@@ -375,6 +375,7 @@ fn visit_instr_uses<F: FnMut(Temp)>(instr: &Instr, mut f: F) {
         | ContractAddress { .. }
         | Entrypoint { .. }
         | GetTriggerEvent { .. }
+        | ProveExecution { .. }
         | TransferBatchBegin
         | TransferBatchEnd
         | CommitOutput => {}
@@ -384,10 +385,17 @@ fn visit_instr_uses<F: FnMut(Temp)>(instr: &Instr, mut f: F) {
             f(*right);
         }
         Unary { operand, .. } => f(*operand),
-        NumericFromInt { value, .. } | NumericToInt { value, .. } => f(*value),
+        NumericFromInt { value, .. } | NumericToInt { value, .. } | NumericNeg { value, .. } => {
+            f(*value)
+        }
         NumericBinary { left, right, .. } | NumericCompare { left, right, .. } => {
             f(*left);
             f(*right);
+        }
+        DirectHelperSyscall { args, .. } => {
+            for arg in args {
+                f(*arg);
+            }
         }
         Min { a, b, .. } | Max { a, b, .. } | Gcd { a, b, .. } | Mean { a, b, .. } => {
             f(*a);
@@ -553,6 +561,8 @@ fn visit_instr_uses<F: FnMut(Temp)>(instr: &Instr, mut f: F) {
         Assert { cond } => f(*cond),
         AbortIf { cond } => f(*cond),
         Info { msg } => f(*msg),
+        DebugPrint { value } => f(*value),
+        DebugLog { payload } => f(*payload),
         PointerFromString { src, .. } => f(*src),
         MapGet { map, key, .. } => {
             f(*map);
@@ -725,6 +735,7 @@ fn visit_instr_uses<F: FnMut(Temp)>(instr: &Instr, mut f: F) {
             }
         }
         Instr::ZkVerify { payload, .. }
+        | Instr::VerifyProof { payload, .. }
         | Instr::VendorExecuteInstruction { payload }
         | Instr::VendorExecuteQuery { payload, .. }
         | Instr::QueryExecuteNorito { payload, .. }
@@ -740,7 +751,54 @@ fn visit_instr_uses<F: FnMut(Temp)>(instr: &Instr, mut f: F) {
             f(*account);
             f(*asset);
         }
+        Instr::Alloc { bytes, .. } => f(*bytes),
+        Instr::GrowHeap { bytes, .. } => f(*bytes),
+        Instr::GetMerklePath {
+            address,
+            output,
+            root_output,
+            ..
+        } => {
+            f(*address);
+            f(*output);
+            if let Some(root_output) = root_output {
+                f(*root_output);
+            }
+        }
+        Instr::GetMerkleCompact {
+            address,
+            output,
+            max_depth,
+            root_output,
+            ..
+        } => {
+            f(*address);
+            f(*output);
+            if let Some(max_depth) = max_depth {
+                f(*max_depth);
+            }
+            if let Some(root_output) = root_output {
+                f(*root_output);
+            }
+        }
+        Instr::GetRegisterMerkleCompact {
+            register_index,
+            output,
+            max_depth,
+            root_output,
+            ..
+        } => {
+            f(*register_index);
+            f(*output);
+            if let Some(max_depth) = max_depth {
+                f(*max_depth);
+            }
+            if let Some(root_output) = root_output {
+                f(*root_output);
+            }
+        }
         Instr::GetPrivateInput { index, .. } => f(*index),
+        Instr::GetPublicInput { key, .. } => f(*key),
         Instr::UseNullifier { nullifier } => f(*nullifier),
         StateGet { path, .. } => f(*path),
         StateSet { path, value } => {
@@ -932,6 +990,8 @@ fn dest_temp(instr: &Instr) -> Option<Temp> {
         | Instr::QueryExecuteNorito { dest, .. }
         | Instr::QueryGet { dest, .. }
         | Instr::GetAccountBalance { dest, .. }
+        | Instr::Alloc { dest, .. }
+        | Instr::GetPublicInput { dest, .. }
         | Instr::GetPrivateInput { dest, .. }
         | Instr::ZkRootsGet { dest, .. }
         | Instr::ZkVoteGetTally { dest, .. }
@@ -954,8 +1014,10 @@ fn dest_temp(instr: &Instr) -> Option<Temp> {
         | Instr::StateCount { dest, .. }
         | Instr::NumericFromInt { dest, .. }
         | Instr::NumericToInt { dest, .. }
+        | Instr::NumericNeg { dest, .. }
         | Instr::NumericBinary { dest, .. }
-        | Instr::NumericCompare { dest, .. } => Some(*dest),
+        | Instr::NumericCompare { dest, .. }
+        | Instr::DirectHelperSyscall { dest, .. } => Some(*dest),
         Instr::SchemaInfo { dest, .. } => Some(*dest),
         Instr::Sm3Hash { dest, .. }
         | Instr::Sha256Hash { dest, .. }
@@ -965,6 +1027,12 @@ fn dest_temp(instr: &Instr) -> Option<Temp> {
         | Instr::IrohaHash { dest, .. } => Some(*dest),
         Instr::Sm2Verify { dest, .. } => Some(*dest),
         Instr::VerifySignature { dest, .. } => Some(*dest),
+        Instr::ProveExecution { dest } => Some(*dest),
+        Instr::GrowHeap { dest, .. } => Some(*dest),
+        Instr::GetMerklePath { dest, .. }
+        | Instr::GetMerkleCompact { dest, .. }
+        | Instr::GetRegisterMerkleCompact { dest, .. } => Some(*dest),
+        Instr::VerifyProof { dest, .. } => Some(*dest),
         Instr::Sm4GcmSeal { dest, .. } => Some(*dest),
         Instr::Sm4GcmOpen { dest, .. } => Some(*dest),
         Instr::Sm4CcmSeal { dest, .. } => Some(*dest),
@@ -1051,6 +1119,8 @@ fn dest_temp(instr: &Instr) -> Option<Temp> {
         | Instr::Assert { .. }
         | Instr::AbortIf { .. }
         | Instr::Info { .. }
+        | Instr::DebugPrint { .. }
+        | Instr::DebugLog { .. }
         | Instr::MapSet { .. }
         | Instr::SetNftData { .. }
         | Instr::BurnNft { .. }

@@ -84,105 +84,11 @@ const RUST_KEYWORD_TOKEN_NAMES = new Map([
     ['view', 'View'],
     ['while', 'While'],
 ]);
-const PUBLIC_PAYLOAD_HELPER_NAMES = new Set([
-    'trigger_event',
-    'json_get_int',
-    'json_get_numeric',
-    'json_get_json',
-    'json_get_name',
-    'json_get_account_id',
-    'json_get_asset_definition_id',
-    'json_get_nft_id',
-    'json_get_blob_hex',
-    'get_int',
-    'get_numeric',
-    'get_json',
-    'get_name',
-    'get_account_id',
-    'get_asset_definition_id',
-    'get_nft_id',
-    'get_blob_hex',
-]);
 const NFT_CALL_NAMES = new Set([
     'nft_mint_asset',
     'nft_set_metadata',
     'nft_transfer_asset',
     'nft_burn_asset',
-]);
-const VIEW_HOST_SIDE_EFFECT_CALL_NAMES = new Set([
-    'transfer_asset',
-    'set_account_detail',
-    'mint_asset',
-    'burn_asset',
-    'nft_mint_asset',
-    'nft_set_metadata',
-    'nft_transfer_asset',
-    'nft_burn_asset',
-    'register_domain',
-    'unregister_domain',
-    'register_account',
-    'unregister_account',
-    'add_signatory',
-    'remove_signatory',
-    'set_account_quorum',
-    'register_asset',
-    'create_new_asset',
-    'register_peer',
-    'unregister_peer',
-    'unregister_asset',
-    'create_trigger',
-    'register_trigger',
-    'remove_trigger',
-    'unregister_trigger',
-    'set_trigger_enabled',
-    'deactivate_contract_instance',
-    'remove_smart_contract_bytes',
-    'register_smart_contract_code',
-    'register_smart_contract_bytes',
-    'activate_contract_instance',
-    'create_role',
-    'delete_role',
-    'grant_role',
-    'revoke_role',
-    'grant_permission',
-    'revoke_permission',
-    'transfer_domain',
-    'transfer_batch',
-    'transfer_v1_batch_begin',
-    'transfer_v1_batch_end',
-    'axt_begin',
-    'axt_touch',
-    'verify_ds_proof',
-    'use_asset_handle',
-    'axt_commit',
-    'subscription_bill',
-    'subscription_record_usage',
-    'escrow_open_offer',
-    'escrow_accept',
-    'escrow_mark_payment_sent',
-    'escrow_release',
-    'escrow_cancel',
-    'escrow_open_dispute',
-    'escrow_resolve_dispute',
-    'anonymous_escrow_open_offer',
-    'anonymous_escrow_accept',
-    'anonymous_escrow_mark_payment_sent',
-    'anonymous_escrow_release',
-    'anonymous_escrow_cancel',
-    'anonymous_escrow_open_dispute',
-    'anonymous_escrow_resolve_dispute',
-    'use_nullifier',
-    'commit_output',
-    'soracloud_read_committed_state',
-    'soracloud_emit_state_mutation',
-    'soracloud_emit_mailbox_message',
-    'soracloud_append_journal',
-    'soracloud_publish_checkpoint',
-    'soracloud_read_secret',
-    'soracloud_read_credential',
-    'soracloud_egress_fetch',
-    'soracloud_read_config',
-    'soracloud_read_secret_envelope',
 ]);
 function integerValueToBigInt(value) {
     if (typeof value === 'bigint')
@@ -196,12 +102,6 @@ function integerAstValue(value) {
         ? Number(value)
         : value;
 }
-const VIEW_INSTRUCTION_EMITTING_CALL_NAMES = new Set([
-    'execute_instruction',
-    'sc_execute_submit_ballot',
-    'sc_execute_unshield',
-    'call_contract',
-]);
 const ASSET_DEFINITION_ADDRESS_VERSION = 1;
 const ASSET_DEFINITION_ADDRESS_LEN = 21;
 const ASSET_DEFINITION_CHECKSUM_OFFSET = 17;
@@ -212,9 +112,10 @@ const BASE58_ALPHABET = '123456789ABCDEFGHJKLMNPQRSTUVWXYZabcdefghijkmnopqrstuvw
 const GLOBAL_WILDCARD_KEY = '*';
 const AUTHORITY_ACCOUNT_PLACEHOLDER = '$authority';
 function isExecuteInstructionCallName(name) {
-    return name === 'execute_instruction'
-        || name === 'sc_execute_submit_ballot'
-        || name === 'sc_execute_unshield';
+    return vendorBridgeBuiltinSpec(name)?.accessKind === 'instruction';
+}
+function isInstructionEmittingCallName(name) {
+    return isExecuteInstructionCallName(name) || callContractBuiltinSpec(name) !== null;
 }
 const FEATURE_BITMAP_BY_NAME = {
     zk: 1 << 0,
@@ -296,6 +197,7 @@ const WRAPPER_PARAM_TEMP_REGS = [9, 8, 7, 6, 5, 4, 3, 2, 20, 21, 22, 25, 27, 29]
 const WRAPPER_PAYLOAD_REG = 24;
 const WRAPPER_PUBLISHED_PAYLOAD_REG = 28;
 const FULL_WRAPPER_SAVED_REGS = [2, 3, 4, 5, 6, 7, 8, 9, 23, 24];
+const SYSCALL_DEBUG_PRINT = 0x00;
 const SYSCALL_ABORT = 0x02;
 const SYSCALL_DEBUG_LOG = 0x03;
 const SYSCALL_REGISTER_DOMAIN = 0x10;
@@ -320,6 +222,7 @@ const SYSCALL_NFT_SET_METADATA = 0x27;
 const SYSCALL_NFT_BURN_ASSET = 0x28;
 const SYSCALL_TRANSFER_V1_BATCH_BEGIN = 0x29;
 const SYSCALL_TRANSFER_V1_BATCH_END = 0x2a;
+const SYSCALL_TRANSFER_V1_BATCH_APPLY = 0x2b;
 const SYSCALL_CREATE_ROLE = 0x30;
 const SYSCALL_DELETE_ROLE = 0x31;
 const SYSCALL_GRANT_ROLE = 0x32;
@@ -364,6 +267,18 @@ const SYSCALL_JSON_GET_ASSET_DEFINITION_ID = 0x80;
 const SYSCALL_JSON_OBJECT = 0x81;
 const SYSCALL_JSON_SET_I64 = 0x82;
 const SYSCALL_JSON_SET_ACCOUNT_ID = 0x83;
+const SYSCALL_JSON_GET_I64_DIRECT = 0x84;
+const SYSCALL_JSON_GET_JSON_DIRECT = 0x85;
+const SYSCALL_JSON_GET_NAME_DIRECT = 0x86;
+const SYSCALL_JSON_GET_ACCOUNT_ID_DIRECT = 0x87;
+const SYSCALL_JSON_GET_NFT_ID_DIRECT = 0x88;
+const SYSCALL_JSON_GET_BLOB_HEX_DIRECT = 0x89;
+const SYSCALL_JSON_GET_NUMERIC_DIRECT = 0x8a;
+const SYSCALL_JSON_GET_ASSET_DEFINITION_ID_DIRECT = 0x8b;
+const SYSCALL_JSON_SET_I64_DIRECT = 0x8c;
+const SYSCALL_JSON_SET_ACCOUNT_ID_DIRECT = 0x8d;
+const SYSCALL_BUILD_PATH_KEY_NORITO_DIRECT = 0x8e;
+const SYSCALL_SCHEMA_INFO_DIRECT = 0x8f;
 const SYSCALL_NUMERIC_FROM_INT = 0x69;
 const SYSCALL_NUMERIC_TO_INT = 0x6a;
 const SYSCALL_NUMERIC_ADD = 0x6b;
@@ -371,6 +286,7 @@ const SYSCALL_NUMERIC_SUB = 0x6c;
 const SYSCALL_NUMERIC_MUL = 0x6d;
 const SYSCALL_NUMERIC_DIV = 0x6e;
 const SYSCALL_NUMERIC_REM = 0x6f;
+const SYSCALL_NUMERIC_NEG = 0x70;
 const SYSCALL_NUMERIC_EQ = 0x71;
 const SYSCALL_NUMERIC_NE = 0x72;
 const SYSCALL_NUMERIC_LT = 0x73;
@@ -379,6 +295,21 @@ const SYSCALL_NUMERIC_GT = 0x75;
 const SYSCALL_NUMERIC_GE = 0x76;
 const SYSCALL_TLV_LEN = 0x77;
 const SYSCALL_JSON_GET_NUMERIC = 0x7f;
+const SYSCALL_SCHEMA_ENCODE_DIRECT = 0xd0;
+const SYSCALL_SCHEMA_DECODE_DIRECT = 0xd1;
+const SYSCALL_NUMERIC_TO_INT_DIRECT = 0xd2;
+const SYSCALL_NUMERIC_ADD_DIRECT = 0xd3;
+const SYSCALL_NUMERIC_SUB_DIRECT = 0xd4;
+const SYSCALL_NUMERIC_MUL_DIRECT = 0xd5;
+const SYSCALL_NUMERIC_DIV_DIRECT = 0xd6;
+const SYSCALL_NUMERIC_REM_DIRECT = 0xd7;
+const SYSCALL_NUMERIC_NEG_DIRECT = 0xd8;
+const SYSCALL_NUMERIC_EQ_DIRECT = 0xd9;
+const SYSCALL_NUMERIC_NE_DIRECT = 0xda;
+const SYSCALL_NUMERIC_LT_DIRECT = 0xdb;
+const SYSCALL_NUMERIC_LE_DIRECT = 0xdc;
+const SYSCALL_NUMERIC_GT_DIRECT = 0xdd;
+const SYSCALL_NUMERIC_GE_DIRECT = 0xde;
 const SYSCALL_ZK_VERIFY_TRANSFER = 0x60;
 const SYSCALL_ZK_VERIFY_UNSHIELD = 0x61;
 const SYSCALL_ZK_VOTE_VERIFY_BALLOT = 0x62;
@@ -454,11 +385,17 @@ const SYSCALL_SORACLOUD_READ_CREDENTIAL = 0xc6;
 const SYSCALL_SORACLOUD_EGRESS_FETCH = 0xc7;
 const SYSCALL_SORACLOUD_READ_CONFIG = 0xc8;
 const SYSCALL_SORACLOUD_READ_SECRET_ENVELOPE = 0xc9;
+const SYSCALL_PROVE_EXECUTION = 0xf4;
+const SYSCALL_GROW_HEAP = 0xf5;
+const SYSCALL_VERIFY_PROOF = 0xf6;
+const SYSCALL_GET_MERKLE_PATH = 0xf7;
 const SYSCALL_GET_ACCOUNT_BALANCE = 0xf9;
+const SYSCALL_GET_MERKLE_COMPACT = 0xfa;
 const SYSCALL_USE_NULLIFIER = 0xfb;
 const SYSCALL_VERIFY_SIGNATURE = 0xfc;
 const SYSCALL_GET_PRIVATE_INPUT = 0xfd;
 const SYSCALL_COMMIT_OUTPUT = 0xfe;
+const SYSCALL_GET_REGISTER_MERKLE_COMPACT = 0xff;
 const SYSCALL_TLV_EQ = 0x5f;
 const SYSCALL_ALLOC = 0xf0;
 const SYSCALL_GET_PUBLIC_INPUT = 0xf1;
@@ -481,31 +418,213 @@ const PUBLIC_KEY_ALGORITHM_BY_MULTIHASH_DIGEST = new Map([
 const BASE58_VALUE_BY_CHAR = new Map([...BASE58_ALPHABET].map((char, index) => [char, index]));
 const textDecoder = new TextDecoder();
 function jsonGetterSpec(name) {
+    const args = ['Json', 'Name'];
+    const message = `${name} expects (Json, Name)`;
     switch (name) {
         case 'json_get_int':
         case 'get_int':
-            return { syscall: SYSCALL_JSON_GET_I64, valueType: 'int', kind: 'int' };
+            return { syscall: SYSCALL_JSON_GET_I64, args, valueType: 'int', kind: 'int', message, publicPayloadHelper: true };
         case 'json_get_numeric':
         case 'get_numeric':
-            return { syscall: SYSCALL_JSON_GET_NUMERIC, valueType: 'Amount', kind: 'pointer' };
+            return { syscall: SYSCALL_JSON_GET_NUMERIC, args, valueType: 'Amount', kind: 'pointer', message, publicPayloadHelper: true };
         case 'json_get_json':
         case 'get_json':
-            return { syscall: SYSCALL_JSON_GET_JSON, valueType: 'Json', kind: 'pointer' };
+            return { syscall: SYSCALL_JSON_GET_JSON, args, valueType: 'Json', kind: 'pointer', message, publicPayloadHelper: true };
         case 'json_get_name':
         case 'get_name':
-            return { syscall: SYSCALL_JSON_GET_NAME, valueType: 'Name', kind: 'pointer' };
+            return { syscall: SYSCALL_JSON_GET_NAME, args, valueType: 'Name', kind: 'pointer', message, publicPayloadHelper: true };
         case 'json_get_account_id':
         case 'get_account_id':
-            return { syscall: SYSCALL_JSON_GET_ACCOUNT_ID, valueType: 'AccountId', kind: 'pointer' };
+            return { syscall: SYSCALL_JSON_GET_ACCOUNT_ID, args, valueType: 'AccountId', kind: 'pointer', message, publicPayloadHelper: true };
         case 'json_get_nft_id':
         case 'get_nft_id':
-            return { syscall: SYSCALL_JSON_GET_NFT_ID, valueType: 'NftId', kind: 'pointer' };
+            return { syscall: SYSCALL_JSON_GET_NFT_ID, args, valueType: 'NftId', kind: 'pointer', message, publicPayloadHelper: true };
         case 'json_get_blob_hex':
         case 'get_blob_hex':
-            return { syscall: SYSCALL_JSON_GET_BLOB_HEX, valueType: 'Blob', kind: 'pointer' };
+            return { syscall: SYSCALL_JSON_GET_BLOB_HEX, args, valueType: 'Blob', kind: 'pointer', message, publicPayloadHelper: true };
         case 'json_get_asset_definition_id':
         case 'get_asset_definition_id':
-            return { syscall: SYSCALL_JSON_GET_ASSET_DEFINITION_ID, valueType: 'AssetDefinitionId', kind: 'pointer' };
+            return { syscall: SYSCALL_JSON_GET_ASSET_DEFINITION_ID, args, valueType: 'AssetDefinitionId', kind: 'pointer', message, publicPayloadHelper: true };
+        default:
+            return null;
+    }
+}
+function jsonBuilderBuiltinSpec(name) {
+    switch (name) {
+        case 'json_object':
+            return { operation: 'object', args: [], valueType: 'Json', kind: 'pointer', message: 'json_object expects no arguments' };
+        case 'json_set_int':
+            return { operation: 'set_int', args: ['Json', 'Name', 'numeric'], valueType: 'Json', kind: 'pointer', message: 'json_set_int expects (Json, Name, int)' };
+        case 'json_set_account_id':
+            return { operation: 'set_account_id', args: ['Json', 'Name', 'AccountId'], valueType: 'Json', kind: 'pointer', message: 'json_set_account_id expects (Json, Name, AccountId)' };
+        default:
+            return null;
+    }
+}
+function codecBuiltinSpec(name) {
+    switch (name) {
+        case 'encode_int':
+            return { operation: 'encode_int', args: ['numeric'], valueType: 'NoritoBytes', kind: 'pointer', message: 'encode_int expects (int)' };
+        case 'decode_int':
+            return { operation: 'decode_int', args: ['BlobLike'], valueType: 'int', kind: 'int', message: 'decode_int expects (Blob|bytes)' };
+        case 'encode_json':
+            return { operation: 'encode_json', args: ['Json'], valueType: 'NoritoBytes', kind: 'pointer', message: 'encode_json expects (Json)' };
+        case 'decode_json':
+            return { operation: 'decode_json', args: ['BlobLike'], valueType: 'Json', kind: 'pointer', message: 'decode_json expects (Blob|bytes)' };
+        default:
+            return null;
+    }
+}
+function pathBuiltinSpec(name) {
+    switch (name) {
+        case 'path':
+            return {
+                args: ['Name', 'IntOrBlobLike'],
+                valueType: 'Name',
+                kind: 'pointer',
+                message: 'path expects (Name, int|Blob|bytes)',
+            };
+        default:
+            return null;
+    }
+}
+function directHelperSpec(name) {
+    switch (name) {
+        case 'json_get_int_direct':
+            return { syscall: SYSCALL_JSON_GET_I64_DIRECT, args: ['Json', 'Name'], valueType: 'int', kind: 'int', message: 'json_get_int_direct expects (Json, Name)', publicPayloadHelper: true };
+        case 'json_get_numeric_direct':
+            return { syscall: SYSCALL_JSON_GET_NUMERIC_DIRECT, args: ['Json', 'Name'], valueType: 'Amount', kind: 'pointer', message: 'json_get_numeric_direct expects (Json, Name)', publicPayloadHelper: true };
+        case 'json_get_json_direct':
+            return { syscall: SYSCALL_JSON_GET_JSON_DIRECT, args: ['Json', 'Name'], valueType: 'Json', kind: 'pointer', message: 'json_get_json_direct expects (Json, Name)', publicPayloadHelper: true };
+        case 'json_get_name_direct':
+            return { syscall: SYSCALL_JSON_GET_NAME_DIRECT, args: ['Json', 'Name'], valueType: 'Name', kind: 'pointer', message: 'json_get_name_direct expects (Json, Name)', publicPayloadHelper: true };
+        case 'json_get_account_id_direct':
+            return { syscall: SYSCALL_JSON_GET_ACCOUNT_ID_DIRECT, args: ['Json', 'Name'], valueType: 'AccountId', kind: 'pointer', message: 'json_get_account_id_direct expects (Json, Name)', publicPayloadHelper: true };
+        case 'json_get_asset_definition_id_direct':
+            return { syscall: SYSCALL_JSON_GET_ASSET_DEFINITION_ID_DIRECT, args: ['Json', 'Name'], valueType: 'AssetDefinitionId', kind: 'pointer', message: 'json_get_asset_definition_id_direct expects (Json, Name)', publicPayloadHelper: true };
+        case 'json_get_nft_id_direct':
+            return { syscall: SYSCALL_JSON_GET_NFT_ID_DIRECT, args: ['Json', 'Name'], valueType: 'NftId', kind: 'pointer', message: 'json_get_nft_id_direct expects (Json, Name)', publicPayloadHelper: true };
+        case 'json_get_blob_hex_direct':
+            return { syscall: SYSCALL_JSON_GET_BLOB_HEX_DIRECT, args: ['Json', 'Name'], valueType: 'Blob', kind: 'pointer', message: 'json_get_blob_hex_direct expects (Json, Name)', publicPayloadHelper: true };
+        case 'json_set_int_direct':
+            return { syscall: SYSCALL_JSON_SET_I64_DIRECT, args: ['Json', 'Name', 'int'], valueType: 'Json', kind: 'pointer', message: 'json_set_int_direct expects (Json, Name, int)' };
+        case 'json_set_account_id_direct':
+            return { syscall: SYSCALL_JSON_SET_ACCOUNT_ID_DIRECT, args: ['Json', 'Name', 'AccountId'], valueType: 'Json', kind: 'pointer', message: 'json_set_account_id_direct expects (Json, Name, AccountId)' };
+        case 'build_path_key_norito_direct':
+            return { syscall: SYSCALL_BUILD_PATH_KEY_NORITO_DIRECT, args: ['Name', 'BlobLike'], valueType: 'Name', kind: 'pointer', message: 'build_path_key_norito_direct expects (Name, Blob|bytes)' };
+        case 'schema_info_direct':
+            return { syscall: SYSCALL_SCHEMA_INFO_DIRECT, args: ['Name'], valueType: 'Json', kind: 'pointer', message: 'schema_info_direct expects (Name)' };
+        case 'schema_encode_direct':
+        case 'encode_schema_direct':
+            return { syscall: SYSCALL_SCHEMA_ENCODE_DIRECT, args: ['Name', 'Json'], valueType: 'NoritoBytes', kind: 'pointer', message: 'encode_schema_direct expects (Name, Json)' };
+        case 'schema_decode_direct':
+        case 'decode_schema_direct':
+            return { syscall: SYSCALL_SCHEMA_DECODE_DIRECT, args: ['Name', 'BlobLike'], valueType: 'Json', kind: 'pointer', message: 'decode_schema_direct expects (Name, Blob|bytes)' };
+        case 'numeric_to_int_direct':
+            return { syscall: SYSCALL_NUMERIC_TO_INT_DIRECT, args: ['WideNumeric'], valueType: 'int', kind: 'int', message: 'numeric_to_int_direct expects (Amount|Balance|fixed_u128)' };
+        case 'numeric_add_direct':
+            return { syscall: SYSCALL_NUMERIC_ADD_DIRECT, args: ['WideNumeric', 'WideNumeric'], result: 'numericBinary', kind: 'pointer', message: 'numeric_add_direct expects compatible wide numeric operands' };
+        case 'numeric_sub_direct':
+            return { syscall: SYSCALL_NUMERIC_SUB_DIRECT, args: ['WideNumeric', 'WideNumeric'], result: 'numericBinary', kind: 'pointer', message: 'numeric_sub_direct expects compatible wide numeric operands' };
+        case 'numeric_mul_direct':
+            return { syscall: SYSCALL_NUMERIC_MUL_DIRECT, args: ['WideNumeric', 'WideNumeric'], result: 'numericBinary', kind: 'pointer', message: 'numeric_mul_direct expects compatible wide numeric operands' };
+        case 'numeric_div_direct':
+            return { syscall: SYSCALL_NUMERIC_DIV_DIRECT, args: ['WideNumeric', 'WideNumeric'], result: 'numericBinary', kind: 'pointer', message: 'numeric_div_direct expects compatible wide numeric operands' };
+        case 'numeric_rem_direct':
+            return { syscall: SYSCALL_NUMERIC_REM_DIRECT, args: ['WideNumeric', 'WideNumeric'], result: 'numericBinary', kind: 'pointer', message: 'numeric_rem_direct expects compatible wide numeric operands' };
+        case 'numeric_neg_direct':
+            return { syscall: SYSCALL_NUMERIC_NEG_DIRECT, args: ['WideNumeric'], result: 'arg0', kind: 'pointer', message: 'numeric_neg_direct expects (Amount|Balance|fixed_u128)' };
+        case 'numeric_eq_direct':
+            return { syscall: SYSCALL_NUMERIC_EQ_DIRECT, args: ['WideNumeric', 'WideNumeric'], valueType: 'bool', kind: 'int', message: 'numeric_eq_direct expects compatible wide numeric operands' };
+        case 'numeric_ne_direct':
+            return { syscall: SYSCALL_NUMERIC_NE_DIRECT, args: ['WideNumeric', 'WideNumeric'], valueType: 'bool', kind: 'int', message: 'numeric_ne_direct expects compatible wide numeric operands' };
+        case 'numeric_lt_direct':
+            return { syscall: SYSCALL_NUMERIC_LT_DIRECT, args: ['WideNumeric', 'WideNumeric'], valueType: 'bool', kind: 'int', message: 'numeric_lt_direct expects compatible wide numeric operands' };
+        case 'numeric_le_direct':
+            return { syscall: SYSCALL_NUMERIC_LE_DIRECT, args: ['WideNumeric', 'WideNumeric'], valueType: 'bool', kind: 'int', message: 'numeric_le_direct expects compatible wide numeric operands' };
+        case 'numeric_gt_direct':
+            return { syscall: SYSCALL_NUMERIC_GT_DIRECT, args: ['WideNumeric', 'WideNumeric'], valueType: 'bool', kind: 'int', message: 'numeric_gt_direct expects compatible wide numeric operands' };
+        case 'numeric_ge_direct':
+            return { syscall: SYSCALL_NUMERIC_GE_DIRECT, args: ['WideNumeric', 'WideNumeric'], valueType: 'bool', kind: 'int', message: 'numeric_ge_direct expects compatible wide numeric operands' };
+        default:
+            return null;
+    }
+}
+function directHelperValueType(spec, argTypes) {
+    if (spec.result === 'arg0') {
+        return argTypes[0] ?? 'Amount';
+    }
+    if (spec.result === 'numericBinary') {
+        return semanticNumericResultType(argTypes[0], argTypes[1]) ?? argTypes[0] ?? 'Amount';
+    }
+    return spec.valueType;
+}
+function directHelperHasDynamicValueType(spec) {
+    return spec !== null && Object.prototype.hasOwnProperty.call(spec, 'result');
+}
+function exactDirectHelperBuiltinSpec(name) {
+    const spec = directHelperSpec(name);
+    if (spec === null)
+        return null;
+    if (spec.result === 'numericBinary' || spec.valueType === 'bool') {
+        return { ...spec, args: [{ kind: 'compatibleWideNumericPair' }] };
+    }
+    return spec;
+}
+function schemaBuiltinSpec(name) {
+    switch (name) {
+        case 'schema_info':
+            return {
+                syscall: SYSCALL_SCHEMA_INFO,
+                args: ['Name'],
+                valueType: 'Json',
+                kind: 'pointer',
+                message: 'schema_info expects (Name)',
+                operation: 'info',
+            };
+        case 'encode_schema':
+            return {
+                syscall: SYSCALL_SCHEMA_ENCODE,
+                args: ['Name', 'Json'],
+                valueType: 'NoritoBytes',
+                kind: 'pointer',
+                message: 'encode_schema expects (Name, Json)',
+                operation: 'encode',
+            };
+        case 'decode_schema':
+            return {
+                syscall: SYSCALL_SCHEMA_DECODE,
+                args: ['Name', 'BlobLike'],
+                valueType: 'Json',
+                kind: 'pointer',
+                message: 'decode_schema expects (Name, Blob|bytes)',
+                operation: 'decode',
+            };
+        default:
+            return null;
+    }
+}
+function vrfBuiltinSpec(name) {
+    switch (name) {
+        case 'vrf_verify':
+            return {
+                syscall: SYSCALL_VRF_VERIFY,
+                args: ['BlobLike', 'BlobLike', 'BlobLike', 'numeric'],
+                valueType: 'NoritoBytes',
+                kind: 'pointer',
+                operation: 'verify',
+                arityMessage: 'vrf_verify expects (Blob, Blob, Blob, int variant)',
+                message: 'vrf_verify expects (Blob|bytes, Blob|bytes, Blob|bytes, int variant)',
+            };
+        case 'vrf_verify_batch':
+            return {
+                syscall: SYSCALL_VRF_VERIFY_BATCH,
+                args: ['BlobLike'],
+                valueType: 'NoritoBytes',
+                kind: 'pointer',
+                operation: 'verify_batch',
+                message: 'vrf_verify_batch expects (Blob|bytes)',
+            };
         default:
             return null;
     }
@@ -618,6 +737,86 @@ function mapEnumerationBuiltinName(name) {
             return null;
     }
 }
+function mapEnumerationBuiltinSpec(name) {
+    const helperName = mapEnumerationBuiltinName(name);
+    if (helperName === null)
+        return null;
+    const arityMessage = helperName === 'keys_values_take2'
+        ? 'keys_values_take2 expects (Map<int,int>, int, int)'
+        : `${helperName} expects (Map<int,int>, int start, int which)`;
+    return {
+        valueType: helperName === 'keys_values_take2'
+            ? { kind: 'tuple', elements: ['int', 'int'] }
+            : 'int',
+        args: [
+            {
+                kind: 'map',
+                key: 'int',
+                value: 'int',
+                message: `${helperName} expects Map<int,int> as first arg`,
+            },
+            'int',
+            'int',
+        ],
+        message: `${helperName} expects (Map<int,int>, int, int)`,
+        arityMessage,
+    };
+}
+function mapAccessBuiltinSpec(name) {
+    switch (name) {
+        case 'contains':
+            return {
+                operation: 'contains',
+                valueType: 'bool',
+                kind: 'int',
+                arities: [2],
+                signature: '(Map<K,V>, K)',
+                message: 'contains expects (Map<K,V>, K)',
+                mutatesDurableState: false,
+            };
+        case 'get_or':
+            return {
+                operation: 'get_or',
+                valueType: 'mapValue',
+                kind: 'mapValue',
+                arities: [2, 3],
+                signature: '(Map<K,V>, K[, V])',
+                message: 'get_or expects (Map<K,V>, K[, V])',
+                mutatesDurableState: false,
+            };
+        case 'get_or_default':
+            return {
+                operation: 'get_or',
+                valueType: 'mapValue',
+                kind: 'mapValue',
+                arities: [3],
+                signature: '(Map<K,V>, K, V)',
+                message: 'get_or_default expects (Map<K,V>, K, V)',
+                mutatesDurableState: false,
+            };
+        case 'ensure':
+            return {
+                operation: 'ensure',
+                valueType: 'mapValue',
+                kind: 'mapValue',
+                arities: [2, 3],
+                signature: '(Map<K,V>, K[, V])',
+                message: 'ensure expects (Map<K,V>, K[, V])',
+                mutatesDurableState: true,
+            };
+        default:
+            return null;
+    }
+}
+function exactMapAccessBuiltinSpec(name) {
+    const spec = mapAccessBuiltinSpec(name);
+    if (spec === null)
+        return null;
+    return {
+        ...spec,
+        args: [{ kind: 'mapAccess', name, spec }],
+    };
+}
 function isMapNewCallName(name) {
     return name === 'Map::new' || name === 'std::map::new' || name === 'std::Map::new';
 }
@@ -642,6 +841,68 @@ function testOnlyKotodamaHelperError(name) {
             return null;
     }
 }
+function testOnlyBuiltinSpec(name) {
+    switch (name) {
+        case 'invoke_entrypoint':
+            return {
+                args: [
+                    { kind: 'testHostLiteral', helperName: 'invoke_entrypoint', label: 'entrypoint name' },
+                    { kind: 'strictType', type: 'Json', message: 'invoke_entrypoint expects a Json payload as its second argument' },
+                ],
+                semanticUsageArgIndexes: [1],
+                message: 'invoke_entrypoint expects (string|Name literal entrypoint, Json)',
+            };
+        case 'invoke_entrypoint_as':
+            return {
+                args: [
+                    { kind: 'testHostLiteral', helperName: 'invoke_entrypoint_as', label: 'actor alias' },
+                    { kind: 'testHostLiteral', helperName: 'invoke_entrypoint_as', label: 'entrypoint name' },
+                    { kind: 'strictType', type: 'Json', message: 'invoke_entrypoint_as expects a Json payload as its third argument' },
+                ],
+                semanticUsageArgIndexes: [2],
+                message: 'invoke_entrypoint_as expects (string|Name literal actor, string|Name literal entrypoint, Json)',
+            };
+        case 'expect_reject_as':
+            return {
+                args: [
+                    { kind: 'testHostLiteral', helperName: 'expect_reject_as', label: 'actor alias' },
+                    { kind: 'testHostLiteral', helperName: 'expect_reject_as', label: 'entrypoint name' },
+                    { kind: 'strictType', type: 'Json', message: 'expect_reject_as expects a Json payload as its third argument' },
+                ],
+                semanticUsageArgIndexes: [2],
+                message: 'expect_reject_as expects (string|Name literal actor, string|Name literal entrypoint, Json)',
+            };
+        case 'actor_account':
+            return {
+                args: [{ kind: 'testHostLiteral', helperName: name, label: 'actor alias' }],
+                semanticUsageArgIndexes: [],
+                valueType: 'AccountId',
+                kind: 'pointer',
+                message: `${name} expects (string|Name literal actor)`,
+            };
+        case 'actor_public_key':
+            return {
+                args: [{ kind: 'testHostLiteral', helperName: name, label: 'actor alias' }],
+                semanticUsageArgIndexes: [],
+                valueType: 'NoritoBytes',
+                kind: 'pointer',
+                message: `${name} expects (string|Name literal actor)`,
+            };
+        case 'actor_sign':
+            return {
+                args: [
+                    { kind: 'testHostLiteral', helperName: 'actor_sign', label: 'actor alias' },
+                    { kind: 'strictBlobLike', message: 'actor_sign expects the message as Blob|bytes' },
+                ],
+                semanticUsageArgIndexes: [1],
+                valueType: 'NoritoBytes',
+                kind: 'pointer',
+                message: 'actor_sign expects (string|Name literal actor, Blob|bytes)',
+            };
+        default:
+            return null;
+    }
+}
 function testHostLiteralStringFromExpression(expression) {
     if (expression.kind === 'string') {
         return expression.value;
@@ -662,36 +923,48 @@ function hashBuiltinSpec(name) {
             return {
                 canonicalName: 'sm3_hash',
                 syscall: SYSCALL_SM3_HASH,
+                args: ['BlobLike'],
+                valueType: 'NoritoBytes',
                 message: 'sm3_hash expects (Blob|bytes) argument pointing to INPUT TLV',
             };
         case 'sha256_hash':
             return {
                 canonicalName: 'sha256_hash',
                 syscall: SYSCALL_SHA256_HASH,
+                args: ['BlobLike'],
+                valueType: 'NoritoBytes',
                 message: 'sha256_hash expects (Blob|bytes) argument pointing to INPUT TLV',
             };
         case 'sha3_hash':
             return {
                 canonicalName: 'sha3_hash',
                 syscall: SYSCALL_SHA3_HASH,
+                args: ['BlobLike'],
+                valueType: 'NoritoBytes',
                 message: 'sha3_hash expects (Blob|bytes) argument pointing to INPUT TLV',
             };
         case 'blake2b256_hash':
             return {
                 canonicalName: 'blake2b256_hash',
                 syscall: SYSCALL_BLAKE2B256_HASH,
+                args: ['BlobLike'],
+                valueType: 'NoritoBytes',
                 message: 'blake2b256_hash expects (Blob|bytes) argument pointing to INPUT TLV',
             };
         case 'keccak256_hash':
             return {
                 canonicalName: 'keccak256_hash',
                 syscall: SYSCALL_KECCAK256_HASH,
+                args: ['BlobLike'],
+                valueType: 'NoritoBytes',
                 message: 'keccak256_hash expects (Blob|bytes) argument pointing to INPUT TLV',
             };
         case 'iroha_hash':
             return {
                 canonicalName: 'iroha_hash',
                 syscall: SYSCALL_IROHA_HASH,
+                args: ['BlobLike'],
+                valueType: 'NoritoBytes',
                 message: 'iroha_hash expects (Blob|bytes) argument pointing to INPUT TLV',
             };
         default:
@@ -700,35 +973,74 @@ function hashBuiltinSpec(name) {
 }
 function sysvarBuiltinSpec(name) {
     switch (name) {
+        case 'authority':
+            return {
+                valueType: 'AccountId',
+                syscall: SYSCALL_GET_AUTHORITY,
+                args: [],
+                message: 'authority expects no arguments',
+            };
+        case 'current_time_ms':
+            return {
+                valueType: 'int',
+                syscall: SYSCALL_CURRENT_TIME_MS,
+                args: [],
+                message: 'current_time_ms expects no arguments',
+            };
+        case 'block_height':
+            return {
+                valueType: 'int',
+                syscall: SYSCALL_SYSVAR_BLOCK_HEIGHT,
+                args: [],
+                message: 'block_height expects no arguments',
+            };
         case 'block_time_ms':
             return {
                 valueType: 'int',
                 syscall: SYSCALL_SYSVAR_BLOCK_TIME_MS,
+                args: [],
                 message: 'block_time_ms expects no arguments',
             };
         case 'chain_id':
             return {
                 valueType: 'NoritoBytes',
                 syscall: SYSCALL_SYSVAR_CHAIN_ID,
+                args: [],
                 message: 'chain_id expects no arguments',
             };
         case 'sysvar_authority':
             return {
                 valueType: 'AccountId',
                 syscall: SYSCALL_SYSVAR_AUTHORITY,
+                args: [],
                 message: 'sysvar_authority expects no arguments',
             };
         case 'contract_address':
             return {
                 valueType: 'NoritoBytes',
                 syscall: SYSCALL_SYSVAR_CONTRACT_ADDRESS,
+                args: [],
                 message: 'contract_address expects no arguments',
             };
         case 'entrypoint':
             return {
                 valueType: 'NoritoBytes',
                 syscall: SYSCALL_SYSVAR_ENTRYPOINT,
+                args: [],
                 message: 'entrypoint expects no arguments',
+            };
+        default:
+            return null;
+    }
+}
+function triggerEventBuiltinSpec(name) {
+    switch (name) {
+        case 'trigger_event':
+            return {
+                valueType: 'Json',
+                args: [],
+                message: 'trigger_event expects no arguments',
+                publicPayloadHelper: true,
             };
         default:
             return null;
@@ -741,30 +1053,40 @@ function zkVerifyBuiltinSpec(name) {
             return {
                 canonicalName: 'zk_verify_transfer',
                 syscall: SYSCALL_ZK_VERIFY_TRANSFER,
+                args: ['BlobLike'],
+                message: 'zk_verify_transfer expects (Blob|bytes) where the argument is a pointer to NoritoBytes TLV in INPUT',
             };
         case 'zk_verify_unshield':
         case 'zk::verify_unshield':
             return {
                 canonicalName: 'zk_verify_unshield',
                 syscall: SYSCALL_ZK_VERIFY_UNSHIELD,
+                args: ['BlobLike'],
+                message: 'zk_verify_unshield expects (Blob|bytes) where the argument is a pointer to NoritoBytes TLV in INPUT',
             };
         case 'zk_verify_batch':
         case 'zk::verify_batch':
             return {
                 canonicalName: 'zk_verify_batch',
                 syscall: SYSCALL_ZK_VERIFY_BATCH,
+                args: ['BlobLike'],
+                message: 'zk_verify_batch expects (Blob|bytes) where the argument is a pointer to NoritoBytes TLV in INPUT',
             };
         case 'zk_vote_verify_ballot':
         case 'zk::vote::verify_ballot':
             return {
                 canonicalName: 'zk_vote_verify_ballot',
                 syscall: SYSCALL_ZK_VOTE_VERIFY_BALLOT,
+                args: ['BlobLike'],
+                message: 'zk_vote_verify_ballot expects (Blob|bytes) where the argument is a pointer to NoritoBytes TLV in INPUT',
             };
         case 'zk_vote_verify_tally':
         case 'zk::vote::verify_tally':
             return {
                 canonicalName: 'zk_vote_verify_tally',
                 syscall: SYSCALL_ZK_VOTE_VERIFY_TALLY,
+                args: ['BlobLike'],
+                message: 'zk_vote_verify_tally expects (Blob|bytes) where the argument is a pointer to NoritoBytes TLV in INPUT',
             };
         default:
             return null;
@@ -783,111 +1105,270 @@ function signatureBuiltinName(name) {
             return null;
     }
 }
+function verifySignatureBuiltinSpec(name) {
+    const signatureName = signatureBuiltinName(name);
+    if (signatureName === 'sm2_verify') {
+        return {
+            args: [
+                { kind: 'BlobLike', message: 'sm2_verify expects message, signature, and public key as Blob|bytes pointers' },
+                { kind: 'BlobLike', message: 'sm2_verify expects message, signature, and public key as Blob|bytes pointers' },
+                { kind: 'BlobLike', message: 'sm2_verify expects message, signature, and public key as Blob|bytes pointers' },
+                { kind: 'BlobLike', optional: true, message: 'sm2_verify optional distid must be provided as Blob|bytes pointer' },
+            ],
+            valueType: 'bool',
+            message: 'sm2_verify expects (Blob, Blob, Blob) or (Blob, Blob, Blob, Blob) where arguments reference INPUT TLVs',
+            arityMessage: 'sm2_verify expects (Blob, Blob, Blob) or (Blob, Blob, Blob, Blob) where arguments reference INPUT TLVs',
+        };
+    }
+    if (signatureName !== 'verify_signature')
+        return null;
+    return {
+        args: [
+            { kind: 'BlobLike', message: 'verify_signature expects message, signature, and public key as Blob|bytes pointers' },
+            { kind: 'BlobLike', message: 'verify_signature expects message, signature, and public key as Blob|bytes pointers' },
+            { kind: 'BlobLike', message: 'verify_signature expects message, signature, and public key as Blob|bytes pointers' },
+            { kind: 'numeric', message: 'verify_signature expects scheme code as int' },
+        ],
+        valueType: 'bool',
+        message: 'verify_signature expects (Blob, Blob, Blob, int) arguments',
+    };
+}
 function noritoReadBuiltinSpec(name) {
     switch (name) {
         case 'query_execute_norito':
             return {
                 syscall: SYSCALL_QUERY_EXECUTE_NORITO,
+                operation: 'query_execute_norito',
+                accessKind: 'query',
                 valueType: 'NoritoBytes',
+                args: ['BlobLike'],
                 message: 'query_execute_norito expects (Blob|bytes) pointer to NoritoBytes QueryRequest',
             };
         case 'zk_roots_get':
             return {
                 syscall: SYSCALL_ZK_ROOTS_GET,
+                operation: 'zk_roots_get',
+                accessKind: 'zk_read',
                 valueType: 'NoritoBytes',
+                args: ['BlobLike'],
                 message: 'zk_roots_get expects (Blob|bytes) pointer to NoritoBytes RootsGetRequest',
             };
         case 'zk_vote_get_tally':
             return {
                 syscall: SYSCALL_ZK_VOTE_GET_TALLY,
+                operation: 'zk_vote_get_tally',
+                accessKind: 'zk_read',
                 valueType: 'NoritoBytes',
+                args: ['BlobLike'],
                 message: 'zk_vote_get_tally expects (Blob|bytes) pointer to NoritoBytes VoteGetTallyRequest',
             };
         case 'vrf_epoch_seed':
             return {
                 syscall: SYSCALL_VRF_EPOCH_SEED,
+                operation: 'vrf_epoch_seed',
+                accessKind: 'zk_read',
                 valueType: 'NoritoBytes',
+                args: ['BlobLike'],
                 message: 'vrf_epoch_seed expects (Blob|bytes) pointer to NoritoBytes VrfEpochSeedRequest',
             };
         default:
             return null;
     }
 }
+const SORACLOUD_BUILTINS = Object.freeze({
+    soracloud_read_committed_state: { syscall: SYSCALL_SORACLOUD_READ_COMMITTED_STATE },
+    soracloud_emit_state_mutation: { syscall: SYSCALL_SORACLOUD_EMIT_STATE_MUTATION },
+    soracloud_emit_mailbox_message: { syscall: SYSCALL_SORACLOUD_EMIT_MAILBOX_MESSAGE },
+    soracloud_append_journal: { syscall: SYSCALL_SORACLOUD_APPEND_JOURNAL },
+    soracloud_publish_checkpoint: { syscall: SYSCALL_SORACLOUD_PUBLISH_CHECKPOINT },
+    soracloud_read_secret: { syscall: SYSCALL_SORACLOUD_READ_SECRET },
+    soracloud_read_credential: { syscall: SYSCALL_SORACLOUD_READ_CREDENTIAL },
+    soracloud_egress_fetch: { syscall: SYSCALL_SORACLOUD_EGRESS_FETCH },
+    soracloud_read_config: { syscall: SYSCALL_SORACLOUD_READ_CONFIG },
+    soracloud_read_secret_envelope: { syscall: SYSCALL_SORACLOUD_READ_SECRET_ENVELOPE },
+});
 function soracloudBuiltinSpec(name) {
-    switch (name) {
-        case 'soracloud_read_committed_state':
-            return { syscall: SYSCALL_SORACLOUD_READ_COMMITTED_STATE };
-        case 'soracloud_emit_state_mutation':
-            return { syscall: SYSCALL_SORACLOUD_EMIT_STATE_MUTATION };
-        case 'soracloud_emit_mailbox_message':
-            return { syscall: SYSCALL_SORACLOUD_EMIT_MAILBOX_MESSAGE };
-        case 'soracloud_append_journal':
-            return { syscall: SYSCALL_SORACLOUD_APPEND_JOURNAL };
-        case 'soracloud_publish_checkpoint':
-            return { syscall: SYSCALL_SORACLOUD_PUBLISH_CHECKPOINT };
-        case 'soracloud_read_secret':
-            return { syscall: SYSCALL_SORACLOUD_READ_SECRET };
-        case 'soracloud_read_credential':
-            return { syscall: SYSCALL_SORACLOUD_READ_CREDENTIAL };
-        case 'soracloud_egress_fetch':
-            return { syscall: SYSCALL_SORACLOUD_EGRESS_FETCH };
-        case 'soracloud_read_config':
-            return { syscall: SYSCALL_SORACLOUD_READ_CONFIG };
-        case 'soracloud_read_secret_envelope':
-            return { syscall: SYSCALL_SORACLOUD_READ_SECRET_ENVELOPE };
-        default:
-            return null;
-    }
+    const spec = SORACLOUD_BUILTINS[name];
+    return spec === undefined
+        ? null
+        : {
+            valueType: 'SoracloudResponse',
+            args: ['SoracloudRequest'],
+            message: `${name} expects (SoracloudRequest)`,
+            hostSideEffect: true,
+            ...spec,
+        };
 }
 function typedQueryBuiltinSpec(name) {
+    const keyArg = (allowedTypes) => [{ kind: 'BlobLikeOrAllowedTypes', allowedTypes }];
     switch (name) {
         case 'query_get_account':
             return {
                 syscall: SYSCALL_QUERY_GET_ACCOUNT,
                 allowedTypes: ['AccountId'],
+                valueType: 'NoritoBytes',
+                args: keyArg(['AccountId']),
                 message: 'query_get_account expects (AccountId|Blob|bytes)',
             };
         case 'query_get_asset':
             return {
                 syscall: SYSCALL_QUERY_GET_ASSET,
                 allowedTypes: ['AssetId'],
+                valueType: 'NoritoBytes',
+                args: keyArg(['AssetId']),
                 message: 'query_get_asset expects (AssetId|Blob|bytes)',
             };
         case 'query_get_asset_definition':
             return {
                 syscall: SYSCALL_QUERY_GET_ASSET_DEFINITION,
                 allowedTypes: ['AssetDefinitionId'],
+                valueType: 'NoritoBytes',
+                args: keyArg(['AssetDefinitionId']),
                 message: 'query_get_asset_definition expects (AssetDefinitionId|Blob|bytes)',
             };
         case 'query_get_domain':
             return {
                 syscall: SYSCALL_QUERY_GET_DOMAIN,
                 allowedTypes: ['DomainId'],
+                valueType: 'NoritoBytes',
+                args: keyArg(['DomainId']),
                 message: 'query_get_domain expects (DomainId|Blob|bytes)',
             };
         case 'query_get_nft':
             return {
                 syscall: SYSCALL_QUERY_GET_NFT,
                 allowedTypes: ['NftId'],
+                valueType: 'NoritoBytes',
+                args: keyArg(['NftId']),
                 message: 'query_get_nft expects (NftId|Blob|bytes)',
             };
         case 'query_get_parameter':
             return {
                 syscall: SYSCALL_QUERY_GET_PARAMETER,
                 allowedTypes: ['Name'],
+                valueType: 'NoritoBytes',
+                args: keyArg(['Name']),
                 message: 'query_get_parameter expects (Name|Blob|bytes)',
             };
         case 'query_get_contract_manifest':
             return {
                 syscall: SYSCALL_QUERY_GET_CONTRACT_MANIFEST,
                 allowedTypes: [],
+                valueType: 'NoritoBytes',
+                args: keyArg([]),
                 message: 'query_get_contract_manifest expects (Blob|bytes) Norito Hash',
             };
         case 'query_get_contract_instance':
             return {
                 syscall: SYSCALL_QUERY_GET_CONTRACT_INSTANCE,
                 allowedTypes: ['Name'],
+                valueType: 'NoritoBytes',
+                args: keyArg(['Name']),
                 message: 'query_get_contract_instance expects (Name|Blob|bytes)',
+            };
+        default:
+            return null;
+    }
+}
+function vendorBridgeBuiltinSpec(name) {
+    switch (name) {
+        case 'execute_instruction':
+            return {
+                canonicalName: 'execute_instruction',
+                syscall: SYSCALL_SMARTCONTRACT_EXECUTE_INSTRUCTION,
+                accessKind: 'instruction',
+                valueType: null,
+                args: ['BlobLike'],
+                message: 'execute_instruction expects (Blob|bytes) where the argument is a pointer to NoritoBytes TLV in INPUT',
+            };
+        case 'sc_execute_submit_ballot':
+            return {
+                canonicalName: 'sc_execute_submit_ballot',
+                syscall: SYSCALL_SMARTCONTRACT_EXECUTE_INSTRUCTION,
+                accessKind: 'instruction',
+                valueType: null,
+                args: ['BlobLike'],
+                message: 'sc_execute_submit_ballot expects (Blob|bytes) where the argument is a pointer to NoritoBytes TLV in INPUT',
+            };
+        case 'sc_execute_unshield':
+            return {
+                canonicalName: 'sc_execute_unshield',
+                syscall: SYSCALL_SMARTCONTRACT_EXECUTE_INSTRUCTION,
+                accessKind: 'instruction',
+                valueType: null,
+                args: ['BlobLike'],
+                message: 'sc_execute_unshield expects (Blob|bytes) where the argument is a pointer to NoritoBytes TLV in INPUT',
+            };
+        case 'execute_query':
+            return {
+                canonicalName: 'execute_query',
+                syscall: SYSCALL_SMARTCONTRACT_EXECUTE_QUERY,
+                accessKind: 'query',
+                valueType: 'Blob',
+                args: ['BlobLike'],
+                message: 'execute_query expects (Blob|bytes) where the argument is a pointer to NoritoBytes TLV in INPUT',
+            };
+        default:
+            return null;
+    }
+}
+function callContractBuiltinSpec(name) {
+    if (name !== 'call_contract')
+        return null;
+    return {
+        syscall: SYSCALL_CALL_CONTRACT,
+        operation: 'call_contract',
+        valueType: 'NoritoBytes',
+        kind: 'pointer',
+        args: ['StringOrBlobLike', 'StringOrBlobLike', 'Json'],
+        message: 'call_contract expects (String|Blob, String|Blob, Json)',
+    };
+}
+function resolveAccountAliasBuiltinSpec(name) {
+    if (name !== 'resolve_account_alias')
+        return null;
+    return {
+        syscall: SYSCALL_RESOLVE_ACCOUNT_ALIAS,
+        operation: 'resolve_account_alias',
+        valueType: 'AccountId',
+        kind: 'pointer',
+        args: ['StringOrBlobLike'],
+        message: 'resolve_account_alias expects (String|Blob)',
+    };
+}
+function subscriptionBuiltinSpec(name) {
+    switch (name) {
+        case 'subscription_bill':
+            return {
+                syscall: SYSCALL_SUBSCRIPTION_BILL,
+                args: [],
+                message: 'subscription_bill expects no arguments',
+                hostSideEffect: true,
+            };
+        case 'subscription_record_usage':
+            return {
+                syscall: SYSCALL_SUBSCRIPTION_RECORD_USAGE,
+                args: [],
+                message: 'subscription_record_usage expects no arguments',
+                hostSideEffect: true,
+            };
+        default:
+            return null;
+    }
+}
+function legacyHostRuntimeControlBuiltinSpec(name) {
+    switch (name) {
+        case 'create_nfts_for_all_users':
+            return {
+                syscall: SYSCALL_CREATE_NFTS_FOR_ALL_USERS,
+                args: [],
+                message: 'create_nfts_for_all_users expects no arguments',
+            };
+        case 'set_execution_depth':
+            return {
+                syscall: SYSCALL_SET_SMARTCONTRACT_EXECUTION_DEPTH,
+                args: ['numeric'],
+                message: 'set_execution_depth expects one int arg',
             };
         default:
             return null;
@@ -898,16 +1379,757 @@ function accountBalanceBuiltinSpec(name) {
         return null;
     return {
         syscall: SYSCALL_GET_ACCOUNT_BALANCE,
+        args: ['AccountId', 'AssetDefinitionId'],
         valueType: 'Balance',
         message: 'get_account_balance expects (AccountId, AssetDefinitionId)',
     };
+}
+function accountDetailBuiltinSpec(name) {
+    if (name !== 'set_account_detail')
+        return null;
+    return {
+        syscall: SYSCALL_SET_ACCOUNT_DETAIL,
+        args: ['AccountId', 'Name', 'Json'],
+        valueType: null,
+        message: 'set_account_detail expects (AccountId, Name, Json)',
+        hostSideEffect: true,
+    };
+}
+const STATE_HOST_BUILTINS = Object.freeze({
+    state_get: {
+        kind: 'get',
+        args: ['Name'],
+        valueType: 'Blob',
+        yieldsPointer: true,
+        mutatesDurableState: false,
+        message: 'state_get expects (Name)',
+    },
+    state_set: {
+        kind: 'set',
+        args: ['Name', 'BlobLike'],
+        valueType: null,
+        yieldsPointer: false,
+        mutatesDurableState: true,
+        message: 'state_set expects (Name, Blob|bytes)',
+    },
+    state_del: {
+        kind: 'del',
+        args: ['Name'],
+        valueType: null,
+        yieldsPointer: false,
+        mutatesDurableState: true,
+        message: 'state_del expects (Name)',
+    },
+    state_keys: {
+        kind: 'keys',
+        args: ['Name', 'numeric', 'numeric'],
+        valueType: 'NoritoBytes',
+        yieldsPointer: true,
+        mutatesDurableState: false,
+        message: 'state_keys expects (Name, int offset, int limit)',
+    },
+    state_has: {
+        kind: 'has',
+        args: ['Name'],
+        valueType: 'bool',
+        yieldsPointer: false,
+        mutatesDurableState: false,
+        message: 'state_has expects (Name)',
+    },
+    state_len: {
+        kind: 'len',
+        args: ['Name'],
+        valueType: 'int',
+        yieldsPointer: false,
+        mutatesDurableState: false,
+        message: 'state_len expects (Name)',
+    },
+    state_count: {
+        kind: 'count',
+        args: ['Name'],
+        valueType: 'int',
+        yieldsPointer: false,
+        mutatesDurableState: false,
+        message: 'state_count expects (Name)',
+    },
+});
+function stateHostBuiltinSpec(name) {
+    return STATE_HOST_BUILTINS[name] ?? null;
+}
+function accountMultisigAdminBuiltinSpec(name) {
+    switch (name) {
+        case 'add_signatory':
+            return {
+                syscall: SYSCALL_ADD_SIGNATORY,
+                kind: 'signatory',
+                args: ['AccountId', 'Json'],
+                valueType: null,
+                message: 'add_signatory expects (AccountId, Json)',
+                hostSideEffect: true,
+            };
+        case 'remove_signatory':
+            return {
+                syscall: SYSCALL_REMOVE_SIGNATORY,
+                kind: 'signatory',
+                args: ['AccountId', 'Json'],
+                valueType: null,
+                message: 'remove_signatory expects (AccountId, Json)',
+                hostSideEffect: true,
+            };
+        case 'set_account_quorum':
+            return {
+                syscall: SYSCALL_SET_ACCOUNT_QUORUM,
+                kind: 'quorum',
+                args: ['AccountId', 'numeric'],
+                valueType: null,
+                message: 'set_account_quorum expects (AccountId, numeric)',
+                hostSideEffect: true,
+            };
+        default:
+            return null;
+    }
+}
+function nativeAssetOperationBuiltinSpec(name) {
+    switch (name) {
+        case 'mint_asset':
+            return {
+                syscall: SYSCALL_MINT_ASSET,
+                kind: 'mintOrBurn',
+                args: ['AccountId', 'AssetDefinitionId', 'numeric'],
+                valueType: null,
+                message: 'mint_asset expects (AccountId, AssetDefinitionId, numeric)',
+                hostSideEffect: true,
+            };
+        case 'burn_asset':
+            return {
+                syscall: SYSCALL_BURN_ASSET,
+                kind: 'mintOrBurn',
+                args: ['AccountId', 'AssetDefinitionId', 'numeric'],
+                valueType: null,
+                message: 'burn_asset expects (AccountId, AssetDefinitionId, numeric)',
+                hostSideEffect: true,
+            };
+        case 'transfer_asset':
+            return {
+                syscall: SYSCALL_TRANSFER_ASSET,
+                kind: 'transfer',
+                args: ['AccountId', 'AccountId', 'AssetDefinitionId', 'numeric'],
+                valueType: null,
+                message: 'transfer_asset expects (AccountId, AccountId, AssetDefinitionId, numeric)',
+                hostSideEffect: true,
+            };
+        default:
+            return null;
+    }
+}
+function nftAssetOperationBuiltinSpec(name) {
+    switch (name) {
+        case 'nft_mint_asset':
+            return {
+                syscall: SYSCALL_NFT_MINT_ASSET,
+                kind: 'mint',
+                args: ['NftId', 'AccountId'],
+                valueType: null,
+                message: 'nft_mint_asset expects (NftId, AccountId)',
+                hostSideEffect: true,
+            };
+        case 'nft_set_metadata':
+            return {
+                syscall: SYSCALL_NFT_SET_METADATA,
+                kind: 'metadata',
+                args: ['NftId', 'Name', 'Json'],
+                valueType: null,
+                message: 'nft_set_metadata expects (NftId, Name, Json)',
+                hostSideEffect: true,
+            };
+        case 'nft_burn_asset':
+            return {
+                syscall: SYSCALL_NFT_BURN_ASSET,
+                kind: 'burn',
+                args: ['NftId'],
+                valueType: null,
+                message: 'nft_burn_asset expects (NftId)',
+                hostSideEffect: true,
+            };
+        case 'nft_transfer_asset':
+            return {
+                syscall: SYSCALL_NFT_TRANSFER_ASSET,
+                kind: 'transfer',
+                args: ['AccountId', 'NftId', 'AccountId'],
+                valueType: null,
+                message: 'nft_transfer_asset expects (AccountId, NftId, AccountId)',
+                hostSideEffect: true,
+            };
+        default:
+            return null;
+    }
+}
+function lifecycleBuiltinSpec(name) {
+    switch (name) {
+        case 'register_domain':
+            return {
+                syscall: SYSCALL_REGISTER_DOMAIN,
+                kind: 'domain',
+                args: ['DomainId'],
+                valueType: null,
+                message: 'register_domain expects (DomainId)',
+                compileMessage: 'register_domain expects exactly one DomainId argument',
+                hostSideEffect: true,
+            };
+        case 'unregister_domain':
+            return {
+                syscall: SYSCALL_UNREGISTER_DOMAIN,
+                kind: 'domain',
+                args: ['DomainId'],
+                valueType: null,
+                message: 'unregister_domain expects (DomainId)',
+                compileMessage: 'unregister_domain expects exactly one DomainId argument',
+                hostSideEffect: true,
+            };
+        case 'transfer_domain':
+            return {
+                syscall: SYSCALL_TRANSFER_DOMAIN,
+                kind: 'transferDomain',
+                args: ['AccountId', 'DomainIdOrName', 'AccountId'],
+                valueType: null,
+                message: 'transfer_domain expects (AccountId, DomainId, AccountId)',
+                hostSideEffect: true,
+            };
+        case 'register_account':
+            return {
+                syscall: SYSCALL_REGISTER_ACCOUNT,
+                kind: 'account',
+                args: ['AccountId'],
+                valueType: null,
+                message: 'register_account expects (AccountId)',
+                compileMessage: 'register_account expects exactly one AccountId argument',
+                hostSideEffect: true,
+            };
+        case 'unregister_account':
+            return {
+                syscall: SYSCALL_UNREGISTER_ACCOUNT,
+                kind: 'account',
+                args: ['AccountId'],
+                valueType: null,
+                message: 'unregister_account expects (AccountId)',
+                compileMessage: 'unregister_account expects exactly one AccountId argument',
+                hostSideEffect: true,
+            };
+        case 'register_asset':
+            return {
+                syscall: SYSCALL_REGISTER_ASSET,
+                kind: 'registerAsset',
+                args: ['AssetDefinitionId', 'String', 'numeric', 'numeric'],
+                valueType: null,
+                message: 'register_asset expects (AssetDefinitionId, string, int, int)',
+                hostSideEffect: true,
+            };
+        case 'create_new_asset':
+            return {
+                syscall: SYSCALL_REGISTER_ASSET,
+                kind: 'createNewAsset',
+                args: ['AssetDefinitionId', 'String', 'numeric', 'AccountId', 'numeric'],
+                valueType: null,
+                message: 'create_new_asset expects (AssetDefinitionId, string, int, AccountId, int)',
+                hostSideEffect: true,
+            };
+        case 'unregister_asset':
+            return {
+                syscall: SYSCALL_UNREGISTER_ASSET,
+                kind: 'assetDefinition',
+                args: ['AssetDefinitionId'],
+                valueType: null,
+                message: 'unregister_asset expects (AssetDefinitionId)',
+                compileMessage: 'unregister_asset expects exactly one AssetDefinitionId argument',
+                hostSideEffect: true,
+            };
+        default:
+            return null;
+    }
+}
+function managementBuiltinSpec(name) {
+    switch (name) {
+        case 'register_peer':
+            return {
+                syscall: SYSCALL_REGISTER_PEER,
+                kind: 'jsonOpaque',
+                args: ['Json'],
+                valueType: null,
+                message: 'register_peer expects (Json)',
+                compileMessage: 'register_peer expects exactly one Json argument',
+                hostSideEffect: true,
+            };
+        case 'unregister_peer':
+            return {
+                syscall: SYSCALL_UNREGISTER_PEER,
+                kind: 'jsonOpaque',
+                args: ['Json'],
+                valueType: null,
+                message: 'unregister_peer expects (Json)',
+                compileMessage: 'unregister_peer expects exactly one Json argument',
+                hostSideEffect: true,
+            };
+        case 'create_trigger':
+            return {
+                syscall: SYSCALL_CREATE_TRIGGER,
+                kind: 'jsonOpaque',
+                args: ['Json'],
+                valueType: null,
+                message: 'create_trigger expects (Json)',
+                compileMessage: 'create_trigger expects exactly one Json argument',
+                hostSideEffect: true,
+            };
+        case 'register_trigger':
+            return {
+                syscall: SYSCALL_CREATE_TRIGGER,
+                kind: 'jsonOpaque',
+                args: ['Json'],
+                valueType: null,
+                message: 'register_trigger expects (Json)',
+                compileMessage: 'register_trigger expects exactly one Json argument',
+                hostSideEffect: true,
+            };
+        case 'remove_trigger':
+            return {
+                syscall: SYSCALL_REMOVE_TRIGGER,
+                kind: 'triggerName',
+                args: ['Name'],
+                valueType: null,
+                message: 'remove_trigger expects (Name)',
+                compileMessage: 'remove_trigger expects exactly one Name argument',
+                hostSideEffect: true,
+            };
+        case 'unregister_trigger':
+            return {
+                syscall: SYSCALL_REMOVE_TRIGGER,
+                kind: 'triggerName',
+                args: ['Name'],
+                valueType: null,
+                message: 'unregister_trigger expects (Name)',
+                compileMessage: 'unregister_trigger expects exactly one Name argument',
+                hostSideEffect: true,
+            };
+        case 'set_trigger_enabled':
+            return {
+                syscall: SYSCALL_SET_TRIGGER_ENABLED,
+                kind: 'triggerEnabled',
+                args: ['Name', 'numeric'],
+                valueType: null,
+                message: 'set_trigger_enabled expects (Name, int)',
+                hostSideEffect: true,
+            };
+        case 'create_role':
+            return {
+                syscall: SYSCALL_CREATE_ROLE,
+                kind: 'roleJson',
+                args: ['Name', 'Json'],
+                valueType: null,
+                message: 'create_role expects (Name, Json)',
+                hostSideEffect: true,
+            };
+        case 'delete_role':
+            return {
+                syscall: SYSCALL_DELETE_ROLE,
+                kind: 'roleName',
+                args: ['Name'],
+                valueType: null,
+                message: 'delete_role expects (Name)',
+                compileMessage: 'delete_role expects exactly one Name argument',
+                hostSideEffect: true,
+            };
+        case 'grant_role':
+            return {
+                syscall: SYSCALL_GRANT_ROLE,
+                kind: 'roleBinding',
+                args: ['AccountId', 'Name'],
+                valueType: null,
+                message: 'grant/revoke_role expects (AccountId, Name)',
+                hostSideEffect: true,
+            };
+        case 'revoke_role':
+            return {
+                syscall: SYSCALL_REVOKE_ROLE,
+                kind: 'roleBinding',
+                args: ['AccountId', 'Name'],
+                valueType: null,
+                message: 'grant/revoke_role expects (AccountId, Name)',
+                hostSideEffect: true,
+            };
+        case 'grant_permission':
+            return {
+                syscall: SYSCALL_GRANT_PERMISSION,
+                kind: 'permissionBinding',
+                args: ['AccountId', 'NameOrJson'],
+                valueType: null,
+                message: 'grant/revoke_permission expects (AccountId, Name|Json)',
+                hostSideEffect: true,
+            };
+        case 'revoke_permission':
+            return {
+                syscall: SYSCALL_REVOKE_PERMISSION,
+                kind: 'permissionBinding',
+                args: ['AccountId', 'NameOrJson'],
+                valueType: null,
+                message: 'grant/revoke_permission expects (AccountId, Name|Json)',
+                hostSideEffect: true,
+            };
+        default:
+            return null;
+    }
+}
+function escrowBuiltinSpec(name) {
+    switch (name) {
+        case 'escrow_open_offer':
+            return {
+                syscall: SYSCALL_ESCROW_OPEN_OFFER,
+                kind: 'openOffer',
+                args: ['Name', 'AssetDefinitionId', 'numeric', { kind: 'BlobLike', optional: true }],
+                valueType: null,
+                message: 'escrow_open_offer expects (Name, AssetDefinitionId, numeric[, Blob|bytes evidence_hashes])',
+                hostSideEffect: true,
+            };
+        case 'escrow_accept':
+            return {
+                syscall: SYSCALL_ESCROW_ACCEPT,
+                kind: 'singleName',
+                args: ['Name'],
+                valueType: null,
+                message: 'escrow_accept expects (Name)',
+                hostSideEffect: true,
+            };
+        case 'escrow_mark_payment_sent':
+            return {
+                syscall: SYSCALL_ESCROW_MARK_PAYMENT_SENT,
+                kind: 'singleName',
+                args: ['Name'],
+                valueType: null,
+                message: 'escrow_mark_payment_sent expects (Name)',
+                hostSideEffect: true,
+            };
+        case 'escrow_release':
+            return {
+                syscall: SYSCALL_ESCROW_RELEASE,
+                kind: 'singleName',
+                args: ['Name'],
+                valueType: null,
+                message: 'escrow_release expects (Name)',
+                hostSideEffect: true,
+            };
+        case 'escrow_cancel':
+            return {
+                syscall: SYSCALL_ESCROW_CANCEL,
+                kind: 'singleName',
+                args: ['Name'],
+                valueType: null,
+                message: 'escrow_cancel expects (Name)',
+                hostSideEffect: true,
+            };
+        case 'escrow_open_dispute':
+            return {
+                syscall: SYSCALL_ESCROW_OPEN_DISPUTE,
+                kind: 'openDispute',
+                args: ['Name', { kind: 'BlobLike', optional: true }],
+                valueType: null,
+                message: 'escrow_open_dispute expects (Name[, Blob|bytes evidence_hashes])',
+                hostSideEffect: true,
+            };
+        case 'escrow_resolve_dispute':
+            return {
+                syscall: SYSCALL_ESCROW_RESOLVE_DISPUTE,
+                kind: 'resolveDispute',
+                args: ['Name', 'numeric', 'numeric', { kind: 'BlobLike', optional: true }],
+                valueType: null,
+                message: 'escrow_resolve_dispute expects (Name, numeric, numeric[, Blob|bytes evidence_hashes])',
+                hostSideEffect: true,
+            };
+        case 'anonymous_escrow_open_offer':
+            return {
+                syscall: SYSCALL_ANONYMOUS_ESCROW_OPEN_OFFER,
+                kind: 'anonymousRequest',
+                args: ['BlobLike'],
+                valueType: null,
+                message: 'anonymous_escrow_open_offer expects (Blob|bytes) Norito request payload',
+                hostSideEffect: true,
+            };
+        case 'anonymous_escrow_accept':
+            return {
+                syscall: SYSCALL_ANONYMOUS_ESCROW_ACCEPT,
+                kind: 'singleName',
+                args: ['Name'],
+                valueType: null,
+                message: 'anonymous_escrow_accept expects (Name)',
+                hostSideEffect: true,
+            };
+        case 'anonymous_escrow_mark_payment_sent':
+            return {
+                syscall: SYSCALL_ANONYMOUS_ESCROW_MARK_PAYMENT_SENT,
+                kind: 'singleName',
+                args: ['Name'],
+                valueType: null,
+                message: 'anonymous_escrow_mark_payment_sent expects (Name)',
+                hostSideEffect: true,
+            };
+        case 'anonymous_escrow_release':
+            return {
+                syscall: SYSCALL_ANONYMOUS_ESCROW_RELEASE,
+                kind: 'anonymousRequest',
+                args: ['BlobLike'],
+                valueType: null,
+                message: 'anonymous_escrow_release expects (Blob|bytes) Norito request payload',
+                hostSideEffect: true,
+            };
+        case 'anonymous_escrow_cancel':
+            return {
+                syscall: SYSCALL_ANONYMOUS_ESCROW_CANCEL,
+                kind: 'anonymousRequest',
+                args: ['BlobLike'],
+                valueType: null,
+                message: 'anonymous_escrow_cancel expects (Blob|bytes) Norito request payload',
+                hostSideEffect: true,
+            };
+        case 'anonymous_escrow_open_dispute':
+            return {
+                syscall: SYSCALL_ANONYMOUS_ESCROW_OPEN_DISPUTE,
+                kind: 'openDispute',
+                args: ['Name', { kind: 'BlobLike', optional: true }],
+                valueType: null,
+                message: 'anonymous_escrow_open_dispute expects (Name[, Blob|bytes evidence_hashes])',
+                hostSideEffect: true,
+            };
+        case 'anonymous_escrow_resolve_dispute':
+            return {
+                syscall: SYSCALL_ANONYMOUS_ESCROW_RESOLVE_DISPUTE,
+                kind: 'anonymousRequest',
+                args: ['BlobLike'],
+                valueType: null,
+                message: 'anonymous_escrow_resolve_dispute expects (Blob|bytes) Norito request payload',
+                hostSideEffect: true,
+            };
+        default:
+            return null;
+    }
+}
+function numericNegBuiltinSpec(name) {
+    if (name !== 'numeric_neg')
+        return null;
+    return {
+        syscall: SYSCALL_NUMERIC_NEG,
+        args: ['WideNumeric'],
+        message: 'numeric_neg expects (Amount|Balance|fixed_u128)',
+    };
+}
+function numericToIntBuiltinSpec(name) {
+    if (name !== 'numeric_to_int')
+        return null;
+    return {
+        syscall: SYSCALL_NUMERIC_TO_INT,
+        args: ['WideNumeric'],
+        valueType: 'int',
+        message: 'numeric_to_int expects (Amount|Balance|fixed_u128)',
+    };
+}
+function regularNumericBinaryBuiltinSpec(name) {
+    switch (name) {
+        case 'numeric_add':
+            return { operator: '+', args: [{ kind: 'compatibleWideNumericPair' }], message: 'numeric_add expects compatible wide numeric operands' };
+        case 'numeric_sub':
+            return { operator: '-', args: [{ kind: 'compatibleWideNumericPair' }], message: 'numeric_sub expects compatible wide numeric operands' };
+        case 'numeric_mul':
+            return { operator: '*', args: [{ kind: 'compatibleWideNumericPair' }], message: 'numeric_mul expects compatible wide numeric operands' };
+        case 'numeric_div':
+            return { operator: '/', args: [{ kind: 'compatibleWideNumericPair' }], message: 'numeric_div expects compatible wide numeric operands' };
+        case 'numeric_rem':
+            return { operator: '%', args: [{ kind: 'compatibleWideNumericPair' }], message: 'numeric_rem expects compatible wide numeric operands' };
+        default:
+            return null;
+    }
+}
+function regularNumericCompareBuiltinSpec(name) {
+    switch (name) {
+        case 'numeric_eq':
+            return { operator: '==', args: [{ kind: 'compatibleWideNumericPair' }], valueType: 'bool', message: 'numeric_eq expects compatible wide numeric operands' };
+        case 'numeric_ne':
+            return { operator: '!=', args: [{ kind: 'compatibleWideNumericPair' }], valueType: 'bool', message: 'numeric_ne expects compatible wide numeric operands' };
+        case 'numeric_lt':
+            return { operator: '<', args: [{ kind: 'compatibleWideNumericPair' }], valueType: 'bool', message: 'numeric_lt expects compatible wide numeric operands' };
+        case 'numeric_le':
+            return { operator: '<=', args: [{ kind: 'compatibleWideNumericPair' }], valueType: 'bool', message: 'numeric_le expects compatible wide numeric operands' };
+        case 'numeric_gt':
+            return { operator: '>', args: [{ kind: 'compatibleWideNumericPair' }], valueType: 'bool', message: 'numeric_gt expects compatible wide numeric operands' };
+        case 'numeric_ge':
+            return { operator: '>=', args: [{ kind: 'compatibleWideNumericPair' }], valueType: 'bool', message: 'numeric_ge expects compatible wide numeric operands' };
+        default:
+            return null;
+    }
+}
+function regularNumericBinaryValueType(argTypes) {
+    const resultType = semanticNumericResultType(argTypes[0], argTypes[1]);
+    return isSemanticWideNumericType(resultType) ? resultType : 'Amount';
+}
+function numericNegValueType(argTypes) {
+    const valueType = argTypes[0] ?? null;
+    return isSemanticWideNumericType(valueType) ? valueType : 'Amount';
+}
+function intArithmeticBuiltinSpec(name) {
+    switch (name) {
+        case 'isqrt':
+            return { opcode: OP_ISQRT, arity: 1, args: ['numeric'], valueType: 'int', message: 'isqrt expects (int)', compileMessage: 'isqrt expects exactly one int argument' };
+        case 'abs':
+            return { opcode: OP_ABS, arity: 1, args: ['numeric'], valueType: 'int', message: 'abs expects (int)', compileMessage: 'abs expects exactly one int argument' };
+        case 'min':
+            return { opcode: OP_MIN, arity: 2, args: ['numeric', 'numeric'], valueType: 'int', message: 'min expects (int, int)', compileMessage: '`min` expects exactly two int arguments' };
+        case 'max':
+            return { opcode: OP_MAX, arity: 2, args: ['numeric', 'numeric'], valueType: 'int', message: 'max expects (int, int)', compileMessage: '`max` expects exactly two int arguments' };
+        case 'mean':
+            return { opcode: OP_MEAN, arity: 2, args: ['numeric', 'numeric'], valueType: 'int', message: 'mean expects (int, int)', compileMessage: '`mean` expects exactly two int arguments' };
+        case 'div_ceil':
+            return { opcode: OP_DIV_CEIL, arity: 2, args: ['numeric', 'numeric'], valueType: 'int', message: 'div_ceil expects (int, int)', compileMessage: '`div_ceil` expects exactly two int arguments' };
+        case 'gcd':
+            return { opcode: OP_GCD, arity: 2, args: ['numeric', 'numeric'], valueType: 'int', message: 'gcd expects (int, int)', compileMessage: '`gcd` expects exactly two int arguments' };
+        case 'poseidon2':
+            return { opcode: OP_POSEIDON2, arity: 2, args: ['numeric', 'numeric'], valueType: 'int', message: 'poseidon2 expects two int args', compileMessage: 'poseidon2 expects exactly two int arguments' };
+        case 'poseidon6':
+            return { opcode: null, arity: 6, args: ['numeric', 'numeric', 'numeric', 'numeric', 'numeric', 'numeric'], valueType: 'int', message: 'poseidon6 expects six int args', compileMessage: 'poseidon6 expects exactly six int arguments', unsupportedMessage: 'POSEIDON6 not supported' };
+        case 'pubkgen':
+            return { opcode: OP_PUBKGEN, arity: 1, args: ['numeric'], valueType: 'int', message: 'pubkgen expects one int arg', compileMessage: 'pubkgen expects exactly one int argument' };
+        case 'valcom':
+            return { opcode: OP_VALCOM, arity: 2, args: ['numeric', 'numeric'], valueType: 'int', message: 'valcom expects two int args', compileMessage: 'valcom expects exactly two int arguments' };
+        default:
+            return null;
+    }
+}
+function vectorBuiltinSpec(name) {
+    switch (name) {
+        case 'setvl':
+            return { opcode: OP_SETVL, arity: 1, args: ['numeric'], valueType: 'Unit', kind: 'void', operation: 'setvl', message: 'setvl expects one int arg', compileMessage: 'setvl expects exactly one int argument' };
+        default:
+            return null;
+    }
+}
+function abiUtilityBuiltinSpec(name) {
+    switch (name) {
+        case 'name_decode':
+            return {
+                operation: 'name_decode',
+                syscall: SYSCALL_NAME_DECODE,
+                args: ['BlobLike'],
+                valueType: 'Name',
+                kind: 'pointer',
+                message: 'name_decode expects (Blob|bytes)',
+            };
+        case 'tlv_eq':
+            return {
+                operation: 'tlv_eq',
+                syscall: SYSCALL_TLV_EQ,
+                args: ['pointerAbi', 'pointerAbi'],
+                valueType: 'bool',
+                kind: 'int',
+                message: 'tlv_eq expects (pointer-ABI, pointer-ABI)',
+                allowJson: true,
+            };
+        case 'tlv_len':
+            return {
+                operation: 'tlv_len',
+                syscall: SYSCALL_TLV_LEN,
+                args: ['pointerAbi'],
+                valueType: 'int',
+                kind: 'int',
+                message: 'tlv_len expects a pointer-ABI type, Json, or Blob|bytes argument',
+                arityMessage: 'tlv_len expects one argument',
+                allowJson: true,
+            };
+        case 'pointer_to_norito':
+            return {
+                operation: 'pointer_to_norito',
+                syscall: SYSCALL_POINTER_TO_NORITO,
+                args: ['pointerAbiNoJson'],
+                valueType: 'NoritoBytes',
+                kind: 'pointer',
+                message: 'pointer_to_norito expects a pointer-ABI type or Blob|bytes argument',
+                arityMessage: 'pointer_to_norito expects one argument',
+                allowJson: false,
+            };
+        default:
+            return null;
+    }
+}
+function exactAbiUtilityBuiltinSpec(name) {
+    return abiUtilityBuiltinSpec(name);
+}
+function publicInputBuiltinSpec(name) {
+    if (name !== 'get_public_input')
+        return null;
+    return {
+        syscall: SYSCALL_GET_PUBLIC_INPUT,
+        args: ['Name'],
+        valueType: 'NoritoBytes',
+        message: 'get_public_input expects (Name)',
+    };
+}
+function debugBuiltinSpec(name) {
+    switch (name) {
+        case 'debug_print':
+            return {
+                syscall: SYSCALL_DEBUG_PRINT,
+                args: ['numeric'],
+                valueType: null,
+                message: 'debug_print expects (int value)',
+                kind: 'print',
+            };
+        case 'debug_log':
+            return {
+                syscall: SYSCALL_DEBUG_LOG,
+                args: ['JsonOrBlobLike'],
+                valueType: null,
+                message: 'debug_log expects (Json|Blob|bytes payload)',
+                kind: 'log',
+            };
+        default:
+            return null;
+    }
+}
+function assertionLoggingBuiltinSpec(name) {
+    switch (name) {
+        case 'assert':
+            return {
+                kind: 'assert',
+                args: [{ kind: 'bool' }, { kind: 'StringOrNumeric', optional: true }],
+                valueType: null,
+                message: 'assert expects (bool) or (bool, string|int)',
+            };
+        case 'require':
+            return {
+                kind: 'require',
+                args: [{ kind: 'bool' }, { kind: 'StringOrNumeric', optional: true }],
+                valueType: null,
+                message: 'require expects (bool) or (bool, string|int)',
+            };
+        case 'info':
+            return {
+                kind: 'info',
+                args: [{ kind: 'StringOrNumeric' }],
+                valueType: null,
+                message: 'info expects (string|int)',
+            };
+        case 'assert_eq':
+            return {
+                kind: 'assertEq',
+                args: ['numeric', 'numeric'],
+                valueType: null,
+                message: 'assert_eq expects two int args',
+            };
+        default:
+            return null;
+    }
 }
 function privacyOutputBuiltinSpec(name) {
     switch (name) {
         case 'get_private_input':
             return {
                 syscall: SYSCALL_GET_PRIVATE_INPUT,
+                operation: 'get_private_input',
                 valueType: 'int',
+                kind: 'int',
                 args: ['numeric'],
                 message: 'get_private_input expects (int index)',
                 sideEffect: false,
@@ -915,38 +2137,255 @@ function privacyOutputBuiltinSpec(name) {
         case 'use_nullifier':
             return {
                 syscall: SYSCALL_USE_NULLIFIER,
+                operation: 'use_nullifier',
                 valueType: null,
+                kind: 'void',
                 args: ['numeric'],
                 message: 'use_nullifier expects (int nullifier)',
                 sideEffect: true,
+                hostSideEffect: true,
             };
         case 'commit_output':
             return {
                 syscall: SYSCALL_COMMIT_OUTPUT,
+                operation: 'commit_output',
                 valueType: null,
+                kind: 'void',
                 args: [],
                 message: 'commit_output expects no arguments',
                 sideEffect: true,
+                hostSideEffect: true,
             };
         default:
             return null;
     }
 }
 function smartContractLifecycleBuiltinSpec(name) {
+    const args = ['BlobLike'];
+    const message = `${name} expects (Blob|bytes) pointer to NoritoBytes lifecycle request`;
     switch (name) {
         case 'deactivate_contract_instance':
-            return { syscall: SYSCALL_DEACTIVATE_CONTRACT_INSTANCE };
+            return { syscall: SYSCALL_DEACTIVATE_CONTRACT_INSTANCE, args, message, hostSideEffect: true };
         case 'remove_smart_contract_bytes':
-            return { syscall: SYSCALL_REMOVE_SMART_CONTRACT_BYTES };
+            return { syscall: SYSCALL_REMOVE_SMART_CONTRACT_BYTES, args, message, hostSideEffect: true };
         case 'register_smart_contract_code':
-            return { syscall: SYSCALL_REGISTER_SMART_CONTRACT_CODE };
+            return { syscall: SYSCALL_REGISTER_SMART_CONTRACT_CODE, args, message, hostSideEffect: true };
         case 'register_smart_contract_bytes':
-            return { syscall: SYSCALL_REGISTER_SMART_CONTRACT_BYTES };
+            return { syscall: SYSCALL_REGISTER_SMART_CONTRACT_BYTES, args, message, hostSideEffect: true };
         case 'activate_contract_instance':
-            return { syscall: SYSCALL_ACTIVATE_CONTRACT_INSTANCE };
+            return { syscall: SYSCALL_ACTIVATE_CONTRACT_INSTANCE, args, message, hostSideEffect: true };
         default:
             return null;
     }
+}
+function transferBatchApplyBuiltinSpec(name) {
+    if (name !== 'transfer_v1_batch_apply')
+        return null;
+    return {
+        syscall: SYSCALL_TRANSFER_V1_BATCH_APPLY,
+        args: ['BlobLike'],
+        message: 'transfer_v1_batch_apply expects (Blob|bytes) Norito TransferAssetBatch',
+        hostSideEffect: true,
+    };
+}
+function transferBatchBuiltinSpec(name) {
+    if (name !== 'transfer_batch')
+        return null;
+    return {
+        valueType: null,
+        args: [{
+                kind: 'variadicTuple',
+                min: 1,
+                elements: ['AccountId', 'AccountId', 'AssetDefinitionId', 'numeric'],
+            }],
+        entryType: { kind: 'tuple', elements: ['AccountId', 'AccountId', 'AssetDefinitionId', 'int'] },
+        message: 'transfer_batch expects (AccountId, AccountId, AssetDefinitionId, numeric) tuple entries',
+        emptyMessage: 'transfer_batch expects at least one entry',
+        hostSideEffect: true,
+    };
+}
+function transferBatchBoundaryBuiltinSpec(name) {
+    switch (name) {
+        case 'transfer_v1_batch_begin':
+            return {
+                syscall: SYSCALL_TRANSFER_V1_BATCH_BEGIN,
+                args: [],
+                message: 'transfer_v1_batch_begin expects no arguments',
+                hostSideEffect: true,
+            };
+        case 'transfer_v1_batch_end':
+            return {
+                syscall: SYSCALL_TRANSFER_V1_BATCH_END,
+                args: [],
+                message: 'transfer_v1_batch_end expects no arguments',
+                hostSideEffect: true,
+            };
+        default:
+            return null;
+    }
+}
+function axtBuiltinSpec(name) {
+    switch (name) {
+        case 'axt_begin':
+            return {
+                syscall: SYSCALL_AXT_BEGIN,
+                minArgs: 1,
+                maxArgs: 1,
+                message: 'axt_begin expects (AxtDescriptor)',
+                args: [
+                    { kind: 'typedPointer', type: 'AxtDescriptor', register: 10 },
+                ],
+                discard: 'deadArg0',
+                hostSideEffect: true,
+            };
+        case 'axt_touch':
+            return {
+                syscall: SYSCALL_AXT_TOUCH,
+                minArgs: 1,
+                maxArgs: 2,
+                message: 'axt_touch expects (DataSpaceId[, Blob|bytes manifest])',
+                args: [
+                    { kind: 'typedPointer', type: 'DataSpaceId', register: 10 },
+                    { kind: 'noritoBytes', register: 11, optional: true },
+                ],
+                discard: 'deadDataSpaceId',
+                hostSideEffect: true,
+            };
+        case 'verify_ds_proof':
+            return {
+                syscall: SYSCALL_VERIFY_DS_PROOF,
+                minArgs: 1,
+                maxArgs: 2,
+                message: 'verify_ds_proof expects (DataSpaceId[, ProofBlob])',
+                args: [
+                    { kind: 'typedPointer', type: 'DataSpaceId', register: 10 },
+                    { kind: 'typedPointer', type: 'ProofBlob', register: 11, optional: true },
+                ],
+                discard: 'deadDataSpaceId',
+                hostSideEffect: true,
+            };
+        case 'use_asset_handle':
+            return {
+                syscall: SYSCALL_USE_ASSET_HANDLE,
+                minArgs: 2,
+                maxArgs: 3,
+                message: 'use_asset_handle expects (AssetHandle, Blob|bytes intent[, ProofBlob])',
+                args: [
+                    { kind: 'typedPointer', type: 'AssetHandle', register: 10 },
+                    { kind: 'noritoBytes', register: 11 },
+                    {
+                        kind: 'typedPointer',
+                        type: 'ProofBlob',
+                        register: 12,
+                        optional: true,
+                        message: 'use_asset_handle expects (AssetHandle, Blob intent[, ProofBlob])',
+                    },
+                ],
+                discard: 'alloc',
+                hostSideEffect: true,
+            };
+        case 'axt_commit':
+            return {
+                syscall: SYSCALL_AXT_COMMIT,
+                minArgs: 0,
+                maxArgs: 0,
+                message: 'axt_commit expects no arguments',
+                args: [],
+                discard: 'alloc',
+                hostSideEffect: true,
+            };
+        default:
+            return null;
+    }
+}
+function proveExecutionBuiltinSpec(name) {
+    if (name !== 'prove_execution')
+        return null;
+    return {
+        syscall: SYSCALL_PROVE_EXECUTION,
+        args: [],
+        valueType: 'NoritoBytes',
+        kind: 'pointer',
+        operation: 'prove_execution',
+        message: 'prove_execution expects no arguments',
+    };
+}
+function growHeapBuiltinSpec(name) {
+    if (name !== 'grow_heap')
+        return null;
+    return {
+        syscall: SYSCALL_GROW_HEAP,
+        args: ['int'],
+        valueType: 'int',
+        kind: 'int',
+        operation: 'grow_heap',
+        message: 'grow_heap expects (int bytes)',
+    };
+}
+function rawMemoryBuiltinSpec(name) {
+    switch (name) {
+        case 'alloc':
+            return {
+                syscall: SYSCALL_ALLOC,
+                valueType: 'int',
+                kind: 'int',
+                operation: 'alloc',
+                args: ['int'],
+                message: 'alloc expects (int bytes)',
+            };
+        case 'get_merkle_path':
+            return {
+                syscall: SYSCALL_GET_MERKLE_PATH,
+                valueType: 'int',
+                kind: 'int',
+                operation: 'merkle_path',
+                args: ['int', 'int', { kind: 'int', optional: true }],
+                minArgs: 2,
+                maxArgs: 3,
+                message: 'get_merkle_path expects (int address, int output_ptr[, int root_output_ptr])',
+            };
+        case 'get_merkle_compact':
+            return {
+                syscall: SYSCALL_GET_MERKLE_COMPACT,
+                valueType: 'int',
+                kind: 'int',
+                operation: 'merkle_compact',
+                args: ['int', 'int', { kind: 'int', optional: true }, { kind: 'int', optional: true }],
+                minArgs: 2,
+                maxArgs: 4,
+                message: 'get_merkle_compact expects (int address_or_register, int output_ptr[, int max_depth[, int root_output_ptr]])',
+            };
+        case 'get_register_merkle_compact':
+            return {
+                syscall: SYSCALL_GET_REGISTER_MERKLE_COMPACT,
+                valueType: 'int',
+                kind: 'int',
+                operation: 'merkle_compact',
+                args: ['int', 'int', { kind: 'int', optional: true }, { kind: 'int', optional: true }],
+                minArgs: 2,
+                maxArgs: 4,
+                message: 'get_register_merkle_compact expects (int address_or_register, int output_ptr[, int max_depth[, int root_output_ptr]])',
+            };
+        default:
+            return null;
+    }
+}
+function verifyProofBuiltinSpec(name) {
+    if (name !== 'verify_proof')
+        return null;
+    return {
+        syscall: SYSCALL_VERIFY_PROOF,
+        args: ['BlobLike'],
+        valueType: 'bool',
+        kind: 'int',
+        operation: 'verify_proof',
+        message: 'verify_proof expects (Blob|bytes) pointer to NoritoBytes OpenVerifyEnvelope',
+    };
+}
+function proofHeapBuiltinSpec(name) {
+    return proveExecutionBuiltinSpec(name)
+        ?? growHeapBuiltinSpec(name)
+        ?? verifyProofBuiltinSpec(name);
 }
 function sm4BuiltinSpec(name) {
     switch (name) {
@@ -959,6 +2398,9 @@ function sm4BuiltinSpec(name) {
                 syscall: SYSCALL_SM4_GCM_SEAL,
                 ccm: false,
                 dataLabel: 'plaintext',
+                args: ['BlobLike', 'BlobLike', 'BlobLike', 'BlobLike'],
+                valueType: 'NoritoBytes',
+                message: 'sm4_gcm_seal expects (Blob|bytes, Blob|bytes, Blob|bytes, Blob|bytes)',
                 arityMessage: 'sm4_gcm_seal expects (Blob|bytes, Blob|bytes, Blob|bytes, Blob|bytes)',
             };
         case 'sm4_gcm_open':
@@ -970,6 +2412,9 @@ function sm4BuiltinSpec(name) {
                 syscall: SYSCALL_SM4_GCM_OPEN,
                 ccm: false,
                 dataLabel: 'ciphertext',
+                args: ['BlobLike', 'BlobLike', 'BlobLike', 'BlobLike'],
+                valueType: 'NoritoBytes',
+                message: 'sm4_gcm_open expects (Blob|bytes, Blob|bytes, Blob|bytes, Blob|bytes)',
                 arityMessage: 'sm4_gcm_open expects (Blob|bytes, Blob|bytes, Blob|bytes, Blob|bytes)',
             };
         case 'sm4_ccm_seal':
@@ -981,6 +2426,15 @@ function sm4BuiltinSpec(name) {
                 syscall: SYSCALL_SM4_CCM_SEAL,
                 ccm: true,
                 dataLabel: 'plaintext',
+                args: [
+                    { kind: 'BlobLike', message: 'sm4_ccm_seal expects key, nonce, aad, plaintext as Blob|bytes pointers' },
+                    { kind: 'BlobLike', message: 'sm4_ccm_seal expects key, nonce, aad, plaintext as Blob|bytes pointers' },
+                    { kind: 'BlobLike', message: 'sm4_ccm_seal expects key, nonce, aad, plaintext as Blob|bytes pointers' },
+                    { kind: 'BlobLike', message: 'sm4_ccm_seal expects key, nonce, aad, plaintext as Blob|bytes pointers' },
+                    { kind: 'numeric', optional: true, message: 'sm4_ccm_seal optional tag length must be int' },
+                ],
+                valueType: 'NoritoBytes',
+                message: 'sm4_ccm_seal expects (Blob|bytes, Blob|bytes, Blob|bytes, Blob|bytes[, int])',
                 arityMessage: 'sm4_ccm_seal expects (Blob|bytes, Blob|bytes, Blob|bytes, Blob|bytes[, int])',
                 pointerMessage: 'sm4_ccm_seal expects key, nonce, aad, plaintext as Blob|bytes pointers',
                 tagMessage: 'sm4_ccm_seal optional tag length must be int',
@@ -994,6 +2448,15 @@ function sm4BuiltinSpec(name) {
                 syscall: SYSCALL_SM4_CCM_OPEN,
                 ccm: true,
                 dataLabel: 'ciphertext',
+                args: [
+                    { kind: 'BlobLike', message: 'sm4_ccm_open expects key, nonce, aad, ciphertext as Blob|bytes pointers' },
+                    { kind: 'BlobLike', message: 'sm4_ccm_open expects key, nonce, aad, ciphertext as Blob|bytes pointers' },
+                    { kind: 'BlobLike', message: 'sm4_ccm_open expects key, nonce, aad, ciphertext as Blob|bytes pointers' },
+                    { kind: 'BlobLike', message: 'sm4_ccm_open expects key, nonce, aad, ciphertext as Blob|bytes pointers' },
+                    { kind: 'numeric', optional: true, message: 'sm4_ccm_open optional tag length must be int' },
+                ],
+                valueType: 'NoritoBytes',
+                message: 'sm4_ccm_open expects (Blob|bytes, Blob|bytes, Blob|bytes, Blob|bytes[, int])',
                 arityMessage: 'sm4_ccm_open expects (Blob|bytes, Blob|bytes, Blob|bytes, Blob|bytes[, int])',
                 pointerMessage: 'sm4_ccm_open expects key, nonce, aad, ciphertext as Blob|bytes pointers',
                 tagMessage: 'sm4_ccm_open optional tag length must be int',
@@ -1001,6 +2464,254 @@ function sm4BuiltinSpec(name) {
         default:
             return null;
     }
+}
+const HOST_SIDE_EFFECT_BUILTIN_SPEC_PROVIDERS = Object.freeze([
+    subscriptionBuiltinSpec,
+    transferBatchApplyBuiltinSpec,
+    transferBatchBuiltinSpec,
+    transferBatchBoundaryBuiltinSpec,
+    axtBuiltinSpec,
+    escrowBuiltinSpec,
+    privacyOutputBuiltinSpec,
+    smartContractLifecycleBuiltinSpec,
+    accountMultisigAdminBuiltinSpec,
+    nativeAssetOperationBuiltinSpec,
+    nftAssetOperationBuiltinSpec,
+    lifecycleBuiltinSpec,
+    managementBuiltinSpec,
+    accountDetailBuiltinSpec,
+    soracloudBuiltinSpec,
+]);
+function hostSideEffectBuiltinSpec(name) {
+    for (const specProvider of HOST_SIDE_EFFECT_BUILTIN_SPEC_PROVIDERS) {
+        const spec = specProvider(name);
+        if (spec?.hostSideEffect === true)
+            return spec;
+    }
+    return null;
+}
+const NO_BUILTIN_VALUE_TYPE = Symbol('no-builtin-value-type');
+const STATIC_VALUE_TYPE_BUILTIN_SPEC_PROVIDERS = Object.freeze([
+    pointerConstructorBuiltinSpec,
+    jsonGetterSpec,
+    directHelperSpec,
+    jsonBuilderBuiltinSpec,
+    codecBuiltinSpec,
+    pathBuiltinSpec,
+    mapEnumerationBuiltinSpec,
+    testOnlyBuiltinSpec,
+    abiUtilityBuiltinSpec,
+    hashBuiltinSpec,
+    verifySignatureBuiltinSpec,
+    sm4BuiltinSpec,
+    sysvarBuiltinSpec,
+    triggerEventBuiltinSpec,
+    noritoReadBuiltinSpec,
+    typedQueryBuiltinSpec,
+    vendorBridgeBuiltinSpec,
+    callContractBuiltinSpec,
+    resolveAccountAliasBuiltinSpec,
+    accountBalanceBuiltinSpec,
+    accountDetailBuiltinSpec,
+    accountMultisigAdminBuiltinSpec,
+    nativeAssetOperationBuiltinSpec,
+    nftAssetOperationBuiltinSpec,
+    lifecycleBuiltinSpec,
+    managementBuiltinSpec,
+    escrowBuiltinSpec,
+    zkInlineBuilderBuiltinSpec,
+    publicInputBuiltinSpec,
+    debugBuiltinSpec,
+    privacyOutputBuiltinSpec,
+    assertionLoggingBuiltinSpec,
+    soracloudBuiltinSpec,
+    stateHostBuiltinSpec,
+    proofHeapBuiltinSpec,
+    rawMemoryBuiltinSpec,
+    numericToIntBuiltinSpec,
+    regularNumericCompareBuiltinSpec,
+    schemaBuiltinSpec,
+    vrfBuiltinSpec,
+    intArithmeticBuiltinSpec,
+]);
+function staticBuiltinValueType(name) {
+    for (const specProvider of STATIC_VALUE_TYPE_BUILTIN_SPEC_PROVIDERS) {
+        const spec = specProvider(name);
+        if (spec !== null && Object.prototype.hasOwnProperty.call(spec, 'valueType'))
+            return spec.valueType;
+    }
+    return NO_BUILTIN_VALUE_TYPE;
+}
+function staticBuiltinYieldsPointer(name) {
+    const valueType = staticBuiltinValueType(name);
+    if (valueType === NO_BUILTIN_VALUE_TYPE)
+        return NO_BUILTIN_VALUE_TYPE;
+    return valueType !== null && valueKindForType(valueType) === 'pointer';
+}
+function dynamicDirectHelperBuiltinSpec(name) {
+    const spec = directHelperSpec(name);
+    if (!directHelperHasDynamicValueType(spec))
+        return null;
+    return {
+        ...spec,
+        valueTypeForArgs: (argTypes) => directHelperValueType(spec, argTypes),
+    };
+}
+function dynamicRegularNumericBinaryBuiltinSpec(name) {
+    const spec = regularNumericBinaryBuiltinSpec(name);
+    return spec === null
+        ? null
+        : {
+            ...spec,
+            kind: 'pointer',
+            valueTypeForArgs: regularNumericBinaryValueType,
+        };
+}
+function dynamicNumericNegBuiltinSpec(name) {
+    const spec = numericNegBuiltinSpec(name);
+    return spec === null
+        ? null
+        : {
+            ...spec,
+            kind: 'pointer',
+            valueTypeForArgs: numericNegValueType,
+        };
+}
+const DYNAMIC_VALUE_TYPE_BUILTIN_SPEC_PROVIDERS = Object.freeze([
+    dynamicDirectHelperBuiltinSpec,
+    dynamicRegularNumericBinaryBuiltinSpec,
+    dynamicNumericNegBuiltinSpec,
+]);
+function dynamicBuiltinValueTypeSpec(name) {
+    for (const specProvider of DYNAMIC_VALUE_TYPE_BUILTIN_SPEC_PROVIDERS) {
+        const spec = specProvider(name);
+        if (spec !== null && typeof spec.valueTypeForArgs === 'function')
+            return spec;
+    }
+    return null;
+}
+function dynamicBuiltinValueType(name, argTypes) {
+    return dynamicBuiltinValueTypeSpec(name)?.valueTypeForArgs(argTypes) ?? NO_BUILTIN_VALUE_TYPE;
+}
+function dynamicBuiltinYieldsPointer(name) {
+    const spec = dynamicBuiltinValueTypeSpec(name);
+    return spec === null ? NO_BUILTIN_VALUE_TYPE : spec.kind === 'pointer';
+}
+const EXACT_ARGUMENT_BUILTIN_SPEC_PROVIDERS = Object.freeze([
+    jsonGetterSpec,
+    jsonBuilderBuiltinSpec,
+    codecBuiltinSpec,
+    pathBuiltinSpec,
+    schemaBuiltinSpec,
+    exactAbiUtilityBuiltinSpec,
+    hashBuiltinSpec,
+    verifySignatureBuiltinSpec,
+    sm4BuiltinSpec,
+    sysvarBuiltinSpec,
+    triggerEventBuiltinSpec,
+    noritoReadBuiltinSpec,
+    typedQueryBuiltinSpec,
+    exactDirectHelperBuiltinSpec,
+    exactMapAccessBuiltinSpec,
+    mapEnumerationBuiltinSpec,
+    testOnlyBuiltinSpec,
+    vrfBuiltinSpec,
+    vendorBridgeBuiltinSpec,
+    soracloudBuiltinSpec,
+    subscriptionBuiltinSpec,
+    legacyHostRuntimeControlBuiltinSpec,
+    accountBalanceBuiltinSpec,
+    accountDetailBuiltinSpec,
+    accountMultisigAdminBuiltinSpec,
+    nativeAssetOperationBuiltinSpec,
+    nftAssetOperationBuiltinSpec,
+    lifecycleBuiltinSpec,
+    managementBuiltinSpec,
+    zkInlineBuilderBuiltinSpec,
+    callContractBuiltinSpec,
+    resolveAccountAliasBuiltinSpec,
+    stateHostBuiltinSpec,
+    publicInputBuiltinSpec,
+    debugBuiltinSpec,
+    assertionLoggingBuiltinSpec,
+    privacyOutputBuiltinSpec,
+    smartContractLifecycleBuiltinSpec,
+    transferBatchApplyBuiltinSpec,
+    transferBatchBuiltinSpec,
+    transferBatchBoundaryBuiltinSpec,
+    escrowBuiltinSpec,
+    axtBuiltinSpec,
+    zkVerifyBuiltinSpec,
+    proofHeapBuiltinSpec,
+    rawMemoryBuiltinSpec,
+    numericNegBuiltinSpec,
+    numericToIntBuiltinSpec,
+    regularNumericBinaryBuiltinSpec,
+    regularNumericCompareBuiltinSpec,
+    intArithmeticBuiltinSpec,
+    vectorBuiltinSpec,
+]);
+function exactArgumentBuiltinSpec(name) {
+    for (const specProvider of EXACT_ARGUMENT_BUILTIN_SPEC_PROVIDERS) {
+        const spec = specProvider(name);
+        if (spec !== null && Array.isArray(spec.args))
+            return spec;
+    }
+    return null;
+}
+function exactArgumentVariadicDescriptor(expectedTypes) {
+    const descriptor = expectedTypes.length === 1 ? expectedTypes[0] : null;
+    return typeof descriptor === 'object' && descriptor !== null && descriptor.kind === 'variadicTuple'
+        ? descriptor
+        : null;
+}
+function exactArgumentCompatibleWideNumericPairDescriptor(expectedTypes) {
+    const descriptor = expectedTypes.length === 1 ? expectedTypes[0] : null;
+    return typeof descriptor === 'object' && descriptor !== null && descriptor.kind === 'compatibleWideNumericPair'
+        ? descriptor
+        : null;
+}
+function exactArgumentMapAccessDescriptor(expectedTypes) {
+    const descriptor = expectedTypes.length === 1 ? expectedTypes[0] : null;
+    return typeof descriptor === 'object' && descriptor !== null && descriptor.kind === 'mapAccess'
+        ? descriptor
+        : null;
+}
+function exactArgumentBuiltinMessage(spec, argCount) {
+    const variadicDescriptor = exactArgumentVariadicDescriptor(spec.args);
+    if (variadicDescriptor !== null) {
+        const minArgs = variadicDescriptor.min ?? 0;
+        if (argCount < minArgs) {
+            return spec.emptyMessage ?? spec.arityMessage ?? spec.message;
+        }
+        return spec.message ?? spec.arityMessage ?? spec.emptyMessage;
+    }
+    const mapAccessDescriptor = exactArgumentMapAccessDescriptor(spec.args);
+    if (mapAccessDescriptor !== null) {
+        return mapAccessDescriptor.spec.message;
+    }
+    const requiredArgCount = spec.args.filter((arg) => !(typeof arg === 'object' && arg !== null && arg.optional === true)).length;
+    return argCount >= requiredArgCount && argCount <= spec.args.length
+        ? spec.message ?? spec.arityMessage
+        : spec.arityMessage ?? spec.message;
+}
+function exactTupleElementTypeMatches(expectedType, argType) {
+    if (argType === null)
+        return false;
+    if (expectedType === 'numeric') {
+        return isSemanticIntBuiltinArg(argType);
+    }
+    return localBindingTypesEqual(expectedType, argType);
+}
+function exactTupleArgumentTypeMatches(expectedType, argType) {
+    return isTupleValueType(argType)
+        && argType.elements.length === expectedType.elements.length
+        && expectedType.elements.every((elementType, index) => exactTupleElementTypeMatches(elementType, argType.elements[index] ?? null));
+}
+function exactCompatibleWideNumericPairMatches(argTypes) {
+    return argTypes.length === 2
+        && argTypes.every((argType) => argType !== null && isSemanticWideNumericType(argType))
+        && semanticNumericResultType(argTypes[0], argTypes[1]) !== null;
 }
 class StudioCompileError extends Error {
     line;
@@ -7317,46 +9028,61 @@ function inlineBuilderSemanticTypeFromExpression(expression, locals) {
             return null;
     }
 }
+function zkInlineBuilderBuiltinSpec(name) {
+    switch (name) {
+        case 'build_submit_ballot_inline':
+            return {
+                kind: 'submitBallot',
+                valueType: 'NoritoBytes',
+                args: ['String', 'BlobLike', 'BlobLike', 'String', 'BlobLike', 'BlobLike'],
+                message: 'build_submit_ballot_inline expects (string election_id, Blob|bytes ciphertext, Blob|bytes nullifier32, string backend, Blob|bytes proof, Blob|bytes vk)',
+                compileMessage: 'build_submit_ballot_inline expects (election_id, ciphertext, nullifier, backend, proof, vk)',
+            };
+        case 'build_unshield_inline':
+            return {
+                kind: 'unshield',
+                valueType: 'NoritoBytes',
+                args: ['AssetDefinitionId', 'AccountId', 'numeric', 'BlobLike', 'String', 'BlobLike', 'BlobLike'],
+                message: 'build_unshield_inline expects (AssetDefinitionId, AccountId, int amount, Blob|bytes inputs32, string backend, Blob|bytes proof, Blob|bytes vk)',
+                compileMessage: 'build_unshield_inline expects (asset, to, amount, inputs, backend, proof, vk)',
+            };
+        default:
+            return null;
+    }
+}
 function validateZkInlineBuilderStaticSemanticShape(expression, locals) {
-    if (expression.name === 'build_submit_ballot_inline') {
-        const message = 'build_submit_ballot_inline expects (string election_id, Blob|bytes ciphertext, Blob|bytes nullifier32, string backend, Blob|bytes proof, Blob|bytes vk)';
-        if (expression.args.length !== 6) {
-            throw new StudioCompileError(`semantic error: ${message}`, expression.line, expression.column);
-        }
-        const argTypes = expression.args.map((arg) => inlineBuilderSemanticTypeFromExpression(arg, locals));
-        const valid = (argTypes[0] === null || argTypes[0] === 'String')
-            && (argTypes[1] === null || isSemanticBlobLikeType(argTypes[1]))
-            && (argTypes[2] === null || isSemanticBlobLikeType(argTypes[2]))
-            && (argTypes[3] === null || argTypes[3] === 'String')
-            && (argTypes[4] === null || isSemanticBlobLikeType(argTypes[4]))
-            && (argTypes[5] === null || isSemanticBlobLikeType(argTypes[5]));
-        if (!valid) {
-            throw new StudioCompileError(`semantic error: ${message}`, expression.line, expression.column);
-        }
+    const spec = zkInlineBuilderBuiltinSpec(expression.name);
+    if (spec === null) {
         return;
     }
-    const message = 'build_unshield_inline expects (AssetDefinitionId, AccountId, int amount, Blob|bytes inputs32, string backend, Blob|bytes proof, Blob|bytes vk)';
-    if (expression.args.length !== 7) {
-        throw new StudioCompileError(`semantic error: ${message}`, expression.line, expression.column);
+    if (expression.args.length !== spec.args.length) {
+        throw new StudioCompileError(`semantic error: ${spec.message}`, expression.line, expression.column);
     }
     const argTypes = expression.args.map((arg) => inlineBuilderSemanticTypeFromExpression(arg, locals));
-    const valid = (argTypes[0] === null || argTypes[0] === 'AssetDefinitionId')
-        && (argTypes[1] === null || argTypes[1] === 'AccountId')
-        && (argTypes[2] === null || argTypes[2] === 'int')
-        && (argTypes[3] === null || isSemanticBlobLikeType(argTypes[3]))
-        && (argTypes[4] === null || argTypes[4] === 'String')
-        && (argTypes[5] === null || isSemanticBlobLikeType(argTypes[5]))
-        && (argTypes[6] === null || isSemanticBlobLikeType(argTypes[6]));
+    const valid = spec.args.every((expectedType, index) => {
+        const argType = argTypes[index];
+        if (argType === null)
+            return true;
+        if (expectedType === 'BlobLike')
+            return isSemanticBlobLikeType(argType);
+        if (expectedType === 'numeric')
+            return argType === 'int';
+        return argType === expectedType;
+    });
     if (!valid) {
-        throw new StudioCompileError(`semantic error: ${message}`, expression.line, expression.column);
+        throw new StudioCompileError(`semantic error: ${spec.message}`, expression.line, expression.column);
     }
 }
 function zkInlineBuilderInstructionBytesFromExpression(expression, locals = new Map()) {
     try {
+        const spec = zkInlineBuilderBuiltinSpec(expression.name);
+        if (spec === null) {
+            return null;
+        }
         validateZkInlineBuilderStaticSemanticShape(expression, locals);
-        if (expression.name === 'build_submit_ballot_inline') {
-            if (expression.args.length !== 6) {
-                throw new StudioCompileError('build_submit_ballot_inline expects (election_id, ciphertext, nullifier, backend, proof, vk) in the browser compiler.', expression.line, expression.column);
+        if (spec.kind === 'submitBallot') {
+            if (expression.args.length !== spec.args.length) {
+                throw new StudioCompileError(`${spec.compileMessage} in the browser compiler.`, expression.line, expression.column);
             }
             return encodeSubmitBallotInstructionBoxBytes({
                 electionId: inlineBuilderStaticLiteralString(expression.args[0], locals, 'build_submit_ballot_inline election_id'),
@@ -7367,9 +9093,9 @@ function zkInlineBuilderInstructionBytesFromExpression(expression, locals = new 
                 verifyingKey: inlineBuilderStaticLiteralString(expression.args[5], locals, 'build_submit_ballot_inline vk_ref'),
             });
         }
-        if (expression.name === 'build_unshield_inline') {
-            if (expression.args.length !== 7) {
-                throw new StudioCompileError('build_unshield_inline expects (asset, to, amount, inputs, backend, proof, vk) in the browser compiler.', expression.line, expression.column);
+        if (spec.kind === 'unshield') {
+            if (expression.args.length !== spec.args.length) {
+                throw new StudioCompileError(`${spec.compileMessage} in the browser compiler.`, expression.line, expression.column);
             }
             const amount = expression.args[2];
             if (amount?.kind !== 'number') {
@@ -7404,10 +9130,7 @@ function rematerializablePointerParamLiteralFromExpression(expression, locals = 
     const literal = rematerializablePointerLiteralFromExpression(expression, locals);
     if (literal !== null && (literal.valueType === 'String' || literal.valueType === 'Blob' || literal.valueType === 'NoritoBytes'))
         return literal;
-    if (expression.kind === 'call' && expression.name === 'build_submit_ballot_inline') {
-        return zkInlineBuilderNoritoBytesLiteralFromExpression(expression, locals);
-    }
-    if (expression.kind === 'call' && expression.name === 'build_unshield_inline') {
+    if (expression.kind === 'call' && zkInlineBuilderBuiltinSpec(expression.name) !== null) {
         return zkInlineBuilderNoritoBytesLiteralFromExpression(expression, locals);
     }
     return null;
@@ -8052,7 +9775,7 @@ function isRematerializablePointerParamType(type) {
     return type === 'String' || type === 'Blob' || type === 'NoritoBytes';
 }
 function isZkInlineBuilderCallName(name) {
-    return name === 'build_submit_ballot_inline' || name === 'build_unshield_inline';
+    return zkInlineBuilderBuiltinSpec(name) !== null;
 }
 function mergeFunctionParamLiteralHint(hints, functionName, paramIndex, literal) {
     const byParam = hints.get(functionName) ?? new Map();
@@ -8649,13 +10372,7 @@ function collectDirectStatePathLocalNamesInExpression(expression, out) {
             collectDirectStatePathLocalNamesInExpression(expression.index, out);
             return;
         case 'call':
-            if ((expression.name === 'state_get'
-                || expression.name === 'state_set'
-                || expression.name === 'state_del'
-                || expression.name === 'state_keys'
-                || expression.name === 'state_has'
-                || expression.name === 'state_len'
-                || expression.name === 'state_count')
+            if (stateHostBuiltinSpec(expression.name) !== null
                 && expression.args[0]?.kind === 'stateReference') {
                 out.add(expression.args[0].name);
             }
@@ -8774,7 +10491,7 @@ function collectPathHelperBaseLocalNamesInExpression(expression, out) {
             collectPathHelperBaseLocalNamesInExpression(expression.index, out);
             return;
         case 'call':
-            if (expression.name === 'path' && expression.args[0]?.kind === 'stateReference') {
+            if (pathBuiltinSpec(expression.name) !== null && expression.args[0]?.kind === 'stateReference') {
                 out.add(expression.args[0].name);
             }
             expression.args.forEach((arg) => collectPathHelperBaseLocalNamesInExpression(arg, out));
@@ -9537,34 +11254,47 @@ function throwUnsupportedStateMapMemberType(kind, type, line) {
     const allowed = kind === 'key' ? 'int or pointer types' : 'int, bool, Json, Blob, or pointer types';
     throw new StudioCompileError(`semantic error: state Map ${kind} type \`${renderUnsupportedStateTypeName(type)}\` is not supported for durable storage; use ${allowed}`, line, 1);
 }
-function isSemanticPointerConstructorArgAssignable(name, argType) {
-    const pointerType = pointerConstructorValueType(name);
-    if (pointerType === null || argType === null)
+const POINTER_CONSTRUCTOR_BUILTINS = Object.freeze({
+    account_id: { valueType: 'AccountId', compile: 'account' },
+    asset_definition: { valueType: 'AssetDefinitionId', compile: 'asset_definition', validateLiteral: 'asset_definition' },
+    asset_id: { valueType: 'AssetId', compile: 'typed' },
+    nft_id: { valueType: 'NftId', compile: 'nft' },
+    name: { valueType: 'Name', compile: 'name', expectedDescription: 'string, Name, or Blob (NoritoBytes)' },
+    json: { valueType: 'Json', compile: 'json', expectedDescription: 'string, Json, or Blob (NoritoBytes)' },
+    domain: { valueType: 'DomainId', compile: 'domain', validateLiteral: 'domain' },
+    domain_id: { valueType: 'DomainId', compile: 'domain', validateLiteral: 'domain' },
+    blob: { valueType: 'Blob', compile: 'blob', expectedDescription: 'string or Blob|bytes' },
+    norito_bytes: { valueType: 'NoritoBytes', compile: 'norito_bytes', expectedDescription: 'string or Blob|bytes' },
+    dataspace_id: { valueType: 'DataSpaceId', compile: 'typed', expectedDescription: 'string, DataSpaceId, or Blob|bytes (NoritoBytes)' },
+    axt_descriptor: { valueType: 'AxtDescriptor', compile: 'typed' },
+    asset_handle: { valueType: 'AssetHandle', compile: 'typed' },
+    proof_blob: { valueType: 'ProofBlob', compile: 'typed' },
+    soracloud_request: { valueType: 'SoracloudRequest', compile: 'typed', expectedDescription: 'string, SoracloudRequest, or Blob|bytes (NoritoBytes)' },
+    soracloud_response: { valueType: 'SoracloudResponse', compile: 'typed', expectedDescription: 'string, SoracloudResponse, or Blob|bytes (NoritoBytes)' },
+});
+function pointerConstructorBuiltinSpec(name) {
+    const spec = POINTER_CONSTRUCTOR_BUILTINS[name];
+    return spec === undefined
+        ? null
+        : {
+            canonicalName: name,
+            expectedDescription: 'string, matching pointer type, or Blob|bytes (NoritoBytes)',
+            validateLiteral: null,
+            ...spec,
+        };
+}
+function isSemanticPointerConstructorArgAssignable(spec, argType) {
+    if (spec === null || argType === null)
         return true;
     if (argType === 'String')
         return true;
-    if (localBindingTypesEqual(pointerType, argType))
+    if (localBindingTypesEqual(spec.valueType, argType))
         return true;
     return isSemanticBlobLikeType(argType);
 }
 function pointerConstructorExpectedDescription(name) {
-    switch (name) {
-        case 'json':
-            return 'string, Json, or Blob (NoritoBytes)';
-        case 'name':
-            return 'string, Name, or Blob (NoritoBytes)';
-        case 'blob':
-        case 'norito_bytes':
-            return 'string or Blob|bytes';
-        case 'dataspace_id':
-            return 'string, DataSpaceId, or Blob|bytes (NoritoBytes)';
-        case 'soracloud_request':
-            return 'string, SoracloudRequest, or Blob|bytes (NoritoBytes)';
-        case 'soracloud_response':
-            return 'string, SoracloudResponse, or Blob|bytes (NoritoBytes)';
-        default:
-            return 'string, matching pointer type, or Blob|bytes (NoritoBytes)';
-    }
+    return pointerConstructorBuiltinSpec(name)?.expectedDescription
+        ?? 'string, matching pointer type, or Blob|bytes (NoritoBytes)';
 }
 function rematerializableStringLiteralFromBinding(binding) {
     if (binding?.kind === 'pointer'
@@ -9660,41 +11390,7 @@ function stateTypeToValueType(type) {
     return type;
 }
 function pointerConstructorValueType(name) {
-    switch (name) {
-        case 'account_id':
-            return 'AccountId';
-        case 'asset_definition':
-            return 'AssetDefinitionId';
-        case 'asset_id':
-            return 'AssetId';
-        case 'domain':
-        case 'domain_id':
-            return 'DomainId';
-        case 'nft_id':
-            return 'NftId';
-        case 'name':
-            return 'Name';
-        case 'json':
-            return 'Json';
-        case 'blob':
-            return 'Blob';
-        case 'norito_bytes':
-            return 'NoritoBytes';
-        case 'dataspace_id':
-            return 'DataSpaceId';
-        case 'axt_descriptor':
-            return 'AxtDescriptor';
-        case 'asset_handle':
-            return 'AssetHandle';
-        case 'proof_blob':
-            return 'ProofBlob';
-        case 'soracloud_request':
-            return 'SoracloudRequest';
-        case 'soracloud_response':
-            return 'SoracloudResponse';
-        default:
-            return null;
-    }
+    return pointerConstructorBuiltinSpec(name)?.valueType ?? null;
 }
 function pointerConstructorNameForValueType(type) {
     switch (type) {
@@ -9731,9 +11427,6 @@ function pointerConstructorNameForValueType(type) {
         default:
             return String(type);
     }
-}
-function isPointerConstructorCall(name) {
-    return pointerConstructorValueType(name) !== null;
 }
 function rematerializableAssetDefinitionLiteralFromExpression(expression) {
     if (expression.kind === 'assetDefinitionLiteral') {
@@ -10435,7 +12128,8 @@ class StudioCodeGenerator {
         }
         if (expression.kind !== 'call')
             return null;
-        if (expression.name === 'build_submit_ballot_inline') {
+        const spec = zkInlineBuilderBuiltinSpec(expression.name);
+        if (spec?.kind === 'submitBallot') {
             if (expression.args.length !== 6)
                 return null;
             const electionId = this.resolveStaticStringLiteral(expression.args[0], scope);
@@ -10449,7 +12143,7 @@ class StudioCodeGenerator {
                     ],
                 };
         }
-        if (expression.name === 'build_unshield_inline') {
+        if (spec?.kind === 'unshield') {
             if (expression.args.length !== 7)
                 return null;
             const assetDefinition = this.resolveStaticAssetDefinitionLiteral(expression.args[0], scope, literalScope);
@@ -10581,14 +12275,14 @@ class StudioCodeGenerator {
         };
         return { reads: readAssetAccess(asset), writes: [] };
     }
-    resolveStaticZkReadAccess(expression, scope) {
+    resolveStaticZkReadAccess(expression, spec, scope) {
         const [payload] = expression.args;
         if (!payload)
             return null;
         const raw = this.resolveStaticStringLiteral(payload, scope);
         if (raw === null)
             return null;
-        switch (expression.name) {
+        switch (spec.operation) {
             case 'zk_roots_get':
                 return decodeZkRootsGetRequestLiteralAccess(raw);
             case 'zk_vote_get_tally':
@@ -10887,21 +12581,19 @@ class StudioCodeGenerator {
                     summary.calls.add(expression.name);
                     return;
                 }
-                if ((expression.name === 'contains'
-                    || expression.name === 'get_or'
-                    || expression.name === 'get_or_default'
-                    || expression.name === 'ensure')
+                const mapAccessSpec = mapAccessBuiltinSpec(expression.name);
+                if (mapAccessSpec !== null
                     && expression.args[0]?.kind === 'stateReference') {
                     if (scope.has(expression.args[0].name)) {
                         summary.dynamicStateReads = true;
-                        if (expression.name === 'ensure')
+                        if (mapAccessSpec.mutatesDurableState)
                             summary.dynamicStateWrites = true;
                     }
                     else {
                         const stateType = this.stateTypes.get(expression.args[0].name);
                         if (stateType && isMapStateType(stateType)) {
                             this.addStateReadAccess(summary, expression.args[0].name, stateType);
-                            if (expression.name === 'ensure')
+                            if (mapAccessSpec.mutatesDurableState)
                                 this.addStateWriteAccess(summary, expression.args[0].name, stateType);
                         }
                     }
@@ -10915,7 +12607,9 @@ class StudioCodeGenerator {
                         this.addGlobalWildcardAccess(summary);
                     }
                 }
-                if (expression.name === 'execute_query' || expression.name === 'query_execute_norito') {
+                const vendorBridgeAccessSpec = vendorBridgeBuiltinSpec(expression.name);
+                const noritoReadAccessSpec = noritoReadBuiltinSpec(expression.name);
+                if (vendorBridgeAccessSpec?.accessKind === 'query' || noritoReadAccessSpec?.accessKind === 'query') {
                     const payload = expression.args[0] ? this.resolveStaticNoritoLiteralAccess(expression.args[0], scope, 'query') : null;
                     if (payload) {
                         this.applyLiteralAccess(summary, payload);
@@ -10924,8 +12618,8 @@ class StudioCodeGenerator {
                         this.addGlobalWildcardAccess(summary);
                     }
                 }
-                if (expression.name === 'zk_roots_get' || expression.name === 'zk_vote_get_tally' || expression.name === 'vrf_epoch_seed') {
-                    const access = this.resolveStaticZkReadAccess(expression, scope);
+                if (noritoReadAccessSpec?.accessKind === 'zk_read') {
+                    const access = this.resolveStaticZkReadAccess(expression, noritoReadAccessSpec, scope);
                     if (access) {
                         this.applyLiteralAccess(summary, access);
                     }
@@ -10951,16 +12645,21 @@ class StudioCodeGenerator {
                         this.addGlobalWildcardAccess(summary);
                     }
                 }
-                if (expression.name === 'use_nullifier') {
+                const privacyOutputAccessSpec = privacyOutputBuiltinSpec(expression.name);
+                if (privacyOutputAccessSpec?.operation === 'use_nullifier') {
+                    this.addOpaqueIsiFallbackAccess(summary);
+                }
+                if (transferBatchApplyBuiltinSpec(expression.name) !== null) {
                     this.addOpaqueIsiFallbackAccess(summary);
                 }
                 if (smartContractLifecycleBuiltinSpec(expression.name) !== null) {
                     this.addOpaqueIsiFallbackAccess(summary);
                 }
-                if (expression.name === 'call_contract') {
+                const callContractAccessSpec = callContractBuiltinSpec(expression.name);
+                if (callContractAccessSpec !== null) {
                     this.addOpaqueIsiFallbackAccess(summary);
                 }
-                if (expression.name === 'transfer_batch') {
+                if (transferBatchBuiltinSpec(expression.name) !== null) {
                     const access = this.resolveStaticTransferBatchAccess(expression.args, scope, literalScope);
                     if (access) {
                         this.applyLiteralAccess(summary, access);
@@ -10969,10 +12668,13 @@ class StudioCodeGenerator {
                         this.addGlobalWildcardAccess(summary);
                     }
                 }
-                if (expression.name === 'transfer_asset') {
-                    const access = expression.args.length === 4
+                const nativeAssetOperationSpec = nativeAssetOperationBuiltinSpec(expression.name);
+                if (nativeAssetOperationSpec !== null) {
+                    const access = nativeAssetOperationSpec.kind === 'transfer' && expression.args.length === 4
                         ? this.resolveStaticTransferAssetAccess(expression.args[0], expression.args[1], expression.args[2], scope, literalScope)
-                        : null;
+                        : nativeAssetOperationSpec.kind === 'mintOrBurn' && expression.args.length === 3
+                            ? this.resolveStaticMintOrBurnAssetAccess(expression.args[0], expression.args[1], scope, literalScope)
+                            : null;
                     if (access) {
                         this.applyLiteralAccess(summary, access);
                     }
@@ -10980,7 +12682,7 @@ class StudioCodeGenerator {
                         this.addGlobalWildcardAccess(summary);
                     }
                 }
-                if (expression.name === 'set_account_detail') {
+                if (accountDetailBuiltinSpec(expression.name) !== null) {
                     const account = expression.args[0]
                         ? this.resolveStaticAccountLiteral(expression.args[0], scope, literalScope)
                         : null;
@@ -10997,18 +12699,15 @@ class StudioCodeGenerator {
                         this.addOpaqueIsiFallbackAccess(summary);
                     }
                 }
-                if (expression.name === 'axt_begin'
-                    || expression.name === 'axt_touch'
-                    || expression.name === 'verify_ds_proof'
-                    || expression.name === 'use_asset_handle'
-                    || expression.name === 'axt_commit') {
+                if (axtBuiltinSpec(expression.name) !== null) {
                     this.addOpaqueIsiFallbackAccess(summary);
                 }
-                if (expression.name === 'create_nfts_for_all_users'
-                    || expression.name === 'set_execution_depth'
-                    || expression.name === 'register_domain'
-                    || expression.name === 'unregister_domain') {
-                    if (expression.name === 'register_domain' || expression.name === 'unregister_domain') {
+                if (legacyHostRuntimeControlBuiltinSpec(expression.name) !== null) {
+                    summary.incomplete = true;
+                }
+                const lifecycleSpec = lifecycleBuiltinSpec(expression.name);
+                if (lifecycleSpec !== null) {
+                    if (lifecycleSpec.kind === 'domain') {
                         const domainLiteral = expression.args[0]
                             ? this.resolveStaticDomainLiteral(expression.args[0], scope, literalScope)
                             : null;
@@ -11016,14 +12715,82 @@ class StudioCodeGenerator {
                             const key = keyDomain(domainLiteral);
                             summary.reads.add(key);
                             summary.writes.add(key);
-                            return;
                         }
-                        this.addOpaqueIsiFallbackAccess(summary);
-                        return;
+                        else {
+                            this.addOpaqueIsiFallbackAccess(summary);
+                        }
                     }
-                    summary.incomplete = true;
+                    else if (lifecycleSpec.kind === 'account') {
+                        const accountLiteral = expression.args[0]
+                            ? this.resolveStaticAccountLiteral(expression.args[0], scope, literalScope)
+                            : null;
+                        if (accountLiteral !== null) {
+                            const key = keyAccount(accountLiteral);
+                            summary.reads.add(key);
+                            summary.writes.add(key);
+                        }
+                        else {
+                            this.addOpaqueIsiFallbackAccess(summary);
+                        }
+                    }
+                    else if (lifecycleSpec.kind === 'registerAsset' || lifecycleSpec.kind === 'createNewAsset') {
+                        const assetDefinition = expression.args[0]
+                            ? this.resolveStaticAssetDefinitionLiteral(expression.args[0], scope, literalScope)
+                            : null;
+                        const account = lifecycleSpec.kind === 'createNewAsset' && expression.args[3]
+                            ? this.resolveStaticAccountLiteral(expression.args[3], scope, literalScope)
+                            : null;
+                        if (assetDefinition !== null) {
+                            const assetDefinitionKey = keyAssetDef(assetDefinition);
+                            summary.reads.add(assetDefinitionKey);
+                            summary.writes.add(assetDefinitionKey);
+                            if (lifecycleSpec.kind === 'createNewAsset') {
+                                if (account !== null) {
+                                    summary.reads.add(keyAccount(account));
+                                    summary.reads.add(keyAsset(`${assetDefinition}#${account}`));
+                                    summary.writes.add(keyAsset(`${assetDefinition}#${account}`));
+                                }
+                                else {
+                                    this.addOpaqueIsiFallbackAccess(summary);
+                                }
+                            }
+                        }
+                        else {
+                            this.addOpaqueIsiFallbackAccess(summary);
+                        }
+                    }
+                    else if (lifecycleSpec.kind === 'assetDefinition') {
+                        const assetDefinition = expression.args[0]
+                            ? this.resolveStaticAssetDefinitionLiteral(expression.args[0], scope, literalScope)
+                            : null;
+                        if (assetDefinition !== null) {
+                            const key = keyAssetDef(assetDefinition);
+                            summary.reads.add(key);
+                            summary.writes.add(key);
+                        }
+                        else {
+                            this.addOpaqueIsiFallbackAccess(summary);
+                        }
+                    }
+                    else if (lifecycleSpec.kind === 'transferDomain') {
+                        const domainLiteral = expression.args[1]
+                            ? this.resolveStaticTransferDomainLiteral(expression.args[1], scope, literalScope)
+                            : null;
+                        const toAccount = expression.args[2]
+                            ? this.resolveStaticAccountLiteral(expression.args[2], scope, literalScope)
+                            : null;
+                        if (domainLiteral !== null && toAccount !== null) {
+                            const key = keyDomain(domainLiteral);
+                            summary.reads.add(key);
+                            summary.reads.add(keyAccount(toAccount));
+                            summary.writes.add(key);
+                        }
+                        else {
+                            this.addOpaqueIsiFallbackAccess(summary);
+                        }
+                    }
                 }
-                if (expression.name === 'register_account' || expression.name === 'unregister_account') {
+                if (accountMultisigAdminBuiltinSpec(expression.name) !== null) {
                     const accountLiteral = expression.args[0]
                         ? this.resolveStaticAccountLiteral(expression.args[0], scope, literalScope)
                         : null;
@@ -11036,199 +12803,115 @@ class StudioCodeGenerator {
                         this.addOpaqueIsiFallbackAccess(summary);
                     }
                 }
-                if (expression.name === 'add_signatory'
-                    || expression.name === 'remove_signatory'
-                    || expression.name === 'set_account_quorum') {
-                    const accountLiteral = expression.args[0]
-                        ? this.resolveStaticAccountLiteral(expression.args[0], scope, literalScope)
-                        : null;
-                    if (accountLiteral !== null) {
-                        const key = keyAccount(accountLiteral);
-                        summary.reads.add(key);
-                        summary.writes.add(key);
-                    }
-                    else {
+                const managementSpec = managementBuiltinSpec(expression.name);
+                if (managementSpec !== null) {
+                    if (managementSpec.kind === 'jsonOpaque') {
                         this.addOpaqueIsiFallbackAccess(summary);
                     }
-                }
-                if (expression.name === 'register_asset' || expression.name === 'create_new_asset') {
-                    const assetDefinition = expression.args[0]
-                        ? this.resolveStaticAssetDefinitionLiteral(expression.args[0], scope, literalScope)
-                        : null;
-                    const account = expression.name === 'create_new_asset' && expression.args[3]
-                        ? this.resolveStaticAccountLiteral(expression.args[3], scope, literalScope)
-                        : null;
-                    if (assetDefinition !== null) {
-                        const assetDefinitionKey = keyAssetDef(assetDefinition);
-                        summary.reads.add(assetDefinitionKey);
-                        summary.writes.add(assetDefinitionKey);
-                        if (expression.name === 'create_new_asset') {
-                            if (account !== null) {
-                                summary.reads.add(keyAccount(account));
-                                summary.reads.add(keyAsset(`${assetDefinition}#${account}`));
-                                summary.writes.add(keyAsset(`${assetDefinition}#${account}`));
-                            }
-                            else {
-                                this.addOpaqueIsiFallbackAccess(summary);
-                            }
+                    else if (managementSpec.kind === 'triggerName' || managementSpec.kind === 'triggerEnabled') {
+                        const trigger = expression.args[0]
+                            ? this.resolveStaticNameLiteral(expression.args[0], scope, literalScope)
+                            : null;
+                        if (trigger !== null) {
+                            const key = keyTrigger(trigger);
+                            summary.reads.add(key);
+                            summary.writes.add(key);
+                        }
+                        else {
+                            this.addOpaqueIsiFallbackAccess(summary);
                         }
                     }
-                    else {
-                        this.addOpaqueIsiFallbackAccess(summary);
+                    else if (managementSpec.kind === 'roleJson' || managementSpec.kind === 'roleName') {
+                        const role = expression.args[0]
+                            ? this.resolveStaticNameLiteral(expression.args[0], scope, literalScope)
+                            : null;
+                        if (role !== null) {
+                            const key = keyRole(role);
+                            summary.reads.add(key);
+                            summary.writes.add(key);
+                        }
+                        else {
+                            this.addOpaqueIsiFallbackAccess(summary);
+                        }
+                    }
+                    else if (managementSpec.kind === 'roleBinding') {
+                        const account = expression.args[0]
+                            ? this.resolveStaticAccountLiteral(expression.args[0], scope, literalScope)
+                            : null;
+                        const role = expression.args[1]
+                            ? this.resolveStaticNameLiteral(expression.args[1], scope, literalScope)
+                            : null;
+                        if (account !== null && role !== null) {
+                            summary.reads.add(keyAccount(account));
+                            summary.reads.add(keyRole(role));
+                            summary.writes.add(keyAccount(account));
+                            summary.writes.add(keyRoleBinding(account, role));
+                        }
+                        else {
+                            this.addOpaqueIsiFallbackAccess(summary);
+                        }
+                    }
+                    else if (managementSpec.kind === 'permissionBinding') {
+                        const account = expression.args[0]
+                            ? this.resolveStaticAccountLiteral(expression.args[0], scope, literalScope)
+                            : null;
+                        const permission = expression.args[1]
+                            ? this.resolveStaticNameLiteral(expression.args[1], scope, literalScope)
+                            : null;
+                        if (account !== null && permission !== null) {
+                            summary.reads.add(keyAccount(account));
+                            summary.writes.add(keyAccount(account));
+                            summary.writes.add(keyPermAccount(account, permission));
+                        }
+                        else {
+                            this.addOpaqueIsiFallbackAccess(summary);
+                        }
                     }
                 }
-                if (expression.name === 'unregister_asset') {
-                    const assetDefinition = expression.args[0]
-                        ? this.resolveStaticAssetDefinitionLiteral(expression.args[0], scope, literalScope)
-                        : null;
-                    if (assetDefinition !== null) {
-                        const key = keyAssetDef(assetDefinition);
-                        summary.reads.add(key);
-                        summary.writes.add(key);
+                const nftAssetOperationSpec = nftAssetOperationBuiltinSpec(expression.name);
+                if (nftAssetOperationSpec !== null) {
+                    if (nftAssetOperationSpec.kind === 'mint') {
+                        const nft = expression.args[0] ? this.resolveStaticNftLiteral(expression.args[0], scope, literalScope) : null;
+                        const owner = expression.args[1] ? this.resolveStaticAccountLiteral(expression.args[1], scope, literalScope) : null;
+                        if (owner !== null)
+                            summary.reads.add(keyAccount(owner));
+                        if (nft !== null)
+                            addNftAccess(summary, nft);
+                        else
+                            addNftCoarseAccess(summary);
                     }
-                    else {
-                        this.addOpaqueIsiFallbackAccess(summary);
+                    else if (nftAssetOperationSpec.kind === 'burn') {
+                        const nft = expression.args[0] ? this.resolveStaticNftLiteral(expression.args[0], scope, literalScope) : null;
+                        if (nft !== null)
+                            addNftAccess(summary, nft);
+                        else
+                            addNftCoarseAccess(summary);
                     }
-                }
-                if (expression.name === 'register_peer'
-                    || expression.name === 'unregister_peer'
-                    || expression.name === 'create_trigger'
-                    || expression.name === 'register_trigger') {
-                    this.addOpaqueIsiFallbackAccess(summary);
-                }
-                if (expression.name === 'remove_trigger'
-                    || expression.name === 'unregister_trigger'
-                    || expression.name === 'set_trigger_enabled') {
-                    const trigger = expression.args[0]
-                        ? this.resolveStaticNameLiteral(expression.args[0], scope, literalScope)
-                        : null;
-                    if (trigger !== null) {
-                        const key = keyTrigger(trigger);
-                        summary.reads.add(key);
-                        summary.writes.add(key);
+                    else if (nftAssetOperationSpec.kind === 'transfer') {
+                        const from = expression.args[0] ? this.resolveStaticAccountLiteral(expression.args[0], scope, literalScope) : null;
+                        const nft = expression.args[1] ? this.resolveStaticNftLiteral(expression.args[1], scope, literalScope) : null;
+                        const to = expression.args[2] ? this.resolveStaticAccountLiteral(expression.args[2], scope, literalScope) : null;
+                        if (from !== null && to !== null && nft !== null) {
+                            summary.reads.add(keyAccount(from));
+                            summary.reads.add(keyAccount(to));
+                            addNftAccess(summary, nft);
+                        }
+                        else {
+                            this.addOpaqueIsiFallbackAccess(summary);
+                        }
                     }
-                    else {
-                        this.addOpaqueIsiFallbackAccess(summary);
-                    }
-                }
-                if (expression.name === 'create_role' || expression.name === 'delete_role') {
-                    const role = expression.args[0]
-                        ? this.resolveStaticNameLiteral(expression.args[0], scope, literalScope)
-                        : null;
-                    if (role !== null) {
-                        const key = keyRole(role);
-                        summary.reads.add(key);
-                        summary.writes.add(key);
-                    }
-                    else {
-                        this.addOpaqueIsiFallbackAccess(summary);
+                    else if (nftAssetOperationSpec.kind === 'metadata') {
+                        const nft = expression.args[0] ? this.resolveStaticNftLiteral(expression.args[0], scope, literalScope) : null;
+                        const key = expression.args[1] ? this.resolveStaticNameLiteral(expression.args[1], scope, literalScope) : null;
+                        if (nft !== null && key !== null)
+                            addNftDetailAccess(summary, nft, key);
+                        else if (nft !== null)
+                            addNftAccess(summary, nft);
+                        else
+                            addNftCoarseAccess(summary);
                     }
                 }
-                if (expression.name === 'grant_role' || expression.name === 'revoke_role') {
-                    const account = expression.args[0]
-                        ? this.resolveStaticAccountLiteral(expression.args[0], scope, literalScope)
-                        : null;
-                    const role = expression.args[1]
-                        ? this.resolveStaticNameLiteral(expression.args[1], scope, literalScope)
-                        : null;
-                    if (account !== null && role !== null) {
-                        summary.reads.add(keyAccount(account));
-                        summary.reads.add(keyRole(role));
-                        summary.writes.add(keyAccount(account));
-                        summary.writes.add(keyRoleBinding(account, role));
-                    }
-                    else {
-                        this.addOpaqueIsiFallbackAccess(summary);
-                    }
-                }
-                if (expression.name === 'grant_permission' || expression.name === 'revoke_permission') {
-                    const account = expression.args[0]
-                        ? this.resolveStaticAccountLiteral(expression.args[0], scope, literalScope)
-                        : null;
-                    const permission = expression.args[1]
-                        ? this.resolveStaticNameLiteral(expression.args[1], scope, literalScope)
-                        : null;
-                    if (account !== null && permission !== null) {
-                        summary.reads.add(keyAccount(account));
-                        summary.writes.add(keyAccount(account));
-                        summary.writes.add(keyPermAccount(account, permission));
-                    }
-                    else {
-                        this.addOpaqueIsiFallbackAccess(summary);
-                    }
-                }
-                if (expression.name === 'transfer_domain') {
-                    const domainLiteral = expression.args[1]
-                        ? this.resolveStaticTransferDomainLiteral(expression.args[1], scope, literalScope)
-                        : null;
-                    const toAccount = expression.args[2]
-                        ? this.resolveStaticAccountLiteral(expression.args[2], scope, literalScope)
-                        : null;
-                    if (domainLiteral !== null && toAccount !== null) {
-                        const key = keyDomain(domainLiteral);
-                        summary.reads.add(key);
-                        summary.reads.add(keyAccount(toAccount));
-                        summary.writes.add(key);
-                    }
-                    else {
-                        this.addOpaqueIsiFallbackAccess(summary);
-                    }
-                }
-                if (expression.name === 'nft_mint_asset') {
-                    const nft = expression.args[0] ? this.resolveStaticNftLiteral(expression.args[0], scope, literalScope) : null;
-                    const owner = expression.args[1] ? this.resolveStaticAccountLiteral(expression.args[1], scope, literalScope) : null;
-                    if (owner !== null)
-                        summary.reads.add(keyAccount(owner));
-                    if (nft !== null)
-                        addNftAccess(summary, nft);
-                    else
-                        addNftCoarseAccess(summary);
-                }
-                if (expression.name === 'nft_burn_asset') {
-                    const nft = expression.args[0] ? this.resolveStaticNftLiteral(expression.args[0], scope, literalScope) : null;
-                    if (nft !== null)
-                        addNftAccess(summary, nft);
-                    else
-                        addNftCoarseAccess(summary);
-                }
-                if (expression.name === 'nft_transfer_asset') {
-                    const from = expression.args[0] ? this.resolveStaticAccountLiteral(expression.args[0], scope, literalScope) : null;
-                    const nft = expression.args[1] ? this.resolveStaticNftLiteral(expression.args[1], scope, literalScope) : null;
-                    const to = expression.args[2] ? this.resolveStaticAccountLiteral(expression.args[2], scope, literalScope) : null;
-                    if (from !== null && to !== null && nft !== null) {
-                        summary.reads.add(keyAccount(from));
-                        summary.reads.add(keyAccount(to));
-                        addNftAccess(summary, nft);
-                    }
-                    else {
-                        this.addOpaqueIsiFallbackAccess(summary);
-                    }
-                }
-                if (expression.name === 'nft_set_metadata') {
-                    const nft = expression.args[0] ? this.resolveStaticNftLiteral(expression.args[0], scope, literalScope) : null;
-                    const key = expression.args[1] ? this.resolveStaticNameLiteral(expression.args[1], scope, literalScope) : null;
-                    if (nft !== null && key !== null)
-                        addNftDetailAccess(summary, nft, key);
-                    else if (nft !== null)
-                        addNftAccess(summary, nft);
-                    else
-                        addNftCoarseAccess(summary);
-                }
-                if (expression.name === 'escrow_open_offer'
-                    || expression.name === 'escrow_accept'
-                    || expression.name === 'escrow_mark_payment_sent'
-                    || expression.name === 'escrow_release'
-                    || expression.name === 'escrow_cancel'
-                    || expression.name === 'escrow_open_dispute'
-                    || expression.name === 'escrow_resolve_dispute'
-                    || expression.name === 'anonymous_escrow_open_offer'
-                    || expression.name === 'anonymous_escrow_accept'
-                    || expression.name === 'anonymous_escrow_mark_payment_sent'
-                    || expression.name === 'anonymous_escrow_release'
-                    || expression.name === 'anonymous_escrow_cancel'
-                    || expression.name === 'anonymous_escrow_open_dispute'
-                    || expression.name === 'anonymous_escrow_resolve_dispute'
-                    || soracloudBuiltinSpec(expression.name) !== null) {
+                if (escrowBuiltinSpec(expression.name) !== null || soracloudBuiltinSpec(expression.name) !== null) {
                     summary.incomplete = true;
                     this.addOpaqueIsiFallbackAccess(summary);
                 }
@@ -11806,120 +13489,6 @@ class StudioCodeGenerator {
         }
         return out;
     }
-    expressionCallsPrivilegedSubscriptionBuiltin(expression, stack, cache) {
-        switch (expression.kind) {
-            case 'tupleLiteral':
-                return expression.elements.some((element) => this.expressionCallsPrivilegedSubscriptionBuiltin(element, stack, cache));
-            case 'negate':
-            case 'not':
-                return this.expressionCallsPrivilegedSubscriptionBuiltin(expression.expression, stack, cache);
-            case 'binaryInt':
-            case 'compare':
-            case 'logical':
-                return this.expressionCallsPrivilegedSubscriptionBuiltin(expression.left, stack, cache)
-                    || this.expressionCallsPrivilegedSubscriptionBuiltin(expression.right, stack, cache);
-            case 'conditional':
-                return this.expressionCallsPrivilegedSubscriptionBuiltin(expression.condition, stack, cache)
-                    || this.expressionCallsPrivilegedSubscriptionBuiltin(expression.whenTrue, stack, cache)
-                    || this.expressionCallsPrivilegedSubscriptionBuiltin(expression.whenFalse, stack, cache);
-            case 'member':
-                return this.expressionCallsPrivilegedSubscriptionBuiltin(expression.object, stack, cache);
-            case 'index':
-                return this.expressionCallsPrivilegedSubscriptionBuiltin(expression.object, stack, cache)
-                    || this.expressionCallsPrivilegedSubscriptionBuiltin(expression.index, stack, cache);
-            case 'call':
-                if (expression.name === 'subscription_bill' || expression.name === 'subscription_record_usage')
-                    return true;
-                if (expression.args.some((arg) => this.expressionCallsPrivilegedSubscriptionBuiltin(arg, stack, cache)))
-                    return true;
-                return this.functionCallsPrivilegedSubscriptionBuiltin(expression.name, stack, cache);
-            default:
-                return false;
-        }
-    }
-    statementCallsPrivilegedSubscriptionBuiltin(statement, stack, cache) {
-        switch (statement.kind) {
-            case 'letLocal':
-                return this.expressionCallsPrivilegedSubscriptionBuiltin(statement.value, stack, cache);
-            case 'info':
-                return this.expressionCallsPrivilegedSubscriptionBuiltin(statement.expression, stack, cache);
-            case 'transferAsset':
-                return this.expressionCallsPrivilegedSubscriptionBuiltin(statement.from, stack, cache)
-                    || this.expressionCallsPrivilegedSubscriptionBuiltin(statement.to, stack, cache)
-                    || this.expressionCallsPrivilegedSubscriptionBuiltin(statement.asset, stack, cache)
-                    || this.expressionCallsPrivilegedSubscriptionBuiltin(statement.amount, stack, cache);
-            case 'mintAsset':
-            case 'burnAsset':
-                return this.expressionCallsPrivilegedSubscriptionBuiltin(statement.account, stack, cache)
-                    || this.expressionCallsPrivilegedSubscriptionBuiltin(statement.asset, stack, cache)
-                    || this.expressionCallsPrivilegedSubscriptionBuiltin(statement.amount, stack, cache);
-            case 'setAccountDetail':
-                return this.expressionCallsPrivilegedSubscriptionBuiltin(statement.account, stack, cache)
-                    || this.expressionCallsPrivilegedSubscriptionBuiltin(statement.key, stack, cache)
-                    || this.expressionCallsPrivilegedSubscriptionBuiltin(statement.value, stack, cache);
-            case 'setState':
-                return this.expressionCallsPrivilegedSubscriptionBuiltin(statement.value, stack, cache);
-            case 'setIndexedState':
-            case 'updateIndexedState':
-                return this.expressionCallsPrivilegedSubscriptionBuiltin(statement.key, stack, cache)
-                    || this.expressionCallsPrivilegedSubscriptionBuiltin(statement.value, stack, cache);
-            case 'updateValue':
-                return this.expressionCallsPrivilegedSubscriptionBuiltin(statement.value, stack, cache);
-            case 'executeQuery':
-                return this.expressionCallsPrivilegedSubscriptionBuiltin(statement.payload, stack, cache);
-            case 'expression':
-                return this.expressionCallsPrivilegedSubscriptionBuiltin(statement.expression, stack, cache);
-            case 'return':
-                return statement.expression !== null && this.expressionCallsPrivilegedSubscriptionBuiltin(statement.expression, stack, cache);
-            case 'if':
-                return this.expressionCallsPrivilegedSubscriptionBuiltin(statement.condition, stack, cache)
-                    || statement.thenBranch.some((entry) => this.statementCallsPrivilegedSubscriptionBuiltin(entry, stack, cache))
-                    || statement.elseBranch.some((entry) => this.statementCallsPrivilegedSubscriptionBuiltin(entry, stack, cache));
-            case 'while':
-                return this.expressionCallsPrivilegedSubscriptionBuiltin(statement.condition, stack, cache)
-                    || statement.body.some((entry) => this.statementCallsPrivilegedSubscriptionBuiltin(entry, stack, cache));
-            case 'forRange':
-            case 'repeat':
-                return this.expressionCallsPrivilegedSubscriptionBuiltin(statement.count, stack, cache)
-                    || statement.body.some((entry) => this.statementCallsPrivilegedSubscriptionBuiltin(entry, stack, cache));
-            case 'forLoop':
-                return (statement.init !== null && this.statementCallsPrivilegedSubscriptionBuiltin(statement.init, stack, cache))
-                    || (statement.condition !== null && this.expressionCallsPrivilegedSubscriptionBuiltin(statement.condition, stack, cache))
-                    || (statement.step !== null && this.statementCallsPrivilegedSubscriptionBuiltin(statement.step, stack, cache))
-                    || statement.body.some((entry) => this.statementCallsPrivilegedSubscriptionBuiltin(entry, stack, cache));
-            case 'forMap':
-                return this.expressionCallsPrivilegedSubscriptionBuiltin(statement.map, stack, cache)
-                    || this.expressionCallsPrivilegedSubscriptionBuiltin(statement.start, stack, cache)
-                    || this.expressionCallsPrivilegedSubscriptionBuiltin(statement.count, stack, cache)
-                    || statement.body.some((entry) => this.statementCallsPrivilegedSubscriptionBuiltin(entry, stack, cache));
-            case 'break':
-            case 'continue':
-                return false;
-        }
-    }
-    functionCallsPrivilegedSubscriptionBuiltin(name, stack, cache) {
-        const cached = cache.get(name);
-        if (cached !== undefined)
-            return cached;
-        const fn = this.functions.get(name);
-        if (!fn || stack.has(name))
-            return false;
-        stack.add(name);
-        const result = fn.body.some((statement) => this.statementCallsPrivilegedSubscriptionBuiltin(statement, stack, cache));
-        stack.delete(name);
-        cache.set(name, result);
-        return result;
-    }
-    validatePrivilegedEntrypointPermissions(entrypoints) {
-        const cache = new Map();
-        for (const entrypoint of entrypoints) {
-            if (entrypoint.entrypointKind !== 'kotoage' || entrypoint.permission !== null)
-                continue;
-            if (!this.functionCallsPrivilegedSubscriptionBuiltin(entrypoint.name, new Set(), cache))
-                continue;
-            throw new StudioCompileError(`semantic error: public function \`${entrypoint.name}\` calls privileged operations but is missing \`permission(...)\``);
-        }
-    }
     firstCallMatchingExpression(expression, predicate) {
         switch (expression.kind) {
             case 'tupleLiteral':
@@ -12072,7 +13641,9 @@ class StudioCodeGenerator {
         }
     }
     publicPayloadHelperFromCall(expression) {
-        return PUBLIC_PAYLOAD_HELPER_NAMES.has(expression.name)
+        return (triggerEventBuiltinSpec(expression.name)?.publicPayloadHelper === true
+            || jsonGetterSpec(expression.name)?.publicPayloadHelper === true
+            || directHelperSpec(expression.name)?.publicPayloadHelper === true)
             ? {
                 name: expression.name,
                 line: expression.line,
@@ -12099,7 +13670,7 @@ class StudioCodeGenerator {
             if (entrypoint.entrypointKind !== 'view')
                 continue;
             for (const statement of entrypoint.body) {
-                const helper = this.firstCallMatchingStatement(statement, (expression) => expression.name === 'ensure'
+                const helper = this.firstCallMatchingStatement(statement, (expression) => mapAccessBuiltinSpec(expression.name)?.mutatesDurableState === true
                     ? {
                         line: expression.line,
                         column: expression.column,
@@ -12129,7 +13700,7 @@ class StudioCodeGenerator {
         return changed;
     }
     viewEffectsForbid(effect) {
-        return effect.hostSideEffects || effect.emitsInstructions || effect.mutatesDurableState;
+    return effect.hostSideEffects || effect.emitsInstructions || effect.mutatesDurableState;
     }
     describeViewEffect(effect) {
         if (effect.mutatesDurableState)
@@ -12137,6 +13708,9 @@ class StudioCodeGenerator {
         if (effect.emitsInstructions)
             return 'instruction emission';
         return 'host side effects';
+    }
+    isHostSideEffectBuiltinCall(name) {
+        return hostSideEffectBuiltinSpec(name) !== null;
     }
     collectViewEffectsInExpression(expression, scope, summary) {
         switch (expression.kind) {
@@ -12167,19 +13741,20 @@ class StudioCodeGenerator {
                 return;
             case 'call':
                 expression.args.forEach((arg) => this.collectViewEffectsInExpression(arg, scope, summary));
-                if (VIEW_HOST_SIDE_EFFECT_CALL_NAMES.has(expression.name)) {
+                if (this.isHostSideEffectBuiltinCall(expression.name)) {
                     summary.hostSideEffects = true;
                 }
-                if (VIEW_INSTRUCTION_EMITTING_CALL_NAMES.has(expression.name)) {
+                if (isInstructionEmittingCallName(expression.name)) {
                     summary.emitsInstructions = true;
                 }
-                if (expression.name === 'ensure'
+                const mapAccessSpec = mapAccessBuiltinSpec(expression.name);
+                if (mapAccessSpec?.mutatesDurableState === true
                     && expression.args[0]?.kind === 'stateReference'
                     && !scope.has(expression.args[0].name)
                     && isMapStateType(this.stateTypes.get(expression.args[0].name))) {
                     summary.mutatesDurableState = true;
                 }
-                if (expression.name === 'state_set' || expression.name === 'state_del') {
+                if (stateHostBuiltinSpec(expression.name)?.mutatesDurableState === true) {
                     summary.mutatesDurableState = true;
                 }
                 if (this.functions.has(expression.name)) {
@@ -12823,375 +14398,207 @@ class StudioCodeGenerator {
             throw new StudioCompileError(`semantic error: ${prefix}${error}`, expression.line, expression.column);
         }
     }
-    validateSemanticIntBuiltinCall(expression, arity, message, scopeTypes, stateHandles) {
-        if (expression.args.length !== arity) {
-            throw new StudioCompileError(`semantic error: ${message}`, expression.line, expression.column);
-        }
-        for (const arg of expression.args) {
-            const argType = this.inferSemanticExpressionType(arg, scopeTypes, stateHandles);
-            if (argType !== null && !isSemanticIntBuiltinArg(argType)) {
-                throw new StudioCompileError(`semantic error: ${message}`, expression.line, expression.column);
-            }
-        }
-    }
-    validateSemanticInfoCall(args, line, column, scopeTypes, stateHandles) {
-        if (args.length !== 1) {
-            throw new StudioCompileError('semantic error: info expects (string|int)', line, column);
-        }
-        const messageType = this.inferSemanticExpressionType(args[0], scopeTypes, stateHandles);
-        if (messageType !== 'String' && !isSemanticAssignableNumericType(messageType)) {
-            throw new StudioCompileError('semantic error: info expects (string|int)', line, column);
-        }
-    }
-    validateSemanticJsonGetterCall(expression, scopeTypes, stateHandles) {
-        if (expression.args.length !== 2) {
-            throw new StudioCompileError(`semantic error: ${expression.name} expects (Json, Name)`, expression.line, expression.column);
-        }
-        const jsonType = this.inferSemanticExpressionType(expression.args[0], scopeTypes, stateHandles);
-        const keyType = this.inferSemanticExpressionType(expression.args[1], scopeTypes, stateHandles);
-        if ((jsonType !== null && jsonType !== 'Json') || (keyType !== null && keyType !== 'Name')) {
-            throw new StudioCompileError(`semantic error: ${expression.name} expects (Json, Name)`, expression.line, expression.column);
-        }
-    }
-    validateSemanticJsonBuilderCall(expression, scopeTypes, stateHandles) {
-        switch (expression.name) {
-            case 'json_object':
-                if (expression.args.length !== 0) {
-                    throw new StudioCompileError('semantic error: json_object expects no arguments', expression.line, expression.column);
-                }
-                return;
-            case 'json_set_int': {
-                if (expression.args.length !== 3) {
-                    throw new StudioCompileError('semantic error: json_set_int expects (Json, Name, int)', expression.line, expression.column);
-                }
-                const argTypes = expression.args.map((arg) => this.inferSemanticExpressionType(arg, scopeTypes, stateHandles));
-                if ((argTypes[0] !== null && argTypes[0] !== 'Json')
-                    || (argTypes[1] !== null && argTypes[1] !== 'Name')
-                    || (argTypes[2] !== null && !isSemanticIntBuiltinArg(argTypes[2]))) {
-                    throw new StudioCompileError('semantic error: json_set_int expects (Json, Name, int)', expression.line, expression.column);
-                }
-                return;
-            }
-            case 'json_set_account_id': {
-                if (expression.args.length !== 3) {
-                    throw new StudioCompileError('semantic error: json_set_account_id expects (Json, Name, AccountId)', expression.line, expression.column);
-                }
-                const argTypes = expression.args.map((arg) => this.inferSemanticExpressionType(arg, scopeTypes, stateHandles));
-                if ((argTypes[0] !== null && argTypes[0] !== 'Json')
-                    || (argTypes[1] !== null && argTypes[1] !== 'Name')
-                    || (argTypes[2] !== null && argTypes[2] !== 'AccountId')) {
-                    throw new StudioCompileError('semantic error: json_set_account_id expects (Json, Name, AccountId)', expression.line, expression.column);
-                }
-                return;
-            }
-            default:
-                return;
-        }
-    }
-    validateSemanticPathCall(expression, scopeTypes, stateHandles) {
-        if (expression.args.length !== 2) {
-            throw new StudioCompileError('semantic error: path expects (Name, int|Blob|bytes)', expression.line, expression.column);
-        }
-        const baseType = this.inferSemanticExpressionType(expression.args[0], scopeTypes, stateHandles);
-        const keyType = this.inferSemanticExpressionType(expression.args[1], scopeTypes, stateHandles);
-        if ((baseType !== null && baseType !== 'Name')
-            || (keyType !== null && !isSemanticIntBuiltinArg(keyType) && !isSemanticBlobLikeType(keyType))) {
-            throw new StudioCompileError('semantic error: path expects (Name, int|Blob|bytes)', expression.line, expression.column);
-        }
-    }
-    validateSemanticSchemaCall(expression, scopeTypes, stateHandles) {
-        if (expression.name === 'schema_info') {
-            this.validateSemanticNameCall(expression, 1, 'schema_info expects (Name)', scopeTypes, stateHandles);
-            return;
-        }
-        if (expression.args.length !== 2) {
-            throw new StudioCompileError(`semantic error: ${expression.name} expects ${expression.name === 'encode_schema' ? '(Name, Json)' : '(Name, Blob|bytes)'}`, expression.line, expression.column);
-        }
-        const schemaType = this.inferSemanticExpressionType(expression.args[0], scopeTypes, stateHandles);
-        const valueType = this.inferSemanticExpressionType(expression.args[1], scopeTypes, stateHandles);
-        if (expression.name === 'encode_schema') {
-            if ((schemaType !== null && schemaType !== 'Name') || (valueType !== null && valueType !== 'Json')) {
-                throw new StudioCompileError('semantic error: encode_schema expects (Name, Json)', expression.line, expression.column);
-            }
-            return;
-        }
-        if ((schemaType !== null && schemaType !== 'Name') || (valueType !== null && !isSemanticBlobLikeType(valueType))) {
-            throw new StudioCompileError('semantic error: decode_schema expects (Name, Blob|bytes)', expression.line, expression.column);
-        }
-    }
-    validateSemanticEncodeDecodeCall(expression, scopeTypes, stateHandles) {
-        if (expression.args.length !== 1) {
-            const signature = {
-                encode_int: '(int)',
-                decode_int: '(Blob|bytes)',
-                encode_json: '(Json)',
-                decode_json: '(Blob|bytes)',
-            }[expression.name];
-            throw new StudioCompileError(`semantic error: ${expression.name} expects ${signature}`, expression.line, expression.column);
-        }
-        const argType = this.inferSemanticExpressionType(expression.args[0], scopeTypes, stateHandles);
-        if (expression.name === 'encode_int' && argType !== null && !isSemanticIntBuiltinArg(argType)) {
-            throw new StudioCompileError('semantic error: encode_int expects (int)', expression.line, expression.column);
-        }
-        if (expression.name === 'encode_json' && argType !== null && argType !== 'Json') {
-            throw new StudioCompileError('semantic error: encode_json expects (Json)', expression.line, expression.column);
-        }
-        if ((expression.name === 'decode_int' || expression.name === 'decode_json')
-            && argType !== null
-            && !isSemanticBlobLikeType(argType)) {
-            throw new StudioCompileError(`semantic error: ${expression.name} expects (Blob|bytes)`, expression.line, expression.column);
-        }
-    }
-    validateSemanticTypedQueryCall(expression, spec, scopeTypes, stateHandles) {
-        if (expression.args.length !== 1) {
-            throw new StudioCompileError(`semantic error: ${spec.message}`, expression.line, expression.column);
-        }
-        const argType = this.inferSemanticExpressionType(expression.args[0], scopeTypes, stateHandles);
-        if (argType !== null
-            && !isSemanticBlobLikeType(argType)
-            && !spec.allowedTypes.includes(argType)) {
-            throw new StudioCompileError(`semantic error: ${spec.message}`, expression.line, expression.column);
-        }
-    }
-    validateSemanticVrfCall(expression, scopeTypes, stateHandles) {
-        if (expression.name === 'vrf_verify_batch') {
-            this.validateSemanticBlobLikeCall(expression, 1, 'vrf_verify_batch expects (Blob|bytes)', scopeTypes, stateHandles);
-            return;
-        }
-        if (expression.args.length !== 4) {
-            throw new StudioCompileError('semantic error: vrf_verify expects (Blob, Blob, Blob, int variant)', expression.line, expression.column);
-        }
-        const inputType = this.inferSemanticExpressionType(expression.args[0], scopeTypes, stateHandles);
-        const publicKeyType = this.inferSemanticExpressionType(expression.args[1], scopeTypes, stateHandles);
-        const proofType = this.inferSemanticExpressionType(expression.args[2], scopeTypes, stateHandles);
-        const variantType = this.inferSemanticExpressionType(expression.args[3], scopeTypes, stateHandles);
-        if ((inputType !== null && !isSemanticBlobLikeType(inputType))
-            || (publicKeyType !== null && !isSemanticBlobLikeType(publicKeyType))
-            || (proofType !== null && !isSemanticBlobLikeType(proofType))
-            || (variantType !== null && !isSemanticIntBuiltinArg(variantType))) {
-            throw new StudioCompileError('semantic error: vrf_verify expects (Blob|bytes, Blob|bytes, Blob|bytes, int variant)', expression.line, expression.column);
-        }
-    }
-    validateSemanticSignatureCall(expression, scopeTypes, stateHandles) {
-        const signatureName = signatureBuiltinName(expression.name);
-        if (signatureName === 'sm2_verify') {
-            if (expression.args.length !== 3 && expression.args.length !== 4) {
-                throw new StudioCompileError('semantic error: sm2_verify expects (Blob, Blob, Blob) or (Blob, Blob, Blob, Blob) where arguments reference INPUT TLVs', expression.line, expression.column);
-            }
-            const messageType = this.inferSemanticExpressionType(expression.args[0], scopeTypes, stateHandles);
-            const signatureType = this.inferSemanticExpressionType(expression.args[1], scopeTypes, stateHandles);
-            const publicKeyType = this.inferSemanticExpressionType(expression.args[2], scopeTypes, stateHandles);
-            if ((messageType !== null && !isSemanticBlobLikeType(messageType))
-                || (signatureType !== null && !isSemanticBlobLikeType(signatureType))
-                || (publicKeyType !== null && !isSemanticBlobLikeType(publicKeyType))) {
-                throw new StudioCompileError('semantic error: sm2_verify expects message, signature, and public key as Blob|bytes pointers', expression.line, expression.column);
-            }
-            if (expression.args.length === 4) {
-                const distidType = this.inferSemanticExpressionType(expression.args[3], scopeTypes, stateHandles);
-                if (distidType !== null && !isSemanticBlobLikeType(distidType)) {
-                    throw new StudioCompileError('semantic error: sm2_verify optional distid must be provided as Blob|bytes pointer', expression.line, expression.column);
-                }
-            }
-            return;
-        }
-        if (expression.args.length !== 4) {
-            throw new StudioCompileError('semantic error: verify_signature expects (Blob, Blob, Blob, int) arguments', expression.line, expression.column);
-        }
-        const messageType = this.inferSemanticExpressionType(expression.args[0], scopeTypes, stateHandles);
-        const signatureType = this.inferSemanticExpressionType(expression.args[1], scopeTypes, stateHandles);
-        const publicKeyType = this.inferSemanticExpressionType(expression.args[2], scopeTypes, stateHandles);
-        const schemeType = this.inferSemanticExpressionType(expression.args[3], scopeTypes, stateHandles);
-        if ((messageType !== null && !isSemanticBlobLikeType(messageType))
-            || (signatureType !== null && !isSemanticBlobLikeType(signatureType))
-            || (publicKeyType !== null && !isSemanticBlobLikeType(publicKeyType))) {
-            throw new StudioCompileError('semantic error: verify_signature expects message, signature, and public key as Blob|bytes pointers', expression.line, expression.column);
-        }
-        if (schemeType !== null && !isSemanticIntBuiltinArg(schemeType)) {
-            throw new StudioCompileError('semantic error: verify_signature expects scheme code as int', expression.line, expression.column);
-        }
-    }
-    validateSemanticSm4Call(expression, spec, scopeTypes, stateHandles) {
-        const minArity = 4;
-        const maxArity = spec.ccm ? 5 : 4;
-        if (expression.args.length < minArity || expression.args.length > maxArity) {
-            throw new StudioCompileError(`semantic error: ${spec.arityMessage}`, expression.line, expression.column);
-        }
-        const blobTypes = expression.args.slice(0, 4).map((arg) => this.inferSemanticExpressionType(arg, scopeTypes, stateHandles));
-        if (blobTypes.some((argType) => argType !== null && !isSemanticBlobLikeType(argType))) {
-            throw new StudioCompileError(`semantic error: ${spec.pointerMessage ?? spec.arityMessage}`, expression.line, expression.column);
-        }
-        if (spec.ccm && expression.args.length === 5) {
-            const tagType = this.inferSemanticExpressionType(expression.args[4], scopeTypes, stateHandles);
-            if (tagType !== null && !isSemanticIntBuiltinArg(tagType)) {
-                throw new StudioCompileError(`semantic error: ${spec.tagMessage}`, expression.line, expression.column);
-            }
-        }
-    }
-    validateSemanticBlobLikeCall(expression, arity, message, scopeTypes, stateHandles) {
-        if (expression.args.length !== arity) {
-            throw new StudioCompileError(`semantic error: ${message}`, expression.line, expression.column);
-        }
-        for (const arg of expression.args) {
-            const argType = this.inferSemanticExpressionType(arg, scopeTypes, stateHandles);
-            if (argType !== null && !isSemanticBlobLikeType(argType)) {
-                throw new StudioCompileError(`semantic error: ${message}`, expression.line, expression.column);
-            }
-        }
-    }
-    validateSemanticNameCall(expression, arity, message, scopeTypes, stateHandles) {
-        if (expression.args.length !== arity) {
-            throw new StudioCompileError(`semantic error: ${message}`, expression.line, expression.column);
-        }
-        for (const arg of expression.args) {
-            const argType = this.inferSemanticExpressionType(arg, scopeTypes, stateHandles);
-            if (argType !== null && argType !== 'Name') {
-                throw new StudioCompileError(`semantic error: ${message}`, expression.line, expression.column);
-            }
-        }
-    }
-    validateSemanticResolveAccountAliasCall(expression, scopeTypes, stateHandles) {
-        if (expression.args.length !== 1) {
-            throw new StudioCompileError('semantic error: resolve_account_alias expects (String|Blob)', expression.line, expression.column);
-        }
-        const argType = this.inferSemanticExpressionType(expression.args[0], scopeTypes, stateHandles);
-        if (argType !== null && argType !== 'String' && !isSemanticBlobLikeType(argType)) {
-            throw new StudioCompileError('semantic error: resolve_account_alias expects (String|Blob)', expression.line, expression.column);
-        }
-    }
-    validateSemanticCallContractCall(expression, scopeTypes, stateHandles) {
-        const message = 'call_contract expects (String|Blob, String|Blob, Json)';
-        if (expression.args.length !== 3) {
-            throw new StudioCompileError(`semantic error: ${message}`, expression.line, expression.column);
-        }
-        const targetType = this.inferSemanticExpressionType(expression.args[0], scopeTypes, stateHandles);
-        const entrypointType = this.inferSemanticExpressionType(expression.args[1], scopeTypes, stateHandles);
-        const payloadType = this.inferSemanticExpressionType(expression.args[2], scopeTypes, stateHandles);
-        const isStringOrBlobArg = (arg, argType) => argType === null
-            || argType === 'String'
-            || arg.kind === 'string'
-            || (arg.kind === 'stateReference' && this.resolveStaticStringLiteral(arg, new Set(scopeTypes.keys())) !== null)
-            || isSemanticBlobLikeType(argType);
-        if (!isStringOrBlobArg(expression.args[0], targetType)
-            || !isStringOrBlobArg(expression.args[1], entrypointType)
-            || (payloadType !== null && payloadType !== 'Json')) {
-            throw new StudioCompileError(`semantic error: ${message}`, expression.line, expression.column);
-        }
-    }
-    validateSemanticTransferBatchCall(expression, scopeTypes, stateHandles) {
-        const message = 'transfer_batch expects (AccountId, AccountId, AssetDefinitionId, numeric) tuple entries';
-        if (expression.args.length === 0) {
-            throw new StudioCompileError('semantic error: transfer_batch expects at least one entry', expression.line, expression.column);
-        }
-        for (const arg of expression.args) {
-            const argType = this.inferSemanticExpressionType(arg, scopeTypes, stateHandles);
-            const entryOk = isTupleValueType(argType)
-                && argType.elements.length === 4
-                && argType.elements[0] !== null
-                && argType.elements[1] !== null
-                && argType.elements[2] !== null
-                && argType.elements[3] !== null
-                && localBindingTypesEqual(argType.elements[0], 'AccountId')
-                && localBindingTypesEqual(argType.elements[1], 'AccountId')
-                && localBindingTypesEqual(argType.elements[2], 'AssetDefinitionId')
-                && isSemanticIntBuiltinArg(argType.elements[3]);
-            if (!entryOk) {
-                throw new StudioCompileError(`semantic error: ${message}`, expression.line, expression.column);
-            }
-        }
-    }
-    validateSemanticAxtCall(expression, scopeTypes, stateHandles) {
-        const argTypes = expression.args.map((arg) => this.inferSemanticExpressionType(arg, scopeTypes, stateHandles));
-        const fail = (message) => {
-            throw new StudioCompileError(`semantic error: ${message}`, expression.line, expression.column);
-        };
-        switch (expression.name) {
-            case 'axt_begin':
-                if (expression.args.length !== 1 || (argTypes[0] !== null && argTypes[0] !== 'AxtDescriptor')) {
-                    fail('axt_begin expects (AxtDescriptor)');
-                }
-                return;
-            case 'axt_touch':
-                if ((expression.args.length !== 1 && expression.args.length !== 2)
-                    || (argTypes[0] !== null && argTypes[0] !== 'DataSpaceId')
-                    || (argTypes[1] !== undefined && argTypes[1] !== null && !isSemanticBlobLikeType(argTypes[1]))) {
-                    fail('axt_touch expects (DataSpaceId[, Blob|bytes manifest])');
-                }
-                return;
-            case 'verify_ds_proof':
-                if ((expression.args.length !== 1 && expression.args.length !== 2)
-                    || (argTypes[0] !== null && argTypes[0] !== 'DataSpaceId')
-                    || (argTypes[1] !== undefined && argTypes[1] !== null && argTypes[1] !== 'ProofBlob')) {
-                    fail('verify_ds_proof expects (DataSpaceId[, ProofBlob])');
-                }
-                return;
-            case 'use_asset_handle':
-                if ((expression.args.length !== 2 && expression.args.length !== 3)
-                    || (argTypes[0] !== null && argTypes[0] !== 'AssetHandle')
-                    || (argTypes[1] !== null && !isSemanticBlobLikeType(argTypes[1]))) {
-                    fail('use_asset_handle expects (AssetHandle, Blob|bytes intent[, ProofBlob])');
-                }
-                if (argTypes[2] !== undefined && argTypes[2] !== null && argTypes[2] !== 'ProofBlob') {
-                    fail('use_asset_handle expects (AssetHandle, Blob intent[, ProofBlob])');
-                }
-                return;
-            case 'axt_commit':
-                if (expression.args.length !== 0) {
-                    fail('axt_commit expects no arguments');
-                }
-                return;
-            default:
-                return;
-        }
-    }
-    validateSemanticAssetDefinitionLifecycleCall(expression, scopeTypes, stateHandles) {
-        const isCreate = expression.name === 'create_new_asset';
-        const message = isCreate
-            ? 'create_new_asset expects (AssetDefinitionId, string, int, AccountId, int)'
-            : 'register_asset expects (AssetDefinitionId, string, int, int)';
-        if (expression.args.length !== (isCreate ? 5 : 4)) {
-            throw new StudioCompileError(`semantic error: ${message}`, expression.line, expression.column);
-        }
-        const argTypes = expression.args.map((arg) => this.inferSemanticExpressionType(arg, scopeTypes, stateHandles));
-        const assetOk = argTypes[0] === null || argTypes[0] === 'AssetDefinitionId';
-        const symbolOk = argTypes[1] === null || argTypes[1] === 'String';
-        const quantityOk = argTypes[2] === null || isSemanticIntBuiltinArg(argTypes[2]);
-        const mintableIndex = isCreate ? 4 : 3;
-        const mintableOk = argTypes[mintableIndex] === null || isSemanticIntBuiltinArg(argTypes[mintableIndex]);
-        const accountOk = !isCreate || argTypes[3] === null || argTypes[3] === 'AccountId';
-        if (!assetOk || !symbolOk || !quantityOk || !accountOk || !mintableOk) {
-            throw new StudioCompileError(`semantic error: ${message}`, expression.line, expression.column);
-        }
-    }
-    validateSemanticStateSetCall(expression, scopeTypes, stateHandles) {
-        if (expression.args.length !== 2) {
-            throw new StudioCompileError('semantic error: state_set expects (Name, Blob|bytes)', expression.line, expression.column);
-        }
-        const keyType = this.inferSemanticExpressionType(expression.args[0], scopeTypes, stateHandles);
-        const valueType = this.inferSemanticExpressionType(expression.args[1], scopeTypes, stateHandles);
-        if ((keyType !== null && keyType !== 'Name') || (valueType !== null && !isSemanticBlobLikeType(valueType))) {
-            throw new StudioCompileError('semantic error: state_set expects (Name, Blob|bytes)', expression.line, expression.column);
-        }
-    }
-    validateSemanticPointerAbiCall(expression, message, allowJson, scopeTypes, stateHandles) {
-        if (expression.args.length !== 1) {
-            throw new StudioCompileError(`semantic error: ${expression.name} expects one argument`, expression.line, expression.column);
-        }
-        const argType = this.inferSemanticExpressionType(expression.args[0], scopeTypes, stateHandles);
-        const validType = allowJson
-            ? isSemanticPointerAbiType(argType)
-            : argType !== 'Json' && isSemanticPointerAbiType(argType);
-        if (argType !== null && !validType) {
-            throw new StudioCompileError(`semantic error: ${message}`, expression.line, expression.column);
-        }
-    }
     validateSemanticExactArgumentTypes(args, expectedTypes, message, scopeTypes, stateHandles, line, column = 1) {
-        if (args.length !== expectedTypes.length) {
+        const variadicDescriptor = exactArgumentVariadicDescriptor(expectedTypes);
+        if (variadicDescriptor !== null) {
+            const minArgs = variadicDescriptor.min ?? 0;
+            const maxArgs = variadicDescriptor.max ?? Number.POSITIVE_INFINITY;
+            if (args.length < minArgs || args.length > maxArgs) {
+                throw new StudioCompileError(`semantic error: ${message}`, line, column);
+            }
+            for (const arg of args) {
+                const argType = this.inferSemanticExpressionType(arg, scopeTypes, stateHandles);
+                if (!exactTupleArgumentTypeMatches(variadicDescriptor, argType)) {
+                    throw new StudioCompileError(`semantic error: ${message}`, line, column);
+                }
+            }
+            return;
+        }
+        const compatibleWideNumericPairDescriptor = exactArgumentCompatibleWideNumericPairDescriptor(expectedTypes);
+        if (compatibleWideNumericPairDescriptor !== null) {
+            if (args.length !== 2) {
+                throw new StudioCompileError(`semantic error: ${message}`, line, column);
+            }
+            const argTypes = args.map((arg) => this.inferSemanticExpressionType(arg, scopeTypes, stateHandles));
+            if (!exactCompatibleWideNumericPairMatches(argTypes)) {
+                throw new StudioCompileError(`semantic error: ${message}`, line, column);
+            }
+            return;
+        }
+        const mapAccessDescriptor = exactArgumentMapAccessDescriptor(expectedTypes);
+        if (mapAccessDescriptor !== null) {
+            const { name, spec } = mapAccessDescriptor;
+            if (!spec.arities.includes(args.length)) {
+                throw new StudioCompileError(`semantic error: ${spec.message}`, line, column);
+            }
+            const mapType = this.inferSemanticExpressionType(args[0], scopeTypes, stateHandles);
+            if (mapType === null)
+                return;
+            if (!isMapStateType(mapType)) {
+                throw new StudioCompileError(`semantic error: ${name} expects Map<K,V> as first arg, got ${renderLocalBindingType(mapType)}`, line, column);
+            }
+            const keyType = this.inferSemanticExpressionType(args[1], scopeTypes, stateHandles);
+            this.validateSemanticAssignable(mapType.key, keyType, args[1]);
+            if (spec.operation === 'contains')
+                return;
+            if (args.length === 3) {
+                const defaultType = this.inferSemanticExpressionType(args[2], scopeTypes, stateHandles);
+                this.validateSemanticAssignable(mapType.value, defaultType, args[2]);
+                return;
+            }
+            if (mapType.value === 'int')
+                return;
+            if (typeof mapType.value === 'string') {
+                throw new StudioCompileError(`semantic error: ${name} requires an explicit default for pointer-valued maps (value type ${renderLocalBindingType(mapType.value)})`, line, column);
+            }
+            throw new StudioCompileError(`semantic error: ${name} auto-default is only available for Map<*,int>; provide an explicit default for value type ${renderLocalBindingType(mapType.value)}`, line, column);
+        }
+        const requiredArgCount = expectedTypes.filter((expectedType) => !(typeof expectedType === 'object' && expectedType !== null && expectedType.optional === true)).length;
+        if (args.length < requiredArgCount || args.length > expectedTypes.length) {
             throw new StudioCompileError(`semantic error: ${message}`, line, column);
         }
         expectedTypes.forEach((expectedType, index) => {
+            if (index >= args.length) {
+                return;
+            }
             const argType = this.inferSemanticExpressionType(args[index], scopeTypes, stateHandles);
+            if (typeof expectedType === 'object' && expectedType !== null) {
+                const expectedMessage = expectedType.message ?? message;
+                if (expectedType.kind === 'BlobLikeOrAllowedTypes') {
+                    const allowed = argType !== null
+                        && expectedType.allowedTypes.some((allowedType) => localBindingTypesEqual(allowedType, argType));
+                    if (argType !== null && !isSemanticBlobLikeType(argType) && !allowed) {
+                        throw new StudioCompileError(`semantic error: ${expectedMessage}`, line, column);
+                    }
+                    return;
+                }
+                if (expectedType.kind === 'BlobLike') {
+                    if (argType !== null && !isSemanticBlobLikeType(argType)) {
+                        throw new StudioCompileError(`semantic error: ${expectedMessage}`, line, column);
+                    }
+                    return;
+                }
+                if (expectedType.kind === 'numeric') {
+                    if (argType !== null && !isSemanticAssignableNumericType(argType)) {
+                        throw new StudioCompileError(`semantic error: ${expectedMessage}`, line, column);
+                    }
+                    return;
+                }
+                if (expectedType.kind === 'bool') {
+                    if (argType !== 'bool') {
+                        throw new StudioCompileError(`semantic error: ${expectedMessage}`, line, column);
+                    }
+                    return;
+                }
+                if (expectedType.kind === 'StringOrNumeric') {
+                    if (argType !== 'String' && !isSemanticAssignableNumericType(argType)) {
+                        throw new StudioCompileError(`semantic error: ${expectedMessage}`, line, column);
+                    }
+                    return;
+                }
+                if (expectedType.kind === 'int') {
+                    if (argType !== null && !isSemanticIntBuiltinArg(argType)) {
+                        throw new StudioCompileError(`semantic error: ${expectedMessage}`, line, column);
+                    }
+                    return;
+                }
+                if (expectedType.kind === 'typedPointer') {
+                    if (argType !== null && !localBindingTypesEqual(expectedType.type, argType)) {
+                        throw new StudioCompileError(`semantic error: ${expectedMessage}`, line, column);
+                    }
+                    return;
+                }
+                if (expectedType.kind === 'noritoBytes') {
+                    if (argType !== null && !isSemanticBlobLikeType(argType)) {
+                        throw new StudioCompileError(`semantic error: ${expectedMessage}`, line, column);
+                    }
+                    return;
+                }
+                if (expectedType.kind === 'map') {
+                    if (argType !== null
+                        && (!isMapStateType(argType)
+                            || !localBindingTypesEqual(expectedType.key, argType.key)
+                            || !localBindingTypesEqual(expectedType.value, argType.value))) {
+                        throw new StudioCompileError(`semantic error: ${expectedMessage}, got ${renderLocalBindingType(argType)}`, line, column);
+                    }
+                    return;
+                }
+                if (expectedType.kind === 'testHostLiteral') {
+                    if (testHostLiteralStringFromExpression(args[index]) === null) {
+                        throw new StudioCompileError(`semantic error: ${expectedType.helperName} requires a literal ${expectedType.label} such as "issuer" or name("issuer")`, args[index].line, args[index].column);
+                    }
+                    return;
+                }
+                if (expectedType.kind === 'strictType') {
+                    if (!localBindingTypesEqual(expectedType.type, argType)) {
+                        throw new StudioCompileError(`semantic error: ${expectedMessage}`, args[index].line, args[index].column);
+                    }
+                    return;
+                }
+                if (expectedType.kind === 'strictBlobLike') {
+                    if (!isSemanticBlobLikeType(argType)) {
+                        throw new StudioCompileError(`semantic error: ${expectedMessage}`, args[index].line, args[index].column);
+                    }
+                    return;
+                }
+                throw new StudioCompileError(`semantic error: unsupported exact argument spec for ${message}`, line, column);
+            }
             if (expectedType === 'numeric') {
                 if (argType !== null && !isSemanticAssignableNumericType(argType)) {
+                    throw new StudioCompileError(`semantic error: ${message}`, line, column);
+                }
+                return;
+            }
+            if (expectedType === 'WideNumeric') {
+                if (argType !== null && !isSemanticWideNumericType(argType)) {
+                    throw new StudioCompileError(`semantic error: ${message}`, line, column);
+                }
+                return;
+            }
+            if (expectedType === 'pointerAbi') {
+                if (argType !== null && !isSemanticPointerAbiType(argType)) {
+                    throw new StudioCompileError(`semantic error: ${message}`, line, column);
+                }
+                return;
+            }
+            if (expectedType === 'pointerAbiNoJson') {
+                if (argType !== null && (argType === 'Json' || !isSemanticPointerAbiType(argType))) {
+                    throw new StudioCompileError(`semantic error: ${message}`, line, column);
+                }
+                return;
+            }
+            if (expectedType === 'BlobLike') {
+                if (argType !== null && !isSemanticBlobLikeType(argType)) {
+                    throw new StudioCompileError(`semantic error: ${message}`, line, column);
+                }
+                return;
+            }
+            if (expectedType === 'JsonOrBlobLike') {
+                if (argType !== null && argType !== 'Json' && !isSemanticBlobLikeType(argType)) {
+                    throw new StudioCompileError(`semantic error: ${message}`, line, column);
+                }
+                return;
+            }
+            if (expectedType === 'IntOrBlobLike') {
+                if (argType !== null && !isSemanticIntBuiltinArg(argType) && !isSemanticBlobLikeType(argType)) {
+                    throw new StudioCompileError(`semantic error: ${message}`, line, column);
+                }
+                return;
+            }
+            if (expectedType === 'StringOrBlobLike') {
+                if (argType !== null && argType !== 'String' && !isSemanticBlobLikeType(argType)) {
+                    throw new StudioCompileError(`semantic error: ${message}`, line, column);
+                }
+                return;
+            }
+            if (expectedType === 'DomainIdOrName') {
+                if (argType !== null && argType !== 'DomainId' && argType !== 'Name') {
+                    throw new StudioCompileError(`semantic error: ${message}`, line, column);
+                }
+                return;
+            }
+            if (expectedType === 'NameOrJson') {
+                if (argType !== null && argType !== 'Name' && argType !== 'Json') {
                     throw new StudioCompileError(`semantic error: ${message}`, line, column);
                 }
                 return;
@@ -13200,148 +14607,6 @@ class StudioCodeGenerator {
                 throw new StudioCompileError(`semantic error: ${message}`, line, column);
             }
         });
-    }
-    validateSemanticPermissionBindingCall(expression, scopeTypes, stateHandles) {
-        const message = 'grant/revoke_permission expects (AccountId, Name|Json)';
-        if (expression.args.length !== 2) {
-            throw new StudioCompileError(`semantic error: ${message}`, expression.line, expression.column);
-        }
-        const accountType = this.inferSemanticExpressionType(expression.args[0], scopeTypes, stateHandles);
-        const tokenType = this.inferSemanticExpressionType(expression.args[1], scopeTypes, stateHandles);
-        if ((accountType !== null && accountType !== 'AccountId')
-            || (tokenType !== null && tokenType !== 'Name' && tokenType !== 'Json')) {
-            throw new StudioCompileError(`semantic error: ${message}`, expression.line, expression.column);
-        }
-    }
-    validateSemanticTransferDomainCall(expression, scopeTypes, stateHandles) {
-        const message = 'transfer_domain expects (AccountId, DomainId, AccountId)';
-        if (expression.args.length !== 3) {
-            throw new StudioCompileError(`semantic error: ${message}`, expression.line, expression.column);
-        }
-        const fromType = this.inferSemanticExpressionType(expression.args[0], scopeTypes, stateHandles);
-        const domainType = this.inferSemanticExpressionType(expression.args[1], scopeTypes, stateHandles);
-        const toType = this.inferSemanticExpressionType(expression.args[2], scopeTypes, stateHandles);
-        if ((fromType !== null && fromType !== 'AccountId')
-            || (domainType !== null && domainType !== 'DomainId' && domainType !== 'Name')
-            || (toType !== null && toType !== 'AccountId')) {
-            throw new StudioCompileError(`semantic error: ${message}`, expression.line, expression.column);
-        }
-    }
-    validateSemanticZkInlineBuilderCall(expression, scopeTypes, stateHandles) {
-        if (expression.name === 'build_submit_ballot_inline') {
-            const message = 'build_submit_ballot_inline expects (string election_id, Blob|bytes ciphertext, Blob|bytes nullifier32, string backend, Blob|bytes proof, Blob|bytes vk)';
-            if (expression.args.length !== 6) {
-                throw new StudioCompileError(`semantic error: ${message}`, expression.line, expression.column);
-            }
-            const argTypes = expression.args.map((arg) => this.inferSemanticExpressionType(arg, scopeTypes, stateHandles));
-            const valid = (argTypes[0] === null || argTypes[0] === 'String')
-                && (argTypes[1] === null || isSemanticBlobLikeType(argTypes[1]))
-                && (argTypes[2] === null || isSemanticBlobLikeType(argTypes[2]))
-                && (argTypes[3] === null || argTypes[3] === 'String')
-                && (argTypes[4] === null || isSemanticBlobLikeType(argTypes[4]))
-                && (argTypes[5] === null || isSemanticBlobLikeType(argTypes[5]));
-            if (!valid) {
-                throw new StudioCompileError(`semantic error: ${message}`, expression.line, expression.column);
-            }
-            return;
-        }
-        const message = 'build_unshield_inline expects (AssetDefinitionId, AccountId, int amount, Blob|bytes inputs32, string backend, Blob|bytes proof, Blob|bytes vk)';
-        if (expression.args.length !== 7) {
-            throw new StudioCompileError(`semantic error: ${message}`, expression.line, expression.column);
-        }
-        const argTypes = expression.args.map((arg) => this.inferSemanticExpressionType(arg, scopeTypes, stateHandles));
-        const valid = (argTypes[0] === null || argTypes[0] === 'AssetDefinitionId')
-            && (argTypes[1] === null || argTypes[1] === 'AccountId')
-            && (argTypes[2] === null || isSemanticIntBuiltinArg(argTypes[2]))
-            && (argTypes[3] === null || isSemanticBlobLikeType(argTypes[3]))
-            && (argTypes[4] === null || argTypes[4] === 'String')
-            && (argTypes[5] === null || isSemanticBlobLikeType(argTypes[5]))
-            && (argTypes[6] === null || isSemanticBlobLikeType(argTypes[6]));
-        if (!valid) {
-            throw new StudioCompileError(`semantic error: ${message}`, expression.line, expression.column);
-        }
-    }
-    validateSemanticNativeEscrowCall(expression, scopeTypes, stateHandles) {
-        const argTypes = expression.args.map((arg) => this.inferSemanticExpressionType(arg, scopeTypes, stateHandles));
-        const optionalEvidenceOk = (index) => (
-            argTypes[index] === undefined
-            || argTypes[index] === null
-            || isSemanticBlobLikeType(argTypes[index])
-        );
-        const nameOk = (index) => argTypes[index] === null || argTypes[index] === 'Name';
-        const assetOk = (index) => argTypes[index] === null || argTypes[index] === 'AssetDefinitionId';
-        const intOk = (index) => argTypes[index] === null || isSemanticIntBuiltinArg(argTypes[index]);
-        const fail = (message) => {
-            throw new StudioCompileError(`semantic error: ${message}`, expression.line, expression.column);
-        };
-        switch (expression.name) {
-            case 'escrow_open_offer': {
-                const message = 'escrow_open_offer expects (Name, AssetDefinitionId, numeric[, Blob|bytes evidence_hashes])';
-                if ((expression.args.length !== 3 && expression.args.length !== 4)
-                    || !nameOk(0)
-                    || !assetOk(1)
-                    || !intOk(2)
-                    || !optionalEvidenceOk(3)) {
-                    fail(message);
-                }
-                return;
-            }
-            case 'escrow_accept':
-            case 'escrow_mark_payment_sent':
-            case 'escrow_release':
-            case 'escrow_cancel':
-                if (expression.args.length !== 1 || !nameOk(0)) {
-                    fail(`${expression.name} expects (Name)`);
-                }
-                return;
-            case 'escrow_open_dispute': {
-                const message = 'escrow_open_dispute expects (Name[, Blob|bytes evidence_hashes])';
-                if ((expression.args.length !== 1 && expression.args.length !== 2)
-                    || !nameOk(0)
-                    || !optionalEvidenceOk(1)) {
-                    fail(message);
-                }
-                return;
-            }
-            case 'escrow_resolve_dispute': {
-                const message = 'escrow_resolve_dispute expects (Name, numeric, numeric[, Blob|bytes evidence_hashes])';
-                if ((expression.args.length !== 3 && expression.args.length !== 4)
-                    || !nameOk(0)
-                    || !intOk(1)
-                    || !intOk(2)
-                    || !optionalEvidenceOk(3)) {
-                    fail(message);
-                }
-                return;
-            }
-            case 'anonymous_escrow_open_offer':
-            case 'anonymous_escrow_release':
-            case 'anonymous_escrow_cancel':
-            case 'anonymous_escrow_resolve_dispute': {
-                const message = `${expression.name} expects (Blob|bytes) Norito request payload`;
-                if (expression.args.length !== 1 || !optionalEvidenceOk(0)) {
-                    fail(message);
-                }
-                return;
-            }
-            case 'anonymous_escrow_accept':
-            case 'anonymous_escrow_mark_payment_sent':
-                if (expression.args.length !== 1 || !nameOk(0)) {
-                    fail(`${expression.name} expects (Name)`);
-                }
-                return;
-            case 'anonymous_escrow_open_dispute': {
-                const message = 'anonymous_escrow_open_dispute expects (Name[, Blob|bytes evidence_hashes])';
-                if ((expression.args.length !== 1 && expression.args.length !== 2)
-                    || !nameOk(0)
-                    || !optionalEvidenceOk(1)) {
-                    fail(message);
-                }
-                return;
-            }
-            default:
-                return;
-        }
     }
     validateSemanticForClauseStatement(statement, scopeTypes, stateHandles, expectedReturnType, expectedUnitReturnStyle, errorMessage) {
         const letValueType = statement.kind === 'letLocal' ? (() => {
@@ -13357,61 +14622,6 @@ class StudioCodeGenerator {
         target.clear();
         for (const [name, type] of source) {
             target.set(name, type);
-        }
-    }
-    validateSemanticMapHelperCall(expression, scopeTypes, stateHandles) {
-        const allowedArity = expression.name === 'contains'
-            ? [2]
-            : expression.name === 'get_or_default'
-                ? [3]
-                : [2, 3];
-        if (!allowedArity.includes(expression.args.length)) {
-            const signature = expression.name === 'contains'
-                ? '(Map<K,V>, K)'
-                : expression.name === 'get_or_default'
-                    ? '(Map<K,V>, K, V)'
-                    : '(Map<K,V>, K[, V])';
-            throw new StudioCompileError(`semantic error: ${expression.name} expects ${signature}`, expression.line, expression.column);
-        }
-        const mapType = this.inferSemanticExpressionType(expression.args[0], scopeTypes, stateHandles);
-        if (mapType === null)
-            return;
-        if (!isMapStateType(mapType)) {
-            throw new StudioCompileError(`semantic error: ${expression.name} expects Map<K,V> as first arg, got ${renderLocalBindingType(mapType)}`, expression.line, expression.column);
-        }
-        const keyType = this.inferSemanticExpressionType(expression.args[1], scopeTypes, stateHandles);
-        this.validateSemanticAssignable(mapType.key, keyType, expression.args[1]);
-        if (expression.name === 'contains')
-            return;
-        if (expression.args.length === 3) {
-            const defaultType = this.inferSemanticExpressionType(expression.args[2], scopeTypes, stateHandles);
-            this.validateSemanticAssignable(mapType.value, defaultType, expression.args[2]);
-            return;
-        }
-        if (mapType.value === 'int')
-            return;
-        if (typeof mapType.value === 'string') {
-            throw new StudioCompileError(`semantic error: ${expression.name} requires an explicit default for pointer-valued maps (value type ${renderLocalBindingType(mapType.value)})`, expression.line, expression.column);
-        }
-        throw new StudioCompileError(`semantic error: ${expression.name} auto-default is only available for Map<*,int>; provide an explicit default for value type ${renderLocalBindingType(mapType.value)}`, expression.line, expression.column);
-    }
-    validateSemanticMapEnumerationCall(expression, helperName, scopeTypes, stateHandles) {
-        const arityMessage = helperName === 'keys_values_take2'
-            ? 'keys_values_take2 expects (Map<int,int>, int, int)'
-            : `${helperName} expects (Map<int,int>, int start, int which)`;
-        if (expression.args.length !== 3) {
-            throw new StudioCompileError(`semantic error: ${arityMessage}`, expression.line, expression.column);
-        }
-        const mapType = this.inferSemanticExpressionType(expression.args[0], scopeTypes, stateHandles);
-        if (mapType === null)
-            return;
-        if (!isMapStateType(mapType) || mapType.key !== 'int' || mapType.value !== 'int') {
-            throw new StudioCompileError(`semantic error: ${helperName} expects Map<int,int> as first arg, got ${renderLocalBindingType(mapType)}`, expression.line, expression.column);
-        }
-        const startType = this.inferSemanticExpressionType(expression.args[1], scopeTypes, stateHandles);
-        const whichType = this.inferSemanticExpressionType(expression.args[2], scopeTypes, stateHandles);
-        if ((startType !== null && startType !== 'int') || (whichType !== null && whichType !== 'int')) {
-            throw new StudioCompileError(`semantic error: ${helperName} expects (Map<int,int>, int, int)`, expression.line, expression.column);
         }
     }
     inferSemanticExpressionType(expression, scopeTypes, stateHandles, constStack = new Set()) {
@@ -13471,57 +14681,26 @@ class StudioCodeGenerator {
                 return isMapStateType(mapType) ? mapType.value : null;
             }
             case 'call': {
-                const pointerType = pointerConstructorValueType(expression.name);
-                if (pointerType !== null)
-                    return pointerType;
-                const jsonGetter = jsonGetterSpec(expression.name);
-                if (jsonGetter !== null)
-                    return jsonGetter.valueType;
-                const mapEnumerationName = mapEnumerationBuiltinName(expression.name);
-                if (mapEnumerationName === 'keys_values_take2') {
-                    return { kind: 'tuple', elements: ['int', 'int'] };
+                const dynamicValueTypeSpec = dynamicBuiltinValueTypeSpec(expression.name);
+                if (dynamicValueTypeSpec !== null) {
+                    const argTypes = expression.args.map((arg) => this.inferSemanticExpressionType(arg, scopeTypes, stateHandles, constStack));
+                    return dynamicValueTypeSpec.valueTypeForArgs(argTypes);
                 }
-                if (mapEnumerationName !== null) {
-                    return 'int';
-                }
-                if (hashBuiltinSpec(expression.name) !== null) {
-                    return 'NoritoBytes';
-                }
-                const sysvarSpec = sysvarBuiltinSpec(expression.name);
-                if (sysvarSpec !== null) {
-                    return sysvarSpec.valueType;
-                }
-                const noritoReadSpec = noritoReadBuiltinSpec(expression.name);
-                if (noritoReadSpec !== null) {
-                    return noritoReadSpec.valueType;
-                }
-                if (typedQueryBuiltinSpec(expression.name) !== null) {
-                    return 'NoritoBytes';
-                }
-                const accountBalanceSpec = accountBalanceBuiltinSpec(expression.name);
-                if (accountBalanceSpec !== null) {
-                    return accountBalanceSpec.valueType;
-                }
-                const privacyOutputSpec = privacyOutputBuiltinSpec(expression.name);
-                if (privacyOutputSpec !== null) {
-                    return privacyOutputSpec.valueType;
-                }
-                if (sm4BuiltinSpec(expression.name) !== null) {
-                    return 'NoritoBytes';
-                }
-                if (signatureBuiltinName(expression.name) !== null) {
-                    return 'bool';
+                const staticValueType = staticBuiltinValueType(expression.name);
+                if (staticValueType !== NO_BUILTIN_VALUE_TYPE)
+                    return staticValueType;
+                const mapAccessSpec = mapAccessBuiltinSpec(expression.name);
+                if (mapAccessSpec !== null) {
+                    if (mapAccessSpec.valueType === 'bool')
+                        return 'bool';
+                    const mapType = this.semanticMapTypeForExpression(expression.args[0], scopeTypes, stateHandles);
+                    return isMapStateType(mapType) ? mapType.value : null;
                 }
                 if (isMapNewCallName(expression.name)) {
                     return null;
                 }
                 if (this.compilerMode === 'test' && testOnlyKotodamaHelperError(expression.name) !== null) {
                     switch (expression.name) {
-                        case 'actor_account':
-                            return 'AccountId';
-                        case 'actor_public_key':
-                        case 'actor_sign':
-                            return 'NoritoBytes';
                         case 'invoke_entrypoint': {
                             const targetName = expression.args.length === 2
                                 ? testHostLiteralStringFromExpression(expression.args[0])
@@ -13541,81 +14720,6 @@ class StudioCodeGenerator {
                         default:
                             return null;
                     }
-                }
-                switch (expression.name) {
-                    case 'json_object':
-                    case 'json_set_int':
-                    case 'json_set_account_id':
-                    case 'decode_json':
-                    case 'decode_schema':
-                    case 'schema_info':
-                        return 'Json';
-                    case 'encode_int':
-                    case 'encode_json':
-                    case 'vrf_verify':
-                    case 'vrf_verify_batch':
-                    case 'call_contract':
-                        return 'NoritoBytes';
-                    case 'encode_schema':
-                        return 'NoritoBytes';
-                    case 'path':
-                        return 'Name';
-                    case 'poseidon2':
-                    case 'poseidon6':
-                    case 'pubkgen':
-                    case 'valcom':
-                    case 'isqrt':
-                    case 'json_get_int':
-                    case 'decode_int':
-                    case 'current_time_ms':
-                    case 'block_height':
-                    case 'abs':
-                    case 'min':
-                    case 'max':
-                    case 'mean':
-                    case 'div_ceil':
-                    case 'gcd':
-                        return 'int';
-                    case 'contains':
-                        return 'bool';
-                    case 'trigger_event':
-                    case 'json_get_json':
-                        return 'Json';
-                    case 'resolve_account_alias':
-                    case 'json_get_account_id':
-                        return 'AccountId';
-                    case 'json_get_name':
-                        return 'Name';
-                    case 'json_get_asset_definition_id':
-                        return 'AssetDefinitionId';
-                    case 'state_get':
-                        return 'Blob';
-                    case 'state_keys':
-                        return 'NoritoBytes';
-                    case 'state_has':
-                        return 'bool';
-                    case 'state_len':
-                    case 'state_count':
-                        return 'int';
-                    case 'execute_query':
-                    case 'query_execute_norito':
-                        return 'Blob';
-                    case 'pointer_to_norito':
-                        return 'NoritoBytes';
-                    case 'tlv_len':
-                        return 'int';
-                    case 'build_submit_ballot_inline':
-                    case 'build_unshield_inline':
-                        this.validateSemanticZkInlineBuilderCall(expression, scopeTypes, stateHandles);
-                        return 'NoritoBytes';
-                    case 'ensure':
-                    case 'get_or_default':
-                    case 'get_or': {
-                        const mapType = this.semanticMapTypeForExpression(expression.args[0], scopeTypes, stateHandles);
-                        return isMapStateType(mapType) ? mapType.value : null;
-                    }
-                    default:
-                        break;
                 }
                 const structDecl = this.structs.get(expression.name);
                 if (structDecl) {
@@ -13641,23 +14745,18 @@ class StudioCodeGenerator {
         }
         return target.returnType;
     }
-    validateSemanticTestHostLiteral(expression, helperName, label) {
-        if (testHostLiteralStringFromExpression(expression) !== null)
-            return;
-        throw new StudioCompileError(`semantic error: ${helperName} requires a literal ${label} such as "issuer" or name("issuer")`, expression.line, expression.column);
-    }
     validateSemanticTestOnlyHelperCall(expression, scopeTypes, stateHandles) {
+        const spec = testOnlyBuiltinSpec(expression.name);
+        if (spec === null)
+            return;
+        for (const argIndex of spec.semanticUsageArgIndexes) {
+            this.validateSemanticExpressionUsage(expression.args[argIndex], scopeTypes, stateHandles);
+        }
+        const exactArgumentSpec = exactArgumentBuiltinSpec(expression.name);
+        const exactArgumentMessage = exactArgumentBuiltinMessage(exactArgumentSpec, expression.args.length);
+        this.validateSemanticExactArgumentTypes(expression.args, exactArgumentSpec.args, exactArgumentMessage, scopeTypes, stateHandles, expression.line, expression.column);
         switch (expression.name) {
             case 'invoke_entrypoint': {
-                if (expression.args.length !== 2) {
-                    throw new StudioCompileError('semantic error: invoke_entrypoint expects (string|Name literal entrypoint, Json)', expression.line, expression.column);
-                }
-                this.validateSemanticTestHostLiteral(expression.args[0], 'invoke_entrypoint', 'entrypoint name');
-                this.validateSemanticExpressionUsage(expression.args[1], scopeTypes, stateHandles);
-                const payloadType = this.inferSemanticExpressionType(expression.args[1], scopeTypes, stateHandles);
-                if (payloadType !== 'Json') {
-                    throw new StudioCompileError('semantic error: invoke_entrypoint expects a Json payload as its second argument', expression.args[1].line, expression.args[1].column);
-                }
                 const targetName = testHostLiteralStringFromExpression(expression.args[0]);
                 this.runtimeEntrypointReturnType(targetName, expression.args[0]);
                 const target = this.functions.get(targetName);
@@ -13667,16 +14766,6 @@ class StudioCodeGenerator {
                 return;
             }
             case 'invoke_entrypoint_as': {
-                if (expression.args.length !== 3) {
-                    throw new StudioCompileError('semantic error: invoke_entrypoint_as expects (string|Name literal actor, string|Name literal entrypoint, Json)', expression.line, expression.column);
-                }
-                this.validateSemanticTestHostLiteral(expression.args[0], 'invoke_entrypoint_as', 'actor alias');
-                this.validateSemanticTestHostLiteral(expression.args[1], 'invoke_entrypoint_as', 'entrypoint name');
-                this.validateSemanticExpressionUsage(expression.args[2], scopeTypes, stateHandles);
-                const payloadType = this.inferSemanticExpressionType(expression.args[2], scopeTypes, stateHandles);
-                if (payloadType !== 'Json') {
-                    throw new StudioCompileError('semantic error: invoke_entrypoint_as expects a Json payload as its third argument', expression.args[2].line, expression.args[2].column);
-                }
                 const targetName = testHostLiteralStringFromExpression(expression.args[1]);
                 const returnType = this.runtimeEntrypointReturnType(targetName, expression.args[1]);
                 if (isTupleValueType(returnType)) {
@@ -13685,39 +14774,14 @@ class StudioCodeGenerator {
                 return;
             }
             case 'expect_reject_as': {
-                if (expression.args.length !== 3) {
-                    throw new StudioCompileError('semantic error: expect_reject_as expects (string|Name literal actor, string|Name literal entrypoint, Json)', expression.line, expression.column);
-                }
-                this.validateSemanticTestHostLiteral(expression.args[0], 'expect_reject_as', 'actor alias');
-                this.validateSemanticTestHostLiteral(expression.args[1], 'expect_reject_as', 'entrypoint name');
-                this.validateSemanticExpressionUsage(expression.args[2], scopeTypes, stateHandles);
-                const payloadType = this.inferSemanticExpressionType(expression.args[2], scopeTypes, stateHandles);
-                if (payloadType !== 'Json') {
-                    throw new StudioCompileError('semantic error: expect_reject_as expects a Json payload as its third argument', expression.args[2].line, expression.args[2].column);
-                }
                 this.runtimeEntrypointReturnType(testHostLiteralStringFromExpression(expression.args[1]), expression.args[1]);
                 return;
             }
             case 'actor_account':
-            case 'actor_public_key': {
-                if (expression.args.length !== 1) {
-                    throw new StudioCompileError(`semantic error: ${expression.name} expects (string|Name literal actor)`, expression.line, expression.column);
-                }
-                this.validateSemanticTestHostLiteral(expression.args[0], expression.name, 'actor alias');
+            case 'actor_public_key':
                 return;
-            }
-            case 'actor_sign': {
-                if (expression.args.length !== 2) {
-                    throw new StudioCompileError('semantic error: actor_sign expects (string|Name literal actor, Blob|bytes)', expression.line, expression.column);
-                }
-                this.validateSemanticTestHostLiteral(expression.args[0], 'actor_sign', 'actor alias');
-                this.validateSemanticExpressionUsage(expression.args[1], scopeTypes, stateHandles);
-                const messageType = this.inferSemanticExpressionType(expression.args[1], scopeTypes, stateHandles);
-                if (!isSemanticBlobLikeType(messageType)) {
-                    throw new StudioCompileError('semantic error: actor_sign expects the message as Blob|bytes', expression.args[1].line, expression.args[1].column);
-                }
+            case 'actor_sign':
                 return;
-            }
             default:
                 return;
         }
@@ -13864,80 +14928,10 @@ class StudioCodeGenerator {
                     return;
                 }
                 expression.args.forEach((arg) => this.validateSemanticExpressionUsage(arg, scopeTypes, stateHandles));
-                if (expression.name === 'assert' || expression.name === 'require') {
-                    if (expression.args.length < 1 || expression.args.length > 2) {
-                        throw new StudioCompileError(`semantic error: ${expression.name} expects (bool) or (bool, string|int)`, expression.line, expression.column);
-                    }
-                    const conditionType = this.inferSemanticExpressionType(expression.args[0], scopeTypes, stateHandles);
-                    const messageType = expression.args.length === 2
-                        ? this.inferSemanticExpressionType(expression.args[1], scopeTypes, stateHandles)
-                        : null;
-                    const messageOk = expression.args.length < 2
-                        || expression.args[1]?.kind === 'string'
-                        || messageType === 'String'
-                        || isSemanticAssignableNumericType(messageType);
-                    if (conditionType !== 'bool'
-                        || !messageOk) {
-                        throw new StudioCompileError(`semantic error: ${expression.name} expects (bool) or (bool, string|int)`, expression.line, expression.column);
-                    }
-                }
-                if (jsonGetterSpec(expression.name) !== null) {
-                    this.validateSemanticJsonGetterCall(expression, scopeTypes, stateHandles);
-                    return;
-                }
-                const mapEnumerationName = mapEnumerationBuiltinName(expression.name);
-                if (mapEnumerationName !== null) {
-                    this.validateSemanticMapEnumerationCall(expression, mapEnumerationName, scopeTypes, stateHandles);
-                    return;
-                }
-                const hashSpec = hashBuiltinSpec(expression.name);
-                if (hashSpec !== null) {
-                    this.validateSemanticBlobLikeCall(expression, 1, hashSpec.message, scopeTypes, stateHandles);
-                    return;
-                }
-                const sysvarSpec = sysvarBuiltinSpec(expression.name);
-                if (sysvarSpec !== null) {
-                    if (expression.args.length !== 0) {
-                        throw new StudioCompileError(`semantic error: ${sysvarSpec.message}`, expression.line, expression.column);
-                    }
-                    return;
-                }
-                const noritoReadSpec = noritoReadBuiltinSpec(expression.name);
-                if (noritoReadSpec !== null) {
-                    this.validateSemanticBlobLikeCall(expression, 1, noritoReadSpec.message, scopeTypes, stateHandles);
-                    return;
-                }
-                const typedQuerySpec = typedQueryBuiltinSpec(expression.name);
-                if (typedQuerySpec !== null) {
-                    this.validateSemanticTypedQueryCall(expression, typedQuerySpec, scopeTypes, stateHandles);
-                    return;
-                }
-                const accountBalanceSpec = accountBalanceBuiltinSpec(expression.name);
-                if (accountBalanceSpec !== null) {
-                    this.validateSemanticExactArgumentTypes(expression.args, ['AccountId', 'AssetDefinitionId'], accountBalanceSpec.message, scopeTypes, stateHandles, expression.line, expression.column);
-                    return;
-                }
-                const privacyOutputSpec = privacyOutputBuiltinSpec(expression.name);
-                if (privacyOutputSpec !== null) {
-                    this.validateSemanticExactArgumentTypes(expression.args, privacyOutputSpec.args, privacyOutputSpec.message, scopeTypes, stateHandles, expression.line, expression.column);
-                    return;
-                }
-                if (smartContractLifecycleBuiltinSpec(expression.name) !== null) {
-                    this.validateSemanticBlobLikeCall(expression, 1, `${expression.name} expects (Blob|bytes) pointer to NoritoBytes lifecycle request`, scopeTypes, stateHandles);
-                    return;
-                }
-                const sm4Spec = sm4BuiltinSpec(expression.name);
-                if (sm4Spec !== null) {
-                    this.validateSemanticSm4Call(expression, sm4Spec, scopeTypes, stateHandles);
-                    return;
-                }
-                if (signatureBuiltinName(expression.name) !== null) {
-                    this.validateSemanticSignatureCall(expression, scopeTypes, stateHandles);
-                    return;
-                }
-                const zkSpec = zkVerifyBuiltinSpec(expression.name);
-                if (zkSpec !== null) {
-                    this.validateSemanticBlobLikeCall(expression, 1, `${zkSpec.canonicalName} expects (Blob|bytes) where the argument is a pointer to NoritoBytes TLV in INPUT`, scopeTypes, stateHandles);
+                const exactArgumentSpec = exactArgumentBuiltinSpec(expression.name);
+                if (exactArgumentSpec !== null) {
+                    const exactArgumentMessage = exactArgumentBuiltinMessage(exactArgumentSpec, expression.args.length);
+                    this.validateSemanticExactArgumentTypes(expression.args, exactArgumentSpec.args, exactArgumentMessage, scopeTypes, stateHandles, expression.line, expression.column);
                     return;
                 }
                 if (isMapNewCallName(expression.name)) {
@@ -13946,316 +14940,22 @@ class StudioCodeGenerator {
                     }
                     return;
                 }
-                switch (expression.name) {
-                    case 'json_object':
-                    case 'json_set_int':
-                    case 'json_set_account_id':
-                        this.validateSemanticJsonBuilderCall(expression, scopeTypes, stateHandles);
-                        return;
-                    case 'path':
-                        this.validateSemanticPathCall(expression, scopeTypes, stateHandles);
-                        return;
-                    case 'encode_schema':
-                    case 'decode_schema':
-                    case 'schema_info':
-                        this.validateSemanticSchemaCall(expression, scopeTypes, stateHandles);
-                        return;
-                    case 'encode_int':
-                    case 'decode_int':
-                    case 'encode_json':
-                    case 'decode_json':
-                        this.validateSemanticEncodeDecodeCall(expression, scopeTypes, stateHandles);
-                        return;
-                    case 'vrf_verify':
-                    case 'vrf_verify_batch':
-                        this.validateSemanticVrfCall(expression, scopeTypes, stateHandles);
-                        return;
-                    case 'current_time_ms':
-                    case 'block_height':
-                        if (expression.args.length !== 0) {
-                            throw new StudioCompileError(`semantic error: ${expression.name} expects no arguments`, expression.line, expression.column);
-                        }
-                        return;
-                    case 'trigger_event':
-                    case 'create_nfts_for_all_users':
-                        if (expression.args.length !== 0) {
-                            throw new StudioCompileError(`semantic error: ${expression.name} expects no arguments`, expression.line, expression.column);
-                        }
-                        return;
-                    case 'info':
-                        this.validateSemanticInfoCall(expression.args, expression.line, expression.column, scopeTypes, stateHandles);
-                        return;
-                    case 'isqrt':
-                        this.validateSemanticIntBuiltinCall(expression, 1, 'isqrt expects (int)', scopeTypes, stateHandles);
-                        return;
-                    case 'abs':
-                        this.validateSemanticIntBuiltinCall(expression, 1, 'abs expects (int)', scopeTypes, stateHandles);
-                        return;
-                    case 'min':
-                    case 'max':
-                    case 'mean':
-                        this.validateSemanticIntBuiltinCall(expression, 2, `${expression.name} expects (int, int)`, scopeTypes, stateHandles);
-                        return;
-                    case 'div_ceil':
-                        this.validateSemanticIntBuiltinCall(expression, 2, 'div_ceil expects (int, int)', scopeTypes, stateHandles);
-                        return;
-                    case 'gcd':
-                        this.validateSemanticIntBuiltinCall(expression, 2, 'gcd expects (int, int)', scopeTypes, stateHandles);
-                        return;
-                    case 'poseidon2':
-                        this.validateSemanticIntBuiltinCall(expression, 2, 'poseidon2 expects two int args', scopeTypes, stateHandles);
-                        return;
-                    case 'poseidon6':
-                        this.validateSemanticIntBuiltinCall(expression, 6, 'poseidon6 expects six int args', scopeTypes, stateHandles);
-                        return;
-                    case 'pubkgen':
-                        this.validateSemanticIntBuiltinCall(expression, 1, 'pubkgen expects one int arg', scopeTypes, stateHandles);
-                        return;
-                    case 'valcom':
-                        this.validateSemanticIntBuiltinCall(expression, 2, 'valcom expects two int args', scopeTypes, stateHandles);
-                        return;
-                    case 'assert_eq':
-                        this.validateSemanticIntBuiltinCall(expression, 2, 'assert_eq expects two int args', scopeTypes, stateHandles);
-                        return;
-                    case 'json_get_int':
-                    case 'json_get_json':
-                    case 'json_get_name':
-                    case 'json_get_account_id':
-                    case 'json_get_asset_definition_id':
-                        this.validateSemanticJsonGetterCall(expression, scopeTypes, stateHandles);
-                        return;
-                    case 'contains':
-                    case 'get_or':
-                    case 'get_or_default':
-                    case 'ensure':
-                        this.validateSemanticMapHelperCall(expression, scopeTypes, stateHandles);
-                        return;
-                    case 'state_get':
-                        this.validateSemanticNameCall(expression, 1, 'state_get expects (Name)', scopeTypes, stateHandles);
-                        return;
-                    case 'state_set':
-                        this.validateSemanticStateSetCall(expression, scopeTypes, stateHandles);
-                        return;
-                    case 'state_del':
-                        this.validateSemanticNameCall(expression, 1, 'state_del expects (Name)', scopeTypes, stateHandles);
-                        return;
-                    case 'state_keys': {
-                        const message = 'state_keys expects (Name, int offset, int limit)';
-                        if (expression.args.length !== 3) {
-                            throw new StudioCompileError(`semantic error: ${message}`, expression.line, expression.column);
-                        }
-                        const prefixType = this.inferSemanticExpressionType(expression.args[0], scopeTypes, stateHandles);
-                        const offsetType = this.inferSemanticExpressionType(expression.args[1], scopeTypes, stateHandles);
-                        const limitType = this.inferSemanticExpressionType(expression.args[2], scopeTypes, stateHandles);
-                        if ((prefixType !== null && prefixType !== 'Name')
-                            || (offsetType !== null && !isSemanticIntBuiltinArg(offsetType))
-                            || (limitType !== null && !isSemanticIntBuiltinArg(limitType))) {
-                            throw new StudioCompileError(`semantic error: ${message}`, expression.line, expression.column);
-                        }
-                        return;
-                    }
-                    case 'state_has':
-                        this.validateSemanticNameCall(expression, 1, 'state_has expects (Name)', scopeTypes, stateHandles);
-                        return;
-                    case 'state_len':
-                        this.validateSemanticNameCall(expression, 1, 'state_len expects (Name)', scopeTypes, stateHandles);
-                        return;
-                    case 'state_count':
-                        this.validateSemanticNameCall(expression, 1, 'state_count expects (Name)', scopeTypes, stateHandles);
-                        return;
-                    case 'execute_instruction':
-                    case 'sc_execute_submit_ballot':
-                    case 'sc_execute_unshield':
-                        this.validateSemanticBlobLikeCall(expression, 1, `${expression.name} expects (Blob|bytes) where the argument is a pointer to NoritoBytes TLV in INPUT`, scopeTypes, stateHandles);
-                        return;
-                    case 'execute_query':
-                        this.validateSemanticBlobLikeCall(expression, 1, 'execute_query expects (Blob|bytes) where the argument is a pointer to NoritoBytes TLV in INPUT', scopeTypes, stateHandles);
-                        return;
-                    case 'query_execute_norito':
-                        this.validateSemanticBlobLikeCall(expression, 1, 'query_execute_norito expects (Blob|bytes) pointer to NoritoBytes QueryRequest', scopeTypes, stateHandles);
-                        return;
-                    case 'query_get_account':
-                    case 'query_get_asset':
-                    case 'query_get_asset_definition':
-                    case 'query_get_domain':
-                    case 'query_get_nft':
-                    case 'query_get_parameter':
-                    case 'query_get_contract_manifest':
-                    case 'query_get_contract_instance':
-                        this.validateSemanticTypedQueryCall(expression, typedQueryBuiltinSpec(expression.name), scopeTypes, stateHandles);
-                        return;
-                    case 'set_execution_depth':
-                        this.validateSemanticIntBuiltinCall(expression, 1, 'set_execution_depth expects one int arg', scopeTypes, stateHandles);
-                        return;
-                    case 'setvl':
-                        this.validateSemanticIntBuiltinCall(expression, 1, 'setvl expects one int arg', scopeTypes, stateHandles);
-                        return;
-                    case 'resolve_account_alias':
-                        this.validateSemanticResolveAccountAliasCall(expression, scopeTypes, stateHandles);
-                        return;
-                    case 'call_contract':
-                        this.validateSemanticCallContractCall(expression, scopeTypes, stateHandles);
-                        return;
-                    case 'transfer_batch':
-                        this.validateSemanticTransferBatchCall(expression, scopeTypes, stateHandles);
-                        return;
-                    case 'axt_begin':
-                    case 'axt_touch':
-                    case 'verify_ds_proof':
-                    case 'use_asset_handle':
-                    case 'axt_commit':
-                        this.validateSemanticAxtCall(expression, scopeTypes, stateHandles);
-                        return;
-                    case 'soracloud_read_committed_state':
-                    case 'soracloud_emit_state_mutation':
-                    case 'soracloud_emit_mailbox_message':
-                    case 'soracloud_append_journal':
-                    case 'soracloud_publish_checkpoint':
-                    case 'soracloud_read_secret':
-                    case 'soracloud_read_credential':
-                    case 'soracloud_egress_fetch':
-                    case 'soracloud_read_config':
-                    case 'soracloud_read_secret_envelope':
-                        this.validateSemanticExactArgumentTypes(expression.args, ['SoracloudRequest'], `${expression.name} expects (SoracloudRequest)`, scopeTypes, stateHandles, expression.line, expression.column);
-                        return;
-                    case 'transfer_v1_batch_begin':
-                    case 'transfer_v1_batch_end':
-                    case 'subscription_bill':
-                    case 'subscription_record_usage':
-                        if (expression.args.length !== 0) {
-                            throw new StudioCompileError(`semantic error: ${expression.name} expects no arguments`, expression.line, expression.column);
-                        }
-                        return;
-                    case 'transfer_asset':
-                        this.validateSemanticExactArgumentTypes(expression.args, ['AccountId', 'AccountId', 'AssetDefinitionId', 'numeric'], 'transfer_asset expects (AccountId, AccountId, AssetDefinitionId, numeric)', scopeTypes, stateHandles, expression.line, expression.column);
-                        return;
-                    case 'set_account_detail':
-                        this.validateSemanticExactArgumentTypes(expression.args, ['AccountId', 'Name', 'Json'], 'set_account_detail expects (AccountId, Name, Json)', scopeTypes, stateHandles, expression.line, expression.column);
-                        return;
-                    case 'mint_asset':
-                        this.validateSemanticExactArgumentTypes(expression.args, ['AccountId', 'AssetDefinitionId', 'numeric'], 'mint_asset expects (AccountId, AssetDefinitionId, numeric)', scopeTypes, stateHandles, expression.line, expression.column);
-                        return;
-                    case 'burn_asset':
-                        this.validateSemanticExactArgumentTypes(expression.args, ['AccountId', 'AssetDefinitionId', 'numeric'], 'burn_asset expects (AccountId, AssetDefinitionId, numeric)', scopeTypes, stateHandles, expression.line, expression.column);
-                        return;
-                    case 'nft_mint_asset':
-                        this.validateSemanticExactArgumentTypes(expression.args, ['NftId', 'AccountId'], 'nft_mint_asset expects (NftId, AccountId)', scopeTypes, stateHandles, expression.line, expression.column);
-                        return;
-                    case 'nft_set_metadata':
-                        this.validateSemanticExactArgumentTypes(expression.args, ['NftId', 'Name', 'Json'], 'nft_set_metadata expects (NftId, Name, Json)', scopeTypes, stateHandles, expression.line, expression.column);
-                        return;
-                    case 'nft_burn_asset':
-                        this.validateSemanticExactArgumentTypes(expression.args, ['NftId'], 'nft_burn_asset expects (NftId)', scopeTypes, stateHandles, expression.line, expression.column);
-                        return;
-                    case 'nft_transfer_asset':
-                        this.validateSemanticExactArgumentTypes(expression.args, ['AccountId', 'NftId', 'AccountId'], 'nft_transfer_asset expects (AccountId, NftId, AccountId)', scopeTypes, stateHandles, expression.line, expression.column);
-                        return;
-                    case 'register_domain':
-                        this.validateSemanticExactArgumentTypes(expression.args, ['DomainId'], 'register_domain expects (DomainId)', scopeTypes, stateHandles, expression.line, expression.column);
-                        return;
-                    case 'unregister_domain':
-                        this.validateSemanticExactArgumentTypes(expression.args, ['DomainId'], 'unregister_domain expects (DomainId)', scopeTypes, stateHandles, expression.line, expression.column);
-                        return;
-                    case 'register_account':
-                        this.validateSemanticExactArgumentTypes(expression.args, ['AccountId'], 'register_account expects (AccountId)', scopeTypes, stateHandles, expression.line, expression.column);
-                        return;
-                    case 'unregister_account':
-                        this.validateSemanticExactArgumentTypes(expression.args, ['AccountId'], 'unregister_account expects (AccountId)', scopeTypes, stateHandles, expression.line, expression.column);
-                        return;
-                    case 'add_signatory':
-                        this.validateSemanticExactArgumentTypes(expression.args, ['AccountId', 'Json'], 'add_signatory expects (AccountId, Json)', scopeTypes, stateHandles, expression.line, expression.column);
-                        return;
-                    case 'remove_signatory':
-                        this.validateSemanticExactArgumentTypes(expression.args, ['AccountId', 'Json'], 'remove_signatory expects (AccountId, Json)', scopeTypes, stateHandles, expression.line, expression.column);
-                        return;
-                    case 'set_account_quorum':
-                        this.validateSemanticExactArgumentTypes(expression.args, ['AccountId', 'numeric'], 'set_account_quorum expects (AccountId, numeric)', scopeTypes, stateHandles, expression.line, expression.column);
-                        return;
-                    case 'register_asset':
-                    case 'create_new_asset':
-                        this.validateSemanticAssetDefinitionLifecycleCall(expression, scopeTypes, stateHandles);
-                        return;
-                    case 'unregister_asset':
-                        this.validateSemanticExactArgumentTypes(expression.args, ['AssetDefinitionId'], 'unregister_asset expects (AssetDefinitionId)', scopeTypes, stateHandles, expression.line, expression.column);
-                        return;
-                    case 'register_peer':
-                        this.validateSemanticExactArgumentTypes(expression.args, ['Json'], 'register_peer expects (Json)', scopeTypes, stateHandles, expression.line, expression.column);
-                        return;
-                    case 'unregister_peer':
-                        this.validateSemanticExactArgumentTypes(expression.args, ['Json'], 'unregister_peer expects (Json)', scopeTypes, stateHandles, expression.line, expression.column);
-                        return;
-                    case 'create_trigger':
-                    case 'register_trigger':
-                        this.validateSemanticExactArgumentTypes(expression.args, ['Json'], `${expression.name} expects (Json)`, scopeTypes, stateHandles, expression.line, expression.column);
-                        return;
-                    case 'remove_trigger':
-                    case 'unregister_trigger':
-                        this.validateSemanticExactArgumentTypes(expression.args, ['Name'], `${expression.name} expects (Name)`, scopeTypes, stateHandles, expression.line, expression.column);
-                        return;
-                    case 'set_trigger_enabled':
-                        this.validateSemanticExactArgumentTypes(expression.args, ['Name', 'numeric'], 'set_trigger_enabled expects (Name, int)', scopeTypes, stateHandles, expression.line, expression.column);
-                        return;
-                    case 'create_role':
-                        this.validateSemanticExactArgumentTypes(expression.args, ['Name', 'Json'], 'create_role expects (Name, Json)', scopeTypes, stateHandles, expression.line, expression.column);
-                        return;
-                    case 'delete_role':
-                        this.validateSemanticExactArgumentTypes(expression.args, ['Name'], 'delete_role expects (Name)', scopeTypes, stateHandles, expression.line, expression.column);
-                        return;
-                    case 'grant_role':
-                    case 'revoke_role':
-                        this.validateSemanticExactArgumentTypes(expression.args, ['AccountId', 'Name'], 'grant/revoke_role expects (AccountId, Name)', scopeTypes, stateHandles, expression.line, expression.column);
-                        return;
-                    case 'grant_permission':
-                    case 'revoke_permission':
-                        this.validateSemanticPermissionBindingCall(expression, scopeTypes, stateHandles);
-                        return;
-                    case 'transfer_domain':
-                        this.validateSemanticTransferDomainCall(expression, scopeTypes, stateHandles);
-                        return;
-                    case 'tlv_len':
-                        this.validateSemanticPointerAbiCall(expression, 'tlv_len expects a pointer-ABI type, Json, or Blob|bytes argument', true, scopeTypes, stateHandles);
-                        return;
-                    case 'pointer_to_norito':
-                        this.validateSemanticPointerAbiCall(expression, 'pointer_to_norito expects a pointer-ABI type or Blob|bytes argument', false, scopeTypes, stateHandles);
-                        return;
-                    case 'build_submit_ballot_inline':
-                    case 'build_unshield_inline':
-                        this.validateSemanticZkInlineBuilderCall(expression, scopeTypes, stateHandles);
-                        return;
-                    case 'escrow_open_offer':
-                    case 'escrow_accept':
-                    case 'escrow_mark_payment_sent':
-                    case 'escrow_release':
-                    case 'escrow_cancel':
-                    case 'escrow_open_dispute':
-                    case 'escrow_resolve_dispute':
-                    case 'anonymous_escrow_open_offer':
-                    case 'anonymous_escrow_accept':
-                    case 'anonymous_escrow_mark_payment_sent':
-                    case 'anonymous_escrow_release':
-                    case 'anonymous_escrow_cancel':
-                    case 'anonymous_escrow_open_dispute':
-                    case 'anonymous_escrow_resolve_dispute':
-                        this.validateSemanticNativeEscrowCall(expression, scopeTypes, stateHandles);
-                        return;
-                    default:
-                        break;
-                }
-                if (isPointerConstructorCall(expression.name)) {
+                const pointerConstructorSpec = pointerConstructorBuiltinSpec(expression.name);
+                if (pointerConstructorSpec !== null) {
                     if (expression.args.length !== 1) {
-                        throw new StudioCompileError(`semantic error: ${expression.name} expects one argument`, expression.line, expression.column);
+                        throw new StudioCompileError(`semantic error: ${pointerConstructorSpec.canonicalName} expects one argument`, expression.line, expression.column);
                     }
                     const argType = this.inferSemanticExpressionType(expression.args[0], scopeTypes, stateHandles);
-                    if (!isSemanticPointerConstructorArgAssignable(expression.name, argType)) {
-                        throw new StudioCompileError(`semantic error: ${expression.name} expects ${pointerConstructorExpectedDescription(expression.name)}`, expression.line, expression.column);
+                    if (!isSemanticPointerConstructorArgAssignable(pointerConstructorSpec, argType)) {
+                        throw new StudioCompileError(`semantic error: ${pointerConstructorSpec.canonicalName} expects ${pointerConstructorSpec.expectedDescription}`, expression.line, expression.column);
                     }
-                    if (expression.name === 'domain' || expression.name === 'domain_id') {
+                    if (pointerConstructorSpec.validateLiteral === 'domain') {
                         const literal = literalStringFromExpression(expression.args[0]);
                         if (literal !== null) {
                             normalizeDomainIdLiteral(literal, expression.line, expression.column);
                         }
                     }
-                    if (expression.name === 'asset_definition') {
+                    if (pointerConstructorSpec.validateLiteral === 'asset_definition') {
                         const literal = literalStringFromExpression(expression.args[0]);
                         if (literal !== null) {
                             validateAssetDefinitionIdLiteral(literal, expression.line, expression.column);
@@ -14332,7 +15032,7 @@ class StudioCodeGenerator {
                 }
                 case 'info':
                     this.validateSemanticExpressionUsage(statement.expression, scopeTypes, stateHandles);
-                    this.validateSemanticInfoCall([statement.expression], statement.line, 1, scopeTypes, stateHandles);
+                    this.validateSemanticExactArgumentTypes([statement.expression], [{ kind: 'StringOrNumeric' }], 'info expects (string|int)', scopeTypes, stateHandles, statement.line);
                     break;
                 case 'transferAsset':
                     this.validateSemanticExpressionUsage(statement.from, scopeTypes, stateHandles);
@@ -14423,7 +15123,7 @@ class StudioCodeGenerator {
                     this.validateSemanticExpressionUsage(statement.payload, scopeTypes, stateHandles);
                     {
                         const payloadType = this.inferSemanticExpressionType(statement.payload, scopeTypes, stateHandles);
-                        if (!isSemanticPointerConstructorArgAssignable('norito_bytes', payloadType)) {
+                        if (!isSemanticPointerConstructorArgAssignable(pointerConstructorBuiltinSpec('norito_bytes'), payloadType)) {
                             throw new StudioCompileError('semantic error: execute_query expects norito_bytes(string or Blob|bytes)', statement.line, 1);
                         }
                     }
@@ -18684,14 +19384,21 @@ class StudioCodeGenerator {
         this.emitNftLiteralPointerIntoRegister(nftLiteral, line, column, 10);
         this.emitDirectNameLiteralPointerIntoRegister(keyLiteral, 11);
         this.emitDirectJsonLiteralPointerIntoRegister(jsonLiteral, 12, line, column);
-        const firstPublishedRegister = this.assembler.allocRegister();
-        const secondPublishedRegister = this.assembler.allocRegister();
+        const useRustScratchPair = this.assembler.canClaimRegister(27) && this.assembler.canClaimRegister(28);
+        const firstPublishedRegister = useRustScratchPair
+            ? 27
+            : this.assembler.allocRegister();
+        const secondPublishedRegister = useRustScratchPair
+            ? 28
+            : this.assembler.allocRegister();
         try {
             this.emitThreePointerSyscallFromAbi(SYSCALL_NFT_SET_METADATA, firstPublishedRegister, secondPublishedRegister);
         }
         finally {
-            this.assembler.releaseRegister(secondPublishedRegister);
-            this.assembler.releaseRegister(firstPublishedRegister);
+            if (!useRustScratchPair) {
+                this.assembler.releaseRegister(secondPublishedRegister);
+                this.assembler.releaseRegister(firstPublishedRegister);
+            }
         }
     }
     emitNftBurnAssetLiteralSyscall(nftLiteral, line, column) {
@@ -19409,14 +20116,16 @@ class StudioCodeGenerator {
         }
     }
     tryCompileRustStyleReturnTlvLenPointerToNorito(expression, callStack, locals) {
+        const tlvLenSpec = expression.kind === 'call' ? abiUtilityBuiltinSpec(expression.name) : null;
         if (expression.kind !== 'call'
-            || expression.name !== 'tlv_len'
+            || tlvLenSpec?.operation !== 'tlv_len'
             || expression.args.length !== 1) {
             return null;
         }
         const pointerCall = expression.args[0];
+        const pointerToNoritoSpec = pointerCall.kind === 'call' ? abiUtilityBuiltinSpec(pointerCall.name) : null;
         if (pointerCall.kind !== 'call'
-            || pointerCall.name !== 'pointer_to_norito'
+            || pointerToNoritoSpec?.operation !== 'pointer_to_norito'
             || pointerCall.args.length !== 1) {
             return null;
         }
@@ -19427,7 +20136,7 @@ class StudioCodeGenerator {
         if (localBinding === undefined || localBinding.kind !== 'pointer' || localBinding.register === null) {
             return null;
         }
-        const pointerReg = this.compileExpressionAsPointerAbiTlv(pointerSource, callStack, locals, false, 'pointer_to_norito expects a pointer-ABI type or Blob|bytes argument');
+        const pointerReg = this.compileExpressionAsPointerAbiTlv(pointerSource, callStack, locals, pointerToNoritoSpec.allowJson, pointerToNoritoSpec.message);
         const noritoReg = this.emitPointerToNorito(pointerReg);
         this.assembler.releaseRegister(pointerReg);
         const lengthReg = this.emitTlvLen(noritoReg);
@@ -20794,6 +21503,87 @@ class StudioCodeGenerator {
         const result = this.createScalarBindingForRegister('int', valueReg);
         this.releaseMapReferenceIfTemporary(mapRef);
         return result;
+    }
+    compileMapAccessBuiltinCall(expression, spec, callStack, locals) {
+        if (!spec.arities.includes(expression.args.length)) {
+            throw new StudioCompileError(`${spec.message} in the browser compiler.`, expression.line, expression.column);
+        }
+        if (spec.operation === 'contains') {
+            const mapRef = this.resolveMapReference(expression.args[0], locals, callStack);
+            const keyReg = mapRef.storage === 'local'
+                ? this.compileLocalMapKey(expression.args[1], mapRef.type.key, callStack, locals)
+                : this.compileMapKey(expression.args[1], mapRef.type.key, callStack, locals);
+            const register = this.emitMapContainsRegister(mapRef, keyReg);
+            this.releaseMapReferenceIfTemporary(mapRef);
+            return { kind: 'int', register, items: null, fieldNames: null, valueType: 'bool' };
+        }
+        if (spec.operation === 'get_or') {
+            const mapRef = this.resolveMapReference(expression.args[0], locals, callStack);
+            const defaultExpression = expression.args[2]
+                ?? (mapRef.type.value === 'int'
+                    ? { kind: 'number', value: 0, line: expression.line, column: expression.column }
+                    : null);
+            if (!defaultExpression) {
+                throw new StudioCompileError(`${expression.name} requires an explicit default for map value type \`${renderValueType(mapRef.type.value)}\` in the browser compiler.`, expression.line, expression.column);
+            }
+            if (mapRef.storage === 'local' && (mapRef.type.value === 'int' || mapRef.type.value === 'bool')) {
+                const result = this.compileLocalMapGetOrBinding(mapRef, expression.args[1], defaultExpression, callStack, locals, expression.line, expression.column);
+                this.releaseMapReferenceIfTemporary(mapRef);
+                return result;
+            }
+            const keyReg = mapRef.storage === 'local'
+                ? this.compileLocalMapKey(expression.args[1], mapRef.type.key, callStack, locals)
+                : this.compileMapKey(expression.args[1], mapRef.type.key, callStack, locals);
+            const result = this.createBindingForType(mapRef.type.value);
+            const existingJump = this.emitMapPresentBranch(mapRef, keyReg);
+            const defaultBinding = this.compileExpressionAsBindingForType(defaultExpression, mapRef.type.value, callStack, locals);
+            this.moveBinding(result, defaultBinding, expression.line, expression.column);
+            const endJump = this.assembler.reserveControlTransferStub();
+            const existingPc = this.assembler.currentPc();
+            this.assembler.patchBranch(existingJump, existingPc);
+            const existingBinding = this.compileMapReadBinding(mapRef, keyReg, expression.line, expression.column);
+            this.moveBinding(result, existingBinding, expression.line, expression.column);
+            this.assembler.patchJumpTransferStub(endJump, this.assembler.currentPc());
+            this.releaseMapReferenceIfTemporary(mapRef);
+            return result;
+        }
+        if (spec.operation === 'ensure') {
+            const mapRef = this.resolveMapReference(expression.args[0], locals, callStack);
+            const defaultExpression = expression.args[2]
+                ?? (mapRef.type.value === 'int' || mapRef.type.value === 'bool'
+                    ? { kind: 'number', value: 0, line: expression.line, column: expression.column }
+                    : null);
+            if (!defaultExpression) {
+                throw new StudioCompileError(`ensure requires an explicit default for map value type \`${renderValueType(mapRef.type.value)}\` in the browser compiler.`, expression.line, expression.column);
+            }
+            if (mapRef.storage !== 'local' && (mapRef.type.value === 'int' || mapRef.type.value === 'bool')) {
+                const keyReg = this.compileMapKey(expression.args[1], mapRef.type.key, callStack, locals);
+                return this.compileDurableMapEnsureBinding(mapRef, keyReg, defaultExpression, callStack, locals, expression.line, expression.column);
+            }
+            const keyReg = this.compileLocalMapKey(expression.args[1], mapRef.type.key, callStack, locals);
+            const result = this.createBindingForType(mapRef.type.value);
+            const existingJump = this.emitMapPresentBranch(mapRef, keyReg);
+            const defaultBinding = this.compileExpressionAsBindingForType(defaultExpression, mapRef.type.value, callStack, locals);
+            if (mapRef.storage === 'local') {
+                this.emitLocalMapSetBinding(mapRef.binding.register, keyReg, mapRef.type.value, defaultBinding, expression.line, expression.column);
+            }
+            else if (mapRef.storage === 'stateHandle') {
+                this.emitStateHandleMapSetBinding(this.requireStateMapHandleLeafRegisters(mapRef, expression.line, expression.column), keyReg, mapRef.type.key, mapRef.type.value, defaultBinding, expression.line, expression.column);
+            }
+            else {
+                this.emitStateMapSetBinding(mapRef.name, keyReg, mapRef.type.key, mapRef.type.value, defaultBinding);
+            }
+            this.moveBinding(result, defaultBinding, expression.line, expression.column);
+            const endJump = this.assembler.reserveControlTransferStub();
+            const existingPc = this.assembler.currentPc();
+            this.assembler.patchBranch(existingJump, existingPc);
+            const existingBinding = this.compileMapReadBinding(mapRef, keyReg, expression.line, expression.column);
+            this.moveBinding(result, existingBinding, expression.line, expression.column);
+            this.assembler.patchJumpTransferStub(endJump, this.assembler.currentPc());
+            this.releaseMapReferenceIfTemporary(mapRef);
+            return result;
+        }
+        throw new StudioCompileError(`Unsupported map helper \`${expression.name}\`.`, expression.line, expression.column);
     }
     compileZeroStartMapEnumerationCall(expression, helperName, mapRef, callStack, locals) {
         const startReg = this.compileExpressionAsInt(expression.args[1], callStack, locals);
@@ -22373,11 +23163,11 @@ class StudioCodeGenerator {
     compileOptionalEscrowEvidencePointer(expression, callStack, locals) {
         return expression === undefined ? null : this.compileExpressionAsNoritoBytesPointer(expression, callStack, locals);
     }
-    compileNativeEscrowCall(expression, callStack, locals, allowVoidResult, liveAfterStatement = null) {
-        switch (expression.name) {
-            case 'escrow_open_offer': {
+    compileEscrowBuiltinCall(expression, spec, callStack, locals, allowVoidResult, liveAfterStatement = null) {
+        switch (spec.kind) {
+            case 'openOffer': {
                 if (expression.args.length !== 3 && expression.args.length !== 4) {
-                    throw new StudioCompileError('escrow_open_offer expects (Name, AssetDefinitionId, numeric[, Blob|bytes evidence_hashes]) in the browser compiler.', expression.line, expression.column);
+                    throw new StudioCompileError(`${spec.message} in the browser compiler.`, expression.line, expression.column);
                 }
                 const amountType = this.inferExpressionValueType(expression.args[2], locals);
                 const amountInt = isSemanticWideNumericType(amountType)
@@ -22399,34 +23189,24 @@ class StudioCodeGenerator {
                     this.releaseExpressionRegisterIfTemporary(evidenceReg, locals);
                 return this.finishNativeEscrowCall(expression, allowVoidResult, amountReg);
             }
-            case 'escrow_accept':
-            case 'escrow_mark_payment_sent':
-            case 'escrow_release':
-            case 'escrow_cancel': {
+            case 'singleName': {
                 if (expression.args.length !== 1) {
-                    throw new StudioCompileError(`${expression.name} expects (Name) in the browser compiler.`, expression.line, expression.column);
+                    throw new StudioCompileError(`${spec.message} in the browser compiler.`, expression.line, expression.column);
                 }
                 const escrowReg = this.compileExpressionAsNamePointer(expression.args[0], callStack, locals);
-                const syscall = expression.name === 'escrow_accept'
-                    ? SYSCALL_ESCROW_ACCEPT
-                    : expression.name === 'escrow_mark_payment_sent'
-                        ? SYSCALL_ESCROW_MARK_PAYMENT_SENT
-                        : expression.name === 'escrow_release'
-                            ? SYSCALL_ESCROW_RELEASE
-                            : SYSCALL_ESCROW_CANCEL;
-                this.emitEscrowSingleNameSyscall(escrowReg, syscall);
+                this.emitEscrowSingleNameSyscall(escrowReg, spec.syscall);
                 const discardReg = this.deadArgumentRegisterAfterStatement(expression.args[0], locals, liveAfterStatement)
                     ?? (this.isExpressionRegisterTemporary(escrowReg, locals) ? escrowReg : null);
                 this.releaseExpressionRegisterIfTemporary(escrowReg, locals);
                 return this.finishNativeEscrowCall(expression, allowVoidResult, discardReg);
             }
-            case 'escrow_open_dispute': {
+            case 'openDispute': {
                 if (expression.args.length !== 1 && expression.args.length !== 2) {
-                    throw new StudioCompileError('escrow_open_dispute expects (Name[, Blob|bytes evidence_hashes]) in the browser compiler.', expression.line, expression.column);
+                    throw new StudioCompileError(`${spec.message} in the browser compiler.`, expression.line, expression.column);
                 }
                 const escrowReg = this.compileExpressionAsNamePointer(expression.args[0], callStack, locals);
                 const evidenceReg = this.compileOptionalEscrowEvidencePointer(expression.args[1], callStack, locals);
-                this.emitEscrowOpenDisputeSyscall(escrowReg, evidenceReg);
+                this.emitEscrowOpenDisputeSyscall(escrowReg, evidenceReg, spec.syscall);
                 const discardReg = this.deadArgumentRegisterAfterStatement(expression.args[0], locals, liveAfterStatement)
                     ?? (this.isExpressionRegisterTemporary(escrowReg, locals) ? escrowReg : null);
                 this.releaseExpressionRegisterIfTemporary(escrowReg, locals);
@@ -22434,9 +23214,9 @@ class StudioCodeGenerator {
                     this.releaseExpressionRegisterIfTemporary(evidenceReg, locals);
                 return this.finishNativeEscrowCall(expression, allowVoidResult, discardReg);
             }
-            case 'escrow_resolve_dispute': {
+            case 'resolveDispute': {
                 if (expression.args.length !== 3 && expression.args.length !== 4) {
-                    throw new StudioCompileError('escrow_resolve_dispute expects (Name, numeric, numeric[, Blob|bytes evidence_hashes]) in the browser compiler.', expression.line, expression.column);
+                    throw new StudioCompileError(`${spec.message} in the browser compiler.`, expression.line, expression.column);
                 }
                 const buyerType = this.inferExpressionValueType(expression.args[1], locals);
                 const buyerInt = isSemanticWideNumericType(buyerType)
@@ -22471,54 +23251,15 @@ class StudioCodeGenerator {
                     this.releaseExpressionRegisterIfTemporary(evidenceReg, locals);
                 return this.finishNativeEscrowCall(expression, allowVoidResult, sellerAmountReg);
             }
-            case 'anonymous_escrow_open_offer':
-            case 'anonymous_escrow_release':
-            case 'anonymous_escrow_cancel':
-            case 'anonymous_escrow_resolve_dispute': {
+            case 'anonymousRequest': {
                 if (expression.args.length !== 1) {
-                    throw new StudioCompileError(`${expression.name} expects (Blob|bytes) Norito request payload in the browser compiler.`, expression.line, expression.column);
+                    throw new StudioCompileError(`${spec.message} in the browser compiler.`, expression.line, expression.column);
                 }
                 const requestReg = this.compileExpressionAsNoritoBytesPointer(expression.args[0], callStack, locals);
-                const syscall = expression.name === 'anonymous_escrow_open_offer'
-                    ? SYSCALL_ANONYMOUS_ESCROW_OPEN_OFFER
-                    : expression.name === 'anonymous_escrow_release'
-                        ? SYSCALL_ANONYMOUS_ESCROW_RELEASE
-                        : expression.name === 'anonymous_escrow_cancel'
-                            ? SYSCALL_ANONYMOUS_ESCROW_CANCEL
-                            : SYSCALL_ANONYMOUS_ESCROW_RESOLVE_DISPUTE;
-                this.emitEscrowSingleRequestSyscall(requestReg, syscall);
+                this.emitEscrowSingleRequestSyscall(requestReg, spec.syscall);
                 const discardReg = this.deadArgumentRegisterAfterStatement(expression.args[0], locals, liveAfterStatement)
                     ?? (this.isExpressionRegisterTemporary(requestReg, locals) ? requestReg : null);
                 this.releaseExpressionRegisterIfTemporary(requestReg, locals);
-                return this.finishNativeEscrowCall(expression, allowVoidResult, discardReg);
-            }
-            case 'anonymous_escrow_accept':
-            case 'anonymous_escrow_mark_payment_sent': {
-                if (expression.args.length !== 1) {
-                    throw new StudioCompileError(`${expression.name} expects (Name) in the browser compiler.`, expression.line, expression.column);
-                }
-                const escrowReg = this.compileExpressionAsNamePointer(expression.args[0], callStack, locals);
-                const syscall = expression.name === 'anonymous_escrow_accept'
-                    ? SYSCALL_ANONYMOUS_ESCROW_ACCEPT
-                    : SYSCALL_ANONYMOUS_ESCROW_MARK_PAYMENT_SENT;
-                this.emitEscrowSingleNameSyscall(escrowReg, syscall);
-                const discardReg = this.deadArgumentRegisterAfterStatement(expression.args[0], locals, liveAfterStatement)
-                    ?? (this.isExpressionRegisterTemporary(escrowReg, locals) ? escrowReg : null);
-                this.releaseExpressionRegisterIfTemporary(escrowReg, locals);
-                return this.finishNativeEscrowCall(expression, allowVoidResult, discardReg);
-            }
-            case 'anonymous_escrow_open_dispute': {
-                if (expression.args.length !== 1 && expression.args.length !== 2) {
-                    throw new StudioCompileError('anonymous_escrow_open_dispute expects (Name[, Blob|bytes evidence_hashes]) in the browser compiler.', expression.line, expression.column);
-                }
-                const escrowReg = this.compileExpressionAsNamePointer(expression.args[0], callStack, locals);
-                const evidenceReg = this.compileOptionalEscrowEvidencePointer(expression.args[1], callStack, locals);
-                this.emitEscrowOpenDisputeSyscall(escrowReg, evidenceReg, SYSCALL_ANONYMOUS_ESCROW_OPEN_DISPUTE);
-                const discardReg = this.deadArgumentRegisterAfterStatement(expression.args[0], locals, liveAfterStatement)
-                    ?? (this.isExpressionRegisterTemporary(escrowReg, locals) ? escrowReg : null);
-                this.releaseExpressionRegisterIfTemporary(escrowReg, locals);
-                if (evidenceReg !== null)
-                    this.releaseExpressionRegisterIfTemporary(evidenceReg, locals);
                 return this.finishNativeEscrowCall(expression, allowVoidResult, discardReg);
             }
             default:
@@ -22650,10 +23391,1180 @@ class StudioCodeGenerator {
                 return undefined;
         }
     }
+    compileDirectHelperJsonPointer(expression, callStack, locals) {
+        if (expression.kind === 'stateReference' && this.consts.has(expression.name) && !locals.has(expression.name)) {
+            return this.withConstResolution(expression.name, expression.line, expression.column, (decl) => this.compileDirectHelperJsonPointer(decl.value, callStack, locals));
+        }
+        switch (expression.kind) {
+            case 'jsonLiteral':
+                return this.emitDirectJsonLiteralPointer(expression.text, expression.line, expression.column);
+            case 'string':
+                return this.emitDirectJsonLiteralPointer(JSON.stringify(expression.value), expression.line, expression.column);
+            case 'number':
+                return this.emitDirectJsonLiteralPointer(JSON.stringify(expression.value), expression.line, expression.column);
+            case 'boolean':
+                return this.emitDirectJsonLiteralPointer(JSON.stringify(expression.value), expression.line, expression.column);
+            default:
+                return this.compileExpressionAsJsonPointer(expression, callStack, locals);
+        }
+    }
+    compileDirectHelperNamePointer(expression, callStack, locals) {
+        const literal = this.resolveRematerializableNameLiteral(expression, locals);
+        if (literal !== null) {
+            return this.emitDirectNameLiteralPointer(literal);
+        }
+        return this.compileExpressionAsNamePointer(expression, callStack, locals);
+    }
+    compileDirectHelperArg(expression, expected, callStack, locals) {
+        switch (expected) {
+            case 'Json':
+                return this.compileDirectHelperJsonPointer(expression, callStack, locals);
+            case 'Name':
+                return this.compileDirectHelperNamePointer(expression, callStack, locals);
+            case 'AccountId':
+                return this.compileExpressionAsAccountPointer(expression, callStack, locals);
+            case 'BlobLike':
+                return this.compileExpressionAsNoritoBytesPointer(expression, callStack, locals);
+            case 'WideNumeric':
+                return this.compileExpressionAsNumericPointer(expression, callStack, locals);
+            case 'int':
+                return this.compileExpressionAsInt(expression, callStack, locals);
+            default:
+                throw new StudioCompileError(`Unsupported direct helper argument kind \`${expected}\`.`, expression.line, expression.column);
+        }
+    }
+    emitDirectHelperSyscall(argRegs, syscall, preferredResultRegister = null) {
+        argRegs.forEach((register, index) => {
+            this.assembler.emitMove(10 + index, register);
+        });
+        this.assembler.emitSyscall(syscall);
+        const register = this.allocPreferredResultRegister(preferredResultRegister, argRegs);
+        this.assembler.emitMove(register, 10);
+        return register;
+    }
+    compileDirectHelperCall(expression, spec, callStack, locals) {
+        const argRegs = spec.args.map((expected, index) => this.compileDirectHelperArg(expression.args[index], expected, callStack, locals));
+        const register = this.emitDirectHelperSyscall(argRegs, spec.syscall);
+        const argTypes = expression.args.map((arg) => this.inferExpressionValueType(arg, locals));
+        const dynamicValueType = dynamicBuiltinValueType(expression.name, argTypes);
+        return {
+            kind: spec.kind,
+            register,
+            items: null,
+            fieldNames: null,
+            valueType: dynamicValueType !== NO_BUILTIN_VALUE_TYPE ? dynamicValueType : directHelperValueType(spec, argTypes),
+        };
+    }
+    compilePathBuiltinCall(expression, spec, callStack, locals) {
+        if (expression.args.length !== 2) {
+            throw new StudioCompileError(`${spec.message} in the browser compiler.`, expression.line, expression.column);
+        }
+        const directBaseLiteral = this.resolveRematerializableNameLiteral(expression.args[0], locals);
+        const keyType = this.inferExpressionValueType(expression.args[1], locals);
+        let keyReg;
+        let register;
+        if (isSemanticIntBuiltinArg(keyType)) {
+            keyReg = this.compileExpressionAsInt(expression.args[1], callStack, locals);
+            const baseReg = directBaseLiteral !== null
+                ? this.emitDirectNameLiteralPointer(directBaseLiteral)
+                : this.compileExpressionAsNamePointer(expression.args[0], callStack, locals);
+            register = this.emitBuildStateMapPathFromBaseRegister(baseReg, keyReg, 'int');
+        }
+        else if (isSemanticBlobLikeType(keyType)) {
+            const baseReg = directBaseLiteral !== null
+                ? this.emitDirectNameLiteralPointer(directBaseLiteral)
+                : this.compileExpressionAsNamePointer(expression.args[0], callStack, locals);
+            keyReg = this.compileExpressionAsNoritoBytesPointer(expression.args[1], callStack, locals);
+            register = this.emitBuildStateMapPathFromBaseRegister(baseReg, keyReg, 'NoritoBytes');
+        }
+        else {
+            throw new StudioCompileError(`${spec.message} in the browser compiler.`, expression.line, expression.column);
+        }
+        return { kind: spec.kind, register, items: null, fieldNames: null, valueType: spec.valueType };
+    }
+    compileJsonBuilderBuiltinCall(expression, spec, callStack, locals) {
+        if (expression.args.length !== spec.args.length) {
+            throw new StudioCompileError(`${spec.message} in the browser compiler.`, expression.line, expression.column);
+        }
+        if (spec.operation === 'object') {
+            this.assembler.emitSyscall(SYSCALL_JSON_OBJECT);
+            const register = this.assembler.allocRegister();
+            this.assembler.emitMove(register, 10);
+            return { kind: spec.kind, register, items: null, fieldNames: null, valueType: spec.valueType };
+        }
+        if (spec.operation === 'set_int') {
+            const jsonReg = this.compileExpressionAsJsonPointer(expression.args[0], callStack, locals);
+            const directKeyLiteral = this.resolveRematerializableNameLiteral(expression.args[1], locals);
+            let register;
+            if (directKeyLiteral !== null) {
+                const valueReg = this.compileExpressionAsInt(expression.args[2], callStack, locals);
+                register = this.emitJsonSetIntDirectNameKey(jsonReg, directKeyLiteral, valueReg);
+            }
+            else {
+                const keyReg = this.compileExpressionAsNamePointer(expression.args[1], callStack, locals);
+                const valueReg = this.compileExpressionAsInt(expression.args[2], callStack, locals);
+                register = this.emitJsonSetInt(jsonReg, keyReg, valueReg);
+            }
+            return { kind: spec.kind, register, items: null, fieldNames: null, valueType: spec.valueType };
+        }
+        if (spec.operation === 'set_account_id') {
+            const jsonReg = this.compileExpressionAsJsonPointer(expression.args[0], callStack, locals);
+            const keyReg = this.compileExpressionAsNamePointer(expression.args[1], callStack, locals);
+            const valueReg = this.compileExpressionAsAccountPointer(expression.args[2], callStack, locals);
+            const register = this.emitJsonSetAccountId(jsonReg, keyReg, valueReg);
+            return { kind: spec.kind, register, items: null, fieldNames: null, valueType: spec.valueType };
+        }
+        throw new StudioCompileError(`Unsupported JSON builder helper \`${expression.name}\`.`, expression.line, expression.column);
+    }
+    compileCodecBuiltinCall(expression, spec, callStack, locals) {
+        if (expression.args.length !== spec.args.length) {
+            throw new StudioCompileError(`${spec.message} in the browser compiler.`, expression.line, expression.column);
+        }
+        if (spec.operation === 'encode_int') {
+            const valueReg = this.compileExpressionAsInt(expression.args[0], callStack, locals);
+            const register = this.emitEncodedIntPointer(valueReg);
+            return { kind: spec.kind, register, items: null, fieldNames: null, valueType: spec.valueType };
+        }
+        if (spec.operation === 'decode_int') {
+            const bytesReg = this.compileExpressionAsNoritoBytesPointer(expression.args[0], callStack, locals);
+            const register = this.emitDecodedInt(bytesReg);
+            return { kind: spec.kind, register, items: null, fieldNames: null, valueType: spec.valueType };
+        }
+        if (spec.operation === 'encode_json') {
+            const jsonReg = this.compileExpressionAsJsonPointer(expression.args[0], callStack, locals);
+            const register = this.emitJsonEncodePointer(jsonReg);
+            return { kind: spec.kind, register, items: null, fieldNames: null, valueType: spec.valueType };
+        }
+        if (spec.operation === 'decode_json') {
+            const bytesReg = this.compileExpressionAsNoritoBytesPointer(expression.args[0], callStack, locals);
+            const register = this.emitJsonDecodePointer(bytesReg);
+            return { kind: spec.kind, register, items: null, fieldNames: null, valueType: spec.valueType };
+        }
+        throw new StudioCompileError(`Unsupported codec helper \`${expression.name}\`.`, expression.line, expression.column);
+    }
+    compileAbiUtilityBuiltinCall(expression, spec, callStack, locals) {
+        if (expression.args.length !== spec.args.length) {
+            throw new StudioCompileError(`${spec.arityMessage ?? spec.message} in the browser compiler.`, expression.line, expression.column);
+        }
+        if (spec.operation === 'name_decode') {
+            const bytesReg = this.compileExpressionAsNoritoBytesPointer(expression.args[0], callStack, locals);
+            this.assembler.emitMove(10, bytesReg);
+            this.assembler.emitSyscall(SYSCALL_INPUT_PUBLISH_TLV);
+            this.assembler.emitSyscall(spec.syscall);
+            const register = this.assembler.allocRegister();
+            this.assembler.emitMove(register, 10);
+            return { kind: spec.kind, register, items: null, fieldNames: null, valueType: spec.valueType };
+        }
+        if (spec.operation === 'pointer_to_norito') {
+            const tlvReg = this.compileExpressionAsPointerAbiTlv(expression.args[0], callStack, locals, spec.allowJson, spec.message);
+            const register = this.emitPointerToNorito(tlvReg);
+            return { kind: spec.kind, register, items: null, fieldNames: null, valueType: spec.valueType };
+        }
+        if (spec.operation === 'tlv_len') {
+            const tlvReg = this.compileExpressionAsPointerAbiTlv(expression.args[0], callStack, locals, spec.allowJson, spec.message);
+            const register = this.emitTlvLen(tlvReg);
+            return { kind: spec.kind, register, items: null, fieldNames: null, valueType: spec.valueType };
+        }
+        if (spec.operation === 'tlv_eq') {
+            const leftReg = this.compileExpressionAsPointerAbiTlv(expression.args[0], callStack, locals, spec.allowJson, spec.message);
+            const rightReg = this.compileExpressionAsPointerAbiTlv(expression.args[1], callStack, locals, spec.allowJson, spec.message);
+            const register = this.emitPointerEqualityRegisters(leftReg, rightReg, false);
+            return { kind: spec.kind, register, items: null, fieldNames: null, valueType: spec.valueType };
+        }
+        throw new StudioCompileError(`Unsupported pointer-ABI utility helper \`${expression.name}\`.`, expression.line, expression.column);
+    }
+    compileSchemaBuiltinCall(expression, spec, callStack, locals) {
+        if (expression.args.length !== spec.args.length) {
+            throw new StudioCompileError(`${spec.message} in the browser compiler.`, expression.line, expression.column);
+        }
+        const schemaReg = this.compileExpressionAsNamePointer(expression.args[0], callStack, locals);
+        let register;
+        if (spec.operation === 'encode') {
+            const jsonReg = this.compileExpressionAsJsonPointer(expression.args[1], callStack, locals);
+            register = this.emitSchemaEncode(schemaReg, jsonReg);
+        }
+        else if (spec.operation === 'decode') {
+            const blobReg = this.compileExpressionAsNoritoBytesPointer(expression.args[1], callStack, locals);
+            register = this.emitSchemaDecode(schemaReg, blobReg);
+        }
+        else {
+            register = this.emitSchemaInfo(schemaReg);
+        }
+        return { kind: spec.kind, register, items: null, fieldNames: null, valueType: spec.valueType };
+    }
+    compileVrfBuiltinCall(expression, spec, callStack, locals) {
+        if (expression.args.length !== spec.args.length) {
+            throw new StudioCompileError(`${spec.arityMessage ?? spec.message} in the browser compiler.`, expression.line, expression.column);
+        }
+        if (spec.operation === 'verify') {
+            const inputReg = this.compileExpressionAsNoritoBytesPointer(expression.args[0], callStack, locals);
+            const publicKeyReg = this.compileExpressionAsNoritoBytesPointer(expression.args[1], callStack, locals);
+            const proofReg = this.compileExpressionAsNoritoBytesPointer(expression.args[2], callStack, locals);
+            const variantReg = this.compileExpressionAsInt(expression.args[3], callStack, locals);
+            const register = this.emitVrfVerify(inputReg, publicKeyReg, proofReg, variantReg);
+            return { kind: spec.kind, register, items: null, fieldNames: null, valueType: spec.valueType };
+        }
+        const batchReg = this.compileExpressionAsNoritoBytesPointer(expression.args[0], callStack, locals);
+        const register = this.emitVrfVerifyBatch(batchReg);
+        return { kind: spec.kind, register, items: null, fieldNames: null, valueType: spec.valueType };
+    }
+    compileRawMemoryBuiltinCall(expression, spec, callStack, locals) {
+        if (spec.args !== undefined && expression.args.length !== spec.args.length) {
+            throw new StudioCompileError(`${spec.message} in the browser compiler.`, expression.line, expression.column);
+        }
+        if (spec.args === undefined
+            && (expression.args.length < spec.minArgs || expression.args.length > spec.maxArgs)) {
+            throw new StudioCompileError(`${spec.message} in the browser compiler.`, expression.line, expression.column);
+        }
+        if (spec.operation === 'alloc') {
+            const bytesReg = this.compileExpressionAsInt(expression.args[0], callStack, locals);
+            this.assembler.emitMove(10, bytesReg);
+        }
+        else {
+            const firstReg = this.compileExpressionAsInt(expression.args[0], callStack, locals);
+            const outputReg = this.compileExpressionAsInt(expression.args[1], callStack, locals);
+            this.assembler.emitMove(10, firstReg);
+            this.assembler.emitMove(11, outputReg);
+            if (spec.operation === 'merkle_path') {
+                if (expression.args[2] !== undefined) {
+                    const rootReg = this.compileExpressionAsInt(expression.args[2], callStack, locals);
+                    this.assembler.emitMove(12, rootReg);
+                }
+                else {
+                    this.assembler.emitMove(12, 0);
+                }
+            }
+            else if (spec.operation === 'merkle_compact') {
+                if (expression.args[2] !== undefined) {
+                    const depthReg = this.compileExpressionAsInt(expression.args[2], callStack, locals);
+                    this.assembler.emitMove(12, depthReg);
+                }
+                else {
+                    this.assembler.emitMove(12, 0);
+                }
+                if (expression.args[3] !== undefined) {
+                    const rootReg = this.compileExpressionAsInt(expression.args[3], callStack, locals);
+                    this.assembler.emitMove(13, rootReg);
+                }
+                else {
+                    this.assembler.emitMove(13, 0);
+                }
+            }
+            else {
+                throw new StudioCompileError(`Unsupported raw memory helper \`${expression.name}\`.`, expression.line, expression.column);
+            }
+        }
+        this.assembler.emitSyscall(spec.syscall);
+        const register = this.assembler.allocRegister();
+        this.assembler.emitMove(register, 10);
+        return { kind: spec.kind, register, items: null, fieldNames: null, valueType: spec.valueType };
+    }
+    compileProofHeapBuiltinCall(expression, spec, callStack, locals) {
+        if (expression.args.length !== spec.args.length) {
+            throw new StudioCompileError(`${spec.message} in the browser compiler.`, expression.line, expression.column);
+        }
+        if (spec.operation === 'prove_execution') {
+            this.assembler.emitSyscall(spec.syscall);
+        }
+        else if (spec.operation === 'grow_heap') {
+            const bytesReg = this.compileExpressionAsInt(expression.args[0], callStack, locals);
+            this.assembler.emitMove(10, bytesReg);
+            this.assembler.emitSyscall(spec.syscall);
+        }
+        else if (spec.operation === 'verify_proof') {
+            const payloadReg = this.compileExpressionAsNoritoBytesPointer(expression.args[0], callStack, locals);
+            this.publishInputTlv(payloadReg, 10);
+            this.assembler.emitSyscall(spec.syscall);
+        }
+        else {
+            throw new StudioCompileError(`Unsupported proof/heap helper \`${expression.name}\`.`, expression.line, expression.column);
+        }
+        const register = this.assembler.allocRegister();
+        this.assembler.emitMove(register, 10);
+        return { kind: spec.kind, register, items: null, fieldNames: null, valueType: spec.valueType };
+    }
+    compilePrivacyOutputBuiltinCall(expression, spec, callStack, locals, allowVoidResult) {
+        if (expression.args.length !== spec.args.length) {
+            throw new StudioCompileError(`${spec.message} in the browser compiler.`, expression.line, expression.column);
+        }
+        let discardedRegister = null;
+        if (spec.operation === 'get_private_input' || spec.operation === 'use_nullifier') {
+            const argReg = this.compileExpressionAsInt(expression.args[0], callStack, locals);
+            this.assembler.emitMove(10, argReg);
+            discardedRegister = argReg;
+        }
+        else if (spec.operation !== 'commit_output') {
+            throw new StudioCompileError(`Unsupported privacy/output helper \`${expression.name}\`.`, expression.line, expression.column);
+        }
+        this.assembler.emitSyscall(spec.syscall);
+        if (spec.kind === 'int') {
+            const register = this.assembler.allocRegister();
+            this.assembler.emitMove(register, 10);
+            return { kind: spec.kind, register, items: null, fieldNames: null, valueType: spec.valueType };
+        }
+        if (spec.kind !== 'void') {
+            throw new StudioCompileError(`Unsupported privacy/output helper \`${expression.name}\`.`, expression.line, expression.column);
+        }
+        this.emitDiscardedVoidIntrinsicResult(discardedRegister ?? this.assembler.allocRegister());
+        if (!allowVoidResult) {
+            throw new StudioCompileError(`${expression.name} does not return a value in the browser compiler.`, expression.line, expression.column);
+        }
+        return null;
+    }
+    emitAxtBuiltinArgument(expression, argSpec, callStack, locals) {
+        const arg = expression.args[argSpec.index];
+        if (arg === undefined) {
+            if (argSpec.optional) {
+                this.assembler.emitMove(argSpec.register, 0);
+                return;
+            }
+            throw new StudioCompileError(`${argSpec.message ?? expression.message} in the browser compiler.`, expression.line, expression.column);
+        }
+        if (argSpec.kind === 'typedPointer') {
+            this.emitPublishedTypedPointerExpressionIntoRegister(arg, argSpec.type, argSpec.register, callStack, locals);
+            return;
+        }
+        if (argSpec.kind === 'noritoBytes') {
+            this.emitPublishedNoritoBytesExpressionIntoRegister(arg, argSpec.register, callStack, locals);
+            return;
+        }
+        throw new StudioCompileError(`Unsupported AXT argument kind \`${argSpec.kind}\`.`, expression.line, expression.column);
+    }
+    emitAxtBuiltinDiscard(expression, spec, locals, liveAfterStatement) {
+        switch (spec.discard) {
+            case 'deadArg0':
+                this.emitDiscardedVoidIntrinsicResult(this.deadArgumentRegisterAfterStatement(expression.args[0], locals, liveAfterStatement) ?? this.assembler.allocRegister());
+                return;
+            case 'deadDataSpaceId':
+                this.emitDiscardedVoidIntrinsicResult(this.deadRematerializedTypedPointerRegisterAfterStatement(expression.args[0], 'DataSpaceId', locals, liveAfterStatement) ?? this.assembler.allocRegister());
+                return;
+            case 'alloc':
+                this.emitDiscardedVoidIntrinsicResult(this.assembler.allocRegister());
+                return;
+            default:
+                throw new StudioCompileError(`Unsupported AXT discard mode \`${spec.discard}\`.`, expression.line, expression.column);
+        }
+    }
+    compileAxtBuiltinCall(expression, spec, callStack, locals, allowVoidResult, liveAfterStatement) {
+        if (expression.args.length < spec.minArgs || expression.args.length > spec.maxArgs) {
+            throw new StudioCompileError(`${spec.message} in the browser compiler.`, expression.line, expression.column);
+        }
+        for (let index = 0; index < spec.args.length; index += 1) {
+            this.emitAxtBuiltinArgument({ ...expression, message: spec.message }, { ...spec.args[index], index }, callStack, locals);
+        }
+        this.assembler.emitSyscall(spec.syscall);
+        this.emitAxtBuiltinDiscard(expression, spec, locals, liveAfterStatement);
+        if (!allowVoidResult) {
+            throw new StudioCompileError(`${expression.name} does not return a value in the browser compiler.`, expression.line, expression.column);
+        }
+        return null;
+    }
+    compileVendorBridgeBuiltinCall(expression, spec, callStack, locals, allowVoidResult, liveAfterStatement) {
+        if (expression.args.length !== 1) {
+            throw new StudioCompileError(`${spec.canonicalName} expects exactly one NoritoBytes argument in the browser compiler.`, expression.line, expression.column);
+        }
+        if (!this.tryEmitNoritoBytesPointerIntoRegister(expression.args[0], locals, 10)) {
+            const payloadReg = this.compileExpressionAsNoritoBytesPointer(expression.args[0], callStack, locals);
+            this.assembler.emitMove(10, payloadReg);
+        }
+        this.assembler.emitSyscall(SYSCALL_INPUT_PUBLISH_TLV);
+        this.assembler.emitSyscall(spec.syscall);
+        if (spec.valueType !== null) {
+            const register = this.assembler.allocRegister();
+            this.assembler.emitMove(register, 10);
+            return { kind: 'pointer', register, items: null, fieldNames: null, valueType: spec.valueType };
+        }
+        this.emitDiscardedVoidIntrinsicResult(this.deadArgumentRegisterAfterStatement(expression.args[0], locals, liveAfterStatement) ?? this.assembler.allocRegister());
+        if (!allowVoidResult) {
+            throw new StudioCompileError(`${spec.canonicalName} does not return a value in the browser compiler.`, expression.line, expression.column);
+        }
+        return null;
+    }
+    compileSoracloudBuiltinCall(expression, spec, callStack, locals) {
+        if (expression.args.length !== spec.args.length) {
+            throw new StudioCompileError(`${spec.message} in the browser compiler.`, expression.line, expression.column);
+        }
+        const requestReg = this.compileExpressionAsTypedPointer(expression.args[0], 'SoracloudRequest', callStack, locals);
+        this.emitOnePointerSyscall(requestReg, spec.syscall);
+        const register = this.assembler.allocRegister();
+        this.assembler.emitMove(register, 10);
+        return { kind: 'pointer', register, items: null, fieldNames: null, valueType: spec.valueType };
+    }
+    compileCallContractBuiltinCall(expression, spec, callStack, locals) {
+        if (expression.args.length !== 3) {
+            throw new StudioCompileError(`${spec.message} in the browser compiler.`, expression.line, expression.column);
+        }
+        const contractReg = this.compileExpressionAsStringOrBlobPointer(expression.args[0], callStack, locals, 'call_contract contract target');
+        const entrypointReg = this.compileExpressionAsStringOrBlobPointer(expression.args[1], callStack, locals, 'call_contract entrypoint');
+        const payloadReg = this.compileExpressionAsJsonPointer(expression.args[2], callStack, locals);
+        this.emitThreePointerSyscall(contractReg, entrypointReg, payloadReg, spec.syscall);
+        const register = this.assembler.allocRegister();
+        this.assembler.emitMove(register, 10);
+        return { kind: 'pointer', register, items: null, fieldNames: null, valueType: spec.valueType };
+    }
+    compileResolveAccountAliasBuiltinCall(expression, spec, callStack, locals) {
+        if (expression.args.length !== 1) {
+            throw new StudioCompileError('resolve_account_alias expects exactly one alias argument in the browser compiler.', expression.line, expression.column);
+        }
+        const aliasReg = this.compileExpressionAsNoritoBytesPointer(expression.args[0], callStack, locals);
+        this.assembler.emitMove(10, aliasReg);
+        this.assembler.emitSyscall(SYSCALL_INPUT_PUBLISH_TLV);
+        this.assembler.emitSyscall(spec.syscall);
+        const register = this.assembler.allocRegister();
+        this.assembler.emitMove(register, 10);
+        return { kind: 'pointer', register, items: null, fieldNames: null, valueType: spec.valueType };
+    }
+    compileTriggerEventBuiltinCall(expression, spec) {
+        if (expression.args.length !== 0) {
+            throw new StudioCompileError(`${spec.message} in the browser compiler.`, expression.line, expression.column);
+        }
+        const keyReg = this.emitNameLiteralPointer(TRIGGER_EVENT_PUBLIC_INPUT_KEY);
+        this.assembler.emitMove(10, keyReg);
+        this.assembler.emitSyscall(SYSCALL_INPUT_PUBLISH_TLV);
+        this.assembler.emitSyscall(SYSCALL_GET_PUBLIC_INPUT);
+        const register = this.assembler.allocRegister();
+        this.assembler.emitMove(register, 10);
+        return { kind: 'pointer', register, items: null, fieldNames: null, valueType: spec.valueType };
+    }
+    compileSubscriptionBuiltinCall(expression, spec, allowVoidResult) {
+        if (expression.args.length !== 0) {
+            throw new StudioCompileError(`${spec.message} in the browser compiler.`, expression.line, expression.column);
+        }
+        this.assembler.emitSyscall(spec.syscall);
+        this.emitDiscardedVoidIntrinsicResult(this.assembler.allocRegister());
+        if (!allowVoidResult) {
+            throw new StudioCompileError(`${expression.name} does not return a value in the browser compiler.`, expression.line, expression.column);
+        }
+        return null;
+    }
+    compileLegacyHostRuntimeControlBuiltinCall(expression, spec, callStack, locals, allowVoidResult) {
+        if (expression.args.length !== spec.args.length) {
+            throw new StudioCompileError(`${spec.message} in the browser compiler.`, expression.line, expression.column);
+        }
+        if (spec.args.length === 0) {
+            this.assembler.emitSyscall(spec.syscall);
+            this.emitDiscardedVoidIntrinsicResult(this.assembler.allocRegister());
+        }
+        else {
+            const valueReg = this.compileExpressionAsInt(expression.args[0], callStack, locals);
+            this.assembler.emitMove(10, valueReg);
+            this.assembler.emitSyscall(spec.syscall);
+            this.emitDiscardedVoidIntrinsicResult(valueReg);
+        }
+        if (!allowVoidResult) {
+            throw new StudioCompileError(`${expression.name} does not return a value in the browser compiler.`, expression.line, expression.column);
+        }
+        return null;
+    }
+    compileAccountDetailBuiltinCall(expression, spec, callStack, locals, allowVoidResult) {
+        if (expression.args.length !== 3) {
+            throw new StudioCompileError(`${spec.message} in the browser compiler.`, expression.line, expression.column);
+        }
+        const accountReg = this.compileExpressionAsAccountPointer(expression.args[0], callStack, locals);
+        const keyReg = this.compileExpressionAsNamePointer(expression.args[1], callStack, locals);
+        const valueReg = this.compileExpressionAsJsonBytesPointer(expression.args[2], callStack, locals);
+        this.emitThreePointerSyscall(accountReg, keyReg, valueReg, spec.syscall);
+        if (!allowVoidResult) {
+            throw new StudioCompileError(`${expression.name} does not return a value in the browser compiler.`, expression.line, expression.column);
+        }
+        return null;
+    }
+    compileAccountMultisigAdminBuiltinCall(expression, spec, callStack, locals, allowVoidResult) {
+        if (expression.args.length !== 2) {
+            throw new StudioCompileError(`${spec.message} in the browser compiler.`, expression.line, expression.column);
+        }
+        const accountReg = this.compileExpressionAsAccountPointer(expression.args[0], callStack, locals);
+        if (spec.kind === 'signatory') {
+            const signatoryReg = this.compileExpressionAsJsonPointer(expression.args[1], callStack, locals);
+            this.emitTwoPointerSyscall(accountReg, signatoryReg, spec.syscall);
+            this.emitDiscardedVoidIntrinsicResult(this.assembler.allocRegister());
+        }
+        else {
+            const quorumType = this.inferExpressionValueType(expression.args[1], locals);
+            let quorumReg;
+            if (isSemanticWideNumericType(quorumType)) {
+                const numericReg = this.compileExpressionAsNumericPointer(expression.args[1], callStack, locals);
+                quorumReg = this.emitNumericToInt(numericReg);
+                this.releaseExpressionRegisterIfTemporary(numericReg, locals);
+            }
+            else {
+                quorumReg = this.compileExpressionAsInt(expression.args[1], callStack, locals);
+            }
+            this.assembler.emitMove(10, accountReg);
+            this.assembler.emitMove(11, quorumReg);
+            this.assembler.emitSyscall(SYSCALL_INPUT_PUBLISH_TLV);
+            this.assembler.emitSyscall(spec.syscall);
+            this.emitDiscardedVoidIntrinsicResult(this.isExpressionRegisterTemporary(quorumReg, locals)
+                ? quorumReg
+                : this.assembler.allocRegister());
+        }
+        if (!allowVoidResult) {
+            throw new StudioCompileError(`${expression.name} does not return a value in the browser compiler.`, expression.line, expression.column);
+        }
+        return null;
+    }
+    compileNativeAssetOperationBuiltinCall(expression, spec, callStack, locals, allowVoidResult) {
+        if (expression.args.length !== spec.args.length) {
+            throw new StudioCompileError(`${spec.message} in the browser compiler.`, expression.line, expression.column);
+        }
+        if (spec.kind === 'transfer') {
+            const fromReg = this.compileExpressionAsAccountPointer(expression.args[0], callStack, locals);
+            const toReg = this.compileExpressionAsAccountPointer(expression.args[1], callStack, locals);
+            const assetReg = this.compileExpressionAsAssetDefinitionPointer(expression.args[2], callStack, locals);
+            const amountType = this.inferExpressionValueType(expression.args[3], locals);
+            const amountReg = isSemanticWideNumericType(amountType)
+                ? this.compileExpressionAsNumericPointer(expression.args[3], callStack, locals)
+                : this.emitNumericFromInt(this.compileExpressionAsInt(expression.args[3], callStack, locals));
+            this.emitFourArgAssetSyscall(fromReg, toReg, assetReg, amountReg, spec.syscall);
+        }
+        else {
+            const accountReg = this.compileExpressionAsAccountPointer(expression.args[0], callStack, locals);
+            const assetReg = this.compileExpressionAsAssetDefinitionPointer(expression.args[1], callStack, locals);
+            const amountType = this.inferExpressionValueType(expression.args[2], locals);
+            const amountReg = isSemanticWideNumericType(amountType)
+                ? this.compileExpressionAsNumericPointer(expression.args[2], callStack, locals)
+                : this.emitNumericFromInt(this.compileExpressionAsInt(expression.args[2], callStack, locals));
+            this.emitThreeArgAssetSyscall(accountReg, assetReg, amountReg, spec.syscall);
+        }
+        if (!allowVoidResult) {
+            throw new StudioCompileError(`${expression.name} does not return a value in the browser compiler.`, expression.line, expression.column);
+        }
+        return null;
+    }
+    compileNftAssetOperationBuiltinCall(expression, spec, callStack, locals, allowVoidResult, liveAfterStatement) {
+        if (expression.args.length !== spec.args.length) {
+            throw new StudioCompileError(`${spec.message} in the browser compiler.`, expression.line, expression.column);
+        }
+        if (spec.kind === 'mint') {
+            const nftLiteral = this.resolveRematerializableNftLiteral(expression.args[0], locals);
+            const ownerLiteral = this.resolveRematerializableAccountLiteral(expression.args[1], locals);
+            if (nftLiteral !== null && ownerLiteral !== null && isDirectAccountPointerLiteral(ownerLiteral)) {
+                this.emitNftMintAssetLiteralSyscall(nftLiteral, ownerLiteral, expression.line, expression.column);
+                this.emitDiscardedVoidIntrinsicResult(this.assembler.allocRegister());
+                if (!allowVoidResult) {
+                    throw new StudioCompileError(`${expression.name} does not return a value in the browser compiler.`, expression.line, expression.column);
+                }
+                return null;
+            }
+            const nftReg = this.compileExpressionAsNftPointer(expression.args[0], callStack, locals);
+            const ownerReg = this.compileExpressionAsAccountPointer(expression.args[1], callStack, locals);
+            this.emitTwoPointerSyscall(nftReg, ownerReg, spec.syscall);
+            this.emitDiscardedVoidIntrinsicResult(this.deadArgumentRegisterAfterStatement(expression.args[0], locals, liveAfterStatement) ?? this.assembler.allocRegister());
+        }
+        else if (spec.kind === 'metadata') {
+            const nftLiteral = this.resolveRematerializableNftLiteral(expression.args[0], locals);
+            const keyLiteral = this.resolveRematerializableNameLiteral(expression.args[1], locals);
+            const jsonLiteral = directJsonLiteralTextFromExpression(expression.args[2]);
+            if (nftLiteral !== null && keyLiteral !== null && jsonLiteral !== null) {
+                this.emitNftSetMetadataLiteralSyscall(nftLiteral, keyLiteral, jsonLiteral, expression.line, expression.column);
+                this.emitDiscardedVoidIntrinsicResult(this.deadRematerializedNftRegisterAfterStatement(expression.args[0], locals, liveAfterStatement)
+                    ?? this.deadLogicalPointerLocalRegisterAfterStatement(locals, liveAfterStatement)
+                    ?? this.rustNftSetMetadataLiveNftDiscardRegister()
+                    ?? this.assembler.allocRegister());
+                if (!allowVoidResult) {
+                    throw new StudioCompileError(`${expression.name} does not return a value in the browser compiler.`, expression.line, expression.column);
+                }
+                return null;
+            }
+            const nftReg = this.compileExpressionAsNftPointer(expression.args[0], callStack, locals);
+            const keyReg = this.compileExpressionAsNamePointer(expression.args[1], callStack, locals);
+            const jsonReg = this.compileExpressionAsJsonPointer(expression.args[2], callStack, locals);
+            this.emitThreePointerSyscall(nftReg, keyReg, jsonReg, spec.syscall);
+            this.emitDiscardedVoidIntrinsicResult(this.deadArgumentRegisterAfterStatement(expression.args[0], locals, liveAfterStatement) ?? this.assembler.allocRegister());
+        }
+        else if (spec.kind === 'burn') {
+            const nftLiteral = this.resolveRematerializableNftLiteral(expression.args[0], locals);
+            if (nftLiteral !== null) {
+                this.emitNftBurnAssetLiteralSyscall(nftLiteral, expression.line, expression.column);
+                this.emitDiscardedVoidIntrinsicResult(this.deadRematerializedNftRegisterAfterStatement(expression.args[0], locals, liveAfterStatement)
+                    ?? this.deadLogicalPointerLocalRegisterAfterStatement(locals, liveAfterStatement)
+                    ?? this.assembler.allocRegister());
+                if (!allowVoidResult) {
+                    throw new StudioCompileError(`${expression.name} does not return a value in the browser compiler.`, expression.line, expression.column);
+                }
+                return null;
+            }
+            const nftReg = this.compileExpressionAsNftPointer(expression.args[0], callStack, locals);
+            this.emitOnePointerSyscall(nftReg, spec.syscall);
+            this.emitDiscardedVoidIntrinsicResult(this.deadArgumentRegisterAfterStatement(expression.args[0], locals, liveAfterStatement) ?? this.assembler.allocRegister());
+        }
+        else if (spec.kind === 'transfer') {
+            const fromLiteral = this.resolveRematerializableAccountLiteral(expression.args[0], locals);
+            const nftLiteral = this.resolveRematerializableNftLiteral(expression.args[1], locals);
+            const toLiteral = this.resolveRematerializableAccountLiteral(expression.args[2], locals);
+            if (fromLiteral !== null && nftLiteral !== null && toLiteral !== null
+                && isDirectAccountPointerLiteral(fromLiteral)
+                && isDirectAccountPointerLiteral(toLiteral)) {
+                this.emitNftTransferAssetLiteralSyscall(fromLiteral, nftLiteral, toLiteral, expression.line, expression.column);
+                this.emitDiscardedVoidIntrinsicResult(this.deadRematerializedAccountRegisterAfterStatement(expression.args[2], locals, liveAfterStatement)
+                    ?? this.deadRematerializedAccountRegisterAfterStatement(expression.args[0], locals, liveAfterStatement)
+                    ?? this.deadRematerializedNftRegisterAfterStatement(expression.args[1], locals, liveAfterStatement)
+                    ?? this.assembler.allocRegister());
+                if (!allowVoidResult) {
+                    throw new StudioCompileError(`${expression.name} does not return a value in the browser compiler.`, expression.line, expression.column);
+                }
+                return null;
+            }
+            const fromReg = this.compileExpressionAsAccountPointer(expression.args[0], callStack, locals);
+            const nftReg = this.compileExpressionAsNftPointer(expression.args[1], callStack, locals);
+            const toReg = this.compileExpressionAsAccountPointer(expression.args[2], callStack, locals);
+            this.emitThreePointerSyscall(fromReg, nftReg, toReg, spec.syscall);
+            this.emitDiscardedVoidIntrinsicResult(this.deadArgumentRegisterAfterStatement(expression.args[2], locals, liveAfterStatement) ?? this.assembler.allocRegister());
+        }
+        if (!allowVoidResult) {
+            throw new StudioCompileError(`${expression.name} does not return a value in the browser compiler.`, expression.line, expression.column);
+        }
+        return null;
+    }
+    compileLifecycleBuiltinCall(expression, spec, callStack, locals, allowVoidResult) {
+        if (expression.args.length !== spec.args.length) {
+            throw new StudioCompileError(`${spec.compileMessage ?? spec.message} in the browser compiler.`, expression.line, expression.column);
+        }
+        if (spec.kind === 'domain') {
+            const domainLiteral = this.resolveRematerializableDomainLiteral(expression.args[0], locals);
+            if (domainLiteral !== null) {
+                this.emitDomainLiteralPointerIntoRegister(domainLiteral, expression.line, expression.column, 10);
+            }
+            else {
+                const domainReg = this.compileExpressionAsDomainPointer(expression.args[0], callStack, locals);
+                this.assembler.emitMove(10, domainReg);
+            }
+            this.assembler.emitSyscall(SYSCALL_INPUT_PUBLISH_TLV);
+            this.assembler.emitSyscall(spec.syscall);
+            const discardReg = spec.syscall === SYSCALL_UNREGISTER_DOMAIN
+                ? this.resolveRematerializableDomainLogicalRegister(expression.args[0], locals) ?? this.assembler.allocRegister()
+                : this.assembler.allocRegister();
+            this.emitDiscardedVoidIntrinsicResult(discardReg);
+        }
+        else if (spec.kind === 'account') {
+            const accountReg = this.compileExpressionAsAccountPointer(expression.args[0], callStack, locals);
+            this.emitOnePointerSyscall(accountReg, spec.syscall);
+            this.emitDiscardedVoidIntrinsicResult(this.assembler.allocRegister());
+        }
+        else if (spec.kind === 'assetDefinition') {
+            const assetReg = this.compileExpressionAsAssetDefinitionPointer(expression.args[0], callStack, locals);
+            this.emitOnePointerSyscall(assetReg, spec.syscall);
+            this.emitDiscardedVoidIntrinsicResult(this.assembler.allocRegister());
+        }
+        else if (spec.kind === 'registerAsset') {
+            const assetLiteral = this.resolveRematerializableAssetDefinitionLiteral(expression.args[0], locals);
+            if (assetLiteral !== null && expression.args[0].kind === 'call') {
+                this.compileExpressionAsAssetDefinitionPointer(expression.args[0], callStack, locals, false);
+            }
+            const symbolReg = this.compileExpressionAsStringPointer(expression.args[1], callStack, locals);
+            const quantityType = this.inferExpressionValueType(expression.args[2], locals);
+            let quantityReg;
+            if (isSemanticWideNumericType(quantityType)) {
+                quantityReg = this.compileExpressionAsNumericPointer(expression.args[2], callStack, locals);
+            }
+            else {
+                const quantityIntReg = this.compileExpressionAsInt(expression.args[2], callStack, locals);
+                quantityReg = this.emitNumericFromInt(quantityIntReg);
+                this.releaseExpressionRegisterIfTemporary(quantityIntReg, locals);
+            }
+            const mintableReg = this.compileExpressionAsInt(expression.args[3], callStack, locals);
+            if (assetLiteral !== null) {
+                this.emitRegisterAssetDefinitionLiteralSyscall(assetLiteral, symbolReg, quantityReg, mintableReg, expression.line, expression.column);
+            }
+            else {
+                const assetReg = this.compileExpressionAsAssetDefinitionPointer(expression.args[0], callStack, locals);
+                this.emitRegisterAssetDefinitionSyscall(assetReg, symbolReg, quantityReg, mintableReg);
+            }
+            this.emitDiscardedVoidIntrinsicResult(this.isExpressionRegisterTemporary(mintableReg, locals)
+                ? mintableReg
+                : this.isExpressionRegisterTemporary(quantityReg, locals)
+                ? quantityReg
+                : this.assembler.allocRegister());
+        }
+        else if (spec.kind === 'createNewAsset') {
+            const assetReg = this.compileExpressionAsAssetDefinitionPointer(expression.args[0], callStack, locals);
+            const symbolReg = this.compileExpressionAsStringPointer(expression.args[1], callStack, locals);
+            const quantityType = this.inferExpressionValueType(expression.args[2], locals);
+            const quantityReg = isSemanticWideNumericType(quantityType)
+                ? this.compileExpressionAsNumericPointer(expression.args[2], callStack, locals)
+                : this.emitNumericFromInt(this.compileExpressionAsInt(expression.args[2], callStack, locals));
+            const accountReg = this.compileExpressionAsAccountPointer(expression.args[3], callStack, locals);
+            const mintableReg = this.compileExpressionAsInt(expression.args[4], callStack, locals);
+            this.emitRegisterAssetDefinitionSyscall(assetReg, symbolReg, quantityReg, mintableReg);
+            this.emitThreeArgAssetSyscall(accountReg, assetReg, quantityReg, SYSCALL_MINT_ASSET);
+            this.emitDiscardedVoidIntrinsicResult(this.assembler.allocRegister());
+        }
+        else if (spec.kind === 'transferDomain') {
+            const toReg = this.compileExpressionAsAccountPointer(expression.args[2], callStack, locals);
+            const domainLiteral = this.resolveRematerializableDomainLiteral(expression.args[1], locals)
+                ?? this.resolveRematerializableNameLiteral(expression.args[1], locals);
+            if (domainLiteral !== null) {
+                this.emitDomainLiteralPointerIntoRegister(domainLiteral, expression.line, expression.column, 10);
+            }
+            else {
+                const domainReg = this.compileExpressionAsDomainPointer(expression.args[1], callStack, locals);
+                this.assembler.emitMove(10, domainReg);
+            }
+            this.assembler.emitSyscall(SYSCALL_INPUT_PUBLISH_TLV);
+            this.assembler.emitMove(12, 10);
+            this.assembler.emitMove(11, toReg);
+            this.assembler.emitMove(10, 11);
+            this.assembler.emitSyscall(SYSCALL_INPUT_PUBLISH_TLV);
+            this.assembler.emitMove(11, 10);
+            this.assembler.emitMove(10, 12);
+            this.assembler.emitSyscall(spec.syscall);
+            this.emitDiscardedVoidIntrinsicResult(toReg);
+        }
+        if (!allowVoidResult) {
+            throw new StudioCompileError(`${expression.name} does not return a value in the browser compiler.`, expression.line, expression.column);
+        }
+        return null;
+    }
+    compileManagementBuiltinCall(expression, spec, callStack, locals, allowVoidResult) {
+        if (expression.args.length !== spec.args.length) {
+            throw new StudioCompileError(`${spec.compileMessage ?? spec.message} in the browser compiler.`, expression.line, expression.column);
+        }
+        if (spec.kind === 'jsonOpaque') {
+            const jsonReg = this.compileExpressionAsJsonPointer(expression.args[0], callStack, locals);
+            this.emitOnePointerSyscall(jsonReg, spec.syscall);
+        }
+        else if (spec.kind === 'triggerName' || spec.kind === 'roleName') {
+            const nameReg = this.compileExpressionAsNamePointer(expression.args[0], callStack, locals);
+            this.emitOnePointerSyscall(nameReg, spec.syscall);
+        }
+        else if (spec.kind === 'triggerEnabled') {
+            const nameReg = this.compileExpressionAsNamePointer(expression.args[0], callStack, locals);
+            const enabledReg = this.compileExpressionAsInt(expression.args[1], callStack, locals);
+            this.assembler.emitMove(10, nameReg);
+            this.assembler.emitMove(11, enabledReg);
+            this.assembler.emitSyscall(SYSCALL_INPUT_PUBLISH_TLV);
+            this.assembler.emitSyscall(spec.syscall);
+        }
+        else if (spec.kind === 'roleJson') {
+            const nameReg = this.compileExpressionAsNamePointer(expression.args[0], callStack, locals);
+            const jsonReg = this.compileExpressionAsJsonPointer(expression.args[1], callStack, locals);
+            this.emitTwoPointerSyscall(nameReg, jsonReg, spec.syscall);
+        }
+        else if (spec.kind === 'roleBinding') {
+            const accountReg = this.compileExpressionAsAccountPointer(expression.args[0], callStack, locals);
+            const nameReg = this.compileExpressionAsNamePointer(expression.args[1], callStack, locals);
+            this.emitTwoPointerSyscall(accountReg, nameReg, spec.syscall);
+        }
+        else if (spec.kind === 'permissionBinding') {
+            const accountReg = this.compileExpressionAsAccountPointer(expression.args[0], callStack, locals);
+            const tokenReg = this.compileExpressionAsNameOrJsonPointer(expression.args[1], callStack, locals, 'grant/revoke_permission token');
+            this.emitTwoPointerSyscall(accountReg, tokenReg, spec.syscall);
+        }
+        this.emitDiscardedVoidIntrinsicResult(this.assembler.allocRegister());
+        if (!allowVoidResult) {
+            throw new StudioCompileError(`${expression.name} does not return a value in the browser compiler.`, expression.line, expression.column);
+        }
+        return null;
+    }
+    compileAssertionLoggingBuiltinCall(expression, spec, callStack, locals, allowVoidResult, liveAfterStatement) {
+        if (spec.kind === 'info') {
+            if (expression.args.length !== 1) {
+                throw new StudioCompileError('info expects exactly one argument in the browser compiler.', expression.line, expression.column);
+            }
+            const infoMessage = this.compileExpressionAsInfoPointer(expression.args[0], callStack, locals, liveAfterStatement);
+            this.assembler.emitMove(10, infoMessage.register);
+            this.assembler.emitSyscall(SYSCALL_DEBUG_LOG);
+            this.emitDiscardedVoidIntrinsicResult(infoMessage.discardedResultRegister);
+            if (!allowVoidResult) {
+                throw new StudioCompileError('info does not return a value in the browser compiler.', expression.line, expression.column);
+            }
+            return null;
+        }
+        if (spec.kind === 'assert') {
+            if (expression.args.length !== 1 && expression.args.length !== 2) {
+                throw new StudioCompileError(`${expression.name} expects (condition) or (condition, message) in the browser compiler.`, expression.line, expression.column);
+            }
+            this.releaseFrame168LogicalRegistersBeforeMintedAssert(expression.args[0], locals);
+            const okReg = this.tryCompileFrame160OneShotAssetInAssertCondition(expression.args[0], callStack, locals, liveAfterStatement)
+                ?? this.compileExpressionAsInt(expression.args[0], callStack, locals);
+            let messageReg = null;
+            if (expression.args[1] !== undefined) {
+                this.releaseFrame144LogicalRegistersBeforeAssertMessage(expression.args[0], locals);
+                const preferredMessageRegister = this.preferredFrame144AssertMessageRegister(expression.args[0], expression.args[1])
+                    ?? this.releaseFrame160DeadAssertMessageRegister(expression.args[0], expression.args[1], locals, liveAfterStatement);
+                messageReg = this.compileAssertMessageSideEffect(expression.args[1], callStack, locals, preferredMessageRegister);
+            }
+            const passJump = this.assembler.emitBranchPlaceholder(OP_BNE, okReg, 0);
+            this.assembler.emitSyscall(SYSCALL_ABORT);
+            this.assembler.patchBranch(passJump, this.assembler.currentPc());
+            if (messageReg !== null) {
+                this.releaseExpressionRegisterIfTemporary(messageReg, locals);
+            }
+            this.releaseExpressionRegisterIfTemporary(okReg, locals);
+            if (!allowVoidResult) {
+                throw new StudioCompileError(`${expression.name} does not return a value in the browser compiler.`, expression.line, expression.column);
+            }
+            this.emitDiscardedVoidIntrinsicResult(this.assembler.allocRegister());
+            this.emitFrame144WithdrawTotalLpAssertAlignmentPadding(expression.args[0]);
+            this.tryShiftFrame168MintedAssertIntoPadding(expression.args[0]);
+            return null;
+        }
+        if (spec.kind === 'require') {
+            if (expression.args.length !== 1 && expression.args.length !== 2) {
+                throw new StudioCompileError('require expects (condition) or (condition, message) in the browser compiler.', expression.line, expression.column);
+            }
+            const okReg = this.compileExpressionAsInt(expression.args[0], callStack, locals);
+            let messageReg = null;
+            if (expression.args[1] !== undefined) {
+                messageReg = this.compileAssertMessageSideEffect(expression.args[1], callStack, locals, null);
+            }
+            const rejectReg = this.assembler.allocRegister();
+            this.assembler.emitXori(rejectReg, okReg, 1);
+            const passJump = this.assembler.emitBranchPlaceholder(OP_BEQ, rejectReg, 0);
+            this.assembler.emitSyscall(SYSCALL_ABORT);
+            this.assembler.patchBranch(passJump, this.assembler.currentPc());
+            if (messageReg !== null) {
+                this.releaseExpressionRegisterIfTemporary(messageReg, locals);
+            }
+            this.releaseExpressionRegisterIfTemporary(rejectReg, locals);
+            this.releaseExpressionRegisterIfTemporary(okReg, locals);
+            if (!allowVoidResult) {
+                throw new StudioCompileError('require does not return a value in the browser compiler.', expression.line, expression.column);
+            }
+            this.emitDiscardedVoidIntrinsicResult(this.rustRequireDiscardRegister() ?? this.assembler.allocRegister());
+            return null;
+        }
+        if (expression.args.length !== 2) {
+            throw new StudioCompileError('assert_eq expects exactly two arguments in the browser compiler.', expression.line, expression.column);
+        }
+        const [leftExpression, rightExpression] = expression.args;
+        let passJump;
+        let releaseRegister = null;
+        const numericResultType = semanticNumericResultType(this.inferExpressionValueType(leftExpression, locals), this.inferExpressionValueType(rightExpression, locals));
+        if (isSemanticWideNumericType(numericResultType)) {
+            releaseRegister = this.compileNumericComparison({
+                kind: 'compare',
+                operator: '==',
+                left: leftExpression,
+                right: rightExpression,
+                line: expression.line,
+                column: expression.column,
+            }, callStack, locals);
+            passJump = this.assembler.emitBranchPlaceholder(OP_BNE, releaseRegister, 0);
+        }
+        else if (this.expressionYieldsPointer(leftExpression, locals) || this.expressionYieldsPointer(rightExpression, locals)) {
+            releaseRegister = this.compilePointerEquality(leftExpression, rightExpression, false, callStack, locals);
+            passJump = this.assembler.emitBranchPlaceholder(OP_BNE, releaseRegister, 0);
+        }
+        else {
+            const literalRegisterPlan = this.rustAssetFailureAssertEqLiteralRegisterPlan(leftExpression, rightExpression);
+            const left = literalRegisterPlan === null
+                ? this.compileExpressionAsInt(leftExpression, callStack, locals)
+                : this.assembler.claimRegister(literalRegisterPlan.leftRegister);
+            if (literalRegisterPlan !== null) {
+                this.emitRustLikeIntLiteral(left, leftExpression.value);
+            }
+            const right = literalRegisterPlan === null
+                ? this.compileExpressionAsInt(rightExpression, callStack, locals)
+                : this.assembler.claimRegister(literalRegisterPlan.rightRegister);
+            if (literalRegisterPlan !== null) {
+                this.emitRustLikeIntLiteral(right, rightExpression.value);
+            }
+            passJump = this.assembler.emitBranchPlaceholder(OP_BEQ, left, right);
+            this.releaseExpressionRegisterIfTemporary(left, locals);
+            this.releaseExpressionRegisterIfTemporary(right, locals);
+        }
+        this.assembler.emitSyscall(SYSCALL_ABORT);
+        this.assembler.patchBranch(passJump, this.assembler.currentPc());
+        if (releaseRegister !== null) {
+            this.releaseExpressionRegisterIfTemporary(releaseRegister, locals);
+        }
+        if (!allowVoidResult) {
+            throw new StudioCompileError('assert_eq does not return a value in the browser compiler.', expression.line, expression.column);
+        }
+        this.emitDiscardedVoidIntrinsicResult(this.assembler.allocRegister());
+        return null;
+    }
+    compileIntArithmeticBuiltinCall(expression, spec, callStack, locals) {
+        if (expression.args.length !== spec.arity) {
+            throw new StudioCompileError(`${spec.compileMessage} in the browser compiler.`, expression.line, expression.column);
+        }
+        if (spec.unsupportedMessage !== undefined) {
+            throw new StudioCompileError(spec.unsupportedMessage, expression.line, expression.column);
+        }
+        const left = this.compileExpressionAsInt(expression.args[0], callStack, locals);
+        const right = spec.arity === 2 ? this.compileExpressionAsInt(expression.args[1], callStack, locals) : 0;
+        const register = this.assembler.allocRegister();
+        this.assembler.emitArithmetic(spec.opcode, register, left, right);
+        return { kind: 'int', register, items: null, fieldNames: null, valueType: spec.valueType };
+    }
+    compileVectorBuiltinCall(expression, spec, callStack, locals, allowVoidResult) {
+        if (expression.args.length !== spec.arity) {
+            throw new StudioCompileError(`${spec.compileMessage} in the browser compiler.`, expression.line, expression.column);
+        }
+        const raw = this.resolveCompileTimeIntegerLiteral(expression.args[0]);
+        if (raw === null) {
+            throw new StudioCompileError('setvl expects a literal int in range 0..=255 in the browser compiler.', expression.line, expression.column);
+        }
+        if (raw < 0 || raw > 255) {
+            throw new StudioCompileError(`setvl value must be in range 0..=255, got ${raw} in the browser compiler.`, expression.line, expression.column);
+        }
+        const valueReg = this.compileExpressionAsInt(expression.args[0], callStack, locals);
+        this.assembler.emitArithmetic(spec.opcode, 0, 0, raw);
+        this.emitDiscardedVoidIntrinsicResult(valueReg);
+        if (!allowVoidResult) {
+            throw new StudioCompileError(`${expression.name} does not return a value in the browser compiler.`, expression.line, expression.column);
+        }
+        return null;
+    }
+    compileTransferBatchCall(expression, spec, callStack, locals, allowVoidResult) {
+        if (expression.args.length === 0) {
+            throw new StudioCompileError(`${spec.emptyMessage} in the browser compiler.`, expression.line, expression.column);
+        }
+        this.assembler.emitSyscall(SYSCALL_TRANSFER_V1_BATCH_BEGIN);
+        for (const entry of expression.args) {
+            const localBinding = entry.kind === 'stateReference' ? locals.get(entry.name) : null;
+            const binding = this.compileExpressionAsTupleBinding(entry, spec.entryType, callStack, locals);
+            const fromReg = this.bindingRegister(binding.items[0], ['pointer'], entry.line, entry.column, 'transfer_batch entry source must be AccountId in the browser compiler.');
+            const toReg = this.bindingRegister(binding.items[1], ['pointer'], entry.line, entry.column, 'transfer_batch entry destination must be AccountId in the browser compiler.');
+            const assetReg = this.bindingRegister(binding.items[2], ['pointer'], entry.line, entry.column, 'transfer_batch entry asset must be AssetDefinitionId in the browser compiler.');
+            const amountInt = this.bindingRegister(binding.items[3], ['int'], entry.line, entry.column, 'transfer_batch entry amount must be int in the browser compiler.');
+            const amountReg = this.emitNumericFromInt(amountInt);
+            this.emitFourArgAssetSyscall(fromReg, toReg, assetReg, amountReg, SYSCALL_TRANSFER_ASSET);
+            this.emitDiscardedVoidIntrinsicResult(this.deadTransferDiscardRegister(amountReg));
+            this.assembler.releaseRegister(amountReg);
+            if (binding !== localBinding) {
+                this.releaseBindingRegisters(binding);
+            }
+            else if (binding.items[3].register === null && binding.items[3].spillFrameOffset !== undefined) {
+                this.assembler.releaseRegister(amountInt);
+            }
+        }
+        this.assembler.emitSyscall(SYSCALL_TRANSFER_V1_BATCH_END);
+        this.emitDiscardedVoidIntrinsicResult(this.assembler.allocRegister());
+        if (!allowVoidResult) {
+            throw new StudioCompileError('transfer_batch does not return a value in the browser compiler.', expression.line, expression.column);
+        }
+        return null;
+    }
+    compileStateHostBuiltinCall(expression, spec, callStack, locals, allowVoidResult, liveAfterStatement) {
+        if (expression.args.length !== spec.args.length) {
+            throw new StudioCompileError(`${spec.message} in the browser compiler.`, expression.line, expression.column);
+        }
+        switch (spec.kind) {
+            case 'get': {
+                const pathLiteral = this.resolveRematerializableNameLiteral(expression.args[0], locals);
+                if (pathLiteral !== null) {
+                    validateNameLiteral(pathLiteral, expression.args[0].line, expression.args[0].column);
+                    this.emitDirectNameLiteralPointerIntoRegister(pathLiteral, 10);
+                    const register = this.emitStateGetPathInRegister();
+                    return { kind: 'pointer', register, items: null, fieldNames: null, valueType: spec.valueType };
+                }
+                const pathReg = this.compileExpressionAsNamePointer(expression.args[0], callStack, locals);
+                const register = this.emitStateGet(pathReg);
+                return { kind: 'pointer', register, items: null, fieldNames: null, valueType: spec.valueType };
+            }
+            case 'set': {
+                const pathLiteral = this.resolveRematerializableNameLiteral(expression.args[0], locals);
+                if (pathLiteral !== null) {
+                    validateNameLiteral(pathLiteral, expression.args[0].line, expression.args[0].column);
+                    const valueReg = this.compileExpressionAsNoritoBytesPointer(expression.args[1], callStack, locals);
+                    this.emitDirectNameLiteralPointerIntoRegister(pathLiteral, 10);
+                    this.emitStateSetPathInRegister(valueReg);
+                }
+                else {
+                    const pathReg = this.compileExpressionAsNamePointer(expression.args[0], callStack, locals);
+                    const valueReg = this.compileExpressionAsNoritoBytesPointer(expression.args[1], callStack, locals);
+                    this.emitStateSet(pathReg, valueReg);
+                }
+                this.emitDiscardedVoidIntrinsicResult(this.deadArgumentRegisterAfterStatement(expression.args[1], locals, liveAfterStatement) ?? this.assembler.allocRegister());
+                if (!allowVoidResult) {
+                    throw new StudioCompileError(`${expression.name} does not return a value in the browser compiler.`, expression.line, expression.column);
+                }
+                return null;
+            }
+            case 'del': {
+                const pathLiteral = this.resolveRematerializableNameLiteral(expression.args[0], locals);
+                if (pathLiteral !== null) {
+                    validateNameLiteral(pathLiteral, expression.args[0].line, expression.args[0].column);
+                    this.emitDirectNameLiteralPointerIntoRegister(pathLiteral, 10);
+                    this.emitStateDelPathInRegister();
+                    this.emitDiscardedVoidIntrinsicResult(this.deadRematerializedNameRegisterAfterStatement(expression.args[0], locals, liveAfterStatement) ?? this.assembler.allocRegister());
+                    if (!allowVoidResult) {
+                        throw new StudioCompileError(`${expression.name} does not return a value in the browser compiler.`, expression.line, expression.column);
+                    }
+                    return null;
+                }
+                const pathReg = this.compileExpressionAsNamePointer(expression.args[0], callStack, locals);
+                this.emitStateDel(pathReg);
+                this.emitDiscardedVoidIntrinsicResult(this.deadArgumentRegisterAfterStatement(expression.args[0], locals, liveAfterStatement) ?? this.assembler.allocRegister());
+                if (!allowVoidResult) {
+                    throw new StudioCompileError(`${expression.name} does not return a value in the browser compiler.`, expression.line, expression.column);
+                }
+                return null;
+            }
+            case 'keys': {
+                const offsetReg = this.compileExpressionAsInt(expression.args[1], callStack, locals);
+                const limitReg = this.compileExpressionAsInt(expression.args[2], callStack, locals);
+                const prefixLiteral = this.resolveRematerializableNameLiteral(expression.args[0], locals);
+                let register;
+                if (prefixLiteral !== null) {
+                    validateNameLiteral(prefixLiteral, expression.args[0].line, expression.args[0].column);
+                    this.emitDirectNameLiteralPointerIntoRegister(prefixLiteral, 10);
+                    register = this.emitStateKeysPrefixInRegister(offsetReg, limitReg);
+                }
+                else {
+                    const prefixReg = this.compileExpressionAsNamePointer(expression.args[0], callStack, locals);
+                    register = this.emitStateKeys(prefixReg, offsetReg, limitReg);
+                }
+                return { kind: 'pointer', register, items: null, fieldNames: null, valueType: spec.valueType };
+            }
+            case 'has': {
+                const pathLiteral = this.resolveRematerializableNameLiteral(expression.args[0], locals);
+                let register;
+                if (pathLiteral !== null) {
+                    validateNameLiteral(pathLiteral, expression.args[0].line, expression.args[0].column);
+                    this.emitDirectNameLiteralPointerIntoRegister(pathLiteral, 10);
+                    register = this.emitStateHasPathInRegister();
+                }
+                else {
+                    const pathReg = this.compileExpressionAsNamePointer(expression.args[0], callStack, locals);
+                    register = this.emitStateHas(pathReg);
+                }
+                return { kind: 'int', register, items: null, fieldNames: null, valueType: spec.valueType };
+            }
+            case 'len': {
+                const pathLiteral = this.resolveRematerializableNameLiteral(expression.args[0], locals);
+                let register;
+                if (pathLiteral !== null) {
+                    validateNameLiteral(pathLiteral, expression.args[0].line, expression.args[0].column);
+                    this.emitDirectNameLiteralPointerIntoRegister(pathLiteral, 10);
+                    register = this.emitStateLenPathInRegister();
+                }
+                else {
+                    const pathReg = this.compileExpressionAsNamePointer(expression.args[0], callStack, locals);
+                    register = this.emitStateLen(pathReg);
+                }
+                return { kind: 'int', register, items: null, fieldNames: null, valueType: spec.valueType };
+            }
+            case 'count': {
+                const prefixLiteral = this.resolveRematerializableNameLiteral(expression.args[0], locals);
+                let register;
+                if (prefixLiteral !== null) {
+                    validateNameLiteral(prefixLiteral, expression.args[0].line, expression.args[0].column);
+                    this.emitDirectNameLiteralPointerIntoRegister(prefixLiteral, 10);
+                    register = this.emitStateCountPrefixInRegister();
+                }
+                else {
+                    const prefixReg = this.compileExpressionAsNamePointer(expression.args[0], callStack, locals);
+                    register = this.emitStateCount(prefixReg);
+                }
+                return { kind: 'int', register, items: null, fieldNames: null, valueType: spec.valueType };
+            }
+            default:
+                throw new StudioCompileError(`Unsupported state host helper \`${expression.name}\` in the browser compiler.`, expression.line, expression.column);
+        }
+    }
+    compileZkInlineBuilderCall(expression, spec, locals) {
+        if (expression.args.length !== spec.args.length) {
+            throw new StudioCompileError(`${spec.compileMessage} in the browser compiler.`, expression.line, expression.column);
+        }
+        if (spec.kind === 'submitBallot') {
+            const instructionBytes = zkInlineBuilderInstructionBytesFromExpression(expression, this.rematerializableLiteralMapForLocals(locals));
+            const instructionHex = bytesToHex(instructionBytes);
+            this.deferBuilderLiteralDataRef(expression.args[2], locals, POINTER_TYPE_BLOB, 'build_submit_ballot_inline nullifier');
+            this.deferBuilderLiteralDataRef(expression.args[4], locals, POINTER_TYPE_BLOB, 'build_submit_ballot_inline proof');
+            this.deferBuilderLiteralDataRef(expression.args[5], locals, POINTER_TYPE_BLOB, 'build_submit_ballot_inline vk_ref');
+            this.emitBlobLiteralPointer(this.inlineBuilderLiteralWithLocals(expression.args[0], locals, 'build_submit_ballot_inline election_id'));
+            this.reserveLogicalBlobLiteral(this.inlineBuilderLiteralWithLocals(expression.args[1], locals, 'build_submit_ballot_inline ciphertext'));
+            this.emitBlobLiteralPointer(this.inlineBuilderLiteralWithLocals(expression.args[3], locals, 'build_submit_ballot_inline backend'));
+            const register = this.assembler.allocRegister();
+            this.emitNoritoBytesLiteralPointerIntoRegister(instructionHex, register);
+            return {
+                kind: 'pointer',
+                register,
+                items: null,
+                fieldNames: null,
+                valueType: spec.valueType,
+                rematerializableBlobLiteral: null,
+                rematerializableNoritoBytesLiteral: `0x${instructionHex}`,
+            };
+        }
+        if (spec.kind === 'unshield') {
+            const amount = expression.args[2];
+            if (amount?.kind !== 'number') {
+                throw new StudioCompileError('build_unshield_inline amount requires a compile-time integer literal in the browser compiler.', expression.line, expression.column);
+            }
+            const instructionBytes = zkInlineBuilderInstructionBytesFromExpression(expression, this.rematerializableLiteralMapForLocals(locals));
+            const instructionHex = bytesToHex(instructionBytes);
+            this.deferBuilderAssetDefinitionDataRef(expression.args[0], locals, 'build_unshield_inline asset');
+            this.deferBuilderAccountDataRef(expression.args[1], locals, 'build_unshield_inline to');
+            this.deferBuilderLiteralDataRef(expression.args[3], locals, POINTER_TYPE_BLOB, 'build_unshield_inline inputs');
+            this.deferBuilderLiteralDataRef(expression.args[5], locals, POINTER_TYPE_BLOB, 'build_unshield_inline proof');
+            this.deferBuilderLiteralDataRef(expression.args[6], locals, POINTER_TYPE_BLOB, 'build_unshield_inline vk_ref');
+            this.claimRegisterIfAvailable(3);
+            this.claimRegisterIfAvailable(4);
+            this.claimRegisterIfAvailable(5);
+            this.claimRegisterIfAvailable(6);
+            this.assembler.emitAddi(3, 0, 0);
+            this.emitRustLikeIntLiteral(4, amount.value);
+            this.emitBlobLiteralPointerIntoRegister(this.inlineBuilderLiteralWithLocals(expression.args[4], locals, 'build_unshield_inline backend'), 5);
+            this.emitNoritoBytesLiteralPointerIntoRegister(instructionHex, 6);
+            return {
+                kind: 'pointer',
+                register: 6,
+                items: null,
+                fieldNames: null,
+                valueType: spec.valueType,
+                rematerializableBlobLiteral: null,
+                rematerializableNoritoBytesLiteral: `0x${instructionHex}`,
+            };
+        }
+        return undefined;
+    }
+    compilePointerConstructorCall(expression, spec, callStack, locals) {
+        if (expression.args.length !== 1) {
+            throw new StudioCompileError(`\`${spec.canonicalName}\` expects exactly one argument in the browser compiler.`, expression.line, expression.column);
+        }
+        const arg = expression.args[0];
+        const compilePointerBinding = (register) => ({
+            kind: 'pointer',
+            register,
+            items: null,
+            fieldNames: null,
+            valueType: spec.valueType,
+            rematerializableAssetDefinitionLiteral: null,
+        });
+        switch (spec.compile) {
+            case 'account':
+                return compilePointerBinding(this.compileExpressionAsAccountPointer(arg, callStack, locals));
+            case 'asset_definition':
+                return compilePointerBinding(this.compileExpressionAsAssetDefinitionPointer(arg, callStack, locals));
+            case 'domain':
+                return compilePointerBinding(this.compileExpressionAsDomainPointer(arg, callStack, locals));
+            case 'nft':
+                return compilePointerBinding(this.compileExpressionAsNftPointer(arg, callStack, locals));
+            case 'name':
+                return compilePointerBinding(this.compileExpressionAsNamePointer(arg, callStack, locals));
+            case 'json':
+                return compilePointerBinding(this.compileExpressionAsJsonConstructorPointer(arg, callStack, locals));
+            case 'blob':
+                if (arg.kind === 'blobLiteral') {
+                    return compilePointerBinding(this.emitBlobLiteralPointer(arg.value));
+                }
+                if (arg.kind === 'string') {
+                    return compilePointerBinding(this.emitBlobLiteralPointer(arg.value));
+                }
+                if (isSemanticBlobLikeType(this.inferExpressionValueType(arg, locals))) {
+                    return compilePointerBinding(this.compileExpressionAsPointer(arg, callStack, locals));
+                }
+                throw new StudioCompileError('blob(...) expects a string, blob literal, or Blob|bytes value in the browser compiler.', expression.line, expression.column);
+            case 'norito_bytes':
+                return compilePointerBinding(this.compileExpressionAsNoritoBytesPointer(arg, callStack, locals));
+            case 'typed':
+                return compilePointerBinding(this.compileExpressionAsTypedPointer(arg, spec.valueType, callStack, locals));
+            default:
+                throw new StudioCompileError(`Unsupported pointer constructor \`${spec.canonicalName}\` in the browser compiler.`, expression.line, expression.column);
+        }
+    }
     compileCallExpression(expression, callStack, locals, allowVoidResult, liveAfterStatement = null) {
-        const nativeEscrowResult = this.compileNativeEscrowCall(expression, callStack, locals, allowVoidResult, liveAfterStatement);
-        if (nativeEscrowResult !== undefined) {
-            return nativeEscrowResult;
+        const escrowSpec = escrowBuiltinSpec(expression.name);
+        if (escrowSpec !== null) {
+            return this.compileEscrowBuiltinCall(expression, escrowSpec, callStack, locals, allowVoidResult, liveAfterStatement);
+        }
+        const inlineBuilderSpec = zkInlineBuilderBuiltinSpec(expression.name);
+        if (inlineBuilderSpec !== null) {
+            return this.compileZkInlineBuilderCall(expression, inlineBuilderSpec, locals);
         }
         const testOnlyResult = this.compileTestOnlyHelperCallExpression(expression, callStack, locals, allowVoidResult);
         if (testOnlyResult !== undefined) {
@@ -22678,61 +24589,82 @@ class StudioCodeGenerator {
                 rematerializableAssetDefinitionLiteral: null,
             });
         }
-        if (isPointerConstructorCall(expression.name)) {
-            if (expression.args.length !== 1) {
-                throw new StudioCompileError(`\`${expression.name}\` expects exactly one argument in the browser compiler.`, expression.line, expression.column);
+        const pointerConstructorSpec = pointerConstructorBuiltinSpec(expression.name);
+        if (pointerConstructorSpec !== null) {
+            return this.compilePointerConstructorCall(expression, pointerConstructorSpec, callStack, locals);
+        }
+        const directHelper = directHelperSpec(expression.name);
+        if (directHelper !== null) {
+            if (expression.args.length !== directHelper.args.length) {
+                throw new StudioCompileError(`${directHelper.message} in the browser compiler.`, expression.line, expression.column);
             }
-            const arg = expression.args[0];
-            const compilePointerBinding = (register, valueType) => ({
+            return this.compileDirectHelperCall(expression, directHelper, callStack, locals);
+        }
+        const regularNumericBinarySpec = regularNumericBinaryBuiltinSpec(expression.name);
+        if (regularNumericBinarySpec !== null) {
+            if (expression.args.length !== 2) {
+                throw new StudioCompileError(`${regularNumericBinarySpec.message} in the browser compiler.`, expression.line, expression.column);
+            }
+            const leftReg = this.compileExpressionAsNumericPointer(expression.args[0], callStack, locals);
+            const rightReg = this.compileExpressionAsNumericPointer(expression.args[1], callStack, locals);
+            const register = this.emitNumericPointerBinaryOperation(regularNumericBinarySpec.operator, leftReg, rightReg);
+            const argTypes = expression.args.map((arg) => this.inferExpressionValueType(arg, locals));
+            const dynamicValueType = dynamicBuiltinValueType(expression.name, argTypes);
+            return {
                 kind: 'pointer',
                 register,
                 items: null,
                 fieldNames: null,
-                valueType,
-                rematerializableAssetDefinitionLiteral: null,
-            });
-            switch (expression.name) {
-                case 'account_id':
-                    return compilePointerBinding(this.compileExpressionAsAccountPointer(arg, callStack, locals), 'AccountId');
-                case 'asset_definition':
-                    return compilePointerBinding(this.compileExpressionAsAssetDefinitionPointer(arg, callStack, locals), 'AssetDefinitionId');
-                case 'asset_id':
-                    return compilePointerBinding(this.compileExpressionAsTypedPointer(arg, 'AssetId', callStack, locals), 'AssetId');
-                case 'domain':
-                case 'domain_id':
-                    return compilePointerBinding(this.compileExpressionAsDomainPointer(arg, callStack, locals), 'DomainId');
-                case 'nft_id':
-                    return compilePointerBinding(this.compileExpressionAsNftPointer(arg, callStack, locals), 'NftId');
-                case 'name':
-                    return compilePointerBinding(this.compileExpressionAsNamePointer(arg, callStack, locals), 'Name');
-                case 'json':
-                    return compilePointerBinding(this.compileExpressionAsJsonConstructorPointer(arg, callStack, locals), 'Json');
-                case 'blob':
-                    if (arg.kind === 'blobLiteral') {
-                        return compilePointerBinding(this.emitBlobLiteralPointer(arg.value), 'Blob');
-                    }
-                    if (arg.kind === 'string') {
-                        return compilePointerBinding(this.emitBlobLiteralPointer(arg.value), 'Blob');
-                    }
-                    if (isSemanticBlobLikeType(this.inferExpressionValueType(arg, locals))) {
-                        return compilePointerBinding(this.compileExpressionAsPointer(arg, callStack, locals), 'Blob');
-                    }
-                    throw new StudioCompileError('blob(...) expects a string, blob literal, or Blob|bytes value in the browser compiler.', expression.line, expression.column);
-                case 'norito_bytes':
-                    return compilePointerBinding(this.compileExpressionAsNoritoBytesPointer(arg, callStack, locals), 'NoritoBytes');
-                case 'dataspace_id':
-                    return compilePointerBinding(this.compileExpressionAsTypedPointer(arg, 'DataSpaceId', callStack, locals), 'DataSpaceId');
-                case 'axt_descriptor':
-                    return compilePointerBinding(this.compileExpressionAsTypedPointer(arg, 'AxtDescriptor', callStack, locals), 'AxtDescriptor');
-                case 'asset_handle':
-                    return compilePointerBinding(this.compileExpressionAsTypedPointer(arg, 'AssetHandle', callStack, locals), 'AssetHandle');
-                case 'proof_blob':
-                    return compilePointerBinding(this.compileExpressionAsTypedPointer(arg, 'ProofBlob', callStack, locals), 'ProofBlob');
-                case 'soracloud_request':
-                    return compilePointerBinding(this.compileExpressionAsTypedPointer(arg, 'SoracloudRequest', callStack, locals), 'SoracloudRequest');
-                case 'soracloud_response':
-                    return compilePointerBinding(this.compileExpressionAsTypedPointer(arg, 'SoracloudResponse', callStack, locals), 'SoracloudResponse');
+                valueType: dynamicValueType !== NO_BUILTIN_VALUE_TYPE ? dynamicValueType : regularNumericBinaryValueType(argTypes),
+            };
+        }
+        const regularNumericCompareSpec = regularNumericCompareBuiltinSpec(expression.name);
+        if (regularNumericCompareSpec !== null) {
+            if (expression.args.length !== 2) {
+                throw new StudioCompileError(`${regularNumericCompareSpec.message} in the browser compiler.`, expression.line, expression.column);
             }
+            const leftReg = this.compileExpressionAsNumericPointer(expression.args[0], callStack, locals);
+            const rightReg = this.compileExpressionAsNumericPointer(expression.args[1], callStack, locals);
+            const register = this.emitNumericCompareOperation(regularNumericCompareSpec.operator, leftReg, rightReg);
+            return {
+                kind: 'int',
+                register,
+                items: null,
+                fieldNames: null,
+                valueType: regularNumericCompareSpec.valueType,
+            };
+        }
+        const numericNegSpec = numericNegBuiltinSpec(expression.name);
+        if (numericNegSpec !== null) {
+            if (expression.args.length !== 1) {
+                throw new StudioCompileError(`${numericNegSpec.message} in the browser compiler.`, expression.line, expression.column);
+            }
+            const valueReg = this.compileExpressionAsNumericPointer(expression.args[0], callStack, locals);
+            const register = this.emitNumericPointerNegOperation(valueReg);
+            const argTypes = expression.args.map((arg) => this.inferExpressionValueType(arg, locals));
+            const dynamicValueType = dynamicBuiltinValueType(expression.name, argTypes);
+            return {
+                kind: 'pointer',
+                register,
+                items: null,
+                fieldNames: null,
+                valueType: dynamicValueType !== NO_BUILTIN_VALUE_TYPE ? dynamicValueType : numericNegValueType(argTypes),
+            };
+        }
+        const numericToIntSpec = numericToIntBuiltinSpec(expression.name);
+        if (numericToIntSpec !== null) {
+            if (expression.args.length !== 1) {
+                throw new StudioCompileError(`${numericToIntSpec.message} in the browser compiler.`, expression.line, expression.column);
+            }
+            const valueReg = this.compileExpressionAsNumericPointer(expression.args[0], callStack, locals);
+            const register = this.emitNumericToInt(valueReg);
+            return {
+                kind: 'int',
+                register,
+                items: null,
+                fieldNames: null,
+                valueType: numericToIntSpec.valueType,
+            };
         }
         const jsonGetter = jsonGetterSpec(expression.name);
         if (jsonGetter !== null) {
@@ -22756,162 +24688,41 @@ class StudioCodeGenerator {
                 valueType: jsonGetter.valueType,
             };
         }
-        if (expression.name === 'json_object') {
-            if (expression.args.length !== 0) {
-                throw new StudioCompileError('json_object expects no arguments in the browser compiler.', expression.line, expression.column);
-            }
-            this.assembler.emitSyscall(SYSCALL_JSON_OBJECT);
-            const register = this.assembler.allocRegister();
-            this.assembler.emitMove(register, 10);
-            return { kind: 'pointer', register, items: null, fieldNames: null, valueType: 'Json' };
+        const pathSpec = pathBuiltinSpec(expression.name);
+        if (pathSpec !== null) {
+            return this.compilePathBuiltinCall(expression, pathSpec, callStack, locals);
         }
-        if (expression.name === 'json_set_int') {
-            if (expression.args.length !== 3) {
-                throw new StudioCompileError('json_set_int expects (Json, Name, int) in the browser compiler.', expression.line, expression.column);
-            }
-            const jsonReg = this.compileExpressionAsJsonPointer(expression.args[0], callStack, locals);
-            const directKeyLiteral = this.resolveRematerializableNameLiteral(expression.args[1], locals);
-            let register;
-            if (directKeyLiteral !== null) {
-                const valueReg = this.compileExpressionAsInt(expression.args[2], callStack, locals);
-                register = this.emitJsonSetIntDirectNameKey(jsonReg, directKeyLiteral, valueReg);
-            }
-            else {
-                const keyReg = this.compileExpressionAsNamePointer(expression.args[1], callStack, locals);
-                const valueReg = this.compileExpressionAsInt(expression.args[2], callStack, locals);
-                register = this.emitJsonSetInt(jsonReg, keyReg, valueReg);
-            }
-            return { kind: 'pointer', register, items: null, fieldNames: null, valueType: 'Json' };
+        const jsonBuilderSpec = jsonBuilderBuiltinSpec(expression.name);
+        if (jsonBuilderSpec !== null) {
+            return this.compileJsonBuilderBuiltinCall(expression, jsonBuilderSpec, callStack, locals);
         }
-        if (expression.name === 'json_set_account_id') {
-            if (expression.args.length !== 3) {
-                throw new StudioCompileError('json_set_account_id expects (Json, Name, AccountId) in the browser compiler.', expression.line, expression.column);
-            }
-            const jsonReg = this.compileExpressionAsJsonPointer(expression.args[0], callStack, locals);
-            const keyReg = this.compileExpressionAsNamePointer(expression.args[1], callStack, locals);
-            const valueReg = this.compileExpressionAsAccountPointer(expression.args[2], callStack, locals);
-            const register = this.emitJsonSetAccountId(jsonReg, keyReg, valueReg);
-            return { kind: 'pointer', register, items: null, fieldNames: null, valueType: 'Json' };
+        const schemaSpec = schemaBuiltinSpec(expression.name);
+        if (schemaSpec !== null) {
+            return this.compileSchemaBuiltinCall(expression, schemaSpec, callStack, locals);
         }
-        if (expression.name === 'path') {
-            if (expression.args.length !== 2) {
-                throw new StudioCompileError('path expects (Name, int|Blob|bytes) in the browser compiler.', expression.line, expression.column);
-            }
-            const directBaseLiteral = this.resolveRematerializableNameLiteral(expression.args[0], locals);
-            const keyType = this.inferExpressionValueType(expression.args[1], locals);
-            let keyReg;
-            let register;
-            if (isSemanticIntBuiltinArg(keyType)) {
-                keyReg = this.compileExpressionAsInt(expression.args[1], callStack, locals);
-                const baseReg = directBaseLiteral !== null
-                    ? this.emitDirectNameLiteralPointer(directBaseLiteral)
-                    : this.compileExpressionAsNamePointer(expression.args[0], callStack, locals);
-                register = this.emitBuildStateMapPathFromBaseRegister(baseReg, keyReg, 'int');
-            }
-            else if (isSemanticBlobLikeType(keyType)) {
-                const baseReg = directBaseLiteral !== null
-                    ? this.emitDirectNameLiteralPointer(directBaseLiteral)
-                    : this.compileExpressionAsNamePointer(expression.args[0], callStack, locals);
-                keyReg = this.compileExpressionAsNoritoBytesPointer(expression.args[1], callStack, locals);
-                register = this.emitBuildStateMapPathFromBaseRegister(baseReg, keyReg, 'NoritoBytes');
-            }
-            else {
-                throw new StudioCompileError('path expects (Name, int|Blob|bytes) in the browser compiler.', expression.line, expression.column);
-            }
-            return { kind: 'pointer', register, items: null, fieldNames: null, valueType: 'Name' };
+        const codecSpec = codecBuiltinSpec(expression.name);
+        if (codecSpec !== null) {
+            return this.compileCodecBuiltinCall(expression, codecSpec, callStack, locals);
         }
-        if (expression.name === 'encode_schema') {
-            if (expression.args.length !== 2) {
-                throw new StudioCompileError('encode_schema expects (Name, Json) in the browser compiler.', expression.line, expression.column);
-            }
-            const schemaReg = this.compileExpressionAsNamePointer(expression.args[0], callStack, locals);
-            const jsonReg = this.compileExpressionAsJsonPointer(expression.args[1], callStack, locals);
-            const register = this.emitSchemaEncode(schemaReg, jsonReg);
-            return { kind: 'pointer', register, items: null, fieldNames: null, valueType: 'NoritoBytes' };
+        const abiUtilitySpec = abiUtilityBuiltinSpec(expression.name);
+        if (abiUtilitySpec !== null) {
+            return this.compileAbiUtilityBuiltinCall(expression, abiUtilitySpec, callStack, locals);
         }
-        if (expression.name === 'decode_schema') {
-            if (expression.args.length !== 2) {
-                throw new StudioCompileError('decode_schema expects (Name, Blob|bytes) in the browser compiler.', expression.line, expression.column);
-            }
-            const schemaReg = this.compileExpressionAsNamePointer(expression.args[0], callStack, locals);
-            const blobReg = this.compileExpressionAsNoritoBytesPointer(expression.args[1], callStack, locals);
-            const register = this.emitSchemaDecode(schemaReg, blobReg);
-            return { kind: 'pointer', register, items: null, fieldNames: null, valueType: 'Json' };
+        const mapAccessSpec = mapAccessBuiltinSpec(expression.name);
+        if (mapAccessSpec !== null) {
+            return this.compileMapAccessBuiltinCall(expression, mapAccessSpec, callStack, locals);
         }
-        if (expression.name === 'schema_info') {
-            if (expression.args.length !== 1) {
-                throw new StudioCompileError('schema_info expects (Name) in the browser compiler.', expression.line, expression.column);
-            }
-            const schemaReg = this.compileExpressionAsNamePointer(expression.args[0], callStack, locals);
-            const register = this.emitSchemaInfo(schemaReg);
-            return { kind: 'pointer', register, items: null, fieldNames: null, valueType: 'Json' };
+        const vrfSpec = vrfBuiltinSpec(expression.name);
+        if (vrfSpec !== null) {
+            return this.compileVrfBuiltinCall(expression, vrfSpec, callStack, locals);
         }
-        if (expression.name === 'encode_int') {
-            if (expression.args.length !== 1) {
-                throw new StudioCompileError('encode_int expects (int) in the browser compiler.', expression.line, expression.column);
-            }
-            const valueReg = this.compileExpressionAsInt(expression.args[0], callStack, locals);
-            const register = this.emitEncodedIntPointer(valueReg);
-            return { kind: 'pointer', register, items: null, fieldNames: null, valueType: 'NoritoBytes' };
+        const proofHeapSpec = proofHeapBuiltinSpec(expression.name);
+        if (proofHeapSpec !== null) {
+            return this.compileProofHeapBuiltinCall(expression, proofHeapSpec, callStack, locals);
         }
-        if (expression.name === 'decode_int') {
-            if (expression.args.length !== 1) {
-                throw new StudioCompileError('decode_int expects (Blob|bytes) in the browser compiler.', expression.line, expression.column);
-            }
-            const bytesReg = this.compileExpressionAsNoritoBytesPointer(expression.args[0], callStack, locals);
-            const register = this.emitDecodedInt(bytesReg);
-            return { kind: 'int', register, items: null, fieldNames: null, valueType: 'int' };
-        }
-        if (expression.name === 'encode_json') {
-            if (expression.args.length !== 1) {
-                throw new StudioCompileError('encode_json expects (Json) in the browser compiler.', expression.line, expression.column);
-            }
-            const jsonReg = this.compileExpressionAsJsonPointer(expression.args[0], callStack, locals);
-            const register = this.emitJsonEncodePointer(jsonReg);
-            return { kind: 'pointer', register, items: null, fieldNames: null, valueType: 'NoritoBytes' };
-        }
-        if (expression.name === 'decode_json') {
-            if (expression.args.length !== 1) {
-                throw new StudioCompileError('decode_json expects (Blob|bytes) in the browser compiler.', expression.line, expression.column);
-            }
-            const bytesReg = this.compileExpressionAsNoritoBytesPointer(expression.args[0], callStack, locals);
-            const register = this.emitJsonDecodePointer(bytesReg);
-            return { kind: 'pointer', register, items: null, fieldNames: null, valueType: 'Json' };
-        }
-        if (expression.name === 'pointer_to_norito') {
-            if (expression.args.length !== 1) {
-                throw new StudioCompileError('pointer_to_norito expects one argument in the browser compiler.', expression.line, expression.column);
-            }
-            const tlvReg = this.compileExpressionAsPointerAbiTlv(expression.args[0], callStack, locals, false, 'pointer_to_norito expects a pointer-ABI type or Blob|bytes argument');
-            const register = this.emitPointerToNorito(tlvReg);
-            return { kind: 'pointer', register, items: null, fieldNames: null, valueType: 'NoritoBytes' };
-        }
-        if (expression.name === 'tlv_len') {
-            if (expression.args.length !== 1) {
-                throw new StudioCompileError('tlv_len expects one argument in the browser compiler.', expression.line, expression.column);
-            }
-            const tlvReg = this.compileExpressionAsPointerAbiTlv(expression.args[0], callStack, locals, true, 'tlv_len expects a pointer-ABI type, Json, or Blob|bytes argument');
-            const register = this.emitTlvLen(tlvReg);
-            return { kind: 'int', register, items: null, fieldNames: null, valueType: 'int' };
-        }
-        if (expression.name === 'vrf_verify') {
-            if (expression.args.length !== 4) {
-                throw new StudioCompileError('vrf_verify expects (Blob, Blob, Blob, int variant) in the browser compiler.', expression.line, expression.column);
-            }
-            const inputReg = this.compileExpressionAsNoritoBytesPointer(expression.args[0], callStack, locals);
-            const publicKeyReg = this.compileExpressionAsNoritoBytesPointer(expression.args[1], callStack, locals);
-            const proofReg = this.compileExpressionAsNoritoBytesPointer(expression.args[2], callStack, locals);
-            const variantReg = this.compileExpressionAsInt(expression.args[3], callStack, locals);
-            const register = this.emitVrfVerify(inputReg, publicKeyReg, proofReg, variantReg);
-            return { kind: 'pointer', register, items: null, fieldNames: null, valueType: 'NoritoBytes' };
-        }
-        if (expression.name === 'vrf_verify_batch') {
-            if (expression.args.length !== 1) {
-                throw new StudioCompileError('vrf_verify_batch expects (Blob|bytes) in the browser compiler.', expression.line, expression.column);
-            }
-            const batchReg = this.compileExpressionAsNoritoBytesPointer(expression.args[0], callStack, locals);
-            const register = this.emitVrfVerifyBatch(batchReg);
-            return { kind: 'pointer', register, items: null, fieldNames: null, valueType: 'NoritoBytes' };
+        const rawMemorySpec = rawMemoryBuiltinSpec(expression.name);
+        if (rawMemorySpec !== null) {
+            return this.compileRawMemoryBuiltinCall(expression, rawMemorySpec, callStack, locals);
         }
         const signatureName = signatureBuiltinName(expression.name);
         if (signatureName === 'sm2_verify') {
@@ -22980,6 +24791,10 @@ class StudioCodeGenerator {
             }
             return { kind: 'pointer', register, items: null, fieldNames: null, valueType: sysvarSpec.valueType };
         }
+        const triggerEventSpec = triggerEventBuiltinSpec(expression.name);
+        if (triggerEventSpec !== null) {
+            return this.compileTriggerEventBuiltinCall(expression, triggerEventSpec);
+        }
         const noritoReadSpec = noritoReadBuiltinSpec(expression.name);
         if (noritoReadSpec !== null) {
             if (expression.args.length !== 1) {
@@ -23008,6 +24823,30 @@ class StudioCodeGenerator {
             this.assembler.emitMove(register, 10);
             return { kind: 'pointer', register, items: null, fieldNames: null, valueType: 'NoritoBytes' };
         }
+        const soracloudSpec = soracloudBuiltinSpec(expression.name);
+        if (soracloudSpec !== null) {
+            return this.compileSoracloudBuiltinCall(expression, soracloudSpec, callStack, locals);
+        }
+        const vendorBridgeSpec = vendorBridgeBuiltinSpec(expression.name);
+        if (vendorBridgeSpec !== null) {
+            return this.compileVendorBridgeBuiltinCall(expression, vendorBridgeSpec, callStack, locals, allowVoidResult, liveAfterStatement);
+        }
+        const subscriptionSpec = subscriptionBuiltinSpec(expression.name);
+        if (subscriptionSpec !== null) {
+            return this.compileSubscriptionBuiltinCall(expression, subscriptionSpec, allowVoidResult);
+        }
+        const legacyRuntimeControlSpec = legacyHostRuntimeControlBuiltinSpec(expression.name);
+        if (legacyRuntimeControlSpec !== null) {
+            return this.compileLegacyHostRuntimeControlBuiltinCall(expression, legacyRuntimeControlSpec, callStack, locals, allowVoidResult);
+        }
+        const callContractSpec = callContractBuiltinSpec(expression.name);
+        if (callContractSpec !== null) {
+            return this.compileCallContractBuiltinCall(expression, callContractSpec, callStack, locals);
+        }
+        const resolveAccountAliasSpec = resolveAccountAliasBuiltinSpec(expression.name);
+        if (resolveAccountAliasSpec !== null) {
+            return this.compileResolveAccountAliasBuiltinCall(expression, resolveAccountAliasSpec, callStack, locals);
+        }
         const accountBalanceSpec = accountBalanceBuiltinSpec(expression.name);
         if (accountBalanceSpec !== null) {
             if (expression.args.length !== 2) {
@@ -23020,30 +24859,66 @@ class StudioCodeGenerator {
             this.assembler.emitMove(register, 10);
             return { kind: 'pointer', register, items: null, fieldNames: null, valueType: accountBalanceSpec.valueType };
         }
-        const privacyOutputSpec = privacyOutputBuiltinSpec(expression.name);
-        if (privacyOutputSpec !== null) {
-            if (expression.args.length !== privacyOutputSpec.args.length) {
-                throw new StudioCompileError(`${privacyOutputSpec.message} in the browser compiler.`, expression.line, expression.column);
+        const accountDetailSpec = accountDetailBuiltinSpec(expression.name);
+        if (accountDetailSpec !== null) {
+            return this.compileAccountDetailBuiltinCall(expression, accountDetailSpec, callStack, locals, allowVoidResult);
+        }
+        const accountMultisigAdminSpec = accountMultisigAdminBuiltinSpec(expression.name);
+        if (accountMultisigAdminSpec !== null) {
+            return this.compileAccountMultisigAdminBuiltinCall(expression, accountMultisigAdminSpec, callStack, locals, allowVoidResult);
+        }
+        const nativeAssetOperationSpec = nativeAssetOperationBuiltinSpec(expression.name);
+        if (nativeAssetOperationSpec !== null) {
+            return this.compileNativeAssetOperationBuiltinCall(expression, nativeAssetOperationSpec, callStack, locals, allowVoidResult);
+        }
+        const nftAssetOperationSpec = nftAssetOperationBuiltinSpec(expression.name);
+        if (nftAssetOperationSpec !== null) {
+            return this.compileNftAssetOperationBuiltinCall(expression, nftAssetOperationSpec, callStack, locals, allowVoidResult, liveAfterStatement);
+        }
+        const lifecycleSpec = lifecycleBuiltinSpec(expression.name);
+        if (lifecycleSpec !== null) {
+            return this.compileLifecycleBuiltinCall(expression, lifecycleSpec, callStack, locals, allowVoidResult);
+        }
+        const managementSpec = managementBuiltinSpec(expression.name);
+        if (managementSpec !== null) {
+            return this.compileManagementBuiltinCall(expression, managementSpec, callStack, locals, allowVoidResult);
+        }
+        const publicInputSpec = publicInputBuiltinSpec(expression.name);
+        if (publicInputSpec !== null) {
+            if (expression.args.length !== 1) {
+                throw new StudioCompileError(`${publicInputSpec.message} in the browser compiler.`, expression.line, expression.column);
             }
-            if (expression.name === 'commit_output') {
-                this.assembler.emitSyscall(privacyOutputSpec.syscall);
-                this.emitDiscardedVoidIntrinsicResult(this.assembler.allocRegister());
+            this.emitPublishedTypedPointerExpressionIntoRegister(expression.args[0], 'Name', 10, callStack, locals);
+            this.assembler.emitSyscall(publicInputSpec.syscall);
+            const register = this.assembler.allocRegister();
+            this.assembler.emitMove(register, 10);
+            return { kind: 'pointer', register, items: null, fieldNames: null, valueType: publicInputSpec.valueType };
+        }
+        const debugSpec = debugBuiltinSpec(expression.name);
+        if (debugSpec !== null) {
+            if (expression.args.length !== 1) {
+                throw new StudioCompileError(`${debugSpec.message} in the browser compiler.`, expression.line, expression.column);
+            }
+            if (debugSpec.kind === 'print') {
+                const valueReg = this.compileExpressionAsInt(expression.args[0], callStack, locals);
+                this.assembler.emitMove(10, valueReg);
+                this.assembler.emitSyscall(debugSpec.syscall);
+                this.emitDiscardedVoidIntrinsicResult(valueReg);
             }
             else {
-                const argReg = this.compileExpressionAsInt(expression.args[0], callStack, locals);
-                this.assembler.emitMove(10, argReg);
-                this.assembler.emitSyscall(privacyOutputSpec.syscall);
-                if (privacyOutputSpec.valueType === 'int') {
-                    const register = this.assembler.allocRegister();
-                    this.assembler.emitMove(register, 10);
-                    return { kind: 'int', register, items: null, fieldNames: null, valueType: 'int' };
-                }
-                this.emitDiscardedVoidIntrinsicResult(argReg);
+                const payload = this.compileExpressionAsInfoPointer(expression.args[0], callStack, locals, liveAfterStatement);
+                this.assembler.emitMove(10, payload.register);
+                this.assembler.emitSyscall(debugSpec.syscall);
+                this.emitDiscardedVoidIntrinsicResult(payload.discardedResultRegister);
             }
             if (!allowVoidResult) {
                 throw new StudioCompileError(`${expression.name} does not return a value in the browser compiler.`, expression.line, expression.column);
             }
             return null;
+        }
+        const privacyOutputSpec = privacyOutputBuiltinSpec(expression.name);
+        if (privacyOutputSpec !== null) {
+            return this.compilePrivacyOutputBuiltinCall(expression, privacyOutputSpec, callStack, locals, allowVoidResult);
         }
         const smartContractLifecycleSpec = smartContractLifecycleBuiltinSpec(expression.name);
         if (smartContractLifecycleSpec !== null) {
@@ -23056,6 +24931,23 @@ class StudioCodeGenerator {
             }
             this.assembler.emitSyscall(SYSCALL_INPUT_PUBLISH_TLV);
             this.assembler.emitSyscall(smartContractLifecycleSpec.syscall);
+            this.emitDiscardedVoidIntrinsicResult(this.deadArgumentRegisterAfterStatement(expression.args[0], locals, liveAfterStatement) ?? this.assembler.allocRegister());
+            if (!allowVoidResult) {
+                throw new StudioCompileError(`${expression.name} does not return a value in the browser compiler.`, expression.line, expression.column);
+            }
+            return null;
+        }
+        const transferBatchApplySpec = transferBatchApplyBuiltinSpec(expression.name);
+        if (transferBatchApplySpec !== null) {
+            if (expression.args.length !== 1) {
+                throw new StudioCompileError(`${transferBatchApplySpec.message} in the browser compiler.`, expression.line, expression.column);
+            }
+            if (!this.tryEmitNoritoBytesPointerIntoRegister(expression.args[0], locals, 10)) {
+                const payloadReg = this.compileExpressionAsNoritoBytesPointer(expression.args[0], callStack, locals);
+                this.assembler.emitMove(10, payloadReg);
+            }
+            this.assembler.emitSyscall(SYSCALL_INPUT_PUBLISH_TLV);
+            this.assembler.emitSyscall(transferBatchApplySpec.syscall);
             this.emitDiscardedVoidIntrinsicResult(this.deadArgumentRegisterAfterStatement(expression.args[0], locals, liveAfterStatement) ?? this.assembler.allocRegister());
             if (!allowVoidResult) {
                 throw new StudioCompileError(`${expression.name} does not return a value in the browser compiler.`, expression.line, expression.column);
@@ -23082,1305 +24974,43 @@ class StudioCodeGenerator {
             }
             return null;
         }
-        switch (expression.name) {
-            case 'current_time_ms': {
-                if (expression.args.length !== 0) {
-                    throw new StudioCompileError('current_time_ms expects no arguments in the browser compiler.', expression.line, expression.column);
-                }
-                this.assembler.emitSyscall(SYSCALL_CURRENT_TIME_MS);
-                const register = this.assembler.allocRegister();
-                this.assembler.emitMove(register, 10);
-                return { kind: 'int', register, items: null, fieldNames: null, valueType: 'int' };
-            }
-            case 'block_height': {
-                if (expression.args.length !== 0) {
-                    throw new StudioCompileError('block_height expects no arguments in the browser compiler.', expression.line, expression.column);
-                }
-                this.assembler.emitSyscall(SYSCALL_SYSVAR_BLOCK_HEIGHT);
-                const register = this.assembler.allocRegister();
-                this.assembler.emitMove(register, 10);
-                return { kind: 'int', register, items: null, fieldNames: null, valueType: 'int' };
-            }
-            case 'poseidon2': {
-                if (expression.args.length !== 2) {
-                    throw new StudioCompileError('poseidon2 expects exactly two int arguments in the browser compiler.', expression.line, expression.column);
-                }
-                const left = this.compileExpressionAsInt(expression.args[0], callStack, locals);
-                const right = this.compileExpressionAsInt(expression.args[1], callStack, locals);
-                const register = this.assembler.allocRegister();
-                this.assembler.emitArithmetic(OP_POSEIDON2, register, left, right);
-                return { kind: 'int', register, items: null, fieldNames: null, valueType: 'int' };
-            }
-            case 'poseidon6': {
-                if (expression.args.length !== 6) {
-                    throw new StudioCompileError('poseidon6 expects exactly six int arguments in the browser compiler.', expression.line, expression.column);
-                }
-                throw new StudioCompileError('POSEIDON6 not supported', expression.line, expression.column);
-            }
-            case 'pubkgen': {
-                if (expression.args.length !== 1) {
-                    throw new StudioCompileError('pubkgen expects exactly one int argument in the browser compiler.', expression.line, expression.column);
-                }
-                const src = this.compileExpressionAsInt(expression.args[0], callStack, locals);
-                const register = this.assembler.allocRegister();
-                this.assembler.emitArithmetic(OP_PUBKGEN, register, src, 0);
-                return { kind: 'int', register, items: null, fieldNames: null, valueType: 'int' };
-            }
-            case 'valcom': {
-                if (expression.args.length !== 2) {
-                    throw new StudioCompileError('valcom expects exactly two int arguments in the browser compiler.', expression.line, expression.column);
-                }
-                const value = this.compileExpressionAsInt(expression.args[0], callStack, locals);
-                const blind = this.compileExpressionAsInt(expression.args[1], callStack, locals);
-                const register = this.assembler.allocRegister();
-                this.assembler.emitArithmetic(OP_VALCOM, register, value, blind);
-                return { kind: 'int', register, items: null, fieldNames: null, valueType: 'int' };
-            }
-            case 'info': {
-                if (expression.args.length !== 1) {
-                    throw new StudioCompileError('info expects exactly one argument in the browser compiler.', expression.line, expression.column);
-                }
-                const infoMessage = this.compileExpressionAsInfoPointer(expression.args[0], callStack, locals, liveAfterStatement);
-                this.assembler.emitMove(10, infoMessage.register);
-                this.assembler.emitSyscall(SYSCALL_DEBUG_LOG);
-                this.emitDiscardedVoidIntrinsicResult(infoMessage.discardedResultRegister);
-                if (!allowVoidResult) {
-                    throw new StudioCompileError('info does not return a value in the browser compiler.', expression.line, expression.column);
-                }
-                return null;
-            }
-            case 'assert': {
-                if (expression.args.length !== 1 && expression.args.length !== 2) {
-                    throw new StudioCompileError(`${expression.name} expects (condition) or (condition, message) in the browser compiler.`, expression.line, expression.column);
-                }
-                this.releaseFrame168LogicalRegistersBeforeMintedAssert(expression.args[0], locals);
-                const okReg = this.tryCompileFrame160OneShotAssetInAssertCondition(expression.args[0], callStack, locals, liveAfterStatement)
-                    ?? this.compileExpressionAsInt(expression.args[0], callStack, locals);
-                let messageReg = null;
-                if (expression.args[1] !== undefined) {
-                    this.releaseFrame144LogicalRegistersBeforeAssertMessage(expression.args[0], locals);
-                    const preferredMessageRegister = this.preferredFrame144AssertMessageRegister(expression.args[0], expression.args[1])
-                        ?? this.releaseFrame160DeadAssertMessageRegister(expression.args[0], expression.args[1], locals, liveAfterStatement);
-                    messageReg = this.compileAssertMessageSideEffect(expression.args[1], callStack, locals, preferredMessageRegister);
-                }
-                const passJump = this.assembler.emitBranchPlaceholder(OP_BNE, okReg, 0);
-                this.assembler.emitSyscall(SYSCALL_ABORT);
-                this.assembler.patchBranch(passJump, this.assembler.currentPc());
-                if (messageReg !== null) {
-                    this.releaseExpressionRegisterIfTemporary(messageReg, locals);
-                }
-                this.releaseExpressionRegisterIfTemporary(okReg, locals);
-                if (!allowVoidResult) {
-                    throw new StudioCompileError(`${expression.name} does not return a value in the browser compiler.`, expression.line, expression.column);
-                }
-                this.emitDiscardedVoidIntrinsicResult(this.assembler.allocRegister());
-                this.emitFrame144WithdrawTotalLpAssertAlignmentPadding(expression.args[0]);
-                this.tryShiftFrame168MintedAssertIntoPadding(expression.args[0]);
-                return null;
-            }
-            case 'require': {
-                if (expression.args.length !== 1 && expression.args.length !== 2) {
-                    throw new StudioCompileError('require expects (condition) or (condition, message) in the browser compiler.', expression.line, expression.column);
-                }
-                const okReg = this.compileExpressionAsInt(expression.args[0], callStack, locals);
-                let messageReg = null;
-                if (expression.args[1] !== undefined) {
-                    messageReg = this.compileAssertMessageSideEffect(expression.args[1], callStack, locals, null);
-                }
-                const rejectReg = this.assembler.allocRegister();
-                this.assembler.emitXori(rejectReg, okReg, 1);
-                const passJump = this.assembler.emitBranchPlaceholder(OP_BEQ, rejectReg, 0);
-                this.assembler.emitSyscall(SYSCALL_ABORT);
-                this.assembler.patchBranch(passJump, this.assembler.currentPc());
-                if (messageReg !== null) {
-                    this.releaseExpressionRegisterIfTemporary(messageReg, locals);
-                }
-                this.releaseExpressionRegisterIfTemporary(rejectReg, locals);
-                this.releaseExpressionRegisterIfTemporary(okReg, locals);
-                if (!allowVoidResult) {
-                    throw new StudioCompileError('require does not return a value in the browser compiler.', expression.line, expression.column);
-                }
-                this.emitDiscardedVoidIntrinsicResult(this.rustRequireDiscardRegister() ?? this.assembler.allocRegister());
-                return null;
-            }
-            case 'assert_eq': {
-                if (expression.args.length !== 2) {
-                    throw new StudioCompileError('assert_eq expects exactly two arguments in the browser compiler.', expression.line, expression.column);
-                }
-                const [leftExpression, rightExpression] = expression.args;
-                let passJump;
-                let releaseRegister = null;
-                const numericResultType = semanticNumericResultType(this.inferExpressionValueType(leftExpression, locals), this.inferExpressionValueType(rightExpression, locals));
-                if (isSemanticWideNumericType(numericResultType)) {
-                    releaseRegister = this.compileNumericComparison({
-                        kind: 'compare',
-                        operator: '==',
-                        left: leftExpression,
-                        right: rightExpression,
-                        line: expression.line,
-                        column: expression.column,
-                    }, callStack, locals);
-                    passJump = this.assembler.emitBranchPlaceholder(OP_BNE, releaseRegister, 0);
-                }
-                else if (this.expressionYieldsPointer(leftExpression, locals) || this.expressionYieldsPointer(rightExpression, locals)) {
-                    releaseRegister = this.compilePointerEquality(leftExpression, rightExpression, false, callStack, locals);
-                    passJump = this.assembler.emitBranchPlaceholder(OP_BNE, releaseRegister, 0);
-                }
-                else {
-                    const literalRegisterPlan = this.rustAssetFailureAssertEqLiteralRegisterPlan(leftExpression, rightExpression);
-                    const left = literalRegisterPlan === null
-                        ? this.compileExpressionAsInt(leftExpression, callStack, locals)
-                        : this.assembler.claimRegister(literalRegisterPlan.leftRegister);
-                    if (literalRegisterPlan !== null) {
-                        this.emitRustLikeIntLiteral(left, leftExpression.value);
-                    }
-                    const right = literalRegisterPlan === null
-                        ? this.compileExpressionAsInt(rightExpression, callStack, locals)
-                        : this.assembler.claimRegister(literalRegisterPlan.rightRegister);
-                    if (literalRegisterPlan !== null) {
-                        this.emitRustLikeIntLiteral(right, rightExpression.value);
-                    }
-                    passJump = this.assembler.emitBranchPlaceholder(OP_BEQ, left, right);
-                    this.releaseExpressionRegisterIfTemporary(left, locals);
-                    this.releaseExpressionRegisterIfTemporary(right, locals);
-                }
-                this.assembler.emitSyscall(SYSCALL_ABORT);
-                this.assembler.patchBranch(passJump, this.assembler.currentPc());
-                if (releaseRegister !== null) {
-                    this.releaseExpressionRegisterIfTemporary(releaseRegister, locals);
-                }
-                if (!allowVoidResult) {
-                    throw new StudioCompileError('assert_eq does not return a value in the browser compiler.', expression.line, expression.column);
-                }
-                this.emitDiscardedVoidIntrinsicResult(this.assembler.allocRegister());
-                return null;
-            }
-            case 'state_get': {
-                if (expression.args.length !== 1) {
-                    throw new StudioCompileError('state_get expects (Name) in the browser compiler.', expression.line, expression.column);
-                }
-                const pathLiteral = this.resolveRematerializableNameLiteral(expression.args[0], locals);
-                if (pathLiteral !== null) {
-                    validateNameLiteral(pathLiteral, expression.args[0].line, expression.args[0].column);
-                    this.emitDirectNameLiteralPointerIntoRegister(pathLiteral, 10);
-                    const register = this.emitStateGetPathInRegister();
-                    return { kind: 'pointer', register, items: null, fieldNames: null, valueType: 'Blob' };
-                }
-                const pathReg = this.compileExpressionAsNamePointer(expression.args[0], callStack, locals);
-                const register = this.emitStateGet(pathReg);
-                return { kind: 'pointer', register, items: null, fieldNames: null, valueType: 'Blob' };
-            }
-            case 'state_set': {
-                if (expression.args.length !== 2) {
-                    throw new StudioCompileError('state_set expects (Name, Blob|bytes) in the browser compiler.', expression.line, expression.column);
-                }
-                const pathLiteral = this.resolveRematerializableNameLiteral(expression.args[0], locals);
-                if (pathLiteral !== null) {
-                    validateNameLiteral(pathLiteral, expression.args[0].line, expression.args[0].column);
-                    const valueReg = this.compileExpressionAsNoritoBytesPointer(expression.args[1], callStack, locals);
-                    this.emitDirectNameLiteralPointerIntoRegister(pathLiteral, 10);
-                    this.emitStateSetPathInRegister(valueReg);
-                }
-                else {
-                    const pathReg = this.compileExpressionAsNamePointer(expression.args[0], callStack, locals);
-                    const valueReg = this.compileExpressionAsNoritoBytesPointer(expression.args[1], callStack, locals);
-                    this.emitStateSet(pathReg, valueReg);
-                }
-                this.emitDiscardedVoidIntrinsicResult(this.deadArgumentRegisterAfterStatement(expression.args[1], locals, liveAfterStatement) ?? this.assembler.allocRegister());
-                if (!allowVoidResult) {
-                    throw new StudioCompileError('state_set does not return a value in the browser compiler.', expression.line, expression.column);
-                }
-                return null;
-            }
-            case 'state_del': {
-                if (expression.args.length !== 1) {
-                    throw new StudioCompileError('state_del expects (Name) in the browser compiler.', expression.line, expression.column);
-                }
-                const pathLiteral = this.resolveRematerializableNameLiteral(expression.args[0], locals);
-                if (pathLiteral !== null) {
-                    validateNameLiteral(pathLiteral, expression.args[0].line, expression.args[0].column);
-                    this.emitDirectNameLiteralPointerIntoRegister(pathLiteral, 10);
-                    this.emitStateDelPathInRegister();
-                    this.emitDiscardedVoidIntrinsicResult(this.deadRematerializedNameRegisterAfterStatement(expression.args[0], locals, liveAfterStatement) ?? this.assembler.allocRegister());
-                    if (!allowVoidResult) {
-                        throw new StudioCompileError('state_del does not return a value in the browser compiler.', expression.line, expression.column);
-                    }
-                    return null;
-                }
-                const pathReg = this.compileExpressionAsNamePointer(expression.args[0], callStack, locals);
-                this.emitStateDel(pathReg);
-                this.emitDiscardedVoidIntrinsicResult(this.deadArgumentRegisterAfterStatement(expression.args[0], locals, liveAfterStatement) ?? this.assembler.allocRegister());
-                if (!allowVoidResult) {
-                    throw new StudioCompileError('state_del does not return a value in the browser compiler.', expression.line, expression.column);
-                }
-                return null;
-            }
-            case 'state_keys': {
-                if (expression.args.length !== 3) {
-                    throw new StudioCompileError('state_keys expects (Name, int offset, int limit) in the browser compiler.', expression.line, expression.column);
-                }
-                const offsetReg = this.compileExpressionAsInt(expression.args[1], callStack, locals);
-                const limitReg = this.compileExpressionAsInt(expression.args[2], callStack, locals);
-                const prefixLiteral = this.resolveRematerializableNameLiteral(expression.args[0], locals);
-                let register;
-                if (prefixLiteral !== null) {
-                    validateNameLiteral(prefixLiteral, expression.args[0].line, expression.args[0].column);
-                    this.emitDirectNameLiteralPointerIntoRegister(prefixLiteral, 10);
-                    register = this.emitStateKeysPrefixInRegister(offsetReg, limitReg);
-                }
-                else {
-                    const prefixReg = this.compileExpressionAsNamePointer(expression.args[0], callStack, locals);
-                    register = this.emitStateKeys(prefixReg, offsetReg, limitReg);
-                }
-                return { kind: 'pointer', register, items: null, fieldNames: null, valueType: 'NoritoBytes' };
-            }
-            case 'state_has': {
-                if (expression.args.length !== 1) {
-                    throw new StudioCompileError('state_has expects (Name) in the browser compiler.', expression.line, expression.column);
-                }
-                const pathLiteral = this.resolveRematerializableNameLiteral(expression.args[0], locals);
-                let register;
-                if (pathLiteral !== null) {
-                    validateNameLiteral(pathLiteral, expression.args[0].line, expression.args[0].column);
-                    this.emitDirectNameLiteralPointerIntoRegister(pathLiteral, 10);
-                    register = this.emitStateHasPathInRegister();
-                }
-                else {
-                    const pathReg = this.compileExpressionAsNamePointer(expression.args[0], callStack, locals);
-                    register = this.emitStateHas(pathReg);
-                }
-                return { kind: 'int', register, items: null, fieldNames: null, valueType: 'bool' };
-            }
-            case 'state_len': {
-                if (expression.args.length !== 1) {
-                    throw new StudioCompileError('state_len expects (Name) in the browser compiler.', expression.line, expression.column);
-                }
-                const pathLiteral = this.resolveRematerializableNameLiteral(expression.args[0], locals);
-                let register;
-                if (pathLiteral !== null) {
-                    validateNameLiteral(pathLiteral, expression.args[0].line, expression.args[0].column);
-                    this.emitDirectNameLiteralPointerIntoRegister(pathLiteral, 10);
-                    register = this.emitStateLenPathInRegister();
-                }
-                else {
-                    const pathReg = this.compileExpressionAsNamePointer(expression.args[0], callStack, locals);
-                    register = this.emitStateLen(pathReg);
-                }
-                return { kind: 'int', register, items: null, fieldNames: null, valueType: 'int' };
-            }
-            case 'state_count': {
-                if (expression.args.length !== 1) {
-                    throw new StudioCompileError('state_count expects (Name) in the browser compiler.', expression.line, expression.column);
-                }
-                const prefixLiteral = this.resolveRematerializableNameLiteral(expression.args[0], locals);
-                let register;
-                if (prefixLiteral !== null) {
-                    validateNameLiteral(prefixLiteral, expression.args[0].line, expression.args[0].column);
-                    this.emitDirectNameLiteralPointerIntoRegister(prefixLiteral, 10);
-                    register = this.emitStateCountPrefixInRegister();
-                }
-                else {
-                    const prefixReg = this.compileExpressionAsNamePointer(expression.args[0], callStack, locals);
-                    register = this.emitStateCount(prefixReg);
-                }
-                return { kind: 'int', register, items: null, fieldNames: null, valueType: 'int' };
-            }
-            case 'execute_instruction':
-            case 'sc_execute_submit_ballot':
-            case 'sc_execute_unshield': {
-                if (expression.args.length !== 1) {
-                    throw new StudioCompileError(`${expression.name} expects exactly one NoritoBytes argument in the browser compiler.`, expression.line, expression.column);
-                }
-                if (!this.tryEmitNoritoBytesPointerIntoRegister(expression.args[0], locals, 10)) {
-                    const payloadReg = this.compileExpressionAsNoritoBytesPointer(expression.args[0], callStack, locals);
-                    this.assembler.emitMove(10, payloadReg);
-                }
-                this.assembler.emitSyscall(SYSCALL_INPUT_PUBLISH_TLV);
-                this.assembler.emitSyscall(SYSCALL_SMARTCONTRACT_EXECUTE_INSTRUCTION);
-                this.emitDiscardedVoidIntrinsicResult(this.deadArgumentRegisterAfterStatement(expression.args[0], locals, liveAfterStatement) ?? this.assembler.allocRegister());
-                if (!allowVoidResult) {
-                    throw new StudioCompileError(`${expression.name} does not return a value in the browser compiler.`, expression.line, expression.column);
-                }
-                return null;
-            }
-            case 'execute_query': {
-                if (expression.args.length !== 1) {
-                    throw new StudioCompileError('execute_query expects exactly one NoritoBytes argument in the browser compiler.', expression.line, expression.column);
-                }
-                if (!this.tryEmitNoritoBytesPointerIntoRegister(expression.args[0], locals, 10)) {
-                    const payloadReg = this.compileExpressionAsNoritoBytesPointer(expression.args[0], callStack, locals);
-                    this.assembler.emitMove(10, payloadReg);
-                }
-                this.assembler.emitSyscall(SYSCALL_INPUT_PUBLISH_TLV);
-                this.assembler.emitSyscall(SYSCALL_SMARTCONTRACT_EXECUTE_QUERY);
-                const register = this.assembler.allocRegister();
-                this.assembler.emitMove(register, 10);
-                return { kind: 'pointer', register, items: null, fieldNames: null, valueType: 'Blob' };
-            }
-            case 'query_execute_norito': {
-                if (expression.args.length !== 1) {
-                    throw new StudioCompileError('query_execute_norito expects exactly one NoritoBytes argument in the browser compiler.', expression.line, expression.column);
-                }
-                if (!this.tryEmitNoritoBytesPointerIntoRegister(expression.args[0], locals, 10)) {
-                    const payloadReg = this.compileExpressionAsNoritoBytesPointer(expression.args[0], callStack, locals);
-                    this.assembler.emitMove(10, payloadReg);
-                }
-                this.assembler.emitSyscall(SYSCALL_INPUT_PUBLISH_TLV);
-                this.assembler.emitSyscall(SYSCALL_QUERY_EXECUTE_NORITO);
-                const register = this.assembler.allocRegister();
-                this.assembler.emitMove(register, 10);
-                return { kind: 'pointer', register, items: null, fieldNames: null, valueType: 'NoritoBytes' };
-            }
-            case 'soracloud_read_committed_state':
-            case 'soracloud_emit_state_mutation':
-            case 'soracloud_emit_mailbox_message':
-            case 'soracloud_append_journal':
-            case 'soracloud_publish_checkpoint':
-            case 'soracloud_read_secret':
-            case 'soracloud_read_credential':
-            case 'soracloud_egress_fetch':
-            case 'soracloud_read_config':
-            case 'soracloud_read_secret_envelope': {
-                if (expression.args.length !== 1) {
-                    throw new StudioCompileError(`${expression.name} expects (SoracloudRequest) in the browser compiler.`, expression.line, expression.column);
-                }
-                const spec = soracloudBuiltinSpec(expression.name);
-                const requestReg = this.compileExpressionAsTypedPointer(expression.args[0], 'SoracloudRequest', callStack, locals);
-                this.emitOnePointerSyscall(requestReg, spec.syscall);
-                const register = this.assembler.allocRegister();
-                this.assembler.emitMove(register, 10);
-                return { kind: 'pointer', register, items: null, fieldNames: null, valueType: 'SoracloudResponse' };
-            }
-            case 'call_contract': {
-                if (expression.args.length !== 3) {
-                    throw new StudioCompileError('call_contract expects (String|Blob, String|Blob, Json) in the browser compiler.', expression.line, expression.column);
-                }
-                const contractReg = this.compileExpressionAsStringOrBlobPointer(expression.args[0], callStack, locals, 'call_contract contract target');
-                const entrypointReg = this.compileExpressionAsStringOrBlobPointer(expression.args[1], callStack, locals, 'call_contract entrypoint');
-                const payloadReg = this.compileExpressionAsJsonPointer(expression.args[2], callStack, locals);
-                this.emitThreePointerSyscall(contractReg, entrypointReg, payloadReg, SYSCALL_CALL_CONTRACT);
-                const register = this.assembler.allocRegister();
-                this.assembler.emitMove(register, 10);
-                return { kind: 'pointer', register, items: null, fieldNames: null, valueType: 'NoritoBytes' };
-            }
-            case 'transfer_v1_batch_begin':
-            case 'transfer_v1_batch_end': {
-                if (expression.args.length !== 0) {
-                    throw new StudioCompileError(`${expression.name} expects no arguments in the browser compiler.`, expression.line, expression.column);
-                }
-                this.assembler.emitSyscall(expression.name === 'transfer_v1_batch_begin'
-                    ? SYSCALL_TRANSFER_V1_BATCH_BEGIN
-                    : SYSCALL_TRANSFER_V1_BATCH_END);
-                this.emitDiscardedVoidIntrinsicResult(this.assembler.allocRegister());
-                if (!allowVoidResult) {
-                    throw new StudioCompileError(`${expression.name} does not return a value in the browser compiler.`, expression.line, expression.column);
-                }
-                return null;
-            }
-            case 'transfer_batch': {
-                if (expression.args.length === 0) {
-                    throw new StudioCompileError('transfer_batch expects at least one entry in the browser compiler.', expression.line, expression.column);
-                }
-                this.assembler.emitSyscall(SYSCALL_TRANSFER_V1_BATCH_BEGIN);
-                const entryType = { kind: 'tuple', elements: ['AccountId', 'AccountId', 'AssetDefinitionId', 'int'] };
-                for (const entry of expression.args) {
-                    const localBinding = entry.kind === 'stateReference' ? locals.get(entry.name) : null;
-                    const binding = this.compileExpressionAsTupleBinding(entry, entryType, callStack, locals);
-                    const fromReg = this.bindingRegister(binding.items[0], ['pointer'], entry.line, entry.column, 'transfer_batch entry source must be AccountId in the browser compiler.');
-                    const toReg = this.bindingRegister(binding.items[1], ['pointer'], entry.line, entry.column, 'transfer_batch entry destination must be AccountId in the browser compiler.');
-                    const assetReg = this.bindingRegister(binding.items[2], ['pointer'], entry.line, entry.column, 'transfer_batch entry asset must be AssetDefinitionId in the browser compiler.');
-                    const amountInt = this.bindingRegister(binding.items[3], ['int'], entry.line, entry.column, 'transfer_batch entry amount must be int in the browser compiler.');
-                    const amountReg = this.emitNumericFromInt(amountInt);
-                    this.emitFourArgAssetSyscall(fromReg, toReg, assetReg, amountReg, SYSCALL_TRANSFER_ASSET);
-                    this.emitDiscardedVoidIntrinsicResult(this.deadTransferDiscardRegister(amountReg));
-                    this.assembler.releaseRegister(amountReg);
-                    if (binding !== localBinding) {
-                        this.releaseBindingRegisters(binding);
-                    }
-                    else if (binding.items[3].register === null && binding.items[3].spillFrameOffset !== undefined) {
-                        this.assembler.releaseRegister(amountInt);
-                    }
-                }
-                this.assembler.emitSyscall(SYSCALL_TRANSFER_V1_BATCH_END);
-                this.emitDiscardedVoidIntrinsicResult(this.assembler.allocRegister());
-                if (!allowVoidResult) {
-                    throw new StudioCompileError('transfer_batch does not return a value in the browser compiler.', expression.line, expression.column);
-                }
-                return null;
-            }
-            case 'axt_begin': {
-                if (expression.args.length !== 1) {
-                    throw new StudioCompileError('axt_begin expects (AxtDescriptor) in the browser compiler.', expression.line, expression.column);
-                }
-                this.emitPublishedTypedPointerExpressionIntoRegister(expression.args[0], 'AxtDescriptor', 10, callStack, locals);
-                this.assembler.emitSyscall(SYSCALL_AXT_BEGIN);
-                this.emitDiscardedVoidIntrinsicResult(this.deadArgumentRegisterAfterStatement(expression.args[0], locals, liveAfterStatement) ?? this.assembler.allocRegister());
-                if (!allowVoidResult) {
-                    throw new StudioCompileError('axt_begin does not return a value in the browser compiler.', expression.line, expression.column);
-                }
-                return null;
-            }
-            case 'axt_touch': {
-                if (expression.args.length !== 1 && expression.args.length !== 2) {
-                    throw new StudioCompileError('axt_touch expects (DataSpaceId[, Blob|bytes manifest]) in the browser compiler.', expression.line, expression.column);
-                }
-                this.emitPublishedTypedPointerExpressionIntoRegister(expression.args[0], 'DataSpaceId', 10, callStack, locals);
-                if (expression.args[1]) {
-                    this.emitPublishedNoritoBytesExpressionIntoRegister(expression.args[1], 11, callStack, locals);
-                }
-                else {
-                    this.assembler.emitMove(11, 0);
-                }
-                this.assembler.emitSyscall(SYSCALL_AXT_TOUCH);
-                this.emitDiscardedVoidIntrinsicResult(this.deadRematerializedTypedPointerRegisterAfterStatement(expression.args[0], 'DataSpaceId', locals, liveAfterStatement) ?? this.assembler.allocRegister());
-                if (!allowVoidResult) {
-                    throw new StudioCompileError('axt_touch does not return a value in the browser compiler.', expression.line, expression.column);
-                }
-                return null;
-            }
-            case 'verify_ds_proof': {
-                if (expression.args.length !== 1 && expression.args.length !== 2) {
-                    throw new StudioCompileError('verify_ds_proof expects (DataSpaceId[, ProofBlob]) in the browser compiler.', expression.line, expression.column);
-                }
-                this.emitPublishedTypedPointerExpressionIntoRegister(expression.args[0], 'DataSpaceId', 10, callStack, locals);
-                if (expression.args[1]) {
-                    this.emitPublishedTypedPointerExpressionIntoRegister(expression.args[1], 'ProofBlob', 11, callStack, locals);
-                }
-                else {
-                    this.assembler.emitMove(11, 0);
-                }
-                this.assembler.emitSyscall(SYSCALL_VERIFY_DS_PROOF);
-                this.emitDiscardedVoidIntrinsicResult(this.deadRematerializedTypedPointerRegisterAfterStatement(expression.args[0], 'DataSpaceId', locals, liveAfterStatement) ?? this.assembler.allocRegister());
-                if (!allowVoidResult) {
-                    throw new StudioCompileError('verify_ds_proof does not return a value in the browser compiler.', expression.line, expression.column);
-                }
-                return null;
-            }
-            case 'use_asset_handle': {
-                if (expression.args.length !== 2 && expression.args.length !== 3) {
-                    throw new StudioCompileError('use_asset_handle expects (AssetHandle, Blob|bytes intent[, ProofBlob]) in the browser compiler.', expression.line, expression.column);
-                }
-                this.emitPublishedTypedPointerExpressionIntoRegister(expression.args[0], 'AssetHandle', 10, callStack, locals);
-                this.emitPublishedNoritoBytesExpressionIntoRegister(expression.args[1], 11, callStack, locals);
-                if (expression.args[2]) {
-                    this.emitPublishedTypedPointerExpressionIntoRegister(expression.args[2], 'ProofBlob', 12, callStack, locals);
-                }
-                else {
-                    this.assembler.emitMove(12, 0);
-                }
-                this.assembler.emitSyscall(SYSCALL_USE_ASSET_HANDLE);
-                this.emitDiscardedVoidIntrinsicResult(this.assembler.allocRegister());
-                if (!allowVoidResult) {
-                    throw new StudioCompileError('use_asset_handle does not return a value in the browser compiler.', expression.line, expression.column);
-                }
-                return null;
-            }
-            case 'axt_commit': {
-                if (expression.args.length !== 0) {
-                    throw new StudioCompileError('axt_commit expects no arguments in the browser compiler.', expression.line, expression.column);
-                }
-                this.assembler.emitSyscall(SYSCALL_AXT_COMMIT);
-                this.emitDiscardedVoidIntrinsicResult(this.assembler.allocRegister());
-                if (!allowVoidResult) {
-                    throw new StudioCompileError('axt_commit does not return a value in the browser compiler.', expression.line, expression.column);
-                }
-                return null;
-            }
-            case 'subscription_bill':
-            case 'subscription_record_usage': {
-                if (expression.args.length !== 0) {
-                    throw new StudioCompileError(`${expression.name} expects no arguments in the browser compiler.`, expression.line, expression.column);
-                }
-                this.assembler.emitSyscall(expression.name === 'subscription_bill'
-                    ? SYSCALL_SUBSCRIPTION_BILL
-                    : SYSCALL_SUBSCRIPTION_RECORD_USAGE);
-                this.emitDiscardedVoidIntrinsicResult(this.assembler.allocRegister());
-                if (!allowVoidResult) {
-                    throw new StudioCompileError(`${expression.name} does not return a value in the browser compiler.`, expression.line, expression.column);
-                }
-                return null;
-            }
-            case 'build_submit_ballot_inline': {
-                if (expression.args.length !== 6) {
-                    throw new StudioCompileError('build_submit_ballot_inline expects (election_id, ciphertext, nullifier, backend, proof, vk) in the browser compiler.', expression.line, expression.column);
-                }
-                const instructionBytes = zkInlineBuilderInstructionBytesFromExpression(expression, this.rematerializableLiteralMapForLocals(locals));
-                const instructionHex = bytesToHex(instructionBytes);
-                this.deferBuilderLiteralDataRef(expression.args[2], locals, POINTER_TYPE_BLOB, 'build_submit_ballot_inline nullifier');
-                this.deferBuilderLiteralDataRef(expression.args[4], locals, POINTER_TYPE_BLOB, 'build_submit_ballot_inline proof');
-                this.deferBuilderLiteralDataRef(expression.args[5], locals, POINTER_TYPE_BLOB, 'build_submit_ballot_inline vk_ref');
-                this.emitBlobLiteralPointer(this.inlineBuilderLiteralWithLocals(expression.args[0], locals, 'build_submit_ballot_inline election_id'));
-                this.reserveLogicalBlobLiteral(this.inlineBuilderLiteralWithLocals(expression.args[1], locals, 'build_submit_ballot_inline ciphertext'));
-                this.emitBlobLiteralPointer(this.inlineBuilderLiteralWithLocals(expression.args[3], locals, 'build_submit_ballot_inline backend'));
-                const register = this.assembler.allocRegister();
-                this.emitNoritoBytesLiteralPointerIntoRegister(instructionHex, register);
-                return {
-                    kind: 'pointer',
-                    register,
-                    items: null,
-                    fieldNames: null,
-                    valueType: 'NoritoBytes',
-                    rematerializableBlobLiteral: null,
-                    rematerializableNoritoBytesLiteral: `0x${instructionHex}`,
-                };
-            }
-            case 'build_unshield_inline': {
-                if (expression.args.length !== 7) {
-                    throw new StudioCompileError('build_unshield_inline expects (asset, to, amount, inputs, backend, proof, vk) in the browser compiler.', expression.line, expression.column);
-                }
-                const amount = expression.args[2];
-                if (amount?.kind !== 'number') {
-                    throw new StudioCompileError('build_unshield_inline amount requires a compile-time integer literal in the browser compiler.', expression.line, expression.column);
-                }
-                const instructionBytes = zkInlineBuilderInstructionBytesFromExpression(expression, this.rematerializableLiteralMapForLocals(locals));
-                const instructionHex = bytesToHex(instructionBytes);
-                this.deferBuilderAssetDefinitionDataRef(expression.args[0], locals, 'build_unshield_inline asset');
-                this.deferBuilderAccountDataRef(expression.args[1], locals, 'build_unshield_inline to');
-                this.deferBuilderLiteralDataRef(expression.args[3], locals, POINTER_TYPE_BLOB, 'build_unshield_inline inputs');
-                this.deferBuilderLiteralDataRef(expression.args[5], locals, POINTER_TYPE_BLOB, 'build_unshield_inline proof');
-                this.deferBuilderLiteralDataRef(expression.args[6], locals, POINTER_TYPE_BLOB, 'build_unshield_inline vk_ref');
-                this.claimRegisterIfAvailable(3);
-                this.claimRegisterIfAvailable(4);
-                this.claimRegisterIfAvailable(5);
-                this.claimRegisterIfAvailable(6);
-                this.assembler.emitAddi(3, 0, 0);
-                this.emitRustLikeIntLiteral(4, amount.value);
-                this.emitBlobLiteralPointerIntoRegister(this.inlineBuilderLiteralWithLocals(expression.args[4], locals, 'build_unshield_inline backend'), 5);
-                this.emitNoritoBytesLiteralPointerIntoRegister(instructionHex, 6);
-                return {
-                    kind: 'pointer',
-                    register: 6,
-                    items: null,
-                    fieldNames: null,
-                    valueType: 'NoritoBytes',
-                    rematerializableBlobLiteral: null,
-                    rematerializableNoritoBytesLiteral: `0x${instructionHex}`,
-                };
-            }
-            case 'create_nfts_for_all_users': {
-                if (expression.args.length !== 0) {
-                    throw new StudioCompileError('create_nfts_for_all_users expects no arguments in the browser compiler.', expression.line, expression.column);
-                }
-                this.assembler.emitSyscall(SYSCALL_CREATE_NFTS_FOR_ALL_USERS);
-                this.emitDiscardedVoidIntrinsicResult(this.assembler.allocRegister());
-                if (!allowVoidResult) {
-                    throw new StudioCompileError('create_nfts_for_all_users does not return a value in the browser compiler.', expression.line, expression.column);
-                }
-                return null;
-            }
-            case 'set_execution_depth': {
-                if (expression.args.length !== 1) {
-                    throw new StudioCompileError('set_execution_depth expects exactly one int argument in the browser compiler.', expression.line, expression.column);
-                }
-                const valueReg = this.compileExpressionAsInt(expression.args[0], callStack, locals);
-                this.assembler.emitMove(10, valueReg);
-                this.assembler.emitSyscall(SYSCALL_SET_SMARTCONTRACT_EXECUTION_DEPTH);
-                this.emitDiscardedVoidIntrinsicResult(valueReg);
-                if (!allowVoidResult) {
-                    throw new StudioCompileError('set_execution_depth does not return a value in the browser compiler.', expression.line, expression.column);
-                }
-                return null;
-            }
-            case 'setvl': {
-                if (expression.args.length !== 1) {
-                    throw new StudioCompileError('setvl expects exactly one int argument in the browser compiler.', expression.line, expression.column);
-                }
-                const raw = this.resolveCompileTimeIntegerLiteral(expression.args[0]);
-                if (raw === null) {
-                    throw new StudioCompileError('setvl expects a literal int in range 0..=255 in the browser compiler.', expression.line, expression.column);
-                }
-                if (raw < 0 || raw > 255) {
-                    throw new StudioCompileError(`setvl value must be in range 0..=255, got ${raw} in the browser compiler.`, expression.line, expression.column);
-                }
-                const valueReg = this.compileExpressionAsInt(expression.args[0], callStack, locals);
-                this.assembler.emitArithmetic(OP_SETVL, 0, 0, raw);
-                this.emitDiscardedVoidIntrinsicResult(valueReg);
-                if (!allowVoidResult) {
-                    throw new StudioCompileError('setvl does not return a value in the browser compiler.', expression.line, expression.column);
-                }
-                return null;
-            }
-            case 'register_domain': {
-                if (expression.args.length !== 1) {
-                    throw new StudioCompileError('register_domain expects exactly one DomainId argument in the browser compiler.', expression.line, expression.column);
-                }
-                const domainLiteral = this.resolveRematerializableDomainLiteral(expression.args[0], locals);
-                if (domainLiteral !== null) {
-                    this.emitDomainLiteralPointerIntoRegister(domainLiteral, expression.line, expression.column, 10);
-                }
-                else {
-                    const domainReg = this.compileExpressionAsDomainPointer(expression.args[0], callStack, locals);
-                    this.assembler.emitMove(10, domainReg);
-                }
-                this.assembler.emitSyscall(SYSCALL_INPUT_PUBLISH_TLV);
-                this.assembler.emitSyscall(SYSCALL_REGISTER_DOMAIN);
-                this.emitDiscardedVoidIntrinsicResult(this.assembler.allocRegister());
-                if (!allowVoidResult) {
-                    throw new StudioCompileError('register_domain does not return a value in the browser compiler.', expression.line, expression.column);
-                }
-                return null;
-            }
-            case 'unregister_domain': {
-                if (expression.args.length !== 1) {
-                    throw new StudioCompileError('unregister_domain expects exactly one DomainId argument in the browser compiler.', expression.line, expression.column);
-                }
-                const domainLogicalReg = this.resolveRematerializableDomainLogicalRegister(expression.args[0], locals);
-                const domainLiteral = this.resolveRematerializableDomainLiteral(expression.args[0], locals);
-                const discardReg = domainLogicalReg ?? this.assembler.allocRegister();
-                if (domainLiteral !== null) {
-                    this.emitDomainLiteralPointerIntoRegister(domainLiteral, expression.line, expression.column, 10);
-                }
-                else {
-                    const domainReg = this.compileExpressionAsDomainPointer(expression.args[0], callStack, locals);
-                    this.assembler.emitMove(10, domainReg);
-                }
-                this.assembler.emitSyscall(SYSCALL_INPUT_PUBLISH_TLV);
-                this.assembler.emitSyscall(SYSCALL_UNREGISTER_DOMAIN);
-                this.emitDiscardedVoidIntrinsicResult(discardReg);
-                if (!allowVoidResult) {
-                    throw new StudioCompileError('unregister_domain does not return a value in the browser compiler.', expression.line, expression.column);
-                }
-                return null;
-            }
-            case 'register_account': {
-                if (expression.args.length !== 1) {
-                    throw new StudioCompileError('register_account expects exactly one AccountId argument in the browser compiler.', expression.line, expression.column);
-                }
-                const accountReg = this.compileExpressionAsAccountPointer(expression.args[0], callStack, locals);
-                this.emitOnePointerSyscall(accountReg, SYSCALL_REGISTER_ACCOUNT);
-                this.emitDiscardedVoidIntrinsicResult(this.assembler.allocRegister());
-                if (!allowVoidResult) {
-                    throw new StudioCompileError('register_account does not return a value in the browser compiler.', expression.line, expression.column);
-                }
-                return null;
-            }
-            case 'unregister_account': {
-                if (expression.args.length !== 1) {
-                    throw new StudioCompileError('unregister_account expects exactly one AccountId argument in the browser compiler.', expression.line, expression.column);
-                }
-                const accountReg = this.compileExpressionAsAccountPointer(expression.args[0], callStack, locals);
-                this.emitOnePointerSyscall(accountReg, SYSCALL_UNREGISTER_ACCOUNT);
-                this.emitDiscardedVoidIntrinsicResult(this.assembler.allocRegister());
-                if (!allowVoidResult) {
-                    throw new StudioCompileError('unregister_account does not return a value in the browser compiler.', expression.line, expression.column);
-                }
-                return null;
-            }
-            case 'add_signatory':
-            case 'remove_signatory': {
-                if (expression.args.length !== 2) {
-                    throw new StudioCompileError(`${expression.name} expects (AccountId, Json) in the browser compiler.`, expression.line, expression.column);
-                }
-                const accountReg = this.compileExpressionAsAccountPointer(expression.args[0], callStack, locals);
-                const signatoryReg = this.compileExpressionAsJsonPointer(expression.args[1], callStack, locals);
-                this.emitTwoPointerSyscall(accountReg, signatoryReg, expression.name === 'add_signatory'
-                    ? SYSCALL_ADD_SIGNATORY
-                    : SYSCALL_REMOVE_SIGNATORY);
-                this.emitDiscardedVoidIntrinsicResult(this.assembler.allocRegister());
-                if (!allowVoidResult) {
-                    throw new StudioCompileError(`${expression.name} does not return a value in the browser compiler.`, expression.line, expression.column);
-                }
-                return null;
-            }
-            case 'set_account_quorum': {
-                if (expression.args.length !== 2) {
-                    throw new StudioCompileError('set_account_quorum expects (AccountId, numeric) in the browser compiler.', expression.line, expression.column);
-                }
-                const accountReg = this.compileExpressionAsAccountPointer(expression.args[0], callStack, locals);
-                const quorumType = this.inferExpressionValueType(expression.args[1], locals);
-                let quorumReg;
-                if (isSemanticWideNumericType(quorumType)) {
-                    const numericReg = this.compileExpressionAsNumericPointer(expression.args[1], callStack, locals);
-                    quorumReg = this.emitNumericToInt(numericReg);
-                    this.releaseExpressionRegisterIfTemporary(numericReg, locals);
-                }
-                else {
-                    quorumReg = this.compileExpressionAsInt(expression.args[1], callStack, locals);
-                }
-                this.assembler.emitMove(10, accountReg);
-                this.assembler.emitMove(11, quorumReg);
-                this.assembler.emitSyscall(SYSCALL_INPUT_PUBLISH_TLV);
-                this.assembler.emitSyscall(SYSCALL_SET_ACCOUNT_QUORUM);
-                this.emitDiscardedVoidIntrinsicResult(this.isExpressionRegisterTemporary(quorumReg, locals)
-                    ? quorumReg
-                    : this.assembler.allocRegister());
-                if (!allowVoidResult) {
-                    throw new StudioCompileError('set_account_quorum does not return a value in the browser compiler.', expression.line, expression.column);
-                }
-                return null;
-            }
-            case 'unregister_asset': {
-                if (expression.args.length !== 1) {
-                    throw new StudioCompileError('unregister_asset expects exactly one AssetDefinitionId argument in the browser compiler.', expression.line, expression.column);
-                }
-                const assetReg = this.compileExpressionAsAssetDefinitionPointer(expression.args[0], callStack, locals);
-                this.emitOnePointerSyscall(assetReg, SYSCALL_UNREGISTER_ASSET);
-                this.emitDiscardedVoidIntrinsicResult(this.assembler.allocRegister());
-                if (!allowVoidResult) {
-                    throw new StudioCompileError('unregister_asset does not return a value in the browser compiler.', expression.line, expression.column);
-                }
-                return null;
-            }
-            case 'register_asset': {
-                if (expression.args.length !== 4) {
-                    throw new StudioCompileError('register_asset expects (AssetDefinitionId, string, int, int) in the browser compiler.', expression.line, expression.column);
-                }
-                const assetLiteral = this.resolveRematerializableAssetDefinitionLiteral(expression.args[0], locals);
-                if (assetLiteral !== null && expression.args[0].kind === 'call') {
-                    this.compileExpressionAsAssetDefinitionPointer(expression.args[0], callStack, locals, false);
-                }
-                const symbolReg = this.compileExpressionAsStringPointer(expression.args[1], callStack, locals);
-                const quantityType = this.inferExpressionValueType(expression.args[2], locals);
-                let quantityReg;
-                if (isSemanticWideNumericType(quantityType)) {
-                    quantityReg = this.compileExpressionAsNumericPointer(expression.args[2], callStack, locals);
-                }
-                else {
-                    const quantityIntReg = this.compileExpressionAsInt(expression.args[2], callStack, locals);
-                    quantityReg = this.emitNumericFromInt(quantityIntReg);
-                    this.releaseExpressionRegisterIfTemporary(quantityIntReg, locals);
-                }
-                const mintableReg = this.compileExpressionAsInt(expression.args[3], callStack, locals);
-                if (assetLiteral !== null) {
-                    this.emitRegisterAssetDefinitionLiteralSyscall(assetLiteral, symbolReg, quantityReg, mintableReg, expression.line, expression.column);
-                }
-                else {
-                    const assetReg = this.compileExpressionAsAssetDefinitionPointer(expression.args[0], callStack, locals);
-                    this.emitRegisterAssetDefinitionSyscall(assetReg, symbolReg, quantityReg, mintableReg);
-                }
-                this.emitDiscardedVoidIntrinsicResult(this.isExpressionRegisterTemporary(mintableReg, locals)
-                    ? mintableReg
-                    : this.isExpressionRegisterTemporary(quantityReg, locals)
-                    ? quantityReg
-                    : this.assembler.allocRegister());
-                if (!allowVoidResult) {
-                    throw new StudioCompileError('register_asset does not return a value in the browser compiler.', expression.line, expression.column);
-                }
-                return null;
-            }
-            case 'create_new_asset': {
-                if (expression.args.length !== 5) {
-                    throw new StudioCompileError('create_new_asset expects (AssetDefinitionId, string, int, AccountId, int) in the browser compiler.', expression.line, expression.column);
-                }
-                const assetReg = this.compileExpressionAsAssetDefinitionPointer(expression.args[0], callStack, locals);
-                const symbolReg = this.compileExpressionAsStringPointer(expression.args[1], callStack, locals);
-                const quantityType = this.inferExpressionValueType(expression.args[2], locals);
-                const quantityReg = isSemanticWideNumericType(quantityType)
-                    ? this.compileExpressionAsNumericPointer(expression.args[2], callStack, locals)
-                    : this.emitNumericFromInt(this.compileExpressionAsInt(expression.args[2], callStack, locals));
-                const accountReg = this.compileExpressionAsAccountPointer(expression.args[3], callStack, locals);
-                const mintableReg = this.compileExpressionAsInt(expression.args[4], callStack, locals);
-                this.emitRegisterAssetDefinitionSyscall(assetReg, symbolReg, quantityReg, mintableReg);
-                this.emitThreeArgAssetSyscall(accountReg, assetReg, quantityReg, SYSCALL_MINT_ASSET);
-                this.emitDiscardedVoidIntrinsicResult(this.assembler.allocRegister());
-                if (!allowVoidResult) {
-                    throw new StudioCompileError('create_new_asset does not return a value in the browser compiler.', expression.line, expression.column);
-                }
-                return null;
-            }
-            case 'register_peer':
-            case 'unregister_peer': {
-                if (expression.args.length !== 1) {
-                    throw new StudioCompileError(`${expression.name} expects exactly one Json argument in the browser compiler.`, expression.line, expression.column);
-                }
-                const jsonReg = this.compileExpressionAsJsonPointer(expression.args[0], callStack, locals);
-                this.emitOnePointerSyscall(jsonReg, expression.name === 'register_peer' ? SYSCALL_REGISTER_PEER : SYSCALL_UNREGISTER_PEER);
-                this.emitDiscardedVoidIntrinsicResult(this.assembler.allocRegister());
-                if (!allowVoidResult) {
-                    throw new StudioCompileError(`${expression.name} does not return a value in the browser compiler.`, expression.line, expression.column);
-                }
-                return null;
-            }
-            case 'create_trigger':
-            case 'register_trigger': {
-                if (expression.args.length !== 1) {
-                    throw new StudioCompileError(`${expression.name} expects exactly one Json argument in the browser compiler.`, expression.line, expression.column);
-                }
-                const jsonReg = this.compileExpressionAsJsonPointer(expression.args[0], callStack, locals);
-                this.emitOnePointerSyscall(jsonReg, SYSCALL_CREATE_TRIGGER);
-                this.emitDiscardedVoidIntrinsicResult(this.assembler.allocRegister());
-                if (!allowVoidResult) {
-                    throw new StudioCompileError(`${expression.name} does not return a value in the browser compiler.`, expression.line, expression.column);
-                }
-                return null;
-            }
-            case 'remove_trigger':
-            case 'unregister_trigger': {
-                if (expression.args.length !== 1) {
-                    throw new StudioCompileError(`${expression.name} expects exactly one Name argument in the browser compiler.`, expression.line, expression.column);
-                }
-                const nameReg = this.compileExpressionAsNamePointer(expression.args[0], callStack, locals);
-                this.emitOnePointerSyscall(nameReg, SYSCALL_REMOVE_TRIGGER);
-                this.emitDiscardedVoidIntrinsicResult(this.assembler.allocRegister());
-                if (!allowVoidResult) {
-                    throw new StudioCompileError(`${expression.name} does not return a value in the browser compiler.`, expression.line, expression.column);
-                }
-                return null;
-            }
-            case 'set_trigger_enabled': {
-                if (expression.args.length !== 2) {
-                    throw new StudioCompileError('set_trigger_enabled expects (Name, int) in the browser compiler.', expression.line, expression.column);
-                }
-                const nameReg = this.compileExpressionAsNamePointer(expression.args[0], callStack, locals);
-                const enabledReg = this.compileExpressionAsInt(expression.args[1], callStack, locals);
-                this.assembler.emitMove(10, nameReg);
-                this.assembler.emitMove(11, enabledReg);
-                this.assembler.emitSyscall(SYSCALL_INPUT_PUBLISH_TLV);
-                this.assembler.emitSyscall(SYSCALL_SET_TRIGGER_ENABLED);
-                this.emitDiscardedVoidIntrinsicResult(this.assembler.allocRegister());
-                if (!allowVoidResult) {
-                    throw new StudioCompileError('set_trigger_enabled does not return a value in the browser compiler.', expression.line, expression.column);
-                }
-                return null;
-            }
-            case 'create_role': {
-                if (expression.args.length !== 2) {
-                    throw new StudioCompileError('create_role expects (Name, Json) in the browser compiler.', expression.line, expression.column);
-                }
-                const nameReg = this.compileExpressionAsNamePointer(expression.args[0], callStack, locals);
-                const jsonReg = this.compileExpressionAsJsonPointer(expression.args[1], callStack, locals);
-                this.emitTwoPointerSyscall(nameReg, jsonReg, SYSCALL_CREATE_ROLE);
-                this.emitDiscardedVoidIntrinsicResult(this.assembler.allocRegister());
-                if (!allowVoidResult) {
-                    throw new StudioCompileError('create_role does not return a value in the browser compiler.', expression.line, expression.column);
-                }
-                return null;
-            }
-            case 'delete_role': {
-                if (expression.args.length !== 1) {
-                    throw new StudioCompileError('delete_role expects exactly one Name argument in the browser compiler.', expression.line, expression.column);
-                }
-                const nameReg = this.compileExpressionAsNamePointer(expression.args[0], callStack, locals);
-                this.emitOnePointerSyscall(nameReg, SYSCALL_DELETE_ROLE);
-                this.emitDiscardedVoidIntrinsicResult(this.assembler.allocRegister());
-                if (!allowVoidResult) {
-                    throw new StudioCompileError('delete_role does not return a value in the browser compiler.', expression.line, expression.column);
-                }
-                return null;
-            }
-            case 'grant_role':
-            case 'revoke_role': {
-                if (expression.args.length !== 2) {
-                    throw new StudioCompileError('grant/revoke_role expects (AccountId, Name) in the browser compiler.', expression.line, expression.column);
-                }
-                const accountReg = this.compileExpressionAsAccountPointer(expression.args[0], callStack, locals);
-                const nameReg = this.compileExpressionAsNamePointer(expression.args[1], callStack, locals);
-                this.emitTwoPointerSyscall(accountReg, nameReg, expression.name === 'grant_role' ? SYSCALL_GRANT_ROLE : SYSCALL_REVOKE_ROLE);
-                this.emitDiscardedVoidIntrinsicResult(this.assembler.allocRegister());
-                if (!allowVoidResult) {
-                    throw new StudioCompileError(`${expression.name} does not return a value in the browser compiler.`, expression.line, expression.column);
-                }
-                return null;
-            }
-            case 'grant_permission':
-            case 'revoke_permission': {
-                if (expression.args.length !== 2) {
-                    throw new StudioCompileError('grant/revoke_permission expects (AccountId, Name|Json) in the browser compiler.', expression.line, expression.column);
-                }
-                const accountReg = this.compileExpressionAsAccountPointer(expression.args[0], callStack, locals);
-                const tokenReg = this.compileExpressionAsNameOrJsonPointer(expression.args[1], callStack, locals, 'grant/revoke_permission token');
-                this.emitTwoPointerSyscall(accountReg, tokenReg, expression.name === 'grant_permission' ? SYSCALL_GRANT_PERMISSION : SYSCALL_REVOKE_PERMISSION);
-                this.emitDiscardedVoidIntrinsicResult(this.assembler.allocRegister());
-                if (!allowVoidResult) {
-                    throw new StudioCompileError(`${expression.name} does not return a value in the browser compiler.`, expression.line, expression.column);
-                }
-                return null;
-            }
-            case 'transfer_domain': {
-                if (expression.args.length !== 3) {
-                    throw new StudioCompileError('transfer_domain expects (AccountId, DomainId, AccountId) in the browser compiler.', expression.line, expression.column);
-                }
-                const toReg = this.compileExpressionAsAccountPointer(expression.args[2], callStack, locals);
-                const domainLiteral = this.resolveRematerializableDomainLiteral(expression.args[1], locals)
-                    ?? this.resolveRematerializableNameLiteral(expression.args[1], locals);
-                if (domainLiteral !== null) {
-                    this.emitDomainLiteralPointerIntoRegister(domainLiteral, expression.line, expression.column, 10);
-                }
-                else {
-                    const domainReg = this.compileExpressionAsDomainPointer(expression.args[1], callStack, locals);
-                    this.assembler.emitMove(10, domainReg);
-                }
-                this.assembler.emitSyscall(SYSCALL_INPUT_PUBLISH_TLV);
-                this.assembler.emitMove(12, 10);
-                this.assembler.emitMove(11, toReg);
-                this.assembler.emitMove(10, 11);
-                this.assembler.emitSyscall(SYSCALL_INPUT_PUBLISH_TLV);
-                this.assembler.emitMove(11, 10);
-                this.assembler.emitMove(10, 12);
-                this.assembler.emitSyscall(SYSCALL_TRANSFER_DOMAIN);
-                this.emitDiscardedVoidIntrinsicResult(toReg);
-                if (!allowVoidResult) {
-                    throw new StudioCompileError('transfer_domain does not return a value in the browser compiler.', expression.line, expression.column);
-                }
-                return null;
-            }
-            case 'trigger_event': {
-                if (expression.args.length !== 0) {
-                    throw new StudioCompileError('trigger_event expects no arguments in the browser compiler.', expression.line, expression.column);
-                }
-                const keyReg = this.emitNameLiteralPointer(TRIGGER_EVENT_PUBLIC_INPUT_KEY);
-                this.assembler.emitMove(10, keyReg);
-                this.assembler.emitSyscall(SYSCALL_INPUT_PUBLISH_TLV);
-                this.assembler.emitSyscall(SYSCALL_GET_PUBLIC_INPUT);
-                const register = this.assembler.allocRegister();
-                this.assembler.emitMove(register, 10);
-                return { kind: 'pointer', register, items: null, fieldNames: null, valueType: 'Json' };
-            }
-            case 'resolve_account_alias': {
-                if (expression.args.length !== 1) {
-                    throw new StudioCompileError('resolve_account_alias expects exactly one alias argument in the browser compiler.', expression.line, expression.column);
-                }
-                const aliasReg = this.compileExpressionAsNoritoBytesPointer(expression.args[0], callStack, locals);
-                this.assembler.emitMove(10, aliasReg);
-                this.assembler.emitSyscall(SYSCALL_INPUT_PUBLISH_TLV);
-                this.assembler.emitSyscall(SYSCALL_RESOLVE_ACCOUNT_ALIAS);
-                const register = this.assembler.allocRegister();
-                this.assembler.emitMove(register, 10);
-                return { kind: 'pointer', register, items: null, fieldNames: null, valueType: 'AccountId' };
-            }
-            case 'json_get_int': {
-                if (expression.args.length !== 2) {
-                    throw new StudioCompileError('json_get_int expects (Json, Name) in the browser compiler.', expression.line, expression.column);
-                }
-                const jsonReg = this.compileExpressionAsJsonPointer(expression.args[0], callStack, locals);
-                const keyReg = this.compileExpressionAsNamePointer(expression.args[1], callStack, locals);
-                const register = this.emitJsonFieldLookup(jsonReg, keyReg, SYSCALL_JSON_GET_I64);
-                return { kind: 'int', register, items: null, fieldNames: null, valueType: 'int' };
-            }
-            case 'json_get_json': {
-                if (expression.args.length !== 2) {
-                    throw new StudioCompileError('json_get_json expects (Json, Name) in the browser compiler.', expression.line, expression.column);
-                }
-                const jsonReg = this.compileExpressionAsJsonPointer(expression.args[0], callStack, locals);
-                const keyReg = this.compileExpressionAsNamePointer(expression.args[1], callStack, locals);
-                const register = this.emitJsonFieldLookup(jsonReg, keyReg, SYSCALL_JSON_GET_JSON);
-                return { kind: 'pointer', register, items: null, fieldNames: null, valueType: 'Json' };
-            }
-            case 'json_get_name': {
-                if (expression.args.length !== 2) {
-                    throw new StudioCompileError('json_get_name expects (Json, Name) in the browser compiler.', expression.line, expression.column);
-                }
-                const jsonReg = this.compileExpressionAsJsonPointer(expression.args[0], callStack, locals);
-                const keyReg = this.compileExpressionAsNamePointer(expression.args[1], callStack, locals);
-                const register = this.emitJsonFieldLookup(jsonReg, keyReg, SYSCALL_JSON_GET_NAME);
-                return { kind: 'pointer', register, items: null, fieldNames: null, valueType: 'Name' };
-            }
-            case 'json_get_account_id': {
-                if (expression.args.length !== 2) {
-                    throw new StudioCompileError('json_get_account_id expects (Json, Name) in the browser compiler.', expression.line, expression.column);
-                }
-                const jsonReg = this.compileExpressionAsJsonPointer(expression.args[0], callStack, locals);
-                const keyReg = this.compileExpressionAsNamePointer(expression.args[1], callStack, locals);
-                const register = this.emitJsonFieldLookup(jsonReg, keyReg, SYSCALL_JSON_GET_ACCOUNT_ID);
-                return { kind: 'pointer', register, items: null, fieldNames: null, valueType: 'AccountId' };
-            }
-            case 'json_get_asset_definition_id': {
-                if (expression.args.length !== 2) {
-                    throw new StudioCompileError('json_get_asset_definition_id expects (Json, Name) in the browser compiler.', expression.line, expression.column);
-                }
-                const jsonReg = this.compileExpressionAsJsonPointer(expression.args[0], callStack, locals);
-                const keyReg = this.compileExpressionAsNamePointer(expression.args[1], callStack, locals);
-                const register = this.emitJsonFieldLookup(jsonReg, keyReg, SYSCALL_JSON_GET_ASSET_DEFINITION_ID);
-                return { kind: 'pointer', register, items: null, fieldNames: null, valueType: 'AssetDefinitionId' };
-            }
-            case 'contains': {
-                if (expression.args.length !== 2) {
-                    throw new StudioCompileError('contains expects (Map<K,V>, K) in the browser compiler.', expression.line, expression.column);
-                }
-                const mapRef = this.resolveMapReference(expression.args[0], locals, callStack);
-                const keyReg = mapRef.storage === 'local'
-                    ? this.compileLocalMapKey(expression.args[1], mapRef.type.key, callStack, locals)
-                    : this.compileMapKey(expression.args[1], mapRef.type.key, callStack, locals);
-                const register = this.emitMapContainsRegister(mapRef, keyReg);
-                this.releaseMapReferenceIfTemporary(mapRef);
-                return { kind: 'int', register, items: null, fieldNames: null, valueType: 'bool' };
-            }
-            case 'get_or':
-            case 'get_or_default': {
-                if (expression.name === 'get_or_default' && expression.args.length !== 3) {
-                    throw new StudioCompileError('get_or_default expects (Map<K,V>, K, V) in the browser compiler.', expression.line, expression.column);
-                }
-                if (expression.name === 'get_or' && expression.args.length !== 2 && expression.args.length !== 3) {
-                    throw new StudioCompileError('get_or expects (Map<K,V>, K[, V]) in the browser compiler.', expression.line, expression.column);
-                }
-                const mapRef = this.resolveMapReference(expression.args[0], locals, callStack);
-                const defaultExpression = expression.args[2]
-                    ?? (mapRef.type.value === 'int'
-                        ? { kind: 'number', value: 0, line: expression.line, column: expression.column }
-                        : null);
-                if (!defaultExpression) {
-                    throw new StudioCompileError(`${expression.name} requires an explicit default for map value type \`${renderValueType(mapRef.type.value)}\` in the browser compiler.`, expression.line, expression.column);
-                }
-                if (mapRef.storage === 'local' && (mapRef.type.value === 'int' || mapRef.type.value === 'bool')) {
-                    const result = this.compileLocalMapGetOrBinding(mapRef, expression.args[1], defaultExpression, callStack, locals, expression.line, expression.column);
-                    this.releaseMapReferenceIfTemporary(mapRef);
-                    return result;
-                }
-                const keyReg = mapRef.storage === 'local'
-                    ? this.compileLocalMapKey(expression.args[1], mapRef.type.key, callStack, locals)
-                    : this.compileMapKey(expression.args[1], mapRef.type.key, callStack, locals);
-                const result = this.createBindingForType(mapRef.type.value);
-                const existingJump = this.emitMapPresentBranch(mapRef, keyReg);
-                const defaultBinding = this.compileExpressionAsBindingForType(defaultExpression, mapRef.type.value, callStack, locals);
-                this.moveBinding(result, defaultBinding, expression.line, expression.column);
-                const endJump = this.assembler.reserveControlTransferStub();
-                const existingPc = this.assembler.currentPc();
-                this.assembler.patchBranch(existingJump, existingPc);
-                const existingBinding = this.compileMapReadBinding(mapRef, keyReg, expression.line, expression.column);
-                this.moveBinding(result, existingBinding, expression.line, expression.column);
-                this.assembler.patchJumpTransferStub(endJump, this.assembler.currentPc());
-                this.releaseMapReferenceIfTemporary(mapRef);
-                return result;
-            }
-            case 'ensure': {
-                if (expression.args.length !== 2 && expression.args.length !== 3) {
-                    throw new StudioCompileError('ensure expects (Map<K,V>, K[, V]) in the browser compiler.', expression.line, expression.column);
-                }
-                const mapRef = this.resolveMapReference(expression.args[0], locals, callStack);
-                const defaultExpression = expression.args[2]
-                    ?? (mapRef.type.value === 'int' || mapRef.type.value === 'bool'
-                        ? { kind: 'number', value: 0, line: expression.line, column: expression.column }
-                        : null);
-                if (!defaultExpression) {
-                    throw new StudioCompileError(`ensure requires an explicit default for map value type \`${renderValueType(mapRef.type.value)}\` in the browser compiler.`, expression.line, expression.column);
-                }
-                if (mapRef.storage !== 'local' && (mapRef.type.value === 'int' || mapRef.type.value === 'bool')) {
-                    const keyReg = this.compileMapKey(expression.args[1], mapRef.type.key, callStack, locals);
-                    return this.compileDurableMapEnsureBinding(mapRef, keyReg, defaultExpression, callStack, locals, expression.line, expression.column);
-                }
-                const keyReg = this.compileLocalMapKey(expression.args[1], mapRef.type.key, callStack, locals);
-                const result = this.createBindingForType(mapRef.type.value);
-                const existingJump = this.emitMapPresentBranch(mapRef, keyReg);
-                const defaultBinding = this.compileExpressionAsBindingForType(defaultExpression, mapRef.type.value, callStack, locals);
-                if (mapRef.storage === 'local') {
-                    this.emitLocalMapSetBinding(mapRef.binding.register, keyReg, mapRef.type.value, defaultBinding, expression.line, expression.column);
-                }
-                else if (mapRef.storage === 'stateHandle') {
-                    this.emitStateHandleMapSetBinding(this.requireStateMapHandleLeafRegisters(mapRef, expression.line, expression.column), keyReg, mapRef.type.key, mapRef.type.value, defaultBinding, expression.line, expression.column);
-                }
-                else {
-                    this.emitStateMapSetBinding(mapRef.name, keyReg, mapRef.type.key, mapRef.type.value, defaultBinding);
-                }
-                this.moveBinding(result, defaultBinding, expression.line, expression.column);
-                const endJump = this.assembler.reserveControlTransferStub();
-                const existingPc = this.assembler.currentPc();
-                this.assembler.patchBranch(existingJump, existingPc);
-                const existingBinding = this.compileMapReadBinding(mapRef, keyReg, expression.line, expression.column);
-                this.moveBinding(result, existingBinding, expression.line, expression.column);
-                this.assembler.patchJumpTransferStub(endJump, this.assembler.currentPc());
-                this.releaseMapReferenceIfTemporary(mapRef);
-                return result;
-            }
-            case 'isqrt': {
-                if (expression.args.length !== 1) {
-                    throw new StudioCompileError('isqrt expects exactly one int argument in the browser compiler.', expression.line, expression.column);
-                }
-                const value = this.compileExpressionAsInt(expression.args[0], callStack, locals);
-                const register = this.assembler.allocRegister();
-                this.assembler.emitArithmetic(OP_ISQRT, register, value, 0);
-                return { kind: 'int', register, items: null, fieldNames: null, valueType: 'int' };
-            }
-            case 'abs': {
-                if (expression.args.length !== 1) {
-                    throw new StudioCompileError('abs expects exactly one int argument in the browser compiler.', expression.line, expression.column);
-                }
-                const value = this.compileExpressionAsInt(expression.args[0], callStack, locals);
-                const register = this.assembler.allocRegister();
-                this.assembler.emitArithmetic(OP_ABS, register, value, 0);
-                return { kind: 'int', register, items: null, fieldNames: null, valueType: 'int' };
-            }
-            case 'min':
-            case 'max':
-            case 'mean':
-            case 'div_ceil':
-            case 'gcd': {
-                if (expression.args.length !== 2) {
-                    throw new StudioCompileError(`\`${expression.name}\` expects exactly two int arguments in the browser compiler.`, expression.line, expression.column);
-                }
-                const left = this.compileExpressionAsInt(expression.args[0], callStack, locals);
-                const right = this.compileExpressionAsInt(expression.args[1], callStack, locals);
-                const register = this.assembler.allocRegister();
-                const opcode = expression.name === 'min'
-                    ? OP_MIN
-                    : expression.name === 'max'
-                        ? OP_MAX
-                        : expression.name === 'mean'
-                            ? OP_MEAN
-                            : expression.name === 'div_ceil'
-                                ? OP_DIV_CEIL
-                                : OP_GCD;
-                this.assembler.emitArithmetic(opcode, register, left, right);
-                return { kind: 'int', register, items: null, fieldNames: null, valueType: 'int' };
-            }
-            case 'mint_asset': {
-                if (expression.args.length !== 3) {
-                    throw new StudioCompileError('mint_asset expects (AccountId, AssetDefinitionId, numeric) in the browser compiler.', expression.line, expression.column);
-                }
-                const accountReg = this.compileExpressionAsAccountPointer(expression.args[0], callStack, locals);
-                const assetReg = this.compileExpressionAsAssetDefinitionPointer(expression.args[1], callStack, locals);
-                const amountType = this.inferExpressionValueType(expression.args[2], locals);
-                const amountReg = isSemanticWideNumericType(amountType)
-                    ? this.compileExpressionAsNumericPointer(expression.args[2], callStack, locals)
-                    : this.emitNumericFromInt(this.compileExpressionAsInt(expression.args[2], callStack, locals));
-                this.emitThreeArgAssetSyscall(accountReg, assetReg, amountReg, SYSCALL_MINT_ASSET);
-                if (!allowVoidResult) {
-                    throw new StudioCompileError('mint_asset does not return a value in the browser compiler.', expression.line, expression.column);
-                }
-                return null;
-            }
-            case 'transfer_asset': {
-                if (expression.args.length !== 4) {
-                    throw new StudioCompileError('transfer_asset expects (AccountId, AccountId, AssetDefinitionId, numeric) in the browser compiler.', expression.line, expression.column);
-                }
-                const fromReg = this.compileExpressionAsAccountPointer(expression.args[0], callStack, locals);
-                const toReg = this.compileExpressionAsAccountPointer(expression.args[1], callStack, locals);
-                const assetReg = this.compileExpressionAsAssetDefinitionPointer(expression.args[2], callStack, locals);
-                const amountType = this.inferExpressionValueType(expression.args[3], locals);
-                const amountReg = isSemanticWideNumericType(amountType)
-                    ? this.compileExpressionAsNumericPointer(expression.args[3], callStack, locals)
-                    : this.emitNumericFromInt(this.compileExpressionAsInt(expression.args[3], callStack, locals));
-                this.emitFourArgAssetSyscall(fromReg, toReg, assetReg, amountReg, SYSCALL_TRANSFER_ASSET);
-                if (!allowVoidResult) {
-                    throw new StudioCompileError('transfer_asset does not return a value in the browser compiler.', expression.line, expression.column);
-                }
-                return null;
-            }
-            case 'set_account_detail': {
-                if (expression.args.length !== 3) {
-                    throw new StudioCompileError('set_account_detail expects (AccountId, Name, Json) in the browser compiler.', expression.line, expression.column);
-                }
-                const accountReg = this.compileExpressionAsAccountPointer(expression.args[0], callStack, locals);
-                const keyReg = this.compileExpressionAsNamePointer(expression.args[1], callStack, locals);
-                const valueReg = this.compileExpressionAsJsonBytesPointer(expression.args[2], callStack, locals);
-                this.emitThreePointerSyscall(accountReg, keyReg, valueReg, SYSCALL_SET_ACCOUNT_DETAIL);
-                if (!allowVoidResult) {
-                    throw new StudioCompileError('set_account_detail does not return a value in the browser compiler.', expression.line, expression.column);
-                }
-                return null;
-            }
-            case 'burn_asset': {
-                if (expression.args.length !== 3) {
-                    throw new StudioCompileError('burn_asset expects (AccountId, AssetDefinitionId, numeric) in the browser compiler.', expression.line, expression.column);
-                }
-                const accountReg = this.compileExpressionAsAccountPointer(expression.args[0], callStack, locals);
-                const assetReg = this.compileExpressionAsAssetDefinitionPointer(expression.args[1], callStack, locals);
-                const amountType = this.inferExpressionValueType(expression.args[2], locals);
-                const amountReg = isSemanticWideNumericType(amountType)
-                    ? this.compileExpressionAsNumericPointer(expression.args[2], callStack, locals)
-                    : this.emitNumericFromInt(this.compileExpressionAsInt(expression.args[2], callStack, locals));
-                this.emitThreeArgAssetSyscall(accountReg, assetReg, amountReg, SYSCALL_BURN_ASSET);
-                if (!allowVoidResult) {
-                    throw new StudioCompileError('burn_asset does not return a value in the browser compiler.', expression.line, expression.column);
-                }
-                return null;
-            }
-            case 'nft_mint_asset': {
-                if (expression.args.length !== 2) {
-                    throw new StudioCompileError('nft_mint_asset expects (NftId, AccountId) in the browser compiler.', expression.line, expression.column);
-                }
-                const nftLiteral = this.resolveRematerializableNftLiteral(expression.args[0], locals);
-                const ownerLiteral = this.resolveRematerializableAccountLiteral(expression.args[1], locals);
-                if (nftLiteral !== null && ownerLiteral !== null && isDirectAccountPointerLiteral(ownerLiteral)) {
-                    this.emitNftMintAssetLiteralSyscall(nftLiteral, ownerLiteral, expression.line, expression.column);
-                    this.emitDiscardedVoidIntrinsicResult(this.assembler.allocRegister());
-                    if (!allowVoidResult) {
-                        throw new StudioCompileError('nft_mint_asset does not return a value in the browser compiler.', expression.line, expression.column);
-                    }
-                    return null;
-                }
-                const nftReg = this.compileExpressionAsNftPointer(expression.args[0], callStack, locals);
-                const ownerReg = this.compileExpressionAsAccountPointer(expression.args[1], callStack, locals);
-                this.emitTwoPointerSyscall(nftReg, ownerReg, SYSCALL_NFT_MINT_ASSET);
-                this.emitDiscardedVoidIntrinsicResult(this.deadArgumentRegisterAfterStatement(expression.args[0], locals, liveAfterStatement) ?? this.assembler.allocRegister());
-                if (!allowVoidResult) {
-                    throw new StudioCompileError('nft_mint_asset does not return a value in the browser compiler.', expression.line, expression.column);
-                }
-                return null;
-            }
-            case 'nft_set_metadata': {
-                if (expression.args.length !== 3) {
-                    throw new StudioCompileError('nft_set_metadata expects (NftId, Name, Json) in the browser compiler.', expression.line, expression.column);
-                }
-                const nftLiteral = this.resolveRematerializableNftLiteral(expression.args[0], locals);
-                const keyLiteral = this.resolveRematerializableNameLiteral(expression.args[1], locals);
-                const jsonLiteral = directJsonLiteralTextFromExpression(expression.args[2]);
-                if (nftLiteral !== null && keyLiteral !== null && jsonLiteral !== null) {
-                    this.emitNftSetMetadataLiteralSyscall(nftLiteral, keyLiteral, jsonLiteral, expression.line, expression.column);
-                    this.emitDiscardedVoidIntrinsicResult(this.deadRematerializedNftRegisterAfterStatement(expression.args[0], locals, liveAfterStatement)
-                        ?? this.deadLogicalPointerLocalRegisterAfterStatement(locals, liveAfterStatement)
-                        ?? this.rustNftSetMetadataLiveNftDiscardRegister()
-                        ?? this.assembler.allocRegister());
-                    if (!allowVoidResult) {
-                        throw new StudioCompileError('nft_set_metadata does not return a value in the browser compiler.', expression.line, expression.column);
-                    }
-                    return null;
-                }
-                const nftReg = this.compileExpressionAsNftPointer(expression.args[0], callStack, locals);
-                const keyReg = this.compileExpressionAsNamePointer(expression.args[1], callStack, locals);
-                const jsonReg = this.compileExpressionAsJsonPointer(expression.args[2], callStack, locals);
-                this.emitThreePointerSyscall(nftReg, keyReg, jsonReg, SYSCALL_NFT_SET_METADATA);
-                this.emitDiscardedVoidIntrinsicResult(this.deadArgumentRegisterAfterStatement(expression.args[0], locals, liveAfterStatement) ?? this.assembler.allocRegister());
-                if (!allowVoidResult) {
-                    throw new StudioCompileError('nft_set_metadata does not return a value in the browser compiler.', expression.line, expression.column);
-                }
-                return null;
-            }
-            case 'nft_burn_asset': {
-                if (expression.args.length !== 1) {
-                    throw new StudioCompileError('nft_burn_asset expects (NftId) in the browser compiler.', expression.line, expression.column);
-                }
-                const nftLiteral = this.resolveRematerializableNftLiteral(expression.args[0], locals);
-                if (nftLiteral !== null) {
-                    this.emitNftBurnAssetLiteralSyscall(nftLiteral, expression.line, expression.column);
-                    this.emitDiscardedVoidIntrinsicResult(this.deadRematerializedNftRegisterAfterStatement(expression.args[0], locals, liveAfterStatement)
-                        ?? this.deadLogicalPointerLocalRegisterAfterStatement(locals, liveAfterStatement)
-                        ?? this.assembler.allocRegister());
-                    if (!allowVoidResult) {
-                        throw new StudioCompileError('nft_burn_asset does not return a value in the browser compiler.', expression.line, expression.column);
-                    }
-                    return null;
-                }
-                const nftReg = this.compileExpressionAsNftPointer(expression.args[0], callStack, locals);
-                this.emitOnePointerSyscall(nftReg, SYSCALL_NFT_BURN_ASSET);
-                this.emitDiscardedVoidIntrinsicResult(this.deadArgumentRegisterAfterStatement(expression.args[0], locals, liveAfterStatement) ?? this.assembler.allocRegister());
-                if (!allowVoidResult) {
-                    throw new StudioCompileError('nft_burn_asset does not return a value in the browser compiler.', expression.line, expression.column);
-                }
-                return null;
-            }
-            case 'nft_transfer_asset': {
-                if (expression.args.length !== 3) {
-                    throw new StudioCompileError('nft_transfer_asset expects (AccountId, NftId, AccountId) in the browser compiler.', expression.line, expression.column);
-                }
-                const fromLiteral = this.resolveRematerializableAccountLiteral(expression.args[0], locals);
-                const nftLiteral = this.resolveRematerializableNftLiteral(expression.args[1], locals);
-                const toLiteral = this.resolveRematerializableAccountLiteral(expression.args[2], locals);
-                if (fromLiteral !== null && nftLiteral !== null && toLiteral !== null
-                    && isDirectAccountPointerLiteral(fromLiteral)
-                    && isDirectAccountPointerLiteral(toLiteral)) {
-                    this.emitNftTransferAssetLiteralSyscall(fromLiteral, nftLiteral, toLiteral, expression.line, expression.column);
-                    this.emitDiscardedVoidIntrinsicResult(this.deadRematerializedAccountRegisterAfterStatement(expression.args[2], locals, liveAfterStatement)
-                        ?? this.deadRematerializedAccountRegisterAfterStatement(expression.args[0], locals, liveAfterStatement)
-                        ?? this.deadRematerializedNftRegisterAfterStatement(expression.args[1], locals, liveAfterStatement)
-                        ?? this.assembler.allocRegister());
-                    if (!allowVoidResult) {
-                        throw new StudioCompileError('nft_transfer_asset does not return a value in the browser compiler.', expression.line, expression.column);
-                    }
-                    return null;
-                }
-                const fromReg = this.compileExpressionAsAccountPointer(expression.args[0], callStack, locals);
-                const nftReg = this.compileExpressionAsNftPointer(expression.args[1], callStack, locals);
-                const toReg = this.compileExpressionAsAccountPointer(expression.args[2], callStack, locals);
-                this.emitThreePointerSyscall(fromReg, nftReg, toReg, SYSCALL_NFT_TRANSFER_ASSET);
-                this.emitDiscardedVoidIntrinsicResult(this.deadArgumentRegisterAfterStatement(expression.args[2], locals, liveAfterStatement) ?? this.assembler.allocRegister());
-                if (!allowVoidResult) {
-                    throw new StudioCompileError('nft_transfer_asset does not return a value in the browser compiler.', expression.line, expression.column);
-                }
-                return null;
-            }
-            default:
-                return this.inlineFunctionCall(expression, callStack, locals, allowVoidResult);
+        const transferBatchBoundarySpec = transferBatchBoundaryBuiltinSpec(expression.name);
+        if (transferBatchBoundarySpec !== null) {
+            if (expression.args.length !== 0) {
+                throw new StudioCompileError(`${transferBatchBoundarySpec.message} in the browser compiler.`, expression.line, expression.column);
+            }
+            this.assembler.emitSyscall(transferBatchBoundarySpec.syscall);
+            this.emitDiscardedVoidIntrinsicResult(this.assembler.allocRegister());
+            if (!allowVoidResult) {
+                throw new StudioCompileError(`${expression.name} does not return a value in the browser compiler.`, expression.line, expression.column);
+            }
+            return null;
         }
+        const transferBatchSpec = transferBatchBuiltinSpec(expression.name);
+        if (transferBatchSpec !== null) {
+            return this.compileTransferBatchCall(expression, transferBatchSpec, callStack, locals, allowVoidResult);
+        }
+        const stateHostSpec = stateHostBuiltinSpec(expression.name);
+        if (stateHostSpec !== null) {
+            return this.compileStateHostBuiltinCall(expression, stateHostSpec, callStack, locals, allowVoidResult, liveAfterStatement);
+        }
+        const axtSpec = axtBuiltinSpec(expression.name);
+        if (axtSpec !== null) {
+            return this.compileAxtBuiltinCall(expression, axtSpec, callStack, locals, allowVoidResult, liveAfterStatement);
+        }
+        const intArithmeticSpec = intArithmeticBuiltinSpec(expression.name);
+        if (intArithmeticSpec !== null) {
+            return this.compileIntArithmeticBuiltinCall(expression, intArithmeticSpec, callStack, locals);
+        }
+        const vectorSpec = vectorBuiltinSpec(expression.name);
+        if (vectorSpec !== null) {
+            return this.compileVectorBuiltinCall(expression, vectorSpec, callStack, locals, allowVoidResult);
+        }
+        const assertionLoggingSpec = assertionLoggingBuiltinSpec(expression.name);
+        if (assertionLoggingSpec !== null) {
+            return this.compileAssertionLoggingBuiltinCall(expression, assertionLoggingSpec, callStack, locals, allowVoidResult, liveAfterStatement);
+        }
+        return this.inlineFunctionCall(expression, callStack, locals, allowVoidResult);
     }
     rustNftSetMetadataLiveNftDiscardRegister() {
         return this.directVoidReturnHalts && this.assembler.canClaimRegister(24)
@@ -27560,7 +28190,7 @@ class StudioCodeGenerator {
     tryCompileNumericPathHelperLocalBinding(expression, valueType, callStack, locals, liveAfterStatement) {
         if (valueType !== 'Name'
             || expression.kind !== 'call'
-            || expression.name !== 'path'
+            || pathBuiltinSpec(expression.name) === null
             || expression.args.length !== 2
             || liveAfterStatement === null) {
             return null;
@@ -27579,9 +28209,10 @@ class StudioCodeGenerator {
         return { kind: 'pointer', register, items: null, fieldNames: null, valueType: 'Name' };
     }
     tryCompileJsonSetIntDirectNameBinding(expression, valueType, callStack, locals, liveAfterStatement) {
+        const jsonBuilderSpec = expression.kind === 'call' ? jsonBuilderBuiltinSpec(expression.name) : null;
         if (valueType !== 'Json'
             || expression.kind !== 'call'
-            || expression.name !== 'json_set_int'
+            || jsonBuilderSpec?.operation !== 'set_int'
             || expression.args.length !== 3
             || liveAfterStatement === null) {
             return null;
@@ -27841,7 +28472,7 @@ class StudioCodeGenerator {
                     && pointerConstructorValueType(expression.name) === resolvedDeclaredType)
                 || (this.directVoidReturnHalts
                     && expression.kind === 'call'
-                    && ((resolvedDeclaredType === 'Blob' && expression.name === 'state_get')
+                    && ((resolvedDeclaredType === 'Blob' && stateHostBuiltinSpec(expression.name)?.kind === 'get')
                         || mapEnumerationBuiltinName(expression.name) !== null))) {
                 return this.maybePrepublishLocalBinding(name, sourceBinding, prepublishedPointerLocalNames);
             }
@@ -28077,7 +28708,7 @@ class StudioCodeGenerator {
                 && pointerConstructorValueType(expression.name) === valueType)
             || (this.directVoidReturnHalts
                 && expression.kind === 'call'
-                && ((valueType === 'Blob' && expression.name === 'state_get')
+                && ((valueType === 'Blob' && stateHostBuiltinSpec(expression.name)?.kind === 'get')
                     || mapEnumerationBuiltinName(expression.name) !== null))) {
             return this.maybePrepublishLocalBinding(name, sourceBinding, prepublishedPointerLocalNames);
         }
@@ -28473,6 +29104,14 @@ class StudioCodeGenerator {
         this.assembler.releaseRegister(leftHandleReg);
         return register;
     }
+    emitNumericPointerNegOperation(valueReg, preferredResultRegister = null) {
+        this.assembler.emitMove(10, valueReg);
+        this.assembler.emitSyscall(SYSCALL_INPUT_PUBLISH_TLV);
+        this.assembler.emitSyscall(SYSCALL_NUMERIC_NEG);
+        const register = this.allocPreferredResultRegister(preferredResultRegister, [valueReg]);
+        this.assembler.emitMove(register, 10);
+        return register;
+    }
     emitNumericCompareOperation(operator, leftReg, rightReg) {
         this.assembler.emitMove(10, leftReg);
         this.assembler.emitSyscall(SYSCALL_INPUT_PUBLISH_TLV);
@@ -28786,73 +29425,22 @@ class StudioCodeGenerator {
             const structDecl = this.structs.get(expression.name);
             if (structDecl)
                 return false;
-            if (isPointerConstructorCall(expression.name))
-                return true;
-            const jsonGetter = jsonGetterSpec(expression.name);
-            if (jsonGetter !== null)
-                return jsonGetter.kind === 'pointer';
-            if (mapEnumerationBuiltinName(expression.name) !== null)
-                return false;
-            if (hashBuiltinSpec(expression.name) !== null)
-                return true;
-            const sysvarSpec = sysvarBuiltinSpec(expression.name);
-            if (sysvarSpec !== null)
-                return sysvarSpec.valueType !== 'int';
-            if (noritoReadBuiltinSpec(expression.name) !== null)
-                return true;
-            if (typedQueryBuiltinSpec(expression.name) !== null)
-                return true;
-            if (accountBalanceBuiltinSpec(expression.name) !== null)
-                return true;
-            if (sm4BuiltinSpec(expression.name) !== null)
-                return true;
-            if (signatureBuiltinName(expression.name) !== null)
-                return false;
-            if (expression.name === 'decode_int')
-                return false;
-            if (expression.name === 'contains'
-                || expression.name === 'isqrt'
-                || expression.name === 'pubkgen'
-                || expression.name === 'valcom'
-                || expression.name === 'json_get_int'
-                || expression.name === 'current_time_ms'
-                || expression.name === 'block_height'
-                || expression.name === 'abs'
-                || expression.name === 'min'
-                || expression.name === 'max'
-                || expression.name === 'mean'
-                || expression.name === 'div_ceil'
-                || expression.name === 'gcd')
-                return false;
-            if (expression.name === 'trigger_event'
-                || expression.name === 'resolve_account_alias'
-                || expression.name === 'call_contract'
-                || expression.name === 'json_object'
-                || expression.name === 'json_set_int'
-                || expression.name === 'json_set_account_id'
-                || expression.name === 'path'
-                || expression.name === 'encode_int'
-                || expression.name === 'encode_json'
-                || expression.name === 'decode_json'
-                || expression.name === 'vrf_verify'
-                || expression.name === 'vrf_verify_batch'
-                || expression.name === 'encode_schema'
-                || expression.name === 'decode_schema'
-                || expression.name === 'schema_info'
-                || expression.name === 'state_get'
-                || expression.name === 'state_keys'
-                || soracloudBuiltinSpec(expression.name) !== null
-                || expression.name === 'json_get_json'
-                || expression.name === 'json_get_name'
-                || expression.name === 'json_get_account_id'
-                || expression.name === 'json_get_asset_definition_id'
-                || expression.name === 'build_submit_ballot_inline'
-                || expression.name === 'build_unshield_inline')
-                return true;
-            if (expression.name === 'ensure' || expression.name === 'get_or_default' || expression.name === 'get_or') {
+            const dynamicPointerYield = dynamicBuiltinYieldsPointer(expression.name);
+            if (dynamicPointerYield !== NO_BUILTIN_VALUE_TYPE)
+                return dynamicPointerYield;
+            const staticPointerYield = staticBuiltinYieldsPointer(expression.name);
+            if (staticPointerYield !== NO_BUILTIN_VALUE_TYPE)
+                return staticPointerYield;
+            const mapAccessSpec = mapAccessBuiltinSpec(expression.name);
+            if (mapAccessSpec !== null) {
+                if (mapAccessSpec.kind === 'int')
+                    return false;
                 const mapType = this.inferMapExpressionType(expression.args[0], locals);
                 return valueKindForType(mapType.value) === 'pointer';
             }
+            const vectorSpec = vectorBuiltinSpec(expression.name);
+            if (vectorSpec !== null)
+                return vectorSpec.kind === 'pointer';
             const callee = this.functions.get(expression.name);
             return callee?.returnType !== undefined && callee.returnType !== null && valueKindForType(callee.returnType) === 'pointer';
         }
@@ -28932,46 +29520,27 @@ class StudioCodeGenerator {
             }
         }
         if (expression.kind === 'call') {
-            const pointerConstructorType = pointerConstructorValueType(expression.name);
-            if (pointerConstructorType !== null)
-                return pointerConstructorType;
-            const jsonGetter = jsonGetterSpec(expression.name);
-            if (jsonGetter !== null)
-                return jsonGetter.valueType;
-            const mapEnumerationName = mapEnumerationBuiltinName(expression.name);
-            if (mapEnumerationName === 'keys_values_take2')
-                return { kind: 'tuple', elements: ['int', 'int'] };
-            if (mapEnumerationName !== null)
-                return 'int';
-            if (hashBuiltinSpec(expression.name) !== null)
-                return 'NoritoBytes';
-            const sysvarSpec = sysvarBuiltinSpec(expression.name);
-            if (sysvarSpec !== null)
-                return sysvarSpec.valueType;
-            const noritoReadSpec = noritoReadBuiltinSpec(expression.name);
-            if (noritoReadSpec !== null)
-                return noritoReadSpec.valueType;
-            if (typedQueryBuiltinSpec(expression.name) !== null)
-                return 'NoritoBytes';
-            const accountBalanceSpec = accountBalanceBuiltinSpec(expression.name);
-            if (accountBalanceSpec !== null)
-                return accountBalanceSpec.valueType;
-            const privacyOutputSpec = privacyOutputBuiltinSpec(expression.name);
-            if (privacyOutputSpec !== null && privacyOutputSpec.valueType !== null)
-                return privacyOutputSpec.valueType;
-            if (soracloudBuiltinSpec(expression.name) !== null)
-                return 'SoracloudResponse';
-            if (sm4BuiltinSpec(expression.name) !== null)
-                return 'NoritoBytes';
-            if (signatureBuiltinName(expression.name) !== null)
-                return 'bool';
+            const dynamicValueTypeSpec = dynamicBuiltinValueTypeSpec(expression.name);
+            if (dynamicValueTypeSpec !== null) {
+                const argTypes = expression.args.map((arg) => this.inferExpressionValueType(arg, locals));
+                return dynamicValueTypeSpec.valueTypeForArgs(argTypes);
+            }
+            const vendorBridgeSpec = vendorBridgeBuiltinSpec(expression.name);
+            if (vendorBridgeSpec !== null && vendorBridgeSpec.valueType === null) {
+                throw new StudioCompileError(`Function \`${expression.name}\` does not produce a value in the browser compiler.`, expression.line, expression.column);
+            }
+            const staticValueType = staticBuiltinValueType(expression.name);
+            if (staticValueType !== NO_BUILTIN_VALUE_TYPE)
+                return staticValueType;
+            const mapAccessSpec = mapAccessBuiltinSpec(expression.name);
+            if (mapAccessSpec !== null) {
+                if (mapAccessSpec.valueType === 'bool')
+                    return 'bool';
+                const mapType = this.inferMapExpressionType(expression.args[0], locals);
+                return mapType.value;
+            }
             if (this.compilerMode === 'test' && testOnlyKotodamaHelperError(expression.name) !== null) {
                 switch (expression.name) {
-                    case 'actor_account':
-                        return 'AccountId';
-                    case 'actor_public_key':
-                    case 'actor_sign':
-                        return 'NoritoBytes';
                     case 'invoke_entrypoint': {
                         const targetName = expression.args.length === 2
                             ? testHostLiteralStringFromExpression(expression.args[0])
@@ -28989,73 +29558,6 @@ class StudioCodeGenerator {
                     default:
                         break;
                 }
-            }
-            if (expression.name === 'json_object'
-                || expression.name === 'json_set_int'
-                || expression.name === 'json_set_account_id'
-                || expression.name === 'decode_json'
-                || expression.name === 'decode_schema'
-                || expression.name === 'schema_info')
-                return 'Json';
-            if (expression.name === 'encode_int'
-                || expression.name === 'encode_json'
-                || expression.name === 'encode_schema'
-                || expression.name === 'call_contract'
-                || expression.name === 'pointer_to_norito'
-                || expression.name === 'vrf_verify'
-                || expression.name === 'vrf_verify_batch')
-                return 'NoritoBytes';
-            if (expression.name === 'path')
-                return 'Name';
-            if (expression.name === 'poseidon2'
-                || expression.name === 'poseidon6'
-                || expression.name === 'pubkgen'
-                || expression.name === 'valcom'
-                || expression.name === 'isqrt'
-                || expression.name === 'contains'
-                || expression.name === 'json_get_int'
-                || expression.name === 'decode_int'
-                || expression.name === 'current_time_ms'
-                || expression.name === 'block_height'
-                || expression.name === 'tlv_len'
-                || expression.name === 'abs'
-                || expression.name === 'min'
-                || expression.name === 'max'
-                || expression.name === 'mean'
-                || expression.name === 'div_ceil'
-                || expression.name === 'gcd')
-                return 'int';
-            if (expression.name === 'trigger_event' || expression.name === 'json_get_json')
-                return 'Json';
-            if (expression.name === 'resolve_account_alias' || expression.name === 'json_get_account_id')
-                return 'AccountId';
-            if (expression.name === 'json_get_name')
-                return 'Name';
-            if (expression.name === 'json_get_asset_definition_id')
-                return 'AssetDefinitionId';
-            if (expression.name === 'state_get')
-                return 'Blob';
-            if (expression.name === 'state_keys')
-                return 'NoritoBytes';
-            if (expression.name === 'state_has')
-                return 'bool';
-            if (expression.name === 'state_len' || expression.name === 'state_count')
-                return 'int';
-            if (expression.name === 'execute_query' || expression.name === 'query_execute_norito')
-                return 'Blob';
-            if (typedQueryBuiltinSpec(expression.name) !== null)
-                return 'NoritoBytes';
-            const fallbackAccountBalanceSpec = accountBalanceBuiltinSpec(expression.name);
-            if (fallbackAccountBalanceSpec !== null)
-                return fallbackAccountBalanceSpec.valueType;
-            const fallbackPrivacyOutputSpec = privacyOutputBuiltinSpec(expression.name);
-            if (fallbackPrivacyOutputSpec !== null && fallbackPrivacyOutputSpec.valueType !== null)
-                return fallbackPrivacyOutputSpec.valueType;
-            if (expression.name === 'build_submit_ballot_inline' || expression.name === 'build_unshield_inline')
-                return 'NoritoBytes';
-            if (expression.name === 'ensure' || expression.name === 'get_or_default' || expression.name === 'get_or') {
-                const mapType = this.inferMapExpressionType(expression.args[0], locals);
-                return mapType.value;
             }
             const structDecl = this.structs.get(expression.name);
             if (structDecl) {
@@ -29211,6 +29713,15 @@ function normalizeKotodamaCompilerModeOption(mode) {
     }
     throw new StudioCompileError('Unknown Kotodama compiler mode; expected "production" or "test".', 1, 1);
 }
+function validateProductionAccessHints(entrypoints) {
+    const incompleteEntrypoint = entrypoints.find((entrypoint) => entrypoint.accessHintsComplete === false);
+    if (incompleteEntrypoint === undefined)
+        return;
+    const reasons = incompleteEntrypoint.accessHintsSkipped.length === 0
+        ? 'no reason recorded'
+        : incompleteEntrypoint.accessHintsSkipped.join('; ');
+    throw new StudioCompileError(`E_ACCESS_INCOMPLETE: entrypoint \`${incompleteEntrypoint.name}\` has incomplete compiler-derived access metadata: ${reasons}`, undefined, undefined);
+}
 export function compileKotodamaStudioProgram(source, options = {}) {
     try {
         const compilerMode = normalizeKotodamaCompilerModeOption(options.mode);
@@ -29227,6 +29738,9 @@ export function compileKotodamaStudioProgram(source, options = {}) {
         }
         const generator = new StudioCodeGenerator(compileProgram, { compilerMode });
         const compiled = generator.compile(options.sourceName ?? null);
+        if (compilerMode === 'production') {
+            validateProductionAccessHints(compiled.entrypoints);
+        }
         validateFeatureRequests(compileProgram.metadata, generator.assembler.code);
         const featuresBitmap = computeFeaturesBitmap(compileProgram.metadata.features, generator.assembler.code);
         const cntrSection = encodeContractInterfaceSectionCompact(compiled.entrypoints, compileProgram.states, compiled.accessSetHints, featuresBitmap, compileProgram.kotoba);

@@ -256,7 +256,7 @@ seiyaku SdkSmoke {
     info("ready");
   }
 }
-`);
+`, { mode: "test" });
 
   assert.deepEqual(compiled.diagnostics, []);
   assert.equal(compiled.abiHashHex.length, 64);
@@ -346,7 +346,7 @@ seiyaku UpgradeHook {
     info("upgrade");
   }
 }
-`);
+`, { mode: "test" });
   const unicode = compileKotodamaProgram(`
 seiyaku UpgradeHookUnicode {
   改善() {
@@ -470,6 +470,24 @@ seiyaku PayloadViewGuard {
   );
 });
 
+test("Kotodama compiler SDK rejects direct payload helpers in public entrypoints", () => {
+  const compiled = compileKotodamaProgram(`
+seiyaku DirectPayloadGuard {
+  kotoage fn run() {
+    let amount = json_get_int_direct(json!{ amount: 7 }, name("amount"));
+    info(amount);
+  }
+}
+`);
+
+  assert.equal(compiled.artifactBytes.length, 0);
+  assert.equal(compiled.diagnostics.length, 1);
+  assert.match(
+    compiled.diagnostics[0].message,
+    /public and view entrypoints cannot use `json_get_int_direct` here/,
+  );
+});
+
 test("Kotodama compiler SDK rejects mutating map ensure in view entrypoints", () => {
   const compiled = compileKotodamaProgram(`
 seiyaku ViewEnsureGuard {
@@ -554,11 +572,319 @@ seiyaku ViewHostEffect {
   );
 });
 
-test("Kotodama compiler SDK rejects native escrow side effects in view entrypoints", () => {
+test("Kotodama compiler SDK rejects native asset operation side effects in view entrypoints", () => {
+  const direct = compileKotodamaProgram(`
+seiyaku ViewNativeAssetEffect {
+  view fn inspect(account: AccountId, asset: AssetDefinitionId) -> int {
+    mint_asset(account, asset, 1);
+    return 1;
+  }
+}
+`);
+  const transitive = compileKotodamaProgram(`
+seiyaku ViewNativeAssetHelperEffect {
+  fn burn(account: AccountId, asset: AssetDefinitionId) {
+    burn_asset(account, asset, 1);
+  }
+
+  view fn inspect(account: AccountId, asset: AssetDefinitionId) -> int {
+    burn(account, asset);
+    return 1;
+  }
+}
+`);
+
+  assert.equal(direct.artifactBytes.length, 0);
+  assert.equal(direct.diagnostics.length, 1);
+  assert.match(
+    direct.diagnostics[0].message,
+    /view function `inspect` cannot perform host side effects/,
+  );
+  assert.equal(transitive.artifactBytes.length, 0);
+  assert.equal(transitive.diagnostics.length, 1);
+  assert.match(
+    transitive.diagnostics[0].message,
+    /view function `inspect` cannot call `burn` because `burn` performs host side effects/,
+  );
+});
+
+test("Kotodama compiler SDK rejects NFT asset operation side effects in view entrypoints", () => {
+  const direct = compileKotodamaProgram(`
+seiyaku ViewNftAssetEffect {
+  view fn inspect(nft: NftId, owner: AccountId) -> int {
+    nft_mint_asset(nft, owner);
+    return 1;
+  }
+}
+`);
+  const transitive = compileKotodamaProgram(`
+seiyaku ViewNftAssetHelperEffect {
+  fn burn(nft: NftId) {
+    nft_burn_asset(nft);
+  }
+
+  view fn inspect(nft: NftId) -> int {
+    burn(nft);
+    return 1;
+  }
+}
+`);
+
+  assert.equal(direct.artifactBytes.length, 0);
+  assert.equal(direct.diagnostics.length, 1);
+  assert.match(
+    direct.diagnostics[0].message,
+    /view function `inspect` cannot perform host side effects/,
+  );
+  assert.equal(transitive.artifactBytes.length, 0);
+  assert.equal(transitive.diagnostics.length, 1);
+  assert.match(
+    transitive.diagnostics[0].message,
+    /view function `inspect` cannot call `burn` because `burn` performs host side effects/,
+  );
+});
+
+test("Kotodama compiler SDK rejects lifecycle and peer side effects in view entrypoints", () => {
+  const direct = compileKotodamaProgram(`
+seiyaku ViewLifecycleEffect {
+  view fn inspect() -> int {
+    register_domain(domain("wonderland.universal"));
+    return 1;
+  }
+}
+`);
+  const transitivePeer = compileKotodamaProgram(`
+seiyaku ViewPeerLifecycleHelperEffect {
+  fn remove_peer() {
+    unregister_peer(json_object());
+  }
+
+  view fn inspect() -> int {
+    remove_peer();
+    return 1;
+  }
+}
+`);
+
+  assert.equal(direct.artifactBytes.length, 0);
+  assert.equal(direct.diagnostics.length, 1);
+  assert.match(
+    direct.diagnostics[0].message,
+    /view function `inspect` cannot perform host side effects/,
+  );
+  assert.equal(transitivePeer.artifactBytes.length, 0);
+  assert.equal(transitivePeer.diagnostics.length, 1);
+  assert.match(
+    transitivePeer.diagnostics[0].message,
+    /view function `inspect` cannot call `remove_peer` because `remove_peer` performs host side effects/,
+  );
+});
+
+test("Kotodama compiler SDK rejects management side effects in view entrypoints", () => {
+  const direct = compileKotodamaProgram(`
+seiyaku ViewManagementEffect {
+  view fn inspect() -> int {
+    create_trigger(json_object());
+    return 1;
+  }
+}
+`);
+  const transitive = compileKotodamaProgram(`
+seiyaku ViewManagementHelperEffect {
+  fn grant(account: AccountId) {
+    grant_permission(account, name("read_blocks"));
+  }
+
+  view fn inspect(account: AccountId) -> int {
+    grant(account);
+    return 1;
+  }
+}
+`);
+
+  assert.equal(direct.artifactBytes.length, 0);
+  assert.equal(direct.diagnostics.length, 1);
+  assert.match(
+    direct.diagnostics[0].message,
+    /view function `inspect` cannot perform host side effects/,
+  );
+  assert.equal(transitive.artifactBytes.length, 0);
+  assert.equal(transitive.diagnostics.length, 1);
+  assert.match(
+    transitive.diagnostics[0].message,
+    /view function `inspect` cannot call `grant` because `grant` performs host side effects/,
+  );
+});
+
+test("Kotodama compiler SDK rejects account detail side effects in view entrypoints", () => {
+  const direct = compileKotodamaProgram(`
+seiyaku ViewAccountDetailEffect {
+  view fn inspect(account: AccountId) -> int {
+    set_account_detail(account, name("status"), json_object());
+    return 1;
+  }
+}
+`);
+  const transitive = compileKotodamaProgram(`
+seiyaku ViewAccountDetailHelperEffect {
+  fn update(account: AccountId) {
+    set_account_detail(account, name("status"), json_object());
+  }
+
+  view fn inspect(account: AccountId) -> int {
+    update(account);
+    return 1;
+  }
+}
+`);
+
+  assert.equal(direct.artifactBytes.length, 0);
+  assert.equal(direct.diagnostics.length, 1);
+  assert.match(
+    direct.diagnostics[0].message,
+    /view function `inspect` cannot perform host side effects/,
+  );
+  assert.equal(transitive.artifactBytes.length, 0);
+  assert.equal(transitive.diagnostics.length, 1);
+  assert.match(
+    transitive.diagnostics[0].message,
+    /view function `inspect` cannot call `update` because `update` performs host side effects/,
+  );
+});
+
+test("Kotodama compiler SDK rejects Soracloud side effects in view entrypoints", () => {
+  const direct = compileKotodamaProgram(`
+seiyaku ViewSoracloudEffect {
+  view fn inspect() -> int {
+    let request = soracloud_request(norito_bytes("00"));
+    let _response = soracloud_read_config(request);
+    return 1;
+  }
+}
+`);
+  const transitive = compileKotodamaProgram(`
+seiyaku ViewSoracloudHelperEffect {
+  fn read(request: SoracloudRequest) -> SoracloudResponse {
+    return soracloud_read_secret(request);
+  }
+
+  view fn inspect() -> int {
+    let request = soracloud_request(norito_bytes("00"));
+    let _response = read(request);
+    return 1;
+  }
+}
+`);
+
+  assert.equal(direct.artifactBytes.length, 0);
+  assert.equal(direct.diagnostics.length, 1);
+  assert.match(
+    direct.diagnostics[0].message,
+    /view function `inspect` cannot perform host side effects/,
+  );
+  assert.equal(transitive.artifactBytes.length, 0);
+  assert.equal(transitive.diagnostics.length, 1);
+  assert.match(
+    transitive.diagnostics[0].message,
+    /view function `inspect` cannot call `read` because `read` performs host side effects/,
+  );
+});
+
+test("Kotodama compiler SDK rejects transfer batch side effects in view entrypoints", () => {
+  const direct = compileKotodamaProgram(`
+seiyaku ViewTransferBatchEffect {
+  view fn batch(from: AccountId, to: AccountId, asset: AssetDefinitionId) -> int {
+    transfer_v1_batch_begin();
+    transfer_batch((from, to, asset, 1));
+    transfer_v1_batch_end();
+    return 1;
+  }
+}
+`);
+  const transitive = compileKotodamaProgram(`
+seiyaku ViewTransferBatchApplyEffect {
+  fn apply(batch: Blob) {
+    transfer_v1_batch_apply(batch);
+  }
+
+  view fn inspect(batch: Blob) -> int {
+    apply(batch);
+    return 1;
+  }
+}
+`);
+
+  assert.equal(direct.artifactBytes.length, 0);
+  assert.equal(direct.diagnostics.length, 1);
+  assert.match(
+    direct.diagnostics[0].message,
+    /view function `batch` cannot perform host side effects/,
+  );
+  assert.equal(transitive.artifactBytes.length, 0);
+  assert.equal(transitive.diagnostics.length, 1);
+  assert.match(
+    transitive.diagnostics[0].message,
+    /view function `inspect` cannot call `apply` because `apply` performs host side effects/,
+  );
+});
+
+test("Kotodama compiler SDK rejects AXT side effects in view entrypoints", () => {
+  const direct = compileKotodamaProgram(`
+seiyaku ViewAxtEffect {
+  view fn inspect() -> int {
+    let ds = dataspace_id("7");
+    let desc = axt_descriptor(norito_bytes("0x00"));
+    let handle = asset_handle(norito_bytes("0x00"));
+    let proof = proof_blob(norito_bytes("0x00"));
+    axt_begin(desc);
+    axt_touch(ds, norito_bytes("manifest"));
+    verify_ds_proof(ds, proof);
+    use_asset_handle(handle, norito_bytes("intent"), proof);
+    axt_commit();
+    return 1;
+  }
+}
+`);
+  const transitive = compileKotodamaProgram(`
+seiyaku ViewAxtHelperEffect {
+  fn commit() {
+    axt_commit();
+  }
+
+  view fn inspect() -> int {
+    commit();
+    return 1;
+  }
+}
+`);
+
+  assert.equal(direct.artifactBytes.length, 0);
+  assert.equal(direct.diagnostics.length, 1);
+  assert.match(
+    direct.diagnostics[0].message,
+    /view function `inspect` cannot perform host side effects/,
+  );
+  assert.equal(transitive.artifactBytes.length, 0);
+  assert.equal(transitive.diagnostics.length, 1);
+  assert.match(
+    transitive.diagnostics[0].message,
+    /view function `inspect` cannot call `commit` because `commit` performs host side effects/,
+  );
+});
+
+test("Kotodama compiler SDK rejects native and anonymous escrow side effects in view entrypoints", () => {
   const direct = compileKotodamaProgram(`
 seiyaku ViewEscrowEffect {
   view fn inspect() -> int {
     escrow_accept(name("aitai_offer"));
+    return 1;
+  }
+}
+`);
+  const anonymousDirect = compileKotodamaProgram(`
+seiyaku ViewAnonymousEscrowEffect {
+  view fn inspect() -> int {
+    anonymous_escrow_release(norito_bytes("0x00"));
     return 1;
   }
 }
@@ -571,6 +897,18 @@ seiyaku ViewEscrowHelperEffect {
 
   view fn inspect() -> int {
     release();
+    return 1;
+  }
+}
+`);
+  const anonymousTransitive = compileKotodamaProgram(`
+seiyaku ViewAnonymousEscrowHelperEffect {
+  fn mark_sent() {
+    anonymous_escrow_mark_payment_sent(name("aitai_offer"));
+  }
+
+  view fn inspect() -> int {
+    mark_sent();
     return 1;
   }
 }
@@ -588,6 +926,217 @@ seiyaku ViewEscrowHelperEffect {
     transitive.diagnostics[0].message,
     /view function `inspect` cannot call `release` because `release` performs host side effects/,
   );
+  assert.equal(anonymousDirect.artifactBytes.length, 0);
+  assert.equal(anonymousDirect.diagnostics.length, 1);
+  assert.match(
+    anonymousDirect.diagnostics[0].message,
+    /view function `inspect` cannot perform host side effects/,
+  );
+  assert.equal(anonymousTransitive.artifactBytes.length, 0);
+  assert.equal(anonymousTransitive.diagnostics.length, 1);
+  assert.match(
+    anonymousTransitive.diagnostics[0].message,
+    /view function `inspect` cannot call `mark_sent` because `mark_sent` performs host side effects/,
+  );
+});
+
+test("Kotodama compiler SDK rejects subscription side effects in view entrypoints", () => {
+  const direct = compileKotodamaProgram(`
+seiyaku ViewSubscriptionEffect {
+  view fn inspect() -> int {
+    subscription_bill();
+    return 1;
+  }
+}
+`);
+  const transitive = compileKotodamaProgram(`
+seiyaku ViewSubscriptionHelperEffect {
+  fn record() {
+    subscription_record_usage();
+  }
+
+  view fn inspect() -> int {
+    record();
+    return 1;
+  }
+}
+`);
+
+  assert.equal(direct.artifactBytes.length, 0);
+  assert.equal(direct.diagnostics.length, 1);
+  assert.match(
+    direct.diagnostics[0].message,
+    /view function `inspect` cannot perform host side effects/,
+  );
+  assert.equal(transitive.artifactBytes.length, 0);
+  assert.equal(transitive.diagnostics.length, 1);
+  assert.match(
+    transitive.diagnostics[0].message,
+    /view function `inspect` cannot call `record` because `record` performs host side effects/,
+  );
+});
+
+test("Kotodama compiler SDK allows read-only privacy input in view entrypoints", () => {
+  const compiled = compileKotodamaProgram(`
+seiyaku ViewPrivateInputRead {
+  view fn inspect() -> int {
+    return get_private_input(0);
+  }
+}
+`);
+
+  assert.deepEqual(compiled.diagnostics, []);
+  assert.ok(compiled.artifactBytes.length > 0);
+});
+
+test("Kotodama compiler SDK rejects privacy output side effects in view entrypoints", () => {
+  const direct = compileKotodamaProgram(`
+seiyaku ViewPrivacyOutputEffect {
+  view fn inspect() -> int {
+    use_nullifier(get_private_input(0));
+    return 1;
+  }
+}
+`);
+  const transitive = compileKotodamaProgram(`
+seiyaku ViewPrivacyOutputHelperEffect {
+  fn commit() {
+    commit_output();
+  }
+
+  view fn inspect() -> int {
+    commit();
+    return 1;
+  }
+}
+`);
+
+  assert.equal(direct.artifactBytes.length, 0);
+  assert.equal(direct.diagnostics.length, 1);
+  assert.match(
+    direct.diagnostics[0].message,
+    /view function `inspect` cannot perform host side effects/,
+  );
+  assert.equal(transitive.artifactBytes.length, 0);
+  assert.equal(transitive.diagnostics.length, 1);
+  assert.match(
+    transitive.diagnostics[0].message,
+    /view function `inspect` cannot call `commit` because `commit` performs host side effects/,
+  );
+});
+
+test("Kotodama compiler SDK rejects smart-contract lifecycle side effects in view entrypoints", () => {
+  const direct = compileKotodamaProgram(`
+seiyaku ViewLifecycleEffect {
+  view fn inspect() -> int {
+    register_smart_contract_code(norito_bytes("0x00"));
+    return 1;
+  }
+}
+`);
+  const transitive = compileKotodamaProgram(`
+seiyaku ViewLifecycleHelperEffect {
+  fn activate() {
+    activate_contract_instance(norito_bytes("0x00"));
+  }
+
+  view fn inspect() -> int {
+    activate();
+    return 1;
+  }
+}
+`);
+
+  assert.equal(direct.artifactBytes.length, 0);
+  assert.equal(direct.diagnostics.length, 1);
+  assert.match(
+    direct.diagnostics[0].message,
+    /view function `inspect` cannot perform host side effects/,
+  );
+  assert.equal(transitive.artifactBytes.length, 0);
+  assert.equal(transitive.diagnostics.length, 1);
+  assert.match(
+    transitive.diagnostics[0].message,
+    /view function `inspect` cannot call `activate` because `activate` performs host side effects/,
+  );
+});
+
+test("Kotodama compiler SDK rejects account multisig admin side effects in view entrypoints", () => {
+  const direct = compileKotodamaProgram(`
+seiyaku ViewAccountMultisigEffect {
+  view fn inspect(account: AccountId, signatory: Json) -> int {
+    add_signatory(account, signatory);
+    return 1;
+  }
+}
+`);
+  const transitive = compileKotodamaProgram(`
+seiyaku ViewAccountMultisigHelperEffect {
+  fn update(account: AccountId) {
+    set_account_quorum(account, 2);
+  }
+
+  view fn inspect(account: AccountId) -> int {
+    update(account);
+    return 1;
+  }
+}
+`);
+
+  assert.equal(direct.artifactBytes.length, 0);
+  assert.equal(direct.diagnostics.length, 1);
+  assert.match(
+    direct.diagnostics[0].message,
+    /view function `inspect` cannot perform host side effects/,
+  );
+  assert.equal(transitive.artifactBytes.length, 0);
+  assert.equal(transitive.diagnostics.length, 1);
+  assert.match(
+    transitive.diagnostics[0].message,
+    /view function `inspect` cannot call `update` because `update` performs host side effects/,
+  );
+});
+
+test("Kotodama compiler SDK rejects host effects through the shared builtin registry", () => {
+  const fixtures = [
+    {
+      contract: "ViewRegistrySubscription",
+      params: "",
+      body: "subscription_bill();",
+    },
+    {
+      contract: "ViewRegistryNativeAsset",
+      params: "account: AccountId, asset: AssetDefinitionId",
+      body: "mint_asset(account, asset, 1);",
+    },
+    {
+      contract: "ViewRegistrySoracloud",
+      params: "",
+      body: `
+    let request = soracloud_request(norito_bytes("00"));
+    let _response = soracloud_read_config(request);
+`,
+    },
+  ];
+
+  for (const fixture of fixtures) {
+    const compiled = compileKotodamaProgram(`
+seiyaku ${fixture.contract} {
+  view fn inspect(${fixture.params}) -> int {
+    ${fixture.body}
+    return 1;
+  }
+}
+`);
+
+    assert.equal(compiled.artifactBytes.length, 0, fixture.contract);
+    assert.equal(compiled.diagnostics.length, 1, fixture.contract);
+    assert.match(
+      compiled.diagnostics[0].message,
+      /view function `inspect` cannot perform host side effects/,
+      fixture.contract,
+    );
+  }
 });
 
 test("Kotodama compiler SDK rejects transitive instruction emission in view entrypoints", () => {
@@ -656,6 +1205,246 @@ seiyaku PublicCallHostEffect {
   );
 });
 
+test("Kotodama compiler SDK requires permission for public native asset operation side effects", () => {
+  const direct = compileKotodamaProgram(`
+seiyaku PublicNativeAssetPermission {
+  kotoage fn run(account: AccountId, asset: AssetDefinitionId) {
+    mint_asset(account, asset, 1);
+  }
+}
+`);
+  const transitive = compileKotodamaProgram(`
+seiyaku PublicNativeAssetHelperPermission {
+  fn burn(account: AccountId, asset: AssetDefinitionId) {
+    burn_asset(account, asset, 1);
+  }
+
+  kotoage fn run(account: AccountId, asset: AssetDefinitionId) {
+    burn(account, asset);
+  }
+}
+`);
+
+  assert.equal(direct.artifactBytes.length, 0);
+  assert.equal(direct.diagnostics.length, 1);
+  assert.match(
+    direct.diagnostics[0].message,
+    /public function `run` calls privileged operations but is missing `permission\(\.\.\.\)`/,
+  );
+  assert.equal(transitive.artifactBytes.length, 0);
+  assert.equal(transitive.diagnostics.length, 1);
+  assert.match(
+    transitive.diagnostics[0].message,
+    /public function `run` calls privileged operations but is missing `permission\(\.\.\.\)`/,
+  );
+});
+
+test("Kotodama compiler SDK requires permission for public NFT asset operation side effects", () => {
+  const direct = compileKotodamaProgram(`
+seiyaku PublicNftAssetPermission {
+  kotoage fn run(nft: NftId, owner: AccountId) {
+    nft_mint_asset(nft, owner);
+  }
+}
+`);
+  const transitive = compileKotodamaProgram(`
+seiyaku PublicNftAssetHelperPermission {
+  fn burn(nft: NftId) {
+    nft_burn_asset(nft);
+  }
+
+  kotoage fn run(nft: NftId) {
+    burn(nft);
+  }
+}
+`);
+
+  assert.equal(direct.artifactBytes.length, 0);
+  assert.equal(direct.diagnostics.length, 1);
+  assert.match(
+    direct.diagnostics[0].message,
+    /public function `run` calls privileged operations but is missing `permission\(\.\.\.\)`/,
+  );
+  assert.equal(transitive.artifactBytes.length, 0);
+  assert.equal(transitive.diagnostics.length, 1);
+  assert.match(
+    transitive.diagnostics[0].message,
+    /public function `run` calls privileged operations but is missing `permission\(\.\.\.\)`/,
+  );
+});
+
+test("Kotodama compiler SDK requires permission for public lifecycle and peer side effects", () => {
+  const direct = compileKotodamaProgram(`
+seiyaku PublicLifecyclePermission {
+  kotoage fn run() {
+    register_domain(domain("wonderland.universal"));
+  }
+}
+`);
+  const transitivePeer = compileKotodamaProgram(`
+seiyaku PublicPeerLifecycleHelperPermission {
+  fn remove_peer() {
+    unregister_peer(json_object());
+  }
+
+  kotoage fn run() {
+    remove_peer();
+  }
+}
+`);
+
+  assert.equal(direct.artifactBytes.length, 0);
+  assert.equal(direct.diagnostics.length, 1);
+  assert.match(
+    direct.diagnostics[0].message,
+    /public function `run` calls privileged operations but is missing `permission\(\.\.\.\)`/,
+  );
+  assert.equal(transitivePeer.artifactBytes.length, 0);
+  assert.equal(transitivePeer.diagnostics.length, 1);
+  assert.match(
+    transitivePeer.diagnostics[0].message,
+    /public function `run` calls privileged operations but is missing `permission\(\.\.\.\)`/,
+  );
+});
+
+test("Kotodama compiler SDK requires permission for public management side effects", () => {
+  const direct = compileKotodamaProgram(`
+seiyaku PublicManagementPermission {
+  kotoage fn run() {
+    create_trigger(json_object());
+  }
+}
+`);
+  const transitive = compileKotodamaProgram(`
+seiyaku PublicManagementHelperPermission {
+  fn grant(account: AccountId) {
+    grant_role(account, name("auditor"));
+  }
+
+  kotoage fn run(account: AccountId) {
+    grant(account);
+  }
+}
+`);
+
+  assert.equal(direct.artifactBytes.length, 0);
+  assert.equal(direct.diagnostics.length, 1);
+  assert.match(
+    direct.diagnostics[0].message,
+    /public function `run` calls privileged operations but is missing `permission\(\.\.\.\)`/,
+  );
+  assert.equal(transitive.artifactBytes.length, 0);
+  assert.equal(transitive.diagnostics.length, 1);
+  assert.match(
+    transitive.diagnostics[0].message,
+    /public function `run` calls privileged operations but is missing `permission\(\.\.\.\)`/,
+  );
+});
+
+test("Kotodama compiler SDK requires permission for public account detail side effects", () => {
+  const direct = compileKotodamaProgram(`
+seiyaku PublicAccountDetailPermission {
+  kotoage fn run(account: AccountId) {
+    set_account_detail(account, name("status"), json_object());
+  }
+}
+`);
+  const transitive = compileKotodamaProgram(`
+seiyaku PublicAccountDetailHelperPermission {
+  fn update(account: AccountId) {
+    set_account_detail(account, name("status"), json_object());
+  }
+
+  kotoage fn run(account: AccountId) {
+    update(account);
+  }
+}
+`);
+
+  assert.equal(direct.artifactBytes.length, 0);
+  assert.equal(direct.diagnostics.length, 1);
+  assert.match(
+    direct.diagnostics[0].message,
+    /public function `run` calls privileged operations but is missing `permission\(\.\.\.\)`/,
+  );
+  assert.equal(transitive.artifactBytes.length, 0);
+  assert.equal(transitive.diagnostics.length, 1);
+  assert.match(
+    transitive.diagnostics[0].message,
+    /public function `run` calls privileged operations but is missing `permission\(\.\.\.\)`/,
+  );
+});
+
+test("Kotodama compiler SDK requires permission for public Soracloud side effects", () => {
+  const direct = compileKotodamaProgram(`
+seiyaku PublicSoracloudPermission {
+  kotoage fn run() {
+    let request = soracloud_request(norito_bytes("00"));
+    let _response = soracloud_read_config(request);
+  }
+}
+`);
+  const transitive = compileKotodamaProgram(`
+seiyaku PublicSoracloudHelperPermission {
+  fn read(request: SoracloudRequest) -> SoracloudResponse {
+    return soracloud_read_secret(request);
+  }
+
+  kotoage fn run() {
+    let request = soracloud_request(norito_bytes("00"));
+    let _response = read(request);
+  }
+}
+`);
+
+  assert.equal(direct.artifactBytes.length, 0);
+  assert.equal(direct.diagnostics.length, 1);
+  assert.match(
+    direct.diagnostics[0].message,
+    /public function `run` calls privileged operations but is missing `permission\(\.\.\.\)`/,
+  );
+  assert.equal(transitive.artifactBytes.length, 0);
+  assert.equal(transitive.diagnostics.length, 1);
+  assert.match(
+    transitive.diagnostics[0].message,
+    /public function `run` calls privileged operations but is missing `permission\(\.\.\.\)`/,
+  );
+});
+
+test("Kotodama compiler SDK requires permission for public subscription helpers", () => {
+  const direct = compileKotodamaProgram(`
+seiyaku PublicSubscriptionEffect {
+  kotoage fn bill() {
+    subscription_bill();
+  }
+}
+`);
+  const transitive = compileKotodamaProgram(`
+seiyaku PublicSubscriptionHelperEffect {
+  fn record() {
+    subscription_record_usage();
+  }
+
+  kotoage fn run() {
+    record();
+  }
+}
+`);
+
+  assert.equal(direct.artifactBytes.length, 0);
+  assert.equal(direct.diagnostics.length, 1);
+  assert.match(
+    direct.diagnostics[0].message,
+    /public function `bill` calls privileged operations but is missing `permission\(\.\.\.\)`/,
+  );
+  assert.equal(transitive.artifactBytes.length, 0);
+  assert.equal(transitive.diagnostics.length, 1);
+  assert.match(
+    transitive.diagnostics[0].message,
+    /public function `run` calls privileged operations but is missing `permission\(\.\.\.\)`/,
+  );
+});
+
 test("Kotodama compiler SDK requires permission for transitive public instruction emission", () => {
   const compiled = compileKotodamaProgram(`
 seiyaku PublicInstructionEffect {
@@ -677,11 +1466,18 @@ seiyaku PublicInstructionEffect {
   );
 });
 
-test("Kotodama compiler SDK requires permission for public native escrow side effects", () => {
+test("Kotodama compiler SDK requires permission for public native and anonymous escrow side effects", () => {
   const direct = compileKotodamaProgram(`
 seiyaku PublicEscrowPermission {
   kotoage fn run() {
     escrow_cancel(name("aitai_offer"));
+  }
+}
+`);
+  const anonymousDirect = compileKotodamaProgram(`
+seiyaku PublicAnonymousEscrowPermission {
+  kotoage fn run() {
+    anonymous_escrow_cancel(norito_bytes("0x00"));
   }
 }
 `);
@@ -693,6 +1489,131 @@ seiyaku PublicEscrowHelperPermission {
 
   kotoage fn run() {
     cancel();
+  }
+}
+`);
+  const anonymousTransitive = compileKotodamaProgram(`
+seiyaku PublicAnonymousEscrowHelperPermission {
+  fn mark_sent() {
+    anonymous_escrow_mark_payment_sent(name("aitai_offer"));
+  }
+
+  kotoage fn run() {
+    mark_sent();
+  }
+}
+`);
+
+  assert.equal(direct.artifactBytes.length, 0);
+  assert.equal(direct.diagnostics.length, 1);
+  assert.match(
+    direct.diagnostics[0].message,
+    /public function `run` calls privileged operations but is missing `permission\(\.\.\.\)`/,
+  );
+  assert.equal(transitive.artifactBytes.length, 0);
+  assert.equal(transitive.diagnostics.length, 1);
+  assert.match(
+    transitive.diagnostics[0].message,
+    /public function `run` calls privileged operations but is missing `permission\(\.\.\.\)`/,
+  );
+  assert.equal(anonymousDirect.artifactBytes.length, 0);
+  assert.equal(anonymousDirect.diagnostics.length, 1);
+  assert.match(
+    anonymousDirect.diagnostics[0].message,
+    /public function `run` calls privileged operations but is missing `permission\(\.\.\.\)`/,
+  );
+  assert.equal(anonymousTransitive.artifactBytes.length, 0);
+  assert.equal(anonymousTransitive.diagnostics.length, 1);
+  assert.match(
+    anonymousTransitive.diagnostics[0].message,
+    /public function `run` calls privileged operations but is missing `permission\(\.\.\.\)`/,
+  );
+});
+
+test("Kotodama compiler SDK requires permission for public privacy output side effects", () => {
+  const direct = compileKotodamaProgram(`
+seiyaku PublicPrivacyOutputPermission {
+  kotoage fn run() {
+    use_nullifier(get_private_input(0));
+  }
+}
+`);
+  const transitive = compileKotodamaProgram(`
+seiyaku PublicPrivacyOutputHelperPermission {
+  fn commit() {
+    commit_output();
+  }
+
+  kotoage fn run() {
+    commit();
+  }
+}
+`);
+
+  assert.equal(direct.artifactBytes.length, 0);
+  assert.equal(direct.diagnostics.length, 1);
+  assert.match(
+    direct.diagnostics[0].message,
+    /public function `run` calls privileged operations but is missing `permission\(\.\.\.\)`/,
+  );
+  assert.equal(transitive.artifactBytes.length, 0);
+  assert.equal(transitive.diagnostics.length, 1);
+  assert.match(
+    transitive.diagnostics[0].message,
+    /public function `run` calls privileged operations but is missing `permission\(\.\.\.\)`/,
+  );
+});
+
+test("Kotodama compiler SDK requires permission for public smart-contract lifecycle side effects", () => {
+  const direct = compileKotodamaProgram(`
+seiyaku PublicLifecyclePermission {
+  kotoage fn run() {
+    remove_smart_contract_bytes(norito_bytes("0x00"));
+  }
+}
+`);
+  const transitive = compileKotodamaProgram(`
+seiyaku PublicLifecycleHelperPermission {
+  fn deactivate() {
+    deactivate_contract_instance(norito_bytes("0x00"));
+  }
+
+  kotoage fn run() {
+    deactivate();
+  }
+}
+`);
+
+  assert.equal(direct.artifactBytes.length, 0);
+  assert.equal(direct.diagnostics.length, 1);
+  assert.match(
+    direct.diagnostics[0].message,
+    /public function `run` calls privileged operations but is missing `permission\(\.\.\.\)`/,
+  );
+  assert.equal(transitive.artifactBytes.length, 0);
+  assert.equal(transitive.diagnostics.length, 1);
+  assert.match(
+    transitive.diagnostics[0].message,
+    /public function `run` calls privileged operations but is missing `permission\(\.\.\.\)`/,
+  );
+});
+
+test("Kotodama compiler SDK requires permission for public account multisig admin side effects", () => {
+  const direct = compileKotodamaProgram(`
+seiyaku PublicAccountMultisigPermission {
+  kotoage fn run(account: AccountId, signatory: Json) {
+    remove_signatory(account, signatory);
+  }
+}
+`);
+  const transitive = compileKotodamaProgram(`
+seiyaku PublicAccountMultisigHelperPermission {
+  fn update(account: AccountId) {
+    set_account_quorum(account, 3);
+  }
+
+  kotoage fn run(account: AccountId) {
+    update(account);
   }
 }
 `);
@@ -1407,11 +2328,59 @@ seiyaku InvalidCallStatementIdentifier {
   const validHostCalls = compileKotodamaProgram(`
 seiyaku CallStatementHostCalls {
   kotoage fn run() permission(Admin) {
-    call transfer_asset(authority(), authority(), asset_definition("62Fk4FPcMuLvW5QjDGNF2a4jAmjM"), 1);
+    let asset = asset_definition("62Fk4FPcMuLvW5QjDGNF2a4jAmjM");
+    let nft = nft_id("n0$wonderland.universal");
+    let domain_id = domain("wonderland.universal");
+    let trigger = name("wake");
+    let role = name("auditor");
+    let evidence = norito_bytes("00");
+    let request = norito_bytes("01");
+    call transfer_asset(authority(), authority(), asset, 1);
+    call mint_asset(authority(), asset, 2);
+    call burn_asset(authority(), asset, 1);
+    call nft_mint_asset(nft, authority());
+    call nft_set_metadata(nft, name("dpn_metadata"), json!{ value: "ok" });
+    call nft_transfer_asset(authority(), nft, authority());
+    call nft_burn_asset(nft);
+    call register_domain(domain_id);
+    call unregister_domain(domain_id);
+    call transfer_domain(authority(), domain_id, authority());
+    call register_account(authority());
+    call unregister_account(authority());
+    call register_asset(asset, "ROSE", 0, 1);
+    call create_new_asset(asset, "ROSE", 1, authority(), 0);
+    call unregister_asset(asset);
     call set_account_detail(authority(), name("status"), json!{ value: "ok" });
+    call register_peer(json!{ address: "127.0.0.1:1337" });
+    call unregister_peer(json!{ address: "127.0.0.1:1337" });
+    call create_trigger(json!{ id: "wake", action: "noop" });
+    call register_trigger(json!{ id: "wake_2", action: "noop" });
+    call remove_trigger(trigger);
+    call unregister_trigger(trigger);
+    call set_trigger_enabled(trigger, 1);
+    call create_role(role, json!{ permissions: ["read_blocks"] });
+    call grant_role(authority(), role);
+    call revoke_role(authority(), role);
+    call grant_permission(authority(), name("read_blocks"));
+    call revoke_permission(authority(), json!{ type: "read_blocks" });
+    call delete_role(role);
+    call escrow_open_offer(name("aitai_offer"), asset, 10, evidence);
+    call escrow_accept(name("aitai_offer"));
+    call escrow_mark_payment_sent(name("aitai_offer"));
+    call escrow_release(name("aitai_offer"));
+    call escrow_cancel(name("aitai_offer"));
+    call escrow_open_dispute(name("aitai_offer"), evidence);
+    call escrow_resolve_dispute(name("aitai_offer"), 6, 4, evidence);
+    call anonymous_escrow_open_offer(request);
+    call anonymous_escrow_accept(name("shielded_offer"));
+    call anonymous_escrow_mark_payment_sent(name("shielded_offer"));
+    call anonymous_escrow_release(request);
+    call anonymous_escrow_cancel(request);
+    call anonymous_escrow_open_dispute(name("shielded_offer"), evidence);
+    call anonymous_escrow_resolve_dispute(request);
   }
 }
-`);
+`, { mode: "test" });
   const invalidTransfer = compileKotodamaProgram(`
 seiyaku InvalidCallStatementTransfer {
   kotoage fn run() permission(Admin) {
@@ -1426,7 +2395,45 @@ seiyaku InvalidCallStatementTransfer {
   assert.notEqual(code.indexOf(syscallNeedle(0x02)), -1);
   assert.deepEqual(validHostCalls.diagnostics, []);
   assert.notEqual(hostCallCode.indexOf(syscallNeedle(0x24)), -1);
+  assert.notEqual(hostCallCode.indexOf(syscallNeedle(0x22)), -1);
+  assert.notEqual(hostCallCode.indexOf(syscallNeedle(0x23)), -1);
+  assert.notEqual(hostCallCode.indexOf(syscallNeedle(0x25)), -1);
+  assert.notEqual(hostCallCode.indexOf(syscallNeedle(0x26)), -1);
+  assert.notEqual(hostCallCode.indexOf(syscallNeedle(0x27)), -1);
+  assert.notEqual(hostCallCode.indexOf(syscallNeedle(0x28)), -1);
+  assert.notEqual(hostCallCode.indexOf(syscallNeedle(0x10)), -1);
+  assert.notEqual(hostCallCode.indexOf(syscallNeedle(0x11)), -1);
+  assert.notEqual(hostCallCode.indexOf(syscallNeedle(0x12)), -1);
+  assert.notEqual(hostCallCode.indexOf(syscallNeedle(0x13)), -1);
+  assert.notEqual(hostCallCode.indexOf(syscallNeedle(0x14)), -1);
+  assert.notEqual(hostCallCode.indexOf(syscallNeedle(0x20)), -1);
+  assert.notEqual(hostCallCode.indexOf(syscallNeedle(0x21)), -1);
   assert.notEqual(hostCallCode.indexOf(syscallNeedle(0x1a)), -1);
+  assert.notEqual(hostCallCode.indexOf(syscallNeedle(0x15)), -1);
+  assert.notEqual(hostCallCode.indexOf(syscallNeedle(0x16)), -1);
+  assert.notEqual(hostCallCode.indexOf(syscallNeedle(0x40)), -1);
+  assert.notEqual(hostCallCode.indexOf(syscallNeedle(0x41)), -1);
+  assert.notEqual(hostCallCode.indexOf(syscallNeedle(0x42)), -1);
+  assert.notEqual(hostCallCode.indexOf(syscallNeedle(0x30)), -1);
+  assert.notEqual(hostCallCode.indexOf(syscallNeedle(0x31)), -1);
+  assert.notEqual(hostCallCode.indexOf(syscallNeedle(0x32)), -1);
+  assert.notEqual(hostCallCode.indexOf(syscallNeedle(0x33)), -1);
+  assert.notEqual(hostCallCode.indexOf(syscallNeedle(0x34)), -1);
+  assert.notEqual(hostCallCode.indexOf(syscallNeedle(0x35)), -1);
+  assert.notEqual(hostCallCode.indexOf(syscallNeedle(0xb8)), -1);
+  assert.notEqual(hostCallCode.indexOf(syscallNeedle(0xb9)), -1);
+  assert.notEqual(hostCallCode.indexOf(syscallNeedle(0xba)), -1);
+  assert.notEqual(hostCallCode.indexOf(syscallNeedle(0xbb)), -1);
+  assert.notEqual(hostCallCode.indexOf(syscallNeedle(0xbc)), -1);
+  assert.notEqual(hostCallCode.indexOf(syscallNeedle(0xbd)), -1);
+  assert.notEqual(hostCallCode.indexOf(syscallNeedle(0xbe)), -1);
+  assert.notEqual(hostCallCode.indexOf(syscallNeedle(0xaa)), -1);
+  assert.notEqual(hostCallCode.indexOf(syscallNeedle(0xab)), -1);
+  assert.notEqual(hostCallCode.indexOf(syscallNeedle(0xac)), -1);
+  assert.notEqual(hostCallCode.indexOf(syscallNeedle(0xad)), -1);
+  assert.notEqual(hostCallCode.indexOf(syscallNeedle(0xae)), -1);
+  assert.notEqual(hostCallCode.indexOf(syscallNeedle(0xaf)), -1);
+  assert.notEqual(hostCallCode.indexOf(syscallNeedle(0xbf)), -1);
   assert.equal(invalidLiteral.artifactBytes.length, 0);
   assert.equal(invalidLiteral.diagnostics.length, 1);
   assert.match(invalidLiteral.diagnostics[0].message, /call expects a function call expression/);
@@ -2431,10 +3438,19 @@ seiyaku InvalidBlobHexGetterMethod {
   kotoage fn run() permission(Admin) {}
 }
 `);
-  const invalidBlockHeightArity = compileKotodamaProgram(`
+const invalidBlockHeightArity = compileKotodamaProgram(`
 seiyaku InvalidBlockHeightArity {
   fn helper() {
     let height = block_height(1);
+  }
+
+  kotoage fn run() permission(Admin) {}
+}
+`);
+  const invalidHostAuthorityArity = compileKotodamaProgram(`
+seiyaku InvalidHostAuthorityArity {
+  fn helper() {
+    let caller = host::authority(1);
   }
 
   kotoage fn run() permission(Admin) {}
@@ -2632,6 +3648,9 @@ seiyaku ValidBuiltins {
   assert.equal(invalidBlockHeightArity.artifactBytes.length, 0);
   assert.equal(invalidBlockHeightArity.diagnostics.length, 1);
   assert.match(invalidBlockHeightArity.diagnostics[0].message, /block_height expects no arguments/);
+  assert.equal(invalidHostAuthorityArity.artifactBytes.length, 0);
+  assert.equal(invalidHostAuthorityArity.diagnostics.length, 1);
+  assert.match(invalidHostAuthorityArity.diagnostics[0].message, /authority expects no arguments/);
   assert.equal(invalidChainIdArity.artifactBytes.length, 0);
   assert.equal(invalidChainIdArity.diagnostics.length, 1);
   assert.match(invalidChainIdArity.diagnostics[0].message, /chain_id expects no arguments/);
@@ -2800,6 +3819,887 @@ seiyaku RuntimeSysvars {
       ["current_entrypoint", "bytes"],
     ],
   );
+});
+
+test("Kotodama compiler SDK infers static builtin value types through the shared registry", () => {
+  const compiled = compileKotodamaProgram(`
+seiyaku StaticBuiltinValueTypes {
+  fn direct_score() -> int {
+    let direct_payload: Json = json_get_json_direct(json!{ nested: { amount: 7 } }, name("nested"));
+    let direct_amount: Amount = json_get_numeric_direct(json!{ amount: 7 }, name("amount"));
+    let direct_int: int = numeric_to_int_direct(direct_amount);
+    let direct_same: bool = numeric_eq_direct(direct_amount, direct_amount);
+    let direct_encoded: bytes = encode_schema_direct(name("example.schema"), direct_payload);
+    if direct_same {
+      return direct_int + tlv_len(direct_encoded);
+    }
+    return 0;
+  }
+
+  kotoage fn main() permission(Admin) {
+    let request = soracloud_request(norito_bytes("00"));
+    let response: SoracloudResponse = soracloud_read_config(request);
+    let state: Blob = state_get(name("bucket"));
+    let balance: Balance = get_account_balance(authority(), asset_definition("62Fk4FPcMuLvW5QjDGNF2a4jAmjM"));
+    let balance_int: int = numeric_to_int(balance);
+    let balance_same: bool = numeric_eq(balance, balance);
+    let now: int = current_time_ms();
+    let proof: bytes = prove_execution();
+    let schema: Json = schema_info(name("Account"));
+    let typed_query: bytes = query_get_account(authority());
+    let vendor_query: Blob = execute_query(norito_bytes("00"));
+    let private_value: int = get_private_input(0);
+    let enum_values: Map<int, int> = Map::new();
+    enum_values[7] = 11;
+    let enum_key: int = keys_take2(enum_values, 0, 0);
+    let enum_pair: (int, int) = keys_values_take2(enum_values, 0, 0);
+    let ctor_account: AccountId = account_id("alice@wonderland");
+    let ctor_name: Name = name("registry");
+    let ctor_blob: Blob = blob("0x00");
+    let ctor_bytes: bytes = norito_bytes("00");
+    if balance_same {
+      info(now + private_value + enum_key + enum_pair.0 + enum_pair.1 + balance_int + direct_score() + tlv_len(response) + tlv_len(state) + tlv_len(proof) + tlv_len(schema) + tlv_len(typed_query) + tlv_len(vendor_query) + tlv_len(ctor_account) + tlv_len(ctor_name) + tlv_len(ctor_blob) + tlv_len(ctor_bytes));
+    }
+  }
+}
+`, { mode: "test" });
+
+  assert.deepEqual(compiled.diagnostics, []);
+  assert.ok(compiled.artifactBytes.length > 0);
+});
+
+test("Kotodama compiler SDK infers semantic static builtin value types through the shared registry", () => {
+  const compiled = compileKotodamaProgram(`
+seiyaku StaticBuiltinSemanticValueTypes {
+  fn direct_score() -> int {
+    let direct_payload = json_get_json_direct(json!{ nested: { amount: 7 } }, name("nested"));
+    let direct_amount = json_get_numeric_direct(json!{ amount: 7 }, name("amount"));
+    let direct_int = numeric_to_int_direct(direct_amount);
+    let direct_same = numeric_eq_direct(direct_amount, direct_amount);
+    let direct_encoded = encode_schema_direct(name("example.schema"), direct_payload);
+    if direct_same {
+      return direct_int + tlv_len(direct_encoded);
+    }
+    return 0;
+  }
+
+  kotoage fn main() permission(Admin) {
+    let payload = json_set_int(json_object(), name("amount"), 7);
+    let encoded = encode_json(payload);
+    let decoded = decode_json(encoded);
+    let amount = current_time_ms();
+    let path_name = name("root").path(encoded);
+    let authority_account = sysvar_authority();
+    let balance = get_account_balance(authority_account, asset_definition("62Fk4FPcMuLvW5QjDGNF2a4jAmjM"));
+    let balance_int = numeric_to_int(balance);
+    let balance_same = numeric_eq(balance, balance);
+    let query_response = query_execute_norito(encoded);
+    let digest = sha256_hash(encoded);
+    let state_value = state_get(name("bucket"));
+    let schema = schema_info(name("Account"));
+    let proof = prove_execution();
+    let public_value = get_public_input(name("input"));
+    let vrf_seed = vrf_epoch_seed(encoded);
+    let vrf_batch = vrf_verify_batch(encoded);
+    let typed_query = query_get_account(authority_account);
+    let vendor_query = execute_query(norito_bytes(encoded));
+    let private_value = get_private_input(0);
+    let enum_values: Map<int, int> = Map::new();
+    enum_values[7] = 11;
+    let enum_key = keys_take2(enum_values, 0, 0);
+    let enum_pair = keys_values_take2(enum_values, 0, 0);
+    let ctor_account = account_id("alice@wonderland");
+    let ctor_name = name("registry");
+    let ctor_blob = blob("0x00");
+    let ctor_bytes = norito_bytes("00");
+    let request = soracloud_request(norito_bytes("00"));
+    let response = soracloud_read_config(request);
+    let alias = resolve_account_alias("alice");
+    if balance_same {
+      info(amount + private_value + enum_key + enum_pair.0 + enum_pair.1 + balance_int + direct_score() + tlv_len(decoded) + tlv_len(path_name) + tlv_len(authority_account) + tlv_len(query_response) + tlv_len(digest) + tlv_len(state_value) + tlv_len(schema) + tlv_len(proof) + tlv_len(public_value) + tlv_len(vrf_seed) + tlv_len(vrf_batch) + tlv_len(typed_query) + tlv_len(vendor_query) + tlv_len(response) + tlv_len(alias) + tlv_len(ctor_account) + tlv_len(ctor_name) + tlv_len(ctor_blob) + tlv_len(ctor_bytes));
+    }
+  }
+}
+`, { mode: "test" });
+
+  assert.deepEqual(compiled.diagnostics, []);
+  assert.ok(compiled.artifactBytes.length > 0);
+});
+
+test("Kotodama compiler SDK infers dynamic builtin value types through the shared registry", () => {
+  const compiled = compileKotodamaProgram(`
+seiyaku DynamicBuiltinValueTypes {
+  fn annotated() -> int {
+    let amount: Amount = 7;
+    let balance: Balance = 3;
+    let amount_sum: Amount = numeric_add(amount, amount);
+    let amount_neg: Amount = numeric_neg(amount_sum);
+    let balance_sum: Balance = numeric_add(balance, balance);
+    let balance_neg: Balance = numeric_neg(balance_sum);
+    let direct_amount_sum: Amount = numeric_add_direct(amount, amount);
+    let direct_balance_sum: Balance = numeric_add_direct(balance, balance);
+    let direct_balance_neg: Balance = numeric_neg_direct(direct_balance_sum);
+    return numeric_to_int(amount_neg) + numeric_to_int(balance_neg) + numeric_to_int_direct(direct_amount_sum) + numeric_to_int_direct(direct_balance_neg);
+  }
+
+  view fn infer() -> int {
+    let amount: Amount = 7;
+    let balance: Balance = 3;
+    let amount_sum = numeric_add(amount, amount);
+    let amount_neg = numeric_neg(amount_sum);
+    let balance_sum = numeric_add(balance, balance);
+    let balance_neg = numeric_neg(balance_sum);
+    let direct_sum = numeric_add_direct(amount, amount);
+    let direct_neg = numeric_neg_direct(direct_sum);
+    let direct_balance_sum = numeric_add_direct(balance, balance);
+    let direct_balance_neg = numeric_neg_direct(direct_balance_sum);
+    if amount_sum == numeric_neg(amount_neg) {
+      return annotated() + numeric_to_int(balance_neg) + numeric_to_int_direct(direct_neg) + numeric_to_int_direct(direct_balance_neg);
+    }
+    return 0;
+  }
+}
+`);
+
+  assert.deepEqual(compiled.diagnostics, []);
+  assert.ok(compiled.artifactBytes.length > 0);
+});
+
+test("Kotodama compiler SDK validates exact-argument static builtins through the shared registry", () => {
+  for (const [source, expected] of [
+    [
+      `
+seiyaku ExactArgInvalidCodec {
+  fn helper() {
+    let encoded = encode_json(1);
+  }
+
+  kotoage fn main() permission(Admin) {}
+}
+`,
+      /encode_json expects \(Json\)/,
+    ],
+    [
+      `
+seiyaku ExactArgInvalidJsonGetter {
+  fn helper() {
+    let payload = json!{ amount: 7 };
+    let amount = payload.get_int(1);
+  }
+
+  kotoage fn main() permission(Admin) {}
+}
+`,
+      /get_int expects \(Json, Name\)/,
+    ],
+    [
+      `
+seiyaku ExactArgInvalidPath {
+  fn helper() {
+    let derived = name("root").path(json_object());
+  }
+
+  kotoage fn main() permission(Admin) {}
+}
+`,
+      /path expects \(Name, int\|Blob\|bytes\)/,
+    ],
+    [
+      `
+seiyaku ExactArgInvalidSysvar {
+  fn helper() {
+    let chain = chain_id(1);
+  }
+
+  kotoage fn main() permission(Admin) {}
+}
+`,
+      /chain_id expects no arguments/,
+    ],
+    [
+      `
+seiyaku ExactArgInvalidTriggerEvent {
+  fn helper() {
+    let event = trigger_event(1);
+  }
+
+  kotoage fn main() permission(Admin) {}
+}
+`,
+      /trigger_event expects no arguments/,
+    ],
+    [
+      `
+seiyaku ExactArgInvalidLegacyRuntime {
+  fn helper() {
+    set_execution_depth(name("depth"));
+  }
+
+  kotoage fn main() permission(Admin) {}
+}
+`,
+      /set_execution_depth expects one int arg/,
+    ],
+    [
+      `
+seiyaku ExactArgInvalidIntArithmetic {
+  fn helper() {
+    let root = isqrt(name("root"));
+  }
+
+  kotoage fn main() permission(Admin) {}
+}
+`,
+      /isqrt expects \(int\)/,
+    ],
+    [
+      `
+seiyaku ExactArgInvalidNumericNeg {
+  fn helper() {
+    let bad = numeric_neg(1);
+  }
+
+  kotoage fn main() permission(Admin) {}
+}
+`,
+      /numeric_neg expects \(Amount\|Balance\|fixed_u128\)/,
+    ],
+    [
+      `
+seiyaku ExactArgInvalidNumericToInt {
+  fn helper() {
+    let bad = numeric_to_int(1);
+  }
+
+  kotoage fn main() permission(Admin) {}
+}
+`,
+      /numeric_to_int expects \(Amount\|Balance\|fixed_u128\)/,
+    ],
+    [
+      `
+seiyaku ExactArgInvalidNumericAdd {
+  fn helper() {
+    let bad = numeric_add(1, 2);
+  }
+
+  kotoage fn main() permission(Admin) {}
+}
+`,
+      /numeric_add expects compatible wide numeric operands/,
+    ],
+    [
+      `
+seiyaku ExactArgInvalidNumericCompare {
+  fn helper() {
+    let amount: Amount = 1;
+    let balance: Balance = 2;
+    let bad = numeric_eq(amount, balance);
+  }
+
+  kotoage fn main() permission(Admin) {}
+}
+`,
+      /numeric_eq expects compatible wide numeric operands/,
+    ],
+    [
+      `
+seiyaku ExactArgInvalidDirectJsonGetter {
+  fn helper() {
+    let bad = json_get_int_direct(name("payload"), name("count"));
+  }
+
+  kotoage fn main() permission(Admin) {}
+}
+`,
+      /json_get_int_direct expects \(Json, Name\)/,
+    ],
+    [
+      `
+seiyaku ExactArgInvalidDirectNumericCompare {
+  fn helper() {
+    let amount: Amount = 1;
+    let balance: Balance = 2;
+    let bad = numeric_eq_direct(amount, balance);
+  }
+
+  kotoage fn main() permission(Admin) {}
+}
+`,
+      /numeric_eq_direct expects compatible wide numeric operands/,
+    ],
+    [
+      `
+seiyaku ExactArgInvalidVector {
+  fn helper() {
+    setvl(name("lanes"));
+  }
+
+  kotoage fn main() permission(Admin) {}
+}
+`,
+      /setvl expects one int arg/,
+    ],
+    [
+      `
+seiyaku ExactArgInvalidMapAccessTarget {
+  fn helper() {
+    let value = 1;
+    let bad = value.contains(name("key"));
+  }
+
+  kotoage fn main() permission(Admin) {}
+}
+`,
+      /contains expects Map<K,V> as first arg, got int/,
+    ],
+    [
+      `
+seiyaku ExactArgInvalidMapAccessDefault {
+  fn helper() {
+    let values: Map<Name, Name> = Map::new();
+    let bad = values.get_or(name("key"));
+  }
+
+  kotoage fn main() permission(Admin) {}
+}
+`,
+      /get_or requires an explicit default for pointer-valued maps/,
+    ],
+    [
+      `
+seiyaku ExactArgInvalidMapEnumerationMap {
+  fn helper() {
+    let values: Map<Name, int> = Map::new();
+    let bad = keys_take2(values, 0, 0);
+  }
+
+  kotoage fn main() permission(Admin) {}
+}
+`,
+      /keys_take2 expects Map<int,int> as first arg, got map<Name, int>/,
+    ],
+    [
+      `
+seiyaku ExactArgInvalidMapEnumerationWhich {
+  fn helper() {
+    let values: Map<int, int> = Map::new();
+    let bad = keys_values_take2(values, 0, name("which"));
+  }
+
+  kotoage fn main() permission(Admin) {}
+}
+`,
+      /keys_values_take2 expects \(Map<int,int>, int, int\)/,
+    ],
+    [
+      `
+seiyaku ExactArgInvalidHash {
+  fn helper() {
+    let digest = sha256_hash(1);
+  }
+
+  kotoage fn main() permission(Admin) {}
+}
+`,
+      /sha256_hash expects \(Blob\|bytes\) argument pointing to INPUT TLV/,
+    ],
+    [
+      `
+seiyaku ExactArgInvalidVrfArity {
+  fn helper() {
+    let proof = vrf_verify(norito_bytes("00"));
+  }
+
+  kotoage fn main() permission(Admin) {}
+}
+`,
+      /vrf_verify expects \(Blob, Blob, Blob, int variant\)/,
+    ],
+    [
+      `
+seiyaku ExactArgInvalidVrfType {
+  fn helper() {
+    let payload = norito_bytes("00");
+    let proof = vrf_verify(payload, payload, payload, name("variant"));
+  }
+
+  kotoage fn main() permission(Admin) {}
+}
+`,
+      /vrf_verify expects \(Blob\|bytes, Blob\|bytes, Blob\|bytes, int variant\)/,
+    ],
+    [
+      `
+seiyaku ExactArgInvalidNameDecode {
+  fn helper() {
+    let decoded = name_decode(1);
+  }
+
+  kotoage fn main() permission(Admin) {}
+}
+`,
+      /name_decode expects \(Blob\|bytes\)/,
+    ],
+    [
+      `
+seiyaku ExactArgInvalidTlvEq {
+  fn helper() {
+    let equal = tlv_eq(1, name("probe"));
+  }
+
+  kotoage fn main() permission(Admin) {}
+}
+`,
+      /tlv_eq expects \(pointer-ABI, pointer-ABI\)/,
+    ],
+    [
+      `
+seiyaku ExactArgInvalidTlvLen {
+  fn helper() {
+    let size = tlv_len();
+  }
+
+  kotoage fn main() permission(Admin) {}
+}
+`,
+      /tlv_len expects one argument/,
+    ],
+    [
+      `
+seiyaku ExactArgInvalidPointerToNorito {
+  fn helper() {
+    let bytes = pointer_to_norito(json_object());
+  }
+
+  kotoage fn main() permission(Admin) {}
+}
+`,
+      /pointer_to_norito expects a pointer-ABI type or Blob\|bytes argument/,
+    ],
+    [
+      `
+seiyaku ExactArgInvalidNoritoRead {
+  fn helper() {
+    let response = query_execute_norito(1);
+  }
+
+  kotoage fn main() permission(Admin) {}
+}
+`,
+      /query_execute_norito expects \(Blob\|bytes\) pointer to NoritoBytes QueryRequest/,
+    ],
+    [
+      `
+seiyaku ExactArgInvalidTypedQuery {
+  fn helper() {
+    let account = query_get_account(1);
+  }
+
+  kotoage fn main() permission(Admin) {}
+}
+`,
+      /query_get_account expects \(AccountId\|Blob\|bytes\)/,
+    ],
+    [
+      `
+seiyaku ExactArgInvalidTypedQueryManifest {
+  fn helper() {
+    let manifest = query_get_contract_manifest(name("contract"));
+  }
+
+  kotoage fn main() permission(Admin) {}
+}
+`,
+      /query_get_contract_manifest expects \(Blob\|bytes\) Norito Hash/,
+    ],
+    [
+      `
+seiyaku ExactArgInvalidStateHost {
+  fn helper() {
+    let keys = state_keys(name("Orders"), 0, name("bad"));
+  }
+
+  kotoage fn main() permission(Admin) {}
+}
+`,
+      /state_keys expects \(Name, int offset, int limit\)/,
+    ],
+    [
+      `
+seiyaku ExactArgInvalidLifecycle {
+  kotoage fn main() permission(Admin) {
+    register_account(name("bad"));
+  }
+}
+`,
+      /register_account expects \(AccountId\)/,
+    ],
+    [
+      `
+seiyaku ExactArgInvalidManagement {
+  kotoage fn main() permission(Admin) {
+    grant_permission(authority(), 1);
+  }
+}
+`,
+      /grant\/revoke_permission expects \(AccountId, Name\|Json\)/,
+    ],
+    [
+      `
+seiyaku ExactArgInvalidVendorBridge {
+  fn helper() {
+    execute_instruction(1);
+  }
+
+  kotoage fn main() permission(Admin) {}
+}
+`,
+      /execute_instruction expects \(Blob\|bytes\) where the argument is a pointer to NoritoBytes TLV in INPUT/,
+    ],
+    [
+      `
+seiyaku ExactArgInvalidSmartContractLifecycle {
+  fn helper() {
+    deactivate_contract_instance(1);
+  }
+
+  kotoage fn main() permission(Admin) {}
+}
+`,
+      /deactivate_contract_instance expects \(Blob\|bytes\) pointer to NoritoBytes lifecycle request/,
+    ],
+    [
+      `
+seiyaku ExactArgInvalidZkVerify {
+  fn helper() {
+    zk_verify_transfer(1);
+  }
+
+  kotoage fn main() permission(Admin) {}
+}
+`,
+      /zk_verify_transfer expects \(Blob\|bytes\) where the argument is a pointer to NoritoBytes TLV in INPUT/,
+    ],
+    [
+      `
+seiyaku ExactArgInvalidInlineZkBuilder {
+  fn helper() {
+    let bytes = build_unshield_inline(name("asset"), authority(), 1, blob("0123456789abcdef0123456789abcdef"), "halo2", blob("proof"), blob("vk"));
+  }
+
+  kotoage fn main() permission(Admin) {}
+}
+`,
+      /build_unshield_inline expects \(AssetDefinitionId, AccountId, int amount, Blob\|bytes inputs32, string backend, Blob\|bytes proof, Blob\|bytes vk\)/,
+    ],
+    [
+      `
+seiyaku ExactArgInvalidVerifySignature {
+  fn helper() {
+    let payload = blob("0x010203");
+    let ok = verify_signature(payload, payload, payload, name("scheme"));
+  }
+
+  kotoage fn main() permission(Admin) {}
+}
+`,
+      /verify_signature expects scheme code as int/,
+    ],
+    [
+      `
+seiyaku ExactArgInvalidSm2Verify {
+  fn helper() {
+    let payload = blob("0x010203");
+    let ok = sm2_verify(payload, payload, payload, name("distid"));
+  }
+
+  kotoage fn main() permission(Admin) {}
+}
+`,
+      /sm2_verify optional distid must be provided as Blob\|bytes pointer/,
+    ],
+    [
+      `
+seiyaku ExactArgInvalidSm4Ccm {
+  fn helper() {
+    let payload = blob("0x010203");
+    let sealed = sm4_ccm_seal(payload, payload, payload, payload, name("tag"));
+  }
+
+  kotoage fn main() permission(Admin) {}
+}
+`,
+      /sm4_ccm_seal optional tag length must be int/,
+    ],
+    [
+      `
+seiyaku ExactArgInvalidAxtTouch {
+  fn helper() {
+    axt_touch(dataspace_id("7"), 1);
+  }
+
+  kotoage fn main() permission(Admin) {}
+}
+`,
+      /axt_touch expects \(DataSpaceId\[, Blob\|bytes manifest\]\)/,
+    ],
+    [
+      `
+seiyaku ExactArgInvalidEscrowEvidence {
+  fn helper() {
+    escrow_open_dispute(name("deal"), 1);
+  }
+
+  kotoage fn main() permission(Admin) {}
+}
+`,
+      /escrow_open_dispute expects \(Name\[, Blob\|bytes evidence_hashes\]\)/,
+    ],
+    [
+      `
+seiyaku ExactArgInvalidBalance {
+  fn helper() {
+    let balance = get_account_balance(name("not_account"), asset_definition("62Fk4FPcMuLvW5QjDGNF2a4jAmjM"));
+  }
+
+  kotoage fn main() permission(Admin) {}
+}
+`,
+      /get_account_balance expects \(AccountId, AssetDefinitionId\)/,
+    ],
+    [
+      `
+seiyaku ExactArgInvalidResolveAlias {
+  fn helper() {
+    let owner = resolve_account_alias(1);
+  }
+
+  kotoage fn main() permission(Admin) {}
+}
+`,
+      /resolve_account_alias expects \(String\|Blob\)/,
+    ],
+    [
+      `
+seiyaku ExactArgInvalidCallContract {
+  fn helper() {
+    let payload = json!{ amount: 1 };
+    let response = call_contract(json_object(), "settle", payload);
+  }
+
+  kotoage fn main() permission(Admin) {}
+}
+`,
+      /call_contract expects \(String\|Blob, String\|Blob, Json\)/,
+    ],
+    [
+      `
+seiyaku ExactArgInvalidDebugPrint {
+  fn helper() {
+    debug_print(name("not_int"));
+  }
+
+  kotoage fn main() permission(Admin) {}
+}
+`,
+      /debug_print expects \(int value\)/,
+    ],
+    [
+      `
+seiyaku ExactArgInvalidDebugLog {
+  fn helper() {
+    debug_log(name("not_payload"));
+  }
+
+  kotoage fn main() permission(Admin) {}
+}
+`,
+      /debug_log expects \(Json\|Blob\|bytes payload\)/,
+    ],
+    [
+      `
+seiyaku ExactArgInvalidAssertCondition {
+  fn helper() {
+    assert(1);
+  }
+
+  kotoage fn main() permission(Admin) {}
+}
+`,
+      /assert expects \(bool\) or \(bool, string\|int\)/,
+    ],
+    [
+      `
+seiyaku ExactArgInvalidRequireMessage {
+  fn helper() {
+    require(true, false);
+  }
+
+  kotoage fn main() permission(Admin) {}
+}
+`,
+      /require expects \(bool\) or \(bool, string\|int\)/,
+    ],
+    [
+      `
+seiyaku ExactArgInvalidInfoPayload {
+  fn helper() {
+    info(json_object());
+  }
+
+  kotoage fn main() permission(Admin) {}
+}
+`,
+      /info expects \(string\|int\)/,
+    ],
+    [
+      `
+seiyaku ExactArgInvalidAssertEq {
+  fn helper() {
+    assert_eq(true, 1);
+  }
+
+  kotoage fn main() permission(Admin) {}
+}
+`,
+      /assert_eq expects two int args/,
+    ],
+    [
+      `
+seiyaku ExactArgInvalidBatchApply {
+  fn helper() {
+    transfer_v1_batch_apply(1);
+  }
+
+  kotoage fn main() permission(Admin) {}
+}
+`,
+      /transfer_v1_batch_apply expects \(Blob\|bytes\) Norito TransferAssetBatch/,
+    ],
+    [
+      `
+seiyaku ExactArgInvalidTransferBatchEmpty {
+  fn helper() {
+    transfer_batch();
+  }
+
+  kotoage fn main() permission(Admin) {}
+}
+`,
+      /transfer_batch expects at least one entry/,
+    ],
+    [
+      `
+seiyaku ExactArgInvalidTransferBatchEntry {
+  fn helper() {
+    transfer_batch(authority());
+  }
+
+  kotoage fn main() permission(Admin) {}
+}
+`,
+      /transfer_batch expects \(AccountId, AccountId, AssetDefinitionId, numeric\) tuple entries/,
+    ],
+    [
+      `
+seiyaku ExactArgInvalidProof {
+  fn helper() {
+    let verified = verify_proof(1);
+  }
+
+  kotoage fn main() permission(Admin) {}
+}
+`,
+      /verify_proof expects \(Blob\|bytes\) pointer to NoritoBytes OpenVerifyEnvelope/,
+    ],
+    [
+      `
+seiyaku ExactArgInvalidAlloc {
+  fn helper() {
+    let ptr = alloc(name("bytes"));
+  }
+
+  kotoage fn main() permission(Admin) {}
+}
+`,
+      /alloc expects \(int bytes\)/,
+    ],
+    [
+      `
+seiyaku ExactArgInvalidRawMemoryMerkle {
+  fn helper() {
+    let ptr = alloc(64);
+    let compact = get_merkle_compact(ptr, ptr, name("depth"));
+  }
+
+  kotoage fn main() permission(Admin) {}
+}
+`,
+      /get_merkle_compact expects \(int address_or_register, int output_ptr\[, int max_depth\[, int root_output_ptr\]\]\)/,
+    ],
+  ]) {
+    const compiled = compileKotodamaProgram(source);
+
+    assert.equal(compiled.artifactBytes.length, 0);
+    assert.equal(compiled.diagnostics.length, 1);
+    assert.match(compiled.diagnostics[0].message, expected);
+  }
+});
+
+test("Kotodama compiler SDK infers pointer-yielding static builtins through the shared registry", () => {
+  const compiled = compileKotodamaProgram(`
+seiyaku StaticBuiltinPointerYields {
+  view fn compare() -> int {
+    if chain_id() == contract_address() {
+      return 1;
+    }
+    if schema_info(name("Account")) != json_object() {
+      return 2;
+    }
+    if current_time_ms() >= block_height() {
+      return 3;
+    }
+    if sha256_hash(norito_bytes("00")) == chain_id() {
+      return 4;
+    }
+    if query_get_account(authority()) == query_get_account(authority()) {
+      return 5;
+    }
+    if execute_query(norito_bytes("00")) == execute_query(norito_bytes("00")) {
+      return 6;
+    }
+    let values: Map<int, int> = Map::new();
+    values[1] = 2;
+    if keys_take2(values, 0, 0) >= values_take2(values, 0, 0) {
+      return 7;
+    }
+    let balance: Balance = get_account_balance(authority(), asset_definition("62Fk4FPcMuLvW5QjDGNF2a4jAmjM"));
+    if numeric_eq(balance, balance) {
+      return 8;
+    }
+    let direct_amount: Amount = 7;
+    if numeric_eq_direct(direct_amount, direct_amount) {
+      return 9;
+    }
+    if schema_info_direct(name("Account")) != json_object() {
+      return 10;
+    }
+    if name("Account") == name("Account") {
+      return 11;
+    }
+    if blob("0x00") == norito_bytes("00") {
+      return 12;
+    }
+    return 0;
+  }
+}
+`);
+  const code = readArtifactCode(compiled.artifactBytes);
+
+  assert.deepEqual(compiled.diagnostics, []);
+  assert.notEqual(code.indexOf(syscallNeedle(0x5f)), -1);
+  assert.equal(compiled.manifest?.entrypoints[0]?.return_type, "int");
 });
 
 test("Kotodama compiler SDK emits extended query and authority sysvar helpers", () => {
@@ -3001,6 +4901,93 @@ seiyaku AccountBalanceInvalidAsset {
   assert.match(invalidAsset.diagnostics[0].message, /get_account_balance expects \(AccountId, AssetDefinitionId\)/);
 });
 
+test("Kotodama compiler SDK emits generic public input helper syscall", () => {
+  const compiled = compileKotodamaProgram(`
+seiyaku PublicInputHelper {
+  view fn read() -> bytes {
+    return get_public_input(name("proof_payload"));
+  }
+}
+`);
+  const code = readArtifactCode(compiled.artifactBytes);
+
+  assert.deepEqual(compiled.diagnostics, []);
+  assert.notEqual(code.indexOf(syscallNeedle(0xe0)), -1, "missing INPUT_PUBLISH_TLV syscall");
+  assert.notEqual(code.indexOf(syscallNeedle(0xf1)), -1, "missing GET_PUBLIC_INPUT syscall");
+  assert.deepEqual(compiled.manifest?.entrypoints[0]?.read_keys, []);
+  assert.deepEqual(compiled.manifest?.entrypoints[0]?.write_keys, []);
+  assert.notEqual(compiled.manifest?.entrypoints[0]?.access_hints_complete, false);
+  assert.deepEqual(compiled.manifest?.entrypoints[0]?.access_hints_skipped, []);
+});
+
+test("Kotodama compiler SDK rejects invalid public input helper arguments semantically", () => {
+  const compiled = compileKotodamaProgram(`
+seiyaku InvalidPublicInputHelper {
+  view fn read() -> bytes {
+    return get_public_input(1);
+  }
+}
+`);
+
+  assert.equal(compiled.artifactBytes.length, 0);
+  assert.equal(compiled.diagnostics.length, 1);
+  assert.match(compiled.diagnostics[0].message, /get_public_input expects \(Name\)/);
+});
+
+test("Kotodama compiler SDK emits ABI debug helper syscalls", () => {
+  const compiled = compileKotodamaProgram(`
+seiyaku DebugHelpers {
+  view fn inspect() -> int {
+    debug_print(42);
+    debug_log(json!{ status: "ok" });
+    debug_log(blob("hello"));
+    debug_log(norito_bytes("00"));
+    return 1;
+  }
+}
+`);
+  const code = readArtifactCode(compiled.artifactBytes);
+
+  assert.deepEqual(compiled.diagnostics, []);
+  assert.notEqual(code.indexOf(syscallNeedle(0x00)), -1, "missing DEBUG_PRINT syscall");
+  assert.notEqual(code.indexOf(syscallNeedle(0x03)), -1, "missing DEBUG_LOG syscall");
+  assert.equal(code.indexOf(syscallNeedle(0xe0)), -1, "debug helpers must not publish INPUT TLVs");
+  assert.deepEqual(compiled.manifest?.entrypoints[0]?.read_keys, []);
+  assert.deepEqual(compiled.manifest?.entrypoints[0]?.write_keys, []);
+  assert.notEqual(compiled.manifest?.entrypoints[0]?.access_hints_complete, false);
+  assert.deepEqual(compiled.manifest?.entrypoints[0]?.access_hints_skipped, []);
+});
+
+test("Kotodama compiler SDK rejects invalid debug helper arguments semantically", () => {
+  for (const [source, expected] of [
+    [
+      `
+seiyaku InvalidDebugPrint {
+  fn run() {
+    debug_print(name("not_int"));
+  }
+}
+`,
+      /debug_print expects \(int value\)/,
+    ],
+    [
+      `
+seiyaku InvalidDebugLog {
+  fn run() {
+    debug_log(name("not_payload"));
+  }
+}
+`,
+      /debug_log expects \(Json\|Blob\|bytes payload\)/,
+    ],
+  ]) {
+    const compiled = compileKotodamaProgram(source);
+    assert.equal(compiled.artifactBytes.length, 0);
+    assert.equal(compiled.diagnostics.length, 1);
+    assert.match(compiled.diagnostics[0].message, expected);
+  }
+});
+
 test("Kotodama compiler SDK emits privacy and output helper syscalls", () => {
   const compiled = compileKotodamaProgram(`
 seiyaku PrivacyOutputHelpers {
@@ -3010,7 +4997,7 @@ seiyaku PrivacyOutputHelpers {
     commit_output();
   }
 }
-`);
+`, { mode: "test" });
   const code = readArtifactCode(compiled.artifactBytes);
 
   assert.deepEqual(compiled.diagnostics, []);
@@ -3077,7 +5064,7 @@ seiyaku SmartContractLifecycleHelpers {
     activate_contract_instance(request);
   }
 }
-`);
+`, { mode: "test" });
   const code = readArtifactCode(compiled.artifactBytes);
 
   assert.deepEqual(compiled.diagnostics, []);
@@ -3106,6 +5093,432 @@ seiyaku InvalidSmartContractLifecycle {
   assert.match(
     compiled.diagnostics[0].message,
     /register_smart_contract_code expects \(Blob\|bytes\) pointer to NoritoBytes lifecycle request/,
+  );
+});
+
+test("Kotodama compiler SDK emits FASTPQ batch apply helper syscall", () => {
+  const compiled = compileKotodamaProgram(`
+seiyaku FastpqBatchApplyHelper {
+  kotoage fn run() permission(Admin) {
+    let batch = norito_bytes("00");
+    transfer_v1_batch_apply(batch);
+  }
+}
+`, { mode: "test" });
+  const code = readArtifactCode(compiled.artifactBytes);
+
+  assert.deepEqual(compiled.diagnostics, []);
+  for (const syscall of [0xe0, 0x2b]) {
+    assert.notEqual(code.indexOf(syscallNeedle(syscall)), -1, `missing syscall 0x${syscall.toString(16)}`);
+  }
+  assert.deepEqual(compiled.manifest?.entrypoints[0]?.read_keys, []);
+  assert.deepEqual(compiled.manifest?.entrypoints[0]?.write_keys, []);
+  assert.equal(compiled.manifest?.entrypoints[0]?.access_hints_complete, false);
+  assert.deepEqual(compiled.manifest?.entrypoints[0]?.access_hints_skipped, [
+    "opaque ISI access is not compiler-resolved",
+  ]);
+});
+
+test("Kotodama compiler SDK rejects invalid FASTPQ batch apply helper arguments semantically", () => {
+  const compiled = compileKotodamaProgram(`
+seiyaku InvalidFastpqBatchApplyHelper {
+  fn run() {
+    transfer_v1_batch_apply(name("not_batch"));
+  }
+}
+`);
+
+  assert.equal(compiled.artifactBytes.length, 0);
+  assert.equal(compiled.diagnostics.length, 1);
+  assert.match(
+    compiled.diagnostics[0].message,
+    /transfer_v1_batch_apply expects \(Blob\|bytes\) Norito TransferAssetBatch/,
+  );
+});
+
+test("Kotodama compiler SDK emits prove_execution helper syscall", () => {
+  const compiled = compileKotodamaProgram(`
+seiyaku ProveExecutionHelper {
+  view fn proof() -> bytes {
+    return prove_execution();
+  }
+}
+`);
+  const code = readArtifactCode(compiled.artifactBytes);
+
+  assert.deepEqual(compiled.diagnostics, []);
+  assert.notEqual(code.indexOf(syscallNeedle(0xf4)), -1, "missing PROVE_EXECUTION syscall");
+  assert.equal(code.indexOf(syscallNeedle(0xe0)), -1, "prove_execution should not publish INPUT TLVs");
+  assert.deepEqual(compiled.manifest?.entrypoints[0]?.read_keys, []);
+  assert.deepEqual(compiled.manifest?.entrypoints[0]?.write_keys, []);
+  assert.notEqual(compiled.manifest?.entrypoints[0]?.access_hints_complete, false);
+  assert.deepEqual(compiled.manifest?.entrypoints[0]?.access_hints_skipped, []);
+});
+
+test("Kotodama compiler SDK rejects invalid prove_execution helper arguments semantically", () => {
+  const compiled = compileKotodamaProgram(`
+seiyaku InvalidProveExecutionHelper {
+  fn run() {
+    let _proof = prove_execution(1);
+  }
+}
+`);
+
+  assert.equal(compiled.artifactBytes.length, 0);
+  assert.equal(compiled.diagnostics.length, 1);
+  assert.match(compiled.diagnostics[0].message, /prove_execution expects no arguments/);
+});
+
+test("Kotodama compiler SDK emits grow_heap helper syscall", () => {
+  const compiled = compileKotodamaProgram(`
+seiyaku GrowHeapHelper {
+  view fn grow() -> int {
+    return grow_heap(4096);
+  }
+}
+`);
+  const code = readArtifactCode(compiled.artifactBytes);
+
+  assert.deepEqual(compiled.diagnostics, []);
+  assert.notEqual(code.indexOf(syscallNeedle(0xf5)), -1, "missing GROW_HEAP syscall");
+  assert.equal(code.indexOf(syscallNeedle(0xe0)), -1, "grow_heap should not publish INPUT TLVs");
+  assert.deepEqual(compiled.manifest?.entrypoints[0]?.read_keys, []);
+  assert.deepEqual(compiled.manifest?.entrypoints[0]?.write_keys, []);
+  assert.notEqual(compiled.manifest?.entrypoints[0]?.access_hints_complete, false);
+  assert.deepEqual(compiled.manifest?.entrypoints[0]?.access_hints_skipped, []);
+});
+
+test("Kotodama compiler SDK rejects invalid grow_heap helper arguments semantically", () => {
+  const compiled = compileKotodamaProgram(`
+seiyaku InvalidGrowHeapHelper {
+  fn run() {
+    let _limit = grow_heap(name("not_bytes"));
+  }
+}
+`);
+
+  assert.equal(compiled.artifactBytes.length, 0);
+  assert.equal(compiled.diagnostics.length, 1);
+  assert.match(compiled.diagnostics[0].message, /grow_heap expects \(int bytes\)/);
+});
+
+test("Kotodama compiler SDK emits raw memory allocation and Merkle helper syscalls", () => {
+  const compiled = compileKotodamaProgram(`
+seiyaku RawMemoryMerkleHelpers {
+  view fn merkle() -> int {
+    let out = alloc(2048);
+    let root = alloc(32);
+    let path_len = get_merkle_path(out, out, root);
+    let compact_len = get_merkle_compact(out, out, 16, root);
+    let register_len = get_register_merkle_compact(10, out, 8, root);
+    return path_len + compact_len + register_len;
+  }
+}
+`);
+  const code = readArtifactCode(compiled.artifactBytes);
+
+  assert.deepEqual(compiled.diagnostics, []);
+  for (const syscall of [0xf0, 0xf7, 0xfa, 0xff]) {
+    assert.notEqual(code.indexOf(syscallNeedle(syscall)), -1, `missing syscall 0x${syscall.toString(16)}`);
+  }
+  assert.equal(code.indexOf(syscallNeedle(0xe0)), -1, "raw memory Merkle helpers should not publish INPUT TLVs");
+  assert.deepEqual(compiled.manifest?.entrypoints[0]?.read_keys, []);
+  assert.deepEqual(compiled.manifest?.entrypoints[0]?.write_keys, []);
+  assert.notEqual(compiled.manifest?.entrypoints[0]?.access_hints_complete, false);
+  assert.deepEqual(compiled.manifest?.entrypoints[0]?.access_hints_skipped, []);
+});
+
+test("Kotodama compiler SDK rejects invalid raw memory Merkle helper arguments semantically", () => {
+  const compiled = compileKotodamaProgram(`
+seiyaku InvalidRawMemoryMerkleHelpers {
+  fn run() {
+    let _path = get_merkle_path(name("address"), 1);
+  }
+}
+`);
+
+  assert.equal(compiled.artifactBytes.length, 0);
+  assert.equal(compiled.diagnostics.length, 1);
+  assert.match(compiled.diagnostics[0].message, /get_merkle_path expects/);
+});
+
+test("Kotodama compiler SDK emits direct codec and numeric helper syscalls", () => {
+  const compiled = compileKotodamaProgram(`
+seiyaku DirectCodecNumericHelpers {
+  fn direct_helpers() -> int {
+    let amount: Amount = json_get_numeric_direct(json!{ amount: 7 }, name("amount"));
+    let sum: Amount = numeric_add_direct(amount, amount);
+    let diff: Amount = numeric_sub_direct(sum, amount);
+    let product: Amount = numeric_mul_direct(diff, amount);
+    let quotient: Amount = numeric_div_direct(product, amount);
+    let remainder: Amount = numeric_rem_direct(product, amount);
+    let negated: Amount = numeric_neg_direct(remainder);
+    let same = numeric_eq_direct(sum, sum);
+    let different = numeric_ne_direct(sum, diff);
+    let lower = numeric_lt_direct(diff, sum);
+    let lower_or_equal = numeric_le_direct(diff, sum);
+    let greater = numeric_gt_direct(sum, diff);
+    let greater_or_equal = numeric_ge_direct(sum, diff);
+    let nested = json_get_json_direct(json!{ nested: { ok: true } }, name("nested"));
+    let label = json_get_name_direct(json!{ label: "ExampleName" }, name("label"));
+    let owner = json_get_account_id_direct(json!{ owner: "alice@wonderland" }, name("owner"));
+    let asset = json_get_asset_definition_id_direct(json!{ asset: "rose#wonderland" }, name("asset"));
+    let nft = json_get_nft_id_direct(json!{ nft: "n0$wonderland.universal" }, name("nft"));
+    let blob = json_get_blob_hex_direct(json!{ blob: "0102" }, name("blob"));
+    let with_count = json_set_int_direct(json!{ count: 0 }, name("count"), json_get_int_direct(json!{ count: 3 }, name("count")));
+    let with_owner = json_set_account_id_direct(with_count, name("owner"), owner);
+    let path = build_path_key_norito_direct(label, blob);
+    let schema = schema_info_direct(path);
+    let encoded = encode_schema_direct(name("example.schema"), with_owner);
+    let decoded = decode_schema_direct(name("example.schema"), encoded);
+    if same && different && lower && lower_or_equal && greater && greater_or_equal {
+      return numeric_to_int_direct(negated);
+    }
+    return json_get_int_direct(decoded, name("count"));
+  }
+
+  kotoage fn run() permission(Admin) {
+    info(direct_helpers());
+  }
+}
+`);
+  const code = readArtifactCode(compiled.artifactBytes);
+
+  assert.deepEqual(compiled.diagnostics, []);
+  for (const syscall of [
+    0x84,
+    0x85,
+    0x86,
+    0x87,
+    0x88,
+    0x89,
+    0x8a,
+    0x8b,
+    0x8c,
+    0x8d,
+    0x8e,
+    0x8f,
+    0xd0,
+    0xd1,
+    0xd2,
+    0xd3,
+    0xd4,
+    0xd5,
+    0xd6,
+    0xd7,
+    0xd8,
+    0xd9,
+    0xda,
+    0xdb,
+    0xdc,
+    0xdd,
+    0xde,
+  ]) {
+    assert.notEqual(code.indexOf(syscallNeedle(syscall)), -1, `missing syscall 0x${syscall.toString(16)}`);
+  }
+  assert.equal(code.indexOf(syscallNeedle(0xe0)), -1, "direct helper builtins should not publish INPUT TLVs");
+  assert.deepEqual(compiled.manifest?.entrypoints[0]?.read_keys, []);
+  assert.deepEqual(compiled.manifest?.entrypoints[0]?.write_keys, []);
+  assert.notEqual(compiled.manifest?.entrypoints[0]?.access_hints_complete, false);
+  assert.deepEqual(compiled.manifest?.entrypoints[0]?.access_hints_skipped, []);
+});
+
+test("Kotodama compiler SDK rejects invalid direct codec and numeric helper arguments semantically", () => {
+  const invalidNumeric = compileKotodamaProgram(`
+seiyaku InvalidDirectNumeric {
+  fn run() {
+    let bad = numeric_add_direct(1, 1);
+  }
+}
+`);
+  const invalidJson = compileKotodamaProgram(`
+seiyaku InvalidDirectJson {
+  fn run() {
+    let bad = json_get_int_direct(name("payload"), name("count"));
+  }
+}
+`);
+
+  assert.equal(invalidNumeric.artifactBytes.length, 0);
+  assert.equal(invalidNumeric.diagnostics.length, 1);
+  assert.match(invalidNumeric.diagnostics[0].message, /numeric_add_direct expects/);
+  assert.equal(invalidJson.artifactBytes.length, 0);
+  assert.equal(invalidJson.diagnostics.length, 1);
+  assert.match(invalidJson.diagnostics[0].message, /json_get_int_direct expects \(Json, Name\)/);
+});
+
+test("Kotodama compiler SDK emits regular numeric neg helper syscall", () => {
+  const compiled = compileKotodamaProgram(`
+seiyaku NumericNegHelper {
+  view fn read() -> Amount {
+    let value: Amount = 7;
+    return numeric_neg(value);
+  }
+}
+`);
+  const code = readArtifactCode(compiled.artifactBytes);
+
+  assert.deepEqual(compiled.diagnostics, []);
+  assert.notEqual(code.indexOf(syscallNeedle(0xe0)), -1, "numeric_neg should publish its pointer operand");
+  assert.notEqual(code.indexOf(syscallNeedle(0x70)), -1, "numeric_neg should emit NUMERIC_NEG");
+  assert.equal(code.indexOf(syscallNeedle(0xd8)), -1, "numeric_neg should not use the direct helper syscall");
+  assert.deepEqual(compiled.manifest?.entrypoints[0]?.read_keys, []);
+  assert.deepEqual(compiled.manifest?.entrypoints[0]?.write_keys, []);
+  assert.notEqual(compiled.manifest?.entrypoints[0]?.access_hints_complete, false);
+  assert.deepEqual(compiled.manifest?.entrypoints[0]?.access_hints_skipped, []);
+});
+
+test("Kotodama compiler SDK rejects invalid regular numeric neg arguments semantically", () => {
+  const compiled = compileKotodamaProgram(`
+seiyaku InvalidNumericNeg {
+  fn run() {
+    let bad = numeric_neg(1);
+  }
+}
+`);
+
+  assert.equal(compiled.artifactBytes.length, 0);
+  assert.equal(compiled.diagnostics.length, 1);
+  assert.match(compiled.diagnostics[0].message, /numeric_neg expects \(Amount\|Balance\|fixed_u128\)/);
+});
+
+test("Kotodama compiler SDK emits regular numeric to int helper syscall", () => {
+  const compiled = compileKotodamaProgram(`
+seiyaku NumericToIntHelper {
+  view fn read() -> int {
+    let value: Amount = 7;
+    return numeric_to_int(value);
+  }
+}
+`);
+  const code = readArtifactCode(compiled.artifactBytes);
+
+  assert.deepEqual(compiled.diagnostics, []);
+  assert.notEqual(code.indexOf(syscallNeedle(0xe0)), -1, "numeric_to_int should publish its pointer operand");
+  assert.notEqual(code.indexOf(syscallNeedle(0x6a)), -1, "numeric_to_int should emit NUMERIC_TO_INT");
+  assert.equal(code.indexOf(syscallNeedle(0xd2)), -1, "numeric_to_int should not use the direct helper syscall");
+  assert.deepEqual(compiled.manifest?.entrypoints[0]?.read_keys, []);
+  assert.deepEqual(compiled.manifest?.entrypoints[0]?.write_keys, []);
+  assert.notEqual(compiled.manifest?.entrypoints[0]?.access_hints_complete, false);
+  assert.deepEqual(compiled.manifest?.entrypoints[0]?.access_hints_skipped, []);
+});
+
+test("Kotodama compiler SDK rejects invalid regular numeric to int arguments semantically", () => {
+  const compiled = compileKotodamaProgram(`
+seiyaku InvalidNumericToInt {
+  fn run() {
+    let bad = numeric_to_int(1);
+  }
+}
+`);
+
+  assert.equal(compiled.artifactBytes.length, 0);
+  assert.equal(compiled.diagnostics.length, 1);
+  assert.match(compiled.diagnostics[0].message, /numeric_to_int expects \(Amount\|Balance\|fixed_u128\)/);
+});
+
+test("Kotodama compiler SDK emits regular numeric binary helper syscalls", () => {
+  const compiled = compileKotodamaProgram(`
+seiyaku NumericBinaryHelpers {
+  view fn compute() -> Amount {
+    let left: Amount = 7;
+    let right: Amount = 3;
+    return numeric_add(left, numeric_rem(left, right));
+  }
+}
+`);
+  const code = readArtifactCode(compiled.artifactBytes);
+
+  assert.deepEqual(compiled.diagnostics, []);
+  assert.notEqual(code.indexOf(syscallNeedle(0xe0)), -1, "regular numeric helpers should publish operands");
+  assert.notEqual(code.indexOf(syscallNeedle(0x6b)), -1, "numeric_add should emit NUMERIC_ADD");
+  assert.notEqual(code.indexOf(syscallNeedle(0x6f)), -1, "numeric_rem should emit NUMERIC_REM");
+  assert.equal(code.indexOf(syscallNeedle(0xd3)), -1, "numeric_add should not use NUMERIC_ADD_DIRECT");
+  assert.equal(code.indexOf(syscallNeedle(0xd7)), -1, "numeric_rem should not use NUMERIC_REM_DIRECT");
+  assert.deepEqual(compiled.manifest?.entrypoints[0]?.read_keys, []);
+  assert.deepEqual(compiled.manifest?.entrypoints[0]?.write_keys, []);
+  assert.notEqual(compiled.manifest?.entrypoints[0]?.access_hints_complete, false);
+  assert.deepEqual(compiled.manifest?.entrypoints[0]?.access_hints_skipped, []);
+});
+
+test("Kotodama compiler SDK emits regular numeric comparison helper syscalls", () => {
+  const compiled = compileKotodamaProgram(`
+seiyaku NumericCompareHelpers {
+  view fn compare() -> int {
+    let left: Amount = 7;
+    let right: Amount = 3;
+    if numeric_ge(left, right) {
+      return 1;
+    }
+    return 0;
+  }
+}
+`);
+  const code = readArtifactCode(compiled.artifactBytes);
+
+  assert.deepEqual(compiled.diagnostics, []);
+  assert.notEqual(code.indexOf(syscallNeedle(0xe0)), -1, "regular numeric helpers should publish operands");
+  assert.notEqual(code.indexOf(syscallNeedle(0x76)), -1, "numeric_ge should emit NUMERIC_GE");
+  assert.equal(code.indexOf(syscallNeedle(0xde)), -1, "numeric_ge should not use NUMERIC_GE_DIRECT");
+  assert.deepEqual(compiled.manifest?.entrypoints[0]?.read_keys, []);
+  assert.deepEqual(compiled.manifest?.entrypoints[0]?.write_keys, []);
+  assert.notEqual(compiled.manifest?.entrypoints[0]?.access_hints_complete, false);
+  assert.deepEqual(compiled.manifest?.entrypoints[0]?.access_hints_skipped, []);
+});
+
+test("Kotodama compiler SDK rejects invalid regular numeric binary helper arguments semantically", () => {
+  const compiled = compileKotodamaProgram(`
+seiyaku InvalidNumericBinary {
+  fn run() {
+    let value: Amount = 7;
+    let bad = numeric_add(1, value);
+  }
+}
+`);
+
+  assert.equal(compiled.artifactBytes.length, 0);
+  assert.equal(compiled.diagnostics.length, 1);
+  assert.match(compiled.diagnostics[0].message, /numeric_add expects compatible wide numeric operands/);
+});
+
+test("Kotodama compiler SDK emits generic verify_proof helper syscall", () => {
+  const compiled = compileKotodamaProgram(`
+seiyaku VerifyProofHelper {
+  view fn check() -> int {
+    let envelope = norito_bytes("00");
+    if verify_proof(envelope) {
+      return 1;
+    }
+    return 0;
+  }
+}
+`);
+  const code = readArtifactCode(compiled.artifactBytes);
+
+  assert.deepEqual(compiled.diagnostics, []);
+  for (const syscall of [0xe0, 0xf6]) {
+    assert.notEqual(code.indexOf(syscallNeedle(syscall)), -1, `missing syscall 0x${syscall.toString(16)}`);
+  }
+  assert.deepEqual(compiled.manifest?.entrypoints[0]?.read_keys, []);
+  assert.deepEqual(compiled.manifest?.entrypoints[0]?.write_keys, []);
+  assert.notEqual(compiled.manifest?.entrypoints[0]?.access_hints_complete, false);
+  assert.deepEqual(compiled.manifest?.entrypoints[0]?.access_hints_skipped, []);
+});
+
+test("Kotodama compiler SDK rejects invalid verify_proof helper arguments semantically", () => {
+  const compiled = compileKotodamaProgram(`
+seiyaku InvalidVerifyProofHelper {
+  fn run() {
+    let _ok = verify_proof(name("not_envelope"));
+  }
+}
+`);
+
+  assert.equal(compiled.artifactBytes.length, 0);
+  assert.equal(compiled.diagnostics.length, 1);
+  assert.match(
+    compiled.diagnostics[0].message,
+    /verify_proof expects \(Blob\|bytes\) pointer to NoritoBytes OpenVerifyEnvelope/,
   );
 });
 
@@ -3147,14 +5560,16 @@ seiyaku HostNamespaceHelpers {
     let now = host::current_time_ms();
     let block_time = host::block_time_ms();
     let chain = host::chain_id();
+    let caller = host::authority();
     info(total);
     info(now);
     info(block_time);
     info(tlv_len(chain));
+    info(tlv_len(caller));
     return host::call_contract("target.contract", "settle", payload);
   }
 }
-`);
+`, { mode: "test" });
   const invalid = compileKotodamaProgram(`
 seiyaku InvalidHostNamespaceHelper {
   kotoage fn run() permission(Admin) {
@@ -3169,6 +5584,7 @@ seiyaku InvalidHostNamespaceHelper {
   assert.notEqual(code.indexOf(syscallNeedle(0x51)), -1);
   assert.notEqual(code.indexOf(syscallNeedle(0x52)), -1);
   assert.notEqual(code.indexOf(syscallxNeedle(0x01_0033)), -1);
+  assert.notEqual(code.indexOf(syscallNeedle(0xa4)), -1);
   assert.notEqual(code.indexOf(syscallNeedle(0xa8)), -1);
   assert.notEqual(code.indexOf(syscallNeedle(0xa9)), -1);
   assert.equal(compiled.manifest?.entrypoints[0]?.return_type, "bytes");
@@ -3381,7 +5797,7 @@ seiyaku SingleJsonPayload {
     return call_contract("target.contract", "relay", payload);
   }
 }
-`);
+`, { mode: "test" });
   const direct = compileKotodamaProgram(`
 seiyaku DirectSingleJsonPayload {
   kotoage fn accept(payload: Json) -> bytes permission(Admin) {
@@ -3787,12 +6203,17 @@ seiyaku HashHelpers {
   const code = readArtifactCode(compiled.artifactBytes);
 
   assert.deepEqual(compiled.diagnostics, []);
+  assert.notEqual(code.indexOf(syscallNeedle(0xe0)), -1);
   assert.notEqual(code.indexOf(syscallNeedle(0x90)), -1);
   assert.notEqual(code.indexOf(syscallNeedle(0x96)), -1);
   assert.notEqual(code.indexOf(syscallNeedle(0x97)), -1);
   assert.notEqual(code.indexOf(syscallNeedle(0x98)), -1);
   assert.notEqual(code.indexOf(syscallNeedle(0x99)), -1);
   assert.notEqual(code.indexOf(syscallNeedle(0x9a)), -1);
+  assert.deepEqual(compiled.manifest?.entrypoints[0]?.read_keys, []);
+  assert.deepEqual(compiled.manifest?.entrypoints[0]?.write_keys, []);
+  assert.notEqual(compiled.manifest?.entrypoints[0]?.access_hints_complete, false);
+  assert.deepEqual(compiled.manifest?.entrypoints[0]?.access_hints_skipped, []);
 });
 
 test("Kotodama compiler SDK rejects extended hash helper non-blob arguments", () => {
@@ -3877,6 +6298,81 @@ seiyaku EncodeDecodeHelpers {
   assert.notEqual(code.indexOf(syscallNeedle(0x53)), -1);
   assert.notEqual(code.indexOf(syscallNeedle(0x57)), -1);
   assert.notEqual(code.indexOf(syscallNeedle(0x58)), -1);
+  assert.deepEqual(compiled.manifest?.entrypoints[0]?.read_keys, []);
+  assert.deepEqual(compiled.manifest?.entrypoints[0]?.write_keys, []);
+  assert.notEqual(compiled.manifest?.entrypoints[0]?.access_hints_complete, false);
+  assert.deepEqual(compiled.manifest?.entrypoints[0]?.access_hints_skipped, []);
+});
+
+test("Kotodama compiler SDK emits name_decode helper syscall", () => {
+  const compiled = compileKotodamaProgram(`
+seiyaku NameDecodeHelper {
+  view fn decode() -> Name {
+    return name_decode(norito_bytes("70726f6265"));
+  }
+}
+`);
+  const code = readArtifactCode(compiled.artifactBytes);
+
+  assert.deepEqual(compiled.diagnostics, []);
+  assert.notEqual(code.indexOf(syscallNeedle(0xe0)), -1, "name_decode should publish its bytes operand");
+  assert.notEqual(code.indexOf(syscallNeedle(0x5c)), -1, "name_decode should emit NAME_DECODE");
+  assert.deepEqual(compiled.manifest?.entrypoints[0]?.read_keys, []);
+  assert.deepEqual(compiled.manifest?.entrypoints[0]?.write_keys, []);
+  assert.notEqual(compiled.manifest?.entrypoints[0]?.access_hints_complete, false);
+  assert.deepEqual(compiled.manifest?.entrypoints[0]?.access_hints_skipped, []);
+});
+
+test("Kotodama compiler SDK rejects invalid name_decode helper arguments semantically", () => {
+  const compiled = compileKotodamaProgram(`
+seiyaku InvalidNameDecode {
+  fn run() {
+    let bad = name_decode(1);
+  }
+}
+`);
+
+  assert.equal(compiled.artifactBytes.length, 0);
+  assert.equal(compiled.diagnostics.length, 1);
+  assert.match(compiled.diagnostics[0].message, /name_decode expects \(Blob\|bytes\)/);
+});
+
+test("Kotodama compiler SDK emits explicit TLV equality helper syscall", () => {
+  const compiled = compileKotodamaProgram(`
+seiyaku TlvEqHelper {
+  view fn compare() -> int {
+    let left = name("probe");
+    let right = name_decode(norito_bytes("70726f6265"));
+    if tlv_eq(left, right) {
+      return 1;
+    }
+    return 0;
+  }
+}
+`);
+  const code = readArtifactCode(compiled.artifactBytes);
+
+  assert.deepEqual(compiled.diagnostics, []);
+  assert.notEqual(code.indexOf(syscallNeedle(0xe0)), -1, "tlv_eq should publish operands");
+  assert.notEqual(code.indexOf(syscallNeedle(0x5f)), -1, "tlv_eq should emit TLV_EQ");
+  assert.deepEqual(compiled.manifest?.entrypoints[0]?.read_keys, []);
+  assert.deepEqual(compiled.manifest?.entrypoints[0]?.write_keys, []);
+  assert.notEqual(compiled.manifest?.entrypoints[0]?.access_hints_complete, false);
+  assert.deepEqual(compiled.manifest?.entrypoints[0]?.access_hints_skipped, []);
+});
+
+test("Kotodama compiler SDK rejects invalid TLV equality helper arguments semantically", () => {
+  const compiled = compileKotodamaProgram(`
+seiyaku InvalidTlvEq {
+  fn run() {
+    let bad = tlv_eq(1, name("probe"));
+  }
+}
+`);
+
+  assert.equal(compiled.artifactBytes.length, 0);
+  assert.equal(compiled.diagnostics.length, 1);
+  assert.match(compiled.diagnostics[0].message, /tlv_eq expects \(pointer-ABI, pointer-ABI\)/);
 });
 
 test("Kotodama compiler SDK accepts Rust int-like encode_int values", () => {
@@ -3931,7 +6427,7 @@ seiyaku ContractCallRelay {
     return call_contract(target, "settle", payload);
   }
 }
-`);
+`, { mode: "test" });
   const code = readArtifactCode(compiled.artifactBytes);
 
   assert.deepEqual(compiled.diagnostics, []);
@@ -4152,7 +6648,7 @@ seiyaku DynamicStringAbi {
     info(tlv_len(response));
   }
 }
-`);
+`, { mode: "test" });
   const code = readArtifactCode(compiled.artifactBytes);
 
   assert.deepEqual(compiled.diagnostics, []);
@@ -4201,7 +6697,7 @@ seiyaku RolePermissionHelpers {
     delete_role(role);
   }
 }
-`);
+`, { mode: "test" });
   const code = readArtifactCode(compiled.artifactBytes);
 
   assert.deepEqual(compiled.diagnostics, []);
@@ -4225,7 +6721,7 @@ seiyaku PeerTriggerHelpers {
     set_trigger_enabled(trigger, 1);
   }
 }
-`);
+`, { mode: "test" });
   const code = readArtifactCode(compiled.artifactBytes);
 
   assert.deepEqual(compiled.diagnostics, []);
@@ -4277,8 +6773,13 @@ seiyaku SignatureHelpers {
   const code = readArtifactCode(compiled.artifactBytes);
 
   assert.deepEqual(compiled.diagnostics, []);
+  assert.notEqual(code.indexOf(syscallNeedle(0xe0)), -1);
   assert.notEqual(code.indexOf(syscallNeedle(0x91)), -1);
   assert.notEqual(code.indexOf(syscallNeedle(0xfc)), -1);
+  assert.deepEqual(compiled.manifest?.entrypoints[0]?.read_keys, []);
+  assert.deepEqual(compiled.manifest?.entrypoints[0]?.write_keys, []);
+  assert.notEqual(compiled.manifest?.entrypoints[0]?.access_hints_complete, false);
+  assert.deepEqual(compiled.manifest?.entrypoints[0]?.access_hints_skipped, []);
 });
 
 test("Kotodama compiler SDK emits SM4 helper syscalls", () => {
@@ -4301,10 +6802,15 @@ seiyaku Sm4Helpers {
   const code = readArtifactCode(compiled.artifactBytes);
 
   assert.deepEqual(compiled.diagnostics, []);
+  assert.notEqual(code.indexOf(syscallNeedle(0xe0)), -1);
   assert.notEqual(code.indexOf(syscallNeedle(0x92)), -1);
   assert.notEqual(code.indexOf(syscallNeedle(0x93)), -1);
   assert.notEqual(code.indexOf(syscallNeedle(0x94)), -1);
   assert.notEqual(code.indexOf(syscallNeedle(0x95)), -1);
+  assert.deepEqual(compiled.manifest?.entrypoints[0]?.read_keys, []);
+  assert.deepEqual(compiled.manifest?.entrypoints[0]?.write_keys, []);
+  assert.notEqual(compiled.manifest?.entrypoints[0]?.access_hints_complete, false);
+  assert.deepEqual(compiled.manifest?.entrypoints[0]?.access_hints_skipped, []);
 });
 
 test("Kotodama compiler SDK accepts Rust int-like crypto selector arguments", () => {
@@ -5490,6 +7996,75 @@ seiyaku TestOnlyHelper {
   }
 });
 
+test("Kotodama compiler SDK validates test-only helper shapes through the shared registry", () => {
+  const cases = [
+    {
+      name: "invoke payload",
+      statement: 'let out = invoke_entrypoint("run", name("payload"));',
+      expected: /invoke_entrypoint expects a Json payload as its second argument/,
+    },
+    {
+      name: "actor literal",
+      statement: "let acct = actor_account(1);",
+      expected: /actor_account requires a literal actor alias such as "issuer" or name\("issuer"\)/,
+    },
+    {
+      name: "actor sign payload",
+      statement: 'let sig = actor_sign("issuer", name("message"));',
+      expected: /actor_sign expects the message as Blob\|bytes/,
+    },
+    {
+      name: "actor public key arity",
+      statement: 'let pk = actor_public_key("issuer", "extra");',
+      expected: /actor_public_key expects \(string\|Name literal actor\)/,
+    },
+  ];
+
+  for (const { name, statement, expected } of cases) {
+    const compiled = compileKotodamaProgram(`
+seiyaku InvalidTestOnlyHelperShape {
+  kotoage fn run() permission(Admin) {}
+
+  #[test]
+  fn smoke() {
+    ${statement}
+  }
+}
+`, { mode: "test" });
+
+    assert.equal(compiled.artifactBytes.length, 0, name);
+    assert.equal(compiled.diagnostics.length, 1, name);
+    assert.match(compiled.diagnostics[0].message, expected, name);
+  }
+});
+
+test("Kotodama compiler SDK infers fixed test-only helper value types through the shared registry", () => {
+  const compiled = compileKotodamaProgram(`
+seiyaku TestOnlyStaticValueTypes {
+  kotoage fn run() permission(Admin) {}
+
+  #[test]
+  fn smoke() {
+    let annotated_account: AccountId = actor_account("issuer");
+    let annotated_public_key: bytes = actor_public_key("issuer");
+    let annotated_signature: bytes = actor_sign("issuer", blob("0x00"));
+    let inferred_account = actor_account(name("issuer"));
+    let inferred_public_key = actor_public_key("issuer");
+    let inferred_signature = actor_sign("issuer", b"demo");
+    if inferred_account == annotated_account {
+      info(tlv_len(annotated_public_key) + tlv_len(annotated_signature) + tlv_len(inferred_public_key) + tlv_len(inferred_signature));
+    }
+    if actor_public_key("issuer") == actor_sign("issuer", blob("0x00")) {
+      info(1);
+    }
+  }
+}
+`, { mode: "test" });
+
+  assert.deepEqual(compiled.diagnostics, []);
+  assert.ok(compiled.artifactBytes.length > 0);
+});
+
 test("Kotodama compiler SDK strips Rust test functions in production mode", () => {
   const compiled = compileKotodamaProgram(`
 seiyaku StrippedTests {
@@ -5866,6 +8441,21 @@ seiyaku ViewScExecuteAlias {
   assert.equal(view.artifactBytes.length, 0);
   assert.equal(view.diagnostics.length, 1);
   assert.match(view.diagnostics[0].message, /view function `inspect` cannot perform instruction emission/);
+});
+
+test("Kotodama compiler SDK rejects instruction bridge helpers used as values", () => {
+  const compiled = compileKotodamaProgram(`
+seiyaku InstructionBridgeValue {
+  kotoage fn run() -> int permission(Admin) {
+    let payload = execute_instruction(norito_bytes("0x0102"));
+    return 1;
+  }
+}
+`);
+
+  assert.equal(compiled.artifactBytes.length, 0);
+  assert.equal(compiled.diagnostics.length, 1);
+  assert.match(compiled.diagnostics[0].message, /Function `execute_instruction` does not produce a value/);
 });
 
 test("Kotodama compiler SDK mirrors Rust lexer diagnostics for string and byte escapes", () => {
@@ -6457,6 +9047,13 @@ seiyaku InvalidMint {
   }
 }
 `);
+  const invalidBurn = compileKotodamaProgram(`
+seiyaku InvalidBurn {
+  kotoage fn run() permission(Admin) {
+    call burn_asset(authority(), name("rose"), 1);
+  }
+}
+`);
 const invalidTransferDomain = compileKotodamaProgram(`
 seiyaku InvalidTransferDomain {
   kotoage fn run() permission(Admin) {
@@ -6571,6 +9168,21 @@ seiyaku InvalidNftMetadata {
   }
 }
 `);
+  const invalidNftTransfer = compileKotodamaProgram(`
+seiyaku InvalidNftTransfer {
+  kotoage fn run() permission(Admin) {
+    let nft = nft_id("n0$wonderland.universal");
+    call nft_transfer_asset(authority(), nft, name("bad"));
+  }
+}
+`);
+  const invalidNftBurn = compileKotodamaProgram(`
+seiyaku InvalidNftBurn {
+  kotoage fn run() permission(Admin) {
+    call nft_burn_asset(name("bad"));
+  }
+}
+`);
   const validEffects = compileKotodamaProgram(`
 seiyaku ValidEffects {
   kotoage fn run() permission(Admin) {
@@ -6604,6 +9216,9 @@ seiyaku ValidEffects {
   assert.equal(invalidMint.artifactBytes.length, 0);
   assert.equal(invalidMint.diagnostics.length, 1);
   assert.match(invalidMint.diagnostics[0].message, /mint_asset expects \(AccountId, AssetDefinitionId, numeric\)/);
+  assert.equal(invalidBurn.artifactBytes.length, 0);
+  assert.equal(invalidBurn.diagnostics.length, 1);
+  assert.match(invalidBurn.diagnostics[0].message, /burn_asset expects \(AccountId, AssetDefinitionId, numeric\)/);
   assert.equal(invalidTransferDomain.artifactBytes.length, 0);
   assert.equal(invalidTransferDomain.diagnostics.length, 1);
   assert.match(
@@ -6664,6 +9279,15 @@ seiyaku ValidEffects {
   assert.equal(invalidNftMetadata.artifactBytes.length, 0);
   assert.equal(invalidNftMetadata.diagnostics.length, 1);
   assert.match(invalidNftMetadata.diagnostics[0].message, /nft_set_metadata expects \(NftId, Name, Json\)/);
+  assert.equal(invalidNftTransfer.artifactBytes.length, 0);
+  assert.equal(invalidNftTransfer.diagnostics.length, 1);
+  assert.match(
+    invalidNftTransfer.diagnostics[0].message,
+    /nft_transfer_asset expects \(AccountId, NftId, AccountId\)/,
+  );
+  assert.equal(invalidNftBurn.artifactBytes.length, 0);
+  assert.equal(invalidNftBurn.diagnostics.length, 1);
+  assert.match(invalidNftBurn.diagnostics[0].message, /nft_burn_asset expects \(NftId\)/);
   assert.deepEqual(validEffects.diagnostics, []);
   const validEffectsCode = readArtifactCode(validEffects.artifactBytes);
   assert.notEqual(validEffectsCode.indexOf(syscallNeedle(0x25)), -1);
@@ -6710,7 +9334,7 @@ seiyaku ValidRuntimeDomainName {
     transfer_domain(authority(), domain_name, authority());
   }
 }
-`);
+`, { mode: "test" });
 
   assert.equal(invalidConstructor.artifactBytes.length, 0);
   assert.equal(invalidConstructor.diagnostics.length, 1);
@@ -7133,7 +9757,7 @@ seiyaku LiteralStringPointerConstructors {
     set_account_detail(owner, key, payload);
   }
 }
-`);
+`, { mode: "test" });
 
   assert.deepEqual(compiled.diagnostics, []);
   const code = readArtifactCode(compiled.artifactBytes);
@@ -7182,7 +9806,7 @@ seiyaku HelperDerivedInvalidStrings {
     set_account_detail(account_id(bad_account()), name(bad_name()), json(raw_json));
   }
 }
-`);
+`, { mode: "test" });
   const invalidNameLocal = compileKotodamaProgram(`
 fn main() {
   let raw: String = "bad name";
@@ -7209,6 +9833,7 @@ seiyaku TransferBatch {
       (authority(), authority(), asset, 7),
       (authority(), authority(), asset, 3)
     );
+    call transfer_batch((authority(), authority(), asset, 5));
   }
 }
 `);
@@ -7219,14 +9844,23 @@ seiyaku TransferBatch {
   const firstTransfer = code.indexOf(syscallNeedle(0x24));
   const secondTransfer = code.indexOf(syscallNeedle(0x24), firstTransfer + 1);
   const batchEnd = code.indexOf(syscallNeedle(0x2a));
+  const callBatchBegin = code.indexOf(syscallNeedle(0x29), batchEnd + 1);
+  const callTransfer = code.indexOf(syscallNeedle(0x24), secondTransfer + 1);
+  const callBatchEnd = code.indexOf(syscallNeedle(0x2a), callTransfer + 1);
   assert.notEqual(batchBegin, -1);
   assert.notEqual(firstTransfer, -1);
   assert.notEqual(secondTransfer, -1);
   assert.notEqual(batchEnd, -1);
-  assert.equal(code.indexOf(syscallNeedle(0x24), secondTransfer + 1), -1);
+  assert.notEqual(callBatchBegin, -1);
+  assert.notEqual(callTransfer, -1);
+  assert.notEqual(callBatchEnd, -1);
+  assert.equal(code.indexOf(syscallNeedle(0x24), callTransfer + 1), -1);
   assert.ok(batchBegin < firstTransfer);
   assert.ok(firstTransfer < secondTransfer);
   assert.ok(secondTransfer < batchEnd);
+  assert.ok(batchEnd < callBatchBegin);
+  assert.ok(callBatchBegin < callTransfer);
+  assert.ok(callTransfer < callBatchEnd);
 });
 
 test("Kotodama compiler SDK emits AXT pointer constructors and syscalls", () => {
@@ -7247,7 +9881,7 @@ seiyaku AxtIntrinsics {
     axt_commit();
   }
 }
-`);
+`, { mode: "test" });
 
   assert.deepEqual(compiled.diagnostics, []);
   const code = readArtifactCode(compiled.artifactBytes);
@@ -7320,14 +9954,14 @@ seiyaku ValidDataSpaceIdPointer {
     axt_touch(ds);
   }
 }
-`);
+`, { mode: "test" });
   const validEncodedDataspace = compileKotodamaProgram(`
 seiyaku ValidEncodedDataSpaceIdPointer {
   kotoage fn run() permission(Admin) {
     axt_touch(dataspace_id("${encodedDataspace7}"));
   }
 }
-`);
+`, { mode: "test" });
   const validBlobLikeAxt = compileKotodamaProgram(`
 seiyaku ValidAxtBlobLikePointers {
   kotoage fn run() permission(Admin) {
@@ -7339,7 +9973,7 @@ seiyaku ValidAxtBlobLikePointers {
     use_asset_handle(handle, norito_bytes("intent"));
   }
 }
-`);
+`, { mode: "test" });
   const invalidDataspace = compileKotodamaProgram(`
 seiyaku InvalidDataSpaceIdPointer {
   kotoage fn run() permission(Admin) {
@@ -7483,7 +10117,7 @@ seiyaku ValidEscrowSemantic {
     escrow_resolve_dispute(name("aitai_offer"), 6, 4, evidence);
   }
 }
-`);
+`, { mode: "test" });
 
   assert.equal(invalidOpenOfferAsset.artifactBytes.length, 0);
   assert.equal(invalidOpenOfferAsset.diagnostics.length, 1);
@@ -7545,7 +10179,7 @@ seiyaku ValidAnonymousEscrowSemantic {
     anonymous_escrow_resolve_dispute(request);
   }
 }
-`);
+`, { mode: "test" });
 
   assert.equal(invalidRequest.artifactBytes.length, 0);
   assert.equal(invalidRequest.diagnostics.length, 1);
@@ -9669,7 +12303,7 @@ seiyaku AccountAliasPointers {
     set_account_detail(qualified, name("status"), json!{ ok: true });
   }
 }
-`);
+`, { mode: "test" });
   const canonical = compileKotodamaProgram(`
 seiyaku CanonicalAccountPointer {
   kotoage fn run() permission(Admin) {
@@ -10163,7 +12797,7 @@ seiyaku NativeEscrowBuiltins {
     escrow_resolve_dispute(name("aitai_offer"), 6, 4, evidence);
   }
 }
-`);
+`, { mode: "test" });
   const code = readArtifactCode(compiled.artifactBytes);
 
   assert.deepEqual(compiled.diagnostics, []);
@@ -10192,7 +12826,7 @@ seiyaku NativeAnonymousEscrowBuiltins {
     anonymous_escrow_resolve_dispute(request);
   }
 }
-`);
+`, { mode: "test" });
   const code = readArtifactCode(compiled.artifactBytes);
 
   assert.deepEqual(compiled.diagnostics, []);
@@ -10224,7 +12858,7 @@ seiyaku SoracloudBuiltins {
     let _secret_envelope = soracloud_read_secret_envelope(request);
   }
 }
-`);
+`, { mode: "test" });
   const code = readArtifactCode(compiled.artifactBytes);
 
   assert.deepEqual(compiled.diagnostics, []);
@@ -10267,6 +12901,9 @@ seiyaku AccountMultisigAdmin {
     add_signatory(account, signatory);
     remove_signatory(account, signatory);
     set_account_quorum(account, 2);
+    call add_signatory(account, signatory);
+    call remove_signatory(account, signatory);
+    call set_account_quorum(account, 3);
   }
 }
 `);
@@ -10294,7 +12931,7 @@ seiyaku AccountAdminArguments {
   const invalidQuorum = compileKotodamaProgram(`
 seiyaku AccountAdminQuorumArguments {
   kotoage fn run(account: AccountId) permission(Admin) {
-    set_account_quorum(account, json("{}"));
+    call set_account_quorum(account, json("{}"));
   }
 }
 `);
@@ -10307,40 +12944,18 @@ seiyaku AccountAdminQuorumArguments {
   assert.match(invalidQuorum.diagnostics[0].message, /set_account_quorum expects \(AccountId, numeric\)/);
 });
 
-test("Kotodama compiler SDK keeps native escrow rows Rust-shaped", () => {
+test("Kotodama compiler SDK rejects native escrow sample incomplete access metadata like Rust", () => {
   const source = readFileSync(
     new URL("../../../crates/kotodama_lang/src/samples/native_escrow.ko", import.meta.url),
     "utf8",
   );
   const compiled = compileKotodamaProgram(source, { sourceName: "native_escrow.ko" });
 
-  assert.deepEqual(compiled.diagnostics, []);
-  assert.deepEqual(
-    compiled.budgetReport.map((entry) => ({
-      function_name: entry.function_name,
-      pc_start: entry.pc_start,
-      pc_end: entry.pc_end,
-      bytecode_bytes: entry.bytecode_bytes,
-      bytecode_words: entry.bytecode_words,
-      frame_bytes: entry.frame_bytes,
-    })),
-    [
-      { function_name: "main", pc_start: 0, pc_end: 8, bytecode_bytes: 8, bytecode_words: 2, frame_bytes: 8 },
-      { function_name: "__entrypoint_impl__open_offer", pc_start: 8, pc_end: 292, bytecode_bytes: 284, bytecode_words: 71, frame_bytes: 72 },
-      { function_name: "open_offer", pc_start: 292, pc_end: 956, bytecode_bytes: 664, bytecode_words: 166, frame_bytes: 48 },
-      { function_name: "__entrypoint_impl__accept", pc_start: 956, pc_end: 1008, bytecode_bytes: 52, bytecode_words: 13, frame_bytes: 24 },
-      { function_name: "accept", pc_start: 1008, pc_end: 1392, bytecode_bytes: 384, bytecode_words: 96, frame_bytes: 32 },
-      { function_name: "__entrypoint_impl__mark_payment_sent", pc_start: 1392, pc_end: 1444, bytecode_bytes: 52, bytecode_words: 13, frame_bytes: 24 },
-      { function_name: "mark_payment_sent", pc_start: 1444, pc_end: 1828, bytecode_bytes: 384, bytecode_words: 96, frame_bytes: 32 },
-      { function_name: "__entrypoint_impl__release", pc_start: 1828, pc_end: 1880, bytecode_bytes: 52, bytecode_words: 13, frame_bytes: 24 },
-      { function_name: "release", pc_start: 1880, pc_end: 2264, bytecode_bytes: 384, bytecode_words: 96, frame_bytes: 32 },
-      { function_name: "__entrypoint_impl__cancel", pc_start: 2264, pc_end: 2316, bytecode_bytes: 52, bytecode_words: 13, frame_bytes: 24 },
-      { function_name: "cancel", pc_start: 2316, pc_end: 2700, bytecode_bytes: 384, bytecode_words: 96, frame_bytes: 32 },
-      { function_name: "__entrypoint_impl__dispute", pc_start: 2700, pc_end: 2756, bytecode_bytes: 56, bytecode_words: 14, frame_bytes: 24 },
-      { function_name: "dispute", pc_start: 2756, pc_end: 3140, bytecode_bytes: 384, bytecode_words: 96, frame_bytes: 32 },
-      { function_name: "__entrypoint_impl__resolve_dispute", pc_start: 3140, pc_end: 3300, bytecode_bytes: 160, bytecode_words: 40, frame_bytes: 64 },
-      { function_name: "resolve_dispute", pc_start: 3300, pc_end: 5420, bytecode_bytes: 2120, bytecode_words: 530, frame_bytes: 48 },
-    ],
+  assert.equal(compiled.artifactBytes.length, 0);
+  assert.equal(compiled.diagnostics.length, 1);
+  assert.match(
+    compiled.diagnostics[0].message,
+    /E_ACCESS_INCOMPLETE: entrypoint `open_offer` has incomplete compiler-derived access metadata: opaque ISI access is not compiler-resolved/,
   );
 });
 
@@ -11819,7 +14434,7 @@ test("Kotodama compiler SDK matches raw main fixed parameter frame homes", () =>
 
   for (const [name, source, bytecodeBytes, frameBytes] of cases) {
     const sourcePath = `/tmp/${name}.ko`;
-    const compiled = compileKotodamaProgram(source, { sourceName: sourcePath });
+    const compiled = compileKotodamaProgram(source, { sourceName: sourcePath, mode: "test" });
 
     assert.deepEqual(compiled.diagnostics, []);
     assert.deepEqual(compiled.budgetReport, [
@@ -13267,7 +15882,7 @@ test("Kotodama compiler SDK matches the tracked upstream corpus budget shape", (
     ["crates/kotodama_lang/src/samples/kotodama_jp.ko", [["hajimari", 116, 16], ["__entrypoint_impl__swap", 548, 144], ["swap", 1440, 80]]],
     ["crates/kotodama_lang/src/samples/lending_simple.ko", [["borrow", 1140, 80], ["collateral_ratio_bps", 684, 56], ["__entrypoint_impl__borrow", 788, 120], ["__entrypoint_impl__repay", 244, 80], ["repay", 1220, 56]]],
     ["crates/kotodama_lang/src/samples/mint_rose_trigger.ko", [["run", 168, 32]]],
-    ["crates/kotodama_lang/src/samples/native_escrow.ko", [["main", 8, 8], ["__entrypoint_impl__open_offer", 284, 72], ["open_offer", 664, 48], ["__entrypoint_impl__accept", 52, 24], ["accept", 384, 32], ["__entrypoint_impl__mark_payment_sent", 52, 24], ["mark_payment_sent", 384, 32], ["__entrypoint_impl__release", 52, 24], ["release", 384, 32], ["__entrypoint_impl__cancel", 52, 24], ["cancel", 384, 32], ["__entrypoint_impl__dispute", 56, 24], ["dispute", 384, 32], ["__entrypoint_impl__resolve_dispute", 160, 64], ["resolve_dispute", 2120, 48]]],
+    ["crates/kotodama_lang/src/samples/native_escrow.ko", null],
     ["crates/kotodama_lang/src/samples/perp_funding.ko", [["settle_funding", 1140, 80], ["funding_payment", 224, 80], ["__entrypoint_impl__settle_funding", 864, 128], ["__entrypoint_impl__is_liquidatable", 676, 72], ["is_liquidatable", 1088, 48]]],
     ["crates/kotodama_lang/src/samples/query_assets_and_save_cursor.ko", [["run", 256, 32]]],
     ["crates/kotodama_lang/src/samples/smart_contract_can_filter_queries.ko", [["run", 256, 32]]],

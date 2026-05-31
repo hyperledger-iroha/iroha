@@ -932,9 +932,8 @@ fn manifest_includes_exact_access_hints_for_static_zk_read_requests() {
     use iroha_data_model::asset::id::AssetDefinitionId;
     use ivm::zk_verify::{RootsGetRequest, VoteGetTallyRequest};
 
-    let asset_definition =
-        AssetDefinitionId::parse_address_literal("62Fk4FPcMuLvW5QjDGNF2a4jAmjM")
-            .expect("parse asset definition");
+    let asset_definition = AssetDefinitionId::parse_address_literal("62Fk4FPcMuLvW5QjDGNF2a4jAmjM")
+        .expect("parse asset definition");
     let roots_payload = norito::to_bytes(&RootsGetRequest {
         asset_id: asset_definition.to_string(),
         max: 4,
