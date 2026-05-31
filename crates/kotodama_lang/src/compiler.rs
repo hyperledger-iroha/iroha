@@ -5949,6 +5949,24 @@ impl Compiler {
                             push_word(&mut code, encode_addi(rd, 10, 0)?);
                             spill_back(dest, rd, spilled, imm, &mut code)?;
                         }
+                        Instr::QueryExecuteNorito { dest, payload } => {
+                            if let Some(pstr) = string_map.get(&(func_idx, *payload)) {
+                                let key = DataKey(DataKind::NoritoBytes, pstr.clone());
+                                emit_literal_stub(&mut code, &mut fixups, 10, key);
+                            } else {
+                                let r = src_reg(payload, scratch1, &mut code)?;
+                                push_word(&mut code, encode_addi(10, r, 0)?);
+                            }
+                            let pub_word = encoding::wide::encode_sys(
+                                instruction::wide::system::SCALL,
+                                syscalls::SYSCALL_INPUT_PUBLISH_TLV as u8,
+                            );
+                            code.extend_from_slice(&pub_word.to_le_bytes());
+                            push_syscall(&mut code, syscalls::SYSCALL_QUERY_EXECUTE_NORITO);
+                            let (rd, spilled, imm) = dst_reg(dest);
+                            push_word(&mut code, encode_addi(rd, 10, 0)?);
+                            spill_back(dest, rd, spilled, imm, &mut code)?;
+                        }
                         Instr::SubscriptionBill => {
                             let word = encoding::wide::encode_sys(
                                 instruction::wide::system::SCALL,
@@ -6764,6 +6782,12 @@ impl Compiler {
                             push_word(&mut code, encode_addi(rd, 10, 0)?);
                             spill_back(dest, rd, spilled, imm, &mut code)?;
                         }
+                        Instr::SysvarAuthority { dest } => {
+                            push_syscall(&mut code, syscalls::SYSCALL_SYSVAR_AUTHORITY);
+                            let (rd, spilled, imm) = dst_reg(dest);
+                            push_word(&mut code, encode_addi(rd, 10, 0)?);
+                            spill_back(dest, rd, spilled, imm, &mut code)?;
+                        }
                         Instr::CurrentTimeMs { dest } => {
                             let word = encoding::wide::encode_sys(
                                 instruction::wide::system::SCALL,
@@ -6776,6 +6800,30 @@ impl Compiler {
                         }
                         Instr::BlockHeight { dest } => {
                             push_syscall(&mut code, syscalls::SYSCALL_SYSVAR_BLOCK_HEIGHT);
+                            let (rd, spilled, imm) = dst_reg(dest);
+                            push_word(&mut code, encode_addi(rd, 10, 0)?);
+                            spill_back(dest, rd, spilled, imm, &mut code)?;
+                        }
+                        Instr::BlockTimeMs { dest } => {
+                            push_syscall(&mut code, syscalls::SYSCALL_SYSVAR_BLOCK_TIME_MS);
+                            let (rd, spilled, imm) = dst_reg(dest);
+                            push_word(&mut code, encode_addi(rd, 10, 0)?);
+                            spill_back(dest, rd, spilled, imm, &mut code)?;
+                        }
+                        Instr::ChainId { dest } => {
+                            push_syscall(&mut code, syscalls::SYSCALL_SYSVAR_CHAIN_ID);
+                            let (rd, spilled, imm) = dst_reg(dest);
+                            push_word(&mut code, encode_addi(rd, 10, 0)?);
+                            spill_back(dest, rd, spilled, imm, &mut code)?;
+                        }
+                        Instr::ContractAddress { dest } => {
+                            push_syscall(&mut code, syscalls::SYSCALL_SYSVAR_CONTRACT_ADDRESS);
+                            let (rd, spilled, imm) = dst_reg(dest);
+                            push_word(&mut code, encode_addi(rd, 10, 0)?);
+                            spill_back(dest, rd, spilled, imm, &mut code)?;
+                        }
+                        Instr::Entrypoint { dest } => {
+                            push_syscall(&mut code, syscalls::SYSCALL_SYSVAR_ENTRYPOINT);
                             let (rd, spilled, imm) = dst_reg(dest);
                             push_word(&mut code, encode_addi(rd, 10, 0)?);
                             spill_back(dest, rd, spilled, imm, &mut code)?;
@@ -7174,6 +7222,72 @@ impl Compiler {
                             let call = encoding::wide::encode_sys(
                                 instruction::wide::system::SCALL,
                                 syscalls::SYSCALL_SHA3_HASH as u8,
+                            );
+                            code.extend_from_slice(&call.to_le_bytes());
+                            let (rd, spilled, imm) = dst_reg(dest);
+                            push_word(&mut code, encode_addi(rd, 10, 0)?);
+                            spill_back(dest, rd, spilled, imm, &mut code)?;
+                        }
+                        Instr::Blake2b256Hash { dest, message } => {
+                            if let Some(bytes) = string_map.get(&(func_idx, *message)) {
+                                let key = DataKey(DataKind::Blob, bytes.clone());
+                                emit_literal_stub(&mut code, &mut fixups, 10, key);
+                            } else {
+                                let rs = src_reg(message, scratch1, &mut code)?;
+                                push_word(&mut code, encode_addi(10, rs, 0)?);
+                            }
+                            let publish = encoding::wide::encode_sys(
+                                instruction::wide::system::SCALL,
+                                syscalls::SYSCALL_INPUT_PUBLISH_TLV as u8,
+                            );
+                            code.extend_from_slice(&publish.to_le_bytes());
+                            let call = encoding::wide::encode_sys(
+                                instruction::wide::system::SCALL,
+                                syscalls::SYSCALL_BLAKE2B256_HASH as u8,
+                            );
+                            code.extend_from_slice(&call.to_le_bytes());
+                            let (rd, spilled, imm) = dst_reg(dest);
+                            push_word(&mut code, encode_addi(rd, 10, 0)?);
+                            spill_back(dest, rd, spilled, imm, &mut code)?;
+                        }
+                        Instr::Keccak256Hash { dest, message } => {
+                            if let Some(bytes) = string_map.get(&(func_idx, *message)) {
+                                let key = DataKey(DataKind::Blob, bytes.clone());
+                                emit_literal_stub(&mut code, &mut fixups, 10, key);
+                            } else {
+                                let rs = src_reg(message, scratch1, &mut code)?;
+                                push_word(&mut code, encode_addi(10, rs, 0)?);
+                            }
+                            let publish = encoding::wide::encode_sys(
+                                instruction::wide::system::SCALL,
+                                syscalls::SYSCALL_INPUT_PUBLISH_TLV as u8,
+                            );
+                            code.extend_from_slice(&publish.to_le_bytes());
+                            let call = encoding::wide::encode_sys(
+                                instruction::wide::system::SCALL,
+                                syscalls::SYSCALL_KECCAK256_HASH as u8,
+                            );
+                            code.extend_from_slice(&call.to_le_bytes());
+                            let (rd, spilled, imm) = dst_reg(dest);
+                            push_word(&mut code, encode_addi(rd, 10, 0)?);
+                            spill_back(dest, rd, spilled, imm, &mut code)?;
+                        }
+                        Instr::IrohaHash { dest, message } => {
+                            if let Some(bytes) = string_map.get(&(func_idx, *message)) {
+                                let key = DataKey(DataKind::Blob, bytes.clone());
+                                emit_literal_stub(&mut code, &mut fixups, 10, key);
+                            } else {
+                                let rs = src_reg(message, scratch1, &mut code)?;
+                                push_word(&mut code, encode_addi(10, rs, 0)?);
+                            }
+                            let publish = encoding::wide::encode_sys(
+                                instruction::wide::system::SCALL,
+                                syscalls::SYSCALL_INPUT_PUBLISH_TLV as u8,
+                            );
+                            code.extend_from_slice(&publish.to_le_bytes());
+                            let call = encoding::wide::encode_sys(
+                                instruction::wide::system::SCALL,
+                                syscalls::SYSCALL_IROHA_HASH as u8,
                             );
                             code.extend_from_slice(&call.to_le_bytes());
                             let (rd, spilled, imm) = dst_reg(dest);
@@ -7843,6 +7957,119 @@ impl Compiler {
                                 syscalls::SYSCALL_STATE_DEL as u8,
                             );
                             code.extend_from_slice(&word.to_le_bytes());
+                        }
+                        Instr::StateKeys {
+                            dest,
+                            prefix,
+                            offset,
+                            limit,
+                        } => {
+                            if !durable_enabled {
+                                return Err(i18n::translate(
+                                    self.lang,
+                                    Message::UnsupportedBinaryOp(
+                                        "durable state requires ABI v1. Add `meta { abi_version: 1; }` or compile with `--abi 1`.",
+                                    ),
+                                ));
+                            }
+                            if let Some(s) = string_map.get(&(func_idx, *prefix)) {
+                                let key = DataKey(DataKind::Name, s.clone());
+                                emit_literal_stub(&mut code, &mut fixups, 10, key);
+                            } else {
+                                let r = src_reg(prefix, scratch1, &mut code)?;
+                                push_word(&mut code, encode_addi(10, r, 0)?);
+                            }
+                            let pub_word = encoding::wide::encode_sys(
+                                instruction::wide::system::SCALL,
+                                syscalls::SYSCALL_INPUT_PUBLISH_TLV as u8,
+                            );
+                            code.extend_from_slice(&pub_word.to_le_bytes());
+                            let offset_reg = src_reg(offset, scratch1, &mut code)?;
+                            push_word(&mut code, encode_addi(11, offset_reg, 0)?);
+                            let limit_reg = src_reg(limit, scratch1, &mut code)?;
+                            push_word(&mut code, encode_addi(12, limit_reg, 0)?);
+                            push_syscall(&mut code, syscalls::SYSCALL_STATE_KEYS);
+                            let (rd, spilled, imm) = dst_reg(dest);
+                            push_word(&mut code, encode_addi(rd, 10, 0)?);
+                            spill_back(dest, rd, spilled, imm, &mut code)?;
+                        }
+                        Instr::StateHas { dest, path } => {
+                            if !durable_enabled {
+                                return Err(i18n::translate(
+                                    self.lang,
+                                    Message::UnsupportedBinaryOp(
+                                        "durable state requires ABI v1. Add `meta { abi_version: 1; }` or compile with `--abi 1`.",
+                                    ),
+                                ));
+                            }
+                            if let Some(s) = string_map.get(&(func_idx, *path)) {
+                                let key = DataKey(DataKind::Name, s.clone());
+                                emit_literal_stub(&mut code, &mut fixups, 10, key);
+                            } else {
+                                let r = src_reg(path, scratch1, &mut code)?;
+                                push_word(&mut code, encode_addi(10, r, 0)?);
+                            }
+                            let pub_word = encoding::wide::encode_sys(
+                                instruction::wide::system::SCALL,
+                                syscalls::SYSCALL_INPUT_PUBLISH_TLV as u8,
+                            );
+                            code.extend_from_slice(&pub_word.to_le_bytes());
+                            push_syscall(&mut code, syscalls::SYSCALL_STATE_HAS);
+                            let (rd, spilled, imm) = dst_reg(dest);
+                            push_word(&mut code, encode_addi(rd, 10, 0)?);
+                            spill_back(dest, rd, spilled, imm, &mut code)?;
+                        }
+                        Instr::StateLen { dest, path } => {
+                            if !durable_enabled {
+                                return Err(i18n::translate(
+                                    self.lang,
+                                    Message::UnsupportedBinaryOp(
+                                        "durable state requires ABI v1. Add `meta { abi_version: 1; }` or compile with `--abi 1`.",
+                                    ),
+                                ));
+                            }
+                            if let Some(s) = string_map.get(&(func_idx, *path)) {
+                                let key = DataKey(DataKind::Name, s.clone());
+                                emit_literal_stub(&mut code, &mut fixups, 10, key);
+                            } else {
+                                let r = src_reg(path, scratch1, &mut code)?;
+                                push_word(&mut code, encode_addi(10, r, 0)?);
+                            }
+                            let pub_word = encoding::wide::encode_sys(
+                                instruction::wide::system::SCALL,
+                                syscalls::SYSCALL_INPUT_PUBLISH_TLV as u8,
+                            );
+                            code.extend_from_slice(&pub_word.to_le_bytes());
+                            push_syscall(&mut code, syscalls::SYSCALL_STATE_LEN);
+                            let (rd, spilled, imm) = dst_reg(dest);
+                            push_word(&mut code, encode_addi(rd, 10, 0)?);
+                            spill_back(dest, rd, spilled, imm, &mut code)?;
+                        }
+                        Instr::StateCount { dest, prefix } => {
+                            if !durable_enabled {
+                                return Err(i18n::translate(
+                                    self.lang,
+                                    Message::UnsupportedBinaryOp(
+                                        "durable state requires ABI v1. Add `meta { abi_version: 1; }` or compile with `--abi 1`.",
+                                    ),
+                                ));
+                            }
+                            if let Some(s) = string_map.get(&(func_idx, *prefix)) {
+                                let key = DataKey(DataKind::Name, s.clone());
+                                emit_literal_stub(&mut code, &mut fixups, 10, key);
+                            } else {
+                                let r = src_reg(prefix, scratch1, &mut code)?;
+                                push_word(&mut code, encode_addi(10, r, 0)?);
+                            }
+                            let pub_word = encoding::wide::encode_sys(
+                                instruction::wide::system::SCALL,
+                                syscalls::SYSCALL_INPUT_PUBLISH_TLV as u8,
+                            );
+                            code.extend_from_slice(&pub_word.to_le_bytes());
+                            push_syscall(&mut code, syscalls::SYSCALL_STATE_COUNT);
+                            let (rd, spilled, imm) = dst_reg(dest);
+                            push_word(&mut code, encode_addi(rd, 10, 0)?);
+                            spill_back(dest, rd, spilled, imm, &mut code)?;
                         }
                         Instr::DecodeInt { dest, blob } => {
                             if !durable_enabled {
@@ -10464,9 +10691,31 @@ fn derive_state_access_hints(
         for bb in &func.blocks {
             for instr in &bb.instrs {
                 match instr {
-                    ir::Instr::StateGet { path, .. } => {
+                    ir::Instr::StateGet { path, .. }
+                    | ir::Instr::StateHas { path, .. }
+                    | ir::Instr::StateLen { path, .. } => {
                         if let Some(key) =
                             render_state_hint(state_path_hints.get(&(func_idx, *path)))
+                        {
+                            insert_state_hint(&mut access_sets[func_idx].reads, key);
+                        } else {
+                            hint_diagnostics.state_wildcards =
+                                hint_diagnostics.state_wildcards.saturating_add(1);
+                            record_hint_skip(
+                                &mut hint_skips[func_idx],
+                                "dynamic state path is not compiler-resolved",
+                            );
+                            access_sets[func_idx]
+                                .reads
+                                .insert(STATE_WILDCARD_KEY.to_string());
+                            access_sets[func_idx]
+                                .writes
+                                .insert(STATE_WILDCARD_KEY.to_string());
+                        }
+                    }
+                    ir::Instr::StateKeys { prefix, .. } | ir::Instr::StateCount { prefix, .. } => {
+                        if let Some(key) =
+                            render_state_hint(state_path_hints.get(&(func_idx, *prefix)))
                         {
                             insert_state_hint(&mut access_sets[func_idx].reads, key);
                         } else {
@@ -10755,7 +11004,8 @@ fn record_isi_access(
                 apply_fallback(access_set, hint_diagnostics);
             }
         }
-        ir::Instr::VendorExecuteQuery { payload, .. } => {
+        ir::Instr::VendorExecuteQuery { payload, .. }
+        | ir::Instr::QueryExecuteNorito { payload, .. } => {
             let Some(raw) = string_map.get(&(func_idx, *payload)) else {
                 return apply_fallback(access_set, hint_diagnostics);
             };
@@ -11845,6 +12095,7 @@ fn instr_queues_isi(instr: &ir::Instr) -> bool {
             | ir::Instr::TransferDomain { .. }
             | ir::Instr::VendorExecuteInstruction { .. }
             | ir::Instr::VendorExecuteQuery { .. }
+            | ir::Instr::QueryExecuteNorito { .. }
             | ir::Instr::CallContract { .. }
             | ir::Instr::InvokeEntrypointAs { .. }
             | ir::Instr::ExpectRejectAs { .. }

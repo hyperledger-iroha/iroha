@@ -376,6 +376,24 @@ pub const KAGEMUSHA_FOLDED_IPA_K: u32 = 7;
 pub const KAGEMUSHA_FOLDED_MAX_PROOF_BYTES: u32 = 8 * 1024 * 1024;
 /// Maximum encoded proof payload accepted for each checked Kagemusha private hop.
 pub const KAGEMUSHA_HOP_MAX_PROOF_BYTES: u32 = confidential_v2::CONFIDENTIAL_V2_MAX_PROOF_BYTES;
+/// Maximum Pallas IPA opening vector length accepted by Kagemusha recursive batch preflight.
+///
+/// This matches the current transparent Halo2 IPA `k = 7` corridor used by
+/// confidential-transfer-v2 private hops and Kagemusha folded proofs. Larger
+/// widths should be enabled only with matching production-width recursive
+/// verifier evidence and adversarial coverage.
+#[cfg(feature = "zk-halo2-ipa")]
+pub const KAGEMUSHA_RECURSIVE_PALLAS_IPA_BATCH_MAX_LEN: usize = 128;
+/// Number of fixed windows used by the production recursive Vesta IPA verifier witness profile.
+#[cfg(feature = "zk-halo2-ipa")]
+pub const KAGEMUSHA_RECURSIVE_VESTA_IPA_WINDOWS: usize = 85;
+/// Bits per fixed window used by the production recursive Vesta IPA verifier witness profile.
+#[cfg(feature = "zk-halo2-ipa")]
+pub const KAGEMUSHA_RECURSIVE_VESTA_IPA_WINDOW_BITS: usize = 3;
+/// Canonical verifier-witness profile name bound into reserved Kagemusha recursive evidence.
+#[cfg(feature = "zk-halo2-ipa")]
+pub const KAGEMUSHA_RECURSIVE_VERIFIER_WITNESS_PROFILE_V1: &str =
+    iroha_data_model::offline::KAGEMUSHA_RECURSIVE_VERIFIER_WITNESS_PROFILE_V1;
 
 const OFFLINE_NOTE_MODE_REDEEM: u64 = 1;
 const OFFLINE_NOTE_MODE_AUDIT: u64 = 2;
@@ -2601,6 +2619,354 @@ pub fn kagemusha_verified_folded_public_inputs_from_record_bundle(
     kagemusha_verified_folded_public_inputs_from_bundle_with_records(
         &record_bundle.bundle,
         &records,
+    )
+}
+
+#[cfg(feature = "zk-halo2-ipa")]
+pub use pasta_tiny::PallasIpaBatchVerifierPreflight;
+
+/// Validate and bind an ordered batch of native Pallas IPA verifier witnesses.
+///
+/// This is the production host-side preflight for the future Kagemusha
+/// recursive aggregation mode. It accepts only the bounded power-of-two opening
+/// widths currently used by the transparent no-trusted-setup Halo2 IPA
+/// corridor, validates every native witness transcript/reduction/accumulator
+/// relation with the optimized deterministic Pallas MSM backend, and returns a
+/// streaming Poseidon2 domain-separated digest that can be bound into reserved
+/// recursive aggregation evidence. Batch length is capped to the Kagemusha
+/// compact-token hop corridor before per-witness validation starts.
+///
+/// # Errors
+///
+/// Returns an error when the parameter width is outside the current production
+/// corridor, the batch is empty or larger than the compact-token hop cap, or
+/// any witness fails native verifier preflight.
+#[cfg(feature = "zk-halo2-ipa")]
+pub fn kagemusha_pallas_ipa_batch_verifier_preflight(
+    params: &iroha_zkp_halo2::pallas::Params,
+    witnesses: &[iroha_zkp_halo2::IpaVerifierWitness<iroha_zkp_halo2::pallas::PallasBackend>],
+) -> Result<PallasIpaBatchVerifierPreflight, String> {
+    if witnesses.len() > iroha_data_model::offline::KAGEMUSHA_COMPACT_TOKEN_MAX_HOPS {
+        return Err(format!(
+            "Kagemusha Pallas IPA batch preflight accepts at most {} witnesses (found {})",
+            iroha_data_model::offline::KAGEMUSHA_COMPACT_TOKEN_MAX_HOPS,
+            witnesses.len()
+        ));
+    }
+
+    macro_rules! dispatch {
+        ($len:literal) => {
+            pasta_tiny::NonNativeVestaIpaVerifierNativeScalar::<
+                $len,
+                KAGEMUSHA_RECURSIVE_VESTA_IPA_WINDOWS,
+                KAGEMUSHA_RECURSIVE_VESTA_IPA_WINDOW_BITS,
+            >::validate_pallas_verifier_witness_batch(params, witnesses)
+        };
+    }
+
+    match params.n() {
+        2 => dispatch!(2),
+        4 => dispatch!(4),
+        8 => dispatch!(8),
+        16 => dispatch!(16),
+        32 => dispatch!(32),
+        64 => dispatch!(64),
+        128 => dispatch!(128),
+        actual => Err(format!(
+            "Kagemusha Pallas IPA batch preflight supports power-of-two lengths 2..={KAGEMUSHA_RECURSIVE_PALLAS_IPA_BATCH_MAX_LEN} in the current production corridor (found {actual})"
+        )),
+    }
+}
+
+#[cfg(feature = "zk-halo2-ipa")]
+fn kagemusha_recursive_poseidon_update_u64(
+    hasher: &mut iroha_zkp_halo2::poseidon::PoseidonByteHasher,
+    value: u64,
+) {
+    hasher.update(&value.to_le_bytes());
+}
+
+#[cfg(feature = "zk-halo2-ipa")]
+fn kagemusha_recursive_poseidon_update_len(
+    hasher: &mut iroha_zkp_halo2::poseidon::PoseidonByteHasher,
+    label: &str,
+    value: usize,
+) -> Result<(), String> {
+    let value = u64::try_from(value)
+        .map_err(|_| format!("Kagemusha recursive {label} length does not fit in u64"))?;
+    kagemusha_recursive_poseidon_update_u64(hasher, value);
+    Ok(())
+}
+
+#[cfg(feature = "zk-halo2-ipa")]
+fn kagemusha_recursive_poseidon_update_tagged_bytes(
+    hasher: &mut iroha_zkp_halo2::poseidon::PoseidonByteHasher,
+    tag: &[u8],
+    value: &[u8],
+) -> Result<(), String> {
+    kagemusha_recursive_poseidon_update_len(hasher, "tag", tag.len())?;
+    hasher.update(tag);
+    kagemusha_recursive_poseidon_update_len(hasher, "value", value.len())?;
+    hasher.update(value);
+    Ok(())
+}
+
+/// Validate a native Pallas IPA witness batch and bind it to ordered hop proof hashes.
+///
+/// The returned preflight keeps the same parameter fingerprint and verifier-witness
+/// profile as [`kagemusha_pallas_ipa_batch_verifier_preflight`], but its
+/// aggregate digest is re-derived with Poseidon2 from the native batch digest
+/// plus the ordered checked-hop proof hashes. This is the host-side reserved
+/// mode-2 evidence surface for record-backed Kagemusha bundles: valid detached
+/// verifier witnesses cannot be replayed against a different folded-hop
+/// transcript without changing the evidence digest.
+///
+/// # Errors
+///
+/// Returns an error when native batch preflight fails or when the hop-proof
+/// hash count does not match the native witness count.
+#[cfg(feature = "zk-halo2-ipa")]
+pub fn kagemusha_pallas_ipa_batch_verifier_preflight_bound_to_hop_proofs(
+    params: &iroha_zkp_halo2::pallas::Params,
+    witnesses: &[iroha_zkp_halo2::IpaVerifierWitness<iroha_zkp_halo2::pallas::PallasBackend>],
+    hop_proof_hashes: &[iroha_crypto::Hash],
+) -> Result<PallasIpaBatchVerifierPreflight, String> {
+    let mut preflight = kagemusha_pallas_ipa_batch_verifier_preflight(params, witnesses)?;
+    if preflight.proof_count != hop_proof_hashes.len() {
+        return Err(format!(
+            "Kagemusha Pallas IPA hop-bound batch preflight witness/hash count mismatch: expected {}, found {}",
+            preflight.proof_count,
+            hop_proof_hashes.len()
+        ));
+    }
+
+    let mut hasher = iroha_zkp_halo2::poseidon::PoseidonByteHasher::new();
+    kagemusha_recursive_poseidon_update_tagged_bytes(
+        &mut hasher,
+        b"domain",
+        b"iroha:kagemusha:pallas-ipa-hop-bound-batch:v1",
+    )?;
+    kagemusha_recursive_poseidon_update_tagged_bytes(
+        &mut hasher,
+        b"profile",
+        preflight.verifier_witness_profile.as_bytes(),
+    )?;
+    kagemusha_recursive_poseidon_update_tagged_bytes(
+        &mut hasher,
+        b"params",
+        &preflight.params_fingerprint,
+    )?;
+    kagemusha_recursive_poseidon_update_tagged_bytes(
+        &mut hasher,
+        b"native-batch",
+        &preflight.aggregate_digest,
+    )?;
+    kagemusha_recursive_poseidon_update_len(
+        &mut hasher,
+        "hop proof hash count",
+        hop_proof_hashes.len(),
+    )?;
+    for (hop_index, proof_hash) in hop_proof_hashes.iter().enumerate() {
+        kagemusha_recursive_poseidon_update_len(&mut hasher, "hop index", hop_index)?;
+        kagemusha_recursive_poseidon_update_tagged_bytes(
+            &mut hasher,
+            b"hop-proof-hash",
+            proof_hash.as_ref(),
+        )?;
+    }
+    preflight.aggregate_digest = hasher.finalize();
+    Ok(preflight)
+}
+
+/// Verify a serializable Kagemusha fold bundle against active hop verifier records
+/// and build reserved-mode recursive aggregation evidence.
+///
+/// This does not enable recursive aggregation for compact-token admission. It is
+/// the WSV-ready evidence-building path for mode `2` work: all private hop proofs
+/// are still checked against active verifier records before the supplied native
+/// verifier-witness batch preflight fields are bound to the canonical hop
+/// transcript.
+///
+/// # Errors
+///
+/// Returns an error when the native verifier-witness count does not match the
+/// hop count, the batch preflight fields are all-zero, verifier-record
+/// enforcement fails, any hop proof fails verification, or the resulting
+/// recursive aggregation evidence is non-canonical.
+pub fn kagemusha_verified_recursive_aggregation_evidence_from_bundle_with_records(
+    bundle: &iroha_data_model::offline::KagemushaVerifiedFoldBundle,
+    records: &[KagemushaHopVerifierRecord<'_>],
+    verifier_witness_count: u32,
+    verifier_params_fingerprint: [u8; 32],
+    verifier_witness_batch_digest: [u8; 32],
+) -> Result<iroha_data_model::offline::KagemushaRecursiveAggregationEvidence, String> {
+    ensure_kagemusha_verified_step_count(bundle.steps.len())?;
+    let expected_witness_count =
+        u32::try_from(bundle.steps.len()).expect("Kagemusha hop count is bounded to u32");
+    if verifier_witness_count != expected_witness_count {
+        return Err(
+            iroha_data_model::offline::KagemushaFoldError::RecursiveAggregationWitnessCountMismatch {
+                expected: expected_witness_count,
+                actual: verifier_witness_count,
+            }
+            .to_string(),
+        );
+    }
+    if verifier_params_fingerprint == [0u8; 32] {
+        return Err(
+            iroha_data_model::offline::KagemushaFoldError::ZeroRecursiveVerifierParamsFingerprint
+                .to_string(),
+        );
+    }
+    if verifier_witness_batch_digest == [0u8; 32] {
+        return Err(
+            iroha_data_model::offline::KagemushaFoldError::ZeroRecursiveVerifierWitnessBatchDigest
+                .to_string(),
+        );
+    }
+
+    let steps = bundle
+        .steps
+        .iter()
+        .map(|step| KagemushaFoldProofStep {
+            root_before: step.root_before,
+            input_nullifiers: &step.input_nullifiers,
+            output_commitments: &step.output_commitments,
+            root_after: step.root_after,
+            attachment: &step.attachment,
+            vk_box: &step.verifier_key,
+        })
+        .collect::<Vec<_>>();
+    validate_kagemusha_fold_metadata(&steps)?;
+    validate_kagemusha_hop_verifier_record_set(&steps, records)?;
+    let mut verified_steps = Vec::with_capacity(steps.len());
+    for step in &steps {
+        let record = kagemusha_hop_verifier_record(&step.attachment.vk_ref, records)?;
+        validate_kagemusha_fold_verifier_record(step, record)?;
+        validate_required_kagemusha_confidential_v2_step_public_inputs(
+            &bundle.chain_id,
+            &bundle.asset,
+            step,
+        )?;
+        verified_steps.push(kagemusha_verified_fold_step(step)?);
+    }
+    iroha_data_model::offline::kagemusha_recursive_aggregation_evidence_from_steps(
+        &bundle.chain_id,
+        &bundle.asset,
+        &verified_steps,
+        verifier_params_fingerprint,
+        verifier_witness_batch_digest,
+    )
+    .map_err(|err| err.to_string())
+}
+
+/// Verify a record-backed Kagemusha fold bundle and build reserved-mode
+/// recursive aggregation evidence.
+///
+/// # Errors
+///
+/// Returns an error when verifier-record enforcement, hop proof verification,
+/// batch preflight binding, or recursive evidence construction fails.
+pub fn kagemusha_verified_recursive_aggregation_evidence_from_record_bundle(
+    record_bundle: &iroha_data_model::offline::KagemushaVerifiedFoldRecordBundle,
+    verifier_witness_count: u32,
+    verifier_params_fingerprint: [u8; 32],
+    verifier_witness_batch_digest: [u8; 32],
+) -> Result<iroha_data_model::offline::KagemushaRecursiveAggregationEvidence, String> {
+    let records = record_bundle
+        .verifier_records
+        .iter()
+        .map(|entry| KagemushaHopVerifierRecord {
+            id: &entry.id,
+            record: &entry.record,
+        })
+        .collect::<Vec<_>>();
+    kagemusha_verified_recursive_aggregation_evidence_from_bundle_with_records(
+        &record_bundle.bundle,
+        &records,
+        verifier_witness_count,
+        verifier_params_fingerprint,
+        verifier_witness_batch_digest,
+    )
+}
+
+/// Verify a record-backed Kagemusha fold bundle and native Pallas IPA witness batch.
+///
+/// This combines active hop verifier-record enforcement with native
+/// verifier-witness preflight so callers cannot supply a detached
+/// count/fingerprint/digest tuple. The witness count must match the private hop
+/// count before native preflight or hop proof decoding starts.
+///
+/// # Errors
+///
+/// Returns an error when the bundle shape is invalid, the native witness count
+/// does not match the hop count, the Pallas batch preflight fails, verifier
+/// records are not exact and active, any private hop proof fails verification,
+/// or reserved recursive evidence construction fails.
+#[cfg(feature = "zk-halo2-ipa")]
+pub fn kagemusha_verified_recursive_aggregation_evidence_from_bundle_with_records_and_pallas_batch(
+    bundle: &iroha_data_model::offline::KagemushaVerifiedFoldBundle,
+    records: &[KagemushaHopVerifierRecord<'_>],
+    params: &iroha_zkp_halo2::pallas::Params,
+    witnesses: &[iroha_zkp_halo2::IpaVerifierWitness<iroha_zkp_halo2::pallas::PallasBackend>],
+) -> Result<iroha_data_model::offline::KagemushaRecursiveAggregationEvidence, String> {
+    ensure_kagemusha_verified_step_count(bundle.steps.len())?;
+    let expected_witness_count =
+        u32::try_from(bundle.steps.len()).expect("Kagemusha hop count is bounded to u32");
+    let actual_witness_count = u32::try_from(witnesses.len()).unwrap_or(u32::MAX);
+    if actual_witness_count != expected_witness_count {
+        return Err(
+            iroha_data_model::offline::KagemushaFoldError::RecursiveAggregationWitnessCountMismatch {
+                expected: expected_witness_count,
+                actual: actual_witness_count,
+            }
+            .to_string(),
+        );
+    }
+    let hop_proof_hashes = bundle
+        .steps
+        .iter()
+        .map(|step| kagemusha_fold_step_proof_hash(&step.attachment.proof))
+        .collect::<Result<Vec<_>, _>>()?;
+    let preflight = kagemusha_pallas_ipa_batch_verifier_preflight_bound_to_hop_proofs(
+        params,
+        witnesses,
+        &hop_proof_hashes,
+    )?;
+    kagemusha_verified_recursive_aggregation_evidence_from_bundle_with_records(
+        bundle,
+        records,
+        expected_witness_count,
+        preflight.params_fingerprint,
+        preflight.aggregate_digest,
+    )
+}
+
+/// Verify a serializable record-backed Kagemusha fold bundle and native Pallas IPA batch.
+///
+/// # Errors
+///
+/// Returns an error when native batch preflight, verifier-record enforcement,
+/// hop proof verification, or recursive evidence construction fails.
+#[cfg(feature = "zk-halo2-ipa")]
+pub fn kagemusha_verified_recursive_aggregation_evidence_from_record_bundle_and_pallas_batch(
+    record_bundle: &iroha_data_model::offline::KagemushaVerifiedFoldRecordBundle,
+    params: &iroha_zkp_halo2::pallas::Params,
+    witnesses: &[iroha_zkp_halo2::IpaVerifierWitness<iroha_zkp_halo2::pallas::PallasBackend>],
+) -> Result<iroha_data_model::offline::KagemushaRecursiveAggregationEvidence, String> {
+    let records = record_bundle
+        .verifier_records
+        .iter()
+        .map(|entry| KagemushaHopVerifierRecord {
+            id: &entry.id,
+            record: &entry.record,
+        })
+        .collect::<Vec<_>>();
+    kagemusha_verified_recursive_aggregation_evidence_from_bundle_with_records_and_pallas_batch(
+        &record_bundle.bundle,
+        &records,
+        params,
+        witnesses,
     )
 }
 
@@ -10383,7 +10749,7 @@ mod kagemusha_non_native_limb_circuit_tests {
         b
     }
 
-    fn sample_pallas_verifier_witness(
+    pub(super) fn sample_pallas_verifier_witness(
         n: usize,
         label: &str,
     ) -> (
@@ -10414,6 +10780,155 @@ mod kagemusha_non_native_limb_circuit_tests {
         >(&params, &mut verifier_transcript, &b, commitment, t, &proof)
         .expect("Pallas verifier witness");
 
+        (params, witness)
+    }
+
+    fn pallas_group_sum(
+        points: impl IntoIterator<Item = iroha_zkp_halo2::pallas::Group>,
+    ) -> iroha_zkp_halo2::pallas::Group {
+        points
+            .into_iter()
+            .fold(iroha_zkp_halo2::pallas::Group::identity(), |acc, point| {
+                acc.mul(point)
+            })
+    }
+
+    fn small_scalar_pallas_transcript_binding(
+        rounds: usize,
+    ) -> (
+        iroha_zkp_halo2::pallas::Scalar,
+        Vec<iroha_zkp_halo2::pallas::Scalar>,
+        iroha_zkp_halo2::pallas::Scalar,
+        iroha_zkp_halo2::pallas::Scalar,
+    ) {
+        let one = iroha_zkp_halo2::pallas::Scalar::from(1u64);
+        let header_projection = iroha_zkp_halo2::pallas::Scalar::from(17u64);
+        let round_projections = (0..rounds)
+            .map(|index| iroha_zkp_halo2::pallas::Scalar::from(19 + index as u64 * 4))
+            .collect::<Vec<_>>();
+        let final_projection = iroha_zkp_halo2::pallas::Scalar::from(31u64);
+        let mut state = header_projection;
+        for round_projection in &round_projections {
+            state =
+                iroha_zkp_halo2::ipa_transcript_binding_round(state, *round_projection, one, one);
+        }
+        let binding_digest =
+            iroha_zkp_halo2::ipa_transcript_binding_compress(state, final_projection);
+        (
+            header_projection,
+            round_projections,
+            final_projection,
+            binding_digest,
+        )
+    }
+
+    fn sample_small_scalar_pallas_verifier_witness() -> (
+        iroha_zkp_halo2::pallas::Params,
+        iroha_zkp_halo2::IpaVerifierWitness<iroha_zkp_halo2::pallas::PallasBackend>,
+    ) {
+        let params = iroha_zkp_halo2::pallas::Params::new(4).expect("Pallas params");
+        let zero = iroha_zkp_halo2::pallas::Scalar::from(0u64);
+        let one = iroha_zkp_halo2::pallas::Scalar::from(1u64);
+        let identity = iroha_zkp_halo2::pallas::Group::identity();
+        let identity_bytes = identity.to_bytes();
+        let round_challenges = (0..2)
+            .map(|round_index| iroha_zkp_halo2::IpaRoundChallenge {
+                round_index,
+                l_bytes: identity_bytes,
+                r_bytes: identity_bytes,
+                round_bytes_digest: [round_index as u8; 32],
+                state_before_round: [1 + round_index as u8; 32],
+                state_after_round_absorb: [3 + round_index as u8; 32],
+                state_after_challenge: [5 + round_index as u8; 32],
+                challenge: one,
+                challenge_inverse: one,
+            })
+            .collect::<Vec<_>>();
+        let (header_projection, round_projections, final_projection, binding_digest) =
+            small_scalar_pallas_transcript_binding(round_challenges.len());
+        let transcript_projection = iroha_zkp_halo2::IpaVerifierTranscriptProjection {
+            n: 4,
+            state_before_ipa_n: [7; 32],
+            state_after_ipa_n: [11; 32],
+            rounds: round_challenges.clone(),
+            final_state: [13; 32],
+        };
+        let transcript_binding = iroha_zkp_halo2::IpaVerifierTranscriptBinding {
+            n: 4,
+            header_projection,
+            round_projections,
+            challenges: vec![one, one],
+            challenge_inverses: vec![one, one],
+            final_projection,
+            binding_digest,
+        };
+        let b0 = vec![one, zero, zero, zero];
+        let b1 = vec![one, zero];
+        let b2 = vec![one];
+        let b_reduction = iroha_zkp_halo2::IpaVerifierBVectorReduction {
+            initial_b: b0.clone(),
+            rounds: vec![
+                iroha_zkp_halo2::IpaVerifierBVectorReductionRound {
+                    round_index: 0,
+                    challenge: one,
+                    challenge_inverse: one,
+                    b_before: b0,
+                    b_after: b1.clone(),
+                },
+                iroha_zkp_halo2::IpaVerifierBVectorReductionRound {
+                    round_index: 1,
+                    challenge: one,
+                    challenge_inverse: one,
+                    b_before: b1,
+                    b_after: b2,
+                },
+            ],
+            final_b: one,
+        };
+
+        let g = params.g();
+        let h = params.h();
+        let g_after_0 = vec![g[0].mul(g[2]), g[1].mul(g[3])];
+        let h_after_0 = vec![h[0].mul(h[2]), h[1].mul(h[3])];
+        let final_g = pallas_group_sum(g_after_0.iter().copied());
+        let final_h = pallas_group_sum(h_after_0.iter().copied());
+        let q = pallas_group_sum([final_g, final_h, params.u()]);
+        let accumulation = iroha_zkp_halo2::IpaVerifierAccumulation {
+            initial_q: q,
+            rounds: vec![
+                iroha_zkp_halo2::IpaVerifierAccumulationRound {
+                    round_index: 0,
+                    challenge_square: one,
+                    challenge_inverse_square: one,
+                    q_before: q,
+                    q_after: q,
+                    g_after: g_after_0,
+                    h_after: h_after_0,
+                },
+                iroha_zkp_halo2::IpaVerifierAccumulationRound {
+                    round_index: 1,
+                    challenge_square: one,
+                    challenge_inverse_square: one,
+                    q_before: q,
+                    q_after: q,
+                    g_after: vec![final_g],
+                    h_after: vec![final_h],
+                },
+            ],
+            final_q: q,
+            final_g,
+            final_h,
+            expected_term: q,
+        };
+        let witness = iroha_zkp_halo2::IpaVerifierWitness {
+            transcript_projection,
+            transcript_binding,
+            round_challenges,
+            b_reduction,
+            accumulation,
+            proof_a_final: one,
+            proof_b_final: one,
+        };
         (params, witness)
     }
 
@@ -13890,12 +14405,358 @@ mod kagemusha_non_native_limb_circuit_tests {
     }
 
     #[test]
-    fn kagemusha_non_native_vesta_ipa_verifier_from_pallas_witness_accepts_four_point_opening() {
+    fn kagemusha_non_native_vesta_ipa_verifier_validate_pallas_witness_accepts_real_opening() {
         run_vesta_affine_ipa_verifier_test(|| {
             let (params, witness) =
-                sample_pallas_verifier_witness(4, "core-pallas-recursive-witness");
+                sample_pallas_verifier_witness(4, "core-pallas-validation-witness");
+            pasta_tiny::NonNativeVestaIpaVerifierNativeScalar::<4, 1, 1>::validate_pallas_verifier_witness(
+                &params,
+                &witness,
+            )
+            .expect("real Pallas verifier witness passes recursive preflight validation");
+        });
+    }
+
+    #[test]
+    fn kagemusha_non_native_vesta_ipa_verifier_batch_preflight_accepts_multiple_real_openings() {
+        run_vesta_affine_ipa_verifier_test(|| {
+            let (params, witness_a) = sample_pallas_verifier_witness(4, "core-pallas-batch-open-a");
+            let (_, witness_b) = sample_pallas_verifier_witness(4, "core-pallas-batch-open-b");
+            let preflight =
+                pasta_tiny::NonNativeVestaIpaVerifierNativeScalar::<4, 1, 1>::validate_pallas_verifier_witness_batch(
+                    &params,
+                    &[witness_a, witness_b],
+            )
+            .expect("real Pallas verifier witness batch passes preflight validation");
+            assert_eq!(preflight.proof_count, 2);
+            assert_eq!(
+                preflight.verifier_witness_profile,
+                KAGEMUSHA_RECURSIVE_VERIFIER_WITNESS_PROFILE_V1
+            );
+            assert_eq!(preflight.params_fingerprint, params.fingerprint());
+            assert_ne!(preflight.aggregate_digest, [0u8; 32]);
+        });
+    }
+
+    #[test]
+    fn kagemusha_pallas_ipa_batch_verifier_preflight_accepts_production_width() {
+        run_vesta_affine_ipa_verifier_test(|| {
+            let (params, witness) = sample_pallas_verifier_witness(
+                KAGEMUSHA_RECURSIVE_PALLAS_IPA_BATCH_MAX_LEN,
+                "core-pallas-production-width",
+            );
+            let preflight = kagemusha_pallas_ipa_batch_verifier_preflight(&params, &[witness])
+                .expect("production-width Pallas verifier witness passes public preflight");
+            assert_eq!(preflight.proof_count, 1);
+            assert_eq!(
+                preflight.verifier_witness_profile,
+                KAGEMUSHA_RECURSIVE_VERIFIER_WITNESS_PROFILE_V1
+            );
+            assert_eq!(preflight.params_fingerprint, params.fingerprint());
+            assert_ne!(preflight.aggregate_digest, [0u8; 32]);
+        });
+    }
+
+    #[test]
+    fn kagemusha_non_native_vesta_ipa_verifier_from_pallas_witness_accepts_production_width_profile()
+     {
+        run_vesta_affine_ipa_verifier_test(|| {
+            let (params, witness) = sample_pallas_verifier_witness(
+                KAGEMUSHA_RECURSIVE_PALLAS_IPA_BATCH_MAX_LEN,
+                "core-pallas-production-width-recursive-witness",
+            );
+            let circuit = pasta_tiny::NonNativeVestaIpaVerifierNativeScalar::<
+                { KAGEMUSHA_RECURSIVE_PALLAS_IPA_BATCH_MAX_LEN },
+                { KAGEMUSHA_RECURSIVE_VESTA_IPA_WINDOWS },
+                { KAGEMUSHA_RECURSIVE_VESTA_IPA_WINDOW_BITS },
+            >::try_from_pallas_verifier_witness(&params, &witness)
+            .expect(
+                "production-width Pallas verifier witness translates into recursive Vesta witness",
+            );
+
+            assert_eq!(circuit.round_accumulators.len(), 7);
+            assert_eq!(circuit.generator_folds.len(), 7);
+            assert_eq!(
+                circuit
+                    .generator_folds
+                    .iter()
+                    .map(Vec::len)
+                    .collect::<Vec<_>>(),
+                vec![64, 32, 16, 8, 4, 2, 1]
+            );
+            assert_eq!(
+                circuit.transcript_challenges.len(),
+                circuit.round_accumulators.len()
+            );
+            assert!(vesta_affine_ipa_verifier_host_links_hold(&circuit));
+        });
+    }
+
+    #[test]
+    fn kagemusha_pallas_ipa_batch_verifier_preflight_rejects_unsupported_width() {
+        run_vesta_affine_ipa_verifier_test(|| {
+            let params = iroha_zkp_halo2::pallas::Params::new(1).expect("n=1 Pallas params");
+            let witnesses = Vec::<
+                iroha_zkp_halo2::IpaVerifierWitness<iroha_zkp_halo2::pallas::PallasBackend>,
+            >::new();
+            let err = kagemusha_pallas_ipa_batch_verifier_preflight(&params, &witnesses)
+                .expect_err("unsupported n=1 preflight width must reject");
+            assert!(
+                err.contains("supports power-of-two lengths 2..="),
+                "unexpected unsupported-width error: {err}"
+            );
+        });
+    }
+
+    #[test]
+    fn kagemusha_pallas_ipa_batch_verifier_preflight_rejects_empty_batch() {
+        run_vesta_affine_ipa_verifier_test(|| {
+            let params = iroha_zkp_halo2::pallas::Params::new(4).expect("n=4 Pallas params");
+            let witnesses = Vec::<
+                iroha_zkp_halo2::IpaVerifierWitness<iroha_zkp_halo2::pallas::PallasBackend>,
+            >::new();
+            let err = kagemusha_pallas_ipa_batch_verifier_preflight(&params, &witnesses)
+                .expect_err("empty public Pallas verifier witness batch must reject");
+            assert!(
+                err.contains("requires at least one witness"),
+                "unexpected empty-batch error: {err}"
+            );
+        });
+    }
+
+    #[test]
+    fn kagemusha_pallas_ipa_batch_verifier_preflight_rejects_over_hop_cap() {
+        run_vesta_affine_ipa_verifier_test(|| {
+            let (params, witness) = sample_pallas_verifier_witness(4, "core-pallas-over-hop-cap");
+            let witnesses =
+                vec![witness; iroha_data_model::offline::KAGEMUSHA_COMPACT_TOKEN_MAX_HOPS + 1];
+            let err = kagemusha_pallas_ipa_batch_verifier_preflight(&params, &witnesses)
+                .expect_err("over-cap Pallas verifier witness batch must reject");
+            assert!(
+                err.contains("accepts at most"),
+                "unexpected over-cap error: {err}"
+            );
+            assert!(
+                !err.contains("batch witness 0 failed preflight"),
+                "over-cap error should reject before native witness validation: {err}"
+            );
+        });
+    }
+
+    #[test]
+    fn kagemusha_non_native_vesta_ipa_verifier_batch_preflight_rejects_empty_batch() {
+        run_vesta_affine_ipa_verifier_test(|| {
+            let params = iroha_zkp_halo2::pallas::Params::new(4).expect("Pallas params");
+            let witnesses = Vec::<
+                iroha_zkp_halo2::IpaVerifierWitness<iroha_zkp_halo2::pallas::PallasBackend>,
+            >::new();
+            let err =
+                pasta_tiny::NonNativeVestaIpaVerifierNativeScalar::<4, 1, 1>::validate_pallas_verifier_witness_batch(
+                    &params,
+                    &witnesses,
+                )
+                .err()
+                .expect("empty Pallas verifier witness batch must be rejected");
+            assert!(err.contains("requires at least one witness"));
+        });
+    }
+
+    #[test]
+    fn kagemusha_non_native_vesta_ipa_verifier_batch_preflight_rejects_length_mismatch() {
+        run_vesta_affine_ipa_verifier_test(|| {
+            let (params, witness) =
+                sample_pallas_verifier_witness(4, "core-pallas-batch-length-mismatch");
+            let err =
+                pasta_tiny::NonNativeVestaIpaVerifierNativeScalar::<8, 1, 1>::validate_pallas_verifier_witness_batch(
+                    &params,
+                    &[witness],
+                )
+                .err()
+                .expect("Pallas verifier witness batch length mismatch must be rejected");
+            assert!(err.contains("batch witness 0 failed preflight"));
+            assert!(err.contains("params length mismatch"));
+        });
+    }
+
+    #[test]
+    fn kagemusha_non_native_vesta_ipa_verifier_batch_preflight_rejects_transcript_splice() {
+        run_vesta_affine_ipa_verifier_test(|| {
+            let (params, witness_a) =
+                sample_pallas_verifier_witness(4, "core-pallas-batch-transcript-a");
+            let (_, mut witness_b) =
+                sample_pallas_verifier_witness(4, "core-pallas-batch-transcript-b");
+            witness_b.transcript_binding.challenges[0] = witness_b.transcript_binding.challenges[0]
+                .add(iroha_zkp_halo2::pallas::Scalar::from(1u64));
+            let err =
+                pasta_tiny::NonNativeVestaIpaVerifierNativeScalar::<4, 1, 1>::validate_pallas_verifier_witness_batch(
+                    &params,
+                    &[witness_a, witness_b],
+                )
+                .err()
+                .expect("spliced Pallas verifier witness batch must be rejected");
+            assert!(err.contains("batch witness 1 failed preflight"));
+            assert!(err.contains("transcript binding challenges mismatch"));
+        });
+    }
+
+    #[test]
+    fn kagemusha_non_native_vesta_ipa_verifier_batch_preflight_rejects_accumulator_splice() {
+        run_vesta_affine_ipa_verifier_test(|| {
+            let (params, witness_a) =
+                sample_pallas_verifier_witness(4, "core-pallas-batch-accumulator-a");
+            let (_, mut witness_b) =
+                sample_pallas_verifier_witness(4, "core-pallas-batch-accumulator-b");
+            witness_b.accumulation.final_q = witness_b.accumulation.initial_q;
+            let err =
+                pasta_tiny::NonNativeVestaIpaVerifierNativeScalar::<4, 1, 1>::validate_pallas_verifier_witness_batch(
+                    &params,
+                    &[witness_a, witness_b],
+                )
+                .err()
+                .expect("accumulator-spliced Pallas verifier witness batch must be rejected");
+            assert!(err.contains("batch witness 1 failed preflight"));
+            assert!(err.contains("accumulator final Q mismatch"));
+        });
+    }
+
+    #[test]
+    fn kagemusha_non_native_vesta_ipa_verifier_batch_preflight_digest_changes_with_order() {
+        run_vesta_affine_ipa_verifier_test(|| {
+            let (params, witness_a) =
+                sample_pallas_verifier_witness(4, "core-pallas-batch-order-a");
+            let (_, witness_b) = sample_pallas_verifier_witness(4, "core-pallas-batch-order-b");
+            let ab =
+                pasta_tiny::NonNativeVestaIpaVerifierNativeScalar::<4, 1, 1>::validate_pallas_verifier_witness_batch(
+                    &params,
+                    &[witness_a.clone(), witness_b.clone()],
+                )
+                .expect("ordered batch passes preflight");
+            let ba =
+                pasta_tiny::NonNativeVestaIpaVerifierNativeScalar::<4, 1, 1>::validate_pallas_verifier_witness_batch(
+                    &params,
+                    &[witness_b, witness_a],
+                )
+                .expect("reordered batch passes preflight");
+            assert_ne!(ab.aggregate_digest, ba.aggregate_digest);
+        });
+    }
+
+    #[test]
+    fn kagemusha_non_native_vesta_ipa_verifier_batch_preflight_digest_changes_with_witness() {
+        run_vesta_affine_ipa_verifier_test(|| {
+            let (params, witness_a) =
+                sample_pallas_verifier_witness(4, "core-pallas-batch-witness-a");
+            let (_, witness_b) = sample_pallas_verifier_witness(4, "core-pallas-batch-witness-b");
+            let (_, witness_c) = sample_pallas_verifier_witness(4, "core-pallas-batch-witness-c");
+            let ab =
+                pasta_tiny::NonNativeVestaIpaVerifierNativeScalar::<4, 1, 1>::validate_pallas_verifier_witness_batch(
+                    &params,
+                    &[witness_a.clone(), witness_b],
+                )
+                .expect("baseline batch passes preflight");
+            let ac =
+                pasta_tiny::NonNativeVestaIpaVerifierNativeScalar::<4, 1, 1>::validate_pallas_verifier_witness_batch(
+                    &params,
+                    &[witness_a, witness_c],
+                )
+                .expect("replacement batch passes preflight");
+            assert_ne!(ab.aggregate_digest, ac.aggregate_digest);
+        });
+    }
+
+    #[test]
+    fn kagemusha_non_native_vesta_ipa_verifier_batch_preflight_populates_recursive_evidence() {
+        run_vesta_affine_ipa_verifier_test(|| {
+            let (params, witness_a) =
+                sample_pallas_verifier_witness(4, "core-pallas-batch-evidence-a");
+            let (_, witness_b) = sample_pallas_verifier_witness(4, "core-pallas-batch-evidence-b");
+            let preflight =
+                pasta_tiny::NonNativeVestaIpaVerifierNativeScalar::<4, 1, 1>::validate_pallas_verifier_witness_batch(
+                    &params,
+                    &[witness_a, witness_b],
+                )
+                .expect("real Pallas verifier witness batch passes preflight validation");
+
+            let chain_id: iroha_data_model::ChainId =
+                "kagemusha-core-recursive".parse().expect("chain id");
+            let asset = iroha_data_model::asset::AssetDefinitionId::new(
+                iroha_data_model::domain::DomainId::try_new("offline", "universal")
+                    .expect("domain id"),
+                "kgm-core".parse().expect("asset name"),
+            );
+            let root0: [u8; 32] = iroha_crypto::Hash::new(b"core-recursive-root-0").into();
+            let root1: [u8; 32] = iroha_crypto::Hash::new(b"core-recursive-root-1").into();
+            let root2: [u8; 32] = iroha_crypto::Hash::new(b"core-recursive-root-2").into();
+            let verifier_key_bytes = b"core-recursive-hop-vk";
+            let verifier_key_poseidon_digest =
+                iroha_data_model::offline::kagemusha_verifier_key_poseidon_digest(
+                    "halo2/ipa",
+                    verifier_key_bytes,
+                )
+                .expect("Kagemusha verifier-key Poseidon digest");
+            let step = |root_before, root_after, input_seed, output_seed, proof_label: &[u8]| {
+                let mut proof_public_inputs_label = proof_label.to_vec();
+                proof_public_inputs_label.extend_from_slice(b":public-inputs");
+                iroha_data_model::offline::KagemushaFoldStep {
+                    root_before,
+                    input_nullifiers: vec![[input_seed; 32]],
+                    output_commitments: vec![[output_seed; 32]],
+                    root_after,
+                    proof_hash: iroha_crypto::Hash::new(proof_label),
+                    proof_public_inputs_digest: iroha_crypto::Hash::new(proof_public_inputs_label)
+                        .into(),
+                    verifier_key_id: iroha_data_model::proof::VerifyingKeyId::new(
+                        "halo2/ipa",
+                        "kagemusha-hop-fixture",
+                    ),
+                    verifier_key_commitment: iroha_crypto::Hash::new(verifier_key_bytes).into(),
+                    verifier_key_poseidon_digest,
+                }
+            };
+            let evidence =
+                iroha_data_model::offline::kagemusha_recursive_aggregation_evidence_from_steps(
+                    &chain_id,
+                    &asset,
+                    &[
+                        step(root0, root1, 0x31, 0x41, b"core-recursive-hop-0"),
+                        step(root1, root2, 0x32, 0x42, b"core-recursive-hop-1"),
+                    ],
+                    preflight.params_fingerprint,
+                    preflight.aggregate_digest,
+                )
+                .expect("Pallas preflight output populates recursive aggregation evidence");
+            assert_eq!(
+                evidence.verifier_witness_count,
+                preflight.proof_count as u32
+            );
+            assert_eq!(
+                evidence.verifier_witness_profile,
+                preflight.verifier_witness_profile
+            );
+            assert_eq!(
+                evidence.verifier_params_fingerprint,
+                preflight.params_fingerprint
+            );
+            assert_eq!(
+                evidence.verifier_witness_batch_digest,
+                preflight.aggregate_digest
+            );
+            let evidence_digest =
+                iroha_data_model::offline::kagemusha_recursive_aggregation_evidence_digest(
+                    &evidence,
+                )
+                .expect("recursive aggregation evidence digest");
+            assert_ne!(evidence_digest, [0u8; 32]);
+        });
+    }
+
+    #[test]
+    fn kagemusha_non_native_vesta_ipa_verifier_from_pallas_witness_accepts_small_scalar_projection()
+    {
+        run_vesta_affine_ipa_verifier_test(|| {
+            let (params, witness) = sample_small_scalar_pallas_verifier_witness();
             let circuit =
-                pasta_tiny::NonNativeVestaIpaVerifierNativeScalar::<4, 85, 3>::try_from_pallas_verifier_witness(
+                pasta_tiny::NonNativeVestaIpaVerifierNativeScalar::<4, 1, 1>::try_from_pallas_verifier_witness(
                     &params,
                     &witness,
                 )
@@ -13939,6 +14800,214 @@ mod kagemusha_non_native_limb_circuit_tests {
                 .err()
                 .expect("Pallas transcript challenge splice must be rejected");
             assert!(err.contains("transcript binding challenges mismatch"));
+        });
+    }
+
+    #[test]
+    fn kagemusha_non_native_vesta_ipa_verifier_from_pallas_witness_rejects_round_index_splice() {
+        run_vesta_affine_ipa_verifier_test(|| {
+            let (params, mut witness) =
+                sample_pallas_verifier_witness(4, "core-pallas-round-index-splice");
+            witness.round_challenges[0].round_index = 1;
+            witness.transcript_projection.rounds[0].round_index = 1;
+            let err =
+                pasta_tiny::NonNativeVestaIpaVerifierNativeScalar::<4, 1, 1>::validate_pallas_verifier_witness(
+                    &params,
+                    &witness,
+                )
+                .err()
+                .expect("Pallas transcript round-index splice must be rejected");
+            assert!(err.contains("transcript round index mismatch"));
+        });
+    }
+
+    #[test]
+    fn kagemusha_non_native_vesta_ipa_verifier_from_pallas_witness_rejects_invalid_l_encoding() {
+        run_vesta_affine_ipa_verifier_test(|| {
+            let (params, mut witness) =
+                sample_pallas_verifier_witness(4, "core-pallas-invalid-l-encoding");
+            witness.round_challenges[0].l_bytes = [0xff; 32];
+            witness.transcript_projection.rounds[0].l_bytes = [0xff; 32];
+            let err =
+                pasta_tiny::NonNativeVestaIpaVerifierNativeScalar::<4, 1, 1>::validate_pallas_verifier_witness(
+                    &params,
+                    &witness,
+                )
+                .err()
+                .expect("Pallas invalid L encoding must be rejected");
+            assert!(err.contains("point encoding failed"));
+        });
+    }
+
+    #[test]
+    fn kagemusha_non_native_vesta_ipa_verifier_from_pallas_witness_rejects_challenge_inverse_splice()
+     {
+        run_vesta_affine_ipa_verifier_test(|| {
+            let (params, mut witness) =
+                sample_pallas_verifier_witness(4, "core-pallas-challenge-inverse-splice");
+            let bad_inverse = witness.round_challenges[0]
+                .challenge_inverse
+                .add(iroha_zkp_halo2::pallas::Scalar::from(1u64));
+            witness.round_challenges[0].challenge_inverse = bad_inverse;
+            witness.transcript_projection.rounds[0].challenge_inverse = bad_inverse;
+            witness.transcript_binding.challenge_inverses[0] = bad_inverse;
+            let err =
+                pasta_tiny::NonNativeVestaIpaVerifierNativeScalar::<4, 1, 1>::validate_pallas_verifier_witness(
+                    &params,
+                    &witness,
+                )
+                .err()
+                .expect("Pallas challenge inverse splice must be rejected");
+            assert!(err.contains("transcript challenge inverse mismatch"));
+        });
+    }
+
+    #[test]
+    fn kagemusha_non_native_vesta_ipa_verifier_from_pallas_witness_rejects_b_layer_splice() {
+        run_vesta_affine_ipa_verifier_test(|| {
+            let (params, mut witness) =
+                sample_pallas_verifier_witness(4, "core-pallas-b-layer-splice");
+            witness.b_reduction.rounds[1].b_before[0] = witness.b_reduction.rounds[1].b_before[0]
+                .add(iroha_zkp_halo2::pallas::Scalar::from(1u64));
+            let err =
+                pasta_tiny::NonNativeVestaIpaVerifierNativeScalar::<4, 1, 1>::validate_pallas_verifier_witness(
+                    &params,
+                    &witness,
+                )
+                .err()
+                .expect("Pallas b-reduction layer splice must be rejected");
+            assert!(err.contains("b reduction input layer mismatch"));
+        });
+    }
+
+    #[test]
+    fn kagemusha_non_native_vesta_ipa_verifier_from_pallas_witness_rejects_b_final_splice() {
+        run_vesta_affine_ipa_verifier_test(|| {
+            let (params, mut witness) =
+                sample_pallas_verifier_witness(4, "core-pallas-b-final-splice");
+            witness.b_reduction.final_b = witness
+                .b_reduction
+                .final_b
+                .add(iroha_zkp_halo2::pallas::Scalar::from(1u64));
+            let err =
+                pasta_tiny::NonNativeVestaIpaVerifierNativeScalar::<4, 1, 1>::validate_pallas_verifier_witness(
+                    &params,
+                    &witness,
+                )
+                .err()
+                .expect("Pallas b-reduction final scalar splice must be rejected");
+            assert!(err.contains("b reduction final scalar mismatch"));
+        });
+    }
+
+    #[test]
+    fn kagemusha_non_native_vesta_ipa_verifier_from_pallas_witness_rejects_b_output_splice() {
+        run_vesta_affine_ipa_verifier_test(|| {
+            let (params, mut witness) =
+                sample_pallas_verifier_witness(4, "core-pallas-b-output-splice");
+            witness.b_reduction.rounds[0].b_after[0] = witness.b_reduction.rounds[0].b_after[0]
+                .add(iroha_zkp_halo2::pallas::Scalar::from(1u64));
+            let err =
+                pasta_tiny::NonNativeVestaIpaVerifierNativeScalar::<4, 1, 1>::validate_pallas_verifier_witness(
+                    &params,
+                    &witness,
+                )
+                .err()
+                .expect("Pallas b-reduction output splice must be rejected");
+            assert!(err.contains("b reduction output mismatch"));
+        });
+    }
+
+    #[test]
+    fn kagemusha_non_native_vesta_ipa_verifier_from_pallas_witness_rejects_accumulator_square_splice()
+     {
+        run_vesta_affine_ipa_verifier_test(|| {
+            let (params, mut witness) =
+                sample_pallas_verifier_witness(4, "core-pallas-accumulator-square-splice");
+            witness.accumulation.rounds[0].challenge_square = witness.accumulation.rounds[0]
+                .challenge_square
+                .add(iroha_zkp_halo2::pallas::Scalar::from(1u64));
+            let err =
+                pasta_tiny::NonNativeVestaIpaVerifierNativeScalar::<4, 1, 1>::validate_pallas_verifier_witness(
+                    &params,
+                    &witness,
+                )
+                .err()
+                .expect("Pallas accumulator square splice must be rejected");
+            assert!(err.contains("accumulator challenge-square mismatch"));
+        });
+    }
+
+    #[test]
+    fn kagemusha_non_native_vesta_ipa_verifier_from_pallas_witness_rejects_accumulator_q_fold_splice()
+     {
+        run_vesta_affine_ipa_verifier_test(|| {
+            let (params, mut witness) =
+                sample_pallas_verifier_witness(4, "core-pallas-accumulator-q-fold-splice");
+            witness.accumulation.rounds[0].q_after = params.u();
+            witness.accumulation.rounds[1].q_before = params.u();
+            let err =
+                pasta_tiny::NonNativeVestaIpaVerifierNativeScalar::<4, 1, 1>::validate_pallas_verifier_witness(
+                    &params,
+                    &witness,
+                )
+                .err()
+                .expect("Pallas accumulator Q fold splice must be rejected");
+            assert!(err.contains("accumulator Q fold mismatch"));
+        });
+    }
+
+    #[test]
+    fn kagemusha_non_native_vesta_ipa_verifier_from_pallas_witness_rejects_generator_fold_splice() {
+        run_vesta_affine_ipa_verifier_test(|| {
+            let (params, mut witness) =
+                sample_pallas_verifier_witness(4, "core-pallas-generator-fold-splice");
+            witness.accumulation.rounds[0].g_after[0] = params.u();
+            let err =
+                pasta_tiny::NonNativeVestaIpaVerifierNativeScalar::<4, 1, 1>::validate_pallas_verifier_witness(
+                    &params,
+                    &witness,
+                )
+                .err()
+                .expect("Pallas generator fold splice must be rejected");
+            assert!(err.contains("accumulator G fold mismatch"));
+        });
+    }
+
+    #[test]
+    fn kagemusha_non_native_vesta_ipa_verifier_from_pallas_witness_rejects_final_generator_splice()
+    {
+        run_vesta_affine_ipa_verifier_test(|| {
+            let (params, mut witness) =
+                sample_pallas_verifier_witness(4, "core-pallas-final-generator-splice");
+            witness.accumulation.final_g = params.u();
+            let err =
+                pasta_tiny::NonNativeVestaIpaVerifierNativeScalar::<4, 1, 1>::validate_pallas_verifier_witness(
+                    &params,
+                    &witness,
+                )
+                .err()
+                .expect("Pallas final generator splice must be rejected");
+            assert!(err.contains("accumulator final generator mismatch"));
+        });
+    }
+
+    #[test]
+    fn kagemusha_non_native_vesta_ipa_verifier_from_pallas_witness_rejects_final_scalar_splice() {
+        run_vesta_affine_ipa_verifier_test(|| {
+            let (params, mut witness) =
+                sample_pallas_verifier_witness(4, "core-pallas-final-scalar-splice");
+            witness.proof_a_final = witness
+                .proof_a_final
+                .add(iroha_zkp_halo2::pallas::Scalar::from(1u64));
+            let err =
+                pasta_tiny::NonNativeVestaIpaVerifierNativeScalar::<4, 1, 1>::validate_pallas_verifier_witness(
+                    &params,
+                    &witness,
+                )
+                .err()
+                .expect("Pallas final scalar splice must be rejected");
+            assert!(err.contains("accumulator expected term mismatch"));
         });
     }
 
@@ -16025,6 +17094,478 @@ mod kagemusha_folded_real_prover_tests {
                 .expect("record-backed bundle verification"),
             kagemusha_verified_folded_public_inputs_from_record_bundle(&record_bundle)
                 .expect("serializable record bundle verification")
+        );
+    }
+
+    #[test]
+    fn kagemusha_verified_recursive_aggregation_evidence_from_records_accepts_active_records() {
+        let (chain_id, asset, hop, record) = sample_confidential_v2_verified_hop();
+        let bundle = KagemushaVerifiedFoldBundle {
+            chain_id,
+            asset,
+            steps: vec![hop.as_bundle_step()],
+        };
+        let id = hop.attachment.vk_ref.clone();
+        let records = [KagemushaHopVerifierRecord {
+            id: &id,
+            record: &record,
+        }];
+        let params_fingerprint = fixed_bytes(b"kagemusha-recursive-core-params");
+        let batch_digest = fixed_bytes(b"kagemusha-recursive-core-batch");
+
+        let evidence = kagemusha_verified_recursive_aggregation_evidence_from_bundle_with_records(
+            &bundle,
+            &records,
+            1,
+            params_fingerprint,
+            batch_digest,
+        )
+        .expect("record-backed recursive aggregation evidence");
+        assert_eq!(
+            evidence.aggregation_statement.aggregation_mode,
+            iroha_data_model::offline::KAGEMUSHA_AGGREGATION_MODE_RECURSIVE_IN_CIRCUIT_V1
+        );
+        assert_eq!(evidence.verifier_witness_count, 1);
+        assert_eq!(
+            evidence.verifier_witness_profile,
+            KAGEMUSHA_RECURSIVE_VERIFIER_WITNESS_PROFILE_V1
+        );
+        assert_eq!(evidence.verifier_params_fingerprint, params_fingerprint);
+        assert_eq!(evidence.verifier_witness_batch_digest, batch_digest);
+        assert_eq!(evidence.aggregation_statement.initial_root, hop.root_before);
+        assert_eq!(evidence.aggregation_statement.final_root, hop.root_after);
+        assert!(matches!(
+            iroha_data_model::offline::kagemusha_folded_public_inputs_from_aggregation_statement(
+                &evidence.aggregation_statement,
+            ),
+            Err(iroha_data_model::offline::KagemushaFoldError::UnsupportedAggregationMode {
+                actual,
+                ..
+            }) if actual == iroha_data_model::offline::KAGEMUSHA_AGGREGATION_MODE_RECURSIVE_IN_CIRCUIT_V1
+        ));
+        let evidence_digest =
+            iroha_data_model::offline::kagemusha_recursive_aggregation_evidence_digest(&evidence)
+                .expect("recursive aggregation evidence digest");
+        assert_ne!(evidence_digest, [0u8; 32]);
+
+        let record_bundle = KagemushaVerifiedFoldRecordBundle {
+            bundle: bundle.clone(),
+            verifier_records: vec![KagemushaVerifiedFoldVerifierRecord {
+                id: id.clone(),
+                record: record.clone(),
+            }],
+        };
+        assert_eq!(
+            evidence,
+            kagemusha_verified_recursive_aggregation_evidence_from_record_bundle(
+                &record_bundle,
+                1,
+                params_fingerprint,
+                batch_digest,
+            )
+            .expect("serializable record-backed recursive aggregation evidence")
+        );
+    }
+
+    #[test]
+    fn kagemusha_verified_recursive_aggregation_evidence_from_pallas_batch_accepts_active_records()
+    {
+        let (chain_id, asset, hop, record) = sample_confidential_v2_verified_hop();
+        let bundle = KagemushaVerifiedFoldBundle {
+            chain_id,
+            asset,
+            steps: vec![hop.as_bundle_step()],
+        };
+        let id = hop.attachment.vk_ref.clone();
+        let records = [KagemushaHopVerifierRecord {
+            id: &id,
+            record: &record,
+        }];
+        let (params, witness) =
+            super::kagemusha_non_native_limb_circuit_tests::sample_pallas_verifier_witness(
+                4,
+                "core-recursive-record-backed-pallas",
+            );
+        let witnesses = vec![witness];
+        let preflight = kagemusha_pallas_ipa_batch_verifier_preflight(&params, &witnesses)
+            .expect("Pallas verifier witness batch preflight");
+        let hop_proof_hash =
+            kagemusha_fold_step_proof_hash(&hop.attachment.proof).expect("hop proof hash");
+        let hop_bound_preflight =
+            kagemusha_pallas_ipa_batch_verifier_preflight_bound_to_hop_proofs(
+                &params,
+                &witnesses,
+                &[hop_proof_hash],
+            )
+            .expect("hop-bound Pallas verifier witness batch preflight");
+        assert_ne!(
+            preflight.aggregate_digest, hop_bound_preflight.aggregate_digest,
+            "hop-bound preflight digest must not equal the detached native batch digest"
+        );
+        let forged_hop_bound = kagemusha_pallas_ipa_batch_verifier_preflight_bound_to_hop_proofs(
+            &params,
+            &witnesses,
+            &[Hash::new(b"forged-kagemusha-hop-proof-hash")],
+        )
+        .expect("forged hop-bound Pallas verifier witness batch preflight");
+        assert_ne!(
+            hop_bound_preflight.aggregate_digest, forged_hop_bound.aggregate_digest,
+            "hop-bound preflight digest must change when the ordered hop proof hash changes"
+        );
+
+        let evidence =
+            kagemusha_verified_recursive_aggregation_evidence_from_bundle_with_records_and_pallas_batch(
+                &bundle,
+                &records,
+                &params,
+                &witnesses,
+            )
+            .expect("record-backed recursive aggregation evidence from Pallas batch");
+        assert_eq!(
+            evidence.verifier_witness_count as usize,
+            preflight.proof_count
+        );
+        assert_eq!(
+            evidence.verifier_witness_profile,
+            preflight.verifier_witness_profile
+        );
+        assert_eq!(
+            evidence.verifier_params_fingerprint,
+            preflight.params_fingerprint
+        );
+        assert_eq!(
+            evidence.verifier_witness_batch_digest,
+            hop_bound_preflight.aggregate_digest
+        );
+        assert_eq!(evidence.aggregation_statement.initial_root, hop.root_before);
+        assert_eq!(evidence.aggregation_statement.final_root, hop.root_after);
+
+        let record_bundle = KagemushaVerifiedFoldRecordBundle {
+            bundle: bundle.clone(),
+            verifier_records: vec![KagemushaVerifiedFoldVerifierRecord {
+                id: id.clone(),
+                record: record.clone(),
+            }],
+        };
+        assert_eq!(
+            evidence,
+            kagemusha_verified_recursive_aggregation_evidence_from_record_bundle_and_pallas_batch(
+                &record_bundle,
+                &params,
+                &witnesses,
+            )
+            .expect("serializable record-backed recursive evidence from Pallas batch")
+        );
+    }
+
+    #[test]
+    fn kagemusha_verified_recursive_aggregation_evidence_rejects_bad_batch_metadata_before_decode()
+    {
+        let (chain_id, asset, mut hop, record) = sample_confidential_v2_verified_hop();
+        hop.attachment.proof.bytes = vec![0xA7];
+        let bundle = KagemushaVerifiedFoldBundle {
+            chain_id,
+            asset,
+            steps: vec![hop.as_bundle_step()],
+        };
+        let id = hop.attachment.vk_ref.clone();
+        let records = [KagemushaHopVerifierRecord {
+            id: &id,
+            record: &record,
+        }];
+
+        let err = kagemusha_verified_recursive_aggregation_evidence_from_bundle_with_records(
+            &bundle,
+            &records,
+            2,
+            fixed_bytes(b"kagemusha-recursive-core-params"),
+            fixed_bytes(b"kagemusha-recursive-core-batch"),
+        )
+        .expect_err("recursive evidence witness-count mismatch must reject before proof decode");
+        assert!(
+            err.contains("witness count"),
+            "unexpected witness-count error: {err}"
+        );
+        assert!(
+            !err.contains("OpenVerifyEnvelope"),
+            "witness-count error should come before proof decoding: {err}"
+        );
+
+        let err = kagemusha_verified_recursive_aggregation_evidence_from_bundle_with_records(
+            &bundle,
+            &records,
+            1,
+            [0u8; 32],
+            fixed_bytes(b"kagemusha-recursive-core-batch"),
+        )
+        .expect_err("zero verifier params fingerprint must reject before proof decode");
+        assert!(
+            err.contains("parameter fingerprint"),
+            "unexpected zero-params error: {err}"
+        );
+        assert!(
+            !err.contains("OpenVerifyEnvelope"),
+            "zero-params error should come before proof decoding: {err}"
+        );
+
+        let err = kagemusha_verified_recursive_aggregation_evidence_from_bundle_with_records(
+            &bundle,
+            &records,
+            1,
+            fixed_bytes(b"kagemusha-recursive-core-params"),
+            [0u8; 32],
+        )
+        .expect_err("zero verifier batch digest must reject before proof decode");
+        assert!(
+            err.contains("batch digest"),
+            "unexpected zero-batch error: {err}"
+        );
+        assert!(
+            !err.contains("OpenVerifyEnvelope"),
+            "zero-batch error should come before proof decoding: {err}"
+        );
+    }
+
+    #[test]
+    fn kagemusha_verified_recursive_aggregation_evidence_from_pallas_batch_rejects_before_hop_decode()
+     {
+        let (chain_id, asset, mut hop, record) = sample_confidential_v2_verified_hop();
+        hop.attachment.proof.bytes = vec![0xA7];
+        let bundle = KagemushaVerifiedFoldBundle {
+            chain_id,
+            asset,
+            steps: vec![hop.as_bundle_step()],
+        };
+        let id = hop.attachment.vk_ref.clone();
+        let records = [KagemushaHopVerifierRecord {
+            id: &id,
+            record: &record,
+        }];
+        let (params, witness) =
+            super::kagemusha_non_native_limb_circuit_tests::sample_pallas_verifier_witness(
+                4,
+                "core-recursive-record-backed-pallas-mismatch",
+            );
+        let no_witnesses = Vec::<
+            iroha_zkp_halo2::IpaVerifierWitness<iroha_zkp_halo2::pallas::PallasBackend>,
+        >::new();
+
+        let err =
+            kagemusha_verified_recursive_aggregation_evidence_from_bundle_with_records_and_pallas_batch(
+                &bundle,
+                &records,
+                &params,
+                &no_witnesses,
+            )
+            .expect_err("Pallas witness-count mismatch must reject before hop proof decode");
+        assert!(
+            err.contains("witness count"),
+            "unexpected witness-count error: {err}"
+        );
+        assert!(
+            !err.contains("requires at least one witness"),
+            "witness-count mismatch should reject before native batch preflight: {err}"
+        );
+        assert!(
+            !err.contains("OpenVerifyEnvelope"),
+            "witness-count mismatch should reject before hop proof decoding: {err}"
+        );
+
+        let wrong_params =
+            iroha_zkp_halo2::pallas::Params::new(8).expect("wrong-width Pallas params");
+        let err =
+            kagemusha_verified_recursive_aggregation_evidence_from_bundle_with_records_and_pallas_batch(
+                &bundle,
+                &records,
+                &wrong_params,
+                std::slice::from_ref(&witness),
+            )
+            .expect_err("Pallas params mismatch must reject before hop proof decode");
+        assert!(
+            err.contains("batch witness 0 failed preflight"),
+            "unexpected Pallas preflight error: {err}"
+        );
+        assert!(
+            err.contains("transcript length mismatch"),
+            "unexpected Pallas witness length mismatch error: {err}"
+        );
+        assert!(
+            !err.contains("OpenVerifyEnvelope"),
+            "Pallas params mismatch should reject before hop proof decoding: {err}"
+        );
+
+        let mut spliced = witness;
+        spliced.accumulation.final_q = spliced.accumulation.initial_q;
+        let err =
+            kagemusha_verified_recursive_aggregation_evidence_from_bundle_with_records_and_pallas_batch(
+                &bundle,
+                &records,
+                &params,
+                &[spliced],
+            )
+            .expect_err("Pallas batch preflight must reject before hop proof decode");
+        assert!(
+            err.contains("batch witness 0 failed preflight"),
+            "unexpected Pallas preflight error: {err}"
+        );
+        assert!(
+            err.contains("accumulator final Q mismatch"),
+            "unexpected Pallas accumulator error: {err}"
+        );
+        assert!(
+            !err.contains("OpenVerifyEnvelope"),
+            "Pallas preflight error should come before hop proof decoding: {err}"
+        );
+    }
+
+    #[test]
+    fn kagemusha_verified_recursive_aggregation_evidence_rejects_records_and_tampered_hops() {
+        let (chain_id, asset, mut hop, record) = sample_confidential_v2_verified_hop();
+        let id = hop.attachment.vk_ref.clone();
+        let bundle = KagemushaVerifiedFoldBundle {
+            chain_id: chain_id.clone(),
+            asset: asset.clone(),
+            steps: vec![hop.as_bundle_step()],
+        };
+        let missing: [KagemushaHopVerifierRecord<'_>; 0] = [];
+        let err = kagemusha_verified_recursive_aggregation_evidence_from_bundle_with_records(
+            &bundle,
+            &missing,
+            1,
+            fixed_bytes(b"kagemusha-recursive-core-params"),
+            fixed_bytes(b"kagemusha-recursive-core-batch"),
+        )
+        .expect_err("missing verifier record must reject recursive evidence");
+        assert!(
+            err.contains("missing"),
+            "unexpected missing-record error: {err}"
+        );
+
+        let mut undecodable_bundle = bundle.clone();
+        undecodable_bundle.steps[0].attachment.proof.bytes = vec![0xA7];
+        let extra_id = VerifyingKeyId::new(ZK_BACKEND_HALO2_IPA, "unused-recursive-hop-vk");
+        let records = [
+            KagemushaHopVerifierRecord {
+                id: &id,
+                record: &record,
+            },
+            KagemushaHopVerifierRecord {
+                id: &extra_id,
+                record: &record,
+            },
+        ];
+        let err = kagemusha_verified_recursive_aggregation_evidence_from_bundle_with_records(
+            &undecodable_bundle,
+            &records,
+            1,
+            fixed_bytes(b"kagemusha-recursive-core-params"),
+            fixed_bytes(b"kagemusha-recursive-core-batch"),
+        )
+        .expect_err("extraneous verifier record must reject recursive evidence");
+        assert!(
+            err.contains("not referenced by any hop"),
+            "unexpected extra-record error: {err}"
+        );
+        assert!(
+            !err.contains("OpenVerifyEnvelope"),
+            "extra-record error should come before proof decoding: {err}"
+        );
+
+        let records = [
+            KagemushaHopVerifierRecord {
+                id: &id,
+                record: &record,
+            },
+            KagemushaHopVerifierRecord {
+                id: &id,
+                record: &record,
+            },
+        ];
+        let err = kagemusha_verified_recursive_aggregation_evidence_from_bundle_with_records(
+            &undecodable_bundle,
+            &records,
+            1,
+            fixed_bytes(b"kagemusha-recursive-core-params"),
+            fixed_bytes(b"kagemusha-recursive-core-batch"),
+        )
+        .expect_err("duplicated verifier record must reject recursive evidence");
+        assert!(
+            err.contains("duplicated"),
+            "unexpected duplicate-record error: {err}"
+        );
+        assert!(
+            !err.contains("OpenVerifyEnvelope"),
+            "duplicate-record error should come before proof decoding: {err}"
+        );
+
+        let mut inactive = record.clone();
+        inactive.status = ConfidentialStatus::Withdrawn;
+        let records = [KagemushaHopVerifierRecord {
+            id: &id,
+            record: &inactive,
+        }];
+        let err = kagemusha_verified_recursive_aggregation_evidence_from_bundle_with_records(
+            &undecodable_bundle,
+            &records,
+            1,
+            fixed_bytes(b"kagemusha-recursive-core-params"),
+            fixed_bytes(b"kagemusha-recursive-core-batch"),
+        )
+        .expect_err("inactive verifier record must reject recursive evidence");
+        assert!(
+            err.contains("not active"),
+            "unexpected inactive error: {err}"
+        );
+        assert!(
+            !err.contains("OpenVerifyEnvelope"),
+            "inactive-record error should come before proof decoding: {err}"
+        );
+
+        let mut wrong_namespace = record.clone();
+        wrong_namespace.namespace = "generic_confidential_transfer".to_owned();
+        let records = [KagemushaHopVerifierRecord {
+            id: &id,
+            record: &wrong_namespace,
+        }];
+        let err = kagemusha_verified_recursive_aggregation_evidence_from_bundle_with_records(
+            &undecodable_bundle,
+            &records,
+            1,
+            fixed_bytes(b"kagemusha-recursive-core-params"),
+            fixed_bytes(b"kagemusha-recursive-core-batch"),
+        )
+        .expect_err("wrong verifier namespace must reject recursive evidence");
+        assert!(
+            err.contains("namespace"),
+            "unexpected namespace error: {err}"
+        );
+        assert!(
+            !err.contains("OpenVerifyEnvelope"),
+            "namespace error should come before proof decoding: {err}"
+        );
+
+        let last = hop.attachment.proof.bytes.last_mut().expect("proof bytes");
+        *last ^= 0x01;
+        let tampered_bundle = KagemushaVerifiedFoldBundle {
+            chain_id,
+            asset,
+            steps: vec![hop.as_bundle_step()],
+        };
+        let records = [KagemushaHopVerifierRecord {
+            id: &id,
+            record: &record,
+        }];
+        let err = kagemusha_verified_recursive_aggregation_evidence_from_bundle_with_records(
+            &tampered_bundle,
+            &records,
+            1,
+            fixed_bytes(b"kagemusha-recursive-core-params"),
+            fixed_bytes(b"kagemusha-recursive-core-batch"),
+        )
+        .expect_err("tampered hop proof must reject recursive evidence");
+        assert!(
+            err.contains("verification failed") || err.contains("not a valid OpenVerifyEnvelope"),
+            "unexpected tampered-hop error: {err}"
         );
     }
 
@@ -20435,6 +21976,205 @@ mod pasta_tiny {
                 "Pallas IPA point encoding failed canonical Vesta decoding".to_owned()
             })?;
         Ok(vesta_affine_to_limbs(affine))
+    }
+
+    fn pallas_optimized_msm(
+        bases: &[iroha_zkp_halo2::pallas::Group],
+        scalars: &[iroha_zkp_halo2::pallas::Scalar],
+        context: &str,
+    ) -> Result<iroha_zkp_halo2::pallas::Group, String> {
+        <iroha_zkp_halo2::pallas::PallasBackend as iroha_zkp_halo2::IpaBackend>::msm(bases, scalars)
+            .map_err(|err| format!("Pallas IPA optimized MSM failed for {context}: {err}"))
+    }
+
+    type PallasBatchDigest = iroha_zkp_halo2::poseidon::PoseidonByteHasher;
+
+    fn pallas_batch_digest_update_bytes(hasher: &mut PallasBatchDigest, bytes: &[u8]) {
+        hasher.update(bytes);
+    }
+
+    fn pallas_batch_digest_update_u64(hasher: &mut PallasBatchDigest, value: u64) {
+        pallas_batch_digest_update_bytes(hasher, &value.to_le_bytes());
+    }
+
+    fn pallas_batch_digest_update_len(
+        hasher: &mut PallasBatchDigest,
+        label: &str,
+        value: usize,
+    ) -> Result<(), String> {
+        let value = u64::try_from(value)
+            .map_err(|_| format!("Pallas IPA batch {label} length does not fit in u64"))?;
+        pallas_batch_digest_update_u64(hasher, value);
+        Ok(())
+    }
+
+    fn pallas_batch_digest_update_scalar(
+        hasher: &mut PallasBatchDigest,
+        scalar: iroha_zkp_halo2::pallas::Scalar,
+    ) {
+        pallas_batch_digest_update_bytes(hasher, &scalar.to_bytes());
+    }
+
+    fn pallas_batch_digest_update_group(
+        hasher: &mut PallasBatchDigest,
+        group: iroha_zkp_halo2::pallas::Group,
+    ) {
+        pallas_batch_digest_update_bytes(hasher, &group.to_bytes());
+    }
+
+    fn pallas_batch_digest_update_scalar_vec(
+        hasher: &mut PallasBatchDigest,
+        label: &str,
+        values: &[iroha_zkp_halo2::pallas::Scalar],
+    ) -> Result<(), String> {
+        pallas_batch_digest_update_len(hasher, label, values.len())?;
+        for value in values {
+            pallas_batch_digest_update_scalar(hasher, *value);
+        }
+        Ok(())
+    }
+
+    fn pallas_batch_digest_update_group_vec(
+        hasher: &mut PallasBatchDigest,
+        label: &str,
+        values: &[iroha_zkp_halo2::pallas::Group],
+    ) -> Result<(), String> {
+        pallas_batch_digest_update_len(hasher, label, values.len())?;
+        for value in values {
+            pallas_batch_digest_update_group(hasher, *value);
+        }
+        Ok(())
+    }
+
+    fn pallas_batch_digest_update_round_challenge(
+        hasher: &mut PallasBatchDigest,
+        round: &iroha_zkp_halo2::IpaRoundChallenge<iroha_zkp_halo2::pallas::Scalar>,
+    ) -> Result<(), String> {
+        pallas_batch_digest_update_len(hasher, "round index", round.round_index)?;
+        pallas_batch_digest_update_bytes(hasher, &round.l_bytes);
+        pallas_batch_digest_update_bytes(hasher, &round.r_bytes);
+        pallas_batch_digest_update_bytes(hasher, &round.round_bytes_digest);
+        pallas_batch_digest_update_bytes(hasher, &round.state_before_round);
+        pallas_batch_digest_update_bytes(hasher, &round.state_after_round_absorb);
+        pallas_batch_digest_update_bytes(hasher, &round.state_after_challenge);
+        pallas_batch_digest_update_scalar(hasher, round.challenge);
+        pallas_batch_digest_update_scalar(hasher, round.challenge_inverse);
+        Ok(())
+    }
+
+    fn pallas_batch_digest_update_witness(
+        hasher: &mut PallasBatchDigest,
+        witness_index: usize,
+        witness: &iroha_zkp_halo2::IpaVerifierWitness<iroha_zkp_halo2::pallas::PallasBackend>,
+    ) -> Result<(), String> {
+        pallas_batch_digest_update_len(hasher, "witness index", witness_index)?;
+        pallas_batch_digest_update_len(
+            hasher,
+            "transcript length",
+            witness.transcript_projection.n,
+        )?;
+        pallas_batch_digest_update_bytes(hasher, &witness.transcript_projection.state_before_ipa_n);
+        pallas_batch_digest_update_bytes(hasher, &witness.transcript_projection.state_after_ipa_n);
+        pallas_batch_digest_update_len(
+            hasher,
+            "transcript projection round count",
+            witness.transcript_projection.rounds.len(),
+        )?;
+        for round in &witness.transcript_projection.rounds {
+            pallas_batch_digest_update_round_challenge(hasher, round)?;
+        }
+        pallas_batch_digest_update_bytes(hasher, &witness.transcript_projection.final_state);
+
+        pallas_batch_digest_update_len(
+            hasher,
+            "transcript binding length",
+            witness.transcript_binding.n,
+        )?;
+        pallas_batch_digest_update_scalar(hasher, witness.transcript_binding.header_projection);
+        pallas_batch_digest_update_scalar_vec(
+            hasher,
+            "transcript binding round projection count",
+            &witness.transcript_binding.round_projections,
+        )?;
+        pallas_batch_digest_update_scalar_vec(
+            hasher,
+            "transcript binding challenge count",
+            &witness.transcript_binding.challenges,
+        )?;
+        pallas_batch_digest_update_scalar_vec(
+            hasher,
+            "transcript binding inverse count",
+            &witness.transcript_binding.challenge_inverses,
+        )?;
+        pallas_batch_digest_update_scalar(hasher, witness.transcript_binding.final_projection);
+        pallas_batch_digest_update_scalar(hasher, witness.transcript_binding.binding_digest);
+
+        pallas_batch_digest_update_len(
+            hasher,
+            "round challenge count",
+            witness.round_challenges.len(),
+        )?;
+        for round in &witness.round_challenges {
+            pallas_batch_digest_update_round_challenge(hasher, round)?;
+        }
+
+        pallas_batch_digest_update_scalar_vec(
+            hasher,
+            "b reduction initial vector length",
+            &witness.b_reduction.initial_b,
+        )?;
+        pallas_batch_digest_update_len(
+            hasher,
+            "b reduction round count",
+            witness.b_reduction.rounds.len(),
+        )?;
+        for round in &witness.b_reduction.rounds {
+            pallas_batch_digest_update_len(hasher, "b reduction round index", round.round_index)?;
+            pallas_batch_digest_update_scalar(hasher, round.challenge);
+            pallas_batch_digest_update_scalar(hasher, round.challenge_inverse);
+            pallas_batch_digest_update_scalar_vec(
+                hasher,
+                "b reduction round input length",
+                &round.b_before,
+            )?;
+            pallas_batch_digest_update_scalar_vec(
+                hasher,
+                "b reduction round output length",
+                &round.b_after,
+            )?;
+        }
+        pallas_batch_digest_update_scalar(hasher, witness.b_reduction.final_b);
+
+        pallas_batch_digest_update_group(hasher, witness.accumulation.initial_q);
+        pallas_batch_digest_update_len(
+            hasher,
+            "accumulator round count",
+            witness.accumulation.rounds.len(),
+        )?;
+        for round in &witness.accumulation.rounds {
+            pallas_batch_digest_update_len(hasher, "accumulator round index", round.round_index)?;
+            pallas_batch_digest_update_scalar(hasher, round.challenge_square);
+            pallas_batch_digest_update_scalar(hasher, round.challenge_inverse_square);
+            pallas_batch_digest_update_group(hasher, round.q_before);
+            pallas_batch_digest_update_group(hasher, round.q_after);
+            pallas_batch_digest_update_group_vec(
+                hasher,
+                "accumulator G layer length",
+                &round.g_after,
+            )?;
+            pallas_batch_digest_update_group_vec(
+                hasher,
+                "accumulator H layer length",
+                &round.h_after,
+            )?;
+        }
+        pallas_batch_digest_update_group(hasher, witness.accumulation.final_q);
+        pallas_batch_digest_update_group(hasher, witness.accumulation.final_g);
+        pallas_batch_digest_update_group(hasher, witness.accumulation.final_h);
+        pallas_batch_digest_update_group(hasher, witness.accumulation.expected_term);
+        pallas_batch_digest_update_scalar(hasher, witness.proof_a_final);
+        pallas_batch_digest_update_scalar(hasher, witness.proof_b_final);
+        Ok(())
     }
 
     fn quotient_and_remainder_limbs(
@@ -27896,6 +29636,26 @@ mod pasta_tiny {
         }
     }
 
+    /// Deterministic host-side summary of a validated batch of Pallas IPA verifier witnesses.
+    ///
+    /// The digest uses the repository's streaming Poseidon2 byte sponge with
+    /// domain separation and binds the parameter fingerprint, witness order,
+    /// transcript projections, `b` reductions, accumulator folds, final terms,
+    /// and proof-final scalars after each witness has passed native verifier
+    /// preflight. It is intended as the compact host bridge surface for the
+    /// future recursive-in-circuit aggregation mode.
+    #[derive(Clone, Copy, Debug, Eq, PartialEq)]
+    pub struct PallasIpaBatchVerifierPreflight {
+        /// Number of verifier witnesses validated into this batch.
+        pub proof_count: usize,
+        /// Canonical recursive verifier-witness profile used by this batch preflight.
+        pub verifier_witness_profile: &'static str,
+        /// Fingerprint of the transparent Pallas IPA parameters used by the batch.
+        pub params_fingerprint: [u8; 32],
+        /// Domain-separated digest binding all validated witness projections in order.
+        pub aggregate_digest: [u8; 32],
+    }
+
     /// Config for a multi-round composed IPA verifier slice.
     #[derive(Clone)]
     pub struct NonNativeVestaIpaVerifierNativeScalarConfig {
@@ -28146,19 +29906,17 @@ mod pasta_tiny {
             })
         }
 
-        /// Build this recursive Vesta verifier witness from a native Pallas IPA verifier witness.
+        /// Validate the native Pallas verifier witness shape before recursive translation.
         ///
         /// # Errors
         ///
         /// Returns an error if the native witness shape does not match `LEN`, if
         /// its transcript, `b`-reduction, or accumulator projections are not
-        /// internally consistent, if any point encoding is invalid, or if the
-        /// translated statement fails the composed recursive verifier witness
-        /// checks.
-        pub fn try_from_pallas_verifier_witness(
+        /// internally consistent.
+        pub fn validate_pallas_verifier_witness(
             params: &iroha_zkp_halo2::pallas::Params,
             witness: &iroha_zkp_halo2::IpaVerifierWitness<iroha_zkp_halo2::pallas::PallasBackend>,
-        ) -> Result<Self, String> {
+        ) -> Result<(), String> {
             let rounds = ipa_power_of_two_rounds(LEN).ok_or_else(|| {
                 "IPA verifier length must be a power of two greater than one".to_owned()
             })?;
@@ -28196,6 +29954,16 @@ mod pasta_tiny {
                     "Pallas IPA transcript binding projection count mismatch: expected {rounds}, found {}",
                     witness.transcript_binding.round_projections.len()
                 ));
+            }
+            for (round_index, round) in witness.round_challenges.iter().enumerate() {
+                if round.round_index != round_index {
+                    return Err(format!(
+                        "Pallas IPA transcript round index mismatch: expected {round_index}, found {}",
+                        round.round_index
+                    ));
+                }
+                vesta_encoding_from_pallas_compressed(&round.l_bytes)?;
+                vesta_encoding_from_pallas_compressed(&round.r_bytes)?;
             }
             let round_challenges = witness
                 .round_challenges
@@ -28254,10 +30022,26 @@ mod pasta_tiny {
                 }
                 let challenge = witness.round_challenges[round_index].challenge;
                 let challenge_inverse = witness.round_challenges[round_index].challenge_inverse;
+                if challenge.mul(challenge_inverse) != iroha_zkp_halo2::pallas::Scalar::one() {
+                    return Err(format!(
+                        "Pallas IPA transcript challenge inverse mismatch at round {round_index}"
+                    ));
+                }
                 if round.challenge != challenge || round.challenge_inverse != challenge_inverse {
                     return Err(format!(
                         "Pallas IPA b reduction challenge mismatch at round {round_index}"
                     ));
+                }
+                let half = round.b_before.len() / 2;
+                for index in 0..half {
+                    let expected = round.b_before[index]
+                        .mul(challenge_inverse)
+                        .add(round.b_before[half + index].mul(challenge));
+                    if round.b_after[index] != expected {
+                        return Err(format!(
+                            "Pallas IPA b reduction output mismatch at round {round_index}"
+                        ));
+                    }
                 }
                 b_layer = round.b_after.as_slice();
                 b_layer_len /= 2;
@@ -28273,6 +30057,8 @@ mod pasta_tiny {
                 ));
             }
             let mut q_current = witness.accumulation.initial_q;
+            let mut g_current = params.g().to_vec();
+            let mut h_current = params.h().to_vec();
             let mut generator_layer_len = LEN;
             for (round_index, round) in witness.accumulation.rounds.iter().enumerate() {
                 if round.round_index != round_index {
@@ -28293,6 +30079,28 @@ mod pasta_tiny {
                         "Pallas IPA accumulator challenge-square mismatch at round {round_index}"
                     ));
                 }
+                let l = iroha_zkp_halo2::pallas::Group::from_bytes(
+                    &witness.round_challenges[round_index].l_bytes,
+                )
+                .map_err(|err| format!("Pallas IPA L point decoding failed: {err:?}"))?;
+                let r = iroha_zkp_halo2::pallas::Group::from_bytes(
+                    &witness.round_challenges[round_index].r_bytes,
+                )
+                .map_err(|err| format!("Pallas IPA R point decoding failed: {err:?}"))?;
+                let expected_q_after = pallas_optimized_msm(
+                    &[l, q_current, r],
+                    &[
+                        round.challenge_square,
+                        iroha_zkp_halo2::pallas::Scalar::one(),
+                        round.challenge_inverse_square,
+                    ],
+                    "IPA accumulator Q fold",
+                )?;
+                if round.q_after != expected_q_after {
+                    return Err(format!(
+                        "Pallas IPA accumulator Q fold mismatch at round {round_index}"
+                    ));
+                }
                 if round.g_after.len() != generator_layer_len / 2
                     || round.h_after.len() != generator_layer_len / 2
                 {
@@ -28300,7 +30108,34 @@ mod pasta_tiny {
                         "Pallas IPA accumulator generator layer shape mismatch at round {round_index}"
                     ));
                 }
+                let half = generator_layer_len / 2;
+                let mut expected_g_after = Vec::with_capacity(half);
+                let mut expected_h_after = Vec::with_capacity(half);
+                for index in 0..half {
+                    expected_g_after.push(pallas_optimized_msm(
+                        &[g_current[index], g_current[half + index]],
+                        &[challenge_inverse, challenge],
+                        "IPA G generator fold",
+                    )?);
+                    expected_h_after.push(pallas_optimized_msm(
+                        &[h_current[index], h_current[half + index]],
+                        &[challenge, challenge_inverse],
+                        "IPA H generator fold",
+                    )?);
+                }
+                if round.g_after != expected_g_after {
+                    return Err(format!(
+                        "Pallas IPA accumulator G fold mismatch at round {round_index}"
+                    ));
+                }
+                if round.h_after != expected_h_after {
+                    return Err(format!(
+                        "Pallas IPA accumulator H fold mismatch at round {round_index}"
+                    ));
+                }
                 q_current = round.q_after;
+                g_current = expected_g_after;
+                h_current = expected_h_after;
                 generator_layer_len /= 2;
             }
             if q_current != witness.accumulation.final_q {
@@ -28318,9 +30153,87 @@ mod pasta_tiny {
             {
                 return Err("Pallas IPA accumulator final generator mismatch".to_owned());
             }
+            let expected_term = pallas_optimized_msm(
+                &[
+                    witness.accumulation.final_g,
+                    witness.accumulation.final_h,
+                    params.u(),
+                ],
+                &[
+                    witness.proof_a_final,
+                    witness.proof_b_final,
+                    witness.proof_a_final.mul(witness.proof_b_final),
+                ],
+                "IPA final expected term",
+            )?;
+            if witness.accumulation.expected_term != expected_term {
+                return Err("Pallas IPA accumulator expected term mismatch".to_owned());
+            }
             if witness.accumulation.final_q != witness.accumulation.expected_term {
                 return Err("Pallas IPA accumulator final term mismatch".to_owned());
             }
+            Ok(())
+        }
+
+        /// Validate and bind a batch of native Pallas IPA verifier witnesses.
+        ///
+        /// # Errors
+        ///
+        /// Returns an error if the batch is empty, if any witness fails the
+        /// single-witness Pallas verifier preflight, or if a witness vector
+        /// length cannot be encoded into the deterministic Poseidon2 aggregate
+        /// digest.
+        pub fn validate_pallas_verifier_witness_batch(
+            params: &iroha_zkp_halo2::pallas::Params,
+            witnesses: &[iroha_zkp_halo2::IpaVerifierWitness<
+                iroha_zkp_halo2::pallas::PallasBackend,
+            >],
+        ) -> Result<PallasIpaBatchVerifierPreflight, String> {
+            if witnesses.is_empty() {
+                return Err("Pallas IPA batch preflight requires at least one witness".to_owned());
+            }
+
+            let params_fingerprint = params.fingerprint();
+            let mut hasher = PallasBatchDigest::new();
+            pallas_batch_digest_update_bytes(
+                &mut hasher,
+                b"iroha:kagemusha:pallas-ipa-batch-preflight:v1",
+            );
+            pallas_batch_digest_update_len(&mut hasher, "LEN", LEN)?;
+            pallas_batch_digest_update_len(&mut hasher, "proof count", witnesses.len())?;
+            pallas_batch_digest_update_bytes(&mut hasher, &params_fingerprint);
+
+            for (witness_index, witness) in witnesses.iter().enumerate() {
+                Self::validate_pallas_verifier_witness(params, witness).map_err(|err| {
+                    format!("Pallas IPA batch witness {witness_index} failed preflight: {err}")
+                })?;
+                pallas_batch_digest_update_witness(&mut hasher, witness_index, witness)?;
+            }
+
+            let aggregate_digest = hasher.finalize();
+            Ok(PallasIpaBatchVerifierPreflight {
+                proof_count: witnesses.len(),
+                verifier_witness_profile:
+                    iroha_data_model::offline::KAGEMUSHA_RECURSIVE_VERIFIER_WITNESS_PROFILE_V1,
+                params_fingerprint,
+                aggregate_digest,
+            })
+        }
+
+        /// Build this recursive Vesta verifier witness from a native Pallas IPA verifier witness.
+        ///
+        /// # Errors
+        ///
+        /// Returns an error if the native witness shape does not match `LEN`, if
+        /// its transcript, `b`-reduction, or accumulator projections are not
+        /// internally consistent, if any point encoding is invalid, or if the
+        /// translated statement fails the composed recursive verifier witness
+        /// checks.
+        pub fn try_from_pallas_verifier_witness(
+            params: &iroha_zkp_halo2::pallas::Params,
+            witness: &iroha_zkp_halo2::IpaVerifierWitness<iroha_zkp_halo2::pallas::PallasBackend>,
+        ) -> Result<Self, String> {
+            Self::validate_pallas_verifier_witness(params, witness)?;
 
             let b_initial_vec = witness
                 .b_reduction

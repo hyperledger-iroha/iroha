@@ -367,8 +367,13 @@ fn visit_instr_uses<F: FnMut(Temp)>(instr: &Instr, mut f: F) {
         | SubscriptionRecordUsage
         | DataRef { .. }
         | GetAuthority { .. }
+        | SysvarAuthority { .. }
         | CurrentTimeMs { .. }
         | BlockHeight { .. }
+        | BlockTimeMs { .. }
+        | ChainId { .. }
+        | ContractAddress { .. }
+        | Entrypoint { .. }
         | GetTriggerEvent { .. }
         | TransferBatchBegin
         | TransferBatchEnd => {}
@@ -609,7 +614,10 @@ fn visit_instr_uses<F: FnMut(Temp)>(instr: &Instr, mut f: F) {
         }
         Instr::Sm3Hash { message, .. }
         | Instr::Sha256Hash { message, .. }
-        | Instr::Sha3Hash { message, .. } => f(*message),
+        | Instr::Sha3Hash { message, .. }
+        | Instr::Blake2b256Hash { message, .. }
+        | Instr::Keccak256Hash { message, .. }
+        | Instr::IrohaHash { message, .. } => f(*message),
         Instr::Sm2Verify {
             message,
             signature,
@@ -694,13 +702,26 @@ fn visit_instr_uses<F: FnMut(Temp)>(instr: &Instr, mut f: F) {
         }
         Instr::ZkVerify { payload, .. }
         | Instr::VendorExecuteInstruction { payload }
-        | Instr::VendorExecuteQuery { payload, .. } => f(*payload),
+        | Instr::VendorExecuteQuery { payload, .. }
+        | Instr::QueryExecuteNorito { payload, .. } => f(*payload),
         StateGet { path, .. } => f(*path),
         StateSet { path, value } => {
             f(*path);
             f(*value);
         }
         StateDel { path } => f(*path),
+        StateKeys {
+            prefix,
+            offset,
+            limit,
+            ..
+        } => {
+            f(*prefix);
+            f(*offset);
+            f(*limit);
+        }
+        StateHas { path, .. } | StateLen { path, .. } => f(*path),
+        StateCount { prefix, .. } => f(*prefix),
         DecodeInt { blob, .. } | JsonDecode { blob, .. } | NameDecode { blob, .. } => f(*blob),
         TlvLen { value, .. } => f(*value),
         JsonSetInt {
@@ -862,9 +883,15 @@ fn dest_temp(instr: &Instr) -> Option<Temp> {
         | Instr::Valcom { dest, .. }
         | Instr::MapNew { dest }
         | Instr::GetAuthority { dest }
+        | Instr::SysvarAuthority { dest }
         | Instr::CurrentTimeMs { dest }
         | Instr::BlockHeight { dest }
+        | Instr::BlockTimeMs { dest }
+        | Instr::ChainId { dest }
+        | Instr::ContractAddress { dest }
+        | Instr::Entrypoint { dest }
         | Instr::CallContract { dest, .. }
+        | Instr::QueryExecuteNorito { dest, .. }
         | Instr::ResolveAccountAlias { dest, .. }
         | Instr::GetTriggerEvent { dest }
         | Instr::ActorAccount { dest, .. }
@@ -876,6 +903,10 @@ fn dest_temp(instr: &Instr) -> Option<Temp> {
         | Instr::PointerFromNorito { dest, .. }
         | Instr::Load64Imm { dest, .. }
         | Instr::StateGet { dest, .. }
+        | Instr::StateKeys { dest, .. }
+        | Instr::StateHas { dest, .. }
+        | Instr::StateLen { dest, .. }
+        | Instr::StateCount { dest, .. }
         | Instr::NumericFromInt { dest, .. }
         | Instr::NumericToInt { dest, .. }
         | Instr::NumericBinary { dest, .. }
@@ -883,7 +914,10 @@ fn dest_temp(instr: &Instr) -> Option<Temp> {
         Instr::SchemaInfo { dest, .. } => Some(*dest),
         Instr::Sm3Hash { dest, .. }
         | Instr::Sha256Hash { dest, .. }
-        | Instr::Sha3Hash { dest, .. } => Some(*dest),
+        | Instr::Sha3Hash { dest, .. }
+        | Instr::Blake2b256Hash { dest, .. }
+        | Instr::Keccak256Hash { dest, .. }
+        | Instr::IrohaHash { dest, .. } => Some(*dest),
         Instr::Sm2Verify { dest, .. } => Some(*dest),
         Instr::VerifySignature { dest, .. } => Some(*dest),
         Instr::Sm4GcmSeal { dest, .. } => Some(*dest),

@@ -1996,6 +1996,48 @@ pub mod isi {
             (state, asset_id, account_id, definition_id)
         }
 
+        fn distinct_escrow_test_state(
+            balance: Numeric,
+            escrow_seed: u8,
+        ) -> (State, AssetId, AccountId, AssetDefinitionId) {
+            let account_id = sample_account(0x01);
+            let escrow_account_id = sample_account(escrow_seed);
+            let domain_id: DomainId = DomainId::try_new("offline", "universal").expect("domain id");
+            let definition_id = AssetDefinitionId::new(
+                domain_id.clone(),
+                "xor".parse().expect("asset definition name"),
+            );
+            let asset_id = AssetId::new(definition_id.clone(), account_id.clone());
+            let escrow_asset_id = AssetId::new(definition_id.clone(), escrow_account_id.clone());
+            let domain = Domain::new(domain_id).build(&account_id);
+            let account = Account::new(account_id.clone()).build(&account_id);
+            let escrow_account = Account::new(escrow_account_id.clone()).build(&account_id);
+            let asset_definition =
+                AssetDefinition::new(definition_id.clone(), NumericSpec::integer())
+                    .with_name("xor".to_owned())
+                    .build(&account_id);
+            let asset = Asset::new(asset_id.clone(), balance);
+            let escrow_asset = Asset::new(escrow_asset_id, Numeric::zero());
+            let world = World::with_assets(
+                [domain],
+                [account, escrow_account],
+                [asset_definition],
+                [asset, escrow_asset],
+                [],
+            );
+            let kura = Kura::blank_kura_for_testing();
+            let query = LiveQueryStore::start_test();
+            let mut state = State::new(world, Arc::clone(&kura), query);
+            state.settlement.offline.escrow_required = true;
+            state
+                .settlement
+                .offline
+                .escrow_accounts
+                .insert(definition_id.clone(), escrow_account_id);
+
+            (state, asset_id, account_id, definition_id)
+        }
+
         fn offline_note_verifier_test_state(
             status: ConfidentialStatus,
         ) -> (State, OfflineNoteRecursiveProof, Hash) {
@@ -2679,6 +2721,55 @@ pub mod isi {
                 .execute(&relayer, &mut transaction)
                 .expect_err("audit must require a sender certificate anchored by topup");
             assert_offline_rejection(err, "invalid_issuer_cert", "key certificate was not issued");
+        }
+
+        #[test]
+        fn audit_rejects_mutated_input_claim_even_when_certificate_topup_is_anchored() {
+            let (state, asset_id, account_id, _definition_id) =
+                distinct_escrow_test_state(Numeric::new(100, 0), 0x7D);
+            let account_keypair = KeyPair::from_seed(vec![0x01; 32], Algorithm::Ed25519);
+            let input_certificate = signed_sample_certificate(
+                &account_keypair,
+                account_id.clone(),
+                0x7A,
+                "topup-input-key",
+            );
+            let output_certificate = signed_sample_certificate(
+                &account_keypair,
+                account_id.clone(),
+                0x7B,
+                "audit-output-key",
+            );
+            let issue = iroha_data_model::offline::OfflineNoteIssue {
+                note_commitment: Hash::new(b"offline-topup-note"),
+                key_certificate: input_certificate,
+                asset: asset_id,
+                amount: Numeric::new(10, 0),
+            };
+            let mut audit = sample_audit_bundle_for_issue(&issue, output_certificate);
+            audit.input_claims[0].note_commitment = Hash::new(b"offline-forged-topup-note");
+            let public_inputs_hash = audit.public_inputs_hash().expect("mutated audit hash");
+            audit.recursive_proof = placeholder_recursive_proof(public_inputs_hash);
+
+            let relayer = sample_account(0x7C);
+            let header = BlockHeader::new(nonzero!(1_u64), None, None, None, 0, 0);
+            let mut block = state.block(header);
+            let mut transaction = block.transaction();
+            transaction.world.account_permissions.insert(
+                account_id.clone(),
+                BTreeSet::from([Permission::new(
+                    CAN_MANAGE_OFFLINE_ESCROW_PERMISSION.into(),
+                    Json::new(()),
+                )]),
+            );
+            IssueOfflineNote::new(issue)
+                .execute(&account_id, &mut transaction)
+                .expect("online-to-offline topup should issue the original claim");
+
+            let err = AuditOfflineNote::new(audit)
+                .execute(&relayer, &mut transaction)
+                .expect_err("audit must reject a claim mutation under the issued certificate");
+            assert_offline_rejection(err, "note_not_issued", "input claim was not issued");
         }
 
         #[test]

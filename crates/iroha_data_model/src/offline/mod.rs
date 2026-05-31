@@ -41,6 +41,12 @@ pub const OFFLINE_NOTE_INPUT_NULLIFIER_DOMAIN: &str = "iroha:offline-note:input-
 pub const OFFLINE_NOTE_PAYMENT_TOKEN_ID_DOMAIN: &str = "iroha:offline-note:payment-token-id";
 /// Domain-separation tag for compact Kagemusha folded-proof public inputs.
 pub const KAGEMUSHA_FOLDED_PUBLIC_INPUTS_DOMAIN: &str = "iroha:kagemusha:v1:folded-public-inputs";
+/// Domain-separation tag for reserved Kagemusha recursive aggregation evidence.
+pub const KAGEMUSHA_RECURSIVE_AGGREGATION_EVIDENCE_DOMAIN: &str =
+    "iroha:kagemusha:v1:recursive-aggregation-evidence";
+/// Canonical verifier-witness profile for reserved Kagemusha recursive aggregation evidence.
+pub const KAGEMUSHA_RECURSIVE_VERIFIER_WITNESS_PROFILE_V1: &str =
+    "pallas-ipa-transparent-v1/vesta-recursive-fixed-window-85x3";
 /// Current Kagemusha aggregation mode: every private hop proof is verified before folding.
 pub const KAGEMUSHA_AGGREGATION_MODE_CHECKED_PREFOLD_V1: u16 = 1;
 /// Reserved Kagemusha aggregation mode for future in-circuit recursive proof aggregation.
@@ -336,6 +342,31 @@ pub enum KagemushaFoldError {
         /// Name of the mismatched folded public-input field.
         field: &'static str,
     },
+    /// Recursive aggregation evidence does not declare the reserved recursive mode.
+    RecursiveAggregationEvidenceModeMismatch {
+        /// Expected reserved recursive aggregation mode.
+        expected: u16,
+        /// Aggregation mode carried by the evidence statement.
+        actual: u16,
+    },
+    /// Recursive aggregation evidence witness count does not match the folded hop count.
+    RecursiveAggregationWitnessCountMismatch {
+        /// Hop count carried by the aggregation statement.
+        expected: u32,
+        /// Witness count carried by the evidence.
+        actual: u32,
+    },
+    /// Recursive aggregation evidence declares an unsupported verifier-witness profile.
+    UnsupportedRecursiveVerifierWitnessProfile {
+        /// Expected verifier-witness profile.
+        expected: &'static str,
+        /// Verifier-witness profile carried by the evidence.
+        actual: String,
+    },
+    /// Recursive aggregation evidence carries an all-zero verifier parameter fingerprint.
+    ZeroRecursiveVerifierParamsFingerprint,
+    /// Recursive aggregation evidence carries an all-zero verifier-witness batch digest.
+    ZeroRecursiveVerifierWitnessBatchDigest,
     /// A folded public-input digest column group is all-zero.
     ZeroFoldedPublicInputDigest {
         /// Name of the all-zero folded public-input digest field.
@@ -502,6 +533,26 @@ impl core::fmt::Display for KagemushaFoldError {
             Self::FoldedPublicInputTranscriptMismatch { field } => write!(
                 f,
                 "Kagemusha folded public input field {field:?} does not match the aggregation transcript"
+            ),
+            Self::RecursiveAggregationEvidenceModeMismatch { expected, actual } => write!(
+                f,
+                "Kagemusha recursive aggregation evidence mode must be {expected} (found {actual})"
+            ),
+            Self::RecursiveAggregationWitnessCountMismatch { expected, actual } => write!(
+                f,
+                "Kagemusha recursive aggregation evidence witness count must be {expected} (found {actual})"
+            ),
+            Self::UnsupportedRecursiveVerifierWitnessProfile { expected, actual } => write!(
+                f,
+                "Kagemusha recursive aggregation verifier-witness profile must be {expected:?} (found {actual:?})"
+            ),
+            Self::ZeroRecursiveVerifierParamsFingerprint => write!(
+                f,
+                "Kagemusha recursive aggregation verifier parameter fingerprint must be non-zero"
+            ),
+            Self::ZeroRecursiveVerifierWitnessBatchDigest => write!(
+                f,
+                "Kagemusha recursive aggregation verifier-witness batch digest must be non-zero"
             ),
             Self::ZeroFoldedPublicInputDigest { field } => write!(
                 f,
@@ -1029,6 +1080,33 @@ mod model {
         pub steps: Vec<KagemushaPoseidonAggregationStepStatement>,
     }
 
+    /// Reserved-mode evidence binding a native verifier-witness batch to an aggregation transcript.
+    ///
+    /// This is not chain-accepted compact-token state in this release. It is the
+    /// canonical wallet/prover-side statement that mode `2` recursive
+    /// aggregation work can use to bind host preflight of native Pallas IPA
+    /// verifier witnesses to the same ordered hop transcript that mode `1`
+    /// exposes through checked pre-fold public inputs.
+    #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Decode, Encode, IntoSchema)]
+    #[cfg_attr(
+        feature = "json",
+        derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
+    )]
+    pub struct KagemushaRecursiveAggregationEvidence {
+        /// Canonical ordered aggregation transcript statement using reserved recursive mode `2`.
+        pub aggregation_statement: KagemushaPoseidonAggregationTranscriptStatement,
+        /// Number of native verifier witnesses validated into the batch.
+        pub verifier_witness_count: u32,
+        /// Canonical no-trusted-setup verifier-witness profile used by the native batch preflight.
+        pub verifier_witness_profile: String,
+        /// Transparent parameter fingerprint used by the native verifier-witness batch.
+        #[cfg_attr(feature = "json", norito(with = "crate::json_helpers::fixed_bytes"))]
+        pub verifier_params_fingerprint: [u8; 32],
+        /// Domain-separated digest emitted by the native verifier-witness batch preflight.
+        #[cfg_attr(feature = "json", norito(with = "crate::json_helpers::fixed_bytes"))]
+        pub verifier_witness_batch_digest: [u8; 32],
+    }
+
     /// One private hop folded into a compact Kagemusha payment token.
     ///
     /// These steps are prover/wallet witness material. The chain-visible compact token exposes
@@ -1310,6 +1388,12 @@ struct KagemushaFoldTranscriptDigestPreimage {
 struct KagemushaPoseidonAggregationTranscriptPreimage {
     domain: String,
     statement: KagemushaPoseidonAggregationTranscriptStatement,
+}
+
+#[derive(Debug, Clone, Decode, Encode)]
+struct KagemushaRecursiveAggregationEvidencePreimage {
+    domain: String,
+    evidence: KagemushaRecursiveAggregationEvidence,
 }
 
 /// Return the registry schema hash required for Offline recursive note verifiers.
@@ -1738,6 +1822,12 @@ fn validate_kagemusha_aggregation_transcript_statement(
             reason: unsupported_kagemusha_aggregation_mode_reason(statement.aggregation_mode),
         });
     }
+    validate_kagemusha_aggregation_transcript_statement_shape(statement)
+}
+
+fn validate_kagemusha_aggregation_transcript_statement_shape(
+    statement: &KagemushaPoseidonAggregationTranscriptStatement,
+) -> Result<(), KagemushaFoldError> {
     if statement.steps.is_empty() {
         return Err(KagemushaFoldError::Empty);
     }
@@ -1824,6 +1914,72 @@ fn validate_kagemusha_aggregation_transcript_statement(
         });
     }
     Ok(())
+}
+
+/// Validate reserved-mode recursive aggregation evidence.
+///
+/// This checks only the canonical host-side evidence shape. It does not make
+/// aggregation mode `2` supported for compact-token admission in this release.
+///
+/// # Errors
+///
+/// Returns [`KagemushaFoldError`] when the evidence does not declare reserved
+/// recursive mode `2`, its hop transcript is non-canonical, its witness count
+/// does not match the hop count, its verifier-witness profile is unsupported,
+/// or its verifier parameter/digest fields are all-zero.
+pub fn validate_kagemusha_recursive_aggregation_evidence(
+    evidence: &KagemushaRecursiveAggregationEvidence,
+) -> Result<(), KagemushaFoldError> {
+    if evidence.aggregation_statement.aggregation_mode
+        != KAGEMUSHA_AGGREGATION_MODE_RECURSIVE_IN_CIRCUIT_V1
+    {
+        return Err(
+            KagemushaFoldError::RecursiveAggregationEvidenceModeMismatch {
+                expected: KAGEMUSHA_AGGREGATION_MODE_RECURSIVE_IN_CIRCUIT_V1,
+                actual: evidence.aggregation_statement.aggregation_mode,
+            },
+        );
+    }
+    validate_kagemusha_aggregation_transcript_statement_shape(&evidence.aggregation_statement)?;
+    if evidence.verifier_witness_count != evidence.aggregation_statement.hop_count {
+        return Err(
+            KagemushaFoldError::RecursiveAggregationWitnessCountMismatch {
+                expected: evidence.aggregation_statement.hop_count,
+                actual: evidence.verifier_witness_count,
+            },
+        );
+    }
+    if evidence.verifier_witness_profile != KAGEMUSHA_RECURSIVE_VERIFIER_WITNESS_PROFILE_V1 {
+        return Err(
+            KagemushaFoldError::UnsupportedRecursiveVerifierWitnessProfile {
+                expected: KAGEMUSHA_RECURSIVE_VERIFIER_WITNESS_PROFILE_V1,
+                actual: evidence.verifier_witness_profile.clone(),
+            },
+        );
+    }
+    if evidence.verifier_params_fingerprint == [0u8; Hash::LENGTH] {
+        return Err(KagemushaFoldError::ZeroRecursiveVerifierParamsFingerprint);
+    }
+    if evidence.verifier_witness_batch_digest == [0u8; Hash::LENGTH] {
+        return Err(KagemushaFoldError::ZeroRecursiveVerifierWitnessBatchDigest);
+    }
+    Ok(())
+}
+
+/// Return the canonical Poseidon2 digest for reserved-mode recursive aggregation evidence.
+///
+/// # Errors
+///
+/// Returns [`KagemushaFoldError`] when the evidence is non-canonical or cannot
+/// be encoded with Norito.
+pub fn kagemusha_recursive_aggregation_evidence_digest(
+    evidence: &KagemushaRecursiveAggregationEvidence,
+) -> Result<[u8; Hash::LENGTH], KagemushaFoldError> {
+    validate_kagemusha_recursive_aggregation_evidence(evidence)?;
+    kagemusha_poseidon_preimage(&KagemushaRecursiveAggregationEvidencePreimage {
+        domain: KAGEMUSHA_RECURSIVE_AGGREGATION_EVIDENCE_DOMAIN.to_owned(),
+        evidence: evidence.clone(),
+    })
 }
 
 struct KagemushaCanonicalFoldParts {
@@ -1976,6 +2132,40 @@ pub fn kagemusha_poseidon_aggregation_transcript_statement(
     steps: &[KagemushaFoldStep],
 ) -> Result<KagemushaPoseidonAggregationTranscriptStatement, KagemushaFoldError> {
     Ok(kagemusha_canonical_fold_parts(chain_id, asset, steps)?.aggregation_statement)
+}
+
+/// Build reserved-mode recursive aggregation evidence from checked folded-hop material.
+///
+/// The builder canonicalizes the folded-hop transcript exactly like
+/// [`kagemusha_folded_public_inputs`], then changes only the aggregation mode to
+/// reserved mode `2` and binds the canonical no-trusted-setup verifier-witness
+/// profile plus the caller-supplied native verifier-witness batch preflight
+/// fields.
+///
+/// # Errors
+///
+/// Returns [`KagemushaFoldError`] when the folded-hop witness is non-canonical,
+/// the verifier parameter fingerprint is all-zero, or the verifier-witness
+/// batch digest is all-zero.
+pub fn kagemusha_recursive_aggregation_evidence_from_steps(
+    chain_id: &ChainId,
+    asset: &AssetDefinitionId,
+    steps: &[KagemushaFoldStep],
+    verifier_params_fingerprint: [u8; Hash::LENGTH],
+    verifier_witness_batch_digest: [u8; Hash::LENGTH],
+) -> Result<KagemushaRecursiveAggregationEvidence, KagemushaFoldError> {
+    let mut aggregation_statement =
+        kagemusha_canonical_fold_parts(chain_id, asset, steps)?.aggregation_statement;
+    aggregation_statement.aggregation_mode = KAGEMUSHA_AGGREGATION_MODE_RECURSIVE_IN_CIRCUIT_V1;
+    let evidence = KagemushaRecursiveAggregationEvidence {
+        verifier_witness_count: aggregation_statement.hop_count,
+        verifier_witness_profile: KAGEMUSHA_RECURSIVE_VERIFIER_WITNESS_PROFILE_V1.to_owned(),
+        aggregation_statement,
+        verifier_params_fingerprint,
+        verifier_witness_batch_digest,
+    };
+    validate_kagemusha_recursive_aggregation_evidence(&evidence)?;
+    Ok(evidence)
 }
 
 struct KagemushaFoldDigestParts {
@@ -2962,6 +3152,248 @@ mod offline_note_tests {
             kagemusha_poseidon_aggregation_transcript_digest(&changed_hop)
                 .expect("changed hop statement digest")
         );
+    }
+
+    #[test]
+    fn kagemusha_recursive_aggregation_evidence_binds_batch_preflight_digest() {
+        let chain_id: ChainId = "kagemusha-recursive-chain".parse().expect("chain id");
+        let asset = kagemusha_asset("kgm-recursive");
+        let root0 = fixed_hash(b"kagemusha-recursive-root-0");
+        let root1 = fixed_hash(b"kagemusha-recursive-root-1");
+        let root2 = fixed_hash(b"kagemusha-recursive-root-2");
+        let steps = vec![
+            kagemusha_step(root0, root1, 0x20, 0x40, b"recursive-proof-hop-0"),
+            kagemusha_step(root1, root2, 0x60, 0x80, b"recursive-proof-hop-1"),
+        ];
+        let params_fingerprint = fixed_hash(b"recursive-pallas-params");
+        let batch_digest = fixed_hash(b"recursive-pallas-witness-batch");
+        let evidence = kagemusha_recursive_aggregation_evidence_from_steps(
+            &chain_id,
+            &asset,
+            &steps,
+            params_fingerprint,
+            batch_digest,
+        )
+        .expect("recursive aggregation evidence");
+        assert_eq!(
+            evidence.aggregation_statement.aggregation_mode,
+            KAGEMUSHA_AGGREGATION_MODE_RECURSIVE_IN_CIRCUIT_V1
+        );
+        assert_eq!(evidence.verifier_witness_count, 2);
+        assert_eq!(
+            evidence.verifier_witness_profile,
+            KAGEMUSHA_RECURSIVE_VERIFIER_WITNESS_PROFILE_V1
+        );
+        assert_eq!(evidence.verifier_params_fingerprint, params_fingerprint);
+        assert_eq!(evidence.verifier_witness_batch_digest, batch_digest);
+        assert!(matches!(
+            kagemusha_poseidon_aggregation_transcript_digest(&evidence.aggregation_statement),
+            Err(KagemushaFoldError::UnsupportedAggregationMode { actual, .. })
+                if actual == KAGEMUSHA_AGGREGATION_MODE_RECURSIVE_IN_CIRCUIT_V1
+        ));
+
+        let digest = kagemusha_recursive_aggregation_evidence_digest(&evidence)
+            .expect("recursive aggregation evidence digest");
+        assert_ne!(digest, [0u8; Hash::LENGTH]);
+        assert_eq!(
+            digest,
+            kagemusha_recursive_aggregation_evidence_digest(&evidence)
+                .expect("repeat recursive aggregation evidence digest")
+        );
+        let bytes = to_bytes(&evidence).expect("encode recursive aggregation evidence");
+        let decoded: KagemushaRecursiveAggregationEvidence =
+            norito::decode_from_bytes(&bytes).expect("decode recursive aggregation evidence");
+        assert_eq!(decoded, evidence);
+        assert_eq!(
+            decoded.verifier_witness_profile,
+            KAGEMUSHA_RECURSIVE_VERIFIER_WITNESS_PROFILE_V1
+        );
+        assert_eq!(
+            digest,
+            kagemusha_recursive_aggregation_evidence_digest(&decoded)
+                .expect("decoded recursive aggregation evidence digest")
+        );
+
+        let mut changed_batch = evidence.clone();
+        changed_batch.verifier_witness_batch_digest =
+            fixed_hash(b"recursive-pallas-witness-batch-other");
+        assert_ne!(
+            digest,
+            kagemusha_recursive_aggregation_evidence_digest(&changed_batch)
+                .expect("changed batch digest evidence")
+        );
+
+        let mut changed_profile = evidence.clone();
+        changed_profile.verifier_witness_profile =
+            "pallas-ipa-transparent-v1/vesta-recursive-fixed-window-unsafe".to_owned();
+        assert!(matches!(
+            kagemusha_recursive_aggregation_evidence_digest(&changed_profile),
+            Err(
+                KagemushaFoldError::UnsupportedRecursiveVerifierWitnessProfile { actual, .. }
+            ) if actual == "pallas-ipa-transparent-v1/vesta-recursive-fixed-window-unsafe"
+        ));
+
+        let mut changed_params = evidence;
+        changed_params.verifier_params_fingerprint = fixed_hash(b"recursive-pallas-params-other");
+        assert_ne!(
+            digest,
+            kagemusha_recursive_aggregation_evidence_digest(&changed_params)
+                .expect("changed params evidence")
+        );
+    }
+
+    #[test]
+    fn kagemusha_recursive_aggregation_evidence_rejects_noncanonical_fields() {
+        let chain_id: ChainId = "kagemusha-recursive-chain".parse().expect("chain id");
+        let asset = kagemusha_asset("kgm-recursive");
+        let root0 = fixed_hash(b"kagemusha-recursive-root-0");
+        let root1 = fixed_hash(b"kagemusha-recursive-root-1");
+        let root2 = fixed_hash(b"kagemusha-recursive-root-2");
+        let steps = vec![
+            kagemusha_step(root0, root1, 0x20, 0x40, b"recursive-bad-hop-0"),
+            kagemusha_step(root1, root2, 0x60, 0x80, b"recursive-bad-hop-1"),
+        ];
+        let evidence = kagemusha_recursive_aggregation_evidence_from_steps(
+            &chain_id,
+            &asset,
+            &steps,
+            fixed_hash(b"recursive-bad-params"),
+            fixed_hash(b"recursive-bad-batch"),
+        )
+        .expect("recursive aggregation evidence");
+
+        let mut checked_mode = evidence.clone();
+        checked_mode.aggregation_statement.aggregation_mode =
+            KAGEMUSHA_AGGREGATION_MODE_CHECKED_PREFOLD_V1;
+        assert!(matches!(
+            validate_kagemusha_recursive_aggregation_evidence(&checked_mode),
+            Err(KagemushaFoldError::RecursiveAggregationEvidenceModeMismatch { actual, .. })
+                if actual == KAGEMUSHA_AGGREGATION_MODE_CHECKED_PREFOLD_V1
+        ));
+
+        let mut bad_count = evidence.clone();
+        bad_count.verifier_witness_count = 1;
+        assert!(matches!(
+            validate_kagemusha_recursive_aggregation_evidence(&bad_count),
+            Err(
+                KagemushaFoldError::RecursiveAggregationWitnessCountMismatch {
+                    expected: 2,
+                    actual: 1
+                }
+            )
+        ));
+
+        let mut empty_statement = evidence.clone();
+        empty_statement.aggregation_statement.steps.clear();
+        empty_statement.aggregation_statement.hop_count = 0;
+        empty_statement.verifier_witness_count = 0;
+        assert!(matches!(
+            validate_kagemusha_recursive_aggregation_evidence(&empty_statement),
+            Err(KagemushaFoldError::Empty)
+        ));
+
+        let mut too_many_hops = evidence.clone();
+        too_many_hops.aggregation_statement.steps =
+            vec![
+                too_many_hops.aggregation_statement.steps[0].clone();
+                KAGEMUSHA_COMPACT_TOKEN_MAX_HOPS + 1
+            ];
+        too_many_hops.aggregation_statement.hop_count =
+            u32::try_from(KAGEMUSHA_COMPACT_TOKEN_MAX_HOPS + 1).expect("hop count fits");
+        too_many_hops.verifier_witness_count = too_many_hops.aggregation_statement.hop_count;
+        assert!(matches!(
+            validate_kagemusha_recursive_aggregation_evidence(&too_many_hops),
+            Err(KagemushaFoldError::TooManyHops { actual, .. })
+                if actual == KAGEMUSHA_COMPACT_TOKEN_MAX_HOPS + 1
+        ));
+
+        let mut bad_profile = evidence.clone();
+        bad_profile.verifier_witness_profile = "pallas-ipa-transparent-v1/mock".to_owned();
+        assert!(matches!(
+            validate_kagemusha_recursive_aggregation_evidence(&bad_profile),
+            Err(
+                KagemushaFoldError::UnsupportedRecursiveVerifierWitnessProfile { actual, .. }
+            ) if actual == "pallas-ipa-transparent-v1/mock"
+        ));
+        let bad_profile_bytes =
+            to_bytes(&bad_profile).expect("encode unsupported-profile recursive evidence");
+        let bad_profile_decoded: KagemushaRecursiveAggregationEvidence =
+            norito::decode_from_bytes(&bad_profile_bytes)
+                .expect("decode unsupported-profile recursive evidence");
+        assert!(matches!(
+            validate_kagemusha_recursive_aggregation_evidence(&bad_profile_decoded),
+            Err(
+                KagemushaFoldError::UnsupportedRecursiveVerifierWitnessProfile { actual, .. }
+            ) if actual == "pallas-ipa-transparent-v1/mock"
+        ));
+
+        let mut zero_params = evidence.clone();
+        zero_params.verifier_params_fingerprint = [0u8; Hash::LENGTH];
+        assert!(matches!(
+            validate_kagemusha_recursive_aggregation_evidence(&zero_params),
+            Err(KagemushaFoldError::ZeroRecursiveVerifierParamsFingerprint)
+        ));
+
+        let mut zero_batch = evidence.clone();
+        zero_batch.verifier_witness_batch_digest = [0u8; Hash::LENGTH];
+        assert!(matches!(
+            validate_kagemusha_recursive_aggregation_evidence(&zero_batch),
+            Err(KagemushaFoldError::ZeroRecursiveVerifierWitnessBatchDigest)
+        ));
+
+        let mut discontinuous = evidence.clone();
+        discontinuous.aggregation_statement.steps[1].root_before =
+            fixed_hash(b"kagemusha-recursive-wrong-root");
+        assert!(matches!(
+            validate_kagemusha_recursive_aggregation_evidence(&discontinuous),
+            Err(KagemushaFoldError::RootDiscontinuity { hop_index: 1, .. })
+        ));
+
+        let mut duplicate_input = evidence.clone();
+        duplicate_input.aggregation_statement.steps[1].input_nullifiers[0] =
+            duplicate_input.aggregation_statement.steps[0].input_nullifiers[0];
+        assert!(matches!(
+            validate_kagemusha_recursive_aggregation_evidence(&duplicate_input),
+            Err(KagemushaFoldError::DuplicateInputNullifier { hop_index: 1 })
+        ));
+
+        let mut duplicate_output = evidence.clone();
+        duplicate_output.aggregation_statement.steps[1].output_commitments[0] =
+            duplicate_output.aggregation_statement.steps[0].output_commitments[0];
+        assert!(matches!(
+            validate_kagemusha_recursive_aggregation_evidence(&duplicate_output),
+            Err(KagemushaFoldError::DuplicateOutputCommitment { hop_index: 1 })
+        ));
+
+        assert!(matches!(
+            kagemusha_recursive_aggregation_evidence_from_steps(
+                &chain_id,
+                &asset,
+                &steps,
+                [0u8; Hash::LENGTH],
+                fixed_hash(b"recursive-bad-batch"),
+            ),
+            Err(KagemushaFoldError::ZeroRecursiveVerifierParamsFingerprint)
+        ));
+        assert!(matches!(
+            kagemusha_recursive_aggregation_evidence_from_steps(
+                &chain_id,
+                &asset,
+                &steps,
+                fixed_hash(b"recursive-bad-params"),
+                [0u8; Hash::LENGTH],
+            ),
+            Err(KagemushaFoldError::ZeroRecursiveVerifierWitnessBatchDigest)
+        ));
+
+        let bytes = to_bytes(&evidence).expect("encode canonical recursive evidence");
+        for len in 0..bytes.len().min(8) {
+            assert!(
+                norito::decode_from_bytes::<KagemushaRecursiveAggregationEvidence>(&bytes[..len])
+                    .is_err(),
+                "truncated recursive evidence archive at length {len} must reject"
+            );
+        }
     }
 
     #[test]
