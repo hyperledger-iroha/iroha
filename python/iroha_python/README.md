@@ -143,6 +143,63 @@ registration = client.get_sns_name("domain", "wonderland.is")
 vk_active = client.zk_verifying_key_active("halo2/ipa", "vk_transfer")
 ```
 
+ZK-capable assets can be registered and moved through the same transaction
+draft helpers, without shelling out to JavaScript tooling:
+
+```python
+client.register_zk_asset_and_wait(
+    chain_id="local",
+    authority="<asset-owner>",
+    private_key_hex="<64-hex-private-key>",
+    asset_definition_id="ds#wonderland.is",
+    vk_transfer="halo2/ipa:vk_transfer",
+    vk_unshield="halo2/ipa:vk_unshield",
+)
+
+client.shield_asset_and_wait(
+    chain_id="local",
+    authority="<payer>",
+    private_key_hex="<64-hex-private-key>",
+    asset_definition_id="ds#wonderland.is",
+    from_account_id="<payer>",
+    amount="7",
+    note_commitment="11" * 32,
+    ephemeral_public_key="22" * 32,
+    nonce="33" * 24,
+    ciphertext_b64="Y2lwaGVydGV4dA==",
+)
+
+prepared_proof = {
+    "backend": "halo2/ipa",
+    "proof_bytes": b"...",
+    "verifying_key_ref": "halo2/ipa:vk_transfer",
+}
+
+client.zk_transfer_prepared_and_wait(
+    chain_id="local",
+    authority="<payer>",
+    private_key_hex="<64-hex-private-key>",
+    asset_definition_id="ds#wonderland.is",
+    inputs=["aa" * 32],
+    outputs=["bb" * 32],
+    proof=prepared_proof,
+    root_hint="cc" * 32,
+)
+
+client.unshield_prepared_and_wait(
+    chain_id="local",
+    authority="<payer>",
+    private_key_hex="<64-hex-private-key>",
+    asset_definition_id="ds#wonderland.is",
+    to_account_id="<recipient>",
+    public_amount="3",
+    inputs=["dd" * 32],
+    proof=prepared_proof,
+    outputs=[],
+    root_hint="ee" * 32,
+)
+```
+
 ## Dataspace lifecycle helpers
 
 SDK users can plan and check their own Nexus dataspaces without copying helper

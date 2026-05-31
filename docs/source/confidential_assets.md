@@ -23,6 +23,7 @@ SPDX-License-Identifier: Apache-2.0
   - Encrypted payloads for recipients and optional auditors.
   - Zero-knowledge proof attesting value conservation, ownership, and authorization.
 - Verifying keys and parameter sets are controlled through on-ledger registries with activation windows; nodes refuse to validate proofs that reference unknown or revoked entries.
+- Asset-hidden pool transfers use a dedicated public-input schema. Before mutating pool state, validators bind the proof to the pool id, asset-set root, recent root, nullifiers, output commitments, and chain tag.
 - Consensus headers commit to the active confidential feature digest so blocks are only accepted when registry and parameter state matches.
 - Proof construction uses a Halo2 (Plonkish) stack without trusted setup; Groth16 or other SNARK variants are intentionally unsupported in v1.
 

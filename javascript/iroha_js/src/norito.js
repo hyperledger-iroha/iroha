@@ -1892,7 +1892,7 @@ function decodeZkInstructionPayload(wireId, payload) {
               "zk.RegisterAssetHiddenZkPool.storage_asset",
             ),
             asset_set_root: Array.from(
-              decodeFixedByteArrayArchiveValue(
+              decodeFixedBytesValue(
                 fields.asset_set_root,
                 32,
                 "zk.RegisterAssetHiddenZkPool.asset_set_root",
@@ -3236,7 +3236,7 @@ function encodeRegisterAssetHiddenZkPoolPayload(value) {
   return encodeStructValue([
     [encodeNoritoStringValue(assertNonEmptyString(value.pool_id, "zk.RegisterAssetHiddenZkPool.pool_id"))],
     [encodeAssetDefinitionIdValue(value.storage_asset, "zk.RegisterAssetHiddenZkPool.storage_asset")],
-    [encodeFixedByteArrayArchiveValue(value.asset_set_root, 32, "zk.RegisterAssetHiddenZkPool.asset_set_root")],
+    [encodeFixedBytesValue(value.asset_set_root, 32, "zk.RegisterAssetHiddenZkPool.asset_set_root")],
     [encodeVerifyingKeyIdValue(value.vk_transfer, "zk.RegisterAssetHiddenZkPool.vk_transfer")],
   ]);
 }

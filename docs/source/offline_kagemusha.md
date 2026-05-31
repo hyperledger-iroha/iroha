@@ -721,10 +721,14 @@ rejection when a valid Pallas preflight is paired with an invalid verifier
 witness, and rejection when a production Pallas preflight is paired with a
 non-production fixed-window profile. The composed circuit now also exposes a
 public verifier transcript-binding digest instance and links it to the embedded
-verifier's transcript-binding accumulator; the digest-splice MockProver case is
-present but heavyweight and ignored by default. Full production fixed-window
-Pallas verifier materialization and composed MockProver acceptance/splice tests
-are heavyweight and ignored by default. This moves verifier composition into the
+verifier's transcript-binding accumulator. It also exposes a public
+scalar-projection digest over that transcript-binding digest, the public
+`b`-reduction input scalars, challenge, inverse, and final folded `b` scalar,
+and constrains the projection with the same field-friendly Pow5 compression.
+Digest-splice and scalar-projection-digest splice MockProver cases are present
+but heavyweight and ignored by default. Full production fixed-window Pallas
+verifier materialization and composed MockProver acceptance/splice tests are
+heavyweight and ignored by default. This moves verifier composition into the
 recursive aggregation circuit surface without accepting compact-token
 aggregation mode `2`; full mode-2 admission still requires composing the
 private-hop verifier batch and proving the complete Poseidon2 witness-batch

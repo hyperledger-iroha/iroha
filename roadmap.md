@@ -688,12 +688,16 @@ and completed history lives in [`status.md`](./status.md).
   verifier witness, and rejection when a production Pallas preflight is paired
   with a non-production fixed-window profile. The composed circuit now also
   exposes a public verifier transcript-binding digest instance and links it to
-  the embedded verifier's transcript-binding accumulator; digest-splice,
-  production fixed-window Pallas verifier materialization, and composed
-  MockProver acceptance/public-count-splice tests remain ignored heavyweight
-  coverage. This is still not mode-2 admission because the private-hop verifier
-  batch and complete Poseidon2 witness-batch digest relation are not yet proved
-  inside the compact-token circuit.
+  the embedded verifier's transcript-binding accumulator. It also exposes a
+  public scalar-projection digest over that digest, the public `b`-reduction
+  input scalars, challenge, inverse, and final folded `b` scalar, and
+  constrains that projection with the same field-friendly Pow5 compressor.
+  Digest-splice, scalar-projection-digest splice, production fixed-window
+  Pallas verifier materialization, and composed MockProver
+  acceptance/public-count-splice tests remain ignored heavyweight coverage.
+  This is still not mode-2 admission because the private-hop verifier batch and
+  complete Poseidon2 witness-batch digest relation are not yet proved inside the
+  compact-token circuit.
   The same shared-table verifier can now be constructed from proof-derived
   native Pallas verifier witnesses after the existing native Pallas preflight
   validates transcript, `b`-reduction, accumulator, and generator-fold

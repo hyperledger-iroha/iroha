@@ -67,10 +67,17 @@ Last updated: 2026-05-31
   case was terminated after more than 20 minutes at full CPU, so routine
   validation keeps these cases ignored and relies on the active builder,
   native-Pallas-preflight, batch-preflight, and host-link adversarial tests.
+- The one-hop recursive verifier-slice now exposes two public verifier-binding
+  digests: the embedded verifier transcript-binding digest and a
+  scalar-projection digest over that transcript-binding digest, the public
+  `b`-reduction input scalars, challenge, inverse, and final folded `b` scalar.
+  The scalar projection is constrained with the same field-friendly Pow5
+  compressor, with active order-sensitivity coverage and heavyweight
+  MockProver splice coverage kept ignored by default.
 - Validation:
   - `CARGO_INCREMENTAL=0 CARGO_TARGET_DIR=/tmp/iroha-codex-kagemusha-target cargo test -p iroha_core kagemusha_non_native_vesta_ipa_final --lib`
   - `CARGO_INCREMENTAL=0 CARGO_TARGET_DIR=/tmp/iroha-codex-kagemusha-target cargo test -p iroha_core kagemusha_recursive_aggregation_proof_preverify --lib`
-  - `CARGO_INCREMENTAL=0 CARGO_TARGET_DIR=/tmp/iroha-codex-kagemusha-target cargo test -p iroha_core kagemusha_recursive_aggregation --lib -- --test-threads=1` (35 passed, 4 ignored heavyweight composed-circuit tests)
+  - `CARGO_INCREMENTAL=0 CARGO_TARGET_DIR=/tmp/iroha-codex-kagemusha-target cargo test -p iroha_core kagemusha_recursive_aggregation --lib -- --test-threads=1` (36 passed, 5 ignored heavyweight composed-circuit tests)
   - `CARGO_INCREMENTAL=0 CARGO_TARGET_DIR=/tmp/iroha-codex-kagemusha-target cargo test -p iroha_core kagemusha_compact_payment_token --lib`
   - `CARGO_INCREMENTAL=0 CARGO_TARGET_DIR=/tmp/iroha-codex-kagemusha-target cargo test -p iroha_core prove_offline_note_redeem_rejects_noncanonical_verifier_key --lib`
   - `CARGO_INCREMENTAL=0 CARGO_TARGET_DIR=/tmp/iroha-codex-kagemusha-target cargo test -p iroha_core offline_note_rejects_recursive_verifier_record_mismatches --lib`
@@ -99,7 +106,7 @@ Last updated: 2026-05-31
   - `CARGO_INCREMENTAL=0 CARGO_TARGET_DIR=/tmp/iroha-codex-kagemusha-target cargo test -p iroha_core kagemusha_non_native_vesta_ipa_verifier_shared_table --lib -- --test-threads=1` (14 passed, 7 ignored heavyweight composed-circuit tests)
   - `CARGO_INCREMENTAL=0 CARGO_TARGET_DIR=/tmp/iroha-codex-kagemusha-target cargo test -p iroha_data_model kagemusha_aggregation_mode_helpers_mark_recursive_mode_reserved --lib`
   - `CARGO_INCREMENTAL=0 CARGO_TARGET_DIR=/tmp/iroha-codex-kagemusha-target cargo test -p iroha_core prove_kagemusha_compact_payment_token_rejects_reserved_recursive_mode --lib`
-  - `CARGO_INCREMENTAL=0 CARGO_TARGET_DIR=/tmp/iroha-codex-kagemusha-target cargo test -p iroha_core kagemusha_recursive_aggregation_one_hop_verifier_slice --lib -- --test-threads=1` (8 passed, 4 ignored heavyweight production/materialized-circuit tests)
+  - `CARGO_INCREMENTAL=0 CARGO_TARGET_DIR=/tmp/iroha-codex-kagemusha-target cargo test -p iroha_core kagemusha_recursive_aggregation_one_hop_verifier_slice --lib -- --test-threads=1` (9 passed, 5 ignored heavyweight production/materialized-circuit tests)
 
 ## 2026-05-31 Sumeragi missing commit-QC actionable TLC cross-check
 

@@ -1,0 +1,21 @@
+Metadata-Version: 2.4
+Name: iroha-torii-client
+Version: 0.0.1
+Summary: Lightweight Torii HTTP client helpers for Hyperledger Iroha.
+Author: Hyperledger Iroha Contributors
+License: Apache-2.0
+Project-URL: Homepage, https://github.com/hyperledger/iroha
+Project-URL: Repository, https://github.com/hyperledger/iroha
+Keywords: iroha,torii,sdk,blockchain
+Classifier: Development Status :: 2 - Pre-Alpha
+Classifier: Intended Audience :: Developers
+Classifier: License :: OSI Approved :: Apache Software License
+Classifier: Programming Language :: Python
+Classifier: Programming Language :: Python :: 3
+Classifier: Programming Language :: Python :: 3.9
+Classifier: Programming Language :: Python :: 3.10
+Classifier: Programming Language :: Python :: 3.11
+Classifier: Programming Language :: Python :: 3.12
+Classifier: Topic :: Software Development :: Libraries :: Python Modules
+Requires-Python: >=3.9
+Requires-Dist: requests>=2.31

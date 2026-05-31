@@ -1,0 +1,11 @@
+pyproject.toml
+./__init__.py
+./client.py
+./mock.py
+./sccp.py
+iroha_torii_client.egg-info/PKG-INFO
+iroha_torii_client.egg-info/SOURCES.txt
+iroha_torii_client.egg-info/dependency_links.txt
+iroha_torii_client.egg-info/requires.txt
+iroha_torii_client.egg-info/top_level.txt
+tests/test_client.py

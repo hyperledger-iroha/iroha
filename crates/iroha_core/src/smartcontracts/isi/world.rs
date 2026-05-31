@@ -994,6 +994,94 @@ pub mod isi {
         Ok(())
     }
 
+    fn validate_asset_hidden_transfer_public_inputs(
+        transfer: &zk::AssetHiddenZkTransfer,
+        attachment: &iroha_data_model::proof::ProofAttachment,
+        state_transaction: &StateTransaction<'_, '_>,
+        vk_record: Option<&VerifyingKeyRecord>,
+        st: &crate::state::ZkAssetState,
+        root_hint: [u8; 32],
+    ) -> Result<(), Error> {
+        let Some(vk_record) = vk_record else {
+            return Ok(());
+        };
+        if attachment.backend.as_str() != crate::zk::ZK_BACKEND_HALO2_IPA {
+            return Err(InstructionExecutionError::InvariantViolation(
+                "asset-hidden transfer requires halo2/ipa backend".into(),
+            ));
+        }
+        validate_confidential_v2_open_verify_envelope_metadata(
+            "asset-hidden transfer",
+            attachment,
+            state_transaction,
+            vk_record,
+            crate::zk::confidential_v2::ASSET_HIDDEN_TRANSFER_V1_PUBLIC_INPUTS_SCHEMA_V1,
+        )?;
+        if transfer.inputs().is_empty()
+            || transfer.inputs().len() > 2
+            || transfer.outputs().is_empty()
+            || transfer.outputs().len() > 2
+        {
+            return Err(InstructionExecutionError::InvariantViolation(
+                "asset-hidden transfer v1 requires 1-2 inputs and 1-2 outputs".into(),
+            ));
+        }
+        let proof_inputs = crate::zk::confidential_v2::parse_asset_hidden_transfer_public_inputs(
+            &attachment.proof.bytes,
+        )
+        .map_err(|err| {
+            InstructionExecutionError::InvariantViolation(
+                format!("invalid asset-hidden transfer public inputs: {err}").into(),
+            )
+        })?;
+        let expected_pool_id_tag =
+            crate::zk::confidential_v2::derive_asset_hidden_pool_id_tag_v1(transfer.pool_id());
+        if proof_inputs.pool_id_tag != expected_pool_id_tag {
+            return Err(InstructionExecutionError::InvariantViolation(
+                "asset-hidden transfer pool_id mismatch".into(),
+            ));
+        }
+        let expected_asset_set_root = st.asset_hidden_asset_set_root.ok_or_else(|| {
+            InstructionExecutionError::InvariantViolation(
+                "asset-hidden transfer pool asset_set_root is missing".into(),
+            )
+        })?;
+        if proof_inputs.asset_set_root != expected_asset_set_root {
+            return Err(InstructionExecutionError::InvariantViolation(
+                "asset-hidden transfer asset_set_root mismatch".into(),
+            ));
+        }
+        if proof_inputs.root != root_hint {
+            return Err(InstructionExecutionError::InvariantViolation(
+                "asset-hidden transfer root_hint mismatch".into(),
+            ));
+        }
+        let zero = [0u8; 32];
+        for index in 0..2 {
+            let expected_nullifier = transfer.inputs().get(index).copied().unwrap_or(zero);
+            if proof_inputs.nullifiers[index] != expected_nullifier {
+                return Err(InstructionExecutionError::InvariantViolation(
+                    "asset-hidden transfer nullifier mismatch".into(),
+                ));
+            }
+            let expected_output = transfer.outputs().get(index).copied().unwrap_or(zero);
+            if proof_inputs.outputs[index] != expected_output {
+                return Err(InstructionExecutionError::InvariantViolation(
+                    "asset-hidden transfer output commitment mismatch".into(),
+                ));
+            }
+        }
+        let expected_chain_tag = crate::zk::confidential_v2::derive_confidential_chain_tag_v2(
+            state_transaction.chain_id.as_str(),
+        );
+        if proof_inputs.chain_tag != expected_chain_tag {
+            return Err(InstructionExecutionError::InvariantViolation(
+                "asset-hidden transfer chain tag mismatch".into(),
+            ));
+        }
+        Ok(())
+    }
+
     fn protect_anonymous_escrow_commitments_from_generic_transfer(
         transfer: &zk::ZkTransfer,
         attachment: &iroha_data_model::proof::ProofAttachment,
@@ -10503,6 +10591,8 @@ pub mod isi {
                     "verifying key backend mismatch".into(),
                 ));
             }
+            state_transaction.register_nullifiers(self.inputs().len())?;
+            state_transaction.register_commitments(self.outputs().len())?;
 
             let mut seen_inputs = BTreeSet::new();
             for &nullifier in self.inputs() {
@@ -10571,6 +10661,14 @@ pub mod isi {
                     ));
                 }
             }
+            validate_asset_hidden_transfer_public_inputs(
+                &self,
+                attachment,
+                state_transaction,
+                vk_record.as_ref(),
+                &st,
+                root_hint,
+            )?;
 
             state_transaction.register_confidential_proof(attachment.proof.bytes.len())?;
             let report = crate::zk::verify_backend_with_timing_checked(

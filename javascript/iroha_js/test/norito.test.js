@@ -94,6 +94,20 @@ const REGISTER_ASSET_WITH_POLICY = {
   },
 };
 
+const REGISTER_ASSET_HIDDEN_POOL = {
+  zk: {
+    RegisterAssetHiddenZkPool: {
+      pool_id: "boi-private-is-pool",
+      storage_asset: "62Fk4FPcMuLvW5QjDGNF2a4jAmjM",
+      asset_set_root: Array.from({ length: 32 }, (_, index) => index + 1),
+      vk_transfer: {
+        backend: "halo2/ipa",
+        name: "asset-hidden-transfer-v1",
+      },
+    },
+  },
+};
+
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
 const repoRoot = path.resolve(__dirname, "..", "..", "..");
@@ -223,6 +237,21 @@ test("native Norito decoder accepts pure JS asset definition frames", () => {
     noritoEncodeInstruction(REGISTER_ASSET_WITH_POLICY),
   );
   assert.deepEqual(noritoDecodeInstruction(encoded), REGISTER_ASSET_WITH_POLICY);
+});
+
+baseTest("pure JS Norito codec supports asset-hidden pool registration without native binding", () => {
+  withMissingNativeBinding(() => {
+    const encoded = noritoEncodeInstruction(REGISTER_ASSET_HIDDEN_POOL);
+    const decoded = noritoDecodeInstruction(encoded);
+    assert.deepEqual(decoded, REGISTER_ASSET_HIDDEN_POOL);
+  });
+});
+
+test("native Norito decoder accepts pure JS asset-hidden pool registration frames", () => {
+  const encoded = withMissingNativeBinding(() =>
+    noritoEncodeInstruction(REGISTER_ASSET_HIDDEN_POOL),
+  );
+  assert.deepEqual(noritoDecodeInstruction(encoded), REGISTER_ASSET_HIDDEN_POOL);
 });
 
 baseTest("pure JS Norito asset definition codec rejects adversarial fields", () => {
