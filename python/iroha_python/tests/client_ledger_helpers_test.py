@@ -7,7 +7,14 @@ from urllib.parse import urlsplit
 import pytest
 import requests
 
-from iroha_python import AccountAddress, Ed25519KeyPair, ToriiClient
+from iroha_python import (
+    AccountAddress,
+    Ed25519KeyPair,
+    Instruction,
+    ToriiClient,
+    TransactionConfig,
+    TransactionDraft,
+)
 
 
 class FakeSession:
@@ -456,6 +463,610 @@ def test_permission_grant_and_revoke_helpers_build_one_instruction() -> None:
     assert grant_kwargs["wait"] is False
     assert revoke_kwargs["private_key_hex"] == "22" * 32
     assert revoke_kwargs["wait"] is True
+
+
+def test_zk_instruction_helpers_serialize_full_surface() -> None:
+    asset_definition_id = "7MBRDd8cGFBZkFGdDMwV7S6FPwbw"
+    source = account_address(0x61)
+    destination = account_address(0x62)
+    proof = {
+        "backend": "halo2/ipa",
+        "proof_bytes": b"proof-bytes",
+        "verifying_key_ref": "halo2/ipa:vk_transfer",
+        "verifying_key_commitment": "44" * 32,
+        "envelope_hash": "55" * 32,
+    }
+
+    instructions = [
+        Instruction.register_zk_asset(
+            asset_definition_id,
+            vk_transfer="halo2/ipa:vk_transfer",
+            vk_unshield={"backend": "halo2/ipa", "name": "vk_unshield"},
+        ),
+        Instruction.shield_asset(
+            asset_definition_id,
+            source,
+            "7",
+            "11" * 32,
+            "22" * 32,
+            "33" * 24,
+            b"ciphertext",
+        ),
+        Instruction.zk_transfer_prepared(
+            asset_definition_id,
+            ["aa" * 32],
+            ["bb" * 32],
+            proof,
+            root_hint="cc" * 32,
+        ),
+        Instruction.unshield_prepared(
+            asset_definition_id,
+            destination,
+            "3",
+            ["dd" * 32],
+            proof,
+            outputs=["ee" * 32],
+            root_hint="ff" * 32,
+        ),
+    ]
+
+    encoded = [instruction.to_json() for instruction in instructions]
+    assert all(payload for payload in encoded)
+    assert [Instruction.from_json(payload).to_json() for payload in encoded] == encoded
+
+
+def test_zk_instruction_helpers_accept_tuple_inputs() -> None:
+    asset_definition_id = "7MBRDd8cGFBZkFGdDMwV7S6FPwbw"
+    proof = {
+        "backend": "halo2/ipa",
+        "proof_bytes": b"proof-bytes",
+        "verifying_key_ref": "halo2/ipa:vk_transfer",
+    }
+
+    instruction = Instruction.zk_transfer_prepared(
+        asset_definition_id,
+        ("aa" * 32,),
+        ("bb" * 32,),
+        proof,
+        root_hint="cc" * 32,
+    )
+
+    assert Instruction.from_json(instruction.to_json()).to_json() == instruction.to_json()
+
+
+def test_transaction_draft_shield_accepts_raw_text_ciphertext() -> None:
+    draft = TransactionDraft(
+        TransactionConfig(
+            chain_id="chain",
+            authority=account_address(0x65),
+        )
+    )
+
+    draft.shield_asset(
+        "7MBRDd8cGFBZkFGdDMwV7S6FPwbw",
+        account_address(0x65),
+        7,
+        note_commitment="11" * 32,
+        ephemeral_public_key="22" * 32,
+        nonce="33" * 24,
+        ciphertext="raw ciphertext payload",
+    )
+
+    assert len(draft) == 1
+
+
+def test_zk_instruction_helpers_reject_invalid_prepared_proof() -> None:
+    with pytest.raises(ValueError, match="vk_ref.backend"):
+        Instruction.zk_transfer_prepared(
+            "7MBRDd8cGFBZkFGdDMwV7S6FPwbw",
+            ["aa" * 32],
+            ["bb" * 32],
+            {
+                "backend": "halo2/ipa",
+                "proof_bytes": b"proof-bytes",
+                "verifying_key_ref": "other:vk_transfer",
+            },
+        )
+
+
+@pytest.mark.parametrize(
+    ("factory", "error_type", "match"),
+    [
+        pytest.param(
+            lambda asset, source, _destination, _proof: Instruction.register_zk_asset(
+                asset,
+                mode="../../Hybrid",
+            ),
+            ValueError,
+            "invalid ZK asset mode",
+            id="register-invalid-mode",
+        ),
+        pytest.param(
+            lambda asset, source, _destination, _proof: Instruction.register_zk_asset(
+                asset,
+                vk_transfer="halo2/ipa",
+            ),
+            ValueError,
+            "backend:name",
+            id="register-invalid-vk-format",
+        ),
+        pytest.param(
+            lambda asset, source, _destination, _proof: Instruction.shield_asset(
+                asset,
+                source,
+                "-1",
+                "11" * 32,
+                "22" * 32,
+                "33" * 24,
+                b"ciphertext",
+            ),
+            ValueError,
+            "amount",
+            id="shield-negative-amount",
+        ),
+        pytest.param(
+            lambda asset, source, _destination, _proof: Instruction.shield_asset(
+                asset,
+                source,
+                "1.5",
+                "11" * 32,
+                "22" * 32,
+                "33" * 24,
+                b"ciphertext",
+            ),
+            ValueError,
+            "amount",
+            id="shield-decimal-amount",
+        ),
+        pytest.param(
+            lambda asset, source, _destination, _proof: Instruction.shield_asset(
+                asset,
+                source,
+                str(2**128),
+                "11" * 32,
+                "22" * 32,
+                "33" * 24,
+                b"ciphertext",
+            ),
+            ValueError,
+            "amount",
+            id="shield-u128-overflow",
+        ),
+        pytest.param(
+            lambda asset, source, _destination, _proof: Instruction.shield_asset(
+                asset,
+                source,
+                "1",
+                "11" * 31,
+                "22" * 32,
+                "33" * 24,
+                b"ciphertext",
+            ),
+            ValueError,
+            "note_commitment",
+            id="shield-short-commitment",
+        ),
+        pytest.param(
+            lambda asset, source, _destination, _proof: Instruction.shield_asset(
+                asset,
+                source,
+                "1",
+                "11" * 32,
+                "22" * 32,
+                "33" * 23,
+                b"ciphertext",
+            ),
+            ValueError,
+            "nonce",
+            id="shield-short-nonce",
+        ),
+        pytest.param(
+            lambda asset, source, _destination, _proof: Instruction.shield_asset(
+                asset,
+                source,
+                "1",
+                "11" * 32,
+                "22" * 32,
+                "33" * 24,
+                b"",
+            ),
+            ValueError,
+            "ciphertext",
+            id="shield-empty-ciphertext",
+        ),
+        pytest.param(
+            lambda asset, _source, _destination, proof: Instruction.zk_transfer_prepared(
+                asset,
+                [],
+                ["bb" * 32],
+                proof,
+            ),
+            ValueError,
+            "inputs",
+            id="transfer-empty-inputs",
+        ),
+        pytest.param(
+            lambda asset, _source, _destination, proof: Instruction.zk_transfer_prepared(
+                asset,
+                ["aa" * 32],
+                [],
+                proof,
+            ),
+            ValueError,
+            "outputs",
+            id="transfer-empty-outputs",
+        ),
+        pytest.param(
+            lambda asset, _source, _destination, proof: Instruction.zk_transfer_prepared(
+                asset,
+                "not-a-list",
+                ["bb" * 32],
+                proof,
+            ),
+            TypeError,
+            "list or tuple",
+            id="transfer-inputs-not-sequence",
+        ),
+        pytest.param(
+            lambda asset, _source, _destination, proof: Instruction.zk_transfer_prepared(
+                asset,
+                ["aa" * 32, "aa" * 32],
+                ["bb" * 32],
+                proof,
+            ),
+            ValueError,
+            "duplicates",
+            id="transfer-duplicate-nullifier",
+        ),
+        pytest.param(
+            lambda asset, _source, _destination, proof: Instruction.zk_transfer_prepared(
+                asset,
+                ["aa" * 32],
+                ["bb" * 32, "bb" * 32],
+                proof,
+            ),
+            ValueError,
+            "duplicates",
+            id="transfer-duplicate-commitment",
+        ),
+        pytest.param(
+            lambda asset, _source, _destination, proof: Instruction.zk_transfer_prepared(
+                asset,
+                ["aa" * 32],
+                ["bb" * 32],
+                proof,
+                root_hint="cc" * 31,
+            ),
+            ValueError,
+            "root_hint",
+            id="transfer-short-root",
+        ),
+        pytest.param(
+            lambda asset, _source, _destination, proof: Instruction.zk_transfer_prepared(
+                asset,
+                ["aa" * 32],
+                ["bb" * 32],
+                {key: value for key, value in proof.items() if key != "backend"},
+            ),
+            ValueError,
+            "backend",
+            id="transfer-missing-proof-backend",
+        ),
+        pytest.param(
+            lambda asset, _source, _destination, proof: Instruction.zk_transfer_prepared(
+                asset,
+                ["aa" * 32],
+                ["bb" * 32],
+                {key: value for key, value in proof.items() if key != "proof_bytes"},
+            ),
+            ValueError,
+            "proof_bytes",
+            id="transfer-missing-proof-bytes",
+        ),
+        pytest.param(
+            lambda asset, _source, _destination, proof: Instruction.zk_transfer_prepared(
+                asset,
+                ["aa" * 32],
+                ["bb" * 32],
+                {**proof, "proof_bytes": b""},
+            ),
+            ValueError,
+            "proof_bytes",
+            id="transfer-empty-proof",
+        ),
+        pytest.param(
+            lambda asset, _source, _destination, proof: Instruction.zk_transfer_prepared(
+                asset,
+                ["aa" * 32],
+                ["bb" * 32],
+                {**proof, "proof_b64": "not base64!", "proof_bytes": None},
+            ),
+            ValueError,
+            "base64",
+            id="transfer-invalid-base64-proof",
+        ),
+        pytest.param(
+            lambda asset, _source, destination, proof: Instruction.unshield_prepared(
+                asset,
+                destination,
+                "-1",
+                ["aa" * 32],
+                {**proof, "verifying_key_ref": "halo2/ipa:vk_unshield"},
+            ),
+            ValueError,
+            "public_amount",
+            id="unshield-negative-public-amount",
+        ),
+        pytest.param(
+            lambda asset, _source, destination, proof: Instruction.unshield_prepared(
+                asset,
+                destination,
+                "1",
+                ["aa" * 32],
+                {**proof, "verifying_key_ref": "halo2/ipa:vk_unshield"},
+                outputs=["bb" * 32, "bb" * 32],
+            ),
+            ValueError,
+            "duplicates",
+            id="unshield-duplicate-output",
+        ),
+    ],
+)
+def test_zk_instruction_helpers_reject_adversarial_inputs(
+    factory,
+    error_type: type[Exception],
+    match: str,
+) -> None:
+    asset_definition_id = "7MBRDd8cGFBZkFGdDMwV7S6FPwbw"
+    source = account_address(0x66)
+    destination = account_address(0x67)
+    proof = {
+        "backend": "halo2/ipa",
+        "proof_bytes": b"proof-bytes",
+        "verifying_key_ref": "halo2/ipa:vk_transfer",
+    }
+
+    with pytest.raises(error_type, match=match):
+        factory(asset_definition_id, source, destination, proof)
+
+
+@pytest.mark.parametrize(
+    ("call", "error_type", "match"),
+    [
+        pytest.param(
+            lambda draft, asset, account, proof: draft.shield_asset(
+                asset,
+                account,
+                1,
+                note_commitment="11" * 32,
+                ephemeral_public_key="22" * 32,
+                nonce="33" * 24,
+            ),
+            ValueError,
+            "ciphertext",
+            id="shield-missing-ciphertext",
+        ),
+        pytest.param(
+            lambda draft, asset, account, proof: draft.shield_asset(
+                asset,
+                account,
+                1,
+                note_commitment="11" * 32,
+                ephemeral_public_key="22" * 32,
+                nonce="33" * 24,
+                ciphertext=b"raw",
+                ciphertext_b64="cmF3",
+            ),
+            ValueError,
+            "only one",
+            id="shield-conflicting-ciphertext",
+        ),
+        pytest.param(
+            lambda draft, asset, account, proof: draft.shield_asset(
+                asset,
+                account,
+                Decimal("1.25"),
+                note_commitment="11" * 32,
+                ephemeral_public_key="22" * 32,
+                nonce="33" * 24,
+                ciphertext=b"raw",
+            ),
+            ValueError,
+            "whole number",
+            id="shield-decimal-amount",
+        ),
+        pytest.param(
+            lambda draft, asset, account, proof: draft.zk_transfer_prepared(
+                asset,
+                inputs=["aa" * 32],
+                outputs=["bb" * 32],
+                proof=["not", "a", "mapping"],
+            ),
+            TypeError,
+            "proof must be a mapping",
+            id="transfer-proof-not-mapping",
+        ),
+        pytest.param(
+            lambda draft, asset, account, proof: draft.unshield_prepared(
+                asset,
+                account,
+                -1,
+                inputs=["aa" * 32],
+                proof={**proof, "verifying_key_ref": "halo2/ipa:vk_unshield"},
+            ),
+            ValueError,
+            "public_amount",
+            id="unshield-negative-public-amount",
+        ),
+    ],
+)
+def test_zk_transaction_draft_rejects_invalid_inputs(
+    call,
+    error_type: type[Exception],
+    match: str,
+) -> None:
+    account = account_address(0x68)
+    draft = TransactionDraft(TransactionConfig(chain_id="chain", authority=account))
+    proof = {
+        "backend": "halo2/ipa",
+        "proof_bytes": b"proof-bytes",
+        "verifying_key_ref": "halo2/ipa:vk_transfer",
+    }
+
+    with pytest.raises(error_type, match=match):
+        call(draft, "7MBRDd8cGFBZkFGdDMwV7S6FPwbw", account, proof)
+
+
+def test_zk_client_helpers_build_transaction_drafts() -> None:
+    client = ToriiClient("http://torii.example", session=FakeSession([]), max_retries=0)
+    captured: list[tuple[object, dict[str, object]]] = []
+    asset_definition_id = "7MBRDd8cGFBZkFGdDMwV7S6FPwbw"
+    source = account_address(0x63)
+    destination = account_address(0x64)
+    proof = {
+        "backend": "halo2/ipa",
+        "proof_bytes": b"proof-bytes",
+        "verifying_key_ref": "halo2/ipa:vk_transfer",
+    }
+
+    def fake_submit(draft: object, **kwargs: object) -> dict[str, object]:
+        captured.append((draft, kwargs))
+        return {"hash": f"zk-{len(captured)}"}
+
+    client._submit_transaction_draft_result = fake_submit  # type: ignore[method-assign]
+
+    assert client.register_zk_asset_and_wait(
+        chain_id="chain",
+        authority="authority@is",
+        private_key_hex="11" * 32,
+        asset_definition_id=asset_definition_id,
+        vk_transfer="halo2/ipa:vk_transfer",
+        vk_unshield="halo2/ipa:vk_unshield",
+        transaction_metadata={"purpose": "zk-register"},
+        wait=False,
+    ) == {"hash": "zk-1"}
+    assert client.shield_asset_and_wait(
+        chain_id="chain",
+        authority=source,
+        private_key_hex="22" * 32,
+        asset_definition_id=asset_definition_id,
+        from_account_id=source,
+        amount="7",
+        note_commitment="11" * 32,
+        ephemeral_public_key="22" * 32,
+        nonce="33" * 24,
+        ciphertext_b64="Y2lwaGVydGV4dA==",
+    ) == {"hash": "zk-2"}
+    assert client.zk_transfer_prepared_and_wait(
+        chain_id="chain",
+        authority=source,
+        private_key_hex="33" * 32,
+        asset_definition_id=asset_definition_id,
+        inputs=["aa" * 32],
+        outputs=["bb" * 32],
+        proof=proof,
+        root_hint="cc" * 32,
+    ) == {"hash": "zk-3"}
+    assert client.unshield_prepared_and_wait(
+        chain_id="chain",
+        authority=source,
+        private_key_hex="44" * 32,
+        asset_definition_id=asset_definition_id,
+        to_account_id=destination,
+        public_amount="3",
+        inputs=["dd" * 32],
+        outputs=["ee" * 32],
+        proof=proof,
+        root_hint="ff" * 32,
+    ) == {"hash": "zk-4"}
+
+    assert [len(draft) for draft, _kwargs in captured] == [1, 1, 1, 1]
+    assert captured[0][0].config.metadata == {"purpose": "zk-register"}
+    assert captured[0][1]["wait"] is False
+    assert captured[1][1]["private_key_hex"] == "22" * 32
+
+
+@pytest.mark.parametrize(
+    ("method_name", "kwargs", "error_type", "match"),
+    [
+        pytest.param(
+            "shield_asset_and_wait",
+            {
+                "asset_definition_id": "7MBRDd8cGFBZkFGdDMwV7S6FPwbw",
+                "from_account_id": account_address(0x69),
+                "amount": 1,
+                "note_commitment": "11" * 32,
+                "ephemeral_public_key": "22" * 32,
+                "nonce": "33" * 24,
+            },
+            ValueError,
+            "ciphertext",
+            id="shield-missing-ciphertext",
+        ),
+        pytest.param(
+            "zk_transfer_prepared_and_wait",
+            {
+                "asset_definition_id": "7MBRDd8cGFBZkFGdDMwV7S6FPwbw",
+                "inputs": ["aa" * 32, "aa" * 32],
+                "outputs": ["bb" * 32],
+                "proof": {
+                    "backend": "halo2/ipa",
+                    "proof_bytes": b"proof-bytes",
+                    "verifying_key_ref": "halo2/ipa:vk_transfer",
+                },
+            },
+            ValueError,
+            "duplicates",
+            id="transfer-duplicate-input",
+        ),
+        pytest.param(
+            "zk_transfer_prepared_and_wait",
+            {
+                "asset_definition_id": "7MBRDd8cGFBZkFGdDMwV7S6FPwbw",
+                "inputs": ["aa" * 32],
+                "outputs": ["bb" * 32],
+                "proof": object(),
+            },
+            TypeError,
+            "proof must be a mapping",
+            id="transfer-proof-not-mapping",
+        ),
+        pytest.param(
+            "unshield_prepared_and_wait",
+            {
+                "asset_definition_id": "7MBRDd8cGFBZkFGdDMwV7S6FPwbw",
+                "to_account_id": account_address(0x6A),
+                "public_amount": 1,
+                "inputs": ["aa" * 32],
+                "proof": {
+                    "proof_bytes": b"proof-bytes",
+                    "verifying_key_ref": "halo2/ipa:vk_unshield",
+                },
+            },
+            ValueError,
+            "backend",
+            id="unshield-missing-proof-backend",
+        ),
+    ],
+)
+def test_zk_client_helpers_reject_invalid_inputs_before_submission(
+    method_name: str,
+    kwargs: dict[str, object],
+    error_type: type[Exception],
+    match: str,
+) -> None:
+    client = ToriiClient("http://torii.example", session=FakeSession([]), max_retries=0)
+    client._submit_transaction_draft_result = (  # type: ignore[method-assign]
+        lambda *_args, **_kwargs: pytest.fail("invalid ZK helper should not submit")
+    )
+
+    with pytest.raises(error_type, match=match):
+        getattr(client, method_name)(
+            chain_id="chain",
+            authority=account_address(0x6B),
+            private_key_hex="11" * 32,
+            **kwargs,
+        )
 
 
 @pytest.mark.parametrize(

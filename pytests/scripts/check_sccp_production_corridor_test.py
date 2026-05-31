@@ -226,3 +226,18 @@ def test_sccp_production_corridor_dry_run_skips_mobile_toolchain_resolution() ->
     assert "./gradlew :core:test --console=plain --tests" in completed.stdout
     assert "ANDROID_HOME=" in completed.stdout
     assert "SCCP production corridor dry run completed." in completed.stdout
+
+
+def test_sccp_production_corridor_java_home_resolver_handles_homebrew_jdk() -> None:
+    """Gradle phases must fall back to Homebrew JDK 21 on macOS workstations."""
+
+    script = SCRIPT.read_text(encoding="utf-8")
+
+    assert 'macos_java_home="$(/usr/libexec/java_home -v 21 2>/dev/null)"' in script
+    assert '[[ -x "$macos_java_home/bin/java" ]]' in script
+    assert "/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home" in script
+    assert "/usr/local/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home" in script
+    assert "/opt/homebrew/Cellar/openjdk@21/*/libexec/openjdk.jdk/Contents/Home" in (
+        script
+    )
+    assert "install Homebrew openjdk@21" in script

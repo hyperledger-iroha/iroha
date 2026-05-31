@@ -6304,6 +6304,111 @@ pub mod test_utils {
     }
 
     #[cfg(any(feature = "zk-halo2", feature = "zk-halo2-ipa"))]
+    /// Build a deterministic asset-hidden transfer fixture with caller-supplied public inputs.
+    ///
+    /// The fixture circuit exposes ten single-row instance columns matching
+    /// [`confidential_v2::ASSET_HIDDEN_TRANSFER_V1_PUBLIC_INPUTS_SCHEMA_V1`].
+    #[must_use]
+    pub fn halo2_asset_hidden_transfer_fixture_envelope(
+        circuit_id: impl Into<String>,
+        vk_hash: [u8; 32],
+        instance_words: [[u8; 32]; 10],
+    ) -> FixtureEnvelope {
+        use halo2_proofs::{
+            halo2curves::{
+                ff::PrimeField,
+                pasta::{EqAffine as Curve, Fp as Scalar},
+            },
+            plonk::{ProvingKey, create_proof, keygen_pk, keygen_vk},
+            poly::ipa::{commitment::IPACommitmentScheme, multiopen::ProverIPA},
+            transcript::{Blake2bWrite, Challenge255, TranscriptWriterBuffer as _},
+        };
+
+        #[derive(Clone)]
+        struct KeyMaterial {
+            k: u32,
+            pk: ProvingKey<Curve>,
+            vk_bytes: Vec<u8>,
+        }
+
+        fn scalar_from_bytes(bytes: [u8; 32]) -> Scalar {
+            let mut repr = <Scalar as PrimeField>::Repr::default();
+            repr.as_mut().copy_from_slice(&bytes);
+            Option::from(<Scalar as PrimeField>::from_repr(repr))
+                .expect("asset-hidden fixture public input must be a canonical Pasta scalar")
+        }
+
+        fn keys() -> &'static KeyMaterial {
+            static CACHE: std::sync::OnceLock<KeyMaterial> = std::sync::OnceLock::new();
+            CACHE.get_or_init(|| {
+                let k = 6u32;
+                let params = pasta_params_new(k);
+                let circuit = super::pasta_tiny::AssetHiddenTransferPublic::default();
+                let vk_h2 = keygen_vk(&params, &circuit).expect("vk");
+                let pk = keygen_pk(&params, vk_h2.clone(), &circuit).expect("pk");
+
+                let mut vk_bytes = super::zk1::wrap_start();
+                super::zk1::wrap_append_ipa_k(&mut vk_bytes, k);
+                super::zk1::wrap_append_vk_pasta(&mut vk_bytes, &vk_h2);
+
+                KeyMaterial { k, pk, vk_bytes }
+            })
+        }
+
+        let values = instance_words.map(scalar_from_bytes);
+        let inst_cols_owned: Vec<Vec<Scalar>> = values.iter().map(|value| vec![*value]).collect();
+        let inst_cols: Vec<&[Scalar]> = inst_cols_owned.iter().map(Vec::as_slice).collect();
+        let inst_refs: Vec<&[&[Scalar]]> = vec![inst_cols.as_slice()];
+        let circuit = super::pasta_tiny::AssetHiddenTransferPublic { values };
+
+        let material = keys();
+        let params = pasta_params_new(material.k);
+        let mut transcript = Blake2bWrite::<_, Curve, Challenge255<Curve>>::init(vec![]);
+        let mut rng = fixture_rng(0x5EED_F1C7_1234_5692);
+        create_proof::<
+            IPACommitmentScheme<Curve>,
+            ProverIPA<'_, Curve>,
+            Challenge255<Curve>,
+            _,
+            _,
+            _,
+        >(
+            &params,
+            &material.pk,
+            &[circuit],
+            &inst_refs,
+            &mut rng,
+            &mut transcript,
+        )
+        .expect("create proof");
+        let proof_raw = transcript.finalize();
+
+        let mut proof_bytes = super::zk1::wrap_start();
+        super::zk1::wrap_append_proof(&mut proof_bytes, &proof_raw);
+        super::zk1::wrap_append_instances_pasta_fp_cols(inst_cols.as_slice(), &mut proof_bytes);
+
+        let public_inputs =
+            super::confidential_v2::ASSET_HIDDEN_TRANSFER_V1_PUBLIC_INPUTS_SCHEMA_V1.to_vec();
+        let schema_hash: [u8; 32] = CryptoHash::new(&public_inputs).into();
+        let envelope = OpenVerifyEnvelope {
+            backend: BackendTag::Halo2IpaPasta,
+            circuit_id: circuit_id.into(),
+            vk_hash,
+            public_inputs: public_inputs.clone(),
+            proof_bytes,
+            aux: Vec::new(),
+        };
+        let proof_bytes =
+            norito::to_bytes(&envelope).expect("OpenVerifyEnvelope Norito serialization must work");
+        FixtureEnvelope {
+            proof_bytes,
+            public_inputs,
+            schema_hash,
+            vk_bytes: Some(material.vk_bytes.clone()),
+        }
+    }
+
+    #[cfg(any(feature = "zk-halo2", feature = "zk-halo2-ipa"))]
     #[must_use]
     fn halo2_ivm_binding_envelope(
         circuit_id: &str,
@@ -27055,6 +27160,72 @@ mod pasta_tiny {
         }
     }
 
+    #[derive(Clone)]
+    pub struct AssetHiddenTransferPublic {
+        pub values: [Scalar; 10],
+    }
+
+    impl Default for AssetHiddenTransferPublic {
+        fn default() -> Self {
+            Self {
+                values: [Scalar::from(0); 10],
+            }
+        }
+    }
+
+    impl Circuit<Scalar> for AssetHiddenTransferPublic {
+        type Config = (
+            [halo2_proofs::plonk::Column<halo2_proofs::plonk::Advice>; 10],
+            [halo2_proofs::plonk::Column<halo2_proofs::plonk::Instance>; 10],
+            Selector,
+        );
+        type FloorPlanner = SimpleFloorPlanner;
+
+        type Params = ();
+        fn without_witnesses(&self) -> Self {
+            Self::default()
+        }
+        fn configure(meta: &mut ConstraintSystem<Scalar>) -> Self::Config {
+            let advice = std::array::from_fn(|_| meta.advice_column());
+            let instances = std::array::from_fn(|_| meta.instance_column());
+            let selector = meta.selector();
+            meta.create_gate("asset_hidden_transfer_public", |meta| {
+                let selector = meta.query_selector(selector);
+                let mut constraints = Vec::with_capacity(10);
+                for index in 0..10 {
+                    let witness = meta.query_advice(advice[index], Rotation::cur());
+                    let public = meta.query_instance(instances[index], Rotation::cur());
+                    constraints.push(selector.clone() * (witness - public));
+                }
+                constraints
+            });
+            (advice, instances, selector)
+        }
+        fn synthesize(
+            &self,
+            (advice, _instances, selector): Self::Config,
+            mut layouter: impl Layouter<Scalar>,
+        ) -> Result<(), PlonkError> {
+            layouter.assign_region(
+                || "asset_hidden_transfer_public",
+                |mut region| {
+                    selector.enable(&mut region, 0)?;
+                    for (index, column) in advice.into_iter().enumerate() {
+                        let value = self.values[index];
+                        crate::zk::assign_advice_compat(
+                            &mut region,
+                            move || format!("public_{index}"),
+                            column,
+                            0,
+                            || Value::known(value),
+                        )?;
+                    }
+                    Ok(())
+                },
+            )
+        }
+    }
+
     #[derive(Clone, Default)]
     pub struct AddTwoRows;
     impl Circuit<Scalar> for AddTwoRows {
@@ -45843,6 +46014,24 @@ fn verify_halo2(backend: &str, proof: &ProofBox, vk: Option<&VerifyingKeyBox>) -
                 }
             )
         }
+        "halo2/pasta/asset-hidden-transfer-public-test" => {
+            if col_refs.len() < 10 || col_refs.iter().take(10).any(|col| col.len() != 1) {
+                return false;
+            }
+            cached_vk_for!(
+                &params,
+                normalized.as_str(),
+                vk_box,
+                pasta_tiny::AssetHiddenTransferPublic::default(),
+                |vk| {
+                    let mut transcript =
+                        Blake2bRead::<_, Curve, _>::init(Cursor::new(proof_payload.as_slice()));
+                    let strategy = SingleVerifier::new(&params);
+                    let proofs_instances = [&col_refs[..]];
+                    verify_proof(&params, vk, strategy, &proofs_instances, &mut transcript).is_ok()
+                }
+            )
+        }
         "halo2/pasta/tiny-anon-transfer-2x2" => {
             cached_vk_for!(
                 &params,
@@ -46208,6 +46397,28 @@ fn verify_halo2_ipa(backend: &str, proof: &ProofBox, vk: Option<&VerifyingKeyBox
                 Err(_) => return false,
             };
             if col_refs.len() < 2 {
+                return false;
+            }
+            let mut transcript =
+                Blake2bRead::<_, Curve, _>::init(Cursor::new(proof_payload.as_slice()));
+            let strategy = SingleVerifier::new(&params);
+            let proofs_instances = [&col_refs[..]];
+            verify_proof(
+                &params,
+                vk_h2.as_ref(),
+                strategy,
+                &proofs_instances,
+                &mut transcript,
+            )
+            .is_ok()
+        }
+        "halo2/pasta/asset-hidden-transfer-public-test" => {
+            let circuit = pasta_tiny::AssetHiddenTransferPublic::default();
+            let vk_h2 = match keygen_vk_cached(normalized.as_str(), &params, &circuit) {
+                Ok(v) => v,
+                Err(_) => return false,
+            };
+            if col_refs.len() < 10 || col_refs.iter().take(10).any(|col| col.len() != 1) {
                 return false;
             }
             let mut transcript =

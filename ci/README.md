@@ -304,7 +304,7 @@ as part of a coordinated migration.
   post-commit pacemaker kick/idle-view proposal budget/cached-slot timeout/
   pending fast-path timeout/live-frontier idle missing-QC/missing-QC reacquire
   admission/missing-QC reacquire action/missing commit-QC actionable/idle backlog
-  signals cross-checks, and
+  signals/missing-QC height stall/missing-QC stall range-pull cross-checks, and
   expected-failure
 frontier/fork/quorum/RBC/rbc-causality/rbc-deliver-acceptance/rbc-commit-processing/rbc-chunk-target/rbc-chunk-payload-cap/rbc-rebroadcast-selection/rbc-chunk-allocation/rbc-payload-chunking/rbc-rs16-initial-fanout/rbc-chunk-broadcast-order/pending-rbc-stash/pending-rbc-status/ingress-status-counters/consensus-message-labels/phase-latency-status/telemetry-status/lane-detail-status/settlement-status/history-status/commit-quorum-status/commit-inflight-status/rbc-status-lookup/rbc-status-retention/rbc-status-persistence/rbc-status-handle/rbc-backlog-status/rbc-abort-status/rbc-mismatch-status/rbc-progress-stage/rbc-hot-repair/rbc-sampling/rbc-store/rbc-store-status/rbc-store-pressure-log/round-gap-status/rbc-recovery-helper/rbc-missing-block-recovery/rbc-unverified-roster/rbc-preimage/classic-preimage/classic-signature/invalid-signature-labels/invalid-signature-throttle/penalty-offender-selection/consensus-penalty-action/exec-witness-roots/block-message-rbc-compact/block-message-priority/block-message-height-view/block-message-kind/message-projection/pipeline-event-emission/block-message-wire/block-created-frontier-wire/cached-proposal-rebroadcast/frontier-same-slot-activity/frontier-reassembly-activity/frontier-quorum-owner-actionable/frontier-sidecar-retarget/frontier-sidecar-expected-hash/contiguous-frontier-payload-hint/frontier-parent-qc-hint-retarget/live-frontier-idle-missing-qc/missing-qc-reacquire-admission/missing-qc-reacquire-action/missing-commit-qc-actionable/missing-qc-height-stall/missing-qc-stall-range-pull/canonical-frontier-reanchor/frontier-repair-view-change/frontier-recovery-advance/same-height-no-proposal-storm/vrf-admission/vote-admission/vote-duplicate-key/evidence-horizon/evidence-canonicalization/evidence-validation/double-vote-recording/invalid-qc-shape/qc-validation-evidence/qc-validation-reason/block-sync-qc-fallback/signed-quorum-fetch-fallback/commit-qc-only-fetch-response/block-sync-update-targets/apply-cached-qcs/block-sync-roster/block-sync-vote-deferral/block-sync-known-hintless/block-sync-implicit-recovery/block-sync-vote-placeholder/block-sync-snapshot-hint/block-sync-snapshot-roster/block-sync-no-roster/block-sync-known-selected-roster/block-sync-selected-signatures/block-sync-selected-qc/block-sync-selected-quorum/block-sync-recovery-mode/block-sync-selected-apply/block-sync-selected-qc-prefilter/block-sync-selected-qc-process/block-sync-selected-qc-cache/block-sync-stale-view/block-sync-commit-conflict/block-sync-warning-throttle/fetch-response-deferral/fetch-block-body-handle/background-frame-cap/fetch-pending-response-send/fetch-pending-responses-batch/pending-response-flush/deferred-block-sync-helper/deferred-block-sync-cache/deferred-block-sync-replay/block-sync-future-window/invalid-proposal-evidence/proposal-mismatch/proposal-cache/proposal-hint/stale-proposal-hint-repair/stale-rbc-hint-repair/proposal-admission/block-created-admission/missing-request-clear/missing-block-clear/proposal-budget/proposal-backpressure/proposal-defer-warning/non-rbc-payload-budget/proposal-batch/lane-interleave/commitment-snapshot-builder/collector-plan/collector-selection/topology-mutation/prf-leader-shuffle/topology-fanout/p2p-topology-trusted/p2p-topology-refresh/quorum-retransmit/retransmit-backpressure/quorum-reschedule-backoff/rbc-availability-reschedule/vote-backed-reassembly-stall/completed-quorum-view-advance/QC-signer/qc-signer-count/signer-index-normalization/commit-root/commit-pipeline-recovery/known-block-commit-qc-recovery/stale-view-commit-qc-fetch/commit-anchor-qc/pending-progress/commit-pipeline-scheduling/precommit-vote-count/voting-signer-count/distinct-vote-epochs/new-view-highest-qc-votes/online-validator-relay-counters/commit-result-drain/commit-drain-summary/commit-pipeline-sample/commit-pipeline-status/autoscale-transition/commit-quorum-signers/signature-index-recovery/commit-qc-lookup/precommit-signer-record/roster-validation-memo/roster-validation-cached/roster-validation-core/roster-artifact-selection/block-roster-caches/block-sync-roster-evidence/block-sync-history-roster/persisted-roster-selection/block-sync-update-roster/roster-index-projection/membership-view-hash/membership-mismatch-status/membership-advert/membership-mismatch-ingress/consensus-params-ingress/prevalidated-commit-artifact/commit-job-dispatch/commit-worker-config/commit-stage-timing-threshold/commit-inflight-timeout/post-commit-pacemaker-kick/idle-view-proposal-budget/pacemaker-core/pacemaker-evaluation/pacing-governor/cached-slot-timeout/pending-fast-path-timeout/stalled-pending-timeout/stalled-pending-frontier-timeout/missing-qc-timing/idle-backlog-signals/proposal-liveness/frontier-slot-tracker/frontier-slot-helpers/frontier-proposal-grace/slot-tracker-state/timeout-derivation/round-view-helpers/phase-tracker/round-trace-status/failure-recovery-helpers/requeue-transactions/tick-deadline-helpers/proposal-parent-resolution/highest-qc-dependency-deferral/precommit-QC-view-change/commit-evidence-replay/block-sync-recovery/certified-fetch/missing-block-ingress-fetch/payload-progress-availability/highest-qc-fetch-body-known/local-payload-availability/block-known-locally/block-known-for-lock/missing-locked-qc-recovery/local-signed-block-lookup/authoritative-payload-progress/authoritative-block-payload/pending-block-active-for-tip/pending-fast-unblock/blocking-pending-blocks/quorum-recovery-vote-drain/frontier-body-gap-payload-drain/rbc-authoritative-payload-progress/slot-authoritative-payload/missing-block-fetch/recovery-status-counters/deferred-recovery-status/range-pull-recovery/range-pull-status/active-lock-reject-recovery/missing-block-hard-cap/missing-block-hard-cap-cleanup/missing-block-view-change/native-AMX-attestation/native-AMX-journal/native-AMX-receipt/native-AMX-ingress/vnext-chain-order/vnext-rechain/vnext-rechain-error-label/vnext-signature/vnext-signing-preimage/vnext-control-ingress/vnext-slot-lifecycle/vnext-validation/validation-worker-config/verify-cache-key/vote-verify-async/vote-verify-worker-config/qc-verify-async/qc-verify-worker-config/worker-drain/actor-gate/worker-budget/worker-ingress/worker-loop-stage/npos-vrf/kura-commit/kura-store-status/restart-replay/post-commit-cleanup/frontier-gap-realign/same-height-vote-conflict/proposal-stale-vote/same-height-vote-recovery-gap/tip-extension-helpers/da-gate/consensus-handshake-caps/handshake/mode-flip/effective-mode/effective-timing/new-view-stats/new-view-tracker/timing-monitor/hotspot-log-summary/adaptive-observability/pacing-backpressure/counter-backpressure-cooldown/locked-qc-helper/stake-snapshot/live-vote-roster/canonical-round-roster/vote-roster-selection/vote-roster-cache/commit-topology-state/precommit-signer-history/precommit/proposal/engine-initial-state/engine-read-accessors/engine-tick/engine-tick-state-preservation/engine-new-view-subject/engine-handle-dispatch/engine-handle-forwarding/engine-handle-output-relay/engine-certificate-dispatch/engine-certificate-prefilter-state/engine-certificate-prefilter-state-preservation/engine-view-advance-saturation/engine-new-view/engine-new-view-highest-qc/engine-new-view-state-preservation/engine-new-view-advance/engine-proposal/engine-proposal-output/engine-proposal-state/engine-proposal-state-preservation/engine-proposal-validation-owner/engine-proposal-lock/qc-round-compatibility/engine-QC-ref-projection/engine-QC-ref-comparator/engine-highest-QC-record/engine-commit-subject/engine-payload-lookup/engine-prepare/engine-prepare-lock-highest/engine-prepare-phase/engine-prepare-vote-cache/engine-commit/engine-commit-highest-qc/engine-commit-phase/engine-commit-state-preservation/engine-commit-available-commit/engine-commit-pending-fetch/engine-commit-validation-cleanup/engine-committed-block/engine-committed-block-record/engine-reconfiguration-staging/engine-reconfiguration-dedup/engine-committed-block-cleanup/engine-committed-block-state-preservation/engine-payload-record/engine-payload/engine-payload-state-preservation/engine-validation-result/engine-validation-state-preservation/engine-validation-ownership/engine-validation-invalid-advance/reconfiguration/recovery/view-change/validation/validation-priority/vote-backed-evidence/vote-payload-actionable/actionable-vote-backed-proposal/slot-proposal-evidence/round-liveness/frontier-live-owner-work/keep-frontier-pending-active/stale-view-pending-prune/superseded-frontier-payload-retention/stale-missing-block-request-prune/fast-finality-inline-validation/observer-signature-recovery/validation-failure-finalize/validation-reject-reason-label/validation-reject-status/peer-key-policy-status/view-change-cause-status/validation-evidence-qc/admission/highest-QC/highest-optional
   mutations.
@@ -748,12 +748,57 @@ frontier/fork/quorum/RBC/rbc-causality/rbc-deliver-acceptance/rbc-commit-process
   The Sumeragi suite also includes the missing-payload-fetch-window helper
   slice for same-height missing-QC targeted-fetch pacing and lock-lag hash-miss
   cap widening.
-  The Sumeragi suite also includes the `vrf-epoch-boundary` helper slice for
-  `EpochManager` boundary finalization, seed evolution, transient reset, and
-  take-once report accessors.
-  The Sumeragi suite also includes the `vrf-epoch-restore` helper slice for
-  `EpochManager` record restore, current snapshot, and observation-merge state
-  preservation.
+  The `vrf-epoch-boundary` family covers no-op boundaries, penalty calculation,
+  snapshot preservation, seed evolution, clear/advance/reset/take semantics,
+  roster canonicalization, and entropy ordering. Its TLC cross-check
+  independently exhausts the same twenty-three expected-failure configs as
+  Apalache.
+  The `vrf-epoch-restore` family covers unfinalized and finalized record
+  hydration, parameter clamps, snapshot roster and input preservation, report
+  clearing, merge conflict handling, late-reveal hydration, and identity
+  preservation. Its TLC cross-check independently exhausts the same twenty-two
+  expected-failure configs as Apalache.
+  The `vrf-material-derivation` family covers required message inputs,
+  big-endian epoch and signer encoding, field order, private-key signature
+  binding, reveal/commitment hash chain, return ordering, and suppression of raw
+  intermediate outputs. Its TLC cross-check independently exhausts the same
+  seventeen expected-failure configs as Apalache.
+  The `vrf-local-state` family covers supported-mode state creation,
+  unsupported-mode preservation, epoch-switch material reset, same-epoch material
+  preservation, commit/reveal note mutation, and actor reset. Its TLC cross-check
+  independently exhausts the same twelve expected-failure configs as Apalache.
+  The `vrf-penalties-report` family covers initial emptiness, update
+  keying/latest-epoch tracking, exact report fields, same-epoch replacement,
+  multi-epoch preservation, missing-get behavior, clear/reset semantics,
+  post-clear updates, and read side-effect freedom. Its TLC cross-check
+  independently exhausts the same seventeen expected-failure configs as
+  Apalache.
+  The `vote-admission` family covers early height/view, lock, roster, duplicate,
+  chain-order, and signature gates; NEW_VIEW highest-QC validation;
+  conflict/defer/evidence handling; QC attempts; roster caching; new-view
+  tracking; pipeline requests; and progress touches. Its TLC cross-check
+  independently exhausts the same thirty-one expected-failure configs as
+  Apalache.
+  The `vote-duplicate-key` family covers raw key fields, public-key exclusion
+  from raw keys, identity-key public-key binding, block-hash comparison, NEW_VIEW
+  highest-QC matching, and non-NEW_VIEW highest-QC ignoring. Its TLC cross-check
+  independently exhausts the same fifteen expected-failure configs as Apalache.
+  The `evidence-horizon` family covers zero-horizon disablement,
+  missing-subject defaulting, saturating lower-bound arithmetic, inclusive
+  boundary handling, stale rejection, and future evidence admission. Its TLC
+  cross-check independently exhausts the same eleven expected-failure configs as
+  Apalache.
+  The `evidence-canonicalization` family covers canonical keys, subject
+  height/view extraction, block references, valid/invalid store insertion,
+  canonical storage keys, persistence defaults, duplicate rejection, and unset
+  penalty flags. Its TLC cross-check independently exhausts the same
+  thirty-seven expected-failure configs as Apalache.
+  The `evidence-validation` family covers kind/payload matching, double-vote
+  signature, phase, height, epoch, signer, block/root conflict, and precedence
+  checks, invalid proposal height, parent, and view-reset handling, and
+  censorship receipt transaction, signer, signature, quorum, deduplication, and
+  precedence checks. Its TLC cross-check independently exhausts the same
+  thirty-nine expected-failure configs as Apalache.
   The Sumeragi suite also includes the p2p-topology-refresh helper slice for
   empty, unchanged, changed, and stray refresh decisions, the local-seen latch,
   local-removal queue clearing, empty gossip updates, and trusted-peer network
@@ -774,29 +819,54 @@ frontier/fork/quorum/RBC/rbc-causality/rbc-deliver-acceptance/rbc-commit-process
   mapping, and stale-prune preservation for local payloads owned by the
   authoritative or frontier slot. Its TLC cross-check independently exhausts the
   same twenty-five expected-failure configs as Apalache.
-  The Sumeragi suite also includes the missing-qc-height-stall helper slice
-  for same-height stall lifecycle, three-window activation, dependency
-  continuity, rotation reservation, availability, and range-pull/rotation
-  marker updates.
-  The Sumeragi suite also includes the missing-qc-stall-range-pull helper
-  slice for same-height stall reason admission, exact active/canonical height
-  matching, recovery-FSM suppression, deterministic cohort fanout, cooldown
-  deduplication, and successful window marking.
-  The Sumeragi suite also includes the canonical-frontier-reanchor helper
-  slice for canonical reanchor reason admission, shared-window key collapse,
-  window snapshots, progress-watermark checks, stride suppression,
-  deterministic range-pull fanout, and quorum view-change suppression.
-  The Sumeragi suite also includes the frontier-repair-view-change helper
-  slice for quorum/stake-quorum cause admission, committed+1 gating,
-  committed-edge/passive catch-up precedence, direct-view and authoritative
-  exits, repair-source admission, and seed/fetch side effects.
-  The Sumeragi suite also includes the frontier-recovery-advance helper slice
-  for contiguous-frontier recovery state-machine transitions, exact-frontier
-  event routing, live-work suppression, catch-up cleanup, and rotate-armed view
-  changes.
-  The Sumeragi suite also includes the same-height-no-proposal-storm helper
-  slice for dependency-progress resets, storm counter recording, bounded
-  force-break admission, and active-pending idle integration.
+  The `missing-qc-height-stall` family covers same-height stall lifecycle,
+  three-window activation, active window advancement, dependency-progress and
+  commit-progress reset, dependency continuity across reclassification, rotation
+  reservation and availability, and range-pull/rotation marker height and mode
+  gating. Its TLC cross-check independently exhausts the same twenty-five
+  expected-failure configs as Apalache.
+  The `missing-qc-stall-range-pull` family covers same-height stall reanchor
+  reason admission, exact active/canonical height gating, already-emitted and
+  recovery-FSM suppression, empty-target suppression, deterministic cohort
+  fanout, sorted/deduplicated cooldown handling, stall-window cooldown
+  application, and successful-send marking. Its TLC cross-check independently
+  exhausts the same twenty-three expected-failure configs as Apalache.
+  The `canonical-frontier-reanchor` family covers canonical reanchor reason
+  admission, shared frontier-window key collapse, window snapshot and
+  dependency-progress watermarks, stride-based suppression, deterministic
+  range-pull fanout and cooldown handling, successful-send marking, and quorum
+  view-change suppression while reanchor work remains unresolved. Its TLC
+  cross-check independently exhausts the same thirty-five expected-failure
+  configs as Apalache.
+  The `frontier-repair-view-change` family covers quorum/stake-quorum cause
+  admission, committed+1 height gating, committed-edge and passive catch-up
+  precedence, direct-view and authoritative-payload exits,
+  exact-repair/missing-payload/reassembly repair-source admission, recovery
+  seeding, urgent body fetch emission, and precedence ordering. Its TLC
+  cross-check independently exhausts the same twenty-six expected-failure
+  configs as Apalache.
+  The `frontier-recovery-advance` family covers reason-to-cause mapping,
+  committed+1 gating, committed-edge and passive catch-up preemption,
+  same-height evidence seeding, exact-frontier event routing, actionable
+  dependency state updates, live-work/cooldown suppression, catch-up range-pull
+  and cleanup transitions, and rotate-armed view-change behavior. Its TLC
+  cross-check independently exhausts the same thirty-six expected-failure
+  configs as Apalache.
+  The `same-height-no-proposal-storm` family covers dependency-progress
+  monotonicity, progress-triggered state resets, timeout record/count behavior,
+  bounded force-break admission and cleanup, and active-pending idle timeout
+  integration. Its TLC cross-check independently exhausts the same thirty-six
+  expected-failure configs as Apalache.
+  The `vrf-admission` family covers consensus-mode and epoch-manager gating,
+  signer/signature checks, commit/reveal window and duplicate handling, external
+  rebroadcast policy, local state updates, and late-reveal PRF refresh
+  suppression. Its TLC cross-check independently exhausts the same twenty-one
+  expected-failure configs as Apalache.
+  The `vrf-epoch-window` family covers zero-length and offset clamping,
+  zero-height/one-based position and epoch mapping, commit/reveal window
+  boundaries, empty reveal windows, and outside-window rejection. Its TLC
+  cross-check independently exhausts the same seventeen expected-failure configs
+  as Apalache.
   The `missing-qc-reacquire-action` family covers prior-attempt classification,
   exact attempt recording, no-signal throttle marking, dependency-signal
   throttle bypass, suppression checks and side effects, sidecar request success,

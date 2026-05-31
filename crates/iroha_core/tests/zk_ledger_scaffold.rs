@@ -10,7 +10,10 @@ use iroha_core::{
     query::store::LiveQueryStore,
     smartcontracts::Execute,
     state::{State, World, WorldReadOnly},
-    zk::test_utils::halo2_fixture_envelope,
+    zk::{
+        confidential_v2,
+        test_utils::{FixtureEnvelope, halo2_asset_hidden_transfer_fixture_envelope},
+    },
 };
 use iroha_crypto::Hash;
 use iroha_data_model::{
@@ -32,7 +35,8 @@ use nonzero_ext::nonzero;
 
 const ASSET_HIDDEN_POOL_ID: &str = "boi-private-is-pool";
 const ASSET_HIDDEN_BACKEND: &str = "halo2/ipa";
-const ASSET_HIDDEN_TEST_CIRCUIT: &str = "halo2/ipa:tiny-add";
+const ASSET_HIDDEN_TEST_CIRCUIT: &str = "halo2/ipa:asset-hidden-transfer-public-test";
+const ASSET_HIDDEN_CHAIN_ID: &str = "00000000-0000-0000-0000-000000000000";
 
 fn derive_test_nullifier(
     nk: &[u8; 32],
@@ -43,16 +47,97 @@ fn derive_test_nullifier(
     confidential::derive_nullifier(nk, rho, asset_id.as_bytes(), chain_id.as_bytes())
 }
 
-fn asset_hidden_test_fixture() -> iroha_core::zk::test_utils::FixtureEnvelope {
-    let seed = halo2_fixture_envelope(ASSET_HIDDEN_TEST_CIRCUIT, [0u8; 32]);
+fn scalar_word(value: u64) -> [u8; 32] {
+    let mut bytes = [0u8; 32];
+    bytes[..8].copy_from_slice(&value.to_le_bytes());
+    bytes
+}
+
+fn asset_hidden_asset_set_root() -> [u8; 32] {
+    scalar_word(0xA0)
+}
+
+fn asset_hidden_input_nullifier() -> [u8; 32] {
+    scalar_word(0xA1)
+}
+
+fn asset_hidden_second_input_nullifier() -> [u8; 32] {
+    scalar_word(0xA2)
+}
+
+fn asset_hidden_output_commitment() -> [u8; 32] {
+    scalar_word(0xB2)
+}
+
+fn asset_hidden_second_output_commitment() -> [u8; 32] {
+    scalar_word(0xB3)
+}
+
+fn asset_hidden_unknown_root() -> [u8; 32] {
+    scalar_word(0xE5)
+}
+
+fn asset_hidden_public_inputs(
+    pool_id: &str,
+    asset_set_root: [u8; 32],
+    inputs: &[[u8; 32]],
+    outputs: &[[u8; 32]],
+    root_hint: [u8; 32],
+    chain_id: &str,
+) -> [[u8; 32]; 10] {
+    let zero = [0u8; 32];
+    [
+        confidential_v2::derive_asset_hidden_pool_id_tag_v1(pool_id),
+        asset_set_root,
+        zero,
+        zero,
+        inputs.first().copied().unwrap_or(zero),
+        inputs.get(1).copied().unwrap_or(zero),
+        outputs.first().copied().unwrap_or(zero),
+        outputs.get(1).copied().unwrap_or(zero),
+        root_hint,
+        confidential_v2::derive_confidential_chain_tag_v2(chain_id),
+    ]
+}
+
+fn default_asset_hidden_public_inputs() -> [[u8; 32]; 10] {
+    asset_hidden_public_inputs(
+        ASSET_HIDDEN_POOL_ID,
+        asset_hidden_asset_set_root(),
+        &[asset_hidden_input_nullifier()],
+        &[asset_hidden_output_commitment()],
+        [0u8; 32],
+        ASSET_HIDDEN_CHAIN_ID,
+    )
+}
+
+fn asset_hidden_test_fixture_for(public_inputs: [[u8; 32]; 10]) -> FixtureEnvelope {
+    let seed = halo2_asset_hidden_transfer_fixture_envelope(
+        ASSET_HIDDEN_TEST_CIRCUIT,
+        [0u8; 32],
+        public_inputs,
+    );
     let vk_hash = seed
         .vk_hash(ASSET_HIDDEN_BACKEND)
         .expect("test fixture verifying key hash");
-    halo2_fixture_envelope(ASSET_HIDDEN_TEST_CIRCUIT, vk_hash)
+    halo2_asset_hidden_transfer_fixture_envelope(ASSET_HIDDEN_TEST_CIRCUIT, vk_hash, public_inputs)
+}
+
+fn asset_hidden_test_fixture() -> FixtureEnvelope {
+    asset_hidden_test_fixture_for(default_asset_hidden_public_inputs())
 }
 
 fn native_ipa_attachment() -> iroha_data_model::proof::ProofAttachment {
     let fixture = asset_hidden_test_fixture();
+    let proof = fixture.proof_box(ASSET_HIDDEN_BACKEND);
+    let vk_ref = VerifyingKeyId::new(ASSET_HIDDEN_BACKEND, "native_ipa_vk");
+    iroha_data_model::proof::ProofAttachment::new_ref(ASSET_HIDDEN_BACKEND.into(), proof, vk_ref)
+}
+
+fn native_ipa_attachment_for_public_inputs(
+    public_inputs: [[u8; 32]; 10],
+) -> iroha_data_model::proof::ProofAttachment {
+    let fixture = asset_hidden_test_fixture_for(public_inputs);
     let proof = fixture.proof_box(ASSET_HIDDEN_BACKEND);
     let vk_ref = VerifyingKeyId::new(ASSET_HIDDEN_BACKEND, "native_ipa_vk");
     iroha_data_model::proof::ProofAttachment::new_ref(ASSET_HIDDEN_BACKEND.into(), proof, vk_ref)
@@ -161,7 +246,7 @@ fn registered_asset_hidden_pool() -> (State, AccountId, AssetDefinitionId, [u8; 
             iroha_data_model::isi::zk::RegisterAssetHiddenZkPool::new(
                 ASSET_HIDDEN_POOL_ID.to_owned(),
                 asset_def_id.clone(),
-                [0xA0; 32],
+                asset_hidden_asset_set_root(),
                 vk_id,
             )
             .into(),
@@ -221,8 +306,8 @@ fn asset_hidden_transfer(
 ) -> iroha_data_model::isi::zk::AssetHiddenZkTransfer {
     iroha_data_model::isi::zk::AssetHiddenZkTransfer::new(
         pool_id.into(),
-        vec![[0xA1; 32]],
-        vec![[0xB2; 32]],
+        vec![asset_hidden_input_nullifier()],
+        vec![asset_hidden_output_commitment()],
         proof,
         root_hint,
     )
@@ -251,7 +336,7 @@ fn asset_hidden_transfer_is_fail_closed_until_pool_verifier_registered() {
     let err = execute_asset_hidden_for_test(asset_hidden_transfer(
         "boi-private-is-pool",
         native_ipa_attachment(),
-        Some([0xC3; 32]),
+        Some(scalar_word(0xC3)),
     ))
     .expect_err("asset-hidden transfer must fail until pool verifier state exists");
     assert_instruction_error_contains(err, "pool is not registered");
@@ -262,7 +347,7 @@ fn asset_hidden_transfer_rejects_blank_pool_id_before_proof_work() {
     let err = execute_asset_hidden_for_test(asset_hidden_transfer(
         "   ",
         native_ipa_attachment(),
-        Some([0xC3; 32]),
+        Some(scalar_word(0xC3)),
     ))
     .expect_err("blank pool id must be rejected");
     assert_instruction_error_contains(err, "pool_id must be non-empty");
@@ -284,9 +369,9 @@ fn asset_hidden_transfer_requires_input_nullifiers() {
     let err = execute_asset_hidden_for_test(iroha_data_model::isi::zk::AssetHiddenZkTransfer::new(
         "boi-private-is-pool".to_owned(),
         Vec::new(),
-        vec![[0xB2; 32]],
+        vec![asset_hidden_output_commitment()],
         native_ipa_attachment(),
-        Some([0xC3; 32]),
+        Some(scalar_word(0xC3)),
     ))
     .expect_err("asset-hidden transfer without input nullifiers must fail");
     assert_instruction_error_contains(err, "requires at least one input nullifier");
@@ -296,10 +381,10 @@ fn asset_hidden_transfer_requires_input_nullifiers() {
 fn asset_hidden_transfer_requires_output_commitments() {
     let err = execute_asset_hidden_for_test(iroha_data_model::isi::zk::AssetHiddenZkTransfer::new(
         "boi-private-is-pool".to_owned(),
-        vec![[0xA1; 32]],
+        vec![asset_hidden_input_nullifier()],
         Vec::new(),
         native_ipa_attachment(),
-        Some([0xC3; 32]),
+        Some(scalar_word(0xC3)),
     ))
     .expect_err("asset-hidden transfer without output commitments must fail");
     assert_instruction_error_contains(err, "requires at least one output commitment");
@@ -312,7 +397,7 @@ fn asset_hidden_transfer_rejects_proof_backend_mismatch() {
     let err = execute_asset_hidden_for_test(asset_hidden_transfer(
         "boi-private-is-pool",
         attachment,
-        Some([0xC3; 32]),
+        Some(scalar_word(0xC3)),
     ))
     .expect_err("proof backend mismatch must fail before verifier lookup");
     assert_instruction_error_contains(err, "proof backend mismatch");
@@ -350,7 +435,7 @@ fn register_asset_hidden_pool_rejects_blank_pool_id() {
             iroha_data_model::isi::zk::RegisterAssetHiddenZkPool::new(
                 "   ".to_owned(),
                 asset_def_id,
-                [0xA0; 32],
+                asset_hidden_asset_set_root(),
                 vk_id,
             )
             .into(),
@@ -400,7 +485,7 @@ fn register_asset_hidden_pool_rejects_missing_verifier() {
             iroha_data_model::isi::zk::RegisterAssetHiddenZkPool::new(
                 ASSET_HIDDEN_POOL_ID.to_owned(),
                 asset_def_id,
-                [0xA0; 32],
+                asset_hidden_asset_set_root(),
                 VerifyingKeyId::new(ASSET_HIDDEN_BACKEND, "does-not-exist"),
             )
             .into(),
@@ -429,8 +514,12 @@ fn asset_hidden_transfer_executes_against_registered_pool_and_updates_state() {
         zk_state.asset_hidden_pool_id.as_deref(),
         Some(ASSET_HIDDEN_POOL_ID)
     );
-    assert!(zk_state.nullifiers.contains(&[0xA1; 32]));
-    assert_eq!(zk_state.commitments, vec![[0xB2; 32]]);
+    assert!(
+        zk_state
+            .nullifiers
+            .contains(&asset_hidden_input_nullifier())
+    );
+    assert_eq!(zk_state.commitments, vec![asset_hidden_output_commitment()]);
     assert_ne!(
         zk_state.root_history.last().copied().unwrap_or([0u8; 32]),
         [0u8; 32]
@@ -446,7 +535,7 @@ fn asset_hidden_transfer_rejects_stale_pool_root() {
         asset_hidden_transfer(
             ASSET_HIDDEN_POOL_ID,
             native_ipa_attachment(),
-            Some([0xE5; 32]),
+            Some(asset_hidden_unknown_root()),
         ),
         3,
     )
@@ -462,8 +551,11 @@ fn asset_hidden_transfer_rejects_duplicate_nullifier_within_tx() {
         &owner,
         iroha_data_model::isi::zk::AssetHiddenZkTransfer::new(
             ASSET_HIDDEN_POOL_ID.to_owned(),
-            vec![[0xA1; 32], [0xA1; 32]],
-            vec![[0xB2; 32]],
+            vec![
+                asset_hidden_input_nullifier(),
+                asset_hidden_input_nullifier(),
+            ],
+            vec![asset_hidden_output_commitment()],
             native_ipa_attachment(),
             Some(root_hint),
         ),
@@ -481,7 +573,7 @@ fn asset_hidden_transfer_rejects_zero_output_commitment() {
         &owner,
         iroha_data_model::isi::zk::AssetHiddenZkTransfer::new(
             ASSET_HIDDEN_POOL_ID.to_owned(),
-            vec![[0xA1; 32]],
+            vec![asset_hidden_input_nullifier()],
             vec![[0u8; 32]],
             native_ipa_attachment(),
             Some(root_hint),
@@ -490,6 +582,182 @@ fn asset_hidden_transfer_rejects_zero_output_commitment() {
     )
     .expect_err("zero output commitments must fail");
     assert_instruction_error_contains(err, "output commitment must be nonzero");
+}
+
+#[test]
+fn asset_hidden_transfer_counts_nullifiers_against_configured_cap() {
+    let (mut state, owner, _asset_def_id, root_hint) = registered_asset_hidden_pool();
+    let mut zk = state.zk.clone();
+    zk.max_nullifiers_per_tx = 1;
+    state.set_zk(zk);
+    let err = execute_asset_hidden_on_state(
+        &state,
+        &owner,
+        iroha_data_model::isi::zk::AssetHiddenZkTransfer::new(
+            ASSET_HIDDEN_POOL_ID.to_owned(),
+            vec![
+                asset_hidden_input_nullifier(),
+                asset_hidden_second_input_nullifier(),
+            ],
+            vec![asset_hidden_output_commitment()],
+            native_ipa_attachment(),
+            Some(root_hint),
+        ),
+        3,
+    )
+    .expect_err("asset-hidden nullifiers must count against per-tx caps");
+    assert_instruction_error_contains(err, "nullifiers per transaction cap exceeded");
+}
+
+#[test]
+fn asset_hidden_transfer_counts_commitments_against_configured_cap() {
+    let (mut state, owner, _asset_def_id, root_hint) = registered_asset_hidden_pool();
+    let mut zk = state.zk.clone();
+    zk.max_commitments_per_tx = 1;
+    state.set_zk(zk);
+    let err = execute_asset_hidden_on_state(
+        &state,
+        &owner,
+        iroha_data_model::isi::zk::AssetHiddenZkTransfer::new(
+            ASSET_HIDDEN_POOL_ID.to_owned(),
+            vec![asset_hidden_input_nullifier()],
+            vec![
+                asset_hidden_output_commitment(),
+                asset_hidden_second_output_commitment(),
+            ],
+            native_ipa_attachment(),
+            Some(root_hint),
+        ),
+        3,
+    )
+    .expect_err("asset-hidden commitments must count against per-tx caps");
+    assert_instruction_error_contains(err, "commitments per transaction cap exceeded");
+}
+
+#[test]
+fn asset_hidden_transfer_rejects_proof_bound_to_different_pool_id() {
+    let (state, owner, _asset_def_id, root_hint) = registered_asset_hidden_pool();
+    let attachment = native_ipa_attachment_for_public_inputs(asset_hidden_public_inputs(
+        "different-private-pool",
+        asset_hidden_asset_set_root(),
+        &[asset_hidden_input_nullifier()],
+        &[asset_hidden_output_commitment()],
+        root_hint,
+        ASSET_HIDDEN_CHAIN_ID,
+    ));
+    let err = execute_asset_hidden_on_state(
+        &state,
+        &owner,
+        asset_hidden_transfer(ASSET_HIDDEN_POOL_ID, attachment, Some(root_hint)),
+        3,
+    )
+    .expect_err("proofs for another asset-hidden pool must fail");
+    assert_instruction_error_contains(err, "pool_id mismatch");
+}
+
+#[test]
+fn asset_hidden_transfer_rejects_proof_bound_to_different_asset_set_root() {
+    let (state, owner, _asset_def_id, root_hint) = registered_asset_hidden_pool();
+    let attachment = native_ipa_attachment_for_public_inputs(asset_hidden_public_inputs(
+        ASSET_HIDDEN_POOL_ID,
+        scalar_word(0xA9),
+        &[asset_hidden_input_nullifier()],
+        &[asset_hidden_output_commitment()],
+        root_hint,
+        ASSET_HIDDEN_CHAIN_ID,
+    ));
+    let err = execute_asset_hidden_on_state(
+        &state,
+        &owner,
+        asset_hidden_transfer(ASSET_HIDDEN_POOL_ID, attachment, Some(root_hint)),
+        3,
+    )
+    .expect_err("proofs for another asset set must fail");
+    assert_instruction_error_contains(err, "asset_set_root mismatch");
+}
+
+#[test]
+fn asset_hidden_transfer_rejects_proof_bound_to_different_nullifier() {
+    let (state, owner, _asset_def_id, root_hint) = registered_asset_hidden_pool();
+    let attachment = native_ipa_attachment_for_public_inputs(asset_hidden_public_inputs(
+        ASSET_HIDDEN_POOL_ID,
+        asset_hidden_asset_set_root(),
+        &[asset_hidden_second_input_nullifier()],
+        &[asset_hidden_output_commitment()],
+        root_hint,
+        ASSET_HIDDEN_CHAIN_ID,
+    ));
+    let err = execute_asset_hidden_on_state(
+        &state,
+        &owner,
+        asset_hidden_transfer(ASSET_HIDDEN_POOL_ID, attachment, Some(root_hint)),
+        3,
+    )
+    .expect_err("proofs for another nullifier must fail");
+    assert_instruction_error_contains(err, "nullifier mismatch");
+}
+
+#[test]
+fn asset_hidden_transfer_rejects_proof_bound_to_different_output() {
+    let (state, owner, _asset_def_id, root_hint) = registered_asset_hidden_pool();
+    let attachment = native_ipa_attachment_for_public_inputs(asset_hidden_public_inputs(
+        ASSET_HIDDEN_POOL_ID,
+        asset_hidden_asset_set_root(),
+        &[asset_hidden_input_nullifier()],
+        &[asset_hidden_second_output_commitment()],
+        root_hint,
+        ASSET_HIDDEN_CHAIN_ID,
+    ));
+    let err = execute_asset_hidden_on_state(
+        &state,
+        &owner,
+        asset_hidden_transfer(ASSET_HIDDEN_POOL_ID, attachment, Some(root_hint)),
+        3,
+    )
+    .expect_err("proofs for another output commitment must fail");
+    assert_instruction_error_contains(err, "output commitment mismatch");
+}
+
+#[test]
+fn asset_hidden_transfer_rejects_proof_bound_to_different_root() {
+    let (state, owner, _asset_def_id, root_hint) = registered_asset_hidden_pool();
+    let attachment = native_ipa_attachment_for_public_inputs(asset_hidden_public_inputs(
+        ASSET_HIDDEN_POOL_ID,
+        asset_hidden_asset_set_root(),
+        &[asset_hidden_input_nullifier()],
+        &[asset_hidden_output_commitment()],
+        asset_hidden_unknown_root(),
+        ASSET_HIDDEN_CHAIN_ID,
+    ));
+    let err = execute_asset_hidden_on_state(
+        &state,
+        &owner,
+        asset_hidden_transfer(ASSET_HIDDEN_POOL_ID, attachment, Some(root_hint)),
+        3,
+    )
+    .expect_err("proofs for another pool root must fail");
+    assert_instruction_error_contains(err, "root_hint mismatch");
+}
+
+#[test]
+fn asset_hidden_transfer_rejects_proof_bound_to_different_chain() {
+    let (state, owner, _asset_def_id, root_hint) = registered_asset_hidden_pool();
+    let attachment = native_ipa_attachment_for_public_inputs(asset_hidden_public_inputs(
+        ASSET_HIDDEN_POOL_ID,
+        asset_hidden_asset_set_root(),
+        &[asset_hidden_input_nullifier()],
+        &[asset_hidden_output_commitment()],
+        root_hint,
+        "other-chain",
+    ));
+    let err = execute_asset_hidden_on_state(
+        &state,
+        &owner,
+        asset_hidden_transfer(ASSET_HIDDEN_POOL_ID, attachment, Some(root_hint)),
+        3,
+    )
+    .expect_err("proofs for another chain must fail");
+    assert_instruction_error_contains(err, "chain tag mismatch");
 }
 
 #[test]
@@ -568,7 +836,7 @@ fn asset_hidden_transfer_rejects_invalid_proof_without_state_update() {
         3,
     )
     .expect_err("invalid proofs must fail");
-    assert_instruction_error_contains(err, "invalid asset-hidden transfer proof");
+    assert_instruction_error_contains(err, "proof must use OpenVerifyEnvelope payload");
     let after_commitments = {
         let view = state.view();
         view.world

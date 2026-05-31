@@ -52,6 +52,7 @@ pub const CONFIDENTIAL_TREE_CAPACITY_V2: usize = 1 << CONFIDENTIAL_TREE_DEPTH_V2
 pub const CONFIDENTIAL_TRANSFER_V2_PUBLIC_INPUTS_SCHEMA_V1: &[u8] = br#"{"schema":"confidential_transfer_v2","public_inputs":["input_commitment_0","input_commitment_1","nullifier_0","nullifier_1","output_commitment_0","output_commitment_1","root","asset_tag","chain_tag"]}"#;
 pub const CONFIDENTIAL_UNSHIELD_V2_PUBLIC_INPUTS_SCHEMA_V1: &[u8] = br#"{"schema":"confidential_unshield_v2","public_inputs":["input_commitment_0","input_commitment_1","nullifier_0","nullifier_1","root","public_amount","asset_tag","chain_tag"]}"#;
 pub const CONFIDENTIAL_UNSHIELD_V3_PUBLIC_INPUTS_SCHEMA_V1: &[u8] = br#"{"schema":"confidential_unshield_v3","public_inputs":["input_commitment_0","input_commitment_1","nullifier_0","nullifier_1","change_commitment_0","root","public_amount","asset_tag","chain_tag"]}"#;
+pub const ASSET_HIDDEN_TRANSFER_V1_PUBLIC_INPUTS_SCHEMA_V1: &[u8] = br#"{"schema":"asset_hidden_transfer_v1","public_inputs":["pool_id","asset_set_root","input_commitment_0","input_commitment_1","nullifier_0","nullifier_1","output_commitment_0","output_commitment_1","root","chain_tag"]}"#;
 pub const CONFIDENTIAL_V2_MAX_PROOF_BYTES: u32 = 192 * 1024;
 
 #[derive(Debug, Clone)]
@@ -452,6 +453,38 @@ pub fn parse_unshield_public_inputs_v3(
     ))
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct AssetHiddenTransferPublicInputsV1 {
+    pub pool_id_tag: [u8; 32],
+    pub asset_set_root: [u8; 32],
+    pub input_commitments: [[u8; 32]; 2],
+    pub nullifiers: [[u8; 32]; 2],
+    pub outputs: [[u8; 32]; 2],
+    pub root: [u8; 32],
+    pub chain_tag: [u8; 32],
+}
+
+pub fn parse_asset_hidden_transfer_public_inputs(
+    proof_bytes: &[u8],
+) -> Result<AssetHiddenTransferPublicInputsV1, String> {
+    let columns = extract_confidential_public_columns(proof_bytes)
+        .ok_or_else(|| "failed to decode asset-hidden transfer proof public inputs".to_owned())?;
+    if columns.len() < 10 || columns.iter().take(10).any(|column| column.len() != 1) {
+        return Err(
+            "asset-hidden transfer proof must expose 10 single-row instance columns".to_owned(),
+        );
+    }
+    Ok(AssetHiddenTransferPublicInputsV1 {
+        pool_id_tag: columns[0][0],
+        asset_set_root: columns[1][0],
+        input_commitments: [columns[2][0], columns[3][0]],
+        nullifiers: [columns[4][0], columns[5][0]],
+        outputs: [columns[6][0], columns[7][0]],
+        root: columns[8][0],
+        chain_tag: columns[9][0],
+    })
+}
+
 fn extract_confidential_public_columns(proof_bytes: &[u8]) -> Option<Vec<Vec<[u8; 32]>>> {
     if let Ok(envelope) = norito::decode_from_bytes::<OpenVerifyEnvelope>(proof_bytes) {
         return match envelope.backend {
@@ -595,6 +628,14 @@ pub fn derive_confidential_chain_tag_v2(chain_id: &str) -> [u8; 32] {
     scalar_to_repr_bytes(hash_to_scalar(
         b"iroha.confidential.v2.chain_tag",
         &[chain_id.trim().as_bytes()],
+    ))
+}
+
+#[cfg(any(feature = "zk-halo2", feature = "zk-halo2-ipa"))]
+pub fn derive_asset_hidden_pool_id_tag_v1(pool_id: &str) -> [u8; 32] {
+    scalar_to_repr_bytes(hash_to_scalar(
+        b"iroha.confidential.asset_hidden.v1.pool_id",
+        &[pool_id.trim().as_bytes()],
     ))
 }
 

@@ -276,11 +276,14 @@ Init ==
   checked = 0
 
 Next ==
-  UNCHANGED vars
+  \/ /\ checked < 23
+     /\ checked' = checked + 1
+  \/ /\ checked = 23
+     /\ UNCHANGED vars
 
 TypeInvariant ==
   /\ Bug \in Bugs
-  /\ checked = 0
+  /\ checked \in 0..23
   /\ \A c \in Cases:
        /\ SpecActions(c) \subseteq ActionUniverse
        /\ ImplementationActions(c) \subseteq ActionUniverse
@@ -335,5 +338,63 @@ SafetyFast ==
   /\ SuppressionSafety
   /\ CohortSafety
   /\ CooldownAndMarkSafety
+
+ActionComparisonAnchors ==
+  ActionsMatchSpec
+
+ReasonClassifierAnchors ==
+  /\ ReasonClassifierSafety
+  /\ ReasonAccepted \in ImplementationActions(IdleReason)
+  /\ ReasonAccepted \in ImplementationActions(QcFastReason)
+  /\ ReasonAccepted \in ImplementationActions(FutureReason)
+  /\ ReasonAccepted \in ImplementationActions(LockLagReason)
+  /\ ReasonAccepted \in ImplementationActions(HardCapReason)
+  /\ ReasonAccepted \in ImplementationActions(CommitConflictReason)
+  /\ ReasonIgnored \in ImplementationActions(FrontierGapReason)
+
+ExactStallGateAnchors ==
+  /\ ExactStallGateSafety
+  /\ NoStallMode \in ImplementationActions(InactiveStall)
+  /\ NoStallMode \in ImplementationActions(CanonicalHeightMismatch)
+  /\ NoStallMode \in ImplementationActions(ActiveRoundMismatch)
+  /\ StallMode \in ImplementationActions(Window0Cohort)
+
+SuppressionAnchors ==
+  /\ SuppressionSafety
+  /\ Suppress \in ImplementationActions(AlreadyEmittedWindow)
+  /\ AlreadyEmittedChecked \in ImplementationActions(AlreadyEmittedWindow)
+  /\ Suppress \in ImplementationActions(RecoveryFsmBlocks)
+  /\ RecoveryFsmChecked \in ImplementationActions(RecoveryFsmBlocks)
+  /\ Suppress \in ImplementationActions(EmptyTargets)
+  /\ TargetsEmpty \in ImplementationActions(EmptyTargets)
+
+CohortAnchors ==
+  /\ CohortSafety
+  /\ Cohort12 \in ImplementationActions(Window0Cohort)
+  /\ Cohort23 \in ImplementationActions(Window1Cohort)
+  /\ AllPeers \in ImplementationActions(Window2AllPeers)
+  /\ AllPeers \in ImplementationActions(SmallPeerAllPeers)
+  /\ SortedDeduped \in ImplementationActions(DuplicateTargetsDeduped)
+
+CooldownAndMarkAnchors ==
+  /\ CooldownAndMarkSafety
+  /\ Suppress \in ImplementationActions(CooldownDuplicate)
+  /\ DedupBlocked \in ImplementationActions(CooldownDuplicate)
+  /\ Send \in ImplementationActions(CooldownBoundary)
+  /\ StallCooldownApplied \in ImplementationActions(StallCooldown)
+  /\ MarkWindow \in ImplementationActions(SuccessfulMarksWindow)
+  /\ NoMark \in ImplementationActions(CooldownDuplicate)
+  /\ NoMark \in ImplementationActions(InactiveStall)
+
+MissingQcStallRangePullSafetyAnchors ==
+  /\ ActionComparisonAnchors
+  /\ ReasonClassifierAnchors
+  /\ ExactStallGateAnchors
+  /\ SuppressionAnchors
+  /\ CohortAnchors
+  /\ CooldownAndMarkAnchors
+
+Safety ==
+  MissingQcStallRangePullSafetyAnchors
 
 ====

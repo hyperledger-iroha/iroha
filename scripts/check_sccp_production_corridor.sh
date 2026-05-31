@@ -43,7 +43,8 @@ Environment:
   NORITO_SKIP_BINDINGS_SYNC    Defaults to 1 for focused Rust validation.
   JAVA_HOME                    JDK 21 for Gradle phases. Falls back to
                                target/java/jdk-21/Contents/Home, then
-                               /usr/libexec/java_home -v 21 on macOS.
+                               /usr/libexec/java_home -v 21 on macOS, then
+                               Homebrew openjdk@21 installations.
   ANDROID_HOME                 Android SDK for the Java Android phase.
                                Defaults to ~/Library/Android/sdk when present.
   ANDROID_SDK_ROOT             Defaults to ANDROID_HOME when unset.
@@ -205,11 +206,29 @@ resolve_java_home() {
   fi
 
   if command -v /usr/libexec/java_home >/dev/null 2>&1; then
-    /usr/libexec/java_home -v 21
-    return 0
+    local macos_java_home
+    if macos_java_home="$(/usr/libexec/java_home -v 21 2>/dev/null)" \
+      && [[ -x "$macos_java_home/bin/java" ]]; then
+      printf '%s\n' "$macos_java_home"
+      return 0
+    fi
   fi
 
-  echo "JDK 21 not found. Set JAVA_HOME or install the repo-local target/java/jdk-21 bundle." >&2
+  local homebrew_candidates=(
+    /opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home
+    /usr/local/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home
+    /opt/homebrew/Cellar/openjdk@21/*/libexec/openjdk.jdk/Contents/Home
+    /usr/local/Cellar/openjdk@21/*/libexec/openjdk.jdk/Contents/Home
+  )
+  local candidate
+  for candidate in "${homebrew_candidates[@]}"; do
+    if [[ -x "$candidate/bin/java" ]]; then
+      printf '%s\n' "$candidate"
+      return 0
+    fi
+  done
+
+  echo "JDK 21 not found. Set JAVA_HOME, install the repo-local target/java/jdk-21 bundle, or install Homebrew openjdk@21." >&2
   return 1
 }
 

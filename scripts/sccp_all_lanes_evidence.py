@@ -5466,6 +5466,7 @@ def _check_substrate_route_canary_finalized_runtime_evidence(
             ("source_verifier_material_hash", source_material_hash),
             ("source_adapter_engine_deployment_hash", source_deployment_hash),
             ("verifier_code_hash", verifier_code_hash),
+            ("substrate_finalized_head", finalized_head),
         ),
         label="Substrate route canary hash role",
     )
@@ -5512,6 +5513,7 @@ def _check_substrate_route_canary_finalized_runtime_evidence(
     else:
         canary["evidence_source"] = "substrate_finalized_runtime_snapshot"
         canary["substrate_finalized_head"] = _hex(finalized_head)
+        canary["substrate_runtime_code_hash"] = _hex(verifier_code_hash)
         canary["substrate_runtime_spec_version"] = spec_version
         canary["substrate_runtime_transaction_version"] = transaction_version
     return errors

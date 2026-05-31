@@ -10293,6 +10293,180 @@ class ToriiClient(_BaseToriiClient):
 
         return self.transfer_assets_numeric_and_wait(**kwargs)
 
+    def register_zk_asset_and_wait(
+        self,
+        *,
+        chain_id: str,
+        authority: str,
+        private_key: Optional[bytes] = None,
+        private_key_hex: Optional[str] = None,
+        asset_definition_id: str,
+        mode: str = "Hybrid",
+        allow_shield: bool = True,
+        allow_unshield: bool = True,
+        vk_transfer: Optional[Union[str, Mapping[str, Any]]] = None,
+        vk_unshield: Optional[Union[str, Mapping[str, Any]]] = None,
+        vk_shield: Optional[Union[str, Mapping[str, Any]]] = None,
+        transaction_metadata: Optional[Mapping[str, Any]] = None,
+        wait: bool = True,
+        timeout: Optional[float] = 30.0,
+        interval: float = 1.0,
+    ) -> Mapping[str, Any]:
+        """Register ZK policy metadata for an asset definition."""
+
+        draft = self._transaction_draft(
+            chain_id=chain_id,
+            authority=authority,
+            metadata=transaction_metadata,
+        )
+        draft.register_zk_asset(
+            asset_definition_id,
+            mode=mode,
+            allow_shield=allow_shield,
+            allow_unshield=allow_unshield,
+            vk_transfer=vk_transfer,
+            vk_unshield=vk_unshield,
+            vk_shield=vk_shield,
+        )
+        return self._submit_transaction_draft_result(
+            draft,
+            private_key=private_key,
+            private_key_hex=private_key_hex,
+            wait=wait,
+            timeout=timeout,
+            interval=interval,
+        )
+
+    def shield_asset_and_wait(
+        self,
+        *,
+        chain_id: str,
+        authority: str,
+        private_key: Optional[bytes] = None,
+        private_key_hex: Optional[str] = None,
+        asset_definition_id: str,
+        from_account_id: str,
+        amount: Union[str, int, float, Decimal],
+        note_commitment: Union[str, bytes, bytearray, memoryview],
+        ephemeral_public_key: Union[str, bytes, bytearray, memoryview],
+        nonce: Union[str, bytes, bytearray, memoryview],
+        ciphertext: Optional[Union[str, bytes, bytearray, memoryview]] = None,
+        ciphertext_b64: Optional[str] = None,
+        transaction_metadata: Optional[Mapping[str, Any]] = None,
+        wait: bool = True,
+        timeout: Optional[float] = 30.0,
+        interval: float = 1.0,
+    ) -> Mapping[str, Any]:
+        """Shield public funds into an asset's ZK ledger."""
+
+        draft = self._transaction_draft(
+            chain_id=chain_id,
+            authority=authority,
+            metadata=transaction_metadata,
+        )
+        draft.shield_asset(
+            asset_definition_id,
+            from_account_id,
+            amount,
+            note_commitment=note_commitment,
+            ephemeral_public_key=ephemeral_public_key,
+            nonce=nonce,
+            ciphertext=ciphertext,
+            ciphertext_b64=ciphertext_b64,
+        )
+        return self._submit_transaction_draft_result(
+            draft,
+            private_key=private_key,
+            private_key_hex=private_key_hex,
+            wait=wait,
+            timeout=timeout,
+            interval=interval,
+        )
+
+    def zk_transfer_prepared_and_wait(
+        self,
+        *,
+        chain_id: str,
+        authority: str,
+        private_key: Optional[bytes] = None,
+        private_key_hex: Optional[str] = None,
+        asset_definition_id: str,
+        inputs: Iterable[Union[str, bytes, bytearray, memoryview]],
+        outputs: Iterable[Union[str, bytes, bytearray, memoryview]],
+        proof: Mapping[str, Any],
+        root_hint: Optional[Union[str, bytes, bytearray, memoryview]] = None,
+        transaction_metadata: Optional[Mapping[str, Any]] = None,
+        wait: bool = True,
+        timeout: Optional[float] = 30.0,
+        interval: float = 1.0,
+    ) -> Mapping[str, Any]:
+        """Submit a prepared private-to-private ZK transfer."""
+
+        draft = self._transaction_draft(
+            chain_id=chain_id,
+            authority=authority,
+            metadata=transaction_metadata,
+        )
+        draft.zk_transfer_prepared(
+            asset_definition_id,
+            inputs=inputs,
+            outputs=outputs,
+            proof=proof,
+            root_hint=root_hint,
+        )
+        return self._submit_transaction_draft_result(
+            draft,
+            private_key=private_key,
+            private_key_hex=private_key_hex,
+            wait=wait,
+            timeout=timeout,
+            interval=interval,
+        )
+
+    def unshield_prepared_and_wait(
+        self,
+        *,
+        chain_id: str,
+        authority: str,
+        private_key: Optional[bytes] = None,
+        private_key_hex: Optional[str] = None,
+        asset_definition_id: str,
+        to_account_id: str,
+        public_amount: Union[str, int, float, Decimal],
+        inputs: Iterable[Union[str, bytes, bytearray, memoryview]],
+        proof: Mapping[str, Any],
+        outputs: Optional[Iterable[Union[str, bytes, bytearray, memoryview]]] = None,
+        root_hint: Optional[Union[str, bytes, bytearray, memoryview]] = None,
+        transaction_metadata: Optional[Mapping[str, Any]] = None,
+        wait: bool = True,
+        timeout: Optional[float] = 30.0,
+        interval: float = 1.0,
+    ) -> Mapping[str, Any]:
+        """Submit a prepared ZK unshield transaction."""
+
+        draft = self._transaction_draft(
+            chain_id=chain_id,
+            authority=authority,
+            metadata=transaction_metadata,
+        )
+        draft.unshield_prepared(
+            asset_definition_id,
+            to_account_id,
+            public_amount,
+            inputs=inputs,
+            proof=proof,
+            outputs=outputs,
+            root_hint=root_hint,
+        )
+        return self._submit_transaction_draft_result(
+            draft,
+            private_key=private_key,
+            private_key_hex=private_key_hex,
+            wait=wait,
+            timeout=timeout,
+            interval=interval,
+        )
+
     # ------------------------------------------------------------------
     # Ledger account and asset convenience helpers
     # ------------------------------------------------------------------

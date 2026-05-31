@@ -460,4 +460,45 @@ SafetyFast ==
   /\ RangePullSafety
   /\ ViewSuppressionSafety
 
+ReasonClassifierAnchors ==
+  /\ ReasonClassifierSafety
+  /\ \A c \in CanonicalReasons : ImplementationActions(c) = SpecActions(c)
+  /\ ImplementationActions(UnrelatedReason) = SpecActions(UnrelatedReason)
+
+GateHeightAnchors ==
+  /\ GateHeightSafety
+  /\ ImplementationActions(NoCatchupTarget) = SpecActions(NoCatchupTarget)
+  /\ ImplementationActions(CanonicalBehindTarget) = SpecActions(CanonicalBehindTarget)
+  /\ ImplementationActions(CollapseCanonicalHeight) = SpecActions(CollapseCanonicalHeight)
+  /\ ImplementationActions(GateActiveSameHeight) = SpecActions(GateActiveSameHeight)
+  /\ ImplementationActions(GateActiveAheadHeight) = SpecActions(GateActiveAheadHeight)
+
+SnapshotAndProgressAnchors ==
+  /\ SnapshotAndProgressSafety
+  /\ \A c \in SnapshotCases : ImplementationActions(c) = SpecActions(c)
+  /\ \A c \in ProgressCases : ImplementationActions(c) = SpecActions(c)
+
+StrideAnchors ==
+  /\ StrideSafety
+  /\ \A c \in StrideCases : ImplementationActions(c) = SpecActions(c)
+
+RangePullAnchors ==
+  /\ RangePullSafety
+  /\ \A c \in RangePullCases : ImplementationActions(c) = SpecActions(c)
+
+ViewSuppressionAnchors ==
+  /\ ViewSuppressionSafety
+  /\ \A c \in ViewSuppressionCases : ImplementationActions(c) = SpecActions(c)
+
+CanonicalFrontierReanchorSafetyAnchors ==
+  /\ ReasonClassifierAnchors
+  /\ GateHeightAnchors
+  /\ SnapshotAndProgressAnchors
+  /\ StrideAnchors
+  /\ RangePullAnchors
+  /\ ViewSuppressionAnchors
+
+Safety ==
+  CanonicalFrontierReanchorSafetyAnchors
+
 ====
