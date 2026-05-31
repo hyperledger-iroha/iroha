@@ -160,9 +160,12 @@ enabled = true
 
 [confidential]
 enabled = true
+max_proof_size_bytes = 8388608
+max_proof_bytes_block = 16777216
 
 [zk]
-sccp_allow_unready_transparent_proofs = true
+sccp_allow_unready_transparent_proofs = false
+sccp_source_verifier_materials = []
 
 [zk.halo2]
 enabled = true

@@ -99,7 +99,7 @@ iroha-core-tests = []
 
 # Enable BLS admission-time micro-batching (deterministic grouping + bisection path in block validation).
 # This forwards to `iroha_crypto/bls` and compiles the BLS path in `block.rs` guarded by `#[cfg(feature = "bls")]`.
-bls = ["iroha_crypto/bls", "iroha_data_model/bls"]
+bls = ["iroha_crypto/bls", "iroha_data_model/bls", "iroha_sccp/bls"]
 bls-multi-pairing = ["iroha_crypto/bls-multi-pairing"]
 # Compatibility flag kept for downstream feature sets. `halo2-ecc` is no
 # longer linked by `iroha_core`.

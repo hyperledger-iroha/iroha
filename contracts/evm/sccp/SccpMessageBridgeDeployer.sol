@@ -10,6 +10,8 @@ contract SccpMessageBridgeDeployer {
 
     function deploySccpMessageBridgeContract(
         address verifierAddress,
+        bytes32 expectedVerifierCodeHash,
+        bytes32 expectedVerifierKeyHash,
         string memory verifierBackendKey,
         string memory proofFamily,
         bytes32 networkId,
@@ -18,6 +20,8 @@ contract SccpMessageBridgeDeployer {
     ) public returns (address) {
         bridge = new SccpMessageBridge(
             verifierAddress,
+            expectedVerifierCodeHash,
+            expectedVerifierKeyHash,
             verifierBackendKey,
             proofFamily,
             networkId,

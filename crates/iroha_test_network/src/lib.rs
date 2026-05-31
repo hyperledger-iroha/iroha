@@ -39,7 +39,7 @@ use iroha_config::{
         read::ConfigReader,
         toml::{TomlSource, WriteExt as _, Writer as TomlWriter},
     },
-    parameters::actual::{ConsensusMode, SumeragiNposTimeoutOverrides},
+    parameters::actual::ConsensusMode,
 };
 use iroha_core::sumeragi::consensus::{
     NPOS_TAG, PERMISSIONED_TAG, PROTO_VERSION, compute_consensus_fingerprint_from_params,
@@ -53,7 +53,7 @@ use iroha_data_model::da::commitment::DaProofPolicyBundle;
 use iroha_data_model::{
     ChainId,
     account::{AccountAddress, AccountId},
-    block::consensus::{ConsensusGenesisParams, NposGenesisParams},
+    block::consensus::ConsensusGenesisParams,
     domain::NewDomain,
     isi::{
         InstructionBox, SetParameter,
@@ -4402,59 +4402,6 @@ fn read_bool(table: &Table, path: &[&str]) -> Option<bool> {
     get_nested_value(table, path).and_then(Value::as_bool)
 }
 
-fn npos_timeout_override_from_table(table: &Table, path: &[&str]) -> Option<Duration> {
-    let value = get_nested_value(table, path).and_then(Value::as_integer)?;
-    if value <= 0 {
-        return None;
-    }
-    let millis = u64::try_from(value).ok()?;
-    Some(Duration::from_millis(millis))
-}
-
-fn npos_timeout_overrides_from_table(table: &Table) -> Option<SumeragiNposTimeoutOverrides> {
-    let overrides = SumeragiNposTimeoutOverrides {
-        propose: npos_timeout_override_from_table(
-            table,
-            &["advanced", "npos", "timeouts", "propose_ms"],
-        ),
-        prevote: npos_timeout_override_from_table(
-            table,
-            &["advanced", "npos", "timeouts", "prevote_ms"],
-        ),
-        precommit: npos_timeout_override_from_table(
-            table,
-            &["advanced", "npos", "timeouts", "precommit_ms"],
-        ),
-        exec: npos_timeout_override_from_table(table, &["advanced", "npos", "timeouts", "exec_ms"]),
-        witness: npos_timeout_override_from_table(
-            table,
-            &["advanced", "npos", "timeouts", "witness_ms"],
-        ),
-        commit: npos_timeout_override_from_table(
-            table,
-            &["advanced", "npos", "timeouts", "commit_ms"],
-        ),
-        da: npos_timeout_override_from_table(table, &["advanced", "npos", "timeouts", "da_ms"]),
-        aggregator: npos_timeout_override_from_table(
-            table,
-            &["advanced", "npos", "timeouts", "aggregator_ms"],
-        ),
-    };
-    if overrides.propose.is_none()
-        && overrides.prevote.is_none()
-        && overrides.precommit.is_none()
-        && overrides.exec.is_none()
-        && overrides.witness.is_none()
-        && overrides.commit.is_none()
-        && overrides.da.is_none()
-        && overrides.aggregator.is_none()
-    {
-        None
-    } else {
-        Some(overrides)
-    }
-}
-
 fn replace_consensus_handshake_meta(genesis_isi: &mut Vec<Vec<InstructionBox>>) -> bool {
     let mut was_replaced = false;
     genesis_isi.iter_mut().for_each(|instructions| {
@@ -5537,134 +5484,45 @@ impl NetworkBuilder {
             confidential_policy_hash,
         );
         let parameter_state = consensus_parameters_from_genesis(&preview_genesis);
-        let npos_timeout_overrides = resolved_npos_config
-            .as_ref()
-            .map(|config| config.sumeragi.npos.timeouts_overrides)
-            .or_else(|| npos_timeout_overrides_from_table(&merged_sumeragi));
-        let default_timeout_base_ms = parameter_state
-            .sumeragi()
-            .block_time_ms()
-            .max(parameter_state.sumeragi().min_finality_ms());
-        let derive_npos_timeouts = |block_time_ms: u64| {
-            let block_time_ms = block_time_ms.max(default_timeout_base_ms).max(1);
-            let block_time = Duration::from_millis(block_time_ms);
-            let timeouts = npos_timeout_overrides
-                .map(|overrides| overrides.resolve(block_time))
-                .unwrap_or_else(|| {
-                    iroha_config::parameters::actual::SumeragiNposTimeouts::from_block_time(
-                        block_time,
-                    )
-                });
-            timeouts
-        };
-
-        let npos_payload = parameter_state
-            .custom()
-            .get(&SumeragiNposParameters::parameter_id())
-            .and_then(SumeragiNposParameters::from_custom_parameter);
-        let (epoch_length_blocks, npos_params) = if matches!(consensus_mode, ConsensusMode::Npos) {
-            match npos_payload {
-                Some(npos) => {
-                    let timeouts = derive_npos_timeouts(parameter_state.sumeragi().block_time_ms());
-                    let duration_ms = |value: Duration| -> u64 {
-                        let ms = value.as_millis();
-                        u64::try_from(ms).expect("NPoS timeout exceeds millisecond range")
-                    };
-                    (
-                        npos.epoch_length_blocks(),
-                        Some(NposGenesisParams {
-                            block_time_ms: parameter_state.sumeragi().block_time_ms(),
-                            timeout_propose_ms: duration_ms(timeouts.propose),
-                            timeout_prevote_ms: duration_ms(timeouts.prevote),
-                            timeout_precommit_ms: duration_ms(timeouts.precommit),
-                            timeout_commit_ms: duration_ms(timeouts.commit),
-                            timeout_da_ms: duration_ms(timeouts.da),
-                            timeout_aggregator_ms: duration_ms(timeouts.aggregator),
-                            k_aggregators: npos.k_aggregators(),
-                            redundant_send_r: npos.redundant_send_r(),
-                            epoch_seed: npos.epoch_seed(),
-                            vrf_commit_window_blocks: npos.vrf_commit_window_blocks(),
-                            vrf_reveal_window_blocks: npos.vrf_reveal_window_blocks(),
-                            max_validators: npos.max_validators(),
-                            min_self_bond: npos.min_self_bond(),
-                            min_nomination_bond: npos.min_nomination_bond(),
-                            max_nominator_concentration_pct: npos.max_nominator_concentration_pct(),
-                            seat_band_pct: npos.seat_band_pct(),
-                            max_entity_correlation_pct: npos.max_entity_correlation_pct(),
-                            finality_margin_blocks: npos.finality_margin_blocks(),
-                            evidence_horizon_blocks: npos.evidence_horizon_blocks(),
-                            activation_lag_blocks: npos.activation_lag_blocks(),
-                            slashing_delay_blocks: npos.slashing_delay_blocks(),
-                        }),
-                    )
-                }
-                None => {
-                    let npos = resolved_npos_config
-                        .as_ref()
-                        .expect("NPoS consensus requires resolved runtime config");
-                    let npos = npos_params_from_config(npos);
-                    let timeouts = derive_npos_timeouts(parameter_state.sumeragi().block_time_ms());
-                    let duration_ms = |value: Duration| -> u64 {
-                        let ms = value.as_millis();
-                        u64::try_from(ms).expect("NPoS timeout exceeds millisecond range")
-                    };
-                    (
-                        npos.epoch_length_blocks,
-                        Some(NposGenesisParams {
-                            block_time_ms: parameter_state.sumeragi().block_time_ms(),
-                            timeout_propose_ms: duration_ms(timeouts.propose),
-                            timeout_prevote_ms: duration_ms(timeouts.prevote),
-                            timeout_precommit_ms: duration_ms(timeouts.precommit),
-                            timeout_commit_ms: duration_ms(timeouts.commit),
-                            timeout_da_ms: duration_ms(timeouts.da),
-                            timeout_aggregator_ms: duration_ms(timeouts.aggregator),
-                            k_aggregators: npos.k_aggregators(),
-                            redundant_send_r: npos.redundant_send_r(),
-                            epoch_seed: npos.epoch_seed(),
-                            vrf_commit_window_blocks: npos.vrf_commit_window_blocks(),
-                            vrf_reveal_window_blocks: npos.vrf_reveal_window_blocks(),
-                            max_validators: npos.max_validators(),
-                            min_self_bond: npos.min_self_bond(),
-                            min_nomination_bond: npos.min_nomination_bond(),
-                            max_nominator_concentration_pct: npos.max_nominator_concentration_pct(),
-                            seat_band_pct: npos.seat_band_pct(),
-                            max_entity_correlation_pct: npos.max_entity_correlation_pct(),
-                            finality_margin_blocks: npos.finality_margin_blocks(),
-                            evidence_horizon_blocks: npos.evidence_horizon_blocks(),
-                            activation_lag_blocks: npos.activation_lag_blocks(),
-                            slashing_delay_blocks: npos.slashing_delay_blocks(),
-                        }),
-                    )
-                }
-            }
-        } else {
-            (0, None)
-        };
-
-        let mut consensus_params = ConsensusGenesisParams {
-            block_time_ms: parameter_state.sumeragi().block_time_ms(),
-            commit_time_ms: parameter_state.sumeragi().commit_time_ms(),
-            min_finality_ms: parameter_state.sumeragi().min_finality_ms(),
-            max_clock_drift_ms: parameter_state.sumeragi().max_clock_drift_ms(),
-            collectors_k: parameter_state.sumeragi().collectors_k(),
-            redundant_send_r: parameter_state.sumeragi().collectors_redundant_send_r(),
-            block_max_transactions: parameter_state.block().max_transactions().get(),
-            da_enabled: parameter_state.sumeragi().da_enabled(),
-            epoch_length_blocks,
-            bls_domain: PERMISSIONED_BLS_DOMAIN.to_string(),
-            npos: npos_params,
-        };
-        // Ensure the handshake caps mirror the builder-resolved flags even if the preview
-        // genesis carries defaults different from the builder request.
-        consensus_params.da_enabled = da_enabled;
-
         let mut consensus_mode_tag = PERMISSIONED_TAG;
         let mut consensus_bls_domain = PERMISSIONED_BLS_DOMAIN;
         if matches!(consensus_mode, ConsensusMode::Npos) {
             consensus_mode_tag = NPOS_TAG;
             consensus_bls_domain = NPOS_BLS_DOMAIN;
-            consensus_params.bls_domain = NPOS_BLS_DOMAIN.to_string();
         }
+        let mut consensus_params = resolved_npos_config.as_ref().map_or_else(
+            || {
+                assert!(
+                    !matches!(consensus_mode, ConsensusMode::Npos),
+                    "NPoS consensus requires resolved runtime config"
+                );
+                ConsensusGenesisParams {
+                    block_time_ms: parameter_state.sumeragi().block_time_ms(),
+                    commit_time_ms: parameter_state.sumeragi().commit_time_ms(),
+                    min_finality_ms: parameter_state.sumeragi().min_finality_ms(),
+                    max_clock_drift_ms: parameter_state.sumeragi().max_clock_drift_ms(),
+                    collectors_k: parameter_state.sumeragi().collectors_k(),
+                    redundant_send_r: parameter_state.sumeragi().collectors_redundant_send_r(),
+                    block_max_transactions: parameter_state.block().max_transactions().get(),
+                    da_enabled: parameter_state.sumeragi().da_enabled(),
+                    epoch_length_blocks: 0,
+                    bls_domain: consensus_bls_domain.to_string(),
+                    npos: None,
+                }
+            },
+            |config| {
+                iroha_core::sumeragi::consensus::consensus_genesis_params_from_parameters(
+                    &consensus_chain_id,
+                    consensus_mode_tag,
+                    consensus_bls_domain,
+                    &parameter_state,
+                    &config.sumeragi,
+                )
+            },
+        );
+        // Ensure the handshake caps mirror the builder-resolved flags even if the preview
+        // genesis carries defaults different from the builder request.
+        consensus_params.da_enabled = da_enabled;
 
         let consensus_profile = ConsensusBootstrapProfile {
             params: consensus_params,
@@ -7402,9 +7260,27 @@ impl NetworkPeer {
     }
 
     fn restart_genesis_file(&self, has_genesis: bool) -> Option<PathBuf> {
-        (!has_genesis)
-            .then(|| self.dir.join("run-1-genesis.nrt"))
-            .filter(|path| fs::metadata(path).is_ok_and(|meta| meta.is_file()))
+        if has_genesis {
+            return None;
+        }
+        fs::read_dir(&self.dir)
+            .ok()?
+            .filter_map(|entry| {
+                let entry = entry.ok()?;
+                let path = entry.path();
+                if !entry.file_type().ok()?.is_file() {
+                    return None;
+                }
+                let file_name = path.file_name()?.to_str()?;
+                let run = file_name
+                    .strip_prefix("run-")?
+                    .strip_suffix("-genesis.nrt")?
+                    .parse::<usize>()
+                    .ok()?;
+                Some((run, path))
+            })
+            .max_by_key(|(run, _)| *run)
+            .map(|(_, path)| path)
     }
 
     async fn write_run_config<T: AsRef<Table>>(
@@ -9220,9 +9096,33 @@ mod tests {
     }
 
     #[test]
+    fn status_error_is_connection_refused_detects_nested_io_error() {
+        let report = Err::<(), Report>(Report::from(std::io::Error::new(
+            ErrorKind::ConnectionRefused,
+            "refused",
+        )))
+        .wrap_err("client status probe failed")
+        .unwrap_err();
+
+        assert!(status_error_is_connection_refused(&report));
+    }
+
+    #[test]
     fn status_error_is_connection_refused_ignores_other_errors() {
         let err = std::io::Error::other("other");
         let report = Report::from(err);
+        assert!(!status_error_is_connection_refused(&report));
+    }
+
+    #[test]
+    fn status_error_is_connection_refused_ignores_nested_non_refusal_io_errors() {
+        let report = Err::<(), Report>(Report::from(std::io::Error::new(
+            ErrorKind::AddrInUse,
+            "address already in use",
+        )))
+        .wrap_err("client status probe failed")
+        .unwrap_err();
+
         assert!(!status_error_is_connection_refused(&report));
     }
 
@@ -9236,8 +9136,35 @@ mod tests {
     }
 
     #[test]
+    fn status_error_is_torii_query_backpressure_detects_nested_status_throttle() {
+        let report = Err::<(), Report>(eyre!(
+            "Unexpected status response; status: 429 Too Many Requests; response body: Reached the limit of parallel queries"
+        ))
+        .wrap_err("client status probe failed")
+        .unwrap_err();
+
+        assert!(status_error_is_torii_query_backpressure(&report));
+    }
+
+    #[test]
     fn status_error_is_torii_query_backpressure_ignores_other_throttles() {
         let report = eyre!("Unexpected status response; status: 429 Too Many Requests");
+
+        assert!(!status_error_is_torii_query_backpressure(&report));
+    }
+
+    #[test]
+    fn status_error_is_torii_query_backpressure_ignores_limit_phrase_without_429() {
+        let report = eyre!("Reached the limit of parallel queries while validating locally");
+
+        assert!(!status_error_is_torii_query_backpressure(&report));
+    }
+
+    #[test]
+    fn status_error_is_torii_query_backpressure_ignores_split_status_and_limit_causes() {
+        let report = Err::<(), Report>(eyre!("Reached the limit of parallel queries"))
+            .wrap_err("Unexpected status response; status: 429 Too Many Requests")
+            .unwrap_err();
 
         assert!(!status_error_is_torii_query_backpressure(&report));
     }
@@ -9277,8 +9204,52 @@ mod tests {
     }
 
     #[test]
+    fn torii_request_error_is_transient_detects_connect_error_phrase() {
+        let report = eyre!(
+            "Failed to send http POST request to http://127.0.0.1:47173/v1/query\n\nCaused by:\n   0: client error (Connect)\n   1: Connection refused"
+        );
+
+        assert!(torii_request_error_is_transient(&report));
+    }
+
+    #[test]
+    fn torii_request_error_is_transient_detects_raw_connection_refused_io_error() {
+        let report = Report::from(std::io::Error::new(
+            ErrorKind::ConnectionRefused,
+            "connection refused",
+        ));
+
+        assert!(torii_request_error_is_transient(&report));
+    }
+
+    #[test]
     fn torii_request_error_is_transient_requires_http_transport_context() {
         let report = eyre!("connection reset while applying local validation");
+
+        assert!(!torii_request_error_is_transient(&report));
+    }
+
+    #[test]
+    fn torii_request_error_is_transient_ignores_plain_timeout_without_http_context() {
+        let report = eyre!("operation timed out while applying local validation");
+
+        assert!(!torii_request_error_is_transient(&report));
+    }
+
+    #[test]
+    fn torii_request_error_is_transient_ignores_http_context_without_transport_failure() {
+        let report = eyre!(
+            "Failed to send http POST request to http://127.0.0.1:47173/v1/query\n\nCaused by:\n   0: validation rejected duplicate domain"
+        );
+
+        assert!(!torii_request_error_is_transient(&report));
+    }
+
+    #[test]
+    fn torii_request_error_is_transient_ignores_backpressure_phrase_without_status() {
+        let report = eyre!(
+            "Failed to send http POST request to http://127.0.0.1:47173/v1/query\n\nCaused by:\n   0: Reached the limit of parallel queries"
+        );
 
         assert!(!torii_request_error_is_transient(&report));
     }
@@ -10804,6 +10775,95 @@ exit 0
             actual, expected,
             "NPoS fingerprint must match runtime profile"
         );
+    }
+
+    #[test]
+    fn genesis_consensus_metadata_matches_shared_runtime_derivation_for_npos() {
+        init_instruction_registry();
+        let network = build_with_isolated_permit(
+            NetworkBuilder::new()
+                .with_peers(4)
+                .with_pipeline_time(Duration::from_secs(2))
+                .with_genesis_instruction(SetParameter::new(Parameter::Block(
+                    iroha_data_model::parameter::BlockParameter::MaxTransactions(
+                        std::num::NonZeroU64::new(512).expect("non-zero block size"),
+                    ),
+                )))
+                .with_genesis_instruction(SetParameter::new(Parameter::Sumeragi(
+                    SumeragiParameter::BlockTimeMs(400),
+                )))
+                .with_genesis_instruction(SetParameter::new(Parameter::Sumeragi(
+                    SumeragiParameter::CommitTimeMs(500),
+                )))
+                .with_genesis_instruction(SetParameter::new(Parameter::Sumeragi(
+                    SumeragiParameter::CollectorsK(2),
+                )))
+                .with_genesis_instruction(SetParameter::new(Parameter::Sumeragi(
+                    SumeragiParameter::RedundantSendR(2),
+                )))
+                .with_config_layer(|layer| {
+                    layer
+                        .write(["sumeragi", "consensus_mode"], "npos")
+                        .write(["sumeragi", "collectors", "k"], 2_i64)
+                        .write(["sumeragi", "collectors", "redundant_send_r"], 2_i64)
+                        .write(["sumeragi", "npos", "use_stake_snapshot_roster"], true)
+                        .write(["sumeragi", "npos", "election", "max_validators"], 4_i64)
+                        .write(["sumeragi", "npos", "epoch_length_blocks"], 3600_i64)
+                        .write(
+                            ["sumeragi", "advanced", "npos", "timeouts", "propose_ms"],
+                            400_i64,
+                        )
+                        .write(
+                            ["sumeragi", "advanced", "npos", "timeouts", "prevote_ms"],
+                            1000_i64,
+                        )
+                        .write(
+                            ["sumeragi", "advanced", "npos", "timeouts", "precommit_ms"],
+                            1500_i64,
+                        )
+                        .write(
+                            ["sumeragi", "advanced", "npos", "timeouts", "commit_ms"],
+                            2000_i64,
+                        )
+                        .write(
+                            ["sumeragi", "advanced", "npos", "timeouts", "da_ms"],
+                            1000_i64,
+                        );
+                }),
+        );
+        let genesis = network.genesis();
+        let profile = network.consensus_bootstrap_profile();
+        let config_layers: Vec<Table> = network.config_layers().map(Cow::into_owned).collect();
+        let peer = network.peers().first().expect("network should have peers");
+        let actual =
+            resolve_actual_config(peer, &config_layers).expect("network config should resolve");
+        let parameter_state = consensus_parameters_from_genesis(&genesis);
+        let shared_params =
+            iroha_core::sumeragi::consensus::consensus_genesis_params_from_parameters(
+                &network.chain_id(),
+                profile.mode_tag,
+                profile.bls_domain,
+                &parameter_state,
+                &actual.sumeragi,
+            );
+
+        assert_eq!(
+            profile.params, shared_params,
+            "test-network genesis metadata must use the same NPoS fingerprint inputs as runtime validation"
+        );
+
+        let actual_fingerprint = consensus_fingerprint_from_block(&genesis)
+            .expect("genesis should contain consensus fingerprint")
+            .to_ascii_lowercase();
+        let expected = format!(
+            "0x{}",
+            hex_lower(&compute_consensus_fingerprint_from_params(
+                &network.chain_id(),
+                &shared_params,
+                profile.mode_tag,
+            ))
+        );
+        assert_eq!(actual_fingerprint, expected);
     }
 
     #[test]
@@ -12670,7 +12730,7 @@ exit 0
     }
 
     #[test]
-    fn restart_genesis_file_reuses_first_run_genesis_when_available() -> Result<()> {
+    fn restart_genesis_file_reuses_latest_run_genesis_when_available() -> Result<()> {
         let root = tempdir()?;
         let env = Environment {
             dir: root.path().to_path_buf(),
@@ -12684,6 +12744,23 @@ exit 0
 
         assert_eq!(peer.restart_genesis_file(false), Some(genesis_path));
         assert_eq!(peer.restart_genesis_file(true), None);
+
+        Ok(())
+    }
+
+    #[test]
+    fn restart_genesis_file_skips_failed_early_run_when_later_genesis_exists() -> Result<()> {
+        let root = tempdir()?;
+        let env = Environment {
+            dir: root.path().to_path_buf(),
+        };
+        let peer = NetworkPeer::builder().build(&env);
+        let first_genesis_path = peer.dir.join("run-1-genesis.nrt");
+        let later_genesis_path = peer.dir.join("run-3-genesis.nrt");
+        fs::write(&first_genesis_path, b"stale genesis")?;
+        fs::write(&later_genesis_path, b"latest genesis")?;
+
+        assert_eq!(peer.restart_genesis_file(false), Some(later_genesis_path));
 
         Ok(())
     }

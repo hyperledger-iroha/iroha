@@ -3,8 +3,11 @@ import test from "node:test";
 
 import {
   hasNoritoBinding,
+  hasNativeBinding,
   hasSm2Binding,
   makeNativeTest,
+  nativeBinding,
+  nativeBindingError,
   nativeSkipMessage,
   noritoRequiredMethods,
   sm2RequiredMethods,
@@ -28,6 +31,14 @@ test("hasSm2Binding checks for required native methods", () => {
   assert.equal(hasSm2Binding(null), false);
   assert.equal(hasSm2Binding({ sm2Keypair() {} }), false);
   assert.equal(hasSm2Binding(buildBinding(sm2RequiredMethods)), true);
+});
+
+test("native helper records binding load failures without aborting import", () => {
+  assert.equal(hasNativeBinding, nativeBinding !== null);
+  if (nativeBindingError !== null) {
+    assert.equal(hasNativeBinding, false);
+    assert.match(nativeBindingError.message, /Native binding required/);
+  }
 });
 
 test("makeNativeTest skips when required methods are missing", () => {

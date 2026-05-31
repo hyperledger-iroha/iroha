@@ -51,6 +51,23 @@ from urllib.parse import parse_qsl, quote, urlencode, urlsplit
 
 import requests
 
+SCCP_GROTH16_BN254_PROOF_ABI_BYTE_LENGTH_V1 = 384
+SCCP_GROTH16_BN254_BASE_FIELD_MODULUS = int(
+    "30644e72e131a029b85045b68181585d97816a916871ca8d3c208c16d87cfd47",
+    16,
+)
+SCCP_GROTH16_BN254_G2_B_C0 = int(
+    "2b149d40ceb8aaae81be18991be06ac3b5b4c5e559dbefa33267e6dc24a138e5",
+    16,
+)
+SCCP_GROTH16_BN254_G2_B_C1 = int(
+    "009713b03af0fed4cd2cafadeed8fdf4a74fa084e52d1852e4a2bd0685c315d2",
+    16,
+)
+SCCP_DOMAIN_SORA = 0
+SCCP_DOMAIN_ETH = 1
+SCCP_DOMAIN_BSC = 2
+
 BASE58_ALPHABET = tuple("123456789ABCDEFGHJKLMNPQRSTUVWXYZabcdefghijkmnopqrstuvwxyz")
 IROHA_POEM_KANA_HALFWIDTH = (
     "ｲ", "ﾛ", "ﾊ", "ﾆ", "ﾎ", "ﾍ", "ﾄ", "ﾁ", "ﾘ", "ﾇ", "ﾙ", "ｦ", "ﾜ", "ｶ", "ﾖ", "ﾀ",
@@ -3549,6 +3566,17 @@ class ToriiClient:
     def get_sccp_message_proof_artifact(
         self,
         message_id: Union[str, bytes, bytearray, memoryview],
+        *,
+        network_id_hex: Optional[Union[str, bytes, bytearray, memoryview]] = None,
+        verifier_address_hex: Optional[str] = None,
+        bridge_address_hex: Optional[str] = None,
+        verifier_code_hash_hex: Optional[Union[str, bytes, bytearray, memoryview]] = None,
+        verifier_key_hash_hex: Optional[Union[str, bytes, bytearray, memoryview]] = None,
+        expected_destination_binding_hash_hex: Optional[
+            Union[str, bytes, bytearray, memoryview]
+        ] = None,
+        tron_verifier_address: Optional[str] = None,
+        proof_bytes_hex: Optional[Union[str, bytes, bytearray, memoryview]] = None,
     ) -> SccpMessageTransparentProofArtifact:
         """Fetch a typed SCCP message proof artifact (`GET /v1/sccp/artifacts/message/{message_id}`)."""
 
@@ -3557,9 +3585,22 @@ class ToriiClient:
             context="sccp message proof artifact message_id",
             expected_length=64,
         )
+        params = self._normalize_sccp_evm_destination_params(
+            network_id_hex=network_id_hex,
+            verifier_address_hex=verifier_address_hex,
+            bridge_address_hex=bridge_address_hex,
+            verifier_code_hash_hex=verifier_code_hash_hex,
+            verifier_key_hash_hex=verifier_key_hash_hex,
+            expected_destination_binding_hash_hex=expected_destination_binding_hash_hex,
+            tron_verifier_address=tron_verifier_address,
+            proof_bytes_hex=proof_bytes_hex,
+            context="sccp message proof artifact",
+            expected_message_id_hex=normalized_message_id,
+        )
         payload = self._get_json_object(
             f"/v1/sccp/artifacts/message/{normalized_message_id}",
             context="sccp message proof artifact",
+            params=params,
         )
         return self._parse_sccp_message_proof_artifact(
             payload,
@@ -3569,6 +3610,17 @@ class ToriiClient:
     def get_sccp_message_proof_job(
         self,
         message_id: Union[str, bytes, bytearray, memoryview],
+        *,
+        network_id_hex: Optional[Union[str, bytes, bytearray, memoryview]] = None,
+        verifier_address_hex: Optional[str] = None,
+        bridge_address_hex: Optional[str] = None,
+        verifier_code_hash_hex: Optional[Union[str, bytes, bytearray, memoryview]] = None,
+        verifier_key_hash_hex: Optional[Union[str, bytes, bytearray, memoryview]] = None,
+        expected_destination_binding_hash_hex: Optional[
+            Union[str, bytes, bytearray, memoryview]
+        ] = None,
+        tron_verifier_address: Optional[str] = None,
+        proof_bytes_hex: Optional[Union[str, bytes, bytearray, memoryview]] = None,
     ) -> SccpCounterpartyProofJob:
         """Fetch a normalized SCCP counterparty proof job (`GET /v1/sccp/jobs/message/{message_id}`)."""
 
@@ -3577,13 +3629,189 @@ class ToriiClient:
             context="sccp message proof job message_id",
             expected_length=64,
         )
+        params = self._normalize_sccp_evm_destination_params(
+            network_id_hex=network_id_hex,
+            verifier_address_hex=verifier_address_hex,
+            bridge_address_hex=bridge_address_hex,
+            verifier_code_hash_hex=verifier_code_hash_hex,
+            verifier_key_hash_hex=verifier_key_hash_hex,
+            expected_destination_binding_hash_hex=expected_destination_binding_hash_hex,
+            tron_verifier_address=tron_verifier_address,
+            proof_bytes_hex=proof_bytes_hex,
+            context="sccp message proof job",
+            expected_message_id_hex=normalized_message_id,
+        )
         payload = self._get_json_object(
             f"/v1/sccp/jobs/message/{normalized_message_id}",
             context="sccp message proof job",
+            params=params,
         )
         return self._parse_sccp_message_proof_job(
             payload,
             context="sccp message proof job",
+        )
+
+    def submit_bridge_proof(
+        self,
+        *,
+        authority: str,
+        private_key: Optional[Any] = None,
+        public_key_hex: Optional[str] = None,
+        signature_b64: Optional[str] = None,
+        burn_bundle: Optional[Mapping[str, Any]] = None,
+        message_bundle: Optional[Mapping[str, Any]] = None,
+        network_id_hex: Optional[Union[str, bytes, bytearray, memoryview]] = None,
+        verifier_address_hex: Optional[str] = None,
+        bridge_address_hex: Optional[str] = None,
+        verifier_code_hash_hex: Optional[Union[str, bytes, bytearray, memoryview]] = None,
+        verifier_key_hash_hex: Optional[Union[str, bytes, bytearray, memoryview]] = None,
+        expected_destination_binding_hash_hex: Optional[
+            Union[str, bytes, bytearray, memoryview]
+        ] = None,
+        tron_verifier_address: Optional[str] = None,
+        proof_bytes_hex: Optional[Union[str, bytes, bytearray, memoryview]] = None,
+        creation_time_ms: Optional[Union[int, str]] = None,
+    ) -> Mapping[str, Any]:
+        """Submit a bridge proof DTO (`POST /v1/bridge/proofs/submit`)."""
+
+        if not isinstance(authority, str) or not authority.strip():
+            raise RuntimeError("bridge proof submit authority must be a non-empty string")
+        payload: Dict[str, Any] = {"authority": authority.strip()}
+        if private_key is not None:
+            payload["private_key"] = private_key
+        if public_key_hex is not None:
+            if not isinstance(public_key_hex, str) or not public_key_hex.strip():
+                raise RuntimeError("bridge proof submit public_key_hex must be a non-empty string")
+            payload["public_key_hex"] = public_key_hex.strip()
+        if signature_b64 is not None:
+            if not isinstance(signature_b64, str) or not signature_b64.strip():
+                raise RuntimeError("bridge proof submit signature_b64 must be a non-empty string")
+            payload["signature_b64"] = signature_b64.strip()
+        if burn_bundle is not None:
+            payload["burn_bundle"] = burn_bundle
+        if message_bundle is not None:
+            payload["message_bundle"] = message_bundle
+        bundle_count = int(burn_bundle is not None) + int(message_bundle is not None)
+        if bundle_count != 1:
+            raise RuntimeError(
+                "bridge proof submit must provide exactly one of burn_bundle or message_bundle"
+            )
+        destination_params = self._normalize_sccp_evm_destination_params(
+            network_id_hex=network_id_hex,
+            verifier_address_hex=verifier_address_hex,
+            bridge_address_hex=bridge_address_hex,
+            verifier_code_hash_hex=verifier_code_hash_hex,
+            verifier_key_hash_hex=verifier_key_hash_hex,
+            expected_destination_binding_hash_hex=expected_destination_binding_hash_hex,
+            tron_verifier_address=tron_verifier_address,
+            proof_bytes_hex=proof_bytes_hex,
+            context="bridge proof submit",
+        )
+        if destination_params is not None:
+            if "proof_bytes_hex" in destination_params:
+                self._validate_sccp_groth16_proof_hex_for_message_bundle(
+                    destination_params["proof_bytes_hex"],
+                    message_bundle,
+                    context="bridge proof submit",
+                )
+            payload.update(destination_params)
+        if burn_bundle is not None and destination_params is not None:
+            raise RuntimeError(
+                "bridge proof submit SCCP destination fields and proof_bytes_hex are only valid for message_bundle submissions"
+            )
+        if creation_time_ms is not None:
+            payload["creation_time_ms"] = creation_time_ms
+        return self._post_json(
+            "/v1/bridge/proofs/submit",
+            payload,
+            context="bridge proof submit",
+        )
+
+    def submit_bridge_message(
+        self,
+        *,
+        authority: str,
+        message_bundle: Mapping[str, Any],
+        private_key: Optional[Any] = None,
+        public_key_hex: Optional[str] = None,
+        signature_b64: Optional[str] = None,
+        network_id_hex: Optional[Union[str, bytes, bytearray, memoryview]] = None,
+        verifier_address_hex: Optional[str] = None,
+        bridge_address_hex: Optional[str] = None,
+        verifier_code_hash_hex: Optional[Union[str, bytes, bytearray, memoryview]] = None,
+        verifier_key_hash_hex: Optional[Union[str, bytes, bytearray, memoryview]] = None,
+        expected_destination_binding_hash_hex: Optional[
+            Union[str, bytes, bytearray, memoryview]
+        ] = None,
+        tron_verifier_address: Optional[str] = None,
+        proof_bytes_hex: Optional[Union[str, bytes, bytearray, memoryview]] = None,
+        receipt_lane: Optional[Union[int, str]] = None,
+        settlement: Optional[Mapping[str, Any]] = None,
+        creation_time_ms: Optional[Union[int, str]] = None,
+    ) -> Mapping[str, Any]:
+        """Submit an inbound bridge message DTO (`POST /v1/bridge/messages`)."""
+
+        if not isinstance(authority, str) or not authority.strip():
+            raise RuntimeError("bridge message submit authority must be a non-empty string")
+        if not isinstance(message_bundle, Mapping):
+            raise RuntimeError("bridge message submit message_bundle must be a mapping")
+        payload: Dict[str, Any] = {
+            "authority": authority.strip(),
+            "message_bundle": message_bundle,
+        }
+        if private_key is not None:
+            payload["private_key"] = private_key
+        if public_key_hex is not None:
+            if not isinstance(public_key_hex, str) or not public_key_hex.strip():
+                raise RuntimeError(
+                    "bridge message submit public_key_hex must be a non-empty string"
+                )
+            payload["public_key_hex"] = public_key_hex.strip()
+        if signature_b64 is not None:
+            if not isinstance(signature_b64, str) or not signature_b64.strip():
+                raise RuntimeError(
+                    "bridge message submit signature_b64 must be a non-empty string"
+                )
+            payload["signature_b64"] = signature_b64.strip()
+        destination_params = self._normalize_sccp_evm_destination_params(
+            network_id_hex=network_id_hex,
+            verifier_address_hex=verifier_address_hex,
+            bridge_address_hex=bridge_address_hex,
+            verifier_code_hash_hex=verifier_code_hash_hex,
+            verifier_key_hash_hex=verifier_key_hash_hex,
+            expected_destination_binding_hash_hex=expected_destination_binding_hash_hex,
+            tron_verifier_address=tron_verifier_address,
+            proof_bytes_hex=proof_bytes_hex,
+            context="bridge message submit",
+        )
+        if destination_params is not None:
+            if "proof_bytes_hex" in destination_params:
+                self._validate_sccp_groth16_proof_hex_for_message_bundle(
+                    destination_params["proof_bytes_hex"],
+                    message_bundle,
+                    context="bridge message submit",
+                )
+            payload.update(destination_params)
+        if receipt_lane is not None:
+            if isinstance(receipt_lane, bool):
+                raise RuntimeError("bridge message submit receipt_lane must fit in u32")
+            lane = self._coerce_optional_unsigned(
+                receipt_lane,
+                context="bridge message submit receipt_lane",
+            )
+            if lane is None or lane > 0xFFFF_FFFF:
+                raise RuntimeError("bridge message submit receipt_lane must fit in u32")
+            payload["receipt_lane"] = lane
+        if settlement is not None:
+            if not isinstance(settlement, Mapping):
+                raise RuntimeError("bridge message submit settlement must be a mapping")
+            payload["settlement"] = settlement
+        if creation_time_ms is not None:
+            payload["creation_time_ms"] = creation_time_ms
+        return self._post_json(
+            "/v1/bridge/messages",
+            payload,
+            context="bridge message submit",
         )
 
     def get_runtime_abi_active(self) -> RuntimeAbiActive:
@@ -8457,6 +8685,543 @@ class ToriiClient:
         return normalized
 
     @staticmethod
+    def _require_exact_inline_hex_string(value: Any, *, context: str) -> None:
+        if not isinstance(value, str):
+            return
+        if value.strip() != value:
+            raise RuntimeError(f"{context} must be canonical hex")
+        literal = value[2:] if value.startswith(("0x", "0X")) else value
+        if any(character.isspace() for character in literal):
+            raise RuntimeError(f"{context} must be canonical hex")
+
+    @classmethod
+    def _normalize_nonzero_hex_bytes(
+        cls,
+        value: Union[str, bytes, bytearray, memoryview],
+        *,
+        context: str,
+        expected_byte_length: Optional[int] = None,
+    ) -> str:
+        normalized = cls._normalize_hex_string(value, context=context)
+        if not any(bytes.fromhex(normalized)):
+            raise RuntimeError(f"{context} must not be all zero")
+        if expected_byte_length is not None and len(normalized) != expected_byte_length * 2:
+            raise RuntimeError(f"{context} must be a {expected_byte_length}-byte hex string")
+        return normalized
+
+    @classmethod
+    def _normalize_exact_nonzero_hex_bytes(
+        cls,
+        value: Union[str, bytes, bytearray, memoryview],
+        *,
+        context: str,
+        expected_byte_length: Optional[int] = None,
+    ) -> str:
+        cls._require_exact_inline_hex_string(value, context=context)
+        return cls._normalize_nonzero_hex_bytes(
+            value,
+            context=context,
+            expected_byte_length=expected_byte_length,
+        )
+
+    @staticmethod
+    def _sccp_abi_word_u32_hex(value: int) -> str:
+        if not isinstance(value, int) or value < 0 or value > 0xFFFF_FFFF:
+            raise RuntimeError("SCCP ABI word value must fit in u32")
+        return value.to_bytes(32, "big").hex()
+
+    @classmethod
+    def _optional_sccp_message_proof_context(
+        cls,
+        message_bundle: Optional[Mapping[str, Any]],
+        *,
+        context: str,
+    ) -> Optional[Dict[str, str]]:
+        if message_bundle is None:
+            return None
+        if not isinstance(message_bundle, Mapping):
+            raise RuntimeError(
+                f"{context}.message_bundle must contain commitment metadata"
+            )
+        commitment = message_bundle.get("commitment")
+        if not isinstance(commitment, Mapping):
+            raise RuntimeError(
+                f"{context}.message_bundle.commitment.message_id is required"
+            )
+        message_id = commitment.get("message_id", commitment.get("messageId"))
+        commitment_root = message_bundle.get(
+            "commitment_root",
+            message_bundle.get("commitmentRoot"),
+        )
+        if message_id is None or commitment_root is None:
+            raise RuntimeError(
+                f"{context}.message_bundle.commitment.message_id and "
+                "message_bundle.commitment_root are required"
+            )
+        return {
+            "message_id": cls._normalize_hex_string(
+                message_id,
+                context=f"{context}.message_bundle.commitment.message_id",
+                expected_length=64,
+            ),
+            "commitment_root": cls._normalize_hex_string(
+                commitment_root,
+                context=f"{context}.message_bundle.commitment_root",
+                expected_length=64,
+            ),
+        }
+
+    @classmethod
+    def _validate_sccp_groth16_proof_hex_for_message_bundle(
+        cls,
+        proof_hex: str,
+        message_bundle: Optional[Mapping[str, Any]],
+        *,
+        context: str,
+    ) -> None:
+        cls._validate_sccp_groth16_proof_hex(proof_hex, context=context)
+        proof_context = cls._optional_sccp_message_proof_context(
+            message_bundle,
+            context=context,
+        )
+        if proof_context is None:
+            return
+
+        def word(index: int) -> str:
+            start = index * 64
+            return proof_hex[start : start + 64]
+
+        if word(0) != cls._sccp_abi_word_u32_hex(1):
+            raise RuntimeError(f"{context}.proof_bytes_hex.version must be 1")
+        if word(1) != proof_context["message_id"]:
+            raise RuntimeError(
+                f"{context}.proof_bytes_hex.message_id must match message_bundle.commitment.message_id"
+            )
+        if word(2) != cls._sccp_abi_word_u32_hex(SCCP_DOMAIN_SORA):
+            raise RuntimeError(f"{context}.proof_bytes_hex.source_domain must be SORA")
+        if word(3) != proof_context["commitment_root"]:
+            raise RuntimeError(
+                f"{context}.proof_bytes_hex.commitment_root must match message_bundle.commitment_root"
+            )
+
+    @staticmethod
+    def _sccp_groth16_proof_word_hex(proof_hex: str, index: int) -> str:
+        start = index * 64
+        return proof_hex[start : start + 64]
+
+    @classmethod
+    def _sccp_groth16_proof_word_value(cls, proof_hex: str, index: int) -> int:
+        return int(cls._sccp_groth16_proof_word_hex(proof_hex, index), 16)
+
+    @classmethod
+    def _sccp_groth16_proof_word_is_zero(cls, proof_hex: str, index: int) -> bool:
+        return cls._sccp_groth16_proof_word_value(proof_hex, index) == 0
+
+    @classmethod
+    def _require_sccp_groth16_base_field_word(
+        cls,
+        proof_hex: str,
+        index: int,
+        label: str,
+    ) -> None:
+        if cls._sccp_groth16_proof_word_value(
+            proof_hex,
+            index,
+        ) >= SCCP_GROTH16_BN254_BASE_FIELD_MODULUS:
+            raise RuntimeError(f"{label} must be a BN254 base-field element")
+
+    @classmethod
+    def _require_sccp_groth16_nonzero_point(
+        cls,
+        proof_hex: str,
+        indexes: Sequence[int],
+        label: str,
+    ) -> None:
+        if all(cls._sccp_groth16_proof_word_is_zero(proof_hex, index) for index in indexes):
+            raise RuntimeError(f"{label} must not be zero")
+
+    @staticmethod
+    def _sccp_bn254_fq(value: int) -> int:
+        return value % SCCP_GROTH16_BN254_BASE_FIELD_MODULUS
+
+    @classmethod
+    def _sccp_bn254_fq2_add(
+        cls,
+        left: Tuple[int, int],
+        right: Tuple[int, int],
+    ) -> Tuple[int, int]:
+        return (
+            cls._sccp_bn254_fq(left[0] + right[0]),
+            cls._sccp_bn254_fq(left[1] + right[1]),
+        )
+
+    @classmethod
+    def _sccp_bn254_fq2_mul(
+        cls,
+        left: Tuple[int, int],
+        right: Tuple[int, int],
+    ) -> Tuple[int, int]:
+        return (
+            cls._sccp_bn254_fq(left[0] * right[0] - left[1] * right[1]),
+            cls._sccp_bn254_fq(left[0] * right[1] + left[1] * right[0]),
+        )
+
+    @classmethod
+    def _require_sccp_groth16_g1_point(
+        cls,
+        proof_hex: str,
+        indexes: Sequence[int],
+        label: str,
+    ) -> None:
+        cls._require_sccp_groth16_nonzero_point(proof_hex, indexes, label)
+        x = cls._sccp_groth16_proof_word_value(proof_hex, indexes[0])
+        y = cls._sccp_groth16_proof_word_value(proof_hex, indexes[1])
+        if cls._sccp_bn254_fq(y * y) != cls._sccp_bn254_fq(x * x * x + 3):
+            raise RuntimeError(f"{label} must be a BN254 G1 point")
+
+    @classmethod
+    def _require_sccp_groth16_g2_point(
+        cls,
+        proof_hex: str,
+        indexes: Sequence[int],
+        label: str,
+    ) -> None:
+        cls._require_sccp_groth16_nonzero_point(proof_hex, indexes, label)
+        x = (
+            cls._sccp_groth16_proof_word_value(proof_hex, indexes[0]),
+            cls._sccp_groth16_proof_word_value(proof_hex, indexes[1]),
+        )
+        y = (
+            cls._sccp_groth16_proof_word_value(proof_hex, indexes[2]),
+            cls._sccp_groth16_proof_word_value(proof_hex, indexes[3]),
+        )
+        left = cls._sccp_bn254_fq2_mul(y, y)
+        x2 = cls._sccp_bn254_fq2_mul(x, x)
+        right = cls._sccp_bn254_fq2_add(
+            cls._sccp_bn254_fq2_mul(x2, x),
+            (SCCP_GROTH16_BN254_G2_B_C0, SCCP_GROTH16_BN254_G2_B_C1),
+        )
+        if left != right:
+            raise RuntimeError(f"{label} must be a BN254 G2 point")
+
+    @classmethod
+    def _validate_sccp_groth16_proof_hex(cls, proof_hex: str, *, context: str) -> None:
+        if cls._sccp_groth16_proof_word_value(proof_hex, 0) != 1:
+            raise RuntimeError(f"{context}.proof_bytes_hex.version must be 1")
+        if cls._sccp_groth16_proof_word_is_zero(proof_hex, 1):
+            raise RuntimeError(f"{context}.proof_bytes_hex.message_id must not be zero")
+        source_domain = cls._sccp_groth16_proof_word_value(proof_hex, 2)
+        if source_domain > 0xFFFF_FFFF:
+            raise RuntimeError(f"{context}.proof_bytes_hex.source_domain must fit u32")
+        if source_domain != SCCP_DOMAIN_SORA:
+            raise RuntimeError(f"{context}.proof_bytes_hex.source_domain must be SORA")
+        if cls._sccp_groth16_proof_word_is_zero(proof_hex, 3):
+            raise RuntimeError(f"{context}.proof_bytes_hex.commitment_root must not be zero")
+        for offset, field in enumerate(
+            ("a.x", "a.y", "b.x0", "b.x1", "b.y0", "b.y1", "c.x", "c.y")
+        ):
+            cls._require_sccp_groth16_base_field_word(
+                proof_hex,
+                4 + offset,
+                f"{context}.proof_bytes_hex.{field}",
+            )
+        cls._require_sccp_groth16_g1_point(
+            proof_hex,
+            (4, 5),
+            f"{context}.proof_bytes_hex.a",
+        )
+        cls._require_sccp_groth16_g2_point(
+            proof_hex,
+            (6, 7, 8, 9),
+            f"{context}.proof_bytes_hex.b",
+        )
+        cls._require_sccp_groth16_g1_point(
+            proof_hex,
+            (10, 11),
+            f"{context}.proof_bytes_hex.c",
+        )
+
+    @classmethod
+    def _normalize_sccp_evm_destination_params(
+        cls,
+        *,
+        network_id_hex: Optional[Union[str, bytes, bytearray, memoryview]],
+        verifier_address_hex: Optional[str],
+        bridge_address_hex: Optional[str],
+        verifier_code_hash_hex: Optional[Union[str, bytes, bytearray, memoryview]],
+        verifier_key_hash_hex: Optional[Union[str, bytes, bytearray, memoryview]],
+        expected_destination_binding_hash_hex: Optional[
+            Union[str, bytes, bytearray, memoryview]
+        ],
+        tron_verifier_address: Optional[str],
+        proof_bytes_hex: Optional[Union[str, bytes, bytearray, memoryview]],
+        context: str,
+        expected_message_id_hex: Optional[str] = None,
+    ) -> Optional[Dict[str, str]]:
+        params: Dict[str, str] = {}
+        if network_id_hex is not None:
+            params["network_id_hex"] = cls._normalize_exact_nonzero_hex_bytes(
+                network_id_hex,
+                context=f"{context}.network_id_hex",
+                expected_byte_length=32,
+            )
+        if verifier_address_hex is not None:
+            params["verifier_address_hex"] = cls._normalize_exact_nonzero_hex_bytes(
+                verifier_address_hex,
+                context=f"{context}.verifier_address_hex",
+                expected_byte_length=20,
+            )
+        if bridge_address_hex is not None:
+            params["bridge_address_hex"] = cls._normalize_exact_nonzero_hex_bytes(
+                bridge_address_hex,
+                context=f"{context}.bridge_address_hex",
+                expected_byte_length=20,
+            )
+        if verifier_code_hash_hex is not None:
+            params["verifier_code_hash_hex"] = cls._normalize_exact_nonzero_hex_bytes(
+                verifier_code_hash_hex,
+                context=f"{context}.verifier_code_hash_hex",
+                expected_byte_length=32,
+            )
+        if verifier_key_hash_hex is not None:
+            params["verifier_key_hash_hex"] = cls._normalize_exact_nonzero_hex_bytes(
+                verifier_key_hash_hex,
+                context=f"{context}.verifier_key_hash_hex",
+                expected_byte_length=32,
+            )
+        if expected_destination_binding_hash_hex is not None:
+            params["expected_destination_binding_hash_hex"] = cls._normalize_exact_nonzero_hex_bytes(
+                expected_destination_binding_hash_hex,
+                context=f"{context}.expected_destination_binding_hash_hex",
+                expected_byte_length=32,
+            )
+        if tron_verifier_address is not None:
+            params["tron_verifier_address"] = cls._normalize_tron_base58check_address(
+                tron_verifier_address,
+                context=f"{context}.tron_verifier_address",
+            )
+        if proof_bytes_hex is not None:
+            params["proof_bytes_hex"] = cls._normalize_exact_nonzero_hex_bytes(
+                proof_bytes_hex,
+                context=f"{context}.proof_bytes_hex",
+                expected_byte_length=SCCP_GROTH16_BN254_PROOF_ABI_BYTE_LENGTH_V1,
+            )
+            cls._validate_sccp_groth16_proof_hex(params["proof_bytes_hex"], context=context)
+            if (
+                expected_message_id_hex is not None
+                and cls._sccp_groth16_proof_word_hex(params["proof_bytes_hex"], 1)
+                != expected_message_id_hex
+            ):
+                raise RuntimeError(
+                    f"{context}.proof_bytes_hex.message_id must match message_id"
+                )
+        destination_material_fields = (
+            "network_id_hex",
+            "verifier_address_hex",
+            "bridge_address_hex",
+            "verifier_code_hash_hex",
+            "verifier_key_hash_hex",
+            "expected_destination_binding_hash_hex",
+            "tron_verifier_address",
+        )
+        has_destination_material = any(field in params for field in destination_material_fields)
+        has_proof_bytes = "proof_bytes_hex" in params
+        if has_destination_material and not has_proof_bytes:
+            raise RuntimeError(
+                f"{context}.proof_bytes_hex is required when SCCP destination proof parameters are supplied"
+            )
+        if has_proof_bytes and not has_destination_material:
+            raise RuntimeError(
+                f"{context}.deployment destination fields are required when proof_bytes_hex is supplied"
+            )
+        if has_destination_material and has_proof_bytes:
+            cls._require_sccp_destination_proof_material_tuple(params, context=context)
+        return params or None
+
+    @classmethod
+    def _require_sccp_destination_proof_material_tuple(
+        cls, params: Mapping[str, str], *, context: str
+    ) -> None:
+        has_evm_fields = (
+            "verifier_address_hex" in params or "bridge_address_hex" in params
+        )
+        has_tron_fields = "tron_verifier_address" in params
+        if has_evm_fields and has_tron_fields:
+            raise RuntimeError(
+                f"{context}.EVM and TRON SCCP destination fields cannot be mixed"
+            )
+
+        shared_fields = (
+            "network_id_hex",
+            "verifier_code_hash_hex",
+            "verifier_key_hash_hex",
+            "expected_destination_binding_hash_hex",
+        )
+        has_shared_fields = any(field in params for field in shared_fields)
+        if has_tron_fields:
+            required = (
+                "network_id_hex",
+                "tron_verifier_address",
+                "verifier_code_hash_hex",
+                "verifier_key_hash_hex",
+                "expected_destination_binding_hash_hex",
+            )
+            missing = [field for field in required if field not in params]
+            if missing:
+                raise RuntimeError(
+                    f"{context}.complete TRON SCCP deployment destination fields are required; missing {', '.join(missing)}"
+                )
+            cls._require_tron_sccp_destination_binding_hash_matches(
+                params,
+                context=context,
+            )
+            return
+
+        if has_evm_fields:
+            required = (
+                "network_id_hex",
+                "verifier_address_hex",
+                "bridge_address_hex",
+                "verifier_code_hash_hex",
+                "verifier_key_hash_hex",
+                "expected_destination_binding_hash_hex",
+            )
+            missing = [field for field in required if field not in params]
+            if missing:
+                raise RuntimeError(
+                    f"{context}.complete EVM SCCP deployment destination fields are required; missing {', '.join(missing)}"
+                )
+            cls._require_evm_sccp_destination_binding_hash_matches(
+                params,
+                context=context,
+            )
+            return
+
+        if has_shared_fields:
+            raise RuntimeError(
+                f"{context}.complete EVM or TRON SCCP deployment destination fields are required"
+            )
+
+    @staticmethod
+    def _require_evm_sccp_destination_binding_hash_matches(
+        params: Mapping[str, str], *, context: str
+    ) -> None:
+        from .sccp import evm_sccp_destination_binding_hash
+
+        actual = params["expected_destination_binding_hash_hex"]
+        for target_domain in (SCCP_DOMAIN_ETH, SCCP_DOMAIN_BSC):
+            try:
+                expected = evm_sccp_destination_binding_hash(
+                    {
+                        "target_domain": target_domain,
+                        "network_id_hex": params["network_id_hex"],
+                        "verifier_address_hex": params["verifier_address_hex"],
+                        "bridge_address_hex": params["bridge_address_hex"],
+                        "verifier_code_hash_hex": params["verifier_code_hash_hex"],
+                        "verifier_key_hash_hex": params["verifier_key_hash_hex"],
+                    }
+                ).removeprefix("0x")
+            except (TypeError, ValueError) as exc:
+                raise RuntimeError(f"{context}.{exc}") from exc
+            if actual == expected:
+                return
+        raise RuntimeError(
+            f"{context}.expected_destination_binding_hash_hex must match canonical EVM destination binding"
+        )
+
+    @staticmethod
+    def _require_tron_sccp_destination_binding_hash_matches(
+        params: Mapping[str, str], *, context: str
+    ) -> None:
+        from .sccp import tron_sccp_destination_binding_hash
+
+        try:
+            expected = tron_sccp_destination_binding_hash(
+                {
+                    "network_id_hex": params["network_id_hex"],
+                    "verifier_address": params["tron_verifier_address"],
+                    "verifier_code_hash_hex": params["verifier_code_hash_hex"],
+                    "verifier_key_hash_hex": params["verifier_key_hash_hex"],
+                }
+            ).removeprefix("0x")
+        except (TypeError, ValueError) as exc:
+            raise RuntimeError(f"{context}.{exc}") from exc
+        actual = params["expected_destination_binding_hash_hex"]
+        if actual != expected:
+            raise RuntimeError(
+                f"{context}.expected_destination_binding_hash_hex must match canonical TRON destination binding"
+            )
+
+    @staticmethod
+    def _normalize_tron_base58check_address(value: Any, *, context: str) -> str:
+        if not isinstance(value, str) or not value.strip():
+            raise RuntimeError(f"{context} must be a non-empty string")
+        if value.strip() != value:
+            raise RuntimeError(f"{context} must be a canonical TRON Base58Check address")
+        normalized = value
+        ToriiClient._decode_tron_base58check_address_payload(normalized, context=context)
+        return normalized
+
+    @staticmethod
+    def _decode_tron_base58check_address_payload(value: str, *, context: str) -> bytes:
+        number = 0
+        for character in value:
+            try:
+                digit = BASE58_ALPHABET.index(character)
+            except ValueError as exc:
+                raise RuntimeError(f"{context} must be a TRON Base58Check address") from exc
+            number = number * 58 + digit
+        decoded = number.to_bytes((number.bit_length() + 7) // 8, "big") if number else b""
+        leading_zeroes = len(value) - len(value.lstrip("1"))
+        decoded = (b"\x00" * leading_zeroes) + decoded
+        if len(decoded) != 25:
+            raise RuntimeError(f"{context} must be a TRON Base58Check address")
+        payload = decoded[:-4]
+        checksum = decoded[-4:]
+        expected_checksum = hashlib.sha256(hashlib.sha256(payload).digest()).digest()[:4]
+        if checksum != expected_checksum:
+            raise RuntimeError(f"{context} must be a TRON Base58Check address")
+        if len(payload) != 21 or payload[0] != 0x41 or not any(payload[1:]):
+            raise RuntimeError(f"{context} must be a TRON Base58Check address")
+        return payload
+
+    @staticmethod
+    def _normalize_tron_base58check_payload(value: Any, *, context: str) -> str:
+        if isinstance(value, (bytes, bytearray, memoryview)):
+            payload = bytes(value)
+        elif isinstance(value, (list, tuple)):
+            try:
+                payload = bytes(
+                    ToriiClient._coerce_unsigned(entry, f"{context}[{index}]")
+                    for index, entry in enumerate(value)
+                )
+            except ValueError as exc:
+                raise RuntimeError(f"{context} must contain byte values") from exc
+        elif isinstance(value, str):
+            if value.strip() != value:
+                raise RuntimeError(f"{context} must be a canonical TRON Base58Check payload")
+            literal = value
+            if not literal:
+                raise RuntimeError(f"{context} must be a non-empty string")
+            hex_literal = literal[2:] if literal.startswith(("0x", "0X")) else literal
+            if (
+                hex_literal
+                and len(hex_literal) % 2 == 0
+                and all(ch in "0123456789abcdefABCDEF" for ch in hex_literal)
+            ):
+                payload = bytes.fromhex(hex_literal)
+            else:
+                payload = ToriiClient._decode_tron_base58check_address_payload(
+                    literal,
+                    context=context,
+                )
+        else:
+            raise RuntimeError(f"{context} must be bytes, a byte array, or a non-empty string")
+        if len(payload) != 21 or payload[0] != 0x41 or not any(payload[1:]):
+            raise RuntimeError(f"{context} must be a 21-byte TRON Base58Check payload")
+        return payload.hex()
+
+    @staticmethod
     def _normalize_uaid_literal(value: Any, *, context: str) -> str:
         if not isinstance(value, str):
             raise RuntimeError(f"{context} must be a UAID string")
@@ -9067,6 +9832,23 @@ class ToriiClient:
         )
 
     @staticmethod
+    def _parse_sccp_destination_binding(
+        payload: Mapping[str, Any],
+        *,
+        context: str,
+    ) -> Mapping[str, Any]:
+        record = ToriiClient._ensure_mapping(payload, context)
+        return {
+            "version": ToriiClient._coerce_unsigned(record.get("version"), f"{context}.version"),
+            "key": ToriiClient._require_string(record.get("key"), f"{context}.key"),
+            "binding_hash": ToriiClient._normalize_hex_string(
+                record.get("binding_hash"),
+                context=f"{context}.binding_hash",
+                expected_length=64,
+            ),
+        }
+
+    @staticmethod
     def _parse_sccp_platform_submission_payload(
         payload: Mapping[str, Any],
         *,
@@ -9124,7 +9906,42 @@ class ToriiClient:
                 ),
             }
             return SccpPlatformSubmissionPayload(kind=kind, value=value)
-        if kind in {"solana_program_instruction", "substrate_runtime_call"}:
+        if kind == "solana_program_instruction":
+            value = {
+                "proof_bytes": ToriiClient._require_hex_string(
+                    body.get("proof_bytes"),
+                    f"{context}.payload.proof_bytes",
+                ),
+                "public_inputs_bytes": ToriiClient._require_hex_string(
+                    body.get("public_inputs_bytes"),
+                    f"{context}.payload.public_inputs_bytes",
+                ),
+                "bundle_bytes": ToriiClient._require_hex_string(
+                    body.get("bundle_bytes"),
+                    f"{context}.payload.bundle_bytes",
+                ),
+                "destination_binding": ToriiClient._parse_sccp_destination_binding(
+                    body.get("destination_binding"),
+                    context=f"{context}.payload.destination_binding",
+                ),
+                "destination_binding_hash": ToriiClient._normalize_hex_string(
+                    body.get("destination_binding_hash"),
+                    context=f"{context}.payload.destination_binding_hash",
+                    expected_length=64,
+                ),
+                "statement_hash": ToriiClient._normalize_hex_string(
+                    body.get("statement_hash"),
+                    context=f"{context}.payload.statement_hash",
+                    expected_length=64,
+                ),
+                "proof_context_hash": ToriiClient._normalize_hex_string(
+                    body.get("proof_context_hash"),
+                    context=f"{context}.payload.proof_context_hash",
+                    expected_length=64,
+                ),
+            }
+            return SccpPlatformSubmissionPayload(kind=kind, value=value)
+        if kind == "substrate_runtime_call":
             value = {
                 "proof_bytes": ToriiClient._require_hex_string(
                     body.get("proof_bytes"),
@@ -9141,6 +9958,44 @@ class ToriiClient:
             }
             return SccpPlatformSubmissionPayload(kind=kind, value=value)
         if kind == "ton_internal_message":
+            if "message_body_boc" in body:
+                value = {
+                    "message_body_boc": ToriiClient._require_hex_string(
+                        body.get("message_body_boc"),
+                        f"{context}.payload.message_body_boc",
+                    ),
+                    "query_id": ToriiClient._coerce_unsigned(
+                        body.get("query_id"),
+                        f"{context}.payload.query_id",
+                    ),
+                    "destination_binding": ToriiClient._parse_sccp_destination_binding(
+                        body.get("destination_binding"),
+                        context=f"{context}.payload.destination_binding",
+                    ),
+                    "destination_binding_hash": ToriiClient._normalize_hex_string(
+                        body.get("destination_binding_hash"),
+                        context=f"{context}.payload.destination_binding_hash",
+                        expected_length=64,
+                    ),
+                    "proof_bytes": ToriiClient._require_hex_string(
+                        body.get("proof_bytes"),
+                        f"{context}.payload.proof_bytes",
+                    ),
+                    "public_inputs_bytes": ToriiClient._require_hex_string(
+                        body.get("public_inputs_bytes"),
+                        f"{context}.payload.public_inputs_bytes",
+                    ),
+                    "bundle_bytes": ToriiClient._require_hex_string(
+                        body.get("bundle_bytes"),
+                        f"{context}.payload.bundle_bytes",
+                    ),
+                    "statement_hash": ToriiClient._normalize_hex_string(
+                        body.get("statement_hash"),
+                        context=f"{context}.payload.statement_hash",
+                        expected_length=64,
+                    ),
+                }
+                return SccpPlatformSubmissionPayload(kind=kind, value=value)
             value = {
                 "proof_cell": ToriiClient._require_hex_string(
                     body.get("proof_cell"),
@@ -9274,7 +10129,7 @@ class ToriiClient:
         if kind == "TronBase58Check":
             return SccpNormalizedCodecValue(
                 kind=kind,
-                value=ToriiClient._coerce_sccp_codec_scalar(
+                value=ToriiClient._normalize_tron_base58check_payload(
                     body_record.get("payload"),
                     context=f"{context}.{kind}.payload",
                 ),

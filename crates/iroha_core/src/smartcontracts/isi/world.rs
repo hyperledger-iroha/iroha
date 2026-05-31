@@ -4453,6 +4453,34 @@ pub mod isi {
         Ok(())
     }
 
+    fn ensure_unique_council_roster(
+        members: &[AccountId],
+        alternates: &[AccountId],
+    ) -> Result<(), Error> {
+        let mut members_seen = BTreeSet::new();
+        for member in members {
+            if !members_seen.insert(member) {
+                return Err(InstructionExecutionError::InvariantViolation(
+                    "council roster contains duplicate member".into(),
+                ));
+            }
+        }
+        let mut alternates_seen = BTreeSet::new();
+        for alternate in alternates {
+            if members_seen.contains(alternate) {
+                return Err(InstructionExecutionError::InvariantViolation(
+                    "council roster account cannot be both member and alternate".into(),
+                ));
+            }
+            if !alternates_seen.insert(alternate) {
+                return Err(InstructionExecutionError::InvariantViolation(
+                    "council roster contains duplicate alternate".into(),
+                ));
+            }
+        }
+        Ok(())
+    }
+
     impl Execute for gov::EnactReferendum {
         fn execute(
             self,
@@ -5032,7 +5060,22 @@ pub mod isi {
                 "referendum already closed".into(),
             ));
         }
+        if referendum.status != crate::state::GovernanceReferendumStatus::Proposed {
+            return Err(InstructionExecutionError::InvariantViolation(
+                "referendum already left parliament stage".into(),
+            ));
+        }
         let now_h = state_transaction._curr_block.height().get();
+        if now_h > referendum.h_end {
+            return Err(InstructionExecutionError::InvariantViolation(
+                "referendum window elapsed for parliament ballots".into(),
+            ));
+        }
+        if !required_parliament_bodies(&proposal.kind).contains(&body) {
+            return Err(InstructionExecutionError::InvariantViolation(
+                "parliament body is not required for this proposal".into(),
+            ));
+        }
         let (bodies, epoch, persist_epoch_bodies) =
             if resolve_governance_approval_mode(state_transaction)
                 == GovernanceApprovalMode::ParliamentSortitionJit
@@ -5121,6 +5164,16 @@ pub mod isi {
                 "parliament roster missing for requested body".into(),
             ));
         };
+        if roster.body != body {
+            return Err(InstructionExecutionError::InvariantViolation(
+                "parliament roster body mismatch".into(),
+            ));
+        }
+        if roster.epoch != epoch {
+            return Err(InstructionExecutionError::InvariantViolation(
+                "parliament body roster epoch mismatch".into(),
+            ));
+        }
         if roster.members.is_empty() {
             return Err(InstructionExecutionError::InvariantViolation(
                 "parliament roster empty for requested body".into(),
@@ -5318,30 +5371,6 @@ pub mod isi {
         ctx: &ApprovalContext,
         state_transaction: &mut StateTransaction<'_, '_>,
     ) {
-        if let Some(mut proposal) = state_transaction
-            .world
-            .governance_proposals
-            .get(&ctx.proposal_id)
-            .cloned()
-        {
-            if matches!(
-                proposal.status,
-                crate::state::GovernanceProposalStatus::Proposed
-            ) {
-                proposal.status = crate::state::GovernanceProposalStatus::Approved;
-                state_transaction
-                    .world
-                    .governance_proposals
-                    .insert(ctx.proposal_id, proposal);
-                state_transaction
-                    .world
-                    .emit_events(Some(GovernanceEvent::ProposalApproved(
-                        iroha_data_model::events::data::governance::GovernanceProposalApproved {
-                            id: ctx.proposal_id,
-                        },
-                    )));
-            }
-        }
         if ctx.referendum.status == crate::state::GovernanceReferendumStatus::Proposed
             && ctx.now_h >= ctx.referendum.h_start
             && ctx.now_h <= ctx.referendum.h_end
@@ -5396,6 +5425,7 @@ pub mod isi {
             let citizen_cfg = &state_transaction.gov.citizen_service;
             let current_height = state_transaction._curr_block.height().get();
 
+            ensure_unique_council_roster(&self.members, &self.alternates)?;
             if state_transaction.gov.citizenship_bond_amount > 0 {
                 process_council_members(
                     &self.members,
@@ -7101,21 +7131,1035 @@ pub mod isi {
         validate_sccp_finality_against_state(&finality, state_transaction)
     }
 
+    fn parse_sccp_source_material_h256(raw: &str, field: &str) -> Result<[u8; 32], Error> {
+        let bytes = hex::decode(raw.trim_start_matches("0x")).map_err(|_| {
+            invalid_bridge_proof(format!(
+                "SCCP source verifier material `{field}` must be 32-byte hex"
+            ))
+        })?;
+        if bytes.len() != 32 {
+            return Err(invalid_bridge_proof(format!(
+                "SCCP source verifier material `{field}` must be 32-byte hex"
+            )));
+        }
+        let mut out = [0u8; 32];
+        out.copy_from_slice(&bytes);
+        Ok(out)
+    }
+
+    fn parse_optional_sccp_source_material_h256(raw: &str, field: &str) -> Result<[u8; 32], Error> {
+        if raw.is_empty() {
+            return Ok([0u8; 32]);
+        }
+        parse_sccp_source_material_h256(raw, field)
+    }
+
+    fn parse_sccp_source_bridge_emitter_address(
+        raw: &str,
+        context: &str,
+        field: &str,
+    ) -> Result<Vec<u8>, Error> {
+        if raw.is_empty() {
+            return Ok(Vec::new());
+        }
+        let bytes = hex::decode(raw.trim_start_matches("0x")).map_err(|_| {
+            invalid_bridge_proof(format!("{context} `{field}` must be 20-byte hex"))
+        })?;
+        if bytes.len() != iroha_sccp::SCCP_EVM_SOURCE_BRIDGE_EMITTER_ADDRESS_BYTES {
+            return Err(invalid_bridge_proof(format!(
+                "{context} `{field}` must be 20-byte hex"
+            )));
+        }
+        Ok(bytes)
+    }
+
+    fn configured_sccp_source_verifier_material_for_domain(
+        zk_config: &iroha_config::parameters::actual::Zk,
+        source_domain: u32,
+    ) -> Result<Option<iroha_sccp::SccpSourceVerifierMaterialV1>, Error> {
+        let mut matches = zk_config
+            .sccp_source_verifier_materials
+            .iter()
+            .filter(|material| material.source_domain == source_domain);
+        let Some(configured) = matches.next() else {
+            return Ok(None);
+        };
+        if matches.next().is_some() {
+            return Err(invalid_bridge_proof(format!(
+                "SCCP source verifier material for domain {source_domain} is duplicated"
+            )));
+        }
+
+        let source_proof_plan = iroha_sccp::SccpSourceProofPlanV1::from_str(
+            &configured.source_proof_plan,
+        )
+        .map_err(|err| {
+            invalid_bridge_proof(format!(
+                "SCCP source verifier material `source_proof_plan` is invalid: {err}"
+            ))
+        })?;
+        let finality_model = iroha_sccp::SccpProofFinalityModelV1::from_str(
+            &configured.finality_model,
+        )
+        .map_err(|err| {
+            invalid_bridge_proof(format!(
+                "SCCP source verifier material `finality_model` is invalid: {err}"
+            ))
+        })?;
+        let material = iroha_sccp::SccpSourceVerifierMaterialV1 {
+            version: configured.version,
+            source_domain: configured.source_domain,
+            source_chain: configured.source_chain.clone(),
+            source_proof_plan,
+            finality_model,
+            adapter_circuit_id: configured.adapter_circuit_id.clone(),
+            source_trust_anchor_id: configured.source_trust_anchor_id.clone(),
+            source_trust_anchor_hash: parse_sccp_source_material_h256(
+                &configured.source_trust_anchor_hash,
+                "source_trust_anchor_hash",
+            )?,
+            consensus_verifier_id: configured.consensus_verifier_id.clone(),
+            consensus_verifier_hash: parse_sccp_source_material_h256(
+                &configured.consensus_verifier_hash,
+                "consensus_verifier_hash",
+            )?,
+            message_inclusion_verifier_id: configured.message_inclusion_verifier_id.clone(),
+            message_inclusion_verifier_hash: parse_sccp_source_material_h256(
+                &configured.message_inclusion_verifier_hash,
+                "message_inclusion_verifier_hash",
+            )?,
+            source_state_verifier_id: configured.source_state_verifier_id.clone(),
+            source_state_verifier_hash: parse_optional_sccp_source_material_h256(
+                &configured.source_state_verifier_hash,
+                "source_state_verifier_hash",
+            )?,
+            source_bridge_emitter_id: configured.source_bridge_emitter_id.clone(),
+            source_bridge_emitter_address: parse_sccp_source_bridge_emitter_address(
+                &configured.source_bridge_emitter_address,
+                "SCCP source verifier material",
+                "source_bridge_emitter_address",
+            )?,
+            source_bridge_emitter_code_hash: parse_optional_sccp_source_material_h256(
+                &configured.source_bridge_emitter_code_hash,
+                "source_bridge_emitter_code_hash",
+            )?,
+            source_bridge_network_id: parse_optional_sccp_source_material_h256(
+                &configured.source_bridge_network_id,
+                "source_bridge_network_id",
+            )?,
+            source_bridge_owner_address: parse_sccp_source_bridge_emitter_address(
+                &configured.source_bridge_owner_address,
+                "SCCP source verifier material",
+                "source_bridge_owner_address",
+            )?,
+            source_bridge_config_hash: parse_optional_sccp_source_material_h256(
+                &configured.source_bridge_config_hash,
+                "source_bridge_config_hash",
+            )?,
+            finality_policy_id: configured.finality_policy_id.clone(),
+            finality_policy_hash: parse_sccp_source_material_h256(
+                &configured.finality_policy_hash,
+                "finality_policy_hash",
+            )?,
+            placeholder_material: configured.placeholder_material,
+        };
+        if !iroha_sccp::sccp_source_verifier_material_is_production_ready(&material) {
+            return Err(invalid_bridge_proof(format!(
+                "SCCP source verifier material for domain {source_domain} is not production-ready"
+            )));
+        }
+        Ok(Some(material))
+    }
+
+    fn parse_sccp_source_adapter_deployment_h256(
+        raw: &str,
+        field: &str,
+    ) -> Result<[u8; 32], Error> {
+        let bytes = hex::decode(raw.trim_start_matches("0x")).map_err(|_| {
+            invalid_bridge_proof(format!(
+                "SCCP source adapter engine deployment `{field}` must be 32-byte hex"
+            ))
+        })?;
+        if bytes.len() != 32 {
+            return Err(invalid_bridge_proof(format!(
+                "SCCP source adapter engine deployment `{field}` must be 32-byte hex"
+            )));
+        }
+        let mut out = [0u8; 32];
+        out.copy_from_slice(&bytes);
+        Ok(out)
+    }
+
+    fn parse_optional_sccp_source_adapter_deployment_h256(
+        raw: &str,
+        field: &str,
+    ) -> Result<[u8; 32], Error> {
+        if raw.is_empty() {
+            return Ok([0u8; 32]);
+        }
+        parse_sccp_source_adapter_deployment_h256(raw, field)
+    }
+
+    fn parse_nonzero_sccp_source_adapter_deployment_h256(
+        raw: &str,
+        field: &str,
+    ) -> Result<[u8; 32], Error> {
+        let hash = parse_sccp_source_adapter_deployment_h256(raw, field)?;
+        if hash.iter().all(|byte| *byte == 0) {
+            return Err(invalid_bridge_proof(format!(
+                "SCCP source adapter engine deployment `{field}` must not be zero"
+            )));
+        }
+        Ok(hash)
+    }
+
+    fn validate_full_light_client_audit_field_lane_isolation(
+        configured: &iroha_config::parameters::actual::SccpSourceAdapterEngineDeployment,
+    ) -> Result<(), Error> {
+        let solana_audit_supplied = [
+            configured.solana_tower_replay_verifier_hash.as_str(),
+            configured
+                .solana_full_accountsdb_lattice_verifier_hash
+                .as_str(),
+            configured.solana_bank_fork_choice_verifier_hash.as_str(),
+            configured.solana_full_light_client_gate_hash.as_str(),
+        ]
+        .iter()
+        .any(|value| !value.is_empty());
+        if solana_audit_supplied && configured.source_domain != iroha_sccp::SCCP_DOMAIN_SOL {
+            return Err(invalid_bridge_proof(
+                "Solana full-light-client audit fields are only valid for SOL source adapter deployments",
+            ));
+        }
+
+        let ton_audit_supplied = [
+            configured.ton_masterchain_config_verifier_hash.as_str(),
+            configured
+                .ton_validator_set_transition_verifier_hash
+                .as_str(),
+            configured
+                .ton_shard_accounts_dictionary_verifier_hash
+                .as_str(),
+            configured.ton_full_light_client_gate_hash.as_str(),
+        ]
+        .iter()
+        .any(|value| !value.is_empty());
+        if ton_audit_supplied && configured.source_domain != iroha_sccp::SCCP_DOMAIN_TON {
+            return Err(invalid_bridge_proof(
+                "TON full-light-client audit fields are only valid for TON source adapter deployments",
+            ));
+        }
+
+        let tron_gate_supplied = !configured.tron_dpos_source_gate_hash.is_empty();
+        if tron_gate_supplied && configured.source_domain != iroha_sccp::SCCP_DOMAIN_TRON {
+            return Err(invalid_bridge_proof(
+                "TRON DPoS source gate hash is only valid for TRON source adapter deployments",
+            ));
+        }
+
+        Ok(())
+    }
+
+    fn validate_solana_full_light_client_audit_evidence(
+        zk_config: &iroha_config::parameters::actual::Zk,
+        configured: &iroha_config::parameters::actual::SccpSourceAdapterEngineDeployment,
+        deployment: &iroha_sccp::SccpSourceAdapterEngineDeploymentV1,
+    ) -> Result<(), Error> {
+        let audit_fields = [
+            (
+                "solana_tower_replay_verifier_hash",
+                configured.solana_tower_replay_verifier_hash.as_str(),
+            ),
+            (
+                "solana_full_accountsdb_lattice_verifier_hash",
+                configured
+                    .solana_full_accountsdb_lattice_verifier_hash
+                    .as_str(),
+            ),
+            (
+                "solana_bank_fork_choice_verifier_hash",
+                configured.solana_bank_fork_choice_verifier_hash.as_str(),
+            ),
+            (
+                "solana_full_light_client_gate_hash",
+                configured.solana_full_light_client_gate_hash.as_str(),
+            ),
+        ];
+        let supplied = audit_fields
+            .iter()
+            .filter(|(_, value)| !value.is_empty())
+            .count();
+        if supplied == 0 {
+            return Ok(());
+        }
+        if configured.source_domain != iroha_sccp::SCCP_DOMAIN_SOL {
+            return Err(invalid_bridge_proof(
+                "Solana full-light-client audit fields are only valid for SOL source adapter deployments",
+            ));
+        }
+        if supplied != audit_fields.len() {
+            return Err(invalid_bridge_proof(
+                "Solana full-light-client audit evidence must include Tower replay, full AccountsDB lattice, bank/fork-choice, and gate hashes",
+            ));
+        }
+
+        let _tower_replay_verifier_hash = parse_nonzero_sccp_source_adapter_deployment_h256(
+            &configured.solana_tower_replay_verifier_hash,
+            "solana_tower_replay_verifier_hash",
+        )?;
+        let _full_accountsdb_lattice_verifier_hash =
+            parse_nonzero_sccp_source_adapter_deployment_h256(
+                &configured.solana_full_accountsdb_lattice_verifier_hash,
+                "solana_full_accountsdb_lattice_verifier_hash",
+            )?;
+        let _bank_fork_choice_verifier_hash = parse_nonzero_sccp_source_adapter_deployment_h256(
+            &configured.solana_bank_fork_choice_verifier_hash,
+            "solana_bank_fork_choice_verifier_hash",
+        )?;
+        let supplied_gate_hash = parse_nonzero_sccp_source_adapter_deployment_h256(
+            &configured.solana_full_light_client_gate_hash,
+            "solana_full_light_client_gate_hash",
+        )?;
+        let material = configured_sccp_source_verifier_material_for_domain(
+            zk_config,
+            configured.source_domain,
+        )?
+        .ok_or_else(|| {
+            invalid_bridge_proof(
+                "Solana full-light-client audit evidence requires source verifier material",
+            )
+        })?;
+        let expected_gate_hash = iroha_sccp::sccp_solana_full_light_client_gate_hash_from_deployment_v1(
+            &material, deployment,
+        )
+        .ok_or_else(|| {
+            invalid_bridge_proof(
+                "Solana full-light-client audit evidence does not match the configured source adapter deployment",
+            )
+        })?;
+        if supplied_gate_hash != expected_gate_hash {
+            return Err(invalid_bridge_proof(
+                "Solana full-light-client audit gate hash does not match the configured verifier hashes",
+            ));
+        }
+        Ok(())
+    }
+
+    fn validate_ton_full_light_client_audit_evidence(
+        zk_config: &iroha_config::parameters::actual::Zk,
+        configured: &iroha_config::parameters::actual::SccpSourceAdapterEngineDeployment,
+        deployment: &iroha_sccp::SccpSourceAdapterEngineDeploymentV1,
+    ) -> Result<(), Error> {
+        let audit_fields = [
+            (
+                "ton_masterchain_config_verifier_hash",
+                configured.ton_masterchain_config_verifier_hash.as_str(),
+            ),
+            (
+                "ton_validator_set_transition_verifier_hash",
+                configured
+                    .ton_validator_set_transition_verifier_hash
+                    .as_str(),
+            ),
+            (
+                "ton_shard_accounts_dictionary_verifier_hash",
+                configured
+                    .ton_shard_accounts_dictionary_verifier_hash
+                    .as_str(),
+            ),
+            (
+                "ton_full_light_client_gate_hash",
+                configured.ton_full_light_client_gate_hash.as_str(),
+            ),
+        ];
+        let supplied = audit_fields
+            .iter()
+            .filter(|(_, value)| !value.is_empty())
+            .count();
+        if supplied == 0 {
+            return Ok(());
+        }
+        if configured.source_domain != iroha_sccp::SCCP_DOMAIN_TON {
+            return Err(invalid_bridge_proof(
+                "TON full-light-client audit fields are only valid for TON source adapter deployments",
+            ));
+        }
+        if supplied != audit_fields.len() {
+            return Err(invalid_bridge_proof(
+                "TON full-light-client audit evidence must include masterchain config, validator-set transition, shard-accounts dictionary, and gate hashes",
+            ));
+        }
+
+        let _masterchain_config_verifier_hash = parse_nonzero_sccp_source_adapter_deployment_h256(
+            &configured.ton_masterchain_config_verifier_hash,
+            "ton_masterchain_config_verifier_hash",
+        )?;
+        let _validator_set_transition_verifier_hash =
+            parse_nonzero_sccp_source_adapter_deployment_h256(
+                &configured.ton_validator_set_transition_verifier_hash,
+                "ton_validator_set_transition_verifier_hash",
+            )?;
+        let _shard_accounts_dictionary_verifier_hash =
+            parse_nonzero_sccp_source_adapter_deployment_h256(
+                &configured.ton_shard_accounts_dictionary_verifier_hash,
+                "ton_shard_accounts_dictionary_verifier_hash",
+            )?;
+        let supplied_gate_hash = parse_nonzero_sccp_source_adapter_deployment_h256(
+            &configured.ton_full_light_client_gate_hash,
+            "ton_full_light_client_gate_hash",
+        )?;
+        let material = configured_sccp_source_verifier_material_for_domain(
+            zk_config,
+            configured.source_domain,
+        )?
+        .ok_or_else(|| {
+            invalid_bridge_proof(
+                "TON full-light-client audit evidence requires source verifier material",
+            )
+        })?;
+        let expected_gate_hash =
+            iroha_sccp::sccp_ton_full_light_client_gate_hash_from_deployment_v1(
+                &material, deployment,
+            )
+            .ok_or_else(|| {
+                invalid_bridge_proof(
+                    "TON full-light-client audit evidence does not match the configured source adapter deployment",
+                )
+            })?;
+        if supplied_gate_hash != expected_gate_hash {
+            return Err(invalid_bridge_proof(
+                "TON full-light-client audit gate hash does not match the configured verifier hashes",
+            ));
+        }
+        Ok(())
+    }
+
+    fn validate_tron_dpos_source_gate_evidence(
+        zk_config: &iroha_config::parameters::actual::Zk,
+        configured: &iroha_config::parameters::actual::SccpSourceAdapterEngineDeployment,
+        deployment: &iroha_sccp::SccpSourceAdapterEngineDeploymentV1,
+    ) -> Result<(), Error> {
+        if configured.source_domain != iroha_sccp::SCCP_DOMAIN_TRON {
+            return Ok(());
+        }
+        let supplied_gate_hash = parse_nonzero_sccp_source_adapter_deployment_h256(
+            &configured.tron_dpos_source_gate_hash,
+            "tron_dpos_source_gate_hash",
+        )?;
+        let material = configured_sccp_source_verifier_material_for_domain(
+            zk_config,
+            configured.source_domain,
+        )?
+        .ok_or_else(|| {
+            invalid_bridge_proof("TRON DPoS source gate evidence requires source verifier material")
+        })?;
+        let expected_gate_hash =
+            iroha_sccp::sccp_tron_dpos_source_gate_hash_from_deployment_v1(
+                &material, deployment,
+            )
+            .ok_or_else(|| {
+                invalid_bridge_proof(
+                    "TRON DPoS source gate evidence does not match the configured source adapter deployment",
+                )
+            })?;
+        if supplied_gate_hash != expected_gate_hash {
+            return Err(invalid_bridge_proof(
+                "TRON DPoS source gate hash does not match the configured source adapter deployment",
+            ));
+        }
+        Ok(())
+    }
+
+    fn configured_sccp_source_adapter_engine_deployment_for_domain(
+        zk_config: &iroha_config::parameters::actual::Zk,
+        source_domain: u32,
+    ) -> Result<Option<iroha_sccp::SccpSourceAdapterEngineDeploymentV1>, Error> {
+        let mut matches = zk_config
+            .sccp_source_adapter_engine_deployments
+            .iter()
+            .filter(|deployment| deployment.source_domain == source_domain);
+        let Some(configured) = matches.next() else {
+            return Ok(None);
+        };
+        if matches.next().is_some() {
+            return Err(invalid_bridge_proof(format!(
+                "SCCP source adapter engine deployment for domain {source_domain} is duplicated"
+            )));
+        }
+        validate_full_light_client_audit_field_lane_isolation(configured)?;
+
+        let source_proof_plan = iroha_sccp::SccpSourceProofPlanV1::from_str(
+            &configured.source_proof_plan,
+        )
+        .map_err(|err| {
+            invalid_bridge_proof(format!(
+                "SCCP source adapter engine deployment `source_proof_plan` is invalid: {err}"
+            ))
+        })?;
+        let finality_model = iroha_sccp::SccpProofFinalityModelV1::from_str(
+            &configured.finality_model,
+        )
+        .map_err(|err| {
+            invalid_bridge_proof(format!(
+                "SCCP source adapter engine deployment `finality_model` is invalid: {err}"
+            ))
+        })?;
+        let deployment = iroha_sccp::SccpSourceAdapterEngineDeploymentV1 {
+            version: configured.version,
+            source_domain: configured.source_domain,
+            target_domain: configured.target_domain,
+            source_chain: configured.source_chain.clone(),
+            source_proof_plan,
+            finality_model,
+            adapter_proof_family: configured.adapter_proof_family.clone(),
+            adapter_circuit_id: configured.adapter_circuit_id.clone(),
+            adapter_verifier_vk_hash: parse_sccp_source_adapter_deployment_h256(
+                &configured.adapter_verifier_vk_hash,
+                "adapter_verifier_vk_hash",
+            )?,
+            source_trust_anchor_id: configured.source_trust_anchor_id.clone(),
+            source_trust_anchor_hash: parse_sccp_source_adapter_deployment_h256(
+                &configured.source_trust_anchor_hash,
+                "source_trust_anchor_hash",
+            )?,
+            consensus_verifier_id: configured.consensus_verifier_id.clone(),
+            consensus_verifier_hash: parse_sccp_source_adapter_deployment_h256(
+                &configured.consensus_verifier_hash,
+                "consensus_verifier_hash",
+            )?,
+            message_inclusion_verifier_id: configured.message_inclusion_verifier_id.clone(),
+            message_inclusion_verifier_hash: parse_sccp_source_adapter_deployment_h256(
+                &configured.message_inclusion_verifier_hash,
+                "message_inclusion_verifier_hash",
+            )?,
+            source_state_verifier_id: configured.source_state_verifier_id.clone(),
+            source_state_verifier_hash: parse_optional_sccp_source_adapter_deployment_h256(
+                &configured.source_state_verifier_hash,
+                "source_state_verifier_hash",
+            )?,
+            solana_tower_replay_verifier_hash: parse_optional_sccp_source_adapter_deployment_h256(
+                &configured.solana_tower_replay_verifier_hash,
+                "solana_tower_replay_verifier_hash",
+            )?,
+            solana_full_accountsdb_lattice_verifier_hash:
+                parse_optional_sccp_source_adapter_deployment_h256(
+                    &configured.solana_full_accountsdb_lattice_verifier_hash,
+                    "solana_full_accountsdb_lattice_verifier_hash",
+                )?,
+            solana_bank_fork_choice_verifier_hash:
+                parse_optional_sccp_source_adapter_deployment_h256(
+                    &configured.solana_bank_fork_choice_verifier_hash,
+                    "solana_bank_fork_choice_verifier_hash",
+                )?,
+            ton_masterchain_config_verifier_hash:
+                parse_optional_sccp_source_adapter_deployment_h256(
+                    &configured.ton_masterchain_config_verifier_hash,
+                    "ton_masterchain_config_verifier_hash",
+                )?,
+            ton_validator_set_transition_verifier_hash:
+                parse_optional_sccp_source_adapter_deployment_h256(
+                    &configured.ton_validator_set_transition_verifier_hash,
+                    "ton_validator_set_transition_verifier_hash",
+                )?,
+            ton_shard_accounts_dictionary_verifier_hash:
+                parse_optional_sccp_source_adapter_deployment_h256(
+                    &configured.ton_shard_accounts_dictionary_verifier_hash,
+                    "ton_shard_accounts_dictionary_verifier_hash",
+                )?,
+            source_bridge_emitter_id: configured.source_bridge_emitter_id.clone(),
+            source_bridge_emitter_address: parse_sccp_source_bridge_emitter_address(
+                &configured.source_bridge_emitter_address,
+                "SCCP source adapter engine deployment",
+                "source_bridge_emitter_address",
+            )?,
+            source_bridge_emitter_code_hash: parse_optional_sccp_source_adapter_deployment_h256(
+                &configured.source_bridge_emitter_code_hash,
+                "source_bridge_emitter_code_hash",
+            )?,
+            source_bridge_network_id: parse_optional_sccp_source_adapter_deployment_h256(
+                &configured.source_bridge_network_id,
+                "source_bridge_network_id",
+            )?,
+            source_bridge_owner_address: parse_sccp_source_bridge_emitter_address(
+                &configured.source_bridge_owner_address,
+                "SCCP source adapter engine deployment",
+                "source_bridge_owner_address",
+            )?,
+            source_bridge_config_hash: parse_optional_sccp_source_adapter_deployment_h256(
+                &configured.source_bridge_config_hash,
+                "source_bridge_config_hash",
+            )?,
+            finality_policy_id: configured.finality_policy_id.clone(),
+            finality_policy_hash: parse_sccp_source_adapter_deployment_h256(
+                &configured.finality_policy_hash,
+                "finality_policy_hash",
+            )?,
+            deployment_receipt_hash: parse_sccp_source_adapter_deployment_h256(
+                &configured.deployment_receipt_hash,
+                "deployment_receipt_hash",
+            )?,
+        };
+        if deployment.target_domain != iroha_sccp::SCCP_DOMAIN_SORA {
+            return Err(invalid_bridge_proof(format!(
+                "SCCP source adapter engine deployment for domain {source_domain} must target SORA"
+            )));
+        }
+        validate_solana_full_light_client_audit_evidence(zk_config, configured, &deployment)?;
+        validate_ton_full_light_client_audit_evidence(zk_config, configured, &deployment)?;
+        validate_tron_dpos_source_gate_evidence(zk_config, configured, &deployment)?;
+        Ok(Some(deployment))
+    }
+
+    fn configured_sccp_destination_rollout_for_domain(
+        zk_config: &iroha_config::parameters::actual::Zk,
+        domain: u32,
+    ) -> Result<Option<iroha_sccp::SccpDestinationRolloutV1>, Error> {
+        let mut matches = zk_config
+            .sccp_destination_rollouts
+            .iter()
+            .filter(|rollout| rollout.domain == domain);
+        let Some(configured) = matches.next() else {
+            return Ok(None);
+        };
+        if matches.next().is_some() {
+            return Err(invalid_bridge_proof(format!(
+                "SCCP destination rollout for domain {domain} is duplicated"
+            )));
+        }
+
+        let verifier_plan =
+            iroha_sccp::SccpDestinationVerifierPlanV1::from_str(&configured.verifier_plan)
+                .map_err(|err| {
+                    invalid_bridge_proof(format!(
+                        "SCCP destination rollout `verifier_plan` is invalid: {err}"
+                    ))
+                })?;
+        let rollout = iroha_sccp::SccpDestinationRolloutV1 {
+            version: configured.version,
+            domain: configured.domain,
+            chain: configured.chain.clone(),
+            verifier_plan,
+            immutable_verifier_ready: configured.immutable_verifier_ready,
+            anchors_ready: configured.anchors_ready,
+            verifier_identity: configured.verifier_identity.clone(),
+            verifier_code_hash: configured.verifier_code_hash.clone(),
+            verifier_key_hash: configured.verifier_key_hash.clone(),
+            destination_network_id: configured.destination_network_id.clone(),
+            destination_bridge_address: configured.destination_bridge_address.clone(),
+            destination_binding_key: configured.destination_binding_key.clone(),
+            destination_binding_hash: configured.destination_binding_hash.clone(),
+            anchor_id: configured.anchor_id.clone(),
+            solana_rpc_commitment: configured.solana_rpc_commitment.clone(),
+            solana_program_owner: configured.solana_program_owner.clone(),
+            solana_programdata_owner: configured.solana_programdata_owner.clone(),
+            solana_program_immutable: configured.solana_program_immutable,
+            solana_program_account_data_base64: configured
+                .solana_program_account_data_base64
+                .clone(),
+            solana_programdata_address: configured.solana_programdata_address.clone(),
+            solana_programdata_slot: configured.solana_programdata_slot.clone(),
+            solana_expected_programdata_slot: configured.solana_expected_programdata_slot.clone(),
+            solana_program_account_context_slot: configured
+                .solana_program_account_context_slot
+                .clone(),
+            solana_programdata_account_context_slot: configured
+                .solana_programdata_account_context_slot
+                .clone(),
+            solana_programdata_metadata_blake2b256: configured
+                .solana_programdata_metadata_blake2b256
+                .clone(),
+            solana_programdata_metadata_base64: configured
+                .solana_programdata_metadata_base64
+                .clone(),
+            solana_programdata_executable_blake2b256: configured
+                .solana_programdata_executable_blake2b256
+                .clone(),
+            solana_programdata_executable_base64: configured
+                .solana_programdata_executable_base64
+                .clone(),
+            ton_account_status: configured.ton_account_status.clone(),
+            ton_account_state_hash: configured.ton_account_state_hash.clone(),
+            ton_last_transaction_lt: configured.ton_last_transaction_lt.clone(),
+            ton_last_transaction_hash: configured.ton_last_transaction_hash.clone(),
+            ton_verifier_code_boc_root_hash: configured.ton_verifier_code_boc_root_hash.clone(),
+            ton_verifier_code_boc: configured.ton_verifier_code_boc.clone(),
+            substrate_finalized_head: configured.substrate_finalized_head.clone(),
+            substrate_runtime_spec_name: configured.substrate_runtime_spec_name.clone(),
+            substrate_runtime_spec_version: configured.substrate_runtime_spec_version.clone(),
+            substrate_runtime_transaction_version: configured
+                .substrate_runtime_transaction_version
+                .clone(),
+            substrate_runtime_code_hash: configured.substrate_runtime_code_hash.clone(),
+            substrate_runtime_code_base64: configured.substrate_runtime_code_base64.clone(),
+            blockers: configured.blockers.clone(),
+        };
+        if !iroha_sccp::sccp_destination_rollout_is_production_ready(domain, &rollout) {
+            let blockers = format_sccp_readiness_blockers(
+                &rollout.blockers,
+                "destination verifier rollout fields do not match the SCCP production profile",
+            );
+            return Err(invalid_bridge_proof(format!(
+                "SCCP destination rollout for domain {domain} is not production-ready: {blockers}"
+            )));
+        }
+        Ok(Some(rollout))
+    }
+
+    fn format_sccp_readiness_blockers(blockers: &[String], fallback: &str) -> String {
+        if blockers.is_empty() {
+            fallback.to_owned()
+        } else {
+            blockers.join("; ")
+        }
+    }
+
+    fn parse_sccp_route_allowlist_h256(raw: &str, field: &str) -> Result<[u8; 32], Error> {
+        let bytes = hex::decode(raw.trim_start_matches("0x")).map_err(|_| {
+            invalid_bridge_proof(format!(
+                "SCCP route allowlist `{field}` must be non-zero 32-byte hex"
+            ))
+        })?;
+        if bytes.len() != 32 || bytes.iter().all(|byte| *byte == 0) {
+            return Err(invalid_bridge_proof(format!(
+                "SCCP route allowlist `{field}` must be non-zero 32-byte hex"
+            )));
+        }
+        let mut out = [0u8; 32];
+        out.copy_from_slice(&bytes);
+        Ok(out)
+    }
+
+    fn configured_sccp_route_allowlist_for_domain(
+        zk_config: &iroha_config::parameters::actual::Zk,
+        domain: u32,
+    ) -> Result<Option<iroha_sccp::SccpRouteAllowlistReadinessV1>, Error> {
+        let mut matches = zk_config
+            .sccp_route_allowlists
+            .iter()
+            .filter(|allowlist| allowlist.domain == domain);
+        let Some(configured) = matches.next() else {
+            return Ok(None);
+        };
+        if matches.next().is_some() {
+            return Err(invalid_bridge_proof(format!(
+                "SCCP route allowlist for domain {domain} is duplicated"
+            )));
+        }
+
+        let activation_policy =
+            iroha_sccp::SccpRouteActivationPolicyV1::from_str(&configured.activation_policy)
+                .map_err(|err| {
+                    invalid_bridge_proof(format!(
+                        "SCCP route allowlist `activation_policy` is invalid: {err}"
+                    ))
+                })?;
+        let allowlist = iroha_sccp::SccpRouteAllowlistReadinessV1 {
+            version: configured.version,
+            domain: configured.domain,
+            chain: configured.chain.clone(),
+            activation_policy,
+            route_allowlist_id: configured.route_allowlist_id.clone(),
+            route_allowlist_hash: configured.route_allowlist_hash.clone(),
+            route_canary_status: configured.route_canary_status.clone(),
+            route_canary_evidence_hash: configured.route_canary_evidence_hash.clone(),
+            route_canary_route_allowlist_hash: configured.route_canary_route_allowlist_hash.clone(),
+            route_canary_destination_binding_hash: configured
+                .route_canary_destination_binding_hash
+                .clone(),
+            evm_route_canary_transaction_hash: configured.evm_route_canary_transaction_hash.clone(),
+            evm_route_canary_log_index: configured.evm_route_canary_log_index,
+            evm_route_canary_message_id: configured.evm_route_canary_message_id.clone(),
+            evm_route_canary_statement_hash: configured.evm_route_canary_statement_hash.clone(),
+            evm_route_canary_commitment_root: configured.evm_route_canary_commitment_root.clone(),
+            evm_route_canary_used_message_proof: configured.evm_route_canary_used_message_proof,
+            tron_route_canary_transaction_id: configured.tron_route_canary_transaction_id.clone(),
+            tron_route_canary_transaction_owner_address: configured
+                .tron_route_canary_transaction_owner_address
+                .clone(),
+            tron_route_canary_log_index: configured.tron_route_canary_log_index,
+            tron_route_canary_message_id: configured.tron_route_canary_message_id.clone(),
+            tron_route_canary_call_data_sha256: configured
+                .tron_route_canary_call_data_sha256
+                .clone(),
+            tron_route_canary_payload_hash: configured.tron_route_canary_payload_hash.clone(),
+            tron_route_canary_target_domain: configured.tron_route_canary_target_domain,
+            tron_route_canary_statement_hash: configured.tron_route_canary_statement_hash.clone(),
+            tron_route_canary_commitment_root: configured.tron_route_canary_commitment_root.clone(),
+            tron_route_canary_finality_height: configured.tron_route_canary_finality_height.clone(),
+            tron_route_canary_finality_block_hash: configured
+                .tron_route_canary_finality_block_hash
+                .clone(),
+            tron_route_canary_proof_version: configured.tron_route_canary_proof_version,
+            tron_route_canary_proof_source_domain: configured.tron_route_canary_proof_source_domain,
+            tron_route_canary_used_message_proof: configured.tron_route_canary_used_message_proof,
+            tron_route_canary_raw_data_owner_matches_transaction: configured
+                .tron_route_canary_raw_data_owner_matches_transaction,
+            tron_route_canary_signature_sha256: configured
+                .tron_route_canary_signature_sha256
+                .clone(),
+            tron_route_canary_signature_recovered_address: configured
+                .tron_route_canary_signature_recovered_address
+                .clone(),
+            tron_route_canary_signature_recovers_to_owner: configured
+                .tron_route_canary_signature_recovers_to_owner,
+            ton_route_canary_account_state_hash: configured
+                .ton_route_canary_account_state_hash
+                .clone(),
+            ton_route_canary_last_transaction_lt: configured
+                .ton_route_canary_last_transaction_lt
+                .clone(),
+            ton_route_canary_last_transaction_hash: configured
+                .ton_route_canary_last_transaction_hash
+                .clone(),
+            routes_allowlisted: configured.routes_allowlisted,
+            blockers: configured.blockers.clone(),
+        };
+        if !iroha_sccp::sccp_route_allowlist_is_production_ready(domain, &allowlist) {
+            let blockers = format_sccp_readiness_blockers(
+                &allowlist.blockers,
+                "route allowlist fields do not match the SCCP production profile",
+            );
+            return Err(invalid_bridge_proof(format!(
+                "SCCP route allowlist for domain {domain} is not production-ready: {blockers}"
+            )));
+        }
+        Ok(Some(allowlist))
+    }
+
+    fn validate_configured_sccp_all_lanes_launch_ready(
+        zk_config: &iroha_config::parameters::actual::Zk,
+    ) -> Result<(), Error> {
+        let mut source_record_hashes = BTreeMap::<[u8; 32], (u32, &'static str)>::new();
+        let mut route_canary_hashes = BTreeMap::<[u8; 32], u32>::new();
+        let mut route_canaries = Vec::<(u32, [u8; 32])>::new();
+
+        for domain in iroha_sccp::SCCP_CORE_REMOTE_DOMAINS {
+            let material = configured_sccp_source_verifier_material_for_domain(zk_config, domain)?
+                .ok_or_else(|| {
+                    invalid_bridge_proof(format!(
+                        "SCCP all-lanes launch policy requires source verifier material for domain {domain}"
+                    ))
+                })?;
+            let deployment =
+                configured_sccp_source_adapter_engine_deployment_for_domain(zk_config, domain)?
+                    .ok_or_else(|| {
+                    invalid_bridge_proof(format!(
+                        "SCCP all-lanes launch policy requires source adapter deployment for domain {domain}"
+                    ))
+                })?;
+            let destination_rollout = configured_sccp_destination_rollout_for_domain(
+                zk_config, domain,
+            )?
+            .ok_or_else(|| {
+                invalid_bridge_proof(format!(
+                    "SCCP all-lanes launch policy requires destination rollout for domain {domain}"
+                ))
+            })?;
+            let route_allowlist = configured_sccp_route_allowlist_for_domain(zk_config, domain)?
+                .ok_or_else(|| {
+                    invalid_bridge_proof(format!(
+                        "SCCP all-lanes launch policy requires route allowlist for domain {domain}"
+                    ))
+                })?;
+            let readiness =
+                iroha_sccp::sccp_lane_production_readiness_with_deployment_materials_for_domain(
+                    domain,
+                    &material,
+                    &deployment,
+                    &destination_rollout,
+                    &route_allowlist,
+                )
+                .ok_or_else(|| {
+                    invalid_bridge_proof(format!(
+                        "SCCP all-lanes launch policy cannot evaluate domain {domain}"
+                    ))
+                })?;
+            if !readiness.production_ready {
+                let blockers = format_sccp_readiness_blockers(
+                    &readiness.blockers,
+                    "no lane-specific blockers were reported",
+                );
+                return Err(invalid_bridge_proof(format!(
+                    "SCCP all-lanes launch policy requires production-ready lane material for domain {domain}: {blockers}"
+                )));
+            }
+
+            source_record_hashes
+                .entry(iroha_sccp::sccp_source_verifier_material_hash(&material))
+                .or_insert((domain, "source verifier material"));
+            source_record_hashes
+                .entry(iroha_sccp::sccp_source_adapter_engine_deployment_hash(
+                    &deployment,
+                ))
+                .or_insert((domain, "source-adapter deployment"));
+            let route_canary_hash = parse_sccp_route_allowlist_h256(
+                route_allowlist
+                    .route_canary_evidence_hash
+                    .as_deref()
+                    .ok_or_else(|| {
+                        invalid_bridge_proof(format!(
+                            "SCCP route allowlist for domain {domain} is missing route canary evidence hash"
+                        ))
+                    })?,
+                "route_canary_evidence_hash",
+            )?;
+            if let Some(previous_domain) = route_canary_hashes.get(&route_canary_hash) {
+                return Err(invalid_bridge_proof(format!(
+                    "SCCP all-lanes launch policy requires route canary evidence hash for domain {domain} to be distinct from domain {previous_domain}"
+                )));
+            }
+            route_canary_hashes.insert(route_canary_hash, domain);
+            route_canaries.push((domain, route_canary_hash));
+        }
+
+        for (domain, route_canary_hash) in route_canaries {
+            if let Some((source_domain, role)) = source_record_hashes.get(&route_canary_hash) {
+                return Err(invalid_bridge_proof(format!(
+                    "SCCP all-lanes launch policy requires route canary evidence hash for domain {domain} to be distinct from {role} record hash for domain {source_domain}"
+                )));
+            }
+        }
+        Ok(())
+    }
+
     fn validate_sccp_message_transparent_bridge_proof(
         artifact: &iroha_sccp::NexusSccpMessageTransparentProofV1,
         state_transaction: &StateTransaction<'_, '_>,
     ) -> Result<(), Error> {
-        if !iroha_sccp::verify_nexus_sccp_message_transparent_proof_structure_allow_unready(
-            artifact,
-            state_transaction.zk.sccp_allow_unready_transparent_proofs,
-        ) || !iroha_sccp::verify_message_bundle_structure(&artifact.bundle)
-        {
+        let source_domain = iroha_sccp::sccp_message_source_domain(&artifact.bundle.payload);
+        let configured_source_material = if source_domain == iroha_sccp::SCCP_DOMAIN_SORA {
+            None
+        } else {
+            configured_sccp_source_verifier_material_for_domain(
+                &state_transaction.zk,
+                source_domain,
+            )?
+        };
+        let configured_source_deployment =
+            if let Some(material) = configured_source_material.as_ref() {
+                let deployment = configured_sccp_source_adapter_engine_deployment_for_domain(
+                    &state_transaction.zk,
+                    source_domain,
+                )?
+                .ok_or_else(|| {
+                    invalid_bridge_proof(format!(
+                        "SCCP source adapter for domain {source_domain} is not production-ready"
+                    ))
+                })?;
+                if !iroha_sccp::sccp_source_adapter_ready_with_material_and_deployment_for_domain(
+                    source_domain,
+                    material,
+                    &deployment,
+                ) {
+                    return Err(invalid_bridge_proof(format!(
+                        "SCCP source adapter for domain {source_domain} is not production-ready"
+                    )));
+                }
+                Some(deployment)
+            } else {
+                None
+            };
+        if let (Some(material), Some(deployment)) = (
+            configured_source_material.as_ref(),
+            configured_source_deployment.as_ref(),
+        ) {
+            let destination_rollout = configured_sccp_destination_rollout_for_domain(
+                &state_transaction.zk,
+                source_domain,
+            )?
+            .ok_or_else(|| {
+                invalid_bridge_proof(format!(
+                    "SCCP destination rollout for domain {source_domain} is not production-ready"
+                ))
+            })?;
+            let route_allowlist =
+                configured_sccp_route_allowlist_for_domain(&state_transaction.zk, source_domain)?
+                    .ok_or_else(|| {
+                    invalid_bridge_proof(format!(
+                        "SCCP route allowlist for domain {source_domain} is not production-ready"
+                    ))
+                })?;
+            let readiness =
+                iroha_sccp::sccp_lane_production_readiness_with_deployment_materials_for_domain(
+                    source_domain,
+                    material,
+                    deployment,
+                    &destination_rollout,
+                    &route_allowlist,
+                )
+                .ok_or_else(|| {
+                    invalid_bridge_proof(format!(
+                        "SCCP lane for domain {source_domain} is not production-ready"
+                    ))
+                })?;
+            if !readiness.production_ready {
+                let blockers = format_sccp_readiness_blockers(
+                    &readiness.blockers,
+                    "no lane-specific blockers were reported",
+                );
+                return Err(invalid_bridge_proof(format!(
+                    "SCCP lane for domain {source_domain} is not production-ready: {blockers}"
+                )));
+            }
+            validate_configured_sccp_all_lanes_launch_ready(&state_transaction.zk)?;
+        }
+        let artifact_structure_is_valid = if let (Some(material), Some(deployment)) = (
+            configured_source_material.as_ref(),
+            configured_source_deployment.as_ref(),
+        ) {
+            iroha_sccp::verify_nexus_sccp_message_transparent_proof_structure_with_source_verifier_material_and_deployment_allow_unready_manifest(
+                artifact,
+                material,
+                deployment,
+            ) && iroha_sccp::verify_message_bundle_structure_with_source_verifier_material_and_deployment(
+                &artifact.bundle,
+                material,
+                deployment,
+            )
+        } else {
+            iroha_sccp::verify_nexus_sccp_message_transparent_proof_structure(artifact)
+                && iroha_sccp::verify_message_bundle_structure(&artifact.bundle)
+        };
+        if !artifact_structure_is_valid {
             return Err(invalid_bridge_proof(
                 "SCCP transparent message proof failed structural verification",
             ));
         }
-        let finality = sccp_decode_finality_proof(&artifact.bundle.finality_proof)?;
-        validate_sccp_finality_against_state(&finality, state_transaction)
+        if source_domain == iroha_sccp::SCCP_DOMAIN_SORA {
+            let finality = iroha_sccp::verified_sccp_message_nexus_finality_proof(&artifact.bundle)
+                .ok_or_else(|| {
+                    invalid_bridge_proof(
+                        "SCCP SORA-source message proof is not bound to Nexus finality",
+                    )
+                })?;
+            validate_sccp_finality_against_state(&finality, state_transaction)
+        } else {
+            if let (Some(material), Some(deployment)) = (
+                configured_source_material.as_ref(),
+                configured_source_deployment.as_ref(),
+            ) {
+                iroha_sccp::verified_sccp_message_source_chain_proof_envelope_for_production_with_material_and_deployment(
+                    &artifact.bundle,
+                    material,
+                    deployment,
+                )
+                .ok_or_else(|| {
+                    invalid_bridge_proof(
+                        "SCCP non-SORA message proof is not bound to configured production source adapter deployment",
+                    )
+                })?;
+            } else {
+                iroha_sccp::verified_sccp_message_source_chain_proof_envelope_for_production(
+                    &artifact.bundle,
+                )
+                    .ok_or_else(|| {
+                        invalid_bridge_proof(
+                            "SCCP non-SORA message proof is not bound to a production-ready source-chain proof adapter",
+                        )
+                    })?;
+            }
+            Ok(())
+        }
     }
 
     fn encode_and_validate_bridge_proof(
@@ -7224,16 +8268,19 @@ pub mod isi {
                     }
                     backend if backend.starts_with("sccp/stark-fri-v1/") => {
                         let Some(artifact) =
-                            iroha_sccp::recover_nexus_sccp_message_transparent_proof_allow_unready(
-                                backend,
+                            iroha_sccp::decode_nexus_sccp_message_transparent_proof(
                                 &tp.proof.bytes,
-                                state_transaction.zk.sccp_allow_unready_transparent_proofs,
                             )
                         else {
                             return Err(invalid_bridge_proof(
                                 "SCCP transparent bridge proofs must decode as valid typed message artifacts",
                             ));
                         };
+                        if artifact.message_backend != backend {
+                            return Err(invalid_bridge_proof(
+                                "SCCP transparent bridge proof backend mismatch",
+                            ));
+                        }
                         if proof.manifest_hash
                             != iroha_sccp::sccp_bridge_manifest_hash_for_seed(
                                 &artifact.manifest_seed,
@@ -7591,6 +8638,13 @@ pub mod isi {
                 return Err(InstructionExecutionError::InvalidParameter(
                     InvalidParameterError::SmartContract(
                         "SCCP payload bytes failed structural verification".into(),
+                    ),
+                ));
+            }
+            if iroha_sccp::sccp_message_source_domain(&payload) != iroha_sccp::SCCP_DOMAIN_SORA {
+                return Err(InstructionExecutionError::InvalidParameter(
+                    InvalidParameterError::SmartContract(
+                        "SCCP message recording only accepts SORA-origin payloads; submit non-SORA source messages with a verified source-chain proof envelope".into(),
                     ),
                 ));
             }
@@ -13307,6 +14361,1000 @@ pub mod isi {
             let raw = format!("sha256:{}", "aa".repeat(32));
             assert!(super::parse_hex32_hint(&raw).is_none());
         }
+
+        fn test_sccp_hex32(fill: u8) -> String {
+            format!("0x{}", hex::encode([fill; 32]))
+        }
+
+        fn test_sccp_evm_address(fill: u8) -> String {
+            let digit = char::from(b'1' + (fill % 9));
+            format!("0x{}", digit.to_string().repeat(40))
+        }
+
+        fn test_sccp_h256_is_nonzero(hash: &[u8; 32]) -> bool {
+            hash.iter().any(|byte| *byte != 0)
+        }
+
+        fn test_sccp_optional_hex32(hash: &[u8; 32]) -> String {
+            if test_sccp_h256_is_nonzero(hash) {
+                hex::encode(hash)
+            } else {
+                String::new()
+            }
+        }
+
+        fn test_sccp_source_verifier_material_for_domain(
+            domain: u32,
+            seed: u8,
+        ) -> iroha_sccp::SccpSourceVerifierMaterialV1 {
+            match domain {
+                iroha_sccp::SCCP_DOMAIN_ETH | iroha_sccp::SCCP_DOMAIN_BSC => {
+                    iroha_sccp::sccp_evm_family_mainnet_source_verifier_material_with_hashes_and_emitter_v1(
+                        domain,
+                        [seed; 32],
+                        [seed + 1; 32],
+                        [seed + 2; 32],
+                        [seed + 3; 32],
+                        [seed + 4; 20],
+                        [seed + 5; 32],
+                    )
+                    .expect("EVM-family SCCP source verifier material")
+                }
+                iroha_sccp::SCCP_DOMAIN_SOL => {
+                    iroha_sccp::sccp_solana_mainnet_source_verifier_material_with_hashes_and_accounts_db_v1(
+                        [seed; 32],
+                        [seed + 1; 32],
+                        [seed + 2; 32],
+                        [seed + 3; 32],
+                        [seed + 4; 32],
+                    )
+                    .expect("Solana SCCP source verifier material")
+                }
+                iroha_sccp::SCCP_DOMAIN_TON => {
+                    iroha_sccp::sccp_ton_mainnet_source_verifier_material_with_hashes_and_shard_state_v1(
+                        [seed; 32],
+                        [seed + 1; 32],
+                        [seed + 2; 32],
+                        [seed + 3; 32],
+                        [seed + 4; 32],
+                    )
+                    .expect("TON SCCP source verifier material")
+                }
+                iroha_sccp::SCCP_DOMAIN_TRON => {
+                    let source_bridge_address = [seed + 4; 20];
+                    let source_bridge_network_id = [seed + 6; 32];
+                    let source_bridge_owner_address = [seed + 7; 20];
+                    let source_bridge_config_hash = iroha_sccp::sccp_tron_source_bridge_config_hash_v1(
+                        source_bridge_network_id,
+                        iroha_sccp::SCCP_DOMAIN_TRON,
+                        iroha_sccp::SCCP_DOMAIN_SORA,
+                        source_bridge_address,
+                        source_bridge_owner_address,
+                    )
+                    .expect("TRON SCCP source bridge config hash");
+                    iroha_sccp::sccp_tron_mainnet_source_verifier_material_with_hashes_and_emitter_v1(
+                        [seed; 32],
+                        [seed + 1; 32],
+                        [seed + 2; 32],
+                        source_bridge_address,
+                        [seed + 5; 32],
+                        source_bridge_network_id,
+                        source_bridge_owner_address,
+                        source_bridge_config_hash,
+                        [seed + 8; 32],
+                    )
+                    .expect("TRON SCCP source verifier material")
+                }
+                iroha_sccp::SCCP_DOMAIN_SORA_KUSAMA
+                | iroha_sccp::SCCP_DOMAIN_SORA_POLKADOT
+                | iroha_sccp::SCCP_DOMAIN_SORA2 => {
+                    iroha_sccp::sccp_substrate_family_runtime_source_verifier_material_with_hashes_and_runtime_storage_v1(
+                        domain,
+                        [seed; 32],
+                        [seed + 1; 32],
+                        [seed + 2; 32],
+                        [seed + 4; 32],
+                        [seed + 3; 32],
+                    )
+                    .expect("Substrate-family SCCP source verifier material")
+                }
+                _ => panic!("unsupported SCCP test domain {domain}"),
+            }
+        }
+
+        fn test_sccp_source_adapter_deployment_for_domain(
+            domain: u32,
+            material: &iroha_sccp::SccpSourceVerifierMaterialV1,
+            seed: u8,
+        ) -> iroha_sccp::SccpSourceAdapterEngineDeploymentV1 {
+            let mut deployment =
+                iroha_sccp::sccp_source_adapter_engine_deployment_from_material_v1(
+                    material,
+                    [seed + 9; 32],
+                )
+                .expect("SCCP source adapter deployment");
+            if domain == iroha_sccp::SCCP_DOMAIN_SOL {
+                deployment.solana_tower_replay_verifier_hash = [0xb1; 32];
+                deployment.solana_full_accountsdb_lattice_verifier_hash = [0xb2; 32];
+                deployment.solana_bank_fork_choice_verifier_hash = [0xb3; 32];
+                assert!(
+                    iroha_sccp::sccp_solana_full_light_client_gate_hash_from_deployment_v1(
+                        material,
+                        &deployment,
+                    )
+                    .is_some(),
+                    "audited Solana SCCP deployment must derive the gate hash"
+                );
+            }
+            if domain == iroha_sccp::SCCP_DOMAIN_TON {
+                deployment.ton_masterchain_config_verifier_hash = [0xc1; 32];
+                deployment.ton_validator_set_transition_verifier_hash = [0xc2; 32];
+                deployment.ton_shard_accounts_dictionary_verifier_hash = [0xc3; 32];
+                assert!(
+                    iroha_sccp::sccp_ton_full_light_client_gate_hash_from_deployment_v1(
+                        material,
+                        &deployment,
+                    )
+                    .is_some(),
+                    "audited TON SCCP deployment must derive the gate hash"
+                );
+            }
+            deployment
+        }
+
+        fn test_sccp_destination_rollout_for_domain(
+            domain: u32,
+            seed: u8,
+        ) -> iroha_sccp::SccpDestinationRolloutV1 {
+            match domain {
+                iroha_sccp::SCCP_DOMAIN_ETH | iroha_sccp::SCCP_DOMAIN_BSC => {
+                    iroha_sccp::sccp_evm_mainnet_destination_rollout_with_binding_v1(
+                        domain,
+                        test_sccp_evm_address(seed + 10),
+                        test_sccp_hex32(seed + 11),
+                        test_sccp_hex32(seed + 12),
+                        test_sccp_hex32(seed + 13),
+                        test_sccp_evm_address(seed + 14),
+                    )
+                    .expect("EVM-family SCCP destination rollout")
+                }
+                iroha_sccp::SCCP_DOMAIN_SOL => {
+                    iroha_sccp::sccp_solana_mainnet_destination_rollout_with_live_evidence_v1(
+                        "3JF3sEqM796hk5WFqA6EtmEwJQ9quALszsfJyvXNQKy3".to_owned(),
+                        "0xc81178d11a4de525782fe7ac6f5accc2056fa15d1b8c2bfd819eb2ef179c3411"
+                            .to_owned(),
+                        "29d2S7vB453rNYFdR5Ycwt7y9haRT5fwVwL9zTmBhfV2".to_owned(),
+                        (4321_u64 + u64::from(seed)).to_string(),
+                        (5000_u64 + u64::from(seed)).to_string(),
+                        (5001_u64 + u64::from(seed)).to_string(),
+                        "f0VMRgECAwQF".to_owned(),
+                    )
+                    .expect("Solana SCCP destination rollout")
+                }
+                iroha_sccp::SCCP_DOMAIN_TON => {
+                    iroha_sccp::sccp_ton_mainnet_destination_rollout_with_live_evidence_v1(
+                        format!("0:{}", hex::encode([seed + 10; 32])),
+                        "0x49725ad44ef5ed5feaa27f88679cabae427209a6bea318cb9b66030131aae6fe"
+                            .to_owned(),
+                        test_sccp_hex32(seed + 13),
+                        (1000_u64 + u64::from(seed)).to_string(),
+                        test_sccp_hex32(seed + 14),
+                        "0xb5ee9c720101020100070001020101000202".to_owned(),
+                    )
+                    .expect("TON SCCP destination rollout")
+                }
+                iroha_sccp::SCCP_DOMAIN_TRON => {
+                    iroha_sccp::sccp_tron_mainnet_destination_rollout_with_binding_v1(
+                        "TJRabPrwbZy45sbavfcjinPJC18kjpRTv8".to_owned(),
+                        test_sccp_hex32(seed + 11),
+                        test_sccp_hex32(seed + 12),
+                        test_sccp_hex32(seed + 6),
+                    )
+                    .expect("TRON SCCP destination rollout")
+                }
+                iroha_sccp::SCCP_DOMAIN_SORA_KUSAMA
+                | iroha_sccp::SCCP_DOMAIN_SORA_POLKADOT
+                | iroha_sccp::SCCP_DOMAIN_SORA2 => {
+                    iroha_sccp::sccp_substrate_runtime_destination_rollout_with_finalized_runtime_v1(
+                        domain,
+                        iroha_sccp::SCCP_SUBSTRATE_RUNTIME_DESTINATION_VERIFIER_ID_V1.to_owned(),
+                        [seed + 15; 32],
+                        1_000 + domain,
+                        7 + domain,
+                        vec![seed + 11; 64],
+                    )
+                    .expect("Substrate-family SCCP destination rollout")
+                }
+                _ => panic!("unsupported SCCP test domain {domain}"),
+            }
+        }
+
+        fn test_sccp_route_allowlist_for_domain(
+            domain: u32,
+            material: &iroha_sccp::SccpSourceVerifierMaterialV1,
+            deployment: &iroha_sccp::SccpSourceAdapterEngineDeploymentV1,
+            rollout: &iroha_sccp::SccpDestinationRolloutV1,
+        ) -> iroha_sccp::SccpRouteAllowlistReadinessV1 {
+            let allowlist = iroha_sccp::sccp_profiled_route_allowlist_for_lane_evidence_v1(
+                domain, material, deployment, rollout,
+            )
+            .expect("SCCP route allowlist");
+            let binding_hash_hex = rollout
+                .destination_binding_hash
+                .as_deref()
+                .expect("destination binding hash");
+            let destination_binding_hash: [u8; 32] =
+                hex::decode(binding_hash_hex.trim_start_matches("0x"))
+                    .expect("decode destination binding hash")
+                    .try_into()
+                    .expect("destination binding hash length");
+            if domain == iroha_sccp::SCCP_DOMAIN_TON {
+                let account_state_hash: [u8; 32] = hex::decode(
+                    rollout
+                        .ton_account_state_hash
+                        .as_deref()
+                        .expect("TON account state hash")
+                        .trim_start_matches("0x"),
+                )
+                .expect("decode TON account state hash")
+                .try_into()
+                .expect("TON account state hash length");
+                let last_transaction_hash: [u8; 32] = hex::decode(
+                    rollout
+                        .ton_last_transaction_hash
+                        .as_deref()
+                        .expect("TON last transaction hash")
+                        .trim_start_matches("0x"),
+                )
+                .expect("decode TON last transaction hash")
+                .try_into()
+                .expect("TON last transaction hash length");
+                return iroha_sccp::sccp_ton_route_allowlist_with_lane_canary_evidence_v1(
+                    allowlist,
+                    rollout,
+                    destination_binding_hash,
+                    iroha_sccp::sccp_source_verifier_material_hash(material),
+                    iroha_sccp::sccp_source_adapter_engine_deployment_hash(deployment),
+                    account_state_hash,
+                    rollout
+                        .ton_last_transaction_lt
+                        .clone()
+                        .expect("TON last transaction LT"),
+                    last_transaction_hash,
+                )
+                .expect("TON route canary evidence");
+            }
+            if domain == iroha_sccp::SCCP_DOMAIN_SOL {
+                return iroha_sccp::sccp_solana_route_allowlist_with_lane_canary_evidence_v1(
+                    allowlist,
+                    rollout,
+                    destination_binding_hash,
+                    iroha_sccp::sccp_source_verifier_material_hash(material),
+                    iroha_sccp::sccp_source_adapter_engine_deployment_hash(deployment),
+                )
+                .expect("Solana route canary evidence");
+            }
+            if matches!(
+                domain,
+                iroha_sccp::SCCP_DOMAIN_ETH | iroha_sccp::SCCP_DOMAIN_BSC
+            ) {
+                return iroha_sccp::sccp_evm_route_allowlist_with_lane_canary_evidence_v1(
+                    allowlist,
+                    rollout,
+                    destination_binding_hash,
+                    iroha_sccp::sccp_source_verifier_material_hash(material),
+                    iroha_sccp::sccp_source_adapter_engine_deployment_hash(deployment),
+                    [0xe0 | (domain as u8); 32],
+                    0,
+                    [0xd0 | (domain as u8); 32],
+                    [0xf0 | (domain as u8); 32],
+                    [0xc0 | (domain as u8); 32],
+                    true,
+                )
+                .expect("EVM route canary evidence");
+            }
+            if domain == iroha_sccp::SCCP_DOMAIN_TRON {
+                return iroha_sccp::sccp_tron_route_allowlist_with_lane_canary_evidence_v1(
+                    allowlist,
+                    rollout,
+                    destination_binding_hash,
+                    iroha_sccp::sccp_source_verifier_material_hash(material),
+                    iroha_sccp::sccp_source_adapter_engine_deployment_hash(deployment),
+                    [0xfa; 32],
+                    [0x41; 21],
+                    0,
+                    [0xdd; 32],
+                    [0xa1; 32],
+                    [0xab; 32],
+                    iroha_sccp::SCCP_DOMAIN_TRON,
+                    [0xf1; 32],
+                    [0xee; 32],
+                    [0xa2; 32],
+                    [0xcd; 32],
+                    1,
+                    iroha_sccp::SCCP_DOMAIN_SORA,
+                    true,
+                    true,
+                    [0x5a; 32],
+                    [0x41; 21],
+                    true,
+                )
+                .expect("TRON route canary evidence");
+            }
+            if matches!(
+                domain,
+                iroha_sccp::SCCP_DOMAIN_SORA_KUSAMA
+                    | iroha_sccp::SCCP_DOMAIN_SORA_POLKADOT
+                    | iroha_sccp::SCCP_DOMAIN_SORA2
+            ) {
+                return iroha_sccp::sccp_substrate_route_allowlist_with_lane_canary_evidence_v1(
+                    allowlist,
+                    rollout,
+                    destination_binding_hash,
+                    iroha_sccp::sccp_source_verifier_material_hash(material),
+                    iroha_sccp::sccp_source_adapter_engine_deployment_hash(deployment),
+                )
+                .expect("Substrate route canary evidence");
+            }
+            iroha_sccp::sccp_route_allowlist_with_lane_canary_evidence_v1(
+                allowlist,
+                [0xe0 | (domain as u8); 32],
+                destination_binding_hash,
+                iroha_sccp::sccp_source_verifier_material_hash(material),
+                iroha_sccp::sccp_source_adapter_engine_deployment_hash(deployment),
+            )
+            .expect("SCCP route canary evidence")
+        }
+
+        fn test_actual_sccp_source_verifier_material(
+            material: &iroha_sccp::SccpSourceVerifierMaterialV1,
+        ) -> iroha_config::parameters::actual::SccpSourceVerifierMaterial {
+            iroha_config::parameters::actual::SccpSourceVerifierMaterial {
+                version: material.version,
+                source_domain: material.source_domain,
+                source_chain: material.source_chain.clone(),
+                source_proof_plan: material.source_proof_plan.as_str().to_owned(),
+                finality_model: material.finality_model.as_str().to_owned(),
+                adapter_circuit_id: material.adapter_circuit_id.clone(),
+                source_trust_anchor_id: material.source_trust_anchor_id.clone(),
+                source_trust_anchor_hash: hex::encode(material.source_trust_anchor_hash),
+                consensus_verifier_id: material.consensus_verifier_id.clone(),
+                consensus_verifier_hash: hex::encode(material.consensus_verifier_hash),
+                message_inclusion_verifier_id: material.message_inclusion_verifier_id.clone(),
+                message_inclusion_verifier_hash: hex::encode(
+                    material.message_inclusion_verifier_hash,
+                ),
+                source_state_verifier_id: material.source_state_verifier_id.clone(),
+                source_state_verifier_hash: hex::encode(material.source_state_verifier_hash),
+                source_bridge_emitter_id: material.source_bridge_emitter_id.clone(),
+                source_bridge_emitter_address: hex::encode(&material.source_bridge_emitter_address),
+                source_bridge_emitter_code_hash: hex::encode(
+                    material.source_bridge_emitter_code_hash,
+                ),
+                source_bridge_network_id: hex::encode(material.source_bridge_network_id),
+                source_bridge_owner_address: hex::encode(&material.source_bridge_owner_address),
+                source_bridge_config_hash: hex::encode(material.source_bridge_config_hash),
+                finality_policy_id: material.finality_policy_id.clone(),
+                finality_policy_hash: hex::encode(material.finality_policy_hash),
+                placeholder_material: material.placeholder_material,
+            }
+        }
+
+        fn test_actual_sccp_source_adapter_deployment(
+            material: &iroha_sccp::SccpSourceVerifierMaterialV1,
+            deployment: &iroha_sccp::SccpSourceAdapterEngineDeploymentV1,
+        ) -> iroha_config::parameters::actual::SccpSourceAdapterEngineDeployment {
+            let solana_full_light_client_gate_hash =
+                iroha_sccp::sccp_solana_full_light_client_gate_hash_from_deployment_v1(
+                    material, deployment,
+                )
+                .map_or_else(String::new, hex::encode);
+            let ton_full_light_client_gate_hash =
+                iroha_sccp::sccp_ton_full_light_client_gate_hash_from_deployment_v1(
+                    material, deployment,
+                )
+                .map_or_else(String::new, hex::encode);
+            let tron_dpos_source_gate_hash =
+                iroha_sccp::sccp_tron_dpos_source_gate_hash_from_deployment_v1(
+                    material, deployment,
+                )
+                .map_or_else(String::new, hex::encode);
+            iroha_config::parameters::actual::SccpSourceAdapterEngineDeployment {
+                version: deployment.version,
+                source_domain: deployment.source_domain,
+                target_domain: deployment.target_domain,
+                source_chain: deployment.source_chain.clone(),
+                source_proof_plan: deployment.source_proof_plan.as_str().to_owned(),
+                finality_model: deployment.finality_model.as_str().to_owned(),
+                adapter_proof_family: deployment.adapter_proof_family.clone(),
+                adapter_circuit_id: deployment.adapter_circuit_id.clone(),
+                adapter_verifier_vk_hash: hex::encode(deployment.adapter_verifier_vk_hash),
+                source_trust_anchor_id: deployment.source_trust_anchor_id.clone(),
+                source_trust_anchor_hash: hex::encode(deployment.source_trust_anchor_hash),
+                consensus_verifier_id: deployment.consensus_verifier_id.clone(),
+                consensus_verifier_hash: hex::encode(deployment.consensus_verifier_hash),
+                message_inclusion_verifier_id: deployment.message_inclusion_verifier_id.clone(),
+                message_inclusion_verifier_hash: hex::encode(
+                    deployment.message_inclusion_verifier_hash,
+                ),
+                source_state_verifier_id: deployment.source_state_verifier_id.clone(),
+                source_state_verifier_hash: hex::encode(deployment.source_state_verifier_hash),
+                source_bridge_emitter_id: deployment.source_bridge_emitter_id.clone(),
+                source_bridge_emitter_address: hex::encode(
+                    &deployment.source_bridge_emitter_address,
+                ),
+                source_bridge_emitter_code_hash: hex::encode(
+                    deployment.source_bridge_emitter_code_hash,
+                ),
+                source_bridge_network_id: hex::encode(deployment.source_bridge_network_id),
+                source_bridge_owner_address: hex::encode(&deployment.source_bridge_owner_address),
+                source_bridge_config_hash: hex::encode(deployment.source_bridge_config_hash),
+                finality_policy_id: deployment.finality_policy_id.clone(),
+                finality_policy_hash: hex::encode(deployment.finality_policy_hash),
+                deployment_receipt_hash: hex::encode(deployment.deployment_receipt_hash),
+                solana_tower_replay_verifier_hash: test_sccp_optional_hex32(
+                    &deployment.solana_tower_replay_verifier_hash,
+                ),
+                solana_full_accountsdb_lattice_verifier_hash: test_sccp_optional_hex32(
+                    &deployment.solana_full_accountsdb_lattice_verifier_hash,
+                ),
+                solana_bank_fork_choice_verifier_hash: test_sccp_optional_hex32(
+                    &deployment.solana_bank_fork_choice_verifier_hash,
+                ),
+                solana_full_light_client_gate_hash,
+                ton_masterchain_config_verifier_hash: test_sccp_optional_hex32(
+                    &deployment.ton_masterchain_config_verifier_hash,
+                ),
+                ton_validator_set_transition_verifier_hash: test_sccp_optional_hex32(
+                    &deployment.ton_validator_set_transition_verifier_hash,
+                ),
+                ton_shard_accounts_dictionary_verifier_hash: test_sccp_optional_hex32(
+                    &deployment.ton_shard_accounts_dictionary_verifier_hash,
+                ),
+                ton_full_light_client_gate_hash,
+                tron_dpos_source_gate_hash,
+            }
+        }
+
+        fn test_actual_sccp_destination_rollout(
+            rollout: &iroha_sccp::SccpDestinationRolloutV1,
+        ) -> iroha_config::parameters::actual::SccpDestinationRollout {
+            iroha_config::parameters::actual::SccpDestinationRollout {
+                version: rollout.version,
+                domain: rollout.domain,
+                chain: rollout.chain.clone(),
+                verifier_plan: rollout.verifier_plan.as_str().to_owned(),
+                immutable_verifier_ready: rollout.immutable_verifier_ready,
+                anchors_ready: rollout.anchors_ready,
+                verifier_identity: rollout.verifier_identity.clone(),
+                verifier_code_hash: rollout.verifier_code_hash.clone(),
+                verifier_key_hash: rollout.verifier_key_hash.clone(),
+                destination_network_id: rollout.destination_network_id.clone(),
+                destination_bridge_address: rollout.destination_bridge_address.clone(),
+                destination_binding_key: rollout.destination_binding_key.clone(),
+                destination_binding_hash: rollout.destination_binding_hash.clone(),
+                anchor_id: rollout.anchor_id.clone(),
+                solana_rpc_commitment: rollout.solana_rpc_commitment.clone(),
+                solana_program_owner: rollout.solana_program_owner.clone(),
+                solana_programdata_owner: rollout.solana_programdata_owner.clone(),
+                solana_program_immutable: rollout.solana_program_immutable,
+                solana_program_account_data_base64: rollout
+                    .solana_program_account_data_base64
+                    .clone(),
+                solana_programdata_address: rollout.solana_programdata_address.clone(),
+                solana_programdata_slot: rollout.solana_programdata_slot.clone(),
+                solana_expected_programdata_slot: rollout.solana_expected_programdata_slot.clone(),
+                solana_program_account_context_slot: rollout
+                    .solana_program_account_context_slot
+                    .clone(),
+                solana_programdata_account_context_slot: rollout
+                    .solana_programdata_account_context_slot
+                    .clone(),
+                solana_programdata_metadata_blake2b256: rollout
+                    .solana_programdata_metadata_blake2b256
+                    .clone(),
+                solana_programdata_metadata_base64: rollout
+                    .solana_programdata_metadata_base64
+                    .clone(),
+                solana_programdata_executable_blake2b256: rollout
+                    .solana_programdata_executable_blake2b256
+                    .clone(),
+                solana_programdata_executable_base64: rollout
+                    .solana_programdata_executable_base64
+                    .clone(),
+                ton_account_status: rollout.ton_account_status.clone(),
+                ton_account_state_hash: rollout.ton_account_state_hash.clone(),
+                ton_last_transaction_lt: rollout.ton_last_transaction_lt.clone(),
+                ton_last_transaction_hash: rollout.ton_last_transaction_hash.clone(),
+                ton_verifier_code_boc_root_hash: rollout.ton_verifier_code_boc_root_hash.clone(),
+                ton_verifier_code_boc: rollout.ton_verifier_code_boc.clone(),
+                substrate_finalized_head: rollout.substrate_finalized_head.clone(),
+                substrate_runtime_spec_name: rollout.substrate_runtime_spec_name.clone(),
+                substrate_runtime_spec_version: rollout.substrate_runtime_spec_version.clone(),
+                substrate_runtime_transaction_version: rollout
+                    .substrate_runtime_transaction_version
+                    .clone(),
+                substrate_runtime_code_hash: rollout.substrate_runtime_code_hash.clone(),
+                substrate_runtime_code_base64: rollout.substrate_runtime_code_base64.clone(),
+                blockers: rollout.blockers.clone(),
+            }
+        }
+
+        fn test_actual_sccp_route_allowlist(
+            allowlist: &iroha_sccp::SccpRouteAllowlistReadinessV1,
+        ) -> iroha_config::parameters::actual::SccpRouteAllowlist {
+            iroha_config::parameters::actual::SccpRouteAllowlist {
+                version: allowlist.version,
+                domain: allowlist.domain,
+                chain: allowlist.chain.clone(),
+                activation_policy: allowlist.activation_policy.as_str().to_owned(),
+                route_allowlist_id: allowlist.route_allowlist_id.clone(),
+                route_allowlist_hash: allowlist.route_allowlist_hash.clone(),
+                route_canary_status: allowlist.route_canary_status.clone(),
+                route_canary_evidence_hash: allowlist.route_canary_evidence_hash.clone(),
+                route_canary_route_allowlist_hash: allowlist
+                    .route_canary_route_allowlist_hash
+                    .clone(),
+                route_canary_destination_binding_hash: allowlist
+                    .route_canary_destination_binding_hash
+                    .clone(),
+                evm_route_canary_transaction_hash: allowlist
+                    .evm_route_canary_transaction_hash
+                    .clone(),
+                evm_route_canary_log_index: allowlist.evm_route_canary_log_index,
+                evm_route_canary_message_id: allowlist.evm_route_canary_message_id.clone(),
+                evm_route_canary_statement_hash: allowlist.evm_route_canary_statement_hash.clone(),
+                evm_route_canary_commitment_root: allowlist
+                    .evm_route_canary_commitment_root
+                    .clone(),
+                evm_route_canary_used_message_proof: allowlist.evm_route_canary_used_message_proof,
+                tron_route_canary_transaction_id: allowlist
+                    .tron_route_canary_transaction_id
+                    .clone(),
+                tron_route_canary_transaction_owner_address: allowlist
+                    .tron_route_canary_transaction_owner_address
+                    .clone(),
+                tron_route_canary_log_index: allowlist.tron_route_canary_log_index,
+                tron_route_canary_message_id: allowlist.tron_route_canary_message_id.clone(),
+                tron_route_canary_call_data_sha256: allowlist
+                    .tron_route_canary_call_data_sha256
+                    .clone(),
+                tron_route_canary_payload_hash: allowlist.tron_route_canary_payload_hash.clone(),
+                tron_route_canary_target_domain: allowlist.tron_route_canary_target_domain,
+                tron_route_canary_statement_hash: allowlist
+                    .tron_route_canary_statement_hash
+                    .clone(),
+                tron_route_canary_commitment_root: allowlist
+                    .tron_route_canary_commitment_root
+                    .clone(),
+                tron_route_canary_finality_height: allowlist
+                    .tron_route_canary_finality_height
+                    .clone(),
+                tron_route_canary_finality_block_hash: allowlist
+                    .tron_route_canary_finality_block_hash
+                    .clone(),
+                tron_route_canary_proof_version: allowlist.tron_route_canary_proof_version,
+                tron_route_canary_proof_source_domain: allowlist
+                    .tron_route_canary_proof_source_domain,
+                tron_route_canary_used_message_proof: allowlist
+                    .tron_route_canary_used_message_proof,
+                tron_route_canary_raw_data_owner_matches_transaction: allowlist
+                    .tron_route_canary_raw_data_owner_matches_transaction,
+                tron_route_canary_signature_sha256: allowlist
+                    .tron_route_canary_signature_sha256
+                    .clone(),
+                tron_route_canary_signature_recovered_address: allowlist
+                    .tron_route_canary_signature_recovered_address
+                    .clone(),
+                tron_route_canary_signature_recovers_to_owner: allowlist
+                    .tron_route_canary_signature_recovers_to_owner,
+                ton_route_canary_account_state_hash: allowlist
+                    .ton_route_canary_account_state_hash
+                    .clone(),
+                ton_route_canary_last_transaction_lt: allowlist
+                    .ton_route_canary_last_transaction_lt
+                    .clone(),
+                ton_route_canary_last_transaction_hash: allowlist
+                    .ton_route_canary_last_transaction_hash
+                    .clone(),
+                routes_allowlisted: allowlist.routes_allowlisted,
+                blockers: allowlist.blockers.clone(),
+            }
+        }
+
+        fn test_configured_sccp_all_lanes_zk_config() -> iroha_config::parameters::actual::Zk {
+            let mut zk = crate::state::default_zk_config();
+            zk.sccp_source_verifier_materials.clear();
+            zk.sccp_source_adapter_engine_deployments.clear();
+            zk.sccp_destination_rollouts.clear();
+            zk.sccp_route_allowlists.clear();
+
+            for (idx, domain) in iroha_sccp::SCCP_CORE_REMOTE_DOMAINS.into_iter().enumerate() {
+                let seed = 0x20 + (idx as u8) * 0x10;
+                let material = test_sccp_source_verifier_material_for_domain(domain, seed);
+                let deployment =
+                    test_sccp_source_adapter_deployment_for_domain(domain, &material, seed);
+                let rollout = test_sccp_destination_rollout_for_domain(domain, seed);
+                let allowlist =
+                    test_sccp_route_allowlist_for_domain(domain, &material, &deployment, &rollout);
+                let readiness =
+                    iroha_sccp::sccp_lane_production_readiness_with_deployment_materials_for_domain(
+                        domain,
+                        &material,
+                        &deployment,
+                        &rollout,
+                        &allowlist,
+                    )
+                    .expect("SCCP lane readiness from deployment material");
+                assert!(
+                    readiness.production_ready,
+                    "domain {domain} should be production-ready with complete configured material: {:?}",
+                    readiness.blockers,
+                );
+
+                zk.sccp_source_verifier_materials
+                    .push(test_actual_sccp_source_verifier_material(&material));
+                zk.sccp_source_adapter_engine_deployments.push(
+                    test_actual_sccp_source_adapter_deployment(&material, &deployment),
+                );
+                zk.sccp_destination_rollouts
+                    .push(test_actual_sccp_destination_rollout(&rollout));
+                zk.sccp_route_allowlists
+                    .push(test_actual_sccp_route_allowlist(&allowlist));
+            }
+
+            zk
+        }
+
+        #[test]
+        fn configured_sccp_all_lanes_launch_requires_every_advertised_lane() {
+            let zk = crate::state::default_zk_config();
+            let err = super::validate_configured_sccp_all_lanes_launch_ready(&zk)
+                .expect_err("empty configured material must not satisfy all-lanes launch");
+            let err = format!("{err:?}");
+            assert!(
+                err.contains("all-lanes launch policy")
+                    && err.contains("source verifier material")
+                    && err.contains("domain 1"),
+                "unexpected error: {err}",
+            );
+        }
+
+        #[test]
+        fn configured_sccp_all_lanes_launch_accepts_substrate_runtime_storage_verifier_evidence() {
+            let zk = test_configured_sccp_all_lanes_zk_config();
+
+            let eth_route = zk
+                .sccp_route_allowlists
+                .iter()
+                .find(|route| route.domain == iroha_sccp::SCCP_DOMAIN_ETH)
+                .expect("configured ETH route");
+            assert_eq!(eth_route.evm_route_canary_log_index, Some(0));
+            assert_eq!(eth_route.evm_route_canary_used_message_proof, Some(true));
+            let tron_route = zk
+                .sccp_route_allowlists
+                .iter()
+                .find(|route| route.domain == iroha_sccp::SCCP_DOMAIN_TRON)
+                .expect("configured TRON route");
+            assert!(tron_route.tron_route_canary_call_data_sha256.is_some());
+            assert!(tron_route.tron_route_canary_payload_hash.is_some());
+            assert_eq!(
+                tron_route.tron_route_canary_target_domain,
+                Some(iroha_sccp::SCCP_DOMAIN_TRON)
+            );
+            assert!(tron_route.tron_route_canary_finality_height.is_some());
+            assert!(tron_route.tron_route_canary_finality_block_hash.is_some());
+            assert_eq!(tron_route.tron_route_canary_proof_version, Some(1));
+            assert_eq!(
+                tron_route.tron_route_canary_proof_source_domain,
+                Some(iroha_sccp::SCCP_DOMAIN_SORA)
+            );
+            let substrate_rollout = zk
+                .sccp_destination_rollouts
+                .iter()
+                .find(|rollout| rollout.domain == iroha_sccp::SCCP_DOMAIN_SORA2)
+                .expect("configured SORA2 rollout");
+            assert!(substrate_rollout.substrate_finalized_head.is_some());
+            assert_eq!(
+                substrate_rollout.substrate_runtime_spec_name.as_deref(),
+                Some("sora2")
+            );
+
+            super::validate_configured_sccp_all_lanes_launch_ready(&zk)
+                .expect("complete configured SCCP material should satisfy all-lanes launch");
+        }
+
+        #[test]
+        fn configured_sccp_all_lanes_launch_rejects_evm_without_transaction_canary_fields() {
+            let mut zk = test_configured_sccp_all_lanes_zk_config();
+            let eth_route = zk
+                .sccp_route_allowlists
+                .iter_mut()
+                .find(|route| route.domain == iroha_sccp::SCCP_DOMAIN_ETH)
+                .expect("configured ETH route");
+            eth_route.evm_route_canary_transaction_hash = None;
+            eth_route.evm_route_canary_log_index = None;
+            eth_route.evm_route_canary_message_id = None;
+            eth_route.evm_route_canary_statement_hash = None;
+            eth_route.evm_route_canary_commitment_root = None;
+            eth_route.evm_route_canary_used_message_proof = None;
+
+            let err = super::validate_configured_sccp_all_lanes_launch_ready(&zk)
+                .expect_err("EVM route canary must preserve transaction transcript fields");
+            let err = format!("{err:?}");
+            assert!(
+                err.contains("production-ready lane material for domain 1")
+                    && err.contains("route canary evidence is not bound"),
+                "unexpected error: {err}",
+            );
+        }
+
+        #[test]
+        fn configured_sccp_all_lanes_launch_rejects_tron_canary_fields_on_evm_route() {
+            let mut zk = test_configured_sccp_all_lanes_zk_config();
+            let eth_route = zk
+                .sccp_route_allowlists
+                .iter_mut()
+                .find(|route| route.domain == iroha_sccp::SCCP_DOMAIN_ETH)
+                .expect("configured ETH route");
+            eth_route.tron_route_canary_call_data_sha256 = Some(format!("0x{}", "91".repeat(32)));
+            eth_route.tron_route_canary_payload_hash = Some(format!("0x{}", "92".repeat(32)));
+            eth_route.tron_route_canary_target_domain = Some(iroha_sccp::SCCP_DOMAIN_TRON);
+            eth_route.tron_route_canary_finality_height = Some(format!("0x{}", "93".repeat(32)));
+            eth_route.tron_route_canary_finality_block_hash =
+                Some(format!("0x{}", "94".repeat(32)));
+            eth_route.tron_route_canary_proof_version = Some(1);
+            eth_route.tron_route_canary_proof_source_domain = Some(iroha_sccp::SCCP_DOMAIN_SORA);
+
+            let err = super::validate_configured_sccp_all_lanes_launch_ready(&zk)
+                .expect_err("EVM route must reject TRON route canary transcript fields");
+            let err = format!("{err:?}");
+            assert!(
+                err.contains("production-ready lane material for domain 1")
+                    && err.contains("route canary evidence is not bound"),
+                "unexpected error: {err}",
+            );
+        }
+
+        #[test]
+        fn configured_sccp_all_lanes_launch_rejects_tron_call_transcript_mismatch() {
+            let mut zk = test_configured_sccp_all_lanes_zk_config();
+            let tron_route = zk
+                .sccp_route_allowlists
+                .iter_mut()
+                .find(|route| route.domain == iroha_sccp::SCCP_DOMAIN_TRON)
+                .expect("configured TRON route");
+            tron_route.tron_route_canary_call_data_sha256 = Some(format!("0x{}", "01".repeat(32)));
+
+            let err = super::validate_configured_sccp_all_lanes_launch_ready(&zk)
+                .expect_err("TRON route canary must bind the exact call transcript");
+            let err = format!("{err:?}");
+            assert!(
+                err.contains("production-ready lane material for domain 5")
+                    && err.contains("route canary evidence is not bound"),
+                "unexpected error: {err}",
+            );
+        }
+
+        #[test]
+        fn configured_sccp_all_lanes_launch_rejects_tron_without_signature_recovery_binding() {
+            let mut zk = test_configured_sccp_all_lanes_zk_config();
+            let tron_route = zk
+                .sccp_route_allowlists
+                .iter_mut()
+                .find(|route| route.domain == iroha_sccp::SCCP_DOMAIN_TRON)
+                .expect("configured TRON route");
+            tron_route.tron_route_canary_signature_recovers_to_owner = None;
+
+            let err = super::validate_configured_sccp_all_lanes_launch_ready(&zk)
+                .expect_err("TRON route canary must preserve signature recovery binding");
+            let err = format!("{err:?}");
+            assert!(
+                err.contains("production-ready lane material for domain 5")
+                    && err.contains("route canary evidence is not bound"),
+                "unexpected error: {err}",
+            );
+        }
+
+        #[test]
+        fn configured_sccp_all_lanes_launch_rejects_tron_without_transaction_owner_address() {
+            let mut zk = test_configured_sccp_all_lanes_zk_config();
+            let tron_route = zk
+                .sccp_route_allowlists
+                .iter_mut()
+                .find(|route| route.domain == iroha_sccp::SCCP_DOMAIN_TRON)
+                .expect("configured TRON route");
+            tron_route.tron_route_canary_transaction_owner_address = None;
+
+            let err = super::validate_configured_sccp_all_lanes_launch_ready(&zk)
+                .expect_err("TRON route canary must preserve transaction owner address");
+            let err = format!("{err:?}");
+            assert!(
+                err.contains("production-ready lane material for domain 5")
+                    && err.contains("route canary evidence is not bound"),
+                "unexpected error: {err}",
+            );
+        }
+
+        #[test]
+        fn configured_sccp_all_lanes_launch_rejects_substrate_without_finalized_runtime_fields() {
+            let mut zk = test_configured_sccp_all_lanes_zk_config();
+            let substrate_rollout = zk
+                .sccp_destination_rollouts
+                .iter_mut()
+                .find(|rollout| rollout.domain == iroha_sccp::SCCP_DOMAIN_SORA2)
+                .expect("configured SORA2 rollout");
+            substrate_rollout.substrate_finalized_head = None;
+            substrate_rollout.substrate_runtime_code_base64 = None;
+
+            let err = super::validate_configured_sccp_all_lanes_launch_ready(&zk)
+                .expect_err("Substrate route canary must preserve finalized runtime evidence");
+            let err = format!("{err:?}");
+            assert!(
+                err.contains("SCCP destination rollout for domain 8 is not production-ready"),
+                "unexpected error: {err}",
+            );
+        }
+
+        #[test]
+        fn configured_sccp_all_lanes_launch_rejects_cross_lane_route_canary_replay() {
+            let mut zk = test_configured_sccp_all_lanes_zk_config();
+            let replayed_canary_hash = zk
+                .sccp_route_allowlists
+                .iter()
+                .find(|route| route.domain == iroha_sccp::SCCP_DOMAIN_SOL)
+                .expect("SOL route allowlist")
+                .route_canary_evidence_hash
+                .clone();
+            let substrate_route = zk
+                .sccp_route_allowlists
+                .iter_mut()
+                .find(|route| route.domain == iroha_sccp::SCCP_DOMAIN_SORA_KUSAMA)
+                .expect("SORA Kusama route allowlist");
+            substrate_route.route_canary_evidence_hash = replayed_canary_hash;
+
+            let err = super::validate_configured_sccp_all_lanes_launch_ready(&zk)
+                .expect_err("cross-lane route canary replay must not satisfy launch");
+            let err = format!("{err:?}");
+            assert!(
+                err.contains("production-ready lane material for domain 6")
+                    && err.contains("route canary evidence is not bound"),
+                "unexpected error: {err}",
+            );
+        }
+
+        #[test]
+        fn configured_sccp_all_lanes_launch_rejects_cross_lane_route_canary_source_hash_replay() {
+            for (hash, role) in [
+                {
+                    let zk = test_configured_sccp_all_lanes_zk_config();
+                    let material = super::configured_sccp_source_verifier_material_for_domain(
+                        &zk,
+                        iroha_sccp::SCCP_DOMAIN_BSC,
+                    )
+                    .expect("configured BSC source material")
+                    .expect("BSC source material");
+                    (
+                        iroha_sccp::sccp_source_verifier_material_hash(&material),
+                        "source verifier material",
+                    )
+                },
+                {
+                    let zk = test_configured_sccp_all_lanes_zk_config();
+                    let deployment =
+                        super::configured_sccp_source_adapter_engine_deployment_for_domain(
+                            &zk,
+                            iroha_sccp::SCCP_DOMAIN_BSC,
+                        )
+                        .expect("configured BSC source deployment")
+                        .expect("BSC source deployment");
+                    (
+                        iroha_sccp::sccp_source_adapter_engine_deployment_hash(&deployment),
+                        "source-adapter deployment",
+                    )
+                },
+            ] {
+                let mut zk = test_configured_sccp_all_lanes_zk_config();
+                let sol_route = zk
+                    .sccp_route_allowlists
+                    .iter_mut()
+                    .find(|allowlist| allowlist.domain == iroha_sccp::SCCP_DOMAIN_SOL)
+                    .expect("SOL route allowlist");
+                sol_route.route_canary_evidence_hash = Some(hex::encode(hash));
+
+                let err = match super::validate_configured_sccp_all_lanes_launch_ready(&zk) {
+                    Ok(()) => {
+                        panic!("cross-lane route canary replay of {role} hash must fail")
+                    }
+                    Err(err) => err,
+                };
+                let err = format!("{err:?}");
+                assert!(
+                    err.contains("production-ready lane material for domain 3")
+                        && err.contains("route canary evidence is not bound"),
+                    "unexpected error for {role}: {err}",
+                );
+            }
+        }
+
+        #[test]
+        fn configured_sccp_all_lanes_launch_rejects_lane_foreign_full_light_client_audit_fields() {
+            let mut zk = test_configured_sccp_all_lanes_zk_config();
+            let eth_deployment = zk
+                .sccp_source_adapter_engine_deployments
+                .iter_mut()
+                .find(|deployment| {
+                    deployment.source_domain != iroha_sccp::SCCP_DOMAIN_SOL
+                        && deployment.source_domain != iroha_sccp::SCCP_DOMAIN_TON
+                })
+                .expect("non-SOL/non-TON SCCP lane");
+            eth_deployment.solana_tower_replay_verifier_hash = hex::encode([0x91; 32]);
+            eth_deployment.solana_full_accountsdb_lattice_verifier_hash = hex::encode([0x92; 32]);
+            eth_deployment.solana_bank_fork_choice_verifier_hash = hex::encode([0x93; 32]);
+            eth_deployment.solana_full_light_client_gate_hash = hex::encode([0x94; 32]);
+
+            let err = super::validate_configured_sccp_all_lanes_launch_ready(&zk)
+                .expect_err("Solana audit fields on a foreign lane must not satisfy launch");
+            let err = format!("{err:?}");
+            assert!(
+                err.contains("Solana full-light-client audit fields are only valid for SOL"),
+                "unexpected error: {err}",
+            );
+
+            let mut zk = test_configured_sccp_all_lanes_zk_config();
+            let solana_deployment = zk
+                .sccp_source_adapter_engine_deployments
+                .iter_mut()
+                .find(|deployment| deployment.source_domain == iroha_sccp::SCCP_DOMAIN_SOL)
+                .expect("SOL SCCP lane");
+            solana_deployment.ton_masterchain_config_verifier_hash = hex::encode([0xa1; 32]);
+            solana_deployment.ton_validator_set_transition_verifier_hash = hex::encode([0xa2; 32]);
+            solana_deployment.ton_shard_accounts_dictionary_verifier_hash = hex::encode([0xa3; 32]);
+            solana_deployment.ton_full_light_client_gate_hash = hex::encode([0xa4; 32]);
+
+            let err = super::validate_configured_sccp_all_lanes_launch_ready(&zk)
+                .expect_err("TON audit fields on a foreign lane must not satisfy launch");
+            let err = format!("{err:?}");
+            assert!(
+                err.contains("TON full-light-client audit fields are only valid for TON"),
+                "unexpected error: {err}",
+            );
+
+            let mut zk = test_configured_sccp_all_lanes_zk_config();
+            let eth_deployment = zk
+                .sccp_source_adapter_engine_deployments
+                .iter_mut()
+                .find(|deployment| deployment.source_domain != iroha_sccp::SCCP_DOMAIN_TRON)
+                .expect("non-TRON SCCP lane");
+            eth_deployment.tron_dpos_source_gate_hash = hex::encode([0xb4; 32]);
+
+            let err = super::validate_configured_sccp_all_lanes_launch_ready(&zk)
+                .expect_err("TRON gate hash on a foreign lane must not satisfy launch");
+            let err = format!("{err:?}");
+            assert!(
+                err.contains("TRON DPoS source gate hash is only valid for TRON"),
+                "unexpected error: {err}",
+            );
+        }
+
+        #[test]
+        fn configured_sccp_all_lanes_launch_reports_lane_blockers() {
+            let mut zk = test_configured_sccp_all_lanes_zk_config();
+
+            zk.sccp_route_allowlists[0].routes_allowlisted = false;
+            zk.sccp_route_allowlists[0]
+                .blockers
+                .push("governed route canary has not passed".to_owned());
+
+            let err = super::validate_configured_sccp_all_lanes_launch_ready(&zk)
+                .expect_err("route blocker should keep all-lanes launch closed");
+            let err = format!("{err:?}");
+            assert!(
+                err.contains("domain 1") && err.contains("governed route canary has not passed"),
+                "unexpected error: {err}",
+            );
+        }
+
         use iroha_executor_data_model::permission::{
             account::{AccountAliasPermissionScope, CanManageAccountAlias},
             domain::CanModifyDomainMetadata,
@@ -13345,6 +15393,52 @@ pub mod isi {
 
         fn new_dummy_block() -> crate::block::CommittedBlock {
             new_dummy_block_at_height(NonZeroU64::new(1).unwrap())
+        }
+
+        #[test]
+        fn record_sccp_message_rejects_non_sora_origin_payloads() {
+            let kura = Kura::blank_kura_for_testing();
+            let query_handle = LiveQueryStore::start_test();
+            let state = State::new_for_testing(World::default(), kura, query_handle);
+            let header = iroha_data_model::block::BlockHeader::new(
+                NonZeroU64::new(1).unwrap(),
+                None,
+                None,
+                None,
+                0,
+                0,
+            );
+            let mut block = state.block(header);
+            let mut stx = block.transaction();
+            stx.sccp_recording_proof_verified = true;
+
+            let payload = iroha_sccp::SccpPayloadV1::Transfer(iroha_sccp::TransferPayloadV1 {
+                version: 1,
+                source_domain: iroha_sccp::SCCP_DOMAIN_ETH,
+                dest_domain: iroha_sccp::SCCP_DOMAIN_SORA,
+                nonce: 42,
+                asset_home_domain: iroha_sccp::SCCP_DOMAIN_ETH,
+                asset_id_codec: iroha_sccp::SCCP_CODEC_TEXT_UTF8,
+                asset_id: b"weth#eth".to_vec(),
+                amount: 1,
+                sender_codec: iroha_sccp::SCCP_CODEC_EVM_HEX,
+                sender: b"0x1111111111111111111111111111111111111111".to_vec(),
+                recipient_codec: iroha_sccp::SCCP_CODEC_TEXT_UTF8,
+                recipient: b"alice@universal".to_vec(),
+                route_id_codec: iroha_sccp::SCCP_CODEC_TEXT_UTF8,
+                route_id: b"eth:sora:weth".to_vec(),
+            });
+            let instruction = iroha_data_model::isi::bridge::RecordSccpMessage::new(
+                iroha_sccp::canonical_sccp_payload_bytes(&payload),
+            );
+
+            let err = instruction.execute(&ALICE_ID, &mut stx).expect_err(
+                "non-SORA source messages must not be recorded as Nexus-origin SCCP messages",
+            );
+            assert!(
+                format!("{err:?}").contains("only accepts SORA-origin payloads"),
+                "unexpected error: {err:?}"
+            );
         }
 
         fn minimal_contract_artifact() -> (Vec<u8>, ContractManifest) {

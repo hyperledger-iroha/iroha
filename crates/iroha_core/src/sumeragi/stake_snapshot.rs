@@ -62,7 +62,7 @@ impl CommitStakeSnapshot {
     }
 }
 
-/// Determine whether 2/3 stake quorum is reached for the provided signers.
+/// Determine whether strict >2/3 stake quorum is reached for the provided signers.
 pub fn stake_quorum_reached_for_world(
     world: &impl WorldReadOnly,
     roster: &[PeerId],
@@ -124,7 +124,7 @@ pub fn stake_quorum_reached_for_world(
     let total_scaled = total
         .checked_mul(Numeric::from(2_u64), NumericSpec::default())
         .ok_or(StakeQuorumError::Overflow)?;
-    Ok(signed_scaled >= total_scaled)
+    Ok(signed_scaled > total_scaled)
 }
 
 /// Return selected signer stake coverage in basis points for the provided roster.
@@ -184,7 +184,7 @@ pub fn stake_coverage_bps_for_world(
     Ok(bps.min(10_000) as u16)
 }
 
-/// Determine whether 2/3 stake quorum is reached for the provided signers.
+/// Determine whether strict >2/3 stake quorum is reached for the provided signers.
 #[cfg(test)]
 pub fn stake_quorum_reached_for_peers(
     view: &StateView<'_>,
@@ -194,7 +194,7 @@ pub fn stake_quorum_reached_for_peers(
     stake_quorum_reached_for_world(view.world(), roster, signers)
 }
 
-/// Determine whether 2/3 stake quorum is reached for the provided signers and snapshot.
+/// Determine whether strict >2/3 stake quorum is reached for the provided signers and snapshot.
 pub fn stake_quorum_reached_for_snapshot(
     snapshot: &CommitStakeSnapshot,
     roster: &[PeerId],
@@ -246,7 +246,7 @@ pub fn stake_quorum_reached_for_snapshot(
     let total_scaled = total
         .checked_mul(Numeric::from(2_u64), NumericSpec::default())
         .ok_or(StakeQuorumError::Overflow)?;
-    Ok(signed_scaled >= total_scaled)
+    Ok(signed_scaled > total_scaled)
 }
 
 /// Build a stake map keyed by peer id using the largest stake seen per peer.
@@ -567,7 +567,7 @@ mod tests {
     }
 
     #[test]
-    fn stake_quorum_reached_for_snapshot_enforces_two_thirds() {
+    fn stake_quorum_reached_for_snapshot_enforces_strict_two_thirds() {
         let peer_a = PeerId::new(KeyPair::random().public_key().clone());
         let peer_b = PeerId::new(KeyPair::random().public_key().clone());
         let peer_c = PeerId::new(KeyPair::random().public_key().clone());
@@ -586,6 +586,11 @@ mod tests {
         let mut signers = BTreeSet::new();
         signers.insert(peer_a.clone());
         signers.insert(peer_b.clone());
+        assert_eq!(
+            stake_quorum_reached_for_snapshot(&snapshot, &roster, &signers),
+            Ok(false)
+        );
+        signers.insert(peer_c.clone());
         assert_eq!(
             stake_quorum_reached_for_snapshot(&snapshot, &roster, &signers),
             Ok(true)
@@ -614,6 +619,15 @@ mod tests {
         let mut signers = BTreeSet::new();
         signers.insert(peer_a.clone());
         signers.insert(peer_b.clone());
+        assert_eq!(
+            stake_quorum_reached_for_world(view.world(), &roster, &signers),
+            Ok(false)
+        );
+        assert_eq!(
+            stake_quorum_reached_for_peers(&view, &roster, &signers),
+            Ok(false)
+        );
+        signers.insert(peer_c.clone());
         assert_eq!(
             stake_quorum_reached_for_world(view.world(), &roster, &signers),
             Ok(true)

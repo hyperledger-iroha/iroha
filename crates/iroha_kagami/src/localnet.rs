@@ -3298,7 +3298,7 @@ fn write_start_script(
     )?;
     writeln!(start_file, "import os")?;
     writeln!(start_file, "import subprocess")?;
-    writeln!(start_file, "")?;
+    writeln!(start_file)?;
     writeln!(start_file, "env = os.environ.copy()")?;
     writeln!(start_file, "cmd = [env[\"IROHAD_BIN\"]]")?;
     writeln!(start_file, "if env.get(\"IROHA_SORA_MODE\") == \"1\":")?;
@@ -5184,6 +5184,61 @@ mod tests {
         assert_eq!(stake_amount, npos.min_self_bond);
     }
 
+    fn assert_localnet_dataspace_catalog_quorum(out_dir: &Path, peer_count: NonZeroU16) {
+        let peer_cfg: toml::Value = toml::from_str(
+            &fs::read_to_string(out_dir.join("peer0.toml")).expect("read generated peer config"),
+        )
+        .expect("parse peer config");
+        let catalog = peer_cfg
+            .get("nexus")
+            .and_then(toml::Value::as_table)
+            .and_then(|nexus| nexus.get("dataspace_catalog"))
+            .and_then(toml::Value::as_array)
+            .expect("nexus dataspace catalog");
+
+        let fault_tolerance = localnet_dataspace_fault_tolerance(peer_count);
+        let committee_size = fault_tolerance
+            .checked_mul(3)
+            .and_then(|value| value.checked_add(1))
+            .expect("committee size");
+        assert_eq!(
+            committee_size,
+            u32::from(peer_count.get()),
+            "committee size should match peer count"
+        );
+        for entry in catalog {
+            let entry = entry.as_table().expect("dataspace entry");
+            let alias = entry
+                .get("alias")
+                .and_then(toml::Value::as_str)
+                .expect("dataspace alias");
+            let id = entry
+                .get("id")
+                .and_then(toml::Value::as_integer)
+                .expect("dataspace id");
+            assert_eq!(
+                entry
+                    .get("fault_tolerance")
+                    .and_then(toml::Value::as_integer),
+                Some(i64::from(fault_tolerance)),
+                "fault tolerance should scale with peers"
+            );
+            if alias == "universal" {
+                assert!(
+                    entry.get("manifest_hash").is_none(),
+                    "universal dataspace keeps the reserved id without a manifest hash"
+                );
+            } else {
+                let expected_manifest = localnet_dataspace_manifest_hash(id);
+                assert_eq!(
+                    entry.get("manifest_hash").and_then(toml::Value::as_str),
+                    Some(expected_manifest.as_str()),
+                    "non-universal dataspaces must carry an id-derived manifest hash"
+                );
+            }
+        }
+    }
+
     #[test]
     fn localnet_npos_validator_roster_and_quorum_match_peer_count() {
         use std::collections::BTreeSet;
@@ -5244,59 +5299,7 @@ mod tests {
             .collect();
         assert_eq!(actual, expected, "validator roster should match peers");
 
-        let peer_cfg: toml::Value = toml::from_str(
-            &fs::read_to_string(temp.path().join("peer0.toml"))
-                .expect("read generated peer config"),
-        )
-        .expect("parse peer config");
-        let catalog = peer_cfg
-            .get("nexus")
-            .and_then(toml::Value::as_table)
-            .and_then(|nexus| nexus.get("dataspace_catalog"))
-            .and_then(toml::Value::as_array)
-            .expect("nexus dataspace catalog");
-
-        let fault_tolerance = localnet_dataspace_fault_tolerance(peer_count);
-        let committee_size = fault_tolerance
-            .checked_mul(3)
-            .and_then(|value| value.checked_add(1))
-            .expect("committee size");
-        assert_eq!(
-            committee_size,
-            u32::from(peer_count.get()),
-            "committee size should match peer count"
-        );
-        for entry in catalog {
-            let entry = entry.as_table().expect("dataspace entry");
-            let alias = entry
-                .get("alias")
-                .and_then(toml::Value::as_str)
-                .expect("dataspace alias");
-            let id = entry
-                .get("id")
-                .and_then(toml::Value::as_integer)
-                .expect("dataspace id");
-            assert_eq!(
-                entry
-                    .get("fault_tolerance")
-                    .and_then(toml::Value::as_integer),
-                Some(i64::from(fault_tolerance)),
-                "fault tolerance should scale with peers"
-            );
-            if alias == "universal" {
-                assert!(
-                    entry.get("manifest_hash").is_none(),
-                    "universal dataspace keeps the reserved id without a manifest hash"
-                );
-            } else {
-                let expected_manifest = localnet_dataspace_manifest_hash(id);
-                assert_eq!(
-                    entry.get("manifest_hash").and_then(toml::Value::as_str),
-                    Some(expected_manifest.as_str()),
-                    "non-universal dataspaces must carry an id-derived manifest hash"
-                );
-            }
-        }
+        assert_localnet_dataspace_catalog_quorum(temp.path(), peer_count);
     }
 
     #[test]
@@ -7240,6 +7243,7 @@ mod tests {
 
     #[cfg(unix)]
     #[test]
+    #[allow(clippy::too_many_lines)]
     fn start_and_stop_scripts_are_executable() {
         let temp = tempfile::tempdir().expect("tmp dir");
         let client_account_literal = localnet_client_account_literal(None);

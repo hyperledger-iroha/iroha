@@ -19,9 +19,10 @@ use iroha::data_model::{
     domain::{Domain, DomainId},
     governance::types::ParliamentBody,
     isi::governance::{
-        ApproveGovernanceProposal, AtWindow, CastPlainBallot, CouncilDerivationKind,
-        EnactReferendum, FinalizeReferendum, PersistCouncilForEpoch, ProposeDeployContract,
-        ProposeRuntimeUpgradeProposal, RegisterCitizen, VotingMode,
+        ApproveGovernanceProposal, AtWindow, CastParliamentBallot, CastPlainBallot,
+        CouncilDerivationKind, EnactReferendum, FinalizeReferendum, ParliamentDecision,
+        PersistCouncilForEpoch, ProposeDeployContract, ProposeRuntimeUpgradeProposal,
+        RegisterCitizen, VotingMode,
     },
     permission::Permission,
     prelude::{
@@ -37,9 +38,12 @@ use iroha::data_model::{
 };
 use iroha_crypto::{Hash, KeyPair};
 use iroha_executor_data_model::permission::governance::{
-    CanEnactGovernance, CanProposeContractDeployment, CanSubmitGovernanceBallot,
+    CanEnactGovernance, CanManageParliament, CanProposeContractDeployment,
+    CanSubmitGovernanceBallot,
 };
-use iroha_test_network::{NetworkBuilder, ensure_domain_registration_lease_for_network};
+use iroha_test_network::{
+    NetworkBuilder, NetworkPeer, ensure_domain_registration_lease_for_network,
+};
 use iroha_test_samples::{ALICE_ID, ALICE_KEYPAIR, gen_account_in};
 
 const CITIZEN_COUNT: usize = 20;
@@ -824,6 +828,7 @@ fn numeric_asset_balance_u128(client: &Client, asset_id: AssetId) -> Result<Opti
                 || msg.contains("Find(Account(")
                 || msg.contains("QueryExecutionFail::Find")
                 || msg.contains("QueryExecutionFail::NotFound")
+                || msg.contains("QueryFailed(NotFound)")
             {
                 return Ok(None);
             }
@@ -884,7 +889,7 @@ async fn wait_for_tx_applied(
     status_url
         .query_pairs_mut()
         .append_pair("hash", tx_hash_hex)
-        .append_pair("scope", "auto");
+        .append_pair("scope", "local");
     let deadline = Instant::now() + timeout;
     let mut last_kind = String::from("unavailable");
     let mut last_payload = String::new();
@@ -966,7 +971,7 @@ async fn wait_for_tx_rejected(
     status_url
         .query_pairs_mut()
         .append_pair("hash", tx_hash_hex)
-        .append_pair("scope", "auto");
+        .append_pair("scope", "local");
     let deadline = Instant::now() + timeout;
     let mut last_kind = String::from("unavailable");
     let mut last_payload = String::new();
@@ -1045,6 +1050,28 @@ fn governance_builder_for_hostile_takeover() -> NetworkBuilder {
         .with_config_layer(move |layer| {
             layer
                 .write(["default_account_domain_label"], "wonderland")
+                .write(["nexus", "governance", "default_module"], "parliament")
+                .write(
+                    [
+                        "nexus",
+                        "governance",
+                        "modules",
+                        "parliament",
+                        "module_type",
+                    ],
+                    "parliament_sortition_jit",
+                )
+                .write(
+                    [
+                        "nexus",
+                        "governance",
+                        "modules",
+                        "parliament",
+                        "params",
+                        "selection",
+                    ],
+                    "multibody_sortition",
+                )
                 .write(["gov", "voting_asset_id"], governance_asset_id.clone())
                 .write(["gov", "citizenship_asset_id"], governance_asset_id.clone())
                 .write(
@@ -1181,12 +1208,14 @@ async fn setup_hostile_fixture(
     }
     .into();
     let enact_perm: Permission = CanEnactGovernance.into();
+    let manage_parliament_perm: Permission = CanManageParliament.into();
     submit_permission_grants_and_wait(
         &alice,
         vec![
             (ALICE_ID.clone(), deploy_perm),
             (ALICE_ID.clone(), runtime_perm),
             (ALICE_ID.clone(), enact_perm),
+            (ALICE_ID.clone(), manage_parliament_perm),
         ],
         Duration::from_secs(180),
         "submit hostile-fixture governance permission grants to alice",
@@ -1322,6 +1351,66 @@ fn hostile_parliament_bodies() -> [ParliamentBody; 7] {
     ]
 }
 
+fn deploy_parliament_bodies() -> [ParliamentBody; 6] {
+    [
+        ParliamentBody::RulesCommittee,
+        ParliamentBody::AgendaCouncil,
+        ParliamentBody::InterestPanel,
+        ParliamentBody::ReviewPanel,
+        ParliamentBody::PolicyJury,
+        ParliamentBody::OversightCommittee,
+    ]
+}
+
+async fn cast_stage_approvals_from_snapshot(
+    http: &reqwest::Client,
+    ready_peer: &NetworkPeer,
+    citizens: &[(iroha::data_model::account::AccountId, KeyPair)],
+    proposal_payload: &norito::json::Value,
+    proposal_id: [u8; 32],
+    bodies: &[ParliamentBody],
+    context: &str,
+) -> Result<()> {
+    for body in bodies {
+        let approvers = proposal_snapshot_body_members(proposal_payload, *body)
+            .wrap_err_with(|| format!("{context}: extract {body:?} roster"))?
+            .ok_or_else(|| eyre!("{context}: proposal is missing parliament snapshot"))?;
+        for (approval_idx, account_id) in approvers.iter().enumerate() {
+            let key_pair = find_account_keypair(citizens, account_id).wrap_err_with(|| {
+                format!("{context}: find key pair for {body:?} approver #{approval_idx}")
+            })?;
+            let mut member_client =
+                ready_peer.client_for(account_id, key_pair.private_key().clone());
+            tune_client_timeouts(&mut member_client);
+            let tx_hash = member_client
+                .submit(CastParliamentBallot {
+                    body: *body,
+                    proposal_id,
+                    decision: ParliamentDecision::Approve,
+                })
+                .wrap_err_with(|| {
+                    format!(
+                        "{context}: submit {body:?} signed approval ballot #{approval_idx} ({account_id})"
+                    )
+                })?;
+            wait_for_tx_applied(
+                http,
+                &member_client.torii_url,
+                &hex::encode(tx_hash.as_ref()),
+                Duration::from_secs(180),
+                "wait for parliament approval ballot transaction to be applied",
+            )
+            .await
+            .wrap_err_with(|| {
+                format!(
+                    "{context}: wait for {body:?} signed approval ballot #{approval_idx} ({account_id})"
+                )
+            })?;
+        }
+    }
+    Ok(())
+}
+
 #[tokio::test]
 async fn sora_parliament_lifecycle_smoke() -> Result<()> {
     eprintln!("sora smoke: start");
@@ -1427,12 +1516,14 @@ async fn sora_parliament_lifecycle_smoke() -> Result<()> {
     }
     .into();
     let enact_perm: Permission = CanEnactGovernance.into();
+    let manage_parliament_perm: Permission = CanManageParliament.into();
     submit_permission_grants_and_wait(
         &alice,
         vec![
             (ALICE_ID.clone(), propose_perm),
             (ALICE_ID.clone(), reject_propose_perm),
             (ALICE_ID.clone(), enact_perm),
+            (ALICE_ID.clone(), manage_parliament_perm),
         ],
         Duration::from_secs(180),
         "submit governance proposal/enact permission grants to alice",
@@ -1719,22 +1810,7 @@ async fn sora_parliament_lifecycle_smoke() -> Result<()> {
     let rules_approvers =
         proposal_snapshot_body_members(&proposal_payload, ParliamentBody::RulesCommittee)
             .wrap_err("extract rules committee roster for first proposal")?
-            .unwrap_or_else(|| {
-                citizens
-                    .iter()
-                    .map(|(account_id, _)| account_id.clone())
-                    .collect()
-            });
-    let agenda_approvers =
-        proposal_snapshot_body_members(&proposal_payload, ParliamentBody::AgendaCouncil)
-            .wrap_err("extract agenda council roster for first proposal")?
-            .unwrap_or_else(|| {
-                citizens
-                    .iter()
-                    .map(|(account_id, _)| account_id.clone())
-                    .collect()
-            });
-
+            .ok_or_else(|| eyre!("first proposal is missing parliament snapshot"))?;
     let first_rules_approver = rules_approvers
         .first()
         .cloned()
@@ -1746,61 +1822,64 @@ async fn sora_parliament_lifecycle_smoke() -> Result<()> {
         first_rules_key_pair.private_key().clone(),
     );
     tune_client_timeouts(&mut first_rules_client);
-    first_rules_client
+    let first_rules_tx_hash = first_rules_client
         .submit(ApproveGovernanceProposal {
             body: ParliamentBody::RulesCommittee,
             proposal_id,
         })
         .wrap_err("submit first rules committee approval")?;
+    wait_for_tx_applied(
+        &http,
+        &first_rules_client.torii_url,
+        &hex::encode(first_rules_tx_hash.as_ref()),
+        Duration::from_secs(180),
+        "wait for first rules committee approval transaction to be applied",
+    )
+    .await
+    .wrap_err("wait for first rules committee approval applied")?;
     wait_for_referendum_found(&alice, &referendum_id, Duration::from_secs(180))
         .await
         .wrap_err("wait for referendum record to appear")?;
     wait_for_referendum_status(&alice, &referendum_id, "Proposed", Duration::from_secs(60))
         .await
-        .wrap_err("wait for referendum to remain proposed before agenda council quorum")?;
-    eprintln!("sora smoke: referendum remained proposed after partial council approvals");
+        .wrap_err("wait for referendum to remain proposed after one rules ballot")?;
 
-    for (approval_idx, agenda_account_id) in agenda_approvers.iter().enumerate() {
-        let agenda_key_pair =
-            find_account_keypair(&citizens, agenda_account_id).wrap_err_with(|| {
-                format!("find key pair for agenda approver #{approval_idx} ({agenda_account_id})")
-            })?;
-        let mut agenda_client =
-            ready_peer.client_for(agenda_account_id, agenda_key_pair.private_key().clone());
-        tune_client_timeouts(&mut agenda_client);
-        agenda_client
-            .submit(ApproveGovernanceProposal {
-                body: ParliamentBody::AgendaCouncil,
-                proposal_id,
-            })
-            .wrap_err_with(|| {
-                format!(
-                    "submit agenda council approval with roster member #{approval_idx} ({agenda_account_id})"
-                )
-            })?;
-    }
-    for (approval_idx, rules_account_id) in rules_approvers.iter().skip(1).enumerate() {
-        let rules_key_pair =
-            find_account_keypair(&citizens, rules_account_id).wrap_err_with(|| {
-                format!("find key pair for rules approver #{approval_idx} ({rules_account_id})")
-            })?;
-        let mut rules_client =
-            ready_peer.client_for(rules_account_id, rules_key_pair.private_key().clone());
-        tune_client_timeouts(&mut rules_client);
-        rules_client
-            .submit(ApproveGovernanceProposal {
-                body: ParliamentBody::RulesCommittee,
-                proposal_id,
-            })
-            .wrap_err_with(|| {
-                format!(
-                    "submit additional rules committee approval with roster member #{approval_idx} ({rules_account_id})"
-                )
-            })?;
-    }
+    cast_stage_approvals_from_snapshot(
+        &http,
+        ready_peer,
+        &citizens,
+        &proposal_payload,
+        proposal_id,
+        &[
+            ParliamentBody::RulesCommittee,
+            ParliamentBody::AgendaCouncil,
+        ],
+        "first proposal rules+agenda gate",
+    )
+    .await?;
+    wait_for_referendum_status(&alice, &referendum_id, "Proposed", Duration::from_secs(60))
+        .await
+        .wrap_err("deploy referendum must remain proposed after only Rules + Agenda")?;
+    eprintln!("sora smoke: deploy referendum stayed proposed after Rules + Agenda only");
+
+    cast_stage_approvals_from_snapshot(
+        &http,
+        ready_peer,
+        &citizens,
+        &proposal_payload,
+        proposal_id,
+        &[
+            ParliamentBody::InterestPanel,
+            ParliamentBody::ReviewPanel,
+            ParliamentBody::PolicyJury,
+            ParliamentBody::OversightCommittee,
+        ],
+        "first proposal remaining parliament gates",
+    )
+    .await?;
     wait_for_referendum_status(&alice, &referendum_id, "Open", Duration::from_secs(180))
         .await
-        .wrap_err("wait for referendum status to open before ballots")?;
+        .wrap_err("wait for referendum status to open after full parliament gate")?;
     eprintln!("sora smoke: referendum open");
 
     for (idx, (account_id, key_pair)) in citizens.iter().take(FIRST_REFERENDUM_VOTERS).enumerate() {
@@ -2012,66 +2091,16 @@ async fn sora_parliament_lifecycle_smoke() -> Result<()> {
     let reject_proposal_payload = alice
         .get_gov_proposal_json(&reject_proposal_id_hex)
         .wrap_err("query second governance proposal payload for parliament snapshot")?;
-    let reject_rules_approvers =
-        proposal_snapshot_body_members(&reject_proposal_payload, ParliamentBody::RulesCommittee)
-            .wrap_err("extract rules committee roster for second proposal")?
-            .unwrap_or_else(|| {
-                citizens
-                    .iter()
-                    .map(|(account_id, _)| account_id.clone())
-                    .collect()
-            });
-    let reject_agenda_approvers =
-        proposal_snapshot_body_members(&reject_proposal_payload, ParliamentBody::AgendaCouncil)
-            .wrap_err("extract agenda council roster for second proposal")?
-            .unwrap_or_else(|| {
-                citizens
-                    .iter()
-                    .map(|(account_id, _)| account_id.clone())
-                    .collect()
-            });
-
-    for (approval_idx, rules_account_id) in reject_rules_approvers.iter().enumerate() {
-        let rules_key_pair =
-            find_account_keypair(&citizens, rules_account_id).wrap_err_with(|| {
-                format!(
-                    "find key pair for rejection-path rules approver #{approval_idx} ({rules_account_id})"
-                )
-            })?;
-        let mut rules_client =
-            ready_peer.client_for(rules_account_id, rules_key_pair.private_key().clone());
-        tune_client_timeouts(&mut rules_client);
-        rules_client
-            .submit(ApproveGovernanceProposal {
-                body: ParliamentBody::RulesCommittee,
-                proposal_id: reject_proposal_id,
-            })
-            .wrap_err_with(|| {
-                format!(
-                    "submit rejection-path rules approval with roster member #{approval_idx} ({rules_account_id})"
-                )
-            })?;
-    }
-    for (approval_idx, agenda_account_id) in reject_agenda_approvers.iter().enumerate() {
-        let agenda_key_pair = find_account_keypair(&citizens, agenda_account_id).wrap_err_with(|| {
-            format!(
-                "find key pair for rejection-path agenda approver #{approval_idx} ({agenda_account_id})"
-            )
-        })?;
-        let mut agenda_client =
-            ready_peer.client_for(agenda_account_id, agenda_key_pair.private_key().clone());
-        tune_client_timeouts(&mut agenda_client);
-        agenda_client
-            .submit(ApproveGovernanceProposal {
-                body: ParliamentBody::AgendaCouncil,
-                proposal_id: reject_proposal_id,
-            })
-            .wrap_err_with(|| {
-                format!(
-                    "submit rejection-path agenda approval with roster member #{approval_idx} ({agenda_account_id})"
-                )
-            })?;
-    }
+    cast_stage_approvals_from_snapshot(
+        &http,
+        ready_peer,
+        &citizens,
+        &reject_proposal_payload,
+        reject_proposal_id,
+        &deploy_parliament_bodies(),
+        "rejection-path deploy parliament gate",
+    )
+    .await?;
     wait_for_referendum_found(&alice, &reject_referendum_id, Duration::from_secs(180))
         .await
         .wrap_err("wait for rejection-path referendum record to appear")?;
@@ -2479,18 +2508,16 @@ async fn sora_parliament_hostile_takeover_enacts_malicious_deploy_and_runtime_af
     .await
     .wrap_err("wait for captured hostile deploy proposal to be queryable")?;
 
-    for body in [
-        ParliamentBody::RulesCommittee,
-        ParliamentBody::AgendaCouncil,
-    ] {
+    for body in deploy_parliament_bodies() {
         for (member_id, member_keypair) in &attacker_members {
             let mut member_client =
                 ready_peer.client_for(member_id, member_keypair.private_key().clone());
             tune_client_timeouts(&mut member_client);
             member_client
-                .submit(ApproveGovernanceProposal {
+                .submit(CastParliamentBallot {
                     body,
                     proposal_id: deploy_proposal_id,
+                    decision: ParliamentDecision::Approve,
                 })
                 .wrap_err_with(|| {
                     format!(
@@ -2645,9 +2672,10 @@ async fn sora_parliament_hostile_takeover_enacts_malicious_deploy_and_runtime_af
                 ready_peer.client_for(member_id, member_keypair.private_key().clone());
             tune_client_timeouts(&mut member_client);
             member_client
-                .submit(ApproveGovernanceProposal {
+                .submit(CastParliamentBallot {
                     body,
                     proposal_id: runtime_proposal_id,
+                    decision: ParliamentDecision::Approve,
                 })
                 .wrap_err_with(|| {
                     format!(

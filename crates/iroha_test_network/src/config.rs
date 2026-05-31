@@ -48,6 +48,7 @@ use iroha_executor_data_model::permission::{
     asset::{CanMintAssetWithDefinition, CanTransferAssetWithDefinition},
     domain::{CanRegisterDomain, CanUnregisterDomain},
     executor::CanUpgradeExecutor,
+    governance::CanManageParliament,
     parameter::CanSetParameters,
     peer::CanManagePeers,
     role::CanManageRoles,
@@ -314,9 +315,16 @@ fn build_minimal_genesis_with_post_topology(
             da_proof_policies,
             nexus_config.clone(),
             zk_config.clone(),
-            consensus_handshake_meta,
+            consensus_handshake_meta.clone(),
             confidential_policy_hash,
         );
+    if let Some(consensus_handshake_meta) = consensus_handshake_meta {
+        append_consensus_handshake_meta_override(
+            &mut block,
+            &genesis_key_pair,
+            consensus_handshake_meta,
+        );
+    }
     ensure_genesis_results(
         &mut block,
         &genesis_account,
@@ -560,6 +568,10 @@ fn build_minimal_genesis_unexecuted_with_post_topology(
             alice_id.clone(),
         )),
         InstructionBox::from(Grant::account_permission(
+            CanManageParliament,
+            alice_id.clone(),
+        )),
+        InstructionBox::from(Grant::account_permission(
             CanRegisterTrigger {
                 authority: alice_id.clone(),
             },
@@ -694,6 +706,94 @@ fn build_minimal_genesis_unexecuted_with_post_topology(
         .build_and_sign_with_confidential_policy_hash(&genesis_key_pair, confidential_policy_hash)
         .expect("build minimal genesis");
     (block, genesis_account, topology_vec, genesis_key_pair)
+}
+
+fn append_consensus_handshake_meta_override(
+    block: &mut GenesisBlock,
+    genesis_key_pair: &KeyPair,
+    consensus_handshake_meta: Parameter,
+) {
+    let mut transactions = block.0.transactions_vec().clone();
+    let chain = transactions
+        .first()
+        .map(|tx| tx.chain().clone())
+        .unwrap_or_else(chain_id);
+    let authority = AccountId::new(genesis_key_pair.public_key().clone());
+    let mut tx_builder = iroha_data_model::transaction::TransactionBuilder::new(chain, authority)
+        .with_instructions([InstructionBox::from(SetParameter::new(
+            consensus_handshake_meta,
+        ))]);
+    let next_creation_time = transactions
+        .iter()
+        .map(iroha_data_model::transaction::SignedTransaction::creation_time)
+        .max()
+        .unwrap_or_default()
+        .saturating_add(std::time::Duration::from_millis(1));
+    tx_builder.set_creation_time(next_creation_time);
+    transactions.push(tx_builder.sign(genesis_key_pair.private_key()));
+
+    let external_merkle: iroha_crypto::MerkleTree<
+        iroha_data_model::transaction::TransactionEntrypoint,
+    > = transactions
+        .iter()
+        .map(iroha_data_model::transaction::SignedTransaction::hash_as_entrypoint)
+        .collect();
+    let mut header = block.0.header();
+    header.merkle_root = external_merkle.root();
+    header.result_merkle_root = None;
+    header.creation_time_ms = u64::try_from(
+        next_creation_time
+            .saturating_add(std::time::Duration::from_millis(1))
+            .as_millis(),
+    )
+    .expect("genesis block creation time must fit into u64 milliseconds");
+
+    let signer_index = block
+        .0
+        .signatures()
+        .next()
+        .map(iroha_data_model::block::BlockSignature::index)
+        .unwrap_or(0);
+    let placeholder_sig = iroha_data_model::block::BlockSignature::new(
+        signer_index,
+        SignatureOf::from_hash(genesis_key_pair.private_key(), header.hash()),
+    );
+    let da_commitments = block.0.da_commitments().cloned();
+    let da_proof_policies = block.0.da_proof_policies().cloned();
+    let da_pin_intents = block.0.da_pin_intents().cloned();
+
+    let mut working = iroha_data_model::block::SignedBlock::presigned(
+        placeholder_sig,
+        header,
+        transactions.clone(),
+    );
+    working.set_da_commitments(da_commitments.clone());
+    working.set_da_proof_policies(da_proof_policies.clone());
+    working.set_da_pin_intents(da_pin_intents.clone());
+    let hashes = transactions
+        .iter()
+        .map(iroha_data_model::transaction::SignedTransaction::hash_as_entrypoint)
+        .collect::<Vec<_>>();
+    working
+        .set_transaction_results(Vec::new(), &hashes, Vec::new())
+        .expect("genesis placeholder hashes should match payload");
+
+    let signature = iroha_data_model::block::BlockSignature::new(
+        signer_index,
+        SignatureOf::from_hash(genesis_key_pair.private_key(), working.hash()),
+    );
+    let mut rebuilt = iroha_data_model::block::SignedBlock::presigned(
+        signature,
+        working.payload().header,
+        transactions,
+    );
+    rebuilt.set_da_commitments(da_commitments);
+    rebuilt.set_da_proof_policies(da_proof_policies);
+    rebuilt.set_da_pin_intents(da_pin_intents);
+    rebuilt
+        .set_transaction_results(Vec::new(), &hashes, Vec::new())
+        .expect("genesis placeholder hashes should match payload");
+    block.0 = rebuilt;
 }
 
 fn format_hash_hex(hash: [u8; 32]) -> String {
@@ -1884,7 +1984,7 @@ mod tests {
     }
 
     #[test]
-    fn genesis_grants_alice_soracloud_management_permission() {
+    fn genesis_grants_alice_bootstrap_management_permissions() {
         use iroha_data_model::{isi::GrantBox, transaction::Executable};
 
         let bls = KeyPair::random_with_algorithm(Algorithm::BlsNormal);
@@ -1895,7 +1995,8 @@ mod tests {
             iroha_crypto::bls_normal_pop_prove(bls.private_key()).expect("BLS PoP generation"),
         );
         let block = genesis(Vec::new(), topology, vec![entry]);
-        let mut saw_permission = false;
+        let mut saw_soracloud_permission = false;
+        let mut saw_parliament_permission = false;
         for tx in block.0.transactions_vec() {
             let Executable::Instructions(instrs) = tx.instructions() else {
                 continue;
@@ -1906,17 +2007,23 @@ mod tests {
                     continue;
                 };
                 if grant.destination == *ALICE_ID && grant.object.name() == "CanManageSoracloud" {
-                    saw_permission = true;
-                    break;
+                    saw_soracloud_permission = true;
+                }
+                if grant.destination == *ALICE_ID && grant.object.name() == "CanManageParliament" {
+                    saw_parliament_permission = true;
                 }
             }
-            if saw_permission {
+            if saw_soracloud_permission && saw_parliament_permission {
                 break;
             }
         }
         assert!(
-            saw_permission,
+            saw_soracloud_permission,
             "default test-network genesis should grant ALICE_ID CanManageSoracloud"
+        );
+        assert!(
+            saw_parliament_permission,
+            "default test-network genesis should grant ALICE_ID CanManageParliament"
         );
     }
 

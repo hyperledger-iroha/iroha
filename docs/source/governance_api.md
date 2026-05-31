@@ -2,7 +2,7 @@
 title: Governance App API — Endpoints (Draft)
 ---
 
-Status: draft/sketch to accompany the governance implementation tasks. Shapes may change during implementation. Determinism and RBAC policy are normative constraints; Torii returns unsigned instruction skeletons for transaction-producing flows and rejects `private_key` payloads. Clients sign locally and submit via `/v1/pipeline/transactions`.
+Status: draft/sketch to accompany the governance implementation tasks. Shapes may change during implementation. Determinism and RBAC policy are normative constraints; Torii returns unsigned instruction skeletons for governance transaction-producing flows and rejects `private_key` payloads. Clients sign locally and submit via `/v1/pipeline/transactions`.
 
 Important: we do not ship a standing council or “default” governance roster. Out of the box, the council endpoints either return an empty/pending state or derive a deterministic fallback from the bonded citizen registry. A citizen is an account that posted the configured minimum bond; the bond is an anti-Sybil/collateral floor and does not increase Parliament draw odds or vote weight above the minimum. Operators must persist their own roster via the governance flows; there is no baked‑in multisig, secret key, or privileged council account in this repository.
 
@@ -10,8 +10,7 @@ Overview
 - All endpoints return JSON. For transaction-producing flows, responses include `tx_instructions` — an array of one or more instruction skeletons:
   - `wire_id`: registry identifier for the instruction type
   - `payload_hex`: Norito payload bytes (hex)
-- If `authority` and `private_key` are provided (or `private_key` on ballot DTOs), Torii signs and submits the transaction and still returns `tx_instructions`.
-- Otherwise, clients assemble a SignedTransaction using their authority and chain_id, then sign and POST to `/v1/pipeline/transactions`.
+- Governance endpoints do not server-sign. Supplying `private_key` to a `/v1/gov/*` transaction-producing endpoint is rejected; clients assemble a `SignedTransaction` using their authority and chain id, then sign locally and POST to `/v1/pipeline/transactions`.
 - SDK coverage:
 - Python (`iroha_python`): `ToriiClient.get_governance_proposal_typed` returns `GovernanceProposalResult` (normalising status/kind fields), `ToriiClient.get_governance_referendum_typed` returns `GovernanceReferendumResult`, `ToriiClient.get_governance_tally_typed` returns `GovernanceTally`, and `ToriiClient.get_governance_locks_typed` returns `GovernanceLocksResult`.
 - Python lightweight client (`iroha_torii_client`): `ToriiClient.finalize_referendum` and `ToriiClient.enact_proposal` return typed `GovernanceInstructionDraft` bundles (wrapping the Torii skeleton `tx_instructions`), avoiding manual JSON parsing when scripts compose Finalize/Enact flows.
@@ -31,8 +30,7 @@ Endpoints
       "mode": "Zk" | "Plain",
       "limits": { … }?,
       "manifest_provenance": { … }?,
-      "authority": "<i105-account-id>?",
-      "private_key": "…?"
+      "authority": "<i105-account-id>?"
     }
   - Response (JSON):
     { "ok": true, "proposal_id": "…64hex", "tx_instructions": [{ "wire_id": "…", "payload_hex": "…" }] }
@@ -43,7 +41,7 @@ Endpoints
     - only `abi_version = "1"` is accepted, and `abi_hash` must equal the canonical ABI hash for that version (`hex::encode(ivm::syscalls::compute_abi_hash(ivm::SyscallPolicy::AbiV1))`);
     - `window.upper` must be `>= window.lower`; and
     - `mode`, when supplied, must be `Zk` or `Plain`.
-  - Submission model: this endpoint is draft-first. `authority`/`private_key` are only accepted as a legacy pair and currently fail closed because governance server-side signing is disabled, so clients should consume `tx_instructions`, sign locally, and submit via `/v1/pipeline/transactions`.
+  - Submission model: this endpoint is draft-first. `private_key` is rejected because governance server-side signing is disabled; clients should consume `tx_instructions`, sign locally, and submit via `/v1/pipeline/transactions`.
 
 Contracts API (deploy)
 - POST `/v1/contracts/deploy`
@@ -85,7 +83,7 @@ Code Size Cap
   - Operators can adjust by submitting `SetParameter(Custom)` with `id = "max_contract_code_bytes"` and a numeric payload.
 
 - POST `/v1/gov/ballots/zk`
-  - Request: { "authority": "<i105-account-id>", "private_key": "…?", "chain_id": "…", "election_id": "e1", "proof_b64": "…", "public": {…} }
+  - Request: { "authority": "<i105-account-id>", "chain_id": "…", "election_id": "e1", "proof_b64": "…", "public": {…} }
   - Response: { "ok": true, "accepted": true, "tx_instructions": [{…}] }
   - Notes:
     - When the circuit’s public inputs include `owner`, `amount`, and `duration_blocks`, and the proof verifies against the configured VK, the node creates or extends a governance lock for `election_id` with that `owner`. Direction remains hidden (`unknown`) unless hinted; only amount/expiry are updated. Re-votes are monotonic: amount and expiry only increase (the node applies max(amount, prev.amount) and max(expiry, prev.expiry)).
@@ -94,12 +92,12 @@ Code Size Cap
     - Contract execution must call `ZK_VOTE_VERIFY_BALLOT` prior to enqueuing `SubmitBallot`; hosts enforce a one-shot latch.
 
 - POST `/v1/gov/ballots/plain`
-  - Request: { "authority": "<i105-account-id>", "private_key": "…?", "chain_id": "…", "referendum_id": "r1", "owner": "<i105-account-id>", "amount": "1000", "duration_blocks": 6000, "direction": "Aye|Nay|Abstain" }
+  - Request: { "authority": "<i105-account-id>", "chain_id": "…", "referendum_id": "r1", "owner": "<i105-account-id>", "amount": "1000", "duration_blocks": 6000, "direction": "Aye|Nay|Abstain" }
   - Response: { "ok": true, "accepted": true, "tx_instructions": [{…}] }
   - Notes: Re-votes are extend-only — a new ballot cannot reduce the existing lock’s amount or expiry. The `owner` must equal the transaction authority. Minimum duration is `conviction_step_blocks`.
 
 - POST `/v1/gov/finalize`
-  - Request: { "referendum_id": "r1", "proposal_id": "…64hex", "authority": "<i105-account-id>?", "private_key": "…?" }
+  - Request: { "referendum_id": "r1", "proposal_id": "…64hex", "authority": "<i105-account-id>?" }
   - Response: { "ok": true, "tx_instructions": [{ "wire_id": "…FinalizeReferendum", "payload_hex": "…" }] }
   - On-chain effect (current scaffold): enacting an approved deploy proposal inserts a minimal `ContractManifest` keyed by `code_hash` with the expected `abi_hash` and marks the proposal Enacted. If a manifest already exists for the `code_hash` with a different `abi_hash`, enactment is rejected.
   - Notes:
@@ -108,9 +106,9 @@ Code Size Cap
     - Turnout checks use approve+reject only; abstain does not count toward turnout.
 
 - POST `/v1/gov/enact`
-  - Request: { "proposal_id": "…64hex", "preimage_hash": "…64hex?", "window": { "lower": 0, "upper": 0 }?, "authority": "<i105-account-id>?", "private_key": "…?" }
+  - Request: { "proposal_id": "…64hex", "preimage_hash": "…64hex?", "window": { "lower": 0, "upper": 0 }?, "authority": "<i105-account-id>?" }
   - Response: { "ok": true, "tx_instructions": [{ "wire_id": "…EnactReferendum", "payload_hex": "…" }] }
-  - Notes: Torii submits the signed transaction when `authority`/`private_key` are provided; otherwise it returns a skeleton for clients to sign and submit. The preimage is optional and currently informational.
+  - Notes: Torii returns a skeleton for clients to sign and submit locally. Supplying `private_key` is rejected. The preimage is optional and currently informational.
 
 - GET `/v1/gov/proposals/{id}`
   - Path `{id}`: proposal id hex (64 chars)
@@ -159,8 +157,8 @@ The council fallback used by Torii when no persisted roster exists is parameteri
   slash_ineligible_proof_bps = 0       # percentage (basis points) to slash on stale/invalid eligibility proofs
   parliament_committee_size = 21
   parliament_term_blocks = 43200
-  parliament_min_stake = 1
-  parliament_eligibility_asset_id = "79jULkZVMgnbzxBe6NvqeDxVEeEk"
+  citizenship_asset_id = "79jULkZVMgnbzxBe6NvqeDxVEeEk"
+  citizenship_bond_amount = 10000
 ```
 
 Equivalent environment overrides:
@@ -177,8 +175,8 @@ GOV_SLASH_INVALID_PROOF_BPS=5000
 GOV_SLASH_INELIGIBLE_PROOF_BPS=1500
 GOV_PARLIAMENT_COMMITTEE_SIZE=21
 GOV_PARLIAMENT_TERM_BLOCKS=43200
-GOV_PARLIAMENT_MIN_STAKE=1
-GOV_PARLIAMENT_ELIGIBILITY_ASSET_ID=79jULkZVMgnbzxBe6NvqeDxVEeEk
+GOV_CITIZENSHIP_ASSET_ID=79jULkZVMgnbzxBe6NvqeDxVEeEk
+GOV_CITIZENSHIP_BOND_AMOUNT=10000
 GOV_ALIAS_TEU_MINIMUM=0
 GOV_ALIAS_FRONTIER_TELEMETRY=true
 ```
@@ -188,7 +186,7 @@ configured escrow account. Locks are created or extended when ballots land and
 released on expiry; bond lifecycle is emitted via `governance_bond_events_total`
 telemetry (lock_created|lock_extended|lock_unlocked|lock_slashed|lock_restituted).
 
-`parliament_committee_size` caps the number of fallback members returned when no council has been persisted, `parliament_term_blocks` defines the epoch length used for seed derivation (`epoch = floor(height / term_blocks)`), `parliament_min_stake` enforces the minimum stake (in smallest units) on the eligibility asset, and `parliament_eligibility_asset_id` selects which asset balance is scanned when building the candidate set.
+`parliament_committee_size` caps the number of fallback members returned when no council has been persisted, and `parliament_term_blocks` defines the epoch length used for seed derivation (`epoch = floor(height / term_blocks)`). SORA Parliament fallback eligibility is read from the bonded citizen registry: an account must have posted at least `citizenship_bond_amount` of `citizenship_asset_id`. Extra bond above the minimum does not add draw tickets or vote weight.
 
 Governance VK verification has no bypass: ballot verification always requires an `Active` verifying key with inline bytes, and environments must not rely on test-only toggles to skip verification.
 
@@ -261,7 +259,6 @@ Unlock Sweep (Operator/Audit)
     {
       "authority": "<i105-account-id>",
       "chain_id": "00000000-0000-0000-0000-000000000000",
-      "private_key": "…?",
       "election_id": "ref-1",
       "backend": "halo2/ipa",
       "envelope_b64": "AAECAwQ=",
@@ -280,7 +277,6 @@ Unlock Sweep (Operator/Audit)
     {
       "authority": "<i105-account-id>",
       "chain_id": "00000000-0000-0000-0000-000000000000",
-      "private_key": "…?",
       "election_id": "ref-1",
       "ballot": {
         "backend": "halo2/ipa",
@@ -303,7 +299,7 @@ Unlock Sweep (Operator/Audit)
       ]
     }
   - Notes:
-    - When `private_key` is provided, Torii submits the signed transaction and sets `reason` to `submitted transaction`.
+    - Supplying `private_key` is rejected; Torii returns only an unsigned instruction skeleton for local signing.
     - The server maps optional `root_hint`/`owner`/`amount`/`duration_blocks`/`direction`/`nullifier` from the ballot to `public_inputs_json` for `CastZkBallot`.
     - The envelope bytes are re-encoded as base64 for the instruction payload.
     - This endpoint is only available when the `zk-ballot` feature is enabled.

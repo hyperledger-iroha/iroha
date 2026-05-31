@@ -6,8 +6,8 @@ package org.hyperledger.iroha.sdk.crypto
 /**
  * Pure Kotlin implementation of the BLAKE3 hash function.
  *
- * Supports inputs up to 1024 bytes (single chunk). This covers the canonical address payloads
- * and checksummed literals used by the Kotlin SDK.
+ * Supports inputs up to the largest Solana AccountLtHash preimage used by the Kotlin SDK,
+ * and exposes BLAKE3 XOF output for Agave-compatible 2048-byte account contributions.
  *
  * Reference: [BLAKE3 Specification](https://github.com/BLAKE3-team/BLAKE3-specs)
  */
@@ -15,9 +15,12 @@ object Blake3 {
 
     private const val BLOCK_LEN = 64
     private const val CHUNK_LEN = 1024
+    private const val OUT_LEN = 32
+    private const val MAX_INPUT_LEN = 8 + 65_536 + 1 + 32 + 32
 
     private const val CHUNK_START = 1
     private const val CHUNK_END = 2
+    private const val PARENT = 4
     private const val ROOT = 8
 
     private val IV = intArrayOf(
@@ -32,55 +35,106 @@ object Blake3 {
     /**
      * Computes the BLAKE3 hash of the given input.
      *
-     * @param input the data to hash (must be at most 1024 bytes)
+     * @param input the data to hash
      * @return the 32-byte BLAKE3 hash
-     * @throws IllegalArgumentException if input exceeds 1024 bytes
+     * @throws IllegalArgumentException if input exceeds the SDK helper limit
      */
     @JvmStatic
-    fun hash(input: ByteArray): ByteArray {
-        require(input.size <= CHUNK_LEN) {
-            "Input too large for single-chunk Blake3: ${input.size} bytes (max $CHUNK_LEN)"
-        }
+    fun hash(input: ByteArray): ByteArray = derive(input, OUT_LEN)
 
+    /**
+     * Computes BLAKE3 XOF output for the given input.
+     *
+     * @param input the data to hash
+     * @param outputLength number of output bytes to derive
+     * @return BLAKE3 XOF bytes
+     * @throws IllegalArgumentException if input or output length exceeds SDK helper bounds
+     */
+    @JvmStatic
+    fun derive(input: ByteArray, outputLength: Int): ByteArray {
+        require(input.size <= MAX_INPUT_LEN) {
+            "Input too large for Blake3 helper: ${input.size} bytes (max $MAX_INPUT_LEN)"
+        }
+        require(outputLength >= 0) { "outputLength must not be negative" }
+        val rootOutput = rootOutput(input)
+        val output = ByteArray(outputLength)
+        var cursor = 0
+        var outputBlockCounter = 0L
+        while (cursor < outputLength) {
+            val words = rootOutput.rootWords(outputBlockCounter)
+            for (word in words) {
+                if (cursor >= outputLength) break
+                output[cursor++] = word.toByte()
+                if (cursor >= outputLength) break
+                output[cursor++] = (word ushr 8).toByte()
+                if (cursor >= outputLength) break
+                output[cursor++] = (word ushr 16).toByte()
+                if (cursor >= outputLength) break
+                output[cursor++] = (word ushr 24).toByte()
+            }
+            outputBlockCounter += 1
+        }
+        return output
+    }
+
+    private fun rootOutput(input: ByteArray): Output {
+        val chunkCount = maxOf(1, (input.size + CHUNK_LEN - 1) / CHUNK_LEN)
+        return subtreeOutput(input, 0, chunkCount)
+    }
+
+    private fun subtreeOutput(input: ByteArray, chunkIndex: Int, chunkCount: Int): Output {
+        if (chunkCount == 1) {
+            val offset = chunkIndex * CHUNK_LEN
+            val length = minOf(CHUNK_LEN, maxOf(0, input.size - offset))
+            return chunkOutput(input, offset, length, chunkIndex.toLong())
+        }
+        val leftCount = leftSubtreeChunkCount(chunkCount)
+        val left = subtreeOutput(input, chunkIndex, leftCount).chainingValue()
+        val right = subtreeOutput(input, chunkIndex + leftCount, chunkCount - leftCount).chainingValue()
+        return parentOutput(left, right)
+    }
+
+    private fun leftSubtreeChunkCount(chunkCount: Int): Int {
+        var power = 1
+        while (power * 2 < chunkCount) {
+            power *= 2
+        }
+        return power
+    }
+
+    private fun chunkOutput(input: ByteArray, offset: Int, length: Int, chunkCounter: Long): Output {
         val cv = IV.copyOf()
-        val numBlocks = maxOf(1, (input.size + BLOCK_LEN - 1) / BLOCK_LEN)
+        val numBlocks = maxOf(1, (length + BLOCK_LEN - 1) / BLOCK_LEN)
 
         for (i in 0 until numBlocks) {
-            val blockStart = i * BLOCK_LEN
-            val blockLen = minOf(BLOCK_LEN, maxOf(0, input.size - blockStart))
+            val blockStart = offset + i * BLOCK_LEN
+            val blockLen = minOf(BLOCK_LEN, maxOf(0, length - i * BLOCK_LEN))
 
-            val blockWords = parseBlockWords(input, blockStart, blockLen)
+            val blockWords = parseBlockWords(input, blockStart)
 
             var flags = 0
             if (i == 0) flags = flags or CHUNK_START
-            if (i == numBlocks - 1) flags = flags or CHUNK_END or ROOT
-
-            val state = compress(cv, blockWords, 0, blockLen, flags)
-
-            if (i < numBlocks - 1) {
-                for (j in 0 until 8) {
-                    cv[j] = state[j] xor state[j + 8]
-                }
-            } else {
-                return rootOutput(state)
+            if (i == numBlocks - 1) {
+                return Output(cv.copyOf(), blockWords, chunkCounter, blockLen, flags or CHUNK_END)
+            }
+            val state = compress(cv, blockWords, chunkCounter, blockLen, flags)
+            for (j in 0 until 8) {
+                cv[j] = state[j] xor state[j + 8]
             }
         }
         error("Unreachable")
     }
 
-    private fun rootOutput(state: IntArray): ByteArray {
-        val output = ByteArray(32)
-        for (j in 0 until 8) {
-            val word = state[j] xor state[j + 8]
-            output[j * 4] = word.toByte()
-            output[j * 4 + 1] = (word ushr 8).toByte()
-            output[j * 4 + 2] = (word ushr 16).toByte()
-            output[j * 4 + 3] = (word ushr 24).toByte()
+    private fun parentOutput(left: IntArray, right: IntArray): Output {
+        val blockWords = IntArray(16)
+        for (i in 0 until 8) {
+            blockWords[i] = left[i]
+            blockWords[i + 8] = right[i]
         }
-        return output
+        return Output(IV.copyOf(), blockWords, 0L, BLOCK_LEN, PARENT)
     }
 
-    private fun parseBlockWords(input: ByteArray, blockStart: Int, blockLen: Int): IntArray {
+    private fun parseBlockWords(input: ByteArray, blockStart: Int): IntArray {
         val words = IntArray(16)
         for (j in 0 until 16) {
             val offset = blockStart + j * 4
@@ -133,4 +187,27 @@ object Blake3 {
     }
 
     private fun permute(msg: IntArray): IntArray = IntArray(16) { msg[MSG_PERMUTATION[it]] }
+
+    private class Output(
+        private val inputChainingValue: IntArray,
+        private val blockWords: IntArray,
+        private val counter: Long,
+        private val blockLen: Int,
+        private val flags: Int,
+    ) {
+        fun chainingValue(): IntArray {
+            val state = compress(inputChainingValue, blockWords, counter, blockLen, flags)
+            return IntArray(8) { state[it] xor state[it + 8] }
+        }
+
+        fun rootWords(outputBlockCounter: Long): IntArray {
+            val state = compress(inputChainingValue, blockWords, outputBlockCounter, blockLen, flags or ROOT)
+            val words = IntArray(16)
+            for (index in 0 until 8) {
+                words[index] = state[index] xor state[index + 8]
+                words[index + 8] = state[index + 8] xor inputChainingValue[index]
+            }
+            return words
+        }
+    }
 }

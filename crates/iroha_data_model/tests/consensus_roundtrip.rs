@@ -28,11 +28,11 @@ use iroha_data_model::{
             SumeragiPendingRbcStatus, SumeragiQcEntry, SumeragiQcSnapshot, SumeragiQcStatus,
             SumeragiRbcEvictedSession, SumeragiRbcMismatchEntry, SumeragiRbcMismatchStatus,
             SumeragiRbcStoreStatus, SumeragiRoundGapStatus, SumeragiRuntimeUpgradeHook,
-            SumeragiStatusWire, SumeragiValidationRejectStatus, SumeragiViewChangeCauseStatus,
-            SumeragiVoteValidationDropEntry, SumeragiVoteValidationDropPeerEntry,
-            SumeragiVoteValidationDropReasonCount, SumeragiVoteValidationDropStatus,
-            SumeragiWorkerLoopStatus, SumeragiWorkerQueueDepths, SumeragiWorkerQueueDiagnostics,
-            SumeragiWorkerQueueTotals, VrfCommit, VrfReveal,
+            SumeragiStatusWire, SumeragiV1StatusWire, SumeragiValidationRejectStatus,
+            SumeragiViewChangeCauseStatus, SumeragiVoteValidationDropEntry,
+            SumeragiVoteValidationDropPeerEntry, SumeragiVoteValidationDropReasonCount,
+            SumeragiVoteValidationDropStatus, SumeragiWorkerLoopStatus, SumeragiWorkerQueueDepths,
+            SumeragiWorkerQueueDiagnostics, SumeragiWorkerQueueTotals, VrfCommit, VrfReveal,
         },
     },
     da::commitment,
@@ -576,6 +576,7 @@ fn rng_evidence_record(rng: &mut DeterministicRng, evidence: Evidence) -> Eviden
 #[allow(clippy::too_many_lines)]
 fn rng_sumeragi_status(rng: &mut DeterministicRng) -> SumeragiStatusWire {
     SumeragiStatusWire {
+        canonical: SumeragiV1StatusWire::default(),
         mode_tag: rng_ascii_string(rng, 24),
         staged_mode_tag: rng.next_bool().then(|| rng_ascii_string(rng, 24)),
         staged_mode_activation_height: rng.next_bool().then(|| rng.next_u64()),
@@ -1338,6 +1339,7 @@ fn sumeragi_wire_status_roundtrip() {
     let mut rng = DeterministicRng::new(0xABCD_DCBA);
     let relay = rng_lane_relay_envelope(&mut rng);
     let status = SumeragiStatusWire {
+        canonical: SumeragiV1StatusWire::default(),
         mode_tag: "iroha2-consensus::permissioned-sumeragi@v1".to_string(),
         staged_mode_tag: Some("iroha2-consensus::npos-sumeragi@v1".to_string()),
         staged_mode_activation_height: Some(42),

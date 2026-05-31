@@ -16,7 +16,7 @@ use iroha_data_model::{
 };
 
 use super::ast::{Block, Expr, Item, Pattern, Program, Statement};
-use crate::builtins::Builtin;
+use crate::builtins::{Builtin, PointerConstructor};
 use crate::i18n::{self, Language, Message as I18nMessage, StateShadowContext};
 use crate::pointer_abi::{self, PointerType};
 
@@ -184,6 +184,23 @@ const OPAQUE_ACCESS_HINT_CALLS: &[&str] = &[
     "escrow_cancel",
     "escrow_open_dispute",
     "escrow_resolve_dispute",
+    "anonymous_escrow_open_offer",
+    "anonymous_escrow_accept",
+    "anonymous_escrow_mark_payment_sent",
+    "anonymous_escrow_release",
+    "anonymous_escrow_cancel",
+    "anonymous_escrow_open_dispute",
+    "anonymous_escrow_resolve_dispute",
+    "soracloud_read_committed_state",
+    "soracloud_emit_state_mutation",
+    "soracloud_emit_mailbox_message",
+    "soracloud_append_journal",
+    "soracloud_publish_checkpoint",
+    "soracloud_read_secret",
+    "soracloud_read_credential",
+    "soracloud_egress_fetch",
+    "soracloud_read_config",
+    "soracloud_read_secret_envelope",
     "transfer_domain",
     "register_peer",
     "unregister_peer",
@@ -556,24 +573,26 @@ fn is_literal_state_key(expr: &Expr) -> bool {
             if !literal_arg || args.len() != 1 {
                 return false;
             }
-            matches!(
-                name.as_str(),
-                "account_id"
-                    | "account"
-                    | "asset_definition"
-                    | "asset_id"
-                    | "nft_id"
-                    | "domain"
-                    | "domain_id"
-                    | "name"
-                    | "json"
-                    | "blob"
-                    | "norito_bytes"
-                    | "dataspace_id"
-                    | "axt_descriptor"
-                    | "asset_handle"
-                    | "proof_blob"
-            )
+            name == "account"
+                || matches!(
+                    Builtin::from_name(name),
+                    Some(Builtin::PointerConstructor(
+                        PointerConstructor::AccountId
+                            | PointerConstructor::AssetDefinition
+                            | PointerConstructor::AssetId
+                            | PointerConstructor::NftId
+                            | PointerConstructor::Domain
+                            | PointerConstructor::DomainId
+                            | PointerConstructor::Name
+                            | PointerConstructor::Json
+                            | PointerConstructor::Blob
+                            | PointerConstructor::NoritoBytes
+                            | PointerConstructor::DataSpaceId
+                            | PointerConstructor::AxtDescriptor
+                            | PointerConstructor::AssetHandle
+                            | PointerConstructor::ProofBlob
+                    ))
+                )
         }
         _ => false,
     }
@@ -583,7 +602,7 @@ fn is_literal_state_path(expr: &Expr) -> bool {
     match expr {
         Expr::String(_) | Expr::Bytes(_) => true,
         Expr::Call { name, args } => match Builtin::from_name(name) {
-            None if name == "name" => {
+            Some(Builtin::PointerConstructor(PointerConstructor::Name)) => {
                 args.len() == 1
                     && matches!(args.first(), Some(Expr::String(_)) | Some(Expr::Bytes(_)))
             }
@@ -1050,20 +1069,29 @@ fn record_expr_idents(expr: &Expr, state_lookup: &HashSet<String>, hits: &mut Ha
     }
 }
 
-const POINTER_CONSTRUCTORS: &[&str] = &[
-    "account_id",
-    "asset_definition",
-    "asset_id",
-    "nft_id",
-    "domain",
-    "domain_id",
-    "json",
-    "blob",
-    "norito_bytes",
+const POINTER_CONSTRUCTORS: &[PointerConstructor] = &[
+    PointerConstructor::AccountId,
+    PointerConstructor::AssetDefinition,
+    PointerConstructor::AssetId,
+    PointerConstructor::NftId,
+    PointerConstructor::Domain,
+    PointerConstructor::DomainId,
+    PointerConstructor::Json,
+    PointerConstructor::Blob,
+    PointerConstructor::NoritoBytes,
+    PointerConstructor::DataSpaceId,
+    PointerConstructor::AxtDescriptor,
+    PointerConstructor::AssetHandle,
+    PointerConstructor::ProofBlob,
+    PointerConstructor::SoracloudRequest,
+    PointerConstructor::SoracloudResponse,
 ];
 
 fn lint_pointer_constructor_usage(program: &Program, warnings: &mut Vec<LintWarning>) {
-    let constructors: HashSet<&str> = POINTER_CONSTRUCTORS.iter().copied().collect();
+    let constructors: HashSet<&str> = POINTER_CONSTRUCTORS
+        .iter()
+        .map(|constructor| constructor.name())
+        .collect();
     let mut literal_counts: HashMap<String, usize> = HashMap::new();
 
     for item in &program.items {

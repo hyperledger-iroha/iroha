@@ -1,7 +1,7 @@
 use clap::Subcommand;
 use eyre::Result;
 use iroha::{
-    client::{SccpCapabilities, SccpProofManifestSet},
+    client::{SccpCapabilities, SccpMessageProofQueryParams, SccpProofManifestSet},
     data_model::prelude::*,
 };
 
@@ -61,6 +61,47 @@ pub struct ArtifactArgs {
     /// SCCP message id (hex, 32 bytes)
     #[arg(long, value_name = "HEX")]
     message_id: String,
+    /// Destination network id (hex, 32 bytes)
+    #[arg(long, value_name = "HEX")]
+    network_id_hex: Option<String>,
+    /// EVM verifier contract address (hex, 20 bytes)
+    #[arg(long, value_name = "HEX")]
+    verifier_address_hex: Option<String>,
+    /// EVM bridge contract address (hex, 20 bytes)
+    #[arg(long, value_name = "HEX")]
+    bridge_address_hex: Option<String>,
+    /// Destination verifier contract code hash (hex, 32 bytes)
+    #[arg(long, value_name = "HEX")]
+    verifier_code_hash_hex: Option<String>,
+    /// Destination verifier key hash (hex, 32 bytes)
+    #[arg(long, value_name = "HEX")]
+    verifier_key_hash_hex: Option<String>,
+    /// Expected canonical destination binding hash (hex, 32 bytes)
+    #[arg(long, value_name = "HEX")]
+    expected_destination_binding_hash_hex: Option<String>,
+    /// TRON verifier contract address
+    #[arg(long, value_name = "ADDRESS")]
+    tron_verifier_address: Option<String>,
+    /// Externally generated 384-byte Groth16 ABI proof tuple (hex)
+    #[arg(long, value_name = "HEX")]
+    proof_bytes_hex: Option<String>,
+}
+
+impl ArtifactArgs {
+    fn proof_query_params(&self) -> SccpMessageProofQueryParams {
+        SccpMessageProofQueryParams {
+            network_id_hex: self.network_id_hex.clone(),
+            verifier_address_hex: self.verifier_address_hex.clone(),
+            bridge_address_hex: self.bridge_address_hex.clone(),
+            verifier_code_hash_hex: self.verifier_code_hash_hex.clone(),
+            verifier_key_hash_hex: self.verifier_key_hash_hex.clone(),
+            expected_destination_binding_hash_hex: self
+                .expected_destination_binding_hash_hex
+                .clone(),
+            tron_verifier_address: self.tron_verifier_address.clone(),
+            proof_bytes_hex: self.proof_bytes_hex.clone(),
+        }
+    }
 }
 
 impl Run for Command {
@@ -133,34 +174,39 @@ fn sccp_manifests(ctx: &mut impl RunContext) -> Result<()> {
 }
 
 fn sccp_artifact(ctx: &mut impl RunContext, args: ArtifactArgs) -> Result<()> {
+    let query_params = args.proof_query_params();
     match ctx.output_format() {
         CliOutputFormat::Text => {
             let artifact = ctx
                 .client_from_config()
-                .get_sccp_message_proof_artifact(&args.message_id)?;
+                .get_sccp_message_proof_artifact_with_params(&args.message_id, &query_params)?;
             ctx.println(render_sccp_artifact_summary(&artifact))
         }
         CliOutputFormat::Json => {
             let artifact = ctx
                 .client_from_config()
-                .get_sccp_message_proof_artifact_json(&args.message_id)?;
+                .get_sccp_message_proof_artifact_json_with_params(
+                    &args.message_id,
+                    &query_params,
+                )?;
             ctx.print_data(&artifact)
         }
     }
 }
 
 fn sccp_job(ctx: &mut impl RunContext, args: ArtifactArgs) -> Result<()> {
+    let query_params = args.proof_query_params();
     match ctx.output_format() {
         CliOutputFormat::Text => {
             let job = ctx
                 .client_from_config()
-                .get_sccp_message_proof_job(&args.message_id)?;
+                .get_sccp_message_proof_job_with_params(&args.message_id, &query_params)?;
             ctx.println(render_sccp_job_summary(&job))
         }
         CliOutputFormat::Json => {
             let job = ctx
                 .client_from_config()
-                .get_sccp_message_proof_job_json(&args.message_id)?;
+                .get_sccp_message_proof_job_json_with_params(&args.message_id, &query_params)?;
             ctx.print_data(&job)
         }
     }
@@ -388,6 +434,25 @@ fn render_sccp_payload_projection_summary(
             render_sccp_normalized_codec_value(&transfer.recipient),
             render_sccp_normalized_codec_value(&transfer.route_id)
         ),
+        iroha_sccp::SccpPayloadProjectionV1::TokenAdd(token) => format!(
+            "token_add sora_asset_id={} decimals={} name={} symbol={}",
+            hex::encode(token.sora_asset_id),
+            token.decimals,
+            hex::encode(token.name),
+            hex::encode(token.symbol)
+        ),
+        iroha_sccp::SccpPayloadProjectionV1::TokenPause(token) => {
+            format!(
+                "token_pause sora_asset_id={}",
+                hex::encode(token.sora_asset_id)
+            )
+        }
+        iroha_sccp::SccpPayloadProjectionV1::TokenResume(token) => {
+            format!(
+                "token_resume sora_asset_id={}",
+                hex::encode(token.sora_asset_id)
+            )
+        }
     }
 }
 
@@ -423,13 +488,21 @@ mod tests {
         io::Write,
         net::{Shutdown, TcpListener, TcpStream},
         sync::{
-            Arc,
+            Arc, Mutex, MutexGuard, OnceLock,
             atomic::{AtomicBool, Ordering},
         },
         thread,
         time::Duration,
     };
     use url::Url;
+
+    fn mock_http_server_guard() -> MutexGuard<'static, ()> {
+        static GUARD: OnceLock<Mutex<()>> = OnceLock::new();
+        GUARD
+            .get_or_init(|| Mutex::new(()))
+            .lock()
+            .expect("mock HTTP server test guard")
+    }
 
     struct TestContext {
         cfg: iroha::config::Config,
@@ -664,6 +737,8 @@ mod tests {
             legacy_burn_registry_backend: "bridge/sccp/burn-v1".to_owned(),
             proof_submit_path: Some("/v1/bridge/proofs/submit".to_owned()),
             message_submit_path: Some("/v1/bridge/messages".to_owned()),
+            production_policy: iroha_sccp::sccp_production_policy_v1(),
+            launch_ready: false,
             message_payload_kinds: vec![
                 "asset_register".to_owned(),
                 "route_activate".to_owned(),
@@ -706,6 +781,10 @@ mod tests {
                         .expect("ton disabled reason")
                         .to_owned(),
                     ),
+                    production_readiness: iroha_sccp::sccp_lane_production_readiness_for_domain(
+                        iroha_sccp::SCCP_DOMAIN_TON,
+                    )
+                    .expect("ton production readiness"),
                 },
                 SccpCounterpartyCapability {
                     domain: iroha_sccp::SCCP_DOMAIN_ETH,
@@ -730,6 +809,10 @@ mod tests {
                         .expect("eth disabled reason")
                         .to_owned(),
                     ),
+                    production_readiness: iroha_sccp::sccp_lane_production_readiness_for_domain(
+                        iroha_sccp::SCCP_DOMAIN_ETH,
+                    )
+                    .expect("eth production readiness"),
                 },
             ],
         }
@@ -773,10 +856,9 @@ mod tests {
             NexusBridgeFinalityProofV1, NexusCommitQcV1, NexusConsensusPhaseV1,
             NexusSccpMessageProofV1, NexusSccpMessageTransparentProofV1,
             SccpCounterpartySubmissionPackageV1, SccpHubCommitmentV1, SccpHubMessageKind,
-            SccpMerkleProofV1, SccpPayloadV1, SccpPlatformSubmissionPayloadV1,
-            SccpTonInternalMessageSubmissionPayloadV1, TransferPayloadV1,
-            canonical_nexus_sccp_message_bundle_bytes,
-            canonical_sccp_message_transparent_public_inputs_bytes, canonical_sccp_payload_bytes,
+            SccpMerkleProofV1, SccpPayloadV1, SccpPlatformSubmissionPayloadV1, TransferPayloadV1,
+            build_sccp_message_transparent_inner_proof,
+            build_sccp_ton_internal_message_submission_payload, canonical_sccp_payload_bytes,
             merkle_root_from_commitment, payload_hash, sccp_message_id,
             sccp_message_transparent_public_inputs, sccp_proof_manifest_for_domain,
         };
@@ -822,6 +904,11 @@ mod tests {
                 epoch: 1,
                 mode_tag: "normal".to_owned(),
                 subject_block_hash: [0x44; 32],
+                parent_state_root: [0u8; 32],
+                post_state_root: [0u8; 32],
+                chain_order_hash: [0u8; 32],
+                rechain_seq: 0,
+                highest_qc: None,
                 validator_set_hash_version: 1,
                 validator_public_keys: vec!["validator-1".to_owned()],
                 validator_set_pops: vec![vec![0xAA]],
@@ -855,14 +942,18 @@ mod tests {
             aux: vec![0xDE, 0xAD],
         })
         .expect("encode open verify envelope");
+        let inner =
+            build_sccp_message_transparent_inner_proof(&bundle, &manifest).expect("inner proof");
         let platform_payload = SccpPlatformSubmissionPayloadV1::TonInternalMessage(
-            SccpTonInternalMessageSubmissionPayloadV1 {
-                proof_cell: proof_bytes.clone(),
-                public_inputs_cell: canonical_sccp_message_transparent_public_inputs_bytes(
-                    &public_inputs,
-                ),
-                bundle_cell: canonical_nexus_sccp_message_bundle_bytes(&bundle),
-            },
+            build_sccp_ton_internal_message_submission_payload(
+                &manifest,
+                &proof_bytes,
+                &public_inputs,
+                &bundle,
+                inner.statement_hash,
+                &manifest.destination_binding,
+            )
+            .expect("ton payload"),
         );
         NexusSccpMessageTransparentProofV1 {
             version: 1,
@@ -882,9 +973,9 @@ mod tests {
             proof_bytes: proof_bytes.clone(),
             submission_package: SccpCounterpartySubmissionPackageV1 {
                 version: 1,
-                proof_family: manifest.proof_family,
-                verifier_backend: manifest.verifier_backend,
-                envelope_encoding: "ton_message_body_v1".to_owned(),
+                proof_family: manifest.proof_family.clone(),
+                verifier_backend: manifest.verifier_backend.clone(),
+                envelope_encoding: "ton_message_body_boc_v1".to_owned(),
                 submission_kind: manifest.submission_template.submission_kind.clone(),
                 verifier_entrypoint: manifest.submission_template.verifier_entrypoint.clone(),
                 platform_payload,
@@ -923,6 +1014,42 @@ mod tests {
             submission_package: artifact.submission_package.clone(),
             bundle: artifact.bundle,
         }
+    }
+
+    fn artifact_args(message_id: String) -> ArtifactArgs {
+        ArtifactArgs {
+            message_id,
+            network_id_hex: None,
+            verifier_address_hex: None,
+            bridge_address_hex: None,
+            verifier_code_hash_hex: None,
+            verifier_key_hash_hex: None,
+            expected_destination_binding_hash_hex: None,
+            tron_verifier_address: None,
+            proof_bytes_hex: None,
+        }
+    }
+
+    fn sccp_groth16_abi_word_hex(value: u32) -> String {
+        format!("{value:064x}")
+    }
+
+    fn sample_sccp_groth16_proof_hex() -> String {
+        [
+            sccp_groth16_abi_word_hex(1),
+            "11".repeat(32),
+            sccp_groth16_abi_word_hex(0),
+            "33".repeat(32),
+            sccp_groth16_abi_word_hex(1),
+            sccp_groth16_abi_word_hex(2),
+            "1800deef121f1e76426a00665e5c4479674322d4f75edadd46debd5cd992f6ed".to_owned(),
+            "198e9393920d483a7260bfb731fb5d25f1aa493335a9e71297e485b7aef312c2".to_owned(),
+            "12c85ea5db8c6deb4aab71808dcb408fe3d1e7690c43d37b4ce6cc0166fa7daa".to_owned(),
+            "090689d0585ff075ec9e99ad690c3395bc4b313370b38ef355acdadcd122975b".to_owned(),
+            sccp_groth16_abi_word_hex(1),
+            sccp_groth16_abi_word_hex(2),
+        ]
+        .concat()
     }
 
     #[test]
@@ -970,6 +1097,7 @@ mod tests {
 
     #[test]
     fn sccp_capabilities_text_command_prints_summary() {
+        let _guard = mock_http_server_guard();
         let capabilities = sample_sccp_capabilities();
         let server = MockHttpServer::start(BTreeMap::from([(
             "/v1/sccp/capabilities".to_owned(),
@@ -996,12 +1124,13 @@ mod tests {
             "ton(4:ton_raw:ton-contract-v1:TonContractNativeRecursive/verifier_live=false/anchors_live=false:disabled)"
         ));
         assert!(rendered.contains(
-            "eth(1:evm_hex:evm-secp256k1-keccak-v1:EvmGroth16Bn254Adapter/verifier_live=false/anchors_live=false:disabled)"
+            "eth(1:evm_hex:evm-groth16-bn254-v1:EvmGroth16Bn254Adapter/verifier_live=false/anchors_live=false:disabled)"
         ));
     }
 
     #[test]
     fn sccp_manifests_json_command_prints_typed_payload() {
+        let _guard = mock_http_server_guard();
         let manifests = sample_sccp_proof_manifests_json();
         let server = MockHttpServer::start(BTreeMap::from([(
             "/v1/sccp/manifests".to_owned(),
@@ -1032,6 +1161,7 @@ mod tests {
 
     #[test]
     fn sccp_artifact_text_command_prints_summary() {
+        let _guard = mock_http_server_guard();
         let artifact = sample_sccp_message_proof_artifact();
         let message_id_hex = hex::encode(artifact.public_inputs.message_id);
         let server = MockHttpServer::start(BTreeMap::from([(
@@ -1043,9 +1173,9 @@ mod tests {
         )]));
         let mut ctx = TestContext::with_base_url(CliOutputFormat::Text, server.base_url.clone());
 
-        Command::Sccp(SccpCommand::Artifact(ArtifactArgs {
-            message_id: format!("0x{message_id_hex}"),
-        }))
+        Command::Sccp(SccpCommand::Artifact(artifact_args(format!(
+            "0x{message_id_hex}"
+        ))))
         .run(&mut ctx)
         .expect("run artifact command");
 
@@ -1060,11 +1190,41 @@ mod tests {
         assert!(rendered.contains("inner_payload=transfer"));
         assert!(rendered.contains("open_verify=stark/sccp-message-transparent-v1"));
         assert!(rendered.contains(&format!("vk_hash={}", "66".repeat(32))));
-        assert!(rendered.contains("package=internal_message/ton_message_body_v1"));
+        assert!(rendered.contains("package=internal_message/ton_message_body_boc_v1"));
+    }
+
+    #[test]
+    fn sccp_artifact_text_command_rejects_invalid_tron_verifier_address_before_request() {
+        for invalid_address in [
+            "TJRabPrwbZy45sbavfcjinPJC18kjpRTv9",
+            "T9yD14Nj9j7xAB4dbGeiX9h8unkKHxuWwb",
+        ] {
+            let mut ctx = TestContext::with_base_url(
+                CliOutputFormat::Text,
+                Url::parse("http://127.0.0.1:1").expect("test base url"),
+            );
+            let mut args = artifact_args("11".repeat(32));
+            args.tron_verifier_address = Some(invalid_address.to_owned());
+            args.proof_bytes_hex = Some(format!("0x{}", sample_sccp_groth16_proof_hex()));
+
+            let err = Command::Sccp(SccpCommand::Artifact(args))
+                .run(&mut ctx)
+                .expect_err("invalid TRON verifier address must fail before request");
+
+            assert!(
+                err.to_string().contains("tron_verifier_address"),
+                "unexpected error: {err:?}"
+            );
+            assert!(
+                ctx.printed_lines.is_empty(),
+                "invalid query params must not print an artifact summary"
+            );
+        }
     }
 
     #[test]
     fn sccp_job_text_command_prints_summary() {
+        let _guard = mock_http_server_guard();
         let job = sample_sccp_message_job();
         let message_id_hex = hex::encode(job.public_inputs.message_id);
         let server = MockHttpServer::start(BTreeMap::from([(
@@ -1076,9 +1236,9 @@ mod tests {
         )]));
         let mut ctx = TestContext::with_base_url(CliOutputFormat::Text, server.base_url.clone());
 
-        Command::Sccp(SccpCommand::Job(ArtifactArgs {
-            message_id: format!("0x{message_id_hex}"),
-        }))
+        Command::Sccp(SccpCommand::Job(artifact_args(format!(
+            "0x{message_id_hex}"
+        ))))
         .run(&mut ctx)
         .expect("run job command");
 
@@ -1093,9 +1253,235 @@ mod tests {
             "recipient=ton:0:0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef"
         ));
         assert!(rendered.contains(
-            "submit=internal_message/ton_cell_v1/op::submit_sccp_message_proof args=[proof_cell,public_inputs_cell,bundle_cell]"
+            "submit=internal_message/ton_message_body_boc_v1/op::submit_sccp_message_proof args=[message_body_boc]"
         ));
         assert!(rendered.contains("open_verify=stark/sccp-message-transparent-v1"));
-        assert!(rendered.contains("package=internal_message/ton_message_body_v1"));
+        assert!(rendered.contains("package=internal_message/ton_message_body_boc_v1"));
+    }
+
+    #[test]
+    fn sccp_job_text_command_forwards_tron_query_material() {
+        let _guard = mock_http_server_guard();
+        let job = sample_sccp_message_job();
+        let message_id_hex = hex::encode(job.public_inputs.message_id);
+        let network_id_hex = "11".repeat(32);
+        let verifier_code_hash_hex = "ab".repeat(32);
+        let verifier_key_hash_hex = "cd".repeat(32);
+        let expected_destination_binding_hash_hex = "ef".repeat(32);
+        let proof_bytes_hex = sample_sccp_groth16_proof_hex();
+        let query = format!(
+            "network_id_hex={network_id_hex}&verifier_code_hash_hex={verifier_code_hash_hex}&verifier_key_hash_hex={verifier_key_hash_hex}&expected_destination_binding_hash_hex={expected_destination_binding_hash_hex}&tron_verifier_address=TJRabPrwbZy45sbavfcjinPJC18kjpRTv8&proof_bytes_hex={proof_bytes_hex}"
+        );
+        let server = MockHttpServer::start(BTreeMap::from([(
+            format!("/v1/sccp/jobs/message/{message_id_hex}?{query}"),
+            MockHttpResponse {
+                content_type: "application/x-norito",
+                body: norito::to_bytes(&job).expect("encode job"),
+            },
+        )]));
+        let mut ctx = TestContext::with_base_url(CliOutputFormat::Text, server.base_url.clone());
+        let mut args = artifact_args(format!("0x{message_id_hex}"));
+        args.network_id_hex = Some(format!("0x{}", network_id_hex.to_uppercase()));
+        args.verifier_code_hash_hex = Some(format!("0x{}", verifier_code_hash_hex.to_uppercase()));
+        args.verifier_key_hash_hex = Some(format!("0x{}", verifier_key_hash_hex.to_uppercase()));
+        args.expected_destination_binding_hash_hex = Some(format!(
+            "0x{}",
+            expected_destination_binding_hash_hex.to_uppercase()
+        ));
+        args.tron_verifier_address = Some("  TJRabPrwbZy45sbavfcjinPJC18kjpRTv8  ".to_owned());
+        args.proof_bytes_hex = Some(format!("0x{}", proof_bytes_hex.to_uppercase()));
+
+        Command::Sccp(SccpCommand::Job(args))
+            .run(&mut ctx)
+            .expect("run job command");
+
+        let rendered = ctx.printed_lines.join("\n");
+        assert!(rendered.contains("sccp job:"));
+        assert!(rendered.contains(&message_id_hex));
+    }
+
+    #[test]
+    fn sccp_job_text_command_rejects_all_zero_proof_bytes_before_request() {
+        let mut ctx = TestContext::with_base_url(
+            CliOutputFormat::Text,
+            Url::parse("http://127.0.0.1:1").expect("test base url"),
+        );
+        let mut args = artifact_args("11".repeat(32));
+        args.proof_bytes_hex = Some("0x0000".to_owned());
+
+        let err = Command::Sccp(SccpCommand::Job(args))
+            .run(&mut ctx)
+            .expect_err("all-zero proof bytes must fail before request");
+
+        assert!(
+            err.to_string().contains("proof_bytes_hex"),
+            "unexpected error: {err:?}"
+        );
+        assert!(
+            err.to_string().contains("all zero"),
+            "unexpected error: {err:?}"
+        );
+        assert!(
+            ctx.printed_lines.is_empty(),
+            "invalid query params must not print a job summary"
+        );
+    }
+
+    #[test]
+    fn sccp_job_text_command_rejects_destination_material_without_proof_bytes() {
+        let mut ctx = TestContext::with_base_url(
+            CliOutputFormat::Text,
+            Url::parse("http://127.0.0.1:1").expect("test base url"),
+        );
+        let mut args = artifact_args("11".repeat(32));
+        args.network_id_hex = Some("22".repeat(32));
+        args.verifier_code_hash_hex = Some("33".repeat(32));
+        args.verifier_key_hash_hex = Some("44".repeat(32));
+        args.expected_destination_binding_hash_hex = Some("55".repeat(32));
+        args.tron_verifier_address = Some("TJRabPrwbZy45sbavfcjinPJC18kjpRTv8".to_owned());
+
+        let err = Command::Sccp(SccpCommand::Job(args))
+            .run(&mut ctx)
+            .expect_err("destination proof material without proof bytes must fail before request");
+
+        assert!(
+            err.to_string().contains("proof_bytes_hex is required"),
+            "unexpected error: {err:?}"
+        );
+        assert!(
+            ctx.printed_lines.is_empty(),
+            "invalid query params must not print a job summary"
+        );
+    }
+
+    #[test]
+    fn sccp_job_text_command_rejects_partial_or_mixed_destination_tuple() {
+        let proof_bytes_hex = sample_sccp_groth16_proof_hex();
+        let mut partial_tron = artifact_args("11".repeat(32));
+        partial_tron.network_id_hex = Some("22".repeat(32));
+        partial_tron.verifier_code_hash_hex = Some("33".repeat(32));
+        partial_tron.verifier_key_hash_hex = Some("44".repeat(32));
+        partial_tron.tron_verifier_address = Some("TJRabPrwbZy45sbavfcjinPJC18kjpRTv8".to_owned());
+        partial_tron.proof_bytes_hex = Some(format!("0x{proof_bytes_hex}"));
+
+        let mut mixed_evm_tron = artifact_args("11".repeat(32));
+        mixed_evm_tron.network_id_hex = Some("22".repeat(32));
+        mixed_evm_tron.verifier_address_hex = Some("66".repeat(20));
+        mixed_evm_tron.bridge_address_hex = Some("77".repeat(20));
+        mixed_evm_tron.verifier_code_hash_hex = Some("33".repeat(32));
+        mixed_evm_tron.verifier_key_hash_hex = Some("44".repeat(32));
+        mixed_evm_tron.expected_destination_binding_hash_hex = Some("55".repeat(32));
+        mixed_evm_tron.tron_verifier_address =
+            Some("TJRabPrwbZy45sbavfcjinPJC18kjpRTv8".to_owned());
+        mixed_evm_tron.proof_bytes_hex = Some(format!("0x{proof_bytes_hex}"));
+
+        for (args, expected_error) in [
+            (
+                partial_tron,
+                "complete TRON SCCP deployment destination fields are required",
+            ),
+            (
+                mixed_evm_tron,
+                "EVM and TRON SCCP destination fields cannot be mixed",
+            ),
+        ] {
+            let mut ctx = TestContext::with_base_url(
+                CliOutputFormat::Text,
+                Url::parse("http://127.0.0.1:1").expect("test base url"),
+            );
+
+            let err = Command::Sccp(SccpCommand::Job(args))
+                .run(&mut ctx)
+                .expect_err("partial or mixed destination tuple must fail before request");
+
+            assert!(
+                err.to_string().contains(expected_error),
+                "unexpected error: {err:?}"
+            );
+            assert!(
+                ctx.printed_lines.is_empty(),
+                "invalid query params must not print a job summary"
+            );
+        }
+    }
+
+    #[test]
+    fn sccp_job_text_command_rejects_invalid_tron_verifier_address_before_request() {
+        for invalid_address in [
+            "TJRabPrwbZy45sbavfcjinPJC18kjpRTv9",
+            "T9yD14Nj9j7xAB4dbGeiX9h8unkKHxuWwb",
+        ] {
+            let mut ctx = TestContext::with_base_url(
+                CliOutputFormat::Text,
+                Url::parse("http://127.0.0.1:1").expect("test base url"),
+            );
+            let mut args = artifact_args("11".repeat(32));
+            args.tron_verifier_address = Some(invalid_address.to_owned());
+            args.proof_bytes_hex = Some(format!("0x{}", sample_sccp_groth16_proof_hex()));
+
+            let err = Command::Sccp(SccpCommand::Job(args))
+                .run(&mut ctx)
+                .expect_err("invalid TRON verifier address must fail before request");
+
+            assert!(
+                err.to_string().contains("tron_verifier_address"),
+                "unexpected error: {err:?}"
+            );
+            assert!(
+                ctx.printed_lines.is_empty(),
+                "invalid query params must not print a job summary"
+            );
+        }
+    }
+
+    #[test]
+    fn sccp_job_text_command_rejects_proof_bytes_without_destination_material() {
+        let mut ctx = TestContext::with_base_url(
+            CliOutputFormat::Text,
+            Url::parse("http://127.0.0.1:1").expect("test base url"),
+        );
+        let mut args = artifact_args("11".repeat(32));
+        args.proof_bytes_hex = Some(format!("0x{}", sample_sccp_groth16_proof_hex()));
+
+        let err = Command::Sccp(SccpCommand::Job(args))
+            .run(&mut ctx)
+            .expect_err("proof bytes without destination material must fail before request");
+
+        assert!(
+            err.to_string()
+                .contains("deployment destination fields are required"),
+            "unexpected error: {err:?}"
+        );
+        assert!(
+            ctx.printed_lines.is_empty(),
+            "invalid query params must not print a job summary"
+        );
+    }
+
+    #[test]
+    fn sccp_job_text_command_rejects_short_proof_bytes_before_request() {
+        let mut ctx = TestContext::with_base_url(
+            CliOutputFormat::Text,
+            Url::parse("http://127.0.0.1:1").expect("test base url"),
+        );
+        let mut args = artifact_args("11".repeat(32));
+        args.proof_bytes_hex = Some("0x0102AB".to_owned());
+
+        let err = Command::Sccp(SccpCommand::Job(args))
+            .run(&mut ctx)
+            .expect_err("short proof bytes must fail before request");
+
+        assert!(
+            err.to_string().contains("proof_bytes_hex"),
+            "unexpected error: {err:?}"
+        );
+        assert!(
+            err.to_string().contains("384-byte"),
+            "unexpected error: {err:?}"
+        );
+        assert!(
+            ctx.printed_lines.is_empty(),
+            "invalid query params must not print a job summary"
+        );
     }
 }

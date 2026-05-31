@@ -81,7 +81,10 @@ test("decodeReplicationOrder rejects invalid lane discriminants", () => {
   assert.notEqual(laneOffset, -1, "fixture lane-primary string missing");
   const discriminantOffset = laneOffset - 3;
   assert.ok(discriminantOffset >= 0, "lane discriminant offset is negative");
+  assert.equal(bytes[discriminantOffset - 1], needle.length + 3);
   assert.equal(bytes[discriminantOffset], 1);
+  assert.equal(bytes[discriminantOffset + 1], needle.length + 1);
+  assert.equal(bytes[discriminantOffset + 2], needle.length);
   const mutated = Buffer.from(bytes);
   mutated[discriminantOffset] = 2;
   assert.throws(

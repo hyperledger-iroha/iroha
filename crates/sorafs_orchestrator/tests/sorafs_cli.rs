@@ -81,6 +81,35 @@ chain_discriminant = 369
     (path, private_key)
 }
 
+fn write_deploy_client_config_with_chain(
+    dir: &Path,
+    torii_url: &str,
+    chain: &str,
+) -> (PathBuf, String) {
+    let keypair = KeyPair::from_seed(
+        b"sorafs-cli-deploy-authority-seed".to_vec(),
+        Algorithm::Ed25519,
+    );
+    let public_key = keypair.public_key().to_string();
+    let private_key = ExposedPrivateKey(keypair.private_key().clone()).to_string();
+    let path = dir.join("client-known-chain.toml");
+    fs::write(
+        &path,
+        format!(
+            r#"
+chain = "{chain}"
+torii_url = "{torii_url}"
+
+[account]
+public_key = "{public_key}"
+private_key = "{private_key}"
+"#
+        ),
+    )
+    .expect("write deploy client config with chain");
+    (path, private_key)
+}
+
 fn make_stream_token_b64(
     manifest_id_hex: &str,
     provider_id_hex: &str,
@@ -1301,6 +1330,61 @@ fn deploy_posts_register_payload_with_content_length_and_pins_peers() {
 }
 
 #[test]
+fn deploy_accepts_known_chain_client_config_without_account_chain_discriminant() {
+    let tempdir = tempdir().expect("tempdir");
+    let payload_path = tempdir.path().join("known-chain.bin");
+    let payload = b"sorafs deploy known chain payload".to_vec();
+    fs::write(&payload_path, &payload).expect("write payload");
+
+    let primary = MockServer::start();
+    let (client_config, _private_key) = write_deploy_client_config_with_chain(
+        tempdir.path(),
+        &primary.base_url(),
+        "809574f5-fee7-5e69-bfcf-52451e42d50f",
+    );
+
+    let register = primary.mock(|when, then| {
+        when.method(POST)
+            .path("/v1/sorafs/pin/register")
+            .body_includes("content_length");
+        then.status(200)
+            .header("Content-Type", "application/json")
+            .body(r#"{"manifest_digest_hex":"abc","pin_fee_nano":"1"}"#);
+    });
+    let pin = primary.mock(|when, then| {
+        when.method(POST).path("/v1/sorafs/storage/pin");
+        then.status(200)
+            .header("Content-Type", "application/json")
+            .body(r#"{"status":"stored"}"#);
+    });
+    let gateway = primary.mock(|when, then| {
+        when.method(GET).path_matches(r"^/sorafs/cid/[^/]+/$");
+        then.status(200).body(payload.clone());
+    });
+
+    let assert = sorafs_cli_cmd()
+        .arg("deploy")
+        .arg(format!("--payload={}", payload_path.display()))
+        .arg(format!("--client-config={}", client_config.display()))
+        .arg("--submitted-epoch=8")
+        .arg("--no-peer-discovery")
+        .arg(format!(
+            "--out-dir={}",
+            tempdir.path().join("known-chain-out").display()
+        ))
+        .assert()
+        .success();
+
+    register.assert_calls(1);
+    pin.assert_calls(1);
+    gateway.assert_calls(1);
+
+    let stdout = String::from_utf8(assert.get_output().stdout.clone()).expect("stdout utf8");
+    let summary: Value = norito::json::from_str(stdout.trim()).expect("deploy summary json");
+    assert_eq!(summary.get("success").and_then(Value::as_bool), Some(true));
+}
+
+#[test]
 fn deploy_falls_back_to_primary_when_peer_discovery_404() {
     let tempdir = tempdir().expect("tempdir");
     let payload_path = tempdir.path().join("payload.bin");
@@ -1587,7 +1671,7 @@ fn deploy_failed_peer_exits_nonzero_and_writes_receipt_details() {
             && entry
                 .get("error")
                 .and_then(Value::as_str)
-                .map_or(false, |message| message.contains("500"))
+                .is_some_and(|message| message.contains("500"))
     }));
 }
 

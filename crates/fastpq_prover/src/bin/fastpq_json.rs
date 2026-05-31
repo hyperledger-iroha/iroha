@@ -575,7 +575,7 @@ fn descriptor_fixture_batch(request: &ProofRequest) -> Result<TransitionBatch, S
             .effect_binding
             .as_ref()
             .and_then(|binding| binding.destination_amount_i64)
-            .unwrap_or(amount as i64)
+            .unwrap_or_else(|| amount.cast_signed())
             .unsigned_abs()
             .max(1);
         batch.push(StateTransition::new(

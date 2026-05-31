@@ -98,7 +98,7 @@ pub struct OracleChangeStageUpdated {
     pub evidence_hashes: Vec<Hash>,
 }
 
-/// Event emitted when a native DeFi oracle attestation is recorded.
+/// Event emitted when a native `DeFi` oracle attestation is recorded.
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Decode, Encode, IntoSchema)]
 #[cfg_attr(any(feature = "ffi_export", feature = "ffi_import"), ffi_type)]
 #[cfg_attr(
@@ -144,7 +144,7 @@ pub enum OracleEvent {
     ChangeProposed(OracleChangeProposed),
     /// Oracle change stage received a vote or terminal outcome.
     ChangeStageUpdated(OracleChangeStageUpdated),
-    /// Native DeFi compatibility oracle attestation recorded.
+    /// Native `DeFi` compatibility oracle attestation recorded.
     DefiAttestationRecorded(DefiOracleAttestationRecorded),
 }
 

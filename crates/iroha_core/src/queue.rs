@@ -32,7 +32,7 @@ use indexmap::IndexSet;
 use iroha_config::parameters::actual::{
     GovernanceCatalog, LaneRegistry, LaneRoutingPolicy, Nexus, Queue as Config,
 };
-use iroha_crypto::HashOf;
+use iroha_crypto::{Hash, HashOf};
 #[allow(unused_imports)]
 use iroha_data_model::nexus::{
     DataSpaceCatalog, DataSpaceId, LaneCatalog, LaneId, LaneLifecyclePlan, LanePrivacyProof,
@@ -57,7 +57,7 @@ use iroha_primitives::time::TimeSource;
 #[cfg(feature = "telemetry")]
 use iroha_telemetry::metrics::NexusLaneTeuBuckets;
 use ivm::ProgramMetadata;
-use journal::{QueuePlanJournal, QueuePlanJournalRecordV1};
+use journal::{QueuePlanJournal, QueuePlanJournalFlush, QueuePlanJournalRecordV1};
 #[cfg(test)]
 use norito::core as ncore;
 use parking_lot::RwLock;
@@ -520,6 +520,19 @@ pub struct QueuePlanJournalReplaySummary {
     pub rejected: usize,
 }
 
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+struct DeferredQueuePlanJournalFlush(QueuePlanJournalFlush);
+
+impl DeferredQueuePlanJournalFlush {
+    fn combine(&mut self, other: QueuePlanJournalFlush) {
+        self.0 = self.0.combine(other);
+    }
+
+    fn is_needed(self) -> bool {
+        self.0.is_needed()
+    }
+}
+
 struct PreparedQueueAdmission {
     checked: CheckedTransaction<'static>,
     hash: SignedTxHash,
@@ -549,6 +562,13 @@ struct QueueAdmissionNotification {
     hash: SignedTxHash,
     lane_id: LaneId,
     dataspace_id: DataSpaceId,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum GossipEntryState {
+    Pending,
+    Committed,
+    Other,
 }
 
 #[cfg(feature = "telemetry")]
@@ -670,6 +690,7 @@ pub struct TransactionGuard {
     queue_position: u64,
     encoded_len: usize,
     gas_cost: u64,
+    released: bool,
     #[cfg(feature = "telemetry")]
     telemetry: Option<crate::telemetry::StateTelemetry>,
 }
@@ -733,14 +754,23 @@ impl TransactionGuard {
 
 impl Drop for TransactionGuard {
     fn drop(&mut self) {
+        if self.released {
+            return;
+        }
         #[cfg(feature = "telemetry")]
         let telemetry_ref: Option<&StateTelemetry> = self.telemetry.as_ref();
         #[cfg(not(feature = "telemetry"))]
         let telemetry_ref: Option<&StateTelemetry> = None;
 
+        {
+            let _guard = self.queue.push_remove_lock.lock();
+            self.queue
+                .remove_transaction_locked(&self.tx, &self.routing_plan, telemetry_ref);
+        }
         self.queue
-            .remove_transaction(&self.tx, &self.routing_plan, telemetry_ref);
+            .publish_backpressure_state(self.queue.active_len(), telemetry_ref);
         self.queue.release_inflight_guard();
+        self.released = true;
     }
 }
 
@@ -1024,6 +1054,7 @@ impl Queue {
             records: records.len(),
             ..QueuePlanJournalReplaySummary::default()
         };
+        let mut journal_removals = Vec::new();
         #[cfg(feature = "telemetry")]
         let telemetry_handle = state.metrics();
         #[cfg(feature = "telemetry")]
@@ -1039,17 +1070,17 @@ impl Queue {
 
             if accepted.hash() != hash {
                 summary.tombstoned_malformed = summary.tombstoned_malformed.saturating_add(1);
-                self.record_plan_journal_remove(hash, &routing_plan);
+                journal_removals.push((hash, routing_plan.digest()));
                 continue;
             }
             if state.has_committed_transaction(hash) {
                 summary.tombstoned_committed = summary.tombstoned_committed.saturating_add(1);
-                self.record_plan_journal_remove(hash, &routing_plan);
+                journal_removals.push((hash, routing_plan.digest()));
                 continue;
             }
             if self.is_expired(&accepted) {
                 summary.tombstoned_expired = summary.tombstoned_expired.saturating_add(1);
-                self.record_plan_journal_remove(hash, &routing_plan);
+                journal_removals.push((hash, routing_plan.digest()));
                 continue;
             }
             match self.route_plan_with_state(&accepted, state) {
@@ -1062,7 +1093,7 @@ impl Queue {
                         "discarding queued transaction journal record with stale routing plan"
                     );
                     summary.tombstoned_stale = summary.tombstoned_stale.saturating_add(1);
-                    self.record_plan_journal_remove(hash, &routing_plan);
+                    journal_removals.push((hash, routing_plan.digest()));
                     continue;
                 }
                 Err(error) => {
@@ -1073,7 +1104,7 @@ impl Queue {
                         "discarding queued transaction journal record with unresolved routing plan"
                     );
                     summary.tombstoned_stale = summary.tombstoned_stale.saturating_add(1);
-                    self.record_plan_journal_remove(hash, &routing_plan);
+                    journal_removals.push((hash, routing_plan.digest()));
                     continue;
                 }
             }
@@ -1098,13 +1129,13 @@ impl Queue {
                         "discarding queued transaction journal record rejected by admission"
                     );
                     summary.rejected = summary.rejected.saturating_add(1);
-                    self.record_plan_journal_remove(hash, &routing_plan);
+                    journal_removals.push((hash, routing_plan.digest()));
                     continue;
                 }
             };
             prepared.enqueued_at_ms = record.enqueue_timestamp_ms;
 
-            match self.enqueue_prepared_admissions(vec![prepared], backpressure_telemetry) {
+            match self.enqueue_prepared_admissions(vec![prepared], backpressure_telemetry, false) {
                 Ok(notifications) => {
                     summary.replayed = summary.replayed.saturating_add(notifications.len());
                     self.publish_admission_notifications(&notifications);
@@ -1118,25 +1149,27 @@ impl Queue {
                         "discarding queued transaction journal record rejected by enqueue"
                     );
                     summary.rejected = summary.rejected.saturating_add(1);
-                    self.record_plan_journal_remove(hash, &routing_plan);
+                    journal_removals.push((hash, routing_plan.digest()));
                 }
             }
         }
 
+        self.record_plan_journal_removes(journal_removals);
+
         Ok(summary)
     }
 
-    fn record_plan_journal_put(
+    fn record_plan_journal_put_deferred(
         &self,
         tx: &AcceptedTransaction<'_>,
         hash: SignedTxHash,
         routing_plan: &RoutingPlan,
         gossip_payload: Arc<Vec<u8>>,
         enqueue_timestamp_ms: u64,
-    ) {
+    ) -> DeferredQueuePlanJournalFlush {
         let mut guard = self.plan_journal.lock();
         let Some(journal) = guard.as_mut() else {
-            return;
+            return DeferredQueuePlanJournalFlush::default();
         };
         let record = QueuePlanJournalRecordV1::new(
             tx.entrypoint().clone(),
@@ -1145,18 +1178,78 @@ impl Queue {
             gossip_payload,
             enqueue_timestamp_ms,
         );
-        if let Err(error) = journal.put(record) {
-            warn!(%error, tx = %hash, "failed to append queue plan journal put");
+        match journal.put_deferred_flush(record) {
+            Ok(flush) => DeferredQueuePlanJournalFlush(flush),
+            Err(error) => {
+                warn!(%error, tx = %hash, "failed to append queue plan journal put");
+                DeferredQueuePlanJournalFlush::default()
+            }
         }
     }
 
     fn record_plan_journal_remove(&self, hash: SignedTxHash, routing_plan: &RoutingPlan) {
+        let flush = self.record_plan_journal_removes_deferred(vec![(hash, routing_plan.digest())]);
+        self.flush_plan_journal_deferred(flush);
+    }
+
+    fn record_plan_journal_removes_deferred(
+        &self,
+        removals: Vec<(SignedTxHash, Hash)>,
+    ) -> DeferredQueuePlanJournalFlush {
+        if removals.is_empty() {
+            return DeferredQueuePlanJournalFlush::default();
+        }
+        let removed = removals.len();
         let mut guard = self.plan_journal.lock();
         let Some(journal) = guard.as_mut() else {
-            return;
+            return DeferredQueuePlanJournalFlush::default();
         };
-        if let Err(error) = journal.remove(hash, routing_plan.digest()) {
-            warn!(%error, tx = %hash, "failed to append queue plan journal remove");
+        match journal.remove_many_deferred_flush(removals) {
+            Ok(flush) => DeferredQueuePlanJournalFlush(flush),
+            Err(error) => {
+                warn!(%error, removed, "failed to append queue plan journal removes");
+                DeferredQueuePlanJournalFlush::default()
+            }
+        }
+    }
+
+    fn record_plan_journal_removes(&self, removals: Vec<(SignedTxHash, Hash)>) {
+        let flush = self.record_plan_journal_removes_deferred(removals);
+        self.flush_plan_journal_deferred(flush);
+    }
+
+    fn flush_plan_journal_deferred(&self, flush: DeferredQueuePlanJournalFlush) {
+        if !flush.is_needed() {
+            return;
+        }
+        let sync_file = if flush.0.sync_data() {
+            let guard = self.plan_journal.lock();
+            let Some(journal) = guard.as_ref() else {
+                return;
+            };
+            match journal.sync_file_clone() {
+                Ok(file) => Some(file),
+                Err(error) => {
+                    warn!(%error, "failed to clone queue plan journal sync handle");
+                    None
+                }
+            }
+        } else {
+            None
+        };
+        if let Some(file) = sync_file
+            && let Err(error) = file.sync_data()
+        {
+            warn!(%error, "failed to sync queue plan journal");
+        }
+        if flush.0.compact() {
+            let mut guard = self.plan_journal.lock();
+            let Some(journal) = guard.as_mut() else {
+                return;
+            };
+            if let Err(error) = journal.compact_if_needed() {
+                warn!(%error, "failed to compact queue plan journal");
+            }
         }
     }
 
@@ -2089,7 +2182,15 @@ impl Queue {
         let backpressure_telemetry: Option<&StateTelemetry> = None;
         self.gossip_batch_inner(
             n,
-            |_, tx_ref| self.is_pending(tx_ref, state_view),
+            |_, tx_ref| {
+                if self.is_expired(tx_ref.as_accepted()) {
+                    GossipEntryState::Other
+                } else if tx_ref.is_in_blockchain(state_view) {
+                    GossipEntryState::Committed
+                } else {
+                    GossipEntryState::Pending
+                }
+            },
             |hash, tx_ref| self.refresh_routing_plan_with_view(hash, tx_ref, state_view),
             backpressure_telemetry,
         )
@@ -2107,8 +2208,13 @@ impl Queue {
         self.gossip_batch_inner(
             n,
             |hash, tx_ref| {
-                !self.is_expired(tx_ref.as_accepted())
-                    && committed_transactions.get(&hash).is_none()
+                if self.is_expired(tx_ref.as_accepted()) {
+                    GossipEntryState::Other
+                } else if committed_transactions.get(&hash).is_some() {
+                    GossipEntryState::Committed
+                } else {
+                    GossipEntryState::Pending
+                }
             },
             |hash, tx_ref| self.refresh_routing_plan_with_state(hash, tx_ref, state),
             backpressure_telemetry,
@@ -2118,12 +2224,12 @@ impl Queue {
     fn gossip_batch_inner<F, R>(
         &self,
         n: u32,
-        mut is_pending: F,
+        mut entry_state: F,
         mut refresh_routing: R,
         backpressure_telemetry: Option<&StateTelemetry>,
     ) -> Vec<GossipBatchEntry>
     where
-        F: FnMut(SignedTxHash, &CheckedTransaction<'static>) -> bool,
+        F: FnMut(SignedTxHash, &CheckedTransaction<'static>) -> GossipEntryState,
         R: FnMut(
             SignedTxHash,
             &CheckedTransaction<'static>,
@@ -2136,42 +2242,49 @@ impl Queue {
                 continue;
             };
             let tx_ref = tx_arc.as_ref();
-            if is_pending(hash, tx_ref) {
-                let routing_plan = match refresh_routing(hash, tx_ref) {
-                    Ok(routing_plan) => routing_plan,
-                    Err(err) => {
-                        warn!(
-                            tx = %hash,
-                            reason = %err,
-                            reason_label = err.as_label(),
-                            "dropping queued transaction before gossip due to unresolved route"
-                        );
-                        self.reject_queued_transaction_for_unresolved_route(
-                            hash,
-                            err.to_string(),
-                            backpressure_telemetry,
-                        );
-                        continue;
+            match entry_state(hash, tx_ref) {
+                GossipEntryState::Pending => {
+                    let routing_plan = match refresh_routing(hash, tx_ref) {
+                        Ok(routing_plan) => routing_plan,
+                        Err(err) => {
+                            warn!(
+                                tx = %hash,
+                                reason = %err,
+                                reason_label = err.as_label(),
+                                "dropping queued transaction before gossip due to unresolved route"
+                            );
+                            self.reject_queued_transaction_for_unresolved_route(
+                                hash,
+                                err.to_string(),
+                                backpressure_telemetry,
+                            );
+                            continue;
+                        }
+                    };
+                    let routing = routing_plan.coordinator_route();
+                    let payload = if let Some(entry) = self.tx_gossip_payloads.get(&hash) {
+                        Arc::clone(entry.value())
+                    } else {
+                        let payload = Self::encode_gossip_payload(tx_ref.as_accepted());
+                        self.tx_gossip_payloads.insert(hash, Arc::clone(&payload));
+                        payload
+                    };
+                    // Deep clone to produce an owned AcceptedTransaction for gossip
+                    batch.push(GossipBatchEntry {
+                        tx: tx_ref.as_accepted().clone(),
+                        routing,
+                        routing_plan,
+                        payload,
+                    });
+                    if batch.len() >= n as usize {
+                        break;
                     }
-                };
-                let routing = routing_plan.coordinator_route();
-                let payload = if let Some(entry) = self.tx_gossip_payloads.get(&hash) {
-                    Arc::clone(entry.value())
-                } else {
-                    let payload = Self::encode_gossip_payload(tx_ref.as_accepted());
-                    self.tx_gossip_payloads.insert(hash, Arc::clone(&payload));
-                    payload
-                };
-                // Deep clone to produce an owned AcceptedTransaction for gossip
-                batch.push(GossipBatchEntry {
-                    tx: tx_ref.as_accepted().clone(),
-                    routing,
-                    routing_plan,
-                    payload,
-                });
-                if batch.len() >= n as usize {
-                    break;
                 }
+                GossipEntryState::Committed => {
+                    drop(tx_arc);
+                    self.remove_committed_hashes([hash], backpressure_telemetry);
+                }
+                GossipEntryState::Other => {}
             }
         }
         batch
@@ -2553,7 +2666,7 @@ impl Queue {
         #[cfg(not(feature = "telemetry"))]
         let backpressure_telemetry: Option<&StateTelemetry> = None;
 
-        match self.enqueue_prepared_admissions(vec![prepared], backpressure_telemetry) {
+        match self.enqueue_prepared_admissions(vec![prepared], backpressure_telemetry, true) {
             Ok(notifications) => {
                 self.publish_admission_notifications(&notifications);
                 Ok(routing_decision)
@@ -2901,10 +3014,12 @@ impl Queue {
         &self,
         prepared: Vec<PreparedQueueAdmission>,
         telemetry: Option<&StateTelemetry>,
+        record_plan_journal: bool,
     ) -> Result<Vec<QueueAdmissionNotification>, (Vec<QueueAdmissionNotification>, Failure)> {
         let mut notifications = Vec::with_capacity(prepared.len());
         let mut failure = None;
         let batch_duplicate_idx = first_batch_duplicate_index(&prepared);
+        let mut journal_flush = DeferredQueuePlanJournalFlush::default();
         #[cfg(feature = "telemetry")]
         let mut dirty_teu_lanes = BTreeSet::new();
         #[cfg(feature = "telemetry")]
@@ -3004,10 +3119,12 @@ impl Queue {
                 self.routing_plans.insert(hash, routing_plan.clone());
                 routing_ledger::record_plan(hash, routing_plan.clone());
                 self.tx_enqueued_at_ms.insert(hash, enqueued_at_ms);
-                let journal_payload = gossip_payload
-                    .as_ref()
-                    .map(Arc::clone)
-                    .unwrap_or_else(|| Self::encode_gossip_payload(tx_arc.as_accepted()));
+                let journal_payload = record_plan_journal.then(|| {
+                    gossip_payload
+                        .as_ref()
+                        .map(Arc::clone)
+                        .unwrap_or_else(|| Self::encode_gossip_payload(tx_arc.as_accepted()))
+                });
 
                 let mut pushed = self.push_queued_hash(hash, enqueued_at_ms);
                 if !pushed {
@@ -3046,13 +3163,16 @@ impl Queue {
                     self.tx_gossip_payloads.insert(hash, payload);
                 }
                 self.tx_gas_cost.insert(hash, proposal_gas_cost);
-                self.record_plan_journal_put(
-                    tx_arc.as_accepted(),
-                    hash,
-                    &routing_plan,
-                    journal_payload,
-                    enqueued_at_ms,
-                );
+                if let Some(journal_payload) = journal_payload {
+                    let flush = self.record_plan_journal_put_deferred(
+                        tx_arc.as_accepted(),
+                        hash,
+                        &routing_plan,
+                        journal_payload,
+                        enqueued_at_ms,
+                    );
+                    journal_flush.combine(flush.0);
+                }
                 drop(tx_arc);
                 self.track_expiry_hash(hash);
                 if let Some(authority) = authority {
@@ -3082,6 +3202,7 @@ impl Queue {
             }
             self.apply_per_user_tx_count_increments(applied_user_increments);
         }
+        self.flush_plan_journal_deferred(journal_flush);
         #[cfg(feature = "telemetry")]
         self.publish_teu_backlog_metric_keys(
             telemetry,
@@ -3328,7 +3449,7 @@ impl Queue {
             }
         }
 
-        match self.enqueue_prepared_admissions(prepared, backpressure_telemetry) {
+        match self.enqueue_prepared_admissions(prepared, backpressure_telemetry, true) {
             Ok(notifications) => {
                 let accepted = notifications.len();
                 self.publish_admission_notifications(&notifications);
@@ -3425,6 +3546,7 @@ impl Queue {
         let lane_id = routing_decision.lane_id;
         let dataspace_id = routing_decision.dataspace_id;
         let enqueue_at_ms = Self::duration_to_millis(self.time_source.get_unix_time());
+        let mut journal_flush = DeferredQueuePlanJournalFlush::default();
         {
             let _guard = self.push_remove_lock.lock();
             let txs_len = self.active_len();
@@ -3506,13 +3628,14 @@ impl Queue {
             }
             self.tx_encoded_len.insert(hash, encoded_len);
             self.tx_gas_cost.insert(hash, proposal_gas_cost);
-            self.record_plan_journal_put(
+            let flush = self.record_plan_journal_put_deferred(
                 tx_arc.as_accepted(),
                 hash,
                 &routing_plan,
                 journal_payload,
                 enqueue_at_ms,
             );
+            journal_flush.combine(flush.0);
             drop(tx_arc);
             self.track_expiry_hash(hash);
             #[cfg(feature = "telemetry")]
@@ -3527,6 +3650,7 @@ impl Queue {
                 );
             }
         }
+        self.flush_plan_journal_deferred(journal_flush);
         #[cfg(feature = "telemetry")]
         self.publish_teu_backlog_metric_keys(
             Some(telemetry_handle),
@@ -3573,66 +3697,72 @@ impl Queue {
     ///
     /// Used when a peer is removed from the topology so it stops advertising stale transactions.
     pub fn clear_all(&self) {
-        let _guard = self.push_remove_lock.lock();
-        let queued_hashes = {
-            let mut age_ring = self.queued_age_ring.lock();
-            let hashes = core::iter::from_fn(|| self.tx_hashes.pop()).collect::<Vec<_>>();
-            self.clear_queued_age_index_locked(&mut age_ring);
-            hashes
-        };
-        for hash in queued_hashes {
-            if self.txs.remove(&hash).is_some() {
-                self.untrack_active_transaction();
-            }
-            self.routing_decisions.remove(&hash);
-            if let Some((_, plan)) = self.routing_plans.remove(&hash) {
-                self.record_plan_journal_remove(hash, &plan);
-                let _ = routing_ledger::take_plan(&hash);
-            } else if let Some(plan) = routing_ledger::take_plan(&hash) {
-                self.record_plan_journal_remove(hash, &plan);
-            }
-            let _ = routing_ledger::take(&hash);
-            self.removed_hashes.remove(&hash);
-        }
-        let remaining_plans = self
-            .routing_plans
-            .iter()
-            .map(|entry| (*entry.key(), entry.value().clone()))
-            .collect::<Vec<_>>();
-        for (hash, plan) in remaining_plans {
-            self.record_plan_journal_remove(hash, &plan);
-            let _ = routing_ledger::take(&hash);
-            let _ = routing_ledger::take_plan(&hash);
-        }
-        let remaining_hashes = self
-            .txs
-            .iter()
-            .map(|entry| *entry.key())
-            .collect::<Vec<_>>();
-        for hash in remaining_hashes {
-            if self.txs.remove(&hash).is_some() {
-                self.untrack_active_transaction();
-            }
-            let _ = routing_ledger::take(&hash);
-            let _ = routing_ledger::take_plan(&hash);
-            self.removed_hashes.remove(&hash);
-        }
-        while self.tx_gossip.pop().is_some() {}
-        self.txs_per_user.clear();
-        self.expiry_ring_members.clear();
-        self.expiry_ring.lock().clear();
-        self.tx_encoded_len.clear();
-        self.tx_gas_cost.clear();
-        self.tx_enqueued_at_ms.clear();
-        self.routing_decisions.clear();
-        self.routing_plans.clear();
-        self.tx_gossip_payloads.clear();
-        #[cfg(feature = "telemetry")]
+        let journal_flush;
         {
-            self.tx_teu.clear();
-            self.lane_teu_pending.clear();
-            self.dataspace_teu_pending.clear();
+            let _guard = self.push_remove_lock.lock();
+            let mut journal_removals = Vec::new();
+            let queued_hashes = {
+                let mut age_ring = self.queued_age_ring.lock();
+                let hashes = core::iter::from_fn(|| self.tx_hashes.pop()).collect::<Vec<_>>();
+                self.clear_queued_age_index_locked(&mut age_ring);
+                hashes
+            };
+            for hash in queued_hashes {
+                if self.txs.remove(&hash).is_some() {
+                    self.untrack_active_transaction();
+                }
+                self.routing_decisions.remove(&hash);
+                if let Some((_, plan)) = self.routing_plans.remove(&hash) {
+                    journal_removals.push((hash, plan.digest()));
+                    let _ = routing_ledger::take_plan(&hash);
+                } else if let Some(plan) = routing_ledger::take_plan(&hash) {
+                    journal_removals.push((hash, plan.digest()));
+                }
+                let _ = routing_ledger::take(&hash);
+                self.removed_hashes.remove(&hash);
+            }
+            let remaining_plans = self
+                .routing_plans
+                .iter()
+                .map(|entry| (*entry.key(), entry.value().clone()))
+                .collect::<Vec<_>>();
+            for (hash, plan) in remaining_plans {
+                journal_removals.push((hash, plan.digest()));
+                let _ = routing_ledger::take(&hash);
+                let _ = routing_ledger::take_plan(&hash);
+            }
+            let remaining_hashes = self
+                .txs
+                .iter()
+                .map(|entry| *entry.key())
+                .collect::<Vec<_>>();
+            for hash in remaining_hashes {
+                if self.txs.remove(&hash).is_some() {
+                    self.untrack_active_transaction();
+                }
+                let _ = routing_ledger::take(&hash);
+                let _ = routing_ledger::take_plan(&hash);
+                self.removed_hashes.remove(&hash);
+            }
+            while self.tx_gossip.pop().is_some() {}
+            self.txs_per_user.clear();
+            self.expiry_ring_members.clear();
+            self.expiry_ring.lock().clear();
+            self.tx_encoded_len.clear();
+            self.tx_gas_cost.clear();
+            self.tx_enqueued_at_ms.clear();
+            self.routing_decisions.clear();
+            self.routing_plans.clear();
+            self.tx_gossip_payloads.clear();
+            #[cfg(feature = "telemetry")]
+            {
+                self.tx_teu.clear();
+                self.lane_teu_pending.clear();
+                self.dataspace_teu_pending.clear();
+            }
+            journal_flush = self.record_plan_journal_removes_deferred(journal_removals);
         }
+        self.flush_plan_journal_deferred(journal_flush);
         self.publish_backpressure_state(self.active_len(), None);
     }
 
@@ -3828,6 +3958,7 @@ impl Queue {
                 queue_position,
                 encoded_len,
                 gas_cost,
+                released: false,
                 #[cfg(feature = "telemetry")]
                 telemetry: Some(telemetry_clone),
             };
@@ -4019,6 +4150,7 @@ impl Queue {
                 queue_position,
                 encoded_len,
                 gas_cost,
+                released: false,
                 #[cfg(feature = "telemetry")]
                 telemetry: Some(telemetry_clone),
             };
@@ -4732,14 +4864,13 @@ impl Queue {
     ///    (either because it was expired, or because transaction is committed to blockchain),
     ///    we should remove transaction from [`Queue::accepted_tx`].
     #[cfg_attr(not(feature = "telemetry"), allow(unused_variables))]
-    fn remove_transaction(
+    fn remove_transaction_locked(
         &self,
         tx: &CheckedTransaction<'static>,
         routing_plan: &RoutingPlan,
         telemetry: Option<&StateTelemetry>,
     ) {
         let hash = tx.hash();
-        let _guard = self.push_remove_lock.lock();
         if self.txs.remove(&hash).is_some() {
             self.untrack_active_transaction();
             self.untrack_expiry_hash(&hash);
@@ -4769,7 +4900,38 @@ impl Queue {
         self.removed_hashes.remove(&hash);
         #[cfg(feature = "telemetry")]
         self.record_teu_dequeue(&hash, telemetry);
-        self.publish_backpressure_state(self.active_len(), telemetry);
+    }
+
+    /// Release a group of popped transaction guards under a single queue lock.
+    pub(crate) fn release_transaction_guards(&self, guards: &mut Vec<TransactionGuard>) {
+        if guards.is_empty() {
+            return;
+        }
+        #[cfg(feature = "telemetry")]
+        let telemetry = guards
+            .iter()
+            .find_map(|guard| guard.telemetry.as_ref())
+            .cloned();
+        #[cfg(not(feature = "telemetry"))]
+        let telemetry: Option<StateTelemetry> = None;
+
+        {
+            let _guard = self.push_remove_lock.lock();
+            for guard in guards.iter_mut() {
+                if guard.released {
+                    continue;
+                }
+                #[cfg(feature = "telemetry")]
+                let guard_telemetry = guard.telemetry.as_ref();
+                #[cfg(not(feature = "telemetry"))]
+                let guard_telemetry: Option<&StateTelemetry> = None;
+                self.remove_transaction_locked(&guard.tx, &guard.routing_plan, guard_telemetry);
+                self.release_inflight_guard();
+                guard.released = true;
+            }
+        }
+        self.publish_backpressure_state(self.active_len(), telemetry.as_ref());
+        guards.clear();
     }
 
     /// Remove committed transactions from the queue by hash, preserving routing metadata.
@@ -4779,36 +4941,46 @@ impl Queue {
         hashes: impl IntoIterator<Item = SignedTxHash>,
         telemetry: Option<&StateTelemetry>,
     ) -> usize {
-        let _guard = self.push_remove_lock.lock();
-        let mut removed = 0usize;
-        for hash in hashes {
-            let tx_arc = self.txs.remove(&hash).map(|(_, tx)| tx);
-            self.untrack_expiry_hash(&hash);
-            let _ = self.routing_decisions.remove(&hash);
-            if let Some((_, plan)) = self.routing_plans.remove(&hash) {
-                self.record_plan_journal_remove(hash, &plan);
-            }
-            let _ = routing_ledger::take(&hash);
-            let _ = routing_ledger::take_plan(&hash);
-            self.tx_encoded_len.remove(&hash);
-            self.tx_gas_cost.remove(&hash);
-            self.tx_enqueued_at_ms.remove(&hash);
-            self.remove_queued_age(&hash);
-            self.tx_gossip_payloads.remove(&hash);
-            if let Some(tx_arc) = tx_arc {
-                self.untrack_active_transaction();
-                self.removed_hashes.insert(hash, ());
-                if let Some(authority) = tx_arc.as_ref().as_ref().authority_opt() {
-                    self.decrease_per_user_tx_count(authority);
+        let journal_flush;
+        let publish_backpressure;
+        let removed;
+        {
+            let _guard = self.push_remove_lock.lock();
+            let mut removed_inner = 0usize;
+            let mut journal_removals = Vec::new();
+            for hash in hashes {
+                let tx_arc = self.txs.remove(&hash).map(|(_, tx)| tx);
+                self.untrack_expiry_hash(&hash);
+                let _ = self.routing_decisions.remove(&hash);
+                if let Some((_, plan)) = self.routing_plans.remove(&hash) {
+                    journal_removals.push((hash, plan.digest()));
                 }
-                #[cfg(feature = "telemetry")]
-                self.record_teu_dequeue(&hash, telemetry);
-                removed = removed.saturating_add(1);
+                let _ = routing_ledger::take(&hash);
+                let _ = routing_ledger::take_plan(&hash);
+                self.tx_encoded_len.remove(&hash);
+                self.tx_gas_cost.remove(&hash);
+                self.tx_enqueued_at_ms.remove(&hash);
+                self.remove_queued_age(&hash);
+                self.tx_gossip_payloads.remove(&hash);
+                if let Some(tx_arc) = tx_arc {
+                    self.untrack_active_transaction();
+                    self.removed_hashes.insert(hash, ());
+                    if let Some(authority) = tx_arc.as_ref().as_ref().authority_opt() {
+                        self.decrease_per_user_tx_count(authority);
+                    }
+                    #[cfg(feature = "telemetry")]
+                    self.record_teu_dequeue(&hash, telemetry);
+                    removed_inner = removed_inner.saturating_add(1);
+                }
             }
+            journal_flush = self.record_plan_journal_removes_deferred(journal_removals);
+            // Keep removed markers until the consumer drains stale hashes or a push triggers
+            // compaction, so committed removals stay observable to in-flight guards.
+            publish_backpressure = removed_inner > 0;
+            removed = removed_inner;
         }
-        // Keep removed markers until the consumer drains stale hashes or a push triggers
-        // compaction, so committed removals stay observable to in-flight guards.
-        if removed > 0 {
+        self.flush_plan_journal_deferred(journal_flush);
+        if publish_backpressure {
             self.publish_backpressure_state(self.active_len(), telemetry);
         }
         removed
@@ -7298,6 +7470,9 @@ pub mod tests {
                 Some(payload.clone()),
             )
             .expect("push with plan");
+        let journal_len_before_replay = std::fs::metadata(&journal_path)
+            .expect("journal metadata before replay")
+            .len();
         drop(queue);
 
         let replay_queue =
@@ -7315,6 +7490,13 @@ pub mod tests {
         assert_eq!(summary.records, 1);
         assert_eq!(summary.replayed, 1);
         assert_eq!(summary.tombstoned_stale, 0);
+        let journal_len_after_replay = std::fs::metadata(&journal_path)
+            .expect("journal metadata after replay")
+            .len();
+        assert_eq!(
+            journal_len_after_replay, journal_len_before_replay,
+            "journal replay must not duplicate already-durable put records"
+        );
         assert!(replay_queue.txs.contains_key(&hash));
         assert_eq!(
             *replay_queue
@@ -7573,6 +7755,44 @@ pub mod tests {
             queue.tx_gas_cost.is_empty(),
             "gas cost cache should clear after guard drop"
         );
+    }
+
+    #[test]
+    fn queued_tx_metadata_cleared_on_batch_guard_release() {
+        let kura = Kura::blank_kura_for_testing();
+        let query_handle = LiveQueryStore::start_test();
+        let state = State::new(world_with_test_domains(), kura, query_handle);
+        let (_time_handle, time_source) = TimeSource::new_mock(Duration::default());
+
+        let queue = Arc::new(Queue::test(config_factory(), &time_source));
+        let first = accepted_tx_by_someone(&time_source);
+        let second = accepted_tx_by_someone(&time_source);
+        let first_hash = first.as_ref().hash();
+        let second_hash = second.as_ref().hash();
+        queue.push(first, state.view()).expect("push first tx");
+        queue.push(second, state.view()).expect("push second tx");
+
+        let state_view = state.view();
+        let mut expired = Vec::new();
+        let mut guards = vec![
+            queue
+                .pop_from_queue(&state_view, &mut expired)
+                .expect("first guard"),
+            queue
+                .pop_from_queue(&state_view, &mut expired)
+                .expect("second guard"),
+        ];
+        assert!(expired.is_empty());
+        assert_eq!(queue.inflight_guards.load(Ordering::Relaxed), 2);
+
+        queue.release_transaction_guards(&mut guards);
+
+        assert!(guards.is_empty());
+        assert_eq!(queue.inflight_guards.load(Ordering::Relaxed), 0);
+        assert!(!queue.txs.contains_key(&first_hash));
+        assert!(!queue.txs.contains_key(&second_hash));
+        assert!(queue.tx_encoded_len.is_empty());
+        assert!(queue.tx_gas_cost.is_empty());
     }
 
     #[test]
@@ -8395,7 +8615,7 @@ pub mod tests {
     }
 
     #[test]
-    fn gossip_batch_with_state_skips_committed_entries() {
+    fn gossip_batch_with_state_removes_committed_entries() {
         let kura = Kura::blank_kura_for_testing();
         let query_handle = LiveQueryStore::start_test();
         let state = State::new(world_with_test_domains(), kura, query_handle);
@@ -8418,6 +8638,9 @@ pub mod tests {
             batch.is_empty(),
             "committed transaction must not be selected for gossip"
         );
+        assert_eq!(queue.active_len(), 0);
+        assert_eq!(queue.queued_len(), 0);
+        assert!(!queue.current_backpressure().is_saturated());
     }
 
     #[tokio::test]

@@ -9650,18 +9650,9 @@ mod cli_integration_harness_tests {
             let domain_id3: iroha::data_model::domain::DomainId =
                 DomainId::try_new("d3", "universal").unwrap();
             let kp = KeyPair::random();
-            let owner1 = iroha::data_model::account::AccountId::new(
-                domain_id1.clone(),
-                kp.public_key().clone(),
-            );
-            let owner2 = iroha::data_model::account::AccountId::new(
-                domain_id2.clone(),
-                kp.public_key().clone(),
-            );
-            let owner3 = iroha::data_model::account::AccountId::new(
-                domain_id3.clone(),
-                kp.public_key().clone(),
-            );
+            let owner1 = iroha::data_model::account::AccountId::new(kp.public_key().clone());
+            let owner2 = iroha::data_model::account::AccountId::new(kp.public_key().clone());
+            let owner3 = iroha::data_model::account::AccountId::new(kp.public_key().clone());
 
             let mut d1 = Domain::new(domain_id1).build(owner1.account());
             let mut d2 = Domain::new(domain_id2).build(owner2.account());
@@ -9770,7 +9761,7 @@ mod cli_integration_harness_tests {
             use iroha::data_model::account::{Account, AccountId};
             use iroha::data_model::domain::DomainId;
 
-            let domain: DomainId = DomainId::try_new("land", "universal").unwrap();
+            let _domain: DomainId = DomainId::try_new("land", "universal").unwrap();
             let kp1 = KeyPair::random();
             let kp2 = KeyPair::random();
             let kp3 = KeyPair::random();
@@ -9781,7 +9772,7 @@ mod cli_integration_harness_tests {
             // Build accounts; builder API needs an authority, use id1 for simplicity
             let mut a1 = Account::new(id1.clone()).build(&id1);
             let mut a2 = Account::new(id2.clone()).build(&id1);
-            let mut a3 = Account::new(id3.clone()).build(&id1);
+            let a3 = Account::new(id3.clone()).build(&id1);
 
             // Insert ranks: a2=1, a1=2, a3=None
             a1.metadata
@@ -9919,7 +9910,7 @@ mod cli_integration_harness_tests {
             use iroha::data_model::asset::id::AssetDefinitionId;
             use iroha::data_model::domain::DomainId;
 
-            let domain: DomainId = DomainId::try_new("land", "universal").unwrap();
+            let _domain: DomainId = DomainId::try_new("land", "universal").unwrap();
             let kp = KeyPair::random();
             let owner = AccountId::new(kp.public_key().clone());
             let id1: AssetDefinitionId = iroha_data_model::asset::AssetDefinitionId::new(
@@ -10549,7 +10540,7 @@ mod cli_integration_harness_tests {
             use iroha::data_model::account::{Account, AccountId};
             use iroha::data_model::domain::DomainId;
 
-            let domain: DomainId = DomainId::try_new("land", "universal").unwrap();
+            let _domain: DomainId = DomainId::try_new("land", "universal").unwrap();
             // Build accounts a0..a4 with ranks: a0=2, a1=4, a2=None, a3=1, a4=3
             let mut accounts: Vec<Account> = (0..5)
                 .map(|_| {
@@ -10678,7 +10669,7 @@ mod cli_integration_harness_tests {
             use iroha::data_model::account::{Account, AccountId};
             use iroha::data_model::domain::DomainId;
 
-            let domain: DomainId = DomainId::try_new("land", "universal").unwrap();
+            let _domain: DomainId = DomainId::try_new("land", "universal").unwrap();
             let mut accounts: Vec<Account> = (0..5)
                 .map(|_| {
                     let kp = KeyPair::random();
@@ -11254,7 +11245,7 @@ mod cli_integration_harness_tests {
             use iroha::data_model::domain::DomainId;
             use iroha::data_model::nft::{Nft, NftId};
 
-            let domain: DomainId = DomainId::try_new("art", "universal").unwrap();
+            let _domain: DomainId = DomainId::try_new("art", "universal").unwrap();
             let kp = KeyPair::random();
             let owner = AccountId::new(kp.public_key().clone());
             let id1: NftId = "n1$art".parse().unwrap();
@@ -11390,7 +11381,7 @@ mod cli_integration_harness_tests {
             use iroha::data_model::domain::DomainId;
             use iroha::data_model::nft::{Nft, NftId};
 
-            let domain: DomainId = DomainId::try_new("art", "universal").unwrap();
+            let _domain: DomainId = DomainId::try_new("art", "universal").unwrap();
             let owner = AccountId::new(KeyPair::random().public_key().clone());
 
             // Build NFTs n0..n4 with ranks: n0=2, n1=4, n2=None, n3=1, n4=3
@@ -11562,7 +11553,7 @@ mod cli_integration_harness_tests {
                 use iroha::data_model::domain::DomainId;
                 use iroha::data_model::nft::{Nft, NftId};
 
-                let domain: DomainId = DomainId::try_new("art", "universal").unwrap();
+                let _domain: DomainId = DomainId::try_new("art", "universal").unwrap();
                 let owner = AccountId::new(KeyPair::random().public_key().clone());
 
                 let ids: Vec<NftId> = (0..5)
@@ -11736,7 +11727,7 @@ mod cli_integration_harness_tests {
             use iroha::data_model::domain::DomainId;
 
             // Build 5 accounts a0..a4 in the same domain, annotate metadata pos = index
-            let domain: DomainId = DomainId::try_new("land", "universal").unwrap();
+            let _domain: DomainId = DomainId::try_new("land", "universal").unwrap();
             let mut accounts = Vec::new();
             for i in 0..5 {
                 let kp = KeyPair::random();
@@ -12030,7 +12021,7 @@ mod cli_integration_harness {
     #[cfg(feature = "ids_projection")]
     use iroha::data_model::query::{QueryItemKind, QueryWithFilter};
     use iroha::data_model::{
-        account::ScopedAccountId,
+        account::AccountId,
         asset::{Asset, AssetId},
         domain::DomainId,
         executor::ExecutorDataModel,
@@ -12077,10 +12068,9 @@ mod cli_integration_harness {
         }
     }
 
-    fn sample_account_id(domain: &str, seed: u8) -> ScopedAccountId {
-        let domain_id = DomainId::try_new(domain, "universal").expect("domain id");
+    fn sample_account_id(_domain: &str, seed: u8) -> AccountId {
         let key_pair = KeyPair::from_seed(vec![seed; 32], Algorithm::Ed25519);
-        ScopedAccountId::new(domain_id, key_pair.public_key().clone())
+        AccountId::new(key_pair.public_key().clone())
     }
 
     #[cfg(feature = "ids_projection")]
@@ -12887,7 +12877,7 @@ mod cli_integration_harness {
             DomainId::try_new("w", "universal").unwrap(),
             "tulip".parse().unwrap()
         )));
-        assert_eq!(rem, 1);
+        assert_eq!(rem, Some(1));
         let cur = cur.expect("should continue");
 
         let (batch2, rem2, cur2) =
@@ -12902,7 +12892,7 @@ mod cli_integration_harness {
             DomainId::try_new("w", "universal").unwrap(),
             "peony".parse().unwrap()
         )));
-        assert_eq!(rem2, 0);
+        assert_eq!(rem2, Some(0));
         assert!(cur2.is_none());
     }
 
@@ -12942,7 +12932,7 @@ mod cli_integration_harness {
         assert_eq!(ids1.len(), 2);
         assert!(ids1.contains(&alice));
         assert!(ids1.contains(&bob));
-        assert_eq!(rem, 1);
+        assert_eq!(rem, Some(1));
         let cur = cur.expect("should continue");
 
         let (batch2, rem2, cur2) =
@@ -12954,7 +12944,7 @@ mod cli_integration_harness {
         };
         assert_eq!(ids2.len(), 1);
         assert!(ids2.contains(&carol));
-        assert_eq!(rem2, 0);
+        assert_eq!(rem2, Some(0));
         assert!(cur2.is_none());
     }
 
@@ -12994,7 +12984,7 @@ mod cli_integration_harness {
         assert_eq!(ids1.len(), 2);
         assert!(ids1.contains(&DomainId::try_new("d1", "universal").unwrap()));
         assert!(ids1.contains(&DomainId::try_new("d2", "universal").unwrap()));
-        assert_eq!(rem, 1);
+        assert_eq!(rem, Some(1));
         let cur = cur.expect("should continue");
 
         let (batch2, rem2, cur2) =
@@ -13006,7 +12996,7 @@ mod cli_integration_harness {
         };
         assert_eq!(ids2.len(), 1);
         assert!(ids2.contains(&DomainId::try_new("d3", "universal").unwrap()));
-        assert_eq!(rem2, 0);
+        assert_eq!(rem2, Some(0));
         assert!(cur2.is_none());
     }
 

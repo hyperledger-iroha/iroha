@@ -69,6 +69,7 @@ const DROP_REASON_NO_RESTRICTED_TARGETS: &str = "no_restricted_targets";
 const DROP_REASON_PUBLIC_OVERLAY_REFUSED: &str = "restricted_public_overlay_refused";
 const DROP_REASON_ROUTE_MISMATCH: &str = "route_mismatch";
 const DROP_REASON_PEER_RECENT_SUPPRESSION: &str = "peer_recent_suppression";
+const OUTCOME_PEER_RECENT_SUPPRESSION_REPLAY: &str = "peer_recent_suppression_replay";
 const OUTCOME_PUBLIC_OVERLAY_FORWARD: &str = "restricted_public_overlay_forward";
 const SURFACE_PUBLIC_OVERLAY: &str = "public_overlay";
 const GOSSIP_SEED_PUBLIC_DOMAIN: u64 = 0x5055_424C_4943_5F00;
@@ -486,14 +487,35 @@ impl TransactionGossiper {
         }
         let mut filtered = Vec::with_capacity(targets.len());
         let mut suppressed = 0usize;
-        for peer in targets {
-            if self.peer_recently_seen_all_hashes(&peer, tx_hashes) {
+        for peer in &targets {
+            if self.peer_recently_seen_all_hashes(peer, tx_hashes) {
                 suppressed = suppressed.saturating_add(1);
             } else {
-                filtered.push(peer);
+                filtered.push(peer.clone());
             }
         }
+        if filtered.is_empty() && suppressed > 0 {
+            return (targets, suppressed);
+        }
         (filtered, suppressed)
+    }
+
+    fn filter_targets_or_replay_recent_suppressed(
+        &self,
+        targets: Vec<PeerId>,
+        tx_hashes: &[HashOf<SignedTransaction>],
+    ) -> (Vec<PeerId>, usize, bool) {
+        if tx_hashes.is_empty() || targets.is_empty() {
+            return (targets, 0, false);
+        }
+        let original_targets = targets.clone();
+        let (targets, suppressed) =
+            self.filter_targets_by_peer_recent_suppression(targets, tx_hashes);
+        if targets.is_empty() && suppressed > 0 {
+            (original_targets, suppressed, true)
+        } else {
+            (targets, suppressed, false)
+        }
     }
 
     fn remember_peer_recent_sends(
@@ -710,6 +732,7 @@ impl TransactionGossiper {
         let targets: Vec<PeerId> = self
             .network
             .online_peers(|online| online.iter().map(|peer| peer.id().clone()).collect());
+        let total_online = targets.len();
         let seed = Self::seed_for_plane(gossip_seed, dataspace_id, GOSSIP_SEED_PUBLIC_DOMAIN);
         let public_target_cap = Self::effective_public_target_cap(
             self.dataspace_cfg.public_target_cap,
@@ -717,10 +740,9 @@ impl TransactionGossiper {
             self.queue.active_len(),
             self.queue.current_backpressure().is_saturated(),
         );
-        let (targets, total_online) =
-            Self::select_targets_with_seed(targets, public_target_cap, seed);
-        let (targets, suppressed_targets) =
-            self.filter_targets_by_peer_recent_suppression(targets, &sent_hashes);
+        let (targets, suppressed_targets, replaying_suppressed_targets) =
+            self.filter_targets_or_replay_recent_suppressed(targets, &sent_hashes);
+        let (targets, _) = Self::select_targets_with_seed(targets, public_target_cap, seed);
 
         if targets.is_empty() {
             iroha_logger::debug!(
@@ -752,6 +774,7 @@ impl TransactionGossiper {
                 size_bytes = encoded_len,
                 targets = targets.len(),
                 suppressed_targets,
+                replaying_suppressed_targets,
                 online_peers = total_online,
                 dataspace = %dataspace_id,
                 "gossiping public transaction batch to capped target set"
@@ -774,7 +797,7 @@ impl TransactionGossiper {
                 frame_bytes,
                 false,
                 None,
-                None,
+                replaying_suppressed_targets.then_some(OUTCOME_PEER_RECENT_SUPPRESSION_REPLAY),
             );
             self.remember_peer_recent_sends(&targets, &sent_hashes);
             // Re-enqueue sent hashes when we gossip to a capped target set so the batch can
@@ -799,6 +822,7 @@ impl TransactionGossiper {
                     size_bytes = encoded_len,
                     targets = targets.len(),
                     suppressed_targets,
+                    replaying_suppressed_targets,
                     online_peers = total_online,
                     dataspace = %dataspace_id,
                     "gossiping public transaction batch to unsuppressed peer subset"
@@ -822,7 +846,7 @@ impl TransactionGossiper {
                 frame_bytes,
                 false,
                 None,
-                None,
+                replaying_suppressed_targets.then_some(OUTCOME_PEER_RECENT_SUPPRESSION_REPLAY),
             );
             self.remember_peer_recent_sends(&targets, &sent_hashes);
             // Broadcast is best-effort during startup and under targeted ingress load. Keep
@@ -918,8 +942,8 @@ impl TransactionGossiper {
                 return;
             }
         };
-        let (targets, suppressed_targets) =
-            self.filter_targets_by_peer_recent_suppression(targets, &sent_hashes);
+        let (targets, suppressed_targets, replaying_suppressed_targets) =
+            self.filter_targets_or_replay_recent_suppressed(targets, &sent_hashes);
         if targets.is_empty() {
             self.defer_gossip_hashes(sent_hashes);
             self.record_drop_metric(
@@ -952,6 +976,7 @@ impl TransactionGossiper {
             size_bytes = encoded_len,
             targets = targets.len(),
             suppressed_targets,
+            replaying_suppressed_targets,
             %dataspace_id,
             "gossiping restricted transactions to online commit topology"
         );
@@ -965,7 +990,11 @@ impl TransactionGossiper {
             frame_bytes,
             fallback_used,
             fallback_surface,
-            reason,
+            if replaying_suppressed_targets {
+                Some(OUTCOME_PEER_RECENT_SUPPRESSION_REPLAY)
+            } else {
+                reason
+            },
         );
         self.remember_peer_recent_sends(&targets, &sent_hashes);
         self.defer_gossip_hashes(sent_hashes);
@@ -3832,7 +3861,11 @@ deferred_send_ttl: Duration::from_millis(defaults::network::DEFERRED_SEND_TTL_MS
             vec![peer.clone()],
             std::slice::from_ref(&tx_hash),
         );
-        assert!(targets.is_empty());
+        assert_eq!(
+            targets,
+            vec![peer.clone()],
+            "all-suppressed target sets must still be retried for liveness"
+        );
         assert_eq!(suppressed, 1);
 
         for _ in 0..GOSSIP_PEER_RECENT_SUPPRESSION_TTL_TICKS {
@@ -3870,6 +3903,26 @@ deferred_send_ttl: Duration::from_millis(defaults::network::DEFERRED_SEND_TTL_MS
         );
         assert_eq!(targets, vec![peer_a]);
         assert_eq!(suppressed, 1);
+    }
+
+    #[test]
+    fn peer_recent_suppression_replays_when_every_target_was_recently_sent() {
+        let resend_ticks = NonZeroU32::new(2).expect("nonzero resend ticks");
+        let mut gossiper = closed_test_gossiper(resend_ticks);
+        let peer_a: PeerId = (*ALICE_KEYPAIR).public_key().clone().into();
+        let peer_b: PeerId = (*BOB_KEYPAIR).public_key().clone().into();
+        let (signed, _) = build_transaction("peer-recent-replay");
+        let tx_hash = signed.hash();
+        let targets = vec![peer_a.clone(), peer_b.clone()];
+
+        gossiper.remember_peer_recent_sends(&targets, std::slice::from_ref(&tx_hash));
+
+        let (targets, suppressed, replayed) = gossiper
+            .filter_targets_or_replay_recent_suppressed(targets, std::slice::from_ref(&tx_hash));
+
+        assert_eq!(targets, vec![peer_a, peer_b]);
+        assert_eq!(suppressed, 2);
+        assert!(replayed);
     }
 
     #[test]

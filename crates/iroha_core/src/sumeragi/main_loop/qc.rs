@@ -238,6 +238,244 @@ pub(super) fn select_commit_root_signers_by_stake(
 }
 
 impl Actor {
+    pub(super) fn maybe_rebroadcast_near_quorum_new_view_votes(
+        &mut self,
+        block_hash: HashOf<BlockHeader>,
+        height: u64,
+        view: u64,
+        support: usize,
+        required: usize,
+        now: Instant,
+    ) -> usize {
+        if self.is_observer()
+            || height != self.committed_height_snapshot().saturating_add(1)
+            || support == 0
+            || support >= required
+        {
+            return 0;
+        }
+
+        let cooldown = self
+            .rebroadcast_cooldown()
+            .max(super::PACEMAKER_QUEUE_NUDGE_MIN_INTERVAL);
+        if !self
+            .new_view_rebroadcast_log
+            .allow(block_hash, height, view, now, cooldown)
+        {
+            return 0;
+        }
+
+        let targets = self.new_view_rebroadcast_targets(block_hash, height, view);
+        let rebroadcasted = self.rebroadcast_block_votes_to_targets_with_backpressure(
+            crate::sumeragi::consensus::Phase::NewView,
+            block_hash,
+            height,
+            view,
+            &targets,
+            true,
+            "near_quorum_new_view_rebroadcast",
+        );
+        if rebroadcasted == 0 {
+            return 0;
+        }
+
+        if let Some(next_deadline) = now.checked_add(super::PACEMAKER_QUEUE_NUDGE_MIN_INTERVAL)
+            && self.subsystems.propose.pacemaker.next_deadline > next_deadline
+        {
+            self.subsystems.propose.pacemaker.next_deadline = next_deadline;
+        }
+        info!(
+            height,
+            view,
+            block = %block_hash,
+            support,
+            required,
+            rebroadcasted,
+            targets = targets.len(),
+            "rebroadcasting partial NEW_VIEW votes to full view topology"
+        );
+        rebroadcasted
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    fn maybe_emit_late_new_view_vote_to_complete_near_quorum(
+        &mut self,
+        groups: &[(crate::sumeragi::consensus::QcRef, BTreeSet<ValidatorIndex>)],
+        block_hash: HashOf<BlockHeader>,
+        height: u64,
+        view: u64,
+        epoch: u64,
+        consensus_mode: ConsensusMode,
+        signature_topology: &super::network_topology::Topology,
+        emission_topology: &super::network_topology::Topology,
+        npos_stake_roster: Option<&[PeerId]>,
+        required: usize,
+        voting_len: usize,
+        chain_order_binding: (Hash, u64),
+    ) -> bool {
+        if height != self.committed_height_snapshot().saturating_add(1) {
+            return false;
+        }
+        if let Some(current_view) = self.phase_tracker.current_view(height)
+            && view > current_view
+        {
+            let future_window = self.config.gating.future_view_window;
+            if future_window > 0 && view > current_view.saturating_add(future_window) {
+                return false;
+            }
+        }
+        let local_same_slot_vote = self.local_same_slot_vote(
+            crate::sumeragi::consensus::Phase::NewView,
+            height,
+            view,
+            epoch,
+        );
+        let Some(local_idx) = self.local_validator_index_for_topology(signature_topology) else {
+            return false;
+        };
+        let mut selected: Option<(
+            crate::sumeragi::consensus::QcRef,
+            BTreeSet<ValidatorIndex>,
+            bool,
+        )> = None;
+        for (highest_qc, group) in groups {
+            if highest_qc.subject_block_hash != block_hash || group.contains(&local_idx) {
+                continue;
+            }
+            if let Some(existing) = local_same_slot_vote.as_ref()
+                && !Self::new_view_highest_qc_supersedes_same_slot_vote(
+                    existing,
+                    height,
+                    view,
+                    epoch,
+                    chain_order_binding,
+                    *highest_qc,
+                )
+            {
+                continue;
+            }
+            let mut with_local = group.clone();
+            with_local.insert(local_idx);
+            let completes = match consensus_mode {
+                ConsensusMode::Permissioned => {
+                    voting_signer_count(group, voting_len).saturating_add(1) >= required
+                        && voting_signer_count(&with_local, voting_len) >= required
+                }
+                ConsensusMode::Npos => {
+                    let Some(stake_roster) = npos_stake_roster else {
+                        return false;
+                    };
+                    let Ok(signer_peers) =
+                        signer_peers_for_topology(&with_local, signature_topology)
+                    else {
+                        continue;
+                    };
+                    let world = self.state.world_view();
+                    super::stake_snapshot::stake_quorum_reached_for_world(
+                        &world,
+                        stake_roster,
+                        &signer_peers,
+                    )
+                    .unwrap_or(false)
+                }
+            };
+            let frontier_catch_up = !completes
+                && self.should_emit_frontier_new_view_catch_up_vote(
+                    height,
+                    view,
+                    *highest_qc,
+                    group,
+                    local_idx,
+                );
+            if !completes && !frontier_catch_up {
+                continue;
+            }
+            let replace = selected
+                .as_ref()
+                .is_none_or(|(best_qc, best_group, best_completes)| {
+                    if completes != *best_completes {
+                        return completes;
+                    }
+                    super::new_view_highest_qc_rank(*highest_qc)
+                        > super::new_view_highest_qc_rank(*best_qc)
+                        || (super::new_view_highest_qc_rank(*highest_qc)
+                            == super::new_view_highest_qc_rank(*best_qc)
+                            && group.len() > best_group.len())
+                });
+            if replace {
+                selected = Some((*highest_qc, with_local, completes));
+            }
+        }
+        let Some((highest_qc, signers_with_local, completes)) = selected else {
+            return false;
+        };
+        let emitted = self.emit_new_view_vote_to_complete_near_quorum(
+            height,
+            view,
+            highest_qc,
+            emission_topology,
+            chain_order_binding,
+        );
+        if emitted && completes {
+            info!(
+                height,
+                view,
+                block = %block_hash,
+                signer = local_idx,
+                signers_after_local = signers_with_local.len(),
+                required,
+                highest_height = highest_qc.height,
+                highest_view = highest_qc.view,
+                highest_block = %highest_qc.subject_block_hash,
+                "emitted late NEW_VIEW vote to complete same-highest near quorum"
+            );
+        } else if emitted {
+            info!(
+                height,
+                view,
+                block = %block_hash,
+                signer = local_idx,
+                signers_after_local = signers_with_local.len(),
+                required,
+                highest_height = highest_qc.height,
+                highest_view = highest_qc.view,
+                highest_block = %highest_qc.subject_block_hash,
+                "emitted frontier catch-up NEW_VIEW vote for same-highest support"
+            );
+        }
+        emitted
+    }
+
+    pub(super) fn should_emit_frontier_new_view_catch_up_vote(
+        &self,
+        height: u64,
+        view: u64,
+        highest_qc: crate::sumeragi::consensus::QcRef,
+        group: &BTreeSet<ValidatorIndex>,
+        local_idx: ValidatorIndex,
+    ) -> bool {
+        if !self.config.resilience.enabled
+            || view == 0
+            || group.is_empty()
+            || group.contains(&local_idx)
+        {
+            return false;
+        }
+        let committed_height = self.committed_height_snapshot();
+        if height != committed_height.saturating_add(1)
+            || !self.highest_qc_is_canonical_committed_tip(highest_qc)
+        {
+            return false;
+        }
+        let Some(current_view) = self.phase_tracker.current_view(height) else {
+            return false;
+        };
+        if view > current_view.saturating_add(1) {
+            return false;
+        }
+        true
+    }
+
     pub(super) fn npos_stake_roster_for_qc(
         &self,
         canonical_topology: &super::network_topology::Topology,
@@ -271,6 +509,7 @@ impl Actor {
         qc: &crate::sumeragi::consensus::Qc,
         consensus_mode: ConsensusMode,
         mode_tag: &str,
+        stake_snapshot_hint: Option<&CommitStakeSnapshot>,
     ) -> Option<(
         super::network_topology::Topology,
         Option<CommitStakeSnapshot>,
@@ -318,9 +557,13 @@ impl Actor {
         let parsed_signers = qc_signer_indices(qc, roster_len, roster_len).ok()?;
         let stake_snapshot = match consensus_mode {
             ConsensusMode::Permissioned => None,
-            ConsensusMode::Npos => self
-                .roster_validation_cache
-                .stake_snapshot_for_roster(topology.as_ref()),
+            ConsensusMode::Npos => stake_snapshot_hint
+                .filter(|snapshot| snapshot.matches_roster(topology.as_ref()))
+                .cloned()
+                .or_else(|| {
+                    self.roster_validation_cache
+                        .stake_snapshot_for_roster(topology.as_ref())
+                }),
         };
         match consensus_mode {
             ConsensusMode::Permissioned => {
@@ -403,13 +646,14 @@ impl Actor {
         mode_tag: &str,
         prf_seed: Option<[u8; 32]>,
         aggregate_ok: Option<bool>,
+        stake_snapshot_hint: Option<&CommitStakeSnapshot>,
     ) -> Option<(
         super::network_topology::Topology,
         Option<CommitStakeSnapshot>,
         QcValidationOutcome,
     )> {
         let (topology, stake_snapshot) =
-            self.certified_embedded_qc_roster(qc, consensus_mode, mode_tag)?;
+            self.certified_embedded_qc_roster(qc, consensus_mode, mode_tag, stake_snapshot_hint)?;
 
         let (validation, evidence) = {
             let world = self.state.world_view();
@@ -487,6 +731,24 @@ impl Actor {
                 return None;
             }
             let signer_peer = self.vote_signer_peer(vote)?;
+            let certified_commit_supersedes = self
+                .certified_commit_hash_supersedes_same_height_vote_conflict(
+                    phase, block_hash, height, view, vote,
+                );
+            if certified_commit_supersedes {
+                info!(
+                    phase = ?phase,
+                    height,
+                    view,
+                    epoch,
+                    block = %block_hash,
+                    conflicting_view = vote.view,
+                    conflicting_block = %vote.block_hash,
+                    signer_peer = ?signer_peer,
+                    "allowing QC aggregation: committed hash supersedes raw same-height signer history"
+                );
+                return None;
+            }
             let new_view_qc_supersedes = highest_qc
                 .or_else(|| self.proposal_or_new_view_highest_qc_for_slot(height, view))
                 .is_some_and(|highest_qc| {
@@ -518,7 +780,7 @@ impl Actor {
         })
     }
 
-    fn try_recover_missing_block_from_local_rbc_session(
+    pub(super) fn try_recover_missing_block_from_local_rbc_session(
         &mut self,
         block_hash: HashOf<BlockHeader>,
         height: u64,
@@ -1006,7 +1268,7 @@ impl Actor {
         )
     }
 
-    fn note_frontier_commit_qc_observed(
+    pub(super) fn note_frontier_commit_qc_observed(
         &mut self,
         block_hash: HashOf<BlockHeader>,
         height: u64,
@@ -1074,6 +1336,7 @@ impl Actor {
             }
             return;
         }
+        self.note_authoritative_slot_owner(height, resolved_view, block_hash);
         let _ = self.handle_frontier_slot_event(
             now,
             super::FrontierSlotEvent::OnCommitQcObserved {
@@ -1275,6 +1538,9 @@ impl Actor {
             super::qc_signer_indices(qc, topology.as_ref().len(), topology.as_ref().len())
                 .map(|parsed| parsed.voting.into_iter().collect::<BTreeSet<_>>())
                 .unwrap_or_default();
+        if matches!(qc.phase, crate::sumeragi::consensus::Phase::Commit) {
+            return self.request_certified_block_for_qc(qc, &topology, &signer_set, reason) > 0;
+        }
         let mut targets = Self::build_fetch_targets(&signer_set, &topology);
         let mut stall_all_peers = false;
         let mut stall_window_index = 0_u64;
@@ -1364,6 +1630,84 @@ impl Actor {
             "forcing targeted missing-block fetch for deferred QC"
         );
         true
+    }
+
+    pub(super) fn request_certified_block_for_qc(
+        &mut self,
+        qc: &crate::sumeragi::consensus::Qc,
+        topology: &super::network_topology::Topology,
+        signers: &BTreeSet<ValidatorIndex>,
+        reason: &'static str,
+    ) -> usize {
+        self.request_certified_block_for_header(
+            Self::qc_to_header_ref(qc),
+            topology,
+            signers,
+            reason,
+        )
+    }
+
+    pub(super) fn request_certified_block_for_header(
+        &mut self,
+        certified: crate::sumeragi::consensus::QcHeaderRef,
+        topology: &super::network_topology::Topology,
+        signers: &BTreeSet<ValidatorIndex>,
+        reason: &'static str,
+    ) -> usize {
+        if !matches!(certified.phase, crate::sumeragi::consensus::Phase::Commit) {
+            return 0;
+        }
+        let mut targets = Self::build_fetch_targets(signers, topology);
+        targets.sort();
+        targets.dedup();
+        #[cfg(test)]
+        let logged_targets =
+            missing_block_request_targets_without_local(&self.common_config.peer.id, &targets);
+        let sent = send_certified_block_fetch_request(
+            &self.network,
+            &self.common_config.peer.id,
+            certified.subject_block_hash,
+            certified.height,
+            certified.view,
+            &targets,
+        );
+        if sent == 0 {
+            warn!(
+                height = certified.height,
+                view = certified.view,
+                block = %certified.subject_block_hash,
+                reason,
+                "unable to request certified block: no remote QC validator targets available"
+            );
+            return 0;
+        }
+        #[cfg(test)]
+        if self.background_request_log.is_some() {
+            let request = build_certified_block_fetch_request(
+                self.common_config.peer.id.clone(),
+                certified.subject_block_hash,
+                certified.height,
+                certified.view,
+            );
+            let msg = BlockMessageWire::new(BlockMessage::CertifiedBlockFetch(
+                super::message::CertifiedBlockFetch::Request(request),
+            ));
+            for peer in logged_targets {
+                self.record_background_request(&BackgroundRequest::Post {
+                    peer,
+                    msg: msg.clone(),
+                });
+            }
+        }
+        info!(
+            height = certified.height,
+            view = certified.view,
+            block = %certified.subject_block_hash,
+            targets = sent,
+            reason,
+            "requested certified block from QC validator set"
+        );
+        sent
     }
 
     pub(super) fn try_replay_deferred_qcs(&mut self) -> bool {
@@ -2732,13 +3076,33 @@ impl Actor {
                 Some(stats) => stats.clone(),
                 None => continue,
             };
+            let expected_epoch = self.epoch_for_height(stats_snapshot.height);
+            let certified_consensus_fetch = matches!(
+                (stats_snapshot.phase, stats_snapshot.priority),
+                (
+                    crate::sumeragi::consensus::Phase::Commit,
+                    super::MissingBlockPriority::Consensus
+                )
+            ) && (super::cached_qc_for(
+                &self.qc_cache,
+                crate::sumeragi::consensus::Phase::Commit,
+                block_hash,
+                stats_snapshot.height,
+                stats_snapshot.view,
+                expected_epoch,
+            )
+            .is_some()
+                || self
+                    .state
+                    .commit_roster_snapshot_for_block(stats_snapshot.height, block_hash)
+                    .is_some());
             let exact_frontier_slot_matches = self.frontier_slot.as_ref().is_some_and(|slot| {
                 slot.block_hash == block_hash
                     && slot.height == stats_snapshot.height
                     && slot.view == stats_snapshot.view
             }) && self
                 .frontier_slot_is_exact_height(stats_snapshot.height);
-            if exact_frontier_slot_matches {
+            if exact_frontier_slot_matches && !certified_consensus_fetch {
                 if self.frontier_recovery_exists_at_height(stats_snapshot.height) {
                     if self.frontier_recovery_owns_height_window(stats_snapshot.height, now) {
                         progress = true;
@@ -2841,7 +3205,6 @@ impl Actor {
                 progress = true;
                 continue;
             }
-            let expected_epoch = self.epoch_for_height(stats_snapshot.height);
             let mut signers = BTreeSet::new();
             let mut roster: Option<Vec<PeerId>> = None;
             if let Some(qc) = super::cached_qc_for(
@@ -2926,7 +3289,10 @@ impl Actor {
                 .filter(|roster| !roster.is_empty())
                 .map(super::network_topology::Topology::new);
 
-            if stats_snapshot.height == frontier_height && !exact_frontier_slot_matches {
+            if stats_snapshot.height == frontier_height
+                && !exact_frontier_slot_matches
+                && !certified_consensus_fetch
+            {
                 let routed = if let Some(topology) = topology.as_ref() {
                     self.handle_frontier_body_gap_with_topology(
                         block_hash,
@@ -2966,7 +3332,7 @@ impl Actor {
                     continue;
                 }
             }
-            if stats_snapshot.height == keep_through_height {
+            if stats_snapshot.height == keep_through_height && !certified_consensus_fetch {
                 self.next_slot_prefetch = Some(super::FrontierPrefetchSlot {
                     height: stats_snapshot.height,
                     view: stats_snapshot.view,
@@ -3129,30 +3495,76 @@ impl Actor {
                     targets,
                     target_kind,
                 } => {
-                    self.request_missing_block(
-                        block_hash,
-                        stats_snapshot.height,
-                        stats_snapshot.view,
-                        stats_snapshot.priority,
-                        &targets,
-                    );
-                    iroha_logger::info!(
-                        height = stats_snapshot.height,
-                        view = stats_snapshot.view,
-                        phase = ?stats_snapshot.phase,
-                        block = ?block_hash,
-                        targets = ?targets,
-                        target_kind = target_kind.label(),
-                        retry_window_ms = effective_retry_window_ms,
-                        base_retry_window_ms = retry_window_ms,
-                        far_ahead_retry,
-                        far_ahead_retry_suppressed,
-                        dwell_ms,
-                        since_last_ms,
-                        attempts,
-                        "retrying missing block fetch"
-                    );
-                    progress = true;
+                    if certified_consensus_fetch {
+                        let sent = send_certified_block_fetch_request(
+                            &self.network,
+                            &self.common_config.peer.id,
+                            block_hash,
+                            stats_snapshot.height,
+                            stats_snapshot.view,
+                            targets,
+                        );
+                        if sent > 0 {
+                            iroha_logger::info!(
+                                height = stats_snapshot.height,
+                                view = stats_snapshot.view,
+                                phase = ?stats_snapshot.phase,
+                                block = ?block_hash,
+                                targets = sent,
+                                target_kind = target_kind.label(),
+                                retry_window_ms = effective_retry_window_ms,
+                                base_retry_window_ms = retry_window_ms,
+                                far_ahead_retry,
+                                far_ahead_retry_suppressed,
+                                dwell_ms,
+                                since_last_ms,
+                                attempts,
+                                "retrying certified block fetch"
+                            );
+                            progress = true;
+                        } else {
+                            iroha_logger::warn!(
+                                height = stats_snapshot.height,
+                                view = stats_snapshot.view,
+                                phase = ?stats_snapshot.phase,
+                                block = ?block_hash,
+                                target_kind = target_kind.label(),
+                                retry_window_ms = effective_retry_window_ms,
+                                base_retry_window_ms = retry_window_ms,
+                                far_ahead_retry,
+                                far_ahead_retry_suppressed,
+                                dwell_ms,
+                                since_last_ms,
+                                attempts,
+                                "unable to retry certified block fetch: no remote targets available"
+                            );
+                        }
+                    } else {
+                        self.request_missing_block(
+                            block_hash,
+                            stats_snapshot.height,
+                            stats_snapshot.view,
+                            stats_snapshot.priority,
+                            targets,
+                        );
+                        iroha_logger::info!(
+                            height = stats_snapshot.height,
+                            view = stats_snapshot.view,
+                            phase = ?stats_snapshot.phase,
+                            block = ?block_hash,
+                            targets = ?targets,
+                            target_kind = target_kind.label(),
+                            retry_window_ms = effective_retry_window_ms,
+                            base_retry_window_ms = retry_window_ms,
+                            far_ahead_retry,
+                            far_ahead_retry_suppressed,
+                            dwell_ms,
+                            since_last_ms,
+                            attempts,
+                            "retrying missing block fetch"
+                        );
+                        progress = true;
+                    }
                 }
                 MissingBlockFetchDecision::NoTargets => {
                     iroha_logger::warn!(
@@ -4008,9 +4420,10 @@ impl Actor {
             let group_count = groups.len();
             let selected = match consensus_mode {
                 ConsensusMode::Permissioned => groups
-                    .into_iter()
+                    .iter()
                     .filter(|(_, group)| voting_signer_count(group, voting_len) >= required)
-                    .max_by_key(|(highest_qc, _)| super::new_view_highest_qc_rank(*highest_qc)),
+                    .max_by_key(|(highest_qc, _)| super::new_view_highest_qc_rank(*highest_qc))
+                    .map(|(highest_qc, group)| (*highest_qc, group.clone())),
                 ConsensusMode::Npos => {
                     let Some(stake_roster) = npos_stake_roster.as_deref() else {
                         warn!(
@@ -4023,7 +4436,7 @@ impl Actor {
                     };
                     let world = self.state.world_view();
                     groups
-                        .into_iter()
+                        .iter()
                         .filter_map(|(highest_qc, group)| {
                             let signer_peers =
                                 signer_peers_for_topology(&group, &signature_topology).ok()?;
@@ -4033,12 +4446,45 @@ impl Actor {
                                 &signer_peers,
                             )
                             .ok()?;
-                            quorum.then_some((highest_qc, group))
+                            quorum.then_some((*highest_qc, group.clone()))
                         })
                         .max_by_key(|(highest_qc, _)| super::new_view_highest_qc_rank(*highest_qc))
                 }
             };
             let Some((highest_qc, filtered_signers)) = selected else {
+                let largest_same_highest_group = groups
+                    .iter()
+                    .filter(|(highest_qc, _)| highest_qc.subject_block_hash == block_hash)
+                    .map(|(_, group)| voting_signer_count(group, voting_len))
+                    .max()
+                    .unwrap_or_default();
+                let late_local_vote_emitted = self
+                    .maybe_emit_late_new_view_vote_to_complete_near_quorum(
+                        &groups,
+                        block_hash,
+                        height,
+                        view,
+                        epoch,
+                        consensus_mode,
+                        &signature_topology,
+                        signature_topology_source,
+                        npos_stake_roster.as_deref(),
+                        required,
+                        voting_len,
+                        (chain_order_hash, rechain_seq),
+                    );
+                if late_local_vote_emitted {
+                    self.try_form_qc_from_votes(phase, block_hash, height, view, epoch, topology);
+                    return;
+                }
+                let near_quorum_rebroadcasted = self.maybe_rebroadcast_near_quorum_new_view_votes(
+                    block_hash,
+                    height,
+                    view,
+                    largest_same_highest_group,
+                    required,
+                    Instant::now(),
+                );
                 warn!(
                     height,
                     view,
@@ -4047,6 +4493,8 @@ impl Actor {
                     voting_signers = snapshot.voting_signers,
                     total_signers = snapshot.total_signers,
                     required,
+                    late_local_vote_emitted,
+                    near_quorum_rebroadcasted,
                     "skipping NEW_VIEW certificate: no single highest-QC vote group reached quorum"
                 );
                 return;
@@ -4451,6 +4899,37 @@ impl Actor {
             return true;
         }
 
+        if !block_known
+            && !quorum_met
+            && matches!(phase, crate::sumeragi::consensus::Phase::Commit)
+            && self
+                .cached_new_view_qc_highest_for_slot(height, view)
+                .is_some_and(|highest_qc| {
+                    self.cached_new_view_qc_extends_committed_frontier(
+                        height, view, view, highest_qc,
+                    )
+                })
+        {
+            let requested = self.request_missing_commit_vote_payload(
+                block_hash,
+                height,
+                view,
+                signers,
+                signature_topology,
+                false,
+                "commit_vote_after_new_view_qc",
+            );
+            debug!(
+                phase = ?phase,
+                height,
+                view,
+                block = %block_hash,
+                signers = signers.len(),
+                requested,
+                "checked missing commit-vote payload after cached NEW_VIEW QC"
+            );
+        }
+
         if !block_known && quorum_met {
             crate::sumeragi::status::inc_qc_quorum_without_qc();
             match consensus_mode {
@@ -4480,6 +4959,32 @@ impl Actor {
             }
 
             let now = Instant::now();
+            if matches!(phase, crate::sumeragi::consensus::Phase::Commit) {
+                let cooldown = self.rebroadcast_cooldown();
+                if self.block_sync_fetch_log.allow(block_hash, now, cooldown) {
+                    let certified = crate::sumeragi::consensus::QcHeaderRef {
+                        subject_block_hash: block_hash,
+                        height,
+                        view,
+                        epoch: self.epoch_for_height(height),
+                        phase,
+                    };
+                    let certified_fetch_targets = self.request_certified_block_for_header(
+                        certified,
+                        signature_topology,
+                        signers,
+                        "qc_missing_payload_quorum_certified_fetch",
+                    );
+                    debug!(
+                        height,
+                        view,
+                        phase = ?phase,
+                        block = %block_hash,
+                        targets = certified_fetch_targets,
+                        "paired missing commit payload quorum with certified block fetch"
+                    );
+                }
+            }
             let contiguous_frontier = height == self.committed_height_snapshot().saturating_add(1)
                 && height == self.active_consensus_round_height();
             if contiguous_frontier {
@@ -4522,13 +5027,14 @@ impl Actor {
                     exact_retry_emitted,
                     "routing vote-backed contiguous frontier payload miss through exact body repair"
                 );
+                let observed_commit_signers = signers.len().max(voting_signers).max(total_signers);
                 let quorum_saturated_commit_gap =
                     matches!(phase, crate::sumeragi::consensus::Phase::Commit)
-                        && exact_owner_routed
+                        && quorum_met
                         && signature_topology
                             .as_ref()
                             .len()
-                            .saturating_sub(signers.len())
+                            .saturating_sub(observed_commit_signers)
                             < 2;
                 if quorum_saturated_commit_gap {
                     let mut targets = rebroadcast_targets_for_qc(
@@ -4595,6 +5101,10 @@ impl Actor {
                         block = %block_hash,
                         topology_len = signature_topology.as_ref().len(),
                         signers = signers.len(),
+                        voting_signers,
+                        total_signers,
+                        observed_commit_signers,
+                        exact_owner_routed,
                         targets = targets.len(),
                         missing_block_requested,
                         "paired exact frontier body repair with quorum-saturated missing-block fetch"
@@ -5793,9 +6303,11 @@ impl Actor {
                 );
             }
             let should_update = same_height_realign
-                || self
+                || allow_nonextending
+                || (self
                     .locked_qc
-                    .is_none_or(|lock| (qc.height, qc.view) > (lock.height, lock.view));
+                    .is_none_or(|lock| (qc.height, qc.view) > (lock.height, lock.view))
+                    && self.block_known_for_lock(qc_ref.subject_block_hash));
             if should_update {
                 super::status::set_locked_qc(qc.height, qc.view, Some(qc.subject_block_hash));
                 self.locked_qc = Some(qc_ref);
@@ -5871,6 +6383,69 @@ impl Actor {
                 highest,
             );
         }
+        self.maybe_install_new_view_qc_at_frontier(qc, highest, signers.len(), topology);
+    }
+
+    fn maybe_install_new_view_qc_at_frontier(
+        &mut self,
+        qc: &crate::sumeragi::consensus::Qc,
+        highest: crate::sumeragi::consensus::QcHeaderRef,
+        support: usize,
+        topology: &super::network_topology::Topology,
+    ) -> bool {
+        let height = qc.height;
+        if height != self.committed_height_snapshot().saturating_add(1) {
+            return false;
+        }
+        let Some(local_view) = self.phase_tracker.current_view(height) else {
+            return false;
+        };
+        if qc.view <= local_view {
+            return false;
+        }
+        let future_window = self.config.gating.future_view_window;
+        if future_window > 0 && qc.view > local_view.saturating_add(future_window) {
+            debug!(
+                height,
+                view = qc.view,
+                local_view,
+                future_window,
+                "not installing NEW_VIEW QC beyond the configured future-view window"
+            );
+            return false;
+        }
+
+        let now = Instant::now();
+        self.phase_tracker.on_view_change(height, qc.view, now);
+        self.subsystems.propose.pacemaker.next_deadline = now;
+        let min_view = if future_window == 0 {
+            qc.view
+        } else {
+            qc.view.saturating_sub(future_window)
+        };
+        self.subsystems
+            .propose
+            .new_view_tracker
+            .drop_below_view(height, min_view);
+        self.prune_stale_view_state(height, qc.view);
+        super::status::set_view_change_index(qc.view);
+        if let Some(telemetry) = self.telemetry_handle() {
+            telemetry.set_view_changes(qc.view);
+            telemetry.inc_view_change_install();
+        }
+        super::status::inc_view_change_install();
+        info!(
+            height,
+            view = qc.view,
+            local_view,
+            support,
+            required = topology.min_votes_for_commit().max(1),
+            highest_height = highest.height,
+            highest_view = highest.view,
+            highest_block = %highest.subject_block_hash,
+            "installing NEW_VIEW QC at active frontier"
+        );
+        true
     }
 
     pub(super) fn rehydrate_pending_from_kura_for_qc(
@@ -5998,12 +6573,38 @@ impl Actor {
         self.handle_qc_with_aggregate_and_roster(qc, aggregate_ok, None)
     }
 
+    pub(super) fn handle_qc_with_stake_snapshot(
+        &mut self,
+        qc: crate::sumeragi::consensus::Qc,
+        stake_snapshot: Option<CommitStakeSnapshot>,
+    ) -> Result<()> {
+        self.handle_qc_with_aggregate_and_roster_and_stake(qc, None, None, stake_snapshot, true)
+    }
+
     #[allow(clippy::too_many_lines, clippy::unnecessary_wraps)]
     fn handle_qc_with_aggregate_and_roster(
         &mut self,
         qc: crate::sumeragi::consensus::Qc,
         aggregate_ok: Option<bool>,
         topology_override: Option<Vec<PeerId>>,
+    ) -> Result<()> {
+        self.handle_qc_with_aggregate_and_roster_and_stake(
+            qc,
+            aggregate_ok,
+            topology_override,
+            None,
+            false,
+        )
+    }
+
+    #[allow(clippy::too_many_lines, clippy::unnecessary_wraps)]
+    fn handle_qc_with_aggregate_and_roster_and_stake(
+        &mut self,
+        qc: crate::sumeragi::consensus::Qc,
+        aggregate_ok: Option<bool>,
+        topology_override: Option<Vec<PeerId>>,
+        stake_snapshot_hint: Option<CommitStakeSnapshot>,
+        force_inline_aggregate: bool,
     ) -> Result<()> {
         let mut aggregate_ok = aggregate_ok;
         // Prepare certificates are view-scoped; commit/new-view certificates can safely arrive
@@ -6036,11 +6637,6 @@ impl Actor {
             );
             return Ok(());
         }
-        self.hydrate_vnext_certificates_for_block_from_roster_sidecar(
-            qc.subject_block_hash,
-            qc.height,
-            qc.view,
-        );
         let (expected_chain_order_hash, expected_rechain_seq) =
             self.vnext_chain_order_binding_for_qc(&qc);
         if qc.chain_order_hash != expected_chain_order_hash
@@ -6213,6 +6809,7 @@ impl Actor {
         }
         if aggregate_ok.is_none()
             && topology_len > QC_VERIFY_INLINE_ROSTER_MAX
+            && !force_inline_aggregate
             && !self.subsystems.qc_verify.work_txs.is_empty()
         {
             if let Some(inputs) = super::qc_aggregate_inputs(
@@ -6329,7 +6926,11 @@ impl Actor {
             let world = self.state.world_view();
             let stake_snapshot = match consensus_mode {
                 ConsensusMode::Permissioned => None,
-                ConsensusMode::Npos => CommitStakeSnapshot::from_roster(&world, topology.as_ref()),
+                ConsensusMode::Npos => stake_snapshot_hint
+                    .as_ref()
+                    .filter(|snapshot| snapshot.matches_roster(topology.as_ref()))
+                    .cloned()
+                    .or_else(|| CommitStakeSnapshot::from_roster(&world, topology.as_ref())),
             };
             let (validation, evidence) = validate_qc_with_evidence(
                 &self.vote_log,
@@ -6366,6 +6967,7 @@ impl Actor {
                             mode_tag,
                             prf_seed,
                             aggregate_ok,
+                            stake_snapshot_hint.as_ref(),
                         )
                     {
                         topology = fallback_topology;
@@ -6410,6 +7012,8 @@ impl Actor {
                 ) {
                     outcome
                 } else {
+                    let repair_started =
+                        self.maybe_repair_rejected_frontier_commit_qc(&qc, &topology, &err);
                     record_qc_validation_error(self.telemetry_handle(), &err);
                     if let Some(evidence) = evidence {
                         let _ = self.handle_evidence(evidence);
@@ -6420,6 +7024,7 @@ impl Actor {
                         view = qc.view,
                         phase = ?qc.phase,
                         block = %qc.subject_block_hash,
+                        repair_started,
                         "rejecting QC without valid signatures"
                     );
                     let handling_reason = match err {
@@ -6625,6 +7230,11 @@ impl Actor {
                         topology.as_ref(),
                         "new_view_qc",
                     );
+                    let _ = self.request_missing_commit_vote_payloads_after_new_view_qc(
+                        &qc,
+                        topology.as_ref(),
+                        "new_view_qc",
+                    );
                 }
                 return Ok(());
             }
@@ -6724,13 +7334,6 @@ impl Actor {
                 return Ok(());
             }
             self.defer_qc_for_missing_payload(&qc, "payload_missing");
-            info!(
-                height = qc.height,
-                view = qc.view,
-                phase = ?qc.phase,
-                hash = %qc.subject_block_hash,
-                "received QC for unknown block; caching without updating locks/highest"
-            );
             let signer_set: BTreeSet<_> = signer_indices.iter().copied().collect();
             if same_height_frontier_commit_qc {
                 // Already recorded before the non-actionable dependency gate so certified
@@ -6752,124 +7355,126 @@ impl Actor {
                     },
                 );
             }
-            let view_change_window = self.quorum_timeout(self.runtime_da_enabled());
-            let base_retry_window = self.rebroadcast_cooldown();
-            let aggressive_qc_fetch = matches!(qc.phase, crate::sumeragi::consensus::Phase::Commit);
-            let existing_attempts = self
-                .pending
-                .missing_block_requests
-                .get(&qc.subject_block_hash)
-                .map_or(0, |stats| stats.attempts);
-            let aggressive_retry_floor = aggressive_qc_fetch && existing_attempts == 0;
-            let retry_window = if aggressive_retry_floor {
-                crate::sumeragi::status::inc_qc_missing_payload_aggressive_fetch();
-                super::REBROADCAST_COOLDOWN_FLOOR
+            if matches!(qc.phase, crate::sumeragi::consensus::Phase::Commit) {
+                info!(
+                    height = qc.height,
+                    view = qc.view,
+                    phase = ?qc.phase,
+                    hash = %qc.subject_block_hash,
+                    "received commit QC for unknown block; accepting certified state and requesting exact certified block"
+                );
+                let targets_len = self.request_certified_block_for_qc(
+                    &qc,
+                    &topology,
+                    &signer_set,
+                    "commit_qc_missing_payload",
+                );
+                super::status::record_missing_block_fetch(targets_len, 0);
             } else {
-                self.missing_block_retry_window_with_rbc_progress(
+                info!(
+                    height = qc.height,
+                    view = qc.view,
+                    phase = ?qc.phase,
+                    hash = %qc.subject_block_hash,
+                    "received QC for unknown block; caching without updating locks/highest"
+                );
+                let view_change_window = self.quorum_timeout(self.runtime_da_enabled());
+                let base_retry_window = self.rebroadcast_cooldown();
+                let retry_window = self.missing_block_retry_window_with_rbc_progress(
                     qc.subject_block_hash,
                     qc.height,
                     qc.view,
                     base_retry_window,
-                )
-            };
-            if let Some(stats) = self
-                .pending
-                .missing_block_requests
-                .get_mut(&qc.subject_block_hash)
-            {
-                if aggressive_retry_floor && stats.attempts == 0 {
-                    if stats.retry_window == Duration::ZERO || retry_window < stats.retry_window {
-                        stats.retry_window = retry_window;
-                    }
-                } else if retry_window > stats.retry_window {
+                );
+                if let Some(stats) = self
+                    .pending
+                    .missing_block_requests
+                    .get_mut(&qc.subject_block_hash)
+                    && retry_window > stats.retry_window
+                {
                     stats.retry_window = retry_window;
                 }
+                let signer_fallback_attempts = self.recovery_signer_fallback_attempts();
+                let decision = plan_missing_block_fetch_with_mode(
+                    &mut self.pending.missing_block_requests,
+                    qc.subject_block_hash,
+                    qc.height,
+                    qc.view,
+                    qc.phase,
+                    super::MissingBlockPriority::Consensus,
+                    &signer_set,
+                    &topology,
+                    now,
+                    retry_window,
+                    Some(view_change_window),
+                    signer_fallback_attempts,
+                    super::MissingBlockFetchMode::Default,
+                    false,
+                );
+                let dwell = self
+                    .pending
+                    .missing_block_requests
+                    .get(&qc.subject_block_hash)
+                    .map(|stats| now.saturating_duration_since(stats.first_seen))
+                    .unwrap_or_default();
+                let dwell_ms = dwell.as_millis();
+                let targets_len = match &decision {
+                    MissingBlockFetchDecision::Requested { targets, .. } => targets.len(),
+                    _ => 0,
+                };
+                let dwell_ms_u64 = dwell_ms.try_into().unwrap_or(u64::MAX);
+                self.note_missing_block_fetch_metrics(&decision, retry_window, targets_len, dwell);
+                match decision {
+                    MissingBlockFetchDecision::Requested {
+                        targets,
+                        target_kind,
+                    } => {
+                        self.request_missing_block(
+                            qc.subject_block_hash,
+                            qc.height,
+                            qc.view,
+                            super::MissingBlockPriority::Consensus,
+                            &targets,
+                        );
+                        iroha_logger::info!(
+                            height = qc.height,
+                            view = qc.view,
+                            phase = ?qc.phase,
+                            block = ?qc.subject_block_hash,
+                            targets = ?targets,
+                            target_kind = target_kind.label(),
+                            retry_window_ms = retry_window.as_millis(),
+                            dwell_ms,
+                            "requested missing block payload after QC arrival"
+                        );
+                    }
+                    MissingBlockFetchDecision::NoTargets => {
+                        iroha_logger::warn!(
+                            height = qc.height,
+                            view = qc.view,
+                            phase = ?qc.phase,
+                            block = ?qc.subject_block_hash,
+                            retry_window_ms = retry_window.as_millis(),
+                            dwell_ms,
+                            targets = targets_len,
+                            "unable to request missing block payload: no peers available"
+                        );
+                    }
+                    MissingBlockFetchDecision::Backoff => {
+                        iroha_logger::info!(
+                            height = qc.height,
+                            view = qc.view,
+                            phase = ?qc.phase,
+                            block = ?qc.subject_block_hash,
+                            retry_window_ms = retry_window.as_millis(),
+                            dwell_ms,
+                            targets = targets_len,
+                            "skipping missing-block fetch during retry backoff window"
+                        );
+                    }
+                }
+                super::status::record_missing_block_fetch(targets_len, dwell_ms_u64);
             }
-            let fetch_mode = if aggressive_qc_fetch {
-                super::MissingBlockFetchMode::AggressiveTopology
-            } else {
-                super::MissingBlockFetchMode::Default
-            };
-            let signer_fallback_attempts = self.recovery_signer_fallback_attempts();
-            let decision = plan_missing_block_fetch_with_mode(
-                &mut self.pending.missing_block_requests,
-                qc.subject_block_hash,
-                qc.height,
-                qc.view,
-                qc.phase,
-                super::MissingBlockPriority::Consensus,
-                &signer_set,
-                &topology,
-                now,
-                retry_window,
-                Some(view_change_window),
-                signer_fallback_attempts,
-                fetch_mode,
-                false,
-            );
-            let dwell = self
-                .pending
-                .missing_block_requests
-                .get(&qc.subject_block_hash)
-                .map(|stats| now.saturating_duration_since(stats.first_seen))
-                .unwrap_or_default();
-            let dwell_ms = dwell.as_millis();
-            let targets_len = match &decision {
-                MissingBlockFetchDecision::Requested { targets, .. } => targets.len(),
-                _ => 0,
-            };
-            let dwell_ms_u64 = dwell_ms.try_into().unwrap_or(u64::MAX);
-            self.note_missing_block_fetch_metrics(&decision, retry_window, targets_len, dwell);
-            match decision {
-                MissingBlockFetchDecision::Requested {
-                    targets,
-                    target_kind,
-                } => {
-                    self.request_missing_block(
-                        qc.subject_block_hash,
-                        qc.height,
-                        qc.view,
-                        super::MissingBlockPriority::Consensus,
-                        &targets,
-                    );
-                    iroha_logger::info!(
-                        height = qc.height,
-                        view = qc.view,
-                        phase = ?qc.phase,
-                        block = ?qc.subject_block_hash,
-                        targets = ?targets,
-                        target_kind = target_kind.label(),
-                        retry_window_ms = retry_window.as_millis(),
-                        dwell_ms,
-                        "requested missing block payload after QC arrival"
-                    );
-                }
-                MissingBlockFetchDecision::NoTargets => {
-                    iroha_logger::warn!(
-                        height = qc.height,
-                        view = qc.view,
-                        phase = ?qc.phase,
-                        block = ?qc.subject_block_hash,
-                        retry_window_ms = retry_window.as_millis(),
-                        dwell_ms,
-                        targets = targets_len,
-                        "unable to request missing block payload: no peers available"
-                    );
-                }
-                MissingBlockFetchDecision::Backoff => {
-                    iroha_logger::info!(
-                        height = qc.height,
-                        view = qc.view,
-                        phase = ?qc.phase,
-                        block = ?qc.subject_block_hash,
-                        retry_window_ms = retry_window.as_millis(),
-                        dwell_ms,
-                        targets = targets_len,
-                        "skipping missing-block fetch during retry backoff window"
-                    );
-                }
-            }
-            super::status::record_missing_block_fetch(targets_len, dwell_ms_u64);
         } else if !block_known_for_lock {
             info!(
                 height = qc.height,
@@ -6886,7 +7491,7 @@ impl Actor {
                 true
             }
             crate::sumeragi::consensus::Phase::Commit => {
-                self.process_precommit_qc(&qc, block_known_for_lock, false)
+                self.process_precommit_qc(&qc, true, false)
             }
             crate::sumeragi::consensus::Phase::NewView => {
                 self.process_new_view_qc(&qc, &signer_indices, &topology);
@@ -6944,6 +7549,11 @@ impl Actor {
         if matches!(qc.phase, crate::sumeragi::consensus::Phase::NewView) {
             let _ = self.replay_deferred_votes_for_slot(qc.height, qc.view, "new_view_qc");
             let _ = self.maybe_retry_local_commit_votes_after_new_view_qc(
+                &qc,
+                topology.as_ref(),
+                "new_view_qc",
+            );
+            let _ = self.request_missing_commit_vote_payloads_after_new_view_qc(
                 &qc,
                 topology.as_ref(),
                 "new_view_qc",
@@ -7027,6 +7637,88 @@ impl Actor {
             None,
         );
         Ok(())
+    }
+
+    fn maybe_repair_rejected_frontier_commit_qc(
+        &mut self,
+        qc: &crate::sumeragi::consensus::Qc,
+        topology: &super::network_topology::Topology,
+        err: &QcValidationError,
+    ) -> bool {
+        if !matches!(qc.phase, crate::sumeragi::consensus::Phase::Commit)
+            || qc.height != self.committed_height_snapshot().saturating_add(1)
+            || !matches!(
+                err,
+                QcValidationError::AggregateMismatch
+                    | QcValidationError::MissingVotes { .. }
+                    | QcValidationError::InsufficientSigners { .. }
+                    | QcValidationError::StakeSnapshotUnavailable
+                    | QcValidationError::StakeQuorumMissing
+            )
+        {
+            return false;
+        }
+        let local_round_known = self
+            .local_signed_block_for_hash(qc.subject_block_hash)
+            .is_some_and(|block| {
+                let header = block.header();
+                header.height().get() == qc.height && header.view_change_index() == qc.view
+            });
+        if !local_round_known {
+            return false;
+        }
+
+        self.try_form_qc_from_votes(
+            crate::sumeragi::consensus::Phase::Commit,
+            qc.subject_block_hash,
+            qc.height,
+            qc.view,
+            qc.epoch,
+            topology,
+        );
+        if self
+            .cached_commit_qc_for_block(qc.subject_block_hash, qc.height, qc.view)
+            .is_some()
+        {
+            self.request_commit_pipeline_for_pending(
+                qc.subject_block_hash,
+                super::status::RoundEventCauseTrace::VoteReceived,
+                None,
+            );
+            info!(
+                height = qc.height,
+                view = qc.view,
+                block = %qc.subject_block_hash,
+                ?err,
+                "formed local commit QC while rejecting invalid incoming commit QC"
+            );
+            return true;
+        }
+
+        let targets = self.known_block_commit_qc_recovery_targets(
+            qc.subject_block_hash,
+            qc.height,
+            qc.view,
+            topology.as_ref(),
+        );
+        let requested = self.maybe_request_known_block_commit_qc_recovery(
+            qc.subject_block_hash,
+            qc.height,
+            qc.view,
+            &targets,
+            None,
+            "rejected_frontier_commit_qc",
+        );
+        if requested {
+            info!(
+                height = qc.height,
+                view = qc.view,
+                block = %qc.subject_block_hash,
+                ?err,
+                "armed known-block commit-QC recovery while rejecting invalid incoming commit QC"
+            );
+        }
+        requested
     }
 
     pub(super) fn recover_qc_from_aggregate(

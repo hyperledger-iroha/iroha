@@ -552,6 +552,7 @@ impl FrontierSlot {
                         actions.fetch_block_body_urgent = true;
                     } else {
                         self.phase = FrontierSlotPhase::AwaitCommitQc;
+                        actions.request_commit_pipeline_for = Some(block_hash);
                     }
                     if fresh_vote_observation {
                         self.quorum_progress.last_vote_at = Some(now);

@@ -178,7 +178,7 @@ fn guard_pop_quorum(filtered: Vec<PeerId>, baseline: &[PeerId], pops_len: usize)
     }
     let baseline_len = baseline.len();
     let needed = if baseline_len > 3 {
-        ((baseline_len.saturating_sub(1)) / 3) * 2 + 1
+        baseline_len.saturating_mul(2) / 3 + 1
     } else {
         baseline_len
     };

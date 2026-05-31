@@ -129,7 +129,7 @@ pub trait Visit {
     fn visit_rwa_instruction_box(&mut self, operation: &RwaInstructionBox) {
         visit_rwa_instruction_box(self, operation);
     }
-    /// Visit a grouped DeFi instruction.
+    /// Visit a grouped `DeFi` instruction.
     fn visit_defi_instruction_box(&mut self, operation: &DeFiInstructionBox) {
         visit_defi_instruction_box(self, operation);
     }

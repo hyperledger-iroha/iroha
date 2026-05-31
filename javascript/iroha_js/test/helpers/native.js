@@ -1,6 +1,12 @@
 import { getNativeBinding } from "../../src/native.js";
 
-const binding = getNativeBinding();
+let binding = null;
+let bindingError = null;
+try {
+  binding = getNativeBinding();
+} catch (error) {
+  bindingError = error;
+}
 
 const NORITO_REQUIRED_METHODS = Object.freeze([
   "noritoEncodeInstruction",
@@ -17,6 +23,7 @@ const SM2_REQUIRED_METHODS = Object.freeze([
 ]);
 
 export const nativeBinding = binding;
+export const nativeBindingError = bindingError;
 export const hasNativeBinding = binding !== null;
 export const noritoRequiredMethods = NORITO_REQUIRED_METHODS;
 export const sm2RequiredMethods = SM2_REQUIRED_METHODS;

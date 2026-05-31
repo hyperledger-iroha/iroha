@@ -4,7 +4,7 @@ import base64
 import json
 import sys
 from pathlib import Path
-from typing import Any, Dict, List, Optional, Union
+from typing import Any, Dict, List, Mapping, Optional, Union
 from urllib.parse import quote
 
 import pytest
@@ -38,6 +38,106 @@ from iroha_torii_client.mock import ToriiMockServer  # noqa: E402
 CANONICAL_OWNER = "sorauﾛ1NcMBm2dﾌBokヱDﾑﾅekAbｶﾍﾜﾇﾐMFｽヱﾋZﾘ2u4WGUMMS63EY6"
 CANONICAL_ASSET_ID = "62Fk4FPcMuLvW5QjDGNF2a4jAmjM"
 CANONICAL_ASSET_DEFINITION_ID = "7EAD8EFYUx1aVKZPUU1fyKvr8dF1"
+SCCP_TEST_MESSAGE_ID = "11" * 32
+SCCP_TEST_COMMITMENT_ROOT = "33" * 32
+SCCP_TEST_MESSAGE_BUNDLE = {
+    "version": 1,
+    "commitment_root": SCCP_TEST_COMMITMENT_ROOT,
+    "commitment": {
+        "version": 1,
+        "kind": "Transfer",
+        "target_domain": 5,
+        "message_id": SCCP_TEST_MESSAGE_ID,
+        "payload_hash": "22" * 32,
+    },
+}
+SCCP_TEST_EVM_NETWORK_ID = "aa" * 32
+SCCP_TEST_EVM_VERIFIER_ADDRESS = "bb" * 20
+SCCP_TEST_EVM_BRIDGE_ADDRESS = "cc" * 20
+SCCP_TEST_EVM_VERIFIER_CODE_HASH = "dd" * 32
+SCCP_TEST_EVM_VERIFIER_KEY_HASH = "ee" * 32
+SCCP_TEST_TRON_NETWORK_ID = "71" * 32
+SCCP_TEST_TRON_VERIFIER_ADDRESS = "TJRabPrwbZy45sbavfcjinPJC18kjpRTv8"
+SCCP_TEST_TRON_VERIFIER_CODE_HASH = "72" * 32
+SCCP_TEST_TRON_VERIFIER_KEY_HASH = "73" * 32
+
+
+def _sample_sccp_evm_destination_binding_hash(
+    network_id: str = SCCP_TEST_EVM_NETWORK_ID,
+    verifier_address: str = SCCP_TEST_EVM_VERIFIER_ADDRESS,
+    bridge_address: str = SCCP_TEST_EVM_BRIDGE_ADDRESS,
+    verifier_code_hash: str = SCCP_TEST_EVM_VERIFIER_CODE_HASH,
+    verifier_key_hash: str = SCCP_TEST_EVM_VERIFIER_KEY_HASH,
+) -> str:
+    from iroha_torii_client.sccp import evm_sccp_destination_binding_hash
+
+    return evm_sccp_destination_binding_hash(
+        {
+            "network_id_hex": f"0x{network_id}",
+            "verifier_address_hex": f"0x{verifier_address}",
+            "bridge_address_hex": f"0x{bridge_address}",
+            "verifier_code_hash_hex": f"0x{verifier_code_hash}",
+            "verifier_key_hash_hex": f"0x{verifier_key_hash}",
+        }
+    ).removeprefix("0x")
+
+
+def _sample_sccp_tron_destination_binding_hash() -> str:
+    from iroha_torii_client.sccp import tron_sccp_destination_binding_hash
+
+    return tron_sccp_destination_binding_hash(
+        {
+            "network_id_hex": f"0x{SCCP_TEST_TRON_NETWORK_ID}",
+            "verifier_address": SCCP_TEST_TRON_VERIFIER_ADDRESS,
+            "verifier_code_hash_hex": f"0x{SCCP_TEST_TRON_VERIFIER_CODE_HASH}",
+            "verifier_key_hash_hex": f"0x{SCCP_TEST_TRON_VERIFIER_KEY_HASH}",
+        }
+    ).removeprefix("0x")
+
+
+def _abi_word(value: int) -> bytes:
+    return value.to_bytes(32, "big")
+
+
+SCCP_TEST_BN254_G2_GENERATOR_WORDS = (
+    _abi_word(
+        int("1800deef121f1e76426a00665e5c4479674322d4f75edadd46debd5cd992f6ed", 16)
+    ),
+    _abi_word(
+        int("198e9393920d483a7260bfb731fb5d25f1aa493335a9e71297e485b7aef312c2", 16)
+    ),
+    _abi_word(
+        int("12c85ea5db8c6deb4aab71808dcb408fe3d1e7690c43d37b4ce6cc0166fa7daa", 16)
+    ),
+    _abi_word(
+        int("090689d0585ff075ec9e99ad690c3395bc4b313370b38ef355acdadcd122975b", 16)
+    ),
+)
+
+
+def _sample_sccp_groth16_proof_bytes(
+    *,
+    message_id: str = SCCP_TEST_MESSAGE_ID,
+    source_domain: int = 0,
+    commitment_root: str = SCCP_TEST_COMMITMENT_ROOT,
+) -> bytes:
+    return b"".join(
+        (
+            _abi_word(1),
+            bytes.fromhex(message_id),
+            _abi_word(source_domain),
+            bytes.fromhex(commitment_root),
+            _abi_word(1),
+            _abi_word(2),
+            *SCCP_TEST_BN254_G2_GENERATOR_WORDS,
+            _abi_word(1),
+            _abi_word(2),
+        )
+    )
+
+
+SCCP_TEST_GROTH16_PROOF_BYTES = _sample_sccp_groth16_proof_bytes()
+SCCP_TEST_GROTH16_PROOF_HEX = SCCP_TEST_GROTH16_PROOF_BYTES.hex()
 
 
 def test_i105_decoder_rejects_out_of_range_numeric_discriminants() -> None:
@@ -1620,7 +1720,17 @@ def test_get_sccp_message_proof_artifact_parses_typed_snapshot() -> None:
     )
     client = ToriiClient("http://node.test", session=session)
 
-    artifact = client.get_sccp_message_proof_artifact(f"0x{message_id}")
+    binding_hash = _sample_sccp_evm_destination_binding_hash()
+    artifact = client.get_sccp_message_proof_artifact(
+        f"0x{message_id}",
+        network_id_hex="0x" + SCCP_TEST_EVM_NETWORK_ID,
+        verifier_address_hex="0x" + SCCP_TEST_EVM_VERIFIER_ADDRESS,
+        bridge_address_hex="0x" + SCCP_TEST_EVM_BRIDGE_ADDRESS,
+        verifier_code_hash_hex="0x" + SCCP_TEST_EVM_VERIFIER_CODE_HASH,
+        verifier_key_hash_hex="0x" + SCCP_TEST_EVM_VERIFIER_KEY_HASH,
+        expected_destination_binding_hash_hex="0x" + binding_hash,
+        proof_bytes_hex=SCCP_TEST_GROTH16_PROOF_BYTES,
+    )
 
     assert artifact.counterparty_domain == 4
     assert artifact.finality_model == "TonMasterchain"
@@ -1630,6 +1740,849 @@ def test_get_sccp_message_proof_artifact_parses_typed_snapshot() -> None:
     assert artifact.bundle.payload.kind == "Transfer"
     assert artifact.bundle.payload.value["amount"] == "77"
     assert session.calls[0]["url"] == f"http://node.test/v1/sccp/artifacts/message/{message_id}"
+    assert session.calls[0]["params"] == {
+        "network_id_hex": SCCP_TEST_EVM_NETWORK_ID,
+        "verifier_address_hex": SCCP_TEST_EVM_VERIFIER_ADDRESS,
+        "bridge_address_hex": SCCP_TEST_EVM_BRIDGE_ADDRESS,
+        "verifier_code_hash_hex": SCCP_TEST_EVM_VERIFIER_CODE_HASH,
+        "verifier_key_hash_hex": SCCP_TEST_EVM_VERIFIER_KEY_HASH,
+        "expected_destination_binding_hash_hex": binding_hash,
+        "proof_bytes_hex": SCCP_TEST_GROTH16_PROOF_HEX,
+    }
+
+
+def test_get_sccp_message_proof_artifact_rejects_proof_message_id_mismatch() -> None:
+    session = RecordingSession()
+    client = ToriiClient("http://node.test", session=session)
+
+    with pytest.raises(RuntimeError, match=r"proof_bytes_hex\.message_id must match message_id"):
+        client.get_sccp_message_proof_artifact(
+            "11" * 32,
+            network_id_hex="0x" + "71" * 32,
+            verifier_code_hash_hex="0x" + "72" * 32,
+            verifier_key_hash_hex="0x" + "73" * 32,
+            expected_destination_binding_hash_hex="0x" + "74" * 32,
+            tron_verifier_address="TJRabPrwbZy45sbavfcjinPJC18kjpRTv8",
+            proof_bytes_hex=_sample_sccp_groth16_proof_bytes(message_id="22" * 32),
+        )
+
+    assert session.calls == []
+
+
+def test_sccp_destination_params_include_tron_proof_material() -> None:
+    binding_hash = _sample_sccp_tron_destination_binding_hash()
+    params = ToriiClient._normalize_sccp_evm_destination_params(
+        network_id_hex=bytes.fromhex(SCCP_TEST_TRON_NETWORK_ID),
+        verifier_address_hex=None,
+        bridge_address_hex=None,
+        verifier_code_hash_hex=f"0x{SCCP_TEST_TRON_VERIFIER_CODE_HASH}",
+        verifier_key_hash_hex=f"0x{SCCP_TEST_TRON_VERIFIER_KEY_HASH}",
+        expected_destination_binding_hash_hex=f"0x{binding_hash}",
+        tron_verifier_address=SCCP_TEST_TRON_VERIFIER_ADDRESS,
+        proof_bytes_hex=SCCP_TEST_GROTH16_PROOF_BYTES,
+        context="sccp message proof artifact",
+    )
+
+    assert params == {
+        "network_id_hex": SCCP_TEST_TRON_NETWORK_ID,
+        "verifier_code_hash_hex": SCCP_TEST_TRON_VERIFIER_CODE_HASH,
+        "verifier_key_hash_hex": SCCP_TEST_TRON_VERIFIER_KEY_HASH,
+        "expected_destination_binding_hash_hex": binding_hash,
+        "tron_verifier_address": SCCP_TEST_TRON_VERIFIER_ADDRESS,
+        "proof_bytes_hex": SCCP_TEST_GROTH16_PROOF_HEX,
+    }
+
+
+def test_sccp_destination_params_reject_tron_binding_hash_mismatch() -> None:
+    with pytest.raises(RuntimeError, match="canonical TRON destination binding"):
+        ToriiClient._normalize_sccp_evm_destination_params(
+            network_id_hex=f"0x{SCCP_TEST_TRON_NETWORK_ID}",
+            verifier_address_hex=None,
+            bridge_address_hex=None,
+            verifier_code_hash_hex=f"0x{SCCP_TEST_TRON_VERIFIER_CODE_HASH}",
+            verifier_key_hash_hex=f"0x{SCCP_TEST_TRON_VERIFIER_KEY_HASH}",
+            expected_destination_binding_hash_hex="0x" + "74" * 32,
+            tron_verifier_address=SCCP_TEST_TRON_VERIFIER_ADDRESS,
+            proof_bytes_hex=SCCP_TEST_GROTH16_PROOF_BYTES,
+            context="sccp message proof artifact",
+        )
+
+
+def test_sccp_destination_params_reject_evm_binding_hash_mismatch() -> None:
+    with pytest.raises(RuntimeError, match="canonical EVM destination binding"):
+        ToriiClient._normalize_sccp_evm_destination_params(
+            network_id_hex=f"0x{SCCP_TEST_EVM_NETWORK_ID}",
+            verifier_address_hex=f"0x{SCCP_TEST_EVM_VERIFIER_ADDRESS}",
+            bridge_address_hex=f"0x{SCCP_TEST_EVM_BRIDGE_ADDRESS}",
+            verifier_code_hash_hex=f"0x{SCCP_TEST_EVM_VERIFIER_CODE_HASH}",
+            verifier_key_hash_hex=f"0x{SCCP_TEST_EVM_VERIFIER_KEY_HASH}",
+            expected_destination_binding_hash_hex="0x" + "74" * 32,
+            tron_verifier_address=None,
+            proof_bytes_hex=SCCP_TEST_GROTH16_PROOF_BYTES,
+            context="sccp message proof artifact",
+        )
+
+
+@pytest.mark.parametrize(
+    "tron_verifier_address",
+    [
+        " TJRabPrwbZy45sbavfcjinPJC18kjpRTv8 ",
+        "TJRabPrwbZy45sbavfcjinPJC18kjpRTv9",
+        "not-base58",
+        "T9yD14Nj9j7xAB4dbGeiX9h8unkKHxuWwb",
+    ],
+)
+def test_sccp_destination_params_reject_invalid_tron_verifier_address(
+    tron_verifier_address: str,
+) -> None:
+    with pytest.raises(RuntimeError, match="tron_verifier_address"):
+        ToriiClient._normalize_sccp_evm_destination_params(
+            network_id_hex=None,
+            verifier_address_hex=None,
+            bridge_address_hex=None,
+            verifier_code_hash_hex=None,
+            verifier_key_hash_hex=None,
+            expected_destination_binding_hash_hex=None,
+            tron_verifier_address=tron_verifier_address,
+            proof_bytes_hex=SCCP_TEST_GROTH16_PROOF_BYTES,
+            context="sccp message proof job",
+        )
+
+
+def test_sccp_normalized_codec_value_normalizes_tron_payload() -> None:
+    expected_payload = "4174472e7d35395a6b5add427eecb7f4b62ad2b071"
+
+    from_address = ToriiClient._parse_sccp_normalized_codec_value(
+        {"TronBase58Check": {"payload": "TLa2f6VPqDgRE67v1736s7bJ8Ray5wYjU7"}},
+        context="codec",
+    )
+    from_hex = ToriiClient._parse_sccp_normalized_codec_value(
+        {"TronBase58Check": {"payload": f"0x{expected_payload}"}},
+        context="codec",
+    )
+
+    assert from_address.kind == "TronBase58Check"
+    assert from_address.value == expected_payload
+    assert from_hex.kind == "TronBase58Check"
+    assert from_hex.value == expected_payload
+
+
+@pytest.mark.parametrize(
+    "payload",
+    [
+        " TLa2f6VPqDgRE67v1736s7bJ8Ray5wYjU7 ",
+        "not-base58",
+        "T9yD14Nj9j7xAB4dbGeiX9h8unkKHxuWwb",
+        "0x41" + "00" * 20,
+    ],
+)
+def test_sccp_normalized_codec_value_rejects_invalid_tron_payload(payload: str) -> None:
+    with pytest.raises(RuntimeError, match="TRON Base58Check"):
+        ToriiClient._parse_sccp_normalized_codec_value(
+            {"TronBase58Check": {"payload": payload}},
+            context="codec",
+        )
+
+
+@pytest.mark.parametrize(
+    ("proof_bytes_hex", "message"),
+    [
+        (b"", "non-empty hex string"),
+        (b"\x00\x00", "must not be all zero"),
+        ("0x0000", "must not be all zero"),
+        (b"\x01\x02\x03", "384-byte hex string"),
+    ],
+)
+def test_sccp_destination_params_reject_placeholder_proof_bytes(
+    proof_bytes_hex: Union[str, bytes],
+    message: str,
+) -> None:
+    with pytest.raises(RuntimeError, match=message):
+        ToriiClient._normalize_sccp_evm_destination_params(
+            network_id_hex=None,
+            verifier_address_hex=None,
+            bridge_address_hex=None,
+            verifier_code_hash_hex=None,
+            verifier_key_hash_hex=None,
+            expected_destination_binding_hash_hex=None,
+            tron_verifier_address=None,
+            proof_bytes_hex=proof_bytes_hex,
+            context="sccp message proof job",
+        )
+
+
+@pytest.mark.parametrize(
+    ("field", "value"),
+    [
+        ("network_id_hex", " 0x" + "71" * 32),
+        ("verifier_code_hash_hex", "0x" + "72" * 16 + " " + "72" * 16),
+        ("expected_destination_binding_hash_hex", "0x" + "74" * 32 + "\n"),
+        ("proof_bytes_hex", " " + SCCP_TEST_GROTH16_PROOF_HEX),
+    ],
+)
+def test_sccp_destination_params_reject_padded_inline_hex_material(
+    field: str,
+    value: str,
+) -> None:
+    kwargs = {
+        "network_id_hex": "0x" + "71" * 32,
+        "verifier_address_hex": None,
+        "bridge_address_hex": None,
+        "verifier_code_hash_hex": "0x" + "72" * 32,
+        "verifier_key_hash_hex": "0x" + "73" * 32,
+        "expected_destination_binding_hash_hex": "0x" + "74" * 32,
+        "tron_verifier_address": "TJRabPrwbZy45sbavfcjinPJC18kjpRTv8",
+        "proof_bytes_hex": SCCP_TEST_GROTH16_PROOF_BYTES,
+        "context": "sccp message proof job",
+    }
+    kwargs[field] = value
+
+    with pytest.raises(RuntimeError, match=f"{field}.*canonical hex"):
+        ToriiClient._normalize_sccp_evm_destination_params(**kwargs)
+
+
+def test_sccp_destination_params_reject_off_curve_groth16_proof_bytes() -> None:
+    off_curve_c = bytearray(SCCP_TEST_GROTH16_PROOF_BYTES)
+    off_curve_c[11 * 32 + 31] = 3
+    with pytest.raises(RuntimeError, match=r"proof_bytes_hex\.c must be a BN254 G1 point"):
+        ToriiClient._normalize_sccp_evm_destination_params(
+            network_id_hex="0x" + "71" * 32,
+            verifier_address_hex=None,
+            bridge_address_hex=None,
+            verifier_code_hash_hex=None,
+            verifier_key_hash_hex=None,
+            expected_destination_binding_hash_hex="0x" + "74" * 32,
+            tron_verifier_address=None,
+            proof_bytes_hex=bytes(off_curve_c),
+            context="sccp message proof job",
+        )
+
+    off_curve_b = bytearray(SCCP_TEST_GROTH16_PROOF_BYTES)
+    off_curve_b[6 * 32 + 31] ^= 0x01
+    with pytest.raises(RuntimeError, match=r"proof_bytes_hex\.b must be a BN254 G2 point"):
+        ToriiClient._normalize_sccp_evm_destination_params(
+            network_id_hex="0x" + "71" * 32,
+            verifier_address_hex=None,
+            bridge_address_hex=None,
+            verifier_code_hash_hex=None,
+            verifier_key_hash_hex=None,
+            expected_destination_binding_hash_hex="0x" + "74" * 32,
+            tron_verifier_address=None,
+            proof_bytes_hex=bytes(off_curve_b),
+            context="sccp message proof job",
+        )
+
+
+def test_sccp_destination_params_reject_wrong_source_domain_groth16_proof_bytes() -> None:
+    with pytest.raises(RuntimeError, match=r"proof_bytes_hex\.source_domain must be SORA"):
+        ToriiClient._normalize_sccp_evm_destination_params(
+            network_id_hex="0x" + "71" * 32,
+            verifier_address_hex=None,
+            bridge_address_hex=None,
+            verifier_code_hash_hex="0x" + "72" * 32,
+            verifier_key_hash_hex="0x" + "73" * 32,
+            expected_destination_binding_hash_hex="0x" + "74" * 32,
+            tron_verifier_address="TJRabPrwbZy45sbavfcjinPJC18kjpRTv8",
+            proof_bytes_hex=_sample_sccp_groth16_proof_bytes(source_domain=5),
+            context="sccp message proof job",
+        )
+
+
+def test_sccp_destination_params_reject_message_id_mismatch_groth16_proof_bytes() -> None:
+    with pytest.raises(RuntimeError, match=r"proof_bytes_hex\.message_id must match message_id"):
+        ToriiClient._normalize_sccp_evm_destination_params(
+            network_id_hex="0x" + "71" * 32,
+            verifier_address_hex=None,
+            bridge_address_hex=None,
+            verifier_code_hash_hex="0x" + "72" * 32,
+            verifier_key_hash_hex="0x" + "73" * 32,
+            expected_destination_binding_hash_hex="0x" + "74" * 32,
+            tron_verifier_address="TJRabPrwbZy45sbavfcjinPJC18kjpRTv8",
+            proof_bytes_hex=_sample_sccp_groth16_proof_bytes(message_id="22" * 32),
+            context="sccp message proof job",
+            expected_message_id_hex="11" * 32,
+        )
+
+
+def test_sccp_destination_params_reject_invalid_expected_binding_hash() -> None:
+    with pytest.raises(RuntimeError, match="expected_destination_binding_hash_hex"):
+        ToriiClient._normalize_sccp_evm_destination_params(
+            network_id_hex=None,
+            verifier_address_hex=None,
+            bridge_address_hex=None,
+            verifier_code_hash_hex=None,
+            verifier_key_hash_hex=None,
+            expected_destination_binding_hash_hex="0x11",
+            tron_verifier_address=None,
+            proof_bytes_hex=None,
+            context="sccp message proof job",
+        )
+
+
+@pytest.mark.parametrize(
+    ("field", "byte_length"),
+    [
+        ("network_id_hex", 32),
+        ("verifier_address_hex", 20),
+        ("bridge_address_hex", 20),
+        ("verifier_code_hash_hex", 32),
+        ("verifier_key_hash_hex", 32),
+        ("expected_destination_binding_hash_hex", 32),
+    ],
+)
+def test_sccp_destination_params_reject_all_zero_evm_destination_material(
+    field: str,
+    byte_length: int,
+) -> None:
+    kwargs = {
+        "network_id_hex": None,
+        "verifier_address_hex": None,
+        "bridge_address_hex": None,
+        "verifier_code_hash_hex": None,
+        "verifier_key_hash_hex": None,
+        "expected_destination_binding_hash_hex": None,
+        "tron_verifier_address": None,
+        "proof_bytes_hex": SCCP_TEST_GROTH16_PROOF_BYTES,
+        "context": "sccp message proof job",
+    }
+    kwargs[field] = "0x" + "00" * byte_length
+
+    with pytest.raises(RuntimeError, match=f"{field}.*all zero"):
+        ToriiClient._normalize_sccp_evm_destination_params(**kwargs)
+
+
+def test_sccp_destination_params_reject_missing_proof_bytes() -> None:
+    with pytest.raises(RuntimeError, match="proof_bytes_hex is required"):
+        ToriiClient._normalize_sccp_evm_destination_params(
+            network_id_hex="0x" + "71" * 32,
+            verifier_address_hex=None,
+            bridge_address_hex=None,
+            verifier_code_hash_hex=None,
+            verifier_key_hash_hex=None,
+            expected_destination_binding_hash_hex="0x" + "74" * 32,
+            tron_verifier_address=None,
+            proof_bytes_hex=None,
+            context="sccp message proof job",
+        )
+
+
+def test_sccp_destination_params_reject_proof_without_destination_material() -> None:
+    with pytest.raises(RuntimeError, match="deployment destination fields are required"):
+        ToriiClient._normalize_sccp_evm_destination_params(
+            network_id_hex=None,
+            verifier_address_hex=None,
+            bridge_address_hex=None,
+            verifier_code_hash_hex=None,
+            verifier_key_hash_hex=None,
+            expected_destination_binding_hash_hex=None,
+            tron_verifier_address=None,
+            proof_bytes_hex=SCCP_TEST_GROTH16_PROOF_BYTES,
+            context="sccp message proof job",
+        )
+
+
+@pytest.mark.parametrize(
+    ("kwargs", "message"),
+    [
+        (
+            {
+                "network_id_hex": "0x" + "71" * 32,
+                "expected_destination_binding_hash_hex": "0x" + "74" * 32,
+            },
+            "complete EVM or TRON",
+        ),
+        (
+            {
+                "network_id_hex": "0x" + "71" * 32,
+                "verifier_address_hex": "0x" + "22" * 20,
+                "verifier_code_hash_hex": "0x" + "72" * 32,
+                "verifier_key_hash_hex": "0x" + "73" * 32,
+                "expected_destination_binding_hash_hex": "0x" + "74" * 32,
+            },
+            "complete EVM",
+        ),
+        (
+            {
+                "network_id_hex": "0x" + "71" * 32,
+                "verifier_address_hex": "0x" + "22" * 20,
+                "bridge_address_hex": "0x" + "33" * 20,
+                "verifier_code_hash_hex": "0x" + "72" * 32,
+                "verifier_key_hash_hex": "0x" + "73" * 32,
+                "expected_destination_binding_hash_hex": "0x" + "74" * 32,
+                "tron_verifier_address": "TJRabPrwbZy45sbavfcjinPJC18kjpRTv8",
+            },
+            "cannot be mixed",
+        ),
+    ],
+)
+def test_sccp_destination_params_reject_partial_or_mixed_deployment_tuple(
+    kwargs: Mapping[str, Any], message: str
+) -> None:
+    params = {
+        "network_id_hex": None,
+        "verifier_address_hex": None,
+        "bridge_address_hex": None,
+        "verifier_code_hash_hex": None,
+        "verifier_key_hash_hex": None,
+        "expected_destination_binding_hash_hex": None,
+        "tron_verifier_address": None,
+    }
+    params.update(kwargs)
+    with pytest.raises(RuntimeError, match=message):
+        ToriiClient._normalize_sccp_evm_destination_params(
+            proof_bytes_hex=SCCP_TEST_GROTH16_PROOF_BYTES,
+            context="sccp message proof job",
+            **params,
+        )
+
+
+def test_bridge_submit_rejects_context_wrong_sccp_groth16_proof_bytes() -> None:
+    client = ToriiClient("http://node.test", session=RecordingSession())
+    binding_hash = _sample_sccp_evm_destination_binding_hash(
+        network_id="11" * 32,
+        verifier_address="22" * 20,
+        bridge_address="33" * 20,
+        verifier_code_hash="44" * 32,
+        verifier_key_hash="55" * 32,
+    )
+    destination_material = {
+        "network_id_hex": "0x" + "11" * 32,
+        "verifier_address_hex": "0x" + "22" * 20,
+        "bridge_address_hex": "0x" + "33" * 20,
+        "verifier_code_hash_hex": "0x" + "44" * 32,
+        "verifier_key_hash_hex": "0x" + "55" * 32,
+        "expected_destination_binding_hash_hex": "0x" + binding_hash,
+    }
+
+    with pytest.raises(RuntimeError, match="proof_bytes_hex.message_id"):
+        client.submit_bridge_proof(
+            authority="alice@sora",
+            message_bundle=SCCP_TEST_MESSAGE_BUNDLE,
+            **destination_material,
+            proof_bytes_hex=_sample_sccp_groth16_proof_bytes(message_id="44" * 32),
+        )
+
+    with pytest.raises(RuntimeError, match="proof_bytes_hex.source_domain must be SORA"):
+        client.submit_bridge_message(
+            authority="alice@sora",
+            message_bundle=SCCP_TEST_MESSAGE_BUNDLE,
+            **destination_material,
+            proof_bytes_hex=_sample_sccp_groth16_proof_bytes(source_domain=5),
+        )
+
+    with pytest.raises(RuntimeError, match="proof_bytes_hex.commitment_root"):
+        client.submit_bridge_message(
+            authority="alice@sora",
+            message_bundle=SCCP_TEST_MESSAGE_BUNDLE,
+            **destination_material,
+            proof_bytes_hex=_sample_sccp_groth16_proof_bytes(commitment_root="55" * 32),
+        )
+
+
+def test_submit_bridge_proof_posts_tron_proof_material() -> None:
+    session = RecordingSession()
+    session.queue(
+        StubResponse(
+            200,
+            {
+                "ok": True,
+                "submitted": False,
+                "proof_kind": "message",
+                "counterparty_chain": "tron",
+            },
+        )
+    )
+    client = ToriiClient("http://node.test", session=session)
+    binding_hash = _sample_sccp_tron_destination_binding_hash()
+
+    response = client.submit_bridge_proof(
+        authority=" alice@sora ",
+        message_bundle=SCCP_TEST_MESSAGE_BUNDLE,
+        network_id_hex=bytes.fromhex(SCCP_TEST_TRON_NETWORK_ID),
+        verifier_code_hash_hex=f"0x{SCCP_TEST_TRON_VERIFIER_CODE_HASH}",
+        verifier_key_hash_hex=f"0x{SCCP_TEST_TRON_VERIFIER_KEY_HASH}",
+        expected_destination_binding_hash_hex=f"0x{binding_hash}",
+        tron_verifier_address=SCCP_TEST_TRON_VERIFIER_ADDRESS,
+        proof_bytes_hex=SCCP_TEST_GROTH16_PROOF_BYTES,
+        creation_time_ms="1779660000000",
+    )
+
+    assert response == {
+        "ok": True,
+        "submitted": False,
+        "proof_kind": "message",
+        "counterparty_chain": "tron",
+    }
+    assert session.calls[0]["method"] == "POST"
+    assert session.calls[0]["url"] == "http://node.test/v1/bridge/proofs/submit"
+    assert session.calls[0]["headers"]["Content-Type"] == "application/json"
+    assert json.loads(session.calls[0]["data"].decode("utf-8")) == {
+        "authority": "alice@sora",
+        "message_bundle": SCCP_TEST_MESSAGE_BUNDLE,
+        "network_id_hex": SCCP_TEST_TRON_NETWORK_ID,
+        "verifier_code_hash_hex": SCCP_TEST_TRON_VERIFIER_CODE_HASH,
+        "verifier_key_hash_hex": SCCP_TEST_TRON_VERIFIER_KEY_HASH,
+        "expected_destination_binding_hash_hex": binding_hash,
+        "tron_verifier_address": SCCP_TEST_TRON_VERIFIER_ADDRESS,
+        "proof_bytes_hex": SCCP_TEST_GROTH16_PROOF_HEX,
+        "creation_time_ms": "1779660000000",
+    }
+
+
+def test_submit_bridge_proof_rejects_ambiguous_bundle_selection_before_request() -> None:
+    session = RecordingSession()
+    client = ToriiClient("http://node.test", session=session)
+
+    with pytest.raises(RuntimeError, match="exactly one of burn_bundle or message_bundle"):
+        client.submit_bridge_proof(authority="alice@sora")
+
+    with pytest.raises(RuntimeError, match="exactly one of burn_bundle or message_bundle"):
+        client.submit_bridge_proof(
+            authority="alice@sora",
+            burn_bundle={"version": 1},
+            message_bundle={"version": 1},
+        )
+
+    assert session.calls == []
+
+
+def test_submit_bridge_proof_rejects_destination_tuple_on_burn_bundle() -> None:
+    session = RecordingSession()
+    client = ToriiClient("http://node.test", session=session)
+    binding_hash = _sample_sccp_tron_destination_binding_hash()
+
+    with pytest.raises(RuntimeError, match="message_bundle submissions"):
+        client.submit_bridge_proof(
+            authority="alice@sora",
+            burn_bundle={"version": 1},
+            network_id_hex=bytes.fromhex(SCCP_TEST_TRON_NETWORK_ID),
+            verifier_code_hash_hex=f"0x{SCCP_TEST_TRON_VERIFIER_CODE_HASH}",
+            verifier_key_hash_hex=f"0x{SCCP_TEST_TRON_VERIFIER_KEY_HASH}",
+            expected_destination_binding_hash_hex=f"0x{binding_hash}",
+            tron_verifier_address=SCCP_TEST_TRON_VERIFIER_ADDRESS,
+            proof_bytes_hex=SCCP_TEST_GROTH16_PROOF_BYTES,
+        )
+
+    assert session.calls == []
+
+
+def test_submit_bridge_proof_rejects_proof_bytes_without_message_commitment_context() -> None:
+    session = RecordingSession()
+    client = ToriiClient("http://node.test", session=session)
+    binding_hash = _sample_sccp_tron_destination_binding_hash()
+
+    with pytest.raises(
+        RuntimeError,
+        match=r"message_bundle\.commitment\.message_id is required",
+    ):
+        client.submit_bridge_proof(
+            authority="alice@sora",
+            message_bundle={"version": 1},
+            network_id_hex=bytes.fromhex(SCCP_TEST_TRON_NETWORK_ID),
+            verifier_code_hash_hex=f"0x{SCCP_TEST_TRON_VERIFIER_CODE_HASH}",
+            verifier_key_hash_hex=f"0x{SCCP_TEST_TRON_VERIFIER_KEY_HASH}",
+            expected_destination_binding_hash_hex=f"0x{binding_hash}",
+            tron_verifier_address=SCCP_TEST_TRON_VERIFIER_ADDRESS,
+            proof_bytes_hex=SCCP_TEST_GROTH16_PROOF_BYTES,
+        )
+
+    assert session.calls == []
+
+
+def test_submit_bridge_message_posts_tron_proof_material() -> None:
+    session = RecordingSession()
+    session.queue(
+        StubResponse(
+            200,
+            {
+                "ok": True,
+                "submitted": False,
+                "message_kind": "transfer",
+                "counterparty_chain": "tron",
+            },
+        )
+    )
+    client = ToriiClient("http://node.test", session=session)
+    binding_hash = _sample_sccp_tron_destination_binding_hash()
+
+    response = client.submit_bridge_message(
+        authority=" alice@sora ",
+        message_bundle=SCCP_TEST_MESSAGE_BUNDLE,
+        network_id_hex=bytes.fromhex(SCCP_TEST_TRON_NETWORK_ID),
+        verifier_code_hash_hex=f"0x{SCCP_TEST_TRON_VERIFIER_CODE_HASH}",
+        verifier_key_hash_hex=f"0x{SCCP_TEST_TRON_VERIFIER_KEY_HASH}",
+        expected_destination_binding_hash_hex=f"0x{binding_hash}",
+        tron_verifier_address=SCCP_TEST_TRON_VERIFIER_ADDRESS,
+        proof_bytes_hex=SCCP_TEST_GROTH16_PROOF_BYTES,
+        receipt_lane=7,
+        settlement={"route": "xor"},
+        creation_time_ms="1779660000000",
+    )
+
+    assert response == {
+        "ok": True,
+        "submitted": False,
+        "message_kind": "transfer",
+        "counterparty_chain": "tron",
+    }
+    assert session.calls[0]["method"] == "POST"
+    assert session.calls[0]["url"] == "http://node.test/v1/bridge/messages"
+    assert session.calls[0]["headers"]["Content-Type"] == "application/json"
+    assert json.loads(session.calls[0]["data"].decode("utf-8")) == {
+        "authority": "alice@sora",
+        "message_bundle": SCCP_TEST_MESSAGE_BUNDLE,
+        "network_id_hex": SCCP_TEST_TRON_NETWORK_ID,
+        "verifier_code_hash_hex": SCCP_TEST_TRON_VERIFIER_CODE_HASH,
+        "verifier_key_hash_hex": SCCP_TEST_TRON_VERIFIER_KEY_HASH,
+        "expected_destination_binding_hash_hex": binding_hash,
+        "tron_verifier_address": SCCP_TEST_TRON_VERIFIER_ADDRESS,
+        "proof_bytes_hex": SCCP_TEST_GROTH16_PROOF_HEX,
+        "receipt_lane": 7,
+        "settlement": {"route": "xor"},
+        "creation_time_ms": "1779660000000",
+    }
+
+
+@pytest.mark.parametrize(
+    "tron_verifier_address",
+    [
+        " TJRabPrwbZy45sbavfcjinPJC18kjpRTv8 ",
+        "TJRabPrwbZy45sbavfcjinPJC18kjpRTv9",
+        "T9yD14Nj9j7xAB4dbGeiX9h8unkKHxuWwb",
+    ],
+)
+def test_submit_bridge_message_rejects_invalid_tron_verifier_address_before_request(
+    tron_verifier_address: str,
+) -> None:
+    session = RecordingSession()
+    client = ToriiClient("http://node.test", session=session)
+
+    with pytest.raises(RuntimeError, match="tron_verifier_address"):
+        client.submit_bridge_message(
+            authority="alice@sora",
+            message_bundle=SCCP_TEST_MESSAGE_BUNDLE,
+            tron_verifier_address=tron_verifier_address,
+            proof_bytes_hex=SCCP_TEST_GROTH16_PROOF_BYTES,
+        )
+
+    assert session.calls == []
+
+
+def test_submit_bridge_message_rejects_all_zero_evm_destination_material_before_request() -> None:
+    session = RecordingSession()
+    client = ToriiClient("http://node.test", session=session)
+
+    with pytest.raises(RuntimeError, match="verifier_address_hex.*all zero"):
+        client.submit_bridge_message(
+            authority="alice@sora",
+            message_bundle=SCCP_TEST_MESSAGE_BUNDLE,
+            verifier_address_hex="0x" + "00" * 20,
+            proof_bytes_hex=SCCP_TEST_GROTH16_PROOF_BYTES,
+        )
+
+    assert session.calls == []
+
+
+def test_get_sccp_message_proof_artifact_preserves_solana_submission_context() -> None:
+    session = RecordingSession()
+    message_id = "11" * 32
+    payload_hash = "22" * 32
+    commitment_root = "33" * 32
+    binding_hash = "56" * 32
+    statement_hash = "99" * 32
+    proof_context_hash = "ab" * 32
+    session.queue(
+        StubResponse(
+            payload={
+                "version": 1,
+                "local_domain": 0,
+                "counterparty_domain": 3,
+                "proof_family": "stark-fri-v1",
+                "message_backend": "sccp/stark-fri-v1/sol",
+                "registry_backend": "bridge/sccp/stark-fri-v1/sol",
+                "manifest_seed": "iroha:sccp:bridge-proof:message:stark-fri:v1:sol",
+                "finality_model": "SolanaFinalizedSlot",
+                "verifier_target": "SolanaProgram",
+                "public_inputs": {
+                    "version": 1,
+                    "message_id": message_id,
+                    "payload_hash": payload_hash,
+                    "target_domain": 3,
+                    "commitment_root": commitment_root,
+                    "finality_height": "321",
+                    "finality_block_hash": "44" * 32,
+                },
+                "proof_bytes": "aa55",
+                "submission_package": {
+                    "version": 1,
+                    "proof_family": "stark-fri-v1",
+                    "verifier_backend": {"version": 1, "key": "solana-program-v1"},
+                    "envelope_encoding": "borsh_instruction_v1",
+                    "submission_kind": "program_instruction",
+                    "verifier_entrypoint": "submit_sccp_message_proof",
+                    "platform_payload": {
+                        "platform": "solana_program_instruction",
+                        "payload": {
+                            "proof_bytes": "aa55",
+                            "public_inputs_bytes": "cc77",
+                            "bundle_bytes": "dd88",
+                            "destination_binding": {
+                                "version": 1,
+                                "key": "sccp:sol:governed-recursive-zk:v1",
+                                "binding_hash": binding_hash,
+                            },
+                            "destination_binding_hash": binding_hash,
+                            "statement_hash": statement_hash,
+                            "proof_context_hash": proof_context_hash,
+                        },
+                    },
+                    "arguments": [
+                        {"key": "proof_bytes", "encoding": "raw_bytes", "bytes": "aa55"},
+                        {"key": "public_inputs", "encoding": "raw_bytes", "bytes": "cc77"},
+                        {"key": "bundle_bytes", "encoding": "raw_bytes", "bytes": "dd88"},
+                        {"key": "statement_hash", "encoding": "raw_bytes", "bytes": statement_hash},
+                        {
+                            "key": "destination_binding_hash",
+                            "encoding": "raw_bytes",
+                            "bytes": binding_hash,
+                        },
+                        {
+                            "key": "proof_context_hash",
+                            "encoding": "raw_bytes",
+                            "bytes": proof_context_hash,
+                        },
+                    ],
+                    "envelope_bytes": "ee99",
+                },
+                "bundle": {
+                    "version": 1,
+                    "commitment_root": commitment_root,
+                    "commitment": {
+                        "version": 1,
+                        "kind": "Transfer",
+                        "target_domain": 3,
+                        "message_id": message_id,
+                        "payload_hash": payload_hash,
+                    },
+                    "merkle_proof": {"steps": []},
+                    "payload": {"Transfer": {"version": 1}},
+                    "finality_proof": "bb66",
+                },
+            }
+        )
+    )
+    client = ToriiClient("http://node.test", session=session)
+
+    artifact = client.get_sccp_message_proof_artifact(f"0x{message_id}")
+    payload = artifact.submission_package.platform_payload
+
+    assert payload.kind == "solana_program_instruction"
+    assert payload.value["proof_bytes"] == "aa55"
+    assert payload.value["public_inputs_bytes"] == "cc77"
+    assert payload.value["bundle_bytes"] == "dd88"
+    assert payload.value["destination_binding"] == {
+        "version": 1,
+        "key": "sccp:sol:governed-recursive-zk:v1",
+        "binding_hash": binding_hash,
+    }
+    assert payload.value["destination_binding_hash"] == binding_hash
+    assert payload.value["statement_hash"] == statement_hash
+    assert payload.value["proof_context_hash"] == proof_context_hash
+
+
+def test_get_sccp_message_proof_artifact_preserves_ton_message_body_payload() -> None:
+    session = RecordingSession()
+    message_id = "11" * 32
+    payload_hash = "22" * 32
+    commitment_root = "33" * 32
+    binding_hash = "58" * 32
+    statement_hash = "99" * 32
+    session.queue(
+        StubResponse(
+            payload={
+                "version": 1,
+                "local_domain": 0,
+                "counterparty_domain": 4,
+                "proof_family": "stark-fri-v1",
+                "message_backend": "sccp/stark-fri-v1/ton",
+                "registry_backend": "bridge/sccp/stark-fri-v1/ton",
+                "manifest_seed": "iroha:sccp:bridge-proof:message:stark-fri:v1:ton",
+                "finality_model": "TonMasterchain",
+                "verifier_target": "TonContract",
+                "public_inputs": {
+                    "version": 1,
+                    "message_id": message_id,
+                    "payload_hash": payload_hash,
+                    "target_domain": 4,
+                    "commitment_root": commitment_root,
+                    "finality_height": "19",
+                    "finality_block_hash": "44" * 32,
+                },
+                "proof_bytes": "aa55",
+                "submission_package": {
+                    "version": 1,
+                    "proof_family": "stark-fri-v1",
+                    "verifier_backend": {"version": 1, "key": "ton-contract-v1"},
+                    "envelope_encoding": "ton_message_body_boc_v1",
+                    "submission_kind": "internal_message",
+                    "verifier_entrypoint": "op::submit_sccp_message_proof",
+                    "platform_payload": {
+                        "platform": "ton_internal_message",
+                        "payload": {
+                            "message_body_boc": "b5ee9c72",
+                            "query_id": "7",
+                            "destination_binding": {
+                                "version": 1,
+                                "key": "sccp:ton:governed-recursive-zk:v1",
+                                "binding_hash": binding_hash,
+                            },
+                            "destination_binding_hash": binding_hash,
+                            "proof_bytes": "aa55",
+                            "public_inputs_bytes": "cc77",
+                            "bundle_bytes": "dd88",
+                            "statement_hash": statement_hash,
+                        },
+                    },
+                    "arguments": [
+                        {"key": "message_body_boc", "encoding": "ton_boc", "bytes": "b5ee9c72"}
+                    ],
+                    "envelope_bytes": "b5ee9c72",
+                },
+                "bundle": {
+                    "version": 1,
+                    "commitment_root": commitment_root,
+                    "commitment": {
+                        "version": 1,
+                        "kind": "Transfer",
+                        "target_domain": 4,
+                        "message_id": message_id,
+                        "payload_hash": payload_hash,
+                    },
+                    "merkle_proof": {"steps": []},
+                    "payload": {"Transfer": {"version": 1}},
+                    "finality_proof": "bb66",
+                },
+            }
+        )
+    )
+    client = ToriiClient("http://node.test", session=session)
+
+    artifact = client.get_sccp_message_proof_artifact(message_id)
+    payload = artifact.submission_package.platform_payload
+
+    assert payload.kind == "ton_internal_message"
+    assert payload.value["message_body_boc"] == "b5ee9c72"
+    assert payload.value["query_id"] == 7
+    assert payload.value["destination_binding"] == {
+        "version": 1,
+        "key": "sccp:ton:governed-recursive-zk:v1",
+        "binding_hash": binding_hash,
+    }
+    assert payload.value["destination_binding_hash"] == binding_hash
+    assert payload.value["proof_bytes"] == "aa55"
+    assert payload.value["public_inputs_bytes"] == "cc77"
+    assert payload.value["bundle_bytes"] == "dd88"
+    assert payload.value["statement_hash"] == statement_hash
 
 
 def test_get_sccp_message_proof_artifact_rejects_mismatched_public_inputs() -> None:
@@ -1922,7 +2875,17 @@ def test_get_sccp_message_proof_job_parses_typed_snapshot() -> None:
     )
     client = ToriiClient("http://node.test", session=session)
 
-    job = client.get_sccp_message_proof_job(f"0x{message_id}")
+    binding_hash = _sample_sccp_evm_destination_binding_hash()
+    job = client.get_sccp_message_proof_job(
+        f"0x{message_id}",
+        network_id_hex="0x" + SCCP_TEST_EVM_NETWORK_ID,
+        verifier_address_hex="0x" + SCCP_TEST_EVM_VERIFIER_ADDRESS,
+        bridge_address_hex="0x" + SCCP_TEST_EVM_BRIDGE_ADDRESS,
+        verifier_code_hash_hex="0x" + SCCP_TEST_EVM_VERIFIER_CODE_HASH,
+        verifier_key_hash_hex="0x" + SCCP_TEST_EVM_VERIFIER_KEY_HASH,
+        expected_destination_binding_hash_hex="0x" + binding_hash,
+        proof_bytes_hex=SCCP_TEST_GROTH16_PROOF_BYTES,
+    )
 
     assert job.chain_family == "Ton"
     assert job.chain == "ton"
@@ -1935,6 +2898,15 @@ def test_get_sccp_message_proof_job_parses_typed_snapshot() -> None:
     assert job.submission_template.required_arguments[0].key == "proof_cell"
     assert job.submission_package.platform_payload.kind == "ton_internal_message"
     assert session.calls[0]["url"] == f"http://node.test/v1/sccp/jobs/message/{message_id}"
+    assert session.calls[0]["params"] == {
+        "network_id_hex": SCCP_TEST_EVM_NETWORK_ID,
+        "verifier_address_hex": SCCP_TEST_EVM_VERIFIER_ADDRESS,
+        "bridge_address_hex": SCCP_TEST_EVM_BRIDGE_ADDRESS,
+        "verifier_code_hash_hex": SCCP_TEST_EVM_VERIFIER_CODE_HASH,
+        "verifier_key_hash_hex": SCCP_TEST_EVM_VERIFIER_KEY_HASH,
+        "expected_destination_binding_hash_hex": binding_hash,
+        "proof_bytes_hex": SCCP_TEST_GROTH16_PROOF_HEX,
+    }
 
 
 def test_get_sccp_message_proof_job_against_mock_server() -> None:

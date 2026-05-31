@@ -812,18 +812,16 @@ From `../iroha2-block-explorer-web`:
      shared-host `127.0.0.1:29080..29083` layout rather than the old
      `127.0.0.1:18080..18083` default
   - keep the shared `taira_public_edge_upstream` wired to every live validator
-    and use it for `taira.sora.org` plus the explorer's `/status` and the
-    general `/v1/*` proxy locations. Do not pin MCP or the generic API surface
-    to `taira_validator_1_upstream`: a single dead validator will turn MCP and
-    explorer API traffic into `502 Bad Gateway`.
-  - keep the `proxy_next_upstream ... non_idempotent` retry policy on those
-    shared public locations. MCP `initialize` and tool calls are POSTs, so the
-    edge has to allow non-idempotent upstream failover when one validator
-    listener is down.
-  - keep the dedicated `location = /v1/mcp` blocks intact; they make the
-     Codex/Torii MCP path explicit on both public hostnames and keep future
-     route changes from accidentally hiding the MCP endpoint behind the generic
-     `/` or `/v1/` proxy rules.
+    and use it for the generic public API surface, public SoraFS/app-api
+    routes, and the explorer's `/status` fallback.
+  - keep the dedicated `location = /v1/mcp` blocks pinned to the same Torii
+    upstream as `/v1/connect/session`, `/v1/connect/status`, and
+    `/v1/connect/ws`. MCP exposes Connect session creation and management
+    tools, and Connect tokens/state are process-local at creation time.
+  - keep the `proxy_next_upstream ... non_idempotent` retry policy on shared
+    public locations only. Do not add upstream failover to the pinned
+    Connect/MCP locations until Connect session state is shared across
+    validators.
   - keep the shared convenience host on `taira_public_edge_upstream` for the
     public SoraFS and app-api surface as well. The checked-in nginx example now
     keeps these paths symmetric with the rest of the public edge:

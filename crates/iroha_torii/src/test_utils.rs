@@ -1276,6 +1276,10 @@ pub fn mk_minimal_root_cfg() -> iroha_config::parameters::actual::Root {
             bridge_proof_max_future_drift_blocks:
                 defaults::zk::proof::BRIDGE_MAX_FUTURE_DRIFT_BLOCKS,
             sccp_allow_unready_transparent_proofs: false,
+            sccp_source_verifier_materials: Vec::new(),
+            sccp_source_adapter_engine_deployments: Vec::new(),
+            sccp_destination_rollouts: Vec::new(),
+            sccp_route_allowlists: Vec::new(),
             poseidon_params_id: defaults::confidential::POSEIDON_PARAMS_ID,
             pedersen_params_id: defaults::confidential::PEDERSEN_PARAMS_ID,
             kaigi_roster_join_vk: None,

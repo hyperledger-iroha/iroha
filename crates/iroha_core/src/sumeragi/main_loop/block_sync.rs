@@ -1,6 +1,6 @@
 //! Block sync and missing-block request handlers.
 
-use std::collections::{BTreeMap, BTreeSet};
+use std::collections::{BTreeMap, BTreeSet, btree_map::Entry};
 use std::sync::Arc;
 use std::time::Instant;
 
@@ -361,6 +361,18 @@ impl Actor {
                 .unwrap_or_default();
         let targets = Self::build_fetch_targets(&signer_set, &topology);
         if targets.is_empty() {
+            return;
+        }
+        if matches!(qc.phase, crate::sumeragi::consensus::Phase::Commit) {
+            let sent = self.request_certified_block_for_qc(qc, &topology, &signer_set, reason);
+            debug!(
+                height = qc.height,
+                view = qc.view,
+                block = %qc.subject_block_hash,
+                targets = sent,
+                reason,
+                "forcing certified block fetch for quarantined commit QC"
+            );
             return;
         }
         self.request_missing_block(
@@ -765,7 +777,7 @@ impl Actor {
         Self::block_body_response_from_payload(block_hash, height, view, body)
     }
 
-    fn plain_block_body_response_for_wire(
+    pub(super) fn plain_block_body_response_for_wire(
         &self,
         block: &SignedBlock,
     ) -> super::message::BlockBodyResponse {
@@ -789,6 +801,7 @@ impl Actor {
         response: super::message::BlockBodyResponse,
     ) {
         let direct_commit_qc = self.direct_commit_qc_from_block_body_response(&response);
+        self.dispatch_block_created_companion_for_body_response(peer.clone(), block);
         if matches!(
             response.body,
             super::message::BlockBodyData::BlockSyncUpdate(_)
@@ -816,6 +829,35 @@ impl Actor {
                 "exact_block_body_response",
             );
         }
+    }
+
+    fn dispatch_block_created_companion_for_body_response(
+        &mut self,
+        peer: PeerId,
+        block: &SignedBlock,
+    ) {
+        let created = BlockMessage::BlockCreated(self.frontier_block_created_for_wire(block));
+        let created_len = super::consensus_block_wire_len(self.common_config.peer.id(), &created);
+        let header = block.header();
+        if created_len > self.consensus_payload_frame_cap {
+            warn!(
+                height = header.height().get(),
+                view = header.view_change_index(),
+                block = %block.hash(),
+                cap = self.consensus_payload_frame_cap,
+                created_len,
+                "skipping BlockCreated companion for exact body response; payload exceeds frame cap"
+            );
+            return;
+        }
+        debug!(
+            height = header.height().get(),
+            view = header.view_change_index(),
+            block = %block.hash(),
+            peer = %peer,
+            "sending BlockCreated companion for exact body response"
+        );
+        self.dispatch_fetch_pending_block_response(peer, created, /*bypass_queue*/ true);
     }
 
     fn direct_commit_qc_for_block(
@@ -875,6 +917,595 @@ impl Actor {
             );
         }
         formed
+    }
+
+    fn validator_checkpoint_from_commit_qc(
+        qc: &crate::sumeragi::consensus::Qc,
+    ) -> ValidatorSetCheckpoint {
+        ValidatorSetCheckpoint::new_with_chain_order(
+            qc.height,
+            qc.view,
+            qc.subject_block_hash,
+            qc.chain_order_hash,
+            qc.rechain_seq,
+            qc.parent_state_root,
+            qc.post_state_root,
+            qc.validator_set.clone(),
+            qc.aggregate.signers_bitmap.clone(),
+            qc.aggregate.bls_aggregate_signature.clone(),
+            qc.validator_set_hash_version,
+            None,
+        )
+    }
+
+    pub(super) fn certified_block_fetch_response_for_block_with_qc(
+        &self,
+        block: &SignedBlock,
+        commit_qc: crate::sumeragi::consensus::Qc,
+    ) -> Option<super::message::CertifiedBlockFetchResponse> {
+        let block_hash = block.hash();
+        let height = block.header().height().get();
+        let view = block.header().view_change_index();
+        if commit_qc.subject_block_hash != block_hash
+            || commit_qc.height != height
+            || commit_qc.view != view
+            || !matches!(commit_qc.phase, crate::sumeragi::consensus::Phase::Commit)
+        {
+            warn!(
+                height,
+                view,
+                block = %block_hash,
+                qc_height = commit_qc.height,
+                qc_view = commit_qc.view,
+                qc_block = %commit_qc.subject_block_hash,
+                "skipping certified block fetch response with mismatched commit QC"
+            );
+            return None;
+        }
+        let (consensus_mode, _, _) = self.consensus_context_for_height(height);
+        let stake_snapshot = match consensus_mode {
+            ConsensusMode::Permissioned => None,
+            ConsensusMode::Npos => self
+                .state
+                .commit_roster_snapshot_for_block(height, block_hash)
+                .and_then(|snapshot| snapshot.stake_snapshot)
+                .filter(|snapshot| snapshot.matches_roster(&commit_qc.validator_set))
+                .or_else(|| {
+                    self.roster_validation_cache
+                        .stake_snapshot_for_roster(&commit_qc.validator_set)
+                }),
+        };
+        Some(super::message::CertifiedBlockFetchResponse {
+            height,
+            view,
+            block: block.clone(),
+            validator_checkpoint: Self::validator_checkpoint_from_commit_qc(&commit_qc),
+            commit_qc,
+            stake_snapshot,
+        })
+    }
+
+    pub(super) fn certified_block_fetch_response_for_block(
+        &mut self,
+        block: &SignedBlock,
+    ) -> Option<super::message::CertifiedBlockFetchResponse> {
+        let commit_qc = self.direct_commit_qc_for_block(block)?;
+        self.certified_block_fetch_response_for_block_with_qc(block, commit_qc)
+    }
+
+    fn certified_block_fetch_proof_for_response(
+        response: &super::message::CertifiedBlockFetchResponse,
+    ) -> super::message::CertifiedBlockFetchProof {
+        super::message::CertifiedBlockFetchProof {
+            height: response.height,
+            view: response.view,
+            block_hash: response.block.hash(),
+            commit_qc: response.commit_qc.clone(),
+            validator_checkpoint: response.validator_checkpoint.clone(),
+            stake_snapshot: response.stake_snapshot.clone(),
+        }
+    }
+
+    pub(super) fn dispatch_certified_block_fetch_proof(
+        &mut self,
+        peer: PeerId,
+        response: &super::message::CertifiedBlockFetchResponse,
+        source: &'static str,
+    ) -> bool {
+        let proof = Self::certified_block_fetch_proof_for_response(response);
+        let msg =
+            BlockMessage::CertifiedBlockFetch(super::message::CertifiedBlockFetch::Proof(proof));
+        let origin = self.common_config.peer.id().clone();
+        let cap = self.block_message_frame_cap(&msg);
+        let proof_len = super::consensus_block_wire_len(&origin, &msg);
+        let block_hash = response.block.hash();
+        if proof_len > cap {
+            warn!(
+                height = response.height,
+                view = response.view,
+                block = %block_hash,
+                cap,
+                proof_len,
+                source,
+                "dropping oversized certified commit proof companion"
+            );
+            return false;
+        }
+        info!(
+            height = response.height,
+            view = response.view,
+            block = %block_hash,
+            peer = %peer,
+            source,
+            "sending certified commit proof companion"
+        );
+        self.dispatch_fetch_pending_block_response(peer, msg, /*bypass_queue*/ true);
+        true
+    }
+
+    fn certified_block_fetch_body_for_response(
+        response: &super::message::CertifiedBlockFetchResponse,
+    ) -> super::message::CertifiedBlockFetchBody {
+        super::message::CertifiedBlockFetchBody {
+            height: response.height,
+            view: response.view,
+            block: response.block.clone(),
+        }
+    }
+
+    pub(super) fn dispatch_certified_block_fetch_response(
+        &mut self,
+        peer: PeerId,
+        response: super::message::CertifiedBlockFetchResponse,
+    ) -> bool {
+        let full = BlockMessage::CertifiedBlockFetch(
+            super::message::CertifiedBlockFetch::Response(response.clone()),
+        );
+        let origin = self.common_config.peer.id().clone();
+        let cap = self.block_message_frame_cap(&full);
+        let full_len = super::consensus_block_wire_len(&origin, &full);
+        if full_len <= cap {
+            self.dispatch_fetch_pending_block_response(peer, full, /*bypass_queue*/ true);
+            return true;
+        }
+
+        let block = response.block.clone();
+        let block_hash = block.hash();
+        let height = response.height;
+        let view = response.view;
+        let proof = Self::certified_block_fetch_proof_for_response(&response);
+        let proof_msg =
+            BlockMessage::CertifiedBlockFetch(super::message::CertifiedBlockFetch::Proof(proof));
+        let proof_len = super::consensus_block_wire_len(&origin, &proof_msg);
+        if proof_len > cap {
+            warn!(
+                height,
+                view,
+                block = %block_hash,
+                cap,
+                full_len,
+                proof_len,
+                "dropping oversized certified block fetch response; proof companion also exceeds frame cap"
+            );
+            return false;
+        }
+
+        let body = Self::certified_block_fetch_body_for_response(&response);
+        let body_msg =
+            BlockMessage::CertifiedBlockFetch(super::message::CertifiedBlockFetch::Body(body));
+        let body_len = super::consensus_block_wire_len(&origin, &body_msg);
+        self.dispatch_fetch_pending_block_response(
+            peer.clone(),
+            proof_msg,
+            /*bypass_queue*/ true,
+        );
+        if body_len <= cap {
+            self.dispatch_fetch_pending_block_response(
+                peer.clone(),
+                body_msg,
+                /*bypass_queue*/ true,
+            );
+        } else {
+            let body_response =
+                BlockMessage::BlockBodyResponse(self.plain_block_body_response_for_wire(&block));
+            let body_response_len = super::consensus_block_wire_len(&origin, &body_response);
+            if body_response_len <= cap {
+                self.dispatch_fetch_pending_block_response(
+                    peer.clone(),
+                    body_response,
+                    /*bypass_queue*/ true,
+                );
+            } else {
+                let created =
+                    BlockMessage::BlockCreated(self.frontier_block_created_for_wire(&block));
+                let created_len = super::consensus_block_wire_len(&origin, &created);
+                if created_len <= cap {
+                    self.dispatch_fetch_pending_block_response(
+                        peer.clone(),
+                        created,
+                        /*bypass_queue*/ true,
+                    );
+                } else {
+                    warn!(
+                        height,
+                        view,
+                        block = %block_hash,
+                        cap,
+                        full_len,
+                        body_len,
+                        body_response_len,
+                        created_len,
+                        "skipping certified block fetch body split; block body exceeds frame cap"
+                    );
+                }
+            }
+        }
+        info!(
+            height,
+            view,
+            block = %block_hash,
+            cap,
+            full_len,
+            proof_len,
+            body_len,
+            "split oversized certified block fetch response into proof and body"
+        );
+        true
+    }
+
+    fn materialize_certified_block_fetch_response(
+        &mut self,
+        response: super::message::CertifiedBlockFetchResponse,
+    ) -> bool {
+        let block = response.block;
+        let block_hash = block.hash();
+        let height = block.header().height().get();
+        let view = block.header().view_change_index();
+        let payload_bytes = super::proposals::block_payload_bytes(&block);
+        let payload_hash = Hash::new(&payload_bytes);
+        if let Some(inflight) = self.subsystems.commit.inflight.as_mut()
+            && inflight.block_hash == block_hash
+        {
+            if matches!(
+                inflight.pending.validation_status,
+                ValidationStatus::Invalid
+            ) {
+                warn!(
+                    height,
+                    view,
+                    block = %block_hash,
+                    "dropping certified block fetch response for invalid inflight block"
+                );
+                return false;
+            }
+            inflight
+                .pending
+                .note_commit_qc_observed(response.commit_qc.epoch);
+            self.maybe_cache_rehydrated_kura_body(&block);
+            self.clear_missing_block_request(
+                &block_hash,
+                MissingBlockClearReason::PayloadAvailable,
+            );
+            self.clear_missing_block_view_change(&block_hash);
+            self.request_commit_pipeline_for_pending(
+                block_hash,
+                super::status::RoundEventCauseTrace::BlockAvailable,
+                None,
+            );
+            return true;
+        }
+        match self.pending.pending_blocks.entry(block_hash) {
+            Entry::Occupied(mut entry) => {
+                let pending = entry.get_mut();
+                if matches!(pending.validation_status, ValidationStatus::Invalid) {
+                    warn!(
+                        height,
+                        view,
+                        block = %block_hash,
+                        "dropping certified block fetch response for invalid pending block"
+                    );
+                    return false;
+                }
+                if pending.is_retry_aborted() {
+                    pending.revive_after_abort_with_payload_bytes(
+                        block.clone(),
+                        payload_hash,
+                        height,
+                        view,
+                        payload_bytes,
+                    );
+                } else {
+                    pending.replace_block_with_payload_bytes(
+                        block.clone(),
+                        payload_hash,
+                        height,
+                        view,
+                        payload_bytes,
+                    );
+                }
+                pending.note_commit_qc_observed(response.commit_qc.epoch);
+            }
+            Entry::Vacant(entry) => {
+                let mut pending = PendingBlock::new_with_payload_bytes(
+                    block.clone(),
+                    payload_hash,
+                    height,
+                    view,
+                    payload_bytes,
+                );
+                pending.note_commit_qc_observed(response.commit_qc.epoch);
+                entry.insert(pending);
+            }
+        }
+        self.maybe_cache_rehydrated_kura_body(&block);
+        self.deferred_missing_payload_qcs
+            .remove(&Self::qc_tally_key(&response.commit_qc));
+        self.deferred_block_sync_updates
+            .remove(&(height, view, block_hash));
+        self.flush_frontier_body_requesters(&block);
+        self.flush_pending_block_body_requests_if_ready(&block);
+        self.flush_pending_fetch_requests(&block);
+        self.clear_missing_block_request(&block_hash, MissingBlockClearReason::PayloadAvailable);
+        self.clear_missing_block_view_change(&block_hash);
+        let _ = self.try_replay_deferred_qcs();
+        let _ = self.try_replay_deferred_missing_payload_qcs(Instant::now());
+        self.request_commit_pipeline_for_pending(
+            block_hash,
+            super::status::RoundEventCauseTrace::BlockAvailable,
+            None,
+        );
+        info!(
+            height,
+            view,
+            block = %block_hash,
+            "materialized certified block fetch response as pending block"
+        );
+        true
+    }
+
+    pub(super) fn handle_certified_block_fetch(
+        &mut self,
+        fetch: super::message::CertifiedBlockFetch,
+        sender: Option<PeerId>,
+    ) -> Result<()> {
+        match fetch {
+            super::message::CertifiedBlockFetch::Request(request) => {
+                self.handle_certified_block_fetch_request(request, sender);
+                Ok(())
+            }
+            super::message::CertifiedBlockFetch::Response(response) => {
+                self.handle_certified_block_fetch_response(response)
+            }
+            super::message::CertifiedBlockFetch::Proof(proof) => {
+                self.handle_certified_block_fetch_proof(proof)
+            }
+            super::message::CertifiedBlockFetch::Body(body) => {
+                self.handle_certified_block_fetch_body(body)
+            }
+        }
+    }
+
+    fn handle_certified_block_fetch_request(
+        &mut self,
+        request: super::message::CertifiedBlockFetchRequest,
+        sender: Option<PeerId>,
+    ) {
+        if let Some(sender) = sender.as_ref()
+            && sender != &request.requester
+        {
+            warn!(
+                authenticated_sender = %sender,
+                claimed_requester = %request.requester,
+                height = request.height,
+                view = request.view,
+                block = %request.block_hash,
+                "dropping certified block fetch request with mismatched requester"
+            );
+            self.record_consensus_message_handling(
+                super::status::ConsensusMessageKind::CertifiedBlockFetch,
+                super::status::ConsensusMessageOutcome::Dropped,
+                super::status::ConsensusMessageReason::InvalidPayload,
+            );
+            return;
+        }
+        let Some(block) = self.local_signed_block_for_body_repair(request.block_hash) else {
+            debug!(
+                height = request.height,
+                view = request.view,
+                block = %request.block_hash,
+                requester = %request.requester,
+                "unable to serve certified block fetch request: local block missing"
+            );
+            return;
+        };
+        if block.header().height().get() != request.height
+            || block.header().view_change_index() != request.view
+            || block.hash() != request.block_hash
+        {
+            warn!(
+                height = request.height,
+                view = request.view,
+                block = %request.block_hash,
+                local_height = block.header().height().get(),
+                local_view = block.header().view_change_index(),
+                local_block = %block.hash(),
+                "dropping certified block fetch request with mismatched local subject"
+            );
+            self.record_consensus_message_handling(
+                super::status::ConsensusMessageKind::CertifiedBlockFetch,
+                super::status::ConsensusMessageOutcome::Dropped,
+                super::status::ConsensusMessageReason::InvalidPayload,
+            );
+            return;
+        }
+        let Some(response) = self.certified_block_fetch_response_for_block(block.as_ref()) else {
+            debug!(
+                height = request.height,
+                view = request.view,
+                block = %request.block_hash,
+                requester = %request.requester,
+                "unable to serve certified block fetch request: commit QC unavailable"
+            );
+            return;
+        };
+        info!(
+            height = request.height,
+            view = request.view,
+            block = %request.block_hash,
+            requester = %request.requester,
+            "sending certified block fetch response"
+        );
+        self.dispatch_certified_block_fetch_response(request.requester, response);
+    }
+
+    fn accept_certified_block_fetch_proof(
+        &mut self,
+        proof: &super::message::CertifiedBlockFetchProof,
+    ) -> Result<bool> {
+        if let Err(err) = proof.validate_subject() {
+            warn!(
+                ?err,
+                height = proof.height,
+                view = proof.view,
+                block = %proof.block_hash,
+                "dropping malformed certified block fetch proof"
+            );
+            self.record_consensus_message_handling(
+                super::status::ConsensusMessageKind::CertifiedBlockFetch,
+                super::status::ConsensusMessageOutcome::Dropped,
+                super::status::ConsensusMessageReason::InvalidPayload,
+            );
+            return Ok(false);
+        }
+        let block_hash = proof.block_hash;
+        let height = proof.height;
+        let view = proof.view;
+        let commit_qc = proof.commit_qc.clone();
+        self.handle_qc_with_stake_snapshot(commit_qc.clone(), proof.stake_snapshot.clone())?;
+        if self
+            .cached_commit_qc_for_block(block_hash, height, view)
+            .is_none()
+        {
+            warn!(
+                height,
+                view,
+                block = %block_hash,
+                "dropping certified block fetch response whose commit QC was not accepted locally"
+            );
+            self.record_consensus_message_handling(
+                super::status::ConsensusMessageKind::CertifiedBlockFetch,
+                super::status::ConsensusMessageOutcome::Dropped,
+                super::status::ConsensusMessageReason::InvalidPayload,
+            );
+            return Ok(false);
+        }
+        self.state.record_commit_roster(
+            &commit_qc,
+            &proof.validator_checkpoint,
+            proof.stake_snapshot.clone(),
+        );
+        super::status::record_commit_qc(commit_qc.clone());
+        self.clear_missing_commit_qc_request(&block_hash, MissingBlockClearReason::Obsolete);
+        Ok(true)
+    }
+
+    fn handle_certified_block_fetch_proof(
+        &mut self,
+        proof: super::message::CertifiedBlockFetchProof,
+    ) -> Result<()> {
+        let _ = self.accept_certified_block_fetch_proof(&proof)?;
+        Ok(())
+    }
+
+    fn handle_certified_block_fetch_body(
+        &mut self,
+        body: super::message::CertifiedBlockFetchBody,
+    ) -> Result<()> {
+        if let Err(err) = body.validate_subject() {
+            warn!(
+                ?err,
+                height = body.height,
+                view = body.view,
+                block = %body.block.hash(),
+                "dropping malformed certified block fetch body"
+            );
+            self.record_consensus_message_handling(
+                super::status::ConsensusMessageKind::CertifiedBlockFetch,
+                super::status::ConsensusMessageOutcome::Dropped,
+                super::status::ConsensusMessageReason::InvalidPayload,
+            );
+            return Ok(());
+        }
+        let block_hash = body.block.hash();
+        let height = body.height;
+        let view = body.view;
+        let Some(commit_qc) = self.cached_commit_qc_for_block(block_hash, height, view) else {
+            warn!(
+                height,
+                view,
+                block = %block_hash,
+                "dropping certified block fetch body without an accepted commit proof"
+            );
+            self.record_consensus_message_handling(
+                super::status::ConsensusMessageKind::CertifiedBlockFetch,
+                super::status::ConsensusMessageOutcome::Dropped,
+                super::status::ConsensusMessageReason::QuorumMissing,
+            );
+            return Ok(());
+        };
+        let snapshot = self
+            .state
+            .commit_roster_snapshot_for_block(height, block_hash);
+        let validator_checkpoint = snapshot
+            .as_ref()
+            .map(|snapshot| snapshot.validator_checkpoint.clone())
+            .unwrap_or_else(|| Self::validator_checkpoint_from_commit_qc(&commit_qc));
+        let stake_snapshot = snapshot
+            .and_then(|snapshot| snapshot.stake_snapshot)
+            .filter(|snapshot| snapshot.matches_roster(&commit_qc.validator_set))
+            .or_else(|| match self.consensus_context_for_height(height).0 {
+                ConsensusMode::Permissioned => None,
+                ConsensusMode::Npos => self
+                    .roster_validation_cache
+                    .stake_snapshot_for_roster(&commit_qc.validator_set),
+            });
+        let response = super::message::CertifiedBlockFetchResponse {
+            height,
+            view,
+            block: body.block,
+            commit_qc,
+            validator_checkpoint,
+            stake_snapshot,
+        };
+        self.materialize_certified_block_fetch_response(response);
+        Ok(())
+    }
+
+    fn handle_certified_block_fetch_response(
+        &mut self,
+        response: super::message::CertifiedBlockFetchResponse,
+    ) -> Result<()> {
+        if let Err(err) = response.validate_subject() {
+            warn!(
+                ?err,
+                height = response.height,
+                view = response.view,
+                block = %response.block.hash(),
+                "dropping malformed certified block fetch response"
+            );
+            self.record_consensus_message_handling(
+                super::status::ConsensusMessageKind::CertifiedBlockFetch,
+                super::status::ConsensusMessageOutcome::Dropped,
+                super::status::ConsensusMessageReason::InvalidPayload,
+            );
+            return Ok(());
+        }
+        let proof = Self::certified_block_fetch_proof_for_response(&response);
+        if !self.accept_certified_block_fetch_proof(&proof)? {
+            return Ok(());
+        }
+        self.materialize_certified_block_fetch_response(response);
+        Ok(())
     }
 
     fn direct_commit_qc_from_block_sync_update(
@@ -959,18 +1590,27 @@ impl Actor {
         &mut self,
         peer: PeerId,
         block: &SignedBlock,
+        priority: FetchPendingBlockPriority,
+        requester_roster_proof_known: bool,
     ) -> bool {
         let block_hash = block.hash();
         let header = block.header();
         let height = header.height().get();
         let view = header.view_change_index();
         let Some(qc) = self.direct_commit_qc_for_block(block) else {
-            let replayed_votes = self.rebroadcast_block_votes_to_targets(
+            let mut replay_targets =
+                self.known_block_commit_qc_recovery_targets(block_hash, height, view, &[]);
+            replay_targets.push(peer.clone());
+            replay_targets.sort();
+            replay_targets.dedup();
+            let replayed_votes = self.rebroadcast_block_votes_to_targets_with_backpressure(
                 crate::sumeragi::consensus::Phase::Commit,
                 block_hash,
                 height,
                 view,
-                std::slice::from_ref(&peer),
+                &replay_targets,
+                true,
+                "commit_qc_only_fetch_response",
             );
             if replayed_votes > 0 {
                 info!(
@@ -978,9 +1618,31 @@ impl Actor {
                     view,
                     block = %block_hash,
                     peer = %peer,
+                    targets = replay_targets.len(),
                     replayed_votes,
                     "sending cached commit votes for commit-QC-only fetch response"
                 );
+            }
+            if self.committed_signed_quorum_fetch_fallback_available(block) {
+                let update = self.signed_quorum_fetch_fallback_update(block);
+                info!(
+                    height,
+                    view,
+                    block = %block_hash,
+                    peer = %peer,
+                    replayed_votes,
+                    "sending signed-quorum block sync fallback for commit-QC-only fetch response"
+                );
+                self.send_fetch_pending_block_response(
+                    peer,
+                    BlockMessage::BlockSyncUpdate(update),
+                    priority,
+                    /*force_bypass_queue*/ true,
+                    /*allow_highest_qc_bypass*/ true,
+                    /*allow_hintless_block_sync_bypass*/ true,
+                    requester_roster_proof_known,
+                );
+                return true;
             }
             debug!(
                 height,
@@ -998,6 +1660,15 @@ impl Actor {
             peer = %peer,
             "sending commit-QC-only fetch response"
         );
+        if let Some(response) =
+            self.certified_block_fetch_response_for_block_with_qc(block, qc.clone())
+        {
+            let _ = self.dispatch_certified_block_fetch_proof(
+                peer.clone(),
+                &response,
+                "fetch_pending_block_commit_qc_only",
+            );
+        }
         self.dispatch_direct_commit_qc_companion(
             peer,
             qc,
@@ -1007,6 +1678,84 @@ impl Actor {
             "fetch_pending_block_commit_qc_only",
         );
         true
+    }
+
+    fn committed_signed_quorum_fetch_fallback_available(&self, block: &SignedBlock) -> bool {
+        let block_hash = block.hash();
+        let height = block.header().height().get();
+        if self.committed_block_hash_for_height(height) != Some(block_hash) {
+            return false;
+        }
+
+        self.signed_commit_quorum_signer_count(block).is_some()
+    }
+
+    fn signed_commit_quorum_signer_count(&self, block: &SignedBlock) -> Option<usize> {
+        let block_hash = block.hash();
+        let height = block.header().height().get();
+        let view = block.header().view_change_index();
+        let (consensus_mode, mode_tag, prf_seed) = self.consensus_context_for_height(height);
+        let mut commit_roster =
+            self.roster_for_vote_with_mode(block_hash, height, view, consensus_mode);
+        if commit_roster.is_empty() {
+            commit_roster = self.effective_commit_topology();
+        }
+        if commit_roster.is_empty() {
+            return None;
+        }
+
+        let topology = super::network_topology::Topology::new(commit_roster);
+        let world = self.state.world_view();
+        let Ok(block_signers) =
+            super::validated_block_signers_from_world(block, &topology, &world, mode_tag, prf_seed)
+        else {
+            return None;
+        };
+        match consensus_mode {
+            ConsensusMode::Permissioned => (block_signers.len()
+                >= topology.min_votes_for_commit().max(1))
+            .then_some(block_signers.len()),
+            ConsensusMode::Npos => {
+                let stake_snapshot = self
+                    .state
+                    .commit_roster_snapshot_for_block(height, block_hash)
+                    .and_then(|snapshot| snapshot.stake_snapshot)
+                    .filter(|snapshot| snapshot.matches_roster(topology.as_ref()))
+                    .or_else(|| {
+                        self.roster_validation_cache
+                            .stake_snapshot_for_roster(topology.as_ref())
+                    });
+                let Some(stake_snapshot) = stake_snapshot.as_ref() else {
+                    return None;
+                };
+                let Ok(signer_peers) = super::signer_peers_for_topology(&block_signers, &topology)
+                else {
+                    return None;
+                };
+                super::stake_snapshot::stake_quorum_reached_for_snapshot(
+                    stake_snapshot,
+                    topology.as_ref(),
+                    &signer_peers,
+                )
+                .unwrap_or(false)
+                .then_some(block_signers.len())
+            }
+        }
+    }
+
+    fn signed_quorum_fetch_fallback_update(
+        &self,
+        block: &SignedBlock,
+    ) -> super::message::BlockSyncUpdate {
+        super::block_sync_update_with_roster(
+            block,
+            self.state.as_ref(),
+            self.kura.as_ref(),
+            self.config.consensus_mode,
+            self.common_config.trusted_peers.value(),
+            self.common_config.peer.id(),
+            &self.roster_validation_cache,
+        )
     }
 
     pub(super) fn send_block_body_response(&mut self, peer: PeerId, block: &SignedBlock) {
@@ -1259,7 +2008,6 @@ impl Actor {
             self.state.as_ref(),
             self.config.consensus_mode,
         );
-        self.attach_vnext_certificates_to_block_sync_update(&mut update);
         let (consensus_mode, _, _) = self.consensus_context_for_height(block_height);
         let has_roster = super::block_sync_update_has_roster(&update, consensus_mode);
         let has_cached_qc = update.commit_qc.is_some() || !update.commit_votes.is_empty();
@@ -1513,7 +2261,12 @@ impl Actor {
         let mut payload_peers = BTreeMap::new();
         for (peer, meta) in peers {
             if meta.commit_qc_only {
-                if !self.dispatch_commit_qc_only_fetch_response(peer.clone(), block) {
+                if !self.dispatch_commit_qc_only_fetch_response(
+                    peer.clone(),
+                    block,
+                    meta.priority,
+                    meta.requester_roster_proof_known,
+                ) {
                     self.stash_pending_fetch_request(
                         block_hash,
                         peer,
@@ -1970,8 +2723,6 @@ impl Actor {
             commit_qc: incoming_qc,
             validator_checkpoint,
             stake_snapshot,
-            vnext_rechain_certificates,
-            vnext_view_change_certificates,
         } = update;
         let mut incoming_qc = incoming_qc;
         let mut validator_checkpoint = validator_checkpoint;
@@ -1979,33 +2730,6 @@ impl Actor {
         let block_hash = block.hash();
         let block_height = block.header().height().get();
         let block_view = block.header().view_change_index();
-        let matching_rechain_certificates = vnext_rechain_certificates
-            .iter()
-            .filter(|certificate| {
-                super::vnext_rechain_certificate_matches_block(
-                    certificate,
-                    block_hash,
-                    block_height,
-                    block_view,
-                )
-            })
-            .cloned()
-            .collect::<Vec<_>>();
-        let matching_view_change_certificates = vnext_view_change_certificates
-            .iter()
-            .filter(|certificate| {
-                super::vnext_view_change_certificate_matches_block(
-                    certificate,
-                    block_height,
-                    block_view,
-                )
-            })
-            .cloned()
-            .collect::<Vec<_>>();
-        self.install_vnext_block_sync_sidecars(
-            &matching_rechain_certificates,
-            &matching_view_change_certificates,
-        );
         self.maybe_cache_rehydrated_kura_body(&block);
         let parent_hash = block.header().prev_block_hash();
         let local_height = u64::try_from(self.state.committed_height()).unwrap_or(u64::MAX);
@@ -2176,6 +2900,21 @@ impl Actor {
                         )
                     })
                 });
+                let signed_quorum_repair_signers = sidecar_qc
+                    .is_none()
+                    .then(|| {
+                        (exact_contiguous_frontier
+                            && self.missing_commit_qc_repair_active_for_round(
+                                block_hash,
+                                block_height,
+                                block_view,
+                                local_height,
+                                Instant::now(),
+                            ))
+                        .then(|| self.signed_commit_quorum_signer_count(&block))
+                        .flatten()
+                    })
+                    .flatten();
                 if sidecar_qc.is_some() {
                     let qc = sidecar_qc
                         .take()
@@ -2253,6 +2992,40 @@ impl Actor {
                         block_hash,
                         super::status::RoundEventCauseTrace::BlockSyncUpdated,
                         None,
+                    );
+                } else if let Some(block_signers) = signed_quorum_repair_signers {
+                    if let Some(pending) = self.pending.pending_blocks.get_mut(&block_hash)
+                        && pending.height == block_height
+                        && pending.view == block_view
+                        && pending.validation_status != ValidationStatus::Invalid
+                    {
+                        // A canonical committed peer may no longer have a portable commit QC,
+                        // but its committed block still carries a verified commit-signature
+                        // quorum. Treat that quorum as the local commit evidence needed to run
+                        // the finalization path.
+                        pending.note_commit_qc_observed(expected_epoch);
+                    }
+                    self.note_frontier_commit_qc_observed(
+                        block_hash,
+                        block_height,
+                        block_view,
+                        Instant::now(),
+                    );
+                    self.clear_missing_commit_qc_request(
+                        &block_hash,
+                        MissingBlockClearReason::Obsolete,
+                    );
+                    self.request_commit_pipeline_for_pending(
+                        block_hash,
+                        super::status::RoundEventCauseTrace::BlockSyncUpdated,
+                        None,
+                    );
+                    info!(
+                        height = block_height,
+                        view = block_view,
+                        block = %block_hash,
+                        block_signers,
+                        "accepted signed-quorum block sync fallback as commit evidence for known block"
                     );
                 }
                 return Ok(());
@@ -2771,8 +3544,6 @@ impl Actor {
                     commit_qc: incoming_qc,
                     validator_checkpoint,
                     stake_snapshot,
-                    vnext_rechain_certificates,
-                    vnext_view_change_certificates,
                 },
                 sender,
                 block_hash,
@@ -4012,6 +4783,51 @@ impl Actor {
             u64::try_from(block_apply_start.elapsed().as_millis()).unwrap_or(u64::MAX);
         let block_known_after_creation = self.block_known_locally(block_hash);
         let creation_ok = creation_result.is_ok();
+        let signed_quorum_commit_repair_active = creation_ok
+            && block_known_after_creation
+            && signature_quorum_met
+            && exact_contiguous_frontier
+            && !qc_evidence_present
+            && !commit_cert_present
+            && !checkpoint_present
+            && self.missing_commit_qc_repair_active_for_round(
+                block_hash,
+                block_height,
+                block_view,
+                local_height,
+                Instant::now(),
+            );
+        if signed_quorum_commit_repair_active {
+            if let Some(pending) = self.pending.pending_blocks.get_mut(&block_hash)
+                && pending.height == block_height
+                && pending.view == block_view
+                && pending.validation_status != ValidationStatus::Invalid
+            {
+                // A canonical committed peer may no longer have a portable commit QC, but its
+                // committed block still carries a verified commit-signature quorum. Treat that
+                // quorum as the local commit evidence needed to run the finalization path.
+                pending.note_commit_qc_observed(expected_epoch);
+            }
+            self.note_frontier_commit_qc_observed(
+                block_hash,
+                block_height,
+                block_view,
+                Instant::now(),
+            );
+            self.clear_missing_commit_qc_request(&block_hash, MissingBlockClearReason::Obsolete);
+            self.request_commit_pipeline_for_pending(
+                block_hash,
+                super::status::RoundEventCauseTrace::BlockSyncUpdated,
+                None,
+            );
+            info!(
+                height = block_height,
+                view = block_view,
+                block = %block_hash,
+                block_signers = block_signer_count,
+                "accepted signed-quorum block sync fallback as commit evidence"
+            );
+        }
         let recovered_sparse_next_height_payload = !block_known
             && block_known_after_creation
             && block_height == local_height.saturating_add(1)
@@ -4852,7 +5668,9 @@ impl Actor {
                     })
                     .or_insert(request_meta);
                 let response = self.build_fetch_pending_block_payload(block);
-                if self.should_defer_canonical_committed_fetch_response(block, &response) {
+                if !commit_qc_only
+                    && self.should_defer_canonical_committed_fetch_response(block, &response)
+                {
                     debug!(
                         height = block.header().height().get(),
                         view = block.header().view_change_index(),
@@ -5026,6 +5844,50 @@ impl Actor {
             )
     }
 
+    fn block_body_response_payload_identity(
+        response: &super::message::BlockBodyResponse,
+    ) -> (HashOf<BlockHeader>, u64, u64, Hash) {
+        let block = match &response.body {
+            super::message::BlockBodyData::BlockCreated(created) => &created.block,
+            super::message::BlockBodyData::BlockSyncUpdate(update) => &update.block,
+        };
+        let header = block.header();
+        let payload_hash = Hash::new(super::proposals::block_payload_bytes(block));
+        (
+            block.hash(),
+            header.height().get(),
+            header.view_change_index(),
+            payload_hash,
+        )
+    }
+
+    fn allow_rbc_session_block_body_repair(
+        &self,
+        response: &super::message::BlockBodyResponse,
+    ) -> bool {
+        if !self.runtime_da_enabled() || !self.frontier_slot_is_exact_height(response.height) {
+            return false;
+        }
+        let key = Actor::session_key(&response.block_hash, response.height, response.view);
+        let Some(session) = self.subsystems.da_rbc.rbc.sessions.get(&key) else {
+            return false;
+        };
+        if !self.rbc_session_metadata_matches_progress_slot(key, session)
+            || self.rbc_session_has_authoritative_payload_for_progress(key, session)
+        {
+            return false;
+        }
+        let Some(expected_payload_hash) = session.payload_hash() else {
+            return false;
+        };
+        let (block_hash, height, view, payload_hash) =
+            Self::block_body_response_payload_identity(response);
+        block_hash == response.block_hash
+            && height == response.height
+            && view == response.view
+            && payload_hash == expected_payload_hash
+    }
+
     fn observed_commit_qc_epoch_for_body_repair(
         &self,
         block_hash: HashOf<BlockHeader>,
@@ -5119,8 +5981,10 @@ impl Actor {
                 && slot.height == response.height
                 && slot.view == response.view
         });
-        let allow_same_height_repair =
-            !slot_matches && self.allow_same_height_block_body_repair(&response);
+        let allow_rbc_body_repair =
+            !slot_matches && self.allow_rbc_session_block_body_repair(&response);
+        let allow_same_height_repair = !slot_matches
+            && (allow_rbc_body_repair || self.allow_same_height_block_body_repair(&response));
         if !slot_matches && !allow_same_height_repair {
             self.handle_detached_block_body_commit_qc(
                 detached_commit_qc,
@@ -5154,6 +6018,7 @@ impl Actor {
                     .frontier_slot
                     .as_ref()
                     .map(|slot| (slot.height, slot.view, slot.block_hash)),
+                allow_rbc_body_repair,
                 "accepting BlockBodyResponse for exact-height same-slot repair after frontier ownership moved"
             );
         }
@@ -5274,6 +6139,7 @@ impl Actor {
                 sender = ?sender_for_slot.as_ref(),
                 slot_matches = slot_matches_after,
                 allow_same_height_repair,
+                allow_rbc_body_repair,
                 vote_rx_depth = queue_depths.vote_rx,
                 block_payload_rx_depth = queue_depths.block_payload_rx,
                 rbc_chunk_rx_depth = queue_depths.rbc_chunk_rx,
@@ -5382,7 +6248,7 @@ impl Actor {
         }
     }
 
-    fn materialize_frontier_block_sync_payload_for_qc_recovery(
+    pub(super) fn materialize_frontier_block_sync_payload_for_qc_recovery(
         &mut self,
         block: &SignedBlock,
         observed_commit_qc_epoch: Option<u64>,

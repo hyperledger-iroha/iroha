@@ -1,4 +1,7 @@
 import { blake2b } from "@noble/hashes/blake2b";
+import { secp256k1 } from "@noble/curves/secp256k1";
+import { blake3 } from "@noble/hashes/blake3";
+import { sha256 } from "@noble/hashes/sha256";
 import { keccak_256 } from "@noble/hashes/sha3";
 
 export const SCCP_DOMAIN_SORA = 0;
@@ -11,6 +14,93 @@ export const SCCP_DOMAIN_SORA_KUSAMA = 6;
 export const SCCP_DOMAIN_SORA_POLKADOT = 7;
 export const SCCP_DOMAIN_SORA2 = 8;
 export const SCCP_STARK_FRI_PROOF_FAMILY_V1 = "stark-fri-v1";
+export const SCCP_SOURCE_STATE_MAX_PROOF_BYTES = 2 * 1024 * 1024;
+export const SCCP_SOURCE_STATE_MAX_PROOF_LABEL_BYTES = 128;
+export const SCCP_NATIVE_RECURSIVE_MAX_PROOF_BYTES = 2 * 1024 * 1024;
+export const SCCP_SOURCE_ADAPTER_OPEN_VERIFY_CIRCUIT_ID_V1 =
+  "sccp-source-adapter-v1";
+export const SCCP_SOURCE_ADAPTER_FASTPQ_PARAMETER_SET_V1 =
+  "fastpq-lane-balanced";
+export const SCCP_EVM_GROTH16_BN254_PROOF_BACKEND_V1 = "evm-groth16-bn254-v1";
+export const SCCP_GROTH16_BN254_PROOF_ABI_BYTE_LENGTH_V1 = 384;
+export const SCCP_EVM_CONTRACT_CALL_ABI_TUPLE_V1 = "abi_tuple_v1";
+export const SCCP_TRON_CONTRACT_CALL_ABI_TUPLE_V1 = "tron_abi_tuple_v1";
+export const SCCP_SUBMIT_MESSAGE_PROOF_ABI_V1 =
+  "submitSccpMessageProof(bytes,bytes32[6],bytes32)";
+export const SCCP_SOLANA_RECURSIVE_PROOF_BACKEND_V1 = "sccp-solana-recursive-mainnet-v1";
+export const SCCP_SOLANA_ACCOUNTS_LT_HASH_OPEN_VERIFY_CIRCUIT_ID_V1 =
+  "sccp-solana-accounts-lt-hash-v1";
+export const SCCP_SOLANA_TOWER_REPLAY_OPEN_VERIFY_CIRCUIT_ID_V1 =
+  "sccp-solana-tower-replay-v1";
+export const SCCP_SOLANA_FULL_ACCOUNTSDB_LATTICE_OPEN_VERIFY_CIRCUIT_ID_V1 =
+  "sccp-solana-full-accountsdb-lattice-v1";
+export const SCCP_SOLANA_BANK_FORK_CHOICE_OPEN_VERIFY_CIRCUIT_ID_V1 =
+  "sccp-solana-bank-fork-choice-v1";
+export const SCCP_SOLANA_MAINNET_GENESIS_HASH = "5eykt4UsFv8P8NJdTREpY1vzqKqZKvdp";
+export const SCCP_SOLANA_MAINNET_ACCOUNTS_DB_VERIFIER_ID_V1 =
+  "sccp:sol:accounts-db-verifier:accounts-lt-hash-mainnet-beta:v1";
+export const SCCP_SOLANA_UPGRADEABLE_LOADER_ID =
+  "BPFLoaderUpgradeab1e11111111111111111111111";
+const SCCP_SOLANA_TEMPLATE_SOURCE_TRUST_ANCHOR_HASH_V1 =
+  "0x113bdb7601d84f2098daec386346a7123857d181b3ac5bd23df50fa9e1b2cbe3";
+const SCCP_SOLANA_TEMPLATE_CONSENSUS_VERIFIER_HASH_V1 =
+  "0x97ea89019e6c79305d06dfc27640ee14a6b42ba6eaf86e1835ee9b433dba48ba";
+const SCCP_SOLANA_TEMPLATE_MESSAGE_INCLUSION_VERIFIER_HASH_V1 =
+  "0xb8358bfef1e428a6a7e9115687cb2b88d9c21dad4021bea3e11d43489eb3dcb0";
+export const SCCP_SOLANA_TEMPLATE_SOURCE_STATE_VERIFIER_HASH_V1 =
+  "0x6b4e4106bbb6b343ae1a4a36c9c68756d4454d2167c9b8b2ee3225e39fb0a48b";
+const SCCP_SOLANA_TEMPLATE_FINALITY_POLICY_HASH_V1 =
+  "0x9df7ea90cf1bbba036788b14804f63f4be1e908390be89524fd4486f74344f56";
+export const SCCP_SOLANA_MAINNET_TOWER_REPLAY_VERIFIER_ID_V1 =
+  "sccp:sol:light-client:tower-replay-mainnet-beta:v1";
+export const SCCP_SOLANA_MAINNET_FULL_ACCOUNTSDB_LATTICE_VERIFIER_ID_V1 =
+  "sccp:sol:light-client:full-accountsdb-lattice-mainnet-beta:v1";
+export const SCCP_SOLANA_MAINNET_BANK_FORK_CHOICE_VERIFIER_ID_V1 =
+  "sccp:sol:light-client:bank-fork-choice-mainnet-beta:v1";
+export const SCCP_SOLANA_MAINNET_SLOTS_PER_EPOCH = 432_000n;
+export const SCCP_SOLANA_TOWER_LOCKOUT_CONFIRMATION_DEPTH = 32n;
+export const SCCP_SOLANA_TOWER_VOTE_STACK_DEPTH =
+  SCCP_SOLANA_TOWER_LOCKOUT_CONFIRMATION_DEPTH - 1n;
+export const SCCP_SOLANA_TOWER_WARMUP_COOLDOWN_RATE_BPS = 900n;
+export const SCCP_SOLANA_MAX_VALIDATORS = 8_192;
+export const SCCP_SOLANA_VOTE_PROGRAM_ID =
+  "0x0761481d357474bb7c4d7624ebd3bdb3d8355e73d11043fc0da3538000000000";
+export const SCCP_SOLANA_STAKE_PROGRAM_ID =
+  "0x06a1d8179137542a983437bdfe2a7ab2557f535c8a78722b68a49dc000000000";
+export const SCCP_SOLANA_SYSVAR_PROGRAM_ID =
+  "0x06a7d5171875f729c73d93408f216120067ed88c76e08c287fc1946000000000";
+export const SCCP_SOLANA_STAKE_HISTORY_SYSVAR_ID =
+  "0x06a7d517193584d0feed9bb3431d13206be544281b57b8566cc5375ff4000000";
+export const SCCP_SOLANA_BORSH_INSTRUCTION_V1 = "borsh_instruction_v1";
+export const SCCP_ZERO_HASH_V1 =
+  "0x0000000000000000000000000000000000000000000000000000000000000000";
+export const SCCP_TON_CONTRACT_PROOF_BACKEND_V1 = "ton-contract-v1";
+export const SCCP_TON_MESSAGE_BODY_BOC_V1 = "ton_message_body_boc_v1";
+export const SCCP_TON_MAINNET_SHARD_STATE_VERIFIER_ID_V1 =
+  "sccp:ton:source-state-verifier:shard-state-light-client-mainnet:v1";
+export const SCCP_TON_SHARD_STATE_OPEN_VERIFY_CIRCUIT_ID_V1 =
+  "sccp-ton-shard-state-light-client-v1";
+export const SCCP_TON_MASTERCHAIN_CONFIG_OPEN_VERIFY_CIRCUIT_ID_V1 =
+  "sccp-ton-masterchain-config-v1";
+export const SCCP_TON_VALIDATOR_SET_TRANSITION_OPEN_VERIFY_CIRCUIT_ID_V1 =
+  "sccp-ton-validator-set-transition-v1";
+export const SCCP_TON_SHARD_ACCOUNTS_DICTIONARY_OPEN_VERIFY_CIRCUIT_ID_V1 =
+  "sccp-ton-shard-accounts-dictionary-v1";
+export const SCCP_TON_MAINNET_MASTERCHAIN_CONFIG_VERIFIER_ID_V1 =
+  "sccp:ton:light-client:masterchain-config-mainnet:v1";
+export const SCCP_TON_MAINNET_VALIDATOR_SET_TRANSITION_VERIFIER_ID_V1 =
+  "sccp:ton:light-client:validator-set-transition-mainnet:v1";
+export const SCCP_TON_MAINNET_SHARD_ACCOUNTS_DICTIONARY_VERIFIER_ID_V1 =
+  "sccp:ton:light-client:shard-accounts-dictionary-mainnet:v1";
+export const SCCP_TON_CURRENT_VALIDATOR_SET_CONFIG_PARAM = 34n;
+export const SCCP_TON_CONFIG_PARAM_KEY_BITS = 32;
+export const SCCP_TRON_GROTH16_BN254_PROOF_BACKEND_V1 = "tron-groth16-bn254-v1";
+export const SCCP_SUBSTRATE_RUNTIME_PROOF_BACKEND_V1 = "substrate-runtime-v1";
+export const SCCP_SUBSTRATE_RUNTIME_CALL_SCALE_V1 = "scale_call_v1";
+export const SCCP_SUBSTRATE_SUBMIT_MESSAGE_PROOF_ENTRYPOINT_V1 =
+  "SccpBridge.submit_message_proof";
+export const SCCP_SUBSTRATE_RUNTIME_STORAGE_OPEN_VERIFY_CIRCUIT_ID_V1 =
+  "sccp-substrate-runtime-storage-v1";
 
 export const SCCP_CORE_REMOTE_DOMAINS = [
   SCCP_DOMAIN_ETH,
@@ -30,6 +120,386 @@ const SCCP_MSG_PREFIX_TOKEN_RESUME_V1 = "sccp:token:resume:v1";
 const SCCP_HUB_LEAF_PREFIX_V1 = "sccp:hub:leaf:v1";
 const SCCP_HUB_NODE_PREFIX_V1 = "sccp:hub:node:v1";
 const SCCP_PAYLOAD_HASH_PREFIX_V1 = "sccp:payload:v1";
+const SCCP_EVM_RECEIPT_PROOF_PREFIX_V1 = "sccp:evm:receipt-proof:v1";
+const SCCP_EVM_GROTH16_PROOF_REQUEST_PREFIX_V1 =
+  "sccp:evm:groth16-proof-request:v1";
+const SCCP_EVM_GROTH16_PROOF_ENVELOPE_PREFIX_V1 =
+  "sccp:evm:groth16-proof-envelope:v1";
+const SCCP_EVM_DESTINATION_BINDING_LABEL_V1 =
+  "iroha:sccp:evm-destination-binding:v1";
+const SCCP_ETH_SYNC_COMMITTEE_PREFIX_V1 = "sccp:eth:sync-committee:v1";
+const SCCP_ETH_SYNC_COMMITTEE_PAYLOAD_PREFIX_V1 =
+  "sccp:eth:sync-committee-payload:v1";
+const SCCP_ETH_SYNC_COMMITTEE_TRANSITION_MESSAGE_PREFIX_V1 =
+  "sccp:eth:sync-committee-transition-message:v1";
+const SCCP_ETH_SYNC_COMMITTEE_TRANSITION_SIGNATURE_PREFIX_V1 =
+  "sccp:eth:sync-committee-transition-signature:v1";
+const SCCP_BSC_RECEIPT_PROOF_PREFIX_V1 = "sccp:bsc:receipt-proof:v1";
+const SCCP_BSC_VALIDATOR_SET_PREFIX_V1 = "sccp:bsc:validator-set:v1";
+const SCCP_BSC_VALIDATOR_SET_PAYLOAD_PREFIX_V1 =
+  "sccp:bsc:validator-set-payload:v1";
+const SCCP_BSC_COMMIT_MESSAGE_PREFIX_V1 = "sccp:bsc:commit-message:v1";
+const SCCP_BSC_COMMIT_SEAL_PREFIX_V1 = "sccp:bsc:commit-seal:v1";
+const SCCP_BSC_VALIDATOR_SET_TRANSITION_MESSAGE_PREFIX_V1 =
+  "sccp:bsc:validator-set-transition-message:v1";
+const SCCP_BSC_VALIDATOR_SET_METADATA_PREFIX_V1 =
+  "sccp:bsc:validator-set-metadata:v1";
+const SCCP_BSC_VALIDATOR_SET_STORAGE_VALUE_PREFIX_V1 =
+  "sccp:bsc:validator-set-storage-value:v1";
+const SCCP_EVM_RECEIPT_ROOT_VALUE_MARKER_V1 =
+  "sccp:evm:receipt-root-value:v1";
+const SCCP_SOLANA_MESSAGE_PROOF_PREFIX_V1 = "sccp:solana:message-proof:v1";
+const SCCP_SOLANA_TRANSACTION_STATUS_LEAF_PREFIX_V1 =
+  "sccp:solana:transaction-status-leaf:v1";
+const SCCP_SOURCE_NODE_PREFIX_V1 = "sccp:source:node:v1";
+const SCCP_SOLANA_EPOCH_STAKE_ROOT_PREFIX_V1 =
+  "sccp:solana:epoch-stake-root:v1";
+const SCCP_SOLANA_STAKE_ACTIVATION_PREFIX_V1 =
+  "sccp:solana:stake-activation:v1";
+const SCCP_SOLANA_STAKE_ACCOUNT_STATE_PREFIX_V1 =
+  "sccp:solana:stake-account-state:v1";
+const SCCP_SOLANA_ACCOUNT_OPENING_PREFIX_V1 =
+  "sccp:solana:account-opening:v1";
+const SCCP_SOLANA_ACCOUNT_RAW_DATA_PREFIX_V1 =
+  "sccp:solana:account-raw-data:v1";
+const SCCP_SOLANA_ACCOUNT_INCLUSION_LEAF_PREFIX_V1 =
+  "sccp:solana:account-inclusion-leaf:v1";
+const SCCP_SOLANA_ACCOUNT_INCLUSION_NODE_PREFIX_V1 =
+  "sccp:solana:account-inclusion-node:v1";
+const SCCP_SOLANA_VOTE_ACCOUNT_DATA_PREFIX_V1 =
+  "sccp:solana:vote-account-data:v1";
+const SCCP_SOLANA_STAKE_ACCOUNT_DATA_PREFIX_V1 =
+  "sccp:solana:stake-account-data:v1";
+const SCCP_SOLANA_STAKE_HISTORY_SYSVAR_DATA_PREFIX_V1 =
+  "sccp:solana:stake-history-sysvar-data:v1";
+const SCCP_SOLANA_STAKE_HISTORY_PREFIX_V1 =
+  "sccp:solana:stake-history:v1";
+const SCCP_SOLANA_ACCOUNTS_LT_HASH_PROOF_PUBLIC_INPUTS_PREFIX_V1 =
+  "sccp:solana:accounts-lt-proof-public-inputs:v1";
+const SCCP_SOLANA_ACCOUNTS_LT_HASH_OPENED_CONTRIBUTIONS_PREFIX_V1 =
+  "sccp:solana:accounts-lt-opened-contributions:v1";
+const SCCP_SOLANA_MAINNET_GENESIS_HASH_PREFIX_V1 =
+  "sccp:solana:mainnet-genesis:v1";
+const SCCP_SOLANA_BANK_HASH_HARD_FORK_DATA_PREFIX_V1 =
+  "sccp:solana:bank-hash-hard-fork-data:v1";
+const SCCP_SOLANA_ACCOUNTS_LT_HASH_FASTPQ_DSID_PREFIX_V1 =
+  "sccp:solana:accounts-lt:fastpq:dsid:v1";
+const SCCP_SOLANA_ACCOUNTS_LT_HASH_FASTPQ_PARAMETER_SET_V1 =
+  "fastpq-lane-balanced";
+const SCCP_SOLANA_ACCOUNTS_LT_HASH_FASTPQ_STATEMENT_KEY_V1 =
+  "sccp:solana:accounts-lt:v1:statement";
+const SCCP_SOLANA_ACCOUNTS_LT_HASH_FASTPQ_ACCOUNTS_KEY_V1 =
+  "sccp:solana:accounts-lt:v1:accounts";
+const SCCP_SOLANA_ACCOUNTS_LT_HASH_FASTPQ_OPENED_CONTRIBUTIONS_KEY_V1 =
+  "sccp:solana:accounts-lt:v1:opened-contributions";
+const SCCP_SOLANA_ACCOUNTS_LT_HASH_FASTPQ_RESIDUAL_KEY_V1 =
+  "sccp:solana:accounts-lt:v1:residual";
+const SCCP_SOLANA_ACCOUNTS_LT_HASH_FASTPQ_CONTEXT_KEY_V1 =
+  "sccp:solana:accounts-lt:v1:context";
+const SCCP_SOLANA_FULL_LIGHT_CLIENT_AUDIT_FASTPQ_DSID_PREFIX_V1 =
+  "sccp:solana:full-light-client-audit:fastpq:dsid:v1";
+const SCCP_SOLANA_FULL_LIGHT_CLIENT_AUDIT_FASTPQ_PARAMETER_SET_V1 =
+  "fastpq-lane-balanced";
+const SCCP_SOLANA_FULL_LIGHT_CLIENT_AUDIT_FASTPQ_STATEMENT_KEY_V1 =
+  "sccp:solana:full-light-client-audit:v1:statement";
+const SCCP_SOLANA_FULL_LIGHT_CLIENT_AUDIT_FASTPQ_CONTEXT_KEY_V1 =
+  "sccp:solana:full-light-client-audit:v1:context";
+const SCCP_SOLANA_FULL_LIGHT_CLIENT_AUDIT_FASTPQ_GATE_KEY_V1 =
+  "sccp:solana:full-light-client-audit:v1:gate";
+const SCCP_SOLANA_FULL_LIGHT_CLIENT_AUDIT_STATEMENT_PREFIX_V1 =
+  "sccp:solana:full-light-client-audit:statement:v1";
+const SCCP_SOLANA_TOWER_LOCKOUT_PREFIX_V1 =
+  "sccp:solana:tower-lockout:v1";
+const SCCP_SOLANA_TOWER_REPLAY_PREFIX_V1 =
+  "sccp:solana:tower-replay:v1";
+const SCCP_SOLANA_BANK_FORK_PREFIX_V1 = "sccp:solana:bank-fork:v1";
+const SCCP_SOLANA_VOTE_ROSTER_PREFIX_V1 = "sccp:solana:vote-roster:v1";
+const SCCP_SOLANA_FINALITY_CONTEXT_PREFIX_V1 =
+  "sccp:solana:finality-context:v1";
+const SCCP_SOLANA_VOTE_MESSAGE_PREFIX_V1 = "sccp:solana:finalized-vote:v1";
+const SCCP_SOLANA_PROOF_CONTEXT_PREFIX_V1 = "sccp:solana:proof-context:v1";
+const SCCP_SOLANA_TRANSACTION_SIGNATURE_BYTES = 64;
+const SCCP_SOLANA_PROGRAM_ID_BYTES = 32;
+const SCCP_SOLANA_UPGRADEABLE_LOADER_PROGRAM_TAG = 2;
+const SCCP_SOLANA_UPGRADEABLE_LOADER_PROGRAMDATA_TAG = 3;
+const SCCP_SOLANA_PROGRAMDATA_METADATA_LEN = 45;
+const SCCP_SOLANA_BPF_ELF_MAGIC = [0x7f, 0x45, 0x4c, 0x46];
+const SCCP_SOLANA_ROUTE_CANARY_LIVE_PROGRAM_LABEL_V1 =
+  "iroha:sccp:solana-route-canary-live-program:v1";
+const SCCP_TON_ROUTE_CANARY_LIVE_ACCOUNT_LABEL_V1 =
+  "iroha:sccp:ton-route-canary-live-account:v1";
+const SCCP_SOLANA_BASIS_POINTS_PER_UNIT = 10_000n;
+const SCCP_SOLANA_STAKE_STATE_V2_STAKE_ACCOUNT_DATA_LEN = 200;
+const SCCP_SOLANA_VOTE_STATE_ACCOUNT_DATA_LEN = 3_762;
+const SCCP_SOLANA_MAX_ACCOUNT_RAW_DATA_BYTES = 65_536;
+const SCCP_SOLANA_LT_HASH_ELEMENTS = 1024;
+const SCCP_SOLANA_ACCOUNTS_LT_HASH_BYTES = SCCP_SOLANA_LT_HASH_ELEMENTS * 2;
+const SCCP_SOLANA_OPENED_LT_HASH_ROLE_VOTE = 1;
+const SCCP_SOLANA_OPENED_LT_HASH_ROLE_STAKE = 2;
+const SCCP_SOLANA_OPENED_LT_HASH_ROLE_STAKE_HISTORY_SYSVAR = 3;
+const SCCP_SOLANA_MAX_BANK_HARD_FORK_HASH_DATA_BYTES = 1024;
+const SCCP_SOLANA_BLS_PUBLIC_KEY_COMPRESSED_LEN = 48;
+const SCCP_SOLANA_VOTE_STATE_V1_14_11_DISCRIMINANT = 1;
+const SCCP_SOLANA_VOTE_STATE_V3_DISCRIMINANT = 2;
+const SCCP_SOLANA_VOTE_STATE_V4_DISCRIMINANT = 3;
+const SCCP_SOLANA_VOTE_STATE_PRIOR_VOTERS = 32;
+const SCCP_SOLANA_VOTE_STATE_V4_AUTHORIZED_VOTERS = 4;
+const SCCP_SOLANA_VOTE_STATE_MAX_EPOCH_CREDITS = 64;
+const SCCP_SOLANA_STAKE_STATE_V2_STAKE_DISCRIMINANT = 2;
+const SCCP_SOLANA_STAKE_STATE_V2_STAKER_OFFSET = 12;
+const SCCP_SOLANA_STAKE_STATE_V2_WITHDRAWER_OFFSET = 44;
+const SCCP_SOLANA_STAKE_STATE_V2_VOTER_PUBKEY_OFFSET = 124;
+const SCCP_SOLANA_STAKE_STATE_V2_DELEGATED_STAKE_OFFSET = 156;
+const SCCP_SOLANA_STAKE_STATE_V2_ACTIVATION_EPOCH_OFFSET = 164;
+const SCCP_SOLANA_STAKE_STATE_V2_DEACTIVATION_EPOCH_OFFSET = 172;
+const SCCP_SOLANA_STAKE_STATE_V2_WARMUP_COOLDOWN_RATE_OFFSET = 180;
+const SCCP_SOLANA_STAKE_STATE_V2_WARMUP_COOLDOWN_RATE_BYTES = 8;
+const SCCP_SOLANA_STAKE_STATE_V2_LEGACY_WARMUP_COOLDOWN_RATE_BYTES = new Uint8Array([
+  0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0xd0, 0x3f,
+]);
+const SCCP_SOLANA_STAKE_STATE_V2_CURRENT_WARMUP_COOLDOWN_RATE_BYTES = new Uint8Array([
+  0x0a, 0xd7, 0xa3, 0x70, 0x3d, 0x0a, 0xb7, 0x3f,
+]);
+const SCCP_SOLANA_STAKE_STATE_V2_CREDITS_OBSERVED_OFFSET = 188;
+const SCCP_SOLANA_STAKE_STATE_V2_FLAG_OFFSET = 196;
+const SCCP_SOLANA_STAKE_STATE_V2_KNOWN_FLAGS_MASK = 0b0000_0001;
+const SOLANA_BASE58_ALPHABET =
+  "123456789ABCDEFGHJKLMNPQRSTUVWXYZabcdefghijkmnopqrstuvwxyz";
+const SOLANA_BASE58_INDEX = new Map(
+  Array.from(SOLANA_BASE58_ALPHABET, (char, index) => [char, BigInt(index)]),
+);
+const SCCP_SOURCE_ADAPTER_DEPLOYMENT_BINDING_PREFIX_V1 =
+  "sccp:source-adapter-deployment-binding:v1";
+const SCCP_DESTINATION_BINDING_PREFIX_V1 = "sccp:destination:binding:v1";
+const SCCP_SOURCE_VERIFIER_MATERIAL_RECORD_PREFIX_V1 =
+  "sccp:source-verifier-material-record:v1";
+const SCCP_SOURCE_ADAPTER_ENGINE_DEPLOYMENT_RECORD_PREFIX_V1 =
+  "sccp:source-adapter-engine-deployment:v1";
+const SCCP_SOLANA_FULL_LIGHT_CLIENT_GATE_PREFIX_V1 =
+  "sccp:solana:full-light-client-gate:v1";
+const SCCP_TON_FULL_LIGHT_CLIENT_GATE_PREFIX_V1 = "sccp:ton:full-light-client-gate:v1";
+const SCCP_SOURCE_ADAPTER_FASTPQ_TRACE_ROOT_V1 = 0x002a247f81c6f850n;
+const SCCP_SOURCE_ADAPTER_FASTPQ_LDE_ROOT_V1 = 0x60263388dbbf9b2an;
+const SCCP_SOURCE_ADAPTER_FASTPQ_OMEGA_COSET_V1 = 0x6af325e825ad5c18n;
+const SCCP_TON_SHARD_PROOF_PREFIX_V1 = "sccp:ton:shard-proof:v1";
+const SCCP_TON_VALIDATOR_SET_PREFIX_V1 = "sccp:ton:validator-set:v1";
+const SCCP_TON_VALIDATOR_SET_PAYLOAD_PREFIX_V1 =
+  "sccp:ton:validator-set-payload:v1";
+const SCCP_TON_MASTERCHAIN_CONFIG_LEAF_PREFIX_V1 =
+  "sccp:ton:masterchain-config-leaf:v1";
+const SCCP_TON_MASTERCHAIN_CONFIG_PROOF_PREFIX_V1 =
+  "sccp:ton:masterchain-config-proof:v1";
+const SCCP_TON_MASTERCHAIN_BLOCK_MESSAGE_PREFIX_V1 =
+  "sccp:ton:masterchain-block-message:v1";
+const SCCP_TON_MASTERCHAIN_SIGNATURES_PREFIX_V1 =
+  "sccp:ton:masterchain-signatures:v1";
+const SCCP_TON_VALIDATOR_SET_TRANSITION_MESSAGE_PREFIX_V1 =
+  "sccp:ton:validator-set-transition-message:v1";
+const SCCP_TON_VALIDATOR_SET_TRANSITION_SIGNATURES_PREFIX_V1 =
+  "sccp:ton:validator-set-transition-signatures:v1";
+const SCCP_TON_VALIDATOR_SET_TRANSITION_CHAIN_PREFIX_V1 =
+  "sccp:ton:validator-set-transition-chain:v1";
+const SCCP_TON_SHARD_STATE_PROOF_PUBLIC_INPUTS_PREFIX_V1 =
+  "sccp:ton:shard-state-proof-public-inputs:v1";
+const SCCP_TON_SHARD_STATE_FASTPQ_DSID_PREFIX_V1 =
+  "sccp:ton:shard-state:fastpq:dsid:v1";
+const SCCP_TON_SHARD_STATE_FASTPQ_PARAMETER_SET_V1 = "fastpq-lane-balanced";
+const SCCP_TON_SHARD_STATE_FASTPQ_STATEMENT_KEY_V1 =
+  "sccp:ton:shard-state:v1:statement";
+const SCCP_TON_SHARD_STATE_FASTPQ_WITNESS_KEY_V1 =
+  "sccp:ton:shard-state:v1:witness";
+const SCCP_TON_SHARD_STATE_FASTPQ_CONTEXT_KEY_V1 =
+  "sccp:ton:shard-state:v1:context";
+const SCCP_TON_SHARD_STATE_PROOF_BOC_PREFIX_V1 =
+  "sccp:ton:shard-state-proof-boc:v1";
+const SCCP_TON_SHARD_ACCOUNTS_PROOF_BOC_PREFIX_V1 =
+  "sccp:ton:shard-accounts-proof-boc:v1";
+const SCCP_TON_CONFIG_PROOF_BOC_PREFIX_V1 = "sccp:ton:config-proof-boc:v1";
+const SCCP_TON_FULL_LIGHT_CLIENT_AUDIT_FASTPQ_DSID_PREFIX_V1 =
+  "sccp:ton:full-light-client-audit:fastpq:dsid:v1";
+const SCCP_TON_FULL_LIGHT_CLIENT_AUDIT_FASTPQ_PARAMETER_SET_V1 =
+  "fastpq-lane-balanced";
+const SCCP_TON_FULL_LIGHT_CLIENT_AUDIT_FASTPQ_STATEMENT_KEY_V1 =
+  "sccp:ton:full-light-client-audit:v1:statement";
+const SCCP_TON_FULL_LIGHT_CLIENT_AUDIT_FASTPQ_CONTEXT_KEY_V1 =
+  "sccp:ton:full-light-client-audit:v1:context";
+const SCCP_TON_FULL_LIGHT_CLIENT_AUDIT_FASTPQ_GATE_KEY_V1 =
+  "sccp:ton:full-light-client-audit:v1:gate";
+const SCCP_TON_FULL_LIGHT_CLIENT_AUDIT_STATEMENT_PREFIX_V1 =
+  "sccp:ton:full-light-client-audit:statement:v1";
+const SCCP_TRON_RECEIPT_PROOF_PREFIX_V1 = "sccp:tron:receipt-proof:v1";
+const SCCP_TRON_RECEIPT_STATE_PROOF_PREFIX_V1 =
+  "sccp:tron:receipt-state-proof:v1";
+const SCCP_TRON_TRANSACTION_SOURCE_PROOF_PREFIX_V1 =
+  "sccp:tron:transaction-source-proof:v1";
+const SCCP_TRON_SOURCE_MESSAGE_CALL_ABI_V1 =
+  "submitSccpSourceEvent(uint32,uint32,bytes32)";
+const SCCP_TRON_TRIGGER_SMART_CONTRACT_TYPE_URL_V1 =
+  "type.googleapis.com/protocol.TriggerSmartContract";
+const SCCP_TRON_SOURCE_CALL_SIGNATURES = 1;
+const SCCP_TRON_SOURCE_BRIDGE_CONFIG_LABEL_V1 =
+  "iroha:sccp:tron-source-bridge-config:v1";
+const SCCP_TRON_RECEIPT_ROOT_VALUE_MARKER_V1 =
+  "sccp:tron:receipt-root-value:v1";
+const SCCP_TRON_SOLID_BLOCK_HEADER_PREFIX_V1 =
+  "sccp:tron:solid-block-header-proof:v1";
+const SCCP_TRON_WITNESS_SCHEDULE_PREFIX_V1 = "sccp:tron:witness-schedule:v1";
+const SCCP_TRON_WITNESS_SCHEDULE_PAYLOAD_PREFIX_V1 =
+  "sccp:tron:witness-schedule-payload:v1";
+const SCCP_TRON_SOLID_BLOCK_MESSAGE_PREFIX_V1 =
+  "sccp:tron:solid-block-message:v1";
+const SCCP_TRON_WITNESS_SEAL_PREFIX_V1 = "sccp:tron:witness-seal:v1";
+const SCCP_TRON_WITNESS_SCHEDULE_TRANSITION_MESSAGE_PREFIX_V1 =
+  "sccp:tron:witness-schedule-transition-message:v1";
+const SCCP_TRON_WITNESS_SCHEDULE_TRANSITION_SEAL_PREFIX_V1 =
+  "sccp:tron:witness-schedule-transition-seal:v1";
+const SCCP_TRON_GROTH16_PROOF_REQUEST_PREFIX_V1 =
+  "sccp:tron:groth16-proof-request:v1";
+const SCCP_TRON_GROTH16_PROOF_ENVELOPE_PREFIX_V1 =
+  "sccp:tron:groth16-proof-envelope:v1";
+const SCCP_TRON_DESTINATION_BINDING_LABEL_V1 =
+  "iroha:sccp:tron-destination-binding:v1";
+const SCCP_SUBSTRATE_RUNTIME_PROOF_REQUEST_PREFIX_V1 =
+  "sccp:substrate:runtime-proof-request:v1";
+const SCCP_SUBSTRATE_RUNTIME_PROOF_ENVELOPE_PREFIX_V1 =
+  "sccp:substrate:runtime-proof-envelope:v1";
+const SCCP_SUBSTRATE_STORAGE_PROOF_PREFIX_V1 = "sccp:substrate:storage-proof:v1";
+const SCCP_SUBSTRATE_RUNTIME_STORAGE_PROOF_PUBLIC_INPUTS_PREFIX_V1 =
+  "sccp:substrate:runtime-storage-proof-public-inputs:v1";
+const SCCP_SUBSTRATE_RUNTIME_STORAGE_FASTPQ_DSID_PREFIX_V1 =
+  "sccp:substrate:runtime-storage:fastpq:dsid:v1";
+const SCCP_SUBSTRATE_RUNTIME_STORAGE_FASTPQ_PARAMETER_SET_V1 =
+  "fastpq-lane-balanced";
+const SCCP_SUBSTRATE_RUNTIME_STORAGE_FASTPQ_STATEMENT_KEY_V1 =
+  "sccp:substrate:runtime-storage:v1:statement";
+const SCCP_SUBSTRATE_RUNTIME_STORAGE_FASTPQ_CONTEXT_KEY_V1 =
+  "sccp:substrate:runtime-storage:v1:context";
+const SCCP_SUBSTRATE_RUNTIME_STORAGE_FASTPQ_STORAGE_KEY_V1 =
+  "sccp:substrate:runtime-storage:v1:storage-key";
+const SCCP_SUBSTRATE_SYSTEM_EVENTS_STORAGE_KEY_V1 =
+  "0x26aa394eea5630e07c48ae0c9558cef780d41e5e16056765bc8461851072c9d7";
+const SCCP_SUBSTRATE_TEMPLATE_SOURCE_STATE_VERIFIER_HASHES_V1 = new Map([
+  [SCCP_DOMAIN_SORA_KUSAMA, "0xaf2d28b3e07447239f28e90ce4fdee7e6cd3778c087eaeda7170781eb4b76b9c"],
+  [SCCP_DOMAIN_SORA_POLKADOT, "0x664576f1a2409099c3b7dba82512c8757501f2869aedda0e45f858572b940b5d"],
+  [SCCP_DOMAIN_SORA2, "0x20509eb56524c727b6d028cc6b43f10c17048d31b92d5a96d41c0512d16267ef"],
+]);
+const SCCP_TON_TEMPLATE_SOURCE_STATE_VERIFIER_HASH_V1 =
+  "0x540205f876591604ccf39f72a051ac5e82647c9e48dbd48cb129d2543971a34f";
+const SCCP_TON_TEMPLATE_COMPONENT_HASHES_V1 = new Map([
+  ["sourceTrustAnchorHash", "0xd83b3a3eb920ac8338533535cf0d6c69c69d507e84aef8ec2094564b8427c56c"],
+  ["consensusVerifierHash", "0xb0225e16477ea3420f7d0de76b87b6e99a43ab97f445d8565a384d4b655bc473"],
+  ["messageInclusionVerifierHash", "0x89254256421c15da8c92842c7d6f448ef6c1d5ca1e2a173754643425fcee6353"],
+  ["sourceStateVerifierHash", SCCP_TON_TEMPLATE_SOURCE_STATE_VERIFIER_HASH_V1],
+  ["finalityPolicyHash", "0x50044ee6db0eb0cdef097e69406b6c30d3406d8f784e8ba34e9b923b38bd0c43"],
+]);
+const SCCP_TON_TEMPLATE_SOURCE_MATERIAL_HASHES_V1 =
+  new Set(SCCP_TON_TEMPLATE_COMPONENT_HASHES_V1.values());
+const SCCP_SOLANA_TEMPLATE_COMPONENT_HASHES_V1 = new Map([
+  ["sourceTrustAnchorHash", SCCP_SOLANA_TEMPLATE_SOURCE_TRUST_ANCHOR_HASH_V1],
+  ["consensusVerifierHash", SCCP_SOLANA_TEMPLATE_CONSENSUS_VERIFIER_HASH_V1],
+  ["messageInclusionVerifierHash", SCCP_SOLANA_TEMPLATE_MESSAGE_INCLUSION_VERIFIER_HASH_V1],
+  ["sourceStateVerifierHash", SCCP_SOLANA_TEMPLATE_SOURCE_STATE_VERIFIER_HASH_V1],
+  ["finalityPolicyHash", SCCP_SOLANA_TEMPLATE_FINALITY_POLICY_HASH_V1],
+]);
+const SCCP_SOLANA_TEMPLATE_SOURCE_MATERIAL_HASHES_V1 =
+  new Set(SCCP_SOLANA_TEMPLATE_COMPONENT_HASHES_V1.values());
+const SCCP_TRON_TEMPLATE_COMPONENT_HASHES_V1 = new Map([
+  ["sourceTrustAnchorHash", "0x3550934cbdfe49449ec4aa383dcea7674541fedf66ab6159b1ed2f2c0be4755c"],
+  ["consensusVerifierHash", "0x8a1de96a869b2f28f197a7835597f17cf77ff45f7cbb77da2f7c48e87df8c5ea"],
+  ["messageInclusionVerifierHash", "0xf39db56474b288680ad9561389cca7a841bd1fd223719255324705e1038fcacc"],
+  ["finalityPolicyHash", "0xad5a6a4f200e070400b5aaa1b7976c639e67571eb711eb6f69d01e3615423864"],
+]);
+const SCCP_SUBSTRATE_AUTHORITY_SET_PREFIX_V1 = "sccp:substrate:authority-set:v1";
+const SCCP_SUBSTRATE_AUTHORITY_SET_PAYLOAD_PREFIX_V1 =
+  "sccp:substrate:authority-set-payload:v1";
+const SCCP_SUBSTRATE_AUTHORITY_SET_TRANSITION_MESSAGE_PREFIX_V1 =
+  "sccp:substrate:authority-set-transition-message:v1";
+const SCCP_SUBSTRATE_AUTHORITY_SET_TRANSITION_JUSTIFICATION_PREFIX_V1 =
+  "sccp:substrate:authority-set-transition-justification:v1";
+const SCCP_TON_BOC_MAGIC = Uint8Array.from([0xb5, 0xee, 0x9c, 0x72]);
+const SCCP_TON_SUBMIT_OP_V1 = 0x53434350;
+const SCCP_TON_MESSAGE_SCHEMA_VERSION_V1 = 1;
+const SCCP_TON_MAX_CELL_DATA_BYTES = 127;
+const SCCP_TON_MAX_CELL_SERIALIZED_DATA_BYTES = 128;
+const SCCP_TON_MAX_BOC_BYTES = 64 * 1024;
+const SCCP_TON_MAX_BOC_CELLS = 4096;
+const SCCP_TON_MAX_REFS = 4;
+const SCCP_TON_MAX_VALIDATORS = 1024;
+const SCCP_TON_SHARD_ACCOUNT_KEY_BITS = 256;
+const SCCP_TON_VALIDATOR_SET_KEY_BITS = 16;
+const SCCP_TON_VALIDATOR_CONSTRUCTOR = 0x53;
+const SCCP_TON_VALIDATOR_ADDR_CONSTRUCTOR = 0x73;
+const SCCP_TON_VALIDATORS_CONSTRUCTOR = 0x11;
+const SCCP_TON_VALIDATORS_EXT_CONSTRUCTOR = 0x12;
+const SCCP_TON_ED25519_PUBKEY_CONSTRUCTOR = 0x8e81278a;
+const SCCP_MAX_SOURCE_MERKLE_BRANCH_NODES = 64;
+const SCCP_ETH_MAX_SYNC_COMMITTEE_AUTHORITIES = 512;
+const SCCP_ETH_SYNC_COMMITTEE_PUBLIC_KEY_BYTES = 48;
+const SCCP_ETH_SYNC_COMMITTEE_POP_BYTES = 96;
+const SCCP_ETH_SYNC_COMMITTEE_SIGNATURE_BYTES = 96;
+const SCCP_ETH_MAX_SYNC_COMMITTEE_PUBLIC_KEY_BYTES = 96;
+const SCCP_ETH_MAX_SYNC_COMMITTEE_POP_BYTES = 256;
+const SCCP_ETH_MAX_SYNC_COMMITTEE_SIGNATURE_BYTES = 192;
+const SCCP_ETH_MAX_SYNC_COMMITTEE_PAYLOAD_BYTES =
+  1 + 4 + SCCP_ETH_MAX_SYNC_COMMITTEE_AUTHORITIES *
+    (4 + SCCP_ETH_MAX_SYNC_COMMITTEE_PUBLIC_KEY_BYTES + 8 + 4 + SCCP_ETH_MAX_SYNC_COMMITTEE_POP_BYTES);
+const SCCP_ETH_MAX_SYNC_COMMITTEE_SIGNERS_BITMAP_BYTES =
+  Math.ceil(SCCP_ETH_MAX_SYNC_COMMITTEE_AUTHORITIES / 8);
+const SCCP_SUBSTRATE_MAX_AUTHORITIES = 2048;
+const SCCP_SUBSTRATE_MAX_AUTHORITY_SET_PAYLOAD_BYTES =
+  1 + 4 + SCCP_SUBSTRATE_MAX_AUTHORITIES * (32 + 8);
+const SCCP_BSC_PARLIA_EXTRA_VANITY_BYTES = 32;
+const SCCP_BSC_PARLIA_EXTRA_SEAL_BYTES = 65;
+const SCCP_BSC_PARLIA_VALIDATOR_ADDRESS_BYTES = 20;
+const SCCP_BSC_PARLIA_VALIDATOR_BLS_KEY_BYTES = 48;
+const SCCP_BSC_MAX_PARLIA_VALIDATORS = 255;
+const SCCP_BSC_MAX_VALIDATOR_SET_PAYLOAD_BYTES =
+  1 + 4 + SCCP_BSC_MAX_PARLIA_VALIDATORS * (SCCP_BSC_PARLIA_VALIDATOR_ADDRESS_BYTES + 8);
+const SCCP_BSC_PARLIA_EPOCH_LENGTH_BLOCKS = 200n;
+const SCCP_EVM_MAX_RECEIPT_VALUE_BYTES = 16 * 1024;
+const SCCP_ETH_EXECUTION_PAYLOAD_BODY_FIELD_INDEX = 9n;
+const SCCP_ETH_EXECUTION_PAYLOAD_BODY_BRANCH_DEPTH = 4;
+const SCCP_TRON_MAX_MPT_PROOF_NODES = 64;
+const SCCP_TRON_MAX_MPT_NODE_BYTES = 16 * 1024;
+const SCCP_TRON_MAX_RAW_HEADER_BYTES = 16 * 1024;
+const SCCP_TRON_MAX_RECEIPT_VALUE_BYTES = 16 * 1024;
+const SCCP_TRON_MAX_TRANSACTION_BYTES = 64 * 1024;
+const SCCP_TRON_MAX_TRANSACTION_MERKLE_BRANCH_NODES = 64;
+const SCCP_TRON_MAX_WITNESSES = 64;
+const SCCP_U64_MAX = (1n << 64n) - 1n;
+const SCCP_SECP256K1_SCALAR_ORDER_BE = Uint8Array.from([
+  0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff,
+  0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xfe,
+  0xba, 0xae, 0xdc, 0xe6, 0xaf, 0x48, 0xa0, 0x3b,
+  0xbf, 0xd2, 0x5e, 0x8c, 0xd0, 0x36, 0x41, 0x41,
+]);
+const SCCP_SECP256K1_SCALAR_HALF_ORDER_BE = Uint8Array.from([
+  0x7f, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff,
+  0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff,
+  0x5d, 0x57, 0x6e, 0x73, 0x57, 0xa4, 0x50, 0x1d,
+  0xdf, 0xe9, 0x2f, 0x46, 0x68, 0x1b, 0x20, 0xa0,
+]);
+export const SCCP_MESSAGE_TRANSPARENT_PUBLIC_INPUTS_BYTES_V1_LEN = 141;
+export const SCCP_SOLANA_SUBMIT_MESSAGE_PROOF_ENTRYPOINT_V1 = "submit_sccp_message_proof";
+const SCCP_GROTH16_BN254_BASE_FIELD_MODULUS =
+  0x30644e72e131a029b85045b68181585d97816a916871ca8d3c208c16d87cfd47n;
+const SCCP_GROTH16_BN254_SCALAR_FIELD_MODULUS =
+  0x30644e72e131a029b85045b68181585d2833e84879b9709143e1f593f0000001n;
+const SCCP_GROTH16_BN254_G2_B_C0 =
+  0x2b149d40ceb8aaae81be18991be06ac3b5b4c5e559dbefa33267e6dc24a138e5n;
+const SCCP_GROTH16_BN254_G2_B_C1 =
+  0x009713b03af0fed4cd2cafadeed8fdf4a74fa084e52d1852e4a2bd0685c315d2n;
+const SCCP_GROTH16_BN254_SIGNAL_LABELS_V1 = [
+  "sccp:groth16-bn254:signal:message-id:v1",
+  "sccp:groth16-bn254:signal:payload-hash:v1",
+  "sccp:groth16-bn254:signal:target-domain:v1",
+  "sccp:groth16-bn254:signal:commitment-root:v1",
+  "sccp:groth16-bn254:signal:finality-height:v1",
+  "sccp:groth16-bn254:signal:finality-block-hash:v1",
+  "sccp:groth16-bn254:signal:source-domain:v1",
+  "sccp:groth16-bn254:signal:statement-hash:v1",
+  "sccp:groth16-bn254:signal:destination-binding-hash:v1",
+];
 
 const textEncoder = new TextEncoder();
 
@@ -37,7 +507,10 @@ const normalizeHexInput = (value, label, byteLength = null) => {
   if (typeof value !== "string") {
     throw new TypeError(`${label} must be a hex string`);
   }
-  const trimmed = value.trim().replace(/^0x/i, "").toLowerCase();
+  if (value.trim() !== value) {
+    throw new TypeError(`${label} must be canonical hex`);
+  }
+  const trimmed = value.replace(/^0x/i, "").toLowerCase();
   if (!trimmed || /[^0-9a-f]/.test(trimmed) || trimmed.length % 2 !== 0) {
     throw new TypeError(`${label} must be canonical hex`);
   }
@@ -61,6 +534,14 @@ const bytesToHex = (bytes, withPrefix = true) => {
   return withPrefix ? `0x${hex}` : hex;
 };
 
+const SCCP_SUBMIT_MESSAGE_PROOF_SELECTOR_BYTES_V1 = keccak_256(
+  textEncoder.encode(SCCP_SUBMIT_MESSAGE_PROOF_ABI_V1),
+).slice(0, 4);
+
+export const SCCP_SUBMIT_MESSAGE_PROOF_SELECTOR_V1 = bytesToHex(
+  SCCP_SUBMIT_MESSAGE_PROOF_SELECTOR_BYTES_V1,
+);
+
 const concatBytes = (...parts) => {
   const total = parts.reduce((sum, part) => sum + part.length, 0);
   const out = new Uint8Array(total);
@@ -72,9 +553,446 @@ const concatBytes = (...parts) => {
   return out;
 };
 
+const bytesEqual = (left, right) => {
+  if (left.length !== right.length) return false;
+  let diff = 0;
+  for (let index = 0; index < left.length; index += 1) {
+    diff |= left[index] ^ right[index];
+  }
+  return diff === 0;
+};
+
+const copyBytes = (bytes) => new Uint8Array(bytes);
+
+const defineCopiedByteField = (target, key, bytes) => {
+  const stored = copyBytes(bytes);
+  Object.defineProperty(target, key, {
+    enumerable: true,
+    configurable: false,
+    get: () => copyBytes(stored),
+  });
+};
+
+const freezePublicInputColumns = (columns) =>
+  Object.freeze(columns.map((column) => Object.freeze([...column])));
+
+const freezeFastpqTransitions = (transitions) =>
+  Object.freeze(transitions.map((transition) => Object.freeze({ ...transition })));
+
+const freezeStringMatrix = (rows) =>
+  Object.freeze(rows.map((row) => Object.freeze([...row])));
+
+const sourceStateProverRequestByteFields = Object.freeze(new Set([
+  "statementBytes",
+  "statement_bytes",
+  "accountCommitmentBytes",
+  "account_commitment_bytes",
+  "witnessCommitmentBytes",
+  "witness_commitment_bytes",
+  "verificationContextBytes",
+  "verification_context_bytes",
+  "schemaDescriptor",
+  "schema_descriptor",
+]));
+
+const immutableProverCallbackValue = (value) => {
+  if (value instanceof Uint8Array || value instanceof ArrayBuffer || ArrayBuffer.isView(value)) {
+    return copyBytes(toBytes(value, "proverCallbackValue"));
+  }
+  if (Array.isArray(value)) {
+    return Object.freeze(value.map((child) => immutableProverCallbackValue(child)));
+  }
+  if (
+    value &&
+    typeof value === "object" &&
+    !(value instanceof Uint8Array) &&
+    !(value instanceof ArrayBuffer) &&
+    !ArrayBuffer.isView(value)
+  ) {
+    const frozen = {};
+    for (const [key, child] of Object.entries(value)) {
+      frozen[key] = immutableProverCallbackValue(child);
+    }
+    return Object.freeze(frozen);
+  }
+  return value;
+};
+
+const mutableProverCallbackSnapshotValue = (value) => {
+  if (value instanceof Uint8Array || value instanceof ArrayBuffer || ArrayBuffer.isView(value)) {
+    return copyBytes(toBytes(value, "proverCallbackValue"));
+  }
+  if (Array.isArray(value)) {
+    return value.map((child) => mutableProverCallbackSnapshotValue(child));
+  }
+  if (
+    value &&
+    typeof value === "object" &&
+    !(value instanceof Uint8Array) &&
+    !(value instanceof ArrayBuffer) &&
+    !ArrayBuffer.isView(value)
+  ) {
+    const snapshot = {};
+    for (const [key, child] of Object.entries(value)) {
+      snapshot[key] = mutableProverCallbackSnapshotValue(child);
+    }
+    return snapshot;
+  }
+  return value;
+};
+
+const immutableSourceStateProverRequest = (request) => {
+  const frozen = {};
+  for (const [key, value] of Object.entries(request)) {
+    if (sourceStateProverRequestByteFields.has(key)) {
+      defineCopiedByteField(frozen, key, toBytes(value, `request.${key}`));
+    } else {
+      frozen[key] = immutableProverCallbackValue(value);
+    }
+  }
+  return Object.freeze(frozen);
+};
+
+const immutableFastpqProofRequest = (request, byteFields) => {
+  const byteFieldSet = new Set(byteFields);
+  const frozen = {};
+  for (const [key, value] of Object.entries(request)) {
+    if (byteFieldSet.has(key)) {
+      defineCopiedByteField(frozen, key, value);
+    } else if (key === "publicInputColumns") {
+      frozen[key] = freezePublicInputColumns(value);
+    } else if (key === "fastpqPublicInputs") {
+      frozen[key] = Object.freeze({ ...value });
+    } else if (key === "fastpqTransitions") {
+      frozen[key] = freezeFastpqTransitions(value);
+    } else {
+      frozen[key] = value;
+    }
+  }
+  return Object.freeze(frozen);
+};
+
+const immutableSourceStateVerificationProof = ({ version, proofFamily, circuitId, proofBytes }) => {
+  const proof = { version, proofFamily, circuitId };
+  defineCopiedByteField(proof, "proofBytes", proofBytes);
+  proof.proofBase64 = bytesToBase64(proofBytes);
+  return Object.freeze(proof);
+};
+
+const immutableGroth16ProofRequest = ({
+  version,
+  backend,
+  sourceDomain,
+  targetDomain,
+  publicInputs,
+  publicInputsBytes,
+  publicSignalWords,
+  bundleBytes,
+  sourceProofBytes,
+  proofContext,
+  statementHash,
+  destinationBinding,
+  destinationBindingHash,
+  requestHash,
+}) => {
+  const request = {
+    version,
+    backend,
+    sourceDomain,
+    targetDomain,
+    publicInputs: Object.freeze({ ...publicInputs }),
+    publicSignalWords: Object.freeze([...publicSignalWords]),
+    proofContext: Object.freeze({
+      version: proofContext.version,
+      statementHash: proofContext.statementHash,
+      destinationBindingHash: proofContext.destinationBindingHash,
+    }),
+    statementHash,
+    destinationBindingHash,
+    requestHash,
+  };
+  if (destinationBinding !== undefined) {
+    request.destinationBinding = Object.freeze({ ...destinationBinding });
+  }
+  defineCopiedByteField(request, "publicInputsBytes", publicInputsBytes);
+  defineCopiedByteField(request, "bundleBytes", bundleBytes);
+  defineCopiedByteField(request, "sourceProofBytes", sourceProofBytes);
+  return Object.freeze(request);
+};
+
+const immutableGroth16ProofResult = ({
+  version,
+  backend,
+  proofBytes,
+  proofBase64,
+  publicInputs,
+  publicSignalWords,
+  bundleBytes,
+  sourceProofBytes,
+  proofContext,
+  statementHash,
+  destinationBinding,
+  destinationBindingHash,
+  requestHash,
+  envelopeHash,
+}) => {
+  const result = {
+    version,
+    backend,
+    proofBase64,
+    publicInputs: Object.freeze({ ...publicInputs }),
+    publicSignalWords: Object.freeze([...publicSignalWords]),
+    proofContext: Object.freeze({
+      version: proofContext.version,
+      statementHash: proofContext.statementHash,
+      destinationBindingHash: proofContext.destinationBindingHash,
+    }),
+    statementHash,
+    destinationBindingHash,
+    requestHash,
+    envelopeHash,
+  };
+  if (destinationBinding !== undefined) {
+    result.destinationBinding = Object.freeze({ ...destinationBinding });
+  }
+  defineCopiedByteField(result, "proofBytes", proofBytes);
+  defineCopiedByteField(result, "bundleBytes", bundleBytes);
+  defineCopiedByteField(result, "sourceProofBytes", sourceProofBytes);
+  return Object.freeze(result);
+};
+
+const immutableSolanaWitness = (witness) => immutableProverCallbackValue(witness);
+
+const immutableSolanaProofRequest = (request) =>
+  Object.freeze({
+    ...request,
+    publicInputs: Object.freeze({ ...request.publicInputs }),
+    witness: immutableSolanaWitness(request.witness),
+    proofContext: Object.freeze({ ...request.proofContext }),
+    sourceAdapterDeploymentBinding: Object.freeze({
+      ...request.sourceAdapterDeploymentBinding,
+    }),
+  });
+
+const immutableSolanaProofResult = ({
+  version,
+  backend,
+  proofBytes,
+  proofBase64,
+  publicInputs,
+  witnessHash,
+  proofContextHash,
+  sourceAdapterDeploymentBindingHash,
+  sourceStateVerifierId,
+  sourceStateVerifierHash,
+  proofContext,
+  sourceAdapterDeploymentBinding,
+  envelopeHash,
+}) => {
+  const result = {
+    version,
+    backend,
+    proofBase64,
+    publicInputs: Object.freeze({ ...publicInputs }),
+    witnessHash,
+    proofContextHash,
+    sourceAdapterDeploymentBindingHash,
+    sourceStateVerifierId,
+    sourceStateVerifierHash,
+    proofContext: Object.freeze({ ...proofContext }),
+    sourceAdapterDeploymentBinding: Object.freeze({ ...sourceAdapterDeploymentBinding }),
+    envelopeHash,
+  };
+  defineCopiedByteField(result, "proofBytes", proofBytes);
+  return Object.freeze(result);
+};
+
+const immutableTonProofRequest = ({
+  version,
+  backend,
+  sourceDomain,
+  targetDomain,
+  publicInputs,
+  publicInputsBytes,
+  bundleBytes,
+  sourceProofBytes,
+  proofContext,
+  statementHash,
+  destinationBindingHash,
+  sourceStateVerifierId,
+  sourceStateVerifierHash,
+  sourceAdapterDeploymentBindingHash,
+  sourceAdapterDeploymentBinding,
+  requestHash,
+}) => {
+  const request = {
+    version,
+    backend,
+    sourceDomain,
+    targetDomain,
+    publicInputs: Object.freeze({ ...publicInputs }),
+    proofContext: Object.freeze({ ...proofContext }),
+    statementHash,
+    destinationBindingHash,
+    sourceStateVerifierId,
+    sourceStateVerifierHash,
+    sourceAdapterDeploymentBindingHash,
+    sourceAdapterDeploymentBinding: Object.freeze({ ...sourceAdapterDeploymentBinding }),
+    requestHash,
+  };
+  defineCopiedByteField(request, "publicInputsBytes", publicInputsBytes);
+  defineCopiedByteField(request, "bundleBytes", bundleBytes);
+  defineCopiedByteField(request, "sourceProofBytes", sourceProofBytes);
+  return Object.freeze(request);
+};
+
+const immutableTonProofResult = ({
+  version,
+  backend,
+  proofBytes,
+  proofBase64,
+  publicInputs,
+  bundleBytes,
+  sourceProofBytes,
+  proofContext,
+  statementHash,
+  destinationBindingHash,
+  sourceStateVerifierId,
+  sourceStateVerifierHash,
+  sourceAdapterDeploymentBindingHash,
+  sourceAdapterDeploymentBinding,
+  requestHash,
+  envelopeHash,
+}) => {
+  const result = {
+    version,
+    backend,
+    proofBase64,
+    publicInputs: Object.freeze({ ...publicInputs }),
+    proofContext: Object.freeze({ ...proofContext }),
+    statementHash,
+    destinationBindingHash,
+    sourceStateVerifierId,
+    sourceStateVerifierHash,
+    sourceAdapterDeploymentBindingHash,
+    sourceAdapterDeploymentBinding: Object.freeze({ ...sourceAdapterDeploymentBinding }),
+    requestHash,
+    envelopeHash,
+  };
+  defineCopiedByteField(result, "proofBytes", proofBytes);
+  defineCopiedByteField(result, "bundleBytes", bundleBytes);
+  defineCopiedByteField(result, "sourceProofBytes", sourceProofBytes);
+  return Object.freeze(result);
+};
+
+const immutableSubstrateProofRequest = ({
+  version,
+  backend,
+  sourceDomain,
+  targetDomain,
+  publicInputs,
+  publicInputsBytes,
+  bundleBytes,
+  sourceProofBytes,
+  proofContext,
+  statementHash,
+  destinationBindingHash,
+  requestHash,
+}) => {
+  const request = {
+    version,
+    backend,
+    sourceDomain,
+    targetDomain,
+    publicInputs: Object.freeze({ ...publicInputs }),
+    proofContext: Object.freeze({ ...proofContext }),
+    statementHash,
+    destinationBindingHash,
+    requestHash,
+  };
+  defineCopiedByteField(request, "publicInputsBytes", publicInputsBytes);
+  defineCopiedByteField(request, "bundleBytes", bundleBytes);
+  defineCopiedByteField(request, "sourceProofBytes", sourceProofBytes);
+  return Object.freeze(request);
+};
+
+const immutableSubstrateProofResult = ({
+  version,
+  backend,
+  proofBytes,
+  proofBase64,
+  publicInputs,
+  bundleBytes,
+  sourceProofBytes,
+  proofContext,
+  statementHash,
+  destinationBindingHash,
+  requestHash,
+  envelopeHash,
+}) => {
+  const result = {
+    version,
+    backend,
+    proofBase64,
+    publicInputs: Object.freeze({ ...publicInputs }),
+    proofContext: Object.freeze({ ...proofContext }),
+    statementHash,
+    destinationBindingHash,
+    requestHash,
+    envelopeHash,
+  };
+  defineCopiedByteField(result, "proofBytes", proofBytes);
+  defineCopiedByteField(result, "bundleBytes", bundleBytes);
+  defineCopiedByteField(result, "sourceProofBytes", sourceProofBytes);
+  return Object.freeze(result);
+};
+
+const scaleCompactU32Bytes = (value, label) => {
+  if (!Number.isInteger(value) || value < 0 || value > 0xffff_ffff) {
+    throw new RangeError(`${label} length must fit u32`);
+  }
+  if (value < 1 << 6) {
+    return new Uint8Array([value << 2]);
+  }
+  if (value < 1 << 14) {
+    const encoded = value * 4 + 0b01;
+    return new Uint8Array([encoded & 0xff, Math.floor(encoded / 0x100) & 0xff]);
+  }
+  if (value < 1 << 30) {
+    const encoded = value * 4 + 0b10;
+    return new Uint8Array([
+      encoded & 0xff,
+      Math.floor(encoded / 0x100) & 0xff,
+      Math.floor(encoded / 0x1_0000) & 0xff,
+      Math.floor(encoded / 0x100_0000) & 0xff,
+    ]);
+  }
+  return concatBytes(new Uint8Array([0b11]), writeU32Le(new Uint8Array(), value));
+};
+
+const scaleVecBytes = (value, label) =>
+  concatBytes(scaleCompactU32Bytes(value.length, label), value);
+
+const encodeSubstrateSccpRuntimeCall = (argumentBytes) => {
+  let out = scaleVecBytes(
+    textEncoder.encode(SCCP_SUBSTRATE_SUBMIT_MESSAGE_PROOF_ENTRYPOINT_V1),
+    "verifierEntrypoint",
+  );
+  for (const [index, value] of argumentBytes.entries()) {
+    out = concatBytes(out, scaleVecBytes(value, `arguments[${index}]`));
+  }
+  return out;
+};
+
 const writeU8 = (target, value) => {
   const out = new Uint8Array(1);
   out[0] = value;
+  return concatBytes(target, out);
+};
+
+const writeU16Le = (target, value) => {
+  const out = new Uint8Array(2);
+  new DataView(out.buffer).setUint16(0, Number(value), true);
   return concatBytes(target, out);
 };
 
@@ -84,12 +1002,117 @@ const writeU32Le = (target, value) => {
   return concatBytes(target, out);
 };
 
+const writeI32Le = (target, value) => {
+  const out = new Uint8Array(4);
+  new DataView(out.buffer).setInt32(0, Number(value), true);
+  return concatBytes(target, out);
+};
+
 const writeU64Le = (target, value) => {
   const out = new Uint8Array(8);
   const view = new DataView(out.buffer);
   view.setBigUint64(0, normalizeUnsignedBigInt(value, "u64"), true);
   return concatBytes(target, out);
 };
+
+const readU32LeAt = (bytes, offset, label) => {
+  if (offset + 4 > bytes.length) {
+    throw new TypeError(`${label} is too short`);
+  }
+  return new DataView(bytes.buffer, bytes.byteOffset + offset, 4).getUint32(0, true);
+};
+
+const readU16LeAt = (bytes, offset, label) => {
+  if (offset + 2 > bytes.length) {
+    throw new TypeError(`${label} is too short`);
+  }
+  return new DataView(bytes.buffer, bytes.byteOffset + offset, 2).getUint16(0, true);
+};
+
+const readU8At = (bytes, offset, label) => {
+  if (offset + 1 > bytes.length) {
+    throw new TypeError(`${label} is too short`);
+  }
+  return bytes[offset];
+};
+
+const readU64LeAt = (bytes, offset, label) => {
+  if (offset + 8 > bytes.length) {
+    throw new TypeError(`${label} is too short`);
+  }
+  return new DataView(bytes.buffer, bytes.byteOffset + offset, 8).getBigUint64(0, true);
+};
+
+const writeU16Be = (target, value) => {
+  const out = new Uint8Array(2);
+  new DataView(out.buffer).setUint16(0, Number(value), false);
+  return concatBytes(target, out);
+};
+
+const writeU32Be = (target, value) => {
+  const out = new Uint8Array(4);
+  new DataView(out.buffer).setUint32(0, Number(value), false);
+  return concatBytes(target, out);
+};
+
+const writeU64Be = (target, value) => {
+  const out = new Uint8Array(8);
+  new DataView(out.buffer).setBigUint64(0, normalizeUnsignedBigInt(value, "u64"), false);
+  return concatBytes(target, out);
+};
+
+const abiWordU32 = (value, label = "u32") => {
+  const out = new Uint8Array(32);
+  new DataView(out.buffer).setUint32(28, normalizeSccpDomainId(value, label), false);
+  return out;
+};
+
+const abiWordAddress20 = (value, label = "address") => {
+  if (!(value instanceof Uint8Array) || value.length !== 20) {
+    throw new TypeError(`${label} must be 20 bytes`);
+  }
+  const out = new Uint8Array(32);
+  out.set(value, 12);
+  return out;
+};
+
+const abiWordBytes21 = (value, label = "bytes21") => {
+  if (!(value instanceof Uint8Array) || value.length !== 21) {
+    throw new TypeError(`${label} must be 21 bytes`);
+  }
+  const out = new Uint8Array(32);
+  out.set(value, 11);
+  return out;
+};
+
+const abiWordU64 = (value, label = "u64") => {
+  const out = new Uint8Array(32);
+  new DataView(out.buffer).setBigUint64(24, normalizeUnsignedBigInt(value, label), false);
+  return out;
+};
+
+const abiWordU256 = (value, label = "u256") => {
+  let numeric = normalizeUnsignedBigInt(value, label);
+  if (numeric >= (1n << 256n)) {
+    throw new RangeError(`${label} must fit u256`);
+  }
+  const out = new Uint8Array(32);
+  for (let index = 31; index >= 0; index -= 1) {
+    out[index] = Number(numeric & 0xffn);
+    numeric >>= 8n;
+  }
+  return out;
+};
+
+const abiPadBytes = (bytes) => {
+  const paddedLength = Math.ceil(bytes.length / 32) * 32;
+  const out = new Uint8Array(paddedLength);
+  out.set(bytes);
+  return out;
+};
+
+const abiDynamicBytes = (bytes, label = "bytes") =>
+  concatBytes(abiWordU256(bytes.length, `${label}.length`), abiPadBytes(bytes));
 
 const writeU128Le = (target, value) => {
   const numeric = normalizeUnsignedBigInt(value, "u128");
@@ -101,6 +1124,94 @@ const writeU128Le = (target, value) => {
   }
   return concatBytes(target, out);
 };
+
+const writeBytes = (target, value) => {
+  const bytes = toBytes(value, "bytes");
+  return concatBytes(writeU32Le(target, bytes.length), bytes);
+};
+
+const toMaybeEmptyBytes = (value, label) => {
+  if (typeof value === "string" && value.trim().toLowerCase() === "0x") {
+    return new Uint8Array();
+  }
+  return toBytes(value, label);
+};
+
+const writeProtobufVarint = (target, value, label = "protobufVarint") => {
+  let numeric = normalizeUnsignedBigInt(value, label);
+  const bytes = [];
+  do {
+    let byte = Number(numeric & 0x7fn);
+    numeric >>= 7n;
+    if (numeric !== 0n) byte |= 0x80;
+    bytes.push(byte);
+  } while (numeric !== 0n);
+  return concatBytes(target, Uint8Array.from(bytes));
+};
+
+const writeProtobufU64 = (target, fieldNumber, value) =>
+  writeProtobufVarint(
+    writeProtobufVarint(target, BigInt((fieldNumber << 3) | 0), "protobufKey"),
+    value,
+    `protobufField${fieldNumber}`,
+  );
+
+const writeProtobufBytes = (target, fieldNumber, value) => {
+  const bytes = toBytes(value, `protobufField${fieldNumber}`);
+  return concatBytes(
+    writeProtobufVarint(
+      writeProtobufVarint(target, BigInt((fieldNumber << 3) | 2), "protobufKey"),
+      BigInt(bytes.length),
+      "protobufLength",
+    ),
+    bytes,
+  );
+};
+
+const protobufVarintLen = (value) => {
+  let working = value;
+  let length = 1;
+  while (working >= 0x80n) {
+    length += 1;
+    working >>= 7n;
+  }
+  return length;
+};
+
+const readCanonicalProtobufVarint = (bytes, cursor, label) => {
+  const start = cursor.offset;
+  let value = 0n;
+  let shift = 0n;
+  for (let index = 0; index < 10; index += 1) {
+    if (cursor.offset >= bytes.length) {
+      throw new TypeError(`${label} contains truncated protobuf varint`);
+    }
+    const byte = bytes[cursor.offset];
+    cursor.offset += 1;
+    const chunk = BigInt(byte & 0x7f);
+    if (index === 9 && chunk > 1n) {
+      throw new RangeError(`${label} protobuf varint must fit u64`);
+    }
+    value |= chunk << shift;
+    if ((byte & 0x80) === 0) {
+      if (cursor.offset - start !== protobufVarintLen(value)) {
+        throw new TypeError(`${label} protobuf varint must be canonical`);
+      }
+      return value;
+    }
+    shift += 7n;
+  }
+  throw new RangeError(`${label} protobuf varint must fit u64`);
+};
+
+const writeString = (target, value, label) => {
+  if (typeof value !== "string" || value.trim() === "") {
+    throw new TypeError(`${label} must be a non-empty string`);
+  }
+  return writeBytes(target, textEncoder.encode(value.trim()));
+};
+
+const isCanonicalDecimalText = (value) => value === "0" || /^[1-9][0-9]*$/.test(value);
 
 const normalizeUnsignedBigInt = (value, label) => {
   if (typeof value === "bigint") {
@@ -114,19 +1225,275 @@ const normalizeUnsignedBigInt = (value, label) => {
     return BigInt(value);
   }
   if (typeof value === "string") {
-    const trimmed = value.trim();
-    if (!/^\d+$/.test(trimmed)) {
+    if (!isCanonicalDecimalText(value)) {
       throw new TypeError(`${label} must be an unsigned integer`);
     }
-    return BigInt(trimmed);
+    return BigInt(value);
   }
   throw new TypeError(`${label} must be an unsigned integer`);
+};
+
+const normalizeV1Version = (value, label, ErrorCtor = RangeError) => {
+  if (value === null) {
+    throw new TypeError(`${label} must be 1`);
+  }
+  const version = normalizeUnsignedBigInt(value === undefined ? 1 : value, label);
+  if (version !== 1n) {
+    throw new ErrorCtor(`${label} must be 1`);
+  }
+  return 1;
+};
+
+const normalizeSignedI32 = (value, label) => {
+  if (typeof value === "bigint") {
+    if (value < -2147483648n || value > 2147483647n) {
+      throw new RangeError(`${label} must fit i32`);
+    }
+    return Number(value);
+  }
+  if (typeof value === "number") {
+    if (!Number.isInteger(value) || value < -2147483648 || value > 2147483647) {
+      throw new RangeError(`${label} must fit i32`);
+    }
+    return value;
+  }
+  if (typeof value === "string") {
+    const trimmed = value.trim();
+    if (!/^-?\d+$/.test(trimmed)) {
+      throw new TypeError(`${label} must be a signed integer`);
+    }
+    return normalizeSignedI32(BigInt(trimmed), label);
+  }
+  throw new TypeError(`${label} must be a signed integer`);
 };
 
 const prefixedKeccak = (prefix, payload) => keccak_256(concatBytes(textEncoder.encode(prefix), payload));
 
 const prefixedBlake2b = (prefix, payload) =>
   blake2b(concatBytes(textEncoder.encode(prefix), payload), { dkLen: 32 });
+
+const normalizeHex32 = (value, label) => bytesToHex(hexToBytes(value, label, 32));
+
+const SCCP_OPTIONAL_FIELD_MISSING = Symbol("sccpOptionalFieldMissing");
+
+const optionalResultField = (value, ...names) => {
+  for (const name of names) {
+    if (Object.prototype.hasOwnProperty.call(value, name)) return value[name];
+  }
+  return SCCP_OPTIONAL_FIELD_MISSING;
+};
+
+const strictOptionalResultField = (value, label, ...names) => {
+  const present = names.filter((name) => Object.prototype.hasOwnProperty.call(value, name));
+  if (present.length > 1) {
+    throw new TypeError(`${label} must not use multiple aliases`);
+  }
+  return present.length === 0 ? SCCP_OPTIONAL_FIELD_MISSING : value[present[0]];
+};
+
+const strictResultField = (value, label, ...names) => {
+  const selected = strictOptionalResultField(value, label, ...names);
+  return selected === SCCP_OPTIONAL_FIELD_MISSING ? undefined : selected;
+};
+
+const strictOptionalConstructorOption = (value, label, ...names) => {
+  const selected = strictOptionalResultField(value, label, ...names);
+  return selected === SCCP_OPTIONAL_FIELD_MISSING || selected == null ? null : selected;
+};
+
+const normalizeOptionalV1Version = (input, label, ErrorCtor = RangeError, ...names) => {
+  const versionInput = optionalResultField(input, ...names);
+  if (versionInput === SCCP_OPTIONAL_FIELD_MISSING) {
+    return 1;
+  }
+  if (versionInput === null || versionInput === undefined) {
+    throw new TypeError(`${label} must be 1`);
+  }
+  return normalizeV1Version(versionInput, label, ErrorCtor);
+};
+
+const requireV1Version = (value, label, ErrorCtor = TypeError) => {
+  if (value === null || value === undefined) {
+    throw new TypeError(`${label} must be 1`);
+  }
+  return normalizeV1Version(value, label, ErrorCtor);
+};
+
+const requireOptionalResultHashMatches = (actual, expected, label) => {
+  if (actual === undefined || actual === null) return;
+  if (normalizeHexInput(actual, label, 32) !== normalizeHexInput(expected, label, 32)) {
+    throw new TypeError(`${label} must match request`);
+  }
+};
+
+const requireSuppliedResultHashMatches = (actual, expected, label) => {
+  if (normalizeHexInput(actual, label, 32) !== normalizeHexInput(expected, label, 32)) {
+    throw new TypeError(`${label} must match request`);
+  }
+};
+
+const requireOptionalResultBackendMatches = (actual, expected) => {
+  if (actual === undefined || actual === null) return;
+  if (actual !== expected) {
+    throw new TypeError("backend must match request");
+  }
+};
+
+const requireSuppliedResultBackendMatches = (actual, expected) => {
+  if (actual !== expected) {
+    throw new TypeError("backend must match request");
+  }
+};
+
+const nonZeroHex32Bytes = (value, label) => {
+  const bytes = hexToBytes(value, label, 32);
+  if (bytes.every((byte) => byte === 0)) {
+    throw new TypeError(`${label} must not be zero`);
+  }
+  return bytes;
+};
+
+const isNonZeroTronAddress = (address) =>
+  address.length === 21 && address[0] === 0x41 && address.subarray(1).some((byte) => byte !== 0);
+
+const normalizeNonZeroHex32 = (value, label) => bytesToHex(nonZeroHex32Bytes(value, label));
+
+const bytesToBigInt = (bytes) => BigInt(`0x${bytesToHex(bytes, false)}`);
+
+const bigIntToBytes32 = (value) => {
+  const hex = value.toString(16).padStart(64, "0");
+  return hexToBytes(hex, "fieldElement", 32);
+};
+
+const groth16Bn254SignalWord = (label, value) => {
+  const labelHash = keccak_256(textEncoder.encode(label));
+  const digest = keccak_256(concatBytes(labelHash, value));
+  return bigIntToBytes32(bytesToBigInt(digest) % SCCP_GROTH16_BN254_SCALAR_FIELD_MODULUS);
+};
+
+const normalizeNonEmptyString = (value, label) => {
+  if (typeof value !== "string" || value.trim() === "") {
+    throw new TypeError(`${label} must be a non-empty string`);
+  }
+  return value.trim();
+};
+
+const decodeSolanaBase58 = (value, label) => {
+  const text = normalizeNonEmptyString(value, label);
+  let numeric = 0n;
+  for (const char of text) {
+    const digit = SOLANA_BASE58_INDEX.get(char);
+    if (digit === undefined) {
+      throw new TypeError(`${label} must be canonical base58`);
+    }
+    numeric = numeric * 58n + digit;
+  }
+  let leadingZeros = 0;
+  while (leadingZeros < text.length && text[leadingZeros] === "1") {
+    leadingZeros += 1;
+  }
+  let payload = new Uint8Array();
+  if (numeric !== 0n) {
+    const hex = numeric.toString(16);
+    payload = hexToBytes(hex.length % 2 === 0 ? hex : `0${hex}`, label);
+  }
+  return concatBytes(new Uint8Array(leadingZeros), payload);
+};
+
+const decodeSolanaBase58Fixed = (value, label, byteLength) => {
+  const bytes = decodeSolanaBase58(value, label);
+  if (bytes.length !== byteLength) {
+    throw new TypeError(`${label} must decode to ${byteLength} bytes`);
+  }
+  if (bytes.every((byte) => byte === 0)) {
+    throw new TypeError(`${label} must not decode to zero`);
+  }
+  return bytes;
+};
+
+const decodeTronBase58CheckPayload = (value, label) => {
+  if (typeof value !== "string" || value === "") {
+    throw new TypeError(`${label} must be a non-empty string`);
+  }
+  if (value.trim() !== value) {
+    throw new TypeError(`${label} must be a canonical base58check address`);
+  }
+  const text = value;
+  const decoded = decodeSolanaBase58(text, label);
+  if (decoded.length < 5) {
+    throw new TypeError(`${label} must be a base58check address`);
+  }
+  const payload = decoded.slice(0, -4);
+  const checksum = decoded.slice(-4);
+  const expected = sha256(sha256(payload)).slice(0, 4);
+  if (!bytesEqual(checksum, expected)) {
+    throw new TypeError(`${label} must have a valid base58check checksum`);
+  }
+  if (payload.length !== 21 || payload[0] !== 0x41) {
+    throw new TypeError(`${label} must use TRON 0x41 prefix`);
+  }
+  if (!payload.slice(1).some((byte) => byte !== 0)) {
+    throw new TypeError(`${label} must not be zero`);
+  }
+  return payload;
+};
+
+const normalizeSolanaBase58FixedString = (value, label, byteLength) => {
+  const text = normalizeNonEmptyString(value, label);
+  decodeSolanaBase58Fixed(text, label, byteLength);
+  return text;
+};
+
+const normalizeSolanaHash32Bytes = (value, label) => {
+  if (typeof value === "string") {
+    const trimmed = value.trim();
+    const hex = trimmed.replace(/^0x/i, "");
+    if (hex.length === 64 && !/[^0-9a-fA-F]/.test(hex)) {
+      return nonZeroHex32Bytes(trimmed, label);
+    }
+    return decodeSolanaBase58Fixed(trimmed, label, 32);
+  }
+  const bytes = toBytes(value, label);
+  if (bytes.length !== 32) {
+    throw new TypeError(`${label} must be 32 bytes`);
+  }
+  if (bytes.every((byte) => byte === 0)) {
+    throw new TypeError(`${label} must not be zero`);
+  }
+  return bytes;
+};
+
+const bytesToBase64 = (bytes) => {
+  const bufferCtor = globalThis.Buffer;
+  if (typeof bufferCtor !== "undefined") {
+    return bufferCtor.from(bytes).toString("base64");
+  }
+  let binary = "";
+  for (const byte of bytes) binary += String.fromCharCode(byte);
+  return btoa(binary);
+};
+
+const base64ToBytesStrict = (value, label) => {
+  const text = normalizeNonEmptyString(value, label);
+  if (text !== value || /\s/.test(text) || text.length % 4 !== 0) {
+    throw new TypeError(`${label} must be canonical base64`);
+  }
+  const bufferCtor = globalThis.Buffer;
+  let bytes;
+  if (typeof bufferCtor !== "undefined") {
+    bytes = new Uint8Array(bufferCtor.from(text, "base64"));
+  } else {
+    const binary = atob(text);
+    bytes = new Uint8Array(binary.length);
+    for (let index = 0; index < binary.length; index += 1) {
+      bytes[index] = binary.charCodeAt(index);
+    }
+  }
+  if (bytesToBase64(bytes) !== text) {
+    throw new TypeError(`${label} must be canonical base64`);
+  }
+  return bytes;
+};
 
 const normalizeTokenMessagePayload = (payload) => {
   if (!payload || typeof payload !== "object" || Array.isArray(payload)) {
@@ -187,18 +1554,25 @@ const messageKindCode = (kind) => {
   }
 };
 
-export const isSupportedSccpDomain = (domainId) =>
-  [
-    SCCP_DOMAIN_SORA,
-    SCCP_DOMAIN_ETH,
-    SCCP_DOMAIN_BSC,
-    SCCP_DOMAIN_SOL,
-    SCCP_DOMAIN_TON,
-    SCCP_DOMAIN_TRON,
-    SCCP_DOMAIN_SORA_KUSAMA,
-    SCCP_DOMAIN_SORA_POLKADOT,
-    SCCP_DOMAIN_SORA2,
-  ].includes(Number(domainId));
+const SCCP_SUPPORTED_DOMAINS = [
+  SCCP_DOMAIN_SORA,
+  SCCP_DOMAIN_ETH,
+  SCCP_DOMAIN_BSC,
+  SCCP_DOMAIN_SOL,
+  SCCP_DOMAIN_TON,
+  SCCP_DOMAIN_TRON,
+  SCCP_DOMAIN_SORA_KUSAMA,
+  SCCP_DOMAIN_SORA_POLKADOT,
+  SCCP_DOMAIN_SORA2,
+];
+
+export const isSupportedSccpDomain = (domainId) => {
+  try {
+    return SCCP_SUPPORTED_DOMAINS.includes(normalizeSccpDomainId(domainId, "domainId"));
+  } catch (_error) {
+    return false;
+  }
+};
 
 export const canonicalSccpBurnPayloadBytes = (payload) => {
   if (!payload || typeof payload !== "object") {
@@ -206,8 +1580,8 @@ export const canonicalSccpBurnPayloadBytes = (payload) => {
   }
   let out = new Uint8Array();
   out = writeU8(out, Number(payload.version));
-  out = writeU32Le(out, Number(payload.source_domain));
-  out = writeU32Le(out, Number(payload.dest_domain));
+  out = writeU32Le(out, normalizeSccpDomainId(payload.source_domain, "payload.source_domain"));
+  out = writeU32Le(out, normalizeSccpDomainId(payload.dest_domain, "payload.dest_domain"));
   out = writeU64Le(out, payload.nonce);
   out = concatBytes(out, hexToBytes(payload.sora_asset_id, "payload.sora_asset_id", 32));
   out = writeU128Le(out, payload.amount);
@@ -221,7 +1595,7 @@ export const canonicalSccpTokenAddPayloadBytes = (payload) => {
   }
   let out = new Uint8Array();
   out = writeU8(out, Number(payload.version));
-  out = writeU32Le(out, Number(payload.target_domain));
+  out = writeU32Le(out, normalizeSccpDomainId(payload.target_domain, "payload.target_domain"));
   out = writeU64Le(out, payload.nonce);
   out = concatBytes(out, hexToBytes(payload.sora_asset_id, "payload.sora_asset_id", 32));
   out = writeU8(out, Number(payload.decimals));
@@ -236,7 +1610,7 @@ export const canonicalSccpTokenControlPayloadBytes = (payload) => {
   }
   let out = new Uint8Array();
   out = writeU8(out, Number(payload.version));
-  out = writeU32Le(out, Number(payload.target_domain));
+  out = writeU32Le(out, normalizeSccpDomainId(payload.target_domain, "payload.target_domain"));
   out = writeU64Le(out, payload.nonce);
   out = concatBytes(out, hexToBytes(payload.sora_asset_id, "payload.sora_asset_id", 32));
   return out;
@@ -296,7 +1670,7 @@ export const sccpTokenMessageId = (payload, options = {}) => {
 
 export const sccpTokenMessageTargetDomain = (payload) => {
   const normalized = normalizeTokenMessagePayload(payload);
-  return Number(normalized.value.target_domain);
+  return normalizeSccpDomainId(normalized.value.target_domain, "payload.target_domain");
 };
 
 export const canonicalSccpGovernancePayloadBytes = (payload) =>
@@ -318,7 +1692,7 @@ export const canonicalSccpCommitmentBytes = (commitment) => {
   let out = new Uint8Array();
   out = writeU8(out, Number(commitment.version));
   out = writeU8(out, messageKindCode(commitment.kind));
-  out = writeU32Le(out, Number(commitment.target_domain));
+  out = writeU32Le(out, normalizeSccpDomainId(commitment.target_domain, "commitment.target_domain"));
   out = concatBytes(out, hexToBytes(commitment.message_id, "commitment.message_id", 32));
   out = concatBytes(out, hexToBytes(commitment.payload_hash, "commitment.payload_hash", 32));
   return out;
@@ -353,7 +1727,9 @@ export const validateSccpBurnBundleSurface = (bundle) => {
     payloadVersion: Number(bundle.payload?.version) === 1,
     sourceDomainSupported: isSupportedSccpDomain(bundle.payload?.source_domain),
     destDomainSupported: isSupportedSccpDomain(bundle.payload?.dest_domain),
-    targetDomainMatches: Number(bundle.commitment?.target_domain) === Number(bundle.payload?.dest_domain),
+    targetDomainMatches:
+      normalizeSccpDomainId(bundle.commitment?.target_domain, "bundle.commitment.target_domain") ===
+      normalizeSccpDomainId(bundle.payload?.dest_domain, "bundle.payload.dest_domain"),
     burnKindMatches: bundle.commitment?.kind === "Burn",
     messageIdMatches: normalizeHexInput(bundle.commitment?.message_id, "bundle.commitment.message_id", 32) === normalizeHexInput(expectedMessageId, "expectedMessageId", 32),
     payloadHashMatches: normalizeHexInput(bundle.commitment?.payload_hash, "bundle.commitment.payload_hash", 32) === normalizeHexInput(expectedPayloadHash, "expectedPayloadHash", 32),
@@ -384,7 +1760,9 @@ export const validateSccpTokenMessageBundleSurface = (bundle) => {
     commitmentVersion: Number(bundle.commitment?.version) === 1,
     targetDomainSupported: isSupportedSccpDomain(sccpTokenMessageTargetDomain(normalizedPayload)),
     kindMatches: bundle.commitment?.kind === expectedKind,
-    targetDomainMatches: Number(bundle.commitment?.target_domain) === sccpTokenMessageTargetDomain(normalizedPayload),
+    targetDomainMatches:
+      normalizeSccpDomainId(bundle.commitment?.target_domain, "bundle.commitment.target_domain") ===
+      sccpTokenMessageTargetDomain(normalizedPayload),
     messageIdMatches: normalizeHexInput(bundle.commitment?.message_id, "bundle.commitment.message_id", 32) === normalizeHexInput(expectedMessageId, "expectedMessageId", 32),
     payloadHashMatches: normalizeHexInput(bundle.commitment?.payload_hash, "bundle.commitment.payload_hash", 32) === normalizeHexInput(expectedPayloadHash, "expectedPayloadHash", 32),
     merkleRootMatches: normalizeHexInput(bundle.commitment_root, "bundle.commitment_root", 32) === normalizeHexInput(expectedMerkleRoot, "expectedMerkleRoot", 32),
@@ -403,13 +1781,15 @@ export const validateSccpGovernanceBundleSurface = (bundle) => {
   const expectedMessageId = sccpTokenMessageId(normalizedPayload);
   const expectedPayloadHash = sccpPayloadHash(canonicalSccpGovernancePayloadBytes(bundle.payload));
   const expectedMerkleRoot = sccpMerkleRootFromCommitment(bundle.commitment, bundle.merkle_proof);
-  const expectedCertificateHash = sccpParliamentCertificateHash(bundle.parliament_certificate || "");
+  const expectedCertificateHash = sccpParliamentCertificateHash(bundle.parliament_certificate ?? "");
   const checks = {
     bundleVersion: Number(bundle.version) === 1,
     commitmentVersion: Number(bundle.commitment?.version) === 1,
-    targetDomainSupported: isSupportedSccpDomain(Number(normalizedPayload.value.target_domain)),
+    targetDomainSupported: isSupportedSccpDomain(sccpTokenMessageTargetDomain(normalizedPayload)),
     kindMatches: bundle.commitment?.kind === normalizedPayload.kind,
-    targetDomainMatches: Number(bundle.commitment?.target_domain) === Number(normalizedPayload.value.target_domain),
+    targetDomainMatches:
+      normalizeSccpDomainId(bundle.commitment?.target_domain, "bundle.commitment.target_domain") ===
+      sccpTokenMessageTargetDomain(normalizedPayload),
     messageIdMatches: normalizeHexInput(bundle.commitment?.message_id, "bundle.commitment.message_id", 32) === normalizeHexInput(expectedMessageId, "expectedMessageId", 32),
     payloadHashMatches: normalizeHexInput(bundle.commitment?.payload_hash, "bundle.commitment.payload_hash", 32) === normalizeHexInput(expectedPayloadHash, "expectedPayloadHash", 32),
     merkleRootMatches: normalizeHexInput(bundle.commitment_root, "bundle.commitment_root", 32) === normalizeHexInput(expectedMerkleRoot, "expectedMerkleRoot", 32),
@@ -425,6 +1805,20734 @@ export const validateSccpGovernanceBundleSurface = (bundle) => {
   };
 };
 
+const normalizeSccpMessageTransparentPublicInputs = (input) => {
+  if (!input || typeof input !== "object" || Array.isArray(input)) {
+    throw new TypeError("publicInputs must be an object");
+  }
+  const version = normalizeOptionalV1Version(input, "publicInputs.version", RangeError, "version");
+  const targetDomain = normalizeSccpDomainId(
+    strictResultField(input, "publicInputs.targetDomain", "targetDomain", "target_domain"),
+    "publicInputs.targetDomain",
+  );
+  const finalityHeight = normalizeUnsignedBigInt(
+    strictResultField(input, "publicInputs.finalityHeight", "finalityHeight", "finality_height"),
+    "publicInputs.finalityHeight",
+  );
+  if (finalityHeight === 0n) {
+    throw new RangeError("publicInputs.finalityHeight must not be zero");
+  }
+  return {
+    version,
+    messageId: normalizeNonZeroHex32(
+      strictResultField(input, "publicInputs.messageId", "messageId", "message_id"),
+      "publicInputs.messageId",
+    ),
+    payloadHash: normalizeNonZeroHex32(
+      strictResultField(input, "publicInputs.payloadHash", "payloadHash", "payload_hash"),
+      "publicInputs.payloadHash",
+    ),
+    targetDomain,
+    commitmentRoot: normalizeNonZeroHex32(
+      strictResultField(input, "publicInputs.commitmentRoot", "commitmentRoot", "commitment_root"),
+      "publicInputs.commitmentRoot",
+    ),
+    finalityHeight: finalityHeight.toString(),
+    finalityBlockHash: normalizeNonZeroHex32(
+      strictResultField(input, "publicInputs.finalityBlockHash", "finalityBlockHash", "finality_block_hash"),
+      "publicInputs.finalityBlockHash",
+    ),
+  };
+};
+
+export const canonicalSccpMessageTransparentPublicInputsBytes = (input) => {
+  const publicInputs = normalizeSccpMessageTransparentPublicInputs(input);
+  let out = new Uint8Array();
+  out = writeU8(out, publicInputs.version);
+  out = concatBytes(out, hexToBytes(publicInputs.messageId, "publicInputs.messageId", 32));
+  out = concatBytes(out, hexToBytes(publicInputs.payloadHash, "publicInputs.payloadHash", 32));
+  out = writeU32Le(out, publicInputs.targetDomain);
+  out = concatBytes(out, hexToBytes(publicInputs.commitmentRoot, "publicInputs.commitmentRoot", 32));
+  out = writeU64Le(out, publicInputs.finalityHeight);
+  out = concatBytes(out, hexToBytes(publicInputs.finalityBlockHash, "publicInputs.finalityBlockHash", 32));
+  return out;
+};
+
+export const sccpGroth16Bn254PublicSignalWords = (input) => {
+  if (!input || typeof input !== "object" || Array.isArray(input)) {
+    throw new TypeError("SCCP Groth16 public signals input must be an object");
+  }
+  const publicInputsInput = strictOptionalResultField(
+    input,
+    "publicInputs",
+    "publicInputs",
+    "public_inputs",
+  );
+  const publicInputs = normalizeSccpMessageTransparentPublicInputs(
+    publicInputsInput === SCCP_OPTIONAL_FIELD_MISSING ? input : publicInputsInput,
+  );
+  const sourceDomain = normalizeSccpDomainId(
+    strictResultField(input, "sourceDomain", "sourceDomain", "source_domain"),
+    "sourceDomain",
+  );
+  if (publicInputs.targetDomain === 0) {
+    throw new RangeError("publicInputs.targetDomain must not be zero");
+  }
+  if (sourceDomain === publicInputs.targetDomain) {
+    throw new RangeError("sourceDomain and publicInputs.targetDomain must differ");
+  }
+  const statementHash = nonZeroHex32Bytes(
+    strictResultField(input, "statementHash", "statementHash", "statement_hash"),
+    "statementHash",
+  );
+  const destinationBindingHash = nonZeroHex32Bytes(
+    strictResultField(input, "destinationBindingHash", "destinationBindingHash", "destination_binding_hash"),
+    "destinationBindingHash",
+  );
+  const values = [
+    hexToBytes(publicInputs.messageId, "publicInputs.messageId", 32),
+    hexToBytes(publicInputs.payloadHash, "publicInputs.payloadHash", 32),
+    abiWordU32(publicInputs.targetDomain, "publicInputs.targetDomain"),
+    hexToBytes(publicInputs.commitmentRoot, "publicInputs.commitmentRoot", 32),
+    abiWordU64(publicInputs.finalityHeight, "publicInputs.finalityHeight"),
+    hexToBytes(publicInputs.finalityBlockHash, "publicInputs.finalityBlockHash", 32),
+    abiWordU32(sourceDomain, "sourceDomain"),
+    statementHash,
+    destinationBindingHash,
+  ];
+  return values.map((value, index) =>
+    bytesToHex(groth16Bn254SignalWord(SCCP_GROTH16_BN254_SIGNAL_LABELS_V1[index], value)),
+  );
+};
+
+export const sccpMessageTransparentPublicInputAbiWords = (input) => {
+  const publicInputs = normalizeSccpMessageTransparentPublicInputs(input);
+  return [
+    hexToBytes(publicInputs.messageId, "publicInputs.messageId", 32),
+    hexToBytes(publicInputs.payloadHash, "publicInputs.payloadHash", 32),
+    abiWordU32(publicInputs.targetDomain, "publicInputs.targetDomain"),
+    hexToBytes(publicInputs.commitmentRoot, "publicInputs.commitmentRoot", 32),
+    abiWordU64(publicInputs.finalityHeight, "publicInputs.finalityHeight"),
+    hexToBytes(publicInputs.finalityBlockHash, "publicInputs.finalityBlockHash", 32),
+  ];
+};
+
+const sccpMessageTransparentPublicInputAbiWordsHex = (publicInputs) =>
+  sccpMessageTransparentPublicInputAbiWords(publicInputs).map((word) => bytesToHex(word));
+
+export const sccpSubmitMessageProofCallData = (
+  proofBytes,
+  publicInputs,
+  statementHash,
+  sourceDomain = SCCP_DOMAIN_SORA,
+) => {
+  const normalizedProofBytes = toBytes(proofBytes, "proofBytes");
+  const normalizedSourceDomain = normalizeSccpDomainId(sourceDomain, "sourceDomain");
+  if (normalizedSourceDomain !== SCCP_DOMAIN_SORA) {
+    throw new RangeError("sourceDomain must be SORA");
+  }
+  requireGroth16ProofBytesForContext(
+    normalizedProofBytes,
+    "proofBytes",
+    { publicInputs, sourceDomain: normalizedSourceDomain },
+  );
+  const publicInputWords = sccpMessageTransparentPublicInputAbiWords(publicInputs);
+  const statementHashBytes = nonZeroHex32Bytes(statementHash, "statementHash");
+  const dynamicOffset = 8 * 32;
+  return concatBytes(
+    SCCP_SUBMIT_MESSAGE_PROOF_SELECTOR_BYTES_V1,
+    abiWordU256(dynamicOffset, "proofBytes offset"),
+    ...publicInputWords,
+    statementHashBytes,
+    abiDynamicBytes(normalizedProofBytes, "proofBytes"),
+  );
+};
+
+export const sccpTonSubmissionQueryId = (publicInputs) => {
+  const normalized = normalizeSccpMessageTransparentPublicInputs(publicInputs);
+  const messageId = hexToBytes(normalized.messageId, "publicInputs.messageId", 32);
+  return new DataView(messageId.buffer, messageId.byteOffset, messageId.byteLength).getBigUint64(0, false);
+};
+
+const tonMinSizeBytes = (value) => {
+  const numeric = normalizeUnsignedBigInt(value, "TON sized integer");
+  for (let size = 1; size <= 7; size += 1) {
+    if (numeric <= (1n << BigInt(size * 8)) - 1n) return size;
+  }
+  throw new RangeError("TON sized integer is too large");
+};
+
+const tonSizedUint = (value, size) => {
+  const numeric = normalizeUnsignedBigInt(value, "TON sized integer");
+  if (!Number.isInteger(size) || size < 1 || size > 7) {
+    throw new RangeError("TON size must be 1..7 bytes");
+  }
+  const out = new Uint8Array(size);
+  let working = numeric;
+  for (let index = size - 1; index >= 0; index -= 1) {
+    out[index] = Number(working & 0xffn);
+    working >>= 8n;
+  }
+  if (working !== 0n) throw new RangeError("TON sized integer overflows");
+  return out;
+};
+
+const tonSerializeCells = (cells, sizeBytes) => {
+  const parts = [];
+  for (const [cellIndex, cell] of cells.entries()) {
+    if (!cell || typeof cell !== "object" || Array.isArray(cell)) {
+      throw new TypeError(`cells[${cellIndex}] must be a TON cell object`);
+    }
+    const data = toBytes(cell.data ?? new Uint8Array(), `cells[${cellIndex}].data`);
+    const refsInput = cell.refs;
+    const refs = refsInput === undefined || refsInput === null ? [] : refsInput;
+    if (!Array.isArray(refs)) {
+      throw new TypeError(`cells[${cellIndex}].refs must be an array`);
+    }
+    if (data.length > SCCP_TON_MAX_CELL_DATA_BYTES) {
+      throw new RangeError(`cells[${cellIndex}].data exceeds one TON cell`);
+    }
+    if (refs.length > SCCP_TON_MAX_REFS) {
+      throw new RangeError(`cells[${cellIndex}].refs exceeds TON ref count`);
+    }
+    parts.push(Uint8Array.from([refs.length, data.length * 2]), data);
+    for (const refIndex of refs) {
+      if (!Number.isInteger(refIndex) || refIndex < 0 || refIndex >= cells.length) {
+        throw new RangeError(`cells[${cellIndex}].refs contains an invalid cell index`);
+      }
+      parts.push(tonSizedUint(refIndex, sizeBytes));
+    }
+  }
+  return concatBytes(...parts);
+};
+
+const encodeTonBocSingleRoot = (cells, rootIndex = 0) => {
+  if (!Array.isArray(cells) || cells.length === 0) throw new TypeError("TON BOC cells must not be empty");
+  if (cells.length > SCCP_TON_MAX_BOC_CELLS) throw new RangeError("TON BOC contains too many cells");
+  if (!Number.isInteger(rootIndex) || rootIndex < 0 || rootIndex >= cells.length) {
+    throw new RangeError("TON BOC root index is invalid");
+  }
+  const sizeBytes = tonMinSizeBytes(Math.max(cells.length, rootIndex));
+  const cellsBytes = tonSerializeCells(cells, sizeBytes);
+  const offsetBytes = tonMinSizeBytes(cellsBytes.length);
+  return concatBytes(
+    SCCP_TON_BOC_MAGIC,
+    Uint8Array.from([sizeBytes, offsetBytes]),
+    tonSizedUint(cells.length, sizeBytes),
+    tonSizedUint(1, sizeBytes),
+    tonSizedUint(0, sizeBytes),
+    tonSizedUint(cellsBytes.length, offsetBytes),
+    tonSizedUint(rootIndex, sizeBytes),
+    cellsBytes,
+  );
+};
+
+const tonReadSizedUint = (bytes, cursor, size) => {
+  if (!Number.isInteger(size) || size < 1 || size > 8) {
+    throw new RangeError("TON size must be 1..8 bytes");
+  }
+  if (cursor.offset + size > bytes.length) {
+    throw new TypeError("TON BoC is truncated");
+  }
+  let value = 0;
+  for (let index = 0; index < size; index += 1) {
+    value = value * 256 + bytes[cursor.offset + index];
+  }
+  cursor.offset += size;
+  return value;
+};
+
+const tonCrc32c = (bytes) => {
+  let crc = 0xffffffff;
+  for (const byte of bytes) {
+    crc = (crc ^ byte) >>> 0;
+    for (let bit = 0; bit < 8; bit += 1) {
+      const mask = -(crc & 1);
+      crc = ((crc >>> 1) ^ (0x82f63b78 & mask)) >>> 0;
+    }
+  }
+  return (~crc) >>> 0;
+};
+
+const tonCellDataPaddingIsValid = (dataDescriptor, data) =>
+  (dataDescriptor & 1) === 0 || data[data.length - 1] !== 0;
+
+const tonCellSerializedBitLenIsByteAligned = (dataDescriptor, data) =>
+  (dataDescriptor & 1) === 0 && dataDescriptor / 2 === data.length;
+
+const tonCellSerializedBitLen = (dataDescriptor, data) => {
+  if ((dataDescriptor & 1) === 0) {
+    const byteLen = dataDescriptor / 2;
+    if (byteLen !== data.length) throw new TypeError("TON BoC cell data length is invalid");
+    return byteLen * 8;
+  }
+  const fullBytes = Math.floor((dataDescriptor + 1) / 2);
+  const floorBytes = Math.floor(dataDescriptor / 2);
+  if (fullBytes !== data.length || floorBytes + 1 !== fullBytes) {
+    throw new TypeError("TON BoC cell data length is invalid");
+  }
+  const last = data[data.length - 1];
+  if (last === 0) throw new TypeError("TON BoC cell data padding is invalid");
+  let trailingZeros = 0;
+  while (trailingZeros < 8 && ((last >>> trailingZeros) & 1) === 0) {
+    trailingZeros += 1;
+  }
+  return floorBytes * 8 + (7 - trailingZeros);
+};
+
+const tonHashmapUintLenBits = (maxValue) => {
+  let bits = 0;
+  let value = maxValue;
+  while (value > 0) {
+    bits += 1;
+    value = Math.floor(value / 2);
+  }
+  return bits;
+};
+
+const tonHashmapKeyIsCanonical = (key, keyBitLen) => {
+  if (!Number.isInteger(keyBitLen) || keyBitLen < 0 || keyBitLen > 0xffff) return false;
+  const expectedBytes = Math.ceil(keyBitLen / 8);
+  if (key.length !== expectedBytes) return false;
+  const unused = expectedBytes * 8 - keyBitLen;
+  return unused === 0 || (key[key.length - 1] & ((1 << unused) - 1)) === 0;
+};
+
+const tonHashmapKeyBit = (key, keyBitLen, bitIndex) => {
+  if (bitIndex >= keyBitLen) throw new TypeError("TON HashmapE key bit is out of range");
+  return ((key[Math.floor(bitIndex / 8)] >>> (7 - (bitIndex % 8))) & 1) !== 0;
+};
+
+const makeTonBocBitReader = (cell) => ({
+  cell,
+  bitLen: tonCellSerializedBitLen(cell.dataDescriptor, cell.data),
+  bitOffset: 0,
+  refOffset: 0,
+  readBit() {
+    if (this.bitOffset >= this.bitLen) {
+      throw new TypeError("TON HashmapE cell bits are truncated");
+    }
+    const bit = ((this.cell.data[Math.floor(this.bitOffset / 8)] >>> (7 - (this.bitOffset % 8))) & 1) !== 0;
+    this.bitOffset += 1;
+    return bit;
+  },
+  readUint(bits) {
+    let value = 0;
+    for (let index = 0; index < bits; index += 1) {
+      value = value * 2 + (this.readBit() ? 1 : 0);
+    }
+    return value;
+  },
+  readUintBigInt(bits) {
+    let value = 0n;
+    for (let index = 0; index < bits; index += 1) {
+      value = value * 2n + (this.readBit() ? 1n : 0n);
+    }
+    return value;
+  },
+  readBytes(byteLength) {
+    const out = new Uint8Array(byteLength);
+    for (let index = 0; index < byteLength; index += 1) {
+      out[index] = this.readUint(8);
+    }
+    return out;
+  },
+  skipBits(bits) {
+    if (!Number.isInteger(bits) || bits < 0 || this.bitOffset + bits > this.bitLen) {
+      throw new TypeError("TON BoC cell bits are truncated");
+    }
+    this.bitOffset += bits;
+  },
+  readRef() {
+    if (this.refOffset >= this.cell.refs.length) {
+      throw new TypeError("TON HashmapE cell refs are truncated");
+    }
+    const ref = this.cell.refs[this.refOffset];
+    this.refOffset += 1;
+    return ref;
+  },
+  remainingBits() {
+    return this.bitLen - this.bitOffset;
+  },
+  remainingRefs() {
+    return this.cell.refs.length - this.refOffset;
+  },
+  isExhausted() {
+    return this.remainingBits() === 0 && this.remainingRefs() === 0;
+  },
+});
+
+const tonLevelMaskValue = (mask) => mask & 0x07;
+const tonLevelMaskLevel = (mask) => {
+  const value = tonLevelMaskValue(mask);
+  return value === 0 ? 0 : 32 - Math.clz32(value);
+};
+const tonLevelMaskHashIndex = (mask) => {
+  let value = tonLevelMaskValue(mask);
+  let count = 0;
+  while (value !== 0) {
+    count += value & 1;
+    value >>>= 1;
+  }
+  return count;
+};
+const tonLevelMaskApply = (mask, level) =>
+  level === 0 ? 0 : tonLevelMaskValue(mask) & ((1 << level) - 1);
+const tonLevelMaskIsSignificant = (mask, level) =>
+  level === 0 || ((tonLevelMaskValue(mask) >>> (level - 1)) & 1) !== 0;
+
+const tonChildHashDepthForLevel = (computed, level) => {
+  const index = Math.min(level, 3);
+  return { hash: computed.hashes[index], depth: computed.depths[index] };
+};
+
+const tonBocCellType = (cell) => {
+  if (!cell.exotic) return "ordinary";
+  if (cell.data[0] === 1) return "prunedBranch";
+  if (cell.data[0] === 3) return "merkleProof";
+  if (cell.data[0] === 4) return "merkleUpdate";
+  throw new TypeError("TON BoC exotic cell type is unsupported");
+};
+
+const tonParsePrunedBranch = (cell) => {
+  if (
+    !tonCellSerializedBitLenIsByteAligned(cell.dataDescriptor, cell.data) ||
+    cell.refs.length !== 0 ||
+    cell.data.length < 2 ||
+    cell.data[0] !== 1
+  ) {
+    throw new TypeError("TON BoC pruned branch cell is invalid");
+  }
+  if (cell.data.length === 35) {
+    return {
+      mask: 1,
+      hashes: [cell.data.slice(1, 33)],
+      depths: [(cell.data[33] << 8) | cell.data[34]],
+    };
+  }
+  const mask = tonLevelMaskValue(cell.data[1]);
+  const level = tonLevelMaskLevel(mask);
+  if (level < 1 || level > 3 || cell.data.length !== 2 + level * 34) {
+    throw new TypeError("TON BoC pruned branch cell is invalid");
+  }
+  const hashes = [];
+  for (let index = 0; index < level; index += 1) {
+    const start = 2 + index * 32;
+    hashes.push(cell.data.slice(start, start + 32));
+  }
+  const depths = [];
+  const depthsStart = 2 + level * 32;
+  for (let index = 0; index < level; index += 1) {
+    const start = depthsStart + index * 2;
+    depths.push((cell.data[start] << 8) | cell.data[start + 1]);
+  }
+  return { mask, hashes, depths };
+};
+
+const parseTonBocCompleteOrdinary = (value) => {
+  const boc = toBytes(value, "TON BoC");
+  if (boc.length < SCCP_TON_BOC_MAGIC.length + 2 || boc.length > SCCP_TON_MAX_BOC_BYTES) {
+    throw new TypeError("TON BoC length is invalid");
+  }
+  for (let index = 0; index < SCCP_TON_BOC_MAGIC.length; index += 1) {
+    if (boc[index] !== SCCP_TON_BOC_MAGIC[index]) {
+      throw new TypeError("TON BoC magic is invalid");
+    }
+  }
+  const cursor = { offset: SCCP_TON_BOC_MAGIC.length };
+  const flagsSize = boc[cursor.offset];
+  cursor.offset += 1;
+  const hasIndex = (flagsSize & 0x80) !== 0;
+  const hasCrc32c = (flagsSize & 0x40) !== 0;
+  const hasCacheBits = (flagsSize & 0x20) !== 0;
+  const flags = (flagsSize >> 3) & 0x03;
+  const sizeBytes = flagsSize & 0x07;
+  const offsetBytes = boc[cursor.offset];
+  cursor.offset += 1;
+  if (
+    hasCacheBits ||
+    flags !== 0 ||
+    sizeBytes < 1 ||
+    sizeBytes > 4 ||
+    offsetBytes < 1 ||
+    offsetBytes > 8
+  ) {
+    throw new TypeError("TON BoC header flags are unsupported");
+  }
+  const cellsCount = tonReadSizedUint(boc, cursor, sizeBytes);
+  const rootsCount = tonReadSizedUint(boc, cursor, sizeBytes);
+  const absentCount = tonReadSizedUint(boc, cursor, sizeBytes);
+  const totalCellsSize = tonReadSizedUint(boc, cursor, offsetBytes);
+  if (
+    cellsCount === 0 ||
+    cellsCount > SCCP_TON_MAX_BOC_CELLS ||
+    rootsCount === 0 ||
+    rootsCount > cellsCount ||
+    absentCount !== 0 ||
+    rootsCount + absentCount > cellsCount
+  ) {
+    throw new TypeError("TON BoC counts are invalid");
+  }
+  const roots = [];
+  for (let index = 0; index < rootsCount; index += 1) {
+    const root = tonReadSizedUint(boc, cursor, sizeBytes);
+    if (root >= cellsCount) throw new TypeError("TON BoC root index is invalid");
+    roots.push(root);
+  }
+  if (hasIndex) {
+    let previous = 0;
+    for (let index = 0; index < cellsCount; index += 1) {
+      const offset = tonReadSizedUint(boc, cursor, offsetBytes);
+      if (offset < previous || offset > totalCellsSize) {
+        throw new TypeError("TON BoC index is invalid");
+      }
+      if (index + 1 === cellsCount && offset !== totalCellsSize) {
+        throw new TypeError("TON BoC index is invalid");
+      }
+      previous = offset;
+    }
+  }
+  const cellDataStart = cursor.offset;
+  const cellDataEnd = cellDataStart + totalCellsSize;
+  const expectedEnd = cellDataEnd + (hasCrc32c ? 4 : 0);
+  if (expectedEnd !== boc.length || cellDataEnd < cellDataStart || expectedEnd < cellDataEnd) {
+    throw new TypeError("TON BoC cell data length is invalid");
+  }
+  if (hasCrc32c) {
+    const expectedCrc = tonCrc32c(boc.subarray(0, cellDataEnd));
+    if (
+      boc[cellDataEnd] !== (expectedCrc & 0xff) ||
+      boc[cellDataEnd + 1] !== ((expectedCrc >>> 8) & 0xff) ||
+      boc[cellDataEnd + 2] !== ((expectedCrc >>> 16) & 0xff) ||
+      boc[cellDataEnd + 3] !== ((expectedCrc >>> 24) & 0xff)
+    ) {
+      throw new TypeError("TON BoC CRC32C is invalid");
+    }
+  }
+  const cellData = boc.subarray(cellDataStart, cellDataEnd);
+  const cellCursor = { offset: 0 };
+  const cells = [];
+  for (let cellIndex = 0; cellIndex < cellsCount; cellIndex += 1) {
+    if (cellCursor.offset + 2 > cellData.length) {
+      throw new TypeError("TON BoC cell is truncated");
+    }
+    const descriptor = cellData[cellCursor.offset];
+    cellCursor.offset += 1;
+    const dataDescriptor = cellData[cellCursor.offset];
+    cellCursor.offset += 1;
+    const refsCount = descriptor & 0x07;
+    const exotic = (descriptor & 0x08) !== 0;
+    const hasHashes = (descriptor & 0x10) !== 0;
+    const level = (descriptor >> 5) & 0x03;
+    const dataBytes = Math.floor((dataDescriptor + 1) / 2);
+    if (
+      refsCount > SCCP_TON_MAX_REFS ||
+      hasHashes ||
+      dataBytes > SCCP_TON_MAX_CELL_SERIALIZED_DATA_BYTES ||
+      cellCursor.offset + dataBytes > cellData.length
+    ) {
+      throw new TypeError("TON BoC cell descriptor is unsupported");
+    }
+    const data = cellData.slice(cellCursor.offset, cellCursor.offset + dataBytes);
+    if (!tonCellDataPaddingIsValid(dataDescriptor, data)) {
+      throw new TypeError("TON BoC cell data padding is invalid");
+    }
+    cellCursor.offset += dataBytes;
+    const refs = [];
+    for (let ref = 0; ref < refsCount; ref += 1) {
+      const refIndex = tonReadSizedUint(cellData, cellCursor, sizeBytes);
+      if (refIndex >= cellsCount || refIndex <= cellIndex) {
+        throw new TypeError("TON BoC cell refs must be forward internal refs");
+      }
+      refs.push(refIndex);
+    }
+    cells.push({ descriptor: descriptor & ~0x10, dataDescriptor, data, refs, level, exotic });
+  }
+  if (cellCursor.offset !== cellData.length) {
+    throw new TypeError("TON BoC has trailing cell data");
+  }
+  return { roots, cells };
+};
+
+const tonBocChildForHashLevel = (cellType, computed, level) =>
+  tonChildHashDepthForLevel(
+    computed,
+    cellType === "merkleProof" || cellType === "merkleUpdate" ? level + 1 : level,
+  );
+
+const tonBocCellHashes = ({ cells }) => {
+  const computed = Array.from({ length: cells.length }, () => ({
+    mask: 0,
+    hashes: Array.from({ length: 4 }, () => new Uint8Array(32)),
+    depths: Array.from({ length: 4 }, () => 0),
+  }));
+  for (let index = cells.length - 1; index >= 0; index -= 1) {
+    const cell = cells[index];
+    const cellType = tonBocCellType(cell);
+    const pruned = cellType === "prunedBranch" ? tonParsePrunedBranch(cell) : null;
+    let mask = 0;
+    if (cellType === "ordinary") {
+      for (const refIndex of cell.refs) mask |= computed[refIndex].mask;
+    } else if (cellType === "prunedBranch") {
+      mask = pruned.mask;
+    } else if (cellType === "merkleProof") {
+      if (
+        !tonCellSerializedBitLenIsByteAligned(cell.dataDescriptor, cell.data) ||
+        cell.data.length !== 35 ||
+        cell.refs.length !== 1
+      ) {
+        throw new TypeError("TON BoC Merkle proof cell is invalid");
+      }
+      const child = tonChildHashDepthForLevel(computed[cell.refs[0]], 0);
+      const proofHash = cell.data.slice(1, 33);
+      const proofDepth = (cell.data[33] << 8) | cell.data[34];
+      if (!bytesEqual(proofHash, child.hash) || proofDepth !== child.depth) {
+        throw new TypeError("TON BoC Merkle proof cell is invalid");
+      }
+      mask = tonLevelMaskValue(computed[cell.refs[0]].mask >>> 1);
+    } else if (cellType === "merkleUpdate") {
+      if (
+        !tonCellSerializedBitLenIsByteAligned(cell.dataDescriptor, cell.data) ||
+        cell.data.length !== 69 ||
+        cell.refs.length !== 2
+      ) {
+        throw new TypeError("TON BoC Merkle update cell is invalid");
+      }
+      for (const [refPos, hashOffset, depthOffset] of [
+        [0, 1, 65],
+        [1, 33, 67],
+      ]) {
+        const child = tonChildHashDepthForLevel(computed[cell.refs[refPos]], 0);
+        const proofHash = cell.data.slice(hashOffset, hashOffset + 32);
+        const proofDepth = (cell.data[depthOffset] << 8) | cell.data[depthOffset + 1];
+        if (!bytesEqual(proofHash, child.hash) || proofDepth !== child.depth) {
+          throw new TypeError("TON BoC Merkle update cell is invalid");
+        }
+      }
+      mask = tonLevelMaskValue((computed[cell.refs[0]].mask | computed[cell.refs[1]].mask) >>> 1);
+    }
+
+    if (cell.level !== mask) {
+      throw new TypeError("TON BoC cell level mask is invalid");
+    }
+
+    const totalHashCount = tonLevelMaskHashIndex(mask) + 1;
+    const hashCount = cellType === "prunedBranch" ? 1 : totalHashCount;
+    const hashOffset = totalHashCount - hashCount;
+    const computedHashes = [];
+    const computedDepths = [];
+    const level = tonLevelMaskLevel(mask);
+    let hashIndex = 0;
+    for (let levelIndex = 0; levelIndex <= level; levelIndex += 1) {
+      if (!tonLevelMaskIsSignificant(mask, levelIndex)) continue;
+      if (hashIndex < hashOffset) {
+        hashIndex += 1;
+        continue;
+      }
+      let currentData;
+      if (hashIndex === hashOffset) {
+        if (levelIndex !== 0 && cellType !== "prunedBranch") {
+          throw new TypeError("TON BoC cell hash level is invalid");
+        }
+        currentData = cell.data;
+      } else {
+        currentData = computedHashes[hashIndex - hashOffset - 1];
+      }
+
+      let currentDepth = 0;
+      for (const refIndex of cell.refs) {
+        const child = tonBocChildForHashLevel(cellType, computed[refIndex], levelIndex);
+        currentDepth = Math.max(currentDepth, child.depth);
+      }
+      if (cell.refs.length > 0) currentDepth += 1;
+      if (currentDepth > 0xffff) {
+        throw new TypeError("TON BoC cell depth is invalid");
+      }
+
+      const appliedMask = tonLevelMaskApply(mask, levelIndex);
+      let descriptor = cell.refs.length | (cellType === "ordinary" ? 0 : 0x08) | (appliedMask << 5);
+      let repr = Uint8Array.from([descriptor, cell.dataDescriptor]);
+      repr = concatBytes(repr, currentData);
+      for (const refIndex of cell.refs) {
+        const child = tonBocChildForHashLevel(cellType, computed[refIndex], levelIndex);
+        const depth = new Uint8Array(2);
+        new DataView(depth.buffer).setUint16(0, child.depth, false);
+        repr = concatBytes(repr, depth);
+      }
+      for (const refIndex of cell.refs) {
+        const child = tonBocChildForHashLevel(cellType, computed[refIndex], levelIndex);
+        repr = concatBytes(repr, child.hash);
+      }
+      computedHashes.push(sha256(repr));
+      computedDepths.push(currentDepth);
+      hashIndex += 1;
+    }
+
+    const resolvedHashes = Array.from({ length: 4 }, () => new Uint8Array(32));
+    const resolvedDepths = Array.from({ length: 4 }, () => 0);
+    for (let resolvedLevel = 0; resolvedLevel < 4; resolvedLevel += 1) {
+      const resolvedHashIndex = tonLevelMaskHashIndex(tonLevelMaskApply(mask, resolvedLevel));
+      if (pruned) {
+        const thisHashIndex = tonLevelMaskHashIndex(mask);
+        if (resolvedHashIndex !== thisHashIndex) {
+          resolvedHashes[resolvedLevel] = pruned.hashes[resolvedHashIndex];
+          resolvedDepths[resolvedLevel] = pruned.depths[resolvedHashIndex];
+        } else {
+          resolvedHashes[resolvedLevel] = computedHashes[0];
+          resolvedDepths[resolvedLevel] = computedDepths[0];
+        }
+      } else {
+        resolvedHashes[resolvedLevel] = computedHashes[resolvedHashIndex];
+        resolvedDepths[resolvedLevel] = computedDepths[resolvedHashIndex];
+      }
+    }
+    computed[index] = { mask, hashes: resolvedHashes, depths: resolvedDepths };
+  }
+  return computed;
+};
+
+export const tonBocRootHashes = (boc) => {
+  const parsed = parseTonBocCompleteOrdinary(boc);
+  const hashes = tonBocCellHashes(parsed);
+  return parsed.roots.map((root) => bytesToHex(hashes[root].hashes[3]));
+};
+
+export const tonBocSingleRootHash = (boc) => {
+  const roots = tonBocRootHashes(boc);
+  if (roots.length !== 1) {
+    throw new TypeError("TON BoC must contain exactly one root");
+  }
+  return roots[0];
+};
+
+const TON_SHARD_STATE_UNSPLIT_TAG = 0x9023afe2;
+const TON_MAINNET_GLOBAL_ID = -239;
+const TON_MASTERCHAIN_WORKCHAIN_ID = -1;
+const TON_MASTERCHAIN_SHARD = 0x8000000000000000n;
+const TON_BASECHAIN_WORKCHAIN_ID = 0;
+const TON_BASECHAIN_FULL_SHARD = 0x8000000000000000n;
+
+const tonReadSignedInt32FromUint = (value) => (
+  value >= 0x80000000 ? value - 0x100000000 : value
+);
+
+const tonBocProofRootAndChildIndex = (parsed, computed) => {
+  if (parsed.roots.length !== 1) {
+    throw new TypeError("TON BoC must contain exactly one root");
+  }
+  const rootIndex = parsed.roots[0];
+  const root = parsed.cells[rootIndex];
+  if (!root || !computed[rootIndex]) {
+    throw new TypeError("TON BoC root index is invalid");
+  }
+  const rootType = tonBocCellType(root);
+  if (rootType === "ordinary") {
+    return { rootHash: computed[rootIndex].hashes[3], childIndex: rootIndex };
+  }
+  if (rootType === "merkleProof") {
+    if (root.refs.length !== 1 || root.data.length < 33) {
+      throw new TypeError("TON BoC Merkle proof cell is invalid");
+    }
+    return { rootHash: root.data.slice(1, 33), childIndex: root.refs[0] };
+  }
+  throw new TypeError("TON shard-state proof root is pruned or unsupported");
+};
+
+export const tonShardStateProofRootHash = (boc) => {
+  const parsed = parseTonBocCompleteOrdinary(boc);
+  const computed = tonBocCellHashes(parsed);
+  return bytesToHex(tonBocProofRootAndChildIndex(parsed, computed).rootHash);
+};
+
+export const tonHashmapEProofRootHash = (boc) => {
+  const parsed = parseTonBocCompleteOrdinary(boc);
+  const computed = tonBocCellHashes(parsed);
+  return bytesToHex(tonBocProofRootAndChildIndex(parsed, computed).rootHash);
+};
+
+const tonShardStateAccountKeyMatchesShardPrefix = (key, keyBitLen, opening) => {
+  if (keyBitLen !== SCCP_TON_SHARD_ACCOUNT_KEY_BITS) return false;
+  for (let bitIndex = 0; bitIndex < opening.shardPfxBits; bitIndex += 1) {
+    if (tonHashmapKeyBit(key, keyBitLen, bitIndex) !== opening.shardPrefixBits[bitIndex]) {
+      return false;
+    }
+  }
+  return true;
+};
+
+const tonShardIdFromPrefixBits = (shardPfxBits, shardPrefixBits) => {
+  if (!Number.isInteger(shardPfxBits) || shardPfxBits < 0 || shardPfxBits > 60) {
+    throw new TypeError("TON ShardIdent prefix length is invalid");
+  }
+  let shardId = 0n;
+  for (let bitIndex = 0; bitIndex < shardPfxBits; bitIndex += 1) {
+    if (shardPrefixBits[bitIndex]) {
+      shardId |= 1n << BigInt(63 - bitIndex);
+    }
+  }
+  shardId |= 1n << BigInt(63 - shardPfxBits);
+  return shardId;
+};
+
+const tonShardStateUnsplitAccountsOpeningFromCell = (parsed, computed, cellIndex) => {
+  const cell = parsed.cells[cellIndex];
+  if (!cell || tonBocCellType(cell) !== "ordinary") {
+    throw new TypeError("TON ShardStateUnsplit root must be ordinary");
+  }
+  const reader = makeTonBocBitReader(cell);
+  if (reader.readUint(32) !== TON_SHARD_STATE_UNSPLIT_TAG) {
+    throw new TypeError("TON ShardStateUnsplit tag is invalid");
+  }
+  const globalId = tonReadSignedInt32FromUint(reader.readUint(32));
+  if (reader.readUint(2) !== 0) {
+    throw new TypeError("TON ShardIdent tag is invalid");
+  }
+  const shardPfxBits = reader.readUint(6);
+  if (shardPfxBits > 60) {
+    throw new TypeError("TON ShardIdent prefix length is invalid");
+  }
+  const workchainId = tonReadSignedInt32FromUint(reader.readUint(32));
+  const shardPrefixBits = [];
+  for (let bitIndex = 0; bitIndex < 64; bitIndex += 1) {
+    shardPrefixBits.push(reader.readBit());
+  }
+  const seqNo = reader.readUint(32);
+  reader.readUint(32);
+  const genUtime = reader.readUint(32);
+  const genLt = reader.readUintBigInt(64);
+  const minRefMcSeqno = reader.readUint(32);
+  const outMsgQueueInfoRef = reader.readRef();
+  if (!computed[outMsgQueueInfoRef]) {
+    throw new TypeError("TON ShardStateUnsplit out_msg_queue_info ref is invalid");
+  }
+  reader.readBit();
+  const accountsRef = reader.readRef();
+  const accounts = computed[accountsRef];
+  if (!accounts) {
+    throw new TypeError("TON ShardStateUnsplit accounts ref is invalid");
+  }
+  const trailingFieldsRef = reader.readRef();
+  if (!computed[trailingFieldsRef]) {
+    throw new TypeError("TON ShardStateUnsplit trailing fields ref is invalid");
+  }
+  if (reader.readBit()) {
+    if (workchainId === TON_BASECHAIN_WORKCHAIN_ID) {
+      throw new TypeError("TON basechain ShardStateUnsplit custom must be absent");
+    }
+    const customRef = reader.readRef();
+    if (!computed[customRef]) {
+      throw new TypeError("TON ShardStateUnsplit custom ref is invalid");
+    }
+  }
+  if (!reader.isExhausted()) {
+    throw new TypeError("TON ShardStateUnsplit has trailing data");
+  }
+  return {
+    accountsRootHash: bytesToHex(accounts.hashes[3]),
+    globalId,
+    workchainId,
+    seqNo,
+    genUtime,
+    genLt,
+    minRefMcSeqno,
+    shardPfxBits,
+    shardPrefixBits,
+    shardId: tonShardIdFromPrefixBits(shardPfxBits, shardPrefixBits),
+  };
+};
+
+const tonShardStateAccountsOpening = (boc) => {
+  const parsed = parseTonBocCompleteOrdinary(boc);
+  const computed = tonBocCellHashes(parsed);
+  const { childIndex } = tonBocProofRootAndChildIndex(parsed, computed);
+  return tonShardStateUnsplitAccountsOpeningFromCell(parsed, computed, childIndex);
+};
+
+export const tonShardStateAccountsRootHash = (boc) => {
+  return tonShardStateAccountsOpening(boc).accountsRootHash;
+};
+
+const tonHashmapUnwrapMerkleProofCell = (parsed, cellIndex) => {
+  const cell = parsed.cells[cellIndex];
+  if (!cell) throw new TypeError("TON HashmapE cell index is invalid");
+  const cellType = tonBocCellType(cell);
+  if (cellType === "ordinary") return cellIndex;
+  if (cellType === "merkleProof") {
+    if (cell.refs.length !== 1) throw new TypeError("TON BoC Merkle proof cell is invalid");
+    return cell.refs[0];
+  }
+  return null;
+};
+
+const tonHashmapReadLabel = (reader, key, keyBitLen, keyOffset, maxLen) => {
+  const longOrSame = reader.readBit();
+  let labelLen;
+  if (!longOrSame) {
+    labelLen = 0;
+    while (reader.readBit()) {
+      labelLen += 1;
+      if (labelLen > maxLen) return null;
+    }
+    for (let offset = 0; offset < labelLen; offset += 1) {
+      if (reader.readBit() !== tonHashmapKeyBit(key, keyBitLen, keyOffset + offset)) return null;
+    }
+  } else if (!reader.readBit()) {
+    labelLen = reader.readUint(tonHashmapUintLenBits(maxLen));
+    if (labelLen > maxLen) return null;
+    for (let offset = 0; offset < labelLen; offset += 1) {
+      if (reader.readBit() !== tonHashmapKeyBit(key, keyBitLen, keyOffset + offset)) return null;
+    }
+  } else {
+    const labelBit = reader.readBit();
+    labelLen = reader.readUint(tonHashmapUintLenBits(maxLen));
+    if (labelLen > maxLen) return null;
+    for (let offset = 0; offset < labelLen; offset += 1) {
+      if (labelBit !== tonHashmapKeyBit(key, keyBitLen, keyOffset + offset)) return null;
+    }
+  }
+  return labelLen;
+};
+
+const tonHashmapReadLabelBits = (reader, maxLen) => {
+  const bits = [];
+  const longOrSame = reader.readBit();
+  let labelLen;
+  if (!longOrSame) {
+    labelLen = 0;
+    while (reader.readBit()) {
+      labelLen += 1;
+      if (labelLen > maxLen) return null;
+    }
+    for (let offset = 0; offset < labelLen; offset += 1) {
+      bits.push(reader.readBit());
+    }
+  } else if (!reader.readBit()) {
+    labelLen = reader.readUint(tonHashmapUintLenBits(maxLen));
+    if (labelLen > maxLen) return null;
+    for (let offset = 0; offset < labelLen; offset += 1) {
+      bits.push(reader.readBit());
+    }
+  } else {
+    const labelBit = reader.readBit();
+    labelLen = reader.readUint(tonHashmapUintLenBits(maxLen));
+    if (labelLen > maxLen) return null;
+    for (let offset = 0; offset < labelLen; offset += 1) {
+      bits.push(labelBit);
+    }
+  }
+  return bits;
+};
+
+const tonHashmapCellRefValueHash = (parsed, computed, rootIndex, key, keyBitLen) => {
+  let cellIndex = tonHashmapUnwrapMerkleProofCell(parsed, rootIndex);
+  if (cellIndex === null) return null;
+  let keyOffset = 0;
+  let remaining = keyBitLen;
+  for (let step = 0; step <= parsed.cells.length; step += 1) {
+    cellIndex = tonHashmapUnwrapMerkleProofCell(parsed, cellIndex);
+    if (cellIndex === null) return null;
+    const cell = parsed.cells[cellIndex];
+    const reader = makeTonBocBitReader(cell);
+    const labelLen = tonHashmapReadLabel(reader, key, keyBitLen, keyOffset, remaining);
+    if (labelLen === null) return null;
+    keyOffset += labelLen;
+    remaining -= labelLen;
+    if (remaining === 0) {
+      if (reader.remainingBits() !== 0 || reader.remainingRefs() !== 1) return null;
+      const valueRef = reader.readRef();
+      if (tonBocCellType(parsed.cells[valueRef]) === "prunedBranch") return null;
+      return bytesToHex(computed[valueRef].hashes[3]);
+    }
+    if (reader.remainingBits() !== 0 || reader.remainingRefs() !== 2) return null;
+    const nextBit = tonHashmapKeyBit(key, keyBitLen, keyOffset);
+    keyOffset += 1;
+    remaining -= 1;
+    const leftRef = reader.readRef();
+    const rightRef = reader.readRef();
+    cellIndex = nextBit ? rightRef : leftRef;
+  }
+  return null;
+};
+
+const tonHashmapCellRefValueIndex = (parsed, rootIndex, key, keyBitLen) => {
+  let cellIndex = tonHashmapUnwrapMerkleProofCell(parsed, rootIndex);
+  if (cellIndex === null) return null;
+  let keyOffset = 0;
+  let remaining = keyBitLen;
+  for (let step = 0; step <= parsed.cells.length; step += 1) {
+    cellIndex = tonHashmapUnwrapMerkleProofCell(parsed, cellIndex);
+    if (cellIndex === null) return null;
+    const cell = parsed.cells[cellIndex];
+    const reader = makeTonBocBitReader(cell);
+    const labelLen = tonHashmapReadLabel(reader, key, keyBitLen, keyOffset, remaining);
+    if (labelLen === null) return null;
+    keyOffset += labelLen;
+    remaining -= labelLen;
+    if (remaining === 0) {
+      if (reader.remainingBits() !== 0 || reader.remainingRefs() !== 1) return null;
+      const valueRef = reader.readRef();
+      if (!parsed.cells[valueRef] || tonBocCellType(parsed.cells[valueRef]) === "prunedBranch") {
+        return null;
+      }
+      return valueRef;
+    }
+    if (reader.remainingBits() !== 0 || reader.remainingRefs() !== 2) return null;
+    const nextBit = tonHashmapKeyBit(key, keyBitLen, keyOffset);
+    keyOffset += 1;
+    remaining -= 1;
+    const leftRef = reader.readRef();
+    const rightRef = reader.readRef();
+    cellIndex = nextBit ? rightRef : leftRef;
+  }
+  return null;
+};
+
+const tonBitsToUint16 = (bits) => {
+  if (bits.length > 16) return null;
+  let value = 0;
+  for (const bit of bits) {
+    value = (value << 1) | (bit ? 1 : 0);
+  }
+  return value;
+};
+
+const tonReadEd25519SigPubkey = (reader) => {
+  if (reader.readUint(32) !== SCCP_TON_ED25519_PUBKEY_CONSTRUCTOR) return null;
+  return reader.readBytes(32);
+};
+
+const tonReadValidatorDescr = (reader) => {
+  const constructor = reader.readUint(8);
+  if (
+    constructor !== SCCP_TON_VALIDATOR_CONSTRUCTOR &&
+    constructor !== SCCP_TON_VALIDATOR_ADDR_CONSTRUCTOR
+  ) {
+    return null;
+  }
+  const publicKey = tonReadEd25519SigPubkey(reader);
+  if (publicKey === null) return null;
+  const weight = reader.readUintBigInt(64);
+  if (weight === 0n) return null;
+  if (constructor === SCCP_TON_VALIDATOR_ADDR_CONSTRUCTOR) {
+    reader.skipBits(256);
+  }
+  return { publicKey, weight };
+};
+
+const tonHashmapCollectValidatorDescrsFromReader = (
+  parsed,
+  reader,
+  remaining,
+  prefix,
+  out,
+  budget,
+) => {
+  if (budget.remaining <= 0 || out.length > SCCP_TON_MAX_VALIDATORS) return false;
+  budget.remaining -= 1;
+
+  const labelBits = tonHashmapReadLabelBits(reader, remaining);
+  if (labelBits === null) return false;
+  prefix.push(...labelBits);
+  const nextRemaining = remaining - labelBits.length;
+
+  if (nextRemaining === 0) {
+    const key = tonBitsToUint16(prefix);
+    const validator = tonReadValidatorDescr(reader);
+    if (key === null || validator === null || !reader.isExhausted()) {
+      prefix.length -= labelBits.length;
+      return false;
+    }
+    out.push({ key, publicKey: validator.publicKey, weight: validator.weight });
+    prefix.length -= labelBits.length;
+    return true;
+  }
+
+  if (reader.remainingBits() !== 0 || reader.remainingRefs() !== 2) {
+    prefix.length -= labelBits.length;
+    return false;
+  }
+  const leftRef = reader.readRef();
+  const rightRef = reader.readRef();
+
+  prefix.push(false);
+  const leftOk = tonHashmapCollectValidatorDescrsFromCell(
+    parsed,
+    leftRef,
+    nextRemaining - 1,
+    prefix,
+    out,
+    budget,
+  );
+  prefix.pop();
+  if (!leftOk) {
+    prefix.length -= labelBits.length;
+    return false;
+  }
+
+  prefix.push(true);
+  const rightOk = tonHashmapCollectValidatorDescrsFromCell(
+    parsed,
+    rightRef,
+    nextRemaining - 1,
+    prefix,
+    out,
+    budget,
+  );
+  prefix.pop();
+  prefix.length -= labelBits.length;
+  return rightOk;
+};
+
+const tonHashmapCollectValidatorDescrsFromCell = (parsed, cellIndex, remaining, prefix, out, budget) => {
+  const cell = parsed.cells[cellIndex];
+  if (!cell || tonBocCellType(cell) !== "ordinary") return false;
+  return tonHashmapCollectValidatorDescrsFromReader(
+    parsed,
+    makeTonBocBitReader(cell),
+    remaining,
+    prefix,
+    out,
+    budget,
+  );
+};
+
+const tonValidatorSetPayloadFromCell = (parsed, cellIndex) => {
+  const cell = parsed.cells[cellIndex];
+  if (!cell || tonBocCellType(cell) !== "ordinary") {
+    throw new TypeError("TON ValidatorSet cell must be ordinary");
+  }
+  const reader = makeTonBocBitReader(cell);
+  const constructor = reader.readUint(8);
+  if (
+    constructor !== SCCP_TON_VALIDATORS_CONSTRUCTOR &&
+    constructor !== SCCP_TON_VALIDATORS_EXT_CONSTRUCTOR
+  ) {
+    throw new TypeError("TON ValidatorSet constructor is unsupported");
+  }
+  const utimeSince = reader.readUint(32);
+  const utimeUntil = reader.readUint(32);
+  if (utimeUntil <= utimeSince) {
+    throw new TypeError("TON ValidatorSet validity interval is invalid");
+  }
+  const total = reader.readUint(16);
+  const main = reader.readUint(16);
+  if (total === 0 || total > SCCP_TON_MAX_VALIDATORS || main === 0 || main > total) {
+    throw new TypeError("TON ValidatorSet counts are invalid");
+  }
+  const declaredTotalWeight =
+    constructor === SCCP_TON_VALIDATORS_EXT_CONSTRUCTOR ? reader.readUintBigInt(64) : null;
+
+  const entries = [];
+  const budget = { remaining: parsed.cells.length + 1 };
+  if (constructor === SCCP_TON_VALIDATORS_EXT_CONSTRUCTOR) {
+    const hasRoot = reader.readBit();
+    if (!hasRoot || reader.remainingBits() !== 0 || reader.remainingRefs() !== 1) {
+      throw new TypeError("TON ValidatorSet dictionary root is invalid");
+    }
+    if (
+      !tonHashmapCollectValidatorDescrsFromCell(
+        parsed,
+        reader.readRef(),
+        SCCP_TON_VALIDATOR_SET_KEY_BITS,
+        [],
+        entries,
+        budget,
+      )
+    ) {
+      throw new TypeError("TON ValidatorSet dictionary is invalid");
+    }
+  } else if (
+    !tonHashmapCollectValidatorDescrsFromReader(
+      parsed,
+      reader,
+      SCCP_TON_VALIDATOR_SET_KEY_BITS,
+      [],
+      entries,
+      budget,
+    )
+  ) {
+    throw new TypeError("TON ValidatorSet dictionary is invalid");
+  }
+
+  if (entries.length !== total || entries.length > SCCP_TON_MAX_VALIDATORS) {
+    throw new TypeError("TON ValidatorSet validator count is invalid");
+  }
+  entries.sort((left, right) => left.key - right.key);
+  for (let index = 1; index < entries.length; index += 1) {
+    if (entries[index - 1].key >= entries[index].key) {
+      throw new TypeError("TON ValidatorSet dictionary keys must be unique and ordered");
+    }
+  }
+  const totalWeight = entries.reduce((sum, entry) => sum + entry.weight, 0n);
+  if (declaredTotalWeight !== null && (declaredTotalWeight === 0n || declaredTotalWeight !== totalWeight)) {
+    throw new TypeError("TON ValidatorSet total weight is invalid");
+  }
+  return canonicalTonValidatorSetPayloadBytes({
+    validatorPublicKeys: entries.map((entry) => entry.publicKey),
+    validatorWeights: entries.map((entry) => entry.weight),
+  });
+};
+
+const tonSkipVarUint = (reader, lengthBits) => {
+  const byteLength = reader.readUint(lengthBits);
+  reader.skipBits(byteLength * 8);
+};
+
+const tonSkipCurrencyCollection = (reader) => {
+  tonSkipVarUint(reader, 4);
+  if (reader.readBit()) reader.readRef();
+};
+
+const tonSkipDepthBalanceInfo = (reader) => {
+  const splitDepth = reader.readUint(5);
+  if (splitDepth > 30) throw new TypeError("TON DepthBalanceInfo split depth is invalid");
+  tonSkipCurrencyCollection(reader);
+};
+
+const tonReadShardAccountLastTransaction = (computed, reader) => {
+  tonSkipDepthBalanceInfo(reader);
+  const accountRef = reader.readRef();
+  if (!computed[accountRef]) throw new TypeError("TON ShardAccount account ref is invalid");
+  const lastTransactionHash = bytesToHex(reader.readBytes(32));
+  const lastTransactionLt = reader.readUintBigInt(64);
+  if (lastTransactionLt === 0n) throw new TypeError("TON ShardAccount last transaction lt must be non-zero");
+  if (!reader.isExhausted()) throw new TypeError("TON ShardAccount has trailing data");
+  return { hash: lastTransactionHash, lt: lastTransactionLt };
+};
+
+const tonHashmapShardAccountsLastTransaction = (parsed, computed, rootIndex, key, keyBitLen) => {
+  let cellIndex = tonHashmapUnwrapMerkleProofCell(parsed, rootIndex);
+  if (cellIndex === null) return null;
+  let keyOffset = 0;
+  let remaining = keyBitLen;
+  for (let step = 0; step <= parsed.cells.length; step += 1) {
+    cellIndex = tonHashmapUnwrapMerkleProofCell(parsed, cellIndex);
+    if (cellIndex === null) return null;
+    const cell = parsed.cells[cellIndex];
+    const reader = makeTonBocBitReader(cell);
+    const labelLen = tonHashmapReadLabel(reader, key, keyBitLen, keyOffset, remaining);
+    if (labelLen === null) return null;
+    keyOffset += labelLen;
+    remaining -= labelLen;
+    if (remaining === 0) {
+      return tonReadShardAccountLastTransaction(computed, reader);
+    }
+    const nextBit = tonHashmapKeyBit(key, keyBitLen, keyOffset);
+    keyOffset += 1;
+    remaining -= 1;
+    const leftRef = reader.readRef();
+    const rightRef = reader.readRef();
+    tonSkipDepthBalanceInfo(reader);
+    if (!reader.isExhausted()) return null;
+    cellIndex = nextBit ? rightRef : leftRef;
+  }
+  return null;
+};
+
+export const tonHashmapECellRefValueHash = (boc, key, keyBitLen) => {
+  const keyBytes = toBytes(key, "TON HashmapE key");
+  const normalizedKeyBitLen = Number(keyBitLen);
+  if (!tonHashmapKeyIsCanonical(keyBytes, normalizedKeyBitLen)) {
+    throw new TypeError("TON HashmapE key length is invalid");
+  }
+  const parsed = parseTonBocCompleteOrdinary(boc);
+  const computed = tonBocCellHashes(parsed);
+  if (parsed.roots.length !== 1) {
+    throw new TypeError("TON BoC must contain exactly one root");
+  }
+  const rootIndex = tonHashmapUnwrapMerkleProofCell(parsed, parsed.roots[0]);
+  if (rootIndex === null) {
+    throw new TypeError("TON HashmapE root is pruned or unsupported");
+  }
+  const root = parsed.cells[rootIndex];
+  if (tonBocCellType(root) !== "ordinary") {
+    throw new TypeError("TON HashmapE root must be ordinary");
+  }
+  const reader = makeTonBocBitReader(root);
+  const hasRoot = reader.readBit();
+  if (!hasRoot) {
+    if (!reader.isExhausted()) throw new TypeError("TON HashmapE empty root is invalid");
+    return null;
+  }
+  if (reader.remainingBits() !== 0 || reader.remainingRefs() !== 1) {
+    throw new TypeError("TON HashmapE root is invalid");
+  }
+  return tonHashmapCellRefValueHash(parsed, computed, reader.readRef(), keyBytes, normalizedKeyBitLen);
+};
+
+const tonCurrentValidatorSetConfigKey = () => {
+  const key = new Uint8Array(4);
+  new DataView(key.buffer).setUint32(0, Number(SCCP_TON_CURRENT_VALIDATOR_SET_CONFIG_PARAM), false);
+  return key;
+};
+
+export const tonConfigValidatorSetPayloadFromProofBoc = (boc) => {
+  const parsed = parseTonBocCompleteOrdinary(boc);
+  tonBocCellHashes(parsed);
+  if (parsed.roots.length !== 1) {
+    throw new TypeError("TON BoC must contain exactly one root");
+  }
+  const rootIndex = tonHashmapUnwrapMerkleProofCell(parsed, parsed.roots[0]);
+  if (rootIndex === null) {
+    throw new TypeError("TON config dictionary root is pruned or unsupported");
+  }
+  const root = parsed.cells[rootIndex];
+  if (tonBocCellType(root) !== "ordinary") {
+    throw new TypeError("TON config dictionary root must be ordinary");
+  }
+  const reader = makeTonBocBitReader(root);
+  const hasRoot = reader.readBit();
+  if (!hasRoot) {
+    if (!reader.isExhausted()) throw new TypeError("TON config dictionary empty root is invalid");
+    return null;
+  }
+  if (reader.remainingBits() !== 0 || reader.remainingRefs() !== 1) {
+    throw new TypeError("TON config dictionary root is invalid");
+  }
+  const valueRef = tonHashmapCellRefValueIndex(
+    parsed,
+    reader.readRef(),
+    tonCurrentValidatorSetConfigKey(),
+    SCCP_TON_CONFIG_PARAM_KEY_BITS,
+  );
+  if (valueRef === null) return null;
+  return tonValidatorSetPayloadFromCell(parsed, valueRef);
+};
+
+export const tonConfigValidatorSetPayloadHashFromProofBoc = (boc) => {
+  const payload = tonConfigValidatorSetPayloadFromProofBoc(boc);
+  return payload === null ? null : tonValidatorSetPayloadHash(payload);
+};
+
+export const tonShardAccountsLastTransaction = (boc, key, keyBitLen) => {
+  const keyBytes = toBytes(key, "TON ShardAccounts key");
+  const normalizedKeyBitLen = Number(keyBitLen);
+  if (normalizedKeyBitLen !== SCCP_TON_SHARD_ACCOUNT_KEY_BITS) {
+    throw new TypeError("TON ShardAccounts key bit length must be 256");
+  }
+  if (!tonHashmapKeyIsCanonical(keyBytes, normalizedKeyBitLen)) {
+    throw new TypeError("TON ShardAccounts key length is invalid");
+  }
+  const parsed = parseTonBocCompleteOrdinary(boc);
+  const computed = tonBocCellHashes(parsed);
+  if (parsed.roots.length !== 1) {
+    throw new TypeError("TON BoC must contain exactly one root");
+  }
+  const rootIndex = tonHashmapUnwrapMerkleProofCell(parsed, parsed.roots[0]);
+  if (rootIndex === null) {
+    throw new TypeError("TON ShardAccounts root is pruned or unsupported");
+  }
+  const root = parsed.cells[rootIndex];
+  if (tonBocCellType(root) !== "ordinary") {
+    throw new TypeError("TON ShardAccounts root must be ordinary");
+  }
+  const reader = makeTonBocBitReader(root);
+  const hasRoot = reader.readBit();
+  if (!hasRoot) {
+    if (!reader.isExhausted()) throw new TypeError("TON ShardAccounts empty root is invalid");
+    return null;
+  }
+  if (reader.remainingBits() !== 0 || reader.remainingRefs() !== 1) {
+    throw new TypeError("TON ShardAccounts root is invalid");
+  }
+  return tonHashmapShardAccountsLastTransaction(
+    parsed,
+    computed,
+    reader.readRef(),
+    keyBytes,
+    normalizedKeyBitLen,
+  );
+};
+
+export const tonShardAccountsLastTransactionHash = (boc, key, keyBitLen) => {
+  const transaction = tonShardAccountsLastTransaction(boc, key, keyBitLen);
+  return transaction?.hash ?? null;
+};
+
+const pushTonSnakeCells = (cells, bytes) => {
+  const data = toBytes(bytes, "TON snake bytes");
+  const start = cells.length;
+  if (data.length === 0) {
+    if (cells.length + 1 > SCCP_TON_MAX_BOC_CELLS) {
+      throw new RangeError("TON BOC contains too many cells");
+    }
+    cells.push({ data: new Uint8Array(), refs: [] });
+    return start;
+  }
+  const chunkCount = Math.ceil(data.length / SCCP_TON_MAX_CELL_DATA_BYTES);
+  if (cells.length + chunkCount > SCCP_TON_MAX_BOC_CELLS) {
+    throw new RangeError("TON BOC contains too many cells");
+  }
+  for (let index = 0; index < chunkCount; index += 1) {
+    const chunkStart = index * SCCP_TON_MAX_CELL_DATA_BYTES;
+    const chunk = data.subarray(chunkStart, Math.min(chunkStart + SCCP_TON_MAX_CELL_DATA_BYTES, data.length));
+    cells.push({ data: chunk, refs: index + 1 === chunkCount ? [] : [start + index + 1] });
+  }
+  return start;
+};
+
+const enumCode = (value, table, label) => {
+  const key = typeof value === "string" ? value : value?.family ?? value?.kind ?? value?.type;
+  if (key in table) return table[key];
+  throw new TypeError(`${label} is unsupported`);
+};
+
+const verifierBackendFamilyForTon = (manifest) => {
+  const verifierBackend = strictResultField(
+    manifest,
+    "verifierBackend",
+    "verifierBackend",
+    "verifier_backend",
+  );
+  const topLevelFamily = strictOptionalResultField(
+    manifest,
+    "verifierBackendFamily",
+    "verifierBackendFamily",
+    "verifier_backend_family",
+  );
+  const nestedFamily =
+    verifierBackend && typeof verifierBackend === "object" && !Array.isArray(verifierBackend)
+      ? strictOptionalResultField(verifierBackend, "verifierBackend.family", "family")
+      : SCCP_OPTIONAL_FIELD_MISSING;
+  if (
+    topLevelFamily !== SCCP_OPTIONAL_FIELD_MISSING &&
+    nestedFamily !== SCCP_OPTIONAL_FIELD_MISSING
+  ) {
+    throw new TypeError("verifierBackendFamily must not use multiple aliases");
+  }
+  if (topLevelFamily !== SCCP_OPTIONAL_FIELD_MISSING) return topLevelFamily;
+  if (nestedFamily !== SCCP_OPTIONAL_FIELD_MISSING) return nestedFamily;
+  return "TonContract";
+};
+
+const normalizeTonSubmissionManifest = (manifestInput) => {
+  if (!manifestInput || typeof manifestInput !== "object" || Array.isArray(manifestInput)) {
+    throw new TypeError("TON SCCP manifest must be an object");
+  }
+  const localDomain = normalizeSccpDomainId(
+    strictResultField(manifestInput, "manifest.localDomain", "localDomain", "local_domain"),
+    "manifest.localDomain",
+  );
+  if (localDomain !== SCCP_DOMAIN_SORA) {
+    throw new TypeError("manifest.localDomain must be SORA");
+  }
+  const counterpartyDomain = normalizeSccpDomainId(
+    strictResultField(
+      manifestInput,
+      "manifest.counterpartyDomain",
+      "counterpartyDomain",
+      "counterparty_domain",
+    ),
+    "manifest.counterpartyDomain",
+  );
+  if (counterpartyDomain !== SCCP_DOMAIN_TON) {
+    throw new TypeError("manifest.counterpartyDomain must be TON");
+  }
+  requireV1Version(strictResultField(manifestInput, "manifest.version", "version"), "manifest.version");
+  enumCode(
+    strictResultField(manifestInput, "securityModel", "securityModel", "security_model"),
+    { RecursiveZk: 1 },
+    "securityModel",
+  );
+  enumCode(
+    strictResultField(manifestInput, "anchorGovernance", "anchorGovernance", "anchor_governance"),
+    { CryptographicProof: 1 },
+    "anchorGovernance",
+  );
+  enumCode(
+    strictResultField(manifestInput, "verifierTarget", "verifierTarget", "verifier_target"),
+    { TonContract: 3 },
+    "verifierTarget",
+  );
+  enumCode(verifierBackendFamilyForTon(manifestInput), { TonContract: 3 }, "verifierBackendFamily");
+  const proofFamily = normalizeNonEmptyString(
+    strictResultField(manifestInput, "proofFamily", "proofFamily", "proof_family"),
+    "proofFamily",
+  );
+  if (proofFamily !== SCCP_STARK_FRI_PROOF_FAMILY_V1) {
+    throw new TypeError("proofFamily must be stark-fri-v1");
+  }
+  const verifierBackend = strictResultField(
+    manifestInput,
+    "verifierBackend",
+    "verifierBackend",
+    "verifier_backend",
+  );
+  const topLevelVerifierBackendKey = strictOptionalResultField(
+    manifestInput,
+    "verifierBackendKey",
+    "verifierBackendKey",
+    "verifier_backend_key",
+  );
+  const nestedVerifierBackendKey =
+    verifierBackend && typeof verifierBackend === "object" && !Array.isArray(verifierBackend)
+      ? strictOptionalResultField(verifierBackend, "verifierBackend.key", "key")
+      : SCCP_OPTIONAL_FIELD_MISSING;
+  if (
+    topLevelVerifierBackendKey !== SCCP_OPTIONAL_FIELD_MISSING &&
+    nestedVerifierBackendKey !== SCCP_OPTIONAL_FIELD_MISSING
+  ) {
+    throw new TypeError("verifierBackendKey must not use multiple aliases");
+  }
+  const verifierBackendKey = normalizeNonEmptyString(
+    topLevelVerifierBackendKey !== SCCP_OPTIONAL_FIELD_MISSING
+      ? topLevelVerifierBackendKey
+      : nestedVerifierBackendKey !== SCCP_OPTIONAL_FIELD_MISSING
+        ? nestedVerifierBackendKey
+        : undefined,
+    "verifierBackendKey",
+  );
+  if (verifierBackendKey !== SCCP_TON_CONTRACT_PROOF_BACKEND_V1) {
+    throw new TypeError("verifierBackendKey must be ton-contract-v1");
+  }
+  return { localDomain, counterpartyDomain, proofFamily, verifierBackendKey };
+};
+
+const normalizeTonSubmissionDestinationBinding = (bindingInput, label = "destinationBinding") => {
+  if (!bindingInput || typeof bindingInput !== "object" || Array.isArray(bindingInput)) {
+    throw new TypeError(`${label} must be an object`);
+  }
+  return {
+    key: normalizeNonEmptyString(bindingInput.key, `${label}.key`),
+    bindingHash: normalizeNonZeroHex32(
+      strictResultField(bindingInput, `${label}.bindingHash`, "bindingHash", "binding_hash"),
+      `${label}.bindingHash`,
+    ),
+  };
+};
+
+export const canonicalSccpTonSubmissionMetadataBytes = (input) => {
+  const manifestInput = strictResultField(input ?? {}, "manifest", "manifest");
+  const manifest = manifestInput ?? input;
+  const normalizedManifest = normalizeTonSubmissionManifest(manifest);
+  const explicitDestinationBinding = strictResultField(
+    input ?? {},
+    "destinationBinding",
+    "destinationBinding",
+    "destination_binding",
+  );
+  const manifestDestinationBinding = strictResultField(
+    manifest,
+    "manifest.destinationBinding",
+    "destinationBinding",
+    "destination_binding",
+  );
+  const destinationBinding = normalizeTonSubmissionDestinationBinding(
+    explicitDestinationBinding ?? manifestDestinationBinding,
+  );
+  const destinationBindingHashInput = strictResultField(
+    input ?? {},
+    "destinationBindingHash",
+    "destinationBindingHash",
+    "destination_binding_hash",
+  );
+  if (destinationBindingHashInput !== undefined) {
+    const destinationBindingHash = normalizeNonZeroHex32(
+      destinationBindingHashInput,
+      "destinationBindingHash",
+    );
+    if (destinationBindingHash !== destinationBinding.bindingHash) {
+      throw new TypeError("destinationBindingHash must match destinationBinding.bindingHash");
+    }
+  }
+  if (explicitDestinationBinding !== undefined && manifestDestinationBinding !== undefined) {
+    const expectedDestinationBinding = normalizeTonSubmissionDestinationBinding(
+      manifestDestinationBinding,
+      "manifest.destinationBinding",
+    );
+    if (
+      destinationBinding.key !== expectedDestinationBinding.key ||
+      destinationBinding.bindingHash !== expectedDestinationBinding.bindingHash
+    ) {
+      throw new TypeError("destinationBinding must match manifest.destinationBinding");
+    }
+  }
+  const publicInputs = strictResultField(input ?? {}, "publicInputs", "publicInputs", "public_inputs");
+  const normalizedPublicInputs = normalizeSccpMessageTransparentPublicInputs(publicInputs);
+  if (normalizedPublicInputs.targetDomain !== SCCP_DOMAIN_TON) {
+    throw new TypeError("publicInputs.targetDomain must be TON");
+  }
+  const statementHash = normalizeNonZeroHex32(
+    strictResultField(input ?? {}, "statementHash", "statementHash", "statement_hash"),
+    "statementHash",
+  );
+  let out = new Uint8Array();
+  out = writeU8(out, 1);
+  out = writeU32Le(out, normalizedManifest.localDomain);
+  out = writeU32Le(out, normalizedManifest.counterpartyDomain);
+  out = writeU8(out, enumCode(strictResultField(manifest, "securityModel", "securityModel", "security_model"), { RecursiveZk: 1 }, "securityModel"));
+  out = writeU8(out, enumCode(strictResultField(manifest, "anchorGovernance", "anchorGovernance", "anchor_governance"), { CryptographicProof: 1 }, "anchorGovernance"));
+  out = writeU8(out, enumCode(strictResultField(manifest, "verifierTarget", "verifierTarget", "verifier_target"), { TonContract: 3 }, "verifierTarget"));
+  out = writeU8(out, enumCode(verifierBackendFamilyForTon(manifest), { TonContract: 3 }, "verifierBackendFamily"));
+  out = writeString(out, normalizedManifest.proofFamily, "proofFamily");
+  out = writeString(out, normalizedManifest.verifierBackendKey, "verifierBackendKey");
+  out = writeString(out, strictResultField(manifest, "messageBackend", "messageBackend", "message_backend"), "messageBackend");
+  out = writeString(out, strictResultField(manifest, "registryBackend", "registryBackend", "registry_backend"), "registryBackend");
+  out = writeString(out, strictResultField(manifest, "manifestSeed", "manifestSeed", "manifest_seed"), "manifestSeed");
+  out = writeString(out, destinationBinding.key, "destinationBinding.key");
+  out = concatBytes(out, hexToBytes(destinationBinding.bindingHash, "destinationBinding.bindingHash", 32));
+  out = concatBytes(out, hexToBytes(statementHash, "statementHash", 32));
+  out = concatBytes(out, canonicalSccpMessageTransparentPublicInputsBytes(normalizedPublicInputs));
+  return out;
+};
+
+export const buildSccpTonMessageBodyBoc = (input) => {
+  if (!input || typeof input !== "object" || Array.isArray(input)) {
+    throw new TypeError("TON SCCP submission input must be an object");
+  }
+  const proofResultInput = strictOptionalResultField(input, "proofResult", "proofResult", "proof_result");
+  const proofResult = proofResultInput;
+  if (
+    proofResultInput === SCCP_OPTIONAL_FIELD_MISSING ||
+    !proofResult ||
+    typeof proofResult !== "object" ||
+    Array.isArray(proofResult)
+  ) {
+    throw new TypeError("proofResult must be a wrapped TON SCCP proof result");
+  }
+  let proofResultRequestHash = null;
+  let proofResultSourceStateVerifierId = null;
+  let proofResultSourceStateVerifierHash = null;
+  let proofResultDeploymentBinding = null;
+  if (proofResult !== null) {
+    requireOptionalResultBackendMatches(proofResult.backend, SCCP_TON_CONTRACT_PROOF_BACKEND_V1);
+  }
+  const resultPublicInputs =
+    proofResult === null
+      ? SCCP_OPTIONAL_FIELD_MISSING
+      : strictOptionalResultField(proofResult, "proofResult.publicInputs", "publicInputs", "public_inputs");
+  const inputPublicInputs = strictOptionalResultField(input, "publicInputs", "publicInputs", "public_inputs");
+  const publicInputs = normalizeSccpMessageTransparentPublicInputs(
+    inputPublicInputs !== SCCP_OPTIONAL_FIELD_MISSING
+      ? inputPublicInputs
+      : resultPublicInputs,
+  );
+  if (publicInputs.targetDomain !== SCCP_DOMAIN_TON) {
+    throw new TypeError("publicInputs.targetDomain must be TON");
+  }
+  if (
+    resultPublicInputs !== SCCP_OPTIONAL_FIELD_MISSING &&
+    JSON.stringify(normalizeSccpMessageTransparentPublicInputs(resultPublicInputs)) !==
+      JSON.stringify(publicInputs)
+  ) {
+    throw new TypeError("publicInputs must match proofResult.publicInputs");
+  }
+  const publicInputsBytes = canonicalSccpMessageTransparentPublicInputsBytes(publicInputs);
+  const inputProofBytes = strictOptionalResultField(input, "proofBytes", "proofBytes", "proof_bytes");
+  const resultProofBytesInput =
+    proofResult === null
+      ? SCCP_OPTIONAL_FIELD_MISSING
+      : strictOptionalResultField(proofResult, "proofResult.proofBytes", "proofBytes", "proof_bytes", "proof");
+  const proofBytes = requireNativeRecursiveProofBytes(
+    toBytes(
+      inputProofBytes !== SCCP_OPTIONAL_FIELD_MISSING
+        ? inputProofBytes
+        : resultProofBytesInput,
+      "proofBytes",
+    ),
+    "proofBytes",
+  );
+  if (proofResult !== null) {
+    const resultProofBytes = requireNativeRecursiveProofBytes(
+      toBytes(
+        resultProofBytesInput,
+        "proofResult.proofBytes",
+      ),
+      "proofResult.proofBytes",
+    );
+    if (!bytesEqual(proofBytes, resultProofBytes)) {
+      throw new TypeError("proofBytes must match proofResult.proofBytes");
+    }
+    const requestHash = normalizeNonZeroHex32(
+      strictResultField(proofResult, "proofResult.requestHash", "requestHash", "request_hash"),
+      "proofResult.requestHash",
+    );
+    proofResultRequestHash = requestHash;
+    const deploymentBindingHash = normalizeNonZeroHex32(
+      strictResultField(
+        proofResult,
+        "proofResult.sourceAdapterDeploymentBindingHash",
+        "sourceAdapterDeploymentBindingHash",
+        "source_adapter_deployment_binding_hash",
+      ),
+      "proofResult.sourceAdapterDeploymentBindingHash",
+    );
+    const envelopeHash = normalizeNonZeroHex32(
+      strictResultField(proofResult, "proofResult.envelopeHash", "envelopeHash", "envelope_hash"),
+      "proofResult.envelopeHash",
+    );
+    const expectedEnvelopeHash = bytesToHex(
+      prefixedBlake2b(
+        "sccp:ton:proof-envelope:v1",
+        concatBytes(
+          hexToBytes(requestHash, "proofResult.requestHash", 32),
+          hexToBytes(
+            deploymentBindingHash,
+            "proofResult.sourceAdapterDeploymentBindingHash",
+            32,
+          ),
+          resultProofBytes,
+        ),
+      ),
+    );
+    if (envelopeHash !== expectedEnvelopeHash) {
+      throw new TypeError("proofResult.envelopeHash must match wrapped proof bytes");
+    }
+    const sourceStateVerifierId = normalizeNonEmptyString(
+      strictResultField(proofResult, "proofResult.sourceStateVerifierId", "sourceStateVerifierId", "source_state_verifier_id"),
+      "proofResult.sourceStateVerifierId",
+    );
+    proofResultSourceStateVerifierId = sourceStateVerifierId;
+    if (sourceStateVerifierId !== SCCP_TON_MAINNET_SHARD_STATE_VERIFIER_ID_V1) {
+      throw new TypeError(
+        "proofResult.sourceStateVerifierId must match TON shard-state verifier profile",
+      );
+    }
+    const sourceStateVerifierHash = normalizeNonZeroHex32(
+      strictResultField(proofResult, "proofResult.sourceStateVerifierHash", "sourceStateVerifierHash", "source_state_verifier_hash"),
+      "proofResult.sourceStateVerifierHash",
+    );
+    proofResultSourceStateVerifierHash = sourceStateVerifierHash;
+    if (sourceStateVerifierHash === SCCP_TON_TEMPLATE_SOURCE_STATE_VERIFIER_HASH_V1) {
+      throw new TypeError("proofResult.sourceStateVerifierHash must not be the TON template verifier hash");
+    }
+    const deploymentBindingValue = strictResultField(
+      proofResult,
+      "proofResult.sourceAdapterDeploymentBinding",
+      "sourceAdapterDeploymentBinding",
+      "source_adapter_deployment_binding",
+    );
+    if (
+      !deploymentBindingValue ||
+      typeof deploymentBindingValue !== "object" ||
+      Array.isArray(deploymentBindingValue)
+    ) {
+      throw new TypeError("proofResult.sourceAdapterDeploymentBinding must be an object");
+    }
+    const deploymentBinding = normalizeSccpSourceAdapterDeploymentBinding(deploymentBindingValue);
+    proofResultDeploymentBinding = deploymentBinding;
+    if (deploymentBinding.sourceDomain !== SCCP_DOMAIN_TON) {
+      throw new TypeError("proofResult.sourceAdapterDeploymentBinding.sourceDomain must be TON");
+    }
+    if (deploymentBinding.targetDomain !== SCCP_DOMAIN_SORA) {
+      throw new TypeError("proofResult.sourceAdapterDeploymentBinding.targetDomain must be SORA");
+    }
+    if (deploymentBinding.sourceAdapterDeploymentHash === SCCP_ZERO_HASH_V1) {
+      throw new TypeError("proofResult.sourceAdapterDeploymentBinding must be non-zero");
+    }
+    if (sccpSourceAdapterDeploymentBindingHash(deploymentBinding) !== deploymentBindingHash) {
+      throw new TypeError(
+        "proofResult.sourceAdapterDeploymentBindingHash must match sourceAdapterDeploymentBinding",
+      );
+    }
+  }
+  const bundleBytes = requireNonEmptyBytes(
+    toBytes(strictResultField(input, "bundleBytes", "bundleBytes", "bundle_bytes"), "bundleBytes"),
+    "bundleBytes",
+  );
+  if (proofResult !== null) {
+    const resultBundleInput = strictOptionalResultField(
+      proofResult,
+      "proofResult.bundleBytes",
+      "bundleBytes",
+      "bundle_bytes",
+    );
+    if (resultBundleInput !== SCCP_OPTIONAL_FIELD_MISSING) {
+      const resultBundleBytes = requireNonEmptyBytes(
+        toBytes(resultBundleInput, "proofResult.bundleBytes"),
+        "proofResult.bundleBytes",
+      );
+      if (!bytesEqual(bundleBytes, resultBundleBytes)) {
+        throw new TypeError("bundleBytes must match proofResult.bundleBytes");
+      }
+    }
+  }
+  let proofContextSource = {};
+  if (proofResult !== null) {
+    const proofContextInput = strictOptionalResultField(
+      proofResult,
+      "proofResult.proofContext",
+      "proofContext",
+      "proof_context",
+    );
+    if (proofContextInput !== SCCP_OPTIONAL_FIELD_MISSING) {
+      if (!proofContextInput || typeof proofContextInput !== "object" || Array.isArray(proofContextInput)) {
+        throw new TypeError("proofResult.proofContext must be an object");
+      }
+      proofContextSource = proofContextInput;
+    }
+  }
+  const inputStatementHash = strictOptionalResultField(input, "statementHash", "statementHash", "statement_hash");
+  const resultStatementHash =
+    proofResult === null
+      ? SCCP_OPTIONAL_FIELD_MISSING
+      : strictOptionalResultField(proofResult, "proofResult.statementHash", "statementHash", "statement_hash");
+  const contextStatementHash = strictOptionalResultField(
+    proofContextSource,
+    "proofResult.proofContext.statementHash",
+    "statementHash",
+    "statement_hash",
+  );
+  const statementHash = normalizeNonZeroHex32(
+    inputStatementHash !== SCCP_OPTIONAL_FIELD_MISSING
+      ? inputStatementHash
+      : resultStatementHash !== SCCP_OPTIONAL_FIELD_MISSING
+        ? resultStatementHash
+        : contextStatementHash,
+    "statementHash",
+  );
+  if (resultStatementHash !== SCCP_OPTIONAL_FIELD_MISSING) {
+    requireSuppliedResultHashMatches(resultStatementHash, statementHash, "proofResult.statementHash");
+  } else if (contextStatementHash !== SCCP_OPTIONAL_FIELD_MISSING) {
+    requireSuppliedResultHashMatches(contextStatementHash, statementHash, "proofResult.statementHash");
+  }
+  const inputDestinationBindingHash = strictOptionalResultField(
+    input,
+    "destinationBindingHash",
+    "destinationBindingHash",
+    "destination_binding_hash",
+  );
+  const inputDestinationBinding = strictOptionalResultField(
+    input,
+    "destinationBinding",
+    "destinationBinding",
+    "destination_binding",
+  );
+  let inputDestinationBindingHashFromBinding = SCCP_OPTIONAL_FIELD_MISSING;
+  if (inputDestinationBinding !== SCCP_OPTIONAL_FIELD_MISSING) {
+    inputDestinationBindingHashFromBinding =
+      inputDestinationBinding && typeof inputDestinationBinding === "object" && !Array.isArray(inputDestinationBinding)
+        ? strictOptionalResultField(inputDestinationBinding, "destinationBinding.bindingHash", "bindingHash", "binding_hash")
+        : null;
+  }
+  const resultDestinationBindingHash =
+    proofResult === null
+      ? SCCP_OPTIONAL_FIELD_MISSING
+      : strictOptionalResultField(proofResult, "proofResult.destinationBindingHash", "destinationBindingHash", "destination_binding_hash");
+  const contextDestinationBindingHash = strictOptionalResultField(
+    proofContextSource,
+    "proofResult.proofContext.destinationBindingHash",
+    "destinationBindingHash",
+    "destination_binding_hash",
+  );
+  const destinationBindingHash = normalizeNonZeroHex32(
+    inputDestinationBindingHash !== SCCP_OPTIONAL_FIELD_MISSING
+      ? inputDestinationBindingHash
+      : inputDestinationBindingHashFromBinding !== SCCP_OPTIONAL_FIELD_MISSING
+        ? inputDestinationBindingHashFromBinding
+        : resultDestinationBindingHash !== SCCP_OPTIONAL_FIELD_MISSING
+          ? resultDestinationBindingHash
+          : contextDestinationBindingHash,
+    "destinationBindingHash",
+  );
+  if (resultDestinationBindingHash !== SCCP_OPTIONAL_FIELD_MISSING) {
+    requireSuppliedResultHashMatches(
+      resultDestinationBindingHash,
+      destinationBindingHash,
+      "proofResult.destinationBindingHash",
+    );
+  } else if (contextDestinationBindingHash !== SCCP_OPTIONAL_FIELD_MISSING) {
+    requireSuppliedResultHashMatches(
+      contextDestinationBindingHash,
+      destinationBindingHash,
+      "proofResult.destinationBindingHash",
+    );
+  }
+  if (proofResult !== null) {
+    const resultSourceProofInput = strictOptionalResultField(
+      proofResult,
+      "proofResult.sourceProofBytes",
+      "sourceProofBytes",
+      "source_proof_bytes",
+    );
+    const inputSourceProofInput = strictOptionalResultField(
+      input,
+      "sourceProofBytes",
+      "sourceProofBytes",
+      "source_proof_bytes",
+    );
+    const sourceProofInput =
+      resultSourceProofInput !== SCCP_OPTIONAL_FIELD_MISSING
+        ? resultSourceProofInput
+        : inputSourceProofInput;
+    const sourceProofBytes = requireOptionalNonZeroBytes(
+      sourceProofInput === SCCP_OPTIONAL_FIELD_MISSING
+        ? new Uint8Array()
+        : toBytes(sourceProofInput, "proofResult.sourceProofBytes"),
+      "proofResult.sourceProofBytes",
+    );
+    const expectedRequest = buildTonSccpProofRequest({
+      publicInputs,
+      bundleBytes,
+      sourceProofBytes,
+      statementHash,
+      destinationBindingHash,
+      sourceStateVerifierId: proofResultSourceStateVerifierId,
+      sourceStateVerifierHash: proofResultSourceStateVerifierHash,
+      sourceAdapterDeploymentHash:
+        proofResultDeploymentBinding.sourceAdapterDeploymentHash,
+      sourceAdapterDeploymentReceiptHash:
+        proofResultDeploymentBinding.sourceAdapterDeploymentReceiptHash,
+      backend: SCCP_TON_CONTRACT_PROOF_BACKEND_V1,
+      sourceDomain: SCCP_DOMAIN_TON,
+    });
+    if (expectedRequest.requestHash !== proofResultRequestHash) {
+      throw new TypeError(
+        "proofResult.requestHash must match bundleBytes and sourceProofBytes",
+      );
+    }
+  }
+  const metadataBytes =
+    strictOptionalResultField(input, "metadataBytes", "metadataBytes", "metadata_bytes") !== SCCP_OPTIONAL_FIELD_MISSING
+      ? toBytes(
+          strictResultField(input, "metadataBytes", "metadataBytes", "metadata_bytes"),
+          "metadataBytes",
+        )
+      : input.manifest
+        ? canonicalSccpTonSubmissionMetadataBytes({
+            manifest: input.manifest,
+            destinationBinding:
+              inputDestinationBinding === SCCP_OPTIONAL_FIELD_MISSING ? undefined : inputDestinationBinding,
+            destinationBindingHash,
+            publicInputs,
+            statementHash,
+          })
+        : new Uint8Array();
+  const queryIdInput = strictOptionalResultField(input, "queryId", "queryId", "query_id");
+  const queryId = queryIdInput === SCCP_OPTIONAL_FIELD_MISSING
+    ? sccpTonSubmissionQueryId(publicInputs)
+    : queryIdInput;
+  let rootData = new Uint8Array();
+  rootData = writeU32Be(rootData, SCCP_TON_SUBMIT_OP_V1);
+  rootData = writeU64Be(rootData, queryId);
+  rootData = writeU16Be(rootData, SCCP_TON_MESSAGE_SCHEMA_VERSION_V1);
+  rootData = concatBytes(rootData, hexToBytes(statementHash, "statementHash", 32));
+  rootData = concatBytes(rootData, hexToBytes(destinationBindingHash, "destinationBindingHash", 32));
+
+  const cells = [{ data: rootData, refs: [] }];
+  const publicInputsRoot = pushTonSnakeCells(cells, publicInputsBytes);
+  const proofRoot = pushTonSnakeCells(cells, proofBytes);
+  const bundleRoot = pushTonSnakeCells(cells, bundleBytes);
+  const metadataRoot = pushTonSnakeCells(cells, metadataBytes);
+  cells[0].refs = [publicInputsRoot, proofRoot, bundleRoot, metadataRoot];
+  return encodeTonBocSingleRoot(cells, 0);
+};
+
+const normalizeSccpProofContext = (input, label = "SCCP proof context") => {
+  if (!input || typeof input !== "object" || Array.isArray(input)) {
+    throw new TypeError(`${label} must be an object`);
+  }
+  const destinationBinding = strictResultField(
+    input,
+    "destinationBinding",
+    "destinationBinding",
+    "destination_binding",
+  );
+  let destinationBindingHash = strictResultField(
+    input,
+    "destinationBindingHash",
+    "destinationBindingHash",
+    "destination_binding_hash",
+  );
+  if (destinationBinding && typeof destinationBinding === "object" && !Array.isArray(destinationBinding)) {
+    const nestedDestinationBindingHash = strictResultField(
+      destinationBinding,
+      "destinationBinding.bindingHash",
+      "bindingHash",
+      "binding_hash",
+    );
+    if (destinationBindingHash === undefined || destinationBindingHash === null) {
+      destinationBindingHash = nestedDestinationBindingHash;
+    } else if (nestedDestinationBindingHash !== undefined && nestedDestinationBindingHash !== null) {
+      requireDestinationBindingHashMatches(
+        destinationBindingHash,
+        normalizeNonZeroHex32(nestedDestinationBindingHash, "destinationBinding.bindingHash"),
+        "destinationBindingHash",
+      );
+    }
+  }
+  return {
+    version: 1,
+    statementHash: normalizeNonZeroHex32(
+      strictResultField(input, "statementHash", "statementHash", "statement_hash"),
+      "statementHash",
+    ),
+    destinationBindingHash: normalizeNonZeroHex32(destinationBindingHash, "destinationBindingHash"),
+  };
+};
+
+const normalizeTonSccpProofContext = (input) => {
+  if (!input || typeof input !== "object" || Array.isArray(input)) {
+    throw new TypeError("TON SCCP proof context must be an object");
+  }
+  const destinationBinding = strictResultField(
+    input,
+    "destinationBinding",
+    "destinationBinding",
+    "destination_binding",
+  );
+  const destinationBindingHashInput = strictOptionalResultField(
+    input,
+    "destinationBindingHash",
+    "destinationBindingHash",
+    "destination_binding_hash",
+  );
+  let nestedDestinationBindingHashInput = SCCP_OPTIONAL_FIELD_MISSING;
+  if (destinationBinding && typeof destinationBinding === "object" && !Array.isArray(destinationBinding)) {
+    nestedDestinationBindingHashInput = strictOptionalResultField(
+      destinationBinding,
+      "destinationBinding.bindingHash",
+      "bindingHash",
+      "binding_hash",
+    );
+  }
+  let destinationBindingHash =
+    destinationBindingHashInput === SCCP_OPTIONAL_FIELD_MISSING
+      ? nestedDestinationBindingHashInput
+      : destinationBindingHashInput;
+  if (destinationBindingHash === SCCP_OPTIONAL_FIELD_MISSING) {
+    destinationBindingHash = undefined;
+  } else if (
+    destinationBindingHashInput !== SCCP_OPTIONAL_FIELD_MISSING &&
+    nestedDestinationBindingHashInput !== SCCP_OPTIONAL_FIELD_MISSING
+  ) {
+    const normalizedDestinationBindingHash = normalizeNonZeroHex32(
+      destinationBindingHashInput,
+      "destinationBindingHash",
+    );
+    const normalizedNestedDestinationBindingHash = normalizeNonZeroHex32(
+      nestedDestinationBindingHashInput,
+      "destinationBinding.bindingHash",
+    );
+    if (normalizedDestinationBindingHash !== normalizedNestedDestinationBindingHash) {
+      throw new TypeError("destinationBindingHash must match destinationBinding.bindingHash");
+    }
+    destinationBindingHash = normalizedDestinationBindingHash;
+  }
+  return {
+    version: 1,
+    statementHash: normalizeNonZeroHex32(
+      strictResultField(input, "statementHash", "statementHash", "statement_hash"),
+      "statementHash",
+    ),
+    destinationBindingHash: normalizeNonZeroHex32(
+      destinationBindingHash,
+      "destinationBindingHash",
+    ),
+  };
+};
+
+export const buildTonSccpProofRequest = (input) => {
+  const inputField = (label, ...names) => strictResultField(input, label, ...names);
+  const optionalInputField = (label, ...names) =>
+    strictOptionalResultField(input, label, ...names);
+  const publicInputs = normalizeSccpMessageTransparentPublicInputs(
+    inputField("publicInputs", "publicInputs", "public_inputs"),
+  );
+  if (publicInputs.targetDomain !== SCCP_DOMAIN_TON) {
+    throw new TypeError("publicInputs.targetDomain must be TON");
+  }
+  const publicInputsBytes = canonicalSccpMessageTransparentPublicInputsBytes(publicInputs);
+  const bundleBytes = requireNonEmptyBytes(
+    toBytes(inputField("bundleBytes", "bundleBytes", "bundle_bytes"), "bundleBytes"),
+    "bundleBytes",
+  );
+  const sourceProofInput = optionalInputField(
+    "sourceProofBytes",
+    "sourceProofBytes",
+    "source_proof_bytes",
+  );
+  const sourceProofBytes = requireOptionalNonZeroBytes(
+    sourceProofInput === SCCP_OPTIONAL_FIELD_MISSING
+      ? new Uint8Array()
+      : toBytes(sourceProofInput, "sourceProofBytes"),
+    "sourceProofBytes",
+  );
+  const sourceDomainInput = optionalInputField("sourceDomain", "sourceDomain", "source_domain");
+  const sourceDomain =
+    sourceDomainInput === SCCP_OPTIONAL_FIELD_MISSING
+      ? normalizeSccpDomainId(SCCP_DOMAIN_TON, "sourceDomain")
+      : normalizeSccpDomainId(sourceDomainInput, "sourceDomain");
+  if (sourceDomain !== SCCP_DOMAIN_TON) {
+    throw new TypeError("TON SCCP proof request sourceDomain must be TON");
+  }
+  const backendInput = optionalInputField("backend", "backend");
+  const backend =
+    backendInput === SCCP_OPTIONAL_FIELD_MISSING
+      ? SCCP_TON_CONTRACT_PROOF_BACKEND_V1
+      : backendInput;
+  if (backend !== SCCP_TON_CONTRACT_PROOF_BACKEND_V1) {
+    throw new TypeError("TON SCCP proof request backend must be ton-contract-v1");
+  }
+  const sourceStateVerifierIdInput = optionalInputField(
+    "sourceStateVerifierId",
+    "sourceStateVerifierId",
+    "source_state_verifier_id",
+  );
+  const sourceStateVerifierId = normalizeNonEmptyString(
+    sourceStateVerifierIdInput === SCCP_OPTIONAL_FIELD_MISSING
+      ? SCCP_TON_MAINNET_SHARD_STATE_VERIFIER_ID_V1
+      : sourceStateVerifierIdInput,
+    "sourceStateVerifierId",
+  );
+  if (sourceStateVerifierId !== SCCP_TON_MAINNET_SHARD_STATE_VERIFIER_ID_V1) {
+    throw new TypeError("sourceStateVerifierId must match TON shard-state verifier profile");
+  }
+  const sourceStateVerifierHash = normalizeNonZeroHex32(
+    inputField(
+      "sourceStateVerifierHash",
+      "sourceStateVerifierHash",
+      "source_state_verifier_hash",
+    ),
+    "sourceStateVerifierHash",
+  );
+  if (sourceStateVerifierHash === SCCP_TON_TEMPLATE_SOURCE_STATE_VERIFIER_HASH_V1) {
+    throw new TypeError("sourceStateVerifierHash must not be the TON template verifier hash");
+  }
+  const proofContextInput = optionalInputField("proofContext", "proofContext", "proof_context");
+  const proofContext = normalizeTonSccpProofContext(
+    proofContextInput === SCCP_OPTIONAL_FIELD_MISSING ? input : proofContextInput,
+  );
+  const deploymentInputValue = optionalInputField(
+    "sourceAdapterDeploymentBinding",
+    "sourceAdapterDeploymentBinding",
+    "source_adapter_deployment_binding",
+  );
+  let deploymentInput = {};
+  if (deploymentInputValue !== SCCP_OPTIONAL_FIELD_MISSING) {
+    if (!deploymentInputValue || typeof deploymentInputValue !== "object" || Array.isArray(deploymentInputValue)) {
+      throw new TypeError("sourceAdapterDeploymentBinding must be an object");
+    }
+    deploymentInput = deploymentInputValue;
+  }
+  const deploymentInputSourceDomain = strictOptionalResultField(
+    deploymentInput,
+    "sourceAdapterDeploymentBinding.sourceDomain",
+    "sourceDomain",
+    "source_domain",
+  );
+  if (
+    deploymentInputSourceDomain !== SCCP_OPTIONAL_FIELD_MISSING &&
+    normalizeSccpDomainId(
+      deploymentInputSourceDomain,
+      "sourceAdapterDeploymentBinding.sourceDomain",
+    ) !== SCCP_DOMAIN_TON
+  ) {
+    throw new TypeError(
+      "TON SCCP proof request source adapter deployment binding sourceDomain must be TON",
+    );
+  }
+  const deploymentInputTargetDomain = strictOptionalResultField(
+    deploymentInput,
+    "sourceAdapterDeploymentBinding.targetDomain",
+    "targetDomain",
+    "target_domain",
+  );
+  if (
+    deploymentInputTargetDomain !== SCCP_OPTIONAL_FIELD_MISSING &&
+    normalizeSccpDomainId(
+      deploymentInputTargetDomain,
+      "sourceAdapterDeploymentBinding.targetDomain",
+    ) !== SCCP_DOMAIN_SORA
+  ) {
+    throw new TypeError(
+      "TON SCCP proof request source adapter deployment binding targetDomain must be SORA",
+    );
+  }
+  const selectDeploymentHash = (label, snakeLabel) => {
+    const topLevelValue = optionalInputField(label, label, snakeLabel);
+    const nestedValue = strictOptionalResultField(
+      deploymentInput,
+      `sourceAdapterDeploymentBinding.${label}`,
+      label,
+      snakeLabel,
+    );
+    const normalizedTopLevelValue =
+      topLevelValue === SCCP_OPTIONAL_FIELD_MISSING
+        ? undefined
+        : normalizeHex32(topLevelValue, label);
+    const normalizedNestedValue =
+      nestedValue === SCCP_OPTIONAL_FIELD_MISSING
+        ? undefined
+        : normalizeHex32(nestedValue, `sourceAdapterDeploymentBinding.${label}`);
+    if (
+      normalizedTopLevelValue !== undefined &&
+      normalizedNestedValue !== undefined &&
+      normalizedTopLevelValue !== normalizedNestedValue
+    ) {
+      throw new TypeError(`${label} must match sourceAdapterDeploymentBinding.${label}`);
+    }
+    return normalizedTopLevelValue ?? normalizedNestedValue ?? SCCP_ZERO_HASH_V1;
+  };
+  const sourceAdapterDeploymentHash = selectDeploymentHash(
+    "sourceAdapterDeploymentHash",
+    "source_adapter_deployment_hash",
+  );
+  const sourceAdapterDeploymentReceiptHash = selectDeploymentHash(
+    "sourceAdapterDeploymentReceiptHash",
+    "source_adapter_deployment_receipt_hash",
+  );
+  const sourceAdapterDeploymentBinding = normalizeSccpSourceAdapterDeploymentBinding({
+    sourceDomain,
+    targetDomain: SCCP_DOMAIN_SORA,
+    sourceAdapterDeploymentHash,
+    sourceAdapterDeploymentReceiptHash,
+  });
+  if (sourceAdapterDeploymentBinding.sourceAdapterDeploymentHash === SCCP_ZERO_HASH_V1) {
+    throw new TypeError("TON SCCP proof request requires non-zero source adapter deployment binding");
+  }
+  const sourceAdapterDeploymentBindingHash = sccpSourceAdapterDeploymentBindingHash(
+    sourceAdapterDeploymentBinding,
+  );
+  const requestHash = bytesToHex(
+    prefixedBlake2b(
+      "sccp:ton:proof-request:v1",
+      concatBytes(
+        publicInputsBytes,
+        writeBytes(new Uint8Array(), bundleBytes),
+        writeBytes(new Uint8Array(), sourceProofBytes),
+        writeString(new Uint8Array(), sourceStateVerifierId, "sourceStateVerifierId"),
+        hexToBytes(sourceStateVerifierHash, "sourceStateVerifierHash", 32),
+        hexToBytes(proofContext.statementHash, "statementHash", 32),
+        hexToBytes(proofContext.destinationBindingHash, "destinationBindingHash", 32),
+        hexToBytes(
+          sourceAdapterDeploymentBindingHash,
+          "sourceAdapterDeploymentBindingHash",
+          32,
+        ),
+      ),
+    ),
+  );
+  return immutableTonProofRequest({
+    version: 1,
+    backend,
+    sourceDomain,
+    targetDomain: publicInputs.targetDomain,
+    publicInputs,
+    publicInputsBytes,
+    bundleBytes,
+    sourceProofBytes,
+    proofContext,
+    statementHash: proofContext.statementHash,
+    destinationBindingHash: proofContext.destinationBindingHash,
+    sourceStateVerifierId,
+    sourceStateVerifierHash,
+    sourceAdapterDeploymentBindingHash,
+    sourceAdapterDeploymentBinding,
+    requestHash,
+  });
+};
+
+export const buildTonSccpSubmission = (input) => {
+  const messageBodyBoc = buildSccpTonMessageBodyBoc(input);
+  const messageBodyBocHex = bytesToHex(messageBodyBoc);
+  const submission = {
+    version: 1,
+    envelopeEncoding: SCCP_TON_MESSAGE_BODY_BOC_V1,
+    submissionKind: "internal_message",
+    verifierEntrypoint: "op::submit_sccp_message_proof",
+    messageBodyBocHex,
+    arguments: Object.freeze([
+      Object.freeze({ key: "message_body_boc", encoding: "ton_boc", bytes: messageBodyBocHex }),
+    ]),
+    envelopeHex: messageBodyBocHex,
+  };
+  defineCopiedByteField(submission, "messageBodyBoc", messageBodyBoc);
+  defineCopiedByteField(submission, "envelopeBytes", messageBodyBoc);
+  return Object.freeze(submission);
+};
+
+function normalizeTonProofResult(result, request) {
+  if (!result || typeof result !== "object" || Array.isArray(result)) {
+    throw new TypeError("TON SCCP proof result must be an object");
+  }
+  const optionalResultAlias = (label, ...names) => {
+    const selected = strictOptionalResultField(result, label, ...names);
+    return selected === SCCP_OPTIONAL_FIELD_MISSING ? undefined : selected;
+  };
+  const proofBytes = requireNativeRecursiveProofBytes(
+    toBytes(strictResultField(result, "proofResult.proofBytes", "proofBytes", "proof_bytes", "proof"), "proofBytes"),
+    "proofBytes",
+  );
+  requireProductionTonProofRequest(request);
+  requireOptionalResultProofBase64Matches(result, proofBytes);
+  requireOptionalResultBackendMatches(result.backend, request.backend);
+  requireOptionalTransparentResultMetadataMatches(result, request);
+  const sourceStateVerifierId = optionalResultAlias(
+    "proofResult.sourceStateVerifierId",
+    "sourceStateVerifierId",
+    "source_state_verifier_id",
+  );
+  if (
+    sourceStateVerifierId !== undefined &&
+    normalizeNonEmptyString(sourceStateVerifierId, "proofResult.sourceStateVerifierId") !==
+      request.sourceStateVerifierId
+  ) {
+    throw new TypeError("proofResult.sourceStateVerifierId must match request");
+  }
+  const sourceStateVerifierHash = optionalResultAlias(
+    "proofResult.sourceStateVerifierHash",
+    "sourceStateVerifierHash",
+    "source_state_verifier_hash",
+  );
+  if (
+    sourceStateVerifierHash !== undefined &&
+    normalizeHex32(sourceStateVerifierHash, "proofResult.sourceStateVerifierHash") !==
+      request.sourceStateVerifierHash
+  ) {
+    throw new TypeError("proofResult.sourceStateVerifierHash must match request");
+  }
+  const deploymentBinding = optionalResultAlias(
+    "proofResult.sourceAdapterDeploymentBinding",
+    "sourceAdapterDeploymentBinding",
+    "source_adapter_deployment_binding",
+  );
+  if (
+    deploymentBinding !== undefined &&
+    JSON.stringify(normalizeSccpSourceAdapterDeploymentBinding(deploymentBinding)) !==
+      JSON.stringify(request.sourceAdapterDeploymentBinding)
+  ) {
+    throw new TypeError("proofResult.sourceAdapterDeploymentBinding must match request");
+  }
+  requireOptionalResultHashMatches(
+    optionalResultAlias("proofResult.requestHash", "requestHash", "request_hash"),
+    request.requestHash,
+    "requestHash",
+  );
+  requireOptionalResultHashMatches(
+    optionalResultAlias(
+      "proofResult.sourceAdapterDeploymentBindingHash",
+      "sourceAdapterDeploymentBindingHash",
+      "source_adapter_deployment_binding_hash",
+    ),
+    request.sourceAdapterDeploymentBindingHash,
+    "sourceAdapterDeploymentBindingHash",
+  );
+  const envelopeHash = bytesToHex(
+    prefixedBlake2b(
+      "sccp:ton:proof-envelope:v1",
+      concatBytes(
+        hexToBytes(request.requestHash, "requestHash", 32),
+        hexToBytes(
+          request.sourceAdapterDeploymentBindingHash,
+          "sourceAdapterDeploymentBindingHash",
+          32,
+        ),
+        proofBytes,
+      ),
+    ),
+  );
+  requireOptionalResultHashMatches(
+    optionalResultAlias("proofResult.envelopeHash", "envelopeHash", "envelope_hash"),
+    envelopeHash,
+    "envelopeHash",
+  );
+  return immutableTonProofResult({
+    version: 1,
+    backend: request.backend,
+    proofBytes,
+    proofBase64: bytesToBase64(proofBytes),
+    publicInputs: request.publicInputs,
+    bundleBytes: request.bundleBytes,
+    sourceProofBytes: request.sourceProofBytes,
+    proofContext: request.proofContext,
+    statementHash: request.statementHash,
+    destinationBindingHash: request.destinationBindingHash,
+    sourceStateVerifierId: request.sourceStateVerifierId,
+    sourceStateVerifierHash: request.sourceStateVerifierHash,
+    sourceAdapterDeploymentBindingHash: request.sourceAdapterDeploymentBindingHash,
+    sourceAdapterDeploymentBinding: request.sourceAdapterDeploymentBinding,
+    requestHash: request.requestHash,
+    envelopeHash,
+  });
+}
+
+export function wrapTonSccpProofResult(proofBytes, request) {
+  return normalizeTonProofResult({ proofBytes }, request);
+}
+
+function resolveSccpWitness(witnessProvider, input, options, label) {
+  if (!witnessProvider) {
+    return input;
+  }
+  const inputSnapshot = mutableProverCallbackSnapshotValue(input);
+  const resolver = strictOptionalResultField(
+    witnessProvider,
+    `${label} witnessProvider resolver`,
+    "resolveWitness",
+    "resolve_witness",
+  );
+  if (typeof witnessProvider === "function") {
+    return witnessProvider(inputSnapshot, options);
+  }
+  if (typeof resolver === "function") {
+    return resolver.call(witnessProvider, inputSnapshot, options);
+  }
+  throw new TypeError(
+    `${label} witnessProvider must be a function or expose resolveWitness/resolve_witness`,
+  );
+}
+
+export class TonSccpProver {
+  constructor(options = {}) {
+    if (!options || typeof options !== "object" || Array.isArray(options)) {
+      throw new TypeError("TonSccpProver options must be an object");
+    }
+    this.witnessProvider = strictOptionalConstructorOption(
+      options,
+      "TON SCCP prover witnessProvider",
+      "witnessProvider",
+      "witness_provider",
+    );
+    this.proveFn = strictOptionalConstructorOption(
+      options,
+      "TON SCCP prover prove",
+      "prove",
+      "proveFn",
+      "prove_fn",
+    );
+  }
+
+  async buildRequest(input, options = {}) {
+    const witness = await resolveSccpWitness(
+      this.witnessProvider,
+      input,
+      options,
+      "TON SCCP",
+    );
+    return buildTonSccpProofRequest(witness);
+  }
+
+  async prove(input, options = {}) {
+    const request = await this.buildRequest(input, options);
+    if (typeof this.proveFn !== "function") {
+      const error = new Error(
+        "TON SCCP local prover is not linked; provide a browser-safe prove function before generating production proofs",
+      );
+      error.code = "ERR_SCCP_TON_PROVER_UNAVAILABLE";
+      throw error;
+    }
+    requireProductionTonProofRequest(request);
+    return normalizeTonProofResult(await this.proveFn(immutableTonProofRequest(request), options), request);
+  }
+}
+
+const tonProofRequestComparable = (request) => {
+  const publicInputs = request.publicInputs ?? {};
+  const proofContext = request.proofContext ?? {};
+  const deploymentBinding = request.sourceAdapterDeploymentBinding ?? {};
+  return {
+    version: request.version,
+    backend: request.backend,
+    sourceDomain: request.sourceDomain,
+    targetDomain: request.targetDomain,
+    publicInputs: {
+      messageId: publicInputs.messageId,
+      payloadHash: publicInputs.payloadHash,
+      targetDomain: publicInputs.targetDomain,
+      commitmentRoot: publicInputs.commitmentRoot,
+      finalityHeight: publicInputs.finalityHeight,
+      finalityBlockHash: publicInputs.finalityBlockHash,
+    },
+    publicInputsBytes: bytesToHex(toBytes(request.publicInputsBytes, "publicInputsBytes")),
+    bundleBytes: bytesToHex(toBytes(request.bundleBytes, "bundleBytes")),
+    sourceProofBytes: bytesToHex(toBytes(request.sourceProofBytes, "sourceProofBytes")),
+    proofContext: {
+      version: proofContext.version,
+      statementHash: proofContext.statementHash,
+      destinationBindingHash: proofContext.destinationBindingHash,
+    },
+    statementHash: request.statementHash,
+    destinationBindingHash: request.destinationBindingHash,
+    sourceStateVerifierId: request.sourceStateVerifierId,
+    sourceStateVerifierHash: request.sourceStateVerifierHash,
+    sourceAdapterDeploymentBindingHash: request.sourceAdapterDeploymentBindingHash,
+    sourceAdapterDeploymentBinding: {
+      version: deploymentBinding.version,
+      sourceDomain: deploymentBinding.sourceDomain,
+      targetDomain: deploymentBinding.targetDomain,
+      sourceAdapterDeploymentHash: deploymentBinding.sourceAdapterDeploymentHash,
+      sourceAdapterDeploymentReceiptHash: deploymentBinding.sourceAdapterDeploymentReceiptHash,
+    },
+    requestHash: request.requestHash,
+  };
+};
+
+const requireCanonicalTonProofRequest = (request) => {
+  if (!request || typeof request !== "object" || Array.isArray(request)) {
+    throw new TypeError("TON SCCP proof request must be canonical");
+  }
+  try {
+    const deploymentBinding = request.sourceAdapterDeploymentBinding ?? {};
+    const expected = buildTonSccpProofRequest({
+      publicInputs: request.publicInputs,
+      bundleBytes: request.bundleBytes,
+      sourceProofBytes: request.sourceProofBytes,
+      statementHash: request.statementHash,
+      destinationBindingHash: request.destinationBindingHash,
+      sourceStateVerifierId: request.sourceStateVerifierId,
+      sourceStateVerifierHash: request.sourceStateVerifierHash,
+      sourceAdapterDeploymentHash: deploymentBinding.sourceAdapterDeploymentHash,
+      sourceAdapterDeploymentReceiptHash: deploymentBinding.sourceAdapterDeploymentReceiptHash,
+      backend: request.backend,
+      sourceDomain: request.sourceDomain,
+    });
+    if (
+      JSON.stringify(tonProofRequestComparable(request)) !==
+      JSON.stringify(tonProofRequestComparable(expected))
+    ) {
+      throw new TypeError("TON SCCP proof request must be canonical");
+    }
+  } catch (error) {
+    if (error instanceof TypeError && error.message === "TON SCCP proof request must be canonical") {
+      throw error;
+    }
+    throw new TypeError("TON SCCP proof request must be canonical");
+  }
+};
+
+const requireProductionTonProofRequest = (request) => {
+  requireCanonicalTonProofRequest(request);
+  if (request.version !== 1) {
+    throw new TypeError("TON SCCP proof request version must be 1");
+  }
+  if (request.sourceDomain !== SCCP_DOMAIN_TON) {
+    throw new TypeError("TON SCCP production proof sourceDomain must be TON");
+  }
+  if (request.targetDomain !== SCCP_DOMAIN_TON || request.publicInputs?.targetDomain !== SCCP_DOMAIN_TON) {
+    throw new TypeError("TON SCCP production proofs must target TON public inputs");
+  }
+  if (request.backend !== SCCP_TON_CONTRACT_PROOF_BACKEND_V1) {
+    throw new TypeError("TON SCCP proof request backend must be ton-contract-v1");
+  }
+  requireNonEmptyBytes(toBytes(request.bundleBytes, "bundleBytes"), "bundleBytes");
+  requireOptionalNonZeroBytes(
+    toBytes(request.sourceProofBytes, "sourceProofBytes"),
+    "sourceProofBytes",
+  );
+  if (request.sourceStateVerifierId !== SCCP_TON_MAINNET_SHARD_STATE_VERIFIER_ID_V1) {
+    throw new TypeError("sourceStateVerifierId must match TON shard-state verifier profile");
+  }
+  const sourceStateVerifierHash = normalizeNonZeroHex32(
+    request.sourceStateVerifierHash,
+    "sourceStateVerifierHash",
+  );
+  if (sourceStateVerifierHash === SCCP_TON_TEMPLATE_SOURCE_STATE_VERIFIER_HASH_V1) {
+    throw new TypeError("sourceStateVerifierHash must not be the TON template verifier hash");
+  }
+  const deploymentBinding = request.sourceAdapterDeploymentBinding ?? {};
+  if (deploymentBinding.sourceDomain !== SCCP_DOMAIN_TON) {
+    throw new TypeError("sourceAdapterDeploymentBinding.sourceDomain must be TON");
+  }
+  if (deploymentBinding.targetDomain !== SCCP_DOMAIN_SORA) {
+    throw new TypeError("sourceAdapterDeploymentBinding.targetDomain must be SORA");
+  }
+  if (deploymentBinding.sourceAdapterDeploymentHash === SCCP_ZERO_HASH_V1) {
+    throw new TypeError("sourceAdapterDeploymentBinding must be non-zero");
+  }
+  if (sccpSourceAdapterDeploymentBindingHash(deploymentBinding) !== request.sourceAdapterDeploymentBindingHash) {
+    throw new TypeError("sourceAdapterDeploymentBindingHash must match sourceAdapterDeploymentBinding");
+  }
+};
+
+const normalizeEvmGroth16ProofRequest = (input) => {
+  if (!input || typeof input !== "object" || Array.isArray(input)) {
+    throw new TypeError("EVM-family SCCP proof request input must be an object");
+  }
+  const requestField = (label, ...names) => strictResultField(input, label, ...names);
+  const requestOptionalField = (label, ...names) =>
+    strictOptionalResultField(input, label, ...names);
+  const publicInputs = normalizeSccpMessageTransparentPublicInputs(
+    requestField("publicInputs", "publicInputs", "public_inputs"),
+  );
+  const publicInputsBytes = canonicalSccpMessageTransparentPublicInputsBytes(publicInputs);
+  const bundleBytes = requireNonEmptyBytes(
+    toBytes(requestField("bundleBytes", "bundleBytes", "bundle_bytes"), "bundleBytes"),
+    "bundleBytes",
+  );
+  const sourceProofInput = requestOptionalField(
+    "sourceProofBytes",
+    "sourceProofBytes",
+    "source_proof_bytes",
+  );
+  const sourceProofBytes = requireOptionalNonZeroBytes(
+    sourceProofInput !== SCCP_OPTIONAL_FIELD_MISSING
+      ? toBytes(sourceProofInput, "sourceProofBytes")
+      : new Uint8Array(),
+    "sourceProofBytes",
+  );
+  const sourceDomainInput = requestOptionalField("sourceDomain", "sourceDomain", "source_domain");
+  const sourceDomain =
+    sourceDomainInput === SCCP_OPTIONAL_FIELD_MISSING
+      ? normalizeSccpDomainId(SCCP_DOMAIN_SORA, "sourceDomain")
+      : normalizeSccpDomainId(sourceDomainInput, "sourceDomain");
+  const backendInput = requestOptionalField("backend", "backend");
+  const backend =
+    backendInput === SCCP_OPTIONAL_FIELD_MISSING || backendInput === null
+      ? SCCP_EVM_GROTH16_BN254_PROOF_BACKEND_V1
+      : backendInput;
+  if (backend !== SCCP_EVM_GROTH16_BN254_PROOF_BACKEND_V1) {
+    throw new TypeError("backend must be evm-groth16-bn254-v1");
+  }
+  if (publicInputs.targetDomain === 0) {
+    throw new RangeError("publicInputs.targetDomain must not be zero");
+  }
+  if (![SCCP_DOMAIN_ETH, SCCP_DOMAIN_BSC].includes(publicInputs.targetDomain)) {
+    throw new RangeError("publicInputs.targetDomain must be ETH or BSC");
+  }
+  if (sourceDomain !== SCCP_DOMAIN_SORA) {
+    throw new RangeError("sourceDomain must be SORA");
+  }
+  if (sourceDomain === publicInputs.targetDomain) {
+    throw new RangeError("sourceDomain and publicInputs.targetDomain must differ");
+  }
+  const proofContextInput = requestOptionalField("proofContext", "proofContext", "proof_context");
+  const proofContext = normalizeBoundSccpProofContext(
+    proofContextInput === SCCP_OPTIONAL_FIELD_MISSING ? input : proofContextInput,
+    "EVM-family SCCP proof context",
+    evmSccpDestinationBinding,
+    publicInputs.targetDomain,
+  );
+  const publicSignalWords = sccpGroth16Bn254PublicSignalWords({
+    publicInputs,
+    sourceDomain,
+    statementHash: proofContext.statementHash,
+    destinationBindingHash: proofContext.destinationBindingHash,
+  });
+  const publicSignalWordBytes = publicSignalWords.map((word, index) =>
+    hexToBytes(word, `publicSignalWords[${index}]`, 32),
+  );
+  return {
+    publicInputs,
+    publicInputsBytes,
+    bundleBytes,
+    sourceProofBytes,
+    sourceDomain,
+    backend,
+    proofContext,
+    publicSignalWords,
+    publicSignalWordBytes,
+  };
+};
+
+export const buildEvmSccpProofRequest = (input) => {
+  const {
+    publicInputs,
+    publicInputsBytes,
+    bundleBytes,
+    sourceProofBytes,
+    sourceDomain,
+    backend,
+    proofContext,
+    publicSignalWords,
+    publicSignalWordBytes,
+  } = normalizeEvmGroth16ProofRequest(input);
+  const requestHash = bytesToHex(
+    prefixedBlake2b(
+      SCCP_EVM_GROTH16_PROOF_REQUEST_PREFIX_V1,
+      concatBytes(
+        publicInputsBytes,
+        writeBytes(new Uint8Array(), bundleBytes),
+        writeBytes(new Uint8Array(), sourceProofBytes),
+        hexToBytes(proofContext.statementHash, "statementHash", 32),
+        hexToBytes(proofContext.destinationBindingHash, "destinationBindingHash", 32),
+        ...publicSignalWordBytes,
+      ),
+    ),
+  );
+  return immutableGroth16ProofRequest({
+    version: 1,
+    backend,
+    sourceDomain,
+    targetDomain: publicInputs.targetDomain,
+    publicInputs,
+    publicInputsBytes,
+    publicSignalWords,
+    bundleBytes,
+    sourceProofBytes,
+    proofContext,
+    statementHash: proofContext.statementHash,
+    destinationBinding: proofContext.destinationBinding,
+    destinationBindingHash: proofContext.destinationBindingHash,
+    requestHash,
+  });
+};
+
+const groth16DestinationBindingComparable = (binding) => {
+  if (binding === undefined || binding === null) return binding;
+  return {
+    version: binding.version,
+    sourceDomain: binding.sourceDomain,
+    targetDomain: binding.targetDomain,
+    networkId: binding.networkId,
+    verifierAddress: binding.verifierAddress,
+    bridgeAddress: binding.bridgeAddress,
+    verifierCodeHash: binding.verifierCodeHash,
+    verifierKeyHash: binding.verifierKeyHash,
+    verifierBackend: binding.verifierBackend,
+    proofFamily: binding.proofFamily,
+    key: binding.key,
+    bindingHash: binding.bindingHash,
+  };
+};
+
+const groth16ProofRequestComparable = (request) => {
+  const publicInputs = request.publicInputs ?? {};
+  const proofContext = request.proofContext ?? {};
+  return {
+    version: request.version,
+    backend: request.backend,
+    sourceDomain: request.sourceDomain,
+    targetDomain: request.targetDomain,
+    publicInputs: {
+      messageId: publicInputs.messageId,
+      payloadHash: publicInputs.payloadHash,
+      targetDomain: publicInputs.targetDomain,
+      commitmentRoot: publicInputs.commitmentRoot,
+      finalityHeight: publicInputs.finalityHeight,
+      finalityBlockHash: publicInputs.finalityBlockHash,
+    },
+    publicInputsBytes: bytesToHex(toBytes(request.publicInputsBytes, "publicInputsBytes")),
+    publicSignalWords: Array.isArray(request.publicSignalWords)
+      ? request.publicSignalWords.map((word, index) =>
+          normalizeHex32(word, `publicSignalWords[${index}]`),
+        )
+      : request.publicSignalWords,
+    bundleBytes: bytesToHex(toBytes(request.bundleBytes, "bundleBytes")),
+    sourceProofBytes: bytesToHex(toBytes(request.sourceProofBytes, "sourceProofBytes")),
+    proofContext: {
+      version: proofContext.version,
+      statementHash: proofContext.statementHash,
+      destinationBindingHash: proofContext.destinationBindingHash,
+    },
+    statementHash: request.statementHash,
+    destinationBinding: groth16DestinationBindingComparable(request.destinationBinding),
+    destinationBindingHash: request.destinationBindingHash,
+    requestHash: request.requestHash,
+  };
+};
+
+const requireCanonicalEvmProofRequest = (request) => {
+  if (!request || typeof request !== "object" || Array.isArray(request)) {
+    throw new TypeError("EVM-family SCCP proof request must be canonical");
+  }
+  try {
+    const expected = buildEvmSccpProofRequest({
+      publicInputs: request.publicInputs,
+      bundleBytes: request.bundleBytes,
+      sourceProofBytes: request.sourceProofBytes,
+      statementHash: request.statementHash,
+      destinationBindingHash: request.destinationBindingHash,
+      destinationBinding: request.destinationBinding,
+      backend: request.backend,
+      sourceDomain: request.sourceDomain,
+    });
+    if (
+      JSON.stringify(groth16ProofRequestComparable(request)) !==
+      JSON.stringify(groth16ProofRequestComparable(expected))
+    ) {
+      throw new TypeError("EVM-family SCCP proof request must be canonical");
+    }
+  } catch (error) {
+    if (
+      error instanceof TypeError &&
+      error.message === "EVM-family SCCP proof request must be canonical"
+    ) {
+      throw error;
+    }
+    throw new TypeError("EVM-family SCCP proof request must be canonical");
+  }
+};
+
+const requireProductionGroth16DestinationBinding = (request, bindingBuilder, label) => {
+  if (
+    !request.destinationBinding ||
+    typeof request.destinationBinding !== "object" ||
+    Array.isArray(request.destinationBinding) ||
+    !destinationBindingHasDeploymentMaterial(request.destinationBinding)
+  ) {
+    throw new TypeError(`${label} production proofs must include destinationBinding deployment material`);
+  }
+  const binding = bindingBuilder(
+    destinationBindingWithDefaultTarget(request.destinationBinding, request.targetDomain),
+  );
+  if (binding.sourceDomain !== request.sourceDomain || binding.targetDomain !== request.targetDomain) {
+    throw new TypeError(`${label} destinationBinding must match request route`);
+  }
+  if (
+    binding.bindingHash !== request.destinationBindingHash ||
+    binding.bindingHash !== request.proofContext?.destinationBindingHash
+  ) {
+    throw new TypeError(`${label} destinationBinding must match request destinationBindingHash`);
+  }
+  return binding;
+};
+
+const requireProductionEvmProofRequest = (request) => {
+  requireCanonicalEvmProofRequest(request);
+  if (request.version !== 1) {
+    throw new TypeError("EVM-family SCCP proof request version must be 1");
+  }
+  if (request.backend !== SCCP_EVM_GROTH16_BN254_PROOF_BACKEND_V1) {
+    throw new TypeError("EVM-family SCCP proof request backend must be evm-groth16-bn254-v1");
+  }
+  if (request.sourceDomain !== SCCP_DOMAIN_SORA) {
+    throw new TypeError("EVM-family SCCP production proofs must start from SORA");
+  }
+  if (
+    request.targetDomain !== request.publicInputs?.targetDomain ||
+    ![SCCP_DOMAIN_ETH, SCCP_DOMAIN_BSC].includes(request.targetDomain)
+  ) {
+    throw new TypeError("EVM-family SCCP production proofs must target ETH or BSC");
+  }
+  requireProductionGroth16DestinationBinding(
+    request,
+    evmSccpDestinationBinding,
+    "EVM-family SCCP",
+  );
+  requireNonEmptyBytes(toBytes(request.bundleBytes, "bundleBytes"), "bundleBytes");
+  requireOptionalNonZeroBytes(
+    toBytes(request.sourceProofBytes, "sourceProofBytes"),
+    "sourceProofBytes",
+  );
+};
+
+const requireOptionalTransparentResultMetadataMatches = (result, request) => {
+  const resultPublicInputs = strictOptionalResultField(
+    result,
+    "proofResult.publicInputs",
+    "publicInputs",
+    "public_inputs",
+  );
+  if (
+    resultPublicInputs !== SCCP_OPTIONAL_FIELD_MISSING &&
+    JSON.stringify(normalizeSccpMessageTransparentPublicInputs(resultPublicInputs)) !==
+      JSON.stringify(request.publicInputs)
+  ) {
+    throw new TypeError("proofResult.publicInputs must match request.publicInputs");
+  }
+
+  const proofContext = strictOptionalResultField(
+    result,
+    "proofResult.proofContext",
+    "proofContext",
+    "proof_context",
+  );
+  if (proofContext !== SCCP_OPTIONAL_FIELD_MISSING) {
+    if (!proofContext || typeof proofContext !== "object" || Array.isArray(proofContext)) {
+      throw new TypeError("proofResult.proofContext must be an object");
+    }
+    if (
+      normalizeHex32(
+        strictResultField(
+          proofContext,
+          "proofResult.proofContext.statementHash",
+          "statementHash",
+          "statement_hash",
+        ),
+        "proofResult.proofContext.statementHash",
+      ) !== request.proofContext.statementHash
+    ) {
+      throw new TypeError("proofResult.proofContext must match request.proofContext");
+    }
+    if (
+      normalizeHex32(
+        strictResultField(
+          proofContext,
+          "proofResult.proofContext.destinationBindingHash",
+          "destinationBindingHash",
+          "destination_binding_hash",
+        ),
+        "proofResult.proofContext.destinationBindingHash",
+      ) !== request.proofContext.destinationBindingHash
+    ) {
+      throw new TypeError("proofResult.proofContext must match request.proofContext");
+    }
+  }
+
+  const resultStatementHash = strictOptionalResultField(
+    result,
+    "proofResult.statementHash",
+    "statementHash",
+    "statement_hash",
+  );
+  if (resultStatementHash !== SCCP_OPTIONAL_FIELD_MISSING) {
+    requireSuppliedResultHashMatches(
+      resultStatementHash,
+      request.statementHash,
+      "proofResult.statementHash",
+    );
+  }
+  const resultDestinationBindingHash = strictOptionalResultField(
+    result,
+    "proofResult.destinationBindingHash",
+    "destinationBindingHash",
+    "destination_binding_hash",
+  );
+  if (resultDestinationBindingHash !== SCCP_OPTIONAL_FIELD_MISSING) {
+    requireSuppliedResultHashMatches(
+      resultDestinationBindingHash,
+      request.destinationBindingHash,
+      "proofResult.destinationBindingHash",
+    );
+  }
+};
+
+const requireOptionalGroth16ResultMetadataMatches = (result, request) => {
+  requireOptionalTransparentResultMetadataMatches(result, request);
+  const suppliedPublicSignalWords = strictOptionalResultField(
+    result,
+    "proofResult.publicSignalWords",
+    "publicSignalWords",
+    "public_signal_words",
+  );
+  if (suppliedPublicSignalWords === SCCP_OPTIONAL_FIELD_MISSING) {
+    return;
+  }
+  if (!Array.isArray(suppliedPublicSignalWords) || suppliedPublicSignalWords.length !== 9) {
+    throw new TypeError("proofResult.publicSignalWords must contain 9 words");
+  }
+  const normalizedSignals = suppliedPublicSignalWords.map((word, index) =>
+    normalizeHex32(word, `proofResult.publicSignalWords[${index}]`),
+  );
+  if (JSON.stringify(normalizedSignals) !== JSON.stringify(request.publicSignalWords)) {
+    throw new TypeError(
+      "proofResult.publicSignalWords must match request public inputs and proof context",
+    );
+  }
+};
+
+const requireOptionalResultProofBase64Matches = (result, proofBytes) => {
+  const proofBase64 = strictOptionalResultField(
+    result,
+    "proofResult.proofBase64",
+    "proofBase64",
+    "proof_base64",
+  );
+  if (proofBase64 === SCCP_OPTIONAL_FIELD_MISSING) {
+    return;
+  }
+  if (
+    typeof proofBase64 !== "string" ||
+    proofBase64.length === 0 ||
+    proofBase64 !== bytesToBase64(proofBytes)
+  ) {
+    throw new TypeError("proofResult.proofBase64 must match proofResult.proofBytes");
+  }
+};
+
+const normalizeEvmProofResult = (result, request) => {
+  if (!result || typeof result !== "object" || Array.isArray(result)) {
+    throw new TypeError("EVM-family SCCP proof result must be an object");
+  }
+  requireProductionEvmProofRequest(request);
+  const proofBytes = toBytes(
+    strictResultField(result, "proofResult.proofBytes", "proofBytes", "proof_bytes", "proof"),
+    "proofBytes",
+  );
+  requireGroth16ProofBytesForContext(proofBytes, "proofBytes", {
+    publicInputs: request.publicInputs,
+    sourceDomain: request.sourceDomain,
+  });
+  requireOptionalResultProofBase64Matches(result, proofBytes);
+  const resultBackend = optionalResultField(result, "backend");
+  if (resultBackend !== SCCP_OPTIONAL_FIELD_MISSING) {
+    requireSuppliedResultBackendMatches(resultBackend, request.backend);
+  }
+  const resultRequestHash = strictOptionalResultField(
+    result,
+    "proofResult.requestHash",
+    "requestHash",
+    "request_hash",
+  );
+  if (resultRequestHash !== SCCP_OPTIONAL_FIELD_MISSING) {
+    requireSuppliedResultHashMatches(resultRequestHash, request.requestHash, "requestHash");
+  }
+  requireOptionalGroth16ResultMetadataMatches(result, request);
+  const envelopeHash = bytesToHex(
+    prefixedBlake2b(
+      SCCP_EVM_GROTH16_PROOF_ENVELOPE_PREFIX_V1,
+      concatBytes(hexToBytes(request.requestHash, "requestHash", 32), proofBytes),
+    ),
+  );
+  const resultEnvelopeHash = strictOptionalResultField(
+    result,
+    "proofResult.envelopeHash",
+    "envelopeHash",
+    "envelope_hash",
+  );
+  if (resultEnvelopeHash !== SCCP_OPTIONAL_FIELD_MISSING) {
+    requireSuppliedResultHashMatches(resultEnvelopeHash, envelopeHash, "envelopeHash");
+  }
+  return immutableGroth16ProofResult({
+    version: 1,
+    backend: request.backend,
+    proofBytes,
+    proofBase64: bytesToBase64(proofBytes),
+    publicInputs: request.publicInputs,
+    publicSignalWords: request.publicSignalWords,
+    bundleBytes: request.bundleBytes,
+    sourceProofBytes: request.sourceProofBytes,
+    proofContext: request.proofContext,
+    statementHash: request.statementHash,
+    destinationBinding: request.destinationBinding,
+    destinationBindingHash: request.destinationBindingHash,
+    requestHash: request.requestHash,
+    envelopeHash,
+  });
+};
+
+export function wrapEvmSccpProofResult(proofBytes, request) {
+  return normalizeEvmProofResult({ proofBytes }, request);
+}
+
+const sccpMessageProofContractEntrypointV1 =
+  "submitSccpMessageProof(bytes proof_bytes, bytes32[6] public_inputs, bytes32 statement_hash)";
+
+const requireGroth16ProofResultEnvelopeForSubmission = (
+  proofResult,
+  proofBytes,
+  statementHash,
+  destinationBindingHash,
+  envelopePrefix,
+) => {
+  const proofContext = strictResultField(
+    proofResult,
+    "proofResult.proofContext",
+    "proofContext",
+    "proof_context",
+  );
+  if (!proofContext || typeof proofContext !== "object" || Array.isArray(proofContext)) {
+    throw new TypeError("proofResult.proofContext must be an object");
+  }
+  if (
+    normalizeHex32(
+      strictResultField(
+        proofContext,
+        "proofResult.proofContext.statementHash",
+        "statementHash",
+        "statement_hash",
+      ),
+      "proofResult.proofContext.statementHash",
+    ) !== statementHash
+  ) {
+    throw new TypeError("proofResult.proofContext must match statementHash");
+  }
+  if (
+    normalizeHex32(
+      strictResultField(
+        proofContext,
+        "proofResult.proofContext.destinationBindingHash",
+        "destinationBindingHash",
+        "destination_binding_hash",
+      ),
+      "proofResult.proofContext.destinationBindingHash",
+    ) !== destinationBindingHash
+  ) {
+    throw new TypeError("proofResult.proofContext must match destinationBindingHash");
+  }
+  const proofBase64 = strictResultField(
+    proofResult,
+    "proofResult.proofBase64",
+    "proofBase64",
+    "proof_base64",
+  );
+  if (proofBase64 !== bytesToBase64(proofBytes)) {
+    throw new TypeError("proofResult.proofBase64 must match proofResult.proofBytes");
+  }
+  const requestHash = normalizeNonZeroHex32(
+    strictResultField(proofResult, "proofResult.requestHash", "requestHash", "request_hash"),
+    "proofResult.requestHash",
+  );
+  const envelopeHash = normalizeNonZeroHex32(
+    strictResultField(proofResult, "proofResult.envelopeHash", "envelopeHash", "envelope_hash"),
+    "proofResult.envelopeHash",
+  );
+  const expectedEnvelopeHash = bytesToHex(
+    prefixedBlake2b(
+      envelopePrefix,
+      concatBytes(hexToBytes(requestHash, "proofResult.requestHash", 32), proofBytes),
+    ),
+  );
+  if (envelopeHash !== expectedEnvelopeHash) {
+    throw new TypeError("proofResult.envelopeHash must match wrapped proof bytes");
+  }
+  return requestHash;
+};
+
+const normalizeGroth16SubmissionInput = (
+  input,
+  {
+    backend,
+    sourceDomainLabel,
+    targetDomainLabel,
+    acceptedTargetDomains,
+    envelopePrefix,
+    proofRequestBuilder,
+  },
+) => {
+  if (!input || typeof input !== "object" || Array.isArray(input)) {
+    throw new TypeError(`${targetDomainLabel} SCCP submission input must be an object`);
+  }
+  const proofResultInput = strictOptionalResultField(input, "proofResult", "proofResult", "proof_result");
+  const proofResult =
+    proofResultInput === SCCP_OPTIONAL_FIELD_MISSING || proofResultInput === null
+      ? null
+      : proofResultInput;
+  if (
+    proofResult !== null &&
+    (!proofResult || typeof proofResult !== "object" || Array.isArray(proofResult))
+  ) {
+    throw new TypeError("proofResult must be a wrapped Groth16 SCCP proof result");
+  }
+  if (proofResult !== null) {
+    requireOptionalResultBackendMatches(proofResult.backend, backend);
+  }
+
+  const inputPublicInputs = strictOptionalResultField(input, "publicInputs", "publicInputs", "public_inputs");
+  const resultPublicInputs =
+    proofResult === null
+      ? SCCP_OPTIONAL_FIELD_MISSING
+      : strictOptionalResultField(proofResult, "proofResult.publicInputs", "publicInputs", "public_inputs");
+  const publicInputs = normalizeSccpMessageTransparentPublicInputs(
+    inputPublicInputs !== SCCP_OPTIONAL_FIELD_MISSING
+      ? inputPublicInputs
+      : resultPublicInputs,
+  );
+  if (!acceptedTargetDomains.includes(publicInputs.targetDomain)) {
+    throw new RangeError(`publicInputs.targetDomain must be ${targetDomainLabel}`);
+  }
+  if (
+    resultPublicInputs !== SCCP_OPTIONAL_FIELD_MISSING &&
+    JSON.stringify(normalizeSccpMessageTransparentPublicInputs(resultPublicInputs)) !==
+      JSON.stringify(publicInputs)
+  ) {
+    throw new TypeError("publicInputs must match proofResult.publicInputs");
+  }
+
+  const sourceDomainInput = strictOptionalResultField(input, "sourceDomain", "sourceDomain", "source_domain");
+  const sourceDomain =
+    sourceDomainInput === SCCP_OPTIONAL_FIELD_MISSING
+      ? normalizeSccpDomainId(SCCP_DOMAIN_SORA, "sourceDomain")
+      : normalizeSccpDomainId(sourceDomainInput, "sourceDomain");
+  if (sourceDomain !== SCCP_DOMAIN_SORA) {
+    throw new RangeError(`sourceDomain must be ${sourceDomainLabel}`);
+  }
+  const inputStatementHash = strictOptionalResultField(input, "statementHash", "statementHash", "statement_hash");
+  const resultStatementHash =
+    proofResult === null
+      ? SCCP_OPTIONAL_FIELD_MISSING
+      : strictOptionalResultField(proofResult, "proofResult.statementHash", "statementHash", "statement_hash");
+  const statementHash = normalizeNonZeroHex32(
+    inputStatementHash !== SCCP_OPTIONAL_FIELD_MISSING
+      ? inputStatementHash
+      : resultStatementHash,
+    "statementHash",
+  );
+  if (resultStatementHash !== SCCP_OPTIONAL_FIELD_MISSING) {
+    requireSuppliedResultHashMatches(resultStatementHash, statementHash, "statementHash");
+  }
+  const inputDestinationBindingHash = strictOptionalResultField(
+    input,
+    "destinationBindingHash",
+    "destinationBindingHash",
+    "destination_binding_hash",
+  );
+  const resultDestinationBindingHash =
+    proofResult === null
+      ? SCCP_OPTIONAL_FIELD_MISSING
+      : strictOptionalResultField(
+          proofResult,
+          "proofResult.destinationBindingHash",
+          "destinationBindingHash",
+          "destination_binding_hash",
+        );
+  const destinationBindingHash = normalizeNonZeroHex32(
+    inputDestinationBindingHash !== SCCP_OPTIONAL_FIELD_MISSING
+      ? inputDestinationBindingHash
+      : resultDestinationBindingHash,
+    "destinationBindingHash",
+  );
+  if (resultDestinationBindingHash !== SCCP_OPTIONAL_FIELD_MISSING) {
+    requireSuppliedResultHashMatches(
+      resultDestinationBindingHash,
+      destinationBindingHash,
+      "destinationBindingHash",
+    );
+  }
+
+  const inputProofBytes = strictOptionalResultField(input, "proofBytes", "proofBytes", "proof_bytes");
+  const resultProofBytes =
+    proofResult === null
+      ? SCCP_OPTIONAL_FIELD_MISSING
+      : strictOptionalResultField(
+          proofResult,
+          "proofResult.proofBytes",
+          "proofBytes",
+          "proof_bytes",
+          "proof",
+        );
+  const proofBytes = toBytes(
+    inputProofBytes !== SCCP_OPTIONAL_FIELD_MISSING ? inputProofBytes : resultProofBytes,
+    "proofBytes",
+  );
+  requireGroth16ProofBytesForContext(proofBytes, "proofBytes", {
+    publicInputs,
+    sourceDomain,
+  });
+  if (proofResult !== null) {
+    const wrappedProofBytes = toBytes(resultProofBytes, "proofResult.proofBytes");
+    requireGroth16ProofBytesForContext(wrappedProofBytes, "proofResult.proofBytes", {
+      publicInputs,
+      sourceDomain,
+    });
+    if (!bytesEqual(proofBytes, wrappedProofBytes)) {
+      throw new TypeError("proofBytes must match proofResult.proofBytes");
+    }
+    const requestHash = requireGroth16ProofResultEnvelopeForSubmission(
+      proofResult,
+      wrappedProofBytes,
+      statementHash,
+      destinationBindingHash,
+      envelopePrefix,
+    );
+    const bundleBytes = requireNonEmptyBytes(
+      toBytes(
+        strictResultField(proofResult, "proofResult.bundleBytes", "bundleBytes", "bundle_bytes"),
+        "proofResult.bundleBytes",
+      ),
+      "proofResult.bundleBytes",
+    );
+    const inputBundleValue = strictOptionalResultField(input, "bundleBytes", "bundleBytes", "bundle_bytes");
+    const inputBundle =
+      inputBundleValue !== SCCP_OPTIONAL_FIELD_MISSING
+        ? toBytes(inputBundleValue, "bundleBytes")
+        : null;
+    if (inputBundle !== null && !bytesEqual(inputBundle, bundleBytes)) {
+      throw new TypeError("bundleBytes must match proofResult.bundleBytes");
+    }
+    const resultSourceProofInput = strictOptionalResultField(
+      proofResult,
+      "proofResult.sourceProofBytes",
+      "sourceProofBytes",
+      "source_proof_bytes",
+    );
+    const inputSourceProofInput = strictOptionalResultField(
+      input,
+      "sourceProofBytes",
+      "sourceProofBytes",
+      "source_proof_bytes",
+    );
+    const sourceProofInput =
+      resultSourceProofInput !== SCCP_OPTIONAL_FIELD_MISSING
+        ? resultSourceProofInput
+        : inputSourceProofInput;
+    const sourceProofBytes = requireOptionalNonZeroBytes(
+      sourceProofInput === SCCP_OPTIONAL_FIELD_MISSING
+        ? new Uint8Array()
+        : toBytes(sourceProofInput, "proofResult.sourceProofBytes"),
+      "proofResult.sourceProofBytes",
+    );
+    const expectedRequest = proofRequestBuilder({
+      publicInputs,
+      bundleBytes,
+      sourceProofBytes,
+      statementHash,
+      destinationBindingHash,
+      sourceDomain,
+    });
+    if (expectedRequest.requestHash !== requestHash) {
+      throw new TypeError(
+        "proofResult.requestHash must match bundleBytes and sourceProofBytes",
+      );
+    }
+  }
+
+  const publicSignalWords = sccpGroth16Bn254PublicSignalWords({
+    publicInputs,
+    sourceDomain,
+    statementHash,
+    destinationBindingHash,
+  });
+  const inputPublicSignalWords = strictOptionalResultField(
+    input,
+    "publicSignalWords",
+    "publicSignalWords",
+    "public_signal_words",
+  );
+  const resultPublicSignalWords =
+    proofResult === null
+      ? SCCP_OPTIONAL_FIELD_MISSING
+      : strictOptionalResultField(
+          proofResult,
+          "proofResult.publicSignalWords",
+          "publicSignalWords",
+          "public_signal_words",
+        );
+  const suppliedPublicSignalWords =
+    inputPublicSignalWords !== SCCP_OPTIONAL_FIELD_MISSING
+      ? inputPublicSignalWords
+      : resultPublicSignalWords;
+  if (suppliedPublicSignalWords !== SCCP_OPTIONAL_FIELD_MISSING) {
+    if (!Array.isArray(suppliedPublicSignalWords) || suppliedPublicSignalWords.length !== 9) {
+      throw new TypeError("publicSignalWords must contain 9 words");
+    }
+    const normalizedSignals = suppliedPublicSignalWords.map((word, index) =>
+      normalizeHex32(word, `publicSignalWords[${index}]`),
+    );
+    if (JSON.stringify(normalizedSignals) !== JSON.stringify(publicSignalWords)) {
+      throw new TypeError("publicSignalWords must match publicInputs and proof context");
+    }
+  }
+
+  return {
+    proofBytes,
+    publicInputs,
+    sourceDomain,
+    statementHash,
+    destinationBindingHash,
+    publicSignalWords,
+  };
+};
+
+const buildGroth16ContractSubmission = (input, options) => {
+  const {
+    proofBytes,
+    publicInputs,
+    sourceDomain,
+    statementHash,
+    destinationBindingHash,
+    publicSignalWords,
+  } = normalizeGroth16SubmissionInput(input, options);
+  const publicInputWords = sccpMessageTransparentPublicInputAbiWords(publicInputs);
+  const publicInputWordsBytes = concatBytes(...publicInputWords);
+  const callData = sccpSubmitMessageProofCallData(
+    proofBytes,
+    publicInputs,
+    statementHash,
+    sourceDomain,
+  );
+  const argumentsValue = [
+    { key: "proof_bytes", encoding: "raw_bytes", bytes: bytesToHex(proofBytes) },
+    { key: "public_inputs", encoding: "abi_bytes32x6", bytes: bytesToHex(publicInputWordsBytes) },
+    { key: "statement_hash", encoding: "abi_bytes32", bytes: statementHash },
+  ];
+  const submission = {
+    version: 1,
+    proofFamily: SCCP_STARK_FRI_PROOF_FAMILY_V1,
+    verifierBackend: options.backend,
+    platformPayload: options.platformPayload,
+    envelopeEncoding: options.envelopeEncoding,
+    submissionKind: "contract_call",
+    verifierEntrypoint: sccpMessageProofContractEntrypointV1,
+    contractMethod: SCCP_SUBMIT_MESSAGE_PROOF_ABI_V1,
+    functionSelector: SCCP_SUBMIT_MESSAGE_PROOF_SELECTOR_V1,
+    sourceDomain,
+    targetDomain: publicInputs.targetDomain,
+    publicInputs: Object.freeze({ ...publicInputs }),
+    publicInputWords: Object.freeze(sccpMessageTransparentPublicInputAbiWordsHex(publicInputs)),
+    publicSignalWords: Object.freeze([...publicSignalWords]),
+    statementHash,
+    destinationBindingHash,
+    arguments: Object.freeze(argumentsValue.map((argument) => Object.freeze({ ...argument }))),
+    callDataHex: bytesToHex(callData),
+    envelopeHex: bytesToHex(callData),
+  };
+  defineCopiedByteField(submission, "proofBytes", proofBytes);
+  defineCopiedByteField(submission, "publicInputWordsBytes", publicInputWordsBytes);
+  defineCopiedByteField(submission, "callData", callData);
+  defineCopiedByteField(submission, "envelopeBytes", callData);
+  return Object.freeze(submission);
+};
+
+export function buildEvmSccpSubmission(input) {
+  return buildGroth16ContractSubmission(input, {
+    backend: SCCP_EVM_GROTH16_BN254_PROOF_BACKEND_V1,
+    platformPayload: "evm_groth16_contract_call",
+    envelopeEncoding: SCCP_EVM_CONTRACT_CALL_ABI_TUPLE_V1,
+    sourceDomainLabel: "SORA",
+    targetDomainLabel: "ETH or BSC",
+    acceptedTargetDomains: [SCCP_DOMAIN_ETH, SCCP_DOMAIN_BSC],
+    envelopePrefix: SCCP_EVM_GROTH16_PROOF_ENVELOPE_PREFIX_V1,
+    proofRequestBuilder: buildEvmSccpProofRequest,
+  });
+}
+
+export class EvmSccpProver {
+  constructor(options = {}) {
+    if (!options || typeof options !== "object" || Array.isArray(options)) {
+      throw new TypeError("EvmSccpProver options must be an object");
+    }
+    this.witnessProvider = strictOptionalConstructorOption(
+      options,
+      "EVM SCCP prover witnessProvider",
+      "witnessProvider",
+      "witness_provider",
+    );
+    this.proveFn = strictOptionalConstructorOption(
+      options,
+      "EVM SCCP prover prove",
+      "prove",
+      "proveFn",
+      "prove_fn",
+    );
+  }
+
+  async buildRequest(input, options = {}) {
+    const witness = await resolveSccpWitness(
+      this.witnessProvider,
+      input,
+      options,
+      "EVM-family SCCP",
+    );
+    return buildEvmSccpProofRequest(witness);
+  }
+
+  async prove(input, options = {}) {
+    const request = await this.buildRequest(input, options);
+    if (typeof this.proveFn !== "function") {
+      const error = new Error(
+        "EVM-family SCCP Groth16 prover is not linked; provide a browser-safe prove function before generating production proofs",
+      );
+      error.code = "ERR_SCCP_EVM_PROVER_UNAVAILABLE";
+      throw error;
+    }
+    requireProductionEvmProofRequest(request);
+    return normalizeEvmProofResult(
+      await this.proveFn(immutableGroth16ProofRequest(request), options),
+      request,
+    );
+  }
+}
+
+const normalizeTronGroth16ProofRequest = (input) => {
+  if (!input || typeof input !== "object" || Array.isArray(input)) {
+    throw new TypeError("TRON SCCP proof request input must be an object");
+  }
+  const requestField = (label, ...names) => strictResultField(input, label, ...names);
+  const requestOptionalField = (label, ...names) =>
+    strictOptionalResultField(input, label, ...names);
+  const publicInputs = normalizeSccpMessageTransparentPublicInputs(
+    requestField("publicInputs", "publicInputs", "public_inputs"),
+  );
+  const publicInputsBytes = canonicalSccpMessageTransparentPublicInputsBytes(publicInputs);
+  const bundleBytes = requireNonEmptyBytes(
+    toBytes(requestField("bundleBytes", "bundleBytes", "bundle_bytes"), "bundleBytes"),
+    "bundleBytes",
+  );
+  const sourceProofInput = requestOptionalField(
+    "sourceProofBytes",
+    "sourceProofBytes",
+    "source_proof_bytes",
+  );
+  const sourceProofBytes = requireOptionalNonZeroBytes(
+    sourceProofInput !== SCCP_OPTIONAL_FIELD_MISSING
+      ? toBytes(sourceProofInput, "sourceProofBytes")
+      : new Uint8Array(),
+    "sourceProofBytes",
+  );
+  const sourceDomainInput = requestOptionalField("sourceDomain", "sourceDomain", "source_domain");
+  const sourceDomain =
+    sourceDomainInput === SCCP_OPTIONAL_FIELD_MISSING
+      ? normalizeSccpDomainId(SCCP_DOMAIN_SORA, "sourceDomain")
+      : normalizeSccpDomainId(sourceDomainInput, "sourceDomain");
+  const backendInput = requestOptionalField("backend", "backend");
+  const backend =
+    backendInput === SCCP_OPTIONAL_FIELD_MISSING || backendInput === null
+      ? SCCP_TRON_GROTH16_BN254_PROOF_BACKEND_V1
+      : backendInput;
+  if (backend !== SCCP_TRON_GROTH16_BN254_PROOF_BACKEND_V1) {
+    throw new TypeError("backend must be tron-groth16-bn254-v1");
+  }
+  if (publicInputs.targetDomain === 0) {
+    throw new RangeError("publicInputs.targetDomain must not be zero");
+  }
+  if (publicInputs.targetDomain !== SCCP_DOMAIN_TRON) {
+    throw new RangeError("publicInputs.targetDomain must be TRON");
+  }
+  if (sourceDomain !== SCCP_DOMAIN_SORA) {
+    throw new RangeError("sourceDomain must be SORA");
+  }
+  if (sourceDomain === publicInputs.targetDomain) {
+    throw new RangeError("sourceDomain and publicInputs.targetDomain must differ");
+  }
+  const proofContextInput = requestOptionalField("proofContext", "proofContext", "proof_context");
+  const proofContext = normalizeBoundSccpProofContext(
+    proofContextInput === SCCP_OPTIONAL_FIELD_MISSING ? input : proofContextInput,
+    "TRON SCCP proof context",
+    tronSccpDestinationBinding,
+    publicInputs.targetDomain,
+  );
+  const publicSignalWords = sccpGroth16Bn254PublicSignalWords({
+    publicInputs,
+    sourceDomain,
+    statementHash: proofContext.statementHash,
+    destinationBindingHash: proofContext.destinationBindingHash,
+  });
+  const publicSignalWordBytes = publicSignalWords.map((word, index) =>
+    hexToBytes(word, `publicSignalWords[${index}]`, 32),
+  );
+  return {
+    publicInputs,
+    publicInputsBytes,
+    bundleBytes,
+    sourceProofBytes,
+    sourceDomain,
+    backend,
+    proofContext,
+    publicSignalWords,
+    publicSignalWordBytes,
+  };
+};
+
+export const buildTronSccpProofRequest = (input) => {
+  const {
+    publicInputs,
+    publicInputsBytes,
+    bundleBytes,
+    sourceProofBytes,
+    sourceDomain,
+    backend,
+    proofContext,
+    publicSignalWords,
+    publicSignalWordBytes,
+  } = normalizeTronGroth16ProofRequest(input);
+  const statementHashBytes = hexToBytes(proofContext.statementHash, "statementHash", 32);
+  const destinationBindingHashBytes = hexToBytes(
+    proofContext.destinationBindingHash,
+    "destinationBindingHash",
+    32,
+  );
+  const requestHash = bytesToHex(
+    prefixedBlake2b(
+      SCCP_TRON_GROTH16_PROOF_REQUEST_PREFIX_V1,
+      concatBytes(
+        publicInputsBytes,
+        writeBytes(new Uint8Array(), bundleBytes),
+        writeBytes(new Uint8Array(), sourceProofBytes),
+        statementHashBytes,
+        destinationBindingHashBytes,
+        ...publicSignalWordBytes,
+      ),
+    ),
+  );
+  return immutableGroth16ProofRequest({
+    version: 1,
+    backend,
+    sourceDomain,
+    targetDomain: publicInputs.targetDomain,
+    publicInputs,
+    publicInputsBytes,
+    publicSignalWords,
+    bundleBytes,
+    sourceProofBytes,
+    proofContext,
+    statementHash: proofContext.statementHash,
+    destinationBinding: proofContext.destinationBinding,
+    destinationBindingHash: proofContext.destinationBindingHash,
+    requestHash,
+  });
+};
+
+const requireCanonicalTronProofRequest = (request) => {
+  if (!request || typeof request !== "object" || Array.isArray(request)) {
+    throw new TypeError("TRON SCCP proof request must be canonical");
+  }
+  try {
+    const expected = buildTronSccpProofRequest({
+      publicInputs: request.publicInputs,
+      bundleBytes: request.bundleBytes,
+      sourceProofBytes: request.sourceProofBytes,
+      statementHash: request.statementHash,
+      destinationBindingHash: request.destinationBindingHash,
+      destinationBinding: request.destinationBinding,
+      backend: request.backend,
+      sourceDomain: request.sourceDomain,
+    });
+    if (
+      JSON.stringify(groth16ProofRequestComparable(request)) !==
+      JSON.stringify(groth16ProofRequestComparable(expected))
+    ) {
+      throw new TypeError("TRON SCCP proof request must be canonical");
+    }
+  } catch (error) {
+    if (
+      error instanceof TypeError &&
+      error.message === "TRON SCCP proof request must be canonical"
+    ) {
+      throw error;
+    }
+    throw new TypeError("TRON SCCP proof request must be canonical");
+  }
+};
+
+const requireProductionTronProofRequest = (request) => {
+  requireCanonicalTronProofRequest(request);
+  if (request.version !== 1) {
+    throw new TypeError("TRON SCCP proof request version must be 1");
+  }
+  if (request.backend !== SCCP_TRON_GROTH16_BN254_PROOF_BACKEND_V1) {
+    throw new TypeError("TRON SCCP proof request backend must be tron-groth16-bn254-v1");
+  }
+  if (request.sourceDomain !== SCCP_DOMAIN_SORA) {
+    throw new TypeError("TRON SCCP production proofs must start from SORA");
+  }
+  if (
+    request.targetDomain !== request.publicInputs?.targetDomain ||
+    request.targetDomain !== SCCP_DOMAIN_TRON
+  ) {
+    throw new TypeError("TRON SCCP production proofs must target TRON");
+  }
+  requireProductionGroth16DestinationBinding(
+    request,
+    tronSccpDestinationBinding,
+    "TRON SCCP",
+  );
+  requireNonEmptyBytes(toBytes(request.bundleBytes, "bundleBytes"), "bundleBytes");
+  requireOptionalNonZeroBytes(
+    toBytes(request.sourceProofBytes, "sourceProofBytes"),
+    "sourceProofBytes",
+  );
+};
+
+const normalizeTronProofResult = (result, request) => {
+  if (!result || typeof result !== "object" || Array.isArray(result)) {
+    throw new TypeError("TRON SCCP proof result must be an object");
+  }
+  requireProductionTronProofRequest(request);
+  const proofBytes = toBytes(
+    strictResultField(result, "proofResult.proofBytes", "proofBytes", "proof_bytes", "proof"),
+    "proofBytes",
+  );
+  requireGroth16ProofBytesForContext(proofBytes, "proofBytes", {
+    publicInputs: request.publicInputs,
+    sourceDomain: request.sourceDomain,
+  });
+  requireOptionalResultProofBase64Matches(result, proofBytes);
+  const resultBackend = optionalResultField(result, "backend");
+  if (resultBackend !== SCCP_OPTIONAL_FIELD_MISSING) {
+    requireSuppliedResultBackendMatches(resultBackend, request.backend);
+  }
+  const resultRequestHash = strictOptionalResultField(
+    result,
+    "proofResult.requestHash",
+    "requestHash",
+    "request_hash",
+  );
+  if (resultRequestHash !== SCCP_OPTIONAL_FIELD_MISSING) {
+    requireSuppliedResultHashMatches(resultRequestHash, request.requestHash, "requestHash");
+  }
+  requireOptionalGroth16ResultMetadataMatches(result, request);
+  const envelopeHash = bytesToHex(
+    prefixedBlake2b(
+      SCCP_TRON_GROTH16_PROOF_ENVELOPE_PREFIX_V1,
+      concatBytes(hexToBytes(request.requestHash, "requestHash", 32), proofBytes),
+    ),
+  );
+  const resultEnvelopeHash = strictOptionalResultField(
+    result,
+    "proofResult.envelopeHash",
+    "envelopeHash",
+    "envelope_hash",
+  );
+  if (resultEnvelopeHash !== SCCP_OPTIONAL_FIELD_MISSING) {
+    requireSuppliedResultHashMatches(resultEnvelopeHash, envelopeHash, "envelopeHash");
+  }
+  return immutableGroth16ProofResult({
+    version: 1,
+    backend: request.backend,
+    proofBytes,
+    proofBase64: bytesToBase64(proofBytes),
+    publicInputs: request.publicInputs,
+    publicSignalWords: request.publicSignalWords,
+    bundleBytes: request.bundleBytes,
+    sourceProofBytes: request.sourceProofBytes,
+    proofContext: request.proofContext,
+    statementHash: request.statementHash,
+    destinationBinding: request.destinationBinding,
+    destinationBindingHash: request.destinationBindingHash,
+    requestHash: request.requestHash,
+    envelopeHash,
+  });
+};
+
+export function wrapTronSccpProofResult(proofBytes, request) {
+  return normalizeTronProofResult({ proofBytes }, request);
+}
+
+export function buildTronSccpSubmission(input) {
+  return buildGroth16ContractSubmission(input, {
+    backend: SCCP_TRON_GROTH16_BN254_PROOF_BACKEND_V1,
+    platformPayload: "tron_contract_call",
+    envelopeEncoding: SCCP_TRON_CONTRACT_CALL_ABI_TUPLE_V1,
+    sourceDomainLabel: "SORA",
+    targetDomainLabel: "TRON",
+    acceptedTargetDomains: [SCCP_DOMAIN_TRON],
+    envelopePrefix: SCCP_TRON_GROTH16_PROOF_ENVELOPE_PREFIX_V1,
+    proofRequestBuilder: buildTronSccpProofRequest,
+  });
+}
+
+export class TronSccpProver {
+  constructor(options = {}) {
+    if (!options || typeof options !== "object" || Array.isArray(options)) {
+      throw new TypeError("TronSccpProver options must be an object");
+    }
+    this.witnessProvider = strictOptionalConstructorOption(
+      options,
+      "TRON SCCP prover witnessProvider",
+      "witnessProvider",
+      "witness_provider",
+    );
+    this.proveFn = strictOptionalConstructorOption(
+      options,
+      "TRON SCCP prover prove",
+      "prove",
+      "proveFn",
+      "prove_fn",
+    );
+  }
+
+  async buildRequest(input, options = {}) {
+    const witness = await resolveSccpWitness(
+      this.witnessProvider,
+      input,
+      options,
+      "TRON SCCP",
+    );
+    return buildTronSccpProofRequest(witness);
+  }
+
+  async prove(input, options = {}) {
+    const request = await this.buildRequest(input, options);
+    if (typeof this.proveFn !== "function") {
+      const error = new Error(
+        "TRON SCCP Groth16 prover is not linked; provide a browser-safe prove function before generating production proofs",
+      );
+      error.code = "ERR_SCCP_TRON_PROVER_UNAVAILABLE";
+      throw error;
+    }
+    requireProductionTronProofRequest(request);
+    return normalizeTronProofResult(
+      await this.proveFn(immutableGroth16ProofRequest(request), options),
+      request,
+    );
+  }
+}
+
+const SCCP_SUBSTRATE_RUNTIME_TARGET_DOMAINS_V1 = new Set([
+  SCCP_DOMAIN_SORA_KUSAMA,
+  SCCP_DOMAIN_SORA_POLKADOT,
+  SCCP_DOMAIN_SORA2,
+]);
+
+const normalizeSubstrateRuntimeProofRequest = (input) => {
+  if (!input || typeof input !== "object" || Array.isArray(input)) {
+    throw new TypeError("Substrate SCCP proof request input must be an object");
+  }
+  const requestField = (label, ...names) => strictResultField(input, label, ...names);
+  const requestOptionalField = (label, ...names) =>
+    strictOptionalResultField(input, label, ...names);
+  const publicInputs = normalizeSccpMessageTransparentPublicInputs(
+    requestField("publicInputs", "publicInputs", "public_inputs"),
+  );
+  const publicInputsBytes = canonicalSccpMessageTransparentPublicInputsBytes(publicInputs);
+  const bundleBytes = requireNonEmptyBytes(
+    toBytes(requestField("bundleBytes", "bundleBytes", "bundle_bytes"), "bundleBytes"),
+    "bundleBytes",
+  );
+  const sourceProofInput = requestOptionalField(
+    "sourceProofBytes",
+    "sourceProofBytes",
+    "source_proof_bytes",
+  );
+  const sourceProofBytes = requireOptionalNonZeroBytes(
+    sourceProofInput !== SCCP_OPTIONAL_FIELD_MISSING
+      ? toBytes(sourceProofInput, "sourceProofBytes")
+      : new Uint8Array(),
+    "sourceProofBytes",
+  );
+  const sourceDomainInput = requestOptionalField("sourceDomain", "sourceDomain", "source_domain");
+  const sourceDomain =
+    sourceDomainInput === SCCP_OPTIONAL_FIELD_MISSING
+      ? normalizeSccpDomainId(SCCP_DOMAIN_SORA, "sourceDomain")
+      : normalizeSccpDomainId(sourceDomainInput, "sourceDomain");
+  const backendInput = requestOptionalField("backend", "backend");
+  const backend =
+    backendInput === SCCP_OPTIONAL_FIELD_MISSING || backendInput === null
+      ? SCCP_SUBSTRATE_RUNTIME_PROOF_BACKEND_V1
+      : backendInput;
+  if (backend !== SCCP_SUBSTRATE_RUNTIME_PROOF_BACKEND_V1) {
+    throw new TypeError("backend must be substrate-runtime-v1");
+  }
+  if (!SCCP_SUBSTRATE_RUNTIME_TARGET_DOMAINS_V1.has(publicInputs.targetDomain)) {
+    throw new RangeError(
+      "publicInputs.targetDomain must be a Substrate-family SCCP domain",
+    );
+  }
+  if (sourceDomain !== SCCP_DOMAIN_SORA) {
+    throw new RangeError("sourceDomain must be SORA");
+  }
+  if (sourceDomain === publicInputs.targetDomain) {
+    throw new RangeError("sourceDomain and publicInputs.targetDomain must differ");
+  }
+  const proofContextInput = requestOptionalField("proofContext", "proofContext", "proof_context");
+  const proofContext = normalizeSccpProofContext(
+    proofContextInput === SCCP_OPTIONAL_FIELD_MISSING ? input : proofContextInput,
+    "Substrate SCCP proof context",
+  );
+  return {
+    publicInputs,
+    publicInputsBytes,
+    bundleBytes,
+    sourceProofBytes,
+    sourceDomain,
+    backend,
+    proofContext,
+  };
+};
+
+export const buildSubstrateSccpProofRequest = (input) => {
+  const {
+    publicInputs,
+    publicInputsBytes,
+    bundleBytes,
+    sourceProofBytes,
+    sourceDomain,
+    backend,
+    proofContext,
+  } = normalizeSubstrateRuntimeProofRequest(input);
+  const requestHash = bytesToHex(
+    prefixedBlake2b(
+      SCCP_SUBSTRATE_RUNTIME_PROOF_REQUEST_PREFIX_V1,
+      concatBytes(
+        writeU32Le(new Uint8Array(), sourceDomain),
+        publicInputsBytes,
+        writeBytes(new Uint8Array(), bundleBytes),
+        writeBytes(new Uint8Array(), sourceProofBytes),
+        hexToBytes(proofContext.statementHash, "statementHash", 32),
+        hexToBytes(proofContext.destinationBindingHash, "destinationBindingHash", 32),
+      ),
+    ),
+  );
+  return immutableSubstrateProofRequest({
+    version: 1,
+    backend,
+    sourceDomain,
+    targetDomain: publicInputs.targetDomain,
+    publicInputs,
+    publicInputsBytes,
+    bundleBytes,
+    sourceProofBytes,
+    proofContext,
+    statementHash: proofContext.statementHash,
+    destinationBindingHash: proofContext.destinationBindingHash,
+    requestHash,
+  });
+};
+
+const substrateProofRequestComparable = (request) => {
+  const publicInputs = request.publicInputs ?? {};
+  const proofContext = request.proofContext ?? {};
+  return {
+    version: request.version,
+    backend: request.backend,
+    sourceDomain: request.sourceDomain,
+    targetDomain: request.targetDomain,
+    publicInputs: {
+      messageId: publicInputs.messageId,
+      payloadHash: publicInputs.payloadHash,
+      targetDomain: publicInputs.targetDomain,
+      commitmentRoot: publicInputs.commitmentRoot,
+      finalityHeight: publicInputs.finalityHeight,
+      finalityBlockHash: publicInputs.finalityBlockHash,
+    },
+    publicInputsBytes: bytesToHex(toBytes(request.publicInputsBytes, "publicInputsBytes")),
+    bundleBytes: bytesToHex(toBytes(request.bundleBytes, "bundleBytes")),
+    sourceProofBytes: bytesToHex(toBytes(request.sourceProofBytes, "sourceProofBytes")),
+    proofContext: {
+      version: proofContext.version,
+      statementHash: proofContext.statementHash,
+      destinationBindingHash: proofContext.destinationBindingHash,
+    },
+    statementHash: request.statementHash,
+    destinationBindingHash: request.destinationBindingHash,
+    requestHash: request.requestHash,
+  };
+};
+
+const requireCanonicalSubstrateProofRequest = (request) => {
+  if (!request || typeof request !== "object" || Array.isArray(request)) {
+    throw new TypeError("Substrate SCCP proof request must be canonical");
+  }
+  try {
+    const expected = buildSubstrateSccpProofRequest({
+      publicInputs: request.publicInputs,
+      bundleBytes: request.bundleBytes,
+      sourceProofBytes: request.sourceProofBytes,
+      statementHash: request.statementHash,
+      destinationBindingHash: request.destinationBindingHash,
+      backend: request.backend,
+      sourceDomain: request.sourceDomain,
+    });
+    if (
+      JSON.stringify(substrateProofRequestComparable(request)) !==
+      JSON.stringify(substrateProofRequestComparable(expected))
+    ) {
+      throw new TypeError("Substrate SCCP proof request must be canonical");
+    }
+  } catch (error) {
+    if (
+      error instanceof TypeError &&
+      error.message === "Substrate SCCP proof request must be canonical"
+    ) {
+      throw error;
+    }
+    throw new TypeError("Substrate SCCP proof request must be canonical");
+  }
+};
+
+const requireProductionSubstrateProofRequest = (request) => {
+  requireCanonicalSubstrateProofRequest(request);
+  if (request.version !== 1) {
+    throw new TypeError("Substrate SCCP proof request version must be 1");
+  }
+  if (request.backend !== SCCP_SUBSTRATE_RUNTIME_PROOF_BACKEND_V1) {
+    throw new TypeError("Substrate SCCP proof request backend must be substrate-runtime-v1");
+  }
+  if (request.sourceDomain !== SCCP_DOMAIN_SORA) {
+    throw new TypeError("Substrate SCCP production proofs must start from SORA");
+  }
+  if (
+    request.targetDomain !== request.publicInputs?.targetDomain ||
+    !SCCP_SUBSTRATE_RUNTIME_TARGET_DOMAINS_V1.has(request.targetDomain)
+  ) {
+    throw new TypeError(
+      "Substrate SCCP production proofs must target a Substrate-family domain",
+    );
+  }
+  requireNonEmptyBytes(toBytes(request.bundleBytes, "bundleBytes"), "bundleBytes");
+  requireOptionalNonZeroBytes(
+    toBytes(request.sourceProofBytes, "sourceProofBytes"),
+    "sourceProofBytes",
+  );
+};
+
+const normalizeSubstrateProofResult = (result, request) => {
+  if (!result || typeof result !== "object" || Array.isArray(result)) {
+    throw new TypeError("Substrate SCCP proof result must be an object");
+  }
+  requireProductionSubstrateProofRequest(request);
+  const proofBytes = toBytes(
+    strictResultField(result, "proofResult.proofBytes", "proofBytes", "proof_bytes", "proof"),
+    "proofBytes",
+  );
+  requireNativeRecursiveProofBytes(proofBytes, "proofBytes");
+  requireOptionalResultProofBase64Matches(result, proofBytes);
+  requireOptionalResultBackendMatches(result.backend, request.backend);
+  const resultRequestHash = strictOptionalResultField(
+    result,
+    "proofResult.requestHash",
+    "requestHash",
+    "request_hash",
+  );
+  if (resultRequestHash !== SCCP_OPTIONAL_FIELD_MISSING) {
+    requireSuppliedResultHashMatches(resultRequestHash, request.requestHash, "requestHash");
+  }
+  requireOptionalTransparentResultMetadataMatches(result, request);
+  const envelopeHash = bytesToHex(
+    prefixedBlake2b(
+      SCCP_SUBSTRATE_RUNTIME_PROOF_ENVELOPE_PREFIX_V1,
+      concatBytes(hexToBytes(request.requestHash, "requestHash", 32), proofBytes),
+    ),
+  );
+  const resultEnvelopeHash = strictOptionalResultField(
+    result,
+    "proofResult.envelopeHash",
+    "envelopeHash",
+    "envelope_hash",
+  );
+  if (resultEnvelopeHash !== SCCP_OPTIONAL_FIELD_MISSING) {
+    requireSuppliedResultHashMatches(resultEnvelopeHash, envelopeHash, "envelopeHash");
+  }
+  return immutableSubstrateProofResult({
+    version: 1,
+    backend: request.backend,
+    proofBytes,
+    proofBase64: bytesToBase64(proofBytes),
+    publicInputs: request.publicInputs,
+    bundleBytes: request.bundleBytes,
+    sourceProofBytes: request.sourceProofBytes,
+    proofContext: request.proofContext,
+    statementHash: request.statementHash,
+    destinationBindingHash: request.destinationBindingHash,
+    requestHash: request.requestHash,
+    envelopeHash,
+  });
+};
+
+export function wrapSubstrateSccpProofResult(proofBytes, request) {
+  return normalizeSubstrateProofResult({ proofBytes }, request);
+}
+
+export function buildSubstrateSccpSubmission(input) {
+  if (!input || typeof input !== "object" || Array.isArray(input)) {
+    throw new TypeError("Substrate SCCP submission input must be an object");
+  }
+  const proofResultInput = strictOptionalResultField(input, "proofResult", "proofResult", "proof_result");
+  const proofResult =
+    proofResultInput === SCCP_OPTIONAL_FIELD_MISSING || proofResultInput === null
+      ? null
+      : proofResultInput;
+  if (
+    proofResult !== null &&
+    (!proofResult || typeof proofResult !== "object" || Array.isArray(proofResult))
+  ) {
+    throw new TypeError("proofResult must be a wrapped Substrate SCCP proof result");
+  }
+  if (proofResult !== null) {
+    const resultBackend = optionalResultField(proofResult, "backend");
+    if (resultBackend !== SCCP_OPTIONAL_FIELD_MISSING) {
+      requireOptionalResultBackendMatches(
+        resultBackend,
+        SCCP_SUBSTRATE_RUNTIME_PROOF_BACKEND_V1,
+      );
+    }
+  }
+
+  const inputPublicInputs = strictOptionalResultField(input, "publicInputs", "publicInputs", "public_inputs");
+  const resultPublicInputs =
+    proofResult === null
+      ? SCCP_OPTIONAL_FIELD_MISSING
+      : strictOptionalResultField(proofResult, "proofResult.publicInputs", "publicInputs", "public_inputs");
+  const publicInputs = normalizeSccpMessageTransparentPublicInputs(
+    inputPublicInputs !== SCCP_OPTIONAL_FIELD_MISSING
+      ? inputPublicInputs
+      : resultPublicInputs,
+  );
+  if (!SCCP_SUBSTRATE_RUNTIME_TARGET_DOMAINS_V1.has(publicInputs.targetDomain)) {
+    throw new TypeError(
+      "Substrate SCCP submissions must target a Substrate-family domain",
+    );
+  }
+  if (
+    resultPublicInputs !== SCCP_OPTIONAL_FIELD_MISSING &&
+    JSON.stringify(normalizeSccpMessageTransparentPublicInputs(resultPublicInputs)) !==
+      JSON.stringify(publicInputs)
+  ) {
+    throw new TypeError("publicInputs must match proofResult.publicInputs");
+  }
+
+  const expectedPublicInputsBytes =
+    canonicalSccpMessageTransparentPublicInputsBytes(publicInputs);
+  const publicInputsBytesInput = strictOptionalResultField(
+    input,
+    "publicInputsBytes",
+    "publicInputsBytes",
+    "public_inputs_bytes",
+  );
+  const publicInputsBytes =
+    publicInputsBytesInput === SCCP_OPTIONAL_FIELD_MISSING
+      ? expectedPublicInputsBytes
+      : toBytes(publicInputsBytesInput, "publicInputsBytes");
+  if (!bytesEqual(publicInputsBytes, expectedPublicInputsBytes)) {
+    throw new TypeError("publicInputsBytes must match canonical SCCP transparent public inputs");
+  }
+
+  const inputBundle = strictOptionalResultField(input, "bundleBytes", "bundleBytes", "bundle_bytes");
+  const resultBundle =
+    proofResult === null
+      ? SCCP_OPTIONAL_FIELD_MISSING
+      : strictOptionalResultField(proofResult, "proofResult.bundleBytes", "bundleBytes", "bundle_bytes");
+  const bundleBytes = requireNonEmptyBytes(
+    toBytes(
+      inputBundle !== SCCP_OPTIONAL_FIELD_MISSING ? inputBundle : resultBundle,
+      "bundleBytes",
+    ),
+    "bundleBytes",
+  );
+  if (
+    resultBundle !== SCCP_OPTIONAL_FIELD_MISSING &&
+    !bytesEqual(bundleBytes, toBytes(resultBundle, "proofResult.bundleBytes"))
+  ) {
+    throw new TypeError("bundleBytes must match proofResult.bundleBytes");
+  }
+
+  const inputSourceProof = strictOptionalResultField(
+    input,
+    "sourceProofBytes",
+    "sourceProofBytes",
+    "source_proof_bytes",
+  );
+  const resultSourceProof =
+    proofResult === null
+      ? SCCP_OPTIONAL_FIELD_MISSING
+      : strictOptionalResultField(
+          proofResult,
+          "proofResult.sourceProofBytes",
+          "sourceProofBytes",
+          "source_proof_bytes",
+        );
+  const sourceProofBytes = requireOptionalNonZeroBytes(
+    inputSourceProof !== SCCP_OPTIONAL_FIELD_MISSING
+      ? toBytes(inputSourceProof, "sourceProofBytes")
+      : resultSourceProof !== SCCP_OPTIONAL_FIELD_MISSING
+        ? toBytes(resultSourceProof, "proofResult.sourceProofBytes")
+        : new Uint8Array(),
+    "sourceProofBytes",
+  );
+  if (
+    resultSourceProof !== SCCP_OPTIONAL_FIELD_MISSING &&
+    !bytesEqual(
+      sourceProofBytes,
+      toBytes(resultSourceProof, "proofResult.sourceProofBytes"),
+    )
+  ) {
+    throw new TypeError("sourceProofBytes must match proofResult.sourceProofBytes");
+  }
+
+  const sourceDomainInput = strictOptionalResultField(input, "sourceDomain", "sourceDomain", "source_domain");
+  const sourceDomain =
+    sourceDomainInput === SCCP_OPTIONAL_FIELD_MISSING
+      ? normalizeSccpDomainId(SCCP_DOMAIN_SORA, "sourceDomain")
+      : normalizeSccpDomainId(sourceDomainInput, "sourceDomain");
+  if (sourceDomain !== SCCP_DOMAIN_SORA) {
+    throw new TypeError("Substrate SCCP submissions must start from SORA");
+  }
+
+  const inputProofContext = strictOptionalResultField(input, "proofContext", "proofContext", "proof_context");
+  const resultProofContext =
+    proofResult === null
+      ? SCCP_OPTIONAL_FIELD_MISSING
+      : strictOptionalResultField(proofResult, "proofResult.proofContext", "proofContext", "proof_context");
+  const proofContextSource =
+    inputProofContext !== SCCP_OPTIONAL_FIELD_MISSING
+      ? inputProofContext
+      : resultProofContext !== SCCP_OPTIONAL_FIELD_MISSING
+        ? resultProofContext
+        : input;
+  if (
+    !proofContextSource ||
+    typeof proofContextSource !== "object" ||
+    Array.isArray(proofContextSource)
+  ) {
+    throw new TypeError("proofContext must be an object");
+  }
+  const inputStatementHash = strictOptionalResultField(input, "statementHash", "statementHash", "statement_hash");
+  const contextStatementHash = strictOptionalResultField(
+    proofContextSource,
+    "proofContext.statementHash",
+    "statementHash",
+    "statement_hash",
+  );
+  const resultStatementHash =
+    proofResult === null
+      ? SCCP_OPTIONAL_FIELD_MISSING
+      : strictOptionalResultField(proofResult, "proofResult.statementHash", "statementHash", "statement_hash");
+  const statementHash = normalizeNonZeroHex32(
+    inputStatementHash !== SCCP_OPTIONAL_FIELD_MISSING
+      ? inputStatementHash
+      : contextStatementHash !== SCCP_OPTIONAL_FIELD_MISSING
+        ? contextStatementHash
+        : resultStatementHash,
+    "statementHash",
+  );
+  if (resultStatementHash !== SCCP_OPTIONAL_FIELD_MISSING) {
+    requireSuppliedResultHashMatches(resultStatementHash, statementHash, "statementHash");
+  }
+
+  const inputDestinationBindingHash = strictOptionalResultField(
+    input,
+    "destinationBindingHash",
+    "destinationBindingHash",
+    "destination_binding_hash",
+  );
+  const contextDestinationBindingHash = strictOptionalResultField(
+    proofContextSource,
+    "proofContext.destinationBindingHash",
+    "destinationBindingHash",
+    "destination_binding_hash",
+  );
+  const resultDestinationBindingHash =
+    proofResult === null
+      ? SCCP_OPTIONAL_FIELD_MISSING
+      : strictOptionalResultField(
+          proofResult,
+          "proofResult.destinationBindingHash",
+          "destinationBindingHash",
+          "destination_binding_hash",
+        );
+  const destinationBindingHash = normalizeNonZeroHex32(
+    inputDestinationBindingHash !== SCCP_OPTIONAL_FIELD_MISSING
+      ? inputDestinationBindingHash
+      : contextDestinationBindingHash !== SCCP_OPTIONAL_FIELD_MISSING
+        ? contextDestinationBindingHash
+        : resultDestinationBindingHash,
+    "destinationBindingHash",
+  );
+  if (resultDestinationBindingHash !== SCCP_OPTIONAL_FIELD_MISSING) {
+    requireSuppliedResultHashMatches(
+      resultDestinationBindingHash,
+      destinationBindingHash,
+      "destinationBindingHash",
+    );
+  }
+
+  const proofBytesInput = strictOptionalResultField(input, "proofBytes", "proofBytes", "proof_bytes");
+  const resultProofBytes =
+    proofResult === null
+      ? SCCP_OPTIONAL_FIELD_MISSING
+      : strictOptionalResultField(
+          proofResult,
+          "proofResult.proofBytes",
+          "proofBytes",
+          "proof_bytes",
+          "proof",
+        );
+  const proofBytes = requireNativeRecursiveProofBytes(
+    toBytes(
+      proofBytesInput !== SCCP_OPTIONAL_FIELD_MISSING ? proofBytesInput : resultProofBytes,
+      "proofBytes",
+    ),
+    "proofBytes",
+  );
+  if (
+    resultProofBytes !== SCCP_OPTIONAL_FIELD_MISSING &&
+    !bytesEqual(proofBytes, toBytes(resultProofBytes, "proofResult.proofBytes"))
+  ) {
+    throw new TypeError("proofBytes must match proofResult.proofBytes");
+  }
+
+  const expectedRequest = buildSubstrateSccpProofRequest({
+    publicInputs,
+    bundleBytes,
+    sourceProofBytes,
+    statementHash,
+    destinationBindingHash,
+    sourceDomain,
+  });
+  if (proofResult !== null) {
+    const wrappedResult = normalizeSubstrateProofResult(proofResult, expectedRequest);
+    if (!bytesEqual(proofBytes, wrappedResult.proofBytes)) {
+      throw new TypeError("proofBytes must match proofResult.proofBytes");
+    }
+  }
+
+  const runtimeCall = encodeSubstrateSccpRuntimeCall([
+    proofBytes,
+    publicInputsBytes,
+    bundleBytes,
+  ]);
+  const argumentsValue = [
+    { key: "proof_bytes", encoding: "raw_bytes", bytes: bytesToHex(proofBytes) },
+    { key: "public_inputs", encoding: "raw_bytes", bytes: bytesToHex(publicInputsBytes) },
+    { key: "bundle_bytes", encoding: "raw_bytes", bytes: bytesToHex(bundleBytes) },
+  ];
+  const submission = {
+    version: 1,
+    proofFamily: SCCP_STARK_FRI_PROOF_FAMILY_V1,
+    verifierBackend: SCCP_SUBSTRATE_RUNTIME_PROOF_BACKEND_V1,
+    platformPayload: "substrate_runtime_call",
+    envelopeEncoding: SCCP_SUBSTRATE_RUNTIME_CALL_SCALE_V1,
+    submissionKind: "runtime_call",
+    verifierEntrypoint: SCCP_SUBSTRATE_SUBMIT_MESSAGE_PROOF_ENTRYPOINT_V1,
+    sourceDomain,
+    targetDomain: publicInputs.targetDomain,
+    publicInputs: Object.freeze({ ...publicInputs }),
+    proofContext: Object.freeze({ ...expectedRequest.proofContext }),
+    statementHash,
+    destinationBindingHash,
+    requestHash: expectedRequest.requestHash,
+    arguments: Object.freeze(argumentsValue.map((argument) => Object.freeze({ ...argument }))),
+    runtimeCallHex: bytesToHex(runtimeCall),
+    envelopeHex: bytesToHex(runtimeCall),
+  };
+  defineCopiedByteField(submission, "proofBytes", proofBytes);
+  defineCopiedByteField(submission, "publicInputsBytes", publicInputsBytes);
+  defineCopiedByteField(submission, "bundleBytes", bundleBytes);
+  defineCopiedByteField(submission, "runtimeCall", runtimeCall);
+  defineCopiedByteField(submission, "envelopeBytes", runtimeCall);
+  return Object.freeze(submission);
+}
+
+export class SubstrateSccpProver {
+  constructor(options = {}) {
+    if (!options || typeof options !== "object" || Array.isArray(options)) {
+      throw new TypeError("SubstrateSccpProver options must be an object");
+    }
+    this.witnessProvider = strictOptionalConstructorOption(
+      options,
+      "Substrate SCCP prover witnessProvider",
+      "witnessProvider",
+      "witness_provider",
+    );
+    this.proveFn = strictOptionalConstructorOption(
+      options,
+      "Substrate SCCP prover prove",
+      "prove",
+      "proveFn",
+      "prove_fn",
+    );
+  }
+
+  async buildRequest(input, options = {}) {
+    const witness = await resolveSccpWitness(
+      this.witnessProvider,
+      input,
+      options,
+      "Substrate SCCP",
+    );
+    return buildSubstrateSccpProofRequest(witness);
+  }
+
+  async prove(input, options = {}) {
+    const request = await this.buildRequest(input, options);
+    if (typeof this.proveFn !== "function") {
+      const error = new Error(
+        "Substrate SCCP runtime prover is not linked; provide a browser-safe prove function before generating production proofs",
+      );
+      error.code = "ERR_SCCP_SUBSTRATE_PROVER_UNAVAILABLE";
+      throw error;
+    }
+    requireProductionSubstrateProofRequest(request);
+    return normalizeSubstrateProofResult(
+      await this.proveFn(immutableSubstrateProofRequest(request), options),
+      request,
+    );
+  }
+}
+
+const normalizeSccpInclusionBranch = (
+  value,
+  label = "inclusionBranch",
+  { requireNonEmpty = false } = {},
+) => {
+  if (!Array.isArray(value)) {
+    throw new TypeError(`${label} must be an array`);
+  }
+  if (requireNonEmpty && value.length === 0) {
+    throw new TypeError(`${label} must not be empty`);
+  }
+  if (value.length > SCCP_MAX_SOURCE_MERKLE_BRANCH_NODES) {
+    throw new RangeError(`${label} must contain at most ${SCCP_MAX_SOURCE_MERKLE_BRANCH_NODES} entries`);
+  }
+  return value.map((sibling, index) => {
+    const bytes = toBytes(sibling, `${label}[${index}]`);
+    if (bytes.length !== 32) {
+      throw new TypeError(`${label}[${index}] must be 32 bytes`);
+    }
+    return bytes;
+  });
+};
+
+const normalizeSccpByteVectors = (
+  value,
+  label,
+  { maxCount = 0xffffffff, maxBytes = 0xffffffff, requireNonEmpty = false } = {},
+) => {
+  if (!Array.isArray(value)) {
+    throw new TypeError(`${label} must be an array`);
+  }
+  if (requireNonEmpty && value.length === 0) {
+    throw new TypeError(`${label} must not be empty`);
+  }
+  if (value.length > maxCount) {
+    throw new RangeError(`${label} must contain at most ${maxCount} entries`);
+  }
+  return value.map((entry, index) => {
+    const bytes = toBytes(entry, `${label}[${index}]`);
+    if (bytes.length === 0) {
+      throw new TypeError(`${label}[${index}] must not be empty`);
+    }
+    if (bytes.length > maxBytes) {
+      throw new RangeError(`${label}[${index}] must be at most ${maxBytes} bytes`);
+    }
+    return bytes;
+  });
+};
+
+const normalizeSolanaInclusionBranch = (value, label = "inclusionBranch") =>
+  normalizeSccpInclusionBranch(value, label);
+
+const normalizeSccpDomainId = (value, label, fallback) => {
+  const selected = value ?? fallback;
+  let numeric;
+  if (typeof selected === "number") {
+    if (!Number.isInteger(selected)) {
+      throw new RangeError(`${label} must be a u32 domain id`);
+    }
+    numeric = selected;
+  } else if (typeof selected === "bigint") {
+    if (selected < 0n || selected > 0xffffffffn) {
+      throw new RangeError(`${label} must be a u32 domain id`);
+    }
+    numeric = Number(selected);
+  } else if (typeof selected === "string" && isCanonicalDecimalText(selected)) {
+    numeric = Number(selected);
+  } else {
+    throw new TypeError(`${label} must be a u32 domain id`);
+  }
+  if (numeric < 0 || numeric > 0xffffffff) {
+    throw new RangeError(`${label} must be a u32 domain id`);
+  }
+  return numeric;
+};
+
+const normalizeOptionalSccpDomainId = (input, label, fallback, ...names) => {
+  const domainInput = optionalResultField(input, ...names);
+  if (domainInput === SCCP_OPTIONAL_FIELD_MISSING) {
+    return normalizeSccpDomainId(fallback, label);
+  }
+  if (domainInput === null || domainInput === undefined) {
+    throw new TypeError(`${label} must be a u32 domain id`);
+  }
+  return normalizeSccpDomainId(domainInput, label);
+};
+
+const writeSccpH256Branch = (target, inclusionBranch) => {
+  let out = writeU32Le(target, inclusionBranch.length);
+  for (const sibling of inclusionBranch) {
+    out = concatBytes(out, sibling);
+  }
+  return out;
+};
+
+const sszHashNode = (left, right) => sha256(concatBytes(left, right));
+
+const sszMerkleizeChunks = (inputChunks) => {
+  let chunks = inputChunks.map((chunk) => {
+    if (chunk.length !== 32) throw new TypeError("SSZ chunk must be 32 bytes");
+    return chunk;
+  });
+  if (chunks.length === 0) return new Uint8Array(32);
+  let paddedLength = 1;
+  while (paddedLength < chunks.length) paddedLength *= 2;
+  while (chunks.length < paddedLength) chunks.push(new Uint8Array(32));
+  while (chunks.length > 1) {
+    const next = [];
+    for (let index = 0; index < chunks.length; index += 2) {
+      next.push(sszHashNode(chunks[index], chunks[index + 1]));
+    }
+    chunks = next;
+  }
+  return chunks[0];
+};
+
+const readMinimalBeU64 = (bytes, label) => {
+  if (bytes.length === 0) return 0n;
+  if (bytes.length > 8 || (bytes.length > 1 && bytes[0] === 0)) {
+    throw new TypeError(`${label} must be a canonical RLP u64`);
+  }
+  let out = 0n;
+  for (const byte of bytes) out = (out << 8n) | BigInt(byte);
+  return out;
+};
+
+const sszU64Chunk = (value, label = "u64") => {
+  const out = new Uint8Array(32);
+  new DataView(out.buffer).setBigUint64(0, normalizeUnsignedBigInt(value, label), true);
+  return out;
+};
+
+const sszU64ChunkFromRlp = (bytes, label) => sszU64Chunk(readMinimalBeU64(bytes, label), label);
+
+const sszU256ChunkFromRlp = (bytes, label) => {
+  if (bytes.length > 32 || (bytes.length > 1 && bytes[0] === 0)) {
+    throw new TypeError(`${label} must be a canonical RLP uint256`);
+  }
+  const out = new Uint8Array(32);
+  for (let index = 0; index < bytes.length; index += 1) {
+    out[index] = bytes[bytes.length - 1 - index];
+  }
+  return out;
+};
+
+const sszByteVectorRoot = (bytes, expectedLength, label) => {
+  if (bytes.length !== expectedLength) {
+    throw new TypeError(`${label} must be ${expectedLength} bytes`);
+  }
+  const chunks = [];
+  for (let offset = 0; offset < bytes.length; offset += 32) {
+    const chunk = new Uint8Array(32);
+    chunk.set(bytes.slice(offset, offset + 32));
+    chunks.push(chunk);
+  }
+  return sszMerkleizeChunks(chunks);
+};
+
+const sszMixInLength = (root, length) => {
+  const lengthChunk = new Uint8Array(32);
+  new DataView(lengthChunk.buffer).setBigUint64(0, BigInt(length), true);
+  return sszHashNode(root, lengthChunk);
+};
+
+const sszByteListRoot = (bytes, maxLength, label) => {
+  if (bytes.length > maxLength) {
+    throw new RangeError(`${label} must be at most ${maxLength} bytes`);
+  }
+  const limitChunks = Math.max(1, Math.ceil(maxLength / 32));
+  const chunks = [];
+  for (let offset = 0; offset < bytes.length; offset += 32) {
+    const chunk = new Uint8Array(32);
+    chunk.set(bytes.slice(offset, offset + 32));
+    chunks.push(chunk);
+  }
+  while (chunks.length < limitChunks) chunks.push(new Uint8Array(32));
+  return sszMixInLength(sszMerkleizeChunks(chunks), bytes.length);
+};
+
+const sszMerkleRootFromBranch = (leaf, leafIndex, branch, label) => {
+  let current = leaf;
+  let index = leafIndex;
+  for (const [branchIndex, sibling] of branch.entries()) {
+    if (sibling.length !== 32) {
+      throw new TypeError(`${label}[${branchIndex}] must be 32 bytes`);
+    }
+    current =
+      index & 1n ? sszHashNode(sibling, current) : sszHashNode(current, sibling);
+    index >>= 1n;
+  }
+  return current;
+};
+
+export function ethExecutionPayloadHeaderRootFromRlp(headerRlp, options = {}) {
+  const bytes = toBytes(headerRlp, "headerRlp");
+  const fields = rlpListByteFields(bytes, "headerRlp");
+  if (fields.length < 19) {
+    throw new TypeError("headerRlp must include Deneb/Fulu execution payload fields");
+  }
+  const root = sszMerkleizeChunks([
+    sszByteVectorRoot(fields[0], 32, "parentHash"),
+    sszByteVectorRoot(fields[2], 20, "feeRecipient"),
+    sszByteVectorRoot(fields[3], 32, "stateRoot"),
+    sszByteVectorRoot(fields[5], 32, "receiptsRoot"),
+    sszByteVectorRoot(fields[6], 256, "logsBloom"),
+    sszByteVectorRoot(fields[13], 32, "prevRandao"),
+    sszU64ChunkFromRlp(fields[8], "blockNumber"),
+    sszU64ChunkFromRlp(fields[9], "gasLimit"),
+    sszU64ChunkFromRlp(fields[10], "gasUsed"),
+    sszU64ChunkFromRlp(fields[11], "timestamp"),
+    sszByteListRoot(fields[12], 32, "extraData"),
+    sszU256ChunkFromRlp(fields[15], "baseFeePerGas"),
+    keccak_256(bytes),
+    sszByteVectorRoot(fields[4], 32, "transactionsRoot"),
+    sszByteVectorRoot(fields[16], 32, "withdrawalsRoot"),
+    sszU64ChunkFromRlp(fields[17], "blobGasUsed"),
+    sszU64ChunkFromRlp(fields[18], "excessBlobGas"),
+  ]);
+  return bytesToHex(root, options.prefix !== false);
+}
+
+export function ethBeaconBodyRootFromExecutionPayloadBranch(
+  executionPayloadHeaderRoot,
+  executionPayloadBranch,
+  options = {},
+) {
+  const root = hexToBytes(executionPayloadHeaderRoot, "executionPayloadHeaderRoot", 32);
+  const branch = normalizeSccpInclusionBranch(executionPayloadBranch, "executionPayloadBranch");
+  if (branch.length !== SCCP_ETH_EXECUTION_PAYLOAD_BODY_BRANCH_DEPTH) {
+    throw new TypeError(
+      `executionPayloadBranch must contain ${SCCP_ETH_EXECUTION_PAYLOAD_BODY_BRANCH_DEPTH} siblings`,
+    );
+  }
+  return bytesToHex(
+    sszMerkleRootFromBranch(
+      root,
+      SCCP_ETH_EXECUTION_PAYLOAD_BODY_FIELD_INDEX,
+      branch,
+      "executionPayloadBranch",
+    ),
+    options.prefix !== false,
+  );
+}
+
+export function ethBeaconBlockHeaderRoot(input, options = {}) {
+  if (!input || typeof input !== "object" || Array.isArray(input)) {
+    throw new TypeError("ETH beacon block header input must be an object");
+  }
+  const root = sszMerkleizeChunks([
+    sszU64Chunk(strictResultField(input, "slot", "slot", "beaconSlot", "beacon_slot"), "slot"),
+    sszU64Chunk(
+      strictResultField(
+        input,
+        "proposerIndex",
+        "proposerIndex",
+        "proposer_index",
+        "beaconProposerIndex",
+        "beacon_proposer_index",
+      ),
+      "proposerIndex",
+    ),
+    hexToBytes(
+      strictResultField(
+        input,
+        "parentRoot",
+        "parentRoot",
+        "parent_root",
+        "beaconParentRoot",
+        "beacon_parent_root",
+      ),
+      "parentRoot",
+      32,
+    ),
+    hexToBytes(
+      strictResultField(input, "stateRoot", "stateRoot", "state_root", "beaconStateRoot", "beacon_state_root"),
+      "stateRoot",
+      32,
+    ),
+    hexToBytes(
+      strictResultField(input, "bodyRoot", "bodyRoot", "body_root", "beaconBodyRoot", "beacon_body_root"),
+      "bodyRoot",
+      32,
+    ),
+  ]);
+  return bytesToHex(root, options.prefix !== false);
+}
+
+export function canonicalEvmSccpReceiptProofBytes(input) {
+  if (!input || typeof input !== "object" || Array.isArray(input)) {
+    throw new TypeError("EVM SCCP receipt proof input must be an object");
+  }
+  const sourceDomainInput = strictOptionalResultField(input, "sourceDomain", "sourceDomain", "source_domain");
+  const sourceDomain =
+    sourceDomainInput === SCCP_OPTIONAL_FIELD_MISSING
+      ? normalizeSccpDomainId(SCCP_DOMAIN_ETH, "sourceDomain")
+      : normalizeSccpDomainId(sourceDomainInput, "sourceDomain");
+  if (sourceDomain !== SCCP_DOMAIN_ETH) {
+    throw new RangeError("sourceDomain must be ETH");
+  }
+  const sourceEventDigest = hexToBytes(
+    strictResultField(input, "sourceEventDigest", "sourceEventDigest", "source_event_digest"),
+    "sourceEventDigest",
+    32,
+  );
+  const beaconSlot = normalizeUnsignedBigInt(
+    strictResultField(input, "beaconSlot", "beaconSlot", "beacon_slot"),
+    "beaconSlot",
+  );
+  const executionBlockNumber = normalizeUnsignedBigInt(
+    strictResultField(
+      input,
+      "executionBlockNumber",
+      "executionBlockNumber",
+      "execution_block_number",
+      "finalityHeight",
+      "finality_height",
+    ),
+    "executionBlockNumber",
+  );
+  const executionBlockHash = hexToBytes(
+    strictResultField(
+      input,
+      "executionBlockHash",
+      "executionBlockHash",
+      "execution_block_hash",
+      "finalityBlockHash",
+      "finality_block_hash",
+    ),
+    "executionBlockHash",
+    32,
+  );
+  const executionReceiptsRoot = hexToBytes(
+    strictResultField(
+      input,
+      "executionReceiptsRoot",
+      "executionReceiptsRoot",
+      "execution_receipts_root",
+      "receiptsRoot",
+      "receipts_root",
+      "receiptOrMessageRoot",
+      "receipt_or_message_root",
+    ),
+    "executionReceiptsRoot",
+    32,
+  );
+  const beaconFinalizedRoot = hexToBytes(
+    strictResultField(input, "beaconFinalizedRoot", "beaconFinalizedRoot", "beacon_finalized_root"),
+    "beaconFinalizedRoot",
+    32,
+  );
+  const syncCommitteeRoot = hexToBytes(
+    strictResultField(input, "syncCommitteeRoot", "syncCommitteeRoot", "sync_committee_root"),
+    "syncCommitteeRoot",
+    32,
+  );
+  const receiptRootIndex = normalizeUnsignedBigInt(
+    strictResultField(input, "receiptRootIndex", "receiptRootIndex", "receipt_root_index"),
+    "receiptRootIndex",
+  );
+  const receiptTrieProofNodes = normalizeSccpByteVectors(
+    strictResultField(input, "receiptTrieProofNodes", "receiptTrieProofNodes", "receipt_trie_proof_nodes"),
+    "receiptTrieProofNodes",
+    {
+      maxCount: SCCP_TRON_MAX_MPT_PROOF_NODES,
+      maxBytes: SCCP_TRON_MAX_MPT_NODE_BYTES,
+      requireNonEmpty: true,
+    },
+  );
+  const inclusionBranch = normalizeSccpInclusionBranch(
+    strictResultField(input, "inclusionBranch", "inclusionBranch", "inclusion_branch"),
+    "inclusionBranch",
+    { requireNonEmpty: true },
+  );
+  let out = new Uint8Array();
+  out = writeU8(out, 1);
+  out = writeU32Le(out, sourceDomain);
+  out = concatBytes(out, sourceEventDigest);
+  out = writeU64Le(out, beaconSlot);
+  out = writeU64Le(out, executionBlockNumber);
+  out = concatBytes(
+    out,
+    executionBlockHash,
+    executionReceiptsRoot,
+    beaconFinalizedRoot,
+    syncCommitteeRoot,
+  );
+  out = writeU64Le(out, receiptRootIndex);
+  out = writeU32Le(out, receiptTrieProofNodes.length);
+  for (const node of receiptTrieProofNodes) {
+    out = writeBytes(out, node);
+  }
+  return writeSccpH256Branch(out, inclusionBranch);
+}
+
+export function evmSccpReceiptProofHash(input) {
+  return bytesToHex(
+    prefixedBlake2b(
+      SCCP_EVM_RECEIPT_PROOF_PREFIX_V1,
+      canonicalEvmSccpReceiptProofBytes(input),
+    ),
+  );
+}
+
+const normalizeEthSyncCommitteeParts = (input) => {
+  if (!input || typeof input !== "object" || Array.isArray(input)) {
+    throw new TypeError("ETH sync committee input must be an object");
+  }
+  const publicKeys = strictResultField(
+    input,
+    "syncCommitteePublicKeys",
+    "syncCommitteePublicKeys",
+    "sync_committee_public_keys",
+  );
+  const weights = strictResultField(
+    input,
+    "syncCommitteeWeights",
+    "syncCommitteeWeights",
+    "sync_committee_weights",
+  );
+  const pops = strictResultField(input, "syncCommitteePops", "syncCommitteePops", "sync_committee_pops");
+  if (!Array.isArray(publicKeys) || !Array.isArray(weights) || !Array.isArray(pops)) {
+    throw new TypeError("ETH sync committee public keys, weights, and PoPs must be arrays");
+  }
+  if (publicKeys.length === 0 || publicKeys.length !== weights.length || publicKeys.length !== pops.length) {
+    throw new RangeError("ETH sync committee public keys, weights, and PoPs must be non-empty equal-length arrays");
+  }
+  if (publicKeys.length > SCCP_ETH_MAX_SYNC_COMMITTEE_AUTHORITIES) {
+    throw new RangeError(
+      `ETH sync committee must contain at most ${SCCP_ETH_MAX_SYNC_COMMITTEE_AUTHORITIES} authorities`,
+    );
+  }
+  const seen = new Set();
+  const syncCommitteePublicKeys = publicKeys.map((publicKeyValue, index) => {
+    const publicKey = toBytes(publicKeyValue, `syncCommitteePublicKeys[${index}]`);
+    if (publicKey.length !== SCCP_ETH_SYNC_COMMITTEE_PUBLIC_KEY_BYTES) {
+      throw new RangeError(
+        `syncCommitteePublicKeys[${index}] must be ${SCCP_ETH_SYNC_COMMITTEE_PUBLIC_KEY_BYTES} bytes`,
+      );
+    }
+    if (publicKey.every((byte) => byte === 0)) {
+      throw new RangeError(`syncCommitteePublicKeys[${index}] must not be zero`);
+    }
+    const publicKeyHex = bytesToHex(publicKey, false);
+    if (seen.has(publicKeyHex)) {
+      throw new RangeError(`syncCommitteePublicKeys[${index}] must be unique`);
+    }
+    seen.add(publicKeyHex);
+    return publicKey;
+  });
+  const syncCommitteeWeights = weights.map((weightValue, index) => {
+    const weight = normalizeUnsignedBigInt(weightValue, `syncCommitteeWeights[${index}]`);
+    if (weight === 0n) {
+      throw new RangeError(`syncCommitteeWeights[${index}] must not be zero`);
+    }
+    return weight;
+  });
+  const syncCommitteePops = pops.map((popValue, index) => {
+    const pop = toBytes(popValue, `syncCommitteePops[${index}]`);
+    if (pop.length !== SCCP_ETH_SYNC_COMMITTEE_POP_BYTES) {
+      throw new RangeError(
+        `syncCommitteePops[${index}] must be ${SCCP_ETH_SYNC_COMMITTEE_POP_BYTES} bytes`,
+      );
+    }
+    if (pop.every((byte) => byte === 0)) {
+      throw new RangeError(`syncCommitteePops[${index}] must not be zero`);
+    }
+    return pop;
+  });
+  return { syncCommitteePublicKeys, syncCommitteeWeights, syncCommitteePops };
+};
+
+export function canonicalEthSyncCommitteePayloadBytes(input) {
+  const { syncCommitteePublicKeys, syncCommitteeWeights, syncCommitteePops } =
+    normalizeEthSyncCommitteeParts(input);
+  let out = new Uint8Array();
+  out = writeU8(out, 1);
+  out = writeU32Le(out, syncCommitteePublicKeys.length);
+  syncCommitteePublicKeys.forEach((publicKey, index) => {
+    out = writeBytes(out, publicKey);
+    out = writeU64Le(out, syncCommitteeWeights[index]);
+    out = writeBytes(out, syncCommitteePops[index]);
+  });
+  return out;
+}
+
+const validateEthSyncCommitteePayloadBytes = (payload) => {
+  let cursor = 0;
+  if (payload.length > SCCP_ETH_MAX_SYNC_COMMITTEE_PAYLOAD_BYTES) {
+    throw new RangeError(
+      `ETH sync committee payload must be at most ${SCCP_ETH_MAX_SYNC_COMMITTEE_PAYLOAD_BYTES} bytes`,
+    );
+  }
+  if (payload.length < 5 || payload[cursor] !== 1) {
+    throw new TypeError("ETH sync committee payload must have version 1");
+  }
+  cursor += 1;
+  const view = new DataView(payload.buffer, payload.byteOffset, payload.byteLength);
+  const count = view.getUint32(cursor, true);
+  cursor += 4;
+  if (count === 0) {
+    throw new TypeError("ETH sync committee payload must not be empty");
+  }
+  if (count > SCCP_ETH_MAX_SYNC_COMMITTEE_AUTHORITIES) {
+    throw new RangeError(
+      `ETH sync committee must contain at most ${SCCP_ETH_MAX_SYNC_COMMITTEE_AUTHORITIES} authorities`,
+    );
+  }
+  const seen = new Set();
+  for (let index = 0; index < count; index += 1) {
+    if (cursor + 4 > payload.length) throw new TypeError("ETH sync committee payload is truncated");
+    const publicKeyLength = view.getUint32(cursor, true);
+    cursor += 4;
+    if (publicKeyLength !== SCCP_ETH_SYNC_COMMITTEE_PUBLIC_KEY_BYTES) {
+      throw new RangeError(
+        `syncCommitteePublicKeys[${index}] must be ${SCCP_ETH_SYNC_COMMITTEE_PUBLIC_KEY_BYTES} bytes`,
+      );
+    }
+    const publicKeyEnd = cursor + publicKeyLength;
+    if (publicKeyEnd > payload.length) throw new TypeError("ETH sync committee public key is truncated");
+    const publicKey = payload.slice(cursor, publicKeyEnd);
+    cursor = publicKeyEnd;
+    if (publicKey.every((byte) => byte === 0)) {
+      throw new TypeError(`syncCommitteePublicKeys[${index}] must not be zero`);
+    }
+    const publicKeyHex = bytesToHex(publicKey, false);
+    if (seen.has(publicKeyHex)) throw new TypeError(`syncCommitteePublicKeys[${index}] must be unique`);
+    seen.add(publicKeyHex);
+    if (cursor + 8 > payload.length) throw new TypeError("ETH sync committee weight is truncated");
+    const weight = view.getBigUint64(cursor, true);
+    cursor += 8;
+    if (weight === 0n) throw new TypeError(`syncCommitteeWeights[${index}] must not be zero`);
+    if (cursor + 4 > payload.length) throw new TypeError("ETH sync committee PoP is truncated");
+    const popLength = view.getUint32(cursor, true);
+    cursor += 4;
+    if (popLength !== SCCP_ETH_SYNC_COMMITTEE_POP_BYTES) {
+      throw new RangeError(
+        `syncCommitteePops[${index}] must be ${SCCP_ETH_SYNC_COMMITTEE_POP_BYTES} bytes`,
+      );
+    }
+    const popEnd = cursor + popLength;
+    if (popEnd > payload.length) throw new TypeError("ETH sync committee PoP is truncated");
+    const pop = payload.slice(cursor, popEnd);
+    cursor = popEnd;
+    if (pop.every((byte) => byte === 0)) {
+      throw new TypeError(`syncCommitteePops[${index}] must not be zero`);
+    }
+  }
+  if (cursor !== payload.length) {
+    throw new TypeError("ETH sync committee payload has trailing bytes");
+  }
+};
+
+const ethSyncCommitteePayloadBytes = (input) => {
+  const payload = input instanceof Uint8Array || ArrayBuffer.isView(input) || input instanceof ArrayBuffer || Array.isArray(input)
+    ? toBytes(input, "syncCommitteePayload")
+    : typeof input === "string"
+      ? hexToBytes(input, "syncCommitteePayload")
+      : canonicalEthSyncCommitteePayloadBytes(input);
+  validateEthSyncCommitteePayloadBytes(payload);
+  return payload;
+};
+
+export function ethSyncCommitteeHash(input) {
+  return ethSyncCommitteeHashFromPayload(canonicalEthSyncCommitteePayloadBytes(input));
+}
+
+export function ethSyncCommitteeHashFromPayload(input) {
+  return bytesToHex(
+    prefixedBlake2b(SCCP_ETH_SYNC_COMMITTEE_PREFIX_V1, ethSyncCommitteePayloadBytes(input)),
+  );
+}
+
+export function ethSyncCommitteePayloadHash(input) {
+  return bytesToHex(
+    prefixedBlake2b(
+      SCCP_ETH_SYNC_COMMITTEE_PAYLOAD_PREFIX_V1,
+      ethSyncCommitteePayloadBytes(input),
+    ),
+  );
+}
+
+const ethTransitionPayloadHashBytes = (input) => {
+  const provided = strictResultField(
+    input,
+    "nextSyncCommitteePayloadHash",
+    "nextSyncCommitteePayloadHash",
+    "next_sync_committee_payload_hash",
+  );
+  const payload = strictResultField(
+    input,
+    "nextSyncCommitteePayload",
+    "nextSyncCommitteePayload",
+    "next_sync_committee_payload",
+  );
+  if (provided === undefined && payload === undefined) {
+    throw new TypeError("nextSyncCommitteePayloadHash or nextSyncCommitteePayload is required");
+  }
+  const payloadHash = provided === undefined
+    ? hexToBytes(ethSyncCommitteePayloadHash(payload), "nextSyncCommitteePayloadHash", 32)
+    : hexToBytes(provided, "nextSyncCommitteePayloadHash", 32);
+  if (payload !== undefined) {
+    const derived = hexToBytes(ethSyncCommitteePayloadHash(payload), "nextSyncCommitteePayloadHash", 32);
+    if (bytesToHex(payloadHash, false) !== bytesToHex(derived, false)) {
+      throw new TypeError("nextSyncCommitteePayloadHash must match nextSyncCommitteePayload");
+    }
+  }
+  return payloadHash;
+};
+
+export function canonicalEthSyncCommitteeTransitionMessageBytes(input) {
+  if (!input || typeof input !== "object" || Array.isArray(input)) {
+    throw new TypeError("ETH sync-committee transition message input must be an object");
+  }
+  let out = new Uint8Array();
+  out = writeU8(out, 1);
+  const sourceDomain = normalizeSccpDomainId(
+    strictResultField(input, "sourceDomain", "sourceDomain", "source_domain"),
+    "sourceDomain",
+  );
+  if (sourceDomain !== SCCP_DOMAIN_ETH) {
+    throw new RangeError("sourceDomain must be ETH");
+  }
+  out = writeU32Le(out, sourceDomain);
+  out = writeU64Le(
+    out,
+    normalizeUnsignedBigInt(
+      strictResultField(input, "fromSyncPeriod", "fromSyncPeriod", "from_sync_period"),
+      "fromSyncPeriod",
+    ),
+  );
+  out = writeU64Le(
+    out,
+    normalizeUnsignedBigInt(strictResultField(input, "toSyncPeriod", "toSyncPeriod", "to_sync_period"), "toSyncPeriod"),
+  );
+  out = writeU64Le(
+    out,
+    normalizeUnsignedBigInt(
+      strictResultField(input, "transitionSlot", "transitionSlot", "transition_slot"),
+      "transitionSlot",
+    ),
+  );
+  return concatBytes(
+    out,
+    hexToBytes(
+      strictResultField(input, "finalizedBeaconRoot", "finalizedBeaconRoot", "finalized_beacon_root"),
+      "finalizedBeaconRoot",
+      32,
+    ),
+    hexToBytes(
+      strictResultField(
+        input,
+        "parentSyncCommitteeHash",
+        "parentSyncCommitteeHash",
+        "parent_sync_committee_hash",
+      ),
+      "parentSyncCommitteeHash",
+      32,
+    ),
+    hexToBytes(
+      strictResultField(input, "nextSyncCommitteeHash", "nextSyncCommitteeHash", "next_sync_committee_hash"),
+      "nextSyncCommitteeHash",
+      32,
+    ),
+    ethTransitionPayloadHashBytes(input),
+    hexToBytes(
+      strictResultField(
+        input,
+        "nextSyncCommitteeBranchHash",
+        "nextSyncCommitteeBranchHash",
+        "next_sync_committee_branch_hash",
+      ),
+      "nextSyncCommitteeBranchHash",
+      32,
+    ),
+  );
+}
+
+export function ethSyncCommitteeTransitionMessageHash(input) {
+  return bytesToHex(
+    prefixedBlake2b(
+      SCCP_ETH_SYNC_COMMITTEE_TRANSITION_MESSAGE_PREFIX_V1,
+      canonicalEthSyncCommitteeTransitionMessageBytes(input),
+    ),
+  );
+}
+
+const canonicalEthBeaconSyncCommitteeProofBytes = (proof) => {
+  if (!proof || typeof proof !== "object" || Array.isArray(proof)) {
+    throw new TypeError("ETH beacon sync committee proof must be an object");
+  }
+  const { syncCommitteePublicKeys, syncCommitteeWeights, syncCommitteePops } =
+    normalizeEthSyncCommitteeParts(proof);
+  const signersBitmap = toBytes(
+    strictResultField(proof, "signersBitmap", "signersBitmap", "signers_bitmap"),
+    "signersBitmap",
+  );
+  if (signersBitmap.length !== Math.ceil(syncCommitteePublicKeys.length / 8)) {
+    throw new RangeError("signersBitmap length must match syncCommitteePublicKeys");
+  }
+  const signerIndices = [];
+  signersBitmap.forEach((byte, byteIndex) => {
+    for (let bit = 0; bit < 8; bit += 1) {
+      if (((byte >> bit) & 1) === 0) continue;
+      const index = byteIndex * 8 + bit;
+      if (index >= syncCommitteePublicKeys.length) {
+        throw new RangeError("signersBitmap must not set padding bits");
+      }
+      signerIndices.push(index);
+    }
+  });
+  if (signerIndices.length === 0) {
+    throw new RangeError("signersBitmap must select at least one sync committee member");
+  }
+  const aggregateSignature = toBytes(
+    strictResultField(proof, "aggregateSignature", "aggregateSignature", "aggregate_signature"),
+    "aggregateSignature",
+  );
+  if (aggregateSignature.length !== SCCP_ETH_SYNC_COMMITTEE_SIGNATURE_BYTES) {
+    throw new RangeError(`aggregateSignature must be ${SCCP_ETH_SYNC_COMMITTEE_SIGNATURE_BYTES} bytes`);
+  }
+  if (aggregateSignature.every((byte) => byte === 0)) {
+    throw new RangeError("aggregateSignature must not be all zero");
+  }
+  const totalWeight = normalizeUnsignedBigInt(
+    strictResultField(proof, "totalWeight", "totalWeight", "total_weight"),
+    "totalWeight",
+  );
+  const signedWeight = normalizeUnsignedBigInt(
+    strictResultField(proof, "signedWeight", "signedWeight", "signed_weight"),
+    "signedWeight",
+  );
+  const computedTotalWeight = syncCommitteeWeights.reduce((sum, weight) => sum + weight, 0n);
+  if (totalWeight !== computedTotalWeight) {
+    throw new RangeError("totalWeight must match syncCommitteeWeights");
+  }
+  const computedSignedWeight = signerIndices.reduce(
+    (sum, index) => sum + syncCommitteeWeights[index],
+    0n,
+  );
+  if (signedWeight !== computedSignedWeight) {
+    throw new RangeError("signedWeight must match signersBitmap");
+  }
+  if (signedWeight * 3n <= totalWeight * 2n) {
+    throw new RangeError("signedWeight must be greater than two thirds of totalWeight");
+  }
+  let out = new Uint8Array();
+  out = writeU8(
+    out,
+    normalizeOptionalV1Version(proof, "syncCommitteeProof.version", RangeError, "version"),
+  );
+  out = writeU64Le(out, totalWeight);
+  out = writeU64Le(out, signedWeight);
+  out = concatBytes(
+    out,
+    hexToBytes(
+      strictResultField(
+        proof,
+        "syncCommitteeMessageHash",
+        "syncCommitteeMessageHash",
+        "sync_committee_message_hash",
+      ),
+      "syncCommitteeMessageHash",
+      32,
+    ),
+  );
+  out = writeU32Le(out, syncCommitteePublicKeys.length);
+  for (const publicKey of syncCommitteePublicKeys) {
+    out = writeBytes(out, publicKey);
+  }
+  out = writeU32Le(out, syncCommitteeWeights.length);
+  for (const weight of syncCommitteeWeights) {
+    out = writeU64Le(out, weight);
+  }
+  out = writeU32Le(out, syncCommitteePops.length);
+  for (const pop of syncCommitteePops) {
+    out = writeBytes(out, pop);
+  }
+  out = writeBytes(out, signersBitmap);
+  out = writeBytes(out, aggregateSignature);
+  return out;
+};
+
+export function canonicalEthSyncCommitteeTransitionSignatureBytes(input) {
+  if (!input || typeof input !== "object" || Array.isArray(input)) {
+    throw new TypeError("ETH sync-committee transition signature input must be an object");
+  }
+  const syncCommitteeProof = strictResultField(input, "syncCommitteeProof", "syncCommitteeProof", "sync_committee_proof");
+  if (!syncCommitteeProof || typeof syncCommitteeProof !== "object" || Array.isArray(syncCommitteeProof)) {
+    throw new TypeError("ETH beacon sync committee proof must be an object");
+  }
+  const parentSyncCommitteeHash = hexToBytes(ethSyncCommitteeHash({
+    syncCommitteePublicKeys: strictResultField(
+      syncCommitteeProof,
+      "syncCommitteePublicKeys",
+      "syncCommitteePublicKeys",
+      "sync_committee_public_keys",
+    ),
+    syncCommitteeWeights: strictResultField(
+      syncCommitteeProof,
+      "syncCommitteeWeights",
+      "syncCommitteeWeights",
+      "sync_committee_weights",
+    ),
+    syncCommitteePops: strictResultField(syncCommitteeProof, "syncCommitteePops", "syncCommitteePops", "sync_committee_pops"),
+  }), "parentSyncCommitteeHash", 32);
+  const nextPayload = ethSyncCommitteePayloadBytes(
+    strictResultField(input, "nextSyncCommitteePayload", "nextSyncCommitteePayload", "next_sync_committee_payload"),
+  );
+  const nextPayloadHash = ethTransitionPayloadHashBytes(input);
+  const derivedNextSyncCommitteeHash = hexToBytes(
+    ethSyncCommitteeHashFromPayload(nextPayload),
+    "nextSyncCommitteeHash",
+    32,
+  );
+  const nextSyncCommitteeHash = hexToBytes(
+    strictResultField(input, "nextSyncCommitteeHash", "nextSyncCommitteeHash", "next_sync_committee_hash"),
+    "nextSyncCommitteeHash",
+    32,
+  );
+  if (bytesToHex(nextSyncCommitteeHash, false) !== bytesToHex(derivedNextSyncCommitteeHash, false)) {
+    throw new TypeError("nextSyncCommitteeHash must match nextSyncCommitteePayload");
+  }
+  let out = new Uint8Array();
+  out = writeU8(
+    out,
+    normalizeOptionalV1Version(input, "ETH sync-committee transition signature version", RangeError, "version"),
+  );
+  const sourceDomain = normalizeSccpDomainId(
+    strictResultField(input, "sourceDomain", "sourceDomain", "source_domain"),
+    "sourceDomain",
+  );
+  if (sourceDomain !== SCCP_DOMAIN_ETH) {
+    throw new RangeError("sourceDomain must be ETH");
+  }
+  out = writeU32Le(out, sourceDomain);
+  out = writeU64Le(
+    out,
+    normalizeUnsignedBigInt(
+      strictResultField(input, "fromSyncPeriod", "fromSyncPeriod", "from_sync_period"),
+      "fromSyncPeriod",
+    ),
+  );
+  out = writeU64Le(
+    out,
+    normalizeUnsignedBigInt(strictResultField(input, "toSyncPeriod", "toSyncPeriod", "to_sync_period"), "toSyncPeriod"),
+  );
+  out = writeU64Le(
+    out,
+    normalizeUnsignedBigInt(
+      strictResultField(input, "transitionSlot", "transitionSlot", "transition_slot"),
+      "transitionSlot",
+    ),
+  );
+  return concatBytes(
+    out,
+    hexToBytes(
+      strictResultField(input, "finalizedBeaconRoot", "finalizedBeaconRoot", "finalized_beacon_root"),
+      "finalizedBeaconRoot",
+      32,
+    ),
+    hexToBytes(
+      strictResultField(
+        input,
+        "parentSyncCommitteeHash",
+        "parentSyncCommitteeHash",
+        "parent_sync_committee_hash",
+      ),
+      "parentSyncCommitteeHash",
+      32,
+    ),
+    nextSyncCommitteeHash,
+    writeBytes(new Uint8Array(), nextPayload),
+    nextPayloadHash,
+    hexToBytes(
+      strictResultField(
+        input,
+        "nextSyncCommitteeBranchHash",
+        "nextSyncCommitteeBranchHash",
+        "next_sync_committee_branch_hash",
+      ),
+      "nextSyncCommitteeBranchHash",
+      32,
+    ),
+    hexToBytes(
+      strictResultField(input, "transitionMessageHash", "transitionMessageHash", "transition_message_hash"),
+      "transitionMessageHash",
+      32,
+    ),
+    parentSyncCommitteeHash,
+    canonicalEthBeaconSyncCommitteeProofBytes(syncCommitteeProof),
+  );
+}
+
+export function ethSyncCommitteeTransitionSignatureHash(input) {
+  return bytesToHex(
+    prefixedBlake2b(
+      SCCP_ETH_SYNC_COMMITTEE_TRANSITION_SIGNATURE_PREFIX_V1,
+      canonicalEthSyncCommitteeTransitionSignatureBytes(input),
+    ),
+  );
+}
+
+export function canonicalBscSccpReceiptProofBytes(input) {
+  if (!input || typeof input !== "object" || Array.isArray(input)) {
+    throw new TypeError("BSC SCCP receipt proof input must be an object");
+  }
+  const sourceDomainInput = strictOptionalResultField(input, "sourceDomain", "sourceDomain", "source_domain");
+  const sourceDomain =
+    sourceDomainInput === SCCP_OPTIONAL_FIELD_MISSING
+      ? normalizeSccpDomainId(SCCP_DOMAIN_BSC, "sourceDomain")
+      : normalizeSccpDomainId(sourceDomainInput, "sourceDomain");
+  if (sourceDomain !== SCCP_DOMAIN_BSC) {
+    throw new RangeError("sourceDomain must be BSC");
+  }
+  const sourceEventDigest = hexToBytes(
+    strictResultField(input, "sourceEventDigest", "sourceEventDigest", "source_event_digest"),
+    "sourceEventDigest",
+    32,
+  );
+  const validatorEpoch = normalizeUnsignedBigInt(
+    strictResultField(input, "validatorEpoch", "validatorEpoch", "validator_epoch"),
+    "validatorEpoch",
+  );
+  const blockNumber = normalizeUnsignedBigInt(
+    strictResultField(input, "blockNumber", "blockNumber", "block_number", "finalityHeight", "finality_height"),
+    "blockNumber",
+  );
+  const blockHash = hexToBytes(
+    strictResultField(input, "blockHash", "blockHash", "block_hash", "finalityBlockHash", "finality_block_hash"),
+    "blockHash",
+    32,
+  );
+  const receiptsRoot = hexToBytes(
+    strictResultField(
+      input,
+      "receiptsRoot",
+      "receiptsRoot",
+      "receipts_root",
+      "receiptOrMessageRoot",
+      "receipt_or_message_root",
+    ),
+    "receiptsRoot",
+    32,
+  );
+  const validatorSetHash = hexToBytes(
+    strictResultField(input, "validatorSetHash", "validatorSetHash", "validator_set_hash"),
+    "validatorSetHash",
+    32,
+  );
+  const commitSealHash = hexToBytes(
+    strictResultField(input, "commitSealHash", "commitSealHash", "commit_seal_hash"),
+    "commitSealHash",
+    32,
+  );
+  const receiptRootIndex = normalizeUnsignedBigInt(
+    strictResultField(input, "receiptRootIndex", "receiptRootIndex", "receipt_root_index"),
+    "receiptRootIndex",
+  );
+  const receiptTrieProofNodes = normalizeSccpByteVectors(
+    strictResultField(input, "receiptTrieProofNodes", "receiptTrieProofNodes", "receipt_trie_proof_nodes"),
+    "receiptTrieProofNodes",
+    {
+      maxCount: SCCP_TRON_MAX_MPT_PROOF_NODES,
+      maxBytes: SCCP_TRON_MAX_MPT_NODE_BYTES,
+      requireNonEmpty: true,
+    },
+  );
+  const inclusionBranch = normalizeSccpInclusionBranch(
+    strictResultField(input, "inclusionBranch", "inclusionBranch", "inclusion_branch"),
+    "inclusionBranch",
+    { requireNonEmpty: true },
+  );
+  let out = new Uint8Array();
+  out = writeU8(out, 1);
+  out = writeU32Le(out, sourceDomain);
+  out = concatBytes(out, sourceEventDigest);
+  out = writeU64Le(out, validatorEpoch);
+  out = writeU64Le(out, blockNumber);
+  out = concatBytes(out, blockHash, receiptsRoot, validatorSetHash, commitSealHash);
+  out = writeU64Le(out, receiptRootIndex);
+  out = writeU32Le(out, receiptTrieProofNodes.length);
+  for (const node of receiptTrieProofNodes) {
+    out = writeBytes(out, node);
+  }
+  return writeSccpH256Branch(out, inclusionBranch);
+}
+
+export function bscSccpReceiptProofHash(input) {
+  return bytesToHex(
+    prefixedBlake2b(
+      SCCP_BSC_RECEIPT_PROOF_PREFIX_V1,
+      canonicalBscSccpReceiptProofBytes(input),
+    ),
+  );
+}
+
+export function canonicalBscValidatorSetPayloadBytes(input) {
+  if (!input || typeof input !== "object" || Array.isArray(input)) {
+    throw new TypeError("BSC validator-set payload input must be an object");
+  }
+  const validatorAddresses = strictResultField(input, "validatorAddresses", "validatorAddresses", "validator_addresses");
+  const validatorPowers = strictResultField(input, "validatorPowers", "validatorPowers", "validator_powers");
+  if (!Array.isArray(validatorAddresses)) {
+    throw new TypeError("validatorAddresses must be an array");
+  }
+  if (!Array.isArray(validatorPowers)) {
+    throw new TypeError("validatorPowers must be an array");
+  }
+  if (validatorAddresses.length === 0 || validatorAddresses.length !== validatorPowers.length) {
+    throw new RangeError("validatorAddresses and validatorPowers must be non-empty equal-length arrays");
+  }
+  if (validatorAddresses.length > SCCP_BSC_MAX_PARLIA_VALIDATORS) {
+    throw new RangeError(
+      `validatorAddresses must contain at most ${SCCP_BSC_MAX_PARLIA_VALIDATORS} entries`,
+    );
+  }
+
+  let out = new Uint8Array();
+  out = writeU8(out, 1);
+  out = writeU32Le(out, validatorAddresses.length);
+  const seenAddresses = new Set();
+  for (const [index, addressValue] of validatorAddresses.entries()) {
+    const address = hexToBytes(addressValue, `validatorAddresses[${index}]`, 20);
+    if (address.every((byte) => byte === 0)) {
+      throw new RangeError(`validatorAddresses[${index}] must not be zero`);
+    }
+    const addressHex = bytesToHex(address, false);
+    if (seenAddresses.has(addressHex)) {
+      throw new RangeError(`validatorAddresses[${index}] must be unique`);
+    }
+    seenAddresses.add(addressHex);
+    const power = normalizeUnsignedBigInt(validatorPowers[index], `validatorPowers[${index}]`);
+    if (power === 0n) {
+      throw new RangeError(`validatorPowers[${index}] must not be zero`);
+    }
+    out = concatBytes(out, address);
+    out = writeU64Le(out, power);
+  }
+  return out;
+}
+
+const validateBscValidatorSetPayloadBytes = (payload) => {
+  if (payload.length > SCCP_BSC_MAX_VALIDATOR_SET_PAYLOAD_BYTES) {
+    throw new RangeError(
+      `BSC validator-set payload must be at most ${SCCP_BSC_MAX_VALIDATOR_SET_PAYLOAD_BYTES} bytes`,
+    );
+  }
+  if (payload.length < 5 || payload[0] !== 1) {
+    throw new TypeError("BSC validator-set payload must have version 1");
+  }
+  const view = new DataView(payload.buffer, payload.byteOffset, payload.byteLength);
+  const validatorCount = view.getUint32(1, true);
+  if (
+    validatorCount === 0 ||
+    validatorCount > SCCP_BSC_MAX_PARLIA_VALIDATORS ||
+    payload.length !== 5 + validatorCount * (SCCP_BSC_PARLIA_VALIDATOR_ADDRESS_BYTES + 8)
+  ) {
+    throw new RangeError("BSC validator-set payload has an invalid validator count");
+  }
+  let cursor = 5;
+  const seenAddresses = new Set();
+  for (let index = 0; index < validatorCount; index += 1) {
+    const address = payload.slice(cursor, cursor + SCCP_BSC_PARLIA_VALIDATOR_ADDRESS_BYTES);
+    cursor += SCCP_BSC_PARLIA_VALIDATOR_ADDRESS_BYTES;
+    if (address.every((byte) => byte === 0)) {
+      throw new RangeError(`validatorAddresses[${index}] must not be zero`);
+    }
+    const addressHex = bytesToHex(address, false);
+    if (seenAddresses.has(addressHex)) {
+      throw new RangeError(`validatorAddresses[${index}] must be unique`);
+    }
+    seenAddresses.add(addressHex);
+    const power = view.getBigUint64(cursor, true);
+    cursor += 8;
+    if (power === 0n) {
+      throw new RangeError(`validatorPowers[${index}] must not be zero`);
+    }
+  }
+};
+
+const bscValidatorSetPayloadBytes = (input, validate = false) => {
+  const payload = input instanceof Uint8Array || ArrayBuffer.isView(input) || input instanceof ArrayBuffer || Array.isArray(input)
+    ? toBytes(input, "validatorSetPayload")
+    : typeof input === "string"
+      ? hexToBytes(input, "validatorSetPayload")
+      : canonicalBscValidatorSetPayloadBytes(input);
+  if (validate) {
+    validateBscValidatorSetPayloadBytes(payload);
+  }
+  return payload;
+};
+
+export function bscValidatorSetPayloadHash(input) {
+  return bytesToHex(
+    prefixedKeccak(SCCP_BSC_VALIDATOR_SET_PAYLOAD_PREFIX_V1, bscValidatorSetPayloadBytes(input)),
+  );
+}
+
+export function bscValidatorSetHashFromPayload(input) {
+  return bytesToHex(
+    prefixedKeccak(SCCP_BSC_VALIDATOR_SET_PREFIX_V1, bscValidatorSetPayloadBytes(input, true)),
+  );
+}
+
+export function canonicalBscCommitMessageBytes(input) {
+  if (!input || typeof input !== "object" || Array.isArray(input)) {
+    throw new TypeError("BSC commit message input must be an object");
+  }
+  const version = normalizeOptionalV1Version(
+    input,
+    "BSC commit message version",
+    RangeError,
+    "version",
+  );
+  const sourceDomainInput = strictOptionalResultField(input, "sourceDomain", "sourceDomain", "source_domain");
+  const sourceDomain =
+    sourceDomainInput === SCCP_OPTIONAL_FIELD_MISSING
+      ? normalizeSccpDomainId(SCCP_DOMAIN_BSC, "sourceDomain")
+      : normalizeSccpDomainId(sourceDomainInput, "sourceDomain");
+  if (sourceDomain !== SCCP_DOMAIN_BSC) {
+    throw new RangeError("sourceDomain must be BSC");
+  }
+  let out = new Uint8Array();
+  out = writeU8(out, version);
+  out = writeU32Le(out, sourceDomain);
+  out = writeU64Le(out, strictResultField(input, "validatorEpoch", "validatorEpoch", "validator_epoch"));
+  out = writeU64Le(out, strictResultField(input, "blockNumber", "blockNumber", "block_number"));
+  out = concatBytes(
+    out,
+    hexToBytes(strictResultField(input, "blockHash", "blockHash", "block_hash"), "blockHash", 32),
+    hexToBytes(strictResultField(input, "receiptsRoot", "receiptsRoot", "receipts_root"), "receiptsRoot", 32),
+    hexToBytes(
+      strictResultField(input, "validatorSetHash", "validatorSetHash", "validator_set_hash"),
+      "validatorSetHash",
+      32,
+    ),
+  );
+  return out;
+}
+
+export function bscCommitMessageHash(input) {
+  return bytesToHex(
+    prefixedKeccak(SCCP_BSC_COMMIT_MESSAGE_PREFIX_V1, canonicalBscCommitMessageBytes(input)),
+  );
+}
+
+const bscValidatorAddressFromPublicKey = (publicKeyInput, label) => {
+  const publicKey = toBytes(publicKeyInput, label);
+  if (
+    !(
+      (publicKey.length === 33 && (publicKey[0] === 0x02 || publicKey[0] === 0x03)) ||
+      (publicKey.length === 65 && publicKey[0] === 0x04)
+    )
+  ) {
+    throw new RangeError(`${label} must be a compressed or uncompressed secp256k1 public key`);
+  }
+  let point;
+  try {
+    point = secp256k1.ProjectivePoint.fromHex(publicKey);
+  } catch {
+    throw new RangeError(`${label} must be a valid secp256k1 public key`);
+  }
+  const canonical = point.toRawBytes(publicKey.length === 33);
+  if (!bytesEqual(canonical, publicKey)) {
+    throw new RangeError(`${label} must be a canonical secp256k1 public key`);
+  }
+  const uncompressed = point.toRawBytes(false);
+  return keccak_256(uncompressed.slice(1)).slice(12);
+};
+
+const canonicalBscValidatorSetPayloadBytesFromAddressPowerBytes = (validatorAddresses, validatorPowers) => {
+  if (
+    !Array.isArray(validatorAddresses) ||
+    !Array.isArray(validatorPowers) ||
+    validatorAddresses.length === 0 ||
+    validatorAddresses.length !== validatorPowers.length ||
+    validatorAddresses.length > SCCP_BSC_MAX_PARLIA_VALIDATORS
+  ) {
+    throw new RangeError("validatorAddresses and validatorPowers must be non-empty bounded arrays");
+  }
+  let out = new Uint8Array();
+  out = writeU8(out, 1);
+  out = writeU32Le(out, validatorAddresses.length);
+  const seenAddresses = new Set();
+  validatorAddresses.forEach((address, index) => {
+    if (!(address instanceof Uint8Array) || address.length !== SCCP_BSC_PARLIA_VALIDATOR_ADDRESS_BYTES) {
+      throw new TypeError(`validatorAddresses[${index}] must be 20 bytes`);
+    }
+    if (address.every((byte) => byte === 0)) {
+      throw new RangeError(`validatorAddresses[${index}] must not be zero`);
+    }
+    const addressHex = bytesToHex(address, false);
+    if (seenAddresses.has(addressHex)) {
+      throw new RangeError(`validatorAddresses[${index}] must be unique`);
+    }
+    seenAddresses.add(addressHex);
+    const power = validatorPowers[index];
+    if (power === 0n) {
+      throw new RangeError(`validatorPowers[${index}] must not be zero`);
+    }
+    out = concatBytes(out, address);
+    out = writeU64Le(out, power);
+  });
+  return out;
+};
+
+const bscSignerIndicesFromBitmap = (signersBitmap, rosterLength) => {
+  const expectedLength = Math.ceil(rosterLength / 8);
+  if (signersBitmap.length !== expectedLength) {
+    throw new RangeError("signersBitmap has invalid length");
+  }
+  const indices = [];
+  for (let byteIndex = 0; byteIndex < signersBitmap.length; byteIndex += 1) {
+    for (let bit = 0; bit < 8; bit += 1) {
+      const validatorIndex = byteIndex * 8 + bit;
+      const bitSet = (signersBitmap[byteIndex] & (1 << bit)) !== 0;
+      if (validatorIndex >= rosterLength) {
+        if (bitSet) {
+          throw new RangeError("signersBitmap padding bits must be zero");
+        }
+      } else if (bitSet) {
+        indices.push(validatorIndex);
+      }
+    }
+  }
+  if (indices.length === 0) {
+    throw new RangeError("signersBitmap must select at least one signer");
+  }
+  return indices;
+};
+
+export function canonicalBscCommitSealBytes(input) {
+  if (!input || typeof input !== "object" || Array.isArray(input)) {
+    throw new TypeError("BSC commit seal input must be an object");
+  }
+  const version = normalizeOptionalV1Version(
+    input,
+    "BSC commit seal version",
+    RangeError,
+    "version",
+  );
+  const totalPower = normalizeUnsignedBigInt(
+    strictResultField(input, "totalPower", "totalPower", "total_power"),
+    "totalPower",
+  );
+  const signedPower = normalizeUnsignedBigInt(
+    strictResultField(input, "signedPower", "signedPower", "signed_power"),
+    "signedPower",
+  );
+  const commitMessageHash = nonZeroHex32Bytes(
+    strictResultField(input, "commitMessageHash", "commitMessageHash", "commit_message_hash"),
+    "commitMessageHash",
+  );
+  const validatorPublicKeys = strictResultField(
+    input,
+    "validatorPublicKeys",
+    "validatorPublicKeys",
+    "validator_public_keys",
+  );
+  const validatorPowersInput = strictResultField(
+    input,
+    "validatorPowers",
+    "validatorPowers",
+    "validator_powers",
+  );
+  if (!Array.isArray(validatorPublicKeys)) {
+    throw new TypeError("validatorPublicKeys must be an array");
+  }
+  if (!Array.isArray(validatorPowersInput)) {
+    throw new TypeError("validatorPowers must be an array");
+  }
+  if (
+    validatorPublicKeys.length === 0 ||
+    validatorPublicKeys.length !== validatorPowersInput.length ||
+    validatorPublicKeys.length > SCCP_BSC_MAX_PARLIA_VALIDATORS
+  ) {
+    throw new RangeError("validatorPublicKeys and validatorPowers must be non-empty bounded arrays");
+  }
+
+  const validatorAddresses = [];
+  const validatorPowers = [];
+  const seenAddresses = new Set();
+  validatorPublicKeys.forEach((publicKey, index) => {
+    const address = bscValidatorAddressFromPublicKey(publicKey, `validatorPublicKeys[${index}]`);
+    const addressHex = bytesToHex(address, false);
+    if (seenAddresses.has(addressHex)) {
+      throw new RangeError(`validatorPublicKeys[${index}] must derive a unique address`);
+    }
+    seenAddresses.add(addressHex);
+    validatorAddresses.push(address);
+    validatorPowers.push(normalizeUnsignedBigInt(validatorPowersInput[index], `validatorPowers[${index}]`));
+  });
+
+  const validatorSetPayload = canonicalBscValidatorSetPayloadBytesFromAddressPowerBytes(
+    validatorAddresses,
+    validatorPowers,
+  );
+  const validatorSetHash = prefixedKeccak(SCCP_BSC_VALIDATOR_SET_PREFIX_V1, validatorSetPayload);
+  const suppliedValidatorSetHash = strictOptionalResultField(
+    input,
+    "validatorSetHash",
+    "validatorSetHash",
+    "validator_set_hash",
+  );
+  if (suppliedValidatorSetHash !== SCCP_OPTIONAL_FIELD_MISSING && suppliedValidatorSetHash !== null) {
+    const supplied = hexToBytes(suppliedValidatorSetHash, "validatorSetHash", 32);
+    if (!bytesEqual(supplied, validatorSetHash)) {
+      throw new RangeError("validatorSetHash must match validatorPublicKeys and validatorPowers");
+    }
+  }
+
+  const computedTotalPower = validatorPowers.reduce((sum, power) => sum + power, 0n);
+  if (computedTotalPower !== totalPower) {
+    throw new RangeError("totalPower must equal validatorPowers sum");
+  }
+  const signersBitmap = toBytes(
+    strictResultField(input, "signersBitmap", "signersBitmap", "signers_bitmap"),
+    "signersBitmap",
+  );
+  const signerIndices = bscSignerIndicesFromBitmap(signersBitmap, validatorAddresses.length);
+  const signaturesInput = input.signatures;
+  if (!Array.isArray(signaturesInput)) {
+    throw new TypeError("signatures must be an array");
+  }
+  if (signaturesInput.length !== signerIndices.length) {
+    throw new RangeError("signatures length must equal selected signers");
+  }
+
+  let computedSignedPower = 0n;
+  const signatures = [];
+  signaturesInput.forEach((signatureInput, signatureIndex) => {
+    const signature = toBytes(signatureInput, `signatures[${signatureIndex}]`);
+    if (!tronRecoverableSignatureIsCanonical(signature)) {
+      throw new RangeError(`signatures[${signatureIndex}] must be a canonical recoverable secp256k1 signature`);
+    }
+    const signerIndex = signerIndices[signatureIndex];
+    const recoveredAddress = tronRecoveredSignerAddress20(commitMessageHash, signature);
+    if (recoveredAddress === null || !bytesEqual(recoveredAddress, validatorAddresses[signerIndex])) {
+      throw new RangeError(`signatures[${signatureIndex}] must recover the selected validator address`);
+    }
+    computedSignedPower += validatorPowers[signerIndex];
+    signatures.push(signature);
+  });
+  if (computedSignedPower !== signedPower) {
+    throw new RangeError("signedPower must equal selected validator power");
+  }
+  if (computedSignedPower * 3n <= totalPower * 2n) {
+    throw new RangeError("signedPower must be greater than two thirds of totalPower");
+  }
+
+  let out = new Uint8Array();
+  out = writeU8(out, version);
+  out = writeU64Le(out, totalPower);
+  out = writeU64Le(out, signedPower);
+  out = concatBytes(out, commitMessageHash, validatorSetHash);
+  out = writeBytes(out, signersBitmap);
+  out = writeU32Le(out, signatures.length);
+  for (const signature of signatures) {
+    out = writeBytes(out, signature);
+  }
+  return out;
+}
+
+export function bscCommitSealHash(input) {
+  return bytesToHex(
+    prefixedKeccak(SCCP_BSC_COMMIT_SEAL_PREFIX_V1, canonicalBscCommitSealBytes(input)),
+  );
+}
+
+export function bscValidatorSetStorageValueHash(input) {
+  return bytesToHex(
+    prefixedKeccak(SCCP_BSC_VALIDATOR_SET_STORAGE_VALUE_PREFIX_V1, toBytes(input, "storageValue")),
+  );
+}
+
+const canonicalBscValidatorStorageProofBytes = (input) => {
+  if (!input || typeof input !== "object" || Array.isArray(input)) {
+    throw new TypeError("BSC validator storage proof input must be an object");
+  }
+  const storageProofNodes = normalizeSccpByteVectors(
+    strictResultField(input, "storageProofNodes", "storageProofNodes", "storage_proof_nodes"),
+    "storageProofNodes",
+    {
+      maxCount: SCCP_TRON_MAX_MPT_PROOF_NODES,
+      maxBytes: SCCP_TRON_MAX_MPT_NODE_BYTES,
+      requireNonEmpty: true,
+    },
+  );
+  let out = new Uint8Array();
+  out = writeU8(
+    out,
+    normalizeOptionalV1Version(input, "BSC validator storage proof version", RangeError, "version"),
+  );
+  out = writeU32Le(
+    out,
+    normalizeSccpDomainId(
+      strictResultField(input, "validatorIndex", "validatorIndex", "validator_index"),
+      "validatorIndex",
+    ),
+  );
+  out = concatBytes(
+    out,
+    hexToBytes(strictResultField(input, "storageSlot", "storageSlot", "storage_slot"), "storageSlot", 32),
+  );
+  const storageValue = toBytes(
+    strictResultField(input, "storageValue", "storageValue", "storage_value"),
+    "storageValue",
+  );
+  const storageValueHash = hexToBytes(
+    strictResultField(input, "storageValueHash", "storageValueHash", "storage_value_hash"),
+    "storageValueHash",
+    32,
+  );
+  if (
+    !bytesEqual(
+      storageValueHash,
+      prefixedKeccak(SCCP_BSC_VALIDATOR_SET_STORAGE_VALUE_PREFIX_V1, storageValue),
+    )
+  ) {
+    throw new RangeError("storageValueHash must match storageValue");
+  }
+  out = writeBytes(out, storageValue);
+  out = concatBytes(out, storageValueHash);
+  out = writeU32Le(out, storageProofNodes.length);
+  for (const node of storageProofNodes) {
+    out = writeBytes(out, node);
+  }
+  return out;
+};
+
+export function canonicalBscValidatorSetMetadataProofBytes(input) {
+  if (!input || typeof input !== "object" || Array.isArray(input)) {
+    throw new TypeError("BSC ValidatorSet metadata proof input must be an object");
+  }
+  const accountProofNodes = normalizeSccpByteVectors(
+    strictResultField(input, "accountProofNodes", "accountProofNodes", "account_proof_nodes"),
+    "accountProofNodes",
+    {
+      maxCount: SCCP_TRON_MAX_MPT_PROOF_NODES,
+      maxBytes: SCCP_TRON_MAX_MPT_NODE_BYTES,
+      requireNonEmpty: true,
+    },
+  );
+  const lengthProofNodes = normalizeSccpByteVectors(
+    strictResultField(
+      input,
+      "validatorSetLengthProofNodes",
+      "validatorSetLengthProofNodes",
+      "validator_set_length_proof_nodes",
+    ),
+    "validatorSetLengthProofNodes",
+    {
+      maxCount: SCCP_TRON_MAX_MPT_PROOF_NODES,
+      maxBytes: SCCP_TRON_MAX_MPT_NODE_BYTES,
+      requireNonEmpty: true,
+    },
+  );
+  const storageProofs = strictResultField(
+    input,
+    "validatorStorageProofs",
+    "validatorStorageProofs",
+    "validator_storage_proofs",
+  );
+  if (!Array.isArray(storageProofs)) {
+    throw new TypeError("validatorStorageProofs must be an array");
+  }
+  if (storageProofs.length === 0 || storageProofs.length > SCCP_BSC_MAX_PARLIA_VALIDATORS) {
+    throw new RangeError(
+      `validatorStorageProofs must contain 1..${SCCP_BSC_MAX_PARLIA_VALIDATORS} entries`,
+    );
+  }
+  const validatorContractAddress = toBytes(
+    strictResultField(input, "validatorContractAddress", "validatorContractAddress", "validator_contract_address"),
+    "validatorContractAddress",
+  );
+  if (validatorContractAddress.length !== 20) {
+    throw new TypeError("validatorContractAddress must be 20 bytes");
+  }
+  let out = new Uint8Array();
+  out = writeU8(
+    out,
+    normalizeOptionalV1Version(input, "BSC ValidatorSet metadata proof version", RangeError, "version"),
+  );
+  out = concatBytes(
+    out,
+    hexToBytes(strictResultField(input, "stateRoot", "stateRoot", "state_root"), "stateRoot", 32),
+    hexToBytes(
+      strictResultField(
+        input,
+        "nextValidatorSetPayloadHash",
+        "nextValidatorSetPayloadHash",
+        "next_validator_set_payload_hash",
+      ),
+      "nextValidatorSetPayloadHash",
+      32,
+    ),
+  );
+  out = writeBytes(out, validatorContractAddress);
+  out = writeU32Le(out, accountProofNodes.length);
+  for (const node of accountProofNodes) {
+    out = writeBytes(out, node);
+  }
+  out = concatBytes(
+    out,
+    hexToBytes(strictResultField(input, "storageRoot", "storageRoot", "storage_root"), "storageRoot", 32),
+    hexToBytes(
+      strictResultField(input, "validatorSetLengthSlot", "validatorSetLengthSlot", "validator_set_length_slot"),
+      "validatorSetLengthSlot",
+      32,
+    ),
+  );
+  const validatorSetLengthValue = toBytes(
+    strictResultField(
+      input,
+      "validatorSetLengthValue",
+      "validatorSetLengthValue",
+      "validator_set_length_value",
+    ),
+    "validatorSetLengthValue",
+  );
+  const validatorSetLengthValueHash = hexToBytes(
+    strictResultField(
+      input,
+      "validatorSetLengthValueHash",
+      "validatorSetLengthValueHash",
+      "validator_set_length_value_hash",
+    ),
+    "validatorSetLengthValueHash",
+    32,
+  );
+  if (
+    !bytesEqual(
+      validatorSetLengthValueHash,
+      prefixedKeccak(SCCP_BSC_VALIDATOR_SET_STORAGE_VALUE_PREFIX_V1, validatorSetLengthValue),
+    )
+  ) {
+    throw new RangeError("validatorSetLengthValueHash must match validatorSetLengthValue");
+  }
+  out = writeBytes(out, validatorSetLengthValue);
+  out = concatBytes(out, validatorSetLengthValueHash);
+  out = writeU32Le(out, lengthProofNodes.length);
+  for (const node of lengthProofNodes) {
+    out = writeBytes(out, node);
+  }
+  out = writeU32Le(out, storageProofs.length);
+  for (const proof of storageProofs) {
+    out = concatBytes(out, canonicalBscValidatorStorageProofBytes(proof));
+  }
+  return out;
+}
+
+export function bscValidatorSetMetadataProofHash(input) {
+  return bytesToHex(
+    prefixedKeccak(
+      SCCP_BSC_VALIDATOR_SET_METADATA_PREFIX_V1,
+      canonicalBscValidatorSetMetadataProofBytes(input),
+    ),
+  );
+}
+
+export function canonicalBscValidatorSetTransitionMessageBytes(input) {
+  if (!input || typeof input !== "object" || Array.isArray(input)) {
+    throw new TypeError("BSC validator-set transition message input must be an object");
+  }
+  const sourceDomainInput = strictOptionalResultField(input, "sourceDomain", "sourceDomain", "source_domain");
+  const sourceDomain =
+    sourceDomainInput === SCCP_OPTIONAL_FIELD_MISSING
+      ? normalizeSccpDomainId(SCCP_DOMAIN_BSC, "sourceDomain")
+      : normalizeSccpDomainId(sourceDomainInput, "sourceDomain");
+  if (sourceDomain !== SCCP_DOMAIN_BSC) {
+    throw new RangeError("sourceDomain must be BSC");
+  }
+  const fromValidatorEpoch = normalizeUnsignedBigInt(
+    strictResultField(input, "fromValidatorEpoch", "fromValidatorEpoch", "from_validator_epoch"),
+    "fromValidatorEpoch",
+  );
+  const toValidatorEpoch = normalizeUnsignedBigInt(
+    strictResultField(input, "toValidatorEpoch", "toValidatorEpoch", "to_validator_epoch"),
+    "toValidatorEpoch",
+  );
+  if (fromValidatorEpoch + 1n !== toValidatorEpoch) {
+    throw new RangeError("toValidatorEpoch must equal fromValidatorEpoch + 1");
+  }
+  const transitionBlockNumber = normalizeUnsignedBigInt(
+    strictResultField(input, "transitionBlockNumber", "transitionBlockNumber", "transition_block_number"),
+    "transitionBlockNumber",
+  );
+  if (transitionBlockNumber !== toValidatorEpoch * SCCP_BSC_PARLIA_EPOCH_LENGTH_BLOCKS) {
+    throw new RangeError("transitionBlockNumber must be the BSC Parlia epoch-start block");
+  }
+  let out = new Uint8Array();
+  out = writeU8(
+    out,
+    normalizeOptionalV1Version(input, "BSC validator-set transition message version", RangeError, "version"),
+  );
+  out = writeU32Le(out, sourceDomain);
+  out = writeU64Le(out, fromValidatorEpoch);
+  out = writeU64Le(out, toValidatorEpoch);
+  out = writeU64Le(out, transitionBlockNumber);
+  return concatBytes(
+    out,
+    hexToBytes(
+      strictResultField(input, "transitionBlockHash", "transitionBlockHash", "transition_block_hash"),
+      "transitionBlockHash",
+      32,
+    ),
+    hexToBytes(
+      strictResultField(input, "parentValidatorSetHash", "parentValidatorSetHash", "parent_validator_set_hash"),
+      "parentValidatorSetHash",
+      32,
+    ),
+    hexToBytes(
+      strictResultField(input, "nextValidatorSetHash", "nextValidatorSetHash", "next_validator_set_hash"),
+      "nextValidatorSetHash",
+      32,
+    ),
+    hexToBytes(
+      strictResultField(
+        input,
+        "nextValidatorSetPayloadHash",
+        "nextValidatorSetPayloadHash",
+        "next_validator_set_payload_hash",
+      ),
+      "nextValidatorSetPayloadHash",
+      32,
+    ),
+    hexToBytes(
+      strictResultField(
+        input,
+        "validatorSetMetadataProofHash",
+        "validatorSetMetadataProofHash",
+        "validator_set_metadata_proof_hash",
+      ),
+      "validatorSetMetadataProofHash",
+      32,
+    ),
+  );
+}
+
+export function bscValidatorSetTransitionMessageHash(input) {
+  return bytesToHex(
+    prefixedKeccak(
+      SCCP_BSC_VALIDATOR_SET_TRANSITION_MESSAGE_PREFIX_V1,
+      canonicalBscValidatorSetTransitionMessageBytes(input),
+    ),
+  );
+}
+
+const canonicalBscValidatorSetPayloadBytesFromAddressBytes = (validatorAddresses) => {
+  if (!Array.isArray(validatorAddresses) || validatorAddresses.length === 0) {
+    throw new RangeError("validatorAddresses must be a non-empty array");
+  }
+  if (validatorAddresses.length > SCCP_BSC_MAX_PARLIA_VALIDATORS) {
+    throw new RangeError("validatorAddresses exceeds the BSC Parlia validator bound");
+  }
+  let out = new Uint8Array();
+  out = writeU8(out, 1);
+  out = writeU32Le(out, validatorAddresses.length);
+  const seenAddresses = new Set();
+  validatorAddresses.forEach((address, index) => {
+    if (!(address instanceof Uint8Array) || address.length !== SCCP_BSC_PARLIA_VALIDATOR_ADDRESS_BYTES) {
+      throw new TypeError(`validatorAddresses[${index}] must be 20 bytes`);
+    }
+    if (address.every((byte) => byte === 0)) {
+      throw new RangeError(`validatorAddresses[${index}] must not be zero`);
+    }
+    const addressHex = bytesToHex(address, false);
+    if (seenAddresses.has(addressHex)) {
+      throw new RangeError(`validatorAddresses[${index}] must be unique`);
+    }
+    seenAddresses.add(addressHex);
+    out = concatBytes(out, address);
+    out = writeU64Le(out, 1n);
+  });
+  return out;
+};
+
+const bscParliaValidatorSetPayloadCandidatesFromExtra = (extraInput) => {
+  const extra = toBytes(extraInput, "extraData");
+  const minimumExtra =
+    SCCP_BSC_PARLIA_EXTRA_VANITY_BYTES + SCCP_BSC_PARLIA_EXTRA_SEAL_BYTES;
+  const candidates = [];
+  const pushCandidate = (addresses) => {
+    try {
+      const payload = canonicalBscValidatorSetPayloadBytesFromAddressBytes(addresses);
+      if (!candidates.some((candidate) => bytesEqual(candidate, payload))) {
+        candidates.push(payload);
+      }
+    } catch {
+      // Invalid candidate shape: keep checking the other Parlia extraData layout.
+    }
+  };
+  if (extra.length <= minimumExtra) return candidates;
+  const validatorRegion = extra.slice(
+    SCCP_BSC_PARLIA_EXTRA_VANITY_BYTES,
+    extra.length - SCCP_BSC_PARLIA_EXTRA_SEAL_BYTES,
+  );
+  if (validatorRegion.length === 0) return candidates;
+
+  if (validatorRegion.length % SCCP_BSC_PARLIA_VALIDATOR_ADDRESS_BYTES === 0) {
+    const count = validatorRegion.length / SCCP_BSC_PARLIA_VALIDATOR_ADDRESS_BYTES;
+    if (count <= SCCP_BSC_MAX_PARLIA_VALIDATORS) {
+      const addresses = [];
+      for (let offset = 0; offset < validatorRegion.length; offset += SCCP_BSC_PARLIA_VALIDATOR_ADDRESS_BYTES) {
+        addresses.push(validatorRegion.slice(offset, offset + SCCP_BSC_PARLIA_VALIDATOR_ADDRESS_BYTES));
+      }
+      pushCandidate(addresses);
+    }
+  }
+
+  const lubanCount = validatorRegion[0];
+  const lubanStride =
+    SCCP_BSC_PARLIA_VALIDATOR_ADDRESS_BYTES + SCCP_BSC_PARLIA_VALIDATOR_BLS_KEY_BYTES;
+  const lubanRegionLength = 1 + lubanCount * lubanStride;
+  if (
+    lubanCount !== 0 &&
+    lubanCount <= SCCP_BSC_MAX_PARLIA_VALIDATORS &&
+    validatorRegion.length >= lubanRegionLength
+  ) {
+    const addresses = [];
+    for (let index = 0; index < lubanCount; index += 1) {
+      const start = 1 + index * lubanStride;
+      addresses.push(validatorRegion.slice(start, start + SCCP_BSC_PARLIA_VALIDATOR_ADDRESS_BYTES));
+    }
+    pushCandidate(addresses);
+  }
+  return candidates;
+};
+
+export function bscValidatorSetPayloadFromParliaExtra(extraData) {
+  const candidates = bscParliaValidatorSetPayloadCandidatesFromExtra(extraData);
+  if (candidates.length !== 1) {
+    throw new TypeError("BSC Parlia extraData must contain one unambiguous validator set");
+  }
+  return candidates[0];
+}
+
+const readRlpLength = (bytes, offset, lengthOfLength) => {
+  if (lengthOfLength === 0 || lengthOfLength > 6 || offset + lengthOfLength > bytes.length) {
+    throw new TypeError("invalid RLP length");
+  }
+  if (bytes[offset] === 0) throw new TypeError("non-canonical RLP length");
+  let length = 0;
+  for (let index = 0; index < lengthOfLength; index += 1) {
+    length = length * 256 + bytes[offset + index];
+  }
+  return length;
+};
+
+const readRlpItem = (bytes, cursor) => {
+  const first = bytes[cursor];
+  if (first === undefined) throw new TypeError("RLP cursor out of bounds");
+  if (first <= 0x7f) {
+    return { type: "bytes", value: bytes.slice(cursor, cursor + 1), next: cursor + 1 };
+  }
+  if (first <= 0xb7) {
+    const length = first - 0x80;
+    const start = cursor + 1;
+    const end = start + length;
+    if (end > bytes.length || (length === 1 && bytes[start] < 0x80)) {
+      throw new TypeError("non-canonical RLP string");
+    }
+    return { type: "bytes", value: bytes.slice(start, end), next: end };
+  }
+  if (first <= 0xbf) {
+    const lengthOfLength = first - 0xb7;
+    const length = readRlpLength(bytes, cursor + 1, lengthOfLength);
+    if (length < 56) throw new TypeError("non-canonical RLP long string");
+    const start = cursor + 1 + lengthOfLength;
+    const end = start + length;
+    if (end > bytes.length) throw new TypeError("RLP string out of bounds");
+    return { type: "bytes", value: bytes.slice(start, end), next: end };
+  }
+  if (first <= 0xf7) {
+    const length = first - 0xc0;
+    const start = cursor + 1;
+    const end = start + length;
+    if (end > bytes.length) throw new TypeError("RLP list out of bounds");
+    return { type: "list", value: bytes.slice(start, end), next: end };
+  }
+  const lengthOfLength = first - 0xf7;
+  const length = readRlpLength(bytes, cursor + 1, lengthOfLength);
+  if (length < 56) throw new TypeError("non-canonical RLP long list");
+  const start = cursor + 1 + lengthOfLength;
+  const end = start + length;
+  if (end > bytes.length) throw new TypeError("RLP list out of bounds");
+  return { type: "list", value: bytes.slice(start, end), next: end };
+};
+
+const rlpListByteFields = (input, label) => {
+  const bytes = toBytes(input, label);
+  const outer = readRlpItem(bytes, 0);
+  if (outer.type !== "list" || outer.next !== bytes.length) {
+    throw new TypeError(`${label} must be an RLP list`);
+  }
+  const fields = [];
+  let cursor = 0;
+  while (cursor < outer.value.length) {
+    const item = readRlpItem(outer.value, cursor);
+    if (item.type !== "bytes") {
+      throw new TypeError(`${label} must contain only RLP byte fields`);
+    }
+    fields.push(item.value);
+    cursor = item.next;
+  }
+  return fields;
+};
+
+const minimalBigEndianLength = (length) => {
+  const bytes = [];
+  let remaining = length;
+  while (remaining > 0) {
+    bytes.unshift(remaining & 0xff);
+    remaining = Math.floor(remaining / 256);
+  }
+  return Uint8Array.from(bytes);
+};
+
+const encodeRlpLength = (length, shortOffset, longOffset) => {
+  if (length < 56) {
+    return Uint8Array.from([shortOffset + length]);
+  }
+  const lengthBytes = minimalBigEndianLength(length);
+  return concatBytes(Uint8Array.from([longOffset + lengthBytes.length]), lengthBytes);
+};
+
+const rlpBytes = (value) => {
+  if (value.length === 1 && value[0] < 0x80) {
+    return Uint8Array.from(value);
+  }
+  return concatBytes(encodeRlpLength(value.length, 0x80, 0xb7), value);
+};
+
+const rlpList = (fields) => {
+  const payload = concatBytes(...fields);
+  return concatBytes(encodeRlpLength(payload.length, 0xc0, 0xf7), payload);
+};
+
+export function bscValidatorSetPayloadFromHeaderRlp(headerRlp) {
+  const fields = rlpListByteFields(headerRlp, "headerRlp");
+  if (fields.length < 13) {
+    throw new TypeError("BSC Parlia header RLP must contain an extraData field");
+  }
+  return bscValidatorSetPayloadFromParliaExtra(fields[12]);
+}
+
+export function canonicalSolanaSccpMessageProofBytes(input) {
+  if (!input || typeof input !== "object" || Array.isArray(input)) {
+    throw new TypeError("Solana SCCP message proof input must be an object");
+  }
+  const sourceEventDigest = nonZeroHex32Bytes(
+    strictResultField(input, "sourceEventDigest", "sourceEventDigest", "source_event_digest"),
+    "sourceEventDigest",
+  );
+  const transactionStatusRoot = nonZeroHex32Bytes(
+    strictResultField(
+      input,
+      "transactionStatusRoot",
+      "transactionStatusRoot",
+      "transaction_status_root",
+      "receiptOrMessageRoot",
+      "receipt_or_message_root",
+    ),
+    "transactionStatusRoot",
+  );
+  const transactionSignature = decodeSolanaBase58Fixed(
+    strictResultField(input, "transactionSignature", "transactionSignature", "transaction_signature"),
+    "transactionSignature",
+    SCCP_SOLANA_TRANSACTION_SIGNATURE_BYTES,
+  );
+  const emitterProgramId = decodeSolanaBase58Fixed(
+    strictResultField(input, "emitterProgramId", "emitterProgramId", "emitter_program_id"),
+    "emitterProgramId",
+    SCCP_SOLANA_PROGRAM_ID_BYTES,
+  );
+  const inclusionBranch = normalizeSolanaInclusionBranch(
+    strictResultField(input, "inclusionBranch", "inclusionBranch", "inclusion_branch"),
+  );
+  if (inclusionBranch.length === 0) {
+    throw new TypeError("inclusionBranch must not be empty");
+  }
+  let out = new Uint8Array();
+  out = writeU8(out, 1);
+  out = concatBytes(out, sourceEventDigest, transactionStatusRoot);
+  out = writeBytes(out, transactionSignature);
+  out = writeBytes(out, emitterProgramId);
+  out = writeU32Le(out, inclusionBranch.length);
+  for (const sibling of inclusionBranch) {
+    out = concatBytes(out, sibling);
+  }
+  return out;
+}
+
+export function solanaSccpMessageProofHash(input) {
+  return bytesToHex(
+    prefixedBlake2b(
+      SCCP_SOLANA_MESSAGE_PROOF_PREFIX_V1,
+      canonicalSolanaSccpMessageProofBytes(input),
+    ),
+  );
+}
+
+export function canonicalSolanaSccpTransactionStatusLeafBytes(input) {
+  if (!input || typeof input !== "object" || Array.isArray(input)) {
+    throw new TypeError("Solana transaction-status leaf input must be an object");
+  }
+  const sourceEventDigest = nonZeroHex32Bytes(
+    strictResultField(input, "sourceEventDigest", "sourceEventDigest", "source_event_digest"),
+    "sourceEventDigest",
+  );
+  const transactionSignature = decodeSolanaBase58Fixed(
+    strictResultField(input, "transactionSignature", "transactionSignature", "transaction_signature"),
+    "transactionSignature",
+    SCCP_SOLANA_TRANSACTION_SIGNATURE_BYTES,
+  );
+  const emitterProgramId = decodeSolanaBase58Fixed(
+    strictResultField(input, "emitterProgramId", "emitterProgramId", "emitter_program_id"),
+    "emitterProgramId",
+    SCCP_SOLANA_PROGRAM_ID_BYTES,
+  );
+  let out = new Uint8Array();
+  out = writeU8(out, 1);
+  out = concatBytes(out, sourceEventDigest);
+  out = writeBytes(out, transactionSignature);
+  out = writeBytes(out, emitterProgramId);
+  return out;
+}
+
+export function solanaSccpTransactionStatusLeafHash(input) {
+  return bytesToHex(
+    prefixedBlake2b(
+      SCCP_SOLANA_TRANSACTION_STATUS_LEAF_PREFIX_V1,
+      canonicalSolanaSccpTransactionStatusLeafBytes(input),
+    ),
+  );
+}
+
+export function solanaSccpTransactionStatusRootFromBranch(input) {
+  if (!input || typeof input !== "object" || Array.isArray(input)) {
+    throw new TypeError("Solana transaction-status root input must be an object");
+  }
+  const inclusionBranch = normalizeSolanaInclusionBranch(
+    strictResultField(input, "inclusionBranch", "inclusionBranch", "inclusion_branch"),
+  );
+  if (inclusionBranch.length === 0) {
+    throw new TypeError("inclusionBranch must not be empty");
+  }
+  let current = hexToBytes(
+    solanaSccpTransactionStatusLeafHash(input),
+    "transactionStatusLeafHash",
+    32,
+  );
+  for (const sibling of inclusionBranch) {
+    current = prefixedBlake2b(SCCP_SOURCE_NODE_PREFIX_V1, concatBytes(current, sibling));
+  }
+  return bytesToHex(current);
+}
+
+export function solanaSccpMainnetEpochForSlot(slot) {
+  return normalizeUnsignedBigInt(slot, "slot") / SCCP_SOLANA_MAINNET_SLOTS_PER_EPOCH;
+}
+
+const normalizeSolanaValidatorRoster = (input) => {
+  if (!input || typeof input !== "object" || Array.isArray(input)) {
+    throw new TypeError("Solana validator roster input must be an object");
+  }
+  const rawPublicKeys = strictResultField(
+    input,
+    "validatorPublicKeys",
+    "validatorPublicKeys",
+    "validator_public_keys",
+  );
+  const rawStakes = strictResultField(
+    input,
+    "validatorStakes",
+    "validatorStakes",
+    "validator_stakes",
+  );
+  if (!Array.isArray(rawPublicKeys) || rawPublicKeys.length === 0) {
+    throw new TypeError("validatorPublicKeys must be a non-empty array");
+  }
+  if (rawPublicKeys.length > SCCP_SOLANA_MAX_VALIDATORS) {
+    throw new RangeError(`validatorPublicKeys must contain 1..${SCCP_SOLANA_MAX_VALIDATORS} entries`);
+  }
+  if (!Array.isArray(rawStakes) || rawStakes.length !== rawPublicKeys.length) {
+    throw new TypeError("validatorStakes must match validatorPublicKeys");
+  }
+  const seen = new Set();
+  const validatorPublicKeys = rawPublicKeys.map((value, index) => {
+    const bytes = toBytes(value, `validatorPublicKeys[${index}]`);
+    if (bytes.length !== 32) {
+      throw new TypeError(`validatorPublicKeys[${index}] must be 32 bytes`);
+    }
+    if (bytes.every((byte) => byte === 0)) {
+      throw new TypeError(`validatorPublicKeys[${index}] must not be zero`);
+    }
+    const key = bytesToHex(bytes);
+    if (seen.has(key)) {
+      throw new TypeError("validatorPublicKeys must not contain duplicates");
+    }
+    seen.add(key);
+    return bytes;
+  });
+  const validatorStakes = rawStakes.map((value, index) => {
+    const stake = normalizeUnsignedBigInt(value, `validatorStakes[${index}]`);
+    if (stake === 0n) {
+      throw new TypeError(`validatorStakes[${index}] must be greater than zero`);
+    }
+    return stake;
+  });
+  return { validatorPublicKeys, validatorStakes };
+};
+
+const canonicalSolanaVoteRosterBytes = (validatorPublicKeys, validatorStakes) => {
+  let out = new Uint8Array();
+  out = writeU8(out, 1);
+  out = writeU32Le(out, validatorPublicKeys.length);
+  for (let index = 0; index < validatorPublicKeys.length; index += 1) {
+    out = writeBytes(out, validatorPublicKeys[index]);
+    out = writeU64Le(out, validatorStakes[index]);
+  }
+  return out;
+};
+
+const normalizeSolanaEpochFromEpochOrSlot = (input) => {
+  const epochSource = strictOptionalResultField(
+    input,
+    "epoch",
+    "epoch",
+    "validatorEpoch",
+    "validator_epoch",
+  );
+  if (
+    epochSource !== SCCP_OPTIONAL_FIELD_MISSING &&
+    epochSource !== undefined &&
+    epochSource !== null
+  ) {
+    return normalizeUnsignedBigInt(epochSource, "epoch");
+  }
+  const slotSource = strictOptionalResultField(
+    input,
+    "finalizedSlot",
+    "finalizedSlot",
+    "finalized_slot",
+    "slot",
+  );
+  if (
+    slotSource !== SCCP_OPTIONAL_FIELD_MISSING &&
+    slotSource !== undefined &&
+    slotSource !== null
+  ) {
+    return solanaSccpMainnetEpochForSlot(slotSource);
+  }
+  throw new TypeError("epoch or finalizedSlot must be provided");
+};
+
+export function canonicalSolanaSccpEpochStakeRootBytes(input) {
+  const epoch = normalizeSolanaEpochFromEpochOrSlot(input);
+  const { validatorPublicKeys, validatorStakes } = normalizeSolanaValidatorRoster(input);
+  const rosterBytes = canonicalSolanaVoteRosterBytes(validatorPublicKeys, validatorStakes);
+  const rosterHash = prefixedBlake2b(SCCP_SOLANA_VOTE_ROSTER_PREFIX_V1, rosterBytes);
+  let out = new Uint8Array();
+  out = writeU8(out, 1);
+  out = writeU64Le(out, epoch);
+  out = concatBytes(out, rosterHash, rosterBytes);
+  return out;
+}
+
+export function solanaSccpEpochStakeRoot(input) {
+  return bytesToHex(
+    prefixedBlake2b(
+      SCCP_SOLANA_EPOCH_STAKE_ROOT_PREFIX_V1,
+      canonicalSolanaSccpEpochStakeRootBytes(input),
+    ),
+  );
+}
+
+export function canonicalSolanaSccpStakeActivationBytes(input) {
+  const epoch = normalizeSolanaEpochFromEpochOrSlot(input);
+  const { validatorPublicKeys, validatorStakes } = normalizeSolanaValidatorRoster(input);
+  const rawActivationEpochs = strictResultField(
+    input,
+    "validatorActivationEpochs",
+    "validatorActivationEpochs",
+    "validator_activation_epochs",
+    "activationEpochs",
+    "activation_epochs",
+  );
+  const rawDeactivationEpochs = strictResultField(
+    input,
+    "validatorDeactivationEpochs",
+    "validatorDeactivationEpochs",
+    "validator_deactivation_epochs",
+    "deactivationEpochs",
+    "deactivation_epochs",
+  );
+  if (!Array.isArray(rawActivationEpochs)) {
+    throw new TypeError("validatorActivationEpochs must be an array");
+  }
+  if (!Array.isArray(rawDeactivationEpochs)) {
+    throw new TypeError("validatorDeactivationEpochs must be an array");
+  }
+  if (
+    rawActivationEpochs.length !== validatorPublicKeys.length ||
+    rawDeactivationEpochs.length !== validatorPublicKeys.length
+  ) {
+    throw new RangeError("validator activation epochs must match validatorPublicKeys");
+  }
+  const activationEpochs = rawActivationEpochs.map((value, index) =>
+    normalizeUnsignedBigInt(value, `validatorActivationEpochs[${index}]`));
+  const deactivationEpochs = rawDeactivationEpochs.map((value, index) =>
+    normalizeUnsignedBigInt(value, `validatorDeactivationEpochs[${index}]`));
+  for (let index = 0; index < validatorPublicKeys.length; index += 1) {
+    if (activationEpochs[index] >= epoch) {
+      throw new RangeError(`validatorActivationEpochs[${index}] must be less than epoch`);
+    }
+    if (deactivationEpochs[index] <= activationEpochs[index]) {
+      throw new RangeError(`validatorDeactivationEpochs[${index}] must be greater than activation epoch`);
+    }
+  }
+
+  const rosterBytes = canonicalSolanaVoteRosterBytes(validatorPublicKeys, validatorStakes);
+  const rosterHash = prefixedBlake2b(SCCP_SOLANA_VOTE_ROSTER_PREFIX_V1, rosterBytes);
+  let out = new Uint8Array();
+  out = writeU8(out, 1);
+  out = writeU64Le(out, epoch);
+  out = concatBytes(out, rosterHash);
+  out = writeU32Le(out, validatorPublicKeys.length);
+  for (let index = 0; index < validatorPublicKeys.length; index += 1) {
+    out = writeBytes(out, validatorPublicKeys[index]);
+    out = writeU64Le(out, validatorStakes[index]);
+    out = writeU64Le(out, activationEpochs[index]);
+    out = writeU64Le(out, deactivationEpochs[index]);
+  }
+  return out;
+}
+
+export function solanaSccpStakeActivationHash(input) {
+  return bytesToHex(
+    prefixedBlake2b(
+      SCCP_SOLANA_STAKE_ACTIVATION_PREFIX_V1,
+      canonicalSolanaSccpStakeActivationBytes(input),
+    ),
+  );
+}
+
+export function canonicalSolanaSccpAccountOpeningBytes(input) {
+  if (!input || typeof input !== "object" || Array.isArray(input)) {
+    throw new TypeError("Solana account opening input must be an object");
+  }
+  const address = toBytes(
+    strictResultField(input, "address", "address", "accountAddress", "account_address"),
+    "address",
+  );
+  const owner = toBytes(
+    strictResultField(input, "owner", "owner", "ownerProgramId", "owner_program_id"),
+    "owner",
+  );
+  const lamports = normalizeUnsignedBigInt(input.lamports, "lamports");
+  const rentEpoch = normalizeUnsignedBigInt(
+    strictResultField(input, "rentEpoch", "rentEpoch", "rent_epoch"),
+    "rentEpoch",
+  );
+  const executable = input.executable ?? false;
+  const dataHash = hexToBytes(
+    strictResultField(input, "dataHash", "dataHash", "data_hash"),
+    "dataHash",
+    32,
+  );
+  if (address.length !== 32 || address.every((byte) => byte === 0)) {
+    throw new TypeError("address must be a non-zero 32-byte Solana account id");
+  }
+  if (owner.length !== 32 || owner.every((byte) => byte === 0)) {
+    throw new TypeError("owner must be a non-zero 32-byte Solana program id");
+  }
+  if (lamports === 0n) {
+    throw new RangeError("lamports must be greater than zero");
+  }
+  if (typeof executable !== "boolean") {
+    throw new TypeError("executable must be a boolean");
+  }
+  if (dataHash.every((byte) => byte === 0)) {
+    throw new TypeError("dataHash must not be zero");
+  }
+  let out = new Uint8Array();
+  out = writeU8(out, 1);
+  out = writeBytes(out, address);
+  out = writeBytes(out, owner);
+  out = writeU64Le(out, lamports);
+  out = writeU64Le(out, rentEpoch);
+  out = writeU8(out, executable ? 1 : 0);
+  out = concatBytes(out, dataHash);
+  return out;
+}
+
+export function solanaSccpAccountOpeningHash(input) {
+  return bytesToHex(
+    prefixedBlake2b(
+      SCCP_SOLANA_ACCOUNT_OPENING_PREFIX_V1,
+      canonicalSolanaSccpAccountOpeningBytes(input),
+    ),
+  );
+}
+
+export function solanaSccpAccountRawDataHash(rawData) {
+  const bytes = toBytes(rawData, "rawData");
+  if (bytes.length === 0 || bytes.length > SCCP_SOLANA_MAX_ACCOUNT_RAW_DATA_BYTES) {
+    throw new RangeError("rawData must be between 1 and 65536 bytes");
+  }
+  return bytesToHex(prefixedBlake2b(SCCP_SOLANA_ACCOUNT_RAW_DATA_PREFIX_V1, bytes));
+}
+
+function normalizeSolanaAccountOpeningForLtHash(input) {
+  if (!input || typeof input !== "object" || Array.isArray(input)) {
+    throw new TypeError("Solana account opening must be an object");
+  }
+  const address = toBytes(
+    strictResultField(input, "address", "address", "accountAddress", "account_address"),
+    "address",
+  );
+  if (address.length !== 32) throw new TypeError("address must be 32 bytes");
+  const owner = toBytes(
+    strictResultField(input, "owner", "owner", "ownerProgramId", "owner_program_id"),
+    "owner",
+  );
+  if (owner.length !== 32) throw new TypeError("owner must be 32 bytes");
+  const lamports = normalizeUnsignedBigInt(input.lamports, "lamports");
+  const executable = input.executable ?? false;
+  if (typeof executable !== "boolean") {
+    throw new TypeError("executable must be a boolean");
+  }
+  return { address, owner, lamports, executable };
+}
+
+export function solanaSccpAccountLtHash(openingInput, rawDataInput) {
+  const opening = normalizeSolanaAccountOpeningForLtHash(openingInput);
+  const rawData = toBytes(rawDataInput, "rawData");
+  if (rawData.length > SCCP_SOLANA_MAX_ACCOUNT_RAW_DATA_BYTES) {
+    throw new RangeError("rawData must be at most 65536 bytes");
+  }
+  if (opening.lamports === 0n) {
+    return new Uint8Array(SCCP_SOLANA_ACCOUNTS_LT_HASH_BYTES);
+  }
+  let lamportsBytes = new Uint8Array();
+  lamportsBytes = writeU64Le(lamportsBytes, opening.lamports);
+  const executable = Uint8Array.from([opening.executable ? 1 : 0]);
+  return blake3(
+    concatBytes(lamportsBytes, rawData, executable, opening.owner, opening.address),
+    { dkLen: SCCP_SOLANA_ACCOUNTS_LT_HASH_BYTES },
+  );
+}
+
+function addSolanaAccountsLtHashContribution(target, contribution) {
+  if (target.length !== SCCP_SOLANA_ACCOUNTS_LT_HASH_BYTES) {
+    throw new TypeError("accountsLtHash target must be 2048 bytes");
+  }
+  if (contribution.length !== SCCP_SOLANA_ACCOUNTS_LT_HASH_BYTES) {
+    throw new TypeError("accountLtHash contribution must be 2048 bytes");
+  }
+  const targetView = new DataView(target.buffer, target.byteOffset, target.byteLength);
+  const contributionView = new DataView(
+    contribution.buffer,
+    contribution.byteOffset,
+    contribution.byteLength,
+  );
+  for (let element = 0; element < SCCP_SOLANA_LT_HASH_ELEMENTS; element += 1) {
+    const offset = element * 2;
+    const mixed =
+      (targetView.getUint16(offset, true) + contributionView.getUint16(offset, true)) &
+      0xffff;
+    targetView.setUint16(offset, mixed, true);
+  }
+}
+
+function subtractSolanaAccountsLtHashContribution(target, contribution) {
+  if (target.length !== SCCP_SOLANA_ACCOUNTS_LT_HASH_BYTES) {
+    throw new TypeError("accountsLtHash target must be 2048 bytes");
+  }
+  if (contribution.length !== SCCP_SOLANA_ACCOUNTS_LT_HASH_BYTES) {
+    throw new TypeError("accountLtHash contribution must be 2048 bytes");
+  }
+  const targetView = new DataView(target.buffer, target.byteOffset, target.byteLength);
+  const contributionView = new DataView(
+    contribution.buffer,
+    contribution.byteOffset,
+    contribution.byteLength,
+  );
+  for (let element = 0; element < SCCP_SOLANA_LT_HASH_ELEMENTS; element += 1) {
+    const offset = element * 2;
+    const mixed =
+      (targetView.getUint16(offset, true) - contributionView.getUint16(offset, true)) &
+      0xffff;
+    targetView.setUint16(offset, mixed, true);
+  }
+}
+
+export function solanaSccpAccountsLtHashFromOpenings(openings, rawDataValues) {
+  if (!Array.isArray(openings) || !Array.isArray(rawDataValues) || openings.length !== rawDataValues.length) {
+    throw new TypeError("openings and rawDataValues must be same-length arrays");
+  }
+  const out = new Uint8Array(SCCP_SOLANA_ACCOUNTS_LT_HASH_BYTES);
+  for (let index = 0; index < openings.length; index += 1) {
+    const accountLtHash = solanaSccpAccountLtHash(openings[index], rawDataValues[index]);
+    addSolanaAccountsLtHashContribution(out, accountLtHash);
+  }
+  return out;
+}
+
+export function solanaSccpAccountsLtHashChecksum(accountsLtHashInput) {
+  const accountsLtHash = toBytes(accountsLtHashInput, "accountsLtHash");
+  if (accountsLtHash.length !== SCCP_SOLANA_ACCOUNTS_LT_HASH_BYTES) {
+    throw new TypeError("accountsLtHash must be 2048 bytes");
+  }
+  return bytesToHex(blake3(accountsLtHash));
+}
+
+function requireNonZeroSolanaAccountsLtHash(accountsLtHash, label = "accountsLtHash") {
+  if (accountsLtHash.length !== SCCP_SOLANA_ACCOUNTS_LT_HASH_BYTES) {
+    throw new TypeError(`${label} must be 2048 bytes`);
+  }
+  if (accountsLtHash.every((byte) => byte === 0)) {
+    throw new TypeError(`${label} must not be zero`);
+  }
+}
+
+const solanaOpenedLtHashArray = (input, keys, label) => {
+  const selected = strictOptionalResultField(input, label, ...keys);
+  if (selected === SCCP_OPTIONAL_FIELD_MISSING || selected === null) {
+    return [];
+  }
+  if (!Array.isArray(selected)) {
+    throw new TypeError(`${label} must be an array`);
+  }
+  if (selected.length > SCCP_SOLANA_MAX_VALIDATORS) {
+    throw new RangeError(`${label} must contain at most ${SCCP_SOLANA_MAX_VALIDATORS} entries`);
+  }
+  return selected;
+};
+
+function requireUniqueSolanaOpenedAccountAddresses(openings) {
+  const seenAddresses = new Set();
+  for (const openingInput of openings) {
+    const { address } = normalizeSolanaAccountOpeningForLtHash(openingInput);
+    const addressKey = bytesToHex(address);
+    if (seenAddresses.has(addressKey)) {
+      throw new TypeError("opened account addresses must be unique");
+    }
+    seenAddresses.add(addressKey);
+  }
+}
+
+function solanaOpenedLtHashContributionRows(input) {
+  if (!input || typeof input !== "object" || Array.isArray(input)) {
+    throw new TypeError("Solana opened AccountsLtHash contribution input must be an object");
+  }
+  const voteOpenings = solanaOpenedLtHashArray(
+    input,
+    ["validatorVoteAccountOpenings", "validator_vote_account_openings", "voteAccountOpenings", "vote_account_openings"],
+    "validatorVoteAccountOpenings",
+  );
+  const voteRawData = solanaOpenedLtHashArray(
+    input,
+    ["validatorVoteAccountRawData", "validator_vote_account_raw_data", "voteAccountRawData", "vote_account_raw_data"],
+    "validatorVoteAccountRawData",
+  );
+  const voteLtHashes = solanaOpenedLtHashArray(
+    input,
+    ["validatorVoteAccountLtHashes", "validator_vote_account_lt_hashes", "voteAccountLtHashes", "vote_account_lt_hashes"],
+    "validatorVoteAccountLtHashes",
+  );
+  const stakeOpenings = solanaOpenedLtHashArray(
+    input,
+    ["validatorStakeAccountOpenings", "validator_stake_account_openings", "stakeAccountOpenings", "stake_account_openings"],
+    "validatorStakeAccountOpenings",
+  );
+  const stakeRawData = solanaOpenedLtHashArray(
+    input,
+    ["validatorStakeAccountRawData", "validator_stake_account_raw_data", "stakeAccountRawData", "stake_account_raw_data"],
+    "validatorStakeAccountRawData",
+  );
+  const stakeLtHashes = solanaOpenedLtHashArray(
+    input,
+    ["validatorStakeAccountLtHashes", "validator_stake_account_lt_hashes", "stakeAccountLtHashes", "stake_account_lt_hashes"],
+    "validatorStakeAccountLtHashes",
+  );
+  if (voteOpenings.length !== voteRawData.length || stakeOpenings.length !== stakeRawData.length) {
+    throw new TypeError("opened account openings and rawData arrays must have matching lengths");
+  }
+  const deriveVoteLtHashes = voteLtHashes.length === 0;
+  const deriveStakeLtHashes = stakeLtHashes.length === 0;
+  if (!deriveVoteLtHashes && voteOpenings.length !== voteLtHashes.length) {
+    throw new TypeError("validatorVoteAccountOpenings and validatorVoteAccountLtHashes must have matching lengths");
+  }
+  if (!deriveStakeLtHashes && stakeOpenings.length !== stakeLtHashes.length) {
+    throw new TypeError("validatorStakeAccountOpenings and validatorStakeAccountLtHashes must have matching lengths");
+  }
+  const rows = [];
+  const seenAddresses = new Set();
+  const pushRow = (role, openingInput, rawDataInput, suppliedLtHashInput, label, allowEmptyDerive = false) => {
+    const opening = normalizeSolanaAccountOpeningForLtHash(openingInput);
+    const addressKey = bytesToHex(opening.address);
+    if (seenAddresses.has(addressKey)) {
+      throw new TypeError("opened account addresses must be unique");
+    }
+    seenAddresses.add(addressKey);
+    const rawData = toBytes(rawDataInput, "rawData");
+    const accountHash = hexToBytes(
+      solanaSccpAccountOpeningHash(openingInput),
+      "accountHash",
+      32,
+    );
+    const rawDataHash = hexToBytes(
+      solanaSccpAccountRawDataHash(rawData),
+      "rawDataHash",
+      32,
+    );
+    const expectedLtHash = solanaSccpAccountLtHash(openingInput, rawData);
+    let accountLtHash = expectedLtHash;
+    if (suppliedLtHashInput !== undefined && suppliedLtHashInput !== null) {
+      const suppliedLtHash = toBytes(suppliedLtHashInput, label);
+      if (!(allowEmptyDerive && suppliedLtHash.length === 0)) {
+        if (suppliedLtHash.length !== SCCP_SOLANA_ACCOUNTS_LT_HASH_BYTES) {
+          throw new TypeError(`${label} must be 2048 bytes`);
+        }
+        if (!bytesEqual(suppliedLtHash, expectedLtHash)) {
+          throw new TypeError(`${label} must match the opening and rawData`);
+        }
+        accountLtHash = suppliedLtHash;
+      }
+    }
+    rows.push({
+      role,
+      address: opening.address,
+      accountHash,
+      rawDataHash,
+      accountLtHash,
+    });
+  };
+  for (let index = 0; index < voteOpenings.length; index += 1) {
+    pushRow(
+      SCCP_SOLANA_OPENED_LT_HASH_ROLE_VOTE,
+      voteOpenings[index],
+      voteRawData[index],
+      deriveVoteLtHashes ? undefined : voteLtHashes[index],
+      `validatorVoteAccountLtHashes[${index}]`,
+    );
+  }
+  for (let index = 0; index < stakeOpenings.length; index += 1) {
+    pushRow(
+      SCCP_SOLANA_OPENED_LT_HASH_ROLE_STAKE,
+      stakeOpenings[index],
+      stakeRawData[index],
+      deriveStakeLtHashes ? undefined : stakeLtHashes[index],
+      `validatorStakeAccountLtHashes[${index}]`,
+    );
+  }
+  const stakeHistoryOpening = strictResultField(
+    input,
+    "stakeHistorySysvarOpening",
+    "stakeHistorySysvarOpening",
+    "stake_history_sysvar_opening",
+  );
+  const stakeHistoryRawData = strictResultField(
+    input,
+    "stakeHistorySysvarRawData",
+    "stakeHistorySysvarRawData",
+    "stake_history_sysvar_raw_data",
+  );
+  const stakeHistoryLtHash = strictResultField(
+    input,
+    "stakeHistorySysvarAccountLtHash",
+    "stakeHistorySysvarAccountLtHash",
+    "stake_history_sysvar_account_lt_hash",
+  );
+  if (stakeHistoryOpening === undefined || stakeHistoryRawData === undefined) {
+    throw new TypeError("stakeHistorySysvarOpening and stakeHistorySysvarRawData are required");
+  }
+  pushRow(
+    SCCP_SOLANA_OPENED_LT_HASH_ROLE_STAKE_HISTORY_SYSVAR,
+    stakeHistoryOpening,
+    stakeHistoryRawData,
+    stakeHistoryLtHash,
+    "stakeHistorySysvarAccountLtHash",
+    true,
+  );
+  rows.sort(
+    (left, right) =>
+      left.role - right.role || compareBytesLexicographically(left.address, right.address),
+  );
+  return rows;
+}
+
+function normalizeSolanaAccountsLtHashOpenedContributionsInput(input) {
+  if (!input || typeof input !== "object" || Array.isArray(input)) {
+    throw new TypeError("Solana opened AccountsLtHash contribution input must be an object");
+  }
+  const sourceDomain = normalizeOptionalSccpDomainId(
+    input,
+    "sourceDomain",
+    SCCP_DOMAIN_SOL,
+    "sourceDomain",
+    "source_domain",
+  );
+  if (sourceDomain !== SCCP_DOMAIN_SOL) {
+    throw new RangeError("sourceDomain must be Solana");
+  }
+  const finalizedSlot = normalizeUnsignedBigInt(
+    strictResultField(input, "finalizedSlot", "finalizedSlot", "finalized_slot", "slot"),
+    "finalizedSlot",
+  );
+  const accountInclusionRoot = nonZeroHex32Bytes(
+    strictResultField(
+      input,
+      "accountInclusionRoot",
+      "accountInclusionRoot",
+      "account_inclusion_root",
+      "accountsRoot",
+      "accounts_root",
+    ),
+    "accountInclusionRoot",
+  );
+  const accountsLtHashChecksum = nonZeroHex32Bytes(
+    strictResultField(
+      input,
+      "accountsLtHashChecksum",
+      "accountsLtHashChecksum",
+      "accounts_lt_hash_checksum",
+      "accountsLtHashRoot",
+      "accounts_lt_hash_root",
+    ),
+    "accountsLtHashChecksum",
+  );
+  const accountsLtHash = toBytes(
+    strictResultField(input, "accountsLtHash", "accountsLtHash", "accounts_lt_hash"),
+    "accountsLtHash",
+  );
+  if (accountsLtHash.length !== SCCP_SOLANA_ACCOUNTS_LT_HASH_BYTES) {
+    throw new TypeError("accountsLtHash must be 2048 bytes");
+  }
+  requireNonZeroSolanaAccountsLtHash(accountsLtHash);
+  if (!bytesEqual(accountsLtHashChecksum, blake3(accountsLtHash))) {
+    throw new TypeError("accountsLtHashChecksum must match accountsLtHash");
+  }
+  const rows = solanaOpenedLtHashContributionRows(input);
+  const openedAccountsLtHash = new Uint8Array(SCCP_SOLANA_ACCOUNTS_LT_HASH_BYTES);
+  for (const row of rows) {
+    addSolanaAccountsLtHashContribution(openedAccountsLtHash, row.accountLtHash);
+  }
+  const openedAccountsLtHashChecksum = blake3(openedAccountsLtHash);
+  const residualAccountsLtHash = new Uint8Array(accountsLtHash);
+  subtractSolanaAccountsLtHashContribution(residualAccountsLtHash, openedAccountsLtHash);
+  requireNonZeroSolanaAccountsLtHash(residualAccountsLtHash, "openedAccountsLtHashResidual");
+  const residualAccountsLtHashChecksum = blake3(residualAccountsLtHash);
+  return {
+    sourceDomain,
+    finalizedSlot,
+    accountInclusionRoot,
+    accountsLtHashChecksum,
+    rows,
+    openedAccountsLtHash,
+    openedAccountsLtHashChecksum,
+    residualAccountsLtHash,
+    residualAccountsLtHashChecksum,
+  };
+}
+
+function solanaOpenedAccountsLtHashInputWithCanonicalFields(
+  input,
+  {
+    sourceDomain,
+    finalizedSlot,
+    accountInclusionRoot,
+    accountsLtHashChecksum,
+    accountsLtHash,
+  },
+) {
+  const value = { ...input };
+  for (const key of [
+    "sourceDomain",
+    "source_domain",
+    "finalizedSlot",
+    "finalized_slot",
+    "slot",
+    "accountInclusionRoot",
+    "account_inclusion_root",
+    "accountsRoot",
+    "accounts_root",
+    "accountsLtHashChecksum",
+    "accounts_lt_hash_checksum",
+    "accountsLtHashRoot",
+    "accounts_lt_hash_root",
+    "accountsLtHash",
+    "accounts_lt_hash",
+  ]) {
+    delete value[key];
+  }
+  return {
+    ...value,
+    sourceDomain,
+    finalizedSlot,
+    accountInclusionRoot,
+    accountsLtHashChecksum,
+    accountsLtHash,
+  };
+}
+
+export function solanaSccpAccountsLtHashOpenedResidual(input) {
+  return normalizeSolanaAccountsLtHashOpenedContributionsInput(input)
+    .residualAccountsLtHash;
+}
+
+export function solanaSccpAccountsLtHashOpenedResidualChecksum(input) {
+  return bytesToHex(
+    normalizeSolanaAccountsLtHashOpenedContributionsInput(input)
+      .residualAccountsLtHashChecksum,
+  );
+}
+
+export function canonicalSolanaSccpAccountsLtHashOpenedContributionsBytes(input) {
+  const normalized = normalizeSolanaAccountsLtHashOpenedContributionsInput(input);
+  let out = new Uint8Array();
+  out = writeU8(out, 1);
+  out = writeU32Le(out, normalized.sourceDomain);
+  out = writeU64Le(out, normalized.finalizedSlot);
+  out = concatBytes(
+    out,
+    normalized.accountInclusionRoot,
+    normalized.accountsLtHashChecksum,
+    normalized.openedAccountsLtHashChecksum,
+    normalized.residualAccountsLtHashChecksum,
+  );
+  out = writeBytes(out, normalized.openedAccountsLtHash);
+  out = writeBytes(out, normalized.residualAccountsLtHash);
+  out = writeU32Le(out, normalized.rows.length);
+  for (const row of normalized.rows) {
+    out = writeU8(out, row.role);
+    out = concatBytes(out, row.address, row.accountHash, row.rawDataHash);
+    out = writeBytes(out, row.accountLtHash);
+  }
+  return out;
+}
+
+export function solanaSccpAccountsLtHashOpenedContributionsHash(input) {
+  return bytesToHex(
+    prefixedBlake2b(
+      SCCP_SOLANA_ACCOUNTS_LT_HASH_OPENED_CONTRIBUTIONS_PREFIX_V1,
+      canonicalSolanaSccpAccountsLtHashOpenedContributionsBytes(input),
+    ),
+  );
+}
+
+const sccpWordU32Le = (value) => {
+  const out = new Uint8Array(32);
+  out.set(writeU32Le(new Uint8Array(), value), 0);
+  return out;
+};
+
+const sccpWordU8 = (value) => {
+  const out = new Uint8Array(32);
+  out[0] = Number(value);
+  return out;
+};
+
+const sccpWordI32Le = (value) => {
+  const out = new Uint8Array(32);
+  out.set(writeI32Le(new Uint8Array(), value), 0);
+  return out;
+};
+
+const sccpWordU64Le = (value) => {
+  const out = new Uint8Array(32);
+  out.set(writeU64Le(new Uint8Array(), value), 0);
+  return out;
+};
+
+const solanaBankHashHardForkDataHash = (data) =>
+  bytesToHex(prefixedBlake2b(SCCP_SOLANA_BANK_HASH_HARD_FORK_DATA_PREFIX_V1, data));
+
+const solanaMainnetGenesisHashPublicInput = () =>
+  bytesToHex(
+    prefixedBlake2b(
+      SCCP_SOLANA_MAINNET_GENESIS_HASH_PREFIX_V1,
+      textEncoder.encode(SCCP_SOLANA_MAINNET_GENESIS_HASH),
+    ),
+  );
+
+function normalizeSolanaAccountsLtHashProofRequestInput(input) {
+  if (!input || typeof input !== "object" || Array.isArray(input)) {
+    throw new TypeError("Solana AccountsLtHash proof request input must be an object");
+  }
+  const requestField = (label, ...names) =>
+    strictResultField(input, label, ...new Set(names));
+  const requestOptionalField = (label, ...names) =>
+    strictOptionalResultField(input, label, ...new Set(names));
+  const requestOptionalValue = (label, ...names) => {
+    const selected = requestOptionalField(label, ...names);
+    return selected === SCCP_OPTIONAL_FIELD_MISSING ||
+      selected === undefined ||
+      selected === null
+      ? undefined
+      : selected;
+  };
+  const requestFieldOrDefault = (label, defaultValue, ...names) => {
+    const selected = requestOptionalField(label, ...names);
+    return selected === SCCP_OPTIONAL_FIELD_MISSING ||
+      selected === undefined ||
+      selected === null
+      ? defaultValue
+      : selected;
+  };
+  const sourceDomainInput = requestOptionalField(
+    "sourceDomain",
+    "sourceDomain",
+    "source_domain",
+  );
+  const sourceDomain = normalizeSccpDomainId(
+    sourceDomainInput === SCCP_OPTIONAL_FIELD_MISSING
+      ? SCCP_DOMAIN_SOL
+      : sourceDomainInput,
+    "sourceDomain",
+  );
+  if (sourceDomain !== SCCP_DOMAIN_SOL) {
+    throw new RangeError("sourceDomain must be Solana");
+  }
+  const finalizedSlot = normalizeUnsignedBigInt(
+    requestField("finalizedSlot", "finalizedSlot", "finalized_slot", "slot"),
+    "finalizedSlot",
+  );
+  const parentSlot = normalizeUnsignedBigInt(
+    requestField("parentSlot", "parentSlot", "parent_slot"),
+    "parentSlot",
+  );
+  if (parentSlot + 1n !== finalizedSlot) {
+    throw new RangeError("parentSlot must be the direct parent of finalizedSlot");
+  }
+  const bankSignatureCount = normalizeUnsignedBigInt(
+    requestField("bankSignatureCount", "bankSignatureCount", "bank_signature_count"),
+    "bankSignatureCount",
+  );
+  if (bankSignatureCount === 0n) {
+    throw new RangeError("bankSignatureCount must be nonzero");
+  }
+  const parentBankHash = normalizeNonZeroHex32(
+    requestField("parentBankHash", "parentBankHash", "parent_bank_hash"),
+    "parentBankHash",
+  );
+  const blockhashBytes = normalizeSolanaHash32Bytes(
+    requestField("blockhash", "blockhashBytes", "blockhash_bytes", "blockhash"),
+    "blockhash",
+  );
+  const transactionStatusRoot = normalizeNonZeroHex32(
+    requestField(
+      "transactionStatusRoot",
+      "transactionStatusRoot",
+      "transaction_status_root",
+    ),
+    "transactionStatusRoot",
+  );
+  const accountInclusionRoot = normalizeNonZeroHex32(
+    requestField(
+      "accountInclusionRoot",
+      "accountInclusionRoot",
+      "account_inclusion_root",
+      "accountsRoot",
+      "accounts_root",
+    ),
+    "accountInclusionRoot",
+  );
+  const accountsLtHash = toBytes(
+    requestField("accountsLtHash", "accountsLtHash", "accounts_lt_hash"),
+    "accountsLtHash",
+  );
+  if (accountsLtHash.length !== SCCP_SOLANA_ACCOUNTS_LT_HASH_BYTES) {
+    throw new TypeError("accountsLtHash must be 2048 bytes");
+  }
+  requireNonZeroSolanaAccountsLtHash(accountsLtHash);
+  const accountsLtHashChecksum = normalizeNonZeroHex32(
+    requestField(
+      "accountsLtHashChecksum",
+      "accountsLtHashChecksum",
+      "accounts_lt_hash_checksum",
+      "accountsLtHashRoot",
+      "accounts_lt_hash_root",
+    ),
+    "accountsLtHashChecksum",
+  );
+  if (!bytesEqual(hexToBytes(accountsLtHashChecksum, "accountsLtHashChecksum", 32), blake3(accountsLtHash))) {
+    throw new TypeError("accountsLtHashChecksum must match accountsLtHash");
+  }
+  const bankHashHardForkData = toMaybeEmptyBytes(
+    requestFieldOrDefault(
+      "bankHashHardForkData",
+      new Uint8Array(),
+      "bankHashHardForkData",
+      "bank_hash_hard_fork_data",
+    ),
+    "bankHashHardForkData",
+  );
+  if (bankHashHardForkData.length > SCCP_SOLANA_MAX_BANK_HARD_FORK_HASH_DATA_BYTES) {
+    throw new RangeError("bankHashHardForkData is too large");
+  }
+  const expectedBankHash = solanaSccpAgaveBankHash({
+    parentBankHash,
+    bankSignatureCount,
+    blockhash: bytesToHex(blockhashBytes),
+    accountsLtHash,
+    bankHashHardForkData,
+  });
+  const bankHash = normalizeNonZeroHex32(
+    requestField("bankHash", "bankHash", "bank_hash"),
+    "bankHash",
+  );
+  if (bankHash !== expectedBankHash) {
+    throw new TypeError("bankHash must match Agave bank hash inputs");
+  }
+  const sourceStateVerifierId = normalizeNonEmptyString(
+    requestFieldOrDefault(
+      "sourceStateVerifierId",
+      SCCP_SOLANA_MAINNET_ACCOUNTS_DB_VERIFIER_ID_V1,
+      "sourceStateVerifierId",
+      "source_state_verifier_id",
+    ),
+    "sourceStateVerifierId",
+  );
+  if (sourceStateVerifierId !== SCCP_SOLANA_MAINNET_ACCOUNTS_DB_VERIFIER_ID_V1) {
+    throw new TypeError("sourceStateVerifierId must match Solana AccountsDB verifier profile");
+  }
+  const sourceStateVerifierHash = normalizeNonZeroHex32(
+    requestField(
+      "sourceStateVerifierHash",
+      "sourceStateVerifierHash",
+      "source_state_verifier_hash",
+    ),
+    "sourceStateVerifierHash",
+  );
+  if (sourceStateVerifierHash === SCCP_SOLANA_TEMPLATE_SOURCE_STATE_VERIFIER_HASH_V1) {
+    throw new TypeError("sourceStateVerifierHash must not be the Solana template verifier hash");
+  }
+  const accountsLtHashProofPublicInputsHash =
+    solanaSccpAccountsLtHashProofPublicInputsHash({
+      sourceDomain,
+      finalizedSlot,
+      parentSlot,
+      bankSignatureCount,
+      parentBankHash,
+      bankHash,
+      blockhash: bytesToHex(blockhashBytes),
+      transactionStatusRoot,
+      accountInclusionRoot,
+      accountsLtHashChecksum,
+      bankHashHardForkData,
+    });
+  const suppliedInputsHash = requestOptionalValue(
+    "accountsLtHashProofPublicInputsHash",
+    "accountsLtHashProofPublicInputsHash",
+    "accounts_lt_hash_proof_public_inputs_hash",
+  );
+  if (
+    suppliedInputsHash !== undefined &&
+    normalizeHex32(suppliedInputsHash, "accountsLtHashProofPublicInputsHash") !==
+      accountsLtHashProofPublicInputsHash
+  ) {
+    throw new TypeError("accountsLtHashProofPublicInputsHash must match bank-state inputs");
+  }
+  const openedInput = solanaOpenedAccountsLtHashInputWithCanonicalFields(input, {
+    sourceDomain,
+    finalizedSlot,
+    accountInclusionRoot,
+    accountsLtHashChecksum,
+    accountsLtHash,
+  });
+  const opened = normalizeSolanaAccountsLtHashOpenedContributionsInput(openedInput);
+  const openedAccountsLtHashContributionsHash =
+    solanaSccpAccountsLtHashOpenedContributionsHash(openedInput);
+  const openedAccountsLtHashResidualChecksum = bytesToHex(opened.residualAccountsLtHashChecksum);
+  return {
+    version: 1,
+    sourceDomain,
+    finalizedSlot,
+    parentSlot,
+    bankSignatureCount,
+    parentBankHash,
+    blockhash: bytesToHex(blockhashBytes),
+    bankHash,
+    transactionStatusRoot,
+    accountInclusionRoot,
+    accountsLtHashChecksum,
+    accountsLtHashProofPublicInputsHash,
+    bankHashHardForkData,
+    accountsLtHash,
+    sourceStateVerifierId,
+    sourceStateVerifierHash,
+    openedAccountsLtHashContributionsHash,
+    openedAccountsLtHashResidualChecksum,
+  };
+}
+
+export function canonicalSolanaSccpAccountsLtHashCommitmentBytes(input) {
+  const normalized = normalizeSolanaAccountsLtHashProofRequestInput(input);
+  let out = new Uint8Array();
+  out = writeU8(out, normalized.version);
+  out = writeU32Le(out, normalized.sourceDomain);
+  out = writeU64Le(out, normalized.finalizedSlot);
+  out = concatBytes(
+    out,
+    hexToBytes(normalized.accountsLtHashChecksum, "accountsLtHashChecksum", 32),
+    hexToBytes(
+      normalized.openedAccountsLtHashContributionsHash,
+      "openedAccountsLtHashContributionsHash",
+      32,
+    ),
+    hexToBytes(
+      normalized.openedAccountsLtHashResidualChecksum,
+      "openedAccountsLtHashResidualChecksum",
+      32,
+    ),
+  );
+  out = writeBytes(out, normalized.accountsLtHash);
+  return out;
+}
+
+export function canonicalSolanaSccpAccountsLtHashVerificationContextBytes(input) {
+  const normalized = normalizeSolanaAccountsLtHashProofRequestInput(input);
+  let out = new Uint8Array();
+  out = writeU8(out, normalized.version);
+  out = writeString(out, SCCP_SOLANA_ACCOUNTS_LT_HASH_OPEN_VERIFY_CIRCUIT_ID_V1);
+  out = writeString(out, SCCP_SOLANA_ACCOUNTS_LT_HASH_FASTPQ_PARAMETER_SET_V1);
+  out = writeString(out, normalized.sourceStateVerifierId);
+  out = concatBytes(
+    out,
+    hexToBytes(normalized.sourceStateVerifierHash, "sourceStateVerifierHash", 32),
+    hexToBytes(
+      normalized.accountsLtHashProofPublicInputsHash,
+      "accountsLtHashProofPublicInputsHash",
+      32,
+    ),
+    hexToBytes(
+      normalized.openedAccountsLtHashContributionsHash,
+      "openedAccountsLtHashContributionsHash",
+      32,
+    ),
+    hexToBytes(
+      normalized.openedAccountsLtHashResidualChecksum,
+      "openedAccountsLtHashResidualChecksum",
+      32,
+    ),
+  );
+  return out;
+}
+
+export function solanaSccpAccountsLtHashPublicInputColumns(input) {
+  const normalized = normalizeSolanaAccountsLtHashProofRequestInput(input);
+  return [
+    [bytesToHex(sccpWordU32Le(normalized.sourceDomain))],
+    [solanaMainnetGenesisHashPublicInput()],
+    [bytesToHex(sccpWordU64Le(normalized.finalizedSlot))],
+    [bytesToHex(sccpWordU64Le(normalized.parentSlot))],
+    [bytesToHex(sccpWordU64Le(normalized.bankSignatureCount))],
+    [normalized.parentBankHash],
+    [normalized.bankHash],
+    [normalized.blockhash],
+    [normalized.transactionStatusRoot],
+    [normalized.accountInclusionRoot],
+    [normalized.accountsLtHashChecksum],
+    [normalized.accountsLtHashProofPublicInputsHash],
+    [normalized.openedAccountsLtHashContributionsHash],
+    [normalized.openedAccountsLtHashResidualChecksum],
+  ];
+}
+
+export function solanaSccpAccountsLtHashOpenVerifySchemaDescriptor(input) {
+  const normalized = normalizeSolanaAccountsLtHashProofRequestInput(input);
+  let descriptor = new Uint8Array();
+  descriptor = writeU8(descriptor, normalized.version);
+  descriptor = writeString(
+    descriptor,
+    SCCP_SOLANA_ACCOUNTS_LT_HASH_OPEN_VERIFY_CIRCUIT_ID_V1,
+  );
+  descriptor = writeString(descriptor, SCCP_SOLANA_ACCOUNTS_LT_HASH_FASTPQ_PARAMETER_SET_V1);
+  descriptor = writeString(descriptor, SCCP_SOLANA_MAINNET_GENESIS_HASH);
+  descriptor = writeU32Le(descriptor, normalized.sourceDomain);
+  descriptor = writeString(descriptor, "source_state_verifier_id");
+  descriptor = writeString(descriptor, normalized.sourceStateVerifierId);
+  descriptor = writeString(descriptor, "source_state_verifier_hash");
+  descriptor = concatBytes(
+    descriptor,
+    hexToBytes(normalized.sourceStateVerifierHash, "sourceStateVerifierHash", 32),
+  );
+  for (const requiredInput of [
+    "source_domain",
+    "mainnet_genesis_hash",
+    "finalized_slot",
+    "parent_slot",
+    "bank_signature_count",
+    "parent_bank_hash",
+    "bank_hash",
+    "blockhash",
+    "transaction_status_root",
+    "account_inclusion_root",
+    "accounts_lt_hash_checksum",
+    "accounts_lt_hash_proof_public_inputs_hash",
+    "opened_accounts_lt_hash_contributions_hash",
+    "opened_accounts_lt_hash_residual_checksum",
+  ]) {
+    descriptor = writeString(descriptor, requiredInput);
+  }
+  return descriptor;
+}
+
+export function buildSolanaSccpAccountsLtHashProofRequest(input) {
+  const normalized = normalizeSolanaAccountsLtHashProofRequestInput(input);
+  const statementBytes = canonicalSolanaSccpAccountsLtHashProofPublicInputsBytes(normalized);
+  const accountCommitmentBytes = canonicalSolanaSccpAccountsLtHashCommitmentBytes(input);
+  const verificationContextBytes =
+    canonicalSolanaSccpAccountsLtHashVerificationContextBytes(input);
+  const schemaDescriptor = solanaSccpAccountsLtHashOpenVerifySchemaDescriptor(input);
+  const publicInputColumns = solanaSccpAccountsLtHashPublicInputColumns(input);
+  const dsidHash = prefixedBlake2b(
+    SCCP_SOLANA_ACCOUNTS_LT_HASH_FASTPQ_DSID_PREFIX_V1,
+    hexToBytes(
+      normalized.accountsLtHashProofPublicInputsHash,
+      "accountsLtHashProofPublicInputsHash",
+      32,
+    ),
+  );
+  return immutableFastpqProofRequest(
+    {
+      version: 1,
+      proofFamily: SCCP_STARK_FRI_PROOF_FAMILY_V1,
+      circuitId: SCCP_SOLANA_ACCOUNTS_LT_HASH_OPEN_VERIFY_CIRCUIT_ID_V1,
+      parameterSet: SCCP_SOLANA_ACCOUNTS_LT_HASH_FASTPQ_PARAMETER_SET_V1,
+      sourceDomain: normalized.sourceDomain,
+      finalizedSlot: normalized.finalizedSlot.toString(),
+      parentSlot: normalized.parentSlot.toString(),
+      sourceStateVerifierId: normalized.sourceStateVerifierId,
+      sourceStateVerifierHash: normalized.sourceStateVerifierHash,
+      accountsLtHashProofPublicInputsHash:
+        normalized.accountsLtHashProofPublicInputsHash,
+      openedAccountsLtHashContributionsHash:
+        normalized.openedAccountsLtHashContributionsHash,
+      openedAccountsLtHashResidualChecksum:
+        normalized.openedAccountsLtHashResidualChecksum,
+      statementBytes,
+      accountCommitmentBytes,
+      verificationContextBytes,
+      schemaDescriptor,
+      publicInputColumns,
+      fastpqPublicInputs: {
+        dsid: bytesToHex(dsidHash.slice(0, 16)),
+        slot: normalized.finalizedSlot.toString(),
+        oldRoot: normalized.parentBankHash,
+        newRoot: normalized.bankHash,
+        permRoot: normalized.accountInclusionRoot,
+        txSetHash: normalized.accountsLtHashProofPublicInputsHash,
+      },
+      fastpqTransitions: [
+        {
+          key: SCCP_SOLANA_ACCOUNTS_LT_HASH_FASTPQ_STATEMENT_KEY_V1,
+          operation: "meta_set",
+          oldValue: "0x",
+          newValue: bytesToHex(statementBytes),
+        },
+        {
+          key: SCCP_SOLANA_ACCOUNTS_LT_HASH_FASTPQ_ACCOUNTS_KEY_V1,
+          operation: "meta_set",
+          oldValue: "0x",
+          newValue: bytesToHex(accountCommitmentBytes),
+        },
+        {
+          key: SCCP_SOLANA_ACCOUNTS_LT_HASH_FASTPQ_OPENED_CONTRIBUTIONS_KEY_V1,
+          operation: "meta_set",
+          oldValue: "0x",
+          newValue: normalized.openedAccountsLtHashContributionsHash,
+        },
+        {
+          key: SCCP_SOLANA_ACCOUNTS_LT_HASH_FASTPQ_RESIDUAL_KEY_V1,
+          operation: "meta_set",
+          oldValue: "0x",
+          newValue: normalized.openedAccountsLtHashResidualChecksum,
+        },
+        {
+          key: SCCP_SOLANA_ACCOUNTS_LT_HASH_FASTPQ_CONTEXT_KEY_V1,
+          operation: "meta_set",
+          oldValue: "0x",
+          newValue: bytesToHex(verificationContextBytes),
+        },
+      ],
+    },
+    ["statementBytes", "accountCommitmentBytes", "verificationContextBytes", "schemaDescriptor"],
+  );
+}
+
+const SOLANA_FULL_LIGHT_CLIENT_AUDIT_ROLES = Object.freeze({
+  towerReplay: Object.freeze({
+    name: "towerReplay",
+    wireName: "tower_replay",
+    code: 1,
+    circuitId: SCCP_SOLANA_TOWER_REPLAY_OPEN_VERIFY_CIRCUIT_ID_V1,
+    verifierId: SCCP_SOLANA_MAINNET_TOWER_REPLAY_VERIFIER_ID_V1,
+    verifierHashField: "solanaTowerReplayVerifierHash",
+    requiredInputNames: Object.freeze([
+      "tower_lockout_hash",
+      "tower_replay_hash",
+      "bank_fork_hash",
+      "epoch_stake_root",
+      "stake_activation_hash",
+      "stake_account_state_hash",
+      "stake_history_hash",
+      "stake_history_sysvar_account_hash",
+      "account_inclusion_root",
+    ]),
+  }),
+  fullAccountsdbLattice: Object.freeze({
+    name: "fullAccountsdbLattice",
+    wireName: "full_accountsdb_lattice",
+    code: 2,
+    circuitId: SCCP_SOLANA_FULL_ACCOUNTSDB_LATTICE_OPEN_VERIFY_CIRCUIT_ID_V1,
+    verifierId: SCCP_SOLANA_MAINNET_FULL_ACCOUNTSDB_LATTICE_VERIFIER_ID_V1,
+    verifierHashField: "solanaFullAccountsdbLatticeVerifierHash",
+    requiredInputNames: Object.freeze([
+      "account_inclusion_root",
+      "accounts_lt_hash_checksum",
+      "accounts_lt_hash_proof_public_inputs_hash",
+      "opened_accounts_lt_hash_contributions_hash",
+      "opened_accounts_lt_hash_residual_checksum",
+      "accounts_lt_hash_proof_hash",
+    ]),
+  }),
+  bankForkChoice: Object.freeze({
+    name: "bankForkChoice",
+    wireName: "bank_fork_choice",
+    code: 3,
+    circuitId: SCCP_SOLANA_BANK_FORK_CHOICE_OPEN_VERIFY_CIRCUIT_ID_V1,
+    verifierId: SCCP_SOLANA_MAINNET_BANK_FORK_CHOICE_VERIFIER_ID_V1,
+    verifierHashField: "solanaBankForkChoiceVerifierHash",
+    requiredInputNames: Object.freeze([
+      "parent_bank_hash",
+      "bank_hash",
+      "blockhash",
+      "transaction_status_root",
+      "account_inclusion_root",
+      "accounts_lt_hash_checksum",
+      "bank_signature_count",
+      "bank_hash_hard_fork_data_hash",
+      "bank_fork_hash",
+      "tower_replay_hash",
+    ]),
+  }),
+});
+
+const normalizeSolanaFullLightClientAuditRole = (role) => {
+  const normalized = normalizeNonEmptyString(role, "role")
+    .replace(/[-_]/g, "")
+    .toLowerCase();
+  switch (normalized) {
+    case "tower":
+    case "towerreplay":
+      return SOLANA_FULL_LIGHT_CLIENT_AUDIT_ROLES.towerReplay;
+    case "accountsdb":
+    case "accounts":
+    case "fullaccountsdb":
+    case "fullaccountsdblattice":
+      return SOLANA_FULL_LIGHT_CLIENT_AUDIT_ROLES.fullAccountsdbLattice;
+    case "bank":
+    case "bankfork":
+    case "bankforkchoice":
+      return SOLANA_FULL_LIGHT_CLIENT_AUDIT_ROLES.bankForkChoice;
+    default:
+      throw new TypeError("role must be towerReplay, fullAccountsdbLattice, or bankForkChoice");
+  }
+};
+
+const solanaAuditRoleVerifierHash = (deployment, role) =>
+  normalizeNonZeroHex32(deployment[role.verifierHashField], role.verifierHashField);
+
+function normalizeSolanaSourceStateVerificationProof(input, label) {
+  if (!input || typeof input !== "object" || Array.isArray(input)) {
+    throw new TypeError(`${label} must be a source-state verification proof object`);
+  }
+  const versionInput = strictOptionalResultField(
+    input,
+    `${label}.version`,
+    "version",
+    "proofVersion",
+    "proof_version",
+  );
+  let version = 1;
+  if (versionInput !== SCCP_OPTIONAL_FIELD_MISSING) {
+    if (versionInput == null) {
+      throw new TypeError(`${label}.version must be 1`);
+    }
+    version = normalizeV1Version(versionInput, `${label}.version`);
+  }
+  const proofFamilyInput = strictOptionalResultField(
+    input,
+    `${label}.proofFamily`,
+    "proofFamily",
+    "proof_family",
+  );
+  const proofFamily =
+    proofFamilyInput === SCCP_OPTIONAL_FIELD_MISSING
+      ? SCCP_STARK_FRI_PROOF_FAMILY_V1
+      : normalizeNonEmptyString(proofFamilyInput, `${label}.proofFamily`);
+  requireSourceStateProofLabel(proofFamily, `${label}.proofFamily`);
+  const circuitId = normalizeNonEmptyString(
+    strictResultField(input, `${label}.circuitId`, "circuitId", "circuit_id"),
+    `${label}.circuitId`,
+  );
+  requireSourceStateProofLabel(circuitId, `${label}.circuitId`);
+  const proofBytes = toBytes(
+    strictResultField(input, `${label}.proofBytes`, "proofBytes", "proof_bytes", "proof"),
+    `${label}.proofBytes`,
+  );
+  if (proofBytes.length === 0) {
+    throw new TypeError(`${label}.proofBytes must not be empty`);
+  }
+  if (proofBytes.length > SCCP_SOURCE_STATE_MAX_PROOF_BYTES) {
+    throw new TypeError(
+      `${label}.proofBytes must be at most ${SCCP_SOURCE_STATE_MAX_PROOF_BYTES} bytes`,
+    );
+  }
+  if (proofBytes.every((byte) => byte === 0)) {
+    throw new TypeError(`${label}.proofBytes must not be all zero`);
+  }
+  const proofBase64 = strictOptionalResultField(
+    input,
+    `${label}.proofBase64`,
+    "proofBase64",
+    "proof_base64",
+  );
+  if (
+    proofBase64 !== SCCP_OPTIONAL_FIELD_MISSING &&
+    proofBase64 !== bytesToBase64(proofBytes)
+  ) {
+    throw new TypeError(`${label}.proofBase64 must match ${label}.proofBytes`);
+  }
+  return { version, proofFamily, circuitId, proofBytes };
+}
+
+function requireSourceStateVerificationProofProfile(proof, expectedCircuitId, label, profileLabel) {
+  if (
+    proof.version !== 1 ||
+    proof.proofFamily !== SCCP_STARK_FRI_PROOF_FAMILY_V1 ||
+    proof.circuitId !== expectedCircuitId
+  ) {
+    throw new TypeError(`${label} must be the ${profileLabel} stark-fri-v1 proof`);
+  }
+}
+
+function canonicalSourceStateVerificationProofBytes(proof) {
+  requireSourceStateProofBytes(proof.proofBytes, "proofBytes");
+  let out = new Uint8Array();
+  out = writeU8(out, proof.version);
+  out = writeString(out, proof.proofFamily, "proofFamily");
+  out = writeString(out, proof.circuitId, "circuitId");
+  out = writeBytes(out, proof.proofBytes);
+  return out;
+}
+
+export function canonicalSolanaSccpSourceStateVerificationProofBytes(input) {
+  const proof = normalizeSolanaSourceStateVerificationProof(input, "sourceStateProof");
+  if (
+    proof.version !== 1 ||
+    proof.proofFamily !== SCCP_STARK_FRI_PROOF_FAMILY_V1 ||
+    !SOLANA_SOURCE_STATE_VERIFICATION_CIRCUIT_IDS.has(proof.circuitId)
+  ) {
+    throw new TypeError("sourceStateProof must be a Solana source-state stark-fri-v1 proof");
+  }
+  return canonicalSourceStateVerificationProofBytes(proof);
+}
+
+export function solanaSccpAccountsLtHashProofHash(input) {
+  const proof = normalizeSolanaSourceStateVerificationProof(input, "accountsLtHashProof");
+  requireSourceStateVerificationProofProfile(
+    proof,
+    SCCP_SOLANA_ACCOUNTS_LT_HASH_OPEN_VERIFY_CIRCUIT_ID_V1,
+    "accountsLtHashProof",
+    "Solana AccountsLtHash",
+  );
+  return bytesToHex(
+    prefixedBlake2b(
+      "sccp:solana:accounts-lt-proof:v1",
+      canonicalSourceStateVerificationProofBytes(proof),
+    ),
+  );
+}
+
+const SOLANA_SOURCE_STATE_VERIFICATION_CIRCUIT_IDS = Object.freeze(new Set([
+  SCCP_SOLANA_ACCOUNTS_LT_HASH_OPEN_VERIFY_CIRCUIT_ID_V1,
+  SCCP_SOLANA_TOWER_REPLAY_OPEN_VERIFY_CIRCUIT_ID_V1,
+  SCCP_SOLANA_FULL_ACCOUNTSDB_LATTICE_OPEN_VERIFY_CIRCUIT_ID_V1,
+  SCCP_SOLANA_BANK_FORK_CHOICE_OPEN_VERIFY_CIRCUIT_ID_V1,
+]));
+
+const requireSolanaSourceStatePublicInputBindingForWrapping = (
+  publicInputColumns,
+  circuitId,
+  request,
+) => {
+  const requireColumn = (index, expected, fieldName) => {
+    const column = publicInputColumns[index];
+    if (!Array.isArray(column) || column.length !== 1) {
+      throw new TypeError(`request.publicInputColumns must bind ${fieldName}`);
+    }
+    const actual = normalizeNonEmptyString(
+      column[0],
+      `request.publicInputColumns[${index}][0]`,
+    );
+    if (actual !== expected) {
+      throw new TypeError(`request.publicInputColumns must bind ${fieldName}`);
+    }
+  };
+  const sourceDomainColumn = bytesToHex(sccpWordU32Le(SCCP_DOMAIN_SOL));
+  const mainnetGenesisColumn = solanaMainnetGenesisHashPublicInput();
+  if (circuitId === SCCP_SOLANA_ACCOUNTS_LT_HASH_OPEN_VERIFY_CIRCUIT_ID_V1) {
+    requireColumn(0, sourceDomainColumn, "source_domain");
+    requireColumn(1, mainnetGenesisColumn, "mainnet_genesis_hash");
+    requireColumn(
+      2,
+      bytesToHex(sccpWordU64Le(request.finalizedSlot ?? request.finalized_slot)),
+      "finalized_slot",
+    );
+    requireColumn(
+      3,
+      bytesToHex(sccpWordU64Le(request.parentSlot ?? request.parent_slot)),
+      "parent_slot",
+    );
+    requireColumn(
+      11,
+      normalizeNonZeroHex32(
+        request.accountsLtHashProofPublicInputsHash ??
+          request.accounts_lt_hash_proof_public_inputs_hash,
+        "request.accountsLtHashProofPublicInputsHash",
+      ),
+      "accounts_lt_hash_proof_public_inputs_hash",
+    );
+    requireColumn(
+      12,
+      normalizeNonZeroHex32(
+        request.openedAccountsLtHashContributionsHash ??
+          request.opened_accounts_lt_hash_contributions_hash,
+        "request.openedAccountsLtHashContributionsHash",
+      ),
+      "opened_accounts_lt_hash_contributions_hash",
+    );
+    requireColumn(
+      13,
+      normalizeNonZeroHex32(
+        request.openedAccountsLtHashResidualChecksum ??
+          request.opened_accounts_lt_hash_residual_checksum,
+        "request.openedAccountsLtHashResidualChecksum",
+      ),
+      "opened_accounts_lt_hash_residual_checksum",
+    );
+    return;
+  }
+  const role = normalizeSolanaFullLightClientAuditRole(request.role ?? request.audit_role);
+  const roleCode = role.code;
+  requireColumn(0, bytesToHex(sccpWordU8(roleCode)), "role");
+  requireColumn(1, sourceDomainColumn, "source_domain");
+  requireColumn(2, mainnetGenesisColumn, "mainnet_genesis_hash");
+  requireColumn(
+    3,
+    bytesToHex(sccpWordU64Le(request.finalizedSlot ?? request.finalized_slot)),
+    "finalized_slot",
+  );
+  requireColumn(
+    4,
+    normalizeNonZeroHex32(request.finalityContextHash ?? request.finality_context_hash, "request.finalityContextHash"),
+    "finality_context_hash",
+  );
+  requireColumn(
+    5,
+    normalizeNonZeroHex32(request.auditStatementHash ?? request.audit_statement_hash, "request.auditStatementHash"),
+    "audit_statement_hash",
+  );
+  requireColumn(
+    6,
+    normalizeNonZeroHex32(
+      request.sourceVerifierMaterialHash ?? request.source_verifier_material_hash,
+      "request.sourceVerifierMaterialHash",
+    ),
+    "source_verifier_material_hash",
+  );
+  requireColumn(
+    7,
+    normalizeNonZeroHex32(
+      request.sourceAdapterDeploymentHash ?? request.source_adapter_deployment_hash,
+      "request.sourceAdapterDeploymentHash",
+    ),
+    "source_adapter_deployment_hash",
+  );
+  requireColumn(
+    8,
+    normalizeNonZeroHex32(request.fullLightClientGateHash ?? request.full_light_client_gate_hash, "request.fullLightClientGateHash"),
+    "full_light_client_gate_hash",
+  );
+  requireColumn(
+    9,
+    normalizeNonZeroHex32(request.verifierHash ?? request.verifier_hash, "request.verifierHash"),
+    "verifier_hash",
+  );
+  requireColumn(
+    13,
+    normalizeNonZeroHex32(request.voteMessageHash ?? request.vote_message_hash, "request.voteMessageHash"),
+    "vote_message_hash",
+  );
+  requireColumn(
+    14,
+    normalizeNonZeroHex32(request.accountsLtHashProofHash ?? request.accounts_lt_hash_proof_hash, "request.accountsLtHashProofHash"),
+    "accounts_lt_hash_proof_hash",
+  );
+};
+
+const normalizeSolanaSourceStateProofRequestForWrapping = (request) => {
+  if (!request || typeof request !== "object" || Array.isArray(request)) {
+    throw new TypeError("Solana source-state proof request must be an object");
+  }
+  const requestField = (camel, snake) => strictResultField(request, `request.${camel}`, camel, snake);
+  const nestedField = (container, label, ...names) => strictResultField(
+    container,
+    label,
+    ...new Set(names),
+  );
+  if (request.version !== 1) {
+    throw new TypeError("Solana source-state proof request.version must be 1");
+  }
+  if (requestField("proofFamily", "proof_family") !== SCCP_STARK_FRI_PROOF_FAMILY_V1) {
+    throw new TypeError("Solana source-state proof request.proofFamily must be stark-fri-v1");
+  }
+  const circuitId = normalizeNonEmptyString(requestField("circuitId", "circuit_id"), "request.circuitId");
+  if (!SOLANA_SOURCE_STATE_VERIFICATION_CIRCUIT_IDS.has(circuitId)) {
+    throw new TypeError("request.circuitId must be a Solana source-state OpenVerify circuit");
+  }
+  const sourceDomain = requestField("sourceDomain", "source_domain");
+  if (sourceDomain === undefined) {
+    throw new TypeError("Solana source-state proof request.sourceDomain is required");
+  }
+  if (sourceDomain !== SCCP_DOMAIN_SOL) {
+    throw new TypeError("Solana source-state proof request.sourceDomain must be Solana");
+  }
+  const expectedParameterSet =
+    circuitId === SCCP_SOLANA_ACCOUNTS_LT_HASH_OPEN_VERIFY_CIRCUIT_ID_V1
+      ? SCCP_SOLANA_ACCOUNTS_LT_HASH_FASTPQ_PARAMETER_SET_V1
+      : SCCP_SOLANA_FULL_LIGHT_CLIENT_AUDIT_FASTPQ_PARAMETER_SET_V1;
+  const parameterSet = normalizeNonEmptyString(
+    requestField("parameterSet", "parameter_set"),
+    "request.parameterSet",
+  );
+  if (parameterSet !== expectedParameterSet) {
+    throw new TypeError("request.parameterSet must be fastpq-lane-balanced");
+  }
+  const sourceStateVerifierId = normalizeNonEmptyString(
+    requestField("sourceStateVerifierId", "source_state_verifier_id"),
+    "request.sourceStateVerifierId",
+  );
+  if (sourceStateVerifierId !== SCCP_SOLANA_MAINNET_ACCOUNTS_DB_VERIFIER_ID_V1) {
+    throw new TypeError("request.sourceStateVerifierId must match Solana AccountsDB verifier profile");
+  }
+  const sourceStateVerifierHash = normalizeNonZeroHex32(
+    requestField("sourceStateVerifierHash", "source_state_verifier_hash"),
+    "request.sourceStateVerifierHash",
+  );
+  if (sourceStateVerifierHash === SCCP_SOLANA_TEMPLATE_SOURCE_STATE_VERIFIER_HASH_V1) {
+    throw new TypeError("request.sourceStateVerifierHash must not be the Solana template verifier hash");
+  }
+  const requestU64 = (camel, snake) => {
+    const numeric = normalizeUnsignedBigInt(requestField(camel, snake), `request.${camel}`);
+    if (numeric > 18446744073709551615n) {
+      throw new RangeError(`request.${camel} must be a u64`);
+    }
+    return numeric;
+  };
+  let expectedDsid;
+  let expectedTxSetHash;
+  let expectedTransitions;
+  if (circuitId === SCCP_SOLANA_ACCOUNTS_LT_HASH_OPEN_VERIFY_CIRCUIT_ID_V1) {
+    const finalizedSlot = requestU64("finalizedSlot", "finalized_slot");
+    const parentSlot = requestU64("parentSlot", "parent_slot");
+    if (parentSlot + 1n !== finalizedSlot) {
+      throw new TypeError("request.parentSlot must be the direct parent of finalizedSlot");
+    }
+    let openedContributionsHash = null;
+    let residualChecksum = null;
+    for (const [camel, snake] of [
+      ["accountsLtHashProofPublicInputsHash", "accounts_lt_hash_proof_public_inputs_hash"],
+      ["openedAccountsLtHashContributionsHash", "opened_accounts_lt_hash_contributions_hash"],
+      ["openedAccountsLtHashResidualChecksum", "opened_accounts_lt_hash_residual_checksum"],
+    ]) {
+      const hash = normalizeNonZeroHex32(requestField(camel, snake), `request.${camel}`);
+      if (camel === "openedAccountsLtHashContributionsHash") {
+        openedContributionsHash = hash;
+      } else if (camel === "openedAccountsLtHashResidualChecksum") {
+        residualChecksum = hash;
+      }
+    }
+    expectedTransitions = (statementBytes, verificationContextBytes, accountCommitmentBytes) => [
+      {
+        key: SCCP_SOLANA_ACCOUNTS_LT_HASH_FASTPQ_STATEMENT_KEY_V1,
+        operation: "meta_set",
+        oldValue: "0x",
+        newValue: bytesToHex(statementBytes),
+      },
+      {
+        key: SCCP_SOLANA_ACCOUNTS_LT_HASH_FASTPQ_ACCOUNTS_KEY_V1,
+        operation: "meta_set",
+        oldValue: "0x",
+        newValue: bytesToHex(accountCommitmentBytes),
+      },
+      {
+        key: SCCP_SOLANA_ACCOUNTS_LT_HASH_FASTPQ_OPENED_CONTRIBUTIONS_KEY_V1,
+        operation: "meta_set",
+        oldValue: "0x",
+        newValue: openedContributionsHash,
+      },
+      {
+        key: SCCP_SOLANA_ACCOUNTS_LT_HASH_FASTPQ_RESIDUAL_KEY_V1,
+        operation: "meta_set",
+        oldValue: "0x",
+        newValue: residualChecksum,
+      },
+      {
+        key: SCCP_SOLANA_ACCOUNTS_LT_HASH_FASTPQ_CONTEXT_KEY_V1,
+        operation: "meta_set",
+        oldValue: "0x",
+        newValue: bytesToHex(verificationContextBytes),
+      },
+    ];
+  } else {
+    const role = normalizeSolanaFullLightClientAuditRole(requestField("role", "audit_role"));
+    const roleCode = normalizeUnsignedBigInt(requestField("roleCode", "role_code"), "request.roleCode");
+    if (roleCode !== BigInt(role.code)) {
+      throw new TypeError("request.roleCode must match request.role");
+    }
+    if (circuitId !== role.circuitId) {
+      throw new TypeError("request.circuitId must match request.role");
+    }
+    const verifierId = normalizeNonEmptyString(
+      requestField("verifierId", "verifier_id"),
+      "request.verifierId",
+    );
+    if (verifierId !== role.verifierId) {
+      throw new TypeError("request.verifierId must match request.role");
+    }
+    requestU64("finalizedSlot", "finalized_slot");
+    const verifierHash = normalizeNonZeroHex32(
+      requestField("verifierHash", "verifier_hash"),
+      "request.verifierHash",
+    );
+    let fullLightClientGateHash = null;
+    const roleSeparatedRequestHashes = [sourceStateVerifierHash];
+    for (const [camel, snake] of [
+      ["sourceVerifierMaterialHash", "source_verifier_material_hash"],
+      ["sourceAdapterDeploymentHash", "source_adapter_deployment_hash"],
+      ["fullLightClientGateHash", "full_light_client_gate_hash"],
+      ["finalityContextHash", "finality_context_hash"],
+      ["voteMessageHash", "vote_message_hash"],
+      ["accountsLtHashProofHash", "accounts_lt_hash_proof_hash"],
+      ["auditStatementHash", "audit_statement_hash"],
+    ]) {
+      const hash = normalizeNonZeroHex32(requestField(camel, snake), `request.${camel}`);
+      roleSeparatedRequestHashes.push(hash);
+      if (camel === "fullLightClientGateHash") {
+        fullLightClientGateHash = hash;
+      }
+    }
+    if (roleSeparatedRequestHashes.includes(verifierHash)) {
+      throw new TypeError(
+        "request.verifierHash must be role-separated from Solana full-light audit request hashes",
+      );
+    }
+    expectedTransitions = (statementBytes, verificationContextBytes) => [
+      {
+        key: bytesToHex(solanaFullLightClientAuditFastpqKey(
+          SCCP_SOLANA_FULL_LIGHT_CLIENT_AUDIT_FASTPQ_STATEMENT_KEY_V1,
+          role,
+        )),
+        operation: "meta_set",
+        oldValue: "0x",
+        newValue: bytesToHex(statementBytes),
+      },
+      {
+        key: bytesToHex(solanaFullLightClientAuditFastpqKey(
+          SCCP_SOLANA_FULL_LIGHT_CLIENT_AUDIT_FASTPQ_CONTEXT_KEY_V1,
+          role,
+        )),
+        operation: "meta_set",
+        oldValue: "0x",
+        newValue: bytesToHex(verificationContextBytes),
+      },
+      {
+        key: bytesToHex(solanaFullLightClientAuditFastpqKey(
+          SCCP_SOLANA_FULL_LIGHT_CLIENT_AUDIT_FASTPQ_GATE_KEY_V1,
+          role,
+        )),
+        operation: "meta_set",
+        oldValue: "0x",
+        newValue: fullLightClientGateHash,
+      },
+    ];
+  }
+  const requestBytes = (camel, snake) => {
+    const value = requestField(camel, snake);
+    if (value === undefined || value === null) {
+      throw new TypeError(`request.${camel} is required`);
+    }
+    const bytes = toBytes(value, `request.${camel}`);
+    if (bytes.length === 0) {
+      throw new TypeError(`request.${camel} must not be empty`);
+    }
+    return bytes;
+  };
+  const statementBytes = requestBytes("statementBytes", "statement_bytes");
+  const verificationContextBytes = requestBytes("verificationContextBytes", "verification_context_bytes");
+  requestBytes("schemaDescriptor", "schema_descriptor");
+  let accountCommitmentBytes = null;
+  if (circuitId === SCCP_SOLANA_ACCOUNTS_LT_HASH_OPEN_VERIFY_CIRCUIT_ID_V1) {
+    accountCommitmentBytes = requestBytes("accountCommitmentBytes", "account_commitment_bytes");
+    const expectedAccountsLtHashProofPublicInputsHash = bytesToHex(prefixedBlake2b(
+      SCCP_SOLANA_ACCOUNTS_LT_HASH_PROOF_PUBLIC_INPUTS_PREFIX_V1,
+      statementBytes,
+    ));
+    const accountsLtHashProofPublicInputsHash = normalizeNonZeroHex32(
+      requestField("accountsLtHashProofPublicInputsHash", "accounts_lt_hash_proof_public_inputs_hash"),
+      "request.accountsLtHashProofPublicInputsHash",
+    );
+    if (accountsLtHashProofPublicInputsHash !== expectedAccountsLtHashProofPublicInputsHash) {
+      throw new TypeError("request.accountsLtHashProofPublicInputsHash must match request.statementBytes");
+    }
+    expectedDsid = bytesToHex(prefixedBlake2b(
+      SCCP_SOLANA_ACCOUNTS_LT_HASH_FASTPQ_DSID_PREFIX_V1,
+      hexToBytes(accountsLtHashProofPublicInputsHash, "request.accountsLtHashProofPublicInputsHash", 32),
+    ).slice(0, 16));
+    expectedTxSetHash = accountsLtHashProofPublicInputsHash;
+  } else {
+    const role = normalizeSolanaFullLightClientAuditRole(requestField("role", "audit_role"));
+    const auditStatementHash = normalizeNonZeroHex32(
+      requestField("auditStatementHash", "audit_statement_hash"),
+      "request.auditStatementHash",
+    );
+    const expectedAuditStatementHash = bytesToHex(prefixedBlake2b(
+      SCCP_SOLANA_FULL_LIGHT_CLIENT_AUDIT_STATEMENT_PREFIX_V1,
+      statementBytes,
+    ));
+    if (auditStatementHash !== expectedAuditStatementHash) {
+      throw new TypeError("request.auditStatementHash must match request.statementBytes");
+    }
+    let dsidPreimage = new Uint8Array();
+    dsidPreimage = writeU8(dsidPreimage, role.code);
+    dsidPreimage = concatBytes(
+      dsidPreimage,
+      hexToBytes(auditStatementHash, "request.auditStatementHash", 32),
+    );
+    expectedDsid = bytesToHex(prefixedBlake2b(
+      SCCP_SOLANA_FULL_LIGHT_CLIENT_AUDIT_FASTPQ_DSID_PREFIX_V1,
+      dsidPreimage,
+    ).slice(0, 16));
+    expectedTxSetHash = auditStatementHash;
+  }
+  const publicInputColumns = requestField("publicInputColumns", "public_input_columns");
+  if (!Array.isArray(publicInputColumns) || publicInputColumns.length === 0) {
+    throw new TypeError("request.publicInputColumns is required");
+  }
+  requireSolanaSourceStatePublicInputBindingForWrapping(publicInputColumns, circuitId, request);
+  const fastpqPublicInputs = requestField("fastpqPublicInputs", "fastpq_public_inputs");
+  if (
+    !fastpqPublicInputs ||
+    typeof fastpqPublicInputs !== "object" ||
+    Array.isArray(fastpqPublicInputs)
+  ) {
+    throw new TypeError("request.fastpqPublicInputs is required");
+  }
+  for (const [camel, snake] of [
+    ["dsid", "dsid"],
+    ["slot", "slot"],
+    ["oldRoot", "old_root"],
+    ["newRoot", "new_root"],
+    ["permRoot", "perm_root"],
+    ["txSetHash", "tx_set_hash"],
+  ]) {
+    const fastpqValue = nestedField(fastpqPublicInputs, `request.fastpqPublicInputs.${camel}`, camel, snake);
+    if (camel === "dsid") {
+      const normalizedDsid = bytesToHex(hexToBytes(fastpqValue, "request.fastpqPublicInputs.dsid", 16));
+      if (normalizedDsid !== expectedDsid) {
+        throw new TypeError("request.fastpqPublicInputs.dsid must match request.statementBytes");
+      }
+      continue;
+    }
+    if (camel === "txSetHash") {
+      const normalizedTxSetHash = normalizeNonZeroHex32(fastpqValue, "request.fastpqPublicInputs.txSetHash");
+      if (normalizedTxSetHash !== expectedTxSetHash) {
+        throw new TypeError("request.fastpqPublicInputs.txSetHash must match request.statementBytes");
+      }
+      continue;
+    }
+    normalizeNonEmptyString(
+      fastpqValue,
+      `request.fastpqPublicInputs.${camel}`,
+    );
+  }
+  const fastpqTransitions = requestField("fastpqTransitions", "fastpq_transitions");
+  if (!Array.isArray(fastpqTransitions) || fastpqTransitions.length === 0) {
+    throw new TypeError("request.fastpqTransitions is required");
+  }
+  const actualTransitions = normalizeSourceStateFastpqTransitionsForCompare(
+    fastpqTransitions,
+    "request.fastpqTransitions",
+  );
+  const sortedActualTransitions = [...actualTransitions].sort((left, right) => left.key.localeCompare(right.key));
+  const sortedExpectedTransitions = expectedTransitions(
+    statementBytes,
+    verificationContextBytes,
+    accountCommitmentBytes,
+  ).sort((left, right) => left.key.localeCompare(right.key));
+  if (
+    sortedActualTransitions.length !== sortedExpectedTransitions.length ||
+    sortedActualTransitions.some((actual, index) => {
+      const expected = sortedExpectedTransitions[index];
+      return actual.key !== expected.key ||
+        actual.operation !== expected.operation ||
+        actual.oldValue !== expected.oldValue ||
+        actual.newValue !== expected.newValue;
+    })
+  ) {
+    throw new TypeError("request.fastpqTransitions must match the canonical Solana source-state request");
+  }
+  return { circuitId };
+};
+
+export function wrapSolanaSccpSourceStateVerificationProof(proofBytes, request) {
+  const proofRequest = normalizeSolanaSourceStateProofRequestForWrapping(request);
+  const proof = copyBytes(toBytes(proofBytes, "proofBytes"));
+  requireSourceStateProofBytes(proof, "proofBytes");
+  return immutableSourceStateVerificationProof({
+    version: 1,
+    proofFamily: SCCP_STARK_FRI_PROOF_FAMILY_V1,
+    circuitId: proofRequest.circuitId,
+    proofBytes: proof,
+  });
+}
+
+const isStructuredSourceStateProveResult = (result) =>
+  result &&
+  typeof result === "object" &&
+  !Array.isArray(result) &&
+  !(result instanceof Uint8Array) &&
+  !(result instanceof ArrayBuffer) &&
+  !ArrayBuffer.isView(result);
+
+const requestSourceStateField = (request, camel, snake) => request[camel] ?? request[snake];
+
+const requireOptionalSourceStateResultFieldMatches = (
+  result,
+  request,
+  camel,
+  snake,
+  normalize,
+) => {
+  const supplied = strictOptionalResultField(
+    result,
+    `source-state prover result.${camel}`,
+    camel,
+    snake,
+  );
+  if (supplied === SCCP_OPTIONAL_FIELD_MISSING) {
+    return;
+  }
+  const expected = requestSourceStateField(request, camel, snake);
+  if (expected === undefined || expected === null) {
+    throw new TypeError(`source-state prover result.${camel} is not supported by request`);
+  }
+  const normalizedSupplied = normalize(supplied, `source-state prover result.${camel}`);
+  const normalizedExpected = normalize(expected, `request.${camel}`);
+  if (
+    normalize === normalizeNonEmptyString &&
+    typeof supplied === "string" &&
+    supplied !== normalizedSupplied
+  ) {
+    throw new TypeError(`source-state prover result.${camel} must match request.${camel}`);
+  }
+  if (!Object.is(normalizedSupplied, normalizedExpected)) {
+    throw new TypeError(`source-state prover result.${camel} must match request.${camel}`);
+  }
+};
+
+const normalizeSourceStateU64ForCompare = (value, label) =>
+  normalizeUnsignedBigInt(value, label).toString();
+
+const normalizeSourceStatePublicInputColumnsForCompare = (columns, label) => {
+  if (!Array.isArray(columns) || columns.length === 0) {
+    throw new TypeError(`${label} must be a non-empty array`);
+  }
+  return columns.map((row, rowIndex) => {
+    if (!Array.isArray(row) || row.length === 0) {
+      throw new TypeError(`${label}[${rowIndex}] must be a non-empty array`);
+    }
+    return row.map((value, columnIndex) =>
+      normalizeNonEmptyString(value, `${label}[${rowIndex}][${columnIndex}]`),
+    );
+  });
+};
+
+const normalizeSourceStateFastpqPublicInputsForCompare = (input, label) => {
+  if (!input || typeof input !== "object" || Array.isArray(input)) {
+    throw new TypeError(`${label} must be an object`);
+  }
+  const field = (camel, snake) => strictResultField(input, `${label}.${camel}`, ...new Set([camel, snake]));
+  return {
+    dsid: bytesToHex(hexToBytes(field("dsid", "dsid"), `${label}.dsid`, 16)),
+    slot: normalizeSourceStateU64ForCompare(field("slot", "slot"), `${label}.slot`),
+    oldRoot: normalizeHex32(field("oldRoot", "old_root"), `${label}.oldRoot`),
+    newRoot: normalizeHex32(field("newRoot", "new_root"), `${label}.newRoot`),
+    permRoot: normalizeHex32(field("permRoot", "perm_root"), `${label}.permRoot`),
+    txSetHash: normalizeHex32(field("txSetHash", "tx_set_hash"), `${label}.txSetHash`),
+  };
+};
+
+const normalizeSourceStateExactStringForCompare = (value, label) => {
+  const normalized = normalizeNonEmptyString(value, label);
+  if (typeof value === "string" && value !== normalized) {
+    throw new TypeError(`${label} must match request`);
+  }
+  return normalized;
+};
+
+const normalizeSourceStateFastpqTransitionKeyForCompare = (value, label) => {
+  const normalized = normalizeSourceStateExactStringForCompare(value, label);
+  return normalized.toLowerCase().startsWith("0x")
+    ? bytesToHex(hexToBytes(normalized, label))
+    : normalized;
+};
+
+const normalizeSourceStateFastpqTransitionBytesForCompare = (value, label) => {
+  if (typeof value === "string") {
+    if (value !== value.trim()) {
+      throw new TypeError(`${label} must be canonical hex`);
+    }
+    if (value.toLowerCase() === "0x") {
+      return new Uint8Array();
+    }
+  }
+  return toBytes(value, label);
+};
+
+const normalizeSourceStateFastpqTransitionsForCompare = (input, label) => {
+  if (!Array.isArray(input) || input.length === 0) {
+    throw new TypeError(`${label} must be a non-empty array`);
+  }
+  return input.map((transition, index) => {
+    if (!transition || typeof transition !== "object" || Array.isArray(transition)) {
+      throw new TypeError(`${label}[${index}] must be an object`);
+    }
+    const field = (camel, snake) => strictResultField(
+      transition,
+      `${label}[${index}].${camel}`,
+      ...new Set([camel, snake]),
+    );
+    return {
+      key: normalizeSourceStateFastpqTransitionKeyForCompare(
+        field("key", "key"),
+        `${label}[${index}].key`,
+      ),
+      operation: normalizeSourceStateExactStringForCompare(
+        field("operation", "operation"),
+        `${label}[${index}].operation`,
+      ),
+      oldValue: bytesToHex(normalizeSourceStateFastpqTransitionBytesForCompare(
+        field("oldValue", "old_value"),
+        `${label}[${index}].oldValue`,
+      )),
+      newValue: bytesToHex(normalizeSourceStateFastpqTransitionBytesForCompare(
+        field("newValue", "new_value"),
+        `${label}[${index}].newValue`,
+      )),
+    };
+  });
+};
+
+const sourceStateExactStructuredEqual = (supplied, expected) => {
+  if (Array.isArray(expected)) {
+    if (!Array.isArray(supplied) || supplied.length !== expected.length) {
+      return false;
+    }
+    return expected.every((value, index) =>
+      sourceStateExactStructuredEqual(supplied[index], value),
+    );
+  }
+  if (
+    expected &&
+    typeof expected === "object" &&
+    !(expected instanceof Uint8Array) &&
+    !(expected instanceof ArrayBuffer) &&
+    !ArrayBuffer.isView(expected)
+  ) {
+    if (
+      !supplied ||
+      typeof supplied !== "object" ||
+      Array.isArray(supplied) ||
+      supplied instanceof Uint8Array ||
+      supplied instanceof ArrayBuffer ||
+      ArrayBuffer.isView(supplied)
+    ) {
+      return false;
+    }
+    const expectedKeys = Object.keys(expected);
+    const suppliedKeys = Object.keys(supplied);
+    if (expectedKeys.length !== suppliedKeys.length) {
+      return false;
+    }
+    return expectedKeys.every((key) =>
+      Object.prototype.hasOwnProperty.call(supplied, key) &&
+      sourceStateExactStructuredEqual(supplied[key], expected[key]),
+    );
+  }
+  return Object.is(supplied, expected);
+};
+
+const requireOptionalSourceStateResultStructuredFieldMatches = (
+  result,
+  request,
+  camel,
+  snake,
+  normalize,
+) => {
+  const supplied = strictOptionalResultField(
+    result,
+    `source-state prover result.${camel}`,
+    camel,
+    snake,
+  );
+  if (supplied === SCCP_OPTIONAL_FIELD_MISSING) {
+    return;
+  }
+  const expected = requestSourceStateField(request, camel, snake);
+  if (expected === undefined || expected === null) {
+    throw new TypeError(`source-state prover result.${camel} is not supported by request`);
+  }
+  const normalizedSupplied = normalize(supplied, `source-state prover result.${camel}`);
+  const normalizedExpected = normalize(expected, `request.${camel}`);
+  const matches = normalize === normalizeSourceStatePublicInputColumnsForCompare
+    ? sourceStateExactStructuredEqual(supplied, expected)
+    : sourceStateExactStructuredEqual(normalizedSupplied, normalizedExpected);
+  if (!matches) {
+    throw new TypeError(`source-state prover result.${camel} must match request.${camel}`);
+  }
+};
+
+const requireOptionalSourceStateResultBytesFieldMatches = (
+  result,
+  request,
+  camel,
+  snake,
+) => {
+  const supplied = strictOptionalResultField(
+    result,
+    `source-state prover result.${camel}`,
+    camel,
+    snake,
+  );
+  if (supplied === SCCP_OPTIONAL_FIELD_MISSING) {
+    return;
+  }
+  const expected = requestSourceStateField(request, camel, snake);
+  if (expected === undefined || expected === null) {
+    throw new TypeError(`source-state prover result.${camel} is not supported by request`);
+  }
+  if (
+    bytesToHex(toBytes(supplied, `source-state prover result.${camel}`)) !==
+    bytesToHex(toBytes(expected, `request.${camel}`))
+  ) {
+    throw new TypeError(`source-state prover result.${camel} must match request.${camel}`);
+  }
+};
+
+const normalizeSourceStateAuditRoleForCompare = (role, request) => {
+  const sourceDomain = requestSourceStateField(request, "sourceDomain", "source_domain");
+  if (sourceDomain !== undefined && sourceDomain !== null) {
+    const normalizedDomain = normalizeSccpDomainId(sourceDomain, "request.sourceDomain");
+    if (normalizedDomain === SCCP_DOMAIN_SOL) {
+      return normalizeSolanaFullLightClientAuditRole(role).wireName;
+    }
+    if (normalizedDomain === SCCP_DOMAIN_TON) {
+      return normalizeTonFullLightClientAuditRole(role).wireName;
+    }
+  }
+  return normalizeNonEmptyString(role, "source-state prover result.role");
+};
+
+const requireOptionalSourceStateProverResultMetadataMatches = (result, request) => {
+  requireOptionalSourceStateResultFieldMatches(
+    result,
+    request,
+    "parameterSet",
+    "parameter_set",
+    normalizeNonEmptyString,
+  );
+  requireOptionalSourceStateResultFieldMatches(
+    result,
+    request,
+    "sourceDomain",
+    "source_domain",
+    normalizeSccpDomainId,
+  );
+  requireOptionalSourceStateResultFieldMatches(
+    result,
+    request,
+    "finalizedSlot",
+    "finalized_slot",
+    normalizeSourceStateU64ForCompare,
+  );
+  requireOptionalSourceStateResultFieldMatches(
+    result,
+    request,
+    "masterchainSeqno",
+    "masterchain_seqno",
+    normalizeSourceStateU64ForCompare,
+  );
+  requireOptionalSourceStateResultFieldMatches(
+    result,
+    request,
+    "shardSeqno",
+    "shard_seqno",
+    normalizeSourceStateU64ForCompare,
+  );
+  requireOptionalSourceStateResultFieldMatches(
+    result,
+    request,
+    "sourceStateVerifierId",
+    "source_state_verifier_id",
+    normalizeNonEmptyString,
+  );
+  requireOptionalSourceStateResultFieldMatches(
+    result,
+    request,
+    "sourceStateVerifierHash",
+    "source_state_verifier_hash",
+    normalizeHex32,
+  );
+  requireOptionalSourceStateResultFieldMatches(
+    result,
+    request,
+    "accountsLtHashProofPublicInputsHash",
+    "accounts_lt_hash_proof_public_inputs_hash",
+    normalizeHex32,
+  );
+  requireOptionalSourceStateResultFieldMatches(
+    result,
+    request,
+    "openedAccountsLtHashContributionsHash",
+    "opened_accounts_lt_hash_contributions_hash",
+    normalizeHex32,
+  );
+  requireOptionalSourceStateResultFieldMatches(
+    result,
+    request,
+    "openedAccountsLtHashResidualChecksum",
+    "opened_accounts_lt_hash_residual_checksum",
+    normalizeHex32,
+  );
+  const suppliedRole = strictOptionalResultField(
+    result,
+    "source-state prover result.role",
+    "role",
+    "audit_role",
+  );
+  if (suppliedRole !== SCCP_OPTIONAL_FIELD_MISSING) {
+    const expectedRole = requestSourceStateField(request, "role", "audit_role");
+    if (expectedRole === undefined || expectedRole === null) {
+      throw new TypeError("source-state prover result.role is not supported by request");
+    }
+    const normalizedSuppliedRole = normalizeSourceStateAuditRoleForCompare(
+      suppliedRole,
+      request,
+    );
+    const normalizedExpectedRole = normalizeSourceStateAuditRoleForCompare(
+      expectedRole,
+      request,
+    );
+    if (
+      typeof suppliedRole !== "string" ||
+      suppliedRole.length === 0 ||
+      suppliedRole !== suppliedRole.trim() ||
+      normalizedSuppliedRole !== normalizedExpectedRole
+    ) {
+      throw new TypeError("source-state prover result.role must match request.role");
+    }
+  }
+  requireOptionalSourceStateResultFieldMatches(
+    result,
+    request,
+    "roleCode",
+    "role_code",
+    normalizeSourceStateU64ForCompare,
+  );
+  requireOptionalSourceStateResultFieldMatches(
+    result,
+    request,
+    "verifierId",
+    "verifier_id",
+    normalizeNonEmptyString,
+  );
+  requireOptionalSourceStateResultFieldMatches(
+    result,
+    request,
+    "verifierHash",
+    "verifier_hash",
+    normalizeHex32,
+  );
+  for (const [camel, snake] of [
+    ["sourceVerifierMaterialHash", "source_verifier_material_hash"],
+    ["sourceAdapterDeploymentHash", "source_adapter_deployment_hash"],
+    ["fullLightClientGateHash", "full_light_client_gate_hash"],
+    ["finalityContextHash", "finality_context_hash"],
+    ["voteMessageHash", "vote_message_hash"],
+    ["accountsLtHashProofHash", "accounts_lt_hash_proof_hash"],
+    ["shardStateProofPublicInputsHash", "shard_state_proof_public_inputs_hash"],
+    ["shardStateVerificationProofHash", "shard_state_verification_proof_hash"],
+    ["auditStatementHash", "audit_statement_hash"],
+  ]) {
+    requireOptionalSourceStateResultFieldMatches(result, request, camel, snake, normalizeHex32);
+  }
+  requireOptionalSourceStateResultStructuredFieldMatches(
+    result,
+    request,
+    "publicInputColumns",
+    "public_input_columns",
+    normalizeSourceStatePublicInputColumnsForCompare,
+  );
+  requireOptionalSourceStateResultStructuredFieldMatches(
+    result,
+    request,
+    "fastpqPublicInputs",
+    "fastpq_public_inputs",
+    normalizeSourceStateFastpqPublicInputsForCompare,
+  );
+  requireOptionalSourceStateResultStructuredFieldMatches(
+    result,
+    request,
+    "fastpqTransitions",
+    "fastpq_transitions",
+    normalizeSourceStateFastpqTransitionsForCompare,
+  );
+  for (const [camel, snake] of [
+    ["statementBytes", "statement_bytes"],
+    ["accountCommitmentBytes", "account_commitment_bytes"],
+    ["witnessCommitmentBytes", "witness_commitment_bytes"],
+    ["verificationContextBytes", "verification_context_bytes"],
+    ["schemaDescriptor", "schema_descriptor"],
+  ]) {
+    requireOptionalSourceStateResultBytesFieldMatches(result, request, camel, snake);
+  }
+};
+
+const solanaSourceStateProofBytesFromResult = (result, request) => {
+  const value =
+    isStructuredSourceStateProveResult(result)
+      ? strictResultField(
+          result,
+          "source-state prover result.proofBytes",
+          "proofBytes",
+          "proof_bytes",
+          "proof",
+        )
+      : result;
+  const proofBytes = toBytes(value, "proofBytes");
+  if (isStructuredSourceStateProveResult(result)) {
+    if (proofBytes.length > SCCP_SOURCE_STATE_MAX_PROOF_BYTES) {
+      throw new TypeError(
+        `proofBytes must be at most ${SCCP_SOURCE_STATE_MAX_PROOF_BYTES} bytes`,
+      );
+    }
+    const version = strictOptionalResultField(
+      result,
+      "source-state prover result.version",
+      "version",
+      "proofVersion",
+      "proof_version",
+    );
+    if (version !== SCCP_OPTIONAL_FIELD_MISSING) {
+      normalizeV1Version(version, "source-state prover result.version", TypeError);
+    }
+    const proofFamily = strictOptionalResultField(
+      result,
+      "source-state prover result.proofFamily",
+      "proofFamily",
+      "proof_family",
+    );
+    if (
+      proofFamily !== SCCP_OPTIONAL_FIELD_MISSING &&
+      (typeof proofFamily !== "string" ||
+        proofFamily.length === 0 ||
+        proofFamily !== SCCP_STARK_FRI_PROOF_FAMILY_V1)
+    ) {
+      throw new TypeError("source-state prover result.proofFamily must be stark-fri-v1");
+    }
+    const circuitId = strictOptionalResultField(
+      result,
+      "source-state prover result.circuitId",
+      "circuitId",
+      "circuit_id",
+    );
+    const requestCircuitId = request.circuitId ?? request.circuit_id;
+    if (
+      circuitId !== SCCP_OPTIONAL_FIELD_MISSING &&
+      (typeof circuitId !== "string" ||
+        circuitId.length === 0 ||
+        circuitId !== requestCircuitId)
+    ) {
+      throw new TypeError("source-state prover result.circuitId must match request.circuitId");
+    }
+    const proofBase64 = strictOptionalResultField(
+      result,
+      "source-state prover result.proofBase64",
+      "proofBase64",
+      "proof_base64",
+    );
+    if (
+      proofBase64 !== SCCP_OPTIONAL_FIELD_MISSING &&
+      (typeof proofBase64 !== "string" ||
+        proofBase64.length === 0 ||
+        proofBase64 !== bytesToBase64(proofBytes))
+    ) {
+      throw new TypeError("source-state prover result.proofBase64 must match proofBytes");
+    }
+    requireOptionalSourceStateProverResultMetadataMatches(result, request);
+  }
+  return proofBytes;
+};
+
+export class SolanaSccpSourceStateProver {
+  constructor(options = {}) {
+    if (!options || typeof options !== "object" || Array.isArray(options)) {
+      throw new TypeError("SolanaSccpSourceStateProver options must be an object");
+    }
+    this.proveFn = strictOptionalConstructorOption(
+      options,
+      "Solana SCCP source-state prover prove",
+      "prove",
+      "proveFn",
+      "prove_fn",
+    );
+  }
+
+  async proveRequest(request, options = {}) {
+    if (typeof this.proveFn !== "function") {
+      const error = new Error(
+        "Solana SCCP source-state prover is not linked; provide a UI-safe prove function before generating source-state proof capsules",
+      );
+      error.code = "ERR_SCCP_SOLANA_SOURCE_STATE_PROVER_UNAVAILABLE";
+      throw error;
+    }
+    normalizeSolanaSourceStateProofRequestForWrapping(request);
+    const callbackRequest = immutableSourceStateProverRequest(request);
+    const result = await this.proveFn(callbackRequest, options);
+    return wrapSolanaSccpSourceStateVerificationProof(
+      solanaSourceStateProofBytesFromResult(result, callbackRequest),
+      callbackRequest,
+    );
+  }
+
+  async proveAccountsLtHash(input, options = {}) {
+    return this.proveRequest(buildSolanaSccpAccountsLtHashProofRequest(input), options);
+  }
+
+  async proveFullLightClientAudit(input, options = {}) {
+    const requests = buildSolanaSccpFullLightClientAuditProofRequests(input);
+    return Object.freeze({
+      towerReplay: await this.proveRequest(requests.towerReplay, options),
+      fullAccountsdbLattice: await this.proveRequest(requests.fullAccountsdbLattice, options),
+      bankForkChoice: await this.proveRequest(requests.bankForkChoice, options),
+    });
+  }
+}
+
+const normalizeSolanaAuditMaterialAndDeployment = (input) => {
+  const materialInputValue = strictOptionalResultField(
+    input,
+    "sourceVerifierMaterial",
+    "sourceVerifierMaterial",
+    "source_verifier_material",
+  );
+  const deploymentInputValue = strictOptionalResultField(
+    input,
+    "sourceAdapterDeployment",
+    "sourceAdapterDeployment",
+    "source_adapter_deployment",
+  );
+  const materialInput =
+    materialInputValue === SCCP_OPTIONAL_FIELD_MISSING ||
+    materialInputValue === undefined ||
+    materialInputValue === null
+      ? input
+      : materialInputValue;
+  const deploymentInput =
+    deploymentInputValue === SCCP_OPTIONAL_FIELD_MISSING ||
+    deploymentInputValue === undefined ||
+    deploymentInputValue === null
+      ? input
+      : deploymentInputValue;
+  const material = normalizeSccpSourceVerifierMaterial(materialInput);
+  const deployment = normalizeSccpSourceAdapterEngineDeployment(deploymentInput);
+  if (
+    material.sourceDomain !== SCCP_DOMAIN_SOL ||
+    deployment.sourceDomain !== SCCP_DOMAIN_SOL ||
+    deployment.targetDomain !== SCCP_DOMAIN_SORA
+  ) {
+    throw new TypeError("Solana full-light-client audit requests require a Solana -> SORA deployment");
+  }
+  for (const field of [
+    "sourceDomain",
+    "sourceChain",
+    "sourceProofPlan",
+    "finalityModel",
+    "adapterCircuitId",
+    "sourceTrustAnchorId",
+    "sourceTrustAnchorHash",
+    "consensusVerifierId",
+    "consensusVerifierHash",
+    "messageInclusionVerifierId",
+    "messageInclusionVerifierHash",
+    "finalityPolicyId",
+    "finalityPolicyHash",
+    "sourceStateVerifierId",
+    "sourceStateVerifierHash",
+    "sourceBridgeEmitterId",
+    "sourceBridgeEmitterAddress",
+    "sourceBridgeEmitterCodeHash",
+    "sourceBridgeNetworkId",
+    "sourceBridgeOwnerAddress",
+    "sourceBridgeConfigHash",
+  ]) {
+    if (deployment[field] !== material[field]) {
+      throw new TypeError("sourceAdapterDeployment must match sourceVerifierMaterial");
+    }
+  }
+  const auditRoles = [
+    SOLANA_FULL_LIGHT_CLIENT_AUDIT_ROLES.towerReplay,
+    SOLANA_FULL_LIGHT_CLIENT_AUDIT_ROLES.fullAccountsdbLattice,
+    SOLANA_FULL_LIGHT_CLIENT_AUDIT_ROLES.bankForkChoice,
+  ];
+  const auditHashes = auditRoles.map((role) => solanaAuditRoleVerifierHash(deployment, role));
+  requireSolanaFullLightClientAuditRoleSeparation(deployment, auditHashes);
+  const gateHash = solanaFullLightClientGateHashForMaterialAndDeployment(material, deployment);
+  return { material, deployment, gateHash };
+};
+
+function solanaFullLightClientGateHashForMaterialAndDeployment(material, deployment) {
+  const auditRoles = [
+    SOLANA_FULL_LIGHT_CLIENT_AUDIT_ROLES.towerReplay,
+    SOLANA_FULL_LIGHT_CLIENT_AUDIT_ROLES.fullAccountsdbLattice,
+    SOLANA_FULL_LIGHT_CLIENT_AUDIT_ROLES.bankForkChoice,
+  ];
+  const auditHashes = auditRoles.map((role) => solanaAuditRoleVerifierHash(deployment, role));
+  requireSolanaFullLightClientAuditRoleSeparation(deployment, auditHashes);
+  let out = new Uint8Array();
+  out = writeU8(out, 1);
+  out = writeU32Le(out, material.sourceDomain);
+  out = writeU32Le(out, deployment.targetDomain);
+  out = writeString(out, material.sourceChain, "sourceChain");
+  out = writeU8(out, material.sourceProofPlan);
+  out = writeU8(out, material.finalityModel);
+  out = writeString(out, SCCP_SOLANA_MAINNET_GENESIS_HASH, "mainnetGenesisHash");
+  out = concatBytes(out, hexToBytes(sccpSourceVerifierMaterialHash(material), "sourceVerifierMaterialHash", 32));
+  out = concatBytes(
+    out,
+    hexToBytes(sccpSourceAdapterEngineDeploymentHash(deployment), "sourceAdapterDeploymentHash", 32),
+  );
+  for (const [index, role] of auditRoles.entries()) {
+    out = writeString(out, role.verifierId, "solanaAuditVerifierId");
+    out = concatBytes(out, hexToBytes(auditHashes[index], "solanaAuditVerifierHash", 32));
+  }
+  return bytesToHex(prefixedBlake2b(SCCP_SOLANA_FULL_LIGHT_CLIENT_GATE_PREFIX_V1, out));
+}
+
+function normalizeSolanaFinalityContextForAudit(input, witness) {
+  const contextOptionalField = (label, ...names) =>
+    strictOptionalResultField(input, label, ...new Set(names));
+  const contextOptionalValue = (label, ...names) => {
+    const selected = contextOptionalField(label, ...names);
+    return selected === SCCP_OPTIONAL_FIELD_MISSING ||
+      selected === undefined ||
+      selected === null
+      ? undefined
+      : selected;
+  };
+  const contextField = (label, ...names) =>
+    strictResultField(input, label, ...new Set(names));
+  const finalizedSlot = normalizeUnsignedBigInt(witness.finalizedSlot, "finalizedSlot");
+  const epochSource = contextOptionalValue("epoch", "epoch", "validatorEpoch", "validator_epoch");
+  const epoch =
+    epochSource === undefined
+      ? solanaSccpMainnetEpochForSlot(finalizedSlot)
+      : normalizeUnsignedBigInt(epochSource, "epoch");
+  if (epoch !== solanaSccpMainnetEpochForSlot(finalizedSlot)) {
+    throw new RangeError("epoch must match Solana mainnet finalizedSlot");
+  }
+  const rootedSlot = normalizeUnsignedBigInt(
+    contextField("rootedSlot", "rootedSlot", "rooted_slot"),
+    "rootedSlot",
+  );
+  const parentSlot = normalizeUnsignedBigInt(witness.parentSlot, "parentSlot");
+  const towerVoteSlotsRaw = contextField(
+    "towerVoteSlots",
+    "towerVoteSlots",
+    "tower_vote_slots",
+    "voteSlots",
+    "vote_slots",
+  );
+  if (!Array.isArray(towerVoteSlotsRaw)) {
+    throw new TypeError("towerVoteSlots must be an array");
+  }
+  const towerVoteSlots = towerVoteSlotsRaw.map((slot, index) =>
+    normalizeUnsignedBigInt(slot, `towerVoteSlots[${index}]`));
+  const bankHashHardForkData = toMaybeEmptyBytes(witness.bankHashHardForkData, "bankHashHardForkData");
+  const base = {
+    sourceDomain: SCCP_DOMAIN_SOL,
+    finalizedSlot,
+    epoch,
+    rootedSlot,
+    parentSlot,
+    towerVoteSlots,
+    parentBankHash: witness.parentBankHash,
+    bankSignatureCount: normalizeUnsignedBigInt(witness.bankSignatureCount, "bankSignatureCount"),
+    bankHashHardForkData,
+    blockhash: witness.blockhash,
+    bankHash: witness.bankHash,
+    transactionStatusRoot: witness.transactionStatusRoot,
+    accountInclusionRoot: witness.accountInclusionRoot,
+    accountsLtHashChecksum: witness.accountsLtHashChecksum,
+    accountsLtHashProofPublicInputsHash: witness.accountsLtHashProofPublicInputsHash,
+  };
+  const towerLockoutHash = solanaSccpTowerLockoutHash(base);
+  const bankForkHash = solanaSccpBankForkHash({
+    ...base,
+    accountsLtHash: witness.accountsLtHash,
+  });
+  const towerReplayHash = solanaSccpTowerReplayHash({ ...base, bankForkHash });
+  const context = {
+    version: 1,
+    ...base,
+    epochStakeRoot: normalizeNonZeroHex32(
+      contextField("epochStakeRoot", "epochStakeRoot", "epoch_stake_root"),
+      "epochStakeRoot",
+    ),
+    stakeActivationHash: normalizeNonZeroHex32(
+      contextField("stakeActivationHash", "stakeActivationHash", "stake_activation_hash"),
+      "stakeActivationHash",
+    ),
+    stakeAccountStateHash: normalizeNonZeroHex32(
+      contextField("stakeAccountStateHash", "stakeAccountStateHash", "stake_account_state_hash"),
+      "stakeAccountStateHash",
+    ),
+    stakeHistoryHash: normalizeNonZeroHex32(
+      contextField("stakeHistoryHash", "stakeHistoryHash", "stake_history_hash"),
+      "stakeHistoryHash",
+    ),
+    stakeHistorySysvarAccountHash: normalizeNonZeroHex32(
+      contextField(
+        "stakeHistorySysvarAccountHash",
+        "stakeHistorySysvarAccountHash",
+        "stake_history_sysvar_account_hash",
+      ),
+      "stakeHistorySysvarAccountHash",
+    ),
+    towerLockoutHash,
+    towerReplayHash,
+    bankForkHash,
+  };
+  const suppliedTowerLockoutHash = contextOptionalValue(
+    "towerLockoutHash",
+    "towerLockoutHash",
+    "tower_lockout_hash",
+  );
+  if (suppliedTowerLockoutHash !== undefined && normalizeHex32(suppliedTowerLockoutHash, "towerLockoutHash") !== towerLockoutHash) {
+    throw new TypeError("towerLockoutHash must match finality context fields");
+  }
+  const suppliedBankForkHash = contextOptionalValue(
+    "bankForkHash",
+    "bankForkHash",
+    "bank_fork_hash",
+  );
+  if (suppliedBankForkHash !== undefined && normalizeHex32(suppliedBankForkHash, "bankForkHash") !== bankForkHash) {
+    throw new TypeError("bankForkHash must match finality context fields");
+  }
+  const suppliedTowerReplayHash = contextOptionalValue(
+    "towerReplayHash",
+    "towerReplayHash",
+    "tower_replay_hash",
+  );
+  if (suppliedTowerReplayHash !== undefined && normalizeHex32(suppliedTowerReplayHash, "towerReplayHash") !== towerReplayHash) {
+    throw new TypeError("towerReplayHash must match finality context fields");
+  }
+  for (const [field, derived] of [
+    ["epochStakeRoot", solanaSccpEpochStakeRoot],
+    ["stakeActivationHash", solanaSccpStakeActivationHash],
+    ["stakeAccountStateHash", solanaSccpStakeAccountStateHash],
+    ["stakeHistoryHash", solanaSccpStakeHistoryHash],
+  ]) {
+    try {
+      const expected = derived({ ...input, epoch });
+      if (context[field] !== expected) {
+        throw new TypeError(`${field} must match finality context fields`);
+      }
+    } catch (error) {
+      if (
+        contextOptionalValue(
+          "validatorPublicKeys",
+          "validatorPublicKeys",
+          "validator_public_keys",
+        ) !== undefined
+      ) {
+        throw error;
+      }
+    }
+  }
+  return context;
+}
+
+function normalizeDirectSolanaFinalityContextV1(input) {
+  if (input.version !== 1) return undefined;
+  const directOptionalField = (label, ...names) =>
+    strictOptionalResultField(input, label, ...new Set(names));
+  const parentBankHashInput = directOptionalField(
+    "parentBankHash",
+    "parentBankHash",
+    "parent_bank_hash",
+  );
+  if (
+    parentBankHashInput === SCCP_OPTIONAL_FIELD_MISSING ||
+    parentBankHashInput === undefined ||
+    parentBankHashInput === null
+  ) {
+    return undefined;
+  }
+  const directField = (label, ...names) => {
+    const selected = directOptionalField(label, ...names);
+    return selected === SCCP_OPTIONAL_FIELD_MISSING ? undefined : selected;
+  };
+  const towerVoteSlotsRaw = directField(
+    "towerVoteSlots",
+    "towerVoteSlots",
+    "tower_vote_slots",
+  );
+  if (!Array.isArray(towerVoteSlotsRaw)) {
+    throw new TypeError("towerVoteSlots must be an array");
+  }
+  const bankHashHardForkDataInput = directOptionalField(
+    "bankHashHardForkData",
+    "bankHashHardForkData",
+    "bank_hash_hard_fork_data",
+  );
+  const bankHashHardForkData =
+    bankHashHardForkDataInput === SCCP_OPTIONAL_FIELD_MISSING ||
+    bankHashHardForkDataInput === undefined ||
+    bankHashHardForkDataInput === null
+      ? new Uint8Array()
+      : toMaybeEmptyBytes(bankHashHardForkDataInput, "bankHashHardForkData");
+  return {
+    version: 1,
+    epoch: normalizeUnsignedBigInt(directField("epoch", "epoch"), "epoch"),
+    rootedSlot: normalizeUnsignedBigInt(
+      directField("rootedSlot", "rootedSlot", "rooted_slot"),
+      "rootedSlot",
+    ),
+    parentSlot: normalizeUnsignedBigInt(
+      directField("parentSlot", "parentSlot", "parent_slot"),
+      "parentSlot",
+    ),
+    towerVoteSlots: towerVoteSlotsRaw.map((slot, index) =>
+      normalizeUnsignedBigInt(slot, `towerVoteSlots[${index}]`)),
+    parentBankHash: normalizeNonZeroHex32(parentBankHashInput, "parentBankHash"),
+    bankSignatureCount: normalizeUnsignedBigInt(
+      directField("bankSignatureCount", "bankSignatureCount", "bank_signature_count"),
+      "bankSignatureCount",
+    ),
+    bankHashHardForkData,
+    epochStakeRoot: normalizeNonZeroHex32(
+      directField("epochStakeRoot", "epochStakeRoot", "epoch_stake_root"),
+      "epochStakeRoot",
+    ),
+    stakeActivationHash: normalizeNonZeroHex32(
+      directField("stakeActivationHash", "stakeActivationHash", "stake_activation_hash"),
+      "stakeActivationHash",
+    ),
+    stakeAccountStateHash: normalizeNonZeroHex32(
+      directField("stakeAccountStateHash", "stakeAccountStateHash", "stake_account_state_hash"),
+      "stakeAccountStateHash",
+    ),
+    stakeHistoryHash: normalizeNonZeroHex32(
+      directField("stakeHistoryHash", "stakeHistoryHash", "stake_history_hash"),
+      "stakeHistoryHash",
+    ),
+    stakeHistorySysvarAccountHash: normalizeNonZeroHex32(
+      directField(
+        "stakeHistorySysvarAccountHash",
+        "stakeHistorySysvarAccountHash",
+        "stake_history_sysvar_account_hash",
+      ),
+      "stakeHistorySysvarAccountHash",
+    ),
+    accountInclusionRoot: normalizeNonZeroHex32(
+      directField("accountInclusionRoot", "accountInclusionRoot", "account_inclusion_root"),
+      "accountInclusionRoot",
+    ),
+    accountsLtHashChecksum: normalizeNonZeroHex32(
+      directField(
+        "accountsLtHashChecksum",
+        "accountsLtHashChecksum",
+        "accounts_lt_hash_checksum",
+      ),
+      "accountsLtHashChecksum",
+    ),
+    accountsLtHashProofPublicInputsHash: normalizeNonZeroHex32(
+      directField(
+        "accountsLtHashProofPublicInputsHash",
+        "accountsLtHashProofPublicInputsHash",
+        "accounts_lt_hash_proof_public_inputs_hash",
+      ),
+      "accountsLtHashProofPublicInputsHash",
+    ),
+    towerLockoutHash: normalizeNonZeroHex32(
+      directField("towerLockoutHash", "towerLockoutHash", "tower_lockout_hash"),
+      "towerLockoutHash",
+    ),
+    towerReplayHash: normalizeNonZeroHex32(
+      directField("towerReplayHash", "towerReplayHash", "tower_replay_hash"),
+      "towerReplayHash",
+    ),
+    bankForkHash: normalizeNonZeroHex32(
+      directField("bankForkHash", "bankForkHash", "bank_fork_hash"),
+      "bankForkHash",
+    ),
+  };
+}
+
+export function canonicalSolanaSccpFinalityContextBytes(input) {
+  const directContext = normalizeDirectSolanaFinalityContextV1(input);
+  const context = directContext ??
+    normalizeSolanaFinalityContextForAudit(input, normalizeSolanaSccpWitness(input));
+  let out = new Uint8Array();
+  out = writeU8(out, context.version);
+  out = writeU64Le(out, context.epoch);
+  out = writeU64Le(out, context.rootedSlot);
+  out = writeU64Le(out, context.parentSlot);
+  out = writeU32Le(out, context.towerVoteSlots.length);
+  for (const slot of context.towerVoteSlots) {
+    out = writeU64Le(out, slot);
+  }
+  out = concatBytes(out, hexToBytes(context.parentBankHash, "parentBankHash", 32));
+  out = writeU64Le(out, context.bankSignatureCount);
+  out = writeBytes(out, context.bankHashHardForkData);
+  out = concatBytes(out, hexToBytes(context.epochStakeRoot, "epochStakeRoot", 32));
+  out = concatBytes(out, hexToBytes(context.stakeActivationHash, "stakeActivationHash", 32));
+  out = concatBytes(out, hexToBytes(context.stakeAccountStateHash, "stakeAccountStateHash", 32));
+  out = concatBytes(out, hexToBytes(context.stakeHistoryHash, "stakeHistoryHash", 32));
+  out = concatBytes(out, hexToBytes(context.stakeHistorySysvarAccountHash, "stakeHistorySysvarAccountHash", 32));
+  out = concatBytes(out, hexToBytes(context.accountInclusionRoot, "accountInclusionRoot", 32));
+  out = concatBytes(out, hexToBytes(context.accountsLtHashChecksum, "accountsLtHashChecksum", 32));
+  out = concatBytes(out, hexToBytes(context.accountsLtHashProofPublicInputsHash, "accountsLtHashProofPublicInputsHash", 32));
+  out = concatBytes(out, hexToBytes(context.towerLockoutHash, "towerLockoutHash", 32));
+  out = concatBytes(out, hexToBytes(context.towerReplayHash, "towerReplayHash", 32));
+  out = concatBytes(out, hexToBytes(context.bankForkHash, "bankForkHash", 32));
+  return out;
+}
+
+export function solanaSccpFinalityContextHash(input) {
+  return bytesToHex(
+    prefixedBlake2b(
+      SCCP_SOLANA_FINALITY_CONTEXT_PREFIX_V1,
+      canonicalSolanaSccpFinalityContextBytes(input),
+    ),
+  );
+}
+
+export function canonicalSolanaSccpVoteMessageBytes(input) {
+  const voteOptionalField = (label, ...names) =>
+    strictOptionalResultField(input, label, ...new Set(names));
+  const voteField = (label, ...names) =>
+    strictResultField(input, label, ...new Set(names));
+  const sourceDomainInput = voteOptionalField(
+    "sourceDomain",
+    "sourceDomain",
+    "source_domain",
+  );
+  const sourceDomain = normalizeSccpDomainId(
+    sourceDomainInput === SCCP_OPTIONAL_FIELD_MISSING
+      ? SCCP_DOMAIN_SOL
+      : sourceDomainInput,
+    "sourceDomain",
+  );
+  const finalizedSlot = normalizeUnsignedBigInt(
+    voteField("finalizedSlot", "finalizedSlot", "finalized_slot"),
+    "finalizedSlot",
+  );
+  let out = new Uint8Array();
+  out = writeU8(out, 1);
+  out = writeU32Le(out, sourceDomain);
+  out = writeU64Le(out, finalizedSlot);
+  out = concatBytes(out, hexToBytes(voteField("blockhash", "blockhash"), "blockhash", 32));
+  out = concatBytes(out, hexToBytes(voteField("bankHash", "bankHash", "bank_hash"), "bankHash", 32));
+  out = concatBytes(out, hexToBytes(
+    voteField("transactionStatusRoot", "transactionStatusRoot", "transaction_status_root"),
+    "transactionStatusRoot",
+    32,
+  ));
+  out = concatBytes(out, hexToBytes(
+    voteField("messageProofHash", "messageProofHash", "message_proof_hash"),
+    "messageProofHash",
+    32,
+  ));
+  out = concatBytes(out, hexToBytes(
+    voteField("finalityContextHash", "finalityContextHash", "finality_context_hash"),
+    "finalityContextHash",
+    32,
+  ));
+  return out;
+}
+
+export function solanaSccpVoteMessageHash(input) {
+  return bytesToHex(
+    prefixedBlake2b(
+      SCCP_SOLANA_VOTE_MESSAGE_PREFIX_V1,
+      canonicalSolanaSccpVoteMessageBytes(input),
+    ),
+  );
+}
+
+function solanaAuditOpenedHash(input, witness, camelKey, snakeKey, derive, label) {
+  const suppliedInput = strictOptionalResultField(input, label, camelKey, snakeKey);
+  const supplied =
+    suppliedInput === SCCP_OPTIONAL_FIELD_MISSING ||
+    suppliedInput === undefined ||
+    suppliedInput === null
+      ? undefined
+      : suppliedInput;
+  const hasOpenedInputs = [
+    "accountsLtHash",
+    "accounts_lt_hash",
+    "validatorVoteAccountOpenings",
+    "validator_vote_account_openings",
+    "validatorStakeAccountOpenings",
+    "validator_stake_account_openings",
+    "stakeHistorySysvarOpening",
+    "stake_history_sysvar_opening",
+  ].some((key) => input[key] !== undefined && input[key] !== null);
+  try {
+    const openedInput = solanaOpenedAccountsLtHashInputWithCanonicalFields(input, {
+      sourceDomain: SCCP_DOMAIN_SOL,
+      finalizedSlot: witness.finalizedSlot,
+      accountInclusionRoot: witness.accountInclusionRoot,
+      accountsLtHashChecksum: witness.accountsLtHashChecksum,
+      accountsLtHash: witness.accountsLtHash,
+    });
+    const expected = derive(openedInput);
+    if (supplied !== undefined && normalizeHex32(supplied, label) !== expected) {
+      throw new TypeError(`${camelKey} must match Solana opened AccountsLtHash inputs`);
+    }
+    return expected;
+  } catch (error) {
+    if (hasOpenedInputs) {
+      throw error;
+    }
+    if (supplied === undefined) {
+      throw error;
+    }
+    return normalizeNonZeroHex32(supplied, label);
+  }
+}
+
+function normalizeSolanaFullLightClientAuditInput(input, role) {
+  if (!input || typeof input !== "object" || Array.isArray(input)) {
+    throw new TypeError("Solana full-light-client audit proof request input must be an object");
+  }
+  const auditOptionalField = (label, ...names) =>
+    strictOptionalResultField(input, label, ...new Set(names));
+  const auditOptionalValue = (label, ...names) => {
+    const selected = auditOptionalField(label, ...names);
+    return selected === SCCP_OPTIONAL_FIELD_MISSING ||
+      selected === undefined ||
+      selected === null
+      ? undefined
+      : selected;
+  };
+  const { material, deployment, gateHash } = normalizeSolanaAuditMaterialAndDeployment(input);
+  const witness = normalizeSolanaSccpWitness(input);
+  if (witness.sourceStateVerifierHash !== material.sourceStateVerifierHash) {
+    throw new TypeError("sourceStateVerifierHash must match sourceVerifierMaterial");
+  }
+  const sourceVerifierMaterialHash = sccpSourceVerifierMaterialHash(material);
+  const suppliedSourceVerifierMaterialHash = auditOptionalValue(
+    "sourceVerifierMaterialHash",
+    "sourceVerifierMaterialHash",
+    "source_verifier_material_hash",
+  );
+  if (
+    suppliedSourceVerifierMaterialHash !== undefined &&
+    normalizeHex32(suppliedSourceVerifierMaterialHash, "sourceVerifierMaterialHash") !==
+      sourceVerifierMaterialHash
+  ) {
+    throw new TypeError("sourceVerifierMaterialHash must match sourceVerifierMaterial");
+  }
+  const sourceAdapterDeploymentHash = sccpSourceAdapterEngineDeploymentHash(deployment);
+  const suppliedSourceAdapterDeploymentHash = auditOptionalValue(
+    "sourceAdapterDeploymentHash",
+    "sourceAdapterDeploymentHash",
+    "source_adapter_deployment_hash",
+  );
+  if (
+    suppliedSourceAdapterDeploymentHash !== undefined &&
+    normalizeHex32(suppliedSourceAdapterDeploymentHash, "sourceAdapterDeploymentHash") !==
+      sourceAdapterDeploymentHash
+  ) {
+    throw new TypeError("sourceAdapterDeploymentHash must match sourceAdapterDeployment");
+  }
+  if (witness.sourceAdapterDeploymentHash !== sourceAdapterDeploymentHash) {
+    throw new TypeError("sourceAdapterDeploymentHash must match witness");
+  }
+  if (witness.sourceAdapterDeploymentReceiptHash !== deployment.deploymentReceiptHash) {
+    throw new TypeError("sourceAdapterDeploymentReceiptHash must match witness");
+  }
+  const suppliedFullLightClientGateHash = auditOptionalValue(
+    "fullLightClientGateHash",
+    "fullLightClientGateHash",
+    "full_light_client_gate_hash",
+  );
+  if (
+    suppliedFullLightClientGateHash !== undefined &&
+    normalizeHex32(suppliedFullLightClientGateHash, "fullLightClientGateHash") !== gateHash
+  ) {
+    throw new TypeError("fullLightClientGateHash must match sourceAdapterDeployment");
+  }
+  const context = normalizeSolanaFinalityContextForAudit(input, witness);
+  const finalityContextHash = solanaSccpFinalityContextHash(context);
+  const suppliedFinalityContextHash = auditOptionalValue(
+    "finalityContextHash",
+    "finalityContextHash",
+    "finality_context_hash",
+  );
+  if (
+    suppliedFinalityContextHash !== undefined &&
+    normalizeHex32(suppliedFinalityContextHash, "finalityContextHash") !== finalityContextHash
+  ) {
+    throw new TypeError("finalityContextHash must match finality context fields");
+  }
+  const voteMessageHash = solanaSccpVoteMessageHash({
+    sourceDomain: SCCP_DOMAIN_SOL,
+    finalizedSlot: witness.finalizedSlot,
+    blockhash: witness.blockhash,
+    bankHash: witness.bankHash,
+    transactionStatusRoot: witness.transactionStatusRoot,
+    messageProofHash: witness.messageProofHash,
+    finalityContextHash,
+  });
+  const suppliedVoteMessageHash = auditOptionalValue(
+    "voteMessageHash",
+    "voteMessageHash",
+    "vote_message_hash",
+  );
+  if (
+    suppliedVoteMessageHash !== undefined &&
+    normalizeHex32(suppliedVoteMessageHash, "voteMessageHash") !== voteMessageHash
+  ) {
+    throw new TypeError("voteMessageHash must match finality context and message proof");
+  }
+  const accountsProofInput = auditOptionalValue(
+    "accountsLtHashProof",
+    "accountsLtHashProof",
+    "accounts_lt_hash_proof",
+  );
+  const suppliedAccountsProofHash = auditOptionalValue(
+    "accountsLtHashProofHash",
+    "accountsLtHashProofHash",
+    "accounts_lt_hash_proof_hash",
+  );
+  let accountsLtHashProofHash;
+  if (accountsProofInput !== undefined) {
+    accountsLtHashProofHash = solanaSccpAccountsLtHashProofHash(accountsProofInput);
+    if (
+      suppliedAccountsProofHash !== undefined &&
+      normalizeHex32(suppliedAccountsProofHash, "accountsLtHashProofHash") !== accountsLtHashProofHash
+    ) {
+      throw new TypeError("accountsLtHashProofHash must match accountsLtHashProof");
+    }
+  } else {
+    throw new TypeError("accountsLtHashProof is required; accountsLtHashProofHash alone is not accepted");
+  }
+  const openedAccountsLtHashContributionsHash = solanaAuditOpenedHash(
+    input,
+    witness,
+    "openedAccountsLtHashContributionsHash",
+    "opened_accounts_lt_hash_contributions_hash",
+    solanaSccpAccountsLtHashOpenedContributionsHash,
+    "openedAccountsLtHashContributionsHash",
+  );
+  const openedAccountsLtHashResidualChecksum = solanaAuditOpenedHash(
+    input,
+    witness,
+    "openedAccountsLtHashResidualChecksum",
+    "opened_accounts_lt_hash_residual_checksum",
+    solanaSccpAccountsLtHashOpenedResidualChecksum,
+    "openedAccountsLtHashResidualChecksum",
+  );
+  return {
+    role,
+    material,
+    deployment,
+    witness,
+    context,
+    finalityContextHash,
+    voteMessageHash,
+    accountsLtHashProofHash,
+    openedAccountsLtHashContributionsHash,
+    openedAccountsLtHashResidualChecksum,
+    sourceVerifierMaterialHash,
+    sourceAdapterDeploymentHash,
+    fullLightClientGateHash: gateHash,
+    verifierHash: solanaAuditRoleVerifierHash(deployment, role),
+  };
+}
+
+export function canonicalSolanaSccpFullLightClientAuditStatementBytes(input, roleName) {
+  const role = normalizeSolanaFullLightClientAuditRole(roleName);
+  const value = normalizeSolanaFullLightClientAuditInput(input, role);
+  const { witness, context } = value;
+  let out = new Uint8Array();
+  out = writeU8(out, 1);
+  out = writeU8(out, role.code);
+  out = writeString(out, role.circuitId, "circuitId");
+  out = writeString(out, SCCP_SOLANA_RECURSIVE_PROOF_BACKEND_V1, "backend");
+  out = writeString(out, SCCP_SOLANA_MAINNET_GENESIS_HASH, "mainnetGenesisHash");
+  out = writeU32Le(out, SCCP_DOMAIN_SOL);
+  out = writeU64Le(out, context.epoch);
+  out = writeU64Le(out, witness.finalizedSlot);
+  out = writeU64Le(out, context.rootedSlot);
+  out = writeU64Le(out, context.parentSlot);
+  out = concatBytes(out, hexToBytes(value.finalityContextHash, "finalityContextHash", 32));
+  out = concatBytes(out, hexToBytes(value.voteMessageHash, "voteMessageHash", 32));
+  out = concatBytes(out, hexToBytes(value.accountsLtHashProofHash, "accountsLtHashProofHash", 32));
+  switch (role.name) {
+    case "towerReplay":
+      out = concatBytes(out, hexToBytes(context.towerLockoutHash, "towerLockoutHash", 32));
+      out = concatBytes(out, hexToBytes(context.towerReplayHash, "towerReplayHash", 32));
+      out = concatBytes(out, hexToBytes(context.bankForkHash, "bankForkHash", 32));
+      out = concatBytes(out, hexToBytes(context.epochStakeRoot, "epochStakeRoot", 32));
+      out = concatBytes(out, hexToBytes(context.stakeActivationHash, "stakeActivationHash", 32));
+      out = concatBytes(out, hexToBytes(context.stakeAccountStateHash, "stakeAccountStateHash", 32));
+      out = concatBytes(out, hexToBytes(context.stakeHistoryHash, "stakeHistoryHash", 32));
+      out = concatBytes(out, hexToBytes(context.stakeHistorySysvarAccountHash, "stakeHistorySysvarAccountHash", 32));
+      out = concatBytes(out, hexToBytes(context.accountInclusionRoot, "accountInclusionRoot", 32));
+      out = writeU32Le(out, context.towerVoteSlots.length);
+      for (const slot of context.towerVoteSlots) out = writeU64Le(out, slot);
+      break;
+    case "fullAccountsdbLattice":
+      out = concatBytes(out, hexToBytes(context.accountInclusionRoot, "accountInclusionRoot", 32));
+      out = concatBytes(out, hexToBytes(context.accountsLtHashChecksum, "accountsLtHashChecksum", 32));
+      out = concatBytes(out, hexToBytes(context.accountsLtHashProofPublicInputsHash, "accountsLtHashProofPublicInputsHash", 32));
+      out = concatBytes(out, hexToBytes(value.openedAccountsLtHashContributionsHash, "openedAccountsLtHashContributionsHash", 32));
+      out = concatBytes(out, hexToBytes(value.openedAccountsLtHashResidualChecksum, "openedAccountsLtHashResidualChecksum", 32));
+      out = concatBytes(out, hexToBytes(value.accountsLtHashProofHash, "accountsLtHashProofHash", 32));
+      break;
+    case "bankForkChoice":
+      out = concatBytes(out, hexToBytes(context.parentBankHash, "parentBankHash", 32));
+      out = concatBytes(out, hexToBytes(witness.bankHash, "bankHash", 32));
+      out = concatBytes(out, hexToBytes(witness.blockhash, "blockhash", 32));
+      out = concatBytes(out, hexToBytes(witness.transactionStatusRoot, "transactionStatusRoot", 32));
+      out = concatBytes(out, hexToBytes(context.accountInclusionRoot, "accountInclusionRoot", 32));
+      out = concatBytes(out, hexToBytes(context.accountsLtHashChecksum, "accountsLtHashChecksum", 32));
+      out = writeU64Le(out, context.bankSignatureCount);
+      out = writeBytes(out, context.bankHashHardForkData);
+      out = concatBytes(out, hexToBytes(context.bankForkHash, "bankForkHash", 32));
+      out = concatBytes(out, hexToBytes(context.towerReplayHash, "towerReplayHash", 32));
+      break;
+    default:
+      throw new TypeError("unsupported Solana full-light-client audit role");
+  }
+  return out;
+}
+
+export function solanaSccpFullLightClientAuditStatementHash(input, roleName) {
+  return bytesToHex(
+    prefixedBlake2b(
+      SCCP_SOLANA_FULL_LIGHT_CLIENT_AUDIT_STATEMENT_PREFIX_V1,
+      canonicalSolanaSccpFullLightClientAuditStatementBytes(input, roleName),
+    ),
+  );
+}
+
+function requireSolanaFullLightClientAuditRoleRequestHashesSeparated(value, auditStatementHash) {
+  if (
+    [
+      value.material.sourceStateVerifierHash,
+      value.sourceVerifierMaterialHash,
+      value.sourceAdapterDeploymentHash,
+      value.fullLightClientGateHash,
+      value.finalityContextHash,
+      value.voteMessageHash,
+      value.accountsLtHashProofHash,
+      auditStatementHash,
+    ].includes(value.verifierHash)
+  ) {
+    throw new TypeError(
+      "verifierHash must be role-separated from Solana full-light audit request hashes",
+    );
+  }
+}
+
+function solanaFullLightClientAuditRoleColumns(value) {
+  const { role, witness, context } = value;
+  switch (role.name) {
+    case "towerReplay":
+      return [
+        context.towerLockoutHash,
+        context.towerReplayHash,
+        context.bankForkHash,
+        context.epochStakeRoot,
+        context.stakeActivationHash,
+        context.stakeAccountStateHash,
+        context.stakeHistoryHash,
+        context.stakeHistorySysvarAccountHash,
+        context.accountInclusionRoot,
+      ];
+    case "fullAccountsdbLattice":
+      return [
+        context.accountInclusionRoot,
+        context.accountsLtHashChecksum,
+        context.accountsLtHashProofPublicInputsHash,
+        value.openedAccountsLtHashContributionsHash,
+        value.openedAccountsLtHashResidualChecksum,
+        value.accountsLtHashProofHash,
+      ];
+    case "bankForkChoice":
+      return [
+        context.parentBankHash,
+        witness.bankHash,
+        witness.blockhash,
+        witness.transactionStatusRoot,
+        context.accountInclusionRoot,
+        context.accountsLtHashChecksum,
+        bytesToHex(sccpWordU64Le(context.bankSignatureCount)),
+        solanaBankHashHardForkDataHash(context.bankHashHardForkData),
+        context.bankForkHash,
+        context.towerReplayHash,
+      ];
+    default:
+      throw new TypeError("unsupported Solana full-light-client audit role");
+  }
+}
+
+export function solanaSccpFullLightClientAuditPublicInputColumns(input, roleName) {
+  const role = normalizeSolanaFullLightClientAuditRole(roleName);
+  const value = normalizeSolanaFullLightClientAuditInput(input, role);
+  const statementHash = solanaSccpFullLightClientAuditStatementHash(input, role.name);
+  const columns = [
+    [bytesToHex(sccpWordU8(role.code))],
+    [bytesToHex(sccpWordU32Le(SCCP_DOMAIN_SOL))],
+    [solanaMainnetGenesisHashPublicInput()],
+    [bytesToHex(sccpWordU64Le(value.witness.finalizedSlot))],
+    [value.finalityContextHash],
+    [statementHash],
+    [value.sourceVerifierMaterialHash],
+    [value.sourceAdapterDeploymentHash],
+    [value.fullLightClientGateHash],
+    [value.verifierHash],
+    [bytesToHex(sccpWordU64Le(value.context.epoch))],
+    [bytesToHex(sccpWordU64Le(value.context.rootedSlot))],
+    [bytesToHex(sccpWordU64Le(value.context.parentSlot))],
+    [value.voteMessageHash],
+    [value.accountsLtHashProofHash],
+  ];
+  for (const column of solanaFullLightClientAuditRoleColumns(value)) {
+    columns.push([column]);
+  }
+  return columns;
+}
+
+function solanaFullLightClientAuditFastpqPublicInputs(value, statementHash) {
+  let dsidPreimage = new Uint8Array();
+  dsidPreimage = writeU8(dsidPreimage, value.role.code);
+  dsidPreimage = concatBytes(dsidPreimage, hexToBytes(statementHash, "auditStatementHash", 32));
+  const dsidHash = prefixedBlake2b(
+    SCCP_SOLANA_FULL_LIGHT_CLIENT_AUDIT_FASTPQ_DSID_PREFIX_V1,
+    dsidPreimage,
+  );
+  let oldRoot;
+  let newRoot;
+  let permRoot;
+  switch (value.role.name) {
+    case "towerReplay":
+      oldRoot = value.context.towerLockoutHash;
+      newRoot = value.context.towerReplayHash;
+      permRoot = value.context.bankForkHash;
+      break;
+    case "fullAccountsdbLattice":
+      oldRoot = value.context.accountInclusionRoot;
+      newRoot = value.context.accountsLtHashChecksum;
+      permRoot = value.openedAccountsLtHashContributionsHash;
+      break;
+    case "bankForkChoice":
+      oldRoot = value.context.parentBankHash;
+      newRoot = value.witness.bankHash;
+      permRoot = value.context.bankForkHash;
+      break;
+    default:
+      throw new TypeError("unsupported Solana full-light-client audit role");
+  }
+  return {
+    dsid: bytesToHex(dsidHash.slice(0, 16)),
+    slot: value.witness.finalizedSlot.toString(),
+    oldRoot,
+    newRoot,
+    permRoot,
+    txSetHash: statementHash,
+  };
+}
+
+function canonicalSolanaFullLightClientAuditContextBytes(value, statementHash) {
+  let out = new Uint8Array();
+  out = writeU8(out, 1);
+  out = writeU8(out, value.role.code);
+  out = writeString(out, value.role.circuitId, "circuitId");
+  out = writeString(out, SCCP_SOLANA_FULL_LIGHT_CLIENT_AUDIT_FASTPQ_PARAMETER_SET_V1, "parameterSet");
+  out = writeString(out, value.role.verifierId, "verifierId");
+  out = concatBytes(out, hexToBytes(value.verifierHash, "verifierHash", 32));
+  out = concatBytes(out, hexToBytes(value.sourceVerifierMaterialHash, "sourceVerifierMaterialHash", 32));
+  out = concatBytes(out, hexToBytes(value.sourceAdapterDeploymentHash, "sourceAdapterDeploymentHash", 32));
+  out = concatBytes(out, hexToBytes(value.fullLightClientGateHash, "fullLightClientGateHash", 32));
+  out = concatBytes(out, hexToBytes(value.finalityContextHash, "finalityContextHash", 32));
+  out = concatBytes(out, hexToBytes(statementHash, "auditStatementHash", 32));
+  return out;
+}
+
+export function solanaSccpFullLightClientAuditOpenVerifySchemaDescriptor(input, roleName) {
+  const role = normalizeSolanaFullLightClientAuditRole(roleName);
+  const value = normalizeSolanaFullLightClientAuditInput(input, role);
+  let descriptor = new Uint8Array();
+  descriptor = writeU8(descriptor, 1);
+  descriptor = writeU8(descriptor, role.code);
+  descriptor = writeString(descriptor, role.circuitId, "circuitId");
+  descriptor = writeString(descriptor, SCCP_SOLANA_FULL_LIGHT_CLIENT_AUDIT_FASTPQ_PARAMETER_SET_V1, "parameterSet");
+  descriptor = writeString(descriptor, SCCP_SOLANA_MAINNET_GENESIS_HASH, "mainnetGenesisHash");
+  descriptor = writeU32Le(descriptor, SCCP_DOMAIN_SOL);
+  descriptor = writeString(descriptor, "verifier_id", "schemaField");
+  descriptor = writeString(descriptor, role.verifierId, "verifierId");
+  descriptor = writeString(descriptor, "verifier_hash", "schemaField");
+  descriptor = concatBytes(descriptor, hexToBytes(value.verifierHash, "verifierHash", 32));
+  descriptor = writeString(descriptor, "source_verifier_material_hash", "schemaField");
+  descriptor = concatBytes(descriptor, hexToBytes(value.sourceVerifierMaterialHash, "sourceVerifierMaterialHash", 32));
+  descriptor = writeString(descriptor, "source_adapter_deployment_hash", "schemaField");
+  descriptor = concatBytes(descriptor, hexToBytes(value.sourceAdapterDeploymentHash, "sourceAdapterDeploymentHash", 32));
+  descriptor = writeString(descriptor, "full_light_client_gate_hash", "schemaField");
+  descriptor = concatBytes(descriptor, hexToBytes(value.fullLightClientGateHash, "fullLightClientGateHash", 32));
+  for (const requiredInput of [
+    "role",
+    "source_domain",
+    "mainnet_genesis_hash",
+    "finalized_slot",
+    "finality_context_hash",
+    "audit_statement_hash",
+    "source_verifier_material_hash",
+    "source_adapter_deployment_hash",
+    "full_light_client_gate_hash",
+    "verifier_hash",
+    "epoch",
+    "rooted_slot",
+    "parent_slot",
+    "vote_message_hash",
+    "accounts_lt_hash_proof_hash",
+    ...role.requiredInputNames,
+  ]) {
+    descriptor = writeString(descriptor, requiredInput, "requiredInput");
+  }
+  return descriptor;
+}
+
+function solanaFullLightClientAuditFastpqKey(prefix, role) {
+  return concatBytes(textEncoder.encode(prefix), Uint8Array.from([0]), textEncoder.encode(role.circuitId));
+}
+
+export function buildSolanaSccpFullLightClientAuditProofRequest(input, roleName) {
+  const role = normalizeSolanaFullLightClientAuditRole(roleName);
+  const value = normalizeSolanaFullLightClientAuditInput(input, role);
+  const statementBytes = canonicalSolanaSccpFullLightClientAuditStatementBytes(input, role.name);
+  const auditStatementHash = solanaSccpFullLightClientAuditStatementHash(input, role.name);
+  requireSolanaFullLightClientAuditRoleRequestHashesSeparated(value, auditStatementHash);
+  const verificationContextBytes = canonicalSolanaFullLightClientAuditContextBytes(value, auditStatementHash);
+  const schemaDescriptor = solanaSccpFullLightClientAuditOpenVerifySchemaDescriptor(input, role.name);
+  const publicInputColumns = solanaSccpFullLightClientAuditPublicInputColumns(input, role.name);
+  const fastpqTransitions = [
+    {
+      key: bytesToHex(solanaFullLightClientAuditFastpqKey(
+        SCCP_SOLANA_FULL_LIGHT_CLIENT_AUDIT_FASTPQ_STATEMENT_KEY_V1,
+        role,
+      )),
+      operation: "meta_set",
+      oldValue: "0x",
+      newValue: bytesToHex(statementBytes),
+    },
+    {
+      key: bytesToHex(solanaFullLightClientAuditFastpqKey(
+        SCCP_SOLANA_FULL_LIGHT_CLIENT_AUDIT_FASTPQ_CONTEXT_KEY_V1,
+        role,
+      )),
+      operation: "meta_set",
+      oldValue: "0x",
+      newValue: bytesToHex(verificationContextBytes),
+    },
+    {
+      key: bytesToHex(solanaFullLightClientAuditFastpqKey(
+        SCCP_SOLANA_FULL_LIGHT_CLIENT_AUDIT_FASTPQ_GATE_KEY_V1,
+        role,
+      )),
+      operation: "meta_set",
+      oldValue: "0x",
+      newValue: value.fullLightClientGateHash,
+    },
+  ].sort((left, right) => left.key.localeCompare(right.key));
+  return immutableFastpqProofRequest(
+    {
+      version: 1,
+      proofFamily: SCCP_STARK_FRI_PROOF_FAMILY_V1,
+      circuitId: role.circuitId,
+      parameterSet: SCCP_SOLANA_FULL_LIGHT_CLIENT_AUDIT_FASTPQ_PARAMETER_SET_V1,
+      role: role.wireName,
+      roleCode: role.code,
+      sourceDomain: SCCP_DOMAIN_SOL,
+      finalizedSlot: value.witness.finalizedSlot.toString(),
+      verifierId: role.verifierId,
+      verifierHash: value.verifierHash,
+      sourceStateVerifierId: value.material.sourceStateVerifierId,
+      sourceStateVerifierHash: value.material.sourceStateVerifierHash,
+      sourceVerifierMaterialHash: value.sourceVerifierMaterialHash,
+      sourceAdapterDeploymentHash: value.sourceAdapterDeploymentHash,
+      fullLightClientGateHash: value.fullLightClientGateHash,
+      finalityContextHash: value.finalityContextHash,
+      voteMessageHash: value.voteMessageHash,
+      accountsLtHashProofHash: value.accountsLtHashProofHash,
+      auditStatementHash,
+      statementBytes,
+      verificationContextBytes,
+      schemaDescriptor,
+      publicInputColumns,
+      fastpqPublicInputs: solanaFullLightClientAuditFastpqPublicInputs(value, auditStatementHash),
+      fastpqTransitions,
+    },
+    ["statementBytes", "verificationContextBytes", "schemaDescriptor"],
+  );
+}
+
+export function buildSolanaSccpTowerReplayProofRequest(input) {
+  return buildSolanaSccpFullLightClientAuditProofRequest(input, "towerReplay");
+}
+
+export function buildSolanaSccpFullAccountsdbLatticeProofRequest(input) {
+  return buildSolanaSccpFullLightClientAuditProofRequest(input, "fullAccountsdbLattice");
+}
+
+export function buildSolanaSccpBankForkChoiceProofRequest(input) {
+  return buildSolanaSccpFullLightClientAuditProofRequest(input, "bankForkChoice");
+}
+
+export function buildSolanaSccpFullLightClientAuditProofRequests(input) {
+  return Object.freeze({
+    towerReplay: buildSolanaSccpTowerReplayProofRequest(input),
+    fullAccountsdbLattice: buildSolanaSccpFullAccountsdbLatticeProofRequest(input),
+    bankForkChoice: buildSolanaSccpBankForkChoiceProofRequest(input),
+  });
+}
+
+const solanaSha256Hashv = (parts) => sha256(concatBytes(...parts));
+
+const solanaSccpAgaveBankHashBytes = (
+  parentBankHash,
+  bankSignatureCount,
+  blockhash,
+  accountsLtHash,
+  bankHashHardForkData,
+) => {
+  if (bankSignatureCount === 0n) {
+    throw new RangeError("bankSignatureCount must be nonzero");
+  }
+  if (accountsLtHash.length !== SCCP_SOLANA_ACCOUNTS_LT_HASH_BYTES) {
+    throw new TypeError("accountsLtHash must be 2048 bytes");
+  }
+  requireNonZeroSolanaAccountsLtHash(accountsLtHash);
+  if (bankHashHardForkData.length > SCCP_SOLANA_MAX_BANK_HARD_FORK_HASH_DATA_BYTES) {
+    throw new RangeError("bankHashHardForkData is too large");
+  }
+  const signatureCountBytes = writeU64Le(new Uint8Array(), bankSignatureCount);
+  let hash = solanaSha256Hashv([parentBankHash, signatureCountBytes, blockhash]);
+  hash = solanaSha256Hashv([hash, accountsLtHash]);
+  if (bankHashHardForkData.length !== 0) {
+    hash = solanaSha256Hashv([hash, bankHashHardForkData]);
+  }
+  return hash;
+};
+
+export function solanaSccpAgaveBankHash(input) {
+  if (!input || typeof input !== "object" || Array.isArray(input)) {
+    throw new TypeError("Solana Agave bank-hash input must be an object");
+  }
+  const parentBankHash = nonZeroHex32Bytes(
+    strictResultField(input, "parentBankHash", "parentBankHash", "parent_bank_hash"),
+    "parentBankHash",
+  );
+  const bankSignatureCount = normalizeUnsignedBigInt(
+    strictResultField(input, "bankSignatureCount", "bankSignatureCount", "bank_signature_count"),
+    "bankSignatureCount",
+  );
+  const blockhash = nonZeroHex32Bytes(
+    strictResultField(input, "blockhash", "blockhashBytes", "blockhash_bytes", "blockhash"),
+    "blockhash",
+  );
+  const accountsLtHash = toBytes(
+    strictResultField(input, "accountsLtHash", "accountsLtHash", "accounts_lt_hash"),
+    "accountsLtHash",
+  );
+  const bankHashHardForkData = toMaybeEmptyBytes(
+    strictResultField(
+      input,
+      "bankHashHardForkData",
+      "bankHashHardForkData",
+      "bank_hash_hard_fork_data",
+    ) ?? new Uint8Array(),
+    "bankHashHardForkData",
+  );
+  return bytesToHex(
+    solanaSccpAgaveBankHashBytes(
+      parentBankHash,
+      bankSignatureCount,
+      blockhash,
+      accountsLtHash,
+      bankHashHardForkData,
+    ),
+  );
+}
+
+export function canonicalSolanaSccpAccountInclusionLeafBytes(input) {
+  if (!input || typeof input !== "object" || Array.isArray(input)) {
+    throw new TypeError("Solana account inclusion leaf input must be an object");
+  }
+  const finalizedSlot = normalizeUnsignedBigInt(
+    strictResultField(input, "finalizedSlot", "finalizedSlot", "finalized_slot"),
+    "finalizedSlot",
+  );
+  const opening = strictResultField(input, "opening", "opening", "accountOpening", "account_opening");
+  if (!opening || typeof opening !== "object" || Array.isArray(opening)) {
+    throw new TypeError("opening must be an object");
+  }
+  const rawDataHashInput = strictResultField(input, "rawDataHash", "rawDataHash", "raw_data_hash");
+  const rawDataInput = strictResultField(input, "rawData", "rawData", "raw_data");
+  let rawDataHash;
+  if (rawDataHashInput === undefined || rawDataHashInput === null) {
+    rawDataHash = nonZeroHex32Bytes(solanaSccpAccountRawDataHash(rawDataInput), "rawDataHash");
+  } else {
+    rawDataHash = nonZeroHex32Bytes(rawDataHashInput, "rawDataHash");
+    if (rawDataInput !== undefined && rawDataInput !== null) {
+      const derivedRawDataHash = solanaSccpAccountRawDataHash(rawDataInput);
+      if (bytesToHex(rawDataHash) !== derivedRawDataHash) {
+        throw new TypeError("rawDataHash must match rawData");
+      }
+    }
+  }
+  const address = toBytes(
+    strictResultField(opening, "opening.address", "address", "accountAddress", "account_address"),
+    "opening.address",
+  );
+  if (address.length !== 32 || address.every((byte) => byte === 0)) {
+    throw new TypeError("opening.address must be a non-zero 32-byte Solana account id");
+  }
+  const openingHash = hexToBytes(solanaSccpAccountOpeningHash(opening), "openingHash", 32);
+  let out = new Uint8Array();
+  out = writeU8(out, 1);
+  out = writeU64Le(out, finalizedSlot);
+  out = writeBytes(out, address);
+  out = concatBytes(out, openingHash, rawDataHash);
+  return out;
+}
+
+export function solanaSccpAccountInclusionLeafHash(input) {
+  return bytesToHex(
+    prefixedBlake2b(
+      SCCP_SOLANA_ACCOUNT_INCLUSION_LEAF_PREFIX_V1,
+      canonicalSolanaSccpAccountInclusionLeafBytes(input),
+    ),
+  );
+}
+
+const compareBytesLexicographically = (left, right) => {
+  if (left.length !== right.length) {
+    return left.length - right.length;
+  }
+  for (let index = 0; index < left.length; index += 1) {
+    if (left[index] !== right[index]) {
+      return left[index] - right[index];
+    }
+  }
+  return 0;
+};
+
+const tronRecoverableSignatureIsCanonical = (signature) => {
+  if (signature.length !== 65) return false;
+  const recoveryId = signature[64];
+  if (!((recoveryId >= 0 && recoveryId <= 3) || (recoveryId >= 27 && recoveryId <= 30))) {
+    return false;
+  }
+  const r = signature.slice(0, 32);
+  const s = signature.slice(32, 64);
+  return r.some((byte) => byte !== 0) &&
+    compareBytesLexicographically(r, SCCP_SECP256K1_SCALAR_ORDER_BE) < 0 &&
+    s.some((byte) => byte !== 0) &&
+    compareBytesLexicographically(s, SCCP_SECP256K1_SCALAR_HALF_ORDER_BE) <= 0;
+};
+
+const tronRecoveredSignerAddress20 = (messageHash, signature) => {
+  if (messageHash.length !== 32 || !tronRecoverableSignatureIsCanonical(signature)) return null;
+  const recoveryId = signature[64] >= 27 ? signature[64] - 27 : signature[64];
+  try {
+    const publicKey = secp256k1.Signature
+      .fromCompact(signature.slice(0, 64))
+      .addRecoveryBit(recoveryId)
+      .recoverPublicKey(messageHash)
+      .toRawBytes(false);
+    return keccak_256(publicKey.slice(1)).slice(12);
+  } catch {
+    return null;
+  }
+};
+
+export function canonicalSolanaSccpAccountInclusionNodeBytes(left, right) {
+  const leftBytes = nonZeroHex32Bytes(left, "left");
+  const rightBytes = nonZeroHex32Bytes(right, "right");
+  const [first, second] = compareBytesLexicographically(leftBytes, rightBytes) <= 0
+    ? [leftBytes, rightBytes]
+    : [rightBytes, leftBytes];
+  let out = new Uint8Array();
+  out = writeU8(out, 1);
+  out = concatBytes(out, first, second);
+  return out;
+}
+
+export function solanaSccpAccountInclusionNodeHash(left, right) {
+  return bytesToHex(
+    prefixedBlake2b(
+      SCCP_SOLANA_ACCOUNT_INCLUSION_NODE_PREFIX_V1,
+      canonicalSolanaSccpAccountInclusionNodeBytes(left, right),
+    ),
+  );
+}
+
+export function solanaSccpAccountInclusionRootFromBranch(leaf, siblings = []) {
+  if (!Array.isArray(siblings)) {
+    throw new TypeError("siblings must be an array");
+  }
+  if (siblings.length > SCCP_MAX_SOURCE_MERKLE_BRANCH_NODES) {
+    throw new RangeError(`siblings must contain at most ${SCCP_MAX_SOURCE_MERKLE_BRANCH_NODES} entries`);
+  }
+  let current = bytesToHex(nonZeroHex32Bytes(leaf, "leaf"));
+  for (const [index, sibling] of siblings.entries()) {
+    current = solanaSccpAccountInclusionNodeHash(
+      current,
+      bytesToHex(nonZeroHex32Bytes(sibling, `siblings[${index}]`)),
+    );
+  }
+  return current;
+}
+
+export function solanaSccpAccountInclusionRootAndBranches(leaves) {
+  if (!Array.isArray(leaves) || leaves.length === 0) {
+    throw new TypeError("leaves must be a non-empty array");
+  }
+  let level = leaves.map((leaf, index) => ({
+    hash: nonZeroHex32Bytes(leaf, `leaves[${index}]`),
+    indexes: [index],
+  }));
+  level.sort((left, right) => compareBytesLexicographically(left.hash, right.hash));
+  for (let index = 1; index < level.length; index += 1) {
+    if (bytesEqual(level[index - 1].hash, level[index].hash)) {
+      throw new TypeError("leaves must be unique");
+    }
+  }
+
+  const branches = leaves.map(() => []);
+  while (level.length > 1) {
+    const next = [];
+    for (let index = 0; index < level.length; index += 2) {
+      if (index + 1 >= level.length) {
+        next.push(level[index]);
+        continue;
+      }
+      const left = level[index];
+      const right = level[index + 1];
+      const rightHex = bytesToHex(right.hash);
+      const leftHex = bytesToHex(left.hash);
+      for (const leafIndex of left.indexes) {
+        branches[leafIndex].push(rightHex);
+      }
+      for (const leafIndex of right.indexes) {
+        branches[leafIndex].push(leftHex);
+      }
+      next.push({
+        hash: hexToBytes(solanaSccpAccountInclusionNodeHash(leftHex, rightHex), "parent", 32),
+        indexes: [...left.indexes, ...right.indexes],
+      });
+    }
+    level = next;
+  }
+  return Object.freeze({
+    root: bytesToHex(level[0].hash),
+    branches: freezeStringMatrix(branches),
+  });
+}
+
+export function solanaSccpOpenedAccountInclusionWitness(input) {
+  if (!input || typeof input !== "object" || Array.isArray(input)) {
+    throw new TypeError("Solana opened account inclusion witness input must be an object");
+  }
+  const finalizedSlot = normalizeUnsignedBigInt(
+    strictResultField(input, "finalizedSlot", "finalizedSlot", "finalized_slot", "slot"),
+    "finalizedSlot",
+  );
+  const voteOpenings = solanaOpenedLtHashArray(
+    input,
+    ["validatorVoteAccountOpenings", "validator_vote_account_openings", "voteAccountOpenings", "vote_account_openings"],
+    "validatorVoteAccountOpenings",
+  );
+  const voteRawData = solanaOpenedLtHashArray(
+    input,
+    ["validatorVoteAccountRawData", "validator_vote_account_raw_data", "voteAccountRawData", "vote_account_raw_data"],
+    "validatorVoteAccountRawData",
+  );
+  const stakeOpenings = solanaOpenedLtHashArray(
+    input,
+    ["validatorStakeAccountOpenings", "validator_stake_account_openings", "stakeAccountOpenings", "stake_account_openings"],
+    "validatorStakeAccountOpenings",
+  );
+  const stakeRawData = solanaOpenedLtHashArray(
+    input,
+    ["validatorStakeAccountRawData", "validator_stake_account_raw_data", "stakeAccountRawData", "stake_account_raw_data"],
+    "validatorStakeAccountRawData",
+  );
+  if (voteOpenings.length !== voteRawData.length || stakeOpenings.length !== stakeRawData.length) {
+    throw new TypeError("opened account openings and rawData arrays must have matching lengths");
+  }
+  const stakeHistoryOpening = strictResultField(
+    input,
+    "stakeHistorySysvarOpening",
+    "stakeHistorySysvarOpening",
+    "stake_history_sysvar_opening",
+  );
+  const stakeHistoryRawData = strictResultField(
+    input,
+    "stakeHistorySysvarRawData",
+    "stakeHistorySysvarRawData",
+    "stake_history_sysvar_raw_data",
+  );
+  if (stakeHistoryOpening === undefined || stakeHistoryRawData === undefined) {
+    throw new TypeError("stakeHistorySysvarOpening and stakeHistorySysvarRawData are required");
+  }
+  requireUniqueSolanaOpenedAccountAddresses([
+    ...voteOpenings,
+    ...stakeOpenings,
+    stakeHistoryOpening,
+  ]);
+  const leafFor = (opening, rawData) =>
+    solanaSccpAccountInclusionLeafHash({ finalizedSlot, opening, rawData });
+  const voteLeaves = voteOpenings.map((opening, index) => leafFor(opening, voteRawData[index]));
+  const stakeLeaves = stakeOpenings.map((opening, index) => leafFor(opening, stakeRawData[index]));
+  const stakeHistoryLeaf = leafFor(stakeHistoryOpening, stakeHistoryRawData);
+  const { root, branches } = solanaSccpAccountInclusionRootAndBranches([
+    ...voteLeaves,
+    ...stakeLeaves,
+    stakeHistoryLeaf,
+  ]);
+  const expectedRoot =
+    strictResultField(
+      input,
+      "accountInclusionRoot",
+      "accountInclusionRoot",
+      "account_inclusion_root",
+      "accountsRoot",
+      "accounts_root",
+    );
+  if (
+    expectedRoot !== undefined &&
+    normalizeNonZeroHex32(expectedRoot, "accountInclusionRoot") !== root
+  ) {
+    throw new TypeError("accountInclusionRoot must match opened account inclusion witness");
+  }
+  const validatorVoteAccountBranches = branches.slice(0, voteLeaves.length);
+  const validatorStakeAccountBranches = branches.slice(
+    voteLeaves.length,
+    voteLeaves.length + stakeLeaves.length,
+  );
+  const stakeHistorySysvarBranch = branches[branches.length - 1];
+  return Object.freeze({
+    root,
+    branches: freezeStringMatrix(branches),
+    validatorVoteAccountBranches: freezeStringMatrix(validatorVoteAccountBranches),
+    validatorStakeAccountBranches: freezeStringMatrix(validatorStakeAccountBranches),
+    stakeHistorySysvarBranch: Object.freeze([...stakeHistorySysvarBranch]),
+  });
+}
+
+export function canonicalSolanaSccpVoteAccountDataBytes(input) {
+  if (!input || typeof input !== "object" || Array.isArray(input)) {
+    throw new TypeError("Solana vote account data input must be an object");
+  }
+  const voteField = (label, ...names) =>
+    strictResultField(input, label, ...new Set(names));
+  const voteOptionalField = (label, ...names) =>
+    strictOptionalResultField(input, label, ...new Set(names));
+  const voteOptionalValue = (label, ...names) => {
+    const selected = voteOptionalField(label, ...names);
+    return selected === SCCP_OPTIONAL_FIELD_MISSING ||
+      selected === undefined ||
+      selected === null
+      ? undefined
+      : selected;
+  };
+  const nodePubkey = toBytes(voteField("nodePubkey", "nodePubkey", "node_pubkey"), "nodePubkey");
+  const authorizedVoter = toBytes(
+    voteField("authorizedVoter", "authorizedVoter", "authorized_voter"),
+    "authorizedVoter",
+  );
+  const authorizedWithdrawer = toBytes(
+    voteField(
+      "authorizedWithdrawer",
+      "authorizedWithdrawer",
+      "authorized_withdrawer",
+    ),
+    "authorizedWithdrawer",
+  );
+  const inflationRewardsCollectorInput = voteOptionalValue(
+    "inflationRewardsCollector",
+    "inflationRewardsCollector",
+    "inflation_rewards_collector",
+  );
+  const legacyVoteAccountAddress = voteOptionalValue(
+    "voteAccountAddress",
+    "voteAccountAddress",
+    "vote_account_address",
+  );
+  const inflationRewardsCollector = toBytes(
+    inflationRewardsCollectorInput ?? legacyVoteAccountAddress,
+    "inflationRewardsCollector",
+  );
+  const blockRevenueCollectorInput = voteOptionalValue(
+    "blockRevenueCollector",
+    "blockRevenueCollector",
+    "block_revenue_collector",
+  );
+  const blockRevenueCollector = toBytes(
+    blockRevenueCollectorInput ?? nodePubkey,
+    "blockRevenueCollector",
+  );
+  const commissionInput = voteOptionalValue("commission", "commission");
+  const commission = commissionInput === undefined
+    ? null
+    : normalizeUnsignedBigInt(commissionInput, "commission");
+  const inflationRewardsCommissionBps = normalizeUnsignedBigInt(
+    voteOptionalValue(
+      "inflationRewardsCommissionBps",
+      "inflationRewardsCommissionBps",
+      "inflation_rewards_commission_bps",
+    ) ?? (commission === null ? undefined : commission * 100n),
+    "inflationRewardsCommissionBps",
+  );
+  const blockRevenueCommissionBps = normalizeUnsignedBigInt(
+    voteOptionalValue(
+      "blockRevenueCommissionBps",
+      "blockRevenueCommissionBps",
+      "block_revenue_commission_bps",
+    ) ?? 10_000n,
+    "blockRevenueCommissionBps",
+  );
+  const pendingDelegatorRewards = normalizeUnsignedBigInt(
+    voteOptionalValue(
+      "pendingDelegatorRewards",
+      "pendingDelegatorRewards",
+      "pending_delegator_rewards",
+    ) ?? 0n,
+    "pendingDelegatorRewards",
+  );
+  const blsPubkeyCompressed = toBytes(
+    voteOptionalValue(
+      "blsPubkeyCompressed",
+      "blsPubkeyCompressed",
+      "bls_pubkey_compressed",
+    ) ?? new Uint8Array(),
+    "blsPubkeyCompressed",
+  );
+  const rootSlot = normalizeUnsignedBigInt(
+    voteField("rootSlot", "rootSlot", "root_slot"),
+    "rootSlot",
+  );
+  const rawTowerVoteSlots = voteField(
+    "towerVoteSlots",
+    "towerVoteSlots",
+    "tower_vote_slots",
+  );
+  if (!Array.isArray(rawTowerVoteSlots)) {
+    throw new TypeError("towerVoteSlots must be an array");
+  }
+  const towerVoteSlots = rawTowerVoteSlots.map((slot, index) =>
+    normalizeUnsignedBigInt(slot, `towerVoteSlots[${index}]`),
+  );
+  for (const [label, bytes] of [
+    ["nodePubkey", nodePubkey],
+    ["authorizedVoter", authorizedVoter],
+    ["authorizedWithdrawer", authorizedWithdrawer],
+    ["inflationRewardsCollector", inflationRewardsCollector],
+    ["blockRevenueCollector", blockRevenueCollector],
+  ]) {
+    if (bytes.length !== 32 || bytes.every((byte) => byte === 0)) {
+      throw new TypeError(`${label} must be a non-zero 32-byte Solana public key`);
+    }
+  }
+  if (inflationRewardsCommissionBps > SCCP_SOLANA_BASIS_POINTS_PER_UNIT) {
+    throw new RangeError("inflationRewardsCommissionBps must be at most 10000");
+  }
+  if (blockRevenueCommissionBps > SCCP_SOLANA_BASIS_POINTS_PER_UNIT) {
+    throw new RangeError("blockRevenueCommissionBps must be at most 10000");
+  }
+  if (
+    blsPubkeyCompressed.length !== 0 &&
+    blsPubkeyCompressed.length !== SCCP_SOLANA_BLS_PUBLIC_KEY_COMPRESSED_LEN
+  ) {
+    throw new TypeError("blsPubkeyCompressed must be empty or 48 bytes");
+  }
+  if (
+    blsPubkeyCompressed.length === SCCP_SOLANA_BLS_PUBLIC_KEY_COMPRESSED_LEN &&
+    blsPubkeyCompressed.every((byte) => byte === 0)
+  ) {
+    throw new TypeError("blsPubkeyCompressed must be empty or non-zero 48 bytes");
+  }
+  if (towerVoteSlots.length !== Number(SCCP_SOLANA_TOWER_VOTE_STACK_DEPTH)) {
+    throw new TypeError("towerVoteSlots must contain 31 active post-root slots");
+  }
+  let previousSlot = rootSlot;
+  for (const [index, slot] of towerVoteSlots.entries()) {
+    if (slot <= previousSlot) {
+      throw new RangeError(`towerVoteSlots[${index}] must be greater than the previous slot`);
+    }
+    previousSlot = slot;
+  }
+  let out = new Uint8Array();
+  out = writeU8(out, 1);
+  out = writeBytes(out, nodePubkey);
+  out = writeBytes(out, authorizedVoter);
+  out = writeBytes(out, authorizedWithdrawer);
+  out = writeBytes(out, inflationRewardsCollector);
+  out = writeBytes(out, blockRevenueCollector);
+  out = writeU16Le(out, inflationRewardsCommissionBps);
+  out = writeU16Le(out, blockRevenueCommissionBps);
+  out = writeU64Le(out, pendingDelegatorRewards);
+  out = writeBytes(out, blsPubkeyCompressed);
+  out = writeU64Le(out, rootSlot);
+  out = writeU32Le(out, towerVoteSlots.length);
+  for (const slot of towerVoteSlots) {
+    out = writeU64Le(out, slot);
+  }
+  return out;
+}
+
+export function solanaSccpVoteAccountDataHash(input) {
+  return bytesToHex(
+    prefixedBlake2b(
+      SCCP_SOLANA_VOTE_ACCOUNT_DATA_PREFIX_V1,
+      canonicalSolanaSccpVoteAccountDataBytes(input),
+    ),
+  );
+}
+
+export function solanaSccpVoteAccountDataFromRawVoteState(
+  rawData,
+  epoch,
+  voteAccountAddress,
+) {
+  const data = toBytes(rawData, "rawData");
+  if (data.length !== SCCP_SOLANA_VOTE_STATE_ACCOUNT_DATA_LEN) {
+    throw new TypeError("rawData must be a 3762-byte Solana VoteState account");
+  }
+  const signedEpoch = normalizeUnsignedBigInt(epoch, "epoch");
+  const voteAccountAddressBytes = toBytes(voteAccountAddress, "voteAccountAddress");
+  if (
+    voteAccountAddressBytes.length !== 32 ||
+    voteAccountAddressBytes.every((byte) => byte === 0)
+  ) {
+    throw new TypeError("voteAccountAddress must be a non-zero 32-byte Solana public key");
+  }
+  let offset = 0;
+  const readU8 = (field) => {
+    const value = readU8At(data, offset, field);
+    offset += 1;
+    return value;
+  };
+  const readU16 = (field) => {
+    const value = readU16LeAt(data, offset, field);
+    offset += 2;
+    return value;
+  };
+  const readU32 = (field) => {
+    const value = readU32LeAt(data, offset, field);
+    offset += 4;
+    return value;
+  };
+  const readU64 = (field) => {
+    const value = readU64LeAt(data, offset, field);
+    offset += 8;
+    return value;
+  };
+  const readI64 = (field) => BigInt.asIntN(64, readU64(field));
+  const readPubkey = (field) => {
+    if (offset + 32 > data.length) {
+      throw new TypeError(`${field} is too short`);
+    }
+    const value = data.slice(offset, offset + 32);
+    offset += 32;
+    return value;
+  };
+
+  const variant = readU32("voteStateVariant");
+  const hasLatency = (() => {
+    if (variant === SCCP_SOLANA_VOTE_STATE_V1_14_11_DISCRIMINANT) return false;
+    if (variant === SCCP_SOLANA_VOTE_STATE_V3_DISCRIMINANT) return true;
+    if (variant === SCCP_SOLANA_VOTE_STATE_V4_DISCRIMINANT) return true;
+    throw new TypeError("rawData must contain VoteStateVersions::V1_14_11, ::V3, or ::V4");
+  })();
+  const nodePubkey = readPubkey("nodePubkey");
+  const authorizedWithdrawer = readPubkey("authorizedWithdrawer");
+  const v4Fields = (() => {
+    if (variant !== SCCP_SOLANA_VOTE_STATE_V4_DISCRIMINANT) {
+      const commission = readU8("commission");
+      return {
+        inflationRewardsCollector: voteAccountAddressBytes,
+        blockRevenueCollector: nodePubkey,
+        inflationRewardsCommissionBps: BigInt(commission) * 100n,
+        blockRevenueCommissionBps: SCCP_SOLANA_BASIS_POINTS_PER_UNIT,
+        pendingDelegatorRewards: 0n,
+        blsPubkeyCompressed: new Uint8Array(),
+      };
+    }
+    const inflationRewardsCollector = readPubkey("inflationRewardsCollector");
+    const blockRevenueCollector = readPubkey("blockRevenueCollector");
+    const inflationRewardsCommissionBps = BigInt(readU16("inflationRewardsCommissionBps"));
+    const blockRevenueCommissionBps = BigInt(readU16("blockRevenueCommissionBps"));
+    if (inflationRewardsCommissionBps > SCCP_SOLANA_BASIS_POINTS_PER_UNIT) {
+      throw new RangeError("inflationRewardsCommissionBps must be at most 10000");
+    }
+    if (blockRevenueCommissionBps > SCCP_SOLANA_BASIS_POINTS_PER_UNIT) {
+      throw new RangeError("blockRevenueCommissionBps must be at most 10000");
+    }
+    const pendingDelegatorRewards = readU64("pendingDelegatorRewards");
+    const blsVariant = readU8("blsPubkeyCompressed");
+    if (blsVariant === 0) {
+      return {
+        inflationRewardsCollector,
+        blockRevenueCollector,
+        inflationRewardsCommissionBps,
+        blockRevenueCommissionBps,
+        pendingDelegatorRewards,
+        blsPubkeyCompressed: new Uint8Array(),
+      };
+    }
+    if (blsVariant !== 1) {
+      throw new TypeError("blsPubkeyCompressed option discriminator must be 0 or 1");
+    }
+    if (offset + SCCP_SOLANA_BLS_PUBLIC_KEY_COMPRESSED_LEN > data.length) {
+      throw new TypeError("blsPubkeyCompressed is too short");
+    }
+    const blsPubkeyCompressed = data.slice(
+      offset,
+      offset + SCCP_SOLANA_BLS_PUBLIC_KEY_COMPRESSED_LEN,
+    );
+    offset += SCCP_SOLANA_BLS_PUBLIC_KEY_COMPRESSED_LEN;
+    return {
+      inflationRewardsCollector,
+      blockRevenueCollector,
+      inflationRewardsCommissionBps,
+      blockRevenueCommissionBps,
+      pendingDelegatorRewards,
+      blsPubkeyCompressed,
+    };
+  })();
+
+  const voteCount = readU64("towerVoteSlots");
+  if (voteCount !== SCCP_SOLANA_TOWER_VOTE_STACK_DEPTH) {
+    throw new TypeError("towerVoteSlots must contain 31 active post-root slots");
+  }
+  const towerVoteSlots = [];
+  const depth = Number(SCCP_SOLANA_TOWER_VOTE_STACK_DEPTH);
+  for (let index = 0; index < depth; index += 1) {
+    if (hasLatency) {
+      readU8(`towerVoteSlots[${index}].latency`);
+    }
+    const slot = readU64(`towerVoteSlots[${index}].slot`);
+    const confirmationCount = readU32(`towerVoteSlots[${index}].confirmationCount`);
+    if (confirmationCount !== depth - index) {
+      throw new TypeError(`towerVoteSlots[${index}] has an invalid Tower confirmation count`);
+    }
+    towerVoteSlots.push(slot);
+  }
+
+  const rootVariant = readU8("rootSlot");
+  if (rootVariant !== 1) {
+    throw new TypeError("rawData must contain a rooted vote state");
+  }
+  const rootSlot = readU64("rootSlot");
+  let previousTowerSlot = rootSlot;
+  for (const [index, slot] of towerVoteSlots.entries()) {
+    if (slot <= previousTowerSlot) {
+      throw new TypeError(`towerVoteSlots[${index}] must be greater than the previous slot`);
+    }
+    previousTowerSlot = slot;
+  }
+
+  const authorizedVoterCount = readU64("authorizedVoters");
+  const authorizedVoterLimit =
+    variant === SCCP_SOLANA_VOTE_STATE_V4_DISCRIMINANT
+      ? SCCP_SOLANA_VOTE_STATE_V4_AUTHORIZED_VOTERS
+      : SCCP_SOLANA_VOTE_STATE_PRIOR_VOTERS;
+  if (authorizedVoterCount === 0n || authorizedVoterCount > BigInt(authorizedVoterLimit)) {
+    throw new TypeError(
+      variant === SCCP_SOLANA_VOTE_STATE_V4_DISCRIMINANT
+        ? "authorizedVoters must contain 1..4 entries for VoteStateV4"
+        : "authorizedVoters must contain 1..32 entries",
+    );
+  }
+  let previousAuthorizedEpoch = null;
+  let authorizedVoter = null;
+  for (let index = 0; index < Number(authorizedVoterCount); index += 1) {
+    const authorizedEpoch = readU64(`authorizedVoters[${index}].epoch`);
+    if (previousAuthorizedEpoch !== null && authorizedEpoch <= previousAuthorizedEpoch) {
+      throw new TypeError("authorizedVoters must be sorted by strictly increasing epoch");
+    }
+    const voter = readPubkey(`authorizedVoters[${index}].authorizedVoter`);
+    if (voter.every((byte) => byte === 0)) {
+      throw new TypeError(`authorizedVoters[${index}].authorizedVoter must be non-zero`);
+    }
+    if (authorizedEpoch <= signedEpoch) {
+      authorizedVoter = voter;
+    }
+    previousAuthorizedEpoch = authorizedEpoch;
+  }
+  if (authorizedVoter === null) {
+    throw new TypeError("authorizedVoters must include an entry at or before epoch");
+  }
+  if (variant !== SCCP_SOLANA_VOTE_STATE_V4_DISCRIMINANT) {
+    for (let index = 0; index < SCCP_SOLANA_VOTE_STATE_PRIOR_VOTERS; index += 1) {
+      const priorVoter = readPubkey(`priorVoters[${index}].pubkey`);
+      const fromEpoch = readU64(`priorVoters[${index}].fromEpoch`);
+      const untilEpoch = readU64(`priorVoters[${index}].untilEpoch`);
+      if (priorVoter.every((byte) => byte === 0)) {
+        if (fromEpoch !== 0n || untilEpoch !== 0n) {
+          throw new TypeError(`priorVoters[${index}] zero pubkey must have zero epoch bounds`);
+        }
+      } else if (fromEpoch >= untilEpoch) {
+        throw new TypeError(`priorVoters[${index}] must have increasing epoch bounds`);
+      }
+    }
+    const priorVotersIndex = readU64("priorVoters.index");
+    const priorVotersIsEmpty = readU8("priorVoters.isEmpty");
+    if (
+      priorVotersIndex >= BigInt(SCCP_SOLANA_VOTE_STATE_PRIOR_VOTERS) ||
+      (priorVotersIsEmpty !== 0 && priorVotersIsEmpty !== 1)
+    ) {
+      throw new TypeError("priorVoters must have a valid cursor and boolean empty flag");
+    }
+  }
+  const epochCreditCount = readU64("epochCredits");
+  if (epochCreditCount > BigInt(SCCP_SOLANA_VOTE_STATE_MAX_EPOCH_CREDITS)) {
+    throw new TypeError("epochCredits exceeds Solana history bound");
+  }
+  let previousEpochCreditEpoch = null;
+  let previousEpochCreditTotal = null;
+  for (let index = 0; index < Number(epochCreditCount); index += 1) {
+    const creditEpoch = readU64(`epochCredits[${index}].epoch`);
+    const credits = readU64(`epochCredits[${index}].credits`);
+    const previousCredits = readU64(`epochCredits[${index}].previousCredits`);
+    if (
+      creditEpoch > signedEpoch ||
+      (previousEpochCreditEpoch !== null && creditEpoch <= previousEpochCreditEpoch) ||
+      previousCredits > credits ||
+      (previousEpochCreditTotal !== null && previousCredits < previousEpochCreditTotal)
+    ) {
+      throw new TypeError("epochCredits must be sorted and monotonic");
+    }
+    previousEpochCreditEpoch = creditEpoch;
+    previousEpochCreditTotal = credits;
+  }
+  const lastTimestampSlot = readU64("lastTimestamp.slot");
+  const lastTimestamp = readI64("lastTimestamp.timestamp");
+  const lastTowerVoteSlot = towerVoteSlots[towerVoteSlots.length - 1];
+  if (
+    (lastTimestampSlot === 0n && lastTimestamp !== 0n) ||
+    (lastTimestampSlot !== 0n && (lastTimestampSlot > lastTowerVoteSlot || lastTimestamp < 0n))
+  ) {
+    throw new TypeError("lastTimestamp must be default or within the Tower vote stack");
+  }
+  for (let index = offset; index < data.length; index += 1) {
+    if (data[index] !== 0) {
+      throw new TypeError("rawData padding must be zero");
+    }
+  }
+  const parsed = {
+    nodePubkey,
+    authorizedVoter,
+    authorizedWithdrawer,
+    ...v4Fields,
+    rootSlot,
+    towerVoteSlots,
+  };
+  canonicalSolanaSccpVoteAccountDataBytes(parsed);
+  return parsed;
+}
+
+export function solanaSccpVoteAccountDataHashFromRawVoteState(
+  rawData,
+  epoch,
+  voteAccountAddress,
+) {
+  return solanaSccpVoteAccountDataHash(
+    solanaSccpVoteAccountDataFromRawVoteState(rawData, epoch, voteAccountAddress),
+  );
+}
+
+export function solanaSccpVoteAccountDataFromRawVoteStateV1OrV3(
+  rawData,
+  epoch,
+  voteAccountAddress,
+) {
+  return solanaSccpVoteAccountDataFromRawVoteState(rawData, epoch, voteAccountAddress);
+}
+
+export function solanaSccpVoteAccountDataHashFromRawVoteStateV1OrV3(
+  rawData,
+  epoch,
+  voteAccountAddress,
+) {
+  return solanaSccpVoteAccountDataHashFromRawVoteState(rawData, epoch, voteAccountAddress);
+}
+
+function isSupportedSolanaStakeWarmupCooldownRateBytes(bytes) {
+  return (
+    bytesEqual(bytes, SCCP_SOLANA_STAKE_STATE_V2_LEGACY_WARMUP_COOLDOWN_RATE_BYTES) ||
+    bytesEqual(bytes, SCCP_SOLANA_STAKE_STATE_V2_CURRENT_WARMUP_COOLDOWN_RATE_BYTES)
+  );
+}
+
+export function canonicalSolanaSccpStakeAccountDataBytes(input) {
+  if (!input || typeof input !== "object" || Array.isArray(input)) {
+    throw new TypeError("Solana stake account data input must be an object");
+  }
+  const stakeField = (label, ...names) =>
+    strictResultField(input, label, ...new Set(names));
+  const stakeOptionalField = (label, ...names) =>
+    strictOptionalResultField(input, label, ...new Set(names));
+  const stakeOptionalValue = (label, ...names) => {
+    const selected = stakeOptionalField(label, ...names);
+    return selected === SCCP_OPTIONAL_FIELD_MISSING ||
+      selected === undefined ||
+      selected === null
+      ? undefined
+      : selected;
+  };
+  const staker = toBytes(input.staker, "staker");
+  const withdrawer = toBytes(input.withdrawer, "withdrawer");
+  const voterPubkey = toBytes(
+    stakeField("voterPubkey", "voterPubkey", "voter_pubkey"),
+    "voterPubkey",
+  );
+  const delegatedStake = normalizeUnsignedBigInt(
+    stakeField("delegatedStake", "delegatedStake", "delegated_stake"),
+    "delegatedStake",
+  );
+  const activationEpoch = normalizeUnsignedBigInt(
+    stakeField("activationEpoch", "activationEpoch", "activation_epoch"),
+    "activationEpoch",
+  );
+  const deactivationEpoch = normalizeUnsignedBigInt(
+    stakeField("deactivationEpoch", "deactivationEpoch", "deactivation_epoch"),
+    "deactivationEpoch",
+  );
+  const creditsObserved = normalizeUnsignedBigInt(
+    stakeOptionalValue("creditsObserved", "creditsObserved", "credits_observed") ?? 0n,
+    "creditsObserved",
+  );
+  const warmupCooldownRateBytes = toBytes(
+    stakeOptionalValue(
+      "warmupCooldownRateBytes",
+      "warmupCooldownRateBytes",
+      "warmup_cooldown_rate_bytes",
+    ) ??
+      SCCP_SOLANA_STAKE_STATE_V2_CURRENT_WARMUP_COOLDOWN_RATE_BYTES,
+    "warmupCooldownRateBytes",
+  );
+  const stakeFlags = normalizeUnsignedBigInt(
+    stakeOptionalValue("stakeFlags", "stakeFlags", "stake_flags") ?? 0n,
+    "stakeFlags",
+  );
+  for (const [label, bytes] of [
+    ["staker", staker],
+    ["withdrawer", withdrawer],
+    ["voterPubkey", voterPubkey],
+  ]) {
+    if (bytes.length !== 32 || bytes.every((byte) => byte === 0)) {
+      throw new TypeError(`${label} must be a non-zero 32-byte Solana public key`);
+    }
+  }
+  if (delegatedStake === 0n) {
+    throw new RangeError("delegatedStake must be greater than zero");
+  }
+  if (deactivationEpoch <= activationEpoch) {
+    throw new RangeError("deactivationEpoch must be greater than activationEpoch");
+  }
+  if (warmupCooldownRateBytes.length !== SCCP_SOLANA_STAKE_STATE_V2_WARMUP_COOLDOWN_RATE_BYTES) {
+    throw new TypeError("warmupCooldownRateBytes must be 8 bytes");
+  }
+  if (!isSupportedSolanaStakeWarmupCooldownRateBytes(warmupCooldownRateBytes)) {
+    throw new TypeError("warmupCooldownRateBytes must be Solana 0.25 or 0.09 f64 bytes");
+  }
+  if (
+    stakeFlags > 0xffn ||
+    (Number(stakeFlags) & ~SCCP_SOLANA_STAKE_STATE_V2_KNOWN_FLAGS_MASK) !== 0
+  ) {
+    throw new RangeError("stakeFlags contains reserved StakeFlags bits");
+  }
+  let out = new Uint8Array();
+  out = writeU8(out, 1);
+  out = writeBytes(out, staker);
+  out = writeBytes(out, withdrawer);
+  out = writeBytes(out, voterPubkey);
+  out = writeU64Le(out, delegatedStake);
+  out = writeU64Le(out, activationEpoch);
+  out = writeU64Le(out, deactivationEpoch);
+  out = writeBytes(out, warmupCooldownRateBytes);
+  out = writeU64Le(out, creditsObserved);
+  out = writeU8(out, Number(stakeFlags));
+  return out;
+}
+
+export function solanaSccpStakeAccountDataHash(input) {
+  return bytesToHex(
+    prefixedBlake2b(
+      SCCP_SOLANA_STAKE_ACCOUNT_DATA_PREFIX_V1,
+      canonicalSolanaSccpStakeAccountDataBytes(input),
+    ),
+  );
+}
+
+export function solanaSccpStakeAccountDataFromRawStakeStateV2(rawData) {
+  const data = toBytes(rawData, "rawData");
+  if (data.length !== SCCP_SOLANA_STAKE_STATE_V2_STAKE_ACCOUNT_DATA_LEN) {
+    throw new TypeError("rawData must be a 200-byte Solana StakeStateV2 account");
+  }
+  const discriminator = readU32LeAt(data, 0, "rawData");
+  if (discriminator !== SCCP_SOLANA_STAKE_STATE_V2_STAKE_DISCRIMINANT) {
+    throw new TypeError("rawData must contain StakeStateV2::Stake");
+  }
+  for (let index = SCCP_SOLANA_STAKE_STATE_V2_FLAG_OFFSET + 1; index < data.length; index += 1) {
+    if (data[index] !== 0) {
+      throw new TypeError("rawData must not contain non-zero stake account padding");
+    }
+  }
+  const stakeFlags = data[SCCP_SOLANA_STAKE_STATE_V2_FLAG_OFFSET];
+  if ((stakeFlags & ~SCCP_SOLANA_STAKE_STATE_V2_KNOWN_FLAGS_MASK) !== 0) {
+    throw new TypeError("rawData contains reserved StakeFlags bits");
+  }
+  const parsed = {
+    staker: data.slice(
+      SCCP_SOLANA_STAKE_STATE_V2_STAKER_OFFSET,
+      SCCP_SOLANA_STAKE_STATE_V2_STAKER_OFFSET + 32,
+    ),
+    withdrawer: data.slice(
+      SCCP_SOLANA_STAKE_STATE_V2_WITHDRAWER_OFFSET,
+      SCCP_SOLANA_STAKE_STATE_V2_WITHDRAWER_OFFSET + 32,
+    ),
+    voterPubkey: data.slice(
+      SCCP_SOLANA_STAKE_STATE_V2_VOTER_PUBKEY_OFFSET,
+      SCCP_SOLANA_STAKE_STATE_V2_VOTER_PUBKEY_OFFSET + 32,
+    ),
+    delegatedStake: readU64LeAt(
+      data,
+      SCCP_SOLANA_STAKE_STATE_V2_DELEGATED_STAKE_OFFSET,
+      "delegatedStake",
+    ),
+    activationEpoch: readU64LeAt(
+      data,
+      SCCP_SOLANA_STAKE_STATE_V2_ACTIVATION_EPOCH_OFFSET,
+      "activationEpoch",
+    ),
+    deactivationEpoch: readU64LeAt(
+      data,
+      SCCP_SOLANA_STAKE_STATE_V2_DEACTIVATION_EPOCH_OFFSET,
+      "deactivationEpoch",
+    ),
+    warmupCooldownRateBytes: data.slice(
+      SCCP_SOLANA_STAKE_STATE_V2_WARMUP_COOLDOWN_RATE_OFFSET,
+      SCCP_SOLANA_STAKE_STATE_V2_WARMUP_COOLDOWN_RATE_OFFSET +
+        SCCP_SOLANA_STAKE_STATE_V2_WARMUP_COOLDOWN_RATE_BYTES,
+    ),
+    creditsObserved: readU64LeAt(
+      data,
+      SCCP_SOLANA_STAKE_STATE_V2_CREDITS_OBSERVED_OFFSET,
+      "creditsObserved",
+    ),
+    stakeFlags: BigInt(stakeFlags),
+  };
+  canonicalSolanaSccpStakeAccountDataBytes(parsed);
+  return parsed;
+}
+
+export function solanaSccpStakeAccountDataHashFromRawStakeStateV2(rawData) {
+  return solanaSccpStakeAccountDataHash(
+    solanaSccpStakeAccountDataFromRawStakeStateV2(rawData),
+  );
+}
+
+const normalizeSolanaFixed32Vector = (rawValues, expectedLength, label, unique = true) => {
+  if (!Array.isArray(rawValues) || rawValues.length !== expectedLength) {
+    throw new TypeError(`${label} must match validatorPublicKeys`);
+  }
+  const seen = new Set();
+  return rawValues.map((value, index) => {
+    const bytes = toBytes(value, `${label}[${index}]`);
+    if (bytes.length !== 32) {
+      throw new TypeError(`${label}[${index}] must be 32 bytes`);
+    }
+    if (bytes.every((byte) => byte === 0)) {
+      throw new TypeError(`${label}[${index}] must not be zero`);
+    }
+    const key = bytesToHex(bytes);
+    if (unique && seen.has(key)) {
+      throw new TypeError(`${label} must not contain duplicates`);
+    }
+    if (unique) {
+      seen.add(key);
+    }
+    return bytes;
+  });
+};
+
+export function canonicalSolanaSccpStakeAccountStateBytes(input) {
+  const epoch = normalizeSolanaEpochFromEpochOrSlot(input);
+  const { validatorPublicKeys, validatorStakes } = normalizeSolanaValidatorRoster(input);
+  const rawActivationEpochs = strictResultField(
+    input,
+    "validatorActivationEpochs",
+    "validatorActivationEpochs",
+    "validator_activation_epochs",
+    "activationEpochs",
+    "activation_epochs",
+  );
+  const rawDeactivationEpochs = strictResultField(
+    input,
+    "validatorDeactivationEpochs",
+    "validatorDeactivationEpochs",
+    "validator_deactivation_epochs",
+    "deactivationEpochs",
+    "deactivation_epochs",
+  );
+  if (!Array.isArray(rawActivationEpochs) || !Array.isArray(rawDeactivationEpochs)) {
+    throw new TypeError("validatorActivationEpochs and validatorDeactivationEpochs must be arrays");
+  }
+  if (
+    rawActivationEpochs.length !== validatorPublicKeys.length ||
+    rawDeactivationEpochs.length !== validatorPublicKeys.length
+  ) {
+    throw new RangeError("validator activation epochs must match validatorPublicKeys");
+  }
+  const activationEpochs = rawActivationEpochs.map((value, index) =>
+    normalizeUnsignedBigInt(value, `validatorActivationEpochs[${index}]`));
+  const deactivationEpochs = rawDeactivationEpochs.map((value, index) =>
+    normalizeUnsignedBigInt(value, `validatorDeactivationEpochs[${index}]`));
+  for (let index = 0; index < validatorPublicKeys.length; index += 1) {
+    if (activationEpochs[index] >= epoch) {
+      throw new RangeError(`validatorActivationEpochs[${index}] must be less than epoch`);
+    }
+    if (deactivationEpochs[index] <= activationEpochs[index]) {
+      throw new RangeError(`validatorDeactivationEpochs[${index}] must be greater than activation epoch`);
+    }
+  }
+
+  const voteAccountAddresses = normalizeSolanaFixed32Vector(
+    strictResultField(
+      input,
+      "validatorVoteAccountAddresses",
+      "validatorVoteAccountAddresses",
+      "validator_vote_account_addresses",
+      "voteAccountAddresses",
+      "vote_account_addresses",
+    ),
+    validatorPublicKeys.length,
+    "validatorVoteAccountAddresses",
+  );
+  const stakeAccountAddresses = normalizeSolanaFixed32Vector(
+    strictResultField(
+      input,
+      "validatorStakeAccountAddresses",
+      "validatorStakeAccountAddresses",
+      "validator_stake_account_addresses",
+      "stakeAccountAddresses",
+      "stake_account_addresses",
+    ),
+    validatorPublicKeys.length,
+    "validatorStakeAccountAddresses",
+  );
+  const voteAccountHashes = normalizeSolanaFixed32Vector(
+    strictResultField(
+      input,
+      "validatorVoteAccountHashes",
+      "validatorVoteAccountHashes",
+      "validator_vote_account_hashes",
+      "voteAccountHashes",
+      "vote_account_hashes",
+    ),
+    validatorPublicKeys.length,
+    "validatorVoteAccountHashes",
+    false,
+  );
+  const stakeAccountHashes = normalizeSolanaFixed32Vector(
+    strictResultField(
+      input,
+      "validatorStakeAccountHashes",
+      "validatorStakeAccountHashes",
+      "validator_stake_account_hashes",
+      "stakeAccountHashes",
+      "stake_account_hashes",
+    ),
+    validatorPublicKeys.length,
+    "validatorStakeAccountHashes",
+    false,
+  );
+  const stakeAccountAddressKeys = new Set(stakeAccountAddresses.map((address) => bytesToHex(address)));
+  for (let index = 0; index < validatorPublicKeys.length; index += 1) {
+    if (bytesEqual(voteAccountAddresses[index], stakeAccountAddresses[index])) {
+      throw new TypeError(`validatorStakeAccountAddresses[${index}] must differ from vote account`);
+    }
+    if (stakeAccountAddressKeys.has(bytesToHex(voteAccountAddresses[index]))) {
+      throw new TypeError(`validatorVoteAccountAddresses[${index}] must not overlap stake accounts`);
+    }
+  }
+
+  const stakeActivationHash = hexToBytes(solanaSccpStakeActivationHash({
+    epoch,
+    validatorPublicKeys,
+    validatorStakes,
+    validatorActivationEpochs: activationEpochs,
+    validatorDeactivationEpochs: deactivationEpochs,
+  }), "stakeActivationHash", 32);
+  let out = new Uint8Array();
+  out = writeU8(out, 1);
+  out = writeU64Le(out, epoch);
+  out = concatBytes(out, stakeActivationHash);
+  out = writeU32Le(out, validatorPublicKeys.length);
+  for (let index = 0; index < validatorPublicKeys.length; index += 1) {
+    out = writeBytes(out, validatorPublicKeys[index]);
+    out = writeU64Le(out, validatorStakes[index]);
+    out = writeU64Le(out, activationEpochs[index]);
+    out = writeU64Le(out, deactivationEpochs[index]);
+    out = writeBytes(out, voteAccountAddresses[index]);
+    out = writeBytes(out, stakeAccountAddresses[index]);
+    out = concatBytes(out, voteAccountHashes[index], stakeAccountHashes[index]);
+  }
+  return out;
+}
+
+export function solanaSccpStakeAccountStateHash(input) {
+  return bytesToHex(
+    prefixedBlake2b(
+      SCCP_SOLANA_STAKE_ACCOUNT_STATE_PREFIX_V1,
+      canonicalSolanaSccpStakeAccountStateBytes(input),
+    ),
+  );
+}
+
+const normalizeSolanaDelegatedStakes = (input, validatorStakes, expectedLength) => {
+  const explicitDelegatedStakes = strictOptionalResultField(
+    input,
+    "validatorDelegatedStakes",
+    "validatorDelegatedStakes",
+    "validator_delegated_stakes",
+    "delegatedStakes",
+    "delegated_stakes",
+  );
+  const rawDelegatedStakes = explicitDelegatedStakes === SCCP_OPTIONAL_FIELD_MISSING
+    ? strictResultField(
+      input,
+      "validatorStakes",
+      "validator_stakes",
+    )
+    : explicitDelegatedStakes;
+  if (!Array.isArray(rawDelegatedStakes) || rawDelegatedStakes.length !== expectedLength) {
+    throw new TypeError("validatorDelegatedStakes must match validatorPublicKeys");
+  }
+  return rawDelegatedStakes.map((value, index) => {
+    const stake = normalizeUnsignedBigInt(value, `validatorDelegatedStakes[${index}]`);
+    if (stake < validatorStakes[index]) {
+      throw new RangeError(`validatorDelegatedStakes[${index}] must be at least validatorStakes[${index}]`);
+    }
+    return stake;
+  });
+};
+
+const solanaStakeHistoryEntryForEpoch = (entries, epoch) =>
+  entries.find((entry) => entry.epoch === epoch) ?? null;
+
+const solanaStakeChangeAllowance = (accountPortion, clusterPortion, clusterEffective) => {
+  if (accountPortion === 0n || clusterPortion === 0n || clusterEffective === 0n) {
+    return 0n;
+  }
+  const numerator =
+    accountPortion * clusterEffective * SCCP_SOLANA_TOWER_WARMUP_COOLDOWN_RATE_BPS;
+  const denominator = clusterPortion * SCCP_SOLANA_BASIS_POINTS_PER_UNIT;
+  const delta = numerator / denominator;
+  return delta < accountPortion ? delta : accountPortion;
+};
+
+const solanaStakeAndActivatingV2 = (
+  targetEpoch,
+  delegatedStake,
+  activationEpoch,
+  deactivationEpoch,
+  stakeHistoryEntries,
+) => {
+  if (activationEpoch === ((1n << 64n) - 1n)) {
+    return { effective: delegatedStake, activating: 0n };
+  }
+  if (activationEpoch === deactivationEpoch) {
+    return { effective: 0n, activating: 0n };
+  }
+  if (targetEpoch === activationEpoch) {
+    return { effective: 0n, activating: delegatedStake };
+  }
+  if (targetEpoch < activationEpoch) {
+    return { effective: 0n, activating: 0n };
+  }
+  let prevClusterStake = solanaStakeHistoryEntryForEpoch(stakeHistoryEntries, activationEpoch);
+  if (prevClusterStake === null) {
+    return { effective: delegatedStake, activating: 0n };
+  }
+
+  let prevEpoch = activationEpoch;
+  let activatedStakeAmount = 0n;
+  while (true) {
+    const currentEpoch = prevEpoch + 1n;
+    if (prevClusterStake.activating === 0n) {
+      break;
+    }
+    const remainingActivatingStake = delegatedStake - activatedStakeAmount;
+    let newlyEffectiveStake = solanaStakeChangeAllowance(
+      remainingActivatingStake,
+      prevClusterStake.activating,
+      prevClusterStake.effective,
+    );
+    if (newlyEffectiveStake < 1n) {
+      newlyEffectiveStake = 1n;
+    }
+    activatedStakeAmount += newlyEffectiveStake;
+    if (activatedStakeAmount >= delegatedStake) {
+      activatedStakeAmount = delegatedStake;
+      break;
+    }
+    if (currentEpoch >= targetEpoch || currentEpoch >= deactivationEpoch) {
+      break;
+    }
+    const currentClusterStake = solanaStakeHistoryEntryForEpoch(stakeHistoryEntries, currentEpoch);
+    if (currentClusterStake === null) {
+      break;
+    }
+    prevEpoch = currentEpoch;
+    prevClusterStake = currentClusterStake;
+  }
+
+  return {
+    effective: activatedStakeAmount,
+    activating: delegatedStake - activatedStakeAmount,
+  };
+};
+
+const solanaDelegationStakeStatusV2 = (
+  targetEpoch,
+  delegatedStake,
+  activationEpoch,
+  deactivationEpoch,
+  stakeHistoryEntries,
+) => {
+  const { effective, activating } = solanaStakeAndActivatingV2(
+    targetEpoch,
+    delegatedStake,
+    activationEpoch,
+    deactivationEpoch,
+    stakeHistoryEntries,
+  );
+  if (targetEpoch < deactivationEpoch) {
+    return { effective, activating, deactivating: 0n };
+  }
+  if (targetEpoch === deactivationEpoch) {
+    return { effective, activating: 0n, deactivating: effective };
+  }
+  let prevClusterStake = solanaStakeHistoryEntryForEpoch(stakeHistoryEntries, deactivationEpoch);
+  if (prevClusterStake === null) {
+    return { effective: 0n, activating: 0n, deactivating: 0n };
+  }
+
+  let prevEpoch = deactivationEpoch;
+  let remainingDeactivatingStake = effective;
+  while (true) {
+    const currentEpoch = prevEpoch + 1n;
+    if (prevClusterStake.deactivating === 0n) {
+      break;
+    }
+    let newlyDeactivatedStake = solanaStakeChangeAllowance(
+      remainingDeactivatingStake,
+      prevClusterStake.deactivating,
+      prevClusterStake.effective,
+    );
+    if (newlyDeactivatedStake < 1n) {
+      newlyDeactivatedStake = 1n;
+    }
+    remainingDeactivatingStake =
+      newlyDeactivatedStake >= remainingDeactivatingStake
+        ? 0n
+        : remainingDeactivatingStake - newlyDeactivatedStake;
+    if (remainingDeactivatingStake === 0n) {
+      break;
+    }
+    if (currentEpoch >= targetEpoch) {
+      break;
+    }
+    const currentClusterStake = solanaStakeHistoryEntryForEpoch(stakeHistoryEntries, currentEpoch);
+    if (currentClusterStake === null) {
+      break;
+    }
+    prevEpoch = currentEpoch;
+    prevClusterStake = currentClusterStake;
+  }
+
+  return {
+    effective: remainingDeactivatingStake,
+    activating: 0n,
+    deactivating: remainingDeactivatingStake,
+  };
+};
+
+const normalizeSolanaStakeHistoryEntries = (
+  input,
+  epoch,
+  validatorStakes,
+  validatorDelegatedStakes,
+  activationEpochs,
+  deactivationEpochs,
+) => {
+  const rawEntries = strictResultField(
+    input,
+    "stakeHistoryEntries",
+    "stakeHistoryEntries",
+    "stake_history_entries",
+    "stakeHistory",
+    "stake_history",
+  );
+  if (!Array.isArray(rawEntries) || rawEntries.length === 0) {
+    throw new TypeError("stakeHistoryEntries must be a non-empty array");
+  }
+  if (rawEntries.length > 512) {
+    throw new RangeError("stakeHistoryEntries must not exceed 512 entries");
+  }
+  let previousEpoch = null;
+  let signedEpochEntry = null;
+  const entries = rawEntries.map((value, index) => {
+    if (!value || typeof value !== "object" || Array.isArray(value)) {
+      throw new TypeError(`stakeHistoryEntries[${index}] must be an object`);
+    }
+    const entry = {
+      epoch: normalizeUnsignedBigInt(value.epoch, `stakeHistoryEntries[${index}].epoch`),
+      effective: normalizeUnsignedBigInt(value.effective, `stakeHistoryEntries[${index}].effective`),
+      activating: normalizeUnsignedBigInt(value.activating, `stakeHistoryEntries[${index}].activating`),
+      deactivating: normalizeUnsignedBigInt(value.deactivating, `stakeHistoryEntries[${index}].deactivating`),
+    };
+    if (entry.epoch > epoch) {
+      throw new RangeError(`stakeHistoryEntries[${index}].epoch must not exceed epoch`);
+    }
+    if (previousEpoch !== null && previousEpoch >= entry.epoch) {
+      throw new RangeError("stakeHistoryEntries must be sorted by strictly increasing epoch");
+    }
+    previousEpoch = entry.epoch;
+    if (entry.epoch === epoch) {
+      signedEpochEntry = entry;
+    }
+    return entry;
+  });
+  if (signedEpochEntry === null) {
+    throw new RangeError("stakeHistoryEntries must include the signed epoch");
+  }
+
+  let totalEffectiveStake = 0n;
+  let totalDelegatedStake = 0n;
+  let totalActivatingStake = 0n;
+  let totalDeactivatingStake = 0n;
+  for (let index = 0; index < validatorStakes.length; index += 1) {
+    const delegatedStake = validatorDelegatedStakes[index];
+    const activationEpoch = activationEpochs[index];
+    const deactivationEpoch = deactivationEpochs[index];
+    if (delegatedStake === 0n) {
+      throw new RangeError(`validatorDelegatedStakes[${index}] must be greater than zero`);
+    }
+    if (deactivationEpoch <= activationEpoch) {
+      throw new RangeError(`validatorDeactivationEpochs[${index}] must be greater than activation epoch`);
+    }
+    const status = solanaDelegationStakeStatusV2(
+      epoch,
+      delegatedStake,
+      activationEpoch,
+      deactivationEpoch,
+      entries,
+    );
+    if (status.effective === 0n || status.effective !== validatorStakes[index]) {
+      throw new RangeError(`validatorStakes[${index}] must equal replayed StakeHistory effective stake`);
+    }
+    totalEffectiveStake += status.effective;
+    totalDelegatedStake += delegatedStake;
+    totalActivatingStake += status.activating;
+    totalDeactivatingStake += status.deactivating;
+  }
+  if (totalEffectiveStake === 0n || totalDelegatedStake < totalEffectiveStake) {
+    throw new RangeError("replayed StakeHistory effective stake must be non-zero and not exceed delegated stake");
+  }
+  if (signedEpochEntry.effective !== totalEffectiveStake) {
+    throw new RangeError("signed epoch StakeHistory effective stake must equal replayed validator effective stake");
+  }
+  if (signedEpochEntry.activating < totalActivatingStake) {
+    throw new RangeError("signed epoch StakeHistory activating stake must cover replayed validators");
+  }
+  if (signedEpochEntry.deactivating < totalDeactivatingStake) {
+    throw new RangeError("signed epoch StakeHistory deactivating stake must cover replayed validators");
+  }
+  return entries;
+};
+
+const normalizeSolanaStakeHistorySysvarEntries = (input) => {
+  const rawEntries = strictResultField(
+    input,
+    "stakeHistoryEntries",
+    "stakeHistoryEntries",
+    "stake_history_entries",
+    "stakeHistory",
+    "stake_history",
+  );
+  if (!Array.isArray(rawEntries) || rawEntries.length === 0) {
+    throw new TypeError("stakeHistoryEntries must be a non-empty array");
+  }
+  if (rawEntries.length > 512) {
+    throw new RangeError("stakeHistoryEntries must not exceed 512 entries");
+  }
+  let previousEpoch = null;
+  return rawEntries.map((value, index) => {
+    if (!value || typeof value !== "object" || Array.isArray(value)) {
+      throw new TypeError(`stakeHistoryEntries[${index}] must be an object`);
+    }
+    const entry = {
+      epoch: normalizeUnsignedBigInt(value.epoch, `stakeHistoryEntries[${index}].epoch`),
+      effective: normalizeUnsignedBigInt(value.effective, `stakeHistoryEntries[${index}].effective`),
+      activating: normalizeUnsignedBigInt(value.activating, `stakeHistoryEntries[${index}].activating`),
+      deactivating: normalizeUnsignedBigInt(value.deactivating, `stakeHistoryEntries[${index}].deactivating`),
+    };
+    if (previousEpoch !== null && previousEpoch >= entry.epoch) {
+      throw new RangeError("stakeHistoryEntries must be sorted by strictly increasing epoch");
+    }
+    previousEpoch = entry.epoch;
+    return entry;
+  });
+};
+
+export function canonicalSolanaSccpStakeHistorySysvarDataBytes(input) {
+  const stakeHistoryEntries = normalizeSolanaStakeHistorySysvarEntries(input);
+  let out = new Uint8Array();
+  out = writeU64Le(out, BigInt(stakeHistoryEntries.length));
+  for (const entry of [...stakeHistoryEntries].reverse()) {
+    out = writeU64Le(out, entry.epoch);
+    out = writeU64Le(out, entry.effective);
+    out = writeU64Le(out, entry.activating);
+    out = writeU64Le(out, entry.deactivating);
+  }
+  return out;
+}
+
+export function solanaSccpStakeHistorySysvarDataHash(input) {
+  return bytesToHex(
+    prefixedBlake2b(
+      SCCP_SOLANA_STAKE_HISTORY_SYSVAR_DATA_PREFIX_V1,
+      canonicalSolanaSccpStakeHistorySysvarDataBytes(input),
+    ),
+  );
+}
+
+export function solanaSccpStakeHistorySysvarDataHashFromRawData(rawData) {
+  const data = toBytes(rawData, "rawData");
+  if (data.length < 8 || (data.length - 8) % 32 !== 0) {
+    throw new TypeError("rawData must be Solana StakeHistory sysvar bincode Vec bytes");
+  }
+  const entryCount = readU64LeAt(data, 0, "rawData");
+  if (entryCount === 0n || entryCount > 512n || data.length !== 8 + Number(entryCount) * 32) {
+    throw new TypeError("rawData must contain 1..512 StakeHistory sysvar entries");
+  }
+  let offset = 8;
+  let previousEpoch = null;
+  for (let index = 0; index < Number(entryCount); index += 1) {
+    const epoch = readU64LeAt(data, offset, `rawData[${index}].epoch`);
+    offset += 32;
+    if (previousEpoch !== null && previousEpoch <= epoch) {
+      throw new TypeError("rawData StakeHistory entries must be newest-first");
+    }
+    previousEpoch = epoch;
+  }
+  return bytesToHex(
+    prefixedBlake2b(
+      SCCP_SOLANA_STAKE_HISTORY_SYSVAR_DATA_PREFIX_V1,
+      data,
+    ),
+  );
+}
+
+export function canonicalSolanaSccpStakeHistoryBytes(input) {
+  const epoch = normalizeSolanaEpochFromEpochOrSlot(input);
+  const { validatorPublicKeys, validatorStakes } = normalizeSolanaValidatorRoster(input);
+  const validatorDelegatedStakes = normalizeSolanaDelegatedStakes(
+    input,
+    validatorStakes,
+    validatorPublicKeys.length,
+  );
+  const rawActivationEpochs = strictResultField(
+    input,
+    "validatorActivationEpochs",
+    "validatorActivationEpochs",
+    "validator_activation_epochs",
+    "activationEpochs",
+    "activation_epochs",
+  );
+  const rawDeactivationEpochs = strictResultField(
+    input,
+    "validatorDeactivationEpochs",
+    "validatorDeactivationEpochs",
+    "validator_deactivation_epochs",
+    "deactivationEpochs",
+    "deactivation_epochs",
+  );
+  if (!Array.isArray(rawActivationEpochs) || !Array.isArray(rawDeactivationEpochs)) {
+    throw new TypeError("validatorActivationEpochs and validatorDeactivationEpochs must be arrays");
+  }
+  if (
+    rawActivationEpochs.length !== validatorPublicKeys.length ||
+    rawDeactivationEpochs.length !== validatorPublicKeys.length
+  ) {
+    throw new RangeError("validator activation epochs must match validatorPublicKeys");
+  }
+  const activationEpochs = rawActivationEpochs.map((value, index) =>
+    normalizeUnsignedBigInt(value, `validatorActivationEpochs[${index}]`));
+  const deactivationEpochs = rawDeactivationEpochs.map((value, index) =>
+    normalizeUnsignedBigInt(value, `validatorDeactivationEpochs[${index}]`));
+  const stakeHistoryEntries = normalizeSolanaStakeHistoryEntries(
+    input,
+    epoch,
+    validatorStakes,
+    validatorDelegatedStakes,
+    activationEpochs,
+    deactivationEpochs,
+  );
+  const stakeAccountStateInput = { ...input };
+  for (const key of [
+    "epoch",
+    "validatorEpoch",
+    "validator_epoch",
+    "finalizedSlot",
+    "finalized_slot",
+    "slot",
+    "validatorPublicKeys",
+    "validator_public_keys",
+    "validatorStakes",
+    "validator_stakes",
+    "validatorActivationEpochs",
+    "validator_activation_epochs",
+    "activationEpochs",
+    "activation_epochs",
+    "validatorDeactivationEpochs",
+    "validator_deactivation_epochs",
+    "deactivationEpochs",
+    "deactivation_epochs",
+  ]) {
+    delete stakeAccountStateInput[key];
+  }
+  const stakeAccountStateHash = hexToBytes(solanaSccpStakeAccountStateHash({
+    ...stakeAccountStateInput,
+    epoch,
+    validatorPublicKeys,
+    validatorStakes: validatorDelegatedStakes,
+    validatorActivationEpochs: activationEpochs,
+    validatorDeactivationEpochs: deactivationEpochs,
+  }), "stakeAccountStateHash", 32);
+
+  let out = new Uint8Array();
+  out = writeU8(out, 1);
+  out = writeU64Le(out, epoch);
+  out = concatBytes(out, stakeAccountStateHash);
+  out = writeU32Le(out, validatorPublicKeys.length);
+  for (let index = 0; index < validatorPublicKeys.length; index += 1) {
+    out = writeBytes(out, validatorPublicKeys[index]);
+    out = writeU64Le(out, validatorStakes[index]);
+    out = writeU64Le(out, validatorDelegatedStakes[index]);
+    out = writeU64Le(out, activationEpochs[index]);
+    out = writeU64Le(out, deactivationEpochs[index]);
+  }
+  out = writeU32Le(out, stakeHistoryEntries.length);
+  for (const entry of stakeHistoryEntries) {
+    out = writeU64Le(out, entry.epoch);
+    out = writeU64Le(out, entry.effective);
+    out = writeU64Le(out, entry.activating);
+    out = writeU64Le(out, entry.deactivating);
+  }
+  return out;
+}
+
+export function solanaSccpStakeHistoryHash(input) {
+  return bytesToHex(
+    prefixedBlake2b(
+      SCCP_SOLANA_STAKE_HISTORY_PREFIX_V1,
+      canonicalSolanaSccpStakeHistoryBytes(input),
+    ),
+  );
+}
+
+export function canonicalSolanaSccpTowerLockoutBytes(input) {
+  if (!input || typeof input !== "object" || Array.isArray(input)) {
+    throw new TypeError("Solana tower lockout input must be an object");
+  }
+  const finalizedSlot = normalizeUnsignedBigInt(
+    strictResultField(input, "finalizedSlot", "finalizedSlot", "finalized_slot"),
+    "finalizedSlot",
+  );
+  const epochSource = strictResultField(input, "epoch", "epoch", "validatorEpoch", "validator_epoch");
+  const epoch = epochSource === undefined || epochSource === null
+    ? solanaSccpMainnetEpochForSlot(finalizedSlot)
+    : normalizeUnsignedBigInt(epochSource, "epoch");
+  if (epoch !== solanaSccpMainnetEpochForSlot(finalizedSlot)) {
+    throw new RangeError("epoch must match Solana mainnet finalizedSlot");
+  }
+  const rootedSlot = normalizeUnsignedBigInt(
+    strictResultField(input, "rootedSlot", "rootedSlot", "rooted_slot"),
+    "rootedSlot",
+  );
+  const parentSlot = normalizeUnsignedBigInt(
+    strictResultField(input, "parentSlot", "parentSlot", "parent_slot"),
+    "parentSlot",
+  );
+  if (rootedSlot > parentSlot) {
+    throw new RangeError("rootedSlot must be less than or equal to parentSlot");
+  }
+  if (parentSlot + 1n !== finalizedSlot) {
+    throw new RangeError("parentSlot must be the direct parent of finalizedSlot");
+  }
+  if (finalizedSlot - rootedSlot < SCCP_SOLANA_TOWER_VOTE_STACK_DEPTH) {
+    throw new RangeError("rootedSlot must satisfy the Solana Tower lockout depth");
+  }
+  const parentBankHash = nonZeroHex32Bytes(
+    strictResultField(input, "parentBankHash", "parentBankHash", "parent_bank_hash"),
+    "parentBankHash",
+  );
+  let out = new Uint8Array();
+  out = writeU8(out, 1);
+  out = writeU64Le(out, epoch);
+  out = writeU64Le(out, SCCP_SOLANA_TOWER_LOCKOUT_CONFIRMATION_DEPTH);
+  out = writeU64Le(out, finalizedSlot);
+  out = writeU64Le(out, rootedSlot);
+  out = writeU64Le(out, parentSlot);
+  out = concatBytes(out, parentBankHash);
+  return out;
+}
+
+export function solanaSccpTowerLockoutHash(input) {
+  return bytesToHex(
+    prefixedBlake2b(
+      SCCP_SOLANA_TOWER_LOCKOUT_PREFIX_V1,
+      canonicalSolanaSccpTowerLockoutBytes(input),
+    ),
+  );
+}
+
+export function canonicalSolanaSccpTowerReplayBytes(input) {
+  if (!input || typeof input !== "object" || Array.isArray(input)) {
+    throw new TypeError("Solana tower replay input must be an object");
+  }
+  const finalizedSlot = normalizeUnsignedBigInt(
+    strictResultField(input, "finalizedSlot", "finalizedSlot", "finalized_slot"),
+    "finalizedSlot",
+  );
+  const epochSource = strictResultField(input, "epoch", "epoch", "validatorEpoch", "validator_epoch");
+  const epoch = epochSource === undefined || epochSource === null
+    ? solanaSccpMainnetEpochForSlot(finalizedSlot)
+    : normalizeUnsignedBigInt(epochSource, "epoch");
+  if (epoch !== solanaSccpMainnetEpochForSlot(finalizedSlot)) {
+    throw new RangeError("epoch must match Solana mainnet finalizedSlot");
+  }
+  const rootedSlot = normalizeUnsignedBigInt(
+    strictResultField(input, "rootedSlot", "rootedSlot", "rooted_slot"),
+    "rootedSlot",
+  );
+  const parentSlot = normalizeUnsignedBigInt(
+    strictResultField(input, "parentSlot", "parentSlot", "parent_slot"),
+    "parentSlot",
+  );
+  if (parentSlot + 1n !== finalizedSlot) {
+    throw new RangeError("parentSlot must be the direct parent of finalizedSlot");
+  }
+  if (rootedSlot >= finalizedSlot) {
+    throw new RangeError("rootedSlot must be less than finalizedSlot");
+  }
+  if (finalizedSlot - rootedSlot < SCCP_SOLANA_TOWER_VOTE_STACK_DEPTH) {
+    throw new RangeError("rootedSlot must satisfy the Solana Tower lockout depth");
+  }
+  const bankForkHash = hexToBytes(
+    strictResultField(input, "bankForkHash", "bankForkHash", "bank_fork_hash"),
+    "bankForkHash",
+    32,
+  );
+  if (!bankForkHash.some((byte) => byte !== 0)) {
+    throw new TypeError("bankForkHash must not be zero");
+  }
+
+  const rawVoteSlots =
+    strictResultField(input, "towerVoteSlots", "towerVoteSlots", "tower_vote_slots", "voteSlots", "vote_slots");
+  if (!Array.isArray(rawVoteSlots)) {
+    throw new TypeError("towerVoteSlots must be an array");
+  }
+  const depth = Number(SCCP_SOLANA_TOWER_VOTE_STACK_DEPTH);
+  if (rawVoteSlots.length !== depth) {
+    throw new RangeError("towerVoteSlots must contain 31 active post-root slots");
+  }
+  const towerVoteSlots = rawVoteSlots.map((slot, index) =>
+    normalizeUnsignedBigInt(slot, `towerVoteSlots[${index}]`));
+  if (towerVoteSlots[0] <= rootedSlot) {
+    throw new RangeError("towerVoteSlots[0] must be greater than rootedSlot");
+  }
+  if (towerVoteSlots[depth - 1] !== finalizedSlot) {
+    throw new RangeError("last towerVoteSlots entry must equal finalizedSlot");
+  }
+  if (towerVoteSlots[depth - 2] !== parentSlot) {
+    throw new RangeError("penultimate towerVoteSlots entry must equal parentSlot");
+  }
+  for (let index = 1; index < towerVoteSlots.length; index += 1) {
+    if (towerVoteSlots[index - 1] >= towerVoteSlots[index]) {
+      throw new RangeError("towerVoteSlots must be strictly increasing");
+    }
+  }
+  for (let index = 0; index < towerVoteSlots.length; index += 1) {
+    const voteSlot = towerVoteSlots[index];
+    if (voteSlot > finalizedSlot) {
+      throw new RangeError(`towerVoteSlots[${index}] must not exceed finalizedSlot`);
+    }
+    const confirmationCount = BigInt(depth - index);
+    const lockout = 1n << confirmationCount;
+    if (voteSlot + lockout <= finalizedSlot) {
+      throw new RangeError(`towerVoteSlots[${index}] does not satisfy its Tower lockout`);
+    }
+  }
+
+  let out = new Uint8Array();
+  out = writeU8(out, 1);
+  out = writeU64Le(out, epoch);
+  out = writeU64Le(out, SCCP_SOLANA_TOWER_LOCKOUT_CONFIRMATION_DEPTH);
+  out = writeU64Le(out, finalizedSlot);
+  out = writeU64Le(out, rootedSlot);
+  out = writeU64Le(out, parentSlot);
+  out = concatBytes(out, bankForkHash);
+  out = writeU32Le(out, towerVoteSlots.length);
+  for (let index = 0; index < towerVoteSlots.length; index += 1) {
+    out = writeU64Le(out, towerVoteSlots[index]);
+    out = writeU64Le(out, BigInt(depth - index));
+  }
+  return out;
+}
+
+export function solanaSccpTowerReplayHash(input) {
+  return bytesToHex(
+    prefixedBlake2b(
+      SCCP_SOLANA_TOWER_REPLAY_PREFIX_V1,
+      canonicalSolanaSccpTowerReplayBytes(input),
+    ),
+  );
+}
+
+export function canonicalSolanaSccpBankForkBytes(input) {
+  if (!input || typeof input !== "object" || Array.isArray(input)) {
+    throw new TypeError("Solana bank-fork input must be an object");
+  }
+  const finalizedSlot = normalizeUnsignedBigInt(
+    strictResultField(input, "finalizedSlot", "finalizedSlot", "finalized_slot"),
+    "finalizedSlot",
+  );
+  const epochSource = strictResultField(input, "epoch", "epoch", "validatorEpoch", "validator_epoch");
+  const epoch = epochSource === undefined || epochSource === null
+    ? solanaSccpMainnetEpochForSlot(finalizedSlot)
+    : normalizeUnsignedBigInt(epochSource, "epoch");
+  if (epoch !== solanaSccpMainnetEpochForSlot(finalizedSlot)) {
+    throw new RangeError("epoch must match Solana mainnet finalizedSlot");
+  }
+  const parentSlot = normalizeUnsignedBigInt(
+    strictResultField(input, "parentSlot", "parentSlot", "parent_slot"),
+    "parentSlot",
+  );
+  if (parentSlot + 1n !== finalizedSlot) {
+    throw new RangeError("parentSlot must be the direct parent of finalizedSlot");
+  }
+  const bankSignatureCount = normalizeUnsignedBigInt(
+    strictResultField(input, "bankSignatureCount", "bankSignatureCount", "bank_signature_count"),
+    "bankSignatureCount",
+  );
+  if (bankSignatureCount === 0n) {
+    throw new RangeError("bankSignatureCount must be nonzero");
+  }
+  const parentBankHash = nonZeroHex32Bytes(
+    strictResultField(input, "parentBankHash", "parentBankHash", "parent_bank_hash"),
+    "parentBankHash",
+  );
+  const bankHash = nonZeroHex32Bytes(
+    strictResultField(input, "bankHash", "bankHash", "bank_hash"),
+    "bankHash",
+  );
+  if (bytesEqual(parentBankHash, bankHash)) {
+    throw new TypeError("parentBankHash must differ from bankHash");
+  }
+  const blockhash = nonZeroHex32Bytes(
+    strictResultField(input, "blockhash", "blockhashBytes", "blockhash_bytes", "blockhash"),
+    "blockhash",
+  );
+  const transactionStatusRoot = nonZeroHex32Bytes(
+    strictResultField(
+      input,
+      "transactionStatusRoot",
+      "transactionStatusRoot",
+      "transaction_status_root",
+      "receiptOrMessageRoot",
+      "receipt_or_message_root",
+    ),
+    "transactionStatusRoot",
+  );
+  const accountInclusionRoot = nonZeroHex32Bytes(
+    strictResultField(
+      input,
+      "accountInclusionRoot",
+      "accountInclusionRoot",
+      "account_inclusion_root",
+      "accountsRoot",
+      "accounts_root",
+    ),
+    "accountInclusionRoot",
+  );
+  const accountsLtHashChecksum = nonZeroHex32Bytes(
+    strictResultField(
+      input,
+      "accountsLtHashChecksum",
+      "accountsLtHashChecksum",
+      "accounts_lt_hash_checksum",
+      "accountsLtHashRoot",
+      "accounts_lt_hash_root",
+    ),
+    "accountsLtHashChecksum",
+  );
+  const bankHashHardForkData = toMaybeEmptyBytes(
+    strictResultField(input, "bankHashHardForkData", "bankHashHardForkData", "bank_hash_hard_fork_data") ?? new Uint8Array(),
+    "bankHashHardForkData",
+  );
+  if (bankHashHardForkData.length > SCCP_SOLANA_MAX_BANK_HARD_FORK_HASH_DATA_BYTES) {
+    throw new RangeError("bankHashHardForkData is too large");
+  }
+  const accountsLtHashInput = strictResultField(input, "accountsLtHash", "accountsLtHash", "accounts_lt_hash");
+  if (accountsLtHashInput !== undefined && accountsLtHashInput !== null) {
+    const accountsLtHash = toBytes(accountsLtHashInput, "accountsLtHash");
+    if (!bytesEqual(accountsLtHashChecksum, blake3(accountsLtHash))) {
+      throw new TypeError("accountsLtHashChecksum must match accountsLtHash");
+    }
+    const expectedBankHash = solanaSccpAgaveBankHashBytes(
+      parentBankHash,
+      bankSignatureCount,
+      blockhash,
+      accountsLtHash,
+      bankHashHardForkData,
+    );
+    if (!bytesEqual(bankHash, expectedBankHash)) {
+      throw new TypeError("bankHash must match Agave bank hash inputs");
+    }
+  }
+  let out = new Uint8Array();
+  out = writeU8(out, 1);
+  out = writeU64Le(out, epoch);
+  out = writeU64Le(out, finalizedSlot);
+  out = writeU64Le(out, parentSlot);
+  out = writeU64Le(out, bankSignatureCount);
+  out = concatBytes(
+    out,
+    parentBankHash,
+    bankHash,
+    blockhash,
+    transactionStatusRoot,
+    accountInclusionRoot,
+    accountsLtHashChecksum,
+  );
+  out = writeBytes(out, bankHashHardForkData);
+  return out;
+}
+
+export function solanaSccpBankForkHash(input) {
+  return bytesToHex(
+    prefixedBlake2b(
+      SCCP_SOLANA_BANK_FORK_PREFIX_V1,
+      canonicalSolanaSccpBankForkBytes(input),
+    ),
+  );
+}
+
+export function canonicalSolanaSccpAccountsLtHashProofPublicInputsBytes(input) {
+  if (!input || typeof input !== "object" || Array.isArray(input)) {
+    throw new TypeError("Solana AccountsLtHash proof public inputs must be an object");
+  }
+  const sourceDomainInput = strictResultField(input, "sourceDomain", "sourceDomain", "source_domain");
+  const sourceDomain = sourceDomainInput === undefined
+    ? normalizeSccpDomainId(SCCP_DOMAIN_SOL, "sourceDomain")
+    : normalizeSccpDomainId(sourceDomainInput, "sourceDomain");
+  if (sourceDomain !== SCCP_DOMAIN_SOL) {
+    throw new RangeError("sourceDomain must be Solana");
+  }
+  const finalizedSlot = normalizeUnsignedBigInt(
+    strictResultField(input, "finalizedSlot", "finalizedSlot", "finalized_slot", "slot"),
+    "finalizedSlot",
+  );
+  const epoch = solanaSccpMainnetEpochForSlot(finalizedSlot);
+  const parentSlot = normalizeUnsignedBigInt(
+    strictResultField(input, "parentSlot", "parentSlot", "parent_slot"),
+    "parentSlot",
+  );
+  const bankSignatureCount = normalizeUnsignedBigInt(
+    strictResultField(input, "bankSignatureCount", "bankSignatureCount", "bank_signature_count"),
+    "bankSignatureCount",
+  );
+  const parentBankHash = nonZeroHex32Bytes(
+    strictResultField(input, "parentBankHash", "parentBankHash", "parent_bank_hash"),
+    "parentBankHash",
+  );
+  const bankHash = nonZeroHex32Bytes(
+    strictResultField(input, "bankHash", "bankHash", "bank_hash"),
+    "bankHash",
+  );
+  const blockhash = normalizeSolanaHash32Bytes(
+    strictResultField(input, "blockhash", "blockhashBytes", "blockhash_bytes", "blockhash"),
+    "blockhash",
+  );
+  const transactionStatusRoot = nonZeroHex32Bytes(
+    strictResultField(
+      input,
+      "transactionStatusRoot",
+      "transactionStatusRoot",
+      "transaction_status_root",
+      "receiptOrMessageRoot",
+      "receipt_or_message_root",
+    ),
+    "transactionStatusRoot",
+  );
+  const accountInclusionRoot = nonZeroHex32Bytes(
+    strictResultField(
+      input,
+      "accountInclusionRoot",
+      "accountInclusionRoot",
+      "account_inclusion_root",
+      "accountsRoot",
+      "accounts_root",
+    ),
+    "accountInclusionRoot",
+  );
+  const accountsLtHashChecksum = nonZeroHex32Bytes(
+    strictResultField(
+      input,
+      "accountsLtHashChecksum",
+      "accountsLtHashChecksum",
+      "accounts_lt_hash_checksum",
+      "accountsLtHashRoot",
+      "accounts_lt_hash_root",
+    ),
+    "accountsLtHashChecksum",
+  );
+  const bankHashHardForkData = toMaybeEmptyBytes(
+    strictResultField(input, "bankHashHardForkData", "bankHashHardForkData", "bank_hash_hard_fork_data") ?? new Uint8Array(),
+    "bankHashHardForkData",
+  );
+  const accountsLtHashInput = strictResultField(input, "accountsLtHash", "accountsLtHash", "accounts_lt_hash");
+  const accountsLtHash = accountsLtHashInput === undefined || accountsLtHashInput === null
+    ? undefined
+    : toBytes(accountsLtHashInput, "accountsLtHash");
+  const bankForkHash = hexToBytes(
+    solanaSccpBankForkHash({
+      epoch,
+      finalizedSlot,
+      parentSlot,
+      bankSignatureCount,
+      parentBankHash: bytesToHex(parentBankHash),
+      bankHash: bytesToHex(bankHash),
+      blockhash: bytesToHex(blockhash),
+      transactionStatusRoot: bytesToHex(transactionStatusRoot),
+      accountInclusionRoot: bytesToHex(accountInclusionRoot),
+      accountsLtHashChecksum: bytesToHex(accountsLtHashChecksum),
+      bankHashHardForkData,
+      accountsLtHash,
+    }),
+    "bankForkHash",
+    32,
+  );
+
+  let out = new Uint8Array();
+  out = writeU8(out, 1);
+  out = writeU32Le(out, sourceDomain);
+  out = writeString(out, SCCP_SOLANA_RECURSIVE_PROOF_BACKEND_V1, "backend");
+  out = writeString(out, SCCP_SOLANA_MAINNET_GENESIS_HASH, "mainnetGenesisHash");
+  out = writeU64Le(out, epoch);
+  out = writeU64Le(out, finalizedSlot);
+  out = writeU64Le(out, parentSlot);
+  out = writeU64Le(out, bankSignatureCount);
+  out = concatBytes(
+    out,
+    parentBankHash,
+    bankHash,
+    blockhash,
+    transactionStatusRoot,
+    accountInclusionRoot,
+    accountsLtHashChecksum,
+  );
+  out = writeBytes(out, bankHashHardForkData);
+  out = concatBytes(out, bankForkHash);
+  return out;
+}
+
+export function solanaSccpAccountsLtHashProofPublicInputsHash(input) {
+  return bytesToHex(
+    prefixedBlake2b(
+      SCCP_SOLANA_ACCOUNTS_LT_HASH_PROOF_PUBLIC_INPUTS_PREFIX_V1,
+      canonicalSolanaSccpAccountsLtHashProofPublicInputsBytes(input),
+    ),
+  );
+}
+
+export function canonicalTonSccpShardProofBytes(input) {
+  if (!input || typeof input !== "object" || Array.isArray(input)) {
+    throw new TypeError("TON SCCP shard proof input must be an object");
+  }
+  const rejectInputAliases = (label, ...names) => {
+    strictOptionalResultField(input, label, ...names);
+  };
+  rejectInputAliases("sourceEventDigest", "sourceEventDigest", "source_event_digest");
+  rejectInputAliases(
+    "masterchainSeqno",
+    "masterchainSeqno",
+    "masterchain_seqno",
+    "finalityHeight",
+    "finality_height",
+  );
+  rejectInputAliases(
+    "masterchainBlockHash",
+    "masterchainBlockHash",
+    "masterchain_block_hash",
+    "finalityBlockHash",
+    "finality_block_hash",
+  );
+  rejectInputAliases("shardWorkchainId", "shardWorkchainId", "shard_workchain_id");
+  rejectInputAliases("shardShard", "shardShard", "shard_shard");
+  rejectInputAliases("shardSeqno", "shardSeqno", "shard_seqno");
+  rejectInputAliases("shardBlockHash", "shardBlockHash", "shard_block_hash");
+  rejectInputAliases("shardFileHash", "shardFileHash", "shard_file_hash");
+  rejectInputAliases("shardStateRoot", "shardStateRoot", "shard_state_root");
+  rejectInputAliases(
+    "transactionRoot",
+    "transactionRoot",
+    "transaction_root",
+    "receiptOrMessageRoot",
+    "receipt_or_message_root",
+  );
+  rejectInputAliases("transactionLt", "transactionLt", "transaction_lt");
+  rejectInputAliases("shardStateProofBoc", "shardStateProofBoc", "shard_state_proof_boc");
+  rejectInputAliases("shardStateDictionaryRoot", "shardStateDictionaryRoot", "shard_state_dictionary_root");
+  rejectInputAliases(
+    "shardStateDictionaryKeyBitLen",
+    "shardStateDictionaryKeyBitLen",
+    "shard_state_dictionary_key_bit_len",
+  );
+  rejectInputAliases("shardStateDictionaryKey", "shardStateDictionaryKey", "shard_state_dictionary_key");
+  rejectInputAliases(
+    "shardStateDictionaryProofBoc",
+    "shardStateDictionaryProofBoc",
+    "shard_state_dictionary_proof_boc",
+  );
+  rejectInputAliases("shardStateLeafIndex", "shardStateLeafIndex", "shard_state_leaf_index");
+  rejectInputAliases("shardStateInclusionBranch", "shardStateInclusionBranch", "shard_state_inclusion_branch");
+  rejectInputAliases("inclusionBranch", "inclusionBranch", "inclusion_branch");
+  const sourceEventDigest = hexToBytes(
+    input.sourceEventDigest ?? input.source_event_digest,
+    "sourceEventDigest",
+    32,
+  );
+  const masterchainSeqno = normalizeUnsignedBigInt(
+    input.masterchainSeqno ?? input.masterchain_seqno ?? input.finalityHeight ?? input.finality_height,
+    "masterchainSeqno",
+  );
+  const masterchainBlockHash = hexToBytes(
+    input.masterchainBlockHash ?? input.masterchain_block_hash ?? input.finalityBlockHash ?? input.finality_block_hash,
+    "masterchainBlockHash",
+    32,
+  );
+  const shardWorkchainId = normalizeSignedI32(
+    input.shardWorkchainId ?? input.shard_workchain_id,
+    "shardWorkchainId",
+  );
+  if (shardWorkchainId !== TON_BASECHAIN_WORKCHAIN_ID) {
+    throw new TypeError("shardWorkchainId must be TON basechain");
+  }
+  const shardShard = normalizeUnsignedBigInt(
+    input.shardShard ?? input.shard_shard,
+    "shardShard",
+  );
+  if (shardShard === 0n) {
+    throw new TypeError("shardShard must be non-zero");
+  }
+  const shardSeqno = normalizeUnsignedBigInt(
+    input.shardSeqno ?? input.shard_seqno,
+    "shardSeqno",
+  );
+  if (shardSeqno === 0n) {
+    throw new TypeError("shardSeqno must be non-zero");
+  }
+  const shardBlockHash = hexToBytes(
+    input.shardBlockHash ?? input.shard_block_hash,
+    "shardBlockHash",
+    32,
+  );
+  const shardFileHash = nonZeroHex32Bytes(
+    input.shardFileHash ?? input.shard_file_hash,
+    "shardFileHash",
+  );
+  const shardStateRoot = hexToBytes(
+    input.shardStateRoot ?? input.shard_state_root,
+    "shardStateRoot",
+    32,
+  );
+  const transactionRoot = hexToBytes(
+    input.transactionRoot ??
+      input.transaction_root ??
+      input.receiptOrMessageRoot ??
+      input.receipt_or_message_root,
+    "transactionRoot",
+    32,
+  );
+  const transactionLt = normalizeUnsignedBigInt(
+    input.transactionLt ?? input.transaction_lt,
+    "transactionLt",
+  );
+  if (transactionLt === 0n) {
+    throw new TypeError("transactionLt must be non-zero");
+  }
+  const shardStateProofInput = input.shardStateProofBoc ?? input.shard_state_proof_boc;
+  const dictionaryRootInput = input.shardStateDictionaryRoot ?? input.shard_state_dictionary_root;
+  const dictionaryKeyBitLenInput =
+    input.shardStateDictionaryKeyBitLen ?? input.shard_state_dictionary_key_bit_len;
+  const dictionaryKeyInput = input.shardStateDictionaryKey ?? input.shard_state_dictionary_key;
+  const dictionaryProofInput =
+    input.shardStateDictionaryProofBoc ?? input.shard_state_dictionary_proof_boc;
+  const hasDictionaryOpening =
+    dictionaryRootInput !== undefined ||
+    dictionaryKeyBitLenInput !== undefined ||
+    dictionaryKeyInput !== undefined ||
+    dictionaryProofInput !== undefined;
+  const hasShardStateProof = shardStateProofInput !== undefined;
+  if (hasDictionaryOpening && !hasShardStateProof) {
+    throw new TypeError("shardStateProofBoc is required for TON shard-state dictionary openings");
+  }
+  if (hasShardStateProof && !hasDictionaryOpening) {
+    throw new TypeError("shardStateProofBoc requires a TON shard-state dictionary opening");
+  }
+  const shardStateLeafIndex = normalizeUnsignedBigInt(
+    input.shardStateLeafIndex ?? input.shard_state_leaf_index,
+    "shardStateLeafIndex",
+  );
+  const shardStateInclusionBranch = normalizeSccpInclusionBranch(
+    input.shardStateInclusionBranch ?? input.shard_state_inclusion_branch,
+    "shardStateInclusionBranch",
+  );
+  if (hasDictionaryOpening && shardStateInclusionBranch.length !== 0) {
+    throw new TypeError("shardStateInclusionBranch must be empty for TON shard-state dictionary openings");
+  }
+  const inclusionBranch = normalizeSccpInclusionBranch(
+    input.inclusionBranch ?? input.inclusion_branch,
+    "inclusionBranch",
+    { requireNonEmpty: true },
+  );
+  let out = new Uint8Array();
+  out = writeU8(out, 1);
+  out = concatBytes(out, sourceEventDigest);
+  out = writeU64Le(out, masterchainSeqno);
+  out = concatBytes(out, masterchainBlockHash);
+  out = writeI32Le(out, shardWorkchainId);
+  out = writeU64Le(out, shardShard);
+  out = writeU64Le(out, shardSeqno);
+  out = concatBytes(out, shardBlockHash, shardFileHash, shardStateRoot, transactionRoot);
+  out = writeU64Le(out, transactionLt);
+  let shardStateProofBoc = new Uint8Array();
+  if (hasShardStateProof) {
+    shardStateProofBoc = toBytes(shardStateProofInput, "shardStateProofBoc");
+    if (shardStateProofBoc.length === 0) {
+      throw new TypeError("shardStateProofBoc must not be empty");
+    }
+    out = writeBytes(out, shardStateProofBoc);
+  }
+  if (hasDictionaryOpening) {
+    const dictionaryRoot = nonZeroHex32Bytes(dictionaryRootInput, "shardStateDictionaryRoot");
+    const dictionaryKeyBitLen = Number(
+      normalizeUnsignedBigInt(dictionaryKeyBitLenInput, "shardStateDictionaryKeyBitLen"),
+    );
+    if (!Number.isInteger(dictionaryKeyBitLen) || dictionaryKeyBitLen < 0 || dictionaryKeyBitLen > 0xffff) {
+      throw new RangeError("shardStateDictionaryKeyBitLen must fit u16");
+    }
+    if (dictionaryKeyBitLen !== SCCP_TON_SHARD_ACCOUNT_KEY_BITS) {
+      throw new TypeError("TON ShardAccounts key bit length must be 256");
+    }
+    const dictionaryKey = toBytes(dictionaryKeyInput, "shardStateDictionaryKey");
+    if (!tonHashmapKeyIsCanonical(dictionaryKey, dictionaryKeyBitLen)) {
+      throw new TypeError("shardStateDictionaryKey length is invalid");
+    }
+    const dictionaryProofBoc = toBytes(dictionaryProofInput, "shardStateDictionaryProofBoc");
+    if (dictionaryProofBoc.length === 0) {
+      throw new TypeError("shardStateDictionaryProofBoc must not be empty");
+    }
+    if (tonShardStateProofRootHash(shardStateProofBoc) !== bytesToHex(shardStateRoot)) {
+      throw new TypeError("shardStateProofBoc root must match shardStateRoot");
+    }
+    const shardStateOpening = tonShardStateAccountsOpening(shardStateProofBoc);
+    if (shardStateOpening.accountsRootHash !== bytesToHex(dictionaryRoot)) {
+      throw new TypeError("shardStateProofBoc accounts root must match shardStateDictionaryRoot");
+    }
+    if (shardStateOpening.globalId !== TON_MAINNET_GLOBAL_ID) {
+      throw new TypeError("shardStateProofBoc ShardStateUnsplit global_id must be TON mainnet");
+    }
+    if (shardStateOpening.workchainId !== TON_BASECHAIN_WORKCHAIN_ID) {
+      throw new TypeError("shardStateProofBoc ShardIdent workchain_id must be TON basechain");
+    }
+    if (shardStateOpening.workchainId !== shardWorkchainId) {
+      throw new TypeError("shardStateProofBoc ShardIdent workchain_id must match shardWorkchainId");
+    }
+    if (BigInt(shardStateOpening.seqNo) !== shardSeqno) {
+      throw new TypeError("shardStateProofBoc ShardStateUnsplit seq_no must match shardSeqno");
+    }
+    if (shardStateOpening.shardId !== shardShard) {
+      throw new TypeError("shardStateProofBoc ShardIdent shard must match shardShard");
+    }
+    if (shardStateOpening.seqNo === 0) {
+      throw new TypeError("shardStateProofBoc ShardStateUnsplit seq_no must be non-zero");
+    }
+    if (shardStateOpening.genUtime === 0) {
+      throw new TypeError("shardStateProofBoc ShardStateUnsplit gen_utime must be non-zero");
+    }
+    if (shardStateOpening.genLt === 0n) {
+      throw new TypeError("shardStateProofBoc ShardStateUnsplit gen_lt must be non-zero");
+    }
+    if (BigInt(shardStateOpening.minRefMcSeqno) > masterchainSeqno) {
+      throw new TypeError("shardStateProofBoc ShardStateUnsplit min_ref_mc_seqno exceeds masterchainSeqno");
+    }
+    if (!tonShardStateAccountKeyMatchesShardPrefix(dictionaryKey, dictionaryKeyBitLen, shardStateOpening)) {
+      throw new TypeError("shardStateDictionaryKey must match shardStateProofBoc ShardIdent prefix");
+    }
+    const selectedTransaction = tonShardAccountsLastTransaction(
+      dictionaryProofBoc,
+      dictionaryKey,
+      dictionaryKeyBitLen,
+    );
+    if (selectedTransaction?.hash !== bytesToHex(transactionRoot)) {
+      throw new TypeError("shardStateDictionaryProofBoc ShardAccount last transaction hash must match transactionRoot");
+    }
+    if (selectedTransaction.lt !== transactionLt) {
+      throw new TypeError("shardStateDictionaryProofBoc ShardAccount last transaction lt must match transactionLt");
+    }
+    out = concatBytes(out, dictionaryRoot);
+    out = writeU16Le(out, dictionaryKeyBitLen);
+    out = writeBytes(out, dictionaryKey);
+    out = writeBytes(out, dictionaryProofBoc);
+  }
+  out = writeU64Le(out, shardStateLeafIndex);
+  out = writeU32Le(out, shardStateInclusionBranch.length);
+  for (const sibling of shardStateInclusionBranch) {
+    out = concatBytes(out, sibling);
+  }
+  out = writeU32Le(out, inclusionBranch.length);
+  for (const sibling of inclusionBranch) {
+    out = concatBytes(out, sibling);
+  }
+  return out;
+}
+
+export function tonSccpShardProofHash(input) {
+  return bytesToHex(
+    prefixedBlake2b(
+      SCCP_TON_SHARD_PROOF_PREFIX_V1,
+      canonicalTonSccpShardProofBytes(input),
+    ),
+  );
+}
+
+const tonBoundedBocHash = (prefix, value, label) => {
+  const raw = toBytes(value, label);
+  if (raw.length === 0) throw new TypeError(`${label} must not be empty`);
+  if (raw.length > SCCP_TON_MAX_BOC_BYTES) {
+    throw new RangeError(`${label} exceeds TON BoC proof byte limit`);
+  }
+  return { raw, hash: prefixedBlake2b(prefix, raw) };
+};
+
+const normalizeTonValidatorSetTransitionForSourceState = (input) => {
+  if (!input || typeof input !== "object" || Array.isArray(input)) {
+    throw new TypeError("TON validator-set transition proof must be an object");
+  }
+  const sourceDomain = normalizeSccpDomainId(input.sourceDomain ?? input.source_domain, "sourceDomain");
+  if (sourceDomain !== SCCP_DOMAIN_TON) throw new TypeError("sourceDomain must be TON");
+  const masterchainWorkchainId = normalizeSignedI32(
+    input.masterchainWorkchainId ?? input.masterchain_workchain_id,
+    "masterchainWorkchainId",
+  );
+  if (masterchainWorkchainId !== TON_MASTERCHAIN_WORKCHAIN_ID) {
+    throw new TypeError("masterchainWorkchainId must be TON masterchain");
+  }
+  const masterchainShard = normalizeUnsignedBigInt(
+    input.masterchainShard ?? input.masterchain_shard,
+    "masterchainShard",
+  );
+  if (masterchainShard !== TON_MASTERCHAIN_SHARD) {
+    throw new TypeError("masterchainShard must be TON masterchain shard");
+  }
+  const validatorSignatureProof = input.validatorSignatureProof ?? input.validator_signature_proof;
+  if (!validatorSignatureProof || typeof validatorSignatureProof !== "object" || Array.isArray(validatorSignatureProof)) {
+    throw new TypeError("TON validator signature proof must be an object");
+  }
+  const version = normalizeOptionalV1Version(input, "TON validator-set transition version", TypeError, "version");
+  const transitionSignatureHash = normalizeHex32(
+    input.transitionSignatureHash ?? input.transition_signature_hash,
+    "transitionSignatureHash",
+  );
+  if (transitionSignatureHash !== tonValidatorSetTransitionSignatureHash(input)) {
+    throw new TypeError("transitionSignatureHash must match transition signature fields");
+  }
+  return {
+    version,
+    sourceDomain,
+    fromValidatorSetSeqno: normalizeUnsignedBigInt(
+      input.fromValidatorSetSeqno ?? input.from_validator_set_seqno,
+      "fromValidatorSetSeqno",
+    ),
+    toValidatorSetSeqno: normalizeUnsignedBigInt(
+      input.toValidatorSetSeqno ?? input.to_validator_set_seqno,
+      "toValidatorSetSeqno",
+    ),
+    masterchainSeqno: normalizeUnsignedBigInt(input.masterchainSeqno ?? input.masterchain_seqno, "masterchainSeqno"),
+    masterchainWorkchainId,
+    masterchainShard,
+    masterchainBlockHash: normalizeNonZeroHex32(input.masterchainBlockHash ?? input.masterchain_block_hash, "masterchainBlockHash"),
+    masterchainFileHash: normalizeNonZeroHex32(input.masterchainFileHash ?? input.masterchain_file_hash, "masterchainFileHash"),
+    parentValidatorSetHash: normalizeHex32(input.parentValidatorSetHash ?? input.parent_validator_set_hash, "parentValidatorSetHash"),
+    nextValidatorSetHash: normalizeHex32(input.nextValidatorSetHash ?? input.next_validator_set_hash, "nextValidatorSetHash"),
+    nextValidatorSetPayload: toBytes(input.nextValidatorSetPayload ?? input.next_validator_set_payload, "nextValidatorSetPayload"),
+    nextValidatorSetPayloadHash: normalizeHex32(
+      input.nextValidatorSetPayloadHash ?? input.next_validator_set_payload_hash,
+      "nextValidatorSetPayloadHash",
+    ),
+    nextValidatorSetConfigHash: normalizeHex32(
+      input.nextValidatorSetConfigHash ?? input.next_validator_set_config_hash,
+      "nextValidatorSetConfigHash",
+    ),
+    transitionMessageHash: normalizeHex32(input.transitionMessageHash ?? input.transition_message_hash, "transitionMessageHash"),
+    transitionSignatureHash,
+    validatorSignatureProof,
+  };
+};
+
+const canonicalTonValidatorSetTransitionProofBytes = (transition) => {
+  let out = new Uint8Array();
+  out = writeU8(out, transition.version);
+  out = writeU32Le(out, transition.sourceDomain);
+  out = writeU64Le(out, transition.fromValidatorSetSeqno);
+  out = writeU64Le(out, transition.toValidatorSetSeqno);
+  out = writeU64Le(out, transition.masterchainSeqno);
+  out = writeI32Le(out, transition.masterchainWorkchainId);
+  out = writeU64Le(out, transition.masterchainShard);
+  return concatBytes(
+    out,
+    hexToBytes(transition.masterchainBlockHash, "masterchainBlockHash", 32),
+    hexToBytes(transition.masterchainFileHash, "masterchainFileHash", 32),
+    hexToBytes(transition.parentValidatorSetHash, "parentValidatorSetHash", 32),
+    hexToBytes(transition.nextValidatorSetHash, "nextValidatorSetHash", 32),
+    writeBytes(new Uint8Array(), transition.nextValidatorSetPayload),
+    hexToBytes(transition.nextValidatorSetPayloadHash, "nextValidatorSetPayloadHash", 32),
+    hexToBytes(transition.nextValidatorSetConfigHash, "nextValidatorSetConfigHash", 32),
+    hexToBytes(transition.transitionMessageHash, "transitionMessageHash", 32),
+    hexToBytes(transition.transitionSignatureHash, "transitionSignatureHash", 32),
+    canonicalTonValidatorSignaturesProofBytes(transition.validatorSignatureProof),
+  );
+};
+
+const tonValidatorSetTransitionChainHash = (transitions) => {
+  let out = new Uint8Array();
+  out = writeU8(out, 1);
+  out = writeU32Le(out, transitions.length);
+  for (const transition of transitions) {
+    out = concatBytes(
+      out,
+      canonicalTonValidatorSetTransitionProofBytes(transition),
+    );
+  }
+  return bytesToHex(prefixedBlake2b(SCCP_TON_VALIDATOR_SET_TRANSITION_CHAIN_PREFIX_V1, out));
+};
+
+const normalizeTonShardStateSourceStateInput = (input) => {
+  if (!input || typeof input !== "object" || Array.isArray(input)) {
+    throw new TypeError("TON shard-state source-state proof input must be an object");
+  }
+  const rejectInputAliases = (label, ...names) => {
+    strictOptionalResultField(input, label, ...names);
+  };
+  rejectInputAliases("sourceDomain", "sourceDomain", "source_domain");
+  rejectInputAliases("masterchainWorkchainId", "masterchainWorkchainId", "masterchain_workchain_id");
+  rejectInputAliases("masterchainShard", "masterchainShard", "masterchain_shard");
+  rejectInputAliases("shardWorkchainId", "shardWorkchainId", "shard_workchain_id");
+  rejectInputAliases("shardShard", "shardShard", "shard_shard");
+  rejectInputAliases("shardSeqno", "shardSeqno", "shard_seqno");
+  rejectInputAliases("masterchainSeqno", "masterchainSeqno", "masterchain_seqno");
+  rejectInputAliases("transactionLt", "transactionLt", "transaction_lt");
+  rejectInputAliases(
+    "shardStateDictionaryKeyBitLen",
+    "shardStateDictionaryKeyBitLen",
+    "shard_state_dictionary_key_bit_len",
+  );
+  rejectInputAliases("shardStateDictionaryKey", "shardStateDictionaryKey", "shard_state_dictionary_key");
+  rejectInputAliases("shardStateProofBoc", "shardStateProofBoc", "shard_state_proof_boc");
+  rejectInputAliases(
+    "shardStateDictionaryProofBoc",
+    "shardStateDictionaryProofBoc",
+    "shard_state_dictionary_proof_boc",
+  );
+  const topLevelConfigProofBoc = strictOptionalResultField(
+    input,
+    "configDictionaryProofBoc",
+    "configDictionaryProofBoc",
+    "config_dictionary_proof_boc",
+    "masterchainConfigProofBoc",
+    "masterchain_config_proof_boc",
+  );
+  const masterchainConfigProof = strictResultField(
+    input,
+    "masterchainConfigProof",
+    "masterchainConfigProof",
+    "masterchain_config_proof",
+  );
+  const nestedConfigProofBoc =
+    masterchainConfigProof &&
+    typeof masterchainConfigProof === "object" &&
+    !Array.isArray(masterchainConfigProof)
+      ? strictOptionalResultField(
+          masterchainConfigProof,
+          "masterchainConfigProof.configDictionaryProofBoc",
+          "configDictionaryProofBoc",
+          "config_dictionary_proof_boc",
+        )
+      : SCCP_OPTIONAL_FIELD_MISSING;
+  if (
+    topLevelConfigProofBoc !== SCCP_OPTIONAL_FIELD_MISSING &&
+    nestedConfigProofBoc !== SCCP_OPTIONAL_FIELD_MISSING
+  ) {
+    throw new TypeError("configDictionaryProofBoc must not use multiple aliases");
+  }
+  rejectInputAliases("shardStateRoot", "shardStateRoot", "shard_state_root");
+  rejectInputAliases("transactionRoot", "transactionRoot", "transaction_root");
+  rejectInputAliases("shardStateDictionaryRoot", "shardStateDictionaryRoot", "shard_state_dictionary_root");
+  rejectInputAliases("validatorSetTransitionProofs", "validatorSetTransitionProofs", "validator_set_transition_proofs");
+  rejectInputAliases("sourceStateVerifierId", "sourceStateVerifierId", "source_state_verifier_id");
+  rejectInputAliases("sourceStateVerifierHash", "sourceStateVerifierHash", "source_state_verifier_hash");
+  rejectInputAliases("masterchainBlockHash", "masterchainBlockHash", "masterchain_block_hash");
+  rejectInputAliases("masterchainFileHash", "masterchainFileHash", "masterchain_file_hash");
+  rejectInputAliases("validatorSetHash", "validatorSetHash", "validator_set_hash");
+  rejectInputAliases("masterchainConfigRoot", "masterchainConfigRoot", "masterchain_config_root");
+  rejectInputAliases("masterchainConfigProofHash", "masterchainConfigProofHash", "masterchain_config_proof_hash");
+  rejectInputAliases("shardBlockHash", "shardBlockHash", "shard_block_hash");
+  rejectInputAliases("shardFileHash", "shardFileHash", "shard_file_hash");
+  rejectInputAliases("masterchainSignatureHash", "masterchainSignatureHash", "masterchain_signature_hash");
+  rejectInputAliases("shardProofHash", "shardProofHash", "shard_proof_hash");
+  rejectInputAliases("sourceTrustAnchorId", "sourceTrustAnchorId", "source_trust_anchor_id");
+  rejectInputAliases("sourceTrustAnchorHash", "sourceTrustAnchorHash", "source_trust_anchor_hash");
+  rejectInputAliases("consensusVerifierId", "consensusVerifierId", "consensus_verifier_id");
+  rejectInputAliases("consensusVerifierHash", "consensusVerifierHash", "consensus_verifier_hash");
+  rejectInputAliases(
+    "messageInclusionVerifierId",
+    "messageInclusionVerifierId",
+    "message_inclusion_verifier_id",
+  );
+  rejectInputAliases(
+    "messageInclusionVerifierHash",
+    "messageInclusionVerifierHash",
+    "message_inclusion_verifier_hash",
+  );
+  rejectInputAliases("finalityPolicyId", "finalityPolicyId", "finality_policy_id");
+  rejectInputAliases("finalityPolicyHash", "finalityPolicyHash", "finality_policy_hash");
+  const sourceDomain = normalizeOptionalSccpDomainId(
+    input,
+    "sourceDomain",
+    SCCP_DOMAIN_TON,
+    "sourceDomain",
+    "source_domain",
+  );
+  if (sourceDomain !== SCCP_DOMAIN_TON) throw new TypeError("sourceDomain must be TON");
+  const masterchainWorkchainId = normalizeSignedI32(
+    input.masterchainWorkchainId ?? input.masterchain_workchain_id,
+    "masterchainWorkchainId",
+  );
+  if (masterchainWorkchainId !== TON_MASTERCHAIN_WORKCHAIN_ID) {
+    throw new TypeError("masterchainWorkchainId must be TON masterchain");
+  }
+  const masterchainShard = normalizeUnsignedBigInt(input.masterchainShard ?? input.masterchain_shard, "masterchainShard");
+  if (masterchainShard !== TON_MASTERCHAIN_SHARD) {
+    throw new TypeError("masterchainShard must be TON masterchain shard");
+  }
+  const shardWorkchainId = normalizeSignedI32(input.shardWorkchainId ?? input.shard_workchain_id, "shardWorkchainId");
+  if (shardWorkchainId !== TON_BASECHAIN_WORKCHAIN_ID) {
+    throw new TypeError("shardWorkchainId must be TON basechain");
+  }
+  const shardShard = normalizeUnsignedBigInt(input.shardShard ?? input.shard_shard, "shardShard");
+  if (shardShard === 0n) throw new TypeError("shardShard must be non-zero");
+  const shardSeqno = normalizeUnsignedBigInt(input.shardSeqno ?? input.shard_seqno, "shardSeqno");
+  if (shardSeqno === 0n) throw new TypeError("shardSeqno must be non-zero");
+  const masterchainSeqno = normalizeUnsignedBigInt(input.masterchainSeqno ?? input.masterchain_seqno, "masterchainSeqno");
+  const transactionLt = normalizeUnsignedBigInt(input.transactionLt ?? input.transaction_lt, "transactionLt");
+  if (transactionLt === 0n) throw new TypeError("transactionLt must be non-zero");
+  const dictionaryKeyBitLen = Number(
+    normalizeUnsignedBigInt(
+      input.shardStateDictionaryKeyBitLen ?? input.shard_state_dictionary_key_bit_len,
+      "shardStateDictionaryKeyBitLen",
+    ),
+  );
+  if (dictionaryKeyBitLen !== SCCP_TON_SHARD_ACCOUNT_KEY_BITS) {
+    throw new TypeError("TON ShardAccounts key bit length must be 256");
+  }
+  const dictionaryKey = toBytes(input.shardStateDictionaryKey ?? input.shard_state_dictionary_key, "shardStateDictionaryKey");
+  if (!tonHashmapKeyIsCanonical(dictionaryKey, dictionaryKeyBitLen)) {
+    throw new TypeError("shardStateDictionaryKey length is invalid");
+  }
+  const { raw: shardStateProofBoc, hash: shardStateProofBocHash } = tonBoundedBocHash(
+    SCCP_TON_SHARD_STATE_PROOF_BOC_PREFIX_V1,
+    input.shardStateProofBoc ?? input.shard_state_proof_boc,
+    "shardStateProofBoc",
+  );
+  const { raw: shardStateDictionaryProofBoc, hash: shardAccountsProofBocHash } = tonBoundedBocHash(
+    SCCP_TON_SHARD_ACCOUNTS_PROOF_BOC_PREFIX_V1,
+    input.shardStateDictionaryProofBoc ?? input.shard_state_dictionary_proof_boc,
+    "shardStateDictionaryProofBoc",
+  );
+  const configProof = input.masterchainConfigProof ?? input.masterchain_config_proof;
+  const configProofBocInput =
+    input.configDictionaryProofBoc ??
+    input.config_dictionary_proof_boc ??
+    input.masterchainConfigProofBoc ??
+    input.masterchain_config_proof_boc ??
+    configProof?.configDictionaryProofBoc ??
+    configProof?.config_dictionary_proof_boc;
+  const { raw: configDictionaryProofBoc, hash: configProofBocHash } = tonBoundedBocHash(
+    SCCP_TON_CONFIG_PROOF_BOC_PREFIX_V1,
+    configProofBocInput,
+    "configDictionaryProofBoc",
+  );
+  const shardStateRoot = normalizeNonZeroHex32(input.shardStateRoot ?? input.shard_state_root, "shardStateRoot");
+  const transactionRoot = normalizeNonZeroHex32(input.transactionRoot ?? input.transaction_root, "transactionRoot");
+  const dictionaryRoot = normalizeNonZeroHex32(
+    input.shardStateDictionaryRoot ?? input.shard_state_dictionary_root,
+    "shardStateDictionaryRoot",
+  );
+  if (tonShardStateProofRootHash(shardStateProofBoc) !== shardStateRoot) {
+    throw new TypeError("shardStateProofBoc root must match shardStateRoot");
+  }
+  const opening = tonShardStateAccountsOpening(shardStateProofBoc);
+  if (opening.accountsRootHash !== dictionaryRoot) {
+    throw new TypeError("shardStateProofBoc accounts root must match shardStateDictionaryRoot");
+  }
+  if (opening.globalId !== TON_MAINNET_GLOBAL_ID) {
+    throw new TypeError("shardStateProofBoc ShardStateUnsplit global_id must be TON mainnet");
+  }
+  if (opening.workchainId !== TON_BASECHAIN_WORKCHAIN_ID || opening.workchainId !== shardWorkchainId) {
+    throw new TypeError("shardStateProofBoc ShardIdent workchain_id must match shardWorkchainId");
+  }
+  if (BigInt(opening.seqNo) !== shardSeqno) {
+    throw new TypeError("shardStateProofBoc ShardStateUnsplit seq_no must match shardSeqno");
+  }
+  if (opening.shardId !== shardShard) {
+    throw new TypeError("shardStateProofBoc ShardIdent shard must match shardShard");
+  }
+  if (opening.seqNo === 0 || opening.genUtime === 0 || opening.genLt === 0n) {
+    throw new TypeError("shardStateProofBoc ShardStateUnsplit metadata must be non-zero");
+  }
+  if (BigInt(opening.minRefMcSeqno) > masterchainSeqno) {
+    throw new TypeError("shardStateProofBoc ShardStateUnsplit min_ref_mc_seqno exceeds masterchainSeqno");
+  }
+  if (!tonShardStateAccountKeyMatchesShardPrefix(dictionaryKey, dictionaryKeyBitLen, opening)) {
+    throw new TypeError("shardStateDictionaryKey must match shardStateProofBoc ShardIdent prefix");
+  }
+  if (tonHashmapEProofRootHash(shardStateDictionaryProofBoc) !== dictionaryRoot) {
+    throw new TypeError("shardStateDictionaryProofBoc root must match shardStateDictionaryRoot");
+  }
+  const selectedTransaction = tonShardAccountsLastTransaction(
+    shardStateDictionaryProofBoc,
+    dictionaryKey,
+    dictionaryKeyBitLen,
+  );
+  if (selectedTransaction?.hash !== transactionRoot) {
+    throw new TypeError("shardStateDictionaryProofBoc ShardAccount last transaction hash must match transactionRoot");
+  }
+  if (selectedTransaction.lt !== transactionLt) {
+    throw new TypeError("shardStateDictionaryProofBoc ShardAccount last transaction lt must match transactionLt");
+  }
+  const transitionInputs = input.validatorSetTransitionProofs ?? input.validator_set_transition_proofs ?? [];
+  if (!Array.isArray(transitionInputs)) throw new TypeError("validatorSetTransitionProofs must be a list");
+  const transitions = transitionInputs.map(normalizeTonValidatorSetTransitionForSourceState);
+  const sourceStateVerifierId = normalizeNonEmptyString(
+    input.sourceStateVerifierId ??
+      input.source_state_verifier_id ??
+      SCCP_TON_MAINNET_SHARD_STATE_VERIFIER_ID_V1,
+    "sourceStateVerifierId",
+  );
+  if (sourceStateVerifierId !== SCCP_TON_MAINNET_SHARD_STATE_VERIFIER_ID_V1) {
+    throw new TypeError("sourceStateVerifierId must match TON shard-state verifier profile");
+  }
+  const sourceStateVerifierHash = normalizeNonZeroHex32(
+    input.sourceStateVerifierHash ?? input.source_state_verifier_hash,
+    "sourceStateVerifierHash",
+  );
+  if (sourceStateVerifierHash === SCCP_TON_TEMPLATE_SOURCE_STATE_VERIFIER_HASH_V1) {
+    throw new TypeError("sourceStateVerifierHash must not be the TON template verifier hash");
+  }
+  return {
+    version: 1,
+    sourceDomain,
+    masterchainSeqno,
+    masterchainWorkchainId,
+    masterchainShard,
+    masterchainBlockHash: normalizeNonZeroHex32(input.masterchainBlockHash ?? input.masterchain_block_hash, "masterchainBlockHash"),
+    masterchainFileHash: normalizeNonZeroHex32(input.masterchainFileHash ?? input.masterchain_file_hash, "masterchainFileHash"),
+    validatorSetHash: normalizeHex32(input.validatorSetHash ?? input.validator_set_hash, "validatorSetHash"),
+    masterchainConfigRoot: normalizeHex32(input.masterchainConfigRoot ?? input.masterchain_config_root, "masterchainConfigRoot"),
+    masterchainConfigProofHash: normalizeHex32(
+      input.masterchainConfigProofHash ?? input.masterchain_config_proof_hash,
+      "masterchainConfigProofHash",
+    ),
+    shardWorkchainId,
+    shardShard,
+    shardSeqno,
+    shardBlockHash: normalizeHex32(input.shardBlockHash ?? input.shard_block_hash, "shardBlockHash"),
+    shardFileHash: normalizeNonZeroHex32(input.shardFileHash ?? input.shard_file_hash, "shardFileHash"),
+    shardStateRoot,
+    transactionRoot,
+    transactionLt,
+    shardStateDictionaryRoot: dictionaryRoot,
+    shardStateDictionaryKeyBitLen: dictionaryKeyBitLen,
+    shardStateDictionaryKey: dictionaryKey,
+    masterchainSignatureHash: normalizeHex32(
+      input.masterchainSignatureHash ?? input.masterchain_signature_hash,
+      "masterchainSignatureHash",
+    ),
+    shardProofHash: normalizeHex32(input.shardProofHash ?? input.shard_proof_hash, "shardProofHash"),
+    shardStateProofBoc,
+    shardStateDictionaryProofBoc,
+    configDictionaryProofBoc,
+    shardStateProofBocHash: bytesToHex(shardStateProofBocHash),
+    shardAccountsProofBocHash: bytesToHex(shardAccountsProofBocHash),
+    configProofBocHash: bytesToHex(configProofBocHash),
+    validatorSetTransitionProofs: transitions,
+    transitionChainHash: tonValidatorSetTransitionChainHash(transitions),
+    sourceStateVerifierId,
+    sourceStateVerifierHash,
+    sourceTrustAnchorId: normalizeNonEmptyString(
+      input.sourceTrustAnchorId ??
+        input.source_trust_anchor_id ??
+        "sccp:ton:source-trust-anchor:ton-mainnet-masterchain:v1",
+      "sourceTrustAnchorId",
+    ),
+    sourceTrustAnchorHash: normalizeNonZeroHex32(input.sourceTrustAnchorHash ?? input.source_trust_anchor_hash, "sourceTrustAnchorHash"),
+    consensusVerifierId: normalizeNonEmptyString(
+      input.consensusVerifierId ??
+        input.consensus_verifier_id ??
+        "sccp:ton:consensus-verifier:masterchain-block-proof:v1",
+      "consensusVerifierId",
+    ),
+    consensusVerifierHash: normalizeNonZeroHex32(input.consensusVerifierHash ?? input.consensus_verifier_hash, "consensusVerifierHash"),
+    messageInclusionVerifierId: normalizeNonEmptyString(
+      input.messageInclusionVerifierId ??
+        input.message_inclusion_verifier_id ??
+        "sccp:ton:message-inclusion-verifier:shard-transaction-branch:v1",
+      "messageInclusionVerifierId",
+    ),
+    messageInclusionVerifierHash: normalizeNonZeroHex32(
+      input.messageInclusionVerifierHash ?? input.message_inclusion_verifier_hash,
+      "messageInclusionVerifierHash",
+    ),
+    finalityPolicyId: normalizeNonEmptyString(
+      input.finalityPolicyId ??
+        input.finality_policy_id ??
+        "sccp:ton:finality-policy:masterchain-finality:v1",
+      "finalityPolicyId",
+    ),
+    finalityPolicyHash: normalizeNonZeroHex32(input.finalityPolicyHash ?? input.finality_policy_hash, "finalityPolicyHash"),
+  };
+};
+
+export function canonicalTonShardStateProofPublicInputsBytes(input) {
+  const normalized = normalizeTonShardStateSourceStateInput(input);
+  let out = new Uint8Array();
+  out = writeU8(out, normalized.version);
+  out = writeU32Le(out, normalized.sourceDomain);
+  out = writeU64Le(out, normalized.masterchainSeqno);
+  out = writeI32Le(out, normalized.masterchainWorkchainId);
+  out = writeU64Le(out, normalized.masterchainShard);
+  out = concatBytes(
+    out,
+    hexToBytes(normalized.masterchainBlockHash, "masterchainBlockHash", 32),
+    hexToBytes(normalized.masterchainFileHash, "masterchainFileHash", 32),
+    hexToBytes(normalized.validatorSetHash, "validatorSetHash", 32),
+    hexToBytes(normalized.masterchainConfigRoot, "masterchainConfigRoot", 32),
+    hexToBytes(normalized.masterchainConfigProofHash, "masterchainConfigProofHash", 32),
+  );
+  out = writeI32Le(out, normalized.shardWorkchainId);
+  out = writeU64Le(out, normalized.shardShard);
+  out = writeU64Le(out, normalized.shardSeqno);
+  out = concatBytes(
+    out,
+    hexToBytes(normalized.shardBlockHash, "shardBlockHash", 32),
+    hexToBytes(normalized.shardFileHash, "shardFileHash", 32),
+    hexToBytes(normalized.shardStateRoot, "shardStateRoot", 32),
+    hexToBytes(normalized.transactionRoot, "transactionRoot", 32),
+  );
+  out = writeU64Le(out, normalized.transactionLt);
+  out = concatBytes(out, hexToBytes(normalized.shardStateDictionaryRoot, "shardStateDictionaryRoot", 32));
+  out = writeU16Le(out, normalized.shardStateDictionaryKeyBitLen);
+  out = writeBytes(out, normalized.shardStateDictionaryKey);
+  return concatBytes(
+    out,
+    hexToBytes(normalized.masterchainSignatureHash, "masterchainSignatureHash", 32),
+    hexToBytes(normalized.shardProofHash, "shardProofHash", 32),
+    hexToBytes(normalized.shardStateProofBocHash, "shardStateProofBocHash", 32),
+    hexToBytes(normalized.shardAccountsProofBocHash, "shardAccountsProofBocHash", 32),
+    hexToBytes(normalized.configProofBocHash, "configProofBocHash", 32),
+    hexToBytes(normalized.transitionChainHash, "transitionChainHash", 32),
+  );
+}
+
+export function tonShardStateProofPublicInputsHash(input) {
+  return bytesToHex(
+    prefixedBlake2b(
+      SCCP_TON_SHARD_STATE_PROOF_PUBLIC_INPUTS_PREFIX_V1,
+      canonicalTonShardStateProofPublicInputsBytes(input),
+    ),
+  );
+}
+
+export function canonicalTonShardStateWitnessCommitmentBytes(input) {
+  const normalized = normalizeTonShardStateSourceStateInput(input);
+  let out = new Uint8Array();
+  out = writeU8(out, normalized.version);
+  out = writeBytes(out, normalized.shardStateProofBoc);
+  out = writeBytes(out, normalized.shardStateDictionaryProofBoc);
+  out = writeBytes(out, normalized.configDictionaryProofBoc);
+  out = writeU32Le(out, normalized.validatorSetTransitionProofs.length);
+  for (const transition of normalized.validatorSetTransitionProofs) {
+    out = concatBytes(out, canonicalTonValidatorSetTransitionProofBytes(transition));
+  }
+  return out;
+}
+
+export function canonicalTonShardStateVerificationContextBytes(input) {
+  const normalized = normalizeTonShardStateSourceStateInput(input);
+  let out = new Uint8Array();
+  out = writeU8(out, normalized.version);
+  out = writeString(out, normalized.sourceStateVerifierId, "sourceStateVerifierId");
+  out = concatBytes(out, hexToBytes(normalized.sourceStateVerifierHash, "sourceStateVerifierHash", 32));
+  out = writeString(out, normalized.sourceTrustAnchorId, "sourceTrustAnchorId");
+  out = concatBytes(out, hexToBytes(normalized.sourceTrustAnchorHash, "sourceTrustAnchorHash", 32));
+  out = writeString(out, normalized.consensusVerifierId, "consensusVerifierId");
+  out = concatBytes(out, hexToBytes(normalized.consensusVerifierHash, "consensusVerifierHash", 32));
+  out = writeString(out, normalized.messageInclusionVerifierId, "messageInclusionVerifierId");
+  out = concatBytes(out, hexToBytes(normalized.messageInclusionVerifierHash, "messageInclusionVerifierHash", 32));
+  out = writeString(out, normalized.finalityPolicyId, "finalityPolicyId");
+  return concatBytes(out, hexToBytes(normalized.finalityPolicyHash, "finalityPolicyHash", 32));
+}
+
+export function tonShardStatePublicInputColumns(input) {
+  const normalized = normalizeTonShardStateSourceStateInput(input);
+  const publicInputsHash = tonShardStateProofPublicInputsHash(input);
+  return [
+    [bytesToHex(sccpWordU32Le(normalized.sourceDomain))],
+    [bytesToHex(sccpWordU64Le(normalized.masterchainSeqno))],
+    [bytesToHex(sccpWordI32Le(normalized.masterchainWorkchainId))],
+    [bytesToHex(sccpWordU64Le(normalized.masterchainShard))],
+    [normalized.masterchainBlockHash],
+    [normalized.validatorSetHash],
+    [normalized.masterchainConfigRoot],
+    [bytesToHex(sccpWordI32Le(normalized.shardWorkchainId))],
+    [bytesToHex(sccpWordU64Le(normalized.shardShard))],
+    [bytesToHex(sccpWordU64Le(normalized.shardSeqno))],
+    [normalized.shardBlockHash],
+    [normalized.shardStateRoot],
+    [normalized.shardStateDictionaryRoot],
+    [normalized.transactionRoot],
+    [bytesToHex(sccpWordU64Le(normalized.transactionLt))],
+    [publicInputsHash],
+  ];
+}
+
+export function tonShardStateOpenVerifySchemaDescriptor(input) {
+  const normalized = normalizeTonShardStateSourceStateInput(input);
+  let out = new Uint8Array();
+  out = writeU8(out, normalized.version);
+  out = writeString(out, SCCP_TON_SHARD_STATE_OPEN_VERIFY_CIRCUIT_ID_V1, "circuitId");
+  out = writeString(out, SCCP_TON_SHARD_STATE_FASTPQ_PARAMETER_SET_V1, "parameterSet");
+  out = writeI32Le(out, TON_MAINNET_GLOBAL_ID);
+  out = writeU32Le(out, normalized.sourceDomain);
+  for (const requiredInput of [
+    "source_domain",
+    "masterchain_seqno",
+    "masterchain_workchain_id",
+    "masterchain_shard",
+    "masterchain_block_hash",
+    "validator_set_hash",
+    "masterchain_config_root",
+    "shard_workchain_id",
+    "shard_shard",
+    "shard_seqno",
+    "shard_block_hash",
+    "shard_state_root",
+    "shard_state_dictionary_root",
+    "transaction_root",
+    "transaction_lt",
+    "shard_state_proof_public_inputs_hash",
+  ]) {
+    out = writeString(out, requiredInput, "requiredInput");
+  }
+  return out;
+}
+
+export function buildTonShardStateProofRequest(input) {
+  const normalized = normalizeTonShardStateSourceStateInput(input);
+  const statementBytes = canonicalTonShardStateProofPublicInputsBytes(input);
+  const witnessCommitmentBytes = canonicalTonShardStateWitnessCommitmentBytes(input);
+  const verificationContextBytes = canonicalTonShardStateVerificationContextBytes(input);
+  const publicInputsHash = tonShardStateProofPublicInputsHash(input);
+  const dsidHash = prefixedBlake2b(
+    SCCP_TON_SHARD_STATE_FASTPQ_DSID_PREFIX_V1,
+    hexToBytes(publicInputsHash, "shardStateProofPublicInputsHash", 32),
+  );
+  return immutableFastpqProofRequest(
+    {
+      version: 1,
+      proofFamily: SCCP_STARK_FRI_PROOF_FAMILY_V1,
+      circuitId: SCCP_TON_SHARD_STATE_OPEN_VERIFY_CIRCUIT_ID_V1,
+      parameterSet: SCCP_TON_SHARD_STATE_FASTPQ_PARAMETER_SET_V1,
+      sourceDomain: normalized.sourceDomain,
+      masterchainSeqno: normalized.masterchainSeqno.toString(),
+      shardSeqno: normalized.shardSeqno.toString(),
+      sourceStateVerifierId: normalized.sourceStateVerifierId,
+      sourceStateVerifierHash: normalized.sourceStateVerifierHash,
+      shardStateProofPublicInputsHash: publicInputsHash,
+      statementBytes,
+      witnessCommitmentBytes,
+      verificationContextBytes,
+      schemaDescriptor: tonShardStateOpenVerifySchemaDescriptor(input),
+      publicInputColumns: tonShardStatePublicInputColumns(input),
+      fastpqPublicInputs: {
+        dsid: bytesToHex(dsidHash.slice(0, 16)),
+        slot: normalized.masterchainSeqno.toString(),
+        oldRoot: normalized.masterchainConfigRoot,
+        newRoot: normalized.shardStateRoot,
+        permRoot: normalized.shardStateDictionaryRoot,
+        txSetHash: publicInputsHash,
+      },
+      fastpqTransitions: [
+        {
+          key: SCCP_TON_SHARD_STATE_FASTPQ_STATEMENT_KEY_V1,
+          operation: "meta_set",
+          oldValue: "0x",
+          newValue: bytesToHex(statementBytes),
+        },
+        {
+          key: SCCP_TON_SHARD_STATE_FASTPQ_WITNESS_KEY_V1,
+          operation: "meta_set",
+          oldValue: "0x",
+          newValue: bytesToHex(witnessCommitmentBytes),
+        },
+        {
+          key: SCCP_TON_SHARD_STATE_FASTPQ_CONTEXT_KEY_V1,
+          operation: "meta_set",
+          oldValue: "0x",
+          newValue: bytesToHex(verificationContextBytes),
+        },
+      ],
+    },
+    ["statementBytes", "witnessCommitmentBytes", "verificationContextBytes", "schemaDescriptor"],
+  );
+}
+
+const TON_FULL_LIGHT_CLIENT_AUDIT_ROLES = Object.freeze({
+  masterchainConfig: Object.freeze({
+    name: "masterchainConfig",
+    wireName: "masterchain_config",
+    code: 1,
+    circuitId: SCCP_TON_MASTERCHAIN_CONFIG_OPEN_VERIFY_CIRCUIT_ID_V1,
+    verifierId: SCCP_TON_MAINNET_MASTERCHAIN_CONFIG_VERIFIER_ID_V1,
+    verifierHashField: "tonMasterchainConfigVerifierHash",
+    requiredInputNames: Object.freeze([
+      "masterchain_config_root",
+      "masterchain_config_proof_hash",
+      "validator_set_payload_hash",
+      "config_leaf_hash",
+      "config_value_hash",
+      "config_proof_boc_hash",
+    ]),
+  }),
+  validatorSetTransition: Object.freeze({
+    name: "validatorSetTransition",
+    wireName: "validator_set_transition",
+    code: 2,
+    circuitId: SCCP_TON_VALIDATOR_SET_TRANSITION_OPEN_VERIFY_CIRCUIT_ID_V1,
+    verifierId: SCCP_TON_MAINNET_VALIDATOR_SET_TRANSITION_VERIFIER_ID_V1,
+    verifierHashField: "tonValidatorSetTransitionVerifierHash",
+    requiredInputNames: Object.freeze([
+      "source_trust_anchor_hash",
+      "validator_set_hash",
+      "validator_set_transition_chain_hash",
+      "masterchain_signature_hash",
+      "validator_set_transition_count",
+    ]),
+  }),
+  shardAccountsDictionary: Object.freeze({
+    name: "shardAccountsDictionary",
+    wireName: "shard_accounts_dictionary",
+    code: 3,
+    circuitId: SCCP_TON_SHARD_ACCOUNTS_DICTIONARY_OPEN_VERIFY_CIRCUIT_ID_V1,
+    verifierId: SCCP_TON_MAINNET_SHARD_ACCOUNTS_DICTIONARY_VERIFIER_ID_V1,
+    verifierHashField: "tonShardAccountsDictionaryVerifierHash",
+    requiredInputNames: Object.freeze([
+      "shard_state_root",
+      "shard_state_dictionary_root",
+      "transaction_root",
+      "shard_state_proof_boc_hash",
+      "shard_accounts_proof_boc_hash",
+      "shard_state_verification_proof_hash",
+    ]),
+  }),
+});
+
+const TON_SOURCE_STATE_VERIFICATION_CIRCUIT_IDS = Object.freeze(new Set([
+  SCCP_TON_SHARD_STATE_OPEN_VERIFY_CIRCUIT_ID_V1,
+  SCCP_TON_MASTERCHAIN_CONFIG_OPEN_VERIFY_CIRCUIT_ID_V1,
+  SCCP_TON_VALIDATOR_SET_TRANSITION_OPEN_VERIFY_CIRCUIT_ID_V1,
+  SCCP_TON_SHARD_ACCOUNTS_DICTIONARY_OPEN_VERIFY_CIRCUIT_ID_V1,
+]));
+
+function normalizeTonFullLightClientAuditRole(roleName) {
+  const normalized = normalizeNonEmptyString(roleName, "role")
+    .replace(/[-_]/g, "")
+    .toLowerCase();
+  switch (normalized) {
+    case "config":
+    case "masterchainconfig":
+      return TON_FULL_LIGHT_CLIENT_AUDIT_ROLES.masterchainConfig;
+    case "transition":
+    case "validators":
+    case "validatorsettransition":
+      return TON_FULL_LIGHT_CLIENT_AUDIT_ROLES.validatorSetTransition;
+    case "accounts":
+    case "shardaccounts":
+    case "shardaccountsdictionary":
+      return TON_FULL_LIGHT_CLIENT_AUDIT_ROLES.shardAccountsDictionary;
+    default:
+      throw new TypeError(
+        "role must be masterchainConfig, validatorSetTransition, or shardAccountsDictionary",
+      );
+  }
+}
+
+const tonAuditRoleVerifierHash = (deployment, role) =>
+  normalizeNonZeroHex32(deployment[role.verifierHashField], role.verifierHashField);
+
+function tonFullLightClientGateHashForMaterialAndDeployment(material, deployment) {
+  const auditHashes = [
+    tonAuditRoleVerifierHash(deployment, TON_FULL_LIGHT_CLIENT_AUDIT_ROLES.masterchainConfig),
+    tonAuditRoleVerifierHash(deployment, TON_FULL_LIGHT_CLIENT_AUDIT_ROLES.validatorSetTransition),
+    tonAuditRoleVerifierHash(deployment, TON_FULL_LIGHT_CLIENT_AUDIT_ROLES.shardAccountsDictionary),
+  ];
+  requireTonFullLightClientAuditRoleSeparation(deployment, auditHashes);
+  let out = new Uint8Array();
+  out = writeU8(out, 1);
+  out = writeU32Le(out, material.sourceDomain);
+  out = writeU32Le(out, deployment.targetDomain);
+  out = writeString(out, material.sourceChain, "sourceChain");
+  out = writeU8(out, material.sourceProofPlan);
+  out = writeU8(out, material.finalityModel);
+  out = writeI32Le(out, TON_MAINNET_GLOBAL_ID);
+  out = writeString(out, SCCP_TON_SHARD_STATE_OPEN_VERIFY_CIRCUIT_ID_V1, "tonShardStateCircuitId");
+  out = writeString(out, SCCP_TON_SHARD_STATE_FASTPQ_PARAMETER_SET_V1, "tonShardStateParameterSet");
+  out = writeString(out, SCCP_TON_MAINNET_SHARD_STATE_VERIFIER_ID_V1, "tonSourceStateVerifierId");
+  out = concatBytes(out, hexToBytes(material.sourceStateVerifierHash, "sourceStateVerifierHash", 32));
+  out = concatBytes(out, hexToBytes(sccpSourceVerifierMaterialHash(material), "sourceVerifierMaterialHash", 32));
+  out = concatBytes(
+    out,
+    hexToBytes(sccpSourceAdapterEngineDeploymentHash(deployment), "sourceAdapterDeploymentHash", 32),
+  );
+  for (const role of [
+    TON_FULL_LIGHT_CLIENT_AUDIT_ROLES.masterchainConfig,
+    TON_FULL_LIGHT_CLIENT_AUDIT_ROLES.validatorSetTransition,
+    TON_FULL_LIGHT_CLIENT_AUDIT_ROLES.shardAccountsDictionary,
+  ]) {
+    out = writeString(out, role.verifierId, "tonAuditVerifierId");
+    out = concatBytes(out, hexToBytes(tonAuditRoleVerifierHash(deployment, role), "tonAuditVerifierHash", 32));
+  }
+  return bytesToHex(prefixedBlake2b(SCCP_TON_FULL_LIGHT_CLIENT_GATE_PREFIX_V1, out));
+}
+
+function normalizeTonAuditMaterialAndDeployment(input) {
+  const materialSelected = strictOptionalResultField(
+    input,
+    "sourceVerifierMaterial",
+    "sourceVerifierMaterial",
+    "source_verifier_material",
+  );
+  const deploymentSelected = strictOptionalResultField(
+    input,
+    "sourceAdapterDeployment",
+    "sourceAdapterDeployment",
+    "source_adapter_deployment",
+  );
+  const materialInput = materialSelected === SCCP_OPTIONAL_FIELD_MISSING ? input : materialSelected;
+  const deploymentInput = deploymentSelected === SCCP_OPTIONAL_FIELD_MISSING ? input : deploymentSelected;
+  const material = normalizeSccpSourceVerifierMaterial(materialInput);
+  const deployment = normalizeSccpSourceAdapterEngineDeployment(deploymentInput);
+  if (
+    material.sourceDomain !== SCCP_DOMAIN_TON ||
+    deployment.sourceDomain !== SCCP_DOMAIN_TON ||
+    deployment.targetDomain !== SCCP_DOMAIN_SORA
+  ) {
+    throw new TypeError("TON full-light-client audit requests require a TON -> SORA deployment");
+  }
+  for (const field of [
+    "sourceDomain",
+    "sourceChain",
+    "sourceProofPlan",
+    "finalityModel",
+    "adapterCircuitId",
+    "sourceTrustAnchorId",
+    "sourceTrustAnchorHash",
+    "consensusVerifierId",
+    "consensusVerifierHash",
+    "messageInclusionVerifierId",
+    "messageInclusionVerifierHash",
+    "finalityPolicyId",
+    "finalityPolicyHash",
+    "sourceStateVerifierId",
+    "sourceStateVerifierHash",
+    "sourceBridgeEmitterId",
+    "sourceBridgeEmitterAddress",
+    "sourceBridgeEmitterCodeHash",
+    "sourceBridgeNetworkId",
+    "sourceBridgeOwnerAddress",
+    "sourceBridgeConfigHash",
+  ]) {
+    if (deployment[field] !== material[field]) {
+      throw new TypeError("sourceAdapterDeployment must match sourceVerifierMaterial");
+    }
+  }
+  for (const role of Object.values(TON_FULL_LIGHT_CLIENT_AUDIT_ROLES)) {
+    tonAuditRoleVerifierHash(deployment, role);
+  }
+  return {
+    material,
+    deployment,
+    gateHash: tonFullLightClientGateHashForMaterialAndDeployment(material, deployment),
+  };
+}
+
+export function tonSccpShardStateVerificationProofHash(input) {
+  const proof = normalizeSolanaSourceStateVerificationProof(input, "shardStateVerificationProof");
+  requireSourceStateVerificationProofProfile(
+    proof,
+    SCCP_TON_SHARD_STATE_OPEN_VERIFY_CIRCUIT_ID_V1,
+    "shardStateVerificationProof",
+    "TON shard-state",
+  );
+  return bytesToHex(
+    prefixedBlake2b(
+      "sccp:ton:source-state-verification-proof:v1",
+      canonicalSourceStateVerificationProofBytes(proof),
+    ),
+  );
+}
+
+export function canonicalTonSccpSourceStateVerificationProofBytes(input) {
+  const proof = normalizeSolanaSourceStateVerificationProof(
+    input,
+    "sourceStateProof",
+  );
+  if (!TON_SOURCE_STATE_VERIFICATION_CIRCUIT_IDS.has(proof.circuitId)) {
+    throw new TypeError("sourceStateProof must be a TON source-state stark-fri-v1 proof");
+  }
+  return canonicalSourceStateVerificationProofBytes(proof);
+}
+
+const tonNestedAuditValue = (input, nested, label, ...keys) => {
+  const topLevel = strictOptionalResultField(input, label, ...keys);
+  const nestedValue = strictOptionalResultField(nested, `masterchainConfigProof.${label}`, ...keys);
+  if (topLevel !== SCCP_OPTIONAL_FIELD_MISSING && nestedValue !== SCCP_OPTIONAL_FIELD_MISSING) {
+    throw new TypeError(`${label} must not use top-level and masterchainConfigProof aliases`);
+  }
+  return topLevel !== SCCP_OPTIONAL_FIELD_MISSING
+    ? topLevel
+    : nestedValue === SCCP_OPTIONAL_FIELD_MISSING
+      ? undefined
+      : nestedValue;
+};
+
+function normalizeTonMasterchainConfigAuditFields(input, shardState) {
+  const nestedInput = strictOptionalResultField(
+    input,
+    "masterchainConfigProof",
+    "masterchainConfigProof",
+    "masterchain_config_proof",
+  );
+  const nested = nestedInput === SCCP_OPTIONAL_FIELD_MISSING ? {} : nestedInput;
+  if (!nested || typeof nested !== "object" || Array.isArray(nested)) {
+    throw new TypeError("masterchainConfigProof must be an object");
+  }
+  const validatorSetPayloadHash = normalizeNonZeroHex32(
+    tonNestedAuditValue(
+      input,
+      nested,
+      "validatorSetPayloadHash",
+      "validatorSetPayloadHash",
+      "validator_set_payload_hash",
+    ),
+    "validatorSetPayloadHash",
+  );
+  const configLeafHash = normalizeNonZeroHex32(
+    tonNestedAuditValue(input, nested, "configLeafHash", "configLeafHash", "config_leaf_hash"),
+    "configLeafHash",
+  );
+  const configValueHash = normalizeNonZeroHex32(
+    tonNestedAuditValue(input, nested, "configValueHash", "configValueHash", "config_value_hash"),
+    "configValueHash",
+  );
+  const configLeafIndexInput = tonNestedAuditValue(
+    input,
+    nested,
+    "configLeafIndex",
+    "configLeafIndex",
+    "config_leaf_index",
+  );
+  const configLeafIndex =
+    configLeafIndexInput === undefined
+      ? SCCP_TON_CURRENT_VALIDATOR_SET_CONFIG_PARAM
+      : normalizeUnsignedBigInt(configLeafIndexInput, "configLeafIndex");
+  if (configLeafIndex !== SCCP_TON_CURRENT_VALIDATOR_SET_CONFIG_PARAM) {
+    throw new TypeError("configLeafIndex must be TON current validator set config param 34");
+  }
+  const expectedProofHash = tonMasterchainConfigProofHash({
+    sourceDomain: shardState.sourceDomain,
+    masterchainSeqno: shardState.masterchainSeqno,
+    masterchainBlockHash: shardState.masterchainBlockHash,
+    shardStateRoot: shardState.shardStateRoot,
+    configRoot: shardState.masterchainConfigRoot,
+    validatorSetHash: shardState.validatorSetHash,
+    validatorSetPayloadHash,
+    configLeafHash,
+    configLeafIndex,
+    configValueHash,
+    configDictionaryProofBoc: shardState.configDictionaryProofBoc,
+    configInclusionBranch: [],
+  });
+  if (expectedProofHash !== shardState.masterchainConfigProofHash) {
+    throw new TypeError("masterchainConfigProofHash must match TON config proof fields");
+  }
+  return { validatorSetPayloadHash, configLeafHash, configValueHash };
+}
+
+function normalizeTonFullLightClientAuditInput(input, role) {
+  if (!input || typeof input !== "object" || Array.isArray(input)) {
+    throw new TypeError("TON full-light-client audit proof request input must be an object");
+  }
+  const { material, deployment, gateHash } = normalizeTonAuditMaterialAndDeployment(input);
+  const shardState = normalizeTonShardStateSourceStateInput(input);
+  for (const [shardField, materialField] of [
+    ["sourceStateVerifierId", "sourceStateVerifierId"],
+    ["sourceStateVerifierHash", "sourceStateVerifierHash"],
+    ["sourceTrustAnchorId", "sourceTrustAnchorId"],
+    ["sourceTrustAnchorHash", "sourceTrustAnchorHash"],
+    ["consensusVerifierId", "consensusVerifierId"],
+    ["consensusVerifierHash", "consensusVerifierHash"],
+    ["messageInclusionVerifierId", "messageInclusionVerifierId"],
+    ["messageInclusionVerifierHash", "messageInclusionVerifierHash"],
+    ["finalityPolicyId", "finalityPolicyId"],
+    ["finalityPolicyHash", "finalityPolicyHash"],
+  ]) {
+    if (shardState[shardField] !== material[materialField]) {
+      throw new TypeError("TON shard-state verification context must match sourceVerifierMaterial");
+    }
+  }
+  const shardStateProofPublicInputsHash = tonShardStateProofPublicInputsHash(input);
+  const suppliedPublicInputsHashInput = strictOptionalResultField(
+    input,
+    "shardStateProofPublicInputsHash",
+    "shardStateProofPublicInputsHash",
+    "shard_state_proof_public_inputs_hash",
+  );
+  const suppliedPublicInputsHash =
+    suppliedPublicInputsHashInput === SCCP_OPTIONAL_FIELD_MISSING ? undefined : suppliedPublicInputsHashInput;
+  if (
+    suppliedPublicInputsHash !== undefined &&
+    normalizeHex32(suppliedPublicInputsHash, "shardStateProofPublicInputsHash") !== shardStateProofPublicInputsHash
+  ) {
+    throw new TypeError("shardStateProofPublicInputsHash must match TON shard-state inputs");
+  }
+  const shardProofSelected = strictOptionalResultField(
+    input,
+    "shardStateVerificationProof",
+    "shardStateVerificationProof",
+    "shard_state_verification_proof",
+  );
+  const shardProofInput = shardProofSelected === SCCP_OPTIONAL_FIELD_MISSING ? undefined : shardProofSelected;
+  const suppliedShardProofHashInput = strictOptionalResultField(
+    input,
+    "shardStateVerificationProofHash",
+    "shardStateVerificationProofHash",
+    "shard_state_verification_proof_hash",
+  );
+  const suppliedShardProofHash =
+    suppliedShardProofHashInput === SCCP_OPTIONAL_FIELD_MISSING ? undefined : suppliedShardProofHashInput;
+  let shardStateVerificationProofHash;
+  if (shardProofInput !== undefined) {
+    shardStateVerificationProofHash = tonSccpShardStateVerificationProofHash(shardProofInput);
+    if (
+      suppliedShardProofHash !== undefined &&
+      normalizeHex32(suppliedShardProofHash, "shardStateVerificationProofHash") !== shardStateVerificationProofHash
+    ) {
+      throw new TypeError("shardStateVerificationProofHash must match shardStateVerificationProof");
+    }
+  } else {
+    throw new TypeError(
+      "shardStateVerificationProof is required; shardStateVerificationProofHash alone is not accepted",
+    );
+  }
+  if (
+    material.sourceTrustAnchorHash === shardState.validatorSetHash &&
+    shardState.validatorSetTransitionProofs.length !== 0
+  ) {
+    throw new TypeError("validatorSetTransitionProofs must be empty when validator set matches source trust anchor");
+  }
+  if (
+    material.sourceTrustAnchorHash !== shardState.validatorSetHash &&
+    shardState.validatorSetTransitionProofs.length === 0
+  ) {
+    throw new TypeError("validatorSetTransitionProofs must connect source trust anchor to validatorSetHash");
+  }
+  const masterchainConfig = normalizeTonMasterchainConfigAuditFields(input, shardState);
+  return {
+    role,
+    material,
+    deployment,
+    shardState,
+    sourceVerifierMaterialHash: sccpSourceVerifierMaterialHash(material),
+    sourceAdapterDeploymentHash: sccpSourceAdapterEngineDeploymentHash(deployment),
+    fullLightClientGateHash: gateHash,
+    verifierHash: tonAuditRoleVerifierHash(deployment, role),
+    shardStateProofPublicInputsHash,
+    shardStateVerificationProofHash,
+    ...masterchainConfig,
+  };
+}
+
+export function canonicalTonSccpFullLightClientAuditStatementBytes(input, roleName) {
+  const role = normalizeTonFullLightClientAuditRole(roleName);
+  const value = normalizeTonFullLightClientAuditInput(input, role);
+  const { shardState } = value;
+  let out = new Uint8Array();
+  out = writeU8(out, 1);
+  out = writeU8(out, role.code);
+  out = writeString(out, role.circuitId, "circuitId");
+  out = writeString(out, SCCP_TON_CONTRACT_PROOF_BACKEND_V1, "backend");
+  out = writeI32Le(out, TON_MAINNET_GLOBAL_ID);
+  out = writeU32Le(out, shardState.sourceDomain);
+  out = writeU64Le(out, shardState.masterchainSeqno);
+  out = writeI32Le(out, shardState.masterchainWorkchainId);
+  out = writeU64Le(out, shardState.masterchainShard);
+  out = concatBytes(
+    out,
+    hexToBytes(shardState.masterchainBlockHash, "masterchainBlockHash", 32),
+    hexToBytes(shardState.masterchainFileHash, "masterchainFileHash", 32),
+    hexToBytes(shardState.validatorSetHash, "validatorSetHash", 32),
+    hexToBytes(shardState.masterchainConfigRoot, "masterchainConfigRoot", 32),
+    hexToBytes(shardState.masterchainConfigProofHash, "masterchainConfigProofHash", 32),
+  );
+  out = writeI32Le(out, shardState.shardWorkchainId);
+  out = writeU64Le(out, shardState.shardShard);
+  out = writeU64Le(out, shardState.shardSeqno);
+  out = concatBytes(
+    out,
+    hexToBytes(shardState.shardBlockHash, "shardBlockHash", 32),
+    hexToBytes(shardState.shardFileHash, "shardFileHash", 32),
+    hexToBytes(shardState.shardStateRoot, "shardStateRoot", 32),
+    hexToBytes(shardState.shardStateDictionaryRoot, "shardStateDictionaryRoot", 32),
+    hexToBytes(shardState.transactionRoot, "transactionRoot", 32),
+  );
+  out = writeU64Le(out, shardState.transactionLt);
+  out = concatBytes(
+    out,
+    hexToBytes(shardState.masterchainSignatureHash, "masterchainSignatureHash", 32),
+    hexToBytes(shardState.shardProofHash, "shardProofHash", 32),
+    hexToBytes(value.shardStateVerificationProofHash, "shardStateVerificationProofHash", 32),
+    hexToBytes(value.shardStateProofPublicInputsHash, "shardStateProofPublicInputsHash", 32),
+  );
+  switch (role.name) {
+    case "masterchainConfig":
+      out = concatBytes(
+        out,
+        hexToBytes(value.validatorSetPayloadHash, "validatorSetPayloadHash", 32),
+        hexToBytes(value.configLeafHash, "configLeafHash", 32),
+        hexToBytes(value.configValueHash, "configValueHash", 32),
+        hexToBytes(shardState.configProofBocHash, "configProofBocHash", 32),
+      );
+      break;
+    case "validatorSetTransition":
+      out = concatBytes(out, hexToBytes(shardState.transitionChainHash, "transitionChainHash", 32));
+      out = writeU32Le(out, shardState.validatorSetTransitionProofs.length);
+      for (const transition of shardState.validatorSetTransitionProofs) {
+        out = concatBytes(out, canonicalTonValidatorSetTransitionProofBytes(transition));
+      }
+      break;
+    case "shardAccountsDictionary":
+      out = concatBytes(
+        out,
+        hexToBytes(shardState.shardStateProofBocHash, "shardStateProofBocHash", 32),
+        hexToBytes(shardState.shardAccountsProofBocHash, "shardAccountsProofBocHash", 32),
+      );
+      out = writeU16Le(out, shardState.shardStateDictionaryKeyBitLen);
+      out = writeBytes(out, shardState.shardStateDictionaryKey);
+      out = concatBytes(out, hexToBytes(value.shardStateProofPublicInputsHash, "shardStateProofPublicInputsHash", 32));
+      break;
+    default:
+      throw new TypeError("unsupported TON full-light-client audit role");
+  }
+  return out;
+}
+
+export function tonSccpFullLightClientAuditStatementHash(input, roleName) {
+  return bytesToHex(
+    prefixedBlake2b(
+      SCCP_TON_FULL_LIGHT_CLIENT_AUDIT_STATEMENT_PREFIX_V1,
+      canonicalTonSccpFullLightClientAuditStatementBytes(input, roleName),
+    ),
+  );
+}
+
+function requireTonFullLightClientAuditRequestHashSeparation(value, statementHash) {
+  const verifierHash = normalizeNonZeroHex32(value.verifierHash, "verifierHash");
+  const requestHashes = [
+    value.material.sourceStateVerifierHash,
+    value.sourceVerifierMaterialHash,
+    value.sourceAdapterDeploymentHash,
+    value.fullLightClientGateHash,
+    value.shardStateProofPublicInputsHash,
+    value.shardStateVerificationProofHash,
+    value.shardState.masterchainConfigProofHash,
+    value.shardState.masterchainSignatureHash,
+    value.shardState.shardProofHash,
+    value.shardState.transitionChainHash,
+    ...tonFullLightClientAuditRoleColumns(value),
+  ];
+  if (statementHash !== undefined) {
+    requestHashes.push(statementHash);
+  }
+  for (const requestHashInput of requestHashes) {
+    const requestHash = normalizeHex32(requestHashInput, "tonAuditRequestHash");
+    if (!isZeroHex32(requestHash, "tonAuditRequestHash") && requestHash === verifierHash) {
+      throw new TypeError(
+        "TON full-light-client audit verifier hash must not reuse request-bound hashes",
+      );
+    }
+  }
+}
+
+function tonFullLightClientAuditRoleColumns(value) {
+  const { role, shardState } = value;
+  switch (role.name) {
+    case "masterchainConfig":
+      return [
+        shardState.masterchainConfigRoot,
+        shardState.masterchainConfigProofHash,
+        value.validatorSetPayloadHash,
+        value.configLeafHash,
+        value.configValueHash,
+        shardState.configProofBocHash,
+      ];
+    case "validatorSetTransition":
+      return [
+        value.material.sourceTrustAnchorHash,
+        shardState.validatorSetHash,
+        shardState.transitionChainHash,
+        shardState.masterchainSignatureHash,
+        bytesToHex(sccpWordU64Le(BigInt(shardState.validatorSetTransitionProofs.length))),
+      ];
+    case "shardAccountsDictionary":
+      return [
+        shardState.shardStateRoot,
+        shardState.shardStateDictionaryRoot,
+        shardState.transactionRoot,
+        shardState.shardStateProofBocHash,
+        shardState.shardAccountsProofBocHash,
+        value.shardStateVerificationProofHash,
+      ];
+    default:
+      throw new TypeError("unsupported TON full-light-client audit role");
+  }
+}
+
+export function tonSccpFullLightClientAuditPublicInputColumns(input, roleName) {
+  const role = normalizeTonFullLightClientAuditRole(roleName);
+  const value = normalizeTonFullLightClientAuditInput(input, role);
+  const { shardState } = value;
+  const statementHash = tonSccpFullLightClientAuditStatementHash(input, role.name);
+  requireTonFullLightClientAuditRequestHashSeparation(value, statementHash);
+  const columns = [
+    [bytesToHex(sccpWordU8(role.code))],
+    [bytesToHex(sccpWordU32Le(shardState.sourceDomain))],
+    [bytesToHex(sccpWordU64Le(shardState.masterchainSeqno))],
+    [shardState.masterchainBlockHash],
+    [bytesToHex(sccpWordU64Le(shardState.shardSeqno))],
+    [shardState.shardBlockHash],
+    [statementHash],
+    [value.sourceVerifierMaterialHash],
+    [value.sourceAdapterDeploymentHash],
+    [value.fullLightClientGateHash],
+    [value.verifierHash],
+  ];
+  for (const column of tonFullLightClientAuditRoleColumns(value)) {
+    columns.push([column]);
+  }
+  return columns;
+}
+
+function tonFullLightClientAuditFastpqPublicInputs(value, statementHash) {
+  let dsidPreimage = new Uint8Array();
+  dsidPreimage = writeU8(dsidPreimage, value.role.code);
+  dsidPreimage = concatBytes(dsidPreimage, hexToBytes(statementHash, "auditStatementHash", 32));
+  const dsidHash = prefixedBlake2b(
+    SCCP_TON_FULL_LIGHT_CLIENT_AUDIT_FASTPQ_DSID_PREFIX_V1,
+    dsidPreimage,
+  );
+  const { shardState } = value;
+  let oldRoot;
+  let newRoot;
+  let permRoot;
+  switch (value.role.name) {
+    case "masterchainConfig":
+      oldRoot = shardState.masterchainConfigRoot;
+      newRoot = shardState.validatorSetHash;
+      permRoot = shardState.masterchainConfigProofHash;
+      break;
+    case "validatorSetTransition":
+      oldRoot = value.material.sourceTrustAnchorHash;
+      newRoot = shardState.validatorSetHash;
+      permRoot = shardState.transitionChainHash;
+      break;
+    case "shardAccountsDictionary":
+      oldRoot = shardState.shardStateRoot;
+      newRoot = shardState.transactionRoot;
+      permRoot = shardState.shardStateDictionaryRoot;
+      break;
+    default:
+      throw new TypeError("unsupported TON full-light-client audit role");
+  }
+  return {
+    dsid: bytesToHex(dsidHash.slice(0, 16)),
+    slot: shardState.masterchainSeqno.toString(),
+    oldRoot,
+    newRoot,
+    permRoot,
+    txSetHash: statementHash,
+  };
+}
+
+function canonicalTonFullLightClientAuditContextBytes(value, statementHash) {
+  requireTonFullLightClientAuditRequestHashSeparation(value, statementHash);
+  let out = new Uint8Array();
+  out = writeU8(out, 1);
+  out = writeU8(out, value.role.code);
+  out = writeString(out, value.role.circuitId, "circuitId");
+  out = writeString(out, SCCP_TON_FULL_LIGHT_CLIENT_AUDIT_FASTPQ_PARAMETER_SET_V1, "parameterSet");
+  out = writeString(out, value.role.verifierId, "verifierId");
+  out = concatBytes(out, hexToBytes(value.verifierHash, "verifierHash", 32));
+  out = concatBytes(out, hexToBytes(value.sourceVerifierMaterialHash, "sourceVerifierMaterialHash", 32));
+  out = concatBytes(out, hexToBytes(value.sourceAdapterDeploymentHash, "sourceAdapterDeploymentHash", 32));
+  out = concatBytes(out, hexToBytes(value.fullLightClientGateHash, "fullLightClientGateHash", 32));
+  out = concatBytes(out, hexToBytes(value.shardStateProofPublicInputsHash, "shardStateProofPublicInputsHash", 32));
+  out = concatBytes(out, hexToBytes(statementHash, "auditStatementHash", 32));
+  return out;
+}
+
+export function tonSccpFullLightClientAuditOpenVerifySchemaDescriptor(input, roleName) {
+  const role = normalizeTonFullLightClientAuditRole(roleName);
+  const value = normalizeTonFullLightClientAuditInput(input, role);
+  requireTonFullLightClientAuditRequestHashSeparation(value);
+  const { shardState } = value;
+  let descriptor = new Uint8Array();
+  descriptor = writeU8(descriptor, 1);
+  descriptor = writeU8(descriptor, role.code);
+  descriptor = writeString(descriptor, role.circuitId, "circuitId");
+  descriptor = writeString(descriptor, SCCP_TON_FULL_LIGHT_CLIENT_AUDIT_FASTPQ_PARAMETER_SET_V1, "parameterSet");
+  descriptor = writeI32Le(descriptor, TON_MAINNET_GLOBAL_ID);
+  descriptor = writeU32Le(descriptor, shardState.sourceDomain);
+  descriptor = writeString(descriptor, "verifier_id", "schemaField");
+  descriptor = writeString(descriptor, role.verifierId, "verifierId");
+  descriptor = writeString(descriptor, "verifier_hash", "schemaField");
+  descriptor = concatBytes(descriptor, hexToBytes(value.verifierHash, "verifierHash", 32));
+  descriptor = writeString(descriptor, "source_verifier_material_hash", "schemaField");
+  descriptor = concatBytes(descriptor, hexToBytes(value.sourceVerifierMaterialHash, "sourceVerifierMaterialHash", 32));
+  descriptor = writeString(descriptor, "source_adapter_deployment_hash", "schemaField");
+  descriptor = concatBytes(descriptor, hexToBytes(value.sourceAdapterDeploymentHash, "sourceAdapterDeploymentHash", 32));
+  descriptor = writeString(descriptor, "full_light_client_gate_hash", "schemaField");
+  descriptor = concatBytes(descriptor, hexToBytes(value.fullLightClientGateHash, "fullLightClientGateHash", 32));
+  for (const requiredInput of [
+    "role",
+    "source_domain",
+    "masterchain_seqno",
+    "masterchain_block_hash",
+    "shard_seqno",
+    "shard_block_hash",
+    "audit_statement_hash",
+    "source_verifier_material_hash",
+    "source_adapter_deployment_hash",
+    "full_light_client_gate_hash",
+    "verifier_hash",
+    ...role.requiredInputNames,
+  ]) {
+    descriptor = writeString(descriptor, requiredInput, "requiredInput");
+  }
+  return descriptor;
+}
+
+function tonFullLightClientAuditFastpqKey(prefix, role) {
+  return concatBytes(textEncoder.encode(prefix), Uint8Array.from([0]), textEncoder.encode(role.circuitId));
+}
+
+export function buildTonSccpFullLightClientAuditProofRequest(input, roleName) {
+  const role = normalizeTonFullLightClientAuditRole(roleName);
+  const value = normalizeTonFullLightClientAuditInput(input, role);
+  const { shardState } = value;
+  const statementBytes = canonicalTonSccpFullLightClientAuditStatementBytes(input, role.name);
+  const auditStatementHash = tonSccpFullLightClientAuditStatementHash(input, role.name);
+  const verificationContextBytes = canonicalTonFullLightClientAuditContextBytes(value, auditStatementHash);
+  const fastpqTransitions = [
+    {
+      key: bytesToHex(tonFullLightClientAuditFastpqKey(
+        SCCP_TON_FULL_LIGHT_CLIENT_AUDIT_FASTPQ_STATEMENT_KEY_V1,
+        role,
+      )),
+      operation: "meta_set",
+      oldValue: "0x",
+      newValue: bytesToHex(statementBytes),
+    },
+    {
+      key: bytesToHex(tonFullLightClientAuditFastpqKey(
+        SCCP_TON_FULL_LIGHT_CLIENT_AUDIT_FASTPQ_CONTEXT_KEY_V1,
+        role,
+      )),
+      operation: "meta_set",
+      oldValue: "0x",
+      newValue: bytesToHex(verificationContextBytes),
+    },
+    {
+      key: bytesToHex(tonFullLightClientAuditFastpqKey(
+        SCCP_TON_FULL_LIGHT_CLIENT_AUDIT_FASTPQ_GATE_KEY_V1,
+        role,
+      )),
+      operation: "meta_set",
+      oldValue: "0x",
+      newValue: value.fullLightClientGateHash,
+    },
+  ].sort((left, right) => left.key.localeCompare(right.key));
+  return immutableFastpqProofRequest(
+    {
+      version: 1,
+      proofFamily: SCCP_STARK_FRI_PROOF_FAMILY_V1,
+      circuitId: role.circuitId,
+      parameterSet: SCCP_TON_FULL_LIGHT_CLIENT_AUDIT_FASTPQ_PARAMETER_SET_V1,
+      role: role.wireName,
+      roleCode: role.code,
+      sourceDomain: SCCP_DOMAIN_TON,
+      masterchainSeqno: shardState.masterchainSeqno.toString(),
+      shardSeqno: shardState.shardSeqno.toString(),
+      verifierId: role.verifierId,
+      verifierHash: value.verifierHash,
+      sourceStateVerifierId: value.material.sourceStateVerifierId,
+      sourceStateVerifierHash: value.material.sourceStateVerifierHash,
+      sourceVerifierMaterialHash: value.sourceVerifierMaterialHash,
+      sourceAdapterDeploymentHash: value.sourceAdapterDeploymentHash,
+      fullLightClientGateHash: value.fullLightClientGateHash,
+      shardStateProofPublicInputsHash: value.shardStateProofPublicInputsHash,
+      shardStateVerificationProofHash: value.shardStateVerificationProofHash,
+      auditStatementHash,
+      statementBytes,
+      verificationContextBytes,
+      schemaDescriptor: tonSccpFullLightClientAuditOpenVerifySchemaDescriptor(input, role.name),
+      publicInputColumns: tonSccpFullLightClientAuditPublicInputColumns(input, role.name),
+      fastpqPublicInputs: tonFullLightClientAuditFastpqPublicInputs(value, auditStatementHash),
+      fastpqTransitions,
+    },
+    ["statementBytes", "verificationContextBytes", "schemaDescriptor"],
+  );
+}
+
+export function buildTonSccpMasterchainConfigProofRequest(input) {
+  return buildTonSccpFullLightClientAuditProofRequest(input, "masterchainConfig");
+}
+
+export function buildTonSccpValidatorSetTransitionProofRequest(input) {
+  return buildTonSccpFullLightClientAuditProofRequest(input, "validatorSetTransition");
+}
+
+export function buildTonSccpShardAccountsDictionaryProofRequest(input) {
+  return buildTonSccpFullLightClientAuditProofRequest(input, "shardAccountsDictionary");
+}
+
+export function buildTonSccpFullLightClientAuditProofRequests(input) {
+  return Object.freeze({
+    masterchainConfig: buildTonSccpMasterchainConfigProofRequest(input),
+    validatorSetTransition: buildTonSccpValidatorSetTransitionProofRequest(input),
+    shardAccountsDictionary: buildTonSccpShardAccountsDictionaryProofRequest(input),
+  });
+}
+
+const normalizeTonSourceStateProofRequestForWrapping = (request) => {
+  if (!request || typeof request !== "object" || Array.isArray(request)) {
+    throw new TypeError("TON source-state proof request must be an object");
+  }
+  const requestField = (camel, snake) => strictResultField(request, `request.${camel}`, camel, snake);
+  const nestedField = (container, label, ...names) => strictResultField(
+    container,
+    label,
+    ...new Set(names),
+  );
+  if (request.version !== 1) {
+    throw new TypeError("TON source-state proof request.version must be 1");
+  }
+  if (requestField("proofFamily", "proof_family") !== SCCP_STARK_FRI_PROOF_FAMILY_V1) {
+    throw new TypeError("TON source-state proof request.proofFamily must be stark-fri-v1");
+  }
+  const circuitId = normalizeNonEmptyString(requestField("circuitId", "circuit_id"), "request.circuitId");
+  if (!TON_SOURCE_STATE_VERIFICATION_CIRCUIT_IDS.has(circuitId)) {
+    throw new TypeError("request.circuitId must be a TON source-state OpenVerify circuit");
+  }
+  const expectedParameterSet =
+    circuitId === SCCP_TON_SHARD_STATE_OPEN_VERIFY_CIRCUIT_ID_V1
+      ? SCCP_TON_SHARD_STATE_FASTPQ_PARAMETER_SET_V1
+      : SCCP_TON_FULL_LIGHT_CLIENT_AUDIT_FASTPQ_PARAMETER_SET_V1;
+  if (requestField("parameterSet", "parameter_set") !== expectedParameterSet) {
+    throw new TypeError("request.parameterSet must be fastpq-lane-balanced");
+  }
+  if (requestField("sourceDomain", "source_domain") !== SCCP_DOMAIN_TON) {
+    throw new TypeError("TON source-state proof request.sourceDomain must be TON");
+  }
+  const masterchainSeqno = normalizeUnsignedBigInt(
+    requestField("masterchainSeqno", "masterchain_seqno"),
+    "request.masterchainSeqno",
+  );
+  const shardSeqno = normalizeUnsignedBigInt(
+    requestField("shardSeqno", "shard_seqno"),
+    "request.shardSeqno",
+  );
+  if (masterchainSeqno === 0n || shardSeqno === 0n) {
+    throw new TypeError("request.seqno must not be zero");
+  }
+  if (
+    requestField("sourceStateVerifierId", "source_state_verifier_id") !==
+    SCCP_TON_MAINNET_SHARD_STATE_VERIFIER_ID_V1
+  ) {
+    throw new TypeError("request.sourceStateVerifierId must match TON shard-state verifier profile");
+  }
+  const sourceStateVerifierHash = normalizeNonZeroHex32(
+    requestField("sourceStateVerifierHash", "source_state_verifier_hash"),
+    "request.sourceStateVerifierHash",
+  );
+  if (sourceStateVerifierHash === SCCP_TON_TEMPLATE_SOURCE_STATE_VERIFIER_HASH_V1) {
+    throw new TypeError("request.sourceStateVerifierHash must not be the TON template verifier hash");
+  }
+  const requestBytes = (camel, snake) => {
+    const value = requestField(camel, snake);
+    if (value === undefined || value === null) {
+      throw new TypeError(`request.${camel} is required`);
+    }
+    const bytes = toBytes(value, `request.${camel}`);
+    if (bytes.length === 0) {
+      throw new TypeError(`request.${camel} must not be empty`);
+    }
+    return bytes;
+  };
+  const statementBytes = requestBytes("statementBytes", "statement_bytes");
+  const verificationContextBytes = requestBytes("verificationContextBytes", "verification_context_bytes");
+  requestBytes("schemaDescriptor", "schema_descriptor");
+  let expectedTransitions;
+  let expectedDsid;
+  let expectedTxSetHash;
+  if (circuitId === SCCP_TON_SHARD_STATE_OPEN_VERIFY_CIRCUIT_ID_V1) {
+    const witnessCommitmentBytes = requestBytes("witnessCommitmentBytes", "witness_commitment_bytes");
+    const statementHash = bytesToHex(prefixedBlake2b(
+      SCCP_TON_SHARD_STATE_PROOF_PUBLIC_INPUTS_PREFIX_V1,
+      statementBytes,
+    ));
+    const suppliedStatementHash = normalizeNonZeroHex32(
+      requestField("shardStateProofPublicInputsHash", "shard_state_proof_public_inputs_hash"),
+      "request.shardStateProofPublicInputsHash",
+    );
+    if (suppliedStatementHash !== statementHash) {
+      throw new TypeError("request.shardStateProofPublicInputsHash must match request.statementBytes");
+    }
+    expectedDsid = bytesToHex(prefixedBlake2b(
+      SCCP_TON_SHARD_STATE_FASTPQ_DSID_PREFIX_V1,
+      hexToBytes(statementHash, "request.shardStateProofPublicInputsHash", 32),
+    ).slice(0, 16));
+    expectedTxSetHash = statementHash;
+    expectedTransitions = [
+      {
+        key: SCCP_TON_SHARD_STATE_FASTPQ_STATEMENT_KEY_V1,
+        operation: "meta_set",
+        oldValue: "0x",
+        newValue: bytesToHex(statementBytes),
+      },
+      {
+        key: SCCP_TON_SHARD_STATE_FASTPQ_WITNESS_KEY_V1,
+        operation: "meta_set",
+        oldValue: "0x",
+        newValue: bytesToHex(witnessCommitmentBytes),
+      },
+      {
+        key: SCCP_TON_SHARD_STATE_FASTPQ_CONTEXT_KEY_V1,
+        operation: "meta_set",
+        oldValue: "0x",
+        newValue: bytesToHex(verificationContextBytes),
+      },
+    ];
+  } else {
+    const roleProfile = normalizeTonFullLightClientAuditRole(strictResultField(request, "request.role", "role"));
+    if (requestField("roleCode", "role_code") !== roleProfile.code) {
+      throw new TypeError("request.roleCode must match request.role");
+    }
+    if (circuitId !== roleProfile.circuitId) {
+      throw new TypeError("request.circuitId must match request.role");
+    }
+    if (requestField("verifierId", "verifier_id") !== roleProfile.verifierId) {
+      throw new TypeError("request.verifierId must match request.role");
+    }
+    let fullLightClientGateHash = null;
+    let auditStatementHash = null;
+    for (const [camel, snake] of [
+      ["verifierHash", "verifier_hash"],
+      ["sourceVerifierMaterialHash", "source_verifier_material_hash"],
+      ["sourceAdapterDeploymentHash", "source_adapter_deployment_hash"],
+      ["fullLightClientGateHash", "full_light_client_gate_hash"],
+      ["shardStateProofPublicInputsHash", "shard_state_proof_public_inputs_hash"],
+      ["shardStateVerificationProofHash", "shard_state_verification_proof_hash"],
+      ["auditStatementHash", "audit_statement_hash"],
+    ]) {
+      const normalizedHash = normalizeNonZeroHex32(requestField(camel, snake), `request.${camel}`);
+      if (camel === "fullLightClientGateHash") {
+        fullLightClientGateHash = normalizedHash;
+      } else if (camel === "auditStatementHash") {
+        auditStatementHash = normalizedHash;
+      }
+    }
+    const expectedAuditStatementHash = bytesToHex(prefixedBlake2b(
+      SCCP_TON_FULL_LIGHT_CLIENT_AUDIT_STATEMENT_PREFIX_V1,
+      statementBytes,
+    ));
+    if (auditStatementHash !== expectedAuditStatementHash) {
+      throw new TypeError("request.auditStatementHash must match request.statementBytes");
+    }
+    let dsidPreimage = new Uint8Array();
+    dsidPreimage = writeU8(dsidPreimage, roleProfile.code);
+    dsidPreimage = concatBytes(
+      dsidPreimage,
+      hexToBytes(auditStatementHash, "request.auditStatementHash", 32),
+    );
+    expectedDsid = bytesToHex(prefixedBlake2b(
+      SCCP_TON_FULL_LIGHT_CLIENT_AUDIT_FASTPQ_DSID_PREFIX_V1,
+      dsidPreimage,
+    ).slice(0, 16));
+    expectedTxSetHash = auditStatementHash;
+    expectedTransitions = [
+      {
+        key: bytesToHex(tonFullLightClientAuditFastpqKey(
+          SCCP_TON_FULL_LIGHT_CLIENT_AUDIT_FASTPQ_STATEMENT_KEY_V1,
+          roleProfile,
+        )),
+        operation: "meta_set",
+        oldValue: "0x",
+        newValue: bytesToHex(statementBytes),
+      },
+      {
+        key: bytesToHex(tonFullLightClientAuditFastpqKey(
+          SCCP_TON_FULL_LIGHT_CLIENT_AUDIT_FASTPQ_CONTEXT_KEY_V1,
+          roleProfile,
+        )),
+        operation: "meta_set",
+        oldValue: "0x",
+        newValue: bytesToHex(verificationContextBytes),
+      },
+      {
+        key: bytesToHex(tonFullLightClientAuditFastpqKey(
+          SCCP_TON_FULL_LIGHT_CLIENT_AUDIT_FASTPQ_GATE_KEY_V1,
+          roleProfile,
+        )),
+        operation: "meta_set",
+        oldValue: "0x",
+        newValue: fullLightClientGateHash,
+      },
+    ];
+  }
+  const publicInputColumns = requestField("publicInputColumns", "public_input_columns");
+  if (!Array.isArray(publicInputColumns) || publicInputColumns.length === 0) {
+    throw new TypeError("request.publicInputColumns is required");
+  }
+  const fastpqPublicInputs = requestField("fastpqPublicInputs", "fastpq_public_inputs");
+  if (!fastpqPublicInputs || typeof fastpqPublicInputs !== "object" || Array.isArray(fastpqPublicInputs)) {
+    throw new TypeError("request.fastpqPublicInputs is required");
+  }
+  for (const [camel, snake] of [
+    ["dsid", "dsid"],
+    ["slot", "slot"],
+    ["oldRoot", "old_root"],
+    ["newRoot", "new_root"],
+    ["permRoot", "perm_root"],
+    ["txSetHash", "tx_set_hash"],
+  ]) {
+    const fastpqValue = nestedField(fastpqPublicInputs, `request.fastpqPublicInputs.${camel}`, camel, snake);
+    if (camel === "dsid") {
+      const normalizedDsid = bytesToHex(hexToBytes(fastpqValue, "request.fastpqPublicInputs.dsid", 16));
+      if (normalizedDsid !== expectedDsid) {
+        throw new TypeError("request.fastpqPublicInputs.dsid must match request.statementBytes");
+      }
+      continue;
+    }
+    if (camel === "txSetHash") {
+      const normalizedTxSetHash = normalizeNonZeroHex32(fastpqValue, "request.fastpqPublicInputs.txSetHash");
+      if (normalizedTxSetHash !== expectedTxSetHash) {
+        throw new TypeError("request.fastpqPublicInputs.txSetHash must match request.statementBytes");
+      }
+      continue;
+    }
+    normalizeNonEmptyString(
+      fastpqValue,
+      `request.fastpqPublicInputs.${camel}`,
+    );
+  }
+  const fastpqTransitions = requestField("fastpqTransitions", "fastpq_transitions");
+  if (!Array.isArray(fastpqTransitions) || fastpqTransitions.length === 0) {
+    throw new TypeError("request.fastpqTransitions is required");
+  }
+  const actualTransitions = fastpqTransitions.map((transition, index) => {
+    if (!transition || typeof transition !== "object" || Array.isArray(transition)) {
+      throw new TypeError(`request.fastpqTransitions[${index}] must be an object`);
+    }
+    return {
+      key: normalizeNonEmptyString(transition.key, `request.fastpqTransitions[${index}].key`),
+      operation: normalizeNonEmptyString(
+        nestedField(transition, `request.fastpqTransitions[${index}].operation`, "operation"),
+        `request.fastpqTransitions[${index}].operation`,
+      ),
+      oldValue: normalizeNonEmptyString(
+        nestedField(transition, `request.fastpqTransitions[${index}].oldValue`, "oldValue", "old_value"),
+        `request.fastpqTransitions[${index}].oldValue`,
+      ),
+      newValue: normalizeNonEmptyString(
+        nestedField(transition, `request.fastpqTransitions[${index}].newValue`, "newValue", "new_value"),
+        `request.fastpqTransitions[${index}].newValue`,
+      ),
+    };
+  });
+  const sortedActualTransitions = [...actualTransitions].sort((left, right) => left.key.localeCompare(right.key));
+  const sortedExpectedTransitions = [...expectedTransitions].sort((left, right) => left.key.localeCompare(right.key));
+  if (
+    sortedActualTransitions.length !== sortedExpectedTransitions.length ||
+    sortedActualTransitions.some((actual, index) => {
+      const expected = sortedExpectedTransitions[index];
+      return actual.key !== expected.key ||
+        actual.operation !== expected.operation ||
+        actual.oldValue !== expected.oldValue ||
+        actual.newValue !== expected.newValue;
+    })
+  ) {
+    throw new TypeError("request.fastpqTransitions must match the canonical TON source-state request");
+  }
+  return { circuitId };
+};
+
+export function wrapTonSccpSourceStateVerificationProof(proofBytes, request) {
+  const proofRequest = normalizeTonSourceStateProofRequestForWrapping(request);
+  const proof = copyBytes(toBytes(proofBytes, "proofBytes"));
+  requireNonZeroProofBytes(proof, "proofBytes");
+  return immutableSourceStateVerificationProof({
+    version: 1,
+    proofFamily: SCCP_STARK_FRI_PROOF_FAMILY_V1,
+    circuitId: proofRequest.circuitId,
+    proofBytes: proof,
+  });
+}
+
+export class TonSccpSourceStateProver {
+  constructor(options = {}) {
+    if (!options || typeof options !== "object" || Array.isArray(options)) {
+      throw new TypeError("TonSccpSourceStateProver options must be an object");
+    }
+    this.proveFn = strictOptionalConstructorOption(
+      options,
+      "TON SCCP source-state prover prove",
+      "prove",
+      "proveFn",
+      "prove_fn",
+    );
+  }
+
+  async proveRequest(request, options = {}) {
+    if (typeof this.proveFn !== "function") {
+      const error = new Error(
+        "TON SCCP source-state prover is not linked; provide a UI-safe prove function before generating source-state proof capsules",
+      );
+      error.code = "ERR_SCCP_TON_SOURCE_STATE_PROVER_UNAVAILABLE";
+      throw error;
+    }
+    normalizeTonSourceStateProofRequestForWrapping(request);
+    const callbackRequest = immutableSourceStateProverRequest(request);
+    const result = await this.proveFn(callbackRequest, options);
+    return wrapTonSccpSourceStateVerificationProof(
+      solanaSourceStateProofBytesFromResult(result, callbackRequest),
+      callbackRequest,
+    );
+  }
+
+  async proveShardState(input, options = {}) {
+    return this.proveRequest(buildTonShardStateProofRequest(input), options);
+  }
+
+  async proveFullLightClientAudit(input, options = {}) {
+    const requests = buildTonSccpFullLightClientAuditProofRequests(input);
+    return Object.freeze({
+      masterchainConfig: await this.proveRequest(requests.masterchainConfig, options),
+      validatorSetTransition: await this.proveRequest(requests.validatorSetTransition, options),
+      shardAccountsDictionary: await this.proveRequest(requests.shardAccountsDictionary, options),
+    });
+  }
+}
+
+const rejectTonTranscriptAliases = (input, label, ...names) => {
+  strictOptionalResultField(input, label, ...names);
+};
+
+const rejectTonValidatorSetPartAliases = (input) => {
+  rejectTonTranscriptAliases(input, "validatorPublicKeys", "validatorPublicKeys", "validator_public_keys");
+  rejectTonTranscriptAliases(input, "validatorWeights", "validatorWeights", "validator_weights");
+};
+
+const rejectTonMasterchainBlockCoordinateAliases = (input) => {
+  rejectTonTranscriptAliases(input, "sourceDomain", "sourceDomain", "source_domain");
+  rejectTonTranscriptAliases(input, "masterchainSeqno", "masterchainSeqno", "masterchain_seqno");
+  rejectTonTranscriptAliases(input, "masterchainWorkchainId", "masterchainWorkchainId", "masterchain_workchain_id");
+  rejectTonTranscriptAliases(input, "masterchainShard", "masterchainShard", "masterchain_shard");
+  rejectTonTranscriptAliases(input, "masterchainBlockHash", "masterchainBlockHash", "masterchain_block_hash");
+  rejectTonTranscriptAliases(input, "masterchainFileHash", "masterchainFileHash", "masterchain_file_hash");
+};
+
+const rejectTonShardBlockCoordinateAliases = (input) => {
+  rejectTonTranscriptAliases(input, "shardWorkchainId", "shardWorkchainId", "shard_workchain_id");
+  rejectTonTranscriptAliases(input, "shardShard", "shardShard", "shard_shard");
+  rejectTonTranscriptAliases(input, "shardSeqno", "shardSeqno", "shard_seqno");
+  rejectTonTranscriptAliases(input, "shardBlockHash", "shardBlockHash", "shard_block_hash");
+  rejectTonTranscriptAliases(input, "shardFileHash", "shardFileHash", "shard_file_hash");
+  rejectTonTranscriptAliases(input, "shardStateRoot", "shardStateRoot", "shard_state_root");
+};
+
+const rejectTonTransitionPayloadAliases = (input) => {
+  rejectTonTranscriptAliases(
+    input,
+    "nextValidatorSetPayloadHash",
+    "nextValidatorSetPayloadHash",
+    "next_validator_set_payload_hash",
+  );
+  rejectTonTranscriptAliases(
+    input,
+    "nextValidatorSetPayload",
+    "nextValidatorSetPayload",
+    "next_validator_set_payload",
+  );
+};
+
+const normalizeTonValidatorSetParts = (input) => {
+  if (!input || typeof input !== "object" || Array.isArray(input)) {
+    throw new TypeError("TON validator set input must be an object");
+  }
+  rejectTonValidatorSetPartAliases(input);
+  const publicKeys = input.validatorPublicKeys ?? input.validator_public_keys;
+  const weights = input.validatorWeights ?? input.validator_weights;
+  if (!Array.isArray(publicKeys) || !Array.isArray(weights) || publicKeys.length !== weights.length) {
+    throw new TypeError("TON validator public keys and weights must be same-length arrays");
+  }
+  if (publicKeys.length === 0) {
+    throw new TypeError("TON validator set must not be empty");
+  }
+  if (publicKeys.length > SCCP_TON_MAX_VALIDATORS) {
+    throw new RangeError(`TON validator set must contain 1..${SCCP_TON_MAX_VALIDATORS} validators`);
+  }
+  const seen = new Set();
+  const validatorPublicKeys = publicKeys.map((publicKey, index) => {
+    const bytes = toBytes(publicKey, `validatorPublicKeys[${index}]`);
+    if (bytes.length !== 32) {
+      throw new TypeError(`validatorPublicKeys[${index}] must be 32 bytes`);
+    }
+    if (bytes.every((byte) => byte === 0)) {
+      throw new TypeError(`validatorPublicKeys[${index}] must not be zero`);
+    }
+    const key = bytesToHex(bytes);
+    if (seen.has(key)) {
+      throw new TypeError("TON validator public keys must be unique");
+    }
+    seen.add(key);
+    return bytes;
+  });
+  const validatorWeights = weights.map((weight, index) => {
+    const numeric = normalizeUnsignedBigInt(weight, `validatorWeights[${index}]`);
+    if (numeric === 0n) {
+      throw new TypeError(`validatorWeights[${index}] must not be zero`);
+    }
+    return numeric;
+  });
+  return { validatorPublicKeys, validatorWeights };
+};
+
+export function canonicalTonValidatorSetBytes(input) {
+  const { validatorPublicKeys, validatorWeights } = normalizeTonValidatorSetParts(input);
+  let out = new Uint8Array();
+  out = writeU8(out, 1);
+  out = writeU32Le(out, validatorPublicKeys.length);
+  validatorPublicKeys.forEach((publicKey, index) => {
+    out = concatBytes(out, publicKey);
+    out = writeU64Le(out, validatorWeights[index]);
+  });
+  return out;
+}
+
+export function canonicalTonValidatorSetPayloadBytes(input) {
+  return canonicalTonValidatorSetBytes(input);
+}
+
+const validateTonValidatorSetPayloadBytes = (payload) => {
+  if (payload.length < 5 || payload[0] !== 1) {
+    throw new RangeError("validatorSetPayload must use version 1");
+  }
+  const view = new DataView(payload.buffer, payload.byteOffset, payload.byteLength);
+  const count = view.getUint32(1, true);
+  if (count === 0 || count > SCCP_TON_MAX_VALIDATORS || payload.length !== 5 + count * 40) {
+    throw new RangeError("validatorSetPayload has invalid validator count or length");
+  }
+  const seenKeys = new Set();
+  let offset = 5;
+  for (let index = 0; index < count; index += 1) {
+    const publicKey = payload.slice(offset, offset + 32);
+    offset += 32;
+    if (publicKey.every((byte) => byte === 0)) {
+      throw new RangeError(`validatorPublicKeys[${index}] must not be zero`);
+    }
+    const keyHex = bytesToHex(publicKey, false);
+    if (seenKeys.has(keyHex)) {
+      throw new RangeError("TON validator public keys must be unique");
+    }
+    seenKeys.add(keyHex);
+    const weight = new DataView(
+      payload.buffer,
+      payload.byteOffset + offset,
+      8,
+    ).getBigUint64(0, true);
+    offset += 8;
+    if (weight === 0n) {
+      throw new RangeError(`validatorWeights[${index}] must not be zero`);
+    }
+  }
+  return payload;
+};
+
+const tonValidatorSetPayloadBytes = (input) =>
+  validateTonValidatorSetPayloadBytes(
+    input instanceof Uint8Array || ArrayBuffer.isView(input) || input instanceof ArrayBuffer || Array.isArray(input)
+      ? toBytes(input, "validatorSetPayload")
+      : typeof input === "string"
+        ? hexToBytes(input, "validatorSetPayload")
+        : canonicalTonValidatorSetPayloadBytes(input),
+  );
+
+export function tonValidatorSetHash(input) {
+  return tonValidatorSetHashFromPayload(canonicalTonValidatorSetBytes(input));
+}
+
+export function tonValidatorSetHashFromPayload(input) {
+  return bytesToHex(
+    prefixedBlake2b(SCCP_TON_VALIDATOR_SET_PREFIX_V1, tonValidatorSetPayloadBytes(input)),
+  );
+}
+
+export function tonValidatorSetPayloadHash(input) {
+  return bytesToHex(
+    prefixedBlake2b(SCCP_TON_VALIDATOR_SET_PAYLOAD_PREFIX_V1, tonValidatorSetPayloadBytes(input)),
+  );
+}
+
+export function canonicalTonMasterchainConfigLeafBytes(input) {
+  if (!input || typeof input !== "object" || Array.isArray(input)) {
+    throw new TypeError("TON masterchain config leaf input must be an object");
+  }
+  rejectTonTranscriptAliases(input, "sourceDomain", "sourceDomain", "source_domain");
+  rejectTonTranscriptAliases(input, "masterchainSeqno", "masterchainSeqno", "masterchain_seqno");
+  rejectTonTranscriptAliases(input, "masterchainBlockHash", "masterchainBlockHash", "masterchain_block_hash");
+  rejectTonTranscriptAliases(input, "shardStateRoot", "shardStateRoot", "shard_state_root");
+  rejectTonTranscriptAliases(input, "validatorSetHash", "validatorSetHash", "validator_set_hash");
+  rejectTonTranscriptAliases(
+    input,
+    "validatorSetPayloadHash",
+    "validatorSetPayloadHash",
+    "validator_set_payload_hash",
+  );
+  let out = new Uint8Array();
+  out = writeU8(
+    out,
+    normalizeOptionalV1Version(input, "TON masterchain config leaf version", TypeError, "version"),
+  );
+  out = writeU32Le(
+    out,
+    normalizeSccpDomainId(input.sourceDomain ?? input.source_domain, "sourceDomain"),
+  );
+  out = writeU64Le(
+    out,
+    normalizeUnsignedBigInt(input.masterchainSeqno ?? input.masterchain_seqno, "masterchainSeqno"),
+  );
+  return concatBytes(
+    out,
+    hexToBytes(input.masterchainBlockHash ?? input.masterchain_block_hash, "masterchainBlockHash", 32),
+    hexToBytes(input.shardStateRoot ?? input.shard_state_root, "shardStateRoot", 32),
+    hexToBytes(input.validatorSetHash ?? input.validator_set_hash, "validatorSetHash", 32),
+    hexToBytes(
+      input.validatorSetPayloadHash ?? input.validator_set_payload_hash,
+      "validatorSetPayloadHash",
+      32,
+    ),
+  );
+}
+
+export function tonMasterchainConfigLeafHash(input) {
+  return bytesToHex(
+    prefixedBlake2b(
+      SCCP_TON_MASTERCHAIN_CONFIG_LEAF_PREFIX_V1,
+      canonicalTonMasterchainConfigLeafBytes(input),
+    ),
+  );
+}
+
+export function canonicalTonMasterchainConfigProofBytes(input) {
+  if (!input || typeof input !== "object" || Array.isArray(input)) {
+    throw new TypeError("TON masterchain config proof input must be an object");
+  }
+  rejectTonTranscriptAliases(input, "sourceDomain", "sourceDomain", "source_domain");
+  rejectTonTranscriptAliases(input, "masterchainSeqno", "masterchainSeqno", "masterchain_seqno");
+  rejectTonTranscriptAliases(input, "configInclusionBranch", "configInclusionBranch", "config_inclusion_branch");
+  rejectTonTranscriptAliases(input, "masterchainBlockHash", "masterchainBlockHash", "masterchain_block_hash");
+  rejectTonTranscriptAliases(input, "shardStateRoot", "shardStateRoot", "shard_state_root");
+  rejectTonTranscriptAliases(input, "configRoot", "configRoot", "config_root");
+  rejectTonTranscriptAliases(input, "configValueHash", "configValueHash", "config_value_hash");
+  rejectTonTranscriptAliases(input, "configDictionaryProofBoc", "configDictionaryProofBoc", "config_dictionary_proof_boc");
+  rejectTonTranscriptAliases(
+    input,
+    "validatorSetPayloadHash",
+    "validatorSetPayloadHash",
+    "validator_set_payload_hash",
+  );
+  rejectTonTranscriptAliases(input, "validatorSetHash", "validatorSetHash", "validator_set_hash");
+  rejectTonTranscriptAliases(input, "configLeafHash", "configLeafHash", "config_leaf_hash");
+  rejectTonTranscriptAliases(input, "configLeafIndex", "configLeafIndex", "config_leaf_index");
+  const version = normalizeOptionalV1Version(
+    input,
+    "TON masterchain config proof version",
+    TypeError,
+    "version",
+  );
+  const sourceDomain = normalizeSccpDomainId(
+    input.sourceDomain ?? input.source_domain,
+    "sourceDomain",
+  );
+  if (sourceDomain !== SCCP_DOMAIN_TON) {
+    throw new TypeError("sourceDomain must be TON");
+  }
+  const masterchainSeqno = normalizeUnsignedBigInt(
+    input.masterchainSeqno ?? input.masterchain_seqno,
+    "masterchainSeqno",
+  );
+  if (masterchainSeqno === 0n) {
+    throw new TypeError("masterchainSeqno must be non-zero");
+  }
+  const configInclusionBranch = normalizeSccpInclusionBranch(
+    input.configInclusionBranch ?? input.config_inclusion_branch,
+    "configInclusionBranch",
+  );
+  if (configInclusionBranch.length !== 0) {
+    throw new TypeError("configInclusionBranch must be empty when configDictionaryProofBoc is used");
+  }
+  const masterchainBlockHash = nonZeroHex32Bytes(
+    input.masterchainBlockHash ?? input.masterchain_block_hash,
+    "masterchainBlockHash",
+  );
+  const shardStateRoot = nonZeroHex32Bytes(
+    input.shardStateRoot ?? input.shard_state_root,
+    "shardStateRoot",
+  );
+  const configRoot = nonZeroHex32Bytes(input.configRoot ?? input.config_root, "configRoot");
+  const configValueHash = hexToBytes(
+    input.configValueHash ?? input.config_value_hash,
+    "configValueHash",
+    32,
+  );
+  if (!configValueHash.some((byte) => byte !== 0)) {
+    throw new TypeError("configValueHash must be non-zero");
+  }
+  const configDictionaryProofBoc = toBytes(
+    input.configDictionaryProofBoc ?? input.config_dictionary_proof_boc,
+    "configDictionaryProofBoc",
+  );
+  if (configDictionaryProofBoc.length === 0) {
+    throw new TypeError("configDictionaryProofBoc must be non-empty");
+  }
+  if (
+    tonHashmapEProofRootHash(configDictionaryProofBoc).toLowerCase()
+      !== bytesToHex(configRoot).toLowerCase()
+  ) {
+    throw new TypeError("configDictionaryProofBoc root does not match configRoot");
+  }
+  const openedConfigValueHash = tonHashmapECellRefValueHash(
+    configDictionaryProofBoc,
+    tonCurrentValidatorSetConfigKey(),
+    SCCP_TON_CONFIG_PARAM_KEY_BITS,
+  );
+  if (openedConfigValueHash?.toLowerCase() !== bytesToHex(configValueHash).toLowerCase()) {
+    throw new TypeError("configDictionaryProofBoc value does not match configValueHash");
+  }
+  const validatorSetPayloadHash = hexToBytes(
+    input.validatorSetPayloadHash ?? input.validator_set_payload_hash,
+    "validatorSetPayloadHash",
+    32,
+  );
+  if (!validatorSetPayloadHash.some((byte) => byte !== 0)) {
+    throw new TypeError("validatorSetPayloadHash must be non-zero");
+  }
+  const validatorSetPayload = tonConfigValidatorSetPayloadFromProofBoc(configDictionaryProofBoc);
+  if (validatorSetPayload === null) {
+    throw new TypeError("configDictionaryProofBoc must open config param 34");
+  }
+  if (tonValidatorSetPayloadHash(validatorSetPayload) !== bytesToHex(validatorSetPayloadHash)) {
+    throw new TypeError("configDictionaryProofBoc ValidatorSet does not match validatorSetPayloadHash");
+  }
+  const validatorSetHash = nonZeroHex32Bytes(
+    input.validatorSetHash ?? input.validator_set_hash,
+    "validatorSetHash",
+  );
+  if (tonValidatorSetHashFromPayload(validatorSetPayload) !== bytesToHex(validatorSetHash)) {
+    throw new TypeError("validatorSetHash must match configDictionaryProofBoc ValidatorSet");
+  }
+  const configLeafHash = nonZeroHex32Bytes(
+    input.configLeafHash ?? input.config_leaf_hash,
+    "configLeafHash",
+  );
+  const expectedConfigLeafHash = hexToBytes(
+    tonMasterchainConfigLeafHash({
+      sourceDomain,
+      masterchainSeqno,
+      masterchainBlockHash: bytesToHex(masterchainBlockHash),
+      shardStateRoot: bytesToHex(shardStateRoot),
+      validatorSetHash: bytesToHex(validatorSetHash),
+      validatorSetPayloadHash: bytesToHex(validatorSetPayloadHash),
+    }),
+    "configLeafHash",
+    32,
+  );
+  if (bytesToHex(configLeafHash, false) !== bytesToHex(expectedConfigLeafHash, false)) {
+    throw new TypeError("configLeafHash must match TON config proof fields");
+  }
+  let out = new Uint8Array();
+  out = writeU8(out, version);
+  out = writeU32Le(out, sourceDomain);
+  out = writeU64Le(out, masterchainSeqno);
+  out = concatBytes(
+    out,
+    masterchainBlockHash,
+    shardStateRoot,
+    configRoot,
+    validatorSetHash,
+    validatorSetPayloadHash,
+    configLeafHash,
+  );
+  const configLeafIndex = normalizeUnsignedBigInt(
+    input.configLeafIndex ?? input.config_leaf_index,
+    "configLeafIndex",
+  );
+  if (configLeafIndex !== SCCP_TON_CURRENT_VALIDATOR_SET_CONFIG_PARAM) {
+    throw new RangeError("configLeafIndex must be TON current validator set config param 34");
+  }
+  out = writeU16Le(out, SCCP_TON_CONFIG_PARAM_KEY_BITS);
+  out = writeU64Le(out, configLeafIndex);
+  out = concatBytes(out, configValueHash);
+  out = writeBytes(out, configDictionaryProofBoc);
+  out = writeU32Le(out, configInclusionBranch.length);
+  for (const sibling of configInclusionBranch) {
+    out = writeBytes(out, sibling);
+  }
+  return out;
+}
+
+export function tonMasterchainConfigProofHash(input) {
+  return bytesToHex(
+    prefixedBlake2b(
+      SCCP_TON_MASTERCHAIN_CONFIG_PROOF_PREFIX_V1,
+      canonicalTonMasterchainConfigProofBytes(input),
+    ),
+  );
+}
+
+export function canonicalTonMasterchainBlockMessageBytes(input) {
+  if (!input || typeof input !== "object" || Array.isArray(input)) {
+    throw new TypeError("TON masterchain block message input must be an object");
+  }
+  rejectTonMasterchainBlockCoordinateAliases(input);
+  rejectTonShardBlockCoordinateAliases(input);
+  rejectTonTranscriptAliases(input, "validatorSetHash", "validatorSetHash", "validator_set_hash");
+  rejectTonTranscriptAliases(input, "masterchainConfigRoot", "masterchainConfigRoot", "masterchain_config_root");
+  rejectTonTranscriptAliases(
+    input,
+    "masterchainConfigProofHash",
+    "masterchainConfigProofHash",
+    "masterchain_config_proof_hash",
+  );
+  rejectTonTranscriptAliases(input, "transactionRoot", "transactionRoot", "transaction_root");
+  rejectTonTranscriptAliases(input, "shardProofHash", "shardProofHash", "shard_proof_hash");
+  let out = new Uint8Array();
+  out = writeU8(out, 1);
+  out = writeU32Le(
+    out,
+    normalizeSccpDomainId(input.sourceDomain ?? input.source_domain, "sourceDomain"),
+  );
+  out = writeU64Le(
+    out,
+    normalizeUnsignedBigInt(input.masterchainSeqno ?? input.masterchain_seqno, "masterchainSeqno"),
+  );
+  const masterchainWorkchainId = normalizeSignedI32(
+    input.masterchainWorkchainId ?? input.masterchain_workchain_id,
+    "masterchainWorkchainId",
+  );
+  if (masterchainWorkchainId !== TON_MASTERCHAIN_WORKCHAIN_ID) {
+    throw new TypeError("masterchainWorkchainId must be TON masterchain");
+  }
+  const masterchainShard = normalizeUnsignedBigInt(
+    input.masterchainShard ?? input.masterchain_shard,
+    "masterchainShard",
+  );
+  if (masterchainShard !== TON_MASTERCHAIN_SHARD) {
+    throw new TypeError("masterchainShard must be TON masterchain shard");
+  }
+  out = writeI32Le(out, masterchainWorkchainId);
+  out = writeU64Le(out, masterchainShard);
+  const shardWorkchainId = normalizeSignedI32(
+    input.shardWorkchainId ?? input.shard_workchain_id,
+    "shardWorkchainId",
+  );
+  if (shardWorkchainId !== TON_BASECHAIN_WORKCHAIN_ID) {
+    throw new TypeError("shardWorkchainId must be TON basechain");
+  }
+  const shardShard = normalizeUnsignedBigInt(
+    input.shardShard ?? input.shard_shard,
+    "shardShard",
+  );
+  if (shardShard === 0n) {
+    throw new TypeError("shardShard must be non-zero");
+  }
+  const shardSeqno = normalizeUnsignedBigInt(
+    input.shardSeqno ?? input.shard_seqno,
+    "shardSeqno",
+  );
+  if (shardSeqno === 0n) {
+    throw new TypeError("shardSeqno must be non-zero");
+  }
+  out = concatBytes(
+    out,
+    nonZeroHex32Bytes(input.masterchainBlockHash ?? input.masterchain_block_hash, "masterchainBlockHash"),
+    nonZeroHex32Bytes(input.masterchainFileHash ?? input.masterchain_file_hash, "masterchainFileHash"),
+    hexToBytes(input.validatorSetHash ?? input.validator_set_hash, "validatorSetHash", 32),
+    hexToBytes(input.masterchainConfigRoot ?? input.masterchain_config_root, "masterchainConfigRoot", 32),
+    hexToBytes(
+      input.masterchainConfigProofHash ?? input.masterchain_config_proof_hash,
+      "masterchainConfigProofHash",
+      32,
+    ),
+  );
+  out = writeI32Le(out, shardWorkchainId);
+  out = writeU64Le(out, shardShard);
+  out = writeU64Le(out, shardSeqno);
+  return concatBytes(
+    out,
+    hexToBytes(input.shardBlockHash ?? input.shard_block_hash, "shardBlockHash", 32),
+    nonZeroHex32Bytes(input.shardFileHash ?? input.shard_file_hash, "shardFileHash"),
+    hexToBytes(input.shardStateRoot ?? input.shard_state_root, "shardStateRoot", 32),
+    hexToBytes(input.transactionRoot ?? input.transaction_root, "transactionRoot", 32),
+    hexToBytes(input.shardProofHash ?? input.shard_proof_hash, "shardProofHash", 32),
+  );
+}
+
+export function tonMasterchainBlockMessageHash(input) {
+  return bytesToHex(
+    prefixedBlake2b(
+      SCCP_TON_MASTERCHAIN_BLOCK_MESSAGE_PREFIX_V1,
+      canonicalTonMasterchainBlockMessageBytes(input),
+    ),
+  );
+}
+
+const tonTransitionPayloadHashBytes = (input) => {
+  rejectTonTransitionPayloadAliases(input);
+  const provided = input.nextValidatorSetPayloadHash ?? input.next_validator_set_payload_hash;
+  const payload = input.nextValidatorSetPayload ?? input.next_validator_set_payload;
+  if (provided === undefined && payload === undefined) {
+    throw new TypeError("nextValidatorSetPayloadHash or nextValidatorSetPayload is required");
+  }
+  const payloadHash = provided === undefined
+    ? hexToBytes(tonValidatorSetPayloadHash(payload), "nextValidatorSetPayloadHash", 32)
+    : hexToBytes(provided, "nextValidatorSetPayloadHash", 32);
+  if (payload !== undefined) {
+    const derived = hexToBytes(tonValidatorSetPayloadHash(payload), "nextValidatorSetPayloadHash", 32);
+    if (bytesToHex(payloadHash, false) !== bytesToHex(derived, false)) {
+      throw new TypeError("nextValidatorSetPayloadHash must match nextValidatorSetPayload");
+    }
+  }
+  return payloadHash;
+};
+
+export function canonicalTonValidatorSetTransitionMessageBytes(input) {
+  if (!input || typeof input !== "object" || Array.isArray(input)) {
+    throw new TypeError("TON validator-set transition message input must be an object");
+  }
+  rejectTonMasterchainBlockCoordinateAliases(input);
+  rejectTonTranscriptAliases(input, "fromValidatorSetSeqno", "fromValidatorSetSeqno", "from_validator_set_seqno");
+  rejectTonTranscriptAliases(input, "toValidatorSetSeqno", "toValidatorSetSeqno", "to_validator_set_seqno");
+  rejectTonTranscriptAliases(input, "parentValidatorSetHash", "parentValidatorSetHash", "parent_validator_set_hash");
+  rejectTonTranscriptAliases(input, "nextValidatorSetHash", "nextValidatorSetHash", "next_validator_set_hash");
+  rejectTonTransitionPayloadAliases(input);
+  rejectTonTranscriptAliases(
+    input,
+    "nextValidatorSetConfigHash",
+    "nextValidatorSetConfigHash",
+    "next_validator_set_config_hash",
+  );
+  const sourceDomain = normalizeSccpDomainId(input.sourceDomain ?? input.source_domain, "sourceDomain");
+  if (sourceDomain !== SCCP_DOMAIN_TON) {
+    throw new TypeError("sourceDomain must be TON");
+  }
+  const fromValidatorSetSeqno = normalizeUnsignedBigInt(
+    input.fromValidatorSetSeqno ?? input.from_validator_set_seqno,
+    "fromValidatorSetSeqno",
+  );
+  const toValidatorSetSeqno = normalizeUnsignedBigInt(
+    input.toValidatorSetSeqno ?? input.to_validator_set_seqno,
+    "toValidatorSetSeqno",
+  );
+  if (fromValidatorSetSeqno + 1n !== toValidatorSetSeqno) {
+    throw new TypeError("toValidatorSetSeqno must be exactly one greater than fromValidatorSetSeqno");
+  }
+  const masterchainSeqno = normalizeUnsignedBigInt(input.masterchainSeqno ?? input.masterchain_seqno, "masterchainSeqno");
+  if (masterchainSeqno === 0n) {
+    throw new TypeError("masterchainSeqno must be non-zero");
+  }
+  const version = normalizeOptionalV1Version(
+    input,
+    "TON validator-set transition version",
+    TypeError,
+    "version",
+  );
+  let out = new Uint8Array();
+  out = writeU8(out, version);
+  out = writeU32Le(out, sourceDomain);
+  out = writeU64Le(out, fromValidatorSetSeqno);
+  out = writeU64Le(out, toValidatorSetSeqno);
+  out = writeU64Le(out, masterchainSeqno);
+  const masterchainWorkchainId = normalizeSignedI32(
+    input.masterchainWorkchainId ?? input.masterchain_workchain_id,
+    "masterchainWorkchainId",
+  );
+  if (masterchainWorkchainId !== TON_MASTERCHAIN_WORKCHAIN_ID) {
+    throw new TypeError("masterchainWorkchainId must be TON masterchain");
+  }
+  const masterchainShard = normalizeUnsignedBigInt(
+    input.masterchainShard ?? input.masterchain_shard,
+    "masterchainShard",
+  );
+  if (masterchainShard !== TON_MASTERCHAIN_SHARD) {
+    throw new TypeError("masterchainShard must be TON masterchain shard");
+  }
+  out = writeI32Le(out, masterchainWorkchainId);
+  out = writeU64Le(out, masterchainShard);
+  return concatBytes(
+    out,
+    nonZeroHex32Bytes(input.masterchainBlockHash ?? input.masterchain_block_hash, "masterchainBlockHash"),
+    nonZeroHex32Bytes(input.masterchainFileHash ?? input.masterchain_file_hash, "masterchainFileHash"),
+    nonZeroHex32Bytes(
+      input.parentValidatorSetHash ?? input.parent_validator_set_hash,
+      "parentValidatorSetHash",
+    ),
+    nonZeroHex32Bytes(input.nextValidatorSetHash ?? input.next_validator_set_hash, "nextValidatorSetHash"),
+    tonTransitionPayloadHashBytes(input),
+    nonZeroHex32Bytes(
+      input.nextValidatorSetConfigHash ?? input.next_validator_set_config_hash,
+      "nextValidatorSetConfigHash",
+    ),
+  );
+}
+
+export function tonValidatorSetTransitionMessageHash(input) {
+  return bytesToHex(
+    prefixedBlake2b(
+      SCCP_TON_VALIDATOR_SET_TRANSITION_MESSAGE_PREFIX_V1,
+      canonicalTonValidatorSetTransitionMessageBytes(input),
+    ),
+  );
+}
+
+const tonSignerIndicesFromBitmap = (bitmap, rosterLength) => {
+  if (bitmap.length !== Math.ceil(rosterLength / 8)) {
+    throw new TypeError("signersBitmap length must match validatorPublicKeys");
+  }
+  const indices = [];
+  bitmap.forEach((byte, byteIndex) => {
+    for (let bit = 0; bit < 8; bit += 1) {
+      if (((byte >> bit) & 1) === 0) {
+        continue;
+      }
+      const index = byteIndex * 8 + bit;
+      if (index >= rosterLength) {
+        throw new TypeError("signersBitmap must not set padding bits");
+      }
+      indices.push(index);
+    }
+  });
+  return indices;
+};
+
+const canonicalTonValidatorSignaturesProofBytes = (proof) => {
+  if (!proof || typeof proof !== "object" || Array.isArray(proof)) {
+    throw new TypeError("TON validator signature proof must be an object");
+  }
+  rejectTonValidatorSetPartAliases(proof);
+  rejectTonTranscriptAliases(proof, "totalWeight", "totalWeight", "total_weight");
+  rejectTonTranscriptAliases(proof, "signedWeight", "signedWeight", "signed_weight");
+  rejectTonTranscriptAliases(proof, "signersBitmap", "signersBitmap", "signers_bitmap");
+  rejectTonTranscriptAliases(proof, "blockMessageHash", "blockMessageHash", "block_message_hash");
+  const { validatorPublicKeys, validatorWeights } = normalizeTonValidatorSetParts({
+    validatorPublicKeys: proof.validatorPublicKeys ?? proof.validator_public_keys,
+    validatorWeights: proof.validatorWeights ?? proof.validator_weights,
+  });
+  const signatures = proof.signatures;
+  if (!Array.isArray(signatures)) {
+    throw new TypeError("signatures must be an array");
+  }
+  const version = normalizeOptionalV1Version(
+    proof,
+    "TON validator signature proof version",
+    TypeError,
+    "version",
+  );
+  const totalWeight = normalizeUnsignedBigInt(proof.totalWeight ?? proof.total_weight, "totalWeight");
+  const signedWeight = normalizeUnsignedBigInt(proof.signedWeight ?? proof.signed_weight, "signedWeight");
+  const computedTotalWeight = validatorWeights.reduce((sum, weight) => sum + weight, 0n);
+  if (totalWeight !== computedTotalWeight) {
+    throw new TypeError("totalWeight must match validatorWeights");
+  }
+  const signersBitmap = toBytes(proof.signersBitmap ?? proof.signers_bitmap, "signersBitmap");
+  const signerIndices = tonSignerIndicesFromBitmap(signersBitmap, validatorPublicKeys.length);
+  if (signerIndices.length === 0) {
+    throw new TypeError("signersBitmap must select at least one validator");
+  }
+  if (signatures.length !== signerIndices.length) {
+    throw new TypeError("signatures length must match signersBitmap");
+  }
+  const computedSignedWeight = signerIndices.reduce(
+    (sum, index) => sum + validatorWeights[index],
+    0n,
+  );
+  if (signedWeight !== computedSignedWeight) {
+    throw new TypeError("signedWeight must match signersBitmap");
+  }
+  if (signedWeight * 3n <= totalWeight * 2n) {
+    throw new TypeError("signedWeight must be greater than two thirds of totalWeight");
+  }
+  let out = new Uint8Array();
+  out = writeU8(out, version);
+  out = writeU64Le(out, totalWeight);
+  out = writeU64Le(out, signedWeight);
+  out = concatBytes(
+    out,
+    nonZeroHex32Bytes(proof.blockMessageHash ?? proof.block_message_hash, "blockMessageHash"),
+  );
+  out = writeU32Le(out, validatorPublicKeys.length);
+  for (const publicKey of validatorPublicKeys) {
+    out = writeBytes(out, publicKey);
+  }
+  out = writeU32Le(out, validatorWeights.length);
+  for (const weight of validatorWeights) {
+    out = writeU64Le(out, weight);
+  }
+  out = writeBytes(out, signersBitmap);
+  out = writeU32Le(out, signatures.length);
+  signatures.forEach((signature, index) => {
+    const bytes = toBytes(signature, `signatures[${index}]`);
+    if (bytes.length !== 64) {
+      throw new TypeError(`signatures[${index}] must be 64 bytes`);
+    }
+    if (bytes.every((byte) => byte === 0)) {
+      throw new TypeError(`signatures[${index}] must not be all zero`);
+    }
+    out = writeBytes(out, bytes);
+  });
+  return out;
+};
+
+export function canonicalTonMasterchainValidatorSignaturesBytes(input) {
+  if (!input || typeof input !== "object" || Array.isArray(input)) {
+    throw new TypeError("TON masterchain validator signatures input must be an object");
+  }
+  rejectTonValidatorSetPartAliases(input);
+  rejectTonTranscriptAliases(input, "validatorSetHash", "validatorSetHash", "validator_set_hash");
+  const validatorSetHash = hexToBytes(tonValidatorSetHash({
+    validatorPublicKeys: input.validatorPublicKeys ?? input.validator_public_keys,
+    validatorWeights: input.validatorWeights ?? input.validator_weights,
+  }), "validatorSetHash", 32);
+  const provided = input.validatorSetHash ?? input.validator_set_hash;
+  if (provided !== undefined) {
+    const providedHash = hexToBytes(provided, "validatorSetHash", 32);
+    if (bytesToHex(providedHash, false) !== bytesToHex(validatorSetHash, false)) {
+      throw new TypeError("validatorSetHash must match validator public keys and weights");
+    }
+  }
+  return concatBytes(canonicalTonValidatorSignaturesProofBytes(input), validatorSetHash);
+}
+
+export function tonMasterchainValidatorSignaturesHash(input) {
+  return bytesToHex(
+    prefixedBlake2b(
+      SCCP_TON_MASTERCHAIN_SIGNATURES_PREFIX_V1,
+      canonicalTonMasterchainValidatorSignaturesBytes(input),
+    ),
+  );
+}
+
+export function canonicalTonValidatorSetTransitionSignatureBytes(input) {
+  if (!input || typeof input !== "object" || Array.isArray(input)) {
+    throw new TypeError("TON validator-set transition signature input must be an object");
+  }
+  rejectTonMasterchainBlockCoordinateAliases(input);
+  rejectTonTranscriptAliases(input, "fromValidatorSetSeqno", "fromValidatorSetSeqno", "from_validator_set_seqno");
+  rejectTonTranscriptAliases(input, "toValidatorSetSeqno", "toValidatorSetSeqno", "to_validator_set_seqno");
+  rejectTonTranscriptAliases(input, "validatorSignatureProof", "validatorSignatureProof", "validator_signature_proof");
+  rejectTonTranscriptAliases(input, "parentValidatorSetHash", "parentValidatorSetHash", "parent_validator_set_hash");
+  rejectTonTranscriptAliases(input, "nextValidatorSetHash", "nextValidatorSetHash", "next_validator_set_hash");
+  rejectTonTransitionPayloadAliases(input);
+  rejectTonTranscriptAliases(input, "transitionMessageHash", "transitionMessageHash", "transition_message_hash");
+  rejectTonTranscriptAliases(
+    input,
+    "nextValidatorSetConfigHash",
+    "nextValidatorSetConfigHash",
+    "next_validator_set_config_hash",
+  );
+  const version = normalizeOptionalV1Version(
+    input,
+    "TON validator-set transition proof version",
+    TypeError,
+    "version",
+  );
+  const signatureProof = input.validatorSignatureProof ?? input.validator_signature_proof;
+  const parentValidatorSetHash = hexToBytes(tonValidatorSetHash({
+    validatorPublicKeys: signatureProof?.validatorPublicKeys ?? signatureProof?.validator_public_keys,
+    validatorWeights: signatureProof?.validatorWeights ?? signatureProof?.validator_weights,
+  }), "parentValidatorSetHash", 32);
+  const providedParentValidatorSetHash = hexToBytes(
+    input.parentValidatorSetHash ?? input.parent_validator_set_hash,
+    "parentValidatorSetHash",
+    32,
+  );
+  if (bytesToHex(providedParentValidatorSetHash, false) !== bytesToHex(parentValidatorSetHash, false)) {
+    throw new TypeError("parentValidatorSetHash must match validatorSignatureProof");
+  }
+  const nextPayload = tonValidatorSetPayloadBytes(
+    input.nextValidatorSetPayload ?? input.next_validator_set_payload,
+  );
+  const nextPayloadHash = tonTransitionPayloadHashBytes(input);
+  const derivedNextValidatorSetHash = hexToBytes(
+    tonValidatorSetHashFromPayload(nextPayload),
+    "nextValidatorSetHash",
+    32,
+  );
+  const nextValidatorSetHash = hexToBytes(
+    input.nextValidatorSetHash ?? input.next_validator_set_hash,
+    "nextValidatorSetHash",
+    32,
+  );
+  if (bytesToHex(nextValidatorSetHash, false) !== bytesToHex(derivedNextValidatorSetHash, false)) {
+    throw new TypeError("nextValidatorSetHash must match nextValidatorSetPayload");
+  }
+  const transitionMessageHash = hexToBytes(
+    input.transitionMessageHash ?? input.transition_message_hash,
+    "transitionMessageHash",
+    32,
+  );
+  const transitionMessageInput = {
+    version,
+    sourceDomain: input.sourceDomain ?? input.source_domain,
+    fromValidatorSetSeqno: input.fromValidatorSetSeqno ?? input.from_validator_set_seqno,
+    toValidatorSetSeqno: input.toValidatorSetSeqno ?? input.to_validator_set_seqno,
+    masterchainSeqno: input.masterchainSeqno ?? input.masterchain_seqno,
+    masterchainWorkchainId: input.masterchainWorkchainId ?? input.masterchain_workchain_id,
+    masterchainShard: input.masterchainShard ?? input.masterchain_shard,
+    masterchainBlockHash: input.masterchainBlockHash ?? input.masterchain_block_hash,
+    masterchainFileHash: input.masterchainFileHash ?? input.masterchain_file_hash,
+    parentValidatorSetHash: input.parentValidatorSetHash ?? input.parent_validator_set_hash,
+    nextValidatorSetHash: input.nextValidatorSetHash ?? input.next_validator_set_hash,
+    nextValidatorSetPayloadHash: bytesToHex(nextPayloadHash),
+    nextValidatorSetConfigHash: input.nextValidatorSetConfigHash ?? input.next_validator_set_config_hash,
+  };
+  const expectedTransitionMessageHash = hexToBytes(
+    tonValidatorSetTransitionMessageHash(transitionMessageInput),
+    "transitionMessageHash",
+    32,
+  );
+  if (bytesToHex(transitionMessageHash, false) !== bytesToHex(expectedTransitionMessageHash, false)) {
+    throw new TypeError("transitionMessageHash must match transition message fields");
+  }
+  const signedBlockMessageHash = hexToBytes(
+    signatureProof?.blockMessageHash ?? signatureProof?.block_message_hash,
+    "blockMessageHash",
+    32,
+  );
+  if (bytesToHex(signedBlockMessageHash, false) !== bytesToHex(transitionMessageHash, false)) {
+    throw new TypeError("validatorSignatureProof.blockMessageHash must match transitionMessageHash");
+  }
+  let out = new Uint8Array();
+  out = writeU8(out, version);
+  out = writeU32Le(
+    out,
+    normalizeSccpDomainId(input.sourceDomain ?? input.source_domain, "sourceDomain"),
+  );
+  out = writeU64Le(
+    out,
+    normalizeUnsignedBigInt(
+      input.fromValidatorSetSeqno ?? input.from_validator_set_seqno,
+      "fromValidatorSetSeqno",
+    ),
+  );
+  out = writeU64Le(
+    out,
+    normalizeUnsignedBigInt(
+      input.toValidatorSetSeqno ?? input.to_validator_set_seqno,
+      "toValidatorSetSeqno",
+    ),
+  );
+  out = writeU64Le(
+    out,
+    normalizeUnsignedBigInt(input.masterchainSeqno ?? input.masterchain_seqno, "masterchainSeqno"),
+  );
+  const masterchainWorkchainId = normalizeSignedI32(
+    input.masterchainWorkchainId ?? input.masterchain_workchain_id,
+    "masterchainWorkchainId",
+  );
+  if (masterchainWorkchainId !== TON_MASTERCHAIN_WORKCHAIN_ID) {
+    throw new TypeError("masterchainWorkchainId must be TON masterchain");
+  }
+  const masterchainShard = normalizeUnsignedBigInt(
+    input.masterchainShard ?? input.masterchain_shard,
+    "masterchainShard",
+  );
+  if (masterchainShard !== TON_MASTERCHAIN_SHARD) {
+    throw new TypeError("masterchainShard must be TON masterchain shard");
+  }
+  out = writeI32Le(out, masterchainWorkchainId);
+  out = writeU64Le(out, masterchainShard);
+  return concatBytes(
+    out,
+    nonZeroHex32Bytes(input.masterchainBlockHash ?? input.masterchain_block_hash, "masterchainBlockHash"),
+    nonZeroHex32Bytes(input.masterchainFileHash ?? input.masterchain_file_hash, "masterchainFileHash"),
+    providedParentValidatorSetHash,
+    nextValidatorSetHash,
+    writeBytes(new Uint8Array(), nextPayload),
+    nextPayloadHash,
+    hexToBytes(
+      input.nextValidatorSetConfigHash ?? input.next_validator_set_config_hash,
+      "nextValidatorSetConfigHash",
+      32,
+    ),
+    transitionMessageHash,
+    parentValidatorSetHash,
+    canonicalTonValidatorSignaturesProofBytes(signatureProof),
+  );
+}
+
+export function tonValidatorSetTransitionSignatureHash(input) {
+  return bytesToHex(
+    prefixedBlake2b(
+      SCCP_TON_VALIDATOR_SET_TRANSITION_SIGNATURES_PREFIX_V1,
+      canonicalTonValidatorSetTransitionSignatureBytes(input),
+    ),
+  );
+}
+
+export function canonicalEvmReceiptRootMptValue(receiptRoot) {
+  const root = hexToBytes(receiptRoot, "receiptRoot", 32);
+  const value = rlpList([
+    rlpBytes(textEncoder.encode(SCCP_EVM_RECEIPT_ROOT_VALUE_MARKER_V1)),
+    rlpBytes(root),
+  ]);
+  if (value.length > SCCP_EVM_MAX_RECEIPT_VALUE_BYTES) {
+    throw new TypeError(
+      `EVM receipt root MPT value must contain 1..${SCCP_EVM_MAX_RECEIPT_VALUE_BYTES} bytes`,
+    );
+  }
+  return value;
+}
+
+export function canonicalTronReceiptRootMptValue(receiptRoot) {
+  const root = nonZeroHex32Bytes(receiptRoot, "receiptRoot");
+  const value = rlpList([
+    rlpBytes(textEncoder.encode(SCCP_TRON_RECEIPT_ROOT_VALUE_MARKER_V1)),
+    rlpBytes(root),
+  ]);
+  if (value.length > SCCP_TRON_MAX_RECEIPT_VALUE_BYTES) {
+    throw new TypeError(
+      `TRON receipt root MPT value must contain 1..${SCCP_TRON_MAX_RECEIPT_VALUE_BYTES} bytes`,
+    );
+  }
+  return value;
+}
+
+export function canonicalTronSccpReceiptProofBytes(input) {
+  if (!input || typeof input !== "object" || Array.isArray(input)) {
+    throw new TypeError("TRON SCCP receipt proof input must be an object");
+  }
+  const sourceEventDigest = nonZeroHex32Bytes(
+    strictResultField(input, "sourceEventDigest", "sourceEventDigest", "source_event_digest"),
+    "sourceEventDigest",
+  );
+  const receiptRoot = nonZeroHex32Bytes(
+    strictResultField(input, "receiptRoot", "receiptRoot", "receipt_root", "receiptOrMessageRoot", "receipt_or_message_root"),
+    "receiptRoot",
+  );
+  const transactionRoot = nonZeroHex32Bytes(
+    strictResultField(input, "transactionRoot", "transactionRoot", "transaction_root"),
+    "transactionRoot",
+  );
+  const inclusionBranch = normalizeSccpInclusionBranch(
+    strictResultField(input, "inclusionBranch", "inclusionBranch", "inclusion_branch"),
+    "inclusionBranch",
+    { requireNonEmpty: true },
+  );
+  let out = new Uint8Array();
+  out = writeU8(out, 1);
+  out = concatBytes(out, sourceEventDigest, receiptRoot, transactionRoot);
+  return writeSccpH256Branch(out, inclusionBranch);
+}
+
+export function tronSccpReceiptProofHash(input) {
+  return bytesToHex(
+    prefixedBlake2b(
+      SCCP_TRON_RECEIPT_PROOF_PREFIX_V1,
+      canonicalTronSccpReceiptProofBytes(input),
+    ),
+  );
+}
+
+export function canonicalTronSccpReceiptStateProofBytes(input) {
+  if (!input || typeof input !== "object" || Array.isArray(input)) {
+    throw new TypeError("TRON SCCP receipt-state proof input must be an object");
+  }
+  const sourceEventDigest = nonZeroHex32Bytes(
+    strictResultField(input, "sourceEventDigest", "sourceEventDigest", "source_event_digest"),
+    "sourceEventDigest",
+  );
+  const receiptRoot = nonZeroHex32Bytes(
+    strictResultField(input, "receiptRoot", "receiptRoot", "receipt_root", "receiptOrMessageRoot", "receipt_or_message_root"),
+    "receiptRoot",
+  );
+  const transactionRoot = nonZeroHex32Bytes(
+    strictResultField(input, "transactionRoot", "transactionRoot", "transaction_root"),
+    "transactionRoot",
+  );
+  const receiptRootIndex = normalizeUnsignedBigInt(
+    strictResultField(input, "receiptRootIndex", "receiptRootIndex", "receipt_root_index"),
+    "receiptRootIndex",
+  );
+  const receiptTrieProofNodes = normalizeSccpByteVectors(
+    strictResultField(input, "receiptTrieProofNodes", "receiptTrieProofNodes", "receipt_trie_proof_nodes"),
+    "receiptTrieProofNodes",
+    {
+      maxCount: SCCP_TRON_MAX_MPT_PROOF_NODES,
+      maxBytes: SCCP_TRON_MAX_MPT_NODE_BYTES,
+      requireNonEmpty: true,
+    },
+  );
+  const inclusionBranch = normalizeSccpInclusionBranch(
+    strictResultField(input, "inclusionBranch", "inclusionBranch", "inclusion_branch"),
+    "inclusionBranch",
+    { requireNonEmpty: true },
+  );
+  let out = new Uint8Array();
+  out = writeU8(out, 1);
+  out = concatBytes(out, sourceEventDigest, receiptRoot, transactionRoot);
+  out = writeU64Le(out, receiptRootIndex);
+  out = writeU32Le(out, receiptTrieProofNodes.length);
+  for (const node of receiptTrieProofNodes) {
+    out = writeBytes(out, node);
+  }
+  return writeSccpH256Branch(out, inclusionBranch);
+}
+
+export function tronSccpReceiptStateProofHash(input) {
+  return bytesToHex(
+    prefixedBlake2b(
+      SCCP_TRON_RECEIPT_STATE_PROOF_PREFIX_V1,
+      canonicalTronSccpReceiptStateProofBytes(input),
+    ),
+  );
+}
+
+export function tronSccpSourceMessageCallData(
+  sourceDomain,
+  targetDomain,
+  sourceEventDigest,
+) {
+  const normalizedSourceDomain = normalizeSccpDomainId(sourceDomain, "sourceDomain");
+  const normalizedTargetDomain = normalizeSccpDomainId(targetDomain, "targetDomain");
+  if (normalizedSourceDomain !== SCCP_DOMAIN_TRON) {
+    throw new RangeError("sourceDomain must be TRON for SCCP TRON source-call calldata");
+  }
+  if (normalizedTargetDomain !== SCCP_DOMAIN_SORA) {
+    throw new RangeError("targetDomain must be SORA for SCCP TRON source-call calldata");
+  }
+  const selector = keccak_256(
+    textEncoder.encode(SCCP_TRON_SOURCE_MESSAGE_CALL_ABI_V1),
+  ).slice(0, 4);
+  const digest = nonZeroHex32Bytes(sourceEventDigest, "sourceEventDigest");
+  return concatBytes(
+    selector,
+    abiWordU32(normalizedSourceDomain, "sourceDomain"),
+    abiWordU32(normalizedTargetDomain, "targetDomain"),
+    digest,
+  );
+}
+
+const tronSourceTransactionError = () =>
+  new TypeError("transactionBytes must be a successful TRON TriggerSmartContract source call");
+
+const readProtobufBytesField = (bytes, cursor, label) => {
+  const length = readCanonicalProtobufVarint(bytes, cursor, label);
+  if (length > BigInt(bytes.length - cursor.offset)) {
+    throw new TypeError(`${label} contains truncated protobuf bytes field`);
+  }
+  const end = cursor.offset + Number(length);
+  const value = bytes.slice(cursor.offset, end);
+  cursor.offset = end;
+  return value;
+};
+
+const protobufFieldNumber = (key, label) => {
+  const fieldNumber = key >> 3n;
+  if (fieldNumber > BigInt(Number.MAX_SAFE_INTEGER)) {
+    throw new TypeError(`${label} protobuf field number is too large`);
+  }
+  return Number(fieldNumber);
+};
+
+const tronTransactionResultSuccess = (result) => {
+  const cursor = { offset: 0 };
+  let feeSeen = false;
+  let retSeen = false;
+  let contractRetSeen = false;
+  while (cursor.offset < result.length) {
+    const key = readCanonicalProtobufVarint(result, cursor, "transactionResult");
+    const fieldNumber = protobufFieldNumber(key, "transactionResult");
+    const wireType = Number(key & 0x07n);
+    if (fieldNumber === 1 && wireType === 0 && !feeSeen) {
+      feeSeen = true;
+      readCanonicalProtobufVarint(result, cursor, "transactionResult");
+    } else if (fieldNumber === 2 && wireType === 0 && !retSeen) {
+      retSeen = true;
+      if (readCanonicalProtobufVarint(result, cursor, "transactionResult") !== 0n) return false;
+    } else if (fieldNumber === 3 && wireType === 0 && !contractRetSeen) {
+      contractRetSeen = true;
+      if (readCanonicalProtobufVarint(result, cursor, "transactionResult") !== 1n) return false;
+    } else {
+      return false;
+    }
+  }
+  return contractRetSeen;
+};
+
+const readTronProtobufAnyValue = (parameter) => {
+  const cursor = { offset: 0 };
+  let typeUrl = null;
+  let value = null;
+  while (cursor.offset < parameter.length) {
+    const key = readCanonicalProtobufVarint(parameter, cursor, "triggerParameter");
+    const fieldNumber = protobufFieldNumber(key, "triggerParameter");
+    const wireType = Number(key & 0x07n);
+    if (fieldNumber === 1 && wireType === 2 && typeUrl === null) {
+      typeUrl = readProtobufBytesField(parameter, cursor, "triggerParameter");
+    } else if (fieldNumber === 2 && wireType === 2 && value === null) {
+      value = readProtobufBytesField(parameter, cursor, "triggerParameter");
+    } else {
+      return null;
+    }
+  }
+  if (
+    !typeUrl ||
+    !bytesEqual(
+      typeUrl,
+      textEncoder.encode(SCCP_TRON_TRIGGER_SMART_CONTRACT_TYPE_URL_V1),
+    )
+  ) {
+    return null;
+  }
+  return value;
+};
+
+const tronTriggerSourceCallOwnerAddress = (
+  trigger,
+  sourceEventDigest,
+  expectedContractAddress = null,
+  expectedOwnerAddress = null,
+) => {
+  const cursor = { offset: 0 };
+  let ownerAddress = null;
+  let contractAddress = null;
+  let data = null;
+  let callValueSeen = false;
+  let callTokenValueSeen = false;
+  let tokenIdSeen = false;
+  while (cursor.offset < trigger.length) {
+    const key = readCanonicalProtobufVarint(trigger, cursor, "triggerContract");
+    const fieldNumber = protobufFieldNumber(key, "triggerContract");
+    const wireType = Number(key & 0x07n);
+    if (fieldNumber === 1 && wireType === 2 && ownerAddress === null) {
+      ownerAddress = readProtobufBytesField(trigger, cursor, "triggerContract");
+    } else if (fieldNumber === 2 && wireType === 2 && contractAddress === null) {
+      contractAddress = readProtobufBytesField(trigger, cursor, "triggerContract");
+    } else if (fieldNumber === 3 && wireType === 0 && !callValueSeen) {
+      callValueSeen = true;
+      if (readCanonicalProtobufVarint(trigger, cursor, "triggerContract") !== 0n) return null;
+    } else if (fieldNumber === 4 && wireType === 2 && data === null) {
+      data = readProtobufBytesField(trigger, cursor, "triggerContract");
+    } else if (fieldNumber === 5 && wireType === 0 && !callTokenValueSeen) {
+      callTokenValueSeen = true;
+      if (readCanonicalProtobufVarint(trigger, cursor, "triggerContract") !== 0n) return null;
+    } else if (fieldNumber === 6 && wireType === 0 && !tokenIdSeen) {
+      tokenIdSeen = true;
+      if (readCanonicalProtobufVarint(trigger, cursor, "triggerContract") !== 0n) return null;
+    } else {
+      return null;
+    }
+  }
+  const selector = keccak_256(
+    textEncoder.encode(SCCP_TRON_SOURCE_MESSAGE_CALL_ABI_V1),
+  ).slice(0, 4);
+  const expectedCallData = concatBytes(
+    selector,
+    abiWordU32(SCCP_DOMAIN_TRON, "sourceDomain"),
+    abiWordU32(SCCP_DOMAIN_SORA, "targetDomain"),
+    sourceEventDigest,
+  );
+  if (
+    !isNonZeroTronAddress(ownerAddress ?? new Uint8Array()) ||
+    !isNonZeroTronAddress(contractAddress ?? new Uint8Array()) ||
+    (expectedContractAddress !== null &&
+      !bytesEqual(contractAddress.subarray(1), expectedContractAddress)) ||
+    (expectedOwnerAddress !== null &&
+      !bytesEqual(ownerAddress.subarray(1), expectedOwnerAddress)) ||
+    data === null ||
+    !bytesEqual(data, expectedCallData)
+  ) {
+    return null;
+  }
+  return ownerAddress.subarray(1);
+};
+
+const tronContractSourceCallOwnerAddress = (
+  contract,
+  sourceEventDigest,
+  expectedContractAddress = null,
+  expectedOwnerAddress = null,
+) => {
+  const cursor = { offset: 0 };
+  let contractType = null;
+  let parameter = null;
+  while (cursor.offset < contract.length) {
+    const key = readCanonicalProtobufVarint(contract, cursor, "transactionContract");
+    const fieldNumber = protobufFieldNumber(key, "transactionContract");
+    const wireType = Number(key & 0x07n);
+    if (fieldNumber === 1 && wireType === 0 && contractType === null) {
+      contractType = readCanonicalProtobufVarint(contract, cursor, "transactionContract");
+    } else if (fieldNumber === 2 && wireType === 2 && parameter === null) {
+      parameter = readProtobufBytesField(contract, cursor, "transactionContract");
+    } else {
+      return null;
+    }
+  }
+  const trigger = parameter ? readTronProtobufAnyValue(parameter) : null;
+  return contractType === 31n && trigger !== null
+    ? tronTriggerSourceCallOwnerAddress(
+      trigger,
+      sourceEventDigest,
+      expectedContractAddress,
+      expectedOwnerAddress,
+    )
+    : null;
+};
+
+const tronRawDataSourceCallOwnerAddress = (
+  rawData,
+  sourceEventDigest,
+  expectedContractAddress = null,
+  expectedOwnerAddress = null,
+) => {
+  const cursor = { offset: 0 };
+  let refBlockBytesSeen = false;
+  let refBlockNumSeen = false;
+  let refBlockHashSeen = false;
+  let expirationMs = null;
+  let timestampMs = null;
+  let feeLimitSeen = false;
+  let contractCount = 0;
+  let matchedContract = null;
+  while (cursor.offset < rawData.length) {
+    const key = readCanonicalProtobufVarint(rawData, cursor, "rawData");
+    const fieldNumber = protobufFieldNumber(key, "rawData");
+    const wireType = Number(key & 0x07n);
+    if (fieldNumber === 1 && wireType === 2 && !refBlockBytesSeen) {
+      refBlockBytesSeen = true;
+      const value = readProtobufBytesField(rawData, cursor, "rawData");
+      if (value.length !== 2 || value.every((byte) => byte === 0)) return null;
+    } else if (fieldNumber === 3 && wireType === 0 && !refBlockNumSeen) {
+      refBlockNumSeen = true;
+      readCanonicalProtobufVarint(rawData, cursor, "rawData");
+    } else if (fieldNumber === 4 && wireType === 2 && !refBlockHashSeen) {
+      refBlockHashSeen = true;
+      const value = readProtobufBytesField(rawData, cursor, "rawData");
+      if (value.length !== 8 || value.every((byte) => byte === 0)) return null;
+    } else if (fieldNumber === 8 && wireType === 0 && expirationMs === null) {
+      expirationMs = readCanonicalProtobufVarint(rawData, cursor, "rawData");
+      if (expirationMs === 0n) return null;
+    } else if (fieldNumber === 11 && wireType === 2) {
+      contractCount += 1;
+      if (contractCount > 1) return null;
+      matchedContract = tronContractSourceCallOwnerAddress(
+        readProtobufBytesField(rawData, cursor, "rawData"),
+        sourceEventDigest,
+        expectedContractAddress,
+        expectedOwnerAddress,
+      );
+    } else if (fieldNumber === 14 && wireType === 0 && timestampMs === null) {
+      timestampMs = readCanonicalProtobufVarint(rawData, cursor, "rawData");
+      if (timestampMs === 0n) return null;
+    } else if (fieldNumber === 18 && wireType === 0 && !feeLimitSeen) {
+      feeLimitSeen = true;
+      if (readCanonicalProtobufVarint(rawData, cursor, "rawData") === 0n) return null;
+    } else {
+      return null;
+    }
+  }
+  return refBlockBytesSeen &&
+    refBlockHashSeen &&
+    expirationMs !== null &&
+    timestampMs !== null &&
+    expirationMs > timestampMs &&
+    feeLimitSeen &&
+    contractCount === 1
+    ? matchedContract
+    : null;
+};
+
+const validateTronSccpTransactionSourceCall = (
+  transactionBytes,
+  sourceEventDigest,
+  expectedContractAddress = null,
+  expectedOwnerAddress = null,
+) => {
+  const cursor = { offset: 0 };
+  let rawData = null;
+  const signatures = [];
+  let resultCount = 0;
+  let resultSuccess = false;
+  while (cursor.offset < transactionBytes.length) {
+    const key = readCanonicalProtobufVarint(transactionBytes, cursor, "transactionBytes");
+    const fieldNumber = protobufFieldNumber(key, "transactionBytes");
+    const wireType = Number(key & 0x07n);
+    if (fieldNumber === 1 && wireType === 2 && rawData === null) {
+      rawData = readProtobufBytesField(transactionBytes, cursor, "transactionBytes");
+    } else if (fieldNumber === 2 && wireType === 2) {
+      if (signatures.length >= SCCP_TRON_SOURCE_CALL_SIGNATURES) throw tronSourceTransactionError();
+      const signature = readProtobufBytesField(transactionBytes, cursor, "transactionBytes");
+      if (!tronRecoverableSignatureIsCanonical(signature)) throw tronSourceTransactionError();
+      signatures.push(signature);
+    } else if (fieldNumber === 5 && wireType === 2) {
+      if (resultCount >= 1) throw tronSourceTransactionError();
+      resultSuccess = tronTransactionResultSuccess(
+        readProtobufBytesField(transactionBytes, cursor, "transactionBytes"),
+      );
+      resultCount += 1;
+    } else {
+      throw tronSourceTransactionError();
+    }
+  }
+  if (rawData === null || signatures.length !== SCCP_TRON_SOURCE_CALL_SIGNATURES) {
+    throw tronSourceTransactionError();
+  }
+  const ownerAddress = tronRawDataSourceCallOwnerAddress(
+    rawData,
+    sourceEventDigest,
+    expectedContractAddress,
+    expectedOwnerAddress,
+  );
+  const recoveredSigner = tronRecoveredSignerAddress20(sha256(rawData), signatures[0]);
+  if (
+    resultCount !== 1 ||
+    !resultSuccess ||
+    ownerAddress === null ||
+    recoveredSigner === null ||
+    !bytesEqual(recoveredSigner, ownerAddress)
+  ) {
+    throw tronSourceTransactionError();
+  }
+};
+
+const tronTransactionMerkleRootFromBranch = (
+  transactionBytes,
+  transactionIndex,
+  transactionCount,
+  transactionMerkleBranch,
+) => {
+  let current = sha256(transactionBytes);
+  let index = transactionIndex;
+  let count = transactionCount;
+  let branchCursor = 0;
+  while (count > 1n) {
+    if ((index & 1n) === 0n) {
+      if (index + 1n < count) {
+        const sibling = transactionMerkleBranch[branchCursor++];
+        if (!sibling) {
+          throw new RangeError("transactionMerkleBranch is too short for transactionIndex/count");
+        }
+        current = sha256(concatBytes(current, sibling));
+      }
+    } else {
+      const sibling = transactionMerkleBranch[branchCursor++];
+      if (!sibling) {
+        throw new RangeError("transactionMerkleBranch is too short for transactionIndex/count");
+      }
+      current = sha256(concatBytes(sibling, current));
+    }
+    index >>= 1n;
+    count = (count + 1n) / 2n;
+  }
+  if (branchCursor !== transactionMerkleBranch.length) {
+    throw new RangeError("transactionMerkleBranch has unused siblings for transactionIndex/count");
+  }
+  return current;
+};
+
+export function canonicalTronSccpTransactionSourceProofBytes(input) {
+  if (!input || typeof input !== "object" || Array.isArray(input)) {
+    throw new TypeError("TRON SCCP transaction source proof input must be an object");
+  }
+  const sourceEventDigest = nonZeroHex32Bytes(
+    strictResultField(input, "sourceEventDigest", "sourceEventDigest", "source_event_digest"),
+    "sourceEventDigest",
+  );
+  const receiptRoot = nonZeroHex32Bytes(
+    strictResultField(input, "receiptRoot", "receiptRoot", "receipt_root", "receiptOrMessageRoot", "receipt_or_message_root"),
+    "receiptRoot",
+  );
+  const transactionRoot = nonZeroHex32Bytes(
+    strictResultField(input, "transactionRoot", "transactionRoot", "transaction_root"),
+    "transactionRoot",
+  );
+  const transactionIndex = normalizeUnsignedBigInt(
+    strictResultField(input, "transactionIndex", "transactionIndex", "transaction_index"),
+    "transactionIndex",
+  );
+  const transactionCount = normalizeUnsignedBigInt(
+    strictResultField(input, "transactionCount", "transactionCount", "transaction_count"),
+    "transactionCount",
+  );
+  if (transactionCount === 0n || transactionIndex >= transactionCount) {
+    throw new RangeError("transactionIndex must be less than non-zero transactionCount");
+  }
+  const transactionBytes = toBytes(
+    strictResultField(input, "transactionBytes", "transactionBytes", "transaction_bytes"),
+    "transactionBytes",
+  );
+  if (transactionBytes.length === 0 || transactionBytes.length > SCCP_TRON_MAX_TRANSACTION_BYTES) {
+    throw new RangeError(
+      `transactionBytes must contain 1..${SCCP_TRON_MAX_TRANSACTION_BYTES} bytes`,
+    );
+  }
+  const expectedContractInput = strictOptionalResultField(
+    input,
+    "sourceBridgeEmitterAddress",
+    "sourceBridgeEmitterAddress",
+    "source_bridge_emitter_address",
+    "expectedSourceBridgeEmitterAddress",
+    "expected_source_bridge_emitter_address",
+    "bridgeAddress",
+    "bridge_address",
+  );
+  const expectedOwnerInput = strictOptionalResultField(
+    input,
+    "sourceBridgeOwnerAddress",
+    "sourceBridgeOwnerAddress",
+    "source_bridge_owner_address",
+    "expectedSourceBridgeOwnerAddress",
+    "expected_source_bridge_owner_address",
+    "ownerAddress",
+    "owner_address",
+  );
+  const expectedContractAddress = expectedContractInput === SCCP_OPTIONAL_FIELD_MISSING
+    ? null
+    : nonZeroHexBytes(expectedContractInput, "sourceBridgeEmitterAddress", 20);
+  const expectedOwnerAddress = expectedOwnerInput === SCCP_OPTIONAL_FIELD_MISSING
+    ? null
+    : nonZeroHexBytes(expectedOwnerInput, "sourceBridgeOwnerAddress", 20);
+  validateTronSccpTransactionSourceCall(
+    transactionBytes,
+    sourceEventDigest,
+    expectedContractAddress,
+    expectedOwnerAddress,
+  );
+  const transactionMerkleBranch = normalizeSccpInclusionBranch(
+    strictResultField(input, "transactionMerkleBranch", "transactionMerkleBranch", "transaction_merkle_branch"),
+    "transactionMerkleBranch",
+  );
+  if (transactionMerkleBranch.length > SCCP_TRON_MAX_TRANSACTION_MERKLE_BRANCH_NODES) {
+    throw new RangeError(
+      `transactionMerkleBranch must contain at most ${SCCP_TRON_MAX_TRANSACTION_MERKLE_BRANCH_NODES} entries`,
+    );
+  }
+  const derivedTransactionRoot = tronTransactionMerkleRootFromBranch(
+    transactionBytes,
+    transactionIndex,
+    transactionCount,
+    transactionMerkleBranch,
+  );
+  if (!bytesEqual(derivedTransactionRoot, transactionRoot)) {
+    throw new TypeError("transactionRoot must match transactionBytes and transactionMerkleBranch");
+  }
+  const inclusionBranch = normalizeSccpInclusionBranch(
+    strictResultField(input, "inclusionBranch", "inclusionBranch", "inclusion_branch"),
+    "inclusionBranch",
+    { requireNonEmpty: true },
+  );
+  let out = new Uint8Array();
+  out = writeU8(out, 1);
+  out = concatBytes(out, sourceEventDigest, receiptRoot, transactionRoot);
+  out = writeU64Le(out, transactionIndex);
+  out = writeU64Le(out, transactionCount);
+  out = writeBytes(out, transactionBytes);
+  out = writeU32Le(out, transactionMerkleBranch.length);
+  for (const sibling of transactionMerkleBranch) {
+    out = concatBytes(out, sibling);
+  }
+  return writeSccpH256Branch(out, inclusionBranch);
+}
+
+export function tronSccpTransactionSourceProofHash(input) {
+  return bytesToHex(
+    prefixedBlake2b(
+      SCCP_TRON_TRANSACTION_SOURCE_PROOF_PREFIX_V1,
+      canonicalTronSccpTransactionSourceProofBytes(input),
+    ),
+  );
+}
+
+export function canonicalTronRawBlockHeaderBytes(input) {
+  if (!input || typeof input !== "object" || Array.isArray(input)) {
+    throw new TypeError("TRON raw block-header input must be an object");
+  }
+  const number = normalizeUnsignedBigInt(
+    strictResultField(input, "number", "number", "blockNumber", "block_number"),
+    "number",
+  );
+  const timestampMs = normalizeUnsignedBigInt(
+    strictResultField(input, "timestampMs", "timestampMs", "timestamp_ms"),
+    "timestampMs",
+  );
+  const headerVersion = normalizeUnsignedBigInt(
+    strictResultField(input, "headerVersion", "headerVersion", "header_version"),
+    "headerVersion",
+  );
+  const txTrieRoot = nonZeroHex32Bytes(
+    strictResultField(input, "txTrieRoot", "txTrieRoot", "tx_trie_root"),
+    "txTrieRoot",
+  );
+  const accountStateRoot = nonZeroHex32Bytes(
+    strictResultField(input, "accountStateRoot", "accountStateRoot", "account_state_root"),
+    "accountStateRoot",
+  );
+  const parentBlockId = nonZeroHex32Bytes(
+    strictResultField(input, "parentBlockId", "parentBlockId", "parent_block_id"),
+    "parentBlockId",
+  );
+  const witnessAddress = hexToBytes(
+    strictResultField(input, "witnessAddress", "witnessAddress", "witness_address"),
+    "witnessAddress",
+    21,
+  );
+  if (number === 0n) throw new RangeError("number must not be zero");
+  if (timestampMs === 0n) throw new RangeError("timestampMs must not be zero");
+  if (headerVersion === 0n || headerVersion > 0xffff_ffffn) {
+    throw new RangeError("headerVersion must be a non-zero u32");
+  }
+  if (!isNonZeroTronAddress(witnessAddress)) {
+    throw new RangeError("witnessAddress must be a TRON 0x41-prefixed address");
+  }
+
+  let out = new Uint8Array();
+  out = writeProtobufU64(out, 1, timestampMs);
+  out = writeProtobufBytes(out, 2, txTrieRoot);
+  out = writeProtobufBytes(out, 3, parentBlockId);
+  out = writeProtobufU64(out, 7, number);
+  out = writeProtobufBytes(out, 9, witnessAddress);
+  out = writeProtobufU64(out, 10, headerVersion);
+  out = writeProtobufBytes(out, 11, accountStateRoot);
+  return out;
+}
+
+const decodeTronRawBlockHeaderFields = (rawData, label) => {
+  const cursor = { offset: 0 };
+  const fields = {};
+  const readBytesField = (byteLength, fieldLabel) => {
+    const length = Number(readCanonicalProtobufVarint(rawData, cursor, label));
+    if (length !== byteLength || cursor.offset + length > rawData.length) {
+      throw new TypeError(`${fieldLabel} must be ${byteLength} bytes`);
+    }
+    const value = rawData.slice(cursor.offset, cursor.offset + length);
+    cursor.offset += length;
+    return value;
+  };
+  while (cursor.offset < rawData.length) {
+    const key = readCanonicalProtobufVarint(rawData, cursor, label);
+    const fieldNumber = Number(key >> 3n);
+    const wireType = Number(key & 0x07n);
+    switch (fieldNumber) {
+      case 1:
+        if (wireType !== 0 || fields.timestampMs !== undefined) {
+          throw new TypeError(`${label} must contain one canonical timestamp field`);
+        }
+        fields.timestampMs = readCanonicalProtobufVarint(rawData, cursor, label);
+        break;
+      case 2:
+        if (wireType !== 2 || fields.txTrieRoot !== undefined) {
+          throw new TypeError(`${label} must contain one canonical txTrieRoot field`);
+        }
+        fields.txTrieRoot = readBytesField(32, "txTrieRoot");
+        break;
+      case 3:
+        if (wireType !== 2 || fields.parentBlockId !== undefined) {
+          throw new TypeError(`${label} must contain one canonical parentBlockId field`);
+        }
+        fields.parentBlockId = readBytesField(32, "parentBlockId");
+        break;
+      case 7:
+        if (wireType !== 0 || fields.number !== undefined) {
+          throw new TypeError(`${label} must contain one canonical number field`);
+        }
+        fields.number = readCanonicalProtobufVarint(rawData, cursor, label);
+        break;
+      case 8:
+        if (wireType !== 0 || fields.witnessIdSeen) {
+          throw new TypeError(`${label} must contain at most one canonical witnessId field`);
+        }
+        fields.witnessIdSeen = true;
+        readCanonicalProtobufVarint(rawData, cursor, label);
+        break;
+      case 9:
+        if (wireType !== 2 || fields.witnessAddress !== undefined) {
+          throw new TypeError(`${label} must contain one canonical witnessAddress field`);
+        }
+        fields.witnessAddress = readBytesField(21, "witnessAddress");
+        break;
+      case 10: {
+        if (wireType !== 0 || fields.headerVersion !== undefined) {
+          throw new TypeError(`${label} must contain one canonical headerVersion field`);
+        }
+        const headerVersion = readCanonicalProtobufVarint(rawData, cursor, label);
+        if (headerVersion > 0xffff_ffffn) {
+          throw new RangeError("headerVersion must be a non-zero u32");
+        }
+        fields.headerVersion = Number(headerVersion);
+        break;
+      }
+      case 11:
+        if (wireType !== 2 || fields.accountStateRoot !== undefined) {
+          throw new TypeError(`${label} must contain one canonical accountStateRoot field`);
+        }
+        fields.accountStateRoot = readBytesField(32, "accountStateRoot");
+        break;
+      default:
+        throw new TypeError(`${label} contains an unsupported protobuf field`);
+    }
+  }
+  if (
+    fields.number === undefined ||
+    fields.timestampMs === undefined ||
+    fields.headerVersion === undefined ||
+    !fields.txTrieRoot ||
+    !fields.accountStateRoot ||
+    !fields.parentBlockId ||
+    !fields.witnessAddress ||
+    fields.number === 0n ||
+    fields.timestampMs === 0n ||
+    fields.headerVersion === 0 ||
+    !fields.txTrieRoot.some((byte) => byte !== 0) ||
+    !fields.accountStateRoot.some((byte) => byte !== 0) ||
+    !fields.parentBlockId.some((byte) => byte !== 0) ||
+    !isNonZeroTronAddress(fields.witnessAddress)
+  ) {
+    throw new TypeError(`${label} must be a canonical TRON raw block header`);
+  }
+  return fields;
+};
+
+const tronBlockIdBytesFromRawDataHash = (number, rawDataHash) => {
+  const blockId = new Uint8Array(rawDataHash);
+  const numberBytes = writeU64Be(new Uint8Array(), number);
+  blockId.set(numberBytes, 0);
+  return blockId;
+};
+
+export function tronRawBlockHeaderHash(rawData) {
+  return bytesToHex(sha256(toBytes(rawData, "rawData")));
+}
+
+export function tronBlockIdFromRawDataHash(number, rawDataHash) {
+  const blockNumber = normalizeUnsignedBigInt(number, "number");
+  if (blockNumber === 0n) throw new RangeError("number must not be zero");
+  return bytesToHex(
+    tronBlockIdBytesFromRawDataHash(blockNumber, hexToBytes(rawDataHash, "rawDataHash", 32)),
+  );
+}
+
+export function canonicalTronSolidBlockHeaderProofBytes(input) {
+  if (!input || typeof input !== "object" || Array.isArray(input)) {
+    throw new TypeError("TRON solid-block header proof input must be an object");
+  }
+  const version = normalizeOptionalV1Version(input, "version", RangeError, "version");
+  const rawData = toBytes(strictResultField(input, "rawData", "rawData", "raw_data"), "rawData");
+  const witnessSignature = toBytes(
+    strictResultField(input, "witnessSignature", "witnessSignature", "witness_signature"),
+    "witnessSignature",
+  );
+  const parentRawData = toBytes(
+    strictResultField(input, "parentRawData", "parentRawData", "parent_raw_data"),
+    "parentRawData",
+  );
+  const parentWitnessSignature = toBytes(
+    strictResultField(
+      input,
+      "parentWitnessSignature",
+      "parentWitnessSignature",
+      "parent_witness_signature",
+    ),
+    "parentWitnessSignature",
+  );
+  if (rawData.length === 0 || parentRawData.length === 0) {
+    throw new RangeError("rawData and parentRawData must not be empty");
+  }
+  if (
+    rawData.length > SCCP_TRON_MAX_RAW_HEADER_BYTES ||
+    parentRawData.length > SCCP_TRON_MAX_RAW_HEADER_BYTES
+  ) {
+    throw new RangeError(
+      `rawData and parentRawData must be at most ${SCCP_TRON_MAX_RAW_HEADER_BYTES} bytes`,
+    );
+  }
+  if (witnessSignature.length !== 65 || parentWitnessSignature.length !== 65) {
+    throw new RangeError("TRON header signatures must be 65 bytes");
+  }
+  if (
+    !tronRecoverableSignatureIsCanonical(witnessSignature) ||
+    !tronRecoverableSignatureIsCanonical(parentWitnessSignature)
+  ) {
+    throw new RangeError(
+      "TRON header signatures must be canonical low-S with recovery id 0..3 or 27..30",
+    );
+  }
+  const witnessAddress = hexToBytes(
+    strictResultField(input, "witnessAddress", "witnessAddress", "witness_address"),
+    "witnessAddress",
+    21,
+  );
+  if (!isNonZeroTronAddress(witnessAddress)) {
+    throw new RangeError("witnessAddress must be a TRON 0x41-prefixed address");
+  }
+  const timestampMs = normalizeUnsignedBigInt(
+    strictResultField(input, "timestampMs", "timestampMs", "timestamp_ms"),
+    "timestampMs",
+  );
+  const headerVersion = normalizeUnsignedBigInt(
+    strictResultField(input, "headerVersion", "headerVersion", "header_version"),
+    "headerVersion",
+  );
+  if (timestampMs === 0n) throw new RangeError("timestampMs must not be zero");
+  if (headerVersion === 0n || headerVersion > 0xffff_ffffn) {
+    throw new RangeError("headerVersion must be a non-zero u32");
+  }
+  const fields = decodeTronRawBlockHeaderFields(rawData, "rawData");
+  const parentFields = decodeTronRawBlockHeaderFields(parentRawData, "parentRawData");
+  const rawDataHash = hexToBytes(
+    strictResultField(input, "rawDataHash", "rawDataHash", "raw_data_hash"),
+    "rawDataHash",
+    32,
+  );
+  const parentRawDataHash = hexToBytes(
+    strictResultField(input, "parentRawDataHash", "parentRawDataHash", "parent_raw_data_hash"),
+    "parentRawDataHash",
+    32,
+  );
+  const blockId = hexToBytes(
+    strictResultField(input, "blockId", "blockId", "block_id"),
+    "blockId",
+    32,
+  );
+  const txTrieRoot = nonZeroHex32Bytes(
+    strictResultField(input, "txTrieRoot", "txTrieRoot", "tx_trie_root"),
+    "txTrieRoot",
+  );
+  const accountStateRoot = nonZeroHex32Bytes(
+    strictResultField(input, "accountStateRoot", "accountStateRoot", "account_state_root"),
+    "accountStateRoot",
+  );
+  const parentBlockId = nonZeroHex32Bytes(
+    strictResultField(input, "parentBlockId", "parentBlockId", "parent_block_id"),
+    "parentBlockId",
+  );
+  const expectedRawDataHash = sha256(rawData);
+  const expectedParentRawDataHash = sha256(parentRawData);
+  if (!bytesEqual(rawDataHash, expectedRawDataHash)) {
+    throw new TypeError("rawDataHash must match rawData");
+  }
+  if (!bytesEqual(parentRawDataHash, expectedParentRawDataHash)) {
+    throw new TypeError("parentRawDataHash must match parentRawData");
+  }
+  if (!bytesEqual(blockId, tronBlockIdBytesFromRawDataHash(fields.number, rawDataHash))) {
+    throw new TypeError("blockId must match rawDataHash and block number");
+  }
+  if (!bytesEqual(parentBlockId, fields.parentBlockId)) {
+    throw new TypeError("parentBlockId must match rawData");
+  }
+  if (!bytesEqual(parentBlockId, tronBlockIdBytesFromRawDataHash(parentFields.number, parentRawDataHash))) {
+    throw new TypeError("parentBlockId must match parentRawDataHash and parent block number");
+  }
+  if (parentFields.number + 1n !== fields.number || parentFields.timestampMs >= fields.timestampMs) {
+    throw new TypeError("rawData must be the direct child of parentRawData");
+  }
+  if (
+    !bytesEqual(txTrieRoot, fields.txTrieRoot) ||
+    !bytesEqual(accountStateRoot, fields.accountStateRoot) ||
+    !bytesEqual(witnessAddress, fields.witnessAddress) ||
+    timestampMs !== fields.timestampMs ||
+    Number(headerVersion) !== fields.headerVersion
+  ) {
+    throw new TypeError("TRON solid-block header fields must match rawData");
+  }
+
+  let out = new Uint8Array();
+  out = writeU8(out, version);
+  out = writeBytes(out, rawData);
+  out = writeBytes(out, witnessSignature);
+  out = writeBytes(out, parentRawData);
+  out = writeBytes(out, parentWitnessSignature);
+  out = concatBytes(
+    out,
+    rawDataHash,
+    parentRawDataHash,
+    blockId,
+    txTrieRoot,
+    accountStateRoot,
+    parentBlockId,
+  );
+  out = writeBytes(out, witnessAddress);
+  out = writeU64Le(out, timestampMs);
+  out = writeU32Le(out, Number(headerVersion));
+  return out;
+}
+
+export function tronSolidBlockHeaderProofHash(input) {
+  return bytesToHex(
+    prefixedBlake2b(
+      SCCP_TRON_SOLID_BLOCK_HEADER_PREFIX_V1,
+      canonicalTronSolidBlockHeaderProofBytes(input),
+    ),
+  );
+}
+
+export function canonicalTronWitnessSchedulePayloadBytes(input) {
+  if (!input || typeof input !== "object" || Array.isArray(input)) {
+    throw new TypeError("TRON witness-schedule payload input must be an object");
+  }
+  const witnessAddresses = strictResultField(input, "witnessAddresses", "witnessAddresses", "witness_addresses");
+  const witnessWeights = strictResultField(input, "witnessWeights", "witnessWeights", "witness_weights");
+  if (!Array.isArray(witnessAddresses)) {
+    throw new TypeError("witnessAddresses must be an array");
+  }
+  if (!Array.isArray(witnessWeights)) {
+    throw new TypeError("witnessWeights must be an array");
+  }
+  if (witnessAddresses.length === 0 || witnessAddresses.length !== witnessWeights.length) {
+    throw new RangeError("witnessAddresses and witnessWeights must be non-empty equal-length arrays");
+  }
+  if (witnessAddresses.length > SCCP_TRON_MAX_WITNESSES) {
+    throw new RangeError(`witnessAddresses must contain at most ${SCCP_TRON_MAX_WITNESSES} entries`);
+  }
+
+  let out = new Uint8Array();
+  out = writeU8(out, 1);
+  out = writeU32Le(out, witnessAddresses.length);
+  const seenAddresses = new Set();
+  let totalWeight = 0n;
+  for (const [index, addressValue] of witnessAddresses.entries()) {
+    const address = hexToBytes(addressValue, `witnessAddresses[${index}]`, 21);
+    if (!isNonZeroTronAddress(address)) {
+      throw new RangeError(`witnessAddresses[${index}] must be a TRON 0x41-prefixed address`);
+    }
+    const addressHex = bytesToHex(address, false);
+    if (seenAddresses.has(addressHex)) {
+      throw new RangeError(`witnessAddresses[${index}] must be unique`);
+    }
+    seenAddresses.add(addressHex);
+    const weight = normalizeUnsignedBigInt(witnessWeights[index], `witnessWeights[${index}]`);
+    if (weight === 0n) {
+      throw new RangeError(`witnessWeights[${index}] must not be zero`);
+    }
+    totalWeight += weight;
+    if (totalWeight > SCCP_U64_MAX) {
+      throw new RangeError("witnessWeights total must fit u64");
+    }
+    out = concatBytes(out, address);
+    out = writeU64Le(out, weight);
+  }
+  return out;
+}
+
+const tronWitnessSchedulePayloadBytes = (input) =>
+  validateTronWitnessSchedulePayloadBytes(
+    input instanceof Uint8Array || ArrayBuffer.isView(input) || input instanceof ArrayBuffer || Array.isArray(input)
+      ? toBytes(input, "witnessSchedulePayload")
+      : typeof input === "string"
+        ? hexToBytes(input, "witnessSchedulePayload")
+        : canonicalTronWitnessSchedulePayloadBytes(input),
+  );
+
+const validateTronWitnessSchedulePayloadBytes = (payload) => {
+  if (payload.length < 5 || readU8At(payload, 0, "witnessSchedulePayload") !== 1) {
+    throw new RangeError("witnessSchedulePayload must be a canonical TRON witness schedule payload");
+  }
+  const witnessCount = readU32LeAt(payload, 1, "witnessSchedulePayload");
+  if (
+    witnessCount === 0 ||
+    witnessCount > SCCP_TRON_MAX_WITNESSES ||
+    payload.length !== 5 + witnessCount * 29
+  ) {
+    throw new RangeError("witnessSchedulePayload must be a canonical TRON witness schedule payload");
+  }
+  const seenAddresses = new Set();
+  let cursor = 5;
+  let totalWeight = 0n;
+  for (let index = 0; index < witnessCount; index += 1) {
+    const address = payload.subarray(cursor, cursor + 21);
+    cursor += 21;
+    if (!isNonZeroTronAddress(address)) {
+      throw new RangeError(`witnessSchedulePayload witness ${index} must be a TRON 0x41-prefixed address`);
+    }
+    const addressHex = bytesToHex(address, false);
+    if (seenAddresses.has(addressHex)) {
+      throw new RangeError(`witnessSchedulePayload witness ${index} must be unique`);
+    }
+    seenAddresses.add(addressHex);
+    const weight = readU64LeAt(payload, cursor, "witnessSchedulePayload");
+    cursor += 8;
+    if (weight === 0n) {
+      throw new RangeError(`witnessSchedulePayload witness ${index} weight must not be zero`);
+    }
+    totalWeight += weight;
+    if (totalWeight > SCCP_U64_MAX) {
+      throw new RangeError("witnessSchedulePayload total weight must fit u64");
+    }
+  }
+  return payload;
+};
+
+export function tronWitnessSchedulePayloadHash(input) {
+  return bytesToHex(
+    prefixedBlake2b(
+      SCCP_TRON_WITNESS_SCHEDULE_PAYLOAD_PREFIX_V1,
+      tronWitnessSchedulePayloadBytes(input),
+    ),
+  );
+}
+
+export function tronWitnessScheduleHashFromPayload(input) {
+  return bytesToHex(
+    prefixedBlake2b(
+      SCCP_TRON_WITNESS_SCHEDULE_PREFIX_V1,
+      tronWitnessSchedulePayloadBytes(input),
+    ),
+  );
+}
+
+export function canonicalTronSolidBlockMessageBytes(input) {
+  if (!input || typeof input !== "object" || Array.isArray(input)) {
+    throw new TypeError("TRON solid-block message input must be an object");
+  }
+  const version = normalizeOptionalV1Version(input, "version", RangeError, "version");
+  const sourceDomain = normalizeSccpDomainId(
+    strictResultField(input, "sourceDomain", "sourceDomain", "source_domain"),
+    "sourceDomain",
+  );
+  const solidBlockNumber = normalizeUnsignedBigInt(
+    strictResultField(input, "solidBlockNumber", "solidBlockNumber", "solid_block_number"),
+    "solidBlockNumber",
+  );
+  if (sourceDomain !== SCCP_DOMAIN_TRON) {
+    throw new RangeError("sourceDomain must be TRON");
+  }
+  if (solidBlockNumber === 0n) {
+    throw new RangeError("solidBlockNumber must not be zero");
+  }
+  const blockHash = nonZeroHex32Bytes(
+    strictResultField(input, "blockHash", "blockHash", "block_hash"),
+    "blockHash",
+  );
+  const witnessScheduleHash = nonZeroHex32Bytes(
+    strictResultField(input, "witnessScheduleHash", "witnessScheduleHash", "witness_schedule_hash"),
+    "witnessScheduleHash",
+  );
+  const receiptRoot = nonZeroHex32Bytes(
+    strictResultField(input, "receiptRoot", "receiptRoot", "receipt_root"),
+    "receiptRoot",
+  );
+  const transactionRoot = nonZeroHex32Bytes(
+    strictResultField(input, "transactionRoot", "transactionRoot", "transaction_root"),
+    "transactionRoot",
+  );
+  const receiptProofHash = nonZeroHex32Bytes(
+    strictResultField(input, "receiptProofHash", "receiptProofHash", "receipt_proof_hash"),
+    "receiptProofHash",
+  );
+  let out = new Uint8Array();
+  out = writeU8(out, version);
+  out = writeU32Le(out, sourceDomain);
+  out = writeU64Le(out, solidBlockNumber);
+  return concatBytes(out, blockHash, witnessScheduleHash, receiptRoot, transactionRoot, receiptProofHash);
+}
+
+export function tronSolidBlockMessageHash(input) {
+  return bytesToHex(
+    prefixedKeccak(
+      SCCP_TRON_SOLID_BLOCK_MESSAGE_PREFIX_V1,
+      canonicalTronSolidBlockMessageBytes(input),
+    ),
+  );
+}
+
+const tronWitnessSealSignerIndices = (bitmap, rosterLength) => {
+  if (rosterLength <= 0 || bitmap.length !== Math.ceil(rosterLength / 8)) {
+    throw new RangeError("signersBitmap length must match witness roster");
+  }
+  const indices = [];
+  for (const [byteIndex, value] of bitmap.entries()) {
+    for (let bitIndex = 0; bitIndex < 8; bitIndex += 1) {
+      if (((value >> bitIndex) & 1) === 0) continue;
+      const index = byteIndex * 8 + bitIndex;
+      if (index >= rosterLength) {
+        throw new RangeError("signersBitmap sets a bit outside the witness roster");
+      }
+      indices.push(index);
+    }
+  }
+  if (indices.length === 0) {
+    throw new RangeError("signersBitmap must select at least one witness");
+  }
+  return indices;
+};
+
+const normalizeTronWitnessSealProof = (input) => {
+  if (!input || typeof input !== "object" || Array.isArray(input)) {
+    throw new TypeError("TRON witness-seal proof input must be an object");
+  }
+  const version = normalizeOptionalV1Version(input, "version", RangeError, "version");
+  const totalWeight = normalizeUnsignedBigInt(
+    strictResultField(input, "totalWeight", "totalWeight", "total_weight"),
+    "totalWeight",
+  );
+  const signedWeight = normalizeUnsignedBigInt(
+    strictResultField(input, "signedWeight", "signedWeight", "signed_weight"),
+    "signedWeight",
+  );
+  const solidBlockMessageHash = nonZeroHex32Bytes(
+    strictResultField(input, "solidBlockMessageHash", "solidBlockMessageHash", "solid_block_message_hash"),
+    "solidBlockMessageHash",
+  );
+  const witnessAddressesInput = strictResultField(input, "witnessAddresses", "witnessAddresses", "witness_addresses");
+  const witnessWeightsInput = strictResultField(input, "witnessWeights", "witnessWeights", "witness_weights");
+  const signaturesInput = input.signatures;
+  if (!Array.isArray(witnessAddressesInput)) {
+    throw new TypeError("witnessAddresses must be an array");
+  }
+  if (!Array.isArray(witnessWeightsInput)) {
+    throw new TypeError("witnessWeights must be an array");
+  }
+  if (!Array.isArray(signaturesInput)) {
+    throw new TypeError("signatures must be an array");
+  }
+  if (totalWeight === 0n) throw new RangeError("totalWeight must not be zero");
+  if (signedWeight === 0n) throw new RangeError("signedWeight must not be zero");
+  if (witnessAddressesInput.length === 0 || witnessAddressesInput.length > SCCP_TRON_MAX_WITNESSES) {
+    throw new RangeError(`witnessAddresses must contain 1..${SCCP_TRON_MAX_WITNESSES} entries`);
+  }
+  if (witnessAddressesInput.length !== witnessWeightsInput.length) {
+    throw new RangeError("witnessAddresses and witnessWeights must be equal-length arrays");
+  }
+
+  const witnessAddresses = [];
+  const witnessWeights = [];
+  const seenAddresses = new Set();
+  let computedTotalWeight = 0n;
+  for (const [index, addressValue] of witnessAddressesInput.entries()) {
+    const address = toBytes(addressValue, `witnessAddresses[${index}]`);
+    if (!isNonZeroTronAddress(address)) {
+      throw new RangeError(`witnessAddresses[${index}] must be a TRON 0x41-prefixed address`);
+    }
+    const addressHex = bytesToHex(address, false);
+    if (seenAddresses.has(addressHex)) {
+      throw new RangeError(`witnessAddresses[${index}] must be unique`);
+    }
+    seenAddresses.add(addressHex);
+    const weight = normalizeUnsignedBigInt(witnessWeightsInput[index], `witnessWeights[${index}]`);
+    if (weight === 0n) {
+      throw new RangeError(`witnessWeights[${index}] must not be zero`);
+    }
+    computedTotalWeight += weight;
+    if (computedTotalWeight > SCCP_U64_MAX) {
+      throw new RangeError("witnessWeights total must fit u64");
+    }
+    witnessAddresses.push(address);
+    witnessWeights.push(weight);
+  }
+  if (computedTotalWeight !== totalWeight) {
+    throw new RangeError("totalWeight must equal the witness weight sum");
+  }
+
+  const signersBitmap = toBytes(
+    strictResultField(input, "signersBitmap", "signersBitmap", "signers_bitmap"),
+    "signersBitmap",
+  );
+  const signerIndices = tronWitnessSealSignerIndices(signersBitmap, witnessAddresses.length);
+  if (signaturesInput.length !== signerIndices.length) {
+    throw new RangeError("signatures length must match signersBitmap");
+  }
+
+  const signatures = [];
+  let computedSignedWeight = 0n;
+  for (const [signatureIndex, witnessIndex] of signerIndices.entries()) {
+    const signature = toBytes(signaturesInput[signatureIndex], `signatures[${signatureIndex}]`);
+    if (!tronRecoverableSignatureIsCanonical(signature)) {
+      throw new RangeError(
+        `signatures[${signatureIndex}] must be a canonical low-S 65-byte TRON signature`,
+      );
+    }
+    const recovered = tronRecoveredSignerAddress20(solidBlockMessageHash, signature);
+    if (
+      recovered === null ||
+      !bytesEqual(concatBytes(Uint8Array.of(0x41), recovered), witnessAddresses[witnessIndex])
+    ) {
+      throw new RangeError("witness seal signature does not recover to declared signer");
+    }
+    signatures.push(signature);
+    computedSignedWeight += witnessWeights[witnessIndex];
+  }
+  if (computedSignedWeight !== signedWeight) {
+    throw new RangeError("signedWeight must equal the signersBitmap witness weight sum");
+  }
+  if (computedSignedWeight * 3n <= computedTotalWeight * 2n) {
+    throw new RangeError("signedWeight must exceed two thirds of totalWeight");
+  }
+
+  let witnessPayload = new Uint8Array();
+  witnessPayload = writeU8(witnessPayload, 1);
+  witnessPayload = writeU32Le(witnessPayload, witnessAddresses.length);
+  for (const [index, address] of witnessAddresses.entries()) {
+    witnessPayload = concatBytes(witnessPayload, address);
+    witnessPayload = writeU64Le(witnessPayload, witnessWeights[index]);
+  }
+  return {
+    version,
+    totalWeight,
+    signedWeight,
+    solidBlockMessageHash,
+    witnessAddresses,
+    witnessWeights,
+    signersBitmap,
+    signatures,
+    witnessScheduleHash: prefixedBlake2b(SCCP_TRON_WITNESS_SCHEDULE_PREFIX_V1, witnessPayload),
+  };
+};
+
+const canonicalTronWitnessSealProofBytes = (proof) => {
+  let out = new Uint8Array();
+  out = writeU8(out, proof.version);
+  out = writeU64Le(out, proof.totalWeight);
+  out = writeU64Le(out, proof.signedWeight);
+  out = concatBytes(out, proof.solidBlockMessageHash);
+  out = writeU32Le(out, proof.witnessAddresses.length);
+  for (const address of proof.witnessAddresses) {
+    out = writeBytes(out, address);
+  }
+  out = writeU32Le(out, proof.witnessWeights.length);
+  for (const weight of proof.witnessWeights) {
+    out = writeU64Le(out, weight);
+  }
+  out = writeBytes(out, proof.signersBitmap);
+  out = writeU32Le(out, proof.signatures.length);
+  for (const signature of proof.signatures) {
+    out = writeBytes(out, signature);
+  }
+  return out;
+};
+
+export function canonicalTronWitnessSealBytes(input) {
+  const proof = normalizeTronWitnessSealProof(input);
+  return concatBytes(canonicalTronWitnessSealProofBytes(proof), proof.witnessScheduleHash);
+}
+
+export function tronWitnessSealHash(input) {
+  return bytesToHex(
+    prefixedBlake2b(SCCP_TRON_WITNESS_SEAL_PREFIX_V1, canonicalTronWitnessSealBytes(input)),
+  );
+}
+
+const tronTransitionPayloadHashBytes = (input) => {
+  const providedHash = strictOptionalResultField(
+    input,
+    "nextWitnessSchedulePayloadHash",
+    "nextWitnessSchedulePayloadHash",
+    "next_witness_schedule_payload_hash",
+  );
+  const payloadValue = strictOptionalResultField(
+    input,
+    "nextWitnessSchedulePayload",
+    "nextWitnessSchedulePayload",
+    "next_witness_schedule_payload",
+  );
+  if (providedHash === SCCP_OPTIONAL_FIELD_MISSING && payloadValue === SCCP_OPTIONAL_FIELD_MISSING) {
+    throw new TypeError("nextWitnessSchedulePayloadHash or nextWitnessSchedulePayload is required");
+  }
+  const payloadHash =
+    providedHash === SCCP_OPTIONAL_FIELD_MISSING
+      ? hexToBytes(tronWitnessSchedulePayloadHash(payloadValue), "nextWitnessSchedulePayloadHash", 32)
+      : nonZeroHex32Bytes(providedHash, "nextWitnessSchedulePayloadHash");
+  if (payloadValue !== SCCP_OPTIONAL_FIELD_MISSING) {
+    const derivedHash = hexToBytes(
+      tronWitnessSchedulePayloadHash(payloadValue),
+      "nextWitnessSchedulePayloadHash",
+      32,
+    );
+    if (!bytesEqual(payloadHash, derivedHash)) {
+      throw new TypeError("nextWitnessSchedulePayloadHash must match nextWitnessSchedulePayload");
+    }
+  }
+  return payloadHash;
+};
+
+const normalizeTronWitnessScheduleTransitionMessageInput = (input) => {
+  if (!input || typeof input !== "object" || Array.isArray(input)) {
+    throw new TypeError("TRON witness-schedule transition message input must be an object");
+  }
+  const version = normalizeOptionalV1Version(
+    input,
+    "TRON witness-schedule transition message version",
+    RangeError,
+    "version",
+  );
+  const sourceDomain = normalizeSccpDomainId(
+    strictResultField(input, "sourceDomain", "sourceDomain", "source_domain"),
+    "sourceDomain",
+  );
+  if (sourceDomain !== SCCP_DOMAIN_TRON) {
+    throw new RangeError("sourceDomain must be TRON");
+  }
+  const fromWitnessScheduleEpoch = normalizeUnsignedBigInt(
+    strictResultField(
+      input,
+      "fromWitnessScheduleEpoch",
+      "fromWitnessScheduleEpoch",
+      "from_witness_schedule_epoch",
+    ),
+    "fromWitnessScheduleEpoch",
+  );
+  const toWitnessScheduleEpoch = normalizeUnsignedBigInt(
+    strictResultField(input, "toWitnessScheduleEpoch", "toWitnessScheduleEpoch", "to_witness_schedule_epoch"),
+    "toWitnessScheduleEpoch",
+  );
+  if (fromWitnessScheduleEpoch + 1n !== toWitnessScheduleEpoch) {
+    throw new RangeError("toWitnessScheduleEpoch must equal fromWitnessScheduleEpoch + 1");
+  }
+  const transitionBlockNumber = normalizeUnsignedBigInt(
+    strictResultField(input, "transitionBlockNumber", "transitionBlockNumber", "transition_block_number"),
+    "transitionBlockNumber",
+  );
+  if (transitionBlockNumber === 0n) {
+    throw new RangeError("transitionBlockNumber must not be zero");
+  }
+  const transitionBlockHash = nonZeroHex32Bytes(
+    strictResultField(input, "transitionBlockHash", "transitionBlockHash", "transition_block_hash"),
+    "transitionBlockHash",
+  );
+  const parentWitnessScheduleHash = nonZeroHex32Bytes(
+    strictResultField(
+      input,
+      "parentWitnessScheduleHash",
+      "parentWitnessScheduleHash",
+      "parent_witness_schedule_hash",
+    ),
+    "parentWitnessScheduleHash",
+  );
+  const nextWitnessScheduleHash = nonZeroHex32Bytes(
+    strictResultField(input, "nextWitnessScheduleHash", "nextWitnessScheduleHash", "next_witness_schedule_hash"),
+    "nextWitnessScheduleHash",
+  );
+  const nextWitnessSchedulePayloadHash = tronTransitionPayloadHashBytes(input);
+  const payloadValue = strictOptionalResultField(
+    input,
+    "nextWitnessSchedulePayload",
+    "nextWitnessSchedulePayload",
+    "next_witness_schedule_payload",
+  );
+  if (payloadValue !== SCCP_OPTIONAL_FIELD_MISSING) {
+    const derivedNextHash = hexToBytes(
+      tronWitnessScheduleHashFromPayload(payloadValue),
+      "nextWitnessScheduleHash",
+      32,
+    );
+    if (!bytesEqual(nextWitnessScheduleHash, derivedNextHash)) {
+      throw new TypeError("nextWitnessScheduleHash must match nextWitnessSchedulePayload");
+    }
+  }
+  return {
+    version,
+    sourceDomain,
+    fromWitnessScheduleEpoch,
+    toWitnessScheduleEpoch,
+    transitionBlockNumber,
+    transitionBlockHash,
+    parentWitnessScheduleHash,
+    nextWitnessScheduleHash,
+    nextWitnessSchedulePayloadHash,
+  };
+};
+
+export function canonicalTronWitnessScheduleTransitionMessageBytes(input) {
+  const transition = normalizeTronWitnessScheduleTransitionMessageInput(input);
+  let out = new Uint8Array();
+  out = writeU8(out, transition.version);
+  out = writeU32Le(out, transition.sourceDomain);
+  out = writeU64Le(out, transition.fromWitnessScheduleEpoch);
+  out = writeU64Le(out, transition.toWitnessScheduleEpoch);
+  out = writeU64Le(out, transition.transitionBlockNumber);
+  return concatBytes(
+    out,
+    transition.transitionBlockHash,
+    transition.parentWitnessScheduleHash,
+    transition.nextWitnessScheduleHash,
+    transition.nextWitnessSchedulePayloadHash,
+  );
+}
+
+export function tronWitnessScheduleTransitionMessageHash(input) {
+  return bytesToHex(
+    prefixedKeccak(
+      SCCP_TRON_WITNESS_SCHEDULE_TRANSITION_MESSAGE_PREFIX_V1,
+      canonicalTronWitnessScheduleTransitionMessageBytes(input),
+    ),
+  );
+}
+
+export function canonicalTronWitnessScheduleTransitionSealBytes(input) {
+  if (!input || typeof input !== "object" || Array.isArray(input)) {
+    throw new TypeError("TRON witness-schedule transition seal input must be an object");
+  }
+  const transition = normalizeTronWitnessScheduleTransitionMessageInput(input);
+  const version = normalizeOptionalV1Version(
+    input,
+    "TRON witness-schedule transition proof version",
+    RangeError,
+    "version",
+  );
+  if (version !== transition.version) {
+    throw new TypeError("version must match transition message version");
+  }
+  const nextPayload = tronWitnessSchedulePayloadBytes(
+    strictResultField(input, "nextWitnessSchedulePayload", "nextWitnessSchedulePayload", "next_witness_schedule_payload"),
+  );
+  const nextPayloadHash = hexToBytes(
+    tronWitnessSchedulePayloadHash(nextPayload),
+    "nextWitnessSchedulePayloadHash",
+    32,
+  );
+  if (!bytesEqual(nextPayloadHash, transition.nextWitnessSchedulePayloadHash)) {
+    throw new TypeError("nextWitnessSchedulePayloadHash must match nextWitnessSchedulePayload");
+  }
+  const nextScheduleHash = hexToBytes(
+    tronWitnessScheduleHashFromPayload(nextPayload),
+    "nextWitnessScheduleHash",
+    32,
+  );
+  if (!bytesEqual(nextScheduleHash, transition.nextWitnessScheduleHash)) {
+    throw new TypeError("nextWitnessScheduleHash must match nextWitnessSchedulePayload");
+  }
+  const transitionMessageHash = nonZeroHex32Bytes(
+    strictResultField(input, "transitionMessageHash", "transitionMessageHash", "transition_message_hash"),
+    "transitionMessageHash",
+  );
+  const expectedMessageHash = hexToBytes(
+    tronWitnessScheduleTransitionMessageHash(input),
+    "transitionMessageHash",
+    32,
+  );
+  if (!bytesEqual(transitionMessageHash, expectedMessageHash)) {
+    throw new TypeError("transitionMessageHash must match transition message fields");
+  }
+  const sealProof = normalizeTronWitnessSealProof(
+    strictResultField(input, "sealProof", "sealProof", "seal_proof", "witnessSealProof", "witness_seal_proof"),
+  );
+  if (!bytesEqual(sealProof.solidBlockMessageHash, transitionMessageHash)) {
+    throw new TypeError("sealProof.solidBlockMessageHash must match transitionMessageHash");
+  }
+  if (!bytesEqual(sealProof.witnessScheduleHash, transition.parentWitnessScheduleHash)) {
+    throw new TypeError("parentWitnessScheduleHash must match sealProof");
+  }
+  let out = new Uint8Array();
+  out = writeU8(out, version);
+  out = writeU32Le(out, transition.sourceDomain);
+  out = writeU64Le(out, transition.fromWitnessScheduleEpoch);
+  out = writeU64Le(out, transition.toWitnessScheduleEpoch);
+  out = writeU64Le(out, transition.transitionBlockNumber);
+  out = concatBytes(
+    out,
+    transition.transitionBlockHash,
+    transition.parentWitnessScheduleHash,
+    transition.nextWitnessScheduleHash,
+  );
+  out = writeBytes(out, nextPayload);
+  out = concatBytes(
+    out,
+    nextPayloadHash,
+    transitionMessageHash,
+    sealProof.witnessScheduleHash,
+    canonicalTronWitnessSealProofBytes(sealProof),
+  );
+  return out;
+}
+
+export function tronWitnessScheduleTransitionSealHash(input) {
+  return bytesToHex(
+    prefixedBlake2b(
+      SCCP_TRON_WITNESS_SCHEDULE_TRANSITION_SEAL_PREFIX_V1,
+      canonicalTronWitnessScheduleTransitionSealBytes(input),
+    ),
+  );
+}
+
+const isSubstrateRuntimeStorageSourceDomain = (sourceDomain) =>
+  sourceDomain === SCCP_DOMAIN_SORA_KUSAMA ||
+  sourceDomain === SCCP_DOMAIN_SORA_POLKADOT ||
+  sourceDomain === SCCP_DOMAIN_SORA2;
+
+const normalizeSubstrateSccpStorageProofInput = (input) => {
+  if (!input || typeof input !== "object" || Array.isArray(input)) {
+    throw new TypeError("Substrate SCCP storage proof input must be an object");
+  }
+  const sourceDomain = normalizeSccpDomainId(
+    strictResultField(input, "sourceDomain", "sourceDomain", "source_domain"),
+    "sourceDomain",
+  );
+  const sourceEventDigest = hexToBytes(
+    strictResultField(input, "sourceEventDigest", "sourceEventDigest", "source_event_digest"),
+    "sourceEventDigest",
+    32,
+  );
+  const sourceEventLeafIndex = normalizeUnsignedBigInt(
+    strictResultField(
+      input,
+      "sourceEventLeafIndex",
+      "sourceEventLeafIndex",
+      "source_event_leaf_index",
+      "leafIndex",
+      "leaf_index",
+    ),
+    "sourceEventLeafIndex",
+  );
+  const finalizedBlockNumber = normalizeUnsignedBigInt(
+    strictResultField(
+      input,
+      "finalizedBlockNumber",
+      "finalizedBlockNumber",
+      "finalized_block_number",
+      "finalityHeight",
+      "finality_height",
+    ),
+    "finalizedBlockNumber",
+  );
+  const grandpaSetId = normalizeUnsignedBigInt(
+    strictResultField(input, "grandpaSetId", "grandpaSetId", "grandpa_set_id"),
+    "grandpaSetId",
+  );
+  const blockHash = hexToBytes(
+    strictResultField(
+      input,
+      "blockHash",
+      "blockHash",
+      "block_hash",
+      "finalityBlockHash",
+      "finality_block_hash",
+    ),
+    "blockHash",
+    32,
+  );
+  const authoritySetHash = hexToBytes(
+    strictResultField(input, "authoritySetHash", "authoritySetHash", "authority_set_hash"),
+    "authoritySetHash",
+    32,
+  );
+  const eventsRoot = hexToBytes(
+    strictResultField(
+      input,
+      "eventsRoot",
+      "eventsRoot",
+      "events_root",
+      "receiptOrMessageRoot",
+      "receipt_or_message_root",
+    ),
+    "eventsRoot",
+    32,
+  );
+  const inclusionBranch = normalizeSccpInclusionBranch(
+    strictResultField(input, "inclusionBranch", "inclusionBranch", "inclusion_branch"),
+  );
+  return {
+    sourceDomain,
+    sourceEventDigest: bytesToHex(sourceEventDigest),
+    sourceEventLeafIndex,
+    finalizedBlockNumber,
+    grandpaSetId,
+    blockHash: bytesToHex(blockHash),
+    authoritySetHash: bytesToHex(authoritySetHash),
+    eventsRoot: bytesToHex(eventsRoot),
+    inclusionBranch,
+  };
+};
+
+export function canonicalSubstrateSccpStorageProofBytes(input) {
+  const normalized = normalizeSubstrateSccpStorageProofInput(input);
+  let out = new Uint8Array();
+  out = writeU8(out, 1);
+  out = writeU32Le(out, normalized.sourceDomain);
+  out = concatBytes(out, hexToBytes(normalized.sourceEventDigest, "sourceEventDigest", 32));
+  out = concatBytes(
+    out,
+    hexToBytes(SCCP_SUBSTRATE_SYSTEM_EVENTS_STORAGE_KEY_V1, "systemEventsStorageKey", 32),
+  );
+  out = writeU64Le(out, normalized.sourceEventLeafIndex);
+  out = writeU64Le(out, normalized.finalizedBlockNumber);
+  out = writeU64Le(out, normalized.grandpaSetId);
+  out = concatBytes(
+    out,
+    hexToBytes(normalized.blockHash, "blockHash", 32),
+    hexToBytes(normalized.authoritySetHash, "authoritySetHash", 32),
+    hexToBytes(normalized.eventsRoot, "eventsRoot", 32),
+  );
+  return writeSccpH256Branch(out, normalized.inclusionBranch);
+}
+
+export function substrateSccpStorageProofHash(input) {
+  return bytesToHex(
+    prefixedBlake2b(
+      SCCP_SUBSTRATE_STORAGE_PROOF_PREFIX_V1,
+      canonicalSubstrateSccpStorageProofBytes(input),
+    ),
+  );
+}
+
+const normalizeSubstrateSccpRuntimeStorageProofRequestInput = (input) => {
+  const storageProof = normalizeSubstrateSccpStorageProofInput(input);
+  if (!isSubstrateRuntimeStorageSourceDomain(storageProof.sourceDomain)) {
+    throw new RangeError("sourceDomain must be a Substrate-family SCCP source domain");
+  }
+  const storageProofHash = substrateSccpStorageProofHash(storageProof);
+  const suppliedStorageProofHash = strictOptionalResultField(
+    input,
+    "storageProofHash",
+    "storageProofHash",
+    "storage_proof_hash",
+  );
+  if (
+    suppliedStorageProofHash !== SCCP_OPTIONAL_FIELD_MISSING &&
+    normalizeHex32(suppliedStorageProofHash, "storageProofHash") !== storageProofHash
+  ) {
+    throw new TypeError("storageProofHash must match Substrate runtime-storage statement");
+  }
+  const materialSource = strictOptionalResultField(
+    input,
+    "sourceVerifierMaterial",
+    "sourceVerifierMaterial",
+    "source_verifier_material",
+    "material",
+  );
+  if (materialSource && typeof materialSource === "object" && !Array.isArray(materialSource)) {
+    const materialDomain = strictOptionalResultField(
+      materialSource,
+      "sourceVerifierMaterial.sourceDomain",
+      "sourceDomain",
+      "source_domain",
+    );
+    if (
+      materialDomain !== SCCP_OPTIONAL_FIELD_MISSING &&
+      normalizeSccpDomainId(materialDomain, "sourceVerifierMaterial.sourceDomain") !==
+        storageProof.sourceDomain
+    ) {
+      throw new RangeError("sourceVerifierMaterial.sourceDomain must match sourceDomain");
+    }
+  }
+  const materialInput = {
+    ...((materialSource !== SCCP_OPTIONAL_FIELD_MISSING &&
+      materialSource &&
+      typeof materialSource === "object" &&
+      !Array.isArray(materialSource))
+      ? materialSource
+      : {}),
+    ...input,
+  };
+  delete materialInput.sourceDomain;
+  delete materialInput.source_domain;
+  materialInput.sourceDomain = storageProof.sourceDomain;
+  const material = normalizeSccpSourceVerifierMaterial(materialInput);
+  if (!isSubstrateRuntimeStorageSourceDomain(material.sourceDomain)) {
+    throw new RangeError("sourceVerifierMaterial.sourceDomain must be a Substrate-family SCCP domain");
+  }
+  if (material.sourceDomain !== storageProof.sourceDomain) {
+    throw new RangeError("sourceVerifierMaterial.sourceDomain must match sourceDomain");
+  }
+  if (!material.sourceStateVerifierId || isZeroHex32(material.sourceStateVerifierHash, "sourceStateVerifierHash")) {
+    throw new TypeError("sourceStateVerifierHash must bind a deployed Substrate runtime-storage verifier");
+  }
+  if (
+    material.sourceStateVerifierHash ===
+    SCCP_SUBSTRATE_TEMPLATE_SOURCE_STATE_VERIFIER_HASHES_V1.get(material.sourceDomain)
+  ) {
+    throw new TypeError("sourceStateVerifierHash must not be the Substrate template verifier hash");
+  }
+  return {
+    ...storageProof,
+    storageProofHash,
+    material,
+  };
+};
+
+export function canonicalSubstrateSccpRuntimeStorageVerificationStatementBytes(input) {
+  return canonicalSubstrateSccpStorageProofBytes(
+    normalizeSubstrateSccpRuntimeStorageProofRequestInput(input),
+  );
+}
+
+export function substrateSccpRuntimeStorageProofPublicInputsHash(input) {
+  return bytesToHex(
+    prefixedBlake2b(
+      SCCP_SUBSTRATE_RUNTIME_STORAGE_PROOF_PUBLIC_INPUTS_PREFIX_V1,
+      canonicalSubstrateSccpRuntimeStorageVerificationStatementBytes(input),
+    ),
+  );
+}
+
+export function canonicalSubstrateSccpRuntimeStorageVerificationContextBytes(input) {
+  const normalized = normalizeSubstrateSccpRuntimeStorageProofRequestInput(input);
+  const material = normalized.material;
+  let out = new Uint8Array();
+  out = writeU8(out, 1);
+  out = writeString(out, SCCP_SUBSTRATE_RUNTIME_STORAGE_OPEN_VERIFY_CIRCUIT_ID_V1, "circuitId");
+  out = writeString(out, SCCP_SUBSTRATE_RUNTIME_STORAGE_FASTPQ_PARAMETER_SET_V1, "parameterSet");
+  out = writeString(out, material.sourceStateVerifierId, "sourceStateVerifierId");
+  out = concatBytes(out, hexToBytes(material.sourceStateVerifierHash, "sourceStateVerifierHash", 32));
+  out = writeString(out, material.sourceTrustAnchorId, "sourceTrustAnchorId");
+  out = concatBytes(out, hexToBytes(material.sourceTrustAnchorHash, "sourceTrustAnchorHash", 32));
+  out = writeString(out, material.consensusVerifierId, "consensusVerifierId");
+  out = concatBytes(out, hexToBytes(material.consensusVerifierHash, "consensusVerifierHash", 32));
+  out = writeString(out, material.messageInclusionVerifierId, "messageInclusionVerifierId");
+  out = concatBytes(out, hexToBytes(material.messageInclusionVerifierHash, "messageInclusionVerifierHash", 32));
+  out = writeString(out, material.finalityPolicyId, "finalityPolicyId");
+  return concatBytes(
+    out,
+    hexToBytes(material.finalityPolicyHash, "finalityPolicyHash", 32),
+    hexToBytes(
+      substrateSccpRuntimeStorageProofPublicInputsHash(normalized),
+      "runtimeStorageProofPublicInputsHash",
+      32,
+    ),
+  );
+}
+
+export function substrateSccpRuntimeStoragePublicInputColumns(input) {
+  const normalized = normalizeSubstrateSccpRuntimeStorageProofRequestInput(input);
+  return [
+    [bytesToHex(sccpWordU32Le(normalized.sourceDomain))],
+    [bytesToHex(sccpWordU64Le(normalized.finalizedBlockNumber))],
+    [bytesToHex(sccpWordU64Le(normalized.grandpaSetId))],
+    [normalized.blockHash],
+    [normalized.authoritySetHash],
+    [normalized.eventsRoot],
+    [normalized.storageProofHash],
+    [normalized.sourceEventDigest],
+    [SCCP_SUBSTRATE_SYSTEM_EVENTS_STORAGE_KEY_V1],
+    [bytesToHex(sccpWordU64Le(normalized.sourceEventLeafIndex))],
+    [substrateSccpRuntimeStorageProofPublicInputsHash(normalized)],
+  ];
+}
+
+export function substrateSccpRuntimeStorageOpenVerifySchemaDescriptor(input) {
+  const sourceDomain =
+    typeof input === "object" && input !== null
+      ? normalizeSccpDomainId(
+        strictResultField(input, "sourceDomain", "sourceDomain", "source_domain"),
+        "sourceDomain",
+      )
+      : normalizeSccpDomainId(input, "sourceDomain");
+  if (!isSubstrateRuntimeStorageSourceDomain(sourceDomain)) {
+    throw new RangeError("sourceDomain must be a Substrate-family SCCP source domain");
+  }
+  const chain = sourceAdapterVerifierProfile(sourceDomain).chain;
+  let descriptor = new Uint8Array();
+  descriptor = writeU8(descriptor, 1);
+  descriptor = writeString(descriptor, SCCP_SUBSTRATE_RUNTIME_STORAGE_OPEN_VERIFY_CIRCUIT_ID_V1, "circuitId");
+  descriptor = writeString(descriptor, SCCP_SUBSTRATE_RUNTIME_STORAGE_FASTPQ_PARAMETER_SET_V1, "parameterSet");
+  descriptor = writeString(descriptor, chain, "sourceChain");
+  descriptor = writeU32Le(descriptor, sourceDomain);
+  for (const requiredInput of [
+    "source_domain",
+    "finalized_block_number",
+    "grandpa_set_id",
+    "block_hash",
+    "authority_set_hash",
+    "events_root",
+    "storage_proof_hash",
+    "source_event_digest",
+    "system_events_storage_key",
+    "source_event_leaf_index",
+    "runtime_storage_proof_public_inputs_hash",
+  ]) {
+    descriptor = writeString(descriptor, requiredInput, "requiredInput");
+  }
+  return descriptor;
+}
+
+export function buildSubstrateSccpRuntimeStorageProofRequest(input) {
+  const normalized = normalizeSubstrateSccpRuntimeStorageProofRequestInput(input);
+  const statementBytes = canonicalSubstrateSccpRuntimeStorageVerificationStatementBytes(normalized);
+  const verificationContextBytes =
+    canonicalSubstrateSccpRuntimeStorageVerificationContextBytes(normalized);
+  const publicInputsHash = substrateSccpRuntimeStorageProofPublicInputsHash(normalized);
+  const dsidHash = prefixedBlake2b(
+    SCCP_SUBSTRATE_RUNTIME_STORAGE_FASTPQ_DSID_PREFIX_V1,
+    hexToBytes(publicInputsHash, "runtimeStorageProofPublicInputsHash", 32),
+  );
+  return immutableFastpqProofRequest(
+    {
+      version: 1,
+      proofFamily: SCCP_STARK_FRI_PROOF_FAMILY_V1,
+      circuitId: SCCP_SUBSTRATE_RUNTIME_STORAGE_OPEN_VERIFY_CIRCUIT_ID_V1,
+      parameterSet: SCCP_SUBSTRATE_RUNTIME_STORAGE_FASTPQ_PARAMETER_SET_V1,
+      sourceDomain: normalized.sourceDomain,
+      finalizedBlockNumber: normalized.finalizedBlockNumber.toString(),
+      grandpaSetId: normalized.grandpaSetId.toString(),
+      sourceStateVerifierId: normalized.material.sourceStateVerifierId,
+      sourceStateVerifierHash: normalized.material.sourceStateVerifierHash,
+      runtimeStorageProofPublicInputsHash: publicInputsHash,
+      storageProofHash: normalized.storageProofHash,
+      statementBytes,
+      verificationContextBytes,
+      schemaDescriptor: substrateSccpRuntimeStorageOpenVerifySchemaDescriptor(normalized.sourceDomain),
+      publicInputColumns: substrateSccpRuntimeStoragePublicInputColumns(normalized),
+      fastpqPublicInputs: {
+        dsid: bytesToHex(dsidHash.slice(0, 16)),
+        slot: normalized.finalizedBlockNumber.toString(),
+        oldRoot: normalized.authoritySetHash,
+        newRoot: normalized.blockHash,
+        permRoot: normalized.eventsRoot,
+        txSetHash: publicInputsHash,
+      },
+      fastpqTransitions: [
+        {
+          key: SCCP_SUBSTRATE_RUNTIME_STORAGE_FASTPQ_STATEMENT_KEY_V1,
+          operation: "meta_set",
+          oldValue: "0x",
+          newValue: bytesToHex(statementBytes),
+        },
+        {
+          key: SCCP_SUBSTRATE_RUNTIME_STORAGE_FASTPQ_CONTEXT_KEY_V1,
+          operation: "meta_set",
+          oldValue: "0x",
+          newValue: bytesToHex(verificationContextBytes),
+        },
+        {
+          key: SCCP_SUBSTRATE_RUNTIME_STORAGE_FASTPQ_STORAGE_KEY_V1,
+          operation: "meta_set",
+          oldValue: "0x",
+          newValue: SCCP_SUBSTRATE_SYSTEM_EVENTS_STORAGE_KEY_V1,
+        },
+      ].sort((left, right) => left.key.localeCompare(right.key)),
+    },
+    ["statementBytes", "verificationContextBytes", "schemaDescriptor"],
+  );
+}
+
+export function canonicalSubstrateAuthoritySetPayloadBytes(input) {
+  if (!input || typeof input !== "object" || Array.isArray(input)) {
+    throw new TypeError("Substrate authority-set payload input must be an object");
+  }
+  const authorityPublicKeys = strictResultField(input, "authorityPublicKeys", "authorityPublicKeys", "authority_public_keys");
+  const authorityWeights = strictResultField(input, "authorityWeights", "authorityWeights", "authority_weights");
+  if (!Array.isArray(authorityPublicKeys)) {
+    throw new TypeError("authorityPublicKeys must be an array");
+  }
+  if (!Array.isArray(authorityWeights)) {
+    throw new TypeError("authorityWeights must be an array");
+  }
+  if (authorityPublicKeys.length === 0 || authorityPublicKeys.length !== authorityWeights.length) {
+    throw new RangeError("authorityPublicKeys and authorityWeights must be non-empty equal-length arrays");
+  }
+  if (authorityPublicKeys.length > SCCP_SUBSTRATE_MAX_AUTHORITIES) {
+    throw new RangeError(`authorityPublicKeys must contain at most ${SCCP_SUBSTRATE_MAX_AUTHORITIES} entries`);
+  }
+
+  let out = new Uint8Array();
+  out = writeU8(out, 1);
+  out = writeU32Le(out, authorityPublicKeys.length);
+  const seenPublicKeys = new Set();
+  for (const [index, publicKeyValue] of authorityPublicKeys.entries()) {
+    const publicKey = hexToBytes(publicKeyValue, `authorityPublicKeys[${index}]`, 32);
+    if (publicKey.every((byte) => byte === 0)) {
+      throw new RangeError(`authorityPublicKeys[${index}] must not be zero`);
+    }
+    const publicKeyHex = bytesToHex(publicKey, false);
+    if (seenPublicKeys.has(publicKeyHex)) {
+      throw new RangeError(`authorityPublicKeys[${index}] must be unique`);
+    }
+    seenPublicKeys.add(publicKeyHex);
+    const weight = normalizeUnsignedBigInt(authorityWeights[index], `authorityWeights[${index}]`);
+    if (weight === 0n) {
+      throw new RangeError(`authorityWeights[${index}] must not be zero`);
+    }
+    out = concatBytes(out, publicKey);
+    out = writeU64Le(out, weight);
+  }
+  return out;
+}
+
+function decodeSubstrateAuthoritySetPayload(payload) {
+  if (payload.length > SCCP_SUBSTRATE_MAX_AUTHORITY_SET_PAYLOAD_BYTES) {
+    throw new RangeError(
+      `Substrate authority-set payload must be at most ${SCCP_SUBSTRATE_MAX_AUTHORITY_SET_PAYLOAD_BYTES} bytes`,
+    );
+  }
+  if (payload.length < 5 || payload[0] !== 1) {
+    throw new RangeError("Substrate authority-set payload must start with version 1");
+  }
+  let cursor = 1;
+  const authorityCount =
+    payload[cursor] |
+    (payload[cursor + 1] << 8) |
+    (payload[cursor + 2] << 16) |
+    (payload[cursor + 3] << 24);
+  cursor += 4;
+  if (
+    authorityCount === 0 ||
+    authorityCount > SCCP_SUBSTRATE_MAX_AUTHORITIES ||
+    payload.length - cursor !== authorityCount * 40
+  ) {
+    throw new RangeError("Substrate authority-set payload length is invalid");
+  }
+  const seenPublicKeys = new Set();
+  for (let index = 0; index < authorityCount; index += 1) {
+    const publicKey = payload.slice(cursor, cursor + 32);
+    cursor += 32;
+    if (publicKey.every((byte) => byte === 0)) {
+      throw new RangeError(`authorityPublicKeys[${index}] must not be zero`);
+    }
+    const publicKeyHex = bytesToHex(publicKey, false);
+    if (seenPublicKeys.has(publicKeyHex)) {
+      throw new RangeError(`authorityPublicKeys[${index}] must be unique`);
+    }
+    seenPublicKeys.add(publicKeyHex);
+    let weight = 0n;
+    for (let offset = 0; offset < 8; offset += 1) {
+      weight |= BigInt(payload[cursor + offset]) << BigInt(offset * 8);
+    }
+    cursor += 8;
+    if (weight === 0n) {
+      throw new RangeError(`authorityWeights[${index}] must not be zero`);
+    }
+  }
+}
+
+const substrateAuthoritySetPayloadBytes = (input) =>
+  {
+    const payload =
+      input instanceof Uint8Array || ArrayBuffer.isView(input) || input instanceof ArrayBuffer || Array.isArray(input)
+        ? toBytes(input, "authoritySetPayload")
+        : typeof input === "string"
+          ? hexToBytes(input, "authoritySetPayload")
+          : canonicalSubstrateAuthoritySetPayloadBytes(input);
+    decodeSubstrateAuthoritySetPayload(payload);
+    return payload;
+  };
+
+export function substrateAuthoritySetPayloadHash(input) {
+  return bytesToHex(
+    prefixedBlake2b(
+      SCCP_SUBSTRATE_AUTHORITY_SET_PAYLOAD_PREFIX_V1,
+      substrateAuthoritySetPayloadBytes(input),
+    ),
+  );
+}
+
+export function substrateAuthoritySetHashFromPayload(input) {
+  return bytesToHex(
+    prefixedBlake2b(
+      SCCP_SUBSTRATE_AUTHORITY_SET_PREFIX_V1,
+      substrateAuthoritySetPayloadBytes(input),
+    ),
+  );
+}
+
+function substrateTransitionPayloadHashBytes(input) {
+  const provided = strictOptionalResultField(
+    input,
+    "nextAuthoritySetPayloadHash",
+    "nextAuthoritySetPayloadHash",
+    "next_authority_set_payload_hash",
+    "nextAuthoritySetProofHash",
+    "next_authority_set_proof_hash",
+  );
+  const payloadValue = strictOptionalResultField(
+    input,
+    "nextAuthoritySetPayload",
+    "nextAuthoritySetPayload",
+    "next_authority_set_payload",
+  );
+  if (provided === SCCP_OPTIONAL_FIELD_MISSING && payloadValue === SCCP_OPTIONAL_FIELD_MISSING) {
+    throw new TypeError("nextAuthoritySetPayloadHash or nextAuthoritySetPayload is required");
+  }
+  const payloadHash =
+    provided === SCCP_OPTIONAL_FIELD_MISSING
+      ? hexToBytes(substrateAuthoritySetPayloadHash(payloadValue), "nextAuthoritySetPayloadHash", 32)
+      : hexToBytes(provided, "nextAuthoritySetPayloadHash", 32);
+  if (payloadValue !== SCCP_OPTIONAL_FIELD_MISSING) {
+    const derived = hexToBytes(substrateAuthoritySetPayloadHash(payloadValue), "nextAuthoritySetPayloadHash", 32);
+    if (!bytesEqual(payloadHash, derived)) {
+      throw new TypeError("nextAuthoritySetPayloadHash must match nextAuthoritySetPayload");
+    }
+  }
+  return payloadHash;
+}
+
+export function canonicalSubstrateAuthoritySetTransitionMessageBytes(input) {
+  if (!input || typeof input !== "object" || Array.isArray(input)) {
+    throw new TypeError("Substrate authority-set transition message input must be an object");
+  }
+  let out = new Uint8Array();
+  out = writeU8(out, 1);
+  out = writeU32Le(
+    out,
+    normalizeSccpDomainId(
+      strictResultField(input, "sourceDomain", "sourceDomain", "source_domain"),
+      "sourceDomain",
+    ),
+  );
+  out = writeU64Le(
+    out,
+    normalizeUnsignedBigInt(
+      strictResultField(input, "fromGrandpaSetId", "fromGrandpaSetId", "from_grandpa_set_id"),
+      "fromGrandpaSetId",
+    ),
+  );
+  out = writeU64Le(
+    out,
+    normalizeUnsignedBigInt(
+      strictResultField(input, "toGrandpaSetId", "toGrandpaSetId", "to_grandpa_set_id"),
+      "toGrandpaSetId",
+    ),
+  );
+  out = writeU64Le(
+    out,
+    normalizeUnsignedBigInt(
+      strictResultField(input, "transitionBlockNumber", "transitionBlockNumber", "transition_block_number"),
+      "transitionBlockNumber",
+    ),
+  );
+  out = concatBytes(
+    out,
+    hexToBytes(
+      strictResultField(input, "transitionBlockHash", "transitionBlockHash", "transition_block_hash"),
+      "transitionBlockHash",
+      32,
+    ),
+    hexToBytes(
+      strictResultField(input, "parentAuthoritySetHash", "parentAuthoritySetHash", "parent_authority_set_hash"),
+      "parentAuthoritySetHash",
+      32,
+    ),
+    hexToBytes(
+      strictResultField(input, "nextAuthoritySetHash", "nextAuthoritySetHash", "next_authority_set_hash"),
+      "nextAuthoritySetHash",
+      32,
+    ),
+    substrateTransitionPayloadHashBytes(input),
+  );
+  return out;
+}
+
+export function substrateAuthoritySetTransitionMessageHash(input) {
+  return bytesToHex(
+    prefixedBlake2b(
+      SCCP_SUBSTRATE_AUTHORITY_SET_TRANSITION_MESSAGE_PREFIX_V1,
+      canonicalSubstrateAuthoritySetTransitionMessageBytes(input),
+    ),
+  );
+}
+
+function canonicalSubstrateGrandpaJustificationProofBytes(input) {
+  if (!input || typeof input !== "object" || Array.isArray(input)) {
+    throw new TypeError("Substrate GRANDPA justification proof input must be an object");
+  }
+  const authorityPublicKeys = strictResultField(input, "authorityPublicKeys", "authorityPublicKeys", "authority_public_keys");
+  const authorityWeights = strictResultField(input, "authorityWeights", "authorityWeights", "authority_weights");
+  const signatures = input.signatures;
+  if (!Array.isArray(authorityPublicKeys)) throw new TypeError("authorityPublicKeys must be an array");
+  if (!Array.isArray(authorityWeights)) throw new TypeError("authorityWeights must be an array");
+  if (authorityPublicKeys.length === 0 || authorityPublicKeys.length !== authorityWeights.length) {
+    throw new RangeError("authorityPublicKeys and authorityWeights must be non-empty equal-length arrays");
+  }
+  if (authorityPublicKeys.length > SCCP_SUBSTRATE_MAX_AUTHORITIES) {
+    throw new RangeError(`authorityPublicKeys must contain at most ${SCCP_SUBSTRATE_MAX_AUTHORITIES} entries`);
+  }
+  if (!Array.isArray(signatures)) throw new TypeError("signatures must be an array");
+  if (signatures.length > SCCP_SUBSTRATE_MAX_AUTHORITIES) {
+    throw new RangeError(`signatures must contain at most ${SCCP_SUBSTRATE_MAX_AUTHORITIES} entries`);
+  }
+  const signersBitmap = toBytes(
+    strictResultField(input, "signersBitmap", "signersBitmap", "signers_bitmap"),
+    "signersBitmap",
+  );
+
+  let out = new Uint8Array();
+  out = writeU8(
+    out,
+    normalizeOptionalV1Version(input, "Substrate GRANDPA justification version", RangeError, "version"),
+  );
+  const totalWeight = normalizeUnsignedBigInt(
+    strictResultField(input, "totalWeight", "totalWeight", "total_weight"),
+    "totalWeight",
+  );
+  const signedWeight = normalizeUnsignedBigInt(
+    strictResultField(input, "signedWeight", "signedWeight", "signed_weight"),
+    "signedWeight",
+  );
+  out = writeU64Le(out, totalWeight);
+  out = writeU64Le(out, signedWeight);
+  out = concatBytes(
+    out,
+    hexToBytes(
+      strictResultField(input, "precommitMessageHash", "precommitMessageHash", "precommit_message_hash"),
+      "precommitMessageHash",
+      32,
+    ),
+  );
+  out = writeU32Le(out, authorityPublicKeys.length);
+  const seenPublicKeys = new Set();
+  const normalizedWeights = [];
+  for (const [index, publicKeyValue] of authorityPublicKeys.entries()) {
+    const publicKey = hexToBytes(publicKeyValue, `authorityPublicKeys[${index}]`, 32);
+    if (publicKey.every((byte) => byte === 0)) {
+      throw new RangeError(`authorityPublicKeys[${index}] must not be zero`);
+    }
+    const publicKeyHex = bytesToHex(publicKey, false);
+    if (seenPublicKeys.has(publicKeyHex)) {
+      throw new RangeError(`authorityPublicKeys[${index}] must be unique`);
+    }
+    seenPublicKeys.add(publicKeyHex);
+    out = writeBytes(out, publicKey);
+  }
+  out = writeU32Le(out, authorityWeights.length);
+  for (const [index, weightValue] of authorityWeights.entries()) {
+    const weight = normalizeUnsignedBigInt(weightValue, `authorityWeights[${index}]`);
+    if (weight === 0n) throw new RangeError(`authorityWeights[${index}] must not be zero`);
+    normalizedWeights.push(weight);
+    out = writeU64Le(out, weight);
+  }
+  const computedTotalWeight = normalizedWeights.reduce((sum, weight) => sum + weight, 0n);
+  if (totalWeight !== computedTotalWeight) {
+    throw new RangeError("totalWeight must match authorityWeights");
+  }
+  if (signersBitmap.length !== Math.ceil(authorityPublicKeys.length / 8)) {
+    throw new RangeError("signersBitmap length must match authorityPublicKeys");
+  }
+  const signerIndices = [];
+  signersBitmap.forEach((byte, byteIndex) => {
+    for (let bit = 0; bit < 8; bit += 1) {
+      if (((byte >> bit) & 1) === 0) continue;
+      const index = byteIndex * 8 + bit;
+      if (index >= authorityPublicKeys.length) {
+        throw new RangeError("signersBitmap must not set padding bits");
+      }
+      signerIndices.push(index);
+    }
+  });
+  if (signerIndices.length === 0) {
+    throw new RangeError("signersBitmap must select at least one authority");
+  }
+  if (signatures.length !== signerIndices.length) {
+    throw new TypeError("signatures length must match signersBitmap");
+  }
+  const computedSignedWeight = signerIndices.reduce(
+    (sum, index) => sum + normalizedWeights[index],
+    0n,
+  );
+  if (signedWeight !== computedSignedWeight) {
+    throw new RangeError("signedWeight must match signersBitmap");
+  }
+  if (signedWeight * 3n <= totalWeight * 2n) {
+    throw new RangeError("signedWeight must be greater than two thirds of totalWeight");
+  }
+  out = writeBytes(out, signersBitmap);
+  out = writeU32Le(out, signatures.length);
+  for (const [index, signatureValue] of signatures.entries()) {
+    const signature = toBytes(signatureValue, `signatures[${index}]`);
+    if (signature.length !== 64) throw new RangeError(`signatures[${index}] must be 64 bytes`);
+    if (signature.every((byte) => byte === 0)) {
+      throw new RangeError(`signatures[${index}] must not be all zero`);
+    }
+    out = writeBytes(out, signature);
+  }
+  return out;
+}
+
+export function canonicalSubstrateAuthoritySetTransitionJustificationBytes(input) {
+  if (!input || typeof input !== "object" || Array.isArray(input)) {
+    throw new TypeError("Substrate authority-set transition justification input must be an object");
+  }
+  const grandpaJustification = strictResultField(
+    input,
+    "grandpaJustification",
+    "grandpaJustification",
+    "grandpa_justification",
+  );
+  if (!grandpaJustification || typeof grandpaJustification !== "object" || Array.isArray(grandpaJustification)) {
+    throw new TypeError("grandpaJustification must be an object");
+  }
+  const parentAuthoritySetHash = hexToBytes(
+    strictResultField(input, "parentAuthoritySetHash", "parentAuthoritySetHash", "parent_authority_set_hash"),
+    "parentAuthoritySetHash",
+    32,
+  );
+  const derivedParentAuthoritySetHash = hexToBytes(
+    substrateAuthoritySetHashFromPayload({
+      authorityPublicKeys: strictResultField(
+        grandpaJustification,
+        "authorityPublicKeys",
+        "authorityPublicKeys",
+        "authority_public_keys",
+      ),
+      authorityWeights: strictResultField(
+        grandpaJustification,
+        "authorityWeights",
+        "authorityWeights",
+        "authority_weights",
+      ),
+    }),
+    "parentAuthoritySetHash",
+    32,
+  );
+  if (!bytesEqual(parentAuthoritySetHash, derivedParentAuthoritySetHash)) {
+    throw new TypeError("parentAuthoritySetHash must match grandpaJustification authority set");
+  }
+  const nextPayload = substrateAuthoritySetPayloadBytes(
+    strictResultField(input, "nextAuthoritySetPayload", "nextAuthoritySetPayload", "next_authority_set_payload"),
+  );
+  const nextPayloadHash = substrateTransitionPayloadHashBytes(input);
+  const nextAuthoritySetHash = hexToBytes(
+    strictResultField(input, "nextAuthoritySetHash", "nextAuthoritySetHash", "next_authority_set_hash"),
+    "nextAuthoritySetHash",
+    32,
+  );
+  const derivedNextAuthoritySetHash = hexToBytes(
+    substrateAuthoritySetHashFromPayload(nextPayload),
+    "nextAuthoritySetHash",
+    32,
+  );
+  if (!bytesEqual(nextAuthoritySetHash, derivedNextAuthoritySetHash)) {
+    throw new TypeError("nextAuthoritySetHash must match nextAuthoritySetPayload");
+  }
+  const transitionMessageHash = hexToBytes(
+    strictResultField(input, "transitionMessageHash", "transitionMessageHash", "transition_message_hash"),
+    "transitionMessageHash",
+    32,
+  );
+  const precommitMessageHash = hexToBytes(
+    strictResultField(
+      grandpaJustification,
+      "precommitMessageHash",
+      "precommitMessageHash",
+      "precommit_message_hash",
+    ),
+    "precommitMessageHash",
+    32,
+  );
+  if (!bytesEqual(transitionMessageHash, precommitMessageHash)) {
+    throw new TypeError("grandpaJustification.precommitMessageHash must match transitionMessageHash");
+  }
+
+  let out = new Uint8Array();
+  out = writeU8(
+    out,
+    normalizeOptionalV1Version(
+      input,
+      "Substrate authority-set transition justification version",
+      RangeError,
+      "version",
+    ),
+  );
+  out = writeU32Le(
+    out,
+    normalizeSccpDomainId(
+      strictResultField(input, "sourceDomain", "sourceDomain", "source_domain"),
+      "sourceDomain",
+    ),
+  );
+  out = writeU64Le(
+    out,
+    normalizeUnsignedBigInt(
+      strictResultField(input, "fromGrandpaSetId", "fromGrandpaSetId", "from_grandpa_set_id"),
+      "fromGrandpaSetId",
+    ),
+  );
+  out = writeU64Le(
+    out,
+    normalizeUnsignedBigInt(
+      strictResultField(input, "toGrandpaSetId", "toGrandpaSetId", "to_grandpa_set_id"),
+      "toGrandpaSetId",
+    ),
+  );
+  out = writeU64Le(
+    out,
+    normalizeUnsignedBigInt(
+      strictResultField(input, "transitionBlockNumber", "transitionBlockNumber", "transition_block_number"),
+      "transitionBlockNumber",
+    ),
+  );
+  out = concatBytes(
+    out,
+    hexToBytes(
+      strictResultField(input, "transitionBlockHash", "transitionBlockHash", "transition_block_hash"),
+      "transitionBlockHash",
+      32,
+    ),
+    parentAuthoritySetHash,
+    nextAuthoritySetHash,
+  );
+  out = writeBytes(out, nextPayload);
+  out = concatBytes(out, nextPayloadHash, transitionMessageHash, derivedParentAuthoritySetHash);
+  out = concatBytes(out, canonicalSubstrateGrandpaJustificationProofBytes(grandpaJustification));
+  return out;
+}
+
+export function substrateAuthoritySetTransitionJustificationHash(input) {
+  return bytesToHex(
+    prefixedBlake2b(
+      SCCP_SUBSTRATE_AUTHORITY_SET_TRANSITION_JUSTIFICATION_PREFIX_V1,
+      canonicalSubstrateAuthoritySetTransitionJustificationBytes(input),
+    ),
+  );
+}
+
+export function normalizeSolanaSccpWitness(input) {
+  if (!input || typeof input !== "object" || Array.isArray(input)) {
+    throw new TypeError("Solana SCCP witness must be an object");
+  }
+  const bundle = input.bundle && typeof input.bundle === "object" ? input.bundle : null;
+  const commitment = bundle?.commitment ?? input.commitment ?? {};
+  const witnessField = (label, ...names) =>
+    strictResultField(input, label, ...new Set(names));
+  const witnessOptionalField = (label, ...names) =>
+    strictOptionalResultField(input, label, ...new Set(names));
+  const witnessFieldOrDefault = (label, defaultValue, ...names) => {
+    const selected = witnessOptionalField(label, ...names);
+    return selected === SCCP_OPTIONAL_FIELD_MISSING ||
+      selected === undefined ||
+      selected === null
+      ? defaultValue
+      : selected;
+  };
+  const witnessFieldOrCommitment = (label, commitmentKey, ...names) => {
+    const selected = witnessOptionalField(label, ...names);
+    return selected === SCCP_OPTIONAL_FIELD_MISSING ||
+      selected === undefined ||
+      selected === null
+      ? commitment?.[commitmentKey]
+      : selected;
+  };
+  const payload = bundle?.payload ?? input.payload ?? null;
+  const targetDomain = normalizeSccpDomainId(
+    witnessFieldOrCommitment("targetDomain", "target_domain", "targetDomain", "target_domain"),
+    "targetDomain",
+    SCCP_DOMAIN_SORA,
+  );
+  if (targetDomain !== SCCP_DOMAIN_SORA) {
+    throw new RangeError("targetDomain must be SORA");
+  }
+  const messageId = witnessFieldOrCommitment("messageId", "message_id", "messageId", "message_id");
+  const payloadHash = witnessFieldOrCommitment(
+    "payloadHash",
+    "payload_hash",
+    "payloadHash",
+    "payload_hash",
+  );
+  const finalizedSlot = normalizeUnsignedBigInt(
+    witnessField("finalizedSlot", "finalizedSlot", "finalized_slot", "slot"),
+    "finalizedSlot",
+  );
+  const parentSlot = normalizeUnsignedBigInt(
+    witnessField("parentSlot", "parentSlot", "parent_slot"),
+    "parentSlot",
+  );
+  if (parentSlot + 1n !== finalizedSlot) {
+    throw new RangeError("parentSlot must be the direct parent of finalizedSlot");
+  }
+  const bankSignatureCount = normalizeUnsignedBigInt(
+    witnessField("bankSignatureCount", "bankSignatureCount", "bank_signature_count"),
+    "bankSignatureCount",
+  );
+  if (bankSignatureCount === 0n) {
+    throw new RangeError("bankSignatureCount must be nonzero");
+  }
+  const parentBankHash = normalizeNonZeroHex32(
+    witnessField("parentBankHash", "parentBankHash", "parent_bank_hash"),
+    "parentBankHash",
+  );
+  const bankHash = normalizeNonZeroHex32(
+    witnessField("bankHash", "bankHash", "bank_hash"),
+    "bankHash",
+  );
+  const blockhashBytes = normalizeSolanaHash32Bytes(
+    witnessField("blockhash", "blockhashBytes", "blockhash_bytes", "blockhash"),
+    "blockhash",
+  );
+  const transactionStatusRoot = normalizeNonZeroHex32(
+    witnessField("transactionStatusRoot", "transactionStatusRoot", "transaction_status_root"),
+    "transactionStatusRoot",
+  );
+  const sourceEventDigest = normalizeNonZeroHex32(
+    witnessField("sourceEventDigest", "sourceEventDigest", "source_event_digest"),
+    "sourceEventDigest",
+  );
+  const transactionSignature = normalizeSolanaBase58FixedString(
+    witnessField("transactionSignature", "transactionSignature", "transaction_signature"),
+    "transactionSignature",
+    SCCP_SOLANA_TRANSACTION_SIGNATURE_BYTES,
+  );
+  const emitterProgramId = normalizeSolanaBase58FixedString(
+    witnessField("emitterProgramId", "emitterProgramId", "emitter_program_id"),
+    "emitterProgramId",
+    SCCP_SOLANA_PROGRAM_ID_BYTES,
+  );
+  const inclusionBranch = witnessOptionalField(
+    "inclusionBranch",
+    "inclusionBranch",
+    "inclusion_branch",
+  );
+  const normalizedInclusionBranch =
+    inclusionBranch === SCCP_OPTIONAL_FIELD_MISSING || inclusionBranch === undefined
+      ? undefined
+      : normalizeSolanaInclusionBranch(inclusionBranch);
+  if (normalizedInclusionBranch !== undefined) {
+    const derivedTransactionStatusRoot = solanaSccpTransactionStatusRootFromBranch({
+      sourceEventDigest,
+      transactionSignature,
+      emitterProgramId,
+      inclusionBranch: normalizedInclusionBranch,
+    });
+    if (transactionStatusRoot !== derivedTransactionStatusRoot) {
+      throw new TypeError("transactionStatusRoot must match inclusionBranch");
+    }
+  }
+  const derivedMessageProofHash =
+    normalizedInclusionBranch === undefined
+      ? undefined
+      : solanaSccpMessageProofHash({
+          sourceEventDigest,
+          transactionStatusRoot,
+          transactionSignature,
+          emitterProgramId,
+          inclusionBranch: normalizedInclusionBranch,
+        });
+  const providedMessageProofHash = witnessField(
+    "messageProofHash",
+    "messageProofHash",
+    "message_proof_hash",
+  );
+  const messageProofHash =
+    derivedMessageProofHash !== undefined &&
+    (providedMessageProofHash === undefined ||
+      (typeof providedMessageProofHash === "string" && providedMessageProofHash.trim() === ""))
+      ? derivedMessageProofHash
+      : normalizeHex32(providedMessageProofHash, "messageProofHash");
+  if (derivedMessageProofHash !== undefined && messageProofHash !== derivedMessageProofHash) {
+    throw new TypeError("messageProofHash must match inclusionBranch");
+  }
+  const accountInclusionRoot = normalizeNonZeroHex32(
+    witnessField(
+      "accountInclusionRoot",
+      "accountInclusionRoot",
+      "account_inclusion_root",
+      "accountsRoot",
+      "accounts_root",
+    ),
+    "accountInclusionRoot",
+  );
+  const accountsLtHashChecksum = normalizeNonZeroHex32(
+    witnessField(
+      "accountsLtHashChecksum",
+      "accountsLtHashChecksum",
+      "accounts_lt_hash_checksum",
+      "accountsLtHashRoot",
+      "accounts_lt_hash_root",
+    ),
+    "accountsLtHashChecksum",
+  );
+  const bankHashHardForkData = toMaybeEmptyBytes(
+    witnessFieldOrDefault(
+      "bankHashHardForkData",
+      new Uint8Array(),
+      "bankHashHardForkData",
+      "bank_hash_hard_fork_data",
+    ),
+    "bankHashHardForkData",
+  );
+  if (bankHashHardForkData.length > SCCP_SOLANA_MAX_BANK_HARD_FORK_HASH_DATA_BYTES) {
+    throw new RangeError("bankHashHardForkData is too large");
+  }
+  const accountsLtHashInput = witnessOptionalField(
+    "accountsLtHash",
+    "accountsLtHash",
+    "accounts_lt_hash",
+  );
+  const accountsLtHash =
+    accountsLtHashInput === SCCP_OPTIONAL_FIELD_MISSING ||
+    accountsLtHashInput === undefined ||
+    accountsLtHashInput === null
+      ? undefined
+      : toBytes(accountsLtHashInput, "accountsLtHash");
+  if (accountsLtHash !== undefined) {
+    if (!bytesEqual(hexToBytes(accountsLtHashChecksum, "accountsLtHashChecksum", 32), blake3(accountsLtHash))) {
+      throw new TypeError("accountsLtHashChecksum must match accountsLtHash");
+    }
+    const expectedBankHash = solanaSccpAgaveBankHash({
+      parentBankHash,
+      bankSignatureCount,
+      blockhash: bytesToHex(blockhashBytes),
+      accountsLtHash,
+      bankHashHardForkData,
+    });
+    if (bankHash !== expectedBankHash) {
+      throw new TypeError("bankHash must match Agave bank hash inputs");
+    }
+  }
+  const deploymentBinding = normalizeSccpSourceAdapterDeploymentBinding({
+    sourceDomain: SCCP_DOMAIN_SOL,
+    targetDomain,
+    sourceAdapterDeploymentHash:
+      witnessFieldOrDefault(
+        "sourceAdapterDeploymentHash",
+        SCCP_ZERO_HASH_V1,
+        "sourceAdapterDeploymentHash",
+        "source_adapter_deployment_hash",
+      ),
+    sourceAdapterDeploymentReceiptHash:
+      witnessFieldOrDefault(
+        "sourceAdapterDeploymentReceiptHash",
+        SCCP_ZERO_HASH_V1,
+        "sourceAdapterDeploymentReceiptHash",
+        "source_adapter_deployment_receipt_hash",
+      ),
+  });
+  const sourceStateVerifierId = normalizeNonEmptyString(
+    witnessFieldOrDefault(
+      "sourceStateVerifierId",
+      SCCP_SOLANA_MAINNET_ACCOUNTS_DB_VERIFIER_ID_V1,
+      "sourceStateVerifierId",
+      "source_state_verifier_id",
+    ),
+    "sourceStateVerifierId",
+  );
+  const sourceStateVerifierHash = normalizeHex32(
+    witnessFieldOrDefault(
+      "sourceStateVerifierHash",
+      SCCP_ZERO_HASH_V1,
+      "sourceStateVerifierHash",
+      "source_state_verifier_hash",
+    ),
+    "sourceStateVerifierHash",
+  );
+  if (
+    sourceStateVerifierHash !== SCCP_ZERO_HASH_V1 &&
+    sourceStateVerifierId !== SCCP_SOLANA_MAINNET_ACCOUNTS_DB_VERIFIER_ID_V1
+  ) {
+    throw new TypeError("sourceStateVerifierId must match Solana AccountsDB verifier profile");
+  }
+  const accountsLtHashProofPublicInputsHash = solanaSccpAccountsLtHashProofPublicInputsHash({
+    sourceDomain: SCCP_DOMAIN_SOL,
+    finalizedSlot,
+    parentSlot,
+    bankSignatureCount,
+    parentBankHash,
+    bankHash,
+    blockhash: bytesToHex(blockhashBytes),
+    transactionStatusRoot,
+    accountInclusionRoot,
+    accountsLtHashChecksum,
+    bankHashHardForkData,
+  });
+  const suppliedAccountsLtHashProofPublicInputsHash =
+    witnessOptionalField(
+      "accountsLtHashProofPublicInputsHash",
+      "accountsLtHashProofPublicInputsHash",
+      "accounts_lt_hash_proof_public_inputs_hash",
+  );
+  if (
+    suppliedAccountsLtHashProofPublicInputsHash !== SCCP_OPTIONAL_FIELD_MISSING &&
+    suppliedAccountsLtHashProofPublicInputsHash !== undefined &&
+    normalizeHex32(
+      suppliedAccountsLtHashProofPublicInputsHash,
+      "accountsLtHashProofPublicInputsHash",
+    ) !== accountsLtHashProofPublicInputsHash
+  ) {
+    throw new TypeError("accountsLtHashProofPublicInputsHash must match bank-state inputs");
+  }
+  return {
+    version: 1,
+    sourceDomain: SCCP_DOMAIN_SOL,
+    targetDomain,
+    mainnetGenesisHash: normalizeNonEmptyString(
+      witnessFieldOrDefault(
+        "mainnetGenesisHash",
+        SCCP_SOLANA_MAINNET_GENESIS_HASH,
+        "mainnetGenesisHash",
+        "mainnet_genesis_hash",
+      ),
+      "mainnetGenesisHash",
+    ),
+    finalizedSlot: finalizedSlot.toString(),
+    parentSlot: parentSlot.toString(),
+    bankSignatureCount: bankSignatureCount.toString(),
+    parentBankHash,
+    blockhash: bytesToHex(blockhashBytes),
+    bankHash,
+    transactionStatusRoot,
+    messageProofHash: normalizeHex32(messageProofHash, "messageProofHash"),
+    accountInclusionRoot,
+    accountsLtHashChecksum,
+    accountsLtHashProofPublicInputsHash,
+    bankHashHardForkData: bytesToHex(bankHashHardForkData),
+    accountsLtHash: accountsLtHash === undefined ? undefined : bytesToHex(accountsLtHash),
+    transactionSignature,
+    emitterProgramId,
+    messageId: normalizeHex32(messageId, "messageId"),
+    payloadHash: normalizeHex32(payloadHash, "payloadHash"),
+    commitmentRoot: normalizeHex32(
+      witnessFieldOrDefault(
+        "commitmentRoot",
+        bundle?.commitment_root,
+        "commitmentRoot",
+        "commitment_root",
+      ),
+      "commitmentRoot",
+    ),
+    sourceEventDigest,
+    sourceStateVerifierId,
+    sourceStateVerifierHash,
+    sourceAdapterDeploymentHash: deploymentBinding.sourceAdapterDeploymentHash,
+    sourceAdapterDeploymentReceiptHash: deploymentBinding.sourceAdapterDeploymentReceiptHash,
+    inclusionBranch:
+      normalizedInclusionBranch === undefined
+        ? undefined
+        : normalizedInclusionBranch.map((sibling) => bytesToHex(sibling)),
+    payload,
+  };
+}
+
+export function canonicalSolanaSccpWitnessBytes(input) {
+  const witness = normalizeSolanaSccpWitness(input);
+  let out = new Uint8Array();
+  out = writeU8(out, witness.version);
+  out = writeU32Le(out, witness.sourceDomain);
+  out = writeU32Le(out, witness.targetDomain);
+  out = writeString(out, witness.mainnetGenesisHash, "mainnetGenesisHash");
+  out = writeU64Le(out, witness.finalizedSlot);
+  out = writeU64Le(out, witness.parentSlot);
+  out = writeU64Le(out, witness.bankSignatureCount);
+  out = concatBytes(out, normalizeSolanaHash32Bytes(witness.blockhash, "blockhash"));
+  out = writeString(out, witness.transactionSignature, "transactionSignature");
+  out = writeString(out, witness.emitterProgramId, "emitterProgramId");
+  out = concatBytes(out, hexToBytes(witness.parentBankHash, "parentBankHash", 32));
+  out = concatBytes(out, hexToBytes(witness.bankHash, "bankHash", 32));
+  out = concatBytes(out, hexToBytes(witness.transactionStatusRoot, "transactionStatusRoot", 32));
+  out = concatBytes(out, hexToBytes(witness.messageProofHash, "messageProofHash", 32));
+  out = concatBytes(out, hexToBytes(witness.accountInclusionRoot, "accountInclusionRoot", 32));
+  out = concatBytes(out, hexToBytes(witness.accountsLtHashChecksum, "accountsLtHashChecksum", 32));
+  out = concatBytes(
+    out,
+    hexToBytes(
+      witness.accountsLtHashProofPublicInputsHash,
+      "accountsLtHashProofPublicInputsHash",
+      32,
+    ),
+  );
+  out = writeBytes(out, toMaybeEmptyBytes(witness.bankHashHardForkData, "bankHashHardForkData"));
+  out = writeBytes(out, toMaybeEmptyBytes(witness.accountsLtHash ?? new Uint8Array(), "accountsLtHash"));
+  out = concatBytes(out, hexToBytes(witness.messageId, "messageId", 32));
+  out = concatBytes(out, hexToBytes(witness.payloadHash, "payloadHash", 32));
+  out = concatBytes(out, hexToBytes(witness.commitmentRoot, "commitmentRoot", 32));
+  out = concatBytes(out, hexToBytes(witness.sourceEventDigest, "sourceEventDigest", 32));
+  out = writeString(out, witness.sourceStateVerifierId, "sourceStateVerifierId");
+  out = concatBytes(out, hexToBytes(witness.sourceStateVerifierHash, "sourceStateVerifierHash", 32));
+  out = concatBytes(
+    out,
+    hexToBytes(witness.sourceAdapterDeploymentHash, "sourceAdapterDeploymentHash", 32),
+  );
+  out = concatBytes(
+    out,
+    hexToBytes(
+      witness.sourceAdapterDeploymentReceiptHash,
+      "sourceAdapterDeploymentReceiptHash",
+      32,
+    ),
+  );
+  const inclusionBranch = witness.inclusionBranch ?? [];
+  out = writeU32Le(out, inclusionBranch.length);
+  for (const [index, sibling] of inclusionBranch.entries()) {
+    out = concatBytes(out, hexToBytes(sibling, `inclusionBranch[${index}]`, 32));
+  }
+  return out;
+}
+
+export function normalizeSolanaSccpProofContext(input) {
+  if (!input || typeof input !== "object" || Array.isArray(input)) {
+    throw new TypeError("Solana SCCP proof context must be an object");
+  }
+  const destinationBinding = strictOptionalResultField(
+    input,
+    "destinationBinding",
+    "destinationBinding",
+    "destination_binding",
+  );
+  const directDestinationBindingHash = strictOptionalResultField(
+    input,
+    "destinationBindingHash",
+    "destinationBindingHash",
+    "destination_binding_hash",
+  );
+  let nestedDestinationBindingHash = SCCP_OPTIONAL_FIELD_MISSING;
+  if (destinationBinding !== SCCP_OPTIONAL_FIELD_MISSING) {
+    if (!destinationBinding || typeof destinationBinding !== "object" || Array.isArray(destinationBinding)) {
+      throw new TypeError("destinationBinding must be an object");
+    }
+    nestedDestinationBindingHash = strictOptionalResultField(
+      destinationBinding,
+      "destinationBinding.bindingHash",
+      "bindingHash",
+      "binding_hash",
+    );
+  }
+  if (
+    directDestinationBindingHash !== SCCP_OPTIONAL_FIELD_MISSING &&
+    nestedDestinationBindingHash !== SCCP_OPTIONAL_FIELD_MISSING &&
+    normalizeHex32(directDestinationBindingHash, "destinationBindingHash") !==
+      normalizeHex32(nestedDestinationBindingHash, "destinationBindingHash")
+  ) {
+    throw new TypeError("destinationBindingHash must match destinationBinding.bindingHash");
+  }
+  return {
+    version: 1,
+    statementHash: normalizeNonZeroHex32(
+      strictResultField(input, "statementHash", "statementHash", "statement_hash"),
+      "statementHash",
+    ),
+    destinationBindingHash: normalizeNonZeroHex32(
+      directDestinationBindingHash !== SCCP_OPTIONAL_FIELD_MISSING
+        ? directDestinationBindingHash
+        : nestedDestinationBindingHash,
+      "destinationBindingHash",
+    ),
+  };
+}
+
+export function canonicalSolanaSccpProofContextBytes(input) {
+  const context = normalizeSolanaSccpProofContext(input);
+  let out = new Uint8Array();
+  out = writeU8(out, context.version);
+  out = concatBytes(out, hexToBytes(context.statementHash, "statementHash", 32));
+  out = concatBytes(out, hexToBytes(context.destinationBindingHash, "destinationBindingHash", 32));
+  return out;
+}
+
+export function solanaSccpProofContextHash(input) {
+  return bytesToHex(
+    prefixedBlake2b(
+      SCCP_SOLANA_PROOF_CONTEXT_PREFIX_V1,
+      canonicalSolanaSccpProofContextBytes(input),
+    ),
+  );
+}
+
+export function normalizeSccpSourceAdapterDeploymentBinding(input = {}) {
+  if (!input || typeof input !== "object" || Array.isArray(input)) {
+    throw new TypeError("SCCP source adapter deployment binding must be an object");
+  }
+  const sourceDomain = normalizeOptionalSccpDomainId(
+    input,
+    "sourceDomain",
+    SCCP_DOMAIN_SOL,
+    "sourceDomain",
+    "source_domain",
+  );
+  const targetDomain = normalizeOptionalSccpDomainId(
+    input,
+    "targetDomain",
+    SCCP_DOMAIN_SORA,
+    "targetDomain",
+    "target_domain",
+  );
+  const sourceAdapterDeploymentHash = normalizeHex32(
+    input.sourceAdapterDeploymentHash ??
+      input.source_adapter_deployment_hash ??
+      SCCP_ZERO_HASH_V1,
+    "sourceAdapterDeploymentHash",
+  );
+  const sourceAdapterDeploymentReceiptHash = normalizeHex32(
+    input.sourceAdapterDeploymentReceiptHash ??
+      input.source_adapter_deployment_receipt_hash ??
+      SCCP_ZERO_HASH_V1,
+    "sourceAdapterDeploymentReceiptHash",
+  );
+  const deploymentIsZero = sourceAdapterDeploymentHash === SCCP_ZERO_HASH_V1;
+  const receiptIsZero = sourceAdapterDeploymentReceiptHash === SCCP_ZERO_HASH_V1;
+  if (deploymentIsZero !== receiptIsZero) {
+    throw new TypeError(
+      "sourceAdapterDeploymentHash and sourceAdapterDeploymentReceiptHash must both be zero or both be non-zero",
+    );
+  }
+  if (!deploymentIsZero && sourceAdapterDeploymentHash === sourceAdapterDeploymentReceiptHash) {
+    throw new TypeError(
+      "sourceAdapterDeploymentHash must differ from sourceAdapterDeploymentReceiptHash",
+    );
+  }
+  return {
+    version: 1,
+    sourceDomain,
+    targetDomain,
+    sourceAdapterDeploymentHash,
+    sourceAdapterDeploymentReceiptHash,
+  };
+}
+
+const sourceAdapterVerifierProfile = (sourceDomain) => {
+  switch (sourceDomain) {
+    case SCCP_DOMAIN_ETH:
+      return { chain: "eth", proofPlan: 1, finalityModel: 1 };
+    case SCCP_DOMAIN_BSC:
+      return { chain: "bsc", proofPlan: 2, finalityModel: 2 };
+    case SCCP_DOMAIN_SOL:
+      return { chain: "sol", proofPlan: 3, finalityModel: 3 };
+    case SCCP_DOMAIN_TON:
+      return { chain: "ton", proofPlan: 4, finalityModel: 4 };
+    case SCCP_DOMAIN_TRON:
+      return { chain: "tron", proofPlan: 5, finalityModel: 5 };
+    case SCCP_DOMAIN_SORA_KUSAMA:
+      return { chain: "sora-kusama", proofPlan: 6, finalityModel: 6 };
+    case SCCP_DOMAIN_SORA_POLKADOT:
+      return { chain: "sora-polkadot", proofPlan: 6, finalityModel: 6 };
+    case SCCP_DOMAIN_SORA2:
+      return { chain: "sora2", proofPlan: 6, finalityModel: 6 };
+    default:
+      throw new TypeError("sourceDomain is not a supported SCCP source-adapter lane");
+  }
+};
+
+const destinationBindingTargetDomain = (input) => {
+  const value =
+    typeof input === "object" && input !== null
+      ? input.targetDomain ?? input.target_domain ?? input.domain
+      : input;
+  return normalizeSccpDomainId(value, "targetDomain");
+};
+
+const destinationBindingProfile = (targetDomain) => {
+  switch (targetDomain) {
+    case SCCP_DOMAIN_SOL:
+      return {
+        verifierTarget: 2,
+        backendFamily: 2,
+        bindingKey: "sccp:0:3:sol:solana-program-v1:2",
+        manifestSeed: "iroha:sccp:bridge-proof:message:stark-fri:v1:sol",
+        verifierBackend: "solana-program-v1",
+      };
+    case SCCP_DOMAIN_TON:
+      return {
+        verifierTarget: 3,
+        backendFamily: 3,
+        bindingKey: "sccp:0:4:ton:ton-contract-v1:3",
+        manifestSeed: "iroha:sccp:bridge-proof:message:stark-fri:v1:ton",
+        verifierBackend: "ton-contract-v1",
+      };
+    case SCCP_DOMAIN_SORA_KUSAMA:
+      return {
+        verifierTarget: 5,
+        backendFamily: 5,
+        bindingKey: "sccp:0:6:sora-kusama:substrate-runtime-v1:5",
+        manifestSeed: "iroha:sccp:bridge-proof:message:stark-fri:v1:sora-kusama",
+        verifierBackend: "substrate-runtime-v1",
+      };
+    case SCCP_DOMAIN_SORA_POLKADOT:
+      return {
+        verifierTarget: 5,
+        backendFamily: 5,
+        bindingKey: "sccp:0:7:sora-polkadot:substrate-runtime-v1:5",
+        manifestSeed: "iroha:sccp:bridge-proof:message:stark-fri:v1:sora-polkadot",
+        verifierBackend: "substrate-runtime-v1",
+      };
+    case SCCP_DOMAIN_SORA2:
+      return {
+        verifierTarget: 5,
+        backendFamily: 5,
+        bindingKey: "sccp:0:8:sora2:substrate-runtime-v1:5",
+        manifestSeed: "iroha:sccp:bridge-proof:message:stark-fri:v1:sora2",
+        verifierBackend: "substrate-runtime-v1",
+      };
+    default:
+      throw new TypeError("targetDomain is not a supported native SCCP destination lane");
+  }
+};
+
+export function sccpDestinationBindingKey(input) {
+  const profile = destinationBindingProfile(destinationBindingTargetDomain(input));
+  return profile.bindingKey;
+}
+
+export function sccpDestinationBindingHash(input) {
+  const targetDomain = destinationBindingTargetDomain(input);
+  const profile = destinationBindingProfile(targetDomain);
+  let out = new Uint8Array();
+  out = writeU8(out, 1);
+  out = writeU32Le(out, SCCP_DOMAIN_SORA);
+  out = writeU32Le(out, targetDomain);
+  out = writeU8(out, 1);
+  out = writeU8(out, 1);
+  out = writeU8(out, profile.verifierTarget);
+  out = writeU8(out, profile.backendFamily);
+  out = writeBytes(out, textEncoder.encode(profile.bindingKey));
+  out = writeBytes(out, textEncoder.encode(profile.manifestSeed));
+  out = writeBytes(out, textEncoder.encode(SCCP_STARK_FRI_PROOF_FAMILY_V1));
+  out = writeBytes(out, textEncoder.encode(profile.verifierBackend));
+  return bytesToHex(prefixedBlake2b(SCCP_DESTINATION_BINDING_PREFIX_V1, out));
+}
+
+const canonicalPositiveU64Text = (value, label) => {
+  const numeric = normalizeUnsignedBigInt(value, label);
+  if (numeric === 0n) {
+    throw new RangeError(`${label} must be positive`);
+  }
+  if (numeric > 0xffff_ffff_ffff_ffffn) {
+    throw new RangeError(`${label} must fit u64`);
+  }
+  if (typeof value === "string" && value !== numeric.toString()) {
+    throw new TypeError(`${label} must be canonical decimal`);
+  }
+  return numeric.toString();
+};
+
+const requireStrictBoolean = (value, label) => {
+  if (value !== true) {
+    throw new TypeError(`${label} must be true`);
+  }
+  return true;
+};
+
+const solanaUpgradeableProgramAccountData = (programdataAddress) => {
+  let out = new Uint8Array();
+  out = writeU32Le(out, SCCP_SOLANA_UPGRADEABLE_LOADER_PROGRAM_TAG);
+  out = concatBytes(out, programdataAddress);
+  return out;
+};
+
+const solanaImmutableProgramdataMetadata = (programdataSlot) => {
+  let out = new Uint8Array();
+  out = writeU32Le(out, SCCP_SOLANA_UPGRADEABLE_LOADER_PROGRAMDATA_TAG);
+  out = writeU64Le(out, programdataSlot);
+  out = writeU8(out, 0);
+  out = concatBytes(out, new Uint8Array(32));
+  return out;
+};
+
+const solanaVerifierProgramCodeHash = (programBytes) => {
+  if (
+    programBytes.length === 0 ||
+    programBytes.every((byte) => byte === 0) ||
+    !SCCP_SOLANA_BPF_ELF_MAGIC.every((byte, index) => programBytes[index] === byte)
+  ) {
+    throw new TypeError("solanaProgramdataExecutable must be non-empty BPF ELF bytes");
+  }
+  return bytesToHex(blake2b(programBytes, { dkLen: 32 }));
+};
+
+const normalizeSolanaDestinationProgramDataEvidence = (input) => {
+  if (!input || typeof input !== "object" || Array.isArray(input)) {
+    throw new TypeError("Solana destination ProgramData evidence must be an object");
+  }
+  const verifierProgram = decodeSolanaBase58Fixed(
+    input.verifierIdentity ?? input.verifier_identity ?? input.verifierProgramId ?? input.verifier_program_id,
+    "verifierIdentity",
+    SCCP_SOLANA_PROGRAM_ID_BYTES,
+  );
+  const programdataAddress = decodeSolanaBase58Fixed(
+    input.solanaProgramdataAddress ?? input.solana_programdata_address ?? input.programdataAddress ?? input.programdata_address,
+    "solanaProgramdataAddress",
+    SCCP_SOLANA_PROGRAM_ID_BYTES,
+  );
+  if (bytesEqual(verifierProgram, programdataAddress)) {
+    throw new TypeError("solanaProgramdataAddress must differ from verifierIdentity");
+  }
+  const programdataSlot = canonicalPositiveU64Text(
+    input.solanaProgramdataSlot ?? input.solana_programdata_slot ?? input.programdataSlot ?? input.programdata_slot,
+    "solanaProgramdataSlot",
+  );
+  const expectedProgramdataSlot = canonicalPositiveU64Text(
+    input.solanaExpectedProgramdataSlot ??
+      input.solana_expected_programdata_slot ??
+      input.expectedProgramdataSlot ??
+      input.expected_programdata_slot,
+    "solanaExpectedProgramdataSlot",
+  );
+  if (programdataSlot !== expectedProgramdataSlot) {
+    throw new TypeError("solanaExpectedProgramdataSlot must match solanaProgramdataSlot");
+  }
+  const programAccountContextSlot = canonicalPositiveU64Text(
+    input.solanaProgramAccountContextSlot ??
+      input.solana_program_account_context_slot ??
+      input.programAccountContextSlot ??
+      input.program_account_context_slot,
+    "solanaProgramAccountContextSlot",
+  );
+  const programdataAccountContextSlot = canonicalPositiveU64Text(
+    input.solanaProgramdataAccountContextSlot ??
+      input.solana_programdata_account_context_slot ??
+      input.programdataAccountContextSlot ??
+      input.programdata_account_context_slot,
+    "solanaProgramdataAccountContextSlot",
+  );
+  if (
+    BigInt(programAccountContextSlot) < BigInt(programdataSlot) ||
+    BigInt(programdataAccountContextSlot) < BigInt(programdataSlot)
+  ) {
+    throw new RangeError("Solana ProgramData context slots must be at or after programdataSlot");
+  }
+  const rpcCommitment = normalizeNonEmptyString(
+    input.solanaRpcCommitment ?? input.solana_rpc_commitment ?? input.rpcCommitment ?? input.rpc_commitment,
+    "solanaRpcCommitment",
+  );
+  if (rpcCommitment !== "finalized") {
+    throw new TypeError("solanaRpcCommitment must be finalized");
+  }
+  const programOwner = normalizeNonEmptyString(
+    input.solanaProgramOwner ?? input.solana_program_owner ?? input.programOwner ?? input.program_owner,
+    "solanaProgramOwner",
+  );
+  const programdataOwner = normalizeNonEmptyString(
+    input.solanaProgramdataOwner ?? input.solana_programdata_owner ?? input.programdataOwner ?? input.programdata_owner,
+    "solanaProgramdataOwner",
+  );
+  if (programOwner !== SCCP_SOLANA_UPGRADEABLE_LOADER_ID) {
+    throw new TypeError("solanaProgramOwner must be the BPF upgradeable loader");
+  }
+  if (programdataOwner !== SCCP_SOLANA_UPGRADEABLE_LOADER_ID) {
+    throw new TypeError("solanaProgramdataOwner must be the BPF upgradeable loader");
+  }
+  requireStrictBoolean(
+    input.solanaProgramImmutable ?? input.solana_program_immutable ?? input.programImmutable ?? input.program_immutable,
+    "solanaProgramImmutable",
+  );
+  const programAccountData = base64ToBytesStrict(
+    input.solanaProgramAccountDataBase64 ??
+      input.solana_program_account_data_base64 ??
+      input.programAccountDataBase64 ??
+      input.program_account_data_base64,
+    "solanaProgramAccountDataBase64",
+  );
+  const expectedProgramAccountData = solanaUpgradeableProgramAccountData(programdataAddress);
+  if (!bytesEqual(programAccountData, expectedProgramAccountData)) {
+    throw new TypeError("solanaProgramAccountDataBase64 must bind solanaProgramdataAddress");
+  }
+  const programdataMetadata = base64ToBytesStrict(
+    input.solanaProgramdataMetadataBase64 ??
+      input.solana_programdata_metadata_base64 ??
+      input.programdataMetadataBase64 ??
+      input.programdata_metadata_base64,
+    "solanaProgramdataMetadataBase64",
+  );
+  if (
+    programdataMetadata.length !== SCCP_SOLANA_PROGRAMDATA_METADATA_LEN ||
+    !bytesEqual(programdataMetadata, solanaImmutableProgramdataMetadata(programdataSlot))
+  ) {
+    throw new TypeError("solanaProgramdataMetadataBase64 must bind immutable ProgramData metadata");
+  }
+  const metadataHash = bytesToHex(blake2b(programdataMetadata, { dkLen: 32 }));
+  if (
+    normalizeNonZeroHex32(
+      input.solanaProgramdataMetadataBlake2b256 ??
+        input.solana_programdata_metadata_blake2b256 ??
+        input.programdataMetadataBlake2b256 ??
+        input.programdata_metadata_blake2b256,
+      "solanaProgramdataMetadataBlake2b256",
+    ) !== metadataHash
+  ) {
+    throw new TypeError("solanaProgramdataMetadataBlake2b256 must match metadata bytes");
+  }
+  const programdataExecutable = base64ToBytesStrict(
+    input.solanaProgramdataExecutableBase64 ??
+      input.solana_programdata_executable_base64 ??
+      input.programdataExecutableBase64 ??
+      input.programdata_executable_base64,
+    "solanaProgramdataExecutableBase64",
+  );
+  const executableHash = solanaVerifierProgramCodeHash(programdataExecutable);
+  if (
+    normalizeNonZeroHex32(
+      input.solanaProgramdataExecutableBlake2b256 ??
+        input.solana_programdata_executable_blake2b256 ??
+        input.programdataExecutableBlake2b256 ??
+        input.programdata_executable_blake2b256,
+      "solanaProgramdataExecutableBlake2b256",
+    ) !== executableHash
+  ) {
+    throw new TypeError("solanaProgramdataExecutableBlake2b256 must match executable bytes");
+  }
+  if (
+    normalizeNonZeroHex32(
+      input.verifierCodeHash ?? input.verifier_code_hash,
+      "verifierCodeHash",
+    ) !== executableHash
+  ) {
+    throw new TypeError("verifierCodeHash must match ProgramData executable hash");
+  }
+  return {
+    verifierProgram,
+    verifierCodeHash: executableHash,
+    rpcCommitment,
+    programOwner,
+    programdataOwner,
+    programAccountData,
+    programdataAddress,
+    programdataSlot,
+    expectedProgramdataSlot,
+    programAccountContextSlot,
+    programdataAccountContextSlot,
+    programdataMetadata,
+    programdataExecutable,
+  };
+};
+
+export function canonicalSolanaSccpRouteCanaryEvidenceBytes(input) {
+  const value = input && typeof input === "object" ? input : {};
+  const routeAllowlistHash = nonZeroHex32Bytes(
+    value.routeAllowlistHash ?? value.route_allowlist_hash,
+    "routeAllowlistHash",
+  );
+  const destinationBindingHash = nonZeroHex32Bytes(
+    value.destinationBindingHash ?? value.destination_binding_hash,
+    "destinationBindingHash",
+  );
+  const canonicalSolanaDestinationBindingHash = sccpDestinationBindingHash(SCCP_DOMAIN_SOL);
+  const expectedDestinationBindingHash = normalizeNonZeroHex32(
+    value.expectedDestinationBindingHash ??
+      value.expected_destination_binding_hash ??
+      canonicalSolanaDestinationBindingHash,
+    "expectedDestinationBindingHash",
+  );
+  if (expectedDestinationBindingHash !== canonicalSolanaDestinationBindingHash) {
+    throw new TypeError(
+      "expectedDestinationBindingHash must match canonical Solana destination binding",
+    );
+  }
+  if (bytesToHex(destinationBindingHash) !== canonicalSolanaDestinationBindingHash) {
+    throw new TypeError("destinationBindingHash must match canonical Solana destination binding");
+  }
+  const sourceVerifierMaterialHash = nonZeroHex32Bytes(
+    value.sourceVerifierMaterialHash ?? value.source_verifier_material_hash,
+    "sourceVerifierMaterialHash",
+  );
+  const sourceAdapterEngineDeploymentHash = nonZeroHex32Bytes(
+    value.sourceAdapterEngineDeploymentHash ?? value.source_adapter_engine_deployment_hash,
+    "sourceAdapterEngineDeploymentHash",
+  );
+  const evidence = normalizeSolanaDestinationProgramDataEvidence(value);
+  let out = new Uint8Array();
+  out = writeU8(out, 1);
+  out = writeU32Le(out, SCCP_DOMAIN_SORA);
+  out = writeU32Le(out, SCCP_DOMAIN_SOL);
+  out = concatBytes(out, routeAllowlistHash);
+  out = concatBytes(out, destinationBindingHash);
+  out = concatBytes(out, sourceVerifierMaterialHash);
+  out = concatBytes(out, sourceAdapterEngineDeploymentHash);
+  out = concatBytes(out, evidence.verifierProgram);
+  out = concatBytes(out, hexToBytes(evidence.verifierCodeHash, "verifierCodeHash", 32));
+  out = writeBytes(out, textEncoder.encode(evidence.rpcCommitment));
+  out = writeBytes(out, textEncoder.encode(evidence.programOwner));
+  out = writeBytes(out, textEncoder.encode(evidence.programdataOwner));
+  out = writeU8(out, 1);
+  out = writeBytes(out, evidence.programAccountData);
+  out = concatBytes(out, evidence.programdataAddress);
+  out = writeU64Le(out, evidence.programdataSlot);
+  out = writeU64Le(out, evidence.expectedProgramdataSlot);
+  out = writeU64Le(out, evidence.programAccountContextSlot);
+  out = writeU64Le(out, evidence.programdataAccountContextSlot);
+  out = writeBytes(out, evidence.programdataMetadata);
+  out = writeBytes(out, evidence.programdataExecutable);
+  return out;
+}
+
+export function solanaSccpRouteCanaryEvidenceHash(input) {
+  return bytesToHex(
+    prefixedBlake2b(
+      SCCP_SOLANA_ROUTE_CANARY_LIVE_PROGRAM_LABEL_V1,
+      canonicalSolanaSccpRouteCanaryEvidenceBytes(input),
+    ),
+  );
+}
+
+const normalizePositiveDecimalText = (value, label) => {
+  if (typeof value !== "string" || value.trim() !== value || !/^[0-9]+$/.test(value)) {
+    throw new TypeError(`${label} must be a positive decimal`);
+  }
+  if ((value.length > 1 && value.startsWith("0")) || BigInt(value) <= 0n) {
+    throw new TypeError(`${label} must be a positive decimal`);
+  }
+  return value;
+};
+
+const normalizeTonRawAddress = (value, label) => {
+  if (typeof value !== "string" || value.trim() !== value) {
+    throw new TypeError(`${label} must not contain whitespace`);
+  }
+  const parts = value.split(":");
+  if (parts.length !== 2) {
+    throw new TypeError(`${label} must be workchain:account_hex`);
+  }
+  const [workchain, accountHex] = parts;
+  if (
+    !/^-?[0-9]+$/.test(workchain) ||
+    (workchain.startsWith("-") && workchain.slice(1) === "0") ||
+    (workchain.replace(/^-/, "").length > 1 && workchain.replace(/^-/, "").startsWith("0"))
+  ) {
+    throw new TypeError(`${label} workchain must be canonical i32`);
+  }
+  const workchainId = Number.parseInt(workchain, 10);
+  if (!Number.isSafeInteger(workchainId) || workchainId < -(2 ** 31) || workchainId > 2 ** 31 - 1) {
+    throw new TypeError(`${label} workchain must be canonical i32`);
+  }
+  if (workchainId !== 0) {
+    throw new TypeError(`${label} workchain must be basechain 0`);
+  }
+  if (accountHex.length !== 64) {
+    throw new TypeError(`${label} account must be 32 bytes`);
+  }
+  if (/[^0-9a-f]/.test(accountHex)) {
+    throw new TypeError(`${label} account must be lowercase canonical hex`);
+  }
+  if (!hexToBytes(accountHex, `${label} account`, 32).some((byte) => byte !== 0)) {
+    throw new TypeError(`${label} account must not be zero`);
+  }
+  return value;
+};
+
+const normalizeTonActiveAccountStatus = (value, label) => {
+  if (typeof value !== "string" || value.trim() !== value) {
+    throw new TypeError(`${label} must not contain whitespace`);
+  }
+  if (value !== "active") {
+    throw new TypeError(`${label} must be active`);
+  }
+  return value;
+};
+
+export function canonicalTonSccpRouteCanaryEvidenceBytes(input) {
+  const value = input && typeof input === "object" ? input : {};
+  const routeAllowlistHash = nonZeroHex32Bytes(
+    strictResultField(value, "routeAllowlistHash", "routeAllowlistHash", "route_allowlist_hash"),
+    "routeAllowlistHash",
+  );
+  const destinationBindingHash = nonZeroHex32Bytes(
+    strictResultField(
+      value,
+      "destinationBindingHash",
+      "destinationBindingHash",
+      "destination_binding_hash",
+    ),
+    "destinationBindingHash",
+  );
+  const canonicalTonDestinationBindingHash = sccpDestinationBindingHash(SCCP_DOMAIN_TON);
+  const expectedDestinationBindingHashInput = strictOptionalResultField(
+    value,
+    "expectedDestinationBindingHash",
+    "expectedDestinationBindingHash",
+    "expected_destination_binding_hash",
+  );
+  const expectedDestinationBindingHash = normalizeNonZeroHex32(
+    expectedDestinationBindingHashInput === SCCP_OPTIONAL_FIELD_MISSING
+      ? canonicalTonDestinationBindingHash
+      : expectedDestinationBindingHashInput,
+    "expectedDestinationBindingHash",
+  );
+  if (expectedDestinationBindingHash !== canonicalTonDestinationBindingHash) {
+    throw new TypeError("expectedDestinationBindingHash must match canonical TON destination binding");
+  }
+  if (bytesToHex(destinationBindingHash) !== canonicalTonDestinationBindingHash) {
+    throw new TypeError("destinationBindingHash must match canonical TON destination binding");
+  }
+  const sourceVerifierMaterialHash = nonZeroHex32Bytes(
+    strictResultField(
+      value,
+      "sourceVerifierMaterialHash",
+      "sourceVerifierMaterialHash",
+      "source_verifier_material_hash",
+    ),
+    "sourceVerifierMaterialHash",
+  );
+  const sourceAdapterEngineDeploymentHash = nonZeroHex32Bytes(
+    strictResultField(
+      value,
+      "sourceAdapterEngineDeploymentHash",
+      "sourceAdapterEngineDeploymentHash",
+      "source_adapter_engine_deployment_hash",
+    ),
+    "sourceAdapterEngineDeploymentHash",
+  );
+  const verifierContractAddress = normalizeTonRawAddress(
+    strictResultField(
+      value,
+      "verifierContractAddress",
+      "verifierContractAddress",
+      "verifier_contract_address",
+      "verifierIdentity",
+      "verifier_identity",
+    ),
+    "verifierContractAddress",
+  );
+  const verifierCodeHash = nonZeroHex32Bytes(
+    strictResultField(value, "verifierCodeHash", "verifierCodeHash", "verifier_code_hash"),
+    "verifierCodeHash",
+  );
+  const accountStatus = normalizeTonActiveAccountStatus(
+    strictResultField(
+      value,
+      "accountStatus",
+      "accountStatus",
+      "account_status",
+      "tonAccountStatus",
+      "ton_account_status",
+    ),
+    "accountStatus",
+  );
+  const accountStateHash = nonZeroHex32Bytes(
+    strictResultField(
+      value,
+      "accountStateHash",
+      "accountStateHash",
+      "account_state_hash",
+      "tonAccountStateHash",
+      "ton_account_state_hash",
+    ),
+    "accountStateHash",
+  );
+  const lastTransactionLt = normalizePositiveDecimalText(
+    strictResultField(
+      value,
+      "lastTransactionLt",
+      "lastTransactionLt",
+      "last_transaction_lt",
+      "tonLastTransactionLt",
+      "ton_last_transaction_lt",
+    ),
+    "lastTransactionLt",
+  );
+  const lastTransactionHash = nonZeroHex32Bytes(
+    strictResultField(
+      value,
+      "lastTransactionHash",
+      "lastTransactionHash",
+      "last_transaction_hash",
+      "tonLastTransactionHash",
+      "ton_last_transaction_hash",
+    ),
+    "lastTransactionHash",
+  );
+  const verifierCodeBocRootHash = nonZeroHex32Bytes(
+    strictResultField(
+      value,
+      "verifierCodeBocRootHash",
+      "verifierCodeBocRootHash",
+      "verifier_code_boc_root_hash",
+      "tonVerifierCodeBocRootHash",
+      "ton_verifier_code_boc_root_hash",
+    ),
+    "verifierCodeBocRootHash",
+  );
+  if (!bytesEqual(verifierCodeBocRootHash, verifierCodeHash)) {
+    throw new TypeError("verifierCodeBocRootHash must match verifierCodeHash");
+  }
+
+  let out = new Uint8Array();
+  out = writeU8(out, 1);
+  out = writeU32Le(out, SCCP_DOMAIN_SORA);
+  out = writeU32Le(out, SCCP_DOMAIN_TON);
+  out = concatBytes(out, routeAllowlistHash);
+  out = concatBytes(out, destinationBindingHash);
+  out = concatBytes(out, sourceVerifierMaterialHash);
+  out = concatBytes(out, sourceAdapterEngineDeploymentHash);
+  out = writeBytes(out, textEncoder.encode(verifierContractAddress));
+  out = concatBytes(out, verifierCodeHash);
+  out = writeBytes(out, textEncoder.encode(accountStatus));
+  out = concatBytes(out, accountStateHash);
+  out = writeBytes(out, textEncoder.encode(lastTransactionLt));
+  out = concatBytes(out, lastTransactionHash);
+  out = concatBytes(out, verifierCodeBocRootHash);
+  return out;
+}
+
+export function tonSccpRouteCanaryEvidenceHash(input) {
+  return bytesToHex(
+    prefixedBlake2b(
+      SCCP_TON_ROUTE_CANARY_LIVE_ACCOUNT_LABEL_V1,
+      canonicalTonSccpRouteCanaryEvidenceBytes(input),
+    ),
+  );
+}
+
+const normalizeDestinationBindingVersion = (input, label) => {
+  const versionInput = optionalResultField(input, "version");
+  if (versionInput === SCCP_OPTIONAL_FIELD_MISSING) return 1;
+  return normalizeV1Version(versionInput, label, TypeError);
+};
+
+const destinationBindingHashFromInput = (input) =>
+  strictResultField(
+    input,
+    "destinationBinding.bindingHash",
+    "bindingHash",
+    "binding_hash",
+    "destinationBindingHash",
+    "destination_binding_hash",
+  );
+
+const requireDestinationBindingHashMatches = (actual, expected, label) => {
+  if (actual === undefined || actual === null) return;
+  if (normalizeNonZeroHex32(actual, label) !== expected) {
+    throw new TypeError(`${label} must match destinationBinding`);
+  }
+};
+
+const requireDestinationBindingKeyMatches = (actual, expected, label) => {
+  if (actual === undefined || actual === null) return;
+  if (typeof actual !== "string" || actual.trim() !== expected) {
+    throw new TypeError(`${label} must match destinationBinding`);
+  }
+};
+
+export function evmSccpDestinationBinding(input) {
+  if (!input || typeof input !== "object" || Array.isArray(input)) {
+    throw new TypeError("EVM-family SCCP destination binding must be an object");
+  }
+  const bindingField = (label, ...names) => strictResultField(input, label, ...names);
+  const bindingOptionalField = (label, ...names) =>
+    strictOptionalResultField(input, label, ...names);
+  const bindingDomain = (label, fallback, ...names) => {
+    const selected = bindingOptionalField(label, ...names);
+    if (selected === SCCP_OPTIONAL_FIELD_MISSING) return normalizeSccpDomainId(fallback, label);
+    if (selected === null || selected === undefined) {
+      throw new TypeError(`${label} must be a u32 domain id`);
+    }
+    return normalizeSccpDomainId(selected, label);
+  };
+  const bindingValueOrDefault = (label, fallback, ...names) => {
+    const selected = bindingOptionalField(label, ...names);
+    return selected === SCCP_OPTIONAL_FIELD_MISSING || selected === null ? fallback : selected;
+  };
+  const version = normalizeDestinationBindingVersion(input, "destinationBinding.version");
+  const sourceDomain = bindingDomain(
+    "destinationBinding.sourceDomain",
+    SCCP_DOMAIN_SORA,
+    "sourceDomain",
+    "source_domain",
+  );
+  const targetDomain = bindingDomain(
+    "destinationBinding.targetDomain",
+    SCCP_DOMAIN_ETH,
+    "targetDomain",
+    "target_domain",
+  );
+  if (sourceDomain !== SCCP_DOMAIN_SORA) {
+    throw new RangeError("destinationBinding.sourceDomain must be SORA");
+  }
+  if (![SCCP_DOMAIN_ETH, SCCP_DOMAIN_BSC].includes(targetDomain)) {
+    throw new RangeError("destinationBinding.targetDomain must be ETH or BSC");
+  }
+  if (sourceDomain === targetDomain) {
+    throw new RangeError("destinationBinding.sourceDomain and targetDomain must differ");
+  }
+  const verifierBackend = bindingValueOrDefault(
+    "destinationBinding.verifierBackend",
+    SCCP_EVM_GROTH16_BN254_PROOF_BACKEND_V1,
+    "verifierBackend",
+    "verifier_backend",
+    "backend",
+  );
+  if (verifierBackend !== SCCP_EVM_GROTH16_BN254_PROOF_BACKEND_V1) {
+    throw new TypeError("destinationBinding.verifierBackend must be evm-groth16-bn254-v1");
+  }
+  const proofFamily = bindingValueOrDefault(
+    "destinationBinding.proofFamily",
+    SCCP_STARK_FRI_PROOF_FAMILY_V1,
+    "proofFamily",
+    "proof_family",
+  );
+  if (proofFamily !== SCCP_STARK_FRI_PROOF_FAMILY_V1) {
+    throw new TypeError("destinationBinding.proofFamily must be stark-fri-v1");
+  }
+
+  const networkId = nonZeroHex(
+    bindingField(
+      "destinationBinding.networkId",
+      "networkId",
+      "network_id",
+      "networkIdHex",
+      "network_id_hex",
+    ),
+    "destinationBinding.networkId",
+    32,
+  );
+  const verifierAddress = nonZeroHex(
+    bindingField(
+      "destinationBinding.verifierAddress",
+      "verifierAddress",
+      "verifier_address",
+      "verifierAddressHex",
+      "verifier_address_hex",
+    ),
+    "destinationBinding.verifierAddress",
+    20,
+  );
+  const bridgeAddress = nonZeroHex(
+    bindingField(
+      "destinationBinding.bridgeAddress",
+      "bridgeAddress",
+      "bridge_address",
+      "bridgeAddressHex",
+      "bridge_address_hex",
+    ),
+    "destinationBinding.bridgeAddress",
+    20,
+  );
+  if (verifierAddress === bridgeAddress) {
+    throw new RangeError("destinationBinding.verifierAddress must differ from bridgeAddress");
+  }
+  const verifierCodeHash = nonZeroHex(
+    bindingField(
+      "destinationBinding.verifierCodeHash",
+      "verifierCodeHash",
+      "verifier_code_hash",
+      "verifierCodeHashHex",
+      "verifier_code_hash_hex",
+    ),
+    "destinationBinding.verifierCodeHash",
+    32,
+  );
+  const verifierKeyHash = nonZeroHex(
+    bindingField(
+      "destinationBinding.verifierKeyHash",
+      "verifierKeyHash",
+      "verifier_key_hash",
+      "verifierKeyHashHex",
+      "verifier_key_hash_hex",
+    ),
+    "destinationBinding.verifierKeyHash",
+    32,
+  );
+  const networkIdBytes = hexToBytes(networkId, "destinationBinding.networkId", 32);
+  const verifierAddressBytes = hexToBytes(
+    verifierAddress,
+    "destinationBinding.verifierAddress",
+    20,
+  );
+  const bridgeAddressBytes = hexToBytes(bridgeAddress, "destinationBinding.bridgeAddress", 20);
+  const verifierCodeHashBytes = hexToBytes(
+    verifierCodeHash,
+    "destinationBinding.verifierCodeHash",
+    32,
+  );
+  const verifierKeyHashBytes = hexToBytes(
+    verifierKeyHash,
+    "destinationBinding.verifierKeyHash",
+    32,
+  );
+  const payload = concatBytes(
+    keccak_256(textEncoder.encode(SCCP_EVM_DESTINATION_BINDING_LABEL_V1)),
+    keccak_256(textEncoder.encode(verifierBackend)),
+    keccak_256(textEncoder.encode(proofFamily)),
+    networkIdBytes,
+    abiWordU32(sourceDomain, "destinationBinding.sourceDomain"),
+    abiWordU32(targetDomain, "destinationBinding.targetDomain"),
+    abiWordAddress20(verifierAddressBytes, "destinationBinding.verifierAddress"),
+    abiWordAddress20(bridgeAddressBytes, "destinationBinding.bridgeAddress"),
+    verifierCodeHashBytes,
+    verifierKeyHashBytes,
+  );
+  const bindingHash = bytesToHex(keccak_256(payload));
+  const key =
+    `evm:${sourceDomain}:${targetDomain}:${bytesToHex(networkIdBytes, false)}:` +
+    `${verifierAddress}:${bridgeAddress}:${verifierCodeHash}:${verifierKeyHash}`;
+  requireDestinationBindingHashMatches(
+    destinationBindingHashFromInput(input),
+    bindingHash,
+    "destinationBinding.bindingHash",
+  );
+  requireDestinationBindingKeyMatches(
+    bindingField("destinationBinding.key", "key", "bindingKey", "binding_key"),
+    key,
+    "destinationBinding.key",
+  );
+  return Object.freeze({
+    version,
+    sourceDomain,
+    targetDomain,
+    networkId,
+    verifierAddress,
+    bridgeAddress,
+    verifierCodeHash,
+    verifierKeyHash,
+    verifierBackend,
+    proofFamily,
+    key,
+    bindingHash,
+  });
+}
+
+export function evmSccpDestinationBindingHash(input) {
+  return evmSccpDestinationBinding(input).bindingHash;
+}
+
+export function tronSccpDestinationBinding(input) {
+  if (!input || typeof input !== "object" || Array.isArray(input)) {
+    throw new TypeError("TRON SCCP destination binding must be an object");
+  }
+  const bindingField = (label, ...names) => strictResultField(input, label, ...names);
+  const bindingOptionalField = (label, ...names) =>
+    strictOptionalResultField(input, label, ...names);
+  const bindingDomain = (label, fallback, ...names) => {
+    const selected = bindingOptionalField(label, ...names);
+    if (selected === SCCP_OPTIONAL_FIELD_MISSING) return normalizeSccpDomainId(fallback, label);
+    if (selected === null || selected === undefined) {
+      throw new TypeError(`${label} must be a u32 domain id`);
+    }
+    return normalizeSccpDomainId(selected, label);
+  };
+  const bindingValueOrDefault = (label, fallback, ...names) => {
+    const selected = bindingOptionalField(label, ...names);
+    return selected === SCCP_OPTIONAL_FIELD_MISSING || selected === null ? fallback : selected;
+  };
+  const version = normalizeDestinationBindingVersion(input, "destinationBinding.version");
+  const sourceDomain = bindingDomain(
+    "destinationBinding.sourceDomain",
+    SCCP_DOMAIN_SORA,
+    "sourceDomain",
+    "source_domain",
+  );
+  const targetDomain = bindingDomain(
+    "destinationBinding.targetDomain",
+    SCCP_DOMAIN_TRON,
+    "targetDomain",
+    "target_domain",
+  );
+  if (sourceDomain !== SCCP_DOMAIN_SORA) {
+    throw new RangeError("destinationBinding.sourceDomain must be SORA");
+  }
+  if (targetDomain !== SCCP_DOMAIN_TRON) {
+    throw new RangeError("destinationBinding.targetDomain must be TRON");
+  }
+  if (sourceDomain === targetDomain) {
+    throw new RangeError("destinationBinding.sourceDomain and targetDomain must differ");
+  }
+  const verifierBackend = bindingValueOrDefault(
+    "destinationBinding.verifierBackend",
+    SCCP_TRON_GROTH16_BN254_PROOF_BACKEND_V1,
+    "verifierBackend",
+    "verifier_backend",
+    "backend",
+  );
+  if (verifierBackend !== SCCP_TRON_GROTH16_BN254_PROOF_BACKEND_V1) {
+    throw new TypeError("destinationBinding.verifierBackend must be tron-groth16-bn254-v1");
+  }
+  const proofFamily = bindingValueOrDefault(
+    "destinationBinding.proofFamily",
+    SCCP_STARK_FRI_PROOF_FAMILY_V1,
+    "proofFamily",
+    "proof_family",
+  );
+  if (proofFamily !== SCCP_STARK_FRI_PROOF_FAMILY_V1) {
+    throw new TypeError("destinationBinding.proofFamily must be stark-fri-v1");
+  }
+
+  const networkId = nonZeroHex(
+    bindingField(
+      "destinationBinding.networkId",
+      "networkId",
+      "network_id",
+      "networkIdHex",
+      "network_id_hex",
+    ),
+    "destinationBinding.networkId",
+    32,
+  );
+  const verifierAddressInput = bindingField(
+    "destinationBinding.verifierAddress",
+    "verifierAddress",
+    "verifier_address",
+  );
+  const verifierPayload = decodeTronBase58CheckPayload(
+    verifierAddressInput,
+    "destinationBinding.verifierAddress",
+  );
+  const verifierAddress = verifierAddressInput;
+  const verifierCodeHash = nonZeroHex(
+    bindingField(
+      "destinationBinding.verifierCodeHash",
+      "verifierCodeHash",
+      "verifier_code_hash",
+      "verifierCodeHashHex",
+      "verifier_code_hash_hex",
+    ),
+    "destinationBinding.verifierCodeHash",
+    32,
+  );
+  const verifierKeyHash = nonZeroHex(
+    bindingField(
+      "destinationBinding.verifierKeyHash",
+      "verifierKeyHash",
+      "verifier_key_hash",
+      "verifierKeyHashHex",
+      "verifier_key_hash_hex",
+    ),
+    "destinationBinding.verifierKeyHash",
+    32,
+  );
+  const networkIdBytes = hexToBytes(networkId, "destinationBinding.networkId", 32);
+  const verifierCodeHashBytes = hexToBytes(
+    verifierCodeHash,
+    "destinationBinding.verifierCodeHash",
+    32,
+  );
+  const verifierKeyHashBytes = hexToBytes(
+    verifierKeyHash,
+    "destinationBinding.verifierKeyHash",
+    32,
+  );
+  const payload = concatBytes(
+    keccak_256(textEncoder.encode(SCCP_TRON_DESTINATION_BINDING_LABEL_V1)),
+    keccak_256(textEncoder.encode(verifierBackend)),
+    keccak_256(textEncoder.encode(proofFamily)),
+    networkIdBytes,
+    abiWordU32(sourceDomain, "destinationBinding.sourceDomain"),
+    abiWordU32(targetDomain, "destinationBinding.targetDomain"),
+    abiWordBytes21(verifierPayload, "destinationBinding.verifierAddress"),
+    verifierCodeHashBytes,
+    verifierKeyHashBytes,
+  );
+  const bindingHash = bytesToHex(keccak_256(payload));
+  const key =
+    `tron:${sourceDomain}:${targetDomain}:${bytesToHex(networkIdBytes, false)}:` +
+    `${verifierAddress}:${verifierCodeHash}:${verifierKeyHash}`;
+  requireDestinationBindingHashMatches(
+    destinationBindingHashFromInput(input),
+    bindingHash,
+    "destinationBinding.bindingHash",
+  );
+  requireDestinationBindingKeyMatches(
+    bindingField("destinationBinding.key", "key", "bindingKey", "binding_key"),
+    key,
+    "destinationBinding.key",
+  );
+  return Object.freeze({
+    version,
+    sourceDomain,
+    targetDomain,
+    networkId,
+    verifierAddress,
+    verifierCodeHash,
+    verifierKeyHash,
+    verifierBackend,
+    proofFamily,
+    key,
+    bindingHash,
+  });
+}
+
+export function tronSccpDestinationBindingHash(input) {
+  return tronSccpDestinationBinding(input).bindingHash;
+}
+
+const normalizeBridgeProofSubmitPayloadBase = (input, context) => {
+  if (!input || typeof input !== "object" || Array.isArray(input)) {
+    throw new TypeError(`${context} must be an object`);
+  }
+  const field = (label, ...names) => strictResultField(input, `${context}.${label}`, ...names);
+  const optionalField = (label, ...names) =>
+    strictOptionalResultField(input, `${context}.${label}`, ...names);
+  const messageBundle = field("messageBundle", "messageBundle", "message_bundle");
+  if (!messageBundle || typeof messageBundle !== "object" || Array.isArray(messageBundle)) {
+    throw new TypeError(`${context}.messageBundle must be an object`);
+  }
+  const payload = {
+    authority: normalizeNonEmptyString(field("authority", "authority"), `${context}.authority`),
+    message_bundle: messageBundle,
+  };
+  const privateKey = optionalField("privateKey", "privateKey", "private_key");
+  if (privateKey !== SCCP_OPTIONAL_FIELD_MISSING) payload.private_key = privateKey;
+  const publicKeyHex = optionalField("publicKeyHex", "publicKeyHex", "public_key_hex");
+  if (publicKeyHex !== SCCP_OPTIONAL_FIELD_MISSING) {
+    payload.public_key_hex = normalizeNonEmptyString(publicKeyHex, `${context}.publicKeyHex`);
+  }
+  const signatureB64 = optionalField("signatureB64", "signatureB64", "signature_b64");
+  if (signatureB64 !== SCCP_OPTIONAL_FIELD_MISSING) {
+    payload.signature_b64 = normalizeNonEmptyString(signatureB64, `${context}.signatureB64`);
+  }
+  const creationTimeMs = optionalField("creationTimeMs", "creationTimeMs", "creation_time_ms");
+  if (creationTimeMs !== SCCP_OPTIONAL_FIELD_MISSING) {
+    payload.creation_time_ms = creationTimeMs;
+  }
+  return payload;
+};
+
+const normalizeBridgeProofMessageBundleBinding = (messageBundle, context) => {
+  if (!messageBundle || typeof messageBundle !== "object" || Array.isArray(messageBundle)) {
+    throw new TypeError(`${context}.messageBundle must be an object`);
+  }
+  const commitment = strictResultField(
+    messageBundle,
+    `${context}.messageBundle.commitment`,
+    "commitment",
+  );
+  if (!commitment || typeof commitment !== "object" || Array.isArray(commitment)) {
+    throw new TypeError(`${context}.messageBundle.commitment must be an object`);
+  }
+  return {
+    messageId: normalizeNonZeroHex32(
+      strictResultField(
+        commitment,
+        `${context}.messageBundle.commitment.messageId`,
+        "messageId",
+        "message_id",
+      ),
+      `${context}.messageBundle.commitment.messageId`,
+    ),
+    commitmentRoot: normalizeNonZeroHex32(
+      strictResultField(
+        messageBundle,
+        `${context}.messageBundle.commitmentRoot`,
+        "commitmentRoot",
+        "commitment_root",
+      ),
+      `${context}.messageBundle.commitmentRoot`,
+    ),
+  };
+};
+
+const requireSccpGroth16ProofBytesForBridgeProofMessageBundle = (
+  proofBytes,
+  messageBundle,
+  context,
+) => {
+  const binding = normalizeBridgeProofMessageBundleBinding(messageBundle, context);
+  if (
+    !bytesEqual(
+      groth16ProofWord(proofBytes, 1),
+      hexToBytes(binding.messageId, `${context}.messageBundle.commitment.messageId`, 32),
+    )
+  ) {
+    throw new TypeError(
+      `${context}.submission.proofBytes.messageId must match messageBundle.commitment.messageId`,
+    );
+  }
+  if (groth16ProofWordValue(proofBytes, 2) !== BigInt(SCCP_DOMAIN_SORA)) {
+    throw new TypeError(`${context}.submission.proofBytes.sourceDomain must be SORA`);
+  }
+  if (
+    !bytesEqual(
+      groth16ProofWord(proofBytes, 3),
+      hexToBytes(binding.commitmentRoot, `${context}.messageBundle.commitmentRoot`, 32),
+    )
+  ) {
+    throw new TypeError(
+      `${context}.submission.proofBytes.commitmentRoot must match messageBundle.commitmentRoot`,
+    );
+  }
+  return proofBytes;
+};
+
+const normalizeSccpGroth16SubmissionForBridgeProofSubmit = (
+  submissionInput,
+  destinationBinding,
+  context,
+  {
+    acceptedTargetDomains,
+    expectedVerifierBackend,
+    expectedPlatformPayload,
+    destinationLabel,
+  },
+) => {
+  if (!submissionInput || typeof submissionInput !== "object" || Array.isArray(submissionInput)) {
+    throw new TypeError(`${context}.submission must be an object`);
+  }
+  const submissionField = (label, ...names) =>
+    strictResultField(submissionInput, `${context}.submission.${label}`, ...names);
+  normalizeV1Version(
+    submissionField("version", "version"),
+    `${context}.submission.version`,
+    TypeError,
+  );
+  if (submissionField("submissionKind", "submissionKind", "submission_kind") !== "contract_call") {
+    throw new TypeError(`${context}.submission must be a contract_call`);
+  }
+  if (submissionField("platformPayload", "platformPayload", "platform_payload") !== expectedPlatformPayload) {
+    throw new TypeError(`${context}.submission platformPayload must match ${destinationLabel}`);
+  }
+  const proofFamily = submissionField("proofFamily", "proofFamily", "proof_family");
+  if (proofFamily !== destinationBinding.proofFamily) {
+    throw new TypeError(`${context}.submission proofFamily must match destinationBinding`);
+  }
+  const verifierBackend = submissionField("verifierBackend", "verifierBackend", "verifier_backend", "backend");
+  if (
+    verifierBackend !== expectedVerifierBackend ||
+    verifierBackend !== destinationBinding.verifierBackend
+  ) {
+    throw new TypeError(`${context}.submission verifierBackend must match destinationBinding`);
+  }
+  const sourceDomain = normalizeSccpDomainId(
+    submissionField("sourceDomain", "sourceDomain", "source_domain"),
+    `${context}.submission.sourceDomain`,
+  );
+  if (sourceDomain !== destinationBinding.sourceDomain) {
+    throw new TypeError(`${context}.submission sourceDomain must match destinationBinding`);
+  }
+  const targetDomain = normalizeSccpDomainId(
+    submissionField("targetDomain", "targetDomain", "target_domain"),
+    `${context}.submission.targetDomain`,
+  );
+  if (!acceptedTargetDomains.includes(targetDomain) || targetDomain !== destinationBinding.targetDomain) {
+    throw new TypeError(`${context}.submission targetDomain must match destinationBinding`);
+  }
+  const destinationBindingHash = normalizeNonZeroHex32(
+    submissionField("destinationBindingHash", "destinationBindingHash", "destination_binding_hash"),
+    `${context}.submission.destinationBindingHash`,
+  );
+  if (destinationBindingHash !== destinationBinding.bindingHash) {
+    throw new TypeError(`${context}.submission destinationBindingHash must match destinationBinding`);
+  }
+  return requireGroth16ProofBytes(
+    toBytes(
+      submissionField("proofBytes", "proofBytes", "proof_bytes"),
+      `${context}.submission.proofBytes`,
+    ),
+    `${context}.submission.proofBytes`,
+  );
+};
+
+export function buildEvmSccpBridgeProofSubmitPayload(input) {
+  const context = "EVM-family SCCP bridge proof submit payload";
+  const payload = normalizeBridgeProofSubmitPayloadBase(input, context);
+  const destinationBinding = evmSccpDestinationBinding(
+    strictResultField(input, `${context}.destinationBinding`, "destinationBinding", "destination_binding"),
+  );
+  const proofBytes = normalizeSccpGroth16SubmissionForBridgeProofSubmit(
+    strictResultField(
+      input,
+      `${context}.submission`,
+      "submission",
+      "evmSccpSubmission",
+      "evm_sccp_submission",
+      "sccpSubmission",
+      "sccp_submission",
+    ),
+    destinationBinding,
+    context,
+    {
+      acceptedTargetDomains: [SCCP_DOMAIN_ETH, SCCP_DOMAIN_BSC],
+      expectedVerifierBackend: SCCP_EVM_GROTH16_BN254_PROOF_BACKEND_V1,
+      expectedPlatformPayload: "evm_groth16_contract_call",
+      destinationLabel: "EVM-family",
+    },
+  );
+  const boundProofBytes = requireSccpGroth16ProofBytesForBridgeProofMessageBundle(
+    proofBytes,
+    payload.message_bundle,
+    context,
+  );
+  return Object.freeze({
+    ...payload,
+    network_id_hex: destinationBinding.networkId,
+    verifier_address_hex: destinationBinding.verifierAddress,
+    bridge_address_hex: destinationBinding.bridgeAddress,
+    verifier_code_hash_hex: destinationBinding.verifierCodeHash,
+    verifier_key_hash_hex: destinationBinding.verifierKeyHash,
+    expected_destination_binding_hash_hex: destinationBinding.bindingHash,
+    proof_bytes_hex: bytesToHex(boundProofBytes),
+  });
+}
+
+export function buildTronSccpBridgeProofSubmitPayload(input) {
+  const context = "TRON SCCP bridge proof submit payload";
+  const payload = normalizeBridgeProofSubmitPayloadBase(input, context);
+  const destinationBinding = tronSccpDestinationBinding(
+    strictResultField(input, `${context}.destinationBinding`, "destinationBinding", "destination_binding"),
+  );
+  const proofBytes = normalizeSccpGroth16SubmissionForBridgeProofSubmit(
+    strictResultField(
+      input,
+      `${context}.submission`,
+      "submission",
+      "tronSccpSubmission",
+      "tron_sccp_submission",
+      "sccpSubmission",
+      "sccp_submission",
+    ),
+    destinationBinding,
+    context,
+    {
+      acceptedTargetDomains: [SCCP_DOMAIN_TRON],
+      expectedVerifierBackend: SCCP_TRON_GROTH16_BN254_PROOF_BACKEND_V1,
+      expectedPlatformPayload: "tron_contract_call",
+      destinationLabel: "TRON",
+    },
+  );
+  const boundProofBytes = requireSccpGroth16ProofBytesForBridgeProofMessageBundle(
+    proofBytes,
+    payload.message_bundle,
+    context,
+  );
+  return Object.freeze({
+    ...payload,
+    network_id_hex: destinationBinding.networkId,
+    verifier_code_hash_hex: destinationBinding.verifierCodeHash,
+    verifier_key_hash_hex: destinationBinding.verifierKeyHash,
+    expected_destination_binding_hash_hex: destinationBinding.bindingHash,
+    tron_verifier_address: destinationBinding.verifierAddress,
+    proof_bytes_hex: bytesToHex(boundProofBytes),
+  });
+}
+
+const destinationBindingHasDeploymentMaterial = (input) =>
+  strictOptionalResultField(
+    input,
+    "destinationBinding.networkId",
+    "networkId",
+    "network_id",
+    "networkIdHex",
+    "network_id_hex",
+  ) !== SCCP_OPTIONAL_FIELD_MISSING;
+
+const destinationBindingWithDefaultTarget = (input, targetDomain) => {
+  if (
+    targetDomain === undefined ||
+    targetDomain === null ||
+    strictOptionalResultField(input, "destinationBinding.targetDomain", "targetDomain", "target_domain") !==
+      SCCP_OPTIONAL_FIELD_MISSING
+  ) {
+    return input;
+  }
+  return { ...input, targetDomain };
+};
+
+const requireObject = (input, label) => {
+  if (!input || typeof input !== "object" || Array.isArray(input)) {
+    throw new TypeError(`${label} must be an object`);
+  }
+  return input;
+};
+
+function normalizeBoundSccpProofContext(input, label, bindingBuilder, targetDomain) {
+  const value = requireObject(input, label);
+  const destinationBinding = strictResultField(
+    value,
+    "destinationBinding",
+    "destinationBinding",
+    "destination_binding",
+  );
+  let normalizedDestinationBinding;
+  let destinationBindingHash = strictResultField(
+    value,
+    "destinationBindingHash",
+    "destinationBindingHash",
+    "destination_binding_hash",
+  );
+  if (destinationBinding && typeof destinationBinding === "object" && !Array.isArray(destinationBinding)) {
+    const bindingHash = destinationBindingHashFromInput(destinationBinding);
+    if (destinationBindingHasDeploymentMaterial(destinationBinding)) {
+      normalizedDestinationBinding = bindingBuilder(
+        destinationBindingWithDefaultTarget(destinationBinding, targetDomain),
+      );
+      const derivedHash = normalizedDestinationBinding.bindingHash;
+      requireDestinationBindingHashMatches(
+        destinationBindingHash,
+        derivedHash,
+        "destinationBindingHash",
+      );
+      destinationBindingHash = derivedHash;
+    } else if (destinationBindingHash === undefined || destinationBindingHash === null) {
+      destinationBindingHash = bindingHash;
+    } else if (bindingHash !== undefined && bindingHash !== null) {
+      requireDestinationBindingHashMatches(
+        destinationBindingHash,
+        normalizeNonZeroHex32(bindingHash, "destinationBinding.bindingHash"),
+        "destinationBindingHash",
+      );
+    }
+  }
+  return {
+    version: 1,
+    statementHash: normalizeNonZeroHex32(
+      strictResultField(value, "statementHash", "statementHash", "statement_hash"),
+      "statementHash",
+    ),
+    destinationBinding: normalizedDestinationBinding,
+    destinationBindingHash: normalizeNonZeroHex32(
+      destinationBindingHash,
+      "destinationBindingHash",
+    ),
+  };
+}
+
+const sourceRecordProfile = (sourceDomain) => {
+  const base = sourceAdapterVerifierProfile(sourceDomain);
+  switch (sourceDomain) {
+    case SCCP_DOMAIN_ETH:
+      return {
+        ...base,
+        sourceTrustAnchorId:
+          "sccp:eth:source-trust-anchor:ethereum-mainnet-beacon-finalized-checkpoint:v1",
+        consensusVerifierId:
+          "sccp:eth:consensus-verifier:beacon-sync-committee-execution-header-mainnet:v1",
+        messageInclusionVerifierId:
+          "sccp:eth:message-inclusion-verifier:execution-receipt-trie-branch-mainnet:v1",
+        finalityPolicyId:
+          "sccp:eth:finality-policy:beacon-finalized-checkpoint-mainnet:v1",
+        sourceStateVerifierId: "",
+        sourceBridgeEmitterId: "sccp:eth:source-bridge-emitter:ethereum-mainnet:v1",
+        requiresSourceBridge: true,
+        requiresSourceBridgeConfig: false,
+      };
+    case SCCP_DOMAIN_BSC:
+      return {
+        ...base,
+        sourceTrustAnchorId:
+          "sccp:bsc:source-trust-anchor:bsc-mainnet-validator-set:v1",
+        consensusVerifierId: "sccp:bsc:consensus-verifier:validator-set-seal-mainnet:v1",
+        messageInclusionVerifierId:
+          "sccp:bsc:message-inclusion-verifier:receipt-trie-branch-mainnet:v1",
+        finalityPolicyId: "sccp:bsc:finality-policy:validator-set-finality-mainnet:v1",
+        sourceStateVerifierId: "",
+        sourceBridgeEmitterId: "sccp:bsc:source-bridge-emitter:bsc-mainnet:v1",
+        requiresSourceBridge: true,
+        requiresSourceBridgeConfig: false,
+      };
+    case SCCP_DOMAIN_SOL:
+      return {
+        ...base,
+        sourceTrustAnchorId:
+          "sccp:sol:source-trust-anchor:solana-mainnet-beta-genesis:v1",
+        consensusVerifierId:
+          "sccp:sol:consensus-verifier:finalized-slot-bankhash-mainnet-beta:v1",
+        messageInclusionVerifierId:
+          "sccp:sol:message-inclusion-verifier:transaction-status-root-branch:v1",
+        finalityPolicyId: "sccp:sol:finality-policy:finalized-slot-mainnet-beta:v1",
+        sourceStateVerifierId: SCCP_SOLANA_MAINNET_ACCOUNTS_DB_VERIFIER_ID_V1,
+        sourceBridgeEmitterId: "",
+        requiresSourceBridge: false,
+        requiresSourceBridgeConfig: false,
+      };
+    case SCCP_DOMAIN_TON:
+      return {
+        ...base,
+        sourceTrustAnchorId: "sccp:ton:source-trust-anchor:ton-mainnet-masterchain:v1",
+        consensusVerifierId: "sccp:ton:consensus-verifier:masterchain-block-proof:v1",
+        messageInclusionVerifierId:
+          "sccp:ton:message-inclusion-verifier:shard-transaction-branch:v1",
+        finalityPolicyId: "sccp:ton:finality-policy:masterchain-finality:v1",
+        sourceStateVerifierId: SCCP_TON_MAINNET_SHARD_STATE_VERIFIER_ID_V1,
+        sourceBridgeEmitterId: "",
+        requiresSourceBridge: false,
+        requiresSourceBridgeConfig: false,
+      };
+    case SCCP_DOMAIN_TRON:
+      return {
+        ...base,
+        sourceTrustAnchorId:
+          "sccp:tron:source-trust-anchor:mainnet-witness-schedule:v1",
+        consensusVerifierId:
+          "sccp:tron:consensus-verifier:dpos-solid-block-mainnet:v1",
+        messageInclusionVerifierId:
+          "sccp:tron:message-inclusion-verifier:transaction-source-mainnet:v1",
+        finalityPolicyId: "sccp:tron:finality-policy:solid-block-mainnet:v1",
+        sourceStateVerifierId: "",
+        sourceBridgeEmitterId: "sccp:tron:source-bridge-emitter:tron-mainnet:v1",
+        requiresSourceBridge: true,
+        requiresSourceBridgeConfig: true,
+      };
+    case SCCP_DOMAIN_SORA_KUSAMA:
+      return {
+        ...base,
+        sourceTrustAnchorId:
+          "sccp:sora-kusama:source-trust-anchor:grandpa-authority-set:v1",
+        consensusVerifierId:
+          "sccp:sora-kusama:consensus-verifier:grandpa-finalized-header:v1",
+        messageInclusionVerifierId:
+          "sccp:sora-kusama:message-inclusion-verifier:events-storage-proof:v1",
+        finalityPolicyId: "sccp:sora-kusama:finality-policy:grandpa-finality:v1",
+        sourceStateVerifierId:
+          "sccp:sora-kusama:source-state-verifier:runtime-storage-proof:v1",
+        sourceBridgeEmitterId: "",
+        requiresSourceBridge: false,
+        requiresSourceBridgeConfig: false,
+      };
+    case SCCP_DOMAIN_SORA_POLKADOT:
+      return {
+        ...base,
+        sourceTrustAnchorId:
+          "sccp:sora-polkadot:source-trust-anchor:grandpa-authority-set:v1",
+        consensusVerifierId:
+          "sccp:sora-polkadot:consensus-verifier:grandpa-finalized-header:v1",
+        messageInclusionVerifierId:
+          "sccp:sora-polkadot:message-inclusion-verifier:events-storage-proof:v1",
+        finalityPolicyId: "sccp:sora-polkadot:finality-policy:grandpa-finality:v1",
+        sourceStateVerifierId:
+          "sccp:sora-polkadot:source-state-verifier:runtime-storage-proof:v1",
+        sourceBridgeEmitterId: "",
+        requiresSourceBridge: false,
+        requiresSourceBridgeConfig: false,
+      };
+    case SCCP_DOMAIN_SORA2:
+      return {
+        ...base,
+        sourceTrustAnchorId:
+          "sccp:sora2:source-trust-anchor:grandpa-authority-set:v1",
+        consensusVerifierId:
+          "sccp:sora2:consensus-verifier:grandpa-finalized-header:v1",
+        messageInclusionVerifierId:
+          "sccp:sora2:message-inclusion-verifier:events-storage-proof:v1",
+        finalityPolicyId: "sccp:sora2:finality-policy:grandpa-finality:v1",
+        sourceStateVerifierId: "sccp:sora2:source-state-verifier:runtime-storage-proof:v1",
+        sourceBridgeEmitterId: "",
+        requiresSourceBridge: false,
+        requiresSourceBridgeConfig: false,
+      };
+    default:
+      throw new TypeError("sourceDomain is not a supported SCCP source material lane");
+  }
+};
+
+const inputValue = (input, ...keys) => {
+  for (const key of keys) {
+    if (input[key] !== undefined && input[key] !== null) return input[key];
+  }
+  return undefined;
+};
+
+const normalizeOptionalHex32 = (value, label) =>
+  value === undefined || value === null ? SCCP_ZERO_HASH_V1 : normalizeHex32(value, label);
+
+const isZeroHex32 = (value, label) =>
+  hexToBytes(value, label, 32).every((byte) => byte === 0);
+
+const nonZeroHexBytes = (value, label, byteLength) => {
+  const bytes = hexToBytes(value, label, byteLength);
+  if (bytes.every((byte) => byte === 0)) {
+    throw new TypeError(`${label} must not be zero`);
+  }
+  return bytes;
+};
+
+const nonZeroHex = (value, label, byteLength) =>
+  bytesToHex(nonZeroHexBytes(value, label, byteLength));
+
+const SCCP_SOURCE_VERIFIER_MATERIAL_ROLE_HASH_FIELDS = [
+  "sourceTrustAnchorHash",
+  "consensusVerifierHash",
+  "messageInclusionVerifierHash",
+  "finalityPolicyHash",
+  "sourceStateVerifierHash",
+  "sourceBridgeEmitterCodeHash",
+  "sourceBridgeNetworkId",
+  "sourceBridgeConfigHash",
+];
+
+const SCCP_SOURCE_ADAPTER_DEPLOYMENT_ROLE_HASH_FIELDS = [
+  "sourceTrustAnchorHash",
+  "consensusVerifierHash",
+  "messageInclusionVerifierHash",
+  "finalityPolicyHash",
+  "sourceStateVerifierHash",
+  "adapterVerifierVkHash",
+  "sourceBridgeEmitterCodeHash",
+  "sourceBridgeNetworkId",
+  "sourceBridgeConfigHash",
+  "deploymentReceiptHash",
+];
+
+function requireSccpRoleHashSeparation(record, roleFields, label) {
+  const seen = new Map();
+  for (const roleField of roleFields) {
+    const roleHash = record[roleField];
+    if (isZeroHex32(roleHash, roleField)) continue;
+    const previousRoleField = seen.get(roleHash);
+    if (previousRoleField !== undefined) {
+      throw new TypeError(
+        `${label} hashes must be role-separated: ${roleField} matches ${previousRoleField}`,
+      );
+    }
+    seen.set(roleHash, roleField);
+  }
+}
+
+const rejectTonTemplateSourceMaterialComponents = (material) => {
+  if (material.sourceDomain !== SCCP_DOMAIN_TON) return;
+  for (const [field, templateHash] of SCCP_TON_TEMPLATE_COMPONENT_HASHES_V1.entries()) {
+    if (material[field] === templateHash) {
+      if (field === "sourceStateVerifierHash") {
+        throw new TypeError("sourceStateVerifierHash must not be the TON template verifier hash");
+      }
+      throw new TypeError(`${field} must not be the TON template component hash`);
+    }
+  }
+};
+
+const rejectTronTemplateSourceMaterialComponents = (material) => {
+  if (material.sourceDomain !== SCCP_DOMAIN_TRON) return;
+  for (const [field, templateHash] of SCCP_TRON_TEMPLATE_COMPONENT_HASHES_V1.entries()) {
+    if (material[field] === templateHash) {
+      throw new TypeError(`${field} must not be the TRON template component hash`);
+    }
+  }
+};
+
+const rejectSolanaTemplateSourceMaterialComponents = (material) => {
+  if (material.sourceDomain !== SCCP_DOMAIN_SOL) return;
+  for (const [field, templateHash] of SCCP_SOLANA_TEMPLATE_COMPONENT_HASHES_V1.entries()) {
+    if (material[field] === templateHash) {
+      if (field === "sourceStateVerifierHash") {
+        throw new TypeError("sourceStateVerifierHash must not be the Solana template verifier hash");
+      }
+      throw new TypeError(`${field} must not be the Solana template component hash`);
+    }
+  }
+};
+
+const tronSourceBridgeConfigHash = (material) =>
+  keccak_256(
+    concatBytes(
+      keccak_256(textEncoder.encode(SCCP_TRON_SOURCE_BRIDGE_CONFIG_LABEL_V1)),
+      abiWordAddress20(
+        hexToBytes(material.sourceBridgeEmitterAddress, "sourceBridgeEmitterAddress", 20),
+        "sourceBridgeEmitterAddress",
+      ),
+      hexToBytes(material.sourceBridgeNetworkId, "sourceBridgeNetworkId", 32),
+      abiWordU32(material.sourceDomain, "sourceDomain"),
+      abiWordU32(SCCP_DOMAIN_SORA, "targetDomain"),
+      abiWordAddress20(
+        hexToBytes(material.sourceBridgeOwnerAddress, "sourceBridgeOwnerAddress", 20),
+        "sourceBridgeOwnerAddress",
+      ),
+    ),
+  );
+
+const rejectMismatchedTronSourceBridgeConfigHash = (material) => {
+  if (material.sourceDomain !== SCCP_DOMAIN_TRON) return;
+  const supplied = hexToBytes(material.sourceBridgeConfigHash, "sourceBridgeConfigHash", 32);
+  const expected = tronSourceBridgeConfigHash(material);
+  if (!bytesEqual(supplied, expected)) {
+    throw new TypeError("sourceBridgeConfigHash must match TRON source bridge config fields");
+  }
+};
+
+export function normalizeSccpSourceVerifierMaterial(input) {
+  if (!input || typeof input !== "object" || Array.isArray(input)) {
+    throw new TypeError("SCCP source verifier material must be an object");
+  }
+  const materialField = (label, ...names) => strictResultField(input, label, ...names);
+  const materialOptionalField = (label, ...names) =>
+    strictOptionalResultField(input, label, ...names);
+  const materialDomainHex32 = (enabled, selected, label) => {
+    if (!enabled) {
+      if (selected !== SCCP_OPTIONAL_FIELD_MISSING) {
+        const normalized = normalizeHex32(selected, label);
+        if (!isZeroHex32(normalized, label)) {
+          throw new TypeError(`${label} is not used for sourceDomain`);
+        }
+      }
+      return SCCP_ZERO_HASH_V1;
+    }
+    return normalizeNonZeroHex32(
+      selected === SCCP_OPTIONAL_FIELD_MISSING ? undefined : selected,
+      label,
+    );
+  };
+  const materialDomainBytesHex = (enabled, selected, label, byteLength) => {
+    if (!enabled) {
+      if (selected !== SCCP_OPTIONAL_FIELD_MISSING) {
+        const bytes = toMaybeEmptyBytes(selected, label);
+        if (bytes.length !== 0) {
+          throw new TypeError(`${label} is not used for sourceDomain`);
+        }
+      }
+      return "0x";
+    }
+    return nonZeroHex(
+      selected === SCCP_OPTIONAL_FIELD_MISSING ? undefined : selected,
+      label,
+      byteLength,
+    );
+  };
+  const sourceDomain = normalizeSccpDomainId(
+    materialField("sourceDomain", "sourceDomain", "source_domain"),
+    "sourceDomain",
+  );
+  const profile = sourceRecordProfile(sourceDomain);
+  const sourceStateVerifierHash = materialDomainHex32(
+    Boolean(profile.sourceStateVerifierId),
+    materialOptionalField(
+      "sourceStateVerifierHash",
+      "sourceStateVerifierHash",
+      "source_state_verifier_hash",
+    ),
+    "sourceStateVerifierHash",
+  );
+  const material = {
+    version: 1,
+    sourceDomain,
+    sourceChain: profile.chain,
+    sourceProofPlan: profile.proofPlan,
+    finalityModel: profile.finalityModel,
+    adapterCircuitId: SCCP_SOURCE_ADAPTER_OPEN_VERIFY_CIRCUIT_ID_V1,
+    sourceTrustAnchorId: profile.sourceTrustAnchorId,
+    sourceTrustAnchorHash: normalizeNonZeroHex32(
+      materialField("sourceTrustAnchorHash", "sourceTrustAnchorHash", "source_trust_anchor_hash"),
+      "sourceTrustAnchorHash",
+    ),
+    consensusVerifierId: profile.consensusVerifierId,
+    consensusVerifierHash: normalizeNonZeroHex32(
+      materialField("consensusVerifierHash", "consensusVerifierHash", "consensus_verifier_hash"),
+      "consensusVerifierHash",
+    ),
+    messageInclusionVerifierId: profile.messageInclusionVerifierId,
+    messageInclusionVerifierHash: normalizeNonZeroHex32(
+      materialField(
+        "messageInclusionVerifierHash",
+        "messageInclusionVerifierHash",
+        "message_inclusion_verifier_hash",
+      ),
+      "messageInclusionVerifierHash",
+    ),
+    finalityPolicyId: profile.finalityPolicyId,
+    finalityPolicyHash: normalizeNonZeroHex32(
+      materialField("finalityPolicyHash", "finalityPolicyHash", "finality_policy_hash"),
+      "finalityPolicyHash",
+    ),
+    sourceStateVerifierId: profile.sourceStateVerifierId,
+    sourceStateVerifierHash,
+    sourceBridgeEmitterId: profile.sourceBridgeEmitterId,
+    sourceBridgeEmitterAddress: materialDomainBytesHex(
+      profile.requiresSourceBridge,
+      materialOptionalField(
+        "sourceBridgeEmitterAddress",
+        "sourceBridgeEmitterAddress",
+        "source_bridge_emitter_address",
+        "bridgeAddress",
+        "bridge_address",
+      ),
+      "sourceBridgeEmitterAddress",
+      20,
+    ),
+    sourceBridgeEmitterCodeHash: materialDomainHex32(
+      profile.requiresSourceBridge,
+      materialOptionalField(
+        "sourceBridgeEmitterCodeHash",
+        "sourceBridgeEmitterCodeHash",
+        "source_bridge_emitter_code_hash",
+      ),
+      "sourceBridgeEmitterCodeHash",
+    ),
+    sourceBridgeNetworkId: materialDomainHex32(
+      profile.requiresSourceBridgeConfig,
+      materialOptionalField(
+        "sourceBridgeNetworkId",
+        "sourceBridgeNetworkId",
+        "source_bridge_network_id",
+        "networkId",
+        "network_id",
+      ),
+      "sourceBridgeNetworkId",
+    ),
+    sourceBridgeOwnerAddress: materialDomainBytesHex(
+      profile.requiresSourceBridgeConfig,
+      materialOptionalField(
+        "sourceBridgeOwnerAddress",
+        "sourceBridgeOwnerAddress",
+        "source_bridge_owner_address",
+        "ownerAddress",
+        "owner_address",
+      ),
+      "sourceBridgeOwnerAddress",
+      20,
+    ),
+    sourceBridgeConfigHash: materialDomainHex32(
+      profile.requiresSourceBridgeConfig,
+      materialOptionalField(
+        "sourceBridgeConfigHash",
+        "sourceBridgeConfigHash",
+        "source_bridge_config_hash",
+        "configHash",
+        "config_hash",
+      ),
+      "sourceBridgeConfigHash",
+    ),
+    placeholderMaterial: false,
+  };
+  rejectSolanaTemplateSourceMaterialComponents(material);
+  rejectTonTemplateSourceMaterialComponents(material);
+  rejectTronTemplateSourceMaterialComponents(material);
+  rejectMismatchedTronSourceBridgeConfigHash(material);
+  requireSccpRoleHashSeparation(
+    material,
+    SCCP_SOURCE_VERIFIER_MATERIAL_ROLE_HASH_FIELDS,
+    "SCCP source verifier material",
+  );
+  return material;
+}
+
+export function canonicalSccpSourceVerifierMaterialBytes(input) {
+  const material = normalizeSccpSourceVerifierMaterial(input);
+  let out = new Uint8Array();
+  out = writeU8(out, material.version);
+  out = writeU32Le(out, material.sourceDomain);
+  out = writeBytes(out, textEncoder.encode(material.sourceChain));
+  out = writeU8(out, material.sourceProofPlan);
+  out = writeU8(out, material.finalityModel);
+  out = writeBytes(out, textEncoder.encode(material.adapterCircuitId));
+  out = writeBytes(out, textEncoder.encode(material.sourceTrustAnchorId));
+  out = concatBytes(out, hexToBytes(material.sourceTrustAnchorHash, "sourceTrustAnchorHash", 32));
+  out = writeBytes(out, textEncoder.encode(material.consensusVerifierId));
+  out = concatBytes(out, hexToBytes(material.consensusVerifierHash, "consensusVerifierHash", 32));
+  out = writeBytes(out, textEncoder.encode(material.messageInclusionVerifierId));
+  out = concatBytes(
+    out,
+    hexToBytes(material.messageInclusionVerifierHash, "messageInclusionVerifierHash", 32),
+  );
+  out = writeBytes(out, textEncoder.encode(material.finalityPolicyId));
+  out = concatBytes(out, hexToBytes(material.finalityPolicyHash, "finalityPolicyHash", 32));
+  out = writeBytes(out, textEncoder.encode(material.sourceStateVerifierId));
+  out = concatBytes(out, hexToBytes(material.sourceStateVerifierHash, "sourceStateVerifierHash", 32));
+  out = writeBytes(out, textEncoder.encode(material.sourceBridgeEmitterId));
+  out = writeBytes(out, toMaybeEmptyBytes(material.sourceBridgeEmitterAddress, "sourceBridgeEmitterAddress"));
+  out = concatBytes(out, hexToBytes(material.sourceBridgeEmitterCodeHash, "sourceBridgeEmitterCodeHash", 32));
+  out = concatBytes(out, hexToBytes(material.sourceBridgeNetworkId, "sourceBridgeNetworkId", 32));
+  out = writeBytes(out, toMaybeEmptyBytes(material.sourceBridgeOwnerAddress, "sourceBridgeOwnerAddress"));
+  out = concatBytes(out, hexToBytes(material.sourceBridgeConfigHash, "sourceBridgeConfigHash", 32));
+  out = writeU8(out, material.placeholderMaterial ? 1 : 0);
+  return out;
+}
+
+export function sccpSourceVerifierMaterialHash(input) {
+  return bytesToHex(
+    prefixedBlake2b(
+      SCCP_SOURCE_VERIFIER_MATERIAL_RECORD_PREFIX_V1,
+      canonicalSccpSourceVerifierMaterialBytes(input),
+    ),
+  );
+}
+
+export function normalizeSccpSourceAdapterEngineDeployment(input) {
+  const material = normalizeSccpSourceVerifierMaterial(input);
+  const deploymentField = (label, ...names) => strictResultField(input, label, ...names);
+  const deploymentOptionalField = (label, ...names) =>
+    strictOptionalResultField(input, label, ...names);
+  const deploymentOptionalHex32 = (label, ...names) => {
+    const selected = deploymentOptionalField(label, ...names);
+    return selected === SCCP_OPTIONAL_FIELD_MISSING
+      ? SCCP_ZERO_HASH_V1
+      : normalizeHex32(selected, label);
+  };
+  const targetDomainInput = deploymentOptionalField("targetDomain", "targetDomain", "target_domain");
+  const targetDomain =
+    targetDomainInput === SCCP_OPTIONAL_FIELD_MISSING
+      ? normalizeSccpDomainId(SCCP_DOMAIN_SORA, "targetDomain")
+      : normalizeSccpDomainId(targetDomainInput, "targetDomain");
+  if (targetDomain !== SCCP_DOMAIN_SORA) {
+    throw new TypeError("targetDomain must be SORA for SCCP source-adapter deployments");
+  }
+  const adapterProofFamilyInput = deploymentOptionalField(
+    "adapterProofFamily",
+    "adapterProofFamily",
+    "adapter_proof_family",
+  );
+  const adapterProofFamily =
+    adapterProofFamilyInput === SCCP_OPTIONAL_FIELD_MISSING
+      ? SCCP_STARK_FRI_PROOF_FAMILY_V1
+      : normalizeNonEmptyString(adapterProofFamilyInput, "adapterProofFamily");
+  if (adapterProofFamily !== SCCP_STARK_FRI_PROOF_FAMILY_V1) {
+    throw new TypeError("adapterProofFamily must be stark-fri-v1");
+  }
+  const canonicalVkHash = sccpSourceAdapterVerifierVkHash({
+    sourceDomain: material.sourceDomain,
+    targetDomain,
+  });
+  const suppliedVkHash = deploymentOptionalField(
+    "adapterVerifierVkHash",
+    "adapterVerifierVkHash",
+    "adapter_verifier_vk_hash",
+  );
+  const adapterVerifierVkHash =
+    suppliedVkHash === SCCP_OPTIONAL_FIELD_MISSING
+      ? canonicalVkHash
+      : normalizeNonZeroHex32(suppliedVkHash, "adapterVerifierVkHash");
+  if (adapterVerifierVkHash !== canonicalVkHash) {
+    throw new TypeError("adapterVerifierVkHash must match the canonical source-adapter verifier profile");
+  }
+  const deployment = {
+    ...material,
+    targetDomain,
+    adapterProofFamily,
+    adapterVerifierVkHash,
+    solanaTowerReplayVerifierHash: deploymentOptionalHex32(
+      "solanaTowerReplayVerifierHash",
+      "solanaTowerReplayVerifierHash",
+      "solana_tower_replay_verifier_hash",
+    ),
+    solanaFullAccountsdbLatticeVerifierHash: deploymentOptionalHex32(
+      "solanaFullAccountsdbLatticeVerifierHash",
+      "solanaFullAccountsdbLatticeVerifierHash",
+      "solana_full_accountsdb_lattice_verifier_hash",
+    ),
+    solanaBankForkChoiceVerifierHash: deploymentOptionalHex32(
+      "solanaBankForkChoiceVerifierHash",
+      "solanaBankForkChoiceVerifierHash",
+      "solana_bank_fork_choice_verifier_hash",
+    ),
+    tonMasterchainConfigVerifierHash: deploymentOptionalHex32(
+      "tonMasterchainConfigVerifierHash",
+      "tonMasterchainConfigVerifierHash",
+      "ton_masterchain_config_verifier_hash",
+    ),
+    tonValidatorSetTransitionVerifierHash: deploymentOptionalHex32(
+      "tonValidatorSetTransitionVerifierHash",
+      "tonValidatorSetTransitionVerifierHash",
+      "ton_validator_set_transition_verifier_hash",
+    ),
+    tonShardAccountsDictionaryVerifierHash: deploymentOptionalHex32(
+      "tonShardAccountsDictionaryVerifierHash",
+      "tonShardAccountsDictionaryVerifierHash",
+      "ton_shard_accounts_dictionary_verifier_hash",
+    ),
+    deploymentReceiptHash: normalizeNonZeroHex32(
+      deploymentField("deploymentReceiptHash", "deploymentReceiptHash", "deployment_receipt_hash"),
+      "deploymentReceiptHash",
+    ),
+  };
+  requireSccpRoleHashSeparation(
+    deployment,
+    SCCP_SOURCE_ADAPTER_DEPLOYMENT_ROLE_HASH_FIELDS,
+    "SCCP source-adapter deployment",
+  );
+  return deployment;
+}
+
+function appendSccpSourceAdapterDeploymentSolanaAuditBytes(out, deployment) {
+  const auditHashes = [
+    deployment.solanaTowerReplayVerifierHash,
+    deployment.solanaFullAccountsdbLatticeVerifierHash,
+    deployment.solanaBankForkChoiceVerifierHash,
+  ];
+  const nonzeroCount = auditHashes.filter((hash, index) => !isZeroHex32(hash, `solanaAuditHash[${index}]`)).length;
+  if (nonzeroCount === 0) return out;
+  if (deployment.sourceDomain !== SCCP_DOMAIN_SOL || nonzeroCount !== auditHashes.length) {
+    throw new TypeError("Solana audit verifier hashes must be all non-zero and only used for Solana deployments");
+  }
+  requireSolanaFullLightClientAuditRoleSeparation(deployment, auditHashes);
+  let next = writeU8(out, 1);
+  const verifierPairs = [
+    [SCCP_SOLANA_MAINNET_TOWER_REPLAY_VERIFIER_ID_V1, deployment.solanaTowerReplayVerifierHash],
+    [
+      SCCP_SOLANA_MAINNET_FULL_ACCOUNTSDB_LATTICE_VERIFIER_ID_V1,
+      deployment.solanaFullAccountsdbLatticeVerifierHash,
+    ],
+    [SCCP_SOLANA_MAINNET_BANK_FORK_CHOICE_VERIFIER_ID_V1, deployment.solanaBankForkChoiceVerifierHash],
+  ];
+  for (const [verifierId, verifierHash] of verifierPairs) {
+    next = writeBytes(next, textEncoder.encode(verifierId));
+    next = concatBytes(next, hexToBytes(verifierHash, "solanaAuditVerifierHash", 32));
+  }
+  return next;
+}
+
+function requireSolanaFullLightClientAuditRoleSeparation(deployment, auditHashes) {
+  const auditFields = [
+    "solanaTowerReplayVerifierHash",
+    "solanaFullAccountsdbLatticeVerifierHash",
+    "solanaBankForkChoiceVerifierHash",
+  ];
+  const seen = new Map();
+  auditHashes.forEach((hash, index) => {
+    const previousField = seen.get(hash);
+    if (previousField !== undefined) {
+      throw new TypeError(
+        `Solana full-light-client audit verifier hashes must be role-separated: ${auditFields[index]} matches ${previousField}`,
+      );
+    }
+    seen.set(hash, auditFields[index]);
+    if (SCCP_SOLANA_TEMPLATE_SOURCE_MATERIAL_HASHES_V1.has(hash)) {
+      throw new TypeError(
+        `Solana full-light-client audit verifier hashes must not reuse built-in template material: ${auditFields[index]}`,
+      );
+    }
+  });
+
+  const roleFields = [
+    "sourceTrustAnchorHash",
+    "consensusVerifierHash",
+    "messageInclusionVerifierHash",
+    "finalityPolicyHash",
+    "sourceStateVerifierHash",
+    "adapterVerifierVkHash",
+    "sourceBridgeEmitterCodeHash",
+    "sourceBridgeNetworkId",
+    "sourceBridgeConfigHash",
+    "deploymentReceiptHash",
+  ];
+  auditHashes.forEach((hash, index) => {
+    for (const roleField of roleFields) {
+      const roleHash = deployment[roleField];
+      if (!isZeroHex32(roleHash, roleField) && hash === roleHash) {
+        throw new TypeError(
+          `Solana full-light-client audit verifier hashes must not reuse existing source-adapter material: ${auditFields[index]} matches ${roleField}`,
+        );
+      }
+    }
+  });
+}
+
+function requireTonFullLightClientAuditRoleSeparation(deployment, auditHashes) {
+  const auditFields = [
+    "tonMasterchainConfigVerifierHash",
+    "tonValidatorSetTransitionVerifierHash",
+    "tonShardAccountsDictionaryVerifierHash",
+  ];
+  const seen = new Map();
+  auditHashes.forEach((hash, index) => {
+    const previousField = seen.get(hash);
+    if (previousField !== undefined) {
+      throw new TypeError(
+        `TON full-light-client audit verifier hashes must be role-separated: ${auditFields[index]} matches ${previousField}`,
+      );
+    }
+    seen.set(hash, auditFields[index]);
+    if (SCCP_TON_TEMPLATE_SOURCE_MATERIAL_HASHES_V1.has(hash)) {
+      throw new TypeError(
+        `TON full-light-client audit verifier hashes must not reuse built-in template material: ${auditFields[index]}`,
+      );
+    }
+  });
+
+  const roleFields = [
+    "sourceTrustAnchorHash",
+    "consensusVerifierHash",
+    "messageInclusionVerifierHash",
+    "finalityPolicyHash",
+    "sourceStateVerifierHash",
+    "adapterVerifierVkHash",
+    "sourceBridgeEmitterCodeHash",
+    "sourceBridgeNetworkId",
+    "sourceBridgeConfigHash",
+    "deploymentReceiptHash",
+  ];
+  auditHashes.forEach((hash, index) => {
+    for (const roleField of roleFields) {
+      const roleHash = deployment[roleField];
+      if (!isZeroHex32(roleHash, roleField) && hash === roleHash) {
+        throw new TypeError(
+          `TON full-light-client audit verifier hashes must not reuse existing source-adapter material: ${auditFields[index]} matches ${roleField}`,
+        );
+      }
+    }
+  });
+}
+
+function appendSccpSourceAdapterDeploymentTonAuditBytes(out, deployment) {
+  const auditHashes = [
+    deployment.tonMasterchainConfigVerifierHash,
+    deployment.tonValidatorSetTransitionVerifierHash,
+    deployment.tonShardAccountsDictionaryVerifierHash,
+  ];
+  const nonzeroCount = auditHashes.filter((hash, index) => !isZeroHex32(hash, `tonAuditHash[${index}]`)).length;
+  if (nonzeroCount === 0) return out;
+  if (deployment.sourceDomain !== SCCP_DOMAIN_TON || nonzeroCount !== auditHashes.length) {
+    throw new TypeError("TON audit verifier hashes must be all non-zero and only used for TON deployments");
+  }
+  requireTonFullLightClientAuditRoleSeparation(deployment, auditHashes);
+  let next = writeU8(out, 2);
+  const verifierPairs = [
+    [SCCP_TON_MAINNET_MASTERCHAIN_CONFIG_VERIFIER_ID_V1, deployment.tonMasterchainConfigVerifierHash],
+    [
+      SCCP_TON_MAINNET_VALIDATOR_SET_TRANSITION_VERIFIER_ID_V1,
+      deployment.tonValidatorSetTransitionVerifierHash,
+    ],
+    [
+      SCCP_TON_MAINNET_SHARD_ACCOUNTS_DICTIONARY_VERIFIER_ID_V1,
+      deployment.tonShardAccountsDictionaryVerifierHash,
+    ],
+  ];
+  for (const [verifierId, verifierHash] of verifierPairs) {
+    next = writeBytes(next, textEncoder.encode(verifierId));
+    next = concatBytes(next, hexToBytes(verifierHash, "tonAuditVerifierHash", 32));
+  }
+  return next;
+}
+
+export function canonicalSccpSourceAdapterEngineDeploymentBytes(input) {
+  const deployment = normalizeSccpSourceAdapterEngineDeployment(input);
+  let out = new Uint8Array();
+  out = writeU8(out, deployment.version);
+  out = writeU32Le(out, deployment.sourceDomain);
+  out = writeU32Le(out, deployment.targetDomain);
+  out = writeBytes(out, textEncoder.encode(deployment.sourceChain));
+  out = writeU8(out, deployment.sourceProofPlan);
+  out = writeU8(out, deployment.finalityModel);
+  out = writeBytes(out, textEncoder.encode(deployment.adapterProofFamily));
+  out = writeBytes(out, textEncoder.encode(deployment.adapterCircuitId));
+  out = concatBytes(out, hexToBytes(deployment.adapterVerifierVkHash, "adapterVerifierVkHash", 32));
+  out = writeBytes(out, textEncoder.encode(deployment.sourceTrustAnchorId));
+  out = concatBytes(out, hexToBytes(deployment.sourceTrustAnchorHash, "sourceTrustAnchorHash", 32));
+  out = writeBytes(out, textEncoder.encode(deployment.consensusVerifierId));
+  out = concatBytes(out, hexToBytes(deployment.consensusVerifierHash, "consensusVerifierHash", 32));
+  out = writeBytes(out, textEncoder.encode(deployment.messageInclusionVerifierId));
+  out = concatBytes(
+    out,
+    hexToBytes(deployment.messageInclusionVerifierHash, "messageInclusionVerifierHash", 32),
+  );
+  out = writeBytes(out, textEncoder.encode(deployment.finalityPolicyId));
+  out = concatBytes(out, hexToBytes(deployment.finalityPolicyHash, "finalityPolicyHash", 32));
+  out = writeBytes(out, textEncoder.encode(deployment.sourceStateVerifierId));
+  out = concatBytes(out, hexToBytes(deployment.sourceStateVerifierHash, "sourceStateVerifierHash", 32));
+  out = writeBytes(out, textEncoder.encode(deployment.sourceBridgeEmitterId));
+  out = writeBytes(out, toMaybeEmptyBytes(deployment.sourceBridgeEmitterAddress, "sourceBridgeEmitterAddress"));
+  out = concatBytes(out, hexToBytes(deployment.sourceBridgeEmitterCodeHash, "sourceBridgeEmitterCodeHash", 32));
+  out = concatBytes(out, hexToBytes(deployment.sourceBridgeNetworkId, "sourceBridgeNetworkId", 32));
+  out = writeBytes(out, toMaybeEmptyBytes(deployment.sourceBridgeOwnerAddress, "sourceBridgeOwnerAddress"));
+  out = concatBytes(out, hexToBytes(deployment.sourceBridgeConfigHash, "sourceBridgeConfigHash", 32));
+  out = concatBytes(out, hexToBytes(deployment.deploymentReceiptHash, "deploymentReceiptHash", 32));
+  out = appendSccpSourceAdapterDeploymentSolanaAuditBytes(out, deployment);
+  out = appendSccpSourceAdapterDeploymentTonAuditBytes(out, deployment);
+  return out;
+}
+
+export function sccpSourceAdapterEngineDeploymentHash(input) {
+  return bytesToHex(
+    prefixedBlake2b(
+      SCCP_SOURCE_ADAPTER_ENGINE_DEPLOYMENT_RECORD_PREFIX_V1,
+      canonicalSccpSourceAdapterEngineDeploymentBytes(input),
+    ),
+  );
+}
+
+export function sccpSolanaFullLightClientGateHash(input) {
+  const material = normalizeSccpSourceVerifierMaterial(input);
+  const deployment = normalizeSccpSourceAdapterEngineDeployment(input);
+  const verifierPairs = [
+    [SCCP_SOLANA_MAINNET_TOWER_REPLAY_VERIFIER_ID_V1, deployment.solanaTowerReplayVerifierHash],
+    [
+      SCCP_SOLANA_MAINNET_FULL_ACCOUNTSDB_LATTICE_VERIFIER_ID_V1,
+      deployment.solanaFullAccountsdbLatticeVerifierHash,
+    ],
+    [SCCP_SOLANA_MAINNET_BANK_FORK_CHOICE_VERIFIER_ID_V1, deployment.solanaBankForkChoiceVerifierHash],
+  ];
+  if (
+    material.sourceDomain !== SCCP_DOMAIN_SOL ||
+    deployment.sourceDomain !== SCCP_DOMAIN_SOL ||
+    deployment.targetDomain !== SCCP_DOMAIN_SORA ||
+    verifierPairs.some(([, hash], index) => isZeroHex32(hash, `solanaAuditHash[${index}]`))
+  ) {
+    throw new TypeError("Solana full light-client gate hash requires an audited Solana -> SORA deployment");
+  }
+  requireSolanaFullLightClientAuditRoleSeparation(
+    deployment,
+    verifierPairs.map(([, verifierHash]) => verifierHash),
+  );
+
+  let out = new Uint8Array();
+  out = writeU8(out, 1);
+  out = writeU32Le(out, material.sourceDomain);
+  out = writeU32Le(out, deployment.targetDomain);
+  out = writeBytes(out, textEncoder.encode(material.sourceChain));
+  out = writeU8(out, material.sourceProofPlan);
+  out = writeU8(out, material.finalityModel);
+  out = writeBytes(out, textEncoder.encode(SCCP_SOLANA_MAINNET_GENESIS_HASH));
+  out = concatBytes(out, hexToBytes(sccpSourceVerifierMaterialHash(material), "sourceVerifierMaterialHash", 32));
+  out = concatBytes(
+    out,
+    hexToBytes(sccpSourceAdapterEngineDeploymentHash(deployment), "sourceAdapterDeploymentHash", 32),
+  );
+  for (const [verifierId, verifierHash] of verifierPairs) {
+    out = writeBytes(out, textEncoder.encode(verifierId));
+    out = concatBytes(out, hexToBytes(verifierHash, "solanaAuditVerifierHash", 32));
+  }
+  return bytesToHex(prefixedBlake2b(SCCP_SOLANA_FULL_LIGHT_CLIENT_GATE_PREFIX_V1, out));
+}
+
+export function sccpTonFullLightClientGateHash(input) {
+  const material = normalizeSccpSourceVerifierMaterial(input);
+  const deployment = normalizeSccpSourceAdapterEngineDeployment(input);
+  const verifierPairs = [
+    [SCCP_TON_MAINNET_MASTERCHAIN_CONFIG_VERIFIER_ID_V1, deployment.tonMasterchainConfigVerifierHash],
+    [
+      SCCP_TON_MAINNET_VALIDATOR_SET_TRANSITION_VERIFIER_ID_V1,
+      deployment.tonValidatorSetTransitionVerifierHash,
+    ],
+    [
+      SCCP_TON_MAINNET_SHARD_ACCOUNTS_DICTIONARY_VERIFIER_ID_V1,
+      deployment.tonShardAccountsDictionaryVerifierHash,
+    ],
+  ];
+  if (
+    material.sourceDomain !== SCCP_DOMAIN_TON ||
+    deployment.sourceDomain !== SCCP_DOMAIN_TON ||
+    deployment.targetDomain !== SCCP_DOMAIN_SORA ||
+    verifierPairs.some(([, hash], index) => isZeroHex32(hash, `tonAuditHash[${index}]`))
+  ) {
+    throw new TypeError("TON full light-client gate hash requires an audited TON -> SORA deployment");
+  }
+
+  let out = new Uint8Array();
+  out = writeU8(out, 1);
+  out = writeU32Le(out, material.sourceDomain);
+  out = writeU32Le(out, deployment.targetDomain);
+  out = writeBytes(out, textEncoder.encode(material.sourceChain));
+  out = writeU8(out, material.sourceProofPlan);
+  out = writeU8(out, material.finalityModel);
+  out = writeI32Le(out, -239);
+  out = writeBytes(out, textEncoder.encode(SCCP_TON_SHARD_STATE_OPEN_VERIFY_CIRCUIT_ID_V1));
+  out = writeBytes(out, textEncoder.encode(SCCP_SOURCE_ADAPTER_FASTPQ_PARAMETER_SET_V1));
+  out = writeBytes(out, textEncoder.encode(SCCP_TON_MAINNET_SHARD_STATE_VERIFIER_ID_V1));
+  out = concatBytes(out, hexToBytes(material.sourceStateVerifierHash, "sourceStateVerifierHash", 32));
+  out = concatBytes(out, hexToBytes(sccpSourceVerifierMaterialHash(material), "sourceVerifierMaterialHash", 32));
+  out = concatBytes(
+    out,
+    hexToBytes(sccpSourceAdapterEngineDeploymentHash(deployment), "sourceAdapterDeploymentHash", 32),
+  );
+  for (const [verifierId, verifierHash] of verifierPairs) {
+    out = writeBytes(out, textEncoder.encode(verifierId));
+    out = concatBytes(out, hexToBytes(verifierHash, "tonAuditVerifierHash", 32));
+  }
+  return bytesToHex(prefixedBlake2b(SCCP_TON_FULL_LIGHT_CLIENT_GATE_PREFIX_V1, out));
+}
+
+export function sccpSourceAdapterVerifierVkHash(input) {
+  const value =
+    typeof input === "object" && input !== null ? input : { sourceDomain: input };
+  const sourceDomain = normalizeSccpDomainId(
+    value.sourceDomain ?? value.source_domain,
+    "sourceDomain",
+  );
+  const targetDomain = normalizeOptionalSccpDomainId(
+    value,
+    "targetDomain",
+    SCCP_DOMAIN_SORA,
+    "targetDomain",
+    "target_domain",
+  );
+  if (targetDomain !== SCCP_DOMAIN_SORA) {
+    throw new TypeError("targetDomain must be SORA for SCCP source-adapter verifier VKs");
+  }
+  const profile = sourceAdapterVerifierProfile(sourceDomain);
+
+  let verifier = new Uint8Array();
+  verifier = writeU8(verifier, 1);
+  verifier = writeBytes(
+    verifier,
+    textEncoder.encode(SCCP_SOURCE_ADAPTER_OPEN_VERIFY_CIRCUIT_ID_V1),
+  );
+  verifier = writeBytes(verifier, textEncoder.encode(profile.chain));
+  verifier = writeU32Le(verifier, sourceDomain);
+  verifier = writeU32Le(verifier, targetDomain);
+  verifier = writeU8(verifier, profile.proofPlan);
+  verifier = writeU8(verifier, profile.finalityModel);
+  verifier = writeBytes(
+    verifier,
+    textEncoder.encode(SCCP_SOURCE_ADAPTER_FASTPQ_PARAMETER_SET_V1),
+  );
+  verifier = writeU32Le(verifier, 128);
+  verifier = writeU32Le(verifier, 23);
+  verifier = writeU32Le(verifier, 16);
+  verifier = writeU64Le(verifier, SCCP_SOURCE_ADAPTER_FASTPQ_TRACE_ROOT_V1);
+  verifier = writeU32Le(verifier, 19);
+  verifier = writeU64Le(verifier, SCCP_SOURCE_ADAPTER_FASTPQ_LDE_ROOT_V1);
+  verifier = writeU32Le(verifier, 65_536);
+  verifier = writeU8(verifier, 1);
+  verifier = writeU32Le(verifier, 19);
+  verifier = writeU64Le(verifier, SCCP_SOURCE_ADAPTER_FASTPQ_OMEGA_COSET_V1);
+  verifier = writeBytes(verifier, textEncoder.encode("Goldilocks"));
+  verifier = writeBytes(verifier, textEncoder.encode("18446744069414584321"));
+  verifier = writeU32Le(verifier, 2);
+  verifier = writeBytes(verifier, textEncoder.encode("Poseidon2(Goldilocks)"));
+  verifier = writeBytes(verifier, textEncoder.encode("SHA3-256"));
+  verifier = writeU32Le(verifier, 8);
+  verifier = writeU32Le(verifier, 8);
+  verifier = writeU32Le(verifier, 8);
+  verifier = writeU32Le(verifier, 46);
+  return bytesToHex(
+    sha256(
+      concatBytes(
+        textEncoder.encode(SCCP_SOURCE_ADAPTER_OPEN_VERIFY_CIRCUIT_ID_V1),
+        verifier,
+      ),
+    ),
+  );
+}
+
+export function canonicalSccpSourceAdapterDeploymentBindingBytes(input) {
+  const binding = normalizeSccpSourceAdapterDeploymentBinding(input);
+  let out = new Uint8Array();
+  out = writeU8(out, binding.version);
+  out = writeU32Le(out, binding.sourceDomain);
+  out = writeU32Le(out, binding.targetDomain);
+  out = concatBytes(
+    out,
+    hexToBytes(binding.sourceAdapterDeploymentHash, "sourceAdapterDeploymentHash", 32),
+  );
+  out = concatBytes(
+    out,
+    hexToBytes(
+      binding.sourceAdapterDeploymentReceiptHash,
+      "sourceAdapterDeploymentReceiptHash",
+      32,
+    ),
+  );
+  return out;
+}
+
+export function sccpSourceAdapterDeploymentBindingHash(input) {
+  return bytesToHex(
+    prefixedBlake2b(
+      SCCP_SOURCE_ADAPTER_DEPLOYMENT_BINDING_PREFIX_V1,
+      canonicalSccpSourceAdapterDeploymentBindingBytes(input),
+    ),
+  );
+}
+
+export function buildSolanaSccpProofRequest(input) {
+  const witness = normalizeSolanaSccpWitness(input);
+  const proofContextInput = strictOptionalResultField(
+    input,
+    "proofContext",
+    "proofContext",
+    "proof_context",
+  );
+  const proofContext = normalizeSolanaSccpProofContext(
+    proofContextInput === SCCP_OPTIONAL_FIELD_MISSING ? input : proofContextInput,
+  );
+  const witnessHash = bytesToHex(
+    prefixedBlake2b("sccp:solana:witness:v1", canonicalSolanaSccpWitnessBytes(witness)),
+  );
+  const proofContextHash = solanaSccpProofContextHash(proofContext);
+  const sourceAdapterDeploymentBinding = normalizeSccpSourceAdapterDeploymentBinding({
+    sourceDomain: witness.sourceDomain,
+    targetDomain: witness.targetDomain,
+    sourceAdapterDeploymentHash: witness.sourceAdapterDeploymentHash,
+    sourceAdapterDeploymentReceiptHash: witness.sourceAdapterDeploymentReceiptHash,
+  });
+  const sourceAdapterDeploymentBindingHash = sccpSourceAdapterDeploymentBindingHash(
+    sourceAdapterDeploymentBinding,
+  );
+  return immutableSolanaProofRequest({
+    version: 1,
+    backend: SCCP_SOLANA_RECURSIVE_PROOF_BACKEND_V1,
+    sourceDomain: SCCP_DOMAIN_SOL,
+    targetDomain: witness.targetDomain,
+    mainnetGenesisHash: witness.mainnetGenesisHash,
+    witnessHash,
+    proofContextHash,
+    sourceAdapterDeploymentBindingHash,
+    sourceStateVerifierId: witness.sourceStateVerifierId,
+    sourceStateVerifierHash: witness.sourceStateVerifierHash,
+    publicInputs: {
+      messageId: witness.messageId,
+      payloadHash: witness.payloadHash,
+      commitmentRoot: witness.commitmentRoot,
+      finalizedSlot: witness.finalizedSlot,
+      parentSlot: witness.parentSlot,
+      bankSignatureCount: witness.bankSignatureCount,
+      parentBankHash: witness.parentBankHash,
+      blockhash: witness.blockhash,
+      bankHash: witness.bankHash,
+      transactionStatusRoot: witness.transactionStatusRoot,
+      messageProofHash: witness.messageProofHash,
+      accountInclusionRoot: witness.accountInclusionRoot,
+      accountsLtHashChecksum: witness.accountsLtHashChecksum,
+      accountsLtHashProofPublicInputsHash: witness.accountsLtHashProofPublicInputsHash,
+      sourceEventDigest: witness.sourceEventDigest,
+      sourceStateVerifierId: witness.sourceStateVerifierId,
+      sourceStateVerifierHash: witness.sourceStateVerifierHash,
+      statementHash: proofContext.statementHash,
+      destinationBindingHash: proofContext.destinationBindingHash,
+      sourceAdapterDeploymentHash: sourceAdapterDeploymentBinding.sourceAdapterDeploymentHash,
+      sourceAdapterDeploymentReceiptHash:
+        sourceAdapterDeploymentBinding.sourceAdapterDeploymentReceiptHash,
+      sourceAdapterDeploymentBindingHash,
+    },
+    witness,
+    proofContext,
+    sourceAdapterDeploymentBinding,
+  });
+}
+
+const encodeSolanaSccpInstructionData = (argumentBytes) => {
+  let out = writeBytes(
+    new Uint8Array(),
+    textEncoder.encode(SCCP_SOLANA_SUBMIT_MESSAGE_PROOF_ENTRYPOINT_V1),
+  );
+  for (const bytes of argumentBytes) {
+    out = writeBytes(out, bytes);
+  }
+  return out;
+};
+
+const requireNonEmptyBytes = (bytes, label) => {
+  if (bytes.length === 0) throw new TypeError(`${label} must not be empty`);
+  return bytes;
+};
+
+const requireNonZeroProofBytes = (bytes, label) => {
+  requireNonEmptyBytes(bytes, label);
+  if (bytes.every((byte) => byte === 0)) {
+    throw new TypeError(`${label} must not be all zero`);
+  }
+  return bytes;
+};
+
+const requireSourceStateProofBytes = (bytes, label) => {
+  requireNonZeroProofBytes(bytes, label);
+  if (bytes.length > SCCP_SOURCE_STATE_MAX_PROOF_BYTES) {
+    throw new TypeError(
+      `${label} must be at most ${SCCP_SOURCE_STATE_MAX_PROOF_BYTES} bytes`,
+    );
+  }
+  return bytes;
+};
+
+const requireSourceStateProofLabel = (value, label) => {
+  if (textEncoder.encode(value).length > SCCP_SOURCE_STATE_MAX_PROOF_LABEL_BYTES) {
+    throw new TypeError(
+      `${label} must be at most ${SCCP_SOURCE_STATE_MAX_PROOF_LABEL_BYTES} bytes`,
+    );
+  }
+  return value;
+};
+
+const requireNativeRecursiveProofBytes = (bytes, label) => {
+  requireNonZeroProofBytes(bytes, label);
+  if (bytes.length > SCCP_NATIVE_RECURSIVE_MAX_PROOF_BYTES) {
+    throw new TypeError(
+      `${label} must be at most ${SCCP_NATIVE_RECURSIVE_MAX_PROOF_BYTES} bytes`,
+    );
+  }
+  return bytes;
+};
+
+const requireOptionalNonZeroBytes = (bytes, label) => {
+  if (bytes.length > 0 && bytes.every((byte) => byte === 0)) {
+    throw new TypeError(`${label} must not be all zero`);
+  }
+  return bytes;
+};
+
+const requireGroth16ProofBytes = (bytes, label) => {
+  requireNonZeroProofBytes(bytes, label);
+  if (bytes.length !== SCCP_GROTH16_BN254_PROOF_ABI_BYTE_LENGTH_V1) {
+    throw new TypeError(
+      `${label} must be ${SCCP_GROTH16_BN254_PROOF_ABI_BYTE_LENGTH_V1} bytes`,
+    );
+  }
+  requireGroth16Bn254ProofTuple(bytes, label);
+  return bytes;
+};
+
+const groth16ProofWord = (bytes, index) =>
+  bytes.subarray(index * 32, (index + 1) * 32);
+
+const groth16ProofWordValue = (bytes, index) => bytesToBigInt(groth16ProofWord(bytes, index));
+
+const groth16ProofWordIsZero = (bytes, index) =>
+  groth16ProofWord(bytes, index).every((byte) => byte === 0);
+
+const requireGroth16BaseFieldWord = (bytes, index, label) => {
+  if (groth16ProofWordValue(bytes, index) >= SCCP_GROTH16_BN254_BASE_FIELD_MODULUS) {
+    throw new TypeError(`${label} must be a BN254 base-field element`);
+  }
+};
+
+const requireGroth16NonZeroPoint = (bytes, indexes, label) => {
+  if (indexes.every((index) => groth16ProofWordIsZero(bytes, index))) {
+    throw new TypeError(`${label} must not be zero`);
+  }
+};
+
+const bn254Fq = (value) => {
+  const reduced = value % SCCP_GROTH16_BN254_BASE_FIELD_MODULUS;
+  return reduced >= 0n ? reduced : reduced + SCCP_GROTH16_BN254_BASE_FIELD_MODULUS;
+};
+
+const bn254FqAdd = (left, right) => bn254Fq(left + right);
+const bn254FqSub = (left, right) => bn254Fq(left - right);
+const bn254FqMul = (left, right) => bn254Fq(left * right);
+const bn254Fq2Add = ([left0, left1], [right0, right1]) => [
+  bn254FqAdd(left0, right0),
+  bn254FqAdd(left1, right1),
+];
+const bn254Fq2Sub = ([left0, left1], [right0, right1]) => [
+  bn254FqSub(left0, right0),
+  bn254FqSub(left1, right1),
+];
+const bn254Fq2Scale = ([left0, left1], scalar) => [
+  bn254FqMul(left0, scalar),
+  bn254FqMul(left1, scalar),
+];
+const bn254Fq2Mul = ([left0, left1], [right0, right1]) => [
+  bn254FqSub(bn254FqMul(left0, right0), bn254FqMul(left1, right1)),
+  bn254FqAdd(bn254FqMul(left0, right1), bn254FqMul(left1, right0)),
+];
+const bn254Fq2Eq = ([left0, left1], [right0, right1]) =>
+  left0 === right0 && left1 === right1;
+const bn254Fq2IsZero = ([left0, left1]) => left0 === 0n && left1 === 0n;
+
+const bn254G2Infinity = () => ({
+  x: [0n, 0n],
+  y: [1n, 0n],
+  z: [0n, 0n],
+  infinity: true,
+});
+
+const bn254G2AffineProjective = (x, y) => ({
+  x,
+  y,
+  z: [1n, 0n],
+  infinity: false,
+});
+
+const bn254G2ProjectiveIsInfinity = (point) =>
+  point.infinity || bn254Fq2IsZero(point.z);
+
+const bn254G2ProjectiveDouble = (point) => {
+  if (bn254G2ProjectiveIsInfinity(point) || bn254Fq2IsZero(point.y)) {
+    return bn254G2Infinity();
+  }
+  const xx = bn254Fq2Mul(point.x, point.x);
+  const yy = bn254Fq2Mul(point.y, point.y);
+  const yyyy = bn254Fq2Mul(yy, yy);
+  const s = bn254Fq2Scale(
+    bn254Fq2Sub(
+      bn254Fq2Sub(bn254Fq2Mul(bn254Fq2Add(point.x, yy), bn254Fq2Add(point.x, yy)), xx),
+      yyyy,
+    ),
+    2n,
+  );
+  const m = bn254Fq2Scale(xx, 3n);
+  const x3 = bn254Fq2Sub(bn254Fq2Mul(m, m), bn254Fq2Scale(s, 2n));
+  const y3 = bn254Fq2Sub(
+    bn254Fq2Mul(m, bn254Fq2Sub(s, x3)),
+    bn254Fq2Scale(yyyy, 8n),
+  );
+  const z3 = bn254Fq2Scale(bn254Fq2Mul(point.y, point.z), 2n);
+  return { x: x3, y: y3, z: z3, infinity: false };
+};
+
+const bn254G2ProjectiveAddAffine = (point, affine) => {
+  if (bn254G2ProjectiveIsInfinity(point)) {
+    return bn254G2AffineProjective(affine.x, affine.y);
+  }
+  const z1z1 = bn254Fq2Mul(point.z, point.z);
+  const u2 = bn254Fq2Mul(affine.x, z1z1);
+  const s2 = bn254Fq2Mul(affine.y, bn254Fq2Mul(point.z, z1z1));
+  const h = bn254Fq2Sub(u2, point.x);
+  if (bn254Fq2IsZero(h)) {
+    if (bn254Fq2Eq(s2, point.y)) {
+      return bn254G2ProjectiveDouble(point);
+    }
+    return bn254G2Infinity();
+  }
+  const hh = bn254Fq2Mul(h, h);
+  const i = bn254Fq2Scale(hh, 4n);
+  const j = bn254Fq2Mul(h, i);
+  const r = bn254Fq2Scale(bn254Fq2Sub(s2, point.y), 2n);
+  const v = bn254Fq2Mul(point.x, i);
+  const x3 = bn254Fq2Sub(bn254Fq2Sub(bn254Fq2Mul(r, r), j), bn254Fq2Scale(v, 2n));
+  const y3 = bn254Fq2Sub(
+    bn254Fq2Mul(r, bn254Fq2Sub(v, x3)),
+    bn254Fq2Scale(bn254Fq2Mul(point.y, j), 2n),
+  );
+  const z3 = bn254Fq2Sub(
+    bn254Fq2Sub(bn254Fq2Mul(bn254Fq2Add(point.z, h), bn254Fq2Add(point.z, h)), z1z1),
+    hh,
+  );
+  return { x: x3, y: y3, z: z3, infinity: false };
+};
+
+const bn254G2PointIsInPrimeSubgroup = (x, y) => {
+  const affine = { x, y };
+  let acc = bn254G2Infinity();
+  for (const bit of SCCP_GROTH16_BN254_SCALAR_FIELD_MODULUS.toString(2)) {
+    acc = bn254G2ProjectiveDouble(acc);
+    if (bit === "1") {
+      acc = bn254G2ProjectiveAddAffine(acc, affine);
+    }
+  }
+  return bn254G2ProjectiveIsInfinity(acc);
+};
+
+const requireGroth16G1Point = (bytes, [xIndex, yIndex], label) => {
+  requireGroth16NonZeroPoint(bytes, [xIndex, yIndex], label);
+  const x = groth16ProofWordValue(bytes, xIndex);
+  const y = groth16ProofWordValue(bytes, yIndex);
+  const left = bn254FqMul(y, y);
+  const right = bn254FqAdd(bn254FqMul(bn254FqMul(x, x), x), 3n);
+  if (left !== right) {
+    throw new TypeError(`${label} must be a BN254 G1 point`);
+  }
+};
+
+const requireGroth16G2Point = (bytes, [x0Index, x1Index, y0Index, y1Index], label) => {
+  requireGroth16NonZeroPoint(bytes, [x0Index, x1Index, y0Index, y1Index], label);
+  const x = [
+    groth16ProofWordValue(bytes, x0Index),
+    groth16ProofWordValue(bytes, x1Index),
+  ];
+  const y = [
+    groth16ProofWordValue(bytes, y0Index),
+    groth16ProofWordValue(bytes, y1Index),
+  ];
+  const left = bn254Fq2Mul(y, y);
+  const x2 = bn254Fq2Mul(x, x);
+  const right = bn254Fq2Add(bn254Fq2Mul(x2, x), [
+    SCCP_GROTH16_BN254_G2_B_C0,
+    SCCP_GROTH16_BN254_G2_B_C1,
+  ]);
+  if (!bn254Fq2Eq(left, right) || !bn254G2PointIsInPrimeSubgroup(x, y)) {
+    throw new TypeError(`${label} must be a BN254 G2 point`);
+  }
+};
+
+const requireGroth16Bn254ProofTuple = (bytes, label) => {
+  if (groth16ProofWordValue(bytes, 0) !== 1n) {
+    throw new TypeError(`${label}.version must be 1`);
+  }
+  if (groth16ProofWordIsZero(bytes, 1)) {
+    throw new TypeError(`${label}.messageId must not be zero`);
+  }
+  if (groth16ProofWordValue(bytes, 2) > 0xffff_ffffn) {
+    throw new TypeError(`${label}.sourceDomain must fit u32`);
+  }
+  if (groth16ProofWordIsZero(bytes, 3)) {
+    throw new TypeError(`${label}.commitmentRoot must not be zero`);
+  }
+  [
+    "a.x",
+    "a.y",
+    "b.x0",
+    "b.x1",
+    "b.y0",
+    "b.y1",
+    "c.x",
+    "c.y",
+  ].forEach((field, offset) => {
+    requireGroth16BaseFieldWord(bytes, 4 + offset, `${label}.${field}`);
+  });
+  requireGroth16G1Point(bytes, [4, 5], `${label}.a`);
+  requireGroth16G2Point(bytes, [6, 7, 8, 9], `${label}.b`);
+  requireGroth16G1Point(bytes, [10, 11], `${label}.c`);
+};
+
+const requireGroth16ProofBytesForPublicInputs = (bytes, label, publicInputs) => {
+  requireGroth16ProofBytes(bytes, label);
+  const normalizedPublicInputs = normalizeSccpMessageTransparentPublicInputs(publicInputs);
+  if (
+    !bytesEqual(
+      groth16ProofWord(bytes, 1),
+      hexToBytes(normalizedPublicInputs.messageId, "publicInputs.messageId", 32),
+    )
+  ) {
+    throw new TypeError(`${label}.messageId must match publicInputs.messageId`);
+  }
+  if (
+    !bytesEqual(
+      groth16ProofWord(bytes, 3),
+      hexToBytes(normalizedPublicInputs.commitmentRoot, "publicInputs.commitmentRoot", 32),
+    )
+  ) {
+    throw new TypeError(`${label}.commitmentRoot must match publicInputs.commitmentRoot`);
+  }
+  return bytes;
+};
+
+const requireGroth16ProofBytesForContext = (
+  bytes,
+  label,
+  { publicInputs, sourceDomain },
+) => {
+  requireGroth16ProofBytesForPublicInputs(bytes, label, publicInputs);
+  const normalizedSourceDomain = normalizeSccpDomainId(sourceDomain, "sourceDomain");
+  if (groth16ProofWordValue(bytes, 2) !== BigInt(normalizedSourceDomain)) {
+    throw new TypeError(`${label}.sourceDomain must match sourceDomain`);
+  }
+  return bytes;
+};
+
+const requireProductionSolanaProofRequest = (request) => {
+  if (request.sourceDomain !== SCCP_DOMAIN_SOL || request.targetDomain !== SCCP_DOMAIN_SORA) {
+    throw new TypeError("Solana SCCP production proofs must target SORA");
+  }
+  const requestGenesisHash = request.mainnetGenesisHash ?? request.mainnet_genesis_hash;
+  const witnessGenesisHash =
+    request.witness?.mainnetGenesisHash ?? request.witness?.mainnet_genesis_hash;
+  if (
+    requestGenesisHash !== SCCP_SOLANA_MAINNET_GENESIS_HASH ||
+    witnessGenesisHash !== SCCP_SOLANA_MAINNET_GENESIS_HASH
+  ) {
+    throw new TypeError("mainnetGenesisHash must match Solana mainnet-beta");
+  }
+  if (request.sourceStateVerifierId !== SCCP_SOLANA_MAINNET_ACCOUNTS_DB_VERIFIER_ID_V1) {
+    throw new TypeError("sourceStateVerifierId must match Solana AccountsDB verifier profile");
+  }
+  if (isZeroHex32(request.sourceStateVerifierHash, "sourceStateVerifierHash")) {
+    throw new TypeError("sourceStateVerifierHash must not be zero for Solana production proofs");
+  }
+  if (
+    normalizeHex32(request.sourceStateVerifierHash, "sourceStateVerifierHash") ===
+    SCCP_SOLANA_TEMPLATE_SOURCE_STATE_VERIFIER_HASH_V1
+  ) {
+    throw new TypeError("sourceStateVerifierHash must not be the Solana template verifier hash");
+  }
+  const inclusionBranch =
+    request.witness?.inclusionBranch ?? request.witness?.inclusion_branch ?? [];
+  if (!Array.isArray(inclusionBranch) || inclusionBranch.length === 0) {
+    throw new TypeError("inclusionBranch must not be empty for Solana production proofs");
+  }
+  const accountsLtHashInput =
+    request.witness?.accountsLtHash ?? request.witness?.accounts_lt_hash;
+  if (accountsLtHashInput === undefined || accountsLtHashInput === null) {
+    throw new TypeError("accountsLtHash must be present for Solana production proofs");
+  }
+  requireNonZeroSolanaAccountsLtHash(toBytes(accountsLtHashInput, "accountsLtHash"));
+  const deploymentBinding = request.sourceAdapterDeploymentBinding ?? {};
+  const sourceAdapterDeploymentHash =
+    deploymentBinding.sourceAdapterDeploymentHash ??
+    request.publicInputs?.sourceAdapterDeploymentHash;
+  const sourceAdapterDeploymentReceiptHash =
+    deploymentBinding.sourceAdapterDeploymentReceiptHash ??
+    request.publicInputs?.sourceAdapterDeploymentReceiptHash;
+  if (isZeroHex32(sourceAdapterDeploymentHash, "sourceAdapterDeploymentHash")) {
+    throw new TypeError(
+      "sourceAdapterDeploymentHash must not be zero for Solana production proofs",
+    );
+  }
+  if (isZeroHex32(sourceAdapterDeploymentReceiptHash, "sourceAdapterDeploymentReceiptHash")) {
+    throw new TypeError(
+      "sourceAdapterDeploymentReceiptHash must not be zero for Solana production proofs",
+    );
+  }
+};
+
+const solanaProofRequestComparable = (request) => {
+  const publicInputs = request.publicInputs ?? {};
+  const proofContext = request.proofContext ?? {};
+  const deploymentBinding = request.sourceAdapterDeploymentBinding ?? {};
+  return {
+    version: request.version,
+    backend: request.backend,
+    sourceDomain: request.sourceDomain,
+    targetDomain: request.targetDomain,
+    mainnetGenesisHash: request.mainnetGenesisHash,
+    witnessHash: request.witnessHash,
+    proofContextHash: request.proofContextHash,
+    sourceAdapterDeploymentBindingHash: request.sourceAdapterDeploymentBindingHash,
+    sourceStateVerifierId: request.sourceStateVerifierId,
+    sourceStateVerifierHash: request.sourceStateVerifierHash,
+    publicInputs: {
+      messageId: publicInputs.messageId,
+      payloadHash: publicInputs.payloadHash,
+      commitmentRoot: publicInputs.commitmentRoot,
+      finalizedSlot: publicInputs.finalizedSlot,
+      parentSlot: publicInputs.parentSlot,
+      bankSignatureCount: publicInputs.bankSignatureCount,
+      parentBankHash: publicInputs.parentBankHash,
+      blockhash: publicInputs.blockhash,
+      bankHash: publicInputs.bankHash,
+      transactionStatusRoot: publicInputs.transactionStatusRoot,
+      messageProofHash: publicInputs.messageProofHash,
+      accountInclusionRoot: publicInputs.accountInclusionRoot,
+      accountsLtHashChecksum: publicInputs.accountsLtHashChecksum,
+      accountsLtHashProofPublicInputsHash: publicInputs.accountsLtHashProofPublicInputsHash,
+      sourceEventDigest: publicInputs.sourceEventDigest,
+      sourceStateVerifierId: publicInputs.sourceStateVerifierId,
+      sourceStateVerifierHash: publicInputs.sourceStateVerifierHash,
+      statementHash: publicInputs.statementHash,
+      destinationBindingHash: publicInputs.destinationBindingHash,
+      sourceAdapterDeploymentHash: publicInputs.sourceAdapterDeploymentHash,
+      sourceAdapterDeploymentReceiptHash: publicInputs.sourceAdapterDeploymentReceiptHash,
+      sourceAdapterDeploymentBindingHash: publicInputs.sourceAdapterDeploymentBindingHash,
+    },
+    witnessBytes: bytesToHex(canonicalSolanaSccpWitnessBytes(request.witness)),
+    proofContext: {
+      version: proofContext.version,
+      statementHash: proofContext.statementHash,
+      destinationBindingHash: proofContext.destinationBindingHash,
+    },
+    sourceAdapterDeploymentBinding: {
+      version: deploymentBinding.version,
+      sourceDomain: deploymentBinding.sourceDomain,
+      targetDomain: deploymentBinding.targetDomain,
+      sourceAdapterDeploymentHash: deploymentBinding.sourceAdapterDeploymentHash,
+      sourceAdapterDeploymentReceiptHash: deploymentBinding.sourceAdapterDeploymentReceiptHash,
+    },
+  };
+};
+
+const requireCanonicalSolanaProofRequest = (request) => {
+  if (!request || typeof request !== "object" || Array.isArray(request)) {
+    throw new TypeError("Solana SCCP proof request must be canonical");
+  }
+  try {
+    const expected = buildSolanaSccpProofRequest({
+      ...request.witness,
+      proofContext: request.proofContext,
+    });
+    if (
+      JSON.stringify(solanaProofRequestComparable(request)) !==
+      JSON.stringify(solanaProofRequestComparable(expected))
+    ) {
+      throw new TypeError("Solana SCCP proof request must be canonical");
+    }
+  } catch (error) {
+    if (
+      error instanceof TypeError &&
+      error.message === "Solana SCCP proof request must be canonical"
+    ) {
+      throw error;
+    }
+    throw new TypeError("Solana SCCP proof request must be canonical");
+  }
+};
+
+const requireSolanaProofResultForSubmission = (
+  proofResult,
+  proofContext,
+  proofContextHash,
+  publicInputs,
+  proofBytes,
+) => {
+  if (
+    !proofResult ||
+    typeof proofResult !== "object" ||
+    Array.isArray(proofResult)
+  ) {
+    throw new TypeError("proofResult must be a wrapped Solana SCCP proof result");
+  }
+  if (proofResult.backend !== SCCP_SOLANA_RECURSIVE_PROOF_BACKEND_V1) {
+    throw new TypeError(
+      "proofResult.backend must be sccp-solana-recursive-mainnet-v1",
+    );
+  }
+  requireV1Version(proofResult.version, "proofResult.version", TypeError);
+  const resultProofContextHash = strictResultField(
+    proofResult,
+    "proofResult.proofContextHash",
+    "proofContextHash",
+    "proof_context_hash",
+  );
+  if (resultProofContextHash === undefined || resultProofContextHash === null) {
+    throw new TypeError("proofResult.proofContextHash is required");
+  }
+  if (
+    normalizeHex32(resultProofContextHash, "proofResult.proofContextHash") !== proofContextHash
+  ) {
+    throw new TypeError(
+      "proofResult.proofContextHash must match statementHash and destinationBindingHash",
+    );
+  }
+  const resultProofBytes = requireNonZeroProofBytes(
+    toBytes(
+      strictResultField(
+        proofResult,
+        "proofResult.proofBytes",
+        "proofBytes",
+        "proof_bytes",
+        "proof",
+      ),
+      "proofResult.proofBytes",
+    ),
+    "proofResult.proofBytes",
+  );
+  requireNativeRecursiveProofBytes(resultProofBytes, "proofResult.proofBytes");
+  if (!bytesEqual(resultProofBytes, proofBytes)) {
+    throw new TypeError("proofBytes must match proofResult.proofBytes");
+  }
+  const proofBase64 = strictResultField(
+    proofResult,
+    "proofResult.proofBase64",
+    "proofBase64",
+    "proof_base64",
+  );
+  if (proofBase64 !== bytesToBase64(resultProofBytes)) {
+    throw new TypeError("proofResult.proofBase64 must match proofResult.proofBytes");
+  }
+  const proofContextValue = strictResultField(
+    proofResult,
+    "proofResult.proofContext",
+    "proofContext",
+    "proof_context",
+  );
+  if (
+    !proofContextValue ||
+    typeof proofContextValue !== "object" ||
+    Array.isArray(proofContextValue)
+  ) {
+    throw new TypeError("proofResult.proofContext is required");
+  }
+  requireV1Version(proofContextValue.version, "proofResult.proofContext.version", TypeError);
+  if (
+    normalizeHex32(
+      strictResultField(
+        proofContextValue,
+        "proofResult.proofContext.statementHash",
+        "statementHash",
+        "statement_hash",
+      ),
+      "proofResult.proofContext.statementHash",
+    ) !== proofContext.statementHash
+  ) {
+    throw new TypeError("proofResult.proofContext.statementHash must match proofContext");
+  }
+  if (
+    normalizeHex32(
+      strictResultField(
+        proofContextValue,
+        "proofResult.proofContext.destinationBindingHash",
+        "destinationBindingHash",
+        "destination_binding_hash",
+      ),
+      "proofResult.proofContext.destinationBindingHash",
+    ) !== proofContext.destinationBindingHash
+  ) {
+    throw new TypeError("proofResult.proofContext.destinationBindingHash must match proofContext");
+  }
+  const envelopeHash = strictResultField(
+    proofResult,
+    "proofResult.envelopeHash",
+    "envelopeHash",
+    "envelope_hash",
+  );
+  const normalizedEnvelopeHash =
+    envelopeHash === undefined || envelopeHash === null
+      ? null
+      : normalizeHex32(envelopeHash, "proofResult.envelopeHash");
+  if (
+    normalizedEnvelopeHash === null ||
+    normalizedEnvelopeHash === SCCP_ZERO_HASH_V1
+  ) {
+    throw new TypeError("proofResult.envelopeHash must be non-zero");
+  }
+  const deploymentBindingHash = strictResultField(
+    proofResult,
+    "proofResult.sourceAdapterDeploymentBindingHash",
+    "sourceAdapterDeploymentBindingHash",
+    "source_adapter_deployment_binding_hash",
+  );
+  const normalizedDeploymentBindingHash =
+    deploymentBindingHash === undefined || deploymentBindingHash === null
+      ? null
+      : normalizeHex32(
+          deploymentBindingHash,
+          "proofResult.sourceAdapterDeploymentBindingHash",
+        );
+  if (
+    normalizedDeploymentBindingHash === null ||
+    normalizedDeploymentBindingHash === SCCP_ZERO_HASH_V1
+  ) {
+    throw new TypeError("proofResult.sourceAdapterDeploymentBindingHash must be non-zero");
+  }
+  const deploymentBindingSource = strictResultField(
+    proofResult,
+    "proofResult.sourceAdapterDeploymentBinding",
+    "sourceAdapterDeploymentBinding",
+    "source_adapter_deployment_binding",
+  );
+  if (
+    !deploymentBindingSource ||
+    typeof deploymentBindingSource !== "object" ||
+    Array.isArray(deploymentBindingSource)
+  ) {
+    throw new TypeError("proofResult.sourceAdapterDeploymentBinding is required");
+  }
+  requireV1Version(
+    deploymentBindingSource.version,
+    "proofResult.sourceAdapterDeploymentBinding.version",
+    TypeError,
+  );
+  const deploymentBinding = normalizeSccpSourceAdapterDeploymentBinding(deploymentBindingSource);
+  if (
+    deploymentBinding.sourceDomain !== SCCP_DOMAIN_SOL ||
+    deploymentBinding.targetDomain !== SCCP_DOMAIN_SORA
+  ) {
+    throw new TypeError("proofResult.sourceAdapterDeploymentBinding must be Solana -> SORA");
+  }
+  if (
+    deploymentBinding.sourceAdapterDeploymentHash === SCCP_ZERO_HASH_V1 ||
+    deploymentBinding.sourceAdapterDeploymentReceiptHash === SCCP_ZERO_HASH_V1
+  ) {
+    throw new TypeError(
+      "proofResult.sourceAdapterDeploymentBinding deployment hashes must be non-zero",
+    );
+  }
+  const expectedDeploymentBindingHash =
+    sccpSourceAdapterDeploymentBindingHash(deploymentBinding);
+  if (normalizedDeploymentBindingHash !== expectedDeploymentBindingHash) {
+    throw new TypeError(
+      "proofResult.sourceAdapterDeploymentBindingHash must match sourceAdapterDeploymentBinding",
+    );
+  }
+  const witnessHash = normalizeNonZeroHex32(
+    strictResultField(
+      proofResult,
+      "proofResult.witnessHash",
+      "witnessHash",
+      "witness_hash",
+    ),
+    "proofResult.witnessHash",
+  );
+  const expectedEnvelopeHash = bytesToHex(
+    prefixedBlake2b(
+      "sccp:solana:proof-envelope:v1",
+      concatBytes(
+        hexToBytes(witnessHash, "proofResult.witnessHash", 32),
+        hexToBytes(proofContextHash, "proofResult.proofContextHash", 32),
+        hexToBytes(
+          normalizedDeploymentBindingHash,
+          "proofResult.sourceAdapterDeploymentBindingHash",
+          32,
+        ),
+        resultProofBytes,
+      ),
+    ),
+  );
+  if (normalizedEnvelopeHash !== expectedEnvelopeHash) {
+    throw new TypeError("proofResult.envelopeHash must match wrapped proof bytes");
+  }
+  const sourceStateVerifierId = strictResultField(
+    proofResult,
+    "proofResult.sourceStateVerifierId",
+    "sourceStateVerifierId",
+    "source_state_verifier_id",
+  );
+  if (sourceStateVerifierId !== SCCP_SOLANA_MAINNET_ACCOUNTS_DB_VERIFIER_ID_V1) {
+    throw new TypeError(
+      "proofResult.sourceStateVerifierId must match Solana AccountsDB verifier profile",
+    );
+  }
+  const sourceStateVerifierHash = strictResultField(
+    proofResult,
+    "proofResult.sourceStateVerifierHash",
+    "sourceStateVerifierHash",
+    "source_state_verifier_hash",
+  );
+  if (
+    sourceStateVerifierHash === undefined ||
+    sourceStateVerifierHash === null ||
+    isZeroHex32(sourceStateVerifierHash, "proofResult.sourceStateVerifierHash")
+  ) {
+    throw new TypeError("proofResult.sourceStateVerifierHash must be non-zero");
+  }
+  const normalizedSourceStateVerifierHash = normalizeHex32(
+    sourceStateVerifierHash,
+    "proofResult.sourceStateVerifierHash",
+  );
+  if (
+    normalizedSourceStateVerifierHash === SCCP_SOLANA_TEMPLATE_SOURCE_STATE_VERIFIER_HASH_V1
+  ) {
+    throw new TypeError(
+      "proofResult.sourceStateVerifierHash must not be the Solana template verifier hash",
+    );
+  }
+  const resultPublicInputs = strictResultField(
+    proofResult,
+    "proofResult.publicInputs",
+    "publicInputs",
+    "public_inputs",
+  );
+  if (
+    !resultPublicInputs ||
+    typeof resultPublicInputs !== "object" ||
+    Array.isArray(resultPublicInputs)
+  ) {
+    throw new TypeError("proofResult.publicInputs must be Solana source-proof inputs");
+  }
+  const publicInputField = (camel, snake = camel) =>
+    strictResultField(
+      resultPublicInputs,
+      `proofResult.publicInputs.${camel}`,
+      ...new Set([camel, snake]),
+    );
+  const resultSourceStateVerifierId = publicInputField(
+    "sourceStateVerifierId",
+    "source_state_verifier_id",
+  );
+  if (resultSourceStateVerifierId !== sourceStateVerifierId) {
+    throw new TypeError(
+      "proofResult.publicInputs.sourceStateVerifierId must match proofResult.sourceStateVerifierId",
+    );
+  }
+  if (
+    normalizeHex32(
+      publicInputField("sourceStateVerifierHash", "source_state_verifier_hash"),
+      "proofResult.publicInputs.sourceStateVerifierHash",
+    ) !== normalizedSourceStateVerifierHash
+  ) {
+    throw new TypeError(
+      "proofResult.publicInputs.sourceStateVerifierHash must match proofResult.sourceStateVerifierHash",
+    );
+  }
+  const resultFinalizedSlot = normalizeUnsignedBigInt(
+    publicInputField("finalizedSlot", "finalized_slot"),
+    "proofResult.publicInputs.finalizedSlot",
+  );
+  const resultParentSlot = normalizeUnsignedBigInt(
+    publicInputField("parentSlot", "parent_slot"),
+    "proofResult.publicInputs.parentSlot",
+  );
+  if (resultParentSlot + 1n !== resultFinalizedSlot) {
+    throw new TypeError(
+      "proofResult.publicInputs.parentSlot must be the direct parent of finalizedSlot",
+    );
+  }
+  const resultBankSignatureCount = normalizeUnsignedBigInt(
+    publicInputField("bankSignatureCount", "bank_signature_count"),
+    "proofResult.publicInputs.bankSignatureCount",
+  );
+  if (resultBankSignatureCount === 0n) {
+    throw new TypeError("proofResult.publicInputs.bankSignatureCount must be nonzero");
+  }
+  for (const [field, snakeField] of [
+    ["parentBankHash", "parent_bank_hash"],
+    ["blockhash", "blockhash"],
+    ["bankHash", "bank_hash"],
+    ["transactionStatusRoot", "transaction_status_root"],
+    ["messageProofHash", "message_proof_hash"],
+    ["accountInclusionRoot", "account_inclusion_root"],
+    ["accountsLtHashChecksum", "accounts_lt_hash_checksum"],
+    ["accountsLtHashProofPublicInputsHash", "accounts_lt_hash_proof_public_inputs_hash"],
+    ["sourceEventDigest", "source_event_digest"],
+  ]) {
+    normalizeNonZeroHex32(
+      publicInputField(field, snakeField),
+      `proofResult.publicInputs.${field}`,
+    );
+  }
+  const resultStatementHash = publicInputField("statementHash", "statement_hash");
+  const resultDestinationBindingHash = publicInputField(
+    "destinationBindingHash",
+    "destination_binding_hash",
+  );
+  if (
+    normalizeHex32(resultStatementHash, "proofResult.publicInputs.statementHash") !==
+    proofContext.statementHash
+  ) {
+    throw new TypeError("proofResult.publicInputs.statementHash must match proofContext");
+  }
+  if (
+    normalizeHex32(
+      resultDestinationBindingHash,
+      "proofResult.publicInputs.destinationBindingHash",
+    ) !== proofContext.destinationBindingHash
+  ) {
+    throw new TypeError("proofResult.publicInputs.destinationBindingHash must match proofContext");
+  }
+  if (
+    normalizeHex32(
+      publicInputField("sourceAdapterDeploymentHash", "source_adapter_deployment_hash"),
+      "proofResult.publicInputs.sourceAdapterDeploymentHash",
+    ) !== deploymentBinding.sourceAdapterDeploymentHash
+  ) {
+    throw new TypeError(
+      "proofResult.publicInputs.sourceAdapterDeploymentHash must match sourceAdapterDeploymentBinding",
+    );
+  }
+  if (
+    normalizeHex32(
+      publicInputField(
+        "sourceAdapterDeploymentReceiptHash",
+        "source_adapter_deployment_receipt_hash",
+      ),
+      "proofResult.publicInputs.sourceAdapterDeploymentReceiptHash",
+    ) !== deploymentBinding.sourceAdapterDeploymentReceiptHash
+  ) {
+    throw new TypeError(
+      "proofResult.publicInputs.sourceAdapterDeploymentReceiptHash must match sourceAdapterDeploymentBinding",
+    );
+  }
+  if (
+    normalizeHex32(
+      publicInputField(
+        "sourceAdapterDeploymentBindingHash",
+        "source_adapter_deployment_binding_hash",
+      ),
+      "proofResult.publicInputs.sourceAdapterDeploymentBindingHash",
+    ) !== expectedDeploymentBindingHash
+  ) {
+    throw new TypeError(
+      "proofResult.publicInputs.sourceAdapterDeploymentBindingHash must match sourceAdapterDeploymentBinding",
+    );
+  }
+  if (
+    normalizeHex32(publicInputField("messageId", "message_id"), "proofResult.publicInputs.messageId") !==
+    publicInputs.messageId
+  ) {
+    throw new TypeError("proofResult.publicInputs.messageId must match publicInputs.messageId");
+  }
+  if (
+    normalizeHex32(publicInputField("payloadHash", "payload_hash"), "proofResult.publicInputs.payloadHash") !==
+    publicInputs.payloadHash
+  ) {
+    throw new TypeError("proofResult.publicInputs.payloadHash must match publicInputs.payloadHash");
+  }
+  if (
+    normalizeHex32(
+      publicInputField("commitmentRoot", "commitment_root"),
+      "proofResult.publicInputs.commitmentRoot",
+    ) !== publicInputs.commitmentRoot
+  ) {
+    throw new TypeError("proofResult.publicInputs.commitmentRoot must match publicInputs.commitmentRoot");
+  }
+  if (resultFinalizedSlot.toString() !== publicInputs.finalityHeight) {
+    throw new TypeError("proofResult.publicInputs.finalizedSlot must match publicInputs.finalityHeight");
+  }
+  if (
+    normalizeHex32(publicInputField("bankHash", "bank_hash"), "proofResult.publicInputs.bankHash") !==
+    publicInputs.finalityBlockHash
+  ) {
+    throw new TypeError("proofResult.publicInputs.bankHash must match publicInputs.finalityBlockHash");
+  }
+};
+
+export function buildSolanaSccpSubmission(input) {
+  if (!input || typeof input !== "object" || Array.isArray(input)) {
+    throw new TypeError("Solana SCCP submission input must be an object");
+  }
+  const proofResult = strictResultField(
+    input,
+    "proofResult",
+    "proofResult",
+    "proof_result",
+  ) ?? null;
+  if (proofResult === null) {
+    throw new TypeError("proofResult must be a wrapped Solana SCCP proof result");
+  }
+  if (
+    (!proofResult || typeof proofResult !== "object" || Array.isArray(proofResult))
+  ) {
+    throw new TypeError("proofResult must be a wrapped Solana SCCP proof result");
+  }
+  const proofResultPublicInputs = strictOptionalResultField(
+    proofResult,
+    "proofResult.publicInputs",
+    "publicInputs",
+    "public_inputs",
+  );
+  const transparentPublicInputs = strictOptionalResultField(
+    input,
+    "publicInputs",
+    "publicInputs",
+    "public_inputs",
+    "transparentPublicInputs",
+    "transparent_public_inputs",
+  );
+  if (transparentPublicInputs === SCCP_OPTIONAL_FIELD_MISSING) {
+    throw new TypeError(
+      "Solana SCCP submission requires transparent publicInputs; proofResult.publicInputs are source-proof inputs",
+    );
+  }
+  const publicInputs = normalizeSccpMessageTransparentPublicInputs(
+    transparentPublicInputs,
+  );
+  if (publicInputs.targetDomain !== SCCP_DOMAIN_SOL) {
+    throw new TypeError("publicInputs.targetDomain must be Solana");
+  }
+  const suppliedPublicInputsBytes = strictResultField(
+    input,
+    "publicInputsBytes",
+    "publicInputsBytes",
+    "public_inputs_bytes",
+  );
+  const expectedPublicInputsBytes = canonicalSccpMessageTransparentPublicInputsBytes(publicInputs);
+  const publicInputsBytes = suppliedPublicInputsBytes !== undefined
+    ? toBytes(suppliedPublicInputsBytes, "publicInputsBytes")
+    : expectedPublicInputsBytes;
+  if (
+    publicInputsBytes.length !== SCCP_MESSAGE_TRANSPARENT_PUBLIC_INPUTS_BYTES_V1_LEN ||
+    !bytesEqual(publicInputsBytes, expectedPublicInputsBytes)
+  ) {
+    throw new TypeError("publicInputsBytes must match canonical SCCP transparent public inputs");
+  }
+
+  const proofBytes = requireNativeRecursiveProofBytes(
+    toBytes(
+      strictOptionalResultField(input, "proofBytes", "proofBytes", "proof_bytes") !==
+        SCCP_OPTIONAL_FIELD_MISSING
+        ? strictOptionalResultField(input, "proofBytes", "proofBytes", "proof_bytes")
+        : strictOptionalResultField(
+            proofResult,
+            "proofResult.proofBytes",
+            "proofBytes",
+            "proof_bytes",
+            "proof",
+          ),
+      "proofBytes",
+    ),
+    "proofBytes",
+  );
+  const bundleBytes = requireNonEmptyBytes(
+    toBytes(
+      strictResultField(input, "bundleBytes", "bundleBytes", "bundle_bytes"),
+      "bundleBytes",
+    ),
+    "bundleBytes",
+  );
+
+  const proofContextInput = strictOptionalResultField(
+    input,
+    "proofContext",
+    "proofContext",
+    "proof_context",
+  );
+  const proofResultContextInput = strictOptionalResultField(
+    proofResult,
+    "proofResult.proofContext",
+    "proofContext",
+    "proof_context",
+  );
+  const proofContextSourceInput =
+    proofContextInput !== SCCP_OPTIONAL_FIELD_MISSING
+      ? proofContextInput
+      : proofResultContextInput;
+  let proofContextSource = {};
+  if (proofContextSourceInput !== SCCP_OPTIONAL_FIELD_MISSING) {
+    if (!proofContextSourceInput || typeof proofContextSourceInput !== "object" || Array.isArray(proofContextSourceInput)) {
+      throw new TypeError("proofContext must be an object");
+    }
+    proofContextSource = proofContextSourceInput;
+  }
+  const statementHashInput = strictOptionalResultField(
+    input,
+    "statementHash",
+    "statementHash",
+    "statement_hash",
+  );
+  const proofContextStatementHashInput = strictOptionalResultField(
+    proofContextSource,
+    "proofContext.statementHash",
+    "statementHash",
+    "statement_hash",
+  );
+  const resultStatementHashInput =
+    proofResultPublicInputs !== SCCP_OPTIONAL_FIELD_MISSING &&
+    proofResultPublicInputs &&
+    typeof proofResultPublicInputs === "object" &&
+    !Array.isArray(proofResultPublicInputs)
+      ? strictOptionalResultField(
+          proofResultPublicInputs,
+          "proofResult.publicInputs.statementHash",
+          "statementHash",
+          "statement_hash",
+        )
+      : SCCP_OPTIONAL_FIELD_MISSING;
+  const destinationBindingHashInput = strictOptionalResultField(
+    input,
+    "destinationBindingHash",
+    "destinationBindingHash",
+    "destination_binding_hash",
+  );
+  const proofContextDestinationBindingHashInput = strictOptionalResultField(
+    proofContextSource,
+    "proofContext.destinationBindingHash",
+    "destinationBindingHash",
+    "destination_binding_hash",
+  );
+  const resultDestinationBindingHashInput =
+    proofResultPublicInputs !== SCCP_OPTIONAL_FIELD_MISSING &&
+    proofResultPublicInputs &&
+    typeof proofResultPublicInputs === "object" &&
+    !Array.isArray(proofResultPublicInputs)
+      ? strictOptionalResultField(
+          proofResultPublicInputs,
+          "proofResult.publicInputs.destinationBindingHash",
+          "destinationBindingHash",
+          "destination_binding_hash",
+        )
+      : SCCP_OPTIONAL_FIELD_MISSING;
+  const proofContext = normalizeSolanaSccpProofContext({
+    statementHash:
+      statementHashInput !== SCCP_OPTIONAL_FIELD_MISSING
+        ? statementHashInput
+        : proofContextStatementHashInput !== SCCP_OPTIONAL_FIELD_MISSING
+          ? proofContextStatementHashInput
+          : resultStatementHashInput,
+    destinationBindingHash:
+      destinationBindingHashInput !== SCCP_OPTIONAL_FIELD_MISSING
+        ? destinationBindingHashInput
+        : proofContextDestinationBindingHashInput !== SCCP_OPTIONAL_FIELD_MISSING
+          ? proofContextDestinationBindingHashInput
+          : resultDestinationBindingHashInput,
+  });
+  if (proofContext.destinationBindingHash !== sccpDestinationBindingHash(SCCP_DOMAIN_SOL)) {
+    throw new TypeError("destinationBindingHash must match canonical Solana destination binding");
+  }
+  const proofContextHash = solanaSccpProofContextHash(proofContext);
+  const inputProofContextHash = strictOptionalResultField(
+    input,
+    "proofContextHash",
+    "proofContextHash",
+    "proof_context_hash",
+  );
+  const resultProofContextHash = strictOptionalResultField(
+    proofResult,
+    "proofResult.proofContextHash",
+    "proofContextHash",
+    "proof_context_hash",
+  );
+  const suppliedProofContextHash =
+    inputProofContextHash !== SCCP_OPTIONAL_FIELD_MISSING
+      ? inputProofContextHash
+      : resultProofContextHash;
+  if (
+    suppliedProofContextHash !== SCCP_OPTIONAL_FIELD_MISSING &&
+    normalizeHex32(suppliedProofContextHash, "proofContextHash") !== proofContextHash
+  ) {
+    throw new TypeError("proofContextHash must match statementHash and destinationBindingHash");
+  }
+  if (proofResult !== null) {
+    requireSolanaProofResultForSubmission(
+      proofResult,
+      proofContext,
+      proofContextHash,
+      publicInputs,
+      proofBytes,
+    );
+  }
+
+  const statementHashBytes = hexToBytes(proofContext.statementHash, "statementHash", 32);
+  const destinationBindingHashBytes = hexToBytes(
+    proofContext.destinationBindingHash,
+    "destinationBindingHash",
+    32,
+  );
+  const proofContextHashBytes = hexToBytes(proofContextHash, "proofContextHash", 32);
+  const argumentBytes = [
+    proofBytes,
+    publicInputsBytes,
+    bundleBytes,
+    statementHashBytes,
+    destinationBindingHashBytes,
+    proofContextHashBytes,
+  ];
+  const instructionData = encodeSolanaSccpInstructionData(argumentBytes);
+  const argumentsValue = [
+    { key: "proof_bytes", encoding: "raw_bytes", bytes: bytesToHex(proofBytes) },
+    { key: "public_inputs", encoding: "raw_bytes", bytes: bytesToHex(publicInputsBytes) },
+    { key: "bundle_bytes", encoding: "raw_bytes", bytes: bytesToHex(bundleBytes) },
+    { key: "statement_hash", encoding: "raw_bytes", bytes: bytesToHex(statementHashBytes) },
+    {
+      key: "destination_binding_hash",
+      encoding: "raw_bytes",
+      bytes: bytesToHex(destinationBindingHashBytes),
+    },
+    { key: "proof_context_hash", encoding: "raw_bytes", bytes: bytesToHex(proofContextHashBytes) },
+  ];
+  const submission = {
+    version: 1,
+    envelopeEncoding: SCCP_SOLANA_BORSH_INSTRUCTION_V1,
+    submissionKind: "program_instruction",
+    verifierEntrypoint: SCCP_SOLANA_SUBMIT_MESSAGE_PROOF_ENTRYPOINT_V1,
+    publicInputs: Object.freeze({ ...publicInputs }),
+    statementHash: proofContext.statementHash,
+    destinationBindingHash: proofContext.destinationBindingHash,
+    proofContextHash,
+    arguments: Object.freeze(argumentsValue.map((argument) => Object.freeze({ ...argument }))),
+    instructionDataHex: bytesToHex(instructionData),
+    envelopeHex: bytesToHex(instructionData),
+  };
+  defineCopiedByteField(submission, "proofBytes", proofBytes);
+  defineCopiedByteField(submission, "publicInputsBytes", publicInputsBytes);
+  defineCopiedByteField(submission, "bundleBytes", bundleBytes);
+  defineCopiedByteField(submission, "instructionData", instructionData);
+  defineCopiedByteField(submission, "envelopeBytes", instructionData);
+  return Object.freeze(submission);
+}
+
+const normalizeSolanaProofResultPublicInputs = (input, label) => {
+  if (!input || typeof input !== "object" || Array.isArray(input)) {
+    throw new TypeError(`${label} must be an object`);
+  }
+  const field = (camel, snake = camel) =>
+    strictResultField(input, `${label}.${camel}`, ...new Set([camel, snake]));
+  const hex = (camel, snake) => normalizeHex32(field(camel, snake), `${label}.${camel}`);
+  const u64 = (camel, snake) =>
+    normalizeUnsignedBigInt(field(camel, snake), `${label}.${camel}`).toString();
+  return {
+    messageId: hex("messageId", "message_id"),
+    payloadHash: hex("payloadHash", "payload_hash"),
+    commitmentRoot: hex("commitmentRoot", "commitment_root"),
+    finalizedSlot: u64("finalizedSlot", "finalized_slot"),
+    parentSlot: u64("parentSlot", "parent_slot"),
+    bankSignatureCount: u64("bankSignatureCount", "bank_signature_count"),
+    parentBankHash: hex("parentBankHash", "parent_bank_hash"),
+    blockhash: hex("blockhash", "blockhash"),
+    bankHash: hex("bankHash", "bank_hash"),
+    transactionStatusRoot: hex("transactionStatusRoot", "transaction_status_root"),
+    messageProofHash: hex("messageProofHash", "message_proof_hash"),
+    accountInclusionRoot: hex("accountInclusionRoot", "account_inclusion_root"),
+    accountsLtHashChecksum: hex("accountsLtHashChecksum", "accounts_lt_hash_checksum"),
+    accountsLtHashProofPublicInputsHash: hex(
+      "accountsLtHashProofPublicInputsHash",
+      "accounts_lt_hash_proof_public_inputs_hash",
+    ),
+    sourceEventDigest: hex("sourceEventDigest", "source_event_digest"),
+    sourceStateVerifierId: normalizeNonEmptyString(
+      field("sourceStateVerifierId", "source_state_verifier_id"),
+      `${label}.sourceStateVerifierId`,
+    ),
+    sourceStateVerifierHash: hex("sourceStateVerifierHash", "source_state_verifier_hash"),
+    statementHash: hex("statementHash", "statement_hash"),
+    destinationBindingHash: hex("destinationBindingHash", "destination_binding_hash"),
+    sourceAdapterDeploymentHash: hex(
+      "sourceAdapterDeploymentHash",
+      "source_adapter_deployment_hash",
+    ),
+    sourceAdapterDeploymentReceiptHash: hex(
+      "sourceAdapterDeploymentReceiptHash",
+      "source_adapter_deployment_receipt_hash",
+    ),
+    sourceAdapterDeploymentBindingHash: hex(
+      "sourceAdapterDeploymentBindingHash",
+      "source_adapter_deployment_binding_hash",
+    ),
+  };
+};
+
+const requireOptionalSolanaProofResultMetadataMatches = (result, request) => {
+  const publicInputs = strictOptionalResultField(
+    result,
+    "proofResult.publicInputs",
+    "publicInputs",
+    "public_inputs",
+  );
+  if (publicInputs !== SCCP_OPTIONAL_FIELD_MISSING) {
+    if (
+      JSON.stringify(
+        normalizeSolanaProofResultPublicInputs(publicInputs, "proofResult.publicInputs"),
+      ) !== JSON.stringify(request.publicInputs)
+    ) {
+      throw new TypeError("proofResult.publicInputs must match request");
+    }
+  }
+  const sourceStateVerifierId = strictOptionalResultField(
+    result,
+    "proofResult.sourceStateVerifierId",
+    "sourceStateVerifierId",
+    "source_state_verifier_id",
+  );
+  if (sourceStateVerifierId !== SCCP_OPTIONAL_FIELD_MISSING) {
+    if (
+      normalizeNonEmptyString(sourceStateVerifierId, "proofResult.sourceStateVerifierId") !==
+      request.sourceStateVerifierId
+    ) {
+      throw new TypeError("proofResult.sourceStateVerifierId must match request");
+    }
+  }
+  const sourceStateVerifierHash = strictOptionalResultField(
+    result,
+    "proofResult.sourceStateVerifierHash",
+    "sourceStateVerifierHash",
+    "source_state_verifier_hash",
+  );
+  if (sourceStateVerifierHash !== SCCP_OPTIONAL_FIELD_MISSING) {
+    if (
+      normalizeHex32(sourceStateVerifierHash, "proofResult.sourceStateVerifierHash") !==
+      request.sourceStateVerifierHash
+    ) {
+      throw new TypeError("proofResult.sourceStateVerifierHash must match request");
+    }
+  }
+  const proofContext = strictOptionalResultField(
+    result,
+    "proofResult.proofContext",
+    "proofContext",
+    "proof_context",
+  );
+  if (proofContext !== SCCP_OPTIONAL_FIELD_MISSING) {
+    if (
+      JSON.stringify(normalizeSolanaSccpProofContext(proofContext)) !==
+      JSON.stringify(request.proofContext)
+    ) {
+      throw new TypeError("proofResult.proofContext must match request");
+    }
+  }
+  const deploymentBinding = strictOptionalResultField(
+    result,
+    "proofResult.sourceAdapterDeploymentBinding",
+    "sourceAdapterDeploymentBinding",
+    "source_adapter_deployment_binding",
+  );
+  if (deploymentBinding !== SCCP_OPTIONAL_FIELD_MISSING) {
+    if (
+      JSON.stringify(normalizeSccpSourceAdapterDeploymentBinding(deploymentBinding)) !==
+      JSON.stringify(request.sourceAdapterDeploymentBinding)
+    ) {
+      throw new TypeError("proofResult.sourceAdapterDeploymentBinding must match request");
+    }
+  }
+};
+
+function normalizeSolanaProofResult(result, request) {
+  if (!result || typeof result !== "object" || Array.isArray(result)) {
+    throw new TypeError("Solana SCCP proof result must be an object");
+  }
+  const proofBytes = toBytes(
+    strictResultField(
+      result,
+      "proofResult.proofBytes",
+      "proofBytes",
+      "proof_bytes",
+      "proof",
+    ),
+    "proofBytes",
+  );
+  requireNativeRecursiveProofBytes(proofBytes, "proofBytes");
+  requireOptionalResultProofBase64Matches(result, proofBytes);
+  requireCanonicalSolanaProofRequest(request);
+  requireProductionSolanaProofRequest(request);
+  requireOptionalResultBackendMatches(result.backend, request.backend);
+  requireOptionalSolanaProofResultMetadataMatches(result, request);
+  requireOptionalResultHashMatches(
+    strictResultField(result, "proofResult.witnessHash", "witnessHash", "witness_hash"),
+    request.witnessHash,
+    "witnessHash",
+  );
+  requireOptionalResultHashMatches(
+    strictResultField(
+      result,
+      "proofResult.proofContextHash",
+      "proofContextHash",
+      "proof_context_hash",
+    ),
+    request.proofContextHash,
+    "proofContextHash",
+  );
+  requireOptionalResultHashMatches(
+    strictResultField(
+      result,
+      "proofResult.sourceAdapterDeploymentBindingHash",
+      "sourceAdapterDeploymentBindingHash",
+      "source_adapter_deployment_binding_hash",
+    ),
+    request.sourceAdapterDeploymentBindingHash,
+    "sourceAdapterDeploymentBindingHash",
+  );
+  const envelopeHash = bytesToHex(
+    prefixedBlake2b(
+      "sccp:solana:proof-envelope:v1",
+      concatBytes(
+        hexToBytes(request.witnessHash, "witnessHash", 32),
+        hexToBytes(request.proofContextHash, "proofContextHash", 32),
+        hexToBytes(
+          request.sourceAdapterDeploymentBindingHash,
+          "sourceAdapterDeploymentBindingHash",
+          32,
+        ),
+        proofBytes,
+      ),
+    ),
+  );
+  requireOptionalResultHashMatches(
+    strictResultField(result, "proofResult.envelopeHash", "envelopeHash", "envelope_hash"),
+    envelopeHash,
+    "envelopeHash",
+  );
+  return immutableSolanaProofResult({
+    version: 1,
+    backend: request.backend,
+    proofBytes,
+    proofBase64: bytesToBase64(proofBytes),
+    publicInputs: request.publicInputs,
+    witnessHash: request.witnessHash,
+    proofContextHash: request.proofContextHash,
+    sourceAdapterDeploymentBindingHash: request.sourceAdapterDeploymentBindingHash,
+    sourceStateVerifierId: request.sourceStateVerifierId,
+    sourceStateVerifierHash: request.sourceStateVerifierHash,
+    proofContext: request.proofContext,
+    sourceAdapterDeploymentBinding: request.sourceAdapterDeploymentBinding,
+    envelopeHash,
+  });
+}
+
+export function wrapSolanaSccpProofResult(proofBytes, request) {
+  return normalizeSolanaProofResult({ proofBytes }, request);
+}
+
+export class SolanaSccpProver {
+  constructor(options = {}) {
+    if (!options || typeof options !== "object" || Array.isArray(options)) {
+      throw new TypeError("SolanaSccpProver options must be an object");
+    }
+    this.witnessProvider = strictOptionalConstructorOption(
+      options,
+      "Solana SCCP prover witnessProvider",
+      "witnessProvider",
+      "witness_provider",
+    );
+    this.proveFn = strictOptionalConstructorOption(
+      options,
+      "Solana SCCP prover prove",
+      "prove",
+      "proveFn",
+      "prove_fn",
+    );
+  }
+
+  async buildRequest(input, options = {}) {
+    const witness = await resolveSccpWitness(
+      this.witnessProvider,
+      input,
+      options,
+      "Solana SCCP",
+    );
+    return buildSolanaSccpProofRequest(witness);
+  }
+
+  async prove(input, options = {}) {
+    const request = await this.buildRequest(input, options);
+    if (typeof this.proveFn !== "function") {
+      const error = new Error(
+        "Solana SCCP local prover is not linked; provide a pure TypeScript prove function before generating production proofs",
+      );
+      error.code = "ERR_SCCP_SOLANA_PROVER_UNAVAILABLE";
+      throw error;
+    }
+    requireProductionSolanaProofRequest(request);
+    return normalizeSolanaProofResult(
+      await this.proveFn(immutableSolanaProofRequest(request), options),
+      request,
+    );
+  }
+}
+
 function toBytes(value, label) {
   if (value instanceof Uint8Array) return value;
   if (ArrayBuffer.isView(value)) {
@@ -432,6 +22540,9 @@ function toBytes(value, label) {
   }
   if (value instanceof ArrayBuffer) {
     return new Uint8Array(value);
+  }
+  if (Array.isArray(value)) {
+    return Uint8Array.from(value);
   }
   if (typeof value === "string") {
     return hexToBytes(value, label);

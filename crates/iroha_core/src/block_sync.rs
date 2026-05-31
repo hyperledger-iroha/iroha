@@ -17,6 +17,7 @@ use iroha_data_model::{
 use iroha_futures::supervisor::{Child, OnShutdown, ShutdownSignal};
 use iroha_logger::prelude::*;
 use iroha_macro::*;
+use mv::storage::StorageReadOnly;
 use norito::codec::{Decode, Encode};
 use rand::seq::SliceRandom;
 use tokio::sync::mpsc;
@@ -2493,6 +2494,8 @@ impl BlockSynchronizer {
             record.height,
             record.view,
             record.epoch,
+            record.chain_order_hash,
+            record.rechain_seq,
             record.signers.clone(),
             record.bls_aggregate_signature.clone(),
         )
@@ -2510,6 +2513,8 @@ impl BlockSynchronizer {
         height: u64,
         view: u64,
         epoch: u64,
+        chain_order_hash: Hash,
+        rechain_seq: u64,
         signers: BTreeSet<ValidatorIndex>,
         aggregate_signature: Vec<u8>,
     ) -> Option<Qc> {
@@ -2552,8 +2557,8 @@ impl BlockSynchronizer {
             height,
             view,
             epoch,
-            chain_order_hash: crate::sumeragi::consensus::default_chain_order_hash(),
-            rechain_seq: 0,
+            chain_order_hash,
+            rechain_seq,
             mode_tag: mode_tag.to_string(),
             highest_qc: None,
             validator_set_hash: HashOf::new(&validator_set),
@@ -2662,6 +2667,41 @@ impl BlockSynchronizer {
                     "block sync: reusing cached commit QC from history"
                 );
                 return Some(cert);
+            }
+        }
+
+        if let Some(cert) = world.commit_qcs().get(&block_hash).filter(|cert| {
+            cert.height == height
+                && cert.view == view
+                && cert.subject_block_hash == block_hash
+                && matches!(cert.phase, Phase::Commit)
+                && cert.mode_tag == expected_mode_tag
+        }) {
+            if matches!(consensus_mode, ConsensusMode::Npos)
+                && let Err(reason) = Self::npos_cached_commit_qc_reusable(world, cert)
+            {
+                if let Some(suppressed) = allow_block_sync_qc_warning(
+                    BlockSyncQcWarningKind::RejectedCachedCommitQcNpos,
+                    block_hash,
+                    height,
+                    view,
+                ) {
+                    warn!(
+                        height,
+                        view,
+                        reason,
+                        signers = qc_signer_count(cert),
+                        suppressed,
+                        "block sync: skipping stored commit QC in NPoS"
+                    );
+                }
+            } else {
+                iroha_logger::info!(
+                    height,
+                    view,
+                    "block sync: reusing stored commit QC from world state"
+                );
+                return Some(cert.clone());
             }
         }
 
@@ -3639,7 +3679,8 @@ mod qc_build_tests {
     use super::*;
     use crate::{query::store::LiveQueryStore, state::World};
 
-    fn qc_preimage(
+    #[allow(clippy::too_many_arguments)]
+    fn qc_preimage_with_chain_order(
         chain_id: &ChainId,
         mode_tag: &str,
         phase: Phase,
@@ -3647,6 +3688,8 @@ mod qc_build_tests {
         height: u64,
         view: u64,
         epoch: u64,
+        chain_order_hash: Hash,
+        rechain_seq: u64,
     ) -> Vec<u8> {
         let zero_root = Hash::prehashed([0u8; Hash::LENGTH]);
         let vote = crate::sumeragi::consensus::Vote {
@@ -3657,8 +3700,8 @@ mod qc_build_tests {
             height,
             view,
             epoch,
-            chain_order_hash: crate::sumeragi::consensus::default_chain_order_hash(),
-            rechain_seq: 0,
+            chain_order_hash,
+            rechain_seq,
             highest_qc: None,
             signer: 0,
             bls_sig: Vec::new(),
@@ -3679,10 +3722,51 @@ mod qc_build_tests {
         topology: &Topology,
         keypairs: &[KeyPair],
     ) -> Vec<u8> {
+        aggregate_signature_for_signers_with_chain_order(
+            chain_id,
+            mode_tag,
+            phase,
+            block_hash,
+            height,
+            view,
+            epoch,
+            crate::sumeragi::consensus::default_chain_order_hash(),
+            0,
+            signers,
+            topology,
+            keypairs,
+        )
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    fn aggregate_signature_for_signers_with_chain_order(
+        chain_id: &ChainId,
+        mode_tag: &str,
+        phase: Phase,
+        block_hash: HashOf<BlockHeader>,
+        height: u64,
+        view: u64,
+        epoch: u64,
+        chain_order_hash: Hash,
+        rechain_seq: u64,
+        signers: &BTreeSet<ValidatorIndex>,
+        topology: &Topology,
+        keypairs: &[KeyPair],
+    ) -> Vec<u8> {
         if signers.is_empty() {
             return Vec::new();
         }
-        let preimage = qc_preimage(chain_id, mode_tag, phase, block_hash, height, view, epoch);
+        let preimage = qc_preimage_with_chain_order(
+            chain_id,
+            mode_tag,
+            phase,
+            block_hash,
+            height,
+            view,
+            epoch,
+            chain_order_hash,
+            rechain_seq,
+        );
         let mut signatures = Vec::with_capacity(signers.len());
         for signer in signers {
             let idx = usize::try_from(*signer).expect("signer fits usize");
@@ -3744,6 +3828,8 @@ mod qc_build_tests {
             height,
             view,
             epoch,
+            crate::sumeragi::consensus::default_chain_order_hash(),
+            0,
             signers.clone(),
             aggregate,
         );
@@ -3760,6 +3846,8 @@ mod qc_build_tests {
             height,
             view,
             epoch,
+            crate::sumeragi::consensus::default_chain_order_hash(),
+            0,
             signers.clone(),
             Vec::new(),
         );
@@ -3781,6 +3869,8 @@ mod qc_build_tests {
             height,
             view,
             epoch,
+            crate::sumeragi::consensus::default_chain_order_hash(),
+            0,
             partial_signers,
             vec![0xAA; 48],
         );
@@ -3847,6 +3937,8 @@ mod qc_build_tests {
             height,
             view,
             epoch,
+            crate::sumeragi::consensus::default_chain_order_hash(),
+            0,
             signers.clone(),
             aggregate.clone(),
         );
@@ -3863,6 +3955,8 @@ mod qc_build_tests {
             height,
             view,
             epoch,
+            crate::sumeragi::consensus::default_chain_order_hash(),
+            0,
             signers,
             aggregate,
         );
@@ -3905,7 +3999,9 @@ mod qc_build_tests {
         let mut signers = BTreeSet::new();
         signers.insert(ValidatorIndex::try_from(0).expect("index 0"));
         signers.insert(ValidatorIndex::try_from(1).expect("index 1"));
-        let aggregate = aggregate_signature_for_signers(
+        let chain_order_hash = Hash::prehashed([0x42; Hash::LENGTH]);
+        let rechain_seq = 7;
+        let aggregate = aggregate_signature_for_signers_with_chain_order(
             &chain_id,
             mode_tag,
             Phase::Commit,
@@ -3913,6 +4009,8 @@ mod qc_build_tests {
             height,
             view,
             0,
+            chain_order_hash,
+            rechain_seq,
             &signers,
             &topology,
             &keypairs,
@@ -3923,8 +4021,8 @@ mod qc_build_tests {
             height,
             view,
             epoch: 0,
-            chain_order_hash: crate::sumeragi::consensus::default_chain_order_hash(),
-            rechain_seq: 0,
+            chain_order_hash,
+            rechain_seq,
             parent_state_root: zero_root,
             post_state_root: zero_root,
             signers: signers.clone(),
@@ -3945,6 +4043,8 @@ mod qc_build_tests {
         )
         .expect("world snapshot path should build cached QC");
         assert_eq!(qc.subject_block_hash, block_hash);
+        assert_eq!(qc.chain_order_hash, chain_order_hash);
+        assert_eq!(qc.rechain_seq, rechain_seq);
         assert_eq!(qc.aggregate.bls_aggregate_signature, aggregate);
         assert_eq!(qc_from_world, qc);
     }
@@ -4006,6 +4106,8 @@ mod qc_build_tests {
             height,
             view,
             0,
+            crate::sumeragi::consensus::default_chain_order_hash(),
+            0,
             signers,
             aggregate.clone(),
         )
@@ -4016,6 +4118,75 @@ mod qc_build_tests {
         let out =
             BlockSynchronizer::block_sync_qc_for(&state_view, ConsensusMode::Permissioned, &block)
                 .expect("commit QC should be reused");
+        assert_eq!(out, qc);
+    }
+
+    #[test]
+    fn block_sync_qc_for_uses_world_commit_qc_storage() {
+        let _guard = status::commit_history_test_guard();
+        status::reset_commit_certs_for_tests();
+        status::reset_precommit_signer_history_for_tests();
+
+        let chain_id = ChainId::from("block-sync-qc-world");
+        let mode_tag = PERMISSIONED_TAG;
+        let keypairs = vec![
+            KeyPair::random_with_algorithm(Algorithm::BlsNormal),
+            KeyPair::random_with_algorithm(Algorithm::BlsNormal),
+        ];
+        let peers: Vec<_> = keypairs
+            .iter()
+            .map(|kp| PeerId::new(kp.public_key().clone()))
+            .collect();
+        let topology = Topology::new(peers.clone());
+        let header = BlockHeader::new(nonzero!(4_u64), None, None, None, 0, 0);
+        let block = BlockBuilder::new(header).build_with_signature(0, keypairs[0].private_key());
+        let block_hash = block.hash();
+        let height = block.header().height().get();
+        let view = block.header().view_change_index();
+
+        let mut signers = BTreeSet::new();
+        signers.insert(ValidatorIndex::try_from(0).expect("index 0"));
+        signers.insert(ValidatorIndex::try_from(1).expect("index 1"));
+        let aggregate = aggregate_signature_for_signers(
+            &chain_id,
+            mode_tag,
+            Phase::Commit,
+            block_hash,
+            height,
+            view,
+            0,
+            &signers,
+            &topology,
+            &keypairs,
+        );
+        let zero_root = Hash::prehashed([0u8; Hash::LENGTH]);
+        let qc = BlockSynchronizer::qc_from_signers(
+            ConsensusMode::Permissioned,
+            None,
+            mode_tag,
+            peers,
+            block_hash,
+            zero_root,
+            zero_root,
+            height,
+            view,
+            0,
+            crate::sumeragi::consensus::default_chain_order_hash(),
+            0,
+            signers,
+            aggregate,
+        )
+        .expect("QC should be built");
+
+        let kura = Arc::new(Kura::blank_kura_for_testing());
+        let mut world = World::new();
+        world.commit_qcs.insert(block_hash, qc.clone());
+        let state = State::new_for_testing(world, Arc::clone(&kura), LiveQueryStore::start_test());
+        let state_view = state.view();
+
+        let out =
+            BlockSynchronizer::block_sync_qc_for(&state_view, ConsensusMode::Permissioned, &block)
+                .expect("stored commit QC should be reused");
         assert_eq!(out, qc);
     }
 
@@ -7941,6 +8112,8 @@ pub mod message {
                 height,
                 view,
                 epoch,
+                crate::sumeragi::consensus::default_chain_order_hash(),
+                0,
                 canonical_signers,
                 aggregate_signature,
             )

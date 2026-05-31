@@ -113,6 +113,91 @@ impl Actor {
         )
     }
 
+    fn handle_membership_status_advert(
+        &self,
+        remote: Option<&iroha_data_model::block::consensus::SumeragiMembershipStatus>,
+        sender: Option<&PeerId>,
+    ) {
+        let Some(remote) = remote else {
+            return;
+        };
+        let Some(remote_hash) = remote.view_hash else {
+            return;
+        };
+        let Some(local) = super::status::membership_snapshot() else {
+            return;
+        };
+        let Some(local_hash) = local.view_hash else {
+            return;
+        };
+        if (remote.height, remote.view, remote.epoch) != (local.height, local.view, local.epoch) {
+            debug!(
+                remote_height = remote.height,
+                remote_view = remote.view,
+                remote_epoch = remote.epoch,
+                local_height = local.height,
+                local_view = local.view,
+                local_epoch = local.epoch,
+                "ignoring membership hash advert for different consensus context"
+            );
+            return;
+        }
+        let Some(peer) = sender else {
+            debug!(
+                height = remote.height,
+                view = remote.view,
+                epoch = remote.epoch,
+                "ignoring membership hash mismatch advert without authenticated sender"
+            );
+            return;
+        };
+        if remote_hash == local_hash {
+            super::status::clear_membership_mismatch(peer);
+            #[cfg(feature = "telemetry")]
+            self.telemetry.clear_membership_mismatch(peer);
+            return;
+        }
+
+        let consecutive = super::status::record_membership_mismatch(
+            peer.clone(),
+            remote.height,
+            remote.view,
+            remote.epoch,
+            local_hash,
+            remote_hash,
+        );
+        #[cfg(feature = "telemetry")]
+        self.telemetry
+            .note_membership_mismatch(peer, remote.height, remote.view);
+        let threshold = self
+            .config
+            .gating
+            .membership_mismatch_alert_threshold
+            .max(1);
+        if consecutive >= threshold {
+            warn!(
+                %peer,
+                height = remote.height,
+                view = remote.view,
+                epoch = remote.epoch,
+                consecutive,
+                threshold,
+                fail_closed = self.config.gating.membership_mismatch_fail_closed,
+                "membership hash mismatch exceeded configured threshold"
+            );
+        } else {
+            debug!(
+                %peer,
+                height = remote.height,
+                view = remote.view,
+                epoch = remote.epoch,
+                consecutive,
+                threshold,
+                "recorded membership hash mismatch below configured threshold"
+            );
+        }
+    }
+
     fn should_force_missing_highest_fetch(&self, hash: HashOf<BlockHeader>) -> bool {
         self.pending
             .pending_blocks
@@ -248,7 +333,9 @@ impl Actor {
     pub(super) fn handle_consensus_params(
         &self,
         advert: super::message::ConsensusParamsAdvert,
+        sender: Option<&PeerId>,
     ) -> Result<()> {
+        self.handle_membership_status_advert(advert.membership.as_ref(), sender);
         let (expected_k, expected_r) = self.expected_collector_params_for_advert(&advert);
         if u64::from(advert.collectors_k) != expected_k {
             warn!(
@@ -301,13 +388,30 @@ impl Actor {
                 .prune_height_leq(state_height);
             return Ok(());
         }
-        if self.drop_stale_view(height, view, "ProposalHint") {
-            self.record_consensus_message_handling(
-                super::status::ConsensusMessageKind::ProposalHint,
-                super::status::ConsensusMessageOutcome::Dropped,
-                super::status::ConsensusMessageReason::StaleView,
-            );
-            return Ok(());
+        if let Some(local_view) = self.stale_view(height, view) {
+            if self.stale_proposal_hint_can_seed_frontier_repair(&hint, local_view) {
+                debug!(
+                    height,
+                    view,
+                    local_view,
+                    block = %hint.block_hash,
+                    "accepting stale proposal hint for exact-frontier RBC repair"
+                );
+            } else {
+                debug!(
+                    height,
+                    view,
+                    local_view,
+                    kind = "ProposalHint",
+                    "dropping consensus message for stale view"
+                );
+                self.record_consensus_message_handling(
+                    super::status::ConsensusMessageKind::ProposalHint,
+                    super::status::ConsensusMessageOutcome::Dropped,
+                    super::status::ConsensusMessageReason::StaleView,
+                );
+                return Ok(());
+            }
         }
         let expected_highest_height = height.saturating_sub(1);
         if highest_qc.height != expected_highest_height {
@@ -599,6 +703,25 @@ impl Actor {
         self.prune_proposals_seen_horizon(state_height);
         let _ = self.maybe_release_committed_edge_conflict_owner("proposal_hint_seen");
         Ok(())
+    }
+
+    fn stale_proposal_hint_can_seed_frontier_repair(
+        &self,
+        hint: &super::message::ProposalHint,
+        local_view: u64,
+    ) -> bool {
+        if !self.runtime_da_enabled()
+            || hint.height != self.committed_height_snapshot().saturating_add(1)
+            || local_view != hint.view.saturating_add(1)
+        {
+            return false;
+        }
+        self.latest_committed_qc().is_some_and(|committed_qc| {
+            hint.highest_qc.height == committed_qc.height
+                && hint.highest_qc.view == committed_qc.view
+                && hint.highest_qc.subject_block_hash == committed_qc.subject_block_hash
+                && hint.highest_qc.epoch == committed_qc.epoch
+        })
     }
 
     pub(super) fn update_prf_context(&self, height: u64, view: u64) {
@@ -1442,7 +1565,7 @@ impl Actor {
             || self.frontier_slot_has_active_owner_state_for_view(height, view)
     }
 
-    fn locally_authoritative_frontier_info_for_block(
+    pub(super) fn locally_authoritative_frontier_info_for_block(
         &self,
         block: &SignedBlock,
     ) -> Option<super::message::BlockCreatedFrontierInfo> {
@@ -2115,9 +2238,10 @@ impl Actor {
                         && pending.height == height
                         && pending.view == view
                 });
-        let authoritative_frontier_owner_supersede = recovery_mode
+        let recovery_mode_authoritative_frontier_owner_supersede = recovery_mode
             .allows_authoritative_frontier_owner_supersede()
             && height == committed_height.saturating_add(1);
+        let certified_frontier_recovery = recovery_mode.observed_commit_qc_epoch().is_some();
         let frontier_highest_qc = frontier.as_ref().map(|frontier| frontier.highest_qc);
         let local_conflicting_same_height_vote =
             self.local_conflicting_frontier_vote(height, block_hash);
@@ -2139,8 +2263,8 @@ impl Actor {
             .is_some_and(|vote| {
                 !self.local_same_height_vote_blocks_fresh_proposal(height, view, vote, now, true)
             });
-        let passive_conflicting_same_height_vote = !authoritative_frontier_owner_supersede
-            && local_conflicting_same_height_vote.is_some()
+        let local_conflicting_same_height_vote_blocks = local_conflicting_same_height_vote
+            .is_some()
             && !new_view_qc_supersedes_local_vote
             && !local_conflicting_vote_can_rotate;
         let conflicting_same_height_owner =
@@ -2177,8 +2301,7 @@ impl Actor {
                                 self.effective_commit_topology().len(),
                             ))
                 });
-        let passive_conflicting_same_height_owner = !authoritative_frontier_owner_supersede
-            && conflicting_same_height_owner.is_some()
+        let same_height_owner_blocks = conflicting_same_height_owner.is_some()
             && !new_view_qc_supersedes_local_owner
             && !stale_owner_can_rotate;
         let same_height_vote_lock =
@@ -2204,11 +2327,24 @@ impl Actor {
                         lock.total_validators,
                     ))
         });
-        let quorum_locked_same_height_conflict = !authoritative_frontier_owner_supersede
-            && recovery_mode.observed_commit_qc_epoch().is_none()
+        let same_height_vote_lock_blocks = recovery_mode.observed_commit_qc_epoch().is_none()
             && same_height_vote_lock.is_some()
             && !new_view_qc_supersedes_vote_lock
             && !stale_vote_lock_can_rotate;
+        let same_height_conflict_blocks_authoritative_supersede =
+            local_conflicting_same_height_vote_blocks
+                || same_height_owner_blocks
+                || same_height_vote_lock_blocks;
+        let authoritative_frontier_owner_supersede =
+            recovery_mode_authoritative_frontier_owner_supersede
+                && (certified_frontier_recovery
+                    || !same_height_conflict_blocks_authoritative_supersede);
+        let passive_conflicting_same_height_vote =
+            !authoritative_frontier_owner_supersede && local_conflicting_same_height_vote_blocks;
+        let passive_conflicting_same_height_owner =
+            !authoritative_frontier_owner_supersede && same_height_owner_blocks;
+        let quorum_locked_same_height_conflict =
+            !authoritative_frontier_owner_supersede && same_height_vote_lock_blocks;
         let passive_conflicting_same_height = passive_conflicting_same_height_vote
             || passive_conflicting_same_height_owner
             || quorum_locked_same_height_conflict;
@@ -2225,6 +2361,11 @@ impl Actor {
             && (recovery_mode.observed_commit_qc_epoch().is_some()
                 || self.pending_block_has_commit_votes(block_hash, height, view)
                 || self.pending_block_has_qc(block_hash, height, view));
+        let delayed_frontier_proposal_can_reactivate = stale_view.is_some()
+            && contiguous_frontier_extends_tip
+            && !same_height_conflict_blocks_authoritative_supersede
+            && frontier_highest_qc
+                .is_some_and(|highest_qc| self.highest_qc_is_canonical_committed_tip(highest_qc));
         if authoritative_frontier_owner_supersede {
             debug!(
                 height,
@@ -2265,7 +2406,8 @@ impl Actor {
                 missing_request,
                 stale_retired_match,
                 recovery_mode.allows_stale_recovery_without_request()
-                    || stale_recovery_has_commit_evidence,
+                    || stale_recovery_has_commit_evidence
+                    || delayed_frontier_proposal_can_reactivate,
             ) {
                 debug!(
                     height,
@@ -2281,15 +2423,25 @@ impl Actor {
                 );
                 return Ok(());
             }
-            debug!(
-                height,
-                view,
-                local_view,
-                missing_request,
-                stale_retired_match,
-                stale_recovery_has_commit_evidence,
-                "accepting BlockCreated for stale view to recover missing payload"
-            );
+            if delayed_frontier_proposal_can_reactivate {
+                info!(
+                    height,
+                    view,
+                    local_view,
+                    block = %block_hash,
+                    "accepting delayed frontier BlockCreated for stale view"
+                );
+            } else {
+                debug!(
+                    height,
+                    view,
+                    local_view,
+                    missing_request,
+                    stale_retired_match,
+                    stale_recovery_has_commit_evidence,
+                    "accepting BlockCreated for stale view to recover missing payload"
+                );
+            }
         }
         if let Some(sink) = self.active_lock_rejected_block_sink(height, block_hash) {
             let (
@@ -2469,6 +2621,7 @@ impl Actor {
             }
         }
         let authoritative_recovery_supersede = authoritative_frontier_owner_supersede
+            || delayed_frontier_proposal_can_reactivate
             || (!quorum_locked_same_height_conflict
                 && stale_recovery_has_commit_evidence
                 && passive_conflicting_same_height_owner);
@@ -4022,6 +4175,9 @@ impl Actor {
             if let Some(hint) = inline_hint {
                 self.subsystems.propose.proposal_cache.insert_hint(hint);
             }
+            let proposal_evidence_for_validation = inline_proposal.is_some()
+                || cached_proposal.is_some()
+                || self.slot_tracker.proposals_seen.contains(&(height, view));
             if let Some(proposal) = inline_proposal {
                 self.subsystems
                     .propose
@@ -4032,6 +4188,23 @@ impl Actor {
             self.note_authoritative_slot_owner(height, view, block_hash);
             self.drive_vnext_proposal_accepted_for_block(block_hash, height, view, payload_hash);
             self.drive_vnext_availability_ready_for_block(block_hash, height, view);
+            let should_start_validation =
+                self.pending
+                    .pending_blocks
+                    .get(&block_hash)
+                    .is_some_and(|pending| {
+                        pending.height == height
+                            && pending.view == view
+                            && !pending.aborted
+                            && matches!(pending.validation_status, ValidationStatus::Pending)
+                            && (proposal_evidence_for_validation
+                                || pending.commit_qc_observed()
+                                || self.pending_block_has_qc(block_hash, height, view))
+                    });
+            if should_start_validation {
+                let _ =
+                    self.drive_vnext_validation_for_pending(block_hash, height, view, payload_hash);
+            }
         }
         if stale_payload_only {
             self.clear_missing_block_request(

@@ -10,10 +10,10 @@ use iroha_data_model::{
         SumeragiDataspaceCommitment, SumeragiLaneCommitment, SumeragiLaneGovernance,
         SumeragiMembershipMismatchStatus, SumeragiMembershipStatus,
         SumeragiNposRepairCoverageStatus, SumeragiNposTimeoutsStatus, SumeragiPeerKeyPolicyStatus,
-        SumeragiPendingRbcEntry, SumeragiPendingRbcStatus, SumeragiQcStatus,
+        SumeragiPendingRbcEntry, SumeragiPendingRbcStatus, SumeragiQcEntry, SumeragiQcStatus,
         SumeragiRbcMismatchEntry, SumeragiRbcMismatchStatus, SumeragiRoundGapStatus,
-        SumeragiRuntimeUpgradeHook, SumeragiStatusWire, SumeragiValidationRejectStatus,
-        SumeragiViewChangeCauseStatus, SumeragiVoteValidationDropEntry,
+        SumeragiRuntimeUpgradeHook, SumeragiStatusWire, SumeragiV1StatusWire,
+        SumeragiValidationRejectStatus, SumeragiViewChangeCauseStatus, SumeragiVoteValidationDropEntry,
         SumeragiVoteValidationDropPeerEntry, SumeragiVoteValidationDropReasonCount,
         SumeragiVoteValidationDropStatus, SumeragiWorkerLoopStatus, SumeragiWorkerQueueDepths,
         SumeragiWorkerQueueDiagnostics, SumeragiWorkerQueueTotals,
@@ -1905,6 +1905,177 @@ fn nexus_staking_snapshot_value(staking: &sumeragi::status::NexusStakingSnapshot
     json_object(vec![json_entry("lanes", lanes)])
 }
 
+fn sumeragi_v1_pending_finality(snap: &sumeragi::StatusSnapshot) -> Option<HashOf<BlockHeader>> {
+    let settled = snap
+        .qc_deferred_resolved_total
+        .saturating_add(snap.qc_deferred_expired_total);
+    (snap.qc_deferred_missing_payload_total > settled)
+        .then(|| snap.commit_qc.block_hash.or(snap.commit_quorum.block_hash))
+        .flatten()
+}
+
+fn sumeragi_v1_phase(snap: &sumeragi::StatusSnapshot) -> &'static str {
+    if sumeragi_v1_pending_finality(snap).is_some() {
+        "pending_finality"
+    } else if snap.commit_inflight.active {
+        "commit"
+    } else if snap.commit_quorum.signatures_present > 0 || snap.highest_qc_height > 0 {
+        "prepare"
+    } else {
+        "proposal"
+    }
+}
+
+fn sumeragi_v1_quorum_policy(
+    snap: &sumeragi::StatusSnapshot,
+) -> Option<iroha_data_model::block::consensus::QuorumPolicy> {
+    if snap.mode_tag == iroha_data_model::block::consensus::NPOS_TAG {
+        return None;
+    }
+    let validators = u32::try_from(snap.commit_qc.validator_set_len).ok()?;
+    (validators > 0)
+        .then_some(iroha_data_model::block::consensus::QuorumPolicy::PermissionedCount(validators))
+}
+
+fn sumeragi_v1_payload_status(snap: &sumeragi::StatusSnapshot) -> &'static str {
+    if sumeragi_v1_pending_finality(snap).is_some() {
+        "waiting_for_local_payload"
+    } else if matches!(
+        snap.da_gate.reason,
+        sumeragi::status::DaGateReasonSnapshot::MissingLocalData
+    ) {
+        "missing_local_payload"
+    } else {
+        "available"
+    }
+}
+
+fn sumeragi_v1_rbc_status(snap: &sumeragi::StatusSnapshot) -> &'static str {
+    if snap.pending_rbc.sessions > 0 {
+        "pending"
+    } else if snap.consensus_caps.as_ref().is_some_and(|caps| caps.da_enabled) {
+        "advisory"
+    } else {
+        "disabled"
+    }
+}
+
+fn sumeragi_v1_height_view(snap: &sumeragi::StatusSnapshot) -> (u64, u64) {
+    if snap.membership_height > 0 || snap.membership_view > 0 {
+        return (snap.membership_height, snap.membership_view);
+    }
+    let height = snap
+        .highest_qc_height
+        .max(snap.locked_qc_height)
+        .max(snap.commit_qc.height)
+        .max(snap.commit_quorum.height);
+    let view = snap
+        .highest_qc_view
+        .max(snap.locked_qc_view)
+        .max(snap.commit_qc.view)
+        .max(snap.commit_quorum.view);
+    (height, view)
+}
+
+fn sumeragi_v1_status_wire(snap: &sumeragi::StatusSnapshot) -> SumeragiV1StatusWire {
+    let (height, view) = sumeragi_v1_height_view(snap);
+    SumeragiV1StatusWire {
+        height,
+        view,
+        phase: sumeragi_v1_phase(snap).to_owned(),
+        leader_index: snap.leader_index,
+        highest_qc: SumeragiQcEntry {
+            height: snap.highest_qc_height,
+            view: snap.highest_qc_view,
+            subject_block_hash: snap.highest_qc_subject,
+        },
+        locked_qc: SumeragiQcEntry {
+            height: snap.locked_qc_height,
+            view: snap.locked_qc_view,
+            subject_block_hash: snap.locked_qc_subject,
+        },
+        pending_finality: sumeragi_v1_pending_finality(snap),
+        validator_set_id: snap
+            .commit_qc
+            .validator_set_hash
+            .map(|hash| iroha_data_model::block::consensus::ValidatorSetId { hash }),
+        quorum_policy: sumeragi_v1_quorum_policy(snap),
+        payload_status: sumeragi_v1_payload_status(snap).to_owned(),
+        rbc_status: sumeragi_v1_rbc_status(snap).to_owned(),
+    }
+}
+
+fn sumeragi_v1_status_json(snap: &sumeragi::StatusSnapshot) -> norito::json::Value {
+    let wire = sumeragi_v1_status_wire(snap);
+    json_object(vec![
+        json_entry("height", wire.height),
+        json_entry("view", wire.view),
+        json_entry("phase", wire.phase),
+        json_entry("leader_index", wire.leader_index),
+        json_entry(
+            "highest_qc",
+            json_object(vec![
+                json_entry("height", wire.highest_qc.height),
+                json_entry("view", wire.highest_qc.view),
+                json_entry(
+                    "subject_block_hash",
+                    wire.highest_qc
+                        .subject_block_hash
+                        .map(|hash| Value::from(format!("{hash}")))
+                        .unwrap_or(Value::Null),
+                ),
+            ]),
+        ),
+        json_entry(
+            "locked_qc",
+            json_object(vec![
+                json_entry("height", wire.locked_qc.height),
+                json_entry("view", wire.locked_qc.view),
+                json_entry(
+                    "subject_block_hash",
+                    wire.locked_qc
+                        .subject_block_hash
+                        .map(|hash| Value::from(format!("{hash}")))
+                        .unwrap_or(Value::Null),
+                ),
+            ]),
+        ),
+        json_entry(
+            "pending_finality",
+            wire.pending_finality
+                .map(|hash| Value::from(format!("{hash}")))
+                .unwrap_or(Value::Null),
+        ),
+        json_entry(
+            "validator_set_id",
+            wire.validator_set_id
+                .map(|id| Value::from(format!("{}", id.hash)))
+                .unwrap_or(Value::Null),
+        ),
+        json_entry(
+            "quorum_policy",
+            wire.quorum_policy
+                .map(|policy| match policy {
+                    iroha_data_model::block::consensus::QuorumPolicy::PermissionedCount(
+                        validators,
+                    ) => json_object(vec![
+                        json_entry("kind", "permissioned_count"),
+                        json_entry("validators", validators),
+                    ]),
+                    iroha_data_model::block::consensus::QuorumPolicy::NposStake(total) => {
+                        json_object(vec![
+                            json_entry("kind", "npos_stake"),
+                            json_entry("total_stake", total.to_string()),
+                        ])
+                    }
+                })
+                .unwrap_or(Value::Null),
+        ),
+        json_entry("payload_status", wire.payload_status),
+        json_entry("rbc_status", wire.rbc_status),
+    ])
+}
+
 fn status_snapshot_json(snap: &sumeragi::StatusSnapshot) -> norito::json::Value {
     let highest_qc = json_object(vec![
         json_entry("height", snap.highest_qc_height),
@@ -3095,6 +3266,7 @@ fn status_snapshot_json(snap: &sumeragi::StatusSnapshot) -> norito::json::Value 
         })
         .unwrap_or(Value::Null);
     crate::json_object(vec![
+        json_entry("canonical", sumeragi_v1_status_json(snap)),
         json_entry("mode_tag", &snap.mode_tag),
         json_entry(
             "staged_mode_tag",
@@ -4332,6 +4504,62 @@ mod status_tests {
     }
 
     #[test]
+    fn status_snapshot_json_includes_canonical_v1_state() {
+        let block_hash = HashOf::<BlockHeader>::from_untyped_unchecked(Hash::prehashed([0xAB; 32]));
+        let snap = sumeragi::StatusSnapshot {
+            membership_height: 12,
+            membership_view: 3,
+            leader_index: 2,
+            highest_qc_height: 11,
+            highest_qc_view: 4,
+            highest_qc_subject: Some(block_hash),
+            locked_qc_height: 10,
+            locked_qc_view: 1,
+            locked_qc_subject: Some(block_hash),
+            qc_deferred_missing_payload_total: 2,
+            qc_deferred_resolved_total: 1,
+            commit_qc: status::QcSnapshot {
+                height: 12,
+                view: 3,
+                block_hash: Some(block_hash),
+                validator_set_len: 4,
+                ..Default::default()
+            },
+            ..Default::default()
+        };
+
+        let payload = status_snapshot_json(&snap);
+        let canonical = payload
+            .get("canonical")
+            .and_then(Value::as_object)
+            .expect("canonical v1 status");
+        assert_eq!(canonical.get("height").and_then(Value::as_u64), Some(12));
+        assert_eq!(canonical.get("view").and_then(Value::as_u64), Some(3));
+        assert_eq!(
+            canonical.get("phase").and_then(Value::as_str),
+            Some("pending_finality")
+        );
+        assert_eq!(
+            canonical.get("payload_status").and_then(Value::as_str),
+            Some("waiting_for_local_payload")
+        );
+        let expected_block_hash = format!("{block_hash}");
+        assert_eq!(
+            canonical.get("pending_finality").and_then(Value::as_str),
+            Some(expected_block_hash.as_str())
+        );
+        let quorum = canonical
+            .get("quorum_policy")
+            .and_then(Value::as_object)
+            .expect("quorum policy");
+        assert_eq!(
+            quorum.get("kind").and_then(Value::as_str),
+            Some("permissioned_count")
+        );
+        assert_eq!(quorum.get("validators").and_then(Value::as_u64), Some(4));
+    }
+
+    #[test]
     fn status_snapshot_json_includes_commit_qc_and_quorum() {
         let block_hash = HashOf::<iroha_data_model::block::BlockHeader>::from_untyped_unchecked(
             Hash::prehashed([0x11; 32]),
@@ -4545,6 +4773,7 @@ pub async fn handle_v1_sumeragi_status(
 
     if matches!(format, crate::utils::ResponseFormat::Norito) {
         let wire = SumeragiStatusWire {
+            canonical: sumeragi_v1_status_wire(&snap),
             mode_tag: snap.mode_tag.clone(),
             staged_mode_tag: snap.staged_mode_tag.clone(),
             staged_mode_activation_height: snap.staged_mode_activation_height,

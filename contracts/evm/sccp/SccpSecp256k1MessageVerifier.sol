@@ -5,16 +5,16 @@ import "./ISccpMessageVerifier.sol";
 
 /**
  * @title SccpSecp256k1MessageVerifier
- * @dev Production SCCP verifier for EVM lanes.
+ * @dev Reference-only SCCP verifier for EVM lanes.
  *
- * The native SCCP proof is verified off-chain and reduced to a secp256k1
- * attestation over `(message_id, source_domain, commitment_root,
- * public_inputs_hash, statement_hash, native_proof_hash,
- * destination_binding_hash)`. On-chain we only verify that enough authorized
- * attestors signed that digest using EVM-native `keccak256` and `ecrecover`.
+ * This contract verifies only a secp256k1 attestation over
+ * `(message_id, source_domain, commitment_root, public_inputs_hash,
+ * statement_hash, native_proof_hash, destination_binding_hash)`. It does not
+ * verify the native SCCP proof and must not be used as a production verifier.
  */
 contract SccpSecp256k1MessageVerifier is ISccpMessageVerifier {
     uint256 private constant ATTESTATION_VERSION = 1;
+    uint256 private constant ATTESTATION_ABI_HEAD_LENGTH = 7 * 32;
     bytes32 private constant ATTESTATION_DOMAIN_SEPARATOR =
         keccak256("iroha:sccp:evm-attestation:v1");
     uint256 private constant SECP256K1_HALF_ORDER =
@@ -23,6 +23,16 @@ contract SccpSecp256k1MessageVerifier is ISccpMessageVerifier {
     mapping(address => bool) public authorizedSigners;
     uint256 public authorizedSignerCount;
     uint256 public minimumSignatures;
+
+    struct DecodedAttestation {
+        uint256 version;
+        bytes32 messageId;
+        uint256 sourceDomain;
+        bytes32 commitmentRoot;
+        bytes32 nativeProofHash;
+        bytes32 destinationBindingHash;
+        bytes signatures;
+    }
 
     event SignerConfigured(address indexed signer, bool authorized);
     event MinimumSignaturesConfigured(uint256 minimumSignatures);
@@ -47,52 +57,46 @@ contract SccpSecp256k1MessageVerifier is ISccpMessageVerifier {
             bytes32 commitmentRoot
         )
     {
-        uint256 rawVersion;
-        uint256 rawSourceDomain;
-        bytes32 nativeProofHash;
-        bytes32 attestedDestinationBindingHash;
-        bytes memory signatures;
-
+        DecodedAttestation memory attestation;
         (
-            rawVersion,
-            messageId,
-            rawSourceDomain,
-            commitmentRoot,
-            nativeProofHash,
-            attestedDestinationBindingHash,
-            signatures
+            attestation.version,
+            attestation.messageId,
+            attestation.sourceDomain,
+            attestation.commitmentRoot,
+            attestation.nativeProofHash,
+            attestation.destinationBindingHash,
+            attestation.signatures
         ) = abi.decode(
             proofBytes,
             (uint256, bytes32, uint256, bytes32, bytes32, bytes32, bytes)
         );
 
-        require(rawVersion == ATTESTATION_VERSION, "Unsupported attestation version");
-        require(messageId != bytes32(0), "Message id is required");
-        require(rawSourceDomain <= type(uint32).max, "Source domain overflow");
-        require(signatures.length % 65 == 0, "Recoverable signatures must be 65 bytes");
-        require(
-            attestedDestinationBindingHash == destinationBindingHash,
-            "Destination binding mismatch"
+        _validateAttestation(
+            proofBytes,
+            publicInputs,
+            statementHash,
+            destinationBindingHash,
+            attestation
         );
 
         bytes32 attestationDigest = _attestationDigest(
-            messageId,
-            rawSourceDomain,
-            commitmentRoot,
+            attestation.messageId,
+            attestation.sourceDomain,
+            attestation.commitmentRoot,
             publicInputs,
             statementHash,
-            nativeProofHash,
-            attestedDestinationBindingHash
+            attestation.nativeProofHash,
+            attestation.destinationBindingHash
         );
 
-        uint256 signatureCount = signatures.length / 65;
+        uint256 signatureCount = attestation.signatures.length / 65;
         require(signatureCount >= minimumSignatures, "Not enough signatures");
 
         address[] memory seen = new address[](signatureCount);
         uint256 validSignatures = 0;
 
         for (uint256 i = 0; i < signatureCount; i++) {
-            address signer = _recoverSigner(attestationDigest, signatures, i);
+            address signer = _recoverSigner(attestationDigest, attestation.signatures, i);
             require(authorizedSigners[signer], "Signer is not authorized");
 
             for (uint256 j = 0; j < validSignatures; j++) {
@@ -104,7 +108,60 @@ contract SccpSecp256k1MessageVerifier is ISccpMessageVerifier {
         }
 
         require(validSignatures >= minimumSignatures, "Signer quorum not met");
-        sourceDomain = uint32(rawSourceDomain);
+        messageId = attestation.messageId;
+        sourceDomain = uint32(attestation.sourceDomain);
+        commitmentRoot = attestation.commitmentRoot;
+    }
+
+    function _validateAttestation(
+        bytes calldata proofBytes,
+        bytes32[6] calldata publicInputs,
+        bytes32 statementHash,
+        bytes32 destinationBindingHash,
+        DecodedAttestation memory attestation
+    ) private pure {
+        require(attestation.version == ATTESTATION_VERSION, "Unsupported attestation version");
+        require(attestation.messageId != bytes32(0), "Message id is required");
+        require(attestation.sourceDomain <= type(uint32).max, "Source domain overflow");
+        require(
+            _encodedSignaturesOffset(proofBytes) == ATTESTATION_ABI_HEAD_LENGTH,
+            "Invalid signatures offset"
+        );
+        require(
+            attestation.signatures.length % 65 == 0,
+            "Recoverable signatures must be 65 bytes"
+        );
+        require(
+            proofBytes.length ==
+                ATTESTATION_ABI_HEAD_LENGTH + 32 + _paddedLength(attestation.signatures.length),
+            "Unexpected attestation length"
+        );
+        require(
+            publicInputs[0] == attestation.messageId,
+            "Public input message id mismatch"
+        );
+        require(publicInputs[1] != bytes32(0), "Payload hash is required");
+        uint256 targetDomain = uint256(publicInputs[2]);
+        require(targetDomain != 0, "Target domain is required");
+        require(targetDomain <= type(uint32).max, "Target domain overflow");
+        require(
+            targetDomain != attestation.sourceDomain,
+            "Source and target domains must differ"
+        );
+        require(
+            publicInputs[3] == attestation.commitmentRoot,
+            "Public input commitment root mismatch"
+        );
+        require(attestation.commitmentRoot != bytes32(0), "Commitment root is required");
+        require(publicInputs[4] != bytes32(0), "Finality height is required");
+        require(publicInputs[5] != bytes32(0), "Finality block hash is required");
+        require(statementHash != bytes32(0), "Statement hash is required");
+        require(attestation.nativeProofHash != bytes32(0), "Native proof hash is required");
+        require(destinationBindingHash != bytes32(0), "Destination binding hash is required");
+        require(
+            attestation.destinationBindingHash == destinationBindingHash,
+            "Destination binding mismatch"
+        );
     }
 
     function _attestationDigest(
@@ -128,6 +185,20 @@ contract SccpSecp256k1MessageVerifier is ISccpMessageVerifier {
                 destinationBindingHash
             )
         );
+    }
+
+    function _encodedSignaturesOffset(bytes memory proofBytes)
+        private
+        pure
+        returns (uint256 offset)
+    {
+        assembly {
+            offset := mload(add(proofBytes, 0xe0))
+        }
+    }
+
+    function _paddedLength(uint256 length) private pure returns (uint256) {
+        return ((length + 31) / 32) * 32;
     }
 
     function _publicInputsHash(bytes32[6] calldata publicInputs)

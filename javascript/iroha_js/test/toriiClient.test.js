@@ -27,6 +27,8 @@ import {
   buildMultisigProposeRequest,
   noritoEncodeMultisigContractCallProposeRequest,
   normalizeAccountId,
+  evmSccpDestinationBindingHash,
+  tronSccpDestinationBindingHash,
   ValidationError,
   ValidationErrorCode,
 } from "../src/index.js";
@@ -36,8 +38,7 @@ import {
   AccountAddressErrorCode,
 } from "../src/address.js";
 import { sorafsGatewayFetch } from "../src/sorafs.js";
-import { getNativeBinding } from "../src/native.js";
-import { makeNativeTest, nativeSkipMessage } from "./helpers/native.js";
+import { makeNativeTest, nativeBinding, nativeSkipMessage } from "./helpers/native.js";
 
 const BASE_URL = "https://localhost:8080";
 const SAMPLE_ACCOUNT_SIGNATORY =
@@ -4510,7 +4511,8 @@ test("submitDaBlob rejects invalid pdp_commitment payloads", async () => {
         laneId: 11,
         epoch: 22,
         sequence: 33,
-        privateKeyHex: "11".repeat(32),
+        submitterPublicKey: SAMPLE_ACCOUNT_SIGNATORY,
+        signatureHex: "aa".repeat(64),
         clientBlobId: Buffer.alloc(32, 0x11),
       }),
     /pdp_commitment/,
@@ -10017,6 +10019,32 @@ test("getSccpCapabilities normalizes discovery response", async () => {
             disabled_reason:
               "disabled until the immutable TON recursive SCCP verifier and cryptographic trust anchors are live for this lane",
           },
+          {
+            domain: 5,
+            chain: "tron",
+            verifier_backend: { version: 1, key: "tron-groth16-bn254-v1" },
+            message_backend: "sccp/stark-fri-v1/tron",
+            registry_backend: "bridge/sccp/stark-fri-v1/tron",
+            counterparty_account_codec: 5,
+            counterparty_account_codec_key: "tron_base58check",
+            destination_rollout: {
+              version: 1,
+              verifier_plan: "TronContractGroth16Bn254",
+              immutable_verifier_ready: false,
+              anchors_ready: false,
+              verifier_identity: null,
+              verifier_code_hash: null,
+              anchor_id: null,
+              blockers: [
+                "immutable TRON verifier contract is not deployed for this SCCP lane",
+                "cryptographic trust anchor is not active for this SCCP lane",
+                "Groth16/bn254 contract proof submission is not wired into the SCCP relayer path",
+              ],
+            },
+            production_ready: false,
+            disabled_reason:
+              "disabled until the immutable TRON Groth16/bn254 SCCP verifier contract and cryptographic trust anchors are live for this lane",
+          },
         ],
       },
       headers: { "content-type": "application/json" },
@@ -10078,6 +10106,32 @@ test("getSccpCapabilities normalizes discovery response", async () => {
         productionReady: false,
         disabledReason:
           "disabled until the immutable TON recursive SCCP verifier and cryptographic trust anchors are live for this lane",
+      },
+      {
+        domain: 5,
+        chain: "tron",
+        verifierBackendKey: "tron-groth16-bn254-v1",
+        messageBackend: "sccp/stark-fri-v1/tron",
+        registryBackend: "bridge/sccp/stark-fri-v1/tron",
+        counterpartyAccountCodec: 5,
+        counterpartyAccountCodecKey: "tron_base58check",
+        destinationRollout: {
+          version: 1,
+          verifierPlan: "TronContractGroth16Bn254",
+          immutableVerifierReady: false,
+          anchorsReady: false,
+          verifierIdentity: null,
+          verifierCodeHash: null,
+          anchorId: null,
+          blockers: [
+            "immutable TRON verifier contract is not deployed for this SCCP lane",
+            "cryptographic trust anchor is not active for this SCCP lane",
+            "Groth16/bn254 contract proof submission is not wired into the SCCP relayer path",
+          ],
+        },
+        productionReady: false,
+        disabledReason:
+          "disabled until the immutable TRON Groth16/bn254 SCCP verifier contract and cryptographic trust anchors are live for this lane",
       },
     ],
   });
@@ -10265,6 +10319,611 @@ test("getSccpProofManifests normalizes typed manifest response", async () => {
   });
 });
 
+const SCCP_TEST_MESSAGE_ID = "11".repeat(32);
+const SCCP_TEST_COMMITMENT_ROOT = "33".repeat(32);
+const SCCP_TEST_MESSAGE_BUNDLE = Object.freeze({
+  version: 1,
+  commitment_root: SCCP_TEST_COMMITMENT_ROOT,
+  commitment: Object.freeze({
+    version: 1,
+    kind: "Transfer",
+    target_domain: 5,
+    message_id: SCCP_TEST_MESSAGE_ID,
+    payload_hash: "22".repeat(32),
+  }),
+});
+const SCCP_TEST_TRON_NETWORK_ID = "71".repeat(32);
+const SCCP_TEST_TRON_VERIFIER_ADDRESS = "TJRabPrwbZy45sbavfcjinPJC18kjpRTv8";
+const SCCP_TEST_TRON_VERIFIER_CODE_HASH = "72".repeat(32);
+const SCCP_TEST_TRON_VERIFIER_KEY_HASH = "73".repeat(32);
+const SCCP_TEST_EVM_NETWORK_ID = "aa".repeat(32);
+const SCCP_TEST_EVM_VERIFIER_ADDRESS = "bb".repeat(20);
+const SCCP_TEST_EVM_BRIDGE_ADDRESS = "cc".repeat(20);
+const SCCP_TEST_EVM_VERIFIER_CODE_HASH = "dd".repeat(32);
+const SCCP_TEST_EVM_VERIFIER_KEY_HASH = "ee".repeat(32);
+
+function sampleSccpEvmDestinationBindingHash({
+  networkId = SCCP_TEST_EVM_NETWORK_ID,
+  verifierAddress = SCCP_TEST_EVM_VERIFIER_ADDRESS,
+  bridgeAddress = SCCP_TEST_EVM_BRIDGE_ADDRESS,
+  verifierCodeHash = SCCP_TEST_EVM_VERIFIER_CODE_HASH,
+  verifierKeyHash = SCCP_TEST_EVM_VERIFIER_KEY_HASH,
+} = {}) {
+  return evmSccpDestinationBindingHash({
+    networkIdHex: `0x${networkId}`,
+    verifierAddressHex: `0x${verifierAddress}`,
+    bridgeAddressHex: `0x${bridgeAddress}`,
+    verifierCodeHashHex: `0x${verifierCodeHash}`,
+    verifierKeyHashHex: `0x${verifierKeyHash}`,
+  }).replace(/^0x/u, "");
+}
+
+function sampleSccpTronDestinationBindingHash() {
+  return tronSccpDestinationBindingHash({
+    networkIdHex: `0x${SCCP_TEST_TRON_NETWORK_ID}`,
+    verifierAddress: SCCP_TEST_TRON_VERIFIER_ADDRESS,
+    verifierCodeHashHex: `0x${SCCP_TEST_TRON_VERIFIER_CODE_HASH}`,
+    verifierKeyHashHex: `0x${SCCP_TEST_TRON_VERIFIER_KEY_HASH}`,
+  }).replace(/^0x/u, "");
+}
+
+function abiWordHex(value) {
+  const out = Buffer.alloc(32);
+  out.writeUInt32BE(value, 28);
+  return out;
+}
+
+function abiWordBigInt(value) {
+  return Buffer.from(value.toString(16).padStart(64, "0"), "hex");
+}
+
+const SCCP_TEST_BN254_G2_GENERATOR_WORDS = Object.freeze([
+  abiWordBigInt(0x1800deef121f1e76426a00665e5c4479674322d4f75edadd46debd5cd992f6edn),
+  abiWordBigInt(0x198e9393920d483a7260bfb731fb5d25f1aa493335a9e71297e485b7aef312c2n),
+  abiWordBigInt(0x12c85ea5db8c6deb4aab71808dcb408fe3d1e7690c43d37b4ce6cc0166fa7daan),
+  abiWordBigInt(0x090689d0585ff075ec9e99ad690c3395bc4b313370b38ef355acdadcd122975bn),
+]);
+
+function sampleSccpGroth16ProofBytes({
+  messageId = SCCP_TEST_MESSAGE_ID,
+  sourceDomain = 0,
+  commitmentRoot = SCCP_TEST_COMMITMENT_ROOT,
+} = {}) {
+  const out = new Uint8Array(384);
+  [
+    abiWordHex(1),
+    Buffer.from(messageId, "hex"),
+    abiWordHex(sourceDomain),
+    Buffer.from(commitmentRoot, "hex"),
+    abiWordHex(1),
+    abiWordHex(2),
+    ...SCCP_TEST_BN254_G2_GENERATOR_WORDS,
+    abiWordHex(1),
+    abiWordHex(2),
+  ].forEach((word, index) => out.set(word, index * 32));
+  return out;
+}
+
+const SCCP_TEST_GROTH16_PROOF_BYTES = sampleSccpGroth16ProofBytes();
+const SCCP_TEST_GROTH16_PROOF_HEX = Buffer.from(SCCP_TEST_GROTH16_PROOF_BYTES).toString("hex");
+
+test("submitBridgeProof posts normalized TRON deployment proof material", async () => {
+  let captured;
+  const fetchImpl = async (url, init) => {
+    captured = { url, init };
+    return createResponse({
+      status: 200,
+      jsonData: {
+        ok: true,
+        submitted: false,
+        proof_kind: "message",
+        counterparty_chain: "tron",
+      },
+      headers: { "content-type": "application/json" },
+    });
+  };
+  const client = new ToriiClient(BASE_URL, { fetchImpl });
+  const bindingHash = sampleSccpTronDestinationBindingHash();
+  const response = await client.submitBridgeProof({
+    authority: "alice@sora",
+    messageBundle: SCCP_TEST_MESSAGE_BUNDLE,
+    networkIdHex: `0x${SCCP_TEST_TRON_NETWORK_ID}`,
+    verifierCodeHashHex: `0x${SCCP_TEST_TRON_VERIFIER_CODE_HASH}`,
+    verifierKeyHashHex: `0x${SCCP_TEST_TRON_VERIFIER_KEY_HASH}`,
+    expectedDestinationBindingHashHex: `0x${bindingHash}`,
+    tronVerifierAddress: SCCP_TEST_TRON_VERIFIER_ADDRESS,
+    proofBytesHex: SCCP_TEST_GROTH16_PROOF_BYTES,
+    creationTimeMs: "1779660000000",
+  });
+
+  assert.deepEqual(response, {
+    ok: true,
+    submitted: false,
+    proof_kind: "message",
+    counterparty_chain: "tron",
+  });
+  assert.equal(captured.url, `${BASE_URL}/v1/bridge/proofs/submit`);
+  assert.equal(captured.init.method, "POST");
+  assert.equal(captured.init.headers["Content-Type"], "application/json");
+  assert.equal(captured.init.headers.Accept, "application/json");
+  assert.deepEqual(JSON.parse(captured.init.body), {
+    authority: "alice@sora",
+    message_bundle: SCCP_TEST_MESSAGE_BUNDLE,
+    network_id_hex: SCCP_TEST_TRON_NETWORK_ID,
+    verifier_code_hash_hex: SCCP_TEST_TRON_VERIFIER_CODE_HASH,
+    verifier_key_hash_hex: SCCP_TEST_TRON_VERIFIER_KEY_HASH,
+    expected_destination_binding_hash_hex: bindingHash,
+    tron_verifier_address: SCCP_TEST_TRON_VERIFIER_ADDRESS,
+    proof_bytes_hex: SCCP_TEST_GROTH16_PROOF_HEX,
+    creation_time_ms: "1779660000000",
+  });
+});
+
+test("submitBridgeProof rejects ambiguous or burn-bound destination payloads before fetch", async () => {
+  const client = new ToriiClient(BASE_URL, { fetchImpl: async () => assert.fail("unexpected fetch") });
+  const bindingHash = sampleSccpTronDestinationBindingHash();
+
+  await assert.rejects(
+    () =>
+      client.submitBridgeProof({
+        authority: "alice@sora",
+      }),
+    /exactly one of burnBundle or messageBundle/,
+  );
+
+  await assert.rejects(
+    () =>
+      client.submitBridgeProof({
+        authority: "alice@sora",
+        burnBundle: { version: 1 },
+        messageBundle: { version: 1 },
+      }),
+    /exactly one of burnBundle or messageBundle/,
+  );
+
+  await assert.rejects(
+    () =>
+      client.submitBridgeProof({
+        authority: "alice@sora",
+        burnBundle: { version: 1 },
+        networkIdHex: `0x${SCCP_TEST_TRON_NETWORK_ID}`,
+        verifierCodeHashHex: `0x${SCCP_TEST_TRON_VERIFIER_CODE_HASH}`,
+        verifierKeyHashHex: `0x${SCCP_TEST_TRON_VERIFIER_KEY_HASH}`,
+        expectedDestinationBindingHashHex: `0x${bindingHash}`,
+        tronVerifierAddress: SCCP_TEST_TRON_VERIFIER_ADDRESS,
+        proofBytesHex: SCCP_TEST_GROTH16_PROOF_BYTES,
+      }),
+    /messageBundle submissions/,
+  );
+});
+
+test("submitBridgeMessage posts normalized TRON deployment proof material", async () => {
+  let captured;
+  const fetchImpl = async (url, init) => {
+    captured = { url, init };
+    return createResponse({
+      status: 200,
+      jsonData: {
+        ok: true,
+        submitted: false,
+        message_kind: "transfer",
+        counterparty_chain: "tron",
+      },
+      headers: { "content-type": "application/json" },
+    });
+  };
+  const client = new ToriiClient(BASE_URL, { fetchImpl });
+  const bindingHash = sampleSccpTronDestinationBindingHash();
+  const response = await client.submitBridgeMessage({
+    authority: "alice@sora",
+    messageBundle: SCCP_TEST_MESSAGE_BUNDLE,
+    networkIdHex: `0x${SCCP_TEST_TRON_NETWORK_ID}`,
+    verifierCodeHashHex: `0x${SCCP_TEST_TRON_VERIFIER_CODE_HASH}`,
+    verifierKeyHashHex: `0x${SCCP_TEST_TRON_VERIFIER_KEY_HASH}`,
+    expectedDestinationBindingHashHex: `0x${bindingHash}`,
+    tronVerifierAddress: SCCP_TEST_TRON_VERIFIER_ADDRESS,
+    proofBytesHex: SCCP_TEST_GROTH16_PROOF_BYTES,
+    receiptLane: 7,
+    settlement: { route: "xor" },
+    creationTimeMs: "1779660000000",
+  });
+
+  assert.deepEqual(response, {
+    ok: true,
+    submitted: false,
+    message_kind: "transfer",
+    counterparty_chain: "tron",
+  });
+  assert.equal(captured.url, `${BASE_URL}/v1/bridge/messages`);
+  assert.equal(captured.init.method, "POST");
+  assert.equal(captured.init.headers["Content-Type"], "application/json");
+  assert.equal(captured.init.headers.Accept, "application/json");
+  assert.deepEqual(JSON.parse(captured.init.body), {
+    authority: "alice@sora",
+    message_bundle: SCCP_TEST_MESSAGE_BUNDLE,
+    network_id_hex: SCCP_TEST_TRON_NETWORK_ID,
+    verifier_code_hash_hex: SCCP_TEST_TRON_VERIFIER_CODE_HASH,
+    verifier_key_hash_hex: SCCP_TEST_TRON_VERIFIER_KEY_HASH,
+    expected_destination_binding_hash_hex: bindingHash,
+    tron_verifier_address: SCCP_TEST_TRON_VERIFIER_ADDRESS,
+    proof_bytes_hex: SCCP_TEST_GROTH16_PROOF_HEX,
+    receipt_lane: 7,
+    settlement: { route: "xor" },
+    creation_time_ms: "1779660000000",
+  });
+});
+
+test("TRON deployment proof material rejects destination binding hash mismatch", async () => {
+  const client = new ToriiClient(BASE_URL, { fetchImpl: async () => assert.fail("unexpected fetch") });
+
+  await assert.rejects(
+    () =>
+      client.submitBridgeMessage({
+        authority: "alice@sora",
+        messageBundle: SCCP_TEST_MESSAGE_BUNDLE,
+        networkIdHex: `0x${SCCP_TEST_TRON_NETWORK_ID}`,
+        verifierCodeHashHex: `0x${SCCP_TEST_TRON_VERIFIER_CODE_HASH}`,
+        verifierKeyHashHex: `0x${SCCP_TEST_TRON_VERIFIER_KEY_HASH}`,
+        expectedDestinationBindingHashHex: `0x${"74".repeat(32)}`,
+        tronVerifierAddress: SCCP_TEST_TRON_VERIFIER_ADDRESS,
+        proofBytesHex: SCCP_TEST_GROTH16_PROOF_BYTES,
+      }),
+    /canonical TRON destination binding/,
+  );
+});
+
+test("EVM deployment proof material rejects destination binding hash mismatch", async () => {
+  const client = new ToriiClient(BASE_URL, { fetchImpl: async () => assert.fail("unexpected fetch") });
+
+  await assert.rejects(
+    () =>
+      client.submitBridgeProof({
+        authority: "alice@sora",
+        messageBundle: SCCP_TEST_MESSAGE_BUNDLE,
+        networkIdHex: `0x${SCCP_TEST_EVM_NETWORK_ID}`,
+        verifierAddressHex: `0x${SCCP_TEST_EVM_VERIFIER_ADDRESS}`,
+        bridgeAddressHex: `0x${SCCP_TEST_EVM_BRIDGE_ADDRESS}`,
+        verifierCodeHashHex: `0x${SCCP_TEST_EVM_VERIFIER_CODE_HASH}`,
+        verifierKeyHashHex: `0x${SCCP_TEST_EVM_VERIFIER_KEY_HASH}`,
+        expectedDestinationBindingHashHex: `0x${"74".repeat(32)}`,
+        proofBytesHex: SCCP_TEST_GROTH16_PROOF_BYTES,
+      }),
+    /canonical EVM destination binding/,
+  );
+});
+
+test("SCCP raw bridge submit rejects proof bytes without message commitment context", async () => {
+  const client = new ToriiClient(BASE_URL, { fetchImpl: async () => assert.fail("unexpected fetch") });
+  const bindingHash = sampleSccpTronDestinationBindingHash();
+
+  await assert.rejects(
+    () =>
+      client.submitBridgeProof({
+        authority: "alice@sora",
+        messageBundle: { version: 1 },
+        networkIdHex: `0x${SCCP_TEST_TRON_NETWORK_ID}`,
+        verifierCodeHashHex: `0x${SCCP_TEST_TRON_VERIFIER_CODE_HASH}`,
+        verifierKeyHashHex: `0x${SCCP_TEST_TRON_VERIFIER_KEY_HASH}`,
+        expectedDestinationBindingHashHex: `0x${bindingHash}`,
+        tronVerifierAddress: SCCP_TEST_TRON_VERIFIER_ADDRESS,
+        proofBytesHex: SCCP_TEST_GROTH16_PROOF_BYTES,
+      }),
+    /messageBundle\.commitment\.messageId is required/,
+  );
+});
+
+test("TRON deployment proof material rejects placeholder and short proof bytes", async () => {
+  const client = new ToriiClient(BASE_URL, { fetchImpl: async () => assert.fail("unexpected fetch") });
+
+  await assert.rejects(
+    () =>
+      client.getSccpMessageProofJob(`0x${"11".repeat(32)}`, {
+        proofBytesHex: new Uint8Array(),
+      }),
+    /proofBytesHex must be a non-empty byte-aligned hex string/,
+  );
+
+  await assert.rejects(
+    () =>
+      client.submitBridgeProof({
+        authority: "alice@sora",
+        messageBundle: SCCP_TEST_MESSAGE_BUNDLE,
+        proofBytesHex: new Uint8Array([0, 0]),
+      }),
+    /proofBytesHex must not be all zero/,
+  );
+
+  await assert.rejects(
+    () =>
+      client.submitBridgeMessage({
+        authority: "alice@sora",
+        messageBundle: SCCP_TEST_MESSAGE_BUNDLE,
+        proof_bytes_hex: "0x0000",
+      }),
+    /proofBytesHex must not be all zero/,
+  );
+
+  await assert.rejects(
+    () =>
+      client.getSccpMessageProofJob(`0x${"11".repeat(32)}`, {
+        proofBytesHex: new Uint8Array([1, 2, 3]),
+      }),
+    /proofBytesHex must be a 384-byte hex string/,
+  );
+
+  const offCurveC = new Uint8Array(SCCP_TEST_GROTH16_PROOF_BYTES);
+  offCurveC[11 * 32 + 31] = 3;
+  await assert.rejects(
+    () =>
+      client.getSccpMessageProofJob(`0x${"11".repeat(32)}`, {
+        expectedDestinationBindingHashHex: `0x${"74".repeat(32)}`,
+        proofBytesHex: offCurveC,
+      }),
+    /proofBytesHex\.c must be a BN254 G1 point/,
+  );
+
+  const offCurveB = new Uint8Array(SCCP_TEST_GROTH16_PROOF_BYTES);
+  offCurveB[6 * 32 + 31] ^= 0x01;
+  await assert.rejects(
+    () =>
+      client.submitBridgeProof({
+        authority: "alice@sora",
+        messageBundle: SCCP_TEST_MESSAGE_BUNDLE,
+        verifierAddressHex: `0x${"22".repeat(20)}`,
+        proofBytesHex: offCurveB,
+      }),
+    /proofBytesHex\.b must be a BN254 G2 point/,
+  );
+
+  await assert.rejects(
+    () =>
+      client.submitBridgeProof({
+        authority: "alice@sora",
+        messageBundle: SCCP_TEST_MESSAGE_BUNDLE,
+        proofBytesHex: sampleSccpGroth16ProofBytes({ messageId: "44".repeat(32) }),
+      }),
+    /proofBytesHex\.messageId must match messageBundle\.commitment\.messageId/,
+  );
+
+  await assert.rejects(
+    () =>
+      client.submitBridgeMessage({
+        authority: "alice@sora",
+        messageBundle: SCCP_TEST_MESSAGE_BUNDLE,
+        proofBytesHex: sampleSccpGroth16ProofBytes({ sourceDomain: 5 }),
+      }),
+    /proofBytesHex\.sourceDomain must be SORA/,
+  );
+
+  await assert.rejects(
+    () =>
+      client.submitBridgeMessage({
+        authority: "alice@sora",
+        messageBundle: SCCP_TEST_MESSAGE_BUNDLE,
+        proofBytesHex: sampleSccpGroth16ProofBytes({ commitmentRoot: "55".repeat(32) }),
+      }),
+    /proofBytesHex\.commitmentRoot must match messageBundle\.commitmentRoot/,
+  );
+
+  await assert.rejects(
+    () =>
+      client.getSccpMessageProofJob(`0x${"11".repeat(32)}`, {
+        networkIdHex: `0x${"71".repeat(32)}`,
+        verifierCodeHashHex: `0x${"72".repeat(32)}`,
+        verifierKeyHashHex: `0x${"73".repeat(32)}`,
+        expectedDestinationBindingHashHex: `0x${"74".repeat(32)}`,
+        tronVerifierAddress: "TJRabPrwbZy45sbavfcjinPJC18kjpRTv8",
+        proofBytesHex: sampleSccpGroth16ProofBytes({ sourceDomain: 5 }),
+      }),
+    /proofBytesHex\.sourceDomain must be SORA/,
+  );
+
+  await assert.rejects(
+    () =>
+      client.getSccpMessageProofJob(`0x${"11".repeat(32)}`, {
+        networkIdHex: `0x${"71".repeat(32)}`,
+        verifierCodeHashHex: `0x${"72".repeat(32)}`,
+        verifierKeyHashHex: `0x${"73".repeat(32)}`,
+        expectedDestinationBindingHashHex: `0x${"74".repeat(32)}`,
+        tronVerifierAddress: "TJRabPrwbZy45sbavfcjinPJC18kjpRTv8",
+        proofBytesHex: sampleSccpGroth16ProofBytes({ messageId: "22".repeat(32) }),
+      }),
+    /proofBytesHex\.messageId must match messageIdHex/,
+  );
+
+  await assert.rejects(
+    () =>
+      client.getSccpMessageProofArtifact(`0x${"11".repeat(32)}`, {
+        networkIdHex: `0x${"71".repeat(32)}`,
+        verifierCodeHashHex: `0x${"72".repeat(32)}`,
+        verifierKeyHashHex: `0x${"73".repeat(32)}`,
+        expectedDestinationBindingHashHex: `0x${"74".repeat(32)}`,
+        tronVerifierAddress: "TJRabPrwbZy45sbavfcjinPJC18kjpRTv8",
+        proofBytesHex: sampleSccpGroth16ProofBytes({ messageId: "22".repeat(32) }),
+      }),
+    /proofBytesHex\.messageId must match messageIdHex/,
+  );
+
+  await assert.rejects(
+    () =>
+      client.getSccpMessageProofJob(`0x${"11".repeat(32)}`, {
+        expectedDestinationBindingHashHex: "0x11",
+      }),
+    /expectedDestinationBindingHashHex must be a 32-byte hex string/,
+  );
+
+  for (const [field, value] of [
+    ["networkIdHex", `0x${"00".repeat(32)}`],
+    ["verifierAddressHex", `0x${"00".repeat(20)}`],
+    ["bridgeAddressHex", `0x${"00".repeat(20)}`],
+    ["verifierCodeHashHex", `0x${"00".repeat(32)}`],
+    ["verifierKeyHashHex", `0x${"00".repeat(32)}`],
+    ["expectedDestinationBindingHashHex", `0x${"00".repeat(32)}`],
+  ]) {
+    await assert.rejects(
+      () =>
+        client.getSccpMessageProofJob(`0x${"11".repeat(32)}`, {
+          [field]: value,
+          proofBytesHex: SCCP_TEST_GROTH16_PROOF_BYTES,
+        }),
+      new RegExp(`${field}.*all zero`),
+    );
+  }
+
+  await assert.rejects(
+    () =>
+      client.submitBridgeMessage({
+        authority: "alice@sora",
+        messageBundle: SCCP_TEST_MESSAGE_BUNDLE,
+        verifierAddressHex: `0x${"00".repeat(20)}`,
+        proofBytesHex: SCCP_TEST_GROTH16_PROOF_BYTES,
+      }),
+    /verifierAddressHex.*all zero/,
+  );
+
+  await assert.rejects(
+    () =>
+      client.getSccpMessageProofJob(`0x${"11".repeat(32)}`, {
+        tronVerifierAddress: " TJRabPrwbZy45sbavfcjinPJC18kjpRTv8",
+        proofBytesHex: SCCP_TEST_GROTH16_PROOF_BYTES,
+      }),
+    /tronVerifierAddress must be a TRON Base58Check address/,
+  );
+
+  await assert.rejects(
+    () =>
+      client.getSccpMessageProofJob(`0x${"11".repeat(32)}`, {
+        tronVerifierAddress: "TJRabPrwbZy45sbavfcjinPJC18kjpRTv9",
+        proofBytesHex: SCCP_TEST_GROTH16_PROOF_BYTES,
+      }),
+    /tronVerifierAddress must be a TRON Base58Check address/,
+  );
+
+  await assert.rejects(
+    () =>
+      client.getSccpMessageProofJob(`0x${"11".repeat(32)}`, {
+        tronVerifierAddress: "T9yD14Nj9j7xAB4dbGeiX9h8unkKHxuWwb",
+        proofBytesHex: SCCP_TEST_GROTH16_PROOF_BYTES,
+      }),
+    /tronVerifierAddress must be a TRON Base58Check address/,
+  );
+
+  await assert.rejects(
+    () =>
+      client.getSccpMessageProofJob(`0x${"11".repeat(32)}`, {
+        networkIdHex: ` 0x${"71".repeat(32)}`,
+        verifierCodeHashHex: `0x${"72".repeat(32)}`,
+        verifierKeyHashHex: `0x${"73".repeat(32)}`,
+        expectedDestinationBindingHashHex: `0x${"74".repeat(32)}`,
+        tronVerifierAddress: "TJRabPrwbZy45sbavfcjinPJC18kjpRTv8",
+        proofBytesHex: SCCP_TEST_GROTH16_PROOF_BYTES,
+      }),
+    /networkIdHex.*canonical hex string/,
+  );
+
+  await assert.rejects(
+    () =>
+      client.submitBridgeMessage({
+        authority: "alice@sora",
+        messageBundle: SCCP_TEST_MESSAGE_BUNDLE,
+        networkIdHex: `0x${"71".repeat(32)}`,
+        verifierCodeHashHex: `0x${"72".repeat(32)}`,
+        verifierKeyHashHex: `0x${"73".repeat(32)}`,
+        expectedDestinationBindingHashHex: `0x${"74".repeat(32)}`,
+        tronVerifierAddress: "TJRabPrwbZy45sbavfcjinPJC18kjpRTv8",
+        proofBytesHex: `0x${SCCP_TEST_GROTH16_PROOF_BYTES} `,
+      }),
+    /proofBytesHex.*canonical hex string/,
+  );
+
+  await assert.rejects(
+    () =>
+      client.getSccpMessageProofJob(`0x${"11".repeat(32)}`, {
+        networkIdHex: `0x${"71".repeat(32)}`,
+        expectedDestinationBindingHashHex: `0x${"74".repeat(32)}`,
+      }),
+    /proofBytesHex is required/,
+  );
+
+  await assert.rejects(
+    () =>
+      client.getSccpMessageProofJob(`0x${"11".repeat(32)}`, {
+        proofBytesHex: SCCP_TEST_GROTH16_PROOF_BYTES,
+      }),
+    /deployment destination fields are required/,
+  );
+
+  await assert.rejects(
+    () =>
+      client.getSccpMessageProofJob(`0x${"11".repeat(32)}`, {
+        networkIdHex: `0x${"71".repeat(32)}`,
+        expectedDestinationBindingHashHex: `0x${"74".repeat(32)}`,
+        proofBytesHex: SCCP_TEST_GROTH16_PROOF_BYTES,
+      }),
+    /complete EVM or TRON/,
+  );
+
+  await assert.rejects(
+    () =>
+      client.getSccpMessageProofJob(`0x${"11".repeat(32)}`, {
+        networkIdHex: `0x${"71".repeat(32)}`,
+        verifierAddressHex: `0x${"22".repeat(20)}`,
+        verifierCodeHashHex: `0x${"72".repeat(32)}`,
+        verifierKeyHashHex: `0x${"73".repeat(32)}`,
+        expectedDestinationBindingHashHex: `0x${"74".repeat(32)}`,
+        proofBytesHex: SCCP_TEST_GROTH16_PROOF_BYTES,
+      }),
+    /complete EVM/,
+  );
+
+  await assert.rejects(
+    () =>
+      client.getSccpMessageProofJob(`0x${"11".repeat(32)}`, {
+        networkIdHex: `0x${"71".repeat(32)}`,
+        verifierAddressHex: `0x${"22".repeat(20)}`,
+        bridgeAddressHex: `0x${"33".repeat(20)}`,
+        verifierCodeHashHex: `0x${"72".repeat(32)}`,
+        verifierKeyHashHex: `0x${"73".repeat(32)}`,
+        expectedDestinationBindingHashHex: `0x${"74".repeat(32)}`,
+        tronVerifierAddress: "TJRabPrwbZy45sbavfcjinPJC18kjpRTv8",
+        proofBytesHex: SCCP_TEST_GROTH16_PROOF_BYTES,
+      }),
+    /cannot be mixed/,
+  );
+
+  await assert.rejects(
+    () =>
+      client.submitBridgeProof({
+        authority: "alice@sora",
+        messageBundle: SCCP_TEST_MESSAGE_BUNDLE,
+        proofBytesHex: sampleSccpGroth16ProofBytes(),
+      }),
+    /deployment destination fields are required/,
+  );
+
+  await assert.rejects(
+    () =>
+      client.submitBridgeMessage({
+        authority: "alice@sora",
+        messageBundle: SCCP_TEST_MESSAGE_BUNDLE,
+        tronVerifierAddress: "not-base58",
+        proofBytesHex: SCCP_TEST_GROTH16_PROOF_BYTES,
+      }),
+    /tronVerifierAddress must be a TRON Base58Check address/,
+  );
+
+  await assert.rejects(
+    () =>
+      client.submitBridgeMessage({
+        authority: "alice@sora",
+        messageBundle: SCCP_TEST_MESSAGE_BUNDLE,
+        tronVerifierAddress: "T9yD14Nj9j7xAB4dbGeiX9h8unkKHxuWwb",
+        proofBytesHex: SCCP_TEST_GROTH16_PROOF_BYTES,
+      }),
+    /tronVerifierAddress must be a TRON Base58Check address/,
+  );
+});
+
 test("getSccpProofManifests rejects unsupported verifier target", async () => {
   const fetchImpl = async () =>
     createResponse({
@@ -10324,13 +10983,14 @@ test("getSccpProofManifests rejects unsupported verifier target", async () => {
               "disabled until the immutable TON recursive SCCP verifier and cryptographic trust anchors are live for this lane",
             submission_template: {
               version: 1,
-              encoding: "ton_cell_v1",
+              encoding: "ton_message_body_boc_v1",
               submission_kind: "internal_message",
               verifier_entrypoint: "op::submit_sccp_message_proof",
               required_arguments: [
                 {
-                  key: "proof_cell",
-                  description: "Transparent SCCP proof cell emitted by the TON prover backend.",
+                  key: "message_body_boc",
+                  description:
+                    "TON Bag-of-Cells internal message body containing the SCCP submission root cell.",
                 },
               ],
             },
@@ -10351,8 +11011,21 @@ test("getSccpMessageProofArtifact normalizes typed artifact response", async () 
   const payloadHash = "22".repeat(32);
   const commitmentRoot = "33".repeat(32);
   const finalityBlockHash = "44".repeat(32);
+  const destinationBindingHash = sampleSccpEvmDestinationBindingHash();
   const fetchImpl = async (url) => {
-    assert.equal(url, `${BASE_URL}/v1/sccp/artifacts/message/${messageId}`);
+    const parsed = new URL(url);
+    assert.equal(parsed.origin, BASE_URL);
+    assert.equal(parsed.pathname, `/v1/sccp/artifacts/message/${messageId}`);
+    assert.equal(parsed.searchParams.get("network_id_hex"), SCCP_TEST_EVM_NETWORK_ID);
+    assert.equal(parsed.searchParams.get("verifier_address_hex"), SCCP_TEST_EVM_VERIFIER_ADDRESS);
+    assert.equal(parsed.searchParams.get("bridge_address_hex"), SCCP_TEST_EVM_BRIDGE_ADDRESS);
+    assert.equal(parsed.searchParams.get("verifier_code_hash_hex"), SCCP_TEST_EVM_VERIFIER_CODE_HASH);
+    assert.equal(parsed.searchParams.get("verifier_key_hash_hex"), SCCP_TEST_EVM_VERIFIER_KEY_HASH);
+    assert.equal(
+      parsed.searchParams.get("expected_destination_binding_hash_hex"),
+      destinationBindingHash,
+    );
+    assert.equal(parsed.searchParams.get("proof_bytes_hex"), SCCP_TEST_GROTH16_PROOF_HEX);
     return createResponse({
       status: 200,
       jsonData: {
@@ -10400,23 +11073,28 @@ test("getSccpMessageProofArtifact normalizes typed artifact response", async () 
           version: 1,
           proof_family: "stark-fri-v1",
           verifier_backend: { version: 1, key: "ton-contract-v1" },
-          envelope_encoding: "ton_message_body_v1",
+          envelope_encoding: "ton_message_body_boc_v1",
           submission_kind: "internal_message",
           verifier_entrypoint: "op::submit_sccp_message_proof",
           platform_payload: {
             platform: "ton_internal_message",
             payload: {
-              proof_cell: "aa55",
-              public_inputs_cell: "cc77",
-              bundle_cell: "dd88",
+              message_body_boc: "b5ee9c72",
+              query_id: "7",
+              destination_binding: {
+                version: 1,
+                key: "sccp:ton:governed-recursive-zk:v1",
+                binding_hash: "56".repeat(32),
+              },
+              destination_binding_hash: "56".repeat(32),
+              proof_bytes: "aa55",
+              public_inputs_bytes: "cc77",
+              bundle_bytes: "dd88",
+              statement_hash: "99".repeat(32),
             },
           },
-          arguments: [
-            { key: "proof_cell", encoding: "raw_bytes", bytes: "aa55" },
-            { key: "public_inputs_cell", encoding: "raw_bytes", bytes: "cc77" },
-            { key: "bundle_cell", encoding: "raw_bytes", bytes: "dd88" },
-          ],
-          envelope_bytes: "ee99",
+          arguments: [{ key: "message_body_boc", encoding: "ton_boc", bytes: "b5ee9c72" }],
+          envelope_bytes: "b5ee9c72",
         },
         bundle: {
           version: 1,
@@ -10447,7 +11125,15 @@ test("getSccpMessageProofArtifact normalizes typed artifact response", async () 
     });
   };
   const client = new ToriiClient(BASE_URL, { fetchImpl });
-  const result = await client.getSccpMessageProofArtifact(`0x${messageId}`);
+  const result = await client.getSccpMessageProofArtifact(`0x${messageId}`, {
+    networkIdHex: `0x${SCCP_TEST_EVM_NETWORK_ID}`,
+    verifierAddressHex: `0x${SCCP_TEST_EVM_VERIFIER_ADDRESS}`,
+    bridgeAddressHex: `0x${SCCP_TEST_EVM_BRIDGE_ADDRESS}`,
+    verifierCodeHashHex: `0x${SCCP_TEST_EVM_VERIFIER_CODE_HASH}`,
+    verifierKeyHashHex: `0x${SCCP_TEST_EVM_VERIFIER_KEY_HASH}`,
+    expectedDestinationBindingHashHex: `0x${destinationBindingHash}`,
+    proofBytesHex: SCCP_TEST_GROTH16_PROOF_BYTES,
+  });
   assert.deepEqual(result, {
     version: 1,
     localDomain: 0,
@@ -10493,23 +11179,28 @@ test("getSccpMessageProofArtifact normalizes typed artifact response", async () 
       version: 1,
       proofFamily: "stark-fri-v1",
       verifierBackendKey: "ton-contract-v1",
-      envelopeEncoding: "ton_message_body_v1",
+      envelopeEncoding: "ton_message_body_boc_v1",
       submissionKind: "internal_message",
       verifierEntrypoint: "op::submit_sccp_message_proof",
       platformPayload: {
         kind: "ton_internal_message",
         value: {
-          proofCell: "aa55",
-          publicInputsCell: "cc77",
-          bundleCell: "dd88",
+          messageBodyBoc: "b5ee9c72",
+          queryId: 7,
+          destinationBinding: {
+            version: 1,
+            key: "sccp:ton:governed-recursive-zk:v1",
+            bindingHash: "56".repeat(32),
+          },
+          destinationBindingHash: "56".repeat(32),
+          proofBytes: "aa55",
+          publicInputsBytes: "cc77",
+          bundleBytes: "dd88",
+          statementHash: "99".repeat(32),
         },
       },
-      arguments: [
-        { key: "proof_cell", encoding: "raw_bytes", bytes: "aa55" },
-        { key: "public_inputs_cell", encoding: "raw_bytes", bytes: "cc77" },
-        { key: "bundle_cell", encoding: "raw_bytes", bytes: "dd88" },
-      ],
-      envelopeBytes: "ee99",
+      arguments: [{ key: "message_body_boc", encoding: "ton_boc", bytes: "b5ee9c72" }],
+      envelopeBytes: "b5ee9c72",
     },
     bundle: {
       version: 1,
@@ -10639,13 +11330,142 @@ test("getSccpMessageProofArtifact rejects bundle/public input mismatch", async (
   );
 });
 
+test("getSccpMessageProofArtifact preserves Solana submission binding fields", async () => {
+  const messageId = "11".repeat(32);
+  const payloadHash = "22".repeat(32);
+  const commitmentRoot = "33".repeat(32);
+  const bindingHash = "56".repeat(32);
+  const statementHash = "99".repeat(32);
+  const proofContextHash = "ab".repeat(32);
+  const fetchImpl = async () =>
+    createResponse({
+      status: 200,
+      jsonData: {
+        version: 1,
+        local_domain: 0,
+        counterparty_domain: 3,
+        security_model: "RecursiveZk",
+        anchor_governance: "CryptographicProof",
+        destination_binding: {
+          version: 1,
+          key: "sccp:sol:governed-recursive-zk:v1",
+          binding_hash: bindingHash,
+        },
+        proof_family: "stark-fri-v1",
+        verifier_backend: { version: 1, key: "solana-program-v1" },
+        message_backend: "sccp/stark-fri-v1/sol",
+        registry_backend: "bridge/sccp/stark-fri-v1/sol",
+        manifest_seed: "iroha:sccp:bridge-proof:message:stark-fri:v1:sol",
+        finality_model: "SolanaFinalizedSlot",
+        verifier_target: "SolanaProgram",
+        public_inputs: {
+          version: 1,
+          message_id: messageId,
+          payload_hash: payloadHash,
+          target_domain: 3,
+          commitment_root: commitmentRoot,
+          finality_height: "321",
+          finality_block_hash: "44".repeat(32),
+        },
+        proof_bytes: "aa55",
+        submission_package: {
+          version: 1,
+          proof_family: "stark-fri-v1",
+          verifier_backend: { version: 1, key: "solana-program-v1" },
+          envelope_encoding: "borsh_instruction_v1",
+          submission_kind: "program_instruction",
+          verifier_entrypoint: "submit_sccp_message_proof",
+          platform_payload: {
+            platform: "solana_program_instruction",
+            payload: {
+              proof_bytes: "aa55",
+              public_inputs_bytes: "cc77",
+              bundle_bytes: "dd88",
+              destination_binding: {
+                version: 1,
+                key: "sccp:sol:governed-recursive-zk:v1",
+                binding_hash: bindingHash,
+              },
+              destination_binding_hash: bindingHash,
+              statement_hash: statementHash,
+              proof_context_hash: proofContextHash,
+            },
+          },
+          arguments: [
+            { key: "proof_bytes", encoding: "raw_bytes", bytes: "aa55" },
+            { key: "public_inputs", encoding: "raw_bytes", bytes: "cc77" },
+            { key: "bundle_bytes", encoding: "raw_bytes", bytes: "dd88" },
+            { key: "statement_hash", encoding: "raw_bytes", bytes: statementHash },
+            { key: "destination_binding_hash", encoding: "raw_bytes", bytes: bindingHash },
+            { key: "proof_context_hash", encoding: "raw_bytes", bytes: proofContextHash },
+          ],
+          envelope_bytes: "ee99",
+        },
+        bundle: {
+          version: 1,
+          commitment_root: commitmentRoot,
+          commitment: {
+            version: 1,
+            kind: "Transfer",
+            target_domain: 3,
+            message_id: messageId,
+            payload_hash: payloadHash,
+          },
+          merkle_proof: { steps: [] },
+          payload: { Transfer: { version: 1 } },
+          finality_proof: "bb66",
+        },
+      },
+      headers: { "content-type": "application/json" },
+    });
+
+  const client = new ToriiClient(BASE_URL, { fetchImpl });
+  const result = await client.getSccpMessageProofArtifact(`0x${messageId}`);
+  assert.deepEqual(result.submissionPackage.platformPayload, {
+    kind: "solana_program_instruction",
+    value: {
+      proofBytes: "aa55",
+      publicInputsBytes: "cc77",
+      bundleBytes: "dd88",
+      destinationBinding: {
+        version: 1,
+        key: "sccp:sol:governed-recursive-zk:v1",
+        bindingHash,
+      },
+      destinationBindingHash: bindingHash,
+      statementHash,
+      proofContextHash,
+    },
+  });
+});
+
 test("getSccpMessageProofJob normalizes typed job response", async () => {
   const messageId = "11".repeat(32);
   const payloadHash = "22".repeat(32);
   const commitmentRoot = "33".repeat(32);
   const finalityBlockHash = "44".repeat(32);
+  const destinationBindingHash = tronSccpDestinationBindingHash({
+    networkIdHex: `0x${"aa".repeat(32)}`,
+    verifierAddress: SCCP_TEST_TRON_VERIFIER_ADDRESS,
+    verifierCodeHashHex: `0x${"dd".repeat(32)}`,
+    verifierKeyHashHex: `0x${"ee".repeat(32)}`,
+  }).replace(/^0x/u, "");
   const fetchImpl = async (url) => {
-    assert.equal(url, `${BASE_URL}/v1/sccp/jobs/message/${messageId}`);
+    const parsed = new URL(url);
+    assert.equal(parsed.origin, BASE_URL);
+    assert.equal(parsed.pathname, `/v1/sccp/jobs/message/${messageId}`);
+    assert.equal(parsed.searchParams.get("network_id_hex"), "aa".repeat(32));
+    assert.equal(parsed.searchParams.get("verifier_code_hash_hex"), "dd".repeat(32));
+    assert.equal(parsed.searchParams.get("verifier_key_hash_hex"), "ee".repeat(32));
+    assert.equal(
+      parsed.searchParams.get("expected_destination_binding_hash_hex"),
+      destinationBindingHash,
+    );
+    assert.equal(
+      parsed.searchParams.get("tron_verifier_address"),
+      SCCP_TEST_TRON_VERIFIER_ADDRESS,
+    );
+    assert.equal(parsed.searchParams.get("proof_bytes_hex"), SCCP_TEST_GROTH16_PROOF_HEX);
     return createResponse({
       status: 200,
       jsonData: {
@@ -10670,22 +11490,14 @@ test("getSccpMessageProofJob normalizes typed job response", async () => {
         verifier_target: "TonContract",
         submission_template: {
           version: 1,
-          encoding: "ton_cell_v1",
+          encoding: "ton_message_body_boc_v1",
           submission_kind: "internal_message",
           verifier_entrypoint: "op::submit_sccp_message_proof",
           required_arguments: [
             {
-              key: "proof_cell",
-              description: "Transparent SCCP proof cell emitted by the TON prover backend.",
-            },
-            {
-              key: "public_inputs_cell",
-              description: "Cell-encoded SCCP public inputs in manifest order.",
-            },
-            {
-              key: "bundle_cell",
+              key: "message_body_boc",
               description:
-                "Cell-encoded Nexus SCCP message bundle for the TON bridge contract.",
+                "TON Bag-of-Cells internal message body containing the SCCP submission root cell.",
             },
           ],
         },
@@ -10693,23 +11505,28 @@ test("getSccpMessageProofJob normalizes typed job response", async () => {
           version: 1,
           proof_family: "stark-fri-v1",
           verifier_backend: { version: 1, key: "ton-contract-v1" },
-          envelope_encoding: "ton_message_body_v1",
+          envelope_encoding: "ton_message_body_boc_v1",
           submission_kind: "internal_message",
           verifier_entrypoint: "op::submit_sccp_message_proof",
           platform_payload: {
             platform: "ton_internal_message",
             payload: {
-              proof_cell: "aa55",
-              public_inputs_cell: "cc77",
-              bundle_cell: "dd88",
+              message_body_boc: "b5ee9c72",
+              query_id: "7",
+              destination_binding: {
+                version: 1,
+                key: "sccp:ton:governed-recursive-zk:v1",
+                binding_hash: "58".repeat(32),
+              },
+              destination_binding_hash: "58".repeat(32),
+              proof_bytes: "aa55",
+              public_inputs_bytes: "cc77",
+              bundle_bytes: "dd88",
+              statement_hash: "99".repeat(32),
             },
           },
-          arguments: [
-            { key: "proof_cell", encoding: "raw_bytes", bytes: "aa55" },
-            { key: "public_inputs_cell", encoding: "raw_bytes", bytes: "cc77" },
-            { key: "bundle_cell", encoding: "raw_bytes", bytes: "dd88" },
-          ],
-          envelope_bytes: "ee99",
+          arguments: [{ key: "message_body_boc", encoding: "ton_boc", bytes: "b5ee9c72" }],
+          envelope_bytes: "b5ee9c72",
         },
         proof_envelope_summary: {
           version: 1,
@@ -10745,10 +11562,7 @@ test("getSccpMessageProofJob normalizes typed job response", async () => {
             amount: "77",
             sender: { TextUtf8: { value: "nexus:soraswap" } },
             recipient: {
-              TonRaw: {
-                workchain: 0,
-                account: "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef",
-              },
+              TronBase58Check: { payload: "TLa2f6VPqDgRE67v1736s7bJ8Ray5wYjU7" },
             },
             route_id: { TextUtf8: { value: "nexus:ton:xor" } },
           },
@@ -10772,7 +11586,14 @@ test("getSccpMessageProofJob normalizes typed job response", async () => {
     });
   };
   const client = new ToriiClient(BASE_URL, { fetchImpl });
-  const result = await client.getSccpMessageProofJob(`0x${messageId}`);
+  const result = await client.getSccpMessageProofJob(`0x${messageId}`, {
+    networkIdHex: `0x${"aa".repeat(32)}`,
+    verifierCodeHashHex: `0x${"dd".repeat(32)}`,
+    verifierKeyHashHex: `0x${"ee".repeat(32)}`,
+    expectedDestinationBindingHashHex: `0x${destinationBindingHash}`,
+    tronVerifierAddress: SCCP_TEST_TRON_VERIFIER_ADDRESS,
+    proofBytesHex: SCCP_TEST_GROTH16_PROOF_BYTES,
+  });
   assert.deepEqual(result, {
     version: 1,
     chainFamily: "Ton",
@@ -10795,21 +11616,14 @@ test("getSccpMessageProofJob normalizes typed job response", async () => {
     verifierTarget: "TonContract",
     submissionTemplate: {
       version: 1,
-      encoding: "ton_cell_v1",
+      encoding: "ton_message_body_boc_v1",
       submissionKind: "internal_message",
       verifierEntrypoint: "op::submit_sccp_message_proof",
       requiredArguments: [
         {
-          key: "proof_cell",
-          description: "Transparent SCCP proof cell emitted by the TON prover backend.",
-        },
-        {
-          key: "public_inputs_cell",
-          description: "Cell-encoded SCCP public inputs in manifest order.",
-        },
-        {
-          key: "bundle_cell",
-          description: "Cell-encoded Nexus SCCP message bundle for the TON bridge contract.",
+          key: "message_body_boc",
+          description:
+            "TON Bag-of-Cells internal message body containing the SCCP submission root cell.",
         },
       ],
     },
@@ -10817,23 +11631,28 @@ test("getSccpMessageProofJob normalizes typed job response", async () => {
       version: 1,
       proofFamily: "stark-fri-v1",
       verifierBackendKey: "ton-contract-v1",
-      envelopeEncoding: "ton_message_body_v1",
+      envelopeEncoding: "ton_message_body_boc_v1",
       submissionKind: "internal_message",
       verifierEntrypoint: "op::submit_sccp_message_proof",
       platformPayload: {
         kind: "ton_internal_message",
         value: {
-          proofCell: "aa55",
-          publicInputsCell: "cc77",
-          bundleCell: "dd88",
+          messageBodyBoc: "b5ee9c72",
+          queryId: 7,
+          destinationBinding: {
+            version: 1,
+            key: "sccp:ton:governed-recursive-zk:v1",
+            bindingHash: "58".repeat(32),
+          },
+          destinationBindingHash: "58".repeat(32),
+          proofBytes: "aa55",
+          publicInputsBytes: "cc77",
+          bundleBytes: "dd88",
+          statementHash: "99".repeat(32),
         },
       },
-      arguments: [
-        { key: "proof_cell", encoding: "raw_bytes", bytes: "aa55" },
-        { key: "public_inputs_cell", encoding: "raw_bytes", bytes: "cc77" },
-        { key: "bundle_cell", encoding: "raw_bytes", bytes: "dd88" },
-      ],
-      envelopeBytes: "ee99",
+      arguments: [{ key: "message_body_boc", encoding: "ton_boc", bytes: "b5ee9c72" }],
+      envelopeBytes: "b5ee9c72",
     },
     proofEnvelopeSummary: {
       version: 1,
@@ -10870,9 +11689,8 @@ test("getSccpMessageProofJob normalizes typed job response", async () => {
         amount: 77,
         sender: { kind: "TextUtf8", value: "nexus:soraswap" },
         recipient: {
-          kind: "TonRaw",
-          workchain: 0,
-          account: "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef",
+          kind: "TronBase58Check",
+          payload: "4174472e7d35395a6b5add427eecb7f4b62ad2b071",
         },
         route_id: { kind: "TextUtf8", value: "nexus:ton:xor" },
       },
@@ -10895,6 +11713,72 @@ test("getSccpMessageProofJob normalizes typed job response", async () => {
       finalityProof: "bb66",
     },
   });
+});
+
+test("getSccpMessageProofJob rejects invalid TRON payload projection", async () => {
+  const messageId = "11".repeat(32);
+  const payloadHash = "22".repeat(32);
+  const commitmentRoot = "33".repeat(32);
+  const finalityBlockHash = "44".repeat(32);
+  const fetchImpl = async () =>
+    createResponse({
+      status: 200,
+      jsonData: {
+        version: 1,
+        chain_family: "Tron",
+        chain: "tron",
+        local_domain: 0,
+        counterparty_domain: 5,
+        security_model: "RecursiveZk",
+        anchor_governance: "CryptographicProof",
+        destination_binding: {
+          version: 1,
+          key: "sccp:tron:governed-recursive-zk:v1",
+          binding_hash: "58".repeat(32),
+        },
+        proof_family: "groth16-bn254-v1",
+        verifier_backend: { version: 1, key: "tron-contract-v1" },
+        message_backend: "sccp/groth16-bn254-v1/tron",
+        registry_backend: "bridge/sccp/groth16-bn254-v1/tron",
+        manifest_seed: "iroha:sccp:bridge-proof:message:groth16:v1:tron",
+        finality_model: "TronDpos",
+        verifier_target: "TronContract",
+        public_inputs: {
+          version: 1,
+          message_id: messageId,
+          payload_hash: payloadHash,
+          target_domain: 5,
+          commitment_root: commitmentRoot,
+          finality_height: "19",
+          finality_block_hash: finalityBlockHash,
+        },
+        payload_kind: "transfer",
+        payload_projection: {
+          Transfer: {
+            version: 1,
+            source_domain: 0,
+            dest_domain: 5,
+            nonce: "21",
+            asset_home_domain: 0,
+            asset_id: { TextUtf8: { value: "xor#universal" } },
+            amount: "77",
+            sender: { TextUtf8: { value: "nexus:soraswap" } },
+            recipient: {
+              TronBase58Check: { payload: "T9yD14Nj9j7xAB4dbGeiX9h8unkKHxuWwb" },
+            },
+            route_id: { TextUtf8: { value: "nexus:tron:xor" } },
+          },
+        },
+      },
+      headers: { "content-type": "application/json" },
+    });
+
+  const client = new ToriiClient(BASE_URL, { fetchImpl });
+
+  await assert.rejects(
+    () => client.getSccpMessageProofJob(`0x${messageId}`),
+    /TronBase58Check\.payload.*TRON Base58Check/,
+  );
 });
 
 test("getRuntimeAbiActive normalizes ABI version", async () => {
@@ -20686,7 +21570,7 @@ test("http errors surface reject header codes", async () => {
 });
 
 function requireSorafsNative(t) {
-  const native = getNativeBinding();
+  const native = nativeBinding;
   if (
     !native ||
     typeof native.sorafsAliasPolicyDefaults !== "function" ||

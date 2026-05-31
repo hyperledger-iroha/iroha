@@ -4961,7 +4961,8 @@ pub(crate) mod valid {
             ) {
                 return WithEvents::new(Err((Box::new(block), Box::new(error))));
             }
-            let exec_witness_guard = crate::sumeragi::witness::exec_witness_guard();
+            let exec_witness_guard = (!state_block.replay_compatibility)
+                .then(crate::sumeragi::witness::exec_witness_guard);
             if let Err(error) =
                 Self::validate_and_record_transactions(&mut block, state_block, None, true)
             {
@@ -4970,7 +4971,9 @@ pub(crate) mod valid {
             if let Err(error) = validate_axt_envelopes(&block, state_block) {
                 return WithEvents::new(Err((Box::new(block), Box::new(error))));
             }
-            state_block.capture_exec_witness();
+            if !state_block.replay_compatibility {
+                state_block.capture_exec_witness();
+            }
             drop(exec_witness_guard);
             if block.is_empty() {
                 let error = BlockValidationError::EmptyBlock;
@@ -5011,7 +5014,8 @@ pub(crate) mod valid {
                 send_events(ev);
                 return WithEvents::new(Err((Box::new(block), Box::new(error))));
             }
-            let exec_witness_guard = crate::sumeragi::witness::exec_witness_guard();
+            let exec_witness_guard = (!state_block.replay_compatibility)
+                .then(crate::sumeragi::witness::exec_witness_guard);
             if let Err(error) =
                 Self::validate_and_record_transactions(&mut block, state_block, None, true)
             {
@@ -5030,7 +5034,9 @@ pub(crate) mod valid {
                 send_events(ev);
                 return WithEvents::new(Err((Box::new(block), Box::new(error))));
             }
-            state_block.capture_exec_witness();
+            if !state_block.replay_compatibility {
+                state_block.capture_exec_witness();
+            }
             drop(exec_witness_guard);
             if block.is_empty() {
                 let error = BlockValidationError::EmptyBlock;
@@ -5383,7 +5389,8 @@ pub(crate) mod valid {
             if let Some(timings) = timings.as_deref_mut() {
                 timings.execution_state_block_ms = to_ms(state_block_start.elapsed());
             }
-            let exec_witness_guard = crate::sumeragi::witness::exec_witness_guard();
+            let exec_witness_guard =
+                (!replay_compatibility).then(crate::sumeragi::witness::exec_witness_guard);
             let tx_start = Instant::now();
             if let Err(error) = Self::validate_and_record_transactions_with_prepared(
                 &mut block,
@@ -5432,7 +5439,9 @@ pub(crate) mod valid {
                 emit_rejection(&block, &error);
                 return WithEvents::new(Err((Box::new(block), Box::new(error))));
             }
-            state_block.capture_exec_witness();
+            if !replay_compatibility {
+                state_block.capture_exec_witness();
+            }
             drop(exec_witness_guard);
             if block.is_empty() {
                 let error = BlockValidationError::EmptyBlock;
@@ -7328,8 +7337,11 @@ pub(crate) mod valid {
 
             let height = block.header().height().get();
 
-            // Start a new witness window for this block (SBV‑AM prototype)
-            crate::sumeragi::witness::start_block();
+            // Start a new witness window only for live validation; Kura replay
+            // correctness is checked through committed results and roots.
+            if !state_block.replay_compatibility {
+                crate::sumeragi::witness::start_block();
+            }
 
             let sequential_entrypoints =
                 block.external_entrypoints_slice().and_then(|entrypoints| {
@@ -11354,13 +11366,16 @@ pub(crate) mod valid {
                 block.header().is_genesis() || signed_block_entrypoints_are_canonical(&block),
                 "unchecked block payload is not in canonical transaction entrypoint order"
             );
-            let exec_witness_guard = crate::sumeragi::witness::exec_witness_guard();
+            let exec_witness_guard = (!state_block.replay_compatibility)
+                .then(crate::sumeragi::witness::exec_witness_guard);
             Self::validate_and_record_transactions(&mut block, state_block, None, false)
                 .expect("unchecked block should have internally consistent entrypoint hashes");
             if let Err(error) = validate_axt_envelopes(&block, state_block) {
                 panic!("AXT envelope validation failed on unchecked block: {error}");
             }
-            state_block.capture_exec_witness();
+            if !state_block.replay_compatibility {
+                state_block.capture_exec_witness();
+            }
             drop(exec_witness_guard);
             WithEvents::new(ValidBlock::new_unverified(block))
         }

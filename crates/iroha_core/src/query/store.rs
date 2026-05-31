@@ -132,6 +132,9 @@ impl PagedQueryContinuation {
         }
         let (batch, next_cursor) = (self.next_page)(cursor)?;
         if let Some(next_cursor) = next_cursor {
+            if next_cursor.get() <= cursor {
+                return Err(QueryExecutionFail::CursorDone);
+            }
             self.expected_cursor = next_cursor;
         }
         Ok((batch, next_cursor))
@@ -1157,6 +1160,58 @@ mod tests {
             1,
             "evicted done cursors must not call replay work again"
         );
+    }
+
+    #[test]
+    fn paged_non_advancing_next_cursor_is_rejected_and_releases_capacity() {
+        let config = Config {
+            idle_time: Duration::from_secs(60),
+            capacity: nonzero!(1_usize),
+            capacity_per_user: nonzero!(4_usize),
+        };
+        let store = Arc::new(LiveQueryStore::from_config(config, ShutdownSignal::new()));
+        let handle = LiveQueryStoreHandle::new(store);
+        let calls = Arc::new(AtomicUsize::new(0));
+        let calls_for_batcher = Arc::clone(&calls);
+
+        let (_batch, _remaining, cursor) = handle
+            .handle_iter_start_paged_prepared(
+                PreparedPagedQueryStart {
+                    first_batch: permission_batch(["first"]),
+                    paged_continuation: Some(PagedQueryContinuation::new(
+                        nonzero!(1_u64),
+                        move |_| {
+                            calls_for_batcher.fetch_add(1, Ordering::SeqCst);
+                            Ok((permission_batch(["loop"]), Some(nonzero!(1_u64))))
+                        },
+                    )),
+                },
+                &ALICE_ID,
+                None,
+            )
+            .expect("first query fits")
+            .into_parts();
+        let cursor = cursor.expect("stored cursor");
+
+        let err = handle
+            .handle_iter_continue(cursor.clone())
+            .expect_err("non-advancing cursor must be rejected");
+        assert_eq!(err, QueryExecutionFail::CursorDone);
+        assert_eq!(calls.load(Ordering::SeqCst), 1);
+
+        handle
+            .handle_iter_start_paged_prepared(
+                prepared_paged_permission_query("replacement"),
+                &ALICE_ID,
+                None,
+            )
+            .expect("non-advancing cursor should release capacity");
+
+        let err = handle
+            .handle_iter_continue(cursor)
+            .expect_err("rejected cursor should be evicted");
+        assert_eq!(err, QueryExecutionFail::Expired);
+        assert_eq!(calls.load(Ordering::SeqCst), 1);
     }
 
     #[test]

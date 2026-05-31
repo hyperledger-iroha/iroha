@@ -809,7 +809,7 @@ mod model {
         OracleChangeProposal(Vec<crate::oracle::OracleChangeProposal>),
         /// Batch of twitter binding records.
         TwitterBindingRecord(Vec<crate::oracle::TwitterBindingRecord>),
-        /// Batch of DeFi oracle attestations.
+        /// Batch of `DeFi` oracle attestations.
         DefiOracleAttestation(Vec<crate::oracle::DefiOracleAttestation>),
         /// Batch of native asset escrow records.
         AssetEscrowRecord(Vec<crate::escrow::AssetEscrowRecord>),
@@ -875,7 +875,7 @@ mod model {
         FindOracleChangeById(oracle::prelude::FindOracleChangeById),
         /// Fetch oracle provider statistics by key.
         FindOracleProviderStatsByKey(oracle::prelude::FindOracleProviderStatsByKey),
-        /// Fetch the latest DeFi oracle attestation for a key.
+        /// Fetch the latest `DeFi` oracle attestation for a key.
         FindLatestDefiOracleAttestation(oracle::prelude::FindLatestDefiOracleAttestation),
         /// Fetch domain endorsement records.
         FindDomainEndorsements(endorsement::prelude::FindDomainEndorsements),
@@ -967,7 +967,7 @@ mod model {
         OracleChangeProposal(crate::oracle::OracleChangeProposal),
         /// Oracle provider statistics payload.
         OracleProviderStats(crate::oracle::OracleProviderStats),
-        /// Latest DeFi oracle attestation payload.
+        /// Latest `DeFi` oracle attestation payload.
         DefiOracleAttestation(crate::oracle::DefiOracleAttestation),
         /// Domain endorsements payload.
         DomainEndorsements(Vec<crate::nexus::DomainEndorsementRecord>),
@@ -1239,7 +1239,7 @@ mod model {
         OracleChangeProposal,
         /// Twitter binding record items.
         TwitterBindingRecord,
-        /// DeFi oracle attestation items.
+        /// `DeFi` oracle attestation items.
         DefiOracleAttestation,
         /// Permission items.
         Permission,
@@ -3612,7 +3612,7 @@ pub mod oracle {
             pub binding_hash: KeyedHash,
         }
 
-        /// Find retained DeFi oracle attestations for a domain and subject id.
+        /// Find retained `DeFi` oracle attestations for a domain and subject id.
         #[derive(Display)]
         #[display("Find DeFi oracle attestations for `{key:?}`")]
         #[repr(transparent)]
@@ -3622,7 +3622,7 @@ pub mod oracle {
             pub key: DefiOracleAttestationKey,
         }
 
-        /// Find the latest DeFi oracle attestation for a domain and subject id.
+        /// Find the latest `DeFi` oracle attestation for a domain and subject id.
         #[derive(Display)]
         #[display("Find latest DeFi oracle attestation for `{key:?}`")]
         #[repr(transparent)]
@@ -4471,7 +4471,7 @@ pub mod error {
             OracleChange(crate::oracle::OracleChangeId),
             /// Failed to find oracle provider stats `{0:?}`
             OracleProviderStats(crate::oracle::OracleProviderKey),
-            /// Failed to find DeFi oracle attestation `{0:?}`
+            /// Failed to find `DeFi` oracle attestation `{0:?}`
             DefiOracleAttestation(crate::oracle::DefiOracleAttestationKey),
             /// Failed to find native asset escrow: `{0:?}`
             AssetEscrow(crate::escrow::EscrowId),

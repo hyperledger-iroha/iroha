@@ -2644,6 +2644,8 @@ pub enum ConsensusMessageKind {
     FetchBlockBody,
     /// Exact frontier body fetch response (`BlockBodyResponse`).
     BlockBodyResponse,
+    /// Direct certified block fetch request/response (`CertifiedBlockFetch`).
+    CertifiedBlockFetch,
     /// Consensus-parameter advertisements (`ConsensusParams`).
     ConsensusParams,
     /// Proposal hints (`ProposalHint`).
@@ -2676,8 +2678,6 @@ pub enum ConsensusMessageKind {
     FetchPendingBlock,
     /// Consensus control-flow evidence.
     Evidence,
-    /// Experimental vNext consensus control messages.
-    VNext,
 }
 
 impl ConsensusMessageKind {
@@ -2689,6 +2689,7 @@ impl ConsensusMessageKind {
             ConsensusMessageKind::BlockSyncUpdate => "block_sync_update",
             ConsensusMessageKind::FetchBlockBody => "fetch_block_body",
             ConsensusMessageKind::BlockBodyResponse => "block_body_response",
+            ConsensusMessageKind::CertifiedBlockFetch => "certified_block_fetch",
             ConsensusMessageKind::ConsensusParams => "consensus_params",
             ConsensusMessageKind::ProposalHint => "proposal_hint",
             ConsensusMessageKind::Proposal => "proposal",
@@ -2705,7 +2706,6 @@ impl ConsensusMessageKind {
             ConsensusMessageKind::RbcDeliver => "rbc_deliver",
             ConsensusMessageKind::FetchPendingBlock => "fetch_pending_block",
             ConsensusMessageKind::Evidence => "evidence",
-            ConsensusMessageKind::VNext => "vnext",
         }
     }
 }
@@ -2807,6 +2807,8 @@ pub enum ConsensusMessageReason {
     RosterUnverifiedDeferred,
     /// Consensus message ignored due to mismatched mode/context.
     ModeMismatch,
+    /// Consensus message dropped while sender advertises a mismatched membership hash.
+    MembershipMismatch,
     /// Requested data not found locally.
     NotFound,
 }
@@ -2853,6 +2855,7 @@ impl ConsensusMessageReason {
             ConsensusMessageReason::RosterHashMismatchDeferred => "roster_hash_mismatch_deferred",
             ConsensusMessageReason::RosterUnverifiedDeferred => "roster_unverified_deferred",
             ConsensusMessageReason::ModeMismatch => "mode_mismatch",
+            ConsensusMessageReason::MembershipMismatch => "membership_mismatch",
             ConsensusMessageReason::NotFound => "not_found",
         }
     }
@@ -9527,8 +9530,11 @@ mod tests {
             super::ConsensusMessageKind::FetchPendingBlock.as_str(),
             "fetch_pending_block"
         );
+        assert_eq!(
+            super::ConsensusMessageKind::CertifiedBlockFetch.as_str(),
+            "certified_block_fetch"
+        );
         assert_eq!(super::ConsensusMessageKind::Evidence.as_str(), "evidence");
-        assert_eq!(super::ConsensusMessageKind::VNext.as_str(), "vnext");
 
         assert_eq!(
             super::ConsensusMessageReason::MissingHighestQc.as_str(),
@@ -9557,6 +9563,10 @@ mod tests {
         assert_eq!(
             super::ConsensusMessageReason::ModeMismatch.as_str(),
             "mode_mismatch"
+        );
+        assert_eq!(
+            super::ConsensusMessageReason::MembershipMismatch.as_str(),
+            "membership_mismatch"
         );
         assert_eq!(
             super::ConsensusMessageReason::NotFound.as_str(),

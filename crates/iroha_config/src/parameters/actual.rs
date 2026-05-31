@@ -7742,6 +7742,14 @@ pub struct Zk {
     pub bridge_proof_max_future_drift_blocks: u64,
     /// Allow SCCP transparent proof consumption for lanes whose destination verifiers are not production-ready.
     pub sccp_allow_unready_transparent_proofs: bool,
+    /// SCCP source-chain verifier material that can enable non-SORA source lanes.
+    pub sccp_source_verifier_materials: Vec<SccpSourceVerifierMaterial>,
+    /// SCCP source adapter engine deployments that can enable non-SORA source lanes.
+    pub sccp_source_adapter_engine_deployments: Vec<SccpSourceAdapterEngineDeployment>,
+    /// SCCP destination verifier rollout material that can enable SCCP lanes.
+    pub sccp_destination_rollouts: Vec<SccpDestinationRollout>,
+    /// SCCP governed route allowlist material that can enable SCCP lanes.
+    pub sccp_route_allowlists: Vec<SccpRouteAllowlist>,
     /// Poseidon parameter set identifier to embed into policies (if any).
     pub poseidon_params_id: Option<u32>,
     /// Pedersen parameter set identifier to embed into policies (if any).
@@ -7790,6 +7798,302 @@ pub struct Zk {
     pub registry_max_delta_per_block: u32,
     /// Gas schedule applied to confidential verification.
     pub gas: ConfidentialGas,
+}
+
+/// Configured SCCP source-chain verifier material.
+#[derive(Debug, Clone)]
+pub struct SccpSourceVerifierMaterial {
+    /// Material format version.
+    pub version: u8,
+    /// SCCP source domain identifier.
+    pub source_domain: u32,
+    /// Canonical source-chain key such as `eth`, `bsc`, or `sol`.
+    pub source_chain: String,
+    /// Source proof plan name.
+    pub source_proof_plan: String,
+    /// Source-chain finality model name.
+    pub finality_model: String,
+    /// Source adapter circuit identifier.
+    pub adapter_circuit_id: String,
+    /// Trust-anchor record identifier.
+    pub source_trust_anchor_id: String,
+    /// Hex-encoded 32-byte trust-anchor digest.
+    pub source_trust_anchor_hash: String,
+    /// Consensus verifier identifier.
+    pub consensus_verifier_id: String,
+    /// Hex-encoded 32-byte consensus verifier digest.
+    pub consensus_verifier_hash: String,
+    /// Message inclusion verifier identifier.
+    pub message_inclusion_verifier_id: String,
+    /// Hex-encoded 32-byte message inclusion verifier digest.
+    pub message_inclusion_verifier_hash: String,
+    /// Source-state verifier identifier, if the source plan binds one.
+    pub source_state_verifier_id: String,
+    /// Hex-encoded 32-byte source-state verifier digest, if required by the source plan.
+    pub source_state_verifier_hash: String,
+    /// Governed source bridge emitter identifier, if the source plan binds one.
+    pub source_bridge_emitter_id: String,
+    /// Hex-encoded governed source bridge emitter address, if required by the source plan.
+    pub source_bridge_emitter_address: String,
+    /// Hex-encoded 32-byte governed source bridge emitter runtime bytecode hash.
+    pub source_bridge_emitter_code_hash: String,
+    /// Hex-encoded 32-byte governed source bridge network identifier.
+    pub source_bridge_network_id: String,
+    /// Hex-encoded 20-byte governed source bridge owner address.
+    pub source_bridge_owner_address: String,
+    /// Hex-encoded 32-byte governed source bridge config hash, when required by the source plan.
+    pub source_bridge_config_hash: String,
+    /// Finality policy identifier.
+    pub finality_policy_id: String,
+    /// Hex-encoded 32-byte finality policy digest.
+    pub finality_policy_hash: String,
+    /// Whether this record is placeholder material and must remain disabled.
+    pub placeholder_material: bool,
+}
+
+/// Configured SCCP source adapter engine deployment material.
+#[derive(Debug, Clone)]
+pub struct SccpSourceAdapterEngineDeployment {
+    /// Material format version.
+    pub version: u8,
+    /// SCCP source domain identifier.
+    pub source_domain: u32,
+    /// SCCP target domain identifier.
+    pub target_domain: u32,
+    /// Canonical source-chain key such as `eth`, `bsc`, or `sol`.
+    pub source_chain: String,
+    /// Source proof plan name.
+    pub source_proof_plan: String,
+    /// Source-chain finality model name.
+    pub finality_model: String,
+    /// Source adapter proof family identifier.
+    pub adapter_proof_family: String,
+    /// Source adapter circuit identifier.
+    pub adapter_circuit_id: String,
+    /// Hex-encoded 32-byte OpenVerify verifier-key commitment for this source->target lane.
+    pub adapter_verifier_vk_hash: String,
+    /// Trust-anchor record identifier.
+    pub source_trust_anchor_id: String,
+    /// Hex-encoded 32-byte trust-anchor digest.
+    pub source_trust_anchor_hash: String,
+    /// Consensus verifier identifier.
+    pub consensus_verifier_id: String,
+    /// Hex-encoded 32-byte consensus verifier digest.
+    pub consensus_verifier_hash: String,
+    /// Message inclusion verifier identifier.
+    pub message_inclusion_verifier_id: String,
+    /// Hex-encoded 32-byte message inclusion verifier digest.
+    pub message_inclusion_verifier_hash: String,
+    /// Source-state verifier identifier, if the source plan binds one.
+    pub source_state_verifier_id: String,
+    /// Hex-encoded 32-byte source-state verifier digest, if required by the source plan.
+    pub source_state_verifier_hash: String,
+    /// Governed source bridge emitter identifier, if the source plan binds one.
+    pub source_bridge_emitter_id: String,
+    /// Hex-encoded governed source bridge emitter address, if required by the source plan.
+    pub source_bridge_emitter_address: String,
+    /// Hex-encoded 32-byte governed source bridge emitter runtime bytecode hash.
+    pub source_bridge_emitter_code_hash: String,
+    /// Hex-encoded 32-byte governed source bridge network identifier.
+    pub source_bridge_network_id: String,
+    /// Hex-encoded 20-byte governed source bridge owner address.
+    pub source_bridge_owner_address: String,
+    /// Hex-encoded 32-byte governed source bridge config hash, when required by the source plan.
+    pub source_bridge_config_hash: String,
+    /// Finality policy identifier.
+    pub finality_policy_id: String,
+    /// Hex-encoded 32-byte finality policy digest.
+    pub finality_policy_hash: String,
+    /// Hex-encoded 32-byte deployment receipt digest.
+    pub deployment_receipt_hash: String,
+    /// Hex-encoded 32-byte Solana Tower replay verifier digest, when auditing SOL source readiness.
+    pub solana_tower_replay_verifier_hash: String,
+    /// Hex-encoded 32-byte Solana full AccountsDB lattice verifier digest, when auditing SOL source readiness.
+    pub solana_full_accountsdb_lattice_verifier_hash: String,
+    /// Hex-encoded 32-byte Solana bank/fork-choice verifier digest, when auditing SOL source readiness.
+    pub solana_bank_fork_choice_verifier_hash: String,
+    /// Hex-encoded Solana full-light-client audit digest derived from the three SOL verifier hashes.
+    pub solana_full_light_client_gate_hash: String,
+    /// Hex-encoded 32-byte TON masterchain config verifier digest, when auditing TON source readiness.
+    pub ton_masterchain_config_verifier_hash: String,
+    /// Hex-encoded 32-byte TON validator-set transition verifier digest, when auditing TON source readiness.
+    pub ton_validator_set_transition_verifier_hash: String,
+    /// Hex-encoded 32-byte TON shard-accounts dictionary verifier digest, when auditing TON source readiness.
+    pub ton_shard_accounts_dictionary_verifier_hash: String,
+    /// Hex-encoded TON full-light-client audit digest derived from the three TON verifier hashes.
+    pub ton_full_light_client_gate_hash: String,
+    /// Hex-encoded TRON DPoS source gate digest derived from the governed source deployment bundle.
+    pub tron_dpos_source_gate_hash: String,
+}
+
+/// Configured SCCP destination verifier rollout material.
+#[derive(Debug, Clone)]
+pub struct SccpDestinationRollout {
+    /// Material format version.
+    pub version: u8,
+    /// SCCP counterparty domain identifier.
+    pub domain: u32,
+    /// Canonical counterparty chain key.
+    pub chain: String,
+    /// Destination verifier plan name.
+    pub verifier_plan: String,
+    /// Whether the destination verifier deployment is immutable.
+    pub immutable_verifier_ready: bool,
+    /// Whether the destination cryptographic anchors are active.
+    pub anchors_ready: bool,
+    /// Chain-specific verifier identity, such as a contract address or program id.
+    pub verifier_identity: Option<String>,
+    /// Hex-encoded 32-byte verifier code digest.
+    pub verifier_code_hash: Option<String>,
+    /// Hex-encoded 32-byte verifier key digest for Groth16-backed verifier deployments.
+    pub verifier_key_hash: Option<String>,
+    /// Hex-encoded EVM-family destination network id used in destination binding evidence.
+    pub destination_network_id: Option<String>,
+    /// Hex-encoded EVM-family bridge wrapper address used in destination binding evidence.
+    pub destination_bridge_address: Option<String>,
+    /// Canonical destination binding key derived from rollout deployment evidence.
+    pub destination_binding_key: Option<String>,
+    /// Hex-encoded canonical destination binding hash derived from rollout deployment evidence.
+    pub destination_binding_hash: Option<String>,
+    /// Destination trust-anchor profile id.
+    pub anchor_id: Option<String>,
+    /// Solana RPC commitment used for live ProgramData evidence.
+    pub solana_rpc_commitment: Option<String>,
+    /// Solana verifier Program account owner.
+    pub solana_program_owner: Option<String>,
+    /// Solana verifier ProgramData account owner.
+    pub solana_programdata_owner: Option<String>,
+    /// Whether Solana ProgramData is immutable with no upgrade authority.
+    pub solana_program_immutable: Option<bool>,
+    /// Base64-encoded Solana Program account data.
+    pub solana_program_account_data_base64: Option<String>,
+    /// Solana ProgramData account address for the verifier program.
+    pub solana_programdata_address: Option<String>,
+    /// Canonical decimal Solana ProgramData deployment slot.
+    pub solana_programdata_slot: Option<String>,
+    /// Canonical decimal expected Solana ProgramData deployment slot.
+    pub solana_expected_programdata_slot: Option<String>,
+    /// Canonical decimal RPC context slot for the Solana Program account.
+    pub solana_program_account_context_slot: Option<String>,
+    /// Canonical decimal RPC context slot for the Solana ProgramData account.
+    pub solana_programdata_account_context_slot: Option<String>,
+    /// Hex-encoded BLAKE2b-256 digest of the immutable Solana ProgramData metadata header.
+    pub solana_programdata_metadata_blake2b256: Option<String>,
+    /// Base64-encoded immutable Solana ProgramData metadata header.
+    pub solana_programdata_metadata_base64: Option<String>,
+    /// Hex-encoded BLAKE2b-256 digest of the deployed Solana verifier executable.
+    pub solana_programdata_executable_blake2b256: Option<String>,
+    /// Base64-encoded deployed Solana verifier executable bytes.
+    pub solana_programdata_executable_base64: Option<String>,
+    /// TON live account status observed for the verifier contract.
+    pub ton_account_status: Option<String>,
+    /// Hex-encoded TON live account state hash for the verifier contract.
+    pub ton_account_state_hash: Option<String>,
+    /// Canonical positive decimal TON last-transaction logical time.
+    pub ton_last_transaction_lt: Option<String>,
+    /// Hex-encoded TON live last-transaction hash for the verifier contract.
+    pub ton_last_transaction_hash: Option<String>,
+    /// Hex-encoded TON verifier code BoC root hash.
+    pub ton_verifier_code_boc_root_hash: Option<String>,
+    /// Hex-encoded TON verifier code BoC bytes.
+    pub ton_verifier_code_boc: Option<String>,
+    /// Hex-encoded finalized Substrate block head used for runtime evidence.
+    pub substrate_finalized_head: Option<String>,
+    /// Substrate runtime `specName` observed at the finalized head.
+    pub substrate_runtime_spec_name: Option<String>,
+    /// Canonical decimal Substrate runtime `specVersion`.
+    pub substrate_runtime_spec_version: Option<String>,
+    /// Canonical decimal Substrate runtime `transactionVersion`.
+    pub substrate_runtime_transaction_version: Option<String>,
+    /// Hex-encoded BLAKE2b-256 digest of the finalized Substrate runtime code.
+    pub substrate_runtime_code_hash: Option<String>,
+    /// Base64-encoded finalized Substrate runtime code bytes.
+    pub substrate_runtime_code_base64: Option<String>,
+    /// Remaining rollout blockers. Must be empty for production.
+    pub blockers: Vec<String>,
+}
+
+/// Configured SCCP governed route allowlist material.
+#[derive(Debug, Clone)]
+pub struct SccpRouteAllowlist {
+    /// Material format version.
+    pub version: u8,
+    /// SCCP counterparty domain identifier.
+    pub domain: u32,
+    /// Canonical counterparty chain key.
+    pub chain: String,
+    /// Route activation policy name.
+    pub activation_policy: String,
+    /// Governed route allowlist profile id.
+    pub route_allowlist_id: Option<String>,
+    /// Hex-encoded 32-byte route allowlist policy digest.
+    pub route_allowlist_hash: Option<String>,
+    /// Route canary status, expected to be `passed` for production launch.
+    pub route_canary_status: Option<String>,
+    /// Hex-encoded 32-byte post-deploy route canary evidence digest.
+    pub route_canary_evidence_hash: Option<String>,
+    /// Hex-encoded route allowlist hash bound by the route canary evidence.
+    pub route_canary_route_allowlist_hash: Option<String>,
+    /// Hex-encoded destination binding hash bound by the route canary evidence.
+    pub route_canary_destination_binding_hash: Option<String>,
+    /// Hex-encoded EVM MessageProofAccepted transaction hash bound by route canary evidence.
+    pub evm_route_canary_transaction_hash: Option<String>,
+    /// EVM MessageProofAccepted log index bound by route canary evidence.
+    pub evm_route_canary_log_index: Option<u32>,
+    /// Hex-encoded EVM MessageProofAccepted message id bound by route canary evidence.
+    pub evm_route_canary_message_id: Option<String>,
+    /// Hex-encoded EVM MessageProofAccepted statement hash bound by route canary evidence.
+    pub evm_route_canary_statement_hash: Option<String>,
+    /// Hex-encoded EVM MessageProofAccepted commitment root bound by route canary evidence.
+    pub evm_route_canary_commitment_root: Option<String>,
+    /// Whether EVM `usedMessageProofs(messageId)` was true for the canary.
+    pub evm_route_canary_used_message_proof: Option<bool>,
+    /// Hex-encoded TRON MessageProofAccepted transaction id bound by route canary evidence.
+    pub tron_route_canary_transaction_id: Option<String>,
+    /// Hex-encoded 0x41-prefixed TRON transaction owner address bound by route canary evidence.
+    pub tron_route_canary_transaction_owner_address: Option<String>,
+    /// TRON MessageProofAccepted log index bound by route canary evidence.
+    pub tron_route_canary_log_index: Option<u32>,
+    /// Hex-encoded TRON MessageProofAccepted message id bound by route canary evidence.
+    pub tron_route_canary_message_id: Option<String>,
+    /// Hex-encoded SHA-256 digest of the TRON submitSccpMessageProof calldata.
+    pub tron_route_canary_call_data_sha256: Option<String>,
+    /// Hex-encoded TRON submitSccpMessageProof payload hash.
+    pub tron_route_canary_payload_hash: Option<String>,
+    /// SCCP target domain decoded from the TRON submitSccpMessageProof calldata.
+    pub tron_route_canary_target_domain: Option<u32>,
+    /// Hex-encoded TRON MessageProofAccepted statement hash bound by route canary evidence.
+    pub tron_route_canary_statement_hash: Option<String>,
+    /// Hex-encoded TRON MessageProofAccepted commitment root bound by route canary evidence.
+    pub tron_route_canary_commitment_root: Option<String>,
+    /// Hex-encoded finality height decoded from the TRON submitSccpMessageProof calldata.
+    pub tron_route_canary_finality_height: Option<String>,
+    /// Hex-encoded finality block hash decoded from the TRON submitSccpMessageProof calldata.
+    pub tron_route_canary_finality_block_hash: Option<String>,
+    /// Proof version decoded from the TRON submitSccpMessageProof calldata.
+    pub tron_route_canary_proof_version: Option<u32>,
+    /// SCCP source domain decoded from the TRON submitSccpMessageProof calldata proof descriptor.
+    pub tron_route_canary_proof_source_domain: Option<u32>,
+    /// Whether TRON `usedMessageProofs(messageId)` was true for the canary.
+    pub tron_route_canary_used_message_proof: Option<bool>,
+    /// Whether TRON raw transaction owner matched the visible transaction owner.
+    pub tron_route_canary_raw_data_owner_matches_transaction: Option<bool>,
+    /// Hex-encoded SHA-256 digest of the TRON route-canary transaction signature.
+    pub tron_route_canary_signature_sha256: Option<String>,
+    /// Hex-encoded 0x41-prefixed address recovered from the TRON route-canary signature.
+    pub tron_route_canary_signature_recovered_address: Option<String>,
+    /// Whether the TRON route-canary signature recovered to the transaction owner.
+    pub tron_route_canary_signature_recovers_to_owner: Option<bool>,
+    /// Hex-encoded TON live account state hash bound by route canary evidence.
+    pub ton_route_canary_account_state_hash: Option<String>,
+    /// Canonical positive decimal TON last-transaction logical time bound by route canary evidence.
+    pub ton_route_canary_last_transaction_lt: Option<String>,
+    /// Hex-encoded TON last-transaction hash bound by route canary evidence.
+    pub ton_route_canary_last_transaction_hash: Option<String>,
+    /// Whether governance has activated this route profile.
+    pub routes_allowlisted: bool,
+    /// Remaining route blockers. Must be empty for production.
+    pub blockers: Vec<String>,
 }
 
 /// CABAC runtime mode compiled into the host.

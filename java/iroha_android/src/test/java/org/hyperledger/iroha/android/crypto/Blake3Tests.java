@@ -13,8 +13,10 @@ public final class Blake3Tests {
   public static void main(final String[] args) {
     emptyInputProducesKnownHash();
     abcInputProducesKnownHash();
+    xofOutputProducesKnownHashPrefix();
+    twoChunkInputProducesKnownHash();
     hashIsDeterministic();
-    inputExceedingChunkLenThrows();
+    inputExceedingHelperLimitThrows();
     System.out.println("[IrohaAndroid] Blake3 tests passed.");
   }
 
@@ -32,6 +34,14 @@ public final class Blake3Tests {
     assert Arrays.equals(expected, hash) : "abc input must match BLAKE3 reference vector";
   }
 
+  private static void xofOutputProducesKnownHashPrefix() {
+    final byte[] hash = Blake3.derive("abc".getBytes(StandardCharsets.UTF_8), 64);
+    final byte[] expected = hexToBytes(
+        "6437b3ac38465133ffb63b75273a8db548c558465d79db03fd359c6cd5bd9d85"
+            + "1fb250ae7393f5d02813b65d521a0d492d9ba09cf7ce7f4cffd900f23374bf0b");
+    assert Arrays.equals(expected, hash) : "BLAKE3 XOF output must match reference vector";
+  }
+
   private static void hashIsDeterministic() {
     final byte[] input = "62Fk4FPcMuLvW5QjDGNF2a4jAmjM".getBytes(StandardCharsets.UTF_8);
     final byte[] first = Blake3.hash(input);
@@ -39,14 +49,21 @@ public final class Blake3Tests {
     assert Arrays.equals(first, second) : "hash must be deterministic across calls";
   }
 
-  private static void inputExceedingChunkLenThrows() {
+  private static void twoChunkInputProducesKnownHash() {
+    final byte[] hash = Blake3.hash(new byte[2048]);
+    final byte[] expected = hexToBytes(
+        "be2a8de3dcf46c94ce85cdc8e07ac308f4d8a95490d956c38d780fd610db0813");
+    assert Arrays.equals(expected, hash) : "2048-byte input must match BLAKE3 reference vector";
+  }
+
+  private static void inputExceedingHelperLimitThrows() {
     boolean threw = false;
     try {
-      Blake3.hash(new byte[1025]);
+      Blake3.hash(new byte[65610]);
     } catch (final IllegalArgumentException ex) {
       threw = ex.getMessage().contains("Input too large");
     }
-    assert threw : "expected input > 1024 bytes to throw";
+    assert threw : "expected input above Solana AccountLtHash preimage size to throw";
   }
 
   private static byte[] hexToBytes(final String hex) {

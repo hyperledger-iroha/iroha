@@ -12060,6 +12060,259 @@ public extension ToriiTransactionEntrypointSubmitting where Self: Sendable {
     }
 }
 
+/// Request payload for `POST /v1/bridge/proofs/submit`.
+public struct ToriiBridgeProofSubmitRequest: Encodable, Sendable, Equatable {
+    public let authority: String
+    public let privateKey: ToriiJSONValue?
+    public let publicKeyHex: String?
+    public let signatureB64: String?
+    public let burnBundle: ToriiJSONValue?
+    public let messageBundle: ToriiJSONValue?
+    public let networkIdHex: String?
+    public let verifierAddressHex: String?
+    public let bridgeAddressHex: String?
+    public let verifierCodeHashHex: String?
+    public let verifierKeyHashHex: String?
+    public let expectedDestinationBindingHashHex: String?
+    public let tronVerifierAddress: String?
+    public let proofBytesHex: String?
+    public let creationTimeMs: ToriiJSONValue?
+
+    public init(authority: String,
+                privateKey: ToriiJSONValue? = nil,
+                publicKeyHex: String? = nil,
+                signatureB64: String? = nil,
+                burnBundle: ToriiJSONValue? = nil,
+                messageBundle: ToriiJSONValue? = nil,
+                networkIdHex: String? = nil,
+                verifierAddressHex: String? = nil,
+                bridgeAddressHex: String? = nil,
+                verifierCodeHashHex: String? = nil,
+                verifierKeyHashHex: String? = nil,
+                expectedDestinationBindingHashHex: String? = nil,
+                tronVerifierAddress: String? = nil,
+                proofBytesHex: String? = nil,
+                creationTimeMs: ToriiJSONValue? = nil) {
+        self.authority = authority
+        self.privateKey = privateKey
+        self.publicKeyHex = publicKeyHex
+        self.signatureB64 = signatureB64
+        self.burnBundle = burnBundle
+        self.messageBundle = messageBundle
+        self.networkIdHex = networkIdHex
+        self.verifierAddressHex = verifierAddressHex
+        self.bridgeAddressHex = bridgeAddressHex
+        self.verifierCodeHashHex = verifierCodeHashHex
+        self.verifierKeyHashHex = verifierKeyHashHex
+        self.expectedDestinationBindingHashHex = expectedDestinationBindingHashHex
+        self.tronVerifierAddress = tronVerifierAddress
+        self.proofBytesHex = proofBytesHex
+        self.creationTimeMs = creationTimeMs
+    }
+
+    private enum CodingKeys: String, CodingKey {
+        case authority
+        case privateKey = "private_key"
+        case publicKeyHex = "public_key_hex"
+        case signatureB64 = "signature_b64"
+        case burnBundle = "burn_bundle"
+        case messageBundle = "message_bundle"
+        case networkIdHex = "network_id_hex"
+        case verifierAddressHex = "verifier_address_hex"
+        case bridgeAddressHex = "bridge_address_hex"
+        case verifierCodeHashHex = "verifier_code_hash_hex"
+        case verifierKeyHashHex = "verifier_key_hash_hex"
+        case expectedDestinationBindingHashHex = "expected_destination_binding_hash_hex"
+        case tronVerifierAddress = "tron_verifier_address"
+        case proofBytesHex = "proof_bytes_hex"
+        case creationTimeMs = "creation_time_ms"
+    }
+}
+
+public extension ToriiBridgeProofSubmitRequest {
+    /// Build an on-chain bridge-proof submit request from an EVM-family SCCP proof submission.
+    init(authority: String,
+         messageBundle: ToriiJSONValue,
+         evmSccpSubmission submission: EvmSccpSubmission,
+         destinationBinding: EvmSccpDestinationBinding,
+         privateKey: ToriiJSONValue? = nil,
+         publicKeyHex: String? = nil,
+         signatureB64: String? = nil,
+         creationTimeMs: ToriiJSONValue? = nil) throws {
+        try Self.requireEvmSubmission(submission, matches: destinationBinding)
+        try Self.requireSccpGroth16Proof(submission.proofBytes, matches: messageBundle)
+        self.init(
+            authority: authority,
+            privateKey: privateKey,
+            publicKeyHex: publicKeyHex,
+            signatureB64: signatureB64,
+            messageBundle: messageBundle,
+            networkIdHex: destinationBinding.networkId,
+            verifierAddressHex: destinationBinding.verifierAddress,
+            bridgeAddressHex: destinationBinding.bridgeAddress,
+            verifierCodeHashHex: destinationBinding.verifierCodeHash,
+            verifierKeyHashHex: destinationBinding.verifierKeyHash,
+            expectedDestinationBindingHashHex: destinationBinding.hash,
+            proofBytesHex: "0x" + submission.proofBytes.hexEncodedString(),
+            creationTimeMs: creationTimeMs
+        )
+    }
+
+    /// Build an on-chain bridge-proof submit request from a TRON SCCP proof submission.
+    init(authority: String,
+         messageBundle: ToriiJSONValue,
+         tronSccpSubmission submission: TronSccpSubmission,
+         destinationBinding: TronSccpDestinationBinding,
+         privateKey: ToriiJSONValue? = nil,
+         publicKeyHex: String? = nil,
+         signatureB64: String? = nil,
+         creationTimeMs: ToriiJSONValue? = nil) throws {
+        try Self.requireTronSubmission(submission, matches: destinationBinding)
+        try Self.requireSccpGroth16Proof(submission.proofBytes, matches: messageBundle)
+        self.init(
+            authority: authority,
+            privateKey: privateKey,
+            publicKeyHex: publicKeyHex,
+            signatureB64: signatureB64,
+            messageBundle: messageBundle,
+            networkIdHex: destinationBinding.networkId,
+            verifierCodeHashHex: destinationBinding.verifierCodeHash,
+            verifierKeyHashHex: destinationBinding.verifierKeyHash,
+            expectedDestinationBindingHashHex: destinationBinding.hash,
+            tronVerifierAddress: destinationBinding.verifierAddress,
+            proofBytesHex: "0x" + submission.proofBytes.hexEncodedString(),
+            creationTimeMs: creationTimeMs
+        )
+    }
+
+    private static func requireEvmSubmission(_ submission: EvmSccpSubmission,
+                                             matches destinationBinding: EvmSccpDestinationBinding) throws {
+        guard submission.version == 1 else {
+            throw ToriiClientError.invalidPayload("EVM SCCP submission version must be 1.")
+        }
+        guard submission.submissionKind == "contract_call" else {
+            throw ToriiClientError.invalidPayload("EVM SCCP submission must be a contract_call.")
+        }
+        guard submission.sourceDomain == destinationBinding.sourceDomain else {
+            throw ToriiClientError.invalidPayload("EVM SCCP submission sourceDomain must match destination binding.")
+        }
+        guard submission.targetDomain == destinationBinding.targetDomain else {
+            throw ToriiClientError.invalidPayload("EVM SCCP submission targetDomain must match destination binding.")
+        }
+        guard submission.verifierBackend == destinationBinding.verifierBackend else {
+            throw ToriiClientError.invalidPayload("EVM SCCP submission verifierBackend must match destination binding.")
+        }
+        guard submission.proofFamily == destinationBinding.proofFamily else {
+            throw ToriiClientError.invalidPayload("EVM SCCP submission proofFamily must match destination binding.")
+        }
+        guard submission.destinationBindingHash == destinationBinding.hash else {
+            throw ToriiClientError.invalidPayload("EVM SCCP submission destinationBindingHash must match destination binding.")
+        }
+    }
+
+    private static func requireTronSubmission(_ submission: TronSccpSubmission,
+                                              matches destinationBinding: TronSccpDestinationBinding) throws {
+        guard submission.version == 1 else {
+            throw ToriiClientError.invalidPayload("TRON SCCP submission version must be 1.")
+        }
+        guard submission.submissionKind == "contract_call" else {
+            throw ToriiClientError.invalidPayload("TRON SCCP submission must be a contract_call.")
+        }
+        guard submission.sourceDomain == destinationBinding.sourceDomain else {
+            throw ToriiClientError.invalidPayload("TRON SCCP submission sourceDomain must match destination binding.")
+        }
+        guard submission.targetDomain == destinationBinding.targetDomain else {
+            throw ToriiClientError.invalidPayload("TRON SCCP submission targetDomain must match destination binding.")
+        }
+        guard submission.verifierBackend == destinationBinding.verifierBackend else {
+            throw ToriiClientError.invalidPayload("TRON SCCP submission verifierBackend must match destination binding.")
+        }
+        guard submission.proofFamily == destinationBinding.proofFamily else {
+            throw ToriiClientError.invalidPayload("TRON SCCP submission proofFamily must match destination binding.")
+        }
+        guard submission.destinationBindingHash == destinationBinding.hash else {
+            throw ToriiClientError.invalidPayload("TRON SCCP submission destinationBindingHash must match destination binding.")
+        }
+    }
+
+    private static func requireSccpGroth16Proof(_ proofBytes: Data,
+                                                matches messageBundle: ToriiJSONValue) throws {
+        guard proofBytes.count == sccpGroth16Bn254ProofAbiByteLengthV1,
+              proofBytes.contains(where: { $0 != 0 })
+        else {
+            throw ToriiClientError.invalidPayload("SCCP proof bytes must be a non-zero 384-byte Groth16 ABI tuple.")
+        }
+        if let field = sccpGroth16Bn254ProofTupleInvalidField(proofBytes) {
+            throw ToriiClientError.invalidPayload("\(field) is invalid.")
+        }
+        let context = try sccpMessageProofContext(from: messageBundle)
+        guard proofWord(proofBytes, index: 0) == abiWordU32(1) else {
+            throw ToriiClientError.invalidPayload("proof_bytes_hex.version must be 1.")
+        }
+        guard proofWord(proofBytes, index: 1) == context.messageId else {
+            throw ToriiClientError.invalidPayload(
+                "proof_bytes_hex.message_id must match message_bundle.commitment.message_id."
+            )
+        }
+        guard proofWord(proofBytes, index: 2) == abiWordU32(0) else {
+            throw ToriiClientError.invalidPayload("proof_bytes_hex.source_domain must be SORA.")
+        }
+        guard proofWord(proofBytes, index: 3) == context.commitmentRoot else {
+            throw ToriiClientError.invalidPayload(
+                "proof_bytes_hex.commitment_root must match message_bundle.commitment_root."
+            )
+        }
+    }
+
+    private static func sccpMessageProofContext(from messageBundle: ToriiJSONValue) throws -> (messageId: Data, commitmentRoot: Data) {
+        guard case let .object(bundle) = messageBundle else {
+            throw ToriiClientError.invalidPayload("message_bundle must contain commitment metadata.")
+        }
+        guard case let .object(commitment)? = bundle["commitment"] else {
+            throw ToriiClientError.invalidPayload("message_bundle.commitment.message_id is required.")
+        }
+        let messageIdValue = commitment["message_id"] ?? commitment["messageId"]
+        let commitmentRootValue = bundle["commitment_root"] ?? bundle["commitmentRoot"]
+        guard let messageIdValue, let commitmentRootValue else {
+            throw ToriiClientError.invalidPayload(
+                "message_bundle.commitment.message_id and message_bundle.commitment_root are required."
+            )
+        }
+        return (
+            try hex32Data(messageIdValue, label: "message_bundle.commitment.message_id"),
+            try hex32Data(commitmentRootValue, label: "message_bundle.commitment_root")
+        )
+    }
+
+    private static func hex32Data(_ value: ToriiJSONValue, label: String) throws -> Data {
+        guard case let .string(string) = value else {
+            throw ToriiClientError.invalidPayload("\(label) must contain valid hexadecimal bytes.")
+        }
+        var normalized = string
+        if normalized.hasPrefix("0x") || normalized.hasPrefix("0X") {
+            normalized = String(normalized.dropFirst(2))
+        }
+        guard let data = Data(hexString: normalized), data.count == 32 else {
+            throw ToriiClientError.invalidPayload("\(label) must contain valid hexadecimal bytes.")
+        }
+        return data
+    }
+
+    private static func proofWord(_ proofBytes: Data, index: Int) -> Data {
+        let start = index * 32
+        return Data(proofBytes[start..<(start + 32)])
+    }
+
+    private static func abiWordU32(_ value: UInt32) -> Data {
+        var out = Data(repeating: 0, count: 32)
+        out[28] = UInt8((value >> 24) & 0xff)
+        out[29] = UInt8((value >> 16) & 0xff)
+        out[30] = UInt8((value >> 8) & 0xff)
+        out[31] = UInt8(value & 0xff)
+        return out
+    }
+}
+
 public final class ToriiClient: ToriiTransactionEntrypointSubmitting, @unchecked Sendable {
     private struct ObservedServerClock: Sendable {
         let serverEpochMs: UInt64
@@ -13041,6 +13294,24 @@ public final class ToriiClient: ToriiTransactionEntrypointSubmitting, @unchecked
                                             idempotencyKey: String?,
                                             completion: @escaping (Result<ToriiSubmitTransactionResponse?, Swift.Error>) -> Void) -> Task<Void, Never> {
         runTask(completion) { try await self.submitTransactionEntrypoint(data: data, idempotencyKey: idempotencyKey) }
+    }
+
+    @discardableResult
+    public func postBridgeProofSubmitJson(_ jsonData: Data,
+                                          completion: @escaping (Result<Data, Swift.Error>) -> Void) -> Task<Void, Never> {
+        runTask(completion) { try await self.postBridgeProofSubmitJson(jsonData) }
+    }
+
+    @discardableResult
+    public func submitBridgeProof(_ requestBody: ToriiBridgeProofSubmitRequest,
+                                  completion: @escaping (Result<Data, Swift.Error>) -> Void) -> Task<Void, Never> {
+        runTask(completion) { try await self.submitBridgeProof(requestBody) }
+    }
+
+    @discardableResult
+    public func postBridgeMessageSubmitJson(_ jsonData: Data,
+                                            completion: @escaping (Result<Data, Swift.Error>) -> Void) -> Task<Void, Never> {
+        runTask(completion) { try await self.postBridgeMessageSubmitJson(jsonData) }
     }
 
     @discardableResult
@@ -15614,6 +15885,449 @@ public final class ToriiClient: ToriiTransactionEntrypointSubmitting, @unchecked
                                            data: jsonData,
                                            contentType: "application/json",
                                            idempotencyKey: idempotencyKey)
+    }
+
+    public func postBridgeProofSubmitJson(_ jsonData: Data) async throws -> Data {
+        try await postBridgeSubmitJson(path: "/v1/bridge/proofs/submit",
+                                       data: jsonData,
+                                       context: "bridge proof submit")
+    }
+
+    public func submitBridgeProof(_ requestBody: ToriiBridgeProofSubmitRequest) async throws -> Data {
+        try await postBridgeProofSubmitJson(JSONEncoder().encode(requestBody))
+    }
+
+    public func postBridgeMessageSubmitJson(_ jsonData: Data) async throws -> Data {
+        try await postBridgeSubmitJson(path: "/v1/bridge/messages",
+                                       data: jsonData,
+                                       context: "bridge message submit")
+    }
+
+    private func postBridgeSubmitJson(path: String,
+                                      data: Data,
+                                      context: String) async throws -> Data {
+        guard !data.isEmpty else {
+            throw ToriiClientError.invalidPayload("\(context) body must not be empty.")
+        }
+        try preflightBridgeSubmitJson(data, context: context)
+        let request = try makeRequest(path: path,
+                                      method: .post,
+                                      body: data,
+                                      headers: [
+                                          "Content-Type": "application/json",
+                                          "Accept": "application/json"
+                                      ])
+        let (responseData, response) = try await send(request)
+        try ensureStatus(response, equals: 200, responseBody: responseData)
+        return responseData
+    }
+
+    private func preflightBridgeSubmitJson(_ data: Data, context: String) throws {
+        guard let root = try? JSONSerialization.jsonObject(with: data),
+              let fields = root as? [String: Any]
+        else {
+            return
+        }
+        if let proofBytesHex = fields["proof_bytes_hex"], !(proofBytesHex is NSNull) {
+            guard let proofBytesHex = proofBytesHex as? String else {
+                throw ToriiClientError.invalidPayload(
+                    "proof_bytes_hex must contain valid hexadecimal bytes."
+                )
+            }
+            guard proofBytesHex.trimmingCharacters(in: .whitespacesAndNewlines) == proofBytesHex else {
+                throw ToriiClientError.invalidPayload(
+                    "proof_bytes_hex must contain canonical hexadecimal bytes."
+                )
+            }
+            var normalized = proofBytesHex
+            if normalized.hasPrefix("0x") || normalized.hasPrefix("0X") {
+                normalized = String(normalized.dropFirst(2))
+            }
+            guard !normalized.isEmpty, let bytes = Data(hexString: normalized) else {
+                throw ToriiClientError.invalidPayload(
+                    "proof_bytes_hex must contain valid hexadecimal bytes."
+                )
+            }
+            guard bytes.contains(where: { $0 != 0 }) else {
+                throw ToriiClientError.invalidPayload("proof_bytes_hex must not be all zero.")
+            }
+            guard bytes.count == sccpGroth16Bn254ProofAbiByteLengthV1 else {
+                throw ToriiClientError.invalidPayload(
+                    "proof_bytes_hex must be a \(sccpGroth16Bn254ProofAbiByteLengthV1)-byte hex string."
+                )
+            }
+            try preflightSccpGroth16ProofBytes(bytes, fields: fields)
+        }
+        try preflightSccpDestinationProofMaterialRelationship(fields)
+        try preflightSccpBridgeSubmitBundleSelection(fields, context: context)
+    }
+
+    private static let sccpDestinationProofMaterialHexFields: [(String, Int)] = [
+        ("network_id_hex", 32),
+        ("verifier_address_hex", 20),
+        ("bridge_address_hex", 20),
+        ("verifier_code_hash_hex", 32),
+        ("verifier_key_hash_hex", 32),
+        ("expected_destination_binding_hash_hex", 32)
+    ]
+    private static let tronBase58Alphabet = Array("123456789ABCDEFGHJKLMNPQRSTUVWXYZabcdefghijkmnopqrstuvwxyz")
+    private static let tronBase58Index = Dictionary(
+        uniqueKeysWithValues: tronBase58Alphabet.enumerated().map { ($0.element, $0.offset) }
+    )
+
+    private func preflightSccpDestinationProofMaterialRelationship(_ fields: [String: Any]) throws {
+        let hasDestinationMaterial = try preflightSccpDestinationProofMaterial(fields)
+        let hasProofBytes = fields["proof_bytes_hex"] != nil && !(fields["proof_bytes_hex"] is NSNull)
+        if hasDestinationMaterial && !hasProofBytes {
+            throw ToriiClientError.invalidPayload(
+                "proof_bytes_hex is required when SCCP destination proof parameters are supplied."
+            )
+        }
+        if hasProofBytes && !hasDestinationMaterial {
+            throw ToriiClientError.invalidPayload(
+                "deployment destination fields are required when proof_bytes_hex is supplied."
+            )
+        }
+        if hasDestinationMaterial && hasProofBytes {
+            try preflightSccpDestinationProofMaterialTuple(fields)
+        }
+    }
+
+    private func preflightSccpDestinationProofMaterial(_ fields: [String: Any]) throws -> Bool {
+        var hasDestinationMaterial = false
+        for (field, expectedByteCount) in Self.sccpDestinationProofMaterialHexFields {
+            guard let value = fields[field], !(value is NSNull) else {
+                continue
+            }
+            _ = try nonZeroHexData(value, label: field, expectedByteCount: expectedByteCount)
+            hasDestinationMaterial = true
+        }
+        if let value = fields["tron_verifier_address"], !(value is NSNull) {
+            _ = try Self.normalizeTronBase58CheckAddress(value, label: "tron_verifier_address")
+            hasDestinationMaterial = true
+        }
+        return hasDestinationMaterial
+    }
+
+    private func preflightSccpDestinationProofMaterialTuple(_ fields: [String: Any]) throws {
+        let hasEvmFields = hasSccpDestinationField(fields, "verifier_address_hex")
+            || hasSccpDestinationField(fields, "bridge_address_hex")
+        let hasTronFields = hasSccpDestinationField(fields, "tron_verifier_address")
+        if hasEvmFields && hasTronFields {
+            throw ToriiClientError.invalidPayload(
+                "EVM and TRON SCCP destination fields cannot be mixed."
+            )
+        }
+
+        let sharedFields = [
+            "network_id_hex",
+            "verifier_code_hash_hex",
+            "verifier_key_hash_hex",
+            "expected_destination_binding_hash_hex"
+        ]
+        let hasSharedFields = sharedFields.contains { hasSccpDestinationField(fields, $0) }
+        if hasTronFields {
+            let required = [
+                "network_id_hex",
+                "tron_verifier_address",
+                "verifier_code_hash_hex",
+                "verifier_key_hash_hex",
+                "expected_destination_binding_hash_hex"
+            ]
+            let missing = required.filter { !hasSccpDestinationField(fields, $0) }
+            if !missing.isEmpty {
+                throw ToriiClientError.invalidPayload(
+                    "complete TRON SCCP deployment destination fields are required; missing \(missing.joined(separator: ", "))."
+                )
+            }
+            try preflightTronSccpDestinationBindingHash(fields)
+            return
+        }
+
+        if hasEvmFields {
+            let required = [
+                "network_id_hex",
+                "verifier_address_hex",
+                "bridge_address_hex",
+                "verifier_code_hash_hex",
+                "verifier_key_hash_hex",
+                "expected_destination_binding_hash_hex"
+            ]
+            let missing = required.filter { !hasSccpDestinationField(fields, $0) }
+            if !missing.isEmpty {
+                throw ToriiClientError.invalidPayload(
+                    "complete EVM SCCP deployment destination fields are required; missing \(missing.joined(separator: ", "))."
+                )
+            }
+            try preflightEvmSccpDestinationBindingHash(fields)
+            return
+        }
+
+        if hasSharedFields {
+            throw ToriiClientError.invalidPayload(
+                "complete EVM or TRON SCCP deployment destination fields are required."
+            )
+        }
+    }
+
+    private func preflightEvmSccpDestinationBindingHash(_ fields: [String: Any]) throws {
+        guard let networkId = fields["network_id_hex"] as? String,
+              let verifierAddress = fields["verifier_address_hex"] as? String,
+              let bridgeAddress = fields["bridge_address_hex"] as? String,
+              let verifierCodeHash = fields["verifier_code_hash_hex"] as? String,
+              let verifierKeyHash = fields["verifier_key_hash_hex"] as? String,
+              let expectedBindingHash = fields["expected_destination_binding_hash_hex"] else {
+            throw ToriiClientError.invalidPayload(
+                "complete EVM SCCP deployment destination fields are required."
+            )
+        }
+        let actual = try nonZeroHexData(
+            expectedBindingHash,
+            label: "expected_destination_binding_hash_hex",
+            expectedByteCount: 32
+        ).hexEncodedString()
+        for targetDomain in [sccpDomainEthereum, sccpDomainBsc] {
+            let expected = try sccpEvmDestinationBindingHash(
+                targetDomain: targetDomain,
+                networkId: networkId,
+                verifierAddress: verifierAddress,
+                bridgeAddress: bridgeAddress,
+                verifierCodeHash: verifierCodeHash,
+                verifierKeyHash: verifierKeyHash
+            ).lowercased().replacingOccurrences(of: "^0x", with: "", options: .regularExpression)
+            if actual == expected {
+                return
+            }
+        }
+        throw ToriiClientError.invalidPayload(
+            "expected_destination_binding_hash_hex must match canonical EVM destination binding."
+        )
+    }
+
+    private func preflightTronSccpDestinationBindingHash(_ fields: [String: Any]) throws {
+        guard let networkId = fields["network_id_hex"] as? String,
+              let verifierAddress = fields["tron_verifier_address"] as? String,
+              let verifierCodeHash = fields["verifier_code_hash_hex"] as? String,
+              let verifierKeyHash = fields["verifier_key_hash_hex"] as? String,
+              let expectedBindingHash = fields["expected_destination_binding_hash_hex"] else {
+            throw ToriiClientError.invalidPayload(
+                "complete TRON SCCP deployment destination fields are required."
+            )
+        }
+        let expected = try sccpTronDestinationBindingHash(
+            networkId: networkId,
+            verifierAddress: verifierAddress,
+            verifierCodeHash: verifierCodeHash,
+            verifierKeyHash: verifierKeyHash
+        ).lowercased().replacingOccurrences(of: "^0x", with: "", options: .regularExpression)
+        let actual = try nonZeroHexData(
+            expectedBindingHash,
+            label: "expected_destination_binding_hash_hex",
+            expectedByteCount: 32
+        ).hexEncodedString()
+        if actual != expected {
+            throw ToriiClientError.invalidPayload(
+                "expected_destination_binding_hash_hex must match canonical TRON destination binding."
+            )
+        }
+    }
+
+    private func hasSccpDestinationField(_ fields: [String: Any], _ field: String) -> Bool {
+        guard let value = fields[field], !(value is NSNull) else {
+            return false
+        }
+        return true
+    }
+
+    private func preflightSccpBridgeSubmitBundleSelection(_ fields: [String: Any],
+                                                          context: String) throws {
+        let hasBurnBundle = hasSccpDestinationField(fields, "burn_bundle")
+        let hasMessageBundle = hasSccpDestinationField(fields, "message_bundle")
+        if context == "bridge proof submit" {
+            guard (hasBurnBundle ? 1 : 0) + (hasMessageBundle ? 1 : 0) == 1 else {
+                throw ToriiClientError.invalidPayload(
+                    "bridge proof submit must provide exactly one of burn_bundle or message_bundle."
+                )
+            }
+            if hasBurnBundle && hasSccpDestinationProofOrMaterial(fields) {
+                throw ToriiClientError.invalidPayload(
+                    "SCCP destination fields and proof_bytes_hex are only valid for message_bundle submissions."
+                )
+            }
+        } else if context == "bridge message submit" {
+            guard hasMessageBundle else {
+                throw ToriiClientError.invalidPayload(
+                    "bridge message submit requires message_bundle."
+                )
+            }
+            guard !hasBurnBundle else {
+                throw ToriiClientError.invalidPayload(
+                    "bridge message submit does not accept burn_bundle."
+                )
+            }
+        }
+    }
+
+    private func hasSccpDestinationProofOrMaterial(_ fields: [String: Any]) -> Bool {
+        if hasSccpDestinationField(fields, "proof_bytes_hex") {
+            return true
+        }
+        return Self.sccpDestinationProofMaterialHexFields.contains {
+            hasSccpDestinationField(fields, $0.0)
+        } || hasSccpDestinationField(fields, "tron_verifier_address")
+    }
+
+    private static func normalizeTronBase58CheckAddress(_ value: Any, label: String) throws -> String {
+        guard let string = value as? String else {
+            throw ToriiClientError.invalidPayload("\(label) must be a non-empty string.")
+        }
+        guard !string.isEmpty else {
+            throw ToriiClientError.invalidPayload("\(label) must be a non-empty string.")
+        }
+        guard string.trimmingCharacters(in: .whitespacesAndNewlines) == string else {
+            throw ToriiClientError.invalidPayload("\(label) must be a TRON Base58Check address.")
+        }
+        let decoded = try decodeBase58(string, label: label)
+        guard decoded.count == 25 else {
+            throw ToriiClientError.invalidPayload("\(label) must be a TRON Base58Check address.")
+        }
+        let payload = decoded.prefix(21)
+        let checksum = decoded.suffix(4)
+        let firstHash = Data(SHA256.hash(data: payload))
+        let expectedChecksum = Data(SHA256.hash(data: firstHash)).prefix(4)
+        guard checksum.elementsEqual(expectedChecksum) else {
+            throw ToriiClientError.invalidPayload("\(label) must be a TRON Base58Check address.")
+        }
+        guard payload[payload.startIndex] == 0x41,
+              payload.dropFirst().contains(where: { $0 != 0 })
+        else {
+            throw ToriiClientError.invalidPayload("\(label) must be a TRON Base58Check address.")
+        }
+        return string
+    }
+
+    private static func decodeBase58(_ value: String, label: String) throws -> Data {
+        var bytes: [UInt8] = []
+        for character in value {
+            guard let digit = tronBase58Index[character] else {
+                throw ToriiClientError.invalidPayload("\(label) must be a TRON Base58Check address.")
+            }
+            var carry = digit
+            if !bytes.isEmpty {
+                for index in stride(from: bytes.count - 1, through: 0, by: -1) {
+                    let next = Int(bytes[index]) * 58 + carry
+                    bytes[index] = UInt8(next & 0xff)
+                    carry = next >> 8
+                }
+            }
+            while carry > 0 {
+                bytes.insert(UInt8(carry & 0xff), at: 0)
+                carry >>= 8
+            }
+        }
+        let leadingZeroes = value.prefix { $0 == "1" }.count
+        var result = Data(repeating: 0, count: leadingZeroes)
+        result.append(contentsOf: bytes)
+        return result
+    }
+
+    private func preflightSccpGroth16ProofBytes(_ bytes: Data,
+                                                fields: [String: Any]) throws {
+        if let field = sccpGroth16Bn254ProofTupleInvalidField(bytes) {
+            let proofBytesHexField = field.replacingOccurrences(
+                of: "proofBytes",
+                with: "proof_bytes_hex"
+            )
+            throw ToriiClientError.invalidPayload("\(proofBytesHexField) is invalid.")
+        }
+        if proofWord(bytes, index: 2) != abiWordU32(0) {
+            throw ToriiClientError.invalidPayload("proof_bytes_hex.source_domain must be SORA.")
+        }
+        guard let context = try optionalSccpMessageProofContext(fields) else {
+            return
+        }
+        if proofWord(bytes, index: 0) != abiWordU32(1) {
+            throw ToriiClientError.invalidPayload("proof_bytes_hex.version must be 1.")
+        }
+        if proofWord(bytes, index: 1) != context.messageId {
+            throw ToriiClientError.invalidPayload(
+                "proof_bytes_hex.message_id must match message_bundle.commitment.message_id."
+            )
+        }
+        if proofWord(bytes, index: 2) != abiWordU32(0) {
+            throw ToriiClientError.invalidPayload("proof_bytes_hex.source_domain must be SORA.")
+        }
+        if proofWord(bytes, index: 3) != context.commitmentRoot {
+            throw ToriiClientError.invalidPayload(
+                "proof_bytes_hex.commitment_root must match message_bundle.commitment_root."
+            )
+        }
+    }
+
+    private func optionalSccpMessageProofContext(_ fields: [String: Any]) throws -> (messageId: Data, commitmentRoot: Data)? {
+        guard let messageBundleValue = fields["message_bundle"] else {
+            return nil
+        }
+        guard let messageBundle = messageBundleValue as? [String: Any] else {
+            throw ToriiClientError.invalidPayload("message_bundle must contain commitment metadata.")
+        }
+        guard let commitment = messageBundle["commitment"] as? [String: Any] else {
+            throw ToriiClientError.invalidPayload("message_bundle.commitment.message_id is required.")
+        }
+        let messageIdValue = commitment["message_id"] ?? commitment["messageId"]
+        let commitmentRootValue = messageBundle["commitment_root"] ?? messageBundle["commitmentRoot"]
+        guard let messageIdValue, let commitmentRootValue else {
+            throw ToriiClientError.invalidPayload(
+                "message_bundle.commitment.message_id and message_bundle.commitment_root are required."
+            )
+        }
+        return (
+            try hex32Data(messageIdValue, label: "message_bundle.commitment.message_id"),
+            try hex32Data(commitmentRootValue, label: "message_bundle.commitment_root")
+        )
+    }
+
+    private func hex32Data(_ value: Any, label: String) throws -> Data {
+        try hexData(value, label: label, expectedByteCount: 32)
+    }
+
+    private func nonZeroHexData(_ value: Any, label: String, expectedByteCount: Int) throws -> Data {
+        let data = try hexData(value, label: label, expectedByteCount: expectedByteCount)
+        guard data.contains(where: { $0 != 0 }) else {
+            throw ToriiClientError.invalidPayload("\(label) must not be all zero.")
+        }
+        return data
+    }
+
+    private func hexData(_ value: Any, label: String, expectedByteCount: Int) throws -> Data {
+        guard let string = value as? String else {
+            throw ToriiClientError.invalidPayload("\(label) must be a \(expectedByteCount)-byte hex string.")
+        }
+        guard string.trimmingCharacters(in: .whitespacesAndNewlines) == string else {
+            throw ToriiClientError.invalidPayload("\(label) must be a canonical hex string.")
+        }
+        var normalized = string
+        if normalized.hasPrefix("0x") || normalized.hasPrefix("0X") {
+            normalized = String(normalized.dropFirst(2))
+        }
+        guard let data = Data(hexString: normalized), data.count == expectedByteCount else {
+            throw ToriiClientError.invalidPayload("\(label) must be a \(expectedByteCount)-byte hex string.")
+        }
+        return data
+    }
+
+    private func proofWord(_ bytes: Data, index: Int) -> Data {
+        let start = index * 32
+        return bytes.subdata(in: start..<(start + 32))
+    }
+
+    private func abiWordU32(_ value: UInt32) -> Data {
+        var out = Data(repeating: 0, count: 32)
+        out[28] = UInt8((value >> 24) & 0xff)
+        out[29] = UInt8((value >> 16) & 0xff)
+        out[30] = UInt8((value >> 8) & 0xff)
+        out[31] = UInt8(value & 0xff)
+        return out
     }
 
     private func submitNoritoTransactionPayload(path: String,

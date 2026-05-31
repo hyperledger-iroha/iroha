@@ -1201,6 +1201,15 @@ fn trust_gossip_allowed(topic: message::Topic, trust_gossip: bool) -> bool {
     !matches!(topic, message::Topic::TrustGossip) || trust_gossip
 }
 
+fn is_consensus_topic(topic: message::Topic) -> bool {
+    matches!(
+        topic,
+        message::Topic::Consensus
+            | message::Topic::ConsensusPayload
+            | message::Topic::ConsensusChunk
+    )
+}
+
 fn inc_subscriber_queue_full_for(topic: message::Topic) -> u64 {
     let total = SUBSCRIBER_QUEUE_FULL.fetch_add(1, Ordering::Relaxed) + 1;
     match topic {
@@ -6696,12 +6705,7 @@ impl<T: Pload + message::ClassifyTopic, K: Kex, E: Enc> NetworkBase<T, K, E> {
         topic: message::Topic,
     ) -> bool {
         let is_high = matches!(frame.priority, Priority::High);
-        let is_consensus = matches!(
-            topic,
-            message::Topic::Consensus
-                | message::Topic::ConsensusPayload
-                | message::Topic::ConsensusChunk
-        );
+        let is_consensus = is_consensus_topic(topic);
         if matches!(topic, message::Topic::BlockSync) {
             iroha_logger::debug!(
                 peer=%peer_id,
@@ -6715,9 +6719,17 @@ impl<T: Pload + message::ClassifyTopic, K: Kex, E: Enc> NetworkBase<T, K, E> {
                 iroha_logger::trace!("Not sending message to myself");
                 return false;
             }
+            if is_consensus {
+                let scheduled_reconnect = self.trigger_reconnect_for_peer(peer_id);
+                iroha_logger::debug!(
+                    peer=%peer_id,
+                    scheduled_reconnect,
+                    "Peer not found; dropping missing-session consensus frame"
+                );
+                return true;
+            }
             iroha_logger::warn!(
                 peer=%peer_id,
-                consensus=is_consensus,
                 "Peer not found; deferring outbound frame"
             );
             return self.defer_frame(peer_id, frame, topic, None, true, "peer session missing");
@@ -8741,7 +8753,7 @@ mod tests {
     }
 
     #[test]
-    fn missing_session_defers_new_frame_without_stale_generation() {
+    fn missing_session_drops_consensus_frame_and_schedules_reconnect() {
         let _guard = deferred_send_test_guard();
         let Some(mut network) = bare_network() else {
             return;
@@ -8763,6 +8775,9 @@ mod tests {
             )]),
         );
 
+        let deferred_before = deferred_send_enqueued_count();
+        let reconnect_before = session_reconnect_total();
+
         let frame = RelayMessage::new(
             network.self_id.clone(),
             RelayTarget::Direct(peer_id.clone()),
@@ -8772,19 +8787,20 @@ mod tests {
         );
         assert!(
             network.send_frame_to_peer(&peer_id, frame, message::Topic::Consensus),
-            "new outbound frames should be deferred while the peer session is missing"
+            "missing-session consensus sends should be handled by scheduling reconnect"
         );
-
-        let generation = network
-            .deferred_send_queue
-            .by_peer
-            .get(&peer_id)
-            .and_then(|entries| entries.back())
-            .map(|entry| entry.generation);
+        assert!(
+            !network.deferred_send_queue.by_peer.contains_key(&peer_id),
+            "missing-session consensus frames should not be replayed after the next handshake"
+        );
         assert_eq!(
-            generation,
-            Some(None),
-            "missing-session frames must flush on the next session instead of being tied to a stale one"
+            deferred_send_enqueued_count(),
+            deferred_before,
+            "dropping consensus frames should not increment the deferred-send counter"
+        );
+        assert!(
+            session_reconnect_total() >= reconnect_before.saturating_add(1),
+            "missing-session consensus sends should schedule reconnect work"
         );
     }
 
@@ -10017,7 +10033,7 @@ mod tests {
     }
 
     #[test]
-    fn missing_session_deferred_burst_schedules_single_reconnect() {
+    fn missing_session_consensus_burst_schedules_single_reconnect_without_deferral() {
         let _guard = deferred_send_test_guard();
         let Some(mut network) = bare_network() else {
             return;
@@ -10050,13 +10066,17 @@ mod tests {
             );
             assert!(
                 network.send_frame_to_peer(&peer_id, frame, message::Topic::Consensus),
-                "missing-session send should defer outbound frame"
+                "missing-session consensus sends should schedule reconnect without retrying stale frames"
             );
         }
 
         assert!(
+            !network.deferred_send_queue.by_peer.contains_key(&peer_id),
+            "missing-session consensus bursts should not enqueue stale consensus frames"
+        );
+        assert!(
             network.pending_connects.len() <= 1,
-            "deferred burst should not schedule duplicate reconnect attempts"
+            "consensus burst should not schedule duplicate reconnect attempts"
         );
         assert!(
             network
@@ -10065,12 +10085,12 @@ mod tests {
                 .filter(|peer| peer.id() == &peer_id)
                 .count()
                 <= 1,
-            "deferred burst should not spawn duplicate active reconnects"
+            "consensus burst should not spawn duplicate active reconnects"
         );
         assert_eq!(
             session_reconnect_total(),
             reconnect_before.saturating_add(1),
-            "deferred burst should trigger reconnect once per unsatisfied peer session"
+            "consensus burst should trigger reconnect once per unsatisfied peer session"
         );
     }
 

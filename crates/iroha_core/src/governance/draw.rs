@@ -406,7 +406,7 @@ mod tests {
     use std::collections::BTreeSet;
 
     use iroha_crypto::{Algorithm, KeyPair};
-    use iroha_data_model::account::AccountId;
+    use iroha_data_model::{account::AccountId, governance::types::ParliamentBody};
 
     use super::*;
 
@@ -461,5 +461,295 @@ mod tests {
 
         assert_eq!(floor_draw.members, high_draw.members);
         assert_eq!(floor_draw.alternates, high_draw.alternates);
+    }
+
+    #[test]
+    fn citizen_draw_deduplicates_duplicate_accounts_without_extra_chances() {
+        let chain_id: ChainId = "citizen-demo".into();
+        let beacon = [9u8; 32];
+        let epoch = 12u64;
+        let accounts = [mk_account(1), mk_account(2), mk_account(3), mk_account(4)];
+        let baseline = [
+            (&accounts[0], 100u128),
+            (&accounts[1], 100u128),
+            (&accounts[2], 100u128),
+            (&accounts[3], 100u128),
+        ];
+        let duplicated_whale = [
+            (&accounts[0], 100u128),
+            (&accounts[1], 1_000_000u128),
+            (&accounts[1], 2_000_000u128),
+            (&accounts[1], 3_000_000u128),
+            (&accounts[2], 100u128),
+            (&accounts[3], 100u128),
+        ];
+
+        let baseline_draw = run_citizen_draw(&chain_id, epoch, &beacon, baseline, 2, 2);
+        let duplicated_draw = run_citizen_draw(&chain_id, epoch, &beacon, duplicated_whale, 2, 2);
+
+        assert_eq!(baseline_draw.members, duplicated_draw.members);
+        assert_eq!(baseline_draw.alternates, duplicated_draw.alternates);
+        let combined: Vec<_> = duplicated_draw
+            .members
+            .iter()
+            .chain(duplicated_draw.alternates.iter())
+            .collect();
+        let unique: BTreeSet<_> = combined.iter().copied().collect();
+        assert_eq!(
+            combined.len(),
+            unique.len(),
+            "duplicate citizen entries must not create duplicate seats"
+        );
+    }
+
+    #[test]
+    fn bonded_body_draws_deduplicate_candidates_and_ignore_whale_bonds() {
+        let chain_id: ChainId = "body-demo".into();
+        let beacon = [0xA5; 32];
+        let epoch = 14u64;
+        let accounts = [
+            mk_account(1),
+            mk_account(2),
+            mk_account(3),
+            mk_account(4),
+            mk_account(5),
+        ];
+        let cfg = Governance {
+            rules_committee_size: 2,
+            agenda_council_size: 2,
+            interest_panel_size: 2,
+            review_panel_size: 2,
+            policy_jury_size: 2,
+            oversight_committee_size: 2,
+            fma_committee_size: 2,
+            parliament_alternate_size: Some(2),
+            ..Governance::default()
+        };
+        let baseline = accounts.iter().map(|account| (account, 100u128));
+        let inflated = [
+            (&accounts[0], 100u128),
+            (&accounts[1], 10_000_000u128),
+            (&accounts[1], 20_000_000u128),
+            (&accounts[2], 100u128),
+            (&accounts[3], 100u128),
+            (&accounts[4], 100u128),
+            (&accounts[4], 40_000_000u128),
+        ];
+
+        let baseline_bodies = derive_parliament_bodies_from_bonded_citizens(
+            &cfg,
+            &chain_id,
+            epoch,
+            &beacon,
+            baseline,
+            CouncilDerivationKind::Fallback,
+        );
+        let inflated_bodies = derive_parliament_bodies_from_bonded_citizens(
+            &cfg,
+            &chain_id,
+            epoch,
+            &beacon,
+            inflated,
+            CouncilDerivationKind::Fallback,
+        );
+
+        for body in [
+            ParliamentBody::RulesCommittee,
+            ParliamentBody::AgendaCouncil,
+            ParliamentBody::InterestPanel,
+            ParliamentBody::ReviewPanel,
+            ParliamentBody::PolicyJury,
+            ParliamentBody::OversightCommittee,
+            ParliamentBody::FmaCommittee,
+        ] {
+            let baseline = baseline_bodies.rosters.get(&body).expect("baseline roster");
+            let inflated = inflated_bodies.rosters.get(&body).expect("inflated roster");
+            assert_eq!(baseline.members, inflated.members, "{body:?} members");
+            assert_eq!(
+                baseline.alternates, inflated.alternates,
+                "{body:?} alternates"
+            );
+            assert_eq!(inflated.candidate_count, 5);
+            let combined: Vec<_> = inflated
+                .members
+                .iter()
+                .chain(inflated.alternates.iter())
+                .collect();
+            let unique: BTreeSet<_> = combined.iter().copied().collect();
+            assert_eq!(
+                combined.len(),
+                unique.len(),
+                "{body:?} duplicate bonded candidates must not create duplicate seats"
+            );
+        }
+    }
+
+    #[test]
+    fn body_rosters_are_independently_domain_separated() {
+        let chain_id: ChainId = "body-domain-demo".into();
+        let beacon = [0xC3; 32];
+        let epoch = 16u64;
+        let accounts = [
+            mk_account(1),
+            mk_account(2),
+            mk_account(3),
+            mk_account(4),
+            mk_account(5),
+            mk_account(6),
+            mk_account(7),
+            mk_account(8),
+            mk_account(9),
+            mk_account(10),
+        ];
+        let cfg = Governance {
+            rules_committee_size: 3,
+            agenda_council_size: 3,
+            interest_panel_size: 3,
+            review_panel_size: 3,
+            policy_jury_size: 3,
+            oversight_committee_size: 3,
+            fma_committee_size: 3,
+            parliament_alternate_size: Some(2),
+            ..Governance::default()
+        };
+        let bodies = derive_parliament_bodies_from_bonded_citizens(
+            &cfg,
+            &chain_id,
+            epoch,
+            &beacon,
+            accounts.iter().map(|account| (account, 100u128)),
+            CouncilDerivationKind::Fallback,
+        );
+
+        let distinct_member_lists: BTreeSet<_> = [
+            ParliamentBody::RulesCommittee,
+            ParliamentBody::AgendaCouncil,
+            ParliamentBody::InterestPanel,
+            ParliamentBody::ReviewPanel,
+            ParliamentBody::PolicyJury,
+            ParliamentBody::OversightCommittee,
+            ParliamentBody::FmaCommittee,
+        ]
+        .into_iter()
+        .map(|body| {
+            bodies
+                .rosters
+                .get(&body)
+                .expect("body roster")
+                .members
+                .clone()
+        })
+        .collect();
+        assert!(
+            distinct_member_lists.len() > 1,
+            "body draws must not clone one shared membership list across all parliament bodies"
+        );
+    }
+
+    #[test]
+    fn bonded_body_draws_are_stable_under_candidate_order_permutation() {
+        let chain_id: ChainId = "body-order-demo".into();
+        let beacon = [0xB7; 32];
+        let epoch = 17u64;
+        let accounts = [
+            mk_account(1),
+            mk_account(2),
+            mk_account(3),
+            mk_account(4),
+            mk_account(5),
+            mk_account(6),
+        ];
+        let cfg = Governance {
+            rules_committee_size: 2,
+            agenda_council_size: 2,
+            interest_panel_size: 2,
+            review_panel_size: 2,
+            policy_jury_size: 2,
+            oversight_committee_size: 2,
+            fma_committee_size: 2,
+            parliament_alternate_size: Some(2),
+            ..Governance::default()
+        };
+        let forward = accounts.iter().map(|account| (account, 100u128));
+        let reverse = accounts.iter().rev().map(|account| (account, 100u128));
+
+        let forward_bodies = derive_parliament_bodies_from_bonded_citizens(
+            &cfg,
+            &chain_id,
+            epoch,
+            &beacon,
+            forward,
+            CouncilDerivationKind::Fallback,
+        );
+        let reverse_bodies = derive_parliament_bodies_from_bonded_citizens(
+            &cfg,
+            &chain_id,
+            epoch,
+            &beacon,
+            reverse,
+            CouncilDerivationKind::Fallback,
+        );
+        assert_eq!(
+            forward_bodies, reverse_bodies,
+            "candidate ordering supplied by an API must not bias parliament body draws"
+        );
+    }
+
+    #[test]
+    fn persisted_body_draws_deduplicate_member_and_alternate_overlap() {
+        let chain_id: ChainId = "body-demo".into();
+        let beacon = [0x5A; 32];
+        let epoch = 15u64;
+        let accounts = [
+            mk_account(1),
+            mk_account(2),
+            mk_account(3),
+            mk_account(4),
+            mk_account(5),
+        ];
+        let cfg = Governance {
+            rules_committee_size: 3,
+            agenda_council_size: 3,
+            interest_panel_size: 3,
+            review_panel_size: 3,
+            policy_jury_size: 3,
+            oversight_committee_size: 3,
+            fma_committee_size: 3,
+            parliament_alternate_size: Some(2),
+            ..Governance::default()
+        };
+        let council = super::super::state::ParliamentTerm {
+            epoch,
+            members: vec![
+                accounts[0].clone(),
+                accounts[1].clone(),
+                accounts[1].clone(),
+                accounts[2].clone(),
+            ],
+            alternates: vec![
+                accounts[2].clone(),
+                accounts[3].clone(),
+                accounts[4].clone(),
+                accounts[4].clone(),
+            ],
+            verified: 5,
+            candidate_count: 8,
+            derived_by: CouncilDerivationKind::Fallback,
+        };
+
+        let bodies = derive_parliament_bodies(&cfg, &chain_id, epoch, &beacon, &council);
+        for (body, roster) in bodies.rosters {
+            let combined: Vec<_> = roster
+                .members
+                .iter()
+                .chain(roster.alternates.iter())
+                .collect();
+            let unique: BTreeSet<_> = combined.iter().copied().collect();
+            assert_eq!(
+                combined.len(),
+                unique.len(),
+                "{body:?} member/alternate overlap must be deduplicated before body selection"
+            );
+        }
     }
 }

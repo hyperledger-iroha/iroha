@@ -204,7 +204,7 @@ use tokio::sync::broadcast;
 use crate::{
     block_sync::message::Message as BlockSyncMessage,
     peers_gossiper::{PeerTrustGossip, PeersGossip},
-    sumeragi::message::{BlockMessage, BlockMessageWire, ControlFlow},
+    sumeragi::message::{BlockMessage, BlockMessageWire, CertifiedBlockFetch, ControlFlow},
 };
 
 /// The interval at which sumeragi checks if there are tx in the `queue`.
@@ -312,6 +312,7 @@ impl iroha_p2p::network::message::ClassifyTopic for NetworkMessage {
             NetworkMessage::SumeragiBlock(msg) => match msg.as_ref().as_ref() {
                 BlockMessage::FetchBlockBody(_)
                 | BlockMessage::FetchPendingBlock(_)
+                | BlockMessage::CertifiedBlockFetch(CertifiedBlockFetch::Request(_))
                 | BlockMessage::RbcInitRequest(_)
                 | BlockMessage::RbcChunkRequest(_)
                 | BlockMessage::ConsensusParams(_)
@@ -321,12 +322,14 @@ impl iroha_p2p::network::message::ClassifyTopic for NetworkMessage {
                 | BlockMessage::Proposal(_)
                 | BlockMessage::Qc(_)
                 | BlockMessage::QcVote(_)
-                | BlockMessage::VNext(_)
                 | BlockMessage::VrfCommit(_)
                 | BlockMessage::VrfReveal(_) => T::Consensus,
                 BlockMessage::BlockCreated(_)
                 | BlockMessage::BlockSyncUpdate(_)
                 | BlockMessage::BlockBodyResponse(_)
+                | BlockMessage::CertifiedBlockFetch(CertifiedBlockFetch::Response(_))
+                | BlockMessage::CertifiedBlockFetch(CertifiedBlockFetch::Proof(_))
+                | BlockMessage::CertifiedBlockFetch(CertifiedBlockFetch::Body(_))
                 | BlockMessage::RbcInit(_) => T::ConsensusPayload,
                 BlockMessage::RbcReady(_)
                 | BlockMessage::RbcDeliver(_)

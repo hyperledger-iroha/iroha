@@ -20,7 +20,8 @@ use iroha_data_model::{
     transaction::Executable,
 };
 use iroha_sccp::{
-    NexusBridgeFinalityProofV1, NexusConsensusPhaseV1, SccpHubCommitmentV1, SccpPayloadV1,
+    NexusBridgeFinalityProofV1, NexusConsensusPhaseV1, NexusQcRefV1, SccpHubCommitmentV1,
+    SccpPayloadV1,
 };
 use thiserror::Error;
 
@@ -762,6 +763,30 @@ fn sccp_block_hash_to_h256(hash: &HashOf<BlockHeader>) -> [u8; 32] {
     out
 }
 
+fn sccp_hash_to_h256(hash: &Hash) -> [u8; 32] {
+    let mut out = [0u8; 32];
+    out.copy_from_slice(hash.as_ref());
+    out
+}
+
+fn sccp_consensus_phase(phase: sumeragi::consensus::Phase) -> NexusConsensusPhaseV1 {
+    match phase {
+        sumeragi::consensus::Phase::Prepare => NexusConsensusPhaseV1::Prepare,
+        sumeragi::consensus::Phase::Commit => NexusConsensusPhaseV1::Commit,
+        sumeragi::consensus::Phase::NewView => NexusConsensusPhaseV1::NewView,
+    }
+}
+
+fn sccp_qc_ref(reference: &iroha_data_model::block::consensus::QcRef) -> NexusQcRefV1 {
+    NexusQcRefV1 {
+        height: reference.height,
+        view: reference.view,
+        epoch: reference.epoch,
+        subject_block_hash: sccp_block_hash_to_h256(&reference.subject_block_hash),
+        phase: sccp_consensus_phase(reference.phase),
+    }
+}
+
 fn sccp_qc_projection_matches_local(
     finality: &NexusBridgeFinalityProofV1,
     trusted_qc: &Qc,
@@ -775,6 +800,11 @@ fn sccp_qc_projection_matches_local(
         && qc.epoch == trusted_qc.epoch
         && qc.mode_tag == trusted_qc.mode_tag
         && qc.subject_block_hash == sccp_block_hash_to_h256(&trusted_qc.subject_block_hash)
+        && qc.parent_state_root == sccp_hash_to_h256(&trusted_qc.parent_state_root)
+        && qc.post_state_root == sccp_hash_to_h256(&trusted_qc.post_state_root)
+        && qc.chain_order_hash == sccp_hash_to_h256(&trusted_qc.chain_order_hash)
+        && qc.rechain_seq == trusted_qc.rechain_seq
+        && qc.highest_qc == trusted_qc.highest_qc.as_ref().map(sccp_qc_ref)
         && qc.validator_set_hash_version == trusted_qc.validator_set_hash_version
         && qc.validator_public_keys
             == trusted_qc
@@ -802,6 +832,9 @@ pub fn verify_sccp_finality_proof_against_local_state(
 ) -> Result<BridgeFinalityProof, String> {
     if !iroha_sccp::verify_nexus_bridge_finality_proof_structure(finality) {
         return Err("SCCP finality proof failed structural verification".to_owned());
+    }
+    if !iroha_sccp::verify_nexus_bridge_finality_proof_cryptographic(finality) {
+        return Err("SCCP finality proof failed cryptographic verification".to_owned());
     }
     if finality.chain_id != state.sccp_chain_id().as_str() {
         return Err(format!(
@@ -885,7 +918,7 @@ pub fn verify_sccp_finality_proof_against_local_state(
 
 #[cfg(test)]
 mod tests {
-    use std::{borrow::Cow, num::NonZeroU64};
+    use std::{borrow::Cow, num::NonZeroU64, sync::Arc};
 
     use iroha_crypto::{Hash, KeyPair, SignatureOf};
     use iroha_data_model::{
@@ -906,6 +939,28 @@ mod tests {
 
     use super::*;
     use crate::tx::AcceptedTransaction;
+
+    struct EmptySccpFinalityState {
+        chain_id: ChainId,
+    }
+
+    impl SccpFinalityStateReadOnly for EmptySccpFinalityState {
+        fn sccp_chain_id(&self) -> &ChainId {
+            &self.chain_id
+        }
+
+        fn sccp_block_by_height(&self, _height: NonZeroUsize) -> Option<Arc<SignedBlock>> {
+            None
+        }
+
+        fn sccp_commit_qc_for_block(
+            &self,
+            _height: u64,
+            _block_hash: HashOf<BlockHeader>,
+        ) -> Option<Qc> {
+            None
+        }
+    }
 
     fn sample_transfer_payload(nonce: u64, recipient: &[u8]) -> SccpPayloadV1 {
         SccpPayloadV1::Transfer(iroha_sccp::TransferPayloadV1 {
@@ -1019,6 +1074,47 @@ mod tests {
             )
             .expect("test block entrypoint hashes should match payload");
         (block, decoded_payloads)
+    }
+
+    #[test]
+    fn sccp_finality_local_state_check_rejects_unsigned_qc_before_state_lookup() {
+        let chain_id: ChainId = "bridge-sccp-tests".parse().expect("chain id");
+        let finality = NexusBridgeFinalityProofV1 {
+            version: 1,
+            chain_id: chain_id.to_string(),
+            height: 7,
+            block_hash: [7; 32],
+            commitment_root: [8; 32],
+            block_header_bytes: vec![0x42],
+            commit_qc: iroha_sccp::NexusCommitQcV1 {
+                version: 1,
+                phase: NexusConsensusPhaseV1::Commit,
+                height: 7,
+                view: 0,
+                epoch: 0,
+                mode_tag: "iroha2-consensus::permissioned-sumeragi@v1".to_owned(),
+                subject_block_hash: [7; 32],
+                parent_state_root: [1; 32],
+                post_state_root: [2; 32],
+                chain_order_hash: [3; 32],
+                rechain_seq: 0,
+                highest_qc: None,
+                validator_set_hash_version: 1,
+                validator_public_keys: vec!["not-a-bls-key".to_owned()],
+                validator_set_pops: vec![vec![1; 48]],
+                signers_bitmap: vec![0b0000_0001],
+                bls_aggregate_signature: vec![2; 96],
+            },
+        };
+        assert!(iroha_sccp::verify_nexus_bridge_finality_proof_structure(
+            &finality
+        ));
+        assert!(!iroha_sccp::verify_nexus_bridge_finality_proof_cryptographic(&finality));
+
+        let state = EmptySccpFinalityState { chain_id };
+        let err = verify_sccp_finality_proof_against_local_state(&state, &finality)
+            .expect_err("unsigned SCCP finality must be rejected before local anchoring");
+        assert_eq!(err, "SCCP finality proof failed cryptographic verification");
     }
 
     #[test]

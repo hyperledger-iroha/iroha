@@ -21,7 +21,11 @@ contract Ownable {
 
     function transferOwnership(address newOwner) public onlyOwner {
         require(newOwner != address(0), "Owner address is required");
-        emit OwnershipTransferred(owner, newOwner);
+        address previousOwner = owner;
+        emit OwnershipTransferred(previousOwner, newOwner);
         owner = newOwner;
+        _afterOwnershipTransferred(previousOwner, newOwner);
     }
+
+    function _afterOwnershipTransferred(address, address) internal virtual {}
 }

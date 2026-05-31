@@ -2,10 +2,13 @@ package org.hyperledger.iroha.android.client;
 
 import java.io.IOException;
 import java.io.UnsupportedEncodingException;
+import java.math.BigInteger;
 import java.net.URI;
 import java.net.URLEncoder;
 import java.nio.charset.StandardCharsets;
 import java.nio.file.Path;
+import java.security.MessageDigest;
+import java.security.NoSuchAlgorithmException;
 import java.time.Duration;
 import java.util.ArrayList;
 import java.util.Arrays;
@@ -53,6 +56,7 @@ import org.hyperledger.iroha.android.tx.SignedTransactionHasher;
 import org.hyperledger.iroha.android.client.HttpTransportExecutor;
 import org.hyperledger.iroha.android.client.transport.TransportRequest;
 import org.hyperledger.iroha.android.client.transport.TransportResponse;
+import org.hyperledger.iroha.android.sccp.SourceSccpProofs;
 
 /**
  * HTTP-based client implementation that will forward transactions to an Iroha Torii endpoint.
@@ -66,6 +70,16 @@ public final class HttpClientTransport implements IrohaClient {
   private static final String RETRY_SIGNAL_ID = "android.torii.http.retry";
   private static final String PIPELINE_STATUS_SIGNAL = "android.torii.pipeline.status";
   private static final String REDACTION_FAILURE_SIGNAL = "android.telemetry.redaction.failure";
+  private static final int SCCP_GROTH16_BN254_PROOF_ABI_BYTE_LENGTH_V1 = 384;
+  private static final int SCCP_DOMAIN_SORA = 0;
+  private static final BigInteger SCCP_GROTH16_BN254_BASE_FIELD_MODULUS =
+      new BigInteger("30644e72e131a029b85045b68181585d97816a916871ca8d3c208c16d87cfd47", 16);
+  private static final BigInteger SCCP_GROTH16_BN254_G2_B_C0 =
+      new BigInteger("2b149d40ceb8aaae81be18991be06ac3b5b4c5e559dbefa33267e6dc24a138e5", 16);
+  private static final BigInteger SCCP_GROTH16_BN254_G2_B_C1 =
+      new BigInteger("009713b03af0fed4cd2cafadeed8fdf4a74fa084e52d1852e4a2bd0685c315d2", 16);
+  private static final String TRON_BASE58_ALPHABET =
+      "123456789ABCDEFGHJKLMNPQRSTUVWXYZabcdefghijkmnopqrstuvwxyz";
 
   private final HttpTransportExecutor executor;
   private final ClientConfig config;
@@ -105,6 +119,24 @@ public final class HttpClientTransport implements IrohaClient {
             config.defaultHeaders(),
             config.wireFormatPreference().acceptHeader());
     return executeAccepted(request, "transaction JSON submit", 202);
+  }
+
+  @Override
+  public CompletableFuture<ClientResponse> postBridgeProofSubmitJson(
+      final byte[] encodedBridgeProofSubmitJson) {
+    return executeAccepted(
+        buildBridgeJsonPostRequest("/v1/bridge/proofs/submit", encodedBridgeProofSubmitJson),
+        "bridge proof submit",
+        200);
+  }
+
+  @Override
+  public CompletableFuture<ClientResponse> postBridgeMessageSubmitJson(
+      final byte[] encodedBridgeMessageSubmitJson) {
+    return executeAccepted(
+        buildBridgeJsonPostRequest("/v1/bridge/messages", encodedBridgeMessageSubmitJson),
+        "bridge message submit",
+        200);
   }
 
   @Override
@@ -1596,6 +1628,11 @@ public final class HttpClientTransport implements IrohaClient {
     return builder.build();
   }
 
+  private TransportRequest buildBridgeJsonPostRequest(final String path, final byte[] body) {
+    preflightSccpBridgeSubmitJson(body, path);
+    return buildJsonPostRequest(path, body);
+  }
+
   private TransportRequest buildVpnRequest(
       final String method,
       final String path,
@@ -2111,11 +2148,571 @@ public final class HttpClientTransport implements IrohaClient {
     return trimmed.toLowerCase();
   }
 
+  static String normalizeExactEvenLengthHex(final String value, final String field) {
+    if (!Objects.requireNonNull(value, field + " must not be null").trim().equals(value)) {
+      throw new IllegalArgumentException(field + " must be a canonical hex string");
+    }
+    return normalizeEvenLengthHex(value, field);
+  }
+
+  static String normalizeNonZeroEvenLengthHex(final String value, final String field) {
+    return normalizeNonZeroEvenLengthHex(value, field, -1);
+  }
+
+  static String normalizeNonZeroEvenLengthHex(
+      final String value, final String field, final int expectedByteLength) {
+    final String normalized = normalizeEvenLengthHex(value, field);
+    for (int i = 0; i < normalized.length(); i++) {
+      if (normalized.charAt(i) != '0') {
+        if (expectedByteLength >= 0 && normalized.length() != expectedByteLength * 2) {
+          throw new IllegalArgumentException(
+              field + " must be a " + expectedByteLength + "-byte hex string");
+        }
+        return normalized;
+      }
+    }
+    throw new IllegalArgumentException(field + " must not be all zero");
+  }
+
+  static String normalizeExactNonZeroEvenLengthHex(
+      final String value, final String field, final int expectedByteLength) {
+    final String normalized = normalizeExactEvenLengthHex(value, field);
+    for (int i = 0; i < normalized.length(); i++) {
+      if (normalized.charAt(i) != '0') {
+        if (expectedByteLength >= 0 && normalized.length() != expectedByteLength * 2) {
+          throw new IllegalArgumentException(
+              field + " must be a " + expectedByteLength + "-byte hex string");
+        }
+        return normalized;
+      }
+    }
+    throw new IllegalArgumentException(field + " must not be all zero");
+  }
+
+  static String normalizeHexBytes(
+      final String value, final String field, final int expectedByteLength) {
+    final String normalized = normalizeEvenLengthHex(value, field);
+    if (normalized.length() != expectedByteLength * 2) {
+      throw new IllegalArgumentException(
+          field + " must be a " + expectedByteLength + "-byte hex string");
+    }
+    return normalized;
+  }
+
+  static String normalizeTronBase58CheckAddress(final String value, final String field) {
+    final String normalized = normalizeNonBlank(value, field);
+    if (!normalized.equals(value)) {
+      throw new IllegalArgumentException(field + " must be a TRON Base58Check address");
+    }
+    final byte[] decoded = decodeBase58(normalized, field);
+    if (decoded.length != 25) {
+      throw new IllegalArgumentException(field + " must be a TRON Base58Check address");
+    }
+    final byte[] payload = Arrays.copyOfRange(decoded, 0, 21);
+    final byte[] checksum = Arrays.copyOfRange(decoded, 21, 25);
+    final byte[] expectedChecksum = Arrays.copyOfRange(sha256(sha256(payload)), 0, 4);
+    if (!Arrays.equals(checksum, expectedChecksum)) {
+      throw new IllegalArgumentException(field + " must be a TRON Base58Check address");
+    }
+    boolean nonZeroAddress = false;
+    for (int i = 1; i < payload.length; i++) {
+      if (payload[i] != 0) {
+        nonZeroAddress = true;
+        break;
+      }
+    }
+    if ((payload[0] & 0xff) != 0x41 || !nonZeroAddress) {
+      throw new IllegalArgumentException(field + " must be a TRON Base58Check address");
+    }
+    return normalized;
+  }
+
+  private static byte[] decodeBase58(final String value, final String field) {
+    final ArrayList<Integer> decoded = new ArrayList<>();
+    for (int i = 0; i < value.length(); i++) {
+      final int digit = TRON_BASE58_ALPHABET.indexOf(value.charAt(i));
+      if (digit < 0) {
+        throw new IllegalArgumentException(field + " must be a TRON Base58Check address");
+      }
+      int carry = digit;
+      for (int outputIndex = decoded.size() - 1; outputIndex >= 0; outputIndex--) {
+        final int next = decoded.get(outputIndex) * 58 + carry;
+        decoded.set(outputIndex, next & 0xff);
+        carry = next >>> 8;
+      }
+      while (carry > 0) {
+        decoded.add(0, carry & 0xff);
+        carry >>>= 8;
+      }
+    }
+    int leadingZeroes = 0;
+    while (leadingZeroes < value.length() && value.charAt(leadingZeroes) == '1') {
+      leadingZeroes++;
+    }
+    final byte[] result = new byte[leadingZeroes + decoded.size()];
+    for (int i = 0; i < decoded.size(); i++) {
+      result[leadingZeroes + i] = (byte) (int) decoded.get(i);
+    }
+    return result;
+  }
+
+  private static byte[] sha256(final byte[] value) {
+    try {
+      return MessageDigest.getInstance("SHA-256").digest(value);
+    } catch (final NoSuchAlgorithmException ex) {
+      throw new IllegalStateException("SHA-256 is unavailable", ex);
+    }
+  }
+
+  static void preflightSccpBridgeSubmitJson(final byte[] body, final String path) {
+    final Object parsed;
+    try {
+      parsed = JsonParser.parse(new String(Objects.requireNonNull(body, "body"), StandardCharsets.UTF_8));
+    } catch (final RuntimeException ex) {
+      return;
+    }
+    if (!(parsed instanceof Map<?, ?>)) {
+      return;
+    }
+    final Map<?, ?> fields = (Map<?, ?>) parsed;
+    final Object proofBytesHex = fields.get("proof_bytes_hex");
+    if (proofBytesHex != null) {
+      if (!(proofBytesHex instanceof String)) {
+        throw new IllegalArgumentException("proof_bytes_hex must be an even-length hex string");
+      }
+      final String normalizedProofBytesHex =
+          normalizeExactNonZeroEvenLengthHex(
+              (String) proofBytesHex,
+              "proof_bytes_hex",
+              SCCP_GROTH16_BN254_PROOF_ABI_BYTE_LENGTH_V1);
+      validateSccpGroth16ProofHexForMessageBundle(normalizedProofBytesHex, fields);
+    }
+    validateSccpDestinationProofMaterialRelationship(fields);
+    preflightSccpBridgeSubmitBundleSelection(fields, path);
+  }
+
   static String normalizeHex32(final String value, final String field) {
     final String normalized = normalizeEvenLengthHex(value, field);
     if (normalized.length() != 64) {
       throw new IllegalArgumentException(field + " must contain 64 hex characters");
     }
     return normalized;
+  }
+
+  private static String abiWordU32Hex(final int value) {
+    if (value < 0) {
+      throw new IllegalArgumentException("SCCP ABI word value must be a u32");
+    }
+    final String hex = Integer.toHexString(value);
+    final StringBuilder out = new StringBuilder(64);
+    for (int i = hex.length(); i < 64; i++) {
+      out.append('0');
+    }
+    out.append(hex);
+    return out.toString();
+  }
+
+  private static String word(final String proofHex, final int index) {
+    final int start = index * 64;
+    return proofHex.substring(start, start + 64);
+  }
+
+  private static String[] optionalSccpMessageProofContext(final Map<?, ?> fields) {
+    final Object messageBundleValue = fields.get("message_bundle");
+    if (messageBundleValue == null) {
+      return null;
+    }
+    if (!(messageBundleValue instanceof Map<?, ?>)) {
+      throw new IllegalArgumentException("message_bundle must contain commitment metadata");
+    }
+    final Map<?, ?> messageBundle = (Map<?, ?>) messageBundleValue;
+    final Object commitmentValue = messageBundle.get("commitment");
+    if (!(commitmentValue instanceof Map<?, ?>)) {
+      throw new IllegalArgumentException("message_bundle.commitment.message_id is required");
+    }
+    final Map<?, ?> commitment = (Map<?, ?>) commitmentValue;
+    final Object messageIdValue =
+        commitment.containsKey("message_id") ? commitment.get("message_id") : commitment.get("messageId");
+    final Object commitmentRootValue =
+        messageBundle.containsKey("commitment_root")
+            ? messageBundle.get("commitment_root")
+            : messageBundle.get("commitmentRoot");
+    if (messageIdValue == null || commitmentRootValue == null) {
+      throw new IllegalArgumentException(
+          "message_bundle.commitment.message_id and message_bundle.commitment_root are required");
+    }
+    if (!(messageIdValue instanceof String)) {
+      throw new IllegalArgumentException(
+          "message_bundle.commitment.message_id must contain 64 hex characters");
+    }
+    if (!(commitmentRootValue instanceof String)) {
+      throw new IllegalArgumentException(
+          "message_bundle.commitment_root must contain 64 hex characters");
+    }
+    return new String[] {
+      normalizeHex32((String) messageIdValue, "message_bundle.commitment.message_id"),
+      normalizeHex32((String) commitmentRootValue, "message_bundle.commitment_root")
+    };
+  }
+
+  private static void validateSccpGroth16ProofHexForMessageBundle(
+      final String proofHex, final Map<?, ?> fields) {
+    validateSccpGroth16ProofHex(proofHex);
+    final String[] proofContext = optionalSccpMessageProofContext(fields);
+    if (proofContext == null) {
+      return;
+    }
+    if (!word(proofHex, 0).equals(abiWordU32Hex(1))) {
+      throw new IllegalArgumentException("proof_bytes_hex.version must be 1");
+    }
+    if (!word(proofHex, 1).equals(proofContext[0])) {
+      throw new IllegalArgumentException(
+          "proof_bytes_hex.message_id must match message_bundle.commitment.message_id");
+    }
+    if (!word(proofHex, 2).equals(abiWordU32Hex(SCCP_DOMAIN_SORA))) {
+      throw new IllegalArgumentException("proof_bytes_hex.source_domain must be SORA");
+    }
+    if (!word(proofHex, 3).equals(proofContext[1])) {
+      throw new IllegalArgumentException(
+          "proof_bytes_hex.commitment_root must match message_bundle.commitment_root");
+    }
+  }
+
+  private static BigInteger proofWordValue(final String proofHex, final int index) {
+    return new BigInteger(word(proofHex, index), 16);
+  }
+
+  private static boolean proofWordIsZero(final String proofHex, final int index) {
+    return BigInteger.ZERO.equals(proofWordValue(proofHex, index));
+  }
+
+  private static void requireBaseFieldWord(
+      final String proofHex, final int index, final String label) {
+    if (proofWordValue(proofHex, index).compareTo(SCCP_GROTH16_BN254_BASE_FIELD_MODULUS) >= 0) {
+      throw new IllegalArgumentException(label + " must be a BN254 base-field element");
+    }
+  }
+
+  private static void requireNonZeroPoint(
+      final String proofHex, final int[] indexes, final String label) {
+    for (final int index : indexes) {
+      if (!proofWordIsZero(proofHex, index)) {
+        return;
+      }
+    }
+    throw new IllegalArgumentException(label + " must not be zero");
+  }
+
+  private static BigInteger fq(final BigInteger value) {
+    return value.mod(SCCP_GROTH16_BN254_BASE_FIELD_MODULUS);
+  }
+
+  private static BigInteger[] fq2Mul(final BigInteger[] left, final BigInteger[] right) {
+    return new BigInteger[] {
+      fq(left[0].multiply(right[0]).subtract(left[1].multiply(right[1]))),
+      fq(left[0].multiply(right[1]).add(left[1].multiply(right[0])))
+    };
+  }
+
+  private static void requireG1Point(
+      final String proofHex, final int xIndex, final int yIndex, final String label) {
+    requireNonZeroPoint(proofHex, new int[] {xIndex, yIndex}, label);
+    final BigInteger x = proofWordValue(proofHex, xIndex);
+    final BigInteger y = proofWordValue(proofHex, yIndex);
+    final BigInteger left = fq(y.multiply(y));
+    final BigInteger right = fq(x.multiply(x).multiply(x).add(BigInteger.valueOf(3)));
+    if (!left.equals(right)) {
+      throw new IllegalArgumentException(label + " must be a BN254 G1 point");
+    }
+  }
+
+  private static void requireG2Point(
+      final String proofHex,
+      final int x0Index,
+      final int x1Index,
+      final int y0Index,
+      final int y1Index,
+      final String label) {
+    requireNonZeroPoint(proofHex, new int[] {x0Index, x1Index, y0Index, y1Index}, label);
+    final BigInteger[] x =
+        new BigInteger[] {proofWordValue(proofHex, x0Index), proofWordValue(proofHex, x1Index)};
+    final BigInteger[] y =
+        new BigInteger[] {proofWordValue(proofHex, y0Index), proofWordValue(proofHex, y1Index)};
+    final BigInteger[] left = fq2Mul(y, y);
+    final BigInteger[] x3 = fq2Mul(fq2Mul(x, x), x);
+    final BigInteger[] right =
+        new BigInteger[] {
+          fq(x3[0].add(SCCP_GROTH16_BN254_G2_B_C0)),
+          fq(x3[1].add(SCCP_GROTH16_BN254_G2_B_C1))
+        };
+    if (!left[0].equals(right[0]) || !left[1].equals(right[1])) {
+      throw new IllegalArgumentException(label + " must be a BN254 G2 point");
+    }
+  }
+
+  static void validateSccpGroth16ProofHex(final String proofHex) {
+    if (!BigInteger.ONE.equals(proofWordValue(proofHex, 0))) {
+      throw new IllegalArgumentException("proof_bytes_hex.version must be 1");
+    }
+    if (proofWordIsZero(proofHex, 1)) {
+      throw new IllegalArgumentException("proof_bytes_hex.message_id must not be zero");
+    }
+    final BigInteger sourceDomain = proofWordValue(proofHex, 2);
+    if (sourceDomain.compareTo(BigInteger.valueOf(0xffff_ffffL)) > 0) {
+      throw new IllegalArgumentException("proof_bytes_hex.source_domain must fit u32");
+    }
+    if (!sourceDomain.equals(BigInteger.valueOf(SCCP_DOMAIN_SORA))) {
+      throw new IllegalArgumentException("proof_bytes_hex.source_domain must be SORA");
+    }
+    if (proofWordIsZero(proofHex, 3)) {
+      throw new IllegalArgumentException("proof_bytes_hex.commitment_root must not be zero");
+    }
+    final String[] fields = {"a.x", "a.y", "b.x0", "b.x1", "b.y0", "b.y1", "c.x", "c.y"};
+    for (int offset = 0; offset < fields.length; offset++) {
+      requireBaseFieldWord(proofHex, 4 + offset, "proof_bytes_hex." + fields[offset]);
+    }
+    requireG1Point(proofHex, 4, 5, "proof_bytes_hex.a");
+    requireG2Point(proofHex, 6, 7, 8, 9, "proof_bytes_hex.b");
+    requireG1Point(proofHex, 10, 11, "proof_bytes_hex.c");
+  }
+
+  private static void validateSccpDestinationProofMaterialRelationship(final Map<?, ?> fields) {
+    final boolean hasDestinationMaterial = preflightSccpDestinationProofMaterial(fields);
+    final boolean hasProofBytes = fields.get("proof_bytes_hex") != null;
+    if (hasDestinationMaterial && !hasProofBytes) {
+      throw new IllegalArgumentException(
+          "proof_bytes_hex is required when SCCP destination proof parameters are supplied");
+    }
+    if (hasProofBytes && !hasDestinationMaterial) {
+      throw new IllegalArgumentException(
+          "deployment destination fields are required when proof_bytes_hex is supplied");
+    }
+    if (hasDestinationMaterial && hasProofBytes) {
+      requireSccpDestinationProofMaterialTuple(fields);
+    }
+  }
+
+  private static boolean preflightSccpDestinationProofMaterial(final Map<?, ?> fields) {
+    boolean hasDestinationMaterial = false;
+    hasDestinationMaterial |= validateOptionalSccpDestinationHex(fields, "network_id_hex", 32);
+    hasDestinationMaterial |= validateOptionalSccpDestinationHex(fields, "verifier_address_hex", 20);
+    hasDestinationMaterial |= validateOptionalSccpDestinationHex(fields, "bridge_address_hex", 20);
+    hasDestinationMaterial |= validateOptionalSccpDestinationHex(fields, "verifier_code_hash_hex", 32);
+    hasDestinationMaterial |= validateOptionalSccpDestinationHex(fields, "verifier_key_hash_hex", 32);
+    hasDestinationMaterial |=
+        validateOptionalSccpDestinationHex(fields, "expected_destination_binding_hash_hex", 32);
+    hasDestinationMaterial |= validateOptionalSccpDestinationText(fields, "tron_verifier_address");
+    return hasDestinationMaterial;
+  }
+
+  private static void requireSccpDestinationProofMaterialTuple(final Map<?, ?> fields) {
+    final boolean hasEvmFields =
+        hasSccpDestinationField(fields, "verifier_address_hex")
+            || hasSccpDestinationField(fields, "bridge_address_hex");
+    final boolean hasTronFields = hasSccpDestinationField(fields, "tron_verifier_address");
+    if (hasEvmFields && hasTronFields) {
+      throw new IllegalArgumentException("EVM and TRON SCCP destination fields cannot be mixed");
+    }
+
+    final String[] sharedFields = {
+      "network_id_hex",
+      "verifier_code_hash_hex",
+      "verifier_key_hash_hex",
+      "expected_destination_binding_hash_hex"
+    };
+    final boolean hasSharedFields = hasAnySccpDestinationField(fields, sharedFields);
+    if (hasTronFields) {
+      final String[] required = {
+        "network_id_hex",
+        "tron_verifier_address",
+        "verifier_code_hash_hex",
+        "verifier_key_hash_hex",
+        "expected_destination_binding_hash_hex"
+      };
+      final String missing = missingSccpDestinationFields(fields, required);
+      if (!missing.isEmpty()) {
+        throw new IllegalArgumentException(
+            "complete TRON SCCP deployment destination fields are required; missing " + missing);
+      }
+      requireTronSccpDestinationBindingHashMatches(fields);
+      return;
+    }
+
+    if (hasEvmFields) {
+      final String[] required = {
+        "network_id_hex",
+        "verifier_address_hex",
+        "bridge_address_hex",
+        "verifier_code_hash_hex",
+        "verifier_key_hash_hex",
+        "expected_destination_binding_hash_hex"
+      };
+      final String missing = missingSccpDestinationFields(fields, required);
+      if (!missing.isEmpty()) {
+        throw new IllegalArgumentException(
+            "complete EVM SCCP deployment destination fields are required; missing " + missing);
+      }
+      requireEvmSccpDestinationBindingHashMatches(fields);
+      return;
+    }
+
+    if (hasSharedFields) {
+      throw new IllegalArgumentException(
+          "complete EVM or TRON SCCP deployment destination fields are required");
+    }
+  }
+
+  private static void requireEvmSccpDestinationBindingHashMatches(final Map<?, ?> fields) {
+    final String actual =
+        normalizeExactNonZeroEvenLengthHex(
+            (String) fields.get("expected_destination_binding_hash_hex"),
+            "expected_destination_binding_hash_hex",
+            32);
+    final int[] targetDomains = {SourceSccpProofs.DOMAIN_ETH, SourceSccpProofs.DOMAIN_BSC};
+    for (final int targetDomain : targetDomains) {
+      final String expectedWithPrefix =
+          SourceSccpProofs.evmDestinationBindingHash(
+              SourceSccpProofs.DOMAIN_SORA,
+              targetDomain,
+              (String) fields.get("network_id_hex"),
+              (String) fields.get("verifier_address_hex"),
+              (String) fields.get("bridge_address_hex"),
+              (String) fields.get("verifier_code_hash_hex"),
+              (String) fields.get("verifier_key_hash_hex"));
+      final String expected =
+          expectedWithPrefix.startsWith("0x")
+              ? expectedWithPrefix.substring(2)
+              : expectedWithPrefix;
+      if (actual.equals(expected)) {
+        return;
+      }
+    }
+    throw new IllegalArgumentException(
+        "expected_destination_binding_hash_hex must match canonical EVM destination binding");
+  }
+
+  private static void requireTronSccpDestinationBindingHashMatches(final Map<?, ?> fields) {
+    final String expectedWithPrefix =
+        SourceSccpProofs.tronDestinationBindingHash(
+            SourceSccpProofs.DOMAIN_SORA,
+            SourceSccpProofs.DOMAIN_TRON,
+            (String) fields.get("network_id_hex"),
+            (String) fields.get("tron_verifier_address"),
+            (String) fields.get("verifier_code_hash_hex"),
+            (String) fields.get("verifier_key_hash_hex"));
+    final String expected =
+        expectedWithPrefix.startsWith("0x")
+            ? expectedWithPrefix.substring(2)
+            : expectedWithPrefix;
+    final String actual =
+        normalizeExactNonZeroEvenLengthHex(
+            (String) fields.get("expected_destination_binding_hash_hex"),
+            "expected_destination_binding_hash_hex",
+            32);
+    if (!actual.equals(expected)) {
+      throw new IllegalArgumentException(
+          "expected_destination_binding_hash_hex must match canonical TRON destination binding");
+    }
+  }
+
+  private static boolean hasSccpDestinationField(final Map<?, ?> fields, final String field) {
+    return fields.get(field) != null;
+  }
+
+  private static void preflightSccpBridgeSubmitBundleSelection(
+      final Map<?, ?> fields, final String path) {
+    final boolean hasBurnBundle = hasSccpDestinationField(fields, "burn_bundle");
+    final boolean hasMessageBundle = hasSccpDestinationField(fields, "message_bundle");
+    if ("/v1/bridge/proofs/submit".equals(path)) {
+      final int bundleCount = (hasBurnBundle ? 1 : 0) + (hasMessageBundle ? 1 : 0);
+      if (bundleCount != 1) {
+        throw new IllegalArgumentException(
+            "bridge proof submit must provide exactly one of burn_bundle or message_bundle");
+      }
+      if (hasBurnBundle && hasSccpDestinationProofOrMaterial(fields)) {
+        throw new IllegalArgumentException(
+            "SCCP destination fields and proof_bytes_hex are only valid for message_bundle submissions");
+      }
+    } else if ("/v1/bridge/messages".equals(path)) {
+      if (!hasMessageBundle) {
+        throw new IllegalArgumentException("bridge message submit requires message_bundle");
+      }
+      if (hasBurnBundle) {
+        throw new IllegalArgumentException("bridge message submit does not accept burn_bundle");
+      }
+    }
+  }
+
+  private static boolean hasSccpDestinationProofOrMaterial(final Map<?, ?> fields) {
+    if (hasSccpDestinationField(fields, "proof_bytes_hex")) {
+      return true;
+    }
+    final String[] materialFields = {
+      "network_id_hex",
+      "verifier_address_hex",
+      "bridge_address_hex",
+      "verifier_code_hash_hex",
+      "verifier_key_hash_hex",
+      "expected_destination_binding_hash_hex",
+      "tron_verifier_address"
+    };
+    return hasAnySccpDestinationField(fields, materialFields);
+  }
+
+  private static boolean hasAnySccpDestinationField(
+      final Map<?, ?> fields, final String[] names) {
+    for (final String name : names) {
+      if (hasSccpDestinationField(fields, name)) {
+        return true;
+      }
+    }
+    return false;
+  }
+
+  private static String missingSccpDestinationFields(
+      final Map<?, ?> fields, final String[] names) {
+    final StringBuilder missing = new StringBuilder();
+    for (final String name : names) {
+      if (!hasSccpDestinationField(fields, name)) {
+        if (missing.length() > 0) {
+          missing.append(", ");
+        }
+        missing.append(name);
+      }
+    }
+    return missing.toString();
+  }
+
+  private static boolean validateOptionalSccpDestinationHex(
+      final Map<?, ?> fields, final String field, final int expectedByteLength) {
+    if (!fields.containsKey(field)) {
+      return false;
+    }
+    final Object value = fields.get(field);
+    if (value == null) {
+      return false;
+    }
+    if (!(value instanceof String)) {
+      throw new IllegalArgumentException(
+          field + " must be a " + expectedByteLength + "-byte hex string");
+    }
+    normalizeExactNonZeroEvenLengthHex((String) value, field, expectedByteLength);
+    return true;
+  }
+
+  private static boolean validateOptionalSccpDestinationText(
+      final Map<?, ?> fields, final String field) {
+    if (!fields.containsKey(field)) {
+      return false;
+    }
+    final Object value = fields.get(field);
+    if (value == null) {
+      return false;
+    }
+    if (!(value instanceof String)) {
+      throw new IllegalArgumentException(field + " must be a non-empty string");
+    }
+    normalizeTronBase58CheckAddress((String) value, field);
+    return true;
   }
 }

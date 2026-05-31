@@ -14,9 +14,9 @@ use iroha::data_model::{
     domain::{Domain, DomainId},
     governance::types::ParliamentBody,
     isi::governance::{
-        ApproveGovernanceProposal, AtWindow, CastPlainBallot, CouncilDerivationKind,
-        EnactReferendum, FinalizeReferendum, PersistCouncilForEpoch, ProposeRuntimeUpgradeProposal,
-        RegisterCitizen, VotingMode,
+        AtWindow, CastParliamentBallot, CastPlainBallot, CouncilDerivationKind, EnactReferendum,
+        FinalizeReferendum, ParliamentDecision, PersistCouncilForEpoch,
+        ProposeRuntimeUpgradeProposal, RegisterCitizen, VotingMode,
     },
     permission::Permission,
     prelude::{
@@ -29,7 +29,8 @@ use iroha::data_model::{
 };
 use iroha_crypto::KeyPair;
 use iroha_executor_data_model::permission::governance::{
-    CanEnactGovernance, CanProposeContractDeployment, CanSubmitGovernanceBallot,
+    CanEnactGovernance, CanManageParliament, CanProposeContractDeployment,
+    CanSubmitGovernanceBallot,
 };
 use iroha_test_network::{NetworkBuilder, ensure_domain_registration_lease_for_network};
 use iroha_test_samples::{ALICE_ID, gen_account_in};
@@ -634,6 +635,7 @@ fn numeric_asset_balance_u128(client: &Client, asset_id: &AssetId) -> Result<Opt
                 || msg.contains("Find(Account(")
                 || msg.contains("QueryExecutionFail::Find")
                 || msg.contains("QueryExecutionFail::NotFound")
+                || msg.contains("QueryFailed(NotFound)")
             {
                 return Ok(None);
             }
@@ -694,7 +696,7 @@ pub async fn wait_for_tx_applied(
     status_url
         .query_pairs_mut()
         .append_pair("hash", tx_hash_hex)
-        .append_pair("scope", "auto");
+        .append_pair("scope", "local");
     let deadline = Instant::now() + timeout;
     let mut last_kind = String::from("unavailable");
     let mut last_payload = String::new();
@@ -776,7 +778,7 @@ pub async fn wait_for_tx_rejected(
     status_url
         .query_pairs_mut()
         .append_pair("hash", tx_hash_hex)
-        .append_pair("scope", "auto");
+        .append_pair("scope", "local");
     let deadline = Instant::now() + timeout;
     let mut last_kind = String::from("unavailable");
     let mut last_payload = String::new();
@@ -874,6 +876,28 @@ pub fn governance_builder_for_runtime_resilience() -> NetworkBuilder {
         .with_config_layer(move |layer| {
             layer
                 .write(["default_account_domain_label"], "wonderland")
+                .write(["nexus", "governance", "default_module"], "parliament")
+                .write(
+                    [
+                        "nexus",
+                        "governance",
+                        "modules",
+                        "parliament",
+                        "module_type",
+                    ],
+                    "parliament_sortition_jit",
+                )
+                .write(
+                    [
+                        "nexus",
+                        "governance",
+                        "modules",
+                        "parliament",
+                        "params",
+                        "selection",
+                    ],
+                    "multibody_sortition",
+                )
                 .write(["gov", "voting_asset_id"], governance_asset_id.clone())
                 .write(["gov", "citizenship_asset_id"], governance_asset_id.clone())
                 .write(
@@ -989,11 +1013,13 @@ pub async fn setup_runtime_governance_fixture(
         contract_address: governance_contract_address(SECOND_CONTRACT_ID),
     }
     .into();
+    let manage_parliament_perm: Permission = CanManageParliament.into();
     let grant_permissions_tx_hash = alice
         .submit_all([
             Grant::account_permission(runtime_propose_perm, ALICE_ID.clone()),
             Grant::account_permission(secondary_propose_perm, ALICE_ID.clone()),
             Grant::account_permission(enact_perm, ALICE_ID.clone()),
+            Grant::account_permission(manage_parliament_perm, ALICE_ID.clone()),
         ])
         .wrap_err("submit governance proposal/enact permission grants to alice")?;
     wait_for_tx_applied(
@@ -1168,6 +1194,118 @@ fn tuned_client_for_account(
     client
 }
 
+fn parliament_body_json_key(body: ParliamentBody) -> &'static str {
+    match body {
+        ParliamentBody::RulesCommittee => "rules-committee",
+        ParliamentBody::AgendaCouncil => "agenda-council",
+        ParliamentBody::InterestPanel => "interest-panel",
+        ParliamentBody::ReviewPanel => "review-panel",
+        ParliamentBody::PolicyJury => "policy-jury",
+        ParliamentBody::OversightCommittee => "oversight-committee",
+        ParliamentBody::FmaCommittee => "fma-committee",
+    }
+}
+
+fn proposal_snapshot_body_members(
+    proposal_payload: &norito::json::Value,
+    body: ParliamentBody,
+) -> Result<Option<Vec<AccountId>>> {
+    let body_key = parliament_body_json_key(body);
+    let Some(parliament_snapshot) = proposal_payload
+        .get("proposal")
+        .and_then(|value| value.get("parliament_snapshot"))
+    else {
+        return Ok(None);
+    };
+    if matches!(parliament_snapshot, norito::json::Value::Null) {
+        return Ok(None);
+    }
+    let members = parliament_snapshot
+        .get("bodies")
+        .and_then(|value| value.get("rosters"))
+        .and_then(|value| value.get(body_key))
+        .and_then(|value| value.get("members"))
+        .and_then(norito::json::Value::as_array)
+        .ok_or_else(|| {
+            eyre!("proposal payload missing roster members for body `{body_key}`: {proposal_payload:?}")
+        })?;
+    let mut parsed = Vec::with_capacity(members.len());
+    for entry in members {
+        let raw = entry
+            .as_str()
+            .ok_or_else(|| eyre!("invalid non-string roster member in `{body_key}`: {entry:?}"))?;
+        let account_id = iroha::data_model::account::AccountId::parse_encoded(raw)
+            .map(|parsed| parsed.into_account_id())
+            .wrap_err_with(|| {
+                format!("failed to parse roster member account id `{raw}` in `{body_key}`")
+            })?;
+        parsed.push(account_id);
+    }
+    if parsed.is_empty() {
+        return Err(eyre!(
+            "proposal roster members for body `{body_key}` is empty"
+        ));
+    }
+    Ok(Some(parsed))
+}
+
+fn find_account_keypair<'a>(
+    accounts: &'a [(AccountId, KeyPair)],
+    account_id: &AccountId,
+) -> Result<&'a KeyPair> {
+    accounts
+        .iter()
+        .find(|(candidate_id, _)| candidate_id == account_id)
+        .map(|(_, keypair)| keypair)
+        .ok_or_else(|| eyre!("missing key pair for parliament member `{account_id}`"))
+}
+
+async fn cast_stage_approvals_from_snapshot(
+    fixture: &RuntimeGovernanceFixture,
+    proposal_payload: &norito::json::Value,
+    proposal_id: [u8; 32],
+    bodies: &[ParliamentBody],
+    context: &str,
+) -> Result<()> {
+    for body in bodies {
+        let approvers = proposal_snapshot_body_members(proposal_payload, *body)
+            .wrap_err_with(|| format!("{context}: extract {body:?} roster"))?
+            .ok_or_else(|| eyre!("{context}: proposal is missing parliament snapshot"))?;
+        for (approval_idx, account_id) in approvers.iter().enumerate() {
+            let key_pair =
+                find_account_keypair(&fixture.citizens, account_id).wrap_err_with(|| {
+                    format!("{context}: find key pair for {body:?} approver #{approval_idx}")
+                })?;
+            let member_client = tuned_client_for_account(fixture, account_id, key_pair);
+            let tx_hash = member_client
+                .submit(CastParliamentBallot {
+                    body: *body,
+                    proposal_id,
+                    decision: ParliamentDecision::Approve,
+                })
+                .wrap_err_with(|| {
+                    format!(
+                        "{context}: submit {body:?} signed approval ballot #{approval_idx} ({account_id})"
+                    )
+                })?;
+            wait_for_tx_applied(
+                &fixture.http,
+                &member_client.torii_url,
+                &hex::encode(tx_hash.as_ref()),
+                Duration::from_secs(180),
+                "wait for runtime parliament approval ballot transaction to be applied",
+            )
+            .await
+            .wrap_err_with(|| {
+                format!(
+                    "{context}: wait for {body:?} signed approval ballot #{approval_idx} ({account_id})"
+                )
+            })?;
+        }
+    }
+    Ok(())
+}
+
 async fn restart_peer_and_wait_for_height(
     network: &sandbox::SerializedNetwork,
     peer_idx: usize,
@@ -1326,23 +1464,22 @@ pub async fn enact_runtime_upgrade_round(
         })?;
     }
 
-    let (first_approver_account_id, first_approver_key_pair) =
-        fixture.citizens.first().ok_or_else(|| {
-            eyre!("runtime-governance fixture expected at least one citizen approver")
-        })?;
-    let first_approver_client =
-        tuned_client_for_account(fixture, first_approver_account_id, first_approver_key_pair);
-    for body in [
-        ParliamentBody::RulesCommittee,
-        ParliamentBody::AgendaCouncil,
-    ] {
-        first_approver_client
-            .submit(ApproveGovernanceProposal {
-                body,
-                proposal_id: runtime_proposal_id,
-            })
-            .wrap_err_with(|| format!("submit initial {body:?} approval ({round_label})"))?;
-    }
+    let runtime_proposal_payload = fixture
+        .alice
+        .get_gov_proposal_json(&runtime_proposal_id_hex)
+        .wrap_err_with(|| format!("query runtime proposal payload ({round_label})"))?;
+    cast_stage_approvals_from_snapshot(
+        fixture,
+        &runtime_proposal_payload,
+        runtime_proposal_id,
+        &[
+            ParliamentBody::RulesCommittee,
+            ParliamentBody::AgendaCouncil,
+        ],
+        "runtime Rules+Agenda gate",
+    )
+    .await
+    .wrap_err_with(|| format!("submit initial runtime Rules+Agenda approvals ({round_label})"))?;
     wait_for_referendum_found(
         &fixture.alice,
         &runtime_referendum_id,
@@ -1370,32 +1507,21 @@ pub async fn enact_runtime_upgrade_round(
         .await?;
     }
 
-    for (approval_idx, (approver_account_id, approver_key_pair)) in
-        fixture.citizens.iter().enumerate()
-    {
-        let approver_client =
-            tuned_client_for_account(fixture, approver_account_id, approver_key_pair);
-        for body in [
-            ParliamentBody::RulesCommittee,
-            ParliamentBody::AgendaCouncil,
+    cast_stage_approvals_from_snapshot(
+        fixture,
+        &runtime_proposal_payload,
+        runtime_proposal_id,
+        &[
             ParliamentBody::InterestPanel,
             ParliamentBody::ReviewPanel,
             ParliamentBody::PolicyJury,
             ParliamentBody::OversightCommittee,
             ParliamentBody::FmaCommittee,
-        ] {
-            approver_client
-                .submit(ApproveGovernanceProposal {
-                    body,
-                    proposal_id: runtime_proposal_id,
-                })
-                .wrap_err_with(|| {
-                    format!(
-                        "submit runtime {body:?} approval with citizen approver #{approval_idx} ({approver_account_id}) ({round_label})"
-                    )
-                })?;
-        }
-    }
+        ],
+        "runtime remaining parliament gates",
+    )
+    .await
+    .wrap_err_with(|| format!("submit remaining runtime approvals ({round_label})"))?;
     wait_for_referendum_status(
         &fixture.alice,
         &runtime_referendum_id,

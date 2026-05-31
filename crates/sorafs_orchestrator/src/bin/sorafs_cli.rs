@@ -1169,17 +1169,7 @@ fn load_deploy_client_config(path: &Path) -> Result<DeployClientConfig, String> 
         .get("private_key")
         .and_then(toml::Value::as_str)
         .ok_or_else(|| "client config `[account]` must define `private_key`".to_string())?;
-    let chain_discriminant = account
-        .get("chain_discriminant")
-        .and_then(toml::Value::as_integer)
-        .ok_or_else(|| {
-            "client config `[account]` must define integer `chain_discriminant`".to_string()
-        })
-        .and_then(|value| {
-            u16::try_from(value).map_err(|_| {
-                "client config `[account].chain_discriminant` must fit in u16".to_string()
-            })
-        })?;
+    let chain_discriminant = resolve_deploy_chain_discriminant(&root, account)?;
     let public_key = PublicKey::from_str(public_key_raw)
         .map_err(|err| format!("failed to parse client config public_key: {err}"))?;
     let private_key = parse_private_key_inline(private_key_raw)
@@ -1190,6 +1180,44 @@ fn load_deploy_client_config(path: &Path) -> Result<DeployClientConfig, String> 
         private_key,
         chain_discriminant,
     })
+}
+
+fn resolve_deploy_chain_discriminant(
+    root: &toml::Table,
+    account: &toml::Table,
+) -> Result<u16, String> {
+    if let Some(value) = account.get("chain_discriminant") {
+        let value = value.as_integer().ok_or_else(|| {
+            "client config `[account].chain_discriminant` must be an integer".to_string()
+        })?;
+        return u16::try_from(value).map_err(|_| {
+            "client config `[account].chain_discriminant` must fit in u16".to_string()
+        });
+    }
+
+    let chain = root
+        .get("chain")
+        .and_then(toml::Value::as_str)
+        .ok_or_else(|| {
+            "client config must define integer `[account].chain_discriminant` or a known top-level `chain`"
+                .to_string()
+        })?;
+    known_deploy_chain_discriminant(chain).ok_or_else(|| {
+        format!(
+            "client config top-level `chain` `{chain}` is not known; define integer `[account].chain_discriminant`"
+        )
+    })
+}
+
+fn known_deploy_chain_discriminant(chain: &str) -> Option<u16> {
+    match chain.trim() {
+        "iroha3-taira" | "809574f5-fee7-5e69-bfcf-52451e42d50f" => Some(369),
+        "iroha3-nexus" | "00000000-0000-0000-0000-000000000753" => Some(753),
+        "00000000-0000-0000-0000-000000000000" => {
+            Some(iroha_config::parameters::defaults::common::chain_discriminant())
+        }
+        _ => None,
+    }
 }
 
 fn build_deploy_artifacts(
@@ -1269,7 +1297,7 @@ fn build_deploy_artifacts(
         .first()
         .cloned()
         .ok_or_else(|| "CAR build did not emit a root CID".to_string())?;
-    let car_digest: [u8; 32] = (*stats.car_archive_digest.as_bytes()).into();
+    let car_digest: [u8; 32] = *stats.car_archive_digest.as_bytes();
     let manifest_descriptor =
         manifest_chunker_registry::lookup_by_handle(handle).ok_or_else(|| {
             format!("unknown manifest chunker profile handle `{handle}`; refresh the registry")
