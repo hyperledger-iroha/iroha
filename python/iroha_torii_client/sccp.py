@@ -1,0 +1,24715 @@
+"""SCCP helper APIs for app-side proof generation and submission packaging."""
+
+from __future__ import annotations
+
+import base64
+import hashlib
+import inspect
+from typing import Any, Awaitable, Callable, Dict, Mapping, Optional, Sequence, Union
+
+try:
+    import blake3 as _blake3
+except ModuleNotFoundError:  # pragma: no cover - optional prover acceleration dependency
+    _blake3 = None
+
+SCCP_DOMAIN_SORA = 0
+SCCP_DOMAIN_ETH = 1
+SCCP_DOMAIN_BSC = 2
+SCCP_DOMAIN_SOL = 3
+SCCP_DOMAIN_TON = 4
+SCCP_DOMAIN_TRON = 5
+SCCP_DOMAIN_SORA_KUSAMA = 6
+SCCP_DOMAIN_SORA_POLKADOT = 7
+SCCP_DOMAIN_SORA2 = 8
+SCCP_SOLANA_RECURSIVE_PROOF_BACKEND_V1 = "sccp-solana-recursive-mainnet-v1"
+SCCP_SOLANA_ACCOUNTS_LT_HASH_OPEN_VERIFY_CIRCUIT_ID_V1 = (
+    "sccp-solana-accounts-lt-hash-v1"
+)
+SCCP_SOLANA_TOWER_REPLAY_OPEN_VERIFY_CIRCUIT_ID_V1 = (
+    "sccp-solana-tower-replay-v1"
+)
+SCCP_SOLANA_FULL_ACCOUNTSDB_LATTICE_OPEN_VERIFY_CIRCUIT_ID_V1 = (
+    "sccp-solana-full-accountsdb-lattice-v1"
+)
+SCCP_SOLANA_BANK_FORK_CHOICE_OPEN_VERIFY_CIRCUIT_ID_V1 = (
+    "sccp-solana-bank-fork-choice-v1"
+)
+SCCP_EVM_GROTH16_BN254_PROOF_BACKEND_V1 = "evm-groth16-bn254-v1"
+SCCP_EVM_CONTRACT_CALL_ABI_TUPLE_V1 = "abi_tuple_v1"
+SCCP_TON_CONTRACT_PROOF_BACKEND_V1 = "ton-contract-v1"
+SCCP_TON_MESSAGE_BODY_BOC_V1 = "ton_message_body_boc_v1"
+SCCP_TON_MAINNET_SHARD_STATE_VERIFIER_ID_V1 = (
+    "sccp:ton:source-state-verifier:shard-state-light-client-mainnet:v1"
+)
+SCCP_TON_SHARD_STATE_OPEN_VERIFY_CIRCUIT_ID_V1 = (
+    "sccp-ton-shard-state-light-client-v1"
+)
+SCCP_TON_MASTERCHAIN_CONFIG_OPEN_VERIFY_CIRCUIT_ID_V1 = (
+    "sccp-ton-masterchain-config-v1"
+)
+SCCP_TON_VALIDATOR_SET_TRANSITION_OPEN_VERIFY_CIRCUIT_ID_V1 = (
+    "sccp-ton-validator-set-transition-v1"
+)
+SCCP_TON_SHARD_ACCOUNTS_DICTIONARY_OPEN_VERIFY_CIRCUIT_ID_V1 = (
+    "sccp-ton-shard-accounts-dictionary-v1"
+)
+SCCP_TON_CURRENT_VALIDATOR_SET_CONFIG_PARAM = 34
+SCCP_TON_CONFIG_PARAM_KEY_BITS = 32
+SCCP_TRON_GROTH16_BN254_PROOF_BACKEND_V1 = "tron-groth16-bn254-v1"
+SCCP_TRON_CONTRACT_CALL_ABI_TUPLE_V1 = "tron_abi_tuple_v1"
+SCCP_SUBMIT_MESSAGE_PROOF_ABI_V1 = (
+    "submitSccpMessageProof(bytes,bytes32[6],bytes32)"
+)
+SCCP_SUBMIT_MESSAGE_PROOF_SELECTOR_V1 = "0xbd57826c"
+SCCP_SUBSTRATE_RUNTIME_PROOF_BACKEND_V1 = "substrate-runtime-v1"
+SCCP_SUBSTRATE_RUNTIME_CALL_SCALE_V1 = "scale_call_v1"
+SCCP_SUBSTRATE_SUBMIT_MESSAGE_PROOF_ENTRYPOINT_V1 = (
+    "SccpBridge.submit_message_proof"
+)
+SCCP_SUBSTRATE_RUNTIME_STORAGE_OPEN_VERIFY_CIRCUIT_ID_V1 = (
+    "sccp-substrate-runtime-storage-v1"
+)
+SCCP_STARK_FRI_PROOF_FAMILY_V1 = "stark-fri-v1"
+SCCP_SOURCE_STATE_MAX_PROOF_BYTES = 2 * 1024 * 1024
+SCCP_SOURCE_STATE_MAX_PROOF_LABEL_BYTES = 128
+SCCP_NATIVE_RECURSIVE_MAX_PROOF_BYTES = 2 * 1024 * 1024
+SCCP_SOURCE_ADAPTER_OPEN_VERIFY_CIRCUIT_ID_V1 = "sccp-source-adapter-v1"
+SCCP_SOURCE_ADAPTER_FASTPQ_PARAMETER_SET_V1 = "fastpq-lane-balanced"
+SCCP_SOLANA_MAINNET_GENESIS_HASH = "5eykt4UsFv8P8NJdTREpY1vzqKqZKvdp"
+SCCP_SOLANA_MAINNET_ACCOUNTS_DB_VERIFIER_ID_V1 = (
+    "sccp:sol:accounts-db-verifier:accounts-lt-hash-mainnet-beta:v1"
+)
+SCCP_SOLANA_UPGRADEABLE_LOADER_ID = "BPFLoaderUpgradeab1e11111111111111111111111"
+_SCCP_SOLANA_TEMPLATE_SOURCE_TRUST_ANCHOR_HASH_V1 = (
+    "0x113bdb7601d84f2098daec386346a7123857d181b3ac5bd23df50fa9e1b2cbe3"
+)
+_SCCP_SOLANA_TEMPLATE_CONSENSUS_VERIFIER_HASH_V1 = (
+    "0x97ea89019e6c79305d06dfc27640ee14a6b42ba6eaf86e1835ee9b433dba48ba"
+)
+_SCCP_SOLANA_TEMPLATE_MESSAGE_INCLUSION_VERIFIER_HASH_V1 = (
+    "0xb8358bfef1e428a6a7e9115687cb2b88d9c21dad4021bea3e11d43489eb3dcb0"
+)
+SCCP_SOLANA_TEMPLATE_SOURCE_STATE_VERIFIER_HASH_V1 = (
+    "0x6b4e4106bbb6b343ae1a4a36c9c68756d4454d2167c9b8b2ee3225e39fb0a48b"
+)
+_SCCP_SOLANA_TEMPLATE_FINALITY_POLICY_HASH_V1 = (
+    "0x9df7ea90cf1bbba036788b14804f63f4be1e908390be89524fd4486f74344f56"
+)
+SCCP_SOLANA_MAINNET_TOWER_REPLAY_VERIFIER_ID_V1 = (
+    "sccp:sol:light-client:tower-replay-mainnet-beta:v1"
+)
+SCCP_SOLANA_MAINNET_FULL_ACCOUNTSDB_LATTICE_VERIFIER_ID_V1 = (
+    "sccp:sol:light-client:full-accountsdb-lattice-mainnet-beta:v1"
+)
+SCCP_SOLANA_MAINNET_BANK_FORK_CHOICE_VERIFIER_ID_V1 = (
+    "sccp:sol:light-client:bank-fork-choice-mainnet-beta:v1"
+)
+SCCP_TON_MAINNET_MASTERCHAIN_CONFIG_VERIFIER_ID_V1 = (
+    "sccp:ton:light-client:masterchain-config-mainnet:v1"
+)
+SCCP_TON_MAINNET_VALIDATOR_SET_TRANSITION_VERIFIER_ID_V1 = (
+    "sccp:ton:light-client:validator-set-transition-mainnet:v1"
+)
+SCCP_TON_MAINNET_SHARD_ACCOUNTS_DICTIONARY_VERIFIER_ID_V1 = (
+    "sccp:ton:light-client:shard-accounts-dictionary-mainnet:v1"
+)
+SCCP_SOLANA_MAINNET_SLOTS_PER_EPOCH = 432_000
+SCCP_SOLANA_TOWER_LOCKOUT_CONFIRMATION_DEPTH = 32
+SCCP_SOLANA_TOWER_VOTE_STACK_DEPTH = SCCP_SOLANA_TOWER_LOCKOUT_CONFIRMATION_DEPTH - 1
+SCCP_SOLANA_TOWER_WARMUP_COOLDOWN_RATE_BPS = 900
+SCCP_SOLANA_MAX_VALIDATORS = 8_192
+SCCP_SOLANA_VOTE_PROGRAM_ID = (
+    "0x0761481d357474bb7c4d7624ebd3bdb3d8355e73d11043fc0da3538000000000"
+)
+SCCP_SOLANA_STAKE_PROGRAM_ID = (
+    "0x06a1d8179137542a983437bdfe2a7ab2557f535c8a78722b68a49dc000000000"
+)
+SCCP_SOLANA_SYSVAR_PROGRAM_ID = (
+    "0x06a7d5171875f729c73d93408f216120067ed88c76e08c287fc1946000000000"
+)
+SCCP_SOLANA_STAKE_HISTORY_SYSVAR_ID = (
+    "0x06a7d517193584d0feed9bb3431d13206be544281b57b8566cc5375ff4000000"
+)
+_SCCP_SOLANA_TRANSACTION_SIGNATURE_BYTES = 64
+_SCCP_SOLANA_PROGRAM_ID_BYTES = 32
+_SCCP_SOLANA_UPGRADEABLE_LOADER_PROGRAM_TAG = 2
+_SCCP_SOLANA_UPGRADEABLE_LOADER_PROGRAMDATA_TAG = 3
+_SCCP_SOLANA_PROGRAMDATA_METADATA_LEN = 45
+_SCCP_SOLANA_BPF_ELF_MAGIC = b"\x7fELF"
+_SCCP_SOLANA_ROUTE_CANARY_LIVE_PROGRAM_LABEL_V1 = (
+    b"iroha:sccp:solana-route-canary-live-program:v1"
+)
+_SCCP_TON_ROUTE_CANARY_LIVE_ACCOUNT_LABEL_V1 = (
+    b"iroha:sccp:ton-route-canary-live-account:v1"
+)
+_SCCP_SOLANA_BASIS_POINTS_PER_UNIT = 10_000
+_SOLANA_BASE58_ALPHABET = "123456789ABCDEFGHJKLMNPQRSTUVWXYZabcdefghijkmnopqrstuvwxyz"
+_SOLANA_BASE58_INDEX = {
+    symbol: index for index, symbol in enumerate(_SOLANA_BASE58_ALPHABET)
+}
+SCCP_SOLANA_BORSH_INSTRUCTION_V1 = "borsh_instruction_v1"
+SCCP_SOLANA_SUBMIT_MESSAGE_PROOF_ENTRYPOINT_V1 = "submit_sccp_message_proof"
+SCCP_ZERO_HASH_V1 = "0x" + "00" * 32
+
+SCCP_MESSAGE_TRANSPARENT_PUBLIC_INPUTS_BYTES_V1_LEN = 141
+
+_SCCP_EVM_RECEIPT_PROOF_PREFIX_V1 = b"sccp:evm:receipt-proof:v1"
+_SCCP_EVM_GROTH16_PROOF_REQUEST_PREFIX_V1 = b"sccp:evm:groth16-proof-request:v1"
+_SCCP_EVM_GROTH16_PROOF_ENVELOPE_PREFIX_V1 = b"sccp:evm:groth16-proof-envelope:v1"
+_SCCP_EVM_DESTINATION_BINDING_LABEL_V1 = b"iroha:sccp:evm-destination-binding:v1"
+_SCCP_GROTH16_BN254_PROOF_ABI_BYTE_LENGTH_V1 = 384
+_SCCP_SUBMIT_MESSAGE_PROOF_SELECTOR_BYTES_V1 = bytes.fromhex(
+    SCCP_SUBMIT_MESSAGE_PROOF_SELECTOR_V1.removeprefix("0x")
+)
+_SCCP_SUBMIT_MESSAGE_PROOF_ENTRYPOINT_V1 = (
+    "submitSccpMessageProof(bytes proof_bytes, bytes32[6] public_inputs, bytes32 statement_hash)"
+)
+_SCCP_ETH_SYNC_COMMITTEE_PREFIX_V1 = b"sccp:eth:sync-committee:v1"
+_SCCP_ETH_SYNC_COMMITTEE_PAYLOAD_PREFIX_V1 = b"sccp:eth:sync-committee-payload:v1"
+_SCCP_ETH_SYNC_COMMITTEE_TRANSITION_MESSAGE_PREFIX_V1 = (
+    b"sccp:eth:sync-committee-transition-message:v1"
+)
+_SCCP_ETH_SYNC_COMMITTEE_TRANSITION_SIGNATURE_PREFIX_V1 = (
+    b"sccp:eth:sync-committee-transition-signature:v1"
+)
+_SCCP_BSC_RECEIPT_PROOF_PREFIX_V1 = b"sccp:bsc:receipt-proof:v1"
+_SCCP_BSC_VALIDATOR_SET_PREFIX_V1 = b"sccp:bsc:validator-set:v1"
+_SCCP_BSC_VALIDATOR_SET_PAYLOAD_PREFIX_V1 = b"sccp:bsc:validator-set-payload:v1"
+_SCCP_BSC_COMMIT_MESSAGE_PREFIX_V1 = b"sccp:bsc:commit-message:v1"
+_SCCP_BSC_COMMIT_SEAL_PREFIX_V1 = b"sccp:bsc:commit-seal:v1"
+_SCCP_BSC_VALIDATOR_SET_TRANSITION_MESSAGE_PREFIX_V1 = (
+    b"sccp:bsc:validator-set-transition-message:v1"
+)
+_SCCP_BSC_VALIDATOR_SET_METADATA_PREFIX_V1 = b"sccp:bsc:validator-set-metadata:v1"
+_SCCP_BSC_VALIDATOR_SET_STORAGE_VALUE_PREFIX_V1 = (
+    b"sccp:bsc:validator-set-storage-value:v1"
+)
+_SCCP_EVM_RECEIPT_ROOT_VALUE_MARKER_V1 = b"sccp:evm:receipt-root-value:v1"
+_SCCP_SOLANA_MESSAGE_PROOF_PREFIX_V1 = b"sccp:solana:message-proof:v1"
+_SCCP_SOLANA_TRANSACTION_STATUS_LEAF_PREFIX_V1 = (
+    b"sccp:solana:transaction-status-leaf:v1"
+)
+_SCCP_SOURCE_NODE_PREFIX_V1 = b"sccp:source:node:v1"
+_SCCP_SOLANA_EPOCH_STAKE_ROOT_PREFIX_V1 = b"sccp:solana:epoch-stake-root:v1"
+_SCCP_SOLANA_STAKE_ACTIVATION_PREFIX_V1 = b"sccp:solana:stake-activation:v1"
+_SCCP_SOLANA_STAKE_ACCOUNT_STATE_PREFIX_V1 = b"sccp:solana:stake-account-state:v1"
+_SCCP_SOLANA_ACCOUNT_OPENING_PREFIX_V1 = b"sccp:solana:account-opening:v1"
+_SCCP_SOLANA_ACCOUNT_RAW_DATA_PREFIX_V1 = b"sccp:solana:account-raw-data:v1"
+_SCCP_SOLANA_ACCOUNT_INCLUSION_LEAF_PREFIX_V1 = (
+    b"sccp:solana:account-inclusion-leaf:v1"
+)
+_SCCP_SOLANA_ACCOUNT_INCLUSION_NODE_PREFIX_V1 = (
+    b"sccp:solana:account-inclusion-node:v1"
+)
+_SCCP_SOLANA_VOTE_ACCOUNT_DATA_PREFIX_V1 = b"sccp:solana:vote-account-data:v1"
+_SCCP_SOLANA_STAKE_ACCOUNT_DATA_PREFIX_V1 = b"sccp:solana:stake-account-data:v1"
+_SCCP_SOLANA_STAKE_HISTORY_SYSVAR_DATA_PREFIX_V1 = (
+    b"sccp:solana:stake-history-sysvar-data:v1"
+)
+_SCCP_SOLANA_STAKE_HISTORY_PREFIX_V1 = b"sccp:solana:stake-history:v1"
+_SCCP_SOLANA_ACCOUNTS_LT_HASH_PROOF_PUBLIC_INPUTS_PREFIX_V1 = (
+    b"sccp:solana:accounts-lt-proof-public-inputs:v1"
+)
+_SCCP_SOLANA_ACCOUNTS_LT_HASH_OPENED_CONTRIBUTIONS_PREFIX_V1 = (
+    b"sccp:solana:accounts-lt-opened-contributions:v1"
+)
+_SCCP_SOLANA_MAINNET_GENESIS_HASH_PREFIX_V1 = (
+    b"sccp:solana:mainnet-genesis:v1"
+)
+_SCCP_SOLANA_BANK_HASH_HARD_FORK_DATA_PREFIX_V1 = (
+    b"sccp:solana:bank-hash-hard-fork-data:v1"
+)
+_SCCP_SOLANA_ACCOUNTS_LT_HASH_FASTPQ_DSID_PREFIX_V1 = (
+    b"sccp:solana:accounts-lt:fastpq:dsid:v1"
+)
+_SCCP_SOLANA_ACCOUNTS_LT_HASH_FASTPQ_PARAMETER_SET_V1 = "fastpq-lane-balanced"
+_SCCP_SOLANA_ACCOUNTS_LT_HASH_FASTPQ_STATEMENT_KEY_V1 = (
+    b"sccp:solana:accounts-lt:v1:statement"
+)
+_SCCP_SOLANA_ACCOUNTS_LT_HASH_FASTPQ_ACCOUNTS_KEY_V1 = (
+    b"sccp:solana:accounts-lt:v1:accounts"
+)
+_SCCP_SOLANA_ACCOUNTS_LT_HASH_FASTPQ_OPENED_CONTRIBUTIONS_KEY_V1 = (
+    b"sccp:solana:accounts-lt:v1:opened-contributions"
+)
+_SCCP_SOLANA_ACCOUNTS_LT_HASH_FASTPQ_RESIDUAL_KEY_V1 = (
+    b"sccp:solana:accounts-lt:v1:residual"
+)
+_SCCP_SOLANA_ACCOUNTS_LT_HASH_FASTPQ_CONTEXT_KEY_V1 = (
+    b"sccp:solana:accounts-lt:v1:context"
+)
+_SCCP_SOLANA_FULL_LIGHT_CLIENT_AUDIT_FASTPQ_DSID_PREFIX_V1 = (
+    b"sccp:solana:full-light-client-audit:fastpq:dsid:v1"
+)
+_SCCP_SOLANA_FULL_LIGHT_CLIENT_AUDIT_FASTPQ_PARAMETER_SET_V1 = "fastpq-lane-balanced"
+_SCCP_SOLANA_FULL_LIGHT_CLIENT_AUDIT_FASTPQ_STATEMENT_KEY_V1 = (
+    b"sccp:solana:full-light-client-audit:v1:statement"
+)
+_SCCP_SOLANA_FULL_LIGHT_CLIENT_AUDIT_FASTPQ_CONTEXT_KEY_V1 = (
+    b"sccp:solana:full-light-client-audit:v1:context"
+)
+_SCCP_SOLANA_FULL_LIGHT_CLIENT_AUDIT_FASTPQ_GATE_KEY_V1 = (
+    b"sccp:solana:full-light-client-audit:v1:gate"
+)
+_SCCP_SOLANA_FULL_LIGHT_CLIENT_AUDIT_STATEMENT_PREFIX_V1 = (
+    b"sccp:solana:full-light-client-audit:statement:v1"
+)
+_SCCP_SOLANA_STAKE_STATE_V2_STAKE_ACCOUNT_DATA_LEN = 200
+_SCCP_SOLANA_VOTE_STATE_ACCOUNT_DATA_LEN = 3_762
+_SCCP_SOLANA_MAX_ACCOUNT_RAW_DATA_BYTES = 65_536
+_SCCP_SOLANA_LT_HASH_ELEMENTS = 1024
+_SCCP_SOLANA_ACCOUNTS_LT_HASH_BYTES = _SCCP_SOLANA_LT_HASH_ELEMENTS * 2
+_SCCP_SOLANA_OPENED_LT_HASH_ROLE_VOTE = 1
+_SCCP_SOLANA_OPENED_LT_HASH_ROLE_STAKE = 2
+_SCCP_SOLANA_OPENED_LT_HASH_ROLE_STAKE_HISTORY_SYSVAR = 3
+_SCCP_SOLANA_MAX_BANK_HARD_FORK_HASH_DATA_BYTES = 1024
+_SCCP_SOLANA_BLS_PUBLIC_KEY_COMPRESSED_LEN = 48
+_SCCP_SOLANA_VOTE_STATE_V1_14_11_DISCRIMINANT = 1
+_SCCP_SOLANA_VOTE_STATE_V3_DISCRIMINANT = 2
+_SCCP_SOLANA_VOTE_STATE_V4_DISCRIMINANT = 3
+_SCCP_SOLANA_VOTE_STATE_PRIOR_VOTERS = 32
+_SCCP_SOLANA_VOTE_STATE_V4_AUTHORIZED_VOTERS = 4
+_SCCP_SOLANA_VOTE_STATE_MAX_EPOCH_CREDITS = 64
+_SCCP_SOLANA_STAKE_STATE_V2_STAKE_DISCRIMINANT = 2
+_SCCP_SOLANA_STAKE_STATE_V2_STAKER_OFFSET = 12
+_SCCP_SOLANA_STAKE_STATE_V2_WITHDRAWER_OFFSET = 44
+_SCCP_SOLANA_STAKE_STATE_V2_VOTER_PUBKEY_OFFSET = 124
+_SCCP_SOLANA_STAKE_STATE_V2_DELEGATED_STAKE_OFFSET = 156
+_SCCP_SOLANA_STAKE_STATE_V2_ACTIVATION_EPOCH_OFFSET = 164
+_SCCP_SOLANA_STAKE_STATE_V2_DEACTIVATION_EPOCH_OFFSET = 172
+_SCCP_SOLANA_STAKE_STATE_V2_WARMUP_COOLDOWN_RATE_OFFSET = 180
+_SCCP_SOLANA_STAKE_STATE_V2_WARMUP_COOLDOWN_RATE_BYTES = 8
+_SCCP_SOLANA_STAKE_STATE_V2_LEGACY_WARMUP_COOLDOWN_RATE_BYTES = bytes(
+    (0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0xD0, 0x3F)
+)
+_SCCP_SOLANA_STAKE_STATE_V2_CURRENT_WARMUP_COOLDOWN_RATE_BYTES = bytes(
+    (0x0A, 0xD7, 0xA3, 0x70, 0x3D, 0x0A, 0xB7, 0x3F)
+)
+_SCCP_SOLANA_STAKE_STATE_V2_CREDITS_OBSERVED_OFFSET = 188
+_SCCP_SOLANA_STAKE_STATE_V2_FLAG_OFFSET = 196
+_SCCP_SOLANA_STAKE_STATE_V2_KNOWN_FLAGS_MASK = 0b0000_0001
+_SCCP_SOLANA_TOWER_LOCKOUT_PREFIX_V1 = b"sccp:solana:tower-lockout:v1"
+_SCCP_SOLANA_TOWER_REPLAY_PREFIX_V1 = b"sccp:solana:tower-replay:v1"
+_SCCP_SOLANA_BANK_FORK_PREFIX_V1 = b"sccp:solana:bank-fork:v1"
+_SCCP_SOLANA_VOTE_ROSTER_PREFIX_V1 = b"sccp:solana:vote-roster:v1"
+_SCCP_SOLANA_FINALITY_CONTEXT_PREFIX_V1 = b"sccp:solana:finality-context:v1"
+_SCCP_SOLANA_VOTE_MESSAGE_PREFIX_V1 = b"sccp:solana:finalized-vote:v1"
+_SCCP_TON_SHARD_PROOF_PREFIX_V1 = b"sccp:ton:shard-proof:v1"
+_SCCP_TON_VALIDATOR_SET_PREFIX_V1 = b"sccp:ton:validator-set:v1"
+_SCCP_TON_VALIDATOR_SET_PAYLOAD_PREFIX_V1 = b"sccp:ton:validator-set-payload:v1"
+_SCCP_TON_MASTERCHAIN_CONFIG_LEAF_PREFIX_V1 = (
+    b"sccp:ton:masterchain-config-leaf:v1"
+)
+_SCCP_TON_MASTERCHAIN_CONFIG_PROOF_PREFIX_V1 = (
+    b"sccp:ton:masterchain-config-proof:v1"
+)
+_SCCP_TON_MASTERCHAIN_BLOCK_MESSAGE_PREFIX_V1 = (
+    b"sccp:ton:masterchain-block-message:v1"
+)
+_SCCP_TON_MASTERCHAIN_SIGNATURES_PREFIX_V1 = (
+    b"sccp:ton:masterchain-signatures:v1"
+)
+_SCCP_TON_VALIDATOR_SET_TRANSITION_MESSAGE_PREFIX_V1 = (
+    b"sccp:ton:validator-set-transition-message:v1"
+)
+_SCCP_TON_VALIDATOR_SET_TRANSITION_SIGNATURES_PREFIX_V1 = (
+    b"sccp:ton:validator-set-transition-signatures:v1"
+)
+_SCCP_TON_VALIDATOR_SET_TRANSITION_CHAIN_PREFIX_V1 = (
+    b"sccp:ton:validator-set-transition-chain:v1"
+)
+_SCCP_TON_SHARD_STATE_PROOF_PUBLIC_INPUTS_PREFIX_V1 = (
+    b"sccp:ton:shard-state-proof-public-inputs:v1"
+)
+_SCCP_TON_SHARD_STATE_FASTPQ_DSID_PREFIX_V1 = (
+    b"sccp:ton:shard-state:fastpq:dsid:v1"
+)
+_SCCP_TON_SHARD_STATE_FASTPQ_PARAMETER_SET_V1 = "fastpq-lane-balanced"
+_SCCP_TON_SHARD_STATE_FASTPQ_STATEMENT_KEY_V1 = (
+    b"sccp:ton:shard-state:v1:statement"
+)
+_SCCP_TON_SHARD_STATE_FASTPQ_WITNESS_KEY_V1 = (
+    b"sccp:ton:shard-state:v1:witness"
+)
+_SCCP_TON_SHARD_STATE_FASTPQ_CONTEXT_KEY_V1 = (
+    b"sccp:ton:shard-state:v1:context"
+)
+_SCCP_TON_SHARD_STATE_PROOF_BOC_PREFIX_V1 = (
+    b"sccp:ton:shard-state-proof-boc:v1"
+)
+_SCCP_TON_SHARD_ACCOUNTS_PROOF_BOC_PREFIX_V1 = (
+    b"sccp:ton:shard-accounts-proof-boc:v1"
+)
+_SCCP_TON_CONFIG_PROOF_BOC_PREFIX_V1 = b"sccp:ton:config-proof-boc:v1"
+_SCCP_TON_FULL_LIGHT_CLIENT_AUDIT_FASTPQ_DSID_PREFIX_V1 = (
+    b"sccp:ton:full-light-client-audit:fastpq:dsid:v1"
+)
+_SCCP_TON_FULL_LIGHT_CLIENT_AUDIT_FASTPQ_PARAMETER_SET_V1 = "fastpq-lane-balanced"
+_SCCP_TON_FULL_LIGHT_CLIENT_AUDIT_FASTPQ_STATEMENT_KEY_V1 = (
+    b"sccp:ton:full-light-client-audit:v1:statement"
+)
+_SCCP_TON_FULL_LIGHT_CLIENT_AUDIT_FASTPQ_CONTEXT_KEY_V1 = (
+    b"sccp:ton:full-light-client-audit:v1:context"
+)
+_SCCP_TON_FULL_LIGHT_CLIENT_AUDIT_FASTPQ_GATE_KEY_V1 = (
+    b"sccp:ton:full-light-client-audit:v1:gate"
+)
+_SCCP_TON_FULL_LIGHT_CLIENT_AUDIT_STATEMENT_PREFIX_V1 = (
+    b"sccp:ton:full-light-client-audit:statement:v1"
+)
+_SCCP_TRON_RECEIPT_PROOF_PREFIX_V1 = b"sccp:tron:receipt-proof:v1"
+_SCCP_TRON_RECEIPT_STATE_PROOF_PREFIX_V1 = b"sccp:tron:receipt-state-proof:v1"
+_SCCP_TRON_TRANSACTION_SOURCE_PROOF_PREFIX_V1 = b"sccp:tron:transaction-source-proof:v1"
+_SCCP_TRON_SOURCE_MESSAGE_CALL_ABI_V1 = b"submitSccpSourceEvent(uint32,uint32,bytes32)"
+_SCCP_TRON_TRIGGER_SMART_CONTRACT_TYPE_URL_V1 = (
+    b"type.googleapis.com/protocol.TriggerSmartContract"
+)
+_SCCP_TRON_SOURCE_CALL_SIGNATURES = 1
+_SCCP_TRON_SOURCE_BRIDGE_CONFIG_LABEL_V1 = b"iroha:sccp:tron-source-bridge-config:v1"
+_SCCP_TRON_RECEIPT_ROOT_VALUE_MARKER_V1 = b"sccp:tron:receipt-root-value:v1"
+_SCCP_TRON_SOLID_BLOCK_HEADER_PREFIX_V1 = b"sccp:tron:solid-block-header-proof:v1"
+_SCCP_TRON_WITNESS_SCHEDULE_PREFIX_V1 = b"sccp:tron:witness-schedule:v1"
+_SCCP_TRON_WITNESS_SCHEDULE_PAYLOAD_PREFIX_V1 = b"sccp:tron:witness-schedule-payload:v1"
+_SCCP_TRON_SOLID_BLOCK_MESSAGE_PREFIX_V1 = b"sccp:tron:solid-block-message:v1"
+_SCCP_TRON_WITNESS_SEAL_PREFIX_V1 = b"sccp:tron:witness-seal:v1"
+_SCCP_TRON_WITNESS_SCHEDULE_TRANSITION_MESSAGE_PREFIX_V1 = (
+    b"sccp:tron:witness-schedule-transition-message:v1"
+)
+_SCCP_TRON_WITNESS_SCHEDULE_TRANSITION_SEAL_PREFIX_V1 = (
+    b"sccp:tron:witness-schedule-transition-seal:v1"
+)
+_SCCP_SUBSTRATE_STORAGE_PROOF_PREFIX_V1 = b"sccp:substrate:storage-proof:v1"
+_SCCP_SUBSTRATE_RUNTIME_STORAGE_PROOF_PUBLIC_INPUTS_PREFIX_V1 = (
+    b"sccp:substrate:runtime-storage-proof-public-inputs:v1"
+)
+_SCCP_SUBSTRATE_RUNTIME_STORAGE_FASTPQ_DSID_PREFIX_V1 = (
+    b"sccp:substrate:runtime-storage:fastpq:dsid:v1"
+)
+_SCCP_SUBSTRATE_RUNTIME_STORAGE_FASTPQ_PARAMETER_SET_V1 = "fastpq-lane-balanced"
+_SCCP_SUBSTRATE_RUNTIME_STORAGE_FASTPQ_STATEMENT_KEY_V1 = (
+    b"sccp:substrate:runtime-storage:v1:statement"
+)
+_SCCP_SUBSTRATE_RUNTIME_STORAGE_FASTPQ_CONTEXT_KEY_V1 = (
+    b"sccp:substrate:runtime-storage:v1:context"
+)
+_SCCP_SUBSTRATE_RUNTIME_STORAGE_FASTPQ_STORAGE_KEY_V1 = (
+    b"sccp:substrate:runtime-storage:v1:storage-key"
+)
+_SCCP_SUBSTRATE_SYSTEM_EVENTS_STORAGE_KEY_V1 = bytes.fromhex(
+    "26aa394eea5630e07c48ae0c9558cef780d41e5e16056765bc8461851072c9d7"
+)
+_SCCP_SUBSTRATE_TEMPLATE_SOURCE_STATE_VERIFIER_HASHES = {
+    6: "0xaf2d28b3e07447239f28e90ce4fdee7e6cd3778c087eaeda7170781eb4b76b9c",
+    7: "0x664576f1a2409099c3b7dba82512c8757501f2869aedda0e45f858572b940b5d",
+    8: "0x20509eb56524c727b6d028cc6b43f10c17048d31b92d5a96d41c0512d16267ef",
+}
+_SCCP_TON_TEMPLATE_SOURCE_STATE_VERIFIER_HASH = (
+    "0x540205f876591604ccf39f72a051ac5e82647c9e48dbd48cb129d2543971a34f"
+)
+_SCCP_TON_TEMPLATE_COMPONENT_HASHES = {
+    "source_state_verifier_hash": _SCCP_TON_TEMPLATE_SOURCE_STATE_VERIFIER_HASH,
+    "source_trust_anchor_hash": "0xd83b3a3eb920ac8338533535cf0d6c69c69d507e84aef8ec2094564b8427c56c",
+    "consensus_verifier_hash": "0xb0225e16477ea3420f7d0de76b87b6e99a43ab97f445d8565a384d4b655bc473",
+    "message_inclusion_verifier_hash": "0x89254256421c15da8c92842c7d6f448ef6c1d5ca1e2a173754643425fcee6353",
+    "finality_policy_hash": "0x50044ee6db0eb0cdef097e69406b6c30d3406d8f784e8ba34e9b923b38bd0c43",
+}
+_SCCP_TON_TEMPLATE_SOURCE_MATERIAL_HASHES = frozenset(
+    _SCCP_TON_TEMPLATE_COMPONENT_HASHES.values()
+)
+_SCCP_SOLANA_TEMPLATE_COMPONENT_HASHES = {
+    "source_trust_anchor_hash": _SCCP_SOLANA_TEMPLATE_SOURCE_TRUST_ANCHOR_HASH_V1,
+    "consensus_verifier_hash": _SCCP_SOLANA_TEMPLATE_CONSENSUS_VERIFIER_HASH_V1,
+    "message_inclusion_verifier_hash": _SCCP_SOLANA_TEMPLATE_MESSAGE_INCLUSION_VERIFIER_HASH_V1,
+    "source_state_verifier_hash": SCCP_SOLANA_TEMPLATE_SOURCE_STATE_VERIFIER_HASH_V1,
+    "finality_policy_hash": _SCCP_SOLANA_TEMPLATE_FINALITY_POLICY_HASH_V1,
+}
+_SCCP_SOLANA_TEMPLATE_SOURCE_MATERIAL_HASHES = frozenset(
+    _SCCP_SOLANA_TEMPLATE_COMPONENT_HASHES.values()
+)
+_SCCP_TRON_TEMPLATE_COMPONENT_HASHES = {
+    "source_trust_anchor_hash": "0x3550934cbdfe49449ec4aa383dcea7674541fedf66ab6159b1ed2f2c0be4755c",
+    "consensus_verifier_hash": "0x8a1de96a869b2f28f197a7835597f17cf77ff45f7cbb77da2f7c48e87df8c5ea",
+    "message_inclusion_verifier_hash": "0xf39db56474b288680ad9561389cca7a841bd1fd223719255324705e1038fcacc",
+    "finality_policy_hash": "0xad5a6a4f200e070400b5aaa1b7976c639e67571eb711eb6f69d01e3615423864",
+}
+_SCCP_SUBSTRATE_AUTHORITY_SET_PREFIX_V1 = b"sccp:substrate:authority-set:v1"
+_SCCP_SUBSTRATE_AUTHORITY_SET_PAYLOAD_PREFIX_V1 = b"sccp:substrate:authority-set-payload:v1"
+_SCCP_SUBSTRATE_AUTHORITY_SET_TRANSITION_MESSAGE_PREFIX_V1 = (
+    b"sccp:substrate:authority-set-transition-message:v1"
+)
+_SCCP_SUBSTRATE_AUTHORITY_SET_TRANSITION_JUSTIFICATION_PREFIX_V1 = (
+    b"sccp:substrate:authority-set-transition-justification:v1"
+)
+_SCCP_SOLANA_PROOF_CONTEXT_PREFIX_V1 = b"sccp:solana:proof-context:v1"
+_SCCP_TON_PROOF_REQUEST_PREFIX_V1 = b"sccp:ton:proof-request:v1"
+_SCCP_TON_PROOF_ENVELOPE_PREFIX_V1 = b"sccp:ton:proof-envelope:v1"
+_SCCP_TON_BOC_MAGIC = b"\xb5\xee\x9c\x72"
+_SCCP_TON_SUBMIT_OP_V1 = 0x53434350
+_SCCP_TON_MESSAGE_SCHEMA_VERSION_V1 = 1
+_SCCP_TON_MAX_CELL_DATA_BYTES = 127
+_SCCP_TON_MAX_CELL_SERIALIZED_DATA_BYTES = 128
+_SCCP_TON_MAX_BOC_BYTES = 64 * 1024
+_SCCP_TON_MAX_BOC_CELLS = 4096
+_SCCP_TON_MAX_REFS = 4
+_SCCP_TON_MAX_VALIDATORS = 1024
+_SCCP_TON_SHARD_ACCOUNT_KEY_BITS = 256
+_SCCP_TON_VALIDATOR_SET_KEY_BITS = 16
+_SCCP_TON_VALIDATOR_CONSTRUCTOR = 0x53
+_SCCP_TON_VALIDATOR_ADDR_CONSTRUCTOR = 0x73
+_SCCP_TON_VALIDATORS_CONSTRUCTOR = 0x11
+_SCCP_TON_VALIDATORS_EXT_CONSTRUCTOR = 0x12
+_SCCP_TON_ED25519_PUBKEY_CONSTRUCTOR = 0x8E81278A
+_SCCP_TRON_GROTH16_PROOF_REQUEST_PREFIX_V1 = b"sccp:tron:groth16-proof-request:v1"
+_SCCP_TRON_GROTH16_PROOF_ENVELOPE_PREFIX_V1 = b"sccp:tron:groth16-proof-envelope:v1"
+_SCCP_TRON_DESTINATION_BINDING_LABEL_V1 = b"iroha:sccp:tron-destination-binding:v1"
+_SCCP_SUBSTRATE_RUNTIME_PROOF_REQUEST_PREFIX_V1 = (
+    b"sccp:substrate:runtime-proof-request:v1"
+)
+_SCCP_SUBSTRATE_RUNTIME_PROOF_ENVELOPE_PREFIX_V1 = (
+    b"sccp:substrate:runtime-proof-envelope:v1"
+)
+_SCCP_SOURCE_ADAPTER_DEPLOYMENT_BINDING_PREFIX_V1 = (
+    b"sccp:source-adapter-deployment-binding:v1"
+)
+_SCCP_DESTINATION_BINDING_PREFIX_V1 = b"sccp:destination:binding:v1"
+_SCCP_SOURCE_VERIFIER_MATERIAL_RECORD_PREFIX_V1 = (
+    b"sccp:source-verifier-material-record:v1"
+)
+_SCCP_SOURCE_ADAPTER_ENGINE_DEPLOYMENT_RECORD_PREFIX_V1 = (
+    b"sccp:source-adapter-engine-deployment:v1"
+)
+_SCCP_SOLANA_FULL_LIGHT_CLIENT_GATE_PREFIX_V1 = (
+    b"sccp:solana:full-light-client-gate:v1"
+)
+_SCCP_TON_FULL_LIGHT_CLIENT_GATE_PREFIX_V1 = b"sccp:ton:full-light-client-gate:v1"
+_SCCP_SOURCE_ADAPTER_FASTPQ_TRACE_ROOT_V1 = 0x002A_247F_81C6_F850
+_SCCP_SOURCE_ADAPTER_FASTPQ_LDE_ROOT_V1 = 0x6026_3388_DBBF_9B2A
+_SCCP_SOURCE_ADAPTER_FASTPQ_OMEGA_COSET_V1 = 0x6AF3_25E8_25AD_5C18
+_SCCP_BSC_PARLIA_EXTRA_VANITY_BYTES = 32
+_SCCP_BSC_PARLIA_EXTRA_SEAL_BYTES = 65
+_SCCP_BSC_PARLIA_VALIDATOR_ADDRESS_BYTES = 20
+_SCCP_BSC_PARLIA_VALIDATOR_BLS_KEY_BYTES = 48
+_SCCP_BSC_MAX_PARLIA_VALIDATORS = 255
+_SCCP_BSC_MAX_VALIDATOR_SET_PAYLOAD_BYTES = (
+    1 + 4 + _SCCP_BSC_MAX_PARLIA_VALIDATORS * (_SCCP_BSC_PARLIA_VALIDATOR_ADDRESS_BYTES + 8)
+)
+_SCCP_BSC_PARLIA_EPOCH_LENGTH_BLOCKS = 200
+_SCCP_GROTH16_BN254_SCALAR_FIELD_MODULUS = int(
+    "30644e72e131a029b85045b68181585d2833e84879b9709143e1f593f0000001",
+    16,
+)
+_SCCP_GROTH16_BN254_BASE_FIELD_MODULUS = int(
+    "30644e72e131a029b85045b68181585d97816a916871ca8d3c208c16d87cfd47",
+    16,
+)
+_SCCP_GROTH16_BN254_G2_B_C0 = int(
+    "2b149d40ceb8aaae81be18991be06ac3b5b4c5e559dbefa33267e6dc24a138e5",
+    16,
+)
+_SCCP_GROTH16_BN254_G2_B_C1 = int(
+    "009713b03af0fed4cd2cafadeed8fdf4a74fa084e52d1852e4a2bd0685c315d2",
+    16,
+)
+_SCCP_ETH_EXECUTION_PAYLOAD_BODY_FIELD_INDEX = 9
+_SCCP_ETH_EXECUTION_PAYLOAD_BODY_BRANCH_DEPTH = 4
+_SCCP_ETH_MAX_SYNC_COMMITTEE_AUTHORITIES = 512
+_SCCP_ETH_SYNC_COMMITTEE_PUBLIC_KEY_BYTES = 48
+_SCCP_ETH_SYNC_COMMITTEE_POP_BYTES = 96
+_SCCP_ETH_SYNC_COMMITTEE_SIGNATURE_BYTES = 96
+_SCCP_ETH_MAX_SYNC_COMMITTEE_PUBLIC_KEY_BYTES = 96
+_SCCP_ETH_MAX_SYNC_COMMITTEE_POP_BYTES = 256
+_SCCP_ETH_MAX_SYNC_COMMITTEE_SIGNATURE_BYTES = 192
+_SCCP_ETH_MAX_SYNC_COMMITTEE_PAYLOAD_BYTES = (
+    1
+    + 4
+    + _SCCP_ETH_MAX_SYNC_COMMITTEE_AUTHORITIES
+    * (4 + _SCCP_ETH_MAX_SYNC_COMMITTEE_PUBLIC_KEY_BYTES + 8 + 4 + _SCCP_ETH_MAX_SYNC_COMMITTEE_POP_BYTES)
+)
+_SCCP_ETH_MAX_SYNC_COMMITTEE_SIGNERS_BITMAP_BYTES = (
+    _SCCP_ETH_MAX_SYNC_COMMITTEE_AUTHORITIES + 7
+) // 8
+_SCCP_GROTH16_BN254_SIGNAL_LABELS_V1 = (
+    b"sccp:groth16-bn254:signal:message-id:v1",
+    b"sccp:groth16-bn254:signal:payload-hash:v1",
+    b"sccp:groth16-bn254:signal:target-domain:v1",
+    b"sccp:groth16-bn254:signal:commitment-root:v1",
+    b"sccp:groth16-bn254:signal:finality-height:v1",
+    b"sccp:groth16-bn254:signal:finality-block-hash:v1",
+    b"sccp:groth16-bn254:signal:source-domain:v1",
+    b"sccp:groth16-bn254:signal:statement-hash:v1",
+    b"sccp:groth16-bn254:signal:destination-binding-hash:v1",
+)
+_KECCAK_256_RATE_BYTES = 136
+_SCCP_MAX_SOURCE_MERKLE_BRANCH_NODES = 64
+_SCCP_SUBSTRATE_MAX_AUTHORITIES = 2048
+_SCCP_SUBSTRATE_MAX_AUTHORITY_SET_PAYLOAD_BYTES = (
+    1 + 4 + _SCCP_SUBSTRATE_MAX_AUTHORITIES * (32 + 8)
+)
+_SCCP_TRON_MAX_MPT_PROOF_NODES = 64
+_SCCP_TRON_MAX_MPT_NODE_BYTES = 16 * 1024
+_SCCP_TRON_MAX_RAW_HEADER_BYTES = 16 * 1024
+_SCCP_TRON_MAX_RECEIPT_VALUE_BYTES = 16 * 1024
+_SCCP_TRON_MAX_TRANSACTION_BYTES = 64 * 1024
+_SCCP_TRON_MAX_TRANSACTION_MERKLE_BRANCH_NODES = 64
+_SCCP_EVM_MAX_RECEIPT_VALUE_BYTES = 16 * 1024
+_SCCP_TRON_MAX_WITNESSES = 64
+_SCCP_U64_MAX = (1 << 64) - 1
+_SECP256K1_SCALAR_ORDER_BE = bytes.fromhex(
+    "fffffffffffffffffffffffffffffffebaaedce6af48a03bbfd25e8cd0364141"
+)
+_SECP256K1_SCALAR_HALF_ORDER_BE = bytes.fromhex(
+    "7fffffffffffffffffffffffffffffff5d576e7357a4501ddfe92f46681b20a0"
+)
+_SECP256K1_FIELD_PRIME = (1 << 256) - (1 << 32) - 977
+_SECP256K1_SCALAR_ORDER = int.from_bytes(_SECP256K1_SCALAR_ORDER_BE, "big")
+_SECP256K1_GENERATOR = (
+    55066263022277343669578718895168534326250603453777594175500187360389116729240,
+    32670510020758816978083085130507043184471273380659243275938904335757337482424,
+)
+_U64_MASK = (1 << 64) - 1
+_KECCAK_ROUND_CONSTANTS = (
+    0x0000000000000001,
+    0x0000000000008082,
+    0x800000000000808A,
+    0x8000000080008000,
+    0x000000000000808B,
+    0x0000000080000001,
+    0x8000000080008081,
+    0x8000000000008009,
+    0x000000000000008A,
+    0x0000000000000088,
+    0x0000000080008009,
+    0x000000008000000A,
+    0x000000008000808B,
+    0x800000000000008B,
+    0x8000000000008089,
+    0x8000000000008003,
+    0x8000000000008002,
+    0x8000000000000080,
+    0x000000000000800A,
+    0x800000008000000A,
+    0x8000000080008081,
+    0x8000000000008080,
+    0x0000000080000001,
+    0x8000000080008008,
+)
+_KECCAK_RHO_OFFSETS = (
+    (0, 36, 3, 41, 18),
+    (1, 44, 10, 45, 2),
+    (62, 6, 43, 15, 61),
+    (28, 55, 25, 21, 56),
+    (27, 20, 39, 8, 14),
+)
+
+
+BytesLike = Union[bytes, bytearray, memoryview, Sequence[int]]
+ProofFn = Callable[
+    [Mapping[str, Any], Mapping[str, Any]],
+    Union[Mapping[str, Any], Awaitable[Mapping[str, Any]]],
+]
+SourceStateProofFn = Callable[
+    [Mapping[str, Any], Mapping[str, Any]],
+    Union[Any, Awaitable[Any]],
+]
+
+
+class _FrozenDict(dict):
+    """Dict-compatible read-only envelope for prover request/result metadata."""
+
+    def _readonly(self, *_args: Any, **_kwargs: Any) -> None:
+        raise TypeError("SCCP prover envelopes are immutable")
+
+    __setitem__ = _readonly
+    __delitem__ = _readonly
+    clear = _readonly
+    pop = _readonly
+    popitem = _readonly
+    setdefault = _readonly
+    update = _readonly
+    __ior__ = _readonly
+
+    def copy(self) -> "_FrozenDict":
+        return self
+
+
+class _FrozenList(list):
+    """List-compatible read-only envelope for prover array metadata."""
+
+    def _readonly(self, *_args: Any, **_kwargs: Any) -> None:
+        raise TypeError("SCCP prover envelopes are immutable")
+
+    __setitem__ = _readonly
+    __delitem__ = _readonly
+    append = _readonly
+    clear = _readonly
+    extend = _readonly
+    insert = _readonly
+    pop = _readonly
+    remove = _readonly
+    reverse = _readonly
+    sort = _readonly
+    __iadd__ = _readonly
+    __imul__ = _readonly
+
+    def copy(self) -> "_FrozenList":
+        return self
+
+
+def _immutable_prover_envelope_value(value: Any) -> Any:
+    if isinstance(value, (_FrozenDict, _FrozenList)):
+        return value
+    if isinstance(value, Mapping):
+        return _FrozenDict(
+            {
+                key: _immutable_prover_envelope_value(child)
+                for key, child in value.items()
+            }
+        )
+    if isinstance(value, (bytes, bytearray, memoryview)):
+        return bytes(value)
+    if isinstance(value, Sequence) and not isinstance(value, str):
+        return _FrozenList(_immutable_prover_envelope_value(child) for child in value)
+    return value
+
+
+def _immutable_prover_envelope(value: Mapping[str, Any]) -> Mapping[str, Any]:
+    return _immutable_prover_envelope_value(value)
+
+
+class SolanaSccpProverUnavailableError(RuntimeError):
+    """Raised when proof generation is requested without a linked local prover."""
+
+    code = "ERR_SCCP_SOLANA_PROVER_UNAVAILABLE"
+
+
+class SolanaSccpSourceStateProverUnavailableError(RuntimeError):
+    """Raised when source-state proof generation is requested without a linked prover."""
+
+    code = "ERR_SCCP_SOLANA_SOURCE_STATE_PROVER_UNAVAILABLE"
+
+
+class TonSccpSourceStateProverUnavailableError(RuntimeError):
+    """Raised when TON source-state proof generation is requested without a linked prover."""
+
+    code = "ERR_SCCP_TON_SOURCE_STATE_PROVER_UNAVAILABLE"
+
+
+class TonSccpProverUnavailableError(RuntimeError):
+    """Raised when TON proof generation is requested without a linked local prover."""
+
+    code = "ERR_SCCP_TON_PROVER_UNAVAILABLE"
+
+
+class EvmSccpProverUnavailableError(RuntimeError):
+    """Raised when EVM-family proof generation is requested without a linked local prover."""
+
+    code = "ERR_SCCP_EVM_PROVER_UNAVAILABLE"
+
+
+class TronSccpProverUnavailableError(RuntimeError):
+    """Raised when TRON proof generation is requested without a linked local prover."""
+
+    code = "ERR_SCCP_TRON_PROVER_UNAVAILABLE"
+
+
+class SubstrateSccpProverUnavailableError(RuntimeError):
+    """Raised when Substrate runtime proof generation is requested without a linked prover."""
+
+    code = "ERR_SCCP_SUBSTRATE_PROVER_UNAVAILABLE"
+
+
+def _mapping_value(value: Mapping[str, Any], *keys: str) -> Any:
+    for key in keys:
+        if key in value:
+            return value[key]
+    return None
+
+
+_MISSING = object()
+
+
+def _mapping_optional_value(value: Mapping[str, Any], *keys: str) -> Any:
+    for key in keys:
+        if key in value:
+            return value[key]
+    return _MISSING
+
+
+def _mapping_optional_value_without_aliases(
+    value: Mapping[str, Any], label: str, *keys: str
+) -> Any:
+    present = [key for key in keys if key in value]
+    if len(present) > 1:
+        raise TypeError(f"{label} must not use multiple aliases")
+    return value[present[0]] if present else _MISSING
+
+
+def _mapping_value_without_aliases(value: Mapping[str, Any], label: str, *keys: str) -> Any:
+    selected = _mapping_optional_value_without_aliases(value, label, *keys)
+    return None if selected is _MISSING else selected
+
+
+def _mapping_value_or_default(value: Mapping[str, Any], default: Any, *keys: str) -> Any:
+    selected = _mapping_optional_value(value, *keys)
+    if selected is _MISSING or selected is None:
+        return default
+    return selected
+
+
+def _mapping_value_or_default_without_aliases(
+    value: Mapping[str, Any], label: str, default: Any, *keys: str
+) -> Any:
+    selected = _mapping_optional_value_without_aliases(value, label, *keys)
+    if selected is _MISSING or selected is None:
+        return default
+    return selected
+
+
+def _first_non_none_mapping_value(*sources: Any) -> Any:
+    for source, keys in sources:
+        if source is None:
+            continue
+        selected = _mapping_optional_value(source, *keys)
+        if selected is _MISSING or selected is None:
+            continue
+        return selected
+    return None
+
+
+def _normalize_hex_input(value: Any, label: str, byte_length: Optional[int] = None) -> str:
+    if not isinstance(value, str):
+        raise TypeError(f"{label} must be a hex string")
+    if value.strip() != value:
+        raise TypeError(f"{label} must be canonical hex")
+    trimmed = value.removeprefix("0x").removeprefix("0X")
+    if any(character.isspace() for character in trimmed):
+        raise TypeError(f"{label} must be canonical hex")
+    trimmed = trimmed.lower()
+    if not trimmed or len(trimmed) % 2 != 0:
+        raise TypeError(f"{label} must be canonical hex")
+    try:
+        raw = bytes.fromhex(trimmed)
+    except ValueError as exc:
+        raise TypeError(f"{label} must be canonical hex") from exc
+    if byte_length is not None and len(raw) != byte_length:
+        raise TypeError(f"{label} must be {byte_length} bytes")
+    return trimmed
+
+
+def _normalize_hex32(value: Any, label: str) -> str:
+    return "0x" + _normalize_hex_input(value, label, 32)
+
+
+def _normalize_optional_hex32(value: Any, label: str) -> str:
+    if value is None:
+        return SCCP_ZERO_HASH_V1
+    return _normalize_hex32(value, label)
+
+
+def _hex32_is_zero(value: Any, label: str) -> bool:
+    return not any(_hex_to_bytes(value, label, 32))
+
+
+def _require_optional_result_hash_matches(
+    actual: Any, expected: Any, label: str
+) -> None:
+    if actual is None:
+        return
+    if _normalize_hex_input(actual, label, 32) != _normalize_hex_input(
+        expected, label, 32
+    ):
+        raise TypeError(f"{label} must match request")
+
+
+def _require_supplied_result_hash_matches(
+    actual: Any, expected: Any, label: str
+) -> None:
+    if _normalize_hex_input(actual, label, 32) != _normalize_hex_input(
+        expected, label, 32
+    ):
+        raise TypeError(f"{label} must match request")
+
+
+def _require_optional_result_backend_matches(actual: Any, expected: str) -> None:
+    if actual is None:
+        return
+    if actual != expected:
+        raise TypeError("backend must match request")
+
+
+def _require_supplied_result_backend_matches(actual: Any, expected: str) -> None:
+    if actual != expected:
+        raise TypeError("backend must match request")
+
+
+def _require_optional_result_proof_base64_matches(
+    result: Mapping[str, Any], proof_bytes: bytes
+) -> None:
+    proof_base64 = _mapping_optional_value_without_aliases(
+        result, "proofResult.proofBase64", "proofBase64", "proof_base64"
+    )
+    if proof_base64 is _MISSING:
+        return
+    if not isinstance(proof_base64, str) or not proof_base64:
+        raise TypeError("proofResult.proofBase64 must match proofResult.proofBytes")
+    if proof_base64 != base64.b64encode(proof_bytes).decode("ascii"):
+        raise TypeError("proofResult.proofBase64 must match proofResult.proofBytes")
+
+
+def _normalize_nonzero_hex32(value: Any, label: str) -> str:
+    raw = bytes.fromhex(_normalize_hex_input(value, label, 32))
+    if not any(raw):
+        raise TypeError(f"{label} must not be zero")
+    return "0x" + raw.hex()
+
+
+def _hex_to_bytes(value: Any, label: str, byte_length: Optional[int] = None) -> bytes:
+    return bytes.fromhex(_normalize_hex_input(value, label, byte_length))
+
+
+def _nonzero_hex32_to_bytes(value: Any, label: str) -> bytes:
+    raw = _hex_to_bytes(value, label, 32)
+    if not any(raw):
+        raise TypeError(f"{label} must not be zero")
+    return raw
+
+
+def _normalize_positive_decimal_text(value: Any, label: str) -> str:
+    if not isinstance(value, str):
+        raise TypeError(f"{label} must be a positive decimal")
+    if (
+        value.strip() != value
+        or not value
+        or not value.isascii()
+        or not value.isdecimal()
+        or (len(value) > 1 and value.startswith("0"))
+        or int(value, 10) <= 0
+    ):
+        raise TypeError(f"{label} must be a positive decimal")
+    return value
+
+
+def _normalize_ton_raw_address(value: Any, label: str) -> str:
+    if not isinstance(value, str) or value.strip() != value:
+        raise TypeError(f"{label} must not contain whitespace")
+    parts = value.split(":")
+    if len(parts) != 2:
+        raise TypeError(f"{label} must be workchain:account_hex")
+    workchain, account_hex = parts
+    digits = workchain[1:] if workchain.startswith("-") else workchain
+    if (
+        not digits
+        or not digits.isascii()
+        or not digits.isdecimal()
+        or workchain.startswith("+")
+        or (workchain.startswith("-") and digits == "0")
+        or (len(digits) > 1 and digits.startswith("0"))
+    ):
+        raise TypeError(f"{label} workchain must be canonical i32")
+    workchain_id = int(workchain, 10)
+    if workchain_id < -(2**31) or workchain_id > 2**31 - 1:
+        raise TypeError(f"{label} workchain must be canonical i32")
+    if workchain_id != 0:
+        raise TypeError(f"{label} workchain must be basechain 0")
+    if len(account_hex) != 64:
+        raise TypeError(f"{label} account must be 32 bytes")
+    if any(symbol not in "0123456789abcdef" for symbol in account_hex):
+        raise TypeError(f"{label} account must be lowercase canonical hex")
+    if not any(bytes.fromhex(account_hex)):
+        raise TypeError(f"{label} account must not be zero")
+    return value
+
+
+def _normalize_ton_active_account_status(value: Any, label: str) -> str:
+    if not isinstance(value, str) or value.strip() != value:
+        raise TypeError(f"{label} must not contain whitespace")
+    if value != "active":
+        raise TypeError(f"{label} must be active")
+    return value
+
+
+def _is_nonzero_tron_address(address: bytes) -> bool:
+    return len(address) == 21 and address[0] == 0x41 and any(address[1:])
+
+
+def _bytes_to_hex(value: bytes, *, prefix: bool = True) -> str:
+    encoded = value.hex()
+    return f"0x{encoded}" if prefix else encoded
+
+
+def _to_bytes(value: Any, label: str) -> bytes:
+    if isinstance(value, bytes):
+        return value
+    if isinstance(value, bytearray):
+        return bytes(value)
+    if isinstance(value, memoryview):
+        return value.tobytes()
+    if isinstance(value, str):
+        return _hex_to_bytes(value, label)
+    if isinstance(value, Sequence) and not isinstance(value, (str, bytes, bytearray)):
+        try:
+            return bytes(value)
+        except ValueError as exc:
+            raise TypeError(f"{label} must be bytes") from exc
+    raise TypeError(f"{label} must be bytes")
+
+
+def _optional_bytes(value: Any, label: str) -> bytes:
+    if value is None:
+        return b""
+    if isinstance(value, str) and value.strip().lower() in {"", "0x"}:
+        return b""
+    return _to_bytes(value, label)
+
+
+def _mapping_blockhash_input(value: Mapping[str, Any]) -> Any:
+    blockhash_bytes = _mapping_optional_value(value, "blockhashBytes", "blockhash_bytes")
+    if blockhash_bytes is not _MISSING and blockhash_bytes is not None:
+        return blockhash_bytes
+    return _mapping_value(value, "blockhash")
+
+
+def _require_mapping(value: Any, label: str) -> Mapping[str, Any]:
+    if not isinstance(value, Mapping):
+        raise TypeError(f"{label} must be an object")
+    return value
+
+
+def _normalize_non_empty_string(value: Any, label: str) -> str:
+    if not isinstance(value, str) or not value.strip():
+        raise TypeError(f"{label} must be a non-empty string")
+    return value.strip()
+
+
+def _decode_solana_base58(value: Any, label: str) -> bytes:
+    text = _normalize_non_empty_string(value, label)
+    numeric = 0
+    for symbol in text:
+        digit = _SOLANA_BASE58_INDEX.get(symbol)
+        if digit is None:
+            raise TypeError(f"{label} must be canonical base58")
+        numeric = numeric * 58 + digit
+    leading_zeros = len(text) - len(text.lstrip("1"))
+    payload = b"" if numeric == 0 else numeric.to_bytes((numeric.bit_length() + 7) // 8, "big")
+    return (b"\x00" * leading_zeros) + payload
+
+
+def _decode_solana_base58_fixed(value: Any, label: str, byte_length: int) -> bytes:
+    raw = _decode_solana_base58(value, label)
+    if len(raw) != byte_length:
+        raise TypeError(f"{label} must decode to {byte_length} bytes")
+    if not any(raw):
+        raise TypeError(f"{label} must not decode to zero")
+    return raw
+
+
+def _decode_base64_strict(value: Any, label: str) -> bytes:
+    text = _normalize_non_empty_string(value, label)
+    if text != value or any(char.isspace() for char in text) or len(text) % 4 != 0:
+        raise TypeError(f"{label} must be canonical base64")
+    try:
+        decoded = base64.b64decode(text, validate=True)
+    except Exception as exc:
+        raise TypeError(f"{label} must be canonical base64") from exc
+    if base64.b64encode(decoded).decode("ascii") != text:
+        raise TypeError(f"{label} must be canonical base64")
+    return decoded
+
+
+def _tron_base58check_payload(value: Any, label: str) -> bytes:
+    text = _normalize_non_empty_string(value, label)
+    if text != value:
+        raise TypeError(f"{label} must be a canonical base58check address")
+    decoded = _decode_solana_base58(text, label)
+    if len(decoded) < 5:
+        raise TypeError(f"{label} must be a base58check address")
+    payload = decoded[:-4]
+    checksum = decoded[-4:]
+    expected = hashlib.sha256(hashlib.sha256(payload).digest()).digest()[:4]
+    if checksum != expected:
+        raise TypeError(f"{label} must have a valid base58check checksum")
+    if len(payload) != 21 or payload[0] != 0x41:
+        raise TypeError(f"{label} must use TRON 0x41 prefix")
+    if not any(payload[1:]):
+        raise TypeError(f"{label} must not be zero")
+    return payload
+
+
+def _normalize_solana_base58_fixed(value: Any, label: str, byte_length: int) -> str:
+    text = _normalize_non_empty_string(value, label)
+    _decode_solana_base58_fixed(text, label, byte_length)
+    return text
+
+
+def _normalize_solana_hash32_bytes(value: Any, label: str) -> bytes:
+    if isinstance(value, str):
+        text = value.strip()
+        hex_text = text[2:] if text.lower().startswith("0x") else text
+        if len(hex_text) == 64 and all(symbol in "0123456789abcdefABCDEF" for symbol in hex_text):
+            return _nonzero_hex32_to_bytes(text, label)
+        return _decode_solana_base58_fixed(text, label, 32)
+    raw = _to_bytes(value, label)
+    if len(raw) != 32:
+        raise TypeError(f"{label} must be 32 bytes")
+    if not any(raw):
+        raise TypeError(f"{label} must not be zero")
+    return raw
+
+
+def _is_canonical_decimal_text(value: str) -> bool:
+    return value == "0" or (
+        bool(value)
+        and value[0] in "123456789"
+        and all("0" <= symbol <= "9" for symbol in value)
+    )
+
+
+def _normalize_u32(value: Any, label: str, fallback: Optional[int] = None) -> int:
+    selected = fallback if value is None else value
+    if type(selected) is int:
+        numeric = selected
+    elif isinstance(selected, str) and _is_canonical_decimal_text(selected):
+        numeric = int(selected, 10)
+    else:
+        raise TypeError(f"{label} must be a u32 domain id")
+    if numeric < 0 or numeric > 0xFFFF_FFFF:
+        raise ValueError(f"{label} must be a u32 domain id")
+    return numeric
+
+
+def _normalize_optional_u32(
+    value: Mapping[str, Any],
+    label: str,
+    fallback: int,
+    *keys: str,
+) -> int:
+    field_input = _mapping_optional_value(value, *keys)
+    if field_input is _MISSING:
+        return _normalize_u32(fallback, label)
+    if field_input is None:
+        raise TypeError(f"{label} must be a u32 domain id")
+    return _normalize_u32(field_input, label)
+
+
+def _normalize_optional_u32_without_aliases(
+    value: Mapping[str, Any],
+    label: str,
+    fallback: int,
+    *keys: str,
+) -> int:
+    field_input = _mapping_optional_value_without_aliases(value, label, *keys)
+    if field_input is _MISSING:
+        return _normalize_u32(fallback, label)
+    if field_input is None:
+        raise TypeError(f"{label} must be a u32 domain id")
+    return _normalize_u32(field_input, label)
+
+
+def _normalize_u64(value: Any, label: str) -> int:
+    if type(value) is int:
+        numeric = value
+    elif isinstance(value, str) and _is_canonical_decimal_text(value):
+        numeric = int(value, 10)
+    else:
+        raise TypeError(f"{label} must be an unsigned integer")
+    if numeric < 0 or numeric > 0xFFFF_FFFF_FFFF_FFFF:
+        raise ValueError(f"{label} must be a u64")
+    return numeric
+
+
+def _normalize_v1_version(
+    value: Any, label: str, *, error_cls: type[Exception] = ValueError
+) -> int:
+    if value is None:
+        raise TypeError(f"{label} must be 1")
+    if isinstance(value, bool):
+        raise TypeError(f"{label} must be 1")
+    try:
+        numeric = int(value)
+    except (TypeError, ValueError) as exc:
+        raise TypeError(f"{label} must be 1") from exc
+    if numeric != 1:
+        raise error_cls(f"{label} must be 1")
+    return numeric
+
+
+def _normalize_optional_v1_version(
+    value: Mapping[str, Any],
+    label: str,
+    *keys: str,
+    error_cls: type[Exception] = ValueError,
+) -> int:
+    version_input = _mapping_optional_value(value, *keys)
+    if version_input is _MISSING:
+        return 1
+    if version_input is None:
+        raise TypeError(f"{label} must be 1")
+    return _normalize_v1_version(version_input, label, error_cls=error_cls)
+
+
+def _require_v1_version(
+    value: Any, label: str, *, error_cls: type[Exception] = TypeError
+) -> int:
+    if value is None:
+        raise TypeError(f"{label} must be 1")
+    return _normalize_v1_version(value, label, error_cls=error_cls)
+
+
+def _normalize_i32(value: Any, label: str) -> int:
+    if isinstance(value, bool):
+        raise TypeError(f"{label} must be a signed integer")
+    try:
+        numeric = int(value)
+    except (TypeError, ValueError) as exc:
+        raise TypeError(f"{label} must be a signed integer") from exc
+    if numeric < -0x8000_0000 or numeric > 0x7FFF_FFFF:
+        raise ValueError(f"{label} must fit i32")
+    return numeric
+
+
+def _write_u8(value: int) -> bytes:
+    return int(value).to_bytes(1, "little")
+
+
+def _write_u16_le(value: int) -> bytes:
+    return int(value).to_bytes(2, "little")
+
+
+def _write_u32_le(value: int) -> bytes:
+    return int(value).to_bytes(4, "little")
+
+
+def _write_i32_le(value: int) -> bytes:
+    return int(value).to_bytes(4, "little", signed=True)
+
+
+def _write_u64_le(value: int) -> bytes:
+    return int(value).to_bytes(8, "little")
+
+
+def _abi_word_u32(value: Any, label: str) -> bytes:
+    return _normalize_u32(value, label).to_bytes(32, "big")
+
+
+def _abi_word_address20(value: bytes, label: str) -> bytes:
+    if len(value) != 20:
+        raise TypeError(f"{label} must be 20 bytes")
+    return b"\x00" * 12 + value
+
+
+def _abi_word_bytes21(value: bytes, label: str) -> bytes:
+    if len(value) != 21:
+        raise TypeError(f"{label} must be 21 bytes")
+    return b"\x00" * 11 + value
+
+
+def _abi_word_u64(value: Any, label: str) -> bytes:
+    return _normalize_u64(value, label).to_bytes(32, "big")
+
+
+def _abi_word_u256(value: Any, label: str) -> bytes:
+    numeric = int(value)
+    if numeric < 0 or numeric >= 1 << 256:
+        raise ValueError(f"{label} must fit u256")
+    return numeric.to_bytes(32, "big")
+
+
+def _write_bytes(value: BytesLike) -> bytes:
+    raw = _to_bytes(value, "bytes")
+    return _write_u32_le(len(raw)) + raw
+
+
+def _write_protobuf_varint(value: int) -> bytes:
+    numeric = _normalize_u64(value, "protobufVarint")
+    out = bytearray()
+    while True:
+        byte = numeric & 0x7F
+        numeric >>= 7
+        if numeric:
+            byte |= 0x80
+        out.append(byte)
+        if not numeric:
+            return bytes(out)
+
+
+def _write_protobuf_u64(field_number: int, value: int) -> bytes:
+    return _write_protobuf_varint((field_number << 3) | 0) + _write_protobuf_varint(value)
+
+
+def _write_protobuf_bytes(field_number: int, value: BytesLike) -> bytes:
+    raw = _to_bytes(value, f"protobufField{field_number}")
+    return _write_protobuf_varint((field_number << 3) | 2) + _write_protobuf_varint(len(raw)) + raw
+
+
+def _protobuf_varint_len(value: int) -> int:
+    length = 1
+    while value >= 0x80:
+        length += 1
+        value >>= 7
+    return length
+
+
+def _read_canonical_protobuf_varint(raw: bytes, cursor: int, label: str) -> tuple[int, int]:
+    start = cursor
+    value = 0
+    shift = 0
+    for index in range(10):
+        if cursor >= len(raw):
+            raise TypeError(f"{label} contains truncated protobuf varint")
+        byte = raw[cursor]
+        cursor += 1
+        chunk = byte & 0x7F
+        if index == 9 and chunk > 1:
+            raise ValueError(f"{label} protobuf varint must fit u64")
+        value |= chunk << shift
+        if byte & 0x80 == 0:
+            if cursor - start != _protobuf_varint_len(value):
+                raise TypeError(f"{label} protobuf varint must be canonical")
+            return value, cursor
+        shift += 7
+    raise ValueError(f"{label} protobuf varint must fit u64")
+
+
+def _write_string(value: str, label: str) -> bytes:
+    return _write_bytes(_normalize_non_empty_string(value, label).encode("utf-8"))
+
+
+def _prefixed_blake2b(prefix: bytes, payload: bytes) -> bytes:
+    return hashlib.blake2b(prefix + payload, digest_size=32).digest()
+
+
+def _rotl64(value: int, shift: int) -> int:
+    if shift == 0:
+        return value & _U64_MASK
+    return ((value << shift) | (value >> (64 - shift))) & _U64_MASK
+
+
+def _keccak_f1600(state: Sequence[int]) -> Sequence[int]:
+    lanes = list(state)
+    for round_constant in _KECCAK_ROUND_CONSTANTS:
+        columns = [
+            lanes[x] ^ lanes[x + 5] ^ lanes[x + 10] ^ lanes[x + 15] ^ lanes[x + 20]
+            for x in range(5)
+        ]
+        theta = [
+            columns[(x - 1) % 5] ^ _rotl64(columns[(x + 1) % 5], 1) for x in range(5)
+        ]
+        for y in range(5):
+            for x in range(5):
+                lanes[x + 5 * y] ^= theta[x]
+
+        rotated = [0] * 25
+        for y in range(5):
+            for x in range(5):
+                rotated[y + 5 * ((2 * x + 3 * y) % 5)] = _rotl64(
+                    lanes[x + 5 * y],
+                    _KECCAK_RHO_OFFSETS[x][y],
+                )
+
+        for y in range(5):
+            row = [rotated[x + 5 * y] for x in range(5)]
+            for x in range(5):
+                lanes[x + 5 * y] = row[x] ^ ((~row[(x + 1) % 5] & _U64_MASK) & row[(x + 2) % 5])
+
+        lanes[0] ^= round_constant
+    return lanes
+
+
+def _keccak_256(payload: bytes) -> bytes:
+    state = [0] * 25
+    padded = bytearray(payload)
+    padded.append(0x01)
+    padded.extend(b"\x00" * ((_KECCAK_256_RATE_BYTES - len(padded) % _KECCAK_256_RATE_BYTES) % _KECCAK_256_RATE_BYTES))
+    padded[-1] ^= 0x80
+
+    for offset in range(0, len(padded), _KECCAK_256_RATE_BYTES):
+        block = padded[offset : offset + _KECCAK_256_RATE_BYTES]
+        for lane_index in range(_KECCAK_256_RATE_BYTES // 8):
+            lane_offset = lane_index * 8
+            state[lane_index] ^= int.from_bytes(block[lane_offset : lane_offset + 8], "little")
+        state = list(_keccak_f1600(state))
+
+    output = bytearray()
+    while len(output) < 32:
+        for lane_index in range(_KECCAK_256_RATE_BYTES // 8):
+            output.extend(state[lane_index].to_bytes(8, "little"))
+            if len(output) >= 32:
+                break
+        if len(output) < 32:
+            state = list(_keccak_f1600(state))
+    return bytes(output[:32])
+
+
+def _prefixed_keccak(prefix: bytes, payload: bytes) -> bytes:
+    return _keccak_256(prefix + payload)
+
+
+def _tron_source_bridge_config_hash(material: Mapping[str, Any]) -> bytes:
+    return _keccak_256(
+        b"".join(
+            (
+                _keccak_256(_SCCP_TRON_SOURCE_BRIDGE_CONFIG_LABEL_V1),
+                _abi_word_address20(
+                    _hex_to_bytes(
+                        material["source_bridge_emitter_address"],
+                        "sourceBridgeEmitterAddress",
+                        20,
+                    ),
+                    "sourceBridgeEmitterAddress",
+                ),
+                _hex_to_bytes(
+                    material["source_bridge_network_id"],
+                    "sourceBridgeNetworkId",
+                    32,
+                ),
+                _abi_word_u32(material["source_domain"], "sourceDomain"),
+                _abi_word_u32(SCCP_DOMAIN_SORA, "targetDomain"),
+                _abi_word_address20(
+                    _hex_to_bytes(
+                        material["source_bridge_owner_address"],
+                        "sourceBridgeOwnerAddress",
+                        20,
+                    ),
+                    "sourceBridgeOwnerAddress",
+                ),
+            )
+        )
+    )
+
+
+def _reject_mismatched_tron_source_bridge_config_hash(
+    material: Mapping[str, Any],
+) -> None:
+    if material["source_domain"] != SCCP_DOMAIN_TRON:
+        return
+    supplied = _hex_to_bytes(
+        material["source_bridge_config_hash"],
+        "sourceBridgeConfigHash",
+        32,
+    )
+    if supplied != _tron_source_bridge_config_hash(material):
+        raise TypeError(
+            "sourceBridgeConfigHash must match TRON source bridge config fields"
+        )
+
+
+def _groth16_bn254_signal_word(label: bytes, value: bytes) -> bytes:
+    digest = _keccak_256(_keccak_256(label) + value)
+    scalar = int.from_bytes(digest, "big") % _SCCP_GROTH16_BN254_SCALAR_FIELD_MODULUS
+    return scalar.to_bytes(32, "big")
+
+
+def _normalize_inclusion_branch(
+    value: Any, label: str = "inclusionBranch", *, require_non_empty: bool = False
+) -> Sequence[bytes]:
+    if not isinstance(value, Sequence) or isinstance(value, (str, bytes, bytearray)):
+        raise TypeError(f"{label} must be an array")
+    if require_non_empty and len(value) == 0:
+        raise ValueError(f"{label} must not be empty")
+    if len(value) > _SCCP_MAX_SOURCE_MERKLE_BRANCH_NODES:
+        raise ValueError(
+            f"{label} must contain at most {_SCCP_MAX_SOURCE_MERKLE_BRANCH_NODES} entries"
+        )
+    branch = []
+    for index, sibling in enumerate(value):
+        raw = _to_bytes(sibling, f"{label}[{index}]")
+        if len(raw) != 32:
+            raise TypeError(f"{label}[{index}] must be 32 bytes")
+        branch.append(raw)
+    return branch
+
+
+def _normalize_byte_vectors(
+    value: Any,
+    label: str,
+    *,
+    max_count: int,
+    max_bytes: int,
+    require_non_empty: bool = False,
+) -> Sequence[bytes]:
+    if not isinstance(value, Sequence) or isinstance(value, (str, bytes, bytearray)):
+        raise TypeError(f"{label} must be an array")
+    if require_non_empty and len(value) == 0:
+        raise TypeError(f"{label} must not be empty")
+    if len(value) > max_count:
+        raise ValueError(f"{label} must contain at most {max_count} entries")
+    vectors = []
+    for index, entry in enumerate(value):
+        raw = _to_bytes(entry, f"{label}[{index}]")
+        if len(raw) == 0:
+            raise TypeError(f"{label}[{index}] must not be empty")
+        if len(raw) > max_bytes:
+            raise ValueError(f"{label}[{index}] must be at most {max_bytes} bytes")
+        vectors.append(raw)
+    return vectors
+
+
+def _normalize_transparent_public_inputs(input_value: Any) -> Dict[str, Any]:
+    value = _require_mapping(input_value, "publicInputs")
+    version = _normalize_optional_v1_version(value, "publicInputs.version", "version")
+    target_domain = _normalize_u32(
+        _mapping_value_without_aliases(
+            value,
+            "publicInputs.targetDomain",
+            "targetDomain",
+            "target_domain",
+        ),
+        "publicInputs.targetDomain",
+    )
+    finality_height = _normalize_u64(
+        _mapping_value_without_aliases(
+            value,
+            "publicInputs.finalityHeight",
+            "finalityHeight",
+            "finality_height",
+        ),
+        "publicInputs.finalityHeight",
+    )
+    if finality_height == 0:
+        raise ValueError("publicInputs.finalityHeight must not be zero")
+    return {
+        "version": version,
+        "message_id": _normalize_nonzero_hex32(
+            _mapping_value_without_aliases(
+                value,
+                "publicInputs.messageId",
+                "messageId",
+                "message_id",
+            ),
+            "publicInputs.messageId",
+        ),
+        "payload_hash": _normalize_nonzero_hex32(
+            _mapping_value_without_aliases(
+                value,
+                "publicInputs.payloadHash",
+                "payloadHash",
+                "payload_hash",
+            ),
+            "publicInputs.payloadHash",
+        ),
+        "target_domain": target_domain,
+        "commitment_root": _normalize_nonzero_hex32(
+            _mapping_value_without_aliases(
+                value,
+                "publicInputs.commitmentRoot",
+                "commitmentRoot",
+                "commitment_root",
+            ),
+            "publicInputs.commitmentRoot",
+        ),
+        "finality_height": str(finality_height),
+        "finality_block_hash": _normalize_nonzero_hex32(
+            _mapping_value_without_aliases(
+                value,
+                "publicInputs.finalityBlockHash",
+                "finalityBlockHash",
+                "finality_block_hash",
+            ),
+            "publicInputs.finalityBlockHash",
+        ),
+    }
+
+
+def canonical_sccp_message_transparent_public_inputs_bytes(input_value: Any) -> bytes:
+    """Return the canonical SCCP transparent public-input byte layout."""
+
+    public_inputs = _normalize_transparent_public_inputs(input_value)
+    return b"".join(
+        (
+            _write_u8(public_inputs["version"]),
+            _hex_to_bytes(public_inputs["message_id"], "publicInputs.messageId", 32),
+            _hex_to_bytes(public_inputs["payload_hash"], "publicInputs.payloadHash", 32),
+            _write_u32_le(public_inputs["target_domain"]),
+            _hex_to_bytes(public_inputs["commitment_root"], "publicInputs.commitmentRoot", 32),
+            _write_u64_le(
+                _normalize_u64(
+                    public_inputs["finality_height"],
+                    "publicInputs.finalityHeight",
+                )
+            ),
+            _hex_to_bytes(
+                public_inputs["finality_block_hash"],
+                "publicInputs.finalityBlockHash",
+                32,
+            ),
+        )
+    )
+
+
+def _sccp_message_transparent_public_input_abi_word_bytes(input_value: Any) -> Sequence[bytes]:
+    public_inputs = _normalize_transparent_public_inputs(input_value)
+    return (
+        _hex_to_bytes(public_inputs["message_id"], "publicInputs.messageId", 32),
+        _hex_to_bytes(public_inputs["payload_hash"], "publicInputs.payloadHash", 32),
+        _abi_word_u32(public_inputs["target_domain"], "publicInputs.targetDomain"),
+        _hex_to_bytes(public_inputs["commitment_root"], "publicInputs.commitmentRoot", 32),
+        _abi_word_u64(public_inputs["finality_height"], "publicInputs.finalityHeight"),
+        _hex_to_bytes(
+            public_inputs["finality_block_hash"],
+            "publicInputs.finalityBlockHash",
+            32,
+        ),
+    )
+
+
+def sccp_message_transparent_public_input_abi_words(input_value: Any) -> Sequence[str]:
+    """Return the six ABI words used by EVM-family/TRON SCCP verifier calls."""
+
+    return [
+        _bytes_to_hex(word)
+        for word in _sccp_message_transparent_public_input_abi_word_bytes(input_value)
+    ]
+
+
+def sccp_groth16_bn254_public_signal_words(input_value: Any) -> Sequence[str]:
+    """Return canonical BN254 public signals for SCCP Groth16 destination verifiers."""
+
+    value = _require_mapping(input_value, "SCCP Groth16 public signals input")
+    public_inputs_input = _mapping_optional_value_without_aliases(
+        value, "publicInputs", "publicInputs", "public_inputs"
+    )
+    public_inputs = _normalize_transparent_public_inputs(
+        value if public_inputs_input is _MISSING else public_inputs_input
+    )
+    source_domain = _normalize_u32(
+        _mapping_value_without_aliases(value, "sourceDomain", "sourceDomain", "source_domain"),
+        "sourceDomain",
+    )
+    if public_inputs["target_domain"] == 0:
+        raise ValueError("publicInputs.targetDomain must not be zero")
+    if source_domain == public_inputs["target_domain"]:
+        raise ValueError("sourceDomain and publicInputs.targetDomain must differ")
+    statement_hash = _nonzero_hex32_to_bytes(
+        _mapping_value_without_aliases(value, "statementHash", "statementHash", "statement_hash"),
+        "statementHash",
+    )
+    destination_binding_hash = _nonzero_hex32_to_bytes(
+        _mapping_value_without_aliases(
+            value,
+            "destinationBindingHash",
+            "destinationBindingHash",
+            "destination_binding_hash",
+        ),
+        "destinationBindingHash",
+    )
+    values = (
+        _hex_to_bytes(public_inputs["message_id"], "publicInputs.messageId", 32),
+        _hex_to_bytes(public_inputs["payload_hash"], "publicInputs.payloadHash", 32),
+        _abi_word_u32(public_inputs["target_domain"], "publicInputs.targetDomain"),
+        _hex_to_bytes(public_inputs["commitment_root"], "publicInputs.commitmentRoot", 32),
+        _abi_word_u64(public_inputs["finality_height"], "publicInputs.finalityHeight"),
+        _hex_to_bytes(public_inputs["finality_block_hash"], "publicInputs.finalityBlockHash", 32),
+        _abi_word_u32(source_domain, "sourceDomain"),
+        statement_hash,
+        destination_binding_hash,
+    )
+    return [
+        _bytes_to_hex(_groth16_bn254_signal_word(label, signal_value))
+        for label, signal_value in zip(_SCCP_GROTH16_BN254_SIGNAL_LABELS_V1, values)
+    ]
+
+
+def canonical_solana_sccp_message_proof_bytes(input_value: Any) -> bytes:
+    """Return canonical Solana SCCP message-inclusion witness bytes."""
+
+    value = _require_mapping(input_value, "Solana SCCP message proof input")
+    source_event_digest = _nonzero_hex32_to_bytes(
+        _mapping_value_without_aliases(
+            value,
+            "sourceEventDigest",
+            "sourceEventDigest",
+            "source_event_digest",
+        ),
+        "sourceEventDigest",
+    )
+    transaction_status_root = _nonzero_hex32_to_bytes(
+        _mapping_value_without_aliases(
+            value,
+            "transactionStatusRoot",
+            "transactionStatusRoot",
+            "transaction_status_root",
+            "receiptOrMessageRoot",
+            "receipt_or_message_root",
+        ),
+        "transactionStatusRoot",
+    )
+    transaction_signature = _decode_solana_base58_fixed(
+        _mapping_value_without_aliases(
+            value,
+            "transactionSignature",
+            "transactionSignature",
+            "transaction_signature",
+        ),
+        "transactionSignature",
+        _SCCP_SOLANA_TRANSACTION_SIGNATURE_BYTES,
+    )
+    emitter_program_id = _decode_solana_base58_fixed(
+        _mapping_value_without_aliases(
+            value,
+            "emitterProgramId",
+            "emitterProgramId",
+            "emitter_program_id",
+        ),
+        "emitterProgramId",
+        _SCCP_SOLANA_PROGRAM_ID_BYTES,
+    )
+    inclusion_branch = _normalize_inclusion_branch(
+        _mapping_value_without_aliases(value, "inclusionBranch", "inclusionBranch", "inclusion_branch"),
+        require_non_empty=True,
+    )
+    if len(inclusion_branch) == 0:
+        raise ValueError("inclusionBranch must not be empty")
+    out = bytearray()
+    out.extend(_write_u8(1))
+    out.extend(source_event_digest)
+    out.extend(transaction_status_root)
+    out.extend(_write_bytes(transaction_signature))
+    out.extend(_write_bytes(emitter_program_id))
+    out.extend(_write_u32_le(len(inclusion_branch)))
+    for sibling in inclusion_branch:
+        out.extend(sibling)
+    return bytes(out)
+
+
+def solana_sccp_message_proof_hash(input_value: Any) -> str:
+    """Hash a Solana SCCP message-inclusion witness with the canonical prefix."""
+
+    return _bytes_to_hex(
+        _prefixed_blake2b(
+            _SCCP_SOLANA_MESSAGE_PROOF_PREFIX_V1,
+            canonical_solana_sccp_message_proof_bytes(input_value),
+        )
+    )
+
+
+def canonical_solana_sccp_transaction_status_leaf_bytes(input_value: Any) -> bytes:
+    """Return canonical bytes for the Solana transaction-status leaf."""
+
+    value = _require_mapping(input_value, "Solana transaction-status leaf input")
+    source_event_digest = _nonzero_hex32_to_bytes(
+        _mapping_value_without_aliases(
+            value,
+            "sourceEventDigest",
+            "sourceEventDigest",
+            "source_event_digest",
+        ),
+        "sourceEventDigest",
+    )
+    transaction_signature = _decode_solana_base58_fixed(
+        _mapping_value_without_aliases(
+            value,
+            "transactionSignature",
+            "transactionSignature",
+            "transaction_signature",
+        ),
+        "transactionSignature",
+        _SCCP_SOLANA_TRANSACTION_SIGNATURE_BYTES,
+    )
+    emitter_program_id = _decode_solana_base58_fixed(
+        _mapping_value_without_aliases(
+            value,
+            "emitterProgramId",
+            "emitterProgramId",
+            "emitter_program_id",
+        ),
+        "emitterProgramId",
+        _SCCP_SOLANA_PROGRAM_ID_BYTES,
+    )
+    out = bytearray()
+    out.extend(_write_u8(1))
+    out.extend(source_event_digest)
+    out.extend(_write_bytes(transaction_signature))
+    out.extend(_write_bytes(emitter_program_id))
+    return bytes(out)
+
+
+def solana_sccp_transaction_status_leaf_hash(input_value: Any) -> str:
+    """Hash the Solana transaction-status leaf with the canonical prefix."""
+
+    return _bytes_to_hex(
+        _prefixed_blake2b(
+            _SCCP_SOLANA_TRANSACTION_STATUS_LEAF_PREFIX_V1,
+            canonical_solana_sccp_transaction_status_leaf_bytes(input_value),
+        )
+    )
+
+
+def solana_sccp_transaction_status_root_from_branch(input_value: Any) -> str:
+    """Recompute the Solana transaction-status root from the identity-bound leaf."""
+
+    value = _require_mapping(input_value, "Solana transaction-status root input")
+    inclusion_branch = _normalize_inclusion_branch(
+        _mapping_value_without_aliases(value, "inclusionBranch", "inclusionBranch", "inclusion_branch")
+    )
+    if len(inclusion_branch) == 0:
+        raise ValueError("inclusionBranch must not be empty")
+    leaf_hash = _hex_to_bytes(
+        solana_sccp_transaction_status_leaf_hash(value),
+        "transactionStatusLeafHash",
+        32,
+    )
+    current = leaf_hash
+    for sibling in inclusion_branch:
+        current = _prefixed_blake2b(_SCCP_SOURCE_NODE_PREFIX_V1, current + sibling)
+    return _bytes_to_hex(current)
+
+
+def solana_sccp_mainnet_epoch_for_slot(slot: Any) -> int:
+    """Return the Solana mainnet-beta epoch for a finalized slot."""
+
+    return _normalize_u64(slot, "slot") // SCCP_SOLANA_MAINNET_SLOTS_PER_EPOCH
+
+
+def _normalize_solana_validator_roster(input_value: Mapping[str, Any]) -> tuple[list[bytes], list[int]]:
+    raw_public_keys = _mapping_value_without_aliases(
+        input_value, "validatorPublicKeys", "validatorPublicKeys", "validator_public_keys"
+    )
+    raw_stakes = _mapping_value_without_aliases(
+        input_value, "validatorStakes", "validatorStakes", "validator_stakes"
+    )
+    if not isinstance(raw_public_keys, Sequence) or isinstance(raw_public_keys, (str, bytes, bytearray)):
+        raise TypeError("validatorPublicKeys must be a non-empty sequence")
+    if len(raw_public_keys) == 0:
+        raise TypeError("validatorPublicKeys must be a non-empty sequence")
+    if len(raw_public_keys) > SCCP_SOLANA_MAX_VALIDATORS:
+        raise ValueError(
+            f"validatorPublicKeys must contain 1..{SCCP_SOLANA_MAX_VALIDATORS} entries"
+        )
+    if not isinstance(raw_stakes, Sequence) or isinstance(raw_stakes, (str, bytes, bytearray)):
+        raise TypeError("validatorStakes must match validatorPublicKeys")
+    if len(raw_stakes) != len(raw_public_keys):
+        raise TypeError("validatorStakes must match validatorPublicKeys")
+
+    public_keys: list[bytes] = []
+    seen: set[bytes] = set()
+    for index, value in enumerate(raw_public_keys):
+        public_key = _to_bytes(value, f"validatorPublicKeys[{index}]")
+        if len(public_key) != 32:
+            raise TypeError(f"validatorPublicKeys[{index}] must be 32 bytes")
+        if not any(public_key):
+            raise TypeError(f"validatorPublicKeys[{index}] must not be zero")
+        if public_key in seen:
+            raise TypeError("validatorPublicKeys must not contain duplicates")
+        seen.add(public_key)
+        public_keys.append(public_key)
+
+    stakes: list[int] = []
+    for index, value in enumerate(raw_stakes):
+        stake = _normalize_u64(value, f"validatorStakes[{index}]")
+        if stake == 0:
+            raise ValueError(f"validatorStakes[{index}] must be greater than zero")
+        stakes.append(stake)
+    return public_keys, stakes
+
+
+def _canonical_solana_vote_roster_bytes(
+    validator_public_keys: Sequence[bytes],
+    validator_stakes: Sequence[int],
+) -> bytes:
+    out = bytearray()
+    out.extend(_write_u8(1))
+    out.extend(_write_u32_le(len(validator_public_keys)))
+    for public_key, stake in zip(validator_public_keys, validator_stakes):
+        out.extend(_write_bytes(public_key))
+        out.extend(_write_u64_le(stake))
+    return bytes(out)
+
+
+def _normalize_solana_fixed32_sequence(
+    raw_values: Any,
+    expected_len: int,
+    label: str,
+    *,
+    unique: bool = True,
+) -> list[bytes]:
+    if not isinstance(raw_values, Sequence) or isinstance(raw_values, (str, bytes, bytearray)):
+        raise TypeError(f"{label} must match validatorPublicKeys")
+    if len(raw_values) != expected_len:
+        raise TypeError(f"{label} must match validatorPublicKeys")
+    out: list[bytes] = []
+    seen: set[bytes] = set()
+    for index, value in enumerate(raw_values):
+        raw = _to_bytes(value, f"{label}[{index}]")
+        if len(raw) != 32:
+            raise TypeError(f"{label}[{index}] must be 32 bytes")
+        if not any(raw):
+            raise TypeError(f"{label}[{index}] must not be zero")
+        if unique and raw in seen:
+            raise TypeError(f"{label} must not contain duplicates")
+        if unique:
+            seen.add(raw)
+        out.append(raw)
+    return out
+
+
+def _solana_epoch_from_epoch_or_slot(value: Mapping[str, Any]) -> int:
+    epoch_value = _mapping_optional_value_without_aliases(
+        value,
+        "epoch",
+        "epoch",
+        "validatorEpoch",
+        "validator_epoch",
+    )
+    if epoch_value is not _MISSING and epoch_value is not None:
+        return _normalize_u64(epoch_value, "epoch")
+    slot_value = _mapping_optional_value_without_aliases(
+        value,
+        "finalizedSlot",
+        "finalizedSlot",
+        "finalized_slot",
+        "slot",
+    )
+    if slot_value is not _MISSING and slot_value is not None:
+        return solana_sccp_mainnet_epoch_for_slot(slot_value)
+    raise TypeError("epoch or finalizedSlot must be provided")
+
+
+def canonical_solana_sccp_epoch_stake_root_bytes(input_value: Any) -> bytes:
+    """Return canonical bytes for the Solana SCCP active-stake root."""
+
+    value = _require_mapping(input_value, "Solana epoch stake root input")
+    epoch = _solana_epoch_from_epoch_or_slot(value)
+    validator_public_keys, validator_stakes = _normalize_solana_validator_roster(value)
+    roster_bytes = _canonical_solana_vote_roster_bytes(validator_public_keys, validator_stakes)
+    roster_hash = _prefixed_blake2b(_SCCP_SOLANA_VOTE_ROSTER_PREFIX_V1, roster_bytes)
+    out = bytearray()
+    out.extend(_write_u8(1))
+    out.extend(_write_u64_le(epoch))
+    out.extend(roster_hash)
+    out.extend(roster_bytes)
+    return bytes(out)
+
+
+def solana_sccp_epoch_stake_root(input_value: Any) -> str:
+    """Hash the Solana active-stake root used by SCCP finality contexts."""
+
+    return _bytes_to_hex(
+        _prefixed_blake2b(
+            _SCCP_SOLANA_EPOCH_STAKE_ROOT_PREFIX_V1,
+            canonical_solana_sccp_epoch_stake_root_bytes(input_value),
+        )
+    )
+
+
+def canonical_solana_sccp_stake_activation_bytes(input_value: Any) -> bytes:
+    """Return canonical bytes for Solana SCCP active stake-activation evidence."""
+
+    value = _require_mapping(input_value, "Solana stake activation input")
+    epoch = _solana_epoch_from_epoch_or_slot(value)
+    validator_public_keys, validator_stakes = _normalize_solana_validator_roster(value)
+    raw_activation_epochs = _mapping_value_without_aliases(
+        value,
+        "validatorActivationEpochs",
+        "validatorActivationEpochs",
+        "validator_activation_epochs",
+        "activationEpochs",
+        "activation_epochs",
+    )
+    raw_deactivation_epochs = _mapping_value_without_aliases(
+        value,
+        "validatorDeactivationEpochs",
+        "validatorDeactivationEpochs",
+        "validator_deactivation_epochs",
+        "deactivationEpochs",
+        "deactivation_epochs",
+    )
+    if not isinstance(raw_activation_epochs, Sequence) or isinstance(
+        raw_activation_epochs, (str, bytes, bytearray)
+    ):
+        raise TypeError("validatorActivationEpochs must be a sequence")
+    if not isinstance(raw_deactivation_epochs, Sequence) or isinstance(
+        raw_deactivation_epochs, (str, bytes, bytearray)
+    ):
+        raise TypeError("validatorDeactivationEpochs must be a sequence")
+    if len(raw_activation_epochs) != len(validator_public_keys) or len(
+        raw_deactivation_epochs
+    ) != len(validator_public_keys):
+        raise ValueError("validator activation epochs must match validatorPublicKeys")
+    activation_epochs = [
+        _normalize_u64(value, f"validatorActivationEpochs[{index}]")
+        for index, value in enumerate(raw_activation_epochs)
+    ]
+    deactivation_epochs = [
+        _normalize_u64(value, f"validatorDeactivationEpochs[{index}]")
+        for index, value in enumerate(raw_deactivation_epochs)
+    ]
+    for index, (activation_epoch, deactivation_epoch) in enumerate(
+        zip(activation_epochs, deactivation_epochs)
+    ):
+        if activation_epoch >= epoch:
+            raise ValueError(
+                f"validatorActivationEpochs[{index}] must be less than epoch"
+            )
+        if deactivation_epoch <= activation_epoch:
+            raise ValueError(
+                f"validatorDeactivationEpochs[{index}] must be greater than activation epoch"
+            )
+
+    roster_bytes = _canonical_solana_vote_roster_bytes(
+        validator_public_keys, validator_stakes
+    )
+    roster_hash = _prefixed_blake2b(_SCCP_SOLANA_VOTE_ROSTER_PREFIX_V1, roster_bytes)
+    out = bytearray()
+    out.extend(_write_u8(1))
+    out.extend(_write_u64_le(epoch))
+    out.extend(roster_hash)
+    out.extend(_write_u32_le(len(validator_public_keys)))
+    for public_key, stake, activation_epoch, deactivation_epoch in zip(
+        validator_public_keys, validator_stakes, activation_epochs, deactivation_epochs
+    ):
+        out.extend(_write_bytes(public_key))
+        out.extend(_write_u64_le(stake))
+        out.extend(_write_u64_le(activation_epoch))
+        out.extend(_write_u64_le(deactivation_epoch))
+    return bytes(out)
+
+
+def solana_sccp_stake_activation_hash(input_value: Any) -> str:
+    """Hash Solana SCCP active stake-activation evidence."""
+
+    return _bytes_to_hex(
+        _prefixed_blake2b(
+            _SCCP_SOLANA_STAKE_ACTIVATION_PREFIX_V1,
+            canonical_solana_sccp_stake_activation_bytes(input_value),
+        )
+    )
+
+
+def canonical_solana_sccp_account_opening_bytes(input_value: Any) -> bytes:
+    """Return canonical bytes for a Solana SCCP account opening."""
+
+    value = _require_mapping(input_value, "Solana account opening input")
+    address = _to_bytes(
+        _mapping_value_without_aliases(
+            value, "address", "address", "accountAddress", "account_address"
+        ),
+        "address",
+    )
+    owner = _to_bytes(
+        _mapping_value_without_aliases(
+            value, "owner", "owner", "ownerProgramId", "owner_program_id"
+        ),
+        "owner",
+    )
+    lamports = _normalize_u64(_mapping_value(value, "lamports"), "lamports")
+    rent_epoch = _normalize_u64(
+        _mapping_value_without_aliases(value, "rentEpoch", "rentEpoch", "rent_epoch"),
+        "rentEpoch",
+    )
+    executable = _mapping_value(value, "executable")
+    if executable is None:
+        executable = False
+    data_hash = _hex_to_bytes(
+        _mapping_value_without_aliases(value, "dataHash", "dataHash", "data_hash"),
+        "dataHash",
+        32,
+    )
+    if len(address) != 32 or not any(address):
+        raise TypeError("address must be a non-zero 32-byte Solana account id")
+    if len(owner) != 32 or not any(owner):
+        raise TypeError("owner must be a non-zero 32-byte Solana program id")
+    if lamports == 0:
+        raise ValueError("lamports must be greater than zero")
+    if not isinstance(executable, bool):
+        raise TypeError("executable must be a boolean")
+    if not any(data_hash):
+        raise TypeError("dataHash must not be zero")
+    out = bytearray()
+    out.extend(_write_u8(1))
+    out.extend(_write_bytes(address))
+    out.extend(_write_bytes(owner))
+    out.extend(_write_u64_le(lamports))
+    out.extend(_write_u64_le(rent_epoch))
+    out.extend(_write_u8(1 if executable else 0))
+    out.extend(data_hash)
+    return bytes(out)
+
+
+def solana_sccp_account_opening_hash(input_value: Any) -> str:
+    """Hash a Solana SCCP account opening."""
+
+    return _bytes_to_hex(
+        _prefixed_blake2b(
+            _SCCP_SOLANA_ACCOUNT_OPENING_PREFIX_V1,
+            canonical_solana_sccp_account_opening_bytes(input_value),
+        )
+    )
+
+
+def solana_sccp_account_raw_data_hash(raw_data: Any) -> str:
+    """Hash exact raw Solana account data bytes for account inclusion proofs."""
+
+    data = _to_bytes(raw_data, "rawData")
+    if not data or len(data) > _SCCP_SOLANA_MAX_ACCOUNT_RAW_DATA_BYTES:
+        raise ValueError("rawData must be between 1 and 65536 bytes")
+    return _bytes_to_hex(_prefixed_blake2b(_SCCP_SOLANA_ACCOUNT_RAW_DATA_PREFIX_V1, data))
+
+
+_BLAKE3_BLOCK_LEN = 64
+_BLAKE3_CHUNK_LEN = 1024
+_BLAKE3_OUT_LEN = 32
+_BLAKE3_CHUNK_START = 1
+_BLAKE3_CHUNK_END = 2
+_BLAKE3_PARENT = 4
+_BLAKE3_ROOT = 8
+_BLAKE3_IV = (
+    0x6A09E667,
+    0xBB67AE85,
+    0x3C6EF372,
+    0xA54FF53A,
+    0x510E527F,
+    0x9B05688C,
+    0x1F83D9AB,
+    0x5BE0CD19,
+)
+_BLAKE3_MSG_PERMUTATION = (2, 6, 3, 10, 7, 0, 4, 13, 1, 11, 12, 5, 9, 14, 15, 8)
+_BLAKE3_MAX_INPUT_LEN = 8 + _SCCP_SOLANA_MAX_ACCOUNT_RAW_DATA_BYTES + 1 + 32 + 32
+
+
+def _u32(value: int) -> int:
+    return value & 0xFFFFFFFF
+
+
+def _rotate_right_u32(value: int, bits: int) -> int:
+    value &= 0xFFFFFFFF
+    return ((value >> bits) | (value << (32 - bits))) & 0xFFFFFFFF
+
+
+def _blake3_g(state: list[int], a: int, b: int, c: int, d: int, mx: int, my: int) -> None:
+    state[a] = _u32(state[a] + state[b] + mx)
+    state[d] = _rotate_right_u32(state[d] ^ state[a], 16)
+    state[c] = _u32(state[c] + state[d])
+    state[b] = _rotate_right_u32(state[b] ^ state[c], 12)
+    state[a] = _u32(state[a] + state[b] + my)
+    state[d] = _rotate_right_u32(state[d] ^ state[a], 8)
+    state[c] = _u32(state[c] + state[d])
+    state[b] = _rotate_right_u32(state[b] ^ state[c], 7)
+
+
+def _blake3_permute(words: Sequence[int]) -> list[int]:
+    return [words[index] for index in _BLAKE3_MSG_PERMUTATION]
+
+
+def _blake3_parse_block_words(data: bytes, block_start: int) -> list[int]:
+    words: list[int] = []
+    for index in range(16):
+        offset = block_start + index * 4
+        b0 = data[offset] if offset < len(data) else 0
+        b1 = data[offset + 1] if offset + 1 < len(data) else 0
+        b2 = data[offset + 2] if offset + 2 < len(data) else 0
+        b3 = data[offset + 3] if offset + 3 < len(data) else 0
+        words.append(b0 | (b1 << 8) | (b2 << 16) | (b3 << 24))
+    return words
+
+
+def _blake3_compress(
+    cv: Sequence[int],
+    block_words: Sequence[int],
+    counter: int,
+    block_len: int,
+    flags: int,
+) -> list[int]:
+    state = [
+        cv[0],
+        cv[1],
+        cv[2],
+        cv[3],
+        cv[4],
+        cv[5],
+        cv[6],
+        cv[7],
+        *_BLAKE3_IV[:4],
+        counter & 0xFFFFFFFF,
+        (counter >> 32) & 0xFFFFFFFF,
+        block_len,
+        flags,
+    ]
+    msg = list(block_words)
+    for round_index in range(7):
+        _blake3_g(state, 0, 4, 8, 12, msg[0], msg[1])
+        _blake3_g(state, 1, 5, 9, 13, msg[2], msg[3])
+        _blake3_g(state, 2, 6, 10, 14, msg[4], msg[5])
+        _blake3_g(state, 3, 7, 11, 15, msg[6], msg[7])
+        _blake3_g(state, 0, 5, 10, 15, msg[8], msg[9])
+        _blake3_g(state, 1, 6, 11, 12, msg[10], msg[11])
+        _blake3_g(state, 2, 7, 8, 13, msg[12], msg[13])
+        _blake3_g(state, 3, 4, 9, 14, msg[14], msg[15])
+        if round_index < 6:
+            msg = _blake3_permute(msg)
+    return state
+
+
+class _Blake3Output:
+    def __init__(
+        self,
+        input_chaining_value: Sequence[int],
+        block_words: Sequence[int],
+        counter: int,
+        block_len: int,
+        flags: int,
+    ) -> None:
+        self.input_chaining_value = list(input_chaining_value)
+        self.block_words = list(block_words)
+        self.counter = counter
+        self.block_len = block_len
+        self.flags = flags
+
+    def chaining_value(self) -> list[int]:
+        state = _blake3_compress(
+            self.input_chaining_value,
+            self.block_words,
+            self.counter,
+            self.block_len,
+            self.flags,
+        )
+        return [_u32(state[index] ^ state[index + 8]) for index in range(8)]
+
+    def root_words(self, output_block_counter: int) -> list[int]:
+        state = _blake3_compress(
+            self.input_chaining_value,
+            self.block_words,
+            output_block_counter,
+            self.block_len,
+            self.flags | _BLAKE3_ROOT,
+        )
+        words = [_u32(state[index] ^ state[index + 8]) for index in range(8)]
+        words.extend(
+            _u32(state[index + 8] ^ self.input_chaining_value[index])
+            for index in range(8)
+        )
+        return words
+
+
+def _blake3_left_subtree_chunk_count(chunk_count: int) -> int:
+    power = 1
+    while power * 2 < chunk_count:
+        power *= 2
+    return power
+
+
+def _blake3_chunk_output(
+    data: bytes,
+    offset: int,
+    length: int,
+    chunk_counter: int,
+) -> _Blake3Output:
+    cv = list(_BLAKE3_IV)
+    num_blocks = max(1, (length + _BLAKE3_BLOCK_LEN - 1) // _BLAKE3_BLOCK_LEN)
+    for block_index in range(num_blocks):
+        block_start = offset + block_index * _BLAKE3_BLOCK_LEN
+        block_len = min(_BLAKE3_BLOCK_LEN, max(0, length - block_index * _BLAKE3_BLOCK_LEN))
+        block_words = _blake3_parse_block_words(data, block_start)
+        flags = 0
+        if block_index == 0:
+            flags |= _BLAKE3_CHUNK_START
+        if block_index == num_blocks - 1:
+            return _Blake3Output(
+                cv,
+                block_words,
+                chunk_counter,
+                block_len,
+                flags | _BLAKE3_CHUNK_END,
+            )
+        state = _blake3_compress(cv, block_words, chunk_counter, block_len, flags)
+        cv = [_u32(state[index] ^ state[index + 8]) for index in range(8)]
+    raise AssertionError("unreachable BLAKE3 chunk state")
+
+
+def _blake3_parent_output(left: Sequence[int], right: Sequence[int]) -> _Blake3Output:
+    return _Blake3Output(_BLAKE3_IV, [*left, *right], 0, _BLAKE3_BLOCK_LEN, _BLAKE3_PARENT)
+
+
+def _blake3_subtree_output(data: bytes, chunk_index: int, chunk_count: int) -> _Blake3Output:
+    if chunk_count == 1:
+        offset = chunk_index * _BLAKE3_CHUNK_LEN
+        length = min(_BLAKE3_CHUNK_LEN, max(0, len(data) - offset))
+        return _blake3_chunk_output(data, offset, length, chunk_index)
+    left_count = _blake3_left_subtree_chunk_count(chunk_count)
+    left = _blake3_subtree_output(data, chunk_index, left_count).chaining_value()
+    right = _blake3_subtree_output(
+        data,
+        chunk_index + left_count,
+        chunk_count - left_count,
+    ).chaining_value()
+    return _blake3_parent_output(left, right)
+
+
+def _blake3_fallback_derive(data: bytes, length: int) -> bytes:
+    if len(data) > _BLAKE3_MAX_INPUT_LEN:
+        raise ValueError(
+            f"Input too large for Blake3 helper: {len(data)} bytes (max {_BLAKE3_MAX_INPUT_LEN})"
+        )
+    if length < 0:
+        raise ValueError("length must not be negative")
+    chunk_count = max(1, (len(data) + _BLAKE3_CHUNK_LEN - 1) // _BLAKE3_CHUNK_LEN)
+    root_output = _blake3_subtree_output(data, 0, chunk_count)
+    output = bytearray()
+    output_block_counter = 0
+    while len(output) < length:
+        for word in root_output.root_words(output_block_counter):
+            output.extend(word.to_bytes(4, "little"))
+            if len(output) >= length:
+                break
+        output_block_counter += 1
+    return bytes(output[:length])
+
+
+def _blake3_digest(data: bytes, *, length: int = _BLAKE3_OUT_LEN) -> bytes:
+    if _blake3 is not None:
+        return _blake3.blake3(data).digest(length=length)
+    return _blake3_fallback_derive(data, length)
+
+
+def _normalize_solana_account_opening_for_lt_hash(input_value: Any) -> tuple[bytes, bytes, int, bool]:
+    value = _require_mapping(input_value, "Solana account opening")
+    address = _to_bytes(
+        _mapping_value_without_aliases(
+            value, "address", "address", "accountAddress", "account_address"
+        ),
+        "address",
+    )
+    if len(address) != 32:
+        raise TypeError("address must be 32 bytes")
+    owner = _to_bytes(
+        _mapping_value_without_aliases(
+            value, "owner", "owner", "ownerProgramId", "owner_program_id"
+        ),
+        "owner",
+    )
+    if len(owner) != 32:
+        raise TypeError("owner must be 32 bytes")
+    lamports = _normalize_u64(_mapping_value(value, "lamports"), "lamports")
+    executable = value.get("executable", False)
+    if not isinstance(executable, bool):
+        raise TypeError("executable must be a boolean")
+    return address, owner, lamports, executable
+
+
+def solana_sccp_account_lt_hash(opening: Any, raw_data: Any) -> bytes:
+    """Return Agave's 2048-byte `AccountLtHash` for a Solana account opening."""
+
+    address, owner, lamports, executable = _normalize_solana_account_opening_for_lt_hash(opening)
+    data = _to_bytes(raw_data, "rawData")
+    if len(data) > _SCCP_SOLANA_MAX_ACCOUNT_RAW_DATA_BYTES:
+        raise ValueError("rawData must be at most 65536 bytes")
+    if lamports == 0:
+        return bytes(_SCCP_SOLANA_ACCOUNTS_LT_HASH_BYTES)
+    preimage = b"".join(
+        (
+            _write_u64_le(lamports),
+            data,
+            _write_u8(1 if executable else 0),
+            owner,
+            address,
+        )
+    )
+    return _blake3_digest(preimage, length=_SCCP_SOLANA_ACCOUNTS_LT_HASH_BYTES)
+
+
+def _add_solana_accounts_lt_hash_contribution(target: bytearray, contribution: bytes) -> None:
+    if len(target) != _SCCP_SOLANA_ACCOUNTS_LT_HASH_BYTES:
+        raise ValueError("accountsLtHash target must be 2048 bytes")
+    if len(contribution) != _SCCP_SOLANA_ACCOUNTS_LT_HASH_BYTES:
+        raise ValueError("accountLtHash contribution must be 2048 bytes")
+    for index in range(_SCCP_SOLANA_LT_HASH_ELEMENTS):
+        offset = index * 2
+        mixed = (
+            int.from_bytes(target[offset : offset + 2], "little")
+            + int.from_bytes(contribution[offset : offset + 2], "little")
+        ) & 0xFFFF
+        target[offset : offset + 2] = mixed.to_bytes(2, "little")
+
+
+def _subtract_solana_accounts_lt_hash_contribution(target: bytearray, contribution: bytes) -> None:
+    if len(target) != _SCCP_SOLANA_ACCOUNTS_LT_HASH_BYTES:
+        raise ValueError("accountsLtHash target must be 2048 bytes")
+    if len(contribution) != _SCCP_SOLANA_ACCOUNTS_LT_HASH_BYTES:
+        raise ValueError("accountLtHash contribution must be 2048 bytes")
+    for index in range(_SCCP_SOLANA_LT_HASH_ELEMENTS):
+        offset = index * 2
+        mixed = (
+            int.from_bytes(target[offset : offset + 2], "little")
+            - int.from_bytes(contribution[offset : offset + 2], "little")
+        ) & 0xFFFF
+        target[offset : offset + 2] = mixed.to_bytes(2, "little")
+
+
+def solana_sccp_accounts_lt_hash_from_openings(openings: Sequence[Any], raw_data_values: Sequence[Any]) -> bytes:
+    """Mix account lattice hashes with Agave's wrapping 16-bit addition."""
+
+    if len(openings) != len(raw_data_values):
+        raise ValueError("openings and raw_data_values must have the same length")
+    out = bytearray(_SCCP_SOLANA_ACCOUNTS_LT_HASH_BYTES)
+    for opening, raw_data in zip(openings, raw_data_values):
+        _add_solana_accounts_lt_hash_contribution(
+            out,
+            solana_sccp_account_lt_hash(opening, raw_data),
+        )
+    return bytes(out)
+
+
+def solana_sccp_accounts_lt_hash_checksum(accounts_lt_hash: Any) -> str:
+    """Return Agave's 32-byte checksum for a canonical Solana `AccountsLtHash`."""
+
+    data = _to_bytes(accounts_lt_hash, "accountsLtHash")
+    if len(data) != _SCCP_SOLANA_ACCOUNTS_LT_HASH_BYTES:
+        raise ValueError("accountsLtHash must be 2048 bytes")
+    return _bytes_to_hex(_blake3_digest(data))
+
+
+def _require_nonzero_solana_accounts_lt_hash(
+    accounts_lt_hash: bytes, label: str = "accountsLtHash"
+) -> None:
+    if len(accounts_lt_hash) != _SCCP_SOLANA_ACCOUNTS_LT_HASH_BYTES:
+        raise ValueError(f"{label} must be 2048 bytes")
+    if not any(accounts_lt_hash):
+        raise TypeError(f"{label} must not be zero")
+
+
+def _solana_opened_lt_hash_array(value: Mapping[str, Any], keys: Sequence[str], label: str) -> Sequence[Any]:
+    selected = _mapping_optional_value_without_aliases(value, label, *keys)
+    if selected is _MISSING or selected is None:
+        return ()
+    if isinstance(selected, (str, bytes, bytearray, memoryview)) or not isinstance(selected, Sequence):
+        raise TypeError(f"{label} must be an array")
+    if len(selected) > SCCP_SOLANA_MAX_VALIDATORS:
+        raise ValueError(
+            f"{label} must contain at most {SCCP_SOLANA_MAX_VALIDATORS} entries"
+        )
+    return selected
+
+
+def _require_unique_solana_opened_account_addresses(openings: Sequence[Any]) -> None:
+    seen_addresses: set[bytes] = set()
+    for opening_value in openings:
+        address, _, _, _ = _normalize_solana_account_opening_for_lt_hash(opening_value)
+        if address in seen_addresses:
+            raise ValueError("opened account addresses must be unique")
+        seen_addresses.add(address)
+
+
+def _solana_opened_lt_hash_contribution_rows(input_value: Any) -> list[tuple[int, bytes, bytes, bytes, bytes]]:
+    value = _require_mapping(input_value, "Solana opened AccountsLtHash contribution input")
+    vote_openings = _solana_opened_lt_hash_array(
+        value,
+        (
+            "validatorVoteAccountOpenings",
+            "validator_vote_account_openings",
+            "voteAccountOpenings",
+            "vote_account_openings",
+        ),
+        "validatorVoteAccountOpenings",
+    )
+    vote_raw_data = _solana_opened_lt_hash_array(
+        value,
+        (
+            "validatorVoteAccountRawData",
+            "validator_vote_account_raw_data",
+            "voteAccountRawData",
+            "vote_account_raw_data",
+        ),
+        "validatorVoteAccountRawData",
+    )
+    vote_lt_hashes = _solana_opened_lt_hash_array(
+        value,
+        (
+            "validatorVoteAccountLtHashes",
+            "validator_vote_account_lt_hashes",
+            "voteAccountLtHashes",
+            "vote_account_lt_hashes",
+        ),
+        "validatorVoteAccountLtHashes",
+    )
+    stake_openings = _solana_opened_lt_hash_array(
+        value,
+        (
+            "validatorStakeAccountOpenings",
+            "validator_stake_account_openings",
+            "stakeAccountOpenings",
+            "stake_account_openings",
+        ),
+        "validatorStakeAccountOpenings",
+    )
+    stake_raw_data = _solana_opened_lt_hash_array(
+        value,
+        (
+            "validatorStakeAccountRawData",
+            "validator_stake_account_raw_data",
+            "stakeAccountRawData",
+            "stake_account_raw_data",
+        ),
+        "validatorStakeAccountRawData",
+    )
+    stake_lt_hashes = _solana_opened_lt_hash_array(
+        value,
+        (
+            "validatorStakeAccountLtHashes",
+            "validator_stake_account_lt_hashes",
+            "stakeAccountLtHashes",
+            "stake_account_lt_hashes",
+        ),
+        "validatorStakeAccountLtHashes",
+    )
+    if len(vote_openings) != len(vote_raw_data) or len(stake_openings) != len(stake_raw_data):
+        raise TypeError("opened account openings and rawData arrays must have matching lengths")
+    derive_vote_lt_hashes = len(vote_lt_hashes) == 0
+    derive_stake_lt_hashes = len(stake_lt_hashes) == 0
+    if not derive_vote_lt_hashes and len(vote_openings) != len(vote_lt_hashes):
+        raise TypeError(
+            "validatorVoteAccountOpenings and validatorVoteAccountLtHashes must have matching lengths"
+        )
+    if not derive_stake_lt_hashes and len(stake_openings) != len(stake_lt_hashes):
+        raise TypeError(
+            "validatorStakeAccountOpenings and validatorStakeAccountLtHashes must have matching lengths"
+        )
+    rows: list[tuple[int, bytes, bytes, bytes, bytes]] = []
+    seen_addresses: set[bytes] = set()
+
+    def push_row(
+        role: int,
+        opening_value: Any,
+        raw_data_value: Any,
+        supplied_lt_hash_value: Any = _MISSING,
+        label: str = "accountLtHash",
+        allow_empty_derive: bool = False,
+    ) -> None:
+        address, _, _, _ = _normalize_solana_account_opening_for_lt_hash(opening_value)
+        if address in seen_addresses:
+            raise ValueError("opened account addresses must be unique")
+        seen_addresses.add(address)
+        raw_data = _to_bytes(raw_data_value, "rawData")
+        account_hash = _hex_to_bytes(solana_sccp_account_opening_hash(opening_value), "accountHash", 32)
+        raw_data_hash = _hex_to_bytes(solana_sccp_account_raw_data_hash(raw_data), "rawDataHash", 32)
+        expected_lt_hash = solana_sccp_account_lt_hash(opening_value, raw_data)
+        account_lt_hash = expected_lt_hash
+        if supplied_lt_hash_value is not _MISSING and supplied_lt_hash_value is not None:
+            supplied_lt_hash = _to_bytes(supplied_lt_hash_value, label)
+            if not (allow_empty_derive and len(supplied_lt_hash) == 0):
+                if len(supplied_lt_hash) != _SCCP_SOLANA_ACCOUNTS_LT_HASH_BYTES:
+                    raise TypeError(f"{label} must be 2048 bytes")
+                if supplied_lt_hash != expected_lt_hash:
+                    raise TypeError(f"{label} must match the opening and rawData")
+                account_lt_hash = supplied_lt_hash
+        rows.append((role, address, account_hash, raw_data_hash, account_lt_hash))
+
+    for index, (opening, raw_data) in enumerate(zip(vote_openings, vote_raw_data)):
+        push_row(
+            _SCCP_SOLANA_OPENED_LT_HASH_ROLE_VOTE,
+            opening,
+            raw_data,
+            _MISSING if derive_vote_lt_hashes else vote_lt_hashes[index],
+            f"validatorVoteAccountLtHashes[{index}]",
+        )
+    for index, (opening, raw_data) in enumerate(zip(stake_openings, stake_raw_data)):
+        push_row(
+            _SCCP_SOLANA_OPENED_LT_HASH_ROLE_STAKE,
+            opening,
+            raw_data,
+            _MISSING if derive_stake_lt_hashes else stake_lt_hashes[index],
+            f"validatorStakeAccountLtHashes[{index}]",
+        )
+    stake_history_opening = _mapping_value_without_aliases(
+        value,
+        "stakeHistorySysvarOpening",
+        "stakeHistorySysvarOpening",
+        "stake_history_sysvar_opening",
+    )
+    stake_history_raw_data = _mapping_value_without_aliases(
+        value,
+        "stakeHistorySysvarRawData",
+        "stakeHistorySysvarRawData",
+        "stake_history_sysvar_raw_data",
+    )
+    stake_history_lt_hash = _mapping_optional_value_without_aliases(
+        value,
+        "stakeHistorySysvarAccountLtHash",
+        "stakeHistorySysvarAccountLtHash",
+        "stake_history_sysvar_account_lt_hash",
+    )
+    if stake_history_opening is None or stake_history_raw_data is None:
+        raise TypeError("stakeHistorySysvarOpening and stakeHistorySysvarRawData are required")
+    push_row(
+        _SCCP_SOLANA_OPENED_LT_HASH_ROLE_STAKE_HISTORY_SYSVAR,
+        stake_history_opening,
+        stake_history_raw_data,
+        stake_history_lt_hash,
+        "stakeHistorySysvarAccountLtHash",
+        True,
+    )
+    rows.sort(key=lambda row: (row[0], row[1]))
+    return rows
+
+
+def _normalize_solana_accounts_lt_hash_opened_contributions_input(
+    input_value: Any,
+) -> tuple[int, int, bytes, bytes, list[tuple[int, bytes, bytes, bytes, bytes]], bytes, bytes, bytes, bytes]:
+    value = _require_mapping(input_value, "Solana opened AccountsLtHash contribution input")
+    source_domain = _normalize_optional_u32_without_aliases(
+        value,
+        "sourceDomain",
+        SCCP_DOMAIN_SOL,
+        "sourceDomain",
+        "source_domain",
+    )
+    if source_domain != SCCP_DOMAIN_SOL:
+        raise ValueError("sourceDomain must be Solana")
+    finalized_slot = _normalize_u64(
+        _mapping_value_without_aliases(
+            value, "finalizedSlot", "finalizedSlot", "finalized_slot", "slot"
+        ),
+        "finalizedSlot",
+    )
+    account_inclusion_root = _nonzero_hex32_to_bytes(
+        _mapping_value_without_aliases(
+            value,
+            "accountInclusionRoot",
+            "accountInclusionRoot",
+            "account_inclusion_root",
+            "accountsRoot",
+            "accounts_root",
+        ),
+        "accountInclusionRoot",
+    )
+    accounts_lt_hash_checksum = _nonzero_hex32_to_bytes(
+        _mapping_value_without_aliases(
+            value,
+            "accountsLtHashChecksum",
+            "accountsLtHashChecksum",
+            "accounts_lt_hash_checksum",
+            "accountsLtHashRoot",
+            "accounts_lt_hash_root",
+        ),
+        "accountsLtHashChecksum",
+    )
+    accounts_lt_hash = _to_bytes(
+        _mapping_value_without_aliases(
+            value, "accountsLtHash", "accountsLtHash", "accounts_lt_hash"
+        ),
+        "accountsLtHash",
+    )
+    if len(accounts_lt_hash) != _SCCP_SOLANA_ACCOUNTS_LT_HASH_BYTES:
+        raise ValueError("accountsLtHash must be 2048 bytes")
+    _require_nonzero_solana_accounts_lt_hash(accounts_lt_hash)
+    if accounts_lt_hash_checksum != _blake3_digest(accounts_lt_hash):
+        raise TypeError("accountsLtHashChecksum must match accountsLtHash")
+    rows = _solana_opened_lt_hash_contribution_rows(value)
+    opened_accounts_lt_hash = bytearray(_SCCP_SOLANA_ACCOUNTS_LT_HASH_BYTES)
+    for _, _, _, _, account_lt_hash in rows:
+        _add_solana_accounts_lt_hash_contribution(opened_accounts_lt_hash, account_lt_hash)
+    opened_accounts_lt_hash_bytes = bytes(opened_accounts_lt_hash)
+    opened_accounts_lt_hash_checksum = _blake3_digest(opened_accounts_lt_hash_bytes)
+    residual_accounts_lt_hash = bytearray(accounts_lt_hash)
+    _subtract_solana_accounts_lt_hash_contribution(residual_accounts_lt_hash, opened_accounts_lt_hash_bytes)
+    residual_accounts_lt_hash_bytes = bytes(residual_accounts_lt_hash)
+    _require_nonzero_solana_accounts_lt_hash(
+        residual_accounts_lt_hash_bytes, "openedAccountsLtHashResidual"
+    )
+    residual_accounts_lt_hash_checksum = _blake3_digest(residual_accounts_lt_hash_bytes)
+    return (
+        source_domain,
+        finalized_slot,
+        account_inclusion_root,
+        accounts_lt_hash_checksum,
+        rows,
+        opened_accounts_lt_hash_bytes,
+        opened_accounts_lt_hash_checksum,
+        residual_accounts_lt_hash_bytes,
+        residual_accounts_lt_hash_checksum,
+    )
+
+
+def _solana_opened_accounts_lt_hash_input_with_canonical_fields(
+    input_value: Mapping[str, Any],
+    *,
+    source_domain: int,
+    finalized_slot: int,
+    account_inclusion_root: str,
+    accounts_lt_hash_checksum: str,
+    accounts_lt_hash: Any,
+) -> Dict[str, Any]:
+    value = dict(input_value)
+    for key in (
+        "sourceDomain",
+        "source_domain",
+        "finalizedSlot",
+        "finalized_slot",
+        "slot",
+        "accountInclusionRoot",
+        "account_inclusion_root",
+        "accountsRoot",
+        "accounts_root",
+        "accountsLtHashChecksum",
+        "accounts_lt_hash_checksum",
+        "accountsLtHashRoot",
+        "accounts_lt_hash_root",
+        "accountsLtHash",
+        "accounts_lt_hash",
+    ):
+        value.pop(key, None)
+    value.update(
+        {
+            "source_domain": source_domain,
+            "finalized_slot": finalized_slot,
+            "account_inclusion_root": account_inclusion_root,
+            "accounts_lt_hash_checksum": accounts_lt_hash_checksum,
+            "accounts_lt_hash": accounts_lt_hash,
+        }
+    )
+    return value
+
+
+def solana_sccp_accounts_lt_hash_opened_residual(input_value: Any) -> bytes:
+    """Return the bank LtHash residual after subtracting opened account contributions."""
+
+    return _normalize_solana_accounts_lt_hash_opened_contributions_input(input_value)[7]
+
+
+def solana_sccp_accounts_lt_hash_opened_residual_checksum(input_value: Any) -> str:
+    """Return the checksum for unopened AccountsDB LtHash residual state."""
+
+    return _bytes_to_hex(
+        _normalize_solana_accounts_lt_hash_opened_contributions_input(input_value)[8]
+    )
+
+
+def canonical_solana_sccp_accounts_lt_hash_opened_contributions_bytes(input_value: Any) -> bytes:
+    """Return canonical opened AccountsLtHash contribution transcript bytes."""
+
+    (
+        source_domain,
+        finalized_slot,
+        account_inclusion_root,
+        accounts_lt_hash_checksum,
+        rows,
+        opened_accounts_lt_hash,
+        opened_accounts_lt_hash_checksum,
+        residual_accounts_lt_hash,
+        residual_accounts_lt_hash_checksum,
+    ) = _normalize_solana_accounts_lt_hash_opened_contributions_input(input_value)
+    out = bytearray()
+    out.extend(_write_u8(1))
+    out.extend(_write_u32_le(source_domain))
+    out.extend(_write_u64_le(finalized_slot))
+    out.extend(account_inclusion_root)
+    out.extend(accounts_lt_hash_checksum)
+    out.extend(opened_accounts_lt_hash_checksum)
+    out.extend(residual_accounts_lt_hash_checksum)
+    out.extend(_write_bytes(opened_accounts_lt_hash))
+    out.extend(_write_bytes(residual_accounts_lt_hash))
+    out.extend(_write_u32_le(len(rows)))
+    for role, address, account_hash, raw_data_hash, account_lt_hash in rows:
+        out.extend(_write_u8(role))
+        out.extend(address)
+        out.extend(account_hash)
+        out.extend(raw_data_hash)
+        out.extend(_write_bytes(account_lt_hash))
+    return bytes(out)
+
+
+def solana_sccp_accounts_lt_hash_opened_contributions_hash(input_value: Any) -> str:
+    """Hash opened AccountsLtHash contributions bound into the recursive source-state proof."""
+
+    return _bytes_to_hex(
+        _prefixed_blake2b(
+            _SCCP_SOLANA_ACCOUNTS_LT_HASH_OPENED_CONTRIBUTIONS_PREFIX_V1,
+            canonical_solana_sccp_accounts_lt_hash_opened_contributions_bytes(input_value),
+        )
+    )
+
+
+def _sccp_word_u32_le(value: int) -> bytes:
+    return _write_u32_le(value) + (b"\x00" * 28)
+
+
+def _sccp_word_u8(value: int) -> bytes:
+    return _write_u8(value) + (b"\x00" * 31)
+
+
+def _sccp_word_i32_le(value: int) -> bytes:
+    return _write_i32_le(value) + (b"\x00" * 28)
+
+
+def _sccp_word_u64_le(value: int) -> bytes:
+    return _write_u64_le(value) + (b"\x00" * 24)
+
+
+def _normalize_solana_accounts_lt_hash_proof_request_input(
+    input_value: Any,
+) -> Dict[str, Any]:
+    value = _require_mapping(input_value, "Solana AccountsLtHash proof request input")
+
+    def request_optional(label: str, *keys: str) -> Any:
+        return _mapping_optional_value_without_aliases(
+            value,
+            label,
+            *dict.fromkeys(keys),
+        )
+
+    def request_value(label: str, *keys: str) -> Any:
+        selected = request_optional(label, *keys)
+        return None if selected is _MISSING else selected
+
+    def request_or_default(label: str, default: Any, *keys: str) -> Any:
+        selected = request_optional(label, *keys)
+        return default if selected is _MISSING or selected is None else selected
+
+    def request_optional_value(label: str, *keys: str) -> Any:
+        selected = request_optional(label, *keys)
+        return None if selected is _MISSING or selected is None else selected
+
+    source_domain_input = request_optional(
+        "sourceDomain",
+        "sourceDomain",
+        "source_domain",
+    )
+    source_domain = _normalize_u32(
+        SCCP_DOMAIN_SOL if source_domain_input is _MISSING else source_domain_input,
+        "sourceDomain",
+    )
+    if source_domain != SCCP_DOMAIN_SOL:
+        raise ValueError("sourceDomain must be Solana")
+    finalized_slot = _normalize_u64(
+        request_value("finalizedSlot", "finalizedSlot", "finalized_slot", "slot"),
+        "finalizedSlot",
+    )
+    parent_slot = _normalize_u64(
+        request_value("parentSlot", "parentSlot", "parent_slot"),
+        "parentSlot",
+    )
+    if parent_slot + 1 != finalized_slot:
+        raise ValueError("parentSlot must be the direct parent of finalizedSlot")
+    bank_signature_count = _normalize_u64(
+        request_value("bankSignatureCount", "bankSignatureCount", "bank_signature_count"),
+        "bankSignatureCount",
+    )
+    if bank_signature_count == 0:
+        raise ValueError("bankSignatureCount must be nonzero")
+    parent_bank_hash = _bytes_to_hex(
+        _nonzero_hex32_to_bytes(
+            request_value("parentBankHash", "parentBankHash", "parent_bank_hash"),
+            "parentBankHash",
+        )
+    )
+    blockhash = _bytes_to_hex(
+        _normalize_solana_hash32_bytes(
+            request_value("blockhash", "blockhashBytes", "blockhash_bytes", "blockhash"),
+            "blockhash",
+        )
+    )
+    transaction_status_root = _bytes_to_hex(
+        _nonzero_hex32_to_bytes(
+            request_value(
+                "transactionStatusRoot",
+                "transactionStatusRoot",
+                "transaction_status_root",
+            ),
+            "transactionStatusRoot",
+        )
+    )
+    account_inclusion_root = _bytes_to_hex(
+        _nonzero_hex32_to_bytes(
+            request_value(
+                "accountInclusionRoot",
+                "accountInclusionRoot",
+                "account_inclusion_root",
+                "accountsRoot",
+                "accounts_root",
+            ),
+            "accountInclusionRoot",
+        )
+    )
+    accounts_lt_hash = _to_bytes(
+        request_value("accountsLtHash", "accountsLtHash", "accounts_lt_hash"),
+        "accountsLtHash",
+    )
+    if len(accounts_lt_hash) != _SCCP_SOLANA_ACCOUNTS_LT_HASH_BYTES:
+        raise ValueError("accountsLtHash must be 2048 bytes")
+    _require_nonzero_solana_accounts_lt_hash(accounts_lt_hash)
+    accounts_lt_hash_checksum = _bytes_to_hex(
+        _nonzero_hex32_to_bytes(
+            request_value(
+                "accountsLtHashChecksum",
+                "accountsLtHashChecksum",
+                "accounts_lt_hash_checksum",
+                "accountsLtHashRoot",
+                "accounts_lt_hash_root",
+            ),
+            "accountsLtHashChecksum",
+        )
+    )
+    if _hex_to_bytes(accounts_lt_hash_checksum, "accountsLtHashChecksum", 32) != _blake3_digest(
+        accounts_lt_hash
+    ):
+        raise TypeError("accountsLtHashChecksum must match accountsLtHash")
+    bank_hash_hard_fork_data = _optional_bytes(
+        request_or_default(
+            "bankHashHardForkData",
+            None,
+            "bankHashHardForkData",
+            "bank_hash_hard_fork_data",
+        ),
+        "bankHashHardForkData",
+    )
+    if len(bank_hash_hard_fork_data) > _SCCP_SOLANA_MAX_BANK_HARD_FORK_HASH_DATA_BYTES:
+        raise ValueError("bankHashHardForkData is too large")
+    expected_bank_hash = solana_sccp_agave_bank_hash(
+        {
+            "parent_bank_hash": parent_bank_hash,
+            "bank_signature_count": bank_signature_count,
+            "blockhash": blockhash,
+            "accounts_lt_hash": accounts_lt_hash,
+            "bank_hash_hard_fork_data": bank_hash_hard_fork_data,
+        }
+    )
+    bank_hash = _normalize_nonzero_hex32(
+        request_value("bankHash", "bankHash", "bank_hash"),
+        "bankHash",
+    )
+    if bank_hash != expected_bank_hash:
+        raise TypeError("bankHash must match Agave bank hash inputs")
+    source_state_verifier_id = _normalize_non_empty_string(
+        request_or_default(
+            "sourceStateVerifierId",
+            SCCP_SOLANA_MAINNET_ACCOUNTS_DB_VERIFIER_ID_V1,
+            "sourceStateVerifierId",
+            "source_state_verifier_id",
+        ),
+        "sourceStateVerifierId",
+    )
+    if source_state_verifier_id != SCCP_SOLANA_MAINNET_ACCOUNTS_DB_VERIFIER_ID_V1:
+        raise TypeError("sourceStateVerifierId must match Solana AccountsDB verifier profile")
+    source_state_verifier_hash = _normalize_nonzero_hex32(
+        request_value(
+            "sourceStateVerifierHash",
+            "sourceStateVerifierHash",
+            "source_state_verifier_hash",
+        ),
+        "sourceStateVerifierHash",
+    )
+    if source_state_verifier_hash == SCCP_SOLANA_TEMPLATE_SOURCE_STATE_VERIFIER_HASH_V1:
+        raise TypeError(
+            "sourceStateVerifierHash must not be the Solana template verifier hash"
+        )
+    accounts_lt_hash_proof_public_inputs_hash = (
+        solana_sccp_accounts_lt_hash_proof_public_inputs_hash(
+            {
+                "source_domain": source_domain,
+                "finalized_slot": finalized_slot,
+                "parent_slot": parent_slot,
+                "bank_signature_count": bank_signature_count,
+                "parent_bank_hash": parent_bank_hash,
+                "bank_hash": bank_hash,
+                "blockhash": blockhash,
+                "transaction_status_root": transaction_status_root,
+                "account_inclusion_root": account_inclusion_root,
+                "accounts_lt_hash_checksum": accounts_lt_hash_checksum,
+                "bank_hash_hard_fork_data": bank_hash_hard_fork_data,
+            }
+        )
+    )
+    supplied_inputs_hash = request_optional_value(
+        "accountsLtHashProofPublicInputsHash",
+        "accountsLtHashProofPublicInputsHash",
+        "accounts_lt_hash_proof_public_inputs_hash",
+    )
+    if supplied_inputs_hash is not None and (
+        _normalize_hex32(supplied_inputs_hash, "accountsLtHashProofPublicInputsHash")
+        != accounts_lt_hash_proof_public_inputs_hash
+    ):
+        raise TypeError("accountsLtHashProofPublicInputsHash must match bank-state inputs")
+    opened_input = _solana_opened_accounts_lt_hash_input_with_canonical_fields(
+        value,
+        source_domain=source_domain,
+        finalized_slot=finalized_slot,
+        account_inclusion_root=account_inclusion_root,
+        accounts_lt_hash_checksum=accounts_lt_hash_checksum,
+        accounts_lt_hash=accounts_lt_hash,
+    )
+    _normalize_solana_accounts_lt_hash_opened_contributions_input(opened_input)
+    return {
+        "version": 1,
+        "source_domain": source_domain,
+        "finalized_slot": finalized_slot,
+        "parent_slot": parent_slot,
+        "bank_signature_count": bank_signature_count,
+        "parent_bank_hash": parent_bank_hash,
+        "blockhash": blockhash,
+        "bank_hash": bank_hash,
+        "transaction_status_root": transaction_status_root,
+        "account_inclusion_root": account_inclusion_root,
+        "accounts_lt_hash_checksum": accounts_lt_hash_checksum,
+        "accounts_lt_hash_proof_public_inputs_hash": accounts_lt_hash_proof_public_inputs_hash,
+        "bank_hash_hard_fork_data": bank_hash_hard_fork_data,
+        "accounts_lt_hash": accounts_lt_hash,
+        "source_state_verifier_id": source_state_verifier_id,
+        "source_state_verifier_hash": source_state_verifier_hash,
+        "opened_accounts_lt_hash_contributions_hash": (
+            solana_sccp_accounts_lt_hash_opened_contributions_hash(opened_input)
+        ),
+        "opened_accounts_lt_hash_residual_checksum": (
+            solana_sccp_accounts_lt_hash_opened_residual_checksum(opened_input)
+        ),
+    }
+
+
+def canonical_solana_sccp_accounts_lt_hash_commitment_bytes(input_value: Any) -> bytes:
+    """Return the AccountsLtHash commitment bytes consumed by the source-state prover."""
+
+    value = _normalize_solana_accounts_lt_hash_proof_request_input(input_value)
+    return b"".join(
+        (
+            _write_u8(value["version"]),
+            _write_u32_le(value["source_domain"]),
+            _write_u64_le(value["finalized_slot"]),
+            _hex_to_bytes(value["accounts_lt_hash_checksum"], "accountsLtHashChecksum", 32),
+            _hex_to_bytes(
+                value["opened_accounts_lt_hash_contributions_hash"],
+                "openedAccountsLtHashContributionsHash",
+                32,
+            ),
+            _hex_to_bytes(
+                value["opened_accounts_lt_hash_residual_checksum"],
+                "openedAccountsLtHashResidualChecksum",
+                32,
+            ),
+            _write_bytes(value["accounts_lt_hash"]),
+        )
+    )
+
+
+def canonical_solana_sccp_accounts_lt_hash_verification_context_bytes(input_value: Any) -> bytes:
+    """Return the OpenVerify context bytes for Solana AccountsLtHash source proofs."""
+
+    value = _normalize_solana_accounts_lt_hash_proof_request_input(input_value)
+    return b"".join(
+        (
+            _write_u8(value["version"]),
+            _write_string(
+                SCCP_SOLANA_ACCOUNTS_LT_HASH_OPEN_VERIFY_CIRCUIT_ID_V1,
+                "circuitId",
+            ),
+            _write_string(
+                _SCCP_SOLANA_ACCOUNTS_LT_HASH_FASTPQ_PARAMETER_SET_V1,
+                "parameterSet",
+            ),
+            _write_string(value["source_state_verifier_id"], "sourceStateVerifierId"),
+            _hex_to_bytes(value["source_state_verifier_hash"], "sourceStateVerifierHash", 32),
+            _hex_to_bytes(
+                value["accounts_lt_hash_proof_public_inputs_hash"],
+                "accountsLtHashProofPublicInputsHash",
+                32,
+            ),
+            _hex_to_bytes(
+                value["opened_accounts_lt_hash_contributions_hash"],
+                "openedAccountsLtHashContributionsHash",
+                32,
+            ),
+            _hex_to_bytes(
+                value["opened_accounts_lt_hash_residual_checksum"],
+                "openedAccountsLtHashResidualChecksum",
+                32,
+            ),
+        )
+    )
+
+
+def solana_sccp_accounts_lt_hash_public_input_columns(input_value: Any) -> list[list[str]]:
+    """Return OpenVerify public-input columns for the AccountsLtHash proof."""
+
+    value = _normalize_solana_accounts_lt_hash_proof_request_input(input_value)
+    return [
+        [_bytes_to_hex(_sccp_word_u32_le(value["source_domain"]))],
+        [_solana_mainnet_genesis_hash_public_input()],
+        [_bytes_to_hex(_sccp_word_u64_le(value["finalized_slot"]))],
+        [_bytes_to_hex(_sccp_word_u64_le(value["parent_slot"]))],
+        [_bytes_to_hex(_sccp_word_u64_le(value["bank_signature_count"]))],
+        [value["parent_bank_hash"]],
+        [value["bank_hash"]],
+        [value["blockhash"]],
+        [value["transaction_status_root"]],
+        [value["account_inclusion_root"]],
+        [value["accounts_lt_hash_checksum"]],
+        [value["accounts_lt_hash_proof_public_inputs_hash"]],
+        [value["opened_accounts_lt_hash_contributions_hash"]],
+        [value["opened_accounts_lt_hash_residual_checksum"]],
+    ]
+
+
+def solana_sccp_accounts_lt_hash_open_verify_schema_descriptor(input_value: Any) -> bytes:
+    """Return the OpenVerify schema descriptor for the AccountsLtHash proof."""
+
+    value = _normalize_solana_accounts_lt_hash_proof_request_input(input_value)
+    out = bytearray()
+    out.extend(_write_u8(value["version"]))
+    out.extend(
+        _write_string(
+            SCCP_SOLANA_ACCOUNTS_LT_HASH_OPEN_VERIFY_CIRCUIT_ID_V1,
+            "circuitId",
+        )
+    )
+    out.extend(
+        _write_string(
+            _SCCP_SOLANA_ACCOUNTS_LT_HASH_FASTPQ_PARAMETER_SET_V1,
+            "parameterSet",
+        )
+    )
+    out.extend(_write_string(SCCP_SOLANA_MAINNET_GENESIS_HASH, "mainnetGenesisHash"))
+    out.extend(_write_u32_le(value["source_domain"]))
+    out.extend(_write_string("source_state_verifier_id", "schemaField"))
+    out.extend(
+        _write_string(value["source_state_verifier_id"], "sourceStateVerifierId")
+    )
+    out.extend(_write_string("source_state_verifier_hash", "schemaField"))
+    out.extend(
+        _hex_to_bytes(
+            value["source_state_verifier_hash"],
+            "sourceStateVerifierHash",
+            32,
+        )
+    )
+    for required_input in (
+        "source_domain",
+        "mainnet_genesis_hash",
+        "finalized_slot",
+        "parent_slot",
+        "bank_signature_count",
+        "parent_bank_hash",
+        "bank_hash",
+        "blockhash",
+        "transaction_status_root",
+        "account_inclusion_root",
+        "accounts_lt_hash_checksum",
+        "accounts_lt_hash_proof_public_inputs_hash",
+        "opened_accounts_lt_hash_contributions_hash",
+        "opened_accounts_lt_hash_residual_checksum",
+    ):
+        out.extend(_write_string(required_input, "requiredInput"))
+    return bytes(out)
+
+
+def build_solana_sccp_accounts_lt_hash_proof_request(input_value: Any) -> Dict[str, Any]:
+    """Build the source-state proof request for a UI/mobile Solana AccountsDB prover."""
+
+    value = _normalize_solana_accounts_lt_hash_proof_request_input(input_value)
+    statement_bytes = canonical_solana_sccp_accounts_lt_hash_proof_public_inputs_bytes(value)
+    account_commitment_bytes = canonical_solana_sccp_accounts_lt_hash_commitment_bytes(input_value)
+    verification_context_bytes = (
+        canonical_solana_sccp_accounts_lt_hash_verification_context_bytes(input_value)
+    )
+    public_inputs_hash_bytes = _hex_to_bytes(
+        value["accounts_lt_hash_proof_public_inputs_hash"],
+        "accountsLtHashProofPublicInputsHash",
+        32,
+    )
+    dsid = _prefixed_blake2b(
+        _SCCP_SOLANA_ACCOUNTS_LT_HASH_FASTPQ_DSID_PREFIX_V1,
+        public_inputs_hash_bytes,
+    )[:16]
+    return _immutable_prover_envelope({
+        "version": 1,
+        "proof_family": SCCP_STARK_FRI_PROOF_FAMILY_V1,
+        "circuit_id": SCCP_SOLANA_ACCOUNTS_LT_HASH_OPEN_VERIFY_CIRCUIT_ID_V1,
+        "parameter_set": _SCCP_SOLANA_ACCOUNTS_LT_HASH_FASTPQ_PARAMETER_SET_V1,
+        "source_domain": value["source_domain"],
+        "finalized_slot": str(value["finalized_slot"]),
+        "parent_slot": str(value["parent_slot"]),
+        "source_state_verifier_id": value["source_state_verifier_id"],
+        "source_state_verifier_hash": value["source_state_verifier_hash"],
+        "accounts_lt_hash_proof_public_inputs_hash": value[
+            "accounts_lt_hash_proof_public_inputs_hash"
+        ],
+        "opened_accounts_lt_hash_contributions_hash": value[
+            "opened_accounts_lt_hash_contributions_hash"
+        ],
+        "opened_accounts_lt_hash_residual_checksum": value[
+            "opened_accounts_lt_hash_residual_checksum"
+        ],
+        "statement_bytes": statement_bytes,
+        "account_commitment_bytes": account_commitment_bytes,
+        "verification_context_bytes": verification_context_bytes,
+        "schema_descriptor": solana_sccp_accounts_lt_hash_open_verify_schema_descriptor(
+            input_value
+        ),
+        "public_input_columns": solana_sccp_accounts_lt_hash_public_input_columns(input_value),
+        "fastpq_public_inputs": {
+            "dsid": _bytes_to_hex(dsid),
+            "slot": str(value["finalized_slot"]),
+            "old_root": value["parent_bank_hash"],
+            "new_root": value["bank_hash"],
+            "perm_root": value["account_inclusion_root"],
+            "tx_set_hash": value["accounts_lt_hash_proof_public_inputs_hash"],
+        },
+        "fastpq_transitions": [
+            {
+                "key": _SCCP_SOLANA_ACCOUNTS_LT_HASH_FASTPQ_STATEMENT_KEY_V1.decode(),
+                "operation": "meta_set",
+                "old_value": "0x",
+                "new_value": _bytes_to_hex(statement_bytes),
+            },
+            {
+                "key": _SCCP_SOLANA_ACCOUNTS_LT_HASH_FASTPQ_ACCOUNTS_KEY_V1.decode(),
+                "operation": "meta_set",
+                "old_value": "0x",
+                "new_value": _bytes_to_hex(account_commitment_bytes),
+            },
+            {
+                "key": _SCCP_SOLANA_ACCOUNTS_LT_HASH_FASTPQ_OPENED_CONTRIBUTIONS_KEY_V1.decode(),
+                "operation": "meta_set",
+                "old_value": "0x",
+                "new_value": value["opened_accounts_lt_hash_contributions_hash"],
+            },
+            {
+                "key": _SCCP_SOLANA_ACCOUNTS_LT_HASH_FASTPQ_RESIDUAL_KEY_V1.decode(),
+                "operation": "meta_set",
+                "old_value": "0x",
+                "new_value": value["opened_accounts_lt_hash_residual_checksum"],
+            },
+            {
+                "key": _SCCP_SOLANA_ACCOUNTS_LT_HASH_FASTPQ_CONTEXT_KEY_V1.decode(),
+                "operation": "meta_set",
+                "old_value": "0x",
+                "new_value": _bytes_to_hex(verification_context_bytes),
+            },
+        ],
+    })
+
+
+_SOLANA_FULL_LIGHT_CLIENT_AUDIT_ROLES = {
+    "tower_replay": {
+        "name": "tower_replay",
+        "camel_name": "towerReplay",
+        "code": 1,
+        "circuit_id": SCCP_SOLANA_TOWER_REPLAY_OPEN_VERIFY_CIRCUIT_ID_V1,
+        "verifier_id": SCCP_SOLANA_MAINNET_TOWER_REPLAY_VERIFIER_ID_V1,
+        "verifier_hash_field": "solana_tower_replay_verifier_hash",
+        "required_input_names": (
+            "tower_lockout_hash",
+            "tower_replay_hash",
+            "bank_fork_hash",
+            "epoch_stake_root",
+            "stake_activation_hash",
+            "stake_account_state_hash",
+            "stake_history_hash",
+            "stake_history_sysvar_account_hash",
+            "account_inclusion_root",
+        ),
+    },
+    "full_accountsdb_lattice": {
+        "name": "full_accountsdb_lattice",
+        "camel_name": "fullAccountsdbLattice",
+        "code": 2,
+        "circuit_id": SCCP_SOLANA_FULL_ACCOUNTSDB_LATTICE_OPEN_VERIFY_CIRCUIT_ID_V1,
+        "verifier_id": SCCP_SOLANA_MAINNET_FULL_ACCOUNTSDB_LATTICE_VERIFIER_ID_V1,
+        "verifier_hash_field": "solana_full_accountsdb_lattice_verifier_hash",
+        "required_input_names": (
+            "account_inclusion_root",
+            "accounts_lt_hash_checksum",
+            "accounts_lt_hash_proof_public_inputs_hash",
+            "opened_accounts_lt_hash_contributions_hash",
+            "opened_accounts_lt_hash_residual_checksum",
+            "accounts_lt_hash_proof_hash",
+        ),
+    },
+    "bank_fork_choice": {
+        "name": "bank_fork_choice",
+        "camel_name": "bankForkChoice",
+        "code": 3,
+        "circuit_id": SCCP_SOLANA_BANK_FORK_CHOICE_OPEN_VERIFY_CIRCUIT_ID_V1,
+        "verifier_id": SCCP_SOLANA_MAINNET_BANK_FORK_CHOICE_VERIFIER_ID_V1,
+        "verifier_hash_field": "solana_bank_fork_choice_verifier_hash",
+        "required_input_names": (
+            "parent_bank_hash",
+            "bank_hash",
+            "blockhash",
+            "transaction_status_root",
+            "account_inclusion_root",
+            "accounts_lt_hash_checksum",
+            "bank_signature_count",
+            "bank_hash_hard_fork_data_hash",
+            "bank_fork_hash",
+            "tower_replay_hash",
+        ),
+    },
+}
+
+
+def _normalize_solana_full_light_client_audit_role(role: Any) -> Mapping[str, Any]:
+    normalized = _normalize_non_empty_string(role, "role").replace("-", "").replace("_", "").lower()
+    if normalized in {"tower", "towerreplay"}:
+        return _SOLANA_FULL_LIGHT_CLIENT_AUDIT_ROLES["tower_replay"]
+    if normalized in {
+        "accounts",
+        "accountsdb",
+        "fullaccountsdb",
+        "fullaccountsdblattice",
+    }:
+        return _SOLANA_FULL_LIGHT_CLIENT_AUDIT_ROLES["full_accountsdb_lattice"]
+    if normalized in {"bank", "bankfork", "bankforkchoice"}:
+        return _SOLANA_FULL_LIGHT_CLIENT_AUDIT_ROLES["bank_fork_choice"]
+    raise TypeError("role must be tower_replay, full_accountsdb_lattice, or bank_fork_choice")
+
+
+def _solana_audit_role_verifier_hash(
+    deployment: Mapping[str, Any],
+    role: Mapping[str, Any],
+) -> str:
+    return _normalize_nonzero_hex32(
+        deployment[role["verifier_hash_field"]],
+        role["verifier_hash_field"],
+    )
+
+
+def _normalize_solana_source_state_verification_proof(
+    input_value: Any,
+    label: str,
+) -> Dict[str, Any]:
+    value = _require_mapping(input_value, label)
+    version_input = _mapping_optional_value_without_aliases(
+        value,
+        f"{label}.version",
+        "version",
+        "proofVersion",
+        "proof_version",
+    )
+    if version_input is _MISSING:
+        version = 1
+    elif version_input is None:
+        raise TypeError(f"{label}.version must be 1")
+    else:
+        version = _normalize_v1_version(version_input, f"{label}.version")
+    proof_family_input = _mapping_optional_value_without_aliases(
+        value,
+        f"{label}.proofFamily",
+        "proofFamily",
+        "proof_family",
+    )
+    if proof_family_input is _MISSING:
+        proof_family = SCCP_STARK_FRI_PROOF_FAMILY_V1
+    elif proof_family_input is None:
+        raise TypeError(f"{label}.proofFamily must be a non-empty string")
+    else:
+        proof_family = _normalize_non_empty_string(
+            proof_family_input,
+            f"{label}.proofFamily",
+        )
+    _require_source_state_proof_label(proof_family, f"{label}.proofFamily")
+    circuit_id = _normalize_non_empty_string(
+        _mapping_value_without_aliases(
+            value,
+            f"{label}.circuitId",
+            "circuitId",
+            "circuit_id",
+        ),
+        f"{label}.circuitId",
+    )
+    _require_source_state_proof_label(circuit_id, f"{label}.circuitId")
+    proof_bytes = _to_bytes(
+        _mapping_value_without_aliases(
+            value,
+            f"{label}.proofBytes",
+            "proofBytes",
+            "proof_bytes",
+            "proof",
+        ),
+        f"{label}.proofBytes",
+    )
+    if not proof_bytes:
+        raise TypeError(f"{label}.proofBytes must not be empty")
+    if len(proof_bytes) > SCCP_SOURCE_STATE_MAX_PROOF_BYTES:
+        raise TypeError(
+            f"{label}.proofBytes must be at most "
+            f"{SCCP_SOURCE_STATE_MAX_PROOF_BYTES} bytes"
+        )
+    if all(byte == 0 for byte in proof_bytes):
+        raise TypeError(f"{label}.proofBytes must not be all zero")
+    proof_base64 = _mapping_optional_value_without_aliases(
+        value,
+        f"{label}.proofBase64",
+        "proofBase64",
+        "proof_base64",
+    )
+    if proof_base64 is not _MISSING and proof_base64 != base64.b64encode(
+        proof_bytes
+    ).decode("ascii"):
+        raise TypeError(f"{label}.proofBase64 must match {label}.proofBytes")
+    return {
+        "version": version,
+        "proof_family": proof_family,
+        "circuit_id": circuit_id,
+        "proof_bytes": proof_bytes,
+    }
+
+
+def _require_source_state_verification_proof_profile(
+    proof: Mapping[str, Any],
+    expected_circuit_id: str,
+    label: str,
+    profile_label: str,
+) -> None:
+    if (
+        proof["version"] != 1
+        or proof["proof_family"] != SCCP_STARK_FRI_PROOF_FAMILY_V1
+        or proof["circuit_id"] != expected_circuit_id
+    ):
+        raise TypeError(f"{label} must be the {profile_label} stark-fri-v1 proof")
+
+
+def _canonical_source_state_verification_proof_bytes(proof: Mapping[str, Any]) -> bytes:
+    _require_source_state_proof_bytes(proof["proof_bytes"])
+    return b"".join(
+        (
+            _write_u8(proof["version"]),
+            _write_string(proof["proof_family"], "proofFamily"),
+            _write_string(proof["circuit_id"], "circuitId"),
+            _write_bytes(proof["proof_bytes"]),
+        )
+    )
+
+
+def canonical_solana_sccp_source_state_verification_proof_bytes(input_value: Any) -> bytes:
+    """Return canonical bytes for a Solana source-state proof capsule."""
+
+    proof = _normalize_solana_source_state_verification_proof(
+        input_value,
+        "sourceStateProof",
+    )
+    if (
+        proof["version"] != 1
+        or proof["proof_family"] != SCCP_STARK_FRI_PROOF_FAMILY_V1
+        or proof["circuit_id"] not in _SOLANA_SOURCE_STATE_VERIFICATION_CIRCUIT_IDS
+    ):
+        raise TypeError("sourceStateProof must be a Solana source-state stark-fri-v1 proof")
+    return _canonical_source_state_verification_proof_bytes(proof)
+
+
+def solana_sccp_accounts_lt_hash_proof_hash(input_value: Any) -> str:
+    """Hash the completed Solana AccountsLtHash proof capsule for audit roles."""
+
+    proof = _normalize_solana_source_state_verification_proof(
+        input_value,
+        "accountsLtHashProof",
+    )
+    _require_source_state_verification_proof_profile(
+        proof,
+        SCCP_SOLANA_ACCOUNTS_LT_HASH_OPEN_VERIFY_CIRCUIT_ID_V1,
+        "accountsLtHashProof",
+        "Solana AccountsLtHash",
+    )
+    return _bytes_to_hex(
+        _prefixed_blake2b(
+            b"sccp:solana:accounts-lt-proof:v1",
+            _canonical_source_state_verification_proof_bytes(proof),
+        )
+    )
+
+
+_SOLANA_SOURCE_STATE_VERIFICATION_CIRCUIT_IDS = frozenset(
+    (
+        SCCP_SOLANA_ACCOUNTS_LT_HASH_OPEN_VERIFY_CIRCUIT_ID_V1,
+        SCCP_SOLANA_TOWER_REPLAY_OPEN_VERIFY_CIRCUIT_ID_V1,
+        SCCP_SOLANA_FULL_ACCOUNTSDB_LATTICE_OPEN_VERIFY_CIRCUIT_ID_V1,
+        SCCP_SOLANA_BANK_FORK_CHOICE_OPEN_VERIFY_CIRCUIT_ID_V1,
+    )
+)
+
+
+def _require_solana_source_state_public_input_binding_for_wrapping(
+    public_input_columns: Sequence[Any],
+    circuit_id: str,
+    request: Mapping[str, Any],
+) -> None:
+    source_domain_column = _bytes_to_hex(_sccp_word_u32_le(SCCP_DOMAIN_SOL))
+    mainnet_genesis_column = _solana_mainnet_genesis_hash_public_input()
+
+    def require_column(index: int, expected: str, field_name: str) -> None:
+        try:
+            column = public_input_columns[index]
+        except IndexError as exc:
+            raise TypeError(
+                f"request.publicInputColumns must bind {field_name}"
+            ) from exc
+        if (
+            not isinstance(column, Sequence)
+            or isinstance(column, (str, bytes, bytearray))
+            or len(column) != 1
+        ):
+            raise TypeError(f"request.publicInputColumns must bind {field_name}")
+        actual = _normalize_non_empty_string(
+            column[0],
+            f"request.publicInputColumns[{index}][0]",
+        )
+        if actual != expected:
+            raise TypeError(f"request.publicInputColumns must bind {field_name}")
+
+    if circuit_id == SCCP_SOLANA_ACCOUNTS_LT_HASH_OPEN_VERIFY_CIRCUIT_ID_V1:
+        require_column(0, source_domain_column, "source_domain")
+        require_column(1, mainnet_genesis_column, "mainnet_genesis_hash")
+        require_column(
+            2,
+            _bytes_to_hex(
+                _sccp_word_u64_le(
+                    _normalize_u64(
+                        _mapping_value(request, "finalizedSlot", "finalized_slot"),
+                        "request.finalizedSlot",
+                    )
+                )
+            ),
+            "finalized_slot",
+        )
+        require_column(
+            3,
+            _bytes_to_hex(
+                _sccp_word_u64_le(
+                    _normalize_u64(
+                        _mapping_value(request, "parentSlot", "parent_slot"),
+                        "request.parentSlot",
+                    )
+                )
+            ),
+            "parent_slot",
+        )
+        for index, camel, snake, field_name in (
+            (
+                11,
+                "accountsLtHashProofPublicInputsHash",
+                "accounts_lt_hash_proof_public_inputs_hash",
+                "accounts_lt_hash_proof_public_inputs_hash",
+            ),
+            (
+                12,
+                "openedAccountsLtHashContributionsHash",
+                "opened_accounts_lt_hash_contributions_hash",
+                "opened_accounts_lt_hash_contributions_hash",
+            ),
+            (
+                13,
+                "openedAccountsLtHashResidualChecksum",
+                "opened_accounts_lt_hash_residual_checksum",
+                "opened_accounts_lt_hash_residual_checksum",
+            ),
+        ):
+            require_column(
+                index,
+                _normalize_nonzero_hex32(
+                    _mapping_value(request, camel, snake),
+                    f"request.{camel}",
+                ),
+                field_name,
+            )
+        return
+
+    role = _normalize_solana_full_light_client_audit_role(
+        _mapping_value(request, "role", "audit_role")
+    )
+    require_column(0, _bytes_to_hex(_sccp_word_u8(role["code"])), "role")
+    require_column(1, source_domain_column, "source_domain")
+    require_column(2, mainnet_genesis_column, "mainnet_genesis_hash")
+    require_column(
+        3,
+        _bytes_to_hex(
+            _sccp_word_u64_le(
+                _normalize_u64(
+                    _mapping_value(request, "finalizedSlot", "finalized_slot"),
+                    "request.finalizedSlot",
+                )
+            )
+        ),
+        "finalized_slot",
+    )
+    for index, camel, snake, field_name in (
+        (4, "finalityContextHash", "finality_context_hash", "finality_context_hash"),
+        (5, "auditStatementHash", "audit_statement_hash", "audit_statement_hash"),
+        (
+            6,
+            "sourceVerifierMaterialHash",
+            "source_verifier_material_hash",
+            "source_verifier_material_hash",
+        ),
+        (
+            7,
+            "sourceAdapterDeploymentHash",
+            "source_adapter_deployment_hash",
+            "source_adapter_deployment_hash",
+        ),
+        (
+            8,
+            "fullLightClientGateHash",
+            "full_light_client_gate_hash",
+            "full_light_client_gate_hash",
+        ),
+        (9, "verifierHash", "verifier_hash", "verifier_hash"),
+        (13, "voteMessageHash", "vote_message_hash", "vote_message_hash"),
+        (
+            14,
+            "accountsLtHashProofHash",
+            "accounts_lt_hash_proof_hash",
+            "accounts_lt_hash_proof_hash",
+        ),
+    ):
+        require_column(
+            index,
+            _normalize_nonzero_hex32(
+                _mapping_value(request, camel, snake),
+                f"request.{camel}",
+            ),
+            field_name,
+        )
+
+
+def _normalize_solana_source_state_proof_request_for_wrapping(
+    request: Mapping[str, Any],
+) -> str:
+    value = _require_mapping(request, "Solana source-state proof request")
+    def request_value(camel: str, snake: str) -> Any:
+        return _mapping_value_without_aliases(
+            value, f"request.{camel}", *dict.fromkeys((camel, snake))
+        )
+
+    def nested_value(container: Mapping[str, Any], label: str, camel: str, snake: str) -> Any:
+        return _mapping_value_without_aliases(
+            container, label, *dict.fromkeys((camel, snake))
+        )
+
+    if value.get("version") != 1:
+        raise TypeError("Solana source-state proof request.version must be 1")
+    proof_family = request_value("proofFamily", "proof_family")
+    if proof_family != SCCP_STARK_FRI_PROOF_FAMILY_V1:
+        raise TypeError(
+            "Solana source-state proof request.proofFamily must be stark-fri-v1"
+        )
+    circuit_id = _normalize_non_empty_string(
+        request_value("circuitId", "circuit_id"),
+        "request.circuitId",
+    )
+    if circuit_id not in _SOLANA_SOURCE_STATE_VERIFICATION_CIRCUIT_IDS:
+        raise TypeError("request.circuitId must be a Solana source-state OpenVerify circuit")
+    source_domain = request_value("sourceDomain", "source_domain")
+    if source_domain is None:
+        raise TypeError("Solana source-state proof request.sourceDomain is required")
+    if _normalize_u32(source_domain, "request.sourceDomain") != SCCP_DOMAIN_SOL:
+        raise TypeError("Solana source-state proof request.sourceDomain must be Solana")
+    expected_parameter_set = (
+        _SCCP_SOLANA_ACCOUNTS_LT_HASH_FASTPQ_PARAMETER_SET_V1
+        if circuit_id == SCCP_SOLANA_ACCOUNTS_LT_HASH_OPEN_VERIFY_CIRCUIT_ID_V1
+        else _SCCP_SOLANA_FULL_LIGHT_CLIENT_AUDIT_FASTPQ_PARAMETER_SET_V1
+    )
+    parameter_set = _normalize_non_empty_string(
+        request_value("parameterSet", "parameter_set"),
+        "request.parameterSet",
+    )
+    if parameter_set != expected_parameter_set:
+        raise TypeError("request.parameterSet must be fastpq-lane-balanced")
+    source_state_verifier_id = _normalize_non_empty_string(
+        request_value("sourceStateVerifierId", "source_state_verifier_id"),
+        "request.sourceStateVerifierId",
+    )
+    if source_state_verifier_id != SCCP_SOLANA_MAINNET_ACCOUNTS_DB_VERIFIER_ID_V1:
+        raise TypeError(
+            "request.sourceStateVerifierId must match Solana AccountsDB verifier profile"
+    )
+    source_state_verifier_hash = _normalize_nonzero_hex32(
+        request_value("sourceStateVerifierHash", "source_state_verifier_hash"),
+        "request.sourceStateVerifierHash",
+    )
+    if source_state_verifier_hash == SCCP_SOLANA_TEMPLATE_SOURCE_STATE_VERIFIER_HASH_V1:
+        raise TypeError(
+            "request.sourceStateVerifierHash must not be the Solana template verifier hash"
+        )
+    expected_transitions: tuple[Dict[str, str], ...]
+    expected_dsid = ""
+    expected_tx_set_hash = ""
+    if circuit_id == SCCP_SOLANA_ACCOUNTS_LT_HASH_OPEN_VERIFY_CIRCUIT_ID_V1:
+        finalized_slot = _normalize_u64(
+            request_value("finalizedSlot", "finalized_slot"),
+            "request.finalizedSlot",
+        )
+        parent_slot = _normalize_u64(
+            request_value("parentSlot", "parent_slot"),
+            "request.parentSlot",
+        )
+        if parent_slot + 1 != finalized_slot:
+            raise TypeError(
+                "request.parentSlot must be the direct parent of finalizedSlot"
+            )
+        accounts_lt_hash_proof_public_inputs_hash = ""
+        opened_contributions_hash = ""
+        residual_checksum = ""
+        for camel, snake in (
+            (
+                "accountsLtHashProofPublicInputsHash",
+                "accounts_lt_hash_proof_public_inputs_hash",
+            ),
+            (
+                "openedAccountsLtHashContributionsHash",
+                "opened_accounts_lt_hash_contributions_hash",
+            ),
+            (
+                "openedAccountsLtHashResidualChecksum",
+                "opened_accounts_lt_hash_residual_checksum",
+            ),
+        ):
+            normalized_hash = _normalize_nonzero_hex32(
+                request_value(camel, snake),
+                f"request.{camel}",
+            )
+            if camel == "accountsLtHashProofPublicInputsHash":
+                accounts_lt_hash_proof_public_inputs_hash = normalized_hash
+            elif camel == "openedAccountsLtHashContributionsHash":
+                opened_contributions_hash = normalized_hash
+            elif camel == "openedAccountsLtHashResidualChecksum":
+                residual_checksum = normalized_hash
+    else:
+        role = _normalize_solana_full_light_client_audit_role(
+            request_value("role", "audit_role")
+        )
+        role_code = _normalize_u64(
+            request_value("roleCode", "role_code"),
+            "request.roleCode",
+        )
+        if role_code != role["code"]:
+            raise TypeError("request.roleCode must match request.role")
+        if circuit_id != role["circuit_id"]:
+            raise TypeError("request.circuitId must match request.role")
+        verifier_id = _normalize_non_empty_string(
+            request_value("verifierId", "verifier_id"),
+            "request.verifierId",
+        )
+        if verifier_id != role["verifier_id"]:
+            raise TypeError("request.verifierId must match request.role")
+        _normalize_u64(
+            request_value("finalizedSlot", "finalized_slot"),
+            "request.finalizedSlot",
+        )
+        verifier_hash = _normalize_nonzero_hex32(
+            request_value("verifierHash", "verifier_hash"),
+            "request.verifierHash",
+        )
+        full_light_client_gate_hash = ""
+        audit_statement_hash = ""
+        role_separated_request_hashes = [source_state_verifier_hash]
+        for camel, snake in (
+            ("sourceVerifierMaterialHash", "source_verifier_material_hash"),
+            ("sourceAdapterDeploymentHash", "source_adapter_deployment_hash"),
+            ("fullLightClientGateHash", "full_light_client_gate_hash"),
+            ("finalityContextHash", "finality_context_hash"),
+            ("voteMessageHash", "vote_message_hash"),
+            ("accountsLtHashProofHash", "accounts_lt_hash_proof_hash"),
+            ("auditStatementHash", "audit_statement_hash"),
+        ):
+            normalized_hash = _normalize_nonzero_hex32(
+                request_value(camel, snake),
+                f"request.{camel}",
+            )
+            role_separated_request_hashes.append(normalized_hash)
+            if camel == "fullLightClientGateHash":
+                full_light_client_gate_hash = normalized_hash
+            elif camel == "auditStatementHash":
+                audit_statement_hash = normalized_hash
+        if verifier_hash in role_separated_request_hashes:
+            raise TypeError(
+                "request.verifierHash must be role-separated from Solana full-light audit request hashes"
+            )
+
+    def require_request_bytes(camel: str, snake: str) -> bytes:
+        selected = request_value(camel, snake)
+        if selected is None:
+            raise TypeError(f"request.{camel} is required")
+        request_bytes = _to_bytes(selected, f"request.{camel}")
+        if not request_bytes:
+            raise TypeError(f"request.{camel} must not be empty")
+        return request_bytes
+
+    statement_bytes = require_request_bytes("statementBytes", "statement_bytes")
+    verification_context_bytes = require_request_bytes(
+        "verificationContextBytes", "verification_context_bytes"
+    )
+    require_request_bytes("schemaDescriptor", "schema_descriptor")
+    account_commitment_bytes: Optional[bytes] = None
+    if circuit_id == SCCP_SOLANA_ACCOUNTS_LT_HASH_OPEN_VERIFY_CIRCUIT_ID_V1:
+        account_commitment_bytes = require_request_bytes(
+            "accountCommitmentBytes", "account_commitment_bytes"
+        )
+        expected_accounts_lt_hash_proof_public_inputs_hash = _bytes_to_hex(
+            _prefixed_blake2b(
+                _SCCP_SOLANA_ACCOUNTS_LT_HASH_PROOF_PUBLIC_INPUTS_PREFIX_V1,
+                statement_bytes,
+            )
+        )
+        if (
+            accounts_lt_hash_proof_public_inputs_hash
+            != expected_accounts_lt_hash_proof_public_inputs_hash
+        ):
+            raise TypeError(
+                "request.accountsLtHashProofPublicInputsHash must match request.statementBytes"
+            )
+        expected_dsid = _bytes_to_hex(
+            _prefixed_blake2b(
+                _SCCP_SOLANA_ACCOUNTS_LT_HASH_FASTPQ_DSID_PREFIX_V1,
+                _hex_to_bytes(
+                    accounts_lt_hash_proof_public_inputs_hash,
+                    "request.accountsLtHashProofPublicInputsHash",
+                    32,
+                ),
+            )[:16]
+        )
+        expected_tx_set_hash = accounts_lt_hash_proof_public_inputs_hash
+        expected_transitions = (
+            {
+                "key": _SCCP_SOLANA_ACCOUNTS_LT_HASH_FASTPQ_STATEMENT_KEY_V1.decode(),
+                "operation": "meta_set",
+                "old_value": "0x",
+                "new_value": _bytes_to_hex(statement_bytes),
+            },
+            {
+                "key": _SCCP_SOLANA_ACCOUNTS_LT_HASH_FASTPQ_ACCOUNTS_KEY_V1.decode(),
+                "operation": "meta_set",
+                "old_value": "0x",
+                "new_value": _bytes_to_hex(account_commitment_bytes),
+            },
+            {
+                "key": _SCCP_SOLANA_ACCOUNTS_LT_HASH_FASTPQ_OPENED_CONTRIBUTIONS_KEY_V1.decode(),
+                "operation": "meta_set",
+                "old_value": "0x",
+                "new_value": opened_contributions_hash,
+            },
+            {
+                "key": _SCCP_SOLANA_ACCOUNTS_LT_HASH_FASTPQ_RESIDUAL_KEY_V1.decode(),
+                "operation": "meta_set",
+                "old_value": "0x",
+                "new_value": residual_checksum,
+            },
+            {
+                "key": _SCCP_SOLANA_ACCOUNTS_LT_HASH_FASTPQ_CONTEXT_KEY_V1.decode(),
+                "operation": "meta_set",
+                "old_value": "0x",
+                "new_value": _bytes_to_hex(verification_context_bytes),
+            },
+        )
+    else:
+        expected_audit_statement_hash = _bytes_to_hex(
+            _prefixed_blake2b(
+                _SCCP_SOLANA_FULL_LIGHT_CLIENT_AUDIT_STATEMENT_PREFIX_V1,
+                statement_bytes,
+            )
+        )
+        if audit_statement_hash != expected_audit_statement_hash:
+            raise TypeError("request.auditStatementHash must match request.statementBytes")
+        dsid_preimage = _write_u8(role["code"]) + _hex_to_bytes(
+            audit_statement_hash,
+            "request.auditStatementHash",
+            32,
+        )
+        expected_dsid = _bytes_to_hex(
+            _prefixed_blake2b(
+                _SCCP_SOLANA_FULL_LIGHT_CLIENT_AUDIT_FASTPQ_DSID_PREFIX_V1,
+                dsid_preimage,
+            )[:16]
+        )
+        expected_tx_set_hash = audit_statement_hash
+        expected_transitions = (
+            {
+                "key": _bytes_to_hex(_solana_full_light_client_audit_fastpq_key(
+                    _SCCP_SOLANA_FULL_LIGHT_CLIENT_AUDIT_FASTPQ_STATEMENT_KEY_V1,
+                    role,
+                )),
+                "operation": "meta_set",
+                "old_value": "0x",
+                "new_value": _bytes_to_hex(statement_bytes),
+            },
+            {
+                "key": _bytes_to_hex(_solana_full_light_client_audit_fastpq_key(
+                    _SCCP_SOLANA_FULL_LIGHT_CLIENT_AUDIT_FASTPQ_CONTEXT_KEY_V1,
+                    role,
+                )),
+                "operation": "meta_set",
+                "old_value": "0x",
+                "new_value": _bytes_to_hex(verification_context_bytes),
+            },
+            {
+                "key": _bytes_to_hex(_solana_full_light_client_audit_fastpq_key(
+                    _SCCP_SOLANA_FULL_LIGHT_CLIENT_AUDIT_FASTPQ_GATE_KEY_V1,
+                    role,
+                )),
+                "operation": "meta_set",
+                "old_value": "0x",
+                "new_value": full_light_client_gate_hash,
+            },
+        )
+
+    public_input_columns = request_value("publicInputColumns", "public_input_columns")
+    if (
+        not isinstance(public_input_columns, Sequence)
+        or isinstance(public_input_columns, (str, bytes, bytearray))
+        or len(public_input_columns) == 0
+    ):
+        raise TypeError("request.publicInputColumns is required")
+    _require_solana_source_state_public_input_binding_for_wrapping(
+        public_input_columns,
+        circuit_id,
+        value,
+    )
+
+    fastpq_public_inputs = _require_mapping(
+        request_value("fastpqPublicInputs", "fastpq_public_inputs"),
+        "request.fastpqPublicInputs",
+    )
+    for camel, snake in (
+        ("dsid", "dsid"),
+        ("slot", "slot"),
+        ("oldRoot", "old_root"),
+        ("newRoot", "new_root"),
+        ("permRoot", "perm_root"),
+        ("txSetHash", "tx_set_hash"),
+    ):
+        fastpq_value = nested_value(
+            fastpq_public_inputs,
+            f"request.fastpqPublicInputs.{camel}",
+            camel,
+            snake,
+        )
+        if camel == "dsid":
+            normalized_dsid = _bytes_to_hex(
+                _hex_to_bytes(fastpq_value, "request.fastpqPublicInputs.dsid", 16)
+            )
+            if normalized_dsid != expected_dsid:
+                raise TypeError("request.fastpqPublicInputs.dsid must match request.statementBytes")
+            continue
+        if camel == "txSetHash":
+            normalized_tx_set_hash = _normalize_nonzero_hex32(
+                fastpq_value,
+                "request.fastpqPublicInputs.txSetHash",
+            )
+            if normalized_tx_set_hash != expected_tx_set_hash:
+                raise TypeError("request.fastpqPublicInputs.txSetHash must match request.statementBytes")
+            continue
+        _normalize_non_empty_string(
+            fastpq_value,
+            f"request.fastpqPublicInputs.{camel}",
+        )
+
+    fastpq_transitions = request_value("fastpqTransitions", "fastpq_transitions")
+    if (
+        not isinstance(fastpq_transitions, Sequence)
+        or isinstance(fastpq_transitions, (str, bytes, bytearray))
+        or len(fastpq_transitions) == 0
+    ):
+        raise TypeError("request.fastpqTransitions is required")
+    actual_transitions = _normalize_source_state_fastpq_transitions_for_compare(
+        fastpq_transitions,
+        "request.fastpqTransitions",
+    )
+    if sorted(actual_transitions, key=lambda item: item["key"]) != sorted(
+        expected_transitions,
+        key=lambda item: item["key"],
+    ):
+        raise TypeError(
+            "request.fastpqTransitions must match the canonical Solana source-state request"
+        )
+    return circuit_id
+
+
+def wrap_solana_sccp_source_state_verification_proof(
+    proof_bytes: BytesLike,
+    request: Mapping[str, Any],
+) -> Mapping[str, Any]:
+    """Wrap local OpenVerify/FastPQ proof bytes as a checked Solana proof capsule."""
+
+    circuit_id = _normalize_solana_source_state_proof_request_for_wrapping(request)
+    proof = _to_bytes(proof_bytes, "proofBytes")
+    _require_source_state_proof_bytes(proof)
+    return _immutable_prover_envelope({
+        "version": 1,
+        "proof_family": SCCP_STARK_FRI_PROOF_FAMILY_V1,
+        "circuit_id": circuit_id,
+        "proof_bytes": proof,
+        "proof_base64": base64.b64encode(proof).decode("ascii"),
+    })
+
+
+def _request_source_state_field(
+    request: Mapping[str, Any], camel: str, snake: str
+) -> Any:
+    return _mapping_optional_value(request, camel, snake)
+
+
+def _require_optional_source_state_result_field_matches(
+    result: Mapping[str, Any],
+    request: Mapping[str, Any],
+    camel: str,
+    snake: str,
+    normalizer: Callable[[Any, str], Any],
+) -> None:
+    supplied = _mapping_optional_value_without_aliases(
+        result, f"source-state prover result.{camel}", camel, snake
+    )
+    if supplied is _MISSING:
+        return
+    expected = _request_source_state_field(request, camel, snake)
+    if expected is _MISSING or expected is None:
+        raise TypeError(f"source-state prover result.{camel} is not supported by request")
+    normalized_supplied = normalizer(supplied, f"source-state prover result.{camel}")
+    normalized_expected = normalizer(expected, f"request.{camel}")
+    if (
+        normalizer is _normalize_non_empty_string
+        and isinstance(supplied, str)
+        and supplied != normalized_supplied
+    ):
+        raise TypeError(f"source-state prover result.{camel} must match request.{camel}")
+    if normalized_supplied != normalized_expected:
+        raise TypeError(f"source-state prover result.{camel} must match request.{camel}")
+
+
+def _normalize_source_state_u64_for_compare(value: Any, label: str) -> str:
+    return str(_normalize_u64(value, label))
+
+
+def _normalize_source_state_public_input_columns_for_compare(
+    columns: Any, label: str
+) -> list[list[str]]:
+    if (
+        not isinstance(columns, Sequence)
+        or isinstance(columns, (str, bytes, bytearray, memoryview))
+        or not columns
+    ):
+        raise TypeError(f"{label} must be a non-empty array")
+    normalized: list[list[str]] = []
+    for row_index, row in enumerate(columns):
+        if (
+            not isinstance(row, Sequence)
+            or isinstance(row, (str, bytes, bytearray, memoryview))
+            or not row
+        ):
+            raise TypeError(f"{label}[{row_index}] must be a non-empty array")
+        normalized.append([
+            _normalize_non_empty_string(value, f"{label}[{row_index}][{column_index}]")
+            for column_index, value in enumerate(row)
+        ])
+    return normalized
+
+
+def _normalize_source_state_fastpq_public_inputs_for_compare(
+    input_value: Any, label: str
+) -> Dict[str, str]:
+    value = _require_mapping(input_value, label)
+
+    def field(camel: str, snake: str) -> Any:
+        return _mapping_value_without_aliases(
+            value, f"{label}.{camel}", *dict.fromkeys((camel, snake))
+        )
+
+    return {
+        "dsid": _bytes_to_hex(
+            _hex_to_bytes(field("dsid", "dsid"), f"{label}.dsid", 16)
+        ),
+        "slot": _normalize_source_state_u64_for_compare(
+            field("slot", "slot"), f"{label}.slot"
+        ),
+        "old_root": _normalize_hex32(
+            field("oldRoot", "old_root"), f"{label}.oldRoot"
+        ),
+        "new_root": _normalize_hex32(
+            field("newRoot", "new_root"), f"{label}.newRoot"
+        ),
+        "perm_root": _normalize_hex32(
+            field("permRoot", "perm_root"), f"{label}.permRoot"
+        ),
+        "tx_set_hash": _normalize_hex32(
+            field("txSetHash", "tx_set_hash"), f"{label}.txSetHash"
+        ),
+    }
+
+
+def _normalize_source_state_exact_string_for_compare(value: Any, label: str) -> str:
+    normalized = _normalize_non_empty_string(value, label)
+    if isinstance(value, str) and value != normalized:
+        raise TypeError(f"{label} must match request")
+    return normalized
+
+
+def _normalize_source_state_fastpq_transition_key_for_compare(
+    value: Any, label: str
+) -> str:
+    normalized = _normalize_source_state_exact_string_for_compare(value, label)
+    if normalized.lower().startswith("0x"):
+        return _bytes_to_hex(_hex_to_bytes(normalized, label))
+    return normalized
+
+
+def _normalize_source_state_fastpq_transition_bytes_for_compare(
+    value: Any, label: str
+) -> bytes:
+    if isinstance(value, str):
+        if value != value.strip():
+            raise TypeError(f"{label} must be canonical hex")
+        if value.lower() == "0x":
+            return b""
+    return _to_bytes(value, label)
+
+
+def _normalize_source_state_fastpq_transitions_for_compare(
+    input_value: Any, label: str
+) -> list[Dict[str, str]]:
+    if (
+        not isinstance(input_value, Sequence)
+        or isinstance(input_value, (str, bytes, bytearray, memoryview))
+        or not input_value
+    ):
+        raise TypeError(f"{label} must be a non-empty array")
+    normalized: list[Dict[str, str]] = []
+    for index, transition_input in enumerate(input_value):
+        transition = _require_mapping(transition_input, f"{label}[{index}]")
+
+        def field(camel: str, snake: str) -> Any:
+            return _mapping_value_without_aliases(
+                transition,
+                f"{label}[{index}].{camel}",
+                *dict.fromkeys((camel, snake)),
+            )
+
+        normalized.append(
+            {
+                "key": _normalize_source_state_fastpq_transition_key_for_compare(
+                    field("key", "key"), f"{label}[{index}].key"
+                ),
+                "operation": _normalize_source_state_exact_string_for_compare(
+                    field("operation", "operation"), f"{label}[{index}].operation"
+                ),
+                "old_value": _bytes_to_hex(
+                    _normalize_source_state_fastpq_transition_bytes_for_compare(
+                        field("oldValue", "old_value"),
+                        f"{label}[{index}].oldValue",
+                    )
+                ),
+                "new_value": _bytes_to_hex(
+                    _normalize_source_state_fastpq_transition_bytes_for_compare(
+                        field("newValue", "new_value"),
+                        f"{label}[{index}].newValue",
+                    )
+                ),
+            }
+        )
+    return normalized
+
+
+def _source_state_exact_structured_equal(supplied: Any, expected: Any) -> bool:
+    if isinstance(expected, Mapping):
+        if not isinstance(supplied, Mapping):
+            return False
+        if set(supplied.keys()) != set(expected.keys()):
+            return False
+        return all(
+            _source_state_exact_structured_equal(supplied[key], expected[key])
+            for key in expected
+        )
+    if isinstance(expected, Sequence) and not isinstance(
+        expected, (str, bytes, bytearray, memoryview)
+    ):
+        if not isinstance(supplied, Sequence) or isinstance(
+            supplied, (str, bytes, bytearray, memoryview)
+        ):
+            return False
+        if len(supplied) != len(expected):
+            return False
+        return all(
+            _source_state_exact_structured_equal(left, right)
+            for left, right in zip(supplied, expected)
+        )
+    return type(supplied) is type(expected) and supplied == expected
+
+
+def _require_optional_source_state_result_structured_field_matches(
+    result: Mapping[str, Any],
+    request: Mapping[str, Any],
+    camel: str,
+    snake: str,
+    normalizer: Callable[[Any, str], Any],
+) -> None:
+    supplied = _mapping_optional_value_without_aliases(
+        result, f"source-state prover result.{camel}", camel, snake
+    )
+    if supplied is _MISSING:
+        return
+    expected = _request_source_state_field(request, camel, snake)
+    if expected is _MISSING or expected is None:
+        raise TypeError(f"source-state prover result.{camel} is not supported by request")
+    normalized_supplied = normalizer(supplied, f"source-state prover result.{camel}")
+    normalized_expected = normalizer(expected, f"request.{camel}")
+    if normalizer is _normalize_source_state_public_input_columns_for_compare:
+        matches = _source_state_exact_structured_equal(supplied, expected)
+    else:
+        matches = _source_state_exact_structured_equal(
+            normalized_supplied, normalized_expected
+        )
+    if not matches:
+        raise TypeError(f"source-state prover result.{camel} must match request.{camel}")
+
+
+def _require_optional_source_state_result_bytes_field_matches(
+    result: Mapping[str, Any],
+    request: Mapping[str, Any],
+    camel: str,
+    snake: str,
+) -> None:
+    supplied = _mapping_optional_value_without_aliases(
+        result, f"source-state prover result.{camel}", camel, snake
+    )
+    if supplied is _MISSING:
+        return
+    expected = _request_source_state_field(request, camel, snake)
+    if expected is _MISSING or expected is None:
+        raise TypeError(f"source-state prover result.{camel} is not supported by request")
+    if _to_bytes(supplied, f"source-state prover result.{camel}") != _to_bytes(
+        expected, f"request.{camel}"
+    ):
+        raise TypeError(f"source-state prover result.{camel} must match request.{camel}")
+
+
+def _normalize_source_state_audit_role_for_compare(
+    role: Any, request: Mapping[str, Any]
+) -> str:
+    source_domain_input = _request_source_state_field(
+        request, "sourceDomain", "source_domain"
+    )
+    if source_domain_input is not _MISSING and source_domain_input is not None:
+        source_domain = _normalize_u32(source_domain_input, "request.sourceDomain")
+        if source_domain == SCCP_DOMAIN_SOL:
+            return str(_normalize_solana_full_light_client_audit_role(role)["name"])
+        if source_domain == SCCP_DOMAIN_TON:
+            return str(_normalize_ton_full_light_client_audit_role(role)["name"])
+    return _normalize_non_empty_string(role, "source-state prover result.role")
+
+
+def _require_optional_source_state_result_metadata_matches(
+    result: Mapping[str, Any], request: Mapping[str, Any]
+) -> None:
+    _require_optional_source_state_result_field_matches(
+        result, request, "parameterSet", "parameter_set", _normalize_non_empty_string
+    )
+    _require_optional_source_state_result_field_matches(
+        result, request, "sourceDomain", "source_domain", _normalize_u32
+    )
+    _require_optional_source_state_result_field_matches(
+        result,
+        request,
+        "finalizedSlot",
+        "finalized_slot",
+        _normalize_source_state_u64_for_compare,
+    )
+    _require_optional_source_state_result_field_matches(
+        result,
+        request,
+        "masterchainSeqno",
+        "masterchain_seqno",
+        _normalize_source_state_u64_for_compare,
+    )
+    _require_optional_source_state_result_field_matches(
+        result,
+        request,
+        "shardSeqno",
+        "shard_seqno",
+        _normalize_source_state_u64_for_compare,
+    )
+    _require_optional_source_state_result_field_matches(
+        result,
+        request,
+        "sourceStateVerifierId",
+        "source_state_verifier_id",
+        _normalize_non_empty_string,
+    )
+    _require_optional_source_state_result_field_matches(
+        result,
+        request,
+        "sourceStateVerifierHash",
+        "source_state_verifier_hash",
+        _normalize_hex32,
+    )
+    _require_optional_source_state_result_field_matches(
+        result,
+        request,
+        "accountsLtHashProofPublicInputsHash",
+        "accounts_lt_hash_proof_public_inputs_hash",
+        _normalize_hex32,
+    )
+    _require_optional_source_state_result_field_matches(
+        result,
+        request,
+        "openedAccountsLtHashContributionsHash",
+        "opened_accounts_lt_hash_contributions_hash",
+        _normalize_hex32,
+    )
+    _require_optional_source_state_result_field_matches(
+        result,
+        request,
+        "openedAccountsLtHashResidualChecksum",
+        "opened_accounts_lt_hash_residual_checksum",
+        _normalize_hex32,
+    )
+    supplied_role = _mapping_optional_value_without_aliases(
+        result, "source-state prover result.role", "role", "audit_role"
+    )
+    if supplied_role is not _MISSING:
+        expected_role = _request_source_state_field(request, "role", "audit_role")
+        if expected_role is _MISSING or expected_role is None:
+            raise TypeError("source-state prover result.role is not supported by request")
+        normalized_supplied_role = _normalize_source_state_audit_role_for_compare(
+            supplied_role, request
+        )
+        normalized_expected_role = _normalize_source_state_audit_role_for_compare(
+            expected_role, request
+        )
+        if (
+            not isinstance(supplied_role, str)
+            or not supplied_role
+            or supplied_role != supplied_role.strip()
+            or normalized_supplied_role != normalized_expected_role
+        ):
+            raise TypeError("source-state prover result.role must match request.role")
+    _require_optional_source_state_result_field_matches(
+        result, request, "roleCode", "role_code", _normalize_source_state_u64_for_compare
+    )
+    _require_optional_source_state_result_field_matches(
+        result, request, "verifierId", "verifier_id", _normalize_non_empty_string
+    )
+    _require_optional_source_state_result_field_matches(
+        result, request, "verifierHash", "verifier_hash", _normalize_hex32
+    )
+    for camel, snake in (
+        ("sourceVerifierMaterialHash", "source_verifier_material_hash"),
+        ("sourceAdapterDeploymentHash", "source_adapter_deployment_hash"),
+        ("fullLightClientGateHash", "full_light_client_gate_hash"),
+        ("finalityContextHash", "finality_context_hash"),
+        ("voteMessageHash", "vote_message_hash"),
+        ("accountsLtHashProofHash", "accounts_lt_hash_proof_hash"),
+        ("shardStateProofPublicInputsHash", "shard_state_proof_public_inputs_hash"),
+        ("shardStateVerificationProofHash", "shard_state_verification_proof_hash"),
+        ("auditStatementHash", "audit_statement_hash"),
+    ):
+        _require_optional_source_state_result_field_matches(
+            result, request, camel, snake, _normalize_hex32
+        )
+    _require_optional_source_state_result_structured_field_matches(
+        result,
+        request,
+        "publicInputColumns",
+        "public_input_columns",
+        _normalize_source_state_public_input_columns_for_compare,
+    )
+    _require_optional_source_state_result_structured_field_matches(
+        result,
+        request,
+        "fastpqPublicInputs",
+        "fastpq_public_inputs",
+        _normalize_source_state_fastpq_public_inputs_for_compare,
+    )
+    _require_optional_source_state_result_structured_field_matches(
+        result,
+        request,
+        "fastpqTransitions",
+        "fastpq_transitions",
+        _normalize_source_state_fastpq_transitions_for_compare,
+    )
+    for camel, snake in (
+        ("statementBytes", "statement_bytes"),
+        ("accountCommitmentBytes", "account_commitment_bytes"),
+        ("witnessCommitmentBytes", "witness_commitment_bytes"),
+        ("verificationContextBytes", "verification_context_bytes"),
+        ("schemaDescriptor", "schema_descriptor"),
+    ):
+        _require_optional_source_state_result_bytes_field_matches(
+            result, request, camel, snake
+        )
+
+
+def _source_state_proof_bytes_from_result(
+    result: Any, request: Mapping[str, Any]
+) -> BytesLike:
+    if isinstance(result, Mapping):
+        value = _mapping_value_without_aliases(
+            result,
+            "source-state prover result.proofBytes",
+            "proofBytes",
+            "proof_bytes",
+            "proof",
+        )
+        proof = _to_bytes(value, "proofBytes")
+        if len(proof) > SCCP_SOURCE_STATE_MAX_PROOF_BYTES:
+            raise TypeError(
+                f"proofBytes must be at most {SCCP_SOURCE_STATE_MAX_PROOF_BYTES} bytes"
+            )
+        version = _mapping_optional_value_without_aliases(
+            result,
+            "source-state prover result.version",
+            "version",
+            "proofVersion",
+            "proof_version",
+        )
+        if version is not _MISSING:
+            _normalize_v1_version(
+                version,
+                "source-state prover result.version",
+                error_cls=TypeError,
+            )
+        proof_family = _mapping_optional_value_without_aliases(
+            result,
+            "source-state prover result.proofFamily",
+            "proofFamily",
+            "proof_family",
+        )
+        if proof_family is not _MISSING and (
+            not isinstance(proof_family, str)
+            or not proof_family
+            or proof_family != SCCP_STARK_FRI_PROOF_FAMILY_V1
+        ):
+            raise TypeError(
+                "source-state prover result.proofFamily must be stark-fri-v1"
+            )
+        circuit_id = _mapping_optional_value_without_aliases(
+            result,
+            "source-state prover result.circuitId",
+            "circuitId",
+            "circuit_id",
+        )
+        request_circuit_id = _mapping_value(request, "circuitId", "circuit_id")
+        if circuit_id is not _MISSING and (
+            not isinstance(circuit_id, str)
+            or not circuit_id
+            or circuit_id != request_circuit_id
+        ):
+            raise TypeError(
+                "source-state prover result.circuitId must match request.circuitId"
+            )
+        proof_base64 = _mapping_optional_value_without_aliases(
+            result,
+            "source-state prover result.proofBase64",
+            "proofBase64",
+            "proof_base64",
+        )
+        if proof_base64 is not _MISSING and (
+            not isinstance(proof_base64, str)
+            or not proof_base64
+            or proof_base64 != base64.b64encode(proof).decode("ascii")
+        ):
+            raise TypeError(
+                "source-state prover result.proofBase64 must match proofBytes"
+            )
+        _require_optional_source_state_result_metadata_matches(result, request)
+        return proof
+    else:
+        value = result
+    return _to_bytes(value, "proofBytes")
+
+
+def _normalize_solana_audit_material_and_deployment(
+    input_value: Mapping[str, Any],
+) -> Dict[str, Any]:
+    material_input_value = _mapping_optional_value_without_aliases(
+        input_value,
+        "sourceVerifierMaterial",
+        "sourceVerifierMaterial",
+        "source_verifier_material",
+    )
+    deployment_input_value = _mapping_optional_value_without_aliases(
+        input_value,
+        "sourceAdapterDeployment",
+        "sourceAdapterDeployment",
+        "source_adapter_deployment",
+    )
+    material_input = (
+        input_value
+        if material_input_value is _MISSING or material_input_value is None
+        else material_input_value
+    )
+    deployment_input = (
+        input_value
+        if deployment_input_value is _MISSING or deployment_input_value is None
+        else deployment_input_value
+    )
+    material = normalize_sccp_source_verifier_material(material_input)
+    deployment = normalize_sccp_source_adapter_engine_deployment(deployment_input)
+    if (
+        material["source_domain"] != SCCP_DOMAIN_SOL
+        or deployment["source_domain"] != SCCP_DOMAIN_SOL
+        or deployment["target_domain"] != SCCP_DOMAIN_SORA
+    ):
+        raise TypeError("Solana full-light-client audit requests require a Solana -> SORA deployment")
+    for field in (
+        "source_domain",
+        "source_chain",
+        "source_proof_plan",
+        "finality_model",
+        "adapter_circuit_id",
+        "source_trust_anchor_id",
+        "source_trust_anchor_hash",
+        "consensus_verifier_id",
+        "consensus_verifier_hash",
+        "message_inclusion_verifier_id",
+        "message_inclusion_verifier_hash",
+        "finality_policy_id",
+        "finality_policy_hash",
+        "source_state_verifier_id",
+        "source_state_verifier_hash",
+        "source_bridge_emitter_id",
+        "source_bridge_emitter_address",
+        "source_bridge_emitter_code_hash",
+        "source_bridge_network_id",
+        "source_bridge_owner_address",
+        "source_bridge_config_hash",
+    ):
+        if deployment[field] != material[field]:
+            raise TypeError("sourceAdapterDeployment must match sourceVerifierMaterial")
+    audit_roles = (
+        _SOLANA_FULL_LIGHT_CLIENT_AUDIT_ROLES["tower_replay"],
+        _SOLANA_FULL_LIGHT_CLIENT_AUDIT_ROLES["full_accountsdb_lattice"],
+        _SOLANA_FULL_LIGHT_CLIENT_AUDIT_ROLES["bank_fork_choice"],
+    )
+    audit_hashes = (
+        _solana_audit_role_verifier_hash(deployment, audit_roles[0]),
+        _solana_audit_role_verifier_hash(deployment, audit_roles[1]),
+        _solana_audit_role_verifier_hash(deployment, audit_roles[2]),
+    )
+    _require_solana_full_light_client_audit_role_separation(deployment, audit_hashes)
+    return {
+        "material": material,
+        "deployment": deployment,
+        "gate_hash": _solana_full_light_client_gate_hash_for_material_and_deployment(
+            material,
+            deployment,
+        ),
+    }
+
+
+def _solana_full_light_client_gate_hash_for_material_and_deployment(
+    material: Mapping[str, Any],
+    deployment: Mapping[str, Any],
+) -> str:
+    audit_roles = (
+        _SOLANA_FULL_LIGHT_CLIENT_AUDIT_ROLES["tower_replay"],
+        _SOLANA_FULL_LIGHT_CLIENT_AUDIT_ROLES["full_accountsdb_lattice"],
+        _SOLANA_FULL_LIGHT_CLIENT_AUDIT_ROLES["bank_fork_choice"],
+    )
+    audit_hashes = (
+        _solana_audit_role_verifier_hash(deployment, audit_roles[0]),
+        _solana_audit_role_verifier_hash(deployment, audit_roles[1]),
+        _solana_audit_role_verifier_hash(deployment, audit_roles[2]),
+    )
+    _require_solana_full_light_client_audit_role_separation(deployment, audit_hashes)
+    out = bytearray()
+    out.extend(_write_u8(1))
+    out.extend(_write_u32_le(material["source_domain"]))
+    out.extend(_write_u32_le(deployment["target_domain"]))
+    out.extend(_write_string(material["source_chain"], "sourceChain"))
+    out.extend(_write_u8(material["source_proof_plan"]))
+    out.extend(_write_u8(material["finality_model"]))
+    out.extend(_write_string(SCCP_SOLANA_MAINNET_GENESIS_HASH, "solanaMainnetGenesisHash"))
+    out.extend(_hex_to_bytes(sccp_source_verifier_material_hash(material), "sourceVerifierMaterialHash", 32))
+    out.extend(_hex_to_bytes(sccp_source_adapter_engine_deployment_hash(deployment), "sourceAdapterDeploymentHash", 32))
+    for role, verifier_hash in zip(audit_roles, audit_hashes):
+        out.extend(_write_string(role["verifier_id"], "solanaAuditVerifierId"))
+        out.extend(_hex_to_bytes(verifier_hash, "solanaAuditVerifierHash", 32))
+    return _bytes_to_hex(
+        _prefixed_blake2b(_SCCP_SOLANA_FULL_LIGHT_CLIENT_GATE_PREFIX_V1, bytes(out))
+    )
+
+
+def _normalize_solana_finality_context_for_audit(
+    input_value: Mapping[str, Any],
+    witness: Mapping[str, Any],
+) -> Dict[str, Any]:
+    def context_optional(label: str, *keys: str) -> Any:
+        return _mapping_optional_value_without_aliases(
+            input_value,
+            label,
+            *dict.fromkeys(keys),
+        )
+
+    def context_value(label: str, *keys: str) -> Any:
+        selected = context_optional(label, *keys)
+        return None if selected is _MISSING else selected
+
+    def context_optional_value(label: str, *keys: str) -> Any:
+        selected = context_optional(label, *keys)
+        return None if selected is _MISSING or selected is None else selected
+
+    finalized_slot = _normalize_u64(witness["finalized_slot"], "finalizedSlot")
+    epoch_value = context_optional_value("epoch", "epoch", "validatorEpoch", "validator_epoch")
+    epoch = (
+        solana_sccp_mainnet_epoch_for_slot(finalized_slot)
+        if epoch_value is None
+        else _normalize_u64(epoch_value, "epoch")
+    )
+    if epoch != solana_sccp_mainnet_epoch_for_slot(finalized_slot):
+        raise ValueError("epoch must match Solana mainnet finalizedSlot")
+    rooted_slot = _normalize_u64(
+        context_value("rootedSlot", "rootedSlot", "rooted_slot"),
+        "rootedSlot",
+    )
+    tower_vote_slots_raw = context_value(
+        "towerVoteSlots",
+        "towerVoteSlots",
+        "tower_vote_slots",
+        "voteSlots",
+        "vote_slots",
+    )
+    if not isinstance(tower_vote_slots_raw, Sequence) or isinstance(
+        tower_vote_slots_raw,
+        (str, bytes, bytearray),
+    ):
+        raise TypeError("towerVoteSlots must be a sequence")
+    tower_vote_slots = [
+        _normalize_u64(slot, f"towerVoteSlots[{index}]")
+        for index, slot in enumerate(tower_vote_slots_raw)
+    ]
+    parent_slot = _normalize_u64(witness["parent_slot"], "parentSlot")
+    bank_hash_hard_fork_data = _optional_bytes(
+        witness["bank_hash_hard_fork_data"],
+        "bankHashHardForkData",
+    )
+    base = {
+        "source_domain": SCCP_DOMAIN_SOL,
+        "finalized_slot": finalized_slot,
+        "epoch": epoch,
+        "rooted_slot": rooted_slot,
+        "parent_slot": parent_slot,
+        "tower_vote_slots": tower_vote_slots,
+        "parent_bank_hash": witness["parent_bank_hash"],
+        "bank_signature_count": _normalize_u64(
+            witness["bank_signature_count"],
+            "bankSignatureCount",
+        ),
+        "bank_hash_hard_fork_data": bank_hash_hard_fork_data,
+        "blockhash": witness["blockhash"],
+        "bank_hash": witness["bank_hash"],
+        "transaction_status_root": witness["transaction_status_root"],
+        "account_inclusion_root": witness["account_inclusion_root"],
+        "accounts_lt_hash_checksum": witness["accounts_lt_hash_checksum"],
+        "accounts_lt_hash_proof_public_inputs_hash": witness[
+            "accounts_lt_hash_proof_public_inputs_hash"
+        ],
+    }
+    tower_lockout_hash = solana_sccp_tower_lockout_hash(base)
+    bank_fork_hash = solana_sccp_bank_fork_hash(
+        {
+            **base,
+            "accounts_lt_hash": witness.get("accounts_lt_hash"),
+        }
+    )
+    tower_replay_hash = solana_sccp_tower_replay_hash(
+        {**base, "bank_fork_hash": bank_fork_hash}
+    )
+    context = {
+        "version": 1,
+        **base,
+        "epoch_stake_root": _normalize_nonzero_hex32(
+            context_value("epochStakeRoot", "epochStakeRoot", "epoch_stake_root"),
+            "epochStakeRoot",
+        ),
+        "stake_activation_hash": _normalize_nonzero_hex32(
+            context_value("stakeActivationHash", "stakeActivationHash", "stake_activation_hash"),
+            "stakeActivationHash",
+        ),
+        "stake_account_state_hash": _normalize_nonzero_hex32(
+            context_value("stakeAccountStateHash", "stakeAccountStateHash", "stake_account_state_hash"),
+            "stakeAccountStateHash",
+        ),
+        "stake_history_hash": _normalize_nonzero_hex32(
+            context_value("stakeHistoryHash", "stakeHistoryHash", "stake_history_hash"),
+            "stakeHistoryHash",
+        ),
+        "stake_history_sysvar_account_hash": _normalize_nonzero_hex32(
+            context_value(
+                "stakeHistorySysvarAccountHash",
+                "stakeHistorySysvarAccountHash",
+                "stake_history_sysvar_account_hash",
+            ),
+            "stakeHistorySysvarAccountHash",
+        ),
+        "tower_lockout_hash": tower_lockout_hash,
+        "tower_replay_hash": tower_replay_hash,
+        "bank_fork_hash": bank_fork_hash,
+    }
+    supplied_tower_lockout_hash = context_optional_value(
+        "towerLockoutHash",
+        "towerLockoutHash",
+        "tower_lockout_hash",
+    )
+    if supplied_tower_lockout_hash is not None and _normalize_hex32(supplied_tower_lockout_hash, "towerLockoutHash") != tower_lockout_hash:
+        raise TypeError("towerLockoutHash must match finality context fields")
+    supplied_bank_fork_hash = context_optional_value(
+        "bankForkHash",
+        "bankForkHash",
+        "bank_fork_hash",
+    )
+    if supplied_bank_fork_hash is not None and _normalize_hex32(supplied_bank_fork_hash, "bankForkHash") != bank_fork_hash:
+        raise TypeError("bankForkHash must match finality context fields")
+    supplied_tower_replay_hash = context_optional_value(
+        "towerReplayHash",
+        "towerReplayHash",
+        "tower_replay_hash",
+    )
+    if supplied_tower_replay_hash is not None and _normalize_hex32(supplied_tower_replay_hash, "towerReplayHash") != tower_replay_hash:
+        raise TypeError("towerReplayHash must match finality context fields")
+    for field, derive in (
+        ("epoch_stake_root", solana_sccp_epoch_stake_root),
+        ("stake_activation_hash", solana_sccp_stake_activation_hash),
+        ("stake_account_state_hash", solana_sccp_stake_account_state_hash),
+        ("stake_history_hash", solana_sccp_stake_history_hash),
+    ):
+        try:
+            expected = derive({**input_value, "epoch": epoch})
+            if context[field] != expected:
+                raise TypeError(f"{field} must match finality context fields")
+        except Exception:
+            if (
+                context_optional_value(
+                    "validatorPublicKeys",
+                    "validatorPublicKeys",
+                    "validator_public_keys",
+                )
+                is not None
+            ):
+                raise
+    return context
+
+
+def canonical_solana_sccp_finality_context_bytes(input_value: Any) -> bytes:
+    """Return canonical bytes for the Solana finality-context transcript."""
+
+    value = _require_mapping(input_value, "Solana finality context")
+
+    def direct_optional(label: str, *keys: str) -> Any:
+        return _mapping_optional_value_without_aliases(
+            value,
+            label,
+            *dict.fromkeys(keys),
+        )
+
+    def direct_value(label: str, *keys: str) -> Any:
+        selected = direct_optional(label, *keys)
+        return None if selected is _MISSING else selected
+
+    direct_parent_bank_hash = (
+        direct_optional("parentBankHash", "parentBankHash", "parent_bank_hash")
+        if value.get("version") == 1
+        else _MISSING
+    )
+    if (
+        value.get("version") == 1
+        and direct_parent_bank_hash is not _MISSING
+        and direct_parent_bank_hash is not None
+    ):
+        tower_vote_slots_raw = direct_value(
+            "towerVoteSlots",
+            "towerVoteSlots",
+            "tower_vote_slots",
+        )
+        if not isinstance(tower_vote_slots_raw, Sequence) or isinstance(
+            tower_vote_slots_raw,
+            (str, bytes, bytearray),
+        ):
+            raise TypeError("towerVoteSlots must be a sequence")
+        bank_hash_hard_fork_data = direct_optional(
+            "bankHashHardForkData",
+            "bankHashHardForkData",
+            "bank_hash_hard_fork_data",
+        )
+        context = {
+            "version": 1,
+            "epoch": _normalize_u64(direct_value("epoch", "epoch"), "epoch"),
+            "rooted_slot": _normalize_u64(direct_value("rootedSlot", "rootedSlot", "rooted_slot"), "rootedSlot"),
+            "parent_slot": _normalize_u64(direct_value("parentSlot", "parentSlot", "parent_slot"), "parentSlot"),
+            "tower_vote_slots": [
+                _normalize_u64(slot, f"towerVoteSlots[{index}]")
+                for index, slot in enumerate(tower_vote_slots_raw)
+            ],
+            "parent_bank_hash": _normalize_nonzero_hex32(direct_parent_bank_hash, "parentBankHash"),
+            "bank_signature_count": _normalize_u64(direct_value("bankSignatureCount", "bankSignatureCount", "bank_signature_count"), "bankSignatureCount"),
+            "bank_hash_hard_fork_data": b"" if bank_hash_hard_fork_data is _MISSING else _optional_bytes(bank_hash_hard_fork_data, "bankHashHardForkData"),
+            "epoch_stake_root": _normalize_nonzero_hex32(direct_value("epochStakeRoot", "epochStakeRoot", "epoch_stake_root"), "epochStakeRoot"),
+            "stake_activation_hash": _normalize_nonzero_hex32(direct_value("stakeActivationHash", "stakeActivationHash", "stake_activation_hash"), "stakeActivationHash"),
+            "stake_account_state_hash": _normalize_nonzero_hex32(direct_value("stakeAccountStateHash", "stakeAccountStateHash", "stake_account_state_hash"), "stakeAccountStateHash"),
+            "stake_history_hash": _normalize_nonzero_hex32(direct_value("stakeHistoryHash", "stakeHistoryHash", "stake_history_hash"), "stakeHistoryHash"),
+            "stake_history_sysvar_account_hash": _normalize_nonzero_hex32(direct_value("stakeHistorySysvarAccountHash", "stakeHistorySysvarAccountHash", "stake_history_sysvar_account_hash"), "stakeHistorySysvarAccountHash"),
+            "account_inclusion_root": _normalize_nonzero_hex32(direct_value("accountInclusionRoot", "accountInclusionRoot", "account_inclusion_root"), "accountInclusionRoot"),
+            "accounts_lt_hash_checksum": _normalize_nonzero_hex32(direct_value("accountsLtHashChecksum", "accountsLtHashChecksum", "accounts_lt_hash_checksum"), "accountsLtHashChecksum"),
+            "accounts_lt_hash_proof_public_inputs_hash": _normalize_nonzero_hex32(direct_value("accountsLtHashProofPublicInputsHash", "accountsLtHashProofPublicInputsHash", "accounts_lt_hash_proof_public_inputs_hash"), "accountsLtHashProofPublicInputsHash"),
+            "tower_lockout_hash": _normalize_nonzero_hex32(direct_value("towerLockoutHash", "towerLockoutHash", "tower_lockout_hash"), "towerLockoutHash"),
+            "tower_replay_hash": _normalize_nonzero_hex32(direct_value("towerReplayHash", "towerReplayHash", "tower_replay_hash"), "towerReplayHash"),
+            "bank_fork_hash": _normalize_nonzero_hex32(direct_value("bankForkHash", "bankForkHash", "bank_fork_hash"), "bankForkHash"),
+        }
+    else:
+        context = _normalize_solana_finality_context_for_audit(
+            value,
+            normalize_solana_sccp_witness(value),
+        )
+    out = bytearray()
+    out.extend(_write_u8(context["version"]))
+    out.extend(_write_u64_le(context["epoch"]))
+    out.extend(_write_u64_le(context["rooted_slot"]))
+    out.extend(_write_u64_le(context["parent_slot"]))
+    out.extend(_write_u32_le(len(context["tower_vote_slots"])))
+    for slot in context["tower_vote_slots"]:
+        out.extend(_write_u64_le(slot))
+    out.extend(_hex_to_bytes(context["parent_bank_hash"], "parentBankHash", 32))
+    out.extend(_write_u64_le(context["bank_signature_count"]))
+    out.extend(_write_bytes(context["bank_hash_hard_fork_data"]))
+    out.extend(_hex_to_bytes(context["epoch_stake_root"], "epochStakeRoot", 32))
+    out.extend(_hex_to_bytes(context["stake_activation_hash"], "stakeActivationHash", 32))
+    out.extend(_hex_to_bytes(context["stake_account_state_hash"], "stakeAccountStateHash", 32))
+    out.extend(_hex_to_bytes(context["stake_history_hash"], "stakeHistoryHash", 32))
+    out.extend(_hex_to_bytes(context["stake_history_sysvar_account_hash"], "stakeHistorySysvarAccountHash", 32))
+    out.extend(_hex_to_bytes(context["account_inclusion_root"], "accountInclusionRoot", 32))
+    out.extend(_hex_to_bytes(context["accounts_lt_hash_checksum"], "accountsLtHashChecksum", 32))
+    out.extend(_hex_to_bytes(context["accounts_lt_hash_proof_public_inputs_hash"], "accountsLtHashProofPublicInputsHash", 32))
+    out.extend(_hex_to_bytes(context["tower_lockout_hash"], "towerLockoutHash", 32))
+    out.extend(_hex_to_bytes(context["tower_replay_hash"], "towerReplayHash", 32))
+    out.extend(_hex_to_bytes(context["bank_fork_hash"], "bankForkHash", 32))
+    return bytes(out)
+
+
+def solana_sccp_finality_context_hash(input_value: Any) -> str:
+    """Hash the Solana SCCP finality context exactly as Rust admission does."""
+
+    return _bytes_to_hex(
+        _prefixed_blake2b(
+            _SCCP_SOLANA_FINALITY_CONTEXT_PREFIX_V1,
+            canonical_solana_sccp_finality_context_bytes(input_value),
+        )
+    )
+
+
+def canonical_solana_sccp_vote_message_bytes(input_value: Any) -> bytes:
+    """Return canonical Solana finalized-vote message bytes."""
+
+    value = _require_mapping(input_value, "Solana vote message")
+
+    def vote_optional(label: str, *keys: str) -> Any:
+        return _mapping_optional_value_without_aliases(
+            value,
+            label,
+            *dict.fromkeys(keys),
+        )
+
+    def vote_value(label: str, *keys: str) -> Any:
+        selected = vote_optional(label, *keys)
+        return None if selected is _MISSING else selected
+
+    source_domain_input = vote_optional(
+        "sourceDomain",
+        "sourceDomain",
+        "source_domain",
+    )
+    return b"".join(
+        (
+            _write_u8(1),
+            _write_u32_le(
+                _normalize_u32(
+                    SCCP_DOMAIN_SOL if source_domain_input is _MISSING else source_domain_input,
+                    "sourceDomain",
+                )
+            ),
+            _write_u64_le(
+                _normalize_u64(
+                    vote_value("finalizedSlot", "finalizedSlot", "finalized_slot"),
+                    "finalizedSlot",
+                )
+            ),
+            _hex_to_bytes(vote_value("blockhash", "blockhash"), "blockhash", 32),
+            _hex_to_bytes(vote_value("bankHash", "bankHash", "bank_hash"), "bankHash", 32),
+            _hex_to_bytes(
+                vote_value(
+                    "transactionStatusRoot",
+                    "transactionStatusRoot",
+                    "transaction_status_root",
+                ),
+                "transactionStatusRoot",
+                32,
+            ),
+            _hex_to_bytes(
+                vote_value("messageProofHash", "messageProofHash", "message_proof_hash"),
+                "messageProofHash",
+                32,
+            ),
+            _hex_to_bytes(
+                vote_value(
+                    "finalityContextHash",
+                    "finalityContextHash",
+                    "finality_context_hash",
+                ),
+                "finalityContextHash",
+                32,
+            ),
+        )
+    )
+
+
+def solana_sccp_vote_message_hash(input_value: Any) -> str:
+    """Hash the Solana finalized-vote message for UI proof generation."""
+
+    return _bytes_to_hex(
+        _prefixed_blake2b(
+            _SCCP_SOLANA_VOTE_MESSAGE_PREFIX_V1,
+            canonical_solana_sccp_vote_message_bytes(input_value),
+        )
+    )
+
+
+def _solana_audit_opened_hash(
+    input_value: Mapping[str, Any],
+    witness: Mapping[str, Any],
+    camel_key: str,
+    snake_key: str,
+    derive: Callable[[Any], str],
+    label: str,
+) -> str:
+    supplied_input = _mapping_optional_value_without_aliases(
+        input_value,
+        label,
+        camel_key,
+        snake_key,
+    )
+    supplied = (
+        None
+        if supplied_input is _MISSING or supplied_input is None
+        else supplied_input
+    )
+    has_opened_inputs = any(
+        key in input_value and input_value[key] is not None
+        for key in (
+            "accountsLtHash",
+            "accounts_lt_hash",
+            "validatorVoteAccountOpenings",
+            "validator_vote_account_openings",
+            "validatorStakeAccountOpenings",
+            "validator_stake_account_openings",
+            "stakeHistorySysvarOpening",
+            "stake_history_sysvar_opening",
+        )
+    )
+    try:
+        expected = derive(
+            _solana_opened_accounts_lt_hash_input_with_canonical_fields(
+                input_value,
+                source_domain=SCCP_DOMAIN_SOL,
+                finalized_slot=_normalize_u64(
+                    witness["finalized_slot"],
+                    "finalizedSlot",
+                ),
+                account_inclusion_root=witness["account_inclusion_root"],
+                accounts_lt_hash_checksum=witness["accounts_lt_hash_checksum"],
+                accounts_lt_hash=witness.get("accounts_lt_hash"),
+            )
+        )
+        if supplied is not None and _normalize_hex32(supplied, label) != expected:
+            raise TypeError(f"{camel_key} must match Solana opened AccountsLtHash inputs")
+        return expected
+    except Exception:
+        if has_opened_inputs:
+            raise
+        if supplied is None:
+            raise
+        return _normalize_nonzero_hex32(supplied, label)
+
+
+def _normalize_solana_full_light_client_audit_input(
+    input_value: Any,
+    role: Mapping[str, Any],
+) -> Dict[str, Any]:
+    value = _require_mapping(input_value, "Solana full-light-client audit proof request input")
+
+    def audit_optional(label: str, *keys: str) -> Any:
+        return _mapping_optional_value_without_aliases(
+            value,
+            label,
+            *dict.fromkeys(keys),
+        )
+
+    def audit_optional_value(label: str, *keys: str) -> Any:
+        selected = audit_optional(label, *keys)
+        return None if selected is _MISSING or selected is None else selected
+
+    material_deployment = _normalize_solana_audit_material_and_deployment(value)
+    material = material_deployment["material"]
+    deployment = material_deployment["deployment"]
+    witness = normalize_solana_sccp_witness(value)
+    if witness["source_state_verifier_hash"] != material["source_state_verifier_hash"]:
+        raise TypeError("sourceStateVerifierHash must match sourceVerifierMaterial")
+    source_verifier_material_hash = sccp_source_verifier_material_hash(material)
+    supplied_source_verifier_material_hash = audit_optional(
+        "sourceVerifierMaterialHash",
+        "sourceVerifierMaterialHash",
+        "source_verifier_material_hash",
+    )
+    if supplied_source_verifier_material_hash is not _MISSING and _normalize_hex32(
+        supplied_source_verifier_material_hash,
+        "sourceVerifierMaterialHash",
+    ) != source_verifier_material_hash:
+        raise TypeError("sourceVerifierMaterialHash must match sourceVerifierMaterial")
+    source_adapter_deployment_hash = sccp_source_adapter_engine_deployment_hash(
+        deployment
+    )
+    supplied_source_adapter_deployment_hash = audit_optional(
+        "sourceAdapterDeploymentHash",
+        "sourceAdapterDeploymentHash",
+        "source_adapter_deployment_hash",
+    )
+    if supplied_source_adapter_deployment_hash is not _MISSING and _normalize_hex32(
+        supplied_source_adapter_deployment_hash,
+        "sourceAdapterDeploymentHash",
+    ) != source_adapter_deployment_hash:
+        raise TypeError("sourceAdapterDeploymentHash must match sourceAdapterDeployment")
+    if witness["source_adapter_deployment_hash"] != source_adapter_deployment_hash:
+        raise TypeError("sourceAdapterDeploymentHash must match witness")
+    if (
+        witness["source_adapter_deployment_receipt_hash"]
+        != deployment["deployment_receipt_hash"]
+    ):
+        raise TypeError("sourceAdapterDeploymentReceiptHash must match witness")
+    supplied_full_light_client_gate_hash = audit_optional(
+        "fullLightClientGateHash",
+        "fullLightClientGateHash",
+        "full_light_client_gate_hash",
+    )
+    if supplied_full_light_client_gate_hash is not _MISSING and _normalize_hex32(
+        supplied_full_light_client_gate_hash,
+        "fullLightClientGateHash",
+    ) != material_deployment["gate_hash"]:
+        raise TypeError("fullLightClientGateHash must match sourceAdapterDeployment")
+    context = _normalize_solana_finality_context_for_audit(value, witness)
+    finality_context_hash = solana_sccp_finality_context_hash(context)
+    supplied_finality_context_hash = audit_optional_value(
+        "finalityContextHash",
+        "finalityContextHash",
+        "finality_context_hash",
+    )
+    if supplied_finality_context_hash is not None and _normalize_hex32(supplied_finality_context_hash, "finalityContextHash") != finality_context_hash:
+        raise TypeError("finalityContextHash must match finality context fields")
+    vote_message_hash = solana_sccp_vote_message_hash(
+        {
+            "source_domain": SCCP_DOMAIN_SOL,
+            "finalized_slot": witness["finalized_slot"],
+            "blockhash": witness["blockhash"],
+            "bank_hash": witness["bank_hash"],
+            "transaction_status_root": witness["transaction_status_root"],
+            "message_proof_hash": witness["message_proof_hash"],
+            "finality_context_hash": finality_context_hash,
+        }
+    )
+    supplied_vote_message_hash = audit_optional_value(
+        "voteMessageHash",
+        "voteMessageHash",
+        "vote_message_hash",
+    )
+    if supplied_vote_message_hash is not None and _normalize_hex32(supplied_vote_message_hash, "voteMessageHash") != vote_message_hash:
+        raise TypeError("voteMessageHash must match finality context and message proof")
+    accounts_proof = audit_optional_value(
+        "accountsLtHashProof",
+        "accountsLtHashProof",
+        "accounts_lt_hash_proof",
+    )
+    supplied_accounts_proof_hash = audit_optional_value(
+        "accountsLtHashProofHash",
+        "accountsLtHashProofHash",
+        "accounts_lt_hash_proof_hash",
+    )
+    if accounts_proof is not None:
+        accounts_lt_hash_proof_hash = solana_sccp_accounts_lt_hash_proof_hash(accounts_proof)
+        if supplied_accounts_proof_hash is not None and _normalize_hex32(supplied_accounts_proof_hash, "accountsLtHashProofHash") != accounts_lt_hash_proof_hash:
+            raise TypeError("accountsLtHashProofHash must match accountsLtHashProof")
+    else:
+        raise TypeError(
+            "accountsLtHashProof is required; accountsLtHashProofHash alone is not accepted"
+        )
+    opened_contributions_hash = _solana_audit_opened_hash(
+        value,
+        witness,
+        "openedAccountsLtHashContributionsHash",
+        "opened_accounts_lt_hash_contributions_hash",
+        solana_sccp_accounts_lt_hash_opened_contributions_hash,
+        "openedAccountsLtHashContributionsHash",
+    )
+    opened_residual_checksum = _solana_audit_opened_hash(
+        value,
+        witness,
+        "openedAccountsLtHashResidualChecksum",
+        "opened_accounts_lt_hash_residual_checksum",
+        solana_sccp_accounts_lt_hash_opened_residual_checksum,
+        "openedAccountsLtHashResidualChecksum",
+    )
+    return {
+        "role": role,
+        "material": material,
+        "deployment": deployment,
+        "witness": witness,
+        "context": context,
+        "finality_context_hash": finality_context_hash,
+        "vote_message_hash": vote_message_hash,
+        "accounts_lt_hash_proof_hash": accounts_lt_hash_proof_hash,
+        "opened_accounts_lt_hash_contributions_hash": opened_contributions_hash,
+        "opened_accounts_lt_hash_residual_checksum": opened_residual_checksum,
+        "source_verifier_material_hash": source_verifier_material_hash,
+        "source_adapter_deployment_hash": source_adapter_deployment_hash,
+        "full_light_client_gate_hash": material_deployment["gate_hash"],
+        "verifier_hash": _solana_audit_role_verifier_hash(deployment, role),
+    }
+
+
+def canonical_solana_sccp_full_light_client_audit_statement_bytes(
+    input_value: Any,
+    role: Any,
+) -> bytes:
+    """Return canonical public statement bytes for a Solana audit role proof."""
+
+    role_value = _normalize_solana_full_light_client_audit_role(role)
+    value = _normalize_solana_full_light_client_audit_input(input_value, role_value)
+    witness = value["witness"]
+    context = value["context"]
+    out = bytearray()
+    out.extend(_write_u8(1))
+    out.extend(_write_u8(role_value["code"]))
+    out.extend(_write_string(role_value["circuit_id"], "circuitId"))
+    out.extend(_write_string(SCCP_SOLANA_RECURSIVE_PROOF_BACKEND_V1, "backend"))
+    out.extend(_write_string(SCCP_SOLANA_MAINNET_GENESIS_HASH, "solanaMainnetGenesisHash"))
+    out.extend(_write_u32_le(SCCP_DOMAIN_SOL))
+    out.extend(_write_u64_le(context["epoch"]))
+    out.extend(_write_u64_le(_normalize_u64(witness["finalized_slot"], "finalizedSlot")))
+    out.extend(_write_u64_le(context["rooted_slot"]))
+    out.extend(_write_u64_le(context["parent_slot"]))
+    out.extend(_hex_to_bytes(value["finality_context_hash"], "finalityContextHash", 32))
+    out.extend(_hex_to_bytes(value["vote_message_hash"], "voteMessageHash", 32))
+    out.extend(_hex_to_bytes(value["accounts_lt_hash_proof_hash"], "accountsLtHashProofHash", 32))
+    if role_value["name"] == "tower_replay":
+        out.extend(_hex_to_bytes(context["tower_lockout_hash"], "towerLockoutHash", 32))
+        out.extend(_hex_to_bytes(context["tower_replay_hash"], "towerReplayHash", 32))
+        out.extend(_hex_to_bytes(context["bank_fork_hash"], "bankForkHash", 32))
+        out.extend(_hex_to_bytes(context["epoch_stake_root"], "epochStakeRoot", 32))
+        out.extend(_hex_to_bytes(context["stake_activation_hash"], "stakeActivationHash", 32))
+        out.extend(_hex_to_bytes(context["stake_account_state_hash"], "stakeAccountStateHash", 32))
+        out.extend(_hex_to_bytes(context["stake_history_hash"], "stakeHistoryHash", 32))
+        out.extend(_hex_to_bytes(context["stake_history_sysvar_account_hash"], "stakeHistorySysvarAccountHash", 32))
+        out.extend(_hex_to_bytes(context["account_inclusion_root"], "accountInclusionRoot", 32))
+        out.extend(_write_u32_le(len(context["tower_vote_slots"])))
+        for slot in context["tower_vote_slots"]:
+            out.extend(_write_u64_le(slot))
+    elif role_value["name"] == "full_accountsdb_lattice":
+        out.extend(_hex_to_bytes(context["account_inclusion_root"], "accountInclusionRoot", 32))
+        out.extend(_hex_to_bytes(context["accounts_lt_hash_checksum"], "accountsLtHashChecksum", 32))
+        out.extend(_hex_to_bytes(context["accounts_lt_hash_proof_public_inputs_hash"], "accountsLtHashProofPublicInputsHash", 32))
+        out.extend(_hex_to_bytes(value["opened_accounts_lt_hash_contributions_hash"], "openedAccountsLtHashContributionsHash", 32))
+        out.extend(_hex_to_bytes(value["opened_accounts_lt_hash_residual_checksum"], "openedAccountsLtHashResidualChecksum", 32))
+        out.extend(_hex_to_bytes(value["accounts_lt_hash_proof_hash"], "accountsLtHashProofHash", 32))
+    elif role_value["name"] == "bank_fork_choice":
+        out.extend(_hex_to_bytes(context["parent_bank_hash"], "parentBankHash", 32))
+        out.extend(_hex_to_bytes(witness["bank_hash"], "bankHash", 32))
+        out.extend(_hex_to_bytes(witness["blockhash"], "blockhash", 32))
+        out.extend(_hex_to_bytes(witness["transaction_status_root"], "transactionStatusRoot", 32))
+        out.extend(_hex_to_bytes(context["account_inclusion_root"], "accountInclusionRoot", 32))
+        out.extend(_hex_to_bytes(context["accounts_lt_hash_checksum"], "accountsLtHashChecksum", 32))
+        out.extend(_write_u64_le(context["bank_signature_count"]))
+        out.extend(_write_bytes(context["bank_hash_hard_fork_data"]))
+        out.extend(_hex_to_bytes(context["bank_fork_hash"], "bankForkHash", 32))
+        out.extend(_hex_to_bytes(context["tower_replay_hash"], "towerReplayHash", 32))
+    else:
+        raise TypeError("unsupported Solana full-light-client audit role")
+    return bytes(out)
+
+
+def solana_sccp_full_light_client_audit_statement_hash(input_value: Any, role: Any) -> str:
+    """Hash a Solana full-light-client audit role statement."""
+
+    return _bytes_to_hex(
+        _prefixed_blake2b(
+            _SCCP_SOLANA_FULL_LIGHT_CLIENT_AUDIT_STATEMENT_PREFIX_V1,
+            canonical_solana_sccp_full_light_client_audit_statement_bytes(input_value, role),
+        )
+    )
+
+
+def _require_solana_full_light_client_audit_role_request_hashes_separated(
+    value: Mapping[str, Any],
+    audit_statement_hash: str,
+) -> None:
+    request_hashes = (
+        value["material"]["source_state_verifier_hash"],
+        value["source_verifier_material_hash"],
+        value["source_adapter_deployment_hash"],
+        value["full_light_client_gate_hash"],
+        value["finality_context_hash"],
+        value["vote_message_hash"],
+        value["accounts_lt_hash_proof_hash"],
+        audit_statement_hash,
+    )
+    if value["verifier_hash"] in request_hashes:
+        raise TypeError(
+            "verifierHash must be role-separated from Solana full-light audit request hashes"
+        )
+
+
+def _solana_bank_hash_hard_fork_data_hash(data: bytes) -> str:
+    return _bytes_to_hex(
+        _prefixed_blake2b(_SCCP_SOLANA_BANK_HASH_HARD_FORK_DATA_PREFIX_V1, data)
+    )
+
+
+def _solana_mainnet_genesis_hash_public_input() -> str:
+    return _bytes_to_hex(
+        _prefixed_blake2b(
+            _SCCP_SOLANA_MAINNET_GENESIS_HASH_PREFIX_V1,
+            SCCP_SOLANA_MAINNET_GENESIS_HASH.encode("ascii"),
+        )
+    )
+
+
+def _solana_full_light_client_audit_role_columns(value: Mapping[str, Any]) -> Sequence[str]:
+    role_name = value["role"]["name"]
+    witness = value["witness"]
+    context = value["context"]
+    if role_name == "tower_replay":
+        return (
+            context["tower_lockout_hash"],
+            context["tower_replay_hash"],
+            context["bank_fork_hash"],
+            context["epoch_stake_root"],
+            context["stake_activation_hash"],
+            context["stake_account_state_hash"],
+            context["stake_history_hash"],
+            context["stake_history_sysvar_account_hash"],
+            context["account_inclusion_root"],
+        )
+    if role_name == "full_accountsdb_lattice":
+        return (
+            context["account_inclusion_root"],
+            context["accounts_lt_hash_checksum"],
+            context["accounts_lt_hash_proof_public_inputs_hash"],
+            value["opened_accounts_lt_hash_contributions_hash"],
+            value["opened_accounts_lt_hash_residual_checksum"],
+            value["accounts_lt_hash_proof_hash"],
+        )
+    if role_name == "bank_fork_choice":
+        return (
+            context["parent_bank_hash"],
+            witness["bank_hash"],
+            witness["blockhash"],
+            witness["transaction_status_root"],
+            context["account_inclusion_root"],
+            context["accounts_lt_hash_checksum"],
+            _bytes_to_hex(_sccp_word_u64_le(context["bank_signature_count"])),
+            _solana_bank_hash_hard_fork_data_hash(context["bank_hash_hard_fork_data"]),
+            context["bank_fork_hash"],
+            context["tower_replay_hash"],
+        )
+    raise TypeError("unsupported Solana full-light-client audit role")
+
+
+def solana_sccp_full_light_client_audit_public_input_columns(
+    input_value: Any,
+    role: Any,
+) -> Sequence[Sequence[str]]:
+    """Return OpenVerify public input columns for a Solana audit role proof."""
+
+    role_value = _normalize_solana_full_light_client_audit_role(role)
+    value = _normalize_solana_full_light_client_audit_input(input_value, role_value)
+    statement_hash = solana_sccp_full_light_client_audit_statement_hash(
+        input_value,
+        role_value["name"],
+    )
+    columns = [
+        [_bytes_to_hex(_sccp_word_u8(role_value["code"]))],
+        [_bytes_to_hex(_sccp_word_u32_le(SCCP_DOMAIN_SOL))],
+        [_solana_mainnet_genesis_hash_public_input()],
+        [_bytes_to_hex(_sccp_word_u64_le(_normalize_u64(value["witness"]["finalized_slot"], "finalizedSlot")))],
+        [value["finality_context_hash"]],
+        [statement_hash],
+        [value["source_verifier_material_hash"]],
+        [value["source_adapter_deployment_hash"]],
+        [value["full_light_client_gate_hash"]],
+        [value["verifier_hash"]],
+        [_bytes_to_hex(_sccp_word_u64_le(value["context"]["epoch"]))],
+        [_bytes_to_hex(_sccp_word_u64_le(value["context"]["rooted_slot"]))],
+        [_bytes_to_hex(_sccp_word_u64_le(value["context"]["parent_slot"]))],
+        [value["vote_message_hash"]],
+        [value["accounts_lt_hash_proof_hash"]],
+    ]
+    columns.extend([[column] for column in _solana_full_light_client_audit_role_columns(value)])
+    return columns
+
+
+def _solana_full_light_client_audit_fastpq_public_inputs(
+    value: Mapping[str, Any],
+    statement_hash: str,
+) -> Dict[str, str]:
+    dsid_preimage = _write_u8(value["role"]["code"]) + _hex_to_bytes(
+        statement_hash,
+        "auditStatementHash",
+        32,
+    )
+    dsid = _prefixed_blake2b(
+        _SCCP_SOLANA_FULL_LIGHT_CLIENT_AUDIT_FASTPQ_DSID_PREFIX_V1,
+        dsid_preimage,
+    )[:16]
+    role_name = value["role"]["name"]
+    if role_name == "tower_replay":
+        old_root = value["context"]["tower_lockout_hash"]
+        new_root = value["context"]["tower_replay_hash"]
+        perm_root = value["context"]["bank_fork_hash"]
+    elif role_name == "full_accountsdb_lattice":
+        old_root = value["context"]["account_inclusion_root"]
+        new_root = value["context"]["accounts_lt_hash_checksum"]
+        perm_root = value["opened_accounts_lt_hash_contributions_hash"]
+    elif role_name == "bank_fork_choice":
+        old_root = value["context"]["parent_bank_hash"]
+        new_root = value["witness"]["bank_hash"]
+        perm_root = value["context"]["bank_fork_hash"]
+    else:
+        raise TypeError("unsupported Solana full-light-client audit role")
+    return {
+        "dsid": _bytes_to_hex(dsid),
+        "slot": str(value["witness"]["finalized_slot"]),
+        "old_root": old_root,
+        "new_root": new_root,
+        "perm_root": perm_root,
+        "tx_set_hash": statement_hash,
+    }
+
+
+def _canonical_solana_full_light_client_audit_context_bytes(
+    value: Mapping[str, Any],
+    statement_hash: str,
+) -> bytes:
+    return b"".join(
+        (
+            _write_u8(1),
+            _write_u8(value["role"]["code"]),
+            _write_string(value["role"]["circuit_id"], "circuitId"),
+            _write_string(
+                _SCCP_SOLANA_FULL_LIGHT_CLIENT_AUDIT_FASTPQ_PARAMETER_SET_V1,
+                "parameterSet",
+            ),
+            _write_string(value["role"]["verifier_id"], "verifierId"),
+            _hex_to_bytes(value["verifier_hash"], "verifierHash", 32),
+            _hex_to_bytes(value["source_verifier_material_hash"], "sourceVerifierMaterialHash", 32),
+            _hex_to_bytes(value["source_adapter_deployment_hash"], "sourceAdapterDeploymentHash", 32),
+            _hex_to_bytes(value["full_light_client_gate_hash"], "fullLightClientGateHash", 32),
+            _hex_to_bytes(value["finality_context_hash"], "finalityContextHash", 32),
+            _hex_to_bytes(statement_hash, "auditStatementHash", 32),
+        )
+    )
+
+
+def solana_sccp_full_light_client_audit_open_verify_schema_descriptor(
+    input_value: Any,
+    role: Any,
+) -> bytes:
+    """Return OpenVerify schema descriptor bytes for a Solana audit role."""
+
+    role_value = _normalize_solana_full_light_client_audit_role(role)
+    value = _normalize_solana_full_light_client_audit_input(input_value, role_value)
+    out = bytearray()
+    out.extend(_write_u8(1))
+    out.extend(_write_u8(role_value["code"]))
+    out.extend(_write_string(role_value["circuit_id"], "circuitId"))
+    out.extend(
+        _write_string(
+            _SCCP_SOLANA_FULL_LIGHT_CLIENT_AUDIT_FASTPQ_PARAMETER_SET_V1,
+            "parameterSet",
+        )
+    )
+    out.extend(_write_string(SCCP_SOLANA_MAINNET_GENESIS_HASH, "solanaMainnetGenesisHash"))
+    out.extend(_write_u32_le(SCCP_DOMAIN_SOL))
+    out.extend(_write_string("verifier_id", "schemaField"))
+    out.extend(_write_string(role_value["verifier_id"], "verifierId"))
+    out.extend(_write_string("verifier_hash", "schemaField"))
+    out.extend(_hex_to_bytes(value["verifier_hash"], "verifierHash", 32))
+    out.extend(_write_string("source_verifier_material_hash", "schemaField"))
+    out.extend(_hex_to_bytes(value["source_verifier_material_hash"], "sourceVerifierMaterialHash", 32))
+    out.extend(_write_string("source_adapter_deployment_hash", "schemaField"))
+    out.extend(_hex_to_bytes(value["source_adapter_deployment_hash"], "sourceAdapterDeploymentHash", 32))
+    out.extend(_write_string("full_light_client_gate_hash", "schemaField"))
+    out.extend(_hex_to_bytes(value["full_light_client_gate_hash"], "fullLightClientGateHash", 32))
+    for required_input in (
+        "role",
+        "source_domain",
+        "mainnet_genesis_hash",
+        "finalized_slot",
+        "finality_context_hash",
+        "audit_statement_hash",
+        "source_verifier_material_hash",
+        "source_adapter_deployment_hash",
+        "full_light_client_gate_hash",
+        "verifier_hash",
+        "epoch",
+        "rooted_slot",
+        "parent_slot",
+        "vote_message_hash",
+        "accounts_lt_hash_proof_hash",
+        *role_value["required_input_names"],
+    ):
+        out.extend(_write_string(required_input, "requiredInput"))
+    return bytes(out)
+
+
+def _solana_full_light_client_audit_fastpq_key(prefix: bytes, role: Mapping[str, Any]) -> bytes:
+    return prefix + b"\x00" + role["circuit_id"].encode()
+
+
+def build_solana_sccp_full_light_client_audit_proof_request(
+    input_value: Any,
+    role: Any,
+) -> Dict[str, Any]:
+    """Build the second-stage Solana audit role proof request for UI/mobile provers."""
+
+    role_value = _normalize_solana_full_light_client_audit_role(role)
+    value = _normalize_solana_full_light_client_audit_input(input_value, role_value)
+    statement_bytes = canonical_solana_sccp_full_light_client_audit_statement_bytes(
+        input_value,
+        role_value["name"],
+    )
+    audit_statement_hash = solana_sccp_full_light_client_audit_statement_hash(
+        input_value,
+        role_value["name"],
+    )
+    _require_solana_full_light_client_audit_role_request_hashes_separated(
+        value,
+        audit_statement_hash,
+    )
+    verification_context_bytes = _canonical_solana_full_light_client_audit_context_bytes(
+        value,
+        audit_statement_hash,
+    )
+    transitions = [
+        {
+            "key": _bytes_to_hex(
+                _solana_full_light_client_audit_fastpq_key(
+                    _SCCP_SOLANA_FULL_LIGHT_CLIENT_AUDIT_FASTPQ_STATEMENT_KEY_V1,
+                    role_value,
+                )
+            ),
+            "operation": "meta_set",
+            "old_value": "0x",
+            "new_value": _bytes_to_hex(statement_bytes),
+        },
+        {
+            "key": _bytes_to_hex(
+                _solana_full_light_client_audit_fastpq_key(
+                    _SCCP_SOLANA_FULL_LIGHT_CLIENT_AUDIT_FASTPQ_CONTEXT_KEY_V1,
+                    role_value,
+                )
+            ),
+            "operation": "meta_set",
+            "old_value": "0x",
+            "new_value": _bytes_to_hex(verification_context_bytes),
+        },
+        {
+            "key": _bytes_to_hex(
+                _solana_full_light_client_audit_fastpq_key(
+                    _SCCP_SOLANA_FULL_LIGHT_CLIENT_AUDIT_FASTPQ_GATE_KEY_V1,
+                    role_value,
+                )
+            ),
+            "operation": "meta_set",
+            "old_value": "0x",
+            "new_value": value["full_light_client_gate_hash"],
+        },
+    ]
+    transitions.sort(key=lambda item: item["key"])
+    return _immutable_prover_envelope({
+        "version": 1,
+        "proof_family": SCCP_STARK_FRI_PROOF_FAMILY_V1,
+        "circuit_id": role_value["circuit_id"],
+        "parameter_set": _SCCP_SOLANA_FULL_LIGHT_CLIENT_AUDIT_FASTPQ_PARAMETER_SET_V1,
+        "role": role_value["name"],
+        "role_code": role_value["code"],
+        "source_domain": SCCP_DOMAIN_SOL,
+        "finalized_slot": str(value["witness"]["finalized_slot"]),
+        "verifier_id": role_value["verifier_id"],
+        "verifier_hash": value["verifier_hash"],
+        "source_state_verifier_id": value["material"]["source_state_verifier_id"],
+        "source_state_verifier_hash": value["material"]["source_state_verifier_hash"],
+        "source_verifier_material_hash": value["source_verifier_material_hash"],
+        "source_adapter_deployment_hash": value["source_adapter_deployment_hash"],
+        "full_light_client_gate_hash": value["full_light_client_gate_hash"],
+        "finality_context_hash": value["finality_context_hash"],
+        "vote_message_hash": value["vote_message_hash"],
+        "accounts_lt_hash_proof_hash": value["accounts_lt_hash_proof_hash"],
+        "audit_statement_hash": audit_statement_hash,
+        "statement_bytes": statement_bytes,
+        "verification_context_bytes": verification_context_bytes,
+        "schema_descriptor": solana_sccp_full_light_client_audit_open_verify_schema_descriptor(
+            input_value,
+            role_value["name"],
+        ),
+        "public_input_columns": solana_sccp_full_light_client_audit_public_input_columns(
+            input_value,
+            role_value["name"],
+        ),
+        "fastpq_public_inputs": _solana_full_light_client_audit_fastpq_public_inputs(
+            value,
+            audit_statement_hash,
+        ),
+        "fastpq_transitions": transitions,
+    })
+
+
+def build_solana_sccp_tower_replay_proof_request(input_value: Any) -> Dict[str, Any]:
+    """Build the Solana Tower replay audit proof request."""
+
+    return build_solana_sccp_full_light_client_audit_proof_request(
+        input_value,
+        "tower_replay",
+    )
+
+
+def build_solana_sccp_full_accountsdb_lattice_proof_request(input_value: Any) -> Dict[str, Any]:
+    """Build the Solana full AccountsDB lattice audit proof request."""
+
+    return build_solana_sccp_full_light_client_audit_proof_request(
+        input_value,
+        "full_accountsdb_lattice",
+    )
+
+
+def build_solana_sccp_bank_fork_choice_proof_request(input_value: Any) -> Dict[str, Any]:
+    """Build the Solana bank/fork-choice audit proof request."""
+
+    return build_solana_sccp_full_light_client_audit_proof_request(
+        input_value,
+        "bank_fork_choice",
+    )
+
+
+def build_solana_sccp_full_light_client_audit_proof_requests(
+    input_value: Any,
+) -> Dict[str, Dict[str, Any]]:
+    """Build all three Solana full-light-client audit proof requests."""
+
+    return _immutable_prover_envelope({
+        "tower_replay": build_solana_sccp_tower_replay_proof_request(input_value),
+        "full_accountsdb_lattice": build_solana_sccp_full_accountsdb_lattice_proof_request(input_value),
+        "bank_fork_choice": build_solana_sccp_bank_fork_choice_proof_request(input_value),
+    })
+
+
+def _solana_sha256_hashv(parts: Sequence[bytes]) -> bytes:
+    hasher = hashlib.sha256()
+    for part in parts:
+        hasher.update(part)
+    return hasher.digest()
+
+
+def _solana_sccp_agave_bank_hash_bytes(
+    parent_bank_hash: bytes,
+    bank_signature_count: int,
+    blockhash: bytes,
+    accounts_lt_hash: bytes,
+    bank_hash_hard_fork_data: bytes,
+) -> bytes:
+    if bank_signature_count == 0:
+        raise ValueError("bankSignatureCount must be nonzero")
+    if len(accounts_lt_hash) != _SCCP_SOLANA_ACCOUNTS_LT_HASH_BYTES:
+        raise ValueError("accountsLtHash must be 2048 bytes")
+    _require_nonzero_solana_accounts_lt_hash(accounts_lt_hash)
+    if len(bank_hash_hard_fork_data) > _SCCP_SOLANA_MAX_BANK_HARD_FORK_HASH_DATA_BYTES:
+        raise ValueError("bankHashHardForkData is too large")
+    digest = _solana_sha256_hashv(
+        [parent_bank_hash, _write_u64_le(bank_signature_count), blockhash]
+    )
+    digest = _solana_sha256_hashv([digest, accounts_lt_hash])
+    if bank_hash_hard_fork_data:
+        digest = _solana_sha256_hashv([digest, bank_hash_hard_fork_data])
+    return digest
+
+
+def solana_sccp_agave_bank_hash(input_value: Any) -> str:
+    """Return Agave's finalized-bank hash from SCCP Solana bank-state inputs."""
+
+    value = _require_mapping(input_value, "Solana Agave bank-hash input")
+    parent_bank_hash = _nonzero_hex32_to_bytes(
+        _mapping_value_without_aliases(
+            value, "parentBankHash", "parentBankHash", "parent_bank_hash"
+        ),
+        "parentBankHash",
+    )
+    bank_signature_count = _normalize_u64(
+        _mapping_value_without_aliases(
+            value,
+            "bankSignatureCount",
+            "bankSignatureCount",
+            "bank_signature_count",
+        ),
+        "bankSignatureCount",
+    )
+    blockhash = _normalize_solana_hash32_bytes(
+        _mapping_value_without_aliases(
+            value, "blockhash", "blockhashBytes", "blockhash_bytes", "blockhash"
+        ),
+        "blockhash",
+    )
+    accounts_lt_hash = _to_bytes(
+        _mapping_value_without_aliases(
+            value, "accountsLtHash", "accountsLtHash", "accounts_lt_hash"
+        ),
+        "accountsLtHash",
+    )
+    bank_hash_hard_fork_data = _optional_bytes(
+        _mapping_value_without_aliases(
+            value,
+            "bankHashHardForkData",
+            "bankHashHardForkData",
+            "bank_hash_hard_fork_data",
+        ),
+        "bankHashHardForkData",
+    )
+    return _bytes_to_hex(
+        _solana_sccp_agave_bank_hash_bytes(
+            parent_bank_hash,
+            bank_signature_count,
+            blockhash,
+            accounts_lt_hash,
+            bank_hash_hard_fork_data,
+        )
+    )
+
+
+def canonical_solana_sccp_account_inclusion_leaf_bytes(input_value: Any) -> bytes:
+    """Return canonical bytes for a Solana SCCP account inclusion leaf."""
+
+    value = _require_mapping(input_value, "Solana account inclusion leaf input")
+    finalized_slot = _normalize_u64(
+        _mapping_value_without_aliases(
+            value, "finalizedSlot", "finalizedSlot", "finalized_slot"
+        ),
+        "finalizedSlot",
+    )
+    opening = _mapping_value_without_aliases(
+        value, "opening", "opening", "accountOpening", "account_opening"
+    )
+    if not isinstance(opening, Mapping):
+        raise TypeError("opening must be an object")
+    raw_data_hash_input = _mapping_value_without_aliases(
+        value, "rawDataHash", "rawDataHash", "raw_data_hash"
+    )
+    raw_data_input = _mapping_value_without_aliases(value, "rawData", "rawData", "raw_data")
+    if raw_data_hash_input is None:
+        raw_data_hash_input = solana_sccp_account_raw_data_hash(raw_data_input)
+    raw_data_hash = _nonzero_hex32_to_bytes(raw_data_hash_input, "rawDataHash")
+    if raw_data_input is not None:
+        if _bytes_to_hex(raw_data_hash) != solana_sccp_account_raw_data_hash(raw_data_input):
+            raise TypeError("rawDataHash must match rawData")
+    address = _to_bytes(
+        _mapping_value_without_aliases(
+            opening, "opening.address", "address", "accountAddress", "account_address"
+        ),
+        "opening.address",
+    )
+    if len(address) != 32 or not any(address):
+        raise TypeError("opening.address must be a non-zero 32-byte Solana account id")
+    opening_hash = _hex_to_bytes(solana_sccp_account_opening_hash(opening), "openingHash", 32)
+    out = bytearray()
+    out.extend(_write_u8(1))
+    out.extend(_write_u64_le(finalized_slot))
+    out.extend(_write_bytes(address))
+    out.extend(opening_hash)
+    out.extend(raw_data_hash)
+    return bytes(out)
+
+
+def solana_sccp_account_inclusion_leaf_hash(input_value: Any) -> str:
+    """Hash a Solana account inclusion leaf."""
+
+    return _bytes_to_hex(
+        _prefixed_blake2b(
+            _SCCP_SOLANA_ACCOUNT_INCLUSION_LEAF_PREFIX_V1,
+            canonical_solana_sccp_account_inclusion_leaf_bytes(input_value),
+        )
+    )
+
+
+def _compare_bytes_lexicographically(left: bytes, right: bytes) -> int:
+    return (left > right) - (left < right)
+
+
+def _tron_recoverable_signature_is_canonical(signature: bytes) -> bool:
+    if len(signature) != 65:
+        return False
+    recovery_id = signature[64]
+    if not (0 <= recovery_id <= 3 or 27 <= recovery_id <= 30):
+        return False
+    r_value = signature[:32]
+    s_value = signature[32:64]
+    return (
+        any(r_value)
+        and r_value < _SECP256K1_SCALAR_ORDER_BE
+        and any(s_value)
+        and s_value <= _SECP256K1_SCALAR_HALF_ORDER_BE
+    )
+
+
+_SecpPoint = Optional[tuple[int, int]]
+
+
+def _secp256k1_inverse(value: int, modulus: int) -> int:
+    return pow(value, -1, modulus)
+
+
+def _secp256k1_point_add(left: _SecpPoint, right: _SecpPoint) -> _SecpPoint:
+    if left is None:
+        return right
+    if right is None:
+        return left
+    x1, y1 = left
+    x2, y2 = right
+    if x1 == x2 and (y1 + y2) % _SECP256K1_FIELD_PRIME == 0:
+        return None
+    if left == right:
+        if y1 == 0:
+            return None
+        slope = (3 * x1 * x1) * _secp256k1_inverse(
+            2 * y1 % _SECP256K1_FIELD_PRIME,
+            _SECP256K1_FIELD_PRIME,
+        )
+    else:
+        slope = (y2 - y1) * _secp256k1_inverse(
+            (x2 - x1) % _SECP256K1_FIELD_PRIME,
+            _SECP256K1_FIELD_PRIME,
+        )
+    slope %= _SECP256K1_FIELD_PRIME
+    x3 = (slope * slope - x1 - x2) % _SECP256K1_FIELD_PRIME
+    y3 = (slope * (x1 - x3) - y1) % _SECP256K1_FIELD_PRIME
+    return x3, y3
+
+
+def _secp256k1_point_mul(scalar: int, point: _SecpPoint) -> _SecpPoint:
+    if scalar % _SECP256K1_SCALAR_ORDER == 0 or point is None:
+        return None
+    result: _SecpPoint = None
+    addend = point
+    working = scalar % _SECP256K1_SCALAR_ORDER
+    while working:
+        if working & 1:
+            result = _secp256k1_point_add(result, addend)
+        addend = _secp256k1_point_add(addend, addend)
+        working >>= 1
+    return result
+
+
+def _secp256k1_recover_address20(message_hash: bytes, signature: bytes) -> bytes | None:
+    if len(message_hash) != 32 or not _tron_recoverable_signature_is_canonical(signature):
+        return None
+    recovery_id = signature[64]
+    if recovery_id >= 27:
+        recovery_id -= 27
+    r_value = int.from_bytes(signature[:32], "big")
+    s_value = int.from_bytes(signature[32:64], "big")
+    x = r_value + (recovery_id >> 1) * _SECP256K1_SCALAR_ORDER
+    if x >= _SECP256K1_FIELD_PRIME:
+        return None
+    alpha = (pow(x, 3, _SECP256K1_FIELD_PRIME) + 7) % _SECP256K1_FIELD_PRIME
+    y = pow(alpha, (_SECP256K1_FIELD_PRIME + 1) // 4, _SECP256K1_FIELD_PRIME)
+    if (y * y - alpha) % _SECP256K1_FIELD_PRIME != 0:
+        return None
+    if (y & 1) != (recovery_id & 1):
+        y = _SECP256K1_FIELD_PRIME - y
+    r_point: _SecpPoint = (x, y)
+    if _secp256k1_point_mul(_SECP256K1_SCALAR_ORDER, r_point) is not None:
+        return None
+    e_value = int.from_bytes(message_hash, "big") % _SECP256K1_SCALAR_ORDER
+    candidate = _secp256k1_point_mul(s_value, r_point)
+    candidate = _secp256k1_point_add(
+        candidate,
+        _secp256k1_point_mul((-e_value) % _SECP256K1_SCALAR_ORDER, _SECP256K1_GENERATOR),
+    )
+    public_key = _secp256k1_point_mul(
+        _secp256k1_inverse(r_value, _SECP256K1_SCALAR_ORDER),
+        candidate,
+    )
+    if public_key is None:
+        return None
+    public_key_bytes = public_key[0].to_bytes(32, "big") + public_key[1].to_bytes(32, "big")
+    return _keccak_256(public_key_bytes)[12:]
+
+
+def canonical_solana_sccp_account_inclusion_node_bytes(left: Any, right: Any) -> bytes:
+    """Return canonical bytes for a directionless Solana account inclusion node."""
+
+    left_bytes = _nonzero_hex32_to_bytes(left, "left")
+    right_bytes = _nonzero_hex32_to_bytes(right, "right")
+    first, second = (
+        (left_bytes, right_bytes)
+        if _compare_bytes_lexicographically(left_bytes, right_bytes) <= 0
+        else (right_bytes, left_bytes)
+    )
+    return _write_u8(1) + first + second
+
+
+def solana_sccp_account_inclusion_node_hash(left: Any, right: Any) -> str:
+    """Hash a directionless Solana account inclusion node."""
+
+    return _bytes_to_hex(
+        _prefixed_blake2b(
+            _SCCP_SOLANA_ACCOUNT_INCLUSION_NODE_PREFIX_V1,
+            canonical_solana_sccp_account_inclusion_node_bytes(left, right),
+        )
+    )
+
+
+def solana_sccp_account_inclusion_root_from_branch(
+    leaf: Any, siblings: Sequence[Any] = (),
+) -> str:
+    """Derive a Solana account inclusion root from a leaf and sibling branch."""
+
+    if not isinstance(siblings, Sequence) or isinstance(siblings, (str, bytes, bytearray)):
+        raise TypeError("siblings must be an array")
+    if len(siblings) > _SCCP_MAX_SOURCE_MERKLE_BRANCH_NODES:
+        raise ValueError(
+            f"siblings must contain at most {_SCCP_MAX_SOURCE_MERKLE_BRANCH_NODES} entries"
+        )
+    current = _bytes_to_hex(_nonzero_hex32_to_bytes(leaf, "leaf"))
+    for index, sibling in enumerate(siblings):
+        current = solana_sccp_account_inclusion_node_hash(
+            current,
+            _bytes_to_hex(_nonzero_hex32_to_bytes(sibling, f"siblings[{index}]")),
+        )
+    return current
+
+
+def solana_sccp_account_inclusion_root_and_branches(
+    leaves: Sequence[Any],
+) -> dict[str, Any]:
+    """Build a deterministic Solana account inclusion root and per-leaf branches."""
+
+    if not leaves:
+        raise TypeError("leaves must be a non-empty sequence")
+    level = [
+        {
+            "hash": _nonzero_hex32_to_bytes(leaf, f"leaves[{index}]"),
+            "indexes": [index],
+        }
+        for index, leaf in enumerate(leaves)
+    ]
+    level.sort(key=lambda item: item["hash"])
+    for previous, current in zip(level, level[1:]):
+        if previous["hash"] == current["hash"]:
+            raise TypeError("leaves must be unique")
+    branches: list[list[str]] = [[] for _ in leaves]
+    while len(level) > 1:
+        next_level: list[dict[str, Any]] = []
+        for index in range(0, len(level), 2):
+            if index + 1 >= len(level):
+                next_level.append(level[index])
+                continue
+            left = level[index]
+            right = level[index + 1]
+            left_hex = _bytes_to_hex(left["hash"])
+            right_hex = _bytes_to_hex(right["hash"])
+            for leaf_index in left["indexes"]:
+                branches[leaf_index].append(right_hex)
+            for leaf_index in right["indexes"]:
+                branches[leaf_index].append(left_hex)
+            next_level.append(
+                {
+                    "hash": _hex_to_bytes(
+                        solana_sccp_account_inclusion_node_hash(left_hex, right_hex),
+                        "parent",
+                        32,
+                    ),
+                    "indexes": left["indexes"] + right["indexes"],
+                }
+            )
+        level = next_level
+    return {"root": _bytes_to_hex(level[0]["hash"]), "branches": branches}
+
+
+def solana_sccp_opened_account_inclusion_witness(input_value: Any) -> dict[str, Any]:
+    """Build the exact opened-account inclusion root and split branches for Solana source proofs."""
+
+    value = _require_mapping(input_value, "Solana opened account inclusion witness input")
+    finalized_slot = _normalize_u64(
+        _mapping_value_without_aliases(
+            value, "finalizedSlot", "finalizedSlot", "finalized_slot", "slot"
+        ),
+        "finalizedSlot",
+    )
+    vote_openings = _solana_opened_lt_hash_array(
+        value,
+        (
+            "validatorVoteAccountOpenings",
+            "validator_vote_account_openings",
+            "voteAccountOpenings",
+            "vote_account_openings",
+        ),
+        "validatorVoteAccountOpenings",
+    )
+    vote_raw_data = _solana_opened_lt_hash_array(
+        value,
+        (
+            "validatorVoteAccountRawData",
+            "validator_vote_account_raw_data",
+            "voteAccountRawData",
+            "vote_account_raw_data",
+        ),
+        "validatorVoteAccountRawData",
+    )
+    stake_openings = _solana_opened_lt_hash_array(
+        value,
+        (
+            "validatorStakeAccountOpenings",
+            "validator_stake_account_openings",
+            "stakeAccountOpenings",
+            "stake_account_openings",
+        ),
+        "validatorStakeAccountOpenings",
+    )
+    stake_raw_data = _solana_opened_lt_hash_array(
+        value,
+        (
+            "validatorStakeAccountRawData",
+            "validator_stake_account_raw_data",
+            "stakeAccountRawData",
+            "stake_account_raw_data",
+        ),
+        "validatorStakeAccountRawData",
+    )
+    if len(vote_openings) != len(vote_raw_data) or len(stake_openings) != len(stake_raw_data):
+        raise TypeError("opened account openings and rawData arrays must have matching lengths")
+    stake_history_opening = _mapping_value_without_aliases(
+        value,
+        "stakeHistorySysvarOpening",
+        "stakeHistorySysvarOpening",
+        "stake_history_sysvar_opening",
+    )
+    stake_history_raw_data = _mapping_value_without_aliases(
+        value,
+        "stakeHistorySysvarRawData",
+        "stakeHistorySysvarRawData",
+        "stake_history_sysvar_raw_data",
+    )
+    if stake_history_opening is None or stake_history_raw_data is None:
+        raise TypeError("stakeHistorySysvarOpening and stakeHistorySysvarRawData are required")
+    _require_unique_solana_opened_account_addresses(
+        (*vote_openings, *stake_openings, stake_history_opening)
+    )
+
+    def leaf(opening: Any, raw_data: Any) -> str:
+        return solana_sccp_account_inclusion_leaf_hash(
+            {"finalized_slot": finalized_slot, "opening": opening, "raw_data": raw_data}
+        )
+
+    vote_leaves = [leaf(opening, vote_raw_data[index]) for index, opening in enumerate(vote_openings)]
+    stake_leaves = [leaf(opening, stake_raw_data[index]) for index, opening in enumerate(stake_openings)]
+    stake_history_leaf = leaf(stake_history_opening, stake_history_raw_data)
+    witness = solana_sccp_account_inclusion_root_and_branches(
+        [*vote_leaves, *stake_leaves, stake_history_leaf]
+    )
+    expected_root = _mapping_value_without_aliases(
+        value,
+        "accountInclusionRoot",
+        "accountInclusionRoot",
+        "account_inclusion_root",
+        "accountsRoot",
+        "accounts_root",
+    )
+    if expected_root is not None and _bytes_to_hex(
+        _nonzero_hex32_to_bytes(expected_root, "accountInclusionRoot")
+    ) != witness["root"]:
+        raise TypeError("accountInclusionRoot must match opened account inclusion witness")
+    branches = witness["branches"]
+    vote_branch_count = len(vote_leaves)
+    stake_branch_count = len(stake_leaves)
+    return {
+        "root": witness["root"],
+        "branches": branches,
+        "validator_vote_account_branches": branches[:vote_branch_count],
+        "validator_stake_account_branches": branches[
+            vote_branch_count : vote_branch_count + stake_branch_count
+        ],
+        "stake_history_sysvar_branch": branches[-1],
+    }
+
+
+def canonical_solana_sccp_vote_account_data_bytes(input_value: Any) -> bytes:
+    """Return canonical bytes for parsed Solana vote account data."""
+
+    value = _require_mapping(input_value, "Solana vote account data input")
+
+    def vote_value(label: str, *keys: str) -> Any:
+        return _mapping_value_without_aliases(value, label, *dict.fromkeys(keys))
+
+    def vote_optional_value(label: str, *keys: str) -> Any:
+        selected = _mapping_optional_value_without_aliases(
+            value,
+            label,
+            *dict.fromkeys(keys),
+        )
+        return None if selected is _MISSING or selected is None else selected
+
+    node_pubkey = _to_bytes(vote_value("nodePubkey", "nodePubkey", "node_pubkey"), "nodePubkey")
+    authorized_voter = _to_bytes(
+        vote_value("authorizedVoter", "authorizedVoter", "authorized_voter"),
+        "authorizedVoter",
+    )
+    authorized_withdrawer = _to_bytes(
+        vote_value("authorizedWithdrawer", "authorizedWithdrawer", "authorized_withdrawer"),
+        "authorizedWithdrawer",
+    )
+    inflation_rewards_collector_value = vote_optional_value(
+        "inflationRewardsCollector",
+        "inflationRewardsCollector",
+        "inflation_rewards_collector",
+    )
+    vote_account_address = vote_optional_value(
+        "voteAccountAddress",
+        "voteAccountAddress",
+        "vote_account_address",
+    )
+    inflation_rewards_collector = _to_bytes(
+        vote_account_address
+        if inflation_rewards_collector_value is None
+        else inflation_rewards_collector_value,
+        "inflationRewardsCollector",
+    )
+    block_revenue_collector_value = vote_optional_value(
+        "blockRevenueCollector",
+        "blockRevenueCollector",
+        "block_revenue_collector",
+    )
+    block_revenue_collector = _to_bytes(
+        node_pubkey
+        if block_revenue_collector_value is None
+        else block_revenue_collector_value,
+        "blockRevenueCollector",
+    )
+    commission_value = vote_optional_value("commission", "commission")
+    commission = None
+    if commission_value is not None:
+        commission = _normalize_u64(commission_value, "commission")
+    inflation_rewards_commission_bps_value = vote_optional_value(
+        "inflationRewardsCommissionBps",
+        "inflationRewardsCommissionBps",
+        "inflation_rewards_commission_bps",
+    )
+    if inflation_rewards_commission_bps_value is None and commission is not None:
+        inflation_rewards_commission_bps_value = commission * 100
+    inflation_rewards_commission_bps = _normalize_u64(
+        inflation_rewards_commission_bps_value,
+        "inflationRewardsCommissionBps",
+    )
+    block_revenue_commission_bps_value = vote_optional_value(
+        "blockRevenueCommissionBps",
+        "blockRevenueCommissionBps",
+        "block_revenue_commission_bps",
+    )
+    block_revenue_commission_bps = _normalize_u64(
+        10_000
+        if block_revenue_commission_bps_value is None
+        else block_revenue_commission_bps_value,
+        "blockRevenueCommissionBps",
+    )
+    pending_delegator_rewards_value = vote_optional_value(
+        "pendingDelegatorRewards",
+        "pendingDelegatorRewards",
+        "pending_delegator_rewards",
+    )
+    pending_delegator_rewards = _normalize_u64(
+        0 if pending_delegator_rewards_value is None else pending_delegator_rewards_value,
+        "pendingDelegatorRewards",
+    )
+    bls_value = vote_optional_value(
+        "blsPubkeyCompressed",
+        "blsPubkeyCompressed",
+        "bls_pubkey_compressed",
+    )
+    bls_pubkey_compressed = b"" if bls_value is None else _to_bytes(bls_value, "blsPubkeyCompressed")
+    root_slot = _normalize_u64(vote_value("rootSlot", "rootSlot", "root_slot"), "rootSlot")
+    raw_tower_vote_slots = vote_value(
+        "towerVoteSlots",
+        "towerVoteSlots",
+        "tower_vote_slots",
+    )
+    if not isinstance(raw_tower_vote_slots, Sequence) or isinstance(
+        raw_tower_vote_slots, (str, bytes, bytearray)
+    ):
+        raise TypeError("towerVoteSlots must be a sequence")
+    tower_vote_slots = [
+        _normalize_u64(slot, f"towerVoteSlots[{index}]")
+        for index, slot in enumerate(raw_tower_vote_slots)
+    ]
+    for label, raw in (
+        ("nodePubkey", node_pubkey),
+        ("authorizedVoter", authorized_voter),
+        ("authorizedWithdrawer", authorized_withdrawer),
+        ("inflationRewardsCollector", inflation_rewards_collector),
+        ("blockRevenueCollector", block_revenue_collector),
+    ):
+        if len(raw) != 32 or not any(raw):
+            raise TypeError(f"{label} must be a non-zero 32-byte Solana public key")
+    if inflation_rewards_commission_bps > 10_000:
+        raise ValueError("inflationRewardsCommissionBps must be at most 10000")
+    if block_revenue_commission_bps > 10_000:
+        raise ValueError("blockRevenueCommissionBps must be at most 10000")
+    if len(bls_pubkey_compressed) not in (0, _SCCP_SOLANA_BLS_PUBLIC_KEY_COMPRESSED_LEN):
+        raise TypeError("blsPubkeyCompressed must be empty or 48 bytes")
+    if (
+        len(bls_pubkey_compressed) == _SCCP_SOLANA_BLS_PUBLIC_KEY_COMPRESSED_LEN
+        and not any(bls_pubkey_compressed)
+    ):
+        raise TypeError("blsPubkeyCompressed must be empty or non-zero 48 bytes")
+    if len(tower_vote_slots) != SCCP_SOLANA_TOWER_VOTE_STACK_DEPTH:
+        raise ValueError("towerVoteSlots must contain 31 active post-root slots")
+    previous_slot = root_slot
+    for index, slot in enumerate(tower_vote_slots):
+        if slot <= previous_slot:
+            raise ValueError(
+                f"towerVoteSlots[{index}] must be greater than the previous slot"
+            )
+        previous_slot = slot
+    out = bytearray()
+    out.extend(_write_u8(1))
+    out.extend(_write_bytes(node_pubkey))
+    out.extend(_write_bytes(authorized_voter))
+    out.extend(_write_bytes(authorized_withdrawer))
+    out.extend(_write_bytes(inflation_rewards_collector))
+    out.extend(_write_bytes(block_revenue_collector))
+    out.extend(_write_u16_le(inflation_rewards_commission_bps))
+    out.extend(_write_u16_le(block_revenue_commission_bps))
+    out.extend(_write_u64_le(pending_delegator_rewards))
+    out.extend(_write_bytes(bls_pubkey_compressed))
+    out.extend(_write_u64_le(root_slot))
+    out.extend(_write_u32_le(len(tower_vote_slots)))
+    for slot in tower_vote_slots:
+        out.extend(_write_u64_le(slot))
+    return bytes(out)
+
+
+def solana_sccp_vote_account_data_hash(input_value: Any) -> str:
+    """Hash parsed Solana vote account data bound to an account opening."""
+
+    return _bytes_to_hex(
+        _prefixed_blake2b(
+            _SCCP_SOLANA_VOTE_ACCOUNT_DATA_PREFIX_V1,
+            canonical_solana_sccp_vote_account_data_bytes(input_value),
+        )
+    )
+
+
+def solana_sccp_vote_account_data_from_raw_vote_state(
+    raw_data: Any,
+    epoch: Any,
+    vote_account_address: Any,
+) -> Dict[str, Any]:
+    """Parse raw Solana ``VoteStateVersions::V1_14_11``/``V3``/``V4`` account data."""
+
+    data = _to_bytes(raw_data, "rawData")
+    if len(data) != _SCCP_SOLANA_VOTE_STATE_ACCOUNT_DATA_LEN:
+        raise TypeError("rawData must be a 3762-byte Solana VoteState account")
+    signed_epoch = _normalize_u64(epoch, "epoch")
+    vote_account_address_bytes = _to_bytes(vote_account_address, "voteAccountAddress")
+    if len(vote_account_address_bytes) != 32 or not any(vote_account_address_bytes):
+        raise TypeError("voteAccountAddress must be a non-zero 32-byte Solana public key")
+    cursor = 0
+
+    def read_u8(field: str) -> int:
+        nonlocal cursor
+        if cursor + 1 > len(data):
+            raise TypeError(f"{field} is too short")
+        value = data[cursor]
+        cursor += 1
+        return value
+
+    def read_u32(field: str) -> int:
+        nonlocal cursor
+        if cursor + 4 > len(data):
+            raise TypeError(f"{field} is too short")
+        value = int.from_bytes(data[cursor : cursor + 4], "little")
+        cursor += 4
+        return value
+
+    def read_u16(field: str) -> int:
+        nonlocal cursor
+        if cursor + 2 > len(data):
+            raise TypeError(f"{field} is too short")
+        value = int.from_bytes(data[cursor : cursor + 2], "little")
+        cursor += 2
+        return value
+
+    def read_u64(field: str) -> int:
+        nonlocal cursor
+        if cursor + 8 > len(data):
+            raise TypeError(f"{field} is too short")
+        value = int.from_bytes(data[cursor : cursor + 8], "little")
+        cursor += 8
+        return value
+
+    def read_i64(field: str) -> int:
+        nonlocal cursor
+        if cursor + 8 > len(data):
+            raise TypeError(f"{field} is too short")
+        value = int.from_bytes(data[cursor : cursor + 8], "little", signed=True)
+        cursor += 8
+        return value
+
+    def read_pubkey(field: str) -> bytes:
+        nonlocal cursor
+        if cursor + 32 > len(data):
+            raise TypeError(f"{field} is too short")
+        value = data[cursor : cursor + 32]
+        cursor += 32
+        return value
+
+    variant = read_u32("voteStateVariant")
+    if variant == _SCCP_SOLANA_VOTE_STATE_V1_14_11_DISCRIMINANT:
+        has_latency = False
+    elif variant == _SCCP_SOLANA_VOTE_STATE_V3_DISCRIMINANT:
+        has_latency = True
+    elif variant == _SCCP_SOLANA_VOTE_STATE_V4_DISCRIMINANT:
+        has_latency = True
+    else:
+        raise TypeError("rawData must contain VoteStateVersions::V1_14_11, ::V3, or ::V4")
+
+    node_pubkey = read_pubkey("nodePubkey")
+    authorized_withdrawer = read_pubkey("authorizedWithdrawer")
+    if variant == _SCCP_SOLANA_VOTE_STATE_V4_DISCRIMINANT:
+        inflation_rewards_collector = read_pubkey("inflationRewardsCollector")
+        block_revenue_collector = read_pubkey("blockRevenueCollector")
+        inflation_rewards_commission_bps = read_u16("inflationRewardsCommissionBps")
+        block_revenue_commission_bps = read_u16("blockRevenueCommissionBps")
+        if inflation_rewards_commission_bps > _SCCP_SOLANA_BASIS_POINTS_PER_UNIT:
+            raise ValueError("inflationRewardsCommissionBps must be at most 10000")
+        if block_revenue_commission_bps > _SCCP_SOLANA_BASIS_POINTS_PER_UNIT:
+            raise ValueError("blockRevenueCommissionBps must be at most 10000")
+        pending_delegator_rewards = read_u64("pendingDelegatorRewards")
+        bls_variant = read_u8("blsPubkeyCompressed")
+        if bls_variant == 0:
+            bls_pubkey_compressed = b""
+        elif bls_variant == 1:
+            if cursor + _SCCP_SOLANA_BLS_PUBLIC_KEY_COMPRESSED_LEN > len(data):
+                raise TypeError("blsPubkeyCompressed is too short")
+            bls_pubkey_compressed = data[
+                cursor : cursor + _SCCP_SOLANA_BLS_PUBLIC_KEY_COMPRESSED_LEN
+            ]
+            cursor += _SCCP_SOLANA_BLS_PUBLIC_KEY_COMPRESSED_LEN
+        else:
+            raise TypeError("blsPubkeyCompressed option discriminator must be 0 or 1")
+    else:
+        commission = read_u8("commission")
+        inflation_rewards_collector = vote_account_address_bytes
+        block_revenue_collector = node_pubkey
+        inflation_rewards_commission_bps = commission * 100
+        block_revenue_commission_bps = 10_000
+        pending_delegator_rewards = 0
+        bls_pubkey_compressed = b""
+    vote_count = read_u64("towerVoteSlots")
+    if vote_count != SCCP_SOLANA_TOWER_VOTE_STACK_DEPTH:
+        raise ValueError("towerVoteSlots must contain 31 active post-root slots")
+
+    tower_vote_slots = []
+    for index in range(SCCP_SOLANA_TOWER_VOTE_STACK_DEPTH):
+        if has_latency:
+            read_u8(f"towerVoteSlots[{index}].latency")
+        slot = read_u64(f"towerVoteSlots[{index}].slot")
+        confirmation_count = read_u32(f"towerVoteSlots[{index}].confirmationCount")
+        if confirmation_count != SCCP_SOLANA_TOWER_VOTE_STACK_DEPTH - index:
+            raise ValueError(
+                f"towerVoteSlots[{index}] has an invalid Tower confirmation count"
+            )
+        tower_vote_slots.append(slot)
+
+    if read_u8("rootSlot") != 1:
+        raise TypeError("rawData must contain a rooted vote state")
+    root_slot = read_u64("rootSlot")
+    previous_tower_slot = root_slot
+    for index, slot in enumerate(tower_vote_slots):
+        if slot <= previous_tower_slot:
+            raise ValueError(
+                f"towerVoteSlots[{index}] must be greater than the previous slot"
+            )
+        previous_tower_slot = slot
+
+    authorized_voter_count = read_u64("authorizedVoters")
+    authorized_voter_limit = (
+        _SCCP_SOLANA_VOTE_STATE_V4_AUTHORIZED_VOTERS
+        if variant == _SCCP_SOLANA_VOTE_STATE_V4_DISCRIMINANT
+        else _SCCP_SOLANA_VOTE_STATE_PRIOR_VOTERS
+    )
+    if authorized_voter_count == 0 or authorized_voter_count > authorized_voter_limit:
+        if variant == _SCCP_SOLANA_VOTE_STATE_V4_DISCRIMINANT:
+            raise ValueError("authorizedVoters must contain 1..4 entries for VoteStateV4")
+        raise ValueError("authorizedVoters must contain 1..32 entries")
+    previous_authorized_epoch = None
+    authorized_voter = None
+    for index in range(authorized_voter_count):
+        authorized_epoch = read_u64(f"authorizedVoters[{index}].epoch")
+        if (
+            previous_authorized_epoch is not None
+            and authorized_epoch <= previous_authorized_epoch
+        ):
+            raise ValueError(
+                "authorizedVoters must be sorted by strictly increasing epoch"
+            )
+        voter = read_pubkey(f"authorizedVoters[{index}].authorizedVoter")
+        if not any(voter):
+            raise TypeError(f"authorizedVoters[{index}].authorizedVoter must be non-zero")
+        if authorized_epoch <= signed_epoch:
+            authorized_voter = voter
+        previous_authorized_epoch = authorized_epoch
+    if authorized_voter is None:
+        raise ValueError("authorizedVoters must include an entry at or before epoch")
+
+    if variant != _SCCP_SOLANA_VOTE_STATE_V4_DISCRIMINANT:
+        for index in range(_SCCP_SOLANA_VOTE_STATE_PRIOR_VOTERS):
+            prior_voter = read_pubkey(f"priorVoters[{index}].pubkey")
+            from_epoch = read_u64(f"priorVoters[{index}].fromEpoch")
+            until_epoch = read_u64(f"priorVoters[{index}].untilEpoch")
+            if not any(prior_voter):
+                if from_epoch != 0 or until_epoch != 0:
+                    raise TypeError(
+                        f"priorVoters[{index}] zero pubkey must have zero epoch bounds"
+                    )
+            elif from_epoch >= until_epoch:
+                raise TypeError(
+                    f"priorVoters[{index}] must have increasing epoch bounds"
+                )
+        prior_voters_index = read_u64("priorVoters.index")
+        prior_voters_is_empty = read_u8("priorVoters.isEmpty")
+        if (
+            prior_voters_index >= _SCCP_SOLANA_VOTE_STATE_PRIOR_VOTERS
+            or prior_voters_is_empty not in (0, 1)
+        ):
+            raise ValueError("priorVoters must have a valid cursor and boolean empty flag")
+
+    epoch_credit_count = read_u64("epochCredits")
+    if epoch_credit_count > _SCCP_SOLANA_VOTE_STATE_MAX_EPOCH_CREDITS:
+        raise ValueError("epochCredits exceeds Solana history bound")
+    previous_epoch_credit_epoch = None
+    previous_epoch_credit_total = None
+    for index in range(epoch_credit_count):
+        credit_epoch = read_u64(f"epochCredits[{index}].epoch")
+        credits = read_u64(f"epochCredits[{index}].credits")
+        previous_credits = read_u64(f"epochCredits[{index}].previousCredits")
+        if (
+            credit_epoch > signed_epoch
+            or (
+                previous_epoch_credit_epoch is not None
+                and credit_epoch <= previous_epoch_credit_epoch
+            )
+            or previous_credits > credits
+            or (
+                previous_epoch_credit_total is not None
+                and previous_credits < previous_epoch_credit_total
+            )
+        ):
+            raise ValueError("epochCredits must be sorted and monotonic")
+        previous_epoch_credit_epoch = credit_epoch
+        previous_epoch_credit_total = credits
+    last_timestamp_slot = read_u64("lastTimestamp.slot")
+    last_timestamp = read_i64("lastTimestamp.timestamp")
+    last_tower_vote_slot = tower_vote_slots[-1]
+    if (
+        (last_timestamp_slot == 0 and last_timestamp != 0)
+        or (
+            last_timestamp_slot != 0
+            and (
+                last_timestamp_slot > last_tower_vote_slot
+                or last_timestamp < 0
+            )
+        )
+    ):
+        raise ValueError("lastTimestamp must be default or within the Tower vote stack")
+    if any(data[cursor:]):
+        raise ValueError("rawData padding must be zero")
+
+    parsed = {
+        "nodePubkey": node_pubkey,
+        "authorizedVoter": authorized_voter,
+        "authorizedWithdrawer": authorized_withdrawer,
+        "inflationRewardsCollector": inflation_rewards_collector,
+        "blockRevenueCollector": block_revenue_collector,
+        "inflationRewardsCommissionBps": inflation_rewards_commission_bps,
+        "blockRevenueCommissionBps": block_revenue_commission_bps,
+        "pendingDelegatorRewards": pending_delegator_rewards,
+        "blsPubkeyCompressed": bls_pubkey_compressed,
+        "rootSlot": root_slot,
+        "towerVoteSlots": tower_vote_slots,
+    }
+    canonical_solana_sccp_vote_account_data_bytes(parsed)
+    return parsed
+
+
+def solana_sccp_vote_account_data_hash_from_raw_vote_state(
+    raw_data: Any,
+    epoch: Any,
+    vote_account_address: Any,
+) -> str:
+    """Hash raw Solana vote account data using SCCP fields."""
+
+    return solana_sccp_vote_account_data_hash(
+        solana_sccp_vote_account_data_from_raw_vote_state(
+            raw_data, epoch, vote_account_address
+        )
+    )
+
+
+def solana_sccp_vote_account_data_from_raw_vote_state_v1_or_v3(
+    raw_data: Any,
+    epoch: Any,
+    vote_account_address: Any,
+) -> Dict[str, Any]:
+    """Compatibility wrapper for raw Solana vote account data parsing."""
+
+    return solana_sccp_vote_account_data_from_raw_vote_state(
+        raw_data, epoch, vote_account_address
+    )
+
+
+def solana_sccp_vote_account_data_hash_from_raw_vote_state_v1_or_v3(
+    raw_data: Any,
+    epoch: Any,
+    vote_account_address: Any,
+) -> str:
+    """Compatibility wrapper for raw Solana vote account data hashing."""
+
+    return solana_sccp_vote_account_data_hash_from_raw_vote_state(
+        raw_data, epoch, vote_account_address
+    )
+
+
+def canonical_solana_sccp_stake_account_data_bytes(input_value: Any) -> bytes:
+    """Return canonical bytes for parsed Solana stake account delegation data."""
+
+    value = _require_mapping(input_value, "Solana stake account data input")
+
+    def stake_value(label: str, *keys: str) -> Any:
+        return _mapping_value_without_aliases(value, label, *dict.fromkeys(keys))
+
+    def stake_optional_value(label: str, *keys: str) -> Any:
+        selected = _mapping_optional_value_without_aliases(
+            value,
+            label,
+            *dict.fromkeys(keys),
+        )
+        return None if selected is _MISSING or selected is None else selected
+
+    staker = _to_bytes(_mapping_value(value, "staker"), "staker")
+    withdrawer = _to_bytes(_mapping_value(value, "withdrawer"), "withdrawer")
+    voter_pubkey = _to_bytes(
+        stake_value("voterPubkey", "voterPubkey", "voter_pubkey"),
+        "voterPubkey",
+    )
+    delegated_stake = _normalize_u64(
+        stake_value("delegatedStake", "delegatedStake", "delegated_stake"),
+        "delegatedStake",
+    )
+    activation_epoch = _normalize_u64(
+        stake_value("activationEpoch", "activationEpoch", "activation_epoch"),
+        "activationEpoch",
+    )
+    deactivation_epoch = _normalize_u64(
+        stake_value("deactivationEpoch", "deactivationEpoch", "deactivation_epoch"),
+        "deactivationEpoch",
+    )
+    credits_observed_value = stake_optional_value(
+        "creditsObserved",
+        "creditsObserved",
+        "credits_observed",
+    )
+    credits_observed = _normalize_u64(
+        0 if credits_observed_value is None else credits_observed_value,
+        "creditsObserved",
+    )
+    warmup_cooldown_rate_bytes_value = stake_optional_value(
+        "warmupCooldownRateBytes",
+        "warmupCooldownRateBytes",
+        "warmup_cooldown_rate_bytes",
+    )
+    warmup_cooldown_rate_bytes = _to_bytes(
+        _SCCP_SOLANA_STAKE_STATE_V2_CURRENT_WARMUP_COOLDOWN_RATE_BYTES
+        if warmup_cooldown_rate_bytes_value is None
+        else warmup_cooldown_rate_bytes_value,
+        "warmupCooldownRateBytes",
+    )
+    stake_flags_value = stake_optional_value("stakeFlags", "stakeFlags", "stake_flags")
+    stake_flags = _normalize_u64(
+        0 if stake_flags_value is None else stake_flags_value,
+        "stakeFlags",
+    )
+    for label, raw in (
+        ("staker", staker),
+        ("withdrawer", withdrawer),
+        ("voterPubkey", voter_pubkey),
+    ):
+        if len(raw) != 32 or not any(raw):
+            raise TypeError(f"{label} must be a non-zero 32-byte Solana public key")
+    if delegated_stake == 0:
+        raise ValueError("delegatedStake must be greater than zero")
+    if deactivation_epoch <= activation_epoch:
+        raise ValueError("deactivationEpoch must be greater than activationEpoch")
+    if (
+        len(warmup_cooldown_rate_bytes)
+        != _SCCP_SOLANA_STAKE_STATE_V2_WARMUP_COOLDOWN_RATE_BYTES
+    ):
+        raise TypeError("warmupCooldownRateBytes must be 8 bytes")
+    if warmup_cooldown_rate_bytes not in (
+        _SCCP_SOLANA_STAKE_STATE_V2_LEGACY_WARMUP_COOLDOWN_RATE_BYTES,
+        _SCCP_SOLANA_STAKE_STATE_V2_CURRENT_WARMUP_COOLDOWN_RATE_BYTES,
+    ):
+        raise TypeError(
+            "warmupCooldownRateBytes must be Solana 0.25 or 0.09 f64 bytes"
+        )
+    if (
+        stake_flags > 0xFF
+        or stake_flags & ~_SCCP_SOLANA_STAKE_STATE_V2_KNOWN_FLAGS_MASK
+    ):
+        raise ValueError("stakeFlags contains reserved StakeFlags bits")
+    out = bytearray()
+    out.extend(_write_u8(1))
+    out.extend(_write_bytes(staker))
+    out.extend(_write_bytes(withdrawer))
+    out.extend(_write_bytes(voter_pubkey))
+    out.extend(_write_u64_le(delegated_stake))
+    out.extend(_write_u64_le(activation_epoch))
+    out.extend(_write_u64_le(deactivation_epoch))
+    out.extend(_write_bytes(warmup_cooldown_rate_bytes))
+    out.extend(_write_u64_le(credits_observed))
+    out.extend(_write_u8(stake_flags))
+    return bytes(out)
+
+
+def solana_sccp_stake_account_data_hash(input_value: Any) -> str:
+    """Hash parsed Solana stake account data bound to an account opening."""
+
+    return _bytes_to_hex(
+        _prefixed_blake2b(
+            _SCCP_SOLANA_STAKE_ACCOUNT_DATA_PREFIX_V1,
+            canonical_solana_sccp_stake_account_data_bytes(input_value),
+        )
+    )
+
+
+def solana_sccp_stake_account_data_from_raw_stake_state_v2(
+    raw_data: Any,
+) -> Dict[str, Any]:
+    """Parse raw Solana ``StakeStateV2::Stake`` account data into SCCP fields."""
+
+    data = _to_bytes(raw_data, "rawData")
+    if len(data) != _SCCP_SOLANA_STAKE_STATE_V2_STAKE_ACCOUNT_DATA_LEN:
+        raise TypeError("rawData must be a 200-byte Solana StakeStateV2 account")
+    discriminator = int.from_bytes(data[0:4], "little")
+    if discriminator != _SCCP_SOLANA_STAKE_STATE_V2_STAKE_DISCRIMINANT:
+        raise TypeError("rawData must contain StakeStateV2::Stake")
+    if any(data[(_SCCP_SOLANA_STAKE_STATE_V2_FLAG_OFFSET + 1) :]):
+        raise TypeError("rawData must not contain non-zero stake account padding")
+    stake_flags = data[_SCCP_SOLANA_STAKE_STATE_V2_FLAG_OFFSET]
+    if stake_flags & ~_SCCP_SOLANA_STAKE_STATE_V2_KNOWN_FLAGS_MASK:
+        raise TypeError("rawData contains reserved StakeFlags bits")
+    parsed = {
+        "staker": data[
+            _SCCP_SOLANA_STAKE_STATE_V2_STAKER_OFFSET : (
+                _SCCP_SOLANA_STAKE_STATE_V2_STAKER_OFFSET + 32
+            )
+        ],
+        "withdrawer": data[
+            _SCCP_SOLANA_STAKE_STATE_V2_WITHDRAWER_OFFSET : (
+                _SCCP_SOLANA_STAKE_STATE_V2_WITHDRAWER_OFFSET + 32
+            )
+        ],
+        "voterPubkey": data[
+            _SCCP_SOLANA_STAKE_STATE_V2_VOTER_PUBKEY_OFFSET : (
+                _SCCP_SOLANA_STAKE_STATE_V2_VOTER_PUBKEY_OFFSET + 32
+            )
+        ],
+        "delegatedStake": int.from_bytes(
+            data[
+                _SCCP_SOLANA_STAKE_STATE_V2_DELEGATED_STAKE_OFFSET : (
+                    _SCCP_SOLANA_STAKE_STATE_V2_DELEGATED_STAKE_OFFSET + 8
+                )
+            ],
+            "little",
+        ),
+        "activationEpoch": int.from_bytes(
+            data[
+                _SCCP_SOLANA_STAKE_STATE_V2_ACTIVATION_EPOCH_OFFSET : (
+                    _SCCP_SOLANA_STAKE_STATE_V2_ACTIVATION_EPOCH_OFFSET + 8
+                )
+            ],
+            "little",
+        ),
+        "deactivationEpoch": int.from_bytes(
+            data[
+                _SCCP_SOLANA_STAKE_STATE_V2_DEACTIVATION_EPOCH_OFFSET : (
+                    _SCCP_SOLANA_STAKE_STATE_V2_DEACTIVATION_EPOCH_OFFSET + 8
+                )
+            ],
+            "little",
+        ),
+        "warmupCooldownRateBytes": data[
+            _SCCP_SOLANA_STAKE_STATE_V2_WARMUP_COOLDOWN_RATE_OFFSET : (
+                _SCCP_SOLANA_STAKE_STATE_V2_WARMUP_COOLDOWN_RATE_OFFSET
+                + _SCCP_SOLANA_STAKE_STATE_V2_WARMUP_COOLDOWN_RATE_BYTES
+            )
+        ],
+        "creditsObserved": int.from_bytes(
+            data[
+                _SCCP_SOLANA_STAKE_STATE_V2_CREDITS_OBSERVED_OFFSET : (
+                    _SCCP_SOLANA_STAKE_STATE_V2_CREDITS_OBSERVED_OFFSET + 8
+                )
+            ],
+            "little",
+        ),
+        "stakeFlags": stake_flags,
+    }
+    canonical_solana_sccp_stake_account_data_bytes(parsed)
+    return parsed
+
+
+def solana_sccp_stake_account_data_hash_from_raw_stake_state_v2(
+    raw_data: Any,
+) -> str:
+    """Hash raw Solana ``StakeStateV2::Stake`` account data using SCCP fields."""
+
+    return solana_sccp_stake_account_data_hash(
+        solana_sccp_stake_account_data_from_raw_stake_state_v2(raw_data)
+    )
+
+
+def canonical_solana_sccp_stake_account_state_bytes(input_value: Any) -> bytes:
+    """Return canonical bytes for Solana SCCP vote/stake account state openings."""
+
+    value = _require_mapping(input_value, "Solana stake account state input")
+    epoch = _solana_epoch_from_epoch_or_slot(value)
+    validator_public_keys, validator_stakes = _normalize_solana_validator_roster(value)
+    raw_activation_epochs = _mapping_value_without_aliases(
+        value,
+        "validatorActivationEpochs",
+        "validatorActivationEpochs",
+        "validator_activation_epochs",
+        "activationEpochs",
+        "activation_epochs",
+    )
+    raw_deactivation_epochs = _mapping_value_without_aliases(
+        value,
+        "validatorDeactivationEpochs",
+        "validatorDeactivationEpochs",
+        "validator_deactivation_epochs",
+        "deactivationEpochs",
+        "deactivation_epochs",
+    )
+    if not isinstance(raw_activation_epochs, Sequence) or isinstance(
+        raw_activation_epochs, (str, bytes, bytearray)
+    ):
+        raise TypeError("validatorActivationEpochs must be a sequence")
+    if not isinstance(raw_deactivation_epochs, Sequence) or isinstance(
+        raw_deactivation_epochs, (str, bytes, bytearray)
+    ):
+        raise TypeError("validatorDeactivationEpochs must be a sequence")
+    if len(raw_activation_epochs) != len(validator_public_keys) or len(
+        raw_deactivation_epochs
+    ) != len(validator_public_keys):
+        raise ValueError("validator activation epochs must match validatorPublicKeys")
+    activation_epochs = [
+        _normalize_u64(value, f"validatorActivationEpochs[{index}]")
+        for index, value in enumerate(raw_activation_epochs)
+    ]
+    deactivation_epochs = [
+        _normalize_u64(value, f"validatorDeactivationEpochs[{index}]")
+        for index, value in enumerate(raw_deactivation_epochs)
+    ]
+    for index, (activation_epoch, deactivation_epoch) in enumerate(
+        zip(activation_epochs, deactivation_epochs)
+    ):
+        if activation_epoch >= epoch:
+            raise ValueError(
+                f"validatorActivationEpochs[{index}] must be less than epoch"
+            )
+        if deactivation_epoch <= activation_epoch:
+            raise ValueError(
+                f"validatorDeactivationEpochs[{index}] must be greater than activation epoch"
+            )
+
+    vote_account_addresses = _normalize_solana_fixed32_sequence(
+        _mapping_value_without_aliases(
+            value,
+            "validatorVoteAccountAddresses",
+            "validatorVoteAccountAddresses",
+            "validator_vote_account_addresses",
+            "voteAccountAddresses",
+            "vote_account_addresses",
+        ),
+        len(validator_public_keys),
+        "validatorVoteAccountAddresses",
+    )
+    stake_account_addresses = _normalize_solana_fixed32_sequence(
+        _mapping_value_without_aliases(
+            value,
+            "validatorStakeAccountAddresses",
+            "validatorStakeAccountAddresses",
+            "validator_stake_account_addresses",
+            "stakeAccountAddresses",
+            "stake_account_addresses",
+        ),
+        len(validator_public_keys),
+        "validatorStakeAccountAddresses",
+    )
+    vote_account_hashes = _normalize_solana_fixed32_sequence(
+        _mapping_value_without_aliases(
+            value,
+            "validatorVoteAccountHashes",
+            "validatorVoteAccountHashes",
+            "validator_vote_account_hashes",
+            "voteAccountHashes",
+            "vote_account_hashes",
+        ),
+        len(validator_public_keys),
+        "validatorVoteAccountHashes",
+        unique=False,
+    )
+    stake_account_hashes = _normalize_solana_fixed32_sequence(
+        _mapping_value_without_aliases(
+            value,
+            "validatorStakeAccountHashes",
+            "validatorStakeAccountHashes",
+            "validator_stake_account_hashes",
+            "stakeAccountHashes",
+            "stake_account_hashes",
+        ),
+        len(validator_public_keys),
+        "validatorStakeAccountHashes",
+        unique=False,
+    )
+    stake_account_address_set = set(stake_account_addresses)
+    for index, (vote_account, stake_account) in enumerate(
+        zip(vote_account_addresses, stake_account_addresses)
+    ):
+        if vote_account == stake_account:
+            raise TypeError(
+                f"validatorStakeAccountAddresses[{index}] must differ from vote account"
+            )
+        if vote_account in stake_account_address_set:
+            raise TypeError(
+                f"validatorVoteAccountAddresses[{index}] must not overlap stake accounts"
+            )
+
+    stake_activation_hash = _hex_to_bytes(
+        solana_sccp_stake_activation_hash(
+            {
+                "epoch": epoch,
+                "validatorPublicKeys": validator_public_keys,
+                "validatorStakes": validator_stakes,
+                "validatorActivationEpochs": activation_epochs,
+                "validatorDeactivationEpochs": deactivation_epochs,
+            }
+        ),
+        "stakeActivationHash",
+        32,
+    )
+    out = bytearray()
+    out.extend(_write_u8(1))
+    out.extend(_write_u64_le(epoch))
+    out.extend(stake_activation_hash)
+    out.extend(_write_u32_le(len(validator_public_keys)))
+    for (
+        public_key,
+        stake,
+        activation_epoch,
+        deactivation_epoch,
+        vote_account,
+        stake_account,
+        vote_account_hash,
+        stake_account_hash,
+    ) in zip(
+        validator_public_keys,
+        validator_stakes,
+        activation_epochs,
+        deactivation_epochs,
+        vote_account_addresses,
+        stake_account_addresses,
+        vote_account_hashes,
+        stake_account_hashes,
+    ):
+        out.extend(_write_bytes(public_key))
+        out.extend(_write_u64_le(stake))
+        out.extend(_write_u64_le(activation_epoch))
+        out.extend(_write_u64_le(deactivation_epoch))
+        out.extend(_write_bytes(vote_account))
+        out.extend(_write_bytes(stake_account))
+        out.extend(vote_account_hash)
+        out.extend(stake_account_hash)
+    return bytes(out)
+
+
+def solana_sccp_stake_account_state_hash(input_value: Any) -> str:
+    """Hash Solana SCCP vote/stake account state openings."""
+
+    return _bytes_to_hex(
+        _prefixed_blake2b(
+            _SCCP_SOLANA_STAKE_ACCOUNT_STATE_PREFIX_V1,
+            canonical_solana_sccp_stake_account_state_bytes(input_value),
+        )
+    )
+
+
+def _normalize_solana_delegated_stakes(
+    value: Mapping[str, Any], validator_stakes: Sequence[int], expected_length: int
+) -> list[int]:
+    explicit_delegated_stakes = _mapping_optional_value_without_aliases(
+        value,
+        "validatorDelegatedStakes",
+        "validatorDelegatedStakes",
+        "validator_delegated_stakes",
+        "delegatedStakes",
+        "delegated_stakes",
+    )
+    raw_delegated_stakes = (
+        _mapping_value_without_aliases(
+            value,
+            "validatorStakes",
+            "validatorStakes",
+            "validator_stakes",
+        )
+        if explicit_delegated_stakes is _MISSING
+        else explicit_delegated_stakes
+    )
+    if not isinstance(raw_delegated_stakes, Sequence) or isinstance(
+        raw_delegated_stakes, (str, bytes, bytearray)
+    ):
+        raise TypeError("validatorDelegatedStakes must be a sequence")
+    if len(raw_delegated_stakes) != expected_length:
+        raise ValueError("validatorDelegatedStakes must match validatorPublicKeys")
+    delegated_stakes = [
+        _normalize_u64(stake, f"validatorDelegatedStakes[{index}]")
+        for index, stake in enumerate(raw_delegated_stakes)
+    ]
+    for index, (delegated_stake, effective_stake) in enumerate(
+        zip(delegated_stakes, validator_stakes)
+    ):
+        if delegated_stake < effective_stake:
+            raise ValueError(
+                f"validatorDelegatedStakes[{index}] must be at least validatorStakes[{index}]"
+            )
+    return delegated_stakes
+
+
+def _solana_stake_history_entry_for_epoch(
+    stake_history_entries: Sequence[Mapping[str, int]], epoch: int
+) -> Mapping[str, int] | None:
+    for entry in stake_history_entries:
+        if entry["epoch"] == epoch:
+            return entry
+    return None
+
+
+def _solana_stake_change_allowance(
+    account_portion: int, cluster_portion: int, cluster_effective: int
+) -> int:
+    if account_portion == 0 or cluster_portion == 0 or cluster_effective == 0:
+        return 0
+    numerator = (
+        account_portion
+        * cluster_effective
+        * SCCP_SOLANA_TOWER_WARMUP_COOLDOWN_RATE_BPS
+    )
+    denominator = cluster_portion * _SCCP_SOLANA_BASIS_POINTS_PER_UNIT
+    return min(numerator // denominator, account_portion)
+
+
+def _solana_stake_and_activating_v2(
+    target_epoch: int,
+    delegated_stake: int,
+    activation_epoch: int,
+    deactivation_epoch: int,
+    stake_history_entries: Sequence[Mapping[str, int]],
+) -> tuple[int, int]:
+    if activation_epoch == _U64_MASK:
+        return delegated_stake, 0
+    if activation_epoch == deactivation_epoch:
+        return 0, 0
+    if target_epoch == activation_epoch:
+        return 0, delegated_stake
+    if target_epoch < activation_epoch:
+        return 0, 0
+    prev_cluster_stake = _solana_stake_history_entry_for_epoch(
+        stake_history_entries, activation_epoch
+    )
+    if prev_cluster_stake is None:
+        return delegated_stake, 0
+
+    prev_epoch = activation_epoch
+    activated_stake_amount = 0
+    while True:
+        current_epoch = prev_epoch + 1
+        if prev_cluster_stake["activating"] == 0:
+            break
+        remaining_activating_stake = delegated_stake - activated_stake_amount
+        newly_effective_stake = max(
+            _solana_stake_change_allowance(
+                remaining_activating_stake,
+                prev_cluster_stake["activating"],
+                prev_cluster_stake["effective"],
+            ),
+            1,
+        )
+        activated_stake_amount = min(
+            activated_stake_amount + newly_effective_stake, delegated_stake
+        )
+        if activated_stake_amount >= delegated_stake:
+            activated_stake_amount = delegated_stake
+            break
+        if current_epoch >= target_epoch or current_epoch >= deactivation_epoch:
+            break
+        current_cluster_stake = _solana_stake_history_entry_for_epoch(
+            stake_history_entries, current_epoch
+        )
+        if current_cluster_stake is None:
+            break
+        prev_epoch = current_epoch
+        prev_cluster_stake = current_cluster_stake
+
+    return activated_stake_amount, delegated_stake - activated_stake_amount
+
+
+def _solana_delegation_stake_status_v2(
+    target_epoch: int,
+    delegated_stake: int,
+    activation_epoch: int,
+    deactivation_epoch: int,
+    stake_history_entries: Sequence[Mapping[str, int]],
+) -> dict[str, int]:
+    effective_stake, activating_stake = _solana_stake_and_activating_v2(
+        target_epoch,
+        delegated_stake,
+        activation_epoch,
+        deactivation_epoch,
+        stake_history_entries,
+    )
+    if target_epoch < deactivation_epoch:
+        return {
+            "effective": effective_stake,
+            "activating": activating_stake,
+            "deactivating": 0,
+        }
+    if target_epoch == deactivation_epoch:
+        return {
+            "effective": effective_stake,
+            "activating": 0,
+            "deactivating": effective_stake,
+        }
+    prev_cluster_stake = _solana_stake_history_entry_for_epoch(
+        stake_history_entries, deactivation_epoch
+    )
+    if prev_cluster_stake is None:
+        return {"effective": 0, "activating": 0, "deactivating": 0}
+
+    prev_epoch = deactivation_epoch
+    remaining_deactivating_stake = effective_stake
+    while True:
+        current_epoch = prev_epoch + 1
+        if prev_cluster_stake["deactivating"] == 0:
+            break
+        newly_deactivated_stake = max(
+            _solana_stake_change_allowance(
+                remaining_deactivating_stake,
+                prev_cluster_stake["deactivating"],
+                prev_cluster_stake["effective"],
+            ),
+            1,
+        )
+        remaining_deactivating_stake = max(
+            remaining_deactivating_stake - newly_deactivated_stake, 0
+        )
+        if remaining_deactivating_stake == 0:
+            break
+        if current_epoch >= target_epoch:
+            break
+        current_cluster_stake = _solana_stake_history_entry_for_epoch(
+            stake_history_entries, current_epoch
+        )
+        if current_cluster_stake is None:
+            break
+        prev_epoch = current_epoch
+        prev_cluster_stake = current_cluster_stake
+
+    return {
+        "effective": remaining_deactivating_stake,
+        "activating": 0,
+        "deactivating": remaining_deactivating_stake,
+    }
+
+
+def _normalize_solana_stake_history_entries(
+    value: Mapping[str, Any],
+    epoch: int,
+    validator_stakes: Sequence[int],
+    validator_delegated_stakes: Sequence[int],
+    activation_epochs: Sequence[int],
+    deactivation_epochs: Sequence[int],
+) -> list[dict[str, int]]:
+    raw_entries = _mapping_value_without_aliases(
+        value,
+        "stakeHistoryEntries",
+        "stakeHistoryEntries",
+        "stake_history_entries",
+        "stakeHistory",
+        "stake_history",
+    )
+    if not isinstance(raw_entries, Sequence) or isinstance(
+        raw_entries, (str, bytes, bytearray)
+    ):
+        raise TypeError("stakeHistoryEntries must be a non-empty sequence")
+    if not raw_entries:
+        raise TypeError("stakeHistoryEntries must be a non-empty sequence")
+    if len(raw_entries) > 512:
+        raise ValueError("stakeHistoryEntries must not exceed 512 entries")
+    entries: list[dict[str, int]] = []
+    previous_epoch: int | None = None
+    signed_epoch_entry: dict[str, int] | None = None
+    for index, entry_value in enumerate(raw_entries):
+        entry = _require_mapping(
+            entry_value, f"stakeHistoryEntries[{index}]"
+        )
+        normalized = {
+            "epoch": _normalize_u64(
+                _mapping_value(entry, "epoch"), f"stakeHistoryEntries[{index}].epoch"
+            ),
+            "effective": _normalize_u64(
+                _mapping_value(entry, "effective"),
+                f"stakeHistoryEntries[{index}].effective",
+            ),
+            "activating": _normalize_u64(
+                _mapping_value(entry, "activating"),
+                f"stakeHistoryEntries[{index}].activating",
+            ),
+            "deactivating": _normalize_u64(
+                _mapping_value(entry, "deactivating"),
+                f"stakeHistoryEntries[{index}].deactivating",
+            ),
+        }
+        if normalized["epoch"] > epoch:
+            raise ValueError(f"stakeHistoryEntries[{index}].epoch must not exceed epoch")
+        if previous_epoch is not None and previous_epoch >= normalized["epoch"]:
+            raise ValueError(
+                "stakeHistoryEntries must be sorted by strictly increasing epoch"
+            )
+        previous_epoch = normalized["epoch"]
+        if normalized["epoch"] == epoch:
+            signed_epoch_entry = normalized
+        entries.append(normalized)
+    if signed_epoch_entry is None:
+        raise ValueError("stakeHistoryEntries must include the signed epoch")
+    total_effective_stake = 0
+    total_delegated_stake = 0
+    total_activating_stake = 0
+    total_deactivating_stake = 0
+    for index, (effective_stake, delegated_stake, activation_epoch, deactivation_epoch) in enumerate(
+        zip(
+            validator_stakes,
+            validator_delegated_stakes,
+            activation_epochs,
+            deactivation_epochs,
+        )
+    ):
+        if delegated_stake == 0:
+            raise ValueError(
+                f"validatorDelegatedStakes[{index}] must be greater than zero"
+            )
+        if deactivation_epoch <= activation_epoch:
+            raise ValueError(
+                f"validatorDeactivationEpochs[{index}] must be greater than activation epoch"
+            )
+        status = _solana_delegation_stake_status_v2(
+            epoch,
+            delegated_stake,
+            activation_epoch,
+            deactivation_epoch,
+            entries,
+        )
+        if status["effective"] == 0 or status["effective"] != effective_stake:
+            raise ValueError(
+                f"validatorStakes[{index}] must equal replayed StakeHistory effective stake"
+            )
+        total_effective_stake += status["effective"]
+        total_delegated_stake += delegated_stake
+        total_activating_stake += status["activating"]
+        total_deactivating_stake += status["deactivating"]
+    if total_effective_stake == 0 or total_delegated_stake < total_effective_stake:
+        raise ValueError(
+            "replayed StakeHistory effective stake must be non-zero and not exceed delegated stake"
+        )
+    if signed_epoch_entry["effective"] != total_effective_stake:
+        raise ValueError(
+            "signed epoch StakeHistory effective stake must equal replayed validator effective stake"
+        )
+    if signed_epoch_entry["activating"] < total_activating_stake:
+        raise ValueError(
+            "signed epoch StakeHistory activating stake must cover replayed validators"
+        )
+    if signed_epoch_entry["deactivating"] < total_deactivating_stake:
+        raise ValueError(
+            "signed epoch StakeHistory deactivating stake must cover replayed validators"
+        )
+    return entries
+
+
+def _normalize_solana_stake_history_sysvar_entries(
+    value: Mapping[str, Any],
+) -> list[dict[str, int]]:
+    raw_entries = _mapping_value_without_aliases(
+        value,
+        "stakeHistoryEntries",
+        "stakeHistoryEntries",
+        "stake_history_entries",
+        "stakeHistory",
+        "stake_history",
+    )
+    if not isinstance(raw_entries, Sequence) or isinstance(
+        raw_entries, (str, bytes, bytearray)
+    ):
+        raise TypeError("stakeHistoryEntries must be a non-empty sequence")
+    if len(raw_entries) == 0 or len(raw_entries) > 512:
+        raise ValueError("stakeHistoryEntries must contain 1..512 entries")
+    entries: list[dict[str, int]] = []
+    previous_epoch: int | None = None
+    for index, entry in enumerate(raw_entries):
+        if not isinstance(entry, Mapping):
+            raise TypeError(f"stakeHistoryEntries[{index}] must be a mapping")
+        normalized = {
+            "epoch": _normalize_u64(entry.get("epoch"), f"stakeHistoryEntries[{index}].epoch"),
+            "effective": _normalize_u64(
+                entry.get("effective"),
+                f"stakeHistoryEntries[{index}].effective",
+            ),
+            "activating": _normalize_u64(
+                entry.get("activating"),
+                f"stakeHistoryEntries[{index}].activating",
+            ),
+            "deactivating": _normalize_u64(
+                entry.get("deactivating"),
+                f"stakeHistoryEntries[{index}].deactivating",
+            ),
+        }
+        if previous_epoch is not None and previous_epoch >= normalized["epoch"]:
+            raise ValueError(
+                "stakeHistoryEntries must be sorted by strictly increasing epoch"
+            )
+        previous_epoch = normalized["epoch"]
+        entries.append(normalized)
+    return entries
+
+
+def canonical_solana_sccp_stake_history_sysvar_data_bytes(
+    input_value: Any,
+) -> bytes:
+    """Return Solana bincode Vec bytes for StakeHistory sysvar account data."""
+
+    value = _require_mapping(input_value, "Solana StakeHistory sysvar data input")
+    entries = _normalize_solana_stake_history_sysvar_entries(value)
+    out = bytearray()
+    out.extend(_write_u64_le(len(entries)))
+    for entry in reversed(entries):
+        out.extend(_write_u64_le(entry["epoch"]))
+        out.extend(_write_u64_le(entry["effective"]))
+        out.extend(_write_u64_le(entry["activating"]))
+        out.extend(_write_u64_le(entry["deactivating"]))
+    return bytes(out)
+
+
+def solana_sccp_stake_history_sysvar_data_hash(input_value: Any) -> str:
+    """Hash Solana StakeHistory sysvar account data."""
+
+    return _bytes_to_hex(
+        _prefixed_blake2b(
+            _SCCP_SOLANA_STAKE_HISTORY_SYSVAR_DATA_PREFIX_V1,
+            canonical_solana_sccp_stake_history_sysvar_data_bytes(input_value),
+        )
+    )
+
+
+def solana_sccp_stake_history_sysvar_data_hash_from_raw_data(raw_data: Any) -> str:
+    """Hash raw Solana StakeHistory sysvar account bytes after bincode Vec validation."""
+
+    data = _to_bytes(raw_data, "rawData")
+    payload_len = len(data) - 8
+    if len(data) < 8 or payload_len % 32 != 0:
+        raise TypeError("rawData must be Solana StakeHistory sysvar bincode Vec bytes")
+    entry_count = int.from_bytes(data[:8], "little")
+    if entry_count == 0 or entry_count > 512 or len(data) != 8 + entry_count * 32:
+        raise TypeError("rawData must contain 1..512 StakeHistory sysvar entries")
+    cursor = 8
+    previous_epoch = None
+    for _ in range(entry_count):
+        entry_epoch = int.from_bytes(data[cursor : cursor + 8], "little")
+        cursor += 32
+        if previous_epoch is not None and previous_epoch <= entry_epoch:
+            raise TypeError("rawData StakeHistory entries must be newest-first")
+        previous_epoch = entry_epoch
+    return _bytes_to_hex(
+        _prefixed_blake2b(
+            _SCCP_SOLANA_STAKE_HISTORY_SYSVAR_DATA_PREFIX_V1,
+            data,
+        )
+    )
+
+
+def canonical_solana_sccp_stake_history_bytes(input_value: Any) -> bytes:
+    """Return canonical bytes for Solana SCCP StakeHistory sysvar evidence."""
+
+    value = _require_mapping(input_value, "Solana stake history input")
+    epoch = _solana_epoch_from_epoch_or_slot(value)
+    validator_public_keys, validator_stakes = _normalize_solana_validator_roster(value)
+    validator_delegated_stakes = _normalize_solana_delegated_stakes(
+        value, validator_stakes, len(validator_public_keys)
+    )
+    raw_activation_epochs = _mapping_value_without_aliases(
+        value,
+        "validatorActivationEpochs",
+        "validatorActivationEpochs",
+        "validator_activation_epochs",
+        "activationEpochs",
+        "activation_epochs",
+    )
+    raw_deactivation_epochs = _mapping_value_without_aliases(
+        value,
+        "validatorDeactivationEpochs",
+        "validatorDeactivationEpochs",
+        "validator_deactivation_epochs",
+        "deactivationEpochs",
+        "deactivation_epochs",
+    )
+    if not isinstance(raw_activation_epochs, Sequence) or isinstance(
+        raw_activation_epochs, (str, bytes, bytearray)
+    ):
+        raise TypeError("validatorActivationEpochs must be a sequence")
+    if not isinstance(raw_deactivation_epochs, Sequence) or isinstance(
+        raw_deactivation_epochs, (str, bytes, bytearray)
+    ):
+        raise TypeError("validatorDeactivationEpochs must be a sequence")
+    if len(raw_activation_epochs) != len(validator_public_keys) or len(
+        raw_deactivation_epochs
+    ) != len(validator_public_keys):
+        raise ValueError("validator activation epochs must match validatorPublicKeys")
+    activation_epochs = [
+        _normalize_u64(epoch_value, f"validatorActivationEpochs[{index}]")
+        for index, epoch_value in enumerate(raw_activation_epochs)
+    ]
+    deactivation_epochs = [
+        _normalize_u64(epoch_value, f"validatorDeactivationEpochs[{index}]")
+        for index, epoch_value in enumerate(raw_deactivation_epochs)
+    ]
+    for index, (activation_epoch, deactivation_epoch) in enumerate(
+        zip(activation_epochs, deactivation_epochs)
+    ):
+        if activation_epoch >= epoch:
+            raise ValueError(
+                f"validatorActivationEpochs[{index}] must be less than epoch"
+            )
+        if deactivation_epoch <= activation_epoch:
+            raise ValueError(
+                f"validatorDeactivationEpochs[{index}] must be greater than activation epoch"
+            )
+    stake_history_entries = _normalize_solana_stake_history_entries(
+        value,
+        epoch,
+        validator_stakes,
+        validator_delegated_stakes,
+        activation_epochs,
+        deactivation_epochs,
+    )
+    stake_account_state_input = dict(value)
+    for key in (
+        "epoch",
+        "validatorEpoch",
+        "validator_epoch",
+        "finalizedSlot",
+        "finalized_slot",
+        "slot",
+        "validatorPublicKeys",
+        "validator_public_keys",
+        "validatorStakes",
+        "validator_stakes",
+        "validatorActivationEpochs",
+        "validator_activation_epochs",
+        "activationEpochs",
+        "activation_epochs",
+        "validatorDeactivationEpochs",
+        "validator_deactivation_epochs",
+        "deactivationEpochs",
+        "deactivation_epochs",
+    ):
+        stake_account_state_input.pop(key, None)
+    stake_account_state_hash = _hex_to_bytes(
+        solana_sccp_stake_account_state_hash(
+            {
+                **stake_account_state_input,
+                "epoch": epoch,
+                "validatorPublicKeys": validator_public_keys,
+                "validatorStakes": validator_delegated_stakes,
+                "validatorActivationEpochs": activation_epochs,
+                "validatorDeactivationEpochs": deactivation_epochs,
+            }
+        ),
+        "stakeAccountStateHash",
+        32,
+    )
+
+    out = bytearray()
+    out.extend(_write_u8(1))
+    out.extend(_write_u64_le(epoch))
+    out.extend(stake_account_state_hash)
+    out.extend(_write_u32_le(len(validator_public_keys)))
+    for public_key, effective_stake, delegated_stake, activation_epoch, deactivation_epoch in zip(
+        validator_public_keys,
+        validator_stakes,
+        validator_delegated_stakes,
+        activation_epochs,
+        deactivation_epochs,
+    ):
+        out.extend(_write_bytes(public_key))
+        out.extend(_write_u64_le(effective_stake))
+        out.extend(_write_u64_le(delegated_stake))
+        out.extend(_write_u64_le(activation_epoch))
+        out.extend(_write_u64_le(deactivation_epoch))
+    out.extend(_write_u32_le(len(stake_history_entries)))
+    for entry in stake_history_entries:
+        out.extend(_write_u64_le(entry["epoch"]))
+        out.extend(_write_u64_le(entry["effective"]))
+        out.extend(_write_u64_le(entry["activating"]))
+        out.extend(_write_u64_le(entry["deactivating"]))
+    return bytes(out)
+
+
+def solana_sccp_stake_history_hash(input_value: Any) -> str:
+    """Hash Solana SCCP StakeHistory sysvar evidence."""
+
+    return _bytes_to_hex(
+        _prefixed_blake2b(
+            _SCCP_SOLANA_STAKE_HISTORY_PREFIX_V1,
+            canonical_solana_sccp_stake_history_bytes(input_value),
+        )
+    )
+
+
+def canonical_solana_sccp_tower_lockout_bytes(input_value: Any) -> bytes:
+    """Return canonical bytes for the Solana SCCP Tower lockout context."""
+
+    value = _require_mapping(input_value, "Solana tower lockout input")
+    finalized_slot = _normalize_u64(
+        _mapping_value_without_aliases(
+            value, "finalizedSlot", "finalizedSlot", "finalized_slot"
+        ),
+        "finalizedSlot",
+    )
+    epoch_value = _mapping_value_without_aliases(
+        value, "epoch", "epoch", "validatorEpoch", "validator_epoch"
+    )
+    if epoch_value is None:
+        epoch = solana_sccp_mainnet_epoch_for_slot(finalized_slot)
+    else:
+        epoch = _normalize_u64(epoch_value, "epoch")
+    if epoch != solana_sccp_mainnet_epoch_for_slot(finalized_slot):
+        raise ValueError("epoch must match Solana mainnet finalizedSlot")
+    rooted_slot = _normalize_u64(
+        _mapping_value_without_aliases(value, "rootedSlot", "rootedSlot", "rooted_slot"),
+        "rootedSlot",
+    )
+    parent_slot = _normalize_u64(
+        _mapping_value_without_aliases(value, "parentSlot", "parentSlot", "parent_slot"),
+        "parentSlot",
+    )
+    if rooted_slot > parent_slot:
+        raise ValueError("rootedSlot must be less than or equal to parentSlot")
+    if parent_slot + 1 != finalized_slot:
+        raise ValueError("parentSlot must be the direct parent of finalizedSlot")
+    if finalized_slot - rooted_slot < SCCP_SOLANA_TOWER_VOTE_STACK_DEPTH:
+        raise ValueError("rootedSlot must satisfy the Solana Tower lockout depth")
+    parent_bank_hash = _nonzero_hex32_to_bytes(
+        _mapping_value_without_aliases(
+            value, "parentBankHash", "parentBankHash", "parent_bank_hash"
+        ),
+        "parentBankHash",
+    )
+    out = bytearray()
+    out.extend(_write_u8(1))
+    out.extend(_write_u64_le(epoch))
+    out.extend(_write_u64_le(SCCP_SOLANA_TOWER_LOCKOUT_CONFIRMATION_DEPTH))
+    out.extend(_write_u64_le(finalized_slot))
+    out.extend(_write_u64_le(rooted_slot))
+    out.extend(_write_u64_le(parent_slot))
+    out.extend(parent_bank_hash)
+    return bytes(out)
+
+
+def solana_sccp_tower_lockout_hash(input_value: Any) -> str:
+    """Hash the Solana Tower lockout context used by SCCP finality votes."""
+
+    return _bytes_to_hex(
+        _prefixed_blake2b(
+            _SCCP_SOLANA_TOWER_LOCKOUT_PREFIX_V1,
+            canonical_solana_sccp_tower_lockout_bytes(input_value),
+        )
+    )
+
+
+def canonical_solana_sccp_tower_replay_bytes(input_value: Any) -> bytes:
+    """Return canonical bytes for the Solana SCCP Tower vote-stack transcript."""
+
+    value = _require_mapping(input_value, "Solana tower replay input")
+    finalized_slot = _normalize_u64(
+        _mapping_value_without_aliases(
+            value, "finalizedSlot", "finalizedSlot", "finalized_slot"
+        ),
+        "finalizedSlot",
+    )
+    epoch_value = _mapping_value_without_aliases(
+        value, "epoch", "epoch", "validatorEpoch", "validator_epoch"
+    )
+    if epoch_value is None:
+        epoch = solana_sccp_mainnet_epoch_for_slot(finalized_slot)
+    else:
+        epoch = _normalize_u64(epoch_value, "epoch")
+    if epoch != solana_sccp_mainnet_epoch_for_slot(finalized_slot):
+        raise ValueError("epoch must match Solana mainnet finalizedSlot")
+    rooted_slot = _normalize_u64(
+        _mapping_value_without_aliases(value, "rootedSlot", "rootedSlot", "rooted_slot"),
+        "rootedSlot",
+    )
+    parent_slot = _normalize_u64(
+        _mapping_value_without_aliases(value, "parentSlot", "parentSlot", "parent_slot"),
+        "parentSlot",
+    )
+    if parent_slot + 1 != finalized_slot:
+        raise ValueError("parentSlot must be the direct parent of finalizedSlot")
+    if rooted_slot >= finalized_slot:
+        raise ValueError("rootedSlot must be less than finalizedSlot")
+    if finalized_slot - rooted_slot < SCCP_SOLANA_TOWER_VOTE_STACK_DEPTH:
+        raise ValueError("rootedSlot must satisfy the Solana Tower lockout depth")
+    bank_fork_hash = _hex_to_bytes(
+        _mapping_value_without_aliases(
+            value, "bankForkHash", "bankForkHash", "bank_fork_hash"
+        ),
+        "bankForkHash",
+        32,
+    )
+    if not any(bank_fork_hash):
+        raise TypeError("bankForkHash must not be zero")
+
+    raw_vote_slots = _mapping_value_without_aliases(
+        value,
+        "towerVoteSlots",
+        "towerVoteSlots",
+        "tower_vote_slots",
+        "voteSlots",
+        "vote_slots",
+    )
+    if not isinstance(raw_vote_slots, Sequence) or isinstance(
+        raw_vote_slots, (str, bytes, bytearray)
+    ):
+        raise TypeError("towerVoteSlots must be a sequence")
+    depth = SCCP_SOLANA_TOWER_VOTE_STACK_DEPTH
+    if len(raw_vote_slots) != depth:
+        raise ValueError("towerVoteSlots must contain 31 active post-root slots")
+    tower_vote_slots = [
+        _normalize_u64(slot, f"towerVoteSlots[{index}]")
+        for index, slot in enumerate(raw_vote_slots)
+    ]
+    if tower_vote_slots[0] <= rooted_slot:
+        raise ValueError("towerVoteSlots[0] must be greater than rootedSlot")
+    if tower_vote_slots[-1] != finalized_slot:
+        raise ValueError("last towerVoteSlots entry must equal finalizedSlot")
+    if tower_vote_slots[-2] != parent_slot:
+        raise ValueError("penultimate towerVoteSlots entry must equal parentSlot")
+    for previous, current in zip(tower_vote_slots, tower_vote_slots[1:]):
+        if previous >= current:
+            raise ValueError("towerVoteSlots must be strictly increasing")
+    for index, vote_slot in enumerate(tower_vote_slots):
+        if vote_slot > finalized_slot:
+            raise ValueError(f"towerVoteSlots[{index}] must not exceed finalizedSlot")
+        confirmation_count = depth - index
+        if vote_slot + (1 << confirmation_count) <= finalized_slot:
+            raise ValueError(
+                f"towerVoteSlots[{index}] does not satisfy its Tower lockout"
+            )
+
+    out = bytearray()
+    out.extend(_write_u8(1))
+    out.extend(_write_u64_le(epoch))
+    out.extend(_write_u64_le(SCCP_SOLANA_TOWER_LOCKOUT_CONFIRMATION_DEPTH))
+    out.extend(_write_u64_le(finalized_slot))
+    out.extend(_write_u64_le(rooted_slot))
+    out.extend(_write_u64_le(parent_slot))
+    out.extend(bank_fork_hash)
+    out.extend(_write_u32_le(len(tower_vote_slots)))
+    for index, vote_slot in enumerate(tower_vote_slots):
+        out.extend(_write_u64_le(vote_slot))
+        out.extend(_write_u64_le(depth - index))
+    return bytes(out)
+
+
+def solana_sccp_tower_replay_hash(input_value: Any) -> str:
+    """Hash the Solana Tower vote-stack transcript used by SCCP finality votes."""
+
+    return _bytes_to_hex(
+        _prefixed_blake2b(
+            _SCCP_SOLANA_TOWER_REPLAY_PREFIX_V1,
+            canonical_solana_sccp_tower_replay_bytes(input_value),
+        )
+    )
+
+
+def canonical_solana_sccp_bank_fork_bytes(input_value: Any) -> bytes:
+    """Return canonical bytes for the Solana SCCP bank-fork context."""
+
+    value = _require_mapping(input_value, "Solana bank-fork input")
+    finalized_slot = _normalize_u64(
+        _mapping_value_without_aliases(
+            value, "finalizedSlot", "finalizedSlot", "finalized_slot"
+        ),
+        "finalizedSlot",
+    )
+    epoch_value = _mapping_value_without_aliases(
+        value, "epoch", "epoch", "validatorEpoch", "validator_epoch"
+    )
+    if epoch_value is None:
+        epoch = solana_sccp_mainnet_epoch_for_slot(finalized_slot)
+    else:
+        epoch = _normalize_u64(epoch_value, "epoch")
+    if epoch != solana_sccp_mainnet_epoch_for_slot(finalized_slot):
+        raise ValueError("epoch must match Solana mainnet finalizedSlot")
+    parent_slot = _normalize_u64(
+        _mapping_value_without_aliases(value, "parentSlot", "parentSlot", "parent_slot"),
+        "parentSlot",
+    )
+    if parent_slot + 1 != finalized_slot:
+        raise ValueError("parentSlot must be the direct parent of finalizedSlot")
+    bank_signature_count = _normalize_u64(
+        _mapping_value_without_aliases(
+            value,
+            "bankSignatureCount",
+            "bankSignatureCount",
+            "bank_signature_count",
+        ),
+        "bankSignatureCount",
+    )
+    if bank_signature_count == 0:
+        raise ValueError("bankSignatureCount must be nonzero")
+    parent_bank_hash = _nonzero_hex32_to_bytes(
+        _mapping_value_without_aliases(
+            value, "parentBankHash", "parentBankHash", "parent_bank_hash"
+        ),
+        "parentBankHash",
+    )
+    bank_hash = _nonzero_hex32_to_bytes(
+        _mapping_value_without_aliases(value, "bankHash", "bankHash", "bank_hash"),
+        "bankHash",
+    )
+    if parent_bank_hash == bank_hash:
+        raise TypeError("parentBankHash must differ from bankHash")
+    blockhash = _nonzero_hex32_to_bytes(
+        _mapping_value_without_aliases(
+            value, "blockhash", "blockhashBytes", "blockhash_bytes", "blockhash"
+        ),
+        "blockhash",
+    )
+    transaction_status_root = _nonzero_hex32_to_bytes(
+        _mapping_value_without_aliases(
+            value,
+            "transactionStatusRoot",
+            "transactionStatusRoot",
+            "transaction_status_root",
+            "receiptOrMessageRoot",
+            "receipt_or_message_root",
+        ),
+        "transactionStatusRoot",
+    )
+    account_inclusion_root = _nonzero_hex32_to_bytes(
+        _mapping_value_without_aliases(
+            value,
+            "accountInclusionRoot",
+            "accountInclusionRoot",
+            "account_inclusion_root",
+            "accountsRoot",
+            "accounts_root",
+        ),
+        "accountInclusionRoot",
+    )
+    accounts_lt_hash_checksum = _nonzero_hex32_to_bytes(
+        _mapping_value_without_aliases(
+            value,
+            "accountsLtHashChecksum",
+            "accountsLtHashChecksum",
+            "accounts_lt_hash_checksum",
+            "accountsLtHashRoot",
+            "accounts_lt_hash_root",
+        ),
+        "accountsLtHashChecksum",
+    )
+    bank_hash_hard_fork_data = _optional_bytes(
+        _mapping_value_without_aliases(
+            value,
+            "bankHashHardForkData",
+            "bankHashHardForkData",
+            "bank_hash_hard_fork_data",
+        ),
+        "bankHashHardForkData",
+    )
+    if len(bank_hash_hard_fork_data) > _SCCP_SOLANA_MAX_BANK_HARD_FORK_HASH_DATA_BYTES:
+        raise ValueError("bankHashHardForkData is too large")
+    accounts_lt_hash_input = _mapping_optional_value_without_aliases(
+        value, "accountsLtHash", "accountsLtHash", "accounts_lt_hash"
+    )
+    if accounts_lt_hash_input is not _MISSING and accounts_lt_hash_input is not None:
+        accounts_lt_hash = _to_bytes(accounts_lt_hash_input, "accountsLtHash")
+        if accounts_lt_hash_checksum != _blake3_digest(accounts_lt_hash):
+            raise TypeError("accountsLtHashChecksum must match accountsLtHash")
+        expected_bank_hash = _solana_sccp_agave_bank_hash_bytes(
+            parent_bank_hash,
+            bank_signature_count,
+            blockhash,
+            accounts_lt_hash,
+            bank_hash_hard_fork_data,
+        )
+        if bank_hash != expected_bank_hash:
+            raise TypeError("bankHash must match Agave bank hash inputs")
+    out = bytearray()
+    out.extend(_write_u8(1))
+    out.extend(_write_u64_le(epoch))
+    out.extend(_write_u64_le(finalized_slot))
+    out.extend(_write_u64_le(parent_slot))
+    out.extend(_write_u64_le(bank_signature_count))
+    out.extend(parent_bank_hash)
+    out.extend(bank_hash)
+    out.extend(blockhash)
+    out.extend(transaction_status_root)
+    out.extend(account_inclusion_root)
+    out.extend(accounts_lt_hash_checksum)
+    out.extend(_write_bytes(bank_hash_hard_fork_data))
+    return bytes(out)
+
+
+def solana_sccp_bank_fork_hash(input_value: Any) -> str:
+    """Hash the Solana bank-fork context used by SCCP finality votes."""
+
+    return _bytes_to_hex(
+        _prefixed_blake2b(
+            _SCCP_SOLANA_BANK_FORK_PREFIX_V1,
+            canonical_solana_sccp_bank_fork_bytes(input_value),
+        )
+    )
+
+
+def canonical_solana_sccp_accounts_lt_hash_proof_public_inputs_bytes(
+    input_value: Any,
+) -> bytes:
+    """Return public inputs for the recursive Solana AccountsDB LtHash proof."""
+
+    value = _require_mapping(
+        input_value,
+        "Solana AccountsLtHash proof public inputs",
+    )
+    source_domain = _normalize_optional_u32_without_aliases(
+        value,
+        "sourceDomain",
+        SCCP_DOMAIN_SOL,
+        "sourceDomain",
+        "source_domain",
+    )
+    if source_domain != SCCP_DOMAIN_SOL:
+        raise ValueError("sourceDomain must be Solana")
+    finalized_slot = _normalize_u64(
+        _mapping_value_without_aliases(
+            value, "finalizedSlot", "finalizedSlot", "finalized_slot", "slot"
+        ),
+        "finalizedSlot",
+    )
+    epoch = solana_sccp_mainnet_epoch_for_slot(finalized_slot)
+    parent_slot = _normalize_u64(
+        _mapping_value_without_aliases(value, "parentSlot", "parentSlot", "parent_slot"),
+        "parentSlot",
+    )
+    bank_signature_count = _normalize_u64(
+        _mapping_value_without_aliases(
+            value,
+            "bankSignatureCount",
+            "bankSignatureCount",
+            "bank_signature_count",
+        ),
+        "bankSignatureCount",
+    )
+    parent_bank_hash = _nonzero_hex32_to_bytes(
+        _mapping_value_without_aliases(
+            value, "parentBankHash", "parentBankHash", "parent_bank_hash"
+        ),
+        "parentBankHash",
+    )
+    bank_hash = _nonzero_hex32_to_bytes(
+        _mapping_value_without_aliases(value, "bankHash", "bankHash", "bank_hash"),
+        "bankHash",
+    )
+    blockhash = _normalize_solana_hash32_bytes(
+        _mapping_value_without_aliases(
+            value, "blockhash", "blockhashBytes", "blockhash_bytes", "blockhash"
+        ),
+        "blockhash",
+    )
+    transaction_status_root = _nonzero_hex32_to_bytes(
+        _mapping_value_without_aliases(
+            value,
+            "transactionStatusRoot",
+            "transactionStatusRoot",
+            "transaction_status_root",
+            "receiptOrMessageRoot",
+            "receipt_or_message_root",
+        ),
+        "transactionStatusRoot",
+    )
+    account_inclusion_root = _nonzero_hex32_to_bytes(
+        _mapping_value_without_aliases(
+            value,
+            "accountInclusionRoot",
+            "accountInclusionRoot",
+            "account_inclusion_root",
+            "accountsRoot",
+            "accounts_root",
+        ),
+        "accountInclusionRoot",
+    )
+    accounts_lt_hash_checksum = _nonzero_hex32_to_bytes(
+        _mapping_value_without_aliases(
+            value,
+            "accountsLtHashChecksum",
+            "accountsLtHashChecksum",
+            "accounts_lt_hash_checksum",
+            "accountsLtHashRoot",
+            "accounts_lt_hash_root",
+        ),
+        "accountsLtHashChecksum",
+    )
+    bank_hash_hard_fork_data = _optional_bytes(
+        _mapping_value_without_aliases(
+            value,
+            "bankHashHardForkData",
+            "bankHashHardForkData",
+            "bank_hash_hard_fork_data",
+        ),
+        "bankHashHardForkData",
+    )
+    accounts_lt_hash = None
+    accounts_lt_hash_input = _mapping_optional_value_without_aliases(
+        value, "accountsLtHash", "accountsLtHash", "accounts_lt_hash"
+    )
+    if accounts_lt_hash_input is not _MISSING and accounts_lt_hash_input is not None:
+        accounts_lt_hash = _to_bytes(accounts_lt_hash_input, "accountsLtHash")
+    bank_fork_hash = _hex_to_bytes(
+        solana_sccp_bank_fork_hash(
+            {
+                "epoch": epoch,
+                "finalized_slot": finalized_slot,
+                "parent_slot": parent_slot,
+                "bank_signature_count": bank_signature_count,
+                "parent_bank_hash": _bytes_to_hex(parent_bank_hash),
+                "bank_hash": _bytes_to_hex(bank_hash),
+                "blockhash": _bytes_to_hex(blockhash),
+                "transaction_status_root": _bytes_to_hex(transaction_status_root),
+                "account_inclusion_root": _bytes_to_hex(account_inclusion_root),
+                "accounts_lt_hash_checksum": _bytes_to_hex(accounts_lt_hash_checksum),
+                "bank_hash_hard_fork_data": bank_hash_hard_fork_data,
+                "accounts_lt_hash": accounts_lt_hash,
+            }
+        ),
+        "bankForkHash",
+        32,
+    )
+    out = bytearray()
+    out.extend(_write_u8(1))
+    out.extend(_write_u32_le(source_domain))
+    out.extend(_write_string(SCCP_SOLANA_RECURSIVE_PROOF_BACKEND_V1, "backend"))
+    out.extend(_write_string(SCCP_SOLANA_MAINNET_GENESIS_HASH, "mainnetGenesisHash"))
+    out.extend(_write_u64_le(epoch))
+    out.extend(_write_u64_le(finalized_slot))
+    out.extend(_write_u64_le(parent_slot))
+    out.extend(_write_u64_le(bank_signature_count))
+    out.extend(parent_bank_hash)
+    out.extend(bank_hash)
+    out.extend(blockhash)
+    out.extend(transaction_status_root)
+    out.extend(account_inclusion_root)
+    out.extend(accounts_lt_hash_checksum)
+    out.extend(_write_bytes(bank_hash_hard_fork_data))
+    out.extend(bank_fork_hash)
+    return bytes(out)
+
+
+def solana_sccp_accounts_lt_hash_proof_public_inputs_hash(input_value: Any) -> str:
+    """Hash the recursive Solana AccountsDB LtHash proof public inputs."""
+
+    return _bytes_to_hex(
+        _prefixed_blake2b(
+            _SCCP_SOLANA_ACCOUNTS_LT_HASH_PROOF_PUBLIC_INPUTS_PREFIX_V1,
+            canonical_solana_sccp_accounts_lt_hash_proof_public_inputs_bytes(input_value),
+        )
+    )
+
+
+def canonical_evm_sccp_receipt_proof_bytes(input_value: Any) -> bytes:
+    """Return canonical ETH/EVM SCCP receipt-proof transcript bytes."""
+
+    value = _require_mapping(input_value, "EVM SCCP receipt proof input")
+    source_domain = _normalize_optional_u32_without_aliases(
+        value,
+        "sourceDomain",
+        SCCP_DOMAIN_ETH,
+        "sourceDomain",
+        "source_domain",
+    )
+    if source_domain != SCCP_DOMAIN_ETH:
+        raise ValueError("sourceDomain must be ETH")
+    source_event_digest = _hex_to_bytes(
+        _mapping_value_without_aliases(value, "sourceEventDigest", "sourceEventDigest", "source_event_digest"),
+        "sourceEventDigest",
+        32,
+    )
+    beacon_slot = _normalize_u64(
+        _mapping_value_without_aliases(value, "beaconSlot", "beaconSlot", "beacon_slot"),
+        "beaconSlot",
+    )
+    execution_block_number = _normalize_u64(
+        _mapping_value_without_aliases(
+            value,
+            "executionBlockNumber",
+            "executionBlockNumber",
+            "execution_block_number",
+            "finalityHeight",
+            "finality_height",
+        ),
+        "executionBlockNumber",
+    )
+    execution_block_hash = _hex_to_bytes(
+        _mapping_value_without_aliases(
+            value,
+            "executionBlockHash",
+            "executionBlockHash",
+            "execution_block_hash",
+            "finalityBlockHash",
+            "finality_block_hash",
+        ),
+        "executionBlockHash",
+        32,
+    )
+    execution_receipts_root = _hex_to_bytes(
+        _mapping_value_without_aliases(
+            value,
+            "executionReceiptsRoot",
+            "executionReceiptsRoot",
+            "execution_receipts_root",
+            "receiptsRoot",
+            "receipts_root",
+            "receiptOrMessageRoot",
+            "receipt_or_message_root",
+        ),
+        "executionReceiptsRoot",
+        32,
+    )
+    beacon_finalized_root = _hex_to_bytes(
+        _mapping_value_without_aliases(
+            value,
+            "beaconFinalizedRoot",
+            "beaconFinalizedRoot",
+            "beacon_finalized_root",
+        ),
+        "beaconFinalizedRoot",
+        32,
+    )
+    sync_committee_root = _hex_to_bytes(
+        _mapping_value_without_aliases(value, "syncCommitteeRoot", "syncCommitteeRoot", "sync_committee_root"),
+        "syncCommitteeRoot",
+        32,
+    )
+    receipt_root_index = _normalize_u64(
+        _mapping_value_without_aliases(value, "receiptRootIndex", "receiptRootIndex", "receipt_root_index"),
+        "receiptRootIndex",
+    )
+    receipt_trie_proof_nodes = _normalize_byte_vectors(
+        _mapping_value_without_aliases(
+            value,
+            "receiptTrieProofNodes",
+            "receiptTrieProofNodes",
+            "receipt_trie_proof_nodes",
+        ),
+        "receiptTrieProofNodes",
+        max_count=_SCCP_TRON_MAX_MPT_PROOF_NODES,
+        max_bytes=_SCCP_TRON_MAX_MPT_NODE_BYTES,
+        require_non_empty=True,
+    )
+    inclusion_branch = _normalize_inclusion_branch(
+        _mapping_value_without_aliases(value, "inclusionBranch", "inclusionBranch", "inclusion_branch"),
+        require_non_empty=True,
+    )
+    out = bytearray()
+    out.extend(_write_u8(1))
+    out.extend(_write_u32_le(source_domain))
+    out.extend(source_event_digest)
+    out.extend(_write_u64_le(beacon_slot))
+    out.extend(_write_u64_le(execution_block_number))
+    out.extend(execution_block_hash)
+    out.extend(execution_receipts_root)
+    out.extend(beacon_finalized_root)
+    out.extend(sync_committee_root)
+    out.extend(_write_u64_le(receipt_root_index))
+    out.extend(_write_u32_le(len(receipt_trie_proof_nodes)))
+    for node in receipt_trie_proof_nodes:
+        out.extend(_write_bytes(node))
+    out.extend(_write_u32_le(len(inclusion_branch)))
+    for sibling in inclusion_branch:
+        out.extend(sibling)
+    return bytes(out)
+
+
+def evm_sccp_receipt_proof_hash(input_value: Any) -> str:
+    """Hash an ETH/EVM SCCP receipt-proof transcript with the canonical prefix."""
+
+    return _bytes_to_hex(
+        _prefixed_blake2b(
+            _SCCP_EVM_RECEIPT_PROOF_PREFIX_V1,
+            canonical_evm_sccp_receipt_proof_bytes(input_value),
+        )
+    )
+
+
+def _normalize_eth_sync_committee_parts(input_value: Any) -> Dict[str, Sequence[Any]]:
+    value = _require_mapping(input_value, "ETH sync committee input")
+    public_keys = _mapping_value_without_aliases(
+        value,
+        "syncCommitteePublicKeys",
+        "syncCommitteePublicKeys",
+        "sync_committee_public_keys",
+    )
+    weights = _mapping_value_without_aliases(
+        value,
+        "syncCommitteeWeights",
+        "syncCommitteeWeights",
+        "sync_committee_weights",
+    )
+    pops = _mapping_value_without_aliases(
+        value,
+        "syncCommitteePops",
+        "syncCommitteePops",
+        "sync_committee_pops",
+    )
+    if (
+        not isinstance(public_keys, Sequence)
+        or isinstance(public_keys, (str, bytes, bytearray))
+        or not isinstance(weights, Sequence)
+        or isinstance(weights, (str, bytes, bytearray))
+        or not isinstance(pops, Sequence)
+        or isinstance(pops, (str, bytes, bytearray))
+    ):
+        raise TypeError("ETH sync committee public keys, weights, and PoPs must be arrays")
+    if not public_keys or len(public_keys) != len(weights) or len(public_keys) != len(pops):
+        raise ValueError(
+            "ETH sync committee public keys, weights, and PoPs must be non-empty equal-length arrays"
+        )
+    if len(public_keys) > _SCCP_ETH_MAX_SYNC_COMMITTEE_AUTHORITIES:
+        raise ValueError(
+            f"ETH sync committee must contain at most {_SCCP_ETH_MAX_SYNC_COMMITTEE_AUTHORITIES} authorities"
+        )
+    seen = set()
+    normalized_public_keys = []
+    normalized_weights = []
+    normalized_pops = []
+    for index, (public_key_value, weight_value, pop_value) in enumerate(
+        zip(public_keys, weights, pops)
+    ):
+        public_key = _to_bytes(public_key_value, f"syncCommitteePublicKeys[{index}]")
+        if len(public_key) != _SCCP_ETH_SYNC_COMMITTEE_PUBLIC_KEY_BYTES:
+            raise ValueError(
+                f"syncCommitteePublicKeys[{index}] must be "
+                f"{_SCCP_ETH_SYNC_COMMITTEE_PUBLIC_KEY_BYTES} bytes"
+            )
+        if not any(public_key):
+            raise ValueError(f"syncCommitteePublicKeys[{index}] must not be zero")
+        if public_key in seen:
+            raise ValueError(f"syncCommitteePublicKeys[{index}] must be unique")
+        seen.add(public_key)
+        weight = _normalize_u64(weight_value, f"syncCommitteeWeights[{index}]")
+        if weight == 0:
+            raise ValueError(f"syncCommitteeWeights[{index}] must not be zero")
+        pop = _to_bytes(pop_value, f"syncCommitteePops[{index}]")
+        if len(pop) != _SCCP_ETH_SYNC_COMMITTEE_POP_BYTES:
+            raise ValueError(
+                f"syncCommitteePops[{index}] must be "
+                f"{_SCCP_ETH_SYNC_COMMITTEE_POP_BYTES} bytes"
+            )
+        if not any(pop):
+            raise ValueError(f"syncCommitteePops[{index}] must not be zero")
+        normalized_public_keys.append(public_key)
+        normalized_weights.append(weight)
+        normalized_pops.append(pop)
+    return {
+        "sync_committee_public_keys": normalized_public_keys,
+        "sync_committee_weights": normalized_weights,
+        "sync_committee_pops": normalized_pops,
+    }
+
+
+def canonical_eth_sync_committee_payload_bytes(input_value: Any) -> bytes:
+    """Return canonical ETH sync-committee payload bytes for transition proofs."""
+
+    parts = _normalize_eth_sync_committee_parts(input_value)
+    out = bytearray()
+    out.extend(_write_u8(1))
+    out.extend(_write_u32_le(len(parts["sync_committee_public_keys"])))
+    for public_key, weight, pop in zip(
+        parts["sync_committee_public_keys"],
+        parts["sync_committee_weights"],
+        parts["sync_committee_pops"],
+    ):
+        out.extend(_write_bytes(public_key))
+        out.extend(_write_u64_le(weight))
+        out.extend(_write_bytes(pop))
+    return bytes(out)
+
+
+def _decode_eth_sync_committee_payload(payload: bytes) -> None:
+    cursor = 0
+    if len(payload) > _SCCP_ETH_MAX_SYNC_COMMITTEE_PAYLOAD_BYTES:
+        raise ValueError(
+            f"ETH sync committee payload must be at most "
+            f"{_SCCP_ETH_MAX_SYNC_COMMITTEE_PAYLOAD_BYTES} bytes"
+        )
+    if len(payload) < 5 or payload[cursor] != 1:
+        raise ValueError("ETH sync committee payload must have version 1")
+    cursor += 1
+    count = int.from_bytes(payload[cursor : cursor + 4], "little")
+    cursor += 4
+    if count == 0:
+        raise ValueError("ETH sync committee payload must not be empty")
+    if count > _SCCP_ETH_MAX_SYNC_COMMITTEE_AUTHORITIES:
+        raise ValueError(
+            f"ETH sync committee must contain at most {_SCCP_ETH_MAX_SYNC_COMMITTEE_AUTHORITIES} authorities"
+        )
+    seen = set()
+    for index in range(count):
+        if cursor + 4 > len(payload):
+            raise ValueError("ETH sync committee payload is truncated")
+        public_key_len = int.from_bytes(payload[cursor : cursor + 4], "little")
+        cursor += 4
+        if public_key_len != _SCCP_ETH_SYNC_COMMITTEE_PUBLIC_KEY_BYTES:
+            raise ValueError(
+                f"syncCommitteePublicKeys[{index}] must be "
+                f"{_SCCP_ETH_SYNC_COMMITTEE_PUBLIC_KEY_BYTES} bytes"
+            )
+        public_key_end = cursor + public_key_len
+        if public_key_end > len(payload):
+            raise ValueError("ETH sync committee public key is truncated")
+        public_key = payload[cursor:public_key_end]
+        cursor = public_key_end
+        if not any(public_key):
+            raise ValueError(f"syncCommitteePublicKeys[{index}] must not be zero")
+        if public_key in seen:
+            raise ValueError(f"syncCommitteePublicKeys[{index}] must be unique")
+        seen.add(public_key)
+        if cursor + 8 > len(payload):
+            raise ValueError("ETH sync committee weight is truncated")
+        weight = int.from_bytes(payload[cursor : cursor + 8], "little")
+        cursor += 8
+        if weight == 0:
+            raise ValueError(f"syncCommitteeWeights[{index}] must not be zero")
+        if cursor + 4 > len(payload):
+            raise ValueError("ETH sync committee PoP is truncated")
+        pop_len = int.from_bytes(payload[cursor : cursor + 4], "little")
+        cursor += 4
+        if pop_len != _SCCP_ETH_SYNC_COMMITTEE_POP_BYTES:
+            raise ValueError(
+                f"syncCommitteePops[{index}] must be "
+                f"{_SCCP_ETH_SYNC_COMMITTEE_POP_BYTES} bytes"
+            )
+        pop_end = cursor + pop_len
+        if pop_end > len(payload):
+            raise ValueError("ETH sync committee PoP is truncated")
+        pop = payload[cursor:pop_end]
+        cursor = pop_end
+        if not any(pop):
+            raise ValueError(f"syncCommitteePops[{index}] must not be zero")
+    if cursor != len(payload):
+        raise ValueError("ETH sync committee payload has trailing bytes")
+
+
+def _eth_sync_committee_payload_bytes(input_value: Any) -> bytes:
+    if isinstance(input_value, (bytes, bytearray, memoryview, str)):
+        payload = _to_bytes(input_value, "syncCommitteePayload")
+    else:
+        payload = canonical_eth_sync_committee_payload_bytes(input_value)
+    _decode_eth_sync_committee_payload(payload)
+    return payload
+
+
+def eth_sync_committee_hash(input_value: Any) -> str:
+    """Derive the SCCP ETH sync-committee hash from committee witness material."""
+
+    return eth_sync_committee_hash_from_payload(
+        canonical_eth_sync_committee_payload_bytes(input_value)
+    )
+
+
+def eth_sync_committee_hash_from_payload(input_value: Any) -> str:
+    """Derive the SCCP ETH sync-committee hash from a canonical payload."""
+
+    payload = _eth_sync_committee_payload_bytes(input_value)
+    return _bytes_to_hex(_prefixed_blake2b(_SCCP_ETH_SYNC_COMMITTEE_PREFIX_V1, payload))
+
+
+def eth_sync_committee_payload_hash(input_value: Any) -> str:
+    """Hash the canonical ETH sync-committee transition payload."""
+
+    payload = _eth_sync_committee_payload_bytes(input_value)
+    return _bytes_to_hex(
+        _prefixed_blake2b(_SCCP_ETH_SYNC_COMMITTEE_PAYLOAD_PREFIX_V1, payload)
+    )
+
+
+def _eth_transition_payload_hash_bytes(input_value: Mapping[str, Any]) -> bytes:
+    provided = _mapping_optional_value_without_aliases(
+        input_value,
+        "nextSyncCommitteePayloadHash",
+        "nextSyncCommitteePayloadHash",
+        "next_sync_committee_payload_hash",
+    )
+    payload_value = _mapping_optional_value_without_aliases(
+        input_value,
+        "nextSyncCommitteePayload",
+        "nextSyncCommitteePayload",
+        "next_sync_committee_payload",
+    )
+    if provided is _MISSING and payload_value is _MISSING:
+        raise TypeError("nextSyncCommitteePayloadHash or nextSyncCommitteePayload is required")
+    payload_hash = (
+        _hex_to_bytes(provided, "nextSyncCommitteePayloadHash", 32)
+        if provided is not _MISSING
+        else _hex_to_bytes(
+            eth_sync_committee_payload_hash(payload_value),
+            "nextSyncCommitteePayloadHash",
+            32,
+        )
+    )
+    if payload_value is not _MISSING:
+        derived = _hex_to_bytes(
+            eth_sync_committee_payload_hash(payload_value),
+            "nextSyncCommitteePayloadHash",
+            32,
+        )
+        if payload_hash != derived:
+            raise TypeError("nextSyncCommitteePayloadHash must match nextSyncCommitteePayload")
+    return payload_hash
+
+
+def canonical_eth_sync_committee_transition_message_bytes(input_value: Any) -> bytes:
+    """Return canonical ETH sync-committee transition message bytes."""
+
+    value = _require_mapping(input_value, "ETH sync-committee transition message input")
+    out = bytearray()
+    out.extend(_write_u8(1))
+    source_domain = _normalize_u32(
+        _mapping_value_without_aliases(value, "sourceDomain", "sourceDomain", "source_domain"),
+        "sourceDomain",
+    )
+    if source_domain != SCCP_DOMAIN_ETH:
+        raise ValueError("sourceDomain must be ETH")
+    out.extend(_write_u32_le(source_domain))
+    out.extend(
+        _write_u64_le(
+            _normalize_u64(
+                _mapping_value_without_aliases(value, "fromSyncPeriod", "fromSyncPeriod", "from_sync_period"),
+                "fromSyncPeriod",
+            )
+        )
+    )
+    out.extend(
+        _write_u64_le(
+            _normalize_u64(
+                _mapping_value_without_aliases(value, "toSyncPeriod", "toSyncPeriod", "to_sync_period"),
+                "toSyncPeriod",
+            )
+        )
+    )
+    out.extend(
+        _write_u64_le(
+            _normalize_u64(
+                _mapping_value_without_aliases(value, "transitionSlot", "transitionSlot", "transition_slot"),
+                "transitionSlot",
+            )
+        )
+    )
+    out.extend(
+        _hex_to_bytes(
+            _mapping_value_without_aliases(value, "finalizedBeaconRoot", "finalizedBeaconRoot", "finalized_beacon_root"),
+            "finalizedBeaconRoot",
+            32,
+        )
+    )
+    out.extend(
+        _hex_to_bytes(
+            _mapping_value_without_aliases(
+                value,
+                "parentSyncCommitteeHash",
+                "parentSyncCommitteeHash",
+                "parent_sync_committee_hash",
+            ),
+            "parentSyncCommitteeHash",
+            32,
+        )
+    )
+    out.extend(
+        _hex_to_bytes(
+            _mapping_value_without_aliases(value, "nextSyncCommitteeHash", "nextSyncCommitteeHash", "next_sync_committee_hash"),
+            "nextSyncCommitteeHash",
+            32,
+        )
+    )
+    out.extend(_eth_transition_payload_hash_bytes(value))
+    out.extend(
+        _hex_to_bytes(
+            _mapping_value_without_aliases(
+                value,
+                "nextSyncCommitteeBranchHash",
+                "nextSyncCommitteeBranchHash",
+                "next_sync_committee_branch_hash",
+            ),
+            "nextSyncCommitteeBranchHash",
+            32,
+        )
+    )
+    return bytes(out)
+
+
+def eth_sync_committee_transition_message_hash(input_value: Any) -> str:
+    """Hash an ETH sync-committee transition message transcript."""
+
+    return _bytes_to_hex(
+        _prefixed_blake2b(
+            _SCCP_ETH_SYNC_COMMITTEE_TRANSITION_MESSAGE_PREFIX_V1,
+            canonical_eth_sync_committee_transition_message_bytes(input_value),
+        )
+    )
+
+
+def _canonical_eth_beacon_sync_committee_proof_bytes(input_value: Any) -> bytes:
+    proof = _require_mapping(input_value, "ETH beacon sync committee proof")
+    parts = _normalize_eth_sync_committee_parts(proof)
+    signers_bitmap = _to_bytes(
+        _mapping_value_without_aliases(proof, "signersBitmap", "signersBitmap", "signers_bitmap"),
+        "signersBitmap",
+    )
+    if len(signers_bitmap) != (len(parts["sync_committee_public_keys"]) + 7) // 8:
+        raise ValueError("signersBitmap length must match syncCommitteePublicKeys")
+    signer_indices: list[int] = []
+    for byte_index, value in enumerate(signers_bitmap):
+        for bit in range(8):
+            if ((value >> bit) & 1) == 0:
+                continue
+            index = byte_index * 8 + bit
+            if index >= len(parts["sync_committee_public_keys"]):
+                raise ValueError("signersBitmap must not set padding bits")
+            signer_indices.append(index)
+    if not signer_indices:
+        raise ValueError("signersBitmap must select at least one sync committee member")
+    aggregate_signature = _to_bytes(
+        _mapping_value_without_aliases(proof, "aggregateSignature", "aggregateSignature", "aggregate_signature"),
+        "aggregateSignature",
+    )
+    if len(aggregate_signature) != _SCCP_ETH_SYNC_COMMITTEE_SIGNATURE_BYTES:
+        raise ValueError(
+            f"aggregateSignature must be {_SCCP_ETH_SYNC_COMMITTEE_SIGNATURE_BYTES} bytes"
+        )
+    if not any(aggregate_signature):
+        raise ValueError("aggregateSignature must not be all zero")
+    total_weight = _normalize_u64(
+        _mapping_value_without_aliases(proof, "totalWeight", "totalWeight", "total_weight"),
+        "totalWeight",
+    )
+    signed_weight = _normalize_u64(
+        _mapping_value_without_aliases(proof, "signedWeight", "signedWeight", "signed_weight"),
+        "signedWeight",
+    )
+    computed_total_weight = sum(parts["sync_committee_weights"])
+    if total_weight != computed_total_weight:
+        raise ValueError("totalWeight must match syncCommitteeWeights")
+    computed_signed_weight = sum(
+        parts["sync_committee_weights"][index] for index in signer_indices
+    )
+    if signed_weight != computed_signed_weight:
+        raise ValueError("signedWeight must match signersBitmap")
+    if signed_weight * 3 <= total_weight * 2:
+        raise ValueError("signedWeight must be greater than two thirds of totalWeight")
+    out = bytearray()
+    out.extend(
+        _write_u8(
+            _normalize_optional_v1_version(
+                proof, "syncCommitteeProof.version", "version"
+            )
+        )
+    )
+    out.extend(_write_u64_le(total_weight))
+    out.extend(_write_u64_le(signed_weight))
+    out.extend(
+        _hex_to_bytes(
+            _mapping_value_without_aliases(
+                proof,
+                "syncCommitteeMessageHash",
+                "syncCommitteeMessageHash",
+                "sync_committee_message_hash",
+            ),
+            "syncCommitteeMessageHash",
+            32,
+        )
+    )
+    out.extend(_write_u32_le(len(parts["sync_committee_public_keys"])))
+    for public_key in parts["sync_committee_public_keys"]:
+        out.extend(_write_bytes(public_key))
+    out.extend(_write_u32_le(len(parts["sync_committee_weights"])))
+    for weight in parts["sync_committee_weights"]:
+        out.extend(_write_u64_le(weight))
+    out.extend(_write_u32_le(len(parts["sync_committee_pops"])))
+    for pop in parts["sync_committee_pops"]:
+        out.extend(_write_bytes(pop))
+    out.extend(_write_bytes(signers_bitmap))
+    out.extend(_write_bytes(aggregate_signature))
+    return bytes(out)
+
+
+def canonical_eth_sync_committee_transition_signature_bytes(input_value: Any) -> bytes:
+    """Return canonical ETH sync-committee transition signature bytes."""
+
+    value = _require_mapping(input_value, "ETH sync-committee transition signature input")
+    sync_committee_proof = _require_mapping(
+        _mapping_value_without_aliases(value, "syncCommitteeProof", "syncCommitteeProof", "sync_committee_proof"),
+        "ETH beacon sync committee proof",
+    )
+    parent_sync_committee_hash = _hex_to_bytes(
+        eth_sync_committee_hash(
+            {
+                "sync_committee_public_keys": _mapping_value_without_aliases(
+                    sync_committee_proof,
+                    "syncCommitteePublicKeys",
+                    "syncCommitteePublicKeys",
+                    "sync_committee_public_keys",
+                ),
+                "sync_committee_weights": _mapping_value_without_aliases(
+                    sync_committee_proof,
+                    "syncCommitteeWeights",
+                    "syncCommitteeWeights",
+                    "sync_committee_weights",
+                ),
+                "sync_committee_pops": _mapping_value_without_aliases(
+                    sync_committee_proof,
+                    "syncCommitteePops",
+                    "syncCommitteePops",
+                    "sync_committee_pops",
+                ),
+            }
+        ),
+        "parentSyncCommitteeHash",
+        32,
+    )
+    next_payload = _eth_sync_committee_payload_bytes(
+        _mapping_value_without_aliases(
+            value,
+            "nextSyncCommitteePayload",
+            "nextSyncCommitteePayload",
+            "next_sync_committee_payload",
+        )
+    )
+    next_payload_hash = _eth_transition_payload_hash_bytes(value)
+    derived_next_sync_committee_hash = _hex_to_bytes(
+        eth_sync_committee_hash_from_payload(next_payload),
+        "nextSyncCommitteeHash",
+        32,
+    )
+    next_sync_committee_hash = _hex_to_bytes(
+        _mapping_value_without_aliases(value, "nextSyncCommitteeHash", "nextSyncCommitteeHash", "next_sync_committee_hash"),
+        "nextSyncCommitteeHash",
+        32,
+    )
+    if next_sync_committee_hash != derived_next_sync_committee_hash:
+        raise TypeError("nextSyncCommitteeHash must match nextSyncCommitteePayload")
+    out = bytearray()
+    out.extend(
+        _write_u8(
+            _normalize_optional_v1_version(
+                value,
+                "ETH sync-committee transition signature version",
+                "version",
+            )
+        )
+    )
+    source_domain = _normalize_u32(
+        _mapping_value_without_aliases(value, "sourceDomain", "sourceDomain", "source_domain"),
+        "sourceDomain",
+    )
+    if source_domain != SCCP_DOMAIN_ETH:
+        raise ValueError("sourceDomain must be ETH")
+    out.extend(_write_u32_le(source_domain))
+    out.extend(
+        _write_u64_le(
+            _normalize_u64(
+                _mapping_value_without_aliases(value, "fromSyncPeriod", "fromSyncPeriod", "from_sync_period"),
+                "fromSyncPeriod",
+            )
+        )
+    )
+    out.extend(
+        _write_u64_le(
+            _normalize_u64(
+                _mapping_value_without_aliases(value, "toSyncPeriod", "toSyncPeriod", "to_sync_period"),
+                "toSyncPeriod",
+            )
+        )
+    )
+    out.extend(
+        _write_u64_le(
+            _normalize_u64(
+                _mapping_value_without_aliases(value, "transitionSlot", "transitionSlot", "transition_slot"),
+                "transitionSlot",
+            )
+        )
+    )
+    out.extend(
+        _hex_to_bytes(
+            _mapping_value_without_aliases(value, "finalizedBeaconRoot", "finalizedBeaconRoot", "finalized_beacon_root"),
+            "finalizedBeaconRoot",
+            32,
+        )
+    )
+    out.extend(
+        _hex_to_bytes(
+            _mapping_value_without_aliases(
+                value,
+                "parentSyncCommitteeHash",
+                "parentSyncCommitteeHash",
+                "parent_sync_committee_hash",
+            ),
+            "parentSyncCommitteeHash",
+            32,
+        )
+    )
+    out.extend(next_sync_committee_hash)
+    out.extend(_write_bytes(next_payload))
+    out.extend(next_payload_hash)
+    out.extend(
+        _hex_to_bytes(
+            _mapping_value_without_aliases(
+                value,
+                "nextSyncCommitteeBranchHash",
+                "nextSyncCommitteeBranchHash",
+                "next_sync_committee_branch_hash",
+            ),
+            "nextSyncCommitteeBranchHash",
+            32,
+        )
+    )
+    out.extend(
+        _hex_to_bytes(
+            _mapping_value_without_aliases(
+                value,
+                "transitionMessageHash",
+                "transitionMessageHash",
+                "transition_message_hash",
+            ),
+            "transitionMessageHash",
+            32,
+        )
+    )
+    out.extend(parent_sync_committee_hash)
+    out.extend(_canonical_eth_beacon_sync_committee_proof_bytes(sync_committee_proof))
+    return bytes(out)
+
+
+def eth_sync_committee_transition_signature_hash(input_value: Any) -> str:
+    """Hash an ETH sync-committee transition signature transcript."""
+
+    return _bytes_to_hex(
+        _prefixed_blake2b(
+            _SCCP_ETH_SYNC_COMMITTEE_TRANSITION_SIGNATURE_PREFIX_V1,
+            canonical_eth_sync_committee_transition_signature_bytes(input_value),
+        )
+    )
+
+
+def canonical_bsc_sccp_receipt_proof_bytes(input_value: Any) -> bytes:
+    """Return canonical BSC SCCP receipt-proof transcript bytes."""
+
+    value = _require_mapping(input_value, "BSC SCCP receipt proof input")
+    source_domain = _normalize_optional_u32_without_aliases(
+        value,
+        "sourceDomain",
+        SCCP_DOMAIN_BSC,
+        "sourceDomain",
+        "source_domain",
+    )
+    if source_domain != SCCP_DOMAIN_BSC:
+        raise ValueError("sourceDomain must be BSC")
+    source_event_digest = _hex_to_bytes(
+        _mapping_value_without_aliases(value, "sourceEventDigest", "sourceEventDigest", "source_event_digest"),
+        "sourceEventDigest",
+        32,
+    )
+    validator_epoch = _normalize_u64(
+        _mapping_value_without_aliases(value, "validatorEpoch", "validatorEpoch", "validator_epoch"),
+        "validatorEpoch",
+    )
+    block_number = _normalize_u64(
+        _mapping_value_without_aliases(
+            value,
+            "blockNumber",
+            "blockNumber",
+            "block_number",
+            "finalityHeight",
+            "finality_height",
+        ),
+        "blockNumber",
+    )
+    block_hash = _hex_to_bytes(
+        _mapping_value_without_aliases(
+            value,
+            "blockHash",
+            "blockHash",
+            "block_hash",
+            "finalityBlockHash",
+            "finality_block_hash",
+        ),
+        "blockHash",
+        32,
+    )
+    receipts_root = _hex_to_bytes(
+        _mapping_value_without_aliases(
+            value,
+            "receiptsRoot",
+            "receiptsRoot",
+            "receipts_root",
+            "receiptOrMessageRoot",
+            "receipt_or_message_root",
+        ),
+        "receiptsRoot",
+        32,
+    )
+    validator_set_hash = _hex_to_bytes(
+        _mapping_value_without_aliases(value, "validatorSetHash", "validatorSetHash", "validator_set_hash"),
+        "validatorSetHash",
+        32,
+    )
+    commit_seal_hash = _hex_to_bytes(
+        _mapping_value_without_aliases(value, "commitSealHash", "commitSealHash", "commit_seal_hash"),
+        "commitSealHash",
+        32,
+    )
+    receipt_root_index = _normalize_u64(
+        _mapping_value_without_aliases(value, "receiptRootIndex", "receiptRootIndex", "receipt_root_index"),
+        "receiptRootIndex",
+    )
+    receipt_trie_proof_nodes = _normalize_byte_vectors(
+        _mapping_value_without_aliases(
+            value,
+            "receiptTrieProofNodes",
+            "receiptTrieProofNodes",
+            "receipt_trie_proof_nodes",
+        ),
+        "receiptTrieProofNodes",
+        max_count=_SCCP_TRON_MAX_MPT_PROOF_NODES,
+        max_bytes=_SCCP_TRON_MAX_MPT_NODE_BYTES,
+        require_non_empty=True,
+    )
+    inclusion_branch = _normalize_inclusion_branch(
+        _mapping_value_without_aliases(value, "inclusionBranch", "inclusionBranch", "inclusion_branch"),
+        require_non_empty=True,
+    )
+    out = bytearray()
+    out.extend(_write_u8(1))
+    out.extend(_write_u32_le(source_domain))
+    out.extend(source_event_digest)
+    out.extend(_write_u64_le(validator_epoch))
+    out.extend(_write_u64_le(block_number))
+    out.extend(block_hash)
+    out.extend(receipts_root)
+    out.extend(validator_set_hash)
+    out.extend(commit_seal_hash)
+    out.extend(_write_u64_le(receipt_root_index))
+    out.extend(_write_u32_le(len(receipt_trie_proof_nodes)))
+    for node in receipt_trie_proof_nodes:
+        out.extend(_write_bytes(node))
+    out.extend(_write_u32_le(len(inclusion_branch)))
+    for sibling in inclusion_branch:
+        out.extend(sibling)
+    return bytes(out)
+
+
+def bsc_sccp_receipt_proof_hash(input_value: Any) -> str:
+    """Hash a BSC SCCP receipt-proof transcript with the canonical prefix."""
+
+    return _bytes_to_hex(
+        _prefixed_blake2b(
+            _SCCP_BSC_RECEIPT_PROOF_PREFIX_V1,
+            canonical_bsc_sccp_receipt_proof_bytes(input_value),
+        )
+    )
+
+
+def canonical_bsc_validator_set_payload_bytes(input_value: Any) -> bytes:
+    """Return canonical BSC validator-set payload bytes for transition proofs."""
+
+    value = _require_mapping(input_value, "BSC validator-set payload input")
+    addresses_value = _mapping_value_without_aliases(
+        value,
+        "validatorAddresses",
+        "validatorAddresses",
+        "validator_addresses",
+    )
+    powers_value = _mapping_value_without_aliases(
+        value,
+        "validatorPowers",
+        "validatorPowers",
+        "validator_powers",
+    )
+    if not isinstance(addresses_value, Sequence) or isinstance(addresses_value, (str, bytes, bytearray)):
+        raise TypeError("validatorAddresses must be an array")
+    if not isinstance(powers_value, Sequence) or isinstance(powers_value, (str, bytes, bytearray)):
+        raise TypeError("validatorPowers must be an array")
+    if not addresses_value or len(addresses_value) != len(powers_value):
+        raise ValueError("validatorAddresses and validatorPowers must be non-empty equal-length arrays")
+    if len(addresses_value) > _SCCP_BSC_MAX_PARLIA_VALIDATORS:
+        raise ValueError(
+            f"validatorAddresses must contain at most {_SCCP_BSC_MAX_PARLIA_VALIDATORS} entries"
+        )
+
+    out = bytearray()
+    out.extend(_write_u8(1))
+    out.extend(_write_u32_le(len(addresses_value)))
+    seen_addresses = set()
+    for index, (address_value, power_value) in enumerate(zip(addresses_value, powers_value)):
+        address = _hex_to_bytes(address_value, f"validatorAddresses[{index}]", 20)
+        if not any(address):
+            raise ValueError(f"validatorAddresses[{index}] must not be zero")
+        if address in seen_addresses:
+            raise ValueError(f"validatorAddresses[{index}] must be unique")
+        seen_addresses.add(address)
+        power = _normalize_u64(power_value, f"validatorPowers[{index}]")
+        if power == 0:
+            raise ValueError(f"validatorPowers[{index}] must not be zero")
+        out.extend(address)
+        out.extend(_write_u64_le(power))
+    return bytes(out)
+
+
+def bsc_validator_set_payload_hash(input_value: Any) -> str:
+    """Hash the canonical BSC validator-set transition payload."""
+
+    payload = (
+        _to_bytes(input_value, "validatorSetPayload")
+        if isinstance(input_value, (bytes, bytearray, memoryview, str))
+        else canonical_bsc_validator_set_payload_bytes(input_value)
+    )
+    return _bytes_to_hex(_prefixed_keccak(_SCCP_BSC_VALIDATOR_SET_PAYLOAD_PREFIX_V1, payload))
+
+
+def _decode_bsc_validator_set_payload(payload: bytes) -> tuple[list[bytes], list[int]]:
+    if len(payload) > _SCCP_BSC_MAX_VALIDATOR_SET_PAYLOAD_BYTES:
+        raise ValueError(
+            f"BSC validator-set payload must be at most {_SCCP_BSC_MAX_VALIDATOR_SET_PAYLOAD_BYTES} bytes"
+        )
+    if len(payload) < 5 or payload[0] != 1:
+        raise ValueError("BSC validator-set payload must have version 1")
+    validator_count = int.from_bytes(payload[1:5], "little")
+    expected_len = 5 + validator_count * (_SCCP_BSC_PARLIA_VALIDATOR_ADDRESS_BYTES + 8)
+    if (
+        validator_count == 0
+        or validator_count > _SCCP_BSC_MAX_PARLIA_VALIDATORS
+        or len(payload) != expected_len
+    ):
+        raise ValueError("BSC validator-set payload has an invalid validator count")
+    cursor = 5
+    seen_addresses = set()
+    addresses: list[bytes] = []
+    powers: list[int] = []
+    for index in range(validator_count):
+        address_end = cursor + _SCCP_BSC_PARLIA_VALIDATOR_ADDRESS_BYTES
+        address = payload[cursor:address_end]
+        cursor = address_end
+        if not any(address):
+            raise ValueError(f"validatorAddresses[{index}] must not be zero")
+        if address in seen_addresses:
+            raise ValueError(f"validatorAddresses[{index}] must be unique")
+        seen_addresses.add(address)
+        power = int.from_bytes(payload[cursor : cursor + 8], "little")
+        cursor += 8
+        if power == 0:
+            raise ValueError(f"validatorPowers[{index}] must not be zero")
+        addresses.append(address)
+        powers.append(power)
+    return addresses, powers
+
+
+def bsc_validator_set_hash_from_payload(input_value: Any) -> str:
+    """Derive the SCCP BSC validator-set hash from a canonical payload."""
+
+    payload = (
+        _to_bytes(input_value, "validatorSetPayload")
+        if isinstance(input_value, (bytes, bytearray, memoryview, str))
+        else canonical_bsc_validator_set_payload_bytes(input_value)
+    )
+    _decode_bsc_validator_set_payload(payload)
+    return _bytes_to_hex(_prefixed_keccak(_SCCP_BSC_VALIDATOR_SET_PREFIX_V1, payload))
+
+
+def canonical_bsc_commit_message_bytes(input_value: Any) -> bytes:
+    """Return canonical BSC Parlia commit-message transcript bytes."""
+
+    value = _require_mapping(input_value, "BSC commit message input")
+    version = _normalize_optional_v1_version(
+        value,
+        "BSC commit message version",
+        "version",
+        error_cls=ValueError,
+    )
+    source_domain = _normalize_optional_u32_without_aliases(
+        value,
+        "sourceDomain",
+        SCCP_DOMAIN_BSC,
+        "sourceDomain",
+        "source_domain",
+    )
+    if source_domain != SCCP_DOMAIN_BSC:
+        raise ValueError("sourceDomain must be BSC")
+    out = bytearray()
+    out.extend(_write_u8(version))
+    out.extend(_write_u32_le(source_domain))
+    out.extend(
+        _write_u64_le(
+            _normalize_u64(
+                _mapping_value_without_aliases(value, "validatorEpoch", "validatorEpoch", "validator_epoch"),
+                "validatorEpoch",
+            )
+        )
+    )
+    out.extend(
+        _write_u64_le(
+            _normalize_u64(
+                _mapping_value_without_aliases(value, "blockNumber", "blockNumber", "block_number"),
+                "blockNumber",
+            )
+        )
+    )
+    out.extend(
+        _hex_to_bytes(
+            _mapping_value_without_aliases(value, "blockHash", "blockHash", "block_hash"),
+            "blockHash",
+            32,
+        )
+    )
+    out.extend(
+        _hex_to_bytes(
+            _mapping_value_without_aliases(value, "receiptsRoot", "receiptsRoot", "receipts_root"),
+            "receiptsRoot",
+            32,
+        )
+    )
+    out.extend(
+        _hex_to_bytes(
+            _mapping_value_without_aliases(value, "validatorSetHash", "validatorSetHash", "validator_set_hash"),
+            "validatorSetHash",
+            32,
+        )
+    )
+    return bytes(out)
+
+
+def bsc_commit_message_hash(input_value: Any) -> str:
+    """Hash a BSC Parlia commit-message transcript."""
+
+    return _bytes_to_hex(
+        _prefixed_keccak(
+            _SCCP_BSC_COMMIT_MESSAGE_PREFIX_V1,
+            canonical_bsc_commit_message_bytes(input_value),
+        )
+    )
+
+
+def _secp256k1_public_key_address20(public_key: bytes, label: str) -> bytes:
+    if len(public_key) == 33 and public_key[0] in (2, 3):
+        x = int.from_bytes(public_key[1:], "big")
+        if x >= _SECP256K1_FIELD_PRIME:
+            raise ValueError(f"{label} is not a canonical secp256k1 public key")
+        alpha = (pow(x, 3, _SECP256K1_FIELD_PRIME) + 7) % _SECP256K1_FIELD_PRIME
+        y = pow(alpha, (_SECP256K1_FIELD_PRIME + 1) // 4, _SECP256K1_FIELD_PRIME)
+        if (y * y - alpha) % _SECP256K1_FIELD_PRIME != 0:
+            raise ValueError(f"{label} is not a valid secp256k1 public key")
+        if (y & 1) != (public_key[0] & 1):
+            y = _SECP256K1_FIELD_PRIME - y
+    elif len(public_key) == 65 and public_key[0] == 4:
+        x = int.from_bytes(public_key[1:33], "big")
+        y = int.from_bytes(public_key[33:], "big")
+        if x >= _SECP256K1_FIELD_PRIME or y >= _SECP256K1_FIELD_PRIME:
+            raise ValueError(f"{label} is not a canonical secp256k1 public key")
+        alpha = (pow(x, 3, _SECP256K1_FIELD_PRIME) + 7) % _SECP256K1_FIELD_PRIME
+        if (y * y - alpha) % _SECP256K1_FIELD_PRIME != 0:
+            raise ValueError(f"{label} is not a valid secp256k1 public key")
+    else:
+        raise ValueError(f"{label} must be a compressed or uncompressed secp256k1 public key")
+    return _keccak_256(x.to_bytes(32, "big") + y.to_bytes(32, "big"))[12:]
+
+
+def _canonical_bsc_validator_set_payload_bytes_from_address_powers(
+    validator_addresses: Sequence[bytes],
+    validator_powers: Sequence[int],
+) -> bytes:
+    if (
+        not validator_addresses
+        or len(validator_addresses) != len(validator_powers)
+        or len(validator_addresses) > _SCCP_BSC_MAX_PARLIA_VALIDATORS
+    ):
+        raise ValueError("validatorAddresses and validatorPowers must be non-empty bounded arrays")
+    out = bytearray()
+    out.extend(_write_u8(1))
+    out.extend(_write_u32_le(len(validator_addresses)))
+    seen_addresses = set()
+    for index, (address, power) in enumerate(zip(validator_addresses, validator_powers)):
+        if len(address) != _SCCP_BSC_PARLIA_VALIDATOR_ADDRESS_BYTES:
+            raise ValueError(f"validatorAddresses[{index}] must be 20 bytes")
+        if not any(address):
+            raise ValueError(f"validatorAddresses[{index}] must not be zero")
+        if address in seen_addresses:
+            raise ValueError(f"validatorAddresses[{index}] must be unique")
+        seen_addresses.add(address)
+        if power == 0:
+            raise ValueError(f"validatorPowers[{index}] must not be zero")
+        out.extend(address)
+        out.extend(_write_u64_le(power))
+    return bytes(out)
+
+
+def _bsc_signer_indices_from_bitmap(signers_bitmap: bytes, roster_len: int) -> list[int]:
+    expected_len = (roster_len + 7) // 8
+    if len(signers_bitmap) != expected_len:
+        raise ValueError("signersBitmap has invalid length")
+    indices: list[int] = []
+    for byte_index, value in enumerate(signers_bitmap):
+        for bit in range(8):
+            validator_index = byte_index * 8 + bit
+            bit_set = (value & (1 << bit)) != 0
+            if validator_index >= roster_len:
+                if bit_set:
+                    raise ValueError("signersBitmap padding bits must be zero")
+                continue
+            if bit_set:
+                indices.append(validator_index)
+    if not indices:
+        raise ValueError("signersBitmap must select at least one signer")
+    return indices
+
+
+def canonical_bsc_commit_seal_bytes(input_value: Any) -> bytes:
+    """Return canonical BSC commit-seal bytes after validating every signer."""
+
+    value = _require_mapping(input_value, "BSC commit seal input")
+    version = _normalize_optional_v1_version(
+        value,
+        "BSC commit seal version",
+        "version",
+        error_cls=ValueError,
+    )
+    total_power = _normalize_u64(
+        _mapping_value_without_aliases(value, "totalPower", "totalPower", "total_power"),
+        "totalPower",
+    )
+    signed_power = _normalize_u64(
+        _mapping_value_without_aliases(value, "signedPower", "signedPower", "signed_power"),
+        "signedPower",
+    )
+    commit_message_hash = _nonzero_hex32_to_bytes(
+        _mapping_value_without_aliases(
+            value,
+            "commitMessageHash",
+            "commitMessageHash",
+            "commit_message_hash",
+        ),
+        "commitMessageHash",
+    )
+    public_keys_value = _mapping_value_without_aliases(
+        value,
+        "validatorPublicKeys",
+        "validatorPublicKeys",
+        "validator_public_keys",
+    )
+    powers_value = _mapping_value_without_aliases(
+        value,
+        "validatorPowers",
+        "validatorPowers",
+        "validator_powers",
+    )
+    if not isinstance(public_keys_value, Sequence) or isinstance(public_keys_value, (str, bytes, bytearray)):
+        raise TypeError("validatorPublicKeys must be an array")
+    if not isinstance(powers_value, Sequence) or isinstance(powers_value, (str, bytes, bytearray)):
+        raise TypeError("validatorPowers must be an array")
+    if (
+        not public_keys_value
+        or len(public_keys_value) != len(powers_value)
+        or len(public_keys_value) > _SCCP_BSC_MAX_PARLIA_VALIDATORS
+    ):
+        raise ValueError("validatorPublicKeys and validatorPowers must be non-empty bounded arrays")
+
+    validator_addresses: list[bytes] = []
+    validator_powers: list[int] = []
+    seen_addresses = set()
+    for index, (public_key_value, power_value) in enumerate(zip(public_keys_value, powers_value)):
+        public_key = _to_bytes(public_key_value, f"validatorPublicKeys[{index}]")
+        address = _secp256k1_public_key_address20(public_key, f"validatorPublicKeys[{index}]")
+        if address in seen_addresses:
+            raise ValueError(f"validatorPublicKeys[{index}] must derive a unique address")
+        seen_addresses.add(address)
+        validator_addresses.append(address)
+        validator_powers.append(_normalize_u64(power_value, f"validatorPowers[{index}]"))
+
+    validator_set_payload = _canonical_bsc_validator_set_payload_bytes_from_address_powers(
+        validator_addresses,
+        validator_powers,
+    )
+    validator_set_hash = _prefixed_keccak(
+        _SCCP_BSC_VALIDATOR_SET_PREFIX_V1,
+        validator_set_payload,
+    )
+    supplied_validator_set_hash = _mapping_optional_value_without_aliases(
+        value,
+        "validatorSetHash",
+        "validatorSetHash",
+        "validator_set_hash",
+    )
+    if supplied_validator_set_hash is not _MISSING and supplied_validator_set_hash is not None:
+        supplied = _hex_to_bytes(supplied_validator_set_hash, "validatorSetHash", 32)
+        if supplied != validator_set_hash:
+            raise ValueError("validatorSetHash must match validatorPublicKeys and validatorPowers")
+
+    if sum(validator_powers) != total_power:
+        raise ValueError("totalPower must equal validatorPowers sum")
+    signers_bitmap = _to_bytes(
+        _mapping_value_without_aliases(
+            value,
+            "signersBitmap",
+            "signersBitmap",
+            "signers_bitmap",
+        ),
+        "signersBitmap",
+    )
+    signer_indices = _bsc_signer_indices_from_bitmap(signers_bitmap, len(validator_addresses))
+
+    signatures_value = _mapping_value(value, "signatures")
+    if not isinstance(signatures_value, Sequence) or isinstance(signatures_value, (str, bytes, bytearray)):
+        raise TypeError("signatures must be an array")
+    if len(signatures_value) != len(signer_indices):
+        raise ValueError("signatures length must equal selected signers")
+
+    computed_signed_power = 0
+    signatures: list[bytes] = []
+    for signature_index, (signature_value, signer_index) in enumerate(zip(signatures_value, signer_indices)):
+        signature = _to_bytes(signature_value, f"signatures[{signature_index}]")
+        if not _tron_recoverable_signature_is_canonical(signature):
+            raise ValueError(f"signatures[{signature_index}] must be a canonical recoverable secp256k1 signature")
+        recovered_address = _secp256k1_recover_address20(commit_message_hash, signature)
+        if recovered_address != validator_addresses[signer_index]:
+            raise ValueError(f"signatures[{signature_index}] must recover the selected validator address")
+        computed_signed_power += validator_powers[signer_index]
+        signatures.append(signature)
+
+    if computed_signed_power != signed_power:
+        raise ValueError("signedPower must equal selected validator power")
+    if computed_signed_power * 3 <= total_power * 2:
+        raise ValueError("signedPower must be greater than two thirds of totalPower")
+
+    out = bytearray()
+    out.extend(_write_u8(version))
+    out.extend(_write_u64_le(total_power))
+    out.extend(_write_u64_le(signed_power))
+    out.extend(commit_message_hash)
+    out.extend(validator_set_hash)
+    out.extend(_write_bytes(signers_bitmap))
+    out.extend(_write_u32_le(len(signatures)))
+    for signature in signatures:
+        out.extend(_write_bytes(signature))
+    return bytes(out)
+
+
+def bsc_commit_seal_hash(input_value: Any) -> str:
+    """Hash a validated BSC Parlia commit-seal transcript."""
+
+    return _bytes_to_hex(
+        _prefixed_keccak(
+            _SCCP_BSC_COMMIT_SEAL_PREFIX_V1,
+            canonical_bsc_commit_seal_bytes(input_value),
+        )
+    )
+
+
+def bsc_validator_set_storage_value_hash(input_value: Any) -> str:
+    """Hash a raw BSC ValidatorSet storage-trie value for metadata proofs."""
+
+    return _bytes_to_hex(
+        _prefixed_keccak(
+            _SCCP_BSC_VALIDATOR_SET_STORAGE_VALUE_PREFIX_V1,
+            _to_bytes(input_value, "storageValue"),
+        )
+    )
+
+
+def _canonical_bsc_validator_storage_proof_bytes(input_value: Any) -> bytes:
+    value = _require_mapping(input_value, "BSC validator storage proof input")
+    storage_proof_nodes = _normalize_byte_vectors(
+        _mapping_value_without_aliases(value, "storageProofNodes", "storageProofNodes", "storage_proof_nodes"),
+        "storageProofNodes",
+        max_count=_SCCP_TRON_MAX_MPT_PROOF_NODES,
+        max_bytes=_SCCP_TRON_MAX_MPT_NODE_BYTES,
+        require_non_empty=True,
+    )
+    out = bytearray()
+    out.extend(
+        _write_u8(
+            _normalize_optional_v1_version(
+                value, "BSC validator storage proof version", "version"
+            )
+        )
+    )
+    out.extend(
+        _write_u32_le(
+            _normalize_u32(
+                _mapping_value_without_aliases(value, "validatorIndex", "validatorIndex", "validator_index"),
+                "validatorIndex",
+            )
+        )
+    )
+    out.extend(
+        _hex_to_bytes(
+            _mapping_value_without_aliases(value, "storageSlot", "storageSlot", "storage_slot"),
+            "storageSlot",
+            32,
+        )
+    )
+    storage_value = _to_bytes(
+        _mapping_value_without_aliases(value, "storageValue", "storageValue", "storage_value"),
+        "storageValue",
+    )
+    storage_value_hash = _hex_to_bytes(
+        _mapping_value_without_aliases(value, "storageValueHash", "storageValueHash", "storage_value_hash"),
+        "storageValueHash",
+        32,
+    )
+    if storage_value_hash != _prefixed_keccak(
+        _SCCP_BSC_VALIDATOR_SET_STORAGE_VALUE_PREFIX_V1,
+        storage_value,
+    ):
+        raise ValueError("storageValueHash must match storageValue")
+    out.extend(_write_bytes(storage_value))
+    out.extend(storage_value_hash)
+    out.extend(_write_u32_le(len(storage_proof_nodes)))
+    for node in storage_proof_nodes:
+        out.extend(_write_bytes(node))
+    return bytes(out)
+
+
+def canonical_bsc_validator_set_metadata_proof_bytes(input_value: Any) -> bytes:
+    """Return canonical BSC ValidatorSet metadata proof bytes."""
+
+    value = _require_mapping(input_value, "BSC ValidatorSet metadata proof input")
+    account_proof_nodes = _normalize_byte_vectors(
+        _mapping_value_without_aliases(value, "accountProofNodes", "accountProofNodes", "account_proof_nodes"),
+        "accountProofNodes",
+        max_count=_SCCP_TRON_MAX_MPT_PROOF_NODES,
+        max_bytes=_SCCP_TRON_MAX_MPT_NODE_BYTES,
+        require_non_empty=True,
+    )
+    length_proof_nodes = _normalize_byte_vectors(
+        _mapping_value_without_aliases(
+            value,
+            "validatorSetLengthProofNodes",
+            "validatorSetLengthProofNodes",
+            "validator_set_length_proof_nodes",
+        ),
+        "validatorSetLengthProofNodes",
+        max_count=_SCCP_TRON_MAX_MPT_PROOF_NODES,
+        max_bytes=_SCCP_TRON_MAX_MPT_NODE_BYTES,
+        require_non_empty=True,
+    )
+    storage_proofs = _mapping_value_without_aliases(
+        value,
+        "validatorStorageProofs",
+        "validatorStorageProofs",
+        "validator_storage_proofs",
+    )
+    if not isinstance(storage_proofs, Sequence) or isinstance(
+        storage_proofs, (str, bytes, bytearray)
+    ):
+        raise TypeError("validatorStorageProofs must be an array")
+    if len(storage_proofs) == 0 or len(storage_proofs) > _SCCP_BSC_MAX_PARLIA_VALIDATORS:
+        raise ValueError(
+            f"validatorStorageProofs must contain 1..{_SCCP_BSC_MAX_PARLIA_VALIDATORS} entries"
+        )
+
+    validator_contract_address = _to_bytes(
+        _mapping_value_without_aliases(
+            value,
+            "validatorContractAddress",
+            "validatorContractAddress",
+            "validator_contract_address",
+        ),
+        "validatorContractAddress",
+    )
+    if len(validator_contract_address) != 20:
+        raise TypeError("validatorContractAddress must be 20 bytes")
+
+    out = bytearray()
+    out.extend(
+        _write_u8(
+            _normalize_optional_v1_version(
+                value,
+                "BSC ValidatorSet metadata proof version",
+                "version",
+            )
+        )
+    )
+    out.extend(
+        _hex_to_bytes(
+            _mapping_value_without_aliases(value, "stateRoot", "stateRoot", "state_root"),
+            "stateRoot",
+            32,
+        )
+    )
+    out.extend(
+        _hex_to_bytes(
+            _mapping_value_without_aliases(
+                value,
+                "nextValidatorSetPayloadHash",
+                "nextValidatorSetPayloadHash",
+                "next_validator_set_payload_hash",
+            ),
+            "nextValidatorSetPayloadHash",
+            32,
+        )
+    )
+    out.extend(_write_bytes(validator_contract_address))
+    out.extend(_write_u32_le(len(account_proof_nodes)))
+    for node in account_proof_nodes:
+        out.extend(_write_bytes(node))
+    out.extend(
+        _hex_to_bytes(
+            _mapping_value_without_aliases(value, "storageRoot", "storageRoot", "storage_root"),
+            "storageRoot",
+            32,
+        )
+    )
+    out.extend(
+        _hex_to_bytes(
+            _mapping_value_without_aliases(
+                value,
+                "validatorSetLengthSlot",
+                "validatorSetLengthSlot",
+                "validator_set_length_slot",
+            ),
+            "validatorSetLengthSlot",
+            32,
+        )
+    )
+    validator_set_length_value = _to_bytes(
+        _mapping_value_without_aliases(
+            value,
+            "validatorSetLengthValue",
+            "validatorSetLengthValue",
+            "validator_set_length_value",
+        ),
+        "validatorSetLengthValue",
+    )
+    validator_set_length_value_hash = _hex_to_bytes(
+        _mapping_value_without_aliases(
+            value,
+            "validatorSetLengthValueHash",
+            "validatorSetLengthValueHash",
+            "validator_set_length_value_hash",
+        ),
+        "validatorSetLengthValueHash",
+        32,
+    )
+    if validator_set_length_value_hash != _prefixed_keccak(
+        _SCCP_BSC_VALIDATOR_SET_STORAGE_VALUE_PREFIX_V1,
+        validator_set_length_value,
+    ):
+        raise ValueError("validatorSetLengthValueHash must match validatorSetLengthValue")
+    out.extend(_write_bytes(validator_set_length_value))
+    out.extend(validator_set_length_value_hash)
+    out.extend(_write_u32_le(len(length_proof_nodes)))
+    for node in length_proof_nodes:
+        out.extend(_write_bytes(node))
+    out.extend(_write_u32_le(len(storage_proofs)))
+    for proof in storage_proofs:
+        out.extend(_canonical_bsc_validator_storage_proof_bytes(proof))
+    return bytes(out)
+
+
+def bsc_validator_set_metadata_proof_hash(input_value: Any) -> str:
+    """Hash a BSC ValidatorSet metadata proof transcript."""
+
+    return _bytes_to_hex(
+        _prefixed_keccak(
+            _SCCP_BSC_VALIDATOR_SET_METADATA_PREFIX_V1,
+            canonical_bsc_validator_set_metadata_proof_bytes(input_value),
+        )
+    )
+
+
+def canonical_bsc_validator_set_transition_message_bytes(input_value: Any) -> bytes:
+    """Return canonical BSC validator-set transition message bytes."""
+
+    value = _require_mapping(input_value, "BSC validator-set transition message input")
+    source_domain = _normalize_optional_u32_without_aliases(
+        value,
+        "sourceDomain",
+        SCCP_DOMAIN_BSC,
+        "sourceDomain",
+        "source_domain",
+    )
+    if source_domain != SCCP_DOMAIN_BSC:
+        raise ValueError("sourceDomain must be BSC")
+    from_validator_epoch = _normalize_u64(
+        _mapping_value_without_aliases(value, "fromValidatorEpoch", "fromValidatorEpoch", "from_validator_epoch"),
+        "fromValidatorEpoch",
+    )
+    to_validator_epoch = _normalize_u64(
+        _mapping_value_without_aliases(value, "toValidatorEpoch", "toValidatorEpoch", "to_validator_epoch"),
+        "toValidatorEpoch",
+    )
+    if from_validator_epoch + 1 != to_validator_epoch:
+        raise ValueError("toValidatorEpoch must equal fromValidatorEpoch + 1")
+    transition_block_number = _normalize_u64(
+        _mapping_value_without_aliases(
+            value,
+            "transitionBlockNumber",
+            "transitionBlockNumber",
+            "transition_block_number",
+        ),
+        "transitionBlockNumber",
+    )
+    if transition_block_number != to_validator_epoch * _SCCP_BSC_PARLIA_EPOCH_LENGTH_BLOCKS:
+        raise ValueError("transitionBlockNumber must be the BSC Parlia epoch-start block")
+    out = bytearray()
+    out.extend(
+        _write_u8(
+            _normalize_optional_v1_version(
+                value,
+                "BSC validator-set transition message version",
+                "version",
+            )
+        )
+    )
+    out.extend(_write_u32_le(source_domain))
+    out.extend(_write_u64_le(from_validator_epoch))
+    out.extend(_write_u64_le(to_validator_epoch))
+    out.extend(_write_u64_le(transition_block_number))
+    for camel, snake, label in (
+        ("transitionBlockHash", "transition_block_hash", "transitionBlockHash"),
+        ("parentValidatorSetHash", "parent_validator_set_hash", "parentValidatorSetHash"),
+        ("nextValidatorSetHash", "next_validator_set_hash", "nextValidatorSetHash"),
+        (
+            "nextValidatorSetPayloadHash",
+            "next_validator_set_payload_hash",
+            "nextValidatorSetPayloadHash",
+        ),
+        (
+            "validatorSetMetadataProofHash",
+            "validator_set_metadata_proof_hash",
+            "validatorSetMetadataProofHash",
+        ),
+    ):
+        out.extend(
+            _hex_to_bytes(
+                _mapping_value_without_aliases(value, label, camel, snake),
+                label,
+                32,
+            )
+        )
+    return bytes(out)
+
+
+def bsc_validator_set_transition_message_hash(input_value: Any) -> str:
+    """Hash a BSC validator-set transition message transcript."""
+
+    return _bytes_to_hex(
+        _prefixed_keccak(
+            _SCCP_BSC_VALIDATOR_SET_TRANSITION_MESSAGE_PREFIX_V1,
+            canonical_bsc_validator_set_transition_message_bytes(input_value),
+        )
+    )
+
+
+def _canonical_bsc_validator_set_payload_bytes_from_addresses(
+    validator_addresses: Sequence[bytes],
+) -> bytes:
+    if (
+        not validator_addresses
+        or len(validator_addresses) > _SCCP_BSC_MAX_PARLIA_VALIDATORS
+    ):
+        raise ValueError("validatorAddresses must be a non-empty bounded array")
+    out = bytearray()
+    out.extend(_write_u8(1))
+    out.extend(_write_u32_le(len(validator_addresses)))
+    seen_addresses = set()
+    for index, address in enumerate(validator_addresses):
+        if len(address) != _SCCP_BSC_PARLIA_VALIDATOR_ADDRESS_BYTES:
+            raise ValueError(f"validatorAddresses[{index}] must be 20 bytes")
+        if not any(address):
+            raise ValueError(f"validatorAddresses[{index}] must not be zero")
+        if address in seen_addresses:
+            raise ValueError(f"validatorAddresses[{index}] must be unique")
+        seen_addresses.add(address)
+        out.extend(address)
+        out.extend(_write_u64_le(1))
+    return bytes(out)
+
+
+def _bsc_parlia_validator_set_payload_candidates_from_extra(
+    extra_data: bytes,
+) -> list[bytes]:
+    candidates: list[bytes] = []
+
+    def push_candidate(addresses: Sequence[bytes]) -> None:
+        try:
+            payload = _canonical_bsc_validator_set_payload_bytes_from_addresses(addresses)
+        except ValueError:
+            return
+        if payload not in candidates:
+            candidates.append(payload)
+
+    minimum_extra = _SCCP_BSC_PARLIA_EXTRA_VANITY_BYTES + _SCCP_BSC_PARLIA_EXTRA_SEAL_BYTES
+    if len(extra_data) <= minimum_extra:
+        return candidates
+    validator_region = extra_data[
+        _SCCP_BSC_PARLIA_EXTRA_VANITY_BYTES : len(extra_data)
+        - _SCCP_BSC_PARLIA_EXTRA_SEAL_BYTES
+    ]
+    if not validator_region:
+        return candidates
+
+    if len(validator_region) % _SCCP_BSC_PARLIA_VALIDATOR_ADDRESS_BYTES == 0:
+        count = len(validator_region) // _SCCP_BSC_PARLIA_VALIDATOR_ADDRESS_BYTES
+        if count <= _SCCP_BSC_MAX_PARLIA_VALIDATORS:
+            push_candidate(
+                [
+                    validator_region[
+                        index : index + _SCCP_BSC_PARLIA_VALIDATOR_ADDRESS_BYTES
+                    ]
+                    for index in range(
+                        0,
+                        len(validator_region),
+                        _SCCP_BSC_PARLIA_VALIDATOR_ADDRESS_BYTES,
+                    )
+                ]
+            )
+
+    luban_count = validator_region[0]
+    luban_stride = (
+        _SCCP_BSC_PARLIA_VALIDATOR_ADDRESS_BYTES
+        + _SCCP_BSC_PARLIA_VALIDATOR_BLS_KEY_BYTES
+    )
+    luban_region_len = 1 + luban_count * luban_stride
+    if (
+        luban_count != 0
+        and luban_count <= _SCCP_BSC_MAX_PARLIA_VALIDATORS
+        and len(validator_region) >= luban_region_len
+    ):
+        addresses = []
+        for index in range(luban_count):
+            start = 1 + index * luban_stride
+            addresses.append(
+                validator_region[
+                    start : start + _SCCP_BSC_PARLIA_VALIDATOR_ADDRESS_BYTES
+                ]
+            )
+        push_candidate(addresses)
+
+    return candidates
+
+
+def bsc_validator_set_payload_from_parlia_extra(extra_data: Any) -> bytes:
+    """Extract canonical BSC validator-set payload bytes from Parlia header extraData."""
+
+    candidates = _bsc_parlia_validator_set_payload_candidates_from_extra(
+        _to_bytes(extra_data, "extraData")
+    )
+    if len(candidates) != 1:
+        raise ValueError("BSC Parlia extraData must contain one unambiguous validator set")
+    return candidates[0]
+
+
+def _read_rlp_len(payload: bytes, offset: int, len_len: int) -> int:
+    if len_len == 0 or len_len > 8 or offset + len_len > len(payload):
+        raise ValueError("invalid RLP length")
+    length_bytes = payload[offset : offset + len_len]
+    if length_bytes[0] == 0:
+        raise ValueError("non-canonical RLP length")
+    return int.from_bytes(length_bytes, "big")
+
+
+def _rlp_item_at(payload: bytes, cursor: int) -> tuple[str, bytes, int]:
+    if cursor >= len(payload):
+        raise ValueError("RLP cursor out of bounds")
+    first = payload[cursor]
+    if first <= 0x7F:
+        return "bytes", payload[cursor : cursor + 1], cursor + 1
+    if first <= 0xB7:
+        length = first - 0x80
+        start = cursor + 1
+        end = start + length
+        if end > len(payload) or (length == 1 and payload[start] < 0x80):
+            raise ValueError("non-canonical RLP string")
+        return "bytes", payload[start:end], end
+    if first <= 0xBF:
+        len_len = first - 0xB7
+        length = _read_rlp_len(payload, cursor + 1, len_len)
+        if length < 56:
+            raise ValueError("non-canonical RLP long string")
+        start = cursor + 1 + len_len
+        end = start + length
+        if end > len(payload):
+            raise ValueError("RLP string out of bounds")
+        return "bytes", payload[start:end], end
+    if first <= 0xF7:
+        length = first - 0xC0
+        start = cursor + 1
+        end = start + length
+        if end > len(payload):
+            raise ValueError("RLP list out of bounds")
+        return "list", payload[start:end], end
+    len_len = first - 0xF7
+    length = _read_rlp_len(payload, cursor + 1, len_len)
+    if length < 56:
+        raise ValueError("non-canonical RLP long list")
+    start = cursor + 1 + len_len
+    end = start + length
+    if end > len(payload):
+        raise ValueError("RLP list out of bounds")
+    return "list", payload[start:end], end
+
+
+def _rlp_list_byte_fields(payload: bytes) -> list[bytes]:
+    item_type, value, cursor = _rlp_item_at(payload, 0)
+    if item_type != "list" or cursor != len(payload):
+        raise ValueError("headerRlp must be an RLP list")
+    fields = []
+    inner_cursor = 0
+    while inner_cursor < len(value):
+        field_type, field_value, inner_cursor = _rlp_item_at(value, inner_cursor)
+        if field_type != "bytes":
+            raise ValueError("headerRlp must contain only RLP byte fields")
+        fields.append(field_value)
+    return fields
+
+
+def _ssz_hash_node(left: bytes, right: bytes) -> bytes:
+    if len(left) != 32 or len(right) != 32:
+        raise TypeError("SSZ node children must be 32 bytes")
+    return hashlib.sha256(left + right).digest()
+
+
+def _ssz_merkleize_chunks(chunks: Sequence[bytes]) -> bytes:
+    working = [bytes(chunk) for chunk in chunks]
+    if any(len(chunk) != 32 for chunk in working):
+        raise TypeError("SSZ chunks must be 32 bytes")
+    if not working:
+        return bytes(32)
+    padded_len = 1
+    while padded_len < len(working):
+        padded_len <<= 1
+    working.extend(bytes(32) for _ in range(padded_len - len(working)))
+    while len(working) > 1:
+        working = [
+            _ssz_hash_node(working[index], working[index + 1])
+            for index in range(0, len(working), 2)
+        ]
+    return working[0]
+
+
+def _read_minimal_be_u64(value: bytes, label: str) -> int:
+    if not value:
+        return 0
+    if len(value) > 8 or (len(value) > 1 and value[0] == 0):
+        raise TypeError(f"{label} must be a canonical RLP u64")
+    return int.from_bytes(value, "big")
+
+
+def _ssz_u64_chunk(value: int) -> bytes:
+    return int(value).to_bytes(8, "little") + bytes(24)
+
+
+def _ssz_u64_chunk_from_rlp(value: bytes, label: str) -> bytes:
+    return _ssz_u64_chunk(_read_minimal_be_u64(value, label))
+
+
+def _ssz_u256_chunk_from_rlp(value: bytes, label: str) -> bytes:
+    if len(value) > 32 or (len(value) > 1 and value[0] == 0):
+        raise TypeError(f"{label} must be a canonical RLP uint256")
+    return value[::-1] + bytes(32 - len(value))
+
+
+def _ssz_bytevector_root(value: bytes, expected_len: int, label: str) -> bytes:
+    if len(value) != expected_len:
+        raise TypeError(f"{label} must be {expected_len} bytes")
+    chunks = []
+    for offset in range(0, len(value), 32):
+        chunk = value[offset : offset + 32]
+        chunks.append(chunk + bytes(32 - len(chunk)))
+    return _ssz_merkleize_chunks(chunks)
+
+
+def _ssz_mix_in_length(root: bytes, length: int) -> bytes:
+    return _ssz_hash_node(root, int(length).to_bytes(8, "little") + bytes(24))
+
+
+def _ssz_bytelist_root(value: bytes, max_len: int, label: str) -> bytes:
+    if len(value) > max_len:
+        raise ValueError(f"{label} must be at most {max_len} bytes")
+    limit_chunks = max(1, (max_len + 31) // 32)
+    chunks = []
+    for offset in range(0, len(value), 32):
+        chunk = value[offset : offset + 32]
+        chunks.append(chunk + bytes(32 - len(chunk)))
+    chunks.extend(bytes(32) for _ in range(limit_chunks - len(chunks)))
+    return _ssz_mix_in_length(_ssz_merkleize_chunks(chunks), len(value))
+
+
+def _ssz_merkle_root_from_branch(leaf: bytes, leaf_index: int, branch: Sequence[bytes]) -> bytes:
+    current = leaf
+    index = leaf_index
+    for branch_index, sibling in enumerate(branch):
+        if len(sibling) != 32:
+            raise TypeError(f"executionPayloadBranch[{branch_index}] must be 32 bytes")
+        current = _ssz_hash_node(sibling, current) if index & 1 else _ssz_hash_node(current, sibling)
+        index >>= 1
+    return current
+
+
+def eth_execution_payload_header_root_from_rlp(header_rlp: Any) -> str:
+    """Return the Deneb/Fulu SSZ ExecutionPayloadHeader root for an ETH RLP header."""
+
+    raw = _to_bytes(header_rlp, "headerRlp")
+    fields = _rlp_list_byte_fields(raw)
+    if len(fields) < 19:
+        raise TypeError("headerRlp must include Deneb/Fulu execution payload fields")
+    return _bytes_to_hex(
+        _ssz_merkleize_chunks(
+            [
+                _ssz_bytevector_root(fields[0], 32, "parentHash"),
+                _ssz_bytevector_root(fields[2], 20, "feeRecipient"),
+                _ssz_bytevector_root(fields[3], 32, "stateRoot"),
+                _ssz_bytevector_root(fields[5], 32, "receiptsRoot"),
+                _ssz_bytevector_root(fields[6], 256, "logsBloom"),
+                _ssz_bytevector_root(fields[13], 32, "prevRandao"),
+                _ssz_u64_chunk_from_rlp(fields[8], "blockNumber"),
+                _ssz_u64_chunk_from_rlp(fields[9], "gasLimit"),
+                _ssz_u64_chunk_from_rlp(fields[10], "gasUsed"),
+                _ssz_u64_chunk_from_rlp(fields[11], "timestamp"),
+                _ssz_bytelist_root(fields[12], 32, "extraData"),
+                _ssz_u256_chunk_from_rlp(fields[15], "baseFeePerGas"),
+                _keccak_256(raw),
+                _ssz_bytevector_root(fields[4], 32, "transactionsRoot"),
+                _ssz_bytevector_root(fields[16], 32, "withdrawalsRoot"),
+                _ssz_u64_chunk_from_rlp(fields[17], "blobGasUsed"),
+                _ssz_u64_chunk_from_rlp(fields[18], "excessBlobGas"),
+            ]
+        )
+    )
+
+
+def eth_beacon_body_root_from_execution_payload_branch(
+    execution_payload_header_root: Any, execution_payload_branch: Sequence[Any]
+) -> str:
+    """Return the beacon body root from the fixed execution-payload branch."""
+
+    root = _hex_to_bytes(execution_payload_header_root, "executionPayloadHeaderRoot", 32)
+    branch = _normalize_inclusion_branch(execution_payload_branch, "executionPayloadBranch")
+    if len(branch) != _SCCP_ETH_EXECUTION_PAYLOAD_BODY_BRANCH_DEPTH:
+        raise TypeError(
+            "executionPayloadBranch must contain "
+            f"{_SCCP_ETH_EXECUTION_PAYLOAD_BODY_BRANCH_DEPTH} siblings"
+        )
+    return _bytes_to_hex(
+        _ssz_merkle_root_from_branch(
+            root,
+            _SCCP_ETH_EXECUTION_PAYLOAD_BODY_FIELD_INDEX,
+            branch,
+        )
+    )
+
+
+def eth_beacon_block_header_root(input_value: Mapping[str, Any]) -> str:
+    """Return the SSZ BeaconBlockHeader root used by ETH SCCP source proofs."""
+
+    value = _require_mapping(input_value, "ETH beacon block header input")
+    slot = _normalize_u64(
+        _mapping_value_without_aliases(value, "slot", "slot", "beaconSlot", "beacon_slot"),
+        "slot",
+    )
+    proposer_index = _normalize_u64(
+        _mapping_value_without_aliases(
+            value,
+            "proposerIndex",
+            "proposerIndex",
+            "proposer_index",
+            "beaconProposerIndex",
+            "beacon_proposer_index",
+        ),
+        "proposerIndex",
+    )
+    parent_root = _hex_to_bytes(
+        _mapping_value_without_aliases(
+            value,
+            "parentRoot",
+            "parentRoot",
+            "parent_root",
+            "beaconParentRoot",
+            "beacon_parent_root",
+        ),
+        "parentRoot",
+        32,
+    )
+    state_root = _hex_to_bytes(
+        _mapping_value_without_aliases(
+            value,
+            "stateRoot",
+            "stateRoot",
+            "state_root",
+            "beaconStateRoot",
+            "beacon_state_root",
+        ),
+        "stateRoot",
+        32,
+    )
+    body_root = _hex_to_bytes(
+        _mapping_value_without_aliases(value, "bodyRoot", "bodyRoot", "body_root", "beaconBodyRoot", "beacon_body_root"),
+        "bodyRoot",
+        32,
+    )
+    return _bytes_to_hex(
+        _ssz_merkleize_chunks(
+            [
+                _ssz_u64_chunk(slot),
+                _ssz_u64_chunk(proposer_index),
+                parent_root,
+                state_root,
+                body_root,
+            ]
+        )
+    )
+
+
+def bsc_validator_set_payload_from_header_rlp(header_rlp: Any) -> bytes:
+    """Extract canonical BSC validator-set payload bytes from a Parlia epoch header RLP."""
+
+    fields = _rlp_list_byte_fields(_to_bytes(header_rlp, "headerRlp"))
+    if len(fields) < 13:
+        raise ValueError("BSC Parlia header RLP must contain an extraData field")
+    return bsc_validator_set_payload_from_parlia_extra(fields[12])
+
+
+def canonical_ton_sccp_shard_proof_bytes(input_value: Any) -> bytes:
+    """Return canonical TON SCCP shard-proof transcript bytes."""
+
+    value = _require_mapping(input_value, "TON SCCP shard proof input")
+
+    def reject_aliases(label: str, *keys: str) -> None:
+        _mapping_optional_value_without_aliases(value, label, *keys)
+
+    reject_aliases("sourceEventDigest", "sourceEventDigest", "source_event_digest")
+    reject_aliases(
+        "masterchainSeqno",
+        "masterchainSeqno",
+        "masterchain_seqno",
+        "finalityHeight",
+        "finality_height",
+    )
+    reject_aliases(
+        "masterchainBlockHash",
+        "masterchainBlockHash",
+        "masterchain_block_hash",
+        "finalityBlockHash",
+        "finality_block_hash",
+    )
+    reject_aliases("shardWorkchainId", "shardWorkchainId", "shard_workchain_id")
+    reject_aliases("shardShard", "shardShard", "shard_shard")
+    reject_aliases("shardSeqno", "shardSeqno", "shard_seqno")
+    reject_aliases("shardBlockHash", "shardBlockHash", "shard_block_hash")
+    reject_aliases("shardFileHash", "shardFileHash", "shard_file_hash")
+    reject_aliases("shardStateRoot", "shardStateRoot", "shard_state_root")
+    reject_aliases(
+        "transactionRoot",
+        "transactionRoot",
+        "transaction_root",
+        "receiptOrMessageRoot",
+        "receipt_or_message_root",
+    )
+    reject_aliases("transactionLt", "transactionLt", "transaction_lt")
+    reject_aliases("shardStateProofBoc", "shardStateProofBoc", "shard_state_proof_boc")
+    reject_aliases("shardStateDictionaryRoot", "shardStateDictionaryRoot", "shard_state_dictionary_root")
+    reject_aliases(
+        "shardStateDictionaryKeyBitLen",
+        "shardStateDictionaryKeyBitLen",
+        "shard_state_dictionary_key_bit_len",
+    )
+    reject_aliases("shardStateDictionaryKey", "shardStateDictionaryKey", "shard_state_dictionary_key")
+    reject_aliases(
+        "shardStateDictionaryProofBoc",
+        "shardStateDictionaryProofBoc",
+        "shard_state_dictionary_proof_boc",
+    )
+    reject_aliases("shardStateLeafIndex", "shardStateLeafIndex", "shard_state_leaf_index")
+    reject_aliases("shardStateInclusionBranch", "shardStateInclusionBranch", "shard_state_inclusion_branch")
+    reject_aliases("inclusionBranch", "inclusionBranch", "inclusion_branch")
+
+    source_event_digest = _hex_to_bytes(
+        _mapping_value(value, "sourceEventDigest", "source_event_digest"),
+        "sourceEventDigest",
+        32,
+    )
+    masterchain_seqno = _normalize_u64(
+        _mapping_value(
+            value,
+            "masterchainSeqno",
+            "masterchain_seqno",
+            "finalityHeight",
+            "finality_height",
+        ),
+        "masterchainSeqno",
+    )
+    masterchain_block_hash = _hex_to_bytes(
+        _mapping_value(
+            value,
+            "masterchainBlockHash",
+            "masterchain_block_hash",
+            "finalityBlockHash",
+            "finality_block_hash",
+        ),
+        "masterchainBlockHash",
+        32,
+    )
+    shard_workchain_id = _normalize_i32(
+        _mapping_value(value, "shardWorkchainId", "shard_workchain_id"),
+        "shardWorkchainId",
+    )
+    if shard_workchain_id != _TON_BASECHAIN_WORKCHAIN_ID:
+        raise TypeError("shardWorkchainId must be TON basechain")
+    shard_shard = _normalize_u64(
+        _mapping_value(value, "shardShard", "shard_shard"),
+        "shardShard",
+    )
+    if shard_shard == 0:
+        raise TypeError("shardShard must be non-zero")
+    shard_seqno = _normalize_u64(
+        _mapping_value(value, "shardSeqno", "shard_seqno"),
+        "shardSeqno",
+    )
+    if shard_seqno == 0:
+        raise TypeError("shardSeqno must be non-zero")
+    shard_block_hash = _hex_to_bytes(
+        _mapping_value(value, "shardBlockHash", "shard_block_hash"),
+        "shardBlockHash",
+        32,
+    )
+    shard_file_hash = _nonzero_hex32_to_bytes(
+        _mapping_value(value, "shardFileHash", "shard_file_hash"),
+        "shardFileHash",
+    )
+    shard_state_root = _hex_to_bytes(
+        _mapping_value(value, "shardStateRoot", "shard_state_root"),
+        "shardStateRoot",
+        32,
+    )
+    transaction_root = _hex_to_bytes(
+        _mapping_value(
+            value,
+            "transactionRoot",
+            "transaction_root",
+            "receiptOrMessageRoot",
+            "receipt_or_message_root",
+        ),
+        "transactionRoot",
+        32,
+    )
+    transaction_lt = _normalize_u64(
+        _mapping_value(value, "transactionLt", "transaction_lt"),
+        "transactionLt",
+    )
+    if transaction_lt == 0:
+        raise TypeError("transactionLt must be non-zero")
+    shard_state_proof_value = _mapping_value(
+        value, "shardStateProofBoc", "shard_state_proof_boc"
+    )
+    dictionary_root_value = _mapping_value(
+        value, "shardStateDictionaryRoot", "shard_state_dictionary_root"
+    )
+    dictionary_key_bit_len_value = _mapping_value(
+        value,
+        "shardStateDictionaryKeyBitLen",
+        "shard_state_dictionary_key_bit_len",
+    )
+    dictionary_key_value = _mapping_value(
+        value, "shardStateDictionaryKey", "shard_state_dictionary_key"
+    )
+    dictionary_proof_value = _mapping_value(
+        value,
+        "shardStateDictionaryProofBoc",
+        "shard_state_dictionary_proof_boc",
+    )
+    has_dictionary_opening = (
+        dictionary_root_value is not None
+        or dictionary_key_bit_len_value is not None
+        or dictionary_key_value is not None
+        or dictionary_proof_value is not None
+    )
+    has_shard_state_proof = shard_state_proof_value is not None
+    if has_dictionary_opening and not has_shard_state_proof:
+        raise TypeError("shardStateProofBoc is required for TON shard-state dictionary openings")
+    if has_shard_state_proof and not has_dictionary_opening:
+        raise TypeError("shardStateProofBoc requires a TON shard-state dictionary opening")
+    shard_state_leaf_index = _normalize_u64(
+        _mapping_value(value, "shardStateLeafIndex", "shard_state_leaf_index"),
+        "shardStateLeafIndex",
+    )
+    shard_state_inclusion_branch = _normalize_inclusion_branch(
+        _mapping_value(
+            value,
+            "shardStateInclusionBranch",
+            "shard_state_inclusion_branch",
+        ),
+        "shardStateInclusionBranch",
+    )
+    if has_dictionary_opening and len(shard_state_inclusion_branch) != 0:
+        raise TypeError(
+            "shardStateInclusionBranch must be empty for TON shard-state dictionary openings"
+        )
+    inclusion_branch = _normalize_inclusion_branch(
+        _mapping_value(value, "inclusionBranch", "inclusion_branch"),
+    )
+    out = bytearray()
+    out.extend(_write_u8(1))
+    out.extend(source_event_digest)
+    out.extend(_write_u64_le(masterchain_seqno))
+    out.extend(masterchain_block_hash)
+    out.extend(_write_i32_le(shard_workchain_id))
+    out.extend(_write_u64_le(shard_shard))
+    out.extend(_write_u64_le(shard_seqno))
+    out.extend(shard_block_hash)
+    out.extend(shard_file_hash)
+    out.extend(shard_state_root)
+    out.extend(transaction_root)
+    out.extend(_write_u64_le(transaction_lt))
+    shard_state_proof_boc = b""
+    if has_shard_state_proof:
+        shard_state_proof_boc = _to_bytes(shard_state_proof_value, "shardStateProofBoc")
+        if len(shard_state_proof_boc) == 0:
+            raise TypeError("shardStateProofBoc must not be empty")
+        out.extend(_write_u32_le(len(shard_state_proof_boc)))
+        out.extend(shard_state_proof_boc)
+    if has_dictionary_opening:
+        dictionary_root = _nonzero_hex32_to_bytes(
+            dictionary_root_value,
+            "shardStateDictionaryRoot",
+        )
+        dictionary_key_bit_len = int(
+            _normalize_u64(dictionary_key_bit_len_value, "shardStateDictionaryKeyBitLen")
+        )
+        if dictionary_key_bit_len > 0xFFFF:
+            raise ValueError("shardStateDictionaryKeyBitLen must fit u16")
+        if dictionary_key_bit_len != _SCCP_TON_SHARD_ACCOUNT_KEY_BITS:
+            raise TypeError("TON ShardAccounts key bit length must be 256")
+        dictionary_key = _to_bytes(dictionary_key_value, "shardStateDictionaryKey")
+        if not _ton_hashmap_key_is_canonical(dictionary_key, dictionary_key_bit_len):
+            raise TypeError("shardStateDictionaryKey length is invalid")
+        dictionary_proof_boc = _to_bytes(
+            dictionary_proof_value,
+            "shardStateDictionaryProofBoc",
+        )
+        if len(dictionary_proof_boc) == 0:
+            raise TypeError("shardStateDictionaryProofBoc must not be empty")
+        if ton_shard_state_proof_root_hash(shard_state_proof_boc) != _bytes_to_hex(
+            shard_state_root
+        ):
+            raise TypeError("shardStateProofBoc root must match shardStateRoot")
+        shard_state_opening = _ton_shard_state_accounts_opening(shard_state_proof_boc)
+        if shard_state_opening["accounts_root_hash"] != _bytes_to_hex(dictionary_root):
+            raise TypeError(
+                "shardStateProofBoc accounts root must match shardStateDictionaryRoot"
+            )
+        if shard_state_opening["global_id"] != _TON_MAINNET_GLOBAL_ID:
+            raise TypeError(
+                "shardStateProofBoc ShardStateUnsplit global_id must be TON mainnet"
+            )
+        if shard_state_opening["workchain_id"] != _TON_BASECHAIN_WORKCHAIN_ID:
+            raise TypeError(
+                "shardStateProofBoc ShardIdent workchain_id must be TON basechain"
+            )
+        if shard_state_opening["workchain_id"] != shard_workchain_id:
+            raise TypeError(
+                "shardStateProofBoc ShardIdent workchain_id must match shardWorkchainId"
+            )
+        if int(shard_state_opening["seq_no"]) != shard_seqno:
+            raise TypeError(
+                "shardStateProofBoc ShardStateUnsplit seq_no must match shardSeqno"
+            )
+        if int(shard_state_opening["shard_id"]) != shard_shard:
+            raise TypeError("shardStateProofBoc ShardIdent shard must match shardShard")
+        if shard_state_opening["seq_no"] == 0:
+            raise TypeError("shardStateProofBoc ShardStateUnsplit seq_no must be non-zero")
+        if shard_state_opening["gen_utime"] == 0:
+            raise TypeError("shardStateProofBoc ShardStateUnsplit gen_utime must be non-zero")
+        if shard_state_opening["gen_lt"] == 0:
+            raise TypeError("shardStateProofBoc ShardStateUnsplit gen_lt must be non-zero")
+        if shard_state_opening["min_ref_mc_seqno"] > masterchain_seqno:
+            raise TypeError(
+                "shardStateProofBoc ShardStateUnsplit min_ref_mc_seqno exceeds masterchainSeqno"
+            )
+        if not _ton_shard_state_account_key_matches_shard_prefix(
+            dictionary_key,
+            dictionary_key_bit_len,
+            shard_state_opening,
+        ):
+            raise TypeError(
+                "shardStateDictionaryKey must match shardStateProofBoc ShardIdent prefix"
+            )
+        selected_transaction = ton_shard_accounts_last_transaction(
+            dictionary_proof_boc,
+            dictionary_key,
+            dictionary_key_bit_len,
+        )
+        if selected_transaction is None or selected_transaction["hash"] != _bytes_to_hex(
+            transaction_root
+        ):
+            raise TypeError(
+                "shardStateDictionaryProofBoc ShardAccount last transaction hash must match transactionRoot"
+            )
+        if selected_transaction["lt"] != transaction_lt:
+            raise TypeError(
+                "shardStateDictionaryProofBoc ShardAccount last transaction lt must match transactionLt"
+            )
+        out.extend(dictionary_root)
+        out.extend(_write_u16_le(dictionary_key_bit_len))
+        out.extend(_write_u32_le(len(dictionary_key)))
+        out.extend(dictionary_key)
+        out.extend(_write_u32_le(len(dictionary_proof_boc)))
+        out.extend(dictionary_proof_boc)
+    out.extend(_write_u64_le(shard_state_leaf_index))
+    out.extend(_write_u32_le(len(shard_state_inclusion_branch)))
+    for sibling in shard_state_inclusion_branch:
+        out.extend(sibling)
+    out.extend(_write_u32_le(len(inclusion_branch)))
+    for sibling in inclusion_branch:
+        out.extend(sibling)
+    return bytes(out)
+
+
+def ton_sccp_shard_proof_hash(input_value: Any) -> str:
+    """Hash a TON SCCP shard-proof transcript with the canonical prefix."""
+
+    return _bytes_to_hex(
+        _prefixed_blake2b(
+            _SCCP_TON_SHARD_PROOF_PREFIX_V1,
+            canonical_ton_sccp_shard_proof_bytes(input_value),
+        )
+    )
+
+
+def _ton_bounded_boc_hash(prefix: bytes, value: Any, label: str) -> tuple[bytes, bytes]:
+    raw = _to_bytes(value, label)
+    if len(raw) == 0:
+        raise TypeError(f"{label} must not be empty")
+    if len(raw) > _SCCP_TON_MAX_BOC_BYTES:
+        raise ValueError(f"{label} exceeds TON BoC proof byte limit")
+    return raw, _prefixed_blake2b(prefix, raw)
+
+
+def _normalize_ton_validator_set_transition_for_source_state(
+    value: Any,
+) -> Dict[str, Any]:
+    transition = _require_mapping(value, "TON validator-set transition proof")
+    source_domain = _normalize_u32(
+        _mapping_value(transition, "sourceDomain", "source_domain"),
+        "sourceDomain",
+    )
+    if source_domain != SCCP_DOMAIN_TON:
+        raise TypeError("sourceDomain must be TON")
+    masterchain_workchain_id = _normalize_i32(
+        _mapping_value(
+            transition,
+            "masterchainWorkchainId",
+            "masterchain_workchain_id",
+        ),
+        "masterchainWorkchainId",
+    )
+    if masterchain_workchain_id != _TON_MASTERCHAIN_WORKCHAIN_ID:
+        raise TypeError("masterchainWorkchainId must be TON masterchain")
+    masterchain_shard = _normalize_u64(
+        _mapping_value(transition, "masterchainShard", "masterchain_shard"),
+        "masterchainShard",
+    )
+    if masterchain_shard != _TON_MASTERCHAIN_SHARD:
+        raise TypeError("masterchainShard must be TON masterchain shard")
+    signature_proof = _require_mapping(
+        _mapping_value(
+            transition,
+            "validatorSignatureProof",
+            "validator_signature_proof",
+        ),
+        "TON validator signature proof",
+    )
+    next_payload = _to_bytes(
+        _mapping_value(
+            transition,
+            "nextValidatorSetPayload",
+            "next_validator_set_payload",
+        ),
+        "nextValidatorSetPayload",
+    )
+    version = _normalize_optional_v1_version(
+        transition,
+        "TON validator-set transition version",
+        "version",
+        error_cls=TypeError,
+    )
+    transition_signature_hash = _normalize_hex32(
+        _mapping_value(
+            transition,
+            "transitionSignatureHash",
+            "transition_signature_hash",
+        ),
+        "transitionSignatureHash",
+    )
+    if transition_signature_hash != ton_validator_set_transition_signature_hash(transition):
+        raise TypeError("transitionSignatureHash must match transition signature fields")
+    return {
+        "version": version,
+        "source_domain": source_domain,
+        "from_validator_set_seqno": _normalize_u64(
+            _mapping_value(
+                transition,
+                "fromValidatorSetSeqno",
+                "from_validator_set_seqno",
+            ),
+            "fromValidatorSetSeqno",
+        ),
+        "to_validator_set_seqno": _normalize_u64(
+            _mapping_value(
+                transition,
+                "toValidatorSetSeqno",
+                "to_validator_set_seqno",
+            ),
+            "toValidatorSetSeqno",
+        ),
+        "masterchain_seqno": _normalize_u64(
+            _mapping_value(transition, "masterchainSeqno", "masterchain_seqno"),
+            "masterchainSeqno",
+        ),
+        "masterchain_workchain_id": masterchain_workchain_id,
+        "masterchain_shard": masterchain_shard,
+        "masterchain_block_hash": _normalize_nonzero_hex32(
+            _mapping_value(
+                transition,
+                "masterchainBlockHash",
+                "masterchain_block_hash",
+            ),
+            "masterchainBlockHash",
+        ),
+        "masterchain_file_hash": _normalize_nonzero_hex32(
+            _mapping_value(
+                transition,
+                "masterchainFileHash",
+                "masterchain_file_hash",
+            ),
+            "masterchainFileHash",
+        ),
+        "parent_validator_set_hash": _normalize_hex32(
+            _mapping_value(
+                transition,
+                "parentValidatorSetHash",
+                "parent_validator_set_hash",
+            ),
+            "parentValidatorSetHash",
+        ),
+        "next_validator_set_hash": _normalize_hex32(
+            _mapping_value(
+                transition,
+                "nextValidatorSetHash",
+                "next_validator_set_hash",
+            ),
+            "nextValidatorSetHash",
+        ),
+        "next_validator_set_payload": next_payload,
+        "next_validator_set_payload_hash": _normalize_hex32(
+            _mapping_value(
+                transition,
+                "nextValidatorSetPayloadHash",
+                "next_validator_set_payload_hash",
+            ),
+            "nextValidatorSetPayloadHash",
+        ),
+        "next_validator_set_config_hash": _normalize_hex32(
+            _mapping_value(
+                transition,
+                "nextValidatorSetConfigHash",
+                "next_validator_set_config_hash",
+            ),
+            "nextValidatorSetConfigHash",
+        ),
+        "transition_message_hash": _normalize_hex32(
+            _mapping_value(
+                transition,
+                "transitionMessageHash",
+                "transition_message_hash",
+            ),
+            "transitionMessageHash",
+        ),
+        "transition_signature_hash": transition_signature_hash,
+        "validator_signature_proof": signature_proof,
+    }
+
+
+def _canonical_ton_validator_set_transition_proof_bytes(
+    transition: Dict[str, Any],
+) -> bytes:
+    out = bytearray()
+    out.extend(_write_u8(transition["version"]))
+    out.extend(_write_u32_le(transition["source_domain"]))
+    out.extend(_write_u64_le(transition["from_validator_set_seqno"]))
+    out.extend(_write_u64_le(transition["to_validator_set_seqno"]))
+    out.extend(_write_u64_le(transition["masterchain_seqno"]))
+    out.extend(_write_i32_le(transition["masterchain_workchain_id"]))
+    out.extend(_write_u64_le(transition["masterchain_shard"]))
+    out.extend(_hex_to_bytes(transition["masterchain_block_hash"], "masterchainBlockHash", 32))
+    out.extend(_hex_to_bytes(transition["masterchain_file_hash"], "masterchainFileHash", 32))
+    out.extend(
+        _hex_to_bytes(
+            transition["parent_validator_set_hash"],
+            "parentValidatorSetHash",
+            32,
+        )
+    )
+    out.extend(
+        _hex_to_bytes(
+            transition["next_validator_set_hash"],
+            "nextValidatorSetHash",
+            32,
+        )
+    )
+    out.extend(_write_bytes(transition["next_validator_set_payload"]))
+    out.extend(
+        _hex_to_bytes(
+            transition["next_validator_set_payload_hash"],
+            "nextValidatorSetPayloadHash",
+            32,
+        )
+    )
+    out.extend(
+        _hex_to_bytes(
+            transition["next_validator_set_config_hash"],
+            "nextValidatorSetConfigHash",
+            32,
+        )
+    )
+    out.extend(
+        _hex_to_bytes(transition["transition_message_hash"], "transitionMessageHash", 32)
+    )
+    out.extend(
+        _hex_to_bytes(
+            transition["transition_signature_hash"],
+            "transitionSignatureHash",
+            32,
+        )
+    )
+    out.extend(_canonical_ton_validator_signatures_proof_bytes(
+        transition["validator_signature_proof"]
+    ))
+    return bytes(out)
+
+
+def _ton_validator_set_transition_chain_hash(
+    transitions: list[Dict[str, Any]],
+) -> str:
+    out = bytearray()
+    out.extend(_write_u8(1))
+    out.extend(_write_u32_le(len(transitions)))
+    for transition in transitions:
+        out.extend(_canonical_ton_validator_set_transition_proof_bytes(transition))
+    return _bytes_to_hex(
+        _prefixed_blake2b(
+            _SCCP_TON_VALIDATOR_SET_TRANSITION_CHAIN_PREFIX_V1,
+            bytes(out),
+        )
+    )
+
+
+def _normalize_ton_shard_state_source_state_input(input_value: Any) -> Dict[str, Any]:
+    value = _require_mapping(input_value, "TON shard-state source-state proof input")
+
+    def reject_aliases(label: str, *keys: str) -> None:
+        _mapping_optional_value_without_aliases(value, label, *keys)
+
+    reject_aliases("sourceDomain", "sourceDomain", "source_domain")
+    reject_aliases("masterchainWorkchainId", "masterchainWorkchainId", "masterchain_workchain_id")
+    reject_aliases("masterchainShard", "masterchainShard", "masterchain_shard")
+    reject_aliases("shardWorkchainId", "shardWorkchainId", "shard_workchain_id")
+    reject_aliases("shardShard", "shardShard", "shard_shard")
+    reject_aliases("shardSeqno", "shardSeqno", "shard_seqno")
+    reject_aliases("masterchainSeqno", "masterchainSeqno", "masterchain_seqno")
+    reject_aliases("transactionLt", "transactionLt", "transaction_lt")
+    reject_aliases(
+        "shardStateDictionaryKeyBitLen",
+        "shardStateDictionaryKeyBitLen",
+        "shard_state_dictionary_key_bit_len",
+    )
+    reject_aliases("shardStateDictionaryKey", "shardStateDictionaryKey", "shard_state_dictionary_key")
+    reject_aliases("shardStateProofBoc", "shardStateProofBoc", "shard_state_proof_boc")
+    reject_aliases(
+        "shardStateDictionaryProofBoc",
+        "shardStateDictionaryProofBoc",
+        "shard_state_dictionary_proof_boc",
+    )
+    top_level_config_proof_boc = _mapping_optional_value_without_aliases(
+        value,
+        "configDictionaryProofBoc",
+        "configDictionaryProofBoc",
+        "config_dictionary_proof_boc",
+        "masterchainConfigProofBoc",
+        "masterchain_config_proof_boc",
+    )
+    masterchain_config_proof = _mapping_value_without_aliases(
+        value,
+        "masterchainConfigProof",
+        "masterchainConfigProof",
+        "masterchain_config_proof",
+    )
+    nested_config_proof_boc = _MISSING
+    if isinstance(masterchain_config_proof, Mapping):
+        nested_config_proof_boc = _mapping_optional_value_without_aliases(
+            masterchain_config_proof,
+            "masterchainConfigProof.configDictionaryProofBoc",
+            "configDictionaryProofBoc",
+            "config_dictionary_proof_boc",
+        )
+    if (
+        top_level_config_proof_boc is not _MISSING
+        and nested_config_proof_boc is not _MISSING
+    ):
+        raise TypeError("configDictionaryProofBoc must not use multiple aliases")
+    reject_aliases("shardStateRoot", "shardStateRoot", "shard_state_root")
+    reject_aliases("transactionRoot", "transactionRoot", "transaction_root")
+    reject_aliases("shardStateDictionaryRoot", "shardStateDictionaryRoot", "shard_state_dictionary_root")
+    reject_aliases("validatorSetTransitionProofs", "validatorSetTransitionProofs", "validator_set_transition_proofs")
+    reject_aliases("sourceStateVerifierId", "sourceStateVerifierId", "source_state_verifier_id")
+    reject_aliases("sourceStateVerifierHash", "sourceStateVerifierHash", "source_state_verifier_hash")
+    reject_aliases("masterchainBlockHash", "masterchainBlockHash", "masterchain_block_hash")
+    reject_aliases("masterchainFileHash", "masterchainFileHash", "masterchain_file_hash")
+    reject_aliases("validatorSetHash", "validatorSetHash", "validator_set_hash")
+    reject_aliases("masterchainConfigRoot", "masterchainConfigRoot", "masterchain_config_root")
+    reject_aliases("masterchainConfigProofHash", "masterchainConfigProofHash", "masterchain_config_proof_hash")
+    reject_aliases("shardBlockHash", "shardBlockHash", "shard_block_hash")
+    reject_aliases("shardFileHash", "shardFileHash", "shard_file_hash")
+    reject_aliases("masterchainSignatureHash", "masterchainSignatureHash", "masterchain_signature_hash")
+    reject_aliases("shardProofHash", "shardProofHash", "shard_proof_hash")
+    reject_aliases("sourceTrustAnchorId", "sourceTrustAnchorId", "source_trust_anchor_id")
+    reject_aliases("sourceTrustAnchorHash", "sourceTrustAnchorHash", "source_trust_anchor_hash")
+    reject_aliases("consensusVerifierId", "consensusVerifierId", "consensus_verifier_id")
+    reject_aliases("consensusVerifierHash", "consensusVerifierHash", "consensus_verifier_hash")
+    reject_aliases(
+        "messageInclusionVerifierId",
+        "messageInclusionVerifierId",
+        "message_inclusion_verifier_id",
+    )
+    reject_aliases(
+        "messageInclusionVerifierHash",
+        "messageInclusionVerifierHash",
+        "message_inclusion_verifier_hash",
+    )
+    reject_aliases("finalityPolicyId", "finalityPolicyId", "finality_policy_id")
+    reject_aliases("finalityPolicyHash", "finalityPolicyHash", "finality_policy_hash")
+
+    source_domain = _normalize_optional_u32(
+        value,
+        "sourceDomain",
+        SCCP_DOMAIN_TON,
+        "sourceDomain",
+        "source_domain",
+    )
+    if source_domain != SCCP_DOMAIN_TON:
+        raise TypeError("sourceDomain must be TON")
+    masterchain_workchain_id = _normalize_i32(
+        _mapping_value(value, "masterchainWorkchainId", "masterchain_workchain_id"),
+        "masterchainWorkchainId",
+    )
+    if masterchain_workchain_id != _TON_MASTERCHAIN_WORKCHAIN_ID:
+        raise TypeError("masterchainWorkchainId must be TON masterchain")
+    masterchain_shard = _normalize_u64(
+        _mapping_value(value, "masterchainShard", "masterchain_shard"),
+        "masterchainShard",
+    )
+    if masterchain_shard != _TON_MASTERCHAIN_SHARD:
+        raise TypeError("masterchainShard must be TON masterchain shard")
+    shard_workchain_id = _normalize_i32(
+        _mapping_value(value, "shardWorkchainId", "shard_workchain_id"),
+        "shardWorkchainId",
+    )
+    if shard_workchain_id != _TON_BASECHAIN_WORKCHAIN_ID:
+        raise TypeError("shardWorkchainId must be TON basechain")
+    shard_shard = _normalize_u64(
+        _mapping_value(value, "shardShard", "shard_shard"),
+        "shardShard",
+    )
+    if shard_shard == 0:
+        raise TypeError("shardShard must be non-zero")
+    shard_seqno = _normalize_u64(
+        _mapping_value(value, "shardSeqno", "shard_seqno"),
+        "shardSeqno",
+    )
+    if shard_seqno == 0:
+        raise TypeError("shardSeqno must be non-zero")
+    transaction_lt = _normalize_u64(
+        _mapping_value(value, "transactionLt", "transaction_lt"),
+        "transactionLt",
+    )
+    if transaction_lt == 0:
+        raise TypeError("transactionLt must be non-zero")
+    dictionary_key_bit_len = int(
+        _normalize_u64(
+            _mapping_value(
+                value,
+                "shardStateDictionaryKeyBitLen",
+                "shard_state_dictionary_key_bit_len",
+            ),
+            "shardStateDictionaryKeyBitLen",
+        )
+    )
+    if dictionary_key_bit_len != _SCCP_TON_SHARD_ACCOUNT_KEY_BITS:
+        raise TypeError("TON ShardAccounts key bit length must be 256")
+    dictionary_key = _to_bytes(
+        _mapping_value(
+            value,
+            "shardStateDictionaryKey",
+            "shard_state_dictionary_key",
+        ),
+        "shardStateDictionaryKey",
+    )
+    if not _ton_hashmap_key_is_canonical(dictionary_key, dictionary_key_bit_len):
+        raise TypeError("shardStateDictionaryKey length is invalid")
+    shard_state_proof_boc, shard_state_proof_boc_hash = _ton_bounded_boc_hash(
+        _SCCP_TON_SHARD_STATE_PROOF_BOC_PREFIX_V1,
+        _mapping_value(value, "shardStateProofBoc", "shard_state_proof_boc"),
+        "shardStateProofBoc",
+    )
+    shard_accounts_proof_boc, shard_accounts_proof_boc_hash = _ton_bounded_boc_hash(
+        _SCCP_TON_SHARD_ACCOUNTS_PROOF_BOC_PREFIX_V1,
+        _mapping_value(
+            value,
+            "shardStateDictionaryProofBoc",
+            "shard_state_dictionary_proof_boc",
+        ),
+        "shardStateDictionaryProofBoc",
+    )
+    config_proof_boc_value = _mapping_value(
+        value,
+        "configDictionaryProofBoc",
+        "config_dictionary_proof_boc",
+        "masterchainConfigProofBoc",
+        "masterchain_config_proof_boc",
+    )
+    if config_proof_boc_value is None:
+        config_proof = _mapping_value(
+            value,
+            "masterchainConfigProof",
+            "masterchain_config_proof",
+        )
+        if config_proof is not None:
+            config_proof = _require_mapping(config_proof, "TON masterchain config proof")
+            config_proof_boc_value = _mapping_value(
+                config_proof,
+                "configDictionaryProofBoc",
+                "config_dictionary_proof_boc",
+            )
+    config_proof_boc, config_proof_boc_hash = _ton_bounded_boc_hash(
+        _SCCP_TON_CONFIG_PROOF_BOC_PREFIX_V1,
+        config_proof_boc_value,
+        "configDictionaryProofBoc",
+    )
+    shard_state_root = _normalize_nonzero_hex32(
+        _mapping_value(value, "shardStateRoot", "shard_state_root"),
+        "shardStateRoot",
+    )
+    transaction_root = _normalize_nonzero_hex32(
+        _mapping_value(value, "transactionRoot", "transaction_root"),
+        "transactionRoot",
+    )
+    dictionary_root = _normalize_nonzero_hex32(
+        _mapping_value(
+            value,
+            "shardStateDictionaryRoot",
+            "shard_state_dictionary_root",
+        ),
+        "shardStateDictionaryRoot",
+    )
+    if ton_shard_state_proof_root_hash(shard_state_proof_boc) != shard_state_root:
+        raise TypeError("shardStateProofBoc root must match shardStateRoot")
+    opening = _ton_shard_state_accounts_opening(shard_state_proof_boc)
+    if opening["accounts_root_hash"] != dictionary_root:
+        raise TypeError("shardStateProofBoc accounts root must match shardStateDictionaryRoot")
+    if opening["global_id"] != _TON_MAINNET_GLOBAL_ID:
+        raise TypeError("shardStateProofBoc ShardStateUnsplit global_id must be TON mainnet")
+    if opening["workchain_id"] != _TON_BASECHAIN_WORKCHAIN_ID:
+        raise TypeError("shardStateProofBoc ShardIdent workchain_id must be TON basechain")
+    if opening["workchain_id"] != shard_workchain_id:
+        raise TypeError("shardStateProofBoc ShardIdent workchain_id must match shardWorkchainId")
+    if int(opening["seq_no"]) != shard_seqno:
+        raise TypeError("shardStateProofBoc ShardStateUnsplit seq_no must match shardSeqno")
+    if int(opening["shard_id"]) != shard_shard:
+        raise TypeError("shardStateProofBoc ShardIdent shard must match shardShard")
+    if opening["seq_no"] == 0 or opening["gen_utime"] == 0 or opening["gen_lt"] == 0:
+        raise TypeError("shardStateProofBoc ShardStateUnsplit metadata must be non-zero")
+    masterchain_seqno = _normalize_u64(
+        _mapping_value(value, "masterchainSeqno", "masterchain_seqno"),
+        "masterchainSeqno",
+    )
+    if opening["min_ref_mc_seqno"] > masterchain_seqno:
+        raise TypeError(
+            "shardStateProofBoc ShardStateUnsplit min_ref_mc_seqno exceeds masterchainSeqno"
+        )
+    if not _ton_shard_state_account_key_matches_shard_prefix(
+        dictionary_key,
+        dictionary_key_bit_len,
+        opening,
+    ):
+        raise TypeError("shardStateDictionaryKey must match shardStateProofBoc ShardIdent prefix")
+    if ton_hashmap_e_proof_root_hash(shard_accounts_proof_boc) != dictionary_root:
+        raise TypeError("shardStateDictionaryProofBoc root must match shardStateDictionaryRoot")
+    selected_transaction = ton_shard_accounts_last_transaction(
+        shard_accounts_proof_boc,
+        dictionary_key,
+        dictionary_key_bit_len,
+    )
+    if selected_transaction is None or selected_transaction["hash"] != transaction_root:
+        raise TypeError(
+            "shardStateDictionaryProofBoc ShardAccount last transaction hash must match transactionRoot"
+        )
+    if selected_transaction["lt"] != transaction_lt:
+        raise TypeError(
+            "shardStateDictionaryProofBoc ShardAccount last transaction lt must match transactionLt"
+        )
+    transitions_input = _mapping_value(
+        value,
+        "validatorSetTransitionProofs",
+        "validator_set_transition_proofs",
+    )
+    if transitions_input is None:
+        transitions_input = []
+    if not isinstance(transitions_input, Sequence) or isinstance(
+        transitions_input, (str, bytes, bytearray)
+    ):
+        raise TypeError("validatorSetTransitionProofs must be a list")
+    transitions = [
+        _normalize_ton_validator_set_transition_for_source_state(transition)
+        for transition in transitions_input
+    ]
+    transition_chain_hash = _ton_validator_set_transition_chain_hash(transitions)
+    source_state_verifier_id = _normalize_non_empty_string(
+        _mapping_value_or_default(
+            value,
+            SCCP_TON_MAINNET_SHARD_STATE_VERIFIER_ID_V1,
+            "sourceStateVerifierId",
+            "source_state_verifier_id",
+        ),
+        "sourceStateVerifierId",
+    )
+    if source_state_verifier_id != SCCP_TON_MAINNET_SHARD_STATE_VERIFIER_ID_V1:
+        raise TypeError("sourceStateVerifierId must match TON shard-state verifier profile")
+    source_state_verifier_hash = _normalize_nonzero_hex32(
+        _mapping_value(value, "sourceStateVerifierHash", "source_state_verifier_hash"),
+        "sourceStateVerifierHash",
+    )
+    if source_state_verifier_hash == _SCCP_TON_TEMPLATE_SOURCE_STATE_VERIFIER_HASH:
+        raise TypeError("sourceStateVerifierHash must not be the TON template verifier hash")
+    return {
+        "version": 1,
+        "source_domain": source_domain,
+        "masterchain_seqno": masterchain_seqno,
+        "masterchain_workchain_id": masterchain_workchain_id,
+        "masterchain_shard": masterchain_shard,
+        "masterchain_block_hash": _normalize_nonzero_hex32(
+            _mapping_value(value, "masterchainBlockHash", "masterchain_block_hash"),
+            "masterchainBlockHash",
+        ),
+        "masterchain_file_hash": _normalize_nonzero_hex32(
+            _mapping_value(value, "masterchainFileHash", "masterchain_file_hash"),
+            "masterchainFileHash",
+        ),
+        "validator_set_hash": _normalize_hex32(
+            _mapping_value(value, "validatorSetHash", "validator_set_hash"),
+            "validatorSetHash",
+        ),
+        "masterchain_config_root": _normalize_hex32(
+            _mapping_value(
+                value,
+                "masterchainConfigRoot",
+                "masterchain_config_root",
+            ),
+            "masterchainConfigRoot",
+        ),
+        "masterchain_config_proof_hash": _normalize_hex32(
+            _mapping_value(
+                value,
+                "masterchainConfigProofHash",
+                "masterchain_config_proof_hash",
+            ),
+            "masterchainConfigProofHash",
+        ),
+        "shard_workchain_id": shard_workchain_id,
+        "shard_shard": shard_shard,
+        "shard_seqno": shard_seqno,
+        "shard_block_hash": _normalize_hex32(
+            _mapping_value(value, "shardBlockHash", "shard_block_hash"),
+            "shardBlockHash",
+        ),
+        "shard_file_hash": _normalize_nonzero_hex32(
+            _mapping_value(value, "shardFileHash", "shard_file_hash"),
+            "shardFileHash",
+        ),
+        "shard_state_root": shard_state_root,
+        "transaction_root": transaction_root,
+        "transaction_lt": transaction_lt,
+        "shard_state_dictionary_root": dictionary_root,
+        "shard_state_dictionary_key_bit_len": dictionary_key_bit_len,
+        "shard_state_dictionary_key": dictionary_key,
+        "masterchain_signature_hash": _normalize_hex32(
+            _mapping_value(
+                value,
+                "masterchainSignatureHash",
+                "masterchain_signature_hash",
+            ),
+            "masterchainSignatureHash",
+        ),
+        "shard_proof_hash": _normalize_hex32(
+            _mapping_value(value, "shardProofHash", "shard_proof_hash"),
+            "shardProofHash",
+        ),
+        "shard_state_proof_boc": shard_state_proof_boc,
+        "shard_state_dictionary_proof_boc": shard_accounts_proof_boc,
+        "config_dictionary_proof_boc": config_proof_boc,
+        "shard_state_proof_boc_hash": _bytes_to_hex(shard_state_proof_boc_hash),
+        "shard_accounts_proof_boc_hash": _bytes_to_hex(shard_accounts_proof_boc_hash),
+        "config_proof_boc_hash": _bytes_to_hex(config_proof_boc_hash),
+        "validator_set_transition_proofs": transitions,
+        "transition_chain_hash": transition_chain_hash,
+        "source_state_verifier_id": source_state_verifier_id,
+        "source_state_verifier_hash": source_state_verifier_hash,
+        "source_trust_anchor_id": _normalize_non_empty_string(
+            _mapping_value(value, "sourceTrustAnchorId", "source_trust_anchor_id")
+            or "sccp:ton:source-trust-anchor:ton-mainnet-masterchain:v1",
+            "sourceTrustAnchorId",
+        ),
+        "source_trust_anchor_hash": _normalize_nonzero_hex32(
+            _mapping_value(value, "sourceTrustAnchorHash", "source_trust_anchor_hash"),
+            "sourceTrustAnchorHash",
+        ),
+        "consensus_verifier_id": _normalize_non_empty_string(
+            _mapping_value(value, "consensusVerifierId", "consensus_verifier_id")
+            or "sccp:ton:consensus-verifier:masterchain-block-proof:v1",
+            "consensusVerifierId",
+        ),
+        "consensus_verifier_hash": _normalize_nonzero_hex32(
+            _mapping_value(value, "consensusVerifierHash", "consensus_verifier_hash"),
+            "consensusVerifierHash",
+        ),
+        "message_inclusion_verifier_id": _normalize_non_empty_string(
+            _mapping_value(
+                value,
+                "messageInclusionVerifierId",
+                "message_inclusion_verifier_id",
+            )
+            or "sccp:ton:message-inclusion-verifier:shard-transaction-branch:v1",
+            "messageInclusionVerifierId",
+        ),
+        "message_inclusion_verifier_hash": _normalize_nonzero_hex32(
+            _mapping_value(
+                value,
+                "messageInclusionVerifierHash",
+                "message_inclusion_verifier_hash",
+            ),
+            "messageInclusionVerifierHash",
+        ),
+        "finality_policy_id": _normalize_non_empty_string(
+            _mapping_value(value, "finalityPolicyId", "finality_policy_id")
+            or "sccp:ton:finality-policy:masterchain-finality:v1",
+            "finalityPolicyId",
+        ),
+        "finality_policy_hash": _normalize_nonzero_hex32(
+            _mapping_value(value, "finalityPolicyHash", "finality_policy_hash"),
+            "finalityPolicyHash",
+        ),
+    }
+
+
+def canonical_ton_shard_state_proof_public_inputs_bytes(input_value: Any) -> bytes:
+    """Return Rust-compatible TON shard-state recursive proof public inputs."""
+
+    value = _normalize_ton_shard_state_source_state_input(input_value)
+    out = bytearray()
+    out.extend(_write_u8(value["version"]))
+    out.extend(_write_u32_le(value["source_domain"]))
+    out.extend(_write_u64_le(value["masterchain_seqno"]))
+    out.extend(_write_i32_le(value["masterchain_workchain_id"]))
+    out.extend(_write_u64_le(value["masterchain_shard"]))
+    out.extend(_hex_to_bytes(value["masterchain_block_hash"], "masterchainBlockHash", 32))
+    out.extend(_hex_to_bytes(value["masterchain_file_hash"], "masterchainFileHash", 32))
+    out.extend(_hex_to_bytes(value["validator_set_hash"], "validatorSetHash", 32))
+    out.extend(_hex_to_bytes(value["masterchain_config_root"], "masterchainConfigRoot", 32))
+    out.extend(
+        _hex_to_bytes(
+            value["masterchain_config_proof_hash"],
+            "masterchainConfigProofHash",
+            32,
+        )
+    )
+    out.extend(_write_i32_le(value["shard_workchain_id"]))
+    out.extend(_write_u64_le(value["shard_shard"]))
+    out.extend(_write_u64_le(value["shard_seqno"]))
+    out.extend(_hex_to_bytes(value["shard_block_hash"], "shardBlockHash", 32))
+    out.extend(_hex_to_bytes(value["shard_file_hash"], "shardFileHash", 32))
+    out.extend(_hex_to_bytes(value["shard_state_root"], "shardStateRoot", 32))
+    out.extend(_hex_to_bytes(value["transaction_root"], "transactionRoot", 32))
+    out.extend(_write_u64_le(value["transaction_lt"]))
+    out.extend(
+        _hex_to_bytes(
+            value["shard_state_dictionary_root"],
+            "shardStateDictionaryRoot",
+            32,
+        )
+    )
+    out.extend(_write_u16_le(value["shard_state_dictionary_key_bit_len"]))
+    out.extend(_write_bytes(value["shard_state_dictionary_key"]))
+    out.extend(
+        _hex_to_bytes(
+            value["masterchain_signature_hash"],
+            "masterchainSignatureHash",
+            32,
+        )
+    )
+    out.extend(_hex_to_bytes(value["shard_proof_hash"], "shardProofHash", 32))
+    out.extend(
+        _hex_to_bytes(
+            value["shard_state_proof_boc_hash"],
+            "shardStateProofBocHash",
+            32,
+        )
+    )
+    out.extend(
+        _hex_to_bytes(
+            value["shard_accounts_proof_boc_hash"],
+            "shardAccountsProofBocHash",
+            32,
+        )
+    )
+    out.extend(_hex_to_bytes(value["config_proof_boc_hash"], "configProofBocHash", 32))
+    out.extend(_hex_to_bytes(value["transition_chain_hash"], "transitionChainHash", 32))
+    return bytes(out)
+
+
+def ton_shard_state_proof_public_inputs_hash(input_value: Any) -> str:
+    """Hash TON shard-state recursive proof public inputs with Rust's prefix."""
+
+    return _bytes_to_hex(
+        _prefixed_blake2b(
+            _SCCP_TON_SHARD_STATE_PROOF_PUBLIC_INPUTS_PREFIX_V1,
+            canonical_ton_shard_state_proof_public_inputs_bytes(input_value),
+        )
+    )
+
+
+def canonical_ton_shard_state_witness_commitment_bytes(input_value: Any) -> bytes:
+    """Return the FastPQ witness commitment bytes for TON shard-state proofs."""
+
+    value = _normalize_ton_shard_state_source_state_input(input_value)
+    out = bytearray()
+    out.extend(_write_u8(value["version"]))
+    out.extend(_write_bytes(value["shard_state_proof_boc"]))
+    out.extend(_write_bytes(value["shard_state_dictionary_proof_boc"]))
+    out.extend(_write_bytes(value["config_dictionary_proof_boc"]))
+    out.extend(_write_u32_le(len(value["validator_set_transition_proofs"])))
+    for transition in value["validator_set_transition_proofs"]:
+        out.extend(_canonical_ton_validator_set_transition_proof_bytes(transition))
+    return bytes(out)
+
+
+def canonical_ton_shard_state_verification_context_bytes(input_value: Any) -> bytes:
+    """Return OpenVerify context bytes for TON shard-state source proofs."""
+
+    value = _normalize_ton_shard_state_source_state_input(input_value)
+    out = bytearray()
+    out.extend(_write_u8(value["version"]))
+    out.extend(_write_string(value["source_state_verifier_id"], "sourceStateVerifierId"))
+    out.extend(_hex_to_bytes(value["source_state_verifier_hash"], "sourceStateVerifierHash", 32))
+    out.extend(_write_string(value["source_trust_anchor_id"], "sourceTrustAnchorId"))
+    out.extend(_hex_to_bytes(value["source_trust_anchor_hash"], "sourceTrustAnchorHash", 32))
+    out.extend(_write_string(value["consensus_verifier_id"], "consensusVerifierId"))
+    out.extend(_hex_to_bytes(value["consensus_verifier_hash"], "consensusVerifierHash", 32))
+    out.extend(
+        _write_string(
+            value["message_inclusion_verifier_id"],
+            "messageInclusionVerifierId",
+        )
+    )
+    out.extend(
+        _hex_to_bytes(
+            value["message_inclusion_verifier_hash"],
+            "messageInclusionVerifierHash",
+            32,
+        )
+    )
+    out.extend(_write_string(value["finality_policy_id"], "finalityPolicyId"))
+    out.extend(_hex_to_bytes(value["finality_policy_hash"], "finalityPolicyHash", 32))
+    return bytes(out)
+
+
+def ton_shard_state_public_input_columns(input_value: Any) -> list[list[str]]:
+    """Return OpenVerify public-input columns for the TON shard-state proof."""
+
+    value = _normalize_ton_shard_state_source_state_input(input_value)
+    public_inputs_hash = ton_shard_state_proof_public_inputs_hash(input_value)
+    return [
+        [_bytes_to_hex(_sccp_word_u32_le(value["source_domain"]))],
+        [_bytes_to_hex(_sccp_word_u64_le(value["masterchain_seqno"]))],
+        [_bytes_to_hex(_sccp_word_i32_le(value["masterchain_workchain_id"]))],
+        [_bytes_to_hex(_sccp_word_u64_le(value["masterchain_shard"]))],
+        [value["masterchain_block_hash"]],
+        [value["validator_set_hash"]],
+        [value["masterchain_config_root"]],
+        [_bytes_to_hex(_sccp_word_i32_le(value["shard_workchain_id"]))],
+        [_bytes_to_hex(_sccp_word_u64_le(value["shard_shard"]))],
+        [_bytes_to_hex(_sccp_word_u64_le(value["shard_seqno"]))],
+        [value["shard_block_hash"]],
+        [value["shard_state_root"]],
+        [value["shard_state_dictionary_root"]],
+        [value["transaction_root"]],
+        [_bytes_to_hex(_sccp_word_u64_le(value["transaction_lt"]))],
+        [public_inputs_hash],
+    ]
+
+
+def ton_shard_state_open_verify_schema_descriptor(input_value: Any) -> bytes:
+    """Return the TON shard-state OpenVerify schema descriptor."""
+
+    value = _normalize_ton_shard_state_source_state_input(input_value)
+    out = bytearray()
+    out.extend(_write_u8(value["version"]))
+    out.extend(
+        _write_string(
+            SCCP_TON_SHARD_STATE_OPEN_VERIFY_CIRCUIT_ID_V1,
+            "circuitId",
+        )
+    )
+    out.extend(
+        _write_string(
+            _SCCP_TON_SHARD_STATE_FASTPQ_PARAMETER_SET_V1,
+            "parameterSet",
+        )
+    )
+    out.extend(_write_i32_le(_TON_MAINNET_GLOBAL_ID))
+    out.extend(_write_u32_le(value["source_domain"]))
+    for required_input in (
+        "source_domain",
+        "masterchain_seqno",
+        "masterchain_workchain_id",
+        "masterchain_shard",
+        "masterchain_block_hash",
+        "validator_set_hash",
+        "masterchain_config_root",
+        "shard_workchain_id",
+        "shard_shard",
+        "shard_seqno",
+        "shard_block_hash",
+        "shard_state_root",
+        "shard_state_dictionary_root",
+        "transaction_root",
+        "transaction_lt",
+        "shard_state_proof_public_inputs_hash",
+    ):
+        out.extend(_write_string(required_input, "requiredInput"))
+    return bytes(out)
+
+
+def build_ton_shard_state_proof_request(input_value: Any) -> Dict[str, Any]:
+    """Build the source-state proof request for a UI/mobile TON shard-state prover."""
+
+    value = _normalize_ton_shard_state_source_state_input(input_value)
+    statement_bytes = canonical_ton_shard_state_proof_public_inputs_bytes(input_value)
+    witness_commitment_bytes = canonical_ton_shard_state_witness_commitment_bytes(input_value)
+    verification_context_bytes = canonical_ton_shard_state_verification_context_bytes(input_value)
+    public_inputs_hash = ton_shard_state_proof_public_inputs_hash(input_value)
+    public_inputs_hash_bytes = _hex_to_bytes(
+        public_inputs_hash,
+        "shardStateProofPublicInputsHash",
+        32,
+    )
+    dsid = _prefixed_blake2b(
+        _SCCP_TON_SHARD_STATE_FASTPQ_DSID_PREFIX_V1,
+        public_inputs_hash_bytes,
+    )[:16]
+    return _immutable_prover_envelope({
+        "version": 1,
+        "proof_family": SCCP_STARK_FRI_PROOF_FAMILY_V1,
+        "circuit_id": SCCP_TON_SHARD_STATE_OPEN_VERIFY_CIRCUIT_ID_V1,
+        "parameter_set": _SCCP_TON_SHARD_STATE_FASTPQ_PARAMETER_SET_V1,
+        "source_domain": value["source_domain"],
+        "masterchain_seqno": str(value["masterchain_seqno"]),
+        "shard_seqno": str(value["shard_seqno"]),
+        "source_state_verifier_id": value["source_state_verifier_id"],
+        "source_state_verifier_hash": value["source_state_verifier_hash"],
+        "shard_state_proof_public_inputs_hash": public_inputs_hash,
+        "statement_bytes": statement_bytes,
+        "witness_commitment_bytes": witness_commitment_bytes,
+        "verification_context_bytes": verification_context_bytes,
+        "schema_descriptor": ton_shard_state_open_verify_schema_descriptor(input_value),
+        "public_input_columns": ton_shard_state_public_input_columns(input_value),
+        "fastpq_public_inputs": {
+            "dsid": _bytes_to_hex(dsid),
+            "slot": str(value["masterchain_seqno"]),
+            "old_root": value["masterchain_config_root"],
+            "new_root": value["shard_state_root"],
+            "perm_root": value["shard_state_dictionary_root"],
+            "tx_set_hash": public_inputs_hash,
+        },
+        "fastpq_transitions": [
+            {
+                "key": _SCCP_TON_SHARD_STATE_FASTPQ_STATEMENT_KEY_V1.decode(),
+                "operation": "meta_set",
+                "old_value": "0x",
+                "new_value": _bytes_to_hex(statement_bytes),
+            },
+            {
+                "key": _SCCP_TON_SHARD_STATE_FASTPQ_WITNESS_KEY_V1.decode(),
+                "operation": "meta_set",
+                "old_value": "0x",
+                "new_value": _bytes_to_hex(witness_commitment_bytes),
+            },
+            {
+                "key": _SCCP_TON_SHARD_STATE_FASTPQ_CONTEXT_KEY_V1.decode(),
+                "operation": "meta_set",
+                "old_value": "0x",
+                "new_value": _bytes_to_hex(verification_context_bytes),
+            },
+        ],
+    })
+
+
+_TON_FULL_LIGHT_CLIENT_AUDIT_ROLES = {
+    "masterchain_config": {
+        "name": "masterchain_config",
+        "camel_name": "masterchainConfig",
+        "code": 1,
+        "circuit_id": SCCP_TON_MASTERCHAIN_CONFIG_OPEN_VERIFY_CIRCUIT_ID_V1,
+        "verifier_id": SCCP_TON_MAINNET_MASTERCHAIN_CONFIG_VERIFIER_ID_V1,
+        "verifier_hash_field": "ton_masterchain_config_verifier_hash",
+        "required_input_names": (
+            "masterchain_config_root",
+            "masterchain_config_proof_hash",
+            "validator_set_payload_hash",
+            "config_leaf_hash",
+            "config_value_hash",
+            "config_proof_boc_hash",
+        ),
+    },
+    "validator_set_transition": {
+        "name": "validator_set_transition",
+        "camel_name": "validatorSetTransition",
+        "code": 2,
+        "circuit_id": SCCP_TON_VALIDATOR_SET_TRANSITION_OPEN_VERIFY_CIRCUIT_ID_V1,
+        "verifier_id": SCCP_TON_MAINNET_VALIDATOR_SET_TRANSITION_VERIFIER_ID_V1,
+        "verifier_hash_field": "ton_validator_set_transition_verifier_hash",
+        "required_input_names": (
+            "source_trust_anchor_hash",
+            "validator_set_hash",
+            "validator_set_transition_chain_hash",
+            "masterchain_signature_hash",
+            "validator_set_transition_count",
+        ),
+    },
+    "shard_accounts_dictionary": {
+        "name": "shard_accounts_dictionary",
+        "camel_name": "shardAccountsDictionary",
+        "code": 3,
+        "circuit_id": SCCP_TON_SHARD_ACCOUNTS_DICTIONARY_OPEN_VERIFY_CIRCUIT_ID_V1,
+        "verifier_id": SCCP_TON_MAINNET_SHARD_ACCOUNTS_DICTIONARY_VERIFIER_ID_V1,
+        "verifier_hash_field": "ton_shard_accounts_dictionary_verifier_hash",
+        "required_input_names": (
+            "shard_state_root",
+            "shard_state_dictionary_root",
+            "transaction_root",
+            "shard_state_proof_boc_hash",
+            "shard_accounts_proof_boc_hash",
+            "shard_state_verification_proof_hash",
+        ),
+    },
+}
+
+
+def _normalize_ton_full_light_client_audit_role(role: Any) -> Mapping[str, Any]:
+    normalized = _normalize_non_empty_string(role, "role").replace("-", "").replace("_", "").lower()
+    if normalized in {"config", "masterchainconfig"}:
+        return _TON_FULL_LIGHT_CLIENT_AUDIT_ROLES["masterchain_config"]
+    if normalized in {"transition", "validatorsettransition", "validators"}:
+        return _TON_FULL_LIGHT_CLIENT_AUDIT_ROLES["validator_set_transition"]
+    if normalized in {"accounts", "shardaccounts", "shardaccountsdictionary"}:
+        return _TON_FULL_LIGHT_CLIENT_AUDIT_ROLES["shard_accounts_dictionary"]
+    raise TypeError(
+        "role must be masterchain_config, validator_set_transition, or shard_accounts_dictionary"
+    )
+
+
+def _ton_audit_role_verifier_hash(
+    deployment: Mapping[str, Any],
+    role: Mapping[str, Any],
+) -> str:
+    return _normalize_nonzero_hex32(
+        deployment[role["verifier_hash_field"]],
+        role["verifier_hash_field"],
+    )
+
+
+def _ton_full_light_client_gate_hash_for_material_and_deployment(
+    material: Mapping[str, Any],
+    deployment: Mapping[str, Any],
+) -> str:
+    audit_hashes = (
+        _ton_audit_role_verifier_hash(
+            deployment,
+            _TON_FULL_LIGHT_CLIENT_AUDIT_ROLES["masterchain_config"],
+        ),
+        _ton_audit_role_verifier_hash(
+            deployment,
+            _TON_FULL_LIGHT_CLIENT_AUDIT_ROLES["validator_set_transition"],
+        ),
+        _ton_audit_role_verifier_hash(
+            deployment,
+            _TON_FULL_LIGHT_CLIENT_AUDIT_ROLES["shard_accounts_dictionary"],
+        ),
+    )
+    _require_ton_full_light_client_audit_role_separation(deployment, audit_hashes)
+    out = bytearray()
+    out.extend(_write_u8(1))
+    out.extend(_write_u32_le(material["source_domain"]))
+    out.extend(_write_u32_le(deployment["target_domain"]))
+    out.extend(_write_string(material["source_chain"], "sourceChain"))
+    out.extend(_write_u8(material["source_proof_plan"]))
+    out.extend(_write_u8(material["finality_model"]))
+    out.extend(_write_i32_le(_TON_MAINNET_GLOBAL_ID))
+    out.extend(
+        _write_string(
+            SCCP_TON_SHARD_STATE_OPEN_VERIFY_CIRCUIT_ID_V1,
+            "tonShardStateCircuitId",
+        )
+    )
+    out.extend(
+        _write_string(
+            _SCCP_TON_SHARD_STATE_FASTPQ_PARAMETER_SET_V1,
+            "tonShardStateParameterSet",
+        )
+    )
+    out.extend(
+        _write_string(
+            SCCP_TON_MAINNET_SHARD_STATE_VERIFIER_ID_V1,
+            "tonSourceStateVerifierId",
+        )
+    )
+    out.extend(_hex_to_bytes(material["source_state_verifier_hash"], "sourceStateVerifierHash", 32))
+    out.extend(_hex_to_bytes(sccp_source_verifier_material_hash(material), "sourceVerifierMaterialHash", 32))
+    out.extend(
+        _hex_to_bytes(
+            sccp_source_adapter_engine_deployment_hash(deployment),
+            "sourceAdapterDeploymentHash",
+            32,
+        )
+    )
+    for role in (
+        _TON_FULL_LIGHT_CLIENT_AUDIT_ROLES["masterchain_config"],
+        _TON_FULL_LIGHT_CLIENT_AUDIT_ROLES["validator_set_transition"],
+        _TON_FULL_LIGHT_CLIENT_AUDIT_ROLES["shard_accounts_dictionary"],
+    ):
+        out.extend(_write_string(role["verifier_id"], "tonAuditVerifierId"))
+        out.extend(_hex_to_bytes(_ton_audit_role_verifier_hash(deployment, role), "tonAuditVerifierHash", 32))
+    return _bytes_to_hex(
+        _prefixed_blake2b(_SCCP_TON_FULL_LIGHT_CLIENT_GATE_PREFIX_V1, bytes(out))
+    )
+
+
+def _normalize_ton_audit_material_and_deployment(
+    input_value: Mapping[str, Any],
+) -> Dict[str, Any]:
+    material_input = _mapping_optional_value_without_aliases(
+        input_value,
+        "sourceVerifierMaterial",
+        "sourceVerifierMaterial",
+        "source_verifier_material",
+    )
+    if material_input is _MISSING:
+        material_input = input_value
+    deployment_input = _mapping_optional_value_without_aliases(
+        input_value,
+        "sourceAdapterDeployment",
+        "sourceAdapterDeployment",
+        "source_adapter_deployment",
+    )
+    if deployment_input is _MISSING:
+        deployment_input = input_value
+    material = normalize_sccp_source_verifier_material(material_input)
+    deployment = normalize_sccp_source_adapter_engine_deployment(deployment_input)
+    if (
+        material["source_domain"] != SCCP_DOMAIN_TON
+        or deployment["source_domain"] != SCCP_DOMAIN_TON
+        or deployment["target_domain"] != SCCP_DOMAIN_SORA
+    ):
+        raise TypeError("TON full-light-client audit requests require a TON -> SORA deployment")
+    for field in (
+        "source_domain",
+        "source_chain",
+        "source_proof_plan",
+        "finality_model",
+        "adapter_circuit_id",
+        "source_trust_anchor_id",
+        "source_trust_anchor_hash",
+        "consensus_verifier_id",
+        "consensus_verifier_hash",
+        "message_inclusion_verifier_id",
+        "message_inclusion_verifier_hash",
+        "finality_policy_id",
+        "finality_policy_hash",
+        "source_state_verifier_id",
+        "source_state_verifier_hash",
+        "source_bridge_emitter_id",
+        "source_bridge_emitter_address",
+        "source_bridge_emitter_code_hash",
+        "source_bridge_network_id",
+        "source_bridge_owner_address",
+        "source_bridge_config_hash",
+    ):
+        if deployment[field] != material[field]:
+            raise TypeError("sourceAdapterDeployment must match sourceVerifierMaterial")
+    for role in _TON_FULL_LIGHT_CLIENT_AUDIT_ROLES.values():
+        _ton_audit_role_verifier_hash(deployment, role)
+    return {
+        "material": material,
+        "deployment": deployment,
+        "gate_hash": _ton_full_light_client_gate_hash_for_material_and_deployment(
+            material,
+            deployment,
+        ),
+    }
+
+
+def ton_sccp_shard_state_verification_proof_hash(input_value: Any) -> str:
+    """Hash the completed TON shard-state source proof capsule for audit roles."""
+
+    proof = _normalize_solana_source_state_verification_proof(
+        input_value,
+        "shardStateVerificationProof",
+    )
+    _require_source_state_verification_proof_profile(
+        proof,
+        SCCP_TON_SHARD_STATE_OPEN_VERIFY_CIRCUIT_ID_V1,
+        "shardStateVerificationProof",
+        "TON shard-state",
+    )
+    return _bytes_to_hex(
+        _prefixed_blake2b(
+            b"sccp:ton:source-state-verification-proof:v1",
+            _canonical_source_state_verification_proof_bytes(proof),
+        )
+    )
+
+
+_TON_SOURCE_STATE_VERIFICATION_CIRCUIT_IDS = frozenset(
+    (
+        SCCP_TON_SHARD_STATE_OPEN_VERIFY_CIRCUIT_ID_V1,
+        SCCP_TON_MASTERCHAIN_CONFIG_OPEN_VERIFY_CIRCUIT_ID_V1,
+        SCCP_TON_VALIDATOR_SET_TRANSITION_OPEN_VERIFY_CIRCUIT_ID_V1,
+        SCCP_TON_SHARD_ACCOUNTS_DICTIONARY_OPEN_VERIFY_CIRCUIT_ID_V1,
+    )
+)
+
+
+def canonical_ton_sccp_source_state_verification_proof_bytes(input_value: Any) -> bytes:
+    """Return canonical bytes for a TON source-state proof capsule."""
+
+    proof = _normalize_solana_source_state_verification_proof(
+        input_value,
+        "sourceStateProof",
+    )
+    if proof["circuit_id"] not in _TON_SOURCE_STATE_VERIFICATION_CIRCUIT_IDS:
+        raise TypeError("sourceStateProof must be a TON source-state stark-fri-v1 proof")
+    return _canonical_source_state_verification_proof_bytes(proof)
+
+
+def _ton_nested_audit_value(
+    input_value: Mapping[str, Any],
+    nested: Mapping[str, Any],
+    label: str,
+    *keys: str,
+) -> Any:
+    top_level = _mapping_optional_value_without_aliases(input_value, label, *keys)
+    nested_value = _mapping_optional_value_without_aliases(
+        nested,
+        f"masterchainConfigProof.{label}",
+        *keys,
+    )
+    if top_level is not _MISSING and nested_value is not _MISSING:
+        raise TypeError(f"{label} must not use top-level and masterchainConfigProof aliases")
+    if top_level is not _MISSING:
+        return top_level
+    return None if nested_value is _MISSING else nested_value
+
+
+def _normalize_ton_masterchain_config_audit_fields(
+    input_value: Mapping[str, Any],
+    shard_state: Mapping[str, Any],
+) -> Dict[str, str]:
+    nested_input = _mapping_optional_value_without_aliases(
+        input_value,
+        "masterchainConfigProof",
+        "masterchainConfigProof",
+        "masterchain_config_proof",
+    )
+    if nested_input is _MISSING:
+        nested_input = {}
+    nested = _require_mapping(nested_input, "masterchainConfigProof")
+    validator_set_payload_hash = _normalize_nonzero_hex32(
+        _ton_nested_audit_value(
+            input_value,
+            nested,
+            "validatorSetPayloadHash",
+            "validatorSetPayloadHash",
+            "validator_set_payload_hash",
+        ),
+        "validatorSetPayloadHash",
+    )
+    config_leaf_hash = _normalize_nonzero_hex32(
+        _ton_nested_audit_value(
+            input_value,
+            nested,
+            "configLeafHash",
+            "configLeafHash",
+            "config_leaf_hash",
+        ),
+        "configLeafHash",
+    )
+    config_value_hash = _normalize_nonzero_hex32(
+        _ton_nested_audit_value(
+            input_value,
+            nested,
+            "configValueHash",
+            "configValueHash",
+            "config_value_hash",
+        ),
+        "configValueHash",
+    )
+    config_leaf_index_value = _ton_nested_audit_value(
+        input_value,
+        nested,
+        "configLeafIndex",
+        "configLeafIndex",
+        "config_leaf_index",
+    )
+    config_leaf_index = (
+        SCCP_TON_CURRENT_VALIDATOR_SET_CONFIG_PARAM
+        if config_leaf_index_value is None
+        else _normalize_u64(config_leaf_index_value, "configLeafIndex")
+    )
+    if config_leaf_index != SCCP_TON_CURRENT_VALIDATOR_SET_CONFIG_PARAM:
+        raise TypeError("configLeafIndex must be TON current validator set config param 34")
+    proof_input = {
+        "source_domain": shard_state["source_domain"],
+        "masterchain_seqno": shard_state["masterchain_seqno"],
+        "masterchain_block_hash": shard_state["masterchain_block_hash"],
+        "shard_state_root": shard_state["shard_state_root"],
+        "config_root": shard_state["masterchain_config_root"],
+        "validator_set_hash": shard_state["validator_set_hash"],
+        "validator_set_payload_hash": validator_set_payload_hash,
+        "config_leaf_hash": config_leaf_hash,
+        "config_leaf_index": config_leaf_index,
+        "config_value_hash": config_value_hash,
+        "config_dictionary_proof_boc": shard_state["config_dictionary_proof_boc"],
+        "config_inclusion_branch": [],
+    }
+    expected_proof_hash = ton_masterchain_config_proof_hash(proof_input)
+    if expected_proof_hash != shard_state["masterchain_config_proof_hash"]:
+        raise TypeError("masterchainConfigProofHash must match TON config proof fields")
+    return {
+        "validator_set_payload_hash": validator_set_payload_hash,
+        "config_leaf_hash": config_leaf_hash,
+        "config_value_hash": config_value_hash,
+    }
+
+
+def _normalize_ton_full_light_client_audit_input(
+    input_value: Any,
+    role: Mapping[str, Any],
+) -> Dict[str, Any]:
+    value = _require_mapping(input_value, "TON full-light-client audit proof request input")
+    material_deployment = _normalize_ton_audit_material_and_deployment(value)
+    material = material_deployment["material"]
+    deployment = material_deployment["deployment"]
+    shard_state = _normalize_ton_shard_state_source_state_input(value)
+    for source_field in (
+        "source_state_verifier_id",
+        "source_state_verifier_hash",
+        "source_trust_anchor_id",
+        "source_trust_anchor_hash",
+        "consensus_verifier_id",
+        "consensus_verifier_hash",
+        "message_inclusion_verifier_id",
+        "message_inclusion_verifier_hash",
+        "finality_policy_id",
+        "finality_policy_hash",
+    ):
+        if shard_state[source_field] != material[source_field]:
+            raise TypeError("TON shard-state verification context must match sourceVerifierMaterial")
+    public_inputs_hash = ton_shard_state_proof_public_inputs_hash(value)
+    supplied_public_inputs_hash = _mapping_optional_value_without_aliases(
+        value,
+        "shardStateProofPublicInputsHash",
+        "shardStateProofPublicInputsHash",
+        "shard_state_proof_public_inputs_hash",
+    )
+    if supplied_public_inputs_hash is not _MISSING and _normalize_hex32(
+        supplied_public_inputs_hash,
+        "shardStateProofPublicInputsHash",
+    ) != public_inputs_hash:
+        raise TypeError("shardStateProofPublicInputsHash must match TON shard-state inputs")
+    shard_proof = _mapping_optional_value_without_aliases(
+        value,
+        "shardStateVerificationProof",
+        "shardStateVerificationProof",
+        "shard_state_verification_proof",
+    )
+    supplied_shard_proof_hash = _mapping_optional_value_without_aliases(
+        value,
+        "shardStateVerificationProofHash",
+        "shardStateVerificationProofHash",
+        "shard_state_verification_proof_hash",
+    )
+    if shard_proof is not _MISSING:
+        shard_state_verification_proof_hash = ton_sccp_shard_state_verification_proof_hash(
+            shard_proof
+        )
+        if supplied_shard_proof_hash is not _MISSING and _normalize_hex32(
+            supplied_shard_proof_hash,
+            "shardStateVerificationProofHash",
+        ) != shard_state_verification_proof_hash:
+            raise TypeError("shardStateVerificationProofHash must match shardStateVerificationProof")
+    else:
+        raise TypeError(
+            "shardStateVerificationProof is required; "
+            "shardStateVerificationProofHash alone is not accepted"
+        )
+    if (
+        material["source_trust_anchor_hash"] == shard_state["validator_set_hash"]
+        and len(shard_state["validator_set_transition_proofs"]) != 0
+    ):
+        raise TypeError("validatorSetTransitionProofs must be empty when validator set matches source trust anchor")
+    if (
+        material["source_trust_anchor_hash"] != shard_state["validator_set_hash"]
+        and len(shard_state["validator_set_transition_proofs"]) == 0
+    ):
+        raise TypeError("validatorSetTransitionProofs must connect source trust anchor to validatorSetHash")
+    masterchain_config = _normalize_ton_masterchain_config_audit_fields(
+        value,
+        shard_state,
+    )
+    return {
+        "role": role,
+        "material": material,
+        "deployment": deployment,
+        "shard_state": shard_state,
+        "source_verifier_material_hash": sccp_source_verifier_material_hash(material),
+        "source_adapter_deployment_hash": sccp_source_adapter_engine_deployment_hash(deployment),
+        "full_light_client_gate_hash": material_deployment["gate_hash"],
+        "verifier_hash": _ton_audit_role_verifier_hash(deployment, role),
+        "shard_state_public_inputs_hash": public_inputs_hash,
+        "shard_state_verification_proof_hash": shard_state_verification_proof_hash,
+        **masterchain_config,
+    }
+
+
+def canonical_ton_sccp_full_light_client_audit_statement_bytes(
+    input_value: Any,
+    role: Any,
+) -> bytes:
+    """Return canonical public statement bytes for a TON audit role proof."""
+
+    role_value = _normalize_ton_full_light_client_audit_role(role)
+    value = _normalize_ton_full_light_client_audit_input(input_value, role_value)
+    shard_state = value["shard_state"]
+    out = bytearray()
+    out.extend(_write_u8(1))
+    out.extend(_write_u8(role_value["code"]))
+    out.extend(_write_string(role_value["circuit_id"], "circuitId"))
+    out.extend(_write_string(SCCP_TON_CONTRACT_PROOF_BACKEND_V1, "backend"))
+    out.extend(_write_i32_le(_TON_MAINNET_GLOBAL_ID))
+    out.extend(_write_u32_le(shard_state["source_domain"]))
+    out.extend(_write_u64_le(shard_state["masterchain_seqno"]))
+    out.extend(_write_i32_le(shard_state["masterchain_workchain_id"]))
+    out.extend(_write_u64_le(shard_state["masterchain_shard"]))
+    out.extend(_hex_to_bytes(shard_state["masterchain_block_hash"], "masterchainBlockHash", 32))
+    out.extend(_hex_to_bytes(shard_state["masterchain_file_hash"], "masterchainFileHash", 32))
+    out.extend(_hex_to_bytes(shard_state["validator_set_hash"], "validatorSetHash", 32))
+    out.extend(_hex_to_bytes(shard_state["masterchain_config_root"], "masterchainConfigRoot", 32))
+    out.extend(_hex_to_bytes(shard_state["masterchain_config_proof_hash"], "masterchainConfigProofHash", 32))
+    out.extend(_write_i32_le(shard_state["shard_workchain_id"]))
+    out.extend(_write_u64_le(shard_state["shard_shard"]))
+    out.extend(_write_u64_le(shard_state["shard_seqno"]))
+    out.extend(_hex_to_bytes(shard_state["shard_block_hash"], "shardBlockHash", 32))
+    out.extend(_hex_to_bytes(shard_state["shard_file_hash"], "shardFileHash", 32))
+    out.extend(_hex_to_bytes(shard_state["shard_state_root"], "shardStateRoot", 32))
+    out.extend(_hex_to_bytes(shard_state["shard_state_dictionary_root"], "shardStateDictionaryRoot", 32))
+    out.extend(_hex_to_bytes(shard_state["transaction_root"], "transactionRoot", 32))
+    out.extend(_write_u64_le(shard_state["transaction_lt"]))
+    out.extend(_hex_to_bytes(shard_state["masterchain_signature_hash"], "masterchainSignatureHash", 32))
+    out.extend(_hex_to_bytes(shard_state["shard_proof_hash"], "shardProofHash", 32))
+    out.extend(_hex_to_bytes(value["shard_state_verification_proof_hash"], "shardStateVerificationProofHash", 32))
+    out.extend(_hex_to_bytes(value["shard_state_public_inputs_hash"], "shardStateProofPublicInputsHash", 32))
+    if role_value["name"] == "masterchain_config":
+        out.extend(_hex_to_bytes(value["validator_set_payload_hash"], "validatorSetPayloadHash", 32))
+        out.extend(_hex_to_bytes(value["config_leaf_hash"], "configLeafHash", 32))
+        out.extend(_hex_to_bytes(value["config_value_hash"], "configValueHash", 32))
+        out.extend(_hex_to_bytes(shard_state["config_proof_boc_hash"], "configProofBocHash", 32))
+    elif role_value["name"] == "validator_set_transition":
+        out.extend(_hex_to_bytes(shard_state["transition_chain_hash"], "transitionChainHash", 32))
+        out.extend(_write_u32_le(len(shard_state["validator_set_transition_proofs"])))
+        for transition in shard_state["validator_set_transition_proofs"]:
+            out.extend(_canonical_ton_validator_set_transition_proof_bytes(transition))
+    elif role_value["name"] == "shard_accounts_dictionary":
+        out.extend(_hex_to_bytes(shard_state["shard_state_proof_boc_hash"], "shardStateProofBocHash", 32))
+        out.extend(_hex_to_bytes(shard_state["shard_accounts_proof_boc_hash"], "shardAccountsProofBocHash", 32))
+        out.extend(_write_u16_le(shard_state["shard_state_dictionary_key_bit_len"]))
+        out.extend(_write_bytes(shard_state["shard_state_dictionary_key"]))
+        out.extend(_hex_to_bytes(value["shard_state_public_inputs_hash"], "shardStateProofPublicInputsHash", 32))
+    else:
+        raise TypeError("unsupported TON full-light-client audit role")
+    return bytes(out)
+
+
+def ton_sccp_full_light_client_audit_statement_hash(input_value: Any, role: Any) -> str:
+    """Hash a TON full-light-client audit role statement."""
+
+    return _bytes_to_hex(
+        _prefixed_blake2b(
+            _SCCP_TON_FULL_LIGHT_CLIENT_AUDIT_STATEMENT_PREFIX_V1,
+            canonical_ton_sccp_full_light_client_audit_statement_bytes(
+                input_value,
+                role,
+            ),
+        )
+    )
+
+
+def _ton_full_light_client_audit_role_columns(value: Mapping[str, Any]) -> Sequence[str]:
+    role_name = value["role"]["name"]
+    shard_state = value["shard_state"]
+    if role_name == "masterchain_config":
+        return (
+            shard_state["masterchain_config_root"],
+            shard_state["masterchain_config_proof_hash"],
+            value["validator_set_payload_hash"],
+            value["config_leaf_hash"],
+            value["config_value_hash"],
+            shard_state["config_proof_boc_hash"],
+        )
+    if role_name == "validator_set_transition":
+        return (
+            value["material"]["source_trust_anchor_hash"],
+            shard_state["validator_set_hash"],
+            shard_state["transition_chain_hash"],
+            shard_state["masterchain_signature_hash"],
+            _bytes_to_hex(
+                _sccp_word_u64_le(len(shard_state["validator_set_transition_proofs"]))
+            ),
+        )
+    if role_name == "shard_accounts_dictionary":
+        return (
+            shard_state["shard_state_root"],
+            shard_state["shard_state_dictionary_root"],
+            shard_state["transaction_root"],
+            shard_state["shard_state_proof_boc_hash"],
+            shard_state["shard_accounts_proof_boc_hash"],
+            value["shard_state_verification_proof_hash"],
+        )
+    raise TypeError("unsupported TON full-light-client audit role")
+
+
+def _require_ton_full_light_client_audit_request_hash_separation(
+    value: Mapping[str, Any],
+    statement_hash: str | None = None,
+) -> None:
+    verifier_hash = _normalize_nonzero_hex32(value["verifier_hash"], "verifierHash")
+    shard_state = value["shard_state"]
+    request_hashes = [
+        value["material"]["source_state_verifier_hash"],
+        value["source_verifier_material_hash"],
+        value["source_adapter_deployment_hash"],
+        value["full_light_client_gate_hash"],
+        value["shard_state_public_inputs_hash"],
+        value["shard_state_verification_proof_hash"],
+        shard_state["masterchain_config_proof_hash"],
+        shard_state["masterchain_signature_hash"],
+        shard_state["shard_proof_hash"],
+        shard_state["transition_chain_hash"],
+        *_ton_full_light_client_audit_role_columns(value),
+    ]
+    if statement_hash is not None:
+        request_hashes.append(statement_hash)
+    for request_hash_value in request_hashes:
+        request_hash = _normalize_hex32(request_hash_value, "tonAuditRequestHash")
+        if not _hex32_is_zero(request_hash, "tonAuditRequestHash") and request_hash == verifier_hash:
+            raise ValueError(
+                "TON full-light-client audit verifier hash must not reuse "
+                "request-bound hashes"
+            )
+
+
+def ton_sccp_full_light_client_audit_public_input_columns(
+    input_value: Any,
+    role: Any,
+) -> Sequence[Sequence[str]]:
+    """Return OpenVerify public input columns for a TON audit role proof."""
+
+    role_value = _normalize_ton_full_light_client_audit_role(role)
+    value = _normalize_ton_full_light_client_audit_input(input_value, role_value)
+    shard_state = value["shard_state"]
+    statement_hash = ton_sccp_full_light_client_audit_statement_hash(
+        input_value,
+        role_value["name"],
+    )
+    _require_ton_full_light_client_audit_request_hash_separation(
+        value,
+        statement_hash,
+    )
+    columns = [
+        [_bytes_to_hex(_sccp_word_u8(role_value["code"]))],
+        [_bytes_to_hex(_sccp_word_u32_le(shard_state["source_domain"]))],
+        [_bytes_to_hex(_sccp_word_u64_le(shard_state["masterchain_seqno"]))],
+        [shard_state["masterchain_block_hash"]],
+        [_bytes_to_hex(_sccp_word_u64_le(shard_state["shard_seqno"]))],
+        [shard_state["shard_block_hash"]],
+        [statement_hash],
+        [value["source_verifier_material_hash"]],
+        [value["source_adapter_deployment_hash"]],
+        [value["full_light_client_gate_hash"]],
+        [value["verifier_hash"]],
+    ]
+    columns.extend([[column] for column in _ton_full_light_client_audit_role_columns(value)])
+    return columns
+
+
+def _ton_full_light_client_audit_fastpq_public_inputs(
+    value: Mapping[str, Any],
+    statement_hash: str,
+) -> Dict[str, str]:
+    dsid_preimage = _write_u8(value["role"]["code"]) + _hex_to_bytes(
+        statement_hash,
+        "auditStatementHash",
+        32,
+    )
+    dsid = _prefixed_blake2b(
+        _SCCP_TON_FULL_LIGHT_CLIENT_AUDIT_FASTPQ_DSID_PREFIX_V1,
+        dsid_preimage,
+    )[:16]
+    role_name = value["role"]["name"]
+    shard_state = value["shard_state"]
+    if role_name == "masterchain_config":
+        old_root = shard_state["masterchain_config_root"]
+        new_root = shard_state["validator_set_hash"]
+        perm_root = shard_state["masterchain_config_proof_hash"]
+    elif role_name == "validator_set_transition":
+        old_root = value["material"]["source_trust_anchor_hash"]
+        new_root = shard_state["validator_set_hash"]
+        perm_root = shard_state["transition_chain_hash"]
+    elif role_name == "shard_accounts_dictionary":
+        old_root = shard_state["shard_state_root"]
+        new_root = shard_state["transaction_root"]
+        perm_root = shard_state["shard_state_dictionary_root"]
+    else:
+        raise TypeError("unsupported TON full-light-client audit role")
+    return {
+        "dsid": _bytes_to_hex(dsid),
+        "slot": str(shard_state["masterchain_seqno"]),
+        "old_root": old_root,
+        "new_root": new_root,
+        "perm_root": perm_root,
+        "tx_set_hash": statement_hash,
+    }
+
+
+def _canonical_ton_full_light_client_audit_context_bytes(
+    value: Mapping[str, Any],
+    statement_hash: str,
+) -> bytes:
+    _require_ton_full_light_client_audit_request_hash_separation(
+        value,
+        statement_hash,
+    )
+    return b"".join(
+        (
+            _write_u8(1),
+            _write_u8(value["role"]["code"]),
+            _write_string(value["role"]["circuit_id"], "circuitId"),
+            _write_string(
+                _SCCP_TON_FULL_LIGHT_CLIENT_AUDIT_FASTPQ_PARAMETER_SET_V1,
+                "parameterSet",
+            ),
+            _write_string(value["role"]["verifier_id"], "verifierId"),
+            _hex_to_bytes(value["verifier_hash"], "verifierHash", 32),
+            _hex_to_bytes(value["source_verifier_material_hash"], "sourceVerifierMaterialHash", 32),
+            _hex_to_bytes(value["source_adapter_deployment_hash"], "sourceAdapterDeploymentHash", 32),
+            _hex_to_bytes(value["full_light_client_gate_hash"], "fullLightClientGateHash", 32),
+            _hex_to_bytes(value["shard_state_public_inputs_hash"], "shardStateProofPublicInputsHash", 32),
+            _hex_to_bytes(statement_hash, "auditStatementHash", 32),
+        )
+    )
+
+
+def ton_sccp_full_light_client_audit_open_verify_schema_descriptor(
+    input_value: Any,
+    role: Any,
+) -> bytes:
+    """Return OpenVerify schema descriptor bytes for a TON audit role."""
+
+    role_value = _normalize_ton_full_light_client_audit_role(role)
+    value = _normalize_ton_full_light_client_audit_input(input_value, role_value)
+    _require_ton_full_light_client_audit_request_hash_separation(value)
+    shard_state = value["shard_state"]
+    out = bytearray()
+    out.extend(_write_u8(1))
+    out.extend(_write_u8(role_value["code"]))
+    out.extend(_write_string(role_value["circuit_id"], "circuitId"))
+    out.extend(
+        _write_string(
+            _SCCP_TON_FULL_LIGHT_CLIENT_AUDIT_FASTPQ_PARAMETER_SET_V1,
+            "parameterSet",
+        )
+    )
+    out.extend(_write_i32_le(_TON_MAINNET_GLOBAL_ID))
+    out.extend(_write_u32_le(shard_state["source_domain"]))
+    out.extend(_write_string("verifier_id", "schemaField"))
+    out.extend(_write_string(role_value["verifier_id"], "verifierId"))
+    out.extend(_write_string("verifier_hash", "schemaField"))
+    out.extend(_hex_to_bytes(value["verifier_hash"], "verifierHash", 32))
+    out.extend(_write_string("source_verifier_material_hash", "schemaField"))
+    out.extend(_hex_to_bytes(value["source_verifier_material_hash"], "sourceVerifierMaterialHash", 32))
+    out.extend(_write_string("source_adapter_deployment_hash", "schemaField"))
+    out.extend(_hex_to_bytes(value["source_adapter_deployment_hash"], "sourceAdapterDeploymentHash", 32))
+    out.extend(_write_string("full_light_client_gate_hash", "schemaField"))
+    out.extend(_hex_to_bytes(value["full_light_client_gate_hash"], "fullLightClientGateHash", 32))
+    for required_input in (
+        "role",
+        "source_domain",
+        "masterchain_seqno",
+        "masterchain_block_hash",
+        "shard_seqno",
+        "shard_block_hash",
+        "audit_statement_hash",
+        "source_verifier_material_hash",
+        "source_adapter_deployment_hash",
+        "full_light_client_gate_hash",
+        "verifier_hash",
+        *role_value["required_input_names"],
+    ):
+        out.extend(_write_string(required_input, "requiredInput"))
+    return bytes(out)
+
+
+def _ton_full_light_client_audit_fastpq_key(prefix: bytes, role: Mapping[str, Any]) -> bytes:
+    return prefix + b"\x00" + role["circuit_id"].encode()
+
+
+def build_ton_sccp_full_light_client_audit_proof_request(
+    input_value: Any,
+    role: Any,
+) -> Dict[str, Any]:
+    """Build the second-stage TON audit role proof request for UI/mobile provers."""
+
+    role_value = _normalize_ton_full_light_client_audit_role(role)
+    value = _normalize_ton_full_light_client_audit_input(input_value, role_value)
+    shard_state = value["shard_state"]
+    statement_bytes = canonical_ton_sccp_full_light_client_audit_statement_bytes(
+        input_value,
+        role_value["name"],
+    )
+    audit_statement_hash = ton_sccp_full_light_client_audit_statement_hash(
+        input_value,
+        role_value["name"],
+    )
+    verification_context_bytes = _canonical_ton_full_light_client_audit_context_bytes(
+        value,
+        audit_statement_hash,
+    )
+    transitions = [
+        {
+            "key": _bytes_to_hex(
+                _ton_full_light_client_audit_fastpq_key(
+                    _SCCP_TON_FULL_LIGHT_CLIENT_AUDIT_FASTPQ_STATEMENT_KEY_V1,
+                    role_value,
+                )
+            ),
+            "operation": "meta_set",
+            "old_value": "0x",
+            "new_value": _bytes_to_hex(statement_bytes),
+        },
+        {
+            "key": _bytes_to_hex(
+                _ton_full_light_client_audit_fastpq_key(
+                    _SCCP_TON_FULL_LIGHT_CLIENT_AUDIT_FASTPQ_CONTEXT_KEY_V1,
+                    role_value,
+                )
+            ),
+            "operation": "meta_set",
+            "old_value": "0x",
+            "new_value": _bytes_to_hex(verification_context_bytes),
+        },
+        {
+            "key": _bytes_to_hex(
+                _ton_full_light_client_audit_fastpq_key(
+                    _SCCP_TON_FULL_LIGHT_CLIENT_AUDIT_FASTPQ_GATE_KEY_V1,
+                    role_value,
+                )
+            ),
+            "operation": "meta_set",
+            "old_value": "0x",
+            "new_value": value["full_light_client_gate_hash"],
+        },
+    ]
+    transitions.sort(key=lambda item: item["key"])
+    return _immutable_prover_envelope({
+        "version": 1,
+        "proof_family": SCCP_STARK_FRI_PROOF_FAMILY_V1,
+        "circuit_id": role_value["circuit_id"],
+        "parameter_set": _SCCP_TON_FULL_LIGHT_CLIENT_AUDIT_FASTPQ_PARAMETER_SET_V1,
+        "role": role_value["name"],
+        "role_code": role_value["code"],
+        "source_domain": SCCP_DOMAIN_TON,
+        "masterchain_seqno": str(shard_state["masterchain_seqno"]),
+        "shard_seqno": str(shard_state["shard_seqno"]),
+        "verifier_id": role_value["verifier_id"],
+        "verifier_hash": value["verifier_hash"],
+        "source_state_verifier_id": value["material"]["source_state_verifier_id"],
+        "source_state_verifier_hash": value["material"]["source_state_verifier_hash"],
+        "source_verifier_material_hash": value["source_verifier_material_hash"],
+        "source_adapter_deployment_hash": value["source_adapter_deployment_hash"],
+        "full_light_client_gate_hash": value["full_light_client_gate_hash"],
+        "shard_state_proof_public_inputs_hash": value["shard_state_public_inputs_hash"],
+        "shard_state_verification_proof_hash": value["shard_state_verification_proof_hash"],
+        "audit_statement_hash": audit_statement_hash,
+        "statement_bytes": statement_bytes,
+        "verification_context_bytes": verification_context_bytes,
+        "schema_descriptor": ton_sccp_full_light_client_audit_open_verify_schema_descriptor(
+            input_value,
+            role_value["name"],
+        ),
+        "public_input_columns": ton_sccp_full_light_client_audit_public_input_columns(
+            input_value,
+            role_value["name"],
+        ),
+        "fastpq_public_inputs": _ton_full_light_client_audit_fastpq_public_inputs(
+            value,
+            audit_statement_hash,
+        ),
+        "fastpq_transitions": transitions,
+    })
+
+
+def build_ton_sccp_masterchain_config_proof_request(input_value: Any) -> Dict[str, Any]:
+    """Build the TON masterchain config audit proof request."""
+
+    return build_ton_sccp_full_light_client_audit_proof_request(
+        input_value,
+        "masterchain_config",
+    )
+
+
+def build_ton_sccp_validator_set_transition_proof_request(input_value: Any) -> Dict[str, Any]:
+    """Build the TON validator-set transition audit proof request."""
+
+    return build_ton_sccp_full_light_client_audit_proof_request(
+        input_value,
+        "validator_set_transition",
+    )
+
+
+def build_ton_sccp_shard_accounts_dictionary_proof_request(input_value: Any) -> Dict[str, Any]:
+    """Build the TON shard-accounts dictionary audit proof request."""
+
+    return build_ton_sccp_full_light_client_audit_proof_request(
+        input_value,
+        "shard_accounts_dictionary",
+    )
+
+
+def build_ton_sccp_full_light_client_audit_proof_requests(
+    input_value: Any,
+) -> Dict[str, Dict[str, Any]]:
+    """Build all three TON full-light-client audit proof requests."""
+
+    return _immutable_prover_envelope({
+        "masterchain_config": build_ton_sccp_masterchain_config_proof_request(input_value),
+        "validator_set_transition": build_ton_sccp_validator_set_transition_proof_request(input_value),
+        "shard_accounts_dictionary": build_ton_sccp_shard_accounts_dictionary_proof_request(input_value),
+    })
+
+
+def _normalize_ton_source_state_proof_request_for_wrapping(
+    request: Mapping[str, Any],
+) -> str:
+    value = _require_mapping(request, "TON source-state proof request")
+    def request_value(camel: str, snake: str) -> Any:
+        return _mapping_value_without_aliases(value, f"request.{camel}", camel, snake)
+
+    def nested_value(container: Mapping[str, Any], label: str, *keys: str) -> Any:
+        unique_keys = tuple(dict.fromkeys(keys))
+        return _mapping_value_without_aliases(container, label, *unique_keys)
+
+    if value.get("version") != 1:
+        raise TypeError("TON source-state proof request.version must be 1")
+    proof_family = request_value("proofFamily", "proof_family")
+    if proof_family != SCCP_STARK_FRI_PROOF_FAMILY_V1:
+        raise TypeError("TON source-state proof request.proofFamily must be stark-fri-v1")
+    circuit_id = _normalize_non_empty_string(
+        request_value("circuitId", "circuit_id"),
+        "request.circuitId",
+    )
+    if circuit_id not in _TON_SOURCE_STATE_VERIFICATION_CIRCUIT_IDS:
+        raise TypeError("request.circuitId must be a TON source-state OpenVerify circuit")
+    expected_parameter_set = (
+        _SCCP_TON_SHARD_STATE_FASTPQ_PARAMETER_SET_V1
+        if circuit_id == SCCP_TON_SHARD_STATE_OPEN_VERIFY_CIRCUIT_ID_V1
+        else _SCCP_TON_FULL_LIGHT_CLIENT_AUDIT_FASTPQ_PARAMETER_SET_V1
+    )
+    if request_value("parameterSet", "parameter_set") != expected_parameter_set:
+        raise TypeError("request.parameterSet must be fastpq-lane-balanced")
+    if _normalize_u32(request_value("sourceDomain", "source_domain"), "request.sourceDomain") != SCCP_DOMAIN_TON:
+        raise TypeError("TON source-state proof request.sourceDomain must be TON")
+    masterchain_seqno = _normalize_u64(
+        request_value("masterchainSeqno", "masterchain_seqno"),
+        "request.masterchainSeqno",
+    )
+    shard_seqno = _normalize_u64(
+        request_value("shardSeqno", "shard_seqno"),
+        "request.shardSeqno",
+    )
+    if masterchain_seqno == 0 or shard_seqno == 0:
+        raise TypeError("request.seqno must not be zero")
+    if request_value("sourceStateVerifierId", "source_state_verifier_id") != SCCP_TON_MAINNET_SHARD_STATE_VERIFIER_ID_V1:
+        raise TypeError("request.sourceStateVerifierId must match TON shard-state verifier profile")
+    source_state_verifier_hash = _normalize_nonzero_hex32(
+        request_value("sourceStateVerifierHash", "source_state_verifier_hash"),
+        "request.sourceStateVerifierHash",
+    )
+    if source_state_verifier_hash == _SCCP_TON_TEMPLATE_SOURCE_STATE_VERIFIER_HASH:
+        raise TypeError("request.sourceStateVerifierHash must not be the TON template verifier hash")
+
+    def require_request_bytes(camel: str, snake: str) -> bytes:
+        selected = request_value(camel, snake)
+        if selected is None:
+            raise TypeError(f"request.{camel} is required")
+        request_bytes = _to_bytes(selected, f"request.{camel}")
+        if not request_bytes:
+            raise TypeError(f"request.{camel} must not be empty")
+        return request_bytes
+
+    statement_bytes = require_request_bytes("statementBytes", "statement_bytes")
+    verification_context_bytes = require_request_bytes(
+        "verificationContextBytes", "verification_context_bytes"
+    )
+    require_request_bytes("schemaDescriptor", "schema_descriptor")
+    if circuit_id == SCCP_TON_SHARD_STATE_OPEN_VERIFY_CIRCUIT_ID_V1:
+        witness_commitment_bytes = require_request_bytes(
+            "witnessCommitmentBytes", "witness_commitment_bytes"
+        )
+        statement_hash = _bytes_to_hex(
+            _prefixed_blake2b(
+                _SCCP_TON_SHARD_STATE_PROOF_PUBLIC_INPUTS_PREFIX_V1,
+                statement_bytes,
+            )
+        )
+        supplied_statement_hash = _normalize_nonzero_hex32(
+            request_value("shardStateProofPublicInputsHash", "shard_state_proof_public_inputs_hash"),
+            "request.shardStateProofPublicInputsHash",
+        )
+        if supplied_statement_hash != statement_hash:
+            raise TypeError("request.shardStateProofPublicInputsHash must match request.statementBytes")
+        expected_dsid = _bytes_to_hex(
+            _prefixed_blake2b(
+                _SCCP_TON_SHARD_STATE_FASTPQ_DSID_PREFIX_V1,
+                _hex_to_bytes(statement_hash, "request.shardStateProofPublicInputsHash", 32),
+            )[:16]
+        )
+        expected_tx_set_hash = statement_hash
+        expected_transitions = (
+            {
+                "key": _SCCP_TON_SHARD_STATE_FASTPQ_STATEMENT_KEY_V1.decode(),
+                "operation": "meta_set",
+                "old_value": "0x",
+                "new_value": _bytes_to_hex(statement_bytes),
+            },
+            {
+                "key": _SCCP_TON_SHARD_STATE_FASTPQ_WITNESS_KEY_V1.decode(),
+                "operation": "meta_set",
+                "old_value": "0x",
+                "new_value": _bytes_to_hex(witness_commitment_bytes),
+            },
+            {
+                "key": _SCCP_TON_SHARD_STATE_FASTPQ_CONTEXT_KEY_V1.decode(),
+                "operation": "meta_set",
+                "old_value": "0x",
+                "new_value": _bytes_to_hex(verification_context_bytes),
+            },
+        )
+    else:
+        role = _normalize_ton_full_light_client_audit_role(_mapping_value_without_aliases(value, "request.role", "role"))
+        if _normalize_u32(request_value("roleCode", "role_code"), "request.roleCode") != role["code"]:
+            raise TypeError("request.roleCode must match request.role")
+        if circuit_id != role["circuit_id"]:
+            raise TypeError("request.circuitId must match request.role")
+        if request_value("verifierId", "verifier_id") != role["verifier_id"]:
+            raise TypeError("request.verifierId must match request.role")
+        full_light_client_gate_hash = None
+        audit_statement_hash = None
+        for camel, snake in (
+            ("verifierHash", "verifier_hash"),
+            ("sourceVerifierMaterialHash", "source_verifier_material_hash"),
+            ("sourceAdapterDeploymentHash", "source_adapter_deployment_hash"),
+            ("fullLightClientGateHash", "full_light_client_gate_hash"),
+            ("shardStateProofPublicInputsHash", "shard_state_proof_public_inputs_hash"),
+            ("shardStateVerificationProofHash", "shard_state_verification_proof_hash"),
+            ("auditStatementHash", "audit_statement_hash"),
+        ):
+            normalized_hash = _normalize_nonzero_hex32(
+                request_value(camel, snake),
+                f"request.{camel}",
+            )
+            if camel == "fullLightClientGateHash":
+                full_light_client_gate_hash = normalized_hash
+            elif camel == "auditStatementHash":
+                audit_statement_hash = normalized_hash
+        expected_audit_statement_hash = _bytes_to_hex(
+            _prefixed_blake2b(
+                _SCCP_TON_FULL_LIGHT_CLIENT_AUDIT_STATEMENT_PREFIX_V1,
+                statement_bytes,
+            )
+        )
+        if audit_statement_hash != expected_audit_statement_hash:
+            raise TypeError("request.auditStatementHash must match request.statementBytes")
+        dsid_preimage = _write_u8(role["code"]) + _hex_to_bytes(
+            audit_statement_hash,
+            "request.auditStatementHash",
+            32,
+        )
+        expected_dsid = _bytes_to_hex(
+            _prefixed_blake2b(
+                _SCCP_TON_FULL_LIGHT_CLIENT_AUDIT_FASTPQ_DSID_PREFIX_V1,
+                dsid_preimage,
+            )[:16]
+        )
+        expected_tx_set_hash = audit_statement_hash
+        expected_transitions = (
+            {
+                "key": _bytes_to_hex(
+                    _ton_full_light_client_audit_fastpq_key(
+                        _SCCP_TON_FULL_LIGHT_CLIENT_AUDIT_FASTPQ_STATEMENT_KEY_V1,
+                        role,
+                    )
+                ),
+                "operation": "meta_set",
+                "old_value": "0x",
+                "new_value": _bytes_to_hex(statement_bytes),
+            },
+            {
+                "key": _bytes_to_hex(
+                    _ton_full_light_client_audit_fastpq_key(
+                        _SCCP_TON_FULL_LIGHT_CLIENT_AUDIT_FASTPQ_CONTEXT_KEY_V1,
+                        role,
+                    )
+                ),
+                "operation": "meta_set",
+                "old_value": "0x",
+                "new_value": _bytes_to_hex(verification_context_bytes),
+            },
+            {
+                "key": _bytes_to_hex(
+                    _ton_full_light_client_audit_fastpq_key(
+                        _SCCP_TON_FULL_LIGHT_CLIENT_AUDIT_FASTPQ_GATE_KEY_V1,
+                        role,
+                    )
+                ),
+                "operation": "meta_set",
+                "old_value": "0x",
+                "new_value": full_light_client_gate_hash,
+            },
+        )
+
+    public_input_columns = request_value("publicInputColumns", "public_input_columns")
+    if (
+        not isinstance(public_input_columns, Sequence)
+        or isinstance(public_input_columns, (str, bytes, bytearray))
+        or len(public_input_columns) == 0
+    ):
+        raise TypeError("request.publicInputColumns is required")
+    fastpq_public_inputs = _require_mapping(
+        request_value("fastpqPublicInputs", "fastpq_public_inputs"),
+        "request.fastpqPublicInputs",
+    )
+    for camel, snake in (
+        ("dsid", "dsid"),
+        ("slot", "slot"),
+        ("oldRoot", "old_root"),
+        ("newRoot", "new_root"),
+        ("permRoot", "perm_root"),
+        ("txSetHash", "tx_set_hash"),
+    ):
+        fastpq_value = nested_value(
+            fastpq_public_inputs,
+            f"request.fastpqPublicInputs.{camel}",
+            camel,
+            snake,
+        )
+        if camel == "dsid":
+            normalized_dsid = _bytes_to_hex(
+                _hex_to_bytes(fastpq_value, "request.fastpqPublicInputs.dsid", 16)
+            )
+            if normalized_dsid != expected_dsid:
+                raise TypeError("request.fastpqPublicInputs.dsid must match request.statementBytes")
+            continue
+        if camel == "txSetHash":
+            normalized_tx_set_hash = _normalize_nonzero_hex32(
+                fastpq_value,
+                "request.fastpqPublicInputs.txSetHash",
+            )
+            if normalized_tx_set_hash != expected_tx_set_hash:
+                raise TypeError("request.fastpqPublicInputs.txSetHash must match request.statementBytes")
+            continue
+        _normalize_non_empty_string(
+            fastpq_value,
+            f"request.fastpqPublicInputs.{camel}",
+        )
+    fastpq_transitions = request_value("fastpqTransitions", "fastpq_transitions")
+    if (
+        not isinstance(fastpq_transitions, Sequence)
+        or isinstance(fastpq_transitions, (str, bytes, bytearray))
+        or len(fastpq_transitions) == 0
+    ):
+        raise TypeError("request.fastpqTransitions is required")
+    actual_transitions = []
+    for index, transition in enumerate(fastpq_transitions):
+        transition_value = _require_mapping(
+            transition,
+            f"request.fastpqTransitions[{index}]",
+        )
+        actual_transitions.append(
+            {
+                "key": _normalize_non_empty_string(
+                    nested_value(transition_value, f"request.fastpqTransitions[{index}].key", "key"),
+                    f"request.fastpqTransitions[{index}].key",
+                ),
+                "operation": _normalize_non_empty_string(
+                    nested_value(transition_value, f"request.fastpqTransitions[{index}].operation", "operation"),
+                    f"request.fastpqTransitions[{index}].operation",
+                ),
+                "old_value": _normalize_non_empty_string(
+                    nested_value(
+                        transition_value,
+                        f"request.fastpqTransitions[{index}].oldValue",
+                        "oldValue",
+                        "old_value",
+                    ),
+                    f"request.fastpqTransitions[{index}].oldValue",
+                ),
+                "new_value": _normalize_non_empty_string(
+                    nested_value(
+                        transition_value,
+                        f"request.fastpqTransitions[{index}].newValue",
+                        "newValue",
+                        "new_value",
+                    ),
+                    f"request.fastpqTransitions[{index}].newValue",
+                ),
+            }
+        )
+    if sorted(actual_transitions, key=lambda item: item["key"]) != sorted(
+        expected_transitions,
+        key=lambda item: item["key"],
+    ):
+        raise TypeError(
+            "request.fastpqTransitions must match the canonical TON source-state request"
+        )
+    return circuit_id
+
+
+def wrap_ton_sccp_source_state_verification_proof(
+    proof_bytes: BytesLike,
+    request: Mapping[str, Any],
+) -> Mapping[str, Any]:
+    """Wrap local OpenVerify/FastPQ proof bytes as a checked TON proof capsule."""
+
+    circuit_id = _normalize_ton_source_state_proof_request_for_wrapping(request)
+    proof = _to_bytes(proof_bytes, "proofBytes")
+    _require_nonzero_proof_bytes(proof)
+    return _immutable_prover_envelope({
+        "version": 1,
+        "proof_family": SCCP_STARK_FRI_PROOF_FAMILY_V1,
+        "circuit_id": circuit_id,
+        "proof_bytes": proof,
+        "proof_base64": base64.b64encode(proof).decode("ascii"),
+    })
+
+
+class TonSccpSourceStateProver:
+    """Injectable TON source-state prover facade for UI and mobile proof tooling."""
+
+    def __init__(self, *, prove: Optional[SourceStateProofFn] = None) -> None:
+        self.prove_fn = prove
+
+    async def prove_request(
+        self,
+        request: Mapping[str, Any],
+        **options: Any,
+    ) -> Mapping[str, Any]:
+        """Generate a checked TON source-state proof capsule for one request."""
+
+        if self.prove_fn is None:
+            raise TonSccpSourceStateProverUnavailableError(
+                "TON SCCP source-state prover is not linked; provide a UI-safe "
+                "prove function before generating source-state proof capsules"
+            )
+        _normalize_ton_source_state_proof_request_for_wrapping(request)
+        callback_request = _clone_prover_callback_request(request)
+        result = await _maybe_await(self.prove_fn(callback_request, options))
+        return wrap_ton_sccp_source_state_verification_proof(
+            _source_state_proof_bytes_from_result(result, callback_request),
+            callback_request,
+        )
+
+    async def prove_shard_state(
+        self,
+        input_value: Any,
+        **options: Any,
+    ) -> Mapping[str, Any]:
+        """Build and prove the nested TON shard-state source-state request."""
+
+        return await self.prove_request(
+            build_ton_shard_state_proof_request(input_value),
+            **options,
+        )
+
+    async def prove_full_light_client_audit(
+        self,
+        input_value: Any,
+        **options: Any,
+    ) -> Mapping[str, Any]:
+        """Build and prove the three role-separated TON full-light audit requests."""
+
+        requests = build_ton_sccp_full_light_client_audit_proof_requests(input_value)
+        return _immutable_prover_envelope({
+            "masterchain_config": await self.prove_request(
+                requests["masterchain_config"],
+                **options,
+            ),
+            "validator_set_transition": await self.prove_request(
+                requests["validator_set_transition"],
+                **options,
+            ),
+            "shard_accounts_dictionary": await self.prove_request(
+                requests["shard_accounts_dictionary"],
+                **options,
+            ),
+        })
+
+
+def _ton_read_sized_uint(data: bytes, offset: int, size: int) -> tuple[int, int]:
+    if size < 1 or size > 8:
+        raise TypeError("TON size must be 1..8 bytes")
+    end = offset + size
+    if end > len(data):
+        raise TypeError("TON BoC is truncated")
+    return int.from_bytes(data[offset:end], "big"), end
+
+
+def _ton_crc32c(data: bytes) -> int:
+    crc = 0xFFFFFFFF
+    for byte in data:
+        crc ^= byte
+        for _ in range(8):
+            mask = -(crc & 1) & 0xFFFFFFFF
+            crc = ((crc >> 1) ^ (0x82F63B78 & mask)) & 0xFFFFFFFF
+    return (~crc) & 0xFFFFFFFF
+
+
+def _ton_cell_data_padding_is_valid(data_descriptor: int, data: bytes) -> bool:
+    return data_descriptor & 1 == 0 or (len(data) > 0 and data[-1] != 0)
+
+
+def _ton_cell_serialized_bit_len_is_byte_aligned(data_descriptor: int, data: bytes) -> bool:
+    return data_descriptor & 1 == 0 and data_descriptor // 2 == len(data)
+
+
+def _ton_cell_serialized_bit_len(data_descriptor: int, data: bytes) -> int:
+    if data_descriptor & 1 == 0:
+        byte_len = data_descriptor // 2
+        if byte_len != len(data):
+            raise TypeError("TON BoC cell data length is invalid")
+        return byte_len * 8
+    full_bytes = (data_descriptor + 1) // 2
+    floor_bytes = data_descriptor // 2
+    if full_bytes != len(data) or floor_bytes + 1 != full_bytes:
+        raise TypeError("TON BoC cell data length is invalid")
+    last = data[-1] if data else 0
+    if last == 0:
+        raise TypeError("TON BoC cell data padding is invalid")
+    trailing_zeros = 0
+    while trailing_zeros < 8 and ((last >> trailing_zeros) & 1) == 0:
+        trailing_zeros += 1
+    return floor_bytes * 8 + (7 - trailing_zeros)
+
+
+def _ton_hashmap_uint_len_bits(max_value: int) -> int:
+    return max_value.bit_length()
+
+
+def _ton_hashmap_key_is_canonical(key: bytes, key_bit_len: int) -> bool:
+    if key_bit_len < 0 or key_bit_len > 0xFFFF:
+        return False
+    expected_bytes = (key_bit_len + 7) // 8
+    if len(key) != expected_bytes:
+        return False
+    unused = expected_bytes * 8 - key_bit_len
+    return unused == 0 or (key[-1] & ((1 << unused) - 1)) == 0
+
+
+def _ton_hashmap_key_bit(key: bytes, key_bit_len: int, bit_index: int) -> bool:
+    if bit_index >= key_bit_len:
+        raise TypeError("TON HashmapE key bit is out of range")
+    return ((key[bit_index // 8] >> (7 - (bit_index % 8))) & 1) != 0
+
+
+class _TonBocBitReader:
+    def __init__(self, cell: Mapping[str, Any]) -> None:
+        self._cell = cell
+        self._bit_len = _ton_cell_serialized_bit_len(cell["data_descriptor"], cell["data"])
+        self._bit_offset = 0
+        self._ref_offset = 0
+
+    def read_bit(self) -> bool:
+        if self._bit_offset >= self._bit_len:
+            raise TypeError("TON HashmapE cell bits are truncated")
+        data = self._cell["data"]
+        bit = ((data[self._bit_offset // 8] >> (7 - (self._bit_offset % 8))) & 1) != 0
+        self._bit_offset += 1
+        return bit
+
+    def read_uint(self, bits: int) -> int:
+        value = 0
+        for _ in range(bits):
+            value = (value << 1) | (1 if self.read_bit() else 0)
+        return value
+
+    def read_bytes(self, byte_len: int) -> bytes:
+        return bytes(self.read_uint(8) for _ in range(byte_len))
+
+    def skip_bits(self, bits: int) -> None:
+        if bits < 0 or self._bit_offset + bits > self._bit_len:
+            raise TypeError("TON BoC cell bits are truncated")
+        self._bit_offset += bits
+
+    def read_ref(self) -> int:
+        refs = self._cell["refs"]
+        if self._ref_offset >= len(refs):
+            raise TypeError("TON HashmapE cell refs are truncated")
+        ref_index = refs[self._ref_offset]
+        self._ref_offset += 1
+        return ref_index
+
+    def remaining_bits(self) -> int:
+        return self._bit_len - self._bit_offset
+
+    def remaining_refs(self) -> int:
+        return len(self._cell["refs"]) - self._ref_offset
+
+    def is_exhausted(self) -> bool:
+        return self.remaining_bits() == 0 and self.remaining_refs() == 0
+
+
+def _ton_level_mask_value(mask: int) -> int:
+    return mask & 0x07
+
+
+def _ton_level_mask_level(mask: int) -> int:
+    value = _ton_level_mask_value(mask)
+    return 0 if value == 0 else value.bit_length()
+
+
+def _ton_level_mask_hash_index(mask: int) -> int:
+    value = _ton_level_mask_value(mask)
+    count = 0
+    while value:
+        count += value & 1
+        value >>= 1
+    return count
+
+
+def _ton_level_mask_apply(mask: int, level: int) -> int:
+    return 0 if level == 0 else _ton_level_mask_value(mask) & ((1 << level) - 1)
+
+
+def _ton_level_mask_is_significant(mask: int, level: int) -> bool:
+    return level == 0 or ((_ton_level_mask_value(mask) >> (level - 1)) & 1) != 0
+
+
+def _ton_child_hash_depth_for_level(computed: Mapping[str, Any], level: int) -> tuple[bytes, int]:
+    index = min(level, 3)
+    return computed["hashes"][index], computed["depths"][index]
+
+
+def _ton_boc_cell_type(cell: Mapping[str, Any]) -> str:
+    if not cell["exotic"]:
+        return "ordinary"
+    data = cell["data"]
+    if len(data) == 0:
+        raise TypeError("TON BoC exotic cell type is unsupported")
+    if data[0] == 1:
+        return "pruned_branch"
+    if data[0] == 3:
+        return "merkle_proof"
+    if data[0] == 4:
+        return "merkle_update"
+    raise TypeError("TON BoC exotic cell type is unsupported")
+
+
+def _ton_parse_pruned_branch(cell: Mapping[str, Any]) -> dict[str, Any]:
+    data = cell["data"]
+    if (
+        not _ton_cell_serialized_bit_len_is_byte_aligned(cell["data_descriptor"], data)
+        or len(cell["refs"]) != 0
+        or len(data) < 2
+        or data[0] != 1
+    ):
+        raise TypeError("TON BoC pruned branch cell is invalid")
+    if len(data) == 35:
+        return {
+            "mask": 1,
+            "hashes": [data[1:33]],
+            "depths": [int.from_bytes(data[33:35], "big")],
+        }
+    mask = _ton_level_mask_value(data[1])
+    level = _ton_level_mask_level(mask)
+    if level < 1 or level > 3 or len(data) != 2 + level * 34:
+        raise TypeError("TON BoC pruned branch cell is invalid")
+    hashes = [data[2 + index * 32 : 2 + (index + 1) * 32] for index in range(level)]
+    depths_start = 2 + level * 32
+    depths = [
+        int.from_bytes(data[depths_start + index * 2 : depths_start + (index + 1) * 2], "big")
+        for index in range(level)
+    ]
+    return {"mask": mask, "hashes": hashes, "depths": depths}
+
+
+def _parse_ton_boc_complete_ordinary(input_value: Any) -> tuple[list[int], list[dict[str, Any]]]:
+    boc = _to_bytes(input_value, "TON BoC")
+    if (
+        len(boc) < len(_SCCP_TON_BOC_MAGIC) + 2
+        or len(boc) > _SCCP_TON_MAX_BOC_BYTES
+        or not boc.startswith(_SCCP_TON_BOC_MAGIC)
+    ):
+        raise TypeError("TON BoC length or magic is invalid")
+    offset = len(_SCCP_TON_BOC_MAGIC)
+    flags_size = boc[offset]
+    offset += 1
+    has_index = (flags_size & 0x80) != 0
+    has_crc32c = (flags_size & 0x40) != 0
+    has_cache_bits = (flags_size & 0x20) != 0
+    flags = (flags_size >> 3) & 0x03
+    size_bytes = flags_size & 0x07
+    offset_bytes = boc[offset]
+    offset += 1
+    if (
+        has_cache_bits
+        or flags != 0
+        or size_bytes < 1
+        or size_bytes > 4
+        or offset_bytes < 1
+        or offset_bytes > 8
+    ):
+        raise TypeError("TON BoC header flags are unsupported")
+    cells_count, offset = _ton_read_sized_uint(boc, offset, size_bytes)
+    roots_count, offset = _ton_read_sized_uint(boc, offset, size_bytes)
+    absent_count, offset = _ton_read_sized_uint(boc, offset, size_bytes)
+    total_cells_size, offset = _ton_read_sized_uint(boc, offset, offset_bytes)
+    if (
+        cells_count == 0
+        or cells_count > _SCCP_TON_MAX_BOC_CELLS
+        or roots_count == 0
+        or roots_count > cells_count
+        or absent_count != 0
+        or roots_count + absent_count > cells_count
+    ):
+        raise TypeError("TON BoC counts are invalid")
+    roots = []
+    for _ in range(roots_count):
+        root, offset = _ton_read_sized_uint(boc, offset, size_bytes)
+        if root >= cells_count:
+            raise TypeError("TON BoC root index is invalid")
+        roots.append(root)
+    if has_index:
+        previous = 0
+        for index in range(cells_count):
+            cell_offset, offset = _ton_read_sized_uint(boc, offset, offset_bytes)
+            if cell_offset < previous or cell_offset > total_cells_size:
+                raise TypeError("TON BoC index is invalid")
+            if index + 1 == cells_count and cell_offset != total_cells_size:
+                raise TypeError("TON BoC index is invalid")
+            previous = cell_offset
+    cell_data_end = offset + total_cells_size
+    expected_end = cell_data_end + (4 if has_crc32c else 0)
+    if expected_end != len(boc):
+        raise TypeError("TON BoC cell data length is invalid")
+    if has_crc32c:
+        expected_crc = _ton_crc32c(boc[:cell_data_end]).to_bytes(4, "little")
+        if boc[cell_data_end:expected_end] != expected_crc:
+            raise TypeError("TON BoC CRC32C is invalid")
+    cell_data = boc[offset:cell_data_end]
+    cell_offset = 0
+    cells = []
+    for cell_index in range(cells_count):
+        if cell_offset + 2 > len(cell_data):
+            raise TypeError("TON BoC cell is truncated")
+        descriptor = cell_data[cell_offset]
+        data_descriptor = cell_data[cell_offset + 1]
+        cell_offset += 2
+        refs_count = descriptor & 0x07
+        exotic = (descriptor & 0x08) != 0
+        has_hashes = (descriptor & 0x10) != 0
+        level = (descriptor >> 5) & 0x03
+        data_bytes = (data_descriptor + 1) // 2
+        if (
+            refs_count > _SCCP_TON_MAX_REFS
+            or has_hashes
+            or data_bytes > _SCCP_TON_MAX_CELL_SERIALIZED_DATA_BYTES
+            or cell_offset + data_bytes > len(cell_data)
+        ):
+            raise TypeError("TON BoC cell descriptor is unsupported")
+        cell_payload = cell_data[cell_offset : cell_offset + data_bytes]
+        if not _ton_cell_data_padding_is_valid(data_descriptor, cell_payload):
+            raise TypeError("TON BoC cell data padding is invalid")
+        cell_offset += data_bytes
+        refs = []
+        for _ in range(refs_count):
+            ref_index, cell_offset = _ton_read_sized_uint(cell_data, cell_offset, size_bytes)
+            if ref_index >= cells_count or ref_index <= cell_index:
+                raise TypeError("TON BoC cell refs must be forward internal refs")
+            refs.append(ref_index)
+        cells.append(
+            {
+                "descriptor": descriptor & ~0x10,
+                "data_descriptor": data_descriptor,
+                "data": cell_payload,
+                "refs": refs,
+                "level": level,
+                "exotic": exotic,
+            }
+        )
+    if cell_offset != len(cell_data):
+        raise TypeError("TON BoC has trailing cell data")
+    return roots, cells
+
+
+def _ton_boc_child_for_hash_level(
+    cell_type: str, computed: Mapping[str, Any], level: int
+) -> tuple[bytes, int]:
+    return _ton_child_hash_depth_for_level(
+        computed, level + 1 if cell_type in ("merkle_proof", "merkle_update") else level
+    )
+
+
+def _ton_boc_cell_hashes(cells: Sequence[Mapping[str, Any]]) -> list[Mapping[str, Any]]:
+    computed: list[Mapping[str, Any]] = [
+        {"mask": 0, "hashes": [bytes(32) for _ in range(4)], "depths": [0 for _ in range(4)]}
+        for _ in cells
+    ]
+    for index in range(len(cells) - 1, -1, -1):
+        cell = cells[index]
+        refs = list(cell["refs"])
+        cell_type = _ton_boc_cell_type(cell)
+        pruned = _ton_parse_pruned_branch(cell) if cell_type == "pruned_branch" else None
+        if cell_type == "ordinary":
+            mask = 0
+            for ref_index in refs:
+                mask |= int(computed[ref_index]["mask"])
+        elif cell_type == "pruned_branch":
+            mask = int(pruned["mask"])
+        elif cell_type == "merkle_proof":
+            data = cell["data"]
+            if (
+                not _ton_cell_serialized_bit_len_is_byte_aligned(cell["data_descriptor"], data)
+                or len(data) != 35
+                or len(refs) != 1
+            ):
+                raise TypeError("TON BoC Merkle proof cell is invalid")
+            child_hash, child_depth = _ton_child_hash_depth_for_level(computed[refs[0]], 0)
+            proof_hash = data[1:33]
+            proof_depth = int.from_bytes(data[33:35], "big")
+            if proof_hash != child_hash or proof_depth != child_depth:
+                raise TypeError("TON BoC Merkle proof cell is invalid")
+            mask = _ton_level_mask_value(int(computed[refs[0]]["mask"]) >> 1)
+        elif cell_type == "merkle_update":
+            data = cell["data"]
+            if (
+                not _ton_cell_serialized_bit_len_is_byte_aligned(cell["data_descriptor"], data)
+                or len(data) != 69
+                or len(refs) != 2
+            ):
+                raise TypeError("TON BoC Merkle update cell is invalid")
+            for ref_pos, hash_offset, depth_offset in ((0, 1, 65), (1, 33, 67)):
+                child_hash, child_depth = _ton_child_hash_depth_for_level(
+                    computed[refs[ref_pos]], 0
+                )
+                proof_hash = data[hash_offset : hash_offset + 32]
+                proof_depth = int.from_bytes(data[depth_offset : depth_offset + 2], "big")
+                if proof_hash != child_hash or proof_depth != child_depth:
+                    raise TypeError("TON BoC Merkle update cell is invalid")
+            mask = _ton_level_mask_value(
+                (int(computed[refs[0]]["mask"]) | int(computed[refs[1]]["mask"])) >> 1
+            )
+        else:
+            raise TypeError("TON BoC exotic cell type is unsupported")
+
+        if int(cell["level"]) != mask:
+            raise TypeError("TON BoC cell level mask is invalid")
+
+        total_hash_count = _ton_level_mask_hash_index(mask) + 1
+        hash_count = 1 if cell_type == "pruned_branch" else total_hash_count
+        hash_offset = total_hash_count - hash_count
+        computed_hashes: list[bytes] = []
+        computed_depths: list[int] = []
+        hash_index = 0
+        for level_index in range(_ton_level_mask_level(mask) + 1):
+            if not _ton_level_mask_is_significant(mask, level_index):
+                continue
+            if hash_index < hash_offset:
+                hash_index += 1
+                continue
+            if hash_index == hash_offset:
+                if level_index != 0 and cell_type != "pruned_branch":
+                    raise TypeError("TON BoC cell hash level is invalid")
+                current_data = cell["data"]
+            else:
+                current_data = computed_hashes[hash_index - hash_offset - 1]
+
+            current_depth = 0
+            for ref_index in refs:
+                _, child_depth = _ton_boc_child_for_hash_level(
+                    cell_type, computed[ref_index], level_index
+                )
+                current_depth = max(current_depth, child_depth)
+            if refs:
+                current_depth += 1
+            if current_depth > 0xFFFF:
+                raise TypeError("TON BoC cell depth is invalid")
+
+            applied_mask = _ton_level_mask_apply(mask, level_index)
+            descriptor = len(refs) | (0 if cell_type == "ordinary" else 0x08) | (applied_mask << 5)
+            representation = bytearray([descriptor, cell["data_descriptor"]])
+            representation.extend(current_data)
+            for ref_index in refs:
+                _, child_depth = _ton_boc_child_for_hash_level(
+                    cell_type, computed[ref_index], level_index
+                )
+                representation.extend(child_depth.to_bytes(2, "big"))
+            for ref_index in refs:
+                child_hash, _ = _ton_boc_child_for_hash_level(
+                    cell_type, computed[ref_index], level_index
+                )
+                representation.extend(child_hash)
+            computed_hashes.append(hashlib.sha256(bytes(representation)).digest())
+            computed_depths.append(current_depth)
+            hash_index += 1
+
+        resolved_hashes = [bytes(32) for _ in range(4)]
+        resolved_depths = [0 for _ in range(4)]
+        for resolved_level in range(4):
+            resolved_hash_index = _ton_level_mask_hash_index(
+                _ton_level_mask_apply(mask, resolved_level)
+            )
+            if pruned is not None:
+                this_hash_index = _ton_level_mask_hash_index(mask)
+                if resolved_hash_index != this_hash_index:
+                    resolved_hashes[resolved_level] = pruned["hashes"][resolved_hash_index]
+                    resolved_depths[resolved_level] = pruned["depths"][resolved_hash_index]
+                else:
+                    resolved_hashes[resolved_level] = computed_hashes[0]
+                    resolved_depths[resolved_level] = computed_depths[0]
+            else:
+                resolved_hashes[resolved_level] = computed_hashes[resolved_hash_index]
+                resolved_depths[resolved_level] = computed_depths[resolved_hash_index]
+        computed[index] = {"mask": mask, "hashes": resolved_hashes, "depths": resolved_depths}
+    return computed
+
+
+def ton_boc_root_hashes(input_value: Any) -> list[str]:
+    """Return root representation hashes for a complete ordinary TON BoC."""
+
+    roots, cells = _parse_ton_boc_complete_ordinary(input_value)
+    hashes = _ton_boc_cell_hashes(cells)
+    return [_bytes_to_hex(hashes[root]["hashes"][3]) for root in roots]
+
+
+def ton_boc_single_root_hash(input_value: Any) -> str:
+    """Return the single root representation hash for a complete ordinary TON BoC."""
+
+    roots = ton_boc_root_hashes(input_value)
+    if len(roots) != 1:
+        raise TypeError("TON BoC must contain exactly one root")
+    return roots[0]
+
+
+_TON_SHARD_STATE_UNSPLIT_TAG = 0x9023AFE2
+_TON_MAINNET_GLOBAL_ID = -239
+_TON_MASTERCHAIN_WORKCHAIN_ID = -1
+_TON_MASTERCHAIN_SHARD = 0x8000_0000_0000_0000
+_TON_BASECHAIN_WORKCHAIN_ID = 0
+_TON_BASECHAIN_FULL_SHARD = 0x8000_0000_0000_0000
+
+
+def _ton_i32_from_u32(value: int) -> int:
+    return value - (1 << 32) if value >= (1 << 31) else value
+
+
+def _ton_boc_proof_root_and_child_index(
+    roots: Sequence[int],
+    cells: Sequence[Mapping[str, Any]],
+    hashes: Sequence[Mapping[str, Any]],
+) -> tuple[bytes, int]:
+    if len(roots) != 1:
+        raise TypeError("TON BoC must contain exactly one root")
+    root_index = roots[0]
+    try:
+        root = cells[root_index]
+        computed_root = hashes[root_index]
+    except IndexError as exc:
+        raise TypeError("TON BoC root index is invalid") from exc
+    root_type = _ton_boc_cell_type(root)
+    if root_type == "ordinary":
+        return computed_root["hashes"][3], root_index
+    if root_type == "merkle_proof":
+        refs = root["refs"]
+        data = root["data"]
+        if len(refs) != 1 or len(data) < 33:
+            raise TypeError("TON BoC Merkle proof cell is invalid")
+        return data[1:33], refs[0]
+    raise TypeError("TON shard-state proof root is pruned or unsupported")
+
+
+def ton_shard_state_proof_root_hash(input_value: Any) -> str:
+    """Return the committed ShardStateUnsplit root hash from a TON shard-state proof BoC."""
+
+    roots, cells = _parse_ton_boc_complete_ordinary(input_value)
+    hashes = _ton_boc_cell_hashes(cells)
+    root_hash, _ = _ton_boc_proof_root_and_child_index(roots, cells, hashes)
+    return _bytes_to_hex(root_hash)
+
+
+def ton_hashmap_e_proof_root_hash(input_value: Any) -> str:
+    """Return the committed root hash from a bounded TON `HashmapE` proof BoC."""
+
+    roots, cells = _parse_ton_boc_complete_ordinary(input_value)
+    hashes = _ton_boc_cell_hashes(cells)
+    root_hash, _ = _ton_boc_proof_root_and_child_index(roots, cells, hashes)
+    return _bytes_to_hex(root_hash)
+
+
+def _ton_shard_state_account_key_matches_shard_prefix(
+    key: bytes,
+    key_bit_len: int,
+    opening: Mapping[str, Any],
+) -> bool:
+    if key_bit_len != _SCCP_TON_SHARD_ACCOUNT_KEY_BITS:
+        return False
+    shard_pfx_bits = int(opening["shard_pfx_bits"])
+    shard_prefix_bits = opening["shard_prefix_bits"]
+    return all(
+        _ton_hashmap_key_bit(key, key_bit_len, bit_index)
+        == shard_prefix_bits[bit_index]
+        for bit_index in range(shard_pfx_bits)
+    )
+
+
+def _ton_shard_id_from_prefix_bits(
+    shard_pfx_bits: int, shard_prefix_bits: Sequence[bool]
+) -> int:
+    if not isinstance(shard_pfx_bits, int) or shard_pfx_bits < 0 or shard_pfx_bits > 60:
+        raise TypeError("TON ShardIdent prefix length is invalid")
+    shard_id = 0
+    for bit_index in range(shard_pfx_bits):
+        if shard_prefix_bits[bit_index]:
+            shard_id |= 1 << (63 - bit_index)
+    shard_id |= 1 << (63 - shard_pfx_bits)
+    return shard_id
+
+
+def _ton_shard_state_unsplit_accounts_opening_from_cell(
+    cells: Sequence[Mapping[str, Any]],
+    hashes: Sequence[Mapping[str, Any]],
+    cell_index: int,
+) -> Mapping[str, Any]:
+    try:
+        cell = cells[cell_index]
+    except IndexError as exc:
+        raise TypeError("TON ShardStateUnsplit cell index is invalid") from exc
+    if _ton_boc_cell_type(cell) != "ordinary":
+        raise TypeError("TON ShardStateUnsplit root must be ordinary")
+    reader = _TonBocBitReader(cell)
+    if reader.read_uint(32) != _TON_SHARD_STATE_UNSPLIT_TAG:
+        raise TypeError("TON ShardStateUnsplit tag is invalid")
+    global_id = _ton_i32_from_u32(reader.read_uint(32))
+    if reader.read_uint(2) != 0:
+        raise TypeError("TON ShardIdent tag is invalid")
+    shard_pfx_bits = reader.read_uint(6)
+    if shard_pfx_bits > 60:
+        raise TypeError("TON ShardIdent prefix length is invalid")
+    workchain_id = _ton_i32_from_u32(reader.read_uint(32))
+    shard_prefix_bits = [reader.read_bit() for _ in range(64)]
+    seq_no = reader.read_uint(32)
+    reader.read_uint(32)
+    gen_utime = reader.read_uint(32)
+    gen_lt = reader.read_uint(64)
+    min_ref_mc_seqno = reader.read_uint(32)
+    out_msg_queue_info_ref = reader.read_ref()
+    if out_msg_queue_info_ref >= len(hashes):
+        raise TypeError("TON ShardStateUnsplit out_msg_queue_info ref is invalid")
+    reader.read_bit()
+    accounts_ref = reader.read_ref()
+    if accounts_ref >= len(hashes):
+        raise TypeError("TON ShardStateUnsplit accounts ref is invalid")
+    trailing_fields_ref = reader.read_ref()
+    if trailing_fields_ref >= len(hashes):
+        raise TypeError("TON ShardStateUnsplit trailing fields ref is invalid")
+    if reader.read_bit():
+        if workchain_id == _TON_BASECHAIN_WORKCHAIN_ID:
+            raise TypeError("TON basechain ShardStateUnsplit custom must be absent")
+        custom_ref = reader.read_ref()
+        if custom_ref >= len(hashes):
+            raise TypeError("TON ShardStateUnsplit custom ref is invalid")
+    if not reader.is_exhausted():
+        raise TypeError("TON ShardStateUnsplit has trailing data")
+    return {
+        "accounts_root_hash": _bytes_to_hex(hashes[accounts_ref]["hashes"][3]),
+        "global_id": global_id,
+        "workchain_id": workchain_id,
+        "seq_no": seq_no,
+        "gen_utime": gen_utime,
+        "gen_lt": gen_lt,
+        "min_ref_mc_seqno": min_ref_mc_seqno,
+        "shard_pfx_bits": shard_pfx_bits,
+        "shard_prefix_bits": shard_prefix_bits,
+        "shard_id": _ton_shard_id_from_prefix_bits(shard_pfx_bits, shard_prefix_bits),
+    }
+
+
+def ton_shard_state_accounts_root_hash(input_value: Any) -> str:
+    """Return the `accounts:^ShardAccounts` root from a TON ShardStateUnsplit proof BoC."""
+
+    return _ton_shard_state_accounts_opening(input_value)["accounts_root_hash"]
+
+
+def _ton_shard_state_accounts_opening(input_value: Any) -> Mapping[str, Any]:
+    roots, cells = _parse_ton_boc_complete_ordinary(input_value)
+    hashes = _ton_boc_cell_hashes(cells)
+    _, child_index = _ton_boc_proof_root_and_child_index(roots, cells, hashes)
+    return _ton_shard_state_unsplit_accounts_opening_from_cell(cells, hashes, child_index)
+
+
+def _ton_hashmap_unwrap_merkle_proof_cell(
+    cells: Sequence[Mapping[str, Any]], cell_index: int
+) -> int | None:
+    try:
+        cell = cells[cell_index]
+    except IndexError as exc:
+        raise TypeError("TON HashmapE cell index is invalid") from exc
+    cell_type = _ton_boc_cell_type(cell)
+    if cell_type == "ordinary":
+        return cell_index
+    if cell_type == "merkle_proof":
+        refs = cell["refs"]
+        if len(refs) != 1:
+            raise TypeError("TON BoC Merkle proof cell is invalid")
+        return refs[0]
+    return None
+
+
+def _ton_hashmap_read_label(
+    reader: _TonBocBitReader,
+    key: bytes,
+    key_bit_len: int,
+    key_offset: int,
+    max_len: int,
+) -> int | None:
+    if not reader.read_bit():
+        label_len = 0
+        while reader.read_bit():
+            label_len += 1
+            if label_len > max_len:
+                return None
+        for offset in range(label_len):
+            if reader.read_bit() != _ton_hashmap_key_bit(key, key_bit_len, key_offset + offset):
+                return None
+        return label_len
+    if not reader.read_bit():
+        label_len = reader.read_uint(_ton_hashmap_uint_len_bits(max_len))
+        if label_len > max_len:
+            return None
+        for offset in range(label_len):
+            if reader.read_bit() != _ton_hashmap_key_bit(key, key_bit_len, key_offset + offset):
+                return None
+        return label_len
+    label_bit = reader.read_bit()
+    label_len = reader.read_uint(_ton_hashmap_uint_len_bits(max_len))
+    if label_len > max_len:
+        return None
+    for offset in range(label_len):
+        if label_bit != _ton_hashmap_key_bit(key, key_bit_len, key_offset + offset):
+            return None
+    return label_len
+
+
+def _ton_hashmap_read_label_bits(reader: _TonBocBitReader, max_len: int) -> list[bool] | None:
+    bits: list[bool] = []
+    if not reader.read_bit():
+        label_len = 0
+        while reader.read_bit():
+            label_len += 1
+            if label_len > max_len:
+                return None
+        bits.extend(reader.read_bit() for _ in range(label_len))
+        return bits
+    if not reader.read_bit():
+        label_len = reader.read_uint(_ton_hashmap_uint_len_bits(max_len))
+        if label_len > max_len:
+            return None
+        bits.extend(reader.read_bit() for _ in range(label_len))
+        return bits
+    label_bit = reader.read_bit()
+    label_len = reader.read_uint(_ton_hashmap_uint_len_bits(max_len))
+    if label_len > max_len:
+        return None
+    bits.extend(label_bit for _ in range(label_len))
+    return bits
+
+
+def _ton_hashmap_cell_ref_value_hash(
+    cells: Sequence[Mapping[str, Any]],
+    hashes: Sequence[Mapping[str, Any]],
+    root_index: int,
+    key: bytes,
+    key_bit_len: int,
+) -> str | None:
+    cell_index = _ton_hashmap_unwrap_merkle_proof_cell(cells, root_index)
+    if cell_index is None:
+        return None
+    key_offset = 0
+    remaining = key_bit_len
+    for _ in range(len(cells) + 1):
+        cell_index = _ton_hashmap_unwrap_merkle_proof_cell(cells, cell_index)
+        if cell_index is None:
+            return None
+        reader = _TonBocBitReader(cells[cell_index])
+        label_len = _ton_hashmap_read_label(reader, key, key_bit_len, key_offset, remaining)
+        if label_len is None:
+            return None
+        key_offset += label_len
+        remaining -= label_len
+        if remaining == 0:
+            if reader.remaining_bits() != 0 or reader.remaining_refs() != 1:
+                return None
+            value_ref = reader.read_ref()
+            if _ton_boc_cell_type(cells[value_ref]) == "pruned_branch":
+                return None
+            return _bytes_to_hex(hashes[value_ref]["hashes"][3])
+        if reader.remaining_bits() != 0 or reader.remaining_refs() != 2:
+            return None
+        next_bit = _ton_hashmap_key_bit(key, key_bit_len, key_offset)
+        key_offset += 1
+        remaining -= 1
+        left_ref = reader.read_ref()
+        right_ref = reader.read_ref()
+        cell_index = right_ref if next_bit else left_ref
+    return None
+
+
+def _ton_hashmap_cell_ref_value_index(
+    cells: Sequence[Mapping[str, Any]],
+    root_index: int,
+    key: bytes,
+    key_bit_len: int,
+) -> int | None:
+    cell_index = _ton_hashmap_unwrap_merkle_proof_cell(cells, root_index)
+    if cell_index is None:
+        return None
+    key_offset = 0
+    remaining = key_bit_len
+    for _ in range(len(cells) + 1):
+        cell_index = _ton_hashmap_unwrap_merkle_proof_cell(cells, cell_index)
+        if cell_index is None:
+            return None
+        reader = _TonBocBitReader(cells[cell_index])
+        label_len = _ton_hashmap_read_label(reader, key, key_bit_len, key_offset, remaining)
+        if label_len is None:
+            return None
+        key_offset += label_len
+        remaining -= label_len
+        if remaining == 0:
+            if reader.remaining_bits() != 0 or reader.remaining_refs() != 1:
+                return None
+            value_ref = reader.read_ref()
+            try:
+                value_cell = cells[value_ref]
+            except IndexError:
+                return None
+            if _ton_boc_cell_type(value_cell) == "pruned_branch":
+                return None
+            return value_ref
+        if reader.remaining_bits() != 0 or reader.remaining_refs() != 2:
+            return None
+        next_bit = _ton_hashmap_key_bit(key, key_bit_len, key_offset)
+        key_offset += 1
+        remaining -= 1
+        left_ref = reader.read_ref()
+        right_ref = reader.read_ref()
+        cell_index = right_ref if next_bit else left_ref
+    return None
+
+
+def _ton_bits_to_u16(bits: Sequence[bool]) -> int | None:
+    if len(bits) > 16:
+        return None
+    value = 0
+    for bit in bits:
+        value = (value << 1) | (1 if bit else 0)
+    return value
+
+
+def _ton_read_ed25519_sig_pubkey(reader: _TonBocBitReader) -> bytes | None:
+    if reader.read_uint(32) != _SCCP_TON_ED25519_PUBKEY_CONSTRUCTOR:
+        return None
+    return reader.read_bytes(32)
+
+
+def _ton_read_validator_descr(reader: _TonBocBitReader) -> tuple[bytes, int] | None:
+    constructor = reader.read_uint(8)
+    if constructor not in (_SCCP_TON_VALIDATOR_CONSTRUCTOR, _SCCP_TON_VALIDATOR_ADDR_CONSTRUCTOR):
+        return None
+    public_key = _ton_read_ed25519_sig_pubkey(reader)
+    if public_key is None:
+        return None
+    weight = reader.read_uint(64)
+    if weight == 0:
+        return None
+    if constructor == _SCCP_TON_VALIDATOR_ADDR_CONSTRUCTOR:
+        reader.skip_bits(256)
+    return public_key, weight
+
+
+def _ton_hashmap_collect_validator_descrs_from_reader(
+    cells: Sequence[Mapping[str, Any]],
+    reader: _TonBocBitReader,
+    remaining: int,
+    prefix: list[bool],
+    out: list[tuple[int, bytes, int]],
+    budget: list[int],
+) -> bool:
+    if budget[0] <= 0 or len(out) > _SCCP_TON_MAX_VALIDATORS:
+        return False
+    budget[0] -= 1
+
+    label_bits = _ton_hashmap_read_label_bits(reader, remaining)
+    if label_bits is None:
+        return False
+    prefix.extend(label_bits)
+    next_remaining = remaining - len(label_bits)
+
+    if next_remaining == 0:
+        key = _ton_bits_to_u16(prefix)
+        validator = _ton_read_validator_descr(reader)
+        if key is None or validator is None or not reader.is_exhausted():
+            del prefix[len(prefix) - len(label_bits) :]
+            return False
+        public_key, weight = validator
+        out.append((key, public_key, weight))
+        del prefix[len(prefix) - len(label_bits) :]
+        return True
+
+    if reader.remaining_bits() != 0 or reader.remaining_refs() != 2:
+        del prefix[len(prefix) - len(label_bits) :]
+        return False
+    left_ref = reader.read_ref()
+    right_ref = reader.read_ref()
+
+    prefix.append(False)
+    left_ok = _ton_hashmap_collect_validator_descrs_from_cell(
+        cells, left_ref, next_remaining - 1, prefix, out, budget
+    )
+    prefix.pop()
+    if not left_ok:
+        del prefix[len(prefix) - len(label_bits) :]
+        return False
+
+    prefix.append(True)
+    right_ok = _ton_hashmap_collect_validator_descrs_from_cell(
+        cells, right_ref, next_remaining - 1, prefix, out, budget
+    )
+    prefix.pop()
+    del prefix[len(prefix) - len(label_bits) :]
+    return right_ok
+
+
+def _ton_hashmap_collect_validator_descrs_from_cell(
+    cells: Sequence[Mapping[str, Any]],
+    cell_index: int,
+    remaining: int,
+    prefix: list[bool],
+    out: list[tuple[int, bytes, int]],
+    budget: list[int],
+) -> bool:
+    try:
+        cell = cells[cell_index]
+    except IndexError:
+        return False
+    if _ton_boc_cell_type(cell) != "ordinary":
+        return False
+    return _ton_hashmap_collect_validator_descrs_from_reader(
+        cells, _TonBocBitReader(cell), remaining, prefix, out, budget
+    )
+
+
+def _ton_validator_set_payload_from_cell(
+    cells: Sequence[Mapping[str, Any]], cell_index: int
+) -> bytes:
+    try:
+        cell = cells[cell_index]
+    except IndexError as exc:
+        raise TypeError("TON ValidatorSet cell index is invalid") from exc
+    if _ton_boc_cell_type(cell) != "ordinary":
+        raise TypeError("TON ValidatorSet cell must be ordinary")
+    reader = _TonBocBitReader(cell)
+    constructor = reader.read_uint(8)
+    if constructor not in (_SCCP_TON_VALIDATORS_CONSTRUCTOR, _SCCP_TON_VALIDATORS_EXT_CONSTRUCTOR):
+        raise TypeError("TON ValidatorSet constructor is unsupported")
+    utime_since = reader.read_uint(32)
+    utime_until = reader.read_uint(32)
+    if utime_until <= utime_since:
+        raise TypeError("TON ValidatorSet validity interval is invalid")
+    total = reader.read_uint(16)
+    main = reader.read_uint(16)
+    if total == 0 or total > _SCCP_TON_MAX_VALIDATORS or main == 0 or main > total:
+        raise TypeError("TON ValidatorSet counts are invalid")
+    declared_total_weight = (
+        reader.read_uint(64) if constructor == _SCCP_TON_VALIDATORS_EXT_CONSTRUCTOR else None
+    )
+
+    entries: list[tuple[int, bytes, int]] = []
+    budget = [len(cells) + 1]
+    if constructor == _SCCP_TON_VALIDATORS_EXT_CONSTRUCTOR:
+        has_root = reader.read_bit()
+        if not has_root or reader.remaining_bits() != 0 or reader.remaining_refs() != 1:
+            raise TypeError("TON ValidatorSet dictionary root is invalid")
+        ok = _ton_hashmap_collect_validator_descrs_from_cell(
+            cells,
+            reader.read_ref(),
+            _SCCP_TON_VALIDATOR_SET_KEY_BITS,
+            [],
+            entries,
+            budget,
+        )
+    else:
+        ok = _ton_hashmap_collect_validator_descrs_from_reader(
+            cells,
+            reader,
+            _SCCP_TON_VALIDATOR_SET_KEY_BITS,
+            [],
+            entries,
+            budget,
+        )
+    if not ok:
+        raise TypeError("TON ValidatorSet dictionary is invalid")
+    if len(entries) != total or len(entries) > _SCCP_TON_MAX_VALIDATORS:
+        raise TypeError("TON ValidatorSet validator count is invalid")
+    entries.sort(key=lambda entry: entry[0])
+    for previous, current in zip(entries, entries[1:]):
+        if previous[0] >= current[0]:
+            raise TypeError("TON ValidatorSet dictionary keys must be unique and ordered")
+    total_weight = sum(weight for _, _, weight in entries)
+    if declared_total_weight is not None and (
+        declared_total_weight == 0 or declared_total_weight != total_weight
+    ):
+        raise TypeError("TON ValidatorSet total weight is invalid")
+    return canonical_ton_validator_set_payload_bytes(
+        {
+            "validator_public_keys": [public_key for _, public_key, _ in entries],
+            "validator_weights": [weight for _, _, weight in entries],
+        }
+    )
+
+
+def _ton_skip_var_uint(reader: _TonBocBitReader, length_bits: int) -> None:
+    reader.skip_bits(reader.read_uint(length_bits) * 8)
+
+
+def _ton_skip_currency_collection(reader: _TonBocBitReader) -> None:
+    _ton_skip_var_uint(reader, 4)
+    if reader.read_bit():
+        reader.read_ref()
+
+
+def _ton_skip_depth_balance_info(reader: _TonBocBitReader) -> None:
+    split_depth = reader.read_uint(5)
+    if split_depth > 30:
+        raise TypeError("TON DepthBalanceInfo split depth is invalid")
+    _ton_skip_currency_collection(reader)
+
+
+def _ton_read_shard_account_last_transaction(
+    hashes: Sequence[Mapping[str, Any]],
+    reader: _TonBocBitReader,
+) -> Dict[str, Any]:
+    _ton_skip_depth_balance_info(reader)
+    account_ref = reader.read_ref()
+    if account_ref >= len(hashes):
+        raise TypeError("TON ShardAccount account ref is invalid")
+    last_transaction_hash = reader.read_bytes(32)
+    last_transaction_lt = reader.read_uint(64)
+    if last_transaction_lt == 0:
+        raise TypeError("TON ShardAccount last transaction lt must be non-zero")
+    if not reader.is_exhausted():
+        raise TypeError("TON ShardAccount has trailing data")
+    return {"hash": _bytes_to_hex(last_transaction_hash), "lt": last_transaction_lt}
+
+
+def _ton_hashmap_shard_accounts_last_transaction(
+    cells: Sequence[Mapping[str, Any]],
+    hashes: Sequence[Mapping[str, Any]],
+    root_index: int,
+    key: bytes,
+    key_bit_len: int,
+) -> Dict[str, Any] | None:
+    cell_index = _ton_hashmap_unwrap_merkle_proof_cell(cells, root_index)
+    if cell_index is None:
+        return None
+    key_offset = 0
+    remaining = key_bit_len
+    for _ in range(len(cells) + 1):
+        cell_index = _ton_hashmap_unwrap_merkle_proof_cell(cells, cell_index)
+        if cell_index is None:
+            return None
+        reader = _TonBocBitReader(cells[cell_index])
+        label_len = _ton_hashmap_read_label(reader, key, key_bit_len, key_offset, remaining)
+        if label_len is None:
+            return None
+        key_offset += label_len
+        remaining -= label_len
+        if remaining == 0:
+            return _ton_read_shard_account_last_transaction(hashes, reader)
+        next_bit = _ton_hashmap_key_bit(key, key_bit_len, key_offset)
+        key_offset += 1
+        remaining -= 1
+        left_ref = reader.read_ref()
+        right_ref = reader.read_ref()
+        _ton_skip_depth_balance_info(reader)
+        if not reader.is_exhausted():
+            return None
+        cell_index = right_ref if next_bit else left_ref
+    return None
+
+
+def ton_hashmap_e_cell_ref_value_hash(
+    input_value: Any,
+    key: Any,
+    key_bit_len: int,
+) -> str | None:
+    """Return a TON `HashmapE n ^Cell` value-cell hash from a bounded proof BoC."""
+
+    key_bytes = _to_bytes(key, "TON HashmapE key")
+    if not isinstance(key_bit_len, int) or not _ton_hashmap_key_is_canonical(
+        key_bytes, key_bit_len
+    ):
+        raise TypeError("TON HashmapE key length is invalid")
+    roots, cells = _parse_ton_boc_complete_ordinary(input_value)
+    hashes = _ton_boc_cell_hashes(cells)
+    if len(roots) != 1:
+        raise TypeError("TON BoC must contain exactly one root")
+    root_index = _ton_hashmap_unwrap_merkle_proof_cell(cells, roots[0])
+    if root_index is None:
+        raise TypeError("TON HashmapE root is pruned or unsupported")
+    root = cells[root_index]
+    if _ton_boc_cell_type(root) != "ordinary":
+        raise TypeError("TON HashmapE root must be ordinary")
+    reader = _TonBocBitReader(root)
+    if not reader.read_bit():
+        if not reader.is_exhausted():
+            raise TypeError("TON HashmapE empty root is invalid")
+        return None
+    if reader.remaining_bits() != 0 or reader.remaining_refs() != 1:
+        raise TypeError("TON HashmapE root is invalid")
+    return _ton_hashmap_cell_ref_value_hash(cells, hashes, reader.read_ref(), key_bytes, key_bit_len)
+
+
+def _ton_current_validator_set_config_key() -> bytes:
+    return int(SCCP_TON_CURRENT_VALIDATOR_SET_CONFIG_PARAM).to_bytes(4, "big")
+
+
+def ton_config_validator_set_payload_from_proof_boc(input_value: Any) -> bytes | None:
+    """Decode config-34 `ValidatorSet` from a TON config dictionary proof BoC."""
+
+    roots, cells = _parse_ton_boc_complete_ordinary(input_value)
+    _ton_boc_cell_hashes(cells)
+    if len(roots) != 1:
+        raise TypeError("TON BoC must contain exactly one root")
+    root_index = _ton_hashmap_unwrap_merkle_proof_cell(cells, roots[0])
+    if root_index is None:
+        raise TypeError("TON config dictionary root is pruned or unsupported")
+    root = cells[root_index]
+    if _ton_boc_cell_type(root) != "ordinary":
+        raise TypeError("TON config dictionary root must be ordinary")
+    reader = _TonBocBitReader(root)
+    if not reader.read_bit():
+        if not reader.is_exhausted():
+            raise TypeError("TON config dictionary empty root is invalid")
+        return None
+    if reader.remaining_bits() != 0 or reader.remaining_refs() != 1:
+        raise TypeError("TON config dictionary root is invalid")
+    value_ref = _ton_hashmap_cell_ref_value_index(
+        cells,
+        reader.read_ref(),
+        _ton_current_validator_set_config_key(),
+        SCCP_TON_CONFIG_PARAM_KEY_BITS,
+    )
+    if value_ref is None:
+        return None
+    return _ton_validator_set_payload_from_cell(cells, value_ref)
+
+
+def ton_config_validator_set_payload_hash_from_proof_boc(input_value: Any) -> str | None:
+    """Decode and hash config-34 `ValidatorSet` from a TON config dictionary proof BoC."""
+
+    payload = ton_config_validator_set_payload_from_proof_boc(input_value)
+    return None if payload is None else ton_validator_set_payload_hash(payload)
+
+
+def ton_shard_accounts_last_transaction(
+    input_value: Any,
+    key: Any,
+    key_bit_len: int,
+) -> Dict[str, Any] | None:
+    """Return selected ShardAccount last transaction hash and logical time from a TON proof BoC."""
+
+    key_bytes = _to_bytes(key, "TON ShardAccounts key")
+    if not isinstance(key_bit_len, int) or key_bit_len != _SCCP_TON_SHARD_ACCOUNT_KEY_BITS:
+        raise TypeError("TON ShardAccounts key bit length must be 256")
+    if not isinstance(key_bit_len, int) or not _ton_hashmap_key_is_canonical(
+        key_bytes, key_bit_len
+    ):
+        raise TypeError("TON ShardAccounts key length is invalid")
+    roots, cells = _parse_ton_boc_complete_ordinary(input_value)
+    hashes = _ton_boc_cell_hashes(cells)
+    if len(roots) != 1:
+        raise TypeError("TON BoC must contain exactly one root")
+    root_index = _ton_hashmap_unwrap_merkle_proof_cell(cells, roots[0])
+    if root_index is None:
+        raise TypeError("TON ShardAccounts root is pruned or unsupported")
+    root = cells[root_index]
+    if _ton_boc_cell_type(root) != "ordinary":
+        raise TypeError("TON ShardAccounts root must be ordinary")
+    reader = _TonBocBitReader(root)
+    if not reader.read_bit():
+        if not reader.is_exhausted():
+            raise TypeError("TON ShardAccounts empty root is invalid")
+        return None
+    if reader.remaining_bits() != 0 or reader.remaining_refs() != 1:
+        raise TypeError("TON ShardAccounts root is invalid")
+    return _ton_hashmap_shard_accounts_last_transaction(
+        cells, hashes, reader.read_ref(), key_bytes, key_bit_len
+    )
+
+
+def ton_shard_accounts_last_transaction_hash(
+    input_value: Any,
+    key: Any,
+    key_bit_len: int,
+) -> str | None:
+    """Return the selected ShardAccount last transaction hash from a bounded TON proof BoC."""
+
+    transaction = ton_shard_accounts_last_transaction(input_value, key, key_bit_len)
+    return None if transaction is None else str(transaction["hash"])
+
+
+def _normalize_ton_validator_set_parts(input_value: Any) -> Dict[str, Sequence[Any]]:
+    value = _require_mapping(input_value, "TON validator set input")
+    _reject_ton_validator_set_part_aliases(value)
+    public_keys = _mapping_value(value, "validatorPublicKeys", "validator_public_keys")
+    weights = _mapping_value(value, "validatorWeights", "validator_weights")
+    if (
+        not isinstance(public_keys, Sequence)
+        or isinstance(public_keys, (str, bytes, bytearray))
+        or not isinstance(weights, Sequence)
+        or isinstance(weights, (str, bytes, bytearray))
+        or len(public_keys) != len(weights)
+    ):
+        raise TypeError("TON validator public keys and weights must be same-length arrays")
+    if len(public_keys) == 0:
+        raise TypeError("TON validator set must not be empty")
+    if len(public_keys) > _SCCP_TON_MAX_VALIDATORS:
+        raise ValueError(
+            f"TON validator set must contain 1..{_SCCP_TON_MAX_VALIDATORS} validators"
+        )
+    normalized_keys = []
+    seen_keys = set()
+    for index, public_key in enumerate(public_keys):
+        raw = _to_bytes(public_key, f"validatorPublicKeys[{index}]")
+        if len(raw) != 32:
+            raise TypeError(f"validatorPublicKeys[{index}] must be 32 bytes")
+        if not any(raw):
+            raise ValueError(f"validatorPublicKeys[{index}] must not be zero")
+        if raw in seen_keys:
+            raise ValueError("TON validator public keys must be unique")
+        seen_keys.add(raw)
+        normalized_keys.append(raw)
+    normalized_weights = []
+    for index, weight in enumerate(weights):
+        numeric = _normalize_u64(weight, f"validatorWeights[{index}]")
+        if numeric == 0:
+            raise ValueError(f"validatorWeights[{index}] must not be zero")
+        normalized_weights.append(numeric)
+    return {"validator_public_keys": normalized_keys, "validator_weights": normalized_weights}
+
+
+def canonical_ton_validator_set_bytes(input_value: Any) -> bytes:
+    """Return canonical TON validator-set bytes used by source trust anchors."""
+
+    parts = _normalize_ton_validator_set_parts(input_value)
+    out = bytearray()
+    out.extend(_write_u8(1))
+    out.extend(_write_u32_le(len(parts["validator_public_keys"])))
+    for public_key, weight in zip(
+        parts["validator_public_keys"], parts["validator_weights"]
+    ):
+        out.extend(public_key)
+        out.extend(_write_u64_le(weight))
+    return bytes(out)
+
+
+def canonical_ton_validator_set_payload_bytes(input_value: Any) -> bytes:
+    """Return the canonical TON next-validator-set payload bytes."""
+
+    return canonical_ton_validator_set_bytes(input_value)
+
+
+def _decode_ton_validator_set_payload(payload: bytes) -> None:
+    if len(payload) < 5 or payload[0] != 1:
+        raise ValueError("validatorSetPayload must use version 1")
+    count = int.from_bytes(payload[1:5], "little")
+    if count == 0 or count > _SCCP_TON_MAX_VALIDATORS or len(payload) != 5 + count * 40:
+        raise ValueError("validatorSetPayload has invalid validator count or length")
+    seen = set()
+    offset = 5
+    for index in range(count):
+        public_key = payload[offset : offset + 32]
+        offset += 32
+        if not any(public_key):
+            raise ValueError(f"validatorPublicKeys[{index}] must not be zero")
+        if public_key in seen:
+            raise ValueError("TON validator public keys must be unique")
+        seen.add(public_key)
+        weight = int.from_bytes(payload[offset : offset + 8], "little")
+        offset += 8
+        if weight == 0:
+            raise ValueError(f"validatorWeights[{index}] must not be zero")
+
+
+def ton_validator_set_hash_from_payload(input_value: Any) -> str:
+    """Hash a canonical TON validator-set payload with the validator-set prefix."""
+
+    payload = _to_bytes(input_value, "validatorSetPayload")
+    _decode_ton_validator_set_payload(payload)
+    return _bytes_to_hex(_prefixed_blake2b(_SCCP_TON_VALIDATOR_SET_PREFIX_V1, payload))
+
+
+def ton_validator_set_payload_hash(input_value: Any) -> str:
+    """Hash a raw TON next-validator-set payload with the payload prefix."""
+
+    payload = _to_bytes(input_value, "validatorSetPayload")
+    _decode_ton_validator_set_payload(payload)
+    return _bytes_to_hex(_prefixed_blake2b(_SCCP_TON_VALIDATOR_SET_PAYLOAD_PREFIX_V1, payload))
+
+
+def ton_validator_set_hash(input_value: Any) -> str:
+    """Hash a canonical TON validator set with the SCCP validator-set prefix."""
+
+    return ton_validator_set_hash_from_payload(canonical_ton_validator_set_bytes(input_value))
+
+
+def _reject_ton_transcript_aliases(value: Mapping[str, Any], label: str, *keys: str) -> None:
+    _mapping_optional_value_without_aliases(value, label, *keys)
+
+
+def _reject_ton_validator_set_part_aliases(value: Mapping[str, Any]) -> None:
+    _reject_ton_transcript_aliases(
+        value,
+        "validatorPublicKeys",
+        "validatorPublicKeys",
+        "validator_public_keys",
+    )
+    _reject_ton_transcript_aliases(
+        value,
+        "validatorWeights",
+        "validatorWeights",
+        "validator_weights",
+    )
+
+
+def _reject_ton_masterchain_block_coordinate_aliases(value: Mapping[str, Any]) -> None:
+    _reject_ton_transcript_aliases(value, "sourceDomain", "sourceDomain", "source_domain")
+    _reject_ton_transcript_aliases(value, "masterchainSeqno", "masterchainSeqno", "masterchain_seqno")
+    _reject_ton_transcript_aliases(
+        value,
+        "masterchainWorkchainId",
+        "masterchainWorkchainId",
+        "masterchain_workchain_id",
+    )
+    _reject_ton_transcript_aliases(value, "masterchainShard", "masterchainShard", "masterchain_shard")
+    _reject_ton_transcript_aliases(value, "masterchainBlockHash", "masterchainBlockHash", "masterchain_block_hash")
+    _reject_ton_transcript_aliases(value, "masterchainFileHash", "masterchainFileHash", "masterchain_file_hash")
+
+
+def _reject_ton_shard_block_coordinate_aliases(value: Mapping[str, Any]) -> None:
+    _reject_ton_transcript_aliases(value, "shardWorkchainId", "shardWorkchainId", "shard_workchain_id")
+    _reject_ton_transcript_aliases(value, "shardShard", "shardShard", "shard_shard")
+    _reject_ton_transcript_aliases(value, "shardSeqno", "shardSeqno", "shard_seqno")
+    _reject_ton_transcript_aliases(value, "shardBlockHash", "shardBlockHash", "shard_block_hash")
+    _reject_ton_transcript_aliases(value, "shardFileHash", "shardFileHash", "shard_file_hash")
+    _reject_ton_transcript_aliases(value, "shardStateRoot", "shardStateRoot", "shard_state_root")
+
+
+def _reject_ton_transition_payload_aliases(value: Mapping[str, Any]) -> None:
+    _reject_ton_transcript_aliases(
+        value,
+        "nextValidatorSetPayloadHash",
+        "nextValidatorSetPayloadHash",
+        "next_validator_set_payload_hash",
+    )
+    _reject_ton_transcript_aliases(
+        value,
+        "nextValidatorSetPayload",
+        "nextValidatorSetPayload",
+        "next_validator_set_payload",
+    )
+
+
+def canonical_ton_masterchain_config_leaf_bytes(input_value: Any) -> bytes:
+    """Return canonical TON masterchain config leaf bytes."""
+
+    value = _require_mapping(input_value, "TON masterchain config leaf input")
+    _reject_ton_transcript_aliases(value, "sourceDomain", "sourceDomain", "source_domain")
+    _reject_ton_transcript_aliases(value, "masterchainSeqno", "masterchainSeqno", "masterchain_seqno")
+    _reject_ton_transcript_aliases(value, "masterchainBlockHash", "masterchainBlockHash", "masterchain_block_hash")
+    _reject_ton_transcript_aliases(value, "shardStateRoot", "shardStateRoot", "shard_state_root")
+    _reject_ton_transcript_aliases(value, "validatorSetHash", "validatorSetHash", "validator_set_hash")
+    _reject_ton_transcript_aliases(
+        value,
+        "validatorSetPayloadHash",
+        "validatorSetPayloadHash",
+        "validator_set_payload_hash",
+    )
+    out = bytearray()
+    out.extend(
+        _write_u8(
+            _normalize_optional_v1_version(
+                value,
+                "TON masterchain config leaf version",
+                "version",
+                error_cls=TypeError,
+            )
+        )
+    )
+    out.extend(
+        _write_u32_le(
+            _normalize_u32(
+                _mapping_value(value, "sourceDomain", "source_domain"),
+                "sourceDomain",
+            )
+        )
+    )
+    out.extend(
+        _write_u64_le(
+            _normalize_u64(
+                _mapping_value(value, "masterchainSeqno", "masterchain_seqno"),
+                "masterchainSeqno",
+            )
+        )
+    )
+    out.extend(
+        _hex_to_bytes(
+            _mapping_value(value, "masterchainBlockHash", "masterchain_block_hash"),
+            "masterchainBlockHash",
+            32,
+        )
+    )
+    out.extend(
+        _hex_to_bytes(
+            _mapping_value(value, "shardStateRoot", "shard_state_root"),
+            "shardStateRoot",
+            32,
+        )
+    )
+    out.extend(
+        _hex_to_bytes(
+            _mapping_value(value, "validatorSetHash", "validator_set_hash"),
+            "validatorSetHash",
+            32,
+        )
+    )
+    out.extend(
+        _hex_to_bytes(
+            _mapping_value(value, "validatorSetPayloadHash", "validator_set_payload_hash"),
+            "validatorSetPayloadHash",
+            32,
+        )
+    )
+    return bytes(out)
+
+
+def ton_masterchain_config_leaf_hash(input_value: Any) -> str:
+    """Hash a TON masterchain config leaf transcript."""
+
+    return _bytes_to_hex(
+        _prefixed_blake2b(
+            _SCCP_TON_MASTERCHAIN_CONFIG_LEAF_PREFIX_V1,
+            canonical_ton_masterchain_config_leaf_bytes(input_value),
+        )
+    )
+
+
+def canonical_ton_masterchain_config_proof_bytes(input_value: Any) -> bytes:
+    """Return canonical TON masterchain config proof bytes."""
+
+    value = _require_mapping(input_value, "TON masterchain config proof input")
+    _reject_ton_transcript_aliases(value, "sourceDomain", "sourceDomain", "source_domain")
+    _reject_ton_transcript_aliases(value, "masterchainSeqno", "masterchainSeqno", "masterchain_seqno")
+    _reject_ton_transcript_aliases(value, "configInclusionBranch", "configInclusionBranch", "config_inclusion_branch")
+    _reject_ton_transcript_aliases(value, "masterchainBlockHash", "masterchainBlockHash", "masterchain_block_hash")
+    _reject_ton_transcript_aliases(value, "shardStateRoot", "shardStateRoot", "shard_state_root")
+    _reject_ton_transcript_aliases(value, "configRoot", "configRoot", "config_root")
+    _reject_ton_transcript_aliases(value, "configValueHash", "configValueHash", "config_value_hash")
+    _reject_ton_transcript_aliases(value, "configDictionaryProofBoc", "configDictionaryProofBoc", "config_dictionary_proof_boc")
+    _reject_ton_transcript_aliases(
+        value,
+        "validatorSetPayloadHash",
+        "validatorSetPayloadHash",
+        "validator_set_payload_hash",
+    )
+    _reject_ton_transcript_aliases(value, "validatorSetHash", "validatorSetHash", "validator_set_hash")
+    _reject_ton_transcript_aliases(value, "configLeafHash", "configLeafHash", "config_leaf_hash")
+    _reject_ton_transcript_aliases(value, "configLeafIndex", "configLeafIndex", "config_leaf_index")
+    version = _normalize_optional_v1_version(
+        value,
+        "TON masterchain config proof version",
+        "version",
+        error_cls=TypeError,
+    )
+    source_domain = _normalize_u32(
+        _mapping_value(value, "sourceDomain", "source_domain"),
+        "sourceDomain",
+    )
+    if source_domain != SCCP_DOMAIN_TON:
+        raise TypeError("sourceDomain must be TON")
+    masterchain_seqno = _normalize_u64(
+        _mapping_value(value, "masterchainSeqno", "masterchain_seqno"),
+        "masterchainSeqno",
+    )
+    if masterchain_seqno == 0:
+        raise TypeError("masterchainSeqno must be non-zero")
+    config_inclusion_branch = _normalize_inclusion_branch(
+        _mapping_value(value, "configInclusionBranch", "config_inclusion_branch"),
+        "configInclusionBranch",
+    )
+    if len(config_inclusion_branch) != 0:
+        raise TypeError("configInclusionBranch must be empty when configDictionaryProofBoc is used")
+    masterchain_block_hash = _nonzero_hex32_to_bytes(
+        _mapping_value(value, "masterchainBlockHash", "masterchain_block_hash"),
+        "masterchainBlockHash",
+    )
+    shard_state_root = _nonzero_hex32_to_bytes(
+        _mapping_value(value, "shardStateRoot", "shard_state_root"),
+        "shardStateRoot",
+    )
+    config_root = _nonzero_hex32_to_bytes(
+        _mapping_value(value, "configRoot", "config_root"),
+        "configRoot",
+    )
+    config_value_hash = _hex_to_bytes(
+        _mapping_value(value, "configValueHash", "config_value_hash"),
+        "configValueHash",
+        32,
+    )
+    if not any(config_value_hash):
+        raise TypeError("configValueHash must be non-zero")
+    config_dictionary_proof_boc = _to_bytes(
+        _mapping_value(value, "configDictionaryProofBoc", "config_dictionary_proof_boc"),
+        "configDictionaryProofBoc",
+    )
+    if not config_dictionary_proof_boc:
+        raise TypeError("configDictionaryProofBoc must be non-empty")
+    if ton_hashmap_e_proof_root_hash(config_dictionary_proof_boc) != _bytes_to_hex(config_root):
+        raise TypeError("configDictionaryProofBoc root does not match configRoot")
+    if (
+        ton_hashmap_e_cell_ref_value_hash(
+            config_dictionary_proof_boc,
+            _ton_current_validator_set_config_key(),
+            SCCP_TON_CONFIG_PARAM_KEY_BITS,
+        )
+        != _bytes_to_hex(config_value_hash)
+    ):
+        raise TypeError("configDictionaryProofBoc value does not match configValueHash")
+    validator_set_payload_hash = _hex_to_bytes(
+        _mapping_value(value, "validatorSetPayloadHash", "validator_set_payload_hash"),
+        "validatorSetPayloadHash",
+        32,
+    )
+    if not any(validator_set_payload_hash):
+        raise TypeError("validatorSetPayloadHash must be non-zero")
+    validator_set_payload = ton_config_validator_set_payload_from_proof_boc(
+        config_dictionary_proof_boc
+    )
+    if validator_set_payload is None:
+        raise TypeError("configDictionaryProofBoc must open config param 34")
+    if ton_validator_set_payload_hash(validator_set_payload) != _bytes_to_hex(
+        validator_set_payload_hash
+    ):
+        raise TypeError("configDictionaryProofBoc ValidatorSet does not match validatorSetPayloadHash")
+    validator_set_hash = _nonzero_hex32_to_bytes(
+        _mapping_value(value, "validatorSetHash", "validator_set_hash"),
+        "validatorSetHash",
+    )
+    if ton_validator_set_hash_from_payload(validator_set_payload) != _bytes_to_hex(
+        validator_set_hash
+    ):
+        raise TypeError("validatorSetHash must match configDictionaryProofBoc ValidatorSet")
+    config_leaf_hash = _nonzero_hex32_to_bytes(
+        _mapping_value(value, "configLeafHash", "config_leaf_hash"),
+        "configLeafHash",
+    )
+    expected_config_leaf_hash = _hex_to_bytes(
+        ton_masterchain_config_leaf_hash(
+            {
+                "sourceDomain": source_domain,
+                "masterchainSeqno": masterchain_seqno,
+                "masterchainBlockHash": _bytes_to_hex(masterchain_block_hash),
+                "shardStateRoot": _bytes_to_hex(shard_state_root),
+                "validatorSetHash": _bytes_to_hex(validator_set_hash),
+                "validatorSetPayloadHash": _bytes_to_hex(validator_set_payload_hash),
+            }
+        ),
+        "configLeafHash",
+        32,
+    )
+    if config_leaf_hash != expected_config_leaf_hash:
+        raise TypeError("configLeafHash must match TON config proof fields")
+    out = bytearray()
+    out.extend(_write_u8(version))
+    out.extend(_write_u32_le(source_domain))
+    out.extend(_write_u64_le(masterchain_seqno))
+    out.extend(masterchain_block_hash)
+    out.extend(shard_state_root)
+    out.extend(config_root)
+    out.extend(validator_set_hash)
+    out.extend(validator_set_payload_hash)
+    out.extend(config_leaf_hash)
+    config_leaf_index = _normalize_u64(
+        _mapping_value(value, "configLeafIndex", "config_leaf_index"),
+        "configLeafIndex",
+    )
+    if config_leaf_index != SCCP_TON_CURRENT_VALIDATOR_SET_CONFIG_PARAM:
+        raise ValueError("configLeafIndex must be TON current validator set config param 34")
+    out.extend(_write_u16_le(SCCP_TON_CONFIG_PARAM_KEY_BITS))
+    out.extend(_write_u64_le(config_leaf_index))
+    out.extend(config_value_hash)
+    out.extend(_write_bytes(config_dictionary_proof_boc))
+    out.extend(_write_u32_le(len(config_inclusion_branch)))
+    for sibling in config_inclusion_branch:
+        out.extend(_write_bytes(sibling))
+    return bytes(out)
+
+
+def ton_masterchain_config_proof_hash(input_value: Any) -> str:
+    """Hash a TON masterchain config proof transcript."""
+
+    return _bytes_to_hex(
+        _prefixed_blake2b(
+            _SCCP_TON_MASTERCHAIN_CONFIG_PROOF_PREFIX_V1,
+            canonical_ton_masterchain_config_proof_bytes(input_value),
+        )
+    )
+
+
+def canonical_ton_masterchain_block_message_bytes(input_value: Any) -> bytes:
+    """Return canonical TON masterchain block-message bytes signed by validators."""
+
+    value = _require_mapping(input_value, "TON masterchain block message input")
+    _reject_ton_masterchain_block_coordinate_aliases(value)
+    _reject_ton_shard_block_coordinate_aliases(value)
+    _reject_ton_transcript_aliases(value, "validatorSetHash", "validatorSetHash", "validator_set_hash")
+    _reject_ton_transcript_aliases(value, "masterchainConfigRoot", "masterchainConfigRoot", "masterchain_config_root")
+    _reject_ton_transcript_aliases(
+        value,
+        "masterchainConfigProofHash",
+        "masterchainConfigProofHash",
+        "masterchain_config_proof_hash",
+    )
+    _reject_ton_transcript_aliases(value, "transactionRoot", "transactionRoot", "transaction_root")
+    _reject_ton_transcript_aliases(value, "shardProofHash", "shardProofHash", "shard_proof_hash")
+    out = bytearray()
+    out.extend(_write_u8(1))
+    out.extend(
+        _write_u32_le(
+            _normalize_u32(
+                _mapping_value(value, "sourceDomain", "source_domain"),
+                "sourceDomain",
+            )
+        )
+    )
+    out.extend(
+        _write_u64_le(
+            _normalize_u64(
+                _mapping_value(value, "masterchainSeqno", "masterchain_seqno"),
+                "masterchainSeqno",
+            )
+        )
+    )
+    masterchain_workchain_id = _normalize_i32(
+        _mapping_value(value, "masterchainWorkchainId", "masterchain_workchain_id"),
+        "masterchainWorkchainId",
+    )
+    if masterchain_workchain_id != _TON_MASTERCHAIN_WORKCHAIN_ID:
+        raise TypeError("masterchainWorkchainId must be TON masterchain")
+    masterchain_shard = _normalize_u64(
+        _mapping_value(value, "masterchainShard", "masterchain_shard"),
+        "masterchainShard",
+    )
+    if masterchain_shard != _TON_MASTERCHAIN_SHARD:
+        raise TypeError("masterchainShard must be TON masterchain shard")
+    out.extend(_write_i32_le(masterchain_workchain_id))
+    out.extend(_write_u64_le(masterchain_shard))
+    out.extend(
+        _nonzero_hex32_to_bytes(
+            _mapping_value(value, "masterchainBlockHash", "masterchain_block_hash"),
+            "masterchainBlockHash",
+        )
+    )
+    out.extend(
+        _nonzero_hex32_to_bytes(
+            _mapping_value(value, "masterchainFileHash", "masterchain_file_hash"),
+            "masterchainFileHash",
+        )
+    )
+    for key, label in (
+        (("validatorSetHash", "validator_set_hash"), "validatorSetHash"),
+        (("masterchainConfigRoot", "masterchain_config_root"), "masterchainConfigRoot"),
+        (
+            ("masterchainConfigProofHash", "masterchain_config_proof_hash"),
+            "masterchainConfigProofHash",
+        ),
+    ):
+        out.extend(_hex_to_bytes(_mapping_value(value, *key), label, 32))
+    shard_workchain_id = _normalize_i32(
+        _mapping_value(value, "shardWorkchainId", "shard_workchain_id"),
+        "shardWorkchainId",
+    )
+    if shard_workchain_id != _TON_BASECHAIN_WORKCHAIN_ID:
+        raise TypeError("shardWorkchainId must be TON basechain")
+    shard_shard = _normalize_u64(
+        _mapping_value(value, "shardShard", "shard_shard"),
+        "shardShard",
+    )
+    if shard_shard == 0:
+        raise TypeError("shardShard must be non-zero")
+    shard_seqno = _normalize_u64(
+        _mapping_value(value, "shardSeqno", "shard_seqno"),
+        "shardSeqno",
+    )
+    if shard_seqno == 0:
+        raise TypeError("shardSeqno must be non-zero")
+    out.extend(_write_i32_le(shard_workchain_id))
+    out.extend(_write_u64_le(shard_shard))
+    out.extend(_write_u64_le(shard_seqno))
+    out.extend(_hex_to_bytes(_mapping_value(value, "shardBlockHash", "shard_block_hash"), "shardBlockHash", 32))
+    out.extend(
+        _nonzero_hex32_to_bytes(
+            _mapping_value(value, "shardFileHash", "shard_file_hash"),
+            "shardFileHash",
+        )
+    )
+    for key, label in (
+        (("shardStateRoot", "shard_state_root"), "shardStateRoot"),
+        (("transactionRoot", "transaction_root"), "transactionRoot"),
+        (("shardProofHash", "shard_proof_hash"), "shardProofHash"),
+    ):
+        out.extend(_hex_to_bytes(_mapping_value(value, *key), label, 32))
+    return bytes(out)
+
+
+def ton_masterchain_block_message_hash(input_value: Any) -> str:
+    """Hash a TON masterchain block-message transcript."""
+
+    return _bytes_to_hex(
+        _prefixed_blake2b(
+            _SCCP_TON_MASTERCHAIN_BLOCK_MESSAGE_PREFIX_V1,
+            canonical_ton_masterchain_block_message_bytes(input_value),
+        )
+    )
+
+
+def canonical_ton_masterchain_validator_signatures_bytes(input_value: Any) -> bytes:
+    """Return canonical TON masterchain validator-signature capsule bytes."""
+
+    proof = _require_mapping(input_value, "TON masterchain validator signatures input")
+    _reject_ton_validator_set_part_aliases(proof)
+    _reject_ton_transcript_aliases(proof, "validatorSetHash", "validatorSetHash", "validator_set_hash")
+    validator_set_hash = _hex_to_bytes(
+        ton_validator_set_hash(
+            {
+                "validator_public_keys": _mapping_value(
+                    proof, "validatorPublicKeys", "validator_public_keys"
+                ),
+                "validator_weights": _mapping_value(
+                    proof, "validatorWeights", "validator_weights"
+                ),
+            }
+        ),
+        "validatorSetHash",
+        32,
+    )
+    provided_hash = _mapping_value(proof, "validatorSetHash", "validator_set_hash")
+    if provided_hash is not None and _hex_to_bytes(provided_hash, "validatorSetHash", 32) != validator_set_hash:
+        raise TypeError("validatorSetHash must match validator public keys and weights")
+    return _canonical_ton_validator_signatures_proof_bytes(proof) + validator_set_hash
+
+
+def ton_masterchain_validator_signatures_hash(input_value: Any) -> str:
+    """Hash a TON masterchain validator-signature capsule transcript."""
+
+    return _bytes_to_hex(
+        _prefixed_blake2b(
+            _SCCP_TON_MASTERCHAIN_SIGNATURES_PREFIX_V1,
+            canonical_ton_masterchain_validator_signatures_bytes(input_value),
+        )
+    )
+
+
+def _ton_transition_payload_hash_bytes(value: Mapping[str, Any]) -> bytes:
+    _reject_ton_transition_payload_aliases(value)
+    provided_hash = _mapping_value(
+        value,
+        "nextValidatorSetPayloadHash",
+        "next_validator_set_payload_hash",
+    )
+    payload_value = _mapping_value(
+        value,
+        "nextValidatorSetPayload",
+        "next_validator_set_payload",
+    )
+    if provided_hash is None and payload_value is None:
+        raise TypeError("nextValidatorSetPayloadHash or nextValidatorSetPayload is required")
+    if provided_hash is not None:
+        payload_hash = _hex_to_bytes(
+            provided_hash,
+            "nextValidatorSetPayloadHash",
+            32,
+        )
+    else:
+        payload_hash = _hex_to_bytes(
+            ton_validator_set_payload_hash(payload_value),
+            "nextValidatorSetPayloadHash",
+            32,
+        )
+    if payload_value is not None:
+        derived_hash = _hex_to_bytes(
+            ton_validator_set_payload_hash(payload_value),
+            "nextValidatorSetPayloadHash",
+            32,
+        )
+        if payload_hash != derived_hash:
+            raise TypeError("nextValidatorSetPayloadHash must match nextValidatorSetPayload")
+    return payload_hash
+
+
+def canonical_ton_validator_set_transition_message_bytes(input_value: Any) -> bytes:
+    """Return canonical TON validator-set transition message bytes."""
+
+    value = _require_mapping(input_value, "TON validator-set transition message input")
+    _reject_ton_masterchain_block_coordinate_aliases(value)
+    _reject_ton_transcript_aliases(value, "fromValidatorSetSeqno", "fromValidatorSetSeqno", "from_validator_set_seqno")
+    _reject_ton_transcript_aliases(value, "toValidatorSetSeqno", "toValidatorSetSeqno", "to_validator_set_seqno")
+    _reject_ton_transcript_aliases(value, "parentValidatorSetHash", "parentValidatorSetHash", "parent_validator_set_hash")
+    _reject_ton_transcript_aliases(value, "nextValidatorSetHash", "nextValidatorSetHash", "next_validator_set_hash")
+    _reject_ton_transition_payload_aliases(value)
+    _reject_ton_transcript_aliases(
+        value,
+        "nextValidatorSetConfigHash",
+        "nextValidatorSetConfigHash",
+        "next_validator_set_config_hash",
+    )
+    source_domain = _normalize_u32(
+        _mapping_value(value, "sourceDomain", "source_domain"),
+        "sourceDomain",
+    )
+    if source_domain != SCCP_DOMAIN_TON:
+        raise TypeError("sourceDomain must be TON")
+    from_validator_set_seqno = _normalize_u64(
+        _mapping_value(value, "fromValidatorSetSeqno", "from_validator_set_seqno"),
+        "fromValidatorSetSeqno",
+    )
+    to_validator_set_seqno = _normalize_u64(
+        _mapping_value(value, "toValidatorSetSeqno", "to_validator_set_seqno"),
+        "toValidatorSetSeqno",
+    )
+    if from_validator_set_seqno + 1 != to_validator_set_seqno:
+        raise TypeError("toValidatorSetSeqno must be exactly one greater than fromValidatorSetSeqno")
+    masterchain_seqno = _normalize_u64(
+        _mapping_value(value, "masterchainSeqno", "masterchain_seqno"),
+        "masterchainSeqno",
+    )
+    if masterchain_seqno == 0:
+        raise TypeError("masterchainSeqno must be non-zero")
+    version = _normalize_optional_v1_version(
+        value,
+        "TON validator-set transition version",
+        "version",
+        error_cls=TypeError,
+    )
+    out = bytearray()
+    out.extend(_write_u8(version))
+    out.extend(_write_u32_le(source_domain))
+    out.extend(_write_u64_le(from_validator_set_seqno))
+    out.extend(_write_u64_le(to_validator_set_seqno))
+    out.extend(_write_u64_le(masterchain_seqno))
+    masterchain_workchain_id = _normalize_i32(
+        _mapping_value(value, "masterchainWorkchainId", "masterchain_workchain_id"),
+        "masterchainWorkchainId",
+    )
+    if masterchain_workchain_id != _TON_MASTERCHAIN_WORKCHAIN_ID:
+        raise TypeError("masterchainWorkchainId must be TON masterchain")
+    masterchain_shard = _normalize_u64(
+        _mapping_value(value, "masterchainShard", "masterchain_shard"),
+        "masterchainShard",
+    )
+    if masterchain_shard != _TON_MASTERCHAIN_SHARD:
+        raise TypeError("masterchainShard must be TON masterchain shard")
+    out.extend(_write_i32_le(masterchain_workchain_id))
+    out.extend(_write_u64_le(masterchain_shard))
+    out.extend(
+        _nonzero_hex32_to_bytes(
+            _mapping_value(value, "masterchainBlockHash", "masterchain_block_hash"),
+            "masterchainBlockHash",
+        )
+    )
+    out.extend(
+        _nonzero_hex32_to_bytes(
+            _mapping_value(value, "masterchainFileHash", "masterchain_file_hash"),
+            "masterchainFileHash",
+        )
+    )
+    out.extend(
+        _nonzero_hex32_to_bytes(
+            _mapping_value(value, "parentValidatorSetHash", "parent_validator_set_hash"),
+            "parentValidatorSetHash",
+        )
+    )
+    out.extend(
+        _nonzero_hex32_to_bytes(
+            _mapping_value(value, "nextValidatorSetHash", "next_validator_set_hash"),
+            "nextValidatorSetHash",
+        )
+    )
+    out.extend(_ton_transition_payload_hash_bytes(value))
+    out.extend(
+        _nonzero_hex32_to_bytes(
+            _mapping_value(
+                value,
+                "nextValidatorSetConfigHash",
+                "next_validator_set_config_hash",
+            ),
+            "nextValidatorSetConfigHash",
+        )
+    )
+    return bytes(out)
+
+
+def ton_validator_set_transition_message_hash(input_value: Any) -> str:
+    """Hash a TON validator-set transition message transcript."""
+
+    return _bytes_to_hex(
+        _prefixed_blake2b(
+            _SCCP_TON_VALIDATOR_SET_TRANSITION_MESSAGE_PREFIX_V1,
+            canonical_ton_validator_set_transition_message_bytes(input_value),
+        )
+    )
+
+
+def _ton_signer_indices_from_bitmap(bitmap: bytes, roster_len: int) -> list[int]:
+    if len(bitmap) != (roster_len + 7) // 8:
+        raise TypeError("signersBitmap length must match validatorPublicKeys")
+    indices = []
+    for byte_index, value in enumerate(bitmap):
+        for bit in range(8):
+            if ((value >> bit) & 1) == 0:
+                continue
+            index = byte_index * 8 + bit
+            if index >= roster_len:
+                raise TypeError("signersBitmap must not set padding bits")
+            indices.append(index)
+    return indices
+
+
+def _canonical_ton_validator_signatures_proof_bytes(input_value: Any) -> bytes:
+    proof = _require_mapping(input_value, "TON validator signature proof")
+    _reject_ton_validator_set_part_aliases(proof)
+    _reject_ton_transcript_aliases(proof, "totalWeight", "totalWeight", "total_weight")
+    _reject_ton_transcript_aliases(proof, "signedWeight", "signedWeight", "signed_weight")
+    _reject_ton_transcript_aliases(proof, "signersBitmap", "signersBitmap", "signers_bitmap")
+    _reject_ton_transcript_aliases(proof, "blockMessageHash", "blockMessageHash", "block_message_hash")
+    parts = _normalize_ton_validator_set_parts(
+        {
+            "validator_public_keys": _mapping_value(
+                proof, "validatorPublicKeys", "validator_public_keys"
+            ),
+            "validator_weights": _mapping_value(
+                proof, "validatorWeights", "validator_weights"
+            ),
+        }
+    )
+    signatures = _mapping_value(proof, "signatures")
+    if (
+        not isinstance(signatures, Sequence)
+        or isinstance(signatures, (str, bytes, bytearray))
+    ):
+        raise TypeError("signatures must be an array")
+    version = _normalize_optional_v1_version(
+        proof,
+        "TON validator signature proof version",
+        "version",
+        error_cls=TypeError,
+    )
+    total_weight = _normalize_u64(
+        _mapping_value(proof, "totalWeight", "total_weight"), "totalWeight"
+    )
+    signed_weight = _normalize_u64(
+        _mapping_value(proof, "signedWeight", "signed_weight"), "signedWeight"
+    )
+    computed_total_weight = sum(parts["validator_weights"])
+    if total_weight != computed_total_weight:
+        raise TypeError("totalWeight must match validatorWeights")
+    signers_bitmap = _to_bytes(
+        _mapping_value(proof, "signersBitmap", "signers_bitmap"), "signersBitmap"
+    )
+    signer_indices = _ton_signer_indices_from_bitmap(
+        signers_bitmap, len(parts["validator_public_keys"])
+    )
+    if not signer_indices:
+        raise TypeError("signersBitmap must select at least one validator")
+    if len(signatures) != len(signer_indices):
+        raise TypeError("signatures length must match signersBitmap")
+    computed_signed_weight = sum(
+        parts["validator_weights"][index] for index in signer_indices
+    )
+    if signed_weight != computed_signed_weight:
+        raise TypeError("signedWeight must match signersBitmap")
+    if signed_weight * 3 <= total_weight * 2:
+        raise TypeError("signedWeight must be greater than two thirds of totalWeight")
+    out = bytearray()
+    out.extend(_write_u8(version))
+    out.extend(_write_u64_le(total_weight))
+    out.extend(_write_u64_le(signed_weight))
+    out.extend(
+        _nonzero_hex32_to_bytes(
+            _mapping_value(proof, "blockMessageHash", "block_message_hash"),
+            "blockMessageHash",
+        )
+    )
+    out.extend(_write_u32_le(len(parts["validator_public_keys"])))
+    for public_key in parts["validator_public_keys"]:
+        out.extend(_write_bytes(public_key))
+    out.extend(_write_u32_le(len(parts["validator_weights"])))
+    for weight in parts["validator_weights"]:
+        out.extend(_write_u64_le(weight))
+    out.extend(_write_bytes(signers_bitmap))
+    out.extend(_write_u32_le(len(signatures)))
+    for index, signature in enumerate(signatures):
+        raw = _to_bytes(signature, f"signatures[{index}]")
+        if len(raw) != 64:
+            raise TypeError(f"signatures[{index}] must be 64 bytes")
+        if not any(raw):
+            raise TypeError(f"signatures[{index}] must not be all zero")
+        out.extend(_write_bytes(raw))
+    return bytes(out)
+
+
+def canonical_ton_validator_set_transition_signature_bytes(input_value: Any) -> bytes:
+    """Return canonical TON validator-set transition signature bytes."""
+
+    value = _require_mapping(input_value, "TON validator-set transition signature input")
+    _reject_ton_masterchain_block_coordinate_aliases(value)
+    _reject_ton_transcript_aliases(value, "fromValidatorSetSeqno", "fromValidatorSetSeqno", "from_validator_set_seqno")
+    _reject_ton_transcript_aliases(value, "toValidatorSetSeqno", "toValidatorSetSeqno", "to_validator_set_seqno")
+    _reject_ton_transcript_aliases(value, "validatorSignatureProof", "validatorSignatureProof", "validator_signature_proof")
+    _reject_ton_transcript_aliases(value, "parentValidatorSetHash", "parentValidatorSetHash", "parent_validator_set_hash")
+    _reject_ton_transcript_aliases(value, "nextValidatorSetHash", "nextValidatorSetHash", "next_validator_set_hash")
+    _reject_ton_transition_payload_aliases(value)
+    _reject_ton_transcript_aliases(value, "transitionMessageHash", "transitionMessageHash", "transition_message_hash")
+    _reject_ton_transcript_aliases(
+        value,
+        "nextValidatorSetConfigHash",
+        "nextValidatorSetConfigHash",
+        "next_validator_set_config_hash",
+    )
+    version = _normalize_optional_v1_version(
+        value,
+        "TON validator-set transition proof version",
+        "version",
+        error_cls=TypeError,
+    )
+    signature_proof = _require_mapping(
+        _mapping_value(value, "validatorSignatureProof", "validator_signature_proof"),
+        "TON validator signature proof",
+    )
+    parent_validator_set_hash = _hex_to_bytes(
+        ton_validator_set_hash(
+            {
+                "validator_public_keys": _mapping_value(
+                    signature_proof, "validatorPublicKeys", "validator_public_keys"
+                ),
+                "validator_weights": _mapping_value(
+                    signature_proof, "validatorWeights", "validator_weights"
+                ),
+            }
+        ),
+        "parentValidatorSetHash",
+        32,
+    )
+    provided_parent_validator_set_hash = _hex_to_bytes(
+        _mapping_value(value, "parentValidatorSetHash", "parent_validator_set_hash"),
+        "parentValidatorSetHash",
+        32,
+    )
+    if provided_parent_validator_set_hash != parent_validator_set_hash:
+        raise TypeError("parentValidatorSetHash must match validatorSignatureProof")
+    next_payload = _to_bytes(
+        _mapping_value(value, "nextValidatorSetPayload", "next_validator_set_payload"),
+        "nextValidatorSetPayload",
+    )
+    next_payload_hash = _ton_transition_payload_hash_bytes(value)
+    derived_next_validator_set_hash = _hex_to_bytes(
+        ton_validator_set_hash_from_payload(next_payload),
+        "nextValidatorSetHash",
+        32,
+    )
+    next_validator_set_hash = _hex_to_bytes(
+        _mapping_value(value, "nextValidatorSetHash", "next_validator_set_hash"),
+        "nextValidatorSetHash",
+        32,
+    )
+    if next_validator_set_hash != derived_next_validator_set_hash:
+        raise TypeError("nextValidatorSetHash must match nextValidatorSetPayload")
+    transition_message_hash = _hex_to_bytes(
+        _mapping_value(value, "transitionMessageHash", "transition_message_hash"),
+        "transitionMessageHash",
+        32,
+    )
+    transition_message_input = {
+        "version": version,
+        "sourceDomain": _mapping_value(value, "sourceDomain", "source_domain"),
+        "fromValidatorSetSeqno": _mapping_value(
+            value, "fromValidatorSetSeqno", "from_validator_set_seqno"
+        ),
+        "toValidatorSetSeqno": _mapping_value(
+            value, "toValidatorSetSeqno", "to_validator_set_seqno"
+        ),
+        "masterchainSeqno": _mapping_value(
+            value, "masterchainSeqno", "masterchain_seqno"
+        ),
+        "masterchainWorkchainId": _mapping_value(
+            value, "masterchainWorkchainId", "masterchain_workchain_id"
+        ),
+        "masterchainShard": _mapping_value(
+            value, "masterchainShard", "masterchain_shard"
+        ),
+        "masterchainBlockHash": _mapping_value(
+            value, "masterchainBlockHash", "masterchain_block_hash"
+        ),
+        "masterchainFileHash": _mapping_value(
+            value, "masterchainFileHash", "masterchain_file_hash"
+        ),
+        "parentValidatorSetHash": _mapping_value(
+            value, "parentValidatorSetHash", "parent_validator_set_hash"
+        ),
+        "nextValidatorSetHash": _mapping_value(
+            value, "nextValidatorSetHash", "next_validator_set_hash"
+        ),
+        "nextValidatorSetPayloadHash": _bytes_to_hex(next_payload_hash),
+        "nextValidatorSetConfigHash": _mapping_value(
+            value,
+            "nextValidatorSetConfigHash",
+            "next_validator_set_config_hash",
+        ),
+    }
+    expected_transition_message_hash = _hex_to_bytes(
+        ton_validator_set_transition_message_hash(transition_message_input),
+        "transitionMessageHash",
+        32,
+    )
+    if transition_message_hash != expected_transition_message_hash:
+        raise TypeError("transitionMessageHash must match transition message fields")
+    signed_block_message_hash = _hex_to_bytes(
+        _mapping_value(signature_proof, "blockMessageHash", "block_message_hash"),
+        "blockMessageHash",
+        32,
+    )
+    if signed_block_message_hash != transition_message_hash:
+        raise TypeError("validatorSignatureProof.blockMessageHash must match transitionMessageHash")
+    out = bytearray()
+    out.extend(_write_u8(version))
+    out.extend(
+        _write_u32_le(
+            _normalize_u32(
+                _mapping_value(value, "sourceDomain", "source_domain"),
+                "sourceDomain",
+            )
+        )
+    )
+    out.extend(
+        _write_u64_le(
+            _normalize_u64(
+                _mapping_value(
+                    value, "fromValidatorSetSeqno", "from_validator_set_seqno"
+                ),
+                "fromValidatorSetSeqno",
+            )
+        )
+    )
+    out.extend(
+        _write_u64_le(
+            _normalize_u64(
+                _mapping_value(value, "toValidatorSetSeqno", "to_validator_set_seqno"),
+                "toValidatorSetSeqno",
+            )
+        )
+    )
+    out.extend(
+        _write_u64_le(
+            _normalize_u64(
+                _mapping_value(value, "masterchainSeqno", "masterchain_seqno"),
+                "masterchainSeqno",
+            )
+        )
+    )
+    masterchain_workchain_id = _normalize_i32(
+        _mapping_value(value, "masterchainWorkchainId", "masterchain_workchain_id"),
+        "masterchainWorkchainId",
+    )
+    if masterchain_workchain_id != _TON_MASTERCHAIN_WORKCHAIN_ID:
+        raise TypeError("masterchainWorkchainId must be TON masterchain")
+    masterchain_shard = _normalize_u64(
+        _mapping_value(value, "masterchainShard", "masterchain_shard"),
+        "masterchainShard",
+    )
+    if masterchain_shard != _TON_MASTERCHAIN_SHARD:
+        raise TypeError("masterchainShard must be TON masterchain shard")
+    out.extend(_write_i32_le(masterchain_workchain_id))
+    out.extend(_write_u64_le(masterchain_shard))
+    out.extend(
+        _nonzero_hex32_to_bytes(
+            _mapping_value(value, "masterchainBlockHash", "masterchain_block_hash"),
+            "masterchainBlockHash",
+        )
+    )
+    out.extend(
+        _nonzero_hex32_to_bytes(
+            _mapping_value(value, "masterchainFileHash", "masterchain_file_hash"),
+            "masterchainFileHash",
+        )
+    )
+    out.extend(provided_parent_validator_set_hash)
+    out.extend(next_validator_set_hash)
+    out.extend(_write_bytes(next_payload))
+    out.extend(next_payload_hash)
+    out.extend(
+        _hex_to_bytes(
+            _mapping_value(
+                value,
+                "nextValidatorSetConfigHash",
+                "next_validator_set_config_hash",
+            ),
+            "nextValidatorSetConfigHash",
+            32,
+        )
+    )
+    out.extend(transition_message_hash)
+    out.extend(parent_validator_set_hash)
+    out.extend(_canonical_ton_validator_signatures_proof_bytes(signature_proof))
+    return bytes(out)
+
+
+def ton_validator_set_transition_signature_hash(input_value: Any) -> str:
+    """Hash a TON validator-set transition signature transcript."""
+
+    return _bytes_to_hex(
+        _prefixed_blake2b(
+            _SCCP_TON_VALIDATOR_SET_TRANSITION_SIGNATURES_PREFIX_V1,
+            canonical_ton_validator_set_transition_signature_bytes(input_value),
+        )
+    )
+
+
+def _rlp_encode_length(length: int, short_offset: int, long_offset: int) -> bytes:
+    if length < 56:
+        return bytes([short_offset + length])
+    length_bytes = length.to_bytes((length.bit_length() + 7) // 8, "big")
+    return bytes([long_offset + len(length_bytes)]) + length_bytes
+
+
+def _rlp_encode_bytes(value: bytes) -> bytes:
+    if len(value) == 1 and value[0] < 0x80:
+        return value
+    return _rlp_encode_length(len(value), 0x80, 0xB7) + value
+
+
+def _rlp_encode_list(fields: list[bytes]) -> bytes:
+    payload = b"".join(fields)
+    return _rlp_encode_length(len(payload), 0xC0, 0xF7) + payload
+
+
+def canonical_evm_receipt_root_mpt_value(receipt_root: Any) -> bytes:
+    """Return the typed EVM-family MPT value envelope carrying an SCCP receipt root."""
+
+    root = _hex_to_bytes(receipt_root, "receiptRoot", 32)
+    value = _rlp_encode_list(
+        [
+            _rlp_encode_bytes(_SCCP_EVM_RECEIPT_ROOT_VALUE_MARKER_V1),
+            _rlp_encode_bytes(root),
+        ]
+    )
+    if not value or len(value) > _SCCP_EVM_MAX_RECEIPT_VALUE_BYTES:
+        raise TypeError(
+            "EVM receipt root MPT value must contain "
+            f"1..{_SCCP_EVM_MAX_RECEIPT_VALUE_BYTES} bytes"
+        )
+    return value
+
+
+def canonical_tron_receipt_root_mpt_value(receipt_root: Any) -> bytes:
+    """Return the typed TRON MPT value envelope carrying an SCCP receipt root."""
+
+    root = _nonzero_hex32_to_bytes(receipt_root, "receiptRoot")
+    value = _rlp_encode_list(
+        [
+            _rlp_encode_bytes(_SCCP_TRON_RECEIPT_ROOT_VALUE_MARKER_V1),
+            _rlp_encode_bytes(root),
+        ]
+    )
+    if not value or len(value) > _SCCP_TRON_MAX_RECEIPT_VALUE_BYTES:
+        raise TypeError(
+            "TRON receipt root MPT value must contain "
+            f"1..{_SCCP_TRON_MAX_RECEIPT_VALUE_BYTES} bytes"
+        )
+    return value
+
+
+def canonical_tron_sccp_receipt_proof_bytes(input_value: Any) -> bytes:
+    """Return canonical TRON SCCP receipt-proof transcript bytes."""
+
+    value = _require_mapping(input_value, "TRON SCCP receipt proof input")
+    source_event_digest = _nonzero_hex32_to_bytes(
+        _mapping_value_without_aliases(value, "sourceEventDigest", "sourceEventDigest", "source_event_digest"),
+        "sourceEventDigest",
+    )
+    receipt_root = _nonzero_hex32_to_bytes(
+        _mapping_value_without_aliases(
+            value,
+            "receiptRoot",
+            "receiptRoot",
+            "receipt_root",
+            "receiptOrMessageRoot",
+            "receipt_or_message_root",
+        ),
+        "receiptRoot",
+    )
+    transaction_root = _nonzero_hex32_to_bytes(
+        _mapping_value_without_aliases(value, "transactionRoot", "transactionRoot", "transaction_root"),
+        "transactionRoot",
+    )
+    inclusion_branch = _normalize_inclusion_branch(
+        _mapping_value_without_aliases(value, "inclusionBranch", "inclusionBranch", "inclusion_branch"),
+        require_non_empty=True,
+    )
+    out = bytearray()
+    out.extend(_write_u8(1))
+    out.extend(source_event_digest)
+    out.extend(receipt_root)
+    out.extend(transaction_root)
+    out.extend(_write_u32_le(len(inclusion_branch)))
+    for sibling in inclusion_branch:
+        out.extend(sibling)
+    return bytes(out)
+
+
+def tron_sccp_receipt_proof_hash(input_value: Any) -> str:
+    """Hash a TRON SCCP receipt-proof transcript with the canonical prefix."""
+
+    return _bytes_to_hex(
+        _prefixed_blake2b(
+            _SCCP_TRON_RECEIPT_PROOF_PREFIX_V1,
+            canonical_tron_sccp_receipt_proof_bytes(input_value),
+        )
+    )
+
+
+def canonical_tron_sccp_receipt_state_proof_bytes(input_value: Any) -> bytes:
+    """Return canonical TRON SCCP receipt-state/MPT-proof transcript bytes."""
+
+    value = _require_mapping(input_value, "TRON SCCP receipt-state proof input")
+    source_event_digest = _nonzero_hex32_to_bytes(
+        _mapping_value_without_aliases(value, "sourceEventDigest", "sourceEventDigest", "source_event_digest"),
+        "sourceEventDigest",
+    )
+    receipt_root = _nonzero_hex32_to_bytes(
+        _mapping_value_without_aliases(
+            value,
+            "receiptRoot",
+            "receiptRoot",
+            "receipt_root",
+            "receiptOrMessageRoot",
+            "receipt_or_message_root",
+        ),
+        "receiptRoot",
+    )
+    transaction_root = _nonzero_hex32_to_bytes(
+        _mapping_value_without_aliases(value, "transactionRoot", "transactionRoot", "transaction_root"),
+        "transactionRoot",
+    )
+    receipt_root_index = _normalize_u64(
+        _mapping_value_without_aliases(value, "receiptRootIndex", "receiptRootIndex", "receipt_root_index"),
+        "receiptRootIndex",
+    )
+    receipt_trie_proof_nodes = _normalize_byte_vectors(
+        _mapping_value_without_aliases(
+            value,
+            "receiptTrieProofNodes",
+            "receiptTrieProofNodes",
+            "receipt_trie_proof_nodes",
+        ),
+        "receiptTrieProofNodes",
+        max_count=_SCCP_TRON_MAX_MPT_PROOF_NODES,
+        max_bytes=_SCCP_TRON_MAX_MPT_NODE_BYTES,
+        require_non_empty=True,
+    )
+    inclusion_branch = _normalize_inclusion_branch(
+        _mapping_value_without_aliases(value, "inclusionBranch", "inclusionBranch", "inclusion_branch"),
+        require_non_empty=True,
+    )
+    out = bytearray()
+    out.extend(_write_u8(1))
+    out.extend(source_event_digest)
+    out.extend(receipt_root)
+    out.extend(transaction_root)
+    out.extend(_write_u64_le(receipt_root_index))
+    out.extend(_write_u32_le(len(receipt_trie_proof_nodes)))
+    for node in receipt_trie_proof_nodes:
+        out.extend(_write_bytes(node))
+    out.extend(_write_u32_le(len(inclusion_branch)))
+    for sibling in inclusion_branch:
+        out.extend(sibling)
+    return bytes(out)
+
+
+def tron_sccp_receipt_state_proof_hash(input_value: Any) -> str:
+    """Hash a TRON SCCP receipt-state/MPT-proof transcript."""
+
+    return _bytes_to_hex(
+        _prefixed_blake2b(
+            _SCCP_TRON_RECEIPT_STATE_PROOF_PREFIX_V1,
+            canonical_tron_sccp_receipt_state_proof_bytes(input_value),
+        )
+    )
+
+
+def tron_sccp_source_message_call_data(
+    source_domain: Any, target_domain: Any, source_event_digest: Any
+) -> bytes:
+    """Return TRON TVM calldata for submitSccpSourceEvent(uint32,uint32,bytes32)."""
+
+    source_domain = _normalize_u32(source_domain, "sourceDomain")
+    target_domain = _normalize_u32(target_domain, "targetDomain")
+    if source_domain != SCCP_DOMAIN_TRON:
+        raise ValueError("sourceDomain must be TRON for SCCP TRON source-call calldata")
+    if target_domain != SCCP_DOMAIN_SORA:
+        raise ValueError("targetDomain must be SORA for SCCP TRON source-call calldata")
+    digest = _nonzero_hex32_to_bytes(source_event_digest, "sourceEventDigest")
+    selector = _keccak_256(_SCCP_TRON_SOURCE_MESSAGE_CALL_ABI_V1)[:4]
+    return (
+        selector
+        + _abi_word_u32(source_domain, "sourceDomain")
+        + _abi_word_u32(target_domain, "targetDomain")
+        + digest
+    )
+
+
+def _tron_source_transaction_error() -> ValueError:
+    return ValueError("transactionBytes must be a successful TRON TriggerSmartContract source call")
+
+
+def _read_protobuf_bytes_field(raw: bytes, cursor: int, label: str) -> tuple[bytes, int]:
+    length, cursor = _read_canonical_protobuf_varint(raw, cursor, label)
+    end = cursor + length
+    if end > len(raw):
+        raise TypeError(f"{label} contains truncated protobuf bytes field")
+    return raw[cursor:end], end
+
+
+def _tron_transaction_result_success(result: bytes) -> bool:
+    cursor = 0
+    fee_seen = False
+    ret_seen = False
+    contract_ret_seen = False
+    while cursor < len(result):
+        key, cursor = _read_canonical_protobuf_varint(result, cursor, "transactionResult")
+        field_number = key >> 3
+        wire_type = key & 0x07
+        if field_number == 1 and wire_type == 0 and not fee_seen:
+            fee_seen = True
+            _, cursor = _read_canonical_protobuf_varint(result, cursor, "transactionResult")
+        elif field_number == 2 and wire_type == 0 and not ret_seen:
+            ret_seen = True
+            value, cursor = _read_canonical_protobuf_varint(result, cursor, "transactionResult")
+            if value != 0:
+                return False
+        elif field_number == 3 and wire_type == 0 and not contract_ret_seen:
+            contract_ret_seen = True
+            value, cursor = _read_canonical_protobuf_varint(result, cursor, "transactionResult")
+            if value != 1:
+                return False
+        else:
+            return False
+    return contract_ret_seen
+
+
+def _read_tron_protobuf_any_value(parameter: bytes) -> bytes | None:
+    cursor = 0
+    type_url = None
+    value = None
+    while cursor < len(parameter):
+        key, cursor = _read_canonical_protobuf_varint(parameter, cursor, "triggerParameter")
+        field_number = key >> 3
+        wire_type = key & 0x07
+        if field_number == 1 and wire_type == 2 and type_url is None:
+            type_url, cursor = _read_protobuf_bytes_field(parameter, cursor, "triggerParameter")
+        elif field_number == 2 and wire_type == 2 and value is None:
+            value, cursor = _read_protobuf_bytes_field(parameter, cursor, "triggerParameter")
+        else:
+            return None
+    if type_url != _SCCP_TRON_TRIGGER_SMART_CONTRACT_TYPE_URL_V1:
+        return None
+    return value
+
+
+def _tron_trigger_source_call_owner_address(
+    trigger: bytes,
+    source_event_digest: bytes,
+    expected_contract_address: bytes | None = None,
+    expected_owner_address: bytes | None = None,
+) -> bytes | None:
+    cursor = 0
+    owner_address = None
+    contract_address = None
+    data = None
+    call_value_seen = False
+    call_token_value_seen = False
+    token_id_seen = False
+    while cursor < len(trigger):
+        key, cursor = _read_canonical_protobuf_varint(trigger, cursor, "triggerContract")
+        field_number = key >> 3
+        wire_type = key & 0x07
+        if field_number == 1 and wire_type == 2 and owner_address is None:
+            owner_address, cursor = _read_protobuf_bytes_field(trigger, cursor, "triggerContract")
+        elif field_number == 2 and wire_type == 2 and contract_address is None:
+            contract_address, cursor = _read_protobuf_bytes_field(trigger, cursor, "triggerContract")
+        elif field_number == 3 and wire_type == 0 and not call_value_seen:
+            call_value_seen = True
+            value, cursor = _read_canonical_protobuf_varint(trigger, cursor, "triggerContract")
+            if value != 0:
+                return None
+        elif field_number == 4 and wire_type == 2 and data is None:
+            data, cursor = _read_protobuf_bytes_field(trigger, cursor, "triggerContract")
+        elif field_number == 5 and wire_type == 0 and not call_token_value_seen:
+            call_token_value_seen = True
+            value, cursor = _read_canonical_protobuf_varint(trigger, cursor, "triggerContract")
+            if value != 0:
+                return None
+        elif field_number == 6 and wire_type == 0 and not token_id_seen:
+            token_id_seen = True
+            value, cursor = _read_canonical_protobuf_varint(trigger, cursor, "triggerContract")
+            if value != 0:
+                return None
+        else:
+            return None
+    if (
+        owner_address is None
+        or len(owner_address) != 21
+        or owner_address[0] != 0x41
+        or not any(owner_address[1:])
+        or contract_address is None
+        or len(contract_address) != 21
+        or contract_address[0] != 0x41
+        or not any(contract_address[1:])
+        or (
+            expected_contract_address is not None
+            and contract_address[1:] != expected_contract_address
+        )
+        or (
+            expected_owner_address is not None
+            and owner_address[1:] != expected_owner_address
+        )
+        or data
+        != tron_sccp_source_message_call_data(
+            SCCP_DOMAIN_TRON,
+            SCCP_DOMAIN_SORA,
+            "0x" + source_event_digest.hex(),
+        )
+    ):
+        return None
+    return owner_address[1:]
+
+
+def _tron_raw_data_source_call_owner_address(
+    raw_data: bytes,
+    source_event_digest: bytes,
+    expected_contract_address: bytes | None = None,
+    expected_owner_address: bytes | None = None,
+) -> bytes | None:
+    cursor = 0
+    ref_block_bytes_seen = False
+    ref_block_num_seen = False
+    ref_block_hash_seen = False
+    expiration_ms = None
+    timestamp_ms = None
+    fee_limit_seen = False
+    contract_count = 0
+    matched_contract = None
+    while cursor < len(raw_data):
+        key, cursor = _read_canonical_protobuf_varint(raw_data, cursor, "rawData")
+        field_number = key >> 3
+        wire_type = key & 0x07
+        if field_number == 1 and wire_type == 2 and not ref_block_bytes_seen:
+            ref_block_bytes_seen = True
+            value, cursor = _read_protobuf_bytes_field(raw_data, cursor, "rawData")
+            if len(value) != 2 or not any(value):
+                return None
+        elif field_number == 3 and wire_type == 0 and not ref_block_num_seen:
+            ref_block_num_seen = True
+            _, cursor = _read_canonical_protobuf_varint(raw_data, cursor, "rawData")
+        elif field_number == 4 and wire_type == 2 and not ref_block_hash_seen:
+            ref_block_hash_seen = True
+            value, cursor = _read_protobuf_bytes_field(raw_data, cursor, "rawData")
+            if len(value) != 8 or not any(value):
+                return None
+        elif field_number == 8 and wire_type == 0 and expiration_ms is None:
+            expiration_ms, cursor = _read_canonical_protobuf_varint(raw_data, cursor, "rawData")
+            if expiration_ms == 0:
+                return None
+        elif field_number == 11 and wire_type == 2:
+            contract_count += 1
+            if contract_count > 1:
+                return None
+            contract, cursor = _read_protobuf_bytes_field(raw_data, cursor, "rawData")
+            matched_contract = _tron_contract_source_call_owner_address(
+                contract,
+                source_event_digest,
+                expected_contract_address,
+                expected_owner_address,
+            )
+        elif field_number == 14 and wire_type == 0 and timestamp_ms is None:
+            timestamp_ms, cursor = _read_canonical_protobuf_varint(raw_data, cursor, "rawData")
+            if timestamp_ms == 0:
+                return None
+        elif field_number == 18 and wire_type == 0 and not fee_limit_seen:
+            fee_limit_seen = True
+            value, cursor = _read_canonical_protobuf_varint(raw_data, cursor, "rawData")
+            if value == 0:
+                return None
+        else:
+            return None
+    if (
+        ref_block_bytes_seen
+        and ref_block_hash_seen
+        and expiration_ms is not None
+        and timestamp_ms is not None
+        and expiration_ms > timestamp_ms
+        and fee_limit_seen
+        and contract_count == 1
+    ):
+        return matched_contract
+    return None
+
+
+def _tron_contract_source_call_owner_address(
+    contract: bytes,
+    source_event_digest: bytes,
+    expected_contract_address: bytes | None = None,
+    expected_owner_address: bytes | None = None,
+) -> bytes | None:
+    cursor = 0
+    contract_type = None
+    parameter = None
+    while cursor < len(contract):
+        key, cursor = _read_canonical_protobuf_varint(contract, cursor, "transactionContract")
+        field_number = key >> 3
+        wire_type = key & 0x07
+        if field_number == 1 and wire_type == 0 and contract_type is None:
+            contract_type, cursor = _read_canonical_protobuf_varint(
+                contract, cursor, "transactionContract"
+            )
+        elif field_number == 2 and wire_type == 2 and parameter is None:
+            parameter, cursor = _read_protobuf_bytes_field(contract, cursor, "transactionContract")
+        else:
+            return None
+    if contract_type != 31 or parameter is None:
+        return None
+    trigger = _read_tron_protobuf_any_value(parameter)
+    if trigger is None:
+        return None
+    return _tron_trigger_source_call_owner_address(
+        trigger,
+        source_event_digest,
+        expected_contract_address,
+        expected_owner_address,
+    )
+
+
+def _validate_tron_sccp_transaction_source_call(
+    transaction_bytes: bytes,
+    source_event_digest: bytes,
+    expected_contract_address: bytes | None = None,
+    expected_owner_address: bytes | None = None,
+) -> None:
+    cursor = 0
+    raw_data = None
+    signatures: list[bytes] = []
+    result_count = 0
+    result_success = False
+    while cursor < len(transaction_bytes):
+        key, cursor = _read_canonical_protobuf_varint(transaction_bytes, cursor, "transactionBytes")
+        field_number = key >> 3
+        wire_type = key & 0x07
+        if field_number == 1 and wire_type == 2 and raw_data is None:
+            raw_data, cursor = _read_protobuf_bytes_field(transaction_bytes, cursor, "transactionBytes")
+        elif field_number == 2 and wire_type == 2:
+            if len(signatures) >= _SCCP_TRON_SOURCE_CALL_SIGNATURES:
+                raise _tron_source_transaction_error()
+            signature, cursor = _read_protobuf_bytes_field(
+                transaction_bytes, cursor, "transactionBytes"
+            )
+            if not _tron_recoverable_signature_is_canonical(signature):
+                raise _tron_source_transaction_error()
+            signatures.append(signature)
+        elif field_number == 5 and wire_type == 2:
+            if result_count >= 1:
+                raise _tron_source_transaction_error()
+            result, cursor = _read_protobuf_bytes_field(transaction_bytes, cursor, "transactionBytes")
+            result_success = _tron_transaction_result_success(result)
+            result_count += 1
+        else:
+            raise _tron_source_transaction_error()
+    if raw_data is None or len(signatures) != _SCCP_TRON_SOURCE_CALL_SIGNATURES:
+        raise _tron_source_transaction_error()
+    owner_address = _tron_raw_data_source_call_owner_address(
+        raw_data,
+        source_event_digest,
+        expected_contract_address,
+        expected_owner_address,
+    )
+    raw_data_hash = hashlib.sha256(raw_data).digest()
+    recovered_signer = _secp256k1_recover_address20(raw_data_hash, signatures[0])
+    if (
+        result_count != 1
+        or not result_success
+        or owner_address is None
+        or recovered_signer != owner_address
+    ):
+        raise _tron_source_transaction_error()
+
+
+def _tron_transaction_merkle_root_from_branch(
+    transaction_bytes: bytes,
+    transaction_index: int,
+    transaction_count: int,
+    transaction_merkle_branch: Sequence[bytes],
+) -> bytes:
+    current = hashlib.sha256(transaction_bytes).digest()
+    index = transaction_index
+    count = transaction_count
+    branch_cursor = 0
+    while count > 1:
+        if index & 1 == 0:
+            if index + 1 < count:
+                if branch_cursor >= len(transaction_merkle_branch):
+                    raise ValueError("transactionMerkleBranch is too short for transactionIndex/count")
+                current = hashlib.sha256(
+                    current + transaction_merkle_branch[branch_cursor]
+                ).digest()
+                branch_cursor += 1
+        else:
+            if branch_cursor >= len(transaction_merkle_branch):
+                raise ValueError("transactionMerkleBranch is too short for transactionIndex/count")
+            current = hashlib.sha256(
+                transaction_merkle_branch[branch_cursor] + current
+            ).digest()
+            branch_cursor += 1
+        index >>= 1
+        count = (count + 1) // 2
+    if branch_cursor != len(transaction_merkle_branch):
+        raise ValueError("transactionMerkleBranch has unused siblings for transactionIndex/count")
+    return current
+
+
+def canonical_tron_sccp_transaction_source_proof_bytes(input_value: Any) -> bytes:
+    """Return canonical TRON transaction-Merkle source-call proof transcript bytes."""
+
+    value = _require_mapping(input_value, "TRON SCCP transaction source proof input")
+    source_event_digest = _nonzero_hex32_to_bytes(
+        _mapping_value_without_aliases(value, "sourceEventDigest", "sourceEventDigest", "source_event_digest"),
+        "sourceEventDigest",
+    )
+    receipt_root = _nonzero_hex32_to_bytes(
+        _mapping_value_without_aliases(
+            value,
+            "receiptRoot",
+            "receiptRoot",
+            "receipt_root",
+            "receiptOrMessageRoot",
+            "receipt_or_message_root",
+        ),
+        "receiptRoot",
+    )
+    transaction_root = _nonzero_hex32_to_bytes(
+        _mapping_value_without_aliases(value, "transactionRoot", "transactionRoot", "transaction_root"),
+        "transactionRoot",
+    )
+    transaction_index = _normalize_u64(
+        _mapping_value_without_aliases(value, "transactionIndex", "transactionIndex", "transaction_index"),
+        "transactionIndex",
+    )
+    transaction_count = _normalize_u64(
+        _mapping_value_without_aliases(value, "transactionCount", "transactionCount", "transaction_count"),
+        "transactionCount",
+    )
+    if transaction_count == 0 or transaction_index >= transaction_count:
+        raise ValueError("transactionIndex must be less than non-zero transactionCount")
+    transaction_bytes = _to_bytes(
+        _mapping_value_without_aliases(value, "transactionBytes", "transactionBytes", "transaction_bytes"),
+        "transactionBytes",
+    )
+    if not transaction_bytes or len(transaction_bytes) > _SCCP_TRON_MAX_TRANSACTION_BYTES:
+        raise ValueError(
+            "transactionBytes must contain "
+            f"1..{_SCCP_TRON_MAX_TRANSACTION_BYTES} bytes"
+        )
+    expected_contract_input = _mapping_optional_value_without_aliases(
+        value,
+        "sourceBridgeEmitterAddress",
+        "sourceBridgeEmitterAddress",
+        "source_bridge_emitter_address",
+        "expectedSourceBridgeEmitterAddress",
+        "expected_source_bridge_emitter_address",
+        "bridgeAddress",
+        "bridge_address",
+    )
+    expected_owner_input = _mapping_optional_value_without_aliases(
+        value,
+        "sourceBridgeOwnerAddress",
+        "sourceBridgeOwnerAddress",
+        "source_bridge_owner_address",
+        "expectedSourceBridgeOwnerAddress",
+        "expected_source_bridge_owner_address",
+        "ownerAddress",
+        "owner_address",
+    )
+    expected_contract_address = (
+        None
+        if expected_contract_input is _MISSING
+        else _nonzero_hex_bytes(
+            expected_contract_input,
+            "sourceBridgeEmitterAddress",
+            20,
+        )
+    )
+    expected_owner_address = (
+        None
+        if expected_owner_input is _MISSING
+        else _nonzero_hex_bytes(
+            expected_owner_input,
+            "sourceBridgeOwnerAddress",
+            20,
+        )
+    )
+    _validate_tron_sccp_transaction_source_call(
+        transaction_bytes,
+        source_event_digest,
+        expected_contract_address,
+        expected_owner_address,
+    )
+    transaction_merkle_branch = _normalize_inclusion_branch(
+        _mapping_value_without_aliases(
+            value,
+            "transactionMerkleBranch",
+            "transactionMerkleBranch",
+            "transaction_merkle_branch",
+        ),
+        "transactionMerkleBranch",
+    )
+    if len(transaction_merkle_branch) > _SCCP_TRON_MAX_TRANSACTION_MERKLE_BRANCH_NODES:
+        raise ValueError(
+            "transactionMerkleBranch must contain at most "
+            f"{_SCCP_TRON_MAX_TRANSACTION_MERKLE_BRANCH_NODES} entries"
+        )
+    if (
+        _tron_transaction_merkle_root_from_branch(
+            transaction_bytes,
+            transaction_index,
+            transaction_count,
+            transaction_merkle_branch,
+        )
+        != transaction_root
+    ):
+        raise TypeError("transactionRoot must match transactionBytes and transactionMerkleBranch")
+    inclusion_branch = _normalize_inclusion_branch(
+        _mapping_value_without_aliases(value, "inclusionBranch", "inclusionBranch", "inclusion_branch"),
+        require_non_empty=True,
+    )
+
+    out = bytearray()
+    out.extend(_write_u8(1))
+    out.extend(source_event_digest)
+    out.extend(receipt_root)
+    out.extend(transaction_root)
+    out.extend(_write_u64_le(transaction_index))
+    out.extend(_write_u64_le(transaction_count))
+    out.extend(_write_bytes(transaction_bytes))
+    out.extend(_write_u32_le(len(transaction_merkle_branch)))
+    for sibling in transaction_merkle_branch:
+        out.extend(sibling)
+    out.extend(_write_u32_le(len(inclusion_branch)))
+    for sibling in inclusion_branch:
+        out.extend(sibling)
+    return bytes(out)
+
+
+def tron_sccp_transaction_source_proof_hash(input_value: Any) -> str:
+    """Hash a TRON transaction-Merkle source-call proof transcript."""
+
+    return _bytes_to_hex(
+        _prefixed_blake2b(
+            _SCCP_TRON_TRANSACTION_SOURCE_PROOF_PREFIX_V1,
+            canonical_tron_sccp_transaction_source_proof_bytes(input_value),
+        )
+    )
+
+
+def canonical_tron_raw_block_header_bytes(input_value: Any) -> bytes:
+    """Return canonical TRON BlockHeader.raw_data bytes for SCCP header proofs."""
+
+    value = _require_mapping(input_value, "TRON raw block-header input")
+    number = _normalize_u64(
+        _mapping_value_without_aliases(value, "number", "number", "blockNumber", "block_number"),
+        "number",
+    )
+    timestamp_ms = _normalize_u64(
+        _mapping_value_without_aliases(value, "timestampMs", "timestampMs", "timestamp_ms"),
+        "timestampMs",
+    )
+    header_version = _normalize_u32(
+        _mapping_value_without_aliases(value, "headerVersion", "headerVersion", "header_version"),
+        "headerVersion",
+    )
+    tx_trie_root = _hex_to_bytes(
+        _mapping_value_without_aliases(value, "txTrieRoot", "txTrieRoot", "tx_trie_root"),
+        "txTrieRoot",
+        32,
+    )
+    account_state_root = _hex_to_bytes(
+        _mapping_value_without_aliases(
+            value,
+            "accountStateRoot",
+            "accountStateRoot",
+            "account_state_root",
+        ),
+        "accountStateRoot",
+        32,
+    )
+    parent_block_id = _hex_to_bytes(
+        _mapping_value_without_aliases(value, "parentBlockId", "parentBlockId", "parent_block_id"),
+        "parentBlockId",
+        32,
+    )
+    witness_address = _hex_to_bytes(
+        _mapping_value_without_aliases(value, "witnessAddress", "witnessAddress", "witness_address"),
+        "witnessAddress",
+        21,
+    )
+    if number == 0:
+        raise ValueError("number must not be zero")
+    if timestamp_ms == 0:
+        raise ValueError("timestampMs must not be zero")
+    if header_version == 0:
+        raise ValueError("headerVersion must not be zero")
+    if not any(tx_trie_root):
+        raise ValueError("txTrieRoot must not be zero")
+    if not any(account_state_root):
+        raise ValueError("accountStateRoot must not be zero")
+    if not any(parent_block_id):
+        raise ValueError("parentBlockId must not be zero")
+    if not _is_nonzero_tron_address(witness_address):
+        raise ValueError("witnessAddress must be a TRON 0x41-prefixed address")
+
+    return b"".join(
+        (
+            _write_protobuf_u64(1, timestamp_ms),
+            _write_protobuf_bytes(2, tx_trie_root),
+            _write_protobuf_bytes(3, parent_block_id),
+            _write_protobuf_u64(7, number),
+            _write_protobuf_bytes(9, witness_address),
+            _write_protobuf_u64(10, header_version),
+            _write_protobuf_bytes(11, account_state_root),
+        )
+    )
+
+
+def _decode_tron_raw_block_header_fields(raw_data: bytes, label: str) -> Dict[str, Any]:
+    cursor = 0
+    fields: Dict[str, Any] = {}
+
+    def read_bytes_field(byte_length: int, field_label: str) -> bytes:
+        nonlocal cursor
+        length, cursor = _read_canonical_protobuf_varint(raw_data, cursor, label)
+        end = cursor + length
+        if length != byte_length or end > len(raw_data):
+            raise TypeError(f"{field_label} must be {byte_length} bytes")
+        value = raw_data[cursor:end]
+        cursor = end
+        return value
+
+    while cursor < len(raw_data):
+        key, cursor = _read_canonical_protobuf_varint(raw_data, cursor, label)
+        field_number = key >> 3
+        wire_type = key & 0x07
+        if field_number == 1:
+            if wire_type != 0 or "timestamp_ms" in fields:
+                raise TypeError(f"{label} must contain one canonical timestamp field")
+            fields["timestamp_ms"], cursor = _read_canonical_protobuf_varint(raw_data, cursor, label)
+        elif field_number == 2:
+            if wire_type != 2 or "tx_trie_root" in fields:
+                raise TypeError(f"{label} must contain one canonical txTrieRoot field")
+            fields["tx_trie_root"] = read_bytes_field(32, "txTrieRoot")
+        elif field_number == 3:
+            if wire_type != 2 or "parent_block_id" in fields:
+                raise TypeError(f"{label} must contain one canonical parentBlockId field")
+            fields["parent_block_id"] = read_bytes_field(32, "parentBlockId")
+        elif field_number == 7:
+            if wire_type != 0 or "number" in fields:
+                raise TypeError(f"{label} must contain one canonical number field")
+            fields["number"], cursor = _read_canonical_protobuf_varint(raw_data, cursor, label)
+        elif field_number == 8:
+            if wire_type != 0 or fields.get("witness_id_seen"):
+                raise TypeError(f"{label} must contain at most one canonical witnessId field")
+            fields["witness_id_seen"] = True
+            _, cursor = _read_canonical_protobuf_varint(raw_data, cursor, label)
+        elif field_number == 9:
+            if wire_type != 2 or "witness_address" in fields:
+                raise TypeError(f"{label} must contain one canonical witnessAddress field")
+            fields["witness_address"] = read_bytes_field(21, "witnessAddress")
+        elif field_number == 10:
+            if wire_type != 0 or "header_version" in fields:
+                raise TypeError(f"{label} must contain one canonical headerVersion field")
+            header_version, cursor = _read_canonical_protobuf_varint(raw_data, cursor, label)
+            if header_version > 0xFFFFFFFF:
+                raise ValueError("headerVersion must be a non-zero u32")
+            fields["header_version"] = header_version
+        elif field_number == 11:
+            if wire_type != 2 or "account_state_root" in fields:
+                raise TypeError(f"{label} must contain one canonical accountStateRoot field")
+            fields["account_state_root"] = read_bytes_field(32, "accountStateRoot")
+        else:
+            raise TypeError(f"{label} contains an unsupported protobuf field")
+
+    required = (
+        "number",
+        "timestamp_ms",
+        "header_version",
+        "tx_trie_root",
+        "account_state_root",
+        "parent_block_id",
+        "witness_address",
+    )
+    if (
+        any(field not in fields for field in required)
+        or fields["number"] == 0
+        or fields["timestamp_ms"] == 0
+        or fields["header_version"] == 0
+        or not any(fields["tx_trie_root"])
+        or not any(fields["account_state_root"])
+        or not any(fields["parent_block_id"])
+        or not _is_nonzero_tron_address(fields["witness_address"])
+    ):
+        raise TypeError(f"{label} must be a canonical TRON raw block header")
+    return fields
+
+
+def tron_raw_block_header_hash(raw_data: BytesLike) -> str:
+    """Return the SHA-256 hash of TRON BlockHeader.raw_data bytes."""
+
+    return _bytes_to_hex(hashlib.sha256(_to_bytes(raw_data, "rawData")).digest())
+
+
+def _tron_block_id_bytes_from_raw_data_hash(number: int, raw_data_hash: bytes) -> bytes:
+    block_id = bytearray(raw_data_hash)
+    block_id[:8] = number.to_bytes(8, "big")
+    return bytes(block_id)
+
+
+def tron_block_id_from_raw_data_hash(number: Any, raw_data_hash: str) -> str:
+    """Derive a TRON block id from a block number and raw-data hash."""
+
+    block_number = _normalize_u64(number, "number")
+    if block_number == 0:
+        raise ValueError("number must not be zero")
+    return _bytes_to_hex(
+        _tron_block_id_bytes_from_raw_data_hash(
+            block_number,
+            _hex_to_bytes(raw_data_hash, "rawDataHash", 32),
+        )
+    )
+
+
+def canonical_tron_solid_block_header_proof_bytes(input_value: Any) -> bytes:
+    """Return canonical parent-linked TRON solid-block header proof bytes."""
+
+    value = _require_mapping(input_value, "TRON solid-block header proof input")
+    version = _normalize_u32(value.get("version", 1), "version")
+    if version != 1:
+        raise ValueError("version must be 1")
+    raw_data = _to_bytes(
+        _mapping_value_without_aliases(value, "rawData", "rawData", "raw_data"),
+        "rawData",
+    )
+    witness_signature = _to_bytes(
+        _mapping_value_without_aliases(
+            value,
+            "witnessSignature",
+            "witnessSignature",
+            "witness_signature",
+        ),
+        "witnessSignature",
+    )
+    parent_raw_data = _to_bytes(
+        _mapping_value_without_aliases(value, "parentRawData", "parentRawData", "parent_raw_data"),
+        "parentRawData",
+    )
+    parent_witness_signature = _to_bytes(
+        _mapping_value_without_aliases(
+            value,
+            "parentWitnessSignature",
+            "parentWitnessSignature",
+            "parent_witness_signature",
+        ),
+        "parentWitnessSignature",
+    )
+    if not raw_data or not parent_raw_data:
+        raise ValueError("rawData and parentRawData must not be empty")
+    if (
+        len(raw_data) > _SCCP_TRON_MAX_RAW_HEADER_BYTES
+        or len(parent_raw_data) > _SCCP_TRON_MAX_RAW_HEADER_BYTES
+    ):
+        raise ValueError(
+            f"rawData and parentRawData must be at most {_SCCP_TRON_MAX_RAW_HEADER_BYTES} bytes"
+        )
+    if len(witness_signature) != 65 or len(parent_witness_signature) != 65:
+        raise ValueError("TRON header signatures must be 65 bytes")
+    if not _tron_recoverable_signature_is_canonical(
+        witness_signature
+    ) or not _tron_recoverable_signature_is_canonical(parent_witness_signature):
+        raise ValueError(
+            "TRON header signatures must be canonical low-S with recovery id 0..3 or 27..30"
+        )
+    witness_address = _hex_to_bytes(
+        _mapping_value_without_aliases(value, "witnessAddress", "witnessAddress", "witness_address"),
+        "witnessAddress",
+        21,
+    )
+    timestamp_ms = _normalize_u64(
+        _mapping_value_without_aliases(value, "timestampMs", "timestampMs", "timestamp_ms"),
+        "timestampMs",
+    )
+    header_version = _normalize_u32(
+        _mapping_value_without_aliases(value, "headerVersion", "headerVersion", "header_version"),
+        "headerVersion",
+    )
+    if timestamp_ms == 0:
+        raise ValueError("timestampMs must not be zero")
+    if header_version == 0:
+        raise ValueError("headerVersion must not be zero")
+    if not _is_nonzero_tron_address(witness_address):
+        raise ValueError("witnessAddress must be a TRON 0x41-prefixed address")
+    fields = _decode_tron_raw_block_header_fields(raw_data, "rawData")
+    parent_fields = _decode_tron_raw_block_header_fields(parent_raw_data, "parentRawData")
+    raw_data_hash = _hex_to_bytes(
+        _mapping_value_without_aliases(value, "rawDataHash", "rawDataHash", "raw_data_hash"),
+        "rawDataHash",
+        32,
+    )
+    parent_raw_data_hash = _hex_to_bytes(
+        _mapping_value_without_aliases(
+            value,
+            "parentRawDataHash",
+            "parentRawDataHash",
+            "parent_raw_data_hash",
+        ),
+        "parentRawDataHash",
+        32,
+    )
+    block_id = _hex_to_bytes(
+        _mapping_value_without_aliases(value, "blockId", "blockId", "block_id"),
+        "blockId",
+        32,
+    )
+    tx_trie_root = _hex_to_bytes(
+        _mapping_value_without_aliases(value, "txTrieRoot", "txTrieRoot", "tx_trie_root"),
+        "txTrieRoot",
+        32,
+    )
+    account_state_root = _hex_to_bytes(
+        _mapping_value_without_aliases(
+            value,
+            "accountStateRoot",
+            "accountStateRoot",
+            "account_state_root",
+        ),
+        "accountStateRoot",
+        32,
+    )
+    parent_block_id = _hex_to_bytes(
+        _mapping_value_without_aliases(value, "parentBlockId", "parentBlockId", "parent_block_id"),
+        "parentBlockId",
+        32,
+    )
+    if not any(tx_trie_root):
+        raise ValueError("txTrieRoot must not be zero")
+    if not any(account_state_root):
+        raise ValueError("accountStateRoot must not be zero")
+    if not any(parent_block_id):
+        raise ValueError("parentBlockId must not be zero")
+    if raw_data_hash != hashlib.sha256(raw_data).digest():
+        raise TypeError("rawDataHash must match rawData")
+    if parent_raw_data_hash != hashlib.sha256(parent_raw_data).digest():
+        raise TypeError("parentRawDataHash must match parentRawData")
+    if block_id != _tron_block_id_bytes_from_raw_data_hash(fields["number"], raw_data_hash):
+        raise TypeError("blockId must match rawDataHash and block number")
+    if parent_block_id != fields["parent_block_id"]:
+        raise TypeError("parentBlockId must match rawData")
+    if parent_block_id != _tron_block_id_bytes_from_raw_data_hash(
+        parent_fields["number"],
+        parent_raw_data_hash,
+    ):
+        raise TypeError("parentBlockId must match parentRawDataHash and parent block number")
+    if (
+        parent_fields["number"] + 1 != fields["number"]
+        or parent_fields["timestamp_ms"] >= fields["timestamp_ms"]
+    ):
+        raise TypeError("rawData must be the direct child of parentRawData")
+    if (
+        tx_trie_root != fields["tx_trie_root"]
+        or account_state_root != fields["account_state_root"]
+        or witness_address != fields["witness_address"]
+        or timestamp_ms != fields["timestamp_ms"]
+        or header_version != fields["header_version"]
+    ):
+        raise TypeError("TRON solid-block header fields must match rawData")
+
+    out = bytearray()
+    out.extend(_write_u8(version))
+    out.extend(_write_bytes(raw_data))
+    out.extend(_write_bytes(witness_signature))
+    out.extend(_write_bytes(parent_raw_data))
+    out.extend(_write_bytes(parent_witness_signature))
+    out.extend(raw_data_hash)
+    out.extend(parent_raw_data_hash)
+    out.extend(block_id)
+    out.extend(tx_trie_root)
+    out.extend(account_state_root)
+    out.extend(parent_block_id)
+    out.extend(_write_bytes(witness_address))
+    out.extend(_write_u64_le(timestamp_ms))
+    out.extend(_write_u32_le(header_version))
+    return bytes(out)
+
+
+def tron_solid_block_header_proof_hash(input_value: Any) -> str:
+    """Hash canonical parent-linked TRON solid-block header proof bytes."""
+
+    return _bytes_to_hex(
+        _prefixed_blake2b(
+            _SCCP_TRON_SOLID_BLOCK_HEADER_PREFIX_V1,
+            canonical_tron_solid_block_header_proof_bytes(input_value),
+        )
+    )
+
+
+def canonical_tron_witness_schedule_payload_bytes(input_value: Any) -> bytes:
+    """Return canonical TRON DPoS witness-schedule payload bytes."""
+
+    value = _require_mapping(input_value, "TRON witness-schedule payload input")
+    addresses_value = _mapping_value_without_aliases(
+        value,
+        "witnessAddresses",
+        "witnessAddresses",
+        "witness_addresses",
+    )
+    weights_value = _mapping_value_without_aliases(
+        value,
+        "witnessWeights",
+        "witnessWeights",
+        "witness_weights",
+    )
+    if not isinstance(addresses_value, Sequence) or isinstance(addresses_value, (str, bytes, bytearray)):
+        raise TypeError("witnessAddresses must be an array")
+    if not isinstance(weights_value, Sequence) or isinstance(weights_value, (str, bytes, bytearray)):
+        raise TypeError("witnessWeights must be an array")
+    if not addresses_value or len(addresses_value) != len(weights_value):
+        raise ValueError("witnessAddresses and witnessWeights must be non-empty equal-length arrays")
+    if len(addresses_value) > _SCCP_TRON_MAX_WITNESSES:
+        raise ValueError(f"witnessAddresses must contain at most {_SCCP_TRON_MAX_WITNESSES} entries")
+
+    out = bytearray()
+    out.extend(_write_u8(1))
+    out.extend(_write_u32_le(len(addresses_value)))
+    seen_addresses = set()
+    total_weight = 0
+    for index, (address_value, weight_value) in enumerate(zip(addresses_value, weights_value)):
+        address = _hex_to_bytes(address_value, f"witnessAddresses[{index}]", 21)
+        if not _is_nonzero_tron_address(address):
+            raise ValueError(f"witnessAddresses[{index}] must be a TRON 0x41-prefixed address")
+        if address in seen_addresses:
+            raise ValueError(f"witnessAddresses[{index}] must be unique")
+        seen_addresses.add(address)
+        weight = _normalize_u64(weight_value, f"witnessWeights[{index}]")
+        if weight == 0:
+            raise ValueError(f"witnessWeights[{index}] must not be zero")
+        total_weight += weight
+        if total_weight > _SCCP_U64_MAX:
+            raise ValueError("witnessWeights total must fit u64")
+        out.extend(address)
+        out.extend(_write_u64_le(weight))
+    return bytes(out)
+
+
+def _validate_tron_witness_schedule_payload_bytes(payload: bytes) -> bytes:
+    if len(payload) < 5 or payload[0] != 1:
+        raise ValueError("witnessSchedulePayload must be a canonical TRON witness schedule payload")
+    witness_count = int.from_bytes(payload[1:5], "little")
+    expected_len = 5 + witness_count * 29
+    if (
+        witness_count == 0
+        or witness_count > _SCCP_TRON_MAX_WITNESSES
+        or len(payload) != expected_len
+    ):
+        raise ValueError("witnessSchedulePayload must be a canonical TRON witness schedule payload")
+    seen_addresses = set()
+    cursor = 5
+    total_weight = 0
+    for index in range(witness_count):
+        address = payload[cursor : cursor + 21]
+        cursor += 21
+        if not _is_nonzero_tron_address(address):
+            raise ValueError(
+                f"witnessSchedulePayload witness {index} must be a TRON 0x41-prefixed address"
+            )
+        if address in seen_addresses:
+            raise ValueError(f"witnessSchedulePayload witness {index} must be unique")
+        seen_addresses.add(address)
+        weight = int.from_bytes(payload[cursor : cursor + 8], "little")
+        cursor += 8
+        if weight == 0:
+            raise ValueError(f"witnessSchedulePayload witness {index} weight must not be zero")
+        total_weight += weight
+        if total_weight > _SCCP_U64_MAX:
+            raise ValueError("witnessSchedulePayload total weight must fit u64")
+    return payload
+
+
+def tron_witness_schedule_payload_hash(input_value: Any) -> str:
+    """Hash the canonical TRON witness-schedule transition payload."""
+
+    payload = _validate_tron_witness_schedule_payload_bytes(
+        (
+            _to_bytes(input_value, "witnessSchedulePayload")
+            if isinstance(input_value, (bytes, bytearray, memoryview, str))
+            else canonical_tron_witness_schedule_payload_bytes(input_value)
+        )
+    )
+    return _bytes_to_hex(
+        _prefixed_blake2b(_SCCP_TRON_WITNESS_SCHEDULE_PAYLOAD_PREFIX_V1, payload)
+    )
+
+
+def tron_witness_schedule_hash_from_payload(input_value: Any) -> str:
+    """Derive the SCCP TRON witness-schedule hash from a canonical payload."""
+
+    payload = _validate_tron_witness_schedule_payload_bytes(
+        (
+            _to_bytes(input_value, "witnessSchedulePayload")
+            if isinstance(input_value, (bytes, bytearray, memoryview, str))
+            else canonical_tron_witness_schedule_payload_bytes(input_value)
+        )
+    )
+    return _bytes_to_hex(_prefixed_blake2b(_SCCP_TRON_WITNESS_SCHEDULE_PREFIX_V1, payload))
+
+
+def _tron_witness_schedule_payload_bytes(input_value: Any) -> bytes:
+    if isinstance(input_value, (bytes, bytearray, memoryview, str)):
+        return _validate_tron_witness_schedule_payload_bytes(
+            _to_bytes(input_value, "nextWitnessSchedulePayload")
+        )
+    return _validate_tron_witness_schedule_payload_bytes(
+        canonical_tron_witness_schedule_payload_bytes(input_value)
+    )
+
+
+def canonical_tron_solid_block_message_bytes(input_value: Any) -> bytes:
+    """Return canonical TRON DPoS solid-block witness message bytes."""
+
+    value = _require_mapping(input_value, "TRON solid-block message input")
+    version = _normalize_u32(value.get("version", 1), "version")
+    if version != 1:
+        raise ValueError("version must be 1")
+    source_domain = _normalize_u32(
+        _mapping_value_without_aliases(value, "sourceDomain", "sourceDomain", "source_domain"),
+        "sourceDomain",
+    )
+    solid_block_number = _normalize_u64(
+        _mapping_value_without_aliases(
+            value,
+            "solidBlockNumber",
+            "solidBlockNumber",
+            "solid_block_number",
+        ),
+        "solidBlockNumber",
+    )
+    block_hash = _hex_to_bytes(
+        _mapping_value_without_aliases(value, "blockHash", "blockHash", "block_hash"),
+        "blockHash",
+        32,
+    )
+    witness_schedule_hash = _hex_to_bytes(
+        _mapping_value_without_aliases(
+            value,
+            "witnessScheduleHash",
+            "witnessScheduleHash",
+            "witness_schedule_hash",
+        ),
+        "witnessScheduleHash",
+        32,
+    )
+    receipt_root = _hex_to_bytes(
+        _mapping_value_without_aliases(value, "receiptRoot", "receiptRoot", "receipt_root"),
+        "receiptRoot",
+        32,
+    )
+    transaction_root = _hex_to_bytes(
+        _mapping_value_without_aliases(value, "transactionRoot", "transactionRoot", "transaction_root"),
+        "transactionRoot",
+        32,
+    )
+    receipt_proof_hash = _hex_to_bytes(
+        _mapping_value_without_aliases(
+            value,
+            "receiptProofHash",
+            "receiptProofHash",
+            "receipt_proof_hash",
+        ),
+        "receiptProofHash",
+        32,
+    )
+    if source_domain != SCCP_DOMAIN_TRON:
+        raise ValueError("sourceDomain must be TRON")
+    if solid_block_number == 0:
+        raise ValueError("solidBlockNumber must not be zero")
+    for field_name, field_value in (
+        ("blockHash", block_hash),
+        ("witnessScheduleHash", witness_schedule_hash),
+        ("receiptRoot", receipt_root),
+        ("transactionRoot", transaction_root),
+        ("receiptProofHash", receipt_proof_hash),
+    ):
+        if not any(field_value):
+            raise ValueError(f"{field_name} must not be zero")
+    return b"".join(
+        (
+            _write_u8(version),
+            _write_u32_le(source_domain),
+            _write_u64_le(solid_block_number),
+            block_hash,
+            witness_schedule_hash,
+            receipt_root,
+            transaction_root,
+            receipt_proof_hash,
+        )
+    )
+
+
+def tron_solid_block_message_hash(input_value: Any) -> str:
+    """Hash canonical TRON DPoS solid-block witness message bytes."""
+
+    return _bytes_to_hex(
+        _prefixed_keccak(
+            _SCCP_TRON_SOLID_BLOCK_MESSAGE_PREFIX_V1,
+            canonical_tron_solid_block_message_bytes(input_value),
+        )
+    )
+
+
+def _tron_witness_seal_signer_indices(bitmap: bytes, roster_len: int) -> list[int]:
+    if roster_len <= 0 or len(bitmap) != (roster_len + 7) // 8:
+        raise ValueError("signersBitmap length must match witness roster")
+    indices: list[int] = []
+    for byte_index, value in enumerate(bitmap):
+        for bit_index in range(8):
+            if ((value >> bit_index) & 1) == 0:
+                continue
+            index = byte_index * 8 + bit_index
+            if index >= roster_len:
+                raise ValueError("signersBitmap sets a bit outside the witness roster")
+            indices.append(index)
+    if not indices:
+        raise ValueError("signersBitmap must select at least one witness")
+    return indices
+
+
+def _normalize_tron_witness_seal_proof(input_value: Any) -> Dict[str, Any]:
+    proof = _require_mapping(input_value, "TRON witness-seal proof input")
+    version = _normalize_u32(proof.get("version", 1), "version")
+    if version != 1:
+        raise ValueError("version must be 1")
+    total_weight = _normalize_u64(
+        _mapping_value_without_aliases(proof, "totalWeight", "totalWeight", "total_weight"),
+        "totalWeight",
+    )
+    signed_weight = _normalize_u64(
+        _mapping_value_without_aliases(proof, "signedWeight", "signedWeight", "signed_weight"),
+        "signedWeight",
+    )
+    solid_block_message_hash = _hex_to_bytes(
+        _mapping_value_without_aliases(
+            proof,
+            "solidBlockMessageHash",
+            "solidBlockMessageHash",
+            "solid_block_message_hash",
+        ),
+        "solidBlockMessageHash",
+        32,
+    )
+    addresses_value = _mapping_value_without_aliases(
+        proof,
+        "witnessAddresses",
+        "witnessAddresses",
+        "witness_addresses",
+    )
+    weights_value = _mapping_value_without_aliases(
+        proof,
+        "witnessWeights",
+        "witnessWeights",
+        "witness_weights",
+    )
+    signatures_value = _mapping_value_without_aliases(proof, "signatures", "signatures")
+    if not isinstance(addresses_value, Sequence) or isinstance(addresses_value, (str, bytes, bytearray)):
+        raise TypeError("witnessAddresses must be an array")
+    if not isinstance(weights_value, Sequence) or isinstance(weights_value, (str, bytes, bytearray)):
+        raise TypeError("witnessWeights must be an array")
+    if not isinstance(signatures_value, Sequence) or isinstance(signatures_value, (str, bytes, bytearray)):
+        raise TypeError("signatures must be an array")
+    if not any(solid_block_message_hash):
+        raise ValueError("solidBlockMessageHash must not be zero")
+    if total_weight == 0:
+        raise ValueError("totalWeight must not be zero")
+    if signed_weight == 0:
+        raise ValueError("signedWeight must not be zero")
+    if not addresses_value or len(addresses_value) > _SCCP_TRON_MAX_WITNESSES:
+        raise ValueError(f"witnessAddresses must contain 1..{_SCCP_TRON_MAX_WITNESSES} entries")
+    if len(addresses_value) != len(weights_value):
+        raise ValueError("witnessAddresses and witnessWeights must be equal-length arrays")
+
+    witness_addresses = []
+    witness_weights = []
+    seen_addresses = set()
+    computed_total_weight = 0
+    for index, (address_value, weight_value) in enumerate(zip(addresses_value, weights_value)):
+        address = _to_bytes(address_value, f"witnessAddresses[{index}]")
+        if not _is_nonzero_tron_address(address):
+            raise ValueError(f"witnessAddresses[{index}] must be a TRON 0x41-prefixed address")
+        if address in seen_addresses:
+            raise ValueError(f"witnessAddresses[{index}] must be unique")
+        seen_addresses.add(address)
+        weight = _normalize_u64(weight_value, f"witnessWeights[{index}]")
+        if weight == 0:
+            raise ValueError(f"witnessWeights[{index}] must not be zero")
+        witness_addresses.append(address)
+        witness_weights.append(weight)
+        computed_total_weight += weight
+    if computed_total_weight != total_weight:
+        raise ValueError("totalWeight must equal the witness weight sum")
+
+    signers_bitmap = _to_bytes(
+        _mapping_value_without_aliases(proof, "signersBitmap", "signersBitmap", "signers_bitmap"),
+        "signersBitmap",
+    )
+    signer_indices = _tron_witness_seal_signer_indices(signers_bitmap, len(witness_addresses))
+    if len(signatures_value) != len(signer_indices):
+        raise ValueError("signatures length must match signersBitmap")
+
+    signatures = []
+    computed_signed_weight = 0
+    for signature_index, witness_index in enumerate(signer_indices):
+        signature = _to_bytes(signatures_value[signature_index], f"signatures[{signature_index}]")
+        if not _tron_recoverable_signature_is_canonical(signature):
+            raise ValueError(
+                f"signatures[{signature_index}] must be a canonical low-S 65-byte TRON signature"
+            )
+        recovered = _secp256k1_recover_address20(solid_block_message_hash, signature)
+        if recovered is None or b"\x41" + recovered != witness_addresses[witness_index]:
+            raise ValueError("witness seal signature does not recover to declared signer")
+        signatures.append(signature)
+        computed_signed_weight += witness_weights[witness_index]
+    if computed_signed_weight != signed_weight:
+        raise ValueError("signedWeight must equal the signersBitmap witness weight sum")
+    if computed_signed_weight * 3 <= computed_total_weight * 2:
+        raise ValueError("signedWeight must exceed two thirds of totalWeight")
+
+    witness_payload = bytearray()
+    witness_payload.extend(_write_u8(1))
+    witness_payload.extend(_write_u32_le(len(witness_addresses)))
+    for address, weight in zip(witness_addresses, witness_weights):
+        witness_payload.extend(address)
+        witness_payload.extend(_write_u64_le(weight))
+    witness_schedule_hash = _prefixed_blake2b(
+        _SCCP_TRON_WITNESS_SCHEDULE_PREFIX_V1,
+        bytes(witness_payload),
+    )
+    return {
+        "version": version,
+        "total_weight": total_weight,
+        "signed_weight": signed_weight,
+        "solid_block_message_hash": solid_block_message_hash,
+        "witness_addresses": witness_addresses,
+        "witness_weights": witness_weights,
+        "signers_bitmap": signers_bitmap,
+        "signatures": signatures,
+        "witness_schedule_hash": witness_schedule_hash,
+    }
+
+
+def _canonical_tron_witness_seal_proof_bytes(proof: Mapping[str, Any]) -> bytes:
+    out = bytearray()
+    out.extend(_write_u8(proof["version"]))
+    out.extend(_write_u64_le(proof["total_weight"]))
+    out.extend(_write_u64_le(proof["signed_weight"]))
+    out.extend(proof["solid_block_message_hash"])
+    out.extend(_write_u32_le(len(proof["witness_addresses"])))
+    for address in proof["witness_addresses"]:
+        out.extend(_write_bytes(address))
+    out.extend(_write_u32_le(len(proof["witness_weights"])))
+    for weight in proof["witness_weights"]:
+        out.extend(_write_u64_le(weight))
+    out.extend(_write_bytes(proof["signers_bitmap"]))
+    out.extend(_write_u32_le(len(proof["signatures"])))
+    for signature in proof["signatures"]:
+        out.extend(_write_bytes(signature))
+    return bytes(out)
+
+
+def canonical_tron_witness_seal_bytes(input_value: Any) -> bytes:
+    """Return canonical TRON DPoS witness-seal certificate bytes."""
+
+    proof = _normalize_tron_witness_seal_proof(input_value)
+    return _canonical_tron_witness_seal_proof_bytes(proof) + proof["witness_schedule_hash"]
+
+
+def tron_witness_seal_hash(input_value: Any) -> str:
+    """Hash canonical TRON DPoS witness-seal certificate bytes."""
+
+    return _bytes_to_hex(
+        _prefixed_blake2b(
+            _SCCP_TRON_WITNESS_SEAL_PREFIX_V1,
+            canonical_tron_witness_seal_bytes(input_value),
+        )
+    )
+
+
+def _tron_transition_payload_hash_bytes(value: Mapping[str, Any]) -> bytes:
+    provided_hash = _mapping_optional_value_without_aliases(
+        value,
+        "nextWitnessSchedulePayloadHash",
+        "nextWitnessSchedulePayloadHash",
+        "next_witness_schedule_payload_hash",
+    )
+    payload_value = _mapping_optional_value_without_aliases(
+        value,
+        "nextWitnessSchedulePayload",
+        "nextWitnessSchedulePayload",
+        "next_witness_schedule_payload",
+    )
+    if provided_hash is _MISSING and payload_value is _MISSING:
+        raise TypeError("nextWitnessSchedulePayloadHash or nextWitnessSchedulePayload is required")
+    if provided_hash is _MISSING:
+        payload_hash = _hex_to_bytes(
+            tron_witness_schedule_payload_hash(payload_value),
+            "nextWitnessSchedulePayloadHash",
+            32,
+        )
+    else:
+        payload_hash = _nonzero_hex32_to_bytes(
+            provided_hash,
+            "nextWitnessSchedulePayloadHash",
+        )
+    if payload_value is not _MISSING:
+        derived_hash = _hex_to_bytes(
+            tron_witness_schedule_payload_hash(payload_value),
+            "nextWitnessSchedulePayloadHash",
+            32,
+        )
+        if payload_hash != derived_hash:
+            raise TypeError("nextWitnessSchedulePayloadHash must match nextWitnessSchedulePayload")
+    return payload_hash
+
+
+def _normalize_tron_witness_schedule_transition_message_input(
+    input_value: Any,
+) -> Dict[str, Any]:
+    value = _require_mapping(input_value, "TRON witness-schedule transition message input")
+    version = _normalize_optional_v1_version(
+        value,
+        "TRON witness-schedule transition message version",
+        "version",
+    )
+    source_domain = _normalize_u32(
+        _mapping_value_without_aliases(value, "sourceDomain", "sourceDomain", "source_domain"),
+        "sourceDomain",
+    )
+    if source_domain != SCCP_DOMAIN_TRON:
+        raise ValueError("sourceDomain must be TRON")
+    from_epoch = _normalize_u64(
+        _mapping_value_without_aliases(
+            value,
+            "fromWitnessScheduleEpoch",
+            "fromWitnessScheduleEpoch",
+            "from_witness_schedule_epoch",
+        ),
+        "fromWitnessScheduleEpoch",
+    )
+    to_epoch = _normalize_u64(
+        _mapping_value_without_aliases(
+            value,
+            "toWitnessScheduleEpoch",
+            "toWitnessScheduleEpoch",
+            "to_witness_schedule_epoch",
+        ),
+        "toWitnessScheduleEpoch",
+    )
+    if from_epoch + 1 != to_epoch:
+        raise ValueError("toWitnessScheduleEpoch must equal fromWitnessScheduleEpoch + 1")
+    transition_block_number = _normalize_u64(
+        _mapping_value_without_aliases(
+            value,
+            "transitionBlockNumber",
+            "transitionBlockNumber",
+            "transition_block_number",
+        ),
+        "transitionBlockNumber",
+    )
+    if transition_block_number == 0:
+        raise ValueError("transitionBlockNumber must not be zero")
+    transition_block_hash = _nonzero_hex32_to_bytes(
+        _mapping_value_without_aliases(
+            value,
+            "transitionBlockHash",
+            "transitionBlockHash",
+            "transition_block_hash",
+        ),
+        "transitionBlockHash",
+    )
+    parent_witness_schedule_hash = _nonzero_hex32_to_bytes(
+        _mapping_value_without_aliases(
+            value,
+            "parentWitnessScheduleHash",
+            "parentWitnessScheduleHash",
+            "parent_witness_schedule_hash",
+        ),
+        "parentWitnessScheduleHash",
+    )
+    next_witness_schedule_hash = _nonzero_hex32_to_bytes(
+        _mapping_value_without_aliases(
+            value,
+            "nextWitnessScheduleHash",
+            "nextWitnessScheduleHash",
+            "next_witness_schedule_hash",
+        ),
+        "nextWitnessScheduleHash",
+    )
+    next_payload_hash = _tron_transition_payload_hash_bytes(value)
+    payload_value = _mapping_optional_value_without_aliases(
+        value,
+        "nextWitnessSchedulePayload",
+        "nextWitnessSchedulePayload",
+        "next_witness_schedule_payload",
+    )
+    if payload_value is not _MISSING:
+        derived_next_hash = _hex_to_bytes(
+            tron_witness_schedule_hash_from_payload(payload_value),
+            "nextWitnessScheduleHash",
+            32,
+        )
+        if next_witness_schedule_hash != derived_next_hash:
+            raise TypeError("nextWitnessScheduleHash must match nextWitnessSchedulePayload")
+    return {
+        "version": version,
+        "source_domain": source_domain,
+        "from_witness_schedule_epoch": from_epoch,
+        "to_witness_schedule_epoch": to_epoch,
+        "transition_block_number": transition_block_number,
+        "transition_block_hash": transition_block_hash,
+        "parent_witness_schedule_hash": parent_witness_schedule_hash,
+        "next_witness_schedule_hash": next_witness_schedule_hash,
+        "next_witness_schedule_payload_hash": next_payload_hash,
+    }
+
+
+def canonical_tron_witness_schedule_transition_message_bytes(input_value: Any) -> bytes:
+    """Return canonical TRON witness-schedule transition message bytes."""
+
+    value = _normalize_tron_witness_schedule_transition_message_input(input_value)
+    return b"".join(
+        (
+            _write_u8(value["version"]),
+            _write_u32_le(value["source_domain"]),
+            _write_u64_le(value["from_witness_schedule_epoch"]),
+            _write_u64_le(value["to_witness_schedule_epoch"]),
+            _write_u64_le(value["transition_block_number"]),
+            value["transition_block_hash"],
+            value["parent_witness_schedule_hash"],
+            value["next_witness_schedule_hash"],
+            value["next_witness_schedule_payload_hash"],
+        )
+    )
+
+
+def tron_witness_schedule_transition_message_hash(input_value: Any) -> str:
+    """Hash a canonical TRON witness-schedule transition message transcript."""
+
+    return _bytes_to_hex(
+        _prefixed_keccak(
+            _SCCP_TRON_WITNESS_SCHEDULE_TRANSITION_MESSAGE_PREFIX_V1,
+            canonical_tron_witness_schedule_transition_message_bytes(input_value),
+        )
+    )
+
+
+def canonical_tron_witness_schedule_transition_seal_bytes(input_value: Any) -> bytes:
+    """Return canonical TRON witness-schedule transition seal bytes."""
+
+    value = _require_mapping(input_value, "TRON witness-schedule transition seal input")
+    message = _normalize_tron_witness_schedule_transition_message_input(value)
+    version = _normalize_optional_v1_version(
+        value,
+        "TRON witness-schedule transition proof version",
+        "version",
+    )
+    if version != message["version"]:
+        raise TypeError("version must match transition message version")
+    next_payload = _tron_witness_schedule_payload_bytes(
+        _mapping_value_without_aliases(
+            value,
+            "nextWitnessSchedulePayload",
+            "nextWitnessSchedulePayload",
+            "next_witness_schedule_payload",
+        )
+    )
+    next_payload_hash = _hex_to_bytes(
+        tron_witness_schedule_payload_hash(next_payload),
+        "nextWitnessSchedulePayloadHash",
+        32,
+    )
+    if next_payload_hash != message["next_witness_schedule_payload_hash"]:
+        raise TypeError("nextWitnessSchedulePayloadHash must match nextWitnessSchedulePayload")
+    next_schedule_hash = _hex_to_bytes(
+        tron_witness_schedule_hash_from_payload(next_payload),
+        "nextWitnessScheduleHash",
+        32,
+    )
+    if next_schedule_hash != message["next_witness_schedule_hash"]:
+        raise TypeError("nextWitnessScheduleHash must match nextWitnessSchedulePayload")
+    transition_message_hash = _nonzero_hex32_to_bytes(
+        _mapping_value_without_aliases(
+            value,
+            "transitionMessageHash",
+            "transitionMessageHash",
+            "transition_message_hash",
+        ),
+        "transitionMessageHash",
+    )
+    expected_message_hash = _hex_to_bytes(
+        tron_witness_schedule_transition_message_hash(value),
+        "transitionMessageHash",
+        32,
+    )
+    if transition_message_hash != expected_message_hash:
+        raise TypeError("transitionMessageHash must match transition message fields")
+    seal_proof = _normalize_tron_witness_seal_proof(
+        _mapping_value_without_aliases(
+            value,
+            "sealProof",
+            "sealProof",
+            "seal_proof",
+            "witnessSealProof",
+            "witness_seal_proof",
+        )
+    )
+    if seal_proof["solid_block_message_hash"] != transition_message_hash:
+        raise TypeError("sealProof.solidBlockMessageHash must match transitionMessageHash")
+    if seal_proof["witness_schedule_hash"] != message["parent_witness_schedule_hash"]:
+        raise TypeError("parentWitnessScheduleHash must match sealProof")
+
+    out = bytearray()
+    out.extend(_write_u8(version))
+    out.extend(_write_u32_le(message["source_domain"]))
+    out.extend(_write_u64_le(message["from_witness_schedule_epoch"]))
+    out.extend(_write_u64_le(message["to_witness_schedule_epoch"]))
+    out.extend(_write_u64_le(message["transition_block_number"]))
+    out.extend(message["transition_block_hash"])
+    out.extend(message["parent_witness_schedule_hash"])
+    out.extend(message["next_witness_schedule_hash"])
+    out.extend(_write_bytes(next_payload))
+    out.extend(next_payload_hash)
+    out.extend(transition_message_hash)
+    out.extend(seal_proof["witness_schedule_hash"])
+    out.extend(_canonical_tron_witness_seal_proof_bytes(seal_proof))
+    return bytes(out)
+
+
+def tron_witness_schedule_transition_seal_hash(input_value: Any) -> str:
+    """Hash canonical TRON witness-schedule transition seal bytes."""
+
+    return _bytes_to_hex(
+        _prefixed_blake2b(
+            _SCCP_TRON_WITNESS_SCHEDULE_TRANSITION_SEAL_PREFIX_V1,
+            canonical_tron_witness_schedule_transition_seal_bytes(input_value),
+        )
+    )
+
+
+def _is_substrate_runtime_storage_source_domain(source_domain: int) -> bool:
+    return source_domain in {
+        SCCP_DOMAIN_SORA_KUSAMA,
+        SCCP_DOMAIN_SORA_POLKADOT,
+        SCCP_DOMAIN_SORA2,
+    }
+
+
+def _normalize_substrate_sccp_storage_proof_input(input_value: Any) -> Dict[str, Any]:
+    value = _require_mapping(input_value, "Substrate SCCP storage proof input")
+    source_domain = _normalize_u32(
+        _mapping_value_without_aliases(value, "sourceDomain", "sourceDomain", "source_domain"),
+        "sourceDomain",
+    )
+    source_event_digest = _hex_to_bytes(
+        _mapping_value_without_aliases(
+            value,
+            "sourceEventDigest",
+            "sourceEventDigest",
+            "source_event_digest",
+        ),
+        "sourceEventDigest",
+        32,
+    )
+    source_event_leaf_index = _normalize_u64(
+        _mapping_value_without_aliases(
+            value,
+            "sourceEventLeafIndex",
+            "sourceEventLeafIndex",
+            "source_event_leaf_index",
+            "leafIndex",
+            "leaf_index",
+        ),
+        "sourceEventLeafIndex",
+    )
+    finalized_block_number = _normalize_u64(
+        _mapping_value_without_aliases(
+            value,
+            "finalizedBlockNumber",
+            "finalizedBlockNumber",
+            "finalized_block_number",
+            "finalityHeight",
+            "finality_height",
+        ),
+        "finalizedBlockNumber",
+    )
+    grandpa_set_id = _normalize_u64(
+        _mapping_value_without_aliases(value, "grandpaSetId", "grandpaSetId", "grandpa_set_id"),
+        "grandpaSetId",
+    )
+    block_hash = _hex_to_bytes(
+        _mapping_value_without_aliases(
+            value,
+            "blockHash",
+            "blockHash",
+            "block_hash",
+            "finalityBlockHash",
+            "finality_block_hash",
+        ),
+        "blockHash",
+        32,
+    )
+    authority_set_hash = _hex_to_bytes(
+        _mapping_value_without_aliases(
+            value,
+            "authoritySetHash",
+            "authoritySetHash",
+            "authority_set_hash",
+        ),
+        "authoritySetHash",
+        32,
+    )
+    events_root = _hex_to_bytes(
+        _mapping_value_without_aliases(
+            value,
+            "eventsRoot",
+            "eventsRoot",
+            "events_root",
+            "receiptOrMessageRoot",
+            "receipt_or_message_root",
+        ),
+        "eventsRoot",
+        32,
+    )
+    inclusion_branch = _normalize_inclusion_branch(
+        _mapping_value_without_aliases(value, "inclusionBranch", "inclusionBranch", "inclusion_branch"),
+    )
+    return {
+        "source_domain": source_domain,
+        "source_event_digest": _bytes_to_hex(source_event_digest),
+        "source_event_leaf_index": source_event_leaf_index,
+        "finalized_block_number": finalized_block_number,
+        "grandpa_set_id": grandpa_set_id,
+        "block_hash": _bytes_to_hex(block_hash),
+        "authority_set_hash": _bytes_to_hex(authority_set_hash),
+        "events_root": _bytes_to_hex(events_root),
+        "inclusion_branch": list(inclusion_branch),
+    }
+
+
+def canonical_substrate_sccp_storage_proof_bytes(input_value: Any) -> bytes:
+    """Return canonical Substrate-family SCCP storage-proof transcript bytes."""
+
+    normalized = _normalize_substrate_sccp_storage_proof_input(input_value)
+    out = bytearray()
+    out.extend(_write_u8(1))
+    out.extend(_write_u32_le(normalized["source_domain"]))
+    out.extend(_hex_to_bytes(normalized["source_event_digest"], "sourceEventDigest", 32))
+    out.extend(_SCCP_SUBSTRATE_SYSTEM_EVENTS_STORAGE_KEY_V1)
+    out.extend(_write_u64_le(normalized["source_event_leaf_index"]))
+    out.extend(_write_u64_le(normalized["finalized_block_number"]))
+    out.extend(_write_u64_le(normalized["grandpa_set_id"]))
+    out.extend(_hex_to_bytes(normalized["block_hash"], "blockHash", 32))
+    out.extend(_hex_to_bytes(normalized["authority_set_hash"], "authoritySetHash", 32))
+    out.extend(_hex_to_bytes(normalized["events_root"], "eventsRoot", 32))
+    out.extend(_write_u32_le(len(normalized["inclusion_branch"])))
+    for sibling in normalized["inclusion_branch"]:
+        out.extend(sibling)
+    return bytes(out)
+
+
+def substrate_sccp_storage_proof_hash(input_value: Any) -> str:
+    """Hash a Substrate-family SCCP storage-proof transcript with the canonical prefix."""
+
+    return _bytes_to_hex(
+        _prefixed_blake2b(
+            _SCCP_SUBSTRATE_STORAGE_PROOF_PREFIX_V1,
+            canonical_substrate_sccp_storage_proof_bytes(input_value),
+        )
+    )
+
+
+def _normalize_substrate_sccp_runtime_storage_proof_request_input(
+    input_value: Any,
+) -> Dict[str, Any]:
+    value = _require_mapping(input_value, "Substrate SCCP runtime-storage proof request input")
+    storage_proof = _normalize_substrate_sccp_storage_proof_input(value)
+    if not _is_substrate_runtime_storage_source_domain(storage_proof["source_domain"]):
+        raise ValueError("sourceDomain must be a Substrate-family SCCP source domain")
+    storage_proof_hash = substrate_sccp_storage_proof_hash(storage_proof)
+    supplied_storage_proof_hash = _mapping_optional_value_without_aliases(
+        value,
+        "storageProofHash",
+        "storageProofHash",
+        "storage_proof_hash",
+    )
+    if supplied_storage_proof_hash is not _MISSING and (
+        _bytes_to_hex(_hex_to_bytes(supplied_storage_proof_hash, "storageProofHash", 32))
+        != storage_proof_hash
+    ):
+        raise TypeError("storageProofHash must match Substrate runtime-storage statement")
+    material_source = _mapping_optional_value_without_aliases(
+        value,
+        "sourceVerifierMaterial",
+        "sourceVerifierMaterial",
+        "source_verifier_material",
+        "material",
+    )
+    material_value: Dict[str, Any] = {}
+    if isinstance(material_source, Mapping):
+        material_domain = _mapping_optional_value_without_aliases(
+            material_source,
+            "sourceVerifierMaterial.sourceDomain",
+            "sourceDomain",
+            "source_domain",
+        )
+        if material_domain is not _MISSING and (
+            _normalize_u32(material_domain, "sourceVerifierMaterial.sourceDomain")
+            != storage_proof["source_domain"]
+        ):
+            raise ValueError("sourceVerifierMaterial.sourceDomain must match sourceDomain")
+        material_value.update(material_source)
+    material_value.update(value)
+    material_value.pop("sourceDomain", None)
+    material_value.pop("source_domain", None)
+    material_value["sourceDomain"] = storage_proof["source_domain"]
+    material = normalize_sccp_source_verifier_material(material_value)
+    if not _is_substrate_runtime_storage_source_domain(material["source_domain"]):
+        raise ValueError("sourceVerifierMaterial.sourceDomain must be a Substrate-family SCCP domain")
+    if material["source_domain"] != storage_proof["source_domain"]:
+        raise ValueError("sourceVerifierMaterial.sourceDomain must match sourceDomain")
+    if not material["source_state_verifier_id"] or (
+        not any(_hex_to_bytes(material["source_state_verifier_hash"], "sourceStateVerifierHash", 32))
+    ):
+        raise TypeError("sourceStateVerifierHash must bind a deployed Substrate runtime-storage verifier")
+    if (
+        material["source_state_verifier_hash"]
+        == _SCCP_SUBSTRATE_TEMPLATE_SOURCE_STATE_VERIFIER_HASHES[material["source_domain"]]
+    ):
+        raise TypeError("sourceStateVerifierHash must not be the Substrate template verifier hash")
+    normalized = storage_proof.copy()
+    normalized["storage_proof_hash"] = storage_proof_hash
+    normalized["material"] = material
+    return normalized
+
+
+def canonical_substrate_sccp_runtime_storage_verification_statement_bytes(
+    input_value: Any,
+) -> bytes:
+    """Return the OpenVerify statement bytes for Substrate runtime-storage proofs."""
+
+    return canonical_substrate_sccp_storage_proof_bytes(
+        _normalize_substrate_sccp_runtime_storage_proof_request_input(input_value)
+    )
+
+
+def substrate_sccp_runtime_storage_proof_public_inputs_hash(input_value: Any) -> str:
+    """Hash the canonical Substrate runtime-storage public inputs."""
+
+    return _bytes_to_hex(
+        _prefixed_blake2b(
+            _SCCP_SUBSTRATE_RUNTIME_STORAGE_PROOF_PUBLIC_INPUTS_PREFIX_V1,
+            canonical_substrate_sccp_runtime_storage_verification_statement_bytes(input_value),
+        )
+    )
+
+
+def canonical_substrate_sccp_runtime_storage_verification_context_bytes(
+    input_value: Any,
+) -> bytes:
+    """Return OpenVerify context bytes for Substrate runtime-storage source proofs."""
+
+    value = _normalize_substrate_sccp_runtime_storage_proof_request_input(input_value)
+    material = value["material"]
+    return b"".join(
+        (
+            _write_u8(1),
+            _write_string(
+                SCCP_SUBSTRATE_RUNTIME_STORAGE_OPEN_VERIFY_CIRCUIT_ID_V1,
+                "circuitId",
+            ),
+            _write_string(
+                _SCCP_SUBSTRATE_RUNTIME_STORAGE_FASTPQ_PARAMETER_SET_V1,
+                "parameterSet",
+            ),
+            _write_string(material["source_state_verifier_id"], "sourceStateVerifierId"),
+            _hex_to_bytes(material["source_state_verifier_hash"], "sourceStateVerifierHash", 32),
+            _write_string(material["source_trust_anchor_id"], "sourceTrustAnchorId"),
+            _hex_to_bytes(material["source_trust_anchor_hash"], "sourceTrustAnchorHash", 32),
+            _write_string(material["consensus_verifier_id"], "consensusVerifierId"),
+            _hex_to_bytes(material["consensus_verifier_hash"], "consensusVerifierHash", 32),
+            _write_string(
+                material["message_inclusion_verifier_id"],
+                "messageInclusionVerifierId",
+            ),
+            _hex_to_bytes(
+                material["message_inclusion_verifier_hash"],
+                "messageInclusionVerifierHash",
+                32,
+            ),
+            _write_string(material["finality_policy_id"], "finalityPolicyId"),
+            _hex_to_bytes(material["finality_policy_hash"], "finalityPolicyHash", 32),
+            _hex_to_bytes(
+                substrate_sccp_runtime_storage_proof_public_inputs_hash(value),
+                "runtimeStorageProofPublicInputsHash",
+                32,
+            ),
+        )
+    )
+
+
+def substrate_sccp_runtime_storage_public_input_columns(
+    input_value: Any,
+) -> list[list[str]]:
+    """Return OpenVerify public-input columns for Substrate runtime-storage proofs."""
+
+    value = _normalize_substrate_sccp_runtime_storage_proof_request_input(input_value)
+    return [
+        [_bytes_to_hex(_sccp_word_u32_le(value["source_domain"]))],
+        [_bytes_to_hex(_sccp_word_u64_le(value["finalized_block_number"]))],
+        [_bytes_to_hex(_sccp_word_u64_le(value["grandpa_set_id"]))],
+        [value["block_hash"]],
+        [value["authority_set_hash"]],
+        [value["events_root"]],
+        [value["storage_proof_hash"]],
+        [value["source_event_digest"]],
+        [_bytes_to_hex(_SCCP_SUBSTRATE_SYSTEM_EVENTS_STORAGE_KEY_V1)],
+        [_bytes_to_hex(_sccp_word_u64_le(value["source_event_leaf_index"]))],
+        [substrate_sccp_runtime_storage_proof_public_inputs_hash(value)],
+    ]
+
+
+def substrate_sccp_runtime_storage_open_verify_schema_descriptor(
+    input_value: Any,
+) -> bytes:
+    """Return the Substrate runtime-storage OpenVerify schema descriptor."""
+
+    if isinstance(input_value, Mapping):
+        source_domain = _normalize_u32(
+            _mapping_value_without_aliases(
+                input_value,
+                "sourceDomain",
+                "sourceDomain",
+                "source_domain",
+            ),
+            "sourceDomain",
+        )
+    else:
+        source_domain = _normalize_u32(input_value, "sourceDomain")
+    if not _is_substrate_runtime_storage_source_domain(source_domain):
+        raise ValueError("sourceDomain must be a Substrate-family SCCP source domain")
+    chain, _, _ = _sccp_source_adapter_verifier_profile(source_domain)
+    out = bytearray()
+    out.extend(_write_u8(1))
+    out.extend(
+        _write_string(
+            SCCP_SUBSTRATE_RUNTIME_STORAGE_OPEN_VERIFY_CIRCUIT_ID_V1,
+            "circuitId",
+        )
+    )
+    out.extend(
+        _write_string(
+            _SCCP_SUBSTRATE_RUNTIME_STORAGE_FASTPQ_PARAMETER_SET_V1,
+            "parameterSet",
+        )
+    )
+    out.extend(_write_string(chain.decode(), "sourceChain"))
+    out.extend(_write_u32_le(source_domain))
+    for required_input in (
+        "source_domain",
+        "finalized_block_number",
+        "grandpa_set_id",
+        "block_hash",
+        "authority_set_hash",
+        "events_root",
+        "storage_proof_hash",
+        "source_event_digest",
+        "system_events_storage_key",
+        "source_event_leaf_index",
+        "runtime_storage_proof_public_inputs_hash",
+    ):
+        out.extend(_write_string(required_input, "requiredInput"))
+    return bytes(out)
+
+
+def build_substrate_sccp_runtime_storage_proof_request(
+    input_value: Any,
+) -> Dict[str, Any]:
+    """Build a Substrate runtime-storage proof request for browser/mobile provers."""
+
+    value = _normalize_substrate_sccp_runtime_storage_proof_request_input(input_value)
+    statement_bytes = canonical_substrate_sccp_runtime_storage_verification_statement_bytes(value)
+    verification_context_bytes = (
+        canonical_substrate_sccp_runtime_storage_verification_context_bytes(value)
+    )
+    public_inputs_hash = substrate_sccp_runtime_storage_proof_public_inputs_hash(value)
+    dsid = _prefixed_blake2b(
+        _SCCP_SUBSTRATE_RUNTIME_STORAGE_FASTPQ_DSID_PREFIX_V1,
+        _hex_to_bytes(public_inputs_hash, "runtimeStorageProofPublicInputsHash", 32),
+    )[:16]
+    transitions = [
+        {
+            "key": _SCCP_SUBSTRATE_RUNTIME_STORAGE_FASTPQ_STATEMENT_KEY_V1.decode(),
+            "operation": "meta_set",
+            "old_value": "0x",
+            "new_value": _bytes_to_hex(statement_bytes),
+        },
+        {
+            "key": _SCCP_SUBSTRATE_RUNTIME_STORAGE_FASTPQ_CONTEXT_KEY_V1.decode(),
+            "operation": "meta_set",
+            "old_value": "0x",
+            "new_value": _bytes_to_hex(verification_context_bytes),
+        },
+        {
+            "key": _SCCP_SUBSTRATE_RUNTIME_STORAGE_FASTPQ_STORAGE_KEY_V1.decode(),
+            "operation": "meta_set",
+            "old_value": "0x",
+            "new_value": _bytes_to_hex(_SCCP_SUBSTRATE_SYSTEM_EVENTS_STORAGE_KEY_V1),
+        },
+    ]
+    transitions.sort(key=lambda transition: transition["key"])
+    return _immutable_prover_envelope({
+        "version": 1,
+        "proof_family": SCCP_STARK_FRI_PROOF_FAMILY_V1,
+        "circuit_id": SCCP_SUBSTRATE_RUNTIME_STORAGE_OPEN_VERIFY_CIRCUIT_ID_V1,
+        "parameter_set": _SCCP_SUBSTRATE_RUNTIME_STORAGE_FASTPQ_PARAMETER_SET_V1,
+        "source_domain": value["source_domain"],
+        "finalized_block_number": str(value["finalized_block_number"]),
+        "grandpa_set_id": str(value["grandpa_set_id"]),
+        "source_state_verifier_id": value["material"]["source_state_verifier_id"],
+        "source_state_verifier_hash": value["material"]["source_state_verifier_hash"],
+        "runtime_storage_proof_public_inputs_hash": public_inputs_hash,
+        "storage_proof_hash": value["storage_proof_hash"],
+        "statement_bytes": statement_bytes,
+        "verification_context_bytes": verification_context_bytes,
+        "schema_descriptor": substrate_sccp_runtime_storage_open_verify_schema_descriptor(
+            value["source_domain"]
+        ),
+        "public_input_columns": substrate_sccp_runtime_storage_public_input_columns(value),
+        "fastpq_public_inputs": {
+            "dsid": _bytes_to_hex(dsid),
+            "slot": str(value["finalized_block_number"]),
+            "old_root": value["authority_set_hash"],
+            "new_root": value["block_hash"],
+            "perm_root": value["events_root"],
+            "tx_set_hash": public_inputs_hash,
+        },
+        "fastpq_transitions": transitions,
+    })
+
+
+def canonical_substrate_authority_set_payload_bytes(input_value: Any) -> bytes:
+    """Return canonical Substrate GRANDPA authority-set payload bytes."""
+
+    value = _require_mapping(input_value, "Substrate authority-set payload input")
+    public_keys_value = _mapping_value_without_aliases(
+        value,
+        "authorityPublicKeys",
+        "authorityPublicKeys",
+        "authority_public_keys",
+    )
+    weights_value = _mapping_value_without_aliases(
+        value,
+        "authorityWeights",
+        "authorityWeights",
+        "authority_weights",
+    )
+    if not isinstance(public_keys_value, Sequence) or isinstance(
+        public_keys_value, (str, bytes, bytearray)
+    ):
+        raise TypeError("authorityPublicKeys must be an array")
+    if not isinstance(weights_value, Sequence) or isinstance(weights_value, (str, bytes, bytearray)):
+        raise TypeError("authorityWeights must be an array")
+    if not public_keys_value or len(public_keys_value) != len(weights_value):
+        raise ValueError("authorityPublicKeys and authorityWeights must be non-empty equal-length arrays")
+    if len(public_keys_value) > _SCCP_SUBSTRATE_MAX_AUTHORITIES:
+        raise ValueError(
+            f"authorityPublicKeys must contain at most {_SCCP_SUBSTRATE_MAX_AUTHORITIES} entries"
+        )
+
+    out = bytearray()
+    out.extend(_write_u8(1))
+    out.extend(_write_u32_le(len(public_keys_value)))
+    seen_public_keys = set()
+    for index, (public_key_value, weight_value) in enumerate(zip(public_keys_value, weights_value)):
+        public_key = _hex_to_bytes(public_key_value, f"authorityPublicKeys[{index}]", 32)
+        if not any(public_key):
+            raise ValueError(f"authorityPublicKeys[{index}] must not be zero")
+        if public_key in seen_public_keys:
+            raise ValueError(f"authorityPublicKeys[{index}] must be unique")
+        seen_public_keys.add(public_key)
+        weight = _normalize_u64(weight_value, f"authorityWeights[{index}]")
+        if weight == 0:
+            raise ValueError(f"authorityWeights[{index}] must not be zero")
+        out.extend(public_key)
+        out.extend(_write_u64_le(weight))
+    return bytes(out)
+
+
+def _decode_substrate_authority_set_payload(payload: bytes) -> None:
+    if len(payload) > _SCCP_SUBSTRATE_MAX_AUTHORITY_SET_PAYLOAD_BYTES:
+        raise ValueError(
+            "Substrate authority-set payload must be at most "
+            f"{_SCCP_SUBSTRATE_MAX_AUTHORITY_SET_PAYLOAD_BYTES} bytes"
+        )
+    if not payload or payload[0] != 1:
+        raise ValueError("Substrate authority-set payload must start with version 1")
+    cursor = 1
+    if cursor + 4 > len(payload):
+        raise ValueError("Substrate authority-set count is truncated")
+    authority_count = int.from_bytes(payload[cursor : cursor + 4], "little")
+    cursor += 4
+    if authority_count == 0:
+        raise ValueError("Substrate authority set must not be empty")
+    if authority_count > _SCCP_SUBSTRATE_MAX_AUTHORITIES:
+        raise ValueError(
+            f"Substrate authority set must contain at most {_SCCP_SUBSTRATE_MAX_AUTHORITIES} entries"
+        )
+    if len(payload) - cursor != authority_count * 40:
+        raise ValueError("Substrate authority-set payload length is invalid")
+    seen_public_keys = set()
+    for index in range(authority_count):
+        public_key = payload[cursor : cursor + 32]
+        cursor += 32
+        if not any(public_key):
+            raise ValueError(f"authorityPublicKeys[{index}] must not be zero")
+        if public_key in seen_public_keys:
+            raise ValueError(f"authorityPublicKeys[{index}] must be unique")
+        seen_public_keys.add(public_key)
+        weight = int.from_bytes(payload[cursor : cursor + 8], "little")
+        cursor += 8
+        if weight == 0:
+            raise ValueError(f"authorityWeights[{index}] must not be zero")
+
+
+def _substrate_authority_set_payload_bytes(input_value: Any) -> bytes:
+    payload = (
+        _to_bytes(input_value, "authoritySetPayload")
+        if isinstance(input_value, (bytes, bytearray, memoryview, str))
+        else canonical_substrate_authority_set_payload_bytes(input_value)
+    )
+    _decode_substrate_authority_set_payload(payload)
+    return payload
+
+
+def substrate_authority_set_payload_hash(input_value: Any) -> str:
+    """Hash the canonical Substrate GRANDPA authority-set transition payload."""
+
+    payload = _substrate_authority_set_payload_bytes(input_value)
+    return _bytes_to_hex(
+        _prefixed_blake2b(_SCCP_SUBSTRATE_AUTHORITY_SET_PAYLOAD_PREFIX_V1, payload)
+    )
+
+
+def substrate_authority_set_hash_from_payload(input_value: Any) -> str:
+    """Derive the SCCP Substrate authority-set hash from a canonical payload."""
+
+    payload = _substrate_authority_set_payload_bytes(input_value)
+    return _bytes_to_hex(_prefixed_blake2b(_SCCP_SUBSTRATE_AUTHORITY_SET_PREFIX_V1, payload))
+
+
+def _substrate_transition_payload_hash_bytes(value: Mapping[str, Any]) -> bytes:
+    provided_hash = _mapping_optional_value_without_aliases(
+        value,
+        "nextAuthoritySetPayloadHash",
+        "nextAuthoritySetPayloadHash",
+        "next_authority_set_payload_hash",
+        "nextAuthoritySetProofHash",
+        "next_authority_set_proof_hash",
+    )
+    payload_value = _mapping_optional_value_without_aliases(
+        value,
+        "nextAuthoritySetPayload",
+        "nextAuthoritySetPayload",
+        "next_authority_set_payload",
+    )
+    if provided_hash is _MISSING and payload_value is _MISSING:
+        raise TypeError("nextAuthoritySetPayloadHash or nextAuthoritySetPayload is required")
+    payload_hash = (
+        _hex_to_bytes(provided_hash, "nextAuthoritySetPayloadHash", 32)
+        if provided_hash is not _MISSING
+        else _hex_to_bytes(
+            substrate_authority_set_payload_hash(payload_value),
+            "nextAuthoritySetPayloadHash",
+            32,
+        )
+    )
+    if payload_value is not _MISSING:
+        derived_hash = _hex_to_bytes(
+            substrate_authority_set_payload_hash(payload_value),
+            "nextAuthoritySetPayloadHash",
+            32,
+        )
+        if payload_hash != derived_hash:
+            raise TypeError("nextAuthoritySetPayloadHash must match nextAuthoritySetPayload")
+    return payload_hash
+
+
+def canonical_substrate_authority_set_transition_message_bytes(input_value: Any) -> bytes:
+    """Return canonical Substrate authority-set transition message bytes."""
+
+    value = _require_mapping(input_value, "Substrate authority-set transition message input")
+    out = bytearray()
+    out.extend(_write_u8(1))
+    out.extend(
+        _write_u32_le(
+            _normalize_u32(
+                _mapping_value_without_aliases(
+                    value,
+                    "sourceDomain",
+                    "sourceDomain",
+                    "source_domain",
+                ),
+                "sourceDomain",
+            )
+        )
+    )
+    out.extend(
+        _write_u64_le(
+            _normalize_u64(
+                _mapping_value_without_aliases(
+                    value,
+                    "fromGrandpaSetId",
+                    "fromGrandpaSetId",
+                    "from_grandpa_set_id",
+                ),
+                "fromGrandpaSetId",
+            )
+        )
+    )
+    out.extend(
+        _write_u64_le(
+            _normalize_u64(
+                _mapping_value_without_aliases(
+                    value,
+                    "toGrandpaSetId",
+                    "toGrandpaSetId",
+                    "to_grandpa_set_id",
+                ),
+                "toGrandpaSetId",
+            )
+        )
+    )
+    out.extend(
+        _write_u64_le(
+            _normalize_u64(
+                _mapping_value_without_aliases(
+                    value,
+                    "transitionBlockNumber",
+                    "transitionBlockNumber",
+                    "transition_block_number",
+                ),
+                "transitionBlockNumber",
+            )
+        )
+    )
+    out.extend(
+        _hex_to_bytes(
+            _mapping_value_without_aliases(
+                value,
+                "transitionBlockHash",
+                "transitionBlockHash",
+                "transition_block_hash",
+            ),
+            "transitionBlockHash",
+            32,
+        )
+    )
+    out.extend(
+        _hex_to_bytes(
+            _mapping_value_without_aliases(
+                value,
+                "parentAuthoritySetHash",
+                "parentAuthoritySetHash",
+                "parent_authority_set_hash",
+            ),
+            "parentAuthoritySetHash",
+            32,
+        )
+    )
+    out.extend(
+        _hex_to_bytes(
+            _mapping_value_without_aliases(
+                value,
+                "nextAuthoritySetHash",
+                "nextAuthoritySetHash",
+                "next_authority_set_hash",
+            ),
+            "nextAuthoritySetHash",
+            32,
+        )
+    )
+    out.extend(_substrate_transition_payload_hash_bytes(value))
+    return bytes(out)
+
+
+def substrate_authority_set_transition_message_hash(input_value: Any) -> str:
+    """Hash a Substrate authority-set transition message transcript."""
+
+    return _bytes_to_hex(
+        _prefixed_blake2b(
+            _SCCP_SUBSTRATE_AUTHORITY_SET_TRANSITION_MESSAGE_PREFIX_V1,
+            canonical_substrate_authority_set_transition_message_bytes(input_value),
+        )
+    )
+
+
+def _canonical_substrate_grandpa_justification_proof_bytes(input_value: Any) -> bytes:
+    proof = _require_mapping(input_value, "Substrate GRANDPA justification proof")
+    public_keys_value = _mapping_value_without_aliases(
+        proof,
+        "authorityPublicKeys",
+        "authorityPublicKeys",
+        "authority_public_keys",
+    )
+    weights_value = _mapping_value_without_aliases(
+        proof,
+        "authorityWeights",
+        "authorityWeights",
+        "authority_weights",
+    )
+    if not isinstance(public_keys_value, Sequence) or isinstance(
+        public_keys_value, (str, bytes, bytearray)
+    ):
+        raise TypeError("authorityPublicKeys must be an array")
+    if not isinstance(weights_value, Sequence) or isinstance(weights_value, (str, bytes, bytearray)):
+        raise TypeError("authorityWeights must be an array")
+    if not public_keys_value or len(public_keys_value) != len(weights_value):
+        raise ValueError("authorityPublicKeys and authorityWeights must be non-empty equal-length arrays")
+    if len(public_keys_value) > _SCCP_SUBSTRATE_MAX_AUTHORITIES:
+        raise ValueError(
+            f"authorityPublicKeys must contain at most {_SCCP_SUBSTRATE_MAX_AUTHORITIES} entries"
+        )
+    signatures = _mapping_value_without_aliases(proof, "signatures", "signatures")
+    if (
+        not isinstance(signatures, Sequence)
+        or isinstance(signatures, (str, bytes, bytearray))
+    ):
+        raise TypeError("signatures must be an array")
+    if len(signatures) > _SCCP_SUBSTRATE_MAX_AUTHORITIES:
+        raise ValueError(
+            f"signatures must contain at most {_SCCP_SUBSTRATE_MAX_AUTHORITIES} entries"
+        )
+
+    public_keys = [
+        _hex_to_bytes(public_key, f"authorityPublicKeys[{index}]", 32)
+        for index, public_key in enumerate(public_keys_value)
+    ]
+    seen_public_keys = set()
+    for index, public_key in enumerate(public_keys):
+        if not any(public_key):
+            raise ValueError(f"authorityPublicKeys[{index}] must not be zero")
+        if public_key in seen_public_keys:
+            raise ValueError(f"authorityPublicKeys[{index}] must be unique")
+        seen_public_keys.add(public_key)
+    weights = [
+        _normalize_u64(weight, f"authorityWeights[{index}]")
+        for index, weight in enumerate(weights_value)
+    ]
+    if any(weight == 0 for weight in weights):
+        raise ValueError("authorityWeights must not contain zero")
+
+    total_weight = _normalize_u64(
+        _mapping_value_without_aliases(proof, "totalWeight", "totalWeight", "total_weight"),
+        "totalWeight",
+    )
+    signed_weight = _normalize_u64(
+        _mapping_value_without_aliases(proof, "signedWeight", "signedWeight", "signed_weight"),
+        "signedWeight",
+    )
+    computed_total_weight = sum(weights)
+    if total_weight != computed_total_weight:
+        raise ValueError("totalWeight must match authorityWeights")
+    signers_bitmap = _to_bytes(
+        _mapping_value_without_aliases(proof, "signersBitmap", "signersBitmap", "signers_bitmap"),
+        "signersBitmap",
+    )
+    if len(signers_bitmap) != (len(public_keys) + 7) // 8:
+        raise ValueError("signersBitmap length must match authorityPublicKeys")
+    signer_indices: list[int] = []
+    for byte_index, value in enumerate(signers_bitmap):
+        for bit in range(8):
+            if ((value >> bit) & 1) == 0:
+                continue
+            index = byte_index * 8 + bit
+            if index >= len(public_keys):
+                raise ValueError("signersBitmap must not set padding bits")
+            signer_indices.append(index)
+    if not signer_indices:
+        raise ValueError("signersBitmap must select at least one authority")
+    if len(signatures) != len(signer_indices):
+        raise TypeError("signatures length must match signersBitmap")
+    computed_signed_weight = sum(weights[index] for index in signer_indices)
+    if signed_weight != computed_signed_weight:
+        raise ValueError("signedWeight must match signersBitmap")
+    if signed_weight * 3 <= total_weight * 2:
+        raise ValueError("signedWeight must be greater than two thirds of totalWeight")
+
+    out = bytearray()
+    out.extend(
+        _write_u8(
+            _normalize_optional_v1_version(
+                proof,
+                "Substrate GRANDPA justification version",
+                "version",
+            )
+        )
+    )
+    out.extend(_write_u64_le(total_weight))
+    out.extend(_write_u64_le(signed_weight))
+    out.extend(
+        _hex_to_bytes(
+            _mapping_value_without_aliases(
+                proof,
+                "precommitMessageHash",
+                "precommitMessageHash",
+                "precommit_message_hash",
+            ),
+            "precommitMessageHash",
+            32,
+        )
+    )
+    out.extend(_write_u32_le(len(public_keys)))
+    for public_key in public_keys:
+        out.extend(_write_bytes(public_key))
+    out.extend(_write_u32_le(len(weights)))
+    for weight in weights:
+        out.extend(_write_u64_le(weight))
+    out.extend(_write_bytes(signers_bitmap))
+    out.extend(_write_u32_le(len(signatures)))
+    for index, signature in enumerate(signatures):
+        raw = _to_bytes(signature, f"signatures[{index}]")
+        if len(raw) != 64:
+            raise TypeError(f"signatures[{index}] must be 64 bytes")
+        if not any(raw):
+            raise TypeError(f"signatures[{index}] must not be all zero")
+        out.extend(_write_bytes(raw))
+    return bytes(out)
+
+
+def canonical_substrate_authority_set_transition_justification_bytes(input_value: Any) -> bytes:
+    """Return canonical Substrate authority-set transition justification bytes."""
+
+    value = _require_mapping(input_value, "Substrate authority-set transition justification input")
+    justification = _require_mapping(
+        _mapping_value_without_aliases(
+            value,
+            "grandpaJustification",
+            "grandpaJustification",
+            "grandpa_justification",
+        ),
+        "Substrate GRANDPA justification proof",
+    )
+    parent_authority_set_hash = _hex_to_bytes(
+        _mapping_value_without_aliases(
+            value,
+            "parentAuthoritySetHash",
+            "parentAuthoritySetHash",
+            "parent_authority_set_hash",
+        ),
+        "parentAuthoritySetHash",
+        32,
+    )
+    derived_parent_hash = _hex_to_bytes(
+        substrate_authority_set_hash_from_payload(
+            {
+                "authority_public_keys": _mapping_value_without_aliases(
+                    justification,
+                    "authorityPublicKeys",
+                    "authorityPublicKeys",
+                    "authority_public_keys",
+                ),
+                "authority_weights": _mapping_value_without_aliases(
+                    justification,
+                    "authorityWeights",
+                    "authorityWeights",
+                    "authority_weights",
+                ),
+            }
+        ),
+        "parentAuthoritySetHash",
+        32,
+    )
+    if parent_authority_set_hash != derived_parent_hash:
+        raise TypeError("parentAuthoritySetHash must match grandpaJustification authority set")
+
+    next_payload = _substrate_authority_set_payload_bytes(
+        _mapping_value_without_aliases(
+            value,
+            "nextAuthoritySetPayload",
+            "nextAuthoritySetPayload",
+            "next_authority_set_payload",
+        )
+    )
+    next_payload_hash = _substrate_transition_payload_hash_bytes(value)
+    next_authority_set_hash = _hex_to_bytes(
+        _mapping_value_without_aliases(
+            value,
+            "nextAuthoritySetHash",
+            "nextAuthoritySetHash",
+            "next_authority_set_hash",
+        ),
+        "nextAuthoritySetHash",
+        32,
+    )
+    derived_next_hash = _hex_to_bytes(
+        substrate_authority_set_hash_from_payload(next_payload),
+        "nextAuthoritySetHash",
+        32,
+    )
+    if next_authority_set_hash != derived_next_hash:
+        raise TypeError("nextAuthoritySetHash must match nextAuthoritySetPayload")
+
+    transition_message_hash = _hex_to_bytes(
+        _mapping_value_without_aliases(
+            value,
+            "transitionMessageHash",
+            "transitionMessageHash",
+            "transition_message_hash",
+        ),
+        "transitionMessageHash",
+        32,
+    )
+    precommit_message_hash = _hex_to_bytes(
+        _mapping_value_without_aliases(
+            justification,
+            "precommitMessageHash",
+            "precommitMessageHash",
+            "precommit_message_hash",
+        ),
+        "precommitMessageHash",
+        32,
+    )
+    if precommit_message_hash != transition_message_hash:
+        raise TypeError("grandpaJustification.precommitMessageHash must match transitionMessageHash")
+
+    out = bytearray()
+    out.extend(
+        _write_u8(
+            _normalize_optional_v1_version(
+                value,
+                "Substrate authority-set transition justification version",
+                "version",
+            )
+        )
+    )
+    out.extend(
+        _write_u32_le(
+            _normalize_u32(
+                _mapping_value_without_aliases(
+                    value,
+                    "sourceDomain",
+                    "sourceDomain",
+                    "source_domain",
+                ),
+                "sourceDomain",
+            )
+        )
+    )
+    out.extend(
+        _write_u64_le(
+            _normalize_u64(
+                _mapping_value_without_aliases(
+                    value,
+                    "fromGrandpaSetId",
+                    "fromGrandpaSetId",
+                    "from_grandpa_set_id",
+                ),
+                "fromGrandpaSetId",
+            )
+        )
+    )
+    out.extend(
+        _write_u64_le(
+            _normalize_u64(
+                _mapping_value_without_aliases(
+                    value,
+                    "toGrandpaSetId",
+                    "toGrandpaSetId",
+                    "to_grandpa_set_id",
+                ),
+                "toGrandpaSetId",
+            )
+        )
+    )
+    out.extend(
+        _write_u64_le(
+            _normalize_u64(
+                _mapping_value_without_aliases(
+                    value,
+                    "transitionBlockNumber",
+                    "transitionBlockNumber",
+                    "transition_block_number",
+                ),
+                "transitionBlockNumber",
+            )
+        )
+    )
+    out.extend(
+        _hex_to_bytes(
+            _mapping_value_without_aliases(
+                value,
+                "transitionBlockHash",
+                "transitionBlockHash",
+                "transition_block_hash",
+            ),
+            "transitionBlockHash",
+            32,
+        )
+    )
+    out.extend(parent_authority_set_hash)
+    out.extend(next_authority_set_hash)
+    out.extend(_write_bytes(next_payload))
+    out.extend(next_payload_hash)
+    out.extend(transition_message_hash)
+    out.extend(derived_parent_hash)
+    out.extend(_canonical_substrate_grandpa_justification_proof_bytes(justification))
+    return bytes(out)
+
+
+def substrate_authority_set_transition_justification_hash(input_value: Any) -> str:
+    """Hash a Substrate authority-set transition justification transcript."""
+
+    return _bytes_to_hex(
+        _prefixed_blake2b(
+            _SCCP_SUBSTRATE_AUTHORITY_SET_TRANSITION_JUSTIFICATION_PREFIX_V1,
+            canonical_substrate_authority_set_transition_justification_bytes(input_value),
+        )
+    )
+
+
+def normalize_solana_sccp_witness(input_value: Any) -> Dict[str, Any]:
+    """Normalize UI-supplied Solana witness fields for a local SCCP prover."""
+
+    value = _require_mapping(input_value, "Solana SCCP witness")
+    bundle = value.get("bundle") if isinstance(value.get("bundle"), Mapping) else {}
+    commitment = bundle.get("commitment") if isinstance(bundle.get("commitment"), Mapping) else {}
+    if not commitment and isinstance(value.get("commitment"), Mapping):
+        commitment = value["commitment"]
+
+    def witness_optional(label: str, *keys: str) -> Any:
+        return _mapping_optional_value_without_aliases(
+            value,
+            label,
+            *dict.fromkeys(keys),
+        )
+
+    def witness_value(label: str, *keys: str) -> Any:
+        selected = witness_optional(label, *keys)
+        return None if selected is _MISSING else selected
+
+    def witness_or_default(label: str, default: Any, *keys: str) -> Any:
+        selected = witness_optional(label, *keys)
+        return default if selected is _MISSING or selected is None else selected
+
+    def witness_or_commitment(label: str, commitment_key: str, *keys: str) -> Any:
+        selected = witness_optional(label, *keys)
+        return commitment.get(commitment_key) if selected is _MISSING else selected
+
+    target_domain_input = witness_optional("targetDomain", "targetDomain", "target_domain")
+    if target_domain_input is _MISSING:
+        target_domain = _normalize_u32(
+            commitment.get("target_domain"),
+            "targetDomain",
+            SCCP_DOMAIN_SORA,
+        )
+    elif target_domain_input is None:
+        raise TypeError("targetDomain must be a u32 domain id")
+    else:
+        target_domain = _normalize_u32(target_domain_input, "targetDomain")
+    if target_domain != SCCP_DOMAIN_SORA:
+        raise ValueError("targetDomain must be SORA")
+    finalized_slot = _normalize_u64(
+        witness_value("finalizedSlot", "finalizedSlot", "finalized_slot", "slot"),
+        "finalizedSlot",
+    )
+    parent_slot = _normalize_u64(
+        witness_value("parentSlot", "parentSlot", "parent_slot"),
+        "parentSlot",
+    )
+    if parent_slot + 1 != finalized_slot:
+        raise ValueError("parentSlot must be the direct parent of finalizedSlot")
+    bank_signature_count = _normalize_u64(
+        witness_value("bankSignatureCount", "bankSignatureCount", "bank_signature_count"),
+        "bankSignatureCount",
+    )
+    if bank_signature_count == 0:
+        raise ValueError("bankSignatureCount must be nonzero")
+    parent_bank_hash = _bytes_to_hex(
+        _nonzero_hex32_to_bytes(
+            witness_value("parentBankHash", "parentBankHash", "parent_bank_hash"),
+            "parentBankHash",
+        )
+    )
+    bank_hash = _bytes_to_hex(
+        _nonzero_hex32_to_bytes(
+            witness_value("bankHash", "bankHash", "bank_hash"),
+            "bankHash",
+        )
+    )
+    blockhash_bytes = _normalize_solana_hash32_bytes(
+        witness_value("blockhash", "blockhashBytes", "blockhash_bytes", "blockhash"),
+        "blockhash",
+    )
+    transaction_status_root = _normalize_nonzero_hex32(
+        witness_value("transactionStatusRoot", "transactionStatusRoot", "transaction_status_root"),
+        "transactionStatusRoot",
+    )
+    source_event_digest = _normalize_nonzero_hex32(
+        witness_value("sourceEventDigest", "sourceEventDigest", "source_event_digest"),
+        "sourceEventDigest",
+    )
+    transaction_signature = _normalize_solana_base58_fixed(
+        witness_value("transactionSignature", "transactionSignature", "transaction_signature"),
+        "transactionSignature",
+        _SCCP_SOLANA_TRANSACTION_SIGNATURE_BYTES,
+    )
+    emitter_program_id = _normalize_solana_base58_fixed(
+        witness_value("emitterProgramId", "emitterProgramId", "emitter_program_id"),
+        "emitterProgramId",
+        _SCCP_SOLANA_PROGRAM_ID_BYTES,
+    )
+
+    raw_inclusion_branch = witness_value("inclusionBranch", "inclusionBranch", "inclusion_branch")
+    normalized_inclusion_branch = (
+        None if raw_inclusion_branch is None else _normalize_inclusion_branch(raw_inclusion_branch)
+    )
+    if normalized_inclusion_branch is not None:
+        derived_transaction_status_root = solana_sccp_transaction_status_root_from_branch(
+            {
+                "sourceEventDigest": source_event_digest,
+                "transactionSignature": transaction_signature,
+                "emitterProgramId": emitter_program_id,
+                "inclusionBranch": normalized_inclusion_branch,
+            }
+        )
+        if transaction_status_root != derived_transaction_status_root:
+            raise TypeError("transactionStatusRoot must match inclusionBranch")
+    derived_message_proof_hash = (
+        None
+        if normalized_inclusion_branch is None
+        else solana_sccp_message_proof_hash(
+            {
+                "sourceEventDigest": source_event_digest,
+                "transactionStatusRoot": transaction_status_root,
+                "transactionSignature": transaction_signature,
+                "emitterProgramId": emitter_program_id,
+                "inclusionBranch": normalized_inclusion_branch,
+            }
+        )
+    )
+    provided_message_proof_hash = witness_value(
+        "messageProofHash",
+        "messageProofHash",
+        "message_proof_hash",
+    )
+    if derived_message_proof_hash is not None and (
+        provided_message_proof_hash is None
+        or (
+            isinstance(provided_message_proof_hash, str)
+            and provided_message_proof_hash.strip() == ""
+        )
+    ):
+        message_proof_hash = derived_message_proof_hash
+    else:
+        message_proof_hash = _normalize_hex32(provided_message_proof_hash, "messageProofHash")
+    if derived_message_proof_hash is not None and message_proof_hash != derived_message_proof_hash:
+        raise TypeError("messageProofHash must match inclusionBranch")
+    account_inclusion_root = _bytes_to_hex(
+        _nonzero_hex32_to_bytes(
+            witness_value(
+                "accountInclusionRoot",
+                "accountInclusionRoot",
+                "account_inclusion_root",
+                "accountsRoot",
+                "accounts_root",
+            ),
+            "accountInclusionRoot",
+        )
+    )
+    accounts_lt_hash_checksum = _bytes_to_hex(
+        _nonzero_hex32_to_bytes(
+            witness_value(
+                "accountsLtHashChecksum",
+                "accountsLtHashChecksum",
+                "accounts_lt_hash_checksum",
+                "accountsLtHashRoot",
+                "accounts_lt_hash_root",
+            ),
+            "accountsLtHashChecksum",
+        )
+    )
+    bank_hash_hard_fork_data = _optional_bytes(
+        witness_or_default(
+            "bankHashHardForkData",
+            None,
+            "bankHashHardForkData",
+            "bank_hash_hard_fork_data",
+        ),
+        "bankHashHardForkData",
+    )
+    if len(bank_hash_hard_fork_data) > _SCCP_SOLANA_MAX_BANK_HARD_FORK_HASH_DATA_BYTES:
+        raise ValueError("bankHashHardForkData is too large")
+    accounts_lt_hash_input = witness_value("accountsLtHash", "accountsLtHash", "accounts_lt_hash")
+    accounts_lt_hash = None if accounts_lt_hash_input is None else _to_bytes(
+        accounts_lt_hash_input,
+        "accountsLtHash",
+    )
+    if accounts_lt_hash is not None:
+        if _hex_to_bytes(accounts_lt_hash_checksum, "accountsLtHashChecksum", 32) != _blake3_digest(accounts_lt_hash):
+            raise TypeError("accountsLtHashChecksum must match accountsLtHash")
+        expected_bank_hash = _bytes_to_hex(
+            _solana_sccp_agave_bank_hash_bytes(
+                _hex_to_bytes(parent_bank_hash, "parentBankHash", 32),
+                bank_signature_count,
+                blockhash_bytes,
+                accounts_lt_hash,
+                bank_hash_hard_fork_data,
+            )
+        )
+        if bank_hash != expected_bank_hash:
+            raise TypeError("bankHash must match Agave bank hash inputs")
+    deployment_binding = normalize_sccp_source_adapter_deployment_binding(
+        {
+            "source_domain": SCCP_DOMAIN_SOL,
+            "target_domain": target_domain,
+            "source_adapter_deployment_hash": witness_or_default(
+                "sourceAdapterDeploymentHash",
+                SCCP_ZERO_HASH_V1,
+                "sourceAdapterDeploymentHash",
+                "source_adapter_deployment_hash",
+            ),
+            "source_adapter_deployment_receipt_hash": witness_or_default(
+                "sourceAdapterDeploymentReceiptHash",
+                SCCP_ZERO_HASH_V1,
+                "sourceAdapterDeploymentReceiptHash",
+                "source_adapter_deployment_receipt_hash",
+            ),
+        }
+    )
+    source_state_verifier_id = _normalize_non_empty_string(
+        witness_or_default(
+            "sourceStateVerifierId",
+            SCCP_SOLANA_MAINNET_ACCOUNTS_DB_VERIFIER_ID_V1,
+            "sourceStateVerifierId",
+            "source_state_verifier_id",
+        ),
+        "sourceStateVerifierId",
+    )
+    source_state_verifier_hash = _normalize_hex32(
+        witness_or_default(
+            "sourceStateVerifierHash",
+            SCCP_ZERO_HASH_V1,
+            "sourceStateVerifierHash",
+            "source_state_verifier_hash",
+        ),
+        "sourceStateVerifierHash",
+    )
+    if (
+        source_state_verifier_hash != SCCP_ZERO_HASH_V1
+        and source_state_verifier_id != SCCP_SOLANA_MAINNET_ACCOUNTS_DB_VERIFIER_ID_V1
+    ):
+        raise TypeError("sourceStateVerifierId must match Solana AccountsDB verifier profile")
+    accounts_lt_hash_proof_public_inputs_hash = solana_sccp_accounts_lt_hash_proof_public_inputs_hash(
+        {
+            "source_domain": SCCP_DOMAIN_SOL,
+            "finalized_slot": finalized_slot,
+            "parent_slot": parent_slot,
+            "bank_signature_count": bank_signature_count,
+            "parent_bank_hash": parent_bank_hash,
+            "bank_hash": bank_hash,
+            "blockhash": _bytes_to_hex(blockhash_bytes),
+            "transaction_status_root": transaction_status_root,
+            "account_inclusion_root": account_inclusion_root,
+            "accounts_lt_hash_checksum": accounts_lt_hash_checksum,
+            "bank_hash_hard_fork_data": bank_hash_hard_fork_data,
+        }
+    )
+    supplied_accounts_lt_hash_proof_public_inputs_hash = witness_value(
+        "accountsLtHashProofPublicInputsHash",
+        "accountsLtHashProofPublicInputsHash",
+        "accounts_lt_hash_proof_public_inputs_hash",
+    )
+    if supplied_accounts_lt_hash_proof_public_inputs_hash is not None and (
+        _normalize_hex32(
+            supplied_accounts_lt_hash_proof_public_inputs_hash,
+            "accountsLtHashProofPublicInputsHash",
+        )
+        != accounts_lt_hash_proof_public_inputs_hash
+    ):
+        raise TypeError("accountsLtHashProofPublicInputsHash must match bank-state inputs")
+
+    payload = bundle.get("payload")
+    if payload is None:
+        payload = value.get("payload")
+    return {
+        "version": 1,
+        "source_domain": SCCP_DOMAIN_SOL,
+        "target_domain": target_domain,
+        "mainnet_genesis_hash": _normalize_non_empty_string(
+            witness_or_default(
+                "mainnetGenesisHash",
+                SCCP_SOLANA_MAINNET_GENESIS_HASH,
+                "mainnetGenesisHash",
+                "mainnet_genesis_hash",
+            ),
+            "mainnetGenesisHash",
+        ),
+        "finalized_slot": str(finalized_slot),
+        "parent_slot": str(parent_slot),
+        "bank_signature_count": str(bank_signature_count),
+        "parent_bank_hash": parent_bank_hash,
+        "blockhash": _bytes_to_hex(blockhash_bytes),
+        "bank_hash": bank_hash,
+        "transaction_status_root": transaction_status_root,
+        "message_proof_hash": message_proof_hash,
+        "account_inclusion_root": account_inclusion_root,
+        "accounts_lt_hash_checksum": accounts_lt_hash_checksum,
+        "accounts_lt_hash_proof_public_inputs_hash": accounts_lt_hash_proof_public_inputs_hash,
+        "bank_hash_hard_fork_data": _bytes_to_hex(bank_hash_hard_fork_data),
+        "accounts_lt_hash": None if accounts_lt_hash is None else _bytes_to_hex(accounts_lt_hash),
+        "transaction_signature": transaction_signature,
+        "emitter_program_id": emitter_program_id,
+        "message_id": _normalize_hex32(
+            witness_or_commitment("messageId", "message_id", "messageId", "message_id"),
+            "messageId",
+        ),
+        "payload_hash": _normalize_hex32(
+            witness_or_commitment("payloadHash", "payload_hash", "payloadHash", "payload_hash"),
+            "payloadHash",
+        ),
+        "commitment_root": _normalize_hex32(
+            witness_or_default(
+                "commitmentRoot",
+                bundle.get("commitment_root"),
+                "commitmentRoot",
+                "commitment_root",
+            ),
+            "commitmentRoot",
+        ),
+        "source_event_digest": source_event_digest,
+        "source_state_verifier_id": source_state_verifier_id,
+        "source_state_verifier_hash": source_state_verifier_hash,
+        "source_adapter_deployment_hash": deployment_binding[
+            "source_adapter_deployment_hash"
+        ],
+        "source_adapter_deployment_receipt_hash": deployment_binding[
+            "source_adapter_deployment_receipt_hash"
+        ],
+        "inclusion_branch": (
+            None
+            if normalized_inclusion_branch is None
+            else [_bytes_to_hex(sibling) for sibling in normalized_inclusion_branch]
+        ),
+        "payload": payload,
+    }
+
+
+def canonical_solana_sccp_witness_bytes(input_value: Any) -> bytes:
+    """Return canonical Solana SCCP local-prover witness bytes."""
+
+    witness = normalize_solana_sccp_witness(input_value)
+    out = bytearray()
+    out.extend(_write_u8(witness["version"]))
+    out.extend(_write_u32_le(witness["source_domain"]))
+    out.extend(_write_u32_le(witness["target_domain"]))
+    out.extend(_write_string(witness["mainnet_genesis_hash"], "mainnetGenesisHash"))
+    out.extend(_write_u64_le(_normalize_u64(witness["finalized_slot"], "finalizedSlot")))
+    out.extend(_write_u64_le(_normalize_u64(witness["parent_slot"], "parentSlot")))
+    out.extend(
+        _write_u64_le(_normalize_u64(witness["bank_signature_count"], "bankSignatureCount"))
+    )
+    out.extend(_normalize_solana_hash32_bytes(witness["blockhash"], "blockhash"))
+    out.extend(_write_string(witness["transaction_signature"], "transactionSignature"))
+    out.extend(_write_string(witness["emitter_program_id"], "emitterProgramId"))
+    out.extend(_hex_to_bytes(witness["parent_bank_hash"], "parentBankHash", 32))
+    out.extend(_hex_to_bytes(witness["bank_hash"], "bankHash", 32))
+    out.extend(_hex_to_bytes(witness["transaction_status_root"], "transactionStatusRoot", 32))
+    out.extend(_hex_to_bytes(witness["message_proof_hash"], "messageProofHash", 32))
+    out.extend(_hex_to_bytes(witness["account_inclusion_root"], "accountInclusionRoot", 32))
+    out.extend(_hex_to_bytes(witness["accounts_lt_hash_checksum"], "accountsLtHashChecksum", 32))
+    out.extend(
+        _hex_to_bytes(
+            witness["accounts_lt_hash_proof_public_inputs_hash"],
+            "accountsLtHashProofPublicInputsHash",
+            32,
+        )
+    )
+    out.extend(
+        _write_bytes(
+            _optional_bytes(witness["bank_hash_hard_fork_data"], "bankHashHardForkData")
+        )
+    )
+    accounts_lt_hash = witness.get("accounts_lt_hash")
+    out.extend(_write_bytes(b"" if accounts_lt_hash is None else _to_bytes(accounts_lt_hash, "accountsLtHash")))
+    out.extend(_hex_to_bytes(witness["message_id"], "messageId", 32))
+    out.extend(_hex_to_bytes(witness["payload_hash"], "payloadHash", 32))
+    out.extend(_hex_to_bytes(witness["commitment_root"], "commitmentRoot", 32))
+    out.extend(_hex_to_bytes(witness["source_event_digest"], "sourceEventDigest", 32))
+    out.extend(_write_string(witness["source_state_verifier_id"], "sourceStateVerifierId"))
+    out.extend(
+        _hex_to_bytes(witness["source_state_verifier_hash"], "sourceStateVerifierHash", 32)
+    )
+    out.extend(
+        _hex_to_bytes(
+            witness["source_adapter_deployment_hash"],
+            "sourceAdapterDeploymentHash",
+            32,
+        )
+    )
+    out.extend(
+        _hex_to_bytes(
+            witness["source_adapter_deployment_receipt_hash"],
+            "sourceAdapterDeploymentReceiptHash",
+            32,
+        )
+    )
+    inclusion_branch = witness.get("inclusion_branch")
+    if inclusion_branch is None:
+        inclusion_branch = []
+    elif not isinstance(inclusion_branch, Sequence) or isinstance(
+        inclusion_branch, (str, bytes, bytearray)
+    ):
+        raise TypeError("inclusionBranch must be an array")
+    out.extend(_write_u32_le(len(inclusion_branch)))
+    for index, sibling in enumerate(inclusion_branch):
+        out.extend(_hex_to_bytes(sibling, f"inclusionBranch[{index}]", 32))
+    return bytes(out)
+
+
+def normalize_sccp_source_adapter_deployment_binding(input_value: Any) -> Dict[str, Any]:
+    """Normalize source-adapter deployment binding material for UI-generated proofs."""
+
+    value = _require_mapping(input_value, "SCCP source adapter deployment binding")
+    source_domain = _normalize_optional_u32(
+        value,
+        "sourceDomain",
+        SCCP_DOMAIN_SOL,
+        "sourceDomain",
+        "source_domain",
+    )
+    target_domain = _normalize_optional_u32(
+        value,
+        "targetDomain",
+        SCCP_DOMAIN_SORA,
+        "targetDomain",
+        "target_domain",
+    )
+    deployment_hash = _normalize_hex32(
+        _mapping_value_or_default(
+            value,
+            SCCP_ZERO_HASH_V1,
+            "sourceAdapterDeploymentHash",
+            "source_adapter_deployment_hash",
+        ),
+        "sourceAdapterDeploymentHash",
+    )
+    receipt_hash = _normalize_hex32(
+        _mapping_value_or_default(
+            value,
+            SCCP_ZERO_HASH_V1,
+            "sourceAdapterDeploymentReceiptHash",
+            "source_adapter_deployment_receipt_hash",
+        ),
+        "sourceAdapterDeploymentReceiptHash",
+    )
+    deployment_is_zero = deployment_hash == SCCP_ZERO_HASH_V1
+    receipt_is_zero = receipt_hash == SCCP_ZERO_HASH_V1
+    if deployment_is_zero != receipt_is_zero:
+        raise TypeError(
+            "sourceAdapterDeploymentHash and sourceAdapterDeploymentReceiptHash "
+            "must both be zero or both be non-zero"
+        )
+    if not deployment_is_zero and deployment_hash == receipt_hash:
+        raise TypeError(
+            "sourceAdapterDeploymentHash must differ from sourceAdapterDeploymentReceiptHash"
+        )
+
+    return {
+        "version": 1,
+        "source_domain": source_domain,
+        "target_domain": target_domain,
+        "source_adapter_deployment_hash": deployment_hash,
+        "source_adapter_deployment_receipt_hash": receipt_hash,
+    }
+
+
+def canonical_sccp_source_adapter_deployment_binding_bytes(input_value: Any) -> bytes:
+    """Return canonical bytes for the deployment binding carried by UI proof requests."""
+
+    binding = normalize_sccp_source_adapter_deployment_binding(input_value)
+    return b"".join(
+        (
+            _write_u8(binding["version"]),
+            _write_u32_le(binding["source_domain"]),
+            _write_u32_le(binding["target_domain"]),
+            _hex_to_bytes(
+                binding["source_adapter_deployment_hash"],
+                "sourceAdapterDeploymentHash",
+                32,
+            ),
+            _hex_to_bytes(
+                binding["source_adapter_deployment_receipt_hash"],
+                "sourceAdapterDeploymentReceiptHash",
+                32,
+            ),
+        )
+    )
+
+
+def sccp_source_adapter_deployment_binding_hash(input_value: Any) -> str:
+    """Hash deployment binding material that source proof engines must include."""
+
+    return _bytes_to_hex(
+        _prefixed_blake2b(
+            _SCCP_SOURCE_ADAPTER_DEPLOYMENT_BINDING_PREFIX_V1,
+            canonical_sccp_source_adapter_deployment_binding_bytes(input_value),
+        )
+    )
+
+
+def _sccp_source_adapter_verifier_profile(source_domain: int) -> tuple[bytes, int, int]:
+    if source_domain == SCCP_DOMAIN_ETH:
+        return (b"eth", 1, 1)
+    if source_domain == SCCP_DOMAIN_BSC:
+        return (b"bsc", 2, 2)
+    if source_domain == SCCP_DOMAIN_SOL:
+        return (b"sol", 3, 3)
+    if source_domain == SCCP_DOMAIN_TON:
+        return (b"ton", 4, 4)
+    if source_domain == SCCP_DOMAIN_TRON:
+        return (b"tron", 5, 5)
+    if source_domain == SCCP_DOMAIN_SORA_KUSAMA:
+        return (b"sora-kusama", 6, 6)
+    if source_domain == SCCP_DOMAIN_SORA_POLKADOT:
+        return (b"sora-polkadot", 6, 6)
+    if source_domain == SCCP_DOMAIN_SORA2:
+        return (b"sora2", 6, 6)
+    raise ValueError("source_domain is not a supported SCCP source-adapter lane")
+
+
+def _sccp_destination_binding_profile(
+    target_domain: int,
+) -> tuple[int, int, bytes, bytes, bytes]:
+    if target_domain == SCCP_DOMAIN_SOL:
+        return (
+            2,
+            2,
+            b"sccp:0:3:sol:solana-program-v1:2",
+            b"iroha:sccp:bridge-proof:message:stark-fri:v1:sol",
+            b"solana-program-v1",
+        )
+    if target_domain == SCCP_DOMAIN_TON:
+        return (
+            3,
+            3,
+            b"sccp:0:4:ton:ton-contract-v1:3",
+            b"iroha:sccp:bridge-proof:message:stark-fri:v1:ton",
+            b"ton-contract-v1",
+        )
+    if target_domain == SCCP_DOMAIN_SORA_KUSAMA:
+        return (
+            5,
+            5,
+            b"sccp:0:6:sora-kusama:substrate-runtime-v1:5",
+            b"iroha:sccp:bridge-proof:message:stark-fri:v1:sora-kusama",
+            b"substrate-runtime-v1",
+        )
+    if target_domain == SCCP_DOMAIN_SORA_POLKADOT:
+        return (
+            5,
+            5,
+            b"sccp:0:7:sora-polkadot:substrate-runtime-v1:5",
+            b"iroha:sccp:bridge-proof:message:stark-fri:v1:sora-polkadot",
+            b"substrate-runtime-v1",
+        )
+    if target_domain == SCCP_DOMAIN_SORA2:
+        return (
+            5,
+            5,
+            b"sccp:0:8:sora2:substrate-runtime-v1:5",
+            b"iroha:sccp:bridge-proof:message:stark-fri:v1:sora2",
+            b"substrate-runtime-v1",
+        )
+    raise ValueError("target_domain is not a supported native SCCP destination lane")
+
+
+def sccp_destination_binding_key(target_domain: int) -> str:
+    """Return the governed destination binding key for a native SCCP lane."""
+
+    target_domain = _normalize_u32(target_domain, "targetDomain")
+    _, _, binding_key, _, _ = _sccp_destination_binding_profile(target_domain)
+    return binding_key.decode("utf-8")
+
+
+def sccp_destination_binding_hash(target_domain: int) -> str:
+    """Return Rust's canonical SccpDestinationBindingV1 hash for a native lane."""
+
+    target_domain = _normalize_u32(target_domain, "targetDomain")
+    (
+        verifier_target,
+        backend_family,
+        binding_key,
+        manifest_seed,
+        verifier_backend,
+    ) = _sccp_destination_binding_profile(target_domain)
+    payload = b"".join(
+        (
+            _write_u8(1),
+            _write_u32_le(SCCP_DOMAIN_SORA),
+            _write_u32_le(target_domain),
+            _write_u8(1),
+            _write_u8(1),
+            _write_u8(verifier_target),
+            _write_u8(backend_family),
+            _write_bytes(binding_key),
+            _write_bytes(manifest_seed),
+            _write_bytes(SCCP_STARK_FRI_PROOF_FAMILY_V1.encode("utf-8")),
+            _write_bytes(verifier_backend),
+        )
+    )
+    return _bytes_to_hex(_prefixed_blake2b(_SCCP_DESTINATION_BINDING_PREFIX_V1, payload))
+
+
+def _canonical_positive_u64_text(value: Any, label: str) -> str:
+    numeric = _normalize_u64(value, label)
+    if numeric == 0:
+        raise ValueError(f"{label} must be positive")
+    if isinstance(value, str) and value != str(numeric):
+        raise TypeError(f"{label} must be canonical decimal")
+    return str(numeric)
+
+
+def _require_true(value: Any, label: str) -> None:
+    if value is not True:
+        raise TypeError(f"{label} must be true")
+
+
+def _solana_upgradeable_program_account_data(programdata_address: bytes) -> bytes:
+    return (
+        _write_u32_le(_SCCP_SOLANA_UPGRADEABLE_LOADER_PROGRAM_TAG)
+        + programdata_address
+    )
+
+
+def _solana_immutable_programdata_metadata(programdata_slot: int) -> bytes:
+    return (
+        _write_u32_le(_SCCP_SOLANA_UPGRADEABLE_LOADER_PROGRAMDATA_TAG)
+        + _write_u64_le(programdata_slot)
+        + b"\x00"
+        + (b"\x00" * 32)
+    )
+
+
+def _solana_verifier_program_code_hash(program_bytes: bytes) -> str:
+    if (
+        not program_bytes
+        or not any(program_bytes)
+        or not program_bytes.startswith(_SCCP_SOLANA_BPF_ELF_MAGIC)
+    ):
+        raise TypeError("solanaProgramdataExecutable must be non-empty BPF ELF bytes")
+    return _bytes_to_hex(hashlib.blake2b(program_bytes, digest_size=32).digest())
+
+
+def _normalize_solana_destination_programdata_evidence(value: Mapping[str, Any]) -> Dict[str, Any]:
+    verifier_program = _decode_solana_base58_fixed(
+        _mapping_value(
+            value,
+            "verifierIdentity",
+            "verifier_identity",
+            "verifierProgramId",
+            "verifier_program_id",
+        ),
+        "verifierIdentity",
+        _SCCP_SOLANA_PROGRAM_ID_BYTES,
+    )
+    programdata_address = _decode_solana_base58_fixed(
+        _mapping_value(
+            value,
+            "solanaProgramdataAddress",
+            "solana_programdata_address",
+            "programdataAddress",
+            "programdata_address",
+        ),
+        "solanaProgramdataAddress",
+        _SCCP_SOLANA_PROGRAM_ID_BYTES,
+    )
+    if verifier_program == programdata_address:
+        raise TypeError("solanaProgramdataAddress must differ from verifierIdentity")
+    programdata_slot = _canonical_positive_u64_text(
+        _mapping_value(
+            value,
+            "solanaProgramdataSlot",
+            "solana_programdata_slot",
+            "programdataSlot",
+            "programdata_slot",
+        ),
+        "solanaProgramdataSlot",
+    )
+    expected_programdata_slot = _canonical_positive_u64_text(
+        _mapping_value(
+            value,
+            "solanaExpectedProgramdataSlot",
+            "solana_expected_programdata_slot",
+            "expectedProgramdataSlot",
+            "expected_programdata_slot",
+        ),
+        "solanaExpectedProgramdataSlot",
+    )
+    if programdata_slot != expected_programdata_slot:
+        raise TypeError("solanaExpectedProgramdataSlot must match solanaProgramdataSlot")
+    program_context_slot = _canonical_positive_u64_text(
+        _mapping_value(
+            value,
+            "solanaProgramAccountContextSlot",
+            "solana_program_account_context_slot",
+            "programAccountContextSlot",
+            "program_account_context_slot",
+        ),
+        "solanaProgramAccountContextSlot",
+    )
+    programdata_context_slot = _canonical_positive_u64_text(
+        _mapping_value(
+            value,
+            "solanaProgramdataAccountContextSlot",
+            "solana_programdata_account_context_slot",
+            "programdataAccountContextSlot",
+            "programdata_account_context_slot",
+        ),
+        "solanaProgramdataAccountContextSlot",
+    )
+    if int(program_context_slot) < int(programdata_slot) or int(programdata_context_slot) < int(programdata_slot):
+        raise ValueError("Solana ProgramData context slots must be at or after programdataSlot")
+    rpc_commitment = _normalize_non_empty_string(
+        _mapping_value(value, "solanaRpcCommitment", "solana_rpc_commitment", "rpcCommitment", "rpc_commitment"),
+        "solanaRpcCommitment",
+    )
+    if rpc_commitment != "finalized":
+        raise TypeError("solanaRpcCommitment must be finalized")
+    program_owner = _normalize_non_empty_string(
+        _mapping_value(value, "solanaProgramOwner", "solana_program_owner", "programOwner", "program_owner"),
+        "solanaProgramOwner",
+    )
+    programdata_owner = _normalize_non_empty_string(
+        _mapping_value(value, "solanaProgramdataOwner", "solana_programdata_owner", "programdataOwner", "programdata_owner"),
+        "solanaProgramdataOwner",
+    )
+    if program_owner != SCCP_SOLANA_UPGRADEABLE_LOADER_ID:
+        raise TypeError("solanaProgramOwner must be the BPF upgradeable loader")
+    if programdata_owner != SCCP_SOLANA_UPGRADEABLE_LOADER_ID:
+        raise TypeError("solanaProgramdataOwner must be the BPF upgradeable loader")
+    _require_true(
+        _mapping_value(value, "solanaProgramImmutable", "solana_program_immutable", "programImmutable", "program_immutable"),
+        "solanaProgramImmutable",
+    )
+    program_account_data = _decode_base64_strict(
+        _mapping_value(
+            value,
+            "solanaProgramAccountDataBase64",
+            "solana_program_account_data_base64",
+            "programAccountDataBase64",
+            "program_account_data_base64",
+        ),
+        "solanaProgramAccountDataBase64",
+    )
+    if program_account_data != _solana_upgradeable_program_account_data(programdata_address):
+        raise TypeError("solanaProgramAccountDataBase64 must bind solanaProgramdataAddress")
+    programdata_metadata = _decode_base64_strict(
+        _mapping_value(
+            value,
+            "solanaProgramdataMetadataBase64",
+            "solana_programdata_metadata_base64",
+            "programdataMetadataBase64",
+            "programdata_metadata_base64",
+        ),
+        "solanaProgramdataMetadataBase64",
+    )
+    expected_metadata = _solana_immutable_programdata_metadata(int(programdata_slot))
+    if (
+        len(programdata_metadata) != _SCCP_SOLANA_PROGRAMDATA_METADATA_LEN
+        or programdata_metadata != expected_metadata
+    ):
+        raise TypeError("solanaProgramdataMetadataBase64 must bind immutable ProgramData metadata")
+    metadata_hash = _bytes_to_hex(hashlib.blake2b(programdata_metadata, digest_size=32).digest())
+    if _normalize_nonzero_hex32(
+        _mapping_value(
+            value,
+            "solanaProgramdataMetadataBlake2b256",
+            "solana_programdata_metadata_blake2b256",
+            "programdataMetadataBlake2b256",
+            "programdata_metadata_blake2b256",
+        ),
+        "solanaProgramdataMetadataBlake2b256",
+    ) != metadata_hash:
+        raise TypeError("solanaProgramdataMetadataBlake2b256 must match metadata bytes")
+    programdata_executable = _decode_base64_strict(
+        _mapping_value(
+            value,
+            "solanaProgramdataExecutableBase64",
+            "solana_programdata_executable_base64",
+            "programdataExecutableBase64",
+            "programdata_executable_base64",
+        ),
+        "solanaProgramdataExecutableBase64",
+    )
+    executable_hash = _solana_verifier_program_code_hash(programdata_executable)
+    if _normalize_nonzero_hex32(
+        _mapping_value(
+            value,
+            "solanaProgramdataExecutableBlake2b256",
+            "solana_programdata_executable_blake2b256",
+            "programdataExecutableBlake2b256",
+            "programdata_executable_blake2b256",
+        ),
+        "solanaProgramdataExecutableBlake2b256",
+    ) != executable_hash:
+        raise TypeError("solanaProgramdataExecutableBlake2b256 must match executable bytes")
+    if _normalize_nonzero_hex32(
+        _mapping_value(value, "verifierCodeHash", "verifier_code_hash"),
+        "verifierCodeHash",
+    ) != executable_hash:
+        raise TypeError("verifierCodeHash must match ProgramData executable hash")
+    return {
+        "verifier_program": verifier_program,
+        "verifier_code_hash": executable_hash,
+        "rpc_commitment": rpc_commitment,
+        "program_owner": program_owner,
+        "programdata_owner": programdata_owner,
+        "program_account_data": program_account_data,
+        "programdata_address": programdata_address,
+        "programdata_slot": programdata_slot,
+        "expected_programdata_slot": expected_programdata_slot,
+        "program_context_slot": program_context_slot,
+        "programdata_context_slot": programdata_context_slot,
+        "programdata_metadata": programdata_metadata,
+        "programdata_executable": programdata_executable,
+    }
+
+
+def canonical_solana_sccp_route_canary_evidence_bytes(input_value: Any) -> bytes:
+    """Return the live ProgramData transcript bytes for SORA -> Solana canaries."""
+
+    value = _require_mapping(input_value, "Solana route canary evidence")
+    route_allowlist_hash = _nonzero_hex32_to_bytes(
+        _mapping_value(value, "routeAllowlistHash", "route_allowlist_hash"),
+        "routeAllowlistHash",
+    )
+    destination_binding_hash = _nonzero_hex32_to_bytes(
+        _mapping_value(value, "destinationBindingHash", "destination_binding_hash"),
+        "destinationBindingHash",
+    )
+    canonical_solana_destination_binding_hash = sccp_destination_binding_hash(SCCP_DOMAIN_SOL)
+    expected_destination_binding_hash_input = _mapping_optional_value(
+        value,
+        "expectedDestinationBindingHash",
+        "expected_destination_binding_hash",
+    )
+    expected_destination_binding_hash = (
+        canonical_solana_destination_binding_hash
+        if expected_destination_binding_hash_input is _MISSING
+        or expected_destination_binding_hash_input is None
+        else _normalize_nonzero_hex32(
+            expected_destination_binding_hash_input,
+            "expectedDestinationBindingHash",
+        )
+    )
+    if expected_destination_binding_hash != canonical_solana_destination_binding_hash:
+        raise TypeError(
+            "expectedDestinationBindingHash must match canonical Solana destination binding"
+        )
+    if _bytes_to_hex(destination_binding_hash) != canonical_solana_destination_binding_hash:
+        raise TypeError(
+            "destinationBindingHash must match canonical Solana destination binding"
+        )
+    source_material_hash = _nonzero_hex32_to_bytes(
+        _mapping_value(value, "sourceVerifierMaterialHash", "source_verifier_material_hash"),
+        "sourceVerifierMaterialHash",
+    )
+    source_deployment_hash = _nonzero_hex32_to_bytes(
+        _mapping_value(
+            value,
+            "sourceAdapterEngineDeploymentHash",
+            "source_adapter_engine_deployment_hash",
+        ),
+        "sourceAdapterEngineDeploymentHash",
+    )
+    evidence = _normalize_solana_destination_programdata_evidence(value)
+    return b"".join(
+        (
+            _write_u8(1),
+            _write_u32_le(SCCP_DOMAIN_SORA),
+            _write_u32_le(SCCP_DOMAIN_SOL),
+            route_allowlist_hash,
+            destination_binding_hash,
+            source_material_hash,
+            source_deployment_hash,
+            evidence["verifier_program"],
+            _hex_to_bytes(evidence["verifier_code_hash"], "verifierCodeHash", 32),
+            _write_bytes(evidence["rpc_commitment"].encode("utf-8")),
+            _write_bytes(evidence["program_owner"].encode("utf-8")),
+            _write_bytes(evidence["programdata_owner"].encode("utf-8")),
+            _write_u8(1),
+            _write_bytes(evidence["program_account_data"]),
+            evidence["programdata_address"],
+            _write_u64_le(int(evidence["programdata_slot"])),
+            _write_u64_le(int(evidence["expected_programdata_slot"])),
+            _write_u64_le(int(evidence["program_context_slot"])),
+            _write_u64_le(int(evidence["programdata_context_slot"])),
+            _write_bytes(evidence["programdata_metadata"]),
+            _write_bytes(evidence["programdata_executable"]),
+        )
+    )
+
+
+def solana_sccp_route_canary_evidence_hash(input_value: Any) -> str:
+    """Return Rust's SORA -> Solana live ProgramData route-canary evidence hash."""
+
+    return _bytes_to_hex(
+        _prefixed_blake2b(
+            _SCCP_SOLANA_ROUTE_CANARY_LIVE_PROGRAM_LABEL_V1,
+            canonical_solana_sccp_route_canary_evidence_bytes(input_value),
+        )
+    )
+
+
+def canonical_ton_sccp_route_canary_evidence_bytes(input_value: Any) -> bytes:
+    """Return Rust's SORA -> TON live-account route-canary transcript bytes."""
+
+    value = _require_mapping(input_value, "TON route canary evidence")
+    route_allowlist_hash = _nonzero_hex32_to_bytes(
+        _mapping_value_without_aliases(
+            value, "routeAllowlistHash", "routeAllowlistHash", "route_allowlist_hash"
+        ),
+        "routeAllowlistHash",
+    )
+    destination_binding_hash = _nonzero_hex32_to_bytes(
+        _mapping_value_without_aliases(
+            value,
+            "destinationBindingHash",
+            "destinationBindingHash",
+            "destination_binding_hash",
+        ),
+        "destinationBindingHash",
+    )
+    canonical_ton_destination_binding_hash = sccp_destination_binding_hash(SCCP_DOMAIN_TON)
+    expected_destination_binding_hash_input = _mapping_optional_value_without_aliases(
+        value,
+        "expectedDestinationBindingHash",
+        "expectedDestinationBindingHash",
+        "expected_destination_binding_hash",
+    )
+    expected_destination_binding_hash = (
+        canonical_ton_destination_binding_hash
+        if expected_destination_binding_hash_input is _MISSING
+        else _normalize_nonzero_hex32(
+            expected_destination_binding_hash_input,
+            "expectedDestinationBindingHash",
+        )
+    )
+    if expected_destination_binding_hash != canonical_ton_destination_binding_hash:
+        raise TypeError(
+            "expectedDestinationBindingHash must match canonical TON destination binding"
+        )
+    if _bytes_to_hex(destination_binding_hash) != canonical_ton_destination_binding_hash:
+        raise TypeError("destinationBindingHash must match canonical TON destination binding")
+    source_verifier_material_hash = _nonzero_hex32_to_bytes(
+        _mapping_value_without_aliases(
+            value,
+            "sourceVerifierMaterialHash",
+            "sourceVerifierMaterialHash",
+            "source_verifier_material_hash",
+        ),
+        "sourceVerifierMaterialHash",
+    )
+    source_adapter_engine_deployment_hash = _nonzero_hex32_to_bytes(
+        _mapping_value_without_aliases(
+            value,
+            "sourceAdapterEngineDeploymentHash",
+            "sourceAdapterEngineDeploymentHash",
+            "source_adapter_engine_deployment_hash",
+        ),
+        "sourceAdapterEngineDeploymentHash",
+    )
+    verifier_contract_address = _normalize_ton_raw_address(
+        _mapping_value_without_aliases(
+            value,
+            "verifierContractAddress",
+            "verifierContractAddress",
+            "verifier_contract_address",
+            "verifierIdentity",
+            "verifier_identity",
+        ),
+        "verifierContractAddress",
+    )
+    verifier_code_hash = _nonzero_hex32_to_bytes(
+        _mapping_value_without_aliases(
+            value, "verifierCodeHash", "verifierCodeHash", "verifier_code_hash"
+        ),
+        "verifierCodeHash",
+    )
+    account_status = _normalize_ton_active_account_status(
+        _mapping_value_without_aliases(
+            value,
+            "accountStatus",
+            "accountStatus",
+            "account_status",
+            "tonAccountStatus",
+            "ton_account_status",
+        ),
+        "accountStatus",
+    )
+    account_state_hash = _nonzero_hex32_to_bytes(
+        _mapping_value_without_aliases(
+            value,
+            "accountStateHash",
+            "accountStateHash",
+            "account_state_hash",
+            "tonAccountStateHash",
+            "ton_account_state_hash",
+        ),
+        "accountStateHash",
+    )
+    last_transaction_lt = _normalize_positive_decimal_text(
+        _mapping_value_without_aliases(
+            value,
+            "lastTransactionLt",
+            "lastTransactionLt",
+            "last_transaction_lt",
+            "tonLastTransactionLt",
+            "ton_last_transaction_lt",
+        ),
+        "lastTransactionLt",
+    )
+    last_transaction_hash = _nonzero_hex32_to_bytes(
+        _mapping_value_without_aliases(
+            value,
+            "lastTransactionHash",
+            "lastTransactionHash",
+            "last_transaction_hash",
+            "tonLastTransactionHash",
+            "ton_last_transaction_hash",
+        ),
+        "lastTransactionHash",
+    )
+    verifier_code_boc_root_hash = _nonzero_hex32_to_bytes(
+        _mapping_value_without_aliases(
+            value,
+            "verifierCodeBocRootHash",
+            "verifierCodeBocRootHash",
+            "verifier_code_boc_root_hash",
+            "tonVerifierCodeBocRootHash",
+            "ton_verifier_code_boc_root_hash",
+        ),
+        "verifierCodeBocRootHash",
+    )
+    if verifier_code_boc_root_hash != verifier_code_hash:
+        raise TypeError("verifierCodeBocRootHash must match verifierCodeHash")
+    return b"".join(
+        (
+            _write_u8(1),
+            _write_u32_le(SCCP_DOMAIN_SORA),
+            _write_u32_le(SCCP_DOMAIN_TON),
+            route_allowlist_hash,
+            destination_binding_hash,
+            source_verifier_material_hash,
+            source_adapter_engine_deployment_hash,
+            _write_bytes(verifier_contract_address.encode("utf-8")),
+            verifier_code_hash,
+            _write_bytes(account_status.encode("ascii")),
+            account_state_hash,
+            _write_bytes(last_transaction_lt.encode("ascii")),
+            last_transaction_hash,
+            verifier_code_boc_root_hash,
+        )
+    )
+
+
+def ton_sccp_route_canary_evidence_hash(input_value: Any) -> str:
+    """Return Rust's SORA -> TON live-account route-canary evidence hash."""
+
+    return _bytes_to_hex(
+        _prefixed_blake2b(
+            _SCCP_TON_ROUTE_CANARY_LIVE_ACCOUNT_LABEL_V1,
+            canonical_ton_sccp_route_canary_evidence_bytes(input_value),
+        )
+    )
+
+
+def _normalize_destination_binding_version(value: Mapping[str, Any], label: str) -> int:
+    version = _mapping_optional_value(value, "version")
+    if version is _MISSING:
+        return 1
+    return _normalize_v1_version(version, label)
+
+
+def _destination_binding_hash_from_mapping(value: Mapping[str, Any]) -> Any:
+    return _mapping_value_without_aliases(
+        value,
+        "destinationBinding.bindingHash",
+        "bindingHash",
+        "binding_hash",
+        "destinationBindingHash",
+        "destination_binding_hash",
+    )
+
+
+def _require_destination_binding_hash_matches(
+    actual: Any,
+    expected: str,
+    label: str,
+) -> None:
+    if actual is None:
+        return
+    if _normalize_nonzero_hex32(actual, label) != expected:
+        raise TypeError(f"{label} must match destinationBinding")
+
+
+def _require_destination_binding_key_matches(
+    actual: Any,
+    expected: str,
+    label: str,
+) -> None:
+    if actual is None:
+        return
+    if not isinstance(actual, str) or actual.strip() != expected:
+        raise TypeError(f"{label} must match destinationBinding")
+
+
+def evm_sccp_destination_binding(input_value: Any) -> Dict[str, Any]:
+    """Derive the canonical EVM/BSC destination binding from deployment material."""
+
+    value = _require_mapping(input_value, "EVM-family SCCP destination binding")
+    version = _normalize_destination_binding_version(value, "destinationBinding.version")
+    source_domain = _normalize_optional_u32_without_aliases(
+        value,
+        "destinationBinding.sourceDomain",
+        SCCP_DOMAIN_SORA,
+        "sourceDomain",
+        "source_domain",
+    )
+    target_domain = _normalize_optional_u32_without_aliases(
+        value,
+        "destinationBinding.targetDomain",
+        SCCP_DOMAIN_ETH,
+        "targetDomain",
+        "target_domain",
+    )
+    if source_domain != SCCP_DOMAIN_SORA:
+        raise ValueError("destinationBinding.sourceDomain must be SORA")
+    if target_domain not in (SCCP_DOMAIN_ETH, SCCP_DOMAIN_BSC):
+        raise ValueError("destinationBinding.targetDomain must be ETH or BSC")
+    if source_domain == target_domain:
+        raise ValueError("destinationBinding.sourceDomain and targetDomain must differ")
+    verifier_backend = _mapping_value_or_default_without_aliases(
+        value,
+        "destinationBinding.verifierBackend",
+        SCCP_EVM_GROTH16_BN254_PROOF_BACKEND_V1,
+        "verifierBackend",
+        "verifier_backend",
+        "backend",
+    )
+    if verifier_backend != SCCP_EVM_GROTH16_BN254_PROOF_BACKEND_V1:
+        raise TypeError("destinationBinding.verifierBackend must be evm-groth16-bn254-v1")
+    proof_family = _mapping_value_or_default_without_aliases(
+        value,
+        "destinationBinding.proofFamily",
+        SCCP_STARK_FRI_PROOF_FAMILY_V1,
+        "proofFamily",
+        "proof_family",
+    )
+    if proof_family != SCCP_STARK_FRI_PROOF_FAMILY_V1:
+        raise TypeError("destinationBinding.proofFamily must be stark-fri-v1")
+
+    network_id = _nonzero_hex_bytes(
+        _mapping_value_without_aliases(
+            value,
+            "destinationBinding.networkId",
+            "networkId",
+            "network_id",
+            "networkIdHex",
+            "network_id_hex",
+        ),
+        "destinationBinding.networkId",
+        32,
+    )
+    verifier_address = _nonzero_hex_bytes(
+        _mapping_value_without_aliases(
+            value,
+            "destinationBinding.verifierAddress",
+            "verifierAddress",
+            "verifier_address",
+            "verifierAddressHex",
+            "verifier_address_hex",
+        ),
+        "destinationBinding.verifierAddress",
+        20,
+    )
+    bridge_address = _nonzero_hex_bytes(
+        _mapping_value_without_aliases(
+            value,
+            "destinationBinding.bridgeAddress",
+            "bridgeAddress",
+            "bridge_address",
+            "bridgeAddressHex",
+            "bridge_address_hex",
+        ),
+        "destinationBinding.bridgeAddress",
+        20,
+    )
+    if verifier_address == bridge_address:
+        raise ValueError("destinationBinding.verifierAddress must differ from bridgeAddress")
+    verifier_code_hash = _nonzero_hex_bytes(
+        _mapping_value_without_aliases(
+            value,
+            "destinationBinding.verifierCodeHash",
+            "verifierCodeHash",
+            "verifier_code_hash",
+            "verifierCodeHashHex",
+            "verifier_code_hash_hex",
+        ),
+        "destinationBinding.verifierCodeHash",
+        32,
+    )
+    verifier_key_hash = _nonzero_hex_bytes(
+        _mapping_value_without_aliases(
+            value,
+            "destinationBinding.verifierKeyHash",
+            "verifierKeyHash",
+            "verifier_key_hash",
+            "verifierKeyHashHex",
+            "verifier_key_hash_hex",
+        ),
+        "destinationBinding.verifierKeyHash",
+        32,
+    )
+
+    payload = b"".join(
+        (
+            _keccak_256(_SCCP_EVM_DESTINATION_BINDING_LABEL_V1),
+            _keccak_256(verifier_backend.encode("utf-8")),
+            _keccak_256(proof_family.encode("utf-8")),
+            network_id,
+            _abi_word_u32(source_domain, "destinationBinding.sourceDomain"),
+            _abi_word_u32(target_domain, "destinationBinding.targetDomain"),
+            _abi_word_address20(verifier_address, "destinationBinding.verifierAddress"),
+            _abi_word_address20(bridge_address, "destinationBinding.bridgeAddress"),
+            verifier_code_hash,
+            verifier_key_hash,
+        )
+    )
+    binding_hash = _bytes_to_hex(_keccak_256(payload))
+    key = (
+        f"evm:{source_domain}:{target_domain}:{network_id.hex()}:"
+        f"0x{verifier_address.hex()}:0x{bridge_address.hex()}:"
+        f"0x{verifier_code_hash.hex()}:0x{verifier_key_hash.hex()}"
+    )
+    _require_destination_binding_hash_matches(
+        _destination_binding_hash_from_mapping(value),
+        binding_hash,
+        "destinationBinding.bindingHash",
+    )
+    _require_destination_binding_key_matches(
+        _mapping_value_without_aliases(
+            value,
+            "destinationBinding.key",
+            "key",
+            "bindingKey",
+            "binding_key",
+        ),
+        key,
+        "destinationBinding.key",
+    )
+    return {
+        "version": version,
+        "source_domain": source_domain,
+        "target_domain": target_domain,
+        "network_id": _bytes_to_hex(network_id),
+        "verifier_address": _bytes_to_hex(verifier_address),
+        "bridge_address": _bytes_to_hex(bridge_address),
+        "verifier_code_hash": _bytes_to_hex(verifier_code_hash),
+        "verifier_key_hash": _bytes_to_hex(verifier_key_hash),
+        "verifier_backend": verifier_backend,
+        "proof_family": proof_family,
+        "key": key,
+        "binding_hash": binding_hash,
+    }
+
+
+def evm_sccp_destination_binding_hash(input_value: Any) -> str:
+    """Return the canonical EVM/BSC destination binding hash for deployment material."""
+
+    return evm_sccp_destination_binding(input_value)["binding_hash"]
+
+
+def tron_sccp_destination_binding(input_value: Any) -> Dict[str, Any]:
+    """Derive the canonical TRON destination binding from deployment material."""
+
+    value = _require_mapping(input_value, "TRON SCCP destination binding")
+    version = _normalize_destination_binding_version(value, "destinationBinding.version")
+    source_domain = _normalize_optional_u32_without_aliases(
+        value,
+        "destinationBinding.sourceDomain",
+        SCCP_DOMAIN_SORA,
+        "sourceDomain",
+        "source_domain",
+    )
+    target_domain = _normalize_optional_u32_without_aliases(
+        value,
+        "destinationBinding.targetDomain",
+        SCCP_DOMAIN_TRON,
+        "targetDomain",
+        "target_domain",
+    )
+    if source_domain != SCCP_DOMAIN_SORA:
+        raise ValueError("destinationBinding.sourceDomain must be SORA")
+    if target_domain != SCCP_DOMAIN_TRON:
+        raise ValueError("destinationBinding.targetDomain must be TRON")
+    if source_domain == target_domain:
+        raise ValueError("destinationBinding.sourceDomain and targetDomain must differ")
+    verifier_backend = _mapping_value_or_default_without_aliases(
+        value,
+        "destinationBinding.verifierBackend",
+        SCCP_TRON_GROTH16_BN254_PROOF_BACKEND_V1,
+        "verifierBackend",
+        "verifier_backend",
+        "backend",
+    )
+    if verifier_backend != SCCP_TRON_GROTH16_BN254_PROOF_BACKEND_V1:
+        raise TypeError("destinationBinding.verifierBackend must be tron-groth16-bn254-v1")
+    proof_family = _mapping_value_or_default_without_aliases(
+        value,
+        "destinationBinding.proofFamily",
+        SCCP_STARK_FRI_PROOF_FAMILY_V1,
+        "proofFamily",
+        "proof_family",
+    )
+    if proof_family != SCCP_STARK_FRI_PROOF_FAMILY_V1:
+        raise TypeError("destinationBinding.proofFamily must be stark-fri-v1")
+
+    network_id = _nonzero_hex_bytes(
+        _mapping_value_without_aliases(
+            value,
+            "destinationBinding.networkId",
+            "networkId",
+            "network_id",
+            "networkIdHex",
+            "network_id_hex",
+        ),
+        "destinationBinding.networkId",
+        32,
+    )
+    verifier_address_value = _mapping_value_without_aliases(
+        value,
+        "destinationBinding.verifierAddress",
+        "verifierAddress",
+        "verifier_address",
+    )
+    verifier_payload = _tron_base58check_payload(
+        verifier_address_value,
+        "destinationBinding.verifierAddress",
+    )
+    verifier_address = _normalize_non_empty_string(
+        verifier_address_value,
+        "destinationBinding.verifierAddress",
+    )
+    verifier_code_hash = _nonzero_hex_bytes(
+        _mapping_value_without_aliases(
+            value,
+            "destinationBinding.verifierCodeHash",
+            "verifierCodeHash",
+            "verifier_code_hash",
+            "verifierCodeHashHex",
+            "verifier_code_hash_hex",
+        ),
+        "destinationBinding.verifierCodeHash",
+        32,
+    )
+    verifier_key_hash = _nonzero_hex_bytes(
+        _mapping_value_without_aliases(
+            value,
+            "destinationBinding.verifierKeyHash",
+            "verifierKeyHash",
+            "verifier_key_hash",
+            "verifierKeyHashHex",
+            "verifier_key_hash_hex",
+        ),
+        "destinationBinding.verifierKeyHash",
+        32,
+    )
+
+    payload = b"".join(
+        (
+            _keccak_256(_SCCP_TRON_DESTINATION_BINDING_LABEL_V1),
+            _keccak_256(verifier_backend.encode("utf-8")),
+            _keccak_256(proof_family.encode("utf-8")),
+            network_id,
+            _abi_word_u32(source_domain, "destinationBinding.sourceDomain"),
+            _abi_word_u32(target_domain, "destinationBinding.targetDomain"),
+            _abi_word_bytes21(verifier_payload, "destinationBinding.verifierAddress"),
+            verifier_code_hash,
+            verifier_key_hash,
+        )
+    )
+    binding_hash = _bytes_to_hex(_keccak_256(payload))
+    key = (
+        f"tron:{source_domain}:{target_domain}:{network_id.hex()}:{verifier_address}:"
+        f"0x{verifier_code_hash.hex()}:0x{verifier_key_hash.hex()}"
+    )
+    _require_destination_binding_hash_matches(
+        _destination_binding_hash_from_mapping(value),
+        binding_hash,
+        "destinationBinding.bindingHash",
+    )
+    _require_destination_binding_key_matches(
+        _mapping_value_without_aliases(
+            value,
+            "destinationBinding.key",
+            "key",
+            "bindingKey",
+            "binding_key",
+        ),
+        key,
+        "destinationBinding.key",
+    )
+    return {
+        "version": version,
+        "source_domain": source_domain,
+        "target_domain": target_domain,
+        "network_id": _bytes_to_hex(network_id),
+        "verifier_address": verifier_address,
+        "verifier_code_hash": _bytes_to_hex(verifier_code_hash),
+        "verifier_key_hash": _bytes_to_hex(verifier_key_hash),
+        "verifier_backend": verifier_backend,
+        "proof_family": proof_family,
+        "key": key,
+        "binding_hash": binding_hash,
+    }
+
+
+def tron_sccp_destination_binding_hash(input_value: Any) -> str:
+    """Return the canonical TRON destination binding hash for deployment material."""
+
+    return tron_sccp_destination_binding(input_value)["binding_hash"]
+
+
+def _normalize_bridge_proof_submit_payload_base(
+    input_value: Any,
+    context: str,
+) -> Dict[str, Any]:
+    value = _require_mapping(input_value, context)
+    message_bundle = _mapping_value_without_aliases(
+        value,
+        f"{context}.messageBundle",
+        "messageBundle",
+        "message_bundle",
+    )
+    if not isinstance(message_bundle, Mapping):
+        raise TypeError(f"{context}.messageBundle must be an object")
+    payload: Dict[str, Any] = {
+        "authority": _normalize_non_empty_string(
+            _mapping_value_without_aliases(value, f"{context}.authority", "authority"),
+            f"{context}.authority",
+        ),
+        "message_bundle": dict(message_bundle),
+    }
+    private_key = _mapping_optional_value_without_aliases(
+        value,
+        f"{context}.privateKey",
+        "privateKey",
+        "private_key",
+    )
+    if private_key is not _MISSING:
+        payload["private_key"] = private_key
+    public_key_hex = _mapping_optional_value_without_aliases(
+        value,
+        f"{context}.publicKeyHex",
+        "publicKeyHex",
+        "public_key_hex",
+    )
+    if public_key_hex is not _MISSING:
+        payload["public_key_hex"] = _normalize_non_empty_string(
+            public_key_hex,
+            f"{context}.publicKeyHex",
+        )
+    signature_b64 = _mapping_optional_value_without_aliases(
+        value,
+        f"{context}.signatureB64",
+        "signatureB64",
+        "signature_b64",
+    )
+    if signature_b64 is not _MISSING:
+        payload["signature_b64"] = _normalize_non_empty_string(
+            signature_b64,
+            f"{context}.signatureB64",
+        )
+    creation_time_ms = _mapping_optional_value_without_aliases(
+        value,
+        f"{context}.creationTimeMs",
+        "creationTimeMs",
+        "creation_time_ms",
+    )
+    if creation_time_ms is not _MISSING:
+        payload["creation_time_ms"] = creation_time_ms
+    return payload
+
+
+def _normalize_bridge_proof_message_bundle_binding(
+    message_bundle: Mapping[str, Any],
+    context: str,
+) -> Dict[str, str]:
+    if not isinstance(message_bundle, Mapping):
+        raise TypeError(f"{context}.messageBundle must be an object")
+    commitment = _mapping_value_without_aliases(
+        message_bundle,
+        f"{context}.messageBundle.commitment",
+        "commitment",
+    )
+    if not isinstance(commitment, Mapping):
+        raise TypeError(f"{context}.messageBundle.commitment must be an object")
+    return {
+        "message_id": _normalize_nonzero_hex32(
+            _mapping_value_without_aliases(
+                commitment,
+                f"{context}.messageBundle.commitment.messageId",
+                "messageId",
+                "message_id",
+            ),
+            f"{context}.messageBundle.commitment.messageId",
+        ),
+        "commitment_root": _normalize_nonzero_hex32(
+            _mapping_value_without_aliases(
+                message_bundle,
+                f"{context}.messageBundle.commitmentRoot",
+                "commitmentRoot",
+                "commitment_root",
+            ),
+            f"{context}.messageBundle.commitmentRoot",
+        ),
+    }
+
+
+def _require_sccp_groth16_proof_bytes_for_bridge_proof_message_bundle(
+    proof_bytes: bytes,
+    message_bundle: Mapping[str, Any],
+    context: str,
+) -> bytes:
+    binding = _normalize_bridge_proof_message_bundle_binding(message_bundle, context)
+    if _groth16_proof_word(proof_bytes, 1) != _hex_to_bytes(
+        binding["message_id"],
+        f"{context}.messageBundle.commitment.messageId",
+        32,
+    ):
+        raise TypeError(
+            f"{context}.submission.proofBytes.messageId must match "
+            "messageBundle.commitment.messageId"
+        )
+    if _groth16_proof_word_value(proof_bytes, 2) != SCCP_DOMAIN_SORA:
+        raise TypeError(f"{context}.submission.proofBytes.sourceDomain must be SORA")
+    if _groth16_proof_word(proof_bytes, 3) != _hex_to_bytes(
+        binding["commitment_root"],
+        f"{context}.messageBundle.commitmentRoot",
+        32,
+    ):
+        raise TypeError(
+            f"{context}.submission.proofBytes.commitmentRoot must match "
+            "messageBundle.commitmentRoot"
+        )
+    return proof_bytes
+
+
+def _normalize_sccp_groth16_submission_for_bridge_proof_submit(
+    submission_value: Any,
+    destination_binding: Mapping[str, Any],
+    context: str,
+    *,
+    accepted_target_domains: Sequence[int],
+    expected_verifier_backend: str,
+    expected_platform_payload: str,
+    destination_label: str,
+) -> bytes:
+    submission = _require_mapping(submission_value, f"{context}.submission")
+    _require_v1_version(
+        _mapping_value_without_aliases(
+            submission,
+            f"{context}.submission.version",
+            "version",
+        ),
+        f"{context}.submission.version",
+    )
+    if (
+        _mapping_value_without_aliases(
+            submission,
+            f"{context}.submission.submissionKind",
+            "submissionKind",
+            "submission_kind",
+        )
+        != "contract_call"
+    ):
+        raise TypeError(f"{context}.submission must be a contract_call")
+    if (
+        _mapping_value_without_aliases(
+            submission,
+            f"{context}.submission.platformPayload",
+            "platformPayload",
+            "platform_payload",
+        )
+        != expected_platform_payload
+    ):
+        raise TypeError(f"{context}.submission platformPayload must match {destination_label}")
+    if (
+        _mapping_value_without_aliases(
+            submission,
+            f"{context}.submission.proofFamily",
+            "proofFamily",
+            "proof_family",
+        )
+        != destination_binding["proof_family"]
+    ):
+        raise TypeError(f"{context}.submission proofFamily must match destinationBinding")
+    verifier_backend = _mapping_value_without_aliases(
+        submission,
+        f"{context}.submission.verifierBackend",
+        "verifierBackend",
+        "verifier_backend",
+        "backend",
+    )
+    if (
+        verifier_backend != expected_verifier_backend
+        or verifier_backend != destination_binding["verifier_backend"]
+    ):
+        raise TypeError(f"{context}.submission verifierBackend must match destinationBinding")
+    source_domain = _normalize_u32(
+        _mapping_value_without_aliases(
+            submission,
+            f"{context}.submission.sourceDomain",
+            "sourceDomain",
+            "source_domain",
+        ),
+        f"{context}.submission.sourceDomain",
+    )
+    if source_domain != destination_binding["source_domain"]:
+        raise TypeError(f"{context}.submission sourceDomain must match destinationBinding")
+    target_domain = _normalize_u32(
+        _mapping_value_without_aliases(
+            submission,
+            f"{context}.submission.targetDomain",
+            "targetDomain",
+            "target_domain",
+        ),
+        f"{context}.submission.targetDomain",
+    )
+    if (
+        target_domain not in accepted_target_domains
+        or target_domain != destination_binding["target_domain"]
+    ):
+        raise TypeError(f"{context}.submission targetDomain must match destinationBinding")
+    destination_binding_hash = _normalize_nonzero_hex32(
+        _mapping_value_without_aliases(
+            submission,
+            f"{context}.submission.destinationBindingHash",
+            "destinationBindingHash",
+            "destination_binding_hash",
+        ),
+        f"{context}.submission.destinationBindingHash",
+    )
+    if destination_binding_hash != destination_binding["binding_hash"]:
+        raise TypeError(
+            f"{context}.submission destinationBindingHash must match destinationBinding"
+        )
+    proof_bytes = _to_bytes(
+        _mapping_value_without_aliases(
+            submission,
+            f"{context}.submission.proofBytes",
+            "proofBytes",
+            "proof_bytes",
+        ),
+        f"{context}.submission.proofBytes",
+    )
+    _require_groth16_proof_bytes(proof_bytes, f"{context}.submission.proofBytes")
+    return proof_bytes
+
+
+def build_evm_sccp_bridge_proof_submit_payload(input_value: Any) -> Dict[str, Any]:
+    """Build a Torii bridge-proof submit payload from an EVM-family SCCP submission."""
+
+    context = "EVM-family SCCP bridge proof submit payload"
+    value = _require_mapping(input_value, context)
+    payload = _normalize_bridge_proof_submit_payload_base(value, context)
+    destination_binding = evm_sccp_destination_binding(
+        _mapping_value_without_aliases(
+            value,
+            f"{context}.destinationBinding",
+            "destinationBinding",
+            "destination_binding",
+        )
+    )
+    proof_bytes = _normalize_sccp_groth16_submission_for_bridge_proof_submit(
+        _mapping_value_without_aliases(
+            value,
+            f"{context}.submission",
+            "submission",
+            "evmSccpSubmission",
+            "evm_sccp_submission",
+            "sccpSubmission",
+            "sccp_submission",
+        ),
+        destination_binding,
+        context,
+        accepted_target_domains=(SCCP_DOMAIN_ETH, SCCP_DOMAIN_BSC),
+        expected_verifier_backend=SCCP_EVM_GROTH16_BN254_PROOF_BACKEND_V1,
+        expected_platform_payload="evm_groth16_contract_call",
+        destination_label="EVM-family",
+    )
+    proof_bytes = _require_sccp_groth16_proof_bytes_for_bridge_proof_message_bundle(
+        proof_bytes,
+        payload["message_bundle"],
+        context,
+    )
+    payload.update(
+        {
+            "network_id_hex": destination_binding["network_id"],
+            "verifier_address_hex": destination_binding["verifier_address"],
+            "bridge_address_hex": destination_binding["bridge_address"],
+            "verifier_code_hash_hex": destination_binding["verifier_code_hash"],
+            "verifier_key_hash_hex": destination_binding["verifier_key_hash"],
+            "expected_destination_binding_hash_hex": destination_binding["binding_hash"],
+            "proof_bytes_hex": _bytes_to_hex(proof_bytes),
+        }
+    )
+    return payload
+
+
+def build_tron_sccp_bridge_proof_submit_payload(input_value: Any) -> Dict[str, Any]:
+    """Build a Torii bridge-proof submit payload from a TRON SCCP submission."""
+
+    context = "TRON SCCP bridge proof submit payload"
+    value = _require_mapping(input_value, context)
+    payload = _normalize_bridge_proof_submit_payload_base(value, context)
+    destination_binding = tron_sccp_destination_binding(
+        _mapping_value_without_aliases(
+            value,
+            f"{context}.destinationBinding",
+            "destinationBinding",
+            "destination_binding",
+        )
+    )
+    proof_bytes = _normalize_sccp_groth16_submission_for_bridge_proof_submit(
+        _mapping_value_without_aliases(
+            value,
+            f"{context}.submission",
+            "submission",
+            "tronSccpSubmission",
+            "tron_sccp_submission",
+            "sccpSubmission",
+            "sccp_submission",
+        ),
+        destination_binding,
+        context,
+        accepted_target_domains=(SCCP_DOMAIN_TRON,),
+        expected_verifier_backend=SCCP_TRON_GROTH16_BN254_PROOF_BACKEND_V1,
+        expected_platform_payload="tron_contract_call",
+        destination_label="TRON",
+    )
+    proof_bytes = _require_sccp_groth16_proof_bytes_for_bridge_proof_message_bundle(
+        proof_bytes,
+        payload["message_bundle"],
+        context,
+    )
+    payload.update(
+        {
+            "network_id_hex": destination_binding["network_id"],
+            "verifier_code_hash_hex": destination_binding["verifier_code_hash"],
+            "verifier_key_hash_hex": destination_binding["verifier_key_hash"],
+            "expected_destination_binding_hash_hex": destination_binding["binding_hash"],
+            "tron_verifier_address": destination_binding["verifier_address"],
+            "proof_bytes_hex": _bytes_to_hex(proof_bytes),
+        }
+    )
+    return payload
+
+
+def _sccp_source_record_profile(source_domain: int) -> Dict[str, Any]:
+    chain, proof_plan, finality_model = _sccp_source_adapter_verifier_profile(
+        source_domain
+    )
+    profiles = {
+        SCCP_DOMAIN_ETH: {
+            "source_trust_anchor_id": (
+                "sccp:eth:source-trust-anchor:"
+                "ethereum-mainnet-beacon-finalized-checkpoint:v1"
+            ),
+            "consensus_verifier_id": (
+                "sccp:eth:consensus-verifier:"
+                "beacon-sync-committee-execution-header-mainnet:v1"
+            ),
+            "message_inclusion_verifier_id": (
+                "sccp:eth:message-inclusion-verifier:"
+                "execution-receipt-trie-branch-mainnet:v1"
+            ),
+            "finality_policy_id": (
+                "sccp:eth:finality-policy:beacon-finalized-checkpoint-mainnet:v1"
+            ),
+            "source_state_verifier_id": "",
+            "source_bridge_emitter_id": (
+                "sccp:eth:source-bridge-emitter:ethereum-mainnet:v1"
+            ),
+            "requires_source_bridge": True,
+            "requires_source_bridge_config": False,
+        },
+        SCCP_DOMAIN_BSC: {
+            "source_trust_anchor_id": (
+                "sccp:bsc:source-trust-anchor:bsc-mainnet-validator-set:v1"
+            ),
+            "consensus_verifier_id": (
+                "sccp:bsc:consensus-verifier:validator-set-seal-mainnet:v1"
+            ),
+            "message_inclusion_verifier_id": (
+                "sccp:bsc:message-inclusion-verifier:receipt-trie-branch-mainnet:v1"
+            ),
+            "finality_policy_id": (
+                "sccp:bsc:finality-policy:validator-set-finality-mainnet:v1"
+            ),
+            "source_state_verifier_id": "",
+            "source_bridge_emitter_id": "sccp:bsc:source-bridge-emitter:bsc-mainnet:v1",
+            "requires_source_bridge": True,
+            "requires_source_bridge_config": False,
+        },
+        SCCP_DOMAIN_SOL: {
+            "source_trust_anchor_id": (
+                "sccp:sol:source-trust-anchor:solana-mainnet-beta-genesis:v1"
+            ),
+            "consensus_verifier_id": (
+                "sccp:sol:consensus-verifier:finalized-slot-bankhash-mainnet-beta:v1"
+            ),
+            "message_inclusion_verifier_id": (
+                "sccp:sol:message-inclusion-verifier:transaction-status-root-branch:v1"
+            ),
+            "finality_policy_id": (
+                "sccp:sol:finality-policy:finalized-slot-mainnet-beta:v1"
+            ),
+            "source_state_verifier_id": SCCP_SOLANA_MAINNET_ACCOUNTS_DB_VERIFIER_ID_V1,
+            "source_bridge_emitter_id": "",
+            "requires_source_bridge": False,
+            "requires_source_bridge_config": False,
+        },
+        SCCP_DOMAIN_TON: {
+            "source_trust_anchor_id": (
+                "sccp:ton:source-trust-anchor:ton-mainnet-masterchain:v1"
+            ),
+            "consensus_verifier_id": (
+                "sccp:ton:consensus-verifier:masterchain-block-proof:v1"
+            ),
+            "message_inclusion_verifier_id": (
+                "sccp:ton:message-inclusion-verifier:shard-transaction-branch:v1"
+            ),
+            "finality_policy_id": "sccp:ton:finality-policy:masterchain-finality:v1",
+            "source_state_verifier_id": SCCP_TON_MAINNET_SHARD_STATE_VERIFIER_ID_V1,
+            "source_bridge_emitter_id": "",
+            "requires_source_bridge": False,
+            "requires_source_bridge_config": False,
+        },
+        SCCP_DOMAIN_TRON: {
+            "source_trust_anchor_id": (
+                "sccp:tron:source-trust-anchor:mainnet-witness-schedule:v1"
+            ),
+            "consensus_verifier_id": (
+                "sccp:tron:consensus-verifier:dpos-solid-block-mainnet:v1"
+            ),
+            "message_inclusion_verifier_id": (
+                "sccp:tron:message-inclusion-verifier:transaction-source-mainnet:v1"
+            ),
+            "finality_policy_id": "sccp:tron:finality-policy:solid-block-mainnet:v1",
+            "source_state_verifier_id": "",
+            "source_bridge_emitter_id": "sccp:tron:source-bridge-emitter:tron-mainnet:v1",
+            "requires_source_bridge": True,
+            "requires_source_bridge_config": True,
+        },
+        SCCP_DOMAIN_SORA_KUSAMA: {
+            "source_trust_anchor_id": (
+                "sccp:sora-kusama:source-trust-anchor:grandpa-authority-set:v1"
+            ),
+            "consensus_verifier_id": (
+                "sccp:sora-kusama:consensus-verifier:grandpa-finalized-header:v1"
+            ),
+            "message_inclusion_verifier_id": (
+                "sccp:sora-kusama:message-inclusion-verifier:events-storage-proof:v1"
+            ),
+            "finality_policy_id": (
+                "sccp:sora-kusama:finality-policy:grandpa-finality:v1"
+            ),
+            "source_state_verifier_id": (
+                "sccp:sora-kusama:source-state-verifier:runtime-storage-proof:v1"
+            ),
+            "source_bridge_emitter_id": "",
+            "requires_source_bridge": False,
+            "requires_source_bridge_config": False,
+        },
+        SCCP_DOMAIN_SORA_POLKADOT: {
+            "source_trust_anchor_id": (
+                "sccp:sora-polkadot:source-trust-anchor:grandpa-authority-set:v1"
+            ),
+            "consensus_verifier_id": (
+                "sccp:sora-polkadot:consensus-verifier:grandpa-finalized-header:v1"
+            ),
+            "message_inclusion_verifier_id": (
+                "sccp:sora-polkadot:message-inclusion-verifier:events-storage-proof:v1"
+            ),
+            "finality_policy_id": (
+                "sccp:sora-polkadot:finality-policy:grandpa-finality:v1"
+            ),
+            "source_state_verifier_id": (
+                "sccp:sora-polkadot:source-state-verifier:runtime-storage-proof:v1"
+            ),
+            "source_bridge_emitter_id": "",
+            "requires_source_bridge": False,
+            "requires_source_bridge_config": False,
+        },
+        SCCP_DOMAIN_SORA2: {
+            "source_trust_anchor_id": (
+                "sccp:sora2:source-trust-anchor:grandpa-authority-set:v1"
+            ),
+            "consensus_verifier_id": (
+                "sccp:sora2:consensus-verifier:grandpa-finalized-header:v1"
+            ),
+            "message_inclusion_verifier_id": (
+                "sccp:sora2:message-inclusion-verifier:events-storage-proof:v1"
+            ),
+            "finality_policy_id": "sccp:sora2:finality-policy:grandpa-finality:v1",
+            "source_state_verifier_id": (
+                "sccp:sora2:source-state-verifier:runtime-storage-proof:v1"
+            ),
+            "source_bridge_emitter_id": "",
+            "requires_source_bridge": False,
+            "requires_source_bridge_config": False,
+        },
+    }
+    profile = profiles[source_domain].copy()
+    profile.update(
+        {
+            "source_chain": chain.decode(),
+            "source_proof_plan": proof_plan,
+            "finality_model": finality_model,
+        }
+    )
+    return profile
+
+
+def sccp_source_adapter_verifier_vk_hash(
+    source_domain: int,
+    *,
+    target_domain: int = SCCP_DOMAIN_SORA,
+) -> str:
+    """Return Rust's canonical OpenVerify verifier-key commitment for a source lane."""
+
+    source_domain = _normalize_u32(source_domain, "sourceDomain")
+    target_domain = _normalize_u32(target_domain, "targetDomain")
+    if target_domain != SCCP_DOMAIN_SORA:
+        raise ValueError("target_domain must be SORA for SCCP source-adapter verifier VKs")
+    source_chain, proof_plan, finality_model = _sccp_source_adapter_verifier_profile(
+        source_domain
+    )
+    circuit_id = SCCP_SOURCE_ADAPTER_OPEN_VERIFY_CIRCUIT_ID_V1.encode()
+    parameter_set = SCCP_SOURCE_ADAPTER_FASTPQ_PARAMETER_SET_V1.encode()
+    verifier = b"".join(
+        (
+            _write_u8(1),
+            _write_u32_le(len(circuit_id)),
+            circuit_id,
+            _write_u32_le(len(source_chain)),
+            source_chain,
+            _write_u32_le(source_domain),
+            _write_u32_le(target_domain),
+            _write_u8(proof_plan),
+            _write_u8(finality_model),
+            _write_u32_le(len(parameter_set)),
+            parameter_set,
+            _write_u32_le(128),
+            _write_u32_le(23),
+            _write_u32_le(16),
+            _write_u64_le(_SCCP_SOURCE_ADAPTER_FASTPQ_TRACE_ROOT_V1),
+            _write_u32_le(19),
+            _write_u64_le(_SCCP_SOURCE_ADAPTER_FASTPQ_LDE_ROOT_V1),
+            _write_u32_le(65_536),
+            _write_u8(1),
+            _write_u32_le(19),
+            _write_u64_le(_SCCP_SOURCE_ADAPTER_FASTPQ_OMEGA_COSET_V1),
+            _write_u32_le(len(b"Goldilocks")),
+            b"Goldilocks",
+            _write_u32_le(len(b"18446744069414584321")),
+            b"18446744069414584321",
+            _write_u32_le(2),
+            _write_u32_le(len(b"Poseidon2(Goldilocks)")),
+            b"Poseidon2(Goldilocks)",
+            _write_u32_le(len(b"SHA3-256")),
+            b"SHA3-256",
+            _write_u32_le(8),
+            _write_u32_le(8),
+            _write_u32_le(8),
+            _write_u32_le(46),
+        )
+    )
+    return _bytes_to_hex(hashlib.sha256(circuit_id + verifier).digest())
+
+
+def _nonzero_hex_bytes(value: Any, label: str, byte_length: int) -> bytes:
+    raw = _hex_to_bytes(value, label, byte_length)
+    if not any(raw):
+        raise TypeError(f"{label} must not be zero")
+    return raw
+
+
+_SCCP_SOURCE_VERIFIER_MATERIAL_ROLE_HASH_FIELDS = (
+    "source_trust_anchor_hash",
+    "consensus_verifier_hash",
+    "message_inclusion_verifier_hash",
+    "finality_policy_hash",
+    "source_state_verifier_hash",
+    "source_bridge_emitter_code_hash",
+    "source_bridge_network_id",
+    "source_bridge_config_hash",
+)
+
+_SCCP_SOURCE_ADAPTER_DEPLOYMENT_ROLE_HASH_FIELDS = (
+    "source_trust_anchor_hash",
+    "consensus_verifier_hash",
+    "message_inclusion_verifier_hash",
+    "finality_policy_hash",
+    "source_state_verifier_hash",
+    "adapter_verifier_vk_hash",
+    "source_bridge_emitter_code_hash",
+    "source_bridge_network_id",
+    "source_bridge_config_hash",
+    "deployment_receipt_hash",
+)
+
+
+def _require_sccp_role_hash_separation(
+    record: Mapping[str, Any],
+    role_fields: Sequence[str],
+    label: str,
+) -> None:
+    seen: Dict[str, str] = {}
+    for role_field in role_fields:
+        role_hash = record[role_field]
+        if _hex32_is_zero(role_hash, role_field):
+            continue
+        previous_role_field = seen.get(role_hash)
+        if previous_role_field is not None:
+            raise ValueError(
+                f"{label} hashes must be role-separated: "
+                f"{role_field} matches {previous_role_field}"
+            )
+        seen[role_hash] = role_field
+
+
+def _maybe_empty_hex_to_bytes(value: Any, label: str) -> bytes:
+    if isinstance(value, str) and value.strip().lower() == "0x":
+        return b""
+    return _hex_to_bytes(value, label)
+
+
+def normalize_sccp_source_verifier_material(input_value: Any) -> Dict[str, Any]:
+    """Normalize governed source verifier material for app-side audit tooling."""
+
+    value = _require_mapping(input_value, "SCCP source verifier material")
+    def material_field(label: str, *keys: str) -> Any:
+        return _mapping_value_without_aliases(value, label, *keys)
+
+    def material_optional_field(label: str, *keys: str) -> Any:
+        return _mapping_optional_value_without_aliases(value, label, *keys)
+
+    def material_domain_hex32(enabled: bool, selected: Any, label: str) -> str:
+        if not enabled:
+            if selected is not _MISSING:
+                normalized = _normalize_hex32(selected, label)
+                if not _hex32_is_zero(normalized, label):
+                    raise TypeError(f"{label} is not used for sourceDomain")
+            return SCCP_ZERO_HASH_V1
+        return _normalize_nonzero_hex32(
+            None if selected is _MISSING else selected,
+            label,
+        )
+
+    def material_domain_bytes_hex(
+        enabled: bool,
+        selected: Any,
+        label: str,
+        byte_length: int,
+    ) -> str:
+        if not enabled:
+            if selected is not _MISSING:
+                raw = _maybe_empty_hex_to_bytes(selected, label)
+                if raw:
+                    raise TypeError(f"{label} is not used for sourceDomain")
+            return "0x"
+        return _bytes_to_hex(
+            _nonzero_hex_bytes(
+                None if selected is _MISSING else selected,
+                label,
+                byte_length,
+            )
+        )
+
+    source_domain = _normalize_u32(
+        material_field("sourceDomain", "sourceDomain", "source_domain"),
+        "sourceDomain",
+    )
+    profile = _sccp_source_record_profile(source_domain)
+    source_state_verifier_hash = material_domain_hex32(
+        bool(profile["source_state_verifier_id"]),
+        material_optional_field(
+            "sourceStateVerifierHash",
+            "sourceStateVerifierHash",
+            "source_state_verifier_hash",
+        ),
+        "sourceStateVerifierHash",
+    )
+    material = {
+        "version": 1,
+        "source_domain": source_domain,
+        "source_chain": profile["source_chain"],
+        "source_proof_plan": profile["source_proof_plan"],
+        "finality_model": profile["finality_model"],
+        "adapter_circuit_id": SCCP_SOURCE_ADAPTER_OPEN_VERIFY_CIRCUIT_ID_V1,
+        "source_trust_anchor_id": profile["source_trust_anchor_id"],
+        "source_trust_anchor_hash": _normalize_nonzero_hex32(
+            material_field(
+                "sourceTrustAnchorHash",
+                "sourceTrustAnchorHash",
+                "source_trust_anchor_hash",
+            ),
+            "sourceTrustAnchorHash",
+        ),
+        "consensus_verifier_id": profile["consensus_verifier_id"],
+        "consensus_verifier_hash": _normalize_nonzero_hex32(
+            material_field(
+                "consensusVerifierHash",
+                "consensusVerifierHash",
+                "consensus_verifier_hash",
+            ),
+            "consensusVerifierHash",
+        ),
+        "message_inclusion_verifier_id": profile["message_inclusion_verifier_id"],
+        "message_inclusion_verifier_hash": _normalize_nonzero_hex32(
+            material_field(
+                "messageInclusionVerifierHash",
+                "messageInclusionVerifierHash",
+                "message_inclusion_verifier_hash",
+            ),
+            "messageInclusionVerifierHash",
+        ),
+        "finality_policy_id": profile["finality_policy_id"],
+        "finality_policy_hash": _normalize_nonzero_hex32(
+            material_field(
+                "finalityPolicyHash",
+                "finalityPolicyHash",
+                "finality_policy_hash",
+            ),
+            "finalityPolicyHash",
+        ),
+        "source_state_verifier_id": profile["source_state_verifier_id"],
+        "source_state_verifier_hash": source_state_verifier_hash,
+        "source_bridge_emitter_id": profile["source_bridge_emitter_id"],
+        "source_bridge_emitter_address": material_domain_bytes_hex(
+            profile["requires_source_bridge"],
+            material_optional_field(
+                "sourceBridgeEmitterAddress",
+                "sourceBridgeEmitterAddress",
+                "source_bridge_emitter_address",
+                "bridgeAddress",
+                "bridge_address",
+            ),
+            "sourceBridgeEmitterAddress",
+            20,
+        ),
+        "source_bridge_emitter_code_hash": material_domain_hex32(
+            profile["requires_source_bridge"],
+            material_optional_field(
+                "sourceBridgeEmitterCodeHash",
+                "sourceBridgeEmitterCodeHash",
+                "source_bridge_emitter_code_hash",
+            ),
+            "sourceBridgeEmitterCodeHash",
+        ),
+        "source_bridge_network_id": material_domain_hex32(
+            profile["requires_source_bridge_config"],
+            material_optional_field(
+                "sourceBridgeNetworkId",
+                "sourceBridgeNetworkId",
+                "source_bridge_network_id",
+                "networkId",
+                "network_id",
+            ),
+            "sourceBridgeNetworkId",
+        ),
+        "source_bridge_owner_address": material_domain_bytes_hex(
+            profile["requires_source_bridge_config"],
+            material_optional_field(
+                "sourceBridgeOwnerAddress",
+                "sourceBridgeOwnerAddress",
+                "source_bridge_owner_address",
+                "ownerAddress",
+                "owner_address",
+            ),
+            "sourceBridgeOwnerAddress",
+            20,
+        ),
+        "source_bridge_config_hash": material_domain_hex32(
+            profile["requires_source_bridge_config"],
+            material_optional_field(
+                "sourceBridgeConfigHash",
+                "sourceBridgeConfigHash",
+                "source_bridge_config_hash",
+                "configHash",
+                "config_hash",
+            ),
+            "sourceBridgeConfigHash",
+        ),
+        "placeholder_material": False,
+    }
+    if source_domain == SCCP_DOMAIN_TON:
+        for field, template_hash in _SCCP_TON_TEMPLATE_COMPONENT_HASHES.items():
+            if material[field] == template_hash:
+                if field == "source_state_verifier_hash":
+                    raise TypeError(
+                        "sourceStateVerifierHash must not be the TON template verifier hash"
+                    )
+                raise TypeError(f"{field} must not be the TON template component hash")
+    if source_domain == SCCP_DOMAIN_TRON:
+        for field, template_hash in _SCCP_TRON_TEMPLATE_COMPONENT_HASHES.items():
+            if material[field] == template_hash:
+                raise TypeError(f"{field} must not be the TRON template component hash")
+    if source_domain == SCCP_DOMAIN_SOL:
+        for field, template_hash in _SCCP_SOLANA_TEMPLATE_COMPONENT_HASHES.items():
+            if material[field] == template_hash:
+                if field == "source_state_verifier_hash":
+                    raise TypeError(
+                        "sourceStateVerifierHash must not be the Solana template verifier hash"
+                    )
+                raise TypeError(f"{field} must not be the Solana template component hash")
+    _reject_mismatched_tron_source_bridge_config_hash(material)
+    _require_sccp_role_hash_separation(
+        material,
+        _SCCP_SOURCE_VERIFIER_MATERIAL_ROLE_HASH_FIELDS,
+        "SCCP source verifier material",
+    )
+    return material
+
+
+def _write_maybe_empty_string(value: str, label: str) -> bytes:
+    return _write_string(value, label) if value else _write_bytes(b"")
+
+
+def canonical_sccp_source_verifier_material_bytes(input_value: Any) -> bytes:
+    """Return canonical bytes for a governed source verifier material record."""
+
+    material = normalize_sccp_source_verifier_material(input_value)
+    return b"".join(
+        (
+            _write_u8(material["version"]),
+            _write_u32_le(material["source_domain"]),
+            _write_string(material["source_chain"], "sourceChain"),
+            _write_u8(material["source_proof_plan"]),
+            _write_u8(material["finality_model"]),
+            _write_string(material["adapter_circuit_id"], "adapterCircuitId"),
+            _write_string(material["source_trust_anchor_id"], "sourceTrustAnchorId"),
+            _hex_to_bytes(material["source_trust_anchor_hash"], "sourceTrustAnchorHash", 32),
+            _write_string(material["consensus_verifier_id"], "consensusVerifierId"),
+            _hex_to_bytes(material["consensus_verifier_hash"], "consensusVerifierHash", 32),
+            _write_string(
+                material["message_inclusion_verifier_id"],
+                "messageInclusionVerifierId",
+            ),
+            _hex_to_bytes(
+                material["message_inclusion_verifier_hash"],
+                "messageInclusionVerifierHash",
+                32,
+            ),
+            _write_string(material["finality_policy_id"], "finalityPolicyId"),
+            _hex_to_bytes(material["finality_policy_hash"], "finalityPolicyHash", 32),
+            _write_maybe_empty_string(
+                material["source_state_verifier_id"],
+                "sourceStateVerifierId",
+            ),
+            _hex_to_bytes(material["source_state_verifier_hash"], "sourceStateVerifierHash", 32),
+            _write_maybe_empty_string(
+                material["source_bridge_emitter_id"],
+                "sourceBridgeEmitterId",
+            ),
+            _write_bytes(
+                _maybe_empty_hex_to_bytes(
+                    material["source_bridge_emitter_address"],
+                    "sourceBridgeEmitterAddress",
+                )
+            ),
+            _hex_to_bytes(
+                material["source_bridge_emitter_code_hash"],
+                "sourceBridgeEmitterCodeHash",
+                32,
+            ),
+            _hex_to_bytes(material["source_bridge_network_id"], "sourceBridgeNetworkId", 32),
+            _write_bytes(
+                _maybe_empty_hex_to_bytes(
+                    material["source_bridge_owner_address"],
+                    "sourceBridgeOwnerAddress",
+                )
+            ),
+            _hex_to_bytes(material["source_bridge_config_hash"], "sourceBridgeConfigHash", 32),
+            _write_u8(1 if material["placeholder_material"] else 0),
+        )
+    )
+
+
+def sccp_source_verifier_material_hash(input_value: Any) -> str:
+    """Hash source verifier material exactly as Rust admission does."""
+
+    return _bytes_to_hex(
+        _prefixed_blake2b(
+            _SCCP_SOURCE_VERIFIER_MATERIAL_RECORD_PREFIX_V1,
+            canonical_sccp_source_verifier_material_bytes(input_value),
+        )
+    )
+
+
+def normalize_sccp_source_adapter_engine_deployment(input_value: Any) -> Dict[str, Any]:
+    """Normalize governed source-adapter deployment material for app-side audits."""
+
+    value = _require_mapping(input_value, "SCCP source adapter engine deployment")
+    material = normalize_sccp_source_verifier_material(value)
+
+    def deployment_field(label: str, *keys: str) -> Any:
+        return _mapping_value_without_aliases(value, label, *keys)
+
+    def deployment_optional_field(label: str, *keys: str) -> Any:
+        return _mapping_optional_value_without_aliases(value, label, *keys)
+
+    def deployment_optional_hex32(label: str, *keys: str) -> str:
+        selected = deployment_optional_field(label, *keys)
+        return SCCP_ZERO_HASH_V1 if selected is _MISSING else _normalize_hex32(selected, label)
+
+    target_domain_input = deployment_optional_field(
+        "targetDomain",
+        "targetDomain",
+        "target_domain",
+    )
+    target_domain = (
+        _normalize_u32(SCCP_DOMAIN_SORA, "targetDomain")
+        if target_domain_input is _MISSING
+        else _normalize_u32(target_domain_input, "targetDomain")
+    )
+    if target_domain != SCCP_DOMAIN_SORA:
+        raise ValueError("targetDomain must be SORA for SCCP source-adapter deployments")
+    adapter_proof_family_input = deployment_optional_field(
+        "adapterProofFamily",
+        "adapterProofFamily",
+        "adapter_proof_family",
+    )
+    if adapter_proof_family_input is _MISSING:
+        adapter_proof_family = SCCP_STARK_FRI_PROOF_FAMILY_V1
+    else:
+        adapter_proof_family = _normalize_non_empty_string(
+            adapter_proof_family_input,
+            "adapterProofFamily",
+        )
+    if adapter_proof_family != SCCP_STARK_FRI_PROOF_FAMILY_V1:
+        raise ValueError("adapterProofFamily must be stark-fri-v1")
+    canonical_vk_hash = sccp_source_adapter_verifier_vk_hash(
+        material["source_domain"],
+        target_domain=target_domain,
+    )
+    supplied_vk_hash = deployment_optional_field(
+        "adapterVerifierVkHash",
+        "adapterVerifierVkHash",
+        "adapter_verifier_vk_hash",
+    )
+    adapter_verifier_vk_hash = (
+        canonical_vk_hash
+        if supplied_vk_hash is _MISSING
+        else _normalize_nonzero_hex32(supplied_vk_hash, "adapterVerifierVkHash")
+    )
+    if adapter_verifier_vk_hash != canonical_vk_hash:
+        raise ValueError(
+            "adapterVerifierVkHash must match the canonical source-adapter verifier profile"
+        )
+    deployment = dict(material)
+    deployment.update(
+        {
+            "target_domain": target_domain,
+            "adapter_proof_family": adapter_proof_family,
+            "adapter_verifier_vk_hash": adapter_verifier_vk_hash,
+            "solana_tower_replay_verifier_hash": deployment_optional_hex32(
+                "solanaTowerReplayVerifierHash",
+                "solanaTowerReplayVerifierHash",
+                "solana_tower_replay_verifier_hash",
+            ),
+            "solana_full_accountsdb_lattice_verifier_hash": deployment_optional_hex32(
+                "solanaFullAccountsdbLatticeVerifierHash",
+                "solanaFullAccountsdbLatticeVerifierHash",
+                "solana_full_accountsdb_lattice_verifier_hash",
+            ),
+            "solana_bank_fork_choice_verifier_hash": deployment_optional_hex32(
+                "solanaBankForkChoiceVerifierHash",
+                "solanaBankForkChoiceVerifierHash",
+                "solana_bank_fork_choice_verifier_hash",
+            ),
+            "ton_masterchain_config_verifier_hash": deployment_optional_hex32(
+                "tonMasterchainConfigVerifierHash",
+                "tonMasterchainConfigVerifierHash",
+                "ton_masterchain_config_verifier_hash",
+            ),
+            "ton_validator_set_transition_verifier_hash": deployment_optional_hex32(
+                "tonValidatorSetTransitionVerifierHash",
+                "tonValidatorSetTransitionVerifierHash",
+                "ton_validator_set_transition_verifier_hash",
+            ),
+            "ton_shard_accounts_dictionary_verifier_hash": deployment_optional_hex32(
+                "tonShardAccountsDictionaryVerifierHash",
+                "tonShardAccountsDictionaryVerifierHash",
+                "ton_shard_accounts_dictionary_verifier_hash",
+            ),
+            "deployment_receipt_hash": _normalize_nonzero_hex32(
+                deployment_field(
+                    "deploymentReceiptHash",
+                    "deploymentReceiptHash",
+                    "deployment_receipt_hash",
+                ),
+                "deploymentReceiptHash",
+            ),
+        }
+    )
+    _require_sccp_role_hash_separation(
+        deployment,
+        _SCCP_SOURCE_ADAPTER_DEPLOYMENT_ROLE_HASH_FIELDS,
+        "SCCP source-adapter deployment",
+    )
+    return deployment
+
+
+def _sccp_source_adapter_deployment_solana_audit_bytes(
+    deployment: Mapping[str, Any],
+) -> bytes:
+    audit_hashes = (
+        deployment["solana_tower_replay_verifier_hash"],
+        deployment["solana_full_accountsdb_lattice_verifier_hash"],
+        deployment["solana_bank_fork_choice_verifier_hash"],
+    )
+    nonzero_count = sum(
+        not _hex32_is_zero(value, f"solanaAuditHash[{index}]")
+        for index, value in enumerate(audit_hashes)
+    )
+    if nonzero_count == 0:
+        return b""
+    if deployment["source_domain"] != SCCP_DOMAIN_SOL or nonzero_count != len(audit_hashes):
+        raise ValueError(
+            "Solana audit verifier hashes must be all non-zero and only used for Solana deployments"
+        )
+    _require_solana_full_light_client_audit_role_separation(deployment, audit_hashes)
+    return b"".join(
+        (
+            _write_u8(1),
+            _write_string(
+                SCCP_SOLANA_MAINNET_TOWER_REPLAY_VERIFIER_ID_V1,
+                "solanaTowerReplayVerifierId",
+            ),
+            _hex_to_bytes(audit_hashes[0], "solanaTowerReplayVerifierHash", 32),
+            _write_string(
+                SCCP_SOLANA_MAINNET_FULL_ACCOUNTSDB_LATTICE_VERIFIER_ID_V1,
+                "solanaFullAccountsdbLatticeVerifierId",
+            ),
+            _hex_to_bytes(audit_hashes[1], "solanaFullAccountsdbLatticeVerifierHash", 32),
+            _write_string(
+                SCCP_SOLANA_MAINNET_BANK_FORK_CHOICE_VERIFIER_ID_V1,
+                "solanaBankForkChoiceVerifierId",
+            ),
+            _hex_to_bytes(audit_hashes[2], "solanaBankForkChoiceVerifierHash", 32),
+        )
+    )
+
+
+def _require_solana_full_light_client_audit_role_separation(
+    deployment: Mapping[str, Any],
+    audit_hashes: tuple[str, str, str],
+) -> None:
+    audit_fields = (
+        "solanaTowerReplayVerifierHash",
+        "solanaFullAccountsdbLatticeVerifierHash",
+        "solanaBankForkChoiceVerifierHash",
+    )
+    seen: Dict[str, str] = {}
+    for field, value in zip(audit_fields, audit_hashes):
+        previous_field = seen.get(value)
+        if previous_field is not None:
+            raise ValueError(
+                "Solana full-light-client audit verifier hashes must be role-separated: "
+                f"{field} matches {previous_field}"
+            )
+        seen[value] = field
+        if value in _SCCP_SOLANA_TEMPLATE_SOURCE_MATERIAL_HASHES:
+            raise ValueError(
+                "Solana full-light-client audit verifier hashes must not reuse "
+                f"built-in template material: {field}"
+            )
+
+    role_fields = (
+        "source_trust_anchor_hash",
+        "consensus_verifier_hash",
+        "message_inclusion_verifier_hash",
+        "finality_policy_hash",
+        "source_state_verifier_hash",
+        "adapter_verifier_vk_hash",
+        "source_bridge_emitter_code_hash",
+        "source_bridge_network_id",
+        "source_bridge_config_hash",
+        "deployment_receipt_hash",
+    )
+    for field, value in zip(audit_fields, audit_hashes):
+        for role_field in role_fields:
+            role_value = deployment[role_field]
+            if not _hex32_is_zero(role_value, role_field) and value == role_value:
+                raise ValueError(
+                    "Solana full-light-client audit verifier hashes must not reuse "
+                    f"existing source-adapter material: {field} matches {role_field}"
+                )
+
+
+def _require_ton_full_light_client_audit_role_separation(
+    deployment: Mapping[str, Any],
+    audit_hashes: tuple[str, str, str],
+) -> None:
+    audit_fields = (
+        "tonMasterchainConfigVerifierHash",
+        "tonValidatorSetTransitionVerifierHash",
+        "tonShardAccountsDictionaryVerifierHash",
+    )
+    seen: Dict[str, str] = {}
+    for field, value in zip(audit_fields, audit_hashes):
+        previous_field = seen.get(value)
+        if previous_field is not None:
+            raise ValueError(
+                "TON full-light-client audit verifier hashes must be role-separated: "
+                f"{field} matches {previous_field}"
+            )
+        seen[value] = field
+        if value in _SCCP_TON_TEMPLATE_SOURCE_MATERIAL_HASHES:
+            raise ValueError(
+                "TON full-light-client audit verifier hashes must not reuse "
+                f"built-in template material: {field}"
+            )
+
+    role_fields = (
+        "source_trust_anchor_hash",
+        "consensus_verifier_hash",
+        "message_inclusion_verifier_hash",
+        "finality_policy_hash",
+        "source_state_verifier_hash",
+        "adapter_verifier_vk_hash",
+        "source_bridge_emitter_code_hash",
+        "source_bridge_network_id",
+        "source_bridge_config_hash",
+        "deployment_receipt_hash",
+    )
+    for field, value in zip(audit_fields, audit_hashes):
+        for role_field in role_fields:
+            role_value = deployment[role_field]
+            if not _hex32_is_zero(role_value, role_field) and value == role_value:
+                raise ValueError(
+                    "TON full-light-client audit verifier hashes must not reuse "
+                    f"existing source-adapter material: {field} matches {role_field}"
+                )
+
+
+def _sccp_source_adapter_deployment_ton_audit_bytes(
+    deployment: Mapping[str, Any],
+) -> bytes:
+    audit_hashes = (
+        deployment["ton_masterchain_config_verifier_hash"],
+        deployment["ton_validator_set_transition_verifier_hash"],
+        deployment["ton_shard_accounts_dictionary_verifier_hash"],
+    )
+    nonzero_count = sum(
+        not _hex32_is_zero(value, f"tonAuditHash[{index}]")
+        for index, value in enumerate(audit_hashes)
+    )
+    if nonzero_count == 0:
+        return b""
+    if deployment["source_domain"] != SCCP_DOMAIN_TON or nonzero_count != len(audit_hashes):
+        raise ValueError(
+            "TON audit verifier hashes must be all non-zero and only used for TON deployments"
+        )
+    _require_ton_full_light_client_audit_role_separation(deployment, audit_hashes)
+    return b"".join(
+        (
+            _write_u8(2),
+            _write_string(
+                SCCP_TON_MAINNET_MASTERCHAIN_CONFIG_VERIFIER_ID_V1,
+                "tonMasterchainConfigVerifierId",
+            ),
+            _hex_to_bytes(audit_hashes[0], "tonMasterchainConfigVerifierHash", 32),
+            _write_string(
+                SCCP_TON_MAINNET_VALIDATOR_SET_TRANSITION_VERIFIER_ID_V1,
+                "tonValidatorSetTransitionVerifierId",
+            ),
+            _hex_to_bytes(audit_hashes[1], "tonValidatorSetTransitionVerifierHash", 32),
+            _write_string(
+                SCCP_TON_MAINNET_SHARD_ACCOUNTS_DICTIONARY_VERIFIER_ID_V1,
+                "tonShardAccountsDictionaryVerifierId",
+            ),
+            _hex_to_bytes(audit_hashes[2], "tonShardAccountsDictionaryVerifierHash", 32),
+        )
+    )
+
+
+def canonical_sccp_source_adapter_engine_deployment_bytes(input_value: Any) -> bytes:
+    """Return canonical bytes for a governed source-adapter deployment record."""
+
+    deployment = normalize_sccp_source_adapter_engine_deployment(input_value)
+    return b"".join(
+        (
+            _write_u8(deployment["version"]),
+            _write_u32_le(deployment["source_domain"]),
+            _write_u32_le(deployment["target_domain"]),
+            _write_string(deployment["source_chain"], "sourceChain"),
+            _write_u8(deployment["source_proof_plan"]),
+            _write_u8(deployment["finality_model"]),
+            _write_string(deployment["adapter_proof_family"], "adapterProofFamily"),
+            _write_string(deployment["adapter_circuit_id"], "adapterCircuitId"),
+            _hex_to_bytes(deployment["adapter_verifier_vk_hash"], "adapterVerifierVkHash", 32),
+            _write_string(deployment["source_trust_anchor_id"], "sourceTrustAnchorId"),
+            _hex_to_bytes(deployment["source_trust_anchor_hash"], "sourceTrustAnchorHash", 32),
+            _write_string(deployment["consensus_verifier_id"], "consensusVerifierId"),
+            _hex_to_bytes(deployment["consensus_verifier_hash"], "consensusVerifierHash", 32),
+            _write_string(
+                deployment["message_inclusion_verifier_id"],
+                "messageInclusionVerifierId",
+            ),
+            _hex_to_bytes(
+                deployment["message_inclusion_verifier_hash"],
+                "messageInclusionVerifierHash",
+                32,
+            ),
+            _write_string(deployment["finality_policy_id"], "finalityPolicyId"),
+            _hex_to_bytes(deployment["finality_policy_hash"], "finalityPolicyHash", 32),
+            _write_maybe_empty_string(
+                deployment["source_state_verifier_id"],
+                "sourceStateVerifierId",
+            ),
+            _hex_to_bytes(deployment["source_state_verifier_hash"], "sourceStateVerifierHash", 32),
+            _write_maybe_empty_string(
+                deployment["source_bridge_emitter_id"],
+                "sourceBridgeEmitterId",
+            ),
+            _write_bytes(
+                _maybe_empty_hex_to_bytes(
+                    deployment["source_bridge_emitter_address"],
+                    "sourceBridgeEmitterAddress",
+                )
+            ),
+            _hex_to_bytes(
+                deployment["source_bridge_emitter_code_hash"],
+                "sourceBridgeEmitterCodeHash",
+                32,
+            ),
+            _hex_to_bytes(deployment["source_bridge_network_id"], "sourceBridgeNetworkId", 32),
+            _write_bytes(
+                _maybe_empty_hex_to_bytes(
+                    deployment["source_bridge_owner_address"],
+                    "sourceBridgeOwnerAddress",
+                )
+            ),
+            _hex_to_bytes(deployment["source_bridge_config_hash"], "sourceBridgeConfigHash", 32),
+            _hex_to_bytes(deployment["deployment_receipt_hash"], "deploymentReceiptHash", 32),
+            _sccp_source_adapter_deployment_solana_audit_bytes(deployment),
+            _sccp_source_adapter_deployment_ton_audit_bytes(deployment),
+        )
+    )
+
+
+def sccp_source_adapter_engine_deployment_hash(input_value: Any) -> str:
+    """Hash source-adapter deployment exactly as Rust admission does."""
+
+    return _bytes_to_hex(
+        _prefixed_blake2b(
+            _SCCP_SOURCE_ADAPTER_ENGINE_DEPLOYMENT_RECORD_PREFIX_V1,
+            canonical_sccp_source_adapter_engine_deployment_bytes(input_value),
+        )
+    )
+
+
+def sccp_solana_full_light_client_gate_hash(input_value: Any) -> str:
+    """Hash the audited Solana full light-client deployment gate transcript."""
+
+    material = normalize_sccp_source_verifier_material(input_value)
+    deployment = normalize_sccp_source_adapter_engine_deployment(input_value)
+    audit_hashes = (
+        deployment["solana_tower_replay_verifier_hash"],
+        deployment["solana_full_accountsdb_lattice_verifier_hash"],
+        deployment["solana_bank_fork_choice_verifier_hash"],
+    )
+    if (
+        material["source_domain"] != SCCP_DOMAIN_SOL
+        or deployment["source_domain"] != SCCP_DOMAIN_SOL
+        or deployment["target_domain"] != SCCP_DOMAIN_SORA
+        or any(
+            _hex32_is_zero(value, f"solanaAuditHash[{index}]")
+            for index, value in enumerate(audit_hashes)
+        )
+    ):
+        raise ValueError(
+            "Solana full light-client gate hash requires an audited Solana -> SORA deployment"
+        )
+    _require_solana_full_light_client_audit_role_separation(deployment, audit_hashes)
+    return _bytes_to_hex(
+        _prefixed_blake2b(
+            _SCCP_SOLANA_FULL_LIGHT_CLIENT_GATE_PREFIX_V1,
+            b"".join(
+                (
+                    _write_u8(1),
+                    _write_u32_le(material["source_domain"]),
+                    _write_u32_le(deployment["target_domain"]),
+                    _write_string(material["source_chain"], "sourceChain"),
+                    _write_u8(material["source_proof_plan"]),
+                    _write_u8(material["finality_model"]),
+                    _write_string(SCCP_SOLANA_MAINNET_GENESIS_HASH, "solanaMainnetGenesisHash"),
+                    _hex_to_bytes(
+                        sccp_source_verifier_material_hash(material),
+                        "sourceVerifierMaterialHash",
+                        32,
+                    ),
+                    _hex_to_bytes(
+                        sccp_source_adapter_engine_deployment_hash(deployment),
+                        "sourceAdapterDeploymentHash",
+                        32,
+                    ),
+                    _write_string(
+                        SCCP_SOLANA_MAINNET_TOWER_REPLAY_VERIFIER_ID_V1,
+                        "solanaTowerReplayVerifierId",
+                    ),
+                    _hex_to_bytes(audit_hashes[0], "solanaTowerReplayVerifierHash", 32),
+                    _write_string(
+                        SCCP_SOLANA_MAINNET_FULL_ACCOUNTSDB_LATTICE_VERIFIER_ID_V1,
+                        "solanaFullAccountsdbLatticeVerifierId",
+                    ),
+                    _hex_to_bytes(audit_hashes[1], "solanaFullAccountsdbLatticeVerifierHash", 32),
+                    _write_string(
+                        SCCP_SOLANA_MAINNET_BANK_FORK_CHOICE_VERIFIER_ID_V1,
+                        "solanaBankForkChoiceVerifierId",
+                    ),
+                    _hex_to_bytes(audit_hashes[2], "solanaBankForkChoiceVerifierHash", 32),
+                )
+            ),
+        )
+    )
+
+
+def sccp_ton_full_light_client_gate_hash(input_value: Any) -> str:
+    """Hash the audited TON full light-client deployment gate transcript."""
+
+    material = normalize_sccp_source_verifier_material(input_value)
+    deployment = normalize_sccp_source_adapter_engine_deployment(input_value)
+    verifier_pairs = (
+        (
+            SCCP_TON_MAINNET_MASTERCHAIN_CONFIG_VERIFIER_ID_V1,
+            deployment["ton_masterchain_config_verifier_hash"],
+        ),
+        (
+            SCCP_TON_MAINNET_VALIDATOR_SET_TRANSITION_VERIFIER_ID_V1,
+            deployment["ton_validator_set_transition_verifier_hash"],
+        ),
+        (
+            SCCP_TON_MAINNET_SHARD_ACCOUNTS_DICTIONARY_VERIFIER_ID_V1,
+            deployment["ton_shard_accounts_dictionary_verifier_hash"],
+        ),
+    )
+    if (
+        material["source_domain"] != SCCP_DOMAIN_TON
+        or deployment["source_domain"] != SCCP_DOMAIN_TON
+        or deployment["target_domain"] != SCCP_DOMAIN_SORA
+        or any(
+            _hex32_is_zero(value, f"tonAuditHash[{index}]")
+            for index, (_verifier_id, value) in enumerate(verifier_pairs)
+        )
+    ):
+        raise ValueError(
+            "TON full light-client gate hash requires an audited TON -> SORA deployment"
+        )
+
+    out = b"".join(
+        (
+            _write_u8(1),
+            _write_u32_le(material["source_domain"]),
+            _write_u32_le(deployment["target_domain"]),
+            _write_string(material["source_chain"], "sourceChain"),
+            _write_u8(material["source_proof_plan"]),
+            _write_u8(material["finality_model"]),
+            int(-239).to_bytes(4, "little", signed=True),
+            _write_string(
+                SCCP_TON_SHARD_STATE_OPEN_VERIFY_CIRCUIT_ID_V1,
+                "tonShardStateCircuitId",
+            ),
+            _write_string(
+                SCCP_SOURCE_ADAPTER_FASTPQ_PARAMETER_SET_V1,
+                "tonShardStateParameterSet",
+            ),
+            _write_string(
+                SCCP_TON_MAINNET_SHARD_STATE_VERIFIER_ID_V1,
+                "tonSourceStateVerifierId",
+            ),
+            _hex_to_bytes(
+                material["source_state_verifier_hash"],
+                "sourceStateVerifierHash",
+                32,
+            ),
+            _hex_to_bytes(
+                sccp_source_verifier_material_hash(material),
+                "sourceVerifierMaterialHash",
+                32,
+            ),
+            _hex_to_bytes(
+                sccp_source_adapter_engine_deployment_hash(deployment),
+                "sourceAdapterDeploymentHash",
+                32,
+            ),
+        )
+    )
+    for verifier_id, verifier_hash in verifier_pairs:
+        out += _write_string(verifier_id, "tonAuditVerifierId")
+        out += _hex_to_bytes(verifier_hash, "tonAuditVerifierHash", 32)
+    return _bytes_to_hex(
+        _prefixed_blake2b(_SCCP_TON_FULL_LIGHT_CLIENT_GATE_PREFIX_V1, out)
+    )
+
+
+def normalize_solana_sccp_proof_context(input_value: Any) -> Dict[str, Any]:
+    """Normalize the Solana proof context that binds UI proofs to a destination."""
+
+    value = _require_mapping(input_value, "Solana SCCP proof context")
+    destination_binding = _mapping_optional_value_without_aliases(
+        value,
+        "destinationBinding",
+        "destinationBinding",
+        "destination_binding",
+    )
+    direct_destination_binding_hash = _mapping_optional_value_without_aliases(
+        value,
+        "destinationBindingHash",
+        "destinationBindingHash",
+        "destination_binding_hash",
+    )
+    nested_destination_binding_hash = _MISSING
+    if destination_binding is not _MISSING:
+        if not isinstance(destination_binding, Mapping):
+            raise TypeError("destinationBinding must be an object")
+        nested_destination_binding_hash = _mapping_optional_value_without_aliases(
+            destination_binding,
+            "destinationBinding.bindingHash",
+            "bindingHash",
+            "binding_hash",
+        )
+    if (
+        direct_destination_binding_hash is not _MISSING
+        and nested_destination_binding_hash is not _MISSING
+        and _normalize_hex32(direct_destination_binding_hash, "destinationBindingHash")
+        != _normalize_hex32(nested_destination_binding_hash, "destinationBindingHash")
+    ):
+        raise TypeError("destinationBindingHash must match destinationBinding.bindingHash")
+    return {
+        "version": 1,
+        "statement_hash": _normalize_nonzero_hex32(
+            _mapping_value_without_aliases(
+                value,
+                "statementHash",
+                "statementHash",
+                "statement_hash",
+            ),
+            "statementHash",
+        ),
+        "destination_binding_hash": _normalize_nonzero_hex32(
+            direct_destination_binding_hash
+            if direct_destination_binding_hash is not _MISSING
+            else nested_destination_binding_hash,
+            "destinationBindingHash",
+        ),
+    }
+
+
+def canonical_solana_sccp_proof_context_bytes(input_value: Any) -> bytes:
+    """Return canonical Solana SCCP proof-context bytes."""
+
+    context = normalize_solana_sccp_proof_context(input_value)
+    return b"".join(
+        (
+            _write_u8(context["version"]),
+            _hex_to_bytes(context["statement_hash"], "statementHash", 32),
+            _hex_to_bytes(context["destination_binding_hash"], "destinationBindingHash", 32),
+        )
+    )
+
+
+def solana_sccp_proof_context_hash(input_value: Any) -> str:
+    """Hash a Solana SCCP proof context with the canonical prefix."""
+
+    return _bytes_to_hex(
+        _prefixed_blake2b(
+            _SCCP_SOLANA_PROOF_CONTEXT_PREFIX_V1,
+            canonical_solana_sccp_proof_context_bytes(input_value),
+        )
+    )
+
+
+def normalize_ton_sccp_proof_context(input_value: Any) -> Dict[str, Any]:
+    """Normalize the TON proof context that binds UI proofs to a destination."""
+
+    value = _require_mapping(input_value, "TON SCCP proof context")
+    destination_binding = _mapping_value_without_aliases(
+        value,
+        "destinationBinding",
+        "destinationBinding",
+        "destination_binding",
+    )
+    destination_binding_hash_input = _mapping_optional_value_without_aliases(
+        value,
+        "destinationBindingHash",
+        "destinationBindingHash",
+        "destination_binding_hash",
+    )
+    nested_destination_binding_hash_input = _MISSING
+    if isinstance(destination_binding, Mapping):
+        nested_destination_binding_hash_input = _mapping_optional_value_without_aliases(
+            destination_binding,
+            "destinationBinding.bindingHash",
+            "bindingHash",
+            "binding_hash",
+        )
+    if destination_binding_hash_input is _MISSING:
+        destination_binding_hash = (
+            nested_destination_binding_hash_input
+            if nested_destination_binding_hash_input is not _MISSING
+            else None
+        )
+    elif nested_destination_binding_hash_input is not _MISSING:
+        destination_binding_hash = _normalize_nonzero_hex32(
+            destination_binding_hash_input,
+            "destinationBindingHash",
+        )
+        nested_destination_binding_hash = _normalize_nonzero_hex32(
+            nested_destination_binding_hash_input,
+            "destinationBinding.bindingHash",
+        )
+        if destination_binding_hash != nested_destination_binding_hash:
+            raise TypeError(
+                "destinationBindingHash must match destinationBinding.bindingHash"
+            )
+    else:
+        destination_binding_hash = destination_binding_hash_input
+    return {
+        "version": 1,
+        "statement_hash": _normalize_nonzero_hex32(
+            _mapping_value_without_aliases(
+                value,
+                "statementHash",
+                "statementHash",
+                "statement_hash",
+            ),
+            "statementHash",
+        ),
+        "destination_binding_hash": _normalize_nonzero_hex32(
+            destination_binding_hash,
+            "destinationBindingHash",
+        ),
+    }
+
+
+def ton_sccp_submission_query_id(public_inputs_value: Any) -> int:
+    """Return the deterministic TON query id derived from the SCCP message id."""
+
+    public_inputs = _normalize_transparent_public_inputs(public_inputs_value)
+    message_id = _hex_to_bytes(public_inputs["message_id"], "messageId", 32)
+    return int.from_bytes(message_id[:8], "big")
+
+
+def _ton_min_size_bytes(value: Any) -> int:
+    numeric = _normalize_u64(value, "TON sized integer")
+    for size in range(1, 8):
+        if numeric <= (1 << (size * 8)) - 1:
+            return size
+    raise ValueError("TON sized integer is too large")
+
+
+def _ton_sized_uint(value: Any, size: int) -> bytes:
+    numeric = _normalize_u64(value, "TON sized integer")
+    if not isinstance(size, int) or size < 1 or size > 7:
+        raise ValueError("TON size must be 1..7 bytes")
+    if numeric > (1 << (size * 8)) - 1:
+        raise ValueError("TON sized integer overflows")
+    return numeric.to_bytes(size, "big")
+
+
+def _ton_serialize_cells(cells: Sequence[Mapping[str, Any]], size_bytes: int) -> bytes:
+    out = bytearray()
+    for cell_index, cell in enumerate(cells):
+        value = _require_mapping(cell, f"cells[{cell_index}]")
+        data_input = _mapping_value(value, "data")
+        data = _to_bytes(
+            b"" if data_input is None else data_input,
+            f"cells[{cell_index}].data",
+        )
+        refs_value = _mapping_value(value, "refs")
+        if refs_value is None:
+            refs_value = []
+        if isinstance(refs_value, (str, bytes, bytearray, memoryview)) or not isinstance(
+            refs_value, Sequence
+        ):
+            raise TypeError(f"cells[{cell_index}].refs must be a sequence")
+        refs = list(refs_value)
+        if len(data) > _SCCP_TON_MAX_CELL_DATA_BYTES:
+            raise ValueError(f"cells[{cell_index}].data exceeds one TON cell")
+        if len(refs) > _SCCP_TON_MAX_REFS:
+            raise ValueError(f"cells[{cell_index}].refs exceeds TON ref count")
+        out.extend((len(refs), len(data) * 2))
+        out.extend(data)
+        for ref_index in refs:
+            if not isinstance(ref_index, int) or ref_index < 0 or ref_index >= len(cells):
+                raise ValueError(f"cells[{cell_index}].refs contains an invalid cell index")
+            out.extend(_ton_sized_uint(ref_index, size_bytes))
+    return bytes(out)
+
+
+def _ton_encode_boc_single_root(cells: Sequence[Mapping[str, Any]], root_index: int = 0) -> bytes:
+    if (
+        isinstance(cells, (str, bytes, bytearray, memoryview))
+        or not isinstance(cells, Sequence)
+        or not cells
+    ):
+        raise TypeError("TON BOC cells must not be empty")
+    if len(cells) > _SCCP_TON_MAX_BOC_CELLS:
+        raise ValueError("TON BOC contains too many cells")
+    if not isinstance(root_index, int) or root_index < 0 or root_index >= len(cells):
+        raise ValueError("TON BOC root index is invalid")
+    size_bytes = _ton_min_size_bytes(max(len(cells), root_index))
+    cells_bytes = _ton_serialize_cells(cells, size_bytes)
+    offset_bytes = _ton_min_size_bytes(len(cells_bytes))
+    return b"".join(
+        (
+            _SCCP_TON_BOC_MAGIC,
+            bytes((size_bytes, offset_bytes)),
+            _ton_sized_uint(len(cells), size_bytes),
+            _ton_sized_uint(1, size_bytes),
+            _ton_sized_uint(0, size_bytes),
+            _ton_sized_uint(len(cells_bytes), offset_bytes),
+            _ton_sized_uint(root_index, size_bytes),
+            cells_bytes,
+        )
+    )
+
+
+def _ton_push_snake_cells(cells: list[dict[str, Any]], value: Any) -> int:
+    data = _to_bytes(value, "TON snake bytes")
+    start = len(cells)
+    if not data:
+        if len(cells) + 1 > _SCCP_TON_MAX_BOC_CELLS:
+            raise ValueError("TON BOC contains too many cells")
+        cells.append({"data": b"", "refs": []})
+        return start
+    chunk_count = (len(data) + _SCCP_TON_MAX_CELL_DATA_BYTES - 1) // _SCCP_TON_MAX_CELL_DATA_BYTES
+    if len(cells) + chunk_count > _SCCP_TON_MAX_BOC_CELLS:
+        raise ValueError("TON BOC contains too many cells")
+    for index in range(chunk_count):
+        chunk_start = index * _SCCP_TON_MAX_CELL_DATA_BYTES
+        chunk = data[chunk_start : chunk_start + _SCCP_TON_MAX_CELL_DATA_BYTES]
+        refs = [] if index + 1 == chunk_count else [start + index + 1]
+        cells.append({"data": chunk, "refs": refs})
+    return start
+
+
+def _enum_code(value: Any, table: Mapping[str, int], label: str) -> int:
+    key = value
+    if isinstance(value, Mapping):
+        key = _mapping_value(value, "family", "kind", "type")
+    if isinstance(key, str) and key in table:
+        return table[key]
+    raise TypeError(f"{label} is unsupported")
+
+
+def _verifier_backend_family_for_ton(manifest: Mapping[str, Any]) -> Any:
+    backend = _mapping_value_without_aliases(
+        manifest,
+        "verifierBackend",
+        "verifierBackend",
+        "verifier_backend",
+    )
+    family = _mapping_optional_value_without_aliases(
+        manifest,
+        "verifierBackendFamily",
+        "verifierBackendFamily",
+        "verifier_backend_family",
+    )
+    backend_family = _MISSING
+    if isinstance(backend, Mapping):
+        backend_family = _mapping_optional_value_without_aliases(
+            backend,
+            "verifierBackend.family",
+            "family",
+        )
+    if family is not _MISSING and backend_family is not _MISSING:
+        raise TypeError("verifierBackendFamily must not use multiple aliases")
+    if family is not _MISSING and family is not None:
+        return family
+    if backend_family is not _MISSING and backend_family is not None:
+        return backend_family
+    return "TonContract"
+
+
+def _normalize_ton_submission_manifest(
+    manifest: Mapping[str, Any],
+) -> dict[str, Any]:
+    local_domain = _normalize_u32(
+        _mapping_value_without_aliases(
+            manifest,
+            "manifest.localDomain",
+            "localDomain",
+            "local_domain",
+        ),
+        "manifest.localDomain",
+    )
+    if local_domain != SCCP_DOMAIN_SORA:
+        raise TypeError("manifest.localDomain must be SORA")
+    counterparty_domain = _normalize_u32(
+        _mapping_value_without_aliases(
+            manifest,
+            "manifest.counterpartyDomain",
+            "counterpartyDomain",
+            "counterparty_domain",
+        ),
+        "manifest.counterpartyDomain",
+    )
+    if counterparty_domain != SCCP_DOMAIN_TON:
+        raise TypeError("manifest.counterpartyDomain must be TON")
+    _require_v1_version(
+        _mapping_value_without_aliases(manifest, "manifest.version", "version"),
+        "manifest.version",
+    )
+    _enum_code(
+        _mapping_value_without_aliases(
+            manifest,
+            "securityModel",
+            "securityModel",
+            "security_model",
+        ),
+        {"RecursiveZk": 1},
+        "securityModel",
+    )
+    _enum_code(
+        _mapping_value_without_aliases(
+            manifest,
+            "anchorGovernance",
+            "anchorGovernance",
+            "anchor_governance",
+        ),
+        {"CryptographicProof": 1},
+        "anchorGovernance",
+    )
+    _enum_code(
+        _mapping_value_without_aliases(
+            manifest,
+            "verifierTarget",
+            "verifierTarget",
+            "verifier_target",
+        ),
+        {"TonContract": 3},
+        "verifierTarget",
+    )
+    _enum_code(
+        _verifier_backend_family_for_ton(manifest),
+        {"TonContract": 3},
+        "verifierBackendFamily",
+    )
+    proof_family = _normalize_non_empty_string(
+        _mapping_value_without_aliases(
+            manifest,
+            "proofFamily",
+            "proofFamily",
+            "proof_family",
+        ),
+        "proofFamily",
+    )
+    if proof_family != SCCP_STARK_FRI_PROOF_FAMILY_V1:
+        raise TypeError("proofFamily must be stark-fri-v1")
+    verifier_backend = _mapping_value_without_aliases(
+        manifest,
+        "verifierBackend",
+        "verifierBackend",
+        "verifier_backend",
+    )
+    verifier_backend_mapping = verifier_backend if isinstance(verifier_backend, Mapping) else None
+    top_level_verifier_backend_key = _mapping_optional_value_without_aliases(
+        manifest,
+        "verifierBackendKey",
+        "verifierBackendKey",
+        "verifier_backend_key",
+    )
+    nested_verifier_backend_key = (
+        _mapping_optional_value_without_aliases(
+            verifier_backend_mapping,
+            "verifierBackend.key",
+            "key",
+        )
+        if verifier_backend_mapping is not None
+        else _MISSING
+    )
+    if (
+        top_level_verifier_backend_key is not _MISSING
+        and nested_verifier_backend_key is not _MISSING
+    ):
+        raise TypeError("verifierBackendKey must not use multiple aliases")
+    verifier_backend_key = _normalize_non_empty_string(
+        top_level_verifier_backend_key
+        if top_level_verifier_backend_key is not _MISSING
+        else nested_verifier_backend_key
+        if nested_verifier_backend_key is not _MISSING
+        else None,
+        "verifierBackendKey",
+    )
+    if verifier_backend_key != SCCP_TON_CONTRACT_PROOF_BACKEND_V1:
+        raise TypeError("verifierBackendKey must be ton-contract-v1")
+    return {
+        "local_domain": local_domain,
+        "counterparty_domain": counterparty_domain,
+        "proof_family": proof_family,
+        "verifier_backend_key": verifier_backend_key,
+    }
+
+
+def _normalize_ton_submission_destination_binding(
+    value: Any,
+    label: str = "destinationBinding",
+) -> dict[str, str]:
+    binding = _require_mapping(value, label)
+    return {
+        "key": _normalize_non_empty_string(
+            _mapping_value(binding, "key"),
+            f"{label}.key",
+        ),
+        "binding_hash": _normalize_nonzero_hex32(
+            _mapping_value_without_aliases(
+                binding,
+                f"{label}.bindingHash",
+                "bindingHash",
+                "binding_hash",
+            ),
+            f"{label}.bindingHash",
+        ),
+    }
+
+
+def canonical_sccp_ton_submission_metadata_bytes(input_value: Any) -> bytes:
+    """Return canonical TON submission metadata bytes for portal proof packages."""
+
+    value = _require_mapping(input_value, "TON SCCP submission metadata input")
+    manifest_input = _mapping_value_without_aliases(value, "manifest", "manifest")
+    if manifest_input is None:
+        manifest_input = value
+    manifest = _require_mapping(
+        manifest_input,
+        "TON SCCP manifest",
+    )
+    normalized_manifest = _normalize_ton_submission_manifest(manifest)
+    destination_binding_input = _mapping_value_without_aliases(
+        value,
+        "destinationBinding",
+        "destinationBinding",
+        "destination_binding",
+    )
+    explicit_destination_binding_input = destination_binding_input
+    if destination_binding_input is None:
+        destination_binding_input = _mapping_value_without_aliases(
+            manifest,
+            "manifest.destinationBinding",
+            "destinationBinding",
+            "destination_binding",
+        )
+    destination_binding = _normalize_ton_submission_destination_binding(
+        destination_binding_input,
+        "destinationBinding",
+    )
+    destination_binding_hash_input = _mapping_optional_value_without_aliases(
+        value,
+        "destinationBindingHash",
+        "destinationBindingHash",
+        "destination_binding_hash",
+    )
+    if destination_binding_hash_input is not _MISSING:
+        destination_binding_hash = _normalize_nonzero_hex32(
+            destination_binding_hash_input,
+            "destinationBindingHash",
+        )
+        if destination_binding_hash != destination_binding["binding_hash"]:
+            raise TypeError("destinationBindingHash must match destinationBinding.bindingHash")
+    manifest_destination_binding_input = _mapping_value_without_aliases(
+        manifest,
+        "manifest.destinationBinding",
+        "destinationBinding",
+        "destination_binding",
+    )
+    if (
+        explicit_destination_binding_input is not None
+        and manifest_destination_binding_input is not None
+    ):
+        manifest_destination_binding = _normalize_ton_submission_destination_binding(
+            manifest_destination_binding_input,
+            "manifest.destinationBinding",
+        )
+        if destination_binding != manifest_destination_binding:
+            raise TypeError("destinationBinding must match manifest.destinationBinding")
+    public_inputs = _normalize_transparent_public_inputs(
+        _mapping_value_without_aliases(
+            value,
+            "publicInputs",
+            "publicInputs",
+            "public_inputs",
+        )
+    )
+    if public_inputs["target_domain"] != SCCP_DOMAIN_TON:
+        raise TypeError("publicInputs.targetDomain must be TON")
+    statement_hash = _normalize_nonzero_hex32(
+        _mapping_value_without_aliases(
+            value,
+            "statementHash",
+            "statementHash",
+            "statement_hash",
+        ),
+        "statementHash",
+    )
+    return b"".join(
+        (
+            _write_u8(1),
+            _write_u32_le(normalized_manifest["local_domain"]),
+            _write_u32_le(normalized_manifest["counterparty_domain"]),
+            _write_u8(
+                _enum_code(
+                    _mapping_value_without_aliases(
+                        manifest,
+                        "securityModel",
+                        "securityModel",
+                        "security_model",
+                    ),
+                    {"RecursiveZk": 1},
+                    "securityModel",
+                )
+            ),
+            _write_u8(
+                _enum_code(
+                    _mapping_value_without_aliases(
+                        manifest,
+                        "anchorGovernance",
+                        "anchorGovernance",
+                        "anchor_governance",
+                    ),
+                    {"CryptographicProof": 1},
+                    "anchorGovernance",
+                )
+            ),
+            _write_u8(
+                _enum_code(
+                    _mapping_value_without_aliases(
+                        manifest,
+                        "verifierTarget",
+                        "verifierTarget",
+                        "verifier_target",
+                    ),
+                    {"TonContract": 3},
+                    "verifierTarget",
+                )
+            ),
+            _write_u8(
+                _enum_code(
+                    _verifier_backend_family_for_ton(manifest),
+                    {"TonContract": 3},
+                    "verifierBackendFamily",
+                )
+            ),
+            _write_string(normalized_manifest["proof_family"], "proofFamily"),
+            _write_string(
+                normalized_manifest["verifier_backend_key"],
+                "verifierBackendKey",
+            ),
+            _write_string(
+                _mapping_value_without_aliases(
+                    manifest,
+                    "messageBackend",
+                    "messageBackend",
+                    "message_backend",
+                ),
+                "messageBackend",
+            ),
+            _write_string(
+                _mapping_value_without_aliases(
+                    manifest,
+                    "registryBackend",
+                    "registryBackend",
+                    "registry_backend",
+                ),
+                "registryBackend",
+            ),
+            _write_string(
+                _mapping_value_without_aliases(
+                    manifest,
+                    "manifestSeed",
+                    "manifestSeed",
+                    "manifest_seed",
+                ),
+                "manifestSeed",
+            ),
+            _write_string(destination_binding["key"], "destinationBinding.key"),
+            _hex_to_bytes(
+                destination_binding["binding_hash"],
+                "destinationBinding.bindingHash",
+                32,
+            ),
+            _hex_to_bytes(statement_hash, "statementHash", 32),
+            canonical_sccp_message_transparent_public_inputs_bytes(public_inputs),
+        )
+    )
+
+
+def build_ton_sccp_message_body_boc(input_value: Any) -> bytes:
+    """Build the TON internal-message body BOC carrying an SCCP proof."""
+
+    value = _require_mapping(input_value, "TON SCCP submission input")
+    proof_result_value = _mapping_value_without_aliases(
+        value,
+        "proofResult",
+        "proofResult",
+        "proof_result",
+    )
+    if isinstance(proof_result_value, Mapping):
+        proof_result = proof_result_value
+    else:
+        raise TypeError("proofResult must be a wrapped TON SCCP proof result")
+
+    def input_optional(label: str, *keys: str) -> Any:
+        return _mapping_optional_value_without_aliases(value, label, *keys)
+
+    def input_field(label: str, *keys: str) -> Any:
+        return _mapping_value_without_aliases(value, label, *keys)
+
+    def result_optional(label: str, *keys: str) -> Any:
+        if proof_result_value is None:
+            return _MISSING
+        return _mapping_optional_value_without_aliases(proof_result, label, *keys)
+
+    def result_field(label: str, *keys: str) -> Any:
+        return _mapping_value_without_aliases(proof_result, label, *keys)
+
+    def context_optional(proof_context: Mapping[str, Any] | None, label: str, *keys: str) -> Any:
+        if proof_context is None:
+            return _MISSING
+        return _mapping_optional_value_without_aliases(proof_context, label, *keys)
+
+    proof_result_request_hash = None
+    proof_result_source_state_verifier_id = None
+    proof_result_source_state_verifier_hash = None
+    proof_result_deployment_binding = None
+    if proof_result_value is not None:
+        _require_optional_result_backend_matches(
+            _mapping_value(proof_result, "backend"),
+            SCCP_TON_CONTRACT_PROOF_BACKEND_V1,
+        )
+    proof_result_public_inputs = result_optional(
+        "proofResult.publicInputs",
+        "publicInputs",
+        "public_inputs",
+    )
+    public_inputs_input = input_optional("publicInputs", "publicInputs", "public_inputs")
+    public_inputs = _normalize_transparent_public_inputs(
+        public_inputs_input
+        if public_inputs_input is not _MISSING
+        else proof_result_public_inputs
+    )
+    if public_inputs["target_domain"] != SCCP_DOMAIN_TON:
+        raise TypeError("publicInputs.targetDomain must be TON")
+    if proof_result_public_inputs is not _MISSING and (
+        _normalize_transparent_public_inputs(proof_result_public_inputs) != public_inputs
+    ):
+        raise TypeError("publicInputs must match proofResult.publicInputs")
+    public_inputs_bytes = canonical_sccp_message_transparent_public_inputs_bytes(public_inputs)
+    proof_input = input_optional("proofBytes", "proofBytes", "proof_bytes")
+    if proof_input is _MISSING and proof_result_value is not None:
+        proof_input = result_optional(
+            "proofResult.proofBytes",
+            "proofBytes",
+            "proof_bytes",
+            "proof",
+        )
+    proof_bytes = _to_bytes(proof_input, "proofBytes")
+    _require_native_recursive_proof_bytes(proof_bytes)
+    if proof_result_value is not None:
+        result_proof_input = result_field(
+            "proofResult.proofBytes",
+            "proofBytes",
+            "proof_bytes",
+            "proof",
+        )
+        result_proof_bytes = _to_bytes(
+            result_proof_input,
+            "proofResult.proofBytes",
+        )
+        _require_native_recursive_proof_bytes(
+            result_proof_bytes,
+            "proofResult.proofBytes",
+        )
+        if proof_bytes != result_proof_bytes:
+            raise TypeError("proofBytes must match proofResult.proofBytes")
+        result_request_hash = _normalize_nonzero_hex32(
+            result_field("proofResult.requestHash", "requestHash", "request_hash"),
+            "proofResult.requestHash",
+        )
+        proof_result_request_hash = result_request_hash
+        result_deployment_binding_hash = _normalize_nonzero_hex32(
+            result_field(
+                "proofResult.sourceAdapterDeploymentBindingHash",
+                "sourceAdapterDeploymentBindingHash",
+                "source_adapter_deployment_binding_hash",
+            ),
+            "proofResult.sourceAdapterDeploymentBindingHash",
+        )
+        result_envelope_hash = _normalize_nonzero_hex32(
+            result_field("proofResult.envelopeHash", "envelopeHash", "envelope_hash"),
+            "proofResult.envelopeHash",
+        )
+        expected_envelope_hash = _bytes_to_hex(
+            _prefixed_blake2b(
+                _SCCP_TON_PROOF_ENVELOPE_PREFIX_V1,
+                _hex_to_bytes(result_request_hash, "proofResult.requestHash", 32)
+                + _hex_to_bytes(
+                    result_deployment_binding_hash,
+                    "proofResult.sourceAdapterDeploymentBindingHash",
+                    32,
+                )
+                + result_proof_bytes,
+            )
+        )
+        if result_envelope_hash != expected_envelope_hash:
+            raise TypeError("proofResult.envelopeHash must match wrapped proof bytes")
+        source_state_verifier_id = _normalize_non_empty_string(
+            result_field(
+                "proofResult.sourceStateVerifierId",
+                "sourceStateVerifierId",
+                "source_state_verifier_id",
+            ),
+            "proofResult.sourceStateVerifierId",
+        )
+        proof_result_source_state_verifier_id = source_state_verifier_id
+        if source_state_verifier_id != SCCP_TON_MAINNET_SHARD_STATE_VERIFIER_ID_V1:
+            raise TypeError(
+                "proofResult.sourceStateVerifierId must match TON shard-state verifier profile"
+            )
+        source_state_verifier_hash = _normalize_nonzero_hex32(
+            result_field(
+                "proofResult.sourceStateVerifierHash",
+                "sourceStateVerifierHash",
+                "source_state_verifier_hash",
+            ),
+            "proofResult.sourceStateVerifierHash",
+        )
+        proof_result_source_state_verifier_hash = source_state_verifier_hash
+        if source_state_verifier_hash == _SCCP_TON_TEMPLATE_SOURCE_STATE_VERIFIER_HASH:
+            raise TypeError(
+                "proofResult.sourceStateVerifierHash must not be the TON template verifier hash"
+            )
+        deployment_binding = normalize_sccp_source_adapter_deployment_binding(
+            _require_mapping(
+                result_field(
+                    "proofResult.sourceAdapterDeploymentBinding",
+                    "sourceAdapterDeploymentBinding",
+                    "source_adapter_deployment_binding",
+                ),
+                "proofResult.sourceAdapterDeploymentBinding",
+            )
+        )
+        proof_result_deployment_binding = deployment_binding
+        if deployment_binding["source_domain"] != SCCP_DOMAIN_TON:
+            raise TypeError(
+                "proofResult.sourceAdapterDeploymentBinding.sourceDomain must be TON"
+            )
+        if deployment_binding["target_domain"] != SCCP_DOMAIN_SORA:
+            raise TypeError(
+                "proofResult.sourceAdapterDeploymentBinding.targetDomain must be SORA"
+            )
+        if deployment_binding["source_adapter_deployment_hash"] == SCCP_ZERO_HASH_V1:
+            raise TypeError("proofResult.sourceAdapterDeploymentBinding must be non-zero")
+        if (
+            sccp_source_adapter_deployment_binding_hash(deployment_binding)
+            != result_deployment_binding_hash
+        ):
+            raise TypeError(
+                "proofResult.sourceAdapterDeploymentBindingHash must match "
+                "sourceAdapterDeploymentBinding"
+            )
+    bundle_bytes = _require_non_empty_bytes(
+        input_field("bundleBytes", "bundleBytes", "bundle_bytes"),
+        "bundleBytes",
+    )
+    if proof_result_value is not None:
+        result_bundle_input = result_optional(
+            "proofResult.bundleBytes",
+            "bundleBytes",
+            "bundle_bytes",
+        )
+        if result_bundle_input is not _MISSING:
+            result_bundle_bytes = _require_non_empty_bytes(
+                result_bundle_input,
+                "proofResult.bundleBytes",
+            )
+            if bundle_bytes != result_bundle_bytes:
+                raise TypeError("bundleBytes must match proofResult.bundleBytes")
+    proof_context_input = result_optional(
+        "proofResult.proofContext",
+        "proofContext",
+        "proof_context",
+    )
+    proof_context_source = None
+    if proof_context_input is not _MISSING:
+        if not isinstance(proof_context_input, Mapping):
+            raise TypeError("proofResult.proofContext must be an object")
+        proof_context_source = proof_context_input
+    statement_source = input_optional("statementHash", "statementHash", "statement_hash")
+    result_statement_hash = result_optional(
+        "proofResult.statementHash",
+        "statementHash",
+        "statement_hash",
+    )
+    context_statement_hash = context_optional(
+        proof_context_source,
+        "proofResult.proofContext.statementHash",
+        "statementHash",
+        "statement_hash",
+    )
+    if statement_source is _MISSING:
+        statement_source = (
+            result_statement_hash
+            if result_statement_hash is not _MISSING
+            else context_statement_hash
+        )
+    statement_hash = _normalize_nonzero_hex32(statement_source, "statementHash")
+    if result_statement_hash is not _MISSING:
+        _require_supplied_result_hash_matches(
+            result_statement_hash,
+            statement_hash,
+            "proofResult.statementHash",
+        )
+    elif context_statement_hash is not _MISSING:
+        _require_supplied_result_hash_matches(
+            context_statement_hash,
+            statement_hash,
+            "proofResult.statementHash",
+        )
+    destination_binding = input_optional(
+        "destinationBinding",
+        "destinationBinding",
+        "destination_binding",
+    )
+    destination_binding_hash = input_optional(
+        "destinationBindingHash",
+        "destinationBindingHash",
+        "destination_binding_hash",
+    )
+    if destination_binding_hash is _MISSING and destination_binding is not _MISSING:
+        destination_binding_hash = (
+            _mapping_optional_value_without_aliases(
+                destination_binding,
+                "destinationBinding.bindingHash",
+                "bindingHash",
+                "binding_hash",
+            )
+            if isinstance(destination_binding, Mapping)
+            else None
+        )
+    result_destination_binding_hash = result_optional(
+        "proofResult.destinationBindingHash",
+        "destinationBindingHash",
+        "destination_binding_hash",
+    )
+    context_destination_binding_hash = context_optional(
+        proof_context_source,
+        "proofResult.proofContext.destinationBindingHash",
+        "destinationBindingHash",
+        "destination_binding_hash",
+    )
+    if destination_binding_hash is _MISSING:
+        destination_binding_hash = (
+            result_destination_binding_hash
+            if result_destination_binding_hash is not _MISSING
+            else context_destination_binding_hash
+        )
+    destination_binding_hash = _normalize_nonzero_hex32(
+        destination_binding_hash,
+        "destinationBindingHash",
+    )
+    if result_destination_binding_hash is not _MISSING:
+        _require_supplied_result_hash_matches(
+            result_destination_binding_hash,
+            destination_binding_hash,
+            "proofResult.destinationBindingHash",
+        )
+    elif context_destination_binding_hash is not _MISSING:
+        _require_supplied_result_hash_matches(
+            context_destination_binding_hash,
+            destination_binding_hash,
+            "proofResult.destinationBindingHash",
+        )
+    if proof_result_value is not None:
+        source_proof_input = result_optional(
+            "proofResult.sourceProofBytes",
+            "sourceProofBytes",
+            "source_proof_bytes",
+        )
+        if source_proof_input is _MISSING:
+            source_proof_input = input_optional(
+                "sourceProofBytes",
+                "sourceProofBytes",
+                "source_proof_bytes",
+            )
+        source_proof_bytes = _require_optional_nonzero_bytes(
+            b"" if source_proof_input is _MISSING else source_proof_input,
+            "proofResult.sourceProofBytes",
+        )
+        expected_request = build_ton_sccp_proof_request(
+            {
+                "public_inputs": public_inputs,
+                "bundle_bytes": bundle_bytes,
+                "source_proof_bytes": source_proof_bytes,
+                "statement_hash": statement_hash,
+                "destination_binding_hash": destination_binding_hash,
+                "source_state_verifier_id": proof_result_source_state_verifier_id,
+                "source_state_verifier_hash": proof_result_source_state_verifier_hash,
+                "source_adapter_deployment_hash": proof_result_deployment_binding[
+                    "source_adapter_deployment_hash"
+                ],
+                "source_adapter_deployment_receipt_hash": proof_result_deployment_binding[
+                    "source_adapter_deployment_receipt_hash"
+                ],
+                "backend": SCCP_TON_CONTRACT_PROOF_BACKEND_V1,
+                "source_domain": SCCP_DOMAIN_TON,
+            }
+        )
+        if expected_request["request_hash"] != proof_result_request_hash:
+            raise TypeError(
+                "proofResult.requestHash must match bundleBytes and sourceProofBytes"
+            )
+    metadata_input = input_field("metadataBytes", "metadataBytes", "metadata_bytes")
+    if metadata_input is not None:
+        metadata_bytes = _to_bytes(metadata_input, "metadataBytes")
+    elif isinstance(input_field("manifest", "manifest"), Mapping):
+        metadata_bytes = canonical_sccp_ton_submission_metadata_bytes(
+            {
+                "manifest": input_field("manifest", "manifest"),
+                "destination_binding": None if destination_binding is _MISSING else destination_binding,
+                "destination_binding_hash": destination_binding_hash,
+                "public_inputs": public_inputs,
+                "statement_hash": statement_hash,
+            }
+        )
+    else:
+        metadata_bytes = b""
+    query_id_input = input_field("queryId", "queryId", "query_id")
+    query_id = _normalize_u64(
+        query_id_input
+        if query_id_input is not None
+        else ton_sccp_submission_query_id(public_inputs),
+        "queryId",
+    )
+    root_data = b"".join(
+        (
+            _SCCP_TON_SUBMIT_OP_V1.to_bytes(4, "big"),
+            query_id.to_bytes(8, "big"),
+            _SCCP_TON_MESSAGE_SCHEMA_VERSION_V1.to_bytes(2, "big"),
+            _hex_to_bytes(statement_hash, "statementHash", 32),
+            _hex_to_bytes(destination_binding_hash, "destinationBindingHash", 32),
+        )
+    )
+    cells: list[dict[str, Any]] = [{"data": root_data, "refs": []}]
+    public_inputs_root = _ton_push_snake_cells(cells, public_inputs_bytes)
+    proof_root = _ton_push_snake_cells(cells, proof_bytes)
+    bundle_root = _ton_push_snake_cells(cells, bundle_bytes)
+    metadata_root = _ton_push_snake_cells(cells, metadata_bytes)
+    cells[0]["refs"] = [public_inputs_root, proof_root, bundle_root, metadata_root]
+    return _ton_encode_boc_single_root(cells, 0)
+
+
+def build_ton_sccp_submission(input_value: Any) -> Mapping[str, Any]:
+    """Build a TON SCCP submission envelope for wallet or liteserver broadcasting."""
+
+    message_body_boc = build_ton_sccp_message_body_boc(input_value)
+    message_body_boc_hex = _bytes_to_hex(message_body_boc)
+    return _immutable_prover_envelope(
+        {
+            "version": 1,
+            "envelope_encoding": SCCP_TON_MESSAGE_BODY_BOC_V1,
+            "submission_kind": "internal_message",
+            "verifier_entrypoint": "op::submit_sccp_message_proof",
+            "message_body_boc": message_body_boc,
+            "message_body_boc_hex": message_body_boc_hex,
+            "arguments": [
+                {
+                    "key": "message_body_boc",
+                    "encoding": "ton_boc",
+                    "bytes": message_body_boc_hex,
+                }
+            ],
+            "envelope_bytes": message_body_boc,
+            "envelope_hex": message_body_boc_hex,
+        }
+    )
+
+
+def build_ton_sccp_proof_request(input_value: Any) -> Mapping[str, Any]:
+    """Build the deterministic request object a UI passes into a local TON prover."""
+
+    value = _require_mapping(input_value, "TON SCCP proof request input")
+
+    def request_value(label: str, *keys: str) -> Any:
+        return _mapping_value_without_aliases(value, label, *keys)
+
+    def request_optional_value(label: str, *keys: str) -> Any:
+        return _mapping_optional_value_without_aliases(value, label, *keys)
+
+    public_inputs = _normalize_transparent_public_inputs(
+        request_value("publicInputs", "publicInputs", "public_inputs")
+    )
+    if public_inputs["target_domain"] != SCCP_DOMAIN_TON:
+        raise TypeError("publicInputs.targetDomain must be TON")
+    public_inputs_bytes = canonical_sccp_message_transparent_public_inputs_bytes(public_inputs)
+    bundle_bytes = _require_non_empty_bytes(
+        request_value("bundleBytes", "bundleBytes", "bundle_bytes"),
+        "bundleBytes",
+    )
+    source_proof_input = request_optional_value(
+        "sourceProofBytes",
+        "sourceProofBytes",
+        "source_proof_bytes",
+    )
+    source_proof_bytes = (
+        b""
+        if source_proof_input is _MISSING
+        else _require_optional_nonzero_bytes(source_proof_input, "sourceProofBytes")
+    )
+    source_domain_input = request_optional_value(
+        "sourceDomain",
+        "sourceDomain",
+        "source_domain",
+    )
+    source_domain = (
+        SCCP_DOMAIN_TON
+        if source_domain_input is _MISSING
+        else _normalize_u32(source_domain_input, "sourceDomain")
+    )
+    if source_domain != SCCP_DOMAIN_TON:
+        raise TypeError("TON SCCP proof request sourceDomain must be TON")
+    backend_input = request_optional_value(
+        "backend",
+        "backend",
+    )
+    backend = (
+        SCCP_TON_CONTRACT_PROOF_BACKEND_V1
+        if backend_input is _MISSING
+        else backend_input
+    )
+    if backend != SCCP_TON_CONTRACT_PROOF_BACKEND_V1:
+        raise TypeError("TON SCCP proof request backend must be ton-contract-v1")
+    source_state_verifier_id_input = request_optional_value(
+        "sourceStateVerifierId",
+        "sourceStateVerifierId",
+        "source_state_verifier_id",
+    )
+    source_state_verifier_id_value = (
+        SCCP_TON_MAINNET_SHARD_STATE_VERIFIER_ID_V1
+        if source_state_verifier_id_input is _MISSING
+        else source_state_verifier_id_input
+    )
+    source_state_verifier_id = _normalize_non_empty_string(
+        source_state_verifier_id_value,
+        "sourceStateVerifierId",
+    )
+    if source_state_verifier_id != SCCP_TON_MAINNET_SHARD_STATE_VERIFIER_ID_V1:
+        raise TypeError("sourceStateVerifierId must match TON shard-state verifier profile")
+    source_state_verifier_hash = _normalize_nonzero_hex32(
+        request_value(
+            "sourceStateVerifierHash",
+            "sourceStateVerifierHash",
+            "source_state_verifier_hash",
+        ),
+        "sourceStateVerifierHash",
+    )
+    if source_state_verifier_hash == _SCCP_TON_TEMPLATE_SOURCE_STATE_VERIFIER_HASH:
+        raise TypeError("sourceStateVerifierHash must not be the TON template verifier hash")
+    proof_context_input = request_optional_value(
+        "proofContext",
+        "proofContext",
+        "proof_context",
+    )
+    proof_context = normalize_ton_sccp_proof_context(
+        value if proof_context_input is _MISSING else proof_context_input
+    )
+    deployment_input = request_optional_value(
+        "sourceAdapterDeploymentBinding",
+        "sourceAdapterDeploymentBinding",
+        "source_adapter_deployment_binding",
+    )
+    if deployment_input is _MISSING:
+        deployment_input = {}
+    deployment_input = _require_mapping(
+        deployment_input,
+        "sourceAdapterDeploymentBinding",
+    )
+    deployment_input_source_domain = _mapping_optional_value_without_aliases(
+        deployment_input,
+        "sourceAdapterDeploymentBinding.sourceDomain",
+        "sourceDomain",
+        "source_domain",
+    )
+    if deployment_input_source_domain is not _MISSING and _normalize_u32(
+        deployment_input_source_domain,
+        "sourceAdapterDeploymentBinding.sourceDomain",
+    ) != SCCP_DOMAIN_TON:
+        raise TypeError(
+            "TON SCCP proof request source adapter deployment binding sourceDomain must be TON"
+        )
+    deployment_input_target_domain = _mapping_optional_value_without_aliases(
+        deployment_input,
+        "sourceAdapterDeploymentBinding.targetDomain",
+        "targetDomain",
+        "target_domain",
+    )
+    if deployment_input_target_domain is not _MISSING and _normalize_u32(
+        deployment_input_target_domain,
+        "sourceAdapterDeploymentBinding.targetDomain",
+    ) != SCCP_DOMAIN_SORA:
+        raise TypeError(
+            "TON SCCP proof request source adapter deployment binding targetDomain must be SORA"
+        )
+
+    def select_deployment_hash(label: str, snake_label: str) -> str:
+        top_level_value = request_optional_value(label, label, snake_label)
+        nested_value = _mapping_optional_value_without_aliases(
+            deployment_input,
+            f"sourceAdapterDeploymentBinding.{label}",
+            label,
+            snake_label,
+        )
+        normalized_top_level_value = (
+            None
+            if top_level_value is _MISSING
+            else _normalize_hex32(top_level_value, label)
+        )
+        normalized_nested_value = (
+            None
+            if nested_value is _MISSING
+            else _normalize_hex32(nested_value, f"sourceAdapterDeploymentBinding.{label}")
+        )
+        if (
+            normalized_top_level_value is not None
+            and normalized_nested_value is not None
+            and normalized_top_level_value != normalized_nested_value
+        ):
+            raise TypeError(
+                f"{label} must match sourceAdapterDeploymentBinding.{label}"
+            )
+        if normalized_top_level_value is not None:
+            return normalized_top_level_value
+        if normalized_nested_value is not None:
+            return normalized_nested_value
+        return SCCP_ZERO_HASH_V1
+
+    deployment_hash_input = select_deployment_hash(
+        "sourceAdapterDeploymentHash",
+        "source_adapter_deployment_hash",
+    )
+    deployment_receipt_hash_input = select_deployment_hash(
+        "sourceAdapterDeploymentReceiptHash",
+        "source_adapter_deployment_receipt_hash",
+    )
+    deployment_binding = normalize_sccp_source_adapter_deployment_binding(
+        {
+            "source_domain": source_domain,
+            "target_domain": SCCP_DOMAIN_SORA,
+            "source_adapter_deployment_hash": deployment_hash_input,
+            "source_adapter_deployment_receipt_hash": deployment_receipt_hash_input,
+        }
+    )
+    if deployment_binding["source_adapter_deployment_hash"] == SCCP_ZERO_HASH_V1:
+        raise TypeError(
+            "TON SCCP proof request requires non-zero source adapter deployment binding"
+        )
+    deployment_binding_hash = sccp_source_adapter_deployment_binding_hash(deployment_binding)
+    request_hash = _bytes_to_hex(
+        _prefixed_blake2b(
+            _SCCP_TON_PROOF_REQUEST_PREFIX_V1,
+            b"".join(
+                (
+                    public_inputs_bytes,
+                    _write_bytes(bundle_bytes),
+                    _write_bytes(source_proof_bytes),
+                    _write_string(source_state_verifier_id, "sourceStateVerifierId"),
+                    _hex_to_bytes(
+                        source_state_verifier_hash,
+                        "sourceStateVerifierHash",
+                        32,
+                    ),
+                    _hex_to_bytes(proof_context["statement_hash"], "statementHash", 32),
+                    _hex_to_bytes(
+                        proof_context["destination_binding_hash"],
+                        "destinationBindingHash",
+                        32,
+                    ),
+                    _hex_to_bytes(
+                        deployment_binding_hash,
+                        "sourceAdapterDeploymentBindingHash",
+                        32,
+                    ),
+                )
+            ),
+        )
+    )
+    return _immutable_prover_envelope({
+        "version": 1,
+        "backend": backend,
+        "source_domain": source_domain,
+        "target_domain": public_inputs["target_domain"],
+        "public_inputs": public_inputs,
+        "public_inputs_bytes": public_inputs_bytes,
+        "bundle_bytes": bundle_bytes,
+        "source_proof_bytes": source_proof_bytes,
+        "proof_context": proof_context,
+        "statement_hash": proof_context["statement_hash"],
+        "destination_binding_hash": proof_context["destination_binding_hash"],
+        "source_state_verifier_id": source_state_verifier_id,
+        "source_state_verifier_hash": source_state_verifier_hash,
+        "source_adapter_deployment_binding_hash": deployment_binding_hash,
+        "source_adapter_deployment_binding": deployment_binding,
+        "request_hash": request_hash,
+    })
+
+
+def _destination_binding_has_deployment_material(value: Mapping[str, Any]) -> bool:
+    return (
+        _mapping_optional_value_without_aliases(
+            value,
+            "destinationBinding.networkId",
+            "networkId",
+            "network_id",
+            "networkIdHex",
+            "network_id_hex",
+        )
+        is not _MISSING
+    )
+
+
+def _destination_binding_with_default_target(
+    value: Mapping[str, Any],
+    target_domain: Optional[int],
+) -> Mapping[str, Any]:
+    if (
+        target_domain is None
+        or _mapping_optional_value_without_aliases(
+            value,
+            "destinationBinding.targetDomain",
+            "targetDomain",
+            "target_domain",
+        )
+        is not _MISSING
+    ):
+        return value
+    return {**value, "target_domain": target_domain}
+
+
+def _normalize_bound_destination_binding_hash(
+    *,
+    value: Mapping[str, Any],
+    destination_binding: Any,
+    destination_binding_hash: Any,
+    target_domain: Optional[int],
+    binding_builder: Callable[[Any], Dict[str, Any]],
+) -> Any:
+    return _normalize_bound_destination_binding(
+        value=value,
+        destination_binding=destination_binding,
+        destination_binding_hash=destination_binding_hash,
+        target_domain=target_domain,
+        binding_builder=binding_builder,
+    )[0]
+
+
+def _normalize_bound_destination_binding(
+    *,
+    value: Mapping[str, Any],
+    destination_binding: Any,
+    destination_binding_hash: Any,
+    target_domain: Optional[int],
+    binding_builder: Callable[[Any], Dict[str, Any]],
+) -> tuple[Any, Optional[Dict[str, Any]]]:
+    if not isinstance(destination_binding, Mapping):
+        return destination_binding_hash, None
+
+    binding_value = _destination_binding_with_default_target(
+        destination_binding,
+        target_domain,
+    )
+    binding_hash = _destination_binding_hash_from_mapping(destination_binding)
+    if _destination_binding_has_deployment_material(destination_binding):
+        normalized_binding = binding_builder(binding_value)
+        derived_hash = normalized_binding["binding_hash"]
+        _require_destination_binding_hash_matches(
+            destination_binding_hash,
+            derived_hash,
+            "destinationBindingHash",
+        )
+        return derived_hash, normalized_binding
+    if destination_binding_hash is not None and binding_hash is not None:
+        expected_hash = _normalize_nonzero_hex32(binding_hash, "destinationBinding.bindingHash")
+        _require_destination_binding_hash_matches(
+            destination_binding_hash,
+            expected_hash,
+            "destinationBindingHash",
+        )
+    return binding_hash if destination_binding_hash is None else destination_binding_hash, None
+
+
+def _normalize_tron_sccp_proof_context_and_binding(
+    input_value: Any,
+    *,
+    target_domain: Optional[int] = None,
+) -> tuple[Dict[str, Any], Optional[Dict[str, Any]]]:
+    value = _require_mapping(input_value, "TRON SCCP proof context")
+    destination_binding = _mapping_value_without_aliases(
+        value,
+        "destinationBinding",
+        "destinationBinding",
+        "destination_binding",
+    )
+    destination_binding_hash = _mapping_value_without_aliases(
+        value,
+        "destinationBindingHash",
+        "destinationBindingHash",
+        "destination_binding_hash",
+    )
+    destination_binding_hash, normalized_destination_binding = _normalize_bound_destination_binding(
+        value=value,
+        destination_binding=destination_binding,
+        destination_binding_hash=destination_binding_hash,
+        target_domain=target_domain,
+        binding_builder=tron_sccp_destination_binding,
+    )
+    return (
+        {
+            "version": 1,
+            "statement_hash": _normalize_nonzero_hex32(
+                _mapping_value_without_aliases(
+                    value,
+                    "statementHash",
+                    "statementHash",
+                    "statement_hash",
+                ),
+                "statementHash",
+            ),
+            "destination_binding_hash": _normalize_nonzero_hex32(
+                destination_binding_hash,
+                "destinationBindingHash",
+            ),
+        },
+        normalized_destination_binding,
+    )
+
+
+def normalize_tron_sccp_proof_context(
+    input_value: Any,
+    *,
+    target_domain: Optional[int] = None,
+) -> Dict[str, Any]:
+    """Normalize the TRON proof context that binds Groth16 proofs to a destination."""
+
+    return _normalize_tron_sccp_proof_context_and_binding(
+        input_value,
+        target_domain=target_domain,
+    )[0]
+
+
+def _normalize_evm_sccp_proof_context_and_binding(
+    input_value: Any,
+    *,
+    target_domain: Optional[int] = None,
+) -> tuple[Dict[str, Any], Optional[Dict[str, Any]]]:
+    value = _require_mapping(input_value, "EVM-family SCCP proof context")
+    destination_binding = _mapping_value_without_aliases(
+        value,
+        "destinationBinding",
+        "destinationBinding",
+        "destination_binding",
+    )
+    destination_binding_hash = _mapping_value_without_aliases(
+        value,
+        "destinationBindingHash",
+        "destinationBindingHash",
+        "destination_binding_hash",
+    )
+    destination_binding_hash, normalized_destination_binding = _normalize_bound_destination_binding(
+        value=value,
+        destination_binding=destination_binding,
+        destination_binding_hash=destination_binding_hash,
+        target_domain=target_domain,
+        binding_builder=evm_sccp_destination_binding,
+    )
+    return (
+        {
+            "version": 1,
+            "statement_hash": _normalize_nonzero_hex32(
+                _mapping_value_without_aliases(
+                    value,
+                    "statementHash",
+                    "statementHash",
+                    "statement_hash",
+                ),
+                "statementHash",
+            ),
+            "destination_binding_hash": _normalize_nonzero_hex32(
+                destination_binding_hash,
+                "destinationBindingHash",
+            ),
+        },
+        normalized_destination_binding,
+    )
+
+
+def normalize_evm_sccp_proof_context(
+    input_value: Any,
+    *,
+    target_domain: Optional[int] = None,
+) -> Dict[str, Any]:
+    """Normalize the EVM-family proof context that binds Groth16 proofs to a destination."""
+
+    return _normalize_evm_sccp_proof_context_and_binding(
+        input_value,
+        target_domain=target_domain,
+    )[0]
+
+
+def build_evm_sccp_proof_request(input_value: Any) -> Mapping[str, Any]:
+    """Build the deterministic request object a UI passes into an EVM-family Groth16 prover."""
+
+    value = _require_mapping(input_value, "EVM-family SCCP proof request input")
+    public_inputs = _normalize_transparent_public_inputs(
+        _mapping_value_without_aliases(value, "publicInputs", "publicInputs", "public_inputs")
+    )
+    public_inputs_bytes = canonical_sccp_message_transparent_public_inputs_bytes(public_inputs)
+    bundle_bytes = _require_non_empty_bytes(
+        _mapping_value_without_aliases(value, "bundleBytes", "bundleBytes", "bundle_bytes"),
+        "bundleBytes",
+    )
+    source_proof_input = _mapping_optional_value_without_aliases(
+        value,
+        "sourceProofBytes",
+        "sourceProofBytes",
+        "source_proof_bytes",
+    )
+    source_proof_bytes = (
+        b""
+        if source_proof_input is _MISSING or source_proof_input is None
+        else _require_optional_nonzero_bytes(source_proof_input, "sourceProofBytes")
+    )
+    source_domain = _normalize_optional_u32_without_aliases(
+        value,
+        "sourceDomain",
+        SCCP_DOMAIN_SORA,
+        "sourceDomain",
+        "source_domain",
+    )
+    backend = _mapping_value_or_default_without_aliases(
+        value,
+        "backend",
+        SCCP_EVM_GROTH16_BN254_PROOF_BACKEND_V1,
+        "backend",
+    )
+    if backend != SCCP_EVM_GROTH16_BN254_PROOF_BACKEND_V1:
+        raise TypeError("backend must be evm-groth16-bn254-v1")
+    if public_inputs["target_domain"] == 0:
+        raise ValueError("publicInputs.targetDomain must not be zero")
+    if public_inputs["target_domain"] not in (SCCP_DOMAIN_ETH, SCCP_DOMAIN_BSC):
+        raise ValueError("publicInputs.targetDomain must be ETH or BSC")
+    if source_domain != SCCP_DOMAIN_SORA:
+        raise ValueError("sourceDomain must be SORA")
+    if source_domain == public_inputs["target_domain"]:
+        raise ValueError("sourceDomain and publicInputs.targetDomain must differ")
+    proof_context_input = _mapping_optional_value_without_aliases(
+        value,
+        "proofContext",
+        "proofContext",
+        "proof_context",
+    )
+    proof_context, destination_binding = _normalize_evm_sccp_proof_context_and_binding(
+        value if proof_context_input is _MISSING else proof_context_input,
+        target_domain=public_inputs["target_domain"],
+    )
+    public_signal_words = sccp_groth16_bn254_public_signal_words(
+        {
+            "public_inputs": public_inputs,
+            "source_domain": source_domain,
+            "statement_hash": proof_context["statement_hash"],
+            "destination_binding_hash": proof_context["destination_binding_hash"],
+        }
+    )
+    public_signal_word_bytes = [
+        _hex_to_bytes(word, f"publicSignalWords[{index}]", 32)
+        for index, word in enumerate(public_signal_words)
+    ]
+    request_hash = _bytes_to_hex(
+        _prefixed_blake2b(
+            _SCCP_EVM_GROTH16_PROOF_REQUEST_PREFIX_V1,
+            b"".join(
+                (
+                    public_inputs_bytes,
+                    _write_bytes(bundle_bytes),
+                    _write_bytes(source_proof_bytes),
+                    _hex_to_bytes(proof_context["statement_hash"], "statementHash", 32),
+                    _hex_to_bytes(
+                        proof_context["destination_binding_hash"],
+                        "destinationBindingHash",
+                        32,
+                    ),
+                    *public_signal_word_bytes,
+                )
+            ),
+        )
+    )
+    request = {
+        "version": 1,
+        "backend": backend,
+        "source_domain": source_domain,
+        "target_domain": public_inputs["target_domain"],
+        "public_inputs": public_inputs,
+        "public_inputs_bytes": public_inputs_bytes,
+        "public_signal_words": public_signal_words,
+        "bundle_bytes": bundle_bytes,
+        "source_proof_bytes": source_proof_bytes,
+        "proof_context": proof_context,
+        "statement_hash": proof_context["statement_hash"],
+        "destination_binding_hash": proof_context["destination_binding_hash"],
+        "request_hash": request_hash,
+    }
+    if destination_binding is not None:
+        request["destination_binding"] = destination_binding
+    return _immutable_prover_envelope(request)
+
+
+def build_tron_sccp_proof_request(input_value: Any) -> Mapping[str, Any]:
+    """Build the deterministic request object a UI passes into a local TRON Groth16 prover."""
+
+    value = _require_mapping(input_value, "TRON SCCP proof request input")
+    public_inputs = _normalize_transparent_public_inputs(
+        _mapping_value_without_aliases(value, "publicInputs", "publicInputs", "public_inputs")
+    )
+    public_inputs_bytes = canonical_sccp_message_transparent_public_inputs_bytes(public_inputs)
+    bundle_bytes = _require_non_empty_bytes(
+        _mapping_value_without_aliases(value, "bundleBytes", "bundleBytes", "bundle_bytes"),
+        "bundleBytes",
+    )
+    source_proof_input = _mapping_optional_value_without_aliases(
+        value,
+        "sourceProofBytes",
+        "sourceProofBytes",
+        "source_proof_bytes",
+    )
+    source_proof_bytes = (
+        b""
+        if source_proof_input is _MISSING or source_proof_input is None
+        else _require_optional_nonzero_bytes(source_proof_input, "sourceProofBytes")
+    )
+    source_domain = _normalize_optional_u32_without_aliases(
+        value,
+        "sourceDomain",
+        SCCP_DOMAIN_SORA,
+        "sourceDomain",
+        "source_domain",
+    )
+    backend = _mapping_value_or_default_without_aliases(
+        value,
+        "backend",
+        SCCP_TRON_GROTH16_BN254_PROOF_BACKEND_V1,
+        "backend",
+    )
+    if backend != SCCP_TRON_GROTH16_BN254_PROOF_BACKEND_V1:
+        raise TypeError("backend must be tron-groth16-bn254-v1")
+    if public_inputs["target_domain"] == 0:
+        raise ValueError("publicInputs.targetDomain must not be zero")
+    if public_inputs["target_domain"] != SCCP_DOMAIN_TRON:
+        raise ValueError("publicInputs.targetDomain must be TRON")
+    if source_domain != SCCP_DOMAIN_SORA:
+        raise ValueError("sourceDomain must be SORA")
+    if source_domain == public_inputs["target_domain"]:
+        raise ValueError("sourceDomain and publicInputs.targetDomain must differ")
+    proof_context_input = _mapping_optional_value_without_aliases(
+        value,
+        "proofContext",
+        "proofContext",
+        "proof_context",
+    )
+    proof_context, destination_binding = _normalize_tron_sccp_proof_context_and_binding(
+        value if proof_context_input is _MISSING else proof_context_input,
+        target_domain=public_inputs["target_domain"],
+    )
+    public_signal_words = sccp_groth16_bn254_public_signal_words(
+        {
+            "public_inputs": public_inputs,
+            "source_domain": source_domain,
+            "statement_hash": proof_context["statement_hash"],
+            "destination_binding_hash": proof_context["destination_binding_hash"],
+        }
+    )
+    public_signal_word_bytes = [
+        _hex_to_bytes(word, f"publicSignalWords[{index}]", 32)
+        for index, word in enumerate(public_signal_words)
+    ]
+    request_hash = _bytes_to_hex(
+        _prefixed_blake2b(
+            _SCCP_TRON_GROTH16_PROOF_REQUEST_PREFIX_V1,
+            b"".join(
+                (
+                    public_inputs_bytes,
+                    _write_bytes(bundle_bytes),
+                    _write_bytes(source_proof_bytes),
+                    _hex_to_bytes(proof_context["statement_hash"], "statementHash", 32),
+                    _hex_to_bytes(
+                        proof_context["destination_binding_hash"],
+                        "destinationBindingHash",
+                        32,
+                    ),
+                    *public_signal_word_bytes,
+                )
+            ),
+        )
+    )
+    request = {
+        "version": 1,
+        "backend": backend,
+        "source_domain": source_domain,
+        "target_domain": public_inputs["target_domain"],
+        "public_inputs": public_inputs,
+        "public_inputs_bytes": public_inputs_bytes,
+        "public_signal_words": public_signal_words,
+        "bundle_bytes": bundle_bytes,
+        "source_proof_bytes": source_proof_bytes,
+        "proof_context": proof_context,
+        "statement_hash": proof_context["statement_hash"],
+        "destination_binding_hash": proof_context["destination_binding_hash"],
+        "request_hash": request_hash,
+    }
+    if destination_binding is not None:
+        request["destination_binding"] = destination_binding
+    return _immutable_prover_envelope(request)
+
+
+_SCCP_SUBSTRATE_RUNTIME_TARGET_DOMAINS_V1 = frozenset(
+    {
+        SCCP_DOMAIN_SORA_KUSAMA,
+        SCCP_DOMAIN_SORA_POLKADOT,
+        SCCP_DOMAIN_SORA2,
+    }
+)
+
+
+def normalize_substrate_sccp_proof_context(input_value: Any) -> Dict[str, Any]:
+    """Normalize the Substrate runtime proof context that binds proofs to a destination."""
+
+    value = _require_mapping(input_value, "Substrate SCCP proof context")
+    destination_binding = _mapping_value_without_aliases(
+        value,
+        "destinationBinding",
+        "destinationBinding",
+        "destination_binding",
+    )
+    destination_binding_hash = _mapping_value_without_aliases(
+        value,
+        "destinationBindingHash",
+        "destinationBindingHash",
+        "destination_binding_hash",
+    )
+    if destination_binding_hash is None and isinstance(destination_binding, Mapping):
+        destination_binding_hash = _mapping_value_without_aliases(
+            destination_binding,
+            "destinationBinding.bindingHash",
+            "bindingHash",
+            "binding_hash",
+        )
+    elif destination_binding_hash is not None and isinstance(destination_binding, Mapping):
+        nested_hash = _mapping_value_without_aliases(
+            destination_binding,
+            "destinationBinding.bindingHash",
+            "bindingHash",
+            "binding_hash",
+        )
+        if nested_hash is not None:
+            expected_hash = _normalize_nonzero_hex32(
+                nested_hash,
+                "destinationBinding.bindingHash",
+            )
+            _require_destination_binding_hash_matches(
+                destination_binding_hash,
+                expected_hash,
+                "destinationBindingHash",
+            )
+    return {
+        "version": 1,
+        "statement_hash": _normalize_nonzero_hex32(
+            _mapping_value_without_aliases(
+                value,
+                "statementHash",
+                "statementHash",
+                "statement_hash",
+            ),
+            "statementHash",
+        ),
+        "destination_binding_hash": _normalize_nonzero_hex32(
+            destination_binding_hash,
+            "destinationBindingHash",
+        ),
+    }
+
+
+def build_substrate_sccp_proof_request(input_value: Any) -> Mapping[str, Any]:
+    """Build the deterministic request object a UI passes into a Substrate runtime prover."""
+
+    value = _require_mapping(input_value, "Substrate SCCP proof request input")
+    public_inputs = _normalize_transparent_public_inputs(
+        _mapping_value_without_aliases(value, "publicInputs", "publicInputs", "public_inputs")
+    )
+    public_inputs_bytes = canonical_sccp_message_transparent_public_inputs_bytes(public_inputs)
+    bundle_bytes = _require_non_empty_bytes(
+        _mapping_value_without_aliases(value, "bundleBytes", "bundleBytes", "bundle_bytes"),
+        "bundleBytes",
+    )
+    source_proof_input = _mapping_optional_value_without_aliases(
+        value,
+        "sourceProofBytes",
+        "sourceProofBytes",
+        "source_proof_bytes",
+    )
+    source_proof_bytes = (
+        b""
+        if source_proof_input is _MISSING or source_proof_input is None
+        else _require_optional_nonzero_bytes(source_proof_input, "sourceProofBytes")
+    )
+    source_domain = _normalize_optional_u32_without_aliases(
+        value,
+        "sourceDomain",
+        SCCP_DOMAIN_SORA,
+        "sourceDomain",
+        "source_domain",
+    )
+    backend = _mapping_value_or_default_without_aliases(
+        value,
+        "backend",
+        SCCP_SUBSTRATE_RUNTIME_PROOF_BACKEND_V1,
+        "backend",
+    )
+    if backend != SCCP_SUBSTRATE_RUNTIME_PROOF_BACKEND_V1:
+        raise TypeError("backend must be substrate-runtime-v1")
+    if public_inputs["target_domain"] not in _SCCP_SUBSTRATE_RUNTIME_TARGET_DOMAINS_V1:
+        raise ValueError("publicInputs.targetDomain must be a Substrate-family SCCP domain")
+    if source_domain != SCCP_DOMAIN_SORA:
+        raise ValueError("sourceDomain must be SORA")
+    if source_domain == public_inputs["target_domain"]:
+        raise ValueError("sourceDomain and publicInputs.targetDomain must differ")
+    proof_context_input = _mapping_optional_value_without_aliases(
+        value,
+        "proofContext",
+        "proofContext",
+        "proof_context",
+    )
+    proof_context = normalize_substrate_sccp_proof_context(
+        value if proof_context_input is _MISSING else proof_context_input
+    )
+    request_hash = _bytes_to_hex(
+        _prefixed_blake2b(
+            _SCCP_SUBSTRATE_RUNTIME_PROOF_REQUEST_PREFIX_V1,
+            b"".join(
+                (
+                    _write_u32_le(source_domain),
+                    public_inputs_bytes,
+                    _write_bytes(bundle_bytes),
+                    _write_bytes(source_proof_bytes),
+                    _hex_to_bytes(proof_context["statement_hash"], "statementHash", 32),
+                    _hex_to_bytes(
+                        proof_context["destination_binding_hash"],
+                        "destinationBindingHash",
+                        32,
+                    ),
+                )
+            ),
+        )
+    )
+    return _immutable_prover_envelope({
+        "version": 1,
+        "backend": backend,
+        "source_domain": source_domain,
+        "target_domain": public_inputs["target_domain"],
+        "public_inputs": public_inputs,
+        "public_inputs_bytes": public_inputs_bytes,
+        "bundle_bytes": bundle_bytes,
+        "source_proof_bytes": source_proof_bytes,
+        "proof_context": proof_context,
+        "statement_hash": proof_context["statement_hash"],
+        "destination_binding_hash": proof_context["destination_binding_hash"],
+        "request_hash": request_hash,
+    })
+
+
+def build_solana_sccp_proof_request(input_value: Any) -> Mapping[str, Any]:
+    """Build the deterministic request object a UI passes into a local Solana prover."""
+
+    value = _require_mapping(input_value, "Solana SCCP witness")
+    witness = normalize_solana_sccp_witness(value)
+    context_source = _mapping_optional_value_without_aliases(
+        value,
+        "proofContext",
+        "proofContext",
+        "proof_context",
+    )
+    if context_source is _MISSING:
+        context_source = value
+    proof_context = normalize_solana_sccp_proof_context(context_source)
+    deployment_binding = normalize_sccp_source_adapter_deployment_binding(
+        {
+            "source_domain": witness["source_domain"],
+            "target_domain": witness["target_domain"],
+            "source_adapter_deployment_hash": witness["source_adapter_deployment_hash"],
+            "source_adapter_deployment_receipt_hash": witness[
+                "source_adapter_deployment_receipt_hash"
+            ],
+        }
+    )
+    witness_hash = _bytes_to_hex(
+        _prefixed_blake2b(
+            b"sccp:solana:witness:v1",
+            canonical_solana_sccp_witness_bytes(witness),
+        )
+    )
+    proof_context_hash = solana_sccp_proof_context_hash(proof_context)
+    deployment_binding_hash = sccp_source_adapter_deployment_binding_hash(deployment_binding)
+    return _immutable_prover_envelope({
+        "version": 1,
+        "backend": SCCP_SOLANA_RECURSIVE_PROOF_BACKEND_V1,
+        "source_domain": SCCP_DOMAIN_SOL,
+        "target_domain": witness["target_domain"],
+        "mainnet_genesis_hash": witness["mainnet_genesis_hash"],
+        "witness_hash": witness_hash,
+        "proof_context_hash": proof_context_hash,
+        "source_adapter_deployment_binding_hash": deployment_binding_hash,
+        "source_state_verifier_id": witness["source_state_verifier_id"],
+        "source_state_verifier_hash": witness["source_state_verifier_hash"],
+        "public_inputs": {
+            "message_id": witness["message_id"],
+            "payload_hash": witness["payload_hash"],
+            "commitment_root": witness["commitment_root"],
+            "finalized_slot": witness["finalized_slot"],
+            "parent_slot": witness["parent_slot"],
+            "bank_signature_count": witness["bank_signature_count"],
+            "parent_bank_hash": witness["parent_bank_hash"],
+            "blockhash": witness["blockhash"],
+            "bank_hash": witness["bank_hash"],
+            "transaction_status_root": witness["transaction_status_root"],
+            "message_proof_hash": witness["message_proof_hash"],
+            "account_inclusion_root": witness["account_inclusion_root"],
+            "accounts_lt_hash_checksum": witness["accounts_lt_hash_checksum"],
+            "accounts_lt_hash_proof_public_inputs_hash": witness[
+                "accounts_lt_hash_proof_public_inputs_hash"
+            ],
+            "source_event_digest": witness["source_event_digest"],
+            "source_state_verifier_id": witness["source_state_verifier_id"],
+            "source_state_verifier_hash": witness["source_state_verifier_hash"],
+            "statement_hash": proof_context["statement_hash"],
+            "destination_binding_hash": proof_context["destination_binding_hash"],
+            "source_adapter_deployment_hash": deployment_binding[
+                "source_adapter_deployment_hash"
+            ],
+            "source_adapter_deployment_receipt_hash": deployment_binding[
+                "source_adapter_deployment_receipt_hash"
+            ],
+            "source_adapter_deployment_binding_hash": deployment_binding_hash,
+        },
+        "witness": witness,
+        "proof_context": proof_context,
+        "source_adapter_deployment_binding": deployment_binding,
+    })
+
+
+def _encode_solana_instruction_data(argument_bytes: Sequence[bytes]) -> bytes:
+    out = bytearray()
+    out.extend(_write_bytes(SCCP_SOLANA_SUBMIT_MESSAGE_PROOF_ENTRYPOINT_V1.encode("utf-8")))
+    for value in argument_bytes:
+        out.extend(_write_bytes(value))
+    return bytes(out)
+
+
+def _scale_compact_u32(value: int, label: str) -> bytes:
+    if value < 0 or value > 0xFFFF_FFFF:
+        raise ValueError(f"{label} length must fit u32")
+    if value < 1 << 6:
+        return bytes([value << 2])
+    if value < 1 << 14:
+        return ((value << 2) | 0b01).to_bytes(2, "little")
+    if value < 1 << 30:
+        return ((value << 2) | 0b10).to_bytes(4, "little")
+    return bytes([0b11]) + value.to_bytes(4, "little")
+
+
+def _scale_vec(value: bytes, label: str) -> bytes:
+    return _scale_compact_u32(len(value), label) + value
+
+
+def _encode_substrate_runtime_call(argument_bytes: Sequence[bytes]) -> bytes:
+    out = bytearray(
+        _scale_vec(
+            SCCP_SUBSTRATE_SUBMIT_MESSAGE_PROOF_ENTRYPOINT_V1.encode("utf-8"),
+            "verifierEntrypoint",
+        )
+    )
+    for index, value in enumerate(argument_bytes):
+        out.extend(_scale_vec(value, f"arguments[{index}]"))
+    return bytes(out)
+
+
+def _require_non_empty_bytes(value: Any, label: str) -> bytes:
+    raw = _to_bytes(value, label)
+    if not raw:
+        raise TypeError(f"{label} must not be empty")
+    return raw
+
+
+def _require_optional_nonzero_bytes(value: Any, label: str) -> bytes:
+    raw = _to_bytes(value, label)
+    if raw and all(byte == 0 for byte in raw):
+        raise TypeError(f"{label} must not be all zero")
+    return raw
+
+
+def _require_non_empty_nonzero_bytes(value: Any, label: str) -> bytes:
+    raw = _require_non_empty_bytes(value, label)
+    if all(byte == 0 for byte in raw):
+        raise TypeError(f"{label} must not be all zero")
+    return raw
+
+
+def _require_solana_proof_result_for_submission(
+    proof_result: Mapping[str, Any],
+    proof_context: Mapping[str, str],
+    proof_context_hash: str,
+    public_inputs: Mapping[str, Any],
+    proof_bytes: bytes,
+) -> None:
+    def proof_result_field(label: str, *keys: str) -> Any:
+        return _mapping_value_without_aliases(
+            proof_result,
+            label,
+            *dict.fromkeys(keys),
+        )
+
+    if _mapping_value(proof_result, "backend") != SCCP_SOLANA_RECURSIVE_PROOF_BACKEND_V1:
+        raise TypeError("proofResult.backend must be sccp-solana-recursive-mainnet-v1")
+    _require_v1_version(
+        _mapping_value(proof_result, "version"),
+        "proofResult.version",
+        error_cls=TypeError,
+    )
+    result_proof_context_hash = proof_result_field(
+        "proofResult.proofContextHash",
+        "proofContextHash",
+        "proof_context_hash",
+    )
+    if result_proof_context_hash is None:
+        raise TypeError("proofResult.proofContextHash is required")
+    if (
+        _normalize_hex32(result_proof_context_hash, "proofResult.proofContextHash")
+        != proof_context_hash
+    ):
+        raise TypeError(
+            "proofResult.proofContextHash must match statementHash and destinationBindingHash"
+        )
+    result_proof_bytes = _to_bytes(
+        _mapping_value_without_aliases(
+            proof_result,
+            "proofResult.proofBytes",
+            "proofBytes",
+            "proof_bytes",
+            "proof",
+        ),
+        "proofResult.proofBytes",
+    )
+    _require_native_recursive_proof_bytes(
+        result_proof_bytes,
+        "proofResult.proofBytes",
+    )
+    if result_proof_bytes != proof_bytes:
+        raise TypeError("proofBytes must match proofResult.proofBytes")
+    if (
+        _mapping_value_without_aliases(
+            proof_result,
+            "proofResult.proofBase64",
+            "proofBase64",
+            "proof_base64",
+        )
+        != base64.b64encode(result_proof_bytes).decode("ascii")
+    ):
+        raise TypeError("proofResult.proofBase64 must match proofResult.proofBytes")
+    proof_context_value = proof_result_field(
+        "proofResult.proofContext",
+        "proofContext",
+        "proof_context",
+    )
+    if not isinstance(proof_context_value, Mapping):
+        raise TypeError("proofResult.proofContext is required")
+
+    def proof_context_field(label: str, *keys: str) -> Any:
+        return _mapping_value_without_aliases(
+            proof_context_value,
+            label,
+            *dict.fromkeys(keys),
+        )
+
+    _require_v1_version(
+        _mapping_value(proof_context_value, "version"),
+        "proofResult.proofContext.version",
+        error_cls=TypeError,
+    )
+    if (
+        _normalize_hex32(
+            proof_context_field(
+                "proofResult.proofContext.statementHash",
+                "statementHash",
+                "statement_hash",
+            ),
+            "proofResult.proofContext.statementHash",
+        )
+        != proof_context["statement_hash"]
+    ):
+        raise TypeError("proofResult.proofContext.statementHash must match proofContext")
+    if (
+        _normalize_hex32(
+            proof_context_field(
+                "proofResult.proofContext.destinationBindingHash",
+                "destinationBindingHash",
+                "destination_binding_hash",
+            ),
+            "proofResult.proofContext.destinationBindingHash",
+        )
+        != proof_context["destination_binding_hash"]
+    ):
+        raise TypeError(
+            "proofResult.proofContext.destinationBindingHash must match proofContext"
+        )
+    envelope_hash = proof_result_field(
+        "proofResult.envelopeHash",
+        "envelopeHash",
+        "envelope_hash",
+    )
+    if envelope_hash is None:
+        raise TypeError("proofResult.envelopeHash must be non-zero")
+    normalized_envelope_hash = _normalize_hex32(
+        envelope_hash,
+        "proofResult.envelopeHash",
+    )
+    if normalized_envelope_hash == SCCP_ZERO_HASH_V1:
+        raise TypeError("proofResult.envelopeHash must be non-zero")
+    deployment_binding_hash = proof_result_field(
+        "proofResult.sourceAdapterDeploymentBindingHash",
+        "sourceAdapterDeploymentBindingHash",
+        "source_adapter_deployment_binding_hash",
+    )
+    if deployment_binding_hash is None:
+        raise TypeError("proofResult.sourceAdapterDeploymentBindingHash must be non-zero")
+    normalized_deployment_binding_hash = _normalize_hex32(
+        deployment_binding_hash,
+        "proofResult.sourceAdapterDeploymentBindingHash",
+    )
+    if normalized_deployment_binding_hash == SCCP_ZERO_HASH_V1:
+        raise TypeError("proofResult.sourceAdapterDeploymentBindingHash must be non-zero")
+    deployment_binding_value = proof_result_field(
+        "proofResult.sourceAdapterDeploymentBinding",
+        "sourceAdapterDeploymentBinding",
+        "source_adapter_deployment_binding",
+    )
+    if not isinstance(deployment_binding_value, Mapping):
+        raise TypeError("proofResult.sourceAdapterDeploymentBinding is required")
+    _require_v1_version(
+        _mapping_value(deployment_binding_value, "version"),
+        "proofResult.sourceAdapterDeploymentBinding.version",
+        error_cls=TypeError,
+    )
+    deployment_binding = normalize_sccp_source_adapter_deployment_binding(
+        deployment_binding_value
+    )
+    if (
+        deployment_binding["source_domain"] != SCCP_DOMAIN_SOL
+        or deployment_binding["target_domain"] != SCCP_DOMAIN_SORA
+    ):
+        raise TypeError("proofResult.sourceAdapterDeploymentBinding must be Solana -> SORA")
+    if (
+        deployment_binding["source_adapter_deployment_hash"] == SCCP_ZERO_HASH_V1
+        or deployment_binding["source_adapter_deployment_receipt_hash"]
+        == SCCP_ZERO_HASH_V1
+    ):
+        raise TypeError(
+            "proofResult.sourceAdapterDeploymentBinding deployment hashes must be non-zero"
+        )
+    expected_deployment_binding_hash = sccp_source_adapter_deployment_binding_hash(
+        deployment_binding
+    )
+    if normalized_deployment_binding_hash != expected_deployment_binding_hash:
+        raise TypeError(
+            "proofResult.sourceAdapterDeploymentBindingHash must match "
+            "sourceAdapterDeploymentBinding"
+        )
+    witness_hash = _normalize_nonzero_hex32(
+        proof_result_field(
+            "proofResult.witnessHash",
+            "witnessHash",
+            "witness_hash",
+        ),
+        "proofResult.witnessHash",
+    )
+    expected_envelope_hash = _bytes_to_hex(
+        _prefixed_blake2b(
+            b"sccp:solana:proof-envelope:v1",
+            _hex_to_bytes(witness_hash, "proofResult.witnessHash", 32)
+            + _hex_to_bytes(
+                proof_context_hash,
+                "proofResult.proofContextHash",
+                32,
+            )
+            + _hex_to_bytes(
+                normalized_deployment_binding_hash,
+                "proofResult.sourceAdapterDeploymentBindingHash",
+                32,
+            )
+            + result_proof_bytes,
+        )
+    )
+    if normalized_envelope_hash != expected_envelope_hash:
+        raise TypeError("proofResult.envelopeHash must match wrapped proof bytes")
+    source_state_verifier_id = proof_result_field(
+        "proofResult.sourceStateVerifierId",
+        "sourceStateVerifierId",
+        "source_state_verifier_id",
+    )
+    if source_state_verifier_id != SCCP_SOLANA_MAINNET_ACCOUNTS_DB_VERIFIER_ID_V1:
+        raise TypeError(
+            "proofResult.sourceStateVerifierId must match Solana AccountsDB verifier profile"
+        )
+    source_state_verifier_hash = proof_result_field(
+        "proofResult.sourceStateVerifierHash",
+        "sourceStateVerifierHash",
+        "source_state_verifier_hash",
+    )
+    if source_state_verifier_hash is None or _hex32_is_zero(
+        source_state_verifier_hash,
+        "proofResult.sourceStateVerifierHash",
+    ):
+        raise TypeError("proofResult.sourceStateVerifierHash must be non-zero")
+    normalized_source_state_verifier_hash = _normalize_hex32(
+        source_state_verifier_hash,
+        "proofResult.sourceStateVerifierHash",
+    )
+    if normalized_source_state_verifier_hash == SCCP_SOLANA_TEMPLATE_SOURCE_STATE_VERIFIER_HASH_V1:
+        raise TypeError(
+            "proofResult.sourceStateVerifierHash must not be the Solana template verifier hash"
+        )
+    result_public_inputs = proof_result_field(
+        "proofResult.publicInputs",
+        "publicInputs",
+        "public_inputs",
+    )
+    if not isinstance(result_public_inputs, Mapping):
+        raise TypeError("proofResult.publicInputs must be Solana source-proof inputs")
+
+    def public_input_field(camel_field: str, snake_field: str | None = None) -> Any:
+        return _mapping_value_without_aliases(
+            result_public_inputs,
+            f"proofResult.publicInputs.{camel_field}",
+            *dict.fromkeys((camel_field, snake_field or camel_field)),
+        )
+
+    if (
+        public_input_field(
+            "sourceStateVerifierId",
+            "source_state_verifier_id",
+        )
+        != source_state_verifier_id
+    ):
+        raise TypeError(
+            "proofResult.publicInputs.sourceStateVerifierId must match "
+            "proofResult.sourceStateVerifierId"
+        )
+    if (
+        _normalize_hex32(
+            public_input_field(
+                "sourceStateVerifierHash",
+                "source_state_verifier_hash",
+            ),
+            "proofResult.publicInputs.sourceStateVerifierHash",
+        )
+        != normalized_source_state_verifier_hash
+    ):
+        raise TypeError(
+            "proofResult.publicInputs.sourceStateVerifierHash must match "
+            "proofResult.sourceStateVerifierHash"
+        )
+    result_finalized_slot = _normalize_u64(
+        public_input_field("finalizedSlot", "finalized_slot"),
+        "proofResult.publicInputs.finalizedSlot",
+    )
+    result_parent_slot = _normalize_u64(
+        public_input_field("parentSlot", "parent_slot"),
+        "proofResult.publicInputs.parentSlot",
+    )
+    if result_parent_slot + 1 != result_finalized_slot:
+        raise TypeError(
+            "proofResult.publicInputs.parentSlot must be the direct parent of finalizedSlot"
+        )
+    result_bank_signature_count = _normalize_u64(
+        public_input_field("bankSignatureCount", "bank_signature_count"),
+        "proofResult.publicInputs.bankSignatureCount",
+    )
+    if result_bank_signature_count == 0:
+        raise TypeError("proofResult.publicInputs.bankSignatureCount must be nonzero")
+    for camel_field, snake_field in (
+        ("parentBankHash", "parent_bank_hash"),
+        ("blockhash", "blockhash"),
+        ("bankHash", "bank_hash"),
+        ("transactionStatusRoot", "transaction_status_root"),
+        ("messageProofHash", "message_proof_hash"),
+        ("accountInclusionRoot", "account_inclusion_root"),
+        ("accountsLtHashChecksum", "accounts_lt_hash_checksum"),
+        (
+            "accountsLtHashProofPublicInputsHash",
+            "accounts_lt_hash_proof_public_inputs_hash",
+        ),
+        ("sourceEventDigest", "source_event_digest"),
+    ):
+        _normalize_nonzero_hex32(
+            public_input_field(camel_field, snake_field),
+            f"proofResult.publicInputs.{camel_field}",
+        )
+    if (
+        _normalize_hex32(
+            public_input_field("statementHash", "statement_hash"),
+            "proofResult.publicInputs.statementHash",
+        )
+        != proof_context["statement_hash"]
+    ):
+        raise TypeError("proofResult.publicInputs.statementHash must match proofContext")
+    if (
+        _normalize_hex32(
+            public_input_field(
+                "destinationBindingHash",
+                "destination_binding_hash",
+            ),
+            "proofResult.publicInputs.destinationBindingHash",
+        )
+        != proof_context["destination_binding_hash"]
+    ):
+        raise TypeError(
+            "proofResult.publicInputs.destinationBindingHash must match proofContext"
+        )
+    if (
+        _normalize_hex32(
+            public_input_field(
+                "sourceAdapterDeploymentHash",
+                "source_adapter_deployment_hash",
+            ),
+            "proofResult.publicInputs.sourceAdapterDeploymentHash",
+        )
+        != deployment_binding["source_adapter_deployment_hash"]
+    ):
+        raise TypeError(
+            "proofResult.publicInputs.sourceAdapterDeploymentHash must match "
+            "sourceAdapterDeploymentBinding"
+        )
+    if (
+        _normalize_hex32(
+            public_input_field(
+                "sourceAdapterDeploymentReceiptHash",
+                "source_adapter_deployment_receipt_hash",
+            ),
+            "proofResult.publicInputs.sourceAdapterDeploymentReceiptHash",
+        )
+        != deployment_binding["source_adapter_deployment_receipt_hash"]
+    ):
+        raise TypeError(
+            "proofResult.publicInputs.sourceAdapterDeploymentReceiptHash must match "
+            "sourceAdapterDeploymentBinding"
+        )
+    if (
+        _normalize_hex32(
+            public_input_field(
+                "sourceAdapterDeploymentBindingHash",
+                "source_adapter_deployment_binding_hash",
+            ),
+            "proofResult.publicInputs.sourceAdapterDeploymentBindingHash",
+        )
+        != expected_deployment_binding_hash
+    ):
+        raise TypeError(
+            "proofResult.publicInputs.sourceAdapterDeploymentBindingHash must match "
+            "sourceAdapterDeploymentBinding"
+        )
+    if (
+        _normalize_hex32(
+            public_input_field("messageId", "message_id"),
+            "proofResult.publicInputs.messageId",
+        )
+        != public_inputs["message_id"]
+    ):
+        raise TypeError("proofResult.publicInputs.messageId must match publicInputs.messageId")
+    if (
+        _normalize_hex32(
+            public_input_field("payloadHash", "payload_hash"),
+            "proofResult.publicInputs.payloadHash",
+        )
+        != public_inputs["payload_hash"]
+    ):
+        raise TypeError("proofResult.publicInputs.payloadHash must match publicInputs.payloadHash")
+    if (
+        _normalize_hex32(
+            public_input_field("commitmentRoot", "commitment_root"),
+            "proofResult.publicInputs.commitmentRoot",
+        )
+        != public_inputs["commitment_root"]
+    ):
+        raise TypeError(
+            "proofResult.publicInputs.commitmentRoot must match publicInputs.commitmentRoot"
+        )
+    if str(result_finalized_slot) != public_inputs["finality_height"]:
+        raise TypeError(
+            "proofResult.publicInputs.finalizedSlot must match publicInputs.finalityHeight"
+        )
+    if (
+        _normalize_hex32(
+            public_input_field("bankHash", "bank_hash"),
+            "proofResult.publicInputs.bankHash",
+        )
+        != public_inputs["finality_block_hash"]
+    ):
+        raise TypeError(
+            "proofResult.publicInputs.bankHash must match publicInputs.finalityBlockHash"
+        )
+
+
+def build_solana_sccp_submission(input_value: Any) -> Mapping[str, Any]:
+    """Build Solana program-instruction submission data for an SCCP proof."""
+
+    value = _require_mapping(input_value, "Solana SCCP submission input")
+    proof_result_value = _mapping_value_without_aliases(
+        value,
+        "proofResult",
+        "proofResult",
+        "proof_result",
+    )
+    if proof_result_value is None:
+        raise TypeError("proofResult must be a wrapped Solana SCCP proof result")
+    elif isinstance(proof_result_value, Mapping):
+        proof_result = proof_result_value
+    else:
+        raise TypeError("proofResult must be a wrapped Solana SCCP proof result")
+    proof_result_public_inputs = _mapping_optional_value_without_aliases(
+        proof_result,
+        "proofResult.publicInputs",
+        "publicInputs",
+        "public_inputs",
+    )
+    transparent_public_inputs = _mapping_optional_value_without_aliases(
+        value,
+        "publicInputs",
+        "publicInputs",
+        "public_inputs",
+        "transparentPublicInputs",
+        "transparent_public_inputs",
+    )
+    if transparent_public_inputs is _MISSING:
+        raise TypeError(
+            "Solana SCCP submission requires transparent publicInputs; "
+            "proofResult.publicInputs are source-proof inputs"
+        )
+    public_inputs = _normalize_transparent_public_inputs(transparent_public_inputs)
+    if public_inputs["target_domain"] != SCCP_DOMAIN_SOL:
+        raise TypeError("publicInputs.targetDomain must be Solana")
+    supplied_public_inputs_bytes = _mapping_value_without_aliases(
+        value,
+        "publicInputsBytes",
+        "publicInputsBytes",
+        "public_inputs_bytes",
+    )
+    expected_public_inputs_bytes = canonical_sccp_message_transparent_public_inputs_bytes(
+        public_inputs
+    )
+    public_inputs_bytes = (
+        _to_bytes(supplied_public_inputs_bytes, "publicInputsBytes")
+        if supplied_public_inputs_bytes is not None
+        else expected_public_inputs_bytes
+    )
+    if (
+        len(public_inputs_bytes) != SCCP_MESSAGE_TRANSPARENT_PUBLIC_INPUTS_BYTES_V1_LEN
+        or public_inputs_bytes != expected_public_inputs_bytes
+    ):
+        raise TypeError("publicInputsBytes must match canonical SCCP transparent public inputs")
+
+    proof_bytes_input = _mapping_optional_value_without_aliases(
+        value,
+        "proofBytes",
+        "proofBytes",
+        "proof_bytes",
+    )
+    if proof_bytes_input is _MISSING:
+        proof_bytes_input = _mapping_optional_value_without_aliases(
+            proof_result,
+            "proofResult.proofBytes",
+            "proofBytes",
+            "proof_bytes",
+            "proof",
+        )
+    proof_bytes = _to_bytes(proof_bytes_input, "proofBytes")
+    _require_native_recursive_proof_bytes(proof_bytes)
+    bundle_bytes = _require_non_empty_bytes(
+        _mapping_value_without_aliases(
+            value,
+            "bundleBytes",
+            "bundleBytes",
+            "bundle_bytes",
+        ),
+        "bundleBytes",
+    )
+
+    proof_context_source = _mapping_optional_value_without_aliases(
+        value,
+        "proofContext",
+        "proofContext",
+        "proof_context",
+    )
+    if proof_context_source is _MISSING:
+        proof_context_source = _mapping_optional_value_without_aliases(
+            proof_result,
+            "proofResult.proofContext",
+            "proofContext",
+            "proof_context",
+        )
+    if proof_context_source is _MISSING:
+        proof_context_source = {}
+    elif not isinstance(proof_context_source, Mapping):
+        raise TypeError("proofContext must be an object")
+    statement_hash_input = _mapping_optional_value_without_aliases(
+        value,
+        "statementHash",
+        "statementHash",
+        "statement_hash",
+    )
+    if statement_hash_input is _MISSING:
+        statement_hash_input = _mapping_optional_value_without_aliases(
+            proof_context_source,
+            "proofContext.statementHash",
+            "statementHash",
+            "statement_hash",
+        )
+    if statement_hash_input is _MISSING and isinstance(
+        proof_result_public_inputs, Mapping
+    ):
+        statement_hash_input = _mapping_optional_value_without_aliases(
+            proof_result_public_inputs,
+            "proofResult.publicInputs.statementHash",
+            "statementHash",
+            "statement_hash",
+        )
+    destination_binding_hash_input = _mapping_optional_value_without_aliases(
+        value,
+        "destinationBindingHash",
+        "destinationBindingHash",
+        "destination_binding_hash",
+    )
+    if destination_binding_hash_input is _MISSING:
+        destination_binding_hash_input = _mapping_optional_value_without_aliases(
+            proof_context_source,
+            "proofContext.destinationBindingHash",
+            "destinationBindingHash",
+            "destination_binding_hash",
+        )
+    if destination_binding_hash_input is _MISSING and isinstance(
+        proof_result_public_inputs, Mapping
+    ):
+        destination_binding_hash_input = _mapping_optional_value_without_aliases(
+            proof_result_public_inputs,
+            "proofResult.publicInputs.destinationBindingHash",
+            "destinationBindingHash",
+            "destination_binding_hash",
+        )
+    proof_context = normalize_solana_sccp_proof_context(
+        {
+            "statement_hash": statement_hash_input,
+            "destination_binding_hash": destination_binding_hash_input,
+        }
+    )
+    if proof_context["destination_binding_hash"] != sccp_destination_binding_hash(
+        SCCP_DOMAIN_SOL
+    ):
+        raise TypeError("destinationBindingHash must match canonical Solana destination binding")
+    proof_context_hash = solana_sccp_proof_context_hash(proof_context)
+    supplied_proof_context_hash = _mapping_optional_value_without_aliases(
+        value,
+        "proofContextHash",
+        "proofContextHash",
+        "proof_context_hash",
+    )
+    if supplied_proof_context_hash is _MISSING:
+        supplied_proof_context_hash = _mapping_optional_value_without_aliases(
+            proof_result,
+            "proofResult.proofContextHash",
+            "proofContextHash",
+            "proof_context_hash",
+        )
+    if supplied_proof_context_hash is not _MISSING and (
+        _normalize_hex32(supplied_proof_context_hash, "proofContextHash") != proof_context_hash
+    ):
+        raise TypeError("proofContextHash must match statementHash and destinationBindingHash")
+    if proof_result_value is not None:
+        _require_solana_proof_result_for_submission(
+            proof_result,
+            proof_context,
+            proof_context_hash,
+            public_inputs,
+            proof_bytes,
+        )
+
+    statement_hash_bytes = _hex_to_bytes(proof_context["statement_hash"], "statementHash", 32)
+    destination_binding_hash_bytes = _hex_to_bytes(
+        proof_context["destination_binding_hash"],
+        "destinationBindingHash",
+        32,
+    )
+    proof_context_hash_bytes = _hex_to_bytes(proof_context_hash, "proofContextHash", 32)
+    argument_bytes = (
+        proof_bytes,
+        public_inputs_bytes,
+        bundle_bytes,
+        statement_hash_bytes,
+        destination_binding_hash_bytes,
+        proof_context_hash_bytes,
+    )
+    instruction_data = _encode_solana_instruction_data(argument_bytes)
+    arguments = [
+        {"key": "proof_bytes", "encoding": "raw_bytes", "bytes": _bytes_to_hex(proof_bytes)},
+        {
+            "key": "public_inputs",
+            "encoding": "raw_bytes",
+            "bytes": _bytes_to_hex(public_inputs_bytes),
+        },
+        {"key": "bundle_bytes", "encoding": "raw_bytes", "bytes": _bytes_to_hex(bundle_bytes)},
+        {
+            "key": "statement_hash",
+            "encoding": "raw_bytes",
+            "bytes": _bytes_to_hex(statement_hash_bytes),
+        },
+        {
+            "key": "destination_binding_hash",
+            "encoding": "raw_bytes",
+            "bytes": _bytes_to_hex(destination_binding_hash_bytes),
+        },
+        {
+            "key": "proof_context_hash",
+            "encoding": "raw_bytes",
+            "bytes": _bytes_to_hex(proof_context_hash_bytes),
+        },
+    ]
+    return _immutable_prover_envelope({
+        "version": 1,
+        "envelope_encoding": SCCP_SOLANA_BORSH_INSTRUCTION_V1,
+        "submission_kind": "program_instruction",
+        "verifier_entrypoint": SCCP_SOLANA_SUBMIT_MESSAGE_PROOF_ENTRYPOINT_V1,
+        "proof_bytes": proof_bytes,
+        "public_inputs": public_inputs,
+        "public_inputs_bytes": public_inputs_bytes,
+        "bundle_bytes": bundle_bytes,
+        "statement_hash": proof_context["statement_hash"],
+        "destination_binding_hash": proof_context["destination_binding_hash"],
+        "proof_context_hash": proof_context_hash,
+        "arguments": arguments,
+        "instruction_data": instruction_data,
+        "instruction_data_hex": _bytes_to_hex(instruction_data),
+        "envelope_bytes": instruction_data,
+        "envelope_hex": _bytes_to_hex(instruction_data),
+    })
+
+
+def _normalize_solana_proof_result(result: Any, request: Mapping[str, Any]) -> Mapping[str, Any]:
+    value = _require_mapping(result, "Solana SCCP proof result")
+    proof_bytes = _to_bytes(
+        _mapping_value_without_aliases(
+            value,
+            "proofResult.proofBytes",
+            "proofBytes",
+            "proof_bytes",
+            "proof",
+        ),
+        "proofBytes",
+    )
+    _require_native_recursive_proof_bytes(proof_bytes)
+    _require_optional_result_proof_base64_matches(value, proof_bytes)
+    _require_canonical_solana_proof_request(request)
+    _require_production_solana_proof_request(request)
+    _require_optional_result_backend_matches(
+        _mapping_value_without_aliases(value, "proofResult.backend", "backend"),
+        request["backend"],
+    )
+    _require_optional_solana_proof_result_metadata_matches(value, request)
+    _require_optional_result_hash_matches(
+        _mapping_value_without_aliases(
+            value,
+            "proofResult.witnessHash",
+            "witnessHash",
+            "witness_hash",
+        ),
+        request["witness_hash"],
+        "witnessHash",
+    )
+    _require_optional_result_hash_matches(
+        _mapping_value_without_aliases(
+            value,
+            "proofResult.proofContextHash",
+            "proofContextHash",
+            "proof_context_hash",
+        ),
+        request["proof_context_hash"],
+        "proofContextHash",
+    )
+    _require_optional_result_hash_matches(
+        _mapping_value_without_aliases(
+            value,
+            "proofResult.sourceAdapterDeploymentBindingHash",
+            "sourceAdapterDeploymentBindingHash",
+            "source_adapter_deployment_binding_hash",
+        ),
+        request["source_adapter_deployment_binding_hash"],
+        "sourceAdapterDeploymentBindingHash",
+    )
+    envelope_hash = _bytes_to_hex(
+        _prefixed_blake2b(
+            b"sccp:solana:proof-envelope:v1",
+            _hex_to_bytes(request["witness_hash"], "witnessHash", 32)
+            + _hex_to_bytes(request["proof_context_hash"], "proofContextHash", 32)
+            + _hex_to_bytes(
+                request["source_adapter_deployment_binding_hash"],
+                "sourceAdapterDeploymentBindingHash",
+                32,
+            )
+            + proof_bytes,
+        )
+    )
+    _require_optional_result_hash_matches(
+        _mapping_value_without_aliases(
+            value,
+            "proofResult.envelopeHash",
+            "envelopeHash",
+            "envelope_hash",
+        ),
+        envelope_hash,
+        "envelopeHash",
+    )
+    return _immutable_prover_envelope({
+        "version": 1,
+        "backend": request["backend"],
+        "proof_bytes": proof_bytes,
+        "proof_base64": base64.b64encode(proof_bytes).decode("ascii"),
+        "public_inputs": request["public_inputs"],
+        "witness_hash": request["witness_hash"],
+        "proof_context_hash": request["proof_context_hash"],
+        "source_adapter_deployment_binding_hash": request[
+            "source_adapter_deployment_binding_hash"
+        ],
+        "source_state_verifier_id": request["source_state_verifier_id"],
+        "source_state_verifier_hash": request["source_state_verifier_hash"],
+        "proof_context": request["proof_context"],
+        "source_adapter_deployment_binding": request["source_adapter_deployment_binding"],
+        "envelope_hash": envelope_hash,
+    })
+
+
+def wrap_solana_sccp_proof_result(
+    proof_bytes: BytesLike, request: Mapping[str, Any]
+) -> Mapping[str, Any]:
+    """Wrap externally generated Solana proof bytes against a canonical request."""
+
+    return _normalize_solana_proof_result({"proof_bytes": proof_bytes}, request)
+
+
+def _normalize_ton_proof_result(result: Any, request: Mapping[str, Any]) -> Mapping[str, Any]:
+    value = _require_mapping(result, "TON SCCP proof result")
+    proof_bytes = _to_bytes(
+        _mapping_value_without_aliases(
+            value,
+            "proofResult.proofBytes",
+            "proofBytes",
+            "proof_bytes",
+            "proof",
+        ),
+        "proofBytes",
+    )
+    _require_native_recursive_proof_bytes(proof_bytes)
+    _require_production_ton_proof_request(request)
+    _require_optional_result_proof_base64_matches(value, proof_bytes)
+    _require_optional_result_backend_matches(
+        _mapping_value(value, "backend"), request["backend"]
+    )
+    _require_optional_transparent_result_metadata_matches(value, request)
+    result_source_state_verifier_id = _mapping_optional_value_without_aliases(
+        value,
+        "proofResult.sourceStateVerifierId",
+        "sourceStateVerifierId",
+        "source_state_verifier_id",
+    )
+    if result_source_state_verifier_id is not _MISSING and (
+        _normalize_non_empty_string(
+            result_source_state_verifier_id,
+            "proofResult.sourceStateVerifierId",
+        )
+        != request["source_state_verifier_id"]
+    ):
+        raise TypeError("proofResult.sourceStateVerifierId must match request")
+    result_source_state_verifier_hash = _mapping_optional_value_without_aliases(
+        value,
+        "proofResult.sourceStateVerifierHash",
+        "sourceStateVerifierHash",
+        "source_state_verifier_hash",
+    )
+    if result_source_state_verifier_hash is not _MISSING and (
+        _normalize_hex32(
+            result_source_state_verifier_hash,
+            "proofResult.sourceStateVerifierHash",
+        )
+        != request["source_state_verifier_hash"]
+    ):
+        raise TypeError("proofResult.sourceStateVerifierHash must match request")
+    result_deployment_binding = _mapping_optional_value_without_aliases(
+        value,
+        "proofResult.sourceAdapterDeploymentBinding",
+        "sourceAdapterDeploymentBinding",
+        "source_adapter_deployment_binding",
+    )
+    if result_deployment_binding is not _MISSING and (
+        normalize_sccp_source_adapter_deployment_binding(result_deployment_binding)
+        != request["source_adapter_deployment_binding"]
+    ):
+        raise TypeError("proofResult.sourceAdapterDeploymentBinding must match request")
+
+    def optional_result_alias(camel: str, snake: str) -> Any:
+        selected = _mapping_optional_value_without_aliases(
+            value,
+            f"proofResult.{camel}",
+            camel,
+            snake,
+        )
+        return None if selected is _MISSING else selected
+
+    _require_optional_result_hash_matches(
+        optional_result_alias("requestHash", "request_hash"),
+        request["request_hash"],
+        "requestHash",
+    )
+    _require_optional_result_hash_matches(
+        optional_result_alias(
+            "sourceAdapterDeploymentBindingHash",
+            "source_adapter_deployment_binding_hash",
+        ),
+        request["source_adapter_deployment_binding_hash"],
+        "sourceAdapterDeploymentBindingHash",
+    )
+    envelope_hash = _bytes_to_hex(
+        _prefixed_blake2b(
+            _SCCP_TON_PROOF_ENVELOPE_PREFIX_V1,
+            _hex_to_bytes(request["request_hash"], "requestHash", 32)
+            + _hex_to_bytes(
+                request["source_adapter_deployment_binding_hash"],
+                "sourceAdapterDeploymentBindingHash",
+                32,
+            )
+            + proof_bytes,
+        )
+    )
+    _require_optional_result_hash_matches(
+        optional_result_alias("envelopeHash", "envelope_hash"),
+        envelope_hash,
+        "envelopeHash",
+    )
+    return _immutable_prover_envelope({
+        "version": 1,
+        "backend": request["backend"],
+        "proof_bytes": proof_bytes,
+        "proof_base64": base64.b64encode(proof_bytes).decode("ascii"),
+        "public_inputs": request["public_inputs"],
+        "bundle_bytes": request["bundle_bytes"],
+        "source_proof_bytes": request["source_proof_bytes"],
+        "proof_context": request["proof_context"],
+        "statement_hash": request["statement_hash"],
+        "destination_binding_hash": request["destination_binding_hash"],
+        "source_state_verifier_id": request["source_state_verifier_id"],
+        "source_state_verifier_hash": request["source_state_verifier_hash"],
+        "source_adapter_deployment_binding_hash": request[
+            "source_adapter_deployment_binding_hash"
+        ],
+        "source_adapter_deployment_binding": request["source_adapter_deployment_binding"],
+        "request_hash": request["request_hash"],
+        "envelope_hash": envelope_hash,
+    })
+
+
+def wrap_ton_sccp_proof_result(
+    proof_bytes: BytesLike, request: Mapping[str, Any]
+) -> Mapping[str, Any]:
+    """Wrap externally generated TON proof bytes against a canonical request."""
+
+    return _normalize_ton_proof_result({"proof_bytes": proof_bytes}, request)
+
+
+def _require_nonzero_proof_bytes(proof_bytes: bytes) -> None:
+    if not proof_bytes:
+        raise TypeError("proofBytes must not be empty")
+    if not any(proof_bytes):
+        raise TypeError("proofBytes must not be all zero")
+
+
+def _require_source_state_proof_bytes(proof_bytes: bytes) -> None:
+    _require_nonzero_proof_bytes(proof_bytes)
+    if len(proof_bytes) > SCCP_SOURCE_STATE_MAX_PROOF_BYTES:
+        raise TypeError(
+            f"proofBytes must be at most {SCCP_SOURCE_STATE_MAX_PROOF_BYTES} bytes"
+        )
+
+
+def _require_source_state_proof_label(value: str, label: str) -> None:
+    if len(value.encode("utf-8")) > SCCP_SOURCE_STATE_MAX_PROOF_LABEL_BYTES:
+        raise TypeError(
+            f"{label} must be at most {SCCP_SOURCE_STATE_MAX_PROOF_LABEL_BYTES} bytes"
+        )
+
+
+def _require_native_recursive_proof_bytes(
+    proof_bytes: bytes, label: str = "proofBytes"
+) -> None:
+    _require_nonzero_proof_bytes(proof_bytes)
+    if len(proof_bytes) > SCCP_NATIVE_RECURSIVE_MAX_PROOF_BYTES:
+        raise TypeError(
+            f"{label} must be at most {SCCP_NATIVE_RECURSIVE_MAX_PROOF_BYTES} bytes"
+        )
+
+
+def _solana_proof_request_comparable(request: Mapping[str, Any]) -> Dict[str, Any]:
+    public_inputs = request.get("public_inputs", {})
+    proof_context = request.get("proof_context", {})
+    deployment_binding = request.get("source_adapter_deployment_binding", {})
+    return {
+        "version": request.get("version"),
+        "backend": request.get("backend"),
+        "source_domain": request.get("source_domain"),
+        "target_domain": request.get("target_domain"),
+        "mainnet_genesis_hash": request.get("mainnet_genesis_hash"),
+        "witness_hash": request.get("witness_hash"),
+        "proof_context_hash": request.get("proof_context_hash"),
+        "source_adapter_deployment_binding_hash": request.get(
+            "source_adapter_deployment_binding_hash"
+        ),
+        "source_state_verifier_id": request.get("source_state_verifier_id"),
+        "source_state_verifier_hash": request.get("source_state_verifier_hash"),
+        "public_inputs": {
+            "message_id": public_inputs.get("message_id"),
+            "payload_hash": public_inputs.get("payload_hash"),
+            "commitment_root": public_inputs.get("commitment_root"),
+            "finalized_slot": public_inputs.get("finalized_slot"),
+            "parent_slot": public_inputs.get("parent_slot"),
+            "bank_signature_count": public_inputs.get("bank_signature_count"),
+            "parent_bank_hash": public_inputs.get("parent_bank_hash"),
+            "blockhash": public_inputs.get("blockhash"),
+            "bank_hash": public_inputs.get("bank_hash"),
+            "transaction_status_root": public_inputs.get("transaction_status_root"),
+            "message_proof_hash": public_inputs.get("message_proof_hash"),
+            "account_inclusion_root": public_inputs.get("account_inclusion_root"),
+            "accounts_lt_hash_checksum": public_inputs.get("accounts_lt_hash_checksum"),
+            "accounts_lt_hash_proof_public_inputs_hash": public_inputs.get(
+                "accounts_lt_hash_proof_public_inputs_hash"
+            ),
+            "source_event_digest": public_inputs.get("source_event_digest"),
+            "source_state_verifier_id": public_inputs.get("source_state_verifier_id"),
+            "source_state_verifier_hash": public_inputs.get("source_state_verifier_hash"),
+            "statement_hash": public_inputs.get("statement_hash"),
+            "destination_binding_hash": public_inputs.get("destination_binding_hash"),
+            "source_adapter_deployment_hash": public_inputs.get(
+                "source_adapter_deployment_hash"
+            ),
+            "source_adapter_deployment_receipt_hash": public_inputs.get(
+                "source_adapter_deployment_receipt_hash"
+            ),
+            "source_adapter_deployment_binding_hash": public_inputs.get(
+                "source_adapter_deployment_binding_hash"
+            ),
+        },
+        "witness_bytes": canonical_solana_sccp_witness_bytes(request.get("witness", {})),
+        "proof_context": {
+            "version": proof_context.get("version"),
+            "statement_hash": proof_context.get("statement_hash"),
+            "destination_binding_hash": proof_context.get("destination_binding_hash"),
+        },
+        "source_adapter_deployment_binding": {
+            "version": deployment_binding.get("version"),
+            "source_domain": deployment_binding.get("source_domain"),
+            "target_domain": deployment_binding.get("target_domain"),
+            "source_adapter_deployment_hash": deployment_binding.get(
+                "source_adapter_deployment_hash"
+            ),
+            "source_adapter_deployment_receipt_hash": deployment_binding.get(
+                "source_adapter_deployment_receipt_hash"
+            ),
+        },
+    }
+
+
+def _require_canonical_solana_proof_request(request: Mapping[str, Any]) -> None:
+    try:
+        witness = dict(request["witness"])
+        witness["proof_context"] = request["proof_context"]
+        expected = build_solana_sccp_proof_request(witness)
+        if _solana_proof_request_comparable(request) != _solana_proof_request_comparable(
+            expected
+        ):
+            raise TypeError("Solana SCCP proof request must be canonical")
+    except TypeError as exc:
+        if str(exc) == "Solana SCCP proof request must be canonical":
+            raise
+        raise TypeError("Solana SCCP proof request must be canonical") from exc
+    except Exception as exc:
+        raise TypeError("Solana SCCP proof request must be canonical") from exc
+
+
+def _ton_proof_request_comparable(request: Mapping[str, Any]) -> Dict[str, Any]:
+    public_inputs = request.get("public_inputs", {})
+    proof_context = request.get("proof_context", {})
+    deployment_binding = request.get("source_adapter_deployment_binding", {})
+    return {
+        "version": request.get("version"),
+        "backend": request.get("backend"),
+        "source_domain": request.get("source_domain"),
+        "target_domain": request.get("target_domain"),
+        "public_inputs": {
+            "message_id": public_inputs.get("message_id"),
+            "payload_hash": public_inputs.get("payload_hash"),
+            "target_domain": public_inputs.get("target_domain"),
+            "commitment_root": public_inputs.get("commitment_root"),
+            "finality_height": public_inputs.get("finality_height"),
+            "finality_block_hash": public_inputs.get("finality_block_hash"),
+        },
+        "public_inputs_bytes": _bytes_to_hex(
+            _to_bytes(request.get("public_inputs_bytes"), "publicInputsBytes")
+        ),
+        "bundle_bytes": _bytes_to_hex(
+            _to_bytes(request.get("bundle_bytes"), "bundleBytes")
+        ),
+        "source_proof_bytes": _bytes_to_hex(
+            _to_bytes(request.get("source_proof_bytes"), "sourceProofBytes")
+        ),
+        "proof_context": {
+            "version": proof_context.get("version"),
+            "statement_hash": proof_context.get("statement_hash"),
+            "destination_binding_hash": proof_context.get("destination_binding_hash"),
+        },
+        "statement_hash": request.get("statement_hash"),
+        "destination_binding_hash": request.get("destination_binding_hash"),
+        "source_state_verifier_id": request.get("source_state_verifier_id"),
+        "source_state_verifier_hash": request.get("source_state_verifier_hash"),
+        "source_adapter_deployment_binding_hash": request.get(
+            "source_adapter_deployment_binding_hash"
+        ),
+        "source_adapter_deployment_binding": {
+            "version": deployment_binding.get("version"),
+            "source_domain": deployment_binding.get("source_domain"),
+            "target_domain": deployment_binding.get("target_domain"),
+            "source_adapter_deployment_hash": deployment_binding.get(
+                "source_adapter_deployment_hash"
+            ),
+            "source_adapter_deployment_receipt_hash": deployment_binding.get(
+                "source_adapter_deployment_receipt_hash"
+            ),
+        },
+        "request_hash": request.get("request_hash"),
+    }
+
+
+def _require_canonical_ton_proof_request(request: Mapping[str, Any]) -> None:
+    try:
+        deployment_binding = request["source_adapter_deployment_binding"]
+        expected = build_ton_sccp_proof_request(
+            {
+                "public_inputs": request["public_inputs"],
+                "bundle_bytes": request["bundle_bytes"],
+                "source_proof_bytes": request["source_proof_bytes"],
+                "statement_hash": request["statement_hash"],
+                "destination_binding_hash": request["destination_binding_hash"],
+                "source_state_verifier_id": request["source_state_verifier_id"],
+                "source_state_verifier_hash": request["source_state_verifier_hash"],
+                "source_adapter_deployment_hash": deployment_binding[
+                    "source_adapter_deployment_hash"
+                ],
+                "source_adapter_deployment_receipt_hash": deployment_binding[
+                    "source_adapter_deployment_receipt_hash"
+                ],
+                "backend": request["backend"],
+                "source_domain": request["source_domain"],
+            }
+        )
+        if _ton_proof_request_comparable(request) != _ton_proof_request_comparable(expected):
+            raise TypeError("TON SCCP proof request must be canonical")
+    except TypeError as exc:
+        if str(exc) == "TON SCCP proof request must be canonical":
+            raise
+        raise TypeError("TON SCCP proof request must be canonical") from exc
+    except Exception as exc:
+        raise TypeError("TON SCCP proof request must be canonical") from exc
+
+
+def _require_production_ton_proof_request(request: Mapping[str, Any]) -> None:
+    _require_canonical_ton_proof_request(request)
+    if request["version"] != 1:
+        raise TypeError("TON SCCP proof request version must be 1")
+    if request["source_domain"] != SCCP_DOMAIN_TON:
+        raise TypeError("TON SCCP production proof sourceDomain must be TON")
+    if (
+        request["target_domain"] != SCCP_DOMAIN_TON
+        or request["public_inputs"]["target_domain"] != SCCP_DOMAIN_TON
+    ):
+        raise TypeError("TON SCCP production proofs must target TON public inputs")
+    if request["backend"] != SCCP_TON_CONTRACT_PROOF_BACKEND_V1:
+        raise TypeError("TON SCCP proof request backend must be ton-contract-v1")
+    _require_non_empty_bytes(request["bundle_bytes"], "bundleBytes")
+    _require_optional_nonzero_bytes(request["source_proof_bytes"], "sourceProofBytes")
+    if request["source_state_verifier_id"] != SCCP_TON_MAINNET_SHARD_STATE_VERIFIER_ID_V1:
+        raise TypeError("sourceStateVerifierId must match TON shard-state verifier profile")
+    source_state_verifier_hash = _normalize_nonzero_hex32(
+        request["source_state_verifier_hash"],
+        "sourceStateVerifierHash",
+    )
+    if source_state_verifier_hash == _SCCP_TON_TEMPLATE_SOURCE_STATE_VERIFIER_HASH:
+        raise TypeError("sourceStateVerifierHash must not be the TON template verifier hash")
+    deployment_binding = request["source_adapter_deployment_binding"]
+    if deployment_binding["source_domain"] != SCCP_DOMAIN_TON:
+        raise TypeError("sourceAdapterDeploymentBinding.sourceDomain must be TON")
+    if deployment_binding["target_domain"] != SCCP_DOMAIN_SORA:
+        raise TypeError("sourceAdapterDeploymentBinding.targetDomain must be SORA")
+    if deployment_binding["source_adapter_deployment_hash"] == SCCP_ZERO_HASH_V1:
+        raise TypeError("sourceAdapterDeploymentBinding must be non-zero")
+    if (
+        sccp_source_adapter_deployment_binding_hash(deployment_binding)
+        != request["source_adapter_deployment_binding_hash"]
+    ):
+        raise TypeError(
+            "sourceAdapterDeploymentBindingHash must match sourceAdapterDeploymentBinding"
+        )
+
+
+def _require_production_solana_proof_request(request: Mapping[str, Any]) -> None:
+    if request["source_domain"] != SCCP_DOMAIN_SOL or request["target_domain"] != SCCP_DOMAIN_SORA:
+        raise TypeError("Solana SCCP production proofs must target SORA")
+    if (
+        request["mainnet_genesis_hash"] != SCCP_SOLANA_MAINNET_GENESIS_HASH
+        or request["witness"]["mainnet_genesis_hash"] != SCCP_SOLANA_MAINNET_GENESIS_HASH
+    ):
+        raise TypeError("mainnetGenesisHash must match Solana mainnet-beta")
+    if request["source_state_verifier_id"] != SCCP_SOLANA_MAINNET_ACCOUNTS_DB_VERIFIER_ID_V1:
+        raise TypeError("sourceStateVerifierId must match Solana AccountsDB verifier profile")
+    if _hex32_is_zero(request["source_state_verifier_hash"], "sourceStateVerifierHash"):
+        raise TypeError("sourceStateVerifierHash must not be zero for Solana production proofs")
+    if (
+        _normalize_hex32(request["source_state_verifier_hash"], "sourceStateVerifierHash")
+        == SCCP_SOLANA_TEMPLATE_SOURCE_STATE_VERIFIER_HASH_V1
+    ):
+        raise TypeError(
+            "sourceStateVerifierHash must not be the Solana template verifier hash"
+        )
+    inclusion_branch = request["witness"].get("inclusion_branch")
+    if not isinstance(inclusion_branch, Sequence) or len(inclusion_branch) == 0:
+        raise TypeError("inclusionBranch must not be empty for Solana production proofs")
+    accounts_lt_hash = request["witness"].get("accounts_lt_hash")
+    if accounts_lt_hash is None:
+        raise TypeError("accountsLtHash must be present for Solana production proofs")
+    _require_nonzero_solana_accounts_lt_hash(
+        _to_bytes(accounts_lt_hash, "accountsLtHash")
+    )
+    deployment_binding = request["source_adapter_deployment_binding"]
+    if _hex32_is_zero(
+        deployment_binding["source_adapter_deployment_hash"],
+        "sourceAdapterDeploymentHash",
+    ):
+        raise TypeError("sourceAdapterDeploymentHash must not be zero for Solana production proofs")
+    if _hex32_is_zero(
+        deployment_binding["source_adapter_deployment_receipt_hash"],
+        "sourceAdapterDeploymentReceiptHash",
+    ):
+        raise TypeError(
+            "sourceAdapterDeploymentReceiptHash must not be zero for Solana production proofs"
+        )
+
+
+def _normalize_solana_proof_result_public_inputs(
+    input_value: Any,
+    label: str,
+) -> Dict[str, Any]:
+    value = _require_mapping(input_value, label)
+
+    def field(camel: str, snake: str) -> Any:
+        return _mapping_value_without_aliases(
+            value,
+            f"{label}.{camel}",
+            *dict.fromkeys((camel, snake)),
+        )
+
+    def hex32(camel: str, snake: str) -> str:
+        return _normalize_hex32(field(camel, snake), f"{label}.{camel}")
+
+    def u64(camel: str, snake: str) -> str:
+        return str(_normalize_u64(field(camel, snake), f"{label}.{camel}"))
+
+    return {
+        "message_id": hex32("messageId", "message_id"),
+        "payload_hash": hex32("payloadHash", "payload_hash"),
+        "commitment_root": hex32("commitmentRoot", "commitment_root"),
+        "finalized_slot": u64("finalizedSlot", "finalized_slot"),
+        "parent_slot": u64("parentSlot", "parent_slot"),
+        "bank_signature_count": u64("bankSignatureCount", "bank_signature_count"),
+        "parent_bank_hash": hex32("parentBankHash", "parent_bank_hash"),
+        "blockhash": hex32("blockhash", "blockhash"),
+        "bank_hash": hex32("bankHash", "bank_hash"),
+        "transaction_status_root": hex32(
+            "transactionStatusRoot",
+            "transaction_status_root",
+        ),
+        "message_proof_hash": hex32("messageProofHash", "message_proof_hash"),
+        "account_inclusion_root": hex32(
+            "accountInclusionRoot",
+            "account_inclusion_root",
+        ),
+        "accounts_lt_hash_checksum": hex32(
+            "accountsLtHashChecksum",
+            "accounts_lt_hash_checksum",
+        ),
+        "accounts_lt_hash_proof_public_inputs_hash": hex32(
+            "accountsLtHashProofPublicInputsHash",
+            "accounts_lt_hash_proof_public_inputs_hash",
+        ),
+        "source_event_digest": hex32("sourceEventDigest", "source_event_digest"),
+        "source_state_verifier_id": _normalize_non_empty_string(
+            field("sourceStateVerifierId", "source_state_verifier_id"),
+            f"{label}.sourceStateVerifierId",
+        ),
+        "source_state_verifier_hash": hex32(
+            "sourceStateVerifierHash",
+            "source_state_verifier_hash",
+        ),
+        "statement_hash": hex32("statementHash", "statement_hash"),
+        "destination_binding_hash": hex32(
+            "destinationBindingHash",
+            "destination_binding_hash",
+        ),
+        "source_adapter_deployment_hash": hex32(
+            "sourceAdapterDeploymentHash",
+            "source_adapter_deployment_hash",
+        ),
+        "source_adapter_deployment_receipt_hash": hex32(
+            "sourceAdapterDeploymentReceiptHash",
+            "source_adapter_deployment_receipt_hash",
+        ),
+        "source_adapter_deployment_binding_hash": hex32(
+            "sourceAdapterDeploymentBindingHash",
+            "source_adapter_deployment_binding_hash",
+        ),
+    }
+
+
+def _require_optional_solana_proof_result_metadata_matches(
+    value: Mapping[str, Any],
+    request: Mapping[str, Any],
+) -> None:
+    result_public_inputs = _mapping_optional_value_without_aliases(
+        value, "proofResult.publicInputs", "publicInputs", "public_inputs"
+    )
+    if result_public_inputs is not _MISSING and (
+        _normalize_solana_proof_result_public_inputs(
+            result_public_inputs,
+            "proofResult.publicInputs",
+        )
+        != request["public_inputs"]
+    ):
+        raise TypeError("proofResult.publicInputs must match request")
+
+    source_state_verifier_id = _mapping_optional_value_without_aliases(
+        value,
+        "proofResult.sourceStateVerifierId",
+        "sourceStateVerifierId",
+        "source_state_verifier_id",
+    )
+    if source_state_verifier_id is not _MISSING and (
+        _normalize_non_empty_string(
+            source_state_verifier_id,
+            "proofResult.sourceStateVerifierId",
+        )
+        != request["source_state_verifier_id"]
+    ):
+        raise TypeError("proofResult.sourceStateVerifierId must match request")
+
+    source_state_verifier_hash = _mapping_optional_value_without_aliases(
+        value,
+        "proofResult.sourceStateVerifierHash",
+        "sourceStateVerifierHash",
+        "source_state_verifier_hash",
+    )
+    if source_state_verifier_hash is not _MISSING and (
+        _normalize_hex32(
+            source_state_verifier_hash,
+            "proofResult.sourceStateVerifierHash",
+        )
+        != request["source_state_verifier_hash"]
+    ):
+        raise TypeError("proofResult.sourceStateVerifierHash must match request")
+
+    proof_context = _mapping_optional_value_without_aliases(
+        value,
+        "proofResult.proofContext",
+        "proofContext",
+        "proof_context",
+    )
+    if proof_context is not _MISSING and (
+        normalize_solana_sccp_proof_context(proof_context) != request["proof_context"]
+    ):
+        raise TypeError("proofResult.proofContext must match request")
+
+    deployment_binding = _mapping_optional_value_without_aliases(
+        value,
+        "proofResult.sourceAdapterDeploymentBinding",
+        "sourceAdapterDeploymentBinding",
+        "source_adapter_deployment_binding",
+    )
+    if deployment_binding is not _MISSING and (
+        normalize_sccp_source_adapter_deployment_binding(deployment_binding)
+        != request["source_adapter_deployment_binding"]
+    ):
+        raise TypeError("proofResult.sourceAdapterDeploymentBinding must match request")
+
+
+def _groth16_destination_binding_comparable(binding: Any) -> Optional[Dict[str, Any]]:
+    if not isinstance(binding, Mapping):
+        return None
+    return {
+        "version": binding.get("version"),
+        "source_domain": binding.get("source_domain"),
+        "target_domain": binding.get("target_domain"),
+        "network_id": binding.get("network_id"),
+        "verifier_address": binding.get("verifier_address"),
+        "bridge_address": binding.get("bridge_address"),
+        "verifier_code_hash": binding.get("verifier_code_hash"),
+        "verifier_key_hash": binding.get("verifier_key_hash"),
+        "verifier_backend": binding.get("verifier_backend"),
+        "proof_family": binding.get("proof_family"),
+        "key": binding.get("key"),
+        "binding_hash": binding.get("binding_hash"),
+    }
+
+
+def _groth16_proof_request_comparable(request: Mapping[str, Any]) -> Dict[str, Any]:
+    public_inputs = request.get("public_inputs", {})
+    proof_context = request.get("proof_context", {})
+    return {
+        "version": request.get("version"),
+        "backend": request.get("backend"),
+        "source_domain": request.get("source_domain"),
+        "target_domain": request.get("target_domain"),
+        "public_inputs": dict(public_inputs) if isinstance(public_inputs, Mapping) else {},
+        "public_inputs_bytes": _bytes_to_hex(
+            _to_bytes(request.get("public_inputs_bytes"), "publicInputsBytes")
+        ),
+        "public_signal_words": tuple(request.get("public_signal_words", ())),
+        "bundle_bytes": _bytes_to_hex(
+            _to_bytes(request.get("bundle_bytes"), "bundleBytes")
+        ),
+        "source_proof_bytes": _bytes_to_hex(
+            _to_bytes(request.get("source_proof_bytes"), "sourceProofBytes")
+        ),
+        "proof_context": {
+            "version": proof_context.get("version"),
+            "statement_hash": proof_context.get("statement_hash"),
+            "destination_binding_hash": proof_context.get("destination_binding_hash"),
+        },
+        "statement_hash": request.get("statement_hash"),
+        "destination_binding": _groth16_destination_binding_comparable(
+            request.get("destination_binding")
+        ),
+        "destination_binding_hash": request.get("destination_binding_hash"),
+        "request_hash": request.get("request_hash"),
+    }
+
+
+def _require_canonical_evm_proof_request(request: Mapping[str, Any]) -> None:
+    try:
+        expected = build_evm_sccp_proof_request(
+            {
+                "public_inputs": request["public_inputs"],
+                "bundle_bytes": request["bundle_bytes"],
+                "source_proof_bytes": request["source_proof_bytes"],
+                "statement_hash": request["statement_hash"],
+                "destination_binding": request.get("destination_binding"),
+                "destination_binding_hash": request["destination_binding_hash"],
+                "source_domain": request["source_domain"],
+                "backend": request["backend"],
+            }
+        )
+        if _groth16_proof_request_comparable(
+            request
+        ) != _groth16_proof_request_comparable(expected):
+            raise TypeError("EVM-family SCCP proof request must be canonical")
+    except TypeError as exc:
+        if str(exc) == "EVM-family SCCP proof request must be canonical":
+            raise
+        raise TypeError("EVM-family SCCP proof request must be canonical") from exc
+    except Exception as exc:
+        raise TypeError("EVM-family SCCP proof request must be canonical") from exc
+
+
+def _require_canonical_tron_proof_request(request: Mapping[str, Any]) -> None:
+    try:
+        expected = build_tron_sccp_proof_request(
+            {
+                "public_inputs": request["public_inputs"],
+                "bundle_bytes": request["bundle_bytes"],
+                "source_proof_bytes": request["source_proof_bytes"],
+                "statement_hash": request["statement_hash"],
+                "destination_binding": request.get("destination_binding"),
+                "destination_binding_hash": request["destination_binding_hash"],
+                "source_domain": request["source_domain"],
+                "backend": request["backend"],
+            }
+        )
+        if _groth16_proof_request_comparable(
+            request
+        ) != _groth16_proof_request_comparable(expected):
+            raise TypeError("TRON SCCP proof request must be canonical")
+    except TypeError as exc:
+        if str(exc) == "TRON SCCP proof request must be canonical":
+            raise
+        raise TypeError("TRON SCCP proof request must be canonical") from exc
+    except Exception as exc:
+        raise TypeError("TRON SCCP proof request must be canonical") from exc
+
+
+def _substrate_proof_request_comparable(request: Mapping[str, Any]) -> Dict[str, Any]:
+    public_inputs = request.get("public_inputs", {})
+    proof_context = request.get("proof_context", {})
+    return {
+        "version": request.get("version"),
+        "backend": request.get("backend"),
+        "source_domain": request.get("source_domain"),
+        "target_domain": request.get("target_domain"),
+        "public_inputs": dict(public_inputs) if isinstance(public_inputs, Mapping) else {},
+        "public_inputs_bytes": _bytes_to_hex(
+            _to_bytes(request.get("public_inputs_bytes"), "publicInputsBytes")
+        ),
+        "bundle_bytes": _bytes_to_hex(
+            _to_bytes(request.get("bundle_bytes"), "bundleBytes")
+        ),
+        "source_proof_bytes": _bytes_to_hex(
+            _to_bytes(request.get("source_proof_bytes"), "sourceProofBytes")
+        ),
+        "proof_context": {
+            "version": proof_context.get("version"),
+            "statement_hash": proof_context.get("statement_hash"),
+            "destination_binding_hash": proof_context.get("destination_binding_hash"),
+        },
+        "statement_hash": request.get("statement_hash"),
+        "destination_binding_hash": request.get("destination_binding_hash"),
+        "request_hash": request.get("request_hash"),
+    }
+
+
+def _require_canonical_substrate_proof_request(request: Mapping[str, Any]) -> None:
+    try:
+        expected = build_substrate_sccp_proof_request(
+            {
+                "public_inputs": request["public_inputs"],
+                "bundle_bytes": request["bundle_bytes"],
+                "source_proof_bytes": request["source_proof_bytes"],
+                "proof_context": request["proof_context"],
+                "source_domain": request["source_domain"],
+                "backend": request["backend"],
+            }
+        )
+        if _substrate_proof_request_comparable(
+            request
+        ) != _substrate_proof_request_comparable(expected):
+            raise TypeError("Substrate SCCP proof request must be canonical")
+    except TypeError as exc:
+        if str(exc) == "Substrate SCCP proof request must be canonical":
+            raise
+        raise TypeError("Substrate SCCP proof request must be canonical") from exc
+    except Exception as exc:
+        raise TypeError("Substrate SCCP proof request must be canonical") from exc
+
+
+def _require_production_groth16_destination_binding(
+    request: Mapping[str, Any],
+    binding_builder: Callable[[Any], Dict[str, Any]],
+    label: str,
+) -> Dict[str, Any]:
+    destination_binding = request.get("destination_binding")
+    if (
+        not isinstance(destination_binding, Mapping)
+        or not _destination_binding_has_deployment_material(destination_binding)
+    ):
+        raise TypeError(
+            f"{label} production proofs must include destinationBinding deployment material"
+        )
+    binding = binding_builder(
+        _destination_binding_with_default_target(
+            destination_binding,
+            request["target_domain"],
+        )
+    )
+    if (
+        binding["source_domain"] != request["source_domain"]
+        or binding["target_domain"] != request["target_domain"]
+    ):
+        raise TypeError(f"{label} destinationBinding must match request route")
+    if (
+        binding["binding_hash"] != request["destination_binding_hash"]
+        or binding["binding_hash"] != request["proof_context"]["destination_binding_hash"]
+    ):
+        raise TypeError(
+            f"{label} destinationBinding must match request destinationBindingHash"
+        )
+    return binding
+
+
+def _require_production_evm_proof_request(request: Mapping[str, Any]) -> None:
+    _require_canonical_evm_proof_request(request)
+    if request["version"] != 1:
+        raise TypeError("EVM-family SCCP proof request version must be 1")
+    if request["backend"] != SCCP_EVM_GROTH16_BN254_PROOF_BACKEND_V1:
+        raise TypeError("EVM-family SCCP proof request backend must be evm-groth16-bn254-v1")
+    if request["source_domain"] != SCCP_DOMAIN_SORA:
+        raise TypeError("EVM-family SCCP production proofs must start from SORA")
+    if request["target_domain"] not in (SCCP_DOMAIN_ETH, SCCP_DOMAIN_BSC):
+        raise TypeError("EVM-family SCCP production proofs must target ETH or BSC")
+    _require_production_groth16_destination_binding(
+        request,
+        evm_sccp_destination_binding,
+        "EVM-family SCCP",
+    )
+    _require_non_empty_bytes(request["bundle_bytes"], "bundleBytes")
+    _require_optional_nonzero_bytes(request["source_proof_bytes"], "sourceProofBytes")
+
+
+def _require_production_tron_proof_request(request: Mapping[str, Any]) -> None:
+    _require_canonical_tron_proof_request(request)
+    if request["version"] != 1:
+        raise TypeError("TRON SCCP proof request version must be 1")
+    if request["backend"] != SCCP_TRON_GROTH16_BN254_PROOF_BACKEND_V1:
+        raise TypeError("TRON SCCP proof request backend must be tron-groth16-bn254-v1")
+    if request["source_domain"] != SCCP_DOMAIN_SORA:
+        raise TypeError("TRON SCCP production proofs must start from SORA")
+    if request["target_domain"] != SCCP_DOMAIN_TRON:
+        raise TypeError("TRON SCCP production proofs must target TRON")
+    _require_production_groth16_destination_binding(
+        request,
+        tron_sccp_destination_binding,
+        "TRON SCCP",
+    )
+    _require_non_empty_bytes(request["bundle_bytes"], "bundleBytes")
+    _require_optional_nonzero_bytes(request["source_proof_bytes"], "sourceProofBytes")
+
+
+def _require_production_substrate_proof_request(request: Mapping[str, Any]) -> None:
+    _require_canonical_substrate_proof_request(request)
+    if request["version"] != 1:
+        raise TypeError("Substrate SCCP proof request version must be 1")
+    if request["backend"] != SCCP_SUBSTRATE_RUNTIME_PROOF_BACKEND_V1:
+        raise TypeError("Substrate SCCP proof request backend must be substrate-runtime-v1")
+    if request["source_domain"] != SCCP_DOMAIN_SORA:
+        raise TypeError("Substrate SCCP production proofs must start from SORA")
+    if request["target_domain"] not in _SCCP_SUBSTRATE_RUNTIME_TARGET_DOMAINS_V1:
+        raise TypeError(
+            "Substrate SCCP production proofs must target a Substrate-family domain"
+        )
+    _require_non_empty_bytes(request["bundle_bytes"], "bundleBytes")
+    _require_optional_nonzero_bytes(request["source_proof_bytes"], "sourceProofBytes")
+
+
+def _require_groth16_proof_bytes(proof_bytes: bytes, label: str = "proofBytes") -> None:
+    _require_native_recursive_proof_bytes(proof_bytes)
+    if len(proof_bytes) != _SCCP_GROTH16_BN254_PROOF_ABI_BYTE_LENGTH_V1:
+        raise TypeError(
+            f"{label} must be {_SCCP_GROTH16_BN254_PROOF_ABI_BYTE_LENGTH_V1} bytes"
+        )
+    _require_groth16_bn254_proof_tuple(proof_bytes, label)
+
+
+def _groth16_proof_word(proof_bytes: bytes, index: int) -> bytes:
+    start = index * 32
+    return proof_bytes[start : start + 32]
+
+
+def _groth16_proof_word_value(proof_bytes: bytes, index: int) -> int:
+    return int.from_bytes(_groth16_proof_word(proof_bytes, index), "big")
+
+
+def _groth16_proof_word_is_zero(proof_bytes: bytes, index: int) -> bool:
+    return not any(_groth16_proof_word(proof_bytes, index))
+
+
+def _require_groth16_base_field_word(
+    proof_bytes: bytes,
+    index: int,
+    label: str,
+) -> None:
+    if _groth16_proof_word_value(proof_bytes, index) >= _SCCP_GROTH16_BN254_BASE_FIELD_MODULUS:
+        raise TypeError(f"{label} must be a BN254 base-field element")
+
+
+def _require_groth16_nonzero_point(
+    proof_bytes: bytes,
+    indexes: Sequence[int],
+    label: str,
+) -> None:
+    if all(_groth16_proof_word_is_zero(proof_bytes, index) for index in indexes):
+        raise TypeError(f"{label} must not be zero")
+
+
+def _bn254_fq(value: int) -> int:
+    return value % _SCCP_GROTH16_BN254_BASE_FIELD_MODULUS
+
+
+def _bn254_fq2_add(left: tuple[int, int], right: tuple[int, int]) -> tuple[int, int]:
+    return (_bn254_fq(left[0] + right[0]), _bn254_fq(left[1] + right[1]))
+
+
+def _bn254_fq2_sub(left: tuple[int, int], right: tuple[int, int]) -> tuple[int, int]:
+    return (_bn254_fq(left[0] - right[0]), _bn254_fq(left[1] - right[1]))
+
+
+def _bn254_fq2_scale(left: tuple[int, int], scalar: int) -> tuple[int, int]:
+    return (_bn254_fq(left[0] * scalar), _bn254_fq(left[1] * scalar))
+
+
+def _bn254_fq2_mul(left: tuple[int, int], right: tuple[int, int]) -> tuple[int, int]:
+    return (
+        _bn254_fq(left[0] * right[0] - left[1] * right[1]),
+        _bn254_fq(left[0] * right[1] + left[1] * right[0]),
+    )
+
+
+def _bn254_fq2_is_zero(value: tuple[int, int]) -> bool:
+    return value[0] == 0 and value[1] == 0
+
+
+def _bn254_g2_infinity() -> dict[str, Any]:
+    return {"x": (0, 0), "y": (1, 0), "z": (0, 0), "infinity": True}
+
+
+def _bn254_g2_affine_projective(
+    x: tuple[int, int],
+    y: tuple[int, int],
+) -> dict[str, Any]:
+    return {"x": x, "y": y, "z": (1, 0), "infinity": False}
+
+
+def _bn254_g2_projective_is_infinity(point: Mapping[str, Any]) -> bool:
+    return bool(point["infinity"]) or _bn254_fq2_is_zero(point["z"])
+
+
+def _bn254_g2_projective_double(point: Mapping[str, Any]) -> dict[str, Any]:
+    if _bn254_g2_projective_is_infinity(point) or _bn254_fq2_is_zero(point["y"]):
+        return _bn254_g2_infinity()
+    xx = _bn254_fq2_mul(point["x"], point["x"])
+    yy = _bn254_fq2_mul(point["y"], point["y"])
+    yyyy = _bn254_fq2_mul(yy, yy)
+    s = _bn254_fq2_scale(
+        _bn254_fq2_sub(
+            _bn254_fq2_sub(
+                _bn254_fq2_mul(_bn254_fq2_add(point["x"], yy), _bn254_fq2_add(point["x"], yy)),
+                xx,
+            ),
+            yyyy,
+        ),
+        2,
+    )
+    m = _bn254_fq2_scale(xx, 3)
+    x3 = _bn254_fq2_sub(_bn254_fq2_mul(m, m), _bn254_fq2_scale(s, 2))
+    y3 = _bn254_fq2_sub(
+        _bn254_fq2_mul(m, _bn254_fq2_sub(s, x3)),
+        _bn254_fq2_scale(yyyy, 8),
+    )
+    z3 = _bn254_fq2_scale(_bn254_fq2_mul(point["y"], point["z"]), 2)
+    return {"x": x3, "y": y3, "z": z3, "infinity": False}
+
+
+def _bn254_g2_projective_add_affine(
+    point: Mapping[str, Any],
+    affine: Mapping[str, tuple[int, int]],
+) -> dict[str, Any]:
+    if _bn254_g2_projective_is_infinity(point):
+        return _bn254_g2_affine_projective(affine["x"], affine["y"])
+    z1z1 = _bn254_fq2_mul(point["z"], point["z"])
+    u2 = _bn254_fq2_mul(affine["x"], z1z1)
+    s2 = _bn254_fq2_mul(affine["y"], _bn254_fq2_mul(point["z"], z1z1))
+    h = _bn254_fq2_sub(u2, point["x"])
+    if _bn254_fq2_is_zero(h):
+        if s2 == point["y"]:
+            return _bn254_g2_projective_double(point)
+        return _bn254_g2_infinity()
+    hh = _bn254_fq2_mul(h, h)
+    i = _bn254_fq2_scale(hh, 4)
+    j = _bn254_fq2_mul(h, i)
+    r = _bn254_fq2_scale(_bn254_fq2_sub(s2, point["y"]), 2)
+    v = _bn254_fq2_mul(point["x"], i)
+    x3 = _bn254_fq2_sub(_bn254_fq2_sub(_bn254_fq2_mul(r, r), j), _bn254_fq2_scale(v, 2))
+    y3 = _bn254_fq2_sub(
+        _bn254_fq2_mul(r, _bn254_fq2_sub(v, x3)),
+        _bn254_fq2_scale(_bn254_fq2_mul(point["y"], j), 2),
+    )
+    z3 = _bn254_fq2_sub(
+        _bn254_fq2_sub(
+            _bn254_fq2_mul(_bn254_fq2_add(point["z"], h), _bn254_fq2_add(point["z"], h)),
+            z1z1,
+        ),
+        hh,
+    )
+    return {"x": x3, "y": y3, "z": z3, "infinity": False}
+
+
+def _bn254_g2_point_is_in_prime_subgroup(
+    x: tuple[int, int],
+    y: tuple[int, int],
+) -> bool:
+    affine = {"x": x, "y": y}
+    acc = _bn254_g2_infinity()
+    for bit in bin(_SCCP_GROTH16_BN254_SCALAR_FIELD_MODULUS)[2:]:
+        acc = _bn254_g2_projective_double(acc)
+        if bit == "1":
+            acc = _bn254_g2_projective_add_affine(acc, affine)
+    return _bn254_g2_projective_is_infinity(acc)
+
+
+def _require_groth16_g1_point(
+    proof_bytes: bytes,
+    indexes: Sequence[int],
+    label: str,
+) -> None:
+    _require_groth16_nonzero_point(proof_bytes, indexes, label)
+    x = _groth16_proof_word_value(proof_bytes, indexes[0])
+    y = _groth16_proof_word_value(proof_bytes, indexes[1])
+    if _bn254_fq(y * y) != _bn254_fq(x * x * x + 3):
+        raise TypeError(f"{label} must be a BN254 G1 point")
+
+
+def _require_groth16_g2_point(
+    proof_bytes: bytes,
+    indexes: Sequence[int],
+    label: str,
+) -> None:
+    _require_groth16_nonzero_point(proof_bytes, indexes, label)
+    x = (
+        _groth16_proof_word_value(proof_bytes, indexes[0]),
+        _groth16_proof_word_value(proof_bytes, indexes[1]),
+    )
+    y = (
+        _groth16_proof_word_value(proof_bytes, indexes[2]),
+        _groth16_proof_word_value(proof_bytes, indexes[3]),
+    )
+    left = _bn254_fq2_mul(y, y)
+    x2 = _bn254_fq2_mul(x, x)
+    right = _bn254_fq2_add(
+        _bn254_fq2_mul(x2, x),
+        (_SCCP_GROTH16_BN254_G2_B_C0, _SCCP_GROTH16_BN254_G2_B_C1),
+    )
+    if left != right or not _bn254_g2_point_is_in_prime_subgroup(x, y):
+        raise TypeError(f"{label} must be a BN254 G2 point")
+
+
+def _require_groth16_bn254_proof_tuple(proof_bytes: bytes, label: str) -> None:
+    if _groth16_proof_word_value(proof_bytes, 0) != 1:
+        raise TypeError(f"{label}.version must be 1")
+    if _groth16_proof_word_is_zero(proof_bytes, 1):
+        raise TypeError(f"{label}.messageId must not be zero")
+    if _groth16_proof_word_value(proof_bytes, 2) > 0xFFFF_FFFF:
+        raise TypeError(f"{label}.sourceDomain must fit u32")
+    if _groth16_proof_word_is_zero(proof_bytes, 3):
+        raise TypeError(f"{label}.commitmentRoot must not be zero")
+    for offset, field in enumerate(
+        ("a.x", "a.y", "b.x0", "b.x1", "b.y0", "b.y1", "c.x", "c.y")
+    ):
+        _require_groth16_base_field_word(proof_bytes, 4 + offset, f"{label}.{field}")
+    _require_groth16_g1_point(proof_bytes, (4, 5), f"{label}.a")
+    _require_groth16_g2_point(proof_bytes, (6, 7, 8, 9), f"{label}.b")
+    _require_groth16_g1_point(proof_bytes, (10, 11), f"{label}.c")
+
+
+def _require_groth16_proof_bytes_for_public_inputs(
+    proof_bytes: bytes,
+    public_inputs_value: Any,
+    *,
+    label: str = "proofBytes",
+) -> None:
+    _require_groth16_proof_bytes(proof_bytes, label)
+    public_inputs = _normalize_transparent_public_inputs(public_inputs_value)
+    if _groth16_proof_word(proof_bytes, 1) != _hex_to_bytes(
+        public_inputs["message_id"], "publicInputs.messageId", 32
+    ):
+        raise TypeError(f"{label}.messageId must match publicInputs.messageId")
+    if _groth16_proof_word(proof_bytes, 3) != _hex_to_bytes(
+        public_inputs["commitment_root"], "publicInputs.commitmentRoot", 32
+    ):
+        raise TypeError(f"{label}.commitmentRoot must match publicInputs.commitmentRoot")
+
+
+def _require_groth16_proof_bytes_for_context(
+    proof_bytes: bytes,
+    public_inputs_value: Any,
+    source_domain_value: Any,
+    *,
+    label: str = "proofBytes",
+) -> None:
+    _require_groth16_proof_bytes_for_public_inputs(
+        proof_bytes,
+        public_inputs_value,
+        label=label,
+    )
+    source_domain = _normalize_u32(source_domain_value, "sourceDomain")
+    if _groth16_proof_word_value(proof_bytes, 2) != source_domain:
+        raise TypeError(f"{label}.sourceDomain must match sourceDomain")
+
+
+def _require_optional_transparent_result_metadata_matches(
+    value: Mapping[str, Any],
+    request: Mapping[str, Any],
+) -> None:
+    result_public_inputs = _mapping_optional_value_without_aliases(
+        value, "proofResult.publicInputs", "publicInputs", "public_inputs"
+    )
+    if (
+        result_public_inputs is not _MISSING
+        and _normalize_transparent_public_inputs(result_public_inputs)
+        != request["public_inputs"]
+    ):
+        raise TypeError("proofResult.publicInputs must match request.publicInputs")
+
+    result_proof_context = _mapping_optional_value_without_aliases(
+        value, "proofResult.proofContext", "proofContext", "proof_context"
+    )
+    if result_proof_context is not _MISSING:
+        if not isinstance(result_proof_context, Mapping):
+            raise TypeError("proofResult.proofContext must be an object")
+        result_statement_hash = _normalize_hex32(
+            _mapping_value_without_aliases(
+                result_proof_context,
+                "proofResult.proofContext.statementHash",
+                "statementHash",
+                "statement_hash",
+            ),
+            "proofResult.proofContext.statementHash",
+        )
+        if result_statement_hash != request["proof_context"]["statement_hash"]:
+            raise TypeError("proofResult.proofContext must match request.proofContext")
+        result_destination_binding_hash = _normalize_hex32(
+            _mapping_value_without_aliases(
+                result_proof_context,
+                "proofResult.proofContext.destinationBindingHash",
+                "destinationBindingHash",
+                "destination_binding_hash",
+            ),
+            "proofResult.proofContext.destinationBindingHash",
+        )
+        if (
+            result_destination_binding_hash
+            != request["proof_context"]["destination_binding_hash"]
+        ):
+            raise TypeError("proofResult.proofContext must match request.proofContext")
+
+    result_statement_hash = _mapping_optional_value_without_aliases(
+        value, "proofResult.statementHash", "statementHash", "statement_hash"
+    )
+    if result_statement_hash is not _MISSING:
+        _require_supplied_result_hash_matches(
+            result_statement_hash,
+            request["statement_hash"],
+            "proofResult.statementHash",
+        )
+    result_destination_binding_hash = _mapping_optional_value_without_aliases(
+        value,
+        "proofResult.destinationBindingHash",
+        "destinationBindingHash",
+        "destination_binding_hash",
+    )
+    if result_destination_binding_hash is not _MISSING:
+        _require_supplied_result_hash_matches(
+            result_destination_binding_hash,
+            request["destination_binding_hash"],
+            "proofResult.destinationBindingHash",
+        )
+
+
+def _require_optional_groth16_result_metadata_matches(
+    value: Mapping[str, Any],
+    request: Mapping[str, Any],
+) -> None:
+    _require_optional_transparent_result_metadata_matches(value, request)
+
+    supplied_public_signal_words = _mapping_optional_value_without_aliases(
+        value,
+        "proofResult.publicSignalWords",
+        "publicSignalWords",
+        "public_signal_words",
+    )
+    if supplied_public_signal_words is _MISSING:
+        return
+    if (
+        not isinstance(supplied_public_signal_words, Sequence)
+        or isinstance(supplied_public_signal_words, (str, bytes, bytearray))
+        or len(supplied_public_signal_words) != 9
+    ):
+        raise TypeError("proofResult.publicSignalWords must contain 9 words")
+    normalized_signals = [
+        _normalize_hex32(word, f"proofResult.publicSignalWords[{index}]")
+        for index, word in enumerate(supplied_public_signal_words)
+    ]
+    if normalized_signals != list(request["public_signal_words"]):
+        raise TypeError(
+            "proofResult.publicSignalWords must match request public inputs and proof context"
+        )
+
+
+def _normalize_evm_proof_result(result: Any, request: Mapping[str, Any]) -> Mapping[str, Any]:
+    value = _require_mapping(result, "EVM-family SCCP proof result")
+    proof_bytes = _to_bytes(
+        _mapping_value_without_aliases(
+            value,
+            "proofResult.proofBytes",
+            "proofBytes",
+            "proof_bytes",
+            "proof",
+        ),
+        "proofBytes",
+    )
+    _require_production_evm_proof_request(request)
+    _require_groth16_proof_bytes_for_context(
+        proof_bytes,
+        request["public_inputs"],
+        request["source_domain"],
+    )
+    _require_optional_result_proof_base64_matches(value, proof_bytes)
+    result_backend = _mapping_optional_value(value, "backend")
+    if result_backend is not _MISSING:
+        _require_supplied_result_backend_matches(result_backend, request["backend"])
+    result_request_hash = _mapping_optional_value_without_aliases(
+        value,
+        "proofResult.requestHash",
+        "requestHash",
+        "request_hash",
+    )
+    if result_request_hash is not _MISSING:
+        _require_supplied_result_hash_matches(
+            result_request_hash,
+            request["request_hash"],
+            "requestHash",
+        )
+    _require_optional_groth16_result_metadata_matches(value, request)
+    envelope_hash = _bytes_to_hex(
+        _prefixed_blake2b(
+            _SCCP_EVM_GROTH16_PROOF_ENVELOPE_PREFIX_V1,
+            _hex_to_bytes(request["request_hash"], "requestHash", 32) + proof_bytes,
+        )
+    )
+    result_envelope_hash = _mapping_optional_value_without_aliases(
+        value,
+        "proofResult.envelopeHash",
+        "envelopeHash",
+        "envelope_hash",
+    )
+    if result_envelope_hash is not _MISSING:
+        _require_supplied_result_hash_matches(
+            result_envelope_hash,
+            envelope_hash,
+            "envelopeHash",
+        )
+    return _immutable_prover_envelope({
+        "version": 1,
+        "backend": request["backend"],
+        "proof_bytes": proof_bytes,
+        "proof_base64": base64.b64encode(proof_bytes).decode("ascii"),
+        "public_inputs": request["public_inputs"],
+        "public_signal_words": request["public_signal_words"],
+        "bundle_bytes": request["bundle_bytes"],
+        "source_proof_bytes": request["source_proof_bytes"],
+        "proof_context": request["proof_context"],
+        "statement_hash": request["statement_hash"],
+        "destination_binding": request["destination_binding"],
+        "destination_binding_hash": request["destination_binding_hash"],
+        "request_hash": request["request_hash"],
+        "envelope_hash": envelope_hash,
+    })
+
+
+def wrap_evm_sccp_proof_result(
+    proof_bytes: BytesLike, request: Mapping[str, Any]
+) -> Mapping[str, Any]:
+    """Wrap externally generated EVM-family Groth16 proof bytes against a request."""
+
+    return _normalize_evm_proof_result({"proof_bytes": proof_bytes}, request)
+
+
+def _normalize_tron_proof_result(result: Any, request: Mapping[str, Any]) -> Mapping[str, Any]:
+    value = _require_mapping(result, "TRON SCCP proof result")
+    proof_bytes = _to_bytes(
+        _mapping_value_without_aliases(
+            value,
+            "proofResult.proofBytes",
+            "proofBytes",
+            "proof_bytes",
+            "proof",
+        ),
+        "proofBytes",
+    )
+    _require_production_tron_proof_request(request)
+    _require_groth16_proof_bytes_for_context(
+        proof_bytes,
+        request["public_inputs"],
+        request["source_domain"],
+    )
+    _require_optional_result_proof_base64_matches(value, proof_bytes)
+    result_backend = _mapping_optional_value(value, "backend")
+    if result_backend is not _MISSING:
+        _require_supplied_result_backend_matches(result_backend, request["backend"])
+    result_request_hash = _mapping_optional_value_without_aliases(
+        value,
+        "proofResult.requestHash",
+        "requestHash",
+        "request_hash",
+    )
+    if result_request_hash is not _MISSING:
+        _require_supplied_result_hash_matches(
+            result_request_hash,
+            request["request_hash"],
+            "requestHash",
+        )
+    _require_optional_groth16_result_metadata_matches(value, request)
+    envelope_hash = _bytes_to_hex(
+        _prefixed_blake2b(
+            _SCCP_TRON_GROTH16_PROOF_ENVELOPE_PREFIX_V1,
+            _hex_to_bytes(request["request_hash"], "requestHash", 32) + proof_bytes,
+        )
+    )
+    result_envelope_hash = _mapping_optional_value_without_aliases(
+        value,
+        "proofResult.envelopeHash",
+        "envelopeHash",
+        "envelope_hash",
+    )
+    if result_envelope_hash is not _MISSING:
+        _require_supplied_result_hash_matches(
+            result_envelope_hash,
+            envelope_hash,
+            "envelopeHash",
+        )
+    return _immutable_prover_envelope({
+        "version": 1,
+        "backend": request["backend"],
+        "proof_bytes": proof_bytes,
+        "proof_base64": base64.b64encode(proof_bytes).decode("ascii"),
+        "public_inputs": request["public_inputs"],
+        "public_signal_words": request["public_signal_words"],
+        "bundle_bytes": request["bundle_bytes"],
+        "source_proof_bytes": request["source_proof_bytes"],
+        "proof_context": request["proof_context"],
+        "statement_hash": request["statement_hash"],
+        "destination_binding": request["destination_binding"],
+        "destination_binding_hash": request["destination_binding_hash"],
+        "request_hash": request["request_hash"],
+        "envelope_hash": envelope_hash,
+    })
+
+
+def wrap_tron_sccp_proof_result(
+    proof_bytes: BytesLike, request: Mapping[str, Any]
+) -> Mapping[str, Any]:
+    """Wrap externally generated TRON Groth16 proof bytes against a request."""
+
+    return _normalize_tron_proof_result({"proof_bytes": proof_bytes}, request)
+
+
+def sccp_submit_message_proof_call_data(
+    proof_bytes_value: BytesLike,
+    public_inputs_value: Any,
+    statement_hash_value: Any,
+    source_domain: Any = SCCP_DOMAIN_SORA,
+) -> bytes:
+    """Return ABI calldata for submitSccpMessageProof(bytes,bytes32[6],bytes32)."""
+
+    proof_bytes = _to_bytes(proof_bytes_value, "proofBytes")
+    source_domain = _normalize_u32(source_domain, "sourceDomain")
+    if source_domain != SCCP_DOMAIN_SORA:
+        raise ValueError("sourceDomain must be SORA")
+    _require_groth16_proof_bytes_for_context(
+        proof_bytes,
+        public_inputs_value,
+        source_domain,
+    )
+    public_input_words = _sccp_message_transparent_public_input_abi_word_bytes(
+        public_inputs_value
+    )
+    statement_hash = _nonzero_hex32_to_bytes(statement_hash_value, "statementHash")
+    padding = b"\x00" * ((32 - (len(proof_bytes) % 32)) % 32)
+    return b"".join(
+        (
+            _SCCP_SUBMIT_MESSAGE_PROOF_SELECTOR_BYTES_V1,
+            _abi_word_u256(32 * 8, "proofBytesOffset"),
+            *public_input_words,
+            statement_hash,
+            _abi_word_u256(len(proof_bytes), "proofBytesLength"),
+            proof_bytes,
+            padding,
+        )
+    )
+
+
+def _require_groth16_proof_result_envelope_for_submission(
+    proof_result: Mapping[str, Any],
+    *,
+    proof_bytes: bytes,
+    statement_hash: str,
+    destination_binding_hash: str,
+    envelope_prefix: bytes,
+) -> str:
+    proof_context = _mapping_value_without_aliases(
+        proof_result,
+        "proofResult.proofContext",
+        "proofContext",
+        "proof_context",
+    )
+    if not isinstance(proof_context, Mapping):
+        raise TypeError("proofResult.proofContext must be an object")
+    result_statement_hash = _normalize_hex32(
+        _mapping_value_without_aliases(
+            proof_context,
+            "proofResult.proofContext.statementHash",
+            "statementHash",
+            "statement_hash",
+        ),
+        "proofResult.proofContext.statementHash",
+    )
+    if result_statement_hash != statement_hash:
+        raise TypeError("proofResult.proofContext must match statementHash")
+    result_destination_binding_hash = _normalize_hex32(
+        _mapping_value_without_aliases(
+            proof_context,
+            "proofResult.proofContext.destinationBindingHash",
+            "destinationBindingHash",
+            "destination_binding_hash",
+        ),
+        "proofResult.proofContext.destinationBindingHash",
+    )
+    if result_destination_binding_hash != destination_binding_hash:
+        raise TypeError("proofResult.proofContext must match destinationBindingHash")
+    if (
+        _mapping_value_without_aliases(
+            proof_result,
+            "proofResult.proofBase64",
+            "proofBase64",
+            "proof_base64",
+        )
+        != base64.b64encode(proof_bytes).decode("ascii")
+    ):
+        raise TypeError("proofResult.proofBase64 must match proofResult.proofBytes")
+    request_hash = _normalize_nonzero_hex32(
+        _mapping_value_without_aliases(
+            proof_result,
+            "proofResult.requestHash",
+            "requestHash",
+            "request_hash",
+        ),
+        "proofResult.requestHash",
+    )
+    envelope_hash = _normalize_nonzero_hex32(
+        _mapping_value_without_aliases(
+            proof_result,
+            "proofResult.envelopeHash",
+            "envelopeHash",
+            "envelope_hash",
+        ),
+        "proofResult.envelopeHash",
+    )
+    expected_envelope_hash = _bytes_to_hex(
+        _prefixed_blake2b(
+            envelope_prefix,
+            _hex_to_bytes(request_hash, "proofResult.requestHash", 32) + proof_bytes,
+        )
+    )
+    if envelope_hash != expected_envelope_hash:
+        raise TypeError("proofResult.envelopeHash must match wrapped proof bytes")
+    return request_hash
+
+
+def _normalize_groth16_contract_submission_input(
+    input_value: Any,
+    *,
+    backend: str,
+    envelope_prefix: bytes,
+    source_domain_label: str,
+    target_domain_label: str,
+    accepted_target_domains: Sequence[int],
+    proof_request_builder: Callable[[Mapping[str, Any]], Mapping[str, Any]],
+) -> Dict[str, Any]:
+    value = _require_mapping(input_value, f"{target_domain_label} SCCP submission input")
+    proof_result_value = _mapping_optional_value_without_aliases(
+        value,
+        "proofResult",
+        "proofResult",
+        "proof_result",
+    )
+    proof_result = None if proof_result_value is _MISSING else proof_result_value
+
+    def input_optional(label: str, *keys: str) -> Any:
+        return _mapping_optional_value_without_aliases(value, label, *keys)
+
+    def result_optional(label: str, *keys: str) -> Any:
+        if proof_result is None:
+            return _MISSING
+        return _mapping_optional_value_without_aliases(proof_result, label, *keys)
+
+    def result_field(label: str, *keys: str) -> Any:
+        if proof_result is None:
+            return None
+        return _mapping_value_without_aliases(proof_result, label, *keys)
+
+    if proof_result is not None:
+        proof_result = _require_mapping(
+            proof_result,
+            f"{target_domain_label} SCCP proof result",
+        )
+        if _mapping_value(proof_result, "backend") != backend:
+            raise TypeError(f"proofResult.backend must be {backend}")
+
+    public_inputs_value = input_optional("publicInputs", "publicInputs", "public_inputs")
+    if public_inputs_value is _MISSING and proof_result is not None:
+        public_inputs_value = result_optional(
+            "proofResult.publicInputs",
+            "publicInputs",
+            "public_inputs",
+        )
+    public_inputs = _normalize_transparent_public_inputs(public_inputs_value)
+    if public_inputs["target_domain"] not in accepted_target_domains:
+        raise ValueError(f"publicInputs.targetDomain must be {target_domain_label}")
+    result_public_inputs = (
+        _MISSING
+        if proof_result is None
+        else result_optional("proofResult.publicInputs", "publicInputs", "public_inputs")
+    )
+    if result_public_inputs is not _MISSING:
+        if _normalize_transparent_public_inputs(result_public_inputs) != public_inputs:
+            raise TypeError("publicInputs must match proofResult.publicInputs")
+
+    source_domain = _normalize_optional_u32_without_aliases(
+        value,
+        "sourceDomain",
+        SCCP_DOMAIN_SORA,
+        "sourceDomain",
+        "source_domain",
+    )
+    if source_domain != SCCP_DOMAIN_SORA:
+        raise ValueError(f"sourceDomain must be {source_domain_label}")
+
+    statement_hash_value = input_optional("statementHash", "statementHash", "statement_hash")
+    if statement_hash_value is _MISSING and proof_result is not None:
+        statement_hash_value = result_optional(
+            "proofResult.statementHash",
+            "statementHash",
+            "statement_hash",
+        )
+    statement_hash = _normalize_nonzero_hex32(statement_hash_value, "statementHash")
+    result_statement_hash = (
+        _MISSING
+        if proof_result is None
+        else result_optional("proofResult.statementHash", "statementHash", "statement_hash")
+    )
+    if result_statement_hash is not _MISSING:
+        _require_supplied_result_hash_matches(
+            result_statement_hash,
+            statement_hash,
+            "statementHash",
+        )
+
+    destination_binding_hash_value = input_optional(
+        "destinationBindingHash",
+        "destinationBindingHash",
+        "destination_binding_hash",
+    )
+    if destination_binding_hash_value is _MISSING and proof_result is not None:
+        destination_binding_hash_value = result_optional(
+            "proofResult.destinationBindingHash",
+            "destinationBindingHash",
+            "destination_binding_hash",
+        )
+    destination_binding_hash = _normalize_nonzero_hex32(
+        destination_binding_hash_value,
+        "destinationBindingHash",
+    )
+    result_destination_binding_hash = (
+        _MISSING
+        if proof_result is None
+        else result_optional(
+            "proofResult.destinationBindingHash",
+            "destinationBindingHash",
+            "destination_binding_hash",
+        )
+    )
+    if result_destination_binding_hash is not _MISSING:
+        _require_supplied_result_hash_matches(
+            result_destination_binding_hash,
+            destination_binding_hash,
+            "destinationBindingHash",
+        )
+
+    proof_bytes_value = input_optional("proofBytes", "proofBytes", "proof_bytes")
+    if proof_bytes_value is _MISSING and proof_result is not None:
+        proof_bytes_value = result_optional(
+            "proofResult.proofBytes",
+            "proofBytes",
+            "proof_bytes",
+            "proof",
+        )
+    proof_bytes = _to_bytes(proof_bytes_value, "proofBytes")
+    _require_groth16_proof_bytes_for_context(
+        proof_bytes,
+        public_inputs,
+        source_domain,
+    )
+    if proof_result is not None:
+        result_proof_bytes_value = result_optional(
+            "proofResult.proofBytes",
+            "proofBytes",
+            "proof_bytes",
+            "proof",
+        )
+        result_proof_bytes = _to_bytes(
+            result_proof_bytes_value,
+            "proofResult.proofBytes",
+        )
+        _require_groth16_proof_bytes_for_context(
+            result_proof_bytes,
+            public_inputs,
+            source_domain,
+            label="proofResult.proofBytes",
+        )
+        if result_proof_bytes != proof_bytes:
+            raise TypeError("proofBytes must match proofResult.proofBytes")
+        request_hash = _require_groth16_proof_result_envelope_for_submission(
+            proof_result,
+            proof_bytes=proof_bytes,
+            statement_hash=statement_hash,
+            destination_binding_hash=destination_binding_hash,
+            envelope_prefix=envelope_prefix,
+        )
+        result_bundle_bytes = _require_non_empty_bytes(
+            result_field("proofResult.bundleBytes", "bundleBytes", "bundle_bytes"),
+            "proofResult.bundleBytes",
+        )
+        input_bundle_bytes = input_optional("bundleBytes", "bundleBytes", "bundle_bytes")
+        if input_bundle_bytes is not _MISSING and _to_bytes(
+            input_bundle_bytes,
+            "bundleBytes",
+        ) != result_bundle_bytes:
+            raise TypeError("bundleBytes must match proofResult.bundleBytes")
+        source_proof_input = result_optional(
+            "proofResult.sourceProofBytes",
+            "sourceProofBytes",
+            "source_proof_bytes",
+        )
+        if source_proof_input is _MISSING:
+            source_proof_input = input_optional(
+                "sourceProofBytes",
+                "sourceProofBytes",
+                "source_proof_bytes",
+            )
+        source_proof_bytes = _require_optional_nonzero_bytes(
+            b"" if source_proof_input is _MISSING else source_proof_input,
+            "proofResult.sourceProofBytes",
+        )
+        expected_request = proof_request_builder(
+            {
+                "public_inputs": public_inputs,
+                "bundle_bytes": result_bundle_bytes,
+                "source_proof_bytes": source_proof_bytes,
+                "statement_hash": statement_hash,
+                "destination_binding_hash": destination_binding_hash,
+                "source_domain": source_domain,
+            }
+        )
+        if expected_request["request_hash"] != request_hash:
+            raise TypeError(
+                "proofResult.requestHash must match bundleBytes and sourceProofBytes"
+            )
+
+    public_signal_words = sccp_groth16_bn254_public_signal_words(
+        {
+            "public_inputs": public_inputs,
+            "source_domain": source_domain,
+            "statement_hash": statement_hash,
+            "destination_binding_hash": destination_binding_hash,
+        }
+    )
+    supplied_public_signal_words = input_optional(
+        "publicSignalWords",
+        "publicSignalWords",
+        "public_signal_words",
+    )
+    if supplied_public_signal_words is _MISSING and proof_result is not None:
+        supplied_public_signal_words = result_optional(
+            "proofResult.publicSignalWords",
+            "publicSignalWords",
+            "public_signal_words",
+        )
+    if supplied_public_signal_words is not _MISSING:
+        if (
+            not isinstance(supplied_public_signal_words, Sequence)
+            or isinstance(supplied_public_signal_words, (str, bytes, bytearray))
+            or len(supplied_public_signal_words) != 9
+        ):
+            raise TypeError("publicSignalWords must contain 9 words")
+        normalized_signals = [
+            _normalize_hex32(word, f"publicSignalWords[{index}]")
+            for index, word in enumerate(supplied_public_signal_words)
+        ]
+        if normalized_signals != list(public_signal_words):
+            raise TypeError("publicSignalWords must match publicInputs and proof context")
+
+    return {
+        "proof_bytes": proof_bytes,
+        "public_inputs": public_inputs,
+        "source_domain": source_domain,
+        "statement_hash": statement_hash,
+        "destination_binding_hash": destination_binding_hash,
+        "public_signal_words": public_signal_words,
+    }
+
+
+def _build_groth16_contract_submission(
+    input_value: Any,
+    *,
+    backend: str,
+    envelope_prefix: bytes,
+    platform_payload: str,
+    envelope_encoding: str,
+    source_domain_label: str,
+    target_domain_label: str,
+    accepted_target_domains: Sequence[int],
+    proof_request_builder: Callable[[Mapping[str, Any]], Mapping[str, Any]],
+) -> Mapping[str, Any]:
+    normalized = _normalize_groth16_contract_submission_input(
+        input_value,
+        backend=backend,
+        envelope_prefix=envelope_prefix,
+        source_domain_label=source_domain_label,
+        target_domain_label=target_domain_label,
+        accepted_target_domains=accepted_target_domains,
+        proof_request_builder=proof_request_builder,
+    )
+    public_input_words_bytes = b"".join(
+        _sccp_message_transparent_public_input_abi_word_bytes(
+            normalized["public_inputs"]
+        )
+    )
+    public_input_words = sccp_message_transparent_public_input_abi_words(
+        normalized["public_inputs"]
+    )
+    call_data = sccp_submit_message_proof_call_data(
+        normalized["proof_bytes"],
+        normalized["public_inputs"],
+        normalized["statement_hash"],
+        normalized["source_domain"],
+    )
+    arguments = (
+        {
+            "key": "proof_bytes",
+            "encoding": "raw_bytes",
+            "bytes": _bytes_to_hex(normalized["proof_bytes"]),
+        },
+        {
+            "key": "public_inputs",
+            "encoding": "abi_bytes32x6",
+            "bytes": _bytes_to_hex(public_input_words_bytes),
+        },
+        {
+            "key": "statement_hash",
+            "encoding": "abi_bytes32",
+            "bytes": normalized["statement_hash"],
+        },
+    )
+    return _immutable_prover_envelope({
+        "version": 1,
+        "proof_family": SCCP_STARK_FRI_PROOF_FAMILY_V1,
+        "verifier_backend": backend,
+        "platform_payload": platform_payload,
+        "envelope_encoding": envelope_encoding,
+        "submission_kind": "contract_call",
+        "verifier_entrypoint": _SCCP_SUBMIT_MESSAGE_PROOF_ENTRYPOINT_V1,
+        "contract_method": SCCP_SUBMIT_MESSAGE_PROOF_ABI_V1,
+        "function_selector": SCCP_SUBMIT_MESSAGE_PROOF_SELECTOR_V1,
+        "source_domain": normalized["source_domain"],
+        "target_domain": normalized["public_inputs"]["target_domain"],
+        "public_inputs": normalized["public_inputs"],
+        "public_input_words": public_input_words,
+        "public_signal_words": normalized["public_signal_words"],
+        "statement_hash": normalized["statement_hash"],
+        "destination_binding_hash": normalized["destination_binding_hash"],
+        "arguments": arguments,
+        "call_data": call_data,
+        "call_data_hex": _bytes_to_hex(call_data),
+        "envelope_bytes": call_data,
+        "envelope_hex": _bytes_to_hex(call_data),
+        "proof_bytes": normalized["proof_bytes"],
+        "public_input_words_bytes": public_input_words_bytes,
+    })
+
+
+def build_evm_sccp_submission(input_value: Any) -> Mapping[str, Any]:
+    """Build EVM-family verifier-contract calldata for a local SCCP proof."""
+
+    return _build_groth16_contract_submission(
+        input_value,
+        backend=SCCP_EVM_GROTH16_BN254_PROOF_BACKEND_V1,
+        envelope_prefix=_SCCP_EVM_GROTH16_PROOF_ENVELOPE_PREFIX_V1,
+        platform_payload="evm_groth16_contract_call",
+        envelope_encoding=SCCP_EVM_CONTRACT_CALL_ABI_TUPLE_V1,
+        source_domain_label="SORA",
+        target_domain_label="ETH or BSC",
+        accepted_target_domains=(SCCP_DOMAIN_ETH, SCCP_DOMAIN_BSC),
+        proof_request_builder=build_evm_sccp_proof_request,
+    )
+
+
+def build_tron_sccp_submission(input_value: Any) -> Mapping[str, Any]:
+    """Build TRON verifier-contract calldata for a local SCCP proof."""
+
+    return _build_groth16_contract_submission(
+        input_value,
+        backend=SCCP_TRON_GROTH16_BN254_PROOF_BACKEND_V1,
+        envelope_prefix=_SCCP_TRON_GROTH16_PROOF_ENVELOPE_PREFIX_V1,
+        platform_payload="tron_contract_call",
+        envelope_encoding=SCCP_TRON_CONTRACT_CALL_ABI_TUPLE_V1,
+        source_domain_label="SORA",
+        target_domain_label="TRON",
+        accepted_target_domains=(SCCP_DOMAIN_TRON,),
+        proof_request_builder=build_tron_sccp_proof_request,
+    )
+
+
+def _normalize_substrate_proof_result(
+    result: Any, request: Mapping[str, Any]
+) -> Mapping[str, Any]:
+    value = _require_mapping(result, "Substrate SCCP proof result")
+    proof_bytes = _to_bytes(
+        _mapping_value_without_aliases(
+            value,
+            "proofResult.proofBytes",
+            "proofBytes",
+            "proof_bytes",
+            "proof",
+        ),
+        "proofBytes",
+    )
+    _require_native_recursive_proof_bytes(proof_bytes)
+    _require_production_substrate_proof_request(request)
+    _require_optional_result_proof_base64_matches(value, proof_bytes)
+    _require_optional_result_backend_matches(
+        _mapping_value(value, "backend"), request["backend"]
+    )
+    result_request_hash = _mapping_optional_value_without_aliases(
+        value,
+        "proofResult.requestHash",
+        "requestHash",
+        "request_hash",
+    )
+    if result_request_hash is not _MISSING:
+        _require_supplied_result_hash_matches(
+            result_request_hash,
+            request["request_hash"],
+            "requestHash",
+        )
+    _require_optional_transparent_result_metadata_matches(value, request)
+    envelope_hash = _bytes_to_hex(
+        _prefixed_blake2b(
+            _SCCP_SUBSTRATE_RUNTIME_PROOF_ENVELOPE_PREFIX_V1,
+            _hex_to_bytes(request["request_hash"], "requestHash", 32) + proof_bytes,
+        )
+    )
+    result_envelope_hash = _mapping_optional_value_without_aliases(
+        value,
+        "proofResult.envelopeHash",
+        "envelopeHash",
+        "envelope_hash",
+    )
+    if result_envelope_hash is not _MISSING:
+        _require_supplied_result_hash_matches(
+            result_envelope_hash,
+            envelope_hash,
+            "envelopeHash",
+        )
+    return _immutable_prover_envelope({
+        "version": 1,
+        "backend": request["backend"],
+        "proof_bytes": proof_bytes,
+        "proof_base64": base64.b64encode(proof_bytes).decode("ascii"),
+        "public_inputs": request["public_inputs"],
+        "bundle_bytes": request["bundle_bytes"],
+        "source_proof_bytes": request["source_proof_bytes"],
+        "proof_context": request["proof_context"],
+        "statement_hash": request["statement_hash"],
+        "destination_binding_hash": request["destination_binding_hash"],
+        "request_hash": request["request_hash"],
+        "envelope_hash": envelope_hash,
+    })
+
+
+def wrap_substrate_sccp_proof_result(
+    proof_bytes: BytesLike, request: Mapping[str, Any]
+) -> Mapping[str, Any]:
+    """Wrap externally generated Substrate runtime proof bytes against a request."""
+
+    return _normalize_substrate_proof_result({"proof_bytes": proof_bytes}, request)
+
+
+def build_substrate_sccp_submission(input_value: Any) -> Mapping[str, Any]:
+    """Build a SCALE runtime-call envelope for a Substrate SCCP proof."""
+
+    value = _require_mapping(input_value, "Substrate SCCP submission input")
+    proof_result_value = _mapping_optional_value_without_aliases(
+        value,
+        "proofResult",
+        "proofResult",
+        "proof_result",
+    )
+    proof_result = None
+    if proof_result_value is not _MISSING and proof_result_value is not None:
+        proof_result = _require_mapping(
+            proof_result_value,
+            "Substrate SCCP proof result",
+        )
+        _require_optional_result_backend_matches(
+            _mapping_value(proof_result, "backend"),
+            SCCP_SUBSTRATE_RUNTIME_PROOF_BACKEND_V1,
+        )
+
+    def input_optional(label: str, *keys: str) -> Any:
+        return _mapping_optional_value_without_aliases(value, label, *keys)
+
+    def result_optional(label: str, *keys: str) -> Any:
+        if proof_result is None:
+            return _MISSING
+        return _mapping_optional_value_without_aliases(proof_result, label, *keys)
+
+    public_inputs_value = input_optional("publicInputs", "publicInputs", "public_inputs")
+    if public_inputs_value is _MISSING and proof_result is not None:
+        public_inputs_value = result_optional(
+            "proofResult.publicInputs",
+            "publicInputs",
+            "public_inputs",
+        )
+    public_inputs = _normalize_transparent_public_inputs(public_inputs_value)
+    if public_inputs["target_domain"] not in _SCCP_SUBSTRATE_RUNTIME_TARGET_DOMAINS_V1:
+        raise TypeError(
+            "Substrate SCCP submissions must target a Substrate-family domain"
+        )
+    result_public_inputs = (
+        _MISSING
+        if proof_result is None
+        else result_optional("proofResult.publicInputs", "publicInputs", "public_inputs")
+    )
+    if (
+        result_public_inputs is not _MISSING
+        and _normalize_transparent_public_inputs(result_public_inputs) != public_inputs
+    ):
+        raise TypeError("publicInputs must match proofResult.publicInputs")
+
+    expected_public_inputs_bytes = (
+        canonical_sccp_message_transparent_public_inputs_bytes(public_inputs)
+    )
+    public_inputs_bytes_value = input_optional(
+        "publicInputsBytes",
+        "publicInputsBytes",
+        "public_inputs_bytes",
+    )
+    public_inputs_bytes = (
+        expected_public_inputs_bytes
+        if public_inputs_bytes_value is _MISSING
+        else _to_bytes(public_inputs_bytes_value, "publicInputsBytes")
+    )
+    if public_inputs_bytes != expected_public_inputs_bytes:
+        raise TypeError(
+            "publicInputsBytes must match canonical SCCP transparent public inputs"
+        )
+
+    bundle_bytes_value = input_optional("bundleBytes", "bundleBytes", "bundle_bytes")
+    result_bundle_bytes_value = (
+        _MISSING
+        if proof_result is None
+        else result_optional("proofResult.bundleBytes", "bundleBytes", "bundle_bytes")
+    )
+    bundle_bytes = _require_non_empty_bytes(
+        bundle_bytes_value
+        if bundle_bytes_value is not _MISSING
+        else result_bundle_bytes_value,
+        "bundleBytes",
+    )
+    if (
+        result_bundle_bytes_value is not _MISSING
+        and _to_bytes(result_bundle_bytes_value, "proofResult.bundleBytes")
+        != bundle_bytes
+    ):
+        raise TypeError("bundleBytes must match proofResult.bundleBytes")
+
+    source_proof_value = input_optional(
+        "sourceProofBytes",
+        "sourceProofBytes",
+        "source_proof_bytes",
+    )
+    result_source_proof_value = (
+        _MISSING
+        if proof_result is None
+        else result_optional(
+            "proofResult.sourceProofBytes",
+            "sourceProofBytes",
+            "source_proof_bytes",
+        )
+    )
+    source_proof_bytes = _require_optional_nonzero_bytes(
+        source_proof_value
+        if source_proof_value is not _MISSING
+        else result_source_proof_value
+        if result_source_proof_value is not _MISSING
+        else b"",
+        "sourceProofBytes",
+    )
+    if (
+        result_source_proof_value is not _MISSING
+        and _to_bytes(result_source_proof_value, "proofResult.sourceProofBytes")
+        != source_proof_bytes
+    ):
+        raise TypeError("sourceProofBytes must match proofResult.sourceProofBytes")
+
+    source_domain = _normalize_optional_u32_without_aliases(
+        value,
+        "sourceDomain",
+        SCCP_DOMAIN_SORA,
+        "sourceDomain",
+        "source_domain",
+    )
+    if source_domain != SCCP_DOMAIN_SORA:
+        raise TypeError("Substrate SCCP submissions must start from SORA")
+
+    proof_context_value = input_optional("proofContext", "proofContext", "proof_context")
+    result_proof_context_value = (
+        _MISSING
+        if proof_result is None
+        else result_optional("proofResult.proofContext", "proofContext", "proof_context")
+    )
+    proof_context_source = (
+        proof_context_value
+        if proof_context_value is not _MISSING
+        else result_proof_context_value
+        if result_proof_context_value is not _MISSING
+        else value
+    )
+    if not isinstance(proof_context_source, Mapping):
+        raise TypeError("proofContext must be an object")
+
+    statement_hash_value = input_optional("statementHash", "statementHash", "statement_hash")
+    context_statement_hash_value = _mapping_optional_value_without_aliases(
+        proof_context_source,
+        "proofContext.statementHash",
+        "statementHash",
+        "statement_hash",
+    )
+    result_statement_hash_value = (
+        _MISSING
+        if proof_result is None
+        else result_optional("proofResult.statementHash", "statementHash", "statement_hash")
+    )
+    statement_hash = _normalize_nonzero_hex32(
+        statement_hash_value
+        if statement_hash_value is not _MISSING
+        else context_statement_hash_value
+        if context_statement_hash_value is not _MISSING
+        else result_statement_hash_value,
+        "statementHash",
+    )
+    if result_statement_hash_value is not _MISSING:
+        _require_supplied_result_hash_matches(
+            result_statement_hash_value,
+            statement_hash,
+            "statementHash",
+        )
+
+    destination_binding_hash_value = input_optional(
+        "destinationBindingHash",
+        "destinationBindingHash",
+        "destination_binding_hash",
+    )
+    context_destination_binding_hash_value = _mapping_optional_value_without_aliases(
+        proof_context_source,
+        "proofContext.destinationBindingHash",
+        "destinationBindingHash",
+        "destination_binding_hash",
+    )
+    result_destination_binding_hash_value = (
+        _MISSING
+        if proof_result is None
+        else result_optional(
+            "proofResult.destinationBindingHash",
+            "destinationBindingHash",
+            "destination_binding_hash",
+        )
+    )
+    destination_binding_hash = _normalize_nonzero_hex32(
+        destination_binding_hash_value
+        if destination_binding_hash_value is not _MISSING
+        else context_destination_binding_hash_value
+        if context_destination_binding_hash_value is not _MISSING
+        else result_destination_binding_hash_value,
+        "destinationBindingHash",
+    )
+    if result_destination_binding_hash_value is not _MISSING:
+        _require_supplied_result_hash_matches(
+            result_destination_binding_hash_value,
+            destination_binding_hash,
+            "destinationBindingHash",
+        )
+
+    proof_bytes_value = input_optional("proofBytes", "proofBytes", "proof_bytes")
+    result_proof_bytes_value = (
+        _MISSING
+        if proof_result is None
+        else result_optional(
+            "proofResult.proofBytes",
+            "proofBytes",
+            "proof_bytes",
+            "proof",
+        )
+    )
+    proof_bytes = _to_bytes(
+        proof_bytes_value
+        if proof_bytes_value is not _MISSING
+        else result_proof_bytes_value,
+        "proofBytes",
+    )
+    _require_native_recursive_proof_bytes(proof_bytes)
+    if (
+        result_proof_bytes_value is not _MISSING
+        and _to_bytes(result_proof_bytes_value, "proofResult.proofBytes")
+        != proof_bytes
+    ):
+        raise TypeError("proofBytes must match proofResult.proofBytes")
+
+    expected_request = build_substrate_sccp_proof_request(
+        {
+            "public_inputs": public_inputs,
+            "bundle_bytes": bundle_bytes,
+            "source_proof_bytes": source_proof_bytes,
+            "statement_hash": statement_hash,
+            "destination_binding_hash": destination_binding_hash,
+            "source_domain": source_domain,
+        }
+    )
+    if proof_result is not None:
+        wrapped_result = _normalize_substrate_proof_result(
+            proof_result,
+            expected_request,
+        )
+        if wrapped_result["proof_bytes"] != proof_bytes:
+            raise TypeError("proofBytes must match proofResult.proofBytes")
+
+    runtime_call = _encode_substrate_runtime_call(
+        (proof_bytes, public_inputs_bytes, bundle_bytes)
+    )
+    arguments = (
+        {
+            "key": "proof_bytes",
+            "encoding": "raw_bytes",
+            "bytes": _bytes_to_hex(proof_bytes),
+        },
+        {
+            "key": "public_inputs",
+            "encoding": "raw_bytes",
+            "bytes": _bytes_to_hex(public_inputs_bytes),
+        },
+        {
+            "key": "bundle_bytes",
+            "encoding": "raw_bytes",
+            "bytes": _bytes_to_hex(bundle_bytes),
+        },
+    )
+    return _immutable_prover_envelope({
+        "version": 1,
+        "proof_family": SCCP_STARK_FRI_PROOF_FAMILY_V1,
+        "verifier_backend": SCCP_SUBSTRATE_RUNTIME_PROOF_BACKEND_V1,
+        "platform_payload": "substrate_runtime_call",
+        "envelope_encoding": SCCP_SUBSTRATE_RUNTIME_CALL_SCALE_V1,
+        "submission_kind": "runtime_call",
+        "verifier_entrypoint": SCCP_SUBSTRATE_SUBMIT_MESSAGE_PROOF_ENTRYPOINT_V1,
+        "source_domain": source_domain,
+        "target_domain": public_inputs["target_domain"],
+        "public_inputs": public_inputs,
+        "proof_context": expected_request["proof_context"],
+        "statement_hash": statement_hash,
+        "destination_binding_hash": destination_binding_hash,
+        "request_hash": expected_request["request_hash"],
+        "arguments": arguments,
+        "runtime_call": runtime_call,
+        "runtime_call_hex": _bytes_to_hex(runtime_call),
+        "envelope_bytes": runtime_call,
+        "envelope_hex": _bytes_to_hex(runtime_call),
+        "proof_bytes": proof_bytes,
+        "public_inputs_bytes": public_inputs_bytes,
+        "bundle_bytes": bundle_bytes,
+    })
+
+
+async def _maybe_await(value: Union[Any, Awaitable[Any]]) -> Any:
+    if inspect.isawaitable(value):
+        return await value
+    return value
+
+
+async def _resolve_sccp_witness(
+    witness_provider: Optional[Any],
+    input_value: Any,
+    options: Mapping[str, Any],
+) -> Any:
+    if witness_provider is None:
+        return input_value
+
+    input_snapshot = _clone_prover_callback_value(input_value)
+    resolver_aliases = []
+    for method_name in ("resolve_witness", "resolveWitness"):
+        try:
+            resolver_aliases.append(
+                (method_name, getattr(witness_provider, method_name))
+            )
+        except AttributeError:
+            continue
+    if len(resolver_aliases) > 1:
+        raise TypeError("witness_provider resolver must not use multiple aliases")
+    if resolver_aliases:
+        resolver = resolver_aliases[0][1]
+        if callable(resolver):
+            return await _maybe_await(resolver(input_snapshot, options))
+
+    if callable(witness_provider):
+        return await _maybe_await(witness_provider(input_snapshot, options))
+
+    raise TypeError(
+        "witness_provider must be callable or expose resolve_witness/resolveWitness"
+    )
+
+
+def _clone_prover_callback_value(value: Any) -> Any:
+    if isinstance(value, Mapping):
+        return {key: _clone_prover_callback_value(child) for key, child in value.items()}
+    if isinstance(value, list):
+        return [_clone_prover_callback_value(child) for child in value]
+    if isinstance(value, tuple):
+        return tuple(_clone_prover_callback_value(child) for child in value)
+    if isinstance(value, (bytes, bytearray, memoryview)):
+        return bytes(value)
+    return value
+
+
+def _clone_prover_callback_request(request: Mapping[str, Any]) -> Mapping[str, Any]:
+    return _immutable_prover_envelope(
+        {
+            key: _clone_prover_callback_value(value)
+            for key, value in request.items()
+        }
+    )
+
+
+class SolanaSccpSourceStateProver:
+    """Injectable Solana source-state prover facade for UI and mobile proof tooling."""
+
+    def __init__(self, *, prove: Optional[SourceStateProofFn] = None) -> None:
+        self.prove_fn = prove
+
+    async def prove_request(
+        self,
+        request: Mapping[str, Any],
+        **options: Any,
+    ) -> Mapping[str, Any]:
+        """Generate a checked Solana source-state proof capsule for one request."""
+
+        if self.prove_fn is None:
+            raise SolanaSccpSourceStateProverUnavailableError(
+                "Solana SCCP source-state prover is not linked; provide a UI-safe "
+                "prove function before generating source-state proof capsules"
+            )
+        _normalize_solana_source_state_proof_request_for_wrapping(request)
+        callback_request = _clone_prover_callback_request(request)
+        result = await _maybe_await(self.prove_fn(callback_request, options))
+        return wrap_solana_sccp_source_state_verification_proof(
+            _source_state_proof_bytes_from_result(result, callback_request),
+            callback_request,
+        )
+
+    async def prove_accounts_lt_hash(
+        self,
+        input_value: Any,
+        **options: Any,
+    ) -> Mapping[str, Any]:
+        """Build and prove the nested Solana AccountsLtHash source-state request."""
+
+        return await self.prove_request(
+            build_solana_sccp_accounts_lt_hash_proof_request(input_value),
+            **options,
+        )
+
+    async def prove_full_light_client_audit(
+        self,
+        input_value: Any,
+        **options: Any,
+    ) -> Mapping[str, Any]:
+        """Build and prove the three role-separated Solana full-light audit requests."""
+
+        requests = build_solana_sccp_full_light_client_audit_proof_requests(input_value)
+        return _immutable_prover_envelope({
+            "tower_replay": await self.prove_request(
+                requests["tower_replay"],
+                **options,
+            ),
+            "full_accountsdb_lattice": await self.prove_request(
+                requests["full_accountsdb_lattice"],
+                **options,
+            ),
+            "bank_fork_choice": await self.prove_request(
+                requests["bank_fork_choice"],
+                **options,
+            ),
+        })
+
+
+class SolanaSccpProver:
+    """Injectable Solana SCCP prover facade for web/mobile-adjacent Python tooling."""
+
+    def __init__(
+        self,
+        *,
+        witness_provider: Optional[Any] = None,
+        prove: Optional[ProofFn] = None,
+    ) -> None:
+        self.witness_provider = witness_provider
+        self.prove_fn = prove
+
+    async def build_request(self, input_value: Any, **options: Any) -> Mapping[str, Any]:
+        """Resolve witness input and build a deterministic local-prover request."""
+
+        witness = await _resolve_sccp_witness(
+            self.witness_provider, input_value, options
+        )
+        return build_solana_sccp_proof_request(witness)
+
+    async def prove(self, input_value: Any, **options: Any) -> Mapping[str, Any]:
+        """Generate and normalize a Solana SCCP proof using the linked prover."""
+
+        request = await self.build_request(input_value, **options)
+        if self.prove_fn is None:
+            raise SolanaSccpProverUnavailableError(
+                "Solana SCCP local prover is not linked; provide a pure Python prove function "
+                "before generating production proofs"
+            )
+        _require_production_solana_proof_request(request)
+        result = await _maybe_await(
+            self.prove_fn(_clone_prover_callback_request(request), options)
+        )
+        return _normalize_solana_proof_result(result, request)
+
+
+class TonSccpProver:
+    """Injectable TON SCCP prover facade for web/mobile-adjacent Python tooling."""
+
+    def __init__(
+        self,
+        *,
+        witness_provider: Optional[Any] = None,
+        prove: Optional[ProofFn] = None,
+    ) -> None:
+        self.witness_provider = witness_provider
+        self.prove_fn = prove
+
+    async def build_request(self, input_value: Any, **options: Any) -> Mapping[str, Any]:
+        """Resolve witness input and build a deterministic local-prover request."""
+
+        witness = await _resolve_sccp_witness(
+            self.witness_provider, input_value, options
+        )
+        return build_ton_sccp_proof_request(witness)
+
+    async def prove(self, input_value: Any, **options: Any) -> Mapping[str, Any]:
+        """Generate and normalize a TON SCCP proof using the linked prover."""
+
+        request = await self.build_request(input_value, **options)
+        if self.prove_fn is None:
+            raise TonSccpProverUnavailableError(
+                "TON SCCP local prover is not linked; provide a pure Python prove function "
+                "before generating production proofs"
+            )
+        _require_production_ton_proof_request(request)
+        result = await _maybe_await(
+            self.prove_fn(_clone_prover_callback_request(request), options)
+        )
+        return _normalize_ton_proof_result(result, request)
+
+
+class EvmSccpProver:
+    """Injectable EVM-family SCCP Groth16 prover facade for Python proof tooling."""
+
+    def __init__(
+        self,
+        *,
+        witness_provider: Optional[Any] = None,
+        prove: Optional[ProofFn] = None,
+    ) -> None:
+        self.witness_provider = witness_provider
+        self.prove_fn = prove
+
+    async def build_request(self, input_value: Any, **options: Any) -> Mapping[str, Any]:
+        """Resolve witness input and build a deterministic local-prover request."""
+
+        witness = await _resolve_sccp_witness(
+            self.witness_provider, input_value, options
+        )
+        return build_evm_sccp_proof_request(witness)
+
+    async def prove(self, input_value: Any, **options: Any) -> Mapping[str, Any]:
+        """Generate and normalize an EVM-family SCCP Groth16 proof using the linked prover."""
+
+        request = await self.build_request(input_value, **options)
+        if self.prove_fn is None:
+            raise EvmSccpProverUnavailableError(
+                "EVM-family SCCP Groth16 prover is not linked; provide a pure Python "
+                "prove function before generating production proofs"
+            )
+        _require_production_evm_proof_request(request)
+        result = await _maybe_await(
+            self.prove_fn(_clone_prover_callback_request(request), options)
+        )
+        return _normalize_evm_proof_result(result, request)
+
+
+class TronSccpProver:
+    """Injectable TRON SCCP Groth16 prover facade for Python proof tooling."""
+
+    def __init__(
+        self,
+        *,
+        witness_provider: Optional[Any] = None,
+        prove: Optional[ProofFn] = None,
+    ) -> None:
+        self.witness_provider = witness_provider
+        self.prove_fn = prove
+
+    async def build_request(self, input_value: Any, **options: Any) -> Mapping[str, Any]:
+        """Resolve witness input and build a deterministic local-prover request."""
+
+        witness = await _resolve_sccp_witness(
+            self.witness_provider, input_value, options
+        )
+        return build_tron_sccp_proof_request(witness)
+
+    async def prove(self, input_value: Any, **options: Any) -> Mapping[str, Any]:
+        """Generate and normalize a TRON SCCP Groth16 proof using the linked prover."""
+
+        request = await self.build_request(input_value, **options)
+        if self.prove_fn is None:
+            raise TronSccpProverUnavailableError(
+                "TRON SCCP Groth16 prover is not linked; provide a pure Python prove "
+                "function before generating production proofs"
+            )
+        _require_production_tron_proof_request(request)
+        result = await _maybe_await(
+            self.prove_fn(_clone_prover_callback_request(request), options)
+        )
+        return _normalize_tron_proof_result(result, request)
+
+
+class SubstrateSccpProver:
+    """Injectable Substrate SCCP runtime prover facade for Python proof tooling."""
+
+    def __init__(
+        self,
+        *,
+        witness_provider: Optional[Any] = None,
+        prove: Optional[ProofFn] = None,
+    ) -> None:
+        self.witness_provider = witness_provider
+        self.prove_fn = prove
+
+    async def build_request(self, input_value: Any, **options: Any) -> Mapping[str, Any]:
+        """Resolve witness input and build a deterministic local-prover request."""
+
+        witness = await _resolve_sccp_witness(
+            self.witness_provider, input_value, options
+        )
+        return build_substrate_sccp_proof_request(witness)
+
+    async def prove(self, input_value: Any, **options: Any) -> Mapping[str, Any]:
+        """Generate and normalize a Substrate SCCP runtime proof using the linked prover."""
+
+        request = await self.build_request(input_value, **options)
+        if self.prove_fn is None:
+            raise SubstrateSccpProverUnavailableError(
+                "Substrate SCCP runtime prover is not linked; provide a pure Python "
+                "prove function before generating production proofs"
+            )
+        _require_production_substrate_proof_request(request)
+        result = await _maybe_await(
+            self.prove_fn(_clone_prover_callback_request(request), options)
+        )
+        return _normalize_substrate_proof_result(result, request)

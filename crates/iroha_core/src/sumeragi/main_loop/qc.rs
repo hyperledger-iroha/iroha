@@ -238,7 +238,7 @@ pub(super) fn select_commit_root_signers_by_stake(
 }
 
 impl Actor {
-    fn maybe_rebroadcast_near_quorum_new_view_votes(
+    pub(super) fn maybe_rebroadcast_near_quorum_new_view_votes(
         &mut self,
         block_hash: HashOf<BlockHeader>,
         height: u64,
@@ -266,12 +266,14 @@ impl Actor {
         }
 
         let targets = self.new_view_rebroadcast_targets(block_hash, height, view);
-        let rebroadcasted = self.rebroadcast_block_votes_to_targets(
+        let rebroadcasted = self.rebroadcast_block_votes_to_targets_with_backpressure(
             crate::sumeragi::consensus::Phase::NewView,
             block_hash,
             height,
             view,
             &targets,
+            true,
+            "near_quorum_new_view_rebroadcast",
         );
         if rebroadcasted == 0 {
             return 0;
@@ -322,24 +324,34 @@ impl Actor {
                 return false;
             }
         }
-        if self
-            .local_same_slot_vote(
-                crate::sumeragi::consensus::Phase::NewView,
-                height,
-                view,
-                epoch,
-            )
-            .is_some()
-        {
-            return false;
-        }
+        let local_same_slot_vote = self.local_same_slot_vote(
+            crate::sumeragi::consensus::Phase::NewView,
+            height,
+            view,
+            epoch,
+        );
         let Some(local_idx) = self.local_validator_index_for_topology(signature_topology) else {
             return false;
         };
-        let mut selected: Option<(crate::sumeragi::consensus::QcRef, BTreeSet<ValidatorIndex>)> =
-            None;
+        let mut selected: Option<(
+            crate::sumeragi::consensus::QcRef,
+            BTreeSet<ValidatorIndex>,
+            bool,
+        )> = None;
         for (highest_qc, group) in groups {
             if highest_qc.subject_block_hash != block_hash || group.contains(&local_idx) {
+                continue;
+            }
+            if let Some(existing) = local_same_slot_vote.as_ref()
+                && !Self::new_view_highest_qc_supersedes_same_slot_vote(
+                    existing,
+                    height,
+                    view,
+                    epoch,
+                    chain_order_binding,
+                    *highest_qc,
+                )
+            {
                 continue;
             }
             let mut with_local = group.clone();
@@ -367,21 +379,34 @@ impl Actor {
                     .unwrap_or(false)
                 }
             };
-            if !completes {
+            let frontier_catch_up = !completes
+                && self.should_emit_frontier_new_view_catch_up_vote(
+                    height,
+                    view,
+                    *highest_qc,
+                    group,
+                    local_idx,
+                );
+            if !completes && !frontier_catch_up {
                 continue;
             }
-            let replace = selected.as_ref().is_none_or(|(best_qc, best_group)| {
-                super::new_view_highest_qc_rank(*highest_qc)
-                    > super::new_view_highest_qc_rank(*best_qc)
-                    || (super::new_view_highest_qc_rank(*highest_qc)
-                        == super::new_view_highest_qc_rank(*best_qc)
-                        && group.len() > best_group.len())
-            });
+            let replace = selected
+                .as_ref()
+                .is_none_or(|(best_qc, best_group, best_completes)| {
+                    if completes != *best_completes {
+                        return completes;
+                    }
+                    super::new_view_highest_qc_rank(*highest_qc)
+                        > super::new_view_highest_qc_rank(*best_qc)
+                        || (super::new_view_highest_qc_rank(*highest_qc)
+                            == super::new_view_highest_qc_rank(*best_qc)
+                            && group.len() > best_group.len())
+                });
             if replace {
-                selected = Some((*highest_qc, with_local));
+                selected = Some((*highest_qc, with_local, completes));
             }
         }
-        let Some((highest_qc, signers_with_local)) = selected else {
+        let Some((highest_qc, signers_with_local, completes)) = selected else {
             return false;
         };
         let emitted = self.emit_new_view_vote_to_complete_near_quorum(
@@ -391,7 +416,7 @@ impl Actor {
             emission_topology,
             chain_order_binding,
         );
-        if emitted {
+        if emitted && completes {
             info!(
                 height,
                 view,
@@ -404,8 +429,51 @@ impl Actor {
                 highest_block = %highest_qc.subject_block_hash,
                 "emitted late NEW_VIEW vote to complete same-highest near quorum"
             );
+        } else if emitted {
+            info!(
+                height,
+                view,
+                block = %block_hash,
+                signer = local_idx,
+                signers_after_local = signers_with_local.len(),
+                required,
+                highest_height = highest_qc.height,
+                highest_view = highest_qc.view,
+                highest_block = %highest_qc.subject_block_hash,
+                "emitted frontier catch-up NEW_VIEW vote for same-highest support"
+            );
         }
         emitted
+    }
+
+    pub(super) fn should_emit_frontier_new_view_catch_up_vote(
+        &self,
+        height: u64,
+        view: u64,
+        highest_qc: crate::sumeragi::consensus::QcRef,
+        group: &BTreeSet<ValidatorIndex>,
+        local_idx: ValidatorIndex,
+    ) -> bool {
+        if !self.config.resilience.enabled
+            || view == 0
+            || group.is_empty()
+            || group.contains(&local_idx)
+        {
+            return false;
+        }
+        let committed_height = self.committed_height_snapshot();
+        if height != committed_height.saturating_add(1)
+            || !self.highest_qc_is_canonical_committed_tip(highest_qc)
+        {
+            return false;
+        }
+        let Some(current_view) = self.phase_tracker.current_view(height) else {
+            return false;
+        };
+        if view > current_view.saturating_add(1) {
+            return false;
+        }
+        true
     }
 
     pub(super) fn npos_stake_roster_for_qc(
@@ -663,6 +731,24 @@ impl Actor {
                 return None;
             }
             let signer_peer = self.vote_signer_peer(vote)?;
+            let certified_commit_supersedes = self
+                .certified_commit_hash_supersedes_same_height_vote_conflict(
+                    phase, block_hash, height, view, vote,
+                );
+            if certified_commit_supersedes {
+                info!(
+                    phase = ?phase,
+                    height,
+                    view,
+                    epoch,
+                    block = %block_hash,
+                    conflicting_view = vote.view,
+                    conflicting_block = %vote.block_hash,
+                    signer_peer = ?signer_peer,
+                    "allowing QC aggregation: committed hash supersedes raw same-height signer history"
+                );
+                return None;
+            }
             let new_view_qc_supersedes = highest_qc
                 .or_else(|| self.proposal_or_new_view_highest_qc_for_slot(height, view))
                 .is_some_and(|highest_qc| {
@@ -694,7 +780,7 @@ impl Actor {
         })
     }
 
-    fn try_recover_missing_block_from_local_rbc_session(
+    pub(super) fn try_recover_missing_block_from_local_rbc_session(
         &mut self,
         block_hash: HashOf<BlockHeader>,
         height: u64,
@@ -1182,7 +1268,7 @@ impl Actor {
         )
     }
 
-    fn note_frontier_commit_qc_observed(
+    pub(super) fn note_frontier_commit_qc_observed(
         &mut self,
         block_hash: HashOf<BlockHeader>,
         height: u64,
@@ -1250,6 +1336,7 @@ impl Actor {
             }
             return;
         }
+        self.note_authoritative_slot_owner(height, resolved_view, block_hash);
         let _ = self.handle_frontier_slot_event(
             now,
             super::FrontierSlotEvent::OnCommitQcObserved {
@@ -4812,6 +4899,37 @@ impl Actor {
             return true;
         }
 
+        if !block_known
+            && !quorum_met
+            && matches!(phase, crate::sumeragi::consensus::Phase::Commit)
+            && self
+                .cached_new_view_qc_highest_for_slot(height, view)
+                .is_some_and(|highest_qc| {
+                    self.cached_new_view_qc_extends_committed_frontier(
+                        height, view, view, highest_qc,
+                    )
+                })
+        {
+            let requested = self.request_missing_commit_vote_payload(
+                block_hash,
+                height,
+                view,
+                signers,
+                signature_topology,
+                false,
+                "commit_vote_after_new_view_qc",
+            );
+            debug!(
+                phase = ?phase,
+                height,
+                view,
+                block = %block_hash,
+                signers = signers.len(),
+                requested,
+                "checked missing commit-vote payload after cached NEW_VIEW QC"
+            );
+        }
+
         if !block_known && quorum_met {
             crate::sumeragi::status::inc_qc_quorum_without_qc();
             match consensus_mode {
@@ -6894,6 +7012,8 @@ impl Actor {
                 ) {
                     outcome
                 } else {
+                    let repair_started =
+                        self.maybe_repair_rejected_frontier_commit_qc(&qc, &topology, &err);
                     record_qc_validation_error(self.telemetry_handle(), &err);
                     if let Some(evidence) = evidence {
                         let _ = self.handle_evidence(evidence);
@@ -6904,6 +7024,7 @@ impl Actor {
                         view = qc.view,
                         phase = ?qc.phase,
                         block = %qc.subject_block_hash,
+                        repair_started,
                         "rejecting QC without valid signatures"
                     );
                     let handling_reason = match err {
@@ -7105,6 +7226,11 @@ impl Actor {
                 if matches!(qc.phase, crate::sumeragi::consensus::Phase::NewView) {
                     let _ = self.replay_deferred_votes_for_slot(qc.height, qc.view, "new_view_qc");
                     let _ = self.maybe_retry_local_commit_votes_after_new_view_qc(
+                        &qc,
+                        topology.as_ref(),
+                        "new_view_qc",
+                    );
+                    let _ = self.request_missing_commit_vote_payloads_after_new_view_qc(
                         &qc,
                         topology.as_ref(),
                         "new_view_qc",
@@ -7427,6 +7553,11 @@ impl Actor {
                 topology.as_ref(),
                 "new_view_qc",
             );
+            let _ = self.request_missing_commit_vote_payloads_after_new_view_qc(
+                &qc,
+                topology.as_ref(),
+                "new_view_qc",
+            );
         }
         iroha_logger::info!(
             height = qc.height,
@@ -7506,6 +7637,88 @@ impl Actor {
             None,
         );
         Ok(())
+    }
+
+    fn maybe_repair_rejected_frontier_commit_qc(
+        &mut self,
+        qc: &crate::sumeragi::consensus::Qc,
+        topology: &super::network_topology::Topology,
+        err: &QcValidationError,
+    ) -> bool {
+        if !matches!(qc.phase, crate::sumeragi::consensus::Phase::Commit)
+            || qc.height != self.committed_height_snapshot().saturating_add(1)
+            || !matches!(
+                err,
+                QcValidationError::AggregateMismatch
+                    | QcValidationError::MissingVotes { .. }
+                    | QcValidationError::InsufficientSigners { .. }
+                    | QcValidationError::StakeSnapshotUnavailable
+                    | QcValidationError::StakeQuorumMissing
+            )
+        {
+            return false;
+        }
+        let local_round_known = self
+            .local_signed_block_for_hash(qc.subject_block_hash)
+            .is_some_and(|block| {
+                let header = block.header();
+                header.height().get() == qc.height && header.view_change_index() == qc.view
+            });
+        if !local_round_known {
+            return false;
+        }
+
+        self.try_form_qc_from_votes(
+            crate::sumeragi::consensus::Phase::Commit,
+            qc.subject_block_hash,
+            qc.height,
+            qc.view,
+            qc.epoch,
+            topology,
+        );
+        if self
+            .cached_commit_qc_for_block(qc.subject_block_hash, qc.height, qc.view)
+            .is_some()
+        {
+            self.request_commit_pipeline_for_pending(
+                qc.subject_block_hash,
+                super::status::RoundEventCauseTrace::VoteReceived,
+                None,
+            );
+            info!(
+                height = qc.height,
+                view = qc.view,
+                block = %qc.subject_block_hash,
+                ?err,
+                "formed local commit QC while rejecting invalid incoming commit QC"
+            );
+            return true;
+        }
+
+        let targets = self.known_block_commit_qc_recovery_targets(
+            qc.subject_block_hash,
+            qc.height,
+            qc.view,
+            topology.as_ref(),
+        );
+        let requested = self.maybe_request_known_block_commit_qc_recovery(
+            qc.subject_block_hash,
+            qc.height,
+            qc.view,
+            &targets,
+            None,
+            "rejected_frontier_commit_qc",
+        );
+        if requested {
+            info!(
+                height = qc.height,
+                view = qc.view,
+                block = %qc.subject_block_hash,
+                ?err,
+                "armed known-block commit-QC recovery while rejecting invalid incoming commit QC"
+            );
+        }
+        requested
     }
 
     pub(super) fn recover_qc_from_aggregate(

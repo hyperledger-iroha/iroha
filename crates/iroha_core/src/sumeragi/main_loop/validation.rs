@@ -514,7 +514,12 @@ impl Actor {
                 .get(&(height, view))
                 .and_then(|round| round.slot(hash))
                 .is_some_and(|slot| {
-                    matches!(
+                    !matches!(
+                        slot.slot_state,
+                        super::vnext::SlotState::Recovering { .. }
+                            | super::vnext::SlotState::Aborted { .. }
+                            | super::vnext::SlotState::Committed { .. }
+                    ) && matches!(
                         slot.validation,
                         super::vnext::ValidationState::Queued { .. }
                             | super::vnext::ValidationState::Running { .. }

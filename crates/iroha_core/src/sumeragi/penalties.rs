@@ -470,20 +470,43 @@ fn consensus_mode_for_evidence(
 }
 
 fn npos_leader_index(seed: [u8; 32], height: u64, view: u64, topology_len: usize) -> Option<usize> {
-    use iroha_crypto::blake2::{Blake2b512, Digest as _};
-
     if topology_len == 0 {
         return None;
     }
+    let slot = usize::try_from(view % u64::try_from(topology_len).ok()?).ok()?;
+    Some(
+        npos_shuffled_indices(seed, height, topology_len)
+            .get(slot)
+            .copied()?,
+    )
+}
+
+fn npos_shuffled_indices(seed: [u8; 32], height: u64, len: usize) -> Vec<usize> {
+    let mut slots: Vec<usize> = (0..len).collect();
+    let mut shuffled = Vec::with_capacity(len);
+    let mut ctr: u64 = 0;
+    while !slots.is_empty() {
+        let pos = npos_shuffle_prf_slot(seed, height, ctr, slots.len());
+        shuffled.push(slots.swap_remove(pos));
+        ctr = ctr.saturating_add(1);
+    }
+    shuffled
+}
+
+fn npos_shuffle_prf_slot(seed: [u8; 32], height: u64, ctr: u64, modulus: usize) -> usize {
+    use iroha_crypto::blake2::{Blake2b512, Digest as _};
+
+    debug_assert!(modulus > 0);
+
     let mut hasher = Blake2b512::new();
     iroha_crypto::blake2::digest::Update::update(&mut hasher, &seed);
     iroha_crypto::blake2::digest::Update::update(&mut hasher, &height.to_be_bytes());
-    iroha_crypto::blake2::digest::Update::update(&mut hasher, &view.to_be_bytes());
+    iroha_crypto::blake2::digest::Update::update(&mut hasher, &ctr.to_be_bytes());
     let digest = iroha_crypto::blake2::Digest::finalize(hasher);
     let mut w = [0u8; 8];
     w.copy_from_slice(&digest[..8]);
-    let modulus = u128::try_from(topology_len).ok()?;
-    Some((u128::from(u64::from_be_bytes(w)) % modulus) as usize)
+    let modulus = u128::try_from(modulus).expect("candidate length fits u128");
+    (u128::from(u64::from_be_bytes(w)) % modulus) as usize
 }
 
 fn canonicalize_index_for_view(
@@ -1027,6 +1050,30 @@ mod tests {
                 .expect("canonical index");
         let expected = ValidatorIndex::try_from(3_usize).expect("expected index");
         assert_eq!(canonical, expected);
+    }
+
+    #[test]
+    fn npos_leader_index_cycles_through_height_permutation_without_repeats() {
+        let seed = [0x35_u8; 32];
+        let height = 19;
+        let topology_len = 5;
+        let first_cycle: Vec<_> = (0..topology_len)
+            .map(|view| {
+                npos_leader_index(seed, height, view as u64, topology_len)
+                    .expect("leader index should resolve")
+            })
+            .collect();
+        let unique: BTreeSet<_> = first_cycle.iter().copied().collect();
+        assert_eq!(
+            unique.len(),
+            topology_len,
+            "one NPoS leader cycle should visit every validator exactly once"
+        );
+        assert_eq!(
+            npos_leader_index(seed, height, topology_len as u64, topology_len),
+            Some(first_cycle[0]),
+            "NPoS leader selection should repeat only after a full cycle"
+        );
     }
 
     fn insert_epoch_seed(state: &State, epoch: u64, seed: [u8; 32]) {

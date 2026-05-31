@@ -2703,15 +2703,12 @@ mod tests {
         );
 
         let block_hash = HashOf::<BlockHeader>::from_untyped_unchecked(Hash::prehashed([9u8; 32]));
-        let rbc_chunk = RbcChunk {
-            block_hash,
-            height: 1,
-            view: 0,
-            epoch: 0,
-            idx: 0,
-            bytes: vec![1, 2, 3],
-        };
-        assert!(!handle.try_incoming_block_message(BlockMessage::RbcChunk(rbc_chunk)));
+        let params = BlockMessage::ConsensusParams(message::ConsensusParamsAdvert {
+            collectors_k: 1,
+            redundant_send_r: 1,
+            membership: None,
+        });
+        assert!(!handle.try_incoming_block_message(params));
 
         let v1 = Vote {
             phase: Phase::Prepare,
@@ -2794,7 +2791,7 @@ mod tests {
     }
 
     #[test]
-    fn try_incoming_rbc_chunk_releases_dedup_on_queue_full() {
+    fn try_incoming_rbc_chunk_waits_when_queue_full_and_dedups_after_enqueue() {
         let (block_payload_tx, _block_payload_rx) = mpsc::sync_channel(TEST_CHANNEL_CAP);
         let (block_tx, _block_rx) = mpsc::sync_channel(TEST_CHANNEL_CAP);
         let (rbc_chunk_tx, rbc_chunk_rx) = mpsc::sync_channel(1);
@@ -2820,7 +2817,7 @@ mod tests {
         );
 
         let block_hash = HashOf::<BlockHeader>::from_untyped_unchecked(Hash::prehashed([9u8; 32]));
-        let rbc_chunk = RbcChunk {
+        let chunk_fill = RbcChunk {
             block_hash,
             height: 1,
             view: 0,
@@ -2828,20 +2825,47 @@ mod tests {
             idx: 0,
             bytes: vec![1, 2, 3],
         };
+        let rbc_chunk = RbcChunk {
+            block_hash,
+            height: 1,
+            view: 0,
+            epoch: 0,
+            idx: 1,
+            bytes: vec![4, 5, 6],
+        };
+        let rbc_chunk_again = rbc_chunk.clone();
         rbc_chunk_tx
-            .send(inbound(BlockMessage::RbcChunk(rbc_chunk.clone())))
+            .send(inbound(BlockMessage::RbcChunk(chunk_fill)))
             .expect("fill queue");
+        let (done_tx, done_rx) = mpsc::channel();
+        let handle_clone = handle.clone();
+        let join = std::thread::spawn(move || {
+            let accepted =
+                handle_clone.try_incoming_block_message(BlockMessage::RbcChunk(rbc_chunk));
+            let _ = done_tx.send(accepted);
+        });
+
         assert!(
-            !handle.try_incoming_block_message(BlockMessage::RbcChunk(rbc_chunk.clone())),
-            "queue full should reject"
+            done_rx.recv_timeout(Duration::from_millis(50)).is_err(),
+            "RBC chunk should wait for queue capacity"
         );
-        let _ = rbc_chunk_rx.try_recv().expect("drain queue");
-        assert!(
-            handle.try_incoming_block_message(BlockMessage::RbcChunk(rbc_chunk)),
-            "dedup should allow retry after drop"
-        );
+        let _ = rbc_chunk_rx.recv().expect("drain queue");
+        let accepted = done_rx
+            .recv_timeout(Duration::from_secs(1))
+            .expect("RBC chunk should be enqueued after space is available");
+        assert!(accepted, "RBC chunk should be accepted after waiting");
+        join.join().expect("join RBC chunk sender");
+
         let received = rbc_chunk_rx.try_recv().expect("queued chunk");
         assert!(matches!(received.message, BlockMessage::RbcChunk(_)));
+        assert!(
+            !handle.try_incoming_block_message(BlockMessage::RbcChunk(rbc_chunk_again)),
+            "queued RBC chunk should be deduplicated"
+        );
+        assert!(matches!(
+            rbc_chunk_rx.try_recv(),
+            Err(mpsc::TryRecvError::Empty)
+        ));
     }
 
     #[test]
@@ -3977,6 +4001,226 @@ mod tests {
             }
         ));
         join.join().expect("join BlockSyncUpdate sender");
+    }
+
+    fn assert_try_incoming_fetch_block_body_waits_when_block_queue_full(with_sender: bool) {
+        const CAP: usize = 1;
+        let (block_payload_tx, _block_payload_rx) = mpsc::sync_channel(CAP);
+        let (block_tx, block_rx) = mpsc::sync_channel(CAP);
+        let (rbc_chunk_tx, _rbc_chunk_rx) = mpsc::sync_channel(CAP);
+        let (vote_tx, _vote_rx) = mpsc::sync_channel(CAP);
+        let (consensus_tx, _consensus_rx) = mpsc::sync_channel(CAP);
+        let (background_tx, _background_rx) = mpsc::sync_channel(CAP);
+        let (lane_tx, _lane_rx) = mpsc::sync_channel(CAP);
+        let vote_dedup: Arc<Mutex<DedupCache<VoteDedupKey>>> = Arc::new(Mutex::new(
+            DedupCache::new(VOTE_DEDUP_CACHE_CAP, VOTE_DEDUP_CACHE_TTL),
+        ));
+        let block_payload_dedup: Arc<Mutex<BlockPayloadDedupCache>> =
+            Arc::new(Mutex::new(BlockPayloadDedupCache::new(
+                BLOCK_PAYLOAD_DEDUP_CACHE_PER_KIND,
+                BLOCK_PAYLOAD_DEDUP_CACHE_TTL,
+            )));
+        let block_tx_fill = block_tx.clone();
+        let handle = SumeragiHandle::new(
+            block_payload_tx,
+            block_tx,
+            rbc_chunk_tx,
+            vote_tx,
+            consensus_tx,
+            background_tx,
+            lane_tx,
+            vote_dedup,
+            block_payload_dedup,
+        );
+
+        let filler = BlockMessage::ConsensusParams(message::ConsensusParamsAdvert {
+            collectors_k: 1,
+            redundant_send_r: 1,
+            membership: None,
+        });
+        block_tx_fill
+            .send(inbound(filler))
+            .expect("fill block ingress channel");
+
+        let requester = PeerId::new(KeyPair::random().public_key().clone());
+        let sender = PeerId::new(KeyPair::random().public_key().clone());
+        let expected_sender = if with_sender {
+            Some(sender.clone())
+        } else {
+            None
+        };
+        let block_hash = HashOf::<BlockHeader>::from_untyped_unchecked(Hash::prehashed([0x42; 32]));
+        let request = message::FetchBlockBody {
+            requester: requester.clone(),
+            block_hash,
+            height: 7,
+            view: 0,
+        };
+
+        let (done_tx, done_rx) = mpsc::channel();
+        let handle_clone = handle.clone();
+        let call_sender = expected_sender.clone();
+        let join = std::thread::spawn(move || {
+            let accepted = if let Some(sender) = call_sender {
+                handle_clone
+                    .try_incoming_block_message_from(sender, BlockMessage::FetchBlockBody(request))
+            } else {
+                handle_clone.try_incoming_block_message(BlockMessage::FetchBlockBody(request))
+            };
+            let _ = done_tx.send(accepted);
+        });
+
+        done_rx
+            .recv_timeout(Duration::from_millis(200))
+            .expect_err("FetchBlockBody should block when block ingress queue is full");
+        let _ = block_rx
+            .recv()
+            .expect("drain block ingress queue to unblock sender");
+        let accepted = done_rx
+            .recv_timeout(Duration::from_secs(1))
+            .expect("FetchBlockBody should enqueue after capacity frees");
+        assert!(accepted, "FetchBlockBody enqueue should succeed");
+        join.join().expect("join FetchBlockBody sender");
+
+        let received = block_rx
+            .try_recv()
+            .expect("FetchBlockBody should be enqueued after capacity frees");
+        match received {
+            InboundBlockMessage {
+                message: BlockMessage::FetchBlockBody(queued),
+                sender,
+                ..
+            } => {
+                assert_eq!(queued.requester, requester);
+                assert_eq!(queued.block_hash, block_hash);
+                assert_eq!(sender, expected_sender);
+            }
+            other => panic!("expected FetchBlockBody, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn try_incoming_block_message_waits_when_block_queue_full_for_fetch_block_body() {
+        assert_try_incoming_fetch_block_body_waits_when_block_queue_full(false);
+    }
+
+    #[test]
+    fn try_incoming_block_message_from_waits_when_block_queue_full_for_fetch_block_body() {
+        assert_try_incoming_fetch_block_body_waits_when_block_queue_full(true);
+    }
+
+    fn assert_try_incoming_commit_qc_fetch_pending_block_waits_when_block_queue_full(
+        with_sender: bool,
+    ) {
+        const CAP: usize = 1;
+        let (block_payload_tx, _block_payload_rx) = mpsc::sync_channel(CAP);
+        let (block_tx, block_rx) = mpsc::sync_channel(CAP);
+        let (rbc_chunk_tx, _rbc_chunk_rx) = mpsc::sync_channel(CAP);
+        let (vote_tx, _vote_rx) = mpsc::sync_channel(CAP);
+        let (consensus_tx, _consensus_rx) = mpsc::sync_channel(CAP);
+        let (background_tx, _background_rx) = mpsc::sync_channel(CAP);
+        let (lane_tx, _lane_rx) = mpsc::sync_channel(CAP);
+        let vote_dedup: Arc<Mutex<DedupCache<VoteDedupKey>>> = Arc::new(Mutex::new(
+            DedupCache::new(VOTE_DEDUP_CACHE_CAP, VOTE_DEDUP_CACHE_TTL),
+        ));
+        let block_payload_dedup: Arc<Mutex<BlockPayloadDedupCache>> =
+            Arc::new(Mutex::new(BlockPayloadDedupCache::new(
+                BLOCK_PAYLOAD_DEDUP_CACHE_PER_KIND,
+                BLOCK_PAYLOAD_DEDUP_CACHE_TTL,
+            )));
+        let handle = SumeragiHandle::new(
+            block_payload_tx,
+            block_tx.clone(),
+            rbc_chunk_tx,
+            vote_tx,
+            consensus_tx,
+            background_tx,
+            lane_tx,
+            vote_dedup,
+            block_payload_dedup,
+        );
+
+        let filler = BlockMessage::ConsensusParams(message::ConsensusParamsAdvert {
+            collectors_k: 1,
+            redundant_send_r: 1,
+            membership: None,
+        });
+        block_tx
+            .send(inbound(filler))
+            .expect("fill block ingress channel");
+
+        let requester = PeerId::new(KeyPair::random().public_key().clone());
+        let sender = PeerId::new(KeyPair::random().public_key().clone());
+        let expected_sender = if with_sender {
+            Some(sender.clone())
+        } else {
+            None
+        };
+        let block_hash = HashOf::<BlockHeader>::from_untyped_unchecked(Hash::prehashed([0x43; 32]));
+        let request = message::FetchPendingBlock {
+            requester: requester.clone(),
+            block_hash,
+            height: 7,
+            view: 1,
+            priority: Some(message::FetchPendingBlockPriority::Consensus),
+            requester_roster_proof_known: None,
+            commit_qc_only: Some(true),
+        };
+
+        let (done_tx, done_rx) = mpsc::channel();
+        let handle_clone = handle.clone();
+        let call_sender = expected_sender.clone();
+        let join = std::thread::spawn(move || {
+            let accepted = if let Some(sender) = call_sender {
+                handle_clone.try_incoming_block_message_from(
+                    sender,
+                    BlockMessage::FetchPendingBlock(request),
+                )
+            } else {
+                handle_clone.try_incoming_block_message(BlockMessage::FetchPendingBlock(request))
+            };
+            let _ = done_tx.send(accepted);
+        });
+
+        done_rx.recv_timeout(Duration::from_millis(200)).expect_err(
+            "commit-QC FetchPendingBlock should block when block ingress queue is full",
+        );
+        let _ = block_rx
+            .recv()
+            .expect("drain block ingress queue to unblock sender");
+        let accepted = done_rx
+            .recv_timeout(Duration::from_secs(1))
+            .expect("commit-QC FetchPendingBlock should enqueue after capacity frees");
+        assert!(accepted, "FetchPendingBlock enqueue should succeed");
+        join.join().expect("join FetchPendingBlock sender");
+
+        let received = block_rx
+            .try_recv()
+            .expect("FetchPendingBlock should be enqueued after capacity frees");
+        match received {
+            InboundBlockMessage {
+                message: BlockMessage::FetchPendingBlock(queued),
+                sender,
+                ..
+            } => {
+                assert_eq!(queued.requester, requester);
+                assert_eq!(queued.block_hash, block_hash);
+                assert_eq!(queued.commit_qc_only, Some(true));
+                assert_eq!(sender, expected_sender);
+            }
+            other => panic!("expected FetchPendingBlock, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn try_incoming_block_message_waits_when_block_queue_full_for_commit_qc_fetch_pending_block() {
+        assert_try_incoming_commit_qc_fetch_pending_block_waits_when_block_queue_full(false);
+    }
+
+    #[test]
+    fn try_incoming_block_message_from_waits_when_block_queue_full_for_commit_qc_fetch_pending_block()
+     {
+        assert_try_incoming_commit_qc_fetch_pending_block_waits_when_block_queue_full(true);
     }
 
     #[test]
@@ -11587,9 +11831,10 @@ impl SumeragiHandle {
     ///
     /// Note: this is a best-effort enqueue that drops messages when queues are saturated
     /// to avoid stalling upstream relays. Block-sync updates and critical payload messages
-    /// (block creation, proposals, and RBC INIT), certified-block fetches, plus RBC READY/DELIVER
-    /// and QC votes/certificates, always use blocking semantics because dropping them can stall
-    /// consensus recovery.
+    /// (block creation, exact body repair, proposals, RBC INIT, and RBC chunks),
+    /// certified-block fetches, consensus-priority/commit-QC-only pending-block fetches,
+    /// plus RBC READY/DELIVER and QC votes/certificates, always use blocking semantics because
+    /// dropping them can stall consensus recovery.
     pub fn try_incoming_block_message(&self, msg: BlockMessage) -> bool {
         let msg = msg.normalize();
         let blocking = matches!(
@@ -11597,13 +11842,23 @@ impl SumeragiHandle {
             BlockMessage::BlockSyncUpdate(_)
                 | BlockMessage::BlockCreated(_)
                 | BlockMessage::BlockBodyResponse(_)
+                | BlockMessage::FetchBlockBody(_)
                 | BlockMessage::CertifiedBlockFetch(_)
+                | BlockMessage::FetchPendingBlock(message::FetchPendingBlock {
+                    priority: Some(message::FetchPendingBlockPriority::Consensus),
+                    ..
+                })
+                | BlockMessage::FetchPendingBlock(message::FetchPendingBlock {
+                    commit_qc_only: Some(true),
+                    ..
+                })
                 | BlockMessage::Proposal(_)
                 | BlockMessage::QcVote(_)
                 | BlockMessage::Qc(_)
                 | BlockMessage::VrfCommit(_)
                 | BlockMessage::VrfReveal(_)
                 | BlockMessage::RbcInit(_)
+                | BlockMessage::RbcChunk(_)
                 | BlockMessage::RbcReady(_)
                 | BlockMessage::RbcDeliver(_)
         );
@@ -11624,13 +11879,23 @@ impl SumeragiHandle {
             BlockMessage::BlockSyncUpdate(_)
                 | BlockMessage::BlockCreated(_)
                 | BlockMessage::BlockBodyResponse(_)
+                | BlockMessage::FetchBlockBody(_)
                 | BlockMessage::CertifiedBlockFetch(_)
+                | BlockMessage::FetchPendingBlock(message::FetchPendingBlock {
+                    priority: Some(message::FetchPendingBlockPriority::Consensus),
+                    ..
+                })
+                | BlockMessage::FetchPendingBlock(message::FetchPendingBlock {
+                    commit_qc_only: Some(true),
+                    ..
+                })
                 | BlockMessage::Proposal(_)
                 | BlockMessage::QcVote(_)
                 | BlockMessage::Qc(_)
                 | BlockMessage::VrfCommit(_)
                 | BlockMessage::VrfReveal(_)
                 | BlockMessage::RbcInit(_)
+                | BlockMessage::RbcChunk(_)
                 | BlockMessage::RbcReady(_)
                 | BlockMessage::RbcDeliver(_)
         );
@@ -12163,9 +12428,8 @@ impl SumeragiHandle {
                     );
                     return false;
                 }
-                // Respect the caller-selected ingress mode so targeted missing-block recovery
-                // chunks can use the blocking path while best-effort callers still drop on
-                // saturation via `try_incoming_block_message`.
+                // Respect the caller-selected ingress mode. Public try paths select blocking
+                // semantics for chunks because dropping payload data can stall DA delivery.
                 let accepted = enqueue_with_mode(
                     &self.rbc_chunks,
                     InboundBlockMessage::new(BlockMessage::RbcChunk(chunk), sender),
@@ -12207,9 +12471,8 @@ impl SumeragiHandle {
                     );
                     return false;
                 }
-                // Respect the caller-selected ingress mode so targeted missing-block recovery
-                // chunks can use the blocking path while best-effort callers still drop on
-                // saturation via `try_incoming_block_message`.
+                // Respect the caller-selected ingress mode. Public try paths select blocking
+                // semantics for chunks because dropping payload data can stall DA delivery.
                 let accepted = enqueue_with_mode(
                     &self.rbc_chunks,
                     InboundBlockMessage::new(BlockMessage::RbcChunk(chunk), sender),

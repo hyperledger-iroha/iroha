@@ -289,4 +289,57 @@ Safety ==
   /\ VrfRevealBindsBody
   /\ PreimagesExcludeMutableSignatures
 
+AllConcretePreimagesMatchSpec ==
+  \A c \in Cases:
+    ActualFields(c) = SpecFields(c)
+
+AllConcretePreimagesBindDomain ==
+  \A c \in Cases:
+    DomainFields \subseteq ActualFields(c)
+
+ConcreteVoteTypeAnchors ==
+  \A c \in VoteCases:
+    /\ VoteTypeField \subseteq ActualFields(c)
+    /\ ActualFields(c) \cap (VrfCommitTypeField \union VrfRevealTypeField) = {}
+
+ConcreteVrfCommitTypeAnchors ==
+  /\ VrfCommitTypeField \subseteq ActualFields("vrf_commit")
+  /\ ActualFields("vrf_commit") \cap (VoteTypeField \union VrfRevealTypeField) = {}
+
+ConcreteVrfRevealTypeAnchors ==
+  /\ VrfRevealTypeField \subseteq ActualFields("vrf_reveal")
+  /\ ActualFields("vrf_reveal") \cap (VoteTypeField \union VrfCommitTypeField) = {}
+
+AllConcreteVotesBindSubject ==
+  \A c \in VoteCases:
+    VoteSubjectFields \subseteq ActualFields(c)
+
+VoteWithoutHighestConcreteAnchors ==
+  /\ HighestAbsentField \subseteq ActualFields("vote_no_highest")
+  /\ ActualFields("vote_no_highest") \cap HighestPresentFields = {}
+
+VoteWithHighestConcreteAnchors ==
+  /\ HighestPresentFields \subseteq ActualFields("vote_with_highest")
+  /\ ActualFields("vote_with_highest") \cap HighestAbsentField = {}
+
+VrfConcreteBodyAnchors ==
+  /\ VrfCommitFields \subseteq ActualFields("vrf_commit")
+  /\ VrfRevealFields \subseteq ActualFields("vrf_reveal")
+
+AllConcretePreimagesExcludeMutableSignatures ==
+  \A c \in Cases:
+    ActualFields(c) \cap SignatureFields = {}
+
+ClassicPreimageSafetyAnchors ==
+  /\ AllConcretePreimagesMatchSpec
+  /\ AllConcretePreimagesBindDomain
+  /\ ConcreteVoteTypeAnchors
+  /\ ConcreteVrfCommitTypeAnchors
+  /\ ConcreteVrfRevealTypeAnchors
+  /\ AllConcreteVotesBindSubject
+  /\ VoteWithoutHighestConcreteAnchors
+  /\ VoteWithHighestConcreteAnchors
+  /\ VrfConcreteBodyAnchors
+  /\ AllConcretePreimagesExcludeMutableSignatures
+
 ====

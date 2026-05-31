@@ -36,6 +36,7 @@ pub type Phase = CertPhase;
 pub type Vote = QcVote;
 /// Reference to a QC header carried in hints.
 pub type QcHeaderRef = QcRef;
+use iroha_data_model::parameter::system::SumeragiNposParameters;
 use iroha_data_model::prelude::*;
 
 use crate::state::{StateView, WorldReadOnly};
@@ -213,35 +214,27 @@ fn npos_timeout_base_for_handshake_fingerprint_ms(
     sumeragi.block_time_ms().max(1).max(min_finality_ms)
 }
 
-/// Derive consensus handshake capabilities (mode tag, BLS domain, fingerprint) from a world
-/// snapshot, committed height, and local configuration.
-#[allow(clippy::too_many_lines)]
-pub fn compute_consensus_handshake_caps_from_world(
-    world: &impl WorldReadOnly,
-    height: u64,
-    common_config: &CommonConfig,
+/// Build the canonical consensus-genesis parameter payload used for handshake fingerprints.
+///
+/// This pure helper is shared by runtime handshakes, genesis metadata generation, and startup
+/// validation so all three paths hash the same field set.
+pub fn consensus_genesis_params_from_parameters(
+    chain_id: &ChainId,
+    mode_tag: &str,
+    bls_domain: impl Into<String>,
+    params: &iroha_data_model::parameter::Parameters,
     sumeragi_config: &SumeragiConfig,
-    config_caps: &iroha_p2p::ConsensusConfigCaps,
-) -> (String, String, iroha_p2p::ConsensusHandshakeCaps) {
-    let s_params = world.parameters();
-    let sumeragi = s_params.sumeragi();
-    let block = s_params.block();
-    let effective_mode = crate::sumeragi::effective_consensus_mode_for_height_from_world(
-        world,
-        height,
-        sumeragi_config.consensus_mode,
-    );
-    let (mode_tag, bls_domain) = match effective_mode {
-        ConsensusMode::Permissioned => (
-            PERMISSIONED_TAG.to_string(),
-            "bls-iroha2:permissioned-sumeragi:v1".to_string(),
-        ),
-        ConsensusMode::Npos => (
-            NPOS_TAG.to_string(),
-            "bls-iroha2:npos-sumeragi:v1".to_string(),
-        ),
-    };
-    let (npos_params, epoch_length_blocks) = if matches!(effective_mode, ConsensusMode::Npos) {
+) -> ConsensusGenesisParams {
+    let sumeragi = params.sumeragi();
+    let block = params.block();
+    let use_npos = mode_tag == NPOS_TAG;
+
+    let npos_payload = params
+        .custom()
+        .get(&SumeragiNposParameters::parameter_id())
+        .and_then(SumeragiNposParameters::from_custom_parameter);
+
+    let (npos_params, epoch_length_blocks) = if use_npos {
         let timeout_base_ms = npos_timeout_base_for_handshake_fingerprint_ms(sumeragi);
         let npos_timeouts = sumeragi_config
             .npos
@@ -251,8 +244,36 @@ pub fn compute_consensus_handshake_caps_from_world(
             let ms = d.as_millis();
             u64::try_from(ms).expect("NPoS timeout exceeds supported millisecond range")
         };
-        world.sumeragi_npos_parameters().map_or_else(
-            || {
+
+        match npos_payload {
+            Some(npos) => (
+                Some(NposGenesisParams {
+                    block_time_ms: sumeragi.block_time_ms,
+                    timeout_propose_ms: duration_ms(npos_timeouts.propose),
+                    timeout_prevote_ms: duration_ms(npos_timeouts.prevote),
+                    timeout_precommit_ms: duration_ms(npos_timeouts.precommit),
+                    timeout_commit_ms: duration_ms(npos_timeouts.commit),
+                    timeout_da_ms: duration_ms(npos_timeouts.da),
+                    timeout_aggregator_ms: duration_ms(npos_timeouts.aggregator),
+                    k_aggregators: npos.k_aggregators(),
+                    redundant_send_r: npos.redundant_send_r(),
+                    epoch_seed: npos.epoch_seed(),
+                    vrf_commit_window_blocks: npos.vrf_commit_window_blocks(),
+                    vrf_reveal_window_blocks: npos.vrf_reveal_window_blocks(),
+                    max_validators: npos.max_validators(),
+                    min_self_bond: npos.min_self_bond(),
+                    min_nomination_bond: npos.min_nomination_bond(),
+                    max_nominator_concentration_pct: npos.max_nominator_concentration_pct(),
+                    seat_band_pct: npos.seat_band_pct(),
+                    max_entity_correlation_pct: npos.max_entity_correlation_pct(),
+                    finality_margin_blocks: npos.finality_margin_blocks(),
+                    evidence_horizon_blocks: npos.evidence_horizon_blocks(),
+                    activation_lag_blocks: npos.activation_lag_blocks(),
+                    slashing_delay_blocks: npos.slashing_delay_blocks(),
+                }),
+                npos.epoch_length_blocks().max(1),
+            ),
+            None => {
                 let npos_cfg = &sumeragi_config.npos;
                 let collectors_cfg = &sumeragi_config.collectors;
                 (
@@ -267,7 +288,7 @@ pub fn compute_consensus_handshake_caps_from_world(
                         k_aggregators: u16::try_from(collectors_cfg.k)
                             .expect("sumeragi.collectors.k must fit into u16"),
                         redundant_send_r: collectors_cfg.redundant_send_r,
-                        epoch_seed: super::chain_epoch_seed(&common_config.chain),
+                        epoch_seed: super::chain_epoch_seed(chain_id),
                         vrf_commit_window_blocks: npos_cfg.vrf.commit_window_blocks,
                         vrf_reveal_window_blocks: npos_cfg.vrf.reveal_window_blocks,
                         max_validators: npos_cfg.election.max_validators,
@@ -283,44 +304,15 @@ pub fn compute_consensus_handshake_caps_from_world(
                         activation_lag_blocks: npos_cfg.reconfig.activation_lag_blocks,
                         slashing_delay_blocks: npos_cfg.reconfig.slashing_delay_blocks,
                     }),
-                    sumeragi_config.npos.epoch_length_blocks.max(1),
+                    npos_cfg.epoch_length_blocks.max(1),
                 )
-            },
-            |npos| {
-                (
-                    Some(NposGenesisParams {
-                        block_time_ms: sumeragi.block_time_ms,
-                        timeout_propose_ms: duration_ms(npos_timeouts.propose),
-                        timeout_prevote_ms: duration_ms(npos_timeouts.prevote),
-                        timeout_precommit_ms: duration_ms(npos_timeouts.precommit),
-                        timeout_commit_ms: duration_ms(npos_timeouts.commit),
-                        timeout_da_ms: duration_ms(npos_timeouts.da),
-                        timeout_aggregator_ms: duration_ms(npos_timeouts.aggregator),
-                        k_aggregators: npos.k_aggregators(),
-                        redundant_send_r: npos.redundant_send_r(),
-                        epoch_seed: npos.epoch_seed(),
-                        vrf_commit_window_blocks: npos.vrf_commit_window_blocks(),
-                        vrf_reveal_window_blocks: npos.vrf_reveal_window_blocks(),
-                        max_validators: npos.max_validators(),
-                        min_self_bond: npos.min_self_bond(),
-                        min_nomination_bond: npos.min_nomination_bond(),
-                        max_nominator_concentration_pct: npos.max_nominator_concentration_pct(),
-                        seat_band_pct: npos.seat_band_pct(),
-                        max_entity_correlation_pct: npos.max_entity_correlation_pct(),
-                        finality_margin_blocks: npos.finality_margin_blocks(),
-                        evidence_horizon_blocks: npos.evidence_horizon_blocks(),
-                        activation_lag_blocks: npos.activation_lag_blocks(),
-                        slashing_delay_blocks: npos.slashing_delay_blocks(),
-                    }),
-                    npos.epoch_length_blocks().max(1),
-                )
-            },
-        )
+            }
+        }
     } else {
         (None, 0)
     };
 
-    let canon = ConsensusGenesisParams {
+    ConsensusGenesisParams {
         block_time_ms: sumeragi.block_time_ms,
         commit_time_ms: sumeragi.commit_time_ms,
         min_finality_ms: sumeragi.min_finality_ms,
@@ -330,9 +322,44 @@ pub fn compute_consensus_handshake_caps_from_world(
         block_max_transactions: block.max_transactions().get(),
         da_enabled: sumeragi.da_enabled,
         epoch_length_blocks,
-        bls_domain: bls_domain.clone(),
+        bls_domain: bls_domain.into(),
         npos: npos_params,
+    }
+}
+
+/// Derive consensus handshake capabilities (mode tag, BLS domain, fingerprint) from a world
+/// snapshot, committed height, and local configuration.
+#[allow(clippy::too_many_lines)]
+pub fn compute_consensus_handshake_caps_from_world(
+    world: &impl WorldReadOnly,
+    height: u64,
+    common_config: &CommonConfig,
+    sumeragi_config: &SumeragiConfig,
+    config_caps: &iroha_p2p::ConsensusConfigCaps,
+) -> (String, String, iroha_p2p::ConsensusHandshakeCaps) {
+    let s_params = world.parameters();
+    let effective_mode = crate::sumeragi::effective_consensus_mode_for_height_from_world(
+        world,
+        height,
+        sumeragi_config.consensus_mode,
+    );
+    let (mode_tag, bls_domain) = match effective_mode {
+        ConsensusMode::Permissioned => (
+            PERMISSIONED_TAG.to_string(),
+            "bls-iroha2:permissioned-sumeragi:v1".to_string(),
+        ),
+        ConsensusMode::Npos => (
+            NPOS_TAG.to_string(),
+            "bls-iroha2:npos-sumeragi:v1".to_string(),
+        ),
     };
+    let canon = consensus_genesis_params_from_parameters(
+        &common_config.chain,
+        &mode_tag,
+        bls_domain.clone(),
+        s_params,
+        sumeragi_config,
+    );
     let fingerprint =
         compute_consensus_fingerprint_from_params(&common_config.chain, &canon, &mode_tag);
 

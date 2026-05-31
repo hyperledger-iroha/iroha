@@ -504,10 +504,59 @@ export const SCCP_DOMAIN_SORA_KUSAMA: number;
 export const SCCP_DOMAIN_SORA_POLKADOT: number;
 export const SCCP_DOMAIN_SORA2: number;
 export const SCCP_STARK_FRI_PROOF_FAMILY_V1: string;
-export const SCCP_SOLANA_RECURSIVE_PROOF_BACKEND_V1: string;
+export const SCCP_SOURCE_STATE_MAX_PROOF_BYTES: number;
+export const SCCP_SOURCE_STATE_MAX_PROOF_LABEL_BYTES: number;
+export const SCCP_NATIVE_RECURSIVE_MAX_PROOF_BYTES: number;
+export const SCCP_SOURCE_ADAPTER_OPEN_VERIFY_CIRCUIT_ID_V1: "sccp-source-adapter-v1";
+export const SCCP_SOURCE_ADAPTER_FASTPQ_PARAMETER_SET_V1: "fastpq-lane-balanced";
+export const SCCP_EVM_GROTH16_BN254_PROOF_BACKEND_V1: "evm-groth16-bn254-v1";
+export const SCCP_GROTH16_BN254_PROOF_ABI_BYTE_LENGTH_V1: 384;
+export const SCCP_EVM_CONTRACT_CALL_ABI_TUPLE_V1: "abi_tuple_v1";
+export const SCCP_TRON_CONTRACT_CALL_ABI_TUPLE_V1: "tron_abi_tuple_v1";
+export const SCCP_SUBMIT_MESSAGE_PROOF_ABI_V1: "submitSccpMessageProof(bytes,bytes32[6],bytes32)";
+export const SCCP_SUBMIT_MESSAGE_PROOF_SELECTOR_V1: string;
+export const SCCP_MESSAGE_TRANSPARENT_PUBLIC_INPUTS_BYTES_V1_LEN: 141;
+export const SCCP_SOLANA_RECURSIVE_PROOF_BACKEND_V1: "sccp-solana-recursive-mainnet-v1";
+export const SCCP_SOLANA_ACCOUNTS_LT_HASH_OPEN_VERIFY_CIRCUIT_ID_V1: "sccp-solana-accounts-lt-hash-v1";
+export const SCCP_SOLANA_TOWER_REPLAY_OPEN_VERIFY_CIRCUIT_ID_V1: "sccp-solana-tower-replay-v1";
+export const SCCP_SOLANA_FULL_ACCOUNTSDB_LATTICE_OPEN_VERIFY_CIRCUIT_ID_V1: "sccp-solana-full-accountsdb-lattice-v1";
+export const SCCP_SOLANA_BANK_FORK_CHOICE_OPEN_VERIFY_CIRCUIT_ID_V1: "sccp-solana-bank-fork-choice-v1";
 export const SCCP_SOLANA_MAINNET_GENESIS_HASH: string;
-export const SCCP_TON_CONTRACT_PROOF_BACKEND_V1: string;
+export const SCCP_SOLANA_MAINNET_ACCOUNTS_DB_VERIFIER_ID_V1: string;
+export const SCCP_SOLANA_UPGRADEABLE_LOADER_ID: string;
+export const SCCP_SOLANA_TEMPLATE_SOURCE_STATE_VERIFIER_HASH_V1: string;
+export const SCCP_SOLANA_MAINNET_TOWER_REPLAY_VERIFIER_ID_V1: string;
+export const SCCP_SOLANA_MAINNET_FULL_ACCOUNTSDB_LATTICE_VERIFIER_ID_V1: string;
+export const SCCP_SOLANA_MAINNET_BANK_FORK_CHOICE_VERIFIER_ID_V1: string;
+export const SCCP_SOLANA_MAINNET_SLOTS_PER_EPOCH: bigint;
+export const SCCP_SOLANA_TOWER_LOCKOUT_CONFIRMATION_DEPTH: bigint;
+export const SCCP_SOLANA_TOWER_VOTE_STACK_DEPTH: bigint;
+export const SCCP_SOLANA_TOWER_WARMUP_COOLDOWN_RATE_BPS: bigint;
+export const SCCP_SOLANA_MAX_VALIDATORS: number;
+export const SCCP_SOLANA_VOTE_PROGRAM_ID: string;
+export const SCCP_SOLANA_STAKE_PROGRAM_ID: string;
+export const SCCP_SOLANA_SYSVAR_PROGRAM_ID: string;
+export const SCCP_SOLANA_STAKE_HISTORY_SYSVAR_ID: string;
+export const SCCP_SOLANA_BORSH_INSTRUCTION_V1: string;
+export const SCCP_SOLANA_SUBMIT_MESSAGE_PROOF_ENTRYPOINT_V1: "submit_sccp_message_proof";
+export const SCCP_ZERO_HASH_V1: string;
+export const SCCP_TON_CONTRACT_PROOF_BACKEND_V1: "ton-contract-v1";
 export const SCCP_TON_MESSAGE_BODY_BOC_V1: string;
+export const SCCP_TON_MAINNET_SHARD_STATE_VERIFIER_ID_V1: string;
+export const SCCP_TON_SHARD_STATE_OPEN_VERIFY_CIRCUIT_ID_V1: "sccp-ton-shard-state-light-client-v1";
+export const SCCP_TON_MASTERCHAIN_CONFIG_OPEN_VERIFY_CIRCUIT_ID_V1: "sccp-ton-masterchain-config-v1";
+export const SCCP_TON_VALIDATOR_SET_TRANSITION_OPEN_VERIFY_CIRCUIT_ID_V1: "sccp-ton-validator-set-transition-v1";
+export const SCCP_TON_SHARD_ACCOUNTS_DICTIONARY_OPEN_VERIFY_CIRCUIT_ID_V1: "sccp-ton-shard-accounts-dictionary-v1";
+export const SCCP_TON_MAINNET_MASTERCHAIN_CONFIG_VERIFIER_ID_V1: string;
+export const SCCP_TON_MAINNET_VALIDATOR_SET_TRANSITION_VERIFIER_ID_V1: string;
+export const SCCP_TON_MAINNET_SHARD_ACCOUNTS_DICTIONARY_VERIFIER_ID_V1: string;
+export const SCCP_TON_CURRENT_VALIDATOR_SET_CONFIG_PARAM: bigint;
+export const SCCP_TON_CONFIG_PARAM_KEY_BITS: number;
+export const SCCP_TRON_GROTH16_BN254_PROOF_BACKEND_V1: "tron-groth16-bn254-v1";
+export const SCCP_SUBSTRATE_RUNTIME_PROOF_BACKEND_V1: "substrate-runtime-v1";
+export const SCCP_SUBSTRATE_RUNTIME_CALL_SCALE_V1: "scale_call_v1";
+export const SCCP_SUBSTRATE_SUBMIT_MESSAGE_PROOF_ENTRYPOINT_V1: "SccpBridge.submit_message_proof";
+export const SCCP_SUBSTRATE_RUNTIME_STORAGE_OPEN_VERIFY_CIRCUIT_ID_V1: "sccp-substrate-runtime-storage-v1";
 export const SCCP_CORE_REMOTE_DOMAINS: number[];
 
 export interface SccpBurnPayload {
@@ -617,6 +666,9 @@ export interface SccpGovernanceBundleSurfaceValidation extends SccpBundleSurface
   expectedCertificateHash: string;
 }
 
+export type SccpDomainIdInput = number | string | bigint;
+export type SccpVersionInput = 1 | "1" | 1n;
+
 export interface SolanaSccpWitnessInput {
   bundle?: {
     commitment?: Partial<SccpHubCommitment>;
@@ -625,18 +677,36 @@ export interface SolanaSccpWitnessInput {
   };
   commitment?: Partial<SccpHubCommitment>;
   payload?: unknown;
-  targetDomain?: number;
-  target_domain?: number;
+  targetDomain?: SccpDomainIdInput;
+  target_domain?: SccpDomainIdInput;
   mainnetGenesisHash?: string;
   mainnet_genesis_hash?: string;
   finalizedSlot?: string | number | bigint;
   finalized_slot?: string | number | bigint;
   slot?: string | number | bigint;
+  parentSlot?: string | number | bigint;
+  parent_slot?: string | number | bigint;
+  bankSignatureCount?: string | number | bigint;
+  bank_signature_count?: string | number | bigint;
+  parentBankHash?: string;
+  parent_bank_hash?: string;
   blockhash: string;
+  blockhashBytes?: BinaryLike;
+  blockhash_bytes?: BinaryLike;
   bankHash?: string;
   bank_hash?: string;
   transactionStatusRoot?: string;
   transaction_status_root?: string;
+  accountInclusionRoot?: string;
+  account_inclusion_root?: string;
+  accountsLtHashChecksum?: string;
+  accounts_lt_hash_checksum?: string;
+  accountsLtHashProofPublicInputsHash?: string;
+  accounts_lt_hash_proof_public_inputs_hash?: string;
+  bankHashHardForkData?: BinaryLike;
+  bank_hash_hard_fork_data?: BinaryLike;
+  accountsLtHash?: BinaryLike;
+  accounts_lt_hash?: BinaryLike;
   messageProofHash?: string;
   message_proof_hash?: string;
   inclusionBranch?: readonly (string | Uint8Array | ArrayBuffer | ArrayBufferView | number[])[];
@@ -653,6 +723,20 @@ export interface SolanaSccpWitnessInput {
   commitment_root?: string;
   sourceEventDigest?: string;
   source_event_digest?: string;
+  sourceStateVerifierId?: string;
+  source_state_verifier_id?: string;
+  sourceStateVerifierHash?: string;
+  source_state_verifier_hash?: string;
+  statementHash?: string;
+  statement_hash?: string;
+  destinationBindingHash?: string;
+  destination_binding_hash?: string;
+  sourceAdapterDeploymentHash?: string;
+  source_adapter_deployment_hash?: string;
+  sourceAdapterDeploymentReceiptHash?: string;
+  source_adapter_deployment_receipt_hash?: string;
+  proofContext?: SolanaSccpProofContextInput;
+  proof_context?: SolanaSccpProofContextInput;
 }
 
 export interface SolanaSccpWitness {
@@ -661,18 +745,1074 @@ export interface SolanaSccpWitness {
   targetDomain: number;
   mainnetGenesisHash: string;
   finalizedSlot: string;
+  parentSlot: string;
+  bankSignatureCount: string;
+  parentBankHash: string;
   blockhash: string;
   bankHash: string;
   transactionStatusRoot: string;
   messageProofHash: string;
+  accountInclusionRoot: string;
+  accountsLtHashChecksum: string;
+  accountsLtHashProofPublicInputsHash: string;
+  bankHashHardForkData: string;
+  accountsLtHash?: string;
   transactionSignature: string;
   emitterProgramId: string;
   messageId: string;
   payloadHash: string;
   commitmentRoot: string;
   sourceEventDigest: string;
+  sourceStateVerifierId: string;
+  sourceStateVerifierHash: string;
+  sourceAdapterDeploymentHash: string;
+  sourceAdapterDeploymentReceiptHash: string;
   inclusionBranch?: string[];
   payload: unknown;
+}
+
+export interface SolanaSccpEpochStakeRootInput {
+  epoch?: string | number | bigint;
+  validatorEpoch?: string | number | bigint;
+  validator_epoch?: string | number | bigint;
+  finalizedSlot?: string | number | bigint;
+  finalized_slot?: string | number | bigint;
+  slot?: string | number | bigint;
+  validatorPublicKeys?: readonly BinaryLike[];
+  validator_public_keys?: readonly BinaryLike[];
+  validatorStakes?: readonly (string | number | bigint)[];
+  validator_stakes?: readonly (string | number | bigint)[];
+}
+
+export interface SolanaSccpStakeActivationInput extends SolanaSccpEpochStakeRootInput {
+  validatorActivationEpochs?: readonly (string | number | bigint)[];
+  validator_activation_epochs?: readonly (string | number | bigint)[];
+  activationEpochs?: readonly (string | number | bigint)[];
+  activation_epochs?: readonly (string | number | bigint)[];
+  validatorDeactivationEpochs?: readonly (string | number | bigint)[];
+  validator_deactivation_epochs?: readonly (string | number | bigint)[];
+  deactivationEpochs?: readonly (string | number | bigint)[];
+  deactivation_epochs?: readonly (string | number | bigint)[];
+}
+
+export interface SolanaSccpAccountOpeningInput {
+  address?: BinaryLike;
+  accountAddress?: BinaryLike;
+  account_address?: BinaryLike;
+  owner?: BinaryLike;
+  ownerProgramId?: BinaryLike;
+  owner_program_id?: BinaryLike;
+  lamports: string | number | bigint;
+  rentEpoch?: string | number | bigint;
+  rent_epoch?: string | number | bigint;
+  executable?: boolean;
+  dataHash?: string;
+  data_hash?: string;
+}
+
+export interface SolanaSccpAccountInclusionLeafInput {
+  finalizedSlot?: string | number | bigint;
+  finalized_slot?: string | number | bigint;
+  opening?: SolanaSccpAccountOpeningInput;
+  accountOpening?: SolanaSccpAccountOpeningInput;
+  account_opening?: SolanaSccpAccountOpeningInput;
+  rawData?: BinaryLike;
+  raw_data?: BinaryLike;
+  rawDataHash?: string;
+  raw_data_hash?: string;
+}
+
+export interface SolanaSccpAccountInclusionRootAndBranches {
+  readonly root: string;
+  readonly branches: ReadonlyArray<ReadonlyArray<string>>;
+}
+
+export function solanaSccpAccountLtHash(
+  opening: SolanaSccpAccountOpeningInput,
+  rawData: BinaryLike,
+): Uint8Array;
+export function solanaSccpAccountsLtHashFromOpenings(
+  openings: readonly SolanaSccpAccountOpeningInput[],
+  rawDataValues: readonly BinaryLike[],
+): Uint8Array;
+export function solanaSccpAccountsLtHashChecksum(accountsLtHash: BinaryLike): string;
+export interface SolanaSccpAccountsLtHashOpenedContributionsInput {
+  sourceDomain?: SccpDomainIdInput;
+  source_domain?: SccpDomainIdInput;
+  finalizedSlot?: string | number | bigint;
+  finalized_slot?: string | number | bigint;
+  slot?: string | number | bigint;
+  accountInclusionRoot?: string;
+  account_inclusion_root?: string;
+  accountsRoot?: string;
+  accounts_root?: string;
+  accountsLtHashChecksum?: string;
+  accounts_lt_hash_checksum?: string;
+  accountsLtHashRoot?: string;
+  accounts_lt_hash_root?: string;
+  accountsLtHash?: BinaryLike | number[];
+  accounts_lt_hash?: BinaryLike | number[];
+  validatorVoteAccountOpenings?: readonly SolanaSccpAccountOpeningInput[];
+  validator_vote_account_openings?: readonly SolanaSccpAccountOpeningInput[];
+  voteAccountOpenings?: readonly SolanaSccpAccountOpeningInput[];
+  vote_account_openings?: readonly SolanaSccpAccountOpeningInput[];
+  validatorVoteAccountRawData?: readonly BinaryLike[];
+  validator_vote_account_raw_data?: readonly BinaryLike[];
+  voteAccountRawData?: readonly BinaryLike[];
+  vote_account_raw_data?: readonly BinaryLike[];
+  validatorStakeAccountOpenings?: readonly SolanaSccpAccountOpeningInput[];
+  validator_stake_account_openings?: readonly SolanaSccpAccountOpeningInput[];
+  stakeAccountOpenings?: readonly SolanaSccpAccountOpeningInput[];
+  stake_account_openings?: readonly SolanaSccpAccountOpeningInput[];
+  validatorStakeAccountRawData?: readonly BinaryLike[];
+  validator_stake_account_raw_data?: readonly BinaryLike[];
+  stakeAccountRawData?: readonly BinaryLike[];
+  stake_account_raw_data?: readonly BinaryLike[];
+  stakeHistorySysvarOpening?: SolanaSccpAccountOpeningInput;
+  stake_history_sysvar_opening?: SolanaSccpAccountOpeningInput;
+  stakeHistorySysvarRawData?: BinaryLike;
+  stake_history_sysvar_raw_data?: BinaryLike;
+}
+export function solanaSccpAccountsLtHashOpenedResidual(
+  input: SolanaSccpAccountsLtHashOpenedContributionsInput,
+): Uint8Array;
+export function solanaSccpAccountsLtHashOpenedResidualChecksum(
+  input: SolanaSccpAccountsLtHashOpenedContributionsInput,
+): string;
+export function canonicalSolanaSccpAccountsLtHashOpenedContributionsBytes(
+  input: SolanaSccpAccountsLtHashOpenedContributionsInput,
+): Uint8Array;
+export function solanaSccpAccountsLtHashOpenedContributionsHash(
+  input: SolanaSccpAccountsLtHashOpenedContributionsInput,
+): string;
+export interface SolanaSccpOpenedAccountInclusionWitness {
+  readonly root: string;
+  readonly branches: ReadonlyArray<ReadonlyArray<string>>;
+  readonly validatorVoteAccountBranches: ReadonlyArray<ReadonlyArray<string>>;
+  readonly validatorStakeAccountBranches: ReadonlyArray<ReadonlyArray<string>>;
+  readonly stakeHistorySysvarBranch: ReadonlyArray<string>;
+}
+export function solanaSccpOpenedAccountInclusionWitness(
+  input: SolanaSccpAccountsLtHashOpenedContributionsInput,
+): SolanaSccpOpenedAccountInclusionWitness;
+
+export interface SolanaSccpAccountsLtHashProofRequestInput
+  extends SolanaSccpAccountsLtHashOpenedContributionsInput {
+  parentSlot?: string | number | bigint;
+  parent_slot?: string | number | bigint;
+  bankSignatureCount?: string | number | bigint;
+  bank_signature_count?: string | number | bigint;
+  parentBankHash?: string;
+  parent_bank_hash?: string;
+  blockhash?: string;
+  blockhashBytes?: BinaryLike;
+  blockhash_bytes?: BinaryLike;
+  bankHash?: string;
+  bank_hash?: string;
+  transactionStatusRoot?: string;
+  transaction_status_root?: string;
+  bankHashHardForkData?: BinaryLike | number[];
+  bank_hash_hard_fork_data?: BinaryLike | number[];
+  sourceStateVerifierId?: string;
+  source_state_verifier_id?: string;
+  sourceStateVerifierHash?: string;
+  source_state_verifier_hash?: string;
+  accountsLtHashProofPublicInputsHash?: string;
+  accounts_lt_hash_proof_public_inputs_hash?: string;
+}
+
+export interface SolanaSccpAccountsLtHashFastpqPublicInputs {
+  readonly dsid: string;
+  readonly slot: string;
+  readonly oldRoot: string;
+  readonly newRoot: string;
+  readonly permRoot: string;
+  readonly txSetHash: string;
+}
+
+export interface SolanaSccpAccountsLtHashFastpqTransition {
+  readonly key: string;
+  readonly operation: "meta_set";
+  readonly oldValue: string;
+  readonly newValue: string;
+}
+
+export type SccpSourceStateResultAlias<
+  Camel extends string,
+  Snake extends string,
+  Value,
+> =
+  | ({ [Key in Camel]: Value } & { [Key in Snake]?: never })
+  | ({ [Key in Snake]: Value } & { [Key in Camel]?: never });
+
+export type SccpSourceStateOptionalResultAlias<
+  Camel extends string,
+  Snake extends string,
+  Value,
+> =
+  | ({ [Key in Camel]?: Value } & { [Key in Snake]?: never })
+  | ({ [Key in Snake]: Value } & { [Key in Camel]?: never });
+
+export type SccpSourceStateOptionalVersionResultMetadata =
+  | {
+      version?: SccpVersionInput;
+      proofVersion?: never;
+      proof_version?: never;
+    }
+  | {
+      version?: never;
+      proofVersion: SccpVersionInput;
+      proof_version?: never;
+    }
+  | {
+      version?: never;
+      proofVersion?: never;
+      proof_version: SccpVersionInput;
+    };
+
+export type SccpSourceStateProofBytesResultMetadata =
+  | {
+      proofBytes: BinaryLike | number[];
+      proof_bytes?: never;
+      proof?: never;
+    }
+  | {
+      proofBytes?: never;
+      proof_bytes: BinaryLike | number[];
+      proof?: never;
+    }
+  | {
+      proofBytes?: never;
+      proof_bytes?: never;
+      proof: BinaryLike | number[];
+    };
+
+export type SccpSourceStateProofCapsuleMetadata<CircuitId extends string = string> =
+  SccpSourceStateOptionalVersionResultMetadata
+    & SccpSourceStateOptionalResultAlias<
+      "proofFamily",
+      "proof_family",
+      typeof SCCP_STARK_FRI_PROOF_FAMILY_V1
+    >
+    & SccpSourceStateResultAlias<"circuitId", "circuit_id", CircuitId>
+    & SccpSourceStateProofBytesResultMetadata
+    & SccpSourceStateOptionalResultAlias<"proofBase64", "proof_base64", string>;
+
+export type SccpSourceStateProverResultProofMetadata<CircuitId extends string = string> =
+  SccpSourceStateOptionalVersionResultMetadata
+    & SccpSourceStateOptionalResultAlias<
+      "proofFamily",
+      "proof_family",
+      typeof SCCP_STARK_FRI_PROOF_FAMILY_V1
+    >
+    & SccpSourceStateOptionalResultAlias<"circuitId", "circuit_id", CircuitId>
+    & SccpSourceStateProofBytesResultMetadata
+    & SccpSourceStateOptionalResultAlias<"proofBase64", "proof_base64", string>;
+
+export type SccpSourceStateFastpqPublicInputsResultMetadata = {
+  dsid: string;
+  slot: string | number | bigint;
+} & SccpSourceStateResultAlias<"oldRoot", "old_root", string>
+  & SccpSourceStateResultAlias<"newRoot", "new_root", string>
+  & SccpSourceStateResultAlias<"permRoot", "perm_root", string>
+  & SccpSourceStateResultAlias<"txSetHash", "tx_set_hash", string>;
+
+export type SccpSourceStateFastpqTransitionResultMetadata = {
+  key: string;
+  operation: string;
+} & SccpSourceStateResultAlias<"oldValue", "old_value", BinaryLike>
+  & SccpSourceStateResultAlias<"newValue", "new_value", BinaryLike>;
+
+export interface SolanaSccpAccountsLtHashProofRequest {
+  readonly version: 1;
+  readonly proofFamily: typeof SCCP_STARK_FRI_PROOF_FAMILY_V1;
+  readonly circuitId: typeof SCCP_SOLANA_ACCOUNTS_LT_HASH_OPEN_VERIFY_CIRCUIT_ID_V1;
+  readonly parameterSet: "fastpq-lane-balanced";
+  readonly sourceDomain: typeof SCCP_DOMAIN_SOL;
+  readonly finalizedSlot: string;
+  readonly parentSlot: string;
+  readonly sourceStateVerifierId: string;
+  readonly sourceStateVerifierHash: string;
+  readonly accountsLtHashProofPublicInputsHash: string;
+  readonly openedAccountsLtHashContributionsHash: string;
+  readonly openedAccountsLtHashResidualChecksum: string;
+  readonly statementBytes: Uint8Array;
+  readonly accountCommitmentBytes: Uint8Array;
+  readonly verificationContextBytes: Uint8Array;
+  readonly schemaDescriptor: Uint8Array;
+  readonly publicInputColumns: ReadonlyArray<ReadonlyArray<string>>;
+  readonly fastpqPublicInputs: Readonly<SolanaSccpAccountsLtHashFastpqPublicInputs>;
+  readonly fastpqTransitions: ReadonlyArray<Readonly<SolanaSccpAccountsLtHashFastpqTransition>>;
+}
+
+export function canonicalSolanaSccpAccountsLtHashCommitmentBytes(
+  input: SolanaSccpAccountsLtHashProofRequestInput,
+): Uint8Array;
+export function canonicalSolanaSccpAccountsLtHashVerificationContextBytes(
+  input: SolanaSccpAccountsLtHashProofRequestInput,
+): Uint8Array;
+export function solanaSccpAccountsLtHashPublicInputColumns(
+  input: SolanaSccpAccountsLtHashProofRequestInput,
+): string[][];
+export function solanaSccpAccountsLtHashOpenVerifySchemaDescriptor(
+  input: SolanaSccpAccountsLtHashProofRequestInput,
+): Uint8Array;
+export function buildSolanaSccpAccountsLtHashProofRequest(
+  input: SolanaSccpAccountsLtHashProofRequestInput,
+): SolanaSccpAccountsLtHashProofRequest;
+
+export type SolanaSccpSourceStateVerificationProof =
+  SccpSourceStateProofCapsuleMetadata<
+    | typeof SCCP_SOLANA_ACCOUNTS_LT_HASH_OPEN_VERIFY_CIRCUIT_ID_V1
+    | typeof SCCP_SOLANA_TOWER_REPLAY_OPEN_VERIFY_CIRCUIT_ID_V1
+    | typeof SCCP_SOLANA_FULL_ACCOUNTSDB_LATTICE_OPEN_VERIFY_CIRCUIT_ID_V1
+    | typeof SCCP_SOLANA_BANK_FORK_CHOICE_OPEN_VERIFY_CIRCUIT_ID_V1
+  >;
+
+export interface WrappedSolanaSccpSourceStateVerificationProof {
+  readonly version: 1;
+  readonly proofFamily: typeof SCCP_STARK_FRI_PROOF_FAMILY_V1;
+  readonly circuitId:
+    | typeof SCCP_SOLANA_ACCOUNTS_LT_HASH_OPEN_VERIFY_CIRCUIT_ID_V1
+    | typeof SCCP_SOLANA_TOWER_REPLAY_OPEN_VERIFY_CIRCUIT_ID_V1
+    | typeof SCCP_SOLANA_FULL_ACCOUNTSDB_LATTICE_OPEN_VERIFY_CIRCUIT_ID_V1
+    | typeof SCCP_SOLANA_BANK_FORK_CHOICE_OPEN_VERIFY_CIRCUIT_ID_V1;
+  readonly proofBytes: Uint8Array;
+  readonly proofBase64: string;
+}
+
+export function wrapSolanaSccpSourceStateVerificationProof(
+  proofBytes: BinaryLike | number[],
+  request: SolanaSccpAccountsLtHashProofRequest | SolanaSccpFullLightClientAuditProofRequest,
+): WrappedSolanaSccpSourceStateVerificationProof;
+
+export type SolanaSccpSourceStateProofRequest =
+  | SolanaSccpAccountsLtHashProofRequest
+  | SolanaSccpFullLightClientAuditProofRequest;
+
+export type SolanaSccpSourceStateProverResultObject =
+  SccpSourceStateProverResultProofMetadata<
+    | typeof SCCP_SOLANA_ACCOUNTS_LT_HASH_OPEN_VERIFY_CIRCUIT_ID_V1
+    | typeof SCCP_SOLANA_TOWER_REPLAY_OPEN_VERIFY_CIRCUIT_ID_V1
+    | typeof SCCP_SOLANA_FULL_ACCOUNTSDB_LATTICE_OPEN_VERIFY_CIRCUIT_ID_V1
+    | typeof SCCP_SOLANA_BANK_FORK_CHOICE_OPEN_VERIFY_CIRCUIT_ID_V1
+  > & {
+  parameterSet?: "fastpq-lane-balanced";
+  parameter_set?: "fastpq-lane-balanced";
+  sourceDomain?: typeof SCCP_DOMAIN_SOL;
+  source_domain?: typeof SCCP_DOMAIN_SOL;
+  finalizedSlot?: string | number | bigint;
+  finalized_slot?: string | number | bigint;
+  sourceStateVerifierId?: string;
+  source_state_verifier_id?: string;
+  sourceStateVerifierHash?: string;
+  source_state_verifier_hash?: string;
+  accountsLtHashProofPublicInputsHash?: string;
+  accounts_lt_hash_proof_public_inputs_hash?: string;
+  openedAccountsLtHashContributionsHash?: string;
+  opened_accounts_lt_hash_contributions_hash?: string;
+  openedAccountsLtHashResidualChecksum?: string;
+  opened_accounts_lt_hash_residual_checksum?: string;
+  role?: SolanaSccpFullLightClientAuditRole;
+  audit_role?: SolanaSccpFullLightClientAuditRole;
+  roleCode?: 1 | 2 | 3 | string | number | bigint;
+  role_code?: 1 | 2 | 3 | string | number | bigint;
+  verifierId?: string;
+  verifier_id?: string;
+  verifierHash?: string;
+  verifier_hash?: string;
+  sourceVerifierMaterialHash?: string;
+  source_verifier_material_hash?: string;
+  sourceAdapterDeploymentHash?: string;
+  source_adapter_deployment_hash?: string;
+  fullLightClientGateHash?: string;
+  full_light_client_gate_hash?: string;
+  finalityContextHash?: string;
+  finality_context_hash?: string;
+  voteMessageHash?: string;
+  vote_message_hash?: string;
+  accountsLtHashProofHash?: string;
+  accounts_lt_hash_proof_hash?: string;
+  auditStatementHash?: string;
+  audit_statement_hash?: string;
+  publicInputColumns?: ReadonlyArray<ReadonlyArray<string>>;
+  public_input_columns?: ReadonlyArray<ReadonlyArray<string>>;
+  fastpqPublicInputs?: SccpSourceStateFastpqPublicInputsResultMetadata;
+  fastpq_public_inputs?: SccpSourceStateFastpqPublicInputsResultMetadata;
+  fastpqTransitions?: ReadonlyArray<SccpSourceStateFastpqTransitionResultMetadata>;
+  fastpq_transitions?: ReadonlyArray<SccpSourceStateFastpqTransitionResultMetadata>;
+  statementBytes?: BinaryLike | number[];
+  statement_bytes?: BinaryLike | number[];
+  accountCommitmentBytes?: BinaryLike | number[];
+  account_commitment_bytes?: BinaryLike | number[];
+  verificationContextBytes?: BinaryLike | number[];
+  verification_context_bytes?: BinaryLike | number[];
+  schemaDescriptor?: BinaryLike | number[];
+  schema_descriptor?: BinaryLike | number[];
+};
+
+export type SolanaSccpSourceStateProveResult =
+  | BinaryLike
+  | number[]
+  | SolanaSccpSourceStateProverResultObject;
+
+export type SolanaSccpSourceStateProveFn = (
+  request: SolanaSccpSourceStateProofRequest,
+  options?: Record<string, unknown>,
+) => SolanaSccpSourceStateProveResult | Promise<SolanaSccpSourceStateProveResult>;
+
+export type SolanaSccpSourceStateProverOptions =
+  SccpProverProveOption<SolanaSccpSourceStateProveFn>;
+
+export class SolanaSccpSourceStateProver {
+  constructor(options?: SolanaSccpSourceStateProverOptions);
+  proveRequest(
+    request: SolanaSccpSourceStateProofRequest,
+    options?: Record<string, unknown>,
+  ): Promise<WrappedSolanaSccpSourceStateVerificationProof>;
+  proveAccountsLtHash(
+    input: SolanaSccpAccountsLtHashProofRequestInput,
+    options?: Record<string, unknown>,
+  ): Promise<WrappedSolanaSccpSourceStateVerificationProof>;
+  proveFullLightClientAudit(
+    input: SolanaSccpFullLightClientAuditProofRequestInput,
+    options?: Record<string, unknown>,
+  ): Promise<
+    Readonly<{
+      readonly towerReplay: WrappedSolanaSccpSourceStateVerificationProof;
+      readonly fullAccountsdbLattice: WrappedSolanaSccpSourceStateVerificationProof;
+      readonly bankForkChoice: WrappedSolanaSccpSourceStateVerificationProof;
+    }>
+  >;
+}
+
+export type TonSccpSourceStateVerificationProof =
+  SccpSourceStateProofCapsuleMetadata<
+    | typeof SCCP_TON_SHARD_STATE_OPEN_VERIFY_CIRCUIT_ID_V1
+    | typeof SCCP_TON_MASTERCHAIN_CONFIG_OPEN_VERIFY_CIRCUIT_ID_V1
+    | typeof SCCP_TON_VALIDATOR_SET_TRANSITION_OPEN_VERIFY_CIRCUIT_ID_V1
+    | typeof SCCP_TON_SHARD_ACCOUNTS_DICTIONARY_OPEN_VERIFY_CIRCUIT_ID_V1
+  >;
+
+export interface WrappedTonSccpSourceStateVerificationProof {
+  readonly version: 1;
+  readonly proofFamily: typeof SCCP_STARK_FRI_PROOF_FAMILY_V1;
+  readonly circuitId:
+    | typeof SCCP_TON_SHARD_STATE_OPEN_VERIFY_CIRCUIT_ID_V1
+    | typeof SCCP_TON_MASTERCHAIN_CONFIG_OPEN_VERIFY_CIRCUIT_ID_V1
+    | typeof SCCP_TON_VALIDATOR_SET_TRANSITION_OPEN_VERIFY_CIRCUIT_ID_V1
+    | typeof SCCP_TON_SHARD_ACCOUNTS_DICTIONARY_OPEN_VERIFY_CIRCUIT_ID_V1;
+  readonly proofBytes: Uint8Array;
+  readonly proofBase64: string;
+}
+
+export type SolanaSccpFullLightClientAuditRole =
+  | "towerReplay"
+  | "tower_replay"
+  | "fullAccountsdbLattice"
+  | "full_accountsdb_lattice"
+  | "bankForkChoice"
+  | "bank_fork_choice";
+
+export interface SolanaSccpFullLightClientAuditProofRequestBaseInput
+  extends SolanaSccpAccountsLtHashProofRequestInput {
+  sourceVerifierMaterial?: unknown;
+  source_verifier_material?: unknown;
+  sourceAdapterDeployment?: unknown;
+  source_adapter_deployment?: unknown;
+  sourceTrustAnchorHash?: string;
+  source_trust_anchor_hash?: string;
+  consensusVerifierHash?: string;
+  consensus_verifier_hash?: string;
+  messageInclusionVerifierHash?: string;
+  message_inclusion_verifier_hash?: string;
+  finalityPolicyHash?: string;
+  finality_policy_hash?: string;
+  adapterVerifierVkHash?: string;
+  adapter_verifier_vk_hash?: string;
+  sourceVerifierMaterialHash?: string;
+  source_verifier_material_hash?: string;
+  sourceAdapterDeploymentHash?: string;
+  source_adapter_deployment_hash?: string;
+  sourceAdapterDeploymentReceiptHash?: string;
+  source_adapter_deployment_receipt_hash?: string;
+  fullLightClientGateHash?: string;
+  full_light_client_gate_hash?: string;
+  solanaTowerReplayVerifierHash?: string;
+  solana_tower_replay_verifier_hash?: string;
+  solanaFullAccountsdbLatticeVerifierHash?: string;
+  solana_full_accountsdb_lattice_verifier_hash?: string;
+  solanaBankForkChoiceVerifierHash?: string;
+  solana_bank_fork_choice_verifier_hash?: string;
+  deploymentReceiptHash?: string;
+  deployment_receipt_hash?: string;
+  epoch?: string | number | bigint;
+  rootedSlot?: string | number | bigint;
+  rooted_slot?: string | number | bigint;
+  towerVoteSlots?: readonly (string | number | bigint)[];
+  tower_vote_slots?: readonly (string | number | bigint)[];
+  epochStakeRoot?: string;
+  epoch_stake_root?: string;
+  stakeActivationHash?: string;
+  stake_activation_hash?: string;
+  stakeAccountStateHash?: string;
+  stake_account_state_hash?: string;
+  stakeHistoryHash?: string;
+  stake_history_hash?: string;
+  stakeHistorySysvarAccountHash?: string;
+  stake_history_sysvar_account_hash?: string;
+  towerLockoutHash?: string;
+  tower_lockout_hash?: string;
+  towerReplayHash?: string;
+  tower_replay_hash?: string;
+  bankForkHash?: string;
+  bank_fork_hash?: string;
+  finalityContextHash?: string;
+  finality_context_hash?: string;
+  voteMessageHash?: string;
+  vote_message_hash?: string;
+  accountsLtHashProofHash?: string;
+  accounts_lt_hash_proof_hash?: string;
+  openedAccountsLtHashContributionsHash?: string;
+  opened_accounts_lt_hash_contributions_hash?: string;
+  openedAccountsLtHashResidualChecksum?: string;
+  opened_accounts_lt_hash_residual_checksum?: string;
+}
+
+export type SolanaSccpFullLightClientAuditProofRequestInput =
+  SolanaSccpFullLightClientAuditProofRequestBaseInput &
+    (
+      | {
+          accountsLtHashProof: SolanaSccpSourceStateVerificationProof;
+          accounts_lt_hash_proof?: never;
+        }
+      | {
+          accountsLtHashProof?: never;
+          accounts_lt_hash_proof: SolanaSccpSourceStateVerificationProof;
+        }
+    );
+
+export interface SolanaSccpFullLightClientAuditProofRequest {
+  readonly version: 1;
+  readonly proofFamily: typeof SCCP_STARK_FRI_PROOF_FAMILY_V1;
+  readonly circuitId:
+    | typeof SCCP_SOLANA_TOWER_REPLAY_OPEN_VERIFY_CIRCUIT_ID_V1
+    | typeof SCCP_SOLANA_FULL_ACCOUNTSDB_LATTICE_OPEN_VERIFY_CIRCUIT_ID_V1
+    | typeof SCCP_SOLANA_BANK_FORK_CHOICE_OPEN_VERIFY_CIRCUIT_ID_V1;
+  readonly parameterSet: "fastpq-lane-balanced";
+  readonly role: "tower_replay" | "full_accountsdb_lattice" | "bank_fork_choice";
+  readonly roleCode: 1 | 2 | 3;
+  readonly sourceDomain: typeof SCCP_DOMAIN_SOL;
+  readonly finalizedSlot: string;
+  readonly verifierId: string;
+  readonly verifierHash: string;
+  readonly sourceStateVerifierId: string;
+  readonly sourceStateVerifierHash: string;
+  readonly sourceVerifierMaterialHash: string;
+  readonly sourceAdapterDeploymentHash: string;
+  readonly fullLightClientGateHash: string;
+  readonly finalityContextHash: string;
+  readonly voteMessageHash: string;
+  readonly accountsLtHashProofHash: string;
+  readonly auditStatementHash: string;
+  readonly statementBytes: Uint8Array;
+  readonly verificationContextBytes: Uint8Array;
+  readonly schemaDescriptor: Uint8Array;
+  readonly publicInputColumns: ReadonlyArray<ReadonlyArray<string>>;
+  readonly fastpqPublicInputs: Readonly<SolanaSccpAccountsLtHashFastpqPublicInputs>;
+  readonly fastpqTransitions: ReadonlyArray<Readonly<SolanaSccpAccountsLtHashFastpqTransition>>;
+}
+
+export function canonicalSolanaSccpSourceStateVerificationProofBytes(
+  input: SolanaSccpSourceStateVerificationProof,
+): Uint8Array;
+export function solanaSccpAccountsLtHashProofHash(
+  input: SolanaSccpSourceStateVerificationProof,
+): string;
+export function canonicalSolanaSccpFinalityContextBytes(
+  input: SolanaSccpFullLightClientAuditProofRequestInput,
+): Uint8Array;
+export function solanaSccpFinalityContextHash(
+  input: SolanaSccpFullLightClientAuditProofRequestInput,
+): string;
+export function canonicalSolanaSccpVoteMessageBytes(input: unknown): Uint8Array;
+export function solanaSccpVoteMessageHash(input: unknown): string;
+export function canonicalSolanaSccpFullLightClientAuditStatementBytes(
+  input: SolanaSccpFullLightClientAuditProofRequestInput,
+  role: SolanaSccpFullLightClientAuditRole,
+): Uint8Array;
+export function solanaSccpFullLightClientAuditStatementHash(
+  input: SolanaSccpFullLightClientAuditProofRequestInput,
+  role: SolanaSccpFullLightClientAuditRole,
+): string;
+export function solanaSccpFullLightClientAuditPublicInputColumns(
+  input: SolanaSccpFullLightClientAuditProofRequestInput,
+  role: SolanaSccpFullLightClientAuditRole,
+): string[][];
+export function solanaSccpFullLightClientAuditOpenVerifySchemaDescriptor(
+  input: SolanaSccpFullLightClientAuditProofRequestInput,
+  role: SolanaSccpFullLightClientAuditRole,
+): Uint8Array;
+export function buildSolanaSccpFullLightClientAuditProofRequest(
+  input: SolanaSccpFullLightClientAuditProofRequestInput,
+  role: SolanaSccpFullLightClientAuditRole,
+): SolanaSccpFullLightClientAuditProofRequest;
+export function buildSolanaSccpTowerReplayProofRequest(
+  input: SolanaSccpFullLightClientAuditProofRequestInput,
+): SolanaSccpFullLightClientAuditProofRequest;
+export function buildSolanaSccpFullAccountsdbLatticeProofRequest(
+  input: SolanaSccpFullLightClientAuditProofRequestInput,
+): SolanaSccpFullLightClientAuditProofRequest;
+export function buildSolanaSccpBankForkChoiceProofRequest(
+  input: SolanaSccpFullLightClientAuditProofRequestInput,
+): SolanaSccpFullLightClientAuditProofRequest;
+export function buildSolanaSccpFullLightClientAuditProofRequests(
+  input: SolanaSccpFullLightClientAuditProofRequestInput,
+): Readonly<{
+  readonly towerReplay: SolanaSccpFullLightClientAuditProofRequest;
+  readonly fullAccountsdbLattice: SolanaSccpFullLightClientAuditProofRequest;
+  readonly bankForkChoice: SolanaSccpFullLightClientAuditProofRequest;
+}>;
+
+export interface SolanaSccpVoteAccountDataInput {
+  nodePubkey?: BinaryLike;
+  node_pubkey?: BinaryLike;
+  authorizedVoter?: BinaryLike;
+  authorized_voter?: BinaryLike;
+  authorizedWithdrawer?: BinaryLike;
+  authorized_withdrawer?: BinaryLike;
+  voteAccountAddress?: BinaryLike;
+  vote_account_address?: BinaryLike;
+  inflationRewardsCollector?: BinaryLike;
+  inflation_rewards_collector?: BinaryLike;
+  blockRevenueCollector?: BinaryLike;
+  block_revenue_collector?: BinaryLike;
+  commission?: string | number | bigint;
+  inflationRewardsCommissionBps?: string | number | bigint;
+  inflation_rewards_commission_bps?: string | number | bigint;
+  blockRevenueCommissionBps?: string | number | bigint;
+  block_revenue_commission_bps?: string | number | bigint;
+  pendingDelegatorRewards?: string | number | bigint;
+  pending_delegator_rewards?: string | number | bigint;
+  blsPubkeyCompressed?: BinaryLike;
+  bls_pubkey_compressed?: BinaryLike;
+  rootSlot?: string | number | bigint;
+  root_slot?: string | number | bigint;
+  towerVoteSlots?: readonly (string | number | bigint)[];
+  tower_vote_slots?: readonly (string | number | bigint)[];
+}
+
+export interface SolanaSccpParsedVoteStateAccountData {
+  nodePubkey: Uint8Array;
+  authorizedVoter: Uint8Array;
+  authorizedWithdrawer: Uint8Array;
+  inflationRewardsCollector: Uint8Array;
+  blockRevenueCollector: Uint8Array;
+  inflationRewardsCommissionBps: bigint;
+  blockRevenueCommissionBps: bigint;
+  pendingDelegatorRewards: bigint;
+  blsPubkeyCompressed: Uint8Array;
+  rootSlot: bigint;
+  towerVoteSlots: bigint[];
+}
+
+export type SolanaSccpParsedVoteStateV1OrV3AccountData =
+  SolanaSccpParsedVoteStateAccountData;
+
+export interface SolanaSccpStakeAccountDataInput {
+  staker: BinaryLike;
+  withdrawer: BinaryLike;
+  voterPubkey?: BinaryLike;
+  voter_pubkey?: BinaryLike;
+  delegatedStake?: string | number | bigint;
+  delegated_stake?: string | number | bigint;
+  activationEpoch?: string | number | bigint;
+  activation_epoch?: string | number | bigint;
+  deactivationEpoch?: string | number | bigint;
+  deactivation_epoch?: string | number | bigint;
+  warmupCooldownRateBytes?: BinaryLike;
+  warmup_cooldown_rate_bytes?: BinaryLike;
+  creditsObserved?: string | number | bigint;
+  credits_observed?: string | number | bigint;
+  stakeFlags?: string | number | bigint;
+  stake_flags?: string | number | bigint;
+}
+
+export interface SolanaSccpParsedStakeStateV2StakeAccountData {
+  staker: Uint8Array;
+  withdrawer: Uint8Array;
+  voterPubkey: Uint8Array;
+  delegatedStake: bigint;
+  activationEpoch: bigint;
+  deactivationEpoch: bigint;
+  warmupCooldownRateBytes: Uint8Array;
+  creditsObserved: bigint;
+  stakeFlags: bigint;
+}
+
+export interface SolanaSccpStakeAccountStateInput extends SolanaSccpStakeActivationInput {
+  validatorVoteAccountAddresses?: readonly BinaryLike[];
+  validator_vote_account_addresses?: readonly BinaryLike[];
+  voteAccountAddresses?: readonly BinaryLike[];
+  vote_account_addresses?: readonly BinaryLike[];
+  validatorStakeAccountAddresses?: readonly BinaryLike[];
+  validator_stake_account_addresses?: readonly BinaryLike[];
+  stakeAccountAddresses?: readonly BinaryLike[];
+  stake_account_addresses?: readonly BinaryLike[];
+  validatorVoteAccountHashes?: readonly BinaryLike[];
+  validator_vote_account_hashes?: readonly BinaryLike[];
+  voteAccountHashes?: readonly BinaryLike[];
+  vote_account_hashes?: readonly BinaryLike[];
+  validatorStakeAccountHashes?: readonly BinaryLike[];
+  validator_stake_account_hashes?: readonly BinaryLike[];
+  stakeAccountHashes?: readonly BinaryLike[];
+  stake_account_hashes?: readonly BinaryLike[];
+}
+
+export interface SolanaSccpStakeHistoryEntryInput {
+  epoch: string | number | bigint;
+  effective: string | number | bigint;
+  activating: string | number | bigint;
+  deactivating: string | number | bigint;
+}
+
+export interface SolanaSccpStakeHistoryInput extends SolanaSccpStakeAccountStateInput {
+  validatorDelegatedStakes?: readonly (string | number | bigint)[];
+  validator_delegated_stakes?: readonly (string | number | bigint)[];
+  delegatedStakes?: readonly (string | number | bigint)[];
+  delegated_stakes?: readonly (string | number | bigint)[];
+  stakeHistoryEntries?: readonly SolanaSccpStakeHistoryEntryInput[];
+  stake_history_entries?: readonly SolanaSccpStakeHistoryEntryInput[];
+  stakeHistory?: readonly SolanaSccpStakeHistoryEntryInput[];
+  stake_history?: readonly SolanaSccpStakeHistoryEntryInput[];
+}
+
+export interface SolanaSccpStakeHistorySysvarDataInput {
+  stakeHistoryEntries?: readonly SolanaSccpStakeHistoryEntryInput[];
+  stake_history_entries?: readonly SolanaSccpStakeHistoryEntryInput[];
+  stakeHistory?: readonly SolanaSccpStakeHistoryEntryInput[];
+  stake_history?: readonly SolanaSccpStakeHistoryEntryInput[];
+}
+
+export interface SolanaSccpTowerLockoutInput {
+  epoch?: string | number | bigint;
+  validatorEpoch?: string | number | bigint;
+  validator_epoch?: string | number | bigint;
+  finalizedSlot?: string | number | bigint;
+  finalized_slot?: string | number | bigint;
+  rootedSlot?: string | number | bigint;
+  rooted_slot?: string | number | bigint;
+  parentSlot?: string | number | bigint;
+  parent_slot?: string | number | bigint;
+  parentBankHash?: string;
+  parent_bank_hash?: string;
+}
+
+export interface SolanaSccpTowerReplayInput {
+  epoch?: string | number | bigint;
+  validatorEpoch?: string | number | bigint;
+  validator_epoch?: string | number | bigint;
+  finalizedSlot?: string | number | bigint;
+  finalized_slot?: string | number | bigint;
+  rootedSlot?: string | number | bigint;
+  rooted_slot?: string | number | bigint;
+  parentSlot?: string | number | bigint;
+  parent_slot?: string | number | bigint;
+  bankForkHash?: string;
+  bank_fork_hash?: string;
+  towerVoteSlots?: readonly (string | number | bigint)[];
+  tower_vote_slots?: readonly (string | number | bigint)[];
+  voteSlots?: readonly (string | number | bigint)[];
+  vote_slots?: readonly (string | number | bigint)[];
+}
+
+export interface SolanaSccpBankForkInput {
+  sourceDomain?: SccpDomainIdInput;
+  source_domain?: SccpDomainIdInput;
+  epoch?: string | number | bigint;
+  validatorEpoch?: string | number | bigint;
+  validator_epoch?: string | number | bigint;
+  finalizedSlot?: string | number | bigint;
+  finalized_slot?: string | number | bigint;
+  parentSlot?: string | number | bigint;
+  parent_slot?: string | number | bigint;
+  bankSignatureCount?: string | number | bigint;
+  bank_signature_count?: string | number | bigint;
+  parentBankHash?: string;
+  parent_bank_hash?: string;
+  bankHash?: string;
+  bank_hash?: string;
+  blockhash?: string;
+  blockhashBytes?: BinaryLike;
+  blockhash_bytes?: BinaryLike;
+  accountsLtHash?: BinaryLike | number[];
+  accounts_lt_hash?: BinaryLike | number[];
+  bankHashHardForkData?: BinaryLike | number[];
+  bank_hash_hard_fork_data?: BinaryLike | number[];
+  transactionStatusRoot?: string;
+  transaction_status_root?: string;
+  receiptOrMessageRoot?: string;
+  receipt_or_message_root?: string;
+  accountInclusionRoot?: string;
+  account_inclusion_root?: string;
+  accountsRoot?: string;
+  accounts_root?: string;
+  accountsLtHashChecksum?: string;
+  accounts_lt_hash_checksum?: string;
+  accountsLtHashRoot?: string;
+  accounts_lt_hash_root?: string;
+}
+
+export type SolanaSccpAccountsLtHashProofPublicInputsInput = SolanaSccpBankForkInput;
+
+export interface SolanaSccpAgaveBankHashInput {
+  parentBankHash?: string;
+  parent_bank_hash?: string;
+  bankSignatureCount?: string | number | bigint;
+  bank_signature_count?: string | number | bigint;
+  blockhash?: string;
+  accountsLtHash?: BinaryLike | number[];
+  accounts_lt_hash?: BinaryLike | number[];
+  bankHashHardForkData?: BinaryLike | number[];
+  bank_hash_hard_fork_data?: BinaryLike | number[];
+}
+
+export interface SolanaSccpProofContextInput {
+  statementHash?: string;
+  statement_hash?: string;
+  destinationBindingHash?: string;
+  destination_binding_hash?: string;
+  destinationBinding?: TonSccpDestinationBindingInput | EvmSccpDestinationBindingInput | TronSccpDestinationBindingInput;
+  destination_binding?: TonSccpDestinationBindingInput | EvmSccpDestinationBindingInput | TronSccpDestinationBindingInput;
+}
+
+export interface SolanaSccpProofContext {
+  version: 1;
+  statementHash: string;
+  destinationBindingHash: string;
+}
+
+export interface SccpSourceAdapterDeploymentBindingInput {
+  sourceDomain?: SccpDomainIdInput;
+  source_domain?: SccpDomainIdInput;
+  targetDomain?: SccpDomainIdInput;
+  target_domain?: SccpDomainIdInput;
+  sourceAdapterDeploymentHash?: string;
+  source_adapter_deployment_hash?: string;
+  sourceAdapterDeploymentReceiptHash?: string;
+  source_adapter_deployment_receipt_hash?: string;
+}
+
+export interface SccpSourceAdapterDeploymentBinding {
+  version: 1;
+  sourceDomain: number;
+  targetDomain: number;
+  sourceAdapterDeploymentHash: string;
+  sourceAdapterDeploymentReceiptHash: string;
+}
+
+export type SccpDestinationBindingDomainInput =
+  | SccpDomainIdInput
+  | { targetDomain?: SccpDomainIdInput; target_domain?: SccpDomainIdInput; domain?: SccpDomainIdInput };
+
+export interface EvmSccpDestinationBindingInput {
+  version?: SccpVersionInput;
+  sourceDomain?: SccpDomainIdInput;
+  source_domain?: SccpDomainIdInput;
+  targetDomain?: SccpDomainIdInput;
+  target_domain?: SccpDomainIdInput;
+  networkId?: string;
+  network_id?: string;
+  networkIdHex?: string;
+  network_id_hex?: string;
+  verifierAddress?: string;
+  verifier_address?: string;
+  verifierAddressHex?: string;
+  verifier_address_hex?: string;
+  bridgeAddress?: string;
+  bridge_address?: string;
+  bridgeAddressHex?: string;
+  bridge_address_hex?: string;
+  verifierCodeHash?: string;
+  verifier_code_hash?: string;
+  verifierCodeHashHex?: string;
+  verifier_code_hash_hex?: string;
+  verifierKeyHash?: string;
+  verifier_key_hash?: string;
+  verifierKeyHashHex?: string;
+  verifier_key_hash_hex?: string;
+  verifierBackend?: typeof SCCP_EVM_GROTH16_BN254_PROOF_BACKEND_V1;
+  verifier_backend?: typeof SCCP_EVM_GROTH16_BN254_PROOF_BACKEND_V1;
+  backend?: typeof SCCP_EVM_GROTH16_BN254_PROOF_BACKEND_V1;
+  proofFamily?: typeof SCCP_STARK_FRI_PROOF_FAMILY_V1;
+  proof_family?: typeof SCCP_STARK_FRI_PROOF_FAMILY_V1;
+  key?: string;
+  bindingKey?: string;
+  binding_key?: string;
+  bindingHash?: string;
+  binding_hash?: string;
+  destinationBindingHash?: string;
+  destination_binding_hash?: string;
+}
+
+export interface EvmSccpDestinationBinding {
+  readonly version: 1;
+  readonly sourceDomain: number;
+  readonly targetDomain: number;
+  readonly networkId: string;
+  readonly verifierAddress: string;
+  readonly bridgeAddress: string;
+  readonly verifierCodeHash: string;
+  readonly verifierKeyHash: string;
+  readonly verifierBackend: typeof SCCP_EVM_GROTH16_BN254_PROOF_BACKEND_V1;
+  readonly proofFamily: typeof SCCP_STARK_FRI_PROOF_FAMILY_V1;
+  readonly key: string;
+  readonly bindingHash: string;
+}
+
+export interface TronSccpDestinationBindingInput {
+  version?: SccpVersionInput;
+  sourceDomain?: SccpDomainIdInput;
+  source_domain?: SccpDomainIdInput;
+  targetDomain?: SccpDomainIdInput;
+  target_domain?: SccpDomainIdInput;
+  networkId?: string;
+  network_id?: string;
+  networkIdHex?: string;
+  network_id_hex?: string;
+  verifierAddress?: string;
+  verifier_address?: string;
+  verifierCodeHash?: string;
+  verifier_code_hash?: string;
+  verifierCodeHashHex?: string;
+  verifier_code_hash_hex?: string;
+  verifierKeyHash?: string;
+  verifier_key_hash?: string;
+  verifierKeyHashHex?: string;
+  verifier_key_hash_hex?: string;
+  verifierBackend?: typeof SCCP_TRON_GROTH16_BN254_PROOF_BACKEND_V1;
+  verifier_backend?: typeof SCCP_TRON_GROTH16_BN254_PROOF_BACKEND_V1;
+  backend?: typeof SCCP_TRON_GROTH16_BN254_PROOF_BACKEND_V1;
+  proofFamily?: typeof SCCP_STARK_FRI_PROOF_FAMILY_V1;
+  proof_family?: typeof SCCP_STARK_FRI_PROOF_FAMILY_V1;
+  key?: string;
+  bindingKey?: string;
+  binding_key?: string;
+  bindingHash?: string;
+  binding_hash?: string;
+  destinationBindingHash?: string;
+  destination_binding_hash?: string;
+}
+
+export interface TronSccpDestinationBinding {
+  readonly version: 1;
+  readonly sourceDomain: number;
+  readonly targetDomain: number;
+  readonly networkId: string;
+  readonly verifierAddress: string;
+  readonly verifierCodeHash: string;
+  readonly verifierKeyHash: string;
+  readonly verifierBackend: typeof SCCP_TRON_GROTH16_BN254_PROOF_BACKEND_V1;
+  readonly proofFamily: typeof SCCP_STARK_FRI_PROOF_FAMILY_V1;
+  readonly key: string;
+  readonly bindingHash: string;
+}
+
+export interface SccpSourceVerifierMaterialInput {
+  sourceDomain?: SccpDomainIdInput;
+  source_domain?: SccpDomainIdInput;
+  targetDomain?: SccpDomainIdInput;
+  target_domain?: SccpDomainIdInput;
+  sourceTrustAnchorHash?: string;
+  source_trust_anchor_hash?: string;
+  consensusVerifierHash?: string;
+  consensus_verifier_hash?: string;
+  messageInclusionVerifierHash?: string;
+  message_inclusion_verifier_hash?: string;
+  finalityPolicyHash?: string;
+  finality_policy_hash?: string;
+  sourceStateVerifierHash?: string;
+  source_state_verifier_hash?: string;
+  sourceBridgeEmitterAddress?: string;
+  source_bridge_emitter_address?: string;
+  bridgeAddress?: string;
+  bridge_address?: string;
+  sourceBridgeEmitterCodeHash?: string;
+  source_bridge_emitter_code_hash?: string;
+  sourceBridgeNetworkId?: string;
+  source_bridge_network_id?: string;
+  networkId?: string;
+  network_id?: string;
+  sourceBridgeOwnerAddress?: string;
+  source_bridge_owner_address?: string;
+  ownerAddress?: string;
+  owner_address?: string;
+  sourceBridgeConfigHash?: string;
+  source_bridge_config_hash?: string;
+  configHash?: string;
+  config_hash?: string;
+}
+
+export interface SccpSourceAdapterEngineDeploymentInput
+  extends SccpSourceVerifierMaterialInput {
+  adapterProofFamily?: string;
+  adapter_proof_family?: string;
+  adapterVerifierVkHash?: string;
+  adapter_verifier_vk_hash?: string;
+  solanaTowerReplayVerifierHash?: string;
+  solana_tower_replay_verifier_hash?: string;
+  solanaFullAccountsdbLatticeVerifierHash?: string;
+  solana_full_accountsdb_lattice_verifier_hash?: string;
+  solanaBankForkChoiceVerifierHash?: string;
+  solana_bank_fork_choice_verifier_hash?: string;
+  tonMasterchainConfigVerifierHash?: string;
+  ton_masterchain_config_verifier_hash?: string;
+  tonValidatorSetTransitionVerifierHash?: string;
+  ton_validator_set_transition_verifier_hash?: string;
+  tonShardAccountsDictionaryVerifierHash?: string;
+  ton_shard_accounts_dictionary_verifier_hash?: string;
+  deploymentReceiptHash?: string;
+  deployment_receipt_hash?: string;
+}
+
+export interface SccpSourceVerifierMaterial {
+  version: 1;
+  sourceDomain: number;
+  sourceChain: string;
+  sourceProofPlan: number;
+  finalityModel: number;
+  adapterCircuitId: string;
+  sourceTrustAnchorId: string;
+  sourceTrustAnchorHash: string;
+  consensusVerifierId: string;
+  consensusVerifierHash: string;
+  messageInclusionVerifierId: string;
+  messageInclusionVerifierHash: string;
+  finalityPolicyId: string;
+  finalityPolicyHash: string;
+  sourceStateVerifierId: string;
+  sourceStateVerifierHash: string;
+  sourceBridgeEmitterId: string;
+  sourceBridgeEmitterAddress: string;
+  sourceBridgeEmitterCodeHash: string;
+  sourceBridgeNetworkId: string;
+  sourceBridgeOwnerAddress: string;
+  sourceBridgeConfigHash: string;
+  placeholderMaterial: false;
+}
+
+export interface SccpSourceAdapterEngineDeployment
+  extends SccpSourceVerifierMaterial {
+  targetDomain: number;
+  adapterProofFamily: string;
+  adapterVerifierVkHash: string;
+  solanaTowerReplayVerifierHash: string;
+  solanaFullAccountsdbLatticeVerifierHash: string;
+  solanaBankForkChoiceVerifierHash: string;
+  tonMasterchainConfigVerifierHash: string;
+  tonValidatorSetTransitionVerifierHash: string;
+  tonShardAccountsDictionaryVerifierHash: string;
+  deploymentReceiptHash: string;
 }
 
 export interface SolanaSccpMessageProofInput {
@@ -682,52 +1822,1193 @@ export interface SolanaSccpMessageProofInput {
   transaction_status_root?: string;
   receiptOrMessageRoot?: string;
   receipt_or_message_root?: string;
+  transactionSignature?: string;
+  transaction_signature?: string;
+  emitterProgramId?: string;
+  emitter_program_id?: string;
   inclusionBranch?: readonly (string | Uint8Array | ArrayBuffer | ArrayBufferView | number[])[];
   inclusion_branch?: readonly (string | Uint8Array | ArrayBuffer | ArrayBufferView | number[])[];
 }
 
-export interface SolanaSccpProofRequest {
-  version: 1;
-  backend: typeof SCCP_SOLANA_RECURSIVE_PROOF_BACKEND_V1;
-  sourceDomain: typeof SCCP_DOMAIN_SOL;
-  targetDomain: number;
-  mainnetGenesisHash: string;
-  witnessHash: string;
-  publicInputs: {
-    messageId: string;
-    payloadHash: string;
-    commitmentRoot: string;
-    finalizedSlot: string;
-    blockhash: string;
-    sourceEventDigest: string;
+export interface TonSccpShardProofInput {
+  sourceEventDigest?: string;
+  source_event_digest?: string;
+  masterchainSeqno?: string | number | bigint;
+  masterchain_seqno?: string | number | bigint;
+  finalityHeight?: string | number | bigint;
+  finality_height?: string | number | bigint;
+  masterchainBlockHash?: string;
+  masterchain_block_hash?: string;
+  finalityBlockHash?: string;
+  finality_block_hash?: string;
+  shardWorkchainId?: string | number | bigint;
+  shard_workchain_id?: string | number | bigint;
+  shardShard?: string | number | bigint;
+  shard_shard?: string | number | bigint;
+  shardSeqno?: string | number | bigint;
+  shard_seqno?: string | number | bigint;
+  shardBlockHash?: string;
+  shard_block_hash?: string;
+  shardFileHash?: string;
+  shard_file_hash?: string;
+  shardStateRoot?: string;
+  shard_state_root?: string;
+  transactionRoot?: string;
+  transaction_root?: string;
+  receiptOrMessageRoot?: string;
+  receipt_or_message_root?: string;
+  transactionLt?: string | number | bigint;
+  transaction_lt?: string | number | bigint;
+  shardStateLeafIndex?: string | number | bigint;
+  shard_state_leaf_index?: string | number | bigint;
+  shardStateInclusionBranch?: readonly (string | Uint8Array | ArrayBuffer | ArrayBufferView | number[])[];
+  shard_state_inclusion_branch?: readonly (string | Uint8Array | ArrayBuffer | ArrayBufferView | number[])[];
+  inclusionBranch?: readonly (string | Uint8Array | ArrayBuffer | ArrayBufferView | number[])[];
+  inclusion_branch?: readonly (string | Uint8Array | ArrayBuffer | ArrayBufferView | number[])[];
+  shardStateProofBoc?: BinaryLike;
+  shard_state_proof_boc?: BinaryLike;
+  shardStateDictionaryRoot?: string;
+  shard_state_dictionary_root?: string;
+  shardStateDictionaryKeyBitLen?: string | number | bigint;
+  shard_state_dictionary_key_bit_len?: string | number | bigint;
+  shardStateDictionaryKey?: BinaryLike;
+  shard_state_dictionary_key?: BinaryLike;
+  shardStateDictionaryProofBoc?: BinaryLike;
+  shard_state_dictionary_proof_boc?: BinaryLike;
+}
+
+export interface TonShardStateTransitionProofInput
+  extends TonValidatorSetTransitionMessageInput {
+  version?: SccpVersionInput;
+  transitionMessageHash?: string;
+  transition_message_hash?: string;
+  transitionSignatureHash?: string;
+  transition_signature_hash?: string;
+  validatorSignatureProof?: TonValidatorSignatureProofInput;
+  validator_signature_proof?: TonValidatorSignatureProofInput;
+}
+
+export interface TonShardStateProofRequestInput
+  extends TonMasterchainBlockMessageInput {
+  transactionLt?: string | number | bigint;
+  transaction_lt?: string | number | bigint;
+  shardStateProofBoc?: BinaryLike;
+  shard_state_proof_boc?: BinaryLike;
+  shardStateDictionaryRoot?: string;
+  shard_state_dictionary_root?: string;
+  shardStateDictionaryKeyBitLen?: string | number | bigint;
+  shard_state_dictionary_key_bit_len?: string | number | bigint;
+  shardStateDictionaryKey?: BinaryLike;
+  shard_state_dictionary_key?: BinaryLike;
+  shardStateDictionaryProofBoc?: BinaryLike;
+  shard_state_dictionary_proof_boc?: BinaryLike;
+  configDictionaryProofBoc?: BinaryLike;
+  config_dictionary_proof_boc?: BinaryLike;
+  masterchainConfigProofBoc?: BinaryLike;
+  masterchain_config_proof_boc?: BinaryLike;
+  masterchainConfigProof?: {
+    configDictionaryProofBoc?: BinaryLike;
+    config_dictionary_proof_boc?: BinaryLike;
+    validatorSetPayloadHash?: string;
+    validator_set_payload_hash?: string;
+    configLeafHash?: string;
+    config_leaf_hash?: string;
+    configLeafIndex?: string | number | bigint;
+    config_leaf_index?: string | number | bigint;
+    configValueHash?: string;
+    config_value_hash?: string;
   };
-  witness: SolanaSccpWitness;
+  masterchain_config_proof?: {
+    configDictionaryProofBoc?: BinaryLike;
+    config_dictionary_proof_boc?: BinaryLike;
+    validatorSetPayloadHash?: string;
+    validator_set_payload_hash?: string;
+    configLeafHash?: string;
+    config_leaf_hash?: string;
+    configLeafIndex?: string | number | bigint;
+    config_leaf_index?: string | number | bigint;
+    configValueHash?: string;
+    config_value_hash?: string;
+  };
+  validatorSetPayloadHash?: string;
+  validator_set_payload_hash?: string;
+  configLeafHash?: string;
+  config_leaf_hash?: string;
+  configLeafIndex?: string | number | bigint;
+  config_leaf_index?: string | number | bigint;
+  configValueHash?: string;
+  config_value_hash?: string;
+  masterchainSignatureHash?: string;
+  masterchain_signature_hash?: string;
+  validatorSetTransitionProofs?: readonly TonShardStateTransitionProofInput[];
+  validator_set_transition_proofs?: readonly TonShardStateTransitionProofInput[];
+  sourceStateVerifierId?: string;
+  source_state_verifier_id?: string;
+  sourceStateVerifierHash?: string;
+  source_state_verifier_hash?: string;
+  sourceTrustAnchorId?: string;
+  source_trust_anchor_id?: string;
+  sourceTrustAnchorHash?: string;
+  source_trust_anchor_hash?: string;
+  consensusVerifierId?: string;
+  consensus_verifier_id?: string;
+  consensusVerifierHash?: string;
+  consensus_verifier_hash?: string;
+  messageInclusionVerifierId?: string;
+  message_inclusion_verifier_id?: string;
+  messageInclusionVerifierHash?: string;
+  message_inclusion_verifier_hash?: string;
+  finalityPolicyId?: string;
+  finality_policy_id?: string;
+  finalityPolicyHash?: string;
+  finality_policy_hash?: string;
+}
+
+export interface TonShardStateFastpqPublicInputs {
+  readonly dsid: string;
+  readonly slot: string;
+  readonly oldRoot: string;
+  readonly newRoot: string;
+  readonly permRoot: string;
+  readonly txSetHash: string;
+}
+
+export interface TonShardStateFastpqTransition {
+  readonly key: string;
+  readonly operation: "meta_set";
+  readonly oldValue: "0x";
+  readonly newValue: string;
+}
+
+export interface TonShardStateProofRequest {
+  readonly version: 1;
+  readonly proofFamily: typeof SCCP_STARK_FRI_PROOF_FAMILY_V1;
+  readonly circuitId: typeof SCCP_TON_SHARD_STATE_OPEN_VERIFY_CIRCUIT_ID_V1;
+  readonly parameterSet: "fastpq-lane-balanced";
+  readonly sourceDomain: typeof SCCP_DOMAIN_TON;
+  readonly masterchainSeqno: string;
+  readonly shardSeqno: string;
+  readonly sourceStateVerifierId: string;
+  readonly sourceStateVerifierHash: string;
+  readonly shardStateProofPublicInputsHash: string;
+  readonly statementBytes: Uint8Array;
+  readonly witnessCommitmentBytes: Uint8Array;
+  readonly verificationContextBytes: Uint8Array;
+  readonly schemaDescriptor: Uint8Array;
+  readonly publicInputColumns: ReadonlyArray<ReadonlyArray<string>>;
+  readonly fastpqPublicInputs: Readonly<TonShardStateFastpqPublicInputs>;
+  readonly fastpqTransitions: ReadonlyArray<Readonly<TonShardStateFastpqTransition>>;
+}
+
+export type TonSccpFullLightClientAuditRole =
+  | "masterchainConfig"
+  | "masterchain_config"
+  | "validatorSetTransition"
+  | "validator_set_transition"
+  | "shardAccountsDictionary"
+  | "shard_accounts_dictionary";
+
+export interface TonSccpFullLightClientAuditProofRequestBaseInput
+  extends TonShardStateProofRequestInput {
+  sourceVerifierMaterial?: unknown;
+  source_verifier_material?: unknown;
+  sourceAdapterDeployment?: unknown;
+  source_adapter_deployment?: unknown;
+  tonMasterchainConfigVerifierHash?: string;
+  ton_masterchain_config_verifier_hash?: string;
+  tonValidatorSetTransitionVerifierHash?: string;
+  ton_validator_set_transition_verifier_hash?: string;
+  tonShardAccountsDictionaryVerifierHash?: string;
+  ton_shard_accounts_dictionary_verifier_hash?: string;
+  deploymentReceiptHash?: string;
+  deployment_receipt_hash?: string;
+  shardStateVerificationProofHash?: string;
+  shard_state_verification_proof_hash?: string;
+  shardStateProofPublicInputsHash?: string;
+  shard_state_proof_public_inputs_hash?: string;
+}
+
+export type TonSccpFullLightClientAuditProofRequestInput =
+  TonSccpFullLightClientAuditProofRequestBaseInput &
+    (
+      | {
+          shardStateVerificationProof: TonSccpSourceStateVerificationProof;
+          shard_state_verification_proof?: never;
+        }
+      | {
+          shardStateVerificationProof?: never;
+          shard_state_verification_proof: TonSccpSourceStateVerificationProof;
+        }
+    );
+
+export function canonicalTonSccpSourceStateVerificationProofBytes(
+  input: TonSccpSourceStateVerificationProof,
+): Uint8Array;
+
+export interface TonSccpFullLightClientAuditProofRequest {
+  readonly version: 1;
+  readonly proofFamily: typeof SCCP_STARK_FRI_PROOF_FAMILY_V1;
+  readonly circuitId:
+    | typeof SCCP_TON_MASTERCHAIN_CONFIG_OPEN_VERIFY_CIRCUIT_ID_V1
+    | typeof SCCP_TON_VALIDATOR_SET_TRANSITION_OPEN_VERIFY_CIRCUIT_ID_V1
+    | typeof SCCP_TON_SHARD_ACCOUNTS_DICTIONARY_OPEN_VERIFY_CIRCUIT_ID_V1;
+  readonly parameterSet: "fastpq-lane-balanced";
+  readonly role: "masterchain_config" | "validator_set_transition" | "shard_accounts_dictionary";
+  readonly roleCode: 1 | 2 | 3;
+  readonly sourceDomain: typeof SCCP_DOMAIN_TON;
+  readonly masterchainSeqno: string;
+  readonly shardSeqno: string;
+  readonly verifierId: string;
+  readonly verifierHash: string;
+  readonly sourceStateVerifierId: string;
+  readonly sourceStateVerifierHash: string;
+  readonly sourceVerifierMaterialHash: string;
+  readonly sourceAdapterDeploymentHash: string;
+  readonly fullLightClientGateHash: string;
+  readonly shardStateProofPublicInputsHash: string;
+  readonly shardStateVerificationProofHash: string;
+  readonly auditStatementHash: string;
+  readonly statementBytes: Uint8Array;
+  readonly verificationContextBytes: Uint8Array;
+  readonly schemaDescriptor: Uint8Array;
+  readonly publicInputColumns: ReadonlyArray<ReadonlyArray<string>>;
+  readonly fastpqPublicInputs: Readonly<TonShardStateFastpqPublicInputs>;
+  readonly fastpqTransitions: ReadonlyArray<Readonly<TonShardStateFastpqTransition>>;
+}
+
+export interface TonValidatorSetPayloadInput {
+  validatorPublicKeys?: readonly string[];
+  validator_public_keys?: readonly string[];
+  validatorWeights?: readonly (string | number | bigint)[];
+  validator_weights?: readonly (string | number | bigint)[];
+}
+
+export interface TonMasterchainConfigLeafInput {
+  version?: SccpVersionInput;
+  sourceDomain?: SccpDomainIdInput;
+  source_domain?: SccpDomainIdInput;
+  masterchainSeqno?: string | number | bigint;
+  masterchain_seqno?: string | number | bigint;
+  masterchainBlockHash?: string;
+  masterchain_block_hash?: string;
+  shardStateRoot?: string;
+  shard_state_root?: string;
+  validatorSetHash?: string;
+  validator_set_hash?: string;
+  validatorSetPayloadHash?: string;
+  validator_set_payload_hash?: string;
+}
+
+export interface TonMasterchainConfigProofInput extends TonMasterchainConfigLeafInput {
+  configRoot?: string;
+  config_root?: string;
+  configLeafHash?: string;
+  config_leaf_hash?: string;
+  configLeafIndex?: string | number | bigint;
+  config_leaf_index?: string | number | bigint;
+  configValueHash?: string;
+  config_value_hash?: string;
+  configDictionaryProofBoc?: string | Uint8Array | ArrayBuffer | ArrayBufferView | number[];
+  config_dictionary_proof_boc?: string | Uint8Array | ArrayBuffer | ArrayBufferView | number[];
+  configInclusionBranch?: readonly (string | Uint8Array | ArrayBuffer | ArrayBufferView | number[])[];
+  config_inclusion_branch?: readonly (string | Uint8Array | ArrayBuffer | ArrayBufferView | number[])[];
+}
+
+export interface TonMasterchainBlockMessageInput {
+  sourceDomain?: SccpDomainIdInput;
+  source_domain?: SccpDomainIdInput;
+  masterchainSeqno?: string | number | bigint;
+  masterchain_seqno?: string | number | bigint;
+  masterchainWorkchainId?: string | number | bigint;
+  masterchain_workchain_id?: string | number | bigint;
+  masterchainShard?: string | number | bigint;
+  masterchain_shard?: string | number | bigint;
+  masterchainBlockHash?: string;
+  masterchain_block_hash?: string;
+  masterchainFileHash?: string;
+  masterchain_file_hash?: string;
+  validatorSetHash?: string;
+  validator_set_hash?: string;
+  masterchainConfigRoot?: string;
+  masterchain_config_root?: string;
+  masterchainConfigProofHash?: string;
+  masterchain_config_proof_hash?: string;
+  shardWorkchainId?: string | number | bigint;
+  shard_workchain_id?: string | number | bigint;
+  shardShard?: string | number | bigint;
+  shard_shard?: string | number | bigint;
+  shardSeqno?: string | number | bigint;
+  shard_seqno?: string | number | bigint;
+  shardBlockHash?: string;
+  shard_block_hash?: string;
+  shardFileHash?: string;
+  shard_file_hash?: string;
+  shardStateRoot?: string;
+  shard_state_root?: string;
+  transactionRoot?: string;
+  transaction_root?: string;
+  shardProofHash?: string;
+  shard_proof_hash?: string;
+}
+
+export interface TonValidatorSetTransitionMessageInput {
+  sourceDomain?: SccpDomainIdInput;
+  source_domain?: SccpDomainIdInput;
+  fromValidatorSetSeqno?: string | number | bigint;
+  from_validator_set_seqno?: string | number | bigint;
+  toValidatorSetSeqno?: string | number | bigint;
+  to_validator_set_seqno?: string | number | bigint;
+  masterchainSeqno?: string | number | bigint;
+  masterchain_seqno?: string | number | bigint;
+  masterchainWorkchainId?: string | number | bigint;
+  masterchain_workchain_id?: string | number | bigint;
+  masterchainShard?: string | number | bigint;
+  masterchain_shard?: string | number | bigint;
+  masterchainBlockHash?: string;
+  masterchain_block_hash?: string;
+  masterchainFileHash?: string;
+  masterchain_file_hash?: string;
+  parentValidatorSetHash?: string;
+  parent_validator_set_hash?: string;
+  nextValidatorSetHash?: string;
+  next_validator_set_hash?: string;
+  nextValidatorSetPayload?: string | Uint8Array | ArrayBuffer | ArrayBufferView | number[];
+  next_validator_set_payload?: string | Uint8Array | ArrayBuffer | ArrayBufferView | number[];
+  nextValidatorSetPayloadHash?: string;
+  next_validator_set_payload_hash?: string;
+  nextValidatorSetConfigHash?: string;
+  next_validator_set_config_hash?: string;
+}
+
+export interface TonValidatorSignatureProofInput {
+  version?: SccpVersionInput;
+  totalWeight?: string | number | bigint;
+  total_weight?: string | number | bigint;
+  signedWeight?: string | number | bigint;
+  signed_weight?: string | number | bigint;
+  blockMessageHash?: string;
+  block_message_hash?: string;
+  validatorPublicKeys?: readonly string[];
+  validator_public_keys?: readonly string[];
+  validatorWeights?: readonly (string | number | bigint)[];
+  validator_weights?: readonly (string | number | bigint)[];
+  validatorSetHash?: string;
+  validator_set_hash?: string;
+  signersBitmap?: string | Uint8Array | ArrayBuffer | ArrayBufferView | number[];
+  signers_bitmap?: string | Uint8Array | ArrayBuffer | ArrayBufferView | number[];
+  signatures?: readonly (string | Uint8Array | ArrayBuffer | ArrayBufferView | number[])[];
+}
+
+export interface TonValidatorSetTransitionSignatureInput
+  extends TonValidatorSetTransitionMessageInput {
+  version?: SccpVersionInput;
+  transitionMessageHash?: string;
+  transition_message_hash?: string;
+  validatorSignatureProof?: TonValidatorSignatureProofInput;
+  validator_signature_proof?: TonValidatorSignatureProofInput;
+}
+
+export interface EvmSccpReceiptProofInput {
+  sourceDomain?: SccpDomainIdInput;
+  source_domain?: SccpDomainIdInput;
+  sourceEventDigest?: string;
+  source_event_digest?: string;
+  beaconSlot?: string | number | bigint;
+  beacon_slot?: string | number | bigint;
+  executionBlockNumber?: string | number | bigint;
+  execution_block_number?: string | number | bigint;
+  finalityHeight?: string | number | bigint;
+  finality_height?: string | number | bigint;
+  executionBlockHash?: string;
+  execution_block_hash?: string;
+  finalityBlockHash?: string;
+  finality_block_hash?: string;
+  executionReceiptsRoot?: string;
+  execution_receipts_root?: string;
+  receiptsRoot?: string;
+  receipts_root?: string;
+  receiptOrMessageRoot?: string;
+  receipt_or_message_root?: string;
+  beaconFinalizedRoot?: string;
+  beacon_finalized_root?: string;
+  syncCommitteeRoot?: string;
+  sync_committee_root?: string;
+  receiptRootIndex?: string | number | bigint;
+  receipt_root_index?: string | number | bigint;
+  receiptTrieProofNodes?: readonly (string | Uint8Array | ArrayBuffer | ArrayBufferView | number[])[];
+  receipt_trie_proof_nodes?: readonly (string | Uint8Array | ArrayBuffer | ArrayBufferView | number[])[];
+  inclusionBranch?: readonly (string | Uint8Array | ArrayBuffer | ArrayBufferView | number[])[];
+  inclusion_branch?: readonly (string | Uint8Array | ArrayBuffer | ArrayBufferView | number[])[];
+}
+
+export interface EthSyncCommitteePayloadInput {
+  syncCommitteePublicKeys?: readonly (string | Uint8Array | ArrayBuffer | ArrayBufferView | number[])[];
+  sync_committee_public_keys?: readonly (string | Uint8Array | ArrayBuffer | ArrayBufferView | number[])[];
+  syncCommitteeWeights?: readonly (string | number | bigint)[];
+  sync_committee_weights?: readonly (string | number | bigint)[];
+  syncCommitteePops?: readonly (string | Uint8Array | ArrayBuffer | ArrayBufferView | number[])[];
+  sync_committee_pops?: readonly (string | Uint8Array | ArrayBuffer | ArrayBufferView | number[])[];
+}
+
+export interface EthBeaconBlockHeaderRootInput {
+  slot?: string | number | bigint;
+  beaconSlot?: string | number | bigint;
+  beacon_slot?: string | number | bigint;
+  proposerIndex?: string | number | bigint;
+  proposer_index?: string | number | bigint;
+  beaconProposerIndex?: string | number | bigint;
+  beacon_proposer_index?: string | number | bigint;
+  parentRoot?: string;
+  parent_root?: string;
+  beaconParentRoot?: string;
+  beacon_parent_root?: string;
+  stateRoot?: string;
+  state_root?: string;
+  beaconStateRoot?: string;
+  beacon_state_root?: string;
+  bodyRoot?: string;
+  body_root?: string;
+  beaconBodyRoot?: string;
+  beacon_body_root?: string;
+}
+
+export interface EthSyncCommitteeTransitionMessageInput {
+  sourceDomain?: SccpDomainIdInput;
+  source_domain?: SccpDomainIdInput;
+  fromSyncPeriod?: string | number | bigint;
+  from_sync_period?: string | number | bigint;
+  toSyncPeriod?: string | number | bigint;
+  to_sync_period?: string | number | bigint;
+  transitionSlot?: string | number | bigint;
+  transition_slot?: string | number | bigint;
+  finalizedBeaconRoot?: string;
+  finalized_beacon_root?: string;
+  parentSyncCommitteeHash?: string;
+  parent_sync_committee_hash?: string;
+  nextSyncCommitteeHash?: string;
+  next_sync_committee_hash?: string;
+  nextSyncCommitteePayload?: string | Uint8Array | ArrayBuffer | ArrayBufferView | number[];
+  next_sync_committee_payload?: string | Uint8Array | ArrayBuffer | ArrayBufferView | number[];
+  nextSyncCommitteePayloadHash?: string;
+  next_sync_committee_payload_hash?: string;
+  nextSyncCommitteeBranchHash?: string;
+  next_sync_committee_branch_hash?: string;
+}
+
+export interface EthBeaconSyncCommitteeProofInput extends EthSyncCommitteePayloadInput {
+  version?: SccpVersionInput;
+  totalWeight?: string | number | bigint;
+  total_weight?: string | number | bigint;
+  signedWeight?: string | number | bigint;
+  signed_weight?: string | number | bigint;
+  syncCommitteeMessageHash?: string;
+  sync_committee_message_hash?: string;
+  signersBitmap?: string | Uint8Array | ArrayBuffer | ArrayBufferView | number[];
+  signers_bitmap?: string | Uint8Array | ArrayBuffer | ArrayBufferView | number[];
+  aggregateSignature?: string | Uint8Array | ArrayBuffer | ArrayBufferView | number[];
+  aggregate_signature?: string | Uint8Array | ArrayBuffer | ArrayBufferView | number[];
+}
+
+export interface EthSyncCommitteeTransitionSignatureInput
+  extends EthSyncCommitteeTransitionMessageInput {
+  version?: SccpVersionInput;
+  transitionMessageHash?: string;
+  transition_message_hash?: string;
+  syncCommitteeProof?: EthBeaconSyncCommitteeProofInput;
+  sync_committee_proof?: EthBeaconSyncCommitteeProofInput;
+}
+
+export interface BscSccpReceiptProofInput {
+  sourceDomain?: SccpDomainIdInput;
+  source_domain?: SccpDomainIdInput;
+  sourceEventDigest?: string;
+  source_event_digest?: string;
+  validatorEpoch?: string | number | bigint;
+  validator_epoch?: string | number | bigint;
+  blockNumber?: string | number | bigint;
+  block_number?: string | number | bigint;
+  finalityHeight?: string | number | bigint;
+  finality_height?: string | number | bigint;
+  blockHash?: string;
+  block_hash?: string;
+  finalityBlockHash?: string;
+  finality_block_hash?: string;
+  receiptsRoot?: string;
+  receipts_root?: string;
+  receiptOrMessageRoot?: string;
+  receipt_or_message_root?: string;
+  validatorSetHash?: string;
+  validator_set_hash?: string;
+  commitSealHash?: string;
+  commit_seal_hash?: string;
+  receiptRootIndex?: string | number | bigint;
+  receipt_root_index?: string | number | bigint;
+  receiptTrieProofNodes?: readonly (string | Uint8Array | ArrayBuffer | ArrayBufferView | number[])[];
+  receipt_trie_proof_nodes?: readonly (string | Uint8Array | ArrayBuffer | ArrayBufferView | number[])[];
+  inclusionBranch?: readonly (string | Uint8Array | ArrayBuffer | ArrayBufferView | number[])[];
+  inclusion_branch?: readonly (string | Uint8Array | ArrayBuffer | ArrayBufferView | number[])[];
+}
+
+export interface BscValidatorSetPayloadInput {
+  validatorAddresses?: readonly string[];
+  validator_addresses?: readonly string[];
+  validatorPowers?: readonly (string | number | bigint)[];
+  validator_powers?: readonly (string | number | bigint)[];
+}
+
+export interface BscValidatorStorageProofInput {
+  version?: SccpVersionInput;
+  validatorIndex?: number;
+  validator_index?: number;
+  storageSlot?: string;
+  storage_slot?: string;
+  storageValue?: BinaryLike;
+  storage_value?: BinaryLike;
+  storageValueHash?: string;
+  storage_value_hash?: string;
+  storageProofNodes?: readonly BinaryLike[];
+  storage_proof_nodes?: readonly BinaryLike[];
+}
+
+export interface BscValidatorSetMetadataProofInput {
+  version?: SccpVersionInput;
+  stateRoot?: string;
+  state_root?: string;
+  nextValidatorSetPayloadHash?: string;
+  next_validator_set_payload_hash?: string;
+  validatorContractAddress?: BinaryLike;
+  validator_contract_address?: BinaryLike;
+  accountProofNodes?: readonly BinaryLike[];
+  account_proof_nodes?: readonly BinaryLike[];
+  storageRoot?: string;
+  storage_root?: string;
+  validatorSetLengthSlot?: string;
+  validator_set_length_slot?: string;
+  validatorSetLengthValue?: BinaryLike;
+  validator_set_length_value?: BinaryLike;
+  validatorSetLengthValueHash?: string;
+  validator_set_length_value_hash?: string;
+  validatorSetLengthProofNodes?: readonly BinaryLike[];
+  validator_set_length_proof_nodes?: readonly BinaryLike[];
+  validatorStorageProofs?: readonly BscValidatorStorageProofInput[];
+  validator_storage_proofs?: readonly BscValidatorStorageProofInput[];
+}
+
+export interface BscValidatorSetTransitionMessageInput {
+  sourceDomain?: SccpDomainIdInput;
+  source_domain?: SccpDomainIdInput;
+  fromValidatorEpoch?: string | number | bigint;
+  from_validator_epoch?: string | number | bigint;
+  toValidatorEpoch?: string | number | bigint;
+  to_validator_epoch?: string | number | bigint;
+  transitionBlockNumber?: string | number | bigint;
+  transition_block_number?: string | number | bigint;
+  transitionBlockHash?: string;
+  transition_block_hash?: string;
+  parentValidatorSetHash?: string;
+  parent_validator_set_hash?: string;
+  nextValidatorSetHash?: string;
+  next_validator_set_hash?: string;
+  nextValidatorSetPayloadHash?: string;
+  next_validator_set_payload_hash?: string;
+  validatorSetMetadataProofHash?: string;
+  validator_set_metadata_proof_hash?: string;
+}
+
+export interface BscCommitMessageInput {
+  version?: SccpVersionInput;
+  sourceDomain?: SccpDomainIdInput;
+  source_domain?: SccpDomainIdInput;
+  validatorEpoch?: string | number | bigint;
+  validator_epoch?: string | number | bigint;
+  blockNumber?: string | number | bigint;
+  block_number?: string | number | bigint;
+  blockHash?: string;
+  block_hash?: string;
+  receiptsRoot?: string;
+  receipts_root?: string;
+  validatorSetHash?: string;
+  validator_set_hash?: string;
+}
+
+export interface BscCommitSealInput {
+  version?: SccpVersionInput;
+  totalPower?: string | number | bigint;
+  total_power?: string | number | bigint;
+  signedPower?: string | number | bigint;
+  signed_power?: string | number | bigint;
+  commitMessageHash?: string;
+  commit_message_hash?: string;
+  validatorPublicKeys?: ReadonlyArray<BinaryLike>;
+  validator_public_keys?: ReadonlyArray<BinaryLike>;
+  validatorPowers?: readonly (string | number | bigint)[];
+  validator_powers?: readonly (string | number | bigint)[];
+  validatorSetHash?: string;
+  validator_set_hash?: string;
+  signersBitmap?: BinaryLike;
+  signers_bitmap?: BinaryLike;
+  signatures?: ReadonlyArray<BinaryLike>;
+}
+
+export interface SubstrateAuthoritySetPayloadInput {
+  authorityPublicKeys?: readonly string[];
+  authority_public_keys?: readonly string[];
+  authorityWeights?: readonly (string | number | bigint)[];
+  authority_weights?: readonly (string | number | bigint)[];
+}
+
+export interface SubstrateGrandpaJustificationProofInput extends SubstrateAuthoritySetPayloadInput {
+  version?: SccpVersionInput;
+  totalWeight?: string | number | bigint;
+  total_weight?: string | number | bigint;
+  signedWeight?: string | number | bigint;
+  signed_weight?: string | number | bigint;
+  precommitMessageHash?: string;
+  precommit_message_hash?: string;
+  signersBitmap?: BinaryLike;
+  signers_bitmap?: BinaryLike;
+  signatures?: readonly BinaryLike[];
+}
+
+export interface SubstrateAuthoritySetTransitionMessageInput {
+  sourceDomain?: SccpDomainIdInput;
+  source_domain?: SccpDomainIdInput;
+  fromGrandpaSetId?: string | number | bigint;
+  from_grandpa_set_id?: string | number | bigint;
+  toGrandpaSetId?: string | number | bigint;
+  to_grandpa_set_id?: string | number | bigint;
+  transitionBlockNumber?: string | number | bigint;
+  transition_block_number?: string | number | bigint;
+  transitionBlockHash?: string;
+  transition_block_hash?: string;
+  parentAuthoritySetHash?: string;
+  parent_authority_set_hash?: string;
+  nextAuthoritySetHash?: string;
+  next_authority_set_hash?: string;
+  nextAuthoritySetPayload?: BinaryLike | SubstrateAuthoritySetPayloadInput;
+  next_authority_set_payload?: BinaryLike | SubstrateAuthoritySetPayloadInput;
+  nextAuthoritySetPayloadHash?: string;
+  next_authority_set_payload_hash?: string;
+  nextAuthoritySetProofHash?: string;
+  next_authority_set_proof_hash?: string;
+}
+
+export interface SubstrateAuthoritySetTransitionJustificationInput
+  extends SubstrateAuthoritySetTransitionMessageInput {
+  version?: SccpVersionInput;
+  transitionMessageHash?: string;
+  transition_message_hash?: string;
+  grandpaJustification?: SubstrateGrandpaJustificationProofInput;
+  grandpa_justification?: SubstrateGrandpaJustificationProofInput;
+}
+
+export interface TronSccpReceiptProofInput {
+  sourceEventDigest?: string;
+  source_event_digest?: string;
+  receiptRoot?: string;
+  receipt_root?: string;
+  receiptOrMessageRoot?: string;
+  receipt_or_message_root?: string;
+  transactionRoot?: string;
+  transaction_root?: string;
+  inclusionBranch?: readonly (string | Uint8Array | ArrayBuffer | ArrayBufferView | number[])[];
+  inclusion_branch?: readonly (string | Uint8Array | ArrayBuffer | ArrayBufferView | number[])[];
+}
+
+export interface TronSccpReceiptStateProofInput extends TronSccpReceiptProofInput {
+  receiptRootIndex?: string | number | bigint;
+  receipt_root_index?: string | number | bigint;
+  receiptTrieProofNodes?: readonly (string | Uint8Array | ArrayBuffer | ArrayBufferView | number[])[];
+  receipt_trie_proof_nodes?: readonly (string | Uint8Array | ArrayBuffer | ArrayBufferView | number[])[];
+}
+
+export interface TronSccpTransactionSourceProofInput extends TronSccpReceiptProofInput {
+  transactionIndex?: string | number | bigint;
+  transaction_index?: string | number | bigint;
+  transactionCount?: string | number | bigint;
+  transaction_count?: string | number | bigint;
+  transactionBytes?: BinaryLike;
+  transaction_bytes?: BinaryLike;
+  transactionMerkleBranch?: readonly (string | Uint8Array | ArrayBuffer | ArrayBufferView | number[])[];
+  transaction_merkle_branch?: readonly (string | Uint8Array | ArrayBuffer | ArrayBufferView | number[])[];
+}
+
+export interface TronRawBlockHeaderInput {
+  number?: string | number | bigint;
+  blockNumber?: string | number | bigint;
+  block_number?: string | number | bigint;
+  txTrieRoot?: string;
+  tx_trie_root?: string;
+  accountStateRoot?: string;
+  account_state_root?: string;
+  parentBlockId?: string;
+  parent_block_id?: string;
+  witnessAddress?: string;
+  witness_address?: string;
+  headerVersion?: string | number | bigint;
+  header_version?: string | number | bigint;
+  timestampMs?: string | number | bigint;
+  timestamp_ms?: string | number | bigint;
+}
+
+export interface TronSolidBlockHeaderProofInput {
+  version?: SccpVersionInput;
+  rawData?: string | Uint8Array | ArrayBuffer | ArrayBufferView | number[];
+  raw_data?: string | Uint8Array | ArrayBuffer | ArrayBufferView | number[];
+  witnessSignature?: string | Uint8Array | ArrayBuffer | ArrayBufferView | number[];
+  witness_signature?: string | Uint8Array | ArrayBuffer | ArrayBufferView | number[];
+  parentRawData?: string | Uint8Array | ArrayBuffer | ArrayBufferView | number[];
+  parent_raw_data?: string | Uint8Array | ArrayBuffer | ArrayBufferView | number[];
+  parentWitnessSignature?: string | Uint8Array | ArrayBuffer | ArrayBufferView | number[];
+  parent_witness_signature?: string | Uint8Array | ArrayBuffer | ArrayBufferView | number[];
+  rawDataHash?: string;
+  raw_data_hash?: string;
+  parentRawDataHash?: string;
+  parent_raw_data_hash?: string;
+  blockId?: string;
+  block_id?: string;
+  txTrieRoot?: string;
+  tx_trie_root?: string;
+  accountStateRoot?: string;
+  account_state_root?: string;
+  parentBlockId?: string;
+  parent_block_id?: string;
+  witnessAddress?: string;
+  witness_address?: string;
+  timestampMs?: string | number | bigint;
+  timestamp_ms?: string | number | bigint;
+  headerVersion?: string | number | bigint;
+  header_version?: string | number | bigint;
+}
+
+export interface TronWitnessSchedulePayloadInput {
+  witnessAddresses?: readonly string[];
+  witness_addresses?: readonly string[];
+  witnessWeights?: readonly (string | number | bigint)[];
+  witness_weights?: readonly (string | number | bigint)[];
+}
+
+export interface TronSolidBlockMessageInput {
+  version?: SccpVersionInput;
+  sourceDomain?: SccpDomainIdInput;
+  source_domain?: SccpDomainIdInput;
+  solidBlockNumber?: string | number | bigint;
+  solid_block_number?: string | number | bigint;
+  blockHash?: string;
+  block_hash?: string;
+  witnessScheduleHash?: string;
+  witness_schedule_hash?: string;
+  receiptRoot?: string;
+  receipt_root?: string;
+  transactionRoot?: string;
+  transaction_root?: string;
+  receiptProofHash?: string;
+  receipt_proof_hash?: string;
+}
+
+export interface TronWitnessSealInput {
+  version?: SccpVersionInput;
+  totalWeight?: string | number | bigint;
+  total_weight?: string | number | bigint;
+  signedWeight?: string | number | bigint;
+  signed_weight?: string | number | bigint;
+  solidBlockMessageHash?: string;
+  solid_block_message_hash?: string;
+  witnessAddresses?: readonly (string | Uint8Array | ArrayBuffer | ArrayBufferView | number[])[];
+  witness_addresses?: readonly (string | Uint8Array | ArrayBuffer | ArrayBufferView | number[])[];
+  witnessWeights?: readonly (string | number | bigint)[];
+  witness_weights?: readonly (string | number | bigint)[];
+  signersBitmap?: string | Uint8Array | ArrayBuffer | ArrayBufferView | number[];
+  signers_bitmap?: string | Uint8Array | ArrayBuffer | ArrayBufferView | number[];
+  signatures?: readonly (string | Uint8Array | ArrayBuffer | ArrayBufferView | number[])[];
+}
+
+export interface TronWitnessScheduleTransitionMessageInput {
+  version?: SccpVersionInput;
+  sourceDomain?: SccpDomainIdInput;
+  source_domain?: SccpDomainIdInput;
+  fromWitnessScheduleEpoch?: string | number | bigint;
+  from_witness_schedule_epoch?: string | number | bigint;
+  toWitnessScheduleEpoch?: string | number | bigint;
+  to_witness_schedule_epoch?: string | number | bigint;
+  transitionBlockNumber?: string | number | bigint;
+  transition_block_number?: string | number | bigint;
+  transitionBlockHash?: string;
+  transition_block_hash?: string;
+  parentWitnessScheduleHash?: string;
+  parent_witness_schedule_hash?: string;
+  nextWitnessScheduleHash?: string;
+  next_witness_schedule_hash?: string;
+  nextWitnessSchedulePayload?: TronWitnessSchedulePayloadInput | string | Uint8Array | ArrayBuffer | ArrayBufferView | number[];
+  next_witness_schedule_payload?: TronWitnessSchedulePayloadInput | string | Uint8Array | ArrayBuffer | ArrayBufferView | number[];
+  nextWitnessSchedulePayloadHash?: string;
+  next_witness_schedule_payload_hash?: string;
+}
+
+export interface TronWitnessScheduleTransitionSealInput extends TronWitnessScheduleTransitionMessageInput {
+  transitionMessageHash?: string;
+  transition_message_hash?: string;
+  sealProof?: TronWitnessSealInput;
+  seal_proof?: TronWitnessSealInput;
+  witnessSealProof?: TronWitnessSealInput;
+  witness_seal_proof?: TronWitnessSealInput;
+}
+
+export interface SubstrateSccpStorageProofInput {
+  sourceDomain?: SccpDomainIdInput;
+  source_domain?: SccpDomainIdInput;
+  sourceEventDigest?: string;
+  source_event_digest?: string;
+  sourceEventLeafIndex?: string | number | bigint;
+  source_event_leaf_index?: string | number | bigint;
+  leafIndex?: string | number | bigint;
+  leaf_index?: string | number | bigint;
+  finalizedBlockNumber?: string | number | bigint;
+  finalized_block_number?: string | number | bigint;
+  finalityHeight?: string | number | bigint;
+  finality_height?: string | number | bigint;
+  grandpaSetId?: string | number | bigint;
+  grandpa_set_id?: string | number | bigint;
+  blockHash?: string;
+  block_hash?: string;
+  finalityBlockHash?: string;
+  finality_block_hash?: string;
+  authoritySetHash?: string;
+  authority_set_hash?: string;
+  eventsRoot?: string;
+  events_root?: string;
+  receiptOrMessageRoot?: string;
+  receipt_or_message_root?: string;
+  inclusionBranch?: readonly (string | Uint8Array | ArrayBuffer | ArrayBufferView | number[])[];
+  inclusion_branch?: readonly (string | Uint8Array | ArrayBuffer | ArrayBufferView | number[])[];
+}
+
+export interface SubstrateSccpRuntimeStorageProofRequestInput
+  extends SubstrateSccpStorageProofInput,
+    SccpSourceVerifierMaterialInput {
+  storageProofHash?: string;
+  storage_proof_hash?: string;
+  sourceVerifierMaterial?: SccpSourceVerifierMaterialInput;
+  source_verifier_material?: SccpSourceVerifierMaterialInput;
+  material?: SccpSourceVerifierMaterialInput;
+}
+
+export interface SubstrateSccpRuntimeStorageFastpqPublicInputs {
+  readonly dsid: string;
+  readonly slot: string;
+  readonly oldRoot: string;
+  readonly newRoot: string;
+  readonly permRoot: string;
+  readonly txSetHash: string;
+}
+
+export interface SubstrateSccpRuntimeStorageFastpqTransition {
+  readonly key: string;
+  readonly operation: "meta_set";
+  readonly oldValue: "0x";
+  readonly newValue: string;
+}
+
+export interface SubstrateSccpRuntimeStorageProofRequest {
+  readonly version: 1;
+  readonly proofFamily: typeof SCCP_STARK_FRI_PROOF_FAMILY_V1;
+  readonly circuitId: typeof SCCP_SUBSTRATE_RUNTIME_STORAGE_OPEN_VERIFY_CIRCUIT_ID_V1;
+  readonly parameterSet: "fastpq-lane-balanced";
+  readonly sourceDomain: number;
+  readonly finalizedBlockNumber: string;
+  readonly grandpaSetId: string;
+  readonly sourceStateVerifierId: string;
+  readonly sourceStateVerifierHash: string;
+  readonly runtimeStorageProofPublicInputsHash: string;
+  readonly storageProofHash: string;
+  readonly statementBytes: Uint8Array;
+  readonly verificationContextBytes: Uint8Array;
+  readonly schemaDescriptor: Uint8Array;
+  readonly publicInputColumns: ReadonlyArray<ReadonlyArray<string>>;
+  readonly fastpqPublicInputs: Readonly<SubstrateSccpRuntimeStorageFastpqPublicInputs>;
+  readonly fastpqTransitions: ReadonlyArray<Readonly<SubstrateSccpRuntimeStorageFastpqTransition>>;
+}
+
+export interface SolanaSccpProofPublicInputs {
+  readonly messageId: string;
+  readonly payloadHash: string;
+  readonly commitmentRoot: string;
+  readonly finalizedSlot: string;
+  readonly parentSlot: string;
+  readonly bankSignatureCount: string;
+  readonly parentBankHash: string;
+  readonly blockhash: string;
+  readonly bankHash: string;
+  readonly transactionStatusRoot: string;
+  readonly messageProofHash: string;
+  readonly accountInclusionRoot: string;
+  readonly accountsLtHashChecksum: string;
+  readonly accountsLtHashProofPublicInputsHash: string;
+  readonly sourceEventDigest: string;
+  readonly sourceStateVerifierId: string;
+  readonly sourceStateVerifierHash: string;
+  readonly statementHash: string;
+  readonly destinationBindingHash: string;
+  readonly sourceAdapterDeploymentHash: string;
+  readonly sourceAdapterDeploymentReceiptHash: string;
+  readonly sourceAdapterDeploymentBindingHash: string;
+}
+
+export interface SolanaSccpProofPublicInputsSnakeCase {
+  readonly message_id: string;
+  readonly payload_hash: string;
+  readonly commitment_root: string;
+  readonly finalized_slot: string | number | bigint;
+  readonly parent_slot: string | number | bigint;
+  readonly bank_signature_count: string | number | bigint;
+  readonly parent_bank_hash: string;
+  readonly blockhash: string;
+  readonly bank_hash: string;
+  readonly transaction_status_root: string;
+  readonly message_proof_hash: string;
+  readonly account_inclusion_root: string;
+  readonly accounts_lt_hash_checksum: string;
+  readonly accounts_lt_hash_proof_public_inputs_hash: string;
+  readonly source_event_digest: string;
+  readonly source_state_verifier_id: string;
+  readonly source_state_verifier_hash: string;
+  readonly statement_hash: string;
+  readonly destination_binding_hash: string;
+  readonly source_adapter_deployment_hash: string;
+  readonly source_adapter_deployment_receipt_hash: string;
+  readonly source_adapter_deployment_binding_hash: string;
+}
+
+export type SolanaSccpProofPublicInputsInput =
+  | SolanaSccpProofPublicInputs
+  | SolanaSccpProofPublicInputsSnakeCase;
+
+export interface SolanaSccpRouteCanaryEvidenceInput {
+  routeAllowlistHash?: string;
+  route_allowlist_hash?: string;
+  destinationBindingHash?: string;
+  destination_binding_hash?: string;
+  expectedDestinationBindingHash?: string;
+  expected_destination_binding_hash?: string;
+  sourceVerifierMaterialHash?: string;
+  source_verifier_material_hash?: string;
+  sourceAdapterEngineDeploymentHash?: string;
+  source_adapter_engine_deployment_hash?: string;
+  verifierIdentity?: string;
+  verifier_identity?: string;
+  verifierProgramId?: string;
+  verifier_program_id?: string;
+  verifierCodeHash?: string;
+  verifier_code_hash?: string;
+  solanaRpcCommitment?: "finalized";
+  solana_rpc_commitment?: "finalized";
+  solanaProgramOwner?: string;
+  solana_program_owner?: string;
+  solanaProgramdataOwner?: string;
+  solana_programdata_owner?: string;
+  solanaProgramImmutable?: boolean;
+  solana_program_immutable?: boolean;
+  solanaProgramAccountDataBase64?: string;
+  solana_program_account_data_base64?: string;
+  solanaProgramdataAddress?: string;
+  solana_programdata_address?: string;
+  solanaProgramdataSlot?: string | number | bigint;
+  solana_programdata_slot?: string | number | bigint;
+  solanaExpectedProgramdataSlot?: string | number | bigint;
+  solana_expected_programdata_slot?: string | number | bigint;
+  solanaProgramAccountContextSlot?: string | number | bigint;
+  solana_program_account_context_slot?: string | number | bigint;
+  solanaProgramdataAccountContextSlot?: string | number | bigint;
+  solana_programdata_account_context_slot?: string | number | bigint;
+  solanaProgramdataMetadataBlake2b256?: string;
+  solana_programdata_metadata_blake2b256?: string;
+  solanaProgramdataMetadataBase64?: string;
+  solana_programdata_metadata_base64?: string;
+  solanaProgramdataExecutableBlake2b256?: string;
+  solana_programdata_executable_blake2b256?: string;
+  solanaProgramdataExecutableBase64?: string;
+  solana_programdata_executable_base64?: string;
+}
+
+export interface TonSccpRouteCanaryEvidenceInput {
+  routeAllowlistHash?: string;
+  route_allowlist_hash?: string;
+  destinationBindingHash?: string;
+  destination_binding_hash?: string;
+  expectedDestinationBindingHash?: string;
+  expected_destination_binding_hash?: string;
+  sourceVerifierMaterialHash?: string;
+  source_verifier_material_hash?: string;
+  sourceAdapterEngineDeploymentHash?: string;
+  source_adapter_engine_deployment_hash?: string;
+  verifierContractAddress?: string;
+  verifier_contract_address?: string;
+  verifierIdentity?: string;
+  verifier_identity?: string;
+  verifierCodeHash?: string;
+  verifier_code_hash?: string;
+  accountStatus?: "active";
+  account_status?: "active";
+  tonAccountStatus?: "active";
+  ton_account_status?: "active";
+  accountStateHash?: string;
+  account_state_hash?: string;
+  tonAccountStateHash?: string;
+  ton_account_state_hash?: string;
+  lastTransactionLt?: string;
+  last_transaction_lt?: string;
+  tonLastTransactionLt?: string;
+  ton_last_transaction_lt?: string;
+  lastTransactionHash?: string;
+  last_transaction_hash?: string;
+  tonLastTransactionHash?: string;
+  ton_last_transaction_hash?: string;
+  verifierCodeBocRootHash?: string;
+  verifier_code_boc_root_hash?: string;
+  tonVerifierCodeBocRootHash?: string;
+  ton_verifier_code_boc_root_hash?: string;
+}
+
+export interface SolanaSccpProofRequest {
+  readonly version: 1;
+  readonly backend: typeof SCCP_SOLANA_RECURSIVE_PROOF_BACKEND_V1;
+  readonly sourceDomain: typeof SCCP_DOMAIN_SOL;
+  readonly targetDomain: number;
+  readonly mainnetGenesisHash: string;
+  readonly witnessHash: string;
+  readonly proofContextHash: string;
+  readonly sourceAdapterDeploymentBindingHash: string;
+  readonly sourceStateVerifierId: string;
+  readonly sourceStateVerifierHash: string;
+  readonly publicInputs: Readonly<SolanaSccpProofPublicInputs>;
+  readonly witness: Readonly<SolanaSccpWitness>;
+  readonly proofContext: Readonly<SolanaSccpProofContext>;
+  readonly sourceAdapterDeploymentBinding: Readonly<SccpSourceAdapterDeploymentBinding>;
 }
 
 export interface SolanaSccpProofResult {
-  version: 1;
-  backend: typeof SCCP_SOLANA_RECURSIVE_PROOF_BACKEND_V1;
-  proofBytes: Uint8Array;
-  proofBase64: string;
-  publicInputs: SolanaSccpProofRequest["publicInputs"];
-  witnessHash: string;
-  envelopeHash: string;
+  readonly version: 1;
+  readonly backend: typeof SCCP_SOLANA_RECURSIVE_PROOF_BACKEND_V1;
+  readonly proofBytes: Uint8Array;
+  readonly proofBase64: string;
+  readonly publicInputs: Readonly<SolanaSccpProofPublicInputs>;
+  readonly witnessHash: string;
+  readonly proofContextHash: string;
+  readonly sourceAdapterDeploymentBindingHash: string;
+  readonly sourceStateVerifierId: string;
+  readonly sourceStateVerifierHash: string;
+  readonly proofContext: Readonly<SolanaSccpProofContext>;
+  readonly sourceAdapterDeploymentBinding: Readonly<SccpSourceAdapterDeploymentBinding>;
+  readonly envelopeHash: string;
+}
+
+export interface SolanaSccpSubmissionInputBase {
+  /**
+   * Transparent SCCP message public inputs are required. Solana proof-result
+   * publicInputs are source-proof inputs and are not accepted as a substitute.
+   */
+  publicInputs?: SccpMessageTransparentPublicInputsInput;
+  public_inputs?: SccpMessageTransparentPublicInputsInput;
+  transparentPublicInputs?: SccpMessageTransparentPublicInputsInput;
+  transparent_public_inputs?: SccpMessageTransparentPublicInputsInput;
+  publicInputsBytes?: BinaryLike;
+  public_inputs_bytes?: BinaryLike;
+  proofBytes?: BinaryLike;
+  proof_bytes?: BinaryLike;
+  bundleBytes?: BinaryLike;
+  bundle_bytes?: BinaryLike;
+  statementHash?: string;
+  statement_hash?: string;
+  destinationBindingHash?: string;
+  destination_binding_hash?: string;
+  proofContextHash?: string;
+  proof_context_hash?: string;
+  proofContext?: SolanaSccpProofContextInput;
+  proof_context?: SolanaSccpProofContextInput;
+}
+
+export type SolanaSccpSubmissionInput =
+  SolanaSccpSubmissionInputBase &
+    (
+      {
+        proofResult: SolanaSccpProofResult;
+        proof_result?: never;
+      } |
+      {
+        proofResult?: never;
+        proof_result: SolanaSccpProofResult;
+      }
+    );
+
+export interface SolanaSccpSubmissionInputWithProofResult extends SolanaSccpSubmissionInputBase {
+  /**
+   * Wrapped result returned by wrapSolanaSccpProofResult or SolanaSccpProver.prove.
+   * Its source public inputs, proof bytes, and recomputed envelope hash must
+  * match the transparent publicInputs and proof bytes submitted on-chain.
+   */
+  proofResult: SolanaSccpProofResult;
+  proof_result?: never;
+}
+
+export interface SolanaSccpSubmission {
+  readonly version: 1;
+  readonly envelopeEncoding: typeof SCCP_SOLANA_BORSH_INSTRUCTION_V1;
+  readonly submissionKind: "program_instruction";
+  readonly verifierEntrypoint: "submit_sccp_message_proof";
+  readonly proofBytes: Uint8Array;
+  readonly publicInputs: Readonly<Required<{
+    version: number;
+    messageId: string;
+    payloadHash: string;
+    targetDomain: number;
+    commitmentRoot: string;
+    finalityHeight: string;
+    finalityBlockHash: string;
+  }>>;
+  readonly publicInputsBytes: Uint8Array;
+  readonly bundleBytes: Uint8Array;
+  readonly statementHash: string;
+  readonly destinationBindingHash: string;
+  readonly proofContextHash: string;
+  readonly arguments: ReadonlyArray<
+    | { key: "proof_bytes"; encoding: "raw_bytes"; bytes: string }
+    | { key: "public_inputs"; encoding: "raw_bytes"; bytes: string }
+    | { key: "bundle_bytes"; encoding: "raw_bytes"; bytes: string }
+    | { key: "statement_hash"; encoding: "raw_bytes"; bytes: string }
+    | { key: "destination_binding_hash"; encoding: "raw_bytes"; bytes: string }
+    | { key: "proof_context_hash"; encoding: "raw_bytes"; bytes: string }
+  >;
+  readonly instructionData: Uint8Array;
+  readonly instructionDataHex: string;
+  readonly envelopeBytes: Uint8Array;
+  readonly envelopeHex: string;
 }
 
 export interface SccpMessageTransparentPublicInputsInput {
-  version?: number;
+  version?: SccpVersionInput;
   messageId?: string;
   message_id?: string;
   payloadHash?: string;
   payload_hash?: string;
-  targetDomain?: number;
-  target_domain?: number;
+  targetDomain?: SccpDomainIdInput;
+  target_domain?: SccpDomainIdInput;
   commitmentRoot?: string;
   commitment_root?: string;
   finalityHeight?: string | number | bigint;
   finality_height?: string | number | bigint;
   finalityBlockHash?: string;
   finality_block_hash?: string;
+}
+
+export interface SccpGroth16Bn254PublicSignalsInput {
+  publicInputs?: SccpMessageTransparentPublicInputsInput;
+  public_inputs?: SccpMessageTransparentPublicInputsInput;
+  sourceDomain?: SccpDomainIdInput;
+  source_domain?: SccpDomainIdInput;
+  statementHash?: string;
+  statement_hash?: string;
+  destinationBindingHash?: string;
+  destination_binding_hash?: string;
 }
 
 export interface TonSccpDestinationBindingInput {
@@ -737,10 +3018,11 @@ export interface TonSccpDestinationBindingInput {
 }
 
 export interface TonSccpManifestInput {
-  localDomain?: number;
-  local_domain?: number;
-  counterpartyDomain?: number;
-  counterparty_domain?: number;
+  version: SccpVersionInput;
+  localDomain?: SccpDomainIdInput;
+  local_domain?: SccpDomainIdInput;
+  counterpartyDomain?: SccpDomainIdInput;
+  counterparty_domain?: SccpDomainIdInput;
   securityModel?: "RecursiveZk";
   security_model?: "RecursiveZk";
   anchorGovernance?: "CryptographicProof";
@@ -749,12 +3031,18 @@ export interface TonSccpManifestInput {
   verifier_target?: "TonContract";
   verifierBackendFamily?: "TonContract";
   verifier_backend_family?: "TonContract";
-  proofFamily?: string;
-  proof_family?: string;
-  verifierBackendKey?: string;
-  verifier_backend_key?: string;
-  verifierBackend?: { key: string; family?: "TonContract" };
-  verifier_backend?: { key: string; family?: "TonContract" };
+  proofFamily?: typeof SCCP_STARK_FRI_PROOF_FAMILY_V1;
+  proof_family?: typeof SCCP_STARK_FRI_PROOF_FAMILY_V1;
+  verifierBackendKey?: typeof SCCP_TON_CONTRACT_PROOF_BACKEND_V1;
+  verifier_backend_key?: typeof SCCP_TON_CONTRACT_PROOF_BACKEND_V1;
+  verifierBackend?: {
+    key: typeof SCCP_TON_CONTRACT_PROOF_BACKEND_V1;
+    family?: "TonContract";
+  };
+  verifier_backend?: {
+    key: typeof SCCP_TON_CONTRACT_PROOF_BACKEND_V1;
+    family?: "TonContract";
+  };
   messageBackend?: string;
   message_backend?: string;
   registryBackend?: string;
@@ -765,19 +3053,39 @@ export interface TonSccpManifestInput {
   destination_binding?: TonSccpDestinationBindingInput;
 }
 
-export interface TonSccpMessageBodyInput {
+export interface TonSccpProofRequestInput {
   publicInputs?: SccpMessageTransparentPublicInputsInput;
   public_inputs?: SccpMessageTransparentPublicInputsInput;
-  proofBytes?: BinaryLike;
-  proof_bytes?: BinaryLike;
   bundleBytes?: BinaryLike;
   bundle_bytes?: BinaryLike;
+  sourceProofBytes?: BinaryLike;
+  source_proof_bytes?: BinaryLike;
+  backend?: typeof SCCP_TON_CONTRACT_PROOF_BACKEND_V1;
+  sourceDomain?: SccpDomainIdInput;
+  source_domain?: SccpDomainIdInput;
   statementHash?: string;
   statement_hash?: string;
   destinationBindingHash?: string;
   destination_binding_hash?: string;
   destinationBinding?: TonSccpDestinationBindingInput;
   destination_binding?: TonSccpDestinationBindingInput;
+  proofContext?: SolanaSccpProofContextInput;
+  proof_context?: SolanaSccpProofContextInput;
+  sourceStateVerifierId?: string;
+  source_state_verifier_id?: string;
+  sourceStateVerifierHash?: string;
+  source_state_verifier_hash?: string;
+  sourceAdapterDeploymentHash?: string;
+  source_adapter_deployment_hash?: string;
+  sourceAdapterDeploymentReceiptHash?: string;
+  source_adapter_deployment_receipt_hash?: string;
+  sourceAdapterDeploymentBinding?: SccpSourceAdapterDeploymentBindingInput;
+  source_adapter_deployment_binding?: SccpSourceAdapterDeploymentBindingInput;
+}
+
+export interface TonSccpMessageBodyInputBase extends TonSccpProofRequestInput {
+  proofBytes?: BinaryLike;
+  proof_bytes?: BinaryLike;
   metadataBytes?: BinaryLike;
   metadata_bytes?: BinaryLike;
   manifest?: TonSccpManifestInput;
@@ -785,12 +3093,35 @@ export interface TonSccpMessageBodyInput {
   query_id?: string | number | bigint;
 }
 
+export type TonSccpMessageBodyInput =
+  TonSccpMessageBodyInputBase &
+    (
+      {
+        proofResult: TonSccpProofResult;
+        proof_result?: TonSccpProofResult;
+      } |
+      {
+        proofResult?: TonSccpProofResult;
+        proof_result: TonSccpProofResult;
+      }
+    );
+
+export interface TonSccpMessageBodyInputWithProofResult extends TonSccpMessageBodyInputBase {
+  /**
+   * Wrapped result returned by wrapTonSccpProofResult or TonSccpProver.prove.
+   * TON native-recursive proof bytes are only accepted when they match this
+   * wrapped result and its request, envelope, verifier, and deployment binding.
+   */
+  proofResult: TonSccpProofResult;
+  proof_result?: TonSccpProofResult;
+}
+
 export interface TonSccpProofRequest {
-  version: 1;
-  backend: string;
-  sourceDomain: number;
-  targetDomain: number;
-  publicInputs: Required<{
+  readonly version: 1;
+  readonly backend: typeof SCCP_TON_CONTRACT_PROOF_BACKEND_V1;
+  readonly sourceDomain: typeof SCCP_DOMAIN_TON;
+  readonly targetDomain: number;
+  readonly publicInputs: Readonly<Required<{
     version: number;
     messageId: string;
     payloadHash: string;
@@ -798,89 +3129,684 @@ export interface TonSccpProofRequest {
     commitmentRoot: string;
     finalityHeight: string;
     finalityBlockHash: string;
-  }>;
-  publicInputsBytes: Uint8Array;
-  bundleBytes: Uint8Array;
-  sourceProofBytes: Uint8Array;
-  requestHash: string;
+  }>>;
+  readonly publicInputsBytes: Uint8Array;
+  readonly bundleBytes: Uint8Array;
+  readonly sourceProofBytes: Uint8Array;
+  readonly proofContext: Readonly<SolanaSccpProofContext>;
+  readonly statementHash: string;
+  readonly destinationBindingHash: string;
+  readonly sourceStateVerifierId: string;
+  readonly sourceStateVerifierHash: string;
+  readonly sourceAdapterDeploymentBindingHash: string;
+  readonly sourceAdapterDeploymentBinding: Readonly<SccpSourceAdapterDeploymentBinding>;
+  readonly requestHash: string;
 }
 
 export interface TonSccpSubmission {
-  version: 1;
-  envelopeEncoding: typeof SCCP_TON_MESSAGE_BODY_BOC_V1;
-  submissionKind: "internal_message";
-  verifierEntrypoint: "op::submit_sccp_message_proof";
-  messageBodyBoc: Uint8Array;
-  messageBodyBocHex: string;
-  arguments: ReadonlyArray<{ key: "message_body_boc"; encoding: "ton_boc"; bytes: string }>;
-  envelopeBytes: Uint8Array;
-  envelopeHex: string;
+  readonly version: 1;
+  readonly envelopeEncoding: typeof SCCP_TON_MESSAGE_BODY_BOC_V1;
+  readonly submissionKind: "internal_message";
+  readonly verifierEntrypoint: "op::submit_sccp_message_proof";
+  readonly messageBodyBoc: Uint8Array;
+  readonly messageBodyBocHex: string;
+  readonly arguments: ReadonlyArray<
+    Readonly<{ key: "message_body_boc"; encoding: "ton_boc"; bytes: string }>
+  >;
+  readonly envelopeBytes: Uint8Array;
+  readonly envelopeHex: string;
 }
 
 export interface TonSccpProofResult {
-  version: 1;
-  backend: string;
-  proofBytes: Uint8Array;
-  proofBase64: string;
-  publicInputs: TonSccpProofRequest["publicInputs"];
-  requestHash: string;
+  readonly version: 1;
+  readonly backend: typeof SCCP_TON_CONTRACT_PROOF_BACKEND_V1;
+  readonly proofBytes: Uint8Array;
+  readonly proofBase64: string;
+  readonly publicInputs: TonSccpProofRequest["publicInputs"];
+  readonly bundleBytes: Uint8Array;
+  readonly sourceProofBytes: Uint8Array;
+  readonly proofContext: Readonly<SolanaSccpProofContext>;
+  readonly statementHash: string;
+  readonly destinationBindingHash: string;
+  readonly sourceStateVerifierId: string;
+  readonly sourceStateVerifierHash: string;
+  readonly sourceAdapterDeploymentBindingHash: string;
+  readonly sourceAdapterDeploymentBinding: Readonly<SccpSourceAdapterDeploymentBinding>;
+  readonly requestHash: string;
+  readonly envelopeHash: string;
 }
 
-export interface TonSccpWitnessProvider {
-  resolveWitness(
-    input: TonSccpMessageBodyInput,
-    options?: Record<string, unknown>,
-  ): TonSccpMessageBodyInput | Promise<TonSccpMessageBodyInput>;
+export interface EvmSccpProofRequestInput {
+  publicInputs?: SccpMessageTransparentPublicInputsInput;
+  public_inputs?: SccpMessageTransparentPublicInputsInput;
+  bundleBytes?: BinaryLike;
+  bundle_bytes?: BinaryLike;
+  sourceProofBytes?: BinaryLike;
+  source_proof_bytes?: BinaryLike;
+  backend?: typeof SCCP_EVM_GROTH16_BN254_PROOF_BACKEND_V1;
+  sourceDomain?: SccpDomainIdInput;
+  source_domain?: SccpDomainIdInput;
+  statementHash?: string;
+  statement_hash?: string;
+  destinationBindingHash?: string;
+  destination_binding_hash?: string;
+  destinationBinding?: EvmSccpDestinationBindingInput;
+  destination_binding?: EvmSccpDestinationBindingInput;
+  proofContext?: SolanaSccpProofContextInput;
+  proof_context?: SolanaSccpProofContextInput;
+}
+
+export interface EvmSccpProofRequest {
+  readonly version: 1;
+  readonly backend: typeof SCCP_EVM_GROTH16_BN254_PROOF_BACKEND_V1;
+  readonly sourceDomain: number;
+  readonly targetDomain: number;
+  readonly publicInputs: Readonly<Required<{
+    version: number;
+    messageId: string;
+    payloadHash: string;
+    targetDomain: number;
+    commitmentRoot: string;
+    finalityHeight: string;
+    finalityBlockHash: string;
+  }>>;
+  readonly publicInputsBytes: Uint8Array;
+  readonly publicSignalWords: readonly string[];
+  readonly bundleBytes: Uint8Array;
+  readonly sourceProofBytes: Uint8Array;
+  readonly proofContext: Readonly<SolanaSccpProofContext>;
+  readonly statementHash: string;
+  readonly destinationBinding?: Readonly<EvmSccpDestinationBinding>;
+  readonly destinationBindingHash: string;
+  readonly requestHash: string;
+}
+
+export interface EvmSccpProofResult {
+  readonly version: 1;
+  readonly backend: typeof SCCP_EVM_GROTH16_BN254_PROOF_BACKEND_V1;
+  readonly proofBytes: Uint8Array;
+  readonly proofBase64: string;
+  readonly publicInputs: EvmSccpProofRequest["publicInputs"];
+  readonly publicSignalWords: readonly string[];
+  readonly bundleBytes: Uint8Array;
+  readonly sourceProofBytes: Uint8Array;
+  readonly proofContext: Readonly<SolanaSccpProofContext>;
+  readonly statementHash: string;
+  readonly destinationBinding: Readonly<EvmSccpDestinationBinding>;
+  readonly destinationBindingHash: string;
+  readonly requestHash: string;
+  readonly envelopeHash: string;
+}
+
+export interface EvmSccpSubmissionInput {
+  proofResult?: EvmSccpProofResult;
+  proof_result?: EvmSccpProofResult;
+  proofBytes?: BinaryLike;
+  proof_bytes?: BinaryLike;
+  bundleBytes?: BinaryLike;
+  bundle_bytes?: BinaryLike;
+  sourceProofBytes?: BinaryLike;
+  source_proof_bytes?: BinaryLike;
+  publicInputs?: SccpMessageTransparentPublicInputsInput;
+  public_inputs?: SccpMessageTransparentPublicInputsInput;
+  sourceDomain?: SccpDomainIdInput;
+  source_domain?: SccpDomainIdInput;
+  statementHash?: string;
+  statement_hash?: string;
+  destinationBindingHash?: string;
+  destination_binding_hash?: string;
+  publicSignalWords?: readonly string[];
+  public_signal_words?: readonly string[];
+}
+
+export interface EvmSccpSubmission {
+  readonly version: 1;
+  readonly proofFamily: typeof SCCP_STARK_FRI_PROOF_FAMILY_V1;
+  readonly verifierBackend: typeof SCCP_EVM_GROTH16_BN254_PROOF_BACKEND_V1;
+  readonly platformPayload: "evm_groth16_contract_call";
+  readonly envelopeEncoding: typeof SCCP_EVM_CONTRACT_CALL_ABI_TUPLE_V1;
+  readonly submissionKind: "contract_call";
+  readonly verifierEntrypoint: "submitSccpMessageProof(bytes proof_bytes, bytes32[6] public_inputs, bytes32 statement_hash)";
+  readonly contractMethod: typeof SCCP_SUBMIT_MESSAGE_PROOF_ABI_V1;
+  readonly functionSelector: string;
+  readonly sourceDomain: number;
+  readonly targetDomain: number;
+  readonly publicInputs: EvmSccpProofRequest["publicInputs"];
+  readonly publicInputWords: readonly string[];
+  readonly publicSignalWords: readonly string[];
+  readonly proofBytes: Uint8Array;
+  readonly publicInputWordsBytes: Uint8Array;
+  readonly statementHash: string;
+  readonly destinationBindingHash: string;
+  readonly arguments: ReadonlyArray<Readonly<{
+    key: "proof_bytes" | "public_inputs" | "statement_hash";
+    encoding: "raw_bytes" | "abi_bytes32x6" | "abi_bytes32";
+    bytes: string;
+  }>>;
+  readonly callData: Uint8Array;
+  readonly callDataHex: string;
+  readonly envelopeBytes: Uint8Array;
+  readonly envelopeHex: string;
+}
+
+export interface TronSccpProofRequestInput {
+  publicInputs?: SccpMessageTransparentPublicInputsInput;
+  public_inputs?: SccpMessageTransparentPublicInputsInput;
+  bundleBytes?: BinaryLike;
+  bundle_bytes?: BinaryLike;
+  sourceProofBytes?: BinaryLike;
+  source_proof_bytes?: BinaryLike;
+  backend?: typeof SCCP_TRON_GROTH16_BN254_PROOF_BACKEND_V1;
+  sourceDomain?: SccpDomainIdInput;
+  source_domain?: SccpDomainIdInput;
+  statementHash?: string;
+  statement_hash?: string;
+  destinationBindingHash?: string;
+  destination_binding_hash?: string;
+  destinationBinding?: TronSccpDestinationBindingInput;
+  destination_binding?: TronSccpDestinationBindingInput;
+  proofContext?: SolanaSccpProofContextInput;
+  proof_context?: SolanaSccpProofContextInput;
+}
+
+export interface TronSccpProofRequest {
+  readonly version: 1;
+  readonly backend: typeof SCCP_TRON_GROTH16_BN254_PROOF_BACKEND_V1;
+  readonly sourceDomain: number;
+  readonly targetDomain: number;
+  readonly publicInputs: Readonly<Required<{
+    version: number;
+    messageId: string;
+    payloadHash: string;
+    targetDomain: number;
+    commitmentRoot: string;
+    finalityHeight: string;
+    finalityBlockHash: string;
+  }>>;
+  readonly publicInputsBytes: Uint8Array;
+  readonly publicSignalWords: readonly string[];
+  readonly bundleBytes: Uint8Array;
+  readonly sourceProofBytes: Uint8Array;
+  readonly proofContext: Readonly<SolanaSccpProofContext>;
+  readonly statementHash: string;
+  readonly destinationBinding?: Readonly<TronSccpDestinationBinding>;
+  readonly destinationBindingHash: string;
+  readonly requestHash: string;
+}
+
+export interface TronSccpProofResult {
+  readonly version: 1;
+  readonly backend: typeof SCCP_TRON_GROTH16_BN254_PROOF_BACKEND_V1;
+  readonly proofBytes: Uint8Array;
+  readonly proofBase64: string;
+  readonly publicInputs: TronSccpProofRequest["publicInputs"];
+  readonly publicSignalWords: readonly string[];
+  readonly bundleBytes: Uint8Array;
+  readonly sourceProofBytes: Uint8Array;
+  readonly proofContext: Readonly<SolanaSccpProofContext>;
+  readonly statementHash: string;
+  readonly destinationBinding: Readonly<TronSccpDestinationBinding>;
+  readonly destinationBindingHash: string;
+  readonly requestHash: string;
+  readonly envelopeHash: string;
+}
+
+export interface TronSccpSubmissionInput {
+  proofResult?: TronSccpProofResult;
+  proof_result?: TronSccpProofResult;
+  proofBytes?: BinaryLike;
+  proof_bytes?: BinaryLike;
+  bundleBytes?: BinaryLike;
+  bundle_bytes?: BinaryLike;
+  sourceProofBytes?: BinaryLike;
+  source_proof_bytes?: BinaryLike;
+  publicInputs?: SccpMessageTransparentPublicInputsInput;
+  public_inputs?: SccpMessageTransparentPublicInputsInput;
+  sourceDomain?: SccpDomainIdInput;
+  source_domain?: SccpDomainIdInput;
+  statementHash?: string;
+  statement_hash?: string;
+  destinationBindingHash?: string;
+  destination_binding_hash?: string;
+  publicSignalWords?: readonly string[];
+  public_signal_words?: readonly string[];
+}
+
+export interface TronSccpSubmission {
+  readonly version: 1;
+  readonly proofFamily: typeof SCCP_STARK_FRI_PROOF_FAMILY_V1;
+  readonly verifierBackend: typeof SCCP_TRON_GROTH16_BN254_PROOF_BACKEND_V1;
+  readonly platformPayload: "tron_contract_call";
+  readonly envelopeEncoding: typeof SCCP_TRON_CONTRACT_CALL_ABI_TUPLE_V1;
+  readonly submissionKind: "contract_call";
+  readonly verifierEntrypoint: "submitSccpMessageProof(bytes proof_bytes, bytes32[6] public_inputs, bytes32 statement_hash)";
+  readonly contractMethod: typeof SCCP_SUBMIT_MESSAGE_PROOF_ABI_V1;
+  readonly functionSelector: string;
+  readonly sourceDomain: number;
+  readonly targetDomain: typeof SCCP_DOMAIN_TRON;
+  readonly publicInputs: TronSccpProofRequest["publicInputs"];
+  readonly publicInputWords: readonly string[];
+  readonly publicSignalWords: readonly string[];
+  readonly proofBytes: Uint8Array;
+  readonly publicInputWordsBytes: Uint8Array;
+  readonly statementHash: string;
+  readonly destinationBindingHash: string;
+  readonly arguments: ReadonlyArray<Readonly<{
+    key: "proof_bytes" | "public_inputs" | "statement_hash";
+    encoding: "raw_bytes" | "abi_bytes32x6" | "abi_bytes32";
+    bytes: string;
+  }>>;
+  readonly callData: Uint8Array;
+  readonly callDataHex: string;
+  readonly envelopeBytes: Uint8Array;
+  readonly envelopeHex: string;
+}
+
+export interface SccpBridgeProofSubmitPayloadBaseInput {
+  authority: string;
+  privateKey?: unknown;
+  private_key?: unknown;
+  publicKeyHex?: string;
+  public_key_hex?: string;
+  signatureB64?: string;
+  signature_b64?: string;
+  messageBundle?: Record<string, unknown>;
+  message_bundle?: Record<string, unknown>;
+  creationTimeMs?: NumericLike;
+  creation_time_ms?: NumericLike;
+}
+
+export interface EvmSccpBridgeProofSubmitPayloadInput
+  extends SccpBridgeProofSubmitPayloadBaseInput {
+  submission?: EvmSccpSubmission;
+  evmSccpSubmission?: EvmSccpSubmission;
+  evm_sccp_submission?: EvmSccpSubmission;
+  sccpSubmission?: EvmSccpSubmission;
+  sccp_submission?: EvmSccpSubmission;
+  destinationBinding?: EvmSccpDestinationBindingInput;
+  destination_binding?: EvmSccpDestinationBindingInput;
+}
+
+export interface TronSccpBridgeProofSubmitPayloadInput
+  extends SccpBridgeProofSubmitPayloadBaseInput {
+  submission?: TronSccpSubmission;
+  tronSccpSubmission?: TronSccpSubmission;
+  tron_sccp_submission?: TronSccpSubmission;
+  sccpSubmission?: TronSccpSubmission;
+  sccp_submission?: TronSccpSubmission;
+  destinationBinding?: TronSccpDestinationBindingInput;
+  destination_binding?: TronSccpDestinationBindingInput;
+}
+
+export interface SubstrateSccpProofRequestInput {
+  publicInputs?: SccpMessageTransparentPublicInputsInput;
+  public_inputs?: SccpMessageTransparentPublicInputsInput;
+  bundleBytes?: BinaryLike;
+  bundle_bytes?: BinaryLike;
+  sourceProofBytes?: BinaryLike;
+  source_proof_bytes?: BinaryLike;
+  backend?: typeof SCCP_SUBSTRATE_RUNTIME_PROOF_BACKEND_V1;
+  sourceDomain?: SccpDomainIdInput;
+  source_domain?: SccpDomainIdInput;
+  statementHash?: string;
+  statement_hash?: string;
+  destinationBindingHash?: string;
+  destination_binding_hash?: string;
+  proofContext?: SolanaSccpProofContextInput;
+  proof_context?: SolanaSccpProofContextInput;
+}
+
+export interface SubstrateSccpProofRequest {
+  readonly version: 1;
+  readonly backend: typeof SCCP_SUBSTRATE_RUNTIME_PROOF_BACKEND_V1;
+  readonly sourceDomain: number;
+  readonly targetDomain: number;
+  readonly publicInputs: Readonly<Required<{
+    version: number;
+    messageId: string;
+    payloadHash: string;
+    targetDomain: number;
+    commitmentRoot: string;
+    finalityHeight: string;
+    finalityBlockHash: string;
+  }>>;
+  readonly publicInputsBytes: Uint8Array;
+  readonly bundleBytes: Uint8Array;
+  readonly sourceProofBytes: Uint8Array;
+  readonly proofContext: Readonly<SolanaSccpProofContext>;
+  readonly statementHash: string;
+  readonly destinationBindingHash: string;
+  readonly requestHash: string;
+}
+
+export interface SubstrateSccpProofResult {
+  readonly version: 1;
+  readonly backend: typeof SCCP_SUBSTRATE_RUNTIME_PROOF_BACKEND_V1;
+  readonly proofBytes: Uint8Array;
+  readonly proofBase64: string;
+  readonly publicInputs: SubstrateSccpProofRequest["publicInputs"];
+  readonly bundleBytes: Uint8Array;
+  readonly sourceProofBytes: Uint8Array;
+  readonly proofContext: Readonly<SolanaSccpProofContext>;
+  readonly statementHash: string;
+  readonly destinationBindingHash: string;
+  readonly requestHash: string;
+  readonly envelopeHash: string;
+}
+
+export interface SubstrateSccpSubmissionInput {
+  proofResult?: SubstrateSccpProofResult;
+  proof_result?: SubstrateSccpProofResult;
+  proofBytes?: BinaryLike;
+  proof_bytes?: BinaryLike;
+  publicInputs?: SccpMessageTransparentPublicInputsInput;
+  public_inputs?: SccpMessageTransparentPublicInputsInput;
+  publicInputsBytes?: BinaryLike;
+  public_inputs_bytes?: BinaryLike;
+  bundleBytes?: BinaryLike;
+  bundle_bytes?: BinaryLike;
+  sourceProofBytes?: BinaryLike;
+  source_proof_bytes?: BinaryLike;
+  sourceDomain?: SccpDomainIdInput;
+  source_domain?: SccpDomainIdInput;
+  statementHash?: string;
+  statement_hash?: string;
+  destinationBindingHash?: string;
+  destination_binding_hash?: string;
+  proofContext?: SolanaSccpProofContextInput;
+  proof_context?: SolanaSccpProofContextInput;
+}
+
+export interface SubstrateSccpSubmission {
+  readonly version: 1;
+  readonly proofFamily: typeof SCCP_STARK_FRI_PROOF_FAMILY_V1;
+  readonly verifierBackend: typeof SCCP_SUBSTRATE_RUNTIME_PROOF_BACKEND_V1;
+  readonly platformPayload: "substrate_runtime_call";
+  readonly envelopeEncoding: typeof SCCP_SUBSTRATE_RUNTIME_CALL_SCALE_V1;
+  readonly submissionKind: "runtime_call";
+  readonly verifierEntrypoint: typeof SCCP_SUBSTRATE_SUBMIT_MESSAGE_PROOF_ENTRYPOINT_V1;
+  readonly sourceDomain: number;
+  readonly targetDomain: number;
+  readonly publicInputs: SubstrateSccpProofRequest["publicInputs"];
+  readonly proofContext: Readonly<SolanaSccpProofContext>;
+  readonly statementHash: string;
+  readonly destinationBindingHash: string;
+  readonly requestHash: string;
+  readonly proofBytes: Uint8Array;
+  readonly publicInputsBytes: Uint8Array;
+  readonly bundleBytes: Uint8Array;
+  readonly arguments: ReadonlyArray<Readonly<{
+    key: "proof_bytes" | "public_inputs" | "bundle_bytes";
+    encoding: "raw_bytes";
+    bytes: string;
+  }>>;
+  readonly runtimeCall: Uint8Array;
+  readonly runtimeCallHex: string;
+  readonly envelopeBytes: Uint8Array;
+  readonly envelopeHex: string;
+}
+
+export type SccpWitnessProviderFn<Input> = (
+  input: Input,
+  options?: Record<string, unknown>,
+) => Input | Promise<Input>;
+
+export type SccpWitnessProviderResolverOption<Input> =
+  | {
+      resolveWitness: SccpWitnessProviderFn<Input>;
+      resolve_witness?: never;
+    }
+  | {
+      resolveWitness?: never;
+      resolve_witness: SccpWitnessProviderFn<Input>;
+    };
+
+export type SccpProverWitnessProviderOption<Provider, Input> =
+  | {
+      witnessProvider?: Provider | SccpWitnessProviderFn<Input>;
+      witness_provider?: never;
+    }
+  | {
+      witnessProvider?: never;
+      witness_provider?: Provider | SccpWitnessProviderFn<Input>;
+    };
+
+export type SccpProverProveOption<ProveFn> =
+  | {
+      prove?: ProveFn;
+      proveFn?: never;
+      prove_fn?: never;
+    }
+  | {
+      prove?: never;
+      proveFn?: ProveFn;
+      prove_fn?: never;
+    }
+  | {
+      prove?: never;
+      proveFn?: never;
+      prove_fn?: ProveFn;
+    };
+
+export type TonSccpWitnessProvider =
+  SccpWitnessProviderResolverOption<TonSccpProofRequestInput>;
+
+export interface TonSccpProveResult {
+  proofBytes?: BinaryLike;
+  proof_bytes?: BinaryLike;
+  proof?: BinaryLike;
+  proofBase64?: string;
+  proof_base64?: string;
+  backend?: typeof SCCP_TON_CONTRACT_PROOF_BACKEND_V1;
+  requestHash?: string;
+  request_hash?: string;
+  sourceAdapterDeploymentBindingHash?: string;
+  source_adapter_deployment_binding_hash?: string;
+  envelopeHash?: string;
+  envelope_hash?: string;
 }
 
 export type TonSccpProveFn = (
   request: TonSccpProofRequest,
   options?: Record<string, unknown>,
-) =>
-  | { proofBytes?: BinaryLike; proof_bytes?: BinaryLike; proof?: BinaryLike }
-  | Promise<{ proofBytes?: BinaryLike; proof_bytes?: BinaryLike; proof?: BinaryLike }>;
+) => TonSccpProveResult | Promise<TonSccpProveResult>;
 
-export interface TonSccpProverOptions {
-  witnessProvider?: TonSccpWitnessProvider;
-  witness_provider?: TonSccpWitnessProvider;
-  prove?: TonSccpProveFn;
-  proveFn?: TonSccpProveFn;
-  prove_fn?: TonSccpProveFn;
-}
+export type TonSccpProverOptions =
+  SccpProverWitnessProviderOption<TonSccpWitnessProvider, TonSccpProofRequestInput> &
+    SccpProverProveOption<TonSccpProveFn>;
 
 export class TonSccpProver {
   constructor(options?: TonSccpProverOptions);
   buildRequest(
-    input: TonSccpMessageBodyInput,
+    input: TonSccpProofRequestInput,
     options?: Record<string, unknown>,
   ): Promise<TonSccpProofRequest>;
   prove(
-    input: TonSccpMessageBodyInput,
+    input: TonSccpProofRequestInput,
     options?: Record<string, unknown>,
   ): Promise<TonSccpProofResult>;
 }
 
-export interface SolanaSccpWitnessProvider {
-  resolveWitness(
-    input: SolanaSccpWitnessInput,
+export type EvmSccpWitnessProvider =
+  SccpWitnessProviderResolverOption<EvmSccpProofRequestInput>;
+
+export interface EvmSccpProveResult {
+  proofBytes?: BinaryLike;
+  proof_bytes?: BinaryLike;
+  proof?: BinaryLike;
+  proofBase64?: string;
+  proof_base64?: string;
+  backend?: typeof SCCP_EVM_GROTH16_BN254_PROOF_BACKEND_V1;
+  requestHash?: string;
+  request_hash?: string;
+  envelopeHash?: string;
+  envelope_hash?: string;
+  publicInputs?: SccpMessageTransparentPublicInputsInput;
+  public_inputs?: SccpMessageTransparentPublicInputsInput;
+  proofContext?: SolanaSccpProofContextInput;
+  proof_context?: SolanaSccpProofContextInput;
+  statementHash?: string;
+  statement_hash?: string;
+  destinationBindingHash?: string;
+  destination_binding_hash?: string;
+  publicSignalWords?: readonly string[];
+  public_signal_words?: readonly string[];
+}
+
+export type EvmSccpProveFn = (
+  request: EvmSccpProofRequest,
+  options?: Record<string, unknown>,
+) => EvmSccpProveResult | Promise<EvmSccpProveResult>;
+
+export type EvmSccpProverOptions =
+  SccpProverWitnessProviderOption<EvmSccpWitnessProvider, EvmSccpProofRequestInput> &
+    SccpProverProveOption<EvmSccpProveFn>;
+
+export class EvmSccpProver {
+  constructor(options?: EvmSccpProverOptions);
+  buildRequest(
+    input: EvmSccpProofRequestInput,
     options?: Record<string, unknown>,
-  ): SolanaSccpWitnessInput | Promise<SolanaSccpWitnessInput>;
+  ): Promise<EvmSccpProofRequest>;
+  prove(
+    input: EvmSccpProofRequestInput,
+    options?: Record<string, unknown>,
+  ): Promise<EvmSccpProofResult>;
+}
+
+export type TronSccpWitnessProvider =
+  SccpWitnessProviderResolverOption<TronSccpProofRequestInput>;
+
+export interface TronSccpProveResult {
+  proofBytes?: BinaryLike;
+  proof_bytes?: BinaryLike;
+  proof?: BinaryLike;
+  proofBase64?: string;
+  proof_base64?: string;
+  backend?: typeof SCCP_TRON_GROTH16_BN254_PROOF_BACKEND_V1;
+  requestHash?: string;
+  request_hash?: string;
+  envelopeHash?: string;
+  envelope_hash?: string;
+  publicInputs?: SccpMessageTransparentPublicInputsInput;
+  public_inputs?: SccpMessageTransparentPublicInputsInput;
+  proofContext?: SolanaSccpProofContextInput;
+  proof_context?: SolanaSccpProofContextInput;
+  statementHash?: string;
+  statement_hash?: string;
+  destinationBindingHash?: string;
+  destination_binding_hash?: string;
+  publicSignalWords?: readonly string[];
+  public_signal_words?: readonly string[];
+}
+
+export type TronSccpProveFn = (
+  request: TronSccpProofRequest,
+  options?: Record<string, unknown>,
+) => TronSccpProveResult | Promise<TronSccpProveResult>;
+
+export type TronSccpProverOptions =
+  SccpProverWitnessProviderOption<TronSccpWitnessProvider, TronSccpProofRequestInput> &
+    SccpProverProveOption<TronSccpProveFn>;
+
+export class TronSccpProver {
+  constructor(options?: TronSccpProverOptions);
+  buildRequest(
+    input: TronSccpProofRequestInput,
+    options?: Record<string, unknown>,
+  ): Promise<TronSccpProofRequest>;
+  prove(
+    input: TronSccpProofRequestInput,
+    options?: Record<string, unknown>,
+  ): Promise<TronSccpProofResult>;
+}
+
+export type SubstrateSccpWitnessProvider =
+  SccpWitnessProviderResolverOption<SubstrateSccpProofRequestInput>;
+
+export interface SubstrateSccpProveResult {
+  proofBytes?: BinaryLike;
+  proof_bytes?: BinaryLike;
+  proof?: BinaryLike;
+  proofBase64?: string;
+  proof_base64?: string;
+  backend?: typeof SCCP_SUBSTRATE_RUNTIME_PROOF_BACKEND_V1;
+  requestHash?: string;
+  request_hash?: string;
+  envelopeHash?: string;
+  envelope_hash?: string;
+  publicInputs?: SccpMessageTransparentPublicInputsInput;
+  public_inputs?: SccpMessageTransparentPublicInputsInput;
+  proofContext?: SolanaSccpProofContextInput;
+  proof_context?: SolanaSccpProofContextInput;
+  statementHash?: string;
+  statement_hash?: string;
+  destinationBindingHash?: string;
+  destination_binding_hash?: string;
+}
+
+export type SubstrateSccpProveFn = (
+  request: SubstrateSccpProofRequest,
+  options?: Record<string, unknown>,
+) => SubstrateSccpProveResult | Promise<SubstrateSccpProveResult>;
+
+export type SubstrateSccpProverOptions =
+  SccpProverWitnessProviderOption<
+    SubstrateSccpWitnessProvider,
+    SubstrateSccpProofRequestInput
+  > &
+    SccpProverProveOption<SubstrateSccpProveFn>;
+
+export class SubstrateSccpProver {
+  constructor(options?: SubstrateSccpProverOptions);
+  buildRequest(
+    input: SubstrateSccpProofRequestInput,
+    options?: Record<string, unknown>,
+  ): Promise<SubstrateSccpProofRequest>;
+  prove(
+    input: SubstrateSccpProofRequestInput,
+    options?: Record<string, unknown>,
+  ): Promise<SubstrateSccpProofResult>;
+}
+
+export type SolanaSccpWitnessProvider =
+  SccpWitnessProviderResolverOption<SolanaSccpWitnessInput>;
+
+export interface SolanaSccpProveResult {
+  proofBytes?: BinaryLike;
+  proof_bytes?: BinaryLike;
+  proof?: BinaryLike;
+  proofBase64?: string;
+  proof_base64?: string;
+  backend?: typeof SCCP_SOLANA_RECURSIVE_PROOF_BACKEND_V1;
+  publicInputs?: SolanaSccpProofPublicInputsInput;
+  public_inputs?: SolanaSccpProofPublicInputsInput;
+  sourceStateVerifierId?: string;
+  source_state_verifier_id?: string;
+  sourceStateVerifierHash?: string;
+  source_state_verifier_hash?: string;
+  proofContext?: SolanaSccpProofContextInput;
+  proof_context?: SolanaSccpProofContextInput;
+  sourceAdapterDeploymentBinding?: SccpSourceAdapterDeploymentBindingInput;
+  source_adapter_deployment_binding?: SccpSourceAdapterDeploymentBindingInput;
+  witnessHash?: string;
+  witness_hash?: string;
+  proofContextHash?: string;
+  proof_context_hash?: string;
+  sourceAdapterDeploymentBindingHash?: string;
+  source_adapter_deployment_binding_hash?: string;
+  envelopeHash?: string;
+  envelope_hash?: string;
 }
 
 export type SolanaSccpProveFn = (
   request: SolanaSccpProofRequest,
   options?: Record<string, unknown>,
-) =>
-  | { proofBytes?: BinaryLike; proof_bytes?: BinaryLike; proof?: BinaryLike }
-  | Promise<{ proofBytes?: BinaryLike; proof_bytes?: BinaryLike; proof?: BinaryLike }>;
+) => SolanaSccpProveResult | Promise<SolanaSccpProveResult>;
 
-export interface SolanaSccpProverOptions {
-  witnessProvider?: SolanaSccpWitnessProvider;
-  witness_provider?: SolanaSccpWitnessProvider;
-  prove?: SolanaSccpProveFn;
-  proveFn?: SolanaSccpProveFn;
-  prove_fn?: SolanaSccpProveFn;
-}
+export type SolanaSccpProverOptions =
+  SccpProverWitnessProviderOption<SolanaSccpWitnessProvider, SolanaSccpWitnessInput> &
+    SccpProverProveOption<SolanaSccpProveFn>;
 
 export class SolanaSccpProver {
   constructor(options?: SolanaSccpProverOptions);
@@ -898,6 +3824,15 @@ export function isSupportedSccpDomain(domainId: number): boolean;
 export function canonicalSccpMessageTransparentPublicInputsBytes(
   input: SccpMessageTransparentPublicInputsInput,
 ): Uint8Array;
+export function sccpMessageTransparentPublicInputAbiWords(
+  input: SccpMessageTransparentPublicInputsInput,
+): Uint8Array[];
+export function sccpSubmitMessageProofCallData(
+  proofBytes: BinaryLike,
+  publicInputs: SccpMessageTransparentPublicInputsInput,
+  statementHash: string,
+  sourceDomain?: number,
+): Uint8Array;
 export function sccpTonSubmissionQueryId(
   publicInputs: SccpMessageTransparentPublicInputsInput,
 ): bigint;
@@ -905,13 +3840,554 @@ export function canonicalSccpTonSubmissionMetadataBytes(
   input: TonSccpMessageBodyInput & { manifest: TonSccpManifestInput },
 ): Uint8Array;
 export function buildSccpTonMessageBodyBoc(input: TonSccpMessageBodyInput): Uint8Array;
-export function buildTonSccpProofRequest(input: TonSccpMessageBodyInput): TonSccpProofRequest;
+export function tonConfigValidatorSetPayloadFromProofBoc(input: BinaryLike): Uint8Array | null;
+export function tonConfigValidatorSetPayloadHashFromProofBoc(input: BinaryLike): string | null;
+export function tonHashmapECellRefValueHash(
+  input: BinaryLike,
+  key: BinaryLike,
+  keyBitLen: number,
+): string | null;
+export function tonHashmapEProofRootHash(input: BinaryLike): string;
+export function tonShardAccountsLastTransaction(
+  input: BinaryLike,
+  key: BinaryLike,
+  keyBitLen: number,
+): { hash: string; lt: bigint } | null;
+export function tonShardAccountsLastTransactionHash(
+  input: BinaryLike,
+  key: BinaryLike,
+  keyBitLen: number,
+): string | null;
+export function tonShardStateProofRootHash(input: BinaryLike): string;
+export function tonShardStateAccountsRootHash(input: BinaryLike): string;
+export function tonBocRootHashes(input: BinaryLike): string[];
+export function tonBocSingleRootHash(input: BinaryLike): string;
+export function buildTonSccpProofRequest(input: TonSccpProofRequestInput): TonSccpProofRequest;
+export function wrapTonSccpProofResult(
+  proofBytes: BinaryLike,
+  request: TonSccpProofRequest,
+): TonSccpProofResult;
 export function buildTonSccpSubmission(input: TonSccpMessageBodyInput): TonSccpSubmission;
+export function buildEvmSccpProofRequest(input: EvmSccpProofRequestInput): EvmSccpProofRequest;
+export function wrapEvmSccpProofResult(
+  proofBytes: BinaryLike,
+  request: EvmSccpProofRequest,
+): EvmSccpProofResult;
+export function buildEvmSccpSubmission(input: EvmSccpSubmissionInput): EvmSccpSubmission;
+export function buildEvmSccpBridgeProofSubmitPayload(
+  input: EvmSccpBridgeProofSubmitPayloadInput,
+): ToriiBridgeProofSubmitPayload;
+export function buildTronSccpProofRequest(input: TronSccpProofRequestInput): TronSccpProofRequest;
+export function wrapTronSccpProofResult(
+  proofBytes: BinaryLike,
+  request: TronSccpProofRequest,
+): TronSccpProofResult;
+export function buildTronSccpSubmission(input: TronSccpSubmissionInput): TronSccpSubmission;
+export function buildTronSccpBridgeProofSubmitPayload(
+  input: TronSccpBridgeProofSubmitPayloadInput,
+): ToriiBridgeProofSubmitPayload;
+export function buildSubstrateSccpProofRequest(
+  input: SubstrateSccpProofRequestInput,
+): SubstrateSccpProofRequest;
+export function wrapSubstrateSccpProofResult(
+  proofBytes: BinaryLike,
+  request: SubstrateSccpProofRequest,
+): SubstrateSccpProofResult;
+export function buildSubstrateSccpSubmission(
+  input: SubstrateSccpSubmissionInput,
+): SubstrateSccpSubmission;
+export function canonicalEvmSccpReceiptProofBytes(input: EvmSccpReceiptProofInput): Uint8Array;
+export function evmSccpReceiptProofHash(input: EvmSccpReceiptProofInput): string;
+export function canonicalEvmReceiptRootMptValue(receiptRoot: string): Uint8Array;
+export function canonicalEthSyncCommitteePayloadBytes(input: EthSyncCommitteePayloadInput): Uint8Array;
+export function ethSyncCommitteeHash(input: EthSyncCommitteePayloadInput): string;
+export function ethSyncCommitteeHashFromPayload(
+  input: EthSyncCommitteePayloadInput | string | Uint8Array | ArrayBuffer | ArrayBufferView | number[],
+): string;
+export function ethSyncCommitteePayloadHash(
+  input: EthSyncCommitteePayloadInput | string | Uint8Array | ArrayBuffer | ArrayBufferView | number[],
+): string;
+export function ethExecutionPayloadHeaderRootFromRlp(
+  headerRlp: string | Uint8Array | ArrayBuffer | ArrayBufferView | number[],
+): string;
+export function ethBeaconBodyRootFromExecutionPayloadBranch(
+  executionPayloadHeaderRoot: string,
+  executionPayloadBranch: readonly (string | Uint8Array | ArrayBuffer | ArrayBufferView | number[])[],
+): string;
+export function ethBeaconBlockHeaderRoot(input: EthBeaconBlockHeaderRootInput): string;
+export function canonicalEthSyncCommitteeTransitionMessageBytes(
+  input: EthSyncCommitteeTransitionMessageInput,
+): Uint8Array;
+export function ethSyncCommitteeTransitionMessageHash(
+  input: EthSyncCommitteeTransitionMessageInput,
+): string;
+export function canonicalEthSyncCommitteeTransitionSignatureBytes(
+  input: EthSyncCommitteeTransitionSignatureInput,
+): Uint8Array;
+export function ethSyncCommitteeTransitionSignatureHash(
+  input: EthSyncCommitteeTransitionSignatureInput,
+): string;
+export function canonicalBscSccpReceiptProofBytes(input: BscSccpReceiptProofInput): Uint8Array;
+export function bscSccpReceiptProofHash(input: BscSccpReceiptProofInput): string;
+export function canonicalBscValidatorSetPayloadBytes(input: BscValidatorSetPayloadInput): Uint8Array;
+export function bscValidatorSetPayloadHash(
+  input: BscValidatorSetPayloadInput | string | Uint8Array | ArrayBuffer | ArrayBufferView | number[],
+): string;
+export function bscValidatorSetHashFromPayload(
+  input: BscValidatorSetPayloadInput | string | Uint8Array | ArrayBuffer | ArrayBufferView | number[],
+): string;
+export function bscValidatorSetStorageValueHash(input: BinaryLike): string;
+export function canonicalBscValidatorSetMetadataProofBytes(
+  input: BscValidatorSetMetadataProofInput,
+): Uint8Array;
+export function bscValidatorSetMetadataProofHash(
+  input: BscValidatorSetMetadataProofInput,
+): string;
+export function canonicalBscValidatorSetTransitionMessageBytes(
+  input: BscValidatorSetTransitionMessageInput,
+): Uint8Array;
+export function bscValidatorSetTransitionMessageHash(
+  input: BscValidatorSetTransitionMessageInput,
+): string;
+export function canonicalBscCommitMessageBytes(input: BscCommitMessageInput): Uint8Array;
+export function bscCommitMessageHash(input: BscCommitMessageInput): string;
+export function canonicalBscCommitSealBytes(input: BscCommitSealInput): Uint8Array;
+export function bscCommitSealHash(input: BscCommitSealInput): string;
+export function bscValidatorSetPayloadFromParliaExtra(extraData: BinaryLike): Uint8Array;
+export function bscValidatorSetPayloadFromHeaderRlp(headerRlp: BinaryLike): Uint8Array;
 export function canonicalSolanaSccpMessageProofBytes(input: SolanaSccpMessageProofInput): Uint8Array;
 export function solanaSccpMessageProofHash(input: SolanaSccpMessageProofInput): string;
+export function canonicalSolanaSccpTransactionStatusLeafBytes(input: SolanaSccpMessageProofInput): Uint8Array;
+export function solanaSccpTransactionStatusLeafHash(input: SolanaSccpMessageProofInput): string;
+export function solanaSccpTransactionStatusRootFromBranch(input: SolanaSccpMessageProofInput): string;
+export function canonicalTonSccpShardProofBytes(input: TonSccpShardProofInput): Uint8Array;
+export function tonSccpShardProofHash(input: TonSccpShardProofInput): string;
+export function canonicalTonShardStateProofPublicInputsBytes(input: TonShardStateProofRequestInput): Uint8Array;
+export function tonShardStateProofPublicInputsHash(input: TonShardStateProofRequestInput): string;
+export function canonicalTonShardStateWitnessCommitmentBytes(input: TonShardStateProofRequestInput): Uint8Array;
+export function canonicalTonShardStateVerificationContextBytes(input: TonShardStateProofRequestInput): Uint8Array;
+export function tonShardStatePublicInputColumns(input: TonShardStateProofRequestInput): string[][];
+export function tonShardStateOpenVerifySchemaDescriptor(input: TonShardStateProofRequestInput): Uint8Array;
+export function buildTonShardStateProofRequest(input: TonShardStateProofRequestInput): TonShardStateProofRequest;
+export function tonSccpShardStateVerificationProofHash(
+  input: TonSccpSourceStateVerificationProof,
+): string;
+export function wrapTonSccpSourceStateVerificationProof(
+  proofBytes: BinaryLike | number[],
+  request: TonShardStateProofRequest | TonSccpFullLightClientAuditProofRequest,
+): WrappedTonSccpSourceStateVerificationProof;
+export function canonicalTonSccpFullLightClientAuditStatementBytes(
+  input: TonSccpFullLightClientAuditProofRequestInput,
+  role: TonSccpFullLightClientAuditRole,
+): Uint8Array;
+export function tonSccpFullLightClientAuditStatementHash(
+  input: TonSccpFullLightClientAuditProofRequestInput,
+  role: TonSccpFullLightClientAuditRole,
+): string;
+export function tonSccpFullLightClientAuditPublicInputColumns(
+  input: TonSccpFullLightClientAuditProofRequestInput,
+  role: TonSccpFullLightClientAuditRole,
+): string[][];
+export function tonSccpFullLightClientAuditOpenVerifySchemaDescriptor(
+  input: TonSccpFullLightClientAuditProofRequestInput,
+  role: TonSccpFullLightClientAuditRole,
+): Uint8Array;
+export function buildTonSccpFullLightClientAuditProofRequest(
+  input: TonSccpFullLightClientAuditProofRequestInput,
+  role: TonSccpFullLightClientAuditRole,
+): TonSccpFullLightClientAuditProofRequest;
+export function buildTonSccpMasterchainConfigProofRequest(
+  input: TonSccpFullLightClientAuditProofRequestInput,
+): TonSccpFullLightClientAuditProofRequest;
+export function buildTonSccpValidatorSetTransitionProofRequest(
+  input: TonSccpFullLightClientAuditProofRequestInput,
+): TonSccpFullLightClientAuditProofRequest;
+export function buildTonSccpShardAccountsDictionaryProofRequest(
+  input: TonSccpFullLightClientAuditProofRequestInput,
+): TonSccpFullLightClientAuditProofRequest;
+export function buildTonSccpFullLightClientAuditProofRequests(
+  input: TonSccpFullLightClientAuditProofRequestInput,
+): Readonly<{
+  readonly masterchainConfig: TonSccpFullLightClientAuditProofRequest;
+  readonly validatorSetTransition: TonSccpFullLightClientAuditProofRequest;
+  readonly shardAccountsDictionary: TonSccpFullLightClientAuditProofRequest;
+}>;
+export type TonSccpSourceStateProofRequest =
+  | TonShardStateProofRequest
+  | TonSccpFullLightClientAuditProofRequest;
+
+export type TonSccpSourceStateProverResultObject =
+  SccpSourceStateProverResultProofMetadata<
+    | typeof SCCP_TON_SHARD_STATE_OPEN_VERIFY_CIRCUIT_ID_V1
+    | typeof SCCP_TON_MASTERCHAIN_CONFIG_OPEN_VERIFY_CIRCUIT_ID_V1
+    | typeof SCCP_TON_VALIDATOR_SET_TRANSITION_OPEN_VERIFY_CIRCUIT_ID_V1
+    | typeof SCCP_TON_SHARD_ACCOUNTS_DICTIONARY_OPEN_VERIFY_CIRCUIT_ID_V1
+  > & {
+  parameterSet?: "fastpq-lane-balanced";
+  parameter_set?: "fastpq-lane-balanced";
+  sourceDomain?: typeof SCCP_DOMAIN_TON;
+  source_domain?: typeof SCCP_DOMAIN_TON;
+  masterchainSeqno?: string | number | bigint;
+  masterchain_seqno?: string | number | bigint;
+  shardSeqno?: string | number | bigint;
+  shard_seqno?: string | number | bigint;
+  sourceStateVerifierId?: string;
+  source_state_verifier_id?: string;
+  sourceStateVerifierHash?: string;
+  source_state_verifier_hash?: string;
+  shardStateProofPublicInputsHash?: string;
+  shard_state_proof_public_inputs_hash?: string;
+  shardStateVerificationProofHash?: string;
+  shard_state_verification_proof_hash?: string;
+  role?: TonSccpFullLightClientAuditRole;
+  audit_role?: TonSccpFullLightClientAuditRole;
+  roleCode?: 1 | 2 | 3 | string | number | bigint;
+  role_code?: 1 | 2 | 3 | string | number | bigint;
+  verifierId?: string;
+  verifier_id?: string;
+  verifierHash?: string;
+  verifier_hash?: string;
+  sourceVerifierMaterialHash?: string;
+  source_verifier_material_hash?: string;
+  sourceAdapterDeploymentHash?: string;
+  source_adapter_deployment_hash?: string;
+  fullLightClientGateHash?: string;
+  full_light_client_gate_hash?: string;
+  auditStatementHash?: string;
+  audit_statement_hash?: string;
+  publicInputColumns?: ReadonlyArray<ReadonlyArray<string>>;
+  public_input_columns?: ReadonlyArray<ReadonlyArray<string>>;
+  fastpqPublicInputs?: SccpSourceStateFastpqPublicInputsResultMetadata;
+  fastpq_public_inputs?: SccpSourceStateFastpqPublicInputsResultMetadata;
+  fastpqTransitions?: ReadonlyArray<SccpSourceStateFastpqTransitionResultMetadata>;
+  fastpq_transitions?: ReadonlyArray<SccpSourceStateFastpqTransitionResultMetadata>;
+  statementBytes?: BinaryLike | number[];
+  statement_bytes?: BinaryLike | number[];
+  witnessCommitmentBytes?: BinaryLike | number[];
+  witness_commitment_bytes?: BinaryLike | number[];
+  verificationContextBytes?: BinaryLike | number[];
+  verification_context_bytes?: BinaryLike | number[];
+  schemaDescriptor?: BinaryLike | number[];
+  schema_descriptor?: BinaryLike | number[];
+};
+
+export type TonSccpSourceStateProveResult =
+  | BinaryLike
+  | number[]
+  | TonSccpSourceStateProverResultObject;
+export type TonSccpSourceStateProveFn = (
+  request: TonSccpSourceStateProofRequest,
+  options?: Record<string, unknown>,
+) => TonSccpSourceStateProveResult | Promise<TonSccpSourceStateProveResult>;
+export type TonSccpSourceStateProverOptions =
+  SccpProverProveOption<TonSccpSourceStateProveFn>;
+export class TonSccpSourceStateProver {
+  constructor(options?: TonSccpSourceStateProverOptions);
+  proveRequest(
+    request: TonSccpSourceStateProofRequest,
+    options?: Record<string, unknown>,
+  ): Promise<WrappedTonSccpSourceStateVerificationProof>;
+  proveShardState(
+    input: TonShardStateProofRequestInput,
+    options?: Record<string, unknown>,
+  ): Promise<WrappedTonSccpSourceStateVerificationProof>;
+  proveFullLightClientAudit(
+    input: TonSccpFullLightClientAuditProofRequestInput,
+    options?: Record<string, unknown>,
+  ): Promise<
+    Readonly<{
+      readonly masterchainConfig: WrappedTonSccpSourceStateVerificationProof;
+      readonly validatorSetTransition: WrappedTonSccpSourceStateVerificationProof;
+      readonly shardAccountsDictionary: WrappedTonSccpSourceStateVerificationProof;
+    }>
+  >;
+}
+export function canonicalTonValidatorSetBytes(input: TonValidatorSetPayloadInput): Uint8Array;
+export function canonicalTonValidatorSetPayloadBytes(input: TonValidatorSetPayloadInput): Uint8Array;
+export function tonValidatorSetHash(input: TonValidatorSetPayloadInput): string;
+export function tonValidatorSetHashFromPayload(
+  input: TonValidatorSetPayloadInput | string | Uint8Array | ArrayBuffer | ArrayBufferView | number[],
+): string;
+export function tonValidatorSetPayloadHash(
+  input: TonValidatorSetPayloadInput | string | Uint8Array | ArrayBuffer | ArrayBufferView | number[],
+): string;
+export function canonicalTonMasterchainConfigLeafBytes(
+  input: TonMasterchainConfigLeafInput,
+): Uint8Array;
+export function tonMasterchainConfigLeafHash(input: TonMasterchainConfigLeafInput): string;
+export function canonicalTonMasterchainConfigProofBytes(
+  input: TonMasterchainConfigProofInput,
+): Uint8Array;
+export function tonMasterchainConfigProofHash(input: TonMasterchainConfigProofInput): string;
+export function canonicalTonMasterchainBlockMessageBytes(
+  input: TonMasterchainBlockMessageInput,
+): Uint8Array;
+export function tonMasterchainBlockMessageHash(input: TonMasterchainBlockMessageInput): string;
+export function canonicalTonMasterchainValidatorSignaturesBytes(
+  input: TonValidatorSignatureProofInput,
+): Uint8Array;
+export function tonMasterchainValidatorSignaturesHash(
+  input: TonValidatorSignatureProofInput,
+): string;
+export function canonicalTonValidatorSetTransitionMessageBytes(
+  input: TonValidatorSetTransitionMessageInput,
+): Uint8Array;
+export function tonValidatorSetTransitionMessageHash(
+  input: TonValidatorSetTransitionMessageInput,
+): string;
+export function canonicalTonValidatorSetTransitionSignatureBytes(
+  input: TonValidatorSetTransitionSignatureInput,
+): Uint8Array;
+export function tonValidatorSetTransitionSignatureHash(
+  input: TonValidatorSetTransitionSignatureInput,
+): string;
+export function canonicalTronReceiptRootMptValue(receiptRoot: string): Uint8Array;
+export function canonicalTronSccpReceiptProofBytes(input: TronSccpReceiptProofInput): Uint8Array;
+export function tronSccpReceiptProofHash(input: TronSccpReceiptProofInput): string;
+export function canonicalTronSccpReceiptStateProofBytes(
+  input: TronSccpReceiptStateProofInput,
+): Uint8Array;
+export function tronSccpReceiptStateProofHash(input: TronSccpReceiptStateProofInput): string;
+export function tronSccpSourceMessageCallData(
+  sourceDomain: number,
+  targetDomain: number,
+  sourceEventDigest: string,
+): Uint8Array;
+export function canonicalTronSccpTransactionSourceProofBytes(
+  input: TronSccpTransactionSourceProofInput,
+): Uint8Array;
+export function tronSccpTransactionSourceProofHash(input: TronSccpTransactionSourceProofInput): string;
+export function canonicalTronRawBlockHeaderBytes(input: TronRawBlockHeaderInput): Uint8Array;
+export function tronRawBlockHeaderHash(
+  rawData: string | Uint8Array | ArrayBuffer | ArrayBufferView | number[],
+): string;
+export function tronBlockIdFromRawDataHash(number: string | number | bigint, rawDataHash: string): string;
+export function canonicalTronSolidBlockHeaderProofBytes(input: TronSolidBlockHeaderProofInput): Uint8Array;
+export function tronSolidBlockHeaderProofHash(input: TronSolidBlockHeaderProofInput): string;
+export function canonicalTronWitnessSchedulePayloadBytes(input: TronWitnessSchedulePayloadInput): Uint8Array;
+export function tronWitnessSchedulePayloadHash(
+  input: TronWitnessSchedulePayloadInput | string | Uint8Array | ArrayBuffer | ArrayBufferView | number[],
+): string;
+export function tronWitnessScheduleHashFromPayload(
+  input: TronWitnessSchedulePayloadInput | string | Uint8Array | ArrayBuffer | ArrayBufferView | number[],
+): string;
+export function canonicalTronSolidBlockMessageBytes(input: TronSolidBlockMessageInput): Uint8Array;
+export function tronSolidBlockMessageHash(input: TronSolidBlockMessageInput): string;
+export function canonicalTronWitnessSealBytes(input: TronWitnessSealInput): Uint8Array;
+export function tronWitnessSealHash(input: TronWitnessSealInput): string;
+export function canonicalTronWitnessScheduleTransitionMessageBytes(
+  input: TronWitnessScheduleTransitionMessageInput,
+): Uint8Array;
+export function tronWitnessScheduleTransitionMessageHash(
+  input: TronWitnessScheduleTransitionMessageInput,
+): string;
+export function canonicalTronWitnessScheduleTransitionSealBytes(
+  input: TronWitnessScheduleTransitionSealInput,
+): Uint8Array;
+export function tronWitnessScheduleTransitionSealHash(
+  input: TronWitnessScheduleTransitionSealInput,
+): string;
+export function canonicalSubstrateSccpStorageProofBytes(input: SubstrateSccpStorageProofInput): Uint8Array;
+export function substrateSccpStorageProofHash(input: SubstrateSccpStorageProofInput): string;
+export function canonicalSubstrateSccpRuntimeStorageVerificationStatementBytes(
+  input: SubstrateSccpRuntimeStorageProofRequestInput,
+): Uint8Array;
+export function substrateSccpRuntimeStorageProofPublicInputsHash(
+  input: SubstrateSccpRuntimeStorageProofRequestInput,
+): string;
+export function canonicalSubstrateSccpRuntimeStorageVerificationContextBytes(
+  input: SubstrateSccpRuntimeStorageProofRequestInput,
+): Uint8Array;
+export function substrateSccpRuntimeStoragePublicInputColumns(
+  input: SubstrateSccpRuntimeStorageProofRequestInput,
+): string[][];
+export function substrateSccpRuntimeStorageOpenVerifySchemaDescriptor(
+  input: SubstrateSccpRuntimeStorageProofRequestInput | number | string | bigint,
+): Uint8Array;
+export function buildSubstrateSccpRuntimeStorageProofRequest(
+  input: SubstrateSccpRuntimeStorageProofRequestInput,
+): SubstrateSccpRuntimeStorageProofRequest;
+export function canonicalSubstrateAuthoritySetPayloadBytes(input: SubstrateAuthoritySetPayloadInput): Uint8Array;
+export function substrateAuthoritySetPayloadHash(
+  input: SubstrateAuthoritySetPayloadInput | string | Uint8Array | ArrayBuffer | ArrayBufferView | number[],
+): string;
+export function substrateAuthoritySetHashFromPayload(
+  input: SubstrateAuthoritySetPayloadInput | string | Uint8Array | ArrayBuffer | ArrayBufferView | number[],
+): string;
+export function canonicalSubstrateAuthoritySetTransitionMessageBytes(
+  input: SubstrateAuthoritySetTransitionMessageInput,
+): Uint8Array;
+export function substrateAuthoritySetTransitionMessageHash(
+  input: SubstrateAuthoritySetTransitionMessageInput,
+): string;
+export function canonicalSubstrateAuthoritySetTransitionJustificationBytes(
+  input: SubstrateAuthoritySetTransitionJustificationInput,
+): Uint8Array;
+export function substrateAuthoritySetTransitionJustificationHash(
+  input: SubstrateAuthoritySetTransitionJustificationInput,
+): string;
+export function solanaSccpMainnetEpochForSlot(slot: string | number | bigint): bigint;
+export function canonicalSolanaSccpEpochStakeRootBytes(
+  input: SolanaSccpEpochStakeRootInput,
+): Uint8Array;
+export function solanaSccpEpochStakeRoot(input: SolanaSccpEpochStakeRootInput): string;
+export function canonicalSolanaSccpStakeActivationBytes(
+  input: SolanaSccpStakeActivationInput,
+): Uint8Array;
+export function solanaSccpStakeActivationHash(input: SolanaSccpStakeActivationInput): string;
+export function canonicalSolanaSccpAccountOpeningBytes(
+  input: SolanaSccpAccountOpeningInput,
+): Uint8Array;
+export function solanaSccpAccountOpeningHash(input: SolanaSccpAccountOpeningInput): string;
+export function solanaSccpAccountRawDataHash(rawData: BinaryLike): string;
+export function canonicalSolanaSccpAccountInclusionLeafBytes(
+  input: SolanaSccpAccountInclusionLeafInput,
+): Uint8Array;
+export function solanaSccpAccountInclusionLeafHash(input: SolanaSccpAccountInclusionLeafInput): string;
+export function canonicalSolanaSccpAccountInclusionNodeBytes(
+  left: BinaryLike,
+  right: BinaryLike,
+): Uint8Array;
+export function solanaSccpAccountInclusionNodeHash(left: BinaryLike, right: BinaryLike): string;
+export function solanaSccpAccountInclusionRootFromBranch(
+  leaf: BinaryLike,
+  siblings?: readonly BinaryLike[],
+): string;
+export function solanaSccpAccountInclusionRootAndBranches(
+  leaves: readonly BinaryLike[],
+): SolanaSccpAccountInclusionRootAndBranches;
+export function canonicalSolanaSccpVoteAccountDataBytes(
+  input: SolanaSccpVoteAccountDataInput,
+): Uint8Array;
+export function solanaSccpVoteAccountDataHash(input: SolanaSccpVoteAccountDataInput): string;
+export function solanaSccpVoteAccountDataFromRawVoteState(
+  rawData: BinaryLike,
+  epoch: string | number | bigint,
+  voteAccountAddress: BinaryLike,
+): SolanaSccpParsedVoteStateAccountData;
+export function solanaSccpVoteAccountDataHashFromRawVoteState(
+  rawData: BinaryLike,
+  epoch: string | number | bigint,
+  voteAccountAddress: BinaryLike,
+): string;
+export function solanaSccpVoteAccountDataFromRawVoteStateV1OrV3(
+  rawData: BinaryLike,
+  epoch: string | number | bigint,
+  voteAccountAddress: BinaryLike,
+): SolanaSccpParsedVoteStateV1OrV3AccountData;
+export function solanaSccpVoteAccountDataHashFromRawVoteStateV1OrV3(
+  rawData: BinaryLike,
+  epoch: string | number | bigint,
+  voteAccountAddress: BinaryLike,
+): string;
+export function canonicalSolanaSccpStakeAccountDataBytes(
+  input: SolanaSccpStakeAccountDataInput,
+): Uint8Array;
+export function solanaSccpStakeAccountDataHash(input: SolanaSccpStakeAccountDataInput): string;
+export function solanaSccpStakeAccountDataFromRawStakeStateV2(
+  rawData: BinaryLike,
+): SolanaSccpParsedStakeStateV2StakeAccountData;
+export function solanaSccpStakeAccountDataHashFromRawStakeStateV2(rawData: BinaryLike): string;
+export function canonicalSolanaSccpStakeAccountStateBytes(
+  input: SolanaSccpStakeAccountStateInput,
+): Uint8Array;
+export function solanaSccpStakeAccountStateHash(input: SolanaSccpStakeAccountStateInput): string;
+export function canonicalSolanaSccpStakeHistorySysvarDataBytes(
+  input: SolanaSccpStakeHistorySysvarDataInput,
+): Uint8Array;
+export function solanaSccpStakeHistorySysvarDataHash(input: SolanaSccpStakeHistorySysvarDataInput): string;
+export function solanaSccpStakeHistorySysvarDataHashFromRawData(rawData: BinaryLike): string;
+export function canonicalSolanaSccpStakeHistoryBytes(
+  input: SolanaSccpStakeHistoryInput,
+): Uint8Array;
+export function solanaSccpStakeHistoryHash(input: SolanaSccpStakeHistoryInput): string;
+export function canonicalSolanaSccpTowerLockoutBytes(
+  input: SolanaSccpTowerLockoutInput,
+): Uint8Array;
+export function solanaSccpTowerLockoutHash(input: SolanaSccpTowerLockoutInput): string;
+export function canonicalSolanaSccpTowerReplayBytes(
+  input: SolanaSccpTowerReplayInput,
+): Uint8Array;
+export function solanaSccpTowerReplayHash(input: SolanaSccpTowerReplayInput): string;
+export function canonicalSolanaSccpBankForkBytes(
+  input: SolanaSccpBankForkInput,
+): Uint8Array;
+export function solanaSccpBankForkHash(input: SolanaSccpBankForkInput): string;
+export function canonicalSolanaSccpAccountsLtHashProofPublicInputsBytes(
+  input: SolanaSccpAccountsLtHashProofPublicInputsInput,
+): Uint8Array;
+export function solanaSccpAccountsLtHashProofPublicInputsHash(
+  input: SolanaSccpAccountsLtHashProofPublicInputsInput,
+): string;
+export function solanaSccpAgaveBankHash(input: SolanaSccpAgaveBankHashInput): string;
 export function normalizeSolanaSccpWitness(input: SolanaSccpWitnessInput): SolanaSccpWitness;
 export function canonicalSolanaSccpWitnessBytes(input: SolanaSccpWitnessInput): Uint8Array;
+export function normalizeSolanaSccpProofContext(input: SolanaSccpProofContextInput): SolanaSccpProofContext;
+export function canonicalSolanaSccpProofContextBytes(input: SolanaSccpProofContextInput): Uint8Array;
+export function solanaSccpProofContextHash(input: SolanaSccpProofContextInput): string;
+export function normalizeSccpSourceAdapterDeploymentBinding(
+  input?: SccpSourceAdapterDeploymentBindingInput,
+): SccpSourceAdapterDeploymentBinding;
+export function canonicalSccpSourceAdapterDeploymentBindingBytes(
+  input: SccpSourceAdapterDeploymentBindingInput,
+): Uint8Array;
+export function sccpSourceAdapterDeploymentBindingHash(
+  input: SccpSourceAdapterDeploymentBindingInput,
+): string;
+export function sccpDestinationBindingKey(input: SccpDestinationBindingDomainInput): string;
+export function sccpDestinationBindingHash(input: SccpDestinationBindingDomainInput): string;
+export function canonicalSolanaSccpRouteCanaryEvidenceBytes(
+  input: SolanaSccpRouteCanaryEvidenceInput,
+): Uint8Array;
+export function solanaSccpRouteCanaryEvidenceHash(
+  input: SolanaSccpRouteCanaryEvidenceInput,
+): string;
+export function canonicalTonSccpRouteCanaryEvidenceBytes(
+  input: TonSccpRouteCanaryEvidenceInput,
+): Uint8Array;
+export function tonSccpRouteCanaryEvidenceHash(
+  input: TonSccpRouteCanaryEvidenceInput,
+): string;
+export function evmSccpDestinationBinding(input: EvmSccpDestinationBindingInput): EvmSccpDestinationBinding;
+export function evmSccpDestinationBindingHash(input: EvmSccpDestinationBindingInput): string;
+export function tronSccpDestinationBinding(input: TronSccpDestinationBindingInput): TronSccpDestinationBinding;
+export function tronSccpDestinationBindingHash(input: TronSccpDestinationBindingInput): string;
+export function normalizeSccpSourceVerifierMaterial(
+  input: SccpSourceVerifierMaterialInput,
+): SccpSourceVerifierMaterial;
+export function canonicalSccpSourceVerifierMaterialBytes(
+  input: SccpSourceVerifierMaterialInput,
+): Uint8Array;
+export function sccpSourceVerifierMaterialHash(
+  input: SccpSourceVerifierMaterialInput,
+): string;
+export function normalizeSccpSourceAdapterEngineDeployment(
+  input: SccpSourceAdapterEngineDeploymentInput,
+): SccpSourceAdapterEngineDeployment;
+export function canonicalSccpSourceAdapterEngineDeploymentBytes(
+  input: SccpSourceAdapterEngineDeploymentInput,
+): Uint8Array;
+export function sccpSourceAdapterEngineDeploymentHash(
+  input: SccpSourceAdapterEngineDeploymentInput,
+): string;
+export function sccpSolanaFullLightClientGateHash(
+  input: SccpSourceAdapterEngineDeploymentInput,
+): string;
+export function sccpTonFullLightClientGateHash(
+  input: SccpSourceAdapterEngineDeploymentInput,
+): string;
+export function sccpSourceAdapterVerifierVkHash(
+  input: SccpDomainIdInput | { sourceDomain?: SccpDomainIdInput; source_domain?: SccpDomainIdInput; targetDomain?: SccpDomainIdInput; target_domain?: SccpDomainIdInput },
+): string;
+export function sccpGroth16Bn254PublicSignalWords(
+  input: SccpGroth16Bn254PublicSignalsInput,
+): string[];
 export function buildSolanaSccpProofRequest(input: SolanaSccpWitnessInput): SolanaSccpProofRequest;
+export function wrapSolanaSccpProofResult(
+  proofBytes: BinaryLike,
+  request: SolanaSccpProofRequest,
+): SolanaSccpProofResult;
+export function buildSolanaSccpSubmission(input: SolanaSccpSubmissionInput): SolanaSccpSubmission;
 export function canonicalSccpBurnPayloadBytes(payload: SccpBurnPayload): Uint8Array;
 export function canonicalSccpTokenAddPayloadBytes(payload: SccpTokenAddPayload): Uint8Array;
 export function canonicalSccpTokenControlPayloadBytes(payload: SccpTokenControlPayload): Uint8Array;
@@ -4358,7 +7834,19 @@ export type ToriiSccpPlatformSubmissionPayload =
       };
     }
   | {
-      kind: "solana_program_instruction" | "substrate_runtime_call";
+      kind: "solana_program_instruction";
+      value: {
+        proofBytes: string;
+        publicInputsBytes: string;
+        bundleBytes: string;
+        destinationBinding: ToriiSccpDestinationBinding;
+        destinationBindingHash: string;
+        statementHash: string;
+        proofContextHash: string;
+      };
+    }
+  | {
+      kind: "substrate_runtime_call";
       value: {
         proofBytes: string;
         publicInputsBytes: string;
@@ -4437,7 +7925,11 @@ export type ToriiSccpNormalizedCodecValue =
   | { kind: "EvmHex"; bytes: string }
   | { kind: "SolanaBase58"; bytes: string }
   | { kind: "TonRaw"; workchain: number; account: string }
-  | { kind: "TronBase58Check"; payload: string };
+  | {
+      kind: "TronBase58Check";
+      /** Lowercase hex for the decoded 21-byte TRON payload: 0x41 prefix plus account bytes. */
+      payload: string;
+    };
 
 export type ToriiSccpPayloadProjection =
   | {
@@ -4500,6 +7992,88 @@ export interface ToriiSccpCounterpartyProofJob {
   submissionTemplate: ToriiSccpCounterpartySubmissionTemplate;
   submissionPackage: ToriiSccpCounterpartySubmissionPackage;
   bundle: ToriiSccpMessageProofBundle;
+}
+
+export interface ToriiBridgeProofSubmitPayload {
+  authority: string;
+  privateKey?: unknown;
+  private_key?: unknown;
+  publicKeyHex?: string;
+  public_key_hex?: string;
+  signatureB64?: string;
+  signature_b64?: string;
+  burnBundle?: Record<string, unknown>;
+  burn_bundle?: Record<string, unknown>;
+  messageBundle?: Record<string, unknown>;
+  message_bundle?: Record<string, unknown>;
+  networkIdHex?: BinaryLike;
+  network_id_hex?: BinaryLike;
+  verifierAddressHex?: string;
+  verifier_address_hex?: string;
+  bridgeAddressHex?: string;
+  bridge_address_hex?: string;
+  verifierCodeHashHex?: BinaryLike;
+  verifier_code_hash_hex?: BinaryLike;
+  verifierKeyHashHex?: BinaryLike;
+  verifier_key_hash_hex?: BinaryLike;
+  expectedDestinationBindingHashHex?: BinaryLike;
+  expected_destination_binding_hash_hex?: BinaryLike;
+  /** Checksummed TRON Base58Check verifier contract address. */
+  tronVerifierAddress?: string;
+  /** Checksummed TRON Base58Check verifier contract address. */
+  tron_verifier_address?: string;
+  proofBytesHex?: BinaryLike;
+  proof_bytes_hex?: BinaryLike;
+  creationTimeMs?: NumericLike;
+  creation_time_ms?: NumericLike;
+}
+
+export interface ToriiBridgeMessageSubmitPayload {
+  authority: string;
+  privateKey?: unknown;
+  private_key?: unknown;
+  publicKeyHex?: string;
+  public_key_hex?: string;
+  signatureB64?: string;
+  signature_b64?: string;
+  messageBundle?: Record<string, unknown>;
+  message_bundle?: Record<string, unknown>;
+  networkIdHex?: BinaryLike;
+  network_id_hex?: BinaryLike;
+  verifierAddressHex?: string;
+  verifier_address_hex?: string;
+  bridgeAddressHex?: string;
+  bridge_address_hex?: string;
+  verifierCodeHashHex?: BinaryLike;
+  verifier_code_hash_hex?: BinaryLike;
+  verifierKeyHashHex?: BinaryLike;
+  verifier_key_hash_hex?: BinaryLike;
+  expectedDestinationBindingHashHex?: BinaryLike;
+  expected_destination_binding_hash_hex?: BinaryLike;
+  /** Checksummed TRON Base58Check verifier contract address. */
+  tronVerifierAddress?: string;
+  /** Checksummed TRON Base58Check verifier contract address. */
+  tron_verifier_address?: string;
+  proofBytesHex?: BinaryLike;
+  proof_bytes_hex?: BinaryLike;
+  receiptLane?: NumericLike;
+  receipt_lane?: NumericLike;
+  settlement?: Record<string, unknown>;
+  creationTimeMs?: NumericLike;
+  creation_time_ms?: NumericLike;
+}
+
+export interface ToriiSccpEvmDestinationQueryOptions {
+  signal?: AbortSignal;
+  networkIdHex?: BinaryLike;
+  verifierAddressHex?: string;
+  bridgeAddressHex?: string;
+  verifierCodeHashHex?: BinaryLike;
+  verifierKeyHashHex?: BinaryLike;
+  expectedDestinationBindingHashHex?: BinaryLike;
+  /** Checksummed TRON Base58Check verifier contract address. */
+  tronVerifierAddress?: string;
+  proofBytesHex?: BinaryLike;
 }
 
 export interface ToriiLoggerConfig {
@@ -7760,13 +11334,21 @@ export declare class ToriiClient {
   getSccpProofManifests(
     options?: { signal?: AbortSignal },
   ): Promise<ToriiSccpProofManifestSet>;
+  submitBridgeProof(
+    payload: ToriiBridgeProofSubmitPayload,
+    options?: { signal?: AbortSignal },
+  ): Promise<Record<string, unknown>>;
+  submitBridgeMessage(
+    payload: ToriiBridgeMessageSubmitPayload,
+    options?: { signal?: AbortSignal },
+  ): Promise<Record<string, unknown>>;
   getSccpMessageProofArtifact(
     messageIdHex: string | Buffer | Uint8Array | ArrayBuffer | ArrayBufferView,
-    options?: { signal?: AbortSignal },
+    options?: ToriiSccpEvmDestinationQueryOptions,
   ): Promise<ToriiSccpMessageTransparentProofArtifact>;
   getSccpMessageProofJob(
     messageIdHex: string | Buffer | Uint8Array | ArrayBuffer | ArrayBufferView,
-    options?: { signal?: AbortSignal },
+    options?: ToriiSccpEvmDestinationQueryOptions,
   ): Promise<ToriiSccpCounterpartyProofJob>;
   getRuntimeAbiActive(
     options?: { signal?: AbortSignal },

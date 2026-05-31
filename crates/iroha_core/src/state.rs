@@ -18063,11 +18063,24 @@ impl State {
         indexed_block_hash: Option<HashOf<BlockHeader>>,
     ) {
         let path = self.query_index_journal_path();
-        let mut journal = self.query_index_journal.write();
-        journal.set_latest(indexed_height, indexed_block_hash);
+        self.set_query_index_status(indexed_height, indexed_block_hash);
         if path.as_os_str().is_empty() {
             return;
         }
+        self.persist_query_index_status_snapshot(&path);
+    }
+
+    fn set_query_index_status(
+        &self,
+        indexed_height: u64,
+        indexed_block_hash: Option<HashOf<BlockHeader>>,
+    ) {
+        self.query_index_journal
+            .write()
+            .set_latest(indexed_height, indexed_block_hash);
+    }
+
+    fn persist_query_index_status_snapshot(&self, path: &Path) {
         let tmp_path = path.with_extension("norito.tmp");
         let measure_bytes = |path: &Path| -> Option<u64> {
             match std::fs::metadata(path) {
@@ -18079,18 +18092,18 @@ impl State {
                 }
             }
         };
-        let before_bytes = match (measure_bytes(&path), measure_bytes(&tmp_path)) {
+        let before_bytes = match (measure_bytes(path), measure_bytes(&tmp_path)) {
             (Some(main), Some(tmp)) => Some(main.saturating_add(tmp)),
             _ => None,
         };
-        if let Err(err) = journal.persist() {
+        if let Err(err) = self.query_index_journal.read().persist() {
             warn!(
                 ?err,
                 path = %path.display(),
                 "failed to persist query index journal"
             );
         }
-        let after_bytes = match (measure_bytes(&path), measure_bytes(&tmp_path)) {
+        let after_bytes = match (measure_bytes(path), measure_bytes(&tmp_path)) {
             (Some(main), Some(tmp)) => Some(main.saturating_add(tmp)),
             _ => None,
         };
@@ -18279,10 +18292,40 @@ impl State {
         height: u64,
         block_hash: HashOf<BlockHeader>,
     ) -> Option<CommitRosterSnapshot> {
+        if self
+            .committed_hash_conflict_for_height(height, block_hash)
+            .is_some()
+        {
+            debug!(
+                height,
+                block = %block_hash,
+                "skipping commit-roster snapshot for non-canonical committed block"
+            );
+            return None;
+        }
         let snapshot = self.commit_roster_journal.read().get(height, block_hash)?;
         status::record_commit_qc(snapshot.commit_qc.clone());
         status::record_validator_checkpoint(snapshot.validator_checkpoint.clone());
         Some(snapshot)
+    }
+
+    fn committed_hash_for_height(&self, height: u64) -> Option<HashOf<BlockHeader>> {
+        let index = usize::try_from(height.checked_sub(1)?).ok()?;
+        self.block_hashes.view().get(index).copied().or_else(|| {
+            let height = NonZeroUsize::new(index.saturating_add(1))?;
+            self.kura
+                .get_block_hash(height)
+                .or_else(|| self.kura.get_durable_block_hash(height))
+        })
+    }
+
+    fn committed_hash_conflict_for_height(
+        &self,
+        height: u64,
+        block_hash: HashOf<BlockHeader>,
+    ) -> Option<HashOf<BlockHeader>> {
+        self.committed_hash_for_height(height)
+            .filter(|canonical_hash| *canonical_hash != block_hash)
     }
 
     fn upsert_commit_qc_in_world(&self, commit_qc: &Qc) {
@@ -18370,6 +18413,22 @@ impl State {
             );
             return false;
         }
+        if let Some(canonical_hash) =
+            self.committed_hash_conflict_for_height(commit_qc.height, subject_block_hash)
+        {
+            warn!(
+                height = commit_qc.height,
+                view = commit_qc.view,
+                block = %subject_block_hash,
+                canonical = %canonical_hash,
+                "skipping commit roster record for non-canonical committed block"
+            );
+            return false;
+        }
+        let write_sidecar = write_sidecar
+            && self
+                .committed_hash_for_height(commit_qc.height)
+                .is_some_and(|canonical_hash| canonical_hash == subject_block_hash);
         let mut stake_snapshot = stake_snapshot;
         if stake_snapshot
             .as_ref()
@@ -18409,6 +18468,15 @@ impl State {
                 && snapshot.validator_checkpoint == *checkpoint
                 && snapshot.stake_snapshot == stake_snapshot
         }) {
+            if write_sidecar
+                && !self.commit_roster_sidecar_matches(
+                    commit_qc,
+                    checkpoint,
+                    stake_snapshot.as_ref(),
+                )
+            {
+                self.write_commit_roster_sidecar(commit_qc, checkpoint, stake_snapshot.clone());
+            }
             if update_status {
                 status::record_commit_qc(commit_qc.clone());
                 status::record_validator_checkpoint(checkpoint.clone());
@@ -18431,16 +18499,42 @@ impl State {
         let sidecar_snapshot = stake_snapshot.clone();
         self.persist_commit_roster_journal(commit_qc, checkpoint, stake_snapshot);
         if write_sidecar {
-            let sidecar = crate::kura::RosterSidecar::new(
-                commit_qc.height,
-                commit_qc.subject_block_hash,
-                Some(commit_qc.clone()),
-                Some(checkpoint.clone()),
-                sidecar_snapshot,
-            );
-            self.kura.write_roster_metadata(&sidecar);
+            self.write_commit_roster_sidecar(commit_qc, checkpoint, sidecar_snapshot);
         }
         true
+    }
+
+    fn commit_roster_sidecar_matches(
+        &self,
+        commit_qc: &Qc,
+        checkpoint: &ValidatorSetCheckpoint,
+        stake_snapshot: Option<&CommitStakeSnapshot>,
+    ) -> bool {
+        self.kura
+            .read_roster_metadata(commit_qc.height)
+            .is_some_and(|sidecar| {
+                sidecar.height == commit_qc.height
+                    && sidecar.block_hash == commit_qc.subject_block_hash
+                    && sidecar.commit_qc.as_ref() == Some(commit_qc)
+                    && sidecar.validator_checkpoint.as_ref() == Some(checkpoint)
+                    && sidecar.stake_snapshot.as_ref() == stake_snapshot
+            })
+    }
+
+    fn write_commit_roster_sidecar(
+        &self,
+        commit_qc: &Qc,
+        checkpoint: &ValidatorSetCheckpoint,
+        stake_snapshot: Option<CommitStakeSnapshot>,
+    ) {
+        let sidecar = crate::kura::RosterSidecar::new(
+            commit_qc.height,
+            commit_qc.subject_block_hash,
+            Some(commit_qc.clone()),
+            Some(checkpoint.clone()),
+            stake_snapshot,
+        );
+        self.kura.write_roster_metadata(&sidecar);
     }
 
     /// Record commit-roster artifacts in status caches, world storage, and the journal.
@@ -18464,31 +18558,6 @@ impl State {
         self.record_commit_roster_internal(commit_qc, checkpoint, stake_snapshot, true, true, true)
     }
 
-    fn record_commit_roster_without_world(
-        &self,
-        commit_qc: &Qc,
-        checkpoint: &ValidatorSetCheckpoint,
-        stake_snapshot: Option<CommitStakeSnapshot>,
-    ) -> bool {
-        self.record_commit_roster_internal(commit_qc, checkpoint, stake_snapshot, false, true, true)
-    }
-
-    fn record_commit_roster_without_world_or_status(
-        &self,
-        commit_qc: &Qc,
-        checkpoint: &ValidatorSetCheckpoint,
-        stake_snapshot: Option<CommitStakeSnapshot>,
-    ) -> bool {
-        self.record_commit_roster_internal(
-            commit_qc,
-            checkpoint,
-            stake_snapshot,
-            false,
-            false,
-            true,
-        )
-    }
-
     fn restore_commit_roster_history(&self) {
         let snapshots = self.commit_roster_journal.read().snapshots();
         if snapshots.is_empty() {
@@ -18496,6 +18565,21 @@ impl State {
         }
         let restored = snapshots.len();
         for snapshot in &snapshots {
+            if self
+                .committed_hash_conflict_for_height(
+                    snapshot.commit_qc.height,
+                    snapshot.commit_qc.subject_block_hash,
+                )
+                .is_some()
+            {
+                debug!(
+                    height = snapshot.commit_qc.height,
+                    view = snapshot.commit_qc.view,
+                    block = %snapshot.commit_qc.subject_block_hash,
+                    "skipping stale commit roster restore for non-canonical committed block"
+                );
+                continue;
+            }
             // Keep journal restore out of WSV storage: block replay materializes
             // `world.commit_qcs` with the same MVCC layer shape as the original commit.
             status::record_commit_qc(snapshot.commit_qc.clone());
@@ -19576,6 +19660,9 @@ impl State {
                     iroha_config::parameters::defaults::zk::proof::BRIDGE_MAX_FUTURE_DRIFT_BLOCKS,
                 sccp_allow_unready_transparent_proofs: false,
                 sccp_source_verifier_materials: Vec::new(),
+                sccp_source_adapter_engine_deployments: Vec::new(),
+                sccp_destination_rollouts: Vec::new(),
+                sccp_route_allowlists: Vec::new(),
                 poseidon_params_id:
                     iroha_config::parameters::defaults::confidential::POSEIDON_PARAMS_ID,
                 pedersen_params_id:
@@ -24525,6 +24612,9 @@ pub fn default_zk_config() -> iroha_config::parameters::actual::Zk {
             iroha_config::parameters::defaults::zk::proof::BRIDGE_MAX_FUTURE_DRIFT_BLOCKS,
         sccp_allow_unready_transparent_proofs: false,
         sccp_source_verifier_materials: Vec::new(),
+        sccp_source_adapter_engine_deployments: Vec::new(),
+        sccp_destination_rollouts: Vec::new(),
+        sccp_route_allowlists: Vec::new(),
         poseidon_params_id: iroha_config::parameters::defaults::confidential::POSEIDON_PARAMS_ID,
         pedersen_params_id: iroha_config::parameters::defaults::confidential::PEDERSEN_PARAMS_ID,
         kaigi_roster_join_vk: None,
@@ -24620,6 +24710,17 @@ fn zk_policy_put_str(hasher: &mut Sha256, name: &str, value: &str) {
     zk_policy_put_bytes(hasher, value.as_bytes());
 }
 
+fn zk_policy_put_option_str(hasher: &mut Sha256, name: &str, value: Option<&str>) {
+    zk_policy_put_field(hasher, name);
+    match value {
+        Some(value) => {
+            Sha2Digest::update(hasher, [1]);
+            zk_policy_put_bytes(hasher, value.as_bytes());
+        }
+        None => Sha2Digest::update(hasher, [0]),
+    }
+}
+
 fn zk_policy_put_option_u32(hasher: &mut Sha256, name: &str, value: Option<u32>) {
     zk_policy_put_field(hasher, name);
     match value {
@@ -24627,6 +24728,14 @@ fn zk_policy_put_option_u32(hasher: &mut Sha256, name: &str, value: Option<u32>)
             Sha2Digest::update(hasher, [1]);
             Sha2Digest::update(hasher, value.to_be_bytes());
         }
+        None => Sha2Digest::update(hasher, [0]),
+    }
+}
+
+fn zk_policy_put_option_bool(hasher: &mut Sha256, name: &str, value: Option<bool>) {
+    zk_policy_put_field(hasher, name);
+    match value {
+        Some(value) => Sha2Digest::update(hasher, [1, u8::from(value)]),
         None => Sha2Digest::update(hasher, [0]),
     }
 }
@@ -24685,6 +24794,38 @@ fn zk_policy_put_sccp_source_verifier_materials(
                 left.message_inclusion_verifier_hash
                     .cmp(&right.message_inclusion_verifier_hash)
             })
+            .then_with(|| {
+                left.source_state_verifier_id
+                    .cmp(&right.source_state_verifier_id)
+            })
+            .then_with(|| {
+                left.source_state_verifier_hash
+                    .cmp(&right.source_state_verifier_hash)
+            })
+            .then_with(|| {
+                left.source_bridge_emitter_id
+                    .cmp(&right.source_bridge_emitter_id)
+            })
+            .then_with(|| {
+                left.source_bridge_emitter_address
+                    .cmp(&right.source_bridge_emitter_address)
+            })
+            .then_with(|| {
+                left.source_bridge_emitter_code_hash
+                    .cmp(&right.source_bridge_emitter_code_hash)
+            })
+            .then_with(|| {
+                left.source_bridge_network_id
+                    .cmp(&right.source_bridge_network_id)
+            })
+            .then_with(|| {
+                left.source_bridge_owner_address
+                    .cmp(&right.source_bridge_owner_address)
+            })
+            .then_with(|| {
+                left.source_bridge_config_hash
+                    .cmp(&right.source_bridge_config_hash)
+            })
             .then_with(|| left.finality_policy_id.cmp(&right.finality_policy_id))
             .then_with(|| left.finality_policy_hash.cmp(&right.finality_policy_hash))
             .then_with(|| left.placeholder_material.cmp(&right.placeholder_material))
@@ -24733,6 +24874,46 @@ fn zk_policy_put_sccp_source_verifier_materials(
             "message_inclusion_verifier_hash",
             &material.message_inclusion_verifier_hash,
         );
+        zk_policy_put_str(
+            hasher,
+            "source_state_verifier_id",
+            &material.source_state_verifier_id,
+        );
+        zk_policy_put_str(
+            hasher,
+            "source_state_verifier_hash",
+            &material.source_state_verifier_hash,
+        );
+        zk_policy_put_str(
+            hasher,
+            "source_bridge_emitter_id",
+            &material.source_bridge_emitter_id,
+        );
+        zk_policy_put_str(
+            hasher,
+            "source_bridge_emitter_address",
+            &material.source_bridge_emitter_address,
+        );
+        zk_policy_put_str(
+            hasher,
+            "source_bridge_emitter_code_hash",
+            &material.source_bridge_emitter_code_hash,
+        );
+        zk_policy_put_str(
+            hasher,
+            "source_bridge_network_id",
+            &material.source_bridge_network_id,
+        );
+        zk_policy_put_str(
+            hasher,
+            "source_bridge_owner_address",
+            &material.source_bridge_owner_address,
+        );
+        zk_policy_put_str(
+            hasher,
+            "source_bridge_config_hash",
+            &material.source_bridge_config_hash,
+        );
         zk_policy_put_str(hasher, "finality_policy_id", &material.finality_policy_id);
         zk_policy_put_str(
             hasher,
@@ -24744,6 +24925,946 @@ fn zk_policy_put_sccp_source_verifier_materials(
             "placeholder_material",
             material.placeholder_material,
         );
+    }
+}
+
+fn zk_policy_put_sccp_source_adapter_engine_deployments(
+    hasher: &mut Sha256,
+    deployments: &[iroha_config::parameters::actual::SccpSourceAdapterEngineDeployment],
+) {
+    if deployments.is_empty() {
+        return;
+    }
+
+    let mut deployments = deployments.iter().collect::<Vec<_>>();
+    deployments.sort_by(|left, right| {
+        left.version
+            .cmp(&right.version)
+            .then_with(|| left.source_domain.cmp(&right.source_domain))
+            .then_with(|| left.target_domain.cmp(&right.target_domain))
+            .then_with(|| left.source_chain.cmp(&right.source_chain))
+            .then_with(|| left.source_proof_plan.cmp(&right.source_proof_plan))
+            .then_with(|| left.finality_model.cmp(&right.finality_model))
+            .then_with(|| left.adapter_proof_family.cmp(&right.adapter_proof_family))
+            .then_with(|| left.adapter_circuit_id.cmp(&right.adapter_circuit_id))
+            .then_with(|| {
+                left.adapter_verifier_vk_hash
+                    .cmp(&right.adapter_verifier_vk_hash)
+            })
+            .then_with(|| {
+                left.source_trust_anchor_id
+                    .cmp(&right.source_trust_anchor_id)
+            })
+            .then_with(|| {
+                left.source_trust_anchor_hash
+                    .cmp(&right.source_trust_anchor_hash)
+            })
+            .then_with(|| left.consensus_verifier_id.cmp(&right.consensus_verifier_id))
+            .then_with(|| {
+                left.consensus_verifier_hash
+                    .cmp(&right.consensus_verifier_hash)
+            })
+            .then_with(|| {
+                left.message_inclusion_verifier_id
+                    .cmp(&right.message_inclusion_verifier_id)
+            })
+            .then_with(|| {
+                left.message_inclusion_verifier_hash
+                    .cmp(&right.message_inclusion_verifier_hash)
+            })
+            .then_with(|| {
+                left.source_state_verifier_id
+                    .cmp(&right.source_state_verifier_id)
+            })
+            .then_with(|| {
+                left.source_state_verifier_hash
+                    .cmp(&right.source_state_verifier_hash)
+            })
+            .then_with(|| {
+                left.source_bridge_emitter_id
+                    .cmp(&right.source_bridge_emitter_id)
+            })
+            .then_with(|| {
+                left.source_bridge_emitter_address
+                    .cmp(&right.source_bridge_emitter_address)
+            })
+            .then_with(|| {
+                left.source_bridge_emitter_code_hash
+                    .cmp(&right.source_bridge_emitter_code_hash)
+            })
+            .then_with(|| {
+                left.source_bridge_network_id
+                    .cmp(&right.source_bridge_network_id)
+            })
+            .then_with(|| {
+                left.source_bridge_owner_address
+                    .cmp(&right.source_bridge_owner_address)
+            })
+            .then_with(|| {
+                left.source_bridge_config_hash
+                    .cmp(&right.source_bridge_config_hash)
+            })
+            .then_with(|| left.finality_policy_id.cmp(&right.finality_policy_id))
+            .then_with(|| left.finality_policy_hash.cmp(&right.finality_policy_hash))
+            .then_with(|| {
+                left.deployment_receipt_hash
+                    .cmp(&right.deployment_receipt_hash)
+            })
+            .then_with(|| {
+                left.solana_tower_replay_verifier_hash
+                    .cmp(&right.solana_tower_replay_verifier_hash)
+            })
+            .then_with(|| {
+                left.solana_full_accountsdb_lattice_verifier_hash
+                    .cmp(&right.solana_full_accountsdb_lattice_verifier_hash)
+            })
+            .then_with(|| {
+                left.solana_bank_fork_choice_verifier_hash
+                    .cmp(&right.solana_bank_fork_choice_verifier_hash)
+            })
+            .then_with(|| {
+                left.solana_full_light_client_gate_hash
+                    .cmp(&right.solana_full_light_client_gate_hash)
+            })
+            .then_with(|| {
+                left.ton_masterchain_config_verifier_hash
+                    .cmp(&right.ton_masterchain_config_verifier_hash)
+            })
+            .then_with(|| {
+                left.ton_validator_set_transition_verifier_hash
+                    .cmp(&right.ton_validator_set_transition_verifier_hash)
+            })
+            .then_with(|| {
+                left.ton_shard_accounts_dictionary_verifier_hash
+                    .cmp(&right.ton_shard_accounts_dictionary_verifier_hash)
+            })
+            .then_with(|| {
+                left.ton_full_light_client_gate_hash
+                    .cmp(&right.ton_full_light_client_gate_hash)
+            })
+            .then_with(|| {
+                left.tron_dpos_source_gate_hash
+                    .cmp(&right.tron_dpos_source_gate_hash)
+            })
+    });
+    zk_policy_put_field(hasher, "sccp_source_adapter_engine_deployments");
+    Sha2Digest::update(
+        hasher,
+        u64::try_from(deployments.len())
+            .expect("SCCP source adapter engine deployment count must fit into u64")
+            .to_be_bytes(),
+    );
+    for deployment in deployments {
+        zk_policy_put_u8(hasher, "version", deployment.version);
+        zk_policy_put_u32(hasher, "source_domain", deployment.source_domain);
+        zk_policy_put_u32(hasher, "target_domain", deployment.target_domain);
+        zk_policy_put_str(hasher, "source_chain", &deployment.source_chain);
+        zk_policy_put_str(hasher, "source_proof_plan", &deployment.source_proof_plan);
+        zk_policy_put_str(hasher, "finality_model", &deployment.finality_model);
+        zk_policy_put_str(
+            hasher,
+            "adapter_proof_family",
+            &deployment.adapter_proof_family,
+        );
+        zk_policy_put_str(hasher, "adapter_circuit_id", &deployment.adapter_circuit_id);
+        zk_policy_put_str(
+            hasher,
+            "adapter_verifier_vk_hash",
+            &deployment.adapter_verifier_vk_hash,
+        );
+        zk_policy_put_str(
+            hasher,
+            "source_trust_anchor_id",
+            &deployment.source_trust_anchor_id,
+        );
+        zk_policy_put_str(
+            hasher,
+            "source_trust_anchor_hash",
+            &deployment.source_trust_anchor_hash,
+        );
+        zk_policy_put_str(
+            hasher,
+            "consensus_verifier_id",
+            &deployment.consensus_verifier_id,
+        );
+        zk_policy_put_str(
+            hasher,
+            "consensus_verifier_hash",
+            &deployment.consensus_verifier_hash,
+        );
+        zk_policy_put_str(
+            hasher,
+            "message_inclusion_verifier_id",
+            &deployment.message_inclusion_verifier_id,
+        );
+        zk_policy_put_str(
+            hasher,
+            "message_inclusion_verifier_hash",
+            &deployment.message_inclusion_verifier_hash,
+        );
+        zk_policy_put_str(
+            hasher,
+            "source_state_verifier_id",
+            &deployment.source_state_verifier_id,
+        );
+        zk_policy_put_str(
+            hasher,
+            "source_state_verifier_hash",
+            &deployment.source_state_verifier_hash,
+        );
+        zk_policy_put_str(
+            hasher,
+            "source_bridge_emitter_id",
+            &deployment.source_bridge_emitter_id,
+        );
+        zk_policy_put_str(
+            hasher,
+            "source_bridge_emitter_address",
+            &deployment.source_bridge_emitter_address,
+        );
+        zk_policy_put_str(
+            hasher,
+            "source_bridge_emitter_code_hash",
+            &deployment.source_bridge_emitter_code_hash,
+        );
+        zk_policy_put_str(
+            hasher,
+            "source_bridge_network_id",
+            &deployment.source_bridge_network_id,
+        );
+        zk_policy_put_str(
+            hasher,
+            "source_bridge_owner_address",
+            &deployment.source_bridge_owner_address,
+        );
+        zk_policy_put_str(
+            hasher,
+            "source_bridge_config_hash",
+            &deployment.source_bridge_config_hash,
+        );
+        zk_policy_put_str(hasher, "finality_policy_id", &deployment.finality_policy_id);
+        zk_policy_put_str(
+            hasher,
+            "finality_policy_hash",
+            &deployment.finality_policy_hash,
+        );
+        zk_policy_put_str(
+            hasher,
+            "deployment_receipt_hash",
+            &deployment.deployment_receipt_hash,
+        );
+        zk_policy_put_str(
+            hasher,
+            "solana_tower_replay_verifier_hash",
+            &deployment.solana_tower_replay_verifier_hash,
+        );
+        zk_policy_put_str(
+            hasher,
+            "solana_full_accountsdb_lattice_verifier_hash",
+            &deployment.solana_full_accountsdb_lattice_verifier_hash,
+        );
+        zk_policy_put_str(
+            hasher,
+            "solana_bank_fork_choice_verifier_hash",
+            &deployment.solana_bank_fork_choice_verifier_hash,
+        );
+        zk_policy_put_str(
+            hasher,
+            "solana_full_light_client_gate_hash",
+            &deployment.solana_full_light_client_gate_hash,
+        );
+        zk_policy_put_str(
+            hasher,
+            "ton_masterchain_config_verifier_hash",
+            &deployment.ton_masterchain_config_verifier_hash,
+        );
+        zk_policy_put_str(
+            hasher,
+            "ton_validator_set_transition_verifier_hash",
+            &deployment.ton_validator_set_transition_verifier_hash,
+        );
+        zk_policy_put_str(
+            hasher,
+            "ton_shard_accounts_dictionary_verifier_hash",
+            &deployment.ton_shard_accounts_dictionary_verifier_hash,
+        );
+        zk_policy_put_str(
+            hasher,
+            "ton_full_light_client_gate_hash",
+            &deployment.ton_full_light_client_gate_hash,
+        );
+        zk_policy_put_str(
+            hasher,
+            "tron_dpos_source_gate_hash",
+            &deployment.tron_dpos_source_gate_hash,
+        );
+    }
+}
+
+fn zk_policy_put_sccp_destination_rollouts(
+    hasher: &mut Sha256,
+    rollouts: &[iroha_config::parameters::actual::SccpDestinationRollout],
+) {
+    if rollouts.is_empty() {
+        return;
+    }
+
+    let mut rollouts = rollouts.iter().collect::<Vec<_>>();
+    rollouts.sort_by(|left, right| {
+        left.version
+            .cmp(&right.version)
+            .then_with(|| left.domain.cmp(&right.domain))
+            .then_with(|| left.chain.cmp(&right.chain))
+            .then_with(|| left.verifier_plan.cmp(&right.verifier_plan))
+            .then_with(|| {
+                left.immutable_verifier_ready
+                    .cmp(&right.immutable_verifier_ready)
+            })
+            .then_with(|| left.anchors_ready.cmp(&right.anchors_ready))
+            .then_with(|| left.verifier_identity.cmp(&right.verifier_identity))
+            .then_with(|| left.verifier_code_hash.cmp(&right.verifier_code_hash))
+            .then_with(|| left.verifier_key_hash.cmp(&right.verifier_key_hash))
+            .then_with(|| {
+                left.destination_network_id
+                    .cmp(&right.destination_network_id)
+            })
+            .then_with(|| {
+                left.destination_bridge_address
+                    .cmp(&right.destination_bridge_address)
+            })
+            .then_with(|| {
+                left.destination_binding_key
+                    .cmp(&right.destination_binding_key)
+            })
+            .then_with(|| {
+                left.destination_binding_hash
+                    .cmp(&right.destination_binding_hash)
+            })
+            .then_with(|| left.anchor_id.cmp(&right.anchor_id))
+            .then_with(|| left.solana_rpc_commitment.cmp(&right.solana_rpc_commitment))
+            .then_with(|| left.solana_program_owner.cmp(&right.solana_program_owner))
+            .then_with(|| {
+                left.solana_programdata_owner
+                    .cmp(&right.solana_programdata_owner)
+            })
+            .then_with(|| {
+                left.solana_program_immutable
+                    .cmp(&right.solana_program_immutable)
+            })
+            .then_with(|| {
+                left.solana_program_account_data_base64
+                    .cmp(&right.solana_program_account_data_base64)
+            })
+            .then_with(|| {
+                left.solana_programdata_address
+                    .cmp(&right.solana_programdata_address)
+            })
+            .then_with(|| {
+                left.solana_programdata_slot
+                    .cmp(&right.solana_programdata_slot)
+            })
+            .then_with(|| {
+                left.solana_expected_programdata_slot
+                    .cmp(&right.solana_expected_programdata_slot)
+            })
+            .then_with(|| {
+                left.solana_program_account_context_slot
+                    .cmp(&right.solana_program_account_context_slot)
+            })
+            .then_with(|| {
+                left.solana_programdata_account_context_slot
+                    .cmp(&right.solana_programdata_account_context_slot)
+            })
+            .then_with(|| {
+                left.solana_programdata_metadata_blake2b256
+                    .cmp(&right.solana_programdata_metadata_blake2b256)
+            })
+            .then_with(|| {
+                left.solana_programdata_metadata_base64
+                    .cmp(&right.solana_programdata_metadata_base64)
+            })
+            .then_with(|| {
+                left.solana_programdata_executable_blake2b256
+                    .cmp(&right.solana_programdata_executable_blake2b256)
+            })
+            .then_with(|| {
+                left.solana_programdata_executable_base64
+                    .cmp(&right.solana_programdata_executable_base64)
+            })
+            .then_with(|| left.ton_account_status.cmp(&right.ton_account_status))
+            .then_with(|| {
+                left.ton_account_state_hash
+                    .cmp(&right.ton_account_state_hash)
+            })
+            .then_with(|| {
+                left.ton_last_transaction_lt
+                    .cmp(&right.ton_last_transaction_lt)
+            })
+            .then_with(|| {
+                left.ton_last_transaction_hash
+                    .cmp(&right.ton_last_transaction_hash)
+            })
+            .then_with(|| {
+                left.ton_verifier_code_boc_root_hash
+                    .cmp(&right.ton_verifier_code_boc_root_hash)
+            })
+            .then_with(|| left.ton_verifier_code_boc.cmp(&right.ton_verifier_code_boc))
+            .then_with(|| {
+                left.substrate_finalized_head
+                    .cmp(&right.substrate_finalized_head)
+            })
+            .then_with(|| {
+                left.substrate_runtime_spec_name
+                    .cmp(&right.substrate_runtime_spec_name)
+            })
+            .then_with(|| {
+                left.substrate_runtime_spec_version
+                    .cmp(&right.substrate_runtime_spec_version)
+            })
+            .then_with(|| {
+                left.substrate_runtime_transaction_version
+                    .cmp(&right.substrate_runtime_transaction_version)
+            })
+            .then_with(|| {
+                left.substrate_runtime_code_hash
+                    .cmp(&right.substrate_runtime_code_hash)
+            })
+            .then_with(|| {
+                left.substrate_runtime_code_base64
+                    .cmp(&right.substrate_runtime_code_base64)
+            })
+            .then_with(|| left.blockers.cmp(&right.blockers))
+    });
+    zk_policy_put_field(hasher, "sccp_destination_rollouts");
+    Sha2Digest::update(
+        hasher,
+        u64::try_from(rollouts.len())
+            .expect("SCCP destination rollout count must fit into u64")
+            .to_be_bytes(),
+    );
+    for rollout in rollouts {
+        zk_policy_put_u8(hasher, "version", rollout.version);
+        zk_policy_put_u32(hasher, "domain", rollout.domain);
+        zk_policy_put_str(hasher, "chain", &rollout.chain);
+        zk_policy_put_str(hasher, "verifier_plan", &rollout.verifier_plan);
+        zk_policy_put_bool(
+            hasher,
+            "immutable_verifier_ready",
+            rollout.immutable_verifier_ready,
+        );
+        zk_policy_put_bool(hasher, "anchors_ready", rollout.anchors_ready);
+        zk_policy_put_option_str(
+            hasher,
+            "verifier_identity",
+            rollout.verifier_identity.as_deref(),
+        );
+        zk_policy_put_option_str(
+            hasher,
+            "verifier_code_hash",
+            rollout.verifier_code_hash.as_deref(),
+        );
+        zk_policy_put_option_str(
+            hasher,
+            "verifier_key_hash",
+            rollout.verifier_key_hash.as_deref(),
+        );
+        zk_policy_put_option_str(
+            hasher,
+            "destination_network_id",
+            rollout.destination_network_id.as_deref(),
+        );
+        zk_policy_put_option_str(
+            hasher,
+            "destination_bridge_address",
+            rollout.destination_bridge_address.as_deref(),
+        );
+        zk_policy_put_option_str(
+            hasher,
+            "destination_binding_key",
+            rollout.destination_binding_key.as_deref(),
+        );
+        zk_policy_put_option_str(
+            hasher,
+            "destination_binding_hash",
+            rollout.destination_binding_hash.as_deref(),
+        );
+        zk_policy_put_option_str(hasher, "anchor_id", rollout.anchor_id.as_deref());
+        zk_policy_put_option_str(
+            hasher,
+            "solana_rpc_commitment",
+            rollout.solana_rpc_commitment.as_deref(),
+        );
+        zk_policy_put_option_str(
+            hasher,
+            "solana_program_owner",
+            rollout.solana_program_owner.as_deref(),
+        );
+        zk_policy_put_option_str(
+            hasher,
+            "solana_programdata_owner",
+            rollout.solana_programdata_owner.as_deref(),
+        );
+        zk_policy_put_option_bool(
+            hasher,
+            "solana_program_immutable",
+            rollout.solana_program_immutable,
+        );
+        zk_policy_put_option_str(
+            hasher,
+            "solana_program_account_data_base64",
+            rollout.solana_program_account_data_base64.as_deref(),
+        );
+        zk_policy_put_option_str(
+            hasher,
+            "solana_programdata_address",
+            rollout.solana_programdata_address.as_deref(),
+        );
+        zk_policy_put_option_str(
+            hasher,
+            "solana_programdata_slot",
+            rollout.solana_programdata_slot.as_deref(),
+        );
+        zk_policy_put_option_str(
+            hasher,
+            "solana_expected_programdata_slot",
+            rollout.solana_expected_programdata_slot.as_deref(),
+        );
+        zk_policy_put_option_str(
+            hasher,
+            "solana_program_account_context_slot",
+            rollout.solana_program_account_context_slot.as_deref(),
+        );
+        zk_policy_put_option_str(
+            hasher,
+            "solana_programdata_account_context_slot",
+            rollout.solana_programdata_account_context_slot.as_deref(),
+        );
+        zk_policy_put_option_str(
+            hasher,
+            "solana_programdata_metadata_blake2b256",
+            rollout.solana_programdata_metadata_blake2b256.as_deref(),
+        );
+        zk_policy_put_option_str(
+            hasher,
+            "solana_programdata_metadata_base64",
+            rollout.solana_programdata_metadata_base64.as_deref(),
+        );
+        zk_policy_put_option_str(
+            hasher,
+            "solana_programdata_executable_blake2b256",
+            rollout.solana_programdata_executable_blake2b256.as_deref(),
+        );
+        zk_policy_put_option_str(
+            hasher,
+            "solana_programdata_executable_base64",
+            rollout.solana_programdata_executable_base64.as_deref(),
+        );
+        zk_policy_put_option_str(
+            hasher,
+            "ton_account_status",
+            rollout.ton_account_status.as_deref(),
+        );
+        zk_policy_put_option_str(
+            hasher,
+            "ton_account_state_hash",
+            rollout.ton_account_state_hash.as_deref(),
+        );
+        zk_policy_put_option_str(
+            hasher,
+            "ton_last_transaction_lt",
+            rollout.ton_last_transaction_lt.as_deref(),
+        );
+        zk_policy_put_option_str(
+            hasher,
+            "ton_last_transaction_hash",
+            rollout.ton_last_transaction_hash.as_deref(),
+        );
+        zk_policy_put_option_str(
+            hasher,
+            "ton_verifier_code_boc_root_hash",
+            rollout.ton_verifier_code_boc_root_hash.as_deref(),
+        );
+        zk_policy_put_option_str(
+            hasher,
+            "ton_verifier_code_boc",
+            rollout.ton_verifier_code_boc.as_deref(),
+        );
+        zk_policy_put_option_str(
+            hasher,
+            "substrate_finalized_head",
+            rollout.substrate_finalized_head.as_deref(),
+        );
+        zk_policy_put_option_str(
+            hasher,
+            "substrate_runtime_spec_name",
+            rollout.substrate_runtime_spec_name.as_deref(),
+        );
+        zk_policy_put_option_str(
+            hasher,
+            "substrate_runtime_spec_version",
+            rollout.substrate_runtime_spec_version.as_deref(),
+        );
+        zk_policy_put_option_str(
+            hasher,
+            "substrate_runtime_transaction_version",
+            rollout.substrate_runtime_transaction_version.as_deref(),
+        );
+        zk_policy_put_option_str(
+            hasher,
+            "substrate_runtime_code_hash",
+            rollout.substrate_runtime_code_hash.as_deref(),
+        );
+        zk_policy_put_option_str(
+            hasher,
+            "substrate_runtime_code_base64",
+            rollout.substrate_runtime_code_base64.as_deref(),
+        );
+        zk_policy_put_field(hasher, "blockers");
+        Sha2Digest::update(
+            hasher,
+            u64::try_from(rollout.blockers.len())
+                .expect("SCCP destination rollout blocker count must fit into u64")
+                .to_be_bytes(),
+        );
+        for blocker in &rollout.blockers {
+            zk_policy_put_bytes(hasher, blocker.as_bytes());
+        }
+    }
+}
+
+fn zk_policy_put_sccp_route_allowlists(
+    hasher: &mut Sha256,
+    allowlists: &[iroha_config::parameters::actual::SccpRouteAllowlist],
+) {
+    if allowlists.is_empty() {
+        return;
+    }
+
+    let mut allowlists = allowlists.iter().collect::<Vec<_>>();
+    allowlists.sort_by(|left, right| {
+        left.version
+            .cmp(&right.version)
+            .then_with(|| left.domain.cmp(&right.domain))
+            .then_with(|| left.chain.cmp(&right.chain))
+            .then_with(|| left.activation_policy.cmp(&right.activation_policy))
+            .then_with(|| left.route_allowlist_id.cmp(&right.route_allowlist_id))
+            .then_with(|| left.route_allowlist_hash.cmp(&right.route_allowlist_hash))
+            .then_with(|| left.route_canary_status.cmp(&right.route_canary_status))
+            .then_with(|| {
+                left.route_canary_evidence_hash
+                    .cmp(&right.route_canary_evidence_hash)
+            })
+            .then_with(|| {
+                left.route_canary_route_allowlist_hash
+                    .cmp(&right.route_canary_route_allowlist_hash)
+            })
+            .then_with(|| {
+                left.route_canary_destination_binding_hash
+                    .cmp(&right.route_canary_destination_binding_hash)
+            })
+            .then_with(|| {
+                left.evm_route_canary_transaction_hash
+                    .cmp(&right.evm_route_canary_transaction_hash)
+            })
+            .then_with(|| {
+                left.evm_route_canary_log_index
+                    .cmp(&right.evm_route_canary_log_index)
+            })
+            .then_with(|| {
+                left.evm_route_canary_message_id
+                    .cmp(&right.evm_route_canary_message_id)
+            })
+            .then_with(|| {
+                left.evm_route_canary_statement_hash
+                    .cmp(&right.evm_route_canary_statement_hash)
+            })
+            .then_with(|| {
+                left.evm_route_canary_commitment_root
+                    .cmp(&right.evm_route_canary_commitment_root)
+            })
+            .then_with(|| {
+                left.evm_route_canary_used_message_proof
+                    .cmp(&right.evm_route_canary_used_message_proof)
+            })
+            .then_with(|| {
+                left.tron_route_canary_transaction_id
+                    .cmp(&right.tron_route_canary_transaction_id)
+            })
+            .then_with(|| {
+                left.tron_route_canary_transaction_owner_address
+                    .cmp(&right.tron_route_canary_transaction_owner_address)
+            })
+            .then_with(|| {
+                left.tron_route_canary_log_index
+                    .cmp(&right.tron_route_canary_log_index)
+            })
+            .then_with(|| {
+                left.tron_route_canary_message_id
+                    .cmp(&right.tron_route_canary_message_id)
+            })
+            .then_with(|| {
+                left.tron_route_canary_call_data_sha256
+                    .cmp(&right.tron_route_canary_call_data_sha256)
+            })
+            .then_with(|| {
+                left.tron_route_canary_payload_hash
+                    .cmp(&right.tron_route_canary_payload_hash)
+            })
+            .then_with(|| {
+                left.tron_route_canary_target_domain
+                    .cmp(&right.tron_route_canary_target_domain)
+            })
+            .then_with(|| {
+                left.tron_route_canary_statement_hash
+                    .cmp(&right.tron_route_canary_statement_hash)
+            })
+            .then_with(|| {
+                left.tron_route_canary_commitment_root
+                    .cmp(&right.tron_route_canary_commitment_root)
+            })
+            .then_with(|| {
+                left.tron_route_canary_finality_height
+                    .cmp(&right.tron_route_canary_finality_height)
+            })
+            .then_with(|| {
+                left.tron_route_canary_finality_block_hash
+                    .cmp(&right.tron_route_canary_finality_block_hash)
+            })
+            .then_with(|| {
+                left.tron_route_canary_proof_version
+                    .cmp(&right.tron_route_canary_proof_version)
+            })
+            .then_with(|| {
+                left.tron_route_canary_proof_source_domain
+                    .cmp(&right.tron_route_canary_proof_source_domain)
+            })
+            .then_with(|| {
+                left.tron_route_canary_used_message_proof
+                    .cmp(&right.tron_route_canary_used_message_proof)
+            })
+            .then_with(|| {
+                left.tron_route_canary_raw_data_owner_matches_transaction
+                    .cmp(&right.tron_route_canary_raw_data_owner_matches_transaction)
+            })
+            .then_with(|| {
+                left.tron_route_canary_signature_sha256
+                    .cmp(&right.tron_route_canary_signature_sha256)
+            })
+            .then_with(|| {
+                left.tron_route_canary_signature_recovered_address
+                    .cmp(&right.tron_route_canary_signature_recovered_address)
+            })
+            .then_with(|| {
+                left.tron_route_canary_signature_recovers_to_owner
+                    .cmp(&right.tron_route_canary_signature_recovers_to_owner)
+            })
+            .then_with(|| {
+                left.ton_route_canary_account_state_hash
+                    .cmp(&right.ton_route_canary_account_state_hash)
+            })
+            .then_with(|| {
+                left.ton_route_canary_last_transaction_lt
+                    .cmp(&right.ton_route_canary_last_transaction_lt)
+            })
+            .then_with(|| {
+                left.ton_route_canary_last_transaction_hash
+                    .cmp(&right.ton_route_canary_last_transaction_hash)
+            })
+            .then_with(|| left.routes_allowlisted.cmp(&right.routes_allowlisted))
+            .then_with(|| left.blockers.cmp(&right.blockers))
+    });
+    zk_policy_put_field(hasher, "sccp_route_allowlists");
+    Sha2Digest::update(
+        hasher,
+        u64::try_from(allowlists.len())
+            .expect("SCCP route allowlist count must fit into u64")
+            .to_be_bytes(),
+    );
+    for allowlist in allowlists {
+        zk_policy_put_u8(hasher, "version", allowlist.version);
+        zk_policy_put_u32(hasher, "domain", allowlist.domain);
+        zk_policy_put_str(hasher, "chain", &allowlist.chain);
+        zk_policy_put_str(hasher, "activation_policy", &allowlist.activation_policy);
+        zk_policy_put_option_str(
+            hasher,
+            "route_allowlist_id",
+            allowlist.route_allowlist_id.as_deref(),
+        );
+        zk_policy_put_option_str(
+            hasher,
+            "route_allowlist_hash",
+            allowlist.route_allowlist_hash.as_deref(),
+        );
+        zk_policy_put_option_str(
+            hasher,
+            "route_canary_status",
+            allowlist.route_canary_status.as_deref(),
+        );
+        zk_policy_put_option_str(
+            hasher,
+            "route_canary_evidence_hash",
+            allowlist.route_canary_evidence_hash.as_deref(),
+        );
+        zk_policy_put_option_str(
+            hasher,
+            "route_canary_route_allowlist_hash",
+            allowlist.route_canary_route_allowlist_hash.as_deref(),
+        );
+        zk_policy_put_option_str(
+            hasher,
+            "route_canary_destination_binding_hash",
+            allowlist.route_canary_destination_binding_hash.as_deref(),
+        );
+        zk_policy_put_option_str(
+            hasher,
+            "evm_route_canary_transaction_hash",
+            allowlist.evm_route_canary_transaction_hash.as_deref(),
+        );
+        zk_policy_put_option_u32(
+            hasher,
+            "evm_route_canary_log_index",
+            allowlist.evm_route_canary_log_index,
+        );
+        zk_policy_put_option_str(
+            hasher,
+            "evm_route_canary_message_id",
+            allowlist.evm_route_canary_message_id.as_deref(),
+        );
+        zk_policy_put_option_str(
+            hasher,
+            "evm_route_canary_statement_hash",
+            allowlist.evm_route_canary_statement_hash.as_deref(),
+        );
+        zk_policy_put_option_str(
+            hasher,
+            "evm_route_canary_commitment_root",
+            allowlist.evm_route_canary_commitment_root.as_deref(),
+        );
+        zk_policy_put_option_bool(
+            hasher,
+            "evm_route_canary_used_message_proof",
+            allowlist.evm_route_canary_used_message_proof,
+        );
+        zk_policy_put_option_str(
+            hasher,
+            "tron_route_canary_transaction_id",
+            allowlist.tron_route_canary_transaction_id.as_deref(),
+        );
+        zk_policy_put_option_str(
+            hasher,
+            "tron_route_canary_transaction_owner_address",
+            allowlist
+                .tron_route_canary_transaction_owner_address
+                .as_deref(),
+        );
+        zk_policy_put_option_u32(
+            hasher,
+            "tron_route_canary_log_index",
+            allowlist.tron_route_canary_log_index,
+        );
+        zk_policy_put_option_str(
+            hasher,
+            "tron_route_canary_message_id",
+            allowlist.tron_route_canary_message_id.as_deref(),
+        );
+        zk_policy_put_option_str(
+            hasher,
+            "tron_route_canary_call_data_sha256",
+            allowlist.tron_route_canary_call_data_sha256.as_deref(),
+        );
+        zk_policy_put_option_str(
+            hasher,
+            "tron_route_canary_payload_hash",
+            allowlist.tron_route_canary_payload_hash.as_deref(),
+        );
+        zk_policy_put_option_u32(
+            hasher,
+            "tron_route_canary_target_domain",
+            allowlist.tron_route_canary_target_domain,
+        );
+        zk_policy_put_option_str(
+            hasher,
+            "tron_route_canary_statement_hash",
+            allowlist.tron_route_canary_statement_hash.as_deref(),
+        );
+        zk_policy_put_option_str(
+            hasher,
+            "tron_route_canary_commitment_root",
+            allowlist.tron_route_canary_commitment_root.as_deref(),
+        );
+        zk_policy_put_option_str(
+            hasher,
+            "tron_route_canary_finality_height",
+            allowlist.tron_route_canary_finality_height.as_deref(),
+        );
+        zk_policy_put_option_str(
+            hasher,
+            "tron_route_canary_finality_block_hash",
+            allowlist.tron_route_canary_finality_block_hash.as_deref(),
+        );
+        zk_policy_put_option_u32(
+            hasher,
+            "tron_route_canary_proof_version",
+            allowlist.tron_route_canary_proof_version,
+        );
+        zk_policy_put_option_u32(
+            hasher,
+            "tron_route_canary_proof_source_domain",
+            allowlist.tron_route_canary_proof_source_domain,
+        );
+        zk_policy_put_option_bool(
+            hasher,
+            "tron_route_canary_used_message_proof",
+            allowlist.tron_route_canary_used_message_proof,
+        );
+        zk_policy_put_option_bool(
+            hasher,
+            "tron_route_canary_raw_data_owner_matches_transaction",
+            allowlist.tron_route_canary_raw_data_owner_matches_transaction,
+        );
+        zk_policy_put_option_str(
+            hasher,
+            "tron_route_canary_signature_sha256",
+            allowlist.tron_route_canary_signature_sha256.as_deref(),
+        );
+        zk_policy_put_option_str(
+            hasher,
+            "tron_route_canary_signature_recovered_address",
+            allowlist
+                .tron_route_canary_signature_recovered_address
+                .as_deref(),
+        );
+        zk_policy_put_option_bool(
+            hasher,
+            "tron_route_canary_signature_recovers_to_owner",
+            allowlist.tron_route_canary_signature_recovers_to_owner,
+        );
+        zk_policy_put_option_str(
+            hasher,
+            "ton_route_canary_account_state_hash",
+            allowlist.ton_route_canary_account_state_hash.as_deref(),
+        );
+        zk_policy_put_option_str(
+            hasher,
+            "ton_route_canary_last_transaction_lt",
+            allowlist.ton_route_canary_last_transaction_lt.as_deref(),
+        );
+        zk_policy_put_option_str(
+            hasher,
+            "ton_route_canary_last_transaction_hash",
+            allowlist.ton_route_canary_last_transaction_hash.as_deref(),
+        );
+        zk_policy_put_bool(hasher, "routes_allowlisted", allowlist.routes_allowlisted);
+        zk_policy_put_field(hasher, "blockers");
+        Sha2Digest::update(
+            hasher,
+            u64::try_from(allowlist.blockers.len())
+                .expect("SCCP route allowlist blocker count must fit into u64")
+                .to_be_bytes(),
+        );
+        for blocker in &allowlist.blockers {
+            zk_policy_put_bytes(hasher, blocker.as_bytes());
+        }
     }
 }
 
@@ -24858,6 +25979,12 @@ pub fn compute_zk_consensus_policy_hash(
         zk_config.sccp_allow_unready_transparent_proofs,
     );
     zk_policy_put_sccp_source_verifier_materials(&mut h, &zk_config.sccp_source_verifier_materials);
+    zk_policy_put_sccp_source_adapter_engine_deployments(
+        &mut h,
+        &zk_config.sccp_source_adapter_engine_deployments,
+    );
+    zk_policy_put_sccp_destination_rollouts(&mut h, &zk_config.sccp_destination_rollouts);
+    zk_policy_put_sccp_route_allowlists(&mut h, &zk_config.sccp_route_allowlists);
     zk_policy_put_option_u32(&mut h, "poseidon_params_id", zk_config.poseidon_params_id);
     zk_policy_put_option_u32(&mut h, "pedersen_params_id", zk_config.pedersen_params_id);
     zk_policy_put_option_vk_ref(
@@ -25368,6 +26495,10 @@ impl<'state> StateBlock<'state> {
 
     /// Capture the execution witness accumulated during this block's execution.
     pub fn capture_exec_witness(&mut self) {
+        if self.replay_compatibility {
+            let _ = crate::sumeragi::witness::drain_exec_witness();
+            return;
+        }
         if self.exec_witness.is_none() {
             let mut witness = crate::sumeragi::witness::drain_exec_witness();
             let entry_dsid_bytes: BTreeMap<Hash, [u8; 16]> = self
@@ -25617,6 +26748,7 @@ impl<'state> StateBlock<'state> {
             commit_topology: committed_topology,
             prev_commit_topology: prev_committed_topology,
             confidential_registry_dirty,
+            replay_compatibility,
             view_lock,
             tiered_backend,
             verified_lane_relay_records,
@@ -25773,7 +26905,11 @@ impl<'state> StateBlock<'state> {
             }
         }
         state_ref.enforce_nexus_storage_budget(block_height);
-        state_ref.persist_query_index_status(block_height, state_ref.latest_block_hash_fast());
+        if replay_compatibility {
+            state_ref.set_query_index_status(block_height, state_ref.latest_block_hash_fast());
+        } else {
+            state_ref.persist_query_index_status(block_height, state_ref.latest_block_hash_fast());
+        }
         Ok(())
     }
 
@@ -25808,6 +26944,38 @@ impl<'state> StateBlock<'state> {
         block: &CommittedBlock,
         topology: Vec<PeerId>,
         commit_qc_hint: Option<&Qc>,
+    ) -> Vec<EventBox> {
+        self.apply_without_execution_with_commit_qc_inner(block, topology, commit_qc_hint, true)
+    }
+
+    /// Apply replayed block effects without refreshing per-block roster sidecars.
+    ///
+    /// Kura replay already has durable commit-roster evidence in the roster journal. Rewriting
+    /// retained sidecars for every historical block makes restart cost scale with the full chain
+    /// and can stall a recovering peer before Torii opens.
+    #[must_use]
+    pub(crate) fn apply_without_execution_with_commit_qc_for_replay(
+        &mut self,
+        block: &CommittedBlock,
+        topology: Vec<PeerId>,
+        commit_qc_hint: Option<&Qc>,
+    ) -> Vec<EventBox> {
+        self.apply_without_execution_with_commit_qc_inner(block, topology, commit_qc_hint, false)
+    }
+
+    #[allow(clippy::too_many_lines)]
+    #[allow(clippy::needless_pass_by_value)]
+    #[iroha_logger::log(
+        skip_all,
+        fields(block_height = block.as_ref().header().height())
+    )]
+    #[must_use]
+    fn apply_without_execution_with_commit_qc_inner(
+        &mut self,
+        block: &CommittedBlock,
+        topology: Vec<PeerId>,
+        commit_qc_hint: Option<&Qc>,
+        write_commit_roster_sidecar: bool,
     ) -> Vec<EventBox> {
         let block_hash = block.as_ref().hash();
         trace!(%block_hash, "Applying block");
@@ -26095,16 +27263,22 @@ impl<'state> StateBlock<'state> {
                         .as_ref()
                         .is_some_and(|hint| hint == &commit_cert)
                     {
-                        self.state_ref.record_commit_roster_without_world_or_status(
+                        self.state_ref.record_commit_roster_internal(
                             &commit_cert,
                             &checkpoint,
                             stake_snapshot,
+                            false,
+                            false,
+                            write_commit_roster_sidecar,
                         )
                     } else {
-                        self.state_ref.record_commit_roster_without_world(
+                        self.state_ref.record_commit_roster_internal(
                             &commit_cert,
                             &checkpoint,
                             stake_snapshot,
+                            false,
+                            true,
+                            write_commit_roster_sidecar,
                         )
                     };
                     if recorded {
@@ -27254,6 +28428,24 @@ mod transfer_transcript_tests {
     use super::*;
     use crate::kura::Kura;
 
+    fn sample_delta(amount: u32) -> TransferDeltaTranscript {
+        TransferDeltaTranscript {
+            from_account: (*ALICE_ID).clone(),
+            to_account: (*BOB_ID).clone(),
+            asset_definition: iroha_data_model::asset::AssetDefinitionId::new(
+                DomainId::try_new("wonderland", "universal").unwrap(),
+                "rose".parse().unwrap(),
+            ),
+            amount: Numeric::from(amount),
+            from_balance_before: Numeric::from(100_u32),
+            from_balance_after: Numeric::from(100_u32.saturating_sub(amount)),
+            to_balance_before: Numeric::zero(),
+            to_balance_after: Numeric::from(amount),
+            from_smt_witness: iroha_data_model::fastpq::TransferSmtWitness::default(),
+            to_smt_witness: iroha_data_model::fastpq::TransferSmtWitness::default(),
+        }
+    }
+
     #[test]
     fn transfer_transcripts_flush_into_block_map_on_apply() {
         let kura = Kura::blank_kura_for_testing();
@@ -27338,6 +28530,32 @@ mod transfer_transcript_tests {
         tx.apply();
         let transcripts = block.drain_transfer_transcripts();
         assert!(transcripts.is_empty());
+    }
+
+    #[test]
+    fn replay_transfer_transcripts_skip_fastpq_work_without_call_hash() {
+        let kura = Kura::blank_kura_for_testing();
+        let query = crate::query::store::LiveQueryStore::start_test();
+        let state = State::new(World::default(), Arc::clone(&kura), query);
+        let header = BlockHeader::new(nonzero!(1_u64), None, None, None, 0, 0);
+        let mut block = state.block(header);
+        block.replay_compatibility = true;
+        let _guard = crate::sumeragi::witness::exec_witness_guard();
+        crate::sumeragi::witness::start_block();
+        let mut tx = block.transaction();
+
+        tx.record_transfer_transcript(&ALICE_ID, sample_delta(1))
+            .expect("replay mode skips transcript recording");
+        assert!(
+            tx.pending_transfer_transcripts.is_empty(),
+            "replay mode must not stage FASTPQ transcripts"
+        );
+        tx.apply();
+
+        assert!(block.drain_transfer_transcripts().is_empty());
+        let witness = crate::sumeragi::witness::drain_exec_witness();
+        assert!(witness.fastpq_transcripts.is_empty());
+        assert!(witness.fastpq_batches.is_empty());
     }
 
     #[test]
@@ -27906,6 +29124,53 @@ mod fastpq_tx_set_hash_tests {
     }
 
     #[test]
+    fn capture_exec_witness_skips_replay_blocks_and_clears_active_capture() {
+        let kura = Kura::blank_kura_for_testing();
+        let query = LiveQueryStore::start_test();
+        let state = State::new(World::default(), kura, query);
+        let header = BlockHeader::new(nonzero!(1_u64), None, None, None, 0, 0);
+        let mut state_block = state.block(header);
+        state_block.replay_compatibility = true;
+        let _guard = crate::sumeragi::witness::exec_witness_guard();
+        crate::sumeragi::witness::start_block();
+
+        let delta = TransferDeltaTranscript {
+            from_account: (*ALICE_ID).clone(),
+            to_account: (*BOB_ID).clone(),
+            asset_definition: iroha_data_model::asset::AssetDefinitionId::new(
+                DomainId::try_new("wonderland", "universal").unwrap(),
+                "rose".parse().unwrap(),
+            ),
+            amount: Numeric::from(10u32),
+            from_balance_before: Numeric::from(100u32),
+            from_balance_after: Numeric::from(90u32),
+            to_balance_before: Numeric::from(0u32),
+            to_balance_after: Numeric::from(10u32),
+            from_smt_witness: iroha_data_model::fastpq::TransferSmtWitness::default(),
+            to_smt_witness: iroha_data_model::fastpq::TransferSmtWitness::default(),
+        };
+        let batch_hash = Hash::prehashed([0x44; 32]);
+        let transcript = TransferTranscript {
+            batch_hash,
+            deltas: vec![delta.clone()],
+            authority_digest: crate::fastpq::authority_digest(&ALICE_ID),
+            poseidon_preimage_digest: Some(crate::fastpq::poseidon_preimage_digest(
+                &delta,
+                &batch_hash,
+            )),
+        };
+        crate::sumeragi::witness::record_fastpq_transcript(&transcript);
+
+        state_block.capture_exec_witness();
+        assert!(state_block.take_exec_witness().is_none());
+        assert!(state_block.take_fastpq_witness_context().is_none());
+        let witness = crate::sumeragi::witness::drain_exec_witness();
+        assert!(witness.reads.is_empty());
+        assert!(witness.writes.is_empty());
+        assert!(witness.fastpq_transcripts.is_empty());
+    }
+
+    #[test]
     fn capture_exec_witness_threads_entry_dataspace_dsid() {
         let kura = Kura::blank_kura_for_testing();
         let query = LiveQueryStore::start_test();
@@ -28399,6 +29664,45 @@ pub fn replay_blocks_from_kura(
     )
 }
 
+#[derive(Debug, Default)]
+struct ReplayKuraTiming {
+    blocks: usize,
+    block_read: Duration,
+    topology: Duration,
+    validation: Duration,
+    result_check: Duration,
+    apply_committed_transactions: Duration,
+    apply_without_execution: Duration,
+    commit: Duration,
+    checkpoint_hash: Duration,
+    query_index_persist: Duration,
+}
+
+impl ReplayKuraTiming {
+    fn duration_ms(duration: Duration) -> u64 {
+        u64::try_from(duration.as_millis()).unwrap_or(u64::MAX)
+    }
+
+    fn log(self, start_height: usize, block_count: usize, total: Duration) {
+        iroha_logger::info!(
+            start_height,
+            block_count,
+            blocks = self.blocks,
+            total_ms = Self::duration_ms(total),
+            block_read_ms = Self::duration_ms(self.block_read),
+            topology_ms = Self::duration_ms(self.topology),
+            validation_ms = Self::duration_ms(self.validation),
+            result_check_ms = Self::duration_ms(self.result_check),
+            apply_committed_transactions_ms = Self::duration_ms(self.apply_committed_transactions),
+            apply_without_execution_ms = Self::duration_ms(self.apply_without_execution),
+            commit_ms = Self::duration_ms(self.commit),
+            checkpoint_hash_ms = Self::duration_ms(self.checkpoint_hash),
+            query_index_persist_ms = Self::duration_ms(self.query_index_persist),
+            "replayed Kura range timing"
+        );
+    }
+}
+
 /// Replay blocks from the local Kura store into the provided [`State`], starting at `start_height`
 /// and continuing through `block_count` (inclusive). Use this to catch up from a snapshot.
 /// Uses the configured consensus mode as a fallback when resolving topology rotation.
@@ -28427,6 +29731,8 @@ pub fn replay_blocks_from_kura_range(
         return Ok(());
     }
 
+    let replay_started = Instant::now();
+    let mut replay_timing = ReplayKuraTiming::default();
     let genesis_account = {
         let view = state.view();
         let maybe = view
@@ -28456,16 +29762,20 @@ pub fn replay_blocks_from_kura_range(
     };
     prune_restored_commit_qcs_for_replay(state, u64::try_from(start_height)?);
     for height in start_height..=block_count {
+        replay_timing.blocks = replay_timing.blocks.saturating_add(1);
         let nz = NonZeroUsize::new(height)
             .ok_or_else(|| eyre!("invalid block height during replay: {height}"))?;
+        let block_read_start = Instant::now();
         let block_arc = kura
             .get_block(nz)
             .ok_or_else(|| eyre!("missing block at height {height} during replay"))?;
+        replay_timing.block_read += block_read_start.elapsed();
         iroha_logger::debug!(height, hash = %block_arc.hash(), "replaying block from Kura");
         let signed_block = (*block_arc).clone();
         let view = signed_block.header().view_change_index();
         let height = signed_block.header().height().get();
         let block_hash = signed_block.hash();
+        let topology_start = Instant::now();
         let replay_commit_roster_snapshot =
             state.commit_roster_snapshot_for_block(height, block_hash);
         let roster = replay_roster_for_block(
@@ -28507,6 +29817,8 @@ pub fn replay_blocks_from_kura_range(
                 }
             }
         }
+        replay_timing.topology += topology_start.elapsed();
+        let validation_start = Instant::now();
         let validate =
             |candidate: SignedBlock,
              candidate_topology: &crate::sumeragi::network_topology::Topology| {
@@ -28613,6 +29925,7 @@ pub fn replay_blocks_from_kura_range(
                 }
             }
         }
+        replay_timing.validation += validation_start.elapsed();
         let (valid_block, mut state_block) = match validation {
             Ok(ok) => ok,
             Err((failed_block, err)) => {
@@ -28640,9 +29953,14 @@ pub fn replay_blocks_from_kura_range(
         let mut committed_block = replayed_committed_block;
         let mut replay_result_mismatch = None;
         let mut apply_committed_transactions = false;
-        if let Err(err) =
-            ensure_replayed_results_match_committed(height, &signed_block, committed_block.as_ref())
-        {
+        let result_check_start = Instant::now();
+        let result_check = ensure_replayed_results_match_committed(
+            height,
+            &signed_block,
+            committed_block.as_ref(),
+        );
+        replay_timing.result_check += result_check_start.elapsed();
+        if let Err(err) = result_check {
             let legacy_uncheckpointed_history = wsv_checkpoint.is_none() && !wsv_checkpoint_seen;
             if legacy_uncheckpointed_history || wsv_checkpoint.is_some() {
                 replay_result_mismatch = Some(err.to_string());
@@ -28710,21 +30028,29 @@ pub fn replay_blocks_from_kura_range(
             );
         }
         if apply_committed_transactions {
+            let apply_committed_start = Instant::now();
             state_block.apply_transactions(&committed_block);
             state_block.execute_time_triggers(&committed_block.as_ref().header());
+            replay_timing.apply_committed_transactions += apply_committed_start.elapsed();
         }
-        let _ = state_block.apply_without_execution_with_commit_qc(
+        let apply_without_execution_start = Instant::now();
+        let _ = state_block.apply_without_execution_with_commit_qc_for_replay(
             &committed_block,
             roster,
             replay_commit_roster_snapshot
                 .as_ref()
                 .map(|snapshot| &snapshot.commit_qc),
         );
+        replay_timing.apply_without_execution += apply_without_execution_start.elapsed();
+        let commit_start = Instant::now();
         state_block.commit().map_err(|err| {
             eyre!(err).wrap_err(format!("failed to commit replayed block #{height}"))
         })?;
+        replay_timing.commit += commit_start.elapsed();
         if let Some(checkpoint) = wsv_checkpoint {
+            let checkpoint_hash_start = Instant::now();
             let actual = crate::snapshot::canonical_state_snapshot_hash(state);
+            replay_timing.checkpoint_hash += checkpoint_hash_start.elapsed();
             if actual != checkpoint.state_hash() {
                 let legacy =
                     crate::snapshot::legacy_state_snapshot_hash_without_space_directory_manifests(
@@ -28771,6 +30097,10 @@ pub fn replay_blocks_from_kura_range(
             }
         }
     }
+    let query_index_persist_start = Instant::now();
+    state.persist_query_index_status(u64::try_from(block_count)?, state.latest_block_hash_fast());
+    replay_timing.query_index_persist += query_index_persist_start.elapsed();
+    replay_timing.log(start_height, block_count, replay_started.elapsed());
     Ok(())
 }
 
@@ -31579,6 +32909,9 @@ impl StateTransaction<'_, '_> {
         if deltas.is_empty() {
             return Ok(());
         }
+        if self.replay_compatibility {
+            return Ok(());
+        }
         let batch_hash = self.tx_call_hash.ok_or_else(|| {
             Error::InvariantViolation(
                 "FastPQ transfer transcript recording requires a transaction call_hash".into(),
@@ -34265,6 +35598,9 @@ pub(crate) mod deserialize {
                 iroha_config::parameters::defaults::zk::proof::BRIDGE_MAX_FUTURE_DRIFT_BLOCKS,
             sccp_allow_unready_transparent_proofs: false,
             sccp_source_verifier_materials: Vec::new(),
+            sccp_source_adapter_engine_deployments: Vec::new(),
+            sccp_destination_rollouts: Vec::new(),
+            sccp_route_allowlists: Vec::new(),
             poseidon_params_id:
                 iroha_config::parameters::defaults::confidential::POSEIDON_PARAMS_ID,
             pedersen_params_id:
@@ -43327,6 +44663,69 @@ mod tests {
     }
 
     #[test]
+    fn replay_state_commit_defers_query_index_status_journal_persistence() {
+        let temp_dir = tempfile::tempdir().expect("temp dir");
+        let store_root = temp_dir.path().join("kura");
+        let lane_count = nonzero!(1_u32);
+        let catalog =
+            LaneCatalog::new(lane_count, vec![LaneConfig::default()]).expect("lane catalog");
+        let lane_config = RuntimeLaneConfig::from_catalog(&catalog);
+        let kura_cfg = KuraConfig {
+            init_mode: InitMode::Strict,
+            store_dir: WithOrigin::inline(store_root),
+            max_disk_usage_bytes: iroha_config::parameters::defaults::kura::MAX_DISK_USAGE_BYTES,
+            blocks_in_memory: iroha_config::parameters::defaults::kura::BLOCKS_IN_MEMORY,
+            debug_output_new_blocks: false,
+            merge_ledger_cache_capacity:
+                iroha_config::parameters::defaults::kura::MERGE_LEDGER_CACHE_CAPACITY,
+            fsync_mode: iroha_config::kura::FsyncMode::Batched,
+            fsync_interval: iroha_config::parameters::defaults::kura::FSYNC_INTERVAL,
+            block_sync_roster_retention:
+                iroha_config::parameters::defaults::kura::BLOCK_SYNC_ROSTER_RETENTION,
+            roster_sidecar_retention:
+                iroha_config::parameters::defaults::kura::ROSTER_SIDECAR_RETENTION,
+            eviction_required_replicas:
+                iroha_config::parameters::defaults::kura::EVICTION_REQUIRED_REPLICAS,
+        };
+        let (kura, _) = Kura::new(&kura_cfg, &lane_config).expect("init kura");
+        let state = State::new_for_testing(
+            World::default(),
+            Arc::clone(&kura),
+            LiveQueryStore::start_test(),
+        );
+
+        let keypair = KeyPair::random();
+        let block = BlockBuilder::new(vec![dummy_accepted_transaction()])
+            .chain(0, None)
+            .sign(keypair.private_key())
+            .unpack(|_| {});
+        let signed: SignedBlock = block.into();
+        let mut state_block = state.block(signed.header());
+        state_block.replay_compatibility = true;
+        let valid = ValidBlock::validate_unchecked(signed, &mut state_block).unpack(|_| {});
+        let committed = valid.commit_unchecked().unpack(|_| {});
+        let _ = state_block.apply_without_execution(&committed, Vec::new());
+        state_block.commit().expect("commit replay state block");
+
+        let expected = QueryIndexStatus {
+            indexed_height: committed.as_ref().header().height().get(),
+            indexed_block_hash: Some(committed.as_ref().hash()),
+        };
+        assert_eq!(state.query_index_status_snapshot(), expected);
+
+        let path = state.query_index_journal_path();
+        assert!(
+            !path.exists(),
+            "replay commit should update the in-memory query-index marker without persisting it"
+        );
+        state.persist_query_index_status_snapshot(&path);
+        let persisted = QueryIndexJournal::load(&path)
+            .expect("load query index journal")
+            .snapshot();
+        assert_eq!(persisted, expected);
+    }
+
+    #[test]
     fn state_persists_query_projection_checkpoint_journal() {
         let temp_dir = tempfile::tempdir().expect("temp dir");
         let store_root = temp_dir.path().join("kura");
@@ -44197,6 +45596,129 @@ mod tests {
     }
 
     #[test]
+    fn replay_apply_with_commit_qc_hint_skips_roster_sidecar_refresh() {
+        let _guard = status::commit_history_test_guard();
+        status::reset_commit_certs_for_tests();
+        status::reset_validator_checkpoints_for_tests();
+        let temp_dir = tempfile::tempdir().expect("temp dir");
+        let kura_cfg = KuraConfig {
+            init_mode: InitMode::Strict,
+            store_dir: WithOrigin::inline(temp_dir.path().join("kura")),
+            max_disk_usage_bytes: iroha_config::parameters::defaults::kura::MAX_DISK_USAGE_BYTES,
+            blocks_in_memory: iroha_config::parameters::defaults::kura::BLOCKS_IN_MEMORY,
+            debug_output_new_blocks: false,
+            merge_ledger_cache_capacity:
+                iroha_config::parameters::defaults::kura::MERGE_LEDGER_CACHE_CAPACITY,
+            fsync_mode: iroha_config::kura::FsyncMode::Batched,
+            fsync_interval: iroha_config::parameters::defaults::kura::FSYNC_INTERVAL,
+            block_sync_roster_retention:
+                iroha_config::parameters::defaults::kura::BLOCK_SYNC_ROSTER_RETENTION,
+            roster_sidecar_retention:
+                iroha_config::parameters::defaults::kura::ROSTER_SIDECAR_RETENTION,
+            eviction_required_replicas:
+                iroha_config::parameters::defaults::kura::EVICTION_REQUIRED_REPLICAS,
+        };
+        let (kura, _) = Kura::new(&kura_cfg, &RuntimeLaneConfig::default()).expect("init kura");
+        let query_handle = LiveQueryStore::start_test();
+        let state = State::new_for_testing(World::default(), Arc::clone(&kura), query_handle);
+
+        let kp_a = KeyPair::random_with_algorithm(iroha_crypto::Algorithm::BlsNormal);
+        let kp_b = KeyPair::random_with_algorithm(iroha_crypto::Algorithm::BlsNormal);
+        let roster = vec![
+            PeerId::new(kp_a.public_key().clone()),
+            PeerId::new(kp_b.public_key().clone()),
+        ];
+
+        let header = BlockHeader::new(nonzero!(1_u64), None, None, None, 0, 1);
+        let signed_block = iroha_data_model::block::builder::BlockBuilder::new(header)
+            .build_with_signature(1, kp_b.private_key());
+
+        let mut state_block = state.block(signed_block.header());
+        let valid = ValidBlock::validate_unchecked(signed_block, &mut state_block).unpack(|_| {});
+        let committed = valid.commit_unchecked().unpack(|_| {});
+        let signers_bitmap = signer_bitmap(&[0, 1], roster.len());
+        let zero_root = iroha_crypto::Hash::prehashed([0u8; iroha_crypto::Hash::LENGTH]);
+        let height = committed.as_ref().header().height().get();
+        let view = committed.as_ref().header().view_change_index();
+        let vote = crate::sumeragi::consensus::Vote {
+            phase: crate::sumeragi::consensus::Phase::Commit,
+            block_hash: committed.as_ref().hash(),
+            parent_state_root: zero_root,
+            post_state_root: zero_root,
+            height,
+            view,
+            epoch: 0,
+            chain_order_hash: crate::sumeragi::consensus::default_chain_order_hash(),
+            rechain_seq: 0,
+            highest_qc: None,
+            signer: 0,
+            bls_sig: Vec::new(),
+        };
+        let preimage = crate::sumeragi::consensus::vote_preimage(
+            &super::DEFAULT_TEST_CHAIN_ID,
+            crate::sumeragi::consensus::PERMISSIONED_TAG,
+            &vote,
+        );
+        let signatures: Vec<Vec<u8>> = [&kp_a, &kp_b]
+            .into_iter()
+            .map(|kp| {
+                Signature::new(kp.private_key(), &preimage)
+                    .payload()
+                    .to_vec()
+            })
+            .collect();
+        let sig_refs: Vec<&[u8]> = signatures.iter().map(Vec::as_slice).collect();
+        let aggregate_signature = iroha_crypto::bls_normal_aggregate_signatures(&sig_refs)
+            .expect("aggregate commit QC signatures");
+        let commit_cert = Qc {
+            phase: crate::sumeragi::consensus::Phase::Commit,
+            subject_block_hash: committed.as_ref().hash(),
+            parent_state_root: zero_root,
+            post_state_root: zero_root,
+            height,
+            view,
+            epoch: 0,
+            chain_order_hash: crate::sumeragi::consensus::default_chain_order_hash(),
+            rechain_seq: 0,
+            mode_tag: crate::sumeragi::consensus::PERMISSIONED_TAG.to_string(),
+            highest_qc: None,
+            validator_set_hash: HashOf::new(&roster),
+            validator_set_hash_version: VALIDATOR_SET_HASH_VERSION_V1,
+            validator_set: roster.clone(),
+            aggregate: crate::sumeragi::consensus::QcAggregate {
+                signers_bitmap: signers_bitmap.clone(),
+                bls_aggregate_signature: aggregate_signature,
+            },
+        };
+
+        let _ = state_block.apply_without_execution_with_commit_qc_for_replay(
+            &committed,
+            roster.clone(),
+            Some(&commit_cert),
+        );
+        state_block.commit().expect("commit");
+
+        let snapshot = state
+            .commit_roster_snapshot_for_block(height, committed.as_ref().hash())
+            .expect("commit-roster snapshot");
+        assert_eq!(snapshot.commit_qc, commit_cert);
+        let view = state.view();
+        let stored = view.world().commit_qcs().get(&committed.as_ref().hash());
+        assert_eq!(
+            stored,
+            Some(&snapshot.commit_qc),
+            "replay should still preserve durable commit-roster evidence"
+        );
+        assert!(
+            kura.read_roster_metadata(height).is_none(),
+            "replay must not rewrite retained roster sidecars for historical blocks"
+        );
+
+        status::reset_commit_certs_for_tests();
+        status::reset_validator_checkpoints_for_tests();
+    }
+
+    #[test]
     fn commit_roster_record_persists_sidecar_to_kura() {
         let _guard = status::commit_history_test_guard();
         status::reset_commit_certs_for_tests();
@@ -44228,15 +45750,15 @@ mod tests {
 
         let kp = KeyPair::random_with_algorithm(iroha_crypto::Algorithm::BlsNormal);
         let peer = PeerId::new(kp.public_key().clone());
-        let header = BlockHeader::new(
-            NonZeroU64::new(2).expect("non-zero"),
-            None,
-            None,
-            None,
+        let header = BlockHeader::new(nonzero!(1_u64), None, None, None, 0, 0);
+        let signature = iroha_data_model::block::BlockSignature::new(
             0,
-            0,
+            iroha_crypto::SignatureOf::from_hash(kp.private_key(), header.hash()),
         );
-        let block_hash = header.hash();
+        let canonical_block = Arc::new(SignedBlock::presigned(signature, header, Vec::new()));
+        let block_hash = canonical_block.hash();
+        kura.store_block(Arc::clone(&canonical_block))
+            .expect("store canonical block");
         let roster = vec![peer];
         let signers_bitmap = vec![0b0000_0001];
         let bls_aggregate_signature = vec![0xAA; 96];
@@ -44245,7 +45767,7 @@ mod tests {
             subject_block_hash: block_hash,
             parent_state_root: iroha_crypto::Hash::prehashed([0u8; iroha_crypto::Hash::LENGTH]),
             post_state_root: iroha_crypto::Hash::prehashed([0u8; iroha_crypto::Hash::LENGTH]),
-            height: 2,
+            height: 1,
             view: 1,
             epoch: 0,
             chain_order_hash: crate::sumeragi::consensus::default_chain_order_hash(),
@@ -44261,7 +45783,7 @@ mod tests {
             },
         };
         let checkpoint = ValidatorSetCheckpoint::new(
-            2,
+            1,
             commit_cert.view,
             block_hash,
             commit_cert.parent_state_root,
@@ -44290,6 +45812,375 @@ mod tests {
             stored,
             Some(&commit_cert),
             "commit certificate should be recorded in world storage"
+        );
+        status::reset_commit_certs_for_tests();
+        status::reset_validator_checkpoints_for_tests();
+    }
+
+    #[test]
+    fn commit_roster_record_defers_sidecar_until_block_is_canonical() {
+        let _guard = status::commit_history_test_guard();
+        status::reset_commit_certs_for_tests();
+        status::reset_validator_checkpoints_for_tests();
+        let kura = Kura::blank_kura_for_testing();
+        let state = State::new_for_testing(
+            World::default(),
+            Arc::clone(&kura),
+            LiveQueryStore::start_test(),
+        );
+
+        let canonical_hash =
+            HashOf::<BlockHeader>::from_untyped_unchecked(Hash::prehashed([0xC4; Hash::LENGTH]));
+        let keypair = KeyPair::random_with_algorithm(iroha_crypto::Algorithm::BlsNormal);
+        let roster = vec![PeerId::new(keypair.public_key().clone())];
+        let signers_bitmap = vec![0b0000_0001];
+        let bls_aggregate_signature = vec![0xBD; 96];
+        let zero_root = iroha_crypto::Hash::prehashed([0u8; iroha_crypto::Hash::LENGTH]);
+
+        let commit_cert = Qc {
+            phase: crate::sumeragi::consensus::Phase::Commit,
+            subject_block_hash: canonical_hash,
+            parent_state_root: zero_root,
+            post_state_root: zero_root,
+            height: 1,
+            view: 0,
+            epoch: 0,
+            chain_order_hash: crate::sumeragi::consensus::default_chain_order_hash(),
+            rechain_seq: 0,
+            mode_tag: crate::sumeragi::consensus::PERMISSIONED_TAG.to_string(),
+            highest_qc: None,
+            validator_set_hash: HashOf::new(&roster),
+            validator_set_hash_version: VALIDATOR_SET_HASH_VERSION_V1,
+            validator_set: roster.clone(),
+            aggregate: crate::sumeragi::consensus::QcAggregate {
+                signers_bitmap: signers_bitmap.clone(),
+                bls_aggregate_signature: bls_aggregate_signature.clone(),
+            },
+        };
+        let checkpoint = ValidatorSetCheckpoint::new(
+            1,
+            commit_cert.view,
+            canonical_hash,
+            zero_root,
+            zero_root,
+            roster,
+            signers_bitmap,
+            bls_aggregate_signature,
+            VALIDATOR_SET_HASH_VERSION_V1,
+            None,
+        );
+
+        assert!(
+            state.record_commit_roster(&commit_cert, &checkpoint, None),
+            "uncommitted commit roster should still populate the journal"
+        );
+        assert!(
+            kura.read_roster_metadata(1).is_none(),
+            "height-indexed sidecar must wait for a canonical committed hash"
+        );
+        assert_eq!(
+            state
+                .commit_roster_snapshot_for_block(1, canonical_hash)
+                .map(|snapshot| snapshot.commit_qc),
+            Some(commit_cert)
+        );
+        status::reset_commit_certs_for_tests();
+        status::reset_validator_checkpoints_for_tests();
+    }
+
+    #[test]
+    fn duplicate_commit_roster_record_rewrites_stale_sidecar() {
+        let _guard = status::commit_history_test_guard();
+        status::reset_commit_certs_for_tests();
+        status::reset_validator_checkpoints_for_tests();
+        let kura = Kura::blank_kura_for_testing();
+        let state = State::new_for_testing(
+            World::default(),
+            Arc::clone(&kura),
+            LiveQueryStore::start_test(),
+        );
+
+        let canonical_hash =
+            HashOf::<BlockHeader>::from_untyped_unchecked(Hash::prehashed([0xC3; Hash::LENGTH]));
+        let stale_hash =
+            HashOf::<BlockHeader>::from_untyped_unchecked(Hash::prehashed([0x5C; Hash::LENGTH]));
+        let keypair = KeyPair::random_with_algorithm(iroha_crypto::Algorithm::BlsNormal);
+        let roster = vec![PeerId::new(keypair.public_key().clone())];
+        let signers_bitmap = vec![0b0000_0001];
+        let bls_aggregate_signature = vec![0xBB; 96];
+        let zero_root = iroha_crypto::Hash::prehashed([0u8; iroha_crypto::Hash::LENGTH]);
+
+        let commit_cert = Qc {
+            phase: crate::sumeragi::consensus::Phase::Commit,
+            subject_block_hash: canonical_hash,
+            parent_state_root: zero_root,
+            post_state_root: zero_root,
+            height: 1,
+            view: 0,
+            epoch: 0,
+            chain_order_hash: crate::sumeragi::consensus::default_chain_order_hash(),
+            rechain_seq: 0,
+            mode_tag: crate::sumeragi::consensus::PERMISSIONED_TAG.to_string(),
+            highest_qc: None,
+            validator_set_hash: HashOf::new(&roster),
+            validator_set_hash_version: VALIDATOR_SET_HASH_VERSION_V1,
+            validator_set: roster.clone(),
+            aggregate: crate::sumeragi::consensus::QcAggregate {
+                signers_bitmap: signers_bitmap.clone(),
+                bls_aggregate_signature: bls_aggregate_signature.clone(),
+            },
+        };
+        let checkpoint = ValidatorSetCheckpoint::new(
+            1,
+            commit_cert.view,
+            canonical_hash,
+            zero_root,
+            zero_root,
+            roster.clone(),
+            signers_bitmap.clone(),
+            bls_aggregate_signature.clone(),
+            VALIDATOR_SET_HASH_VERSION_V1,
+            None,
+        );
+        {
+            let mut block_hashes = state.block_hashes.block();
+            block_hashes.push_for_tests(canonical_hash);
+            block_hashes.commit_for_tests();
+        }
+
+        assert!(
+            state.record_commit_roster(&commit_cert, &checkpoint, None),
+            "initial canonical commit roster should be accepted"
+        );
+        kura.write_roster_metadata(&crate::kura::RosterSidecar::new(
+            1,
+            stale_hash,
+            Some(Qc {
+                subject_block_hash: stale_hash,
+                view: 1,
+                ..commit_cert.clone()
+            }),
+            Some(ValidatorSetCheckpoint::new(
+                1,
+                1,
+                stale_hash,
+                zero_root,
+                zero_root,
+                roster,
+                signers_bitmap,
+                bls_aggregate_signature,
+                VALIDATOR_SET_HASH_VERSION_V1,
+                None,
+            )),
+            None,
+        ));
+        let stale_sidecar = kura
+            .read_roster_metadata(1)
+            .expect("test setup should write stale sidecar");
+        assert_eq!(stale_sidecar.block_hash, stale_hash);
+
+        assert!(
+            state.record_commit_roster(&commit_cert, &checkpoint, None),
+            "duplicate canonical commit roster should be accepted"
+        );
+
+        let repaired = kura
+            .read_roster_metadata(1)
+            .expect("duplicate record should repair sidecar");
+        assert_eq!(repaired.block_hash, canonical_hash);
+        assert_eq!(repaired.commit_qc, Some(commit_cert));
+        assert_eq!(repaired.validator_checkpoint, Some(checkpoint));
+        status::reset_commit_certs_for_tests();
+        status::reset_validator_checkpoints_for_tests();
+    }
+
+    #[test]
+    fn commit_roster_record_rejects_noncanonical_kura_height() {
+        let _guard = status::commit_history_test_guard();
+        status::reset_commit_certs_for_tests();
+        status::reset_validator_checkpoints_for_tests();
+        let kura = Kura::blank_kura_for_testing();
+        let state = State::new_for_testing(
+            World::default(),
+            Arc::clone(&kura),
+            LiveQueryStore::start_test(),
+        );
+
+        let block_keypair = KeyPair::random_with_algorithm(iroha_crypto::Algorithm::BlsNormal);
+        let header = BlockHeader::new(nonzero!(1_u64), None, None, None, 0, 0);
+        let signature = iroha_data_model::block::BlockSignature::new(
+            0,
+            iroha_crypto::SignatureOf::from_hash(block_keypair.private_key(), header.hash()),
+        );
+        let canonical_block = Arc::new(SignedBlock::presigned(signature, header, Vec::new()));
+        let canonical_hash = canonical_block.hash();
+        kura.store_block(Arc::clone(&canonical_block))
+            .expect("store canonical block");
+
+        let stale_hash =
+            HashOf::<BlockHeader>::from_untyped_unchecked(Hash::prehashed([0x5D; Hash::LENGTH]));
+        let roster_keypair = KeyPair::random_with_algorithm(iroha_crypto::Algorithm::BlsNormal);
+        let roster = vec![PeerId::new(roster_keypair.public_key().clone())];
+        let signers_bitmap = vec![0b0000_0001];
+        let bls_aggregate_signature = vec![0xBC; 96];
+        let zero_root = iroha_crypto::Hash::prehashed([0u8; iroha_crypto::Hash::LENGTH]);
+        let stale_cert = Qc {
+            phase: crate::sumeragi::consensus::Phase::Commit,
+            subject_block_hash: stale_hash,
+            parent_state_root: zero_root,
+            post_state_root: zero_root,
+            height: 1,
+            view: 1,
+            epoch: 0,
+            chain_order_hash: crate::sumeragi::consensus::default_chain_order_hash(),
+            rechain_seq: 0,
+            mode_tag: crate::sumeragi::consensus::PERMISSIONED_TAG.to_string(),
+            highest_qc: None,
+            validator_set_hash: HashOf::new(&roster),
+            validator_set_hash_version: VALIDATOR_SET_HASH_VERSION_V1,
+            validator_set: roster.clone(),
+            aggregate: crate::sumeragi::consensus::QcAggregate {
+                signers_bitmap: signers_bitmap.clone(),
+                bls_aggregate_signature: bls_aggregate_signature.clone(),
+            },
+        };
+        let stale_checkpoint = ValidatorSetCheckpoint::new(
+            1,
+            stale_cert.view,
+            stale_hash,
+            zero_root,
+            zero_root,
+            roster,
+            signers_bitmap,
+            bls_aggregate_signature,
+            VALIDATOR_SET_HASH_VERSION_V1,
+            None,
+        );
+
+        assert!(
+            !state.record_commit_roster(&stale_cert, &stale_checkpoint, None),
+            "Kura's committed block hash should reject a stale same-height roster"
+        );
+        assert!(
+            kura.read_roster_metadata(1).is_none(),
+            "rejected stale roster must not write a sidecar"
+        );
+        assert!(
+            state
+                .commit_roster_snapshot_for_block(1, canonical_hash)
+                .is_none(),
+            "test should not manufacture canonical roster data"
+        );
+        status::reset_commit_certs_for_tests();
+        status::reset_validator_checkpoints_for_tests();
+    }
+
+    #[test]
+    fn commit_roster_record_rejects_noncanonical_committed_height() {
+        let _guard = status::commit_history_test_guard();
+        status::reset_commit_certs_for_tests();
+        status::reset_validator_checkpoints_for_tests();
+        let kura = Kura::blank_kura_for_testing();
+        let state = State::new_for_testing(
+            World::default(),
+            Arc::clone(&kura),
+            LiveQueryStore::start_test(),
+        );
+
+        let canonical_hash =
+            HashOf::<BlockHeader>::from_untyped_unchecked(Hash::prehashed([0xC1; Hash::LENGTH]));
+        let stale_hash =
+            HashOf::<BlockHeader>::from_untyped_unchecked(Hash::prehashed([0x5A; Hash::LENGTH]));
+        let keypair = KeyPair::random_with_algorithm(iroha_crypto::Algorithm::BlsNormal);
+        let roster = vec![PeerId::new(keypair.public_key().clone())];
+        let signers_bitmap = vec![0b0000_0001];
+        let bls_aggregate_signature = vec![0xAA; 96];
+        let zero_root = iroha_crypto::Hash::prehashed([0u8; iroha_crypto::Hash::LENGTH]);
+
+        let make_record = |block_hash: HashOf<BlockHeader>, view| {
+            let commit_cert = Qc {
+                phase: crate::sumeragi::consensus::Phase::Commit,
+                subject_block_hash: block_hash,
+                parent_state_root: zero_root,
+                post_state_root: zero_root,
+                height: 1,
+                view,
+                epoch: 0,
+                chain_order_hash: crate::sumeragi::consensus::default_chain_order_hash(),
+                rechain_seq: 0,
+                mode_tag: crate::sumeragi::consensus::PERMISSIONED_TAG.to_string(),
+                highest_qc: None,
+                validator_set_hash: HashOf::new(&roster),
+                validator_set_hash_version: VALIDATOR_SET_HASH_VERSION_V1,
+                validator_set: roster.clone(),
+                aggregate: crate::sumeragi::consensus::QcAggregate {
+                    signers_bitmap: signers_bitmap.clone(),
+                    bls_aggregate_signature: bls_aggregate_signature.clone(),
+                },
+            };
+            let checkpoint = ValidatorSetCheckpoint::new(
+                1,
+                view,
+                block_hash,
+                zero_root,
+                zero_root,
+                roster.clone(),
+                signers_bitmap.clone(),
+                bls_aggregate_signature.clone(),
+                VALIDATOR_SET_HASH_VERSION_V1,
+                None,
+            );
+            (commit_cert, checkpoint)
+        };
+        let (canonical_cert, canonical_checkpoint) = make_record(canonical_hash, 0);
+        let (stale_cert, stale_checkpoint) = make_record(stale_hash, 1);
+
+        {
+            let mut block_hashes = state.block_hashes.block();
+            block_hashes.push_for_tests(canonical_hash);
+            block_hashes.commit_for_tests();
+        }
+
+        assert!(
+            state.record_commit_roster(&canonical_cert, &canonical_checkpoint, None),
+            "canonical commit roster should be accepted"
+        );
+        assert!(
+            !state.record_commit_roster(&stale_cert, &stale_checkpoint, None),
+            "stale same-height commit roster must not replace canonical metadata"
+        );
+
+        let sidecar = kura
+            .read_roster_metadata(1)
+            .expect("canonical sidecar should remain");
+        assert_eq!(sidecar.block_hash, canonical_hash);
+        assert_eq!(sidecar.commit_qc, Some(canonical_cert.clone()));
+        assert!(
+            state
+                .commit_roster_snapshot_for_block(1, stale_hash)
+                .is_none(),
+            "stale same-height commit roster must not be served after canonical commit"
+        );
+        assert_eq!(
+            state
+                .commit_roster_snapshot_for_block(1, canonical_hash)
+                .map(|snapshot| snapshot.commit_qc),
+            Some(canonical_cert.clone())
+        );
+        let view = state.view();
+        assert_eq!(
+            view.world().commit_qcs().get(&canonical_hash),
+            Some(&canonical_cert)
+        );
+        assert!(
+            view.world().commit_qcs().get(&stale_hash).is_none(),
+            "stale same-height commit QC must not be inserted into world storage"
+        );
+        assert!(
+            status::commit_qc_history()
+                .iter()
+                .all(|cert| cert.subject_block_hash != stale_hash),
+            "stale same-height commit QC must not be inserted into status history"
         );
         status::reset_commit_certs_for_tests();
         status::reset_validator_checkpoints_for_tests();
@@ -49173,6 +51064,14 @@ mod tests {
                 consensus_verifier_hash: hex::encode([0x22; 32]),
                 message_inclusion_verifier_id: "eth-receipt-inclusion-v1".to_owned(),
                 message_inclusion_verifier_hash: hex::encode([0x33; 32]),
+                source_state_verifier_id: String::new(),
+                source_state_verifier_hash: String::new(),
+                source_bridge_emitter_id: "eth-source-bridge-emitter-v1".to_owned(),
+                source_bridge_emitter_address: hex::encode([0x99; 20]),
+                source_bridge_emitter_code_hash: hex::encode([0x9B; 32]),
+                source_bridge_network_id: String::new(),
+                source_bridge_owner_address: String::new(),
+                source_bridge_config_hash: String::new(),
                 finality_policy_id: "eth-finality-policy-v1".to_owned(),
                 finality_policy_hash: hex::encode([0x44; 32]),
                 placeholder_material: false,
@@ -49182,6 +51081,54 @@ mod tests {
         assert_ne!(
             compute_zk_consensus_policy_hash(&base),
             compute_zk_consensus_policy_hash(&changed)
+        );
+
+        let mut changed_emitter = changed.clone();
+        changed_emitter.sccp_source_verifier_materials[0].source_bridge_emitter_address =
+            hex::encode([0x9A; 20]);
+        assert_ne!(
+            compute_zk_consensus_policy_hash(&changed),
+            compute_zk_consensus_policy_hash(&changed_emitter)
+        );
+
+        let mut changed_emitter_code_hash = changed.clone();
+        changed_emitter_code_hash.sccp_source_verifier_materials[0]
+            .source_bridge_emitter_code_hash = hex::encode([0x9C; 32]);
+        assert_ne!(
+            compute_zk_consensus_policy_hash(&changed),
+            compute_zk_consensus_policy_hash(&changed_emitter_code_hash)
+        );
+
+        let mut changed_network_id = changed.clone();
+        changed_network_id.sccp_source_verifier_materials[0].source_bridge_network_id =
+            hex::encode([0x9D; 32]);
+        assert_ne!(
+            compute_zk_consensus_policy_hash(&changed),
+            compute_zk_consensus_policy_hash(&changed_network_id)
+        );
+
+        let mut changed_owner_address = changed.clone();
+        changed_owner_address.sccp_source_verifier_materials[0].source_bridge_owner_address =
+            hex::encode([0x9A; 20]);
+        assert_ne!(
+            compute_zk_consensus_policy_hash(&changed),
+            compute_zk_consensus_policy_hash(&changed_owner_address)
+        );
+
+        let mut changed_emitter_config_hash = changed.clone();
+        changed_emitter_config_hash.sccp_source_verifier_materials[0].source_bridge_config_hash =
+            hex::encode([0x9F; 32]);
+        assert_ne!(
+            compute_zk_consensus_policy_hash(&changed),
+            compute_zk_consensus_policy_hash(&changed_emitter_config_hash)
+        );
+
+        let mut changed_source_state_hash = changed.clone();
+        changed_source_state_hash.sccp_source_verifier_materials[0].source_state_verifier_hash =
+            hex::encode([0x9E; 32]);
+        assert_ne!(
+            compute_zk_consensus_policy_hash(&changed),
+            compute_zk_consensus_policy_hash(&changed_source_state_hash)
         );
 
         let mut reversed = base.clone();
@@ -49202,6 +51149,14 @@ mod tests {
                 consensus_verifier_hash: hex::encode([0x66; 32]),
                 message_inclusion_verifier_id: "sol-message-inclusion-v1".to_owned(),
                 message_inclusion_verifier_hash: hex::encode([0x77; 32]),
+                source_state_verifier_id: "sol-accounts-db-v1".to_owned(),
+                source_state_verifier_hash: hex::encode([0x79; 32]),
+                source_bridge_emitter_id: String::new(),
+                source_bridge_emitter_address: String::new(),
+                source_bridge_emitter_code_hash: String::new(),
+                source_bridge_network_id: String::new(),
+                source_bridge_owner_address: String::new(),
+                source_bridge_config_hash: String::new(),
                 finality_policy_id: "sol-finality-policy-v1".to_owned(),
                 finality_policy_hash: hex::encode([0x88; 32]),
                 placeholder_material: false,
@@ -49209,6 +51164,430 @@ mod tests {
         );
         let mut sorted_equivalent = reversed.clone();
         sorted_equivalent.sccp_source_verifier_materials.reverse();
+        assert_eq!(
+            compute_zk_consensus_policy_hash(&reversed),
+            compute_zk_consensus_policy_hash(&sorted_equivalent)
+        );
+    }
+
+    #[test]
+    fn zk_policy_hash_tracks_sccp_source_adapter_engine_deployments() {
+        let base = default_zk();
+        let mut changed = base.clone();
+        changed.sccp_source_adapter_engine_deployments.push(
+            iroha_config::parameters::actual::SccpSourceAdapterEngineDeployment {
+                version: 1,
+                source_domain: iroha_sccp::SCCP_DOMAIN_ETH,
+                target_domain: iroha_sccp::SCCP_DOMAIN_SORA,
+                source_chain: "eth".to_owned(),
+                source_proof_plan: "EthereumBeaconReceiptProof".to_owned(),
+                finality_model: "EthereumBeaconExecution".to_owned(),
+                adapter_proof_family: "stark-fri-v1".to_owned(),
+                adapter_circuit_id: "sccp-source-adapter-v1".to_owned(),
+                adapter_verifier_vk_hash: hex::encode([0x10; 32]),
+                source_trust_anchor_id: "eth-finalized-checkpoint-v1".to_owned(),
+                source_trust_anchor_hash: hex::encode([0x11; 32]),
+                consensus_verifier_id: "eth-beacon-consensus-v1".to_owned(),
+                consensus_verifier_hash: hex::encode([0x22; 32]),
+                message_inclusion_verifier_id: "eth-receipt-inclusion-v1".to_owned(),
+                message_inclusion_verifier_hash: hex::encode([0x33; 32]),
+                source_state_verifier_id: String::new(),
+                source_state_verifier_hash: String::new(),
+                source_bridge_emitter_id: "eth-source-bridge-emitter-v1".to_owned(),
+                source_bridge_emitter_address: hex::encode([0x99; 20]),
+                source_bridge_emitter_code_hash: hex::encode([0x9B; 32]),
+                source_bridge_network_id: String::new(),
+                source_bridge_owner_address: String::new(),
+                source_bridge_config_hash: String::new(),
+                finality_policy_id: "eth-finality-policy-v1".to_owned(),
+                finality_policy_hash: hex::encode([0x44; 32]),
+                deployment_receipt_hash: hex::encode([0x55; 32]),
+                solana_tower_replay_verifier_hash: String::new(),
+                solana_full_accountsdb_lattice_verifier_hash: String::new(),
+                solana_bank_fork_choice_verifier_hash: String::new(),
+                solana_full_light_client_gate_hash: String::new(),
+                ton_masterchain_config_verifier_hash: String::new(),
+                ton_validator_set_transition_verifier_hash: String::new(),
+                ton_shard_accounts_dictionary_verifier_hash: String::new(),
+                ton_full_light_client_gate_hash: String::new(),
+                tron_dpos_source_gate_hash: String::new(),
+            },
+        );
+
+        assert_ne!(
+            compute_zk_consensus_policy_hash(&base),
+            compute_zk_consensus_policy_hash(&changed)
+        );
+
+        let mut changed_emitter_code_hash = changed.clone();
+        changed_emitter_code_hash.sccp_source_adapter_engine_deployments[0]
+            .source_bridge_emitter_code_hash = hex::encode([0x9C; 32]);
+        assert_ne!(
+            compute_zk_consensus_policy_hash(&changed),
+            compute_zk_consensus_policy_hash(&changed_emitter_code_hash)
+        );
+
+        let mut changed_network_id = changed.clone();
+        changed_network_id.sccp_source_adapter_engine_deployments[0].source_bridge_network_id =
+            hex::encode([0x9D; 32]);
+        assert_ne!(
+            compute_zk_consensus_policy_hash(&changed),
+            compute_zk_consensus_policy_hash(&changed_network_id)
+        );
+
+        let mut changed_owner_address = changed.clone();
+        changed_owner_address.sccp_source_adapter_engine_deployments[0]
+            .source_bridge_owner_address = hex::encode([0x9A; 20]);
+        assert_ne!(
+            compute_zk_consensus_policy_hash(&changed),
+            compute_zk_consensus_policy_hash(&changed_owner_address)
+        );
+
+        let mut changed_emitter_config_hash = changed.clone();
+        changed_emitter_config_hash.sccp_source_adapter_engine_deployments[0]
+            .source_bridge_config_hash = hex::encode([0x9F; 32]);
+        assert_ne!(
+            compute_zk_consensus_policy_hash(&changed),
+            compute_zk_consensus_policy_hash(&changed_emitter_config_hash)
+        );
+
+        let mut changed_source_state_hash = changed.clone();
+        changed_source_state_hash.sccp_source_adapter_engine_deployments[0]
+            .source_state_verifier_hash = hex::encode([0x9E; 32]);
+        assert_ne!(
+            compute_zk_consensus_policy_hash(&changed),
+            compute_zk_consensus_policy_hash(&changed_source_state_hash)
+        );
+
+        let mut changed_solana_gate_hash = changed.clone();
+        changed_solana_gate_hash.sccp_source_adapter_engine_deployments[0]
+            .solana_full_light_client_gate_hash = hex::encode([0xA1; 32]);
+        assert_ne!(
+            compute_zk_consensus_policy_hash(&changed),
+            compute_zk_consensus_policy_hash(&changed_solana_gate_hash)
+        );
+
+        let mut changed_ton_gate_hash = changed.clone();
+        changed_ton_gate_hash.sccp_source_adapter_engine_deployments[0]
+            .ton_full_light_client_gate_hash = hex::encode([0xA2; 32]);
+        assert_ne!(
+            compute_zk_consensus_policy_hash(&changed),
+            compute_zk_consensus_policy_hash(&changed_ton_gate_hash)
+        );
+
+        let mut changed_tron_gate_hash = changed.clone();
+        changed_tron_gate_hash.sccp_source_adapter_engine_deployments[0]
+            .tron_dpos_source_gate_hash = hex::encode([0xA3; 32]);
+        assert_ne!(
+            compute_zk_consensus_policy_hash(&changed),
+            compute_zk_consensus_policy_hash(&changed_tron_gate_hash)
+        );
+
+        let mut reversed = base.clone();
+        reversed
+            .sccp_source_adapter_engine_deployments
+            .push(changed.sccp_source_adapter_engine_deployments[0].clone());
+        reversed.sccp_source_adapter_engine_deployments.push(
+            iroha_config::parameters::actual::SccpSourceAdapterEngineDeployment {
+                version: 1,
+                source_domain: iroha_sccp::SCCP_DOMAIN_SOL,
+                target_domain: iroha_sccp::SCCP_DOMAIN_SORA,
+                source_chain: "sol".to_owned(),
+                source_proof_plan: "SolanaFinalizedTransactionProof".to_owned(),
+                finality_model: "SolanaFinalizedSlot".to_owned(),
+                adapter_proof_family: "stark-fri-v1".to_owned(),
+                adapter_circuit_id: "sccp-source-adapter-v1".to_owned(),
+                adapter_verifier_vk_hash: hex::encode([0x60; 32]),
+                source_trust_anchor_id: "sol-root-anchor-v1".to_owned(),
+                source_trust_anchor_hash: hex::encode([0x66; 32]),
+                consensus_verifier_id: "sol-slot-consensus-v1".to_owned(),
+                consensus_verifier_hash: hex::encode([0x77; 32]),
+                message_inclusion_verifier_id: "sol-message-inclusion-v1".to_owned(),
+                message_inclusion_verifier_hash: hex::encode([0x88; 32]),
+                source_state_verifier_id: "sol-accounts-db-v1".to_owned(),
+                source_state_verifier_hash: hex::encode([0x89; 32]),
+                source_bridge_emitter_id: String::new(),
+                source_bridge_emitter_address: String::new(),
+                source_bridge_emitter_code_hash: String::new(),
+                source_bridge_network_id: String::new(),
+                source_bridge_owner_address: String::new(),
+                source_bridge_config_hash: String::new(),
+                finality_policy_id: "sol-finality-policy-v1".to_owned(),
+                finality_policy_hash: hex::encode([0x99; 32]),
+                deployment_receipt_hash: hex::encode([0xAA; 32]),
+                solana_tower_replay_verifier_hash: hex::encode([0xBB; 32]),
+                solana_full_accountsdb_lattice_verifier_hash: hex::encode([0xCC; 32]),
+                solana_bank_fork_choice_verifier_hash: hex::encode([0xDD; 32]),
+                solana_full_light_client_gate_hash: hex::encode([0xEE; 32]),
+                ton_masterchain_config_verifier_hash: String::new(),
+                ton_validator_set_transition_verifier_hash: String::new(),
+                ton_shard_accounts_dictionary_verifier_hash: String::new(),
+                ton_full_light_client_gate_hash: String::new(),
+                tron_dpos_source_gate_hash: String::new(),
+            },
+        );
+        let mut sorted_equivalent = reversed.clone();
+        sorted_equivalent
+            .sccp_source_adapter_engine_deployments
+            .reverse();
+        assert_eq!(
+            compute_zk_consensus_policy_hash(&reversed),
+            compute_zk_consensus_policy_hash(&sorted_equivalent)
+        );
+    }
+
+    #[test]
+    fn zk_policy_hash_tracks_sccp_destination_rollouts_and_route_allowlists() {
+        let base = default_zk();
+        let mut changed = base.clone();
+        changed.sccp_destination_rollouts.push(
+            iroha_config::parameters::actual::SccpDestinationRollout {
+                version: 1,
+                domain: iroha_sccp::SCCP_DOMAIN_SOL,
+                chain: "sol".to_owned(),
+                verifier_plan: "SolanaProgramNativeRecursive".to_owned(),
+                immutable_verifier_ready: true,
+                anchors_ready: true,
+                verifier_identity: Some("So11111111111111111111111111111111111111112".to_owned()),
+                verifier_code_hash: Some(hex::encode([0x11; 32])),
+                verifier_key_hash: None,
+                destination_network_id: None,
+                destination_bridge_address: None,
+                destination_binding_key: Some("sccp:0:3:sol:solana-program-v1:2".to_owned()),
+                destination_binding_hash: Some(hex::encode([0x12; 32])),
+                anchor_id: Some("sccp:sol:destination-anchor:solana-mainnet-beta:v1".to_owned()),
+                solana_rpc_commitment: None,
+                solana_program_owner: None,
+                solana_programdata_owner: None,
+                solana_program_immutable: None,
+                solana_program_account_data_base64: None,
+                solana_programdata_address: None,
+                solana_programdata_slot: None,
+                solana_expected_programdata_slot: None,
+                solana_program_account_context_slot: None,
+                solana_programdata_account_context_slot: None,
+                solana_programdata_metadata_blake2b256: None,
+                solana_programdata_metadata_base64: None,
+                solana_programdata_executable_blake2b256: None,
+                solana_programdata_executable_base64: None,
+                ton_account_status: None,
+                ton_account_state_hash: None,
+                ton_last_transaction_lt: None,
+                ton_last_transaction_hash: None,
+                ton_verifier_code_boc_root_hash: None,
+                ton_verifier_code_boc: None,
+                substrate_finalized_head: None,
+                substrate_runtime_spec_name: None,
+                substrate_runtime_spec_version: None,
+                substrate_runtime_transaction_version: None,
+                substrate_runtime_code_hash: None,
+                substrate_runtime_code_base64: None,
+                blockers: Vec::new(),
+            },
+        );
+        changed
+            .sccp_route_allowlists
+            .push(iroha_config::parameters::actual::SccpRouteAllowlist {
+                version: 1,
+                domain: iroha_sccp::SCCP_DOMAIN_SOL,
+                chain: "sol".to_owned(),
+                activation_policy: "GovernanceAllowlist".to_owned(),
+                route_allowlist_id: Some(
+                    "sccp:sol:route-allowlist:solana-mainnet-beta:v1".to_owned(),
+                ),
+                route_allowlist_hash: Some(hex::encode([0x22; 32])),
+                route_canary_status: Some("passed".to_owned()),
+                route_canary_evidence_hash: Some(hex::encode([0x24; 32])),
+                route_canary_route_allowlist_hash: Some(hex::encode([0x22; 32])),
+                route_canary_destination_binding_hash: Some(hex::encode([0x12; 32])),
+                evm_route_canary_transaction_hash: None,
+                evm_route_canary_log_index: None,
+                evm_route_canary_message_id: None,
+                evm_route_canary_statement_hash: None,
+                evm_route_canary_commitment_root: None,
+                evm_route_canary_used_message_proof: None,
+                tron_route_canary_transaction_id: None,
+                tron_route_canary_transaction_owner_address: None,
+                tron_route_canary_log_index: None,
+                tron_route_canary_message_id: None,
+                tron_route_canary_call_data_sha256: None,
+                tron_route_canary_payload_hash: None,
+                tron_route_canary_target_domain: None,
+                tron_route_canary_statement_hash: None,
+                tron_route_canary_commitment_root: None,
+                tron_route_canary_finality_height: None,
+                tron_route_canary_finality_block_hash: None,
+                tron_route_canary_proof_version: None,
+                tron_route_canary_proof_source_domain: None,
+                tron_route_canary_used_message_proof: None,
+                tron_route_canary_raw_data_owner_matches_transaction: None,
+                tron_route_canary_signature_sha256: None,
+                tron_route_canary_signature_recovered_address: None,
+                tron_route_canary_signature_recovers_to_owner: None,
+                ton_route_canary_account_state_hash: None,
+                ton_route_canary_last_transaction_lt: None,
+                ton_route_canary_last_transaction_hash: None,
+                routes_allowlisted: true,
+                blockers: Vec::new(),
+            });
+
+        let changed_hash = compute_zk_consensus_policy_hash(&changed);
+        assert_ne!(compute_zk_consensus_policy_hash(&base), changed_hash);
+
+        let mut destination_binding_changed = changed.clone();
+        destination_binding_changed.sccp_destination_rollouts[0].destination_binding_hash =
+            Some(hex::encode([0x23; 32]));
+        assert_ne!(
+            changed_hash,
+            compute_zk_consensus_policy_hash(&destination_binding_changed)
+        );
+
+        let mut evm_route_canary_changed = changed.clone();
+        evm_route_canary_changed.sccp_route_allowlists[0].evm_route_canary_transaction_hash =
+            Some(hex::encode([0x46; 32]));
+        assert_ne!(
+            changed_hash,
+            compute_zk_consensus_policy_hash(&evm_route_canary_changed)
+        );
+
+        let mut tron_route_canary_changed = changed.clone();
+        tron_route_canary_changed.sccp_route_allowlists[0].tron_route_canary_call_data_sha256 =
+            Some(hex::encode([0x47; 32]));
+        assert_ne!(
+            changed_hash,
+            compute_zk_consensus_policy_hash(&tron_route_canary_changed)
+        );
+
+        let mut ton_live_metadata_changed = changed.clone();
+        ton_live_metadata_changed.sccp_destination_rollouts[0].ton_account_status =
+            Some("active".to_owned());
+        assert_ne!(
+            changed_hash,
+            compute_zk_consensus_policy_hash(&ton_live_metadata_changed)
+        );
+
+        let mut solana_live_metadata_changed = changed.clone();
+        solana_live_metadata_changed.sccp_destination_rollouts[0].solana_rpc_commitment =
+            Some("finalized".to_owned());
+        assert_ne!(
+            changed_hash,
+            compute_zk_consensus_policy_hash(&solana_live_metadata_changed)
+        );
+
+        let mut substrate_live_metadata_changed = changed.clone();
+        substrate_live_metadata_changed.sccp_destination_rollouts[0].substrate_finalized_head =
+            Some(hex::encode([0xb1; 32]));
+        assert_ne!(
+            changed_hash,
+            compute_zk_consensus_policy_hash(&substrate_live_metadata_changed)
+        );
+
+        let mut tron_raw_owner_binding_changed = changed.clone();
+        tron_raw_owner_binding_changed.sccp_route_allowlists[0]
+            .tron_route_canary_raw_data_owner_matches_transaction = Some(true);
+        assert_ne!(
+            changed_hash,
+            compute_zk_consensus_policy_hash(&tron_raw_owner_binding_changed)
+        );
+
+        let mut reversed = base.clone();
+        reversed
+            .sccp_destination_rollouts
+            .push(changed.sccp_destination_rollouts[0].clone());
+        reversed.sccp_destination_rollouts.push(
+            iroha_config::parameters::actual::SccpDestinationRollout {
+                version: 1,
+                domain: iroha_sccp::SCCP_DOMAIN_ETH,
+                chain: "eth".to_owned(),
+                verifier_plan: "EvmGroth16Bn254Adapter".to_owned(),
+                immutable_verifier_ready: true,
+                anchors_ready: true,
+                verifier_identity: Some("0x1111111111111111111111111111111111111111".to_owned()),
+                verifier_code_hash: Some(hex::encode([0x33; 32])),
+                verifier_key_hash: Some(hex::encode([0x34; 32])),
+                destination_network_id: Some(hex::encode([0x35; 32])),
+                destination_bridge_address: Some(hex::encode([0x36; 20])),
+                destination_binding_key: None,
+                destination_binding_hash: Some(hex::encode([0x37; 32])),
+                anchor_id: Some("sccp:eth:destination-anchor:ethereum-mainnet:v1".to_owned()),
+                solana_rpc_commitment: None,
+                solana_program_owner: None,
+                solana_programdata_owner: None,
+                solana_program_immutable: None,
+                solana_program_account_data_base64: None,
+                solana_programdata_address: None,
+                solana_programdata_slot: None,
+                solana_expected_programdata_slot: None,
+                solana_program_account_context_slot: None,
+                solana_programdata_account_context_slot: None,
+                solana_programdata_metadata_blake2b256: None,
+                solana_programdata_metadata_base64: None,
+                solana_programdata_executable_blake2b256: None,
+                solana_programdata_executable_base64: None,
+                ton_account_status: None,
+                ton_account_state_hash: None,
+                ton_last_transaction_lt: None,
+                ton_last_transaction_hash: None,
+                ton_verifier_code_boc_root_hash: None,
+                ton_verifier_code_boc: None,
+                substrate_finalized_head: None,
+                substrate_runtime_spec_name: None,
+                substrate_runtime_spec_version: None,
+                substrate_runtime_transaction_version: None,
+                substrate_runtime_code_hash: None,
+                substrate_runtime_code_base64: None,
+                blockers: Vec::new(),
+            },
+        );
+        reversed
+            .sccp_route_allowlists
+            .push(changed.sccp_route_allowlists[0].clone());
+        reversed
+            .sccp_route_allowlists
+            .push(iroha_config::parameters::actual::SccpRouteAllowlist {
+                version: 1,
+                domain: iroha_sccp::SCCP_DOMAIN_ETH,
+                chain: "eth".to_owned(),
+                activation_policy: "GovernanceAllowlist".to_owned(),
+                route_allowlist_id: Some("sccp:eth:route-allowlist:ethereum-mainnet:v1".to_owned()),
+                route_allowlist_hash: Some(hex::encode([0x44; 32])),
+                route_canary_status: Some("passed".to_owned()),
+                route_canary_evidence_hash: Some(hex::encode([0x45; 32])),
+                route_canary_route_allowlist_hash: Some(hex::encode([0x44; 32])),
+                route_canary_destination_binding_hash: Some(hex::encode([0x37; 32])),
+                evm_route_canary_transaction_hash: None,
+                evm_route_canary_log_index: None,
+                evm_route_canary_message_id: None,
+                evm_route_canary_statement_hash: None,
+                evm_route_canary_commitment_root: None,
+                evm_route_canary_used_message_proof: None,
+                tron_route_canary_transaction_id: None,
+                tron_route_canary_transaction_owner_address: None,
+                tron_route_canary_log_index: None,
+                tron_route_canary_message_id: None,
+                tron_route_canary_call_data_sha256: None,
+                tron_route_canary_payload_hash: None,
+                tron_route_canary_target_domain: None,
+                tron_route_canary_statement_hash: None,
+                tron_route_canary_commitment_root: None,
+                tron_route_canary_finality_height: None,
+                tron_route_canary_finality_block_hash: None,
+                tron_route_canary_proof_version: None,
+                tron_route_canary_proof_source_domain: None,
+                tron_route_canary_used_message_proof: None,
+                tron_route_canary_raw_data_owner_matches_transaction: None,
+                tron_route_canary_signature_sha256: None,
+                tron_route_canary_signature_recovered_address: None,
+                tron_route_canary_signature_recovers_to_owner: None,
+                ton_route_canary_account_state_hash: None,
+                ton_route_canary_last_transaction_lt: None,
+                ton_route_canary_last_transaction_hash: None,
+                routes_allowlisted: true,
+                blockers: Vec::new(),
+            });
+        let mut sorted_equivalent = reversed.clone();
+        sorted_equivalent.sccp_destination_rollouts.reverse();
+        sorted_equivalent.sccp_route_allowlists.reverse();
         assert_eq!(
             compute_zk_consensus_policy_hash(&reversed),
             compute_zk_consensus_policy_hash(&sorted_equivalent)

@@ -9,9 +9,12 @@ This slice models the reconfiguration side effect in
 notification carrying a validator-set change whose activation height is the
 next block height must both stage that exact change in
 `pending_reconfiguration` and emit `ActivateValidatorSet(change)`. Plain
-commits, non-boundary reconfigurations, duplicate committed-block
-notifications, and conflicting committed-block notifications must preserve any
-previously staged change and emit no activation.
+commits and non-boundary reconfigurations must preserve any previously staged
+change and emit no activation. Duplicate committed-block notifications in this
+slice represent already-scheduled duplicate reconfiguration notifications;
+`SumeragiEngineReconfigurationDedupGate.tla` separately covers the replay path
+where a plain same-hash commit is followed by boundary reconfiguration metadata
+and may still activate.
 
 The model is separate from `SumeragiEngineCommittedBlockGate.tla`, which
 checks that activation only appears for fresh boundary notifications. This

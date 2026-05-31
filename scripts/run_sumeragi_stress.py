@@ -1,9 +1,9 @@
 #!/usr/bin/env python3
 """Run the Sumeragi NPoS stress scenarios and collect summaries.
 
-This helper orchestrates the targeted performance/chaos tests defined in
-`integration_tests/tests/sumeragi_npos_performance.rs` and writes their
-stdout/stderr into numbered artefact files for later inspection.
+This helper orchestrates the targeted performance/chaos tests grouped under the
+`consensus_and_da` integration harness and writes their stdout/stderr into
+numbered artefact files for later inspection.
 
 Example:
 
@@ -53,8 +53,8 @@ def run_test(test: str, artifact_dir: Path, cargo_env: dict[str, str]) -> dict[s
         "-p",
         "integration_tests",
         "--test",
-        "sumeragi_npos_performance",
-        test,
+        "consensus_and_da",
+        f"sumeragi_npos_performance::{test}",
         "--",
         "--nocapture",
     ]

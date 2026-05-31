@@ -17,7 +17,7 @@ use blake3::Hasher as Blake3Hasher;
 use eyre::{Result, WrapErr, bail, ensure, eyre};
 use futures_util::{
     StreamExt, TryStreamExt,
-    future::try_join_all,
+    future::{join_all, try_join_all},
     stream::{self, FuturesUnordered},
 };
 use integration_tests::sandbox;
@@ -139,9 +139,40 @@ const REALISTIC_30TPS_COMMIT_TIME_MS: u64 = 500;
 const REALISTIC_30TPS_BLOCK_MAX_TXS: u64 = 128;
 const REALISTIC_30TPS_SUBMIT_PARALLELISM: usize = 64;
 const REALISTIC_30TPS_QUEUE_SOFT_LIMIT: u64 = 3_000;
+const REALISTIC_30TPS_ROTATING_FAULT_QUEUE_SOFT_LIMIT: u64 = 64_000;
 const REALISTIC_30TPS_STALL_THRESHOLD: Duration = Duration::from_secs(20);
+const REALISTIC_30TPS_STALL_SECS_ENV: &str = "IROHA_REALISTIC_30TPS_STALL_SECS";
 const REALISTIC_30TPS_SAMPLE_INTERVAL: Duration = Duration::from_secs(2);
 const REALISTIC_30TPS_PROGRESS_LOG_INTERVAL: Duration = Duration::from_secs(10);
+const REALISTIC_30TPS_STATUS_RECOVERY_POLL_TIMEOUT: Duration = Duration::from_secs(2);
+const REALISTIC_30TPS_BAD_PEER_ROTATE_SECS: u64 = 60;
+const REALISTIC_30TPS_BAD_PEER_ROTATE_SECS_ENV: &str = "IROHA_REALISTIC_30TPS_BAD_PEER_ROTATE_SECS";
+const REALISTIC_30TPS_BAD_PEER_RECOVERY_SECS: u64 = 900;
+const REALISTIC_30TPS_BAD_PEER_RECOVERY_SECS_ENV: &str =
+    "IROHA_REALISTIC_30TPS_BAD_PEER_RECOVERY_SECS";
+const REALISTIC_30TPS_FAULT_KINDS_ENV: &str = "IROHA_REALISTIC_30TPS_FAULT_KINDS";
+const REALISTIC_30TPS_RECOVERY_BOUND_SECS_ENV: &str = "IROHA_REALISTIC_30TPS_RECOVERY_BOUND_SECS";
+const REALISTIC_30TPS_STRICT_ROTATION_CONVERGENCE_ENV: &str =
+    "IROHA_REALISTIC_30TPS_STRICT_ROTATION_CONVERGENCE";
+const REALISTIC_30TPS_CONVERGENCE_BOUND_SECS_ENV: &str =
+    "IROHA_REALISTIC_30TPS_CONVERGENCE_BOUND_SECS";
+const REALISTIC_30TPS_CONVERGENCE_BOUND_SECS: u64 = 120;
+const REALISTIC_30TPS_ROTATING_FAULT_TOLERATED_PEERS: usize = 1;
+const REALISTIC_30TPS_ROTATING_FAULT_BLOCK_MAX_TXS: u64 = 512;
+const REALISTIC_30TPS_ROTATING_FAULT_SNAPSHOT_MODE: &str = "read_write";
+const REALISTIC_30TPS_ROTATING_FAULT_SNAPSHOT_CREATE_EVERY_MS: u64 = 30_000;
+const REALISTIC_30TPS_SNAPSHOT_DATA_FILE: &str = "snapshot.data";
+const REALISTIC_30TPS_SNAPSHOT_DIGEST_FILE: &str = "snapshot.sha256";
+const REALISTIC_30TPS_SNAPSHOT_SIGNATURE_FILE: &str = "snapshot.sig";
+const REALISTIC_30TPS_SNAPSHOT_MERKLE_FILE: &str = "snapshot.merkle.json";
+const REALISTIC_30TPS_ROTATING_FAULT_MAX_HEALTHY_BLOCK_LAG: u64 = 1;
+const REALISTIC_30TPS_ROTATING_FAULT_MAX_HEALTHY_APPROVED_LAG: u64 =
+    REALISTIC_30TPS_ROTATING_FAULT_BLOCK_MAX_TXS;
+const REALISTIC_30TPS_MAX_AVG_SECS_PER_BLOCK_ENV: &str =
+    "IROHA_REALISTIC_30TPS_MAX_AVG_SECS_PER_BLOCK";
+const REALISTIC_30TPS_MAX_AVG_SECS_PER_BLOCK: f64 = 3.0;
+const REALISTIC_30TPS_ROTATING_FAULT_MAX_AVG_SECS_PER_BLOCK: f64 = 18.0;
+const REALISTIC_30TPS_RESTART_GRACE: Duration = Duration::from_secs(2);
 const REALISTIC_30TPS_TRANSFER_ACCOUNTS: usize = 640;
 const REALISTIC_30TPS_TRANSFER_MAX_AMOUNT: u64 = 5;
 const REALISTIC_30TPS_NPOS_FEE_FUNDING_CHUNK: usize = 128;
@@ -193,6 +224,42 @@ fn env_or_default_f64(key: &str, default: f64) -> f64 {
         .and_then(|value| value.parse::<f64>().ok())
         .filter(|value| value.is_finite() && *value >= 0.0)
         .unwrap_or(default)
+}
+
+fn realistic_max_avg_secs_per_block(rotating_fault: bool) -> f64 {
+    let default = if rotating_fault {
+        REALISTIC_30TPS_ROTATING_FAULT_MAX_AVG_SECS_PER_BLOCK
+    } else {
+        REALISTIC_30TPS_MAX_AVG_SECS_PER_BLOCK
+    };
+    env_or_default_f64(REALISTIC_30TPS_MAX_AVG_SECS_PER_BLOCK_ENV, default)
+}
+
+fn realistic_default_block_max_txs(rotating_fault: bool) -> u64 {
+    if rotating_fault {
+        REALISTIC_30TPS_ROTATING_FAULT_BLOCK_MAX_TXS
+    } else {
+        REALISTIC_30TPS_BLOCK_MAX_TXS
+    }
+}
+
+fn realistic_default_queue_soft_limit(rotating_fault: bool) -> u64 {
+    if rotating_fault {
+        REALISTIC_30TPS_ROTATING_FAULT_QUEUE_SOFT_LIMIT
+    } else {
+        REALISTIC_30TPS_QUEUE_SOFT_LIMIT
+    }
+}
+
+fn realistic_30tps_snapshot_settings(rotating_fault: bool) -> (&'static str, u64) {
+    if rotating_fault {
+        (
+            REALISTIC_30TPS_ROTATING_FAULT_SNAPSHOT_MODE,
+            REALISTIC_30TPS_ROTATING_FAULT_SNAPSHOT_CREATE_EVERY_MS,
+        )
+    } else {
+        ("disabled", 0)
+    }
 }
 
 async fn submit_route_probe_with_retry(
@@ -441,7 +508,7 @@ struct TransferLoadAccount {
 #[derive(Clone)]
 struct TransferSubmitAccount {
     id: AccountId,
-    client: iroha::client::Client,
+    clients: Vec<iroha::client::Client>,
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -486,7 +553,7 @@ struct RamLfeEmailLoadAccount {
 #[derive(Clone)]
 struct RamLfeEmailSubmitAccount {
     id: AccountId,
-    client: iroha::client::Client,
+    clients: Vec<iroha::client::Client>,
     uaid: UniversalAccountId,
 }
 
@@ -854,6 +921,66 @@ fn realistic_load_metadata(index: u64) -> Metadata {
     metadata
 }
 
+fn realistic_submit_error_is_retryable_message(message: &str) -> bool {
+    let message = message.to_ascii_lowercase();
+    message.contains("connection refused")
+        || message.contains("connection reset")
+        || message.contains("connection closed")
+        || message.contains("tcp connect")
+}
+
+fn realistic_submit_error_is_already_known_message(message: &str) -> bool {
+    let message = message.to_ascii_lowercase();
+    message.contains("already_enqueued")
+        || message.contains("already enqueued")
+        || message.contains("already present in the queue")
+        || message.contains("already_committed")
+        || message.contains("already committed")
+        || message.contains("already in blockchain")
+        || message.contains("already in the blockchain")
+}
+
+fn realistic_submit_accept_quorum(client_count: usize, tolerated_faults: usize) -> usize {
+    tolerated_faults.saturating_add(1).min(client_count).max(1)
+}
+
+fn submit_prepared_to_accept_quorum(
+    clients: &[iroha::client::Client],
+    payload: &iroha::client::PreparedTransactionPayload,
+    required_accepts: usize,
+) -> Result<()> {
+    ensure!(
+        !clients.is_empty(),
+        "prepared transaction broadcast requires at least one client"
+    );
+    let required_accepts = required_accepts.clamp(1, clients.len());
+    let mut accepts = 0_usize;
+    let mut errors = Vec::new();
+
+    for client in clients {
+        match client.submit_prepared_transaction_payload(payload) {
+            Ok(_) => accepts = accepts.saturating_add(1),
+            Err(err) => {
+                let error_message = format!("{err:?}");
+                if realistic_submit_error_is_already_known_message(&error_message) {
+                    accepts = accepts.saturating_add(1);
+                } else {
+                    errors.push(error_message);
+                }
+            }
+        }
+
+        if accepts >= required_accepts {
+            return Ok(());
+        }
+    }
+
+    bail!(
+        "prepared transaction {:?} accepted by {accepts}/{required_accepts} required Torii endpoints; errors={errors:?}",
+        payload.hash()
+    )
+}
+
 #[allow(clippy::too_many_arguments)]
 async fn submit_ram_lfe_emails_paced(
     tx_count: u64,
@@ -863,6 +990,7 @@ async fn submit_ram_lfe_emails_paced(
     resolver: KeyPair,
     rng_seed: u64,
     submit_parallelism: usize,
+    submit_accept_quorum: usize,
     submitted_counter: Arc<AtomicU64>,
 ) -> Result<Duration> {
     ensure!(
@@ -891,6 +1019,10 @@ async fn submit_ram_lfe_emails_paced(
         let resolver = resolver.clone();
         let submitted_counter = Arc::clone(&submitted_counter);
         pending.push(task::spawn_blocking(move || {
+            ensure!(
+                !submit_account.clients.is_empty(),
+                "RAM-LFE email submit account has no clients"
+            );
             let receipt = realistic_ram_lfe_email_receipt(
                 &policy_context,
                 &resolver,
@@ -899,21 +1031,24 @@ async fn submit_ram_lfe_emails_paced(
                 index,
                 rng_seed,
             );
-            submit_account
-                .client
-                .submit_with_metadata::<InstructionBox>(
-                    ClaimIdentifier {
-                        account: submit_account.id,
-                        receipt,
-                    }
-                    .into(),
-                    realistic_load_metadata(index),
+            let instruction: InstructionBox = ClaimIdentifier {
+                account: submit_account.id.clone(),
+                receipt,
+            }
+            .into();
+            let transaction = submit_account.clients[0]
+                .build_transaction_from_items([instruction], realistic_load_metadata(index));
+            let payload = submit_account.clients[0].prepare_transaction_payload(&transaction);
+            submit_prepared_to_accept_quorum(
+                &submit_account.clients,
+                &payload,
+                submit_accept_quorum,
+            )
+            .wrap_err_with(|| {
+                format!(
+                    "failed to submit paced RAM-LFE email claim instruction {index} from account index {account_index}"
                 )
-                .wrap_err_with(|| {
-                    format!(
-                        "failed to submit paced RAM-LFE email claim instruction {index} from account index {account_index}"
-                    )
-                })?;
+            })?;
             submitted_counter.fetch_add(1, AtomicOrdering::Relaxed);
             Ok(())
         }));
@@ -942,6 +1077,7 @@ async fn submit_transfers_paced(
     transfer_max_amount: u64,
     rng_seed: u64,
     submit_parallelism: usize,
+    submit_accept_quorum: usize,
     submitted_counter: Arc<AtomicU64>,
 ) -> Result<Duration> {
     ensure!(
@@ -971,19 +1107,31 @@ async fn submit_transfers_paced(
         let asset_definition_id = asset_definition_id.clone();
         let submitted_counter = Arc::clone(&submitted_counter);
         pending.push(task::spawn_blocking(move || {
-            let source_asset_id = AssetId::new(asset_definition_id, source_account.id.clone());
-            source_account
-                .client
-                .submit_with_metadata::<InstructionBox>(
-                    Transfer::asset_numeric(source_asset_id, Numeric::from(amount), destination_id)
-                        .into(),
-                    realistic_load_metadata(index),
+            ensure!(
+                !source_account.clients.is_empty(),
+                "transfer submit account has no clients"
+            );
+            let source_asset_id =
+                AssetId::new(asset_definition_id.clone(), source_account.id.clone());
+            let instruction: InstructionBox = Transfer::asset_numeric(
+                source_asset_id,
+                Numeric::from(amount),
+                destination_id.clone(),
+            )
+            .into();
+            let transaction = source_account.clients[0]
+                .build_transaction_from_items([instruction], realistic_load_metadata(index));
+            let payload = source_account.clients[0].prepare_transaction_payload(&transaction);
+            submit_prepared_to_accept_quorum(
+                &source_account.clients,
+                &payload,
+                submit_accept_quorum,
+            )
+            .wrap_err_with(|| {
+                format!(
+                    "failed to submit paced transfer instruction {index} from account index {source} to {destination}"
                 )
-                .wrap_err_with(|| {
-                    format!(
-                        "failed to submit paced transfer instruction {index} from account index {source} to {destination}"
-                    )
-                })?;
+            })?;
             submitted_counter.fetch_add(1, AtomicOrdering::Relaxed);
             Ok(())
         }));
@@ -1068,6 +1216,7 @@ async fn permissioned_localnet_realistic_30tps_2h() -> Result<()> {
     run_realistic_30tps_localnet(
         Realistic30TpsConsensusMode::Permissioned,
         stringify!(permissioned_localnet_realistic_30tps_2h),
+        None,
     )
     .await
 }
@@ -1079,6 +1228,19 @@ async fn npos_localnet_realistic_30tps_2h() -> Result<()> {
     run_realistic_30tps_localnet(
         Realistic30TpsConsensusMode::Npos,
         stringify!(npos_localnet_realistic_30tps_2h),
+        None,
+    )
+    .await
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+#[ignore = "long-running 4-peer NPoS localnet regression (30 TPS for 2 hours, rotating Byzantine peer)"]
+#[allow(clippy::too_many_lines, clippy::cast_precision_loss)]
+async fn npos_localnet_realistic_30tps_2h_rotating_byzantine_peer() -> Result<()> {
+    run_realistic_30tps_localnet(
+        Realistic30TpsConsensusMode::Npos,
+        stringify!(npos_localnet_realistic_30tps_2h_rotating_byzantine_peer),
+        Some(Realistic30TpsRotatingFaultConfig::from_env()?),
     )
     .await
 }
@@ -1102,9 +1264,1480 @@ impl Realistic30TpsConsensusMode {
     }
 }
 
+#[derive(Clone, Debug)]
+struct ConfigLayer(Table);
+
+impl AsRef<Table> for ConfigLayer {
+    fn as_ref(&self) -> &Table {
+        &self.0
+    }
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum Realistic30TpsFaultKind {
+    ConflictingReady,
+    DuplicateInits,
+    DropValidatorChunks,
+}
+
+const REALISTIC_30TPS_DEFAULT_FAULT_KINDS: [Realistic30TpsFaultKind; 3] = [
+    Realistic30TpsFaultKind::ConflictingReady,
+    Realistic30TpsFaultKind::DuplicateInits,
+    Realistic30TpsFaultKind::DropValidatorChunks,
+];
+
+impl Realistic30TpsFaultKind {
+    fn as_str(self) -> &'static str {
+        match self {
+            Self::ConflictingReady => "conflicting-ready",
+            Self::DuplicateInits => "duplicate-inits",
+            Self::DropValidatorChunks => "drop-validator-chunks",
+        }
+    }
+
+    fn parse(raw: &str) -> Option<Self> {
+        match raw.trim() {
+            "conflicting-ready"
+            | "conflicting_ready"
+            | "rbc-conflicting-ready"
+            | "rbc_conflicting_ready" => Some(Self::ConflictingReady),
+            "duplicate-inits"
+            | "duplicate_inits"
+            | "rbc-duplicate-inits"
+            | "rbc_duplicate_inits" => Some(Self::DuplicateInits),
+            "drop-validator-chunks"
+            | "drop_validator_chunks"
+            | "rbc-drop-validator-chunks"
+            | "rbc_drop_validator_chunks" => Some(Self::DropValidatorChunks),
+            _ => None,
+        }
+    }
+
+    fn layer(self, peer_count: usize) -> ConfigLayer {
+        let mut layer = Table::new();
+        let mut rbc = Table::new();
+        match self {
+            Self::ConflictingReady => {
+                rbc.insert(
+                    "conflicting_ready_mask".to_string(),
+                    TomlValue::Integer(realistic_30tps_validator_mask(peer_count)),
+                );
+            }
+            Self::DuplicateInits => {
+                rbc.insert("duplicate_inits".to_string(), TomlValue::Boolean(true));
+            }
+            Self::DropValidatorChunks => {
+                rbc.insert(
+                    "drop_validator_mask".to_string(),
+                    TomlValue::Integer(realistic_30tps_validator_mask(peer_count)),
+                );
+            }
+        }
+        let mut debug = Table::new();
+        debug.insert("rbc".to_string(), TomlValue::Table(rbc));
+        let mut sumeragi = Table::new();
+        sumeragi.insert("debug".to_string(), TomlValue::Table(debug));
+        layer.insert("sumeragi".to_string(), TomlValue::Table(sumeragi));
+        ConfigLayer(layer)
+    }
+}
+
+fn default_realistic_30tps_fault_kinds() -> Vec<Realistic30TpsFaultKind> {
+    REALISTIC_30TPS_DEFAULT_FAULT_KINDS.to_vec()
+}
+
+fn parse_realistic_30tps_fault_kinds(raw: &str) -> Result<Vec<Realistic30TpsFaultKind>> {
+    let trimmed = raw.trim();
+    if trimmed.is_empty() || trimmed.eq_ignore_ascii_case("default") {
+        return Ok(default_realistic_30tps_fault_kinds());
+    }
+
+    let mut kinds = Vec::new();
+    for name in trimmed
+        .split(',')
+        .map(str::trim)
+        .filter(|name| !name.is_empty())
+    {
+        let kind = Realistic30TpsFaultKind::parse(name).ok_or_else(|| {
+            eyre!(
+                "unsupported {REALISTIC_30TPS_FAULT_KINDS_ENV} entry `{name}`; expected one of conflicting-ready, duplicate-inits, drop-validator-chunks"
+            )
+        })?;
+        if !kinds.contains(&kind) {
+            kinds.push(kind);
+        }
+    }
+    ensure!(
+        !kinds.is_empty(),
+        "{REALISTIC_30TPS_FAULT_KINDS_ENV} must configure at least one fault kind"
+    );
+    Ok(kinds)
+}
+
+fn realistic_30tps_fault_kinds_from_env() -> Result<Vec<Realistic30TpsFaultKind>> {
+    match std::env::var(REALISTIC_30TPS_FAULT_KINDS_ENV) {
+        Ok(raw) => parse_realistic_30tps_fault_kinds(&raw),
+        Err(std::env::VarError::NotPresent) => Ok(default_realistic_30tps_fault_kinds()),
+        Err(err) => Err(eyre!(
+            "failed to read {REALISTIC_30TPS_FAULT_KINDS_ENV}: {err}"
+        )),
+    }
+}
+
+fn realistic_30tps_fault_kind_at(
+    fault_kinds: &[Realistic30TpsFaultKind],
+    window_index: usize,
+) -> Option<Realistic30TpsFaultKind> {
+    fault_kinds
+        .get(window_index % fault_kinds.len().max(1))
+        .copied()
+}
+
+fn realistic_30tps_peer_index_at(peer_count: usize, window_index: usize) -> Option<usize> {
+    (peer_count > 0).then_some(window_index % peer_count)
+}
+
+fn realistic_30tps_recovery_bound_from_env() -> Result<Option<Duration>> {
+    match std::env::var(REALISTIC_30TPS_RECOVERY_BOUND_SECS_ENV) {
+        Ok(raw) => {
+            let seconds = raw.trim().parse::<u64>().map_err(|err| {
+                eyre!("failed to parse {REALISTIC_30TPS_RECOVERY_BOUND_SECS_ENV}={raw:?}: {err}")
+            })?;
+            ensure!(
+                seconds > 0,
+                "{REALISTIC_30TPS_RECOVERY_BOUND_SECS_ENV} must be positive when set"
+            );
+            Ok(Some(Duration::from_secs(seconds)))
+        }
+        Err(std::env::VarError::NotPresent) => Ok(None),
+        Err(err) => Err(eyre!(
+            "failed to read {REALISTIC_30TPS_RECOVERY_BOUND_SECS_ENV}: {err}"
+        )),
+    }
+}
+
+fn env_bool(key: &str) -> Result<bool> {
+    match std::env::var(key) {
+        Ok(raw) => match raw.trim().to_ascii_lowercase().as_str() {
+            "1" | "true" | "yes" | "on" => Ok(true),
+            "0" | "false" | "no" | "off" => Ok(false),
+            _ => Err(eyre!(
+                "{key} must be one of 1/0, true/false, yes/no, or on/off when set"
+            )),
+        },
+        Err(std::env::VarError::NotPresent) => Ok(false),
+        Err(err) => Err(eyre!("failed to read {key}: {err}")),
+    }
+}
+
+fn realistic_30tps_convergence_total_bound_from_env(
+    recovery_bound: Option<Duration>,
+) -> Result<Option<Duration>> {
+    match std::env::var(REALISTIC_30TPS_CONVERGENCE_BOUND_SECS_ENV) {
+        Ok(raw) => {
+            let seconds = raw.trim().parse::<u64>().map_err(|err| {
+                eyre!("failed to parse {REALISTIC_30TPS_CONVERGENCE_BOUND_SECS_ENV}={raw:?}: {err}")
+            })?;
+            ensure!(
+                seconds > 0,
+                "{REALISTIC_30TPS_CONVERGENCE_BOUND_SECS_ENV} must be positive when set"
+            );
+            Ok(Some(Duration::from_secs(seconds)))
+        }
+        Err(std::env::VarError::NotPresent) => Ok(recovery_bound),
+        Err(err) => Err(eyre!(
+            "failed to read {REALISTIC_30TPS_CONVERGENCE_BOUND_SECS_ENV}: {err}"
+        )),
+    }
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+struct Realistic30TpsRotatingFaultConfig {
+    rotate_interval: Duration,
+    recovery_timeout: Duration,
+    recovery_bound: Option<Duration>,
+    strict_rotation_convergence: bool,
+    convergence_total_bound: Option<Duration>,
+    fault_kinds: Vec<Realistic30TpsFaultKind>,
+}
+
+impl Realistic30TpsRotatingFaultConfig {
+    fn from_env() -> Result<Self> {
+        let recovery_bound = realistic_30tps_recovery_bound_from_env()?;
+        let strict_rotation_convergence =
+            env_bool(REALISTIC_30TPS_STRICT_ROTATION_CONVERGENCE_ENV)?;
+        Ok(Self {
+            rotate_interval: Duration::from_secs(
+                env_or_default(
+                    REALISTIC_30TPS_BAD_PEER_ROTATE_SECS_ENV,
+                    REALISTIC_30TPS_BAD_PEER_ROTATE_SECS,
+                )
+                .max(1),
+            ),
+            recovery_timeout: Duration::from_secs(
+                env_or_default(
+                    REALISTIC_30TPS_BAD_PEER_RECOVERY_SECS_ENV,
+                    REALISTIC_30TPS_BAD_PEER_RECOVERY_SECS,
+                )
+                .max(1),
+            ),
+            recovery_bound,
+            strict_rotation_convergence,
+            convergence_total_bound: realistic_30tps_convergence_total_bound_from_env(
+                recovery_bound,
+            )?,
+            fault_kinds: realistic_30tps_fault_kinds_from_env()?,
+        })
+    }
+
+    fn recovery_wait_timeout(&self) -> Duration {
+        self.recovery_bound.unwrap_or(self.recovery_timeout)
+    }
+
+    fn requires_bounded_convergence(&self) -> bool {
+        self.strict_rotation_convergence
+    }
+
+    fn convergence_progress_timeout(&self) -> Duration {
+        Duration::from_secs(REALISTIC_30TPS_CONVERGENCE_BOUND_SECS)
+    }
+
+    fn convergence_total_bound(&self) -> Option<Duration> {
+        self.convergence_total_bound
+    }
+}
+
+fn realistic_30tps_stall_threshold(
+    rotating_fault: Option<&Realistic30TpsRotatingFaultConfig>,
+) -> Duration {
+    if let Ok(raw) = std::env::var(REALISTIC_30TPS_STALL_SECS_ENV)
+        && let Ok(secs) = raw.parse::<u64>()
+        && secs > 0
+    {
+        return Duration::from_secs(secs);
+    }
+
+    if let Some(config) = rotating_fault {
+        return REALISTIC_30TPS_STALL_THRESHOLD.max(config.rotate_interval.saturating_mul(2));
+    }
+
+    REALISTIC_30TPS_STALL_THRESHOLD
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+struct Realistic30TpsFaultWindow {
+    peer_index: usize,
+    mnemonic: String,
+    fault: &'static str,
+    started_ms: u64,
+    ended_ms: Option<u64>,
+}
+
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+struct Realistic30TpsSnapshotObservation {
+    store_dir: String,
+    data_bytes: Option<u64>,
+    digest_bytes: Option<u64>,
+    signature_bytes: Option<u64>,
+    merkle_bytes: Option<u64>,
+    data_modified_ms: Option<u64>,
+    errors: Vec<String>,
+}
+
+impl Realistic30TpsSnapshotObservation {
+    fn data_present(&self) -> bool {
+        self.data_bytes.is_some()
+    }
+
+    fn bundle_complete(&self) -> bool {
+        self.data_bytes.is_some()
+            && self.digest_bytes.is_some()
+            && self.signature_bytes.is_some()
+            && self.merkle_bytes.is_some()
+    }
+}
+
+#[derive(Clone, Debug)]
+struct Realistic30TpsStatusRecoverySample {
+    peer_index: usize,
+    mnemonic: String,
+    context: String,
+    restart_started_ms: u64,
+    status_wait_started_ms: u64,
+    ended_ms: u64,
+    bound_ms: u64,
+    recovered: bool,
+    poll_attempts: u64,
+    last_error: Option<String>,
+    snapshot_before_shutdown: Realistic30TpsSnapshotObservation,
+    snapshot_after_shutdown: Realistic30TpsSnapshotObservation,
+    snapshot_after_status: Realistic30TpsSnapshotObservation,
+}
+
+impl Realistic30TpsStatusRecoverySample {
+    fn total_duration_ms(&self) -> u64 {
+        self.ended_ms.saturating_sub(self.restart_started_ms)
+    }
+
+    fn status_wait_ms(&self) -> u64 {
+        self.ended_ms.saturating_sub(self.status_wait_started_ms)
+    }
+
+    fn recovered_within_bound(&self) -> bool {
+        self.recovered && self.status_wait_ms() <= self.bound_ms
+    }
+}
+
+fn realistic_30tps_peer_snapshot_observation(
+    peer: &iroha_test_network::NetworkPeer,
+) -> Realistic30TpsSnapshotObservation {
+    let store_dir = peer.kura_store_dir().join("snapshot");
+    let (data_bytes, data_modified_ms, mut errors) =
+        realistic_30tps_snapshot_file_metadata(&store_dir.join(REALISTIC_30TPS_SNAPSHOT_DATA_FILE));
+    let (digest_bytes, _, digest_errors) = realistic_30tps_snapshot_file_metadata(
+        &store_dir.join(REALISTIC_30TPS_SNAPSHOT_DIGEST_FILE),
+    );
+    let (signature_bytes, _, signature_errors) = realistic_30tps_snapshot_file_metadata(
+        &store_dir.join(REALISTIC_30TPS_SNAPSHOT_SIGNATURE_FILE),
+    );
+    let (merkle_bytes, _, merkle_errors) = realistic_30tps_snapshot_file_metadata(
+        &store_dir.join(REALISTIC_30TPS_SNAPSHOT_MERKLE_FILE),
+    );
+    errors.extend(digest_errors);
+    errors.extend(signature_errors);
+    errors.extend(merkle_errors);
+    Realistic30TpsSnapshotObservation {
+        store_dir: store_dir.to_string_lossy().to_string(),
+        data_bytes,
+        digest_bytes,
+        signature_bytes,
+        merkle_bytes,
+        data_modified_ms,
+        errors,
+    }
+}
+
+fn realistic_30tps_snapshot_file_metadata(path: &Path) -> (Option<u64>, Option<u64>, Vec<String>) {
+    match fs::metadata(path) {
+        Ok(metadata) => {
+            let modified_ms = metadata.modified().ok().and_then(system_time_ms);
+            (Some(metadata.len()), modified_ms, Vec::new())
+        }
+        Err(err) if err.kind() == std::io::ErrorKind::NotFound => (None, None, Vec::new()),
+        Err(err) => (
+            None,
+            None,
+            vec![format!("{}: {err}", path.to_string_lossy())],
+        ),
+    }
+}
+
+fn system_time_ms(time: SystemTime) -> Option<u64> {
+    time.duration_since(UNIX_EPOCH)
+        .ok()
+        .and_then(|duration| u64::try_from(duration.as_millis()).ok())
+}
+
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+struct Realistic30TpsCatchUpTarget {
+    blocks_non_empty: u64,
+    txs_approved: u64,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+struct Realistic30TpsConvergenceSpan {
+    min_blocks_non_empty: u64,
+    max_blocks_non_empty: u64,
+    min_txs_approved: u64,
+    max_txs_approved: u64,
+}
+
+impl Realistic30TpsConvergenceSpan {
+    fn block_gap(self) -> u64 {
+        self.max_blocks_non_empty
+            .saturating_sub(self.min_blocks_non_empty)
+    }
+
+    fn approved_gap(self) -> u64 {
+        self.max_txs_approved.saturating_sub(self.min_txs_approved)
+    }
+}
+
+#[derive(Clone, Debug)]
+struct Realistic30TpsCatchUpSample {
+    timestamp_ms: u64,
+    recovering_peer_index: usize,
+    target: Realistic30TpsCatchUpTarget,
+    recovering_status: Option<StatusSnapshot>,
+    healthy_statuses: Vec<StatusSnapshot>,
+    healthy_status_error: Option<String>,
+    recovering_no_progress_ms: u64,
+}
+
+#[derive(Clone, Debug)]
+struct Realistic30TpsConvergenceWindow {
+    healed_peer_index: usize,
+    healed_fault: &'static str,
+    started_ms: u64,
+    ended_ms: u64,
+    start_span: Option<Realistic30TpsConvergenceSpan>,
+    end_span: Realistic30TpsConvergenceSpan,
+}
+
+#[derive(Debug)]
+struct Realistic30TpsRotatingFaultController {
+    config: Realistic30TpsRotatingFaultConfig,
+    base_layers: Vec<ConfigLayer>,
+    final_target_approved: u64,
+    current_peer: Option<usize>,
+    next_peer: usize,
+    next_fault_index: usize,
+    next_rotation_at: Option<Instant>,
+    fault_windows: Vec<Realistic30TpsFaultWindow>,
+    status_recovery_samples: Vec<Realistic30TpsStatusRecoverySample>,
+    catch_up_samples: Vec<Realistic30TpsCatchUpSample>,
+    convergence_windows: Vec<Realistic30TpsConvergenceWindow>,
+}
+
+impl Realistic30TpsRotatingFaultController {
+    fn new(
+        network: &Network,
+        config: Realistic30TpsRotatingFaultConfig,
+        final_target_approved: u64,
+    ) -> Self {
+        Self {
+            config,
+            base_layers: network
+                .config_layers()
+                .map(|layer| ConfigLayer(layer.into_owned()))
+                .collect(),
+            final_target_approved,
+            current_peer: None,
+            next_peer: 0,
+            next_fault_index: 0,
+            next_rotation_at: None,
+            fault_windows: Vec::new(),
+            status_recovery_samples: Vec::new(),
+            catch_up_samples: Vec::new(),
+            convergence_windows: Vec::new(),
+        }
+    }
+
+    async fn start(&mut self, network: &Network) -> Result<()> {
+        ensure!(
+            network.peers().len() >= REALISTIC_30TPS_PEERS,
+            "rotating Byzantine 30 TPS soak requires at least {REALISTIC_30TPS_PEERS} peers"
+        );
+        ensure!(
+            !self.config.fault_kinds.is_empty(),
+            "rotating Byzantine 30 TPS soak requires at least one fault kind"
+        );
+        let fault_kind = self.next_fault_kind();
+        self.poison_peer(network, 0, fault_kind, "initial rotating Byzantine peer")
+            .await?;
+        self.next_peer = 1 % network.peers().len();
+        self.next_rotation_at = Instant::now().checked_add(self.config.rotate_interval);
+        Ok(())
+    }
+
+    async fn rotate_if_due(&mut self, network: &Network) -> Result<bool> {
+        let Some(next_rotation_at) = self.next_rotation_at else {
+            return Ok(false);
+        };
+        if Instant::now() < next_rotation_at {
+            return Ok(false);
+        }
+        self.rotate(network).await?;
+        Ok(true)
+    }
+
+    async fn rotate(&mut self, network: &Network) -> Result<()> {
+        if let Some(current_peer) = self.current_peer {
+            self.heal_peer(network, current_peer, "heal rotating Byzantine peer", true)
+                .await?;
+        }
+        let next_peer = self.next_peer % network.peers().len();
+        let fault_kind = self.next_fault_kind();
+        self.poison_peer(network, next_peer, fault_kind, "rotate Byzantine peer")
+            .await?;
+        self.next_peer = (next_peer + 1) % network.peers().len();
+        self.next_rotation_at = Instant::now().checked_add(self.config.rotate_interval);
+        Ok(())
+    }
+
+    async fn stop_and_heal(&mut self, network: &Network) -> Result<()> {
+        self.next_rotation_at = None;
+        if let Some(current_peer) = self.current_peer {
+            let current_fault = self.current_fault_for_peer(current_peer);
+            self.heal_peer(
+                network,
+                current_peer,
+                "heal final rotating Byzantine peer",
+                false,
+            )
+            .await?;
+            if self.config.requires_bounded_convergence() {
+                let convergence_window = wait_for_realistic_all_peer_convergence(
+                    network,
+                    current_peer,
+                    current_fault,
+                    self.config.convergence_progress_timeout(),
+                    self.config.convergence_total_bound(),
+                )
+                .await
+                .wrap_err_with(|| {
+                    format!("heal final rotating Byzantine peer: peer {current_peer} bounded convergence")
+                })?;
+                self.convergence_windows.push(convergence_window);
+            }
+        }
+        ensure!(
+            realistic_fault_windows_have_no_overlap(&self.fault_windows),
+            "rotating Byzantine fault windows overlapped: {:?}",
+            self.fault_windows
+        );
+        if self.config.requires_bounded_convergence() {
+            ensure!(
+                realistic_strict_fault_windows_start_after_convergence(
+                    &self.fault_windows,
+                    &self.convergence_windows
+                ),
+                "strict rotating Byzantine fault windows started before healed peers converged: windows={:?}, convergence={:?}",
+                self.fault_windows,
+                self.convergence_windows
+            );
+        }
+        if self.fault_windows.len() >= self.config.fault_kinds.len() {
+            ensure!(
+                realistic_fault_windows_observed_all_kinds(
+                    &self.fault_windows,
+                    &self.config.fault_kinds
+                ),
+                "rotating Byzantine fault windows did not observe every configured fault kind: windows={:?}, configured={:?}",
+                &self.fault_windows,
+                &self.config.fault_kinds
+            );
+        }
+        Ok(())
+    }
+
+    fn fault_windows(&self) -> &[Realistic30TpsFaultWindow] {
+        &self.fault_windows
+    }
+
+    fn drain_status_recovery_samples(&mut self) -> Vec<Realistic30TpsStatusRecoverySample> {
+        self.status_recovery_samples.drain(..).collect()
+    }
+
+    fn drain_catch_up_samples(&mut self) -> Vec<Realistic30TpsCatchUpSample> {
+        self.catch_up_samples.drain(..).collect()
+    }
+
+    fn convergence_windows(&self) -> &[Realistic30TpsConvergenceWindow] {
+        &self.convergence_windows
+    }
+
+    fn current_fault_for_peer(&self, peer_index: usize) -> &'static str {
+        self.fault_windows
+            .iter()
+            .rev()
+            .find(|window| window.peer_index == peer_index && window.ended_ms.is_none())
+            .map_or("unknown", |window| window.fault)
+    }
+
+    fn next_fault_kind(&mut self) -> Realistic30TpsFaultKind {
+        let kind = realistic_30tps_fault_kind_at(&self.config.fault_kinds, self.next_fault_index)
+            .expect("fault kind list checked before rotation starts");
+        self.next_fault_index = self.next_fault_index.saturating_add(1);
+        kind
+    }
+
+    async fn poison_peer(
+        &mut self,
+        network: &Network,
+        peer_index: usize,
+        fault_kind: Realistic30TpsFaultKind,
+        context: &str,
+    ) -> Result<()> {
+        let peer_count = network.peers().len();
+        let fault_layer = fault_kind.layer(peer_count);
+        let mut layers = self.base_layers.clone();
+        layers.push(fault_layer);
+        let peer = network
+            .peers()
+            .get(peer_index)
+            .ok_or_else(|| eyre!("bad peer index {peer_index} missing"))?;
+        self.fault_windows.push(Realistic30TpsFaultWindow {
+            peer_index,
+            mnemonic: peer.mnemonic().to_owned(),
+            fault: fault_kind.as_str(),
+            started_ms: unix_timestamp_ms(),
+            ended_ms: None,
+        });
+        restart_realistic_30tps_peer(
+            network,
+            peer_index,
+            &layers,
+            false,
+            self.config.recovery_wait_timeout(),
+            context,
+            None,
+        )
+        .await?;
+        self.current_peer = Some(peer_index);
+        Ok(())
+    }
+
+    async fn heal_peer(
+        &mut self,
+        network: &Network,
+        peer_index: usize,
+        context: &str,
+        require_post_heal_progress: bool,
+    ) -> Result<()> {
+        let catch_up_target = realistic_30tps_catch_up_target(network, peer_index).await?;
+        restart_realistic_30tps_peer(
+            network,
+            peer_index,
+            &self.base_layers,
+            true,
+            self.config.recovery_wait_timeout(),
+            context,
+            Some(&mut self.status_recovery_samples),
+        )
+        .await?;
+        wait_for_realistic_peer_catch_up(
+            network,
+            peer_index,
+            catch_up_target,
+            self.config.recovery_wait_timeout(),
+            Some(&mut self.catch_up_samples),
+        )
+        .await
+        .wrap_err_with(|| format!("{context}: peer {peer_index} catch-up after healing"))?;
+        if require_post_heal_progress {
+            let healed_fault = self.current_fault_for_peer(peer_index);
+            wait_for_realistic_post_heal_consensus_progress(
+                network,
+                peer_index,
+                self.config.recovery_wait_timeout(),
+                self.final_target_approved,
+            )
+            .await
+            .wrap_err_with(|| {
+                format!("{context}: peer {peer_index} post-heal consensus progress")
+            })?;
+            if self.config.requires_bounded_convergence() {
+                let convergence_window = wait_for_realistic_all_peer_convergence(
+                    network,
+                    peer_index,
+                    healed_fault,
+                    self.config.convergence_progress_timeout(),
+                    self.config.convergence_total_bound(),
+                )
+                .await
+                .wrap_err_with(|| {
+                    format!("{context}: peer {peer_index} post-heal all-peer convergence")
+                })?;
+                self.convergence_windows.push(convergence_window);
+            }
+        }
+        if let Some(window) = self
+            .fault_windows
+            .iter_mut()
+            .rev()
+            .find(|window| window.peer_index == peer_index && window.ended_ms.is_none())
+        {
+            window.ended_ms = Some(unix_timestamp_ms());
+        }
+        self.current_peer = None;
+        Ok(())
+    }
+}
+
+fn sync_realistic_fault_artifacts(
+    controller: &mut Realistic30TpsRotatingFaultController,
+    artifacts: &mut ThroughputArtifacts,
+) {
+    artifacts
+        .status_recovery_samples
+        .extend(controller.drain_status_recovery_samples());
+    artifacts
+        .catch_up_samples
+        .extend(controller.drain_catch_up_samples());
+    let synced_convergence_windows = artifacts.convergence_windows.len();
+    if synced_convergence_windows < controller.convergence_windows().len() {
+        artifacts.convergence_windows.extend(
+            controller.convergence_windows()[synced_convergence_windows..]
+                .iter()
+                .cloned(),
+        );
+    }
+    artifacts.fault_windows = controller.fault_windows().to_vec();
+}
+
+async fn restart_realistic_30tps_peer(
+    network: &Network,
+    peer_index: usize,
+    layers: &[ConfigLayer],
+    wait_for_status: bool,
+    status_timeout: Duration,
+    context: &str,
+    mut status_samples: Option<&mut Vec<Realistic30TpsStatusRecoverySample>>,
+) -> Result<()> {
+    let peer = network
+        .peers()
+        .get(peer_index)
+        .ok_or_else(|| eyre!("peer index {peer_index} missing during {context}"))?;
+    let mnemonic = peer.mnemonic().to_owned();
+    eprintln!("realistic localnet {context}: restarting peer {peer_index} ({mnemonic})");
+    let restart_started_ms = unix_timestamp_ms();
+    let snapshot_before_shutdown = realistic_30tps_peer_snapshot_observation(peer);
+    let _ = peer.shutdown_if_started().await;
+    let snapshot_after_shutdown = realistic_30tps_peer_snapshot_observation(peer);
+    peer.start(layers.iter().cloned(), None)
+        .await
+        .wrap_err_with(|| format!("{context}: restart peer {peer_index} ({mnemonic})"))?;
+    sleep(REALISTIC_30TPS_RESTART_GRACE).await;
+    if !peer.is_running() {
+        let last_error = "peer exited during restart grace".to_string();
+        if let Some(status_samples) = status_samples.as_mut() {
+            status_samples.push(Realistic30TpsStatusRecoverySample {
+                peer_index,
+                mnemonic: mnemonic.clone(),
+                context: context.to_string(),
+                restart_started_ms,
+                status_wait_started_ms: unix_timestamp_ms(),
+                ended_ms: unix_timestamp_ms(),
+                bound_ms: duration_millis_u64(status_timeout),
+                recovered: false,
+                poll_attempts: 0,
+                last_error: Some(last_error.clone()),
+                snapshot_before_shutdown,
+                snapshot_after_shutdown,
+                snapshot_after_status: realistic_30tps_peer_snapshot_observation(peer),
+            });
+        }
+        return Err(eyre!(
+            "{context}: peer {peer_index} ({mnemonic}) {last_error}"
+        ));
+    }
+    if wait_for_status {
+        let sample = wait_for_realistic_peer_status(
+            peer_index,
+            peer,
+            context,
+            restart_started_ms,
+            status_timeout,
+            snapshot_before_shutdown,
+            snapshot_after_shutdown,
+        )
+        .await;
+        let recovered = sample.recovered;
+        let status_wait_ms = sample.status_wait_ms();
+        let last_error = sample.last_error.clone();
+        if let Some(status_samples) = status_samples.as_mut() {
+            status_samples.push(sample);
+        }
+        ensure!(
+            recovered,
+            "{context}: peer {peer_index} ({mnemonic}) status did not recover within {:?}: {}",
+            status_timeout,
+            last_error.unwrap_or_else(|| "status endpoint unavailable".to_string())
+        );
+        eprintln!(
+            "realistic localnet {context}: peer {peer_index} ({mnemonic}) status recovered in {status_wait_ms}ms"
+        );
+    }
+    Ok(())
+}
+
+async fn wait_for_realistic_peer_status(
+    peer_index: usize,
+    peer: &iroha_test_network::NetworkPeer,
+    context: &str,
+    restart_started_ms: u64,
+    timeout: Duration,
+    snapshot_before_shutdown: Realistic30TpsSnapshotObservation,
+    snapshot_after_shutdown: Realistic30TpsSnapshotObservation,
+) -> Realistic30TpsStatusRecoverySample {
+    let status_wait_started_ms = unix_timestamp_ms();
+    let deadline = Instant::now() + timeout;
+    let bound_ms = duration_millis_u64(timeout);
+    let mut poll_attempts = 0_u64;
+    let mut last_error = None;
+    let mut last_log = Instant::now()
+        .checked_sub(STATUS_LOG_INTERVAL)
+        .unwrap_or_else(Instant::now);
+    let make_sample =
+        |ended_ms: u64, recovered: bool, poll_attempts: u64, last_error: Option<String>| {
+            Realistic30TpsStatusRecoverySample {
+                peer_index,
+                mnemonic: peer.mnemonic().to_owned(),
+                context: context.to_string(),
+                restart_started_ms,
+                status_wait_started_ms,
+                ended_ms,
+                bound_ms,
+                recovered,
+                poll_attempts,
+                last_error,
+                snapshot_before_shutdown: snapshot_before_shutdown.clone(),
+                snapshot_after_shutdown: snapshot_after_shutdown.clone(),
+                snapshot_after_status: realistic_30tps_peer_snapshot_observation(peer),
+            }
+        };
+    loop {
+        if !peer.is_running() {
+            last_error = Some(format!(
+                "{context}: peer {} exited before status recovery",
+                peer.mnemonic()
+            ));
+            return make_sample(unix_timestamp_ms(), false, poll_attempts, last_error);
+        }
+        let remaining = deadline.saturating_duration_since(Instant::now());
+        if remaining.is_zero() {
+            if last_error.is_none() {
+                last_error = Some(format!("status did not recover within {timeout:?}"));
+            }
+            return make_sample(unix_timestamp_ms(), false, poll_attempts, last_error);
+        }
+        let poll_timeout = std::cmp::min(remaining, REALISTIC_30TPS_STATUS_RECOVERY_POLL_TIMEOUT);
+        poll_attempts = poll_attempts.saturating_add(1);
+        match tokio::time::timeout(poll_timeout, peer.status()).await {
+            Ok(Ok(_)) => {
+                return make_sample(unix_timestamp_ms(), true, poll_attempts, last_error);
+            }
+            Ok(Err(err)) => {
+                last_error = Some(format!("{err:?}"));
+                if last_log.elapsed() >= STATUS_LOG_INTERVAL {
+                    eprintln!(
+                        "waiting for restarted peer {} status recovery: {err:?}",
+                        peer.mnemonic()
+                    );
+                    last_log = Instant::now();
+                }
+            }
+            Err(_) => {
+                last_error = Some(format!("status poll timed out after {poll_timeout:?}"));
+                if last_log.elapsed() >= STATUS_LOG_INTERVAL {
+                    eprintln!(
+                        "waiting for restarted peer {} status recovery timed out",
+                        peer.mnemonic()
+                    );
+                    last_log = Instant::now();
+                }
+            }
+        }
+        if Instant::now() >= deadline {
+            if last_error.is_none() {
+                last_error = Some(format!("status did not recover within {timeout:?}"));
+            }
+            return make_sample(unix_timestamp_ms(), false, poll_attempts, last_error);
+        }
+        let sleep_for = std::cmp::min(
+            Duration::from_millis(200),
+            deadline.saturating_duration_since(Instant::now()),
+        );
+        if !sleep_for.is_zero() {
+            sleep(sleep_for).await;
+        }
+    }
+}
+
+async fn realistic_30tps_catch_up_target(
+    network: &Network,
+    recovering_peer_index: usize,
+) -> Result<Realistic30TpsCatchUpTarget> {
+    let statuses = try_join_all(
+        network
+            .peers()
+            .iter()
+            .enumerate()
+            .filter(|(peer_index, _)| *peer_index != recovering_peer_index)
+            .map(|(peer_index, peer)| async move {
+                tokio::time::timeout(STATUS_POLL_TIMEOUT, peer.status())
+                    .await
+                    .map_err(|_| {
+                        eyre!(
+                            "status request timed out while computing recovery target for peer {peer_index}"
+                        )
+                    })?
+                    .wrap_err_with(|| {
+                        format!(
+                            "status request failed while computing recovery target for peer {peer_index}"
+                        )
+                    })
+            }),
+    )
+    .await?;
+    realistic_30tps_catch_up_target_from_statuses(&statuses)
+}
+
+fn realistic_30tps_catch_up_target_from_statuses(
+    statuses: &[iroha::client::Status],
+) -> Result<Realistic30TpsCatchUpTarget> {
+    ensure!(
+        !statuses.is_empty(),
+        "cannot compute recovery target without any healthy peer status"
+    );
+    Ok(Realistic30TpsCatchUpTarget {
+        blocks_non_empty: statuses
+            .iter()
+            .map(|status| status.blocks_non_empty)
+            .max()
+            .unwrap_or_default(),
+        txs_approved: statuses
+            .iter()
+            .map(|status| status.txs_approved)
+            .max()
+            .unwrap_or_default(),
+    })
+}
+
+fn realistic_30tps_strict_progress_target_from_statuses(
+    statuses: &[iroha::client::Status],
+) -> Result<Realistic30TpsCatchUpTarget> {
+    ensure!(
+        !statuses.is_empty(),
+        "cannot compute strict progress target without any peer status"
+    );
+    Ok(Realistic30TpsCatchUpTarget {
+        blocks_non_empty: statuses
+            .iter()
+            .map(|status| status.blocks_non_empty)
+            .min()
+            .unwrap_or_default(),
+        txs_approved: statuses
+            .iter()
+            .map(|status| status.txs_approved)
+            .min()
+            .unwrap_or_default(),
+    })
+}
+
+fn realistic_30tps_statuses_exceed_strict_progress_target(
+    statuses: &[iroha::client::Status],
+    target: Realistic30TpsCatchUpTarget,
+) -> bool {
+    realistic_30tps_strict_progress_target_from_statuses(statuses).is_ok_and(|current| {
+        current.blocks_non_empty > target.blocks_non_empty
+            || current.txs_approved > target.txs_approved
+    })
+}
+
+fn realistic_30tps_statuses_satisfy_post_heal_progress(
+    statuses: &[iroha::client::Status],
+    target: Realistic30TpsCatchUpTarget,
+    final_target_approved: u64,
+) -> bool {
+    realistic_30tps_strict_progress_target_from_statuses(statuses).is_ok_and(|current| {
+        current.blocks_non_empty > target.blocks_non_empty
+            || current.txs_approved > target.txs_approved
+            || current.txs_approved >= final_target_approved
+    })
+}
+
+fn realistic_30tps_convergence_span_from_statuses(
+    statuses: &[iroha::client::Status],
+) -> Result<Realistic30TpsConvergenceSpan> {
+    ensure!(
+        !statuses.is_empty(),
+        "cannot compute all-peer convergence without any peer status"
+    );
+    Ok(Realistic30TpsConvergenceSpan {
+        min_blocks_non_empty: statuses
+            .iter()
+            .map(|status| status.blocks_non_empty)
+            .min()
+            .unwrap_or_default(),
+        max_blocks_non_empty: statuses
+            .iter()
+            .map(|status| status.blocks_non_empty)
+            .max()
+            .unwrap_or_default(),
+        min_txs_approved: statuses
+            .iter()
+            .map(|status| status.txs_approved)
+            .min()
+            .unwrap_or_default(),
+        max_txs_approved: statuses
+            .iter()
+            .map(|status| status.txs_approved)
+            .max()
+            .unwrap_or_default(),
+    })
+}
+
+fn realistic_30tps_statuses_are_converged(statuses: &[iroha::client::Status]) -> Result<bool> {
+    let span = realistic_30tps_convergence_span_from_statuses(statuses)?;
+    Ok(span
+        .max_blocks_non_empty
+        .saturating_sub(span.min_blocks_non_empty)
+        <= REALISTIC_30TPS_ROTATING_FAULT_MAX_HEALTHY_BLOCK_LAG
+        && span.max_txs_approved.saturating_sub(span.min_txs_approved)
+            <= REALISTIC_30TPS_ROTATING_FAULT_MAX_HEALTHY_APPROVED_LAG)
+}
+
+fn realistic_30tps_convergence_progress_since(
+    current: Realistic30TpsConvergenceSpan,
+    last_seen: Realistic30TpsConvergenceSpan,
+) -> Option<Realistic30TpsConvergenceSpan> {
+    let current_block_lag = current
+        .max_blocks_non_empty
+        .saturating_sub(current.min_blocks_non_empty);
+    let last_block_lag = last_seen
+        .max_blocks_non_empty
+        .saturating_sub(last_seen.min_blocks_non_empty);
+    let current_approved_lag = current
+        .max_txs_approved
+        .saturating_sub(current.min_txs_approved);
+    let last_approved_lag = last_seen
+        .max_txs_approved
+        .saturating_sub(last_seen.min_txs_approved);
+
+    (current.min_blocks_non_empty > last_seen.min_blocks_non_empty
+        || current.min_txs_approved > last_seen.min_txs_approved
+        || current_block_lag < last_block_lag
+        || current_approved_lag < last_approved_lag)
+        .then_some(current)
+}
+
+fn realistic_30tps_catch_up_progress_since(
+    status: &iroha::client::Status,
+    last_seen: Realistic30TpsCatchUpTarget,
+) -> Option<Realistic30TpsCatchUpTarget> {
+    let current = Realistic30TpsCatchUpTarget {
+        blocks_non_empty: status.blocks_non_empty,
+        txs_approved: status.txs_approved,
+    };
+    (current.blocks_non_empty > last_seen.blocks_non_empty
+        || current.txs_approved > last_seen.txs_approved)
+        .then_some(current)
+}
+
+async fn realistic_30tps_healthy_status_snapshots(
+    network: &Network,
+    recovering_peer_index: usize,
+    status_timeout: Duration,
+) -> Result<Vec<StatusSnapshot>> {
+    let statuses = try_join_all(
+        network
+            .peers()
+            .iter()
+            .enumerate()
+            .filter(|(peer_index, _)| *peer_index != recovering_peer_index)
+            .map(|(peer_index, peer)| async move {
+                tokio::time::timeout(status_timeout, peer.status())
+                    .await
+                    .map_err(|_| {
+                        eyre!("healthy peer {peer_index} status timed out during catch-up sample")
+                    })?
+                    .wrap_err_with(|| {
+                        format!("healthy peer {peer_index} status failed during catch-up sample")
+                    })
+            }),
+    )
+    .await?;
+    Ok(statuses.iter().map(StatusSnapshot::from_status).collect())
+}
+
+async fn realistic_30tps_catch_up_sample(
+    network: &Network,
+    recovering_peer_index: usize,
+    target: Realistic30TpsCatchUpTarget,
+    recovering_status: Option<StatusSnapshot>,
+    recovering_no_progress: Duration,
+) -> Realistic30TpsCatchUpSample {
+    let (healthy_statuses, healthy_status_error) = match realistic_30tps_healthy_status_snapshots(
+        network,
+        recovering_peer_index,
+        STATUS_POLL_TIMEOUT,
+    )
+    .await
+    {
+        Ok(statuses) => (statuses, None),
+        Err(err) => (Vec::new(), Some(format!("{err:?}"))),
+    };
+    Realistic30TpsCatchUpSample {
+        timestamp_ms: unix_timestamp_ms(),
+        recovering_peer_index,
+        target,
+        recovering_status,
+        healthy_statuses,
+        healthy_status_error,
+        recovering_no_progress_ms: u64::try_from(recovering_no_progress.as_millis())
+            .unwrap_or(u64::MAX),
+    }
+}
+
+async fn wait_for_realistic_peer_catch_up(
+    network: &Network,
+    peer_index: usize,
+    target: Realistic30TpsCatchUpTarget,
+    no_progress_timeout: Duration,
+    mut catch_up_samples: Option<&mut Vec<Realistic30TpsCatchUpSample>>,
+) -> Result<()> {
+    let peer = network
+        .peers()
+        .get(peer_index)
+        .ok_or_else(|| eyre!("peer index {peer_index} missing during catch-up wait"))?;
+    let mut last_seen = Realistic30TpsCatchUpTarget::default();
+    let mut last_progress = Instant::now();
+    let mut last_log = Instant::now()
+        .checked_sub(STATUS_LOG_INTERVAL)
+        .unwrap_or_else(Instant::now);
+    loop {
+        if !peer.is_running() {
+            return Err(eyre!(
+                "peer {} exited before catch-up to {:?}",
+                peer.mnemonic(),
+                target
+            ));
+        }
+        let mut recovering_status = None;
+        if let Ok(Ok(status)) = tokio::time::timeout(STATUS_POLL_TIMEOUT, peer.status()).await {
+            if status.blocks_non_empty >= target.blocks_non_empty
+                && status.txs_approved >= target.txs_approved
+            {
+                return Ok(());
+            }
+            if let Some(current) = realistic_30tps_catch_up_progress_since(&status, last_seen) {
+                last_seen = current;
+                last_progress = Instant::now();
+            }
+            recovering_status = Some(StatusSnapshot::from_status(&status));
+            if last_log.elapsed() >= STATUS_LOG_INTERVAL {
+                let sample = realistic_30tps_catch_up_sample(
+                    network,
+                    peer_index,
+                    target,
+                    recovering_status.clone(),
+                    last_progress.elapsed(),
+                )
+                .await;
+                let healthy_summary =
+                    ThroughputStatusSummary::from_statuses(&sample.healthy_statuses);
+                if let Some(samples) = catch_up_samples.as_mut() {
+                    samples.push(sample);
+                }
+                eprintln!(
+                    "waiting for restarted peer {} catch-up: current_non_empty={}, target_non_empty={}, current_approved={}, target_approved={}, healthy_min_non_empty={}, healthy_max_non_empty={}, healthy_min_approved={}, healthy_max_approved={}, no_progress_for={:?}",
+                    peer.mnemonic(),
+                    status.blocks_non_empty,
+                    target.blocks_non_empty,
+                    status.txs_approved,
+                    target.txs_approved,
+                    healthy_summary.min_blocks_non_empty,
+                    healthy_summary.max_blocks_non_empty,
+                    healthy_summary.min_txs_approved,
+                    healthy_summary.max_txs_approved,
+                    last_progress.elapsed()
+                );
+                last_log = Instant::now();
+            }
+        } else if last_log.elapsed() >= STATUS_LOG_INTERVAL {
+            let sample = realistic_30tps_catch_up_sample(
+                network,
+                peer_index,
+                target,
+                recovering_status,
+                last_progress.elapsed(),
+            )
+            .await;
+            let healthy_summary = ThroughputStatusSummary::from_statuses(&sample.healthy_statuses);
+            let healthy_status_error = sample.healthy_status_error.clone();
+            if let Some(samples) = catch_up_samples.as_mut() {
+                samples.push(sample);
+            }
+            eprintln!(
+                "waiting for restarted peer {} catch-up status sample: healthy_min_non_empty={}, healthy_max_non_empty={}, healthy_min_approved={}, healthy_max_approved={}, healthy_status_error={:?}",
+                peer.mnemonic(),
+                healthy_summary.min_blocks_non_empty,
+                healthy_summary.max_blocks_non_empty,
+                healthy_summary.min_txs_approved,
+                healthy_summary.max_txs_approved,
+                healthy_status_error
+            );
+            last_log = Instant::now();
+        }
+        if last_progress.elapsed() >= no_progress_timeout {
+            return Err(eyre!(
+                "peer {} did not make catch-up progress toward {:?} for {:?}: last_seen={:?}",
+                peer.mnemonic(),
+                target,
+                no_progress_timeout,
+                last_seen
+            ));
+        }
+        sleep(Duration::from_millis(200)).await;
+    }
+}
+
+async fn wait_for_realistic_all_peer_convergence(
+    network: &Network,
+    peer_index: usize,
+    healed_fault: &'static str,
+    no_progress_timeout: Duration,
+    total_timeout: Option<Duration>,
+) -> Result<Realistic30TpsConvergenceWindow> {
+    let peer = network
+        .peers()
+        .get(peer_index)
+        .ok_or_else(|| eyre!("peer index {peer_index} missing during all-peer convergence wait"))?;
+    let started_at = Instant::now();
+    let started_ms = unix_timestamp_ms();
+    let mut start_span: Option<Realistic30TpsConvergenceSpan> = None;
+    let mut last_seen: Option<Realistic30TpsConvergenceSpan> = None;
+    let mut last_progress = Instant::now();
+    let mut last_log = Instant::now()
+        .checked_sub(STATUS_LOG_INTERVAL)
+        .unwrap_or_else(Instant::now);
+    loop {
+        for (running_peer_index, running_peer) in network.peers().iter().enumerate() {
+            if !running_peer.is_running() {
+                return Err(eyre!(
+                    "peer {} exited before all-peer convergence after healing peer {}",
+                    running_peer_index,
+                    peer.mnemonic()
+                ));
+            }
+        }
+        match collect_statuses(network, STATUS_POLL_TIMEOUT).await {
+            Ok(statuses) => {
+                let span = realistic_30tps_convergence_span_from_statuses(&statuses)?;
+                if start_span.is_none() {
+                    start_span = Some(span);
+                }
+                if realistic_30tps_statuses_are_converged(&statuses)? {
+                    eprintln!(
+                        "healed peer {} all-peer convergence: min_non_empty={}, max_non_empty={}, min_approved={}, max_approved={}",
+                        peer.mnemonic(),
+                        span.min_blocks_non_empty,
+                        span.max_blocks_non_empty,
+                        span.min_txs_approved,
+                        span.max_txs_approved
+                    );
+                    return Ok(Realistic30TpsConvergenceWindow {
+                        healed_peer_index: peer_index,
+                        healed_fault,
+                        started_ms,
+                        ended_ms: unix_timestamp_ms(),
+                        start_span,
+                        end_span: span,
+                    });
+                }
+                match last_seen {
+                    Some(previous) => {
+                        if let Some(current) =
+                            realistic_30tps_convergence_progress_since(span, previous)
+                        {
+                            last_seen = Some(current);
+                            last_progress = Instant::now();
+                        }
+                    }
+                    None => {
+                        last_seen = Some(span);
+                        last_progress = Instant::now();
+                    }
+                }
+                if last_log.elapsed() >= STATUS_LOG_INTERVAL {
+                    eprintln!(
+                        "waiting for healed peer {} all-peer convergence: min_non_empty={}, max_non_empty={}, min_approved={}, max_approved={}, max_block_lag={}, max_approved_lag={}, no_progress_for={:?}",
+                        peer.mnemonic(),
+                        span.min_blocks_non_empty,
+                        span.max_blocks_non_empty,
+                        span.min_txs_approved,
+                        span.max_txs_approved,
+                        REALISTIC_30TPS_ROTATING_FAULT_MAX_HEALTHY_BLOCK_LAG,
+                        REALISTIC_30TPS_ROTATING_FAULT_MAX_HEALTHY_APPROVED_LAG,
+                        last_progress.elapsed()
+                    );
+                    last_log = Instant::now();
+                }
+            }
+            Err(err) => {
+                if last_log.elapsed() >= STATUS_LOG_INTERVAL {
+                    eprintln!(
+                        "waiting for healed peer {} all-peer convergence status sample: {err:?}",
+                        peer.mnemonic()
+                    );
+                    last_log = Instant::now();
+                }
+            }
+        }
+        if last_progress.elapsed() >= no_progress_timeout {
+            return Err(eyre!(
+                "peers did not make all-peer convergence progress for {:?} after healing peer {}: last_seen={:?}",
+                no_progress_timeout,
+                peer.mnemonic(),
+                last_seen
+            ));
+        }
+        if let Some(total_timeout) = total_timeout
+            && started_at.elapsed() >= total_timeout
+        {
+            return Err(eyre!(
+                "peers did not converge within {:?} after healing peer {}: last_seen={:?}",
+                total_timeout,
+                peer.mnemonic(),
+                last_seen
+            ));
+        }
+        sleep(Duration::from_millis(200)).await;
+    }
+}
+
+async fn wait_for_realistic_post_heal_consensus_progress(
+    network: &Network,
+    peer_index: usize,
+    timeout: Duration,
+    final_target_approved: u64,
+) -> Result<()> {
+    let peer = network
+        .peers()
+        .get(peer_index)
+        .ok_or_else(|| eyre!("peer index {peer_index} missing during post-heal progress wait"))?;
+    let baseline_statuses = collect_statuses(network, STATUS_POLL_TIMEOUT)
+        .await
+        .wrap_err_with(|| {
+            format!(
+                "failed to collect all peer statuses before post-heal progress wait for peer {}",
+                peer.mnemonic()
+            )
+        })?;
+    let target = realistic_30tps_strict_progress_target_from_statuses(&baseline_statuses)?;
+    let deadline = Instant::now() + timeout;
+    let mut last_log = Instant::now()
+        .checked_sub(STATUS_LOG_INTERVAL)
+        .unwrap_or_else(Instant::now);
+    loop {
+        for (running_peer_index, running_peer) in network.peers().iter().enumerate() {
+            if !running_peer.is_running() {
+                return Err(eyre!(
+                    "peer {} exited before post-heal consensus progress for peer {}",
+                    running_peer_index,
+                    peer.mnemonic()
+                ));
+            }
+        }
+        match collect_statuses(network, STATUS_POLL_TIMEOUT).await {
+            Ok(statuses) => {
+                let current = realistic_30tps_strict_progress_target_from_statuses(&statuses)?;
+                if realistic_30tps_statuses_satisfy_post_heal_progress(
+                    &statuses,
+                    target,
+                    final_target_approved,
+                ) {
+                    eprintln!(
+                        "healed peer {} post-heal consensus progress: baseline_non_empty={}, current_min_non_empty={}, baseline_approved={}, current_min_approved={}",
+                        peer.mnemonic(),
+                        target.blocks_non_empty,
+                        current.blocks_non_empty,
+                        target.txs_approved,
+                        current.txs_approved
+                    );
+                    return Ok(());
+                }
+                if last_log.elapsed() >= STATUS_LOG_INTERVAL {
+                    eprintln!(
+                        "waiting for healed peer {} post-heal consensus progress: current_min_non_empty={}, target_min_non_empty_gt={}, current_min_approved={}, target_min_approved_gt={}",
+                        peer.mnemonic(),
+                        current.blocks_non_empty,
+                        target.blocks_non_empty,
+                        current.txs_approved,
+                        target.txs_approved
+                    );
+                    last_log = Instant::now();
+                }
+            }
+            Err(err) => {
+                if last_log.elapsed() >= STATUS_LOG_INTERVAL {
+                    eprintln!(
+                        "waiting for healed peer {} post-heal all-peer status sample: {err:?}",
+                        peer.mnemonic()
+                    );
+                    last_log = Instant::now();
+                }
+            }
+        }
+        if Instant::now() >= deadline {
+            return Err(eyre!(
+                "peer {} did not reach post-heal consensus progress from {:?} within {:?}",
+                peer.mnemonic(),
+                target,
+                timeout
+            ));
+        }
+        sleep(Duration::from_millis(200)).await;
+    }
+}
+
+fn realistic_30tps_validator_mask(peer_count: usize) -> i64 {
+    if peer_count == 0 {
+        0
+    } else if peer_count >= 63 {
+        i64::MAX
+    } else {
+        (1_i64 << peer_count) - 1
+    }
+}
+
+fn realistic_fault_windows_have_no_overlap(windows: &[Realistic30TpsFaultWindow]) -> bool {
+    let mut sorted: Vec<_> = windows.iter().collect();
+    sorted.sort_by_key(|window| window.started_ms);
+    let mut last_end = 0_u64;
+    for window in sorted {
+        if window.started_ms < last_end {
+            return false;
+        }
+        last_end = window.ended_ms.unwrap_or(u64::MAX);
+    }
+    true
+}
+
+fn realistic_fault_windows_observed_all_kinds(
+    windows: &[Realistic30TpsFaultWindow],
+    fault_kinds: &[Realistic30TpsFaultKind],
+) -> bool {
+    fault_kinds
+        .iter()
+        .all(|kind| windows.iter().any(|window| window.fault == kind.as_str()))
+}
+
+fn realistic_strict_fault_windows_start_after_convergence(
+    windows: &[Realistic30TpsFaultWindow],
+    convergence_windows: &[Realistic30TpsConvergenceWindow],
+) -> bool {
+    if windows.len() <= 1 {
+        return true;
+    }
+    windows.windows(2).all(|pair| {
+        let previous = &pair[0];
+        let next = &pair[1];
+        convergence_windows
+            .iter()
+            .find(|window| {
+                window.healed_peer_index == previous.peer_index
+                    && window.healed_fault == previous.fault
+                    && window.started_ms >= previous.started_ms
+            })
+            .is_some_and(|convergence| next.started_ms >= convergence.ended_ms)
+    })
+}
+
+fn unix_timestamp_ms() -> u64 {
+    let millis = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .unwrap_or_default()
+        .as_millis();
+    u64::try_from(millis).unwrap_or(u64::MAX)
+}
+
 async fn run_realistic_30tps_localnet(
     consensus_mode: Realistic30TpsConsensusMode,
     test_name: &'static str,
+    rotating_fault: Option<Realistic30TpsRotatingFaultConfig>,
 ) -> Result<()> {
     init_instruction_registry();
     let _guard = LOCALNET_SMOKE_GUARD
@@ -1134,13 +2767,8 @@ async fn run_realistic_30tps_localnet(
         REALISTIC_30TPS_COMMIT_TIME_MS,
     )
     .max(block_time_ms);
-    let stall_secs = env_or_default(
-        "IROHA_REALISTIC_30TPS_STALL_SECS",
-        REALISTIC_30TPS_STALL_THRESHOLD.as_secs(),
-    );
-    let stall_threshold = Duration::from_secs(stall_secs.max(1));
-    let max_avg_secs_per_block =
-        env_or_default_f64("IROHA_REALISTIC_30TPS_MAX_AVG_SECS_PER_BLOCK", 3.0);
+    let stall_threshold = realistic_30tps_stall_threshold(rotating_fault.as_ref());
+    let max_avg_secs_per_block = realistic_max_avg_secs_per_block(rotating_fault.is_some());
     let submit_parallelism = env_or_default_usize(
         "IROHA_REALISTIC_30TPS_PARALLELISM",
         REALISTIC_30TPS_SUBMIT_PARALLELISM,
@@ -1148,7 +2776,7 @@ async fn run_realistic_30tps_localnet(
     .max(1);
     let queue_soft_limit = env_or_default(
         "IROHA_REALISTIC_30TPS_QUEUE_SOFT_LIMIT",
-        REALISTIC_30TPS_QUEUE_SOFT_LIMIT,
+        realistic_default_queue_soft_limit(rotating_fault.is_some()),
     );
     let configured_transfer_accounts = env_or_default_usize(
         "IROHA_REALISTIC_30TPS_TRANSFER_ACCOUNTS",
@@ -1167,7 +2795,7 @@ async fn run_realistic_30tps_localnet(
     .max(1);
     let block_max_txs = env_or_default(
         "IROHA_REALISTIC_30TPS_BLOCK_MAX_TXS",
-        REALISTIC_30TPS_BLOCK_MAX_TXS,
+        realistic_default_block_max_txs(rotating_fault.is_some()),
     );
     let rng_seed = env_or_default("IROHA_REALISTIC_30TPS_RNG_SEED", THROUGHPUT_RNG_SEED);
     let total_txs = duration_secs.saturating_mul(target_tps);
@@ -1185,6 +2813,14 @@ async fn run_realistic_30tps_localnet(
     );
     let target_blocks = realistic_target_blocks(configured_target_blocks, total_txs, block_max_txs);
     let load_kind = Realistic30TpsLoadKind::from_env()?;
+    let rotating_fault_snapshots_enabled = rotating_fault.is_some();
+    let (snapshot_mode, snapshot_create_every_ms) =
+        realistic_30tps_snapshot_settings(rotating_fault_snapshots_enabled);
+    let snapshot_create_every_config_ms = if rotating_fault_snapshots_enabled {
+        snapshot_create_every_ms
+    } else {
+        600_000
+    };
     let transfer_asset_definition_id = realistic_transfer_asset_definition_id();
     let transfer_load_accounts = if load_kind == Realistic30TpsLoadKind::Transfer {
         realistic_transfer_accounts(transfer_accounts, rng_seed)
@@ -1238,12 +2874,14 @@ async fn run_realistic_30tps_localnet(
             SumeragiParameter::RedundantSendR(2),
         )))
         .with_config_layer(|layer| {
+            let logger_level =
+                std::env::var("IROHA_REALISTIC_30TPS_LOG_LEVEL").unwrap_or_else(|_| "WARN".into());
             let writer = layer
                 .write(
                     ["sumeragi", "consensus_mode"],
                     consensus_mode.as_config_str(),
                 )
-                .write(["logger", "level"], "WARN")
+                .write(["logger", "level"], logger_level)
                 .write(["network", "transaction_gossip_period_ms"], 20_i64)
                 .write(["network", "transaction_gossip_size"], 64_i64)
                 .write(["network", "max_frame_bytes_tx_gossip"], 65_536_i64)
@@ -1336,7 +2974,13 @@ async fn run_realistic_30tps_localnet(
                 .write(["torii", "query_burst_per_authority"], 0_i64)
                 .write(["torii", "tx_rate_per_authority_per_sec"], 0_i64)
                 .write(["torii", "tx_burst_per_authority"], 0_i64)
-                .write(["torii", "api_high_load_tx_threshold"], 262_144_i64);
+                .write(["torii", "api_high_load_tx_threshold"], 262_144_i64)
+                .write(["snapshot", "mode"], snapshot_mode)
+                .write(
+                    ["snapshot", "create_every_ms"],
+                    i64::try_from(snapshot_create_every_config_ms)
+                        .expect("snapshot create interval fits i64"),
+                );
             if consensus_mode.is_npos() {
                 let _ = writer
                     .write(["sumeragi", "collectors", "k"], 2_i64)
@@ -1501,26 +3145,57 @@ async fn run_realistic_30tps_localnet(
                     String::new()
                 },
                 rng_seed,
+                snapshot_mode: snapshot_mode.to_owned(),
+                snapshot_create_every_ms,
                 rbc_encoding: "plain".to_owned(),
                 rbc_data_shards: 0,
                 rbc_parity_shards: 0,
             });
 
+            let mut fault_controller = if let Some(config) = rotating_fault {
+                let mut controller = Realistic30TpsRotatingFaultController::new(
+                    &network,
+                    config,
+                    target_approved,
+                );
+                controller
+                    .start(&network)
+                    .await
+                    .wrap_err("failed to start rotating Byzantine peer controller")?;
+                artifacts.fault_windows = controller.fault_windows().to_vec();
+                Some(controller)
+            } else {
+                None
+            };
+
             let submitted_counter = Arc::new(AtomicU64::new(0));
             let submitted_for_task = Arc::clone(&submitted_counter);
+            let submit_accept_quorum = realistic_submit_accept_quorum(
+                network.peers().len(),
+                if fault_controller.is_some() {
+                    REALISTIC_30TPS_ROTATING_FAULT_TOLERATED_PEERS
+                } else {
+                    0
+                },
+            );
             let submit_handle = match load_kind {
                 Realistic30TpsLoadKind::Transfer => {
                     let submit_accounts: Vec<_> = transfer_load_accounts
                         .iter()
                         .enumerate()
                         .map(|(index, account)| {
-                            let peer = &network.peers()[index % network.peers().len()];
+                            let peer_count = network.peers().len();
                             TransferSubmitAccount {
                                 id: account.id.clone(),
-                                client: peer.client_for(
-                                    &account.id,
-                                    account.key_pair.private_key().clone(),
-                                ),
+                                clients: (0..peer_count)
+                                    .map(|offset| {
+                                        let peer = &network.peers()[(index + offset) % peer_count];
+                                        peer.client_for(
+                                            &account.id,
+                                            account.key_pair.private_key().clone(),
+                                        )
+                                    })
+                                    .collect(),
                             }
                         })
                         .collect();
@@ -1532,6 +3207,7 @@ async fn run_realistic_30tps_localnet(
                         transfer_max_amount,
                         rng_seed,
                         submit_parallelism,
+                        submit_accept_quorum,
                         submitted_for_task,
                     ))
                 }
@@ -1545,13 +3221,18 @@ async fn run_realistic_30tps_localnet(
                         .iter()
                         .enumerate()
                         .map(|(index, account)| {
-                            let peer = &network.peers()[index % network.peers().len()];
+                            let peer_count = network.peers().len();
                             RamLfeEmailSubmitAccount {
                                 id: account.id.clone(),
-                                client: peer.client_for(
-                                    &ram_lfe_email_owner,
-                                    policy_owner_private_key.clone(),
-                                ),
+                                clients: (0..peer_count)
+                                    .map(|offset| {
+                                        let peer = &network.peers()[(index + offset) % peer_count];
+                                        peer.client_for(
+                                            &ram_lfe_email_owner,
+                                            policy_owner_private_key.clone(),
+                                        )
+                                    })
+                                    .collect(),
                                 uaid: account.uaid,
                             }
                         })
@@ -1564,13 +3245,14 @@ async fn run_realistic_30tps_localnet(
                         ram_lfe_email_resolver.clone(),
                         rng_seed,
                         submit_parallelism,
+                        submit_accept_quorum,
                         submitted_for_task,
                     ))
                 }
             };
 
             eprintln!(
-                "realistic localnet recipe: peers={}, target_tps={}, duration_secs={}, total_txs={}, target_non_empty_delta={}, block_time_ms={}, commit_time_ms={}, block_max_txs={}, load_kind={}, transfer_accounts={}, transfer_initial_balance={}, transfer_max_amount={}, ram_lfe_email_accounts={}, ram_lfe_email_policy={}, ram_lfe_program={}, submit_parallelism={}, queue_soft_limit={}, max_avg_secs_per_block={max_avg_secs_per_block:.3}, baseline_non_empty={}, baseline_approved={}",
+                "realistic localnet recipe: peers={}, target_tps={}, duration_secs={}, total_txs={}, target_non_empty_delta={}, block_time_ms={}, commit_time_ms={}, block_max_txs={}, load_kind={}, transfer_accounts={}, transfer_initial_balance={}, transfer_max_amount={}, ram_lfe_email_accounts={}, ram_lfe_email_policy={}, ram_lfe_program={}, submit_parallelism={}, submit_accept_quorum={}, queue_soft_limit={}, snapshot_mode={}, snapshot_create_every_ms={}, stall_threshold={:?}, max_avg_secs_per_block={max_avg_secs_per_block:.3}, baseline_non_empty={}, baseline_approved={}",
                 network.peers().len(),
                 target_tps,
                 duration_secs,
@@ -1603,10 +3285,25 @@ async fn run_realistic_30tps_localnet(
                 ram_lfe_email_policy.id,
                 ram_lfe_email_program_policy.program_id,
                 submit_parallelism,
+                submit_accept_quorum,
                 queue_soft_limit,
+                snapshot_mode,
+                snapshot_create_every_ms,
+                stall_threshold,
                 baseline_non_empty,
                 baseline_approved,
             );
+            if let Some(controller) = fault_controller.as_ref() {
+                eprintln!(
+                    "realistic localnet rotating Byzantine recipe: rotate_interval={:?}, recovery_bound={:?}, strict_rotation_convergence={}, convergence_total_bound={:?}, fault_kinds={:?}, initial_fault_windows={:?}",
+                    controller.config.rotate_interval,
+                    controller.config.recovery_bound,
+                    controller.config.strict_rotation_convergence,
+                    controller.config.convergence_total_bound,
+                    controller.config.fault_kinds,
+                    controller.fault_windows()
+                );
+            }
 
             artifacts.samples.clear();
             let mut last_progress = Instant::now();
@@ -1617,37 +3314,55 @@ async fn run_realistic_30tps_localnet(
                 .checked_sub(REALISTIC_30TPS_PROGRESS_LOG_INTERVAL)
                 .unwrap_or_else(Instant::now);
             let run_start = Instant::now();
+            let tolerated_progress_lagging = usize::from(fault_controller.is_some());
 
             loop {
-                match collect_statuses(&network, STATUS_POLL_TIMEOUT).await {
+                if let Some(controller) = fault_controller.as_mut() {
+                    match controller.rotate_if_due(&network).await {
+                        Ok(_) => {
+                            sync_realistic_fault_artifacts(controller, &mut artifacts);
+                        }
+                        Err(err) => {
+                            sync_realistic_fault_artifacts(controller, &mut artifacts);
+                            submit_handle.abort();
+                            let _ = submit_handle.await;
+                            if let Err(heal_err) = controller.stop_and_heal(&network).await {
+                                eprintln!(
+                                    "failed to heal rotating Byzantine peer after load rotation error: {heal_err:?}"
+                                );
+                            }
+                            sync_realistic_fault_artifacts(controller, &mut artifacts);
+                            return Err(err.wrap_err(
+                                "rotating Byzantine peer controller failed during load",
+                            ));
+                        }
+                    };
+                    sync_realistic_fault_artifacts(controller, &mut artifacts);
+                }
+                match collect_realistic_statuses(
+                    &network,
+                    STATUS_POLL_TIMEOUT,
+                    fault_controller.is_some(),
+                )
+                .await
+                {
                     Ok(statuses) => {
-                        let min_non_empty = statuses
-                            .iter()
-                            .map(|status| status.blocks_non_empty)
-                            .min()
-                            .unwrap_or_default();
-                        let max_non_empty = statuses
-                            .iter()
-                            .map(|status| status.blocks_non_empty)
-                            .max()
-                            .unwrap_or_default();
-                        let min_approved = statuses
-                            .iter()
-                            .map(|status| status.txs_approved)
-                            .min()
-                            .unwrap_or_default();
-                        let max_queue = statuses
-                            .iter()
-                            .map(|status| status.queue_size)
-                            .max()
-                            .unwrap_or_default();
+                        let status_snapshots: Vec<StatusSnapshot> =
+                            statuses.iter().map(StatusSnapshot::from_status).collect();
+                        let progress_summary =
+                            ThroughputStatusSummary::from_statuses_tolerating_lagging(
+                                &status_snapshots,
+                                tolerated_progress_lagging,
+                            );
+                        let min_non_empty = progress_summary.min_blocks_non_empty;
+                        let max_non_empty = progress_summary.max_blocks_non_empty;
+                        let min_approved = progress_summary.min_txs_approved;
+                        let max_queue = progress_summary.max_queue_size;
                         if min_non_empty > last_min_non_empty || min_approved > last_min_approved {
                             last_min_non_empty = min_non_empty;
                             last_min_approved = min_approved;
                             last_progress = Instant::now();
                         }
-                        let status_snapshots: Vec<StatusSnapshot> =
-                            statuses.iter().map(StatusSnapshot::from_status).collect();
                         let sumeragi_snapshots = match collect_sumeragi_statuses(
                             &network,
                             STATUS_POLL_TIMEOUT,
@@ -1705,10 +3420,22 @@ async fn run_realistic_30tps_localnet(
                 if last_progress.elapsed() >= stall_threshold {
                     submit_handle.abort();
                     let _ = submit_handle.await;
+                    if let Some(controller) = fault_controller.as_mut() {
+                        if let Err(err) = controller.stop_and_heal(&network).await {
+                            eprintln!(
+                                "failed to heal rotating Byzantine peer after load stall: {err:?}"
+                            );
+                        }
+                        sync_realistic_fault_artifacts(controller, &mut artifacts);
+                    }
                     let elapsed = run_start.elapsed();
                     let submitted = submitted_counter.load(AtomicOrdering::Relaxed);
                     let produced_blocks = last_min_non_empty.saturating_sub(baseline_non_empty);
-                    let status_summary = ThroughputStatusSummary::from_statuses(&last_snapshot);
+                    let status_summary =
+                        ThroughputStatusSummary::from_statuses_tolerating_lagging(
+                            &last_snapshot,
+                            tolerated_progress_lagging,
+                        );
                     artifacts.realistic = Some(realistic_artifact_summary(
                         baseline_non_empty,
                         baseline_approved,
@@ -1740,70 +3467,61 @@ async fn run_realistic_30tps_localnet(
                 .await
                 .wrap_err("paced submit task join failed")??;
             let load_end_elapsed = run_start.elapsed();
-            let load_end_statuses = collect_statuses(&network, STATUS_POLL_TIMEOUT).await?;
-            let load_end_min_non_empty = load_end_statuses
-                .iter()
-                .map(|status| status.blocks_non_empty)
-                .min()
-                .unwrap_or_default();
+            let load_end_statuses =
+                collect_realistic_statuses(&network, STATUS_POLL_TIMEOUT, fault_controller.is_some())
+                    .await?;
             let load_end_snapshots: Vec<StatusSnapshot> = load_end_statuses
                 .iter()
                 .map(StatusSnapshot::from_status)
                 .collect();
-            let load_end_summary =
-                ThroughputStatusSummary::from_statuses(&load_end_snapshots);
+            let load_end_summary = ThroughputStatusSummary::from_statuses_tolerating_lagging(
+                &load_end_snapshots,
+                tolerated_progress_lagging,
+            );
+            let load_end_min_non_empty = load_end_summary.min_blocks_non_empty;
             let load_end_produced_blocks =
                 load_end_min_non_empty.saturating_sub(baseline_non_empty);
             let max_load_queue_size = max_queue_size_for_phase(&artifacts.samples, "load");
             let mut after_statuses = load_end_statuses;
             let mut drain_last_progress = Instant::now();
-            let mut drain_last_min_approved = after_statuses
-                .iter()
-                .map(|status| status.txs_approved)
-                .min()
-                .unwrap_or_default();
-            let mut drain_last_max_queue = after_statuses
-                .iter()
-                .map(|status| status.queue_size)
-                .max()
-                .unwrap_or_default();
+            let mut drain_progress_summary = load_end_summary.clone();
+            let mut drain_last_min_approved = drain_progress_summary.min_txs_approved;
+            let mut drain_last_max_queue = drain_progress_summary.max_queue_size;
             while drain_last_min_approved < target_approved {
-                if drain_last_progress.elapsed() >= stall_threshold {
-                    let final_snapshots: Vec<StatusSnapshot> =
-                        after_statuses.iter().map(StatusSnapshot::from_status).collect();
-                    let final_summary = ThroughputStatusSummary::from_statuses(&final_snapshots);
-                    let produced_blocks = final_summary
-                        .min_blocks_non_empty
-                        .saturating_sub(baseline_non_empty);
-                    artifacts.realistic = Some(realistic_artifact_summary(
-                        baseline_non_empty,
-                        baseline_approved,
-                        target_non_empty,
-                        target_approved,
-                        submitted_counter.load(AtomicOrdering::Relaxed),
-                        submit_elapsed,
-                        load_end_elapsed,
-                        run_start.elapsed(),
-                        load_end_summary.clone(),
-                        final_summary,
-                        load_end_produced_blocks,
-                        produced_blocks,
-                        &artifacts.samples,
-                    ));
-                    return Err(eyre!(
-                        "realistic localnet stalled while draining after load for {:?}: load_elapsed={:?}, submitted={}, min_approved={}, target_approved={}, max_queue={}, last_statuses={after_statuses:?}",
-                        stall_threshold,
-                        load_end_elapsed,
-                        submitted_counter.load(AtomicOrdering::Relaxed),
-                        drain_last_min_approved,
-                        target_approved,
-                        drain_last_max_queue,
-                    ));
+                if let Some(controller) = fault_controller.as_mut() {
+                    match controller.rotate_if_due(&network).await {
+                        Ok(_) => {
+                            sync_realistic_fault_artifacts(controller, &mut artifacts);
+                        }
+                        Err(err) => {
+                            sync_realistic_fault_artifacts(controller, &mut artifacts);
+                            if let Err(heal_err) = controller.stop_and_heal(&network).await {
+                                eprintln!(
+                                    "failed to heal rotating Byzantine peer after drain rotation error: {heal_err:?}"
+                                );
+                            }
+                            sync_realistic_fault_artifacts(controller, &mut artifacts);
+                            return Err(err.wrap_err(
+                                "rotating Byzantine peer controller failed during drain",
+                            ));
+                        }
+                    };
+                    sync_realistic_fault_artifacts(controller, &mut artifacts);
                 }
                 sleep(REALISTIC_30TPS_SAMPLE_INTERVAL).await;
-                after_statuses = collect_statuses(&network, STATUS_POLL_TIMEOUT).await?;
+                after_statuses = collect_realistic_statuses(
+                    &network,
+                    STATUS_POLL_TIMEOUT,
+                    fault_controller.is_some(),
+                )
+                .await?;
                 let status_snapshots: Vec<StatusSnapshot> =
                     after_statuses.iter().map(StatusSnapshot::from_status).collect();
+                drain_progress_summary =
+                    ThroughputStatusSummary::from_statuses_tolerating_lagging(
+                        &status_snapshots,
+                        tolerated_progress_lagging,
+                    );
                 let sumeragi_snapshots = match collect_sumeragi_statuses(
                     &network,
                     STATUS_POLL_TIMEOUT,
@@ -1826,24 +3544,69 @@ async fn run_realistic_30tps_localnet(
                 artifacts.samples.push(ThroughputSample {
                     phase: Some("drain".to_owned()),
                     timestamp_ms: u64::try_from(timestamp_ms).unwrap_or(u64::MAX),
-                    statuses: status_snapshots,
+                    statuses: status_snapshots.clone(),
                     sumeragi: sumeragi_snapshots,
                 });
-                let min_approved = after_statuses
-                    .iter()
-                    .map(|status| status.txs_approved)
-                    .min()
-                    .unwrap_or_default();
-                let max_queue = after_statuses
-                    .iter()
-                    .map(|status| status.queue_size)
-                    .max()
-                    .unwrap_or_default();
+                let min_approved = drain_progress_summary.min_txs_approved;
+                let max_queue = drain_progress_summary.max_queue_size;
                 if min_approved > drain_last_min_approved || max_queue < drain_last_max_queue {
                     drain_last_min_approved = min_approved;
                     drain_last_max_queue = max_queue;
                     drain_last_progress = Instant::now();
                 }
+                if drain_last_progress.elapsed() >= stall_threshold {
+                    let final_summary =
+                        ThroughputStatusSummary::from_statuses_tolerating_lagging(
+                            &status_snapshots,
+                            tolerated_progress_lagging,
+                        );
+                    let produced_blocks = final_summary
+                        .min_blocks_non_empty
+                        .saturating_sub(baseline_non_empty);
+                    artifacts.realistic = Some(realistic_artifact_summary(
+                        baseline_non_empty,
+                        baseline_approved,
+                        target_non_empty,
+                        target_approved,
+                        submitted_counter.load(AtomicOrdering::Relaxed),
+                        submit_elapsed,
+                        load_end_elapsed,
+                        run_start.elapsed(),
+                        load_end_summary.clone(),
+                        final_summary,
+                        load_end_produced_blocks,
+                        produced_blocks,
+                        &artifacts.samples,
+                    ));
+                    if let Some(controller) = fault_controller.as_mut() {
+                        if let Err(err) = controller.stop_and_heal(&network).await {
+                            eprintln!(
+                                "failed to heal rotating Byzantine peer after drain stall: {err:?}"
+                            );
+                        }
+                        sync_realistic_fault_artifacts(controller, &mut artifacts);
+                    }
+                    return Err(eyre!(
+                        "realistic localnet stalled while draining after load for {:?}: load_elapsed={:?}, submitted={}, min_approved={}, target_approved={}, max_queue={}, last_statuses={after_statuses:?}",
+                        stall_threshold,
+                        load_end_elapsed,
+                        submitted_counter.load(AtomicOrdering::Relaxed),
+                        drain_last_min_approved,
+                        target_approved,
+                        drain_last_max_queue,
+                    ));
+                }
+            }
+            if let Some(controller) = fault_controller.as_mut() {
+                controller
+                    .stop_and_heal(&network)
+                    .await
+                    .wrap_err("failed to heal final rotating Byzantine peer")?;
+                sync_realistic_fault_artifacts(controller, &mut artifacts);
+                wait_for_min_txs_approved(&network, target_approved, Duration::from_secs(60))
+                    .await
+                    .wrap_err("healed network did not preserve approved transaction convergence")?;
+                after_statuses = collect_statuses(&network, STATUS_POLL_TIMEOUT).await?;
             }
             let min_non_empty = after_statuses
                 .iter()
@@ -3337,6 +5100,8 @@ async fn permissioned_localnet_throughput_10k_tps() -> Result<()> {
             ram_lfe_email_policy: String::new(),
             ram_lfe_program: String::new(),
             rng_seed,
+            snapshot_mode: "disabled".to_owned(),
+            snapshot_create_every_ms: 0,
             rbc_encoding: throughput_rbc_encoding.clone(),
             rbc_data_shards: throughput_rbc_data_shards,
             rbc_parity_shards: throughput_rbc_parity_shards,
@@ -3996,6 +5761,8 @@ async fn npos_localnet_throughput_10k_tps() -> Result<()> {
             ram_lfe_email_policy: String::new(),
             ram_lfe_program: String::new(),
             rng_seed,
+            snapshot_mode: "disabled".to_owned(),
+            snapshot_create_every_ms: 0,
             rbc_encoding: "plain".to_owned(),
             rbc_data_shards: 4,
             rbc_parity_shards: 2,
@@ -4473,6 +6240,70 @@ async fn collect_statuses(
     .await
 }
 
+async fn collect_realistic_statuses(
+    network: &Network,
+    status_timeout: Duration,
+    tolerate_one_fault: bool,
+) -> Result<Vec<iroha::client::Status>> {
+    if tolerate_one_fault {
+        collect_statuses_allowing_missing(network, status_timeout, 1).await
+    } else {
+        collect_statuses(network, status_timeout).await
+    }
+}
+
+async fn collect_statuses_allowing_missing(
+    network: &Network,
+    status_timeout: Duration,
+    max_missing: usize,
+) -> Result<Vec<iroha::client::Status>> {
+    let results = join_all(network.peers().iter().map(|peer| async move {
+        tokio::time::timeout(status_timeout, peer.status())
+            .await
+            .map_or_else(
+                |_| {
+                    Err(eyre!(
+                        "status request timed out after {:?} for peer {}",
+                        status_timeout,
+                        peer.mnemonic()
+                    ))
+                },
+                |result| {
+                    result.wrap_err_with(|| {
+                        format!("status request failed for peer {}", peer.mnemonic())
+                    })
+                },
+            )
+            .map_err(|err| {
+                eprintln!(
+                    "tolerating realistic localnet status failure for peer {}: {err:?} (best_effort={:?}, stdout={:?})",
+                    peer.mnemonic(),
+                    peer.best_effort_block_height(),
+                    peer.latest_stdout_log_path()
+                );
+                err
+            })
+    }))
+    .await;
+    let mut statuses = Vec::with_capacity(results.len());
+    let mut failures = Vec::new();
+    for result in results {
+        match result {
+            Ok(status) => statuses.push(status),
+            Err(err) => failures.push(err.to_string()),
+        }
+    }
+    ensure!(
+        !statuses.is_empty(),
+        "all peer status requests failed while tolerating at most {max_missing} missing peers: {failures:?}"
+    );
+    ensure!(
+        failures.len() <= max_missing,
+        "too many peer status requests failed while tolerating at most {max_missing} missing peers: {failures:?}"
+    );
+    Ok(statuses)
+}
+
 async fn collect_sumeragi_statuses(
     network: &Network,
     status_timeout: Duration,
@@ -4806,6 +6637,30 @@ async fn env_or_default_f64_reads_values() {
 }
 
 #[tokio::test]
+async fn realistic_max_avg_secs_per_block_is_fault_aware_and_overridable() {
+    let _guard = LOCALNET_SMOKE_GUARD
+        .get_or_init(|| Mutex::new(()))
+        .lock()
+        .await;
+    remove_env_var(REALISTIC_30TPS_MAX_AVG_SECS_PER_BLOCK_ENV);
+    assert!(
+        (realistic_max_avg_secs_per_block(false) - REALISTIC_30TPS_MAX_AVG_SECS_PER_BLOCK).abs()
+            < f64::EPSILON
+    );
+    assert!(
+        (realistic_max_avg_secs_per_block(true)
+            - REALISTIC_30TPS_ROTATING_FAULT_MAX_AVG_SECS_PER_BLOCK)
+            .abs()
+            < f64::EPSILON
+    );
+
+    set_env_var(REALISTIC_30TPS_MAX_AVG_SECS_PER_BLOCK_ENV, "2.5");
+    assert!((realistic_max_avg_secs_per_block(false) - 2.5).abs() < f64::EPSILON);
+    assert!((realistic_max_avg_secs_per_block(true) - 2.5).abs() < f64::EPSILON);
+    remove_env_var(REALISTIC_30TPS_MAX_AVG_SECS_PER_BLOCK_ENV);
+}
+
+#[tokio::test]
 async fn queue_progress_timeout_reads_override() {
     let _guard = LOCALNET_SMOKE_GUARD
         .get_or_init(|| Mutex::new(()))
@@ -4874,6 +6729,723 @@ async fn realistic_30tps_load_kind_parses_email_mode_and_defaults_to_transfer() 
     remove_env_var("IROHA_REALISTIC_30TPS_LOAD_KIND");
 }
 
+#[tokio::test]
+async fn realistic_30tps_rotating_fault_config_reads_rotate_interval_override() {
+    let _guard = LOCALNET_SMOKE_GUARD
+        .get_or_init(|| Mutex::new(()))
+        .lock()
+        .await;
+    remove_env_var(REALISTIC_30TPS_FAULT_KINDS_ENV);
+    remove_env_var(REALISTIC_30TPS_RECOVERY_BOUND_SECS_ENV);
+    remove_env_var(REALISTIC_30TPS_STRICT_ROTATION_CONVERGENCE_ENV);
+    remove_env_var(REALISTIC_30TPS_CONVERGENCE_BOUND_SECS_ENV);
+    set_env_var(REALISTIC_30TPS_BAD_PEER_ROTATE_SECS_ENV, "7");
+    assert_eq!(
+        Realistic30TpsRotatingFaultConfig::from_env()
+            .expect("rotating fault config")
+            .rotate_interval,
+        Duration::from_secs(7)
+    );
+    set_env_var(REALISTIC_30TPS_BAD_PEER_ROTATE_SECS_ENV, "0");
+    assert_eq!(
+        Realistic30TpsRotatingFaultConfig::from_env()
+            .expect("rotating fault config")
+            .rotate_interval,
+        Duration::from_secs(REALISTIC_30TPS_BAD_PEER_ROTATE_SECS)
+    );
+    set_env_var(REALISTIC_30TPS_BAD_PEER_RECOVERY_SECS_ENV, "240");
+    assert_eq!(
+        Realistic30TpsRotatingFaultConfig::from_env()
+            .expect("rotating fault config")
+            .recovery_timeout,
+        Duration::from_secs(240)
+    );
+    set_env_var(REALISTIC_30TPS_BAD_PEER_RECOVERY_SECS_ENV, "0");
+    assert_eq!(
+        Realistic30TpsRotatingFaultConfig::from_env()
+            .expect("rotating fault config")
+            .recovery_timeout,
+        Duration::from_secs(REALISTIC_30TPS_BAD_PEER_RECOVERY_SECS)
+    );
+    assert_eq!(
+        Realistic30TpsRotatingFaultConfig::from_env()
+            .expect("rotating fault config")
+            .recovery_bound,
+        None
+    );
+    assert!(
+        !Realistic30TpsRotatingFaultConfig::from_env()
+            .expect("rotating fault config")
+            .requires_bounded_convergence()
+    );
+    set_env_var(REALISTIC_30TPS_RECOVERY_BOUND_SECS_ENV, "120");
+    let config = Realistic30TpsRotatingFaultConfig::from_env().expect("rotating fault config");
+    assert_eq!(config.recovery_bound, Some(Duration::from_secs(120)));
+    assert_eq!(
+        config.convergence_total_bound,
+        Some(Duration::from_secs(120))
+    );
+    assert!(!config.requires_bounded_convergence());
+    set_env_var(REALISTIC_30TPS_STRICT_ROTATION_CONVERGENCE_ENV, "true");
+    let config = Realistic30TpsRotatingFaultConfig::from_env().expect("rotating fault config");
+    assert!(config.strict_rotation_convergence);
+    assert!(config.requires_bounded_convergence());
+    assert_eq!(
+        config.convergence_progress_timeout(),
+        Duration::from_secs(REALISTIC_30TPS_CONVERGENCE_BOUND_SECS)
+    );
+    assert_eq!(
+        config.convergence_total_bound(),
+        Some(Duration::from_secs(120))
+    );
+    set_env_var(REALISTIC_30TPS_CONVERGENCE_BOUND_SECS_ENV, "30");
+    assert_eq!(
+        Realistic30TpsRotatingFaultConfig::from_env()
+            .expect("rotating fault config")
+            .convergence_total_bound(),
+        Some(Duration::from_secs(30))
+    );
+    set_env_var(REALISTIC_30TPS_STRICT_ROTATION_CONVERGENCE_ENV, "maybe");
+    assert!(Realistic30TpsRotatingFaultConfig::from_env().is_err());
+    remove_env_var(REALISTIC_30TPS_BAD_PEER_ROTATE_SECS_ENV);
+    remove_env_var(REALISTIC_30TPS_BAD_PEER_RECOVERY_SECS_ENV);
+    remove_env_var(REALISTIC_30TPS_RECOVERY_BOUND_SECS_ENV);
+    remove_env_var(REALISTIC_30TPS_STRICT_ROTATION_CONVERGENCE_ENV);
+    remove_env_var(REALISTIC_30TPS_CONVERGENCE_BOUND_SECS_ENV);
+}
+
+#[tokio::test]
+async fn realistic_30tps_rotating_fault_stall_threshold_covers_fault_windows() {
+    let _guard = LOCALNET_SMOKE_GUARD
+        .get_or_init(|| Mutex::new(()))
+        .lock()
+        .await;
+    remove_env_var(REALISTIC_30TPS_STALL_SECS_ENV);
+    let config = Realistic30TpsRotatingFaultConfig {
+        rotate_interval: Duration::from_secs(60),
+        recovery_timeout: Duration::from_secs(REALISTIC_30TPS_BAD_PEER_RECOVERY_SECS),
+        recovery_bound: None,
+        strict_rotation_convergence: false,
+        convergence_total_bound: None,
+        fault_kinds: default_realistic_30tps_fault_kinds(),
+    };
+
+    assert_eq!(
+        realistic_30tps_stall_threshold(None),
+        REALISTIC_30TPS_STALL_THRESHOLD
+    );
+    assert_eq!(
+        realistic_30tps_stall_threshold(Some(&config)),
+        Duration::from_secs(120)
+    );
+
+    set_env_var(REALISTIC_30TPS_STALL_SECS_ENV, "45");
+    assert_eq!(
+        realistic_30tps_stall_threshold(Some(&config)),
+        Duration::from_secs(45)
+    );
+
+    set_env_var(REALISTIC_30TPS_STALL_SECS_ENV, "0");
+    assert_eq!(
+        realistic_30tps_stall_threshold(Some(&config)),
+        Duration::from_secs(120)
+    );
+    remove_env_var(REALISTIC_30TPS_STALL_SECS_ENV);
+}
+
+#[test]
+fn realistic_30tps_fault_kind_parsing_accepts_default_matrix_and_rejects_unknown() -> Result<()> {
+    assert_eq!(
+        parse_realistic_30tps_fault_kinds("default")?,
+        default_realistic_30tps_fault_kinds()
+    );
+    assert_eq!(
+        parse_realistic_30tps_fault_kinds(
+            "conflicting-ready, duplicate-inits, drop-validator-chunks"
+        )?,
+        default_realistic_30tps_fault_kinds()
+    );
+    assert!(parse_realistic_30tps_fault_kinds("conflicting-ready,unknown").is_err());
+    Ok(())
+}
+
+fn realistic_30tps_fault_layer_rbc(layer: &ConfigLayer) -> &Table {
+    layer
+        .as_ref()
+        .get("sumeragi")
+        .and_then(TomlValue::as_table)
+        .and_then(|value| value.get("debug"))
+        .and_then(TomlValue::as_table)
+        .and_then(|value| value.get("rbc"))
+        .and_then(TomlValue::as_table)
+        .expect("fault layer should include sumeragi.debug.rbc")
+}
+
+#[test]
+fn realistic_30tps_fault_kind_layers_set_only_expected_rbc_knob() {
+    let conflicting_ready = Realistic30TpsFaultKind::ConflictingReady.layer(4);
+    let rbc = realistic_30tps_fault_layer_rbc(&conflicting_ready);
+    assert_eq!(rbc.len(), 1);
+    assert_eq!(
+        rbc.get("conflicting_ready_mask")
+            .and_then(TomlValue::as_integer),
+        Some(0b1111)
+    );
+
+    let duplicate_inits = Realistic30TpsFaultKind::DuplicateInits.layer(4);
+    let rbc = realistic_30tps_fault_layer_rbc(&duplicate_inits);
+    assert_eq!(rbc.len(), 1);
+    assert_eq!(
+        rbc.get("duplicate_inits").and_then(TomlValue::as_bool),
+        Some(true)
+    );
+
+    let drop_validator_chunks = Realistic30TpsFaultKind::DropValidatorChunks.layer(4);
+    let rbc = realistic_30tps_fault_layer_rbc(&drop_validator_chunks);
+    assert_eq!(rbc.len(), 1);
+    assert_eq!(
+        rbc.get("drop_validator_mask")
+            .and_then(TomlValue::as_integer),
+        Some(0b1111)
+    );
+}
+
+#[test]
+fn realistic_30tps_fault_rotation_schedule_cycles_peer_and_fault_without_overlap() -> Result<()> {
+    let fault_kinds = default_realistic_30tps_fault_kinds();
+    let windows = (0..6)
+        .map(|idx| {
+            let kind = realistic_30tps_fault_kind_at(&fault_kinds, idx)
+                .expect("default fault kind sequence");
+            Ok(Realistic30TpsFaultWindow {
+                peer_index: realistic_30tps_peer_index_at(REALISTIC_30TPS_PEERS, idx)
+                    .expect("peer sequence"),
+                mnemonic: format!("peer{idx}"),
+                fault: kind.as_str(),
+                started_ms: u64::try_from(idx)? * 60_000,
+                ended_ms: Some(u64::try_from(idx + 1)? * 60_000),
+            })
+        })
+        .collect::<Result<Vec<_>>>()?;
+
+    assert_eq!(
+        windows
+            .iter()
+            .map(|window| window.peer_index)
+            .collect::<Vec<_>>(),
+        vec![0, 1, 2, 3, 0, 1]
+    );
+    assert_eq!(
+        windows
+            .iter()
+            .map(|window| window.fault)
+            .collect::<Vec<_>>(),
+        vec![
+            "conflicting-ready",
+            "duplicate-inits",
+            "drop-validator-chunks",
+            "conflicting-ready",
+            "duplicate-inits",
+            "drop-validator-chunks"
+        ]
+    );
+    assert!(realistic_fault_windows_have_no_overlap(&windows));
+    assert!(realistic_fault_windows_observed_all_kinds(
+        &windows,
+        &fault_kinds
+    ));
+    Ok(())
+}
+
+#[test]
+fn realistic_default_block_max_txs_uses_larger_rotating_fault_batches() {
+    assert_eq!(
+        realistic_default_block_max_txs(false),
+        REALISTIC_30TPS_BLOCK_MAX_TXS
+    );
+    assert_eq!(
+        realistic_default_block_max_txs(true),
+        REALISTIC_30TPS_ROTATING_FAULT_BLOCK_MAX_TXS
+    );
+    assert!(
+        realistic_default_block_max_txs(true) > realistic_default_block_max_txs(false),
+        "rotating fault soak needs enough per-block capacity to absorb one faulty validator"
+    );
+    assert_eq!(realistic_default_block_max_txs(true), 512);
+}
+
+#[test]
+fn realistic_default_queue_soft_limit_is_fault_aware() {
+    assert_eq!(
+        realistic_default_queue_soft_limit(false),
+        REALISTIC_30TPS_QUEUE_SOFT_LIMIT
+    );
+    assert_eq!(
+        realistic_default_queue_soft_limit(true),
+        REALISTIC_30TPS_ROTATING_FAULT_QUEUE_SOFT_LIMIT
+    );
+    assert!(
+        realistic_default_queue_soft_limit(true) > realistic_default_queue_soft_limit(false),
+        "rotating fault soak allows restart bursts without accepting unbounded backlog"
+    );
+}
+
+#[test]
+fn realistic_30tps_snapshot_settings_enable_read_write_for_rotating_faults() {
+    assert_eq!(realistic_30tps_snapshot_settings(false), ("disabled", 0));
+    assert_eq!(
+        realistic_30tps_snapshot_settings(true),
+        (
+            REALISTIC_30TPS_ROTATING_FAULT_SNAPSHOT_MODE,
+            REALISTIC_30TPS_ROTATING_FAULT_SNAPSHOT_CREATE_EVERY_MS
+        )
+    );
+}
+
+#[test]
+fn realistic_30tps_validator_mask_covers_roster_bits() {
+    assert_eq!(realistic_30tps_validator_mask(0), 0);
+    assert_eq!(realistic_30tps_validator_mask(1), 0b1);
+    assert_eq!(realistic_30tps_validator_mask(4), 0b1111);
+    assert_eq!(realistic_30tps_validator_mask(63), i64::MAX);
+}
+
+#[test]
+fn realistic_30tps_catch_up_target_uses_leading_statuses() -> Result<()> {
+    let target = realistic_30tps_catch_up_target_from_statuses(&[
+        iroha::client::Status {
+            blocks_non_empty: 7,
+            txs_approved: 11,
+            ..Default::default()
+        },
+        iroha::client::Status {
+            blocks_non_empty: 9,
+            txs_approved: 10,
+            ..Default::default()
+        },
+        iroha::client::Status {
+            blocks_non_empty: 8,
+            txs_approved: 13,
+            ..Default::default()
+        },
+    ])?;
+    assert_eq!(
+        target,
+        Realistic30TpsCatchUpTarget {
+            blocks_non_empty: 9,
+            txs_approved: 13,
+        }
+    );
+    assert!(realistic_30tps_catch_up_target_from_statuses(&[]).is_err());
+    Ok(())
+}
+
+#[test]
+fn realistic_30tps_catch_up_progress_tracks_block_or_transaction_advances() {
+    let last_seen = Realistic30TpsCatchUpTarget {
+        blocks_non_empty: 10,
+        txs_approved: 100,
+    };
+    assert_eq!(
+        realistic_30tps_catch_up_progress_since(
+            &iroha::client::Status {
+                blocks_non_empty: 10,
+                txs_approved: 100,
+                ..Default::default()
+            },
+            last_seen
+        ),
+        None
+    );
+    assert_eq!(
+        realistic_30tps_catch_up_progress_since(
+            &iroha::client::Status {
+                blocks_non_empty: 11,
+                txs_approved: 100,
+                ..Default::default()
+            },
+            last_seen
+        ),
+        Some(Realistic30TpsCatchUpTarget {
+            blocks_non_empty: 11,
+            txs_approved: 100,
+        })
+    );
+    assert_eq!(
+        realistic_30tps_catch_up_progress_since(
+            &iroha::client::Status {
+                blocks_non_empty: 10,
+                txs_approved: 101,
+                ..Default::default()
+            },
+            last_seen
+        ),
+        Some(Realistic30TpsCatchUpTarget {
+            blocks_non_empty: 10,
+            txs_approved: 101,
+        })
+    );
+    assert_eq!(
+        realistic_30tps_catch_up_progress_since(
+            &iroha::client::Status {
+                blocks_non_empty: 12,
+                txs_approved: 130,
+                ..Default::default()
+            },
+            last_seen
+        ),
+        Some(Realistic30TpsCatchUpTarget {
+            blocks_non_empty: 12,
+            txs_approved: 130,
+        })
+    );
+}
+
+#[test]
+fn realistic_30tps_strict_progress_target_uses_lagging_statuses() -> Result<()> {
+    let target = realistic_30tps_strict_progress_target_from_statuses(&[
+        iroha::client::Status {
+            blocks_non_empty: 7,
+            txs_approved: 11,
+            ..Default::default()
+        },
+        iroha::client::Status {
+            blocks_non_empty: 9,
+            txs_approved: 10,
+            ..Default::default()
+        },
+        iroha::client::Status {
+            blocks_non_empty: 8,
+            txs_approved: 13,
+            ..Default::default()
+        },
+    ])?;
+    assert_eq!(
+        target,
+        Realistic30TpsCatchUpTarget {
+            blocks_non_empty: 7,
+            txs_approved: 10,
+        }
+    );
+    assert!(realistic_30tps_strict_progress_target_from_statuses(&[]).is_err());
+    Ok(())
+}
+
+#[test]
+fn realistic_30tps_strict_progress_requires_all_peers_to_advance() {
+    let target = Realistic30TpsCatchUpTarget {
+        blocks_non_empty: 10,
+        txs_approved: 100,
+    };
+    let one_peer_still_at_baseline = [
+        iroha::client::Status {
+            blocks_non_empty: 10,
+            txs_approved: 100,
+            ..Default::default()
+        },
+        iroha::client::Status {
+            blocks_non_empty: 11,
+            txs_approved: 120,
+            ..Default::default()
+        },
+    ];
+    assert!(!realistic_30tps_statuses_exceed_strict_progress_target(
+        &one_peer_still_at_baseline,
+        target
+    ));
+
+    let all_peers_approved_more = [
+        iroha::client::Status {
+            blocks_non_empty: 10,
+            txs_approved: 101,
+            ..Default::default()
+        },
+        iroha::client::Status {
+            blocks_non_empty: 11,
+            txs_approved: 120,
+            ..Default::default()
+        },
+    ];
+    assert!(realistic_30tps_statuses_exceed_strict_progress_target(
+        &all_peers_approved_more,
+        target
+    ));
+
+    let all_peers_have_more_non_empty_blocks = [
+        iroha::client::Status {
+            blocks_non_empty: 11,
+            txs_approved: 100,
+            ..Default::default()
+        },
+        iroha::client::Status {
+            blocks_non_empty: 12,
+            txs_approved: 100,
+            ..Default::default()
+        },
+    ];
+    assert!(realistic_30tps_statuses_exceed_strict_progress_target(
+        &all_peers_have_more_non_empty_blocks,
+        target
+    ));
+    assert!(!realistic_30tps_statuses_exceed_strict_progress_target(
+        &[],
+        target
+    ));
+}
+
+#[test]
+fn realistic_30tps_post_heal_progress_accepts_completed_target() {
+    let target = Realistic30TpsCatchUpTarget {
+        blocks_non_empty: 1379,
+        txs_approved: 216_016,
+    };
+    let all_peers_at_final_target = [
+        iroha::client::Status {
+            blocks_non_empty: 1379,
+            txs_approved: 216_016,
+            ..Default::default()
+        },
+        iroha::client::Status {
+            blocks_non_empty: 1379,
+            txs_approved: 216_016,
+            ..Default::default()
+        },
+    ];
+    assert!(!realistic_30tps_statuses_exceed_strict_progress_target(
+        &all_peers_at_final_target,
+        target
+    ));
+    assert!(realistic_30tps_statuses_satisfy_post_heal_progress(
+        &all_peers_at_final_target,
+        target,
+        216_016
+    ));
+
+    let one_peer_before_final_target = [
+        iroha::client::Status {
+            blocks_non_empty: 1379,
+            txs_approved: 216_016,
+            ..Default::default()
+        },
+        iroha::client::Status {
+            blocks_non_empty: 1379,
+            txs_approved: 216_015,
+            ..Default::default()
+        },
+    ];
+    assert!(!realistic_30tps_statuses_satisfy_post_heal_progress(
+        &one_peer_before_final_target,
+        target,
+        216_016
+    ));
+}
+
+#[test]
+fn realistic_30tps_all_peer_convergence_rejects_deep_lag() -> Result<()> {
+    let converged = [
+        iroha::client::Status {
+            blocks_non_empty: 42,
+            txs_approved: 10_000,
+            ..Default::default()
+        },
+        iroha::client::Status {
+            blocks_non_empty: 43,
+            txs_approved: 10_300,
+            ..Default::default()
+        },
+    ];
+    assert!(realistic_30tps_statuses_are_converged(&converged)?);
+
+    let lagging = [
+        iroha::client::Status {
+            blocks_non_empty: 42,
+            txs_approved: 10_000,
+            ..Default::default()
+        },
+        iroha::client::Status {
+            blocks_non_empty: 47,
+            txs_approved: 13_000,
+            ..Default::default()
+        },
+    ];
+    assert!(!realistic_30tps_statuses_are_converged(&lagging)?);
+    assert!(realistic_30tps_statuses_are_converged(&[]).is_err());
+    Ok(())
+}
+
+#[test]
+fn realistic_30tps_convergence_progress_tracks_lagging_peer_catch_up() {
+    let last_seen = Realistic30TpsConvergenceSpan {
+        min_blocks_non_empty: 1_111,
+        max_blocks_non_empty: 1_196,
+        min_txs_approved: 163_597,
+        max_txs_approved: 180_156,
+    };
+    let leading_peer_only_advanced = Realistic30TpsConvergenceSpan {
+        min_blocks_non_empty: 1_111,
+        max_blocks_non_empty: 1_197,
+        min_txs_approved: 163_597,
+        max_txs_approved: 180_668,
+    };
+    assert_eq!(
+        realistic_30tps_convergence_progress_since(leading_peer_only_advanced, last_seen),
+        None
+    );
+
+    let lagging_peer_advanced = Realistic30TpsConvergenceSpan {
+        min_blocks_non_empty: 1_112,
+        max_blocks_non_empty: 1_197,
+        min_txs_approved: 163_700,
+        max_txs_approved: 180_668,
+    };
+    assert_eq!(
+        realistic_30tps_convergence_progress_since(lagging_peer_advanced, last_seen),
+        Some(lagging_peer_advanced)
+    );
+
+    let block_gap_narrowed = Realistic30TpsConvergenceSpan {
+        min_blocks_non_empty: 1_111,
+        max_blocks_non_empty: 1_195,
+        min_txs_approved: 163_597,
+        max_txs_approved: 180_156,
+    };
+    assert_eq!(
+        realistic_30tps_convergence_progress_since(block_gap_narrowed, last_seen),
+        Some(block_gap_narrowed)
+    );
+
+    let approved_gap_narrowed = Realistic30TpsConvergenceSpan {
+        min_blocks_non_empty: 1_111,
+        max_blocks_non_empty: 1_196,
+        min_txs_approved: 163_597,
+        max_txs_approved: 179_900,
+    };
+    assert_eq!(
+        realistic_30tps_convergence_progress_since(approved_gap_narrowed, last_seen),
+        Some(approved_gap_narrowed)
+    );
+}
+
+#[test]
+fn realistic_fault_windows_detect_overlap() {
+    let first = Realistic30TpsFaultWindow {
+        peer_index: 0,
+        mnemonic: "peer0".to_string(),
+        fault: "conflicting-ready",
+        started_ms: 10,
+        ended_ms: Some(20),
+    };
+    let second = Realistic30TpsFaultWindow {
+        peer_index: 1,
+        mnemonic: "peer1".to_string(),
+        fault: "duplicate-inits",
+        started_ms: 20,
+        ended_ms: Some(30),
+    };
+    assert!(realistic_fault_windows_have_no_overlap(&[
+        second.clone(),
+        first.clone(),
+    ]));
+    let overlapping = Realistic30TpsFaultWindow {
+        started_ms: 19,
+        ..second
+    };
+    assert!(!realistic_fault_windows_have_no_overlap(&[
+        first,
+        overlapping,
+    ]));
+}
+
+#[test]
+fn realistic_strict_fault_windows_require_convergence_before_next_fault() {
+    let first = Realistic30TpsFaultWindow {
+        peer_index: 0,
+        mnemonic: "peer0".to_string(),
+        fault: "conflicting-ready",
+        started_ms: 10,
+        ended_ms: Some(40),
+    };
+    let second = Realistic30TpsFaultWindow {
+        peer_index: 1,
+        mnemonic: "peer1".to_string(),
+        fault: "duplicate-inits",
+        started_ms: 75,
+        ended_ms: Some(100),
+    };
+    let convergence = Realistic30TpsConvergenceWindow {
+        healed_peer_index: 0,
+        healed_fault: "conflicting-ready",
+        started_ms: 40,
+        ended_ms: 70,
+        start_span: Some(Realistic30TpsConvergenceSpan {
+            min_blocks_non_empty: 10,
+            max_blocks_non_empty: 14,
+            min_txs_approved: 1_000,
+            max_txs_approved: 1_600,
+        }),
+        end_span: Realistic30TpsConvergenceSpan {
+            min_blocks_non_empty: 14,
+            max_blocks_non_empty: 15,
+            min_txs_approved: 1_600,
+            max_txs_approved: 1_700,
+        },
+    };
+    assert!(realistic_strict_fault_windows_start_after_convergence(
+        &[first.clone(), second.clone()],
+        std::slice::from_ref(&convergence)
+    ));
+
+    let early_second = Realistic30TpsFaultWindow {
+        started_ms: 69,
+        ..second
+    };
+    assert!(!realistic_strict_fault_windows_start_after_convergence(
+        &[first, early_second],
+        &[convergence]
+    ));
+}
+
+#[test]
+fn realistic_status_recovery_summary_distinguishes_startup_bound_from_convergence() {
+    let within = Realistic30TpsStatusRecoverySample {
+        peer_index: 0,
+        mnemonic: "peer0".to_string(),
+        context: "heal rotating Byzantine peer".to_string(),
+        restart_started_ms: 10,
+        status_wait_started_ms: 12,
+        ended_ms: 72,
+        bound_ms: 120,
+        recovered: true,
+        poll_attempts: 3,
+        last_error: None,
+        snapshot_before_shutdown: Realistic30TpsSnapshotObservation::default(),
+        snapshot_after_shutdown: Realistic30TpsSnapshotObservation::default(),
+        snapshot_after_status: Realistic30TpsSnapshotObservation::default(),
+    };
+    let outside = Realistic30TpsStatusRecoverySample {
+        status_wait_started_ms: 100,
+        ended_ms: 230,
+        last_error: Some("connection refused".to_string()),
+        ..within.clone()
+    };
+
+    assert_eq!(within.total_duration_ms(), 62);
+    assert_eq!(within.status_wait_ms(), 60);
+    assert!(within.recovered_within_bound());
+    assert!(!outside.recovered_within_bound());
+
+    let Value::Object(summary) = status_recovery_summary_value(&[within, outside]) else {
+        panic!("expected status recovery summary object");
+    };
+    assert_eq!(summary.get("recoveries"), Some(&Value::from(2_u64)));
+    assert_eq!(summary.get("failures"), Some(&Value::from(0_u64)));
+    assert_eq!(summary.get("outside_bound"), Some(&Value::from(1_u64)));
+    assert_eq!(
+        summary.get("all_recovered_within_bound"),
+        Some(&Value::from(false))
+    );
+}
+
 #[test]
 fn realistic_load_metadata_stamps_unique_sequence() {
     let sequence_key = Name::from_str("tx_sequence").expect("tx_sequence metadata key");
@@ -4892,6 +7464,46 @@ fn realistic_load_metadata_stamps_unique_sequence() {
         Some("8")
     );
     assert_ne!(first, second);
+}
+
+#[test]
+fn realistic_submit_retry_filter_only_matches_local_transport_errors() {
+    assert!(realistic_submit_error_is_retryable_message(
+        "Failed to send http GET request to http://127.0.0.1:40097/v1/node/capabilities: tcp connect error: Connection refused"
+    ));
+    assert!(realistic_submit_error_is_retryable_message(
+        "connection reset by peer while reading /v1/node/capabilities"
+    ));
+    assert!(!realistic_submit_error_is_retryable_message(
+        "transaction rejected: insufficient balance"
+    ));
+    assert!(!realistic_submit_error_is_retryable_message(
+        "validation failed after transaction reached Torii"
+    ));
+}
+
+#[test]
+fn realistic_submit_already_known_filter_counts_queue_conflicts_as_accepts() {
+    assert!(realistic_submit_error_is_already_known_message(
+        "Unexpected transaction response: 409 Conflict already_enqueued"
+    ));
+    assert!(realistic_submit_error_is_already_known_message(
+        "transaction already present in the queue"
+    ));
+    assert!(realistic_submit_error_is_already_known_message(
+        "transaction already committed to the blockchain"
+    ));
+    assert!(!realistic_submit_error_is_already_known_message(
+        "transaction rejected: insufficient balance"
+    ));
+}
+
+#[test]
+fn realistic_submit_accept_quorum_requires_one_more_than_tolerated_faults() {
+    assert_eq!(realistic_submit_accept_quorum(4, 0), 1);
+    assert_eq!(realistic_submit_accept_quorum(4, 1), 2);
+    assert_eq!(realistic_submit_accept_quorum(4, 2), 3);
+    assert_eq!(realistic_submit_accept_quorum(1, 1), 1);
 }
 
 #[test]
@@ -5059,6 +7671,64 @@ fn throughput_status_summary_uses_min_and_max_peer_values() {
     assert_eq!(summary.min_txs_approved, 90);
     assert_eq!(summary.max_txs_rejected, 2);
     assert_eq!(summary.max_queue_size, 7);
+}
+
+#[test]
+fn throughput_status_summary_can_ignore_one_lagging_peer_for_progress() {
+    let statuses = vec![
+        StatusSnapshot {
+            blocks: 201,
+            blocks_non_empty: 201,
+            queue_size: 1_847,
+            txs_approved: 48_193,
+            ..StatusSnapshot::default()
+        },
+        StatusSnapshot {
+            blocks: 208,
+            blocks_non_empty: 208,
+            queue_size: 517,
+            txs_approved: 51_777,
+            ..StatusSnapshot::default()
+        },
+        StatusSnapshot {
+            blocks: 208,
+            blocks_non_empty: 208,
+            queue_size: 525,
+            txs_approved: 51_777,
+            txs_rejected: 1,
+            ..StatusSnapshot::default()
+        },
+    ];
+
+    let summary = ThroughputStatusSummary::from_statuses_tolerating_lagging(&statuses, 1);
+
+    assert_eq!(summary.min_blocks, 208);
+    assert_eq!(summary.min_blocks_non_empty, 208);
+    assert_eq!(summary.min_txs_approved, 51_777);
+    assert_eq!(summary.max_blocks_non_empty, 208);
+    assert_eq!(summary.max_txs_rejected, 1);
+    assert_eq!(summary.max_queue_size, 1_847);
+}
+
+#[test]
+fn throughput_status_summary_uses_strict_min_without_lag_tolerance() {
+    let statuses = vec![
+        StatusSnapshot {
+            blocks_non_empty: 7,
+            txs_approved: 70,
+            ..StatusSnapshot::default()
+        },
+        StatusSnapshot {
+            blocks_non_empty: 9,
+            txs_approved: 90,
+            ..StatusSnapshot::default()
+        },
+    ];
+
+    let summary = ThroughputStatusSummary::from_statuses_tolerating_lagging(&statuses, 0);
+
+    assert_eq!(summary.min_blocks_non_empty, 7);
+    assert_eq!(summary.min_txs_approved, 70);
 }
 
 #[test]
@@ -5348,6 +8018,42 @@ fn write_throughput_artifacts_writes_realistic_summary_and_sample_phases() {
         commit_signatures_required: Some(3),
     };
     let summary = ThroughputStatusSummary::from_statuses(std::slice::from_ref(&status));
+    let recovering_status = StatusSnapshot {
+        blocks: 4,
+        blocks_non_empty: 3,
+        queue_size: 0,
+        txs_approved: 80,
+        txs_rejected: 0,
+        view_changes: 2,
+        leader_index: Some(1),
+        highest_qc_height: Some(3),
+        locked_qc_height: Some(3),
+        tx_queue_depth: Some(0),
+        tx_queue_saturated: Some(false),
+        block_created_dropped_by_lock_total: Some(0),
+        block_created_hint_mismatch_total: Some(0),
+        block_created_proposal_mismatch_total: Some(0),
+        commit_signatures_present: Some(2),
+        commit_signatures_required: Some(3),
+    };
+    let healthy_status = StatusSnapshot {
+        blocks: 6,
+        blocks_non_empty: 5,
+        queue_size: 0,
+        txs_approved: 150,
+        txs_rejected: 0,
+        view_changes: 1,
+        leader_index: Some(0),
+        highest_qc_height: Some(5),
+        locked_qc_height: Some(5),
+        tx_queue_depth: Some(0),
+        tx_queue_saturated: Some(false),
+        block_created_dropped_by_lock_total: Some(0),
+        block_created_hint_mismatch_total: Some(0),
+        block_created_proposal_mismatch_total: Some(0),
+        commit_signatures_present: Some(3),
+        commit_signatures_required: Some(3),
+    };
     let artifacts = ThroughputArtifacts {
         realistic: Some(ThroughputArtifactRealistic {
             baseline_non_empty: 1,
@@ -5373,8 +8079,76 @@ fn write_throughput_artifacts_writes_realistic_summary_and_sample_phases() {
         samples: vec![ThroughputSample {
             phase: Some("load".to_string()),
             timestamp_ms: 42,
-            statuses: vec![status],
+            statuses: vec![status.clone()],
             sumeragi: Vec::new(),
+        }],
+        fault_windows: vec![Realistic30TpsFaultWindow {
+            peer_index: 2,
+            mnemonic: "peer2".to_string(),
+            fault: "conflicting-ready",
+            started_ms: 100,
+            ended_ms: Some(160),
+        }],
+        status_recovery_samples: vec![Realistic30TpsStatusRecoverySample {
+            peer_index: 2,
+            mnemonic: "peer2".to_string(),
+            context: "heal rotating Byzantine peer".to_string(),
+            restart_started_ms: 170,
+            status_wait_started_ms: 172,
+            ended_ms: 210,
+            bound_ms: 120_000,
+            recovered: true,
+            poll_attempts: 4,
+            last_error: Some("connection refused".to_string()),
+            snapshot_before_shutdown: Realistic30TpsSnapshotObservation::default(),
+            snapshot_after_shutdown: Realistic30TpsSnapshotObservation {
+                store_dir: "peer2/storage/snapshot".to_string(),
+                data_bytes: Some(4096),
+                digest_bytes: Some(64),
+                signature_bytes: Some(128),
+                merkle_bytes: Some(256),
+                data_modified_ms: Some(180),
+                errors: Vec::new(),
+            },
+            snapshot_after_status: Realistic30TpsSnapshotObservation {
+                store_dir: "peer2/storage/snapshot".to_string(),
+                data_bytes: Some(4096),
+                digest_bytes: Some(64),
+                signature_bytes: Some(128),
+                merkle_bytes: Some(256),
+                data_modified_ms: Some(180),
+                errors: Vec::new(),
+            },
+        }],
+        catch_up_samples: vec![Realistic30TpsCatchUpSample {
+            timestamp_ms: 200,
+            recovering_peer_index: 2,
+            target: Realistic30TpsCatchUpTarget {
+                blocks_non_empty: 4,
+                txs_approved: 98,
+            },
+            recovering_status: Some(recovering_status),
+            healthy_statuses: vec![status, healthy_status],
+            healthy_status_error: None,
+            recovering_no_progress_ms: 12_000,
+        }],
+        convergence_windows: vec![Realistic30TpsConvergenceWindow {
+            healed_peer_index: 2,
+            healed_fault: "conflicting-ready",
+            started_ms: 170,
+            ended_ms: 230,
+            start_span: Some(Realistic30TpsConvergenceSpan {
+                min_blocks_non_empty: 4,
+                max_blocks_non_empty: 7,
+                min_txs_approved: 98,
+                max_txs_approved: 150,
+            }),
+            end_span: Realistic30TpsConvergenceSpan {
+                min_blocks_non_empty: 8,
+                max_blocks_non_empty: 9,
+                min_txs_approved: 180,
+                max_txs_approved: 200,
+            },
         }],
         ..ThroughputArtifacts::default()
     };
@@ -5399,6 +8173,124 @@ fn write_throughput_artifacts_writes_realistic_summary_and_sample_phases() {
     assert_eq!(realistic.get("submitted"), Some(&Value::from(90_u64)));
     assert_eq!(
         realistic.get("load_end_produced_blocks"),
+        Some(&Value::from(3_u64))
+    );
+    let Some(Value::Array(fault_windows)) = summary_map.get("fault_windows") else {
+        panic!("expected fault windows");
+    };
+    let Some(Value::Object(first_fault)) = fault_windows.first() else {
+        panic!("expected first fault window");
+    };
+    assert_eq!(first_fault.get("peer_index"), Some(&Value::from(2_u64)));
+    assert_eq!(first_fault.get("duration_ms"), Some(&Value::from(60_u64)));
+    let Some(Value::Array(status_recoveries)) = summary_map.get("status_recovery_samples") else {
+        panic!("expected status recovery samples");
+    };
+    let Some(Value::Object(first_status_recovery)) = status_recoveries.first() else {
+        panic!("expected first status recovery sample");
+    };
+    assert_eq!(
+        first_status_recovery.get("status_wait_ms"),
+        Some(&Value::from(38_u64))
+    );
+    assert_eq!(
+        first_status_recovery.get("recovered_within_bound"),
+        Some(&Value::from(true))
+    );
+    let Some(Value::Object(snapshot_after_shutdown)) =
+        first_status_recovery.get("snapshot_after_shutdown")
+    else {
+        panic!("expected snapshot observation");
+    };
+    assert_eq!(
+        snapshot_after_shutdown.get("bundle_complete"),
+        Some(&Value::from(true))
+    );
+    let Some(Value::Object(status_recovery_summary)) = summary_map.get("status_recovery_summary")
+    else {
+        panic!("expected status recovery summary");
+    };
+    assert_eq!(
+        status_recovery_summary.get("max_status_wait_ms"),
+        Some(&Value::from(38_u64))
+    );
+    assert_eq!(
+        status_recovery_summary.get("outside_bound"),
+        Some(&Value::from(0_u64))
+    );
+    assert_eq!(
+        status_recovery_summary.get("complete_bundle_after_shutdown"),
+        Some(&Value::from(1_u64))
+    );
+    assert_eq!(
+        status_recovery_summary.get("all_complete_bundle_after_shutdown"),
+        Some(&Value::from(true))
+    );
+    let Some(Value::Array(catch_up_samples)) = summary_map.get("catch_up_samples") else {
+        panic!("expected catch-up samples");
+    };
+    let Some(Value::Object(first_catch_up)) = catch_up_samples.first() else {
+        panic!("expected first catch-up sample");
+    };
+    assert_eq!(
+        first_catch_up.get("recovering_peer_index"),
+        Some(&Value::from(2_u64))
+    );
+    assert_eq!(
+        first_catch_up.get("recovering_no_progress_ms"),
+        Some(&Value::from(12_000_u64))
+    );
+    let Some(Value::Object(target)) = first_catch_up.get("target") else {
+        panic!("expected catch-up target");
+    };
+    assert_eq!(target.get("blocks_non_empty"), Some(&Value::from(4_u64)));
+    assert_eq!(target.get("txs_approved"), Some(&Value::from(98_u64)));
+    let Some(Value::Object(recovering_status)) = first_catch_up.get("recovering_status") else {
+        panic!("expected recovering status");
+    };
+    assert_eq!(
+        recovering_status.get("blocks_non_empty"),
+        Some(&Value::from(3_u64))
+    );
+    let Some(Value::Array(healthy_statuses)) = first_catch_up.get("healthy_statuses") else {
+        panic!("expected healthy statuses");
+    };
+    assert_eq!(healthy_statuses.len(), 2);
+    let Some(Value::Object(healthy_summary)) = first_catch_up.get("healthy_summary") else {
+        panic!("expected healthy summary");
+    };
+    assert_eq!(
+        healthy_summary.get("min_txs_approved"),
+        Some(&Value::from(120_u64))
+    );
+    assert_eq!(
+        healthy_summary.get("max_txs_approved"),
+        Some(&Value::from(150_u64))
+    );
+    let Some(Value::Array(convergence_windows)) = summary_map.get("strict_convergence_windows")
+    else {
+        panic!("expected strict convergence windows");
+    };
+    let Some(Value::Object(first_convergence)) = convergence_windows.first() else {
+        panic!("expected first convergence window");
+    };
+    assert_eq!(
+        first_convergence.get("healed_peer_index"),
+        Some(&Value::from(2_u64))
+    );
+    assert_eq!(
+        first_convergence.get("duration_ms"),
+        Some(&Value::from(60_u64))
+    );
+    let Some(Value::Object(strict_summary)) = summary_map.get("strict_convergence_summary") else {
+        panic!("expected strict convergence summary");
+    };
+    assert_eq!(
+        strict_summary.get("post_heal_lag_windows"),
+        Some(&Value::from(1_u64))
+    );
+    assert_eq!(
+        strict_summary.get("max_start_block_gap"),
         Some(&Value::from(3_u64))
     );
 
@@ -5756,6 +8648,42 @@ impl ThroughputStatusSummary {
                 .unwrap_or_default(),
         }
     }
+
+    fn from_statuses_tolerating_lagging(
+        statuses: &[StatusSnapshot],
+        tolerated_lagging: usize,
+    ) -> Self {
+        if statuses.is_empty() || tolerated_lagging == 0 {
+            return Self::from_statuses(statuses);
+        }
+
+        fn low_watermark_after_lagging<I>(values: I, tolerated_lagging: usize) -> u64
+        where
+            I: IntoIterator<Item = u64>,
+        {
+            let mut values: Vec<_> = values.into_iter().collect();
+            if values.is_empty() {
+                return 0;
+            }
+            values.sort_unstable();
+            values[tolerated_lagging.min(values.len().saturating_sub(1))]
+        }
+
+        let mut summary = Self::from_statuses(statuses);
+        summary.min_blocks = low_watermark_after_lagging(
+            statuses.iter().map(|status| status.blocks),
+            tolerated_lagging,
+        );
+        summary.min_blocks_non_empty = low_watermark_after_lagging(
+            statuses.iter().map(|status| status.blocks_non_empty),
+            tolerated_lagging,
+        );
+        summary.min_txs_approved = low_watermark_after_lagging(
+            statuses.iter().map(|status| status.txs_approved),
+            tolerated_lagging,
+        );
+        summary
+    }
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -5875,6 +8803,404 @@ fn throughput_status_summary_value(summary: &ThroughputStatusSummary) -> Value {
     Value::Object(map)
 }
 
+fn catch_up_target_value(target: Realistic30TpsCatchUpTarget) -> Value {
+    let mut map = Map::new();
+    map.insert(
+        "blocks_non_empty".to_string(),
+        Value::from(target.blocks_non_empty),
+    );
+    map.insert("txs_approved".to_string(), Value::from(target.txs_approved));
+    Value::Object(map)
+}
+
+fn convergence_span_value(span: Realistic30TpsConvergenceSpan) -> Value {
+    let mut map = Map::new();
+    map.insert(
+        "min_blocks_non_empty".to_string(),
+        Value::from(span.min_blocks_non_empty),
+    );
+    map.insert(
+        "max_blocks_non_empty".to_string(),
+        Value::from(span.max_blocks_non_empty),
+    );
+    map.insert(
+        "min_txs_approved".to_string(),
+        Value::from(span.min_txs_approved),
+    );
+    map.insert(
+        "max_txs_approved".to_string(),
+        Value::from(span.max_txs_approved),
+    );
+    map.insert("block_gap".to_string(), Value::from(span.block_gap()));
+    map.insert("approved_gap".to_string(), Value::from(span.approved_gap()));
+    Value::Object(map)
+}
+
+fn convergence_window_value(window: &Realistic30TpsConvergenceWindow) -> Value {
+    let mut map = Map::new();
+    map.insert(
+        "healed_peer_index".to_string(),
+        Value::from(u64::try_from(window.healed_peer_index).unwrap_or(u64::MAX)),
+    );
+    map.insert(
+        "healed_fault".to_string(),
+        Value::String(window.healed_fault.to_owned()),
+    );
+    map.insert("started_ms".to_string(), Value::from(window.started_ms));
+    map.insert("ended_ms".to_string(), Value::from(window.ended_ms));
+    map.insert(
+        "duration_ms".to_string(),
+        Value::from(window.ended_ms.saturating_sub(window.started_ms)),
+    );
+    map.insert(
+        "start_span".to_string(),
+        window
+            .start_span
+            .map_or(Value::Null, convergence_span_value),
+    );
+    map.insert(
+        "end_span".to_string(),
+        convergence_span_value(window.end_span),
+    );
+    Value::Object(map)
+}
+
+fn catch_up_sample_value(sample: &Realistic30TpsCatchUpSample) -> Value {
+    let mut map = Map::new();
+    map.insert("timestamp_ms".to_string(), Value::from(sample.timestamp_ms));
+    map.insert(
+        "recovering_peer_index".to_string(),
+        Value::from(u64::try_from(sample.recovering_peer_index).unwrap_or(u64::MAX)),
+    );
+    map.insert("target".to_string(), catch_up_target_value(sample.target));
+    map.insert(
+        "recovering_status".to_string(),
+        sample
+            .recovering_status
+            .as_ref()
+            .map_or(Value::Null, status_snapshot_value),
+    );
+    map.insert(
+        "healthy_statuses".to_string(),
+        Value::Array(
+            sample
+                .healthy_statuses
+                .iter()
+                .map(status_snapshot_value)
+                .collect(),
+        ),
+    );
+    map.insert(
+        "healthy_summary".to_string(),
+        throughput_status_summary_value(&ThroughputStatusSummary::from_statuses(
+            &sample.healthy_statuses,
+        )),
+    );
+    map.insert(
+        "healthy_status_error".to_string(),
+        sample
+            .healthy_status_error
+            .as_ref()
+            .map_or(Value::Null, |error| Value::String(error.clone())),
+    );
+    map.insert(
+        "recovering_no_progress_ms".to_string(),
+        Value::from(sample.recovering_no_progress_ms),
+    );
+    Value::Object(map)
+}
+
+fn snapshot_observation_value(snapshot: &Realistic30TpsSnapshotObservation) -> Value {
+    let mut map = Map::new();
+    map.insert(
+        "store_dir".to_string(),
+        Value::String(snapshot.store_dir.clone()),
+    );
+    map.insert(
+        "data_present".to_string(),
+        Value::from(snapshot.data_present()),
+    );
+    map.insert(
+        "bundle_complete".to_string(),
+        Value::from(snapshot.bundle_complete()),
+    );
+    map.insert(
+        "data_bytes".to_string(),
+        snapshot.data_bytes.map_or(Value::Null, Value::from),
+    );
+    map.insert(
+        "digest_bytes".to_string(),
+        snapshot.digest_bytes.map_or(Value::Null, Value::from),
+    );
+    map.insert(
+        "signature_bytes".to_string(),
+        snapshot.signature_bytes.map_or(Value::Null, Value::from),
+    );
+    map.insert(
+        "merkle_bytes".to_string(),
+        snapshot.merkle_bytes.map_or(Value::Null, Value::from),
+    );
+    map.insert(
+        "data_modified_ms".to_string(),
+        snapshot.data_modified_ms.map_or(Value::Null, Value::from),
+    );
+    map.insert(
+        "errors".to_string(),
+        Value::Array(snapshot.errors.iter().cloned().map(Value::String).collect()),
+    );
+    Value::Object(map)
+}
+
+fn status_recovery_sample_value(sample: &Realistic30TpsStatusRecoverySample) -> Value {
+    let mut map = Map::new();
+    map.insert(
+        "peer_index".to_string(),
+        Value::from(u64::try_from(sample.peer_index).unwrap_or(u64::MAX)),
+    );
+    map.insert(
+        "mnemonic".to_string(),
+        Value::String(sample.mnemonic.clone()),
+    );
+    map.insert("context".to_string(), Value::String(sample.context.clone()));
+    map.insert(
+        "restart_started_ms".to_string(),
+        Value::from(sample.restart_started_ms),
+    );
+    map.insert(
+        "status_wait_started_ms".to_string(),
+        Value::from(sample.status_wait_started_ms),
+    );
+    map.insert("ended_ms".to_string(), Value::from(sample.ended_ms));
+    map.insert(
+        "total_duration_ms".to_string(),
+        Value::from(sample.total_duration_ms()),
+    );
+    map.insert(
+        "status_wait_ms".to_string(),
+        Value::from(sample.status_wait_ms()),
+    );
+    map.insert("bound_ms".to_string(), Value::from(sample.bound_ms));
+    map.insert("recovered".to_string(), Value::from(sample.recovered));
+    map.insert(
+        "recovered_within_bound".to_string(),
+        Value::from(sample.recovered_within_bound()),
+    );
+    map.insert(
+        "poll_attempts".to_string(),
+        Value::from(sample.poll_attempts),
+    );
+    map.insert(
+        "last_error".to_string(),
+        sample
+            .last_error
+            .as_ref()
+            .map_or(Value::Null, |error| Value::String(error.clone())),
+    );
+    map.insert(
+        "snapshot_before_shutdown".to_string(),
+        snapshot_observation_value(&sample.snapshot_before_shutdown),
+    );
+    map.insert(
+        "snapshot_after_shutdown".to_string(),
+        snapshot_observation_value(&sample.snapshot_after_shutdown),
+    );
+    map.insert(
+        "snapshot_after_status".to_string(),
+        snapshot_observation_value(&sample.snapshot_after_status),
+    );
+    Value::Object(map)
+}
+
+fn fault_window_value(window: &Realistic30TpsFaultWindow) -> Value {
+    let mut map = Map::new();
+    map.insert(
+        "peer_index".to_string(),
+        Value::from(u64::try_from(window.peer_index).unwrap_or(u64::MAX)),
+    );
+    map.insert(
+        "mnemonic".to_string(),
+        Value::String(window.mnemonic.clone()),
+    );
+    map.insert("fault".to_string(), Value::String(window.fault.to_owned()));
+    map.insert("started_ms".to_string(), Value::from(window.started_ms));
+    map.insert(
+        "ended_ms".to_string(),
+        window.ended_ms.map_or(Value::Null, Value::from),
+    );
+    map.insert(
+        "duration_ms".to_string(),
+        window.ended_ms.map_or(Value::Null, |ended_ms| {
+            Value::from(ended_ms.saturating_sub(window.started_ms))
+        }),
+    );
+    Value::Object(map)
+}
+
+fn convergence_summary_value(
+    windows: &[Realistic30TpsFaultWindow],
+    convergence_windows: &[Realistic30TpsConvergenceWindow],
+) -> Value {
+    let mut map = Map::new();
+    let strict_fault_starts_after_convergence =
+        realistic_strict_fault_windows_start_after_convergence(windows, convergence_windows);
+    let post_heal_lag_windows = convergence_windows
+        .iter()
+        .filter(|window| {
+            window
+                .start_span
+                .is_some_and(|span| span.block_gap() > 0 || span.approved_gap() > 0)
+        })
+        .count();
+    let max_start_block_gap = convergence_windows
+        .iter()
+        .filter_map(|window| {
+            window
+                .start_span
+                .map(Realistic30TpsConvergenceSpan::block_gap)
+        })
+        .max()
+        .unwrap_or_default();
+    let max_start_approved_gap = convergence_windows
+        .iter()
+        .filter_map(|window| {
+            window
+                .start_span
+                .map(Realistic30TpsConvergenceSpan::approved_gap)
+        })
+        .max()
+        .unwrap_or_default();
+    let max_end_block_gap = convergence_windows
+        .iter()
+        .map(|window| window.end_span.block_gap())
+        .max()
+        .unwrap_or_default();
+    let max_end_approved_gap = convergence_windows
+        .iter()
+        .map(|window| window.end_span.approved_gap())
+        .max()
+        .unwrap_or_default();
+    let max_wait_ms = convergence_windows
+        .iter()
+        .map(|window| window.ended_ms.saturating_sub(window.started_ms))
+        .max()
+        .unwrap_or_default();
+
+    map.insert(
+        "strict_fault_starts_after_convergence".to_string(),
+        Value::from(strict_fault_starts_after_convergence),
+    );
+    map.insert(
+        "convergence_windows".to_string(),
+        Value::from(u64::try_from(convergence_windows.len()).unwrap_or(u64::MAX)),
+    );
+    map.insert(
+        "post_heal_lag_windows".to_string(),
+        Value::from(u64::try_from(post_heal_lag_windows).unwrap_or(u64::MAX)),
+    );
+    map.insert(
+        "max_start_block_gap".to_string(),
+        Value::from(max_start_block_gap),
+    );
+    map.insert(
+        "max_start_approved_gap".to_string(),
+        Value::from(max_start_approved_gap),
+    );
+    map.insert(
+        "max_end_block_gap".to_string(),
+        Value::from(max_end_block_gap),
+    );
+    map.insert(
+        "max_end_approved_gap".to_string(),
+        Value::from(max_end_approved_gap),
+    );
+    map.insert("max_wait_ms".to_string(), Value::from(max_wait_ms));
+    Value::Object(map)
+}
+
+fn status_recovery_summary_value(samples: &[Realistic30TpsStatusRecoverySample]) -> Value {
+    let mut map = Map::new();
+    let recoveries = samples.len();
+    let failures = samples.iter().filter(|sample| !sample.recovered).count();
+    let outside_bound = samples
+        .iter()
+        .filter(|sample| !sample.recovered_within_bound())
+        .count();
+    let data_present_after_shutdown = samples
+        .iter()
+        .filter(|sample| sample.snapshot_after_shutdown.data_present())
+        .count();
+    let complete_bundle_after_shutdown = samples
+        .iter()
+        .filter(|sample| sample.snapshot_after_shutdown.bundle_complete())
+        .count();
+    let complete_bundle_after_status = samples
+        .iter()
+        .filter(|sample| sample.snapshot_after_status.bundle_complete())
+        .count();
+    let max_total_duration_ms = samples
+        .iter()
+        .map(Realistic30TpsStatusRecoverySample::total_duration_ms)
+        .max()
+        .unwrap_or_default();
+    let max_status_wait_ms = samples
+        .iter()
+        .map(Realistic30TpsStatusRecoverySample::status_wait_ms)
+        .max()
+        .unwrap_or_default();
+    let max_bound_ms = samples
+        .iter()
+        .map(|sample| sample.bound_ms)
+        .max()
+        .unwrap_or_default();
+    map.insert(
+        "recoveries".to_string(),
+        Value::from(u64::try_from(recoveries).unwrap_or(u64::MAX)),
+    );
+    map.insert(
+        "failures".to_string(),
+        Value::from(u64::try_from(failures).unwrap_or(u64::MAX)),
+    );
+    map.insert(
+        "outside_bound".to_string(),
+        Value::from(u64::try_from(outside_bound).unwrap_or(u64::MAX)),
+    );
+    map.insert(
+        "data_present_after_shutdown".to_string(),
+        Value::from(u64::try_from(data_present_after_shutdown).unwrap_or(u64::MAX)),
+    );
+    map.insert(
+        "complete_bundle_after_shutdown".to_string(),
+        Value::from(u64::try_from(complete_bundle_after_shutdown).unwrap_or(u64::MAX)),
+    );
+    map.insert(
+        "complete_bundle_after_status".to_string(),
+        Value::from(u64::try_from(complete_bundle_after_status).unwrap_or(u64::MAX)),
+    );
+    map.insert("all_recovered".to_string(), Value::from(failures == 0));
+    map.insert(
+        "all_recovered_within_bound".to_string(),
+        Value::from(outside_bound == 0),
+    );
+    map.insert(
+        "all_complete_bundle_after_shutdown".to_string(),
+        Value::from(complete_bundle_after_shutdown == recoveries),
+    );
+    map.insert(
+        "all_complete_bundle_after_status".to_string(),
+        Value::from(complete_bundle_after_status == recoveries),
+    );
+    map.insert(
+        "max_total_duration_ms".to_string(),
+        Value::from(max_total_duration_ms),
+    );
+    map.insert(
+        "max_status_wait_ms".to_string(),
+        Value::from(max_status_wait_ms),
+    );
+    map.insert("max_bound_ms".to_string(), Value::from(max_bound_ms));
+    Value::Object(map)
+}
+
 fn sumeragi_snapshot_value(snapshot: &SumeragiStatusSnapshot) -> Value {
     let mut map = Map::new();
     map.insert(
@@ -5936,6 +9262,8 @@ struct ThroughputArtifactRecipe {
     ram_lfe_email_policy: String,
     ram_lfe_program: String,
     rng_seed: u64,
+    snapshot_mode: String,
+    snapshot_create_every_ms: u64,
     rbc_encoding: String,
     rbc_data_shards: u64,
     rbc_parity_shards: u64,
@@ -6003,6 +9331,10 @@ struct ThroughputArtifacts {
     warmup_metrics: Vec<PeerMetricsSnapshot>,
     after_metrics: Vec<PeerMetricsSnapshot>,
     samples: Vec<ThroughputSample>,
+    fault_windows: Vec<Realistic30TpsFaultWindow>,
+    status_recovery_samples: Vec<Realistic30TpsStatusRecoverySample>,
+    catch_up_samples: Vec<Realistic30TpsCatchUpSample>,
+    convergence_windows: Vec<Realistic30TpsConvergenceWindow>,
     error: Option<String>,
 }
 
@@ -6101,6 +9433,62 @@ fn write_throughput_artifacts(
     if let Some(error) = artifacts.error.as_ref() {
         summary.insert("error".to_string(), Value::String(error.clone()));
     }
+    if !artifacts.fault_windows.is_empty() {
+        summary.insert(
+            "fault_windows".to_string(),
+            Value::Array(
+                artifacts
+                    .fault_windows
+                    .iter()
+                    .map(fault_window_value)
+                    .collect(),
+            ),
+        );
+    }
+    if !artifacts.status_recovery_samples.is_empty() {
+        summary.insert(
+            "status_recovery_samples".to_string(),
+            Value::Array(
+                artifacts
+                    .status_recovery_samples
+                    .iter()
+                    .map(status_recovery_sample_value)
+                    .collect(),
+            ),
+        );
+        summary.insert(
+            "status_recovery_summary".to_string(),
+            status_recovery_summary_value(&artifacts.status_recovery_samples),
+        );
+    }
+    if !artifacts.catch_up_samples.is_empty() {
+        summary.insert(
+            "catch_up_samples".to_string(),
+            Value::Array(
+                artifacts
+                    .catch_up_samples
+                    .iter()
+                    .map(catch_up_sample_value)
+                    .collect(),
+            ),
+        );
+    }
+    if !artifacts.convergence_windows.is_empty() {
+        summary.insert(
+            "strict_convergence_windows".to_string(),
+            Value::Array(
+                artifacts
+                    .convergence_windows
+                    .iter()
+                    .map(convergence_window_value)
+                    .collect(),
+            ),
+        );
+        summary.insert(
+            "strict_convergence_summary".to_string(),
+            convergence_summary_value(&artifacts.fault_windows, &artifacts.convergence_windows),
+        );
+    }
 
     if let Some(recipe) = artifacts.recipe.as_ref() {
         let mut recipe_map = Map::new();
@@ -6171,6 +9559,14 @@ fn write_throughput_artifacts(
             Value::from(recipe.ram_lfe_program.clone()),
         );
         recipe_map.insert("rng_seed".to_string(), Value::from(recipe.rng_seed));
+        recipe_map.insert(
+            "snapshot_mode".to_string(),
+            Value::from(recipe.snapshot_mode.clone()),
+        );
+        recipe_map.insert(
+            "snapshot_create_every_ms".to_string(),
+            Value::from(recipe.snapshot_create_every_ms),
+        );
         recipe_map.insert(
             "rbc_encoding".to_string(),
             Value::from(recipe.rbc_encoding.clone()),

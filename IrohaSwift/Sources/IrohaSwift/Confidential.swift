@@ -159,6 +159,10 @@ private func sha3_512(_ data: Data) -> Data {
     return keccak(rate: 72, outputLength: 64, data: data, suffix: 0x06)
 }
 
+func irohaKeccak256(_ data: Data) -> Data {
+    return keccak(rate: 136, outputLength: 32, data: data, suffix: 0x01)
+}
+
 private func keccak(rate: Int, outputLength: Int, data: Data, suffix: UInt8) -> Data {
     var state = [UInt64](repeating: 0, count: 25)
     let rateInBytes = rate

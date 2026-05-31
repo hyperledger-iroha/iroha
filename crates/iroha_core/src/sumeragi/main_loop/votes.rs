@@ -73,7 +73,20 @@ fn vote_duplicate(
 ) -> bool {
     vote_log
         .get(&vote_key(vote))
-        .is_some_and(|existing| existing.block_hash == vote.block_hash)
+        .is_some_and(|existing| same_recorded_vote_is_duplicate(existing, vote))
+}
+
+fn same_recorded_vote_is_duplicate(
+    existing: &crate::sumeragi::consensus::Vote,
+    vote: &crate::sumeragi::consensus::Vote,
+) -> bool {
+    if existing.block_hash != vote.block_hash {
+        return false;
+    }
+    if vote.phase == Phase::NewView {
+        return existing.highest_qc == vote.highest_qc;
+    }
+    true
 }
 
 pub(super) fn record_vote_drop_without_roster(
@@ -362,6 +375,28 @@ impl Actor {
         })
     }
 
+    pub(super) fn certified_commit_hash_supersedes_same_height_vote_conflict(
+        &self,
+        phase: crate::sumeragi::consensus::Phase,
+        block_hash: HashOf<BlockHeader>,
+        height: u64,
+        _view: u64,
+        _existing: &crate::sumeragi::consensus::Vote,
+    ) -> bool {
+        if phase != crate::sumeragi::consensus::Phase::Commit {
+            return false;
+        }
+
+        if self
+            .committed_block_hash_for_height(height)
+            .is_some_and(|hash| hash == block_hash)
+        {
+            return true;
+        }
+
+        false
+    }
+
     pub(super) fn local_same_height_vote(
         &self,
         height: u64,
@@ -420,18 +455,104 @@ impl Actor {
         epoch: u64,
     ) -> Option<crate::sumeragi::consensus::Vote> {
         let local_peer = self.common_config.peer.id();
-        self.stored_votes().find_map(|existing| {
-            if existing.phase != phase
-                || existing.height != height
-                || existing.view != view
-                || existing.epoch != epoch
-            {
-                return None;
-            }
-            self.vote_signer_peer(existing)
-                .filter(|peer| peer == local_peer)
-                .map(|_| existing.clone())
-        })
+        self.stored_votes()
+            .filter(|existing| {
+                existing.phase == phase
+                    && existing.height == height
+                    && existing.view == view
+                    && existing.epoch == epoch
+                    && self
+                        .vote_signer_peer(existing)
+                        .as_ref()
+                        .is_some_and(|peer| peer == local_peer)
+            })
+            .max_by(|left, right| match (left.highest_qc, right.highest_qc) {
+                (Some(left), Some(right)) => super::new_view_highest_qc_rank(left)
+                    .cmp(&super::new_view_highest_qc_rank(right)),
+                (Some(_), None) => std::cmp::Ordering::Greater,
+                (None, Some(_)) => std::cmp::Ordering::Less,
+                (None, None) => std::cmp::Ordering::Equal,
+            })
+            .cloned()
+    }
+
+    pub(super) fn new_view_highest_qc_supersedes_same_slot_vote(
+        existing: &crate::sumeragi::consensus::Vote,
+        height: u64,
+        view: u64,
+        epoch: u64,
+        chain_order_binding: (Hash, u64),
+        highest_qc: crate::sumeragi::consensus::QcRef,
+    ) -> bool {
+        if existing.phase != Phase::NewView
+            || existing.height != height
+            || existing.view != view
+            || existing.epoch != epoch
+        {
+            return false;
+        }
+        let Some(existing_highest_qc) = existing.highest_qc else {
+            return false;
+        };
+        if existing.block_hash != existing_highest_qc.subject_block_hash {
+            return false;
+        }
+        if super::new_view_highest_qc_rank(highest_qc)
+            <= super::new_view_highest_qc_rank(existing_highest_qc)
+        {
+            return false;
+        }
+        (existing.chain_order_hash == chain_order_binding.0
+            && existing.rechain_seq == chain_order_binding.1)
+            || matches!(highest_qc.phase, Phase::Commit)
+    }
+
+    fn new_view_vote_supersedes_same_slot(
+        existing: &crate::sumeragi::consensus::Vote,
+        vote: &crate::sumeragi::consensus::Vote,
+    ) -> bool {
+        if vote.phase != Phase::NewView || existing.signer != vote.signer {
+            return false;
+        }
+        let Some(highest_qc) = vote.highest_qc else {
+            return false;
+        };
+        if vote.block_hash != highest_qc.subject_block_hash {
+            return false;
+        }
+        Self::new_view_highest_qc_supersedes_same_slot_vote(
+            existing,
+            vote.height,
+            vote.view,
+            vote.epoch,
+            (vote.chain_order_hash, vote.rechain_seq),
+            highest_qc,
+        )
+    }
+
+    fn remove_recorded_vote(&mut self, vote: &crate::sumeragi::consensus::Vote) -> bool {
+        let mut removed = false;
+        let raw_key = vote_key(vote);
+        if self
+            .vote_log
+            .get(&raw_key)
+            .is_some_and(|stored| stored == vote)
+        {
+            self.vote_log.remove(&raw_key);
+            self.vote_validation_cache.remove(&raw_key);
+            removed = true;
+        }
+        let identity_keys: Vec<_> = self
+            .vote_log_identities
+            .iter()
+            .filter_map(|(key, stored)| (stored == vote).then_some(key.clone()))
+            .collect();
+        for key in identity_keys {
+            self.vote_log_identities.remove(&key);
+            self.vote_validation_cache_identities.remove(&key);
+            removed = true;
+        }
+        removed
     }
 
     pub(super) fn local_conflicting_slot_vote(
@@ -722,6 +843,7 @@ impl Actor {
             self.handle_vote(vote);
             return;
         }
+        let _ = self.maybe_request_missing_payload_for_inbound_commit_vote(&vote);
         let pending_cap = self.config.worker.validation_pending_cap;
         if self.subsystems.vote_verify.pending_validation.len() >= pending_cap {
             debug!(
@@ -750,6 +872,69 @@ impl Actor {
             .vote_verify
             .pending_validation
             .insert(super::VoteVerifyKey::from_vote(&vote), vote);
+    }
+
+    pub(super) fn maybe_request_missing_payload_for_inbound_commit_vote(
+        &mut self,
+        vote: &crate::sumeragi::consensus::Vote,
+    ) -> bool {
+        if vote.phase != Phase::Commit {
+            return false;
+        }
+        let committed_height = self.committed_height_snapshot();
+        if vote.height != committed_height.saturating_add(1)
+            || self.block_known_locally(vote.block_hash)
+            || self.should_drop_future_consensus_message(vote.height, vote.view, "QcVote")
+        {
+            return false;
+        }
+
+        let (consensus_mode, mode_tag, prf_seed) = self.consensus_context_for_height(vote.height);
+        let mut topology_peers = self.validation_roster_for_vote_with_mode(
+            vote.block_hash,
+            vote.height,
+            vote.view,
+            consensus_mode,
+            "inbound_commit_vote_payload_hint",
+        );
+        if topology_peers.is_empty() {
+            topology_peers = self.roster_for_live_vote_with_mode(vote.height, consensus_mode);
+        }
+        if topology_peers.is_empty() {
+            topology_peers = self.effective_commit_topology();
+        }
+        if topology_peers.is_empty() {
+            return false;
+        }
+
+        let topology_peers =
+            super::roster::canonicalize_roster_for_mode(topology_peers, consensus_mode);
+        let topology = super::network_topology::Topology::new(topology_peers.clone());
+        let roster_hash = iroha_crypto::HashOf::new(&topology_peers);
+        let signature_topology = self.cached_signature_topology(
+            vote.height,
+            vote.view,
+            &roster_hash,
+            &topology,
+            mode_tag,
+            prf_seed,
+        );
+        if usize::try_from(vote.signer).map_or(true, |idx| {
+            idx >= signature_topology.as_ref().as_ref().len()
+        }) {
+            return false;
+        }
+
+        let signers = BTreeSet::from([vote.signer]);
+        self.request_missing_commit_vote_payload(
+            vote.block_hash,
+            vote.height,
+            vote.view,
+            &signers,
+            signature_topology.as_ref(),
+            false,
+            "inbound_commit_vote_payload_hint",
+        )
     }
 
     pub(super) fn process_pending_vote_validation(&mut self) -> bool {
@@ -1024,7 +1209,13 @@ impl Actor {
                 topology_peers.clone(),
             );
         }
-        self.prune_vote_caches_horizon(committed_height);
+        let vote_targets_committed_block = vote.phase == Phase::Commit
+            && self
+                .committed_block_hash_for_height(vote.height)
+                .is_some_and(|hash| hash == vote.block_hash);
+        if !vote_targets_committed_block {
+            self.prune_vote_caches_horizon(committed_height);
+        }
         match vote.phase {
             Phase::Prepare | Phase::Commit => {
                 self.try_form_qc_from_votes(
@@ -1081,6 +1272,9 @@ impl Actor {
                                 block = %vote.block_hash,
                                 "skipping known-block commit evidence replay for aborted pending block"
                             );
+                            if vote_targets_committed_block {
+                                self.prune_vote_caches_horizon(committed_height);
+                            }
                             return;
                         }
                     }
@@ -1198,6 +1392,9 @@ impl Actor {
             super::status::RoundEventCauseTrace::VoteReceived,
             None,
         );
+        if vote_targets_committed_block {
+            self.prune_vote_caches_horizon(committed_height);
+        }
     }
 
     fn maybe_follow_future_new_view_quorum(
@@ -2103,9 +2300,7 @@ impl Actor {
         }
         let payload_available =
             self.block_payload_available_for_progress(highest.subject_block_hash);
-        let local_known = self
-            .local_block_height_view(highest.subject_block_hash)
-            .is_some();
+        let local_known = self.block_body_known_for_highest_qc_fetch(highest.subject_block_hash);
         if observe_sidecar_mismatch {
             self.observe_sidecar_mismatch_for_height(
                 highest.height,
@@ -2531,8 +2726,7 @@ impl Actor {
         let Some(lock) = self.locked_qc else {
             return false;
         };
-        let lock_override = vote.view > lock.view;
-        if !lock_override && vote.height < lock.height {
+        if vote.height < lock.height {
             iroha_logger::debug!(
                 height = vote.height,
                 view = vote.view,
@@ -2550,29 +2744,28 @@ impl Actor {
             );
             return true;
         }
-        if !lock_override && vote.height == lock.height {
-            if vote.block_hash != lock.subject_block_hash {
-                iroha_logger::debug!(
-                    height = vote.height,
-                    view = vote.view,
-                    epoch = vote.epoch,
-                    signer = vote.signer,
-                    block_hash = %vote.block_hash,
-                    locked_height = lock.height,
-                    locked_hash = %lock.subject_block_hash,
-                    "dropping precommit vote that conflicts with locked block"
-                );
-                self.record_consensus_message_handling(
-                    super::status::ConsensusMessageKind::QcVote,
-                    super::status::ConsensusMessageOutcome::Dropped,
-                    super::status::ConsensusMessageReason::LockedQc,
-                );
-                record_vote_drop_without_roster(
-                    vote,
-                    super::status::VoteValidationDropReason::LockedQc,
-                );
-                return true;
-            }
+        if vote.height == lock.height && vote.block_hash != lock.subject_block_hash {
+            iroha_logger::debug!(
+                height = vote.height,
+                view = vote.view,
+                epoch = vote.epoch,
+                signer = vote.signer,
+                block_hash = %vote.block_hash,
+                locked_height = lock.height,
+                locked_view = lock.view,
+                locked_hash = %lock.subject_block_hash,
+                "dropping precommit vote that conflicts with locked block"
+            );
+            self.record_consensus_message_handling(
+                super::status::ConsensusMessageKind::QcVote,
+                super::status::ConsensusMessageOutcome::Dropped,
+                super::status::ConsensusMessageReason::LockedQc,
+            );
+            record_vote_drop_without_roster(
+                vote,
+                super::status::VoteValidationDropReason::LockedQc,
+            );
+            return true;
         }
         if !self.block_known_for_lock(lock.subject_block_hash) {
             return false;
@@ -2681,14 +2874,14 @@ impl Actor {
         if identity_key
             .as_ref()
             .and_then(|key| self.vote_log_identities.get(key))
-            .is_some_and(|existing| existing.block_hash == vote.block_hash)
+            .is_some_and(|existing| same_recorded_vote_is_duplicate(existing, vote))
             || identity_key.as_ref().is_some_and(|key| {
                 self.vote_log
                     .get(&raw_vote_key_from_identity_key(key))
                     .filter(|existing| {
                         self.vote_identity_key_from_vote(existing).as_ref() == Some(key)
                     })
-                    .is_some_and(|existing| existing.block_hash == vote.block_hash)
+                    .is_some_and(|existing| same_recorded_vote_is_duplicate(existing, vote))
             })
             || (identity_key.is_none() && vote_duplicate(&self.vote_log, vote))
         {
@@ -2959,6 +3152,14 @@ impl Actor {
                 vote.block_hash,
                 signer_peer,
             ) {
+                let certified_commit_supersedes = self
+                    .certified_commit_hash_supersedes_same_height_vote_conflict(
+                        vote.phase,
+                        vote.block_hash,
+                        vote.height,
+                        vote.view,
+                        &existing,
+                    );
                 let new_view_qc_supersedes = self
                     .proposal_or_new_view_highest_qc_for_slot(vote.height, vote.view)
                     .is_some_and(|highest_qc| {
@@ -2970,7 +3171,7 @@ impl Actor {
                             existing.view,
                         )
                     });
-                if new_view_qc_supersedes {
+                if new_view_qc_supersedes || certified_commit_supersedes {
                     info!(
                         phase = ?vote.phase,
                         height = vote.height,
@@ -2982,6 +3183,7 @@ impl Actor {
                         existing_block = %existing.block_hash,
                         signer_peer = ?signer_peer,
                         new_view_qc_supersedes,
+                        certified_commit_supersedes,
                         "accepting vote: same-height signer vote is superseded"
                     );
                 } else if self.should_defer_same_height_supersession_conflict(vote, &existing) {
@@ -3033,7 +3235,7 @@ impl Actor {
                     .flatten()
             })
         {
-            if existing.block_hash == vote.block_hash {
+            if same_recorded_vote_is_duplicate(&existing, vote) {
                 iroha_logger::debug!(
                     phase = ?vote.phase,
                     height = vote.height,
@@ -3046,82 +3248,97 @@ impl Actor {
                 record_drop(super::status::VoteValidationDropReason::Duplicate);
                 return false;
             }
-            self.note_double_vote(Some(&existing), vote, evidence_context);
-            let cross_phase = match vote.phase {
-                crate::sumeragi::consensus::Phase::Prepare => {
-                    Some(crate::sumeragi::consensus::Phase::Commit)
-                }
-                crate::sumeragi::consensus::Phase::Commit => {
-                    Some(crate::sumeragi::consensus::Phase::Prepare)
-                }
-                _ => None,
-            };
-            if let Some(phase) = cross_phase {
-                if let Some(previous) = signer_public_key
-                    .as_ref()
-                    .and_then(|signer_public_key| {
-                        self.vote_log_identities
-                            .get(&(
-                                phase,
-                                vote.height,
-                                vote.view,
-                                vote.epoch,
-                                vote.signer,
-                                vote.chain_order_hash,
-                                vote.rechain_seq,
-                                signer_public_key.clone(),
-                            ))
-                            .cloned()
-                    })
-                    .or_else(|| {
-                        self.vote_log
-                            .get(&(
-                                phase,
-                                vote.height,
-                                vote.view,
-                                vote.epoch,
-                                vote.signer,
-                                vote.chain_order_hash,
-                                vote.rechain_seq,
-                            ))
-                            .filter(|previous| {
-                                signer_public_key.as_ref().is_none_or(|signer_public_key| {
-                                    self.vote_identity_key_from_vote(previous).as_ref()
-                                        == Some(&(
-                                            phase,
-                                            vote.height,
-                                            vote.view,
-                                            vote.epoch,
-                                            vote.signer,
-                                            vote.chain_order_hash,
-                                            vote.rechain_seq,
-                                            signer_public_key.clone(),
-                                        ))
+            if Self::new_view_vote_supersedes_same_slot(&existing, vote) {
+                info!(
+                    height = vote.height,
+                    view = vote.view,
+                    epoch = vote.epoch,
+                    signer = vote.signer,
+                    old_highest = ?existing.highest_qc,
+                    new_highest = ?vote.highest_qc,
+                    old_block = %existing.block_hash,
+                    new_block = %vote.block_hash,
+                    "accepting NEW_VIEW vote: higher highest-QC supersedes same-slot signer vote"
+                );
+                let _ = self.remove_recorded_vote(&existing);
+            } else {
+                self.note_double_vote(Some(&existing), vote, evidence_context);
+                let cross_phase = match vote.phase {
+                    crate::sumeragi::consensus::Phase::Prepare => {
+                        Some(crate::sumeragi::consensus::Phase::Commit)
+                    }
+                    crate::sumeragi::consensus::Phase::Commit => {
+                        Some(crate::sumeragi::consensus::Phase::Prepare)
+                    }
+                    _ => None,
+                };
+                if let Some(phase) = cross_phase {
+                    if let Some(previous) = signer_public_key
+                        .as_ref()
+                        .and_then(|signer_public_key| {
+                            self.vote_log_identities
+                                .get(&(
+                                    phase,
+                                    vote.height,
+                                    vote.view,
+                                    vote.epoch,
+                                    vote.signer,
+                                    vote.chain_order_hash,
+                                    vote.rechain_seq,
+                                    signer_public_key.clone(),
+                                ))
+                                .cloned()
+                        })
+                        .or_else(|| {
+                            self.vote_log
+                                .get(&(
+                                    phase,
+                                    vote.height,
+                                    vote.view,
+                                    vote.epoch,
+                                    vote.signer,
+                                    vote.chain_order_hash,
+                                    vote.rechain_seq,
+                                ))
+                                .filter(|previous| {
+                                    signer_public_key.as_ref().is_none_or(|signer_public_key| {
+                                        self.vote_identity_key_from_vote(previous).as_ref()
+                                            == Some(&(
+                                                phase,
+                                                vote.height,
+                                                vote.view,
+                                                vote.epoch,
+                                                vote.signer,
+                                                vote.chain_order_hash,
+                                                vote.rechain_seq,
+                                                signer_public_key.clone(),
+                                            ))
+                                    })
                                 })
-                            })
-                            .cloned()
-                    })
-                {
-                    self.note_double_vote(Some(&previous), vote, evidence_context);
+                                .cloned()
+                        })
+                    {
+                        self.note_double_vote(Some(&previous), vote, evidence_context);
+                    }
                 }
+                warn!(
+                    phase = ?vote.phase,
+                    height = vote.height,
+                    view = vote.view,
+                    epoch = vote.epoch,
+                    signer = vote.signer,
+                    block_hash = %vote.block_hash,
+                    existing_block = %existing.block_hash,
+                    "dropping conflicting vote for signer"
+                );
+                self.record_consensus_message_handling(
+                    super::status::ConsensusMessageKind::QcVote,
+                    super::status::ConsensusMessageOutcome::Dropped,
+                    super::status::ConsensusMessageReason::ConflictingVote,
+                );
+                record_drop(super::status::VoteValidationDropReason::ConflictingVote);
+                return false;
             }
-            warn!(
-                phase = ?vote.phase,
-                height = vote.height,
-                view = vote.view,
-                epoch = vote.epoch,
-                signer = vote.signer,
-                block_hash = %vote.block_hash,
-                existing_block = %existing.block_hash,
-                "dropping conflicting vote for signer"
-            );
-            self.record_consensus_message_handling(
-                super::status::ConsensusMessageKind::QcVote,
-                super::status::ConsensusMessageOutcome::Dropped,
-                super::status::ConsensusMessageReason::ConflictingVote,
-            );
-            record_drop(super::status::VoteValidationDropReason::ConflictingVote);
-            return false;
         }
         let previous = identity_key.as_ref().and_then(|key| {
             let previous = self.vote_log_identities.insert(key.clone(), vote.clone());
@@ -3352,9 +3569,8 @@ impl Actor {
         }
         match self.proposal_or_new_view_highest_qc_for_slot(vote.height, vote.view) {
             Some(highest_qc) => {
-                highest_qc.phase == Phase::Commit
-                    && highest_qc.height.saturating_add(1) == vote.height
-                    && self.latest_committed_qc() == Some(highest_qc)
+                highest_qc.height.saturating_add(1) == vote.height
+                    && self.highest_qc_is_canonical_committed_tip(highest_qc)
                     && !self.cached_new_view_qc_extends_committed_frontier(
                         vote.height,
                         existing.view.saturating_add(1),
@@ -4252,7 +4468,7 @@ impl Actor {
             )
         };
         let canonical = super::roster::canonicalize_roster_for_mode(filtered, consensus_mode);
-        (!canonical.is_empty()).then_some(canonical)
+        Some(canonical)
     }
 
     pub(super) fn roster_for_new_view_with_mode(

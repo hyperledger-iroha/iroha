@@ -8,9 +8,13 @@ This slice models `ConsensusEngine::on_committed_block(...)`, the boundary
 where storage/application finality notifications are reflected back into the
 pure consensus engine. A fresh committed-block notification records the height.
 A fresh notification carrying a validator-set change may emit activation only
-when the change activates at the next height. Duplicate same-height
-notifications are idempotent, and conflicting same-height notifications cannot
-overwrite the recorded commit or activate a validator set.
+when the change activates at the next height. This slice treats duplicate
+reconfiguration notifications as already-scheduled duplicates and keeps them
+idempotent; `SumeragiEngineReconfigurationDedupGate.tla` covers the distinct
+plain-commit-then-reconfiguration replay case where the same committed hash may
+activate later metadata if no change for that activation height is pending.
+Conflicting same-height notifications cannot overwrite the recorded commit or
+activate a validator set.
 
 The model enumerates the finite input shapes that matter for this boundary.
 The implementation transition records whether each notification inserted a

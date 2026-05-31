@@ -207,6 +207,19 @@ TypeInvariant ==
   /\ retry_requested \in BOOLEAN
   /\ retry_after_proposal \in BOOLEAN
 
+CasePartitionExact ==
+  /\ Cases = PreserveCases \union RetryCases
+  /\ PreserveCases \intersect RetryCases = {}
+  /\ PreserveCases =
+       NoQueuePreserveCases \union ModeFlipCases
+       \union CommitInflightPreserveCases \union DeadlineNotDueCases
+       \union AllowedPreserveCases \union HardBackpressureCases
+  /\ AllowedPreserveCases = HealthyDueCases \union PacingAllowedCases
+  /\ AllowedPreserveCases \intersect HardBackpressureCases = {}
+  /\ RetryCases =
+       RetryAllowedCases \union RetryNotSkippedCases \union RetryNoQueueCases
+       \union RetryPendingBlocksCases \union RetryCommitInflightCases
+
 PreserveMatchesSpec ==
   candidate = "none" \/ preserve_budget = SpecPreserveBudget(candidate)
 
@@ -278,6 +291,7 @@ RetrySuppressorsStayQuiet ==
     /\ ~retry_after_proposal
 
 Safety ==
+  /\ CasePartitionExact
   /\ PreserveMatchesSpec
   /\ IdleRepairDeferralMatchesSpec
   /\ ProposalSlotReservationMatchesSpec

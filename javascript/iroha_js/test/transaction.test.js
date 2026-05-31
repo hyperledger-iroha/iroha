@@ -128,7 +128,7 @@ test("submitSignedTransaction submits payload and polls status until terminal", 
     }
     if (url.endsWith("/v1/pipeline/transactions")) {
       assert.ok(Buffer.isBuffer(init.body));
-      assert.deepEqual([...init.body.values()], [...signedBytes.values()]);
+      assert.deepEqual([...init.body.values()], [0x01, ...signedBytes.values()]);
       return submissionResponse;
     }
     return statusQueue.shift() ?? statusQueue[statusQueue.length - 1];

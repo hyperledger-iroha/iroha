@@ -91,9 +91,7 @@ use iroha_data_model::query::{self as dm_query, ErasedIterQuery};
 use iroha_data_model::{block::decode_framed_signed_block, prelude::*, transaction::Executable};
 use iroha_data_model::{
     isi::RegisterPeerWithPop,
-    parameter::system::{
-        SumeragiNposParameters, confidential_metadata, consensus_metadata, crypto_metadata,
-    },
+    parameter::system::{confidential_metadata, consensus_metadata, crypto_metadata},
 };
 use iroha_futures::supervisor::{Child, OnShutdown, ShutdownSignal, Supervisor};
 use iroha_genesis::{
@@ -1010,11 +1008,11 @@ impl ConsensusIngressLimiter {
                 BlockMessage::RbcInit(_)
                 | BlockMessage::RbcInitRequest(_)
                 | BlockMessage::RbcChunkRequest(_)
+                | BlockMessage::RbcChunk(_)
+                | BlockMessage::RbcChunkCompact(_)
                 | BlockMessage::RbcReady(_)
                 | BlockMessage::RbcDeliver(_) => IngressPolicy::critical_with_rbc_sessions(),
-                BlockMessage::RbcChunk(_)
-                | BlockMessage::RbcChunkCompact(_)
-                | BlockMessage::BlockBodyResponse(_) => IngressPolicy::bulk(),
+                BlockMessage::BlockBodyResponse(_) => IngressPolicy::bulk(),
                 BlockMessage::ConsensusParams(_) | BlockMessage::KuraReplicaAdvert(_) => {
                     IngressPolicy::limited()
                 }
@@ -2410,12 +2408,26 @@ fn sumeragi_block_message_requires_blocking(
         BlockMessage::BlockSyncUpdate(_)
             | BlockMessage::BlockCreated(_)
             | BlockMessage::Proposal(_)
+            | BlockMessage::FetchPendingBlock(
+                iroha_core::sumeragi::message::FetchPendingBlock {
+                    priority: Some(iroha_core::sumeragi::message::FetchPendingBlockPriority::Consensus),
+                    ..
+                }
+            )
+            | BlockMessage::FetchPendingBlock(
+                iroha_core::sumeragi::message::FetchPendingBlock {
+                    commit_qc_only: Some(true),
+                    ..
+                }
+            )
             | BlockMessage::QcVote(_)
             | BlockMessage::Qc(_)
             | BlockMessage::CertifiedBlockFetch(_)
             | BlockMessage::RbcInit(_)
             | BlockMessage::RbcInitRequest(_)
             | BlockMessage::RbcChunkRequest(_)
+            | BlockMessage::RbcChunk(_)
+            | BlockMessage::RbcChunkCompact(_)
             | BlockMessage::RbcReady(_)
             | BlockMessage::RbcDeliver(_)
     )
@@ -2439,7 +2451,8 @@ mod network_relay_tests {
                 ExecWitnessMsg, Phase, Proposal, QcHeaderRef, RbcInit,
             },
             message::{
-                BlockMessage, BlockMessageWire, BlockSyncUpdate, ConsensusParamsAdvert, ControlFlow,
+                BlockMessage, BlockMessageWire, BlockSyncUpdate, ConsensusParamsAdvert,
+                ControlFlow, FetchPendingBlock, FetchPendingBlockPriority,
             },
         },
         torii_proxy::{
@@ -2534,6 +2547,48 @@ mod network_relay_tests {
                 .clone(),
         });
         assert!(sumeragi_block_message_requires_blocking(&init));
+
+        let chunk = iroha_core::sumeragi::consensus::RbcChunk {
+            block_hash: signed.hash(),
+            height: signed.header().height().get(),
+            view: signed.header().view_change_index(),
+            epoch: 0,
+            idx: 0,
+            bytes: vec![0x55],
+        };
+        assert!(sumeragi_block_message_requires_blocking(
+            &BlockMessage::RbcChunk(chunk.clone())
+        ));
+        assert!(sumeragi_block_message_requires_blocking(
+            &BlockMessage::from_rbc_chunk(chunk)
+        ));
+
+        let requester = PeerId::new(KeyPair::random().public_key().clone());
+        let fetch = FetchPendingBlock {
+            requester,
+            block_hash: signed.hash(),
+            height: signed.header().height().get(),
+            view: signed.header().view_change_index(),
+            priority: Some(FetchPendingBlockPriority::Consensus),
+            requester_roster_proof_known: None,
+            commit_qc_only: Some(true),
+        };
+        assert!(sumeragi_block_message_requires_blocking(
+            &BlockMessage::FetchPendingBlock(fetch)
+        ));
+
+        let background_fetch = FetchPendingBlock {
+            requester: PeerId::new(KeyPair::random().public_key().clone()),
+            block_hash: signed.hash(),
+            height: signed.header().height().get(),
+            view: signed.header().view_change_index(),
+            priority: None,
+            requester_roster_proof_known: None,
+            commit_qc_only: None,
+        };
+        assert!(!sumeragi_block_message_requires_blocking(
+            &BlockMessage::FetchPendingBlock(background_fetch)
+        ));
 
         let advert = ConsensusParamsAdvert {
             collectors_k: 1,
@@ -2952,6 +3007,19 @@ mod network_relay_tests {
         sumeragi_msg(BlockMessage::RbcChunk(chunk))
     }
 
+    fn rbc_chunk_compact_msg(tag: u8, height: u64, view: u64) -> iroha_core::NetworkMessage {
+        let block_hash = HashOf::<BlockHeader>::from_untyped_unchecked(Hash::prehashed([tag; 32]));
+        let chunk = iroha_core::sumeragi::consensus::RbcChunk {
+            block_hash,
+            height,
+            view,
+            epoch: 0,
+            idx: 0,
+            bytes: vec![0xCE; 4],
+        };
+        sumeragi_msg(BlockMessage::from_rbc_chunk(chunk))
+    }
+
     #[test]
     fn block_sync_request_drops_mismatched_peer_id() {
         let peer = sample_peer();
@@ -3242,7 +3310,46 @@ mod network_relay_tests {
         let peer = sample_peer();
         assert_bulk(&peer, &block_sync_update_msg());
         assert_bulk(&peer, &exec_witness_msg());
-        assert_bulk(&peer, &rbc_chunk_msg(0x01, 2, 0));
+    }
+
+    #[test]
+    fn consensus_ingress_rbc_chunk_uses_critical_session_bucket() {
+        let peer = sample_peer();
+        let standard = consensus_params_msg();
+        let chunk = rbc_chunk_msg(0x01, 2, 0);
+        let compact_chunk = rbc_chunk_compact_msg(0x02, 3, 0);
+        let mut limiter = ConsensusIngressLimiter::new(
+            Some(BucketConfig {
+                rate_per_sec: nz_u32(1),
+                burst: nz_u32(1),
+            }),
+            None,
+            None,
+            None,
+            Some(BucketConfig {
+                rate_per_sec: nz_u32(1),
+                burst: nz_u32(1),
+            }),
+            None,
+            0,
+            Duration::from_secs(1),
+            PenaltyConfig {
+                threshold: 0,
+                window: Duration::from_secs(1),
+                cooldown: Duration::from_secs(1),
+            },
+        );
+
+        assert_eq!(limiter.should_drop(&peer, &standard, 1), None);
+        assert_eq!(
+            limiter.should_drop(&peer, &standard, 1),
+            Some(ConsensusIngressDropReason::Rate)
+        );
+        assert_eq!(limiter.should_drop(&peer, &chunk, 1), None);
+        assert_eq!(
+            limiter.should_drop(&peer, &compact_chunk, 1),
+            Some(ConsensusIngressDropReason::Rate)
+        );
     }
 
     #[test]
@@ -3566,6 +3673,23 @@ fn snapshot_read_error_is_recoverable(error: &TryReadSnapshotError) -> bool {
     }
 }
 
+fn apply_state_config_before_kura_replay(
+    state: &mut State,
+    config: &Config,
+) -> ReportResult<(), StartError> {
+    // Apply runtime knobs that affect deterministic replay before Kura catch-up.
+    // In particular, the pacing governor can update on-chain Sumeragi parameters
+    // from block metadata during `apply_without_execution`.
+    state.set_crypto(config.crypto.clone());
+    state.set_pipeline(config.pipeline.clone());
+    state.set_zk(config.zk.clone());
+    state.set_sumeragi_pacing_governor(config.sumeragi.pacing_governor);
+    state
+        .set_nexus(config.nexus.clone())
+        .map_err(|err| Report::new(err).change_context(StartError::InitKura))
+        .map_err(|report| report.attach("failed to apply Nexus lane catalog/lifecycle at startup"))
+}
+
 #[cfg(test)]
 mod snapshot_read_error_tests {
     use super::*;
@@ -3838,6 +3962,7 @@ impl Iroha {
             config.genesis.public_key.clone()
         };
 
+        let mut loaded_state_from_snapshot = false;
         let mut state = match try_read_snapshot(
             config.snapshot.store_dir.resolve_relative_path(),
             &kura,
@@ -3854,6 +3979,7 @@ impl Iroha {
                     at_height = state.committed_height(),
                     "Successfully loaded the state from a snapshot"
                 );
+                loaded_state_from_snapshot = true;
                 state
             }
             Err(TryReadSnapshotError::NotFound) => {
@@ -3909,7 +4035,9 @@ impl Iroha {
                 return Err(Report::new(error).change_context(StartError::InitKura));
             }
         };
-        if snapshot_missing_public_lane_state(&state, stored_genesis_block.as_ref()) {
+        if loaded_state_from_snapshot
+            && snapshot_missing_public_lane_state(&state, stored_genesis_block.as_ref())
+        {
             iroha_logger::warn!(
                 "Loaded snapshot is missing public-lane staking state; accepting snapshot to avoid replaying an existing Taira ledger from genesis"
             );
@@ -3920,20 +4048,7 @@ impl Iroha {
         }
         // Thread chain id into state for VRF prehash binding.
         state.chain_id = config.common.chain.clone();
-        // Apply crypto config before replay/genesis validation so allowed_signing is respected.
-        state.set_crypto(config.crypto.clone());
-        // Apply pipeline config before replay so config-backed execution policy such as
-        // pipeline.gas is identical to the live path that originally committed the block.
-        state.set_pipeline(config.pipeline.clone());
-        // Apply ZK config before replay/genesis validation so confidential feature digests match
-        // the runtime policy advertised by peer configs and committed by signed genesis.
-        state.set_zk(config.zk.clone());
-        state
-            .set_nexus(config.nexus.clone())
-            .map_err(|err| Report::new(err).change_context(StartError::InitKura))
-            .map_err(|report| {
-                report.attach("failed to apply Nexus lane catalog/lifecycle at startup")
-            })?;
+        apply_state_config_before_kura_replay(&mut state, &config)?;
 
         let state_height = state.committed_height();
         if block_count.0 > state_height {
@@ -8457,116 +8572,13 @@ fn consensus_entry_caps(
         "Npos" => iroha_core::sumeragi::consensus::NPOS_TAG,
         _ => iroha_core::sumeragi::consensus::PERMISSIONED_TAG,
     };
-    let use_npos = mode_tag == iroha_core::sumeragi::consensus::NPOS_TAG;
-
-    let npos_payload = params
-        .custom()
-        .get(&SumeragiNposParameters::parameter_id())
-        .and_then(SumeragiNposParameters::from_custom_parameter);
-    let epoch_length_blocks = if use_npos {
-        npos_payload.as_ref().map_or(
-            sumeragi.npos.epoch_length_blocks,
-            SumeragiNposParameters::epoch_length_blocks,
-        )
-    } else {
-        0
-    };
-    let npos_timeouts = if use_npos {
-        let min_finality_ms = params.sumeragi().min_finality_ms.max(1);
-        let mut block_time_ms = params.sumeragi().block_time_ms.max(1);
-        if block_time_ms < min_finality_ms {
-            block_time_ms = min_finality_ms;
-        }
-        Some(
-            sumeragi
-                .npos
-                .timeouts_overrides
-                .resolve(Duration::from_millis(block_time_ms)),
-        )
-    } else {
-        None
-    };
-    let npos_params = if use_npos {
-        let timeouts = npos_timeouts.expect("timeouts computed for NPoS");
-        let duration_ms = |value: Duration| -> u64 {
-            let ms = value.as_millis();
-            u64::try_from(ms).expect("NPoS timeout exceeds millisecond range")
-        };
-        Some(match npos_payload {
-            Some(npos) => iroha_data_model::block::consensus::NposGenesisParams {
-                block_time_ms: params.sumeragi().block_time_ms,
-                timeout_propose_ms: duration_ms(timeouts.propose),
-                timeout_prevote_ms: duration_ms(timeouts.prevote),
-                timeout_precommit_ms: duration_ms(timeouts.precommit),
-                timeout_commit_ms: duration_ms(timeouts.commit),
-                timeout_da_ms: duration_ms(timeouts.da),
-                timeout_aggregator_ms: duration_ms(timeouts.aggregator),
-                k_aggregators: npos.k_aggregators(),
-                redundant_send_r: npos.redundant_send_r(),
-                epoch_seed: npos.epoch_seed(),
-                vrf_commit_window_blocks: npos.vrf_commit_window_blocks(),
-                vrf_reveal_window_blocks: npos.vrf_reveal_window_blocks(),
-                max_validators: npos.max_validators(),
-                min_self_bond: npos.min_self_bond(),
-                min_nomination_bond: npos.min_nomination_bond(),
-                max_nominator_concentration_pct: npos.max_nominator_concentration_pct(),
-                seat_band_pct: npos.seat_band_pct,
-                max_entity_correlation_pct: npos.max_entity_correlation_pct,
-                finality_margin_blocks: npos.finality_margin_blocks(),
-                evidence_horizon_blocks: npos.evidence_horizon_blocks(),
-                activation_lag_blocks: npos.activation_lag_blocks(),
-                slashing_delay_blocks: npos.slashing_delay_blocks(),
-            },
-            None => {
-                let chain_hash = iroha_crypto::Hash::new(chain_id.clone().into_inner().as_bytes());
-                let epoch_seed: [u8; 32] = chain_hash.into();
-                iroha_data_model::block::consensus::NposGenesisParams {
-                    block_time_ms: params.sumeragi().block_time_ms,
-                    timeout_propose_ms: duration_ms(timeouts.propose),
-                    timeout_prevote_ms: duration_ms(timeouts.prevote),
-                    timeout_precommit_ms: duration_ms(timeouts.precommit),
-                    timeout_commit_ms: duration_ms(timeouts.commit),
-                    timeout_da_ms: duration_ms(timeouts.da),
-                    timeout_aggregator_ms: duration_ms(timeouts.aggregator),
-                    k_aggregators: u16::try_from(sumeragi.collectors.k)
-                        .expect("sumeragi.collectors.k must fit into u16"),
-                    redundant_send_r: sumeragi.collectors.redundant_send_r,
-                    epoch_seed,
-                    vrf_commit_window_blocks: sumeragi.npos.vrf.commit_window_blocks,
-                    vrf_reveal_window_blocks: sumeragi.npos.vrf.reveal_window_blocks,
-                    max_validators: sumeragi.npos.election.max_validators,
-                    min_self_bond: sumeragi.npos.election.min_self_bond,
-                    min_nomination_bond: sumeragi.npos.election.min_nomination_bond,
-                    max_nominator_concentration_pct: sumeragi
-                        .npos
-                        .election
-                        .max_nominator_concentration_pct,
-                    seat_band_pct: sumeragi.npos.election.seat_band_pct,
-                    max_entity_correlation_pct: sumeragi.npos.election.max_entity_correlation_pct,
-                    finality_margin_blocks: sumeragi.npos.election.finality_margin_blocks,
-                    evidence_horizon_blocks: sumeragi.npos.reconfig.evidence_horizon_blocks,
-                    activation_lag_blocks: sumeragi.npos.reconfig.activation_lag_blocks,
-                    slashing_delay_blocks: sumeragi.npos.reconfig.slashing_delay_blocks,
-                }
-            }
-        })
-    } else {
-        None
-    };
-
-    let consensus_params = iroha_data_model::block::consensus::ConsensusGenesisParams {
-        min_finality_ms: params.sumeragi().min_finality_ms,
-        block_time_ms: params.sumeragi().block_time_ms,
-        commit_time_ms: params.sumeragi().commit_time_ms,
-        max_clock_drift_ms: params.sumeragi().max_clock_drift_ms,
-        collectors_k: params.sumeragi().collectors_k,
-        redundant_send_r: params.sumeragi().collectors_redundant_send_r,
-        block_max_transactions: params.block().max_transactions().get(),
-        da_enabled: params.sumeragi().da_enabled,
-        epoch_length_blocks,
-        bls_domain: entry.bls_domain.clone(),
-        npos: npos_params,
-    };
+    let consensus_params = iroha_core::sumeragi::consensus::consensus_genesis_params_from_parameters(
+        chain_id,
+        &mode_tag,
+        entry.bls_domain.clone(),
+        params,
+        sumeragi,
+    );
 
     let fingerprint = iroha_core::sumeragi::consensus::compute_consensus_fingerprint_from_params(
         chain_id,
@@ -8783,114 +8795,13 @@ fn verify_genesis_metadata(
     ensure_crypto_snapshot_matches_config(&manifest_crypto, config)
         .map_err(|err| Report::new(MainError::Config).attach(err))?;
 
-    let use_npos = mode_tag == iroha_core::sumeragi::consensus::NPOS_TAG;
-    let npos_payload = params
-        .custom()
-        .get(&SumeragiNposParameters::parameter_id())
-        .and_then(SumeragiNposParameters::from_custom_parameter);
-    let epoch_length_blocks = if use_npos {
-        npos_payload.as_ref().map_or(
-            config.sumeragi.npos.epoch_length_blocks,
-            SumeragiNposParameters::epoch_length_blocks,
-        )
-    } else {
-        0
-    };
-    let npos_params = if use_npos {
-        let min_finality_ms = params.sumeragi().min_finality_ms.max(1);
-        let mut block_time_ms = params.sumeragi().block_time_ms.max(1);
-        if block_time_ms < min_finality_ms {
-            block_time_ms = min_finality_ms;
-        }
-        let timeouts = config
-            .sumeragi
-            .npos
-            .timeouts_overrides
-            .resolve(Duration::from_millis(block_time_ms));
-        let duration_ms = |value: Duration| -> u64 {
-            let ms = value.as_millis();
-            u64::try_from(ms).expect("NPoS timeout exceeds millisecond range")
-        };
-        Some(match npos_payload {
-            Some(npos) => iroha_data_model::block::consensus::NposGenesisParams {
-                block_time_ms: params.sumeragi().block_time_ms,
-                timeout_propose_ms: duration_ms(timeouts.propose),
-                timeout_prevote_ms: duration_ms(timeouts.prevote),
-                timeout_precommit_ms: duration_ms(timeouts.precommit),
-                timeout_commit_ms: duration_ms(timeouts.commit),
-                timeout_da_ms: duration_ms(timeouts.da),
-                timeout_aggregator_ms: duration_ms(timeouts.aggregator),
-                k_aggregators: npos.k_aggregators(),
-                redundant_send_r: npos.redundant_send_r(),
-                epoch_seed: npos.epoch_seed(),
-                vrf_commit_window_blocks: npos.vrf_commit_window_blocks(),
-                vrf_reveal_window_blocks: npos.vrf_reveal_window_blocks(),
-                max_validators: npos.max_validators(),
-                min_self_bond: npos.min_self_bond(),
-                min_nomination_bond: npos.min_nomination_bond(),
-                max_nominator_concentration_pct: npos.max_nominator_concentration_pct(),
-                seat_band_pct: npos.seat_band_pct(),
-                max_entity_correlation_pct: npos.max_entity_correlation_pct(),
-                finality_margin_blocks: npos.finality_margin_blocks(),
-                evidence_horizon_blocks: npos.evidence_horizon_blocks(),
-                activation_lag_blocks: npos.activation_lag_blocks(),
-                slashing_delay_blocks: npos.slashing_delay_blocks(),
-            },
-            None => {
-                let chain_hash =
-                    iroha_crypto::Hash::new(config.common.chain.clone().into_inner().as_bytes());
-                let epoch_seed: [u8; 32] = chain_hash.into();
-                iroha_data_model::block::consensus::NposGenesisParams {
-                    block_time_ms: params.sumeragi().block_time_ms,
-                    timeout_propose_ms: duration_ms(timeouts.propose),
-                    timeout_prevote_ms: duration_ms(timeouts.prevote),
-                    timeout_precommit_ms: duration_ms(timeouts.precommit),
-                    timeout_commit_ms: duration_ms(timeouts.commit),
-                    timeout_da_ms: duration_ms(timeouts.da),
-                    timeout_aggregator_ms: duration_ms(timeouts.aggregator),
-                    k_aggregators: u16::try_from(config.sumeragi.collectors.k)
-                        .expect("sumeragi.collectors.k must fit into u16"),
-                    redundant_send_r: config.sumeragi.collectors.redundant_send_r,
-                    epoch_seed,
-                    vrf_commit_window_blocks: config.sumeragi.npos.vrf.commit_window_blocks,
-                    vrf_reveal_window_blocks: config.sumeragi.npos.vrf.reveal_window_blocks,
-                    max_validators: config.sumeragi.npos.election.max_validators,
-                    min_self_bond: config.sumeragi.npos.election.min_self_bond,
-                    min_nomination_bond: config.sumeragi.npos.election.min_nomination_bond,
-                    max_nominator_concentration_pct: config
-                        .sumeragi
-                        .npos
-                        .election
-                        .max_nominator_concentration_pct,
-                    seat_band_pct: config.sumeragi.npos.election.seat_band_pct,
-                    max_entity_correlation_pct: config
-                        .sumeragi
-                        .npos
-                        .election
-                        .max_entity_correlation_pct,
-                    finality_margin_blocks: config.sumeragi.npos.election.finality_margin_blocks,
-                    evidence_horizon_blocks: config.sumeragi.npos.reconfig.evidence_horizon_blocks,
-                    activation_lag_blocks: config.sumeragi.npos.reconfig.activation_lag_blocks,
-                    slashing_delay_blocks: config.sumeragi.npos.reconfig.slashing_delay_blocks,
-                }
-            }
-        })
-    } else {
-        None
-    };
-    let consensus_params = iroha_data_model::block::consensus::ConsensusGenesisParams {
-        min_finality_ms: params.sumeragi().min_finality_ms,
-        block_time_ms: params.sumeragi().block_time_ms,
-        commit_time_ms: params.sumeragi().commit_time_ms,
-        max_clock_drift_ms: params.sumeragi().max_clock_drift_ms,
-        collectors_k: params.sumeragi().collectors_k,
-        redundant_send_r: params.sumeragi().collectors_redundant_send_r,
-        block_max_transactions: params.block().max_transactions().get(),
-        da_enabled: params.sumeragi().da_enabled,
-        epoch_length_blocks,
-        bls_domain: matched_meta.bls_domain.clone(),
-        npos: npos_params,
-    };
+    let consensus_params = iroha_core::sumeragi::consensus::consensus_genesis_params_from_parameters(
+        &config.common.chain,
+        mode_tag,
+        matched_meta.bls_domain.clone(),
+        &params,
+        &config.sumeragi,
+    );
     let computed_fp = iroha_core::sumeragi::consensus::compute_consensus_fingerprint_from_params(
         &config.common.chain,
         &consensus_params,
@@ -9147,6 +9058,56 @@ mod tests {
         #[test]
         fn clamps_zero_to_one_core() {
             assert_eq!(scheduler_banner_line(0), "Using 1 core");
+        }
+    }
+
+    mod replay_startup_config {
+        use super::*;
+
+        #[test]
+        fn applies_pacing_governor_before_kura_replay() {
+            let config_table = toml::toml! {
+                chain = "00000000-0000-0000-0000-000000000000"
+                public_key = "ea01309060D021340617E9554CCBC2CF3CC3DB922A9BA323ABDF7C271FCC6EF69BE7A8DEBCA7D9E96C0F0089ABA22CDAADE4A2"
+                private_key = "8926201CA347641228C3B79AA43839DEDC85FA51C0E8B9B6A00F6B0D6B0423E902973F"
+
+                [network]
+                address = "addr:127.0.0.1:1337#8F78"
+                public_address = "addr:127.0.0.1:1337#8F78"
+
+                [genesis]
+                public_key = "ed01204164BF554923ECE1FD412D241036D863A6AE430476C898248B8237D77534CFC4"
+                file = "./genesis.signed.nrt"
+
+                [streaming]
+                identity_public_key = "ed01208BA62848CF767D72E7F7F4B9D2D7BA07FEE33760F79ABE5597A51520E292A0CB"
+                identity_private_key = "8026208F4C15E5D664DA3F13778801D23D4E89B76E94C1B94B389544168B6CB894F84F"
+
+                [torii]
+                address = "addr:127.0.0.1:8080#8942"
+            };
+            let mut config = ConfigReader::new()
+                .with_toml_source(TomlSource::inline(config_table))
+                .read_and_complete::<UserConfig>()
+                .expect("sample config should be readable")
+                .parse()
+                .expect("sample config should parse");
+            config.sumeragi.pacing_governor =
+                iroha_config::parameters::actual::SumeragiPacingGovernor {
+                    window_blocks: 7,
+                    step_up_bps: 1_234,
+                    ..Default::default()
+                };
+
+            let kura = Kura::blank_kura_for_testing();
+            let query = LiveQueryStore::start_test();
+            let mut state = State::new_for_testing(World::new(), kura, query);
+
+            apply_state_config_before_kura_replay(&mut state, &config)
+                .expect("pre-replay config should apply");
+
+            assert_eq!(state.pacing_governor.window_blocks, 7);
+            assert_eq!(state.pacing_governor.step_up_bps, 1_234);
         }
     }
 

@@ -1924,6 +1924,7 @@ final class OfflineNoteV2Tests: XCTestCase {
             offlinePublicKey: offlinePublicKey,
             deviceBinding: [
                 "device_id": "device-1",
+                "attestation_key_id": "attestation-key-slash",
                 "offline_public_key": offlinePublicKey,
                 "signature_base64": "ABC//DEF/GHI/JKL=",
             ]

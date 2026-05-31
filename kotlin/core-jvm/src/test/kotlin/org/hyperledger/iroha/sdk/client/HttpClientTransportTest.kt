@@ -22,6 +22,14 @@ import org.hyperledger.iroha.sdk.crypto.IrohaHash
 import org.hyperledger.iroha.sdk.core.model.TransactionPayload
 import org.hyperledger.iroha.sdk.norito.NoritoAdapters
 import org.hyperledger.iroha.sdk.norito.NoritoCodec
+import org.hyperledger.iroha.sdk.sccp.EvmSccpPublicInputsInput
+import org.hyperledger.iroha.sdk.sccp.EvmSccpSubmission
+import org.hyperledger.iroha.sdk.sccp.EvmSccpSubmissionInput
+import org.hyperledger.iroha.sdk.sccp.SccpEvm
+import org.hyperledger.iroha.sdk.sccp.SccpSourceProofs
+import org.hyperledger.iroha.sdk.sccp.SccpTron
+import org.hyperledger.iroha.sdk.sccp.TronSccpPublicInputsInput
+import org.hyperledger.iroha.sdk.sccp.TronSccpSubmissionInput
 import org.hyperledger.iroha.sdk.tx.SignedTransaction
 import org.hyperledger.iroha.sdk.tx.SignedTransactionHasher
 import org.hyperledger.iroha.sdk.tx.norito.NoritoJavaCodecAdapter
@@ -1153,6 +1161,486 @@ class HttpClientTransportTest {
         assertTrue(body.contentEquals(request.body))
     }
 
+    private val sccpTestMessageId = "11".repeat(32)
+    private val sccpTestCommitmentRoot = "33".repeat(32)
+    private val sccpTestTronNetworkId = "71".repeat(32)
+    private val sccpTestTronVerifierAddress = "TJRabPrwbZy45sbavfcjinPJC18kjpRTv8"
+    private val sccpTestTronVerifierCodeHash = "72".repeat(32)
+    private val sccpTestTronVerifierKeyHash = "73".repeat(32)
+    private val sccpTestEvmNetworkId = "aa".repeat(32)
+    private val sccpTestEvmVerifierAddress = "bb".repeat(20)
+    private val sccpTestEvmBridgeAddress = "cc".repeat(20)
+    private val sccpTestEvmVerifierCodeHash = "dd".repeat(32)
+    private val sccpTestEvmVerifierKeyHash = "ee".repeat(32)
+
+    private fun sampleSccpTronDestinationBindingHash(): String =
+        SccpSourceProofs.tronDestinationBindingHash(
+            networkId = "0x$sccpTestTronNetworkId",
+            verifierAddress = sccpTestTronVerifierAddress,
+            verifierCodeHash = "0x$sccpTestTronVerifierCodeHash",
+            verifierKeyHash = "0x$sccpTestTronVerifierKeyHash",
+        ).removePrefix("0x")
+
+    private fun abiWordHex(value: Int): String = value.toString(16).padStart(64, '0')
+
+    private fun sampleSccpProofHex(
+        messageId: String = sccpTestMessageId,
+        sourceDomain: Int = 0,
+        commitmentRoot: String = sccpTestCommitmentRoot,
+    ): String =
+        listOf(
+            abiWordHex(1),
+            messageId,
+            abiWordHex(sourceDomain),
+            commitmentRoot,
+            abiWordHex(1),
+            abiWordHex(2),
+            "1800deef121f1e76426a00665e5c4479674322d4f75edadd46debd5cd992f6ed",
+            "198e9393920d483a7260bfb731fb5d25f1aa493335a9e71297e485b7aef312c2",
+            "12c85ea5db8c6deb4aab71808dcb408fe3d1e7690c43d37b4ce6cc0166fa7daa",
+            "090689d0585ff075ec9e99ad690c3395bc4b313370b38ef355acdadcd122975b",
+            abiWordHex(1),
+            abiWordHex(2),
+        ).joinToString("")
+
+    private fun sccpMessageBundleJson(): String =
+        """{"version":1,"commitment_root":"$sccpTestCommitmentRoot","commitment":{"version":1,"kind":"Transfer","target_domain":5,"message_id":"$sccpTestMessageId","payload_hash":"${"22".repeat(32)}"}}"""
+
+    private fun sccpBridgeMessageBody(proofHex: String): ByteArray =
+        """{"authority":"alice","message_bundle":${sccpMessageBundleJson()},"proof_bytes_hex":"0x$proofHex"}""".toByteArray(StandardCharsets.UTF_8)
+
+    @Test
+    fun bridgeSubmitJsonHelpersPostRawProofAndMessagePayloads() {
+        val executor = StubResponseExecutor(200, """{"ok":true}""".toByteArray(StandardCharsets.UTF_8))
+        val transport = HttpClientTransport.withExecutor(
+            executor = executor,
+            config = ClientConfig.builder()
+                .setBaseUri(URI.create("https://127.0.0.1:8080/base"))
+                .build(),
+        )
+        val proofHex = sampleSccpProofHex()
+        val bindingHash = sampleSccpTronDestinationBindingHash()
+        val proofBody =
+            """{"authority":"alice","message_bundle":${sccpMessageBundleJson()},"network_id_hex":"0x$sccpTestTronNetworkId","verifier_code_hash_hex":"0x$sccpTestTronVerifierCodeHash","verifier_key_hash_hex":"0x$sccpTestTronVerifierKeyHash","expected_destination_binding_hash_hex":"0x$bindingHash","tron_verifier_address":"$sccpTestTronVerifierAddress","proof_bytes_hex":"0x$proofHex"}"""
+                .toByteArray(StandardCharsets.UTF_8)
+        val messageBody = """{"authority":"alice","message_bundle":{}}""".toByteArray(StandardCharsets.UTF_8)
+        val typedMessageBundle = linkedMapOf<String, Any?>(
+            "commitment_root" to sccpTestCommitmentRoot,
+            "commitment" to linkedMapOf<String, Any?>("message_id" to sccpTestMessageId),
+        )
+
+        val proofResponse = transport.postBridgeProofSubmitJson(proofBody).join()
+        val proofRequest = executor.lastRequest
+        assertEquals(200, proofResponse.statusCode)
+        assertEquals("POST", proofRequest.method)
+        assertEquals("https://127.0.0.1:8080/base/v1/bridge/proofs/submit", proofRequest.uri.toString())
+        assertEquals("application/json", proofRequest.headers["Content-Type"]?.first())
+        assertEquals("application/json", proofRequest.headers["Accept"]?.first())
+        assertTrue(proofBody.contentEquals(proofRequest.body))
+
+        val messageResponse = transport.postBridgeMessageSubmitJson(messageBody).join()
+        val messageRequest = executor.lastRequest
+        assertEquals(200, messageResponse.statusCode)
+        assertEquals("POST", messageRequest.method)
+        assertEquals("https://127.0.0.1:8080/base/v1/bridge/messages", messageRequest.uri.toString())
+        assertEquals("application/json", messageRequest.headers["Content-Type"]?.first())
+        assertEquals("application/json", messageRequest.headers["Accept"]?.first())
+        assertTrue(messageBody.contentEquals(messageRequest.body))
+
+        val typedResponse = transport.submitBridgeProof(
+            BridgeProofSubmitRequest(
+                authority = "alice",
+                messageBundle = typedMessageBundle,
+                networkIdHex = "0x$sccpTestTronNetworkId",
+                verifierCodeHashHex = "0x$sccpTestTronVerifierCodeHash",
+                verifierKeyHashHex = "0x$sccpTestTronVerifierKeyHash",
+                expectedDestinationBindingHashHex = "0x$bindingHash",
+                tronVerifierAddress = sccpTestTronVerifierAddress,
+                proofBytesHex = "0x$proofHex",
+            )
+        ).join()
+        val typedRequest = executor.lastRequest
+        val typedBody =
+            """{"authority":"alice","expected_destination_binding_hash_hex":"0x$bindingHash","message_bundle":{"commitment":{"message_id":"$sccpTestMessageId"},"commitment_root":"$sccpTestCommitmentRoot"},"network_id_hex":"0x$sccpTestTronNetworkId","proof_bytes_hex":"0x$proofHex","tron_verifier_address":"$sccpTestTronVerifierAddress","verifier_code_hash_hex":"0x$sccpTestTronVerifierCodeHash","verifier_key_hash_hex":"0x$sccpTestTronVerifierKeyHash"}"""
+        assertEquals(200, typedResponse.statusCode)
+        assertEquals("https://127.0.0.1:8080/base/v1/bridge/proofs/submit", typedRequest.uri.toString())
+        assertEquals(typedBody, String(typedRequest.body, StandardCharsets.UTF_8))
+    }
+
+    @Test
+    fun bridgeProofSubmitRequestBuildsSccpPayloadsFromSubmissions() {
+        val executor = StubResponseExecutor(200, """{"ok":true}""".toByteArray(StandardCharsets.UTF_8))
+        val transport = HttpClientTransport.withExecutor(
+            executor = executor,
+            config = ClientConfig.builder()
+                .setBaseUri(URI.create("https://127.0.0.1:8080/base"))
+                .build(),
+        )
+        val messageBundle = linkedMapOf<String, Any?>(
+            "commitment_root" to sccpTestCommitmentRoot,
+            "commitment" to linkedMapOf<String, Any?>("message_id" to sccpTestMessageId),
+        )
+        val proofBytes = hexToBytes(sampleSccpProofHex())
+        val evmBinding = SccpSourceProofs.evmDestinationBinding(
+            targetDomain = SccpSourceProofs.DOMAIN_ETH,
+            networkId = "0x${"71".repeat(32)}",
+            verifierAddress = "0x${"44".repeat(20)}",
+            bridgeAddress = "0x${"45".repeat(20)}",
+            verifierCodeHash = "0x${"72".repeat(32)}",
+            verifierKeyHash = "0x${"73".repeat(32)}",
+        )
+        val evmSubmission = SccpEvm.buildSubmission(
+            EvmSccpSubmissionInput(
+                publicInputs = EvmSccpPublicInputsInput(
+                    messageId = sccpTestMessageId,
+                    payloadHash = "22".repeat(32),
+                    targetDomain = SccpSourceProofs.DOMAIN_ETH,
+                    commitmentRoot = sccpTestCommitmentRoot,
+                    finalityHeight = "7",
+                    finalityBlockHash = "44".repeat(32),
+                ),
+                proofBytes = proofBytes,
+                statementHash = "0x${"55".repeat(32)}",
+                destinationBinding = evmBinding,
+            )
+        )
+
+        transport.submitBridgeProof(
+            BridgeProofSubmitRequest.fromEvmSccpSubmission(
+                authority = "alice",
+                messageBundle = messageBundle,
+                submission = evmSubmission,
+                destinationBinding = evmBinding,
+            )
+        ).join()
+
+        @Suppress("UNCHECKED_CAST")
+        val evmBody = JsonParser.parse(readBody(executor.lastRequest)) as Map<String, Any?>
+        assertEquals(evmBinding.networkId, evmBody["network_id_hex"])
+        assertEquals(evmBinding.verifierAddress, evmBody["verifier_address_hex"])
+        assertEquals(evmBinding.bridgeAddress, evmBody["bridge_address_hex"])
+        assertEquals(evmBinding.verifierCodeHash, evmBody["verifier_code_hash_hex"])
+        assertEquals(evmBinding.verifierKeyHash, evmBody["verifier_key_hash_hex"])
+        assertEquals(evmBinding.hash, evmBody["expected_destination_binding_hash_hex"])
+        assertEquals("0x${sampleSccpProofHex()}", evmBody["proof_bytes_hex"])
+        val malformedBundleError = assertFailsWith<IllegalArgumentException> {
+            BridgeProofSubmitRequest.fromEvmSccpSubmission(
+                authority = "alice",
+                messageBundle = emptyMap(),
+                submission = evmSubmission,
+                destinationBinding = evmBinding,
+            )
+        }
+        assertTrue(malformedBundleError.message?.contains("message_bundle.commitment.message_id") == true)
+        val invalidProofBytes = proofBytes.copyOf()
+        invalidProofBytes.fill(0, 4 * 32, 6 * 32)
+        val invalidEvmSubmission = EvmSccpSubmission(
+            version = evmSubmission.version,
+            proofFamily = evmSubmission.proofFamily,
+            verifierBackend = evmSubmission.verifierBackend,
+            platformPayload = evmSubmission.platformPayload,
+            envelopeEncoding = evmSubmission.envelopeEncoding,
+            submissionKind = evmSubmission.submissionKind,
+            verifierEntrypoint = evmSubmission.verifierEntrypoint,
+            contractMethod = evmSubmission.contractMethod,
+            functionSelector = evmSubmission.functionSelector,
+            sourceDomain = evmSubmission.sourceDomain,
+            targetDomain = evmSubmission.targetDomain,
+            publicInputs = evmSubmission.publicInputs,
+            publicInputWords = evmSubmission.publicInputWords,
+            publicSignalWords = evmSubmission.publicSignalWords,
+            statementHash = evmSubmission.statementHash,
+            destinationBindingHash = evmSubmission.destinationBindingHash,
+            arguments = evmSubmission.arguments,
+            callDataHex = evmSubmission.callDataHex,
+            envelopeHex = evmSubmission.envelopeHex,
+            proofBytes = invalidProofBytes,
+            publicInputWordsBytes = evmSubmission.publicInputWordsBytes,
+            callData = evmSubmission.callData,
+        )
+        val invalidProofError = assertFailsWith<IllegalArgumentException> {
+            BridgeProofSubmitRequest.fromEvmSccpSubmission(
+                authority = "alice",
+                messageBundle = messageBundle,
+                submission = invalidEvmSubmission,
+                destinationBinding = evmBinding,
+            )
+        }
+        assertTrue(invalidProofError.message?.contains("proof_bytes_hex.a") == true)
+
+        val tronBinding = SccpSourceProofs.tronDestinationBinding(
+            targetDomain = SccpSourceProofs.DOMAIN_TRON,
+            networkId = "0x${"81".repeat(32)}",
+            verifierAddress = "TJRabPrwbZy45sbavfcjinPJC18kjpRTv8",
+            verifierCodeHash = "0x${"82".repeat(32)}",
+            verifierKeyHash = "0x${"83".repeat(32)}",
+        )
+        val tronSubmission = SccpTron.buildSubmission(
+            TronSccpSubmissionInput(
+                publicInputs = TronSccpPublicInputsInput(
+                    messageId = sccpTestMessageId,
+                    payloadHash = "22".repeat(32),
+                    targetDomain = SccpSourceProofs.DOMAIN_TRON,
+                    commitmentRoot = sccpTestCommitmentRoot,
+                    finalityHeight = "7",
+                    finalityBlockHash = "44".repeat(32),
+                ),
+                proofBytes = proofBytes,
+                statementHash = "0x${"66".repeat(32)}",
+                destinationBinding = tronBinding,
+            )
+        )
+
+        transport.submitBridgeProof(
+            BridgeProofSubmitRequest.fromTronSccpSubmission(
+                authority = "alice",
+                messageBundle = messageBundle,
+                submission = tronSubmission,
+                destinationBinding = tronBinding,
+            )
+        ).join()
+
+        @Suppress("UNCHECKED_CAST")
+        val tronBody = JsonParser.parse(readBody(executor.lastRequest)) as Map<String, Any?>
+        assertEquals(tronBinding.networkId, tronBody["network_id_hex"])
+        assertEquals(tronBinding.verifierAddress, tronBody["tron_verifier_address"])
+        assertEquals(tronBinding.verifierCodeHash, tronBody["verifier_code_hash_hex"])
+        assertEquals(tronBinding.verifierKeyHash, tronBody["verifier_key_hash_hex"])
+        assertEquals(tronBinding.hash, tronBody["expected_destination_binding_hash_hex"])
+        assertNull(tronBody["verifier_address_hex"])
+        assertNull(tronBody["bridge_address_hex"])
+        assertEquals("0x${sampleSccpProofHex()}", tronBody["proof_bytes_hex"])
+    }
+
+    @Test
+    fun bridgeSubmitJsonHelpersRejectPlaceholderProofBytesBeforeRequest() {
+        val executor = StubResponseExecutor(200, """{"ok":true}""".toByteArray(StandardCharsets.UTF_8))
+        val transport = HttpClientTransport.withExecutor(
+            executor = executor,
+            config = ClientConfig.builder()
+                .setBaseUri(URI.create("https://127.0.0.1:8080/base"))
+                .build(),
+        )
+        val proofBody = """{"proof_bytes_hex":"0x0000"}""".toByteArray(StandardCharsets.UTF_8)
+        val messageBody = """{"proof_bytes_hex":"0x0000"}""".toByteArray(StandardCharsets.UTF_8)
+        val shortBody = """{"proof_bytes_hex":"0x0102ab"}""".toByteArray(StandardCharsets.UTF_8)
+        val bindingHash = sampleSccpTronDestinationBindingHash()
+        val proofOnlyBody = """{"proof_bytes_hex":"0x${sampleSccpProofHex()}"}""".toByteArray(StandardCharsets.UTF_8)
+        val destinationOnlyBody =
+            """{"network_id_hex":"0x${"71".repeat(32)}","expected_destination_binding_hash_hex":"0x${"74".repeat(32)}"}"""
+                .toByteArray(StandardCharsets.UTF_8)
+        val invalidNetworkIdBody =
+            """{"network_id_hex":"0x1234","proof_bytes_hex":"0x${sampleSccpProofHex()}"}"""
+                .toByteArray(StandardCharsets.UTF_8)
+        val paddedNetworkIdBody =
+            """{"network_id_hex":" 0x${"71".repeat(32)}","verifier_code_hash_hex":"0x${"72".repeat(32)}","verifier_key_hash_hex":"0x${"73".repeat(32)}","expected_destination_binding_hash_hex":"0x${"74".repeat(32)}","tron_verifier_address":"TJRabPrwbZy45sbavfcjinPJC18kjpRTv8","proof_bytes_hex":"0x${sampleSccpProofHex()}"}"""
+                .toByteArray(StandardCharsets.UTF_8)
+        val paddedProofBytesBody =
+            """{"network_id_hex":"0x${"71".repeat(32)}","verifier_code_hash_hex":"0x${"72".repeat(32)}","verifier_key_hash_hex":"0x${"73".repeat(32)}","expected_destination_binding_hash_hex":"0x${"74".repeat(32)}","tron_verifier_address":"TJRabPrwbZy45sbavfcjinPJC18kjpRTv8","proof_bytes_hex":"0x${sampleSccpProofHex()} "}"""
+                .toByteArray(StandardCharsets.UTF_8)
+        val zeroEvmVerifierBody =
+            """{"verifier_address_hex":"0x${"00".repeat(20)}","proof_bytes_hex":"0x${sampleSccpProofHex()}"}"""
+                .toByteArray(StandardCharsets.UTF_8)
+        val blankTronVerifierBody =
+            """{"tron_verifier_address":"   ","proof_bytes_hex":"0x${sampleSccpProofHex()}"}"""
+                .toByteArray(StandardCharsets.UTF_8)
+        val paddedTronVerifierBody =
+            """{"tron_verifier_address":" TJRabPrwbZy45sbavfcjinPJC18kjpRTv8","proof_bytes_hex":"0x${sampleSccpProofHex()}"}"""
+                .toByteArray(StandardCharsets.UTF_8)
+        val zeroTronVerifierBody =
+            """{"tron_verifier_address":"T9yD14Nj9j7xAB4dbGeiX9h8unkKHxuWwb","proof_bytes_hex":"0x${sampleSccpProofHex()}"}"""
+                .toByteArray(StandardCharsets.UTF_8)
+        val invalidTronVerifierBody =
+            """{"tron_verifier_address":"TJRabPrwbZy45sbavfcjinPJC18kjpRTv9","proof_bytes_hex":"0x${sampleSccpProofHex()}"}"""
+                .toByteArray(StandardCharsets.UTF_8)
+        val wrongSourceDomainDestinationBody =
+            """{"authority":"alice","network_id_hex":"0x${"71".repeat(32)}","verifier_code_hash_hex":"0x${"72".repeat(32)}","verifier_key_hash_hex":"0x${"73".repeat(32)}","expected_destination_binding_hash_hex":"0x${"74".repeat(32)}","tron_verifier_address":"TJRabPrwbZy45sbavfcjinPJC18kjpRTv8","proof_bytes_hex":"0x${sampleSccpProofHex(sourceDomain = 5)}"}"""
+                .toByteArray(StandardCharsets.UTF_8)
+        val missingBundleContextBody =
+            """{"authority":"alice","message_bundle":{},"network_id_hex":"0x${"71".repeat(32)}","verifier_code_hash_hex":"0x${"72".repeat(32)}","verifier_key_hash_hex":"0x${"73".repeat(32)}","expected_destination_binding_hash_hex":"0x${"74".repeat(32)}","tron_verifier_address":"TJRabPrwbZy45sbavfcjinPJC18kjpRTv8","proof_bytes_hex":"0x${sampleSccpProofHex()}"}"""
+                .toByteArray(StandardCharsets.UTF_8)
+        val partialDestinationBody =
+            """{"network_id_hex":"0x${"71".repeat(32)}","expected_destination_binding_hash_hex":"0x${"74".repeat(32)}","proof_bytes_hex":"0x${sampleSccpProofHex()}"}"""
+                .toByteArray(StandardCharsets.UTF_8)
+        val mixedDestinationBody =
+            """{"network_id_hex":"0x${"71".repeat(32)}","verifier_address_hex":"0x${"22".repeat(20)}","bridge_address_hex":"0x${"33".repeat(20)}","verifier_code_hash_hex":"0x${"72".repeat(32)}","verifier_key_hash_hex":"0x${"73".repeat(32)}","expected_destination_binding_hash_hex":"0x${"74".repeat(32)}","tron_verifier_address":"TJRabPrwbZy45sbavfcjinPJC18kjpRTv8","proof_bytes_hex":"0x${sampleSccpProofHex()}"}"""
+                .toByteArray(StandardCharsets.UTF_8)
+        val mismatchedDestinationBindingBody =
+            """{"authority":"alice","message_bundle":${sccpMessageBundleJson()},"network_id_hex":"0x$sccpTestTronNetworkId","verifier_code_hash_hex":"0x$sccpTestTronVerifierCodeHash","verifier_key_hash_hex":"0x$sccpTestTronVerifierKeyHash","expected_destination_binding_hash_hex":"0x${"74".repeat(32)}","tron_verifier_address":"$sccpTestTronVerifierAddress","proof_bytes_hex":"0x${sampleSccpProofHex()}"}"""
+                .toByteArray(StandardCharsets.UTF_8)
+        val mismatchedEvmDestinationBindingBody =
+            """{"authority":"alice","message_bundle":${sccpMessageBundleJson()},"network_id_hex":"0x$sccpTestEvmNetworkId","verifier_address_hex":"0x$sccpTestEvmVerifierAddress","bridge_address_hex":"0x$sccpTestEvmBridgeAddress","verifier_code_hash_hex":"0x$sccpTestEvmVerifierCodeHash","verifier_key_hash_hex":"0x$sccpTestEvmVerifierKeyHash","expected_destination_binding_hash_hex":"0x${"74".repeat(32)}","proof_bytes_hex":"0x${sampleSccpProofHex()}"}"""
+                .toByteArray(StandardCharsets.UTF_8)
+        val fullDestinationNoBundleBody =
+            """{"authority":"alice","network_id_hex":"0x$sccpTestTronNetworkId","verifier_code_hash_hex":"0x$sccpTestTronVerifierCodeHash","verifier_key_hash_hex":"0x$sccpTestTronVerifierKeyHash","expected_destination_binding_hash_hex":"0x$bindingHash","tron_verifier_address":"$sccpTestTronVerifierAddress","proof_bytes_hex":"0x${sampleSccpProofHex()}"}"""
+                .toByteArray(StandardCharsets.UTF_8)
+        val burnDestinationBody =
+            """{"authority":"alice","burn_bundle":{},"network_id_hex":"0x$sccpTestTronNetworkId","verifier_code_hash_hex":"0x$sccpTestTronVerifierCodeHash","verifier_key_hash_hex":"0x$sccpTestTronVerifierKeyHash","expected_destination_binding_hash_hex":"0x$bindingHash","tron_verifier_address":"$sccpTestTronVerifierAddress","proof_bytes_hex":"0x${sampleSccpProofHex()}"}"""
+                .toByteArray(StandardCharsets.UTF_8)
+
+        val proofError = assertFailsWith<IllegalArgumentException> {
+            transport.postBridgeProofSubmitJson(proofBody)
+        }
+        assertTrue(proofError.message?.contains("proof_bytes_hex") == true)
+        assertTrue(proofError.message?.contains("all zero") == true)
+
+        val messageError = assertFailsWith<IllegalArgumentException> {
+            transport.postBridgeMessageSubmitJson(messageBody)
+        }
+        assertTrue(messageError.message?.contains("proof_bytes_hex") == true)
+        assertTrue(messageError.message?.contains("all zero") == true)
+
+        val shortProofError = assertFailsWith<IllegalArgumentException> {
+            transport.postBridgeProofSubmitJson(shortBody)
+        }
+        assertTrue(shortProofError.message?.contains("proof_bytes_hex") == true)
+        assertTrue(shortProofError.message?.contains("384-byte") == true)
+
+        val shortMessageError = assertFailsWith<IllegalArgumentException> {
+            transport.postBridgeMessageSubmitJson(shortBody)
+        }
+        assertTrue(shortMessageError.message?.contains("proof_bytes_hex") == true)
+        assertTrue(shortMessageError.message?.contains("384-byte") == true)
+
+        val offCurveC = sampleSccpProofHex().toCharArray()
+        offCurveC[11 * 64 + 63] = '3'
+        val offCurveCError = assertFailsWith<IllegalArgumentException> {
+            transport.postBridgeProofSubmitJson(
+                """{"network_id_hex":"0x${"71".repeat(32)}","expected_destination_binding_hash_hex":"0x${"74".repeat(32)}","proof_bytes_hex":"0x${String(offCurveC)}"}"""
+                    .toByteArray(StandardCharsets.UTF_8),
+            )
+        }
+        assertTrue(offCurveCError.message?.contains("proof_bytes_hex.c") == true)
+
+        val offCurveB = sampleSccpProofHex().toCharArray()
+        offCurveB[6 * 64 + 63] = if (offCurveB[6 * 64 + 63] == '0') '1' else '0'
+        val offCurveBError = assertFailsWith<IllegalArgumentException> {
+            transport.postBridgeMessageSubmitJson(
+                """{"verifier_address_hex":"0x${"22".repeat(20)}","proof_bytes_hex":"0x${String(offCurveB)}"}"""
+                    .toByteArray(StandardCharsets.UTF_8),
+            )
+        }
+        assertTrue(offCurveBError.message?.contains("proof_bytes_hex.b") == true)
+
+        val messageIdError = assertFailsWith<IllegalArgumentException> {
+            transport.postBridgeProofSubmitJson(
+                sccpBridgeMessageBody(sampleSccpProofHex(messageId = "44".repeat(32))),
+            )
+        }
+        assertTrue(messageIdError.message?.contains("proof_bytes_hex.message_id") == true)
+
+        val sourceDomainError = assertFailsWith<IllegalArgumentException> {
+            transport.postBridgeMessageSubmitJson(
+                sccpBridgeMessageBody(sampleSccpProofHex(sourceDomain = 5)),
+            )
+        }
+        assertTrue(sourceDomainError.message?.contains("proof_bytes_hex.source_domain") == true)
+
+        val commitmentRootError = assertFailsWith<IllegalArgumentException> {
+            transport.postBridgeMessageSubmitJson(
+                sccpBridgeMessageBody(sampleSccpProofHex(commitmentRoot = "55".repeat(32))),
+            )
+        }
+        assertTrue(commitmentRootError.message?.contains("proof_bytes_hex.commitment_root") == true)
+
+        val wrongSourceDomainDestinationError = assertFailsWith<IllegalArgumentException> {
+            transport.postBridgeProofSubmitJson(wrongSourceDomainDestinationBody)
+        }
+        assertTrue(wrongSourceDomainDestinationError.message?.contains("proof_bytes_hex.source_domain") == true)
+
+        val missingBundleContextError = assertFailsWith<IllegalArgumentException> {
+            transport.postBridgeProofSubmitJson(missingBundleContextBody)
+        }
+        assertTrue(missingBundleContextError.message?.contains("message_bundle.commitment.message_id") == true)
+
+        val proofOnlyError = assertFailsWith<IllegalArgumentException> {
+            transport.postBridgeProofSubmitJson(proofOnlyBody)
+        }
+        assertTrue(proofOnlyError.message?.contains("deployment destination fields") == true)
+
+        val partialDestinationError = assertFailsWith<IllegalArgumentException> {
+            transport.postBridgeProofSubmitJson(partialDestinationBody)
+        }
+        assertTrue(partialDestinationError.message?.contains("complete EVM or TRON") == true)
+
+        val mixedDestinationError = assertFailsWith<IllegalArgumentException> {
+            transport.postBridgeMessageSubmitJson(mixedDestinationBody)
+        }
+        assertTrue(mixedDestinationError.message?.contains("cannot be mixed") == true)
+
+        val mismatchedDestinationBindingError = assertFailsWith<IllegalArgumentException> {
+            transport.postBridgeMessageSubmitJson(mismatchedDestinationBindingBody)
+        }
+        assertTrue(mismatchedDestinationBindingError.message?.contains("canonical TRON destination binding") == true)
+
+        val mismatchedEvmDestinationBindingError = assertFailsWith<IllegalArgumentException> {
+            transport.postBridgeMessageSubmitJson(mismatchedEvmDestinationBindingBody)
+        }
+        assertTrue(mismatchedEvmDestinationBindingError.message?.contains("canonical EVM destination binding") == true)
+
+        val fullDestinationNoBundleError = assertFailsWith<IllegalArgumentException> {
+            transport.postBridgeProofSubmitJson(fullDestinationNoBundleBody)
+        }
+        assertTrue(
+            fullDestinationNoBundleError.message?.contains("exactly one of burn_bundle or message_bundle") == true,
+        )
+
+        val burnDestinationError = assertFailsWith<IllegalArgumentException> {
+            transport.postBridgeProofSubmitJson(burnDestinationBody)
+        }
+        assertTrue(burnDestinationError.message?.contains("message_bundle submissions") == true)
+
+        val destinationOnlyError = assertFailsWith<IllegalArgumentException> {
+            transport.postBridgeMessageSubmitJson(destinationOnlyBody)
+        }
+        assertTrue(destinationOnlyError.message?.contains("proof_bytes_hex is required") == true)
+
+        val invalidNetworkIdError = assertFailsWith<IllegalArgumentException> {
+            transport.postBridgeProofSubmitJson(invalidNetworkIdBody)
+        }
+        assertTrue(invalidNetworkIdError.message?.contains("network_id_hex") == true)
+        assertTrue(invalidNetworkIdError.message?.contains("32-byte") == true)
+
+        val paddedNetworkIdError = assertFailsWith<IllegalArgumentException> {
+            transport.postBridgeProofSubmitJson(paddedNetworkIdBody)
+        }
+        assertTrue(paddedNetworkIdError.message?.contains("network_id_hex") == true)
+        assertTrue(paddedNetworkIdError.message?.contains("canonical hex") == true)
+
+        val paddedProofBytesError = assertFailsWith<IllegalArgumentException> {
+            transport.postBridgeMessageSubmitJson(paddedProofBytesBody)
+        }
+        assertTrue(paddedProofBytesError.message?.contains("proof_bytes_hex") == true)
+        assertTrue(paddedProofBytesError.message?.contains("canonical hex") == true)
+
+        val zeroEvmVerifierError = assertFailsWith<IllegalArgumentException> {
+            transport.postBridgeProofSubmitJson(zeroEvmVerifierBody)
+        }
+        assertTrue(zeroEvmVerifierError.message?.contains("verifier_address_hex") == true)
+        assertTrue(zeroEvmVerifierError.message?.contains("all zero") == true)
+
+        val blankTronVerifierError = assertFailsWith<IllegalArgumentException> {
+            transport.postBridgeMessageSubmitJson(blankTronVerifierBody)
+        }
+        assertTrue(blankTronVerifierError.message?.contains("tron_verifier_address") == true)
+
+        val paddedTronVerifierError = assertFailsWith<IllegalArgumentException> {
+            transport.postBridgeMessageSubmitJson(paddedTronVerifierBody)
+        }
+        assertTrue(paddedTronVerifierError.message?.contains("tron_verifier_address") == true)
+
+        val zeroTronVerifierError = assertFailsWith<IllegalArgumentException> {
+            transport.postBridgeMessageSubmitJson(zeroTronVerifierBody)
+        }
+        assertTrue(zeroTronVerifierError.message?.contains("tron_verifier_address") == true)
+
+        val invalidTronVerifierError = assertFailsWith<IllegalArgumentException> {
+            transport.postBridgeMessageSubmitJson(invalidTronVerifierBody)
+        }
+        assertTrue(invalidTronVerifierError.message?.contains("tron_verifier_address") == true)
+        assertEquals(0, executor.requestCount)
+    }
+
     private fun encodeErrorEnvelope(code: String, message: String, rejectCode: String): ByteArray {
         val optionalString = NoritoAdapters.option(NoritoAdapters.stringAdapter())
         val detailsAdapter = NoritoAdapters.struct(
@@ -1188,6 +1676,13 @@ class HttpClientTransportTest {
 
     private fun readBody(request: TransportRequest): String =
         String(request.body, StandardCharsets.UTF_8)
+
+    private fun hexToBytes(hex: String): ByteArray {
+        require(hex.length % 2 == 0) { "hex must be even length" }
+        return ByteArray(hex.length / 2) { index ->
+            hex.substring(index * 2, index * 2 + 2).toInt(16).toByte()
+        }
+    }
 
     private fun assertCanonicalSignature(
         request: TransportRequest,
@@ -1480,8 +1975,10 @@ class HttpClientTransportTest {
 
     private open class CapturingExecutor : HttpTransportExecutor {
         lateinit var lastRequest: TransportRequest
+        var requestCount: Int = 0
 
         override fun execute(request: TransportRequest): CompletableFuture<TransportResponse> {
+            requestCount += 1
             lastRequest = request
             return CompletableFuture.completedFuture(
                 TransportResponse.builder().setStatusCode(404).setBody(byteArrayOf()).build(),
@@ -1494,6 +1991,7 @@ class HttpClientTransportTest {
         private val body: ByteArray,
     ) : CapturingExecutor() {
         override fun execute(request: TransportRequest): CompletableFuture<TransportResponse> {
+            requestCount += 1
             lastRequest = request
             return CompletableFuture.completedFuture(
                 TransportResponse.builder().setStatusCode(statusCode).setBody(body).build(),

@@ -46,6 +46,10 @@ import {
   publicKeyMulticodecForCurveId,
 } from "./curveRegistry.js";
 import { noritoEncodeMultisigProposeRequest } from "./norito.js";
+import {
+  evmSccpDestinationBindingHash,
+  tronSccpDestinationBindingHash,
+} from "./sccp.js";
 
 const DEFAULT_PAGE_SIZE = 100;
 
@@ -188,6 +192,7 @@ const SCCP_DESTINATION_VERIFIER_PLAN_VALUES = new Set([
   "SolanaProgramNativeRecursive",
   "TonContractNativeRecursive",
   "TronContractNativeRecursive",
+  "TronContractGroth16Bn254",
   "SubstrateRuntimeNativeRecursive",
 ]);
 const SCCP_HUB_MESSAGE_KIND_VALUES = new Set([
@@ -225,6 +230,16 @@ const SUBSCRIPTION_LIST_OPTION_KEYS = new Set([
 ]);
 const NORITO_FRAME_HEADER_LENGTH = 40;
 const VERSIONED_TRANSACTION_PAYLOAD_VERSION = 1;
+const SCCP_GROTH16_BN254_PROOF_ABI_BYTE_LENGTH_V1 = 384;
+const SCCP_GROTH16_BN254_BASE_FIELD_MODULUS =
+  0x30644e72e131a029b85045b68181585d97816a916871ca8d3c208c16d87cfd47n;
+const SCCP_GROTH16_BN254_G2_B_C0 =
+  0x2b149d40ceb8aaae81be18991be06ac3b5b4c5e559dbefa33267e6dc24a138e5n;
+const SCCP_GROTH16_BN254_G2_B_C1 =
+  0x009713b03af0fed4cd2cafadeed8fdf4a74fa084e52d1852e4a2bd0685c315d2n;
+const SCCP_DOMAIN_SORA = 0;
+const SCCP_DOMAIN_ETH = 1;
+const SCCP_DOMAIN_BSC = 2;
 
 const CRC64_TABLE = (() => {
   const table = new Array(256);
@@ -4343,9 +4358,55 @@ export class ToriiClient {
   }
 
   /**
+   * Submit a bridge proof DTO (`POST /v1/bridge/proofs/submit`).
+   * @param {object} payload
+   * @param {{signal?: AbortSignal}} [options]
+   * @returns {Promise<object>}
+   */
+  async submitBridgeProof(payload, options = {}) {
+    const { signal } = normalizeSignalOnlyOption(options, "submitBridgeProof");
+    const body = normalizeBridgeProofSubmitPayload(payload, "submitBridgeProof.payload");
+    const response = await this._request("POST", "/v1/bridge/proofs/submit", {
+      headers: { "Content-Type": "application/json", Accept: "application/json" },
+      body: JSON.stringify(body),
+      signal,
+    });
+    await this._expectStatus(response, [200]);
+    const responsePayload = await this._maybeJson(response);
+    return requirePlainObjectOption(
+      responsePayload ?? {},
+      "submitBridgeProof response",
+      { message: "must be a JSON object" },
+    );
+  }
+
+  /**
+   * Submit an inbound bridge message DTO (`POST /v1/bridge/messages`).
+   * @param {object} payload
+   * @param {{signal?: AbortSignal}} [options]
+   * @returns {Promise<object>}
+   */
+  async submitBridgeMessage(payload, options = {}) {
+    const { signal } = normalizeSignalOnlyOption(options, "submitBridgeMessage");
+    const body = normalizeBridgeMessageSubmitPayload(payload, "submitBridgeMessage.payload");
+    const response = await this._request("POST", "/v1/bridge/messages", {
+      headers: { "Content-Type": "application/json", Accept: "application/json" },
+      body: JSON.stringify(body),
+      signal,
+    });
+    await this._expectStatus(response, [200]);
+    const responsePayload = await this._maybeJson(response);
+    return requirePlainObjectOption(
+      responsePayload ?? {},
+      "submitBridgeMessage response",
+      { message: "must be a JSON object" },
+    );
+  }
+
+  /**
    * Fetch a typed SCCP transparent message-proof artifact (`GET /v1/sccp/artifacts/message/{message_id}`).
    * @param {string|Buffer|Uint8Array|ArrayBuffer|ArrayBufferView} messageIdHex
-   * @param {{signal?: AbortSignal}} [options]
+   * @param {{signal?: AbortSignal, networkIdHex?: string|Buffer|Uint8Array|ArrayBuffer|ArrayBufferView, verifierAddressHex?: string, bridgeAddressHex?: string, verifierCodeHashHex?: string|Buffer|Uint8Array|ArrayBuffer|ArrayBufferView, verifierKeyHashHex?: string|Buffer|Uint8Array|ArrayBuffer|ArrayBufferView, expectedDestinationBindingHashHex?: string|Buffer|Uint8Array|ArrayBuffer|ArrayBufferView, tronVerifierAddress?: string, proofBytesHex?: string|Buffer|Uint8Array|ArrayBuffer|ArrayBufferView}} [options]
    * @returns {Promise<object>}
    */
   async getSccpMessageProofArtifact(messageIdHex, options = {}) {
@@ -4353,12 +4414,17 @@ export class ToriiClient {
       messageIdHex,
       "getSccpMessageProofArtifact.messageIdHex",
     );
-    const { signal } = normalizeSignalOnlyOption(options, "getSccpMessageProofArtifact");
+    const { signal, params } = normalizeSccpEvmDestinationQueryOptions(
+      options,
+      "getSccpMessageProofArtifact",
+      normalizedMessageId,
+    );
     const response = await this._request(
       "GET",
       `/v1/sccp/artifacts/message/${normalizedMessageId}`,
       {
         headers: { Accept: "application/json" },
+        params,
         signal,
       },
     );
@@ -4370,7 +4436,7 @@ export class ToriiClient {
   /**
    * Fetch a normalized SCCP counterparty proof job (`GET /v1/sccp/jobs/message/{message_id}`).
    * @param {string|Buffer|Uint8Array|ArrayBuffer|ArrayBufferView} messageIdHex
-   * @param {{signal?: AbortSignal}} [options]
+   * @param {{signal?: AbortSignal, networkIdHex?: string|Buffer|Uint8Array|ArrayBuffer|ArrayBufferView, verifierAddressHex?: string, bridgeAddressHex?: string, verifierCodeHashHex?: string|Buffer|Uint8Array|ArrayBuffer|ArrayBufferView, verifierKeyHashHex?: string|Buffer|Uint8Array|ArrayBuffer|ArrayBufferView, expectedDestinationBindingHashHex?: string|Buffer|Uint8Array|ArrayBuffer|ArrayBufferView, tronVerifierAddress?: string, proofBytesHex?: string|Buffer|Uint8Array|ArrayBuffer|ArrayBufferView}} [options]
    * @returns {Promise<object>}
    */
   async getSccpMessageProofJob(messageIdHex, options = {}) {
@@ -4378,12 +4444,17 @@ export class ToriiClient {
       messageIdHex,
       "getSccpMessageProofJob.messageIdHex",
     );
-    const { signal } = normalizeSignalOnlyOption(options, "getSccpMessageProofJob");
+    const { signal, params } = normalizeSccpEvmDestinationQueryOptions(
+      options,
+      "getSccpMessageProofJob",
+      normalizedMessageId,
+    );
     const response = await this._request(
       "GET",
       `/v1/sccp/jobs/message/${normalizedMessageId}`,
       {
         headers: { Accept: "application/json" },
+        params,
         signal,
       },
     );
@@ -13611,6 +13682,36 @@ function normalizeSccpPlatformSubmissionPayload(value, context) {
         },
       };
     case "solana_program_instruction":
+      return {
+        kind: platform,
+        value: {
+          proofBytes: normalizeArbitraryHex(payload.proof_bytes, `${context}.payload.proof_bytes`),
+          publicInputsBytes: normalizeArbitraryHex(
+            payload.public_inputs_bytes,
+            `${context}.payload.public_inputs_bytes`,
+          ),
+          bundleBytes: normalizeArbitraryHex(
+            payload.bundle_bytes,
+            `${context}.payload.bundle_bytes`,
+          ),
+          destinationBinding: normalizeSccpDestinationBinding(
+            payload.destination_binding,
+            `${context}.payload.destination_binding`,
+          ),
+          destinationBindingHash: normalizeHex32String(
+            payload.destination_binding_hash,
+            `${context}.payload.destination_binding_hash`,
+          ),
+          statementHash: normalizeHex32String(
+            payload.statement_hash,
+            `${context}.payload.statement_hash`,
+          ),
+          proofContextHash: normalizeHex32String(
+            payload.proof_context_hash,
+            `${context}.payload.proof_context_hash`,
+          ),
+        },
+      };
     case "substrate_runtime_call":
       return {
         kind: platform,
@@ -14238,7 +14339,10 @@ function normalizeSccpNormalizedCodecValue(value, context) {
     case "TronBase58Check":
       return {
         kind,
-        payload: normalizeSccpCodecScalarValue(variant.payload, `${context}.${kind}.payload`),
+        payload: normalizeTronBase58CheckPayloadValue(
+          variant.payload,
+          `${context}.${kind}.payload`,
+        ),
       };
     default:
       throw createValidationError(
@@ -18046,6 +18150,594 @@ function normalizeHex32String(value, name, options = {}) {
     );
   }
   return hex.toLowerCase();
+}
+
+function normalizeHex20String(value, name) {
+  const normalized = requireHexString(value, name);
+  const hex =
+    normalized.startsWith("0x") || normalized.startsWith("0X")
+      ? normalized.slice(2)
+      : normalized;
+  if (hex.length !== 40) {
+    throw createValidationError(
+      ValidationErrorCode.INVALID_HEX,
+      `${name} must be a 20-byte hex string`,
+      name,
+    );
+  }
+  return hex.toLowerCase();
+}
+
+function normalizeNonZeroHex20String(value, name) {
+  return normalizeNonZeroHexBytesString(value, name, 20);
+}
+
+function normalizeNonZeroHex32String(value, name) {
+  return normalizeNonZeroHexBytesString(value, name, 32);
+}
+
+function normalizeHexBytesString(value, name) {
+  if (Buffer.isBuffer(value)) {
+    return value.toString("hex");
+  }
+  if (ArrayBuffer.isView(value)) {
+    return Buffer.from(value.buffer, value.byteOffset, value.byteLength).toString("hex");
+  }
+  if (value instanceof ArrayBuffer) {
+    return Buffer.from(value).toString("hex");
+  }
+  if (Array.isArray(value)) {
+    return normalizeByteArray(value, name).toString("hex");
+  }
+  const normalized = requireHexString(value, name);
+  const hex =
+    normalized.startsWith("0x") || normalized.startsWith("0X")
+      ? normalized.slice(2)
+      : normalized;
+  if (hex.length === 0 || hex.length % 2 !== 0 || !/^[0-9a-fA-F]+$/.test(hex)) {
+    throw createValidationError(
+      ValidationErrorCode.INVALID_HEX,
+      `${name} must be a non-empty byte-aligned hex string`,
+      name,
+    );
+  }
+  return hex.toLowerCase();
+}
+
+function normalizeExactHexBytesString(value, name) {
+  if (typeof value === "string" && value.trim() !== value) {
+    throw createValidationError(
+      ValidationErrorCode.INVALID_HEX,
+      `${name} must be a canonical hex string`,
+      name,
+    );
+  }
+  return normalizeHexBytesString(value, name);
+}
+
+function normalizeNonZeroHexBytesString(value, name, expectedByteLength) {
+  const hex = normalizeHexBytesString(value, name);
+  if (hex.length === 0) {
+    throw createValidationError(
+      ValidationErrorCode.INVALID_HEX,
+      `${name} must be a non-empty byte-aligned hex string`,
+      name,
+    );
+  }
+  if (/^(?:00)+$/.test(hex)) {
+    throw createValidationError(
+      ValidationErrorCode.INVALID_HEX,
+      `${name} must not be all zero`,
+      name,
+    );
+  }
+  if (expectedByteLength !== undefined && hex.length !== expectedByteLength * 2) {
+    throw createValidationError(
+      ValidationErrorCode.INVALID_HEX,
+      `${name} must be a ${expectedByteLength}-byte hex string`,
+      name,
+    );
+  }
+  return hex;
+}
+
+function normalizeExactNonZeroHexBytesString(value, name, expectedByteLength) {
+  const hex = normalizeExactHexBytesString(value, name);
+  if (hex.length === 0) {
+    throw createValidationError(
+      ValidationErrorCode.INVALID_HEX,
+      `${name} must be a non-empty byte-aligned hex string`,
+      name,
+    );
+  }
+  if (/^(?:00)+$/.test(hex)) {
+    throw createValidationError(
+      ValidationErrorCode.INVALID_HEX,
+      `${name} must not be all zero`,
+      name,
+    );
+  }
+  if (expectedByteLength !== undefined && hex.length !== expectedByteLength * 2) {
+    throw createValidationError(
+      ValidationErrorCode.INVALID_HEX,
+      `${name} must be a ${expectedByteLength}-byte hex string`,
+      name,
+    );
+  }
+  return hex;
+}
+
+function normalizeExactNonZeroHex20String(value, name) {
+  return normalizeExactNonZeroHexBytesString(value, name, 20);
+}
+
+function normalizeExactNonZeroHex32String(value, name) {
+  return normalizeExactNonZeroHexBytesString(value, name, 32);
+}
+
+const TRON_BASE58_ALPHABET = "123456789ABCDEFGHJKLMNPQRSTUVWXYZabcdefghijkmnopqrstuvwxyz";
+const TRON_BASE58_INDEX = new Map(
+  Array.from(TRON_BASE58_ALPHABET, (character, index) => [character, index]),
+);
+
+function normalizeTronBase58CheckAddress(value, name) {
+  const normalized = requireNonEmptyString(value, name);
+  if (normalized !== value) {
+    throw invalidTronBase58CheckAddress(name);
+  }
+  decodeTronBase58CheckAddressPayload(normalized, name);
+  return normalized;
+}
+
+function decodeTronBase58CheckAddressPayload(value, name) {
+  let number = 0n;
+  for (const character of value) {
+    const digit = TRON_BASE58_INDEX.get(character);
+    if (digit === undefined) {
+      throw invalidTronBase58CheckAddress(name);
+    }
+    number = number * 58n + BigInt(digit);
+  }
+  let hex = number === 0n ? "" : number.toString(16);
+  if (hex.length % 2 === 1) {
+    hex = `0${hex}`;
+  }
+  let decoded = hex ? Buffer.from(hex, "hex") : Buffer.alloc(0);
+  const leadingZeroes = value.match(/^1*/)[0].length;
+  if (leadingZeroes > 0) {
+    decoded = Buffer.concat([Buffer.alloc(leadingZeroes), decoded]);
+  }
+  if (decoded.length !== 25) {
+    throw invalidTronBase58CheckAddress(name);
+  }
+  const payload = decoded.subarray(0, 21);
+  const checksum = decoded.subarray(21);
+  const expectedChecksum = createHash("sha256")
+    .update(createHash("sha256").update(payload).digest())
+    .digest()
+    .subarray(0, 4);
+  if (!checksum.equals(expectedChecksum)) {
+    throw invalidTronBase58CheckAddress(name);
+  }
+  if (payload[0] !== 0x41 || payload.subarray(1).every((byte) => byte === 0)) {
+    throw invalidTronBase58CheckAddress(name);
+  }
+  return payload;
+}
+
+function normalizeTronBase58CheckPayloadValue(value, name) {
+  let payload;
+  if (Buffer.isBuffer(value)) {
+    payload = value;
+  } else if (ArrayBuffer.isView(value)) {
+    payload = Buffer.from(value.buffer, value.byteOffset, value.byteLength);
+  } else if (value instanceof ArrayBuffer) {
+    payload = Buffer.from(value);
+  } else if (Array.isArray(value)) {
+    payload = normalizeByteArray(value, name);
+  } else {
+    const text = requireNonEmptyString(value, name);
+    if (text !== value) {
+      throw invalidTronBase58CheckPayload(name);
+    }
+    const hex = text.startsWith("0x") || text.startsWith("0X") ? text.slice(2) : text;
+    if (hex.length > 0 && hex.length % 2 === 0 && /^[0-9a-fA-F]+$/.test(hex)) {
+      payload = Buffer.from(normalizeArbitraryHex(text, name), "hex");
+    } else {
+      payload = decodeTronBase58CheckAddressPayload(text, name);
+    }
+  }
+  if (
+    payload.length !== 21 ||
+    payload[0] !== 0x41 ||
+    payload.subarray(1).every((byte) => byte === 0)
+  ) {
+    throw invalidTronBase58CheckPayload(name);
+  }
+  return payload.toString("hex");
+}
+
+function invalidTronBase58CheckAddress(name) {
+  return createValidationError(
+    ValidationErrorCode.INVALID_STRING,
+    `${name} must be a TRON Base58Check address`,
+    name,
+  );
+}
+
+function invalidTronBase58CheckPayload(name) {
+  return createValidationError(
+    ValidationErrorCode.INVALID_STRING,
+    `${name} must be a 21-byte TRON Base58Check payload`,
+    name,
+  );
+}
+
+function abiWordU32Hex(value) {
+  const normalized = Number(value);
+  if (!Number.isSafeInteger(normalized) || normalized < 0 || normalized > 0xffffffff) {
+    throw createValidationError(
+      ValidationErrorCode.INVALID_NUMERIC,
+      "SCCP ABI word value must be a u32",
+      "SCCP ABI word value",
+    );
+  }
+  const word = Buffer.alloc(32);
+  word.writeUInt32BE(normalized, 28);
+  return word.toString("hex");
+}
+
+function sccpGroth16ProofHexWord(proofHex, index) {
+  return proofHex.slice(index * 64, (index + 1) * 64);
+}
+
+function sccpGroth16ProofHexWordValue(proofHex, index) {
+  return BigInt(`0x${sccpGroth16ProofHexWord(proofHex, index)}`);
+}
+
+function sccpGroth16ProofHexWordIsZero(proofHex, index) {
+  return sccpGroth16ProofHexWordValue(proofHex, index) === 0n;
+}
+
+function throwSccpGroth16ProofHexError(label, message) {
+  throw createValidationError(ValidationErrorCode.INVALID_HEX, `${label} ${message}`, label);
+}
+
+function requireSccpGroth16BaseFieldWord(proofHex, index, label) {
+  if (sccpGroth16ProofHexWordValue(proofHex, index) >= SCCP_GROTH16_BN254_BASE_FIELD_MODULUS) {
+    throwSccpGroth16ProofHexError(label, "must be a BN254 base-field element");
+  }
+}
+
+function requireSccpGroth16NonZeroPoint(proofHex, indexes, label) {
+  if (indexes.every((index) => sccpGroth16ProofHexWordIsZero(proofHex, index))) {
+    throwSccpGroth16ProofHexError(label, "must not be zero");
+  }
+}
+
+function sccpBn254Fq(value) {
+  const reduced = value % SCCP_GROTH16_BN254_BASE_FIELD_MODULUS;
+  return reduced >= 0n ? reduced : reduced + SCCP_GROTH16_BN254_BASE_FIELD_MODULUS;
+}
+
+const sccpBn254FqAdd = (left, right) => sccpBn254Fq(left + right);
+const sccpBn254FqSub = (left, right) => sccpBn254Fq(left - right);
+const sccpBn254FqMul = (left, right) => sccpBn254Fq(left * right);
+const sccpBn254Fq2Add = ([left0, left1], [right0, right1]) => [
+  sccpBn254FqAdd(left0, right0),
+  sccpBn254FqAdd(left1, right1),
+];
+const sccpBn254Fq2Mul = ([left0, left1], [right0, right1]) => [
+  sccpBn254FqSub(sccpBn254FqMul(left0, right0), sccpBn254FqMul(left1, right1)),
+  sccpBn254FqAdd(sccpBn254FqMul(left0, right1), sccpBn254FqMul(left1, right0)),
+];
+const sccpBn254Fq2Eq = ([left0, left1], [right0, right1]) =>
+  left0 === right0 && left1 === right1;
+
+function requireSccpGroth16G1Point(proofHex, [xIndex, yIndex], label) {
+  requireSccpGroth16NonZeroPoint(proofHex, [xIndex, yIndex], label);
+  const x = sccpGroth16ProofHexWordValue(proofHex, xIndex);
+  const y = sccpGroth16ProofHexWordValue(proofHex, yIndex);
+  const left = sccpBn254FqMul(y, y);
+  const right = sccpBn254FqAdd(sccpBn254FqMul(sccpBn254FqMul(x, x), x), 3n);
+  if (left !== right) {
+    throwSccpGroth16ProofHexError(label, "must be a BN254 G1 point");
+  }
+}
+
+function requireSccpGroth16G2Point(proofHex, [x0Index, x1Index, y0Index, y1Index], label) {
+  requireSccpGroth16NonZeroPoint(proofHex, [x0Index, x1Index, y0Index, y1Index], label);
+  const x = [
+    sccpGroth16ProofHexWordValue(proofHex, x0Index),
+    sccpGroth16ProofHexWordValue(proofHex, x1Index),
+  ];
+  const y = [
+    sccpGroth16ProofHexWordValue(proofHex, y0Index),
+    sccpGroth16ProofHexWordValue(proofHex, y1Index),
+  ];
+  const left = sccpBn254Fq2Mul(y, y);
+  const x2 = sccpBn254Fq2Mul(x, x);
+  const right = sccpBn254Fq2Add(sccpBn254Fq2Mul(x2, x), [
+    SCCP_GROTH16_BN254_G2_B_C0,
+    SCCP_GROTH16_BN254_G2_B_C1,
+  ]);
+  if (!sccpBn254Fq2Eq(left, right)) {
+    throwSccpGroth16ProofHexError(label, "must be a BN254 G2 point");
+  }
+}
+
+function validateSccpGroth16ProofHex(proofHex, context) {
+  if (sccpGroth16ProofHexWordValue(proofHex, 0) !== 1n) {
+    throw createValidationError(
+      ValidationErrorCode.INVALID_HEX,
+      `${context}.proofBytesHex.version must be 1`,
+      `${context}.proofBytesHex`,
+    );
+  }
+  if (sccpGroth16ProofHexWordIsZero(proofHex, 1)) {
+    throw createValidationError(
+      ValidationErrorCode.INVALID_HEX,
+      `${context}.proofBytesHex.messageId must not be zero`,
+      `${context}.proofBytesHex`,
+    );
+  }
+  const sourceDomain = sccpGroth16ProofHexWordValue(proofHex, 2);
+  if (sourceDomain > 0xffff_ffffn) {
+    throw createValidationError(
+      ValidationErrorCode.INVALID_HEX,
+      `${context}.proofBytesHex.sourceDomain must fit u32`,
+      `${context}.proofBytesHex`,
+    );
+  }
+  if (sourceDomain !== BigInt(SCCP_DOMAIN_SORA)) {
+    throw createValidationError(
+      ValidationErrorCode.INVALID_HEX,
+      `${context}.proofBytesHex.sourceDomain must be SORA`,
+      `${context}.proofBytesHex`,
+    );
+  }
+  if (sccpGroth16ProofHexWordIsZero(proofHex, 3)) {
+    throw createValidationError(
+      ValidationErrorCode.INVALID_HEX,
+      `${context}.proofBytesHex.commitmentRoot must not be zero`,
+      `${context}.proofBytesHex`,
+    );
+  }
+  [
+    "a.x",
+    "a.y",
+    "b.x0",
+    "b.x1",
+    "b.y0",
+    "b.y1",
+    "c.x",
+    "c.y",
+  ].forEach((field, offset) => {
+    requireSccpGroth16BaseFieldWord(proofHex, 4 + offset, `${context}.proofBytesHex.${field}`);
+  });
+  requireSccpGroth16G1Point(proofHex, [4, 5], `${context}.proofBytesHex.a`);
+  requireSccpGroth16G2Point(proofHex, [6, 7, 8, 9], `${context}.proofBytesHex.b`);
+  requireSccpGroth16G1Point(proofHex, [10, 11], `${context}.proofBytesHex.c`);
+}
+
+function optionalSccpMessageProofContext(messageBundle, context) {
+  if (messageBundle === undefined) {
+    return null;
+  }
+  if (!isPlainObject(messageBundle)) {
+    throw createValidationError(
+      ValidationErrorCode.INVALID_OBJECT,
+      `${context}.messageBundle must contain commitment metadata`,
+      `${context}.messageBundle`,
+    );
+  }
+  const commitment =
+    messageBundle.commitment && isPlainObject(messageBundle.commitment)
+      ? messageBundle.commitment
+      : null;
+  if (!commitment) {
+    throw createValidationError(
+      ValidationErrorCode.INVALID_OBJECT,
+      `${context}.messageBundle.commitment.messageId is required`,
+      `${context}.messageBundle.commitment.messageId`,
+    );
+  }
+  const messageId = commitment.message_id ?? commitment.messageId;
+  const commitmentRoot = messageBundle.commitment_root ?? messageBundle.commitmentRoot;
+  if (messageId === undefined || commitmentRoot === undefined) {
+    throw createValidationError(
+      ValidationErrorCode.INVALID_OBJECT,
+      `${context}.messageBundle.commitment.messageId and messageBundle.commitmentRoot are required`,
+      `${context}.messageBundle.commitment.messageId`,
+    );
+  }
+  return {
+    messageId: normalizeHex32String(messageId, `${context}.messageBundle.commitment.messageId`),
+    commitmentRoot: normalizeHex32String(
+      commitmentRoot,
+      `${context}.messageBundle.commitmentRoot`,
+    ),
+  };
+}
+
+function validateSccpGroth16ProofHexForMessageBundle(proofHex, messageBundle, context) {
+  validateSccpGroth16ProofHex(proofHex, context);
+  const proofContext = optionalSccpMessageProofContext(messageBundle, context);
+  if (proofContext === null) {
+    return;
+  }
+  const word = (index) => proofHex.slice(index * 64, (index + 1) * 64);
+  if (word(0) !== abiWordU32Hex(1)) {
+    throw createValidationError(
+      ValidationErrorCode.INVALID_HEX,
+      `${context}.proofBytesHex.version must be 1`,
+      `${context}.proofBytesHex`,
+    );
+  }
+  if (word(1) !== proofContext.messageId) {
+    throw createValidationError(
+      ValidationErrorCode.INVALID_HEX,
+      `${context}.proofBytesHex.messageId must match messageBundle.commitment.messageId`,
+      `${context}.proofBytesHex`,
+    );
+  }
+  if (word(2) !== abiWordU32Hex(SCCP_DOMAIN_SORA)) {
+    throw createValidationError(
+      ValidationErrorCode.INVALID_HEX,
+      `${context}.proofBytesHex.sourceDomain must be SORA`,
+      `${context}.proofBytesHex`,
+    );
+  }
+  if (word(3) !== proofContext.commitmentRoot) {
+    throw createValidationError(
+      ValidationErrorCode.INVALID_HEX,
+      `${context}.proofBytesHex.commitmentRoot must match messageBundle.commitmentRoot`,
+      `${context}.proofBytesHex`,
+    );
+  }
+}
+
+const SCCP_DESTINATION_PROOF_MATERIAL_KEYS = [
+  "network_id_hex",
+  "verifier_address_hex",
+  "bridge_address_hex",
+  "verifier_code_hash_hex",
+  "verifier_key_hash_hex",
+  "expected_destination_binding_hash_hex",
+  "tron_verifier_address",
+];
+
+function hasOwnRecordField(record, key) {
+  return Object.prototype.hasOwnProperty.call(record, key);
+}
+
+function hasSccpDestinationProofMaterial(record) {
+  return SCCP_DESTINATION_PROOF_MATERIAL_KEYS.some((key) => hasOwnRecordField(record, key));
+}
+
+function validateSccpDestinationProofMaterialRelationship(record, context) {
+  const hasDestinationMaterial = hasSccpDestinationProofMaterial(record);
+  const hasProofBytes = hasOwnRecordField(record, "proof_bytes_hex");
+  if (hasDestinationMaterial && !hasProofBytes) {
+    throw createValidationError(
+      ValidationErrorCode.INVALID_OBJECT,
+      `${context}.proofBytesHex is required when SCCP destination proof parameters are supplied`,
+      `${context}.proofBytesHex`,
+    );
+  }
+  if (hasProofBytes && !hasDestinationMaterial) {
+    throw createValidationError(
+      ValidationErrorCode.INVALID_OBJECT,
+      `${context} deployment destination fields are required when proofBytesHex is supplied`,
+      `${context}.proofBytesHex`,
+    );
+  }
+  if (hasDestinationMaterial && hasProofBytes) {
+    requireSccpDestinationProofMaterialTuple(record, context);
+  }
+}
+
+function requireSccpDestinationProofMaterialTuple(record, context) {
+  const hasEvmFields =
+    hasOwnRecordField(record, "verifier_address_hex") ||
+    hasOwnRecordField(record, "bridge_address_hex");
+  const hasTronFields = hasOwnRecordField(record, "tron_verifier_address");
+  if (hasEvmFields && hasTronFields) {
+    throw createValidationError(
+      ValidationErrorCode.INVALID_OBJECT,
+      `${context} EVM and TRON SCCP destination fields cannot be mixed`,
+      `${context}.proofBytesHex`,
+    );
+  }
+  const sharedFields = [
+    "network_id_hex",
+    "verifier_code_hash_hex",
+    "verifier_key_hash_hex",
+    "expected_destination_binding_hash_hex",
+  ];
+  const hasSharedFields = sharedFields.some((key) => hasOwnRecordField(record, key));
+  if (hasTronFields) {
+    const required = [
+      "network_id_hex",
+      "tron_verifier_address",
+      "verifier_code_hash_hex",
+      "verifier_key_hash_hex",
+      "expected_destination_binding_hash_hex",
+    ];
+    const missing = required.filter((key) => !hasOwnRecordField(record, key));
+    if (missing.length > 0) {
+      throw createValidationError(
+        ValidationErrorCode.INVALID_OBJECT,
+        `${context} complete TRON SCCP deployment destination fields are required; missing ${missing.join(", ")}`,
+        `${context}.proofBytesHex`,
+      );
+    }
+    requireTronSccpDestinationBindingHashMatches(record, context);
+    return;
+  }
+  if (hasEvmFields) {
+    const required = [
+      "network_id_hex",
+      "verifier_address_hex",
+      "bridge_address_hex",
+      "verifier_code_hash_hex",
+      "verifier_key_hash_hex",
+      "expected_destination_binding_hash_hex",
+    ];
+    const missing = required.filter((key) => !hasOwnRecordField(record, key));
+    if (missing.length > 0) {
+      throw createValidationError(
+        ValidationErrorCode.INVALID_OBJECT,
+        `${context} complete EVM SCCP deployment destination fields are required; missing ${missing.join(", ")}`,
+        `${context}.proofBytesHex`,
+      );
+    }
+    requireEvmSccpDestinationBindingHashMatches(record, context);
+    return;
+  }
+  if (hasSharedFields) {
+    throw createValidationError(
+      ValidationErrorCode.INVALID_OBJECT,
+      `${context} complete EVM or TRON SCCP deployment destination fields are required`,
+      `${context}.proofBytesHex`,
+    );
+  }
+}
+
+function requireEvmSccpDestinationBindingHashMatches(record, context) {
+  const candidateHashes = [SCCP_DOMAIN_ETH, SCCP_DOMAIN_BSC].map((targetDomain) =>
+    evmSccpDestinationBindingHash({
+      targetDomain,
+      networkIdHex: record.network_id_hex,
+      verifierAddressHex: record.verifier_address_hex,
+      bridgeAddressHex: record.bridge_address_hex,
+      verifierCodeHashHex: record.verifier_code_hash_hex,
+      verifierKeyHashHex: record.verifier_key_hash_hex,
+    }).replace(/^0x/u, ""),
+  );
+  if (!candidateHashes.includes(record.expected_destination_binding_hash_hex)) {
+    throw createValidationError(
+      ValidationErrorCode.INVALID_OBJECT,
+      `${context}.expectedDestinationBindingHashHex must match canonical EVM destination binding`,
+      `${context}.expectedDestinationBindingHashHex`,
+    );
+  }
+}
+
+function requireTronSccpDestinationBindingHashMatches(record, context) {
+  const expected = tronSccpDestinationBindingHash({
+    network_id_hex: record.network_id_hex,
+    verifierAddress: record.tron_verifier_address,
+    verifier_code_hash_hex: record.verifier_code_hash_hex,
+    verifier_key_hash_hex: record.verifier_key_hash_hex,
+  }).replace(/^0x/u, "");
+  if (record.expected_destination_binding_hash_hex !== expected) {
+    throw createValidationError(
+      ValidationErrorCode.INVALID_OBJECT,
+      `${context}.expectedDestinationBindingHashHex must match canonical TRON destination binding`,
+      `${context}.expectedDestinationBindingHashHex`,
+    );
+  }
 }
 
 function normalizeHashLike32(value, name, options = {}) {
@@ -23849,6 +24541,393 @@ function normalizeSignalOnlyOption(options, context) {
     }
   }
   return { signal };
+}
+
+function normalizeSccpEvmDestinationQueryOptions(options, context, expectedMessageIdHex) {
+  const { signal } = normalizeSignalOption(options, context);
+  const allowed = new Set([
+    "signal",
+    "networkIdHex",
+    "verifierAddressHex",
+    "bridgeAddressHex",
+    "verifierCodeHashHex",
+    "verifierKeyHashHex",
+    "expectedDestinationBindingHashHex",
+    "tronVerifierAddress",
+    "proofBytesHex",
+  ]);
+  const extras = Object.keys(options ?? {}).filter((key) => !allowed.has(key));
+  if (extras.length > 0) {
+    throw createValidationError(
+      ValidationErrorCode.INVALID_OBJECT,
+      `${context} options contains unsupported fields: ${extras.join(", ")}`,
+      `${context}.options`,
+    );
+  }
+  const params = {};
+  if (options?.networkIdHex !== undefined) {
+    params.network_id_hex = normalizeExactNonZeroHex32String(
+      options.networkIdHex,
+      `${context}.networkIdHex`,
+    );
+  }
+  if (options?.verifierAddressHex !== undefined) {
+    params.verifier_address_hex = normalizeExactNonZeroHex20String(
+      options.verifierAddressHex,
+      `${context}.verifierAddressHex`,
+    );
+  }
+  if (options?.bridgeAddressHex !== undefined) {
+    params.bridge_address_hex = normalizeExactNonZeroHex20String(
+      options.bridgeAddressHex,
+      `${context}.bridgeAddressHex`,
+    );
+  }
+  if (options?.verifierCodeHashHex !== undefined) {
+    params.verifier_code_hash_hex = normalizeExactNonZeroHex32String(
+      options.verifierCodeHashHex,
+      `${context}.verifierCodeHashHex`,
+    );
+  }
+  if (options?.verifierKeyHashHex !== undefined) {
+    params.verifier_key_hash_hex = normalizeExactNonZeroHex32String(
+      options.verifierKeyHashHex,
+      `${context}.verifierKeyHashHex`,
+    );
+  }
+  if (options?.expectedDestinationBindingHashHex !== undefined) {
+    params.expected_destination_binding_hash_hex = normalizeExactNonZeroHex32String(
+      options.expectedDestinationBindingHashHex,
+      `${context}.expectedDestinationBindingHashHex`,
+    );
+  }
+  if (options?.tronVerifierAddress !== undefined) {
+    params.tron_verifier_address = normalizeTronBase58CheckAddress(
+      options.tronVerifierAddress,
+      `${context}.tronVerifierAddress`,
+    );
+  }
+  if (options?.proofBytesHex !== undefined) {
+    params.proof_bytes_hex = normalizeExactNonZeroHexBytesString(
+      options.proofBytesHex,
+      `${context}.proofBytesHex`,
+      SCCP_GROTH16_BN254_PROOF_ABI_BYTE_LENGTH_V1,
+    );
+    validateSccpGroth16ProofHex(params.proof_bytes_hex, context);
+    if (
+      expectedMessageIdHex !== undefined &&
+      sccpGroth16ProofHexWord(params.proof_bytes_hex, 1) !== expectedMessageIdHex
+    ) {
+      throw createValidationError(
+        ValidationErrorCode.INVALID_HEX,
+        `${context}.proofBytesHex.messageId must match messageIdHex`,
+        `${context}.proofBytesHex`,
+      );
+    }
+  }
+  validateSccpDestinationProofMaterialRelationship(params, context);
+  return {
+    signal,
+    params: Object.keys(params).length > 0 ? params : undefined,
+  };
+}
+
+function normalizeBridgeProofSubmitPayload(payload, context) {
+  const record = requirePlainObjectOption(payload, context);
+  const allowed = new Set([
+    "authority",
+    "privateKey",
+    "private_key",
+    "publicKeyHex",
+    "public_key_hex",
+    "signatureB64",
+    "signature_b64",
+    "burnBundle",
+    "burn_bundle",
+    "messageBundle",
+    "message_bundle",
+    "networkIdHex",
+    "network_id_hex",
+    "verifierAddressHex",
+    "verifier_address_hex",
+    "bridgeAddressHex",
+    "bridge_address_hex",
+    "verifierCodeHashHex",
+    "verifier_code_hash_hex",
+    "verifierKeyHashHex",
+    "verifier_key_hash_hex",
+    "expectedDestinationBindingHashHex",
+    "expected_destination_binding_hash_hex",
+    "tronVerifierAddress",
+    "tron_verifier_address",
+    "proofBytesHex",
+    "proof_bytes_hex",
+    "creationTimeMs",
+    "creation_time_ms",
+  ]);
+  assertSupportedOptionKeys(record, allowed, context);
+  const pick = (camel, snake = camel) =>
+    record[camel] !== undefined ? record[camel] : record[snake];
+  const normalized = {
+    authority: requireNonEmptyString(record.authority, `${context}.authority`),
+  };
+  const privateKey = pick("privateKey", "private_key");
+  if (privateKey !== undefined) {
+    normalized.private_key = privateKey;
+  }
+  const publicKeyHex = pick("publicKeyHex", "public_key_hex");
+  if (publicKeyHex !== undefined) {
+    normalized.public_key_hex = requireNonEmptyString(publicKeyHex, `${context}.publicKeyHex`);
+  }
+  const signatureB64 = pick("signatureB64", "signature_b64");
+  if (signatureB64 !== undefined) {
+    normalized.signature_b64 = requireNonEmptyString(signatureB64, `${context}.signatureB64`);
+  }
+  const burnBundle = pick("burnBundle", "burn_bundle");
+  if (burnBundle !== undefined) {
+    normalized.burn_bundle = burnBundle;
+  }
+  const messageBundle = pick("messageBundle", "message_bundle");
+  if (messageBundle !== undefined) {
+    normalized.message_bundle = messageBundle;
+  }
+  const bundleCount = Number(burnBundle !== undefined) + Number(messageBundle !== undefined);
+  if (bundleCount !== 1) {
+    throw createValidationError(
+      ValidationErrorCode.INVALID_OBJECT,
+      `${context} must provide exactly one of burnBundle or messageBundle`,
+      context,
+    );
+  }
+  const networkIdHex = pick("networkIdHex", "network_id_hex");
+  if (networkIdHex !== undefined) {
+    normalized.network_id_hex = normalizeExactNonZeroHex32String(networkIdHex, `${context}.networkIdHex`);
+  }
+  const verifierAddressHex = pick("verifierAddressHex", "verifier_address_hex");
+  if (verifierAddressHex !== undefined) {
+    normalized.verifier_address_hex = normalizeExactNonZeroHex20String(
+      verifierAddressHex,
+      `${context}.verifierAddressHex`,
+    );
+  }
+  const bridgeAddressHex = pick("bridgeAddressHex", "bridge_address_hex");
+  if (bridgeAddressHex !== undefined) {
+    normalized.bridge_address_hex = normalizeExactNonZeroHex20String(
+      bridgeAddressHex,
+      `${context}.bridgeAddressHex`,
+    );
+  }
+  const verifierCodeHashHex = pick("verifierCodeHashHex", "verifier_code_hash_hex");
+  if (verifierCodeHashHex !== undefined) {
+    normalized.verifier_code_hash_hex = normalizeExactNonZeroHex32String(
+      verifierCodeHashHex,
+      `${context}.verifierCodeHashHex`,
+    );
+  }
+  const verifierKeyHashHex = pick("verifierKeyHashHex", "verifier_key_hash_hex");
+  if (verifierKeyHashHex !== undefined) {
+    normalized.verifier_key_hash_hex = normalizeExactNonZeroHex32String(
+      verifierKeyHashHex,
+      `${context}.verifierKeyHashHex`,
+    );
+  }
+  const expectedDestinationBindingHashHex = pick(
+    "expectedDestinationBindingHashHex",
+    "expected_destination_binding_hash_hex",
+  );
+  if (expectedDestinationBindingHashHex !== undefined) {
+    normalized.expected_destination_binding_hash_hex = normalizeExactNonZeroHex32String(
+      expectedDestinationBindingHashHex,
+      `${context}.expectedDestinationBindingHashHex`,
+    );
+  }
+  const tronVerifierAddress = pick("tronVerifierAddress", "tron_verifier_address");
+  if (tronVerifierAddress !== undefined) {
+    normalized.tron_verifier_address = normalizeTronBase58CheckAddress(
+      tronVerifierAddress,
+      `${context}.tronVerifierAddress`,
+    );
+  }
+  const proofBytesHex = pick("proofBytesHex", "proof_bytes_hex");
+  if (proofBytesHex !== undefined) {
+    normalized.proof_bytes_hex = normalizeExactNonZeroHexBytesString(
+      proofBytesHex,
+      `${context}.proofBytesHex`,
+      SCCP_GROTH16_BN254_PROOF_ABI_BYTE_LENGTH_V1,
+    );
+    validateSccpGroth16ProofHexForMessageBundle(
+      normalized.proof_bytes_hex,
+      normalized.message_bundle,
+      context,
+    );
+  }
+  validateSccpDestinationProofMaterialRelationship(normalized, context);
+  if (
+    normalized.burn_bundle !== undefined &&
+    (hasSccpDestinationProofMaterial(normalized) || hasOwnRecordField(normalized, "proof_bytes_hex"))
+  ) {
+    throw createValidationError(
+      ValidationErrorCode.INVALID_OBJECT,
+      `${context} SCCP destination fields and proofBytesHex are only valid for messageBundle submissions`,
+      `${context}.proofBytesHex`,
+    );
+  }
+  const creationTimeMs = pick("creationTimeMs", "creation_time_ms");
+  if (creationTimeMs !== undefined) {
+    normalized.creation_time_ms = creationTimeMs;
+  }
+  return normalized;
+}
+
+function normalizeBridgeMessageSubmitPayload(payload, context) {
+  const record = requirePlainObjectOption(payload, context);
+  const allowed = new Set([
+    "authority",
+    "privateKey",
+    "private_key",
+    "publicKeyHex",
+    "public_key_hex",
+    "signatureB64",
+    "signature_b64",
+    "messageBundle",
+    "message_bundle",
+    "networkIdHex",
+    "network_id_hex",
+    "verifierAddressHex",
+    "verifier_address_hex",
+    "bridgeAddressHex",
+    "bridge_address_hex",
+    "verifierCodeHashHex",
+    "verifier_code_hash_hex",
+    "verifierKeyHashHex",
+    "verifier_key_hash_hex",
+    "expectedDestinationBindingHashHex",
+    "expected_destination_binding_hash_hex",
+    "tronVerifierAddress",
+    "tron_verifier_address",
+    "proofBytesHex",
+    "proof_bytes_hex",
+    "receiptLane",
+    "receipt_lane",
+    "settlement",
+    "creationTimeMs",
+    "creation_time_ms",
+  ]);
+  assertSupportedOptionKeys(record, allowed, context);
+  const pick = (camel, snake = camel) =>
+    record[camel] !== undefined ? record[camel] : record[snake];
+  const messageBundle = pick("messageBundle", "message_bundle");
+  if (messageBundle === undefined) {
+    throw createValidationError(
+      ValidationErrorCode.INVALID_OBJECT,
+      `${context}.messageBundle is required`,
+      `${context}.messageBundle`,
+    );
+  }
+  const normalized = {
+    authority: requireNonEmptyString(record.authority, `${context}.authority`),
+    message_bundle: requirePlainObjectOption(messageBundle, `${context}.messageBundle`),
+  };
+  const privateKey = pick("privateKey", "private_key");
+  if (privateKey !== undefined) {
+    normalized.private_key = privateKey;
+  }
+  const publicKeyHex = pick("publicKeyHex", "public_key_hex");
+  if (publicKeyHex !== undefined) {
+    normalized.public_key_hex = requireNonEmptyString(publicKeyHex, `${context}.publicKeyHex`);
+  }
+  const signatureB64 = pick("signatureB64", "signature_b64");
+  if (signatureB64 !== undefined) {
+    normalized.signature_b64 = requireNonEmptyString(signatureB64, `${context}.signatureB64`);
+  }
+  const networkIdHex = pick("networkIdHex", "network_id_hex");
+  if (networkIdHex !== undefined) {
+    normalized.network_id_hex = normalizeExactNonZeroHex32String(networkIdHex, `${context}.networkIdHex`);
+  }
+  const verifierAddressHex = pick("verifierAddressHex", "verifier_address_hex");
+  if (verifierAddressHex !== undefined) {
+    normalized.verifier_address_hex = normalizeExactNonZeroHex20String(
+      verifierAddressHex,
+      `${context}.verifierAddressHex`,
+    );
+  }
+  const bridgeAddressHex = pick("bridgeAddressHex", "bridge_address_hex");
+  if (bridgeAddressHex !== undefined) {
+    normalized.bridge_address_hex = normalizeExactNonZeroHex20String(
+      bridgeAddressHex,
+      `${context}.bridgeAddressHex`,
+    );
+  }
+  const verifierCodeHashHex = pick("verifierCodeHashHex", "verifier_code_hash_hex");
+  if (verifierCodeHashHex !== undefined) {
+    normalized.verifier_code_hash_hex = normalizeExactNonZeroHex32String(
+      verifierCodeHashHex,
+      `${context}.verifierCodeHashHex`,
+    );
+  }
+  const verifierKeyHashHex = pick("verifierKeyHashHex", "verifier_key_hash_hex");
+  if (verifierKeyHashHex !== undefined) {
+    normalized.verifier_key_hash_hex = normalizeExactNonZeroHex32String(
+      verifierKeyHashHex,
+      `${context}.verifierKeyHashHex`,
+    );
+  }
+  const expectedDestinationBindingHashHex = pick(
+    "expectedDestinationBindingHashHex",
+    "expected_destination_binding_hash_hex",
+  );
+  if (expectedDestinationBindingHashHex !== undefined) {
+    normalized.expected_destination_binding_hash_hex = normalizeExactNonZeroHex32String(
+      expectedDestinationBindingHashHex,
+      `${context}.expectedDestinationBindingHashHex`,
+    );
+  }
+  const tronVerifierAddress = pick("tronVerifierAddress", "tron_verifier_address");
+  if (tronVerifierAddress !== undefined) {
+    normalized.tron_verifier_address = normalizeTronBase58CheckAddress(
+      tronVerifierAddress,
+      `${context}.tronVerifierAddress`,
+    );
+  }
+  const proofBytesHex = pick("proofBytesHex", "proof_bytes_hex");
+  if (proofBytesHex !== undefined) {
+    normalized.proof_bytes_hex = normalizeExactNonZeroHexBytesString(
+      proofBytesHex,
+      `${context}.proofBytesHex`,
+      SCCP_GROTH16_BN254_PROOF_ABI_BYTE_LENGTH_V1,
+    );
+    validateSccpGroth16ProofHexForMessageBundle(
+      normalized.proof_bytes_hex,
+      normalized.message_bundle,
+      context,
+    );
+  }
+  validateSccpDestinationProofMaterialRelationship(normalized, context);
+  const receiptLane = pick("receiptLane", "receipt_lane");
+  if (receiptLane !== undefined) {
+    if (
+      typeof receiptLane !== "number" ||
+      !Number.isSafeInteger(receiptLane) ||
+      receiptLane < 0 ||
+      receiptLane > 0xffffffff
+    ) {
+      throw createValidationError(
+        ValidationErrorCode.INVALID_NUMERIC,
+        `${context}.receiptLane must be a non-negative u32 integer`,
+        `${context}.receiptLane`,
+      );
+    }
+    normalized.receipt_lane = receiptLane;
+  }
+  const settlement = record.settlement;
+  if (settlement !== undefined) {
+    normalized.settlement = requirePlainObjectOption(settlement, `${context}.settlement`);
+  }
+  const creationTimeMs = pick("creationTimeMs", "creation_time_ms");
+  if (creationTimeMs !== undefined) {
+    normalized.creation_time_ms = creationTimeMs;
+  }
+  return normalized;
 }
 
 function requirePlainObjectOption(value, context, { message } = {}) {

@@ -5,8 +5,8 @@ import "./ISccpMessageVerifier.sol";
 
 /**
  * @title SccpGroth16Bn254MessageVerifier
- * @dev Production-style SCCP verifier for EVM lanes backed by the BN254
- * pairing precompiles.
+ * @dev Production-style SCCP verifier for EVM-compatible lanes backed by the
+ * BN254 pairing precompiles.
  *
  * The immutable verifying key is supplied at deployment and cannot be updated.
  * `proofBytes` must ABI-decode as:
@@ -30,6 +30,8 @@ import "./ISccpMessageVerifier.sol";
 contract SccpGroth16Bn254MessageVerifier is ISccpMessageVerifier {
     uint256 private constant PROOF_VERSION = 1;
     uint256 private constant PUBLIC_INPUT_COUNT = 9;
+    uint256 private constant PROOF_ABI_WORD_COUNT = 12;
+    uint256 private constant PROOF_ABI_BYTE_LENGTH = PROOF_ABI_WORD_COUNT * 32;
     uint256 private constant BASE_FIELD_MODULUS =
         21888242871839275222246405745257275088696311157297823662689037894645226208583;
     uint256 private constant SCALAR_FIELD_MODULUS =
@@ -156,6 +158,16 @@ contract SccpGroth16Bn254MessageVerifier is ISccpMessageVerifier {
         require(rawSourceDomain <= type(uint32).max, "Source domain overflow");
         require(publicInputs[0] == messageId, "Public input message id mismatch");
         require(publicInputs[3] == commitmentRoot, "Public input commitment root mismatch");
+        require(publicInputs[1] != bytes32(0), "Payload hash is required");
+        require(commitmentRoot != bytes32(0), "Commitment root is required");
+        require(publicInputs[4] != bytes32(0), "Finality height is required");
+        require(publicInputs[5] != bytes32(0), "Finality block hash is required");
+        require(statementHash != bytes32(0), "Statement hash is required");
+        require(destinationBindingHash != bytes32(0), "Destination binding hash is required");
+        uint256 targetDomain = uint256(publicInputs[2]);
+        require(targetDomain != 0, "Target domain is required");
+        require(targetDomain <= type(uint32).max, "Target domain overflow");
+        require(targetDomain != rawSourceDomain, "Source and target domains must differ");
         _requireValidG1(proof.a);
         _requireValidG2(proof.b);
         _requireValidG1(proof.c);
@@ -185,6 +197,7 @@ contract SccpGroth16Bn254MessageVerifier is ISccpMessageVerifier {
         uint256[2] memory rawA;
         uint256[4] memory rawB;
         uint256[2] memory rawC;
+        require(proofBytes.length == PROOF_ABI_BYTE_LENGTH, "Unexpected Groth16 proof length");
         (
             rawVersion,
             messageId,
@@ -281,6 +294,9 @@ contract SccpGroth16Bn254MessageVerifier is ISccpMessageVerifier {
     function _requireValidG2(G2Point memory point) private view {
         _requireNonZeroG2(point);
         G1Point memory generator = G1Point(1, 2);
+        // EIP-197 requires the pairing precompile to reject G2 inputs that are
+        // not in the prime-order subgroup; this neutral pairing keeps that
+        // validation local to constructor and proof decoding.
         require(
             _pairing2(generator, point, _negate(generator), point),
             "G2 point is invalid"

@@ -48,6 +48,9 @@ import org.hyperledger.iroha.android.sorafs.GatewayFetchRequest;
 import org.hyperledger.iroha.android.sorafs.GatewayProvider;
 import org.hyperledger.iroha.android.sorafs.TransportPolicy;
 import org.hyperledger.iroha.android.sorafs.WriteModeHint;
+import org.hyperledger.iroha.android.sccp.EvmSccpProver;
+import org.hyperledger.iroha.android.sccp.SourceSccpProofs;
+import org.hyperledger.iroha.android.sccp.TronSccpProver;
 import org.hyperledger.iroha.android.telemetry.DeviceProfile;
 import org.hyperledger.iroha.android.telemetry.DeviceProfileProvider;
 import org.hyperledger.iroha.android.telemetry.NetworkContext;
@@ -60,12 +63,89 @@ import org.hyperledger.iroha.android.client.transport.TransportResponse;
 
 public final class HttpClientTransportTests {
   private static final String VPN_HELPER_TICKET_HEX = "5356504e48543100" + "00".repeat(248);
+  private static final String SCCP_TEST_MESSAGE_ID = "11".repeat(32);
+  private static final String SCCP_TEST_COMMITMENT_ROOT = "33".repeat(32);
+  private static final String SCCP_TEST_GROTH16_PROOF_HEX =
+      sampleSccpProofHex(SCCP_TEST_MESSAGE_ID, 0, SCCP_TEST_COMMITMENT_ROOT);
+  private static final String SCCP_TEST_TRON_NETWORK_ID = "71".repeat(32);
+  private static final String SCCP_TEST_TRON_VERIFIER_ADDRESS =
+      "TJRabPrwbZy45sbavfcjinPJC18kjpRTv8";
+  private static final String SCCP_TEST_TRON_VERIFIER_CODE_HASH = "72".repeat(32);
+  private static final String SCCP_TEST_TRON_VERIFIER_KEY_HASH = "73".repeat(32);
+  private static final String SCCP_TEST_EVM_NETWORK_ID = "aa".repeat(32);
+  private static final String SCCP_TEST_EVM_VERIFIER_ADDRESS = "bb".repeat(20);
+  private static final String SCCP_TEST_EVM_BRIDGE_ADDRESS = "cc".repeat(20);
+  private static final String SCCP_TEST_EVM_VERIFIER_CODE_HASH = "dd".repeat(32);
+  private static final String SCCP_TEST_EVM_VERIFIER_KEY_HASH = "ee".repeat(32);
 
   private HttpClientTransportTests() {}
+
+  private static String abiWordHex(final int value) {
+    final String hex = Integer.toHexString(value);
+    final StringBuilder out = new StringBuilder(64);
+    for (int i = hex.length(); i < 64; i++) {
+      out.append('0');
+    }
+    out.append(hex);
+    return out.toString();
+  }
+
+  private static String sampleSccpProofHex(
+      final String messageId, final int sourceDomain, final String commitmentRoot) {
+    final StringBuilder out = new StringBuilder(384 * 2);
+    out.append(abiWordHex(1));
+    out.append(messageId);
+    out.append(abiWordHex(sourceDomain));
+    out.append(commitmentRoot);
+    out.append(abiWordHex(1));
+    out.append(abiWordHex(2));
+    out.append("1800deef121f1e76426a00665e5c4479674322d4f75edadd46debd5cd992f6ed");
+    out.append("198e9393920d483a7260bfb731fb5d25f1aa493335a9e71297e485b7aef312c2");
+    out.append("12c85ea5db8c6deb4aab71808dcb408fe3d1e7690c43d37b4ce6cc0166fa7daa");
+    out.append("090689d0585ff075ec9e99ad690c3395bc4b313370b38ef355acdadcd122975b");
+    out.append(abiWordHex(1));
+    out.append(abiWordHex(2));
+    return out.toString();
+  }
+
+  private static String sccpMessageBundleJson() {
+    return "{\"version\":1,\"commitment_root\":\""
+        + SCCP_TEST_COMMITMENT_ROOT
+        + "\",\"commitment\":{\"version\":1,\"kind\":\"Transfer\",\"target_domain\":5,"
+        + "\"message_id\":\""
+        + SCCP_TEST_MESSAGE_ID
+        + "\",\"payload_hash\":\""
+        + "22".repeat(32)
+        + "\"}}";
+  }
+
+  private static byte[] sccpBridgeMessageBody(final String proofHex) {
+    return ("{\"authority\":\"alice\",\"message_bundle\":"
+            + sccpMessageBundleJson()
+            + ",\"proof_bytes_hex\":\"0x"
+            + proofHex
+            + "\"}")
+        .getBytes(StandardCharsets.UTF_8);
+  }
+
+  private static String sampleSccpTronDestinationBindingHash() {
+    final String hash =
+        SourceSccpProofs.tronDestinationBindingHash(
+            SourceSccpProofs.DOMAIN_SORA,
+            SourceSccpProofs.DOMAIN_TRON,
+            "0x" + SCCP_TEST_TRON_NETWORK_ID,
+            SCCP_TEST_TRON_VERIFIER_ADDRESS,
+            "0x" + SCCP_TEST_TRON_VERIFIER_CODE_HASH,
+            "0x" + SCCP_TEST_TRON_VERIFIER_KEY_HASH);
+    return hash.startsWith("0x") ? hash.substring(2) : hash;
+  }
 
   public static void main(final String[] args) throws Exception {
     submitBuildsToriiRequest();
     submitTransactionJsonBuildsJsonIngressRequest();
+    bridgeSubmitJsonHelpersPostRawProofAndMessagePayloads();
+    bridgeProofSubmitRequestBuildsSccpPayloadsFromSubmissions();
+    bridgeSubmitJsonHelpersRejectPlaceholderProofBytesBeforeRequest();
     submitPropagatesExecutorFailure();
     submitSkipsRetryWhenNetworkRetriesDisabled();
     submitRetriesOnServerError();
@@ -194,6 +274,729 @@ public final class HttpClientTransportTests {
     assert request.headers().get("Accept").contains(WireFormatPreference.JSON_PREFERRED.acceptHeader())
         : "JSON submit Accept header must use configured wire preference";
     assert java.util.Arrays.equals(body, request.body()) : "JSON submit body must be preserved";
+  }
+
+  private static void bridgeSubmitJsonHelpersPostRawProofAndMessagePayloads() {
+    final StubResponseExecutor executor =
+        new StubResponseExecutor(200, "{\"ok\":true}".getBytes(StandardCharsets.UTF_8));
+    final ClientConfig config =
+        ClientConfig.builder()
+            .setBaseUri(URI.create("https://127.0.0.1:8080/base"))
+            .build();
+    final HttpClientTransport transport = HttpClientTransport.withExecutor(executor, config);
+    final String bindingHash = sampleSccpTronDestinationBindingHash();
+    final byte[] proofBody =
+        ("{\"authority\":\"alice\",\"message_bundle\":"
+                + sccpMessageBundleJson()
+                + ",\"network_id_hex\":\"0x"
+                + SCCP_TEST_TRON_NETWORK_ID
+                + "\",\"verifier_code_hash_hex\":\"0x"
+                + SCCP_TEST_TRON_VERIFIER_CODE_HASH
+                + "\",\"verifier_key_hash_hex\":\"0x"
+                + SCCP_TEST_TRON_VERIFIER_KEY_HASH
+                + "\",\"expected_destination_binding_hash_hex\":\"0x"
+                + bindingHash
+                + "\",\"tron_verifier_address\":\""
+                + SCCP_TEST_TRON_VERIFIER_ADDRESS
+                + "\",\"proof_bytes_hex\":\"0x"
+                + SCCP_TEST_GROTH16_PROOF_HEX
+                + "\"}")
+            .getBytes(StandardCharsets.UTF_8);
+    final byte[] messageBody =
+        "{\"authority\":\"alice\",\"message_bundle\":{}}".getBytes(StandardCharsets.UTF_8);
+    final Map<String, Object> commitment = new LinkedHashMap<>();
+    commitment.put("message_id", SCCP_TEST_MESSAGE_ID);
+    final Map<String, Object> typedMessageBundle = new LinkedHashMap<>();
+    typedMessageBundle.put("commitment_root", SCCP_TEST_COMMITMENT_ROOT);
+    typedMessageBundle.put("commitment", commitment);
+
+    final ClientResponse proofResponse = transport.postBridgeProofSubmitJson(proofBody).join();
+    final TransportRequest proofRequest = executor.lastRequest();
+    assert proofResponse.statusCode() == 200 : "Bridge proof submit must expect HTTP 200";
+    assert "POST".equals(proofRequest.method()) : "Bridge proof submit must use POST";
+    assert proofRequest
+        .uri()
+        .toString()
+        .equals("https://127.0.0.1:8080/base/v1/bridge/proofs/submit")
+        : "Bridge proof submit endpoint must target Torii bridge route";
+    assert proofRequest.headers().get("Content-Type").contains("application/json")
+        : "Bridge proof submit Content-Type must be application/json";
+    assert proofRequest.headers().get("Accept").contains("application/json")
+        : "Bridge proof submit Accept header must be application/json";
+    assert java.util.Arrays.equals(proofBody, proofRequest.body())
+        : "Bridge proof submit body must be preserved";
+
+    final ClientResponse messageResponse = transport.postBridgeMessageSubmitJson(messageBody).join();
+    final TransportRequest messageRequest = executor.lastRequest();
+    assert messageResponse.statusCode() == 200 : "Bridge message submit must expect HTTP 200";
+    assert "POST".equals(messageRequest.method()) : "Bridge message submit must use POST";
+    assert messageRequest
+        .uri()
+        .toString()
+        .equals("https://127.0.0.1:8080/base/v1/bridge/messages")
+        : "Bridge message submit endpoint must target Torii bridge route";
+    assert messageRequest.headers().get("Content-Type").contains("application/json")
+        : "Bridge message submit Content-Type must be application/json";
+    assert messageRequest.headers().get("Accept").contains("application/json")
+        : "Bridge message submit Accept header must be application/json";
+    assert java.util.Arrays.equals(messageBody, messageRequest.body())
+        : "Bridge message submit body must be preserved";
+
+    final ClientResponse typedResponse =
+        transport
+            .submitBridgeProof(
+                BridgeProofSubmitRequest.builder()
+                    .authority("alice")
+                    .messageBundle(typedMessageBundle)
+                    .networkIdHex("0x" + SCCP_TEST_TRON_NETWORK_ID)
+                    .verifierCodeHashHex("0x" + SCCP_TEST_TRON_VERIFIER_CODE_HASH)
+                    .verifierKeyHashHex("0x" + SCCP_TEST_TRON_VERIFIER_KEY_HASH)
+                    .expectedDestinationBindingHashHex("0x" + bindingHash)
+                    .tronVerifierAddress(SCCP_TEST_TRON_VERIFIER_ADDRESS)
+                    .proofBytesHex("0x" + SCCP_TEST_GROTH16_PROOF_HEX)
+                    .build())
+            .join();
+    final TransportRequest typedRequest = executor.lastRequest();
+    final String typedBody =
+        "{\"authority\":\"alice\",\"expected_destination_binding_hash_hex\":\"0x"
+            + bindingHash
+            + "\",\"message_bundle\":{\"commitment\":{\"message_id\":\""
+            + SCCP_TEST_MESSAGE_ID
+            + "\"},\"commitment_root\":\""
+            + SCCP_TEST_COMMITMENT_ROOT
+            + "\"},\"network_id_hex\":\"0x"
+            + SCCP_TEST_TRON_NETWORK_ID
+            + "\",\"proof_bytes_hex\":\"0x"
+            + SCCP_TEST_GROTH16_PROOF_HEX
+            + "\",\"tron_verifier_address\":\""
+            + SCCP_TEST_TRON_VERIFIER_ADDRESS
+            + "\",\"verifier_code_hash_hex\":\"0x"
+            + SCCP_TEST_TRON_VERIFIER_CODE_HASH
+            + "\",\"verifier_key_hash_hex\":\"0x"
+            + SCCP_TEST_TRON_VERIFIER_KEY_HASH
+            + "\"}";
+    assert typedResponse.statusCode() == 200 : "Typed bridge proof submit must expect HTTP 200";
+    assert typedRequest
+        .uri()
+        .toString()
+        .equals("https://127.0.0.1:8080/base/v1/bridge/proofs/submit")
+        : "Typed bridge proof submit endpoint mismatch";
+    assert typedBody.equals(new String(typedRequest.body(), StandardCharsets.UTF_8))
+        : "Typed bridge proof submit body mismatch";
+  }
+
+  @SuppressWarnings("unchecked")
+  private static void bridgeProofSubmitRequestBuildsSccpPayloadsFromSubmissions() {
+    final StubResponseExecutor executor =
+        new StubResponseExecutor(200, "{\"ok\":true}".getBytes(StandardCharsets.UTF_8));
+    final ClientConfig config =
+        ClientConfig.builder()
+            .setBaseUri(URI.create("https://127.0.0.1:8080/base"))
+            .build();
+    final HttpClientTransport transport = HttpClientTransport.withExecutor(executor, config);
+    final Map<String, Object> commitment = new LinkedHashMap<>();
+    commitment.put("message_id", SCCP_TEST_MESSAGE_ID);
+    final Map<String, Object> messageBundle = new LinkedHashMap<>();
+    messageBundle.put("commitment_root", SCCP_TEST_COMMITMENT_ROOT);
+    messageBundle.put("commitment", commitment);
+    final byte[] proofBytes = hexToBytes(SCCP_TEST_GROTH16_PROOF_HEX);
+
+    final SourceSccpProofs.EvmDestinationBinding evmBinding =
+        SourceSccpProofs.evmDestinationBinding(
+            SourceSccpProofs.DOMAIN_SORA,
+            SourceSccpProofs.DOMAIN_ETH,
+            "0x" + "71".repeat(32),
+            "0x" + "44".repeat(20),
+            "0x" + "45".repeat(20),
+            "0x" + "72".repeat(32),
+            "0x" + "73".repeat(32));
+    final EvmSccpProver.Submission evmSubmission =
+        EvmSccpProver.buildSubmission(
+            new EvmSccpProver.SubmissionInput(
+                new EvmSccpProver.PublicInputsInput(
+                    1,
+                    SCCP_TEST_MESSAGE_ID,
+                    "22".repeat(32),
+                    SourceSccpProofs.DOMAIN_ETH,
+                    SCCP_TEST_COMMITMENT_ROOT,
+                    "7",
+                    "44".repeat(32)),
+                proofBytes,
+                "0x" + "55".repeat(32),
+                evmBinding));
+
+    transport
+        .submitBridgeProof(
+            BridgeProofSubmitRequest.fromEvmSccpSubmission(
+                "alice", messageBundle, evmSubmission, evmBinding))
+        .join();
+
+    final Map<String, Object> evmBody =
+        (Map<String, Object>) JsonParser.parse(readBody(executor.lastRequest()));
+    assert evmBinding.networkId.equals(evmBody.get("network_id_hex"))
+        : "EVM submit request must carry governed network id";
+    assert evmBinding.verifierAddress.equals(evmBody.get("verifier_address_hex"))
+        : "EVM submit request must carry governed verifier";
+    assert evmBinding.bridgeAddress.equals(evmBody.get("bridge_address_hex"))
+        : "EVM submit request must carry governed bridge";
+    assert evmBinding.verifierCodeHash.equals(evmBody.get("verifier_code_hash_hex"))
+        : "EVM submit request must carry governed code hash";
+    assert evmBinding.verifierKeyHash.equals(evmBody.get("verifier_key_hash_hex"))
+        : "EVM submit request must carry governed verifier key hash";
+    assert evmBinding.hash.equals(evmBody.get("expected_destination_binding_hash_hex"))
+        : "EVM submit request must carry governed binding hash";
+    assert ("0x" + SCCP_TEST_GROTH16_PROOF_HEX).equals(evmBody.get("proof_bytes_hex"))
+        : "EVM submit request must carry generated proof bytes";
+    try {
+      BridgeProofSubmitRequest.fromEvmSccpSubmission(
+          "alice", java.util.Collections.emptyMap(), evmSubmission, evmBinding);
+      throw new AssertionError("EVM SCCP submit helper must reject missing message bundle proof context");
+    } catch (final IllegalArgumentException ex) {
+      assert ex.getMessage().contains("message_bundle.commitment.message_id")
+          : "EVM SCCP submit helper rejection must name message bundle context";
+    }
+    final byte[] invalidProofBytes = proofBytes.clone();
+    java.util.Arrays.fill(invalidProofBytes, 4 * 32, 6 * 32, (byte) 0);
+    final EvmSccpProver.Submission invalidEvmSubmission =
+        new EvmSccpProver.Submission(
+            evmSubmission.version(),
+            evmSubmission.proofFamily(),
+            evmSubmission.verifierBackend(),
+            evmSubmission.platformPayload(),
+            evmSubmission.envelopeEncoding(),
+            evmSubmission.submissionKind(),
+            evmSubmission.verifierEntrypoint(),
+            evmSubmission.contractMethod(),
+            evmSubmission.functionSelector(),
+            evmSubmission.sourceDomain(),
+            evmSubmission.targetDomain(),
+            evmSubmission.publicInputs(),
+            evmSubmission.publicInputWords(),
+            evmSubmission.publicSignalWords(),
+            evmSubmission.statementHash(),
+            evmSubmission.destinationBindingHash(),
+            evmSubmission.arguments(),
+            evmSubmission.callDataHex(),
+            evmSubmission.envelopeHex(),
+            invalidProofBytes,
+            evmSubmission.publicInputWordsBytes(),
+            evmSubmission.callData());
+    try {
+      BridgeProofSubmitRequest.fromEvmSccpSubmission(
+          "alice", messageBundle, invalidEvmSubmission, evmBinding);
+      throw new AssertionError("EVM SCCP submit helper must reject invalid Groth16 proof tuple");
+    } catch (final IllegalArgumentException ex) {
+      assert ex.getMessage().contains("proof_bytes_hex.a")
+          : "EVM SCCP submit helper rejection must name the invalid proof point";
+    }
+
+    final SourceSccpProofs.TronDestinationBinding tronBinding =
+        SourceSccpProofs.tronDestinationBinding(
+            SourceSccpProofs.DOMAIN_SORA,
+            SourceSccpProofs.DOMAIN_TRON,
+            "0x" + "81".repeat(32),
+            "TJRabPrwbZy45sbavfcjinPJC18kjpRTv8",
+            "0x" + "82".repeat(32),
+            "0x" + "83".repeat(32));
+    final TronSccpProver.Submission tronSubmission =
+        TronSccpProver.buildSubmission(
+            new TronSccpProver.SubmissionInput(
+                new TronSccpProver.PublicInputsInput(
+                    1,
+                    SCCP_TEST_MESSAGE_ID,
+                    "22".repeat(32),
+                    SourceSccpProofs.DOMAIN_TRON,
+                    SCCP_TEST_COMMITMENT_ROOT,
+                    "7",
+                    "44".repeat(32)),
+                proofBytes,
+                "0x" + "66".repeat(32),
+                tronBinding));
+
+    transport
+        .submitBridgeProof(
+            BridgeProofSubmitRequest.fromTronSccpSubmission(
+                "alice", messageBundle, tronSubmission, tronBinding))
+        .join();
+
+    final Map<String, Object> tronBody =
+        (Map<String, Object>) JsonParser.parse(readBody(executor.lastRequest()));
+    assert tronBinding.networkId.equals(tronBody.get("network_id_hex"))
+        : "TRON submit request must carry governed network id";
+    assert tronBinding.verifierAddress.equals(tronBody.get("tron_verifier_address"))
+        : "TRON submit request must carry governed verifier";
+    assert tronBinding.verifierCodeHash.equals(tronBody.get("verifier_code_hash_hex"))
+        : "TRON submit request must carry governed code hash";
+    assert tronBinding.verifierKeyHash.equals(tronBody.get("verifier_key_hash_hex"))
+        : "TRON submit request must carry governed verifier key hash";
+    assert tronBinding.hash.equals(tronBody.get("expected_destination_binding_hash_hex"))
+        : "TRON submit request must carry governed binding hash";
+    assert !tronBody.containsKey("verifier_address_hex")
+        : "TRON submit request must not include EVM verifier field";
+    assert !tronBody.containsKey("bridge_address_hex")
+        : "TRON submit request must not include EVM bridge field";
+    assert ("0x" + SCCP_TEST_GROTH16_PROOF_HEX).equals(tronBody.get("proof_bytes_hex"))
+        : "TRON submit request must carry generated proof bytes";
+  }
+
+  private static void bridgeSubmitJsonHelpersRejectPlaceholderProofBytesBeforeRequest() {
+    final StubResponseExecutor executor =
+        new StubResponseExecutor(200, "{\"ok\":true}".getBytes(StandardCharsets.UTF_8));
+    final ClientConfig config =
+        ClientConfig.builder()
+            .setBaseUri(URI.create("https://127.0.0.1:8080/base"))
+            .build();
+    final HttpClientTransport transport = HttpClientTransport.withExecutor(executor, config);
+    final byte[] body = "{\"proof_bytes_hex\":\"0x0000\"}".getBytes(StandardCharsets.UTF_8);
+    final byte[] shortBody = "{\"proof_bytes_hex\":\"0x0102ab\"}".getBytes(StandardCharsets.UTF_8);
+    final String bindingHash = sampleSccpTronDestinationBindingHash();
+    final byte[] proofOnlyBody =
+        ("{\"proof_bytes_hex\":\"0x" + SCCP_TEST_GROTH16_PROOF_HEX + "\"}")
+            .getBytes(StandardCharsets.UTF_8);
+    final byte[] destinationOnlyBody =
+        ("{\"network_id_hex\":\"0x"
+                + "71".repeat(32)
+                + "\",\"expected_destination_binding_hash_hex\":\"0x"
+                + "74".repeat(32)
+                + "\"}")
+            .getBytes(StandardCharsets.UTF_8);
+    final byte[] invalidNetworkIdBody =
+        ("{\"network_id_hex\":\"0x1234\",\"proof_bytes_hex\":\"0x"
+                + SCCP_TEST_GROTH16_PROOF_HEX
+                + "\"}")
+            .getBytes(StandardCharsets.UTF_8);
+    final byte[] paddedNetworkIdBody =
+        ("{\"network_id_hex\":\" 0x"
+                + "71".repeat(32)
+                + "\",\"verifier_code_hash_hex\":\"0x"
+                + "72".repeat(32)
+                + "\",\"verifier_key_hash_hex\":\"0x"
+                + "73".repeat(32)
+                + "\",\"expected_destination_binding_hash_hex\":\"0x"
+                + "74".repeat(32)
+                + "\",\"tron_verifier_address\":\"TJRabPrwbZy45sbavfcjinPJC18kjpRTv8"
+                + "\",\"proof_bytes_hex\":\"0x"
+                + SCCP_TEST_GROTH16_PROOF_HEX
+                + "\"}")
+            .getBytes(StandardCharsets.UTF_8);
+    final byte[] paddedProofBytesBody =
+        ("{\"network_id_hex\":\"0x"
+                + "71".repeat(32)
+                + "\",\"verifier_code_hash_hex\":\"0x"
+                + "72".repeat(32)
+                + "\",\"verifier_key_hash_hex\":\"0x"
+                + "73".repeat(32)
+                + "\",\"expected_destination_binding_hash_hex\":\"0x"
+                + "74".repeat(32)
+                + "\",\"tron_verifier_address\":\"TJRabPrwbZy45sbavfcjinPJC18kjpRTv8"
+                + "\",\"proof_bytes_hex\":\"0x"
+                + SCCP_TEST_GROTH16_PROOF_HEX
+                + " \"}")
+            .getBytes(StandardCharsets.UTF_8);
+    final byte[] zeroEvmVerifierBody =
+        ("{\"verifier_address_hex\":\"0x"
+                + "00".repeat(20)
+                + "\",\"proof_bytes_hex\":\"0x"
+                + SCCP_TEST_GROTH16_PROOF_HEX
+                + "\"}")
+            .getBytes(StandardCharsets.UTF_8);
+    final byte[] blankTronVerifierBody =
+        ("{\"tron_verifier_address\":\"   \",\"proof_bytes_hex\":\"0x"
+                + SCCP_TEST_GROTH16_PROOF_HEX
+                + "\"}")
+            .getBytes(StandardCharsets.UTF_8);
+    final byte[] paddedTronVerifierBody =
+        ("{\"tron_verifier_address\":\" TJRabPrwbZy45sbavfcjinPJC18kjpRTv8\",\"proof_bytes_hex\":\"0x"
+                + SCCP_TEST_GROTH16_PROOF_HEX
+                + "\"}")
+            .getBytes(StandardCharsets.UTF_8);
+    final byte[] zeroTronVerifierBody =
+        ("{\"tron_verifier_address\":\"T9yD14Nj9j7xAB4dbGeiX9h8unkKHxuWwb\",\"proof_bytes_hex\":\"0x"
+                + SCCP_TEST_GROTH16_PROOF_HEX
+                + "\"}")
+            .getBytes(StandardCharsets.UTF_8);
+    final byte[] invalidTronVerifierBody =
+        ("{\"tron_verifier_address\":\"TJRabPrwbZy45sbavfcjinPJC18kjpRTv9\",\"proof_bytes_hex\":\"0x"
+                + SCCP_TEST_GROTH16_PROOF_HEX
+                + "\"}")
+            .getBytes(StandardCharsets.UTF_8);
+    final byte[] partialDestinationBody =
+        ("{\"network_id_hex\":\"0x"
+                + "71".repeat(32)
+                + "\",\"expected_destination_binding_hash_hex\":\"0x"
+                + "74".repeat(32)
+                + "\",\"proof_bytes_hex\":\"0x"
+                + SCCP_TEST_GROTH16_PROOF_HEX
+                + "\"}")
+            .getBytes(StandardCharsets.UTF_8);
+    final byte[] mixedDestinationBody =
+        ("{\"network_id_hex\":\"0x"
+                + "71".repeat(32)
+                + "\",\"verifier_address_hex\":\"0x"
+                + "22".repeat(20)
+                + "\",\"bridge_address_hex\":\"0x"
+                + "33".repeat(20)
+                + "\",\"verifier_code_hash_hex\":\"0x"
+                + "72".repeat(32)
+                + "\",\"verifier_key_hash_hex\":\"0x"
+                + "73".repeat(32)
+                + "\",\"expected_destination_binding_hash_hex\":\"0x"
+                + "74".repeat(32)
+                + "\",\"tron_verifier_address\":\"TJRabPrwbZy45sbavfcjinPJC18kjpRTv8"
+                + "\",\"proof_bytes_hex\":\"0x"
+                + SCCP_TEST_GROTH16_PROOF_HEX
+                + "\"}")
+            .getBytes(StandardCharsets.UTF_8);
+    final byte[] fullDestinationNoBundleBody =
+        ("{\"authority\":\"alice\",\"network_id_hex\":\"0x"
+                + SCCP_TEST_TRON_NETWORK_ID
+                + "\",\"verifier_code_hash_hex\":\"0x"
+                + SCCP_TEST_TRON_VERIFIER_CODE_HASH
+                + "\",\"verifier_key_hash_hex\":\"0x"
+                + SCCP_TEST_TRON_VERIFIER_KEY_HASH
+                + "\",\"expected_destination_binding_hash_hex\":\"0x"
+                + bindingHash
+                + "\",\"tron_verifier_address\":\""
+                + SCCP_TEST_TRON_VERIFIER_ADDRESS
+                + "\",\"proof_bytes_hex\":\"0x"
+                + SCCP_TEST_GROTH16_PROOF_HEX
+                + "\"}")
+            .getBytes(StandardCharsets.UTF_8);
+    final byte[] burnDestinationBody =
+        ("{\"authority\":\"alice\",\"burn_bundle\":{},\"network_id_hex\":\"0x"
+                + SCCP_TEST_TRON_NETWORK_ID
+                + "\",\"verifier_code_hash_hex\":\"0x"
+                + SCCP_TEST_TRON_VERIFIER_CODE_HASH
+                + "\",\"verifier_key_hash_hex\":\"0x"
+                + SCCP_TEST_TRON_VERIFIER_KEY_HASH
+                + "\",\"expected_destination_binding_hash_hex\":\"0x"
+                + bindingHash
+                + "\",\"tron_verifier_address\":\""
+                + SCCP_TEST_TRON_VERIFIER_ADDRESS
+                + "\",\"proof_bytes_hex\":\"0x"
+                + SCCP_TEST_GROTH16_PROOF_HEX
+                + "\"}")
+            .getBytes(StandardCharsets.UTF_8);
+    final byte[] mismatchedDestinationBindingBody =
+        ("{\"authority\":\"alice\",\"message_bundle\":"
+                + sccpMessageBundleJson()
+                + ",\"network_id_hex\":\"0x"
+                + SCCP_TEST_TRON_NETWORK_ID
+                + "\",\"verifier_code_hash_hex\":\"0x"
+                + SCCP_TEST_TRON_VERIFIER_CODE_HASH
+                + "\",\"verifier_key_hash_hex\":\"0x"
+                + SCCP_TEST_TRON_VERIFIER_KEY_HASH
+                + "\",\"expected_destination_binding_hash_hex\":\"0x"
+                + "74".repeat(32)
+                + "\",\"tron_verifier_address\":\""
+                + SCCP_TEST_TRON_VERIFIER_ADDRESS
+                + "\",\"proof_bytes_hex\":\"0x"
+                + SCCP_TEST_GROTH16_PROOF_HEX
+                + "\"}")
+            .getBytes(StandardCharsets.UTF_8);
+    final byte[] mismatchedEvmDestinationBindingBody =
+        ("{\"authority\":\"alice\",\"message_bundle\":"
+                + sccpMessageBundleJson()
+                + ",\"network_id_hex\":\"0x"
+                + SCCP_TEST_EVM_NETWORK_ID
+                + "\",\"verifier_address_hex\":\"0x"
+                + SCCP_TEST_EVM_VERIFIER_ADDRESS
+                + "\",\"bridge_address_hex\":\"0x"
+                + SCCP_TEST_EVM_BRIDGE_ADDRESS
+                + "\",\"verifier_code_hash_hex\":\"0x"
+                + SCCP_TEST_EVM_VERIFIER_CODE_HASH
+                + "\",\"verifier_key_hash_hex\":\"0x"
+                + SCCP_TEST_EVM_VERIFIER_KEY_HASH
+                + "\",\"expected_destination_binding_hash_hex\":\"0x"
+                + "74".repeat(32)
+                + "\",\"proof_bytes_hex\":\"0x"
+                + SCCP_TEST_GROTH16_PROOF_HEX
+                + "\"}")
+            .getBytes(StandardCharsets.UTF_8);
+    final byte[] wrongSourceDomainDestinationBody =
+        ("{\"authority\":\"alice\",\"network_id_hex\":\"0x"
+                + "71".repeat(32)
+                + "\",\"verifier_code_hash_hex\":\"0x"
+                + "72".repeat(32)
+                + "\",\"verifier_key_hash_hex\":\"0x"
+                + "73".repeat(32)
+                + "\",\"expected_destination_binding_hash_hex\":\"0x"
+                + "74".repeat(32)
+                + "\",\"tron_verifier_address\":\"TJRabPrwbZy45sbavfcjinPJC18kjpRTv8"
+                + "\",\"proof_bytes_hex\":\"0x"
+                + sampleSccpProofHex(SCCP_TEST_MESSAGE_ID, 5, SCCP_TEST_COMMITMENT_ROOT)
+                + "\"}")
+            .getBytes(StandardCharsets.UTF_8);
+
+    try {
+      transport.postBridgeProofSubmitJson(body);
+      throw new AssertionError("Bridge proof submit must reject all-zero proof bytes");
+    } catch (final IllegalArgumentException ex) {
+      assert ex.getMessage().contains("proof_bytes_hex")
+          : "Bridge proof rejection must name proof_bytes_hex";
+      assert ex.getMessage().contains("all zero")
+          : "Bridge proof rejection must explain all-zero proof bytes";
+    }
+
+    try {
+      transport.postBridgeMessageSubmitJson(body);
+      throw new AssertionError("Bridge message submit must reject all-zero proof bytes");
+    } catch (final IllegalArgumentException ex) {
+      assert ex.getMessage().contains("proof_bytes_hex")
+          : "Bridge message rejection must name proof_bytes_hex";
+      assert ex.getMessage().contains("all zero")
+          : "Bridge message rejection must explain all-zero proof bytes";
+    }
+
+    try {
+      transport.postBridgeProofSubmitJson(shortBody);
+      throw new AssertionError("Bridge proof submit must reject short proof bytes");
+    } catch (final IllegalArgumentException ex) {
+      assert ex.getMessage().contains("proof_bytes_hex")
+          : "Bridge proof rejection must name proof_bytes_hex";
+      assert ex.getMessage().contains("384-byte")
+          : "Bridge proof rejection must explain canonical proof byte length";
+    }
+
+    try {
+      transport.postBridgeMessageSubmitJson(shortBody);
+      throw new AssertionError("Bridge message submit must reject short proof bytes");
+    } catch (final IllegalArgumentException ex) {
+      assert ex.getMessage().contains("proof_bytes_hex")
+          : "Bridge message rejection must name proof_bytes_hex";
+      assert ex.getMessage().contains("384-byte")
+          : "Bridge message rejection must explain canonical proof byte length";
+    }
+
+    final StringBuilder offCurveC = new StringBuilder(SCCP_TEST_GROTH16_PROOF_HEX);
+    offCurveC.setCharAt(11 * 64 + 63, '3');
+    try {
+      transport.postBridgeProofSubmitJson(
+          ("{\"network_id_hex\":\"0x"
+                  + "71".repeat(32)
+                  + "\",\"expected_destination_binding_hash_hex\":\"0x"
+                  + "74".repeat(32)
+                  + "\",\"proof_bytes_hex\":\"0x"
+                  + offCurveC
+                  + "\"}")
+              .getBytes(StandardCharsets.UTF_8));
+      throw new AssertionError("Bridge proof submit must reject off-curve G1 proof bytes");
+    } catch (final IllegalArgumentException ex) {
+      assert ex.getMessage().contains("proof_bytes_hex.c")
+          : "Bridge proof rejection must name off-curve G1 proof point";
+    }
+
+    final StringBuilder offCurveB = new StringBuilder(SCCP_TEST_GROTH16_PROOF_HEX);
+    final int offCurveBIndex = 6 * 64 + 63;
+    offCurveB.setCharAt(offCurveBIndex, offCurveB.charAt(offCurveBIndex) == '0' ? '1' : '0');
+    try {
+      transport.postBridgeMessageSubmitJson(
+          ("{\"verifier_address_hex\":\"0x"
+                  + "22".repeat(20)
+                  + "\",\"proof_bytes_hex\":\"0x"
+                  + offCurveB
+                  + "\"}")
+              .getBytes(StandardCharsets.UTF_8));
+      throw new AssertionError("Bridge message submit must reject off-curve G2 proof bytes");
+    } catch (final IllegalArgumentException ex) {
+      assert ex.getMessage().contains("proof_bytes_hex.b")
+          : "Bridge message rejection must name off-curve G2 proof point";
+    }
+
+    try {
+      transport.postBridgeProofSubmitJson(
+          sccpBridgeMessageBody(
+              sampleSccpProofHex("44".repeat(32), 0, SCCP_TEST_COMMITMENT_ROOT)));
+      throw new AssertionError("Bridge proof submit must reject message-id drift");
+    } catch (final IllegalArgumentException ex) {
+      assert ex.getMessage().contains("proof_bytes_hex.message_id")
+          : "Bridge proof rejection must name proof tuple message id";
+    }
+
+    try {
+      transport.postBridgeMessageSubmitJson(
+          sccpBridgeMessageBody(sampleSccpProofHex(SCCP_TEST_MESSAGE_ID, 5, SCCP_TEST_COMMITMENT_ROOT)));
+      throw new AssertionError("Bridge message submit must reject source-domain drift");
+    } catch (final IllegalArgumentException ex) {
+      assert ex.getMessage().contains("proof_bytes_hex.source_domain")
+          : "Bridge message rejection must name proof tuple source domain";
+    }
+
+    try {
+      transport.postBridgeMessageSubmitJson(
+          sccpBridgeMessageBody(sampleSccpProofHex(SCCP_TEST_MESSAGE_ID, 0, "55".repeat(32))));
+      throw new AssertionError("Bridge message submit must reject commitment-root drift");
+    } catch (final IllegalArgumentException ex) {
+      assert ex.getMessage().contains("proof_bytes_hex.commitment_root")
+          : "Bridge message rejection must name proof tuple commitment root";
+    }
+
+    try {
+      transport.postBridgeProofSubmitJson(
+          ("{\"authority\":\"alice\",\"message_bundle\":{},\"network_id_hex\":\"0x"
+                  + "71".repeat(32)
+                  + "\",\"verifier_code_hash_hex\":\"0x"
+                  + "72".repeat(32)
+                  + "\",\"verifier_key_hash_hex\":\"0x"
+                  + "73".repeat(32)
+                  + "\",\"expected_destination_binding_hash_hex\":\"0x"
+                  + "74".repeat(32)
+                  + "\",\"tron_verifier_address\":\"TJRabPrwbZy45sbavfcjinPJC18kjpRTv8"
+                  + "\",\"proof_bytes_hex\":\"0x"
+                  + SCCP_TEST_GROTH16_PROOF_HEX
+                  + "\"}")
+              .getBytes(StandardCharsets.UTF_8));
+      throw new AssertionError("Bridge proof submit must reject missing message bundle proof context");
+    } catch (final IllegalArgumentException ex) {
+      assert ex.getMessage().contains("message_bundle.commitment.message_id")
+          : "Bridge proof rejection must name message bundle context";
+    }
+
+    try {
+      transport.postBridgeProofSubmitJson(wrongSourceDomainDestinationBody);
+      throw new AssertionError("Bridge proof submit must reject wrong source-domain destination proof");
+    } catch (final IllegalArgumentException ex) {
+      assert ex.getMessage().contains("proof_bytes_hex.source_domain")
+          : "Bridge proof rejection must name proof tuple source domain";
+    }
+
+    try {
+      transport.postBridgeProofSubmitJson(proofOnlyBody);
+      throw new AssertionError("Bridge proof submit must reject proof bytes without destination material");
+    } catch (final IllegalArgumentException ex) {
+      assert ex.getMessage().contains("deployment destination fields")
+          : "Bridge proof rejection must require destination material";
+    }
+
+    try {
+      transport.postBridgeProofSubmitJson(partialDestinationBody);
+      throw new AssertionError("Bridge proof submit must reject partial destination tuple");
+    } catch (final IllegalArgumentException ex) {
+      assert ex.getMessage().contains("complete EVM or TRON")
+          : "Bridge proof rejection must require a complete destination tuple";
+    }
+
+    try {
+      transport.postBridgeMessageSubmitJson(mixedDestinationBody);
+      throw new AssertionError("Bridge message submit must reject mixed EVM/TRON tuple");
+    } catch (final IllegalArgumentException ex) {
+      assert ex.getMessage().contains("cannot be mixed")
+          : "Bridge message rejection must reject mixed EVM/TRON material";
+    }
+
+    try {
+      transport.postBridgeMessageSubmitJson(mismatchedDestinationBindingBody);
+      throw new AssertionError("Bridge message submit must reject mismatched TRON binding hash");
+    } catch (final IllegalArgumentException ex) {
+      assert ex.getMessage().contains("canonical TRON destination binding")
+          : "Bridge message rejection must reject mismatched TRON binding hashes";
+    }
+
+    try {
+      transport.postBridgeMessageSubmitJson(mismatchedEvmDestinationBindingBody);
+      throw new AssertionError("Bridge message submit must reject mismatched EVM binding hash");
+    } catch (final IllegalArgumentException ex) {
+      assert ex.getMessage().contains("canonical EVM destination binding")
+          : "Bridge message rejection must reject mismatched EVM binding hashes";
+    }
+
+    try {
+      transport.postBridgeProofSubmitJson(fullDestinationNoBundleBody);
+      throw new AssertionError("Bridge proof submit must reject missing bundle selection");
+    } catch (final IllegalArgumentException ex) {
+      assert ex.getMessage().contains("exactly one of burn_bundle or message_bundle")
+          : "Bridge proof rejection must require one bundle";
+    }
+
+    try {
+      transport.postBridgeProofSubmitJson(burnDestinationBody);
+      throw new AssertionError("Bridge proof submit must reject destination tuple on burn bundle");
+    } catch (final IllegalArgumentException ex) {
+      assert ex.getMessage().contains("message_bundle submissions")
+          : "Bridge proof rejection must reject destination material on burn bundles";
+    }
+
+    try {
+      transport.postBridgeMessageSubmitJson(destinationOnlyBody);
+      throw new AssertionError("Bridge message submit must reject destination material without proof bytes");
+    } catch (final IllegalArgumentException ex) {
+      assert ex.getMessage().contains("proof_bytes_hex is required")
+          : "Bridge message rejection must require proof bytes";
+    }
+
+    try {
+      transport.postBridgeProofSubmitJson(invalidNetworkIdBody);
+      throw new AssertionError("Bridge proof submit must reject invalid destination network id");
+    } catch (final IllegalArgumentException ex) {
+      assert ex.getMessage().contains("network_id_hex")
+          : "Bridge proof rejection must name the invalid destination field";
+      assert ex.getMessage().contains("32-byte")
+          : "Bridge proof rejection must explain destination network id length";
+    }
+
+    try {
+      transport.postBridgeProofSubmitJson(paddedNetworkIdBody);
+      throw new AssertionError("Bridge proof submit must reject padded destination network id");
+    } catch (final IllegalArgumentException ex) {
+      assert ex.getMessage().contains("network_id_hex")
+          : "Bridge proof rejection must name the padded destination field";
+      assert ex.getMessage().contains("canonical hex")
+          : "Bridge proof rejection must require exact destination hex";
+    }
+
+    try {
+      transport.postBridgeMessageSubmitJson(paddedProofBytesBody);
+      throw new AssertionError("Bridge message submit must reject padded proof bytes");
+    } catch (final IllegalArgumentException ex) {
+      assert ex.getMessage().contains("proof_bytes_hex")
+          : "Bridge message rejection must name padded proof bytes";
+      assert ex.getMessage().contains("canonical hex")
+          : "Bridge message rejection must require exact proof hex";
+    }
+
+    try {
+      transport.postBridgeProofSubmitJson(zeroEvmVerifierBody);
+      throw new AssertionError("Bridge proof submit must reject all-zero EVM verifier address");
+    } catch (final IllegalArgumentException ex) {
+      assert ex.getMessage().contains("verifier_address_hex")
+          : "Bridge proof rejection must name the zero EVM verifier field";
+      assert ex.getMessage().contains("all zero")
+          : "Bridge proof rejection must explain all-zero EVM verifier material";
+    }
+
+    try {
+      transport.postBridgeMessageSubmitJson(blankTronVerifierBody);
+      throw new AssertionError("Bridge message submit must reject blank TRON verifier address");
+    } catch (final IllegalArgumentException ex) {
+      assert ex.getMessage().contains("tron_verifier_address")
+          : "Bridge message rejection must name the invalid TRON verifier field";
+    }
+
+    try {
+      transport.postBridgeMessageSubmitJson(paddedTronVerifierBody);
+      throw new AssertionError("Bridge message submit must reject padded TRON verifier address");
+    } catch (final IllegalArgumentException ex) {
+      assert ex.getMessage().contains("tron_verifier_address")
+          : "Bridge message rejection must name the padded TRON verifier field";
+    }
+
+    try {
+      transport.postBridgeMessageSubmitJson(zeroTronVerifierBody);
+      throw new AssertionError("Bridge message submit must reject zero TRON verifier address");
+    } catch (final IllegalArgumentException ex) {
+      assert ex.getMessage().contains("tron_verifier_address")
+          : "Bridge message rejection must name the invalid TRON verifier field";
+    }
+
+    try {
+      transport.postBridgeMessageSubmitJson(invalidTronVerifierBody);
+      throw new AssertionError("Bridge message submit must reject invalid TRON verifier address");
+    } catch (final IllegalArgumentException ex) {
+      assert ex.getMessage().contains("tron_verifier_address")
+          : "Bridge message rejection must name the invalid TRON verifier field";
+    }
+
+    assert executor.lastRequest() == null : "Invalid bridge submit payload must not be sent";
   }
 
   private static void submitPropagatesExecutorFailure() {

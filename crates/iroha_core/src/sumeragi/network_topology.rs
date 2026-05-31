@@ -257,34 +257,27 @@ impl Topology {
         if n <= 1 {
             return;
         }
-        let mut slots: Vec<usize> = (0..n).collect();
-        let mut shuffled = Vec::with_capacity(n);
-        let mut ctr: u64 = 0;
-        while !slots.is_empty() {
-            let pos = Self::shuffle_prf_slot(seed, height, ctr, slots.len());
-            let pick = slots.swap_remove(pos);
-            shuffled.push(self.0[pick].clone());
-            ctr = ctr.saturating_add(1);
-        }
+        let shuffled = Self::prf_shuffled_indices(seed, height, n)
+            .into_iter()
+            .map(|idx| self.0[idx].clone())
+            .collect();
         self.0 = shuffled;
     }
 
-    /// PRF-based leader index for (height, view).
+    /// PRF-based leader index for `(height, view)`.
+    ///
+    /// The seed selects a deterministic validator permutation per height, and
+    /// views walk that permutation cyclically. This preserves deterministic
+    /// leader unpredictability for the height while bounding consecutive views
+    /// led by the same faulty validator.
     pub fn leader_index_prf(&self, seed: [u8; 32], height: u64, view: u64) -> usize {
-        use iroha_crypto::blake2::{Blake2b512, Digest as _};
         let n = self.0.len();
         if n == 0 {
             return 0;
         }
-        let mut hasher = Blake2b512::new();
-        iroha_crypto::blake2::digest::Update::update(&mut hasher, &seed);
-        iroha_crypto::blake2::digest::Update::update(&mut hasher, &height.to_be_bytes());
-        iroha_crypto::blake2::digest::Update::update(&mut hasher, &view.to_be_bytes());
-        let digest = iroha_crypto::blake2::Digest::finalize(hasher);
-        let mut w = [0u8; 8];
-        w.copy_from_slice(&digest[..8]);
-        let modulus = u128::try_from(n).expect("topology length fits u128");
-        (u128::from(u64::from_be_bytes(w)) % modulus) as usize
+        let slot = usize::try_from(view % u64::try_from(n).expect("topology length fits u64"))
+            .expect("view slot fits usize");
+        Self::prf_shuffled_indices(seed, height, n)[slot]
     }
 
     /// `NPoS`-style PRF-based collector selection for a given (height, view).
@@ -360,6 +353,18 @@ impl Topology {
         let r = u64::from_be_bytes(idx_bytes);
         let modulus = u128::try_from(modulus).expect("candidate length fits u128");
         (u128::from(r) % modulus) as usize
+    }
+
+    fn prf_shuffled_indices(seed: [u8; 32], height: u64, len: usize) -> Vec<usize> {
+        let mut slots: Vec<usize> = (0..len).collect();
+        let mut shuffled = Vec::with_capacity(len);
+        let mut ctr: u64 = 0;
+        while !slots.is_empty() {
+            let pos = Self::shuffle_prf_slot(seed, height, ctr, slots.len());
+            shuffled.push(slots.swap_remove(pos));
+            ctr = ctr.saturating_add(1);
+        }
+        shuffled
     }
 
     /// Whether the given peer participates as a collector for the current topology
@@ -556,6 +561,30 @@ mod prf_collectors_tests {
         // With different seed, high probability to differ; allow equality only if very unlucky
         // Accept difference as a sanity check:
         assert!(la1 != lb || topo.as_ref().len() == 1);
+    }
+
+    #[test]
+    fn prf_leader_cycles_through_height_permutation_without_repeats() {
+        let peers: Vec<PeerId> = (0..5)
+            .map(|_| PeerId::new(iroha_crypto::KeyPair::random().public_key().clone()))
+            .collect();
+        let topo = Topology::new(peers);
+        let seed = [3u8; 32];
+        let height = 42;
+        let first_cycle: Vec<_> = (0..topo.as_ref().len())
+            .map(|view| topo.leader_index_prf(seed, height, view as u64))
+            .collect();
+        let unique: std::collections::BTreeSet<_> = first_cycle.iter().copied().collect();
+        assert_eq!(
+            unique.len(),
+            topo.as_ref().len(),
+            "one NPoS leader cycle should visit every validator exactly once"
+        );
+        assert_eq!(
+            topo.leader_index_prf(seed, height, topo.as_ref().len() as u64),
+            first_cycle[0],
+            "NPoS leader selection should repeat only after a full cycle"
+        );
     }
 }
 

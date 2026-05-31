@@ -224,6 +224,22 @@ TypeInvariant ==
   /\ next_streak \in 0..4
   /\ hysteresis_factor \in 0..5
 
+CasePartitionExact ==
+  /\ Cases = EffectiveCases \union HysteresisCases
+  /\ EffectiveCases \intersect HysteresisCases = {}
+  /\ EffectiveCases = NearFastEligibleCases \union NonFastEffectiveCases
+  /\ NearFastEligibleCases =
+       NearFastShorterCases \union NearFastNotShorterCases
+  /\ NearFastShorterCases \intersect NearFastNotShorterCases = {}
+  /\ HysteresisCases = HysteresisInvalidCases \union HysteresisValidCases
+  /\ HysteresisInvalidCases \intersect HysteresisValidCases = {}
+  /\ HysteresisValidCases =
+       HysteresisBeforeCases \union HysteresisBoundaryCases
+       \union HysteresisAfterCases
+  /\ HysteresisValidCases =
+       Streak0Cases \union Streak1Cases \union Streak2Cases
+       \union Streak3Cases
+
 FastTimeoutMatchesSpec ==
   candidate = "none" \/ uses_fast_timeout = SpecUsesFastTimeout(candidate)
 
@@ -294,6 +310,7 @@ StreakTwoAndAboveUseCappedFourTimeoutFactor ==
     hysteresis_factor = 4
 
 Safety ==
+  /\ CasePartitionExact
   /\ FastTimeoutMatchesSpec
   /\ BaseTimeoutMatchesSpec
   /\ ShorterNearTimeoutMatchesSpec

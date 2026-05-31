@@ -2807,6 +2807,8 @@ pub enum ConsensusMessageReason {
     RosterUnverifiedDeferred,
     /// Consensus message ignored due to mismatched mode/context.
     ModeMismatch,
+    /// Consensus message dropped while sender advertises a mismatched membership hash.
+    MembershipMismatch,
     /// Requested data not found locally.
     NotFound,
 }
@@ -2853,6 +2855,7 @@ impl ConsensusMessageReason {
             ConsensusMessageReason::RosterHashMismatchDeferred => "roster_hash_mismatch_deferred",
             ConsensusMessageReason::RosterUnverifiedDeferred => "roster_unverified_deferred",
             ConsensusMessageReason::ModeMismatch => "mode_mismatch",
+            ConsensusMessageReason::MembershipMismatch => "membership_mismatch",
             ConsensusMessageReason::NotFound => "not_found",
         }
     }
@@ -9560,6 +9563,10 @@ mod tests {
         assert_eq!(
             super::ConsensusMessageReason::ModeMismatch.as_str(),
             "mode_mismatch"
+        );
+        assert_eq!(
+            super::ConsensusMessageReason::MembershipMismatch.as_str(),
+            "membership_mismatch"
         );
         assert_eq!(
             super::ConsensusMessageReason::NotFound.as_str(),

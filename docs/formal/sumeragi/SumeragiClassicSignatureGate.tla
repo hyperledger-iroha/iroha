@@ -405,4 +405,70 @@ Safety ==
   /\ HighestFailuresFailClosed
   /\ NposAggregateMayTolerateMissingVotes
 
+AllConcreteAcceptDecisionsMatchSpec ==
+  \A c \in Cases:
+    ActualAccept(c) = SpecAccept(c)
+
+AllConcreteAcceptedReturnBitmapSigners ==
+  \A c \in Cases:
+    ActualAccept(c) => ActualReturned(c) = SelectedByBitmap(c)
+
+AllConcreteReturnedSignersWithinRoster ==
+  \A c \in Cases:
+    ActualReturned(c) \subseteq Roster(c)
+
+AllConcreteRejectedReturnNoSigners ==
+  \A c \in Cases:
+    ~ActualAccept(c) => ActualReturned(c) = {}
+
+AllConcreteValidCasesAccepted ==
+  \A c \in ValidCases:
+    ActualAccept(c)
+
+ConcreteModeAndRosterFailuresFailClosed ==
+  \A c \in {"mode_tag_mismatch", "validator_set_mismatch"}:
+    ~ActualAccept(c)
+
+ConcreteBitmapFailuresFailClosed ==
+  \A c \in BitmapFailureCases:
+    ~ActualAccept(c)
+
+ConcreteQuorumFailuresFailClosed ==
+  \A c \in QuorumFailureCases:
+    ~ActualAccept(c)
+
+ConcreteAggregateFailuresFailClosed ==
+  \A c \in AggregateFailureCases:
+    ~ActualAccept(c)
+
+ConcreteVoteFailuresFailClosed ==
+  \A c \in VoteFailureCases:
+    ~ActualAccept(c)
+
+ConcreteHighestFailuresFailClosed ==
+  \A c \in HighestFailureCases:
+    ~ActualAccept(c)
+
+ConcreteNposMissingVoteAnchor ==
+  /\ ActualAccept("valid_npos_stake_missing_vote")
+  /\ ConsensusMode("valid_npos_stake_missing_vote") = "npos"
+  /\ Cardinality(
+       SelectedByBitmap("valid_npos_stake_missing_vote")
+         \ VotesPresent("valid_npos_stake_missing_vote")
+     ) = 1
+
+ClassicSignatureSafetyAnchors ==
+  /\ AllConcreteAcceptDecisionsMatchSpec
+  /\ AllConcreteAcceptedReturnBitmapSigners
+  /\ AllConcreteReturnedSignersWithinRoster
+  /\ AllConcreteRejectedReturnNoSigners
+  /\ AllConcreteValidCasesAccepted
+  /\ ConcreteModeAndRosterFailuresFailClosed
+  /\ ConcreteBitmapFailuresFailClosed
+  /\ ConcreteQuorumFailuresFailClosed
+  /\ ConcreteAggregateFailuresFailClosed
+  /\ ConcreteVoteFailuresFailClosed
+  /\ ConcreteHighestFailuresFailClosed
+  /\ ConcreteNposMissingVoteAnchor
+
 ====

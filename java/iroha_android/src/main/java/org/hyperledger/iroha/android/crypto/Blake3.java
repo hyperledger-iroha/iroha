@@ -6,8 +6,8 @@ package org.hyperledger.iroha.android.crypto;
 /**
  * Pure Java implementation of the BLAKE3 hash function.
  *
- * <p>Supports inputs up to 1024 bytes (single chunk). This covers the canonical address payloads
- * and checksummed literals used by the Android SDK.
+ * <p>Supports inputs up to the largest Solana AccountLtHash preimage used by the Android SDK, and
+ * exposes BLAKE3 XOF output for Agave-compatible 2048-byte account contributions.
  *
  * <p>Reference: <a href="https://github.com/BLAKE3-team/BLAKE3-specs">BLAKE3 Specification</a>
  */
@@ -15,9 +15,12 @@ public final class Blake3 {
 
   private static final int BLOCK_LEN = 64;
   private static final int CHUNK_LEN = 1024;
+  private static final int OUT_LEN = 32;
+  private static final int MAX_INPUT_LEN = 8 + 65_536 + 1 + 32 + 32;
 
   private static final int CHUNK_START = 1;
   private static final int CHUNK_END = 2;
+  private static final int PARENT = 4;
   private static final int ROOT = 8;
 
   private static final int[] IV = {
@@ -34,55 +37,111 @@ public final class Blake3 {
   /**
    * Computes the BLAKE3 hash of the given input.
    *
-   * @param input the data to hash (must be at most 1024 bytes)
+   * @param input the data to hash
    * @return the 32-byte BLAKE3 hash
-   * @throws IllegalArgumentException if input exceeds 1024 bytes
+   * @throws IllegalArgumentException if input exceeds the SDK helper limit
    */
   public static byte[] hash(byte[] input) {
-    if (input.length > CHUNK_LEN) {
-      throw new IllegalArgumentException(
-          "Input too large for single-chunk Blake3: " + input.length + " bytes (max " + CHUNK_LEN + ")");
-    }
+    return derive(input, OUT_LEN);
+  }
 
+  /**
+   * Computes BLAKE3 XOF output for the given input.
+   *
+   * @param input the data to hash
+   * @param outputLength number of output bytes to derive
+   * @return BLAKE3 XOF bytes
+   * @throws IllegalArgumentException if input or output length exceeds SDK helper bounds
+   */
+  public static byte[] derive(final byte[] input, final int outputLength) {
+    if (input.length > MAX_INPUT_LEN) {
+      throw new IllegalArgumentException(
+          "Input too large for Blake3 helper: " + input.length + " bytes (max " + MAX_INPUT_LEN + ")");
+    }
+    if (outputLength < 0) {
+      throw new IllegalArgumentException("outputLength must not be negative");
+    }
+    final Output rootOutput = rootOutput(input);
+    final byte[] output = new byte[outputLength];
+    int cursor = 0;
+    long outputBlockCounter = 0L;
+    while (cursor < outputLength) {
+      final int[] words = rootOutput.rootWords(outputBlockCounter);
+      for (final int word : words) {
+        if (cursor >= outputLength) break;
+        output[cursor++] = (byte) word;
+        if (cursor >= outputLength) break;
+        output[cursor++] = (byte) (word >>> 8);
+        if (cursor >= outputLength) break;
+        output[cursor++] = (byte) (word >>> 16);
+        if (cursor >= outputLength) break;
+        output[cursor++] = (byte) (word >>> 24);
+      }
+      outputBlockCounter += 1;
+    }
+    return output;
+  }
+
+  private static Output rootOutput(final byte[] input) {
+    final int chunkCount = Math.max(1, (input.length + CHUNK_LEN - 1) / CHUNK_LEN);
+    return subtreeOutput(input, 0, chunkCount);
+  }
+
+  private static Output subtreeOutput(
+      final byte[] input, final int chunkIndex, final int chunkCount) {
+    if (chunkCount == 1) {
+      final int offset = chunkIndex * CHUNK_LEN;
+      final int length = Math.min(CHUNK_LEN, Math.max(0, input.length - offset));
+      return chunkOutput(input, offset, length, chunkIndex);
+    }
+    final int leftCount = leftSubtreeChunkCount(chunkCount);
+    final int[] left = subtreeOutput(input, chunkIndex, leftCount).chainingValue();
+    final int[] right = subtreeOutput(input, chunkIndex + leftCount, chunkCount - leftCount).chainingValue();
+    return parentOutput(left, right);
+  }
+
+  private static int leftSubtreeChunkCount(final int chunkCount) {
+    int power = 1;
+    while (power * 2 < chunkCount) {
+      power *= 2;
+    }
+    return power;
+  }
+
+  private static Output chunkOutput(
+      final byte[] input, final int offset, final int length, final long chunkCounter) {
     int[] cv = IV.clone();
-    int numBlocks = Math.max(1, (input.length + BLOCK_LEN - 1) / BLOCK_LEN);
+    int numBlocks = Math.max(1, (length + BLOCK_LEN - 1) / BLOCK_LEN);
 
     for (int i = 0; i < numBlocks; i++) {
-      int blockStart = i * BLOCK_LEN;
-      int blockLen = Math.min(BLOCK_LEN, Math.max(0, input.length - blockStart));
+      int blockStart = offset + i * BLOCK_LEN;
+      int blockLen = Math.min(BLOCK_LEN, Math.max(0, length - i * BLOCK_LEN));
 
-      int[] blockWords = parseBlockWords(input, blockStart, blockLen);
+      int[] blockWords = parseBlockWords(input, blockStart);
 
       int flags = 0;
       if (i == 0) flags |= CHUNK_START;
-      if (i == numBlocks - 1) flags |= CHUNK_END | ROOT;
-
-      int[] state = compress(cv, blockWords, 0, blockLen, flags);
-
-      if (i < numBlocks - 1) {
-        for (int j = 0; j < 8; j++) {
-          cv[j] = state[j] ^ state[j + 8];
-        }
-      } else {
-        return rootOutput(state);
+      if (i == numBlocks - 1) {
+        return new Output(cv.clone(), blockWords, chunkCounter, blockLen, flags | CHUNK_END);
+      }
+      int[] state = compress(cv, blockWords, chunkCounter, blockLen, flags);
+      for (int j = 0; j < 8; j++) {
+        cv[j] = state[j] ^ state[j + 8];
       }
     }
     throw new IllegalStateException("Unreachable");
   }
 
-  private static byte[] rootOutput(int[] state) {
-    byte[] output = new byte[32];
-    for (int j = 0; j < 8; j++) {
-      int word = state[j] ^ state[j + 8];
-      output[j * 4] = (byte) word;
-      output[j * 4 + 1] = (byte) (word >>> 8);
-      output[j * 4 + 2] = (byte) (word >>> 16);
-      output[j * 4 + 3] = (byte) (word >>> 24);
+  private static Output parentOutput(final int[] left, final int[] right) {
+    final int[] blockWords = new int[16];
+    for (int i = 0; i < 8; i++) {
+      blockWords[i] = left[i];
+      blockWords[i + 8] = right[i];
     }
-    return output;
+    return new Output(IV.clone(), blockWords, 0L, BLOCK_LEN, PARENT);
   }
 
-  private static int[] parseBlockWords(byte[] input, int blockStart, int blockLen) {
+  private static int[] parseBlockWords(byte[] input, int blockStart) {
     int[] words = new int[16];
     for (int j = 0; j < 16; j++) {
       int offset = blockStart + j * 4;
@@ -142,5 +201,46 @@ public final class Blake3 {
       permuted[i] = msg[MSG_PERMUTATION[i]];
     }
     return permuted;
+  }
+
+  private static final class Output {
+    private final int[] inputChainingValue;
+    private final int[] blockWords;
+    private final long counter;
+    private final int blockLen;
+    private final int flags;
+
+    private Output(
+        final int[] inputChainingValue,
+        final int[] blockWords,
+        final long counter,
+        final int blockLen,
+        final int flags) {
+      this.inputChainingValue = inputChainingValue;
+      this.blockWords = blockWords;
+      this.counter = counter;
+      this.blockLen = blockLen;
+      this.flags = flags;
+    }
+
+    private int[] chainingValue() {
+      final int[] state = compress(inputChainingValue, blockWords, counter, blockLen, flags);
+      final int[] out = new int[8];
+      for (int i = 0; i < 8; i++) {
+        out[i] = state[i] ^ state[i + 8];
+      }
+      return out;
+    }
+
+    private int[] rootWords(final long outputBlockCounter) {
+      final int[] state =
+          compress(inputChainingValue, blockWords, outputBlockCounter, blockLen, flags | ROOT);
+      final int[] words = new int[16];
+      for (int i = 0; i < 8; i++) {
+        words[i] = state[i] ^ state[i + 8];
+        words[i + 8] = state[i + 8] ^ inputChainingValue[i];
+      }
+      return words;
+    }
   }
 }

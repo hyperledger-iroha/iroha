@@ -160,7 +160,7 @@ enabled = true
 
 [confidential]
 enabled = true
-max_proof_size_bytes = 4194304
+max_proof_size_bytes = 8388608
 max_proof_bytes_block = 16777216
 
 [zk]

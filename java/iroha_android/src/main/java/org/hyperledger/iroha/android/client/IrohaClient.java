@@ -30,6 +30,36 @@ public interface IrohaClient {
   }
 
   /**
+   * Posts a JSON bridge-proof submission DTO to Torii's `/v1/bridge/proofs/submit` route.
+   *
+   * <p>This helper is for UI/mobile clients that already hold the SCCP proof package assembled by
+   * the app-side prover flow.
+   */
+  default CompletableFuture<ClientResponse> postBridgeProofSubmitJson(
+      final byte[] encodedBridgeProofSubmitJson) {
+    final CompletableFuture<ClientResponse> future = new CompletableFuture<>();
+    future.completeExceptionally(
+        new UnsupportedOperationException("postBridgeProofSubmitJson not supported"));
+    return future;
+  }
+
+  /** Encodes and posts a bridge-proof submission DTO to Torii's `/v1/bridge/proofs/submit` route. */
+  default CompletableFuture<ClientResponse> submitBridgeProof(
+      final BridgeProofSubmitRequest request) {
+    return postBridgeProofSubmitJson(
+        java.util.Objects.requireNonNull(request, "request").toJsonBytes());
+  }
+
+  /** Posts a JSON bridge-message submission DTO to Torii's `/v1/bridge/messages` route. */
+  default CompletableFuture<ClientResponse> postBridgeMessageSubmitJson(
+      final byte[] encodedBridgeMessageSubmitJson) {
+    final CompletableFuture<ClientResponse> future = new CompletableFuture<>();
+    future.completeExceptionally(
+        new UnsupportedOperationException("postBridgeMessageSubmitJson not supported"));
+    return future;
+  }
+
+  /**
    * Submits an already versioned Norito transaction entrypoint to the node.
    *
    * <p>This is intended for sealed commitment/reveal entrypoints and other non-legacy transaction

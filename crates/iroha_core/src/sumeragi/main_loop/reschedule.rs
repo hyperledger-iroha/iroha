@@ -169,6 +169,103 @@ pub(super) fn contiguous_frontier_vote_backed_fast_resend_window(
 }
 
 impl Actor {
+    fn vote_backed_frontier_reassembly_hard_cap(
+        &self,
+        quorum_timeout: Duration,
+        vote_count: usize,
+        min_votes_for_commit: usize,
+    ) -> Duration {
+        let resend_window = contiguous_frontier_vote_backed_resend_window(
+            self.rebroadcast_cooldown(),
+            vote_count,
+            min_votes_for_commit,
+        );
+        super::saturating_mul_duration(
+            self.frontier_recovery_window()
+                .max(quorum_timeout)
+                .max(resend_window)
+                .max(Duration::from_millis(1)),
+            2,
+        )
+    }
+
+    fn vote_backed_frontier_reassembly_owner_stall_age(
+        &self,
+        frontier_height: u64,
+        frontier_view: u64,
+        now: Instant,
+    ) -> Option<Duration> {
+        if self.frontier_slot_is_exact_height(frontier_height)
+            && let Some(slot) = self.frontier_slot.as_ref()
+            && slot.height == frontier_height
+            && slot.view == frontier_view
+            && !matches!(
+                slot.mode,
+                FrontierSlotMode::Finalized | FrontierSlotMode::PassiveCatchup
+            )
+            && slot.repair_state.last_reason == Some("quorum_timeout")
+        {
+            let last_owner_progress_at = [
+                Some(slot.lag_started_at()),
+                Some(slot.timers.last_progress_at),
+                slot.timers.last_fetch_at,
+                slot.timers.last_view_advance_at,
+                slot.timers.deep_catchup_entered_at,
+                slot.quorum_progress.last_vote_at,
+                slot.quorum_progress.last_commit_qc_at,
+            ]
+            .into_iter()
+            .flatten()
+            .max()
+            .unwrap_or_else(|| slot.lag_started_at());
+            return Some(now.saturating_duration_since(last_owner_progress_at));
+        }
+
+        self.frontier_recovery
+            .filter(|state| {
+                state.frontier_height == frontier_height
+                    && state.last_view == frontier_view
+                    && state.last_cause == "quorum_timeout"
+            })
+            .map(|state| {
+                let last_owner_progress_at = [
+                    Some(state.entered_at),
+                    Some(state.last_progress_at),
+                    state.last_dependency_progress_at,
+                    state.last_action_at,
+                ]
+                .into_iter()
+                .flatten()
+                .max()
+                .unwrap_or(state.entered_at);
+                now.saturating_duration_since(last_owner_progress_at)
+            })
+    }
+
+    fn vote_backed_frontier_reassembly_stall_expired(
+        &self,
+        frontier_height: u64,
+        frontier_view: u64,
+        quorum_stall_age: Duration,
+        quorum_timeout: Duration,
+        vote_count: usize,
+        min_votes_for_commit: usize,
+        now: Instant,
+    ) -> Option<(Duration, Duration)> {
+        let hard_cap = self.vote_backed_frontier_reassembly_hard_cap(
+            quorum_timeout,
+            vote_count,
+            min_votes_for_commit,
+        );
+        let owner_stall_age = self.vote_backed_frontier_reassembly_owner_stall_age(
+            frontier_height,
+            frontier_view,
+            now,
+        )?;
+        (owner_stall_age >= hard_cap && quorum_stall_age >= hard_cap)
+            .then_some((owner_stall_age, hard_cap))
+    }
+
     fn advance_view_after_completed_quorum_reschedule(
         &mut self,
         height: u64,
@@ -1459,6 +1556,63 @@ impl Actor {
         action_taken
     }
 
+    fn maybe_handoff_isolated_vote_backed_frontier_to_anchor(
+        &mut self,
+        block_hash: HashOf<BlockHeader>,
+        height: u64,
+        view: u64,
+        vote_count: usize,
+        min_votes_for_commit: usize,
+        now: Instant,
+    ) -> bool {
+        if !self.config.resilience.enabled
+            || vote_count != 1
+            || vote_count >= min_votes_for_commit
+            || height != self.committed_height_snapshot().saturating_add(1)
+            || self
+                .cached_commit_qc_for_block(block_hash, height, view)
+                .is_some()
+        {
+            return false;
+        }
+
+        let _ = self.seed_frontier_recovery_for_quorum_timeout(height, view, now);
+        let _ = self.handle_frontier_slot_event(
+            now,
+            super::FrontierSlotEvent::OnBodyAvailable {
+                block_hash,
+                view,
+                sender: None,
+            },
+        );
+        let Some(slot) = self.frontier_slot.as_ref() else {
+            return false;
+        };
+        if slot.height != height
+            || slot.view != view
+            || slot.block_hash != block_hash
+            || !slot.body_present
+            || slot.quorum_progress.commit_qc_observed
+            || !self.frontier_slot_has_vote_backed_owner_state_in_slot(slot)
+        {
+            return false;
+        }
+
+        let requested =
+            self.request_range_pull_from_anchor(height, "frontier_stall_reset_fallback", now);
+        if requested {
+            info!(
+                block = %block_hash,
+                height,
+                view,
+                votes = vote_count,
+                min_votes = min_votes_for_commit,
+                "handed isolated vote-backed frontier owner to committed-anchor catch-up"
+            );
+        }
+        requested
+    }
+
     #[allow(clippy::too_many_arguments, clippy::too_many_lines)]
     pub(super) fn reschedule_pending_quorum_block(
         &mut self,
@@ -1742,6 +1896,20 @@ impl Actor {
             && !rotate_authoritative_frontier_immediately
             && !authoritative_payload_can_bypass_reassembly
             && self.frontier_recovery_same_slot_reassembly_active(height, view, now, queue_depths);
+        let vote_backed_frontier_same_height_recovery_expired =
+            vote_backed_frontier_same_height_recovery_active
+                .then(|| {
+                    self.vote_backed_frontier_reassembly_stall_expired(
+                        height,
+                        view,
+                        quorum_stall_age,
+                        quorum_timeout,
+                        vote_count,
+                        min_votes_for_commit,
+                        now,
+                    )
+                })
+                .flatten();
         let vote_backed_frontier_window_owned = contiguous_frontier
             && effective_has_reschedule_votes
             && !drop_pending
@@ -1752,7 +1920,9 @@ impl Actor {
                 now,
                 bundle_window_override.unwrap_or(frontier_window),
             );
-        if vote_backed_frontier_same_height_recovery_active {
+        if vote_backed_frontier_same_height_recovery_active
+            && vote_backed_frontier_same_height_recovery_expired.is_none()
+        {
             let recovery_cause = self
                 .frontier_dependency_recovery_cause(height, view, now)
                 .unwrap_or("quorum_timeout");
@@ -1778,6 +1948,21 @@ impl Actor {
             );
             self.pending.pending_blocks.insert(block_hash, pending);
             return false;
+        }
+        if let Some((owner_stall_age, hard_cap)) = vote_backed_frontier_same_height_recovery_expired
+        {
+            debug!(
+                block = %block_hash,
+                height,
+                view,
+                votes = vote_count,
+                min_votes = min_votes_for_commit,
+                pending_age_ms = pending_age.as_millis(),
+                quorum_stall_age_ms = quorum_stall_age.as_millis(),
+                owner_stall_age_ms = owner_stall_age.as_millis(),
+                hard_cap_ms = hard_cap.as_millis(),
+                "allowing vote-backed quorum reschedule after same-slot frontier recovery stalled past hard cap"
+            );
         }
         if vote_backed_frontier_window_owned {
             debug!(
@@ -2064,6 +2249,18 @@ impl Actor {
                 }
             }
         }
+        let isolated_frontier_anchor_handoff = if handoff_frontier_quorum_timeout_owner {
+            self.maybe_handoff_isolated_vote_backed_frontier_to_anchor(
+                block_hash,
+                height,
+                view,
+                reschedule_vote_count,
+                min_votes_for_commit,
+                now,
+            )
+        } else {
+            false
+        };
         let frontier_recovery_advance = if handoff_frontier_quorum_timeout_owner {
             let _ = self.seed_frontier_recovery_for_quorum_timeout(height, view, now);
             Some(self.advance_frontier_recovery(
@@ -2108,6 +2305,7 @@ impl Actor {
             frontier_slot_owner_active = frontier_slot_owner_was_active,
             effective_has_reschedule_votes,
             handoff_frontier_quorum_timeout_owner,
+            isolated_frontier_anchor_handoff,
             frontier_recovery_advance = ?frontier_recovery_advance,
             precommit_votes = precommit_vote_count,
             commit_votes = commit_vote_count,
@@ -2564,11 +2762,9 @@ impl Actor {
         let near_commit_quorum = min_votes_for_commit > 0
             && vote_count < min_votes_for_commit
             && vote_count.saturating_add(1) >= min_votes_for_commit;
-        if near_commit_quorum
-            && missing_targets.len() <= 1
-            && missing_targets.len() < all_non_local_targets.len()
-        {
-            // Near quorum, signer-index inference can be brittle under churn; fan out to all peers.
+        if near_commit_quorum && !all_non_local_targets.is_empty() {
+            // Near quorum, peers can hold overlapping vote subsets. Fan out to every remote peer
+            // so observed voters can merge partial sets instead of only targeting inferred gaps.
             if matches!(consensus_mode, ConsensusMode::Npos) {
                 self.record_npos_repair_coverage(
                     height,

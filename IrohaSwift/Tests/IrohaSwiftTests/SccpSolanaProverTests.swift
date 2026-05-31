@@ -3,6 +3,349 @@ import XCTest
 @testable import IrohaSwift
 
 final class SccpSolanaProverTests: XCTestCase {
+    private static let solanaSignature55 =
+        "2hxGyn4y9Mjkii76BqmxVoNYbTs3tw97bmtZRXnDoZPAw7VZTWhhk1aV11DtFgYGVibPaty4PQLHVLaKrT24NxGU"
+    private static let solanaSignature01 =
+        "2AXDGYSE4f2sz7tvMMzyHvUfcoJmxudvdhBcmiUSo6ijwfYmfZYsKRxboQMPh3R4kUhXRVdtSXFXMheka4Rc4P2"
+    private static let solanaZeroSignature = String(repeating: "1", count: 64)
+    private static let solanaProgram42 = "5TeWSsjg2gbxCyWVniXeCmwM7UtHTCK7svzJr5xYJzHf"
+    private static let solanaProgram02 = "8qbHbw2BbbTHBW1sbeqakYXVKRQM8Ne7pLK7m6CVfeR"
+    private static let solanaZeroProgram = String(repeating: "1", count: 32)
+    private static let solanaMainnetGenesisPublicInput =
+        "0x8dbaadfbc441ded0257a4700cd26d814b5a196be44b963454cff8dd9543f13b5"
+
+    func testSolanaRouteCanaryEvidenceBindsProgramdataSnapshot() throws {
+        let evidence = try Self.sampleSolanaRouteCanaryEvidence()
+
+        XCTAssertEqual(try canonicalSolanaSccpRouteCanaryEvidenceBytes(evidence).count, 475)
+        XCTAssertEqual(
+            try solanaSccpRouteCanaryEvidenceHash(evidence),
+            "0x77296e47d5681f97136dc79d66dbda4478c3c5ec80271bfd4f1f3b3dbb8e15ca"
+        )
+        XCTAssertEqual(sccpSolanaUpgradeableLoaderId, "BPFLoaderUpgradeab1e11111111111111111111111")
+
+        XCTAssertThrowsError(try solanaSccpRouteCanaryEvidenceHash(
+            try Self.sampleSolanaRouteCanaryEvidence(solanaProgramdataSlot: "4322")
+        )) { error in
+            XCTAssertEqual(error as? SolanaSccpProverError, .invalidString("solanaExpectedProgramdataSlot"))
+        }
+        XCTAssertThrowsError(try solanaSccpRouteCanaryEvidenceHash(
+            try Self.sampleSolanaRouteCanaryEvidence(solanaProgramdataExecutableBase64: "AQIDBA==")
+        )) { error in
+            XCTAssertEqual(error as? SolanaSccpProverError, .invalidString("solanaProgramdataExecutable"))
+        }
+        XCTAssertThrowsError(try solanaSccpRouteCanaryEvidenceHash(
+            try Self.sampleSolanaRouteCanaryEvidence(destinationBindingHash: String(repeating: "78", count: 32))
+        )) { error in
+            XCTAssertEqual(error as? SolanaSccpProverError, .invalidString("destinationBindingHash"))
+        }
+        XCTAssertThrowsError(try solanaSccpRouteCanaryEvidenceHash(
+            try Self.sampleSolanaRouteCanaryEvidence(expectedDestinationBindingHash: String(repeating: "78", count: 32))
+        )) { error in
+            XCTAssertEqual(error as? SolanaSccpProverError, .invalidString("expectedDestinationBindingHash"))
+        }
+    }
+
+    func testTonRouteCanaryEvidenceBindsLiveAccountSnapshot() throws {
+        let evidence = try Self.sampleTonRouteCanaryEvidence()
+
+        XCTAssertEqual(try canonicalTonSccpRouteCanaryEvidenceBytes(evidence).count, 358)
+        XCTAssertEqual(
+            try tonSccpRouteCanaryEvidenceHash(evidence),
+            "0xf128e8405017b9ca7733bb10d43eeaf783e38d39740a3455aa353c76655c6942"
+        )
+
+        XCTAssertThrowsError(try tonSccpRouteCanaryEvidenceHash(
+            try Self.sampleTonRouteCanaryEvidence(destinationBindingHash: "0x" + String(repeating: "78", count: 32))
+        )) { error in
+            XCTAssertEqual(error as? TonSccpProverError, .invalidField("destinationBindingHash"))
+        }
+        XCTAssertThrowsError(try tonSccpRouteCanaryEvidenceHash(
+            try Self.sampleTonRouteCanaryEvidence(verifierContractAddress: "1:" + String(repeating: "11", count: 32))
+        )) { error in
+            XCTAssertEqual(error as? TonSccpProverError, .invalidField("verifierContractAddress"))
+        }
+        XCTAssertThrowsError(try tonSccpRouteCanaryEvidenceHash(
+            try Self.sampleTonRouteCanaryEvidence(accountStatus: "uninit")
+        )) { error in
+            XCTAssertEqual(error as? TonSccpProverError, .invalidField("accountStatus"))
+        }
+        XCTAssertThrowsError(try tonSccpRouteCanaryEvidenceHash(
+            try Self.sampleTonRouteCanaryEvidence(lastTransactionLt: "0123")
+        )) { error in
+            XCTAssertEqual(error as? TonSccpProverError, .invalidField("lastTransactionLt"))
+        }
+        XCTAssertThrowsError(try tonSccpRouteCanaryEvidenceHash(
+            try Self.sampleTonRouteCanaryEvidence(verifierCodeBocRootHash: "0x" + String(repeating: "45", count: 32))
+        )) { error in
+            XCTAssertEqual(error as? TonSccpProverError, .invalidField("verifierCodeBocRootHash"))
+        }
+    }
+
+    private final class EvmSourceProofWitnessProvider: EvmSccpWitnessProvider {
+        private(set) var resolveCount = 0
+
+        func resolveWitness(_ input: EvmSccpProofRequestInput) async throws -> EvmSccpProofRequestInput {
+            XCTAssertTrue(input.sourceProofBytes.isEmpty)
+            resolveCount += 1
+            return EvmSccpProofRequestInput(
+                publicInputs: input.publicInputs,
+                bundleBytes: input.bundleBytes,
+                sourceProofBytes: Data([9, 10]),
+                statementHash: input.statementHash,
+                destinationBindingHash: input.destinationBindingHash,
+                backend: input.backend,
+                sourceDomain: input.sourceDomain,
+                destinationBinding: input.destinationBinding
+            )
+        }
+    }
+
+    private final class TronSourceProofWitnessProvider: TronSccpWitnessProvider {
+        private(set) var resolveCount = 0
+
+        func resolveWitness(_ input: TronSccpProofRequestInput) async throws -> TronSccpProofRequestInput {
+            XCTAssertTrue(input.sourceProofBytes.isEmpty)
+            resolveCount += 1
+            return TronSccpProofRequestInput(
+                publicInputs: input.publicInputs,
+                bundleBytes: input.bundleBytes,
+                sourceProofBytes: Data([9, 10]),
+                statementHash: input.statementHash,
+                destinationBindingHash: input.destinationBindingHash,
+                backend: input.backend,
+                sourceDomain: input.sourceDomain,
+                destinationBinding: input.destinationBinding
+            )
+        }
+    }
+
+    private final class TonSourceProofWitnessProvider: TonSccpWitnessProvider {
+        private(set) var resolveCount = 0
+
+        func resolveWitness(_ input: TonSccpProofRequestInput) async throws -> TonSccpProofRequestInput {
+            XCTAssertTrue(input.sourceProofBytes.isEmpty)
+            resolveCount += 1
+            return TonSccpProofRequestInput(
+                publicInputs: input.publicInputs,
+                bundleBytes: input.bundleBytes,
+                sourceProofBytes: Data([9, 10]),
+                statementHash: input.statementHash,
+                destinationBindingHash: input.destinationBindingHash,
+                sourceStateVerifierId: input.sourceStateVerifierId,
+                sourceStateVerifierHash: input.sourceStateVerifierHash,
+                sourceAdapterDeploymentHash: input.sourceAdapterDeploymentHash,
+                sourceAdapterDeploymentReceiptHash: input.sourceAdapterDeploymentReceiptHash,
+                backend: input.backend,
+                sourceDomain: input.sourceDomain
+            )
+        }
+    }
+
+    private final class SubstrateSourceProofWitnessProvider: SubstrateSccpWitnessProvider {
+        private(set) var resolveCount = 0
+
+        func resolveWitness(_ input: SubstrateSccpProofRequestInput) async throws -> SubstrateSccpProofRequestInput {
+            XCTAssertTrue(input.sourceProofBytes.isEmpty)
+            resolveCount += 1
+            return SubstrateSccpProofRequestInput(
+                publicInputs: input.publicInputs,
+                bundleBytes: input.bundleBytes,
+                sourceProofBytes: Data([9, 10]),
+                statementHash: input.statementHash,
+                destinationBindingHash: input.destinationBindingHash,
+                backend: input.backend,
+                sourceDomain: input.sourceDomain
+            )
+        }
+    }
+
+    private final class SolanaDestinationBindingWitnessProvider: SolanaSccpWitnessProvider {
+        private let resolvedDestinationBindingHash: String
+        private(set) var resolveCount = 0
+
+        init(resolvedDestinationBindingHash: String) {
+            self.resolvedDestinationBindingHash = resolvedDestinationBindingHash
+        }
+
+        func resolveWitness(_ input: SolanaSccpWitnessInput) async throws -> SolanaSccpWitnessInput {
+            XCTAssertEqual(input.destinationBindingHash, String(repeating: "78", count: 32))
+            resolveCount += 1
+            return SolanaSccpWitnessInput(
+                targetDomain: input.targetDomain,
+                mainnetGenesisHash: input.mainnetGenesisHash,
+                finalizedSlot: input.finalizedSlot,
+                parentSlot: input.parentSlot,
+                bankSignatureCount: input.bankSignatureCount,
+                parentBankHash: input.parentBankHash,
+                blockhash: input.blockhash,
+                bankHash: input.bankHash,
+                transactionStatusRoot: input.transactionStatusRoot,
+                messageProofHash: input.messageProofHash,
+                accountInclusionRoot: input.accountInclusionRoot,
+                accountsLtHashChecksum: input.accountsLtHashChecksum,
+                accountsLtHashProofPublicInputsHash: input.accountsLtHashProofPublicInputsHash,
+                bankHashHardForkData: input.bankHashHardForkData,
+                accountsLtHash: input.accountsLtHash,
+                transactionSignature: input.transactionSignature,
+                emitterProgramId: input.emitterProgramId,
+                messageId: input.messageId,
+                payloadHash: input.payloadHash,
+                commitmentRoot: input.commitmentRoot,
+                sourceEventDigest: input.sourceEventDigest,
+                sourceStateVerifierId: input.sourceStateVerifierId,
+                sourceStateVerifierHash: input.sourceStateVerifierHash,
+                statementHash: input.statementHash,
+                destinationBindingHash: resolvedDestinationBindingHash,
+                inclusionBranch: input.inclusionBranch,
+                sourceAdapterDeploymentHash: input.sourceAdapterDeploymentHash,
+                sourceAdapterDeploymentReceiptHash: input.sourceAdapterDeploymentReceiptHash
+            )
+        }
+    }
+
+    private static func sampleSolanaStakeStateV2StakeAccount() -> Data {
+        var data = Data(repeating: 0, count: 200)
+        data[0..<4] = Data([2, 0, 0, 0])
+        data[12..<44] = Data(repeating: 0x81, count: 32)
+        data[44..<76] = Data(repeating: 0x91, count: 32)
+        data[124..<156] = Data(repeating: 0xa1, count: 32)
+        data[156..<164] = Data([0xe8, 0x03, 0, 0, 0, 0, 0, 0])
+        data[164..<172] = Data([2, 0, 0, 0, 0, 0, 0, 0])
+        data[172..<180] = Data([9, 0, 0, 0, 0, 0, 0, 0])
+        data[180..<188] = Data([0x0a, 0xd7, 0xa3, 0x70, 0x3d, 0x0a, 0xb7, 0x3f])
+        data[188..<196] = Data([123, 0, 0, 0, 0, 0, 0, 0])
+        data[196] = 1
+        return data
+    }
+
+    private static func sampleSolanaVoteStateAccount(hasLatency: Bool = true) -> Data {
+        var data = Data(repeating: 0, count: 3_762)
+        var cursor = 0
+
+        func writeU8(_ value: UInt8) {
+            data[cursor] = value
+            cursor += 1
+        }
+
+        func writeU32(_ value: UInt32) {
+            data[cursor..<(cursor + 4)] = Data([
+                UInt8(value & 0xff),
+                UInt8((value >> 8) & 0xff),
+                UInt8((value >> 16) & 0xff),
+                UInt8((value >> 24) & 0xff),
+            ])
+            cursor += 4
+        }
+
+        func writeU64(_ value: UInt64) {
+            var bytes = Data()
+            for shift in stride(from: 0, through: 56, by: 8) {
+                bytes.append(UInt8((value >> UInt64(shift)) & 0xff))
+            }
+            data[cursor..<(cursor + 8)] = bytes
+            cursor += 8
+        }
+
+        func writeRepeated(_ value: UInt8, count: Int) {
+            data[cursor..<(cursor + count)] = Data(repeating: value, count: count)
+            cursor += count
+        }
+
+        writeU32(hasLatency ? 2 : 1)
+        writeRepeated(0x51, count: 32)
+        writeRepeated(0x71, count: 32)
+        writeU8(7)
+        writeU64(sccpSolanaTowerVoteStackDepth)
+        for index in 0..<Int(sccpSolanaTowerVoteStackDepth) {
+            if hasLatency {
+                writeU8(0)
+            }
+            writeU64(11 + UInt64(index))
+            writeU32(UInt32(Int(sccpSolanaTowerVoteStackDepth) - index))
+        }
+        writeU8(1)
+        writeU64(10)
+        writeU64(2)
+        writeU64(1)
+        writeRepeated(0x60, count: 32)
+        writeU64(3)
+        writeRepeated(0x61, count: 32)
+        return data
+    }
+
+    private static func sampleSolanaVoteStateV4Account(
+        withBls: Bool = true,
+        authorizedVoterCount: Int = 2
+    ) -> Data {
+        var data = Data(repeating: 0, count: 3_762)
+        var cursor = 0
+
+        func writeU8(_ value: UInt8) {
+            data[cursor] = value
+            cursor += 1
+        }
+
+        func writeU16(_ value: UInt16) {
+            data[cursor..<(cursor + 2)] = Data([
+                UInt8(value & 0xff),
+                UInt8((value >> 8) & 0xff),
+            ])
+            cursor += 2
+        }
+
+        func writeU32(_ value: UInt32) {
+            data[cursor..<(cursor + 4)] = Data([
+                UInt8(value & 0xff),
+                UInt8((value >> 8) & 0xff),
+                UInt8((value >> 16) & 0xff),
+                UInt8((value >> 24) & 0xff),
+            ])
+            cursor += 4
+        }
+
+        func writeU64(_ value: UInt64) {
+            var bytes = Data()
+            for shift in stride(from: 0, through: 56, by: 8) {
+                bytes.append(UInt8((value >> UInt64(shift)) & 0xff))
+            }
+            data[cursor..<(cursor + 8)] = bytes
+            cursor += 8
+        }
+
+        func writeRepeated(_ value: UInt8, count: Int) {
+            data[cursor..<(cursor + count)] = Data(repeating: value, count: count)
+            cursor += count
+        }
+
+        writeU32(3)
+        writeRepeated(0x51, count: 32)
+        writeRepeated(0x71, count: 32)
+        writeRepeated(0x81, count: 32)
+        writeRepeated(0x91, count: 32)
+        writeU16(1_234)
+        writeU16(9_876)
+        writeU64(456)
+        writeU8(withBls ? 1 : 0)
+        if withBls {
+            writeRepeated(0xa5, count: 48)
+        }
+        writeU64(sccpSolanaTowerVoteStackDepth)
+        for index in 0..<Int(sccpSolanaTowerVoteStackDepth) {
+            writeU8(0)
+            writeU64(11 + UInt64(index))
+            writeU32(UInt32(Int(sccpSolanaTowerVoteStackDepth) - index))
+        }
+        writeU8(1)
+        writeU64(10)
+        writeU64(UInt64(authorizedVoterCount))
+        for index in 0..<authorizedVoterCount {
+            writeU64(UInt64(index + 1))
+            writeRepeated(0x60 + UInt8(index), count: 32)
+        }
+        return data
+    }
+
     func testBuildsSolanaSccpProofRequest() throws {
         let request = try buildSolanaSccpProofRequest(Self.sampleWitness())
 
@@ -11,24 +354,100 @@ final class SccpSolanaProverTests: XCTestCase {
         XCTAssertEqual(request.sourceDomain, sccpDomainSolana)
         XCTAssertEqual(request.targetDomain, sccpDomainSora)
         XCTAssertEqual(request.mainnetGenesisHash, sccpSolanaMainnetGenesisHash)
+        XCTAssertTrue(request.witness.blockhash.hasPrefix("0x"))
+        XCTAssertEqual(request.witness.blockhash.count, 66)
+        XCTAssertEqual(
+            request.witnessHash,
+            try buildSolanaSccpProofRequest(Self.sampleWitness(blockhash: request.witness.blockhash)).witnessHash
+        )
         XCTAssertEqual(request.publicInputs.messageId, "0x" + String(repeating: "dd", count: 32))
+        XCTAssertEqual(request.publicInputs.bankHash, "0x" + String(repeating: "aa", count: 32))
+        XCTAssertEqual(request.publicInputs.parentSlot, 320)
+        XCTAssertEqual(request.publicInputs.bankSignatureCount, 8)
+        XCTAssertEqual(
+            request.publicInputs.accountsLtHashProofPublicInputsHash,
+            try solanaSccpAccountsLtHashProofPublicInputsHash(
+                finalizedSlot: request.witness.finalizedSlot,
+                parentSlot: request.witness.parentSlot,
+                bankSignatureCount: request.witness.bankSignatureCount,
+                parentBankHash: request.witness.parentBankHash,
+                bankHash: request.witness.bankHash,
+                blockhash: request.witness.blockhash,
+                bankHashHardForkData: request.witness.bankHashHardForkData,
+                transactionStatusRoot: request.witness.transactionStatusRoot,
+                accountInclusionRoot: request.witness.accountInclusionRoot,
+                accountsLtHashChecksum: request.witness.accountsLtHashChecksum
+            )
+        )
+        XCTAssertEqual(
+            request.publicInputs.transactionStatusRoot,
+            "0x" + String(repeating: "bb", count: 32)
+        )
+        XCTAssertEqual(request.publicInputs.messageProofHash, "0x" + String(repeating: "cc", count: 32))
+        XCTAssertEqual(request.publicInputs.statementHash, "0x" + String(repeating: "56", count: 32))
+        XCTAssertEqual(request.publicInputs.destinationBindingHash, "0x" + String(repeating: "78", count: 32))
+        XCTAssertEqual(request.sourceStateVerifierId, sccpSolanaMainnetAccountsDbVerifierIdV1)
+        XCTAssertEqual(request.sourceStateVerifierHash, sccpZeroHashV1)
+        XCTAssertEqual(request.publicInputs.sourceStateVerifierId, sccpSolanaMainnetAccountsDbVerifierIdV1)
+        XCTAssertEqual(request.publicInputs.sourceStateVerifierHash, sccpZeroHashV1)
+        XCTAssertEqual(request.publicInputs.sourceAdapterDeploymentHash, sccpZeroHashV1)
+        XCTAssertEqual(request.publicInputs.sourceAdapterDeploymentReceiptHash, sccpZeroHashV1)
+        XCTAssertEqual(
+            request.sourceAdapterDeploymentBindingHash,
+            try sccpSourceAdapterDeploymentBindingHash(request.sourceAdapterDeploymentBinding)
+        )
+        XCTAssertEqual(request.proofContext.statementHash, request.publicInputs.statementHash)
+        XCTAssertTrue(request.proofContextHash.hasPrefix("0x"))
+        XCTAssertEqual(request.proofContextHash.count, 66)
+        XCTAssertEqual(request.sourceAdapterDeploymentBindingHash.count, 66)
+        XCTAssertGreaterThan(try canonicalSolanaSccpProofContextBytes(request.proofContext).count, 0)
+        XCTAssertGreaterThan(
+            try canonicalSolanaSccpAccountsLtHashProofPublicInputsBytes(
+                finalizedSlot: request.witness.finalizedSlot,
+                parentSlot: request.witness.parentSlot,
+                bankSignatureCount: request.witness.bankSignatureCount,
+                parentBankHash: request.witness.parentBankHash,
+                bankHash: request.witness.bankHash,
+                blockhash: request.witness.blockhash,
+                bankHashHardForkData: request.witness.bankHashHardForkData,
+                transactionStatusRoot: request.witness.transactionStatusRoot,
+                accountInclusionRoot: request.witness.accountInclusionRoot,
+                accountsLtHashChecksum: request.witness.accountsLtHashChecksum
+            ).count,
+            250
+        )
         XCTAssertTrue(request.witnessHash.hasPrefix("0x"))
         XCTAssertEqual(request.witnessHash.count, 66)
+    }
+
+    func testSolanaProofRequestRequiresSoraTargetDomain() {
+        XCTAssertThrowsError(try buildSolanaSccpProofRequest(Self.sampleWitness(
+            targetDomain: sccpDomainTon
+        ))) { error in
+            XCTAssertEqual(error as? SolanaSccpProverError, .invalidString("targetDomain"))
+        }
     }
 
     func testRequiresSourceEventDigest() {
         let witness = SolanaSccpWitnessInput(
             finalizedSlot: 321,
+            parentSlot: 320,
+            bankSignatureCount: 8,
+            parentBankHash: String(repeating: "c0", count: 32),
             blockhash: "9xQeWvG816bUx9EPfYdLSdJH7Gq2Xv3yQPG8mD3kAcL7",
             bankHash: String(repeating: "aa", count: 32),
             transactionStatusRoot: String(repeating: "bb", count: 32),
             messageProofHash: String(repeating: "cc", count: 32),
-            transactionSignature: "5eykt4Signature111111111111111111111111111111",
-            emitterProgramId: "Bridge111111111111111111111111111111111111",
+            accountInclusionRoot: String(repeating: "77", count: 32),
+            accountsLtHashChecksum: String(repeating: "88", count: 32),
+            transactionSignature: Self.solanaSignature55,
+            emitterProgramId: Self.solanaProgram42,
             messageId: String(repeating: "dd", count: 32),
             payloadHash: String(repeating: "ee", count: 32),
             commitmentRoot: String(repeating: "12", count: 32),
-            sourceEventDigest: ""
+            sourceEventDigest: "",
+            statementHash: String(repeating: "56", count: 32),
+            destinationBindingHash: String(repeating: "78", count: 32)
         )
 
         XCTAssertThrowsError(try normalizeSolanaSccpWitness(witness)) { error in
@@ -38,29 +457,3715 @@ final class SccpSolanaProverTests: XCTestCase {
 
     func testBuildsSolanaMessageProofHashFromInclusionWitness() throws {
         let branch = [Data(repeating: 0x56, count: 32)]
+        let transactionStatusRoot = try solanaSccpTransactionStatusRootFromBranch(
+            sourceEventDigest: String(repeating: "34", count: 32),
+            transactionSignature: Self.solanaSignature55,
+            emitterProgramId: Self.solanaProgram42,
+            inclusionBranch: branch
+        )
+        XCTAssertEqual(
+            transactionStatusRoot,
+            "0xb048ca31d8ad7b2a0d15cbeb81d536350743483d44dd93136e859df93d3863b2"
+        )
         let hash = try solanaSccpMessageProofHash(
             sourceEventDigest: String(repeating: "34", count: 32),
-            transactionStatusRoot: String(repeating: "bb", count: 32),
+            transactionStatusRoot: transactionStatusRoot,
+            transactionSignature: Self.solanaSignature55,
+            emitterProgramId: Self.solanaProgram42,
             inclusionBranch: branch
         )
 
         XCTAssertTrue(hash.hasPrefix("0x"))
         XCTAssertEqual(hash.count, 66)
         XCTAssertGreaterThan(
+            try canonicalSolanaSccpTransactionStatusLeafBytes(
+                sourceEventDigest: String(repeating: "34", count: 32),
+                transactionSignature: Self.solanaSignature55,
+                emitterProgramId: Self.solanaProgram42
+            ).count,
+            0
+        )
+        XCTAssertEqual(
+            try solanaSccpTransactionStatusLeafHash(
+                sourceEventDigest: String(repeating: "34", count: 32),
+                transactionSignature: Self.solanaSignature55,
+                emitterProgramId: Self.solanaProgram42
+            ),
+            "0x4e12efed6d53466de0596f05aa6cc767df1efd6a4d1549276c4ec8b69118515d"
+        )
+        XCTAssertThrowsError(try solanaSccpTransactionStatusLeafHash(
+            sourceEventDigest: String(repeating: "34", count: 32),
+            transactionSignature: Self.solanaZeroSignature,
+            emitterProgramId: Self.solanaProgram42
+        ))
+        XCTAssertThrowsError(try solanaSccpTransactionStatusLeafHash(
+            sourceEventDigest: String(repeating: "34", count: 32),
+            transactionSignature: Self.solanaSignature55,
+            emitterProgramId: Self.solanaZeroProgram
+        ))
+        XCTAssertGreaterThan(
             try canonicalSolanaSccpMessageProofBytes(
                 sourceEventDigest: String(repeating: "34", count: 32),
-                transactionStatusRoot: String(repeating: "bb", count: 32),
+                transactionStatusRoot: transactionStatusRoot,
+                transactionSignature: Self.solanaSignature55,
+                emitterProgramId: Self.solanaProgram42,
                 inclusionBranch: branch
             ).count,
             0
         )
+        XCTAssertNotEqual(
+            hash,
+            try solanaSccpMessageProofHash(
+                sourceEventDigest: String(repeating: "34", count: 32),
+                transactionStatusRoot: transactionStatusRoot,
+                transactionSignature: Self.solanaSignature01,
+                emitterProgramId: Self.solanaProgram42,
+                inclusionBranch: branch
+            )
+        )
+        XCTAssertThrowsError(try solanaSccpMessageProofHash(
+            sourceEventDigest: String(repeating: "34", count: 32),
+            transactionStatusRoot: transactionStatusRoot,
+            transactionSignature: Self.solanaZeroSignature,
+            emitterProgramId: Self.solanaProgram42,
+            inclusionBranch: branch
+        ))
+        XCTAssertThrowsError(try solanaSccpMessageProofHash(
+            sourceEventDigest: String(repeating: "34", count: 32),
+            transactionStatusRoot: transactionStatusRoot,
+            transactionSignature: Self.solanaSignature55,
+            emitterProgramId: Self.solanaZeroProgram,
+            inclusionBranch: branch
+        ))
+        XCTAssertNotEqual(
+            hash,
+            try solanaSccpMessageProofHash(
+                sourceEventDigest: String(repeating: "34", count: 32),
+                transactionStatusRoot: transactionStatusRoot,
+                transactionSignature: Self.solanaSignature55,
+                emitterProgramId: Self.solanaProgram02,
+                inclusionBranch: branch
+            )
+        )
         XCTAssertThrowsError(
             try solanaSccpMessageProofHash(
                 sourceEventDigest: String(repeating: "34", count: 32),
-                transactionStatusRoot: String(repeating: "bb", count: 32),
+                transactionStatusRoot: transactionStatusRoot,
+                transactionSignature: Self.solanaSignature55,
+                emitterProgramId: Self.solanaProgram42,
+                inclusionBranch: []
+            )
+        )
+        XCTAssertThrowsError(
+            try solanaSccpMessageProofHash(
+                sourceEventDigest: String(repeating: "34", count: 32),
+                transactionStatusRoot: transactionStatusRoot,
+                transactionSignature: Self.solanaSignature55,
+                emitterProgramId: Self.solanaProgram42,
+                inclusionBranch: Array(
+                    repeating: Data(repeating: 0x56, count: 32),
+                    count: sccpMaxSourceMerkleBranchNodes + 1
+                )
+            )
+        ) { error in
+            XCTAssertEqual(error as? SolanaSccpProverError, .invalidString("inclusionBranch"))
+        }
+        XCTAssertThrowsError(
+            try solanaSccpMessageProofHash(
+                sourceEventDigest: String(repeating: "34", count: 32),
+                transactionStatusRoot: transactionStatusRoot,
+                transactionSignature: Self.solanaSignature55,
+                emitterProgramId: Self.solanaProgram42,
                 inclusionBranch: [Data(repeating: 0xab, count: 31)]
             )
         )
+        XCTAssertThrowsError(
+            try solanaSccpMessageProofHash(
+                sourceEventDigest: String(repeating: "34", count: 32),
+                transactionStatusRoot: transactionStatusRoot,
+                transactionSignature: "not-a-solana-signature",
+                emitterProgramId: Self.solanaProgram42,
+                inclusionBranch: branch
+            )
+        )
+    }
+
+    func testBuildsSolanaEpochStakeRootForVoteWitnesses() throws {
+        let validatorPublicKeys = [
+            Data(repeating: 0x11, count: 32),
+            Data(repeating: 0x22, count: 32),
+        ]
+        let validatorStakes: [UInt64] = [1, 2]
+
+        XCTAssertEqual(sccpSolanaMainnetSlotsPerEpoch, 432_000)
+        XCTAssertEqual(solanaSccpMainnetEpoch(forSlot: 864_000), 2)
+        XCTAssertEqual(
+            try canonicalSolanaSccpEpochStakeRootBytes(
+                epoch: 3,
+                validatorPublicKeys: validatorPublicKeys,
+                validatorStakes: validatorStakes
+            ).count,
+            134
+        )
+        XCTAssertEqual(
+            try solanaSccpEpochStakeRoot(
+                epoch: 3,
+                validatorPublicKeys: validatorPublicKeys,
+                validatorStakes: validatorStakes
+            ),
+            "0x1d86a5ecfac6e63bfcefdc1a3bfefd962a33e2a4cf65cd4e8518bcebea771f0a"
+        )
+        XCTAssertThrowsError(try solanaSccpEpochStakeRoot(
+            epoch: 3,
+            validatorPublicKeys: [Data(repeating: 0x11, count: 31)],
+            validatorStakes: [1]
+        )) { error in
+            XCTAssertEqual(error as? SolanaSccpProverError, .invalidHex32("validatorPublicKeys[0]"))
+        }
+        XCTAssertThrowsError(try solanaSccpEpochStakeRoot(
+            epoch: 3,
+            validatorPublicKeys: [Data(repeating: 0x00, count: 32)],
+            validatorStakes: [1]
+        )) { error in
+            XCTAssertEqual(error as? SolanaSccpProverError, .invalidString("validatorPublicKeys[0]"))
+        }
+        let oversizedValidatorPublicKeys = (0...sccpSolanaMaxValidators).map { index -> Data in
+            var publicKey = Data(repeating: 0x00, count: 32)
+            var encodedIndex = UInt64(index + 1).littleEndian
+            withUnsafeBytes(of: &encodedIndex) { publicKey.replaceSubrange(24..<32, with: $0) }
+            return publicKey
+        }
+        XCTAssertThrowsError(try solanaSccpEpochStakeRoot(
+            epoch: 3,
+            validatorPublicKeys: oversizedValidatorPublicKeys,
+            validatorStakes: Array(repeating: 1, count: oversizedValidatorPublicKeys.count)
+        )) { error in
+            XCTAssertEqual(error as? SolanaSccpProverError, .invalidString("validatorPublicKeys"))
+        }
+    }
+
+    func testBuildsSolanaStakeActivationHashForFinalityContext() throws {
+        let validatorPublicKeys = [
+            Data(repeating: 0x11, count: 32),
+            Data(repeating: 0x22, count: 32),
+        ]
+        let validatorStakes: [UInt64] = [1, 2]
+        let activationEpochs: [UInt64] = [0, 2]
+        let deactivationEpochs: [UInt64] = [UInt64.max, 9]
+
+        XCTAssertEqual(
+            try canonicalSolanaSccpStakeActivationBytes(
+                epoch: 3,
+                validatorPublicKeys: validatorPublicKeys,
+                validatorStakes: validatorStakes,
+                validatorActivationEpochs: activationEpochs,
+                validatorDeactivationEpochs: deactivationEpochs
+            ).count,
+            165
+        )
+        XCTAssertEqual(
+            try solanaSccpStakeActivationHash(
+                epoch: 3,
+                validatorPublicKeys: validatorPublicKeys,
+                validatorStakes: validatorStakes,
+                validatorActivationEpochs: activationEpochs,
+                validatorDeactivationEpochs: deactivationEpochs
+            ),
+            "0xdb418c62a1aeb8ae15cb26e3a198d46890cefa3545df8e1921be2e83f57dabf3"
+        )
+        XCTAssertThrowsError(try solanaSccpStakeActivationHash(
+            epoch: 3,
+            validatorPublicKeys: validatorPublicKeys,
+            validatorStakes: validatorStakes,
+            validatorActivationEpochs: [4, 2],
+            validatorDeactivationEpochs: deactivationEpochs
+        )) { error in
+            XCTAssertEqual(error as? SolanaSccpProverError, .invalidString("validatorActivationEpochs[0]"))
+        }
+        XCTAssertThrowsError(try solanaSccpStakeActivationHash(
+            epoch: 3,
+            validatorPublicKeys: validatorPublicKeys,
+            validatorStakes: validatorStakes,
+            validatorActivationEpochs: [3, 2],
+            validatorDeactivationEpochs: deactivationEpochs
+        )) { error in
+            XCTAssertEqual(error as? SolanaSccpProverError, .invalidString("validatorActivationEpochs[0]"))
+        }
+        XCTAssertThrowsError(try solanaSccpStakeActivationHash(
+            epoch: 3,
+            validatorPublicKeys: validatorPublicKeys,
+            validatorStakes: validatorStakes,
+            validatorActivationEpochs: activationEpochs,
+            validatorDeactivationEpochs: [UInt64.max, 2]
+        )) { error in
+            XCTAssertEqual(error as? SolanaSccpProverError, .invalidString("validatorDeactivationEpochs[1]"))
+        }
+        XCTAssertEqual(
+            try solanaSccpStakeActivationHash(
+                epoch: 3,
+                validatorPublicKeys: validatorPublicKeys,
+                validatorStakes: validatorStakes,
+                validatorActivationEpochs: activationEpochs,
+                validatorDeactivationEpochs: [UInt64.max, 3]
+            ).count,
+            66
+        )
+        XCTAssertThrowsError(try solanaSccpStakeActivationHash(
+            epoch: 3,
+            validatorPublicKeys: validatorPublicKeys,
+            validatorStakes: validatorStakes,
+            validatorActivationEpochs: [0],
+            validatorDeactivationEpochs: deactivationEpochs
+        )) { error in
+            XCTAssertEqual(error as? SolanaSccpProverError, .invalidString("validatorActivationEpochs"))
+        }
+    }
+
+    func testBuildsSolanaAccountOpeningHashForFinalityContext() throws {
+        let address = Data(repeating: 0x31, count: 32)
+        let dataHash = Data(repeating: 0x71, count: 32)
+
+        XCTAssertEqual(
+            try canonicalSolanaSccpAccountOpeningBytes(
+                address: address,
+                owner: sccpSolanaVoteProgramId,
+                lamports: 1_000_000,
+                rentEpoch: 0,
+                executable: false,
+                dataHash: dataHash
+            ).count,
+            122
+        )
+        let accountHash = try solanaSccpAccountOpeningHash(
+            address: address,
+            owner: sccpSolanaVoteProgramId,
+            lamports: 1_000_000,
+            rentEpoch: 0,
+            executable: false,
+            dataHash: dataHash
+        )
+        XCTAssertTrue(accountHash.range(of: #"^0x[0-9a-f]{64}$"#, options: .regularExpression) != nil)
+        XCTAssertNotEqual(
+            accountHash,
+            try solanaSccpAccountOpeningHash(
+                address: address,
+                owner: sccpSolanaStakeProgramId,
+                lamports: 1_000_000,
+                rentEpoch: 0,
+                executable: false,
+                dataHash: dataHash
+            )
+        )
+        XCTAssertNotEqual(
+            accountHash,
+            try solanaSccpAccountOpeningHash(
+                address: address,
+                owner: sccpSolanaVoteProgramId,
+                lamports: 1_000_000,
+                rentEpoch: 0,
+                executable: true,
+                dataHash: dataHash
+            )
+        )
+        XCTAssertThrowsError(try solanaSccpAccountOpeningHash(
+            address: address,
+            owner: sccpSolanaVoteProgramId,
+            lamports: 0,
+            rentEpoch: 0,
+            executable: false,
+            dataHash: dataHash
+        )) { error in
+            XCTAssertEqual(error as? SolanaSccpProverError, .invalidString("lamports"))
+        }
+    }
+
+    func testBuildsOpenedAccountsLtHashContributionBindings() throws {
+        func ltHash(_ value: UInt16) -> Data {
+            var out = Data(repeating: 0, count: 2_048)
+            for index in stride(from: 0, to: out.count, by: 2) {
+                let word = value &+ UInt16(index / 2) &* 17
+                out[index] = UInt8(word & 0xff)
+                out[index + 1] = UInt8(word >> 8)
+            }
+            return out
+        }
+        func add(_ left: Data, _ right: Data) -> Data {
+            var out = left
+            for index in stride(from: 0, to: out.count, by: 2) {
+                let mixed = (UInt16(out[index]) | (UInt16(out[index + 1]) << 8))
+                    &+ (UInt16(right[index]) | (UInt16(right[index + 1]) << 8))
+                out[index] = UInt8(mixed & 0xff)
+                out[index + 1] = UInt8(mixed >> 8)
+            }
+            return out
+        }
+        let voteOpening = SolanaSccpAccountOpeningInput(
+            address: Data(repeating: 0x31, count: 32),
+            owner: sccpSolanaVoteProgramId,
+            lamports: 1_000_000,
+            rentEpoch: 0,
+            dataHash: "0x" + String(repeating: "91", count: 32)
+        )
+        let stakeOpening = SolanaSccpAccountOpeningInput(
+            address: Data(repeating: 0x32, count: 32),
+            owner: sccpSolanaStakeProgramId,
+            lamports: 2_000_000,
+            rentEpoch: 0,
+            dataHash: "0x" + String(repeating: "92", count: 32)
+        )
+        let stakeHistoryOpening = SolanaSccpAccountOpeningInput(
+            address: sccpSolanaStakeHistorySysvarId,
+            owner: sccpSolanaSysvarProgramId,
+            lamports: 1,
+            rentEpoch: 0,
+            dataHash: "0x" + String(repeating: "93", count: 32)
+        )
+        let unopenedOpening = SolanaSccpAccountOpeningInput(
+            address: Data(repeating: 0x34, count: 32),
+            owner: sccpSolanaStakeProgramId,
+            lamports: 3_000_000,
+            rentEpoch: 0,
+            dataHash: "0x" + String(repeating: "94", count: 32)
+        )
+        let voteRawData = Data([1, 2, 3])
+        let stakeRawData = Data([4, 5, 6])
+        let stakeHistoryRawData = Data([7, 8, 9])
+        let unopenedRawData = Data([10, 11, 12])
+        let voteLtHash = try solanaSccpAccountLtHash(opening: voteOpening, rawData: voteRawData)
+        let stakeLtHash = try solanaSccpAccountLtHash(opening: stakeOpening, rawData: stakeRawData)
+        let stakeHistoryLtHash = try solanaSccpAccountLtHash(
+            opening: stakeHistoryOpening,
+            rawData: stakeHistoryRawData
+        )
+        let openedLtHash = try solanaSccpAccountsLtHashFromOpenings(
+            openings: [voteOpening, stakeOpening, stakeHistoryOpening],
+            rawDataValues: [voteRawData, stakeRawData, stakeHistoryRawData]
+        )
+        let unopenedLtHash = try solanaSccpAccountLtHash(
+            opening: unopenedOpening,
+            rawData: unopenedRawData
+        )
+        let accountsLtHash = try solanaSccpAccountsLtHashFromOpenings(
+            openings: [voteOpening, stakeOpening, stakeHistoryOpening, unopenedOpening],
+            rawDataValues: [voteRawData, stakeRawData, stakeHistoryRawData, unopenedRawData]
+        )
+        let input = SolanaSccpOpenedAccountsLtHashContributionsInput(
+            finalizedSlot: 1_296_096,
+            accountInclusionRoot: "0x" + String(repeating: "77", count: 32),
+            accountsLtHashChecksum: try solanaSccpAccountsLtHashChecksum(accountsLtHash),
+            accountsLtHash: accountsLtHash,
+            validatorVoteAccountOpenings: [voteOpening],
+            validatorVoteAccountRawData: [voteRawData],
+            validatorVoteAccountLtHashes: [voteLtHash],
+            validatorStakeAccountOpenings: [stakeOpening],
+            validatorStakeAccountRawData: [stakeRawData],
+            validatorStakeAccountLtHashes: [stakeLtHash],
+            stakeHistorySysvarOpening: stakeHistoryOpening,
+            stakeHistorySysvarRawData: stakeHistoryRawData,
+            stakeHistorySysvarAccountLtHash: stakeHistoryLtHash
+        )
+
+        XCTAssertEqual(try solanaSccpOpenedAccountsLtHashResidual(input), unopenedLtHash)
+        XCTAssertEqual(
+            try solanaSccpOpenedAccountsLtHashResidualChecksum(input),
+            try solanaSccpAccountsLtHashChecksum(unopenedLtHash)
+        )
+        XCTAssertEqual(
+            try canonicalSolanaSccpOpenedAccountsLtHashContributionsBytes(input).count,
+            10_696
+        )
+        XCTAssertEqual(
+            try solanaSccpOpenedAccountsLtHashContributionsHash(input),
+            "0x07270072f8b70b755ed491c1582b40050a484edd67752a8a0bbbd97aa175d4f9"
+        )
+        let badInput = SolanaSccpOpenedAccountsLtHashContributionsInput(
+            finalizedSlot: input.finalizedSlot,
+            accountInclusionRoot: input.accountInclusionRoot,
+            accountsLtHashChecksum: "0x" + String(repeating: "88", count: 32),
+            accountsLtHash: input.accountsLtHash,
+            validatorVoteAccountOpenings: input.validatorVoteAccountOpenings,
+            validatorVoteAccountRawData: input.validatorVoteAccountRawData,
+            validatorVoteAccountLtHashes: input.validatorVoteAccountLtHashes,
+            validatorStakeAccountOpenings: input.validatorStakeAccountOpenings,
+            validatorStakeAccountRawData: input.validatorStakeAccountRawData,
+            validatorStakeAccountLtHashes: input.validatorStakeAccountLtHashes,
+            stakeHistorySysvarOpening: input.stakeHistorySysvarOpening,
+            stakeHistorySysvarRawData: input.stakeHistorySysvarRawData,
+            stakeHistorySysvarAccountLtHash: input.stakeHistorySysvarAccountLtHash
+        )
+        XCTAssertThrowsError(try solanaSccpOpenedAccountsLtHashContributionsHash(badInput))
+
+        let zeroResidualInput = SolanaSccpOpenedAccountsLtHashContributionsInput(
+            finalizedSlot: input.finalizedSlot,
+            accountInclusionRoot: input.accountInclusionRoot,
+            accountsLtHashChecksum: try solanaSccpAccountsLtHashChecksum(openedLtHash),
+            accountsLtHash: openedLtHash,
+            validatorVoteAccountOpenings: input.validatorVoteAccountOpenings,
+            validatorVoteAccountRawData: input.validatorVoteAccountRawData,
+            validatorVoteAccountLtHashes: input.validatorVoteAccountLtHashes,
+            validatorStakeAccountOpenings: input.validatorStakeAccountOpenings,
+            validatorStakeAccountRawData: input.validatorStakeAccountRawData,
+            validatorStakeAccountLtHashes: input.validatorStakeAccountLtHashes,
+            stakeHistorySysvarOpening: input.stakeHistorySysvarOpening,
+            stakeHistorySysvarRawData: input.stakeHistorySysvarRawData,
+            stakeHistorySysvarAccountLtHash: input.stakeHistorySysvarAccountLtHash
+        )
+        XCTAssertThrowsError(try solanaSccpOpenedAccountsLtHashContributionsHash(zeroResidualInput)) { error in
+            XCTAssertEqual(error as? SolanaSccpProverError, .invalidString("openedAccountsLtHashResidual"))
+        }
+
+        let duplicateStakeOpening = SolanaSccpAccountOpeningInput(
+            address: voteOpening.address,
+            owner: stakeOpening.owner,
+            lamports: stakeOpening.lamports,
+            rentEpoch: stakeOpening.rentEpoch,
+            dataHash: stakeOpening.dataHash
+        )
+        let duplicateInput = SolanaSccpOpenedAccountsLtHashContributionsInput(
+            finalizedSlot: input.finalizedSlot,
+            accountInclusionRoot: input.accountInclusionRoot,
+            accountsLtHashChecksum: input.accountsLtHashChecksum,
+            accountsLtHash: input.accountsLtHash,
+            validatorVoteAccountOpenings: input.validatorVoteAccountOpenings,
+            validatorVoteAccountRawData: input.validatorVoteAccountRawData,
+            validatorVoteAccountLtHashes: input.validatorVoteAccountLtHashes,
+            validatorStakeAccountOpenings: [duplicateStakeOpening],
+            validatorStakeAccountRawData: input.validatorStakeAccountRawData,
+            validatorStakeAccountLtHashes: input.validatorStakeAccountLtHashes,
+            stakeHistorySysvarOpening: input.stakeHistorySysvarOpening,
+            stakeHistorySysvarRawData: input.stakeHistorySysvarRawData,
+            stakeHistorySysvarAccountLtHash: input.stakeHistorySysvarAccountLtHash
+        )
+        XCTAssertThrowsError(try solanaSccpOpenedAccountsLtHashContributionsHash(duplicateInput)) { error in
+            XCTAssertEqual(error as? SolanaSccpProverError, .invalidString("openedAccountAddresses"))
+        }
+
+        let zeroLamportsVoteOpening = SolanaSccpAccountOpeningInput(
+            address: voteOpening.address,
+            owner: voteOpening.owner,
+            lamports: 0,
+            rentEpoch: voteOpening.rentEpoch,
+            dataHash: voteOpening.dataHash
+        )
+        let zeroLamportsInput = SolanaSccpOpenedAccountsLtHashContributionsInput(
+            finalizedSlot: input.finalizedSlot,
+            accountInclusionRoot: input.accountInclusionRoot,
+            accountsLtHashChecksum: input.accountsLtHashChecksum,
+            accountsLtHash: input.accountsLtHash,
+            validatorVoteAccountOpenings: [zeroLamportsVoteOpening],
+            validatorVoteAccountRawData: input.validatorVoteAccountRawData,
+            validatorVoteAccountLtHashes: [Data(repeating: 0, count: 2_048)],
+            validatorStakeAccountOpenings: input.validatorStakeAccountOpenings,
+            validatorStakeAccountRawData: input.validatorStakeAccountRawData,
+            validatorStakeAccountLtHashes: input.validatorStakeAccountLtHashes,
+            stakeHistorySysvarOpening: input.stakeHistorySysvarOpening,
+            stakeHistorySysvarRawData: input.stakeHistorySysvarRawData,
+            stakeHistorySysvarAccountLtHash: input.stakeHistorySysvarAccountLtHash
+        )
+        XCTAssertThrowsError(try solanaSccpOpenedAccountsLtHashContributionsHash(zeroLamportsInput)) { error in
+            XCTAssertEqual(error as? SolanaSccpProverError, .invalidString("lamports"))
+        }
+
+        let oversizedVoteInput = SolanaSccpOpenedAccountsLtHashContributionsInput(
+            finalizedSlot: input.finalizedSlot,
+            accountInclusionRoot: input.accountInclusionRoot,
+            accountsLtHashChecksum: input.accountsLtHashChecksum,
+            accountsLtHash: input.accountsLtHash,
+            validatorVoteAccountOpenings: Array(
+                repeating: voteOpening,
+                count: sccpSolanaMaxValidators + 1
+            ),
+            validatorVoteAccountRawData: Array(
+                repeating: voteRawData,
+                count: sccpSolanaMaxValidators + 1
+            ),
+            validatorVoteAccountLtHashes: Array(
+                repeating: voteLtHash,
+                count: sccpSolanaMaxValidators + 1
+            ),
+            validatorStakeAccountOpenings: input.validatorStakeAccountOpenings,
+            validatorStakeAccountRawData: input.validatorStakeAccountRawData,
+            validatorStakeAccountLtHashes: input.validatorStakeAccountLtHashes,
+            stakeHistorySysvarOpening: input.stakeHistorySysvarOpening,
+            stakeHistorySysvarRawData: input.stakeHistorySysvarRawData,
+            stakeHistorySysvarAccountLtHash: input.stakeHistorySysvarAccountLtHash
+        )
+        XCTAssertThrowsError(try solanaSccpOpenedAccountsLtHashContributionsHash(oversizedVoteInput)) { error in
+            XCTAssertEqual(error as? SolanaSccpProverError, .invalidString("validatorVoteAccountOpenings"))
+        }
+    }
+
+    func testSolanaAccountsLtHashChecksumUsesPureSwiftBlake3Vector() throws {
+        XCTAssertEqual(
+            try solanaSccpAccountsLtHashChecksum(Data(repeating: 0x99, count: 2_048)),
+            "0x77a98713a20195e570cd12a8bdaaa355912663352b4b63c9f754c20f008860cc"
+        )
+        XCTAssertEqual(
+            try solanaSccpAccountsLtHashChecksum(Data(repeating: 0, count: 2_048)),
+            "0xbe2a8de3dcf46c94ce85cdc8e07ac308f4d8a95490d956c38d780fd610db0813"
+        )
+        XCTAssertEqual(
+            try solanaSccpAccountsLtHashChecksum(Data((0..<2_048).map { UInt8($0 & 0xff) })),
+            "0x1bdccfde0210a8ca178be19c6777cdb4b9a8fd24e7fe2b6b259b98e7aaaa0bb6"
+        )
+    }
+
+    func testSolanaAccountLtHashDerivesFromOpeningsAndRawData() throws {
+        func add(_ left: Data, _ right: Data) -> Data {
+            var out = left
+            for index in stride(from: 0, to: out.count, by: 2) {
+                let current = UInt16(out[index]) | (UInt16(out[index + 1]) << 8)
+                let addend = UInt16(right[index]) | (UInt16(right[index + 1]) << 8)
+                let mixed = current &+ addend
+                out[index] = UInt8(mixed & 0xff)
+                out[index + 1] = UInt8(mixed >> 8)
+            }
+            return out
+        }
+
+        let voteOpening = SolanaSccpAccountOpeningInput(
+            address: Data(repeating: 0x31, count: 32),
+            owner: sccpSolanaVoteProgramId,
+            lamports: 1_000_000,
+            rentEpoch: 0,
+            dataHash: "0x" + String(repeating: "91", count: 32)
+        )
+        let voteRawData = Data([1, 2, 3])
+        let voteLtHash = try solanaSccpAccountLtHash(opening: voteOpening, rawData: voteRawData)
+        XCTAssertEqual(voteLtHash.count, 2_048)
+        XCTAssertEqual(
+            try solanaSccpAccountsLtHashChecksum(voteLtHash),
+            "0x56a868657e9113c76dc94321040b8f01a35ea4996c6fa235581510cd18be4bfe"
+        )
+        let maxRawData = Data((0..<65_536).map { UInt8($0 & 0xff) })
+        let maxLtHash = try solanaSccpAccountLtHash(opening: voteOpening, rawData: maxRawData)
+        XCTAssertEqual(
+            try solanaSccpAccountsLtHashChecksum(maxLtHash),
+            "0xc467c59f47747fdae4d87f8c79413ae24d3674ea3ca02aad0a1216a20d4fe147"
+        )
+        XCTAssertEqual(
+            Data(maxLtHash.prefix(64)).hexEncodedString(),
+            "c972db5d20a5a451a44daa674d0511382480d6e9060f750129723812e0e3c66a4" +
+                "deddbb7975e2ff4d4c753aebcb703e61122d1ca1cfcd4f0c002a2cad30f4949"
+        )
+        XCTAssertEqual(
+            Data(maxLtHash.suffix(64)).hexEncodedString(),
+            "b4159fa2d334c4209bfb59997f7da42a56e2e921e0bbc4ebd916f3c55353b630" +
+                "e26303b0af0b23e91870e9815f7ed6348395fbc7c0f07bf605da23589fa9fb51"
+        )
+        let zeroLamportsOpening = SolanaSccpAccountOpeningInput(
+            address: Data(repeating: 0x33, count: 32),
+            owner: sccpSolanaVoteProgramId,
+            lamports: 0,
+            rentEpoch: 0,
+            dataHash: "0x" + String(repeating: "94", count: 32)
+        )
+        XCTAssertEqual(
+            try solanaSccpAccountLtHash(opening: zeroLamportsOpening, rawData: voteRawData),
+            Data(repeating: 0, count: 2_048)
+        )
+        XCTAssertEqual(
+            try solanaSccpAccountsLtHashFromOpenings(
+                openings: [voteOpening, zeroLamportsOpening],
+                rawDataValues: [voteRawData, voteRawData]
+            ),
+            voteLtHash
+        )
+
+        let stakeOpening = SolanaSccpAccountOpeningInput(
+            address: Data(repeating: 0x32, count: 32),
+            owner: sccpSolanaStakeProgramId,
+            lamports: 2_000_000,
+            rentEpoch: 0,
+            dataHash: "0x" + String(repeating: "92", count: 32)
+        )
+        let stakeHistoryOpening = SolanaSccpAccountOpeningInput(
+            address: sccpSolanaStakeHistorySysvarId,
+            owner: sccpSolanaSysvarProgramId,
+            lamports: 1,
+            rentEpoch: 0,
+            dataHash: "0x" + String(repeating: "93", count: 32)
+        )
+        let stakeRawData = Data([4, 5, 6])
+        let stakeHistoryRawData = Data([7, 8, 9])
+        let stakeLtHash = try solanaSccpAccountLtHash(opening: stakeOpening, rawData: stakeRawData)
+        let stakeHistoryLtHash = try solanaSccpAccountLtHash(
+            opening: stakeHistoryOpening,
+            rawData: stakeHistoryRawData
+        )
+        let unopenedLtHash = Data(repeating: 0x44, count: 2_048)
+        let openedLtHash = try solanaSccpAccountsLtHashFromOpenings(
+            openings: [voteOpening, stakeOpening, stakeHistoryOpening],
+            rawDataValues: [voteRawData, stakeRawData, stakeHistoryRawData]
+        )
+        let accountsLtHash = add(openedLtHash, unopenedLtHash)
+        let derivedInput = SolanaSccpOpenedAccountsLtHashContributionsInput(
+            finalizedSlot: 1_296_096,
+            accountInclusionRoot: "0x" + String(repeating: "77", count: 32),
+            accountsLtHashChecksum: try solanaSccpAccountsLtHashChecksum(accountsLtHash),
+            accountsLtHash: accountsLtHash,
+            validatorVoteAccountOpenings: [voteOpening],
+            validatorVoteAccountRawData: [voteRawData],
+            validatorStakeAccountOpenings: [stakeOpening],
+            validatorStakeAccountRawData: [stakeRawData],
+            stakeHistorySysvarOpening: stakeHistoryOpening,
+            stakeHistorySysvarRawData: stakeHistoryRawData
+        )
+        let precomputedInput = SolanaSccpOpenedAccountsLtHashContributionsInput(
+            finalizedSlot: derivedInput.finalizedSlot,
+            accountInclusionRoot: derivedInput.accountInclusionRoot,
+            accountsLtHashChecksum: derivedInput.accountsLtHashChecksum,
+            accountsLtHash: derivedInput.accountsLtHash,
+            validatorVoteAccountOpenings: derivedInput.validatorVoteAccountOpenings,
+            validatorVoteAccountRawData: derivedInput.validatorVoteAccountRawData,
+            validatorVoteAccountLtHashes: [voteLtHash],
+            validatorStakeAccountOpenings: derivedInput.validatorStakeAccountOpenings,
+            validatorStakeAccountRawData: derivedInput.validatorStakeAccountRawData,
+            validatorStakeAccountLtHashes: [stakeLtHash],
+            stakeHistorySysvarOpening: derivedInput.stakeHistorySysvarOpening,
+            stakeHistorySysvarRawData: derivedInput.stakeHistorySysvarRawData,
+            stakeHistorySysvarAccountLtHash: stakeHistoryLtHash
+        )
+        XCTAssertEqual(try solanaSccpOpenedAccountsLtHashResidual(derivedInput), unopenedLtHash)
+        XCTAssertEqual(
+            try canonicalSolanaSccpOpenedAccountsLtHashContributionsBytes(derivedInput),
+            try canonicalSolanaSccpOpenedAccountsLtHashContributionsBytes(precomputedInput)
+        )
+        XCTAssertEqual(
+            try solanaSccpOpenedAccountsLtHashContributionsHash(derivedInput),
+            try solanaSccpOpenedAccountsLtHashContributionsHash(precomputedInput)
+        )
+        var wrongVoteLtHash = voteLtHash
+        wrongVoteLtHash[0] ^= 0x01
+        let badPrecomputedInput = SolanaSccpOpenedAccountsLtHashContributionsInput(
+            finalizedSlot: derivedInput.finalizedSlot,
+            accountInclusionRoot: derivedInput.accountInclusionRoot,
+            accountsLtHashChecksum: derivedInput.accountsLtHashChecksum,
+            accountsLtHash: derivedInput.accountsLtHash,
+            validatorVoteAccountOpenings: derivedInput.validatorVoteAccountOpenings,
+            validatorVoteAccountRawData: derivedInput.validatorVoteAccountRawData,
+            validatorVoteAccountLtHashes: [wrongVoteLtHash],
+            validatorStakeAccountOpenings: derivedInput.validatorStakeAccountOpenings,
+            validatorStakeAccountRawData: derivedInput.validatorStakeAccountRawData,
+            validatorStakeAccountLtHashes: [stakeLtHash],
+            stakeHistorySysvarOpening: derivedInput.stakeHistorySysvarOpening,
+            stakeHistorySysvarRawData: derivedInput.stakeHistorySysvarRawData,
+            stakeHistorySysvarAccountLtHash: stakeHistoryLtHash
+        )
+        XCTAssertThrowsError(
+            try solanaSccpOpenedAccountsLtHashContributionsHash(badPrecomputedInput)
+        ) { error in
+            XCTAssertEqual(error as? SolanaSccpProverError, .invalidString("validatorVoteAccountLtHashes[0]"))
+        }
+    }
+
+    func testBuildsAccountsLtHashSourceStateProofRequest() async throws {
+        func ltHash(_ value: UInt16) -> Data {
+            var out = Data(repeating: 0, count: 2_048)
+            for index in stride(from: 0, to: out.count, by: 2) {
+                let word = value &+ UInt16(index / 2) &* 17
+                out[index] = UInt8(word & 0xff)
+                out[index + 1] = UInt8(word >> 8)
+            }
+            return out
+        }
+        func add(_ left: Data, _ right: Data) -> Data {
+            var out = left
+            for index in stride(from: 0, to: out.count, by: 2) {
+                let mixed = (UInt16(out[index]) | (UInt16(out[index + 1]) << 8))
+                    &+ (UInt16(right[index]) | (UInt16(right[index + 1]) << 8))
+                out[index] = UInt8(mixed & 0xff)
+                out[index + 1] = UInt8(mixed >> 8)
+            }
+            return out
+        }
+        let voteOpening = SolanaSccpAccountOpeningInput(
+            address: Data(repeating: 0x31, count: 32),
+            owner: sccpSolanaVoteProgramId,
+            lamports: 1_000_000,
+            rentEpoch: 0,
+            dataHash: "0x" + String(repeating: "91", count: 32)
+        )
+        let stakeOpening = SolanaSccpAccountOpeningInput(
+            address: Data(repeating: 0x32, count: 32),
+            owner: sccpSolanaStakeProgramId,
+            lamports: 2_000_000,
+            rentEpoch: 0,
+            dataHash: "0x" + String(repeating: "92", count: 32)
+        )
+        let stakeHistoryOpening = SolanaSccpAccountOpeningInput(
+            address: sccpSolanaStakeHistorySysvarId,
+            owner: sccpSolanaSysvarProgramId,
+            lamports: 1,
+            rentEpoch: 0,
+            dataHash: "0x" + String(repeating: "93", count: 32)
+        )
+        let voteRawData = Data([1, 2, 3])
+        let stakeRawData = Data([4, 5, 6])
+        let stakeHistoryRawData = Data([7, 8, 9])
+        let voteLtHash = try solanaSccpAccountLtHash(opening: voteOpening, rawData: voteRawData)
+        let stakeLtHash = try solanaSccpAccountLtHash(opening: stakeOpening, rawData: stakeRawData)
+        let stakeHistoryLtHash = try solanaSccpAccountLtHash(
+            opening: stakeHistoryOpening,
+            rawData: stakeHistoryRawData
+        )
+        let accountsLtHash = add(add(add(voteLtHash, stakeLtHash), stakeHistoryLtHash), ltHash(4))
+        let opened = SolanaSccpOpenedAccountsLtHashContributionsInput(
+            finalizedSlot: 1_296_096,
+            accountInclusionRoot: "0x" + String(repeating: "77", count: 32),
+            accountsLtHashChecksum: try solanaSccpAccountsLtHashChecksum(accountsLtHash),
+            accountsLtHash: accountsLtHash,
+            validatorVoteAccountOpenings: [voteOpening],
+            validatorVoteAccountRawData: [voteRawData],
+            validatorVoteAccountLtHashes: [voteLtHash],
+            validatorStakeAccountOpenings: [stakeOpening],
+            validatorStakeAccountRawData: [stakeRawData],
+            validatorStakeAccountLtHashes: [stakeLtHash],
+            stakeHistorySysvarOpening: stakeHistoryOpening,
+            stakeHistorySysvarRawData: stakeHistoryRawData,
+            stakeHistorySysvarAccountLtHash: stakeHistoryLtHash
+        )
+        let parentBankHash = String(repeating: "c0", count: 32)
+        let blockhash = String(repeating: "42", count: 32)
+        let bankHash = try solanaSccpAgaveBankHash(
+            parentBankHash: parentBankHash,
+            bankSignatureCount: 8,
+            blockhash: blockhash,
+            accountsLtHash: accountsLtHash
+        )
+        let zeroAccountsLtHash = Data(repeating: 0, count: 2_048)
+        let zeroAccountsLtHashChecksum = try solanaSccpAccountsLtHashChecksum(zeroAccountsLtHash)
+        XCTAssertTrue(zeroAccountsLtHashChecksum.hasPrefix("0x"))
+        XCTAssertThrowsError(try solanaSccpAgaveBankHash(
+            parentBankHash: parentBankHash,
+            bankSignatureCount: 8,
+            blockhash: blockhash,
+            accountsLtHash: zeroAccountsLtHash
+        ))
+        XCTAssertThrowsError(try solanaSccpOpenedAccountsLtHashContributionsHash(
+            SolanaSccpOpenedAccountsLtHashContributionsInput(
+                finalizedSlot: opened.finalizedSlot,
+                accountInclusionRoot: opened.accountInclusionRoot,
+                accountsLtHashChecksum: zeroAccountsLtHashChecksum,
+                accountsLtHash: zeroAccountsLtHash,
+                validatorVoteAccountOpenings: opened.validatorVoteAccountOpenings,
+                validatorVoteAccountRawData: opened.validatorVoteAccountRawData,
+                validatorVoteAccountLtHashes: opened.validatorVoteAccountLtHashes,
+                validatorStakeAccountOpenings: opened.validatorStakeAccountOpenings,
+                validatorStakeAccountRawData: opened.validatorStakeAccountRawData,
+                validatorStakeAccountLtHashes: opened.validatorStakeAccountLtHashes,
+                stakeHistorySysvarOpening: opened.stakeHistorySysvarOpening,
+                stakeHistorySysvarRawData: opened.stakeHistorySysvarRawData,
+                stakeHistorySysvarAccountLtHash: opened.stakeHistorySysvarAccountLtHash
+            )
+        ))
+        let witness = SolanaSccpWitnessInput(
+            finalizedSlot: opened.finalizedSlot,
+            parentSlot: opened.finalizedSlot - 1,
+            bankSignatureCount: 8,
+            parentBankHash: parentBankHash,
+            blockhash: blockhash,
+            bankHash: bankHash,
+            transactionStatusRoot: String(repeating: "bb", count: 32),
+            messageProofHash: String(repeating: "cc", count: 32),
+            accountInclusionRoot: opened.accountInclusionRoot,
+            accountsLtHashChecksum: opened.accountsLtHashChecksum,
+            accountsLtHash: accountsLtHash,
+            transactionSignature: Self.solanaSignature55,
+            emitterProgramId: Self.solanaProgram42,
+            messageId: String(repeating: "dd", count: 32),
+            payloadHash: String(repeating: "ee", count: 32),
+            commitmentRoot: String(repeating: "12", count: 32),
+            sourceEventDigest: String(repeating: "34", count: 32),
+            sourceStateVerifierHash: String(repeating: "aa", count: 32),
+            statementHash: String(repeating: "56", count: 32),
+            destinationBindingHash: String(repeating: "78", count: 32)
+        )
+
+        let request = try buildSolanaSccpAccountsLtHashProofRequest(
+            witness: witness,
+            openedAccounts: opened
+        )
+        var mismatchedWitnessLtHash = accountsLtHash
+        mismatchedWitnessLtHash[0] = mismatchedWitnessLtHash[0] ^ 0x01
+        XCTAssertThrowsError(
+            try buildSolanaSccpAccountsLtHashProofRequest(
+                witness: SolanaSccpWitnessInput(
+                    finalizedSlot: witness.finalizedSlot,
+                    parentSlot: witness.parentSlot,
+                    bankSignatureCount: witness.bankSignatureCount,
+                    parentBankHash: witness.parentBankHash,
+                    blockhash: witness.blockhash,
+                    bankHash: witness.bankHash,
+                    transactionStatusRoot: witness.transactionStatusRoot,
+                    messageProofHash: witness.messageProofHash,
+                    accountInclusionRoot: witness.accountInclusionRoot,
+                    accountsLtHashChecksum: witness.accountsLtHashChecksum,
+                    accountsLtHash: mismatchedWitnessLtHash,
+                    transactionSignature: witness.transactionSignature,
+                    emitterProgramId: witness.emitterProgramId,
+                    messageId: witness.messageId,
+                    payloadHash: witness.payloadHash,
+                    commitmentRoot: witness.commitmentRoot,
+                    sourceEventDigest: witness.sourceEventDigest,
+                    sourceStateVerifierHash: witness.sourceStateVerifierHash,
+                    statementHash: witness.statementHash,
+                    destinationBindingHash: witness.destinationBindingHash
+                ),
+                openedAccounts: opened
+            )
+        ) { error in
+            XCTAssertEqual(error as? SolanaSccpProverError, .invalidString("accountsLtHash"))
+        }
+
+        XCTAssertEqual(request.version, 1)
+        XCTAssertEqual(request.proofFamily, "stark-fri-v1")
+        XCTAssertEqual(request.circuitId, sccpSolanaAccountsLtHashOpenVerifyCircuitIdV1)
+        XCTAssertEqual(request.parameterSet, "fastpq-lane-balanced")
+        XCTAssertEqual(request.sourceStateVerifierId, sccpSolanaMainnetAccountsDbVerifierIdV1)
+        XCTAssertEqual(request.sourceStateVerifierHash, "0x" + String(repeating: "aa", count: 32))
+        XCTAssertEqual(
+            request.accountsLtHashProofPublicInputsHash,
+            try solanaSccpAccountsLtHashProofPublicInputsHash(
+                sourceDomain: sccpDomainSolana,
+                finalizedSlot: witness.finalizedSlot,
+                parentSlot: witness.parentSlot,
+                bankSignatureCount: witness.bankSignatureCount,
+                parentBankHash: witness.parentBankHash,
+                bankHash: witness.bankHash,
+                blockhash: witness.blockhash,
+                transactionStatusRoot: witness.transactionStatusRoot,
+                accountInclusionRoot: witness.accountInclusionRoot,
+                accountsLtHashChecksum: witness.accountsLtHashChecksum,
+                accountsLtHash: accountsLtHash
+            )
+        )
+        XCTAssertThrowsError(
+            try canonicalSolanaSccpAccountsLtHashProofPublicInputsBytes(
+                sourceDomain: sccpDomainSolana,
+                finalizedSlot: witness.finalizedSlot,
+                parentSlot: witness.parentSlot,
+                bankSignatureCount: witness.bankSignatureCount,
+                parentBankHash: witness.parentBankHash,
+                bankHash: "0x" + String(repeating: "44", count: 32),
+                blockhash: witness.blockhash,
+                transactionStatusRoot: witness.transactionStatusRoot,
+                accountInclusionRoot: witness.accountInclusionRoot,
+                accountsLtHashChecksum: witness.accountsLtHashChecksum,
+                accountsLtHash: accountsLtHash
+            )
+        ) { error in
+            XCTAssertEqual(error as? SolanaSccpProverError, .invalidString("bankHash"))
+        }
+        XCTAssertThrowsError(
+            try solanaSccpAccountsLtHashProofPublicInputsHash(
+                sourceDomain: sccpDomainSolana,
+                finalizedSlot: witness.finalizedSlot,
+                parentSlot: witness.parentSlot,
+                bankSignatureCount: witness.bankSignatureCount,
+                parentBankHash: witness.parentBankHash,
+                bankHash: witness.bankHash,
+                blockhash: witness.blockhash,
+                transactionStatusRoot: witness.transactionStatusRoot,
+                accountInclusionRoot: witness.accountInclusionRoot,
+                accountsLtHashChecksum: "0x" + String(repeating: "44", count: 32),
+                accountsLtHash: accountsLtHash
+            )
+        ) { error in
+            XCTAssertEqual(error as? SolanaSccpProverError, .invalidString("accountsLtHashChecksum"))
+        }
+        XCTAssertEqual(
+            request.openedAccountsLtHashContributionsHash,
+            try solanaSccpOpenedAccountsLtHashContributionsHash(opened)
+        )
+        XCTAssertEqual(
+            request.openedAccountsLtHashResidualChecksum,
+            try solanaSccpOpenedAccountsLtHashResidualChecksum(opened)
+        )
+        XCTAssertEqual(
+            request.accountCommitmentBytes,
+            try canonicalSolanaSccpAccountsLtHashCommitmentBytes(witness: witness, openedAccounts: opened)
+        )
+        XCTAssertEqual(
+            request.verificationContextBytes,
+            try canonicalSolanaSccpAccountsLtHashVerificationContextBytes(witness: witness, openedAccounts: opened)
+        )
+        XCTAssertEqual(
+            request.publicInputColumns,
+            try solanaSccpAccountsLtHashPublicInputColumns(witness: witness, openedAccounts: opened)
+        )
+        XCTAssertEqual(request.publicInputColumns[1][0], Self.solanaMainnetGenesisPublicInput)
+        XCTAssertEqual(request.publicInputColumns[12][0], request.openedAccountsLtHashContributionsHash)
+        XCTAssertEqual(request.publicInputColumns[13][0], request.openedAccountsLtHashResidualChecksum)
+        XCTAssertNotNil(
+            request.schemaDescriptor.range(of: Data("opened_accounts_lt_hash_residual_checksum".utf8))
+        )
+        XCTAssertNotNil(request.schemaDescriptor.range(of: Data("mainnet_genesis_hash".utf8)))
+        XCTAssertNotNil(request.schemaDescriptor.range(of: Data("source_state_verifier_id".utf8)))
+        XCTAssertNotNil(request.schemaDescriptor.range(of: Data(sccpSolanaMainnetAccountsDbVerifierIdV1.utf8)))
+        XCTAssertNotNil(request.schemaDescriptor.range(of: Data("source_state_verifier_hash".utf8)))
+        XCTAssertNotNil(
+            request.schemaDescriptor.range(
+                of: Data(hexString: String(request.sourceStateVerifierHash.dropFirst(2)))!
+            )
+        )
+        XCTAssertEqual(
+            request.fastpqTransitions.map(\.key),
+            [
+                "sccp:solana:accounts-lt:v1:statement",
+                "sccp:solana:accounts-lt:v1:accounts",
+                "sccp:solana:accounts-lt:v1:opened-contributions",
+                "sccp:solana:accounts-lt:v1:residual",
+                "sccp:solana:accounts-lt:v1:context",
+            ]
+        )
+        XCTAssertEqual(request.fastpqPublicInputs.oldRoot, "0x" + parentBankHash)
+        XCTAssertEqual(request.fastpqPublicInputs.newRoot, bankHash)
+        let proofCapsule = try wrapSolanaSccpSourceStateVerificationProof(
+            proofBytes: Data([1, 2, 3]),
+            request: request
+        )
+        XCTAssertEqual(proofCapsule.version, request.version)
+        XCTAssertEqual(proofCapsule.proofFamily, request.proofFamily)
+        XCTAssertEqual(proofCapsule.circuitId, request.circuitId)
+        XCTAssertEqual(proofCapsule.proofBytes, Data([1, 2, 3]))
+        XCTAssertEqual(proofCapsule.proofBase64, "AQID")
+        var exposedProofBytes = proofCapsule.proofBytes
+        exposedProofBytes[0] = 9
+        XCTAssertEqual(proofCapsule.proofBytes, Data([1, 2, 3]))
+        XCTAssertEqual(proofCapsule.proofBase64, "AQID")
+        XCTAssertEqual(
+            try solanaSccpAccountsLtHashProofHash(proofCapsule),
+            try solanaSccpAccountsLtHashProofHash(
+                SolanaSccpSourceStateVerificationProof(
+                    circuitId: request.circuitId,
+                    proofBytes: Data([1, 2, 3])
+                )
+            )
+        )
+        XCTAssertThrowsError(
+            try wrapSolanaSccpSourceStateVerificationProof(
+                proofBytes: Data(repeating: 0, count: 2),
+                request: request
+            )
+        ) { error in
+            XCTAssertEqual(error as? SolanaSccpProverError, .allZeroProof)
+        }
+        let oversizedProofBytes = Data(repeating: 1, count: sccpSourceStateMaxProofBytes + 1)
+        XCTAssertThrowsError(
+            try wrapSolanaSccpSourceStateVerificationProof(
+                proofBytes: oversizedProofBytes,
+                request: request
+            )
+        ) { error in
+            XCTAssertEqual(error as? SolanaSccpProverError, .invalidString("proofBytes"))
+        }
+        XCTAssertThrowsError(
+            try canonicalSolanaSccpSourceStateVerificationProofBytes(
+                SolanaSccpSourceStateVerificationProof(
+                    circuitId: request.circuitId,
+                    proofBytes: oversizedProofBytes
+                )
+            )
+        ) { error in
+            XCTAssertEqual(error as? SolanaSccpProverError, .invalidString("proofBytes"))
+        }
+        XCTAssertThrowsError(
+            try canonicalSolanaSccpSourceStateVerificationProofBytes(
+                SolanaSccpSourceStateVerificationProof(
+                    proofFamily: String(repeating: "x", count: sccpSourceStateMaxProofLabelBytes + 1),
+                    circuitId: request.circuitId,
+                    proofBytes: Data([1])
+                )
+            )
+        ) { error in
+            XCTAssertEqual(error as? SolanaSccpProverError, .invalidString("proofFamily"))
+        }
+        XCTAssertThrowsError(
+            try canonicalSolanaSccpSourceStateVerificationProofBytes(
+                SolanaSccpSourceStateVerificationProof(
+                    circuitId: String(repeating: "x", count: sccpSourceStateMaxProofLabelBytes + 1),
+                    proofBytes: Data([1])
+                )
+            )
+        ) { error in
+            XCTAssertEqual(error as? SolanaSccpProverError, .invalidString("circuitId"))
+        }
+        var wrongGenesisColumns = request.publicInputColumns
+        wrongGenesisColumns[1][0] = "0x" + String(repeating: "aa", count: 32)
+        let wrongGenesisRequest = SolanaSccpAccountsLtHashProofRequest(
+            version: request.version,
+            proofFamily: request.proofFamily,
+            circuitId: request.circuitId,
+            parameterSet: request.parameterSet,
+            sourceDomain: request.sourceDomain,
+            finalizedSlot: request.finalizedSlot,
+            parentSlot: request.parentSlot,
+            sourceStateVerifierId: request.sourceStateVerifierId,
+            sourceStateVerifierHash: request.sourceStateVerifierHash,
+            accountsLtHashProofPublicInputsHash: request.accountsLtHashProofPublicInputsHash,
+            openedAccountsLtHashContributionsHash: request.openedAccountsLtHashContributionsHash,
+            openedAccountsLtHashResidualChecksum: request.openedAccountsLtHashResidualChecksum,
+            statementBytes: request.statementBytes,
+            accountCommitmentBytes: request.accountCommitmentBytes,
+            verificationContextBytes: request.verificationContextBytes,
+            schemaDescriptor: request.schemaDescriptor,
+            publicInputColumns: wrongGenesisColumns,
+            fastpqPublicInputs: request.fastpqPublicInputs,
+            fastpqTransitions: request.fastpqTransitions
+        )
+        XCTAssertThrowsError(
+            try wrapSolanaSccpSourceStateVerificationProof(
+                proofBytes: Data([1]),
+                request: wrongGenesisRequest
+            )
+        ) { error in
+            XCTAssertEqual(
+                error as? SolanaSccpProverError,
+                .invalidString("request.publicInputColumns.mainnet_genesis_hash")
+            )
+        }
+        var wrongResidualColumns = request.publicInputColumns
+        wrongResidualColumns[13][0] = "0x" + String(repeating: "cc", count: 32)
+        let wrongResidualRequest = SolanaSccpAccountsLtHashProofRequest(
+            version: request.version,
+            proofFamily: request.proofFamily,
+            circuitId: request.circuitId,
+            parameterSet: request.parameterSet,
+            sourceDomain: request.sourceDomain,
+            finalizedSlot: request.finalizedSlot,
+            parentSlot: request.parentSlot,
+            sourceStateVerifierId: request.sourceStateVerifierId,
+            sourceStateVerifierHash: request.sourceStateVerifierHash,
+            accountsLtHashProofPublicInputsHash: request.accountsLtHashProofPublicInputsHash,
+            openedAccountsLtHashContributionsHash: request.openedAccountsLtHashContributionsHash,
+            openedAccountsLtHashResidualChecksum: request.openedAccountsLtHashResidualChecksum,
+            statementBytes: request.statementBytes,
+            accountCommitmentBytes: request.accountCommitmentBytes,
+            verificationContextBytes: request.verificationContextBytes,
+            schemaDescriptor: request.schemaDescriptor,
+            publicInputColumns: wrongResidualColumns,
+            fastpqPublicInputs: request.fastpqPublicInputs,
+            fastpqTransitions: request.fastpqTransitions
+        )
+        XCTAssertThrowsError(
+            try wrapSolanaSccpSourceStateVerificationProof(
+                proofBytes: Data([1]),
+                request: wrongResidualRequest
+            )
+        ) { error in
+            XCTAssertEqual(
+                error as? SolanaSccpProverError,
+                .invalidString("request.publicInputColumns.opened_accounts_lt_hash_residual_checksum")
+            )
+        }
+        let staleAccountsHashRequest = Self.accountsLtHashRequest(
+            request,
+            accountsLtHashProofPublicInputsHash: "0x" + String(repeating: "cc", count: 32)
+        )
+        XCTAssertThrowsError(
+            try wrapSolanaSccpSourceStateVerificationProof(
+                proofBytes: Data([1]),
+                request: staleAccountsHashRequest
+            )
+        ) { error in
+            XCTAssertEqual(
+                error as? SolanaSccpProverError,
+                .invalidString("request.accountsLtHashProofPublicInputsHash")
+            )
+        }
+        let wrongAccountsDsidInputs = SolanaSccpAccountsLtHashFastpqPublicInputs(
+            dsid: "0x" + String(repeating: "00", count: 16),
+            slot: request.fastpqPublicInputs.slot,
+            oldRoot: request.fastpqPublicInputs.oldRoot,
+            newRoot: request.fastpqPublicInputs.newRoot,
+            permRoot: request.fastpqPublicInputs.permRoot,
+            txSetHash: request.fastpqPublicInputs.txSetHash
+        )
+        let wrongAccountsDsidRequest = Self.accountsLtHashRequest(
+            request,
+            fastpqPublicInputs: wrongAccountsDsidInputs
+        )
+        XCTAssertThrowsError(
+            try wrapSolanaSccpSourceStateVerificationProof(
+                proofBytes: Data([1]),
+                request: wrongAccountsDsidRequest
+            )
+        ) { error in
+            XCTAssertEqual(error as? SolanaSccpProverError, .invalidString("request.fastpqPublicInputs.dsid"))
+        }
+        let wrongAccountsTxInputs = SolanaSccpAccountsLtHashFastpqPublicInputs(
+            dsid: request.fastpqPublicInputs.dsid,
+            slot: request.fastpqPublicInputs.slot,
+            oldRoot: request.fastpqPublicInputs.oldRoot,
+            newRoot: request.fastpqPublicInputs.newRoot,
+            permRoot: request.fastpqPublicInputs.permRoot,
+            txSetHash: "0x" + String(repeating: "cc", count: 32)
+        )
+        let wrongAccountsTxRequest = Self.accountsLtHashRequest(
+            request,
+            fastpqPublicInputs: wrongAccountsTxInputs
+        )
+        XCTAssertThrowsError(
+            try wrapSolanaSccpSourceStateVerificationProof(
+                proofBytes: Data([1]),
+                request: wrongAccountsTxRequest
+            )
+        ) { error in
+            XCTAssertEqual(error as? SolanaSccpProverError, .invalidString("request.fastpqPublicInputs.txSetHash"))
+        }
+        var wrongTransitions = request.fastpqTransitions
+        wrongTransitions[0] = SolanaSccpAccountsLtHashFastpqTransition(
+            key: wrongTransitions[0].key,
+            operation: wrongTransitions[0].operation,
+            oldValue: wrongTransitions[0].oldValue,
+            newValue: Data([0])
+        )
+        let wrongTransitionRequest = SolanaSccpAccountsLtHashProofRequest(
+            version: request.version,
+            proofFamily: request.proofFamily,
+            circuitId: request.circuitId,
+            parameterSet: request.parameterSet,
+            sourceDomain: request.sourceDomain,
+            finalizedSlot: request.finalizedSlot,
+            parentSlot: request.parentSlot,
+            sourceStateVerifierId: request.sourceStateVerifierId,
+            sourceStateVerifierHash: request.sourceStateVerifierHash,
+            accountsLtHashProofPublicInputsHash: request.accountsLtHashProofPublicInputsHash,
+            openedAccountsLtHashContributionsHash: request.openedAccountsLtHashContributionsHash,
+            openedAccountsLtHashResidualChecksum: request.openedAccountsLtHashResidualChecksum,
+            statementBytes: request.statementBytes,
+            accountCommitmentBytes: request.accountCommitmentBytes,
+            verificationContextBytes: request.verificationContextBytes,
+            schemaDescriptor: request.schemaDescriptor,
+            publicInputColumns: request.publicInputColumns,
+            fastpqPublicInputs: request.fastpqPublicInputs,
+            fastpqTransitions: wrongTransitions
+        )
+        XCTAssertThrowsError(
+            try wrapSolanaSccpSourceStateVerificationProof(
+                proofBytes: Data([1]),
+                request: wrongTransitionRequest
+            )
+        ) { error in
+            XCTAssertEqual(error as? SolanaSccpProverError, .invalidString("request.fastpqTransitions"))
+        }
+        var wrongOldValueTransitions = request.fastpqTransitions
+        wrongOldValueTransitions[0] = SolanaSccpAccountsLtHashFastpqTransition(
+            key: wrongOldValueTransitions[0].key,
+            operation: wrongOldValueTransitions[0].operation,
+            oldValue: Data([0]),
+            newValue: wrongOldValueTransitions[0].newValue
+        )
+        let wrongOldValueRequest = SolanaSccpAccountsLtHashProofRequest(
+            version: request.version,
+            proofFamily: request.proofFamily,
+            circuitId: request.circuitId,
+            parameterSet: request.parameterSet,
+            sourceDomain: request.sourceDomain,
+            finalizedSlot: request.finalizedSlot,
+            parentSlot: request.parentSlot,
+            sourceStateVerifierId: request.sourceStateVerifierId,
+            sourceStateVerifierHash: request.sourceStateVerifierHash,
+            accountsLtHashProofPublicInputsHash: request.accountsLtHashProofPublicInputsHash,
+            openedAccountsLtHashContributionsHash: request.openedAccountsLtHashContributionsHash,
+            openedAccountsLtHashResidualChecksum: request.openedAccountsLtHashResidualChecksum,
+            statementBytes: request.statementBytes,
+            accountCommitmentBytes: request.accountCommitmentBytes,
+            verificationContextBytes: request.verificationContextBytes,
+            schemaDescriptor: request.schemaDescriptor,
+            publicInputColumns: request.publicInputColumns,
+            fastpqPublicInputs: request.fastpqPublicInputs,
+            fastpqTransitions: wrongOldValueTransitions
+        )
+        XCTAssertThrowsError(
+            try wrapSolanaSccpSourceStateVerificationProof(
+                proofBytes: Data([1]),
+                request: wrongOldValueRequest
+            )
+        ) { error in
+            XCTAssertEqual(error as? SolanaSccpProverError, .invalidString("request.fastpqTransitions"))
+        }
+        var seenAccountsRequest: SolanaSccpAccountsLtHashProofRequest?
+        let sourceStateProver = SolanaSccpSourceStateProver(
+            accountsLtHashProveFunction: { linkedRequest in
+                seenAccountsRequest = linkedRequest
+                XCTAssertEqual(
+                    linkedRequest.circuitId,
+                    sccpSolanaAccountsLtHashOpenVerifyCircuitIdV1
+                )
+                return Data([1, 2, 3])
+            }
+        )
+        let linkedProof = try await sourceStateProver.proveAccountsLtHash(
+            witness: witness,
+            openedAccounts: opened
+        )
+        XCTAssertEqual(seenAccountsRequest?.circuitId, request.circuitId)
+        XCTAssertEqual(linkedProof.circuitId, request.circuitId)
+        XCTAssertEqual(linkedProof.proofBytes, Data([1, 2, 3]))
+        XCTAssertEqual(linkedProof.proofBase64, "AQID")
+        do {
+            _ = try await SolanaSccpSourceStateProver().proveAccountsLtHash(request: request)
+            XCTFail("expected missing source-state prover")
+        } catch {
+            XCTAssertEqual(error as? SolanaSccpProverError, .localProverUnavailable)
+        }
+        let missingStatementRequest = SolanaSccpAccountsLtHashProofRequest(
+            version: request.version,
+            proofFamily: request.proofFamily,
+            circuitId: request.circuitId,
+            parameterSet: request.parameterSet,
+            sourceDomain: request.sourceDomain,
+            finalizedSlot: request.finalizedSlot,
+            parentSlot: request.parentSlot,
+            sourceStateVerifierId: request.sourceStateVerifierId,
+            sourceStateVerifierHash: request.sourceStateVerifierHash,
+            accountsLtHashProofPublicInputsHash: request.accountsLtHashProofPublicInputsHash,
+            openedAccountsLtHashContributionsHash: request.openedAccountsLtHashContributionsHash,
+            openedAccountsLtHashResidualChecksum: request.openedAccountsLtHashResidualChecksum,
+            statementBytes: Data(),
+            accountCommitmentBytes: request.accountCommitmentBytes,
+            verificationContextBytes: request.verificationContextBytes,
+            schemaDescriptor: request.schemaDescriptor,
+            publicInputColumns: request.publicInputColumns,
+            fastpqPublicInputs: request.fastpqPublicInputs,
+            fastpqTransitions: request.fastpqTransitions
+        )
+        XCTAssertThrowsError(
+            try wrapSolanaSccpSourceStateVerificationProof(
+                proofBytes: Data([1]),
+                request: missingStatementRequest
+            )
+        ) { error in
+            XCTAssertEqual(error as? SolanaSccpProverError, .invalidString("request.statementBytes"))
+        }
+        var rejectedAccountsCallbackRan = false
+        let guardingAccountsProver = SolanaSccpSourceStateProver(
+            accountsLtHashProveFunction: { _ in
+                rejectedAccountsCallbackRan = true
+                return Data([1])
+            }
+        )
+        do {
+            _ = try await guardingAccountsProver.proveAccountsLtHash(request: missingStatementRequest)
+            XCTFail("expected malformed AccountsLtHash request to fail before callback")
+        } catch {
+            XCTAssertEqual(error as? SolanaSccpProverError, .invalidString("request.statementBytes"))
+            XCTAssertFalse(rejectedAccountsCallbackRan)
+        }
+        let expectedStatementBytes = request.statementBytes
+        var exposedStatement = request.statementBytes
+        exposedStatement[exposedStatement.startIndex] = exposedStatement[exposedStatement.startIndex] == 0 ? 1 : 0
+        XCTAssertEqual(request.statementBytes, expectedStatementBytes)
+        let expectedTransitionValue = request.fastpqTransitions[0].newValue
+        var exposedTransitionValue = request.fastpqTransitions[0].newValue
+        exposedTransitionValue[exposedTransitionValue.startIndex] =
+            exposedTransitionValue[exposedTransitionValue.startIndex] == 0 ? 1 : 0
+        XCTAssertEqual(request.fastpqTransitions[0].newValue, expectedTransitionValue)
+        XCTAssertThrowsError(try buildSolanaSccpAccountsLtHashProofRequest(
+            witness: SolanaSccpWitnessInput(
+                finalizedSlot: witness.finalizedSlot,
+                parentSlot: witness.parentSlot,
+                bankSignatureCount: witness.bankSignatureCount,
+                parentBankHash: witness.parentBankHash,
+                blockhash: witness.blockhash,
+                bankHash: witness.bankHash,
+                transactionStatusRoot: witness.transactionStatusRoot,
+                messageProofHash: witness.messageProofHash,
+                accountInclusionRoot: witness.accountInclusionRoot,
+                accountsLtHashChecksum: witness.accountsLtHashChecksum,
+                accountsLtHash: witness.accountsLtHash,
+                transactionSignature: witness.transactionSignature,
+                emitterProgramId: witness.emitterProgramId,
+                messageId: witness.messageId,
+                payloadHash: witness.payloadHash,
+                commitmentRoot: witness.commitmentRoot,
+                sourceEventDigest: witness.sourceEventDigest,
+                sourceStateVerifierHash: sccpZeroHashV1,
+                statementHash: witness.statementHash,
+                destinationBindingHash: witness.destinationBindingHash
+            ),
+            openedAccounts: opened
+        ))
+        XCTAssertThrowsError(try buildSolanaSccpAccountsLtHashProofRequest(
+            witness: SolanaSccpWitnessInput(
+                finalizedSlot: witness.finalizedSlot,
+                parentSlot: witness.parentSlot,
+                bankSignatureCount: witness.bankSignatureCount,
+                parentBankHash: witness.parentBankHash,
+                blockhash: witness.blockhash,
+                bankHash: witness.bankHash,
+                transactionStatusRoot: witness.transactionStatusRoot,
+                messageProofHash: witness.messageProofHash,
+                accountInclusionRoot: witness.accountInclusionRoot,
+                accountsLtHashChecksum: witness.accountsLtHashChecksum,
+                accountsLtHash: witness.accountsLtHash,
+                transactionSignature: witness.transactionSignature,
+                emitterProgramId: witness.emitterProgramId,
+                messageId: witness.messageId,
+                payloadHash: witness.payloadHash,
+                commitmentRoot: witness.commitmentRoot,
+                sourceEventDigest: witness.sourceEventDigest,
+                sourceStateVerifierHash: sccpSolanaTemplateSourceStateVerifierHashV1,
+                statementHash: witness.statementHash,
+                destinationBindingHash: witness.destinationBindingHash
+            ),
+            openedAccounts: opened
+        ))
+    }
+
+    func testBuildsSolanaFullLightClientAuditRoleProofRequests() async throws {
+        let voteOpening = SolanaSccpAccountOpeningInput(
+            address: Data(repeating: 0x31, count: 32),
+            owner: sccpSolanaVoteProgramId,
+            lamports: 1_000_000,
+            rentEpoch: 0,
+            dataHash: "0x" + String(repeating: "91", count: 32)
+        )
+        let stakeOpening = SolanaSccpAccountOpeningInput(
+            address: Data(repeating: 0x32, count: 32),
+            owner: sccpSolanaStakeProgramId,
+            lamports: 2_000_000,
+            rentEpoch: 0,
+            dataHash: "0x" + String(repeating: "92", count: 32)
+        )
+        let stakeHistoryOpening = SolanaSccpAccountOpeningInput(
+            address: sccpSolanaStakeHistorySysvarId,
+            owner: sccpSolanaSysvarProgramId,
+            lamports: 1,
+            rentEpoch: 0,
+            dataHash: "0x" + String(repeating: "93", count: 32)
+        )
+        let unopenedOpening = SolanaSccpAccountOpeningInput(
+            address: Data(repeating: 0x34, count: 32),
+            owner: sccpSolanaStakeProgramId,
+            lamports: 3_000_000,
+            rentEpoch: 0,
+            dataHash: "0x" + String(repeating: "94", count: 32)
+        )
+        let voteRawData = Data([1, 2, 3])
+        let stakeRawData = Data([4, 5, 6])
+        let stakeHistoryRawData = Data([7, 8, 9])
+        let unopenedRawData = Data([10, 11, 12])
+        let accountsLtHash = try solanaSccpAccountsLtHashFromOpenings(
+            openings: [voteOpening, stakeOpening, stakeHistoryOpening, unopenedOpening],
+            rawDataValues: [voteRawData, stakeRawData, stakeHistoryRawData, unopenedRawData]
+        )
+        let parentBankHash = String(repeating: "c0", count: 32)
+        let blockhash = String(repeating: "42", count: 32)
+        let bankHash = try solanaSccpAgaveBankHash(
+            parentBankHash: parentBankHash,
+            bankSignatureCount: 8,
+            blockhash: blockhash,
+            accountsLtHash: accountsLtHash
+        )
+        let opened = SolanaSccpOpenedAccountsLtHashContributionsInput(
+            finalizedSlot: 1_296_096,
+            accountInclusionRoot: "0x" + String(repeating: "77", count: 32),
+            accountsLtHashChecksum: try solanaSccpAccountsLtHashChecksum(accountsLtHash),
+            accountsLtHash: accountsLtHash,
+            validatorVoteAccountOpenings: [voteOpening],
+            validatorVoteAccountRawData: [voteRawData],
+            validatorStakeAccountOpenings: [stakeOpening],
+            validatorStakeAccountRawData: [stakeRawData],
+            stakeHistorySysvarOpening: stakeHistoryOpening,
+            stakeHistorySysvarRawData: stakeHistoryRawData
+        )
+        let sourceStateVerifierHash = String(repeating: "99", count: 32)
+        let sourceTrustAnchorHash = String(repeating: "44", count: 32)
+        let consensusVerifierHash = String(repeating: "55", count: 32)
+        let messageInclusionVerifierHash = String(repeating: "66", count: 32)
+        let finalityPolicyHash = String(repeating: "88", count: 32)
+        let deploymentReceiptHash = String(repeating: "aa", count: 32)
+        let towerVerifierHash = String(repeating: "b1", count: 32)
+        let accountsdbVerifierHash = String(repeating: "c2", count: 32)
+        let bankVerifierHash = String(repeating: "d3", count: 32)
+        let sourceVerifierMaterialHash = try sccpSourceVerifierMaterialHash(
+            sourceDomain: sccpDomainSolana,
+            sourceTrustAnchorHash: sourceTrustAnchorHash,
+            consensusVerifierHash: consensusVerifierHash,
+            messageInclusionVerifierHash: messageInclusionVerifierHash,
+            finalityPolicyHash: finalityPolicyHash,
+            sourceStateVerifierHash: sourceStateVerifierHash
+        )
+        let sourceAdapterDeploymentHash = try sccpSourceAdapterEngineDeploymentHash(
+            sourceDomain: sccpDomainSolana,
+            sourceTrustAnchorHash: sourceTrustAnchorHash,
+            consensusVerifierHash: consensusVerifierHash,
+            messageInclusionVerifierHash: messageInclusionVerifierHash,
+            finalityPolicyHash: finalityPolicyHash,
+            deploymentReceiptHash: deploymentReceiptHash,
+            sourceStateVerifierHash: sourceStateVerifierHash,
+            solanaTowerReplayVerifierHash: towerVerifierHash,
+            solanaFullAccountsdbLatticeVerifierHash: accountsdbVerifierHash,
+            solanaBankForkChoiceVerifierHash: bankVerifierHash
+        )
+        let fullLightClientGateHash = try sccpSolanaFullLightClientGateHash(
+            sourceTrustAnchorHash: sourceTrustAnchorHash,
+            consensusVerifierHash: consensusVerifierHash,
+            messageInclusionVerifierHash: messageInclusionVerifierHash,
+            finalityPolicyHash: finalityPolicyHash,
+            deploymentReceiptHash: deploymentReceiptHash,
+            solanaTowerReplayVerifierHash: towerVerifierHash,
+            solanaFullAccountsdbLatticeVerifierHash: accountsdbVerifierHash,
+            solanaBankForkChoiceVerifierHash: bankVerifierHash,
+            sourceStateVerifierHash: sourceStateVerifierHash
+        )
+        func witnessInput(
+            sourceAdapterDeploymentHash overrideSourceAdapterDeploymentHash: String = sourceAdapterDeploymentHash,
+            sourceAdapterDeploymentReceiptHash overrideSourceAdapterDeploymentReceiptHash: String = deploymentReceiptHash,
+            accountsLtHash overrideAccountsLtHash: Data? = accountsLtHash
+        ) -> SolanaSccpWitnessInput {
+            SolanaSccpWitnessInput(
+                finalizedSlot: opened.finalizedSlot,
+                parentSlot: opened.finalizedSlot - 1,
+                bankSignatureCount: 8,
+                parentBankHash: parentBankHash,
+                blockhash: blockhash,
+                bankHash: bankHash,
+                transactionStatusRoot: String(repeating: "bb", count: 32),
+                messageProofHash: String(repeating: "cc", count: 32),
+                accountInclusionRoot: opened.accountInclusionRoot,
+                accountsLtHashChecksum: opened.accountsLtHashChecksum,
+                accountsLtHash: overrideAccountsLtHash,
+                transactionSignature: Self.solanaSignature55,
+                emitterProgramId: Self.solanaProgram42,
+                messageId: String(repeating: "dd", count: 32),
+                payloadHash: String(repeating: "ee", count: 32),
+                commitmentRoot: String(repeating: "12", count: 32),
+                sourceEventDigest: String(repeating: "34", count: 32),
+                sourceStateVerifierHash: sourceStateVerifierHash,
+                statementHash: String(repeating: "56", count: 32),
+                destinationBindingHash: String(repeating: "78", count: 32),
+                sourceAdapterDeploymentHash: overrideSourceAdapterDeploymentHash,
+                sourceAdapterDeploymentReceiptHash: overrideSourceAdapterDeploymentReceiptHash
+            )
+        }
+        let witness = witnessInput()
+        func auditInput(
+            fullLightClientGateHash overrideFullLightClientGateHash: String? = nil,
+            sourceVerifierMaterialHash overrideSourceVerifierMaterialHash: String? = nil,
+            sourceAdapterDeploymentHash overrideSourceAdapterDeploymentHash: String? = nil,
+            sourceAdapterDeploymentReceiptHash overrideSourceAdapterDeploymentReceiptHash: String? = nil,
+            towerVerifierHash overrideTowerVerifierHash: String? = nil,
+            accountsdbVerifierHash overrideAccountsdbVerifierHash: String? = nil,
+            bankVerifierHash overrideBankVerifierHash: String? = nil,
+            witness overrideWitness: SolanaSccpWitnessInput? = nil
+        ) -> SolanaSccpFullLightClientAuditProofInput {
+            SolanaSccpFullLightClientAuditProofInput(
+                witness: overrideWitness ?? witness,
+                openedAccounts: opened,
+                accountsLtHashProof: SolanaSccpSourceStateVerificationProof(
+                    circuitId: sccpSolanaAccountsLtHashOpenVerifyCircuitIdV1,
+                    proofBytes: Data([1, 2, 3, 4])
+                ),
+                rootedSlot: 1_296_065,
+                towerVoteSlots: Array(1_296_066...1_296_096),
+                epochStakeRoot: String(repeating: "13", count: 32),
+                stakeActivationHash: String(repeating: "14", count: 32),
+                stakeAccountStateHash: String(repeating: "15", count: 32),
+                stakeHistoryHash: String(repeating: "16", count: 32),
+                stakeHistorySysvarAccountHash: String(repeating: "17", count: 32),
+                sourceTrustAnchorHash: sourceTrustAnchorHash,
+                consensusVerifierHash: consensusVerifierHash,
+                messageInclusionVerifierHash: messageInclusionVerifierHash,
+                finalityPolicyHash: finalityPolicyHash,
+                sourceAdapterDeploymentReceiptHash: overrideSourceAdapterDeploymentReceiptHash ?? deploymentReceiptHash,
+                solanaTowerReplayVerifierHash: overrideTowerVerifierHash ?? towerVerifierHash,
+                solanaFullAccountsdbLatticeVerifierHash: overrideAccountsdbVerifierHash ?? accountsdbVerifierHash,
+                solanaBankForkChoiceVerifierHash: overrideBankVerifierHash ?? bankVerifierHash,
+                sourceVerifierMaterialHash: overrideSourceVerifierMaterialHash ?? sourceVerifierMaterialHash,
+                sourceAdapterDeploymentHash: overrideSourceAdapterDeploymentHash ?? sourceAdapterDeploymentHash,
+                fullLightClientGateHash: overrideFullLightClientGateHash ?? fullLightClientGateHash
+            )
+        }
+        let input = auditInput()
+
+        let requests = try buildSolanaSccpFullLightClientAuditProofRequests(input)
+        var mismatchedAuditWitnessLtHash = accountsLtHash
+        mismatchedAuditWitnessLtHash[0] = mismatchedAuditWitnessLtHash[0] ^ 0x01
+        XCTAssertThrowsError(
+            try buildSolanaSccpFullLightClientAuditProofRequests(
+                auditInput(witness: witnessInput(accountsLtHash: mismatchedAuditWitnessLtHash))
+            )
+        ) { error in
+            XCTAssertEqual(error as? SolanaSccpProverError, .invalidString("accountsLtHash"))
+        }
+        let requestHashReusedTowerVerifierHash = requests.towerReplay.auditStatementHash
+        let requestHashReusedDeploymentHash = try sccpSourceAdapterEngineDeploymentHash(
+            sourceDomain: sccpDomainSolana,
+            sourceTrustAnchorHash: sourceTrustAnchorHash,
+            consensusVerifierHash: consensusVerifierHash,
+            messageInclusionVerifierHash: messageInclusionVerifierHash,
+            finalityPolicyHash: finalityPolicyHash,
+            deploymentReceiptHash: deploymentReceiptHash,
+            sourceStateVerifierHash: sourceStateVerifierHash,
+            solanaTowerReplayVerifierHash: requestHashReusedTowerVerifierHash,
+            solanaFullAccountsdbLatticeVerifierHash: accountsdbVerifierHash,
+            solanaBankForkChoiceVerifierHash: bankVerifierHash
+        )
+        let requestHashReusedGateHash = try sccpSolanaFullLightClientGateHash(
+            sourceTrustAnchorHash: sourceTrustAnchorHash,
+            consensusVerifierHash: consensusVerifierHash,
+            messageInclusionVerifierHash: messageInclusionVerifierHash,
+            finalityPolicyHash: finalityPolicyHash,
+            deploymentReceiptHash: deploymentReceiptHash,
+            solanaTowerReplayVerifierHash: requestHashReusedTowerVerifierHash,
+            solanaFullAccountsdbLatticeVerifierHash: accountsdbVerifierHash,
+            solanaBankForkChoiceVerifierHash: bankVerifierHash,
+            sourceStateVerifierHash: sourceStateVerifierHash
+        )
+        XCTAssertThrowsError(
+            try buildSolanaSccpTowerReplayProofRequest(
+                auditInput(
+                    fullLightClientGateHash: requestHashReusedGateHash,
+                    sourceAdapterDeploymentHash: requestHashReusedDeploymentHash,
+                    towerVerifierHash: requestHashReusedTowerVerifierHash,
+                    witness: witnessInput(sourceAdapterDeploymentHash: requestHashReusedDeploymentHash)
+                )
+            )
+        ) { error in
+            XCTAssertEqual(error as? SolanaSccpProverError, .invalidString("verifierHash"))
+        }
+        let expectedTowerReplayColumns = [
+            ["0x0100000000000000000000000000000000000000000000000000000000000000"],
+            ["0x0300000000000000000000000000000000000000000000000000000000000000"],
+            [Self.solanaMainnetGenesisPublicInput],
+            ["0xe0c6130000000000000000000000000000000000000000000000000000000000"],
+            ["0xb553931911947ab6caa4eba88d6aee62738b40f2e4d8d572e5e6616890abefbb"],
+            ["0x2ead9384eaa2351b45a81bb22384a9bc9ed7c0793b06d0d3eb15424ef28929e3"],
+            ["0xf0c76a74d7368857b724a8299f0851a30041acfbb03d6fc6bd4a6070358c093c"],
+            ["0x9c33ee13a70d2c960e27e28680f7816b84bda7d6cb4888fb449f6407c87a2bbd"],
+            ["0x3e0126e340dac71435abbb43b2df3bb5635568e8445326cd8723fef8a3dfd78f"],
+            ["0xb1b1b1b1b1b1b1b1b1b1b1b1b1b1b1b1b1b1b1b1b1b1b1b1b1b1b1b1b1b1b1b1"],
+            ["0x0300000000000000000000000000000000000000000000000000000000000000"],
+            ["0xc1c6130000000000000000000000000000000000000000000000000000000000"],
+            ["0xdfc6130000000000000000000000000000000000000000000000000000000000"],
+            ["0x17a9f46bb57527c1579df8463067264c93125f1b5315fe3b537022809e76f3bc"],
+            ["0xfc2832401bd6d624ab198e85a6ad1c889e09b393b3d16fff25a080c230c809dc"],
+            ["0x922a426e06d6263986a0c9ff0f956f5429288c9c1310cb67fbaf30918de58b40"],
+            ["0xaf75ee33d0fc85873b5302df026eaceddd40184c0f210a37968feea3b38d5ca0"],
+            ["0xb114fd98978cd6d734a070976fb2e30a92110731bcc81ed2ace2698221aee727"],
+            ["0x1313131313131313131313131313131313131313131313131313131313131313"],
+            ["0x1414141414141414141414141414141414141414141414141414141414141414"],
+            ["0x1515151515151515151515151515151515151515151515151515151515151515"],
+            ["0x1616161616161616161616161616161616161616161616161616161616161616"],
+            ["0x1717171717171717171717171717171717171717171717171717171717171717"],
+            ["0x7777777777777777777777777777777777777777777777777777777777777777"],
+        ]
+        let expectedAccountsdbColumns = [
+            ["0x0200000000000000000000000000000000000000000000000000000000000000"],
+            ["0x0300000000000000000000000000000000000000000000000000000000000000"],
+            [Self.solanaMainnetGenesisPublicInput],
+            ["0xe0c6130000000000000000000000000000000000000000000000000000000000"],
+            ["0xb553931911947ab6caa4eba88d6aee62738b40f2e4d8d572e5e6616890abefbb"],
+            ["0x016d361178fe1ed787add1eb9b75b5cc37453995e24b0acd845bd977e1cc9df0"],
+            ["0xf0c76a74d7368857b724a8299f0851a30041acfbb03d6fc6bd4a6070358c093c"],
+            ["0x9c33ee13a70d2c960e27e28680f7816b84bda7d6cb4888fb449f6407c87a2bbd"],
+            ["0x3e0126e340dac71435abbb43b2df3bb5635568e8445326cd8723fef8a3dfd78f"],
+            ["0xc2c2c2c2c2c2c2c2c2c2c2c2c2c2c2c2c2c2c2c2c2c2c2c2c2c2c2c2c2c2c2c2"],
+            ["0x0300000000000000000000000000000000000000000000000000000000000000"],
+            ["0xc1c6130000000000000000000000000000000000000000000000000000000000"],
+            ["0xdfc6130000000000000000000000000000000000000000000000000000000000"],
+            ["0x17a9f46bb57527c1579df8463067264c93125f1b5315fe3b537022809e76f3bc"],
+            ["0xfc2832401bd6d624ab198e85a6ad1c889e09b393b3d16fff25a080c230c809dc"],
+            ["0x7777777777777777777777777777777777777777777777777777777777777777"],
+            ["0xba606dacb76b0b03f395e6177a4a46cbe07f729678ab3a28f5ad8d7619cffc62"],
+            ["0xc1b7c880344a2551d0842848f68b8519027e8b228a4c92c4e754141821d63810"],
+            ["0x07270072f8b70b755ed491c1582b40050a484edd67752a8a0bbbd97aa175d4f9"],
+            ["0x336bb79a5e96c331ddca555aedde346438de4ca1b227ae09f7faaa5e0e455be0"],
+            ["0xfc2832401bd6d624ab198e85a6ad1c889e09b393b3d16fff25a080c230c809dc"],
+        ]
+        let expectedBankForkChoiceColumns = [
+            ["0x0300000000000000000000000000000000000000000000000000000000000000"],
+            ["0x0300000000000000000000000000000000000000000000000000000000000000"],
+            [Self.solanaMainnetGenesisPublicInput],
+            ["0xe0c6130000000000000000000000000000000000000000000000000000000000"],
+            ["0xb553931911947ab6caa4eba88d6aee62738b40f2e4d8d572e5e6616890abefbb"],
+            ["0x0c6a73bb4622acbb67c562c0a890237ca77619b33fececb645ee33b2028ed6a8"],
+            ["0xf0c76a74d7368857b724a8299f0851a30041acfbb03d6fc6bd4a6070358c093c"],
+            ["0x9c33ee13a70d2c960e27e28680f7816b84bda7d6cb4888fb449f6407c87a2bbd"],
+            ["0x3e0126e340dac71435abbb43b2df3bb5635568e8445326cd8723fef8a3dfd78f"],
+            ["0xd3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3"],
+            ["0x0300000000000000000000000000000000000000000000000000000000000000"],
+            ["0xc1c6130000000000000000000000000000000000000000000000000000000000"],
+            ["0xdfc6130000000000000000000000000000000000000000000000000000000000"],
+            ["0x17a9f46bb57527c1579df8463067264c93125f1b5315fe3b537022809e76f3bc"],
+            ["0xfc2832401bd6d624ab198e85a6ad1c889e09b393b3d16fff25a080c230c809dc"],
+            ["0xc0c0c0c0c0c0c0c0c0c0c0c0c0c0c0c0c0c0c0c0c0c0c0c0c0c0c0c0c0c0c0c0"],
+            ["0x46bf9f58208a9c61b931640824eb13d636d3af5b0268cce866c958367bd6a451"],
+            ["0x4242424242424242424242424242424242424242424242424242424242424242"],
+            ["0xbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"],
+            ["0x7777777777777777777777777777777777777777777777777777777777777777"],
+            ["0xba606dacb76b0b03f395e6177a4a46cbe07f729678ab3a28f5ad8d7619cffc62"],
+            ["0x0800000000000000000000000000000000000000000000000000000000000000"],
+            ["0x1d2a51ef7c068fe46c9f588c252ce9cea8b66d87453bf73c9920005802e738bc"],
+            ["0xb114fd98978cd6d734a070976fb2e30a92110731bcc81ed2ace2698221aee727"],
+            ["0xaf75ee33d0fc85873b5302df026eaceddd40184c0f210a37968feea3b38d5ca0"],
+        ]
+
+        XCTAssertEqual(requests.towerReplay.circuitId, sccpSolanaTowerReplayOpenVerifyCircuitIdV1)
+        XCTAssertEqual(
+            requests.towerReplay.auditStatementHash,
+            "0x2ead9384eaa2351b45a81bb22384a9bc9ed7c0793b06d0d3eb15424ef28929e3"
+        )
+        XCTAssertEqual(requests.towerReplay.statementBytes.count, 777)
+        XCTAssertEqual(requests.towerReplay.publicInputColumns, expectedTowerReplayColumns)
+        XCTAssertEqual(
+            requests.fullAccountsdbLattice.circuitId,
+            sccpSolanaFullAccountsdbLatticeOpenVerifyCircuitIdV1
+        )
+        XCTAssertEqual(
+            requests.fullAccountsdbLattice.auditStatementHash,
+            "0x016d361178fe1ed787add1eb9b75b5cc37453995e24b0acd845bd977e1cc9df0"
+        )
+        XCTAssertEqual(requests.fullAccountsdbLattice.statementBytes.count, 440)
+        XCTAssertEqual(requests.fullAccountsdbLattice.publicInputColumns, expectedAccountsdbColumns)
+        XCTAssertEqual(requests.bankForkChoice.circuitId, sccpSolanaBankForkChoiceOpenVerifyCircuitIdV1)
+        XCTAssertEqual(
+            requests.bankForkChoice.auditStatementHash,
+            "0x0c6a73bb4622acbb67c562c0a890237ca77619b33fececb645ee33b2028ed6a8"
+        )
+        XCTAssertEqual(requests.bankForkChoice.statementBytes.count, 509)
+        XCTAssertEqual(requests.bankForkChoice.publicInputColumns, expectedBankForkChoiceColumns)
+        XCTAssertEqual(requests.bankForkChoice.publicInputColumns[19], [input.witness.accountInclusionRoot])
+        XCTAssertTrue(
+            String(decoding: requests.towerReplay.schemaDescriptor, as: UTF8.self)
+                .contains("mainnet_genesis_hash")
+        )
+        XCTAssertEqual(
+            requests.towerReplay.publicInputColumns[20],
+            ["0x1515151515151515151515151515151515151515151515151515151515151515"]
+        )
+        XCTAssertEqual(
+            requests.towerReplay.publicInputColumns[22],
+            ["0x1717171717171717171717171717171717171717171717171717171717171717"]
+        )
+        XCTAssertEqual(requests.towerReplay.publicInputColumns[23], [input.witness.accountInclusionRoot])
+        XCTAssertTrue(
+            String(decoding: requests.towerReplay.schemaDescriptor, as: UTF8.self)
+                .contains("stake_account_state_hash")
+        )
+        XCTAssertTrue(
+            String(decoding: requests.towerReplay.schemaDescriptor, as: UTF8.self)
+                .contains("stake_history_sysvar_account_hash")
+        )
+        XCTAssertTrue(
+            String(decoding: requests.towerReplay.schemaDescriptor, as: UTF8.self)
+                .contains("account_inclusion_root")
+        )
+        XCTAssertTrue(
+            String(decoding: requests.bankForkChoice.schemaDescriptor, as: UTF8.self)
+                .contains("account_inclusion_root")
+        )
+        XCTAssertTrue(
+            String(decoding: requests.bankForkChoice.schemaDescriptor, as: UTF8.self)
+                .contains("bank_hash_hard_fork_data_hash")
+        )
+        XCTAssertEqual(
+            Set([
+                requests.towerReplay.auditStatementHash,
+                requests.fullAccountsdbLattice.auditStatementHash,
+                requests.bankForkChoice.auditStatementHash,
+            ]).count,
+            3
+        )
+        XCTAssertEqual(requests.towerReplay.fullLightClientGateHash, fullLightClientGateHash)
+        XCTAssertEqual(
+            requests.towerReplay.finalityContextHash,
+            try solanaSccpFullLightClientAuditFinalityContextHash(input)
+        )
+        XCTAssertEqual(
+            requests.towerReplay.voteMessageHash,
+            try solanaSccpFullLightClientAuditVoteMessageHash(input)
+        )
+        XCTAssertEqual(
+            requests.towerReplay.accountsLtHashProofHash,
+            try solanaSccpAccountsLtHashProofHash(input.accountsLtHashProof)
+        )
+        for request in [
+            requests.towerReplay,
+            requests.fullAccountsdbLattice,
+            requests.bankForkChoice,
+        ] {
+            let proofCapsule = try wrapSolanaSccpSourceStateVerificationProof(
+                proofBytes: Data([9, 8, 7]),
+                request: request
+            )
+            XCTAssertEqual(proofCapsule.version, request.version)
+            XCTAssertEqual(proofCapsule.proofFamily, request.proofFamily)
+            XCTAssertEqual(proofCapsule.circuitId, request.circuitId)
+            XCTAssertEqual(proofCapsule.proofBytes, Data([9, 8, 7]))
+            XCTAssertEqual(proofCapsule.proofBase64, "CQgH")
+            XCTAssertGreaterThan(
+                try canonicalSolanaSccpSourceStateVerificationProofBytes(proofCapsule).count,
+                0
+            )
+            XCTAssertThrowsError(try solanaSccpAccountsLtHashProofHash(proofCapsule))
+            var exposedProofBytes = proofCapsule.proofBytes
+            exposedProofBytes[0] = 1
+            XCTAssertEqual(proofCapsule.proofBytes, Data([9, 8, 7]))
+            XCTAssertEqual(proofCapsule.proofBase64, "CQgH")
+        }
+        var wrongAuditGenesisColumns = requests.bankForkChoice.publicInputColumns
+        wrongAuditGenesisColumns[2][0] = "0x" + String(repeating: "aa", count: 32)
+        let wrongAuditGenesisRequest = SolanaSccpFullLightClientAuditProofRequest(
+            version: requests.bankForkChoice.version,
+            proofFamily: requests.bankForkChoice.proofFamily,
+            circuitId: requests.bankForkChoice.circuitId,
+            parameterSet: requests.bankForkChoice.parameterSet,
+            role: requests.bankForkChoice.role,
+            roleCode: requests.bankForkChoice.roleCode,
+            sourceDomain: requests.bankForkChoice.sourceDomain,
+            finalizedSlot: requests.bankForkChoice.finalizedSlot,
+            verifierId: requests.bankForkChoice.verifierId,
+            verifierHash: requests.bankForkChoice.verifierHash,
+            sourceStateVerifierId: requests.bankForkChoice.sourceStateVerifierId,
+            sourceStateVerifierHash: requests.bankForkChoice.sourceStateVerifierHash,
+            sourceVerifierMaterialHash: requests.bankForkChoice.sourceVerifierMaterialHash,
+            sourceAdapterDeploymentHash: requests.bankForkChoice.sourceAdapterDeploymentHash,
+            fullLightClientGateHash: requests.bankForkChoice.fullLightClientGateHash,
+            finalityContextHash: requests.bankForkChoice.finalityContextHash,
+            voteMessageHash: requests.bankForkChoice.voteMessageHash,
+            accountsLtHashProofHash: requests.bankForkChoice.accountsLtHashProofHash,
+            auditStatementHash: requests.bankForkChoice.auditStatementHash,
+            statementBytes: requests.bankForkChoice.statementBytes,
+            verificationContextBytes: requests.bankForkChoice.verificationContextBytes,
+            schemaDescriptor: requests.bankForkChoice.schemaDescriptor,
+            publicInputColumns: wrongAuditGenesisColumns,
+            fastpqPublicInputs: requests.bankForkChoice.fastpqPublicInputs,
+            fastpqTransitions: requests.bankForkChoice.fastpqTransitions
+        )
+        XCTAssertThrowsError(
+            try wrapSolanaSccpSourceStateVerificationProof(
+                proofBytes: Data([9, 8, 7]),
+                request: wrongAuditGenesisRequest
+            )
+        ) { error in
+            XCTAssertEqual(
+                error as? SolanaSccpProverError,
+                .invalidString("request.publicInputColumns.mainnet_genesis_hash")
+            )
+        }
+        var wrongAuditStatementColumns = requests.towerReplay.publicInputColumns
+        wrongAuditStatementColumns[5][0] = "0x" + String(repeating: "cc", count: 32)
+        let wrongAuditStatementRequest = SolanaSccpFullLightClientAuditProofRequest(
+            version: requests.towerReplay.version,
+            proofFamily: requests.towerReplay.proofFamily,
+            circuitId: requests.towerReplay.circuitId,
+            parameterSet: requests.towerReplay.parameterSet,
+            role: requests.towerReplay.role,
+            roleCode: requests.towerReplay.roleCode,
+            sourceDomain: requests.towerReplay.sourceDomain,
+            finalizedSlot: requests.towerReplay.finalizedSlot,
+            verifierId: requests.towerReplay.verifierId,
+            verifierHash: requests.towerReplay.verifierHash,
+            sourceStateVerifierId: requests.towerReplay.sourceStateVerifierId,
+            sourceStateVerifierHash: requests.towerReplay.sourceStateVerifierHash,
+            sourceVerifierMaterialHash: requests.towerReplay.sourceVerifierMaterialHash,
+            sourceAdapterDeploymentHash: requests.towerReplay.sourceAdapterDeploymentHash,
+            fullLightClientGateHash: requests.towerReplay.fullLightClientGateHash,
+            finalityContextHash: requests.towerReplay.finalityContextHash,
+            voteMessageHash: requests.towerReplay.voteMessageHash,
+            accountsLtHashProofHash: requests.towerReplay.accountsLtHashProofHash,
+            auditStatementHash: requests.towerReplay.auditStatementHash,
+            statementBytes: requests.towerReplay.statementBytes,
+            verificationContextBytes: requests.towerReplay.verificationContextBytes,
+            schemaDescriptor: requests.towerReplay.schemaDescriptor,
+            publicInputColumns: wrongAuditStatementColumns,
+            fastpqPublicInputs: requests.towerReplay.fastpqPublicInputs,
+            fastpqTransitions: requests.towerReplay.fastpqTransitions
+        )
+        XCTAssertThrowsError(
+            try wrapSolanaSccpSourceStateVerificationProof(
+                proofBytes: Data([9, 8, 7]),
+                request: wrongAuditStatementRequest
+            )
+        ) { error in
+            XCTAssertEqual(
+                error as? SolanaSccpProverError,
+                .invalidString("request.publicInputColumns.audit_statement_hash")
+            )
+        }
+        let staleAuditHashRequest = Self.fullLightClientAuditRequest(
+            requests.towerReplay,
+            auditStatementHash: "0x" + String(repeating: "cc", count: 32)
+        )
+        XCTAssertThrowsError(
+            try wrapSolanaSccpSourceStateVerificationProof(
+                proofBytes: Data([9, 8, 7]),
+                request: staleAuditHashRequest
+            )
+        ) { error in
+            XCTAssertEqual(error as? SolanaSccpProverError, .invalidString("request.auditStatementHash"))
+        }
+        let wrongAuditDsidInputs = SolanaSccpFullLightClientAuditFastpqPublicInputs(
+            dsid: "0x" + String(repeating: "00", count: 16),
+            slot: requests.towerReplay.fastpqPublicInputs.slot,
+            oldRoot: requests.towerReplay.fastpqPublicInputs.oldRoot,
+            newRoot: requests.towerReplay.fastpqPublicInputs.newRoot,
+            permRoot: requests.towerReplay.fastpqPublicInputs.permRoot,
+            txSetHash: requests.towerReplay.fastpqPublicInputs.txSetHash
+        )
+        let wrongAuditDsidRequest = Self.fullLightClientAuditRequest(
+            requests.towerReplay,
+            fastpqPublicInputs: wrongAuditDsidInputs
+        )
+        XCTAssertThrowsError(
+            try wrapSolanaSccpSourceStateVerificationProof(
+                proofBytes: Data([9, 8, 7]),
+                request: wrongAuditDsidRequest
+            )
+        ) { error in
+            XCTAssertEqual(error as? SolanaSccpProverError, .invalidString("request.fastpqPublicInputs.dsid"))
+        }
+        let wrongAuditTxInputs = SolanaSccpFullLightClientAuditFastpqPublicInputs(
+            dsid: requests.towerReplay.fastpqPublicInputs.dsid,
+            slot: requests.towerReplay.fastpqPublicInputs.slot,
+            oldRoot: requests.towerReplay.fastpqPublicInputs.oldRoot,
+            newRoot: requests.towerReplay.fastpqPublicInputs.newRoot,
+            permRoot: requests.towerReplay.fastpqPublicInputs.permRoot,
+            txSetHash: "0x" + String(repeating: "cc", count: 32)
+        )
+        let wrongAuditTxRequest = Self.fullLightClientAuditRequest(
+            requests.towerReplay,
+            fastpqPublicInputs: wrongAuditTxInputs
+        )
+        XCTAssertThrowsError(
+            try wrapSolanaSccpSourceStateVerificationProof(
+                proofBytes: Data([9, 8, 7]),
+                request: wrongAuditTxRequest
+            )
+        ) { error in
+            XCTAssertEqual(error as? SolanaSccpProverError, .invalidString("request.fastpqPublicInputs.txSetHash"))
+        }
+        let reusedSourceStateVerifierRequest = Self.fullLightClientAuditRequest(
+            requests.towerReplay,
+            verifierHash: requests.towerReplay.sourceStateVerifierHash
+        )
+        XCTAssertThrowsError(
+            try wrapSolanaSccpSourceStateVerificationProof(
+                proofBytes: Data([9, 8, 7]),
+                request: reusedSourceStateVerifierRequest
+            )
+        ) { error in
+            XCTAssertEqual(error as? SolanaSccpProverError, .invalidString("request.verifierHash"))
+        }
+        var wrongAuditTransitions = requests.towerReplay.fastpqTransitions
+        wrongAuditTransitions[0] = SolanaSccpFullLightClientAuditFastpqTransition(
+            key: wrongAuditTransitions[0].key,
+            operation: wrongAuditTransitions[0].operation,
+            oldValue: wrongAuditTransitions[0].oldValue,
+            newValue: Data([0])
+        )
+        let wrongAuditTransitionRequest = SolanaSccpFullLightClientAuditProofRequest(
+            version: requests.towerReplay.version,
+            proofFamily: requests.towerReplay.proofFamily,
+            circuitId: requests.towerReplay.circuitId,
+            parameterSet: requests.towerReplay.parameterSet,
+            role: requests.towerReplay.role,
+            roleCode: requests.towerReplay.roleCode,
+            sourceDomain: requests.towerReplay.sourceDomain,
+            finalizedSlot: requests.towerReplay.finalizedSlot,
+            verifierId: requests.towerReplay.verifierId,
+            verifierHash: requests.towerReplay.verifierHash,
+            sourceStateVerifierId: requests.towerReplay.sourceStateVerifierId,
+            sourceStateVerifierHash: requests.towerReplay.sourceStateVerifierHash,
+            sourceVerifierMaterialHash: requests.towerReplay.sourceVerifierMaterialHash,
+            sourceAdapterDeploymentHash: requests.towerReplay.sourceAdapterDeploymentHash,
+            fullLightClientGateHash: requests.towerReplay.fullLightClientGateHash,
+            finalityContextHash: requests.towerReplay.finalityContextHash,
+            voteMessageHash: requests.towerReplay.voteMessageHash,
+            accountsLtHashProofHash: requests.towerReplay.accountsLtHashProofHash,
+            auditStatementHash: requests.towerReplay.auditStatementHash,
+            statementBytes: requests.towerReplay.statementBytes,
+            verificationContextBytes: requests.towerReplay.verificationContextBytes,
+            schemaDescriptor: requests.towerReplay.schemaDescriptor,
+            publicInputColumns: requests.towerReplay.publicInputColumns,
+            fastpqPublicInputs: requests.towerReplay.fastpqPublicInputs,
+            fastpqTransitions: wrongAuditTransitions
+        )
+        XCTAssertThrowsError(
+            try wrapSolanaSccpSourceStateVerificationProof(
+                proofBytes: Data([9, 8, 7]),
+                request: wrongAuditTransitionRequest
+            )
+        ) { error in
+            XCTAssertEqual(error as? SolanaSccpProverError, .invalidString("request.fastpqTransitions"))
+        }
+        var wrongAuditOldValueTransitions = requests.towerReplay.fastpqTransitions
+        wrongAuditOldValueTransitions[0] = SolanaSccpFullLightClientAuditFastpqTransition(
+            key: wrongAuditOldValueTransitions[0].key,
+            operation: wrongAuditOldValueTransitions[0].operation,
+            oldValue: Data([0]),
+            newValue: wrongAuditOldValueTransitions[0].newValue
+        )
+        let wrongAuditOldValueRequest = SolanaSccpFullLightClientAuditProofRequest(
+            version: requests.towerReplay.version,
+            proofFamily: requests.towerReplay.proofFamily,
+            circuitId: requests.towerReplay.circuitId,
+            parameterSet: requests.towerReplay.parameterSet,
+            role: requests.towerReplay.role,
+            roleCode: requests.towerReplay.roleCode,
+            sourceDomain: requests.towerReplay.sourceDomain,
+            finalizedSlot: requests.towerReplay.finalizedSlot,
+            verifierId: requests.towerReplay.verifierId,
+            verifierHash: requests.towerReplay.verifierHash,
+            sourceStateVerifierId: requests.towerReplay.sourceStateVerifierId,
+            sourceStateVerifierHash: requests.towerReplay.sourceStateVerifierHash,
+            sourceVerifierMaterialHash: requests.towerReplay.sourceVerifierMaterialHash,
+            sourceAdapterDeploymentHash: requests.towerReplay.sourceAdapterDeploymentHash,
+            fullLightClientGateHash: requests.towerReplay.fullLightClientGateHash,
+            finalityContextHash: requests.towerReplay.finalityContextHash,
+            voteMessageHash: requests.towerReplay.voteMessageHash,
+            accountsLtHashProofHash: requests.towerReplay.accountsLtHashProofHash,
+            auditStatementHash: requests.towerReplay.auditStatementHash,
+            statementBytes: requests.towerReplay.statementBytes,
+            verificationContextBytes: requests.towerReplay.verificationContextBytes,
+            schemaDescriptor: requests.towerReplay.schemaDescriptor,
+            publicInputColumns: requests.towerReplay.publicInputColumns,
+            fastpqPublicInputs: requests.towerReplay.fastpqPublicInputs,
+            fastpqTransitions: wrongAuditOldValueTransitions
+        )
+        XCTAssertThrowsError(
+            try wrapSolanaSccpSourceStateVerificationProof(
+                proofBytes: Data([9, 8, 7]),
+                request: wrongAuditOldValueRequest
+            )
+        ) { error in
+            XCTAssertEqual(error as? SolanaSccpProverError, .invalidString("request.fastpqTransitions"))
+        }
+        let malformedAuditRequest = SolanaSccpFullLightClientAuditProofRequest(
+            version: requests.towerReplay.version,
+            proofFamily: requests.towerReplay.proofFamily,
+            circuitId: requests.towerReplay.circuitId,
+            parameterSet: requests.towerReplay.parameterSet,
+            role: requests.towerReplay.role,
+            roleCode: requests.towerReplay.roleCode,
+            sourceDomain: requests.towerReplay.sourceDomain,
+            finalizedSlot: requests.towerReplay.finalizedSlot,
+            verifierId: requests.towerReplay.verifierId,
+            verifierHash: requests.towerReplay.verifierHash,
+            sourceStateVerifierId: requests.towerReplay.sourceStateVerifierId,
+            sourceStateVerifierHash: requests.towerReplay.sourceStateVerifierHash,
+            sourceVerifierMaterialHash: requests.towerReplay.sourceVerifierMaterialHash,
+            sourceAdapterDeploymentHash: requests.towerReplay.sourceAdapterDeploymentHash,
+            fullLightClientGateHash: requests.towerReplay.fullLightClientGateHash,
+            finalityContextHash: requests.towerReplay.finalityContextHash,
+            voteMessageHash: requests.towerReplay.voteMessageHash,
+            accountsLtHashProofHash: requests.towerReplay.accountsLtHashProofHash,
+            auditStatementHash: requests.towerReplay.auditStatementHash,
+            statementBytes: requests.towerReplay.statementBytes,
+            verificationContextBytes: requests.towerReplay.verificationContextBytes,
+            schemaDescriptor: requests.towerReplay.schemaDescriptor,
+            publicInputColumns: [],
+            fastpqPublicInputs: requests.towerReplay.fastpqPublicInputs,
+            fastpqTransitions: requests.towerReplay.fastpqTransitions
+        )
+        XCTAssertThrowsError(
+            try wrapSolanaSccpSourceStateVerificationProof(
+                proofBytes: Data([9, 8, 7]),
+                request: malformedAuditRequest
+            )
+        ) { error in
+            XCTAssertEqual(error as? SolanaSccpProverError, .invalidString("request.publicInputColumns"))
+        }
+        var rejectedAuditCallbackRan = false
+        let guardingAuditProver = SolanaSccpSourceStateProver(
+            fullLightClientAuditProveFunction: { _ in
+                rejectedAuditCallbackRan = true
+                return Data([9, 8, 7])
+            }
+        )
+        do {
+            _ = try await guardingAuditProver.proveFullLightClientAudit(request: malformedAuditRequest)
+            XCTFail("expected malformed full-light audit request to fail before callback")
+        } catch {
+            XCTAssertEqual(error as? SolanaSccpProverError, .invalidString("request.publicInputColumns"))
+            XCTAssertFalse(rejectedAuditCallbackRan)
+        }
+        XCTAssertThrowsError(
+            try solanaSccpAccountsLtHashProofHash(
+                SolanaSccpSourceStateVerificationProof(
+                    circuitId: input.accountsLtHashProof.circuitId,
+                    proofBytes: Data(repeating: 0, count: 3)
+                )
+            )
+        ) { error in
+            XCTAssertEqual(error as? SolanaSccpProverError, .allZeroProof)
+        }
+        XCTAssertThrowsError(
+            try canonicalSolanaSccpSourceStateVerificationProofBytes(
+                SolanaSccpSourceStateVerificationProof(
+                    version: 0,
+                    circuitId: input.accountsLtHashProof.circuitId,
+                    proofBytes: Data([1, 2, 3])
+                )
+            )
+        ) { error in
+            XCTAssertEqual(error as? SolanaSccpProverError, .invalidString("accountsLtHashProof"))
+        }
+        XCTAssertNotNil(
+            requests.fullAccountsdbLattice.schemaDescriptor.range(
+                of: Data("full_light_client_gate_hash".utf8)
+            )
+        )
+        var exposedAuditStatement = requests.towerReplay.statementBytes
+        exposedAuditStatement[exposedAuditStatement.startIndex] =
+            exposedAuditStatement[exposedAuditStatement.startIndex] == 0 ? 1 : 0
+        XCTAssertEqual(
+            requests.towerReplay.statementBytes,
+            try canonicalSolanaSccpFullLightClientAuditStatementBytes(input, role: .towerReplay)
+        )
+        var exposedAuditSchema = requests.fullAccountsdbLattice.schemaDescriptor
+        exposedAuditSchema[exposedAuditSchema.startIndex] =
+            exposedAuditSchema[exposedAuditSchema.startIndex] == 0 ? 1 : 0
+        XCTAssertEqual(
+            requests.fullAccountsdbLattice.schemaDescriptor,
+            try solanaSccpFullLightClientAuditOpenVerifySchemaDescriptor(input, role: .fullAccountsdbLattice)
+        )
+        var seenRoles: [String] = []
+        let sourceStateProver = SolanaSccpSourceStateProver(
+            fullLightClientAuditProveFunction: { request in
+                seenRoles.append(request.role)
+                return Data([9, 8, 7])
+            }
+        )
+        let linkedProofs = try await sourceStateProver.proveFullLightClientAudit(input)
+        XCTAssertEqual(seenRoles, ["tower_replay", "full_accountsdb_lattice", "bank_fork_choice"])
+        XCTAssertEqual(
+            linkedProofs.towerReplay.circuitId,
+            sccpSolanaTowerReplayOpenVerifyCircuitIdV1
+        )
+        XCTAssertEqual(
+            linkedProofs.fullAccountsdbLattice.circuitId,
+            sccpSolanaFullAccountsdbLatticeOpenVerifyCircuitIdV1
+        )
+        XCTAssertEqual(
+            linkedProofs.bankForkChoice.circuitId,
+            sccpSolanaBankForkChoiceOpenVerifyCircuitIdV1
+        )
+        XCTAssertEqual(linkedProofs.bankForkChoice.proofBase64, "CQgH")
+        do {
+            _ = try await SolanaSccpSourceStateProver().proveFullLightClientAudit(input)
+            XCTFail("expected missing source-state prover")
+        } catch {
+            XCTAssertEqual(error as? SolanaSccpProverError, .localProverUnavailable)
+        }
+        XCTAssertTrue(requests.bankForkChoice.fastpqTransitions.allSatisfy { $0.key.hasPrefix("0x") })
+        XCTAssertThrowsError(
+            try buildSolanaSccpFullLightClientAuditProofRequests(
+                auditInput(fullLightClientGateHash: "0x" + String(repeating: "ab", count: 32))
+            )
+        ) { error in
+            XCTAssertEqual(error as? SolanaSccpProverError, .invalidHex32("fullLightClientGateHash"))
+        }
+        XCTAssertThrowsError(
+            try buildSolanaSccpFullLightClientAuditProofRequests(
+                auditInput(sourceVerifierMaterialHash: "0x" + String(repeating: "ab", count: 32))
+            )
+        ) { error in
+            XCTAssertEqual(error as? SolanaSccpProverError, .invalidHex32("sourceVerifierMaterialHash"))
+        }
+        XCTAssertThrowsError(
+            try buildSolanaSccpFullLightClientAuditProofRequests(
+                auditInput(sourceAdapterDeploymentReceiptHash: "0x" + String(repeating: "ab", count: 32))
+            )
+        ) { error in
+            XCTAssertEqual(error as? SolanaSccpProverError, .invalidHex32("sourceAdapterDeploymentReceiptHash"))
+        }
+        XCTAssertThrowsError(
+            try buildSolanaSccpFullLightClientAuditProofRequests(
+                auditInput(witness: witnessInput(
+                    sourceAdapterDeploymentHash: "0x" + String(repeating: "ab", count: 32)
+                ))
+            )
+        ) { error in
+            XCTAssertEqual(error as? SolanaSccpProverError, .sourceAdapterDeploymentBindingMismatch)
+        }
+        XCTAssertThrowsError(
+            try buildSolanaSccpFullLightClientAuditProofRequests(
+                auditInput(witness: witnessInput(
+                    sourceAdapterDeploymentReceiptHash: "0x" + String(repeating: "ab", count: 32)
+                ))
+            )
+        ) { error in
+            XCTAssertEqual(error as? SolanaSccpProverError, .invalidHex32("sourceAdapterDeploymentReceiptHash"))
+        }
+        XCTAssertThrowsError(
+            try buildSolanaSccpFullLightClientAuditProofRequests(
+                auditInput(towerVerifierHash: accountsdbVerifierHash)
+            )
+        ) { error in
+            XCTAssertEqual(
+                error as? SolanaSccpProverError,
+                .invalidString("solanaFullLightClientAuditVerifierHashes")
+            )
+        }
+        XCTAssertThrowsError(
+            try buildSolanaSccpFullLightClientAuditProofRequests(
+                auditInput(towerVerifierHash: sourceStateVerifierHash)
+            )
+        ) { error in
+            XCTAssertEqual(
+                error as? SolanaSccpProverError,
+                .invalidString("solanaFullLightClientAuditVerifierHashes")
+            )
+        }
+        XCTAssertThrowsError(
+            try buildSolanaSccpFullLightClientAuditProofRequests(
+                auditInput(towerVerifierHash: sourceTrustAnchorHash)
+            )
+        ) { error in
+            XCTAssertEqual(
+                error as? SolanaSccpProverError,
+                .invalidString("solanaFullLightClientAuditVerifierHashes")
+            )
+        }
+        XCTAssertThrowsError(
+            try buildSolanaSccpFullLightClientAuditProofRequests(
+                auditInput(
+                    towerVerifierHash: try sccpSourceAdapterVerifierVkHash(
+                        sourceDomain: sccpDomainSolana
+                    )
+                )
+            )
+        ) { error in
+            XCTAssertEqual(
+                error as? SolanaSccpProverError,
+                .invalidString("solanaFullLightClientAuditVerifierHashes")
+            )
+        }
+        XCTAssertThrowsError(
+            try buildSolanaSccpFullLightClientAuditProofRequests(
+                auditInput(
+                    sourceAdapterDeploymentReceiptHash: towerVerifierHash,
+                    towerVerifierHash: towerVerifierHash,
+                    witness: witnessInput(sourceAdapterDeploymentReceiptHash: towerVerifierHash)
+                )
+            )
+        ) { error in
+            XCTAssertEqual(
+                error as? SolanaSccpProverError,
+                .invalidString("solanaFullLightClientAuditVerifierHashes")
+            )
+        }
+        XCTAssertThrowsError(
+            try buildSolanaSccpFullLightClientAuditProofRequests(
+                auditInput(
+                    towerVerifierHash:
+                        "0x113bdb7601d84f2098daec386346a7123857d181b3ac5bd23df50fa9e1b2cbe3"
+                )
+            )
+        ) { error in
+            XCTAssertEqual(
+                error as? SolanaSccpProverError,
+                .invalidString("solanaFullLightClientAuditVerifierHashes")
+            )
+        }
+    }
+
+    func testBuildsSolanaVoteAndStakeAccountDataHashes() throws {
+        let towerVoteSlots = (11...41).map(UInt64.init)
+
+        XCTAssertEqual(
+            try canonicalSolanaSccpVoteAccountDataBytes(
+                nodePubkey: Data(repeating: 0x51, count: 32),
+                authorizedVoter: Data(repeating: 0x61, count: 32),
+                authorizedWithdrawer: Data(repeating: 0x71, count: 32),
+                inflationRewardsCollector: Data(repeating: 0x81, count: 32),
+                blockRevenueCollector: Data(repeating: 0x51, count: 32),
+                inflationRewardsCommissionBps: 700,
+                blockRevenueCommissionBps: 10_000,
+                pendingDelegatorRewards: 123,
+                rootSlot: 10,
+                towerVoteSlots: towerVoteSlots
+            ).count,
+            457
+        )
+        let voteHash = try solanaSccpVoteAccountDataHash(
+            nodePubkey: Data(repeating: 0x51, count: 32),
+            authorizedVoter: Data(repeating: 0x61, count: 32),
+            authorizedWithdrawer: Data(repeating: 0x71, count: 32),
+            inflationRewardsCollector: Data(repeating: 0x81, count: 32),
+            blockRevenueCollector: Data(repeating: 0x51, count: 32),
+            inflationRewardsCommissionBps: 700,
+            blockRevenueCommissionBps: 10_000,
+            pendingDelegatorRewards: 123,
+            rootSlot: 10,
+            towerVoteSlots: towerVoteSlots
+        )
+        XCTAssertTrue(voteHash.range(of: #"^0x[0-9a-f]{64}$"#, options: .regularExpression) != nil)
+        XCTAssertNotEqual(
+            voteHash,
+            try solanaSccpVoteAccountDataHash(
+                nodePubkey: Data(repeating: 0x51, count: 32),
+                authorizedVoter: Data(repeating: 0x62, count: 32),
+                authorizedWithdrawer: Data(repeating: 0x71, count: 32),
+                inflationRewardsCollector: Data(repeating: 0x81, count: 32),
+                blockRevenueCollector: Data(repeating: 0x51, count: 32),
+                inflationRewardsCommissionBps: 700,
+                blockRevenueCommissionBps: 10_000,
+                pendingDelegatorRewards: 123,
+                rootSlot: 10,
+                towerVoteSlots: towerVoteSlots
+            )
+        )
+        XCTAssertThrowsError(try solanaSccpVoteAccountDataHash(
+            nodePubkey: Data(repeating: 0x51, count: 32),
+            authorizedVoter: Data(repeating: 0x61, count: 32),
+            authorizedWithdrawer: Data(repeating: 0x71, count: 32),
+            inflationRewardsCollector: Data(repeating: 0x81, count: 32),
+            blockRevenueCollector: Data(repeating: 0x51, count: 32),
+            inflationRewardsCommissionBps: 700,
+            blockRevenueCommissionBps: 10_000,
+            pendingDelegatorRewards: 123,
+            rootSlot: 10,
+            towerVoteSlots: [UInt64(10)] + Array(towerVoteSlots.dropFirst())
+        )) { error in
+            XCTAssertEqual(error as? SolanaSccpProverError, .invalidString("towerVoteSlots[0]"))
+        }
+
+        XCTAssertEqual(
+            try canonicalSolanaSccpStakeAccountDataBytes(
+                staker: Data(repeating: 0x81, count: 32),
+                withdrawer: Data(repeating: 0x91, count: 32),
+                voterPubkey: Data(repeating: 0xa1, count: 32),
+                delegatedStake: 1_000,
+                activationEpoch: 2,
+                deactivationEpoch: 9,
+                warmupCooldownRateBytes: Data([0x0a, 0xd7, 0xa3, 0x70, 0x3d, 0x0a, 0xb7, 0x3f]),
+                creditsObserved: 123,
+                stakeFlags: 1
+            ).count,
+            154
+        )
+        let stakeHash = try solanaSccpStakeAccountDataHash(
+            staker: Data(repeating: 0x81, count: 32),
+            withdrawer: Data(repeating: 0x91, count: 32),
+            voterPubkey: Data(repeating: 0xa1, count: 32),
+            delegatedStake: 1_000,
+            activationEpoch: 2,
+            deactivationEpoch: 9,
+            warmupCooldownRateBytes: Data([0x0a, 0xd7, 0xa3, 0x70, 0x3d, 0x0a, 0xb7, 0x3f]),
+            creditsObserved: 123,
+            stakeFlags: 1
+        )
+        XCTAssertTrue(stakeHash.range(of: #"^0x[0-9a-f]{64}$"#, options: .regularExpression) != nil)
+        XCTAssertNotEqual(
+            stakeHash,
+            try solanaSccpStakeAccountDataHash(
+                staker: Data(repeating: 0x81, count: 32),
+                withdrawer: Data(repeating: 0x91, count: 32),
+                voterPubkey: Data(repeating: 0xa2, count: 32),
+                delegatedStake: 1_000,
+                activationEpoch: 2,
+                deactivationEpoch: 9,
+                warmupCooldownRateBytes: Data([0x0a, 0xd7, 0xa3, 0x70, 0x3d, 0x0a, 0xb7, 0x3f]),
+                creditsObserved: 123,
+                stakeFlags: 1
+            )
+        )
+        XCTAssertTrue(try solanaSccpStakeAccountDataHash(
+            staker: Data(repeating: 0x81, count: 32),
+            withdrawer: Data(repeating: 0x91, count: 32),
+            voterPubkey: Data(repeating: 0xa1, count: 32),
+            delegatedStake: 1_000,
+            activationEpoch: 2,
+            deactivationEpoch: 9,
+            warmupCooldownRateBytes: Data([0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0xd0, 0x3f]),
+            creditsObserved: 123,
+            stakeFlags: 1
+        ).range(of: #"^0x[0-9a-f]{64}$"#, options: .regularExpression) != nil)
+        XCTAssertThrowsError(try solanaSccpStakeAccountDataHash(
+                staker: Data(repeating: 0x81, count: 32),
+                withdrawer: Data(repeating: 0x91, count: 32),
+                voterPubkey: Data(repeating: 0xa1, count: 32),
+                delegatedStake: 1_000,
+                activationEpoch: 2,
+                deactivationEpoch: 9,
+                warmupCooldownRateBytes: Data(repeating: 0, count: 8),
+                creditsObserved: 123,
+                stakeFlags: 1
+            )
+        ) { error in
+            XCTAssertEqual(error as? SolanaSccpProverError, .invalidString("warmupCooldownRateBytes"))
+        }
+        XCTAssertNotEqual(
+            stakeHash,
+            try solanaSccpStakeAccountDataHash(
+                staker: Data(repeating: 0x81, count: 32),
+                withdrawer: Data(repeating: 0x91, count: 32),
+                voterPubkey: Data(repeating: 0xa1, count: 32),
+                delegatedStake: 1_000,
+                activationEpoch: 2,
+                deactivationEpoch: 9,
+                warmupCooldownRateBytes: Data([0x0a, 0xd7, 0xa3, 0x70, 0x3d, 0x0a, 0xb7, 0x3f]),
+                creditsObserved: 123,
+                stakeFlags: 0
+            )
+        )
+        XCTAssertThrowsError(try solanaSccpStakeAccountDataHash(
+            staker: Data(repeating: 0x81, count: 32),
+            withdrawer: Data(repeating: 0x91, count: 32),
+            voterPubkey: Data(repeating: 0xa1, count: 32),
+            delegatedStake: 1_000,
+            activationEpoch: 2,
+            deactivationEpoch: 2,
+            warmupCooldownRateBytes: Data([0x0a, 0xd7, 0xa3, 0x70, 0x3d, 0x0a, 0xb7, 0x3f]),
+            creditsObserved: 123,
+            stakeFlags: 1
+        )) { error in
+            XCTAssertEqual(error as? SolanaSccpProverError, .invalidString("deactivationEpoch"))
+        }
+        XCTAssertThrowsError(try solanaSccpStakeAccountDataHash(
+            staker: Data(repeating: 0x81, count: 32),
+            withdrawer: Data(repeating: 0x91, count: 32),
+            voterPubkey: Data(repeating: 0xa1, count: 32),
+            delegatedStake: 1_000,
+            activationEpoch: 2,
+            deactivationEpoch: 9,
+            warmupCooldownRateBytes: Data([0x0a, 0xd7, 0xa3, 0x70, 0x3d, 0x0a, 0xb7, 0x3f]),
+            creditsObserved: 123,
+            stakeFlags: 2
+        )) { error in
+            XCTAssertEqual(error as? SolanaSccpProverError, .invalidString("stakeFlags"))
+        }
+        XCTAssertThrowsError(try solanaSccpStakeAccountDataHash(
+            staker: Data(repeating: 0x81, count: 32),
+            withdrawer: Data(repeating: 0x91, count: 32),
+            voterPubkey: Data(repeating: 0xa1, count: 32),
+            delegatedStake: 1_000,
+            activationEpoch: 2,
+            deactivationEpoch: 9,
+            warmupCooldownRateBytes: Data(repeating: 0, count: 7),
+            creditsObserved: 123,
+            stakeFlags: 1
+        )) { error in
+            XCTAssertEqual(error as? SolanaSccpProverError, .invalidString("warmupCooldownRateBytes"))
+        }
+    }
+
+    func testBuildsSolanaVoteAccountDataHashFromRawVoteState() throws {
+        let voteAccountAddress = Data(repeating: 0x81, count: 32)
+        let rawV3 = Self.sampleSolanaVoteStateAccount(hasLatency: true)
+        let parsed = try solanaSccpVoteAccountDataFromRawVoteState(
+            rawData: rawV3,
+            epoch: 3,
+            voteAccountAddress: voteAccountAddress
+        )
+        XCTAssertEqual(parsed.nodePubkey, Data(repeating: 0x51, count: 32))
+        XCTAssertEqual(parsed.authorizedVoter, Data(repeating: 0x61, count: 32))
+        XCTAssertEqual(parsed.authorizedWithdrawer, Data(repeating: 0x71, count: 32))
+        XCTAssertEqual(parsed.inflationRewardsCollector, voteAccountAddress)
+        XCTAssertEqual(parsed.blockRevenueCollector, Data(repeating: 0x51, count: 32))
+        XCTAssertEqual(parsed.inflationRewardsCommissionBps, 700)
+        XCTAssertEqual(parsed.blockRevenueCommissionBps, 10_000)
+        XCTAssertEqual(parsed.pendingDelegatorRewards, 0)
+        XCTAssertEqual(parsed.blsPubkeyCompressed, Data())
+        XCTAssertEqual(parsed.rootSlot, 10)
+        XCTAssertEqual(parsed.towerVoteSlots, (11...41).map(UInt64.init))
+        XCTAssertEqual(
+            try solanaSccpVoteAccountDataHashFromRawVoteState(
+                rawData: rawV3,
+                epoch: 3,
+                voteAccountAddress: voteAccountAddress
+            ),
+            try solanaSccpVoteAccountDataHash(
+                nodePubkey: parsed.nodePubkey,
+                authorizedVoter: parsed.authorizedVoter,
+                authorizedWithdrawer: parsed.authorizedWithdrawer,
+                inflationRewardsCollector: parsed.inflationRewardsCollector,
+                blockRevenueCollector: parsed.blockRevenueCollector,
+                inflationRewardsCommissionBps: parsed.inflationRewardsCommissionBps,
+                blockRevenueCommissionBps: parsed.blockRevenueCommissionBps,
+                pendingDelegatorRewards: parsed.pendingDelegatorRewards,
+                blsPubkeyCompressed: parsed.blsPubkeyCompressed,
+                rootSlot: parsed.rootSlot,
+                towerVoteSlots: parsed.towerVoteSlots
+            )
+        )
+
+        let rawV1 = Self.sampleSolanaVoteStateAccount(hasLatency: false)
+        XCTAssertEqual(
+            try solanaSccpVoteAccountDataFromRawVoteState(
+                rawData: rawV1,
+                epoch: 3,
+                voteAccountAddress: voteAccountAddress
+            ).towerVoteSlots,
+            parsed.towerVoteSlots
+        )
+
+        let rawV4 = Self.sampleSolanaVoteStateV4Account(withBls: true)
+        let parsedV4 = try solanaSccpVoteAccountDataFromRawVoteState(
+            rawData: rawV4,
+            epoch: 3,
+            voteAccountAddress: voteAccountAddress
+        )
+        XCTAssertEqual(parsedV4.inflationRewardsCollector, Data(repeating: 0x81, count: 32))
+        XCTAssertEqual(parsedV4.blockRevenueCollector, Data(repeating: 0x91, count: 32))
+        XCTAssertEqual(parsedV4.inflationRewardsCommissionBps, 1_234)
+        XCTAssertEqual(parsedV4.blockRevenueCommissionBps, 9_876)
+        XCTAssertEqual(parsedV4.pendingDelegatorRewards, 456)
+        XCTAssertEqual(parsedV4.blsPubkeyCompressed, Data(repeating: 0xa5, count: 48))
+        let v4InflationCommissionBpsOffset = 4 + (4 * 32)
+        var excessiveInflationCommissionV4 = rawV4
+        excessiveInflationCommissionV4[
+            v4InflationCommissionBpsOffset..<(v4InflationCommissionBpsOffset + 2)
+        ] = Data([0x11, 0x27])
+        XCTAssertThrowsError(try solanaSccpVoteAccountDataFromRawVoteState(
+            rawData: excessiveInflationCommissionV4,
+            epoch: 3,
+            voteAccountAddress: voteAccountAddress
+        )) { error in
+            XCTAssertEqual(error as? SolanaSccpProverError, .invalidString("inflationRewardsCommissionBps"))
+        }
+        var excessiveBlockCommissionV4 = rawV4
+        excessiveBlockCommissionV4[
+            (v4InflationCommissionBpsOffset + 2)..<(v4InflationCommissionBpsOffset + 4)
+        ] = Data([0x11, 0x27])
+        XCTAssertThrowsError(try solanaSccpVoteAccountDataFromRawVoteState(
+            rawData: excessiveBlockCommissionV4,
+            epoch: 3,
+            voteAccountAddress: voteAccountAddress
+        )) { error in
+            XCTAssertEqual(error as? SolanaSccpProverError, .invalidString("blockRevenueCommissionBps"))
+        }
+        XCTAssertThrowsError(try solanaSccpVoteAccountDataHash(
+            nodePubkey: parsedV4.nodePubkey,
+            authorizedVoter: parsedV4.authorizedVoter,
+            authorizedWithdrawer: parsedV4.authorizedWithdrawer,
+            inflationRewardsCollector: parsedV4.inflationRewardsCollector,
+            blockRevenueCollector: parsedV4.blockRevenueCollector,
+            inflationRewardsCommissionBps: parsedV4.inflationRewardsCommissionBps,
+            blockRevenueCommissionBps: parsedV4.blockRevenueCommissionBps,
+            pendingDelegatorRewards: parsedV4.pendingDelegatorRewards,
+            blsPubkeyCompressed: Data(repeating: 0, count: 48),
+            rootSlot: parsedV4.rootSlot,
+            towerVoteSlots: parsedV4.towerVoteSlots
+        ))
+        var allZeroBlsV4 = rawV4
+        let v4BlsPubkeyOffset = 4 + (4 * 32) + 2 + 2 + 8 + 1
+        allZeroBlsV4[v4BlsPubkeyOffset..<(v4BlsPubkeyOffset + 48)] =
+            Data(repeating: 0, count: 48)
+        XCTAssertThrowsError(try solanaSccpVoteAccountDataFromRawVoteState(
+            rawData: allZeroBlsV4,
+            epoch: 3,
+            voteAccountAddress: voteAccountAddress
+        ))
+        let parsedV4FourAuthorized = try solanaSccpVoteAccountDataFromRawVoteState(
+            rawData: Self.sampleSolanaVoteStateV4Account(withBls: true, authorizedVoterCount: 4),
+            epoch: 3,
+            voteAccountAddress: voteAccountAddress
+        )
+        XCTAssertEqual(parsedV4FourAuthorized.authorizedVoter, Data(repeating: 0x62, count: 32))
+
+        var wrongVoteCount = rawV3
+        wrongVoteCount[(4 + 32 + 32 + 1)..<(4 + 32 + 32 + 1 + 8)] = Data([30, 0, 0, 0, 0, 0, 0, 0])
+        XCTAssertThrowsError(try solanaSccpVoteAccountDataFromRawVoteState(
+            rawData: wrongVoteCount,
+            epoch: 3,
+            voteAccountAddress: voteAccountAddress
+        )) { error in
+            XCTAssertEqual(error as? SolanaSccpProverError, .invalidString("towerVoteSlots"))
+        }
+
+        let voteEntryOffset = 4 + 32 + 32 + 1 + 8
+        let firstVoteSlotOffset = voteEntryOffset + 1
+        let firstConfirmationOffset = firstVoteSlotOffset + 8
+        let secondVoteSlotOffset = voteEntryOffset + (1 + 8 + 4) + 1
+        let rootOptionOffset = voteEntryOffset + (31 * (1 + 8 + 4))
+
+        var wrongConfirmationCount = rawV3
+        wrongConfirmationCount[firstConfirmationOffset..<(firstConfirmationOffset + 4)] = Data([30, 0, 0, 0])
+        XCTAssertThrowsError(try solanaSccpVoteAccountDataFromRawVoteState(
+            rawData: wrongConfirmationCount,
+            epoch: 3,
+            voteAccountAddress: voteAccountAddress
+        )) { error in
+            XCTAssertEqual(error as? SolanaSccpProverError, .invalidString("towerVoteSlots[0]"))
+        }
+
+        var repeatedVoteSlot = rawV3
+        repeatedVoteSlot[secondVoteSlotOffset..<(secondVoteSlotOffset + 8)] = Data([11, 0, 0, 0, 0, 0, 0, 0])
+        XCTAssertThrowsError(try solanaSccpVoteAccountDataFromRawVoteState(
+            rawData: repeatedVoteSlot,
+            epoch: 3,
+            voteAccountAddress: voteAccountAddress
+        )) { error in
+            XCTAssertEqual(error as? SolanaSccpProverError, .invalidString("towerVoteSlots[1]"))
+        }
+
+        var noRoot = rawV3
+        noRoot[rootOptionOffset] = 0
+        XCTAssertThrowsError(try solanaSccpVoteAccountDataFromRawVoteState(
+            rawData: noRoot,
+            epoch: 3,
+            voteAccountAddress: voteAccountAddress
+        )) { error in
+            XCTAssertEqual(error as? SolanaSccpProverError, .invalidString("rootSlot"))
+        }
+
+        var rootOverlapsVoteStack = rawV3
+        rootOverlapsVoteStack[(rootOptionOffset + 1)..<(rootOptionOffset + 9)] = Data([11, 0, 0, 0, 0, 0, 0, 0])
+        XCTAssertThrowsError(try solanaSccpVoteAccountDataFromRawVoteState(
+            rawData: rootOverlapsVoteStack,
+            epoch: 3,
+            voteAccountAddress: voteAccountAddress
+        )) { error in
+            XCTAssertEqual(error as? SolanaSccpProverError, .invalidString("towerVoteSlots[0]"))
+        }
+
+        var badPriorVoters = rawV3
+        let priorVotersOffset = rootOptionOffset + 1 + 8 + 8 + (2 * (8 + 32))
+        var zeroPriorVoterWithEpochBounds = rawV3
+        zeroPriorVoterWithEpochBounds[(priorVotersOffset + 32)..<(priorVotersOffset + 40)] =
+            Data([1, 0, 0, 0, 0, 0, 0, 0])
+        XCTAssertThrowsError(try solanaSccpVoteAccountDataFromRawVoteState(
+            rawData: zeroPriorVoterWithEpochBounds,
+            epoch: 3,
+            voteAccountAddress: voteAccountAddress
+        )) { error in
+            XCTAssertEqual(error as? SolanaSccpProverError, .invalidString("priorVoters[0]"))
+        }
+        badPriorVoters[priorVotersOffset + (32 * (32 + 8 + 8)) + 8] = 2
+        XCTAssertThrowsError(try solanaSccpVoteAccountDataFromRawVoteState(
+            rawData: badPriorVoters,
+            epoch: 3,
+            voteAccountAddress: voteAccountAddress
+        )) { error in
+            XCTAssertEqual(error as? SolanaSccpProverError, .invalidString("priorVoters"))
+        }
+
+        var tooManyEpochCredits = rawV4
+        let v4AuthorizedVotersOffset = 4 + 32 + 32 + 32 + 32 + 2 + 2 + 8 + 1 + 48 + 8
+            + (31 * (1 + 8 + 4)) + 1 + 8
+        var zeroFutureAuthorizedVoter = Self.sampleSolanaVoteStateV4Account(
+            withBls: true,
+            authorizedVoterCount: 4
+        )
+        let fourthAuthorizedVoterKeyOffset = v4AuthorizedVotersOffset + 8 + (3 * (8 + 32)) + 8
+        zeroFutureAuthorizedVoter[fourthAuthorizedVoterKeyOffset..<(fourthAuthorizedVoterKeyOffset + 32)] =
+            Data(repeating: 0, count: 32)
+        XCTAssertThrowsError(try solanaSccpVoteAccountDataFromRawVoteState(
+            rawData: zeroFutureAuthorizedVoter,
+            epoch: 3,
+            voteAccountAddress: voteAccountAddress
+        )) { error in
+            XCTAssertEqual(
+                error as? SolanaSccpProverError,
+                .invalidString("authorizedVoters[3].authorizedVoter")
+            )
+        }
+        let tooManyV4AuthorizedVoters = Self.sampleSolanaVoteStateV4Account(
+            withBls: true,
+            authorizedVoterCount: 5
+        )
+        XCTAssertThrowsError(try solanaSccpVoteAccountDataFromRawVoteState(
+            rawData: tooManyV4AuthorizedVoters,
+            epoch: 3,
+            voteAccountAddress: voteAccountAddress
+        )) { error in
+            XCTAssertEqual(error as? SolanaSccpProverError, .invalidString("authorizedVoters"))
+        }
+
+        let v4EpochCreditsOffset = v4AuthorizedVotersOffset + 8 + (2 * (8 + 32))
+        tooManyEpochCredits[v4EpochCreditsOffset..<(v4EpochCreditsOffset + 8)] = Data([65, 0, 0, 0, 0, 0, 0, 0])
+        XCTAssertThrowsError(try solanaSccpVoteAccountDataFromRawVoteState(
+            rawData: tooManyEpochCredits,
+            epoch: 3,
+            voteAccountAddress: voteAccountAddress
+        )) { error in
+            XCTAssertEqual(error as? SolanaSccpProverError, .invalidString("epochCredits"))
+        }
+
+        let v3EpochCreditsOffset = priorVotersOffset + (32 * (32 + 8 + 8)) + 8 + 1
+        var futureEpochCredit = rawV3
+        futureEpochCredit[v3EpochCreditsOffset..<(v3EpochCreditsOffset + 8)] = Data([1, 0, 0, 0, 0, 0, 0, 0])
+        futureEpochCredit[(v3EpochCreditsOffset + 8)..<(v3EpochCreditsOffset + 16)] = Data([4, 0, 0, 0, 0, 0, 0, 0])
+        futureEpochCredit[(v3EpochCreditsOffset + 16)..<(v3EpochCreditsOffset + 24)] = Data([1, 0, 0, 0, 0, 0, 0, 0])
+        XCTAssertThrowsError(try solanaSccpVoteAccountDataFromRawVoteState(
+            rawData: futureEpochCredit,
+            epoch: 3,
+            voteAccountAddress: voteAccountAddress
+        )) { error in
+            XCTAssertEqual(error as? SolanaSccpProverError, .invalidString("epochCredits"))
+        }
+
+        let lastTimestampSlotOffset = v3EpochCreditsOffset + 8
+        var futureLastTimestampSlot = rawV3
+        futureLastTimestampSlot[lastTimestampSlotOffset..<(lastTimestampSlotOffset + 8)] = Data([42, 0, 0, 0, 0, 0, 0, 0])
+        XCTAssertThrowsError(try solanaSccpVoteAccountDataFromRawVoteState(
+            rawData: futureLastTimestampSlot,
+            epoch: 3,
+            voteAccountAddress: voteAccountAddress
+        )) { error in
+            XCTAssertEqual(error as? SolanaSccpProverError, .invalidString("lastTimestamp"))
+        }
+
+        var negativeLastTimestamp = rawV3
+        negativeLastTimestamp[lastTimestampSlotOffset..<(lastTimestampSlotOffset + 8)] = Data([41, 0, 0, 0, 0, 0, 0, 0])
+        negativeLastTimestamp[(lastTimestampSlotOffset + 8)..<(lastTimestampSlotOffset + 16)] =
+            Data(repeating: 0xff, count: 8)
+        XCTAssertThrowsError(try solanaSccpVoteAccountDataFromRawVoteState(
+            rawData: negativeLastTimestamp,
+            epoch: 3,
+            voteAccountAddress: voteAccountAddress
+        )) { error in
+            XCTAssertEqual(error as? SolanaSccpProverError, .invalidString("lastTimestamp"))
+        }
+
+        var nonzeroPadding = rawV3
+        nonzeroPadding[nonzeroPadding.count - 1] = 1
+        XCTAssertThrowsError(try solanaSccpVoteAccountDataFromRawVoteState(
+            rawData: nonzeroPadding,
+            epoch: 3,
+            voteAccountAddress: voteAccountAddress
+        )) { error in
+            XCTAssertEqual(error as? SolanaSccpProverError, .invalidString("rawDataPadding"))
+        }
+
+        XCTAssertThrowsError(try solanaSccpVoteAccountDataFromRawVoteState(
+            rawData: rawV3,
+            epoch: 0,
+            voteAccountAddress: voteAccountAddress
+        )) { error in
+            XCTAssertEqual(error as? SolanaSccpProverError, .invalidString("authorizedVoters"))
+        }
+    }
+
+    func testBuildsSolanaStakeAccountDataHashFromRawStakeStateV2() throws {
+        let raw = Self.sampleSolanaStakeStateV2StakeAccount()
+        let parsed = try solanaSccpStakeAccountDataFromRawStakeStateV2(rawData: raw)
+        XCTAssertEqual(parsed.staker, Data(repeating: 0x81, count: 32))
+        XCTAssertEqual(parsed.withdrawer, Data(repeating: 0x91, count: 32))
+        XCTAssertEqual(parsed.voterPubkey, Data(repeating: 0xa1, count: 32))
+        XCTAssertEqual(parsed.delegatedStake, 1_000)
+        XCTAssertEqual(parsed.activationEpoch, 2)
+        XCTAssertEqual(parsed.deactivationEpoch, 9)
+        XCTAssertEqual(parsed.warmupCooldownRateBytes, Data([0x0a, 0xd7, 0xa3, 0x70, 0x3d, 0x0a, 0xb7, 0x3f]))
+        XCTAssertEqual(parsed.creditsObserved, 123)
+        XCTAssertEqual(parsed.stakeFlags, 1)
+        XCTAssertEqual(
+            try solanaSccpStakeAccountDataHashFromRawStakeStateV2(rawData: raw),
+            try solanaSccpStakeAccountDataHash(
+                staker: parsed.staker,
+                withdrawer: parsed.withdrawer,
+                voterPubkey: parsed.voterPubkey,
+                delegatedStake: parsed.delegatedStake,
+                activationEpoch: parsed.activationEpoch,
+                deactivationEpoch: parsed.deactivationEpoch,
+                warmupCooldownRateBytes: parsed.warmupCooldownRateBytes,
+                creditsObserved: parsed.creditsObserved,
+                stakeFlags: parsed.stakeFlags
+            )
+        )
+
+        var wrongVariant = raw
+        wrongVariant[0..<4] = Data([1, 0, 0, 0])
+        XCTAssertThrowsError(try solanaSccpStakeAccountDataFromRawStakeStateV2(rawData: wrongVariant)) { error in
+            XCTAssertEqual(error as? SolanaSccpProverError, .invalidString("rawData"))
+        }
+        XCTAssertThrowsError(try solanaSccpStakeAccountDataFromRawStakeStateV2(rawData: raw.dropLast())) { error in
+            XCTAssertEqual(error as? SolanaSccpProverError, .invalidString("rawData"))
+        }
+
+        var hiddenPadding = raw
+        hiddenPadding[197] = 1
+        XCTAssertThrowsError(try solanaSccpStakeAccountDataFromRawStakeStateV2(rawData: hiddenPadding)) { error in
+            XCTAssertEqual(error as? SolanaSccpProverError, .invalidString("rawData"))
+        }
+
+        var unknownFlags = raw
+        unknownFlags[196] = 2
+        XCTAssertThrowsError(try solanaSccpStakeAccountDataFromRawStakeStateV2(rawData: unknownFlags)) { error in
+            XCTAssertEqual(error as? SolanaSccpProverError, .invalidString("stakeFlags"))
+        }
+
+        var zeroVoter = raw
+        zeroVoter[124..<156] = Data(repeating: 0, count: 32)
+        XCTAssertThrowsError(try solanaSccpStakeAccountDataFromRawStakeStateV2(rawData: zeroVoter)) { error in
+            XCTAssertEqual(error as? SolanaSccpProverError, .invalidString("voterPubkey"))
+        }
+
+        var zeroDelegation = raw
+        zeroDelegation[156..<164] = Data(repeating: 0, count: 8)
+        XCTAssertThrowsError(try solanaSccpStakeAccountDataFromRawStakeStateV2(rawData: zeroDelegation)) { error in
+            XCTAssertEqual(error as? SolanaSccpProverError, .invalidString("delegatedStake"))
+        }
+
+        var legacyWarmupCooldownRate = raw
+        legacyWarmupCooldownRate[180..<188] = Data([0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0xd0, 0x3f])
+        XCTAssertEqual(
+            try solanaSccpStakeAccountDataFromRawStakeStateV2(rawData: legacyWarmupCooldownRate)
+                .warmupCooldownRateBytes,
+            Data([0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0xd0, 0x3f])
+        )
+
+        var zeroWarmupCooldownRate = raw
+        zeroWarmupCooldownRate[180..<188] = Data(repeating: 0, count: 8)
+        XCTAssertThrowsError(try solanaSccpStakeAccountDataFromRawStakeStateV2(rawData: zeroWarmupCooldownRate)) { error in
+            XCTAssertEqual(error as? SolanaSccpProverError, .invalidString("warmupCooldownRateBytes"))
+        }
+
+        var invalidEpochOrder = raw
+        invalidEpochOrder[172..<180] = Data([2, 0, 0, 0, 0, 0, 0, 0])
+        XCTAssertThrowsError(try solanaSccpStakeAccountDataFromRawStakeStateV2(rawData: invalidEpochOrder)) { error in
+            XCTAssertEqual(error as? SolanaSccpProverError, .invalidString("deactivationEpoch"))
+        }
+    }
+
+    func testBuildsSolanaStakeAccountStateHashForFinalityContext() throws {
+        let validatorPublicKeys = [
+            Data(repeating: 0x11, count: 32),
+            Data(repeating: 0x22, count: 32),
+        ]
+        let validatorStakes: [UInt64] = [1, 2]
+        let activationEpochs: [UInt64] = [0, 2]
+        let deactivationEpochs: [UInt64] = [UInt64.max, 9]
+        let voteAccounts = [
+            Data(repeating: 0x33, count: 32),
+            Data(repeating: 0x44, count: 32),
+        ]
+        let stakeAccounts = [
+            Data(repeating: 0x55, count: 32),
+            Data(repeating: 0x66, count: 32),
+        ]
+        let voteAccountHashes = [
+            Data(repeating: 0x77, count: 32),
+            Data(repeating: 0x88, count: 32),
+        ]
+        let stakeAccountHashes = [
+            Data(repeating: 0x99, count: 32),
+            Data(repeating: 0xaa, count: 32),
+        ]
+
+        XCTAssertEqual(
+            try canonicalSolanaSccpStakeAccountStateBytes(
+                epoch: 3,
+                validatorPublicKeys: validatorPublicKeys,
+                validatorStakes: validatorStakes,
+                validatorActivationEpochs: activationEpochs,
+                validatorDeactivationEpochs: deactivationEpochs,
+                validatorVoteAccountAddresses: voteAccounts,
+                validatorStakeAccountAddresses: stakeAccounts,
+                validatorVoteAccountHashes: voteAccountHashes,
+                validatorStakeAccountHashes: stakeAccountHashes
+            ).count,
+            437
+        )
+        XCTAssertEqual(
+            try solanaSccpStakeAccountStateHash(
+                epoch: 3,
+                validatorPublicKeys: validatorPublicKeys,
+                validatorStakes: validatorStakes,
+                validatorActivationEpochs: activationEpochs,
+                validatorDeactivationEpochs: deactivationEpochs,
+                validatorVoteAccountAddresses: voteAccounts,
+                validatorStakeAccountAddresses: stakeAccounts,
+                validatorVoteAccountHashes: voteAccountHashes,
+                validatorStakeAccountHashes: stakeAccountHashes
+            ),
+            "0x34f6086dd8c1770770802be17b833ed7c973fdaa002c866c0462c33d6938f5b5"
+        )
+        XCTAssertThrowsError(try solanaSccpStakeAccountStateHash(
+            epoch: 3,
+            validatorPublicKeys: validatorPublicKeys,
+            validatorStakes: validatorStakes,
+            validatorActivationEpochs: activationEpochs,
+            validatorDeactivationEpochs: deactivationEpochs,
+            validatorVoteAccountAddresses: [Data(repeating: 0x33, count: 32)],
+            validatorStakeAccountAddresses: stakeAccounts,
+            validatorVoteAccountHashes: voteAccountHashes,
+            validatorStakeAccountHashes: stakeAccountHashes
+        )) { error in
+            XCTAssertEqual(error as? SolanaSccpProverError, .invalidString("validatorVoteAccountAddresses"))
+        }
+        XCTAssertThrowsError(try solanaSccpStakeAccountStateHash(
+            epoch: 3,
+            validatorPublicKeys: validatorPublicKeys,
+            validatorStakes: validatorStakes,
+            validatorActivationEpochs: activationEpochs,
+            validatorDeactivationEpochs: deactivationEpochs,
+            validatorVoteAccountAddresses: [Data(repeating: 0x33, count: 32), Data(repeating: 0x33, count: 32)],
+            validatorStakeAccountAddresses: stakeAccounts,
+            validatorVoteAccountHashes: voteAccountHashes,
+            validatorStakeAccountHashes: stakeAccountHashes
+        )) { error in
+            XCTAssertEqual(error as? SolanaSccpProverError, .invalidString("validatorVoteAccountAddresses"))
+        }
+        XCTAssertThrowsError(try solanaSccpStakeAccountStateHash(
+            epoch: 3,
+            validatorPublicKeys: validatorPublicKeys,
+            validatorStakes: validatorStakes,
+            validatorActivationEpochs: activationEpochs,
+            validatorDeactivationEpochs: deactivationEpochs,
+            validatorVoteAccountAddresses: voteAccounts,
+            validatorStakeAccountAddresses: [Data(repeating: 0x55, count: 32), Data(repeating: 0x44, count: 32)],
+            validatorVoteAccountHashes: voteAccountHashes,
+            validatorStakeAccountHashes: stakeAccountHashes
+        )) { error in
+            XCTAssertEqual(error as? SolanaSccpProverError, .invalidString("validatorStakeAccountAddresses[1]"))
+        }
+        XCTAssertThrowsError(try solanaSccpStakeAccountStateHash(
+            epoch: 3,
+            validatorPublicKeys: validatorPublicKeys,
+            validatorStakes: validatorStakes,
+            validatorActivationEpochs: activationEpochs,
+            validatorDeactivationEpochs: deactivationEpochs,
+            validatorVoteAccountAddresses: [Data(repeating: 0x66, count: 32), Data(repeating: 0x44, count: 32)],
+            validatorStakeAccountAddresses: stakeAccounts,
+            validatorVoteAccountHashes: voteAccountHashes,
+            validatorStakeAccountHashes: stakeAccountHashes
+        )) { error in
+            XCTAssertEqual(error as? SolanaSccpProverError, .invalidString("validatorStakeAccountAddresses"))
+        }
+        XCTAssertThrowsError(try solanaSccpStakeAccountStateHash(
+            epoch: 3,
+            validatorPublicKeys: validatorPublicKeys,
+            validatorStakes: validatorStakes,
+            validatorActivationEpochs: activationEpochs,
+            validatorDeactivationEpochs: deactivationEpochs,
+            validatorVoteAccountAddresses: voteAccounts,
+            validatorStakeAccountAddresses: stakeAccounts,
+            validatorVoteAccountHashes: [Data(repeating: 0x77, count: 32), Data(repeating: 0x00, count: 32)],
+            validatorStakeAccountHashes: stakeAccountHashes
+        )) { error in
+            XCTAssertEqual(error as? SolanaSccpProverError, .invalidHex32("validatorVoteAccountHashes[1]"))
+        }
+    }
+
+    func testBuildsSolanaStakeHistoryHashForFinalityContext() throws {
+        let validatorPublicKeys = [
+            Data(repeating: 0x11, count: 32),
+            Data(repeating: 0x22, count: 32),
+        ]
+        let validatorEffectiveStakes: [UInt64] = [1, 2]
+        let validatorDelegatedStakes: [UInt64] = [1, 3]
+        let activationEpochs: [UInt64] = [0, 2]
+        let deactivationEpochs: [UInt64] = [UInt64.max, 9]
+        let voteAccounts = [
+            Data(repeating: 0x33, count: 32),
+            Data(repeating: 0x44, count: 32),
+        ]
+        let stakeAccounts = [
+            Data(repeating: 0x55, count: 32),
+            Data(repeating: 0x66, count: 32),
+        ]
+        let voteAccountHashes = [
+            Data(repeating: 0x77, count: 32),
+            Data(repeating: 0x88, count: 32),
+        ]
+        let stakeAccountHashes = [
+            Data(repeating: 0x99, count: 32),
+            Data(repeating: 0xaa, count: 32),
+        ]
+        let stakeHistoryEntries = [
+            SolanaSccpStakeHistoryEntry(epoch: 2, effective: 23, activating: 3, deactivating: 0),
+            SolanaSccpStakeHistoryEntry(epoch: 3, effective: 3, activating: 1, deactivating: 0),
+        ]
+
+        XCTAssertEqual(
+            try canonicalSolanaSccpStakeHistoryBytes(
+                epoch: 3,
+                validatorPublicKeys: validatorPublicKeys,
+                validatorEffectiveStakes: validatorEffectiveStakes,
+                validatorDelegatedStakes: validatorDelegatedStakes,
+                validatorActivationEpochs: activationEpochs,
+                validatorDeactivationEpochs: deactivationEpochs,
+                validatorVoteAccountAddresses: voteAccounts,
+                validatorStakeAccountAddresses: stakeAccounts,
+                validatorVoteAccountHashes: voteAccountHashes,
+                validatorStakeAccountHashes: stakeAccountHashes,
+                stakeHistoryEntries: stakeHistoryEntries
+            ).count,
+            249
+        )
+        XCTAssertEqual(
+            try solanaSccpStakeHistoryHash(
+                epoch: 3,
+                validatorPublicKeys: validatorPublicKeys,
+                validatorEffectiveStakes: validatorEffectiveStakes,
+                validatorDelegatedStakes: validatorDelegatedStakes,
+                validatorActivationEpochs: activationEpochs,
+                validatorDeactivationEpochs: deactivationEpochs,
+                validatorVoteAccountAddresses: voteAccounts,
+                validatorStakeAccountAddresses: stakeAccounts,
+                validatorVoteAccountHashes: voteAccountHashes,
+                validatorStakeAccountHashes: stakeAccountHashes,
+                stakeHistoryEntries: stakeHistoryEntries
+            ),
+            "0xd75957eec3cf9f5b88076c8dc18e81c5debd627adfbed7e03e35443bcc4d14b6"
+        )
+        XCTAssertThrowsError(try solanaSccpStakeHistoryHash(
+            epoch: 3,
+            validatorPublicKeys: validatorPublicKeys,
+            validatorEffectiveStakes: validatorEffectiveStakes,
+            validatorDelegatedStakes: [0, 3],
+            validatorActivationEpochs: activationEpochs,
+            validatorDeactivationEpochs: deactivationEpochs,
+            validatorVoteAccountAddresses: voteAccounts,
+            validatorStakeAccountAddresses: stakeAccounts,
+            validatorVoteAccountHashes: voteAccountHashes,
+            validatorStakeAccountHashes: stakeAccountHashes,
+            stakeHistoryEntries: stakeHistoryEntries
+        )) { error in
+            XCTAssertEqual(error as? SolanaSccpProverError, .invalidString("validatorDelegatedStakes[0]"))
+        }
+        XCTAssertThrowsError(try solanaSccpStakeHistoryHash(
+            epoch: 3,
+            validatorPublicKeys: validatorPublicKeys,
+            validatorEffectiveStakes: [1, 1],
+            validatorDelegatedStakes: validatorDelegatedStakes,
+            validatorActivationEpochs: activationEpochs,
+            validatorDeactivationEpochs: deactivationEpochs,
+            validatorVoteAccountAddresses: voteAccounts,
+            validatorStakeAccountAddresses: stakeAccounts,
+            validatorVoteAccountHashes: voteAccountHashes,
+            validatorStakeAccountHashes: stakeAccountHashes,
+            stakeHistoryEntries: stakeHistoryEntries
+        )) { error in
+            XCTAssertEqual(error as? SolanaSccpProverError, .invalidString("validatorEffectiveStakes[1]"))
+        }
+        XCTAssertThrowsError(try solanaSccpStakeHistoryHash(
+            epoch: 3,
+            validatorPublicKeys: validatorPublicKeys,
+            validatorEffectiveStakes: validatorEffectiveStakes,
+            validatorDelegatedStakes: validatorDelegatedStakes,
+            validatorActivationEpochs: activationEpochs,
+            validatorDeactivationEpochs: deactivationEpochs,
+            validatorVoteAccountAddresses: voteAccounts,
+            validatorStakeAccountAddresses: stakeAccounts,
+            validatorVoteAccountHashes: voteAccountHashes,
+            validatorStakeAccountHashes: stakeAccountHashes,
+            stakeHistoryEntries: [
+                stakeHistoryEntries[0],
+                SolanaSccpStakeHistoryEntry(epoch: 3, effective: 4, activating: 1, deactivating: 0),
+            ]
+        )) { error in
+            XCTAssertEqual(error as? SolanaSccpProverError, .invalidString("stakeHistoryEntries"))
+        }
+        XCTAssertThrowsError(try solanaSccpStakeHistoryHash(
+            epoch: 3,
+            validatorPublicKeys: validatorPublicKeys,
+            validatorEffectiveStakes: validatorEffectiveStakes,
+            validatorDelegatedStakes: validatorDelegatedStakes,
+            validatorActivationEpochs: activationEpochs,
+            validatorDeactivationEpochs: deactivationEpochs,
+            validatorVoteAccountAddresses: voteAccounts,
+            validatorStakeAccountAddresses: stakeAccounts,
+            validatorVoteAccountHashes: voteAccountHashes,
+            validatorStakeAccountHashes: stakeAccountHashes,
+            stakeHistoryEntries: Array(stakeHistoryEntries.prefix(1))
+        )) { error in
+            XCTAssertEqual(error as? SolanaSccpProverError, .invalidString("stakeHistoryEntries"))
+        }
+    }
+
+    func testBuildsSolanaStakeHistorySysvarDataHash() throws {
+        let stakeHistoryEntries = [
+            SolanaSccpStakeHistoryEntry(epoch: 2, effective: 10, activating: 3, deactivating: 1),
+            SolanaSccpStakeHistoryEntry(epoch: 3, effective: 12, activating: 0, deactivating: 0),
+        ]
+
+        XCTAssertEqual(sccpSolanaSysvarProgramId.count, 32)
+        XCTAssertEqual(sccpSolanaStakeHistorySysvarId.count, 32)
+        let canonical = try canonicalSolanaSccpStakeHistorySysvarDataBytes(
+            stakeHistoryEntries: stakeHistoryEntries
+        )
+        XCTAssertEqual(canonical.count, 72)
+        let dataHash = try solanaSccpStakeHistorySysvarDataHash(
+            stakeHistoryEntries: stakeHistoryEntries
+        )
+        XCTAssertTrue(dataHash.range(of: #"^0x[0-9a-f]{64}$"#, options: .regularExpression) != nil)
+        XCTAssertEqual(
+            try solanaSccpStakeHistorySysvarDataHashFromRawData(rawData: canonical),
+            dataHash
+        )
+        XCTAssertNotEqual(
+            dataHash,
+            try solanaSccpStakeHistorySysvarDataHash(
+                stakeHistoryEntries: [
+                    stakeHistoryEntries[0],
+                    SolanaSccpStakeHistoryEntry(
+                        epoch: 3,
+                        effective: 13,
+                        activating: 0,
+                        deactivating: 0
+                    ),
+                ]
+            )
+        )
+        XCTAssertThrowsError(try solanaSccpStakeHistorySysvarDataHash(
+            stakeHistoryEntries: Array(stakeHistoryEntries.reversed())
+        )) { error in
+            XCTAssertEqual(error as? SolanaSccpProverError, .invalidString("stakeHistoryEntries"))
+        }
+        XCTAssertThrowsError(
+            try solanaSccpStakeHistorySysvarDataHashFromRawData(rawData: Data(canonical.prefix(9)))
+        ) { error in
+            XCTAssertEqual(error as? SolanaSccpProverError, .invalidString("rawData"))
+        }
+        var wrongCount = canonical
+        wrongCount[0..<8] = Data([3, 0, 0, 0, 0, 0, 0, 0])
+        XCTAssertThrowsError(
+            try solanaSccpStakeHistorySysvarDataHashFromRawData(rawData: wrongCount)
+        ) { error in
+            XCTAssertEqual(error as? SolanaSccpProverError, .invalidString("rawData"))
+        }
+        var ascendingRaw = canonical
+        let newestEntry = Data(canonical[8..<40])
+        let oldestEntry = Data(canonical[40..<72])
+        ascendingRaw[8..<40] = oldestEntry
+        ascendingRaw[40..<72] = newestEntry
+        XCTAssertThrowsError(
+            try solanaSccpStakeHistorySysvarDataHashFromRawData(rawData: ascendingRaw)
+        ) { error in
+            XCTAssertEqual(error as? SolanaSccpProverError, .invalidString("rawDataOrder"))
+        }
+    }
+
+    func testBuildsSolanaTowerLockoutHashForFinalityContext() throws {
+        let finalizedSlot: UInt64 = 1_296_096
+        let rootedSlot: UInt64 = 1_296_065
+        let parentSlot: UInt64 = 1_296_095
+        let parentBankHash = "0x" + String(repeating: "33", count: 32)
+
+        XCTAssertEqual(sccpSolanaTowerLockoutConfirmationDepth, 32)
+        XCTAssertEqual(sccpSolanaTowerVoteStackDepth, 31)
+        XCTAssertEqual(
+            try canonicalSolanaSccpTowerLockoutBytes(
+                finalizedSlot: finalizedSlot,
+                rootedSlot: rootedSlot,
+                parentSlot: parentSlot,
+                parentBankHash: parentBankHash
+            ).count,
+            73
+        )
+        XCTAssertTrue(
+            try solanaSccpTowerLockoutHash(
+                finalizedSlot: finalizedSlot,
+                rootedSlot: rootedSlot,
+                parentSlot: parentSlot,
+                parentBankHash: parentBankHash
+            ).hasPrefix("0x")
+        )
+        XCTAssertThrowsError(try solanaSccpTowerLockoutHash(
+            epoch: 4,
+            finalizedSlot: finalizedSlot,
+            rootedSlot: rootedSlot,
+            parentSlot: parentSlot,
+            parentBankHash: parentBankHash
+        )) { error in
+            XCTAssertEqual(error as? SolanaSccpProverError, .invalidString("epoch"))
+        }
+        XCTAssertThrowsError(try solanaSccpTowerLockoutHash(
+            finalizedSlot: finalizedSlot,
+            rootedSlot: rootedSlot + 1,
+            parentSlot: parentSlot,
+            parentBankHash: parentBankHash
+        )) { error in
+            XCTAssertEqual(error as? SolanaSccpProverError, .invalidString("rootedSlot"))
+        }
+        XCTAssertThrowsError(try solanaSccpTowerLockoutHash(
+            finalizedSlot: finalizedSlot,
+            rootedSlot: rootedSlot,
+            parentSlot: parentSlot - 1,
+            parentBankHash: parentBankHash
+        )) { error in
+            XCTAssertEqual(error as? SolanaSccpProverError, .invalidString("parentSlot"))
+        }
+        XCTAssertThrowsError(try solanaSccpTowerLockoutHash(
+            finalizedSlot: finalizedSlot,
+            rootedSlot: rootedSlot,
+            parentSlot: parentSlot,
+            parentBankHash: "0x" + String(repeating: "00", count: 32)
+        )) { error in
+            XCTAssertEqual(error as? SolanaSccpProverError, .invalidHex32("parentBankHash"))
+        }
+    }
+
+    func testBuildsSolanaTowerReplayHashForFinalityContext() throws {
+        let finalizedSlot: UInt64 = 1_296_096
+        let rootedSlot: UInt64 = 1_296_065
+        let parentSlot: UInt64 = 1_296_095
+        let bankForkHash = "0x" + String(repeating: "a5", count: 32)
+        let towerVoteSlots = Array((rootedSlot + 1)...finalizedSlot)
+
+        XCTAssertEqual(
+            try canonicalSolanaSccpTowerReplayBytes(
+                finalizedSlot: finalizedSlot,
+                rootedSlot: rootedSlot,
+                parentSlot: parentSlot,
+                bankForkHash: bankForkHash,
+                towerVoteSlots: towerVoteSlots
+            ).count,
+            573
+        )
+        XCTAssertTrue(
+            try solanaSccpTowerReplayHash(
+                finalizedSlot: finalizedSlot,
+                rootedSlot: rootedSlot,
+                parentSlot: parentSlot,
+                bankForkHash: bankForkHash,
+                towerVoteSlots: towerVoteSlots
+            ).hasPrefix("0x")
+        )
+        XCTAssertNotEqual(
+            try solanaSccpTowerReplayHash(
+                finalizedSlot: finalizedSlot,
+                rootedSlot: rootedSlot,
+                parentSlot: parentSlot,
+                bankForkHash: bankForkHash,
+                towerVoteSlots: towerVoteSlots
+            ),
+            try solanaSccpTowerReplayHash(
+                finalizedSlot: finalizedSlot,
+                rootedSlot: rootedSlot,
+                parentSlot: parentSlot,
+                bankForkHash: "0x" + String(repeating: "a6", count: 32),
+                towerVoteSlots: towerVoteSlots
+            )
+        )
+        XCTAssertThrowsError(try solanaSccpTowerReplayHash(
+            finalizedSlot: finalizedSlot,
+            rootedSlot: rootedSlot,
+            parentSlot: parentSlot,
+            bankForkHash: "0x" + String(repeating: "00", count: 32),
+            towerVoteSlots: towerVoteSlots
+        )) { error in
+            XCTAssertEqual(error as? SolanaSccpProverError, .invalidHex32("bankForkHash"))
+        }
+        XCTAssertThrowsError(try solanaSccpTowerReplayHash(
+            epoch: 4,
+            finalizedSlot: finalizedSlot,
+            rootedSlot: rootedSlot,
+            parentSlot: parentSlot,
+            bankForkHash: bankForkHash,
+            towerVoteSlots: towerVoteSlots
+        )) { error in
+            XCTAssertEqual(error as? SolanaSccpProverError, .invalidString("epoch"))
+        }
+        XCTAssertThrowsError(try solanaSccpTowerReplayHash(
+            finalizedSlot: finalizedSlot,
+            rootedSlot: rootedSlot,
+            parentSlot: parentSlot,
+            bankForkHash: bankForkHash,
+            towerVoteSlots: Array(towerVoteSlots.dropFirst())
+        )) { error in
+            XCTAssertEqual(error as? SolanaSccpProverError, .invalidString("towerVoteSlots"))
+        }
+        var unsortedVoteSlots = towerVoteSlots
+        unsortedVoteSlots.swapAt(0, 1)
+        XCTAssertThrowsError(try solanaSccpTowerReplayHash(
+            finalizedSlot: finalizedSlot,
+            rootedSlot: rootedSlot,
+            parentSlot: parentSlot,
+            bankForkHash: bankForkHash,
+            towerVoteSlots: unsortedVoteSlots
+        )) { error in
+            XCTAssertEqual(error as? SolanaSccpProverError, .invalidString("towerVoteSlots"))
+        }
+        var wrongLastVoteSlots = towerVoteSlots
+        wrongLastVoteSlots[wrongLastVoteSlots.count - 1] -= 1
+        XCTAssertThrowsError(try solanaSccpTowerReplayHash(
+            finalizedSlot: finalizedSlot,
+            rootedSlot: rootedSlot,
+            parentSlot: parentSlot,
+            bankForkHash: bankForkHash,
+            towerVoteSlots: wrongLastVoteSlots
+        )) { error in
+            XCTAssertEqual(error as? SolanaSccpProverError, .invalidString("towerVoteSlots"))
+        }
+    }
+
+    func testBuildsSolanaBankForkHashForFinalityContext() throws {
+        let finalizedSlot: UInt64 = 1_296_096
+        let parentSlot: UInt64 = 1_296_095
+        let parentBankHash = "0x" + String(repeating: "33", count: 32)
+        let bankSignatureCount: UInt64 = 8
+        let blockhash = "0x" + String(repeating: "55", count: 32)
+        let accountsLtHash = Data(repeating: 0x99, count: 2_048)
+        let bankHash = try solanaSccpAgaveBankHash(
+            parentBankHash: parentBankHash,
+            bankSignatureCount: bankSignatureCount,
+            blockhash: blockhash,
+            accountsLtHash: accountsLtHash
+        )
+        let transactionStatusRoot = "0x" + String(repeating: "66", count: 32)
+        let accountInclusionRoot = "0x" + String(repeating: "77", count: 32)
+        let accountsLtHashChecksum = try solanaSccpAccountsLtHashChecksum(accountsLtHash)
+
+        XCTAssertEqual(
+            try canonicalSolanaSccpBankForkBytes(
+                finalizedSlot: finalizedSlot,
+                parentSlot: parentSlot,
+                bankSignatureCount: bankSignatureCount,
+                parentBankHash: parentBankHash,
+                bankHash: bankHash,
+                blockhash: blockhash,
+                accountsLtHash: accountsLtHash,
+                transactionStatusRoot: transactionStatusRoot,
+                accountInclusionRoot: accountInclusionRoot,
+                accountsLtHashChecksum: accountsLtHashChecksum
+            ).count,
+            229
+        )
+        XCTAssertEqual(
+            try solanaSccpBankForkHash(
+                finalizedSlot: finalizedSlot,
+                parentSlot: parentSlot,
+                bankSignatureCount: bankSignatureCount,
+                parentBankHash: parentBankHash,
+                bankHash: bankHash,
+                blockhash: blockhash,
+                accountsLtHash: accountsLtHash,
+                transactionStatusRoot: transactionStatusRoot,
+                accountInclusionRoot: accountInclusionRoot,
+                accountsLtHashChecksum: accountsLtHashChecksum
+            ),
+            "0x8c496fb25a4499947e454a84f638211a84445748bc5242fbb6fb511edd82e531"
+        )
+        XCTAssertEqual(
+            try solanaSccpBankForkHash(
+                epoch: 3,
+                finalizedSlot: finalizedSlot,
+                parentSlot: parentSlot,
+                bankSignatureCount: bankSignatureCount,
+                parentBankHash: parentBankHash,
+                bankHash: bankHash,
+                blockhash: blockhash,
+                accountsLtHash: accountsLtHash,
+                transactionStatusRoot: transactionStatusRoot,
+                accountInclusionRoot: accountInclusionRoot,
+                accountsLtHashChecksum: accountsLtHashChecksum
+            ),
+            try solanaSccpBankForkHash(
+                finalizedSlot: finalizedSlot,
+                parentSlot: parentSlot,
+                bankSignatureCount: bankSignatureCount,
+                parentBankHash: parentBankHash,
+                bankHash: bankHash,
+                blockhash: blockhash,
+                accountsLtHash: accountsLtHash,
+                transactionStatusRoot: transactionStatusRoot,
+                accountInclusionRoot: accountInclusionRoot,
+                accountsLtHashChecksum: accountsLtHashChecksum
+            )
+        )
+        XCTAssertThrowsError(try solanaSccpBankForkHash(
+            epoch: 4,
+            finalizedSlot: finalizedSlot,
+            parentSlot: parentSlot,
+            bankSignatureCount: bankSignatureCount,
+            parentBankHash: parentBankHash,
+            bankHash: bankHash,
+            blockhash: blockhash,
+            accountsLtHash: accountsLtHash,
+            transactionStatusRoot: transactionStatusRoot,
+            accountInclusionRoot: accountInclusionRoot,
+            accountsLtHashChecksum: accountsLtHashChecksum
+        )) { error in
+            XCTAssertEqual(error as? SolanaSccpProverError, .invalidString("epoch"))
+        }
+        XCTAssertThrowsError(try solanaSccpBankForkHash(
+            finalizedSlot: finalizedSlot,
+            parentSlot: parentSlot - 1,
+            bankSignatureCount: bankSignatureCount,
+            parentBankHash: parentBankHash,
+            bankHash: bankHash,
+            blockhash: blockhash,
+            accountsLtHash: accountsLtHash,
+            transactionStatusRoot: transactionStatusRoot,
+            accountInclusionRoot: accountInclusionRoot,
+            accountsLtHashChecksum: accountsLtHashChecksum
+        )) { error in
+            XCTAssertEqual(error as? SolanaSccpProverError, .invalidString("parentSlot"))
+        }
+        XCTAssertThrowsError(try solanaSccpBankForkHash(
+            finalizedSlot: finalizedSlot,
+            parentSlot: parentSlot,
+            bankSignatureCount: 0,
+            parentBankHash: parentBankHash,
+            bankHash: bankHash,
+            blockhash: blockhash,
+            accountsLtHash: accountsLtHash,
+            transactionStatusRoot: transactionStatusRoot,
+            accountInclusionRoot: accountInclusionRoot,
+            accountsLtHashChecksum: accountsLtHashChecksum
+        )) { error in
+            XCTAssertEqual(error as? SolanaSccpProverError, .invalidString("bankSignatureCount"))
+        }
+        XCTAssertThrowsError(try solanaSccpBankForkHash(
+            finalizedSlot: finalizedSlot,
+            parentSlot: parentSlot,
+            bankSignatureCount: bankSignatureCount,
+            parentBankHash: parentBankHash,
+            bankHash: parentBankHash,
+            blockhash: blockhash,
+            accountsLtHash: accountsLtHash,
+            transactionStatusRoot: transactionStatusRoot,
+            accountInclusionRoot: accountInclusionRoot,
+            accountsLtHashChecksum: accountsLtHashChecksum
+        )) { error in
+            XCTAssertEqual(error as? SolanaSccpProverError, .invalidString("bankHash"))
+        }
+        XCTAssertThrowsError(try solanaSccpBankForkHash(
+            finalizedSlot: finalizedSlot,
+            parentSlot: parentSlot,
+            bankSignatureCount: bankSignatureCount,
+            parentBankHash: parentBankHash,
+            bankHash: "0x" + String(repeating: "44", count: 32),
+            blockhash: blockhash,
+            accountsLtHash: accountsLtHash,
+            transactionStatusRoot: transactionStatusRoot,
+            accountInclusionRoot: accountInclusionRoot,
+            accountsLtHashChecksum: accountsLtHashChecksum
+        )) { error in
+            XCTAssertEqual(error as? SolanaSccpProverError, .invalidString("bankHash"))
+        }
+        XCTAssertThrowsError(try solanaSccpBankForkHash(
+            finalizedSlot: finalizedSlot,
+            parentSlot: parentSlot,
+            bankSignatureCount: bankSignatureCount,
+            parentBankHash: parentBankHash,
+            bankHash: bankHash,
+            blockhash: "0x" + String(repeating: "00", count: 32),
+            accountsLtHash: accountsLtHash,
+            transactionStatusRoot: transactionStatusRoot,
+            accountInclusionRoot: accountInclusionRoot,
+            accountsLtHashChecksum: accountsLtHashChecksum
+        )) { error in
+            XCTAssertEqual(error as? SolanaSccpProverError, .invalidHex32("blockhash"))
+        }
+        XCTAssertThrowsError(try solanaSccpBankForkHash(
+            finalizedSlot: finalizedSlot,
+            parentSlot: parentSlot,
+            bankSignatureCount: bankSignatureCount,
+            parentBankHash: parentBankHash,
+            bankHash: bankHash,
+            blockhash: blockhash,
+            accountsLtHash: accountsLtHash,
+            transactionStatusRoot: transactionStatusRoot,
+            accountInclusionRoot: "0x" + String(repeating: "00", count: 32),
+            accountsLtHashChecksum: accountsLtHashChecksum
+        )) { error in
+            XCTAssertEqual(error as? SolanaSccpProverError, .invalidHex32("accountInclusionRoot"))
+        }
+        XCTAssertThrowsError(try solanaSccpBankForkHash(
+            finalizedSlot: finalizedSlot,
+            parentSlot: parentSlot,
+            bankSignatureCount: bankSignatureCount,
+            parentBankHash: parentBankHash,
+            bankHash: bankHash,
+            blockhash: blockhash,
+            accountsLtHash: accountsLtHash,
+            transactionStatusRoot: transactionStatusRoot,
+            accountInclusionRoot: accountInclusionRoot,
+            accountsLtHashChecksum: "0x" + String(repeating: "00", count: 32)
+        )) { error in
+            XCTAssertEqual(error as? SolanaSccpProverError, .invalidHex32("accountsLtHashChecksum"))
+        }
+        XCTAssertThrowsError(try solanaSccpAgaveBankHash(
+            parentBankHash: parentBankHash,
+            bankSignatureCount: bankSignatureCount,
+            blockhash: blockhash,
+            accountsLtHash: accountsLtHash,
+            bankHashHardForkData: Data(repeating: 0, count: 1_025)
+        )) { error in
+            XCTAssertEqual(error as? SolanaSccpProverError, .invalidString("bankHashHardForkData"))
+        }
+    }
+
+    func testBuildsSolanaAccountInclusionWitness() throws {
+        let finalizedSlot: UInt64 = 1_296_096
+        let openings: [(address: Data, owner: Data, lamports: UInt64, dataHash: Data)] = [
+            (Data(repeating: 0x31, count: 32), sccpSolanaVoteProgramId, 1_000_000, Data(repeating: 0x91, count: 32)),
+            (Data(repeating: 0x41, count: 32), sccpSolanaStakeProgramId, 1_000_001, Data(repeating: 0x92, count: 32)),
+            (Data(repeating: 0x51, count: 32), sccpSolanaStakeProgramId, 1_000_002, Data(repeating: 0x93, count: 32)),
+        ]
+        let openingInputs = openings.map { opening in
+            SolanaSccpAccountOpeningInput(
+                address: opening.address,
+                owner: opening.owner,
+                lamports: opening.lamports,
+                rentEpoch: 0,
+                dataHash: "0x" + opening.dataHash.hexEncodedString()
+            )
+        }
+        let rawData = [
+            Data(repeating: 0x01, count: 64),
+            Data(repeating: 0x02, count: 64),
+            Data(repeating: 0x03, count: 64),
+        ]
+        let rawDataHash0 = Data(hexString: String((try solanaSccpAccountRawDataHash(rawData[0])).dropFirst(2)))!
+
+        XCTAssertEqual(
+            try canonicalSolanaSccpAccountInclusionLeafBytes(
+                finalizedSlot: finalizedSlot,
+                address: openings[0].address,
+                owner: openings[0].owner,
+                lamports: openings[0].lamports,
+                rentEpoch: 0,
+                dataHash: openings[0].dataHash,
+                rawDataHash: rawDataHash0
+            ).count,
+            109
+        )
+        let leaves = try openings.enumerated().map { index, opening in
+            try solanaSccpAccountInclusionLeafHash(
+                finalizedSlot: finalizedSlot,
+                address: opening.address,
+                owner: opening.owner,
+                lamports: opening.lamports,
+                rentEpoch: 0,
+                dataHash: opening.dataHash,
+                rawData: rawData[index]
+            )
+        }
+        XCTAssertEqual(try canonicalSolanaSccpAccountInclusionNodeBytes(left: leaves[0], right: leaves[1]).count, 65)
+        XCTAssertTrue(try solanaSccpAccountInclusionNodeHash(left: leaves[0], right: leaves[1]).hasPrefix("0x"))
+
+        let witness = try solanaSccpAccountInclusionRootAndBranches(leaves: leaves)
+        XCTAssertEqual(witness.branches.count, leaves.count)
+        XCTAssertEqual(
+            try solanaSccpAccountInclusionRootFromBranch(leaf: leaves[0], siblings: witness.branches[0]),
+            witness.root
+        )
+        XCTAssertEqual(
+            try solanaSccpAccountInclusionRootFromBranch(leaf: leaves[1], siblings: witness.branches[1]),
+            witness.root
+        )
+        let openedWitness = try solanaSccpOpenedAccountInclusionWitness(
+            SolanaSccpOpenedAccountInclusionWitnessInput(
+                finalizedSlot: finalizedSlot,
+                validatorVoteAccountOpenings: [openingInputs[0]],
+                validatorVoteAccountRawData: [rawData[0]],
+                validatorStakeAccountOpenings: [openingInputs[1]],
+                validatorStakeAccountRawData: [rawData[1]],
+                stakeHistorySysvarOpening: openingInputs[2],
+                stakeHistorySysvarRawData: rawData[2],
+                expectedAccountInclusionRoot: witness.root
+            )
+        )
+        XCTAssertEqual(openedWitness.branches, witness.branches)
+        XCTAssertEqual(openedWitness.validatorVoteAccountBranches, [witness.branches[0]])
+        XCTAssertEqual(openedWitness.validatorStakeAccountBranches, [witness.branches[1]])
+        XCTAssertEqual(openedWitness.stakeHistorySysvarBranch, witness.branches[2])
+        let duplicateStakeOpening = SolanaSccpAccountOpeningInput(
+            address: openingInputs[0].address,
+            owner: openingInputs[1].owner,
+            lamports: openingInputs[1].lamports,
+            rentEpoch: openingInputs[1].rentEpoch,
+            executable: openingInputs[1].executable,
+            dataHash: openingInputs[1].dataHash
+        )
+        XCTAssertThrowsError(try solanaSccpOpenedAccountInclusionWitness(
+            SolanaSccpOpenedAccountInclusionWitnessInput(
+                finalizedSlot: finalizedSlot,
+                validatorVoteAccountOpenings: [openingInputs[0]],
+                validatorVoteAccountRawData: [rawData[0]],
+                validatorStakeAccountOpenings: [duplicateStakeOpening],
+                validatorStakeAccountRawData: [rawData[1]],
+                stakeHistorySysvarOpening: openingInputs[2],
+                stakeHistorySysvarRawData: rawData[2]
+            )
+        )) { error in
+            XCTAssertEqual(error as? SolanaSccpProverError, .invalidString("openedAccountAddresses"))
+        }
+        XCTAssertThrowsError(try solanaSccpOpenedAccountInclusionWitness(
+            SolanaSccpOpenedAccountInclusionWitnessInput(
+                finalizedSlot: finalizedSlot,
+                validatorVoteAccountOpenings: [openingInputs[0]],
+                validatorVoteAccountRawData: [rawData[0]],
+                validatorStakeAccountOpenings: [openingInputs[1]],
+                validatorStakeAccountRawData: [rawData[1]],
+                stakeHistorySysvarOpening: openingInputs[2],
+                stakeHistorySysvarRawData: rawData[2],
+                expectedAccountInclusionRoot: "0x" + String(repeating: "77", count: 32)
+            )
+        )) { error in
+            XCTAssertEqual(error as? SolanaSccpProverError, .invalidString("accountInclusionRoot"))
+        }
+        let mutatedLeaf = try solanaSccpAccountInclusionLeafHash(
+            finalizedSlot: finalizedSlot,
+            address: openings[0].address,
+            owner: openings[0].owner,
+            lamports: openings[0].lamports,
+            rentEpoch: 0,
+            dataHash: openings[0].dataHash,
+            rawData: Data(repeating: 0x04, count: 64)
+        )
+        XCTAssertNotEqual(
+            try solanaSccpAccountInclusionRootFromBranch(leaf: mutatedLeaf, siblings: witness.branches[0]),
+            witness.root
+        )
+        XCTAssertThrowsError(try solanaSccpAccountInclusionRootFromBranch(
+            leaf: "0x" + String(repeating: "00", count: 32),
+            siblings: []
+        )) { error in
+            XCTAssertEqual(error as? SolanaSccpProverError, .invalidHex32("leaf"))
+        }
+        XCTAssertThrowsError(try solanaSccpAccountInclusionRootFromBranch(
+            leaf: leaves[0],
+            siblings: Array(
+                repeating: "0x" + String(repeating: "56", count: 32),
+                count: sccpMaxSourceMerkleBranchNodes + 1
+            )
+        )) { error in
+            XCTAssertEqual(error as? SolanaSccpProverError, .invalidString("siblings"))
+        }
+        XCTAssertThrowsError(try solanaSccpOpenedAccountInclusionWitness(
+            SolanaSccpOpenedAccountInclusionWitnessInput(
+                finalizedSlot: finalizedSlot,
+                validatorVoteAccountOpenings: Array(
+                    repeating: openingInputs[0],
+                    count: sccpSolanaMaxValidators + 1
+                ),
+                validatorVoteAccountRawData: Array(
+                    repeating: rawData[0],
+                    count: sccpSolanaMaxValidators + 1
+                ),
+                validatorStakeAccountOpenings: [openingInputs[1]],
+                validatorStakeAccountRawData: [rawData[1]],
+                stakeHistorySysvarOpening: openingInputs[2],
+                stakeHistorySysvarRawData: rawData[2]
+            )
+        )) { error in
+            XCTAssertEqual(error as? SolanaSccpProverError, .invalidString("validatorVoteAccountOpenings"))
+        }
+        XCTAssertThrowsError(try solanaSccpAccountRawDataHash(Data()))
+        XCTAssertThrowsError(try solanaSccpAccountInclusionRootAndBranches(leaves: [leaves[0], leaves[0]]))
+    }
+
+    func testDerivesAndValidatesMessageProofHashFromWitnessBranch() throws {
+        let branch = [Data(repeating: 0x56, count: 32)]
+        var witness = Self.sampleWitness(messageProofHash: "", inclusionBranch: branch)
+        let derived = try solanaSccpMessageProofHash(
+            sourceEventDigest: witness.sourceEventDigest,
+            transactionStatusRoot: witness.transactionStatusRoot,
+            transactionSignature: witness.transactionSignature,
+            emitterProgramId: witness.emitterProgramId,
+            inclusionBranch: branch
+        )
+        let normalized = try normalizeSolanaSccpWitness(witness)
+
+        XCTAssertEqual(normalized.messageProofHash, derived)
+        XCTAssertEqual(normalized.inclusionBranch, branch)
+        XCTAssertThrowsError(try solanaSccpMessageProofHash(
+            sourceEventDigest: String(repeating: "00", count: 32),
+            transactionStatusRoot: witness.transactionStatusRoot,
+            transactionSignature: witness.transactionSignature,
+            emitterProgramId: witness.emitterProgramId,
+            inclusionBranch: branch
+        )) { error in
+            XCTAssertEqual(error as? SolanaSccpProverError, .invalidHex32("sourceEventDigest"))
+        }
+        XCTAssertThrowsError(try solanaSccpMessageProofHash(
+            sourceEventDigest: witness.sourceEventDigest,
+            transactionStatusRoot: String(repeating: "00", count: 32),
+            transactionSignature: witness.transactionSignature,
+            emitterProgramId: witness.emitterProgramId,
+            inclusionBranch: branch
+        )) { error in
+            XCTAssertEqual(error as? SolanaSccpProverError, .invalidHex32("transactionStatusRoot"))
+        }
+        XCTAssertThrowsError(try normalizeSolanaSccpWitness(Self.sampleWitness(
+            transactionSignature: Self.solanaZeroSignature
+        ))) { error in
+            XCTAssertEqual(error as? SolanaSccpProverError, .invalidString("transactionSignature"))
+        }
+        XCTAssertThrowsError(try normalizeSolanaSccpWitness(Self.sampleWitness(
+            emitterProgramId: Self.solanaZeroProgram
+        ))) { error in
+            XCTAssertEqual(error as? SolanaSccpProverError, .invalidString("emitterProgramId"))
+        }
+        XCTAssertGreaterThan(
+            try canonicalSolanaSccpWitnessBytes(witness).count,
+            try canonicalSolanaSccpWitnessBytes(Self.sampleWitness()).count
+        )
+
+        witness = Self.sampleWitness(
+            messageProofHash: String(repeating: "cc", count: 32),
+            inclusionBranch: branch
+        )
+        XCTAssertThrowsError(try normalizeSolanaSccpWitness(witness)) { error in
+            XCTAssertEqual(error as? SolanaSccpProverError, .messageProofHashMismatch)
+        }
+    }
+
+    func testRejectsUnexpectedSolanaSourceStateVerifierProfile() {
+        XCTAssertThrowsError(try normalizeSolanaSccpWitness(Self.sampleWitness(
+            sourceStateVerifierId: "debug-solana-state-verifier",
+            sourceStateVerifierHash: String(repeating: "ab", count: 32)
+        ))) { error in
+            XCTAssertEqual(error as? SolanaSccpProverError, .invalidString("sourceStateVerifierId"))
+        }
+    }
+
+    func testRejectsSolanaWitnessAccountsLtHashChecksumMismatch() throws {
+        let accountsLtHash = Data(repeating: 0x99, count: 2_048)
+        guard let accountsLtHashChecksum = try? solanaSccpAccountsLtHashChecksum(accountsLtHash) else {
+            throw XCTSkip("BLAKE3 bridge unavailable")
+        }
+        let parentBankHash = String(repeating: "c0", count: 32)
+        let blockhash = String(repeating: "55", count: 32)
+        guard let bankHash = try? solanaSccpAgaveBankHash(
+            parentBankHash: parentBankHash,
+            bankSignatureCount: 8,
+            blockhash: blockhash,
+            accountsLtHash: accountsLtHash
+        ) else {
+            throw XCTSkip("BLAKE3 bridge unavailable")
+        }
+        let valid = SolanaSccpWitnessInput(
+            finalizedSlot: 321,
+            parentSlot: 320,
+            bankSignatureCount: 8,
+            parentBankHash: parentBankHash,
+            blockhash: blockhash,
+            bankHash: bankHash,
+            transactionStatusRoot: String(repeating: "bb", count: 32),
+            messageProofHash: String(repeating: "cc", count: 32),
+            accountInclusionRoot: String(repeating: "77", count: 32),
+            accountsLtHashChecksum: accountsLtHashChecksum,
+            accountsLtHash: accountsLtHash,
+            transactionSignature: Self.solanaSignature55,
+            emitterProgramId: Self.solanaProgram42,
+            messageId: String(repeating: "dd", count: 32),
+            payloadHash: String(repeating: "ee", count: 32),
+            commitmentRoot: String(repeating: "12", count: 32),
+            sourceEventDigest: String(repeating: "34", count: 32),
+            statementHash: String(repeating: "56", count: 32),
+            destinationBindingHash: String(repeating: "78", count: 32)
+        )
+        XCTAssertNoThrow(try normalizeSolanaSccpWitness(valid))
+
+        let mismatch = SolanaSccpWitnessInput(
+            finalizedSlot: 321,
+            parentSlot: 320,
+            bankSignatureCount: 8,
+            parentBankHash: parentBankHash,
+            blockhash: blockhash,
+            bankHash: bankHash,
+            transactionStatusRoot: String(repeating: "bb", count: 32),
+            messageProofHash: String(repeating: "cc", count: 32),
+            accountInclusionRoot: String(repeating: "77", count: 32),
+            accountsLtHashChecksum: String(repeating: "88", count: 32),
+            accountsLtHash: accountsLtHash,
+            transactionSignature: Self.solanaSignature55,
+            emitterProgramId: Self.solanaProgram42,
+            messageId: String(repeating: "dd", count: 32),
+            payloadHash: String(repeating: "ee", count: 32),
+            commitmentRoot: String(repeating: "12", count: 32),
+            sourceEventDigest: String(repeating: "34", count: 32),
+            statementHash: String(repeating: "56", count: 32),
+            destinationBindingHash: String(repeating: "78", count: 32)
+        )
+        XCTAssertThrowsError(try normalizeSolanaSccpWitness(mismatch)) { error in
+            XCTAssertEqual(error as? SolanaSccpProverError, .invalidString("accountsLtHashChecksum"))
+        }
     }
 
     func testProverRequiresLinkedProofEngine() async throws {
@@ -74,18 +4179,1112 @@ final class SccpSolanaProverTests: XCTestCase {
         }
     }
 
+    func testRequiresSolanaProofContext() {
+        XCTAssertThrowsError(try normalizeSolanaSccpProofContext(
+            statementHash: "",
+            destinationBindingHash: String(repeating: "78", count: 32)
+        )) { error in
+            XCTAssertEqual(error as? SolanaSccpProverError, .invalidHex32("statementHash"))
+        }
+        XCTAssertThrowsError(try normalizeSolanaSccpProofContext(
+            statementHash: sccpZeroHashV1,
+            destinationBindingHash: String(repeating: "78", count: 32)
+        )) { error in
+            XCTAssertEqual(error as? SolanaSccpProverError, .invalidHex32("statementHash"))
+        }
+        XCTAssertThrowsError(try normalizeSolanaSccpProofContext(
+            statementHash: String(repeating: "56", count: 32),
+            destinationBindingHash: ""
+        )) { error in
+            XCTAssertEqual(error as? SolanaSccpProverError, .invalidHex32("destinationBindingHash"))
+        }
+        XCTAssertThrowsError(try normalizeSolanaSccpProofContext(
+            statementHash: String(repeating: "56", count: 32),
+            destinationBindingHash: sccpZeroHashV1
+        )) { error in
+            XCTAssertEqual(error as? SolanaSccpProverError, .invalidHex32("destinationBindingHash"))
+        }
+    }
+
+    func testBindsSourceAdapterDeploymentContextForUiProvers() throws {
+        let request = try buildSolanaSccpProofRequest(Self.sampleWitness(
+            sourceAdapterDeploymentHash: String(repeating: "ab", count: 32),
+            sourceAdapterDeploymentReceiptHash: String(repeating: "cd", count: 32)
+        ))
+
+        XCTAssertEqual(
+            request.publicInputs.sourceAdapterDeploymentHash,
+            "0x" + String(repeating: "ab", count: 32)
+        )
+        XCTAssertEqual(
+            request.publicInputs.sourceAdapterDeploymentReceiptHash,
+            "0x" + String(repeating: "cd", count: 32)
+        )
+        XCTAssertEqual(
+            try canonicalSccpSourceAdapterDeploymentBindingBytes(request.sourceAdapterDeploymentBinding).count,
+            73
+        )
+        XCTAssertEqual(
+            request.sourceAdapterDeploymentBindingHash,
+            try sccpSourceAdapterDeploymentBindingHash(request.sourceAdapterDeploymentBinding)
+        )
+
+        XCTAssertThrowsError(try normalizeSccpSourceAdapterDeploymentBinding(
+            sourceAdapterDeploymentHash: String(repeating: "ab", count: 32),
+            sourceAdapterDeploymentReceiptHash: sccpZeroHashV1
+        )) { error in
+            XCTAssertEqual(error as? SolanaSccpProverError, .sourceAdapterDeploymentBindingMismatch)
+        }
+        XCTAssertThrowsError(try normalizeSccpSourceAdapterDeploymentBinding(
+            sourceAdapterDeploymentHash: String(repeating: "ab", count: 32),
+            sourceAdapterDeploymentReceiptHash: String(repeating: "ab", count: 32)
+        )) { error in
+            XCTAssertEqual(error as? SolanaSccpProverError, .sourceAdapterDeploymentBindingMismatch)
+        }
+    }
+
+    func testDerivesSourceAdapterVerifierVkHashesForUiTooling() throws {
+        let vectors: [(UInt32, String)] = [
+            (sccpDomainEthereum, "0x2140903293411cad0f0eb217d8beb18d3a188edf7bba455098589a2409445e46"),
+            (sccpDomainBsc, "0x12536f25748a6520f10ebd42a7bcccd6ec181b9d53129795c8e186dc6e8b18cc"),
+            (sccpDomainSolana, "0xe7bc29d06bf56184183c3fc59a0e934cd1d8e16751f1eda2efaaf88aa350b9d6"),
+            (sccpDomainTon, "0xf03f70e8cb504e69b0611df224c2783d04d8f4ee93beae7a62e1cd0a49703bad"),
+            (sccpDomainTron, "0x0e12ad03def9d75887d4d6437e63539cef97c54db4769881eeda757a88826364"),
+            (sccpDomainSoraKusama, "0xf7768653132995511594e6e7edb4af22f78bba615650d9dda72f14bb18984daf"),
+            (sccpDomainSoraPolkadot, "0x4f8456bf8626436a16d763c40bf23dffb962232f0766c4ae33d6e594f8be1635"),
+            (sccpDomainSora2, "0x96bbfa08489249b28a1444d0dcb9d5b4023bd688091f31c0b435601dad48dbb4"),
+        ]
+        for (sourceDomain, expectedHash) in vectors {
+            XCTAssertEqual(
+                try sccpSourceAdapterVerifierVkHash(sourceDomain: sourceDomain),
+                expectedHash
+            )
+        }
+        XCTAssertThrowsError(
+            try sccpSourceAdapterVerifierVkHash(
+                sourceDomain: sccpDomainTon,
+                targetDomain: sccpDomainTon
+            )
+        ) { error in
+            XCTAssertEqual(
+                error as? SccpSourceProofHashError,
+                .unsupportedSourceAdapterDomain("targetDomain")
+            )
+        }
+    }
+
+    func testDerivesNativeDestinationBindingHashesForUiTooling() throws {
+        let vectors: [(UInt32, String, String)] = [
+            (
+                sccpDomainSolana,
+                "sccp:0:3:sol:solana-program-v1:2",
+                "0x078578f0aa27daa2972d6c19d1d26dbb6bf6ba1e8df84e283d7ef101fc46abf6"
+            ),
+            (
+                sccpDomainTon,
+                "sccp:0:4:ton:ton-contract-v1:3",
+                "0x8651c1b818973f92050f69e66e8491e9681d23db1cb37393b9ea15c5e7e02799"
+            ),
+            (
+                sccpDomainSoraKusama,
+                "sccp:0:6:sora-kusama:substrate-runtime-v1:5",
+                "0x2ee5c37634c3fab7e9086ea43af7553089fc24dc2ce27d76c46ef4c3da57bb56"
+            ),
+            (
+                sccpDomainSoraPolkadot,
+                "sccp:0:7:sora-polkadot:substrate-runtime-v1:5",
+                "0x570ec340d4fee4a84eaa7a53b19baa53c9f4f8d7f64c3c43639fde0c6b3fdef0"
+            ),
+            (
+                sccpDomainSora2,
+                "sccp:0:8:sora2:substrate-runtime-v1:5",
+                "0xda5d48fe26518cd8cff6bdaa7cf8e37c7302d1e66469efed4ef2cf340c55b9e4"
+            ),
+        ]
+        for (domain, expectedKey, expectedHash) in vectors {
+            XCTAssertEqual(try sccpDestinationBindingKey(domain: domain), expectedKey)
+            XCTAssertEqual(try sccpDestinationBindingHash(domain: domain), expectedHash)
+        }
+        XCTAssertThrowsError(try sccpDestinationBindingHash(domain: sccpDomainEthereum)) { error in
+            XCTAssertEqual(
+                error as? SccpSourceProofHashError,
+                .unsupportedDestinationBindingDomain("targetDomain")
+            )
+        }
+    }
+
+    func testDerivesEvmAndTronDestinationBindingsForUiTooling() throws {
+        let evmBinding = try sccpEvmDestinationBinding(
+            targetDomain: sccpDomainEthereum,
+            networkId: "0x" + String(repeating: "33", count: 32),
+            verifierAddress: "0x" + String(repeating: "11", count: 20),
+            bridgeAddress: "0x" + String(repeating: "22", count: 20),
+            verifierCodeHash: "0x" + String(repeating: "bb", count: 32),
+            verifierKeyHash: "0x" + String(repeating: "cc", count: 32)
+        )
+        XCTAssertEqual(evmBinding.key, [
+            "evm",
+            "0",
+            "1",
+            String(repeating: "33", count: 32),
+            "0x" + String(repeating: "11", count: 20),
+            "0x" + String(repeating: "22", count: 20),
+            "0x" + String(repeating: "bb", count: 32),
+            "0x" + String(repeating: "cc", count: 32)
+        ].joined(separator: ":"))
+        XCTAssertEqual(
+            evmBinding.hash,
+            "0x3ad95ac3e5bc2892f768aae40a3b7ba673d561858b7d1318fbb9f6eba83207bf"
+        )
+        XCTAssertEqual(
+            try sccpEvmDestinationBindingHash(
+                targetDomain: sccpDomainEthereum,
+                networkId: "0x" + String(repeating: "33", count: 32),
+                verifierAddress: "0x" + String(repeating: "11", count: 20),
+                bridgeAddress: "0x" + String(repeating: "22", count: 20),
+                verifierCodeHash: "0x" + String(repeating: "bb", count: 32),
+                verifierKeyHash: "0x" + String(repeating: "cc", count: 32)
+            ),
+            evmBinding.hash
+        )
+
+        let tronAddress = "TJRabPrwbZy45sbavfcjinPJC18kjpRTv8"
+        let tronBinding = try sccpTronDestinationBinding(
+            networkId: "0x" + String(repeating: "33", count: 32),
+            verifierAddress: tronAddress,
+            verifierCodeHash: "0x" + String(repeating: "bb", count: 32),
+            verifierKeyHash: "0x" + String(repeating: "cc", count: 32)
+        )
+        XCTAssertEqual(tronBinding.key, [
+            "tron",
+            "0",
+            "5",
+            String(repeating: "33", count: 32),
+            tronAddress,
+            "0x" + String(repeating: "bb", count: 32),
+            "0x" + String(repeating: "cc", count: 32)
+        ].joined(separator: ":"))
+        XCTAssertEqual(
+            tronBinding.hash,
+            "0x17c953ad5b8c9a2b6f7102aca993fa7c427d018505cf4f58fac35ea454caba7f"
+        )
+        XCTAssertEqual(
+            try sccpTronDestinationBindingHash(
+                networkId: "0x" + String(repeating: "33", count: 32),
+                verifierAddress: tronAddress,
+                verifierCodeHash: "0x" + String(repeating: "bb", count: 32),
+                verifierKeyHash: "0x" + String(repeating: "cc", count: 32)
+            ),
+            tronBinding.hash
+        )
+
+        XCTAssertThrowsError(
+            try sccpEvmDestinationBinding(
+                targetDomain: sccpDomainEthereum,
+                networkId: "0x" + String(repeating: "33", count: 32),
+                verifierAddress: "0x" + String(repeating: "11", count: 20),
+                bridgeAddress: "0x" + String(repeating: "11", count: 20),
+                verifierCodeHash: "0x" + String(repeating: "bb", count: 32),
+                verifierKeyHash: "0x" + String(repeating: "cc", count: 32)
+            )
+        ) { error in
+            XCTAssertEqual(error as? SccpSourceProofHashError, .invalidSourceMaterial("bridgeAddress"))
+        }
+        XCTAssertThrowsError(
+            try sccpTronDestinationBinding(
+                networkId: "0x" + String(repeating: "33", count: 32),
+                verifierAddress: "TJRabPrwbZy45sbavfcjinPJC18kjpRTv9",
+                verifierCodeHash: "0x" + String(repeating: "bb", count: 32),
+                verifierKeyHash: "0x" + String(repeating: "cc", count: 32)
+            )
+        ) { error in
+            XCTAssertEqual(error as? SccpSourceProofHashError, .invalidSourceMaterial("verifierAddress"))
+        }
+        XCTAssertThrowsError(
+            try sccpTronDestinationBinding(
+                networkId: "0x" + String(repeating: "33", count: 32),
+                verifierAddress: " " + tronAddress,
+                verifierCodeHash: "0x" + String(repeating: "bb", count: 32),
+                verifierKeyHash: "0x" + String(repeating: "cc", count: 32)
+            )
+        ) { error in
+            XCTAssertEqual(error as? SccpSourceProofHashError, .invalidSourceMaterial("verifierAddress"))
+        }
+    }
+
+    func testDerivesSourceMaterialAndDeploymentRecordHashesForUiTooling() throws {
+        let materialVectors: [(UInt32, String)] = [
+            (sccpDomainEthereum, "0x035c5a35f6412d45ed10389741016d067bd6d0b874a38cd744922c599e0a2fdd"),
+            (sccpDomainBsc, "0x1630e4d75e2676cc443e07b0477303240ae4cff13bdf9fe61725b4a9a4ee959a"),
+            (sccpDomainSolana, "0x499a7363142d5fcfe3a79b11a29ae2ad897e853649e80e39a162b8942f908331"),
+            (sccpDomainTon, "0x08b11177113ac2d9f612abdf767a017de560d805e965b3dc32e28c8748ea2ebc"),
+            (sccpDomainTron, "0x68c20262e44676bd5f3c4ec428f063373147a1ca14c5885648a9c651b3bcd8d8"),
+            (sccpDomainSoraKusama, "0x012c66498a85190d6075c441fad30fe01816796ee1713838fe8bb97f2ad1c924"),
+            (sccpDomainSoraPolkadot, "0x40cd55d64e92d688b839242e170f1722485cddf2e42b4ff22e53c5e7723e570d"),
+            (sccpDomainSora2, "0x6fc968441106993502dd05ebeadea1dbfee0f7814680f1ad006d4584c99a8a2d"),
+        ]
+        let deploymentVectors: [UInt32: String] = [
+            sccpDomainEthereum: "0xd08e3344760aabfb4ba891990c852846d04a5735647174ce6e3ab0f2cad57f4d",
+            sccpDomainBsc: "0x7d47ade779a5bddb3a5f283600af677db8605b75a00516a4328f3823ff28fb2d",
+            sccpDomainSolana: "0xcdb2a81cb31e58d9bc1f4292d33c3f4990b2d2008dda1b9b1275aaac087461cc",
+            sccpDomainTon: "0x5c4e226c1f4619311762a9c889f8e3b99ea6f020317c2e8a0c76a08d7a70f887",
+            sccpDomainTron: "0x94dbe28a2fb16e043b83639b6dea8ec62f53679599ef1dd220fd13c71c7bdcb8",
+            sccpDomainSoraKusama: "0xda47a31715813ef5bff0882cd0e0e8b0cc89d426e005e37e0f94a2bdba2043cd",
+            sccpDomainSoraPolkadot: "0x2a57fe4beb69e8201299f2c01259a025cafc8388bb38e2a727c2fc872893e13a",
+            sccpDomainSora2: "0xdac819bff0aa57f7596f06297dfec39027aaab63213497020b772c355a6eaecb",
+        ]
+        for (domain, expectedMaterialHash) in materialVectors {
+            XCTAssertFalse(try Self.sampleSourceVerifierMaterialBytes(domain: domain).isEmpty)
+            XCTAssertEqual(try Self.sampleSourceVerifierMaterialHash(domain: domain), expectedMaterialHash)
+            XCTAssertEqual(
+                try Self.sampleSourceAdapterDeploymentHash(domain: domain),
+                deploymentVectors[domain]
+            )
+        }
+        XCTAssertThrowsError(
+            try canonicalSccpSourceVerifierMaterialBytes(
+                sourceDomain: sccpDomainEthereum,
+                sourceTrustAnchorHash: "0x" + String(repeating: "44", count: 32),
+                consensusVerifierHash: "0x" + String(repeating: "55", count: 32),
+                messageInclusionVerifierHash: "0x" + String(repeating: "66", count: 32),
+                finalityPolicyHash: "0x" + String(repeating: "88", count: 32),
+                sourceStateVerifierHash: "0x" + String(repeating: "77", count: 32),
+                bridgeAddress: "0x" + String(repeating: "11", count: 20),
+                sourceBridgeEmitterCodeHash: "0x" + String(repeating: "77", count: 32)
+            )
+        ) { error in
+            XCTAssertEqual(error as? SccpSourceProofHashError, .invalidSourceMaterial("sourceStateVerifierHash"))
+        }
+        XCTAssertThrowsError(
+            try canonicalSccpSourceVerifierMaterialBytes(
+                sourceDomain: sccpDomainSolana,
+                sourceTrustAnchorHash: "0x" + String(repeating: "44", count: 32),
+                consensusVerifierHash: "0x" + String(repeating: "55", count: 32),
+                messageInclusionVerifierHash: "0x" + String(repeating: "66", count: 32),
+                finalityPolicyHash: "0x" + String(repeating: "88", count: 32),
+                sourceStateVerifierHash: "0x" + String(repeating: "77", count: 32),
+                bridgeAddress: "0x" + String(repeating: "11", count: 20)
+            )
+        ) { error in
+            XCTAssertEqual(error as? SccpSourceProofHashError, .invalidSourceMaterial("sourceBridgeEmitterAddress"))
+        }
+        XCTAssertThrowsError(
+            try canonicalSccpSourceVerifierMaterialBytes(
+                sourceDomain: sccpDomainEthereum,
+                sourceTrustAnchorHash: "0x" + String(repeating: "44", count: 32),
+                consensusVerifierHash: "0x" + String(repeating: "55", count: 32),
+                messageInclusionVerifierHash: "0x" + String(repeating: "66", count: 32),
+                finalityPolicyHash: "0x" + String(repeating: "88", count: 32),
+                bridgeAddress: "0x" + String(repeating: "11", count: 20),
+                sourceBridgeEmitterCodeHash: "0x" + String(repeating: "77", count: 32),
+                networkId: "0x" + String(repeating: "33", count: 32)
+            )
+        ) { error in
+            XCTAssertEqual(error as? SccpSourceProofHashError, .invalidSourceMaterial("sourceBridgeNetworkId"))
+        }
+        let tonTemplateComponentHashes = [
+            "sourceTrustAnchorHash": "0xd83b3a3eb920ac8338533535cf0d6c69c69d507e84aef8ec2094564b8427c56c",
+            "consensusVerifierHash": "0xb0225e16477ea3420f7d0de76b87b6e99a43ab97f445d8565a384d4b655bc473",
+            "messageInclusionVerifierHash": "0x89254256421c15da8c92842c7d6f448ef6c1d5ca1e2a173754643425fcee6353",
+            "sourceStateVerifierHash": "0x540205f876591604ccf39f72a051ac5e82647c9e48dbd48cb129d2543971a34f",
+            "finalityPolicyHash": "0x50044ee6db0eb0cdef097e69406b6c30d3406d8f784e8ba34e9b923b38bd0c43",
+        ]
+        for (field, templateHash) in tonTemplateComponentHashes {
+            XCTAssertThrowsError(
+                try canonicalSccpSourceVerifierMaterialBytes(
+                    sourceDomain: sccpDomainTon,
+                    sourceTrustAnchorHash: field == "sourceTrustAnchorHash" ? templateHash : "0x" + String(repeating: "44", count: 32),
+                    consensusVerifierHash: field == "consensusVerifierHash" ? templateHash : "0x" + String(repeating: "55", count: 32),
+                    messageInclusionVerifierHash: field == "messageInclusionVerifierHash" ? templateHash : "0x" + String(repeating: "66", count: 32),
+                    finalityPolicyHash: field == "finalityPolicyHash" ? templateHash : "0x" + String(repeating: "88", count: 32),
+                    sourceStateVerifierHash: field == "sourceStateVerifierHash" ? templateHash : "0x" + String(repeating: "77", count: 32)
+                )
+            ) { error in
+                XCTAssertEqual(error as? SccpSourceProofHashError, .invalidSourceMaterial(field))
+            }
+        }
+        let tronTemplateComponentHashes = [
+            "sourceTrustAnchorHash": "0x3550934cbdfe49449ec4aa383dcea7674541fedf66ab6159b1ed2f2c0be4755c",
+            "consensusVerifierHash": "0x8a1de96a869b2f28f197a7835597f17cf77ff45f7cbb77da2f7c48e87df8c5ea",
+            "messageInclusionVerifierHash": "0xf39db56474b288680ad9561389cca7a841bd1fd223719255324705e1038fcacc",
+            "finalityPolicyHash": "0xad5a6a4f200e070400b5aaa1b7976c639e67571eb711eb6f69d01e3615423864",
+        ]
+        for (field, templateHash) in tronTemplateComponentHashes {
+            XCTAssertThrowsError(
+                try canonicalSccpSourceVerifierMaterialBytes(
+                    sourceDomain: sccpDomainTron,
+                    sourceTrustAnchorHash: field == "sourceTrustAnchorHash" ? templateHash : "0x" + String(repeating: "44", count: 32),
+                    consensusVerifierHash: field == "consensusVerifierHash" ? templateHash : "0x" + String(repeating: "55", count: 32),
+                    messageInclusionVerifierHash: field == "messageInclusionVerifierHash" ? templateHash : "0x" + String(repeating: "66", count: 32),
+                    finalityPolicyHash: field == "finalityPolicyHash" ? templateHash : "0x" + String(repeating: "88", count: 32),
+                    bridgeAddress: "0x" + String(repeating: "11", count: 20),
+                    sourceBridgeEmitterCodeHash: "0x" + String(repeating: "77", count: 32),
+                    networkId: "0x" + String(repeating: "33", count: 32),
+                    ownerAddress: "0x" + String(repeating: "22", count: 20),
+                    configHash: "0xe986dd67bfa2307b4e00cf46bde41a88003a55c5b7fea311fa106614b2252f9d"
+                )
+            ) { error in
+                XCTAssertEqual(error as? SccpSourceProofHashError, .invalidSourceMaterial(field))
+            }
+        }
+        let solanaTemplateComponentHashes = [
+            "sourceTrustAnchorHash": "0x113bdb7601d84f2098daec386346a7123857d181b3ac5bd23df50fa9e1b2cbe3",
+            "consensusVerifierHash": "0x97ea89019e6c79305d06dfc27640ee14a6b42ba6eaf86e1835ee9b433dba48ba",
+            "messageInclusionVerifierHash": "0xb8358bfef1e428a6a7e9115687cb2b88d9c21dad4021bea3e11d43489eb3dcb0",
+            "sourceStateVerifierHash": sccpSolanaTemplateSourceStateVerifierHashV1,
+            "finalityPolicyHash": "0x9df7ea90cf1bbba036788b14804f63f4be1e908390be89524fd4486f74344f56",
+        ]
+        for (field, templateHash) in solanaTemplateComponentHashes {
+            XCTAssertThrowsError(
+                try canonicalSccpSourceVerifierMaterialBytes(
+                    sourceDomain: sccpDomainSolana,
+                    sourceTrustAnchorHash: field == "sourceTrustAnchorHash" ? templateHash : "0x" + String(repeating: "44", count: 32),
+                    consensusVerifierHash: field == "consensusVerifierHash" ? templateHash : "0x" + String(repeating: "55", count: 32),
+                    messageInclusionVerifierHash: field == "messageInclusionVerifierHash" ? templateHash : "0x" + String(repeating: "66", count: 32),
+                    finalityPolicyHash: field == "finalityPolicyHash" ? templateHash : "0x" + String(repeating: "88", count: 32),
+                    sourceStateVerifierHash: field == "sourceStateVerifierHash" ? templateHash : "0x" + String(repeating: "77", count: 32)
+                )
+            ) { error in
+                XCTAssertEqual(error as? SccpSourceProofHashError, .invalidSourceMaterial(field))
+            }
+        }
+        XCTAssertThrowsError(
+            try canonicalSccpSourceVerifierMaterialBytes(
+                sourceDomain: sccpDomainTron,
+                sourceTrustAnchorHash: "0x" + String(repeating: "44", count: 32),
+                consensusVerifierHash: "0x" + String(repeating: "55", count: 32),
+                messageInclusionVerifierHash: "0x" + String(repeating: "66", count: 32),
+                finalityPolicyHash: "0x" + String(repeating: "88", count: 32),
+                bridgeAddress: "0x" + String(repeating: "11", count: 20),
+                sourceBridgeEmitterCodeHash: "0x" + String(repeating: "77", count: 32),
+                networkId: "0x" + String(repeating: "33", count: 32),
+                ownerAddress: "0x" + String(repeating: "22", count: 20),
+                configHash: "0x" + String(repeating: "99", count: 32)
+            )
+        ) { error in
+            XCTAssertEqual(
+                error as? SccpSourceProofHashError,
+                .invalidSourceMaterial("sourceBridgeConfigHash")
+            )
+        }
+        XCTAssertThrowsError(
+            try canonicalSccpSourceVerifierMaterialBytes(
+                sourceDomain: sccpDomainEthereum,
+                sourceTrustAnchorHash: "0x" + String(repeating: "44", count: 32),
+                consensusVerifierHash: "0x" + String(repeating: "44", count: 32),
+                messageInclusionVerifierHash: "0x" + String(repeating: "66", count: 32),
+                finalityPolicyHash: "0x" + String(repeating: "88", count: 32),
+                bridgeAddress: "0x" + String(repeating: "11", count: 20),
+                sourceBridgeEmitterCodeHash: "0x" + String(repeating: "77", count: 32)
+            )
+        ) { error in
+            guard case let .invalidSourceMaterial(field) = error as? SccpSourceProofHashError else {
+                return XCTFail("expected source material role-hash error")
+            }
+            XCTAssertTrue(field.contains("sourceVerifierMaterialRoleHash"))
+        }
+        let ethAdapterVerifierHash = try sccpSourceAdapterVerifierVkHash(sourceDomain: sccpDomainEthereum)
+        XCTAssertThrowsError(
+            try canonicalSccpSourceAdapterEngineDeploymentBytes(
+                sourceDomain: sccpDomainEthereum,
+                sourceTrustAnchorHash: "0x" + String(repeating: "44", count: 32),
+                consensusVerifierHash: "0x" + String(repeating: "55", count: 32),
+                messageInclusionVerifierHash: "0x" + String(repeating: "66", count: 32),
+                finalityPolicyHash: "0x" + String(repeating: "88", count: 32),
+                deploymentReceiptHash: ethAdapterVerifierHash,
+                bridgeAddress: "0x" + String(repeating: "11", count: 20),
+                sourceBridgeEmitterCodeHash: "0x" + String(repeating: "77", count: 32)
+            )
+        ) { error in
+            guard case let .invalidSourceMaterial(field) = error as? SccpSourceProofHashError else {
+                return XCTFail("expected source deployment role-hash error")
+            }
+            XCTAssertTrue(field.contains("sourceAdapterDeploymentRoleHash"))
+        }
+        XCTAssertEqual(
+            try Self.sampleSourceAdapterDeploymentHash(
+                domain: sccpDomainSolana,
+                solanaTowerReplayVerifierHash: "0x" + String(repeating: "bb", count: 32),
+                solanaFullAccountsdbLatticeVerifierHash: "0x" + String(repeating: "cc", count: 32),
+                solanaBankForkChoiceVerifierHash: "0x" + String(repeating: "dd", count: 32)
+            ),
+            "0x97e5c4196aff6387b9d973e663de3ce9345e1d8c3de89d22505b2197e282dc61"
+        )
+        XCTAssertEqual(
+            try Self.sampleSolanaFullLightClientGateHash(),
+            "0x2c94b86a665bb68708b762c678661f5e9879bd588627e93a640796eeaef970f9"
+        )
+        XCTAssertThrowsError(try Self.sampleSolanaFullLightClientGateHash(towerReplayHash: "0x" + String(repeating: "00", count: 32))) { error in
+            XCTAssertEqual(error as? SccpSourceProofHashError, .invalidHex32("solanaTowerReplayVerifierHash"))
+        }
+        XCTAssertThrowsError(
+            try Self.sampleSolanaFullLightClientGateHash(
+                towerReplayHash: "0x" + String(repeating: "bb", count: 32),
+                fullAccountsdbLatticeHash: "0x" + String(repeating: "bb", count: 32)
+            )
+        ) { error in
+            XCTAssertEqual(error as? SccpSourceProofHashError, .invalidSourceMaterial("solanaAuditVerifierHash"))
+        }
+        XCTAssertThrowsError(
+            try Self.sampleSolanaFullLightClientGateHash(
+                towerReplayHash: Self.sourceStateVerifierHash(domain: sccpDomainSolana)!
+            )
+        ) { error in
+            XCTAssertEqual(error as? SccpSourceProofHashError, .invalidSourceMaterial("solanaAuditVerifierHash"))
+        }
+        XCTAssertThrowsError(
+            try Self.sampleSolanaFullLightClientGateHash(
+                towerReplayHash: "0x113bdb7601d84f2098daec386346a7123857d181b3ac5bd23df50fa9e1b2cbe3"
+            )
+        ) { error in
+            XCTAssertEqual(error as? SccpSourceProofHashError, .invalidSourceMaterial("solanaAuditVerifierHash"))
+        }
+        XCTAssertThrowsError(
+            try Self.sampleSolanaFullLightClientGateHash(
+                sourceStateHash: sccpSolanaTemplateSourceStateVerifierHashV1
+            )
+        ) { error in
+            XCTAssertEqual(error as? SccpSourceProofHashError, .invalidSourceMaterial("sourceStateVerifierHash"))
+        }
+        XCTAssertThrowsError(
+            try Self.sampleSourceAdapterDeploymentHash(
+                domain: sccpDomainSolana,
+                solanaTowerReplayVerifierHash: "0x" + String(repeating: "bb", count: 32)
+            )
+        ) { error in
+            XCTAssertEqual(error as? SccpSourceProofHashError, .invalidSourceMaterial("solanaAuditVerifierHash"))
+        }
+        XCTAssertThrowsError(
+            try Self.sampleSourceAdapterDeploymentHash(
+                domain: sccpDomainTon,
+                solanaTowerReplayVerifierHash: "0x" + String(repeating: "bb", count: 32),
+                solanaFullAccountsdbLatticeVerifierHash: "0x" + String(repeating: "cc", count: 32),
+                solanaBankForkChoiceVerifierHash: "0x" + String(repeating: "dd", count: 32)
+            )
+        ) { error in
+            XCTAssertEqual(error as? SccpSourceProofHashError, .invalidSourceMaterial("solanaAuditVerifierHash"))
+        }
+        XCTAssertEqual(
+            try Self.sampleSourceAdapterDeploymentHash(
+                domain: sccpDomainTon,
+                tonMasterchainConfigVerifierHash: "0x" + String(repeating: "bb", count: 32),
+                tonValidatorSetTransitionVerifierHash: "0x" + String(repeating: "cc", count: 32),
+                tonShardAccountsDictionaryVerifierHash: "0x" + String(repeating: "dd", count: 32)
+            ),
+            "0x61e5d710ccbc902be00a38a5a80d05c19de97105605a3f93d4f8067862d81f07"
+        )
+        XCTAssertEqual(
+            try Self.sampleTonFullLightClientGateHash(),
+            "0xc32d8cfc2e273646abb00911b9a15e7ee0ab1721b04a6e89a060422dd3cc4596"
+        )
+        XCTAssertThrowsError(try Self.sampleTonFullLightClientGateHash(masterchainConfigHash: "0x" + String(repeating: "00", count: 32))) { error in
+            XCTAssertEqual(error as? SccpSourceProofHashError, .invalidHex32("tonMasterchainConfigVerifierHash"))
+        }
+        XCTAssertThrowsError(try Self.sampleTonFullLightClientGateHash(
+            masterchainConfigHash: "0x" + String(repeating: "bb", count: 32),
+            validatorSetTransitionHash: "0x" + String(repeating: "bb", count: 32)
+        )) { error in
+            XCTAssertEqual(error as? SccpSourceProofHashError, .invalidSourceMaterial("tonAuditVerifierHash"))
+        }
+        XCTAssertThrowsError(try Self.sampleTonFullLightClientGateHash(
+            masterchainConfigHash: Self.sourceStateVerifierHash(domain: sccpDomainTon)!
+        )) { error in
+            XCTAssertEqual(error as? SccpSourceProofHashError, .invalidSourceMaterial("tonAuditVerifierHash"))
+        }
+        XCTAssertThrowsError(try Self.sampleTonFullLightClientGateHash(
+            masterchainConfigHash: "0xd83b3a3eb920ac8338533535cf0d6c69c69d507e84aef8ec2094564b8427c56c"
+        )) { error in
+            XCTAssertEqual(error as? SccpSourceProofHashError, .invalidSourceMaterial("tonAuditVerifierHash"))
+        }
+        XCTAssertThrowsError(
+            try Self.sampleSourceAdapterDeploymentHash(
+                domain: sccpDomainTon,
+                tonMasterchainConfigVerifierHash: "0x" + String(repeating: "bb", count: 32)
+            )
+        ) { error in
+            XCTAssertEqual(error as? SccpSourceProofHashError, .invalidSourceMaterial("tonAuditVerifierHash"))
+        }
+        XCTAssertThrowsError(
+            try Self.sampleSourceAdapterDeploymentHash(
+                domain: sccpDomainSolana,
+                tonMasterchainConfigVerifierHash: "0x" + String(repeating: "bb", count: 32),
+                tonValidatorSetTransitionVerifierHash: "0x" + String(repeating: "cc", count: 32),
+                tonShardAccountsDictionaryVerifierHash: "0x" + String(repeating: "dd", count: 32)
+            )
+        ) { error in
+            XCTAssertEqual(error as? SccpSourceProofHashError, .invalidSourceMaterial("tonAuditVerifierHash"))
+        }
+        XCTAssertThrowsError(
+            try Self.sampleSourceAdapterDeploymentHash(
+                domain: sccpDomainEthereum,
+                adapterVerifierVkHash: "0x" + String(repeating: "99", count: 32)
+            )
+        ) { error in
+            XCTAssertEqual(error as? SccpSourceProofHashError, .invalidSourceMaterial("adapterVerifierVkHash"))
+        }
+    }
+
+    func testBuildsSolanaProgramInstructionSubmission() throws {
+        let solanaDestinationBindingHash = try sccpDestinationBindingHash(domain: sccpDomainSolana)
+        let request = try buildSolanaSccpProofRequest(Self.sampleProductionWitness(
+            destinationBindingHash: solanaDestinationBindingHash
+        ))
+        let proofResult = try wrapSolanaSccpProofResult(
+            proofBytes: Data([1, 2, 3, 4]),
+            request: request
+        )
+        let submissionPublicInputs = Self.sampleSolanaSubmissionPublicInputs(from: request.publicInputs)
+
+        let submission = try buildSolanaSccpSubmission(SolanaSccpSubmissionInput(
+            publicInputs: submissionPublicInputs,
+            proofResult: proofResult,
+            bundleBytes: Data([5, 6, 7])
+        ))
+
+        XCTAssertEqual(submission.envelopeEncoding, sccpSolanaBorshInstructionV1)
+        XCTAssertEqual(submission.submissionKind, "program_instruction")
+        XCTAssertEqual(submission.verifierEntrypoint, "submit_sccp_message_proof")
+        XCTAssertEqual(submission.arguments.map(\.key), [
+            "proof_bytes",
+            "public_inputs",
+            "bundle_bytes",
+            "statement_hash",
+            "destination_binding_hash",
+            "proof_context_hash",
+        ])
+        XCTAssertEqual(submission.publicInputsBytes.count, 141)
+        XCTAssertEqual(
+            submission.proofContextHash,
+            try solanaSccpProofContextHash(normalizeSolanaSccpProofContext(
+                statementHash: String(repeating: "56", count: 32),
+                destinationBindingHash: solanaDestinationBindingHash
+            ))
+        )
+        XCTAssertEqual(submission.instructionDataHex, submission.envelopeHex)
+        XCTAssertEqual(
+            String(data: Data(submission.instructionData.dropFirst(4).prefix(25)), encoding: .utf8),
+            "submit_sccp_message_proof"
+        )
+        XCTAssertThrowsError(try SolanaSccpSubmissionInput(
+            publicInputs: Self.sampleSolanaSubmissionPublicInputs(),
+            proofResult: proofResult,
+            bundleBytes: Data([5, 6, 7])
+        )) { error in
+            XCTAssertEqual(error as? SolanaSccpProverError, .invalidString("proofResult.publicInputs.bankHash"))
+        }
+        let uppercaseProofContext = SolanaSccpProofContext(
+            version: 1,
+            statementHash: proofResult.proofContext.statementHash.uppercased(),
+            destinationBindingHash: proofResult.proofContext.destinationBindingHash.uppercased()
+        )
+        let uppercaseProofResult = SolanaSccpProofResult(
+            version: proofResult.version,
+            backend: proofResult.backend,
+            proofBytes: proofResult.proofBytes,
+            proofBase64: proofResult.proofBase64,
+            publicInputs: SolanaSccpPublicInputs(
+                messageId: proofResult.publicInputs.messageId,
+                payloadHash: proofResult.publicInputs.payloadHash,
+                commitmentRoot: proofResult.publicInputs.commitmentRoot,
+                finalizedSlot: proofResult.publicInputs.finalizedSlot,
+                parentSlot: proofResult.publicInputs.parentSlot,
+                bankSignatureCount: proofResult.publicInputs.bankSignatureCount,
+                parentBankHash: proofResult.publicInputs.parentBankHash,
+                blockhash: proofResult.publicInputs.blockhash,
+                bankHash: proofResult.publicInputs.bankHash,
+                transactionStatusRoot: proofResult.publicInputs.transactionStatusRoot,
+                messageProofHash: proofResult.publicInputs.messageProofHash,
+                accountInclusionRoot: proofResult.publicInputs.accountInclusionRoot,
+                accountsLtHashChecksum: proofResult.publicInputs.accountsLtHashChecksum,
+                accountsLtHashProofPublicInputsHash: proofResult.publicInputs.accountsLtHashProofPublicInputsHash,
+                sourceEventDigest: proofResult.publicInputs.sourceEventDigest,
+                sourceStateVerifierId: proofResult.publicInputs.sourceStateVerifierId,
+                sourceStateVerifierHash: proofResult.publicInputs.sourceStateVerifierHash,
+                statementHash: proofResult.publicInputs.statementHash.uppercased(),
+                destinationBindingHash: proofResult.publicInputs.destinationBindingHash.uppercased(),
+                sourceAdapterDeploymentHash: proofResult.publicInputs.sourceAdapterDeploymentHash,
+                sourceAdapterDeploymentReceiptHash: proofResult.publicInputs.sourceAdapterDeploymentReceiptHash,
+                sourceAdapterDeploymentBindingHash: proofResult.publicInputs.sourceAdapterDeploymentBindingHash
+            ),
+            witnessHash: proofResult.witnessHash,
+            proofContextHash: proofResult.proofContextHash,
+            sourceAdapterDeploymentBindingHash: proofResult.sourceAdapterDeploymentBindingHash,
+            sourceStateVerifierId: proofResult.sourceStateVerifierId,
+            sourceStateVerifierHash: proofResult.sourceStateVerifierHash,
+            proofContext: uppercaseProofContext,
+            sourceAdapterDeploymentBinding: proofResult.sourceAdapterDeploymentBinding,
+            envelopeHash: proofResult.envelopeHash
+        )
+        let normalizedMetadataSubmission = try buildSolanaSccpSubmission(SolanaSccpSubmissionInput(
+            publicInputs: SolanaSccpSubmissionPublicInputs(
+                messageId: submissionPublicInputs.messageId.uppercased(),
+                payloadHash: submissionPublicInputs.payloadHash.uppercased(),
+                targetDomain: submissionPublicInputs.targetDomain,
+                commitmentRoot: submissionPublicInputs.commitmentRoot.uppercased(),
+                finalityHeight: submissionPublicInputs.finalityHeight,
+                finalityBlockHash: submissionPublicInputs.finalityBlockHash.uppercased()
+            ),
+            proofBytes: uppercaseProofResult.proofBytes,
+            bundleBytes: Data([5, 6, 7]),
+            statementHash: proofResult.proofContext.statementHash.uppercased(),
+            destinationBindingHash: solanaDestinationBindingHash.uppercased(),
+            proofContextHash: proofResult.proofContextHash.uppercased(),
+            proofResult: uppercaseProofResult
+        ))
+        XCTAssertEqual(normalizedMetadataSubmission.proofContextHash, proofResult.proofContextHash)
+        XCTAssertEqual(normalizedMetadataSubmission.statementHash, proofResult.proofContext.statementHash)
+        XCTAssertEqual(normalizedMetadataSubmission.destinationBindingHash, solanaDestinationBindingHash)
+        let missingEnvelopeProofResult = SolanaSccpProofResult(
+            version: proofResult.version,
+            backend: proofResult.backend,
+            proofBytes: proofResult.proofBytes,
+            proofBase64: proofResult.proofBase64,
+            publicInputs: proofResult.publicInputs,
+            witnessHash: proofResult.witnessHash,
+            proofContextHash: proofResult.proofContextHash,
+            sourceAdapterDeploymentBindingHash: proofResult.sourceAdapterDeploymentBindingHash,
+            sourceStateVerifierId: proofResult.sourceStateVerifierId,
+            sourceStateVerifierHash: proofResult.sourceStateVerifierHash,
+            proofContext: proofResult.proofContext,
+            sourceAdapterDeploymentBinding: proofResult.sourceAdapterDeploymentBinding,
+            envelopeHash: sccpZeroHashV1
+        )
+        XCTAssertThrowsError(try SolanaSccpSubmissionInput(
+            publicInputs: submissionPublicInputs,
+            proofResult: missingEnvelopeProofResult,
+            bundleBytes: Data([5, 6, 7])
+        )) { error in
+            XCTAssertEqual(error as? SolanaSccpProverError, .invalidHex32("proofResult.envelopeHash"))
+        }
+        let tamperedEnvelopeProofResult = SolanaSccpProofResult(
+            version: proofResult.version,
+            backend: proofResult.backend,
+            proofBytes: proofResult.proofBytes,
+            proofBase64: proofResult.proofBase64,
+            publicInputs: proofResult.publicInputs,
+            witnessHash: proofResult.witnessHash,
+            proofContextHash: proofResult.proofContextHash,
+            sourceAdapterDeploymentBindingHash: proofResult.sourceAdapterDeploymentBindingHash,
+            sourceStateVerifierId: proofResult.sourceStateVerifierId,
+            sourceStateVerifierHash: proofResult.sourceStateVerifierHash,
+            proofContext: proofResult.proofContext,
+            sourceAdapterDeploymentBinding: proofResult.sourceAdapterDeploymentBinding,
+            envelopeHash: "0x" + String(repeating: "aa", count: 32)
+        )
+        XCTAssertThrowsError(try SolanaSccpSubmissionInput(
+            publicInputs: submissionPublicInputs,
+            proofResult: tamperedEnvelopeProofResult,
+            bundleBytes: Data([5, 6, 7])
+        )) { error in
+            XCTAssertEqual(error as? SolanaSccpProverError, .invalidString("proofResult.envelopeHash"))
+        }
+        let tamperedDeploymentBindingProofResult = SolanaSccpProofResult(
+            version: proofResult.version,
+            backend: proofResult.backend,
+            proofBytes: proofResult.proofBytes,
+            proofBase64: proofResult.proofBase64,
+            publicInputs: proofResult.publicInputs,
+            witnessHash: proofResult.witnessHash,
+            proofContextHash: proofResult.proofContextHash,
+            sourceAdapterDeploymentBindingHash: proofResult.sourceAdapterDeploymentBindingHash,
+            sourceStateVerifierId: proofResult.sourceStateVerifierId,
+            sourceStateVerifierHash: proofResult.sourceStateVerifierHash,
+            proofContext: proofResult.proofContext,
+            sourceAdapterDeploymentBinding: SolanaSccpSourceAdapterDeploymentBinding(
+                version: proofResult.sourceAdapterDeploymentBinding.version,
+                sourceDomain: proofResult.sourceAdapterDeploymentBinding.sourceDomain,
+                targetDomain: proofResult.sourceAdapterDeploymentBinding.targetDomain,
+                sourceAdapterDeploymentHash: "0x" + String(repeating: "ee", count: 32),
+                sourceAdapterDeploymentReceiptHash: proofResult.sourceAdapterDeploymentBinding.sourceAdapterDeploymentReceiptHash
+            ),
+            envelopeHash: proofResult.envelopeHash
+        )
+        XCTAssertThrowsError(try SolanaSccpSubmissionInput(
+            publicInputs: submissionPublicInputs,
+            proofResult: tamperedDeploymentBindingProofResult,
+            bundleBytes: Data([5, 6, 7])
+        )) { error in
+            XCTAssertEqual(
+                error as? SolanaSccpProverError,
+                .invalidString("proofResult.sourceAdapterDeploymentBindingHash")
+            )
+        }
+        func proofResultPublicInputs(
+            parentSlot: UInt64? = nil,
+            messageProofHash: String? = nil,
+            sourceStateVerifierId: String? = nil,
+            sourceStateVerifierHash: String? = nil,
+            sourceAdapterDeploymentHash: String? = nil
+        ) -> SolanaSccpPublicInputs {
+            SolanaSccpPublicInputs(
+                messageId: proofResult.publicInputs.messageId,
+                payloadHash: proofResult.publicInputs.payloadHash,
+                commitmentRoot: proofResult.publicInputs.commitmentRoot,
+                finalizedSlot: proofResult.publicInputs.finalizedSlot,
+                parentSlot: parentSlot ?? proofResult.publicInputs.parentSlot,
+                bankSignatureCount: proofResult.publicInputs.bankSignatureCount,
+                parentBankHash: proofResult.publicInputs.parentBankHash,
+                blockhash: proofResult.publicInputs.blockhash,
+                bankHash: proofResult.publicInputs.bankHash,
+                transactionStatusRoot: proofResult.publicInputs.transactionStatusRoot,
+                messageProofHash: messageProofHash ?? proofResult.publicInputs.messageProofHash,
+                accountInclusionRoot: proofResult.publicInputs.accountInclusionRoot,
+                accountsLtHashChecksum: proofResult.publicInputs.accountsLtHashChecksum,
+                accountsLtHashProofPublicInputsHash: proofResult.publicInputs.accountsLtHashProofPublicInputsHash,
+                sourceEventDigest: proofResult.publicInputs.sourceEventDigest,
+                sourceStateVerifierId: sourceStateVerifierId ?? proofResult.publicInputs.sourceStateVerifierId,
+                sourceStateVerifierHash: sourceStateVerifierHash ?? proofResult.publicInputs.sourceStateVerifierHash,
+                statementHash: proofResult.publicInputs.statementHash,
+                destinationBindingHash: proofResult.publicInputs.destinationBindingHash,
+                sourceAdapterDeploymentHash: sourceAdapterDeploymentHash ?? proofResult.publicInputs.sourceAdapterDeploymentHash,
+                sourceAdapterDeploymentReceiptHash: proofResult.publicInputs.sourceAdapterDeploymentReceiptHash,
+                sourceAdapterDeploymentBindingHash: proofResult.publicInputs.sourceAdapterDeploymentBindingHash
+            )
+        }
+        func makeProofResult(
+            version: UInt8 = proofResult.version,
+            proofBase64: String = proofResult.proofBase64,
+            publicInputs: SolanaSccpPublicInputs = proofResult.publicInputs,
+            witnessHash: String = proofResult.witnessHash,
+            proofContext: SolanaSccpProofContext = proofResult.proofContext,
+            sourceAdapterDeploymentBinding: SolanaSccpSourceAdapterDeploymentBinding = proofResult.sourceAdapterDeploymentBinding
+        ) -> SolanaSccpProofResult {
+            SolanaSccpProofResult(
+                version: version,
+                backend: proofResult.backend,
+                proofBytes: proofResult.proofBytes,
+                proofBase64: proofBase64,
+                publicInputs: publicInputs,
+                witnessHash: witnessHash,
+                proofContextHash: proofResult.proofContextHash,
+                sourceAdapterDeploymentBindingHash: proofResult.sourceAdapterDeploymentBindingHash,
+                sourceStateVerifierId: proofResult.sourceStateVerifierId,
+                sourceStateVerifierHash: proofResult.sourceStateVerifierHash,
+                proofContext: proofContext,
+                sourceAdapterDeploymentBinding: sourceAdapterDeploymentBinding,
+                envelopeHash: proofResult.envelopeHash
+            )
+        }
+        XCTAssertThrowsError(try SolanaSccpSubmissionInput(
+            publicInputs: submissionPublicInputs,
+            proofResult: makeProofResult(version: 2),
+            bundleBytes: Data([5, 6, 7])
+        )) { error in
+            XCTAssertEqual(error as? SolanaSccpProverError, .invalidString("proofResult.version"))
+        }
+        XCTAssertThrowsError(try SolanaSccpSubmissionInput(
+            publicInputs: submissionPublicInputs,
+            proofResult: makeProofResult(proofBase64: "AAAA"),
+            bundleBytes: Data([5, 6, 7])
+        )) { error in
+            XCTAssertEqual(error as? SolanaSccpProverError, .invalidString("proofResult.proofBase64"))
+        }
+        XCTAssertThrowsError(try SolanaSccpSubmissionInput(
+            publicInputs: submissionPublicInputs,
+            proofResult: makeProofResult(witnessHash: sccpZeroHashV1),
+            bundleBytes: Data([5, 6, 7])
+        )) { error in
+            XCTAssertEqual(error as? SolanaSccpProverError, .invalidHex32("proofResult.witnessHash"))
+        }
+        XCTAssertThrowsError(try SolanaSccpSubmissionInput(
+            publicInputs: submissionPublicInputs,
+            proofResult: makeProofResult(proofContext: SolanaSccpProofContext(
+                version: 2,
+                statementHash: proofResult.proofContext.statementHash,
+                destinationBindingHash: proofResult.proofContext.destinationBindingHash
+            )),
+            bundleBytes: Data([5, 6, 7])
+        )) { error in
+            XCTAssertEqual(error as? SolanaSccpProverError, .invalidString("proofResult.proofContext.version"))
+        }
+        XCTAssertThrowsError(try SolanaSccpSubmissionInput(
+            publicInputs: submissionPublicInputs,
+            proofResult: makeProofResult(sourceAdapterDeploymentBinding: SolanaSccpSourceAdapterDeploymentBinding(
+                version: 2,
+                sourceDomain: proofResult.sourceAdapterDeploymentBinding.sourceDomain,
+                targetDomain: proofResult.sourceAdapterDeploymentBinding.targetDomain,
+                sourceAdapterDeploymentHash: proofResult.sourceAdapterDeploymentBinding.sourceAdapterDeploymentHash,
+                sourceAdapterDeploymentReceiptHash: proofResult.sourceAdapterDeploymentBinding.sourceAdapterDeploymentReceiptHash
+            )),
+            bundleBytes: Data([5, 6, 7])
+        )) { error in
+            XCTAssertEqual(
+                error as? SolanaSccpProverError,
+                .invalidString("proofResult.sourceAdapterDeploymentBinding.version")
+            )
+        }
+        XCTAssertThrowsError(try SolanaSccpSubmissionInput(
+            publicInputs: submissionPublicInputs,
+            proofResult: makeProofResult(publicInputs: proofResultPublicInputs(
+                parentSlot: proofResult.publicInputs.finalizedSlot
+            )),
+            bundleBytes: Data([5, 6, 7])
+        )) { error in
+            XCTAssertEqual(error as? SolanaSccpProverError, .invalidString("proofResult.publicInputs.parentSlot"))
+        }
+        XCTAssertThrowsError(try SolanaSccpSubmissionInput(
+            publicInputs: submissionPublicInputs,
+            proofResult: makeProofResult(publicInputs: proofResultPublicInputs(messageProofHash: sccpZeroHashV1)),
+            bundleBytes: Data([5, 6, 7])
+        )) { error in
+            XCTAssertEqual(error as? SolanaSccpProverError, .invalidHex32("proofResult.publicInputs.messageProofHash"))
+        }
+        let tamperedDeploymentPublicInputs = proofResultPublicInputs(
+            sourceAdapterDeploymentHash: "0x" + String(repeating: "ee", count: 32)
+        )
+        let tamperedDeploymentPublicInputsProofResult = SolanaSccpProofResult(
+            version: proofResult.version,
+            backend: proofResult.backend,
+            proofBytes: proofResult.proofBytes,
+            proofBase64: proofResult.proofBase64,
+            publicInputs: tamperedDeploymentPublicInputs,
+            witnessHash: proofResult.witnessHash,
+            proofContextHash: proofResult.proofContextHash,
+            sourceAdapterDeploymentBindingHash: proofResult.sourceAdapterDeploymentBindingHash,
+            sourceStateVerifierId: proofResult.sourceStateVerifierId,
+            sourceStateVerifierHash: proofResult.sourceStateVerifierHash,
+            proofContext: proofResult.proofContext,
+            sourceAdapterDeploymentBinding: proofResult.sourceAdapterDeploymentBinding,
+            envelopeHash: proofResult.envelopeHash
+        )
+        XCTAssertThrowsError(try SolanaSccpSubmissionInput(
+            publicInputs: submissionPublicInputs,
+            proofResult: tamperedDeploymentPublicInputsProofResult,
+            bundleBytes: Data([5, 6, 7])
+        )) { error in
+            XCTAssertEqual(
+                error as? SolanaSccpProverError,
+                .invalidString("proofResult.publicInputs.sourceAdapterDeploymentHash")
+            )
+        }
+        let tamperedSourceVerifierIdProofResult = SolanaSccpProofResult(
+            version: proofResult.version,
+            backend: proofResult.backend,
+            proofBytes: proofResult.proofBytes,
+            proofBase64: proofResult.proofBase64,
+            publicInputs: proofResultPublicInputs(sourceStateVerifierId: "sccp:solana:wrong-source-state-verifier:v1"),
+            witnessHash: proofResult.witnessHash,
+            proofContextHash: proofResult.proofContextHash,
+            sourceAdapterDeploymentBindingHash: proofResult.sourceAdapterDeploymentBindingHash,
+            sourceStateVerifierId: proofResult.sourceStateVerifierId,
+            sourceStateVerifierHash: proofResult.sourceStateVerifierHash,
+            proofContext: proofResult.proofContext,
+            sourceAdapterDeploymentBinding: proofResult.sourceAdapterDeploymentBinding,
+            envelopeHash: proofResult.envelopeHash
+        )
+        XCTAssertThrowsError(try SolanaSccpSubmissionInput(
+            publicInputs: submissionPublicInputs,
+            proofResult: tamperedSourceVerifierIdProofResult,
+            bundleBytes: Data([5, 6, 7])
+        )) { error in
+            XCTAssertEqual(
+                error as? SolanaSccpProverError,
+                .invalidString("proofResult.publicInputs.sourceStateVerifierId")
+            )
+        }
+        let tamperedSourceVerifierHashProofResult = SolanaSccpProofResult(
+            version: proofResult.version,
+            backend: proofResult.backend,
+            proofBytes: proofResult.proofBytes,
+            proofBase64: proofResult.proofBase64,
+            publicInputs: proofResultPublicInputs(sourceStateVerifierHash: "0x" + String(repeating: "dd", count: 32)),
+            witnessHash: proofResult.witnessHash,
+            proofContextHash: proofResult.proofContextHash,
+            sourceAdapterDeploymentBindingHash: proofResult.sourceAdapterDeploymentBindingHash,
+            sourceStateVerifierId: proofResult.sourceStateVerifierId,
+            sourceStateVerifierHash: proofResult.sourceStateVerifierHash,
+            proofContext: proofResult.proofContext,
+            sourceAdapterDeploymentBinding: proofResult.sourceAdapterDeploymentBinding,
+            envelopeHash: proofResult.envelopeHash
+        )
+        XCTAssertThrowsError(try SolanaSccpSubmissionInput(
+            publicInputs: submissionPublicInputs,
+            proofResult: tamperedSourceVerifierHashProofResult,
+            bundleBytes: Data([5, 6, 7])
+        )) { error in
+            XCTAssertEqual(
+                error as? SolanaSccpProverError,
+                .invalidString("proofResult.publicInputs.sourceStateVerifierHash")
+            )
+        }
+        XCTAssertThrowsError(try buildSolanaSccpSubmission(SolanaSccpSubmissionInput(
+            publicInputs: Self.sampleSolanaSubmissionPublicInputs(version: 2),
+            proofBytes: Data([1]),
+            bundleBytes: Data([2]),
+            statementHash: String(repeating: "56", count: 32),
+            destinationBindingHash: solanaDestinationBindingHash
+        ))) { error in
+            XCTAssertEqual(error as? SolanaSccpProverError, .invalidString("publicInputs.version"))
+        }
+        XCTAssertThrowsError(try buildSolanaSccpSubmission(SolanaSccpSubmissionInput(
+            publicInputs: submissionPublicInputs,
+            proofBytes: proofResult.proofBytes,
+            bundleBytes: Data([2]),
+            statementHash: proofResult.proofContext.statementHash,
+            destinationBindingHash: proofResult.proofContext.destinationBindingHash
+        ))) { error in
+            XCTAssertEqual(error as? SolanaSccpProverError, .invalidString("proofResult"))
+        }
+        XCTAssertThrowsError(try buildSolanaSccpSubmission(SolanaSccpSubmissionInput(
+            publicInputs: Self.sampleSolanaSubmissionPublicInputs(targetDomain: sccpDomainSora),
+            proofBytes: Data([1, 2]),
+            bundleBytes: Data([5, 6, 7]),
+            statementHash: String(repeating: "56", count: 32),
+            destinationBindingHash: solanaDestinationBindingHash
+        ))) { error in
+            XCTAssertEqual(error as? SolanaSccpProverError, .invalidString("publicInputs.targetDomain"))
+        }
+        XCTAssertThrowsError(try buildSolanaSccpSubmission(SolanaSccpSubmissionInput(
+            publicInputs: submissionPublicInputs,
+            proofBytes: proofResult.proofBytes,
+            bundleBytes: Data([2]),
+            statementHash: proofResult.proofContext.statementHash,
+            destinationBindingHash: String(repeating: "78", count: 32),
+            proofContextHash: proofResult.proofContextHash,
+            proofResult: proofResult
+        ))) { error in
+            XCTAssertEqual(error as? SolanaSccpProverError, .invalidString("destinationBindingHash"))
+        }
+        XCTAssertThrowsError(try buildSolanaSccpSubmission(SolanaSccpSubmissionInput(
+            publicInputs: submissionPublicInputs,
+            proofBytes: proofResult.proofBytes,
+            bundleBytes: Data([2]),
+            statementHash: proofResult.proofContext.statementHash,
+            destinationBindingHash: solanaDestinationBindingHash,
+            proofContextHash: String(repeating: "cc", count: 32),
+            proofResult: proofResult
+        ))) { error in
+            XCTAssertEqual(error as? SolanaSccpProverError, .proofContextHashMismatch)
+        }
+    }
+
     func testProverWrapsExternalProofBytes() async throws {
+        let productionWitness = Self.sampleProductionWitness()
         let prover = SolanaSccpProver { request in
             XCTAssertEqual(request.backend, sccpSolanaRecursiveProofBackendV1)
+            XCTAssertEqual(request.proofContext.statementHash, "0x" + String(repeating: "56", count: 32))
             return Data([1, 2, 3, 4])
         }
 
-        let result = try await prover.prove(Self.sampleWitness())
+        let result = try await prover.prove(productionWitness)
 
         XCTAssertEqual(result.proofBytes, Data([1, 2, 3, 4]))
         XCTAssertEqual(result.proofBase64, "AQIDBA==")
+        XCTAssertEqual(result.proofContextHash, try buildSolanaSccpProofRequest(productionWitness).proofContextHash)
         XCTAssertTrue(result.envelopeHash.hasPrefix("0x"))
         XCTAssertEqual(result.envelopeHash.count, 66)
+
+        let request = try buildSolanaSccpProofRequest(productionWitness)
+        let directResult = try wrapSolanaSccpProofResult(
+            proofBytes: Data([1, 2, 3, 4]),
+            request: request
+        )
+        XCTAssertEqual(directResult, result)
+        XCTAssertThrowsError(try wrapSolanaSccpProofResult(
+            proofBytes: Data([0, 0]),
+            request: request
+        )) { error in
+            XCTAssertEqual(error as? SolanaSccpProverError, .allZeroProof)
+        }
+        XCTAssertThrowsError(try wrapSolanaSccpProofResult(
+            proofBytes: Data(repeating: 1, count: sccpNativeRecursiveMaxProofBytes + 1),
+            request: request
+        )) { error in
+            XCTAssertEqual(error as? SolanaSccpProverError, .invalidString("proofBytes"))
+        }
+        let mismatchedRequest = SolanaSccpProofRequest(
+            version: request.version,
+            backend: "debug-solana-backend",
+            sourceDomain: request.sourceDomain,
+            targetDomain: request.targetDomain,
+            mainnetGenesisHash: request.mainnetGenesisHash,
+            witnessHash: request.witnessHash,
+            proofContextHash: request.proofContextHash,
+            sourceAdapterDeploymentBindingHash: request.sourceAdapterDeploymentBindingHash,
+            sourceStateVerifierId: request.sourceStateVerifierId,
+            sourceStateVerifierHash: request.sourceStateVerifierHash,
+            publicInputs: request.publicInputs,
+            witness: request.witness,
+            proofContext: request.proofContext,
+            sourceAdapterDeploymentBinding: request.sourceAdapterDeploymentBinding
+        )
+        XCTAssertThrowsError(try wrapSolanaSccpProofResult(
+            proofBytes: Data([1, 2, 3, 4]),
+            request: mismatchedRequest
+        )) { error in
+            XCTAssertEqual(error as? SolanaSccpProverError, .invalidString("request"))
+        }
+
+        let missingProductionBinding = SolanaSccpProver { _ in
+            XCTFail("local prover should not be invoked")
+            return Data([1])
+        }
+        do {
+            _ = try await missingProductionBinding.prove(Self.sampleProductionWitness(
+                mainnetGenesisHash: "devnet"
+            ))
+            XCTFail("expected invalid mainnetGenesisHash")
+        } catch let error as SolanaSccpProverError {
+            XCTAssertEqual(error, .invalidString("mainnetGenesisHash"))
+        }
+        do {
+            _ = try await missingProductionBinding.prove(Self.sampleProductionWitness(
+                accountsLtHash: nil
+            ))
+            XCTFail("expected invalid accountsLtHash")
+        } catch let error as SolanaSccpProverError {
+            XCTAssertEqual(error, .invalidString("accountsLtHash"))
+        }
+        do {
+            _ = try await missingProductionBinding.prove(Self.sampleWitness())
+            XCTFail("expected invalid sourceStateVerifierHash")
+        } catch let error as SolanaSccpProverError {
+            XCTAssertEqual(error, .invalidHex32("sourceStateVerifierHash"))
+        }
+        do {
+            _ = try await missingProductionBinding.prove(Self.sampleProductionWitness(
+                sourceStateVerifierHash: sccpSolanaTemplateSourceStateVerifierHashV1
+            ))
+            XCTFail("expected invalid sourceStateVerifierHash")
+        } catch let error as SolanaSccpProverError {
+            XCTAssertEqual(error, .invalidHex32("sourceStateVerifierHash"))
+        }
+        do {
+            _ = try await missingProductionBinding.prove(Self.sampleWitness(
+                sourceStateVerifierHash: String(repeating: "ef", count: 32),
+                sourceAdapterDeploymentHash: String(repeating: "ab", count: 32),
+                sourceAdapterDeploymentReceiptHash: String(repeating: "cd", count: 32)
+            ))
+            XCTFail("expected invalid inclusionBranch")
+        } catch let error as SolanaSccpProverError {
+            XCTAssertEqual(error, .invalidString("inclusionBranch"))
+        }
+    }
+
+    func testSolanaProverResolvesWitnessProviderBeforeBuildingRequest() async throws {
+        let input = Self.sampleProductionWitness()
+        let resolvedDestinationBindingHash = try sccpDestinationBindingHash(domain: sccpDomainSolana)
+        let expectedRequest = try buildSolanaSccpProofRequest(
+            Self.sampleProductionWitness(destinationBindingHash: resolvedDestinationBindingHash)
+        )
+        let witnessProvider = SolanaDestinationBindingWitnessProvider(
+            resolvedDestinationBindingHash: resolvedDestinationBindingHash
+        )
+        let prover = SolanaSccpProver(
+            witnessProvider: witnessProvider,
+            proveFunction: { request in
+                XCTAssertEqual(witnessProvider.resolveCount, 1)
+                XCTAssertEqual(request.proofContext.destinationBindingHash, resolvedDestinationBindingHash)
+                XCTAssertEqual(request.proofContextHash, expectedRequest.proofContextHash)
+                return Data([1, 2, 3, 4])
+            }
+        )
+
+        let result = try await prover.prove(input)
+
+        XCTAssertEqual(witnessProvider.resolveCount, 1)
+        XCTAssertEqual(result.witnessHash, expectedRequest.witnessHash)
+        XCTAssertEqual(result.proofContextHash, expectedRequest.proofContextHash)
     }
 
     func testBuildsTonMessageBodyBoc() throws {
@@ -94,10 +5293,1837 @@ final class SccpSolanaProverTests: XCTestCase {
         XCTAssertEqual(Array(body.prefix(4)), [0xb5, 0xee, 0x9c, 0x72])
         XCTAssertGreaterThan(body.count, try canonicalTonSccpPublicInputsBytes(Self.sampleTonPublicInputs()).count)
 
+        let destinationBinding = TonSccpSubmissionDestinationBindingInput(
+            key: "sora:ton",
+            bindingHash: String(repeating: "78", count: 32)
+        )
+        let manifest = TonSccpSubmissionManifestInput(
+            messageBackend: "sccp-message-v1",
+            registryBackend: "sccp-registry-v1",
+            manifestSeed: "iroha:sccp:bridge-proof:message:stark-fri:v1:ton",
+            destinationBinding: destinationBinding
+        )
+        let metadata = try canonicalTonSccpSubmissionMetadataBytes(TonSccpSubmissionMetadataInput(
+            manifest: manifest,
+            destinationBindingHash: String(repeating: "78", count: 32),
+            publicInputs: Self.sampleTonPublicInputs(),
+            statementHash: String(repeating: "bb", count: 32)
+        ))
+        XCTAssertGreaterThan(metadata.count, try canonicalTonSccpPublicInputsBytes(Self.sampleTonPublicInputs()).count)
+        XCTAssertThrowsError(try canonicalTonSccpSubmissionMetadataBytes(TonSccpSubmissionMetadataInput(
+            manifest: manifest,
+            destinationBindingHash: String(repeating: "56", count: 32),
+            publicInputs: Self.sampleTonPublicInputs(),
+            statementHash: String(repeating: "bb", count: 32)
+        ))) { error in
+            XCTAssertEqual(error as? TonSccpProverError, .invalidField("destinationBindingHash"))
+        }
+        XCTAssertThrowsError(try canonicalTonSccpSubmissionMetadataBytes(TonSccpSubmissionMetadataInput(
+            manifest: TonSccpSubmissionManifestInput(
+                counterpartyDomain: sccpDomainSolana,
+                messageBackend: "sccp-message-v1",
+                registryBackend: "sccp-registry-v1",
+                manifestSeed: "iroha:sccp:bridge-proof:message:stark-fri:v1:ton",
+                destinationBinding: destinationBinding
+            ),
+            publicInputs: Self.sampleTonPublicInputs(),
+            statementHash: String(repeating: "bb", count: 32)
+        ))) { error in
+            XCTAssertEqual(error as? TonSccpProverError, .invalidField("manifest.counterpartyDomain"))
+        }
+
         let submission = try buildTonSccpSubmission(Self.sampleTonMessageBodyInput())
+        XCTAssertEqual(submission.version, 1)
         XCTAssertEqual(submission.envelopeEncoding, sccpTonMessageBodyBocV1)
+        XCTAssertEqual(submission.submissionKind, "internal_message")
+        XCTAssertEqual(submission.verifierEntrypoint, "op::submit_sccp_message_proof")
         XCTAssertEqual(submission.messageBodyBoc, body)
         XCTAssertTrue(submission.messageBodyBocHex.hasPrefix("0xb5ee9c72"))
+        XCTAssertEqual(submission.arguments.map(\.key), ["message_body_boc"])
+        XCTAssertEqual(submission.arguments.map(\.encoding), ["ton_boc"])
+        XCTAssertEqual(submission.arguments.map(\.bytesHex), [submission.messageBodyBocHex])
+        XCTAssertEqual(submission.envelopeBytes, body)
+        XCTAssertEqual(submission.envelopeHex, submission.messageBodyBocHex)
+        XCTAssertThrowsError(try buildTonSccpSubmission(Self.sampleTonMessageBodyInput(bundleBytes: Data()))) { error in
+            XCTAssertEqual(error as? TonSccpProverError, .invalidField("bundleBytes"))
+        }
+        XCTAssertThrowsError(try buildTonSccpSubmission(Self.sampleTonMessageBodyInput(proofBytes: Data([0, 0])))) { error in
+            XCTAssertEqual(error as? TonSccpProverError, .allZeroProof)
+        }
+        XCTAssertThrowsError(try buildTonSccpSubmission(Self.sampleTonMessageBodyInput(
+            statementHash: String(repeating: "00", count: 32)
+        ))) { error in
+            XCTAssertEqual(error as? TonSccpProverError, .invalidHex32("statementHash"))
+        }
+        XCTAssertThrowsError(try buildTonSccpSubmission(Self.sampleTonMessageBodyInput(
+            destinationBindingHash: String(repeating: "00", count: 32)
+        ))) { error in
+            XCTAssertEqual(error as? TonSccpProverError, .invalidHex32("destinationBindingHash"))
+        }
+        XCTAssertThrowsError(try buildTonSccpSubmission(Self.sampleTonMessageBodyInput(
+            publicInputs: Self.sampleTonPublicInputs(targetDomain: sccpDomainSolana)
+        ))) { error in
+            XCTAssertEqual(error as? TonSccpProverError, .invalidField("publicInputs.targetDomain"))
+        }
+    }
+
+    func testTonBocRootHashBindsOrdinaryCells() throws {
+        let boc = Data(hexString: "b5ee9c720101020100070001020101000202")!
+        let checkedBoc = Data(hexString: "b5ee9c724101020100070001020101000202be1c1df5")!
+        let rootHash = "0x49725ad44ef5ed5feaa27f88679cabae427209a6bea318cb9b66030131aae6fe"
+
+        XCTAssertEqual(try tonBocRootHashes(boc), [rootHash])
+        XCTAssertEqual(try tonBocSingleRootHash(boc), rootHash)
+        XCTAssertEqual(try tonBocSingleRootHash(checkedBoc), rootHash)
+
+        var badCrc = checkedBoc
+        badCrc[badCrc.count - 1] ^= 0x01
+        XCTAssertThrowsError(try tonBocSingleRootHash(badCrc))
+
+        var changedChild = boc
+        changedChild[changedChild.count - 1] ^= 0x01
+        XCTAssertNotEqual(try tonBocSingleRootHash(changedChild), rootHash)
+
+        var cyclicRef = boc
+        cyclicRef[14] = 0
+        XCTAssertThrowsError(try tonBocSingleRootHash(cyclicRef))
+
+        var exoticCell = boc
+        exoticCell[11] |= 0x08
+        XCTAssertThrowsError(try tonBocSingleRootHash(exoticCell))
+
+        var invalidPartialData = boc
+        invalidPartialData[16] = 1
+        invalidPartialData[17] = 0
+        XCTAssertThrowsError(try tonBocSingleRootHash(invalidPartialData))
+
+        let prunedBranchBoc = Data(hexString: "b5ee9c72010101010026002848010149725ad44ef5ed5feaa27f88679cabae427209a6bea318cb9b66030131aae6fe0001")!
+        XCTAssertEqual(
+            try tonBocSingleRootHash(prunedBranchBoc),
+            "0xcc9095f882fb62a27bb19ad4aa84e19571a3283988ae40b75e238ad240cf1a96"
+        )
+
+        let legacyPrunedProofBoc = Data(hexString: "b5ee9c7201010601005f0022012001052201620203284801010bd445eea7213bd88307c204a267aa798c1bacb2ad2d781f6106a8296bc12b6500010103a0c0040004006f284801011d894d2390dbd75b607f99091580d9f1652f34c525e35ba648d4325cc7495d3e0001")!
+        XCTAssertEqual(
+            try tonBocSingleRootHash(legacyPrunedProofBoc),
+            "0x9c769b035b601b0ddc098e9b148d9bdab0761c14bfe310ac090962ba1f39739a"
+        )
+
+        let merkleProofBoc = Data(hexString: "b5ee9c7201010301002d0009460349725ad44ef5ed5feaa27f88679cabae427209a6bea318cb9b66030131aae6fe00010101020102000202")!
+        XCTAssertEqual(
+            try tonBocSingleRootHash(merkleProofBoc),
+            "0xe749bc5225cabbe3fa78fc12d74a734c365379bc0d302123dcf7bfa2ee3fbd21"
+        )
+        var mismatchedMerkleProof = merkleProofBoc
+        mismatchedMerkleProof[14] ^= 0x01
+        XCTAssertThrowsError(try tonBocSingleRootHash(mismatchedMerkleProof))
+
+        let hashmapBoc = Data(hexString: "b5ee9c72010109010028000101c001020120020702016203050103a0c004000403090103a0c0060004006f0101de08000403e7")!
+        let hashmapValueHash = "0x5a75fc0633903343b684ec73076c5a48cf6b453fc73aa316c2a6de900669e419"
+        XCTAssertEqual(
+            try tonHashmapECellRefValueHash(hashmapBoc, key: Data([17]), keyBitLen: 8),
+            hashmapValueHash
+        )
+        XCTAssertNil(try tonHashmapECellRefValueHash(hashmapBoc, key: Data([18]), keyBitLen: 8))
+        XCTAssertThrowsError(try tonHashmapECellRefValueHash(hashmapBoc, key: Data([17]), keyBitLen: 7))
+
+        let hashmapDirectProofBoc = Data(hexString: "b5ee9c72010107010063002101c00122012002062201620304284801010bd445eea7213bd88307c204a267aa798c1bacb2ad2d781f6106a8296bc12b6500010103a0c0050004006f284801011d894d2390dbd75b607f99091580d9f1652f34c525e35ba648d4325cc7495d3e0001")!
+        XCTAssertEqual(
+            try tonHashmapECellRefValueHash(hashmapDirectProofBoc, key: Data([17]), keyBitLen: 8),
+            hashmapValueHash
+        )
+        XCTAssertNil(try tonHashmapECellRefValueHash(hashmapDirectProofBoc, key: Data([1]), keyBitLen: 8))
+
+        let hashmapMerkleProofBoc = Data(hexString: "b5ee9c72010108010089000101c001094603e714f85374c2c336ed499a5a35e6c4f87441184532e7c23be795ce71b457f1bf00030222012003072201620405284801010bd445eea7213bd88307c204a267aa798c1bacb2ad2d781f6106a8296bc12b6500010103a0c0060004006f284801011d894d2390dbd75b607f99091580d9f1652f34c525e35ba648d4325cc7495d3e0001")!
+        XCTAssertEqual(
+            try tonHashmapECellRefValueHash(hashmapMerkleProofBoc, key: Data([17]), keyBitLen: 8),
+            hashmapValueHash
+        )
+
+        let shardAccountsBoc = Data(hexString: "b5ee9c72010103010073000101c00101d37fffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff84400000000000000000000000000000000000000000000000000000000000000005a75fc0633903343b684ec73076c5a48cf6b453fc73aa316c2a6de900669e41900000000000000078020000")!
+        let shardAccountKey = Data(hexString: "1100000000000000000000000000000000000000000000000000000000000000")!
+        let absentShardAccountKey = Data(hexString: "1200000000000000000000000000000000000000000000000000000000000000")!
+        XCTAssertEqual(
+            try tonShardAccountsLastTransactionHash(shardAccountsBoc, key: shardAccountKey, keyBitLen: 256),
+            hashmapValueHash
+        )
+        XCTAssertEqual(
+            try tonShardAccountsLastTransaction(shardAccountsBoc, key: shardAccountKey, keyBitLen: 256),
+            TonShardAccountLastTransaction(hash: hashmapValueHash, lt: 7)
+        )
+        XCTAssertNil(try tonShardAccountsLastTransactionHash(shardAccountsBoc, key: absentShardAccountKey, keyBitLen: 256))
+        XCTAssertThrowsError(try tonShardAccountsLastTransactionHash(shardAccountsBoc, key: Data([17]), keyBitLen: 8))
+
+        let shardStateProofBoc = Data(hexString: "b5ee9c720101060100aa00035b9023afe2ffffff110000000000000000000000000000000007000000010000000b000000000000000c000000122001020500000101c00301d37fffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff84400000000000000000000000000000000000000000000000000000000000000005a75fc0633903343b684ec73076c5a48cf6b453fc73aa316c2a6de900669e419000000000000000780400000000")!
+        XCTAssertEqual(
+            try tonShardStateProofRootHash(shardStateProofBoc),
+            "0x12a960855fea2f529c336d7325b1cca784f0f0b1a52ae149d02d046a2499e270"
+        )
+        XCTAssertEqual(
+            try tonShardStateAccountsRootHash(shardStateProofBoc),
+            "0x049a63ecefc78dc0cd468ebf47e0385807d790a2ca8e0dca5cbbeb0714567fd3"
+        )
+        var badShardStateTag = shardStateProofBoc
+        let tagRange = try XCTUnwrap(badShardStateTag.range(of: Data([0x90, 0x23, 0xaf, 0xe2])))
+        badShardStateTag[tagRange.lowerBound] ^= 0x01
+        XCTAssertThrowsError(try tonShardStateAccountsRootHash(badShardStateTag))
+        let shardIdentOffset = tagRange.lowerBound + 8
+        var badShardIdentTag = shardStateProofBoc
+        badShardIdentTag[shardIdentOffset] |= 0x80
+        XCTAssertThrowsError(try tonShardStateAccountsRootHash(badShardIdentTag))
+        var badShardIdentPrefixLen = shardStateProofBoc
+        badShardIdentPrefixLen[shardIdentOffset] = 0x3d
+        XCTAssertThrowsError(try tonShardStateAccountsRootHash(badShardIdentPrefixLen))
+    }
+
+    func testTonShardProofHashBindsWitnessMaterial() throws {
+        let branch = [Data(repeating: 0xee, count: 32)]
+        let shardStateBranch = [Data(repeating: 0x12, count: 32)]
+        let bytes = try canonicalTonSccpShardProofBytes(
+            sourceEventDigest: String(repeating: "34", count: 32),
+            masterchainSeqno: 19,
+            masterchainBlockHash: String(repeating: "aa", count: 32),
+            shardWorkchainId: 0,
+            shardShard: 0x8000_0000_0000_0000,
+            shardSeqno: 7,
+            shardBlockHash: String(repeating: "bb", count: 32),
+            shardFileHash: String(repeating: "bc", count: 32),
+            shardStateRoot: String(repeating: "cc", count: 32),
+            transactionRoot: String(repeating: "dd", count: 32),
+            transactionLt: 7,
+            shardStateLeafIndex: 0,
+            shardStateInclusionBranch: shardStateBranch,
+            inclusionBranch: branch
+        )
+
+        XCTAssertEqual(bytes.count, 309)
+        XCTAssertEqual(bytes.first, 1)
+
+        let hash = try tonSccpShardProofHash(
+            sourceEventDigest: String(repeating: "34", count: 32),
+            masterchainSeqno: 19,
+            masterchainBlockHash: String(repeating: "aa", count: 32),
+            shardWorkchainId: 0,
+            shardShard: 0x8000_0000_0000_0000,
+            shardSeqno: 7,
+            shardBlockHash: String(repeating: "bb", count: 32),
+            shardFileHash: String(repeating: "bc", count: 32),
+            shardStateRoot: String(repeating: "cc", count: 32),
+            transactionRoot: String(repeating: "dd", count: 32),
+            transactionLt: 7,
+            shardStateLeafIndex: 0,
+            shardStateInclusionBranch: shardStateBranch,
+            inclusionBranch: branch
+        )
+        let changed = try tonSccpShardProofHash(
+            sourceEventDigest: String(repeating: "34", count: 32),
+            masterchainSeqno: 19,
+            masterchainBlockHash: String(repeating: "aa", count: 32),
+            shardWorkchainId: 0,
+            shardShard: 0x8000_0000_0000_0000,
+            shardSeqno: 7,
+            shardBlockHash: String(repeating: "bb", count: 32),
+            shardFileHash: String(repeating: "bc", count: 32),
+            shardStateRoot: String(repeating: "cc", count: 32),
+            transactionRoot: String(repeating: "dd", count: 32),
+            transactionLt: 7,
+            shardStateLeafIndex: 0,
+            shardStateInclusionBranch: shardStateBranch,
+            inclusionBranch: [Data(repeating: 0x12, count: 32)]
+        )
+        let changedShardState = try tonSccpShardProofHash(
+            sourceEventDigest: String(repeating: "34", count: 32),
+            masterchainSeqno: 19,
+            masterchainBlockHash: String(repeating: "aa", count: 32),
+            shardWorkchainId: 0,
+            shardShard: 0x8000_0000_0000_0000,
+            shardSeqno: 7,
+            shardBlockHash: String(repeating: "bb", count: 32),
+            shardFileHash: String(repeating: "bc", count: 32),
+            shardStateRoot: String(repeating: "cc", count: 32),
+            transactionRoot: String(repeating: "dd", count: 32),
+            transactionLt: 7,
+            shardStateLeafIndex: 0,
+            shardStateInclusionBranch: [Data(repeating: 0xee, count: 32)],
+            inclusionBranch: branch
+        )
+        XCTAssertEqual(hash, "0x09c63ca1185b537f0a37b7b248600a0992e5b7ed64ace9d1d437db7caae00686")
+        XCTAssertNotEqual(hash, changed)
+        XCTAssertNotEqual(hash, changedShardState)
+
+        let hashmapBoc = Data(hexString: "b5ee9c72010103010073000101c00101d37fffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff84400000000000000000000000000000000000000000000000000000000000000005a75fc0633903343b684ec73076c5a48cf6b453fc73aa316c2a6de900669e41900000000000000078020000")!
+        let shardStateProofBoc = Data(hexString: "b5ee9c720101060100aa00035b9023afe2ffffff110000000000000000000000000000000007000000010000000b000000000000000c000000122001020500000101c00301d37fffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff84400000000000000000000000000000000000000000000000000000000000000005a75fc0633903343b684ec73076c5a48cf6b453fc73aa316c2a6de900669e419000000000000000780400000000")!
+        let shardAccountKey = Data(hexString: "1100000000000000000000000000000000000000000000000000000000000000")!
+        let shardStateRoot = "0x12a960855fea2f529c336d7325b1cca784f0f0b1a52ae149d02d046a2499e270"
+        let shardAccountsRoot = "0x049a63ecefc78dc0cd468ebf47e0385807d790a2ca8e0dca5cbbeb0714567fd3"
+        let dictionaryBytes = try canonicalTonSccpShardProofBytes(
+            sourceEventDigest: String(repeating: "34", count: 32),
+            masterchainSeqno: 19,
+            masterchainBlockHash: String(repeating: "aa", count: 32),
+            shardWorkchainId: 0,
+            shardShard: 0x8000_0000_0000_0000,
+            shardSeqno: 7,
+            shardBlockHash: String(repeating: "bb", count: 32),
+            shardFileHash: String(repeating: "bc", count: 32),
+            shardStateRoot: shardStateRoot,
+            transactionRoot: "0x5a75fc0633903343b684ec73076c5a48cf6b453fc73aa316c2a6de900669e419",
+            transactionLt: 7,
+            shardStateLeafIndex: 0,
+            shardStateInclusionBranch: [],
+            inclusionBranch: branch,
+            shardStateDictionaryRoot: shardAccountsRoot,
+            shardStateDictionaryKeyBitLen: 256,
+            shardStateDictionaryKey: shardAccountKey,
+            shardStateDictionaryProofBoc: hashmapBoc,
+            shardStateProofBoc: shardStateProofBoc
+        )
+        let dictionaryHash = try tonSccpShardProofHash(
+            sourceEventDigest: String(repeating: "34", count: 32),
+            masterchainSeqno: 19,
+            masterchainBlockHash: String(repeating: "aa", count: 32),
+            shardWorkchainId: 0,
+            shardShard: 0x8000_0000_0000_0000,
+            shardSeqno: 7,
+            shardBlockHash: String(repeating: "bb", count: 32),
+            shardFileHash: String(repeating: "bc", count: 32),
+            shardStateRoot: shardStateRoot,
+            transactionRoot: "0x5a75fc0633903343b684ec73076c5a48cf6b453fc73aa316c2a6de900669e419",
+            transactionLt: 7,
+            shardStateLeafIndex: 0,
+            shardStateInclusionBranch: [],
+            inclusionBranch: branch,
+            shardStateDictionaryRoot: shardAccountsRoot,
+            shardStateDictionaryKeyBitLen: 256,
+            shardStateDictionaryKey: shardAccountKey,
+            shardStateDictionaryProofBoc: hashmapBoc,
+            shardStateProofBoc: shardStateProofBoc
+        )
+        XCTAssertEqual(dictionaryBytes.count, 662)
+        XCTAssertEqual(dictionaryHash, "0x32d8b496320e6a1ce5ccf671f2bd6f0d09cb53afed8c123b86cb9327b77c88cf")
+        XCTAssertNotEqual(dictionaryHash, hash)
+        XCTAssertThrowsError(try canonicalTonSccpShardProofBytes(
+            sourceEventDigest: String(repeating: "34", count: 32),
+            masterchainSeqno: 19,
+            masterchainBlockHash: String(repeating: "aa", count: 32),
+            shardWorkchainId: 0,
+            shardShard: 0x8000_0000_0000_0000,
+            shardSeqno: 7,
+            shardBlockHash: String(repeating: "bb", count: 32),
+            shardFileHash: String(repeating: "bc", count: 32),
+            shardStateRoot: shardStateRoot,
+            transactionRoot: "0x5a75fc0633903343b684ec73076c5a48cf6b453fc73aa316c2a6de900669e419",
+            transactionLt: 8,
+            shardStateLeafIndex: 0,
+            shardStateInclusionBranch: [],
+            inclusionBranch: branch,
+            shardStateDictionaryRoot: shardAccountsRoot,
+            shardStateDictionaryKeyBitLen: 256,
+            shardStateDictionaryKey: shardAccountKey,
+            shardStateDictionaryProofBoc: hashmapBoc,
+            shardStateProofBoc: shardStateProofBoc
+        ))
+        XCTAssertThrowsError(try canonicalTonSccpShardProofBytes(
+            sourceEventDigest: String(repeating: "34", count: 32),
+            masterchainSeqno: 19,
+            masterchainBlockHash: String(repeating: "aa", count: 32),
+            shardWorkchainId: 0,
+            shardShard: 0x8000_0000_0000_0000,
+            shardSeqno: 7,
+            shardBlockHash: String(repeating: "bb", count: 32),
+            shardFileHash: String(repeating: "bc", count: 32),
+            shardStateRoot: shardStateRoot,
+            transactionRoot: "0x5a75fc0633903343b684ec73076c5a48cf6b453fc73aa316c2a6de900669e419",
+            transactionLt: 7,
+            shardStateLeafIndex: 0,
+            shardStateInclusionBranch: shardStateBranch,
+            inclusionBranch: branch,
+            shardStateDictionaryRoot: shardAccountsRoot,
+            shardStateDictionaryKeyBitLen: 256,
+            shardStateDictionaryKey: shardAccountKey,
+            shardStateDictionaryProofBoc: hashmapBoc,
+            shardStateProofBoc: shardStateProofBoc
+        ))
+        var wrongGlobalIdProofBoc = shardStateProofBoc
+        let wrongGlobalIdShardStateTag = Data([0x90, 0x23, 0xaf, 0xe2])
+        guard let wrongGlobalIdTagRange = wrongGlobalIdProofBoc.range(of: wrongGlobalIdShardStateTag) else {
+            XCTFail("test shard-state BoC contains ShardStateUnsplit tag")
+            return
+        }
+        wrongGlobalIdProofBoc.replaceSubrange(
+            (wrongGlobalIdTagRange.lowerBound + 4)..<(wrongGlobalIdTagRange.lowerBound + 8),
+            with: Data(repeating: 0, count: 4)
+        )
+        XCTAssertEqual(try tonShardStateAccountsRootHash(wrongGlobalIdProofBoc), shardAccountsRoot)
+        XCTAssertThrowsError(try canonicalTonSccpShardProofBytes(
+            sourceEventDigest: String(repeating: "34", count: 32),
+            masterchainSeqno: 19,
+            masterchainBlockHash: String(repeating: "aa", count: 32),
+            shardWorkchainId: 0,
+            shardShard: 0x8000_0000_0000_0000,
+            shardSeqno: 7,
+            shardBlockHash: String(repeating: "bb", count: 32),
+            shardFileHash: String(repeating: "bc", count: 32),
+            shardStateRoot: try tonShardStateProofRootHash(wrongGlobalIdProofBoc),
+            transactionRoot: "0x5a75fc0633903343b684ec73076c5a48cf6b453fc73aa316c2a6de900669e419",
+            transactionLt: 7,
+            shardStateLeafIndex: 0,
+            shardStateInclusionBranch: [],
+            inclusionBranch: branch,
+            shardStateDictionaryRoot: shardAccountsRoot,
+            shardStateDictionaryKeyBitLen: 256,
+            shardStateDictionaryKey: shardAccountKey,
+            shardStateDictionaryProofBoc: hashmapBoc,
+            shardStateProofBoc: wrongGlobalIdProofBoc
+        ))
+        var wrongWorkchainIdProofBoc = shardStateProofBoc
+        guard let wrongWorkchainTagRange = wrongWorkchainIdProofBoc.range(of: wrongGlobalIdShardStateTag) else {
+            XCTFail("test shard-state BoC contains ShardStateUnsplit tag")
+            return
+        }
+        let wrongWorkchainShardIdentOffset = wrongWorkchainTagRange.lowerBound + 8
+        wrongWorkchainIdProofBoc.replaceSubrange(
+            (wrongWorkchainShardIdentOffset + 1)..<(wrongWorkchainShardIdentOffset + 5),
+            with: Data(repeating: 0xff, count: 4)
+        )
+        XCTAssertEqual(try tonShardStateAccountsRootHash(wrongWorkchainIdProofBoc), shardAccountsRoot)
+        XCTAssertThrowsError(try canonicalTonSccpShardProofBytes(
+            sourceEventDigest: String(repeating: "34", count: 32),
+            masterchainSeqno: 19,
+            masterchainBlockHash: String(repeating: "aa", count: 32),
+            shardWorkchainId: 0,
+            shardShard: 0x8000_0000_0000_0000,
+            shardSeqno: 7,
+            shardBlockHash: String(repeating: "bb", count: 32),
+            shardFileHash: String(repeating: "bc", count: 32),
+            shardStateRoot: try tonShardStateProofRootHash(wrongWorkchainIdProofBoc),
+            transactionRoot: "0x5a75fc0633903343b684ec73076c5a48cf6b453fc73aa316c2a6de900669e419",
+            transactionLt: 7,
+            shardStateLeafIndex: 0,
+            shardStateInclusionBranch: [],
+            inclusionBranch: branch,
+            shardStateDictionaryRoot: shardAccountsRoot,
+            shardStateDictionaryKeyBitLen: 256,
+            shardStateDictionaryKey: shardAccountKey,
+            shardStateDictionaryProofBoc: hashmapBoc,
+            shardStateProofBoc: wrongWorkchainIdProofBoc
+        ))
+        var zeroGenUtimeProofBoc = shardStateProofBoc
+        guard let zeroGenUtimeTagRange = zeroGenUtimeProofBoc.range(of: wrongGlobalIdShardStateTag) else {
+            XCTFail("test shard-state BoC contains ShardStateUnsplit tag")
+            return
+        }
+        zeroGenUtimeProofBoc.replaceSubrange(
+            (zeroGenUtimeTagRange.lowerBound + 29)..<(zeroGenUtimeTagRange.lowerBound + 33),
+            with: Data(repeating: 0, count: 4)
+        )
+        XCTAssertThrowsError(try canonicalTonSccpShardProofBytes(
+            sourceEventDigest: String(repeating: "34", count: 32),
+            masterchainSeqno: 19,
+            masterchainBlockHash: String(repeating: "aa", count: 32),
+            shardWorkchainId: 0,
+            shardShard: 0x8000_0000_0000_0000,
+            shardSeqno: 7,
+            shardBlockHash: String(repeating: "bb", count: 32),
+            shardFileHash: String(repeating: "bc", count: 32),
+            shardStateRoot: try tonShardStateProofRootHash(zeroGenUtimeProofBoc),
+            transactionRoot: "0x5a75fc0633903343b684ec73076c5a48cf6b453fc73aa316c2a6de900669e419",
+            transactionLt: 7,
+            shardStateLeafIndex: 0,
+            shardStateInclusionBranch: [],
+            inclusionBranch: branch,
+            shardStateDictionaryRoot: shardAccountsRoot,
+            shardStateDictionaryKeyBitLen: 256,
+            shardStateDictionaryKey: shardAccountKey,
+            shardStateDictionaryProofBoc: hashmapBoc,
+            shardStateProofBoc: zeroGenUtimeProofBoc
+        ))
+        var futureMinRefMcSeqnoProofBoc = shardStateProofBoc
+        guard let futureMinRefMcSeqnoTagRange = futureMinRefMcSeqnoProofBoc.range(of: wrongGlobalIdShardStateTag) else {
+            XCTFail("test shard-state BoC contains ShardStateUnsplit tag")
+            return
+        }
+        futureMinRefMcSeqnoProofBoc[futureMinRefMcSeqnoTagRange.lowerBound + 44] = 0x14
+        XCTAssertThrowsError(try canonicalTonSccpShardProofBytes(
+            sourceEventDigest: String(repeating: "34", count: 32),
+            masterchainSeqno: 19,
+            masterchainBlockHash: String(repeating: "aa", count: 32),
+            shardWorkchainId: 0,
+            shardShard: 0x8000_0000_0000_0000,
+            shardSeqno: 7,
+            shardBlockHash: String(repeating: "bb", count: 32),
+            shardFileHash: String(repeating: "bc", count: 32),
+            shardStateRoot: try tonShardStateProofRootHash(futureMinRefMcSeqnoProofBoc),
+            transactionRoot: "0x5a75fc0633903343b684ec73076c5a48cf6b453fc73aa316c2a6de900669e419",
+            transactionLt: 7,
+            shardStateLeafIndex: 0,
+            shardStateInclusionBranch: [],
+            inclusionBranch: branch,
+            shardStateDictionaryRoot: shardAccountsRoot,
+            shardStateDictionaryKeyBitLen: 256,
+            shardStateDictionaryKey: shardAccountKey,
+            shardStateDictionaryProofBoc: hashmapBoc,
+            shardStateProofBoc: futureMinRefMcSeqnoProofBoc
+        ))
+        var basechainCustomProofBoc = shardStateProofBoc
+        guard let basechainCustomTagRange = basechainCustomProofBoc.range(of: wrongGlobalIdShardStateTag) else {
+            XCTFail("test shard-state BoC contains ShardStateUnsplit tag")
+            return
+        }
+        basechainCustomProofBoc[basechainCustomTagRange.lowerBound + 45] |= 0x40
+        XCTAssertThrowsError(try tonShardStateAccountsRootHash(basechainCustomProofBoc))
+        XCTAssertThrowsError(try canonicalTonSccpShardProofBytes(
+            sourceEventDigest: String(repeating: "34", count: 32),
+            masterchainSeqno: 19,
+            masterchainBlockHash: String(repeating: "aa", count: 32),
+            shardWorkchainId: 0,
+            shardShard: 0x8000_0000_0000_0000,
+            shardSeqno: 7,
+            shardBlockHash: String(repeating: "bb", count: 32),
+            shardFileHash: String(repeating: "bc", count: 32),
+            shardStateRoot: try tonShardStateProofRootHash(basechainCustomProofBoc),
+            transactionRoot: "0x5a75fc0633903343b684ec73076c5a48cf6b453fc73aa316c2a6de900669e419",
+            transactionLt: 7,
+            shardStateLeafIndex: 0,
+            shardStateInclusionBranch: [],
+            inclusionBranch: branch,
+            shardStateDictionaryRoot: shardAccountsRoot,
+            shardStateDictionaryKeyBitLen: 256,
+            shardStateDictionaryKey: shardAccountKey,
+            shardStateDictionaryProofBoc: hashmapBoc,
+            shardStateProofBoc: basechainCustomProofBoc
+        ))
+        var mismatchedShardPrefixProofBoc = shardStateProofBoc
+        let shardStateTag = Data([0x90, 0x23, 0xaf, 0xe2])
+        guard let shardStateTagRange = mismatchedShardPrefixProofBoc.range(of: shardStateTag) else {
+            XCTFail("test shard-state BoC contains ShardStateUnsplit tag")
+            return
+        }
+        let shardIdentOffset = shardStateTagRange.lowerBound + 8
+        mismatchedShardPrefixProofBoc[shardIdentOffset] = 0x08
+        mismatchedShardPrefixProofBoc[shardIdentOffset + 5] = 0x12
+        XCTAssertEqual(try tonShardStateAccountsRootHash(mismatchedShardPrefixProofBoc), shardAccountsRoot)
+        XCTAssertThrowsError(try canonicalTonSccpShardProofBytes(
+            sourceEventDigest: String(repeating: "34", count: 32),
+            masterchainSeqno: 19,
+            masterchainBlockHash: String(repeating: "aa", count: 32),
+            shardWorkchainId: 0,
+            shardShard: 0x1280_0000_0000_0000,
+            shardSeqno: 7,
+            shardBlockHash: String(repeating: "bb", count: 32),
+            shardFileHash: String(repeating: "bc", count: 32),
+            shardStateRoot: try tonShardStateProofRootHash(mismatchedShardPrefixProofBoc),
+            transactionRoot: "0x5a75fc0633903343b684ec73076c5a48cf6b453fc73aa316c2a6de900669e419",
+            transactionLt: 7,
+            shardStateLeafIndex: 0,
+            shardStateInclusionBranch: [],
+            inclusionBranch: branch,
+            shardStateDictionaryRoot: shardAccountsRoot,
+            shardStateDictionaryKeyBitLen: 256,
+            shardStateDictionaryKey: shardAccountKey,
+            shardStateDictionaryProofBoc: hashmapBoc,
+            shardStateProofBoc: mismatchedShardPrefixProofBoc
+        ))
+        XCTAssertThrowsError(try canonicalTonSccpShardProofBytes(
+            sourceEventDigest: String(repeating: "34", count: 32),
+            masterchainSeqno: 19,
+            masterchainBlockHash: String(repeating: "aa", count: 32),
+            shardWorkchainId: 0,
+            shardShard: 0x8000_0000_0000_0000,
+            shardSeqno: 7,
+            shardBlockHash: String(repeating: "bb", count: 32),
+            shardFileHash: String(repeating: "bc", count: 32),
+            shardStateRoot: String(repeating: "66", count: 32),
+            transactionRoot: "0x5a75fc0633903343b684ec73076c5a48cf6b453fc73aa316c2a6de900669e419",
+            transactionLt: 7,
+            shardStateLeafIndex: 0,
+            shardStateInclusionBranch: [],
+            inclusionBranch: branch,
+            shardStateDictionaryRoot: shardAccountsRoot,
+            shardStateDictionaryKeyBitLen: 256,
+            shardStateDictionaryKey: shardAccountKey,
+            shardStateDictionaryProofBoc: hashmapBoc,
+            shardStateProofBoc: shardStateProofBoc
+        ))
+        XCTAssertThrowsError(try canonicalTonSccpShardProofBytes(
+            sourceEventDigest: String(repeating: "34", count: 32),
+            masterchainSeqno: 19,
+            masterchainBlockHash: String(repeating: "aa", count: 32),
+            shardWorkchainId: 0,
+            shardShard: 0x8000_0000_0000_0000,
+            shardSeqno: 7,
+            shardBlockHash: String(repeating: "bb", count: 32),
+            shardFileHash: String(repeating: "bc", count: 32),
+            shardStateRoot: shardStateRoot,
+            transactionRoot: String(repeating: "66", count: 32),
+            transactionLt: 7,
+            shardStateLeafIndex: 0,
+            shardStateInclusionBranch: [],
+            inclusionBranch: branch,
+            shardStateDictionaryRoot: shardAccountsRoot,
+            shardStateDictionaryKeyBitLen: 256,
+            shardStateDictionaryKey: shardAccountKey,
+            shardStateDictionaryProofBoc: hashmapBoc,
+            shardStateProofBoc: shardStateProofBoc
+        ))
+        XCTAssertThrowsError(try canonicalTonSccpShardProofBytes(
+            sourceEventDigest: String(repeating: "34", count: 32),
+            masterchainSeqno: 19,
+            masterchainBlockHash: String(repeating: "aa", count: 32),
+            shardWorkchainId: 0,
+            shardShard: 0x8000_0000_0000_0000,
+            shardSeqno: 7,
+            shardBlockHash: String(repeating: "bb", count: 32),
+            shardFileHash: String(repeating: "bc", count: 32),
+            shardStateRoot: shardStateRoot,
+            transactionRoot: "0x5a75fc0633903343b684ec73076c5a48cf6b453fc73aa316c2a6de900669e419",
+            transactionLt: 7,
+            shardStateLeafIndex: 0,
+            shardStateInclusionBranch: [],
+            inclusionBranch: branch,
+            shardStateDictionaryRoot: String(repeating: "66", count: 32),
+            shardStateDictionaryKeyBitLen: 256,
+            shardStateDictionaryKey: shardAccountKey,
+            shardStateDictionaryProofBoc: hashmapBoc,
+            shardStateProofBoc: shardStateProofBoc
+        ))
+        XCTAssertThrowsError(try canonicalTonSccpShardProofBytes(
+            sourceEventDigest: String(repeating: "34", count: 32),
+            masterchainSeqno: 19,
+            masterchainBlockHash: String(repeating: "aa", count: 32),
+            shardWorkchainId: 0,
+            shardShard: 0x8000_0000_0000_0000,
+            shardSeqno: 7,
+            shardBlockHash: String(repeating: "bb", count: 32),
+            shardFileHash: String(repeating: "bc", count: 32),
+            shardStateRoot: shardStateRoot,
+            transactionRoot: "0x5a75fc0633903343b684ec73076c5a48cf6b453fc73aa316c2a6de900669e419",
+            transactionLt: 7,
+            shardStateLeafIndex: 0,
+            shardStateInclusionBranch: shardStateBranch,
+            inclusionBranch: branch,
+            shardStateDictionaryRoot: String(repeating: "00", count: 32),
+            shardStateDictionaryKeyBitLen: 256,
+            shardStateDictionaryKey: shardAccountKey,
+            shardStateDictionaryProofBoc: hashmapBoc,
+            shardStateProofBoc: shardStateProofBoc
+        ))
+        XCTAssertThrowsError(try canonicalTonSccpShardProofBytes(
+            sourceEventDigest: String(repeating: "34", count: 32),
+            masterchainSeqno: 19,
+            masterchainBlockHash: String(repeating: "aa", count: 32),
+            shardWorkchainId: 0,
+            shardShard: 0x8000_0000_0000_0000,
+            shardSeqno: 7,
+            shardBlockHash: String(repeating: "bb", count: 32),
+            shardFileHash: String(repeating: "bc", count: 32),
+            shardStateRoot: shardStateRoot,
+            transactionRoot: "0x5a75fc0633903343b684ec73076c5a48cf6b453fc73aa316c2a6de900669e419",
+            transactionLt: 7,
+            shardStateLeafIndex: 0,
+            shardStateInclusionBranch: shardStateBranch,
+            inclusionBranch: branch,
+            shardStateDictionaryRoot: shardAccountsRoot,
+            shardStateDictionaryKeyBitLen: 7,
+            shardStateDictionaryKey: Data([17]),
+            shardStateDictionaryProofBoc: hashmapBoc,
+            shardStateProofBoc: shardStateProofBoc
+        ))
+        XCTAssertThrowsError(try canonicalTonSccpShardProofBytes(
+            sourceEventDigest: String(repeating: "34", count: 32),
+            masterchainSeqno: 19,
+            masterchainBlockHash: String(repeating: "aa", count: 32),
+            shardWorkchainId: 0,
+            shardShard: 0x8000_0000_0000_0000,
+            shardSeqno: 7,
+            shardBlockHash: String(repeating: "bb", count: 32),
+            shardFileHash: String(repeating: "bc", count: 32),
+            shardStateRoot: String(repeating: "cc", count: 32),
+            transactionRoot: String(repeating: "dd", count: 32),
+            transactionLt: 7,
+            shardStateLeafIndex: 0,
+            shardStateInclusionBranch: shardStateBranch,
+            inclusionBranch: [Data([1, 2, 3])]
+        ))
+        XCTAssertThrowsError(try canonicalTonSccpShardProofBytes(
+            sourceEventDigest: String(repeating: "34", count: 32),
+            masterchainSeqno: 19,
+            masterchainBlockHash: String(repeating: "aa", count: 32),
+            shardWorkchainId: 0,
+            shardShard: 0x8000_0000_0000_0000,
+            shardSeqno: 7,
+            shardBlockHash: String(repeating: "bb", count: 32),
+            shardFileHash: String(repeating: "bc", count: 32),
+            shardStateRoot: String(repeating: "cc", count: 32),
+            transactionRoot: String(repeating: "dd", count: 32),
+            transactionLt: 7,
+            shardStateLeafIndex: 0,
+            shardStateInclusionBranch: [Data([1, 2, 3])],
+            inclusionBranch: branch
+        ))
+        XCTAssertThrowsError(try canonicalTonSccpShardProofBytes(
+            sourceEventDigest: String(repeating: "34", count: 32),
+            masterchainSeqno: 19,
+            masterchainBlockHash: String(repeating: "aa", count: 32),
+            shardWorkchainId: 0,
+            shardShard: 0x8000_0000_0000_0000,
+            shardSeqno: 7,
+            shardBlockHash: String(repeating: "bb", count: 32),
+            shardFileHash: String(repeating: "bc", count: 32),
+            shardStateRoot: String(repeating: "cc", count: 32),
+            transactionRoot: String(repeating: "dd", count: 32),
+            transactionLt: 7,
+            shardStateLeafIndex: 0,
+            shardStateInclusionBranch: shardStateBranch,
+            inclusionBranch: Array(repeating: Data(repeating: 0xee, count: 32), count: 65)
+        ))
+    }
+
+    func testTonShardStateOpenVerifyProofRequestBindsWitnessMaterial() throws {
+        let input = Self.sampleTonShardStateProofRequestInput()
+        let statement = try canonicalTonShardStateProofPublicInputsBytes(input)
+        let witness = try canonicalTonShardStateWitnessCommitmentBytes(input)
+        let context = try canonicalTonShardStateVerificationContextBytes(input)
+        let schema = try tonShardStateOpenVerifySchemaDescriptor(input)
+        let publicInputsHash = try tonShardStateProofPublicInputsHash(input)
+        let columns = try tonShardStatePublicInputColumns(input)
+        let request = try buildTonShardStateProofRequest(input)
+
+        XCTAssertEqual(statement.count, 603)
+        XCTAssertEqual(publicInputsHash, "0x82bdedb87242c4bb073b7c97cb339b7f1300e3692e327c5bc8233bd105cafb19")
+        XCTAssertEqual(witness.count, 480)
+        XCTAssertEqual(context.count, 467)
+        XCTAssertEqual(schema.count, 436)
+        XCTAssertEqual(request.circuitId, sccpTonShardStateOpenVerifyCircuitIdV1)
+        XCTAssertEqual(request.proofFamily, "stark-fri-v1")
+        XCTAssertEqual(request.fastpqPublicInputs.dsid, "0x27e44edc7d124906a8176e94557996c3")
+        XCTAssertEqual(request.fastpqPublicInputs.txSetHash, publicInputsHash)
+        XCTAssertEqual(request.shardStateProofPublicInputsHash, publicInputsHash)
+        XCTAssertEqual(columns[15][0], publicInputsHash)
+        XCTAssertEqual(request.publicInputColumns[15][0], publicInputsHash)
+        XCTAssertEqual(request.fastpqTransitions[0].key, "sccp:ton:shard-state:v1:statement")
+        XCTAssertEqual(request.fastpqTransitions[1].key, "sccp:ton:shard-state:v1:witness")
+        XCTAssertEqual(request.fastpqTransitions[2].key, "sccp:ton:shard-state:v1:context")
+        XCTAssertEqual(request.statementBytes, statement)
+        XCTAssertEqual(request.witnessCommitmentBytes, witness)
+        XCTAssertEqual(request.verificationContextBytes, context)
+        XCTAssertEqual(request.schemaDescriptor, schema)
+        let transitionProof = try Self.sampleTonValidatorSetTransitionProofInput()
+        let transitionBoundInput = Self.sampleTonShardStateProofRequestInput(
+            validatorSetTransitionProofs: [transitionProof]
+        )
+        var tamperedSignatures = transitionProof.validatorSignatureProof.signatures
+        tamperedSignatures[0][tamperedSignatures[0].startIndex] = 0xaa
+        let tamperedTransitionProof = try Self.sampleTonValidatorSetTransitionProofInput(
+            signatures: tamperedSignatures
+        )
+        XCTAssertNotEqual(
+            try canonicalTonShardStateProofPublicInputsBytes(transitionBoundInput),
+            try canonicalTonShardStateProofPublicInputsBytes(
+                Self.sampleTonShardStateProofRequestInput(
+                    validatorSetTransitionProofs: [tamperedTransitionProof]
+                )
+            )
+        )
+        var exposedShardStatement = request.statementBytes
+        exposedShardStatement[exposedShardStatement.startIndex] =
+            exposedShardStatement[exposedShardStatement.startIndex] == 0 ? 1 : 0
+        XCTAssertEqual(request.statementBytes, statement)
+        var exposedShardWitness = request.witnessCommitmentBytes
+        exposedShardWitness[exposedShardWitness.startIndex] =
+            exposedShardWitness[exposedShardWitness.startIndex] == 0 ? 1 : 0
+        XCTAssertEqual(request.witnessCommitmentBytes, witness)
+        XCTAssertThrowsError(try buildTonShardStateProofRequest(
+            Self.sampleTonShardStateProofRequestInput(
+                sourceStateVerifierHash: "0x540205f876591604ccf39f72a051ac5e82647c9e48dbd48cb129d2543971a34f"
+            )
+        )) { error in
+            XCTAssertEqual(error as? TonSccpProverError, .invalidField("sourceStateVerifierHash"))
+        }
+
+        let mismatched = Self.sampleTonShardStateProofRequestInput(transactionRoot: String(repeating: "66", count: 32))
+        XCTAssertThrowsError(try tonShardStateProofPublicInputsHash(mismatched))
+    }
+
+    func testTonFullLightClientAuditRoleProofRequests() async throws {
+        let input = try Self.sampleTonFullLightClientAuditProofInput()
+        func replacing(
+            _ input: TonSccpFullLightClientAuditProofInput,
+            masterchainConfigVerifierHash: String? = nil,
+            validatorSetTransitionVerifierHash: String? = nil,
+            shardStateVerificationProofHash: String? = nil
+        ) -> TonSccpFullLightClientAuditProofInput {
+            TonSccpFullLightClientAuditProofInput(
+                shardState: input.shardState,
+                shardStateVerificationProof: input.shardStateVerificationProof,
+                validatorSetPayloadHash: input.validatorSetPayloadHash,
+                configLeafHash: input.configLeafHash,
+                configValueHash: input.configValueHash,
+                sourceVerifierMaterialHash: input.sourceVerifierMaterialHash,
+                sourceAdapterDeploymentHash: input.sourceAdapterDeploymentHash,
+                fullLightClientGateHash: input.fullLightClientGateHash,
+                tonMasterchainConfigVerifierHash: masterchainConfigVerifierHash
+                    ?? input.tonMasterchainConfigVerifierHash,
+                tonValidatorSetTransitionVerifierHash: validatorSetTransitionVerifierHash
+                    ?? input.tonValidatorSetTransitionVerifierHash,
+                tonShardAccountsDictionaryVerifierHash: input.tonShardAccountsDictionaryVerifierHash,
+                shardStateProofPublicInputsHash: input.shardStateProofPublicInputsHash,
+                shardStateVerificationProofHash: shardStateVerificationProofHash
+                    ?? input.shardStateVerificationProofHash
+            )
+        }
+        let requests = try buildTonSccpFullLightClientAuditProofRequests(input)
+        let shardStateProofPublicInputsHash = try tonShardStateProofPublicInputsHash(input.shardState)
+        let shardStateVerificationProofHash = try tonSccpShardStateVerificationProofHash(
+            input.shardStateVerificationProof
+        )
+        XCTAssertThrowsError(
+            try canonicalTonSccpSourceStateVerificationProofBytes(
+                TonSccpSourceStateVerificationProof(
+                    version: 0,
+                    proofBytes: Data([1, 2, 3])
+                )
+            )
+        ) { error in
+            XCTAssertEqual(error as? TonSccpProverError, .invalidField("sourceStateVerificationProof"))
+        }
+
+        XCTAssertEqual(requests.masterchainConfig.circuitId, sccpTonMasterchainConfigOpenVerifyCircuitIdV1)
+        XCTAssertEqual(
+            requests.validatorSetTransition.circuitId,
+            sccpTonValidatorSetTransitionOpenVerifyCircuitIdV1
+        )
+        XCTAssertEqual(
+            requests.shardAccountsDictionary.circuitId,
+            sccpTonShardAccountsDictionaryOpenVerifyCircuitIdV1
+        )
+        XCTAssertEqual(Set([
+            requests.masterchainConfig.circuitId,
+            requests.validatorSetTransition.circuitId,
+            requests.shardAccountsDictionary.circuitId,
+        ]).count, 3)
+        XCTAssertEqual(
+            [
+                requests.masterchainConfig.role,
+                requests.validatorSetTransition.role,
+                requests.shardAccountsDictionary.role,
+            ],
+            ["masterchain_config", "validator_set_transition", "shard_accounts_dictionary"]
+        )
+        XCTAssertGreaterThan(
+            try canonicalTonSccpFullLightClientAuditStatementBytes(input, role: .masterchainConfig).count,
+            0
+        )
+        for request in [
+            requests.masterchainConfig,
+            requests.validatorSetTransition,
+            requests.shardAccountsDictionary,
+        ] {
+            let role: TonSccpFullLightClientAuditRole
+            switch request.roleCode {
+            case 1:
+                role = .masterchainConfig
+            case 2:
+                role = .validatorSetTransition
+            default:
+                role = .shardAccountsDictionary
+            }
+            XCTAssertEqual(request.version, 1)
+            XCTAssertEqual(request.proofFamily, "stark-fri-v1")
+            XCTAssertEqual(request.parameterSet, "fastpq-lane-balanced")
+            XCTAssertEqual(request.sourceDomain, sccpDomainTon)
+            XCTAssertEqual(request.masterchainSeqno, "19")
+            XCTAssertEqual(request.shardSeqno, "7")
+            XCTAssertEqual(request.sourceStateVerifierId, sccpTonMainnetShardStateVerifierIdV1)
+            XCTAssertEqual(request.fullLightClientGateHash, input.fullLightClientGateHash)
+            XCTAssertEqual(request.shardStateProofPublicInputsHash, shardStateProofPublicInputsHash)
+            XCTAssertEqual(request.shardStateVerificationProofHash, shardStateVerificationProofHash)
+            XCTAssertEqual(request.fastpqTransitions.count, 3)
+            XCTAssertEqual(request.fastpqTransitions.map(\.key), request.fastpqTransitions.map(\.key).sorted())
+            XCTAssertTrue(request.fastpqTransitions.allSatisfy { $0.key.hasPrefix("0x") })
+            XCTAssertEqual(
+                request.auditStatementHash,
+                try tonSccpFullLightClientAuditStatementHash(input, role: role)
+            )
+        }
+        XCTAssertEqual(requests.masterchainConfig.publicInputColumns.count, 17)
+        XCTAssertEqual(requests.validatorSetTransition.publicInputColumns.count, 16)
+        XCTAssertEqual(requests.shardAccountsDictionary.publicInputColumns.count, 17)
+        XCTAssertEqual(
+            requests.masterchainConfig.publicInputColumns,
+            try tonSccpFullLightClientAuditPublicInputColumns(input, role: .masterchainConfig)
+        )
+        XCTAssertEqual(
+            requests.masterchainConfig.schemaDescriptor,
+            try tonSccpFullLightClientAuditOpenVerifySchemaDescriptor(input, role: .masterchainConfig)
+        )
+        var exposedAuditStatement = requests.masterchainConfig.statementBytes
+        exposedAuditStatement[exposedAuditStatement.startIndex] =
+            exposedAuditStatement[exposedAuditStatement.startIndex] == 0 ? 1 : 0
+        XCTAssertEqual(
+            requests.masterchainConfig.statementBytes,
+            try canonicalTonSccpFullLightClientAuditStatementBytes(input, role: .masterchainConfig)
+        )
+        var exposedAuditSchema = requests.shardAccountsDictionary.schemaDescriptor
+        exposedAuditSchema[exposedAuditSchema.startIndex] =
+            exposedAuditSchema[exposedAuditSchema.startIndex] == 0 ? 1 : 0
+        XCTAssertEqual(
+            requests.shardAccountsDictionary.schemaDescriptor,
+            try tonSccpFullLightClientAuditOpenVerifySchemaDescriptor(input, role: .shardAccountsDictionary)
+        )
+        XCTAssertEqual(requests.masterchainConfig.fastpqPublicInputs.oldRoot, input.shardState.masterchainConfigRoot)
+        XCTAssertEqual(
+            requests.validatorSetTransition.fastpqPublicInputs.oldRoot,
+            input.shardState.sourceTrustAnchorHash
+        )
+        XCTAssertEqual(requests.shardAccountsDictionary.fastpqPublicInputs.newRoot, input.shardState.transactionRoot)
+
+        let shardRequest = try buildTonShardStateProofRequest(input.shardState)
+        let wrappedShard = try wrapTonSccpSourceStateVerificationProof(
+            proofBytes: Data([9, 8, 7]),
+            request: shardRequest
+        )
+        XCTAssertEqual(wrappedShard.circuitId, sccpTonShardStateOpenVerifyCircuitIdV1)
+        XCTAssertEqual(wrappedShard.proofBytes, Data([9, 8, 7]))
+        XCTAssertEqual(wrappedShard.proofBase64, "CQgH")
+        var exposedTonProofBytes = wrappedShard.proofBytes
+        exposedTonProofBytes[0] = 0
+        XCTAssertEqual(wrappedShard.proofBytes, Data([9, 8, 7]))
+        XCTAssertEqual(wrappedShard.proofBase64, "CQgH")
+        XCTAssertGreaterThan(try canonicalTonSccpSourceStateVerificationProofBytes(wrappedShard).count, 0)
+        let wrappedAudit = try wrapTonSccpSourceStateVerificationProof(
+            proofBytes: Data([1, 2, 3]),
+            request: requests.masterchainConfig
+        )
+        XCTAssertEqual(wrappedAudit.circuitId, sccpTonMasterchainConfigOpenVerifyCircuitIdV1)
+        XCTAssertEqual(wrappedAudit.proofBase64, "AQID")
+        XCTAssertGreaterThan(try canonicalTonSccpSourceStateVerificationProofBytes(wrappedAudit).count, 0)
+        XCTAssertThrowsError(
+            try wrapTonSccpSourceStateVerificationProof(
+                proofBytes: Data(repeating: 0, count: 2),
+                request: shardRequest
+            )
+        ) { error in
+            XCTAssertEqual(error as? TonSccpProverError, .allZeroProof)
+        }
+        var tamperedShardTransitions = shardRequest.fastpqTransitions
+        tamperedShardTransitions[0] = TonShardStateFastpqTransition(
+            key: tamperedShardTransitions[0].key,
+            operation: tamperedShardTransitions[0].operation,
+            oldValue: tamperedShardTransitions[0].oldValue,
+            newValue: "0x00"
+        )
+        let tamperedShardRequest = TonShardStateProofRequest(
+            version: shardRequest.version,
+            proofFamily: shardRequest.proofFamily,
+            circuitId: shardRequest.circuitId,
+            parameterSet: shardRequest.parameterSet,
+            sourceDomain: shardRequest.sourceDomain,
+            masterchainSeqno: shardRequest.masterchainSeqno,
+            shardSeqno: shardRequest.shardSeqno,
+            sourceStateVerifierId: shardRequest.sourceStateVerifierId,
+            sourceStateVerifierHash: shardRequest.sourceStateVerifierHash,
+            shardStateProofPublicInputsHash: shardRequest.shardStateProofPublicInputsHash,
+            statementBytes: shardRequest.statementBytes,
+            witnessCommitmentBytes: shardRequest.witnessCommitmentBytes,
+            verificationContextBytes: shardRequest.verificationContextBytes,
+            schemaDescriptor: shardRequest.schemaDescriptor,
+            publicInputColumns: shardRequest.publicInputColumns,
+            fastpqPublicInputs: shardRequest.fastpqPublicInputs,
+            fastpqTransitions: tamperedShardTransitions
+        )
+        XCTAssertThrowsError(try wrapTonSccpSourceStateVerificationProof(
+            proofBytes: Data([9, 8, 7]),
+            request: tamperedShardRequest
+        )) { error in
+            XCTAssertEqual(error as? TonSccpProverError, .invalidField("request.fastpqTransitions"))
+        }
+        let tamperedShardFastpqInputs = TonShardStateFastpqPublicInputs(
+            dsid: "0x" + String(repeating: "00", count: 16),
+            slot: shardRequest.fastpqPublicInputs.slot,
+            oldRoot: shardRequest.fastpqPublicInputs.oldRoot,
+            newRoot: shardRequest.fastpqPublicInputs.newRoot,
+            permRoot: shardRequest.fastpqPublicInputs.permRoot,
+            txSetHash: shardRequest.fastpqPublicInputs.txSetHash
+        )
+        let tamperedShardDsidRequest = TonShardStateProofRequest(
+            version: shardRequest.version,
+            proofFamily: shardRequest.proofFamily,
+            circuitId: shardRequest.circuitId,
+            parameterSet: shardRequest.parameterSet,
+            sourceDomain: shardRequest.sourceDomain,
+            masterchainSeqno: shardRequest.masterchainSeqno,
+            shardSeqno: shardRequest.shardSeqno,
+            sourceStateVerifierId: shardRequest.sourceStateVerifierId,
+            sourceStateVerifierHash: shardRequest.sourceStateVerifierHash,
+            shardStateProofPublicInputsHash: shardRequest.shardStateProofPublicInputsHash,
+            statementBytes: shardRequest.statementBytes,
+            witnessCommitmentBytes: shardRequest.witnessCommitmentBytes,
+            verificationContextBytes: shardRequest.verificationContextBytes,
+            schemaDescriptor: shardRequest.schemaDescriptor,
+            publicInputColumns: shardRequest.publicInputColumns,
+            fastpqPublicInputs: tamperedShardFastpqInputs,
+            fastpqTransitions: shardRequest.fastpqTransitions
+        )
+        XCTAssertThrowsError(try wrapTonSccpSourceStateVerificationProof(
+            proofBytes: Data([9, 8, 7]),
+            request: tamperedShardDsidRequest
+        )) { error in
+            XCTAssertEqual(error as? TonSccpProverError, .invalidField("request.fastpqPublicInputs.dsid"))
+        }
+        var tamperedAuditTransitions = requests.masterchainConfig.fastpqTransitions
+        tamperedAuditTransitions[0] = TonSccpFullLightClientAuditFastpqTransition(
+            key: tamperedAuditTransitions[0].key,
+            operation: tamperedAuditTransitions[0].operation,
+            oldValue: tamperedAuditTransitions[0].oldValue,
+            newValue: "0x00"
+        )
+        let tamperedAuditRequest = TonSccpFullLightClientAuditProofRequest(
+            version: requests.masterchainConfig.version,
+            proofFamily: requests.masterchainConfig.proofFamily,
+            circuitId: requests.masterchainConfig.circuitId,
+            parameterSet: requests.masterchainConfig.parameterSet,
+            role: requests.masterchainConfig.role,
+            roleCode: requests.masterchainConfig.roleCode,
+            sourceDomain: requests.masterchainConfig.sourceDomain,
+            masterchainSeqno: requests.masterchainConfig.masterchainSeqno,
+            shardSeqno: requests.masterchainConfig.shardSeqno,
+            verifierId: requests.masterchainConfig.verifierId,
+            verifierHash: requests.masterchainConfig.verifierHash,
+            sourceStateVerifierId: requests.masterchainConfig.sourceStateVerifierId,
+            sourceStateVerifierHash: requests.masterchainConfig.sourceStateVerifierHash,
+            sourceVerifierMaterialHash: requests.masterchainConfig.sourceVerifierMaterialHash,
+            sourceAdapterDeploymentHash: requests.masterchainConfig.sourceAdapterDeploymentHash,
+            fullLightClientGateHash: requests.masterchainConfig.fullLightClientGateHash,
+            shardStateProofPublicInputsHash: requests.masterchainConfig.shardStateProofPublicInputsHash,
+            shardStateVerificationProofHash: requests.masterchainConfig.shardStateVerificationProofHash,
+            auditStatementHash: requests.masterchainConfig.auditStatementHash,
+            statementBytes: requests.masterchainConfig.statementBytes,
+            verificationContextBytes: requests.masterchainConfig.verificationContextBytes,
+            schemaDescriptor: requests.masterchainConfig.schemaDescriptor,
+            publicInputColumns: requests.masterchainConfig.publicInputColumns,
+            fastpqPublicInputs: requests.masterchainConfig.fastpqPublicInputs,
+            fastpqTransitions: tamperedAuditTransitions
+        )
+        XCTAssertThrowsError(try wrapTonSccpSourceStateVerificationProof(
+            proofBytes: Data([9, 8, 7]),
+            request: tamperedAuditRequest
+        )) { error in
+            XCTAssertEqual(error as? TonSccpProverError, .invalidField("request.fastpqTransitions"))
+        }
+        let tamperedAuditFastpqInputs = TonSccpFullLightClientAuditFastpqPublicInputs(
+            dsid: requests.masterchainConfig.fastpqPublicInputs.dsid,
+            slot: requests.masterchainConfig.fastpqPublicInputs.slot,
+            oldRoot: requests.masterchainConfig.fastpqPublicInputs.oldRoot,
+            newRoot: requests.masterchainConfig.fastpqPublicInputs.newRoot,
+            permRoot: requests.masterchainConfig.fastpqPublicInputs.permRoot,
+            txSetHash: "0x" + String(repeating: "aa", count: 32)
+        )
+        let tamperedAuditTxRequest = TonSccpFullLightClientAuditProofRequest(
+            version: requests.masterchainConfig.version,
+            proofFamily: requests.masterchainConfig.proofFamily,
+            circuitId: requests.masterchainConfig.circuitId,
+            parameterSet: requests.masterchainConfig.parameterSet,
+            role: requests.masterchainConfig.role,
+            roleCode: requests.masterchainConfig.roleCode,
+            sourceDomain: requests.masterchainConfig.sourceDomain,
+            masterchainSeqno: requests.masterchainConfig.masterchainSeqno,
+            shardSeqno: requests.masterchainConfig.shardSeqno,
+            verifierId: requests.masterchainConfig.verifierId,
+            verifierHash: requests.masterchainConfig.verifierHash,
+            sourceStateVerifierId: requests.masterchainConfig.sourceStateVerifierId,
+            sourceStateVerifierHash: requests.masterchainConfig.sourceStateVerifierHash,
+            sourceVerifierMaterialHash: requests.masterchainConfig.sourceVerifierMaterialHash,
+            sourceAdapterDeploymentHash: requests.masterchainConfig.sourceAdapterDeploymentHash,
+            fullLightClientGateHash: requests.masterchainConfig.fullLightClientGateHash,
+            shardStateProofPublicInputsHash: requests.masterchainConfig.shardStateProofPublicInputsHash,
+            shardStateVerificationProofHash: requests.masterchainConfig.shardStateVerificationProofHash,
+            auditStatementHash: requests.masterchainConfig.auditStatementHash,
+            statementBytes: requests.masterchainConfig.statementBytes,
+            verificationContextBytes: requests.masterchainConfig.verificationContextBytes,
+            schemaDescriptor: requests.masterchainConfig.schemaDescriptor,
+            publicInputColumns: requests.masterchainConfig.publicInputColumns,
+            fastpqPublicInputs: tamperedAuditFastpqInputs,
+            fastpqTransitions: requests.masterchainConfig.fastpqTransitions
+        )
+        XCTAssertThrowsError(try wrapTonSccpSourceStateVerificationProof(
+            proofBytes: Data([9, 8, 7]),
+            request: tamperedAuditTxRequest
+        )) { error in
+            XCTAssertEqual(error as? TonSccpProverError, .invalidField("request.fastpqPublicInputs.txSetHash"))
+        }
+
+        var preflightCallbackInvoked = false
+        let preflightCheckingProver = TonSccpSourceStateProver(
+            shardStateProveFunction: { _ in
+                preflightCallbackInvoked = true
+                return Data([9, 8, 7])
+            },
+            fullLightClientAuditProveFunction: { _ in
+                preflightCallbackInvoked = true
+                return Data([9, 8, 7])
+            }
+        )
+        do {
+            _ = try await preflightCheckingProver.proveShardState(request: tamperedShardRequest)
+            XCTFail("expected malformed TON shard-state request to fail before callback")
+        } catch {
+            XCTAssertEqual(error as? TonSccpProverError, .invalidField("request.fastpqTransitions"))
+        }
+        XCTAssertFalse(preflightCallbackInvoked)
+        do {
+            _ = try await preflightCheckingProver.proveFullLightClientAudit(request: tamperedAuditRequest)
+            XCTFail("expected malformed TON audit request to fail before callback")
+        } catch {
+            XCTAssertEqual(error as? TonSccpProverError, .invalidField("request.fastpqTransitions"))
+        }
+        XCTAssertFalse(preflightCallbackInvoked)
+
+        var seenTonRoles: [String] = []
+        var seenTonShardCallbackRequest: TonShardStateProofRequest?
+        var seenTonAuditCallbackRequests: [TonSccpFullLightClientAuditProofRequest] = []
+        let tonSourceStateProver = TonSccpSourceStateProver(
+            shardStateProveFunction: { request in
+                seenTonRoles.append("shard_state")
+                seenTonShardCallbackRequest = request
+                XCTAssertEqual(request.circuitId, sccpTonShardStateOpenVerifyCircuitIdV1)
+                XCTAssertEqual(request, shardRequest)
+                var callbackStatementBytes = request.statementBytes
+                callbackStatementBytes[callbackStatementBytes.startIndex] =
+                    callbackStatementBytes[callbackStatementBytes.startIndex] == 0 ? 1 : 0
+                XCTAssertEqual(request.statementBytes, shardRequest.statementBytes)
+                var callbackColumns = request.publicInputColumns
+                callbackColumns[0][0] = "0x00"
+                XCTAssertEqual(request.publicInputColumns, shardRequest.publicInputColumns)
+                return Data([9, 8, 7])
+            },
+            fullLightClientAuditProveFunction: { request in
+                let expectedAuditRequests = [
+                    requests.masterchainConfig,
+                    requests.validatorSetTransition,
+                    requests.shardAccountsDictionary,
+                ]
+                let expectedRequest = expectedAuditRequests[seenTonAuditCallbackRequests.count]
+                seenTonRoles.append(request.role)
+                seenTonAuditCallbackRequests.append(request)
+                XCTAssertEqual(request, expectedRequest)
+                var callbackStatementBytes = request.statementBytes
+                callbackStatementBytes[callbackStatementBytes.startIndex] =
+                    callbackStatementBytes[callbackStatementBytes.startIndex] == 0 ? 1 : 0
+                XCTAssertEqual(request.statementBytes, expectedRequest.statementBytes)
+                var callbackColumns = request.publicInputColumns
+                callbackColumns[0][0] = "0x00"
+                XCTAssertEqual(request.publicInputColumns, expectedRequest.publicInputColumns)
+                return Data([9, 8, 7])
+            }
+        )
+        let linkedShardProof = try await tonSourceStateProver.proveShardState(input.shardState)
+        let linkedTonProofs = try await tonSourceStateProver.proveFullLightClientAudit(input)
+        XCTAssertEqual(linkedShardProof.circuitId, sccpTonShardStateOpenVerifyCircuitIdV1)
+        XCTAssertEqual(linkedShardProof.proofBase64, "CQgH")
+        XCTAssertEqual(
+            seenTonRoles,
+            ["shard_state", "masterchain_config", "validator_set_transition", "shard_accounts_dictionary"]
+        )
+        XCTAssertEqual(seenTonShardCallbackRequest, shardRequest)
+        XCTAssertEqual(
+            seenTonAuditCallbackRequests,
+            [requests.masterchainConfig, requests.validatorSetTransition, requests.shardAccountsDictionary]
+        )
+        XCTAssertEqual(
+            linkedTonProofs.validatorSetTransition.circuitId,
+            sccpTonValidatorSetTransitionOpenVerifyCircuitIdV1
+        )
+        XCTAssertEqual(
+            linkedTonProofs.shardAccountsDictionary.circuitId,
+            sccpTonShardAccountsDictionaryOpenVerifyCircuitIdV1
+        )
+        XCTAssertEqual(linkedTonProofs.shardAccountsDictionary.proofBytes, Data([9, 8, 7]))
+        XCTAssertEqual(linkedTonProofs.shardAccountsDictionary.proofBase64, "CQgH")
+        do {
+            _ = try await TonSccpSourceStateProver().proveFullLightClientAudit(input)
+            XCTFail("expected missing TON source-state prover")
+        } catch {
+            XCTAssertEqual(error as? TonSccpProverError, .localProverUnavailable)
+        }
+
+        XCTAssertThrowsError(try buildTonSccpFullLightClientAuditProofRequests(
+            replacing(input, validatorSetTransitionVerifierHash: "0x" + String(repeating: "b1", count: 32))
+        )) { error in
+            XCTAssertEqual(error as? TonSccpProverError, .invalidField("tonAuditVerifierHash"))
+        }
+        XCTAssertThrowsError(try buildTonSccpFullLightClientAuditProofRequests(
+            replacing(input, masterchainConfigVerifierHash: "0x" + String(repeating: "d4", count: 32))
+        )) { error in
+            XCTAssertEqual(error as? TonSccpProverError, .invalidField("tonAuditVerifierHash"))
+        }
+        XCTAssertThrowsError(try buildTonSccpFullLightClientAuditProofRequests(
+            replacing(
+                input,
+                masterchainConfigVerifierHash: try tonSccpFullLightClientAuditStatementHash(
+                    input,
+                    role: .masterchainConfig
+                )
+            )
+        )) { error in
+            XCTAssertEqual(error as? TonSccpProverError, .invalidField("tonAuditVerifierHash"))
+        }
+        XCTAssertThrowsError(try buildTonSccpFullLightClientAuditProofRequests(
+            replacing(
+                input,
+                masterchainConfigVerifierHash: "0xd83b3a3eb920ac8338533535cf0d6c69c69d507e84aef8ec2094564b8427c56c"
+            )
+        )) { error in
+            XCTAssertEqual(error as? TonSccpProverError, .invalidField("tonAuditVerifierHash"))
+        }
+        XCTAssertThrowsError(try buildTonSccpFullLightClientAuditProofRequests(
+            replacing(input, shardStateVerificationProofHash: "0x" + String(repeating: "aa", count: 32))
+        )) { error in
+            XCTAssertEqual(error as? TonSccpProverError, .invalidField("shardStateVerificationProofHash"))
+        }
+        XCTAssertThrowsError(try buildTonSccpFullLightClientAuditProofRequests(
+            try Self.sampleTonFullLightClientAuditProofInput(masterchainConfigProofHash: "0x" + String(repeating: "aa", count: 32))
+        )) { error in
+            XCTAssertEqual(error as? TonSccpProverError, .invalidField("masterchainConfigProofHash"))
+        }
+    }
+
+    func testTonValidatorSetTransitionHashesBindWitnessMaterial() throws {
+        let validatorPublicKeys = [Data(repeating: 0x11, count: 32), Data(repeating: 0x22, count: 32)]
+        let validatorWeights: [UInt64] = [1, 2]
+        let validatorSetHash = "0x68bfccd52bc19cf8cdaffc611d58e53824d0aee395a4d813eca0bcefb3970938"
+        let nextValidatorPublicKeys = [Data(repeating: 0x33, count: 32), Data(repeating: 0x44, count: 32)]
+        let nextValidatorWeights: [UInt64] = [3, 4]
+        let nextValidatorSetPayload = try canonicalTonValidatorSetPayloadBytes(
+            validatorPublicKeys: nextValidatorPublicKeys,
+            validatorWeights: nextValidatorWeights
+        )
+        let nextValidatorSetHash = "0x26bfcffe8913e5e4f09e56076d5a237cbc5b890d31b8912bd7eacc5d3805691f"
+        let nextValidatorSetPayloadHash = "0xb76b843e99596a049425653e9921e4227af23a5b70331940fa057f1f58314983"
+        let transitionMessageHash = "0x91eda926884eb1ae700e7b398c46f6d47fbb973efa322564894936140ccd2a19"
+        let transitionSignatureHash = "0xd784461f68495981c2c00e60316dc9353ea4b5be3bc261b26feadc7c83c4f6a7"
+        let signatureProof = TonValidatorSignatureProofInput(
+            totalWeight: 3,
+            signedWeight: 3,
+            blockMessageHash: transitionMessageHash,
+            validatorPublicKeys: validatorPublicKeys,
+            validatorWeights: validatorWeights,
+            signersBitmap: Data([0x03]),
+            signatures: [Data(repeating: 0xab, count: 64), Data(repeating: 0xcd, count: 64)]
+        )
+
+        XCTAssertEqual(
+            try canonicalTonValidatorSetBytes(
+                validatorPublicKeys: validatorPublicKeys,
+                validatorWeights: validatorWeights
+            ).count,
+            85
+        )
+        XCTAssertEqual(
+            try tonValidatorSetHash(
+                validatorPublicKeys: validatorPublicKeys,
+                validatorWeights: validatorWeights
+            ),
+            validatorSetHash
+        )
+        XCTAssertEqual(try tonValidatorSetPayloadHash(payload: nextValidatorSetPayload), nextValidatorSetPayloadHash)
+        XCTAssertEqual(try tonValidatorSetHashFromPayload(payload: nextValidatorSetPayload), nextValidatorSetHash)
+        XCTAssertEqual(
+            try canonicalTonValidatorSetTransitionMessageBytes(
+                sourceDomain: sccpDomainTon,
+                fromValidatorSetSeqno: 7,
+                toValidatorSetSeqno: 8,
+                masterchainSeqno: 19,
+                masterchainWorkchainId: -1,
+                masterchainShard: 0x8000_0000_0000_0000,
+                masterchainBlockHash: String(repeating: "aa", count: 32),
+                masterchainFileHash: String(repeating: "a5", count: 32),
+                parentValidatorSetHash: validatorSetHash,
+                nextValidatorSetHash: nextValidatorSetHash,
+                nextValidatorSetPayloadHash: nextValidatorSetPayloadHash,
+                nextValidatorSetConfigHash: String(repeating: "cc", count: 32)
+            ).count,
+            233
+        )
+        XCTAssertEqual(
+            try tonValidatorSetTransitionMessageHash(
+                sourceDomain: sccpDomainTon,
+                fromValidatorSetSeqno: 7,
+                toValidatorSetSeqno: 8,
+                masterchainSeqno: 19,
+                masterchainWorkchainId: -1,
+                masterchainShard: 0x8000_0000_0000_0000,
+                masterchainBlockHash: String(repeating: "aa", count: 32),
+                masterchainFileHash: String(repeating: "a5", count: 32),
+                parentValidatorSetHash: validatorSetHash,
+                nextValidatorSetHash: nextValidatorSetHash,
+                nextValidatorSetPayloadHash: nextValidatorSetPayloadHash,
+                nextValidatorSetConfigHash: String(repeating: "cc", count: 32)
+            ),
+            transitionMessageHash
+        )
+        XCTAssertEqual(
+            try canonicalTonValidatorSetTransitionSignatureBytes(
+                sourceDomain: sccpDomainTon,
+                fromValidatorSetSeqno: 7,
+                toValidatorSetSeqno: 8,
+                masterchainSeqno: 19,
+                masterchainWorkchainId: -1,
+                masterchainShard: 0x8000_0000_0000_0000,
+                masterchainBlockHash: String(repeating: "aa", count: 32),
+                masterchainFileHash: String(repeating: "a5", count: 32),
+                parentValidatorSetHash: validatorSetHash,
+                nextValidatorSetHash: nextValidatorSetHash,
+                nextValidatorSetPayload: nextValidatorSetPayload,
+                nextValidatorSetPayloadHash: nextValidatorSetPayloadHash,
+                nextValidatorSetConfigHash: String(repeating: "cc", count: 32),
+                transitionMessageHash: transitionMessageHash,
+                validatorSignatureProof: signatureProof
+            ).count,
+            676
+        )
+        XCTAssertEqual(
+            try tonValidatorSetTransitionSignatureHash(
+                sourceDomain: sccpDomainTon,
+                fromValidatorSetSeqno: 7,
+                toValidatorSetSeqno: 8,
+                masterchainSeqno: 19,
+                masterchainWorkchainId: -1,
+                masterchainShard: 0x8000_0000_0000_0000,
+                masterchainBlockHash: String(repeating: "aa", count: 32),
+                masterchainFileHash: String(repeating: "a5", count: 32),
+                parentValidatorSetHash: validatorSetHash,
+                nextValidatorSetHash: nextValidatorSetHash,
+                nextValidatorSetPayload: nextValidatorSetPayload,
+                nextValidatorSetPayloadHash: nextValidatorSetPayloadHash,
+                nextValidatorSetConfigHash: String(repeating: "cc", count: 32),
+                transitionMessageHash: transitionMessageHash,
+                validatorSignatureProof: signatureProof
+            ),
+            transitionSignatureHash
+        )
+        XCTAssertThrowsError(try canonicalTonValidatorSetTransitionSignatureBytes(
+            sourceDomain: sccpDomainTon,
+            fromValidatorSetSeqno: 7,
+            toValidatorSetSeqno: 8,
+            masterchainSeqno: 19,
+            masterchainWorkchainId: -1,
+            masterchainShard: 0x8000_0000_0000_0000,
+            masterchainBlockHash: String(repeating: "aa", count: 32),
+            masterchainFileHash: String(repeating: "a5", count: 32),
+            parentValidatorSetHash: String(repeating: "dd", count: 32),
+            nextValidatorSetHash: nextValidatorSetHash,
+            nextValidatorSetPayload: nextValidatorSetPayload,
+            nextValidatorSetPayloadHash: nextValidatorSetPayloadHash,
+            nextValidatorSetConfigHash: String(repeating: "cc", count: 32),
+            transitionMessageHash: transitionMessageHash,
+            validatorSignatureProof: signatureProof
+        ))
+        XCTAssertThrowsError(try canonicalTonValidatorSetTransitionSignatureBytes(
+            sourceDomain: sccpDomainTon,
+            fromValidatorSetSeqno: 7,
+            toValidatorSetSeqno: 8,
+            masterchainSeqno: 19,
+            masterchainWorkchainId: -1,
+            masterchainShard: 0x8000_0000_0000_0000,
+            masterchainBlockHash: String(repeating: "aa", count: 32),
+            masterchainFileHash: String(repeating: "a5", count: 32),
+            parentValidatorSetHash: validatorSetHash,
+            nextValidatorSetHash: nextValidatorSetHash,
+            nextValidatorSetPayload: nextValidatorSetPayload,
+            nextValidatorSetPayloadHash: nextValidatorSetPayloadHash,
+            nextValidatorSetConfigHash: String(repeating: "cc", count: 32),
+            transitionMessageHash: String(repeating: "dd", count: 32),
+            validatorSignatureProof: signatureProof
+        ))
+        XCTAssertThrowsError(try canonicalTonValidatorSetTransitionMessageBytes(
+            sourceDomain: sccpDomainTon,
+            fromValidatorSetSeqno: 7,
+            toValidatorSetSeqno: 9,
+            masterchainSeqno: 19,
+            masterchainWorkchainId: -1,
+            masterchainShard: 0x8000_0000_0000_0000,
+            masterchainBlockHash: String(repeating: "aa", count: 32),
+            masterchainFileHash: String(repeating: "a5", count: 32),
+            parentValidatorSetHash: validatorSetHash,
+            nextValidatorSetHash: nextValidatorSetHash,
+            nextValidatorSetPayloadHash: nextValidatorSetPayloadHash,
+            nextValidatorSetConfigHash: String(repeating: "cc", count: 32)
+        ))
+        XCTAssertThrowsError(try canonicalTonValidatorSetTransitionSignatureBytes(
+            sourceDomain: sccpDomainTon,
+            fromValidatorSetSeqno: 7,
+            toValidatorSetSeqno: 8,
+            masterchainSeqno: 19,
+            masterchainWorkchainId: -1,
+            masterchainShard: 0x8000_0000_0000_0000,
+            masterchainBlockHash: String(repeating: "aa", count: 32),
+            masterchainFileHash: String(repeating: "a5", count: 32),
+            parentValidatorSetHash: validatorSetHash,
+            nextValidatorSetHash: nextValidatorSetHash,
+            nextValidatorSetPayload: nextValidatorSetPayload,
+            nextValidatorSetPayloadHash: nextValidatorSetPayloadHash,
+            nextValidatorSetConfigHash: String(repeating: "cc", count: 32),
+            transitionMessageHash: transitionMessageHash,
+            validatorSignatureProof: TonValidatorSignatureProofInput(
+                totalWeight: 3,
+                signedWeight: 3,
+                blockMessageHash: String(repeating: "dd", count: 32),
+                validatorPublicKeys: validatorPublicKeys,
+                validatorWeights: validatorWeights,
+                signersBitmap: Data([0x03]),
+                signatures: [Data(repeating: 0xab, count: 64), Data(repeating: 0xcd, count: 64)]
+            )
+        ))
+        XCTAssertThrowsError(try canonicalTonValidatorSetBytes(
+            validatorPublicKeys: validatorPublicKeys,
+            validatorWeights: [1, 0]
+        ))
+        XCTAssertThrowsError(try canonicalTonValidatorSetBytes(
+            validatorPublicKeys: [Data(repeating: 0, count: 32), validatorPublicKeys[1]],
+            validatorWeights: validatorWeights
+        ))
+        var zeroKeyValidatorSetPayload = try canonicalTonValidatorSetPayloadBytes(
+            validatorPublicKeys: validatorPublicKeys,
+            validatorWeights: validatorWeights
+        )
+        zeroKeyValidatorSetPayload.replaceSubrange(5 ..< 37, with: Data(repeating: 0, count: 32))
+        XCTAssertThrowsError(try tonValidatorSetHashFromPayload(payload: zeroKeyValidatorSetPayload))
+        let oversizedValidatorPublicKeys = (0 ... 1024).map { index -> Data in
+            var publicKey = Data(repeating: 0, count: 32)
+            publicKey[0] = 0x80
+            var encodedIndex = UInt32(index).littleEndian
+            withUnsafeBytes(of: &encodedIndex) { bytes in
+                publicKey.replaceSubrange(28 ..< 32, with: bytes)
+            }
+            return publicKey
+        }
+        XCTAssertThrowsError(try canonicalTonValidatorSetBytes(
+            validatorPublicKeys: oversizedValidatorPublicKeys,
+            validatorWeights: Array(repeating: 1, count: oversizedValidatorPublicKeys.count)
+        ))
+        var oversizedValidatorSetPayload = Data([1])
+        var oversizedCount = UInt32(1025).littleEndian
+        withUnsafeBytes(of: &oversizedCount) { oversizedValidatorSetPayload.append(contentsOf: $0) }
+        for publicKey in oversizedValidatorPublicKeys {
+            oversizedValidatorSetPayload.append(publicKey)
+            var weight = UInt64(1).littleEndian
+            withUnsafeBytes(of: &weight) { oversizedValidatorSetPayload.append(contentsOf: $0) }
+        }
+        XCTAssertThrowsError(try tonValidatorSetHashFromPayload(payload: oversizedValidatorSetPayload))
+        XCTAssertThrowsError(try canonicalTonValidatorSetTransitionSignatureBytes(
+            sourceDomain: sccpDomainTon,
+            fromValidatorSetSeqno: 7,
+            toValidatorSetSeqno: 8,
+            masterchainSeqno: 19,
+            masterchainWorkchainId: -1,
+            masterchainShard: 0x8000_0000_0000_0000,
+            masterchainBlockHash: String(repeating: "aa", count: 32),
+            masterchainFileHash: String(repeating: "a5", count: 32),
+            parentValidatorSetHash: validatorSetHash,
+            nextValidatorSetHash: nextValidatorSetHash,
+            nextValidatorSetPayload: nextValidatorSetPayload,
+            nextValidatorSetPayloadHash: nextValidatorSetPayloadHash,
+            nextValidatorSetConfigHash: String(repeating: "cc", count: 32),
+            transitionMessageHash: transitionMessageHash,
+            validatorSignatureProof: TonValidatorSignatureProofInput(
+                totalWeight: 3,
+                signedWeight: 3,
+                blockMessageHash: transitionMessageHash,
+                validatorPublicKeys: validatorPublicKeys,
+                validatorWeights: validatorWeights,
+                signersBitmap: Data([0x03]),
+                signatures: [Data(repeating: 0xab, count: 64)]
+            )
+        ))
+        XCTAssertThrowsError(try canonicalTonValidatorSetTransitionSignatureBytes(
+            sourceDomain: sccpDomainTon,
+            fromValidatorSetSeqno: 7,
+            toValidatorSetSeqno: 8,
+            masterchainSeqno: 19,
+            masterchainWorkchainId: -1,
+            masterchainShard: 0x8000_0000_0000_0000,
+            masterchainBlockHash: String(repeating: "aa", count: 32),
+            masterchainFileHash: String(repeating: "a5", count: 32),
+            parentValidatorSetHash: validatorSetHash,
+            nextValidatorSetHash: nextValidatorSetHash,
+            nextValidatorSetPayload: nextValidatorSetPayload,
+            nextValidatorSetPayloadHash: nextValidatorSetPayloadHash,
+            nextValidatorSetConfigHash: String(repeating: "cc", count: 32),
+            transitionMessageHash: transitionMessageHash,
+            validatorSignatureProof: TonValidatorSignatureProofInput(
+                totalWeight: 3,
+                signedWeight: 3,
+                blockMessageHash: transitionMessageHash,
+                validatorPublicKeys: validatorPublicKeys,
+                validatorWeights: validatorWeights,
+                signersBitmap: Data([0x03]),
+                signatures: [Data(repeating: 0xab, count: 63), Data(repeating: 0xcd, count: 64)]
+            )
+        ))
+        XCTAssertThrowsError(try canonicalTonValidatorSetTransitionSignatureBytes(
+            sourceDomain: sccpDomainTon,
+            fromValidatorSetSeqno: 7,
+            toValidatorSetSeqno: 8,
+            masterchainSeqno: 19,
+            masterchainWorkchainId: -1,
+            masterchainShard: 0x8000_0000_0000_0000,
+            masterchainBlockHash: String(repeating: "aa", count: 32),
+            masterchainFileHash: String(repeating: "a5", count: 32),
+            parentValidatorSetHash: validatorSetHash,
+            nextValidatorSetHash: nextValidatorSetHash,
+            nextValidatorSetPayload: nextValidatorSetPayload,
+            nextValidatorSetPayloadHash: nextValidatorSetPayloadHash,
+            nextValidatorSetConfigHash: String(repeating: "cc", count: 32),
+            transitionMessageHash: transitionMessageHash,
+            validatorSignatureProof: TonValidatorSignatureProofInput(
+                totalWeight: 3,
+                signedWeight: 3,
+                blockMessageHash: transitionMessageHash,
+                validatorPublicKeys: validatorPublicKeys,
+                validatorWeights: validatorWeights,
+                signersBitmap: Data([0x03]),
+                signatures: [Data(repeating: 0, count: 64), Data(repeating: 0x01, count: 64)]
+            )
+        ))
+        XCTAssertThrowsError(try canonicalTonValidatorSetTransitionSignatureBytes(
+            sourceDomain: sccpDomainTon,
+            fromValidatorSetSeqno: 7,
+            toValidatorSetSeqno: 8,
+            masterchainSeqno: 19,
+            masterchainWorkchainId: -1,
+            masterchainShard: 0x8000_0000_0000_0000,
+            masterchainBlockHash: String(repeating: "aa", count: 32),
+            masterchainFileHash: String(repeating: "a5", count: 32),
+            parentValidatorSetHash: validatorSetHash,
+            nextValidatorSetHash: nextValidatorSetHash,
+            nextValidatorSetPayload: nextValidatorSetPayload,
+            nextValidatorSetPayloadHash: nextValidatorSetPayloadHash,
+            nextValidatorSetConfigHash: String(repeating: "cc", count: 32),
+            transitionMessageHash: transitionMessageHash,
+            validatorSignatureProof: TonValidatorSignatureProofInput(
+                totalWeight: 3,
+                signedWeight: 1,
+                blockMessageHash: transitionMessageHash,
+                validatorPublicKeys: validatorPublicKeys,
+                validatorWeights: validatorWeights,
+                signersBitmap: Data([0x01]),
+                signatures: [Data(repeating: 0xab, count: 64)]
+            )
+        ))
+    }
+
+    func testTonMasterchainConfigProofHashesBindWitnessMaterial() throws {
+        let validatorPublicKeys = [Data(repeating: 0x11, count: 32), Data(repeating: 0x22, count: 32)]
+        let validatorWeights: [UInt64] = [1, 2]
+        let validatorSetHash = "0x68bfccd52bc19cf8cdaffc611d58e53824d0aee395a4d813eca0bcefb3970938"
+        let validatorSetPayloadHash = "0xb322afe2faa070a2ed88a922c5ac5d27e5f9fecc41a11ffbed37cca293c4aeb0"
+        let configLeafHash = "0xed92ba8082850092da7cc296a2184cc4576877aaee08c72748d96ea449b16e39"
+        let configProofBoc = Data(hexString: "b5ee9c72010106010091000101c00101117fffffff80000008a002012b120000000100000002000200020000000000000003c00302087fff00000405005b14e3a049e28444444444444444444444444444444444444444444444444444444444444444400000000000000060005b14e3a049e288888888888888888888888888888888888888888888888888888888888888888000000000000000a0")!
+        let configRoot = "0x5bf87008e0e76085d6db977b53a89329de49a4eed8fd1ff90d8c78f096ef05af"
+        let configValueHash = "0x1aa64eb5ca0b3cb254dfada709904ce81f8b327eed0d83f2522122a0a9dddd50"
+        let configProofHash = "0x9949285613a9e9dfb4ed3728bbede7ddea36fd82ac3d7eff3955dd75e9c4941c"
+        let validatorSetPayload = try canonicalTonValidatorSetPayloadBytes(
+            validatorPublicKeys: validatorPublicKeys,
+            validatorWeights: validatorWeights
+        )
+
+        XCTAssertEqual(try tonValidatorSetPayloadHash(payload: validatorSetPayload), validatorSetPayloadHash)
+        XCTAssertEqual(try tonConfigValidatorSetPayloadFromProofBoc(configProofBoc), validatorSetPayload)
+        XCTAssertEqual(
+            try tonConfigValidatorSetPayloadHashFromProofBoc(configProofBoc),
+            validatorSetPayloadHash
+        )
+        XCTAssertEqual(try tonHashmapEProofRootHash(configProofBoc), configRoot)
+        XCTAssertEqual(
+            try tonHashmapECellRefValueHash(
+                configProofBoc,
+                key: Data([0, 0, 0, UInt8(sccpTonCurrentValidatorSetConfigParam)]),
+                keyBitLen: sccpTonConfigParamKeyBits
+            ),
+            configValueHash
+        )
+        XCTAssertEqual(
+            try canonicalTonMasterchainConfigLeafBytes(
+                sourceDomain: sccpDomainTon,
+                masterchainSeqno: 19,
+                masterchainBlockHash: String(repeating: "aa", count: 32),
+                shardStateRoot: String(repeating: "cc", count: 32),
+                validatorSetHash: validatorSetHash,
+                validatorSetPayloadHash: validatorSetPayloadHash
+            ).count,
+            141
+        )
+        XCTAssertThrowsError(try canonicalTonMasterchainConfigLeafBytes(
+            version: 0,
+            sourceDomain: sccpDomainTon,
+            masterchainSeqno: 19,
+            masterchainBlockHash: String(repeating: "aa", count: 32),
+            shardStateRoot: String(repeating: "cc", count: 32),
+            validatorSetHash: validatorSetHash,
+            validatorSetPayloadHash: validatorSetPayloadHash
+        ))
+        XCTAssertEqual(
+            try tonMasterchainConfigLeafHash(
+                sourceDomain: sccpDomainTon,
+                masterchainSeqno: 19,
+                masterchainBlockHash: String(repeating: "aa", count: 32),
+                shardStateRoot: String(repeating: "cc", count: 32),
+                validatorSetHash: validatorSetHash,
+                validatorSetPayloadHash: validatorSetPayloadHash
+            ),
+            configLeafHash
+        )
+        XCTAssertEqual(
+            try canonicalTonMasterchainConfigProofBytes(
+                sourceDomain: sccpDomainTon,
+                masterchainSeqno: 19,
+                masterchainBlockHash: String(repeating: "aa", count: 32),
+                shardStateRoot: String(repeating: "cc", count: 32),
+                configRoot: configRoot,
+                validatorSetHash: validatorSetHash,
+                validatorSetPayloadHash: validatorSetPayloadHash,
+                configLeafHash: configLeafHash,
+                configLeafIndex: sccpTonCurrentValidatorSetConfigParam,
+                configValueHash: configValueHash,
+                configDictionaryProofBoc: configProofBoc,
+                configInclusionBranch: []
+            ).count,
+            411
+        )
+        XCTAssertEqual(
+            try tonMasterchainConfigProofHash(
+                sourceDomain: sccpDomainTon,
+                masterchainSeqno: 19,
+                masterchainBlockHash: String(repeating: "aa", count: 32),
+                shardStateRoot: String(repeating: "cc", count: 32),
+                configRoot: configRoot,
+                validatorSetHash: validatorSetHash,
+                validatorSetPayloadHash: validatorSetPayloadHash,
+                configLeafHash: configLeafHash,
+                configLeafIndex: sccpTonCurrentValidatorSetConfigParam,
+                configValueHash: configValueHash,
+                configDictionaryProofBoc: configProofBoc,
+                configInclusionBranch: []
+            ),
+            configProofHash
+        )
+        XCTAssertThrowsError(try canonicalTonMasterchainConfigProofBytes(
+            sourceDomain: sccpDomainTon,
+            masterchainSeqno: 19,
+            masterchainBlockHash: String(repeating: "aa", count: 32),
+            shardStateRoot: String(repeating: "cc", count: 32),
+            configRoot: configRoot,
+            validatorSetHash: validatorSetHash,
+            validatorSetPayloadHash: validatorSetPayloadHash,
+            configLeafHash: configLeafHash,
+            configLeafIndex: 0,
+            configValueHash: configValueHash,
+            configDictionaryProofBoc: configProofBoc,
+            configInclusionBranch: []
+        ))
+        XCTAssertThrowsError(try canonicalTonMasterchainConfigProofBytes(
+            sourceDomain: sccpDomainTon,
+            masterchainSeqno: 19,
+            masterchainBlockHash: String(repeating: "aa", count: 32),
+            shardStateRoot: String(repeating: "cc", count: 32),
+            configRoot: configRoot,
+            validatorSetHash: validatorSetHash,
+            validatorSetPayloadHash: validatorSetPayloadHash,
+            configLeafHash: String(repeating: "ee", count: 32),
+            configLeafIndex: sccpTonCurrentValidatorSetConfigParam,
+            configValueHash: configValueHash,
+            configDictionaryProofBoc: configProofBoc,
+            configInclusionBranch: []
+        ))
+        let wrongValidatorSetHash = String(repeating: "ee", count: 32)
+        let wrongValidatorSetLeafHash = try tonMasterchainConfigLeafHash(
+            sourceDomain: sccpDomainTon,
+            masterchainSeqno: 19,
+            masterchainBlockHash: String(repeating: "aa", count: 32),
+            shardStateRoot: String(repeating: "cc", count: 32),
+            validatorSetHash: wrongValidatorSetHash,
+            validatorSetPayloadHash: validatorSetPayloadHash
+        )
+        XCTAssertThrowsError(try canonicalTonMasterchainConfigProofBytes(
+            sourceDomain: sccpDomainTon,
+            masterchainSeqno: 19,
+            masterchainBlockHash: String(repeating: "aa", count: 32),
+            shardStateRoot: String(repeating: "cc", count: 32),
+            configRoot: configRoot,
+            validatorSetHash: wrongValidatorSetHash,
+            validatorSetPayloadHash: validatorSetPayloadHash,
+            configLeafHash: wrongValidatorSetLeafHash,
+            configLeafIndex: sccpTonCurrentValidatorSetConfigParam,
+            configValueHash: configValueHash,
+            configDictionaryProofBoc: configProofBoc,
+            configInclusionBranch: []
+        ))
+        XCTAssertThrowsError(try canonicalTonMasterchainConfigProofBytes(
+            sourceDomain: sccpDomainSolana,
+            masterchainSeqno: 19,
+            masterchainBlockHash: String(repeating: "aa", count: 32),
+            shardStateRoot: String(repeating: "cc", count: 32),
+            configRoot: configRoot,
+            validatorSetHash: validatorSetHash,
+            validatorSetPayloadHash: validatorSetPayloadHash,
+            configLeafHash: configLeafHash,
+            configLeafIndex: sccpTonCurrentValidatorSetConfigParam,
+            configValueHash: configValueHash,
+            configDictionaryProofBoc: configProofBoc,
+            configInclusionBranch: []
+        ))
+        XCTAssertThrowsError(try canonicalTonMasterchainConfigProofBytes(
+            sourceDomain: sccpDomainTon,
+            masterchainSeqno: 19,
+            masterchainBlockHash: String(repeating: "aa", count: 32),
+            shardStateRoot: String(repeating: "cc", count: 32),
+            configRoot: configRoot,
+            validatorSetHash: validatorSetHash,
+            validatorSetPayloadHash: String(repeating: "ee", count: 32),
+            configLeafHash: configLeafHash,
+            configLeafIndex: sccpTonCurrentValidatorSetConfigParam,
+            configValueHash: configValueHash,
+            configDictionaryProofBoc: configProofBoc,
+            configInclusionBranch: []
+        ))
+        XCTAssertThrowsError(try canonicalTonMasterchainConfigProofBytes(
+            sourceDomain: sccpDomainTon,
+            masterchainSeqno: 19,
+            masterchainBlockHash: String(repeating: "aa", count: 32),
+            shardStateRoot: String(repeating: "cc", count: 32),
+            configRoot: configRoot,
+            validatorSetHash: validatorSetHash,
+            validatorSetPayloadHash: validatorSetPayloadHash,
+            configLeafHash: configLeafHash,
+            configLeafIndex: sccpTonCurrentValidatorSetConfigParam,
+            configValueHash: String(repeating: "ee", count: 32),
+            configDictionaryProofBoc: configProofBoc,
+            configInclusionBranch: []
+        ))
+        XCTAssertThrowsError(try canonicalTonMasterchainConfigProofBytes(
+            sourceDomain: sccpDomainTon,
+            masterchainSeqno: 19,
+            masterchainBlockHash: String(repeating: "aa", count: 32),
+            shardStateRoot: String(repeating: "cc", count: 32),
+            configRoot: configRoot,
+            validatorSetHash: validatorSetHash,
+            validatorSetPayloadHash: validatorSetPayloadHash,
+            configLeafHash: configLeafHash,
+            configLeafIndex: sccpTonCurrentValidatorSetConfigParam,
+            configValueHash: configValueHash,
+            configDictionaryProofBoc: configProofBoc,
+            configInclusionBranch: [Data(repeating: 0xee, count: 32)]
+        ))
+    }
+
+    func testTonMasterchainBlockMessageAndSignaturesBindWitnessMaterial() throws {
+        let validatorPublicKeys = [Data(repeating: 0x11, count: 32), Data(repeating: 0x22, count: 32)]
+        let validatorWeights: [UInt64] = [1, 2]
+        let validatorSetHash = "0x68bfccd52bc19cf8cdaffc611d58e53824d0aee395a4d813eca0bcefb3970938"
+        let configRoot = "0x5bf87008e0e76085d6db977b53a89329de49a4eed8fd1ff90d8c78f096ef05af"
+        let configProofHash = "0x9949285613a9e9dfb4ed3728bbede7ddea36fd82ac3d7eff3955dd75e9c4941c"
+        let blockMessageHash = "0x0ca07d5072adb7db3d6a0f831294c7e119c451884aaa1afcbb23e0df0911d8bd"
+        let signaturesHash = "0x7a927ad3e689e4f3679fe1d1b8ea1088b914523b0c2da0d6dc0938e5e5cf8d15"
+        let signatureProof = TonValidatorSignatureProofInput(
+            totalWeight: 3,
+            signedWeight: 3,
+            blockMessageHash: blockMessageHash,
+            validatorPublicKeys: validatorPublicKeys,
+            validatorWeights: validatorWeights,
+            signersBitmap: Data([0x03]),
+            signatures: [Data(repeating: 0xab, count: 64), Data(repeating: 0xcd, count: 64)]
+        )
+
+        XCTAssertEqual(
+            try canonicalTonMasterchainBlockMessageBytes(
+                sourceDomain: sccpDomainTon,
+                masterchainSeqno: 19,
+                masterchainWorkchainId: -1,
+                masterchainShard: 0x8000_0000_0000_0000,
+                masterchainBlockHash: String(repeating: "aa", count: 32),
+                masterchainFileHash: String(repeating: "a5", count: 32),
+                validatorSetHash: validatorSetHash,
+                masterchainConfigRoot: configRoot,
+                masterchainConfigProofHash: configProofHash,
+                shardWorkchainId: 0,
+                shardShard: 0x8000_0000_0000_0000,
+                shardSeqno: 7,
+                shardBlockHash: String(repeating: "bb", count: 32),
+                shardFileHash: String(repeating: "bc", count: 32),
+                shardStateRoot: String(repeating: "cc", count: 32),
+                transactionRoot: String(repeating: "dd", count: 32),
+                shardProofHash: String(repeating: "ee", count: 32)
+            ).count,
+            365
+        )
+        XCTAssertEqual(
+            try tonMasterchainBlockMessageHash(
+                sourceDomain: sccpDomainTon,
+                masterchainSeqno: 19,
+                masterchainWorkchainId: -1,
+                masterchainShard: 0x8000_0000_0000_0000,
+                masterchainBlockHash: String(repeating: "aa", count: 32),
+                masterchainFileHash: String(repeating: "a5", count: 32),
+                validatorSetHash: validatorSetHash,
+                masterchainConfigRoot: configRoot,
+                masterchainConfigProofHash: configProofHash,
+                shardWorkchainId: 0,
+                shardShard: 0x8000_0000_0000_0000,
+                shardSeqno: 7,
+                shardBlockHash: String(repeating: "bb", count: 32),
+                shardFileHash: String(repeating: "bc", count: 32),
+                shardStateRoot: String(repeating: "cc", count: 32),
+                transactionRoot: String(repeating: "dd", count: 32),
+                shardProofHash: String(repeating: "ee", count: 32)
+            ),
+            blockMessageHash
+        )
+        XCTAssertThrowsError(try canonicalTonMasterchainBlockMessageBytes(
+            sourceDomain: sccpDomainTon,
+            masterchainSeqno: 19,
+            masterchainWorkchainId: 0,
+            masterchainShard: 0x8000_0000_0000_0000,
+            masterchainBlockHash: String(repeating: "aa", count: 32),
+            masterchainFileHash: String(repeating: "a5", count: 32),
+            validatorSetHash: validatorSetHash,
+            masterchainConfigRoot: configRoot,
+            masterchainConfigProofHash: configProofHash,
+            shardWorkchainId: 0,
+            shardShard: 0x8000_0000_0000_0000,
+            shardSeqno: 7,
+            shardBlockHash: String(repeating: "bb", count: 32),
+            shardFileHash: String(repeating: "bc", count: 32),
+            shardStateRoot: String(repeating: "cc", count: 32),
+            transactionRoot: String(repeating: "dd", count: 32),
+            shardProofHash: String(repeating: "ee", count: 32)
+        ))
+        XCTAssertEqual(
+            try canonicalTonMasterchainValidatorSignaturesBytes(
+                signatureProof,
+                validatorSetHash: validatorSetHash
+            ).count,
+            322
+        )
+        XCTAssertEqual(
+            try tonMasterchainValidatorSignaturesHash(signatureProof, validatorSetHash: validatorSetHash),
+            signaturesHash
+        )
+        XCTAssertThrowsError(try canonicalTonMasterchainValidatorSignaturesBytes(
+            signatureProof,
+            validatorSetHash: String(repeating: "bb", count: 32)
+        ))
+        XCTAssertThrowsError(try canonicalTonMasterchainValidatorSignaturesBytes(
+            TonValidatorSignatureProofInput(
+                totalWeight: 3,
+                signedWeight: 3,
+                blockMessageHash: blockMessageHash,
+                validatorPublicKeys: validatorPublicKeys,
+                validatorWeights: validatorWeights,
+                signersBitmap: Data([0x03]),
+                signatures: [Data(repeating: 0, count: 64), Data(repeating: 0x01, count: 64)]
+            ),
+            validatorSetHash: validatorSetHash
+        ))
     }
 
     func testTonProverRequiresLinkedProofEngine() async throws {
@@ -111,61 +7137,4888 @@ final class SccpSolanaProverTests: XCTestCase {
         }
     }
 
-    func testTonProverWrapsExternalProofBytes() async throws {
-        let prover = TonSccpProver { request in
-            XCTAssertEqual(request.backend, sccpTonContractProofBackendV1)
+    func testTonProverRejectsNonProductionInputBeforeLinkedProofEngine() async throws {
+        var invoked = false
+        let prover = TonSccpProver { _ in
+            invoked = true
             return Data([1, 2, 3, 4])
         }
 
-        let result = try await prover.prove(Self.sampleTonProofRequestInput())
+        do {
+            _ = try await prover.prove(Self.sampleTonProofRequestInput(
+                sourceProofBytes: Data([9, 10]),
+                sourceStateVerifierHash: sccpZeroHashV1
+            ))
+            XCTFail("expected invalidHex32")
+        } catch let error as TonSccpProverError {
+            XCTAssertEqual(error, .invalidHex32("sourceStateVerifierHash"))
+        }
+        XCTAssertFalse(invoked)
+    }
+
+    func testTonProverWrapsExternalProofBytes() async throws {
+        var seenTonProofRequests: [TonSccpProofRequest] = []
+        let prover = TonSccpProver { request in
+            seenTonProofRequests.append(request)
+            XCTAssertEqual(request.backend, sccpTonContractProofBackendV1)
+            XCTAssertEqual(request.statementHash, "0x" + String(repeating: "56", count: 32))
+            XCTAssertEqual(request.destinationBindingHash, "0x" + String(repeating: "78", count: 32))
+            var callbackBundleBytes = request.bundleBytes
+            callbackBundleBytes[callbackBundleBytes.startIndex] =
+                callbackBundleBytes[callbackBundleBytes.startIndex] == 0 ? 1 : 0
+            XCTAssertEqual(request.bundleBytes, Data([5, 6, 7]))
+            return Data([1, 2, 3, 4])
+        }
+
+        let sourceProofInput = Self.sampleTonProofRequestInput(sourceProofBytes: Data([9, 10]))
+        let omittedSourceInput = Self.sampleTonProofRequestInput()
+        let result = try await prover.prove(sourceProofInput)
+        let omittedSourceResult = try await prover.prove(omittedSourceInput)
+        XCTAssertTrue(omittedSourceResult.sourceProofBytes.isEmpty)
+        XCTAssertEqual(
+            seenTonProofRequests,
+            [
+                try buildTonSccpProofRequest(sourceProofInput),
+                try buildTonSccpProofRequest(omittedSourceInput),
+            ]
+        )
 
         XCTAssertEqual(result.proofBytes, Data([1, 2, 3, 4]))
         XCTAssertEqual(result.proofBase64, "AQIDBA==")
+        XCTAssertEqual(result.statementHash, "0x" + String(repeating: "56", count: 32))
+        XCTAssertEqual(result.destinationBindingHash, "0x" + String(repeating: "78", count: 32))
+        XCTAssertEqual(result.sourceStateVerifierId, sccpTonMainnetShardStateVerifierIdV1)
+        XCTAssertEqual(result.sourceStateVerifierHash, "0x" + String(repeating: "cc", count: 32))
+        XCTAssertTrue(result.envelopeHash.hasPrefix("0x"))
+        XCTAssertEqual(result.envelopeHash.count, 66)
         XCTAssertTrue(result.requestHash.hasPrefix("0x"))
         XCTAssertEqual(result.requestHash.count, 66)
+
+        let submissionInput = try TonSccpMessageBodyInput(
+            proofResult: result,
+            bundleBytes: Data([5, 6, 7]),
+            metadataBytes: Data([8, 9]),
+            queryId: 7
+        )
+        XCTAssertEqual(submissionInput.publicInputs, result.publicInputs)
+        XCTAssertEqual(submissionInput.proofBytes, result.proofBytes)
+        XCTAssertEqual(result.bundleBytes, Data([5, 6, 7]))
+        XCTAssertEqual(result.sourceProofBytes, Data([9, 10]))
+        XCTAssertEqual(submissionInput.statementHash, result.proofContext.statementHash)
+        XCTAssertEqual(submissionInput.destinationBindingHash, result.proofContext.destinationBindingHash)
+        let submission = try buildTonSccpSubmission(submissionInput)
+        XCTAssertEqual(submission.submissionKind, "internal_message")
+        XCTAssertEqual(submission.verifierEntrypoint, "op::submit_sccp_message_proof")
+        let oversizedTonMessageResult = try wrapTonSccpProofResult(
+            proofBytes: Data(repeating: 1, count: 4096 * 127),
+            request: try buildTonSccpProofRequest(Self.sampleTonProofRequestInput())
+        )
+        let oversizedTonMessageInput = try TonSccpMessageBodyInput(
+            proofResult: oversizedTonMessageResult,
+            bundleBytes: Data([5, 6, 7]),
+            metadataBytes: Data([8, 9])
+        )
+        XCTAssertThrowsError(try buildTonSccpSubmission(oversizedTonMessageInput)) { error in
+            XCTAssertEqual(error as? TonSccpProverError, .invalidField("messageBodyBoc"))
+        }
+        let omittedSourceWrapped = try wrapTonSccpProofResult(
+            proofBytes: Data([1, 2, 3, 4]),
+            request: try buildTonSccpProofRequest(Self.sampleTonProofRequestInput())
+        )
+        XCTAssertTrue(omittedSourceWrapped.sourceProofBytes.isEmpty)
+        let omittedSourceSubmissionInput = try TonSccpMessageBodyInput(
+            proofResult: omittedSourceResult,
+            bundleBytes: Data([5, 6, 7])
+        )
+        XCTAssertEqual(omittedSourceSubmissionInput.bundleBytes, Data([5, 6, 7]))
+
+        XCTAssertThrowsError(try TonSccpMessageBodyInput(
+            proofResult: result,
+            bundleBytes: Data([5, 6, 8])
+        )) { error in
+            XCTAssertEqual(error as? TonSccpProverError, .invalidField("bundleBytes"))
+        }
+
+        let tamperedBundleResult = TonSccpProofResult(
+            version: result.version,
+            backend: result.backend,
+            proofBytes: result.proofBytes,
+            proofBase64: result.proofBase64,
+            publicInputs: result.publicInputs,
+            bundleBytes: Data([5, 6, 8]),
+            sourceProofBytes: result.sourceProofBytes,
+            proofContext: result.proofContext,
+            statementHash: result.statementHash,
+            destinationBindingHash: result.destinationBindingHash,
+            sourceStateVerifierId: result.sourceStateVerifierId,
+            sourceStateVerifierHash: result.sourceStateVerifierHash,
+            sourceAdapterDeploymentBindingHash: result.sourceAdapterDeploymentBindingHash,
+            sourceAdapterDeploymentBinding: result.sourceAdapterDeploymentBinding,
+            requestHash: result.requestHash,
+            envelopeHash: result.envelopeHash
+        )
+        XCTAssertThrowsError(try TonSccpMessageBodyInput(
+            proofResult: tamperedBundleResult,
+            bundleBytes: Data([5, 6, 8])
+        )) { error in
+            XCTAssertEqual(error as? TonSccpProverError, .invalidField("proofResult.requestHash"))
+        }
+
+        let mismatchedProofBase64Result = TonSccpProofResult(
+            version: result.version,
+            backend: result.backend,
+            proofBytes: result.proofBytes,
+            proofBase64: "AAAA",
+            publicInputs: result.publicInputs,
+            bundleBytes: result.bundleBytes,
+            sourceProofBytes: result.sourceProofBytes,
+            proofContext: result.proofContext,
+            statementHash: result.statementHash,
+            destinationBindingHash: result.destinationBindingHash,
+            sourceStateVerifierId: result.sourceStateVerifierId,
+            sourceStateVerifierHash: result.sourceStateVerifierHash,
+            sourceAdapterDeploymentBindingHash: result.sourceAdapterDeploymentBindingHash,
+            sourceAdapterDeploymentBinding: result.sourceAdapterDeploymentBinding,
+            requestHash: result.requestHash,
+            envelopeHash: result.envelopeHash
+        )
+        XCTAssertThrowsError(try TonSccpMessageBodyInput(
+            proofResult: mismatchedProofBase64Result,
+            bundleBytes: Data([5, 6, 7])
+        )) { error in
+            XCTAssertEqual(error as? TonSccpProverError, .invalidField("proofResult.proofBase64"))
+        }
+
+        let missingEnvelopeResult = TonSccpProofResult(
+            version: result.version,
+            backend: result.backend,
+            proofBytes: result.proofBytes,
+            proofBase64: result.proofBase64,
+            publicInputs: result.publicInputs,
+            proofContext: result.proofContext,
+            statementHash: result.statementHash,
+            destinationBindingHash: result.destinationBindingHash,
+            sourceStateVerifierId: result.sourceStateVerifierId,
+            sourceStateVerifierHash: result.sourceStateVerifierHash,
+            sourceAdapterDeploymentBindingHash: result.sourceAdapterDeploymentBindingHash,
+            sourceAdapterDeploymentBinding: result.sourceAdapterDeploymentBinding,
+            requestHash: result.requestHash,
+            envelopeHash: sccpZeroHashV1
+        )
+        XCTAssertThrowsError(try TonSccpMessageBodyInput(
+            proofResult: missingEnvelopeResult,
+            bundleBytes: Data([5, 6, 7])
+        )) { error in
+            XCTAssertEqual(error as? TonSccpProverError, .invalidHex32("proofResult.envelopeHash"))
+        }
+
+        let tamperedEnvelopeResult = TonSccpProofResult(
+            version: result.version,
+            backend: result.backend,
+            proofBytes: result.proofBytes,
+            proofBase64: result.proofBase64,
+            publicInputs: result.publicInputs,
+            proofContext: result.proofContext,
+            statementHash: result.statementHash,
+            destinationBindingHash: result.destinationBindingHash,
+            sourceStateVerifierId: result.sourceStateVerifierId,
+            sourceStateVerifierHash: result.sourceStateVerifierHash,
+            sourceAdapterDeploymentBindingHash: result.sourceAdapterDeploymentBindingHash,
+            sourceAdapterDeploymentBinding: result.sourceAdapterDeploymentBinding,
+            requestHash: result.requestHash,
+            envelopeHash: "0x" + String(repeating: "aa", count: 32)
+        )
+        XCTAssertThrowsError(try TonSccpMessageBodyInput(
+            proofResult: tamperedEnvelopeResult,
+            bundleBytes: Data([5, 6, 7])
+        )) { error in
+            XCTAssertEqual(error as? TonSccpProverError, .invalidField("proofResult.envelopeHash"))
+        }
+
+        let mismatchedProofContextResult = TonSccpProofResult(
+            version: result.version,
+            backend: result.backend,
+            proofBytes: result.proofBytes,
+            proofBase64: result.proofBase64,
+            publicInputs: result.publicInputs,
+            proofContext: TonSccpProofContext(
+                version: result.proofContext.version,
+                statementHash: "0x" + String(repeating: "99", count: 32),
+                destinationBindingHash: result.proofContext.destinationBindingHash
+            ),
+            statementHash: result.statementHash,
+            destinationBindingHash: result.destinationBindingHash,
+            sourceStateVerifierId: result.sourceStateVerifierId,
+            sourceStateVerifierHash: result.sourceStateVerifierHash,
+            sourceAdapterDeploymentBindingHash: result.sourceAdapterDeploymentBindingHash,
+            sourceAdapterDeploymentBinding: result.sourceAdapterDeploymentBinding,
+            requestHash: result.requestHash,
+            envelopeHash: result.envelopeHash
+        )
+        XCTAssertThrowsError(try TonSccpMessageBodyInput(
+            proofResult: mismatchedProofContextResult,
+            bundleBytes: Data([5, 6, 7])
+        )) { error in
+            XCTAssertEqual(error as? TonSccpProverError, .invalidField("proofResult.proofContext"))
+        }
+
+        let wrongSourceStateVerifierResult = TonSccpProofResult(
+            version: result.version,
+            backend: result.backend,
+            proofBytes: result.proofBytes,
+            proofBase64: result.proofBase64,
+            publicInputs: result.publicInputs,
+            proofContext: result.proofContext,
+            statementHash: result.statementHash,
+            destinationBindingHash: result.destinationBindingHash,
+            sourceStateVerifierId: result.sourceStateVerifierId,
+            sourceStateVerifierHash: sccpZeroHashV1,
+            sourceAdapterDeploymentBindingHash: result.sourceAdapterDeploymentBindingHash,
+            sourceAdapterDeploymentBinding: result.sourceAdapterDeploymentBinding,
+            requestHash: result.requestHash,
+            envelopeHash: result.envelopeHash
+        )
+        XCTAssertThrowsError(try TonSccpMessageBodyInput(
+            proofResult: wrongSourceStateVerifierResult,
+            bundleBytes: Data([5, 6, 7])
+        )) { error in
+            XCTAssertEqual(error as? TonSccpProverError, .invalidHex32("proofResult.sourceStateVerifierHash"))
+        }
+
+        let wrongDeploymentBindingResult = TonSccpProofResult(
+            version: result.version,
+            backend: result.backend,
+            proofBytes: result.proofBytes,
+            proofBase64: result.proofBase64,
+            publicInputs: result.publicInputs,
+            proofContext: result.proofContext,
+            statementHash: result.statementHash,
+            destinationBindingHash: result.destinationBindingHash,
+            sourceStateVerifierId: result.sourceStateVerifierId,
+            sourceStateVerifierHash: result.sourceStateVerifierHash,
+            sourceAdapterDeploymentBindingHash: result.sourceAdapterDeploymentBindingHash,
+            sourceAdapterDeploymentBinding: TonSccpSourceAdapterDeploymentBinding(
+                version: result.sourceAdapterDeploymentBinding.version,
+                sourceDomain: result.sourceAdapterDeploymentBinding.sourceDomain,
+                targetDomain: sccpDomainTon,
+                sourceAdapterDeploymentHash: result.sourceAdapterDeploymentBinding.sourceAdapterDeploymentHash,
+                sourceAdapterDeploymentReceiptHash: result.sourceAdapterDeploymentBinding.sourceAdapterDeploymentReceiptHash
+            ),
+            requestHash: result.requestHash,
+            envelopeHash: result.envelopeHash
+        )
+        XCTAssertThrowsError(try TonSccpMessageBodyInput(
+            proofResult: wrongDeploymentBindingResult,
+            bundleBytes: Data([5, 6, 7])
+        )) { error in
+            XCTAssertEqual(error as? TonSccpProverError, .invalidField("proofResult.sourceAdapterDeploymentBinding.targetDomain"))
+        }
+
+        let request = try buildTonSccpProofRequest(Self.sampleTonProofRequestInput(sourceProofBytes: Data([9, 10])))
+        let mismatchedRequest = TonSccpProofRequest(
+            version: request.version,
+            backend: request.backend,
+            sourceDomain: request.sourceDomain,
+            targetDomain: request.targetDomain,
+            publicInputs: request.publicInputs,
+            publicInputsBytes: request.publicInputsBytes,
+            bundleBytes: request.bundleBytes,
+            sourceProofBytes: request.sourceProofBytes,
+            proofContext: request.proofContext,
+            statementHash: request.statementHash,
+            destinationBindingHash: request.destinationBindingHash,
+            sourceStateVerifierId: request.sourceStateVerifierId,
+            sourceStateVerifierHash: request.sourceStateVerifierHash,
+            sourceAdapterDeploymentBindingHash: "0x" + String(repeating: "cc", count: 32),
+            sourceAdapterDeploymentBinding: request.sourceAdapterDeploymentBinding,
+            requestHash: request.requestHash
+        )
+        XCTAssertThrowsError(try wrapTonSccpProofResult(
+            proofBytes: Data([1, 2, 3, 4]),
+            request: mismatchedRequest
+        )) { error in
+            XCTAssertEqual(error as? TonSccpProverError, .invalidField("request"))
+        }
+        XCTAssertThrowsError(try wrapTonSccpProofResult(
+            proofBytes: Data([0, 0]),
+            request: request
+        )) { error in
+            XCTAssertEqual(error as? TonSccpProverError, .allZeroProof)
+        }
+        XCTAssertThrowsError(try wrapTonSccpProofResult(
+            proofBytes: Data(repeating: 1, count: sccpNativeRecursiveMaxProofBytes + 1),
+            request: request
+        )) { error in
+            XCTAssertEqual(error as? TonSccpProverError, .invalidField("proofBytes"))
+        }
     }
 
-    private static func sampleWitness() -> SolanaSccpWitnessInput {
-        SolanaSccpWitnessInput(
-            finalizedSlot: 321,
-            blockhash: "9xQeWvG816bUx9EPfYdLSdJH7Gq2Xv3yQPG8mD3kAcL7",
-            bankHash: String(repeating: "aa", count: 32),
-            transactionStatusRoot: String(repeating: "bb", count: 32),
-            messageProofHash: String(repeating: "cc", count: 32),
-            transactionSignature: "5eykt4Signature111111111111111111111111111111",
-            emitterProgramId: "Bridge111111111111111111111111111111111111",
-            messageId: String(repeating: "dd", count: 32),
-            payloadHash: String(repeating: "ee", count: 32),
-            commitmentRoot: String(repeating: "12", count: 32),
-            sourceEventDigest: String(repeating: "34", count: 32)
+    func testTonProverResolvesWitnessProviderBeforeBuildingRequest() async throws {
+        let witnessProvider = TonSourceProofWitnessProvider()
+        let prover = TonSccpProver(
+            witnessProvider: witnessProvider,
+            proveFunction: { request in
+                XCTAssertEqual(witnessProvider.resolveCount, 1)
+                XCTAssertEqual(request.sourceProofBytes, Data([9, 10]))
+                return Data([1, 2, 3, 4])
+            }
+        )
+
+        let result = try await prover.prove(Self.sampleTonProofRequestInput())
+
+        XCTAssertEqual(witnessProvider.resolveCount, 1)
+        XCTAssertEqual(result.sourceProofBytes, Data([9, 10]))
+    }
+
+    func testTonProofRequestBindsRelayContextAndSourceAdapterDeployment() throws {
+        let request = try buildTonSccpProofRequest(Self.sampleTonProofRequestInput(
+            sourceAdapterDeploymentHash: String(repeating: "aa", count: 32),
+            sourceAdapterDeploymentReceiptHash: String(repeating: "bb", count: 32)
+        ))
+
+        XCTAssertEqual(request.proofContext.statementHash, "0x" + String(repeating: "56", count: 32))
+        XCTAssertEqual(request.proofContext.destinationBindingHash, "0x" + String(repeating: "78", count: 32))
+        XCTAssertEqual(request.sourceStateVerifierId, sccpTonMainnetShardStateVerifierIdV1)
+        XCTAssertEqual(request.sourceStateVerifierHash, "0x" + String(repeating: "cc", count: 32))
+        XCTAssertEqual(request.sourceAdapterDeploymentBinding.sourceDomain, sccpDomainTon)
+        XCTAssertEqual(request.sourceAdapterDeploymentBinding.targetDomain, sccpDomainSora)
+        XCTAssertEqual(request.sourceAdapterDeploymentBinding.sourceAdapterDeploymentHash, "0x" + String(repeating: "aa", count: 32))
+        XCTAssertEqual(request.sourceAdapterDeploymentBinding.sourceAdapterDeploymentReceiptHash, "0x" + String(repeating: "bb", count: 32))
+        XCTAssertEqual(
+            request.sourceAdapterDeploymentBindingHash,
+            try sccpSourceAdapterDeploymentBindingHash(request.sourceAdapterDeploymentBinding)
+        )
+        XCTAssertTrue(request.requestHash.hasPrefix("0x"))
+        XCTAssertEqual(request.requestHash.count, 66)
+        let deploymentBinding = TonSccpSourceAdapterDeploymentBinding(
+            version: 1,
+            sourceDomain: sccpDomainTon,
+            targetDomain: sccpDomainSora,
+            sourceAdapterDeploymentHash: String(repeating: "aa", count: 32),
+            sourceAdapterDeploymentReceiptHash: String(repeating: "bb", count: 32)
+        )
+        let bindingRequest = try buildTonSccpProofRequest(TonSccpProofRequestInput(
+            publicInputs: Self.sampleTonPublicInputs(),
+            bundleBytes: Data([5, 6, 7]),
+            statementHash: String(repeating: "56", count: 32),
+            destinationBindingHash: String(repeating: "78", count: 32),
+            sourceStateVerifierHash: String(repeating: "cc", count: 32),
+            sourceAdapterDeploymentBinding: deploymentBinding
+        ))
+        XCTAssertEqual(bindingRequest.requestHash, request.requestHash)
+        XCTAssertThrowsError(try TonSccpProofRequestInput(
+            publicInputs: Self.sampleTonPublicInputs(),
+            bundleBytes: Data([5, 6, 7]),
+            statementHash: String(repeating: "56", count: 32),
+            destinationBindingHash: String(repeating: "78", count: 32),
+            sourceStateVerifierHash: String(repeating: "cc", count: 32),
+            sourceAdapterDeploymentBinding: TonSccpSourceAdapterDeploymentBinding(
+                version: 1,
+                sourceDomain: sccpDomainTon,
+                targetDomain: sccpDomainTon,
+                sourceAdapterDeploymentHash: String(repeating: "aa", count: 32),
+                sourceAdapterDeploymentReceiptHash: String(repeating: "bb", count: 32)
+            )
+        )) { error in
+            XCTAssertEqual(
+                error as? TonSccpProverError,
+                .invalidField("sourceAdapterDeploymentBinding.targetDomain")
+            )
+        }
+        let sourceStateBoundRequest = try buildTonSccpProofRequest(Self.sampleTonProofRequestInput(
+            sourceStateVerifierHash: String(repeating: "dd", count: 32),
+            sourceAdapterDeploymentHash: String(repeating: "aa", count: 32),
+            sourceAdapterDeploymentReceiptHash: String(repeating: "bb", count: 32)
+        ))
+        XCTAssertNotEqual(sourceStateBoundRequest.requestHash, request.requestHash)
+        let splitBoundaryRequest = try buildTonSccpProofRequest(Self.sampleTonProofRequestInput(
+            bundleBytes: Data([5, 6, 7]),
+            sourceProofBytes: Data([9, 10]),
+            sourceAdapterDeploymentHash: String(repeating: "aa", count: 32),
+            sourceAdapterDeploymentReceiptHash: String(repeating: "bb", count: 32)
+        ))
+        let shiftedSplitRequest = try buildTonSccpProofRequest(Self.sampleTonProofRequestInput(
+            bundleBytes: Data([5, 6, 7, 9]),
+            sourceProofBytes: Data([10]),
+            sourceAdapterDeploymentHash: String(repeating: "aa", count: 32),
+            sourceAdapterDeploymentReceiptHash: String(repeating: "bb", count: 32)
+        ))
+        XCTAssertNotEqual(splitBoundaryRequest.requestHash, shiftedSplitRequest.requestHash)
+        XCTAssertThrowsError(try buildTonSccpProofRequest(Self.sampleTonProofRequestInput(
+            sourceStateVerifierId: "debug-ton-state-verifier",
+            sourceStateVerifierHash: String(repeating: "cc", count: 32)
+        ))) { error in
+            XCTAssertEqual(error as? TonSccpProverError, .invalidField("sourceStateVerifierId"))
+        }
+        XCTAssertThrowsError(try buildTonSccpProofRequest(Self.sampleTonProofRequestInput(
+            sourceStateVerifierHash: sccpZeroHashV1
+        ))) { error in
+            XCTAssertEqual(error as? TonSccpProverError, .invalidHex32("sourceStateVerifierHash"))
+        }
+        XCTAssertThrowsError(try buildTonSccpProofRequest(Self.sampleTonProofRequestInput(
+            publicInputs: Self.sampleTonPublicInputs(payloadHash: " " + String(repeating: "ee", count: 32))
+        ))) { error in
+            XCTAssertEqual(error as? TonSccpProverError, .invalidHex32("payloadHash"))
+        }
+        XCTAssertThrowsError(try buildTonSccpProofRequest(Self.sampleTonProofRequestInput(
+            statementHash: String(repeating: "56", count: 32) + "\n"
+        ))) { error in
+            XCTAssertEqual(error as? TonSccpProverError, .invalidHex32("statementHash"))
+        }
+        XCTAssertThrowsError(try buildTonSccpProofRequest(Self.sampleTonProofRequestInput(
+            statementHash: String(repeating: "00", count: 32)
+        ))) { error in
+            XCTAssertEqual(error as? TonSccpProverError, .invalidHex32("statementHash"))
+        }
+        XCTAssertThrowsError(try buildTonSccpProofRequest(Self.sampleTonProofRequestInput(
+            destinationBindingHash: String(repeating: "00", count: 32)
+        ))) { error in
+            XCTAssertEqual(error as? TonSccpProverError, .invalidHex32("destinationBindingHash"))
+        }
+        XCTAssertThrowsError(try buildTonSccpProofRequest(Self.sampleTonProofRequestInput(
+            sourceAdapterDeploymentHash: "\n" + String(repeating: "aa", count: 32),
+            sourceAdapterDeploymentReceiptHash: String(repeating: "bb", count: 32)
+        ))) { error in
+            XCTAssertEqual(error as? TonSccpProverError, .invalidHex32("sourceAdapterDeploymentHash"))
+        }
+        XCTAssertThrowsError(try buildTonSccpProofRequest(Self.sampleTonProofRequestInput(
+            sourceAdapterDeploymentHash: String(repeating: "aa", count: 32),
+            sourceAdapterDeploymentReceiptHash: sccpZeroHashV1
+        ))) { error in
+            XCTAssertEqual(error as? TonSccpProverError, .sourceAdapterDeploymentBindingMismatch)
+        }
+        XCTAssertThrowsError(try buildTonSccpProofRequest(Self.sampleTonProofRequestInput(
+            sourceAdapterDeploymentHash: sccpZeroHashV1,
+            sourceAdapterDeploymentReceiptHash: sccpZeroHashV1
+        ))) { error in
+            XCTAssertEqual(error as? TonSccpProverError, .sourceAdapterDeploymentBindingMismatch)
+        }
+        XCTAssertThrowsError(try buildTonSccpProofRequest(Self.sampleTonProofRequestInput(
+            bundleBytes: Data(),
+            sourceAdapterDeploymentHash: String(repeating: "aa", count: 32),
+            sourceAdapterDeploymentReceiptHash: String(repeating: "bb", count: 32)
+        ))) { error in
+            XCTAssertEqual(error as? TonSccpProverError, .invalidField("bundleBytes"))
+        }
+        XCTAssertThrowsError(try buildTonSccpProofRequest(Self.sampleTonProofRequestInput(
+            sourceDomain: sccpDomainSolana
+        ))) { error in
+            XCTAssertEqual(error as? TonSccpProverError, .invalidSourceDomain(sccpDomainSolana))
+        }
+        XCTAssertThrowsError(try buildTonSccpProofRequest(TonSccpProofRequestInput(
+            publicInputs: Self.sampleTonPublicInputs(targetDomain: sccpDomainSolana),
+            bundleBytes: Data([5, 6, 7]),
+            statementHash: String(repeating: "56", count: 32),
+            destinationBindingHash: String(repeating: "78", count: 32),
+            sourceStateVerifierHash: String(repeating: "cc", count: 32),
+            sourceAdapterDeploymentHash: String(repeating: "aa", count: 32),
+            sourceAdapterDeploymentReceiptHash: String(repeating: "bb", count: 32)
+        ))) { error in
+            XCTAssertEqual(error as? TonSccpProverError, .invalidField("publicInputs.targetDomain"))
+        }
+        XCTAssertThrowsError(try buildTonSccpProofRequest(Self.sampleTonProofRequestInput(
+            backend: "debug-ton-backend"
+        ))) { error in
+            XCTAssertEqual(error as? TonSccpProverError, .invalidBranch("backend"))
+        }
+    }
+
+    func testTonProofRequestHashMatchesCrossSdkVector() throws {
+        let publicInputs = TonSccpPublicInputsInput(
+            messageId: String(repeating: "11", count: 32),
+            payloadHash: String(repeating: "22", count: 32),
+            commitmentRoot: String(repeating: "33", count: 32),
+            finalityHeight: 123_456_789,
+            finalityBlockHash: String(repeating: "44", count: 32)
+        )
+        let request = try buildTonSccpProofRequest(TonSccpProofRequestInput(
+            publicInputs: publicInputs,
+            bundleBytes: Data([1, 2, 3, 4, 5, 6, 7, 8, 9]),
+            sourceProofBytes: Data([0x51, 0x52, 0x53]),
+            statementHash: String(repeating: "55", count: 32),
+            destinationBindingHash: String(repeating: "66", count: 32),
+            sourceStateVerifierHash: String(repeating: "42", count: 32),
+            sourceAdapterDeploymentBinding: TonSccpSourceAdapterDeploymentBinding(
+                version: 1,
+                sourceDomain: sccpDomainTon,
+                targetDomain: sccpDomainSora,
+                sourceAdapterDeploymentHash: String(repeating: "aa", count: 32),
+                sourceAdapterDeploymentReceiptHash: String(repeating: "bb", count: 32)
+            )
+        ))
+        let expectedPublicInputsBytes = Data(hexString:
+            "01" +
+            String(repeating: "11", count: 32) +
+            String(repeating: "22", count: 32) +
+            "04000000" +
+            String(repeating: "33", count: 32) +
+            "15cd5b0700000000" +
+            String(repeating: "44", count: 32)
+        )!
+
+        XCTAssertEqual(try canonicalTonSccpPublicInputsBytes(publicInputs), expectedPublicInputsBytes)
+        XCTAssertEqual(
+            request.sourceAdapterDeploymentBindingHash,
+            "0x7d35b186e3d49aed31693e33d33355fa8fa9032160c929f2c7fe260094f6ccdf"
+        )
+        XCTAssertEqual(
+            request.requestHash,
+            "0xb3a61f09923efd639a0263de6b45eec6ddd5de679bfaab1b6ec1c591fd1b1d1b"
+        )
+        let proofResult = try wrapTonSccpProofResult(
+            proofBytes: Data([0x91, 0x92, 0x93, 0x94, 0x95]),
+            request: request
+        )
+        XCTAssertEqual(
+            proofResult.envelopeHash,
+            "0xa2bc6697b237fd4b2dd3f60f187a184793104a99372dcdf60c7ec585ef32f5ab"
         )
     }
 
-    private static func sampleTonMessageBodyInput() -> TonSccpMessageBodyInput {
-        TonSccpMessageBodyInput(
-            publicInputs: sampleTonPublicInputs(),
+    func testDerivesGroth16PublicSignalWordsForTron() throws {
+        let signals = try sccpGroth16Bn254PublicSignalWords(
+            publicInputs: Self.sampleTronPublicInputs(),
+            sourceDomain: sccpDomainSora,
+            statementHash: String(repeating: "55", count: 32),
+            destinationBindingHash: String(repeating: "66", count: 32)
+        )
+
+        XCTAssertEqual(signals, [
+            "0x0ffdbc782e79d1dc508e08af01e87f16d93b6e58e4861a0b8155455e3ee7a683",
+            "0x0c5398ea95021a790e276e3ece1592b32b85751dc77e50293c867a5f2e0131bb",
+            "0x21aac4195d8db839756f61c0780675823e15456c92acf135c36e02367c8fd11f",
+            "0x01c73f2f9156a52493a9beabeec73e62deed32fcef2e3e6fac86a79f0764f0bc",
+            "0x0ca6bbc36d23183d027c8df09f06c39e64abbb0bb4d6a4c37369d2c36f41a888",
+            "0x2b153d0fe1bc6e2a6d44e851523edb1511dac55443ca80c22cbe9cb7423886dc",
+            "0x2697e4e42f34b673b4aa254c6a92de09304e84c1a667c7d266777775a231efb4",
+            "0x16fbe0c1d659f142b3e7815b24df66da3cfd89cc42d051b04bc31aae6925c396",
+            "0x1157cd422e2089145c9cf93794dd6a0a1c3b1a611c22a5fe999d0542f62535d8",
+        ])
+
+        let changed = try sccpGroth16Bn254PublicSignalWords(
+            publicInputs: Self.sampleTronPublicInputs(),
+            sourceDomain: sccpDomainSora,
+            statementHash: String(repeating: "55", count: 32),
+            destinationBindingHash: String(repeating: "67", count: 32)
+        )
+        XCTAssertEqual(Array(signals.prefix(8)), Array(changed.prefix(8)))
+        XCTAssertNotEqual(signals[8], changed[8])
+    }
+
+    func testTronProofRequestBindsPublicSignalsAndRelayContext() throws {
+        let request = try buildTronSccpProofRequest(Self.sampleTronProofRequestInput(sourceProofBytes: Data([9, 10])))
+        let expectedSignals = try sccpGroth16Bn254PublicSignalWords(
+            publicInputs: Self.sampleTronPublicInputs(),
+            sourceDomain: sccpDomainSora,
+            statementHash: String(repeating: "56", count: 32),
+            destinationBindingHash: String(repeating: "78", count: 32)
+        )
+
+        XCTAssertEqual(request.backend, sccpTronGroth16Bn254ProofBackendV1)
+        XCTAssertEqual(request.sourceDomain, sccpDomainSora)
+        XCTAssertEqual(request.targetDomain, sccpDomainTron)
+        XCTAssertEqual(request.publicSignalWords, expectedSignals)
+        XCTAssertEqual(request.proofContext.statementHash, "0x" + String(repeating: "56", count: 32))
+        XCTAssertEqual(request.proofContext.destinationBindingHash, "0x" + String(repeating: "78", count: 32))
+        XCTAssertTrue(request.requestHash.hasPrefix("0x"))
+        XCTAssertEqual(request.requestHash.count, 66)
+
+        let destinationBinding = try sccpTronDestinationBinding(
+            networkId: "0x" + String(repeating: "33", count: 32),
+            verifierAddress: "TJRabPrwbZy45sbavfcjinPJC18kjpRTv8",
+            verifierCodeHash: "0x" + String(repeating: "bb", count: 32),
+            verifierKeyHash: "0x" + String(repeating: "cc", count: 32)
+        )
+        let boundRequest = try buildTronSccpProofRequest(try TronSccpProofRequestInput(
+            publicInputs: Self.sampleTronPublicInputs(),
+            bundleBytes: Data([5, 6, 7]),
+            sourceProofBytes: Data([9, 10]),
+            statementHash: String(repeating: "56", count: 32),
+            destinationBinding: destinationBinding
+        ))
+        XCTAssertEqual(boundRequest.destinationBindingHash, destinationBinding.hash)
+        XCTAssertEqual(boundRequest.destinationBinding, destinationBinding)
+        XCTAssertNotEqual(boundRequest.requestHash, request.requestHash)
+
+        let forgedHashBinding = TronSccpDestinationBinding(
+            version: destinationBinding.version,
+            sourceDomain: destinationBinding.sourceDomain,
+            targetDomain: destinationBinding.targetDomain,
+            networkId: destinationBinding.networkId,
+            verifierAddress: destinationBinding.verifierAddress,
+            verifierCodeHash: destinationBinding.verifierCodeHash,
+            verifierKeyHash: destinationBinding.verifierKeyHash,
+            verifierBackend: destinationBinding.verifierBackend,
+            proofFamily: destinationBinding.proofFamily,
+            key: destinationBinding.key,
+            hash: "0x" + String(repeating: "a7", count: 32)
+        )
+        XCTAssertThrowsError(try TronSccpProofRequestInput(
+            publicInputs: Self.sampleTronPublicInputs(),
+            bundleBytes: Data([5, 6, 7]),
+            statementHash: String(repeating: "56", count: 32),
+            destinationBinding: forgedHashBinding
+        )) { error in
+            XCTAssertEqual(error as? TronSccpProverError, .invalidPublicInputs("destinationBinding"))
+        }
+
+        let changed = try buildTronSccpProofRequest(Self.sampleTronProofRequestInput(
+            sourceProofBytes: Data([9, 11])
+        ))
+        XCTAssertNotEqual(request.requestHash, changed.requestHash)
+        let shiftedSplit = try buildTronSccpProofRequest(Self.sampleTronProofRequestInput(
+            bundleBytes: Data([5, 6, 7, 9]),
+            sourceProofBytes: Data([10])
+        ))
+        XCTAssertNotEqual(request.requestHash, shiftedSplit.requestHash)
+        XCTAssertThrowsError(try buildTronSccpProofRequest(Self.sampleTronProofRequestInput(statementHash: ""))) { error in
+            XCTAssertEqual(error as? TronSccpProverError, .invalidHex32("statementHash"))
+        }
+        XCTAssertThrowsError(try buildTronSccpProofRequest(Self.sampleTronProofRequestInput(
+            publicInputs: Self.sampleTronPublicInputs(payloadHash: String(repeating: "00", count: 32))
+        ))) { error in
+            XCTAssertEqual(error as? TronSccpProverError, .zeroField("payloadHash"))
+        }
+        XCTAssertThrowsError(try buildTronSccpProofRequest(Self.sampleTronProofRequestInput(
+            publicInputs: Self.sampleTronPublicInputs(payloadHash: " " + String(repeating: "22", count: 32))
+        ))) { error in
+            XCTAssertEqual(error as? TronSccpProverError, .invalidHex32("payloadHash"))
+        }
+        XCTAssertThrowsError(try buildTronSccpProofRequest(Self.sampleTronProofRequestInput(
+            statementHash: String(repeating: "56", count: 32) + "\n"
+        ))) { error in
+            XCTAssertEqual(error as? TronSccpProverError, .invalidHex32("statementHash"))
+        }
+        XCTAssertThrowsError(try buildTronSccpProofRequest(Self.sampleTronProofRequestInput(
+            bundleBytes: Data()
+        ))) { error in
+            XCTAssertEqual(error as? TronSccpProverError, .invalidPublicInputs("bundleBytes"))
+        }
+        XCTAssertThrowsError(try buildTronSccpProofRequest(Self.sampleTronProofRequestInput(
+            sourceDomain: sccpDomainEthereum
+        ))) { error in
+            XCTAssertEqual(error as? TronSccpProverError, .invalidPublicInputs("sourceDomain"))
+        }
+        XCTAssertThrowsError(try buildTronSccpProofRequest(Self.sampleTronProofRequestInput(
+            publicInputs: Self.sampleTronPublicInputs(targetDomain: sccpDomainTon)
+        ))) { error in
+            XCTAssertEqual(error as? TronSccpProverError, .invalidPublicInputs("publicInputs.targetDomain"))
+        }
+        XCTAssertThrowsError(try buildTronSccpProofRequest(Self.sampleTronProofRequestInput(
+            destinationBindingHash: String(repeating: "00", count: 32)
+        ))) { error in
+            XCTAssertEqual(error as? TronSccpProverError, .zeroField("destinationBindingHash"))
+        }
+        XCTAssertThrowsError(try buildTronSccpProofRequest(Self.sampleTronProofRequestInput(
+            backend: "debug-tron-backend"
+        ))) { error in
+            XCTAssertEqual(error as? TronSccpProverError, .invalidPublicInputs("backend"))
+        }
+        let wrongSourceBinding = TronSccpDestinationBinding(
+            version: destinationBinding.version,
+            sourceDomain: sccpDomainEthereum,
+            targetDomain: destinationBinding.targetDomain,
+            networkId: destinationBinding.networkId,
+            verifierAddress: destinationBinding.verifierAddress,
+            verifierCodeHash: destinationBinding.verifierCodeHash,
+            verifierKeyHash: destinationBinding.verifierKeyHash,
+            verifierBackend: destinationBinding.verifierBackend,
+            proofFamily: destinationBinding.proofFamily,
+            key: destinationBinding.key,
+            hash: destinationBinding.hash
+        )
+        XCTAssertThrowsError(try TronSccpProofRequestInput(
+            publicInputs: Self.sampleTronPublicInputs(),
+            bundleBytes: Data([5, 6, 7]),
+            statementHash: String(repeating: "56", count: 32),
+            destinationBinding: wrongSourceBinding
+        )) { error in
+            XCTAssertEqual(error as? TronSccpProverError, .invalidPublicInputs("destinationBinding.sourceDomain"))
+        }
+    }
+
+    func testTronProverRequiresLinkedProofEngine() async throws {
+        let prover = TronSccpProver()
+
+        do {
+            _ = try await prover.prove(Self.sampleTronProofRequestInput())
+            XCTFail("expected localProverUnavailable")
+        } catch let error as TronSccpProverError {
+            XCTAssertEqual(error, .localProverUnavailable)
+        }
+    }
+
+    func testTronProverWrapsExternalProofBytes() async throws {
+        let proofBytes = Self.sampleGroth16ProofBytes()
+        var seenTronProofRequests: [TronSccpProofRequest] = []
+        let prover = TronSccpProver { request in
+            seenTronProofRequests.append(request)
+            XCTAssertEqual(request.backend, sccpTronGroth16Bn254ProofBackendV1)
+            XCTAssertEqual(request.publicSignalWords.count, 9)
+            var callbackBundleBytes = request.bundleBytes
+            callbackBundleBytes[callbackBundleBytes.startIndex] =
+                callbackBundleBytes[callbackBundleBytes.startIndex] == 0 ? 1 : 0
+            var callbackPublicSignalWords = request.publicSignalWords
+            callbackPublicSignalWords[0] = "0x" + String(repeating: "aa", count: 32)
+            XCTAssertEqual(request.bundleBytes, Data([5, 6, 7]))
+            XCTAssertNotEqual(callbackBundleBytes, request.bundleBytes)
+            XCTAssertEqual(request.publicSignalWords.count, 9)
+            XCTAssertNotEqual(callbackPublicSignalWords, request.publicSignalWords)
+            return proofBytes
+        }
+
+        let sourceProofInput = try Self.sampleProductionTronProofRequestInput(sourceProofBytes: Data([9, 10]))
+        let omittedSourceInput = try Self.sampleProductionTronProofRequestInput()
+        let result = try await prover.prove(sourceProofInput)
+        let omittedSourceResult = try await prover.prove(omittedSourceInput)
+        XCTAssertTrue(omittedSourceResult.sourceProofBytes.isEmpty)
+        XCTAssertEqual(
+            seenTronProofRequests,
+            [
+                try buildTronSccpProofRequest(sourceProofInput),
+                try buildTronSccpProofRequest(omittedSourceInput),
+            ]
+        )
+
+        XCTAssertEqual(result.proofBytes, proofBytes)
+        XCTAssertFalse(result.proofBase64.isEmpty)
+        XCTAssertEqual(result.statementHash, "0x" + String(repeating: "56", count: 32))
+        XCTAssertEqual(result.destinationBindingHash, sourceProofInput.destinationBinding?.hash)
+        XCTAssertEqual(result.destinationBinding, sourceProofInput.destinationBinding)
+        XCTAssertEqual(result.bundleBytes, Data([5, 6, 7]))
+        XCTAssertEqual(result.sourceProofBytes, Data([9, 10]))
+        XCTAssertTrue(result.requestHash.hasPrefix("0x"))
+        XCTAssertEqual(result.requestHash.count, 66)
+        XCTAssertTrue(result.envelopeHash.hasPrefix("0x"))
+        XCTAssertEqual(result.envelopeHash.count, 66)
+
+        let hashOnlyRequest = try buildTronSccpProofRequest(Self.sampleTronProofRequestInput(sourceProofBytes: Data([9, 10])))
+        XCTAssertThrowsError(try wrapTronSccpProofResult(
+            proofBytes: proofBytes,
+            request: hashOnlyRequest
+        )) { error in
+            XCTAssertEqual(error as? TronSccpProverError, .invalidPublicInputs("request.destinationBinding"))
+        }
+
+        let request = try buildTronSccpProofRequest(sourceProofInput)
+        XCTAssertThrowsError(try wrapTronSccpProofResult(
+            proofBytes: Data([0, 0]),
+            request: request
+        )) { error in
+            XCTAssertEqual(error as? TronSccpProverError, .allZeroProof)
+        }
+        XCTAssertThrowsError(try wrapTronSccpProofResult(
+            proofBytes: Data([1, 2, 3, 4]),
+            request: request
+        )) { error in
+            XCTAssertEqual(error as? TronSccpProverError, .invalidProofLength(4))
+        }
+        let mismatchedRequest = TronSccpProofRequest(
+            version: request.version,
+            backend: request.backend,
+            sourceDomain: request.sourceDomain,
+            targetDomain: request.targetDomain,
+            publicInputs: request.publicInputs,
+            publicInputsBytes: request.publicInputsBytes,
+            publicSignalWords: request.publicSignalWords,
+            bundleBytes: request.bundleBytes,
+            sourceProofBytes: request.sourceProofBytes,
+            proofContext: request.proofContext,
+            statementHash: request.statementHash,
+            destinationBindingHash: request.destinationBindingHash,
+            requestHash: "0x" + String(repeating: "cc", count: 32),
+            destinationBinding: request.destinationBinding
+        )
+        XCTAssertThrowsError(try wrapTronSccpProofResult(
+            proofBytes: proofBytes,
+            request: mismatchedRequest
+        )) { error in
+            XCTAssertEqual(error as? TronSccpProverError, .invalidPublicInputs("request"))
+        }
+    }
+
+    func testTronProverResolvesWitnessProviderBeforeBuildingRequest() async throws {
+        let proofBytes = Self.sampleGroth16ProofBytes()
+        let witnessProvider = TronSourceProofWitnessProvider()
+        let prover = TronSccpProver(
+            witnessProvider: witnessProvider,
+            proveFunction: { request in
+                XCTAssertEqual(witnessProvider.resolveCount, 1)
+                XCTAssertEqual(request.sourceProofBytes, Data([9, 10]))
+                return proofBytes
+            }
+        )
+
+        let result = try await prover.prove(try Self.sampleProductionTronProofRequestInput())
+
+        XCTAssertEqual(witnessProvider.resolveCount, 1)
+        XCTAssertEqual(result.sourceProofBytes, Data([9, 10]))
+    }
+
+    func testBuildsTronContractCallSubmission() throws {
+        let proofBytes = Self.sampleGroth16ProofBytes()
+        let request = try buildTronSccpProofRequest(try Self.sampleProductionTronProofRequestInput(
+            sourceProofBytes: Data([9, 10])
+        ))
+        let proofResult = try wrapTronSccpProofResult(proofBytes: proofBytes, request: request)
+        let submission = try buildTronSccpSubmission(TronSccpSubmissionInput(proofResult: proofResult))
+        let directCallData = try tronSccpSubmitMessageProofCallData(
+            proofBytes: proofBytes,
+            publicInputs: proofResult.publicInputs,
+            statementHash: proofResult.statementHash
+        )
+
+        XCTAssertEqual(submission.submissionKind, "contract_call")
+        XCTAssertEqual(submission.platformPayload, "tron_contract_call")
+        XCTAssertEqual(submission.envelopeEncoding, sccpTronContractCallAbiTupleV1)
+        XCTAssertEqual(submission.functionSelector, sccpSubmitMessageProofSelectorV1)
+        XCTAssertTrue(submission.callDataHex.hasPrefix(sccpSubmitMessageProofSelectorV1))
+        XCTAssertEqual(submission.callData.count, 676)
+        XCTAssertEqual(
+            "0x" + String(repeating: "00", count: 30) + "0100",
+            "0x" + submission.callData.subdata(in: 4..<36).hexEncodedString()
+        )
+        XCTAssertEqual(
+            "0x" + String(repeating: "00", count: 30) + "0180",
+            "0x" + submission.callData.subdata(in: 260..<292).hexEncodedString()
+        )
+        XCTAssertEqual(submission.publicInputWords, try tronSccpMessageTransparentPublicInputAbiWords(Self.sampleTronPublicInputs()))
+        XCTAssertEqual(submission.publicSignalWords, proofResult.publicSignalWords)
+        XCTAssertEqual(proofResult.bundleBytes, Data([5, 6, 7]))
+        XCTAssertEqual(proofResult.sourceProofBytes, Data([9, 10]))
+        XCTAssertEqual(proofResult.destinationBinding, request.destinationBinding)
+        XCTAssertEqual(submission.envelopeBytes, submission.callData)
+        XCTAssertEqual(directCallData, submission.callData)
+        let destinationBinding = try sccpTronDestinationBinding(
+            networkId: "0x" + String(repeating: "33", count: 32),
+            verifierAddress: "TJRabPrwbZy45sbavfcjinPJC18kjpRTv8",
+            verifierCodeHash: "0x" + String(repeating: "bb", count: 32),
+            verifierKeyHash: "0x" + String(repeating: "cc", count: 32)
+        )
+        let bindingSubmission = try buildTronSccpSubmission(try TronSccpSubmissionInput(
+            publicInputs: proofResult.publicInputs,
+            proofBytes: proofBytes,
+            statementHash: proofResult.statementHash,
+            destinationBinding: destinationBinding
+        ))
+        XCTAssertEqual(bindingSubmission.destinationBindingHash, destinationBinding.hash)
+
+        let omittedSourceProofResult = try wrapTronSccpProofResult(
+            proofBytes: proofBytes,
+            request: try buildTronSccpProofRequest(try Self.sampleProductionTronProofRequestInput())
+        )
+        XCTAssertTrue(omittedSourceProofResult.sourceProofBytes.isEmpty)
+
+        var proofMismatch = proofBytes
+        proofMismatch[4 * 32 + 31] = 9
+        XCTAssertThrowsError(try buildTronSccpSubmission(TronSccpSubmissionInput(
+            publicInputs: proofResult.publicInputs,
+            proofBytes: proofMismatch,
+            statementHash: proofResult.statementHash,
+            destinationBindingHash: proofResult.destinationBindingHash,
+            proofResult: proofResult
+        ))) { error in
+            XCTAssertEqual(error as? TronSccpProverError, .invalidPublicInputs("proofBytes.a"))
+        }
+        let wrongSourceBinding = TronSccpDestinationBinding(
+            version: destinationBinding.version,
+            sourceDomain: sccpDomainEthereum,
+            targetDomain: destinationBinding.targetDomain,
+            networkId: destinationBinding.networkId,
+            verifierAddress: destinationBinding.verifierAddress,
+            verifierCodeHash: destinationBinding.verifierCodeHash,
+            verifierKeyHash: destinationBinding.verifierKeyHash,
+            verifierBackend: destinationBinding.verifierBackend,
+            proofFamily: destinationBinding.proofFamily,
+            key: destinationBinding.key,
+            hash: destinationBinding.hash
+        )
+        XCTAssertThrowsError(try TronSccpSubmissionInput(
+            publicInputs: proofResult.publicInputs,
+            proofBytes: proofBytes,
+            statementHash: proofResult.statementHash,
+            destinationBinding: wrongSourceBinding
+        )) { error in
+            XCTAssertEqual(error as? TronSccpProverError, .invalidPublicInputs("destinationBinding.sourceDomain"))
+        }
+
+        let tamperedEnvelopeProofResult = TronSccpProofResult(
+            version: proofResult.version,
+            backend: proofResult.backend,
+            proofBytes: proofResult.proofBytes,
+            proofBase64: proofResult.proofBase64,
+            publicInputs: proofResult.publicInputs,
+            publicSignalWords: proofResult.publicSignalWords,
+            proofContext: proofResult.proofContext,
+            statementHash: proofResult.statementHash,
+            destinationBindingHash: proofResult.destinationBindingHash,
+            requestHash: proofResult.requestHash,
+            envelopeHash: "0x" + String(repeating: "aa", count: 32),
+            destinationBinding: proofResult.destinationBinding
+        )
+        XCTAssertThrowsError(try buildTronSccpSubmission(TronSccpSubmissionInput(
+            proofResult: tamperedEnvelopeProofResult
+        ))) { error in
+            XCTAssertEqual(error as? TronSccpProverError, .invalidPublicInputs("proofResult.envelopeHash"))
+        }
+
+        let tamperedBase64ProofResult = TronSccpProofResult(
+            version: proofResult.version,
+            backend: proofResult.backend,
+            proofBytes: proofResult.proofBytes,
+            proofBase64: "AAAA",
+            publicInputs: proofResult.publicInputs,
+            publicSignalWords: proofResult.publicSignalWords,
+            proofContext: proofResult.proofContext,
+            statementHash: proofResult.statementHash,
+            destinationBindingHash: proofResult.destinationBindingHash,
+            requestHash: proofResult.requestHash,
+            envelopeHash: proofResult.envelopeHash,
+            destinationBinding: proofResult.destinationBinding
+        )
+        XCTAssertThrowsError(try buildTronSccpSubmission(TronSccpSubmissionInput(
+            proofResult: tamperedBase64ProofResult
+        ))) { error in
+            XCTAssertEqual(error as? TronSccpProverError, .invalidPublicInputs("proofResult.proofBase64"))
+        }
+
+        let staleRequestProofResult = TronSccpProofResult(
+            version: proofResult.version,
+            backend: proofResult.backend,
+            proofBytes: proofResult.proofBytes,
+            proofBase64: proofResult.proofBase64,
+            publicInputs: proofResult.publicInputs,
+            publicSignalWords: proofResult.publicSignalWords,
+            bundleBytes: Data([5, 6, 8]),
+            sourceProofBytes: proofResult.sourceProofBytes,
+            proofContext: proofResult.proofContext,
+            statementHash: proofResult.statementHash,
+            destinationBindingHash: proofResult.destinationBindingHash,
+            requestHash: proofResult.requestHash,
+            envelopeHash: proofResult.envelopeHash,
+            destinationBinding: proofResult.destinationBinding
+        )
+        XCTAssertThrowsError(try buildTronSccpSubmission(TronSccpSubmissionInput(
+            proofResult: staleRequestProofResult
+        ))) { error in
+            XCTAssertEqual(error as? TronSccpProverError, .invalidPublicInputs("proofResult.requestHash"))
+        }
+
+        var mismatchedSignals = proofResult.publicSignalWords
+        mismatchedSignals[0] = "0x" + String(repeating: "99", count: 32)
+        XCTAssertThrowsError(try buildTronSccpSubmission(TronSccpSubmissionInput(
+            publicInputs: proofResult.publicInputs,
+            proofBytes: proofBytes,
+            statementHash: proofResult.statementHash,
+            destinationBindingHash: proofResult.destinationBindingHash,
+            publicSignalWords: mismatchedSignals
+        ))) { error in
+            XCTAssertEqual(error as? TronSccpProverError, .invalidPublicInputs("publicSignalWords"))
+        }
+
+        XCTAssertThrowsError(try buildTronSccpSubmission(TronSccpSubmissionInput(
+            publicInputs: Self.sampleTronPublicInputs(targetDomain: sccpDomainTon),
+            proofBytes: proofBytes,
+            statementHash: proofResult.statementHash,
+            destinationBindingHash: proofResult.destinationBindingHash
+        ))) { error in
+            XCTAssertEqual(error as? TronSccpProverError, .invalidPublicInputs("publicInputs.targetDomain"))
+        }
+    }
+
+    func testRejectsMalformedTronGroth16ProofTuple() throws {
+        let request = try buildTronSccpProofRequest(try Self.sampleProductionTronProofRequestInput(
+            sourceProofBytes: Data([9, 10])
+        ))
+
+        XCTAssertThrowsError(try wrapTronSccpProofResult(
+            proofBytes: Self.sampleGroth16ProofBytes(overrides: [0: Self.abiWord(2)]),
+            request: request
+        )) { error in
+            XCTAssertEqual(error as? TronSccpProverError, .invalidPublicInputs("proofBytes.version"))
+        }
+        XCTAssertThrowsError(try wrapTronSccpProofResult(
+            proofBytes: Self.sampleGroth16ProofBytes(overrides: [4: Data(repeating: 0xff, count: 32)]),
+            request: request
+        )) { error in
+            XCTAssertEqual(error as? TronSccpProverError, .invalidPublicInputs("proofBytes.a.x"))
+        }
+        XCTAssertThrowsError(try wrapTronSccpProofResult(
+            proofBytes: Self.sampleGroth16ProofBytes(overrides: [
+                4: Data(repeating: 0, count: 32),
+                5: Data(repeating: 0, count: 32),
+            ]),
+            request: request
+        )) { error in
+            XCTAssertEqual(error as? TronSccpProverError, .invalidPublicInputs("proofBytes.a"))
+        }
+        XCTAssertThrowsError(try wrapTronSccpProofResult(
+            proofBytes: Self.sampleGroth16ProofBytes(overrides: [
+                6: Data(repeating: 0, count: 32),
+                7: Data(repeating: 0, count: 32),
+                8: Data(repeating: 0, count: 32),
+                9: Data(repeating: 0, count: 32),
+            ]),
+            request: request
+        )) { error in
+            XCTAssertEqual(error as? TronSccpProverError, .invalidPublicInputs("proofBytes.b"))
+        }
+        XCTAssertThrowsError(try wrapTronSccpProofResult(
+            proofBytes: Self.sampleGroth16ProofBytes(overrides: [
+                10: Data(repeating: 0, count: 32),
+                11: Data(repeating: 0, count: 32),
+            ]),
+            request: request
+        )) { error in
+            XCTAssertEqual(error as? TronSccpProverError, .invalidPublicInputs("proofBytes.c"))
+        }
+        XCTAssertThrowsError(try wrapTronSccpProofResult(
+            proofBytes: Self.sampleGroth16ProofBytes(overrides: [6: Self.abiWord(4)]),
+            request: request
+        )) { error in
+            XCTAssertEqual(error as? TronSccpProverError, .invalidPublicInputs("proofBytes.b"))
+        }
+        XCTAssertThrowsError(try wrapTronSccpProofResult(
+            proofBytes: Self.sampleGroth16ProofBytes(overrides: [
+                6: Self.abiWord(0),
+                7: Self.abiWord(1),
+                8: Data(hexString: "0cf32d3c49a2cb8a092f24ec3201e68dc299b6216e6321ee60573e3a7f596ea8")!,
+                9: Data(hexString: "07bca656753ef8cbee60335acbffe3def91636952d4ab9eb0b839c7f3566c0e2")!,
+            ]),
+            request: request
+        )) { error in
+            XCTAssertEqual(error as? TronSccpProverError, .invalidPublicInputs("proofBytes.b"))
+        }
+        XCTAssertThrowsError(try wrapTronSccpProofResult(
+            proofBytes: Self.sampleGroth16ProofBytes(overrides: [1: Self.repeatedWord(0x22)]),
+            request: request
+        )) { error in
+            XCTAssertEqual(error as? TronSccpProverError, .invalidPublicInputs("proofBytes.messageId"))
+        }
+        XCTAssertThrowsError(try wrapTronSccpProofResult(
+            proofBytes: Self.sampleGroth16ProofBytes(overrides: [2: Self.abiWord(999)]),
+            request: request
+        )) { error in
+            XCTAssertEqual(error as? TronSccpProverError, .invalidPublicInputs("proofBytes.sourceDomain"))
+        }
+        XCTAssertThrowsError(try tronSccpSubmitMessageProofCallData(
+            proofBytes: Self.sampleGroth16ProofBytes(overrides: [2: Self.abiWord(UInt64(sccpDomainEthereum))]),
+            publicInputs: Self.sampleTronPublicInputs(),
+            statementHash: String(repeating: "56", count: 32)
+        )) { error in
+            XCTAssertEqual(error as? TronSccpProverError, .invalidPublicInputs("proofBytes.sourceDomain"))
+        }
+        XCTAssertThrowsError(try tronSccpSubmitMessageProofCallData(
+            proofBytes: Self.sampleGroth16ProofBytes(overrides: [2: Self.abiWord(UInt64(sccpDomainEthereum))]),
+            publicInputs: Self.sampleTronPublicInputs(),
+            statementHash: String(repeating: "56", count: 32),
+            sourceDomain: sccpDomainEthereum
+        )) { error in
+            XCTAssertEqual(error as? TronSccpProverError, .invalidPublicInputs("sourceDomain"))
+        }
+        XCTAssertThrowsError(try buildTronSccpSubmission(TronSccpSubmissionInput(
+            publicInputs: Self.sampleTronPublicInputs(),
+            proofBytes: Self.sampleGroth16ProofBytes(overrides: [3: Self.repeatedWord(0x44)]),
+            statementHash: String(repeating: "56", count: 32),
+            destinationBindingHash: String(repeating: "78", count: 32)
+        ))) { error in
+            XCTAssertEqual(error as? TronSccpProverError, .invalidPublicInputs("proofBytes.commitmentRoot"))
+        }
+    }
+
+    func testEvmProofRequestBindsPublicSignalsAndRelayContext() throws {
+        let request = try buildEvmSccpProofRequest(Self.sampleEvmProofRequestInput(sourceProofBytes: Data([9, 10])))
+        let expectedSignals = try sccpGroth16Bn254PublicSignalWords(
+            publicInputs: Self.sampleEvmPublicInputs(),
+            sourceDomain: sccpDomainSora,
+            statementHash: String(repeating: "56", count: 32),
+            destinationBindingHash: String(repeating: "78", count: 32)
+        )
+
+        XCTAssertEqual(request.backend, sccpEvmGroth16Bn254ProofBackendV1)
+        XCTAssertEqual(request.sourceDomain, sccpDomainSora)
+        XCTAssertEqual(request.targetDomain, sccpDomainEthereum)
+        XCTAssertEqual(request.publicSignalWords, expectedSignals)
+        XCTAssertEqual(request.publicSignalWords[2], "0x2eb6b5dbab56255a979f433862429637ba1e8251106271606f0a279f593d7a39")
+        XCTAssertEqual(request.proofContext.statementHash, "0x" + String(repeating: "56", count: 32))
+        XCTAssertEqual(request.proofContext.destinationBindingHash, "0x" + String(repeating: "78", count: 32))
+        XCTAssertEqual(
+            request.requestHash,
+            "0xfb990c2ffdf826c9beb0e74105b060af467570720a1382b48abc42d32850f5ea"
+        )
+
+        let destinationBinding = try sccpEvmDestinationBinding(
+            networkId: "0x" + String(repeating: "33", count: 32),
+            verifierAddress: "0x" + String(repeating: "11", count: 20),
+            bridgeAddress: "0x" + String(repeating: "22", count: 20),
+            verifierCodeHash: "0x" + String(repeating: "bb", count: 32),
+            verifierKeyHash: "0x" + String(repeating: "cc", count: 32)
+        )
+        let boundRequest = try buildEvmSccpProofRequest(try EvmSccpProofRequestInput(
+            publicInputs: Self.sampleEvmPublicInputs(),
+            bundleBytes: Data([5, 6, 7]),
+            sourceProofBytes: Data([9, 10]),
+            statementHash: String(repeating: "56", count: 32),
+            destinationBinding: destinationBinding
+        ))
+        XCTAssertEqual(boundRequest.destinationBindingHash, destinationBinding.hash)
+        XCTAssertEqual(boundRequest.destinationBinding, destinationBinding)
+        XCTAssertNotEqual(boundRequest.requestHash, request.requestHash)
+
+        let forgedHashBinding = EvmSccpDestinationBinding(
+            version: destinationBinding.version,
+            sourceDomain: destinationBinding.sourceDomain,
+            targetDomain: destinationBinding.targetDomain,
+            networkId: destinationBinding.networkId,
+            verifierAddress: destinationBinding.verifierAddress,
+            bridgeAddress: destinationBinding.bridgeAddress,
+            verifierCodeHash: destinationBinding.verifierCodeHash,
+            verifierKeyHash: destinationBinding.verifierKeyHash,
+            verifierBackend: destinationBinding.verifierBackend,
+            proofFamily: destinationBinding.proofFamily,
+            key: destinationBinding.key,
+            hash: "0x" + String(repeating: "a7", count: 32)
+        )
+        XCTAssertThrowsError(try EvmSccpProofRequestInput(
+            publicInputs: Self.sampleEvmPublicInputs(),
+            bundleBytes: Data([5, 6, 7]),
+            statementHash: String(repeating: "56", count: 32),
+            destinationBinding: forgedHashBinding
+        )) { error in
+            XCTAssertEqual(error as? EvmSccpProverError, .invalidPublicInputs("destinationBinding"))
+        }
+
+        let bscRequest = try buildEvmSccpProofRequest(Self.sampleEvmProofRequestInput(
+            publicInputs: Self.sampleEvmPublicInputs(targetDomain: sccpDomainBsc),
+            sourceProofBytes: Data([9, 10])
+        ))
+        XCTAssertEqual(bscRequest.targetDomain, sccpDomainBsc)
+        XCTAssertNotEqual(request.publicSignalWords[2], bscRequest.publicSignalWords[2])
+        XCTAssertNotEqual(request.requestHash, bscRequest.requestHash)
+        let shiftedSplitRequest = try buildEvmSccpProofRequest(Self.sampleEvmProofRequestInput(
+            bundleBytes: Data([5, 6, 7, 9]),
+            sourceProofBytes: Data([10])
+        ))
+        XCTAssertNotEqual(request.requestHash, shiftedSplitRequest.requestHash)
+        XCTAssertThrowsError(try buildEvmSccpProofRequest(Self.sampleEvmProofRequestInput(statementHash: ""))) { error in
+            XCTAssertEqual(error as? EvmSccpProverError, .invalidHex32("statementHash"))
+        }
+        XCTAssertThrowsError(try buildEvmSccpProofRequest(Self.sampleEvmProofRequestInput(
+            publicInputs: Self.sampleEvmPublicInputs(payloadHash: " " + String(repeating: "22", count: 32))
+        ))) { error in
+            XCTAssertEqual(error as? EvmSccpProverError, .invalidHex32("payloadHash"))
+        }
+        XCTAssertThrowsError(try buildEvmSccpProofRequest(Self.sampleEvmProofRequestInput(
+            statementHash: String(repeating: "56", count: 32) + "\n"
+        ))) { error in
+            XCTAssertEqual(error as? EvmSccpProverError, .invalidHex32("statementHash"))
+        }
+        XCTAssertThrowsError(try buildEvmSccpProofRequest(Self.sampleEvmProofRequestInput(
+            publicInputs: Self.sampleEvmPublicInputs(finalityHeight: 0)
+        ))) { error in
+            XCTAssertEqual(error as? EvmSccpProverError, .invalidPublicInputs("publicInputs.finalityHeight"))
+        }
+        XCTAssertThrowsError(try buildEvmSccpProofRequest(Self.sampleEvmProofRequestInput(
+            publicInputs: Self.sampleEvmPublicInputs(),
+            sourceDomain: sccpDomainEthereum
+        ))) { error in
+            XCTAssertEqual(error as? EvmSccpProverError, .invalidPublicInputs("sourceDomain"))
+        }
+        XCTAssertThrowsError(try buildEvmSccpProofRequest(Self.sampleEvmProofRequestInput(
+            publicInputs: Self.sampleEvmPublicInputs(),
+            sourceDomain: sccpDomainTon
+        ))) { error in
+            XCTAssertEqual(error as? EvmSccpProverError, .invalidPublicInputs("sourceDomain"))
+        }
+        XCTAssertThrowsError(try buildEvmSccpProofRequest(Self.sampleEvmProofRequestInput(
+            publicInputs: Self.sampleEvmPublicInputs(targetDomain: sccpDomainTon)
+        ))) { error in
+            XCTAssertEqual(error as? EvmSccpProverError, .invalidPublicInputs("publicInputs.targetDomain"))
+        }
+        XCTAssertThrowsError(try buildEvmSccpProofRequest(Self.sampleEvmProofRequestInput(
+            destinationBindingHash: String(repeating: "00", count: 32)
+        ))) { error in
+            XCTAssertEqual(error as? EvmSccpProverError, .zeroField("destinationBindingHash"))
+        }
+        XCTAssertThrowsError(try buildEvmSccpProofRequest(Self.sampleEvmProofRequestInput(
+            bundleBytes: Data()
+        ))) { error in
+            XCTAssertEqual(error as? EvmSccpProverError, .invalidPublicInputs("bundleBytes"))
+        }
+        XCTAssertThrowsError(try buildEvmSccpProofRequest(Self.sampleEvmProofRequestInput(
+            backend: "debug-evm-backend"
+        ))) { error in
+            XCTAssertEqual(error as? EvmSccpProverError, .invalidPublicInputs("backend"))
+        }
+        let bscDestinationBinding = try sccpEvmDestinationBinding(
+            targetDomain: sccpDomainBsc,
+            networkId: "0x" + String(repeating: "33", count: 32),
+            verifierAddress: "0x" + String(repeating: "11", count: 20),
+            bridgeAddress: "0x" + String(repeating: "22", count: 20),
+            verifierCodeHash: "0x" + String(repeating: "bb", count: 32),
+            verifierKeyHash: "0x" + String(repeating: "cc", count: 32)
+        )
+        XCTAssertThrowsError(try EvmSccpProofRequestInput(
+            publicInputs: Self.sampleEvmPublicInputs(),
+            bundleBytes: Data([5, 6, 7]),
+            statementHash: String(repeating: "56", count: 32),
+            destinationBinding: bscDestinationBinding
+        )) { error in
+            XCTAssertEqual(error as? EvmSccpProverError, .invalidPublicInputs("destinationBinding.targetDomain"))
+        }
+    }
+
+    func testEvmProverRequiresLinkedProofEngine() async throws {
+        let prover = EvmSccpProver()
+
+        do {
+            _ = try await prover.prove(Self.sampleEvmProofRequestInput())
+            XCTFail("expected localProverUnavailable")
+        } catch let error as EvmSccpProverError {
+            XCTAssertEqual(error, .localProverUnavailable)
+        }
+    }
+
+    func testEvmProverWrapsExternalProofBytes() async throws {
+        let proofBytes = Self.sampleGroth16ProofBytes()
+        var seenEvmProofRequests: [EvmSccpProofRequest] = []
+        let prover = EvmSccpProver { request in
+            seenEvmProofRequests.append(request)
+            XCTAssertEqual(request.backend, sccpEvmGroth16Bn254ProofBackendV1)
+            XCTAssertEqual(request.targetDomain, sccpDomainEthereum)
+            XCTAssertEqual(request.publicSignalWords.count, 9)
+            var callbackBundleBytes = request.bundleBytes
+            callbackBundleBytes[callbackBundleBytes.startIndex] =
+                callbackBundleBytes[callbackBundleBytes.startIndex] == 0 ? 1 : 0
+            var callbackPublicSignalWords = request.publicSignalWords
+            callbackPublicSignalWords[0] = "0x" + String(repeating: "aa", count: 32)
+            XCTAssertEqual(request.bundleBytes, Data([5, 6, 7]))
+            XCTAssertNotEqual(callbackBundleBytes, request.bundleBytes)
+            XCTAssertEqual(request.publicSignalWords.count, 9)
+            XCTAssertNotEqual(callbackPublicSignalWords, request.publicSignalWords)
+            return proofBytes
+        }
+
+        let sourceProofInput = try Self.sampleProductionEvmProofRequestInput(sourceProofBytes: Data([9, 10]))
+        let omittedSourceInput = try Self.sampleProductionEvmProofRequestInput()
+        let result = try await prover.prove(sourceProofInput)
+        let omittedSourceResult = try await prover.prove(omittedSourceInput)
+        XCTAssertTrue(omittedSourceResult.sourceProofBytes.isEmpty)
+        XCTAssertEqual(
+            seenEvmProofRequests,
+            [
+                try buildEvmSccpProofRequest(sourceProofInput),
+                try buildEvmSccpProofRequest(omittedSourceInput),
+            ]
+        )
+
+        XCTAssertEqual(result.proofBytes, proofBytes)
+        XCTAssertFalse(result.proofBase64.isEmpty)
+        XCTAssertEqual(result.statementHash, "0x" + String(repeating: "56", count: 32))
+        XCTAssertEqual(result.destinationBindingHash, sourceProofInput.destinationBinding?.hash)
+        XCTAssertEqual(result.destinationBinding, sourceProofInput.destinationBinding)
+        XCTAssertEqual(result.bundleBytes, Data([5, 6, 7]))
+        XCTAssertEqual(result.sourceProofBytes, Data([9, 10]))
+        XCTAssertEqual(result.requestHash, try buildEvmSccpProofRequest(sourceProofInput).requestHash)
+        XCTAssertEqual(result.envelopeHash.count, 66)
+
+        let hashOnlyRequest = try buildEvmSccpProofRequest(Self.sampleEvmProofRequestInput(sourceProofBytes: Data([9, 10])))
+        XCTAssertThrowsError(try wrapEvmSccpProofResult(
+            proofBytes: proofBytes,
+            request: hashOnlyRequest
+        )) { error in
+            XCTAssertEqual(error as? EvmSccpProverError, .invalidPublicInputs("request.destinationBinding"))
+        }
+
+        let request = try buildEvmSccpProofRequest(sourceProofInput)
+        XCTAssertThrowsError(try wrapEvmSccpProofResult(
+            proofBytes: Data([0, 0]),
+            request: request
+        )) { error in
+            XCTAssertEqual(error as? EvmSccpProverError, .allZeroProof)
+        }
+        XCTAssertThrowsError(try wrapEvmSccpProofResult(
+            proofBytes: Data([1, 2, 3, 4]),
+            request: request
+        )) { error in
+            XCTAssertEqual(error as? EvmSccpProverError, .invalidProofLength(4))
+        }
+        let mismatchedRequest = EvmSccpProofRequest(
+            version: request.version,
+            backend: request.backend,
+            sourceDomain: request.sourceDomain,
+            targetDomain: request.targetDomain,
+            publicInputs: request.publicInputs,
+            publicInputsBytes: request.publicInputsBytes,
+            publicSignalWords: request.publicSignalWords,
+            bundleBytes: request.bundleBytes,
+            sourceProofBytes: request.sourceProofBytes,
+            proofContext: request.proofContext,
+            statementHash: request.statementHash,
+            destinationBindingHash: request.destinationBindingHash,
+            requestHash: "0x" + String(repeating: "cc", count: 32),
+            destinationBinding: request.destinationBinding
+        )
+        XCTAssertThrowsError(try wrapEvmSccpProofResult(
+            proofBytes: proofBytes,
+            request: mismatchedRequest
+        )) { error in
+            XCTAssertEqual(error as? EvmSccpProverError, .invalidPublicInputs("request"))
+        }
+    }
+
+    func testEvmProverResolvesWitnessProviderBeforeBuildingRequest() async throws {
+        let proofBytes = Self.sampleGroth16ProofBytes()
+        let witnessProvider = EvmSourceProofWitnessProvider()
+        let prover = EvmSccpProver(
+            witnessProvider: witnessProvider,
+            proveFunction: { request in
+                XCTAssertEqual(request.sourceProofBytes, Data([9, 10]))
+                return proofBytes
+            }
+        )
+
+        let result = try await prover.prove(try Self.sampleProductionEvmProofRequestInput())
+
+        XCTAssertEqual(witnessProvider.resolveCount, 1)
+        XCTAssertEqual(result.sourceProofBytes, Data([9, 10]))
+    }
+
+    func testBuildsEvmContractCallSubmission() throws {
+        let proofBytes = Self.sampleGroth16ProofBytes()
+        let request = try buildEvmSccpProofRequest(try Self.sampleProductionEvmProofRequestInput(
+            sourceProofBytes: Data([9, 10])
+        ))
+        let proofResult = try wrapEvmSccpProofResult(proofBytes: proofBytes, request: request)
+        let submission = try buildEvmSccpSubmission(EvmSccpSubmissionInput(proofResult: proofResult))
+        let directCallData = try evmSccpSubmitMessageProofCallData(
+            proofBytes: proofBytes,
+            publicInputs: proofResult.publicInputs,
+            statementHash: proofResult.statementHash
+        )
+
+        XCTAssertEqual(submission.submissionKind, "contract_call")
+        XCTAssertEqual(submission.platformPayload, "evm_groth16_contract_call")
+        XCTAssertEqual(submission.envelopeEncoding, sccpEvmContractCallAbiTupleV1)
+        XCTAssertEqual(submission.functionSelector, sccpSubmitMessageProofSelectorV1)
+        XCTAssertTrue(submission.callDataHex.hasPrefix(sccpSubmitMessageProofSelectorV1))
+        XCTAssertEqual(submission.callData.count, 676)
+        XCTAssertEqual(
+            "0x" + String(repeating: "00", count: 30) + "0100",
+            "0x" + submission.callData.subdata(in: 4..<36).hexEncodedString()
+        )
+        XCTAssertEqual(
+            "0x" + String(repeating: "00", count: 30) + "0180",
+            "0x" + submission.callData.subdata(in: 260..<292).hexEncodedString()
+        )
+        XCTAssertEqual(submission.publicInputWords, try evmSccpMessageTransparentPublicInputAbiWords(Self.sampleEvmPublicInputs()))
+        XCTAssertEqual(submission.publicSignalWords, proofResult.publicSignalWords)
+        XCTAssertEqual(proofResult.bundleBytes, Data([5, 6, 7]))
+        XCTAssertEqual(proofResult.sourceProofBytes, Data([9, 10]))
+        XCTAssertEqual(proofResult.destinationBinding, request.destinationBinding)
+        XCTAssertEqual(submission.envelopeBytes, submission.callData)
+        XCTAssertEqual(directCallData, submission.callData)
+        let destinationBinding = try sccpEvmDestinationBinding(
+            networkId: "0x" + String(repeating: "33", count: 32),
+            verifierAddress: "0x" + String(repeating: "11", count: 20),
+            bridgeAddress: "0x" + String(repeating: "22", count: 20),
+            verifierCodeHash: "0x" + String(repeating: "bb", count: 32),
+            verifierKeyHash: "0x" + String(repeating: "cc", count: 32)
+        )
+        let bindingSubmission = try buildEvmSccpSubmission(try EvmSccpSubmissionInput(
+            publicInputs: proofResult.publicInputs,
+            proofBytes: proofBytes,
+            statementHash: proofResult.statementHash,
+            destinationBinding: destinationBinding
+        ))
+        XCTAssertEqual(bindingSubmission.destinationBindingHash, destinationBinding.hash)
+
+        let omittedSourceProofResult = try wrapEvmSccpProofResult(
+            proofBytes: proofBytes,
+            request: try buildEvmSccpProofRequest(try Self.sampleProductionEvmProofRequestInput())
+        )
+        XCTAssertTrue(omittedSourceProofResult.sourceProofBytes.isEmpty)
+
+        var proofMismatch = proofBytes
+        proofMismatch[4 * 32 + 31] = 9
+        XCTAssertThrowsError(try buildEvmSccpSubmission(EvmSccpSubmissionInput(
+            publicInputs: proofResult.publicInputs,
+            proofBytes: proofMismatch,
+            statementHash: proofResult.statementHash,
+            destinationBindingHash: proofResult.destinationBindingHash,
+            proofResult: proofResult
+        ))) { error in
+            XCTAssertEqual(error as? EvmSccpProverError, .invalidPublicInputs("proofBytes.a"))
+        }
+        let bscDestinationBinding = try sccpEvmDestinationBinding(
+            targetDomain: sccpDomainBsc,
+            networkId: "0x" + String(repeating: "33", count: 32),
+            verifierAddress: "0x" + String(repeating: "11", count: 20),
+            bridgeAddress: "0x" + String(repeating: "22", count: 20),
+            verifierCodeHash: "0x" + String(repeating: "bb", count: 32),
+            verifierKeyHash: "0x" + String(repeating: "cc", count: 32)
+        )
+        XCTAssertThrowsError(try EvmSccpSubmissionInput(
+            publicInputs: proofResult.publicInputs,
+            proofBytes: proofBytes,
+            statementHash: proofResult.statementHash,
+            destinationBinding: bscDestinationBinding
+        )) { error in
+            XCTAssertEqual(error as? EvmSccpProverError, .invalidPublicInputs("destinationBinding.targetDomain"))
+        }
+
+        let tamperedEnvelopeProofResult = EvmSccpProofResult(
+            version: proofResult.version,
+            backend: proofResult.backend,
+            proofBytes: proofResult.proofBytes,
+            proofBase64: proofResult.proofBase64,
+            publicInputs: proofResult.publicInputs,
+            publicSignalWords: proofResult.publicSignalWords,
+            proofContext: proofResult.proofContext,
+            statementHash: proofResult.statementHash,
+            destinationBindingHash: proofResult.destinationBindingHash,
+            requestHash: proofResult.requestHash,
+            envelopeHash: "0x" + String(repeating: "aa", count: 32),
+            destinationBinding: proofResult.destinationBinding
+        )
+        XCTAssertThrowsError(try buildEvmSccpSubmission(EvmSccpSubmissionInput(
+            proofResult: tamperedEnvelopeProofResult
+        ))) { error in
+            XCTAssertEqual(error as? EvmSccpProverError, .invalidPublicInputs("proofResult.envelopeHash"))
+        }
+
+        let tamperedBase64ProofResult = EvmSccpProofResult(
+            version: proofResult.version,
+            backend: proofResult.backend,
+            proofBytes: proofResult.proofBytes,
+            proofBase64: "AAAA",
+            publicInputs: proofResult.publicInputs,
+            publicSignalWords: proofResult.publicSignalWords,
+            proofContext: proofResult.proofContext,
+            statementHash: proofResult.statementHash,
+            destinationBindingHash: proofResult.destinationBindingHash,
+            requestHash: proofResult.requestHash,
+            envelopeHash: proofResult.envelopeHash,
+            destinationBinding: proofResult.destinationBinding
+        )
+        XCTAssertThrowsError(try buildEvmSccpSubmission(EvmSccpSubmissionInput(
+            proofResult: tamperedBase64ProofResult
+        ))) { error in
+            XCTAssertEqual(error as? EvmSccpProverError, .invalidPublicInputs("proofResult.proofBase64"))
+        }
+
+        let staleRequestProofResult = EvmSccpProofResult(
+            version: proofResult.version,
+            backend: proofResult.backend,
+            proofBytes: proofResult.proofBytes,
+            proofBase64: proofResult.proofBase64,
+            publicInputs: proofResult.publicInputs,
+            publicSignalWords: proofResult.publicSignalWords,
+            bundleBytes: Data([5, 6, 8]),
+            sourceProofBytes: proofResult.sourceProofBytes,
+            proofContext: proofResult.proofContext,
+            statementHash: proofResult.statementHash,
+            destinationBindingHash: proofResult.destinationBindingHash,
+            requestHash: proofResult.requestHash,
+            envelopeHash: proofResult.envelopeHash,
+            destinationBinding: proofResult.destinationBinding
+        )
+        XCTAssertThrowsError(try buildEvmSccpSubmission(EvmSccpSubmissionInput(
+            proofResult: staleRequestProofResult
+        ))) { error in
+            XCTAssertEqual(error as? EvmSccpProverError, .invalidPublicInputs("proofResult.requestHash"))
+        }
+
+        var mismatchedSignals = proofResult.publicSignalWords
+        mismatchedSignals[0] = "0x" + String(repeating: "99", count: 32)
+        XCTAssertThrowsError(try buildEvmSccpSubmission(EvmSccpSubmissionInput(
+            publicInputs: proofResult.publicInputs,
+            proofBytes: proofBytes,
+            statementHash: proofResult.statementHash,
+            destinationBindingHash: proofResult.destinationBindingHash,
+            publicSignalWords: mismatchedSignals
+        ))) { error in
+            XCTAssertEqual(error as? EvmSccpProverError, .invalidPublicInputs("publicSignalWords"))
+        }
+
+        XCTAssertThrowsError(try buildEvmSccpSubmission(EvmSccpSubmissionInput(
+            publicInputs: Self.sampleEvmPublicInputs(targetDomain: sccpDomainTon),
+            proofBytes: proofBytes,
+            statementHash: proofResult.statementHash,
+            destinationBindingHash: proofResult.destinationBindingHash
+        ))) { error in
+            XCTAssertEqual(error as? EvmSccpProverError, .invalidPublicInputs("publicInputs.targetDomain"))
+        }
+    }
+
+    func testRejectsMalformedEvmGroth16ProofTuple() throws {
+        let request = try buildEvmSccpProofRequest(try Self.sampleProductionEvmProofRequestInput(
+            sourceProofBytes: Data([9, 10])
+        ))
+
+        XCTAssertThrowsError(try wrapEvmSccpProofResult(
+            proofBytes: Self.sampleGroth16ProofBytes(overrides: [0: Self.abiWord(2)]),
+            request: request
+        )) { error in
+            XCTAssertEqual(error as? EvmSccpProverError, .invalidPublicInputs("proofBytes.version"))
+        }
+        XCTAssertThrowsError(try wrapEvmSccpProofResult(
+            proofBytes: Self.sampleGroth16ProofBytes(overrides: [4: Data(repeating: 0xff, count: 32)]),
+            request: request
+        )) { error in
+            XCTAssertEqual(error as? EvmSccpProverError, .invalidPublicInputs("proofBytes.a.x"))
+        }
+        XCTAssertThrowsError(try wrapEvmSccpProofResult(
+            proofBytes: Self.sampleGroth16ProofBytes(overrides: [
+                6: Data(repeating: 0, count: 32),
+                7: Data(repeating: 0, count: 32),
+                8: Data(repeating: 0, count: 32),
+                9: Data(repeating: 0, count: 32),
+            ]),
+            request: request
+        )) { error in
+            XCTAssertEqual(error as? EvmSccpProverError, .invalidPublicInputs("proofBytes.b"))
+        }
+        XCTAssertThrowsError(try wrapEvmSccpProofResult(
+            proofBytes: Self.sampleGroth16ProofBytes(overrides: [11: Self.abiWord(3)]),
+            request: request
+        )) { error in
+            XCTAssertEqual(error as? EvmSccpProverError, .invalidPublicInputs("proofBytes.c"))
+        }
+        XCTAssertThrowsError(try wrapEvmSccpProofResult(
+            proofBytes: Self.sampleGroth16ProofBytes(overrides: [
+                6: Self.abiWord(0),
+                7: Self.abiWord(1),
+                8: Data(hexString: "0cf32d3c49a2cb8a092f24ec3201e68dc299b6216e6321ee60573e3a7f596ea8")!,
+                9: Data(hexString: "07bca656753ef8cbee60335acbffe3def91636952d4ab9eb0b839c7f3566c0e2")!,
+            ]),
+            request: request
+        )) { error in
+            XCTAssertEqual(error as? EvmSccpProverError, .invalidPublicInputs("proofBytes.b"))
+        }
+        XCTAssertThrowsError(try wrapEvmSccpProofResult(
+            proofBytes: Self.sampleGroth16ProofBytes(overrides: [1: Self.repeatedWord(0x22)]),
+            request: request
+        )) { error in
+            XCTAssertEqual(error as? EvmSccpProverError, .invalidPublicInputs("proofBytes.messageId"))
+        }
+        XCTAssertThrowsError(try wrapEvmSccpProofResult(
+            proofBytes: Self.sampleGroth16ProofBytes(overrides: [2: Self.abiWord(999)]),
+            request: request
+        )) { error in
+            XCTAssertEqual(error as? EvmSccpProverError, .invalidPublicInputs("proofBytes.sourceDomain"))
+        }
+        XCTAssertThrowsError(try evmSccpSubmitMessageProofCallData(
+            proofBytes: Self.sampleGroth16ProofBytes(overrides: [2: Self.abiWord(UInt64(sccpDomainEthereum))]),
+            publicInputs: Self.sampleEvmPublicInputs(),
+            statementHash: String(repeating: "56", count: 32)
+        )) { error in
+            XCTAssertEqual(error as? EvmSccpProverError, .invalidPublicInputs("proofBytes.sourceDomain"))
+        }
+        XCTAssertThrowsError(try evmSccpSubmitMessageProofCallData(
+            proofBytes: Self.sampleGroth16ProofBytes(overrides: [2: Self.abiWord(UInt64(sccpDomainEthereum))]),
+            publicInputs: Self.sampleEvmPublicInputs(),
+            statementHash: String(repeating: "56", count: 32),
+            sourceDomain: sccpDomainEthereum
+        )) { error in
+            XCTAssertEqual(error as? EvmSccpProverError, .invalidPublicInputs("sourceDomain"))
+        }
+        XCTAssertThrowsError(try buildEvmSccpSubmission(EvmSccpSubmissionInput(
+            publicInputs: Self.sampleEvmPublicInputs(),
+            proofBytes: Self.sampleGroth16ProofBytes(overrides: [3: Self.repeatedWord(0x44)]),
+            statementHash: String(repeating: "56", count: 32),
+            destinationBindingHash: String(repeating: "78", count: 32)
+        ))) { error in
+            XCTAssertEqual(error as? EvmSccpProverError, .invalidPublicInputs("proofBytes.commitmentRoot"))
+        }
+    }
+
+    func testSubstrateProofRequestBindsRelayContext() throws {
+        let request = try buildSubstrateSccpProofRequest(Self.sampleSubstrateProofRequestInput(
+            sourceProofBytes: Data([9, 10])
+        ))
+
+        XCTAssertEqual(request.backend, sccpSubstrateRuntimeProofBackendV1)
+        XCTAssertEqual(request.sourceDomain, sccpDomainSora)
+        XCTAssertEqual(request.targetDomain, sccpDomainSora2)
+        XCTAssertEqual(request.publicInputsBytes.count, 141)
+        XCTAssertEqual(request.proofContext.statementHash, "0x" + String(repeating: "56", count: 32))
+        XCTAssertEqual(request.proofContext.destinationBindingHash, "0x" + String(repeating: "78", count: 32))
+        XCTAssertTrue(request.requestHash.hasPrefix("0x"))
+        XCTAssertEqual(request.requestHash.count, 66)
+
+        let kusamaRequest = try buildSubstrateSccpProofRequest(Self.sampleSubstrateProofRequestInput(
+            publicInputs: Self.sampleSubstratePublicInputs(targetDomain: sccpDomainSoraKusama),
+            sourceProofBytes: Data([9, 10])
+        ))
+        XCTAssertEqual(kusamaRequest.targetDomain, sccpDomainSoraKusama)
+        XCTAssertNotEqual(request.requestHash, kusamaRequest.requestHash)
+        XCTAssertThrowsError(try buildSubstrateSccpProofRequest(Self.sampleSubstrateProofRequestInput(
+            sourceProofBytes: Data([9, 10]),
+            sourceDomain: sccpDomainTron
+        ))) { error in
+            XCTAssertEqual(error as? SubstrateSccpProverError, .invalidPublicInputs("sourceDomain"))
+        }
+        let shiftedSplit = try buildSubstrateSccpProofRequest(Self.sampleSubstrateProofRequestInput(
+            bundleBytes: Data([5, 6, 7, 9]),
+            sourceProofBytes: Data([10])
+        ))
+        XCTAssertNotEqual(request.requestHash, shiftedSplit.requestHash)
+        XCTAssertThrowsError(try buildSubstrateSccpProofRequest(Self.sampleSubstrateProofRequestInput(
+            publicInputs: Self.sampleSubstratePublicInputs(targetDomain: sccpDomainTon)
+        ))) { error in
+            XCTAssertEqual(error as? SubstrateSccpProverError, .invalidPublicInputs("publicInputs.targetDomain"))
+        }
+        XCTAssertThrowsError(try buildSubstrateSccpProofRequest(Self.sampleSubstrateProofRequestInput(
+            sourceDomain: sccpDomainSora2
+        ))) { error in
+            XCTAssertEqual(error as? SubstrateSccpProverError, .invalidPublicInputs("sourceDomain"))
+        }
+        XCTAssertThrowsError(try buildSubstrateSccpProofRequest(Self.sampleSubstrateProofRequestInput(
+            publicInputs: Self.sampleSubstratePublicInputs(payloadHash: " " + String(repeating: "22", count: 32))
+        ))) { error in
+            XCTAssertEqual(error as? SubstrateSccpProverError, .invalidHex32("payloadHash"))
+        }
+        XCTAssertThrowsError(try buildSubstrateSccpProofRequest(Self.sampleSubstrateProofRequestInput(
+            statementHash: String(repeating: "56", count: 32) + "\n"
+        ))) { error in
+            XCTAssertEqual(error as? SubstrateSccpProverError, .invalidHex32("statementHash"))
+        }
+        XCTAssertThrowsError(try buildSubstrateSccpProofRequest(Self.sampleSubstrateProofRequestInput(
+            destinationBindingHash: String(repeating: "00", count: 32)
+        ))) { error in
+            XCTAssertEqual(error as? SubstrateSccpProverError, .zeroField("destinationBindingHash"))
+        }
+        XCTAssertThrowsError(try buildSubstrateSccpProofRequest(Self.sampleSubstrateProofRequestInput(
+            bundleBytes: Data()
+        ))) { error in
+            XCTAssertEqual(error as? SubstrateSccpProverError, .invalidPublicInputs("bundleBytes"))
+        }
+        XCTAssertThrowsError(try buildSubstrateSccpProofRequest(Self.sampleSubstrateProofRequestInput(
+            backend: "debug-substrate-backend"
+        ))) { error in
+            XCTAssertEqual(error as? SubstrateSccpProverError, .invalidPublicInputs("backend"))
+        }
+    }
+
+    func testBuildsSubstrateRuntimeCallSubmission() throws {
+        let request = try buildSubstrateSccpProofRequest(Self.sampleSubstrateProofRequestInput(
+            sourceProofBytes: Data([9, 10])
+        ))
+        let proofResult = try wrapSubstrateSccpProofResult(
+            proofBytes: Data([1, 2, 3, 4]),
+            request: request
+        )
+        let submission = try buildSubstrateSccpSubmission(SubstrateSccpSubmissionInput(
+            proofResult: proofResult
+        ))
+
+        XCTAssertEqual(submission.proofFamily, sccpStarkFriProofFamilyV1)
+        XCTAssertEqual(submission.verifierBackend, sccpSubstrateRuntimeProofBackendV1)
+        XCTAssertEqual(submission.platformPayload, "substrate_runtime_call")
+        XCTAssertEqual(submission.envelopeEncoding, sccpSubstrateRuntimeCallScaleV1)
+        XCTAssertEqual(submission.submissionKind, "runtime_call")
+        XCTAssertEqual(submission.verifierEntrypoint, sccpSubstrateSubmitMessageProofEntrypointV1)
+        XCTAssertEqual(submission.sourceDomain, sccpDomainSora)
+        XCTAssertEqual(submission.targetDomain, sccpDomainSora2)
+        XCTAssertEqual(submission.requestHash, request.requestHash)
+        XCTAssertEqual(submission.arguments.map(\.key), ["proof_bytes", "public_inputs", "bundle_bytes"])
+        XCTAssertEqual(submission.runtimeCall, submission.envelopeBytes)
+        XCTAssertEqual(submission.runtimeCallHex, submission.envelopeHex)
+        var expectedPrefix = Data([0x7c])
+        expectedPrefix.append(Data(sccpSubstrateSubmitMessageProofEntrypointV1.utf8))
+        expectedPrefix.append(0x10)
+        XCTAssertEqual(Data(submission.runtimeCall.prefix(expectedPrefix.count)), expectedPrefix)
+        XCTAssertEqual(submission.proofBytes, Data([1, 2, 3, 4]))
+        XCTAssertEqual(submission.publicInputsBytes, request.publicInputsBytes)
+        XCTAssertEqual(submission.bundleBytes, Data([5, 6, 7]))
+
+        let explicitSubmission = try buildSubstrateSccpSubmission(SubstrateSccpSubmissionInput(
+            publicInputs: Self.sampleSubstratePublicInputs(),
             proofBytes: Data([1, 2, 3, 4]),
             bundleBytes: Data([5, 6, 7]),
-            statementHash: String(repeating: "bb", count: 32),
-            destinationBindingHash: String(repeating: "56", count: 32),
+            sourceProofBytes: Data([9, 10]),
+            statementHash: String(repeating: "56", count: 32),
+            destinationBindingHash: String(repeating: "78", count: 32)
+        ))
+        XCTAssertEqual(explicitSubmission.runtimeCall, submission.runtimeCall)
+
+        XCTAssertThrowsError(try buildSubstrateSccpSubmission(SubstrateSccpSubmissionInput(
+            publicInputs: proofResult.publicInputs,
+            proofBytes: proofResult.proofBytes,
+            bundleBytes: Data([5, 6, 8]),
+            sourceProofBytes: proofResult.sourceProofBytes,
+            statementHash: proofResult.statementHash,
+            destinationBindingHash: proofResult.destinationBindingHash,
+            proofResult: proofResult
+        ))) { error in
+            XCTAssertEqual(error as? SubstrateSccpProverError, .invalidPublicInputs("bundleBytes"))
+        }
+        XCTAssertThrowsError(try buildSubstrateSccpSubmission(SubstrateSccpSubmissionInput(
+            proofResult: SubstrateSccpProofResult(
+                version: proofResult.version,
+                backend: proofResult.backend,
+                proofBytes: proofResult.proofBytes,
+                proofBase64: "AAAA",
+                publicInputs: proofResult.publicInputs,
+                bundleBytes: proofResult.bundleBytes,
+                sourceProofBytes: proofResult.sourceProofBytes,
+                proofContext: proofResult.proofContext,
+                statementHash: proofResult.statementHash,
+                destinationBindingHash: proofResult.destinationBindingHash,
+                requestHash: proofResult.requestHash,
+                envelopeHash: proofResult.envelopeHash
+            )
+        ))) { error in
+            XCTAssertEqual(error as? SubstrateSccpProverError, .invalidPublicInputs("proofResult.proofBase64"))
+        }
+        XCTAssertThrowsError(try buildSubstrateSccpSubmission(SubstrateSccpSubmissionInput(
+            proofResult: SubstrateSccpProofResult(
+                version: proofResult.version,
+                backend: proofResult.backend,
+                proofBytes: proofResult.proofBytes,
+                proofBase64: proofResult.proofBase64,
+                publicInputs: proofResult.publicInputs,
+                bundleBytes: proofResult.bundleBytes,
+                sourceProofBytes: proofResult.sourceProofBytes,
+                proofContext: proofResult.proofContext,
+                statementHash: proofResult.statementHash,
+                destinationBindingHash: proofResult.destinationBindingHash,
+                requestHash: proofResult.requestHash,
+                envelopeHash: "0x" + String(repeating: "aa", count: 32)
+            )
+        ))) { error in
+            XCTAssertEqual(error as? SubstrateSccpProverError, .invalidPublicInputs("proofResult"))
+        }
+    }
+
+    func testSccpProofRequestsRejectAllZeroSourceProofBytes() throws {
+        let zeroSourceProofBytes = Data([0, 0, 0])
+
+        XCTAssertThrowsError(try buildEvmSccpProofRequest(Self.sampleEvmProofRequestInput(
+            sourceProofBytes: zeroSourceProofBytes
+        ))) { error in
+            XCTAssertEqual(error as? EvmSccpProverError, .invalidPublicInputs("sourceProofBytes"))
+        }
+        XCTAssertThrowsError(try buildTronSccpProofRequest(Self.sampleTronProofRequestInput(
+            sourceProofBytes: zeroSourceProofBytes
+        ))) { error in
+            XCTAssertEqual(error as? TronSccpProverError, .invalidPublicInputs("sourceProofBytes"))
+        }
+        XCTAssertThrowsError(try buildSubstrateSccpProofRequest(Self.sampleSubstrateProofRequestInput(
+            sourceProofBytes: zeroSourceProofBytes
+        ))) { error in
+            XCTAssertEqual(error as? SubstrateSccpProverError, .invalidPublicInputs("sourceProofBytes"))
+        }
+        XCTAssertThrowsError(try buildTonSccpProofRequest(Self.sampleTonProofRequestInput(
+            sourceProofBytes: zeroSourceProofBytes
+        ))) { error in
+            XCTAssertEqual(error as? TonSccpProverError, .invalidField("sourceProofBytes"))
+        }
+
+        XCTAssertTrue(try buildEvmSccpProofRequest(Self.sampleEvmProofRequestInput()).sourceProofBytes.isEmpty)
+        XCTAssertTrue(try buildTronSccpProofRequest(Self.sampleTronProofRequestInput()).sourceProofBytes.isEmpty)
+        XCTAssertTrue(try buildSubstrateSccpProofRequest(Self.sampleSubstrateProofRequestInput()).sourceProofBytes.isEmpty)
+        XCTAssertTrue(try buildTonSccpProofRequest(Self.sampleTonProofRequestInput()).sourceProofBytes.isEmpty)
+    }
+
+    func testSubstrateProverRequiresLinkedProofEngine() async throws {
+        let prover = SubstrateSccpProver()
+
+        do {
+            _ = try await prover.prove(Self.sampleSubstrateProofRequestInput())
+            XCTFail("expected localProverUnavailable")
+        } catch let error as SubstrateSccpProverError {
+            XCTAssertEqual(error, .localProverUnavailable)
+        }
+    }
+
+    func testSubstrateProverWrapsExternalProofBytes() async throws {
+        var seenSubstrateProofRequests: [SubstrateSccpProofRequest] = []
+        let prover = SubstrateSccpProver { request in
+            seenSubstrateProofRequests.append(request)
+            XCTAssertEqual(request.backend, sccpSubstrateRuntimeProofBackendV1)
+            XCTAssertEqual(request.targetDomain, sccpDomainSora2)
+            var callbackBundleBytes = request.bundleBytes
+            callbackBundleBytes[callbackBundleBytes.startIndex] =
+                callbackBundleBytes[callbackBundleBytes.startIndex] == 0 ? 1 : 0
+            XCTAssertEqual(request.bundleBytes, Data([5, 6, 7]))
+            XCTAssertNotEqual(callbackBundleBytes, request.bundleBytes)
+            return Data([1, 2, 3, 4])
+        }
+
+        let sourceProofInput = Self.sampleSubstrateProofRequestInput(sourceProofBytes: Data([9, 10]))
+        let omittedSourceInput = Self.sampleSubstrateProofRequestInput()
+        let result = try await prover.prove(sourceProofInput)
+        let omittedSourceResult = try await prover.prove(omittedSourceInput)
+        XCTAssertTrue(omittedSourceResult.sourceProofBytes.isEmpty)
+        XCTAssertEqual(
+            seenSubstrateProofRequests,
+            [
+                try buildSubstrateSccpProofRequest(sourceProofInput),
+                try buildSubstrateSccpProofRequest(omittedSourceInput),
+            ]
+        )
+
+        XCTAssertEqual(result.proofBytes, Data([1, 2, 3, 4]))
+        XCTAssertEqual(result.proofBase64, "AQIDBA==")
+        XCTAssertEqual(result.statementHash, "0x" + String(repeating: "56", count: 32))
+        XCTAssertEqual(result.destinationBindingHash, "0x" + String(repeating: "78", count: 32))
+        XCTAssertEqual(result.bundleBytes, Data([5, 6, 7]))
+        XCTAssertEqual(result.sourceProofBytes, Data([9, 10]))
+        XCTAssertTrue(result.requestHash.hasPrefix("0x"))
+        XCTAssertEqual(result.requestHash.count, 66)
+        XCTAssertTrue(result.envelopeHash.hasPrefix("0x"))
+        XCTAssertEqual(result.envelopeHash.count, 66)
+
+        let request = try buildSubstrateSccpProofRequest(Self.sampleSubstrateProofRequestInput(sourceProofBytes: Data([9, 10])))
+        let mismatchedRequest = SubstrateSccpProofRequest(
+            version: request.version,
+            backend: request.backend,
+            sourceDomain: request.sourceDomain,
+            targetDomain: request.targetDomain,
+            publicInputs: request.publicInputs,
+            publicInputsBytes: request.publicInputsBytes,
+            bundleBytes: request.bundleBytes,
+            sourceProofBytes: request.sourceProofBytes,
+            proofContext: request.proofContext,
+            statementHash: request.statementHash,
+            destinationBindingHash: request.destinationBindingHash,
+            requestHash: "0x" + String(repeating: "cc", count: 32)
+        )
+        XCTAssertThrowsError(try wrapSubstrateSccpProofResult(
+            proofBytes: Data([1, 2, 3, 4]),
+            request: mismatchedRequest
+        )) { error in
+            XCTAssertEqual(error as? SubstrateSccpProverError, .invalidPublicInputs("request"))
+        }
+        XCTAssertThrowsError(try wrapSubstrateSccpProofResult(
+            proofBytes: Data([0, 0]),
+            request: request
+        )) { error in
+            XCTAssertEqual(error as? SubstrateSccpProverError, .allZeroProof)
+        }
+        XCTAssertThrowsError(try wrapSubstrateSccpProofResult(
+            proofBytes: Data(repeating: 1, count: sccpNativeRecursiveMaxProofBytes + 1),
+            request: request
+        )) { error in
+            XCTAssertEqual(error as? SubstrateSccpProverError, .invalidPublicInputs("proofBytes"))
+        }
+    }
+
+    func testSubstrateProverResolvesWitnessProviderBeforeBuildingRequest() async throws {
+        let witnessProvider = SubstrateSourceProofWitnessProvider()
+        let prover = SubstrateSccpProver(
+            witnessProvider: witnessProvider,
+            proveFunction: { request in
+                XCTAssertEqual(witnessProvider.resolveCount, 1)
+                XCTAssertEqual(request.sourceProofBytes, Data([9, 10]))
+                return Data([1, 2, 3, 4])
+            }
+        )
+
+        let result = try await prover.prove(Self.sampleSubstrateProofRequestInput())
+
+        XCTAssertEqual(witnessProvider.resolveCount, 1)
+        XCTAssertEqual(result.sourceProofBytes, Data([9, 10]))
+    }
+
+    func testSourceProofHashesBindUiWitnessMaterial() throws {
+        let sourceEventDigest = String(repeating: "34", count: 32)
+        let zeroHash = String(repeating: "00", count: 32)
+        let branch = [Data(repeating: 0xee, count: 32)]
+        let changedBranch = [Data(repeating: 0x12, count: 32)]
+        let tronReceiptStateNode = Data(hexString: "e4822080a0" + String(repeating: "bb", count: 32))!
+        let evmReceiptRootMptValueHex = "f8409e736363703a65766d3a726563656970742d726f6f742d76616c75653a7631a0" + String(repeating: "bb", count: 32)
+        let evmReceiptStateNode = Data(hexString: "f847822080b842" + evmReceiptRootMptValueHex)!
+        let evmReceiptsRoot = "6438aaabb78989f2803c6b0f227ee0f94beecde07cdd9c737e258e4faf581b68"
+
+        let evmBytes = try canonicalEvmSccpReceiptProofBytes(
+            sourceEventDigest: sourceEventDigest,
+            beaconSlot: 11,
+            executionBlockNumber: 12,
+            executionBlockHash: String(repeating: "aa", count: 32),
+            executionReceiptsRoot: evmReceiptsRoot,
+            beaconFinalizedRoot: String(repeating: "cc", count: 32),
+            syncCommitteeRoot: String(repeating: "dd", count: 32),
+            receiptRootIndex: 0,
+            receiptTrieProofNodes: [evmReceiptStateNode],
+            inclusionBranch: branch
+        )
+        XCTAssertEqual(evmBytes.count, 306)
+        let evmHash = try evmSccpReceiptProofHash(
+            sourceEventDigest: sourceEventDigest,
+            beaconSlot: 11,
+            executionBlockNumber: 12,
+            executionBlockHash: String(repeating: "aa", count: 32),
+            executionReceiptsRoot: evmReceiptsRoot,
+            beaconFinalizedRoot: String(repeating: "cc", count: 32),
+            syncCommitteeRoot: String(repeating: "dd", count: 32),
+            receiptRootIndex: 0,
+            receiptTrieProofNodes: [evmReceiptStateNode],
+            inclusionBranch: branch
+        )
+        let changedEvmHash = try evmSccpReceiptProofHash(
+            sourceEventDigest: sourceEventDigest,
+            beaconSlot: 11,
+            executionBlockNumber: 12,
+            executionBlockHash: String(repeating: "aa", count: 32),
+            executionReceiptsRoot: evmReceiptsRoot,
+            beaconFinalizedRoot: String(repeating: "cc", count: 32),
+            syncCommitteeRoot: String(repeating: "dd", count: 32),
+            receiptRootIndex: 0,
+            receiptTrieProofNodes: [evmReceiptStateNode],
+            inclusionBranch: changedBranch
+        )
+        XCTAssertEqual(evmHash.count, 66)
+        XCTAssertNotEqual(evmHash, changedEvmHash)
+
+        XCTAssertEqual(try canonicalBscSccpReceiptProofBytes(
+            sourceEventDigest: sourceEventDigest,
+            validatorEpoch: 21,
+            blockNumber: 22,
+            blockHash: String(repeating: "aa", count: 32),
+            receiptsRoot: evmReceiptsRoot,
+            validatorSetHash: String(repeating: "cc", count: 32),
+            commitSealHash: String(repeating: "dd", count: 32),
+            receiptRootIndex: 0,
+            receiptTrieProofNodes: [evmReceiptStateNode],
+            inclusionBranch: branch
+        ).count, 306)
+        XCTAssertNotEqual(
+            try bscSccpReceiptProofHash(
+                sourceEventDigest: sourceEventDigest,
+                validatorEpoch: 21,
+                blockNumber: 22,
+                blockHash: String(repeating: "aa", count: 32),
+                receiptsRoot: evmReceiptsRoot,
+                validatorSetHash: String(repeating: "cc", count: 32),
+                commitSealHash: String(repeating: "dd", count: 32),
+                receiptRootIndex: 0,
+                receiptTrieProofNodes: [evmReceiptStateNode],
+                inclusionBranch: branch
+            ),
+            try bscSccpReceiptProofHash(
+                sourceEventDigest: sourceEventDigest,
+                validatorEpoch: 21,
+                blockNumber: 22,
+                blockHash: String(repeating: "aa", count: 32),
+                receiptsRoot: evmReceiptsRoot,
+                validatorSetHash: String(repeating: "cc", count: 32),
+                commitSealHash: String(repeating: "dd", count: 32),
+                receiptRootIndex: 0,
+                receiptTrieProofNodes: [evmReceiptStateNode],
+                inclusionBranch: changedBranch
+            )
+        )
+
+        let validatorPayload = try canonicalBscValidatorSetPayloadBytes(
+            validatorAddresses: [String(repeating: "11", count: 20), String(repeating: "22", count: 20)],
+            validatorPowers: [1, 2]
+        )
+        XCTAssertEqual(
+            validatorPayload.hexEncodedString(),
+            "0102000000"
+                + String(repeating: "11", count: 20)
+                + "0100000000000000"
+                + String(repeating: "22", count: 20)
+                + "0200000000000000"
+        )
+        XCTAssertEqual(
+            bscValidatorSetPayloadHash(payload: validatorPayload),
+            "0xdc6190956bc147c9a0a2fbf1384d40a1deb4b211a709f229275d1ea5ac3f8370"
+        )
+        XCTAssertEqual(
+            try bscValidatorSetPayloadHash(
+                validatorAddresses: [String(repeating: "11", count: 20), String(repeating: "22", count: 20)],
+                validatorPowers: [1, 2]
+            ),
+            "0xdc6190956bc147c9a0a2fbf1384d40a1deb4b211a709f229275d1ea5ac3f8370"
+        )
+        XCTAssertEqual(
+            try bscValidatorSetHashFromPayload(payload: validatorPayload),
+            "0x3ef5ecfb6dc4f5fc9e970cc18cd72164495c827e96f77851813973a286f5c762"
+        )
+        let bscCommitValidatorPublicKeys = [
+            Data(hexString: "0279be667ef9dcbbac55a06295ce870b07029bfcdb2dce28d959f2815b16f81798")!,
+            Data(hexString: "02c6047f9441ed7d6d3045406e95c07cd85c778e4b8cef3ca7abac09b95c709ee5")!,
+            Data(hexString: "02f9308a019258c31049344f85f89d5229b531c845836f99b08601f113bce036f9")!,
+            Data(hexString: "02e493dbf1c10d80f3581e4904930b1404cc6c13900ee0758474fa94abe8c4cd13")!
+        ]
+        let bscCommitValidatorSetHash =
+            "0xc5152802f6ca9ec72a4249646aca7476496f00b71ab5b1482c881a31fb42dd8c"
+        let bscCommitMessageHashValue =
+            "0x5832165d1a87ed49a323f2ecaecbef973489aed1a42e7eab369244e7abec43c7"
+        let bscCommitSignatures = [
+            Data(hexString: "1b8802069b82c3d4cb6d7bec82323853f36d965c1e71647560084e7c7a0de9c17c85fcc3c6222f905cbbc4ba5b5f3f005f07d144304184181be67b3d02d1ba9f00")!,
+            Data(hexString: "921d39c29fb793c496f96cf647128232d228024ed2f3e68cc6a52aa4cf64facf6bbd9dfcf7d703165f7880e7e1310f34d1b0fb8ca6dd8f506bf289ba012387f001")!,
+            Data(hexString: "cfa11aa1ec214278afdb4ef7f3c40af97a2784e0336afb5ebef345c0d2eaa9ef629ad2d25cf9709eb9b842fb2fb3f749ce365af97af6e7064771614312d3619600")!
+        ]
+        XCTAssertEqual(
+            try canonicalBscCommitMessageBytes(
+                validatorEpoch: 2,
+                blockNumber: 401,
+                blockHash: String(repeating: "22", count: 32),
+                receiptsRoot: String(repeating: "33", count: 32),
+                validatorSetHash: bscCommitValidatorSetHash
+            ).count,
+            117
+        )
+        XCTAssertEqual(
+            try bscCommitMessageHash(
+                validatorEpoch: 2,
+                blockNumber: 401,
+                blockHash: String(repeating: "22", count: 32),
+                receiptsRoot: String(repeating: "33", count: 32),
+                validatorSetHash: bscCommitValidatorSetHash
+            ),
+            bscCommitMessageHashValue
+        )
+        XCTAssertThrowsError(
+            try bscCommitMessageHash(
+                sourceDomain: sccpDomainEthereum,
+                validatorEpoch: 2,
+                blockNumber: 401,
+                blockHash: String(repeating: "22", count: 32),
+                receiptsRoot: String(repeating: "33", count: 32),
+                validatorSetHash: bscCommitValidatorSetHash
+            )
+        )
+        let bscCommitSeal = BscCommitSealProof(
+            totalPower: 4,
+            signedPower: 3,
+            commitMessageHash: bscCommitMessageHashValue,
+            validatorPublicKeys: bscCommitValidatorPublicKeys,
+            validatorPowers: [1, 1, 1, 1],
+            signersBitmap: Data(hexString: "07")!,
+            signatures: bscCommitSignatures,
+            validatorSetHash: bscCommitValidatorSetHash
+        )
+        XCTAssertEqual(try canonicalBscCommitSealBytes(bscCommitSeal).count, 297)
+        XCTAssertEqual(
+            try bscCommitSealHash(bscCommitSeal),
+            "0xcd9d87b24d8c1cf7615cb4267cde5a3fc24bbb770807134ee75d4ddaba992172"
+        )
+        XCTAssertThrowsError(try canonicalBscCommitSealBytes(BscCommitSealProof(
+            totalPower: 4,
+            signedPower: 2,
+            commitMessageHash: bscCommitMessageHashValue,
+            validatorPublicKeys: bscCommitValidatorPublicKeys,
+            validatorPowers: [1, 1, 1, 1],
+            signersBitmap: Data(hexString: "03")!,
+            signatures: Array(bscCommitSignatures.prefix(2)),
+            validatorSetHash: bscCommitValidatorSetHash
+        )))
+        XCTAssertThrowsError(try canonicalBscCommitSealBytes(BscCommitSealProof(
+            totalPower: 4,
+            signedPower: 3,
+            commitMessageHash: bscCommitMessageHashValue,
+            validatorPublicKeys: bscCommitValidatorPublicKeys,
+            validatorPowers: [1, 1, 1, 1],
+            signersBitmap: Data(hexString: "1f")!,
+            signatures: bscCommitSignatures,
+            validatorSetHash: bscCommitValidatorSetHash
+        )))
+        var changedBscCommitSignature = bscCommitSignatures[0]
+        changedBscCommitSignature[changedBscCommitSignature.startIndex] = 0x31
+        XCTAssertThrowsError(try canonicalBscCommitSealBytes(BscCommitSealProof(
+            totalPower: 4,
+            signedPower: 3,
+            commitMessageHash: bscCommitMessageHashValue,
+            validatorPublicKeys: bscCommitValidatorPublicKeys,
+            validatorPowers: [1, 1, 1, 1],
+            signersBitmap: Data(hexString: "07")!,
+            signatures: [changedBscCommitSignature, bscCommitSignatures[1], bscCommitSignatures[2]],
+            validatorSetHash: bscCommitValidatorSetHash
+        )))
+        XCTAssertThrowsError(try canonicalBscCommitSealBytes(BscCommitSealProof(
+            totalPower: 4,
+            signedPower: 3,
+            commitMessageHash: bscCommitMessageHashValue,
+            validatorPublicKeys: bscCommitValidatorPublicKeys,
+            validatorPowers: [1, 1, 1, 1],
+            signersBitmap: Data(hexString: "07")!,
+            signatures: bscCommitSignatures,
+            validatorSetHash: String(repeating: "aa", count: 32)
+        )))
+        let storageValue = Data(hexString: "02")!
+        let storageValueHash = bscValidatorSetStorageValueHash(storageValue: storageValue)
+        let metadataProof = BscValidatorSetMetadataProof(
+            stateRoot: String(repeating: "aa", count: 32),
+            nextValidatorSetPayloadHash: bscValidatorSetPayloadHash(payload: validatorPayload),
+            validatorContractAddress: Data(hexString: String(repeating: "00", count: 18) + "1000")!,
+            accountProofNodes: [Data(hexString: "f842a0" + String(repeating: "11", count: 32))!],
+            storageRoot: String(repeating: "bb", count: 32),
+            validatorSetLengthSlot: String(repeating: "cc", count: 32),
+            validatorSetLengthValue: storageValue,
+            validatorSetLengthValueHash: storageValueHash,
+            validatorSetLengthProofNodes: [Data(hexString: "e4822080a0" + String(repeating: "22", count: 32))!],
+            validatorStorageProofs: [
+                BscValidatorStorageProof(
+                    validatorIndex: 0,
+                    storageSlot: String(repeating: "dd", count: 32),
+                    storageValue: Data(hexString: "94" + String(repeating: "11", count: 20))!,
+                    storageValueHash: bscValidatorSetStorageValueHash(
+                        storageValue: Data(hexString: "94" + String(repeating: "11", count: 20))!
+                    ),
+                    storageProofNodes: [Data(hexString: "e4822080a0" + String(repeating: "33", count: 32))!]
+                ),
+                BscValidatorStorageProof(
+                    validatorIndex: 1,
+                    storageSlot: String(repeating: "ee", count: 32),
+                    storageValue: Data(hexString: "94" + String(repeating: "22", count: 20))!,
+                    storageValueHash: bscValidatorSetStorageValueHash(
+                        storageValue: Data(hexString: "94" + String(repeating: "22", count: 20))!
+                    ),
+                    storageProofNodes: [Data(hexString: "e4822080a0" + String(repeating: "44", count: 32))!]
+                )
+            ]
+        )
+        XCTAssertEqual(try canonicalBscValidatorSetMetadataProofBytes(metadataProof).count, 560)
+        let metadataHash = try bscValidatorSetMetadataProofHash(metadataProof)
+        func metadataVariant(validatorContractAddress: Data? = nil,
+                             accountProofNodes: [Data]? = nil,
+                             validatorSetLengthValueHash: String? = nil,
+                             validatorSetLengthProofNodes: [Data]? = nil,
+                             validatorStorageProofs: [BscValidatorStorageProof]? = nil) -> BscValidatorSetMetadataProof {
+            BscValidatorSetMetadataProof(
+                stateRoot: metadataProof.stateRoot,
+                nextValidatorSetPayloadHash: metadataProof.nextValidatorSetPayloadHash,
+                validatorContractAddress: validatorContractAddress ?? metadataProof.validatorContractAddress,
+                accountProofNodes: accountProofNodes ?? metadataProof.accountProofNodes,
+                storageRoot: metadataProof.storageRoot,
+                validatorSetLengthSlot: metadataProof.validatorSetLengthSlot,
+                validatorSetLengthValue: metadataProof.validatorSetLengthValue,
+                validatorSetLengthValueHash: validatorSetLengthValueHash ?? metadataProof.validatorSetLengthValueHash,
+                validatorSetLengthProofNodes: validatorSetLengthProofNodes ?? metadataProof.validatorSetLengthProofNodes,
+                validatorStorageProofs: validatorStorageProofs ?? metadataProof.validatorStorageProofs
+            )
+        }
+        func storageVariant(storageValueHash: String? = nil,
+                            storageProofNodes: [Data]? = nil) -> BscValidatorStorageProof {
+            let first = metadataProof.validatorStorageProofs[0]
+            return BscValidatorStorageProof(
+                validatorIndex: first.validatorIndex,
+                storageSlot: first.storageSlot,
+                storageValue: first.storageValue,
+                storageValueHash: storageValueHash ?? first.storageValueHash,
+                storageProofNodes: storageProofNodes ?? first.storageProofNodes
+            )
+        }
+        XCTAssertEqual(metadataHash.count, 66)
+        XCTAssertThrowsError(try canonicalBscValidatorSetMetadataProofBytes(
+            BscValidatorSetMetadataProof(
+                version: 0,
+                stateRoot: metadataProof.stateRoot,
+                nextValidatorSetPayloadHash: metadataProof.nextValidatorSetPayloadHash,
+                validatorContractAddress: metadataProof.validatorContractAddress,
+                accountProofNodes: metadataProof.accountProofNodes,
+                storageRoot: metadataProof.storageRoot,
+                validatorSetLengthSlot: metadataProof.validatorSetLengthSlot,
+                validatorSetLengthValue: metadataProof.validatorSetLengthValue,
+                validatorSetLengthValueHash: metadataProof.validatorSetLengthValueHash,
+                validatorSetLengthProofNodes: metadataProof.validatorSetLengthProofNodes,
+                validatorStorageProofs: metadataProof.validatorStorageProofs
+            )
+        ))
+        XCTAssertThrowsError(try canonicalBscValidatorSetMetadataProofBytes(
+            BscValidatorSetMetadataProof(
+                stateRoot: metadataProof.stateRoot,
+                nextValidatorSetPayloadHash: metadataProof.nextValidatorSetPayloadHash,
+                validatorContractAddress: metadataProof.validatorContractAddress,
+                accountProofNodes: metadataProof.accountProofNodes,
+                storageRoot: metadataProof.storageRoot,
+                validatorSetLengthSlot: metadataProof.validatorSetLengthSlot,
+                validatorSetLengthValue: metadataProof.validatorSetLengthValue,
+                validatorSetLengthValueHash: metadataProof.validatorSetLengthValueHash,
+                validatorSetLengthProofNodes: metadataProof.validatorSetLengthProofNodes,
+                validatorStorageProofs: [
+                    BscValidatorStorageProof(
+                        version: 0,
+                        validatorIndex: metadataProof.validatorStorageProofs[0].validatorIndex,
+                        storageSlot: metadataProof.validatorStorageProofs[0].storageSlot,
+                        storageValue: metadataProof.validatorStorageProofs[0].storageValue,
+                        storageValueHash: metadataProof.validatorStorageProofs[0].storageValueHash,
+                        storageProofNodes: metadataProof.validatorStorageProofs[0].storageProofNodes
+                    )
+                ]
+            )
+        ))
+        XCTAssertThrowsError(try canonicalBscValidatorSetMetadataProofBytes(
+            metadataVariant(validatorContractAddress: Data(repeating: 0x12, count: 19))
+        ))
+        XCTAssertThrowsError(try canonicalBscValidatorSetMetadataProofBytes(
+            metadataVariant(accountProofNodes: [])
+        ))
+        XCTAssertThrowsError(try canonicalBscValidatorSetMetadataProofBytes(
+            metadataVariant(validatorSetLengthProofNodes: [])
+        ))
+        XCTAssertThrowsError(try canonicalBscValidatorSetMetadataProofBytes(
+            metadataVariant(validatorStorageProofs: [])
+        ))
+        XCTAssertThrowsError(try canonicalBscValidatorSetMetadataProofBytes(
+            metadataVariant(validatorStorageProofs: [storageVariant(storageProofNodes: [])])
+        ))
+        XCTAssertThrowsError(try canonicalBscValidatorSetMetadataProofBytes(
+            metadataVariant(validatorSetLengthValueHash: String(repeating: "ff", count: 32))
+        ))
+        XCTAssertThrowsError(try canonicalBscValidatorSetMetadataProofBytes(
+            metadataVariant(
+                validatorStorageProofs: [
+                    storageVariant(storageValueHash: String(repeating: "ff", count: 32))
+                ]
+            )
+        ))
+        let changedMetadataProof = BscValidatorSetMetadataProof(
+            stateRoot: String(repeating: "12", count: 32),
+            nextValidatorSetPayloadHash: metadataProof.nextValidatorSetPayloadHash,
+            validatorContractAddress: metadataProof.validatorContractAddress,
+            accountProofNodes: metadataProof.accountProofNodes,
+            storageRoot: metadataProof.storageRoot,
+            validatorSetLengthSlot: metadataProof.validatorSetLengthSlot,
+            validatorSetLengthValue: metadataProof.validatorSetLengthValue,
+            validatorSetLengthValueHash: metadataProof.validatorSetLengthValueHash,
+            validatorSetLengthProofNodes: metadataProof.validatorSetLengthProofNodes,
+            validatorStorageProofs: metadataProof.validatorStorageProofs
+        )
+        XCTAssertNotEqual(metadataHash, try bscValidatorSetMetadataProofHash(changedMetadataProof))
+        XCTAssertEqual(
+            try canonicalBscValidatorSetTransitionMessageBytes(
+                fromValidatorEpoch: 41,
+                toValidatorEpoch: 42,
+                transitionBlockNumber: 8400,
+                transitionBlockHash: String(repeating: "aa", count: 32),
+                parentValidatorSetHash: String(repeating: "bb", count: 32),
+                nextValidatorSetHash: try bscValidatorSetHashFromPayload(payload: validatorPayload),
+                nextValidatorSetPayloadHash: bscValidatorSetPayloadHash(payload: validatorPayload),
+                validatorSetMetadataProofHash: metadataHash
+            ).count,
+            189
+        )
+        XCTAssertNotEqual(
+            try bscValidatorSetTransitionMessageHash(
+                fromValidatorEpoch: 41,
+                toValidatorEpoch: 42,
+                transitionBlockNumber: 8400,
+                transitionBlockHash: String(repeating: "aa", count: 32),
+                parentValidatorSetHash: String(repeating: "bb", count: 32),
+                nextValidatorSetHash: try bscValidatorSetHashFromPayload(payload: validatorPayload),
+                nextValidatorSetPayloadHash: bscValidatorSetPayloadHash(payload: validatorPayload),
+                validatorSetMetadataProofHash: metadataHash
+            ),
+            try bscValidatorSetTransitionMessageHash(
+                fromValidatorEpoch: 41,
+                toValidatorEpoch: 42,
+                transitionBlockNumber: 8400,
+                transitionBlockHash: String(repeating: "aa", count: 32),
+                parentValidatorSetHash: String(repeating: "bb", count: 32),
+                nextValidatorSetHash: try bscValidatorSetHashFromPayload(payload: validatorPayload),
+                nextValidatorSetPayloadHash: bscValidatorSetPayloadHash(payload: validatorPayload),
+                validatorSetMetadataProofHash: String(repeating: "12", count: 32)
+            )
+        )
+        XCTAssertThrowsError(
+            try bscValidatorSetTransitionMessageHash(
+                fromValidatorEpoch: 41,
+                toValidatorEpoch: 42,
+                transitionBlockNumber: 8401,
+                transitionBlockHash: String(repeating: "aa", count: 32),
+                parentValidatorSetHash: String(repeating: "bb", count: 32),
+                nextValidatorSetHash: try bscValidatorSetHashFromPayload(payload: validatorPayload),
+                nextValidatorSetPayloadHash: bscValidatorSetPayloadHash(payload: validatorPayload),
+                validatorSetMetadataProofHash: metadataHash
+            )
+        ) { error in
+            XCTAssertEqual(error as? SccpSourceProofHashError, .invalidValidatorSet("transitionBlockNumber"))
+        }
+        XCTAssertThrowsError(
+            try bscValidatorSetTransitionMessageHash(
+                fromValidatorEpoch: 41,
+                toValidatorEpoch: 43,
+                transitionBlockNumber: 8400,
+                transitionBlockHash: String(repeating: "aa", count: 32),
+                parentValidatorSetHash: String(repeating: "bb", count: 32),
+                nextValidatorSetHash: try bscValidatorSetHashFromPayload(payload: validatorPayload),
+                nextValidatorSetPayloadHash: bscValidatorSetPayloadHash(payload: validatorPayload),
+                validatorSetMetadataProofHash: metadataHash
+            )
+        ) { error in
+            XCTAssertEqual(error as? SccpSourceProofHashError, .invalidValidatorSet("toValidatorEpoch"))
+        }
+        XCTAssertThrowsError(
+            try bscValidatorSetTransitionMessageHash(
+                sourceDomain: 0,
+                fromValidatorEpoch: 41,
+                toValidatorEpoch: 42,
+                transitionBlockNumber: 8400,
+                transitionBlockHash: String(repeating: "aa", count: 32),
+                parentValidatorSetHash: String(repeating: "bb", count: 32),
+                nextValidatorSetHash: try bscValidatorSetHashFromPayload(payload: validatorPayload),
+                nextValidatorSetPayloadHash: bscValidatorSetPayloadHash(payload: validatorPayload),
+                validatorSetMetadataProofHash: metadataHash
+            )
+        ) { error in
+            XCTAssertEqual(error as? SccpSourceProofHashError, .invalidValidatorSet("sourceDomain"))
+        }
+        let parliaPayload = try canonicalBscValidatorSetPayloadBytes(
+            validatorAddresses: [String(repeating: "11", count: 20), String(repeating: "22", count: 20)],
+            validatorPowers: [1, 1]
+        )
+        let parliaExtra = Self.sampleBscParliaExtra()
+        XCTAssertEqual(try bscValidatorSetPayloadFromParliaExtra(parliaExtra), parliaPayload)
+        XCTAssertEqual(
+            try bscValidatorSetPayloadFromHeaderRlp(Self.sampleBscParliaHeaderRlp(extraData: parliaExtra)),
+            parliaPayload
+        )
+        XCTAssertThrowsError(try bscValidatorSetPayloadFromHeaderRlp(Data([0x80])))
+        XCTAssertThrowsError(
+            try canonicalBscValidatorSetPayloadBytes(
+                validatorAddresses: [String(repeating: "11", count: 20), String(repeating: "11", count: 20)],
+                validatorPowers: [1, 2]
+            )
+        )
+        XCTAssertThrowsError(
+            try canonicalBscValidatorSetPayloadBytes(
+                validatorAddresses: [String(repeating: "11", count: 20)],
+                validatorPowers: [0]
+            )
+        )
+        XCTAssertThrowsError(
+            try canonicalBscValidatorSetPayloadBytes(
+                validatorAddresses: (0..<256).map { String(format: "%040x", $0 + 1) },
+                validatorPowers: Array(repeating: 1, count: 256)
+            )
+        )
+
+        let parentSyncKeys = [Data(repeating: 0x11, count: 48), Data(repeating: 0x22, count: 48)]
+        let parentSyncWeights: [UInt64] = [1, 2]
+        let parentSyncPops = [Data(repeating: 0xaa, count: 96), Data(repeating: 0xbb, count: 96)]
+        let nextSyncKeys = [Data(repeating: 0x33, count: 48), Data(repeating: 0x44, count: 48)]
+        let nextSyncWeights: [UInt64] = [3, 4]
+        let nextSyncPops = [Data(repeating: 0xcc, count: 96), Data(repeating: 0xdd, count: 96)]
+        let nextSyncPayload = try canonicalEthSyncCommitteePayloadBytes(
+            syncCommitteePublicKeys: nextSyncKeys,
+            syncCommitteeWeights: nextSyncWeights,
+            syncCommitteePops: nextSyncPops
+        )
+        XCTAssertEqual(
+            try ethSyncCommitteeHash(
+                syncCommitteePublicKeys: parentSyncKeys,
+                syncCommitteeWeights: parentSyncWeights,
+                syncCommitteePops: parentSyncPops
+            ),
+            "0xa95be780d50a9f42f4b1871e29798dbee0352d08027f0c4c6f4fc6466b4bd536"
+        )
+        XCTAssertEqual(
+            nextSyncPayload.hexEncodedString(),
+            "010200000030000000"
+                + String(repeating: "33", count: 48)
+                + "030000000000000060000000"
+                + String(repeating: "cc", count: 96)
+                + "30000000"
+                + String(repeating: "44", count: 48)
+                + "040000000000000060000000"
+                + String(repeating: "dd", count: 96)
+        )
+        XCTAssertEqual(
+            try ethSyncCommitteeHashFromPayload(payload: nextSyncPayload),
+            "0xb3343685e8ab63a2d66bccebb6c03a149a53330389473b4a495598065c17b445"
+        )
+        XCTAssertEqual(
+            try ethSyncCommitteePayloadHash(payload: nextSyncPayload),
+            "0xfdba6ad2ff9acca564b1042eec01c2d6356d5e2ade5e653c9d47360e55d53e17"
+        )
+        let ethTransitionMessageHash = try ethSyncCommitteeTransitionMessageHash(
+            fromSyncPeriod: 7,
+            toSyncPeriod: 8,
+            transitionSlot: 19,
+            finalizedBeaconRoot: String(repeating: "aa", count: 32),
+            parentSyncCommitteeHash: "0xa95be780d50a9f42f4b1871e29798dbee0352d08027f0c4c6f4fc6466b4bd536",
+            nextSyncCommitteeHash: "0xb3343685e8ab63a2d66bccebb6c03a149a53330389473b4a495598065c17b445",
+            nextSyncCommitteePayloadHash: "0xfdba6ad2ff9acca564b1042eec01c2d6356d5e2ade5e653c9d47360e55d53e17",
+            nextSyncCommitteeBranchHash: String(repeating: "be", count: 32)
+        )
+        XCTAssertEqual(
+            ethTransitionMessageHash,
+            "0xc5cbfaf915a63e59bc142277814f13fab1e8012a0bd56db7033b18bc02637bec"
+        )
+        XCTAssertEqual(try canonicalEthSyncCommitteeTransitionSignatureBytes(
+            fromSyncPeriod: 7,
+            toSyncPeriod: 8,
+            transitionSlot: 19,
+            finalizedBeaconRoot: String(repeating: "aa", count: 32),
+            parentSyncCommitteeHash: "0xa95be780d50a9f42f4b1871e29798dbee0352d08027f0c4c6f4fc6466b4bd536",
+            nextSyncCommitteeHash: "0xb3343685e8ab63a2d66bccebb6c03a149a53330389473b4a495598065c17b445",
+            nextSyncCommitteePayload: nextSyncPayload,
+            nextSyncCommitteePayloadHash: "0xfdba6ad2ff9acca564b1042eec01c2d6356d5e2ade5e653c9d47360e55d53e17",
+            nextSyncCommitteeBranchHash: String(repeating: "be", count: 32),
+            transitionMessageHash: ethTransitionMessageHash,
+            totalWeight: 3,
+            signedWeight: 3,
+            syncCommitteePublicKeys: parentSyncKeys,
+            syncCommitteeWeights: parentSyncWeights,
+            syncCommitteePops: parentSyncPops,
+            signersBitmap: Data([0x03]),
+            aggregateSignature: Data(repeating: 0xee, count: 96)
+        ).count, 1068)
+        XCTAssertEqual(try ethSyncCommitteeTransitionSignatureHash(
+            fromSyncPeriod: 7,
+            toSyncPeriod: 8,
+            transitionSlot: 19,
+            finalizedBeaconRoot: String(repeating: "aa", count: 32),
+            parentSyncCommitteeHash: "0xa95be780d50a9f42f4b1871e29798dbee0352d08027f0c4c6f4fc6466b4bd536",
+            nextSyncCommitteeHash: "0xb3343685e8ab63a2d66bccebb6c03a149a53330389473b4a495598065c17b445",
+            nextSyncCommitteePayload: nextSyncPayload,
+            nextSyncCommitteePayloadHash: "0xfdba6ad2ff9acca564b1042eec01c2d6356d5e2ade5e653c9d47360e55d53e17",
+            nextSyncCommitteeBranchHash: String(repeating: "be", count: 32),
+            transitionMessageHash: ethTransitionMessageHash,
+            totalWeight: 3,
+            signedWeight: 3,
+            syncCommitteePublicKeys: parentSyncKeys,
+            syncCommitteeWeights: parentSyncWeights,
+            syncCommitteePops: parentSyncPops,
+            signersBitmap: Data([0x03]),
+            aggregateSignature: Data(repeating: 0xee, count: 96)
+        ), "0x2d03886e7ea307f7b5a77af00075b32536cbf016d0d8554bec2b1e424252f858")
+        XCTAssertThrowsError(try canonicalEthSyncCommitteeTransitionSignatureBytes(
+            version: 0,
+            fromSyncPeriod: 7,
+            toSyncPeriod: 8,
+            transitionSlot: 19,
+            finalizedBeaconRoot: String(repeating: "aa", count: 32),
+            parentSyncCommitteeHash: "0xa95be780d50a9f42f4b1871e29798dbee0352d08027f0c4c6f4fc6466b4bd536",
+            nextSyncCommitteeHash: "0xb3343685e8ab63a2d66bccebb6c03a149a53330389473b4a495598065c17b445",
+            nextSyncCommitteePayload: nextSyncPayload,
+            nextSyncCommitteePayloadHash: "0xfdba6ad2ff9acca564b1042eec01c2d6356d5e2ade5e653c9d47360e55d53e17",
+            nextSyncCommitteeBranchHash: String(repeating: "be", count: 32),
+            transitionMessageHash: ethTransitionMessageHash,
+            totalWeight: 3,
+            signedWeight: 3,
+            syncCommitteePublicKeys: parentSyncKeys,
+            syncCommitteeWeights: parentSyncWeights,
+            syncCommitteePops: parentSyncPops,
+            signersBitmap: Data([0x03]),
+            aggregateSignature: Data(repeating: 0xee, count: 96)
+        ))
+        XCTAssertThrowsError(try canonicalEthBeaconSyncCommitteeProofBytes(
+            version: 0,
+            totalWeight: 3,
+            signedWeight: 3,
+            syncCommitteeMessageHash: ethTransitionMessageHash,
+            syncCommitteePublicKeys: parentSyncKeys,
+            syncCommitteeWeights: parentSyncWeights,
+            syncCommitteePops: parentSyncPops,
+            signersBitmap: Data([0x03]),
+            aggregateSignature: Data(repeating: 0xee, count: 96)
+        ))
+        XCTAssertThrowsError(
+            try canonicalEthSyncCommitteePayloadBytes(
+                syncCommitteePublicKeys: Array(repeating: Data(repeating: 0x11, count: 48), count: 513),
+                syncCommitteeWeights: Array(repeating: 1, count: 513),
+                syncCommitteePops: Array(repeating: Data(repeating: 0xaa, count: 96), count: 513)
+            )
+        )
+        XCTAssertThrowsError(
+            try canonicalEthSyncCommitteePayloadBytes(
+                syncCommitteePublicKeys: [Data(repeating: 0x11, count: 47), parentSyncKeys[1]],
+                syncCommitteeWeights: parentSyncWeights,
+                syncCommitteePops: parentSyncPops
+            )
+        )
+        XCTAssertThrowsError(
+            try canonicalEthSyncCommitteePayloadBytes(
+                syncCommitteePublicKeys: [Data(repeating: 0, count: 48), parentSyncKeys[1]],
+                syncCommitteeWeights: parentSyncWeights,
+                syncCommitteePops: parentSyncPops
+            )
+        )
+        XCTAssertThrowsError(
+            try canonicalEthSyncCommitteePayloadBytes(
+                syncCommitteePublicKeys: parentSyncKeys,
+                syncCommitteeWeights: parentSyncWeights,
+                syncCommitteePops: [Data(repeating: 0, count: 96), parentSyncPops[1]]
+            )
+        )
+        XCTAssertThrowsError(
+            try canonicalEthBeaconSyncCommitteeProofBytes(
+                totalWeight: 3,
+                signedWeight: 3,
+                syncCommitteeMessageHash: ethTransitionMessageHash,
+                syncCommitteePublicKeys: parentSyncKeys,
+                syncCommitteeWeights: parentSyncWeights,
+                syncCommitteePops: parentSyncPops,
+                signersBitmap: Data(repeating: 0, count: 65),
+                aggregateSignature: Data(repeating: 0xee, count: 96)
+            )
+        )
+        XCTAssertThrowsError(
+            try canonicalEthBeaconSyncCommitteeProofBytes(
+                totalWeight: 3,
+                signedWeight: 0,
+                syncCommitteeMessageHash: ethTransitionMessageHash,
+                syncCommitteePublicKeys: parentSyncKeys,
+                syncCommitteeWeights: parentSyncWeights,
+                syncCommitteePops: parentSyncPops,
+                signersBitmap: Data([0x00]),
+                aggregateSignature: Data(repeating: 0xee, count: 96)
+            )
+        )
+        XCTAssertThrowsError(
+            try canonicalEthBeaconSyncCommitteeProofBytes(
+                totalWeight: 3,
+                signedWeight: 3,
+                syncCommitteeMessageHash: ethTransitionMessageHash,
+                syncCommitteePublicKeys: parentSyncKeys,
+                syncCommitteeWeights: parentSyncWeights,
+                syncCommitteePops: parentSyncPops,
+                signersBitmap: Data([0x04]),
+                aggregateSignature: Data(repeating: 0xee, count: 96)
+            )
+        )
+        XCTAssertThrowsError(
+            try canonicalEthBeaconSyncCommitteeProofBytes(
+                totalWeight: 3,
+                signedWeight: 2,
+                syncCommitteeMessageHash: ethTransitionMessageHash,
+                syncCommitteePublicKeys: parentSyncKeys,
+                syncCommitteeWeights: parentSyncWeights,
+                syncCommitteePops: parentSyncPops,
+                signersBitmap: Data([0x01]),
+                aggregateSignature: Data(repeating: 0xee, count: 96)
+            )
+        )
+        XCTAssertThrowsError(
+            try canonicalEthBeaconSyncCommitteeProofBytes(
+                totalWeight: 4,
+                signedWeight: 3,
+                syncCommitteeMessageHash: ethTransitionMessageHash,
+                syncCommitteePublicKeys: parentSyncKeys,
+                syncCommitteeWeights: parentSyncWeights,
+                syncCommitteePops: parentSyncPops,
+                signersBitmap: Data([0x03]),
+                aggregateSignature: Data(repeating: 0xee, count: 96)
+            )
+        )
+        XCTAssertThrowsError(
+            try canonicalEthBeaconSyncCommitteeProofBytes(
+                totalWeight: 3,
+                signedWeight: 1,
+                syncCommitteeMessageHash: ethTransitionMessageHash,
+                syncCommitteePublicKeys: parentSyncKeys,
+                syncCommitteeWeights: parentSyncWeights,
+                syncCommitteePops: parentSyncPops,
+                signersBitmap: Data([0x01]),
+                aggregateSignature: Data(repeating: 0xee, count: 96)
+            )
+        )
+        XCTAssertThrowsError(
+            try canonicalEthBeaconSyncCommitteeProofBytes(
+                totalWeight: 3,
+                signedWeight: 3,
+                syncCommitteeMessageHash: ethTransitionMessageHash,
+                syncCommitteePublicKeys: parentSyncKeys,
+                syncCommitteeWeights: parentSyncWeights,
+                syncCommitteePops: parentSyncPops,
+                signersBitmap: Data([0x03]),
+                aggregateSignature: Data(repeating: 0, count: 96)
+            )
+        )
+
+        let witnessPayload = try canonicalTronWitnessSchedulePayloadBytes(
+            witnessAddresses: ["41" + String(repeating: "11", count: 20),
+                               "41" + String(repeating: "22", count: 20)],
+            witnessWeights: [1, 2]
+        )
+        XCTAssertEqual(
+            witnessPayload.hexEncodedString(),
+            "0102000000"
+                + "41"
+                + String(repeating: "11", count: 20)
+                + "0100000000000000"
+                + "41"
+                + String(repeating: "22", count: 20)
+                + "0200000000000000"
+        )
+        XCTAssertEqual(
+            try tronWitnessSchedulePayloadHash(payload: witnessPayload),
+            "0xd6087d6ea6a1b58b17523587f28e457d84d5d2214298f93a09dbb509ea2cf429"
+        )
+        XCTAssertEqual(
+            try tronWitnessSchedulePayloadHash(
+                witnessAddresses: ["41" + String(repeating: "11", count: 20),
+                                   "41" + String(repeating: "22", count: 20)],
+                witnessWeights: [1, 2]
+            ),
+            "0xd6087d6ea6a1b58b17523587f28e457d84d5d2214298f93a09dbb509ea2cf429"
+        )
+        XCTAssertEqual(
+            try tronWitnessScheduleHashFromPayload(payload: witnessPayload),
+            "0x0c5eca6f96572fe939e640d8951abd126d2e966ffc4e3d0d087dbff6052577be"
+        )
+        let zeroWitnessPayload = Data(
+            hexString: "010100000041" + String(repeating: "00", count: 20) + "0100000000000000"
+        )!
+        XCTAssertThrowsError(try tronWitnessSchedulePayloadHash(payload: zeroWitnessPayload))
+        XCTAssertThrowsError(try tronWitnessScheduleHashFromPayload(payload: zeroWitnessPayload))
+        XCTAssertThrowsError(
+            try canonicalTronWitnessSchedulePayloadBytes(
+                witnessAddresses: (0..<65).map {
+                    "41" + String(repeating: "11", count: 19) + String(format: "%02x", $0)
+                },
+                witnessWeights: Array(repeating: 1, count: 65)
+            )
+        )
+        XCTAssertThrowsError(
+            try canonicalTronWitnessSchedulePayloadBytes(
+                witnessAddresses: ["41" + String(repeating: "11", count: 20),
+                                   "41" + String(repeating: "11", count: 20)],
+                witnessWeights: [1, 2]
+            )
+        )
+        XCTAssertThrowsError(
+            try canonicalTronWitnessSchedulePayloadBytes(
+                witnessAddresses: ["41" + String(repeating: "00", count: 20)],
+                witnessWeights: [1]
+            )
+        )
+        XCTAssertThrowsError(
+            try canonicalTronWitnessSchedulePayloadBytes(
+                witnessAddresses: ["41" + String(repeating: "11", count: 20)],
+                witnessWeights: [0]
+            )
+        )
+        XCTAssertThrowsError(
+            try canonicalTronWitnessSchedulePayloadBytes(
+                witnessAddresses: ["41" + String(repeating: "11", count: 20),
+                                   "41" + String(repeating: "22", count: 20)],
+                witnessWeights: [UInt64.max, 1]
+            )
+        )
+        let overflowingWitnessPayload = Data(
+            hexString: "0102000000"
+                + "41"
+                + String(repeating: "11", count: 20)
+                + "ffffffffffffffff"
+                + "41"
+                + String(repeating: "22", count: 20)
+                + "0100000000000000"
+        )!
+        XCTAssertThrowsError(try tronWitnessSchedulePayloadHash(payload: overflowingWitnessPayload))
+        XCTAssertThrowsError(try tronWitnessScheduleHashFromPayload(payload: overflowingWitnessPayload))
+
+        let tronWitnessScheduleHash = "0x0c5eca6f96572fe939e640d8951abd126d2e966ffc4e3d0d087dbff6052577be"
+        XCTAssertEqual(
+            try tronSolidBlockMessageHash(
+                sourceDomain: sccpDomainTron,
+                solidBlockNumber: 12345,
+                blockHash: "0x0000000000003039b6bc08fb34f737c093d9dd2adefccb04344715e2619c8286",
+                witnessScheduleHash: tronWitnessScheduleHash,
+                receiptRoot: String(repeating: "bb", count: 32),
+                transactionRoot: String(repeating: "dd", count: 32),
+                receiptProofHash: String(repeating: "cc", count: 32)
+            ),
+            "0x065173d89272a549b504258936729c5226dfdb866ccb9422757d95ec9fa6d688"
+        )
+        XCTAssertThrowsError(
+            try canonicalTronSolidBlockMessageBytes(
+                sourceDomain: sccpDomainEthereum,
+                solidBlockNumber: 12345,
+                blockHash: "0x0000000000003039b6bc08fb34f737c093d9dd2adefccb04344715e2619c8286",
+                witnessScheduleHash: tronWitnessScheduleHash,
+                receiptRoot: String(repeating: "bb", count: 32),
+                transactionRoot: String(repeating: "dd", count: 32),
+                receiptProofHash: String(repeating: "cc", count: 32)
+            )
+        )
+        let tronTestOwnerAddress = "0x417e5f4552091a69125d5dfcb7b8c2659029395bdf"
+        let tronSourceEventTransactionId = "be9223cdfd6728fd2512f270a44f928fbd58df98f8e9e5fe13c4dc73503192e4"
+        let tronSourceEventSignature = Data(
+            hexString: "79be667ef9dcbbac55a06295ce870b07029bfcdb2dce28d959f2815b16f81798"
+                + "38508a4cf743e4a97ab3550672d69d980545ff8d776f6e9bade4ff4196f3693b"
+                + "00"
+        )!
+        XCTAssertEqual(
+            try tronWitnessSealHash(
+                totalWeight: 1,
+                signedWeight: 1,
+                solidBlockMessageHash: "0x" + tronSourceEventTransactionId,
+                witnessAddresses: [tronTestOwnerAddress],
+                witnessWeights: [1],
+                signersBitmap: Data([0x01]),
+                signatures: [tronSourceEventSignature]
+            ),
+            "0x4266cf4de71c96e4fde925b686abbd50e67026f63ad90e0cf4899d4925d45849"
+        )
+        XCTAssertThrowsError(
+            try canonicalTronWitnessSealBytes(
+                totalWeight: 1,
+                signedWeight: 1,
+                solidBlockMessageHash: "0x" + tronSourceEventTransactionId,
+                witnessAddresses: ["0x41" + String(repeating: "11", count: 20)],
+                witnessWeights: [1],
+                signersBitmap: Data([0x01]),
+                signatures: [tronSourceEventSignature]
+            )
+        )
+        let parentWitnessSchedulePayload = Data(
+            hexString: "0101000000417e5f4552091a69125d5dfcb7b8c2659029395bdf0100000000000000"
+        )!
+        let parentWitnessScheduleHash = "0x87174bbfde1c4b8473a6be18df37b60979c7609ebf1788ce8cf97604311474b6"
+        XCTAssertEqual(try tronWitnessScheduleHashFromPayload(payload: parentWitnessSchedulePayload), parentWitnessScheduleHash)
+        let transitionMessage = try canonicalTronWitnessScheduleTransitionMessageBytes(
+            sourceDomain: sccpDomainTron,
+            fromWitnessScheduleEpoch: 7,
+            toWitnessScheduleEpoch: 8,
+            transitionBlockNumber: 12345,
+            transitionBlockHash: "0x0000000000003039b6bc08fb34f737c093d9dd2adefccb04344715e2619c8286",
+            parentWitnessScheduleHash: parentWitnessScheduleHash,
+            nextWitnessScheduleHash: tronWitnessScheduleHash,
+            nextWitnessSchedulePayload: witnessPayload
+        )
+        XCTAssertEqual(transitionMessage.count, 157)
+        XCTAssertEqual(
+            transitionMessage.hexEncodedString(),
+            "0105000000070000000000000008000000000000003930000000000000"
+                + "0000000000003039b6bc08fb34f737c093d9dd2adefccb04344715e2619c8286"
+                + "87174bbfde1c4b8473a6be18df37b60979c7609ebf1788ce8cf97604311474b6"
+                + "0c5eca6f96572fe939e640d8951abd126d2e966ffc4e3d0d087dbff6052577be"
+                + "d6087d6ea6a1b58b17523587f28e457d84d5d2214298f93a09dbb509ea2cf429"
+        )
+        let transitionMessageHash = "0x6e53d3f7d1253223a70a163a02544a8df27b74171cb0c76c8f42d71419fabd43"
+        XCTAssertEqual(
+            try tronWitnessScheduleTransitionMessageHash(
+                sourceDomain: sccpDomainTron,
+                fromWitnessScheduleEpoch: 7,
+                toWitnessScheduleEpoch: 8,
+                transitionBlockNumber: 12345,
+                transitionBlockHash: "0x0000000000003039b6bc08fb34f737c093d9dd2adefccb04344715e2619c8286",
+                parentWitnessScheduleHash: parentWitnessScheduleHash,
+                nextWitnessScheduleHash: tronWitnessScheduleHash,
+                nextWitnessSchedulePayload: witnessPayload
+            ),
+            transitionMessageHash
+        )
+        let transitionSignature = Data(
+            hexString: "c6047f9441ed7d6d3045406e95c07cd85c778e4b8cef3ca7abac09b95c709ee5"
+                + "65d3d639f676a837945854abb3f59c4b93355bb55a789e31a25aee261500932d01"
+        )!
+        XCTAssertEqual(
+            try tronWitnessScheduleTransitionSealHash(
+                sourceDomain: sccpDomainTron,
+                fromWitnessScheduleEpoch: 7,
+                toWitnessScheduleEpoch: 8,
+                transitionBlockNumber: 12345,
+                transitionBlockHash: "0x0000000000003039b6bc08fb34f737c093d9dd2adefccb04344715e2619c8286",
+                parentWitnessScheduleHash: parentWitnessScheduleHash,
+                nextWitnessScheduleHash: tronWitnessScheduleHash,
+                nextWitnessSchedulePayload: witnessPayload,
+                transitionMessageHash: transitionMessageHash,
+                totalWeight: 1,
+                signedWeight: 1,
+                witnessAddresses: [tronTestOwnerAddress],
+                witnessWeights: [1],
+                signersBitmap: Data([0x01]),
+                signatures: [transitionSignature]
+            ),
+            "0xbb3b7ef87bd3efb77d9b7f0a4dba8e7398827621d59039c694c285a7e2deacce"
+        )
+        XCTAssertThrowsError(
+            try canonicalTronWitnessScheduleTransitionSealBytes(
+                sourceDomain: sccpDomainTron,
+                fromWitnessScheduleEpoch: 7,
+                toWitnessScheduleEpoch: 8,
+                transitionBlockNumber: 12345,
+                transitionBlockHash: "0x0000000000003039b6bc08fb34f737c093d9dd2adefccb04344715e2619c8286",
+                parentWitnessScheduleHash: parentWitnessScheduleHash,
+                nextWitnessScheduleHash: tronWitnessScheduleHash,
+                nextWitnessSchedulePayload: witnessPayload,
+                transitionMessageHash: "0x" + String(repeating: "dd", count: 32),
+                totalWeight: 1,
+                signedWeight: 1,
+                witnessAddresses: [tronTestOwnerAddress],
+                witnessWeights: [1],
+                signersBitmap: Data([0x01]),
+                signatures: [transitionSignature]
+            )
+        )
+
+        let authorityPayload = try canonicalSubstrateAuthoritySetPayloadBytes(
+            authorityPublicKeys: [String(repeating: "11", count: 32), String(repeating: "22", count: 32)],
+            authorityWeights: [1, 2]
+        )
+        XCTAssertEqual(
+            authorityPayload.hexEncodedString(),
+            "0102000000"
+                + String(repeating: "11", count: 32)
+                + "0100000000000000"
+                + String(repeating: "22", count: 32)
+                + "0200000000000000"
+        )
+        XCTAssertEqual(
+            try substrateAuthoritySetPayloadHash(payload: authorityPayload),
+            "0xdedc4ebe5f91162a5029cb67f88cdbbf94c2bf2b9d0d373bd3e670321565cc16"
+        )
+        XCTAssertEqual(
+            try substrateAuthoritySetPayloadHash(
+                authorityPublicKeys: [String(repeating: "11", count: 32), String(repeating: "22", count: 32)],
+                authorityWeights: [1, 2]
+            ),
+            "0xdedc4ebe5f91162a5029cb67f88cdbbf94c2bf2b9d0d373bd3e670321565cc16"
+        )
+        XCTAssertEqual(
+            try substrateAuthoritySetHashFromPayload(payload: authorityPayload),
+            "0xde84b8b7a5409c0f2cff1191173d6caa681d902b35e42669106ec6ea3193a117"
+        )
+        XCTAssertThrowsError(
+            try canonicalSubstrateAuthoritySetPayloadBytes(
+                authorityPublicKeys: [String(repeating: "11", count: 32), String(repeating: "11", count: 32)],
+                authorityWeights: [1, 2]
+            )
+        )
+        XCTAssertThrowsError(
+            try canonicalSubstrateAuthoritySetPayloadBytes(
+                authorityPublicKeys: [String(repeating: "00", count: 32)],
+                authorityWeights: [1]
+            )
+        )
+        var zeroAuthorityPayload = Data(repeating: 0, count: 45)
+        zeroAuthorityPayload[0] = 1
+        zeroAuthorityPayload[1] = 1
+        zeroAuthorityPayload[37] = 1
+        XCTAssertThrowsError(try substrateAuthoritySetHashFromPayload(payload: zeroAuthorityPayload))
+        XCTAssertThrowsError(
+            try canonicalSubstrateAuthoritySetPayloadBytes(
+                authorityPublicKeys: [String(repeating: "11", count: 32)],
+                authorityWeights: [0]
+            )
+        )
+        XCTAssertThrowsError(
+            try canonicalSubstrateAuthoritySetPayloadBytes(
+                authorityPublicKeys: Array(repeating: String(repeating: "11", count: 32), count: 2049),
+                authorityWeights: Array(repeating: 1, count: 2049)
+            )
+        )
+        let parentAuthorityKeys = [
+            String(repeating: "11", count: 32),
+            String(repeating: "22", count: 32),
+            String(repeating: "33", count: 32),
+        ]
+        let parentAuthorityWeights: [UInt64] = [5, 7, 11]
+        let nextAuthorityKeys = [
+            String(repeating: "aa", count: 32),
+            String(repeating: "bb", count: 32),
+            String(repeating: "cc", count: 32),
+        ]
+        let nextAuthorityWeights: [UInt64] = [13, 17, 19]
+        let parentAuthorityPayload = try canonicalSubstrateAuthoritySetPayloadBytes(
+            authorityPublicKeys: parentAuthorityKeys,
+            authorityWeights: parentAuthorityWeights
+        )
+        let nextAuthorityPayload = try canonicalSubstrateAuthoritySetPayloadBytes(
+            authorityPublicKeys: nextAuthorityKeys,
+            authorityWeights: nextAuthorityWeights
+        )
+        XCTAssertEqual(
+            parentAuthorityPayload.hexEncodedString(),
+            "0103000000"
+                + String(repeating: "11", count: 32)
+                + "0500000000000000"
+                + String(repeating: "22", count: 32)
+                + "0700000000000000"
+                + String(repeating: "33", count: 32)
+                + "0b00000000000000"
+        )
+        XCTAssertEqual(
+            nextAuthorityPayload.hexEncodedString(),
+            "0103000000"
+                + String(repeating: "aa", count: 32)
+                + "0d00000000000000"
+                + String(repeating: "bb", count: 32)
+                + "1100000000000000"
+                + String(repeating: "cc", count: 32)
+                + "1300000000000000"
+        )
+        let parentAuthorityHash = "0xb2efd5d86304ea728a8a9ed4013aab8f3e10c0cf862e859c9cade55e660934ef"
+        let nextAuthorityHash = "0x07cdbba0d61fdd4324b571dd793965e52acbf7f4c163af328e26c92c047501b3"
+        let nextAuthorityPayloadHash = "0x12ce972498ba5cd8a760aee0429fdc30d8b6447890e1bf77d8dde46f86b40d85"
+        XCTAssertEqual(try substrateAuthoritySetHashFromPayload(payload: parentAuthorityPayload), parentAuthorityHash)
+        XCTAssertEqual(try substrateAuthoritySetHashFromPayload(payload: nextAuthorityPayload), nextAuthorityHash)
+        XCTAssertEqual(try substrateAuthoritySetPayloadHash(payload: nextAuthorityPayload), nextAuthorityPayloadHash)
+        let substrateTransitionMessageHash = try substrateAuthoritySetTransitionMessageHash(
+            sourceDomain: sccpDomainSoraKusama,
+            fromGrandpaSetId: 41,
+            toGrandpaSetId: 42,
+            transitionBlockNumber: 9001,
+            transitionBlockHash: String(repeating: "44", count: 32),
+            parentAuthoritySetHash: parentAuthorityHash,
+            nextAuthoritySetHash: nextAuthorityHash,
+            nextAuthoritySetPayloadHash: nextAuthorityPayloadHash
+        )
+        XCTAssertEqual(
+            substrateTransitionMessageHash,
+            "0x60589333bf798bf592b2642d0fbac39b4e9305576cd2ebe9dd1f448a97a0596b"
+        )
+        XCTAssertEqual(try canonicalSubstrateAuthoritySetTransitionMessageBytes(
+            sourceDomain: sccpDomainSoraKusama,
+            fromGrandpaSetId: 41,
+            toGrandpaSetId: 42,
+            transitionBlockNumber: 9001,
+            transitionBlockHash: String(repeating: "44", count: 32),
+            parentAuthoritySetHash: parentAuthorityHash,
+            nextAuthoritySetHash: nextAuthorityHash,
+            nextAuthoritySetPayloadHash: nextAuthorityPayloadHash
+        ).count, 157)
+        XCTAssertEqual(try canonicalSubstrateAuthoritySetTransitionJustificationBytes(
+            sourceDomain: sccpDomainSoraKusama,
+            fromGrandpaSetId: 41,
+            toGrandpaSetId: 42,
+            transitionBlockNumber: 9001,
+            transitionBlockHash: String(repeating: "44", count: 32),
+            parentAuthoritySetHash: parentAuthorityHash,
+            nextAuthoritySetHash: nextAuthorityHash,
+            nextAuthoritySetPayload: nextAuthorityPayload,
+            nextAuthoritySetPayloadHash: nextAuthorityPayloadHash,
+            transitionMessageHash: substrateTransitionMessageHash,
+            totalWeight: 23,
+            signedWeight: 18,
+            authorityPublicKeys: parentAuthorityKeys,
+            authorityWeights: parentAuthorityWeights,
+            signersBitmap: Data([0x06]),
+            signatures: [Data(repeating: 0x77, count: 64), Data(repeating: 0x88, count: 64)]
+        ).count, 684)
+        XCTAssertEqual(try substrateAuthoritySetTransitionJustificationHash(
+            sourceDomain: sccpDomainSoraKusama,
+            fromGrandpaSetId: 41,
+            toGrandpaSetId: 42,
+            transitionBlockNumber: 9001,
+            transitionBlockHash: String(repeating: "44", count: 32),
+            parentAuthoritySetHash: parentAuthorityHash,
+            nextAuthoritySetHash: nextAuthorityHash,
+            nextAuthoritySetPayload: nextAuthorityPayload,
+            nextAuthoritySetPayloadHash: nextAuthorityPayloadHash,
+            transitionMessageHash: substrateTransitionMessageHash,
+            totalWeight: 23,
+            signedWeight: 18,
+            authorityPublicKeys: parentAuthorityKeys,
+            authorityWeights: parentAuthorityWeights,
+            signersBitmap: Data([0x06]),
+            signatures: [Data(repeating: 0x77, count: 64), Data(repeating: 0x88, count: 64)]
+        ), "0x4d50a606c6858d3a4af5caf991a6dd8ac10dce717b14bd36ba70e5b0b098d302")
+        XCTAssertThrowsError(try canonicalSubstrateAuthoritySetTransitionJustificationBytes(
+            version: 0,
+            sourceDomain: sccpDomainSoraKusama,
+            fromGrandpaSetId: 41,
+            toGrandpaSetId: 42,
+            transitionBlockNumber: 9001,
+            transitionBlockHash: String(repeating: "44", count: 32),
+            parentAuthoritySetHash: parentAuthorityHash,
+            nextAuthoritySetHash: nextAuthorityHash,
+            nextAuthoritySetPayload: nextAuthorityPayload,
+            nextAuthoritySetPayloadHash: nextAuthorityPayloadHash,
+            transitionMessageHash: substrateTransitionMessageHash,
+            totalWeight: 23,
+            signedWeight: 18,
+            authorityPublicKeys: parentAuthorityKeys,
+            authorityWeights: parentAuthorityWeights,
+            signersBitmap: Data([0x06]),
+            signatures: [Data(repeating: 0x77, count: 64), Data(repeating: 0x88, count: 64)]
+        ))
+        XCTAssertThrowsError(try canonicalSubstrateAuthoritySetTransitionJustificationBytes(
+            sourceDomain: sccpDomainSoraKusama,
+            fromGrandpaSetId: 41,
+            toGrandpaSetId: 42,
+            transitionBlockNumber: 9001,
+            transitionBlockHash: String(repeating: "44", count: 32),
+            parentAuthoritySetHash: parentAuthorityHash,
+            nextAuthoritySetHash: nextAuthorityHash,
+            nextAuthoritySetPayload: nextAuthorityPayload,
+            nextAuthoritySetPayloadHash: nextAuthorityPayloadHash,
+            transitionMessageHash: substrateTransitionMessageHash,
+            proofVersion: 0,
+            totalWeight: 23,
+            signedWeight: 18,
+            authorityPublicKeys: parentAuthorityKeys,
+            authorityWeights: parentAuthorityWeights,
+            signersBitmap: Data([0x06]),
+            signatures: [Data(repeating: 0x77, count: 64), Data(repeating: 0x88, count: 64)]
+        ))
+        XCTAssertThrowsError(try canonicalSubstrateAuthoritySetTransitionJustificationBytes(
+            sourceDomain: sccpDomainSoraKusama,
+            fromGrandpaSetId: 41,
+            toGrandpaSetId: 42,
+            transitionBlockNumber: 9001,
+            transitionBlockHash: String(repeating: "44", count: 32),
+            parentAuthoritySetHash: parentAuthorityHash,
+            nextAuthoritySetHash: nextAuthorityHash,
+            nextAuthoritySetPayload: nextAuthorityPayload,
+            nextAuthoritySetPayloadHash: nextAuthorityPayloadHash,
+            transitionMessageHash: substrateTransitionMessageHash,
+            totalWeight: 23,
+            signedWeight: 18,
+            authorityPublicKeys: parentAuthorityKeys,
+            authorityWeights: parentAuthorityWeights,
+            signersBitmap: Data(repeating: 0xff, count: 257),
+            signatures: [Data(repeating: 0x77, count: 64), Data(repeating: 0x88, count: 64)]
+        ))
+        func XCTAssertBadSubstrateJustification(
+            totalWeight: UInt64 = 23,
+            signedWeight: UInt64 = 18,
+            signersBitmap: Data = Data([0x06]),
+            signatures: [Data] = [Data(repeating: 0x77, count: 64), Data(repeating: 0x88, count: 64)]
+        ) {
+            XCTAssertThrowsError(try canonicalSubstrateAuthoritySetTransitionJustificationBytes(
+                sourceDomain: sccpDomainSoraKusama,
+                fromGrandpaSetId: 41,
+                toGrandpaSetId: 42,
+                transitionBlockNumber: 9001,
+                transitionBlockHash: String(repeating: "44", count: 32),
+                parentAuthoritySetHash: parentAuthorityHash,
+                nextAuthoritySetHash: nextAuthorityHash,
+                nextAuthoritySetPayload: nextAuthorityPayload,
+                nextAuthoritySetPayloadHash: nextAuthorityPayloadHash,
+                transitionMessageHash: substrateTransitionMessageHash,
+                totalWeight: totalWeight,
+                signedWeight: signedWeight,
+                authorityPublicKeys: parentAuthorityKeys,
+                authorityWeights: parentAuthorityWeights,
+                signersBitmap: signersBitmap,
+                signatures: signatures
+            ))
+        }
+        XCTAssertBadSubstrateJustification(totalWeight: 22)
+        XCTAssertBadSubstrateJustification(signedWeight: 17)
+        XCTAssertBadSubstrateJustification(signedWeight: 12, signersBitmap: Data([0x03]))
+        XCTAssertBadSubstrateJustification(signersBitmap: Data([0x00]), signatures: [])
+        XCTAssertBadSubstrateJustification(signersBitmap: Data([0x08]), signatures: [])
+        XCTAssertBadSubstrateJustification(signatures: [Data(repeating: 0, count: 64), Data(repeating: 0x88, count: 64)])
+        XCTAssertBadSubstrateJustification(signatures: [Data(repeating: 0x77, count: 63), Data(repeating: 0x88, count: 64)])
+
+        XCTAssertEqual(try canonicalTronSccpReceiptProofBytes(
+            sourceEventDigest: sourceEventDigest,
+            receiptRoot: String(repeating: "bb", count: 32),
+            transactionRoot: String(repeating: "dd", count: 32),
+            inclusionBranch: branch
+        ).count, 133)
+        XCTAssertThrowsError(try canonicalTronSccpReceiptProofBytes(
+            sourceEventDigest: sourceEventDigest + " ",
+            receiptRoot: String(repeating: "bb", count: 32),
+            transactionRoot: String(repeating: "dd", count: 32),
+            inclusionBranch: branch
+        )) { error in
+            XCTAssertEqual(error as? SccpSourceProofHashError, .invalidHex32("sourceEventDigest"))
+        }
+        XCTAssertThrowsError(try canonicalTronSccpReceiptProofBytes(
+            sourceEventDigest: zeroHash,
+            receiptRoot: String(repeating: "bb", count: 32),
+            transactionRoot: String(repeating: "dd", count: 32),
+            inclusionBranch: branch
+        ))
+        XCTAssertThrowsError(try canonicalTronSccpReceiptProofBytes(
+            sourceEventDigest: sourceEventDigest,
+            receiptRoot: zeroHash,
+            transactionRoot: String(repeating: "dd", count: 32),
+            inclusionBranch: branch
+        ))
+        XCTAssertThrowsError(try canonicalTronSccpReceiptProofBytes(
+            sourceEventDigest: sourceEventDigest,
+            receiptRoot: String(repeating: "bb", count: 32),
+            transactionRoot: zeroHash,
+            inclusionBranch: branch
+        ))
+        XCTAssertThrowsError(try canonicalTronSccpReceiptProofBytes(
+            sourceEventDigest: sourceEventDigest,
+            receiptRoot: String(repeating: "bb", count: 32),
+            transactionRoot: String(repeating: "dd", count: 32),
+            inclusionBranch: []
+        ))
+        XCTAssertEqual(
+            try canonicalEvmReceiptRootMptValue(receiptRoot: String(repeating: "bb", count: 32)).hexEncodedString(),
+            evmReceiptRootMptValueHex
+        )
+        XCTAssertThrowsError(try canonicalEvmReceiptRootMptValue(receiptRoot: "1234"))
+        XCTAssertEqual(
+            try canonicalTronReceiptRootMptValue(receiptRoot: String(repeating: "bb", count: 32)).hexEncodedString(),
+            "f8419f736363703a74726f6e3a726563656970742d726f6f742d76616c75653a7631a0" + String(repeating: "bb", count: 32)
+        )
+        XCTAssertThrowsError(try canonicalTronReceiptRootMptValue(receiptRoot: "1234"))
+        XCTAssertThrowsError(try canonicalTronReceiptRootMptValue(receiptRoot: zeroHash))
+        XCTAssertNotEqual(
+            try tronSccpReceiptProofHash(
+                sourceEventDigest: sourceEventDigest,
+                receiptRoot: String(repeating: "bb", count: 32),
+                transactionRoot: String(repeating: "dd", count: 32),
+                inclusionBranch: branch
+            ),
+            try tronSccpReceiptProofHash(
+                sourceEventDigest: sourceEventDigest,
+                receiptRoot: String(repeating: "bb", count: 32),
+                transactionRoot: String(repeating: "dd", count: 32),
+                inclusionBranch: changedBranch
+            )
+        )
+        XCTAssertEqual(try canonicalTronSccpReceiptStateProofBytes(
+            sourceEventDigest: sourceEventDigest,
+            receiptRoot: String(repeating: "bb", count: 32),
+            transactionRoot: "21789ae4e9fb0f13a9d7ef876ccbc90ee2fe1d1eddeec5c35e33e0a09c768079",
+            receiptRootIndex: 0,
+            receiptTrieProofNodes: [tronReceiptStateNode],
+            inclusionBranch: branch
+        ).count, 186)
+        XCTAssertThrowsError(try canonicalTronSccpReceiptStateProofBytes(
+            sourceEventDigest: zeroHash,
+            receiptRoot: String(repeating: "bb", count: 32),
+            transactionRoot: "21789ae4e9fb0f13a9d7ef876ccbc90ee2fe1d1eddeec5c35e33e0a09c768079",
+            receiptRootIndex: 0,
+            receiptTrieProofNodes: [tronReceiptStateNode],
+            inclusionBranch: branch
+        ))
+        XCTAssertThrowsError(try canonicalTronSccpReceiptStateProofBytes(
+            sourceEventDigest: sourceEventDigest,
+            receiptRoot: zeroHash,
+            transactionRoot: "21789ae4e9fb0f13a9d7ef876ccbc90ee2fe1d1eddeec5c35e33e0a09c768079",
+            receiptRootIndex: 0,
+            receiptTrieProofNodes: [tronReceiptStateNode],
+            inclusionBranch: branch
+        ))
+        XCTAssertThrowsError(try canonicalTronSccpReceiptStateProofBytes(
+            sourceEventDigest: sourceEventDigest,
+            receiptRoot: String(repeating: "bb", count: 32),
+            transactionRoot: zeroHash,
+            receiptRootIndex: 0,
+            receiptTrieProofNodes: [tronReceiptStateNode],
+            inclusionBranch: branch
+        ))
+        XCTAssertThrowsError(try canonicalTronSccpReceiptStateProofBytes(
+            sourceEventDigest: sourceEventDigest,
+            receiptRoot: String(repeating: "bb", count: 32),
+            transactionRoot: "21789ae4e9fb0f13a9d7ef876ccbc90ee2fe1d1eddeec5c35e33e0a09c768079",
+            receiptRootIndex: 0,
+            receiptTrieProofNodes: [tronReceiptStateNode],
+            inclusionBranch: []
+        ))
+        XCTAssertEqual(
+            try tronSccpReceiptStateProofHash(
+                sourceEventDigest: sourceEventDigest,
+                receiptRoot: String(repeating: "bb", count: 32),
+                transactionRoot: "21789ae4e9fb0f13a9d7ef876ccbc90ee2fe1d1eddeec5c35e33e0a09c768079",
+                receiptRootIndex: 0,
+                receiptTrieProofNodes: [tronReceiptStateNode],
+                inclusionBranch: branch
+            ),
+            "0x847c5ee3e6f4f83fef4d754a9aed93fae38c6677011cae03b10228c17c60b13b"
+        )
+        XCTAssertNotEqual(
+            try tronSccpReceiptStateProofHash(
+                sourceEventDigest: sourceEventDigest,
+                receiptRoot: String(repeating: "bb", count: 32),
+                transactionRoot: "21789ae4e9fb0f13a9d7ef876ccbc90ee2fe1d1eddeec5c35e33e0a09c768079",
+                receiptRootIndex: 0,
+                receiptTrieProofNodes: [tronReceiptStateNode],
+                inclusionBranch: branch
+            ),
+            try tronSccpReceiptStateProofHash(
+                sourceEventDigest: sourceEventDigest,
+                receiptRoot: String(repeating: "bb", count: 32),
+                transactionRoot: "21789ae4e9fb0f13a9d7ef876ccbc90ee2fe1d1eddeec5c35e33e0a09c768079",
+                receiptRootIndex: 1,
+                receiptTrieProofNodes: [tronReceiptStateNode],
+                inclusionBranch: branch
+            )
+        )
+        XCTAssertEqual(
+            try tronSccpSourceMessageCallData(
+                sourceDomain: 5,
+                targetDomain: 0,
+                sourceEventDigest: sourceEventDigest
+            ).hexEncodedString(),
+            "06841e30" + String(repeating: "00", count: 31) + "05"
+                + String(repeating: "00", count: 32)
+                + String(repeating: "34", count: 32)
+        )
+        XCTAssertThrowsError(try tronSccpSourceMessageCallData(
+            sourceDomain: 0,
+            targetDomain: 0,
+            sourceEventDigest: sourceEventDigest
+        )) { error in
+            XCTAssertEqual(error as? SccpSourceProofHashError, .invalidValidatorSet("sourceDomain"))
+        }
+        XCTAssertThrowsError(try tronSccpSourceMessageCallData(
+            sourceDomain: 5,
+            targetDomain: 5,
+            sourceEventDigest: sourceEventDigest
+        )) { error in
+            XCTAssertEqual(error as? SccpSourceProofHashError, .invalidValidatorSet("targetDomain"))
+        }
+        XCTAssertThrowsError(try tronSccpSourceMessageCallData(
+            sourceDomain: 5,
+            targetDomain: 0,
+            sourceEventDigest: String(repeating: "00", count: 32)
+        )) { error in
+            XCTAssertEqual(error as? SccpSourceProofHashError, .invalidHex32("sourceEventDigest"))
+        }
+        let transactionSourceBytes = Data(hexString:
+            "0af3010a02123418b9602208565656565656565640959aef3a5acf01081f12ca"
+                + "010a31747970652e676f6f676c65617069732e636f6d2f70726f746f636f6c2e"
+                + "54726967676572536d617274436f6e74726163741294010a15417e5f4552091a"
+                + "69125d5dfcb7b8c2659029395bdf121541454545454545454545454545454545"
+                + "4545454545226406841e30000000000000000000000000000000000000000000"
+                + "0000000000000000000005000000000000000000000000000000000000000000"
+                + "0000000000000000000000343434343434343434343434343434343434343434"
+                + "34343434343434343434347090e5ee3a900180e1eb171241cc58d7ac52c91117"
+                + "92495fee682b53cab96ff4229043c5b8b90c31447f5934553d8854ab35de3437"
+                + "2c13331bf3ef5cefd8f2cc5ad026faf223da83969fe8973c012a0410001801"
+        )!
+        let transactionSourceBranch: [Data] = []
+        let transactionSourceRoot = "1751c62dce36d5d642e48480b45d48ed16dd1b9b40ce216bc2f15c1b1ccf300b"
+        let transactionSourceInclusionBranch = [Data(repeating: 0xaa, count: 32)]
+        XCTAssertEqual(try canonicalTronSccpTransactionSourceProofBytes(
+            sourceEventDigest: sourceEventDigest,
+            receiptRoot: String(repeating: "bb", count: 32),
+            transactionRoot: transactionSourceRoot,
+            transactionIndex: 0,
+            transactionCount: 1,
+            transactionBytes: transactionSourceBytes,
+            transactionMerkleBranch: transactionSourceBranch,
+            inclusionBranch: transactionSourceInclusionBranch
+        ).count, 476)
+        XCTAssertEqual(
+            try canonicalTronSccpTransactionSourceProofBytes(
+                sourceEventDigest: sourceEventDigest,
+                receiptRoot: String(repeating: "bb", count: 32),
+                transactionRoot: transactionSourceRoot,
+                transactionIndex: 0,
+                transactionCount: 1,
+                transactionBytes: transactionSourceBytes,
+                transactionMerkleBranch: transactionSourceBranch,
+                inclusionBranch: transactionSourceInclusionBranch,
+                sourceBridgeEmitterAddress: String(repeating: "45", count: 20),
+                sourceBridgeOwnerAddress: "7e5f4552091a69125d5dfcb7b8c2659029395bdf"
+            ),
+            try canonicalTronSccpTransactionSourceProofBytes(
+                sourceEventDigest: sourceEventDigest,
+                receiptRoot: String(repeating: "bb", count: 32),
+                transactionRoot: transactionSourceRoot,
+                transactionIndex: 0,
+                transactionCount: 1,
+                transactionBytes: transactionSourceBytes,
+                transactionMerkleBranch: transactionSourceBranch,
+                inclusionBranch: transactionSourceInclusionBranch
+            )
+        )
+        XCTAssertThrowsError(try canonicalTronSccpTransactionSourceProofBytes(
+            sourceEventDigest: sourceEventDigest,
+            receiptRoot: String(repeating: "bb", count: 32),
+            transactionRoot: transactionSourceRoot,
+            transactionIndex: 0,
+            transactionCount: 1,
+            transactionBytes: transactionSourceBytes,
+            transactionMerkleBranch: transactionSourceBranch,
+            inclusionBranch: transactionSourceInclusionBranch,
+            sourceBridgeEmitterAddress: String(repeating: "46", count: 20),
+            sourceBridgeOwnerAddress: "7e5f4552091a69125d5dfcb7b8c2659029395bdf"
+        ))
+        XCTAssertThrowsError(try canonicalTronSccpTransactionSourceProofBytes(
+            sourceEventDigest: sourceEventDigest,
+            receiptRoot: String(repeating: "bb", count: 32),
+            transactionRoot: transactionSourceRoot,
+            transactionIndex: 0,
+            transactionCount: 1,
+            transactionBytes: transactionSourceBytes,
+            transactionMerkleBranch: transactionSourceBranch,
+            inclusionBranch: transactionSourceInclusionBranch,
+            sourceBridgeEmitterAddress: String(repeating: "45", count: 20),
+            sourceBridgeOwnerAddress: String(repeating: "22", count: 20)
+        ))
+        let transactionSourceSignature = Data(hexString:
+            "cc58d7ac52c9111792495fee682b53cab96ff4229043c5b8b90c31447f593455"
+                + "3d8854ab35de34372c13331bf3ef5cefd8f2cc5ad026faf223da83969fe8973c01"
+        )!
+        let wrongSignerTransactionSourceSignature = Data(hexString:
+            "b50455577deef2a0d6c3c521d97de050d5b9ba46df00c8ddad014bac4ca334517"
+                + "3223f1d4c5940538f1b1da069bed6828a9b27794bd1eac1a35810baaef28d2101"
+        )!
+        var wrongSignerTransactionSourceBytes = transactionSourceBytes
+        let transactionSourceSignatureRange = try XCTUnwrap(
+            wrongSignerTransactionSourceBytes.range(of: transactionSourceSignature)
+        )
+        wrongSignerTransactionSourceBytes.replaceSubrange(
+            transactionSourceSignatureRange,
+            with: wrongSignerTransactionSourceSignature
+        )
+        XCTAssertThrowsError(try canonicalTronSccpTransactionSourceProofBytes(
+            sourceEventDigest: sourceEventDigest,
+            receiptRoot: String(repeating: "bb", count: 32),
+            transactionRoot: transactionSourceRoot,
+            transactionIndex: 0,
+            transactionCount: 1,
+            transactionBytes: wrongSignerTransactionSourceBytes,
+            transactionMerkleBranch: transactionSourceBranch,
+            inclusionBranch: transactionSourceInclusionBranch
+        ))
+        XCTAssertEqual(
+            try tronSccpTransactionSourceProofHash(
+                sourceEventDigest: sourceEventDigest,
+                receiptRoot: String(repeating: "bb", count: 32),
+                transactionRoot: transactionSourceRoot,
+                transactionIndex: 0,
+                transactionCount: 1,
+                transactionBytes: transactionSourceBytes,
+                transactionMerkleBranch: transactionSourceBranch,
+                inclusionBranch: transactionSourceInclusionBranch
+            ),
+            "0xfc98a09ae9e7f63ccd383b2f3e104efce0d2c291dc7900ffd49e4f391e6016b6"
+        )
+        let omittedDefaultRetTransactionSourceBytes = try XCTUnwrap(Data(hexString:
+            transactionSourceBytes.hexEncodedString().replacingOccurrences(
+                of: "2a0410001801",
+                with: "2a021801"
+            )
+        ))
+        XCTAssertEqual(try canonicalTronSccpTransactionSourceProofBytes(
+            sourceEventDigest: sourceEventDigest,
+            receiptRoot: String(repeating: "bb", count: 32),
+            transactionRoot: "62489e5ad22dd0fc7a4b8444c2b17ef28c2c885a01bd0f97fd7f63fbfb1552bd",
+            transactionIndex: 0,
+            transactionCount: 1,
+            transactionBytes: omittedDefaultRetTransactionSourceBytes,
+            transactionMerkleBranch: transactionSourceBranch,
+            inclusionBranch: transactionSourceInclusionBranch
+        ).count, 474)
+        XCTAssertEqual(
+            try tronSccpTransactionSourceProofHash(
+                sourceEventDigest: sourceEventDigest,
+                receiptRoot: String(repeating: "bb", count: 32),
+                transactionRoot: "62489e5ad22dd0fc7a4b8444c2b17ef28c2c885a01bd0f97fd7f63fbfb1552bd",
+                transactionIndex: 0,
+                transactionCount: 1,
+                transactionBytes: omittedDefaultRetTransactionSourceBytes,
+                transactionMerkleBranch: transactionSourceBranch,
+                inclusionBranch: transactionSourceInclusionBranch
+            ),
+            "0xdb367957f5100b81ef1b074867c5c7c846c8bb3b44353668f65bf1c8ec805a18"
+        )
+        var nonCanonicalTransactionSourceBytes = [UInt8](transactionSourceBytes)
+        nonCanonicalTransactionSourceBytes[nonCanonicalTransactionSourceBytes.count - 7] = 0x1f
+        XCTAssertThrowsError(try canonicalTronSccpTransactionSourceProofBytes(
+            sourceEventDigest: sourceEventDigest,
+            receiptRoot: String(repeating: "bb", count: 32),
+            transactionRoot: transactionSourceRoot,
+            transactionIndex: 0,
+            transactionCount: 1,
+            transactionBytes: Data(nonCanonicalTransactionSourceBytes),
+            transactionMerkleBranch: transactionSourceBranch,
+            inclusionBranch: transactionSourceInclusionBranch
+        ))
+        XCTAssertThrowsError(try canonicalTronSccpTransactionSourceProofBytes(
+            sourceEventDigest: sourceEventDigest,
+            receiptRoot: String(repeating: "bb", count: 32),
+            transactionRoot: transactionSourceRoot,
+            transactionIndex: 1,
+            transactionCount: 1,
+            transactionBytes: transactionSourceBytes,
+            transactionMerkleBranch: transactionSourceBranch,
+            inclusionBranch: transactionSourceInclusionBranch
+        ))
+        XCTAssertThrowsError(try canonicalTronSccpTransactionSourceProofBytes(
+            sourceEventDigest: sourceEventDigest,
+            receiptRoot: String(repeating: "bb", count: 32),
+            transactionRoot: String(repeating: "cc", count: 32),
+            transactionIndex: 0,
+            transactionCount: 1,
+            transactionBytes: transactionSourceBytes,
+            transactionMerkleBranch: transactionSourceBranch,
+            inclusionBranch: transactionSourceInclusionBranch
+        ))
+        XCTAssertThrowsError(try canonicalTronSccpTransactionSourceProofBytes(
+            sourceEventDigest: sourceEventDigest,
+            receiptRoot: String(repeating: "bb", count: 32),
+            transactionRoot: "e4a77765ae41dc30b8bf3f7d9847170e0646e3dd0189433d2e3c88296221c942",
+            transactionIndex: 1,
+            transactionCount: 3,
+            transactionBytes: Data(hexString: "123456")!,
+            transactionMerkleBranch: [Data(repeating: 0x11, count: 32), Data(repeating: 0x22, count: 32)],
+            inclusionBranch: transactionSourceInclusionBranch
+        ))
+        XCTAssertThrowsError(try canonicalTronSccpTransactionSourceProofBytes(
+            sourceEventDigest: sourceEventDigest,
+            receiptRoot: String(repeating: "bb", count: 32),
+            transactionRoot: transactionSourceRoot,
+            transactionIndex: 0,
+            transactionCount: 1,
+            transactionBytes: transactionSourceBytes,
+            transactionMerkleBranch: transactionSourceBranch,
+            inclusionBranch: []
+        ))
+        let parentRawHeader = try canonicalTronRawBlockHeaderBytes(
+            number: 12_344,
+            txTrieRoot: String(repeating: "cc", count: 32),
+            accountStateRoot: String(repeating: "aa", count: 32),
+            parentBlockId: String(repeating: "bb", count: 32),
+            witnessAddress: "41" + String(repeating: "11", count: 20),
+            headerVersion: 1,
+            timestampMs: 1_700_000_012_344
+        )
+        let rawHeader = try canonicalTronRawBlockHeaderBytes(
+            number: 12_345,
+            txTrieRoot: String(repeating: "dd", count: 32),
+            accountStateRoot: String(repeating: "ee", count: 32),
+            parentBlockId: "0000000000003038701e5a1cd89912e6118f8aa18222c8b90867fedcca84c4d4",
+            witnessAddress: "41" + String(repeating: "11", count: 20),
+            headerVersion: 1,
+            timestampMs: 1_700_000_012_345
+        )
+        XCTAssertEqual(
+            parentRawHeader.hexEncodedString(),
+            "08b8b096ffbc311220"
+                + String(repeating: "cc", count: 32)
+                + "1a20"
+                + String(repeating: "bb", count: 32)
+                + "38b8604a1541"
+                + String(repeating: "11", count: 20)
+                + "50015a20"
+                + String(repeating: "aa", count: 32)
+        )
+        XCTAssertEqual(
+            rawHeader.hexEncodedString(),
+            "08b9b096ffbc311220"
+                + String(repeating: "dd", count: 32)
+                + "1a200000000000003038701e5a1cd89912e6118f8aa18222c8b90867fedcca84c4d4"
+                + "38b9604a1541"
+                + String(repeating: "11", count: 20)
+                + "50015a20"
+                + String(repeating: "ee", count: 32)
+        )
+        XCTAssertEqual(
+            tronRawBlockHeaderHash(rawData: parentRawHeader),
+            "0x5647d462e78851c6701e5a1cd89912e6118f8aa18222c8b90867fedcca84c4d4"
+        )
+        XCTAssertEqual(
+            tronRawBlockHeaderHash(rawData: rawHeader),
+            "0x614a09275b6d0fffb6bc08fb34f737c093d9dd2adefccb04344715e2619c8286"
+        )
+        XCTAssertEqual(
+            try tronBlockIdFromRawDataHash(
+                number: 12_345,
+                rawDataHash: "0x614a09275b6d0fffb6bc08fb34f737c093d9dd2adefccb04344715e2619c8286"
+            ),
+            "0x0000000000003039b6bc08fb34f737c093d9dd2adefccb04344715e2619c8286"
+        )
+        XCTAssertThrowsError(try canonicalTronRawBlockHeaderBytes(
+            number: 12_345,
+            txTrieRoot: " " + String(repeating: "dd", count: 32),
+            accountStateRoot: String(repeating: "ee", count: 32),
+            parentBlockId: "0000000000003038701e5a1cd89912e6118f8aa18222c8b90867fedcca84c4d4",
+            witnessAddress: "41" + String(repeating: "11", count: 20),
+            headerVersion: 1,
+            timestampMs: 1_700_000_012_345
+        )) { error in
+            XCTAssertEqual(error as? SccpSourceProofHashError, .invalidHex32("txTrieRoot"))
+        }
+        XCTAssertThrowsError(try canonicalTronRawBlockHeaderBytes(
+            number: 12_346,
+            txTrieRoot: String(repeating: "dd", count: 32),
+            accountStateRoot: String(repeating: "ee", count: 32),
+            parentBlockId: "0x0000000000003039b6bc08fb34f737c093d9dd2adefccb04344715e2619c8286",
+            witnessAddress: "0x41" + String(repeating: "00", count: 20),
+            headerVersion: 1,
+            timestampMs: 1_700_000_012_346
+        ))
+        let tronWitnessSignature = Data([UInt8](repeating: 0xaa, count: 32) + [UInt8](repeating: 0x01, count: 32) + [0])
+        let tronParentWitnessSignature = Data([UInt8](repeating: 0xaa, count: 32) + [UInt8](repeating: 0x01, count: 32) + [27])
+        let solidHeaderProofBytes = try canonicalTronSolidBlockHeaderProofBytes(
+            rawData: rawHeader,
+            witnessSignature: tronWitnessSignature,
+            parentRawData: parentRawHeader,
+            parentWitnessSignature: tronParentWitnessSignature,
+            rawDataHash: "0x614a09275b6d0fffb6bc08fb34f737c093d9dd2adefccb04344715e2619c8286",
+            parentRawDataHash: "0x5647d462e78851c6701e5a1cd89912e6118f8aa18222c8b90867fedcca84c4d4",
+            blockId: "0x0000000000003039b6bc08fb34f737c093d9dd2adefccb04344715e2619c8286",
+            txTrieRoot: String(repeating: "dd", count: 32),
+            accountStateRoot: String(repeating: "ee", count: 32),
+            parentBlockId: "0x0000000000003038701e5a1cd89912e6118f8aa18222c8b90867fedcca84c4d4",
+            witnessAddress: "0x41" + String(repeating: "11", count: 20),
+            timestampMs: 1_700_000_012_345,
+            headerVersion: 1
+        )
+        XCTAssertEqual(solidHeaderProofBytes.count, 650)
+        XCTAssertThrowsError(try canonicalTronSolidBlockHeaderProofBytes(
+            rawData: rawHeader,
+            witnessSignature: tronWitnessSignature,
+            parentRawData: parentRawHeader,
+            parentWitnessSignature: tronParentWitnessSignature,
+            rawDataHash: String(repeating: "aa", count: 32),
+            parentRawDataHash: "0x5647d462e78851c6701e5a1cd89912e6118f8aa18222c8b90867fedcca84c4d4",
+            blockId: "0x0000000000003039b6bc08fb34f737c093d9dd2adefccb04344715e2619c8286",
+            txTrieRoot: String(repeating: "dd", count: 32),
+            accountStateRoot: String(repeating: "ee", count: 32),
+            parentBlockId: "0x0000000000003038701e5a1cd89912e6118f8aa18222c8b90867fedcca84c4d4",
+            witnessAddress: "0x41" + String(repeating: "11", count: 20),
+            timestampMs: 1_700_000_012_345,
+            headerVersion: 1
+        ))
+        var overlongKeyRawHeader = Data([0x88, 0x00])
+        overlongKeyRawHeader.append(rawHeader.dropFirst())
+        let overlongKeyRawHeaderHash = tronRawBlockHeaderHash(rawData: overlongKeyRawHeader)
+        XCTAssertThrowsError(try canonicalTronSolidBlockHeaderProofBytes(
+            rawData: overlongKeyRawHeader,
+            witnessSignature: tronWitnessSignature,
+            parentRawData: parentRawHeader,
+            parentWitnessSignature: tronParentWitnessSignature,
+            rawDataHash: overlongKeyRawHeaderHash,
+            parentRawDataHash: "0x5647d462e78851c6701e5a1cd89912e6118f8aa18222c8b90867fedcca84c4d4",
+            blockId: try tronBlockIdFromRawDataHash(number: 12345, rawDataHash: overlongKeyRawHeaderHash),
+            txTrieRoot: String(repeating: "dd", count: 32),
+            accountStateRoot: String(repeating: "ee", count: 32),
+            parentBlockId: "0x0000000000003038701e5a1cd89912e6118f8aa18222c8b90867fedcca84c4d4",
+            witnessAddress: "0x41" + String(repeating: "11", count: 20),
+            timestampMs: 1_700_000_012_345,
+            headerVersion: 1
+        ))
+        XCTAssertThrowsError(try canonicalTronSolidBlockHeaderProofBytes(
+            rawData: rawHeader,
+            witnessSignature: tronWitnessSignature,
+            parentRawData: parentRawHeader,
+            parentWitnessSignature: tronParentWitnessSignature,
+            rawDataHash: "0x614a09275b6d0fffb6bc08fb34f737c093d9dd2adefccb04344715e2619c8286",
+            parentRawDataHash: "0x5647d462e78851c6701e5a1cd89912e6118f8aa18222c8b90867fedcca84c4d4",
+            blockId: "0x0000000000003039b6bc08fb34f737c093d9dd2adefccb04344715e2619c8286",
+            txTrieRoot: String(repeating: "dd", count: 32),
+            accountStateRoot: String(repeating: "ee", count: 32),
+            parentBlockId: "0x0000000000003038701e5a1cd89912e6118f8aa18222c8b90867fedcca84c4d4",
+            witnessAddress: "0x41" + String(repeating: "00", count: 20),
+            timestampMs: 1_700_000_012_345,
+            headerVersion: 1
+        ))
+        XCTAssertThrowsError(try canonicalTronSolidBlockHeaderProofBytes(
+            rawData: Data(repeating: 0xaa, count: 16 * 1024 + 1),
+            witnessSignature: tronWitnessSignature,
+            parentRawData: parentRawHeader,
+            parentWitnessSignature: tronParentWitnessSignature,
+            rawDataHash: "0x614a09275b6d0fffb6bc08fb34f737c093d9dd2adefccb04344715e2619c8286",
+            parentRawDataHash: "0x5647d462e78851c6701e5a1cd89912e6118f8aa18222c8b90867fedcca84c4d4",
+            blockId: "0x0000000000003039b6bc08fb34f737c093d9dd2adefccb04344715e2619c8286",
+            txTrieRoot: String(repeating: "dd", count: 32),
+            accountStateRoot: String(repeating: "ee", count: 32),
+            parentBlockId: "0x0000000000003038701e5a1cd89912e6118f8aa18222c8b90867fedcca84c4d4",
+            witnessAddress: "0x41" + String(repeating: "11", count: 20),
+            timestampMs: 1_700_000_012_345,
+            headerVersion: 1
+        ))
+        XCTAssertThrowsError(try canonicalTronSolidBlockHeaderProofBytes(
+            rawData: rawHeader,
+            witnessSignature: Data(repeating: 0xaa, count: 65),
+            parentRawData: parentRawHeader,
+            parentWitnessSignature: tronParentWitnessSignature,
+            rawDataHash: "0x614a09275b6d0fffb6bc08fb34f737c093d9dd2adefccb04344715e2619c8286",
+            parentRawDataHash: "0x5647d462e78851c6701e5a1cd89912e6118f8aa18222c8b90867fedcca84c4d4",
+            blockId: "0x0000000000003039b6bc08fb34f737c093d9dd2adefccb04344715e2619c8286",
+            txTrieRoot: String(repeating: "dd", count: 32),
+            accountStateRoot: String(repeating: "ee", count: 32),
+            parentBlockId: "0x0000000000003038701e5a1cd89912e6118f8aa18222c8b90867fedcca84c4d4",
+            witnessAddress: "0x41" + String(repeating: "11", count: 20),
+            timestampMs: 1_700_000_012_345,
+            headerVersion: 1
+        ))
+        XCTAssertThrowsError(try canonicalTronSolidBlockHeaderProofBytes(
+            rawData: rawHeader,
+            witnessSignature: tronWitnessSignature,
+            parentRawData: parentRawHeader,
+            parentWitnessSignature: Data([UInt8](repeating: 0xaa, count: 32) + [UInt8](repeating: 0x01, count: 32) + [4]),
+            rawDataHash: "0x614a09275b6d0fffb6bc08fb34f737c093d9dd2adefccb04344715e2619c8286",
+            parentRawDataHash: "0x5647d462e78851c6701e5a1cd89912e6118f8aa18222c8b90867fedcca84c4d4",
+            blockId: "0x0000000000003039b6bc08fb34f737c093d9dd2adefccb04344715e2619c8286",
+            txTrieRoot: String(repeating: "dd", count: 32),
+            accountStateRoot: String(repeating: "ee", count: 32),
+            parentBlockId: "0x0000000000003038701e5a1cd89912e6118f8aa18222c8b90867fedcca84c4d4",
+            witnessAddress: "0x41" + String(repeating: "11", count: 20),
+            timestampMs: 1_700_000_012_345,
+            headerVersion: 1
+        ))
+        var zeroRSignature = tronWitnessSignature
+        zeroRSignature.replaceSubrange(0..<32, with: Data(repeating: 0, count: 32))
+        XCTAssertThrowsError(try canonicalTronSolidBlockHeaderProofBytes(
+            rawData: rawHeader,
+            witnessSignature: zeroRSignature,
+            parentRawData: parentRawHeader,
+            parentWitnessSignature: tronParentWitnessSignature,
+            rawDataHash: "0x614a09275b6d0fffb6bc08fb34f737c093d9dd2adefccb04344715e2619c8286",
+            parentRawDataHash: "0x5647d462e78851c6701e5a1cd89912e6118f8aa18222c8b90867fedcca84c4d4",
+            blockId: "0x0000000000003039b6bc08fb34f737c093d9dd2adefccb04344715e2619c8286",
+            txTrieRoot: String(repeating: "dd", count: 32),
+            accountStateRoot: String(repeating: "ee", count: 32),
+            parentBlockId: "0x0000000000003038701e5a1cd89912e6118f8aa18222c8b90867fedcca84c4d4",
+            witnessAddress: "0x41" + String(repeating: "11", count: 20),
+            timestampMs: 1_700_000_012_345,
+            headerVersion: 1
+        ))
+        XCTAssertEqual(
+            try tronSolidBlockHeaderProofHash(
+                rawData: rawHeader,
+                witnessSignature: tronWitnessSignature,
+                parentRawData: parentRawHeader,
+                parentWitnessSignature: tronParentWitnessSignature,
+                rawDataHash: "0x614a09275b6d0fffb6bc08fb34f737c093d9dd2adefccb04344715e2619c8286",
+                parentRawDataHash: "0x5647d462e78851c6701e5a1cd89912e6118f8aa18222c8b90867fedcca84c4d4",
+                blockId: "0x0000000000003039b6bc08fb34f737c093d9dd2adefccb04344715e2619c8286",
+                txTrieRoot: String(repeating: "dd", count: 32),
+                accountStateRoot: String(repeating: "ee", count: 32),
+                parentBlockId: "0x0000000000003038701e5a1cd89912e6118f8aa18222c8b90867fedcca84c4d4",
+                witnessAddress: "0x41" + String(repeating: "11", count: 20),
+                timestampMs: 1_700_000_012_345,
+                headerVersion: 1
+            ),
+            "0x25416bda5734ecef1ab9920d15f1011e962f6ff90e9c6247ff6b2ce34a5ab49f"
+        )
+
+        XCTAssertEqual(try canonicalSubstrateSccpStorageProofBytes(
+            sourceDomain: sccpDomainSoraKusama,
+            sourceEventDigest: sourceEventDigest,
+            sourceEventLeafIndex: 7,
+            finalizedBlockNumber: 31,
+            grandpaSetId: 32,
+            blockHash: String(repeating: "aa", count: 32),
+            authoritySetHash: String(repeating: "cc", count: 32),
+            eventsRoot: String(repeating: "bb", count: 32),
+            inclusionBranch: branch
+        ).count, 225)
+        XCTAssertEqual(
+            try canonicalSubstrateSccpRuntimeStorageVerificationStatementBytes(
+                sourceDomain: sccpDomainSoraKusama,
+                sourceEventDigest: sourceEventDigest,
+                sourceEventLeafIndex: 7,
+                finalizedBlockNumber: 31,
+                grandpaSetId: 32,
+                blockHash: String(repeating: "aa", count: 32),
+                authoritySetHash: String(repeating: "cc", count: 32),
+                eventsRoot: String(repeating: "bb", count: 32),
+                inclusionBranch: branch
+            ),
+            try canonicalSubstrateSccpStorageProofBytes(
+                sourceDomain: sccpDomainSoraKusama,
+                sourceEventDigest: sourceEventDigest,
+                sourceEventLeafIndex: 7,
+                finalizedBlockNumber: 31,
+                grandpaSetId: 32,
+                blockHash: String(repeating: "aa", count: 32),
+                authoritySetHash: String(repeating: "cc", count: 32),
+                eventsRoot: String(repeating: "bb", count: 32),
+                inclusionBranch: branch
+            )
+        )
+        let runtimeStoragePublicInputsHash = try substrateSccpRuntimeStorageProofPublicInputsHash(
+            sourceDomain: sccpDomainSoraKusama,
+            sourceEventDigest: sourceEventDigest,
+            sourceEventLeafIndex: 7,
+            finalizedBlockNumber: 31,
+            grandpaSetId: 32,
+            blockHash: String(repeating: "aa", count: 32),
+            authoritySetHash: String(repeating: "cc", count: 32),
+            eventsRoot: String(repeating: "bb", count: 32),
+            inclusionBranch: branch
+        )
+        XCTAssertTrue(runtimeStoragePublicInputsHash.hasPrefix("0x"))
+        XCTAssertEqual(runtimeStoragePublicInputsHash.count, 66)
+        let runtimeStorageColumns = try substrateSccpRuntimeStoragePublicInputColumns(
+            sourceDomain: sccpDomainSoraKusama,
+            sourceEventDigest: sourceEventDigest,
+            sourceEventLeafIndex: 7,
+            finalizedBlockNumber: 31,
+            grandpaSetId: 32,
+            blockHash: String(repeating: "aa", count: 32),
+            authoritySetHash: String(repeating: "cc", count: 32),
+            eventsRoot: String(repeating: "bb", count: 32),
+            inclusionBranch: branch
+        )
+        XCTAssertEqual(runtimeStorageColumns.count, 11)
+        XCTAssertEqual(
+            runtimeStorageColumns[8],
+            ["0x26aa394eea5630e07c48ae0c9558cef780d41e5e16056765bc8461851072c9d7"]
+        )
+        XCTAssertEqual(runtimeStorageColumns[10], [runtimeStoragePublicInputsHash])
+        let runtimeStorageRequest = try buildSubstrateSccpRuntimeStorageProofRequest(
+            sourceDomain: sccpDomainSoraKusama,
+            sourceEventDigest: sourceEventDigest,
+            sourceEventLeafIndex: 7,
+            finalizedBlockNumber: 31,
+            grandpaSetId: 32,
+            blockHash: String(repeating: "aa", count: 32),
+            authoritySetHash: String(repeating: "cc", count: 32),
+            eventsRoot: String(repeating: "bb", count: 32),
+            sourceTrustAnchorHash: String(repeating: "aa", count: 32),
+            consensusVerifierHash: String(repeating: "bb", count: 32),
+            messageInclusionVerifierHash: String(repeating: "cc", count: 32),
+            finalityPolicyHash: String(repeating: "dd", count: 32),
+            sourceStateVerifierHash: String(repeating: "12", count: 32),
+            inclusionBranch: branch
+        )
+        XCTAssertEqual(runtimeStorageRequest.circuitId, sccpSubstrateRuntimeStorageOpenVerifyCircuitIdV1)
+        XCTAssertEqual(runtimeStorageRequest.runtimeStorageProofPublicInputsHash, runtimeStoragePublicInputsHash)
+        XCTAssertEqual(runtimeStorageRequest.fastpqPublicInputs.slot, "31")
+        XCTAssertEqual(
+            runtimeStorageRequest.fastpqTransitions.map { $0.key },
+            [
+                "sccp:substrate:runtime-storage:v1:context",
+                "sccp:substrate:runtime-storage:v1:statement",
+                "sccp:substrate:runtime-storage:v1:storage-key"
+            ]
+        )
+        var exposedRuntimeStatement = runtimeStorageRequest.statementBytes
+        exposedRuntimeStatement[exposedRuntimeStatement.startIndex] =
+            exposedRuntimeStatement[exposedRuntimeStatement.startIndex] == 0 ? 1 : 0
+        XCTAssertEqual(
+            runtimeStorageRequest.statementBytes,
+            try canonicalSubstrateSccpRuntimeStorageVerificationStatementBytes(
+                sourceDomain: sccpDomainSoraKusama,
+                sourceEventDigest: sourceEventDigest,
+                sourceEventLeafIndex: 7,
+                finalizedBlockNumber: 31,
+                grandpaSetId: 32,
+                blockHash: String(repeating: "aa", count: 32),
+                authoritySetHash: String(repeating: "cc", count: 32),
+                eventsRoot: String(repeating: "bb", count: 32),
+                inclusionBranch: branch
+            )
+        )
+        var exposedRuntimeColumns = runtimeStorageRequest.publicInputColumns
+        exposedRuntimeColumns.removeAll()
+        XCTAssertEqual(runtimeStorageRequest.publicInputColumns.count, 11)
+        XCTAssertThrowsError(try buildSubstrateSccpRuntimeStorageProofRequest(
+            sourceDomain: sccpDomainSoraKusama,
+            sourceEventDigest: sourceEventDigest,
+            sourceEventLeafIndex: 7,
+            finalizedBlockNumber: 31,
+            grandpaSetId: 32,
+            blockHash: String(repeating: "aa", count: 32),
+            authoritySetHash: String(repeating: "cc", count: 32),
+            eventsRoot: String(repeating: "bb", count: 32),
+            sourceTrustAnchorHash: String(repeating: "aa", count: 32),
+            consensusVerifierHash: String(repeating: "bb", count: 32),
+            messageInclusionVerifierHash: String(repeating: "cc", count: 32),
+            finalityPolicyHash: String(repeating: "dd", count: 32),
+            sourceStateVerifierHash: String(repeating: "12", count: 32),
+            storageProofHash: String(repeating: "aa", count: 32),
+            inclusionBranch: branch
+        ))
+        XCTAssertThrowsError(try buildSubstrateSccpRuntimeStorageProofRequest(
+            sourceDomain: sccpDomainSoraKusama,
+            sourceEventDigest: sourceEventDigest,
+            sourceEventLeafIndex: 7,
+            finalizedBlockNumber: 31,
+            grandpaSetId: 32,
+            blockHash: String(repeating: "aa", count: 32),
+            authoritySetHash: String(repeating: "cc", count: 32),
+            eventsRoot: String(repeating: "bb", count: 32),
+            sourceTrustAnchorHash: String(repeating: "aa", count: 32),
+            consensusVerifierHash: String(repeating: "bb", count: 32),
+            messageInclusionVerifierHash: String(repeating: "cc", count: 32),
+            finalityPolicyHash: String(repeating: "dd", count: 32),
+            sourceStateVerifierHash: "0xaf2d28b3e07447239f28e90ce4fdee7e6cd3778c087eaeda7170781eb4b76b9c",
+            inclusionBranch: branch
+        ))
+        XCTAssertNotEqual(
+            try substrateSccpStorageProofHash(
+                sourceDomain: sccpDomainSoraKusama,
+                sourceEventDigest: sourceEventDigest,
+                sourceEventLeafIndex: 7,
+                finalizedBlockNumber: 31,
+                grandpaSetId: 32,
+                blockHash: String(repeating: "aa", count: 32),
+                authoritySetHash: String(repeating: "cc", count: 32),
+                eventsRoot: String(repeating: "bb", count: 32),
+                inclusionBranch: branch
+            ),
+            try substrateSccpStorageProofHash(
+                sourceDomain: sccpDomainSoraKusama,
+                sourceEventDigest: sourceEventDigest,
+                sourceEventLeafIndex: 7,
+                finalizedBlockNumber: 31,
+                grandpaSetId: 32,
+                blockHash: String(repeating: "aa", count: 32),
+                authoritySetHash: String(repeating: "cc", count: 32),
+                eventsRoot: String(repeating: "bb", count: 32),
+                inclusionBranch: changedBranch
+            )
+        )
+        XCTAssertNotEqual(
+            try substrateSccpStorageProofHash(
+                sourceDomain: sccpDomainSoraKusama,
+                sourceEventDigest: sourceEventDigest,
+                sourceEventLeafIndex: 7,
+                finalizedBlockNumber: 31,
+                grandpaSetId: 32,
+                blockHash: String(repeating: "aa", count: 32),
+                authoritySetHash: String(repeating: "cc", count: 32),
+                eventsRoot: String(repeating: "bb", count: 32),
+                inclusionBranch: branch
+            ),
+            try substrateSccpStorageProofHash(
+                sourceDomain: sccpDomainSoraKusama,
+                sourceEventDigest: sourceEventDigest,
+                sourceEventLeafIndex: 8,
+                finalizedBlockNumber: 31,
+                grandpaSetId: 32,
+                blockHash: String(repeating: "aa", count: 32),
+                authoritySetHash: String(repeating: "cc", count: 32),
+                eventsRoot: String(repeating: "bb", count: 32),
+                inclusionBranch: branch
+            )
+        )
+        XCTAssertThrowsError(try canonicalTronSccpReceiptProofBytes(
+            sourceEventDigest: sourceEventDigest,
+            receiptRoot: String(repeating: "bb", count: 32),
+            transactionRoot: String(repeating: "dd", count: 32),
+            inclusionBranch: [Data([1, 2, 3])]
+        ))
+        XCTAssertThrowsError(try canonicalTronSccpReceiptStateProofBytes(
+            sourceEventDigest: sourceEventDigest,
+            receiptRoot: String(repeating: "bb", count: 32),
+            transactionRoot: "21789ae4e9fb0f13a9d7ef876ccbc90ee2fe1d1eddeec5c35e33e0a09c768079",
+            receiptRootIndex: 0,
+            receiptTrieProofNodes: [],
+            inclusionBranch: branch
+        ))
+    }
+
+    func testEthBeaconExecutionPayloadSszRootsBindUiWitnessMaterial() throws {
+        let headerRlp = Self.sampleEthExecutionHeaderRlp()
+        let executionPayloadRoot = try ethExecutionPayloadHeaderRootFromRlp(headerRlp)
+        let executionPayloadBranch = [
+            Data(repeating: 0xee, count: 32),
+            Data(repeating: 0xff, count: 32),
+            Data(repeating: 0x11, count: 32),
+            Data(repeating: 0x22, count: 32),
+        ]
+        let beaconBodyRoot = try ethBeaconBodyRootFromExecutionPayloadBranch(
+            executionPayloadHeaderRoot: executionPayloadRoot,
+            executionPayloadBranch: executionPayloadBranch
+        )
+        let beaconHeaderRoot = try ethBeaconBlockHeaderRoot(
+            beaconSlot: 320,
+            beaconProposerIndex: 17,
+            beaconParentRoot: String(repeating: "aa", count: 32),
+            beaconStateRoot: String(repeating: "bb", count: 32),
+            beaconBodyRoot: beaconBodyRoot
+        )
+
+        XCTAssertEqual(
+            executionPayloadRoot,
+            "0xc029dda492d2e41ad72bd83f1727a67e5331f413ec29d5c31de955d0bea24624"
+        )
+        XCTAssertEqual(
+            beaconBodyRoot,
+            "0x431e6bef5e759e8fdf32d8e8ed1ff761933ddb4de24ec9ae8e2aa0d25fe861ba"
+        )
+        XCTAssertEqual(
+            beaconHeaderRoot,
+            "0xd54b406debae26e6ebaef512cc4f9e6bc12cf02af0d4476895383b37f682a179"
+        )
+        XCTAssertNotEqual(
+            try ethBeaconBodyRootFromExecutionPayloadBranch(
+                executionPayloadHeaderRoot: executionPayloadRoot,
+                executionPayloadBranch: [
+                    Data(repeating: 0xff, count: 32),
+                    Data(repeating: 0xff, count: 32),
+                    Data(repeating: 0x11, count: 32),
+                    Data(repeating: 0x22, count: 32),
+                ]
+            ),
+            beaconBodyRoot
+        )
+        XCTAssertThrowsError(
+            try ethBeaconBodyRootFromExecutionPayloadBranch(
+                executionPayloadHeaderRoot: executionPayloadRoot,
+                executionPayloadBranch: [Data(repeating: 0xee, count: 32)]
+            )
+        )
+        XCTAssertThrowsError(try ethExecutionPayloadHeaderRootFromRlp(Data([0x80])))
+    }
+
+    private static func accountsLtHashRequest(
+        _ request: SolanaSccpAccountsLtHashProofRequest,
+        accountsLtHashProofPublicInputsHash: String? = nil,
+        publicInputColumns: [[String]]? = nil,
+        fastpqPublicInputs: SolanaSccpAccountsLtHashFastpqPublicInputs? = nil,
+        fastpqTransitions: [SolanaSccpAccountsLtHashFastpqTransition]? = nil
+    ) -> SolanaSccpAccountsLtHashProofRequest {
+        SolanaSccpAccountsLtHashProofRequest(
+            version: request.version,
+            proofFamily: request.proofFamily,
+            circuitId: request.circuitId,
+            parameterSet: request.parameterSet,
+            sourceDomain: request.sourceDomain,
+            finalizedSlot: request.finalizedSlot,
+            parentSlot: request.parentSlot,
+            sourceStateVerifierId: request.sourceStateVerifierId,
+            sourceStateVerifierHash: request.sourceStateVerifierHash,
+            accountsLtHashProofPublicInputsHash: accountsLtHashProofPublicInputsHash
+                ?? request.accountsLtHashProofPublicInputsHash,
+            openedAccountsLtHashContributionsHash: request.openedAccountsLtHashContributionsHash,
+            openedAccountsLtHashResidualChecksum: request.openedAccountsLtHashResidualChecksum,
+            statementBytes: request.statementBytes,
+            accountCommitmentBytes: request.accountCommitmentBytes,
+            verificationContextBytes: request.verificationContextBytes,
+            schemaDescriptor: request.schemaDescriptor,
+            publicInputColumns: publicInputColumns ?? request.publicInputColumns,
+            fastpqPublicInputs: fastpqPublicInputs ?? request.fastpqPublicInputs,
+            fastpqTransitions: fastpqTransitions ?? request.fastpqTransitions
+        )
+    }
+
+    private static func fullLightClientAuditRequest(
+        _ request: SolanaSccpFullLightClientAuditProofRequest,
+        verifierHash: String? = nil,
+        auditStatementHash: String? = nil,
+        publicInputColumns: [[String]]? = nil,
+        fastpqPublicInputs: SolanaSccpFullLightClientAuditFastpqPublicInputs? = nil,
+        fastpqTransitions: [SolanaSccpFullLightClientAuditFastpqTransition]? = nil
+    ) -> SolanaSccpFullLightClientAuditProofRequest {
+        SolanaSccpFullLightClientAuditProofRequest(
+            version: request.version,
+            proofFamily: request.proofFamily,
+            circuitId: request.circuitId,
+            parameterSet: request.parameterSet,
+            role: request.role,
+            roleCode: request.roleCode,
+            sourceDomain: request.sourceDomain,
+            finalizedSlot: request.finalizedSlot,
+            verifierId: request.verifierId,
+            verifierHash: verifierHash ?? request.verifierHash,
+            sourceStateVerifierId: request.sourceStateVerifierId,
+            sourceStateVerifierHash: request.sourceStateVerifierHash,
+            sourceVerifierMaterialHash: request.sourceVerifierMaterialHash,
+            sourceAdapterDeploymentHash: request.sourceAdapterDeploymentHash,
+            fullLightClientGateHash: request.fullLightClientGateHash,
+            finalityContextHash: request.finalityContextHash,
+            voteMessageHash: request.voteMessageHash,
+            accountsLtHashProofHash: request.accountsLtHashProofHash,
+            auditStatementHash: auditStatementHash ?? request.auditStatementHash,
+            statementBytes: request.statementBytes,
+            verificationContextBytes: request.verificationContextBytes,
+            schemaDescriptor: request.schemaDescriptor,
+            publicInputColumns: publicInputColumns ?? request.publicInputColumns,
+            fastpqPublicInputs: fastpqPublicInputs ?? request.fastpqPublicInputs,
+            fastpqTransitions: fastpqTransitions ?? request.fastpqTransitions
+        )
+    }
+
+    private static func sampleProductionWitness(
+        mainnetGenesisHash: String = sccpSolanaMainnetGenesisHash,
+        sourceStateVerifierHash: String = String(repeating: "ef", count: 32),
+        accountsLtHash: Data? = Data((0..<2_048).map { UInt8(($0 % 251) + 1) }),
+        destinationBindingHash: String = String(repeating: "78", count: 32)
+    ) -> SolanaSccpWitnessInput {
+        let branch = [Data(repeating: 0x56, count: 32)]
+        let sourceEventDigest = String(repeating: "34", count: 32)
+        let blockhash = String(repeating: "9a", count: 32)
+        let transactionStatusRoot = try! solanaSccpTransactionStatusRootFromBranch(
+            sourceEventDigest: sourceEventDigest,
+            transactionSignature: Self.solanaSignature55,
+            emitterProgramId: Self.solanaProgram42,
+            inclusionBranch: branch
+        )
+        let messageProofHash = try! solanaSccpMessageProofHash(
+            sourceEventDigest: sourceEventDigest,
+            transactionStatusRoot: transactionStatusRoot,
+            transactionSignature: Self.solanaSignature55,
+            emitterProgramId: Self.solanaProgram42,
+            inclusionBranch: branch
+        )
+        let accountsLtHashChecksum = accountsLtHash.map {
+            try! solanaSccpAccountsLtHashChecksum($0)
+        } ?? String(repeating: "88", count: 32)
+        let bankHash = accountsLtHash.map {
+            try! solanaSccpAgaveBankHash(
+                parentBankHash: String(repeating: "c0", count: 32),
+                bankSignatureCount: 8,
+                blockhash: blockhash,
+                accountsLtHash: $0
+            )
+        } ?? String(repeating: "aa", count: 32)
+        return sampleWitness(
+            mainnetGenesisHash: mainnetGenesisHash,
+            messageProofHash: messageProofHash,
+            inclusionBranch: branch,
+            sourceStateVerifierHash: sourceStateVerifierHash,
+            sourceAdapterDeploymentHash: String(repeating: "ab", count: 32),
+            sourceAdapterDeploymentReceiptHash: String(repeating: "cd", count: 32),
+            bankHash: bankHash,
+            blockhash: blockhash,
+            accountsLtHashChecksum: accountsLtHashChecksum,
+            accountsLtHash: accountsLtHash,
+            destinationBindingHash: destinationBindingHash
+        )
+    }
+
+    private static func sampleSolanaRouteCanaryEvidence(
+        solanaProgramdataSlot: String = "4321",
+        solanaProgramdataExecutableBase64: String = "f0VMRgECAwQF",
+        destinationBindingHash: String? = nil,
+        expectedDestinationBindingHash: String? = nil
+    ) throws -> SolanaSccpRouteCanaryEvidenceInput {
+        let canonicalDestinationBindingHash = try sccpDestinationBindingHash(domain: sccpDomainSolana)
+        return SolanaSccpRouteCanaryEvidenceInput(
+            routeAllowlistHash: "0x" + String(repeating: "31", count: 32),
+            destinationBindingHash: destinationBindingHash ?? canonicalDestinationBindingHash,
+            expectedDestinationBindingHash: expectedDestinationBindingHash,
+            sourceVerifierMaterialHash: "0x" + String(repeating: "33", count: 32),
+            sourceAdapterEngineDeploymentHash: "0x" + String(repeating: "34", count: 32),
+            verifierIdentity: "3JF3sEqM796hk5WFqA6EtmEwJQ9quALszsfJyvXNQKy3",
+            verifierCodeHash: "0xc81178d11a4de525782fe7ac6f5accc2056fa15d1b8c2bfd819eb2ef179c3411",
+            solanaProgramAccountDataBase64: "AgAAABERERERERERERERERERERERERERERERERERERERERER",
+            solanaProgramdataAddress: "29d2S7vB453rNYFdR5Ycwt7y9haRT5fwVwL9zTmBhfV2",
+            solanaProgramdataSlot: solanaProgramdataSlot,
+            solanaExpectedProgramdataSlot: "4321",
+            solanaProgramAccountContextSlot: "5000",
+            solanaProgramdataAccountContextSlot: "5001",
+            solanaProgramdataMetadataBlake2b256:
+                "0x2b5f26278ea949463e97c1dc5e53a821b82515b405454a1b0e3cd652c3b00209",
+            solanaProgramdataMetadataBase64:
+                "AwAAAOEQAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA",
+            solanaProgramdataExecutableBlake2b256:
+                "0xc81178d11a4de525782fe7ac6f5accc2056fa15d1b8c2bfd819eb2ef179c3411",
+            solanaProgramdataExecutableBase64: solanaProgramdataExecutableBase64
+        )
+    }
+
+    private static func sampleTonRouteCanaryEvidence(
+        destinationBindingHash: String? = nil,
+        expectedDestinationBindingHash: String? = nil,
+        verifierContractAddress: String = "0:" + String(repeating: "11", count: 32),
+        accountStatus: String = "active",
+        lastTransactionLt: String = "123456789",
+        verifierCodeBocRootHash: String = "0x" + String(repeating: "44", count: 32)
+    ) throws -> TonSccpRouteCanaryEvidenceInput {
+        let canonicalDestinationBindingHash = try sccpDestinationBindingHash(domain: sccpDomainTon)
+        return TonSccpRouteCanaryEvidenceInput(
+            routeAllowlistHash: "0x" + String(repeating: "31", count: 32),
+            destinationBindingHash: destinationBindingHash ?? canonicalDestinationBindingHash,
+            expectedDestinationBindingHash: expectedDestinationBindingHash,
+            sourceVerifierMaterialHash: "0x" + String(repeating: "33", count: 32),
+            sourceAdapterEngineDeploymentHash: "0x" + String(repeating: "34", count: 32),
+            verifierContractAddress: verifierContractAddress,
+            verifierCodeHash: "0x" + String(repeating: "44", count: 32),
+            accountStatus: accountStatus,
+            accountStateHash: "0x" + String(repeating: "55", count: 32),
+            lastTransactionLt: lastTransactionLt,
+            lastTransactionHash: "0x" + String(repeating: "66", count: 32),
+            verifierCodeBocRootHash: verifierCodeBocRootHash
+        )
+    }
+
+    private static func sampleWitness(
+        targetDomain: UInt32 = sccpDomainSora,
+        mainnetGenesisHash: String = sccpSolanaMainnetGenesisHash,
+        messageProofHash: String = String(repeating: "cc", count: 32),
+        inclusionBranch: [Data] = [],
+        sourceStateVerifierId: String = sccpSolanaMainnetAccountsDbVerifierIdV1,
+        sourceStateVerifierHash: String = sccpZeroHashV1,
+        sourceAdapterDeploymentHash: String = sccpZeroHashV1,
+        sourceAdapterDeploymentReceiptHash: String = sccpZeroHashV1,
+        bankHash: String = String(repeating: "aa", count: 32),
+        blockhash: String = "9xQeWvG816bUx9EPfYdLSdJH7Gq2Xv3yQPG8mD3kAcL7",
+        accountsLtHashChecksum: String = String(repeating: "88", count: 32),
+        accountsLtHash: Data? = nil,
+        transactionSignature: String? = nil,
+        emitterProgramId: String? = nil,
+        destinationBindingHash: String = String(repeating: "78", count: 32)
+    ) -> SolanaSccpWitnessInput {
+        let sourceEventDigest = String(repeating: "34", count: 32)
+        let transactionSignature = transactionSignature ?? Self.solanaSignature55
+        let emitterProgramId = emitterProgramId ?? Self.solanaProgram42
+        let transactionStatusRoot = inclusionBranch.isEmpty
+            ? String(repeating: "bb", count: 32)
+            : try! solanaSccpTransactionStatusRootFromBranch(
+                sourceEventDigest: sourceEventDigest,
+                transactionSignature: transactionSignature,
+                emitterProgramId: emitterProgramId,
+                inclusionBranch: inclusionBranch
+        )
+        return SolanaSccpWitnessInput(
+            targetDomain: targetDomain,
+            mainnetGenesisHash: mainnetGenesisHash,
+            finalizedSlot: 321,
+            parentSlot: 320,
+            bankSignatureCount: 8,
+            parentBankHash: String(repeating: "c0", count: 32),
+            blockhash: blockhash,
+            bankHash: bankHash,
+            transactionStatusRoot: transactionStatusRoot,
+            messageProofHash: messageProofHash,
+            accountInclusionRoot: String(repeating: "77", count: 32),
+            accountsLtHashChecksum: accountsLtHashChecksum,
+            accountsLtHash: accountsLtHash,
+            transactionSignature: transactionSignature,
+            emitterProgramId: emitterProgramId,
+            messageId: String(repeating: "dd", count: 32),
+            payloadHash: String(repeating: "ee", count: 32),
+            commitmentRoot: String(repeating: "12", count: 32),
+            sourceEventDigest: sourceEventDigest,
+            sourceStateVerifierId: sourceStateVerifierId,
+            sourceStateVerifierHash: sourceStateVerifierHash,
+            statementHash: String(repeating: "56", count: 32),
+            destinationBindingHash: destinationBindingHash,
+            inclusionBranch: inclusionBranch,
+            sourceAdapterDeploymentHash: sourceAdapterDeploymentHash,
+            sourceAdapterDeploymentReceiptHash: sourceAdapterDeploymentReceiptHash
+        )
+    }
+
+    private static func sampleTonMessageBodyInput(
+        publicInputs: TonSccpPublicInputsInput = sampleTonPublicInputs(),
+        proofBytes: Data = Data([1, 2, 3, 4]),
+        bundleBytes: Data = Data([5, 6, 7]),
+        statementHash: String = String(repeating: "bb", count: 32),
+        destinationBindingHash: String = String(repeating: "56", count: 32)
+    ) throws -> TonSccpMessageBodyInput {
+        let request = try buildTonSccpProofRequest(Self.sampleTonProofRequestInput(
+            publicInputs: publicInputs,
+            bundleBytes: bundleBytes,
+            sourceProofBytes: Data([9, 10]),
+            statementHash: statementHash,
+            destinationBindingHash: destinationBindingHash,
+            sourceAdapterDeploymentHash: String(repeating: "aa", count: 32),
+            sourceAdapterDeploymentReceiptHash: String(repeating: "bb", count: 32)
+        ))
+        let proofResult = try wrapTonSccpProofResult(
+            proofBytes: proofBytes,
+            request: request
+        )
+        return try TonSccpMessageBodyInput(
+            proofResult: proofResult,
+            bundleBytes: bundleBytes,
             metadataBytes: Data([8, 9])
         )
     }
 
-    private static func sampleTonProofRequestInput() -> TonSccpProofRequestInput {
-        TonSccpProofRequestInput(
-            publicInputs: sampleTonPublicInputs(),
-            bundleBytes: Data([5, 6, 7])
+    private static func sampleSolanaSubmissionPublicInputs(
+        version: UInt8 = 1,
+        targetDomain: UInt32 = sccpDomainSolana
+    ) -> SolanaSccpSubmissionPublicInputs {
+        SolanaSccpSubmissionPublicInputs(
+            version: version,
+            messageId: String(repeating: "dd", count: 32),
+            payloadHash: String(repeating: "ee", count: 32),
+            targetDomain: targetDomain,
+            commitmentRoot: String(repeating: "12", count: 32),
+            finalityHeight: 321,
+            finalityBlockHash: String(repeating: "aa", count: 32)
         )
     }
 
-    private static func sampleTonPublicInputs() -> TonSccpPublicInputsInput {
+    private static func sampleSolanaSubmissionPublicInputs(
+        from publicInputs: SolanaSccpPublicInputs,
+        targetDomain: UInt32 = sccpDomainSolana
+    ) -> SolanaSccpSubmissionPublicInputs {
+        SolanaSccpSubmissionPublicInputs(
+            messageId: publicInputs.messageId,
+            payloadHash: publicInputs.payloadHash,
+            targetDomain: targetDomain,
+            commitmentRoot: publicInputs.commitmentRoot,
+            finalityHeight: publicInputs.finalizedSlot,
+            finalityBlockHash: publicInputs.bankHash
+        )
+    }
+
+    private static func sampleTonProofRequestInput(
+        publicInputs: TonSccpPublicInputsInput = sampleTonPublicInputs(),
+        bundleBytes: Data = Data([5, 6, 7]),
+        sourceProofBytes: Data = Data(),
+        statementHash: String = String(repeating: "56", count: 32),
+        destinationBindingHash: String = String(repeating: "78", count: 32),
+        sourceStateVerifierId: String = sccpTonMainnetShardStateVerifierIdV1,
+        sourceStateVerifierHash: String = String(repeating: "cc", count: 32),
+        sourceAdapterDeploymentHash: String = String(repeating: "aa", count: 32),
+        sourceAdapterDeploymentReceiptHash: String = String(repeating: "bb", count: 32),
+        backend: String = sccpTonContractProofBackendV1,
+        sourceDomain: UInt32 = sccpDomainTon
+    ) -> TonSccpProofRequestInput {
+        TonSccpProofRequestInput(
+            publicInputs: publicInputs,
+            bundleBytes: bundleBytes,
+            sourceProofBytes: sourceProofBytes,
+            statementHash: statementHash,
+            destinationBindingHash: destinationBindingHash,
+            sourceStateVerifierId: sourceStateVerifierId,
+            sourceStateVerifierHash: sourceStateVerifierHash,
+            sourceAdapterDeploymentHash: sourceAdapterDeploymentHash,
+            sourceAdapterDeploymentReceiptHash: sourceAdapterDeploymentReceiptHash,
+            backend: backend,
+            sourceDomain: sourceDomain
+        )
+    }
+
+    private static func sampleTonShardStateProofRequestInput(
+        transactionRoot: String = "0x5a75fc0633903343b684ec73076c5a48cf6b453fc73aa316c2a6de900669e419",
+        sourceStateVerifierHash: String = String(repeating: "d4", count: 32),
+        validatorSetTransitionProofs: [TonValidatorSetTransitionProofInput] = []
+    ) -> TonShardStateProofRequestInput {
+        var shardAccountKey = Data(repeating: 0, count: 32)
+        shardAccountKey[0] = 17
+        return TonShardStateProofRequestInput(
+            masterchainSeqno: 19,
+            masterchainBlockHash: String(repeating: "aa", count: 32),
+            masterchainFileHash: String(repeating: "a5", count: 32),
+            validatorSetHash: "0x68bfccd52bc19cf8cdaffc611d58e53824d0aee395a4d813eca0bcefb3970938",
+            masterchainConfigRoot: "0x5bf87008e0e76085d6db977b53a89329de49a4eed8fd1ff90d8c78f096ef05af",
+            masterchainConfigProofHash: "0x235c1f0946e38bc210a6a8e193fbe52399ccc4d82693ef3f123be20e27697fc3",
+            shardShard: 0x8000_0000_0000_0000,
+            shardSeqno: 7,
+            shardBlockHash: String(repeating: "bb", count: 32),
+            shardFileHash: String(repeating: "bc", count: 32),
+            shardStateRoot: "0x12a960855fea2f529c336d7325b1cca784f0f0b1a52ae149d02d046a2499e270",
+            transactionRoot: transactionRoot,
+            transactionLt: 7,
+            shardStateDictionaryRoot: "0x049a63ecefc78dc0cd468ebf47e0385807d790a2ca8e0dca5cbbeb0714567fd3",
+            shardStateDictionaryKeyBitLen: 256,
+            shardStateDictionaryKey: shardAccountKey,
+            masterchainSignatureHash: "0x7a927ad3e689e4f3679fe1d1b8ea1088b914523b0c2da0d6dc0938e5e5cf8d15",
+            shardProofHash: "0x32d8b496320e6a1ce5ccf671f2bd6f0d09cb53afed8c123b86cb9327b77c88cf",
+            shardStateProofBoc: Data(hexString:
+                "b5ee9c720101060100aa00035b9023afe2ffffff110000000000000000000000000000000007000000010000000b000000000000000c000000122001020500000101c00301d37fffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff84400000000000000000000000000000000000000000000000000000000000000005a75fc0633903343b684ec73076c5a48cf6b453fc73aa316c2a6de900669e419000000000000000780400000000"
+            )!,
+            shardStateDictionaryProofBoc: Data(hexString:
+                "b5ee9c72010103010073000101c00101d37fffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff84400000000000000000000000000000000000000000000000000000000000000005a75fc0633903343b684ec73076c5a48cf6b453fc73aa316c2a6de900669e41900000000000000078020000"
+            )!,
+            configDictionaryProofBoc: Data(hexString:
+                "b5ee9c72010106010091000101c00101117fffffff80000008a002012b120000000100000002000200020000000000000003c00302087fff00000405005b14e3a049e28444444444444444444444444444444444444444444444444444444444444444400000000000000060005b14e3a049e288888888888888888888888888888888888888888888888888888888888888888000000000000000a0"
+            )!,
+            validatorSetTransitionProofs: validatorSetTransitionProofs,
+            sourceStateVerifierHash: sourceStateVerifierHash,
+            sourceTrustAnchorHash: "0x68bfccd52bc19cf8cdaffc611d58e53824d0aee395a4d813eca0bcefb3970938",
+            consensusVerifierHash: String(repeating: "b2", count: 32),
+            messageInclusionVerifierHash: String(repeating: "c3", count: 32),
+            finalityPolicyHash: String(repeating: "c4", count: 32)
+        )
+    }
+
+    private static func sampleTonValidatorSetTransitionProofInput(
+        signatures: [Data] = [Data(repeating: 0xab, count: 64), Data(repeating: 0xcd, count: 64)]
+    ) throws -> TonValidatorSetTransitionProofInput {
+        let transitionMessageHash = "0x91eda926884eb1ae700e7b398c46f6d47fbb973efa322564894936140ccd2a19"
+        let nextValidatorSetPayload = Data(hexString:
+            "0102000000" + String(repeating: "33", count: 32)
+                + "0300000000000000" + String(repeating: "44", count: 32)
+                + "0400000000000000"
+        )!
+        let validatorSignatureProof = TonValidatorSignatureProofInput(
+            totalWeight: 3,
+            signedWeight: 3,
+            blockMessageHash: transitionMessageHash,
+            validatorPublicKeys: [
+                Data(repeating: 0x11, count: 32),
+                Data(repeating: 0x22, count: 32)
+            ],
+            validatorWeights: [1, 2],
+            signersBitmap: Data([0x03]),
+            signatures: signatures
+        )
+        return TonValidatorSetTransitionProofInput(
+            fromValidatorSetSeqno: 7,
+            toValidatorSetSeqno: 8,
+            masterchainSeqno: 19,
+            masterchainBlockHash: String(repeating: "aa", count: 32),
+            masterchainFileHash: String(repeating: "a5", count: 32),
+            parentValidatorSetHash: "0x68bfccd52bc19cf8cdaffc611d58e53824d0aee395a4d813eca0bcefb3970938",
+            nextValidatorSetHash: "0x26bfcffe8913e5e4f09e56076d5a237cbc5b890d31b8912bd7eacc5d3805691f",
+            nextValidatorSetPayload: nextValidatorSetPayload,
+            nextValidatorSetPayloadHash: "0xb76b843e99596a049425653e9921e4227af23a5b70331940fa057f1f58314983",
+            nextValidatorSetConfigHash: String(repeating: "cc", count: 32),
+            transitionMessageHash: transitionMessageHash,
+            transitionSignatureHash: try tonValidatorSetTransitionSignatureHash(
+                sourceDomain: sccpDomainTon,
+                fromValidatorSetSeqno: 7,
+                toValidatorSetSeqno: 8,
+                masterchainSeqno: 19,
+                masterchainWorkchainId: -1,
+                masterchainShard: 0x8000_0000_0000_0000,
+                masterchainBlockHash: String(repeating: "aa", count: 32),
+                masterchainFileHash: String(repeating: "a5", count: 32),
+                parentValidatorSetHash: "0x68bfccd52bc19cf8cdaffc611d58e53824d0aee395a4d813eca0bcefb3970938",
+                nextValidatorSetHash: "0x26bfcffe8913e5e4f09e56076d5a237cbc5b890d31b8912bd7eacc5d3805691f",
+                nextValidatorSetPayload: nextValidatorSetPayload,
+                nextValidatorSetPayloadHash: "0xb76b843e99596a049425653e9921e4227af23a5b70331940fa057f1f58314983",
+                nextValidatorSetConfigHash: String(repeating: "cc", count: 32),
+                transitionMessageHash: transitionMessageHash,
+                validatorSignatureProof: validatorSignatureProof
+            ),
+            validatorSignatureProof: validatorSignatureProof
+        )
+    }
+
+    private static func sampleTonFullLightClientAuditProofInput(
+        masterchainConfigVerifierHash: String = "0x" + String(repeating: "b1", count: 32),
+        validatorSetTransitionVerifierHash: String = "0x" + String(repeating: "c2", count: 32),
+        shardAccountsDictionaryVerifierHash: String = "0x" + String(repeating: "d3", count: 32),
+        shardStateVerificationProofHash: String? = nil,
+        masterchainConfigProofHash: String? = nil
+    ) throws -> TonSccpFullLightClientAuditProofInput {
+        let baseShardState = sampleTonShardStateProofRequestInput()
+        let validatorSetPayloadHash = "0xb322afe2faa070a2ed88a922c5ac5d27e5f9fecc41a11ffbed37cca293c4aeb0"
+        let configLeafHash = try tonMasterchainConfigLeafHash(
+            sourceDomain: sccpDomainTon,
+            masterchainSeqno: baseShardState.masterchainSeqno,
+            masterchainBlockHash: baseShardState.masterchainBlockHash,
+            shardStateRoot: baseShardState.shardStateRoot,
+            validatorSetHash: baseShardState.validatorSetHash,
+            validatorSetPayloadHash: validatorSetPayloadHash
+        )
+        let configValueHash = "0x1aa64eb5ca0b3cb254dfada709904ce81f8b327eed0d83f2522122a0a9dddd50"
+        let shardState = TonShardStateProofRequestInput(
+            masterchainSeqno: baseShardState.masterchainSeqno,
+            masterchainWorkchainId: baseShardState.masterchainWorkchainId,
+            masterchainShard: baseShardState.masterchainShard,
+            masterchainBlockHash: baseShardState.masterchainBlockHash,
+            masterchainFileHash: baseShardState.masterchainFileHash,
+            validatorSetHash: baseShardState.validatorSetHash,
+            masterchainConfigRoot: baseShardState.masterchainConfigRoot,
+            masterchainConfigProofHash: masterchainConfigProofHash ?? baseShardState.masterchainConfigProofHash,
+            shardWorkchainId: baseShardState.shardWorkchainId,
+            shardShard: baseShardState.shardShard,
+            shardSeqno: baseShardState.shardSeqno,
+            shardBlockHash: baseShardState.shardBlockHash,
+            shardFileHash: baseShardState.shardFileHash,
+            shardStateRoot: baseShardState.shardStateRoot,
+            transactionRoot: baseShardState.transactionRoot,
+            transactionLt: baseShardState.transactionLt,
+            shardStateDictionaryRoot: baseShardState.shardStateDictionaryRoot,
+            shardStateDictionaryKeyBitLen: baseShardState.shardStateDictionaryKeyBitLen,
+            shardStateDictionaryKey: baseShardState.shardStateDictionaryKey,
+            masterchainSignatureHash: baseShardState.masterchainSignatureHash,
+            shardProofHash: baseShardState.shardProofHash,
+            shardStateProofBoc: baseShardState.shardStateProofBoc,
+            shardStateDictionaryProofBoc: baseShardState.shardStateDictionaryProofBoc,
+            configDictionaryProofBoc: baseShardState.configDictionaryProofBoc,
+            validatorSetTransitionProofs: baseShardState.validatorSetTransitionProofs,
+            sourceStateVerifierId: baseShardState.sourceStateVerifierId,
+            sourceStateVerifierHash: baseShardState.sourceStateVerifierHash,
+            sourceTrustAnchorId: baseShardState.sourceTrustAnchorId,
+            sourceTrustAnchorHash: baseShardState.sourceTrustAnchorHash,
+            consensusVerifierId: baseShardState.consensusVerifierId,
+            consensusVerifierHash: baseShardState.consensusVerifierHash,
+            messageInclusionVerifierId: baseShardState.messageInclusionVerifierId,
+            messageInclusionVerifierHash: baseShardState.messageInclusionVerifierHash,
+            finalityPolicyId: baseShardState.finalityPolicyId,
+            finalityPolicyHash: baseShardState.finalityPolicyHash
+        )
+        let sourceVerifierMaterialHash = try sccpSourceVerifierMaterialHash(
+            sourceDomain: sccpDomainTon,
+            sourceTrustAnchorHash: shardState.sourceTrustAnchorHash,
+            consensusVerifierHash: shardState.consensusVerifierHash,
+            messageInclusionVerifierHash: shardState.messageInclusionVerifierHash,
+            finalityPolicyHash: shardState.finalityPolicyHash,
+            sourceStateVerifierHash: shardState.sourceStateVerifierHash
+        )
+        let deploymentReceiptHash = "0x" + String(repeating: "aa", count: 32)
+        let sourceAdapterDeploymentHash = try sccpSourceAdapterEngineDeploymentHash(
+            sourceDomain: sccpDomainTon,
+            sourceTrustAnchorHash: shardState.sourceTrustAnchorHash,
+            consensusVerifierHash: shardState.consensusVerifierHash,
+            messageInclusionVerifierHash: shardState.messageInclusionVerifierHash,
+            finalityPolicyHash: shardState.finalityPolicyHash,
+            deploymentReceiptHash: deploymentReceiptHash,
+            sourceStateVerifierHash: shardState.sourceStateVerifierHash,
+            tonMasterchainConfigVerifierHash: masterchainConfigVerifierHash,
+            tonValidatorSetTransitionVerifierHash: validatorSetTransitionVerifierHash,
+            tonShardAccountsDictionaryVerifierHash: shardAccountsDictionaryVerifierHash
+        )
+        let gateHash = try sccpTonFullLightClientGateHash(
+            sourceTrustAnchorHash: shardState.sourceTrustAnchorHash,
+            consensusVerifierHash: shardState.consensusVerifierHash,
+            messageInclusionVerifierHash: shardState.messageInclusionVerifierHash,
+            finalityPolicyHash: shardState.finalityPolicyHash,
+            deploymentReceiptHash: deploymentReceiptHash,
+            tonMasterchainConfigVerifierHash: masterchainConfigVerifierHash,
+            tonValidatorSetTransitionVerifierHash: validatorSetTransitionVerifierHash,
+            tonShardAccountsDictionaryVerifierHash: shardAccountsDictionaryVerifierHash,
+            sourceStateVerifierHash: shardState.sourceStateVerifierHash
+        )
+        return TonSccpFullLightClientAuditProofInput(
+            shardState: shardState,
+            shardStateVerificationProof: TonSccpSourceStateVerificationProof(proofBytes: Data([0x11, 0x22, 0x33, 0x44])),
+            validatorSetPayloadHash: validatorSetPayloadHash,
+            configLeafHash: configLeafHash,
+            configValueHash: configValueHash,
+            sourceVerifierMaterialHash: sourceVerifierMaterialHash,
+            sourceAdapterDeploymentHash: sourceAdapterDeploymentHash,
+            fullLightClientGateHash: gateHash,
+            tonMasterchainConfigVerifierHash: masterchainConfigVerifierHash,
+            tonValidatorSetTransitionVerifierHash: validatorSetTransitionVerifierHash,
+            tonShardAccountsDictionaryVerifierHash: shardAccountsDictionaryVerifierHash,
+            shardStateVerificationProofHash: shardStateVerificationProofHash
+        )
+    }
+
+    private static func sampleTonPublicInputs(
+        payloadHash: String = String(repeating: "ee", count: 32),
+        targetDomain: UInt32 = sccpDomainTon
+    ) -> TonSccpPublicInputsInput {
         TonSccpPublicInputsInput(
             messageId: String(repeating: "dd", count: 32),
-            payloadHash: String(repeating: "ee", count: 32),
+            payloadHash: payloadHash,
+            targetDomain: targetDomain,
             commitmentRoot: String(repeating: "12", count: 32),
             finalityHeight: 19,
             finalityBlockHash: String(repeating: "aa", count: 32)
         )
+    }
+
+    private static func sampleGroth16ProofBytes(overrides: [Int: Data] = [:]) -> Data {
+        var words = [
+            abiWord(1),
+            repeatedWord(0x11),
+            abiWord(UInt64(sccpDomainSora)),
+            repeatedWord(0x33),
+            abiWord(1),
+            abiWord(2),
+            bn254G2GeneratorWords[0],
+            bn254G2GeneratorWords[1],
+            bn254G2GeneratorWords[2],
+            bn254G2GeneratorWords[3],
+            abiWord(1),
+            abiWord(2),
+        ]
+        for (index, word) in overrides {
+            words[index] = word
+        }
+        var out = Data()
+        for word in words {
+            out.append(word)
+        }
+        return out
+    }
+
+    private static let bn254G2GeneratorWords = [
+        Data(hexString: "1800deef121f1e76426a00665e5c4479674322d4f75edadd46debd5cd992f6ed")!,
+        Data(hexString: "198e9393920d483a7260bfb731fb5d25f1aa493335a9e71297e485b7aef312c2")!,
+        Data(hexString: "12c85ea5db8c6deb4aab71808dcb408fe3d1e7690c43d37b4ce6cc0166fa7daa")!,
+        Data(hexString: "090689d0585ff075ec9e99ad690c3395bc4b313370b38ef355acdadcd122975b")!,
+    ]
+
+    private static func abiWord(_ value: UInt64) -> Data {
+        var out = Data(repeating: 0, count: 32)
+        var working = value
+        for index in stride(from: 31, through: 0, by: -1) {
+            out[index] = UInt8(working & 0xff)
+            working >>= 8
+            if working == 0 {
+                break
+            }
+        }
+        return out
+    }
+
+    private static func repeatedWord(_ value: UInt8) -> Data {
+        Data(repeating: value, count: 32)
+    }
+
+    private static func sampleTronProofRequestInput(
+        publicInputs: TronSccpPublicInputsInput = sampleTronPublicInputs(),
+        bundleBytes: Data = Data([5, 6, 7]),
+        sourceProofBytes: Data = Data(),
+        statementHash: String = String(repeating: "56", count: 32),
+        destinationBindingHash: String = String(repeating: "78", count: 32),
+        backend: String = sccpTronGroth16Bn254ProofBackendV1,
+        sourceDomain: UInt32 = sccpDomainSora
+    ) -> TronSccpProofRequestInput {
+        TronSccpProofRequestInput(
+            publicInputs: publicInputs,
+            bundleBytes: bundleBytes,
+            sourceProofBytes: sourceProofBytes,
+            statementHash: statementHash,
+            destinationBindingHash: destinationBindingHash,
+            backend: backend,
+            sourceDomain: sourceDomain
+        )
+    }
+
+    private static func sampleTronDestinationBinding(
+        targetDomain: UInt32 = sccpDomainTron,
+        networkId: String = "0x" + String(repeating: "33", count: 32),
+        verifierAddress: String = "TJRabPrwbZy45sbavfcjinPJC18kjpRTv8",
+        verifierCodeHash: String = "0x" + String(repeating: "bb", count: 32),
+        verifierKeyHash: String = "0x" + String(repeating: "cc", count: 32)
+    ) throws -> TronSccpDestinationBinding {
+        try sccpTronDestinationBinding(
+            targetDomain: targetDomain,
+            networkId: networkId,
+            verifierAddress: verifierAddress,
+            verifierCodeHash: verifierCodeHash,
+            verifierKeyHash: verifierKeyHash
+        )
+    }
+
+    private static func sampleProductionTronProofRequestInput(
+        publicInputs: TronSccpPublicInputsInput = sampleTronPublicInputs(),
+        bundleBytes: Data = Data([5, 6, 7]),
+        sourceProofBytes: Data = Data(),
+        statementHash: String = String(repeating: "56", count: 32),
+        backend: String = sccpTronGroth16Bn254ProofBackendV1,
+        sourceDomain: UInt32 = sccpDomainSora
+    ) throws -> TronSccpProofRequestInput {
+        try TronSccpProofRequestInput(
+            publicInputs: publicInputs,
+            bundleBytes: bundleBytes,
+            sourceProofBytes: sourceProofBytes,
+            statementHash: statementHash,
+            destinationBinding: try sampleTronDestinationBinding(targetDomain: publicInputs.targetDomain),
+            backend: backend,
+            sourceDomain: sourceDomain
+        )
+    }
+
+    private static func sampleTronPublicInputs(
+        payloadHash: String = String(repeating: "22", count: 32),
+        targetDomain: UInt32 = sccpDomainTron
+    ) -> TronSccpPublicInputsInput {
+        TronSccpPublicInputsInput(
+            messageId: String(repeating: "11", count: 32),
+            payloadHash: payloadHash,
+            targetDomain: targetDomain,
+            commitmentRoot: String(repeating: "33", count: 32),
+            finalityHeight: 19,
+            finalityBlockHash: String(repeating: "44", count: 32)
+        )
+    }
+
+    private static func sampleEvmProofRequestInput(
+        publicInputs: EvmSccpPublicInputsInput = sampleEvmPublicInputs(),
+        bundleBytes: Data = Data([5, 6, 7]),
+        sourceProofBytes: Data = Data(),
+        statementHash: String = String(repeating: "56", count: 32),
+        destinationBindingHash: String = String(repeating: "78", count: 32),
+        backend: String = sccpEvmGroth16Bn254ProofBackendV1,
+        sourceDomain: UInt32 = sccpDomainSora
+    ) -> EvmSccpProofRequestInput {
+        EvmSccpProofRequestInput(
+            publicInputs: publicInputs,
+            bundleBytes: bundleBytes,
+            sourceProofBytes: sourceProofBytes,
+            statementHash: statementHash,
+            destinationBindingHash: destinationBindingHash,
+            backend: backend,
+            sourceDomain: sourceDomain
+        )
+    }
+
+    private static func sampleEvmDestinationBinding(
+        targetDomain: UInt32 = sccpDomainEthereum,
+        networkId: String = "0x" + String(repeating: "33", count: 32),
+        verifierAddress: String = "0x" + String(repeating: "11", count: 20),
+        bridgeAddress: String = "0x" + String(repeating: "22", count: 20),
+        verifierCodeHash: String = "0x" + String(repeating: "bb", count: 32),
+        verifierKeyHash: String = "0x" + String(repeating: "cc", count: 32)
+    ) throws -> EvmSccpDestinationBinding {
+        try sccpEvmDestinationBinding(
+            targetDomain: targetDomain,
+            networkId: networkId,
+            verifierAddress: verifierAddress,
+            bridgeAddress: bridgeAddress,
+            verifierCodeHash: verifierCodeHash,
+            verifierKeyHash: verifierKeyHash
+        )
+    }
+
+    private static func sampleProductionEvmProofRequestInput(
+        publicInputs: EvmSccpPublicInputsInput = sampleEvmPublicInputs(),
+        bundleBytes: Data = Data([5, 6, 7]),
+        sourceProofBytes: Data = Data(),
+        statementHash: String = String(repeating: "56", count: 32),
+        backend: String = sccpEvmGroth16Bn254ProofBackendV1,
+        sourceDomain: UInt32 = sccpDomainSora
+    ) throws -> EvmSccpProofRequestInput {
+        try EvmSccpProofRequestInput(
+            publicInputs: publicInputs,
+            bundleBytes: bundleBytes,
+            sourceProofBytes: sourceProofBytes,
+            statementHash: statementHash,
+            destinationBinding: try sampleEvmDestinationBinding(targetDomain: publicInputs.targetDomain),
+            backend: backend,
+            sourceDomain: sourceDomain
+        )
+    }
+
+    private static func sampleEvmPublicInputs(
+        payloadHash: String = String(repeating: "22", count: 32),
+        targetDomain: UInt32 = sccpDomainEthereum,
+        finalityHeight: UInt64 = 19
+    ) -> EvmSccpPublicInputsInput {
+        EvmSccpPublicInputsInput(
+            messageId: String(repeating: "11", count: 32),
+            payloadHash: payloadHash,
+            targetDomain: targetDomain,
+            commitmentRoot: String(repeating: "33", count: 32),
+            finalityHeight: finalityHeight,
+            finalityBlockHash: String(repeating: "44", count: 32)
+        )
+    }
+
+    private static func sampleSubstrateProofRequestInput(
+        publicInputs: SubstrateSccpPublicInputsInput = sampleSubstratePublicInputs(),
+        bundleBytes: Data = Data([5, 6, 7]),
+        sourceProofBytes: Data = Data(),
+        statementHash: String = String(repeating: "56", count: 32),
+        destinationBindingHash: String = String(repeating: "78", count: 32),
+        backend: String = sccpSubstrateRuntimeProofBackendV1,
+        sourceDomain: UInt32 = sccpDomainSora
+    ) -> SubstrateSccpProofRequestInput {
+        SubstrateSccpProofRequestInput(
+            publicInputs: publicInputs,
+            bundleBytes: bundleBytes,
+            sourceProofBytes: sourceProofBytes,
+            statementHash: statementHash,
+            destinationBindingHash: destinationBindingHash,
+            backend: backend,
+            sourceDomain: sourceDomain
+        )
+    }
+
+    private static func sampleSubstratePublicInputs(
+        payloadHash: String = String(repeating: "22", count: 32),
+        targetDomain: UInt32 = sccpDomainSora2,
+        finalityHeight: UInt64 = 42
+    ) -> SubstrateSccpPublicInputsInput {
+        SubstrateSccpPublicInputsInput(
+            messageId: String(repeating: "21", count: 32),
+            payloadHash: payloadHash,
+            targetDomain: targetDomain,
+            commitmentRoot: String(repeating: "23", count: 32),
+            finalityHeight: finalityHeight,
+            finalityBlockHash: String(repeating: "24", count: 32)
+        )
+    }
+
+    private static func sampleSourceVerifierMaterialBytes(domain: UInt32) throws -> Data {
+        try canonicalSccpSourceVerifierMaterialBytes(
+            sourceDomain: domain,
+            sourceTrustAnchorHash: "0x" + String(repeating: "44", count: 32),
+            consensusVerifierHash: "0x" + String(repeating: "55", count: 32),
+            messageInclusionVerifierHash: "0x" + String(repeating: "66", count: 32),
+            finalityPolicyHash: "0x" + String(repeating: "88", count: 32),
+            sourceStateVerifierHash: sourceStateVerifierHash(domain: domain),
+            bridgeAddress: bridgeAddress(domain: domain),
+            sourceBridgeEmitterCodeHash: sourceBridgeCodeHash(domain: domain),
+            networkId: networkId(domain: domain),
+            ownerAddress: ownerAddress(domain: domain),
+            configHash: configHash(domain: domain)
+        )
+    }
+
+    private static func sampleSourceVerifierMaterialHash(domain: UInt32) throws -> String {
+        try sccpSourceVerifierMaterialHash(
+            sourceDomain: domain,
+            sourceTrustAnchorHash: "0x" + String(repeating: "44", count: 32),
+            consensusVerifierHash: "0x" + String(repeating: "55", count: 32),
+            messageInclusionVerifierHash: "0x" + String(repeating: "66", count: 32),
+            finalityPolicyHash: "0x" + String(repeating: "88", count: 32),
+            sourceStateVerifierHash: sourceStateVerifierHash(domain: domain),
+            bridgeAddress: bridgeAddress(domain: domain),
+            sourceBridgeEmitterCodeHash: sourceBridgeCodeHash(domain: domain),
+            networkId: networkId(domain: domain),
+            ownerAddress: ownerAddress(domain: domain),
+            configHash: configHash(domain: domain)
+        )
+    }
+
+    private static func sampleSourceAdapterDeploymentHash(
+        domain: UInt32,
+        adapterVerifierVkHash: String? = nil,
+        solanaTowerReplayVerifierHash: String? = nil,
+        solanaFullAccountsdbLatticeVerifierHash: String? = nil,
+        solanaBankForkChoiceVerifierHash: String? = nil,
+        tonMasterchainConfigVerifierHash: String? = nil,
+        tonValidatorSetTransitionVerifierHash: String? = nil,
+        tonShardAccountsDictionaryVerifierHash: String? = nil
+    ) throws -> String {
+        try sccpSourceAdapterEngineDeploymentHash(
+            sourceDomain: domain,
+            sourceTrustAnchorHash: "0x" + String(repeating: "44", count: 32),
+            consensusVerifierHash: "0x" + String(repeating: "55", count: 32),
+            messageInclusionVerifierHash: "0x" + String(repeating: "66", count: 32),
+            finalityPolicyHash: "0x" + String(repeating: "88", count: 32),
+            deploymentReceiptHash: "0x" + String(repeating: "aa", count: 32),
+            adapterVerifierVkHash: adapterVerifierVkHash,
+            sourceStateVerifierHash: sourceStateVerifierHash(domain: domain),
+            bridgeAddress: bridgeAddress(domain: domain),
+            sourceBridgeEmitterCodeHash: sourceBridgeCodeHash(domain: domain),
+            networkId: networkId(domain: domain),
+            ownerAddress: ownerAddress(domain: domain),
+            configHash: configHash(domain: domain),
+            solanaTowerReplayVerifierHash: solanaTowerReplayVerifierHash,
+            solanaFullAccountsdbLatticeVerifierHash: solanaFullAccountsdbLatticeVerifierHash,
+            solanaBankForkChoiceVerifierHash: solanaBankForkChoiceVerifierHash,
+            tonMasterchainConfigVerifierHash: tonMasterchainConfigVerifierHash,
+            tonValidatorSetTransitionVerifierHash: tonValidatorSetTransitionVerifierHash,
+            tonShardAccountsDictionaryVerifierHash: tonShardAccountsDictionaryVerifierHash
+        )
+    }
+
+    private static func sampleSolanaFullLightClientGateHash(
+        towerReplayHash: String = "0x" + String(repeating: "bb", count: 32),
+        fullAccountsdbLatticeHash: String = "0x" + String(repeating: "cc", count: 32),
+        bankForkChoiceHash: String = "0x" + String(repeating: "dd", count: 32),
+        sourceStateHash: String? = sourceStateVerifierHash(domain: sccpDomainSolana)
+    ) throws -> String {
+        try sccpSolanaFullLightClientGateHash(
+            sourceTrustAnchorHash: "0x" + String(repeating: "44", count: 32),
+            consensusVerifierHash: "0x" + String(repeating: "55", count: 32),
+            messageInclusionVerifierHash: "0x" + String(repeating: "66", count: 32),
+            finalityPolicyHash: "0x" + String(repeating: "88", count: 32),
+            deploymentReceiptHash: "0x" + String(repeating: "aa", count: 32),
+            solanaTowerReplayVerifierHash: towerReplayHash,
+            solanaFullAccountsdbLatticeVerifierHash: fullAccountsdbLatticeHash,
+            solanaBankForkChoiceVerifierHash: bankForkChoiceHash,
+            sourceStateVerifierHash: sourceStateHash
+        )
+    }
+
+    private static func sampleTonFullLightClientGateHash(
+        masterchainConfigHash: String = "0x" + String(repeating: "bb", count: 32),
+        validatorSetTransitionHash: String = "0x" + String(repeating: "cc", count: 32),
+        shardAccountsDictionaryHash: String = "0x" + String(repeating: "dd", count: 32)
+    ) throws -> String {
+        try sccpTonFullLightClientGateHash(
+            sourceTrustAnchorHash: "0x" + String(repeating: "44", count: 32),
+            consensusVerifierHash: "0x" + String(repeating: "55", count: 32),
+            messageInclusionVerifierHash: "0x" + String(repeating: "66", count: 32),
+            finalityPolicyHash: "0x" + String(repeating: "88", count: 32),
+            deploymentReceiptHash: "0x" + String(repeating: "aa", count: 32),
+            tonMasterchainConfigVerifierHash: masterchainConfigHash,
+            tonValidatorSetTransitionVerifierHash: validatorSetTransitionHash,
+            tonShardAccountsDictionaryVerifierHash: shardAccountsDictionaryHash,
+            sourceStateVerifierHash: sourceStateVerifierHash(domain: sccpDomainTon)
+        )
+    }
+
+    private static func sourceStateVerifierHash(domain: UInt32) -> String? {
+        let requiresSourceState = domain == sccpDomainSolana
+            || domain == sccpDomainTon
+            || domain == sccpDomainSoraKusama
+            || domain == sccpDomainSoraPolkadot
+            || domain == sccpDomainSora2
+        return requiresSourceState ? "0x" + String(repeating: "77", count: 32) : nil
+    }
+
+    private static func bridgeAddress(domain: UInt32) -> String? {
+        domain == sccpDomainEthereum || domain == sccpDomainBsc || domain == sccpDomainTron
+            ? "0x" + String(repeating: "11", count: 20)
+            : nil
+    }
+
+    private static func sourceBridgeCodeHash(domain: UInt32) -> String? {
+        bridgeAddress(domain: domain) == nil ? nil : "0x" + String(repeating: "77", count: 32)
+    }
+
+    private static func networkId(domain: UInt32) -> String? {
+        domain == sccpDomainTron ? "0x" + String(repeating: "33", count: 32) : nil
+    }
+
+    private static func ownerAddress(domain: UInt32) -> String? {
+        domain == sccpDomainTron ? "0x" + String(repeating: "22", count: 20) : nil
+    }
+
+    private static func configHash(domain: UInt32) -> String? {
+        domain == sccpDomainTron
+            ? "0xe986dd67bfa2307b4e00cf46bde41a88003a55c5b7fea311fa106614b2252f9d"
+            : nil
+    }
+
+    private static func rlpString(_ value: Data) -> Data {
+        if value.count == 1, value[0] < 0x80 {
+            return value
+        }
+        if value.count < 56 {
+            var out = Data([0x80 + UInt8(value.count)])
+            out.append(value)
+            return out
+        }
+        let lengthBytes = minimalBeLengthBytes(value.count)
+        var out = Data([0xb7 + UInt8(lengthBytes.count)])
+        out.append(lengthBytes)
+        out.append(value)
+        return out
+    }
+
+    private static func rlpList(_ fields: [Data]) -> Data {
+        let payload = fields.reduce(into: Data()) { out, field in
+            out.append(field)
+        }
+        if payload.count < 56 {
+            var out = Data([0xc0 + UInt8(payload.count)])
+            out.append(payload)
+            return out
+        }
+        let lengthBytes = minimalBeLengthBytes(payload.count)
+        var out = Data([0xf7 + UInt8(lengthBytes.count)])
+        out.append(lengthBytes)
+        out.append(payload)
+        return out
+    }
+
+    private static func minimalBeLengthBytes(_ value: Int) -> Data {
+        var working = value
+        var bytes: [UInt8] = []
+        repeat {
+            bytes.insert(UInt8(working & 0xff), at: 0)
+            working >>= 8
+        } while working != 0
+        return Data(bytes)
+    }
+
+    private static func sampleBscParliaExtra() -> Data {
+        var extra = Data(repeating: 0x11, count: 32)
+        extra.append(2)
+        extra.append(Data(repeating: 0x11, count: 20))
+        extra.append(Data(repeating: 0x01, count: 48))
+        extra.append(Data(repeating: 0x22, count: 20))
+        extra.append(Data(repeating: 0x02, count: 48))
+        extra.append(Data(repeating: 0x99, count: 65))
+        return extra
+    }
+
+    private static func sampleBscParliaHeaderRlp(extraData: Data) -> Data {
+        rlpList([
+            rlpString(Data(repeating: 0x10, count: 32)),
+            rlpString(Data(repeating: 0x11, count: 32)),
+            rlpString(Data(repeating: 0x12, count: 20)),
+            rlpString(Data(repeating: 0x13, count: 32)),
+            rlpString(Data(repeating: 0x14, count: 32)),
+            rlpString(Data(repeating: 0x15, count: 32)),
+            rlpString(Data(repeating: 0x00, count: 256)),
+            rlpString(Data([2])),
+            rlpString(Data([1])),
+            rlpString(Data([1])),
+            rlpString(Data([1])),
+            rlpString(Data([1])),
+            rlpString(extraData),
+            rlpString(Data(repeating: 0x00, count: 32)),
+            rlpString(Data(repeating: 0x00, count: 8))
+        ])
+    }
+
+    private static func sampleEthExecutionHeaderRlp(
+        receiptsRoot: Data = Data(repeating: 0x15, count: 32)
+    ) -> Data {
+        rlpList([
+            rlpString(Data(repeating: 0x10, count: 32)),
+            rlpString(Data(repeating: 0x11, count: 32)),
+            rlpString(Data(repeating: 0x12, count: 20)),
+            rlpString(Data(repeating: 0x13, count: 32)),
+            rlpString(Data(repeating: 0x14, count: 32)),
+            rlpString(receiptsRoot),
+            rlpString(Data(repeating: 0x00, count: 256)),
+            rlpString(Data()),
+            rlpString(Data([0x2a])),
+            rlpString(Data([0x01, 0xc9, 0xc3, 0x80])),
+            rlpString(Data([0x52, 0x08])),
+            rlpString(Data([0x65, 0x53, 0xf1, 0x00])),
+            rlpString(Data("iroha-sccp-test".utf8)),
+            rlpString(Data(repeating: 0x16, count: 32)),
+            rlpString(Data(repeating: 0x00, count: 8)),
+            rlpString(Data([0x3b, 0x9a, 0xca, 0x00])),
+            rlpString(Data(repeating: 0x17, count: 32)),
+            rlpString(Data()),
+            rlpString(Data()),
+            rlpString(Data(repeating: 0x18, count: 32))
+        ])
     }
 }

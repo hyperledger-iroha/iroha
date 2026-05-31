@@ -243,6 +243,17 @@ TypeInvariant ==
   /\ pacemaker_kickstarted \in BOOLEAN
   /\ late_result_attachable \in BOOLEAN
 
+CasePartitionExact ==
+  /\ Cases =
+       NoInflightCases \union TimeoutZeroCases \union ClockBeforeCases
+       \union BelowTimeoutCases \union NewReportCases
+       \union AlreadyReportedCases
+  /\ NewReportCases = AtTimeoutNewCases \union AboveTimeoutNewCases
+  /\ NoReportCases = Cases \ NewReportCases
+  /\ NoInflightCases \intersect HasInflightCases = {}
+  /\ NewReportCases \intersect NoReportCases = {}
+  /\ AlreadyReportedCases \subseteq NoReportCases
+
 ReportReturnMatchesSpec ==
   candidate = "none" \/ report_returned = SpecReportReturned(candidate)
 
@@ -323,6 +334,7 @@ NewMarkRequiresReturnTrue ==
   timeout_newly_marked => report_returned
 
 Safety ==
+  /\ CasePartitionExact
   /\ ReportReturnMatchesSpec
   /\ TimeoutMarkMatchesSpec
   /\ TimeoutNewlyMarkedMatchesSpec

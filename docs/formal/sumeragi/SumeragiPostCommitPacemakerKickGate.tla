@@ -195,6 +195,14 @@ TypeInvariant ==
   /\ returned_true \in BOOLEAN
   /\ returned_false \in BOOLEAN
 
+CasePartitionExact ==
+  /\ Cases =
+       NoQueueCases \union HealthyQueuedCases \union PacingOnlyQueuedCases
+       \union HardBackpressureCases
+  /\ NoQueueCases \intersect QueuedCases = {}
+  /\ AllowedCases = QueuedCases \ HardBackpressureCases
+  /\ AllowedCases \intersect HardBackpressureCases = {}
+
 TriggerMatchesSpec ==
   candidate = "none" \/ trigger_called = SpecTriggerCalled(candidate)
 
@@ -252,6 +260,7 @@ SuppressionDoesNotCaptureTime ==
   returned_false => ~timestamp_captured
 
 Safety ==
+  /\ CasePartitionExact
   /\ TriggerMatchesSpec
   /\ TimestampMatchesSpec
   /\ ReturnMatchesSpec

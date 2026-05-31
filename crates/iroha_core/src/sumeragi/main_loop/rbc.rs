@@ -3496,6 +3496,21 @@ impl Actor {
             );
             return false;
         }
+        if self.runtime_da_enabled()
+            && Self::stale_rbc_repair_message_can_seed_session(kind)
+            && self.stale_frontier_proposal_hint_matches(*block_hash, height, view)
+        {
+            debug!(
+                height,
+                view,
+                local_view,
+                committed_height,
+                block = %block_hash,
+                kind,
+                "accepting RBC message for stale view with exact-frontier proposal hint"
+            );
+            return false;
+        }
         if self.runtime_da_enabled() && self.rbc_rebroadcast_active(key) {
             debug!(
                 height,
@@ -3568,6 +3583,21 @@ impl Actor {
                 committed_height,
                 now,
             )
+    }
+
+    fn stale_frontier_proposal_hint_matches(
+        &self,
+        block_hash: HashOf<BlockHeader>,
+        height: u64,
+        view: u64,
+    ) -> bool {
+        self.frontier_slot_is_exact_height(height)
+            && self
+                .subsystems
+                .propose
+                .proposal_cache
+                .get_hint(height, view)
+                .is_some_and(|hint| hint.block_hash == block_hash)
     }
 
     #[allow(clippy::too_many_lines)]

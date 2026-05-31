@@ -1,0 +1,1155 @@
+import json
+from importlib.util import module_from_spec, spec_from_file_location
+from pathlib import Path
+from types import SimpleNamespace
+
+
+ETH_DESTINATION_BINDING_VECTOR = (
+    "3ad95ac3e5bc2892f768aae40a3b7ba673d561858b7d1318fbb9f6eba83207bf"
+)
+BSC_DESTINATION_BINDING_VECTOR = (
+    "01f0a2b6b82ff36dfd375b2262dfb011d858267efb4b38ffcb17cb2461a39956"
+)
+EVM_SOURCE_VERIFIER_MATERIAL_HASH = "aa" * 32
+EVM_SOURCE_ADAPTER_ENGINE_DEPLOYMENT_HASH = "99" * 32
+ETH_ROUTE_ALLOWLIST_HASH_VECTOR = (
+    "0e191f1431409c99cb2aabd3e39b6e9f1ed063afc95ca7a8904b5c63c1875ace"
+)
+BSC_ROUTE_ALLOWLIST_HASH_VECTOR = (
+    "366c86cf9a9fd660ab30fc918fd3e608e35d9d658c2030a4425592dd8abd225a"
+)
+EVM_ROUTE_CANARY_EVIDENCE_HASH = "e1" * 32
+ETH_ROUTE_CANARY_TRANSACTION_HASH_VECTOR = (
+    "b2a393cf1e28a4d8ab5182e51b53ae3b3e144c0d24087e73ce77216b4773abac"
+)
+BSC_ROUTE_CANARY_TRANSACTION_HASH_VECTOR = (
+    "bc66a1abd4546341a9e59753712deee600d1447b8eeb118471481c156be4d7c2"
+)
+
+
+def load_evidence_module():
+    script_path = (
+        Path(__file__).resolve().parents[2]
+        / "scripts"
+        / "sccp_evm_destination_evidence.py"
+    )
+    spec = spec_from_file_location("sccp_evm_destination_evidence", script_path)
+    module = module_from_spec(spec)
+    assert spec.loader is not None
+    spec.loader.exec_module(module)  # type: ignore[assignment]
+    return module
+
+
+def evm_runtime_material(module, *, domain=1):
+    bridge_runtime = bytes.fromhex("6001600255")
+    verifier_runtime = bytes.fromhex("6080604052")
+    network_id = bytes.fromhex("33" * 32)
+    verifier_address = bytes.fromhex("11" * 20)
+    bridge_address = bytes.fromhex("22" * 20)
+    verifier_key_hash = bytes.fromhex("cc" * 32)
+    bridge_code_hash = module.runtime_bytecode_hash(bridge_runtime)
+    verifier_code_hash = module.runtime_bytecode_hash(verifier_runtime)
+    destination_binding_hash = module.evm_destination_binding_hash(
+        network_id=network_id,
+        source_domain=0,
+        target_domain=domain,
+        verifier_address=verifier_address,
+        bridge_address=bridge_address,
+        verifier_code_hash=verifier_code_hash,
+        verifier_key_hash=verifier_key_hash,
+    )
+    route_allowlist_hash = module.evm_route_allowlist_hash(
+        domain=domain,
+        source_verifier_material_hash=bytes.fromhex(EVM_SOURCE_VERIFIER_MATERIAL_HASH),
+        source_adapter_engine_deployment_hash=bytes.fromhex(
+            EVM_SOURCE_ADAPTER_ENGINE_DEPLOYMENT_HASH
+        ),
+        destination_binding_hash=destination_binding_hash,
+    )
+    route_canary_transaction_hash = bytes.fromhex("44" * 32)
+    route_canary_message_id = bytes.fromhex("55" * 32)
+    route_canary_call_data_sha256 = bytes.fromhex("88" * 32)
+    route_canary_payload_hash = bytes.fromhex("99" * 32)
+    route_canary_statement_hash = bytes.fromhex("66" * 32)
+    route_canary_commitment_root = bytes.fromhex("77" * 32)
+    route_canary_finality_height = bytes.fromhex("aa" * 32)
+    route_canary_finality_block_hash = bytes.fromhex("ab" * 32)
+    route_canary_evidence_hash = module.evm_route_canary_transaction_evidence_hash(
+        route_allowlist_hash=route_allowlist_hash,
+        bridge_address=bridge_address,
+        transaction_hash=route_canary_transaction_hash,
+        log_index=0,
+        call_data_sha256=route_canary_call_data_sha256,
+        message_id=route_canary_message_id,
+        payload_hash=route_canary_payload_hash,
+        source_domain=0,
+        target_domain=domain,
+        commitment_root=route_canary_commitment_root,
+        finality_height=route_canary_finality_height,
+        finality_block_hash=route_canary_finality_block_hash,
+        statement_hash=route_canary_statement_hash,
+        proof_version=1,
+        proof_source_domain=0,
+        destination_binding_hash=destination_binding_hash,
+        verifier_backend_hash=module.evm_verifier_backend_hash(),
+        proof_family_hash=module.evm_proof_family_hash(),
+        network_id=network_id,
+        used_message_proof=True,
+    )
+    return SimpleNamespace(
+        domain=domain,
+        network_id=network_id,
+        verifier_address=verifier_address,
+        bridge_address=bridge_address,
+        bridge_runtime=bridge_runtime,
+        verifier_runtime=verifier_runtime,
+        bridge_code_hash=bridge_code_hash,
+        verifier_code_hash=verifier_code_hash,
+        verifier_key_hash=verifier_key_hash,
+        destination_binding_hash=destination_binding_hash,
+        route_allowlist_hash=route_allowlist_hash,
+        route_canary_transaction_hash=route_canary_transaction_hash,
+        route_canary_log_index=0,
+        route_canary_call_data_sha256=route_canary_call_data_sha256,
+        route_canary_message_id=route_canary_message_id,
+        route_canary_payload_hash=route_canary_payload_hash,
+        route_canary_target_domain=domain,
+        route_canary_statement_hash=route_canary_statement_hash,
+        route_canary_commitment_root=route_canary_commitment_root,
+        route_canary_finality_height=route_canary_finality_height,
+        route_canary_finality_block_hash=route_canary_finality_block_hash,
+        route_canary_proof_version=1,
+        route_canary_proof_source_domain=0,
+        route_canary_evidence_hash=route_canary_evidence_hash,
+    )
+
+
+def add_route_canary_args(args, material):
+    args.route_canary_evidence_hash = material.route_canary_evidence_hash
+    args.route_canary_transaction_hash = material.route_canary_transaction_hash
+    args.route_canary_log_index = material.route_canary_log_index
+    args.route_canary_call_data_sha256 = material.route_canary_call_data_sha256
+    args.route_canary_message_id = material.route_canary_message_id
+    args.route_canary_payload_hash = material.route_canary_payload_hash
+    args.route_canary_target_domain = material.route_canary_target_domain
+    args.route_canary_statement_hash = material.route_canary_statement_hash
+    args.route_canary_commitment_root = material.route_canary_commitment_root
+    args.route_canary_finality_height = material.route_canary_finality_height
+    args.route_canary_finality_block_hash = material.route_canary_finality_block_hash
+    args.route_canary_proof_version = material.route_canary_proof_version
+    args.route_canary_proof_source_domain = material.route_canary_proof_source_domain
+    args.route_canary_used_message_proof = True
+    return args
+
+
+def full_toml_args(material):
+    return add_route_canary_args(
+        SimpleNamespace(
+            domain=material.domain,
+            network_id=material.network_id,
+            verifier_address=material.verifier_address,
+            bridge_address=material.bridge_address,
+            bridge_code_hash=material.bridge_code_hash,
+            bridge_runtime_bytecode_hex=material.bridge_runtime,
+            verifier_code_hash=material.verifier_code_hash,
+            verifier_runtime_bytecode_hex=material.verifier_runtime,
+            verifier_key_hash=material.verifier_key_hash,
+            expected_destination_binding_hash=material.destination_binding_hash,
+            source_verifier_material_hash=bytes.fromhex(
+                EVM_SOURCE_VERIFIER_MATERIAL_HASH
+            ),
+            source_adapter_engine_deployment_hash=bytes.fromhex(
+                EVM_SOURCE_ADAPTER_ENGINE_DEPLOYMENT_HASH
+            ),
+            route_allowlist_hash=material.route_allowlist_hash,
+        ),
+        material,
+    )
+
+
+def test_evm_destination_domain_parser_accepts_eth_and_bsc_only():
+    module = load_evidence_module()
+
+    assert module.parse_destination_domain("eth") == 1
+    assert module.parse_destination_domain("ethereum") == 1
+    assert module.parse_destination_domain("1") == 1
+    assert module.parse_destination_domain("bsc") == 2
+    assert module.parse_destination_domain("bnb") == 2
+    assert module.parse_destination_domain("2") == 2
+
+    try:
+        module.parse_destination_domain("tron")
+    except module.argparse.ArgumentTypeError as exc:
+        assert "domain must be eth or bsc" in str(exc)
+    else:
+        raise AssertionError("non-EVM destination domain was accepted")
+
+    try:
+        module.parse_destination_domain(" eth ")
+    except module.argparse.ArgumentTypeError as exc:
+        assert "domain must be eth or bsc" in str(exc)
+    else:
+        raise AssertionError("padded EVM destination domain was accepted")
+
+
+def test_evm_address_and_hash_parsers_reject_zero_and_wrong_width(tmp_path):
+    module = load_evidence_module()
+
+    assert module.parse_evm_address(
+        "0x" + "11" * 20,
+        label="verifier address",
+    ) == bytes.fromhex("11" * 20)
+    assert module.parse_hex_bytes(
+        "0x" + "33" * 32,
+        label="network id",
+        byte_length=32,
+    ) == bytes.fromhex("33" * 32)
+    assert module.parse_runtime_bytecode_hex(
+        "0x6080604052",
+        label="bridge runtime bytecode",
+    ) == bytes.fromhex("6080604052")
+
+    for value in (" 0x6080604052", "0x6080\n604052"):
+        try:
+            module.parse_runtime_bytecode_hex(
+                value,
+                label="bridge runtime bytecode",
+            )
+        except module.argparse.ArgumentTypeError as exc:
+            assert "must not contain whitespace" in str(exc)
+        else:
+            raise AssertionError("padded EVM runtime bytecode was accepted")
+
+    runtime_file = tmp_path / "runtime.hex"
+    runtime_file.write_text("0x6080\n604052\n", encoding="ascii")
+    assert module.parse_runtime_bytecode_file(
+        str(runtime_file),
+        label="bridge runtime bytecode",
+    ) == bytes.fromhex("6080604052")
+
+    try:
+        module.parse_evm_address("0x" + "00" * 20, label="verifier address")
+    except module.argparse.ArgumentTypeError as exc:
+        assert "must not be zero" in str(exc)
+    else:
+        raise AssertionError("zero EVM address was accepted")
+
+    try:
+        module.parse_evm_address(
+            " 0x" + "11" * 20 + " ",
+            label="verifier address",
+        )
+    except module.argparse.ArgumentTypeError as exc:
+        assert "must not contain whitespace" in str(exc)
+    else:
+        raise AssertionError("padded EVM address was accepted")
+
+    try:
+        module.parse_hex_bytes("0x" + "33" * 31, label="network id", byte_length=32)
+    except module.argparse.ArgumentTypeError as exc:
+        assert "must be 32 bytes" in str(exc)
+    else:
+        raise AssertionError("short EVM network id was accepted")
+
+
+def test_evm_destination_binding_hash_matches_vectors_and_domain_separates():
+    module = load_evidence_module()
+    common = {
+        "network_id": bytes.fromhex("33" * 32),
+        "source_domain": 0,
+        "verifier_address": bytes.fromhex("11" * 20),
+        "bridge_address": bytes.fromhex("22" * 20),
+        "verifier_code_hash": bytes.fromhex("bb" * 32),
+        "verifier_key_hash": bytes.fromhex("cc" * 32),
+    }
+
+    eth_hash = module.evm_destination_binding_hash(target_domain=1, **common)
+    bsc_hash = module.evm_destination_binding_hash(target_domain=2, **common)
+    eth_key = module.evm_destination_binding_key(target_domain=1, **common)
+
+    assert eth_hash.hex() == ETH_DESTINATION_BINDING_VECTOR
+    assert bsc_hash.hex() == BSC_DESTINATION_BINDING_VECTOR
+    assert eth_hash != bsc_hash
+    assert eth_key == (
+        "evm:0:1:"
+        + "33" * 32
+        + ":0x"
+        + "11" * 20
+        + ":0x"
+        + "22" * 20
+        + ":0x"
+        + "bb" * 32
+        + ":0x"
+        + "cc" * 32
+    )
+
+
+def test_evm_route_allowlist_hash_matches_lane_evidence_vectors():
+    module = load_evidence_module()
+
+    eth_hash = module.evm_route_allowlist_hash(
+        domain=1,
+        source_verifier_material_hash=bytes.fromhex(EVM_SOURCE_VERIFIER_MATERIAL_HASH),
+        source_adapter_engine_deployment_hash=bytes.fromhex(
+            EVM_SOURCE_ADAPTER_ENGINE_DEPLOYMENT_HASH
+        ),
+        destination_binding_hash=bytes.fromhex(ETH_DESTINATION_BINDING_VECTOR),
+    )
+    bsc_hash = module.evm_route_allowlist_hash(
+        domain=2,
+        source_verifier_material_hash=bytes.fromhex(EVM_SOURCE_VERIFIER_MATERIAL_HASH),
+        source_adapter_engine_deployment_hash=bytes.fromhex(
+            EVM_SOURCE_ADAPTER_ENGINE_DEPLOYMENT_HASH
+        ),
+        destination_binding_hash=bytes.fromhex(BSC_DESTINATION_BINDING_VECTOR),
+    )
+
+    assert eth_hash.hex() == ETH_ROUTE_ALLOWLIST_HASH_VECTOR
+    assert bsc_hash.hex() == BSC_ROUTE_ALLOWLIST_HASH_VECTOR
+    assert eth_hash != bsc_hash
+
+
+def test_evm_route_canary_transaction_hash_binds_target_domain():
+    module = load_evidence_module()
+    common = {
+        "route_allowlist_hash": bytes.fromhex(ETH_ROUTE_ALLOWLIST_HASH_VECTOR),
+        "bridge_address": bytes.fromhex("22" * 20),
+        "transaction_hash": bytes.fromhex("44" * 32),
+        "log_index": 0,
+        "call_data_sha256": bytes.fromhex("88" * 32),
+        "message_id": bytes.fromhex("55" * 32),
+        "payload_hash": bytes.fromhex("99" * 32),
+        "source_domain": 0,
+        "commitment_root": bytes.fromhex("77" * 32),
+        "finality_height": bytes.fromhex("aa" * 32),
+        "finality_block_hash": bytes.fromhex("ab" * 32),
+        "statement_hash": bytes.fromhex("66" * 32),
+        "proof_version": 1,
+        "proof_source_domain": 0,
+        "destination_binding_hash": bytes.fromhex(ETH_DESTINATION_BINDING_VECTOR),
+        "verifier_backend_hash": module.evm_verifier_backend_hash(),
+        "proof_family_hash": module.evm_proof_family_hash(),
+        "network_id": bytes.fromhex("33" * 32),
+        "used_message_proof": True,
+    }
+
+    eth_hash = module.evm_route_canary_transaction_evidence_hash(
+        target_domain=module.SCCP_DOMAIN_ETH,
+        **common,
+    )
+    bsc_hash = module.evm_route_canary_transaction_evidence_hash(
+        target_domain=module.SCCP_DOMAIN_BSC,
+        **common,
+    )
+
+    assert eth_hash != bsc_hash
+    assert eth_hash.hex() == ETH_ROUTE_CANARY_TRANSACTION_HASH_VECTOR
+    assert bsc_hash.hex() == BSC_ROUTE_CANARY_TRANSACTION_HASH_VECTOR
+    try:
+        module.evm_route_canary_transaction_evidence_hash(
+            target_domain=module.SCCP_DOMAIN_SORA,
+            **common,
+        )
+    except ValueError as exc:
+        assert "target_domain must be ETH or BSC" in str(exc)
+    else:
+        raise AssertionError("non-EVM route canary target domain was accepted")
+
+    for field, source_field in (
+        ("message_id", "transaction_hash"),
+        ("payload_hash", "call_data_sha256"),
+        ("commitment_root", "statement_hash"),
+        ("finality_block_hash", "transaction_hash"),
+    ):
+        reused = dict(common)
+        reused[field] = reused[source_field]
+        try:
+            module.evm_route_canary_transaction_evidence_hash(
+                target_domain=module.SCCP_DOMAIN_ETH,
+                **reused,
+            )
+        except ValueError as exc:
+            assert "EVM route canary transcript hashes must be distinct" in str(exc)
+        else:
+            raise AssertionError(f"reused EVM route canary hash role {field} accepted")
+
+
+def test_evm_destination_binding_hash_rejects_malformed_direct_material():
+    module = load_evidence_module()
+    common = {
+        "network_id": bytes.fromhex("33" * 32),
+        "source_domain": 0,
+        "target_domain": 1,
+        "verifier_address": bytes.fromhex("11" * 20),
+        "bridge_address": bytes.fromhex("22" * 20),
+        "verifier_code_hash": bytes.fromhex("bb" * 32),
+        "verifier_key_hash": bytes.fromhex("cc" * 32),
+    }
+
+    try:
+        module.evm_destination_binding_hash(
+            network_id=bytes(32),
+            **{key: value for key, value in common.items() if key != "network_id"},
+        )
+    except ValueError as exc:
+        assert "network_id must not be zero" in str(exc)
+    else:
+        raise AssertionError("zero EVM network id was accepted")
+
+    try:
+        module.evm_destination_binding_hash(
+            source_domain=1,
+            **{key: value for key, value in common.items() if key != "source_domain"},
+        )
+    except ValueError as exc:
+        assert "source_domain must be SORA" in str(exc)
+    else:
+        raise AssertionError("non-SORA EVM destination source was accepted")
+
+    try:
+        module.evm_destination_binding_hash(
+            source_domain=False,
+            **{key: value for key, value in common.items() if key != "source_domain"},
+        )
+    except ValueError as exc:
+        assert "source_domain must be an exact u32" in str(exc)
+    else:
+        raise AssertionError("boolean EVM destination source domain was accepted")
+
+    try:
+        module.evm_destination_binding_key(
+            target_domain=True,
+            **{key: value for key, value in common.items() if key != "target_domain"},
+        )
+    except ValueError as exc:
+        assert "target_domain must be an exact u32" in str(exc)
+    else:
+        raise AssertionError("boolean EVM destination target domain was accepted")
+
+    try:
+        module.evm_route_allowlist_hash(
+            domain=True,
+            source_verifier_material_hash=bytes.fromhex(EVM_SOURCE_VERIFIER_MATERIAL_HASH),
+            source_adapter_engine_deployment_hash=bytes.fromhex(
+                EVM_SOURCE_ADAPTER_ENGINE_DEPLOYMENT_HASH
+            ),
+            destination_binding_hash=bytes.fromhex(ETH_DESTINATION_BINDING_VECTOR),
+        )
+    except ValueError as exc:
+        assert "domain must be an exact u32" in str(exc)
+    else:
+        raise AssertionError("boolean EVM route allowlist domain was accepted")
+
+    try:
+        module.evm_destination_binding_hash(
+            verifier_backend="debug-groth16",
+            **common,
+        )
+    except ValueError as exc:
+        assert "verifier_backend must be evm-groth16-bn254-v1" in str(exc)
+    else:
+        raise AssertionError("non-production EVM destination backend was accepted")
+
+    try:
+        module.evm_destination_binding_hash(
+            proof_family="debug-proof-family",
+            **common,
+        )
+    except ValueError as exc:
+        assert "proof_family must be stark-fri-v1" in str(exc)
+    else:
+        raise AssertionError("non-production EVM destination proof family was accepted")
+
+    aliased_addresses = dict(common)
+    aliased_addresses["bridge_address"] = aliased_addresses["verifier_address"]
+    for helper in (
+        module.evm_destination_binding_hash,
+        module.evm_destination_binding_key,
+    ):
+        try:
+            helper(**aliased_addresses)
+        except ValueError as exc:
+            assert "verifier_address must differ from bridge_address" in str(exc)
+        else:
+            raise AssertionError(
+                f"{helper.__name__} accepted aliased EVM verifier and bridge addresses"
+            )
+
+
+def test_evm_runtime_bytecode_derives_and_rejects_mismatched_code_hash():
+    module = load_evidence_module()
+    args = SimpleNamespace(
+        verifier_runtime_bytecode_hex=bytes.fromhex("6080604052"),
+        verifier_runtime_bytecode_file=None,
+        verifier_code_hash=None,
+    )
+
+    module.apply_runtime_bytecode_hash(args)
+
+    assert args.verifier_code_hash == module.runtime_bytecode_hash(
+        bytes.fromhex("6080604052")
+    )
+
+    mismatch = SimpleNamespace(
+        verifier_runtime_bytecode_hex=bytes.fromhex("6080604052"),
+        verifier_runtime_bytecode_file=None,
+        verifier_code_hash=bytes.fromhex("bb" * 32),
+    )
+    try:
+        module.apply_runtime_bytecode_hash(mismatch)
+    except ValueError as exc:
+        assert "does not match verifier runtime bytecode" in str(exc)
+    else:
+        raise AssertionError("mismatched EVM verifier runtime bytecode was accepted")
+
+
+def test_evm_direct_renderers_derive_code_hashes_from_runtime_bytecode():
+    module = load_evidence_module()
+    verifier_runtime = bytes.fromhex("6080604052")
+    bridge_runtime = bytes.fromhex("6001600255")
+    verifier_code_hash = module.runtime_bytecode_hash(verifier_runtime)
+    bridge_code_hash = module.runtime_bytecode_hash(bridge_runtime)
+    verifier_key_hash = bytes.fromhex("cc" * 32)
+    network_id = bytes.fromhex("33" * 32)
+    verifier_address = bytes.fromhex("11" * 20)
+    bridge_address = bytes.fromhex("22" * 20)
+    destination_binding_hash = module.evm_destination_binding_hash(
+        network_id=network_id,
+        source_domain=0,
+        target_domain=1,
+        verifier_address=verifier_address,
+        bridge_address=bridge_address,
+        verifier_code_hash=verifier_code_hash,
+        verifier_key_hash=verifier_key_hash,
+    )
+    route_allowlist_hash = module.evm_route_allowlist_hash(
+        domain=1,
+        source_verifier_material_hash=bytes.fromhex(EVM_SOURCE_VERIFIER_MATERIAL_HASH),
+        source_adapter_engine_deployment_hash=bytes.fromhex(
+            EVM_SOURCE_ADAPTER_ENGINE_DEPLOYMENT_HASH
+        ),
+        destination_binding_hash=destination_binding_hash,
+    )
+    route_canary_transaction_hash = bytes.fromhex("44" * 32)
+    route_canary_message_id = bytes.fromhex("55" * 32)
+    route_canary_call_data_sha256 = bytes.fromhex("88" * 32)
+    route_canary_payload_hash = bytes.fromhex("99" * 32)
+    route_canary_statement_hash = bytes.fromhex("66" * 32)
+    route_canary_commitment_root = bytes.fromhex("77" * 32)
+    route_canary_finality_height = bytes.fromhex("aa" * 32)
+    route_canary_finality_block_hash = bytes.fromhex("ab" * 32)
+    route_canary_evidence_hash = module.evm_route_canary_transaction_evidence_hash(
+        route_allowlist_hash=route_allowlist_hash,
+        bridge_address=bridge_address,
+        transaction_hash=route_canary_transaction_hash,
+        log_index=0,
+        call_data_sha256=route_canary_call_data_sha256,
+        message_id=route_canary_message_id,
+        payload_hash=route_canary_payload_hash,
+        source_domain=0,
+        target_domain=1,
+        commitment_root=route_canary_commitment_root,
+        finality_height=route_canary_finality_height,
+        finality_block_hash=route_canary_finality_block_hash,
+        statement_hash=route_canary_statement_hash,
+        proof_version=1,
+        proof_source_domain=0,
+        destination_binding_hash=destination_binding_hash,
+        verifier_backend_hash=module.evm_verifier_backend_hash(),
+        proof_family_hash=module.evm_proof_family_hash(),
+        network_id=network_id,
+        used_message_proof=True,
+    )
+    common = dict(
+        domain=1,
+        network_id=network_id,
+        verifier_address=verifier_address,
+        bridge_address=bridge_address,
+        verifier_key_hash=verifier_key_hash,
+        expected_destination_binding_hash=destination_binding_hash,
+        source_verifier_material_hash=bytes.fromhex(EVM_SOURCE_VERIFIER_MATERIAL_HASH),
+        source_adapter_engine_deployment_hash=bytes.fromhex(
+            EVM_SOURCE_ADAPTER_ENGINE_DEPLOYMENT_HASH
+        ),
+        route_allowlist_hash=route_allowlist_hash,
+        route_canary_evidence_hash=route_canary_evidence_hash,
+        route_canary_transaction_hash=route_canary_transaction_hash,
+        route_canary_log_index=0,
+        route_canary_call_data_sha256=route_canary_call_data_sha256,
+        route_canary_message_id=route_canary_message_id,
+        route_canary_payload_hash=route_canary_payload_hash,
+        route_canary_target_domain=1,
+        route_canary_statement_hash=route_canary_statement_hash,
+        route_canary_commitment_root=route_canary_commitment_root,
+        route_canary_finality_height=route_canary_finality_height,
+        route_canary_finality_block_hash=route_canary_finality_block_hash,
+        route_canary_proof_version=1,
+        route_canary_proof_source_domain=0,
+        route_canary_used_message_proof=True,
+    )
+
+    render_args = SimpleNamespace(
+        **common,
+        verifier_runtime_bytecode_hex=verifier_runtime,
+        bridge_runtime_bytecode_hex=bridge_runtime,
+    )
+    rendered = module.render_toml(render_args, destination_binding_hash)
+
+    assert render_args.verifier_code_hash == verifier_code_hash
+    assert render_args.bridge_code_hash == bridge_code_hash
+    assert 'verifier_code_hash = "0x' + verifier_code_hash.hex() + '"' in rendered
+    assert (
+        '# sccp_evm_bridge_runtime_code_hash = "0x'
+        + bridge_code_hash.hex()
+        + '"'
+        in rendered
+    )
+    assert (
+        'route_allowlist_hash = "0x' + route_allowlist_hash.hex() + '"'
+        in rendered
+    )
+
+    summary_args = SimpleNamespace(
+        **common,
+        verifier_runtime_bytecode_file=verifier_runtime,
+        bridge_runtime_bytecode_file=bridge_runtime,
+    )
+    summary = module._json_summary(summary_args, destination_binding_hash, True)
+
+    assert summary_args.verifier_code_hash == verifier_code_hash
+    assert summary_args.bridge_code_hash == bridge_code_hash
+    assert summary["verifier_code_hash"] == "0x" + verifier_code_hash.hex()
+    assert summary["bridge_code_hash"] == "0x" + bridge_code_hash.hex()
+    assert summary["destination_binding_hash"] == "0x" + destination_binding_hash.hex()
+    assert summary["route_allowlist_hash"] == "0x" + route_allowlist_hash.hex()
+    assert summary["toml_ready"] is True
+
+
+def test_evm_toml_rendering_carries_eth_and_bsc_profile_ids():
+    module = load_evidence_module()
+    eth = evm_runtime_material(module, domain=1)
+
+    def toml_args(material):
+        return SimpleNamespace(
+            domain=material.domain,
+            network_id=material.network_id,
+            verifier_address=material.verifier_address,
+            bridge_address=material.bridge_address,
+            bridge_code_hash=material.bridge_code_hash,
+            bridge_runtime_bytecode_hex=material.bridge_runtime,
+            verifier_code_hash=material.verifier_code_hash,
+            verifier_runtime_bytecode_hex=material.verifier_runtime,
+            verifier_key_hash=material.verifier_key_hash,
+            expected_destination_binding_hash=material.destination_binding_hash,
+            source_verifier_material_hash=bytes.fromhex(
+                EVM_SOURCE_VERIFIER_MATERIAL_HASH
+            ),
+            source_adapter_engine_deployment_hash=bytes.fromhex(
+                EVM_SOURCE_ADAPTER_ENGINE_DEPLOYMENT_HASH
+            ),
+            route_allowlist_hash=material.route_allowlist_hash,
+            route_canary_evidence_hash=material.route_canary_evidence_hash,
+            route_canary_transaction_hash=material.route_canary_transaction_hash,
+            route_canary_log_index=material.route_canary_log_index,
+            route_canary_call_data_sha256=material.route_canary_call_data_sha256,
+            route_canary_message_id=material.route_canary_message_id,
+            route_canary_payload_hash=material.route_canary_payload_hash,
+            route_canary_target_domain=material.route_canary_target_domain,
+            route_canary_statement_hash=material.route_canary_statement_hash,
+            route_canary_commitment_root=material.route_canary_commitment_root,
+            route_canary_finality_height=material.route_canary_finality_height,
+            route_canary_finality_block_hash=material.route_canary_finality_block_hash,
+            route_canary_proof_version=material.route_canary_proof_version,
+            route_canary_proof_source_domain=material.route_canary_proof_source_domain,
+            route_canary_used_message_proof=True,
+        )
+
+    eth_args = toml_args(eth)
+    eth_hash = eth.destination_binding_hash
+    eth_binding_hex = eth.destination_binding_hash.hex()
+    eth_route_hex = eth.route_allowlist_hash.hex()
+
+    rendered = module.render_toml(eth_args, eth_hash)
+
+    assert (
+        '# sccp_evm_destination_binding_hash = "0x'
+        + eth_binding_hex
+        + '"'
+        in rendered
+    )
+    assert (
+        '# sccp_evm_route_allowlist_hash = "0x'
+        + eth_route_hex
+        + '"'
+        in rendered
+    )
+    assert '# sccp_evm_rpc_chain_id = "1"' in rendered
+    assert (
+        '# sccp_evm_bridge_runtime_code_hash = "0x'
+        + eth.bridge_code_hash.hex()
+        + '"'
+        in rendered
+    )
+    assert (
+        '# sccp_evm_verifier_runtime_code_hash = "0x'
+        + eth.verifier_code_hash.hex()
+        + '"'
+        in rendered
+    )
+    assert '# sccp_evm_verifier_key_hash = "0x' + "cc" * 32 + '"' in rendered
+    assert (
+        '# sccp_evm_verifier_backend_hash = "0x'
+        + module.evm_verifier_backend_hash().hex()
+        + '"'
+        in rendered
+    )
+    assert (
+        '# sccp_evm_proof_family_hash = "0x'
+        + module.evm_proof_family_hash().hex()
+        + '"'
+        in rendered
+    )
+    assert '# sccp_evm_destination_network_id = "0x' + "33" * 32 + '"' in rendered
+    assert '# sccp_evm_destination_bridge_address = "0x' + "22" * 20 + '"' in rendered
+    assert "# sccp_evm_destination_binding_key = " in rendered
+    assert 'destination_network_id = "0x' + "33" * 32 + '"' in rendered
+    assert 'destination_bridge_address = "0x' + "22" * 20 + '"' in rendered
+    assert 'destination_binding_key = "evm:0:1:' in rendered
+    assert (
+        'destination_binding_hash = "0x'
+        + eth_binding_hex
+        + '"'
+        in rendered
+    )
+    assert "[[zk.sccp_destination_rollouts]]" in rendered
+    assert "[[zk.sccp_route_allowlists]]" in rendered
+    assert 'domain = 1' in rendered
+    assert 'chain = "eth"' in rendered
+    assert 'verifier_plan = "EvmGroth16Bn254Adapter"' in rendered
+    assert 'verifier_identity = "0x' + "11" * 20 + '"' in rendered
+    assert (
+        'anchor_id = "sccp:eth:destination-anchor:ethereum-mainnet:v1"'
+        in rendered
+    )
+    assert (
+        'route_allowlist_id = "sccp:eth:route-allowlist:ethereum-mainnet:v1"'
+        in rendered
+    )
+    assert (
+        'route_allowlist_hash = "0x' + eth_route_hex + '"'
+        in rendered
+    )
+    assert '# sccp_route_canary_status = "passed"' in rendered
+    assert 'route_canary_status = "passed"' in rendered
+    assert (
+        '# sccp_route_canary_evidence_hash = "0x'
+        + eth.route_canary_evidence_hash.hex()
+        + '"'
+        in rendered
+    )
+    assert (
+        'route_canary_evidence_hash = "0x'
+        + eth.route_canary_evidence_hash.hex()
+        + '"'
+        in rendered
+    )
+    assert (
+        '# sccp_evm_route_canary_transaction_hash = "0x'
+        + eth.route_canary_transaction_hash.hex()
+        + '"'
+        in rendered
+    )
+    assert (
+        'evm_route_canary_transaction_hash = "0x'
+        + eth.route_canary_transaction_hash.hex()
+        + '"'
+        in rendered
+    )
+    assert 'blockers = []' in rendered
+
+    bsc = evm_runtime_material(module, domain=2)
+    bsc_args = toml_args(bsc)
+    bsc_rendered = module.render_toml(bsc_args, bsc.destination_binding_hash)
+    assert 'domain = 2' in bsc_rendered
+    assert 'chain = "bsc"' in bsc_rendered
+    assert 'anchor_id = "sccp:bsc:destination-anchor:bsc-mainnet:v1"' in bsc_rendered
+    assert (
+        'route_allowlist_id = "sccp:bsc:route-allowlist:bsc-mainnet:v1"'
+        in bsc_rendered
+    )
+
+    try:
+        module.render_toml(eth_args, bytes.fromhex("ee" * 32))
+    except ValueError as exc:
+        assert "canonical SORA -> ETH binding" in str(exc)
+    else:
+        raise AssertionError("mismatched direct EVM destination binding hash was accepted")
+
+    try:
+        module._json_summary(eth_args, bytes.fromhex("ee" * 32), False)
+    except ValueError as exc:
+        assert "canonical SORA -> ETH binding" in str(exc)
+    else:
+        raise AssertionError("mismatched direct EVM JSON binding hash was accepted")
+
+    bad_allowlist_args = SimpleNamespace(
+        **{**eth_args.__dict__, "route_allowlist_hash": bytes(32)}
+    )
+    try:
+        module.render_toml(bad_allowlist_args, eth_hash)
+    except ValueError as exc:
+        assert "route_allowlist_hash must not be zero" in str(exc)
+    else:
+        raise AssertionError("zero direct EVM route allowlist hash was accepted")
+
+    try:
+        module._json_summary(bad_allowlist_args, eth_hash, False)
+    except ValueError as exc:
+        assert "route_allowlist_hash must not be zero" in str(exc)
+    else:
+        raise AssertionError("zero direct EVM JSON route allowlist hash was accepted")
+
+    drifted_allowlist_args = SimpleNamespace(
+        **{**eth_args.__dict__, "route_allowlist_hash": bytes.fromhex("dd" * 32)}
+    )
+    try:
+        module.render_toml(drifted_allowlist_args, eth_hash)
+    except ValueError as exc:
+        assert "canonical source, deployment, and destination evidence" in str(exc)
+    else:
+        raise AssertionError("drifted direct EVM route allowlist hash was accepted")
+
+    try:
+        module._json_summary(drifted_allowlist_args, eth_hash, False)
+    except ValueError as exc:
+        assert "canonical source, deployment, and destination evidence" in str(exc)
+    else:
+        raise AssertionError("drifted direct EVM JSON route allowlist hash was accepted")
+
+    missing_canary_args = SimpleNamespace(
+        **{
+            **eth_args.__dict__,
+            "route_canary_evidence_hash": None,
+            "route_canary_transaction_hash": None,
+            "route_canary_log_index": None,
+            "route_canary_call_data_sha256": None,
+            "route_canary_message_id": None,
+            "route_canary_payload_hash": None,
+            "route_canary_target_domain": None,
+            "route_canary_statement_hash": None,
+            "route_canary_commitment_root": None,
+            "route_canary_finality_height": None,
+            "route_canary_finality_block_hash": None,
+            "route_canary_proof_version": None,
+            "route_canary_proof_source_domain": None,
+            "route_canary_used_message_proof": None,
+        }
+    )
+    try:
+        module.render_toml(missing_canary_args, eth_hash)
+    except ValueError as exc:
+        assert "--route-canary-transaction-hash" in str(exc)
+    else:
+        raise AssertionError("EVM destination TOML accepted without route canary evidence")
+
+    missing_canary_summary = module._json_summary(missing_canary_args, eth_hash, True)
+    assert missing_canary_summary["toml_ready"] is False
+    assert "route_canary" not in missing_canary_summary
+
+    missing_bridge_runtime_args = SimpleNamespace(
+        **{
+            **toml_args(eth).__dict__,
+            "bridge_runtime_bytecode_hex": None,
+        }
+    )
+    try:
+        module.render_toml(missing_bridge_runtime_args, eth_hash)
+    except ValueError as exc:
+        assert "--bridge-runtime-bytecode-hex" in str(exc)
+    else:
+        raise AssertionError("EVM destination TOML accepted without bridge bytecode")
+
+    missing_bridge_runtime_summary = module._json_summary(
+        missing_bridge_runtime_args,
+        eth_hash,
+        True,
+    )
+    assert missing_bridge_runtime_summary["toml_ready"] is False
+    assert "bridge_runtime_bytecode_hex" not in missing_bridge_runtime_summary
+    assert missing_bridge_runtime_summary["route_canary"]["status"] == "passed"
+
+    forged_canary_args = SimpleNamespace(
+        **{**eth_args.__dict__, "route_canary_evidence_hash": bytes.fromhex("e1" * 32)}
+    )
+    try:
+        module.render_toml(forged_canary_args, eth_hash)
+    except ValueError as exc:
+        assert "route canary transaction metadata" in str(exc)
+    else:
+        raise AssertionError("EVM destination TOML accepted forged route canary hash")
+
+    try:
+        module._json_summary(forged_canary_args, eth_hash, True)
+    except ValueError as exc:
+        assert "route canary transaction metadata" in str(exc)
+    else:
+        raise AssertionError("EVM destination JSON accepted forged route canary hash")
+
+
+def test_evm_full_toml_rejects_route_canary_transcript_hash_reuse():
+    module = load_evidence_module()
+    eth = evm_runtime_material(module, domain=1)
+
+    for attr_name, source_attr_name in (
+        ("route_canary_message_id", "route_canary_transaction_hash"),
+        ("route_canary_payload_hash", "route_canary_call_data_sha256"),
+        ("route_canary_commitment_root", "route_canary_statement_hash"),
+        ("route_canary_finality_block_hash", "route_canary_transaction_hash"),
+    ):
+        args = full_toml_args(eth)
+        setattr(args, attr_name, getattr(args, source_attr_name))
+
+        try:
+            module.render_toml(args, eth.destination_binding_hash)
+        except ValueError as exc:
+            assert "EVM route canary transcript hashes must be distinct" in str(exc)
+        else:
+            raise AssertionError(
+                "EVM destination TOML accepted reused route canary transcript "
+                f"hash {attr_name}"
+            )
+
+
+def test_evm_cli_json_summary_toml_and_expected_binding_check(capsys):
+    module = load_evidence_module()
+    eth = evm_runtime_material(module, domain=1)
+    args = [
+        "--domain",
+        "eth",
+        "--network-id",
+        "0x" + eth.network_id.hex(),
+        "--verifier-address",
+        "0x" + eth.verifier_address.hex(),
+        "--bridge-address",
+        "0x" + eth.bridge_address.hex(),
+        "--bridge-code-hash",
+        "0x" + eth.bridge_code_hash.hex(),
+        "--verifier-code-hash",
+        "0x" + eth.verifier_code_hash.hex(),
+        "--verifier-key-hash",
+        "0x" + eth.verifier_key_hash.hex(),
+        "--route-allowlist-hash",
+        "0x" + eth.route_allowlist_hash.hex(),
+        "--source-verifier-material-hash",
+        "0x" + EVM_SOURCE_VERIFIER_MATERIAL_HASH,
+        "--source-adapter-engine-deployment-hash",
+        "0x" + EVM_SOURCE_ADAPTER_ENGINE_DEPLOYMENT_HASH,
+        "--expected-destination-binding-hash",
+        "0x" + eth.destination_binding_hash.hex(),
+    ]
+    binding_only_args = args[:14]
+    route_unpinned_args = args[:-2]
+    full_args = [
+        *args,
+        "--bridge-runtime-bytecode-hex",
+        "0x" + eth.bridge_runtime.hex(),
+        "--verifier-runtime-bytecode-hex",
+        "0x" + eth.verifier_runtime.hex(),
+        "--route-canary-evidence-hash",
+        "0x" + eth.route_canary_evidence_hash.hex(),
+        "--route-canary-transaction-hash",
+        "0x" + eth.route_canary_transaction_hash.hex(),
+        "--route-canary-log-index",
+        str(eth.route_canary_log_index),
+        "--route-canary-call-data-sha256",
+        "0x" + eth.route_canary_call_data_sha256.hex(),
+        "--route-canary-message-id",
+        "0x" + eth.route_canary_message_id.hex(),
+        "--route-canary-payload-hash",
+        "0x" + eth.route_canary_payload_hash.hex(),
+        "--route-canary-target-domain",
+        str(eth.route_canary_target_domain),
+        "--route-canary-statement-hash",
+        "0x" + eth.route_canary_statement_hash.hex(),
+        "--route-canary-commitment-root",
+        "0x" + eth.route_canary_commitment_root.hex(),
+        "--route-canary-finality-height",
+        "0x" + eth.route_canary_finality_height.hex(),
+        "--route-canary-finality-block-hash",
+        "0x" + eth.route_canary_finality_block_hash.hex(),
+        "--route-canary-proof-version",
+        str(eth.route_canary_proof_version),
+        "--route-canary-proof-source-domain",
+        str(eth.route_canary_proof_source_domain),
+        "--route-canary-used-message-proof",
+        "true",
+    ]
+
+    assert module.main(binding_only_args) == 0
+    unpinned = json.loads(capsys.readouterr().out)
+    assert unpinned["expected_destination_binding_hash_matches"] is False
+    assert unpinned["toml_ready"] is False
+    assert unpinned["destination_binding_hash"] == (
+        "0x" + eth.destination_binding_hash.hex()
+    )
+    assert "route_allowlist_hash" not in unpinned
+
+    try:
+        module.main(route_unpinned_args)
+    except SystemExit as exc:
+        assert exc.code == 2
+    else:
+        raise AssertionError("unpinned EVM route allowlist hash was accepted")
+
+    try:
+        module.main([*binding_only_args, "--toml"])
+    except SystemExit as exc:
+        assert exc.code == 2
+    else:
+        raise AssertionError("unpinned EVM destination TOML was accepted")
+
+    assert module.main(args) == 0
+    no_canary = json.loads(capsys.readouterr().out)
+    assert no_canary["expected_destination_binding_hash_matches"] is True
+    assert no_canary["expected_route_allowlist_hash_matches"] is True
+    assert no_canary["toml_ready"] is False
+    assert "route_canary" not in no_canary
+
+    try:
+        module.main([*args, "--toml"])
+    except SystemExit as exc:
+        assert exc.code == 2
+    else:
+        raise AssertionError("EVM destination TOML rendered without route canary evidence")
+
+    assert module.main(full_args) == 0
+    output = json.loads(capsys.readouterr().out)
+    assert output["source_domain"] == 0
+    assert output["target_domain"] == 1
+    assert output["network_id"] == "0x" + "33" * 32
+    assert output["destination_binding_key"].startswith("evm:0:1:")
+    assert output["destination_binding_hash"] == (
+        "0x" + eth.destination_binding_hash.hex()
+    )
+    assert output["expected_destination_binding_hash_matches"] is True
+    assert output["bridge_code_hash"] == "0x" + eth.bridge_code_hash.hex()
+    assert output["verifier_backend_hash"] == (
+        "0x" + module.evm_verifier_backend_hash().hex()
+    )
+    assert output["proof_family_hash"] == "0x" + module.evm_proof_family_hash().hex()
+    assert output["toml_ready"] is True
+    assert output["expected_route_allowlist_hash"] == (
+        "0x" + eth.route_allowlist_hash.hex()
+    )
+    assert output["expected_route_allowlist_hash_matches"] is True
+    assert output["route_canary"]["status"] == "passed"
+    assert output["route_canary"]["evidence_hash"] == (
+        "0x" + eth.route_canary_evidence_hash.hex()
+    )
+
+    assert module.main([*full_args, "--toml"]) == 0
+    rendered = capsys.readouterr().out
+    assert "[[zk.sccp_destination_rollouts]]" in rendered
+    assert "[[zk.sccp_route_allowlists]]" in rendered
+    assert '# sccp_evm_rpc_chain_id = "1"' in rendered
+    assert (
+        '# sccp_evm_bridge_runtime_code_hash = "0x'
+        + eth.bridge_code_hash.hex()
+        + '"'
+        in rendered
+    )
+    assert (
+        '# sccp_evm_verifier_runtime_code_hash = "0x'
+        + eth.verifier_code_hash.hex()
+        + '"'
+        in rendered
+    )
+    assert '# sccp_evm_verifier_key_hash = "0x' + "cc" * 32 + '"' in rendered
+    assert "# sccp_evm_verifier_backend_hash" in rendered
+    assert "# sccp_evm_proof_family_hash" in rendered
+
+    try:
+        module.main(
+            [
+                value
+                if value != "0x" + eth.destination_binding_hash.hex()
+                else "0x" + "ee" * 32
+                for value in full_args
+            ]
+        )
+    except SystemExit as exc:
+        assert exc.code == 2
+    else:
+        raise AssertionError("mismatched EVM destination binding hash was accepted")
+
+
+def test_evm_cli_requires_code_hash_or_runtime_bytecode():
+    module = load_evidence_module()
+
+    try:
+        module.main(
+            [
+                "--domain",
+                "eth",
+                "--network-id",
+                "0x" + "33" * 32,
+                "--verifier-address",
+                "0x" + "11" * 20,
+                "--bridge-address",
+                "0x" + "22" * 20,
+                "--verifier-key-hash",
+                "0x" + "cc" * 32,
+                "--route-allowlist-hash",
+                "0x" + ETH_ROUTE_ALLOWLIST_HASH_VECTOR,
+                "--source-verifier-material-hash",
+                "0x" + EVM_SOURCE_VERIFIER_MATERIAL_HASH,
+                "--source-adapter-engine-deployment-hash",
+                "0x" + EVM_SOURCE_ADAPTER_ENGINE_DEPLOYMENT_HASH,
+            ]
+        )
+    except SystemExit as exc:
+        assert exc.code == 2
+    else:
+        raise AssertionError("EVM destination evidence without code hash was accepted")
+
+
+def test_evm_cli_derives_bridge_code_hash_from_runtime_bytecode(capsys):
+    module = load_evidence_module()
+    bridge_runtime = "6001600255"
+    bridge_code_hash = module.runtime_bytecode_hash(bytes.fromhex(bridge_runtime)).hex()
+    args = [
+        "--domain",
+        "eth",
+        "--network-id",
+        "0x" + "33" * 32,
+        "--verifier-address",
+        "0x" + "11" * 20,
+        "--bridge-address",
+        "0x" + "22" * 20,
+        "--bridge-runtime-bytecode-hex",
+        "0x" + bridge_runtime,
+        "--verifier-code-hash",
+        "0x" + "bb" * 32,
+        "--verifier-key-hash",
+        "0x" + "cc" * 32,
+        "--route-allowlist-hash",
+        "0x" + ETH_ROUTE_ALLOWLIST_HASH_VECTOR,
+        "--source-verifier-material-hash",
+        "0x" + EVM_SOURCE_VERIFIER_MATERIAL_HASH,
+        "--source-adapter-engine-deployment-hash",
+        "0x" + EVM_SOURCE_ADAPTER_ENGINE_DEPLOYMENT_HASH,
+        "--expected-destination-binding-hash",
+        "0x" + ETH_DESTINATION_BINDING_VECTOR,
+    ]
+
+    assert module.main(args) == 0
+    output = json.loads(capsys.readouterr().out)
+    assert output["bridge_code_hash"] == "0x" + bridge_code_hash
+    assert output["toml_ready"] is False
+
+    try:
+        module.main([*args, "--bridge-code-hash", "0x" + "aa" * 32])
+    except SystemExit as exc:
+        assert exc.code == 2
+    else:
+        raise AssertionError("mismatched bridge runtime bytecode hash was accepted")

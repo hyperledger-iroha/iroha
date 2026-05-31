@@ -2,11 +2,478 @@
 
 import test from "node:test";
 import assert from "node:assert/strict";
+import { readFileSync } from "node:fs";
 
-import { AccountAddress } from "../dist/index.js";
+import {
+  AccountAddress,
+  SCCP_DOMAIN_BSC,
+  SCCP_DOMAIN_ETH,
+  SCCP_DOMAIN_SOL,
+  SCCP_DOMAIN_SORA,
+  SCCP_DOMAIN_SORA_KUSAMA,
+  SCCP_DOMAIN_TON,
+  SCCP_DOMAIN_TRON,
+  SCCP_STARK_FRI_PROOF_FAMILY_V1,
+  SCCP_SOURCE_STATE_MAX_PROOF_BYTES,
+  SCCP_SOURCE_STATE_MAX_PROOF_LABEL_BYTES,
+  SCCP_NATIVE_RECURSIVE_MAX_PROOF_BYTES,
+  SCCP_SOURCE_ADAPTER_FASTPQ_PARAMETER_SET_V1,
+  SCCP_SOURCE_ADAPTER_OPEN_VERIFY_CIRCUIT_ID_V1,
+  SCCP_SUBSTRATE_RUNTIME_PROOF_BACKEND_V1,
+  SCCP_SUBSTRATE_RUNTIME_CALL_SCALE_V1,
+  SCCP_MESSAGE_TRANSPARENT_PUBLIC_INPUTS_BYTES_V1_LEN,
+  SCCP_TON_CURRENT_VALIDATOR_SET_CONFIG_PARAM,
+  SCCP_TON_MESSAGE_BODY_BOC_V1,
+  SCCP_TON_MAINNET_SHARD_STATE_VERIFIER_ID_V1,
+  SCCP_TON_MAINNET_MASTERCHAIN_CONFIG_VERIFIER_ID_V1,
+  SCCP_TON_MAINNET_VALIDATOR_SET_TRANSITION_VERIFIER_ID_V1,
+  SCCP_TON_MAINNET_SHARD_ACCOUNTS_DICTIONARY_VERIFIER_ID_V1,
+  SCCP_TON_SHARD_STATE_OPEN_VERIFY_CIRCUIT_ID_V1,
+  SCCP_TON_MASTERCHAIN_CONFIG_OPEN_VERIFY_CIRCUIT_ID_V1,
+  SCCP_TON_VALIDATOR_SET_TRANSITION_OPEN_VERIFY_CIRCUIT_ID_V1,
+  SCCP_TON_SHARD_ACCOUNTS_DICTIONARY_OPEN_VERIFY_CIRCUIT_ID_V1,
+  SCCP_SOLANA_MAINNET_ACCOUNTS_DB_VERIFIER_ID_V1,
+  SCCP_SOLANA_UPGRADEABLE_LOADER_ID,
+  SCCP_SOLANA_TEMPLATE_SOURCE_STATE_VERIFIER_HASH_V1,
+  SCCP_SOLANA_ACCOUNTS_LT_HASH_OPEN_VERIFY_CIRCUIT_ID_V1,
+  SCCP_SOLANA_TOWER_REPLAY_OPEN_VERIFY_CIRCUIT_ID_V1,
+  SCCP_SOLANA_FULL_ACCOUNTSDB_LATTICE_OPEN_VERIFY_CIRCUIT_ID_V1,
+  SCCP_SOLANA_BANK_FORK_CHOICE_OPEN_VERIFY_CIRCUIT_ID_V1,
+  SCCP_SOLANA_SUBMIT_MESSAGE_PROOF_ENTRYPOINT_V1,
+  SCCP_SOLANA_STAKE_PROGRAM_ID,
+  SCCP_SOLANA_STAKE_HISTORY_SYSVAR_ID,
+  SCCP_SOLANA_SYSVAR_PROGRAM_ID,
+  SCCP_SOLANA_TOWER_LOCKOUT_CONFIRMATION_DEPTH,
+  SCCP_SOLANA_TOWER_VOTE_STACK_DEPTH,
+  SCCP_SOLANA_VOTE_PROGRAM_ID,
+  bscCommitMessageHash,
+  bscCommitSealHash,
+  bscValidatorSetHashFromPayload,
+  bscValidatorSetMetadataProofHash,
+  bscValidatorSetPayloadFromHeaderRlp,
+  bscValidatorSetPayloadFromParliaExtra,
+  bscValidatorSetPayloadHash,
+  bscValidatorSetStorageValueHash,
+  bscValidatorSetTransitionMessageHash,
+  buildEvmSccpProofRequest,
+  evmSccpDestinationBinding,
+  wrapEvmSccpProofResult,
+  buildSolanaSccpAccountsLtHashProofRequest,
+  buildSolanaSccpFullLightClientAuditProofRequest,
+  buildSolanaSccpTowerReplayProofRequest,
+  buildSolanaSccpFullAccountsdbLatticeProofRequest,
+  buildSolanaSccpBankForkChoiceProofRequest,
+  buildSolanaSccpFullLightClientAuditProofRequests,
+  wrapSolanaSccpSourceStateVerificationProof,
+  buildSubstrateSccpProofRequest,
+  buildSubstrateSccpSubmission,
+  wrapSubstrateSccpProofResult,
+  buildTonSccpProofRequest,
+  buildTonSccpSubmission,
+  buildTonShardStateProofRequest,
+  buildTonSccpFullLightClientAuditProofRequest,
+  buildTonSccpFullLightClientAuditProofRequests,
+  buildTronSccpProofRequest,
+  tronSccpDestinationBinding,
+  wrapTonSccpProofResult,
+  wrapTronSccpProofResult,
+  wrapSolanaSccpProofResult,
+  canonicalBscCommitMessageBytes,
+  canonicalBscCommitSealBytes,
+  canonicalBscValidatorSetMetadataProofBytes,
+  canonicalBscValidatorSetPayloadBytes,
+  canonicalBscValidatorSetTransitionMessageBytes,
+  canonicalEvmReceiptRootMptValue,
+  canonicalSccpSourceAdapterEngineDeploymentBytes,
+  canonicalSccpSourceVerifierMaterialBytes,
+  canonicalEthSyncCommitteePayloadBytes,
+  ethSyncCommitteePayloadHash,
+  ethSyncCommitteeHashFromPayload,
+  buildSubstrateSccpRuntimeStorageProofRequest,
+  canonicalSubstrateAuthoritySetPayloadBytes,
+  canonicalSubstrateSccpRuntimeStorageVerificationStatementBytes,
+  canonicalSubstrateSccpStorageProofBytes,
+  substrateSccpRuntimeStorageProofPublicInputsHash,
+  canonicalSubstrateAuthoritySetTransitionMessageBytes,
+  canonicalSolanaSccpBankForkBytes,
+  canonicalSolanaSccpRouteCanaryEvidenceBytes,
+  canonicalSolanaSccpAccountsLtHashCommitmentBytes,
+  canonicalSolanaSccpAccountsLtHashVerificationContextBytes,
+  canonicalSolanaSccpSourceStateVerificationProofBytes,
+  canonicalSolanaSccpFinalityContextBytes,
+  canonicalSolanaSccpVoteMessageBytes,
+  canonicalSolanaSccpFullLightClientAuditStatementBytes,
+  canonicalSolanaSccpAccountInclusionLeafBytes,
+  canonicalSolanaSccpAccountInclusionNodeBytes,
+  canonicalSolanaSccpAccountOpeningBytes,
+  canonicalSolanaSccpVoteAccountDataBytes,
+  canonicalSolanaSccpStakeAccountDataBytes,
+  canonicalSolanaSccpStakeActivationBytes,
+  canonicalSolanaSccpStakeAccountStateBytes,
+  canonicalSolanaSccpStakeHistorySysvarDataBytes,
+  canonicalSolanaSccpStakeHistoryBytes,
+  canonicalSolanaSccpTowerLockoutBytes,
+  canonicalSolanaSccpTowerReplayBytes,
+  canonicalTonShardStateProofPublicInputsBytes,
+  canonicalTonShardStateVerificationContextBytes,
+  canonicalTonShardStateWitnessCommitmentBytes,
+  canonicalTonSccpSourceStateVerificationProofBytes,
+  canonicalTonSccpRouteCanaryEvidenceBytes,
+  canonicalTonSccpFullLightClientAuditStatementBytes,
+  canonicalTonMasterchainBlockMessageBytes,
+  canonicalTonMasterchainConfigLeafBytes,
+  canonicalTonMasterchainConfigProofBytes,
+  canonicalTonMasterchainValidatorSignaturesBytes,
+  canonicalTonValidatorSetPayloadBytes,
+  canonicalTonValidatorSetTransitionMessageBytes,
+  canonicalTronRawBlockHeaderBytes,
+  canonicalTronReceiptRootMptValue,
+  canonicalTronSccpReceiptStateProofBytes,
+  canonicalTronSolidBlockMessageBytes,
+  canonicalTronSolidBlockHeaderProofBytes,
+  canonicalTronWitnessSealBytes,
+  canonicalTronWitnessScheduleTransitionMessageBytes,
+  canonicalTronWitnessScheduleTransitionSealBytes,
+  canonicalTronWitnessSchedulePayloadBytes,
+  ethBeaconBlockHeaderRoot,
+  ethBeaconBodyRootFromExecutionPayloadBranch,
+  ethExecutionPayloadHeaderRootFromRlp,
+  sccpGroth16Bn254PublicSignalWords,
+  sccpMessageTransparentPublicInputAbiWords,
+  sccpSubmitMessageProofCallData,
+  sccpDestinationBindingHash,
+  sccpDestinationBindingKey,
+  solanaSccpRouteCanaryEvidenceHash,
+  tonSccpRouteCanaryEvidenceHash,
+  sccpSourceAdapterEngineDeploymentHash,
+  sccpSourceAdapterVerifierVkHash,
+  sccpSolanaFullLightClientGateHash,
+  sccpTonFullLightClientGateHash,
+  sccpSourceVerifierMaterialHash,
+  tonSccpShardStateVerificationProofHash,
+  tonSccpFullLightClientAuditStatementHash,
+  tonSccpFullLightClientAuditPublicInputColumns,
+  tonSccpFullLightClientAuditOpenVerifySchemaDescriptor,
+  solanaSccpAccountOpeningHash,
+  solanaSccpAccountRawDataHash,
+  solanaSccpAccountsLtHashProofHash,
+  solanaSccpFinalityContextHash,
+  solanaSccpVoteMessageHash,
+  solanaSccpFullLightClientAuditStatementHash,
+  solanaSccpFullLightClientAuditPublicInputColumns,
+  solanaSccpFullLightClientAuditOpenVerifySchemaDescriptor,
+  solanaSccpAccountInclusionLeafHash,
+  solanaSccpAccountInclusionNodeHash,
+  solanaSccpAccountInclusionRootFromBranch,
+  solanaSccpAccountInclusionRootAndBranches,
+  solanaSccpAccountsLtHashChecksum,
+  solanaSccpOpenedAccountInclusionWitness,
+  solanaSccpAccountsLtHashPublicInputColumns,
+  solanaSccpAccountsLtHashOpenVerifySchemaDescriptor,
+  solanaSccpAgaveBankHash,
+  solanaSccpBankForkHash,
+  solanaSccpVoteAccountDataHash,
+  solanaSccpVoteAccountDataFromRawVoteState,
+  solanaSccpVoteAccountDataHashFromRawVoteState,
+  solanaSccpVoteAccountDataFromRawVoteStateV1OrV3,
+  solanaSccpVoteAccountDataHashFromRawVoteStateV1OrV3,
+  solanaSccpStakeAccountDataHash,
+  solanaSccpStakeAccountDataFromRawStakeStateV2,
+  solanaSccpStakeAccountDataHashFromRawStakeStateV2,
+  solanaSccpStakeActivationHash,
+  solanaSccpStakeAccountStateHash,
+  solanaSccpStakeHistorySysvarDataHash,
+  solanaSccpStakeHistorySysvarDataHashFromRawData,
+  solanaSccpStakeHistoryHash,
+  solanaSccpTowerLockoutHash,
+  solanaSccpTowerReplayHash,
+  substrateAuthoritySetHashFromPayload,
+  substrateAuthoritySetPayloadHash,
+  substrateAuthoritySetTransitionMessageHash,
+  SubstrateSccpProver,
+  tonMasterchainBlockMessageHash,
+  tonMasterchainConfigLeafHash,
+  tonMasterchainConfigProofHash,
+  tonMasterchainValidatorSignaturesHash,
+  tonConfigValidatorSetPayloadFromProofBoc,
+  tonConfigValidatorSetPayloadHashFromProofBoc,
+  tonHashmapEProofRootHash,
+  tonHashmapECellRefValueHash,
+  tonShardAccountsLastTransaction,
+  tonShardAccountsLastTransactionHash,
+  tonShardStateProofRootHash,
+  tonShardStateAccountsRootHash,
+  tonShardStateOpenVerifySchemaDescriptor,
+  tonShardStateProofPublicInputsHash,
+  tonShardStatePublicInputColumns,
+  tonBocRootHashes,
+  tonBocSingleRootHash,
+  tonValidatorSetHashFromPayload,
+  tonValidatorSetHash,
+  tonValidatorSetPayloadHash,
+  tonValidatorSetTransitionMessageHash,
+  tronBlockIdFromRawDataHash,
+  tronRawBlockHeaderHash,
+  tronSccpReceiptStateProofHash,
+  tronSolidBlockMessageHash,
+  tronSolidBlockHeaderProofHash,
+  tronWitnessSealHash,
+  tronWitnessScheduleHashFromPayload,
+  tronWitnessScheduleTransitionMessageHash,
+  tronWitnessScheduleTransitionSealHash,
+  tronWitnessSchedulePayloadHash,
+} from "../dist/index.js";
 
 const LEGACY_FULLWIDTH_KANA = /[イロハニホヘトチリヌルヲワカヨタレソツネナラムウノオクヤマケフコエテアサキユメミシヒモセス]/u;
 const HALFWIDTH_KANA = /[ｲﾛﾊﾆﾎﾍﾄﾁﾘﾇﾙｦﾜｶﾖﾀﾚｿﾂﾈﾅﾗﾑｳﾉｵｸﾔﾏｹﾌｺｴﾃｱｻｷﾕﾒﾐｼﾋﾓｾｽ]/u;
+const DECLARATIONS_TEXT = readFileSync(new URL("../index.d.ts", import.meta.url), "utf8");
+const SCCP_SOURCE_TEXT = readFileSync(new URL("../src/sccp.js", import.meta.url), "utf8");
+const INDEX_SOURCE_TEXT = readFileSync(new URL("../src/index.js", import.meta.url), "utf8");
+const DIST_INDEX_TEXT = readFileSync(new URL("../dist/index.js", import.meta.url), "utf8");
+
+function publicSccpSourceExports() {
+  return [...SCCP_SOURCE_TEXT.matchAll(/export\s+(?:const|function|class)\s+([A-Za-z0-9_]+)/gu)]
+    .map((match) => match[1])
+    .filter((name) => name.startsWith("SCCP_") || /Sccp|sccp/u.test(name));
+}
+
+function sccpEntrypointExportNames(text) {
+  const match = text.match(/export \{([\s\S]*?)\} from "\.\/sccp\.js";/u);
+  assert.notEqual(match, null);
+  return new Set([...match[1].matchAll(/\b([A-Za-z_][A-Za-z0-9_]*)\b/gu)].map((item) => item[1]));
+}
+
+function declarationExportNames() {
+  return new Set(
+    [...DECLARATIONS_TEXT.matchAll(/export\s+(?:const|function|class|interface|type)\s+([A-Za-z0-9_]+)/gu)]
+      .map((match) => match[1]),
+  );
+}
+
+function declarationInterface(name) {
+  const match = DECLARATIONS_TEXT.match(
+    new RegExp(`export interface ${name}(?: extends [^{]+)? \\{[\\s\\S]*?\\n\\}`),
+  );
+  assert.ok(match, `missing declaration interface ${name}`);
+  return match[0];
+}
+
+function abiWord(value) {
+  let remaining = BigInt(value);
+  const out = new Uint8Array(32);
+  for (let index = out.length - 1; index >= 0; index -= 1) {
+    out[index] = Number(remaining & 0xffn);
+    remaining >>= 8n;
+  }
+  return out;
+}
+
+const BN254_G2_GENERATOR_WORDS = [
+  abiWord(0x1800deef121f1e76426a00665e5c4479674322d4f75edadd46debd5cd992f6edn),
+  abiWord(0x198e9393920d483a7260bfb731fb5d25f1aa493335a9e71297e485b7aef312c2n),
+  abiWord(0x12c85ea5db8c6deb4aab71808dcb408fe3d1e7690c43d37b4ce6cc0166fa7daan),
+  abiWord(0x090689d0585ff075ec9e99ad690c3395bc4b313370b38ef355acdadcd122975bn),
+];
+
+function sampleGroth16ProofBytes() {
+  const out = new Uint8Array(384);
+  [
+    abiWord(1),
+    Uint8Array.from({ length: 32 }, () => 0x11),
+    abiWord(SCCP_DOMAIN_SORA),
+    Uint8Array.from({ length: 32 }, () => 0x33),
+    abiWord(1),
+    abiWord(2),
+    ...BN254_G2_GENERATOR_WORDS,
+    abiWord(1),
+    abiWord(2),
+  ].forEach((word, index) => out.set(word, index * 32));
+  return out;
+}
+
+function sampleEvmDestinationBinding() {
+  return evmSccpDestinationBinding({
+    targetDomain: SCCP_DOMAIN_ETH,
+    networkId: `0x${"33".repeat(32)}`,
+    verifierAddress: `0x${"11".repeat(20)}`,
+    bridgeAddress: `0x${"22".repeat(20)}`,
+    verifierCodeHash: `0x${"bb".repeat(32)}`,
+    verifierKeyHash: `0x${"cc".repeat(32)}`,
+  });
+}
+
+function sampleTronDestinationBinding() {
+  return tronSccpDestinationBinding({
+    networkId: `0x${"33".repeat(32)}`,
+    verifierAddress: "TJRabPrwbZy45sbavfcjinPJC18kjpRTv8",
+    verifierCodeHash: `0x${"bb".repeat(32)}`,
+    verifierKeyHash: `0x${"cc".repeat(32)}`,
+  });
+}
+
+function sampleSolanaStakeStateV2StakeAccount() {
+  const data = new Uint8Array(200);
+  const view = new DataView(data.buffer);
+  view.setUint32(0, 2, true);
+  data.fill(0x81, 12, 44);
+  data.fill(0x91, 44, 76);
+  data.fill(0xa1, 124, 156);
+  view.setBigUint64(156, 1_000n, true);
+  view.setBigUint64(164, 2n, true);
+  view.setBigUint64(172, 9n, true);
+  data.set([0x0a, 0xd7, 0xa3, 0x70, 0x3d, 0x0a, 0xb7, 0x3f], 180);
+  view.setBigUint64(188, 123n, true);
+  data[196] = 1;
+  return data;
+}
+
+function sampleSolanaVoteStateAccount() {
+  const data = new Uint8Array(3_762);
+  const view = new DataView(data.buffer);
+  let offset = 0;
+  const writeU8 = (value) => {
+    data[offset] = value;
+    offset += 1;
+  };
+  const writeU32 = (value) => {
+    view.setUint32(offset, value, true);
+    offset += 4;
+  };
+  const writeU64 = (value) => {
+    view.setBigUint64(offset, BigInt(value), true);
+    offset += 8;
+  };
+  const writeRepeated = (value, length) => {
+    data.fill(value, offset, offset + length);
+    offset += length;
+  };
+
+  writeU32(2);
+  writeRepeated(0x51, 32);
+  writeRepeated(0x71, 32);
+  writeU8(7);
+  writeU64(31n);
+  for (let index = 0; index < 31; index += 1) {
+    writeU8(0);
+    writeU64(11n + BigInt(index));
+    writeU32(31 - index);
+  }
+  writeU8(1);
+  writeU64(10n);
+  writeU64(2n);
+  writeU64(1n);
+  writeRepeated(0x60, 32);
+  writeU64(3n);
+  writeRepeated(0x61, 32);
+  return data;
+}
+
+function sampleSolanaVoteStateV4Account() {
+  const data = new Uint8Array(3_762);
+  const view = new DataView(data.buffer);
+  let offset = 0;
+  const writeU8 = (value) => {
+    data[offset] = value;
+    offset += 1;
+  };
+  const writeU16 = (value) => {
+    view.setUint16(offset, value, true);
+    offset += 2;
+  };
+  const writeU32 = (value) => {
+    view.setUint32(offset, value, true);
+    offset += 4;
+  };
+  const writeU64 = (value) => {
+    view.setBigUint64(offset, BigInt(value), true);
+    offset += 8;
+  };
+  const writeRepeated = (value, length) => {
+    data.fill(value, offset, offset + length);
+    offset += length;
+  };
+
+  writeU32(3);
+  writeRepeated(0x51, 32);
+  writeRepeated(0x71, 32);
+  writeRepeated(0x81, 32);
+  writeRepeated(0x91, 32);
+  writeU16(1_234);
+  writeU16(9_876);
+  writeU64(456n);
+  writeU8(1);
+  writeRepeated(0xa5, 48);
+  writeU64(31n);
+  for (let index = 0; index < 31; index += 1) {
+    writeU8(0);
+    writeU64(11n + BigInt(index));
+    writeU32(31 - index);
+  }
+  writeU8(1);
+  writeU64(10n);
+  writeU64(2n);
+  writeU64(1n);
+  writeRepeated(0x60, 32);
+  writeU64(3n);
+  writeRepeated(0x61, 32);
+  return data;
+}
+
+function rlpLengthPrefix(length, shortOffset, longOffset) {
+  if (length < 56) return Uint8Array.from([shortOffset + length]);
+  const bytes = [];
+  let remaining = length;
+  while (remaining > 0) {
+    bytes.unshift(remaining & 0xff);
+    remaining = Math.floor(remaining / 256);
+  }
+  return Uint8Array.from([longOffset + bytes.length, ...bytes]);
+}
+
+function concatBytes(...parts) {
+  const out = new Uint8Array(parts.reduce((size, part) => size + part.length, 0));
+  let offset = 0;
+  for (const part of parts) {
+    out.set(part, offset);
+    offset += part.length;
+  }
+  return out;
+}
+
+function rlpString(bytes) {
+  if (bytes.length === 1 && bytes[0] < 0x80) return bytes;
+  return concatBytes(rlpLengthPrefix(bytes.length, 0x80, 0xb7), bytes);
+}
+
+function rlpList(fields) {
+  const payload = concatBytes(...fields);
+  return concatBytes(rlpLengthPrefix(payload.length, 0xc0, 0xf7), payload);
+}
+
+function sampleEthExecutionHeaderRlp(receiptsRoot = Uint8Array.from(Array(32).fill(0x15))) {
+  return rlpList([
+    rlpString(Uint8Array.from(Array(32).fill(0x10))),
+    rlpString(Uint8Array.from(Array(32).fill(0x11))),
+    rlpString(Uint8Array.from(Array(20).fill(0x12))),
+    rlpString(Uint8Array.from(Array(32).fill(0x13))),
+    rlpString(Uint8Array.from(Array(32).fill(0x14))),
+    rlpString(receiptsRoot),
+    rlpString(Uint8Array.from(Array(256).fill(0x00))),
+    rlpString(new Uint8Array()),
+    rlpString(Uint8Array.from([0x2a])),
+    rlpString(Uint8Array.from([0x01, 0xc9, 0xc3, 0x80])),
+    rlpString(Uint8Array.from([0x52, 0x08])),
+    rlpString(Uint8Array.from([0x65, 0x53, 0xf1, 0x00])),
+    rlpString(Uint8Array.from(Buffer.from("iroha-sccp-test"))),
+    rlpString(Uint8Array.from(Array(32).fill(0x16))),
+    rlpString(Uint8Array.from(Array(8).fill(0x00))),
+    rlpString(Uint8Array.from([0x3b, 0x9a, 0xca, 0x00])),
+    rlpString(Uint8Array.from(Array(32).fill(0x17))),
+    rlpString(new Uint8Array()),
+    rlpString(new Uint8Array()),
+    rlpString(Uint8Array.from(Array(32).fill(0x18))),
+  ]);
+}
 
 test("package dist entrypoint imports and emits halfwidth i105 literals", () => {
   const publicKey = Buffer.from(
@@ -19,4 +486,1911 @@ test("package dist entrypoint imports and emits halfwidth i105 literals", () => 
   assert.match(literal, /^sora/u);
   assert.equal(LEGACY_FULLWIDTH_KANA.test(literal), false);
   assert.equal(HALFWIDTH_KANA.test(literal), true);
+});
+
+test("package SCCP entrypoint and declarations cover public source exports", () => {
+  const sourceExports = publicSccpSourceExports();
+  const sourceEntrypointExports = sccpEntrypointExportNames(INDEX_SOURCE_TEXT);
+  const distEntrypointExports = sccpEntrypointExportNames(DIST_INDEX_TEXT);
+  const declarationExports = declarationExportNames();
+
+  assert.deepEqual(
+    sourceExports.filter((name) => !sourceEntrypointExports.has(name)),
+    [],
+  );
+  assert.deepEqual(
+    sourceExports.filter((name) => !distEntrypointExports.has(name)),
+    [],
+  );
+  assert.deepEqual(
+    sourceExports.filter((name) => !declarationExports.has(name)),
+    [],
+  );
+});
+
+test("package declarations mark SCCP FastPQ proof requests readonly", () => {
+  assert.match(
+    DECLARATIONS_TEXT,
+    /export interface SolanaSccpAccountsLtHashProofRequest[\s\S]*readonly publicInputColumns: ReadonlyArray<ReadonlyArray<string>>;[\s\S]*readonly fastpqTransitions: ReadonlyArray<Readonly<SolanaSccpAccountsLtHashFastpqTransition>>;/,
+  );
+  assert.match(
+    DECLARATIONS_TEXT,
+    /export function buildSolanaSccpFullLightClientAuditProofRequests\([\s\S]*\): Readonly<\{/,
+  );
+  assert.match(
+    DECLARATIONS_TEXT,
+    /export interface SolanaSccpFullLightClientAuditProofRequestBaseInput[\s\S]*sourceTrustAnchorHash\?: string;[\s\S]*sourceAdapterDeploymentHash\?: string;[\s\S]*sourceAdapterDeploymentReceiptHash\?: string;[\s\S]*fullLightClientGateHash\?: string;[\s\S]*accountsLtHashProofHash\?: string;/,
+  );
+  assert.match(
+    DECLARATIONS_TEXT,
+    /export type SolanaSccpFullLightClientAuditProofRequestInput =[\s\S]*accountsLtHashProof: SolanaSccpSourceStateVerificationProof;[\s\S]*accounts_lt_hash_proof\?: never;[\s\S]*accountsLtHashProof\?: never;[\s\S]*accounts_lt_hash_proof: SolanaSccpSourceStateVerificationProof;/,
+  );
+  assert.match(
+    DECLARATIONS_TEXT,
+    /export interface WrappedSolanaSccpSourceStateVerificationProof[\s\S]*readonly proofBase64: string;/,
+  );
+  assert.match(
+    DECLARATIONS_TEXT,
+    /export type SccpSourceStateProofBytesResultMetadata[\s\S]*proofBytes: BinaryLike \| number\[\];[\s\S]*proof_bytes: BinaryLike \| number\[\];[\s\S]*proof: BinaryLike \| number\[\];[\s\S]*export type SccpSourceStateProofCapsuleMetadata[\s\S]*SccpSourceStateResultAlias<"circuitId", "circuit_id", CircuitId>[\s\S]*export type SolanaSccpSourceStateVerificationProof =[\s\S]*SccpSourceStateProofCapsuleMetadata/,
+  );
+  assert.match(
+    DECLARATIONS_TEXT,
+    /export type SccpSourceStateResultAlias<[\s\S]*\{ \[Key in Snake\]\?: never \}[\s\S]*export type SccpSourceStateFastpqPublicInputsResultMetadata = \{[\s\S]*slot: string \| number \| bigint;[\s\S]*SccpSourceStateResultAlias<"txSetHash", "tx_set_hash", string>;[\s\S]*export type SccpSourceStateFastpqTransitionResultMetadata = \{[\s\S]*SccpSourceStateResultAlias<"oldValue", "old_value", BinaryLike>[\s\S]*SccpSourceStateResultAlias<"newValue", "new_value", BinaryLike>;/,
+  );
+  assert.match(
+    DECLARATIONS_TEXT,
+    /export type SolanaSccpSourceStateProverResultObject =[\s\S]*SccpSourceStateProverResultProofMetadata[\s\S]*sourceStateVerifierId\?: string;[\s\S]*sourceStateVerifierHash\?: string;[\s\S]*publicInputColumns\?: ReadonlyArray<ReadonlyArray<string>>;[\s\S]*fastpqPublicInputs\?: SccpSourceStateFastpqPublicInputsResultMetadata;[\s\S]*fastpqTransitions\?: ReadonlyArray<SccpSourceStateFastpqTransitionResultMetadata>;[\s\S]*statementBytes\?: BinaryLike \| number\[\];[\s\S]*accountCommitmentBytes\?: BinaryLike \| number\[\];[\s\S]*verificationContextBytes\?: BinaryLike \| number\[\];[\s\S]*schemaDescriptor\?: BinaryLike \| number\[\];/,
+  );
+  assert.match(
+    DECLARATIONS_TEXT,
+    /export function wrapSolanaSccpSourceStateVerificationProof\([\s\S]*\): WrappedSolanaSccpSourceStateVerificationProof;/,
+  );
+  assert.match(
+    DECLARATIONS_TEXT,
+    /export interface TonShardStateProofRequest[\s\S]*readonly publicInputColumns: ReadonlyArray<ReadonlyArray<string>>;[\s\S]*readonly fastpqTransitions: ReadonlyArray<Readonly<TonShardStateFastpqTransition>>;/,
+  );
+  assert.match(
+    DECLARATIONS_TEXT,
+    /export interface TonSccpFullLightClientAuditProofRequestBaseInput[\s\S]*tonMasterchainConfigVerifierHash\?: string;[\s\S]*tonShardAccountsDictionaryVerifierHash\?: string;[\s\S]*shardStateVerificationProofHash\?: string;/,
+  );
+  assert.match(
+    DECLARATIONS_TEXT,
+    /export type TonSccpFullLightClientAuditProofRequestInput =[\s\S]*shardStateVerificationProof: TonSccpSourceStateVerificationProof;[\s\S]*shard_state_verification_proof\?: never;[\s\S]*shardStateVerificationProof\?: never;[\s\S]*shard_state_verification_proof: TonSccpSourceStateVerificationProof;/,
+  );
+  assert.match(
+    DECLARATIONS_TEXT,
+    /export type TonSccpSourceStateProverResultObject =[\s\S]*SccpSourceStateProverResultProofMetadata[\s\S]*masterchainSeqno\?: string \| number \| bigint;[\s\S]*shardSeqno\?: string \| number \| bigint;[\s\S]*sourceStateVerifierId\?: string;[\s\S]*shardStateProofPublicInputsHash\?: string;[\s\S]*shardStateVerificationProofHash\?: string;[\s\S]*role\?: TonSccpFullLightClientAuditRole;[\s\S]*fastpqPublicInputs\?: SccpSourceStateFastpqPublicInputsResultMetadata;[\s\S]*fastpqTransitions\?: ReadonlyArray<SccpSourceStateFastpqTransitionResultMetadata>;[\s\S]*statementBytes\?: BinaryLike \| number\[\];[\s\S]*witnessCommitmentBytes\?: BinaryLike \| number\[\];[\s\S]*verificationContextBytes\?: BinaryLike \| number\[\];[\s\S]*schemaDescriptor\?: BinaryLike \| number\[\];/,
+  );
+  assert.match(
+    DECLARATIONS_TEXT,
+    /export function buildTonSccpFullLightClientAuditProofRequests\([\s\S]*\): Readonly<\{/,
+  );
+  assert.match(
+    DECLARATIONS_TEXT,
+    /export interface SubstrateSccpRuntimeStorageProofRequest[\s\S]*readonly publicInputColumns: ReadonlyArray<ReadonlyArray<string>>;[\s\S]*readonly fastpqTransitions: ReadonlyArray<Readonly<SubstrateSccpRuntimeStorageFastpqTransition>>;/,
+  );
+  assert.match(
+    DECLARATIONS_TEXT,
+    /export interface EvmSccpBridgeProofSubmitPayloadInput[\s\S]*submission\?: EvmSccpSubmission;[\s\S]*destinationBinding\?: EvmSccpDestinationBindingInput;[\s\S]*export function buildEvmSccpBridgeProofSubmitPayload\([\s\S]*\): ToriiBridgeProofSubmitPayload;/,
+  );
+  assert.match(
+    DECLARATIONS_TEXT,
+    /export interface TronSccpBridgeProofSubmitPayloadInput[\s\S]*submission\?: TronSccpSubmission;[\s\S]*destinationBinding\?: TronSccpDestinationBindingInput;[\s\S]*export function buildTronSccpBridgeProofSubmitPayload\([\s\S]*\): ToriiBridgeProofSubmitPayload;/,
+  );
+});
+
+test("package declarations expose SCCP proof-result request bytes", () => {
+  for (const resultType of [
+    "TonSccpProofResult",
+    "EvmSccpProofResult",
+    "TronSccpProofResult",
+    "SubstrateSccpProofResult",
+  ]) {
+    assert.match(
+      DECLARATIONS_TEXT,
+      new RegExp(
+        `export interface ${resultType}[\\s\\S]*bundleBytes: Uint8Array;[\\s\\S]*sourceProofBytes: Uint8Array;`,
+      ),
+      `${resultType} must expose the retained request bytes`,
+    );
+  }
+  for (const inputType of ["EvmSccpSubmissionInput", "TronSccpSubmissionInput"]) {
+    assert.match(
+      DECLARATIONS_TEXT,
+      new RegExp(
+        `export interface ${inputType}[\\s\\S]*bundleBytes\\?: BinaryLike;[\\s\\S]*sourceProofBytes\\?: BinaryLike;`,
+      ),
+      `${inputType} must accept explicit request bytes for proof-result replay checks`,
+    );
+  }
+});
+
+test("package declarations keep EVM and TRON proof envelopes readonly", () => {
+  for (const typeName of [
+    "EvmSccpProofRequest",
+    "EvmSccpProofResult",
+    "TronSccpProofRequest",
+    "TronSccpProofResult",
+  ]) {
+    const declaration = declarationInterface(typeName);
+    assert.match(declaration, /readonly version: 1;/);
+    assert.match(declaration, /readonly publicInputs: /);
+    assert.match(declaration, /readonly publicSignalWords: readonly string\[\];/);
+    assert.match(declaration, /readonly bundleBytes: Uint8Array;/);
+    assert.match(declaration, /readonly sourceProofBytes: Uint8Array;/);
+    assert.match(declaration, /readonly proofContext: Readonly<SolanaSccpProofContext>;/);
+  }
+});
+
+test("package declarations expose SCCP local-prover result metadata", () => {
+  for (const [resultType, proveFnType] of [
+    ["TonSccpProveResult", "TonSccpProveFn"],
+    ["EvmSccpProveResult", "EvmSccpProveFn"],
+    ["TronSccpProveResult", "TronSccpProveFn"],
+    ["SubstrateSccpProveResult", "SubstrateSccpProveFn"],
+    ["SolanaSccpProveResult", "SolanaSccpProveFn"],
+  ]) {
+    assert.match(
+      DECLARATIONS_TEXT,
+      new RegExp(`export interface ${resultType}[\\s\\S]*proofBytes\\?: BinaryLike;`),
+      `${resultType} must expose callback proof bytes`,
+    );
+    assert.match(
+      DECLARATIONS_TEXT,
+      new RegExp(
+        `export type ${proveFnType} = \\([\\s\\S]*\\) => ${resultType} \\| Promise<${resultType}>;`,
+      ),
+      `${proveFnType} must return the named metadata result type`,
+    );
+  }
+
+  for (const resultType of [
+    "EvmSccpProveResult",
+    "TronSccpProveResult",
+    "SubstrateSccpProveResult",
+  ]) {
+    assert.match(
+      DECLARATIONS_TEXT,
+      new RegExp(
+        `export interface ${resultType}[\\s\\S]*proofBase64\\?: string;[\\s\\S]*proof_base64\\?: string;`,
+      ),
+      `${resultType} must expose optional callback proof base64 metadata`,
+    );
+  }
+
+  assert.match(
+    DECLARATIONS_TEXT,
+    /export interface EvmSccpProveResult[\s\S]*publicInputs\?: SccpMessageTransparentPublicInputsInput;[\s\S]*proofContext\?: SolanaSccpProofContextInput;[\s\S]*publicSignalWords\?: readonly string\[\];/,
+  );
+  assert.match(
+    DECLARATIONS_TEXT,
+    /export interface TronSccpProveResult[\s\S]*publicInputs\?: SccpMessageTransparentPublicInputsInput;[\s\S]*proofContext\?: SolanaSccpProofContextInput;[\s\S]*publicSignalWords\?: readonly string\[\];/,
+  );
+  assert.match(
+    DECLARATIONS_TEXT,
+    /export interface SolanaSccpProofPublicInputs[\s\S]*readonly sourceStateVerifierId: string;[\s\S]*readonly sourceStateVerifierHash: string;[\s\S]*readonly sourceAdapterDeploymentBindingHash: string;/,
+  );
+  assert.match(
+    DECLARATIONS_TEXT,
+    /export type SolanaSccpProofPublicInputsInput =[\s\S]*SolanaSccpProofPublicInputs[\s\S]*SolanaSccpProofPublicInputsSnakeCase;/,
+  );
+  assert.match(
+    DECLARATIONS_TEXT,
+    /export interface SolanaSccpProveResult[\s\S]*proofBase64\?: string;[\s\S]*proof_base64\?: string;[\s\S]*publicInputs\?: SolanaSccpProofPublicInputsInput;[\s\S]*sourceStateVerifierId\?: string;[\s\S]*sourceStateVerifierHash\?: string;[\s\S]*proofContext\?: SolanaSccpProofContextInput;[\s\S]*sourceAdapterDeploymentBinding\?: SccpSourceAdapterDeploymentBindingInput;[\s\S]*proofContextHash\?: string;[\s\S]*sourceAdapterDeploymentBindingHash\?: string;/,
+  );
+  assert.match(
+    DECLARATIONS_TEXT,
+    /export interface TonSccpProveResult[\s\S]*requestHash\?: string;[\s\S]*sourceAdapterDeploymentBindingHash\?: string;[\s\S]*envelopeHash\?: string;/,
+  );
+  assert.match(
+    DECLARATIONS_TEXT,
+    /export interface SubstrateSccpProveResult[\s\S]*requestHash\?: string;[\s\S]*envelopeHash\?: string;/,
+  );
+});
+
+test("package declarations expose SCCP witness-provider hooks for portal provers", () => {
+  assert.match(
+    DECLARATIONS_TEXT,
+    /export type SccpWitnessProviderFn<Input> = \([\s\S]*\) => Input \| Promise<Input>;/,
+  );
+  assert.match(
+    DECLARATIONS_TEXT,
+    /export type SccpWitnessProviderResolverOption<Input> =[\s\S]*resolveWitness: SccpWitnessProviderFn<Input>;[\s\S]*resolve_witness\?: never;[\s\S]*resolveWitness\?: never;[\s\S]*resolve_witness: SccpWitnessProviderFn<Input>;/,
+  );
+  assert.match(
+    DECLARATIONS_TEXT,
+    /export type SccpProverWitnessProviderOption<Provider, Input> =[\s\S]*witnessProvider\?: Provider \| SccpWitnessProviderFn<Input>;[\s\S]*witness_provider\?: never;[\s\S]*witnessProvider\?: never;[\s\S]*witness_provider\?: Provider \| SccpWitnessProviderFn<Input>;/,
+  );
+  assert.match(
+    DECLARATIONS_TEXT,
+    /export type SccpProverProveOption<ProveFn> =[\s\S]*prove\?: ProveFn;[\s\S]*proveFn\?: never;[\s\S]*prove_fn\?: never;[\s\S]*prove\?: never;[\s\S]*proveFn\?: ProveFn;[\s\S]*prove_fn\?: never;[\s\S]*prove\?: never;[\s\S]*proveFn\?: never;[\s\S]*prove_fn\?: ProveFn;/,
+  );
+  assert.match(
+    DECLARATIONS_TEXT,
+    /export type SolanaSccpSourceStateProverOptions =\s+SccpProverProveOption<SolanaSccpSourceStateProveFn>;/,
+  );
+  assert.match(
+    DECLARATIONS_TEXT,
+    /export type TonSccpSourceStateProverOptions =\s+SccpProverProveOption<TonSccpSourceStateProveFn>;/,
+  );
+  for (const [lane, inputType] of [
+    ["Ton", "TonSccpProofRequestInput"],
+    ["Evm", "EvmSccpProofRequestInput"],
+    ["Tron", "TronSccpProofRequestInput"],
+    ["Substrate", "SubstrateSccpProofRequestInput"],
+    ["Solana", "SolanaSccpWitnessInput"],
+  ]) {
+    assert.match(
+      DECLARATIONS_TEXT,
+      new RegExp(
+        `export type ${lane}SccpWitnessProvider =[\\s\\S]*` +
+          `SccpWitnessProviderResolverOption<${inputType}>;`,
+      ),
+      `${lane} provider declarations must use the exclusive resolver alias helper`,
+    );
+    assert.match(
+      DECLARATIONS_TEXT,
+      new RegExp(
+        `export type ${lane}SccpProverOptions =[\\s\\S]*` +
+          `SccpProverWitnessProviderOption<[\\s\\S]*${lane}SccpWitnessProvider,[\\s\\S]*${inputType}[\\s\\S]*>[\\s\\S]*` +
+          `SccpProverProveOption<${lane}SccpProveFn>;`,
+      ),
+      `${lane} prover options must reject duplicate witness/prove aliases`,
+    );
+  }
+});
+
+test("package declarations separate TON proof-request and submission inputs", () => {
+  const manifestInput = declarationInterface("TonSccpManifestInput");
+  const proofRequestInput = declarationInterface("TonSccpProofRequestInput");
+  const messageBodyInputBase = declarationInterface("TonSccpMessageBodyInputBase");
+
+  assert.match(manifestInput, /version: SccpVersionInput;/);
+  assert.doesNotMatch(manifestInput, /version\?:/);
+  assert.match(manifestInput, /proofFamily\?: typeof SCCP_STARK_FRI_PROOF_FAMILY_V1;/);
+  assert.match(manifestInput, /proof_family\?: typeof SCCP_STARK_FRI_PROOF_FAMILY_V1;/);
+  assert.match(
+    manifestInput,
+    /verifierBackendKey\?: typeof SCCP_TON_CONTRACT_PROOF_BACKEND_V1;/,
+  );
+  assert.match(
+    manifestInput,
+    /verifier_backend_key\?: typeof SCCP_TON_CONTRACT_PROOF_BACKEND_V1;/,
+  );
+  assert.match(proofRequestInput, /publicInputs\?: SccpMessageTransparentPublicInputsInput;/);
+  assert.match(proofRequestInput, /bundleBytes\?: BinaryLike;/);
+  assert.match(proofRequestInput, /sourceStateVerifierHash\?: string;/);
+  assert.match(
+    proofRequestInput,
+    /sourceAdapterDeploymentBinding\?: SccpSourceAdapterDeploymentBindingInput;/,
+  );
+  assert.doesNotMatch(proofRequestInput, /proofResult\?:/);
+  assert.doesNotMatch(proofRequestInput, /proofBytes\?:/);
+  assert.doesNotMatch(proofRequestInput, /metadataBytes\?:/);
+  assert.doesNotMatch(proofRequestInput, /manifest\?:/);
+  assert.doesNotMatch(proofRequestInput, /queryId\?:/);
+
+  assert.match(messageBodyInputBase, /extends TonSccpProofRequestInput/);
+  assert.doesNotMatch(messageBodyInputBase, /proofResult\?:/);
+  assert.match(messageBodyInputBase, /proofBytes\?: BinaryLike;/);
+  assert.match(messageBodyInputBase, /metadataBytes\?: BinaryLike;/);
+  assert.match(messageBodyInputBase, /manifest\?: TonSccpManifestInput;/);
+  assert.match(messageBodyInputBase, /queryId\?: string \| number \| bigint;/);
+  assert.match(
+    DECLARATIONS_TEXT,
+    /export type TonSccpMessageBodyInput =\s+TonSccpMessageBodyInputBase &[\s\S]*proofResult: TonSccpProofResult;[\s\S]*proof_result: TonSccpProofResult;/,
+  );
+  assert.match(
+    DECLARATIONS_TEXT,
+    /export function buildTonSccpProofRequest\(input: TonSccpProofRequestInput\): TonSccpProofRequest;/,
+  );
+});
+
+test("package declarations require wrapped Solana submission proof results", () => {
+  const submissionInputBase = declarationInterface("SolanaSccpSubmissionInputBase");
+
+  assert.match(submissionInputBase, /publicInputs\?: SccpMessageTransparentPublicInputsInput;/);
+  assert.match(submissionInputBase, /proofBytes\?: BinaryLike;/);
+  assert.doesNotMatch(submissionInputBase, /proofResult\?:/);
+  assert.match(
+    DECLARATIONS_TEXT,
+    /export type SolanaSccpSubmissionInput =\s+SolanaSccpSubmissionInputBase &[\s\S]*proofResult: SolanaSccpProofResult;[\s\S]*proof_result\?: never;[\s\S]*proofResult\?: never;[\s\S]*proof_result: SolanaSccpProofResult;/,
+  );
+  assert.match(
+    DECLARATIONS_TEXT,
+    /export interface SolanaSccpSubmissionInputWithProofResult[\s\S]*proofResult: SolanaSccpProofResult;[\s\S]*proof_result\?: never;/,
+  );
+  assert.match(
+    DECLARATIONS_TEXT,
+    /export function buildSolanaSccpSubmission\(input: SolanaSccpSubmissionInput\): SolanaSccpSubmission;/,
+  );
+});
+
+test("package dist entrypoint exports SCCP portal constants", () => {
+  assert.equal(SCCP_MESSAGE_TRANSPARENT_PUBLIC_INPUTS_BYTES_V1_LEN, 141);
+  assert.equal(SCCP_SOLANA_SUBMIT_MESSAGE_PROOF_ENTRYPOINT_V1, "submit_sccp_message_proof");
+  assert.match(SCCP_TON_MAINNET_MASTERCHAIN_CONFIG_VERIFIER_ID_V1, /^sccp:ton:/u);
+  assert.match(SCCP_TON_MAINNET_VALIDATOR_SET_TRANSITION_VERIFIER_ID_V1, /^sccp:ton:/u);
+  assert.match(SCCP_TON_MAINNET_SHARD_ACCOUNTS_DICTIONARY_VERIFIER_ID_V1, /^sccp:ton:/u);
+  assert.match(
+    DECLARATIONS_TEXT,
+    /export const SCCP_MESSAGE_TRANSPARENT_PUBLIC_INPUTS_BYTES_V1_LEN: 141;/,
+  );
+  assert.match(
+    DECLARATIONS_TEXT,
+    /export const SCCP_SOLANA_SUBMIT_MESSAGE_PROOF_ENTRYPOINT_V1: "submit_sccp_message_proof";/,
+  );
+  assert.match(
+    DECLARATIONS_TEXT,
+    /export const SCCP_TON_MAINNET_MASTERCHAIN_CONFIG_VERIFIER_ID_V1: string;/,
+  );
+});
+
+test("package dist entrypoint exports Solana source-state helpers", () => {
+  assert.equal(SCCP_SOURCE_STATE_MAX_PROOF_BYTES, 2 * 1024 * 1024);
+  assert.equal(SCCP_SOURCE_STATE_MAX_PROOF_LABEL_BYTES, 128);
+  assert.equal(SCCP_NATIVE_RECURSIVE_MAX_PROOF_BYTES, 2 * 1024 * 1024);
+  assert.equal(
+    SCCP_SOLANA_TOWER_REPLAY_OPEN_VERIFY_CIRCUIT_ID_V1,
+    "sccp-solana-tower-replay-v1",
+  );
+  assert.equal(
+    SCCP_SOLANA_FULL_ACCOUNTSDB_LATTICE_OPEN_VERIFY_CIRCUIT_ID_V1,
+    "sccp-solana-full-accountsdb-lattice-v1",
+  );
+  assert.equal(
+    SCCP_SOLANA_BANK_FORK_CHOICE_OPEN_VERIFY_CIRCUIT_ID_V1,
+    "sccp-solana-bank-fork-choice-v1",
+  );
+  for (const helper of [
+    canonicalSolanaSccpSourceStateVerificationProofBytes,
+    solanaSccpAccountsLtHashProofHash,
+    canonicalSolanaSccpFinalityContextBytes,
+    solanaSccpFinalityContextHash,
+    canonicalSolanaSccpVoteMessageBytes,
+    solanaSccpVoteMessageHash,
+    canonicalSolanaSccpFullLightClientAuditStatementBytes,
+    solanaSccpFullLightClientAuditStatementHash,
+    solanaSccpFullLightClientAuditPublicInputColumns,
+    solanaSccpFullLightClientAuditOpenVerifySchemaDescriptor,
+    buildSolanaSccpFullLightClientAuditProofRequest,
+    buildSolanaSccpTowerReplayProofRequest,
+    buildSolanaSccpFullAccountsdbLatticeProofRequest,
+    buildSolanaSccpBankForkChoiceProofRequest,
+    buildSolanaSccpFullLightClientAuditProofRequests,
+    canonicalSolanaSccpRouteCanaryEvidenceBytes,
+    solanaSccpRouteCanaryEvidenceHash,
+    canonicalTonSccpRouteCanaryEvidenceBytes,
+    tonSccpRouteCanaryEvidenceHash,
+  ]) {
+    assert.equal(typeof helper, "function");
+  }
+  assert.equal(
+    SCCP_SOLANA_UPGRADEABLE_LOADER_ID,
+    "BPFLoaderUpgradeab1e11111111111111111111111",
+  );
+  assert.equal(
+    solanaSccpRouteCanaryEvidenceHash({
+      routeAllowlistHash: `0x${"31".repeat(32)}`,
+      destinationBindingHash: sccpDestinationBindingHash(SCCP_DOMAIN_SOL),
+      sourceVerifierMaterialHash: `0x${"33".repeat(32)}`,
+      sourceAdapterEngineDeploymentHash: `0x${"34".repeat(32)}`,
+      verifierIdentity: "3JF3sEqM796hk5WFqA6EtmEwJQ9quALszsfJyvXNQKy3",
+      verifierCodeHash: "0xc81178d11a4de525782fe7ac6f5accc2056fa15d1b8c2bfd819eb2ef179c3411",
+      solanaRpcCommitment: "finalized",
+      solanaProgramOwner: SCCP_SOLANA_UPGRADEABLE_LOADER_ID,
+      solanaProgramdataOwner: SCCP_SOLANA_UPGRADEABLE_LOADER_ID,
+      solanaProgramImmutable: true,
+      solanaProgramAccountDataBase64: "AgAAABERERERERERERERERERERERERERERERERERERERERER",
+      solanaProgramdataAddress: "29d2S7vB453rNYFdR5Ycwt7y9haRT5fwVwL9zTmBhfV2",
+      solanaProgramdataSlot: "4321",
+      solanaExpectedProgramdataSlot: "4321",
+      solanaProgramAccountContextSlot: "5000",
+      solanaProgramdataAccountContextSlot: "5001",
+      solanaProgramdataMetadataBlake2b256:
+        "0x2b5f26278ea949463e97c1dc5e53a821b82515b405454a1b0e3cd652c3b00209",
+      solanaProgramdataMetadataBase64:
+        "AwAAAOEQAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA",
+      solanaProgramdataExecutableBlake2b256:
+        "0xc81178d11a4de525782fe7ac6f5accc2056fa15d1b8c2bfd819eb2ef179c3411",
+      solanaProgramdataExecutableBase64: "f0VMRgECAwQF",
+    }),
+    "0x77296e47d5681f97136dc79d66dbda4478c3c5ec80271bfd4f1f3b3dbb8e15ca",
+  );
+  assert.equal(
+    tonSccpRouteCanaryEvidenceHash({
+      routeAllowlistHash: `0x${"31".repeat(32)}`,
+      destinationBindingHash: sccpDestinationBindingHash(SCCP_DOMAIN_TON),
+      sourceVerifierMaterialHash: `0x${"33".repeat(32)}`,
+      sourceAdapterEngineDeploymentHash: `0x${"34".repeat(32)}`,
+      verifierContractAddress: `0:${"11".repeat(32)}`,
+      verifierCodeHash: `0x${"44".repeat(32)}`,
+      accountStatus: "active",
+      accountStateHash: `0x${"55".repeat(32)}`,
+      lastTransactionLt: "123456789",
+      lastTransactionHash: `0x${"66".repeat(32)}`,
+      verifierCodeBocRootHash: `0x${"44".repeat(32)}`,
+    }),
+    "0xf128e8405017b9ca7733bb10d43eeaf783e38d39740a3455aa353c76655c6942",
+  );
+  assert.match(
+    DECLARATIONS_TEXT,
+    /wrapSolanaSccpSourceStateVerificationProof\(\s+proofBytes: BinaryLike \| number\[\],[\s\S]*request: SolanaSccpAccountsLtHashProofRequest \| SolanaSccpFullLightClientAuditProofRequest,/,
+  );
+  assert.match(
+    DECLARATIONS_TEXT,
+    /export function solanaSccpRouteCanaryEvidenceHash\([\s\S]*SolanaSccpRouteCanaryEvidenceInput/,
+  );
+  assert.match(
+    DECLARATIONS_TEXT,
+    /export function tonSccpRouteCanaryEvidenceHash\([\s\S]*TonSccpRouteCanaryEvidenceInput/,
+  );
+
+  const rawDataHash = solanaSccpAccountRawDataHash(new Uint8Array([1, 2, 3, 4]));
+  assert.match(rawDataHash, /^0x[0-9a-f]{64}$/u);
+  const opening = {
+    address: `0x${"41".repeat(32)}`,
+    owner: SCCP_SOLANA_VOTE_PROGRAM_ID,
+    lamports: 1n,
+    rentEpoch: 0n,
+    executable: false,
+    dataHash: rawDataHash,
+  };
+  const leafInput = {
+    finalizedSlot: 42n,
+    opening,
+    rawDataHash,
+  };
+  assert.equal(canonicalSolanaSccpAccountInclusionLeafBytes(leafInput).length, 109);
+  const leafHash = solanaSccpAccountInclusionLeafHash(leafInput);
+  assert.match(leafHash, /^0x[0-9a-f]{64}$/u);
+  assert.equal(
+    canonicalSolanaSccpAccountInclusionNodeBytes(leafHash, `0x${"88".repeat(32)}`).length,
+    65,
+  );
+  assert.match(
+    solanaSccpAccountInclusionNodeHash(leafHash, `0x${"88".repeat(32)}`),
+    /^0x[0-9a-f]{64}$/u,
+  );
+  const tree = solanaSccpAccountInclusionRootAndBranches([leafHash, `0x${"88".repeat(32)}`]);
+  assert.match(tree.root, /^0x[0-9a-f]{64}$/u);
+  assert.equal(tree.branches.length, 2);
+  assert.equal(tree.branches[0].length, 1);
+  assert.ok(Object.isFrozen(tree));
+  assert.ok(Object.isFrozen(tree.branches));
+  assert.ok(Object.isFrozen(tree.branches[0]));
+  assert.equal(solanaSccpAccountInclusionRootFromBranch(leafHash, tree.branches[0]), tree.root);
+
+  assert.match(
+    DECLARATIONS_TEXT,
+    /export interface SolanaSccpAccountInclusionLeafInput/,
+  );
+  assert.match(
+    DECLARATIONS_TEXT,
+    /export function solanaSccpAccountRawDataHash\(rawData: BinaryLike\): string;/,
+  );
+  assert.match(
+    DECLARATIONS_TEXT,
+    /export function canonicalSolanaSccpAccountInclusionLeafBytes\([\s\S]*input: SolanaSccpAccountInclusionLeafInput[\s\S]*\): Uint8Array;/,
+  );
+  assert.match(
+    DECLARATIONS_TEXT,
+    /export interface SolanaSccpAccountInclusionRootAndBranches[\s\S]*readonly branches: ReadonlyArray<ReadonlyArray<string>>;[\s\S]*export function solanaSccpAccountInclusionRootAndBranches\([\s\S]*leaves: readonly BinaryLike\[\][\s\S]*\): SolanaSccpAccountInclusionRootAndBranches;/,
+  );
+  assert.match(
+    DECLARATIONS_TEXT,
+    /export interface SolanaSccpOpenedAccountInclusionWitness[\s\S]*readonly branches: ReadonlyArray<ReadonlyArray<string>>;[\s\S]*readonly stakeHistorySysvarBranch: ReadonlyArray<string>;/,
+  );
+});
+
+test("package dist entrypoint exports Solana tower lockout helpers", () => {
+  assert.equal(SCCP_DOMAIN_SOL, 3);
+  assert.equal(SCCP_SOLANA_TOWER_LOCKOUT_CONFIRMATION_DEPTH, 32n);
+  assert.equal(SCCP_SOLANA_TOWER_VOTE_STACK_DEPTH, 31n);
+  const input = {
+    finalizedSlot: 1_296_096n,
+    rootedSlot: 1_296_065n,
+    parentSlot: 1_296_095n,
+    parentBankHash: `0x${"33".repeat(32)}`,
+  };
+  assert.equal(canonicalSolanaSccpTowerLockoutBytes(input).length, 73);
+  assert.match(solanaSccpTowerLockoutHash(input), /^0x[0-9a-f]{64}$/u);
+});
+
+test("package dist entrypoint exports Solana stake activation helpers", () => {
+  const input = {
+    epoch: 3n,
+    validatorPublicKeys: [`0x${"11".repeat(32)}`, `0x${"22".repeat(32)}`],
+    validatorStakes: [1n, 2n],
+    validatorActivationEpochs: [0n, 2n],
+    validatorDeactivationEpochs: [(1n << 64n) - 1n, 9n],
+  };
+  assert.equal(canonicalSolanaSccpStakeActivationBytes(input).length, 165);
+  assert.equal(
+    solanaSccpStakeActivationHash(input),
+    "0xdb418c62a1aeb8ae15cb26e3a198d46890cefa3545df8e1921be2e83f57dabf3",
+  );
+});
+
+test("package dist entrypoint exports Solana account opening helpers", () => {
+  const input = {
+    address: `0x${"31".repeat(32)}`,
+    owner: SCCP_SOLANA_VOTE_PROGRAM_ID,
+    lamports: 1_000_000n,
+    rentEpoch: 0n,
+    executable: false,
+    dataHash: `0x${"71".repeat(32)}`,
+  };
+  assert.equal(canonicalSolanaSccpAccountOpeningBytes(input).length, 122);
+  const accountHash = solanaSccpAccountOpeningHash(input);
+  assert.match(accountHash, /^0x[0-9a-f]{64}$/u);
+  assert.notEqual(
+    accountHash,
+    solanaSccpAccountOpeningHash({ ...input, owner: SCCP_SOLANA_STAKE_PROGRAM_ID }),
+  );
+  assert.equal(typeof solanaSccpOpenedAccountInclusionWitness, "function");
+  assert.equal(
+    SCCP_SOLANA_ACCOUNTS_LT_HASH_OPEN_VERIFY_CIRCUIT_ID_V1,
+    "sccp-solana-accounts-lt-hash-v1",
+  );
+  assert.equal(typeof buildSolanaSccpAccountsLtHashProofRequest, "function");
+  assert.throws(
+    () =>
+      wrapSolanaSccpSourceStateVerificationProof(new Uint8Array([1, 2, 3]), {
+        version: 1,
+        proofFamily: SCCP_STARK_FRI_PROOF_FAMILY_V1,
+        circuitId: SCCP_SOLANA_ACCOUNTS_LT_HASH_OPEN_VERIFY_CIRCUIT_ID_V1,
+        sourceDomain: SCCP_DOMAIN_SOL,
+      }),
+    /request\.parameterSet/,
+  );
+  assert.equal(typeof canonicalSolanaSccpAccountsLtHashCommitmentBytes, "function");
+  assert.equal(typeof canonicalSolanaSccpAccountsLtHashVerificationContextBytes, "function");
+  assert.equal(typeof solanaSccpAccountsLtHashPublicInputColumns, "function");
+  assert.equal(typeof solanaSccpAccountsLtHashOpenVerifySchemaDescriptor, "function");
+  assert.equal(typeof buildTonShardStateProofRequest, "function");
+  assert.equal(typeof canonicalTonShardStateProofPublicInputsBytes, "function");
+  assert.equal(typeof canonicalTonShardStateWitnessCommitmentBytes, "function");
+  assert.equal(typeof canonicalTonShardStateVerificationContextBytes, "function");
+  assert.equal(typeof tonShardStateProofPublicInputsHash, "function");
+  assert.equal(typeof tonShardStatePublicInputColumns, "function");
+  assert.equal(typeof tonShardStateOpenVerifySchemaDescriptor, "function");
+  assert.equal(
+    SCCP_TON_MASTERCHAIN_CONFIG_OPEN_VERIFY_CIRCUIT_ID_V1,
+    "sccp-ton-masterchain-config-v1",
+  );
+  assert.equal(
+    SCCP_TON_VALIDATOR_SET_TRANSITION_OPEN_VERIFY_CIRCUIT_ID_V1,
+    "sccp-ton-validator-set-transition-v1",
+  );
+  assert.equal(
+    SCCP_TON_SHARD_ACCOUNTS_DICTIONARY_OPEN_VERIFY_CIRCUIT_ID_V1,
+    "sccp-ton-shard-accounts-dictionary-v1",
+  );
+  assert.equal(typeof tonSccpShardStateVerificationProofHash, "function");
+  assert.equal(typeof canonicalTonSccpFullLightClientAuditStatementBytes, "function");
+  assert.equal(typeof tonSccpFullLightClientAuditStatementHash, "function");
+  assert.equal(typeof tonSccpFullLightClientAuditPublicInputColumns, "function");
+  assert.equal(typeof tonSccpFullLightClientAuditOpenVerifySchemaDescriptor, "function");
+  assert.equal(typeof buildTonSccpFullLightClientAuditProofRequest, "function");
+  assert.equal(typeof buildTonSccpFullLightClientAuditProofRequests, "function");
+});
+
+test("package dist entrypoint exports Solana account data helpers", () => {
+  const towerVoteSlots = Array.from({ length: Number(SCCP_SOLANA_TOWER_VOTE_STACK_DEPTH) }, (_, index) =>
+    11n + BigInt(index),
+  );
+  const voteInput = {
+    nodePubkey: `0x${"51".repeat(32)}`,
+    authorizedVoter: `0x${"61".repeat(32)}`,
+    authorizedWithdrawer: `0x${"71".repeat(32)}`,
+    inflationRewardsCollector: `0x${"81".repeat(32)}`,
+    blockRevenueCollector: `0x${"51".repeat(32)}`,
+    inflationRewardsCommissionBps: 700n,
+    blockRevenueCommissionBps: 10_000n,
+    pendingDelegatorRewards: 123n,
+    blsPubkeyCompressed: new Uint8Array(),
+    rootSlot: 10n,
+    towerVoteSlots,
+  };
+  assert.equal(canonicalSolanaSccpVoteAccountDataBytes(voteInput).length, 457);
+  const voteHash = solanaSccpVoteAccountDataHash(voteInput);
+  assert.match(voteHash, /^0x[0-9a-f]{64}$/u);
+  assert.notEqual(
+    voteHash,
+    solanaSccpVoteAccountDataHash({ ...voteInput, authorizedVoter: `0x${"62".repeat(32)}` }),
+  );
+  assert.throws(
+    () => solanaSccpVoteAccountDataHash({ ...voteInput, towerVoteSlots: [10n, ...towerVoteSlots.slice(1)] }),
+    /towerVoteSlots\[0\]/u,
+  );
+
+  const stakeInput = {
+    staker: `0x${"81".repeat(32)}`,
+    withdrawer: `0x${"91".repeat(32)}`,
+    voterPubkey: `0x${"a1".repeat(32)}`,
+    delegatedStake: 1_000n,
+    activationEpoch: 2n,
+    deactivationEpoch: 9n,
+    creditsObserved: 123n,
+  };
+  assert.equal(canonicalSolanaSccpStakeAccountDataBytes(stakeInput).length, 154);
+  const stakeHash = solanaSccpStakeAccountDataHash(stakeInput);
+  assert.match(stakeHash, /^0x[0-9a-f]{64}$/u);
+  assert.notEqual(
+    stakeHash,
+    solanaSccpStakeAccountDataHash({ ...stakeInput, voterPubkey: `0x${"a2".repeat(32)}` }),
+  );
+  assert.throws(
+    () => solanaSccpStakeAccountDataHash({ ...stakeInput, deactivationEpoch: 2n }),
+    /deactivationEpoch/u,
+  );
+});
+
+test("package dist entrypoint exports Solana raw vote account parser helpers", () => {
+  const raw = sampleSolanaVoteStateAccount();
+  const voteAccountAddress = `0x${"81".repeat(32)}`;
+  const parsed = solanaSccpVoteAccountDataFromRawVoteState(raw, 3n, voteAccountAddress);
+  assert.deepEqual(Array.from(parsed.authorizedVoter), Array(32).fill(0x61));
+  assert.deepEqual(Array.from(parsed.inflationRewardsCollector), Array(32).fill(0x81));
+  assert.equal(parsed.inflationRewardsCommissionBps, 700n);
+  assert.equal(parsed.rootSlot, 10n);
+  assert.equal(
+    solanaSccpVoteAccountDataHashFromRawVoteState(raw, 3n, voteAccountAddress),
+    solanaSccpVoteAccountDataHash(parsed),
+  );
+  assert.equal(
+    solanaSccpVoteAccountDataHashFromRawVoteStateV1OrV3(raw, 3n, voteAccountAddress),
+    solanaSccpVoteAccountDataHash(parsed),
+  );
+  const parsedV4 = solanaSccpVoteAccountDataFromRawVoteState(
+    sampleSolanaVoteStateV4Account(),
+    3n,
+    voteAccountAddress,
+  );
+  assert.deepEqual(Array.from(parsedV4.blockRevenueCollector), Array(32).fill(0x91));
+  assert.equal(parsedV4.inflationRewardsCommissionBps, 1_234n);
+  assert.equal(parsedV4.blockRevenueCommissionBps, 9_876n);
+  assert.equal(parsedV4.pendingDelegatorRewards, 456n);
+  assert.deepEqual(Array.from(parsedV4.blsPubkeyCompressed), Array(48).fill(0xa5));
+});
+
+test("package dist entrypoint exports Solana raw stake account parser helpers", () => {
+  const raw = sampleSolanaStakeStateV2StakeAccount();
+  const parsed = solanaSccpStakeAccountDataFromRawStakeStateV2(raw);
+  assert.deepEqual(Array.from(parsed.voterPubkey), Array(32).fill(0xa1));
+  assert.equal(parsed.delegatedStake, 1_000n);
+  assert.equal(
+    solanaSccpStakeAccountDataHashFromRawStakeStateV2(raw),
+    solanaSccpStakeAccountDataHash(parsed),
+  );
+  const hiddenPadding = raw.slice();
+  hiddenPadding[197] = 1;
+  assert.throws(
+    () => solanaSccpStakeAccountDataFromRawStakeStateV2(hiddenPadding),
+    /padding/u,
+  );
+});
+
+test("package dist entrypoint exports Solana stake account state helpers", () => {
+  const input = {
+    epoch: 3n,
+    validatorPublicKeys: [`0x${"11".repeat(32)}`, `0x${"22".repeat(32)}`],
+    validatorStakes: [1n, 2n],
+    validatorActivationEpochs: [0n, 2n],
+    validatorDeactivationEpochs: [(1n << 64n) - 1n, 9n],
+    validatorVoteAccountAddresses: [`0x${"33".repeat(32)}`, `0x${"44".repeat(32)}`],
+    validatorStakeAccountAddresses: [`0x${"55".repeat(32)}`, `0x${"66".repeat(32)}`],
+    validatorVoteAccountHashes: [`0x${"77".repeat(32)}`, `0x${"88".repeat(32)}`],
+    validatorStakeAccountHashes: [`0x${"99".repeat(32)}`, `0x${"aa".repeat(32)}`],
+  };
+  assert.equal(canonicalSolanaSccpStakeAccountStateBytes(input).length, 437);
+  assert.equal(
+    solanaSccpStakeAccountStateHash(input),
+    "0x34f6086dd8c1770770802be17b833ed7c973fdaa002c866c0462c33d6938f5b5",
+  );
+});
+
+test("package dist entrypoint exports Solana stake history helpers", () => {
+  const input = {
+    epoch: 3n,
+    validatorPublicKeys: [`0x${"11".repeat(32)}`, `0x${"22".repeat(32)}`],
+    validatorStakes: [1n, 2n],
+    validatorDelegatedStakes: [1n, 3n],
+    validatorActivationEpochs: [0n, 2n],
+    validatorDeactivationEpochs: [(1n << 64n) - 1n, 9n],
+    validatorVoteAccountAddresses: [`0x${"33".repeat(32)}`, `0x${"44".repeat(32)}`],
+    validatorStakeAccountAddresses: [`0x${"55".repeat(32)}`, `0x${"66".repeat(32)}`],
+    validatorVoteAccountHashes: [`0x${"77".repeat(32)}`, `0x${"88".repeat(32)}`],
+    validatorStakeAccountHashes: [`0x${"99".repeat(32)}`, `0x${"aa".repeat(32)}`],
+    stakeHistoryEntries: [
+      { epoch: 2n, effective: 23n, activating: 3n, deactivating: 0n },
+      { epoch: 3n, effective: 3n, activating: 1n, deactivating: 0n },
+    ],
+  };
+  assert.equal(canonicalSolanaSccpStakeHistoryBytes(input).length, 249);
+  assert.equal(
+    solanaSccpStakeHistoryHash(input),
+    "0xd75957eec3cf9f5b88076c8dc18e81c5debd627adfbed7e03e35443bcc4d14b6",
+  );
+});
+
+test("package dist entrypoint exports Solana StakeHistory sysvar helpers", () => {
+  assert.equal(
+    SCCP_SOLANA_SYSVAR_PROGRAM_ID,
+    "0x06a7d5171875f729c73d93408f216120067ed88c76e08c287fc1946000000000",
+  );
+  assert.equal(
+    SCCP_SOLANA_STAKE_HISTORY_SYSVAR_ID,
+    "0x06a7d517193584d0feed9bb3431d13206be544281b57b8566cc5375ff4000000",
+  );
+  const input = {
+    stakeHistoryEntries: [
+      { epoch: 2n, effective: 10n, activating: 3n, deactivating: 1n },
+      { epoch: 3n, effective: 12n, activating: 0n, deactivating: 0n },
+    ],
+  };
+  const canonical = canonicalSolanaSccpStakeHistorySysvarDataBytes(input);
+  const hash = solanaSccpStakeHistorySysvarDataHash(input);
+  assert.equal(canonical.length, 72);
+  assert.match(hash, /^0x[0-9a-f]{64}$/u);
+  assert.equal(solanaSccpStakeHistorySysvarDataHashFromRawData(canonical), hash);
+});
+
+test("package dist entrypoint exports Solana tower replay helpers", () => {
+  const input = {
+    finalizedSlot: 1_296_096n,
+    rootedSlot: 1_296_065n,
+    parentSlot: 1_296_095n,
+    bankForkHash: `0x${"aa".repeat(32)}`,
+    towerVoteSlots: Array.from({ length: Number(SCCP_SOLANA_TOWER_VOTE_STACK_DEPTH) }, (_, index) =>
+      1_296_066n + BigInt(index),
+    ),
+  };
+  assert.equal(canonicalSolanaSccpTowerReplayBytes(input).length, 573);
+  assert.match(solanaSccpTowerReplayHash(input), /^0x[0-9a-f]{64}$/u);
+});
+
+test("package dist entrypoint exports Solana bank-fork helpers", () => {
+  assert.equal(
+    SCCP_SOLANA_MAINNET_ACCOUNTS_DB_VERIFIER_ID_V1,
+    "sccp:sol:accounts-db-verifier:accounts-lt-hash-mainnet-beta:v1",
+  );
+  assert.equal(
+    SCCP_SOLANA_TEMPLATE_SOURCE_STATE_VERIFIER_HASH_V1,
+    "0x6b4e4106bbb6b343ae1a4a36c9c68756d4454d2167c9b8b2ee3225e39fb0a48b",
+  );
+  assert.equal(typeof wrapSolanaSccpProofResult, "function");
+  const accountsLtHash = `0x${"99".repeat(2048)}`;
+  const bankSignatureCount = 8n;
+  const parentBankHash = `0x${"33".repeat(32)}`;
+  const blockhash = `0x${"55".repeat(32)}`;
+  const bankHash = solanaSccpAgaveBankHash({
+    parentBankHash,
+    bankSignatureCount,
+    blockhash,
+    accountsLtHash,
+  });
+  const input = {
+    finalizedSlot: 1_296_096n,
+    parentSlot: 1_296_095n,
+    bankSignatureCount,
+    parentBankHash,
+    bankHash,
+    blockhash,
+    accountsLtHash,
+    transactionStatusRoot: `0x${"66".repeat(32)}`,
+    accountInclusionRoot: `0x${"77".repeat(32)}`,
+    accountsLtHashChecksum: solanaSccpAccountsLtHashChecksum(accountsLtHash),
+  };
+  assert.equal(canonicalSolanaSccpBankForkBytes(input).length, 229);
+  assert.equal(
+    solanaSccpBankForkHash(input),
+    "0x8c496fb25a4499947e454a84f638211a84445748bc5242fbb6fb511edd82e531",
+  );
+});
+
+test("package dist entrypoint exports TON BoC root helper", () => {
+  assert.equal(
+    SCCP_TON_MAINNET_SHARD_STATE_VERIFIER_ID_V1,
+    "sccp:ton:source-state-verifier:shard-state-light-client-mainnet:v1",
+  );
+  const boc = Buffer.from("b5ee9c720101020100070001020101000202", "hex");
+  const checkedBoc = Buffer.from("b5ee9c724101020100070001020101000202be1c1df5", "hex");
+  const prunedBoc = Buffer.from(
+    "b5ee9c72010101010026002848010149725ad44ef5ed5feaa27f88679cabae427209a6bea318cb9b66030131aae6fe0001",
+    "hex",
+  );
+  const legacyPrunedProofBoc = Buffer.from(
+    "b5ee9c7201010601005f0022012001052201620203284801010bd445eea7213bd88307c204a267aa798c1bacb2ad2d781f6106a8296bc12b6500010103a0c0040004006f284801011d894d2390dbd75b607f99091580d9f1652f34c525e35ba648d4325cc7495d3e0001",
+    "hex",
+  );
+  const merkleProofBoc = Buffer.from(
+    "b5ee9c7201010301002d0009460349725ad44ef5ed5feaa27f88679cabae427209a6bea318cb9b66030131aae6fe00010101020102000202",
+    "hex",
+  );
+  const hashmapBoc = Buffer.from(
+    "b5ee9c72010109010028000101c001020120020702016203050103a0c004000403090103a0c0060004006f0101de08000403e7",
+    "hex",
+  );
+  const shardAccountsBoc = Buffer.from(
+    "b5ee9c72010103010073000101c00101d37fffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff84400000000000000000000000000000000000000000000000000000000000000005a75fc0633903343b684ec73076c5a48cf6b453fc73aa316c2a6de900669e41900000000000000078020000",
+    "hex",
+  );
+  const shardStateProofBoc = Buffer.from(
+    "b5ee9c720101060100aa00035b9023afe2ffffff11000000000000000000000000000000000700000001000000000000000000000000000000002001020500000101c00301d37fffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff84400000000000000000000000000000000000000000000000000000000000000005a75fc0633903343b684ec73076c5a48cf6b453fc73aa316c2a6de900669e419000000000000000780400000000",
+    "hex",
+  );
+  assert.deepEqual(tonBocRootHashes(boc), [
+    "0x49725ad44ef5ed5feaa27f88679cabae427209a6bea318cb9b66030131aae6fe",
+  ]);
+  assert.equal(
+    tonBocSingleRootHash(boc),
+    "0x49725ad44ef5ed5feaa27f88679cabae427209a6bea318cb9b66030131aae6fe",
+  );
+  assert.equal(
+    tonBocSingleRootHash(checkedBoc),
+    "0x49725ad44ef5ed5feaa27f88679cabae427209a6bea318cb9b66030131aae6fe",
+  );
+  assert.equal(
+    tonBocSingleRootHash(prunedBoc),
+    "0xcc9095f882fb62a27bb19ad4aa84e19571a3283988ae40b75e238ad240cf1a96",
+  );
+  assert.equal(
+    tonBocSingleRootHash(legacyPrunedProofBoc),
+    "0x9c769b035b601b0ddc098e9b148d9bdab0761c14bfe310ac090962ba1f39739a",
+  );
+  assert.equal(
+    tonBocSingleRootHash(merkleProofBoc),
+    "0xe749bc5225cabbe3fa78fc12d74a734c365379bc0d302123dcf7bfa2ee3fbd21",
+  );
+  assert.equal(
+    tonHashmapECellRefValueHash(hashmapBoc, Uint8Array.from([17]), 8),
+    "0x5a75fc0633903343b684ec73076c5a48cf6b453fc73aa316c2a6de900669e419",
+  );
+  assert.equal(
+    tonShardAccountsLastTransactionHash(shardAccountsBoc, Uint8Array.from([17, ...Array(31).fill(0)]), 256),
+    "0x5a75fc0633903343b684ec73076c5a48cf6b453fc73aa316c2a6de900669e419",
+  );
+  const selectedShardAccount = tonShardAccountsLastTransaction(
+    shardAccountsBoc,
+    Uint8Array.from([17, ...Array(31).fill(0)]),
+    256,
+  );
+  assert.deepEqual(
+    {
+      hash: selectedShardAccount?.hash,
+      lt: selectedShardAccount?.lt.toString(),
+    },
+    {
+      hash: "0x5a75fc0633903343b684ec73076c5a48cf6b453fc73aa316c2a6de900669e419",
+      lt: "7",
+    },
+  );
+  assert.equal(
+    tonShardStateProofRootHash(shardStateProofBoc),
+    "0xb77955f1a48e68cb56b9e910603a0acddf1c78d45125d65e272b821faa6fce55",
+  );
+  assert.equal(
+    tonShardStateAccountsRootHash(shardStateProofBoc),
+    "0x049a63ecefc78dc0cd468ebf47e0385807d790a2ca8e0dca5cbbeb0714567fd3",
+  );
+  const shardStateTagOffset = shardStateProofBoc.indexOf(Buffer.from("9023afe2", "hex"));
+  assert.notEqual(shardStateTagOffset, -1);
+  const basechainCustom = Buffer.from(shardStateProofBoc);
+  basechainCustom[shardStateTagOffset + 45] |= 0x40;
+  assert.throws(() => tonShardStateAccountsRootHash(basechainCustom), /custom/);
+});
+
+test("package dist entrypoint exports SCCP TRON Groth16 helpers", () => {
+  const proofBytes = sampleGroth16ProofBytes();
+  const destinationBinding = sampleTronDestinationBinding();
+  const publicInputs = {
+    version: 1,
+    message_id: `0x${"11".repeat(32)}`,
+    payload_hash: `0x${"22".repeat(32)}`,
+    target_domain: SCCP_DOMAIN_TRON,
+    commitment_root: `0x${"33".repeat(32)}`,
+    finality_height: "19",
+    finality_block_hash: `0x${"44".repeat(32)}`,
+  };
+  const request = buildTronSccpProofRequest({
+    public_inputs: publicInputs,
+    bundle_bytes: new Uint8Array([5, 6, 7]),
+    source_proof_bytes: new Uint8Array([9, 10]),
+    source_domain: SCCP_DOMAIN_SORA,
+    statement_hash: `0x${"55".repeat(32)}`,
+    destination_binding: destinationBinding,
+  });
+
+  assert.equal(
+    request.requestHash,
+    "0x53d48d1d2005df00f1a4060ef9396b4ca2aa8ecc405dee439729c061693a44e5",
+  );
+  assert.equal(wrapTronSccpProofResult(proofBytes, request).requestHash, request.requestHash);
+  const publicInputWords = sccpMessageTransparentPublicInputAbiWords(publicInputs);
+  assert.equal(publicInputWords.length, 6);
+  assert.equal(Buffer.from(publicInputWords[2]).toString("hex"), `${"00".repeat(31)}05`);
+  const callData = sccpSubmitMessageProofCallData(
+    proofBytes,
+    publicInputs,
+    `0x${"55".repeat(32)}`,
+  );
+  assert.equal(callData.length, 676);
+  assert.equal(Buffer.from(callData.subarray(0, 4)).toString("hex"), "bd57826c");
+  const mismatchedProof = Uint8Array.from(proofBytes);
+  mismatchedProof.fill(0x44, 3 * 32, 4 * 32);
+  assert.throws(
+    () =>
+      sccpSubmitMessageProofCallData(
+        mismatchedProof,
+        publicInputs,
+        `0x${"55".repeat(32)}`,
+      ),
+    /proofBytes\.commitmentRoot must match publicInputs\.commitmentRoot/,
+  );
+  const wrongSourceDomainProof = Uint8Array.from(proofBytes);
+  wrongSourceDomainProof.set(abiWord(SCCP_DOMAIN_TRON), 2 * 32);
+  assert.throws(
+    () =>
+      sccpSubmitMessageProofCallData(
+        wrongSourceDomainProof,
+        publicInputs,
+        `0x${"55".repeat(32)}`,
+      ),
+    /proofBytes\.sourceDomain must match sourceDomain/,
+  );
+  assert.throws(
+    () =>
+      sccpSubmitMessageProofCallData(
+        proofBytes,
+        publicInputs,
+        `0x${"55".repeat(32)}`,
+        SCCP_DOMAIN_TRON,
+      ),
+    /sourceDomain must be SORA/,
+  );
+  assert.deepEqual(
+    request.publicSignalWords,
+    sccpGroth16Bn254PublicSignalWords({
+      publicInputs,
+      sourceDomain: SCCP_DOMAIN_SORA,
+      statementHash: `0x${"55".repeat(32)}`,
+      destinationBindingHash: destinationBinding.bindingHash,
+    }),
+  );
+  assert.notEqual(
+    request.requestHash,
+    buildTronSccpProofRequest({
+      public_inputs: publicInputs,
+      bundle_bytes: new Uint8Array([5, 6, 7, 9]),
+      source_proof_bytes: new Uint8Array([10]),
+      source_domain: SCCP_DOMAIN_SORA,
+      statement_hash: `0x${"55".repeat(32)}`,
+      destination_binding: destinationBinding,
+    }).requestHash,
+  );
+  assert.throws(
+    () =>
+      buildTronSccpProofRequest({
+        public_inputs: { ...publicInputs, target_domain: SCCP_DOMAIN_BSC },
+        bundle_bytes: new Uint8Array([5, 6, 7]),
+        source_domain: SCCP_DOMAIN_SORA,
+        statement_hash: `0x${"55".repeat(32)}`,
+        destination_binding: destinationBinding,
+    }),
+    /publicInputs\.targetDomain must be TRON/,
+  );
+  assert.throws(
+    () =>
+      buildTronSccpProofRequest({
+        public_inputs: publicInputs,
+        bundle_bytes: new Uint8Array(),
+        source_domain: SCCP_DOMAIN_SORA,
+        statement_hash: `0x${"55".repeat(32)}`,
+        destination_binding: destinationBinding,
+      }),
+    /bundleBytes must not be empty/,
+  );
+});
+
+test("package dist entrypoint exports SCCP EVM-family Groth16 helpers", () => {
+  const proofBytes = sampleGroth16ProofBytes();
+  const destinationBinding = sampleEvmDestinationBinding();
+  const publicInputs = {
+    version: 1,
+    message_id: `0x${"11".repeat(32)}`,
+    payload_hash: `0x${"22".repeat(32)}`,
+    target_domain: SCCP_DOMAIN_ETH,
+    commitment_root: `0x${"33".repeat(32)}`,
+    finality_height: "19",
+    finality_block_hash: `0x${"44".repeat(32)}`,
+  };
+  const request = buildEvmSccpProofRequest({
+    public_inputs: publicInputs,
+    bundle_bytes: new Uint8Array([5, 6, 7]),
+    source_proof_bytes: new Uint8Array([9, 10]),
+    source_domain: SCCP_DOMAIN_SORA,
+    statement_hash: `0x${"55".repeat(32)}`,
+    destination_binding: destinationBinding,
+  });
+
+  assert.equal(
+    request.requestHash,
+    "0x4a7c71c3c1838f5d30e1641a32984999a71f9c6cfdff9151ac7d77ca60b64d5e",
+  );
+  assert.equal(wrapEvmSccpProofResult(proofBytes, request).requestHash, request.requestHash);
+  const publicInputWords = sccpMessageTransparentPublicInputAbiWords(publicInputs);
+  assert.equal(publicInputWords.length, 6);
+  assert.equal(Buffer.from(publicInputWords[2]).toString("hex"), `${"00".repeat(31)}01`);
+  const callData = sccpSubmitMessageProofCallData(
+    proofBytes,
+    publicInputs,
+    `0x${"55".repeat(32)}`,
+  );
+  assert.equal(callData.length, 676);
+  assert.equal(Buffer.from(callData.subarray(0, 4)).toString("hex"), "bd57826c");
+  const mismatchedProof = Uint8Array.from(proofBytes);
+  mismatchedProof.fill(0x22, 32, 64);
+  assert.throws(
+    () =>
+      sccpSubmitMessageProofCallData(
+        mismatchedProof,
+        publicInputs,
+        `0x${"55".repeat(32)}`,
+      ),
+    /proofBytes\.messageId must match publicInputs\.messageId/,
+  );
+  const wrongSourceDomainProof = Uint8Array.from(proofBytes);
+  wrongSourceDomainProof.set(abiWord(SCCP_DOMAIN_ETH), 2 * 32);
+  assert.throws(
+    () =>
+      sccpSubmitMessageProofCallData(
+        wrongSourceDomainProof,
+        publicInputs,
+        `0x${"55".repeat(32)}`,
+      ),
+    /proofBytes\.sourceDomain must match sourceDomain/,
+  );
+  assert.throws(
+    () =>
+      sccpSubmitMessageProofCallData(
+        proofBytes,
+        publicInputs,
+        `0x${"55".repeat(32)}`,
+        SCCP_DOMAIN_ETH,
+      ),
+    /sourceDomain must be SORA/,
+  );
+  assert.notEqual(
+    request.requestHash,
+    buildEvmSccpProofRequest({
+      public_inputs: publicInputs,
+      bundle_bytes: new Uint8Array([5, 6, 7, 9]),
+      source_proof_bytes: new Uint8Array([10]),
+      source_domain: SCCP_DOMAIN_SORA,
+      statement_hash: `0x${"55".repeat(32)}`,
+      destination_binding: destinationBinding,
+    }).requestHash,
+  );
+  assert.deepEqual(
+    request.publicSignalWords,
+    sccpGroth16Bn254PublicSignalWords({
+      publicInputs,
+      sourceDomain: SCCP_DOMAIN_SORA,
+      statementHash: `0x${"55".repeat(32)}`,
+      destinationBindingHash: destinationBinding.bindingHash,
+    }),
+  );
+  assert.throws(
+    () =>
+      buildEvmSccpProofRequest({
+        public_inputs: publicInputs,
+        bundle_bytes: new Uint8Array(),
+        source_domain: SCCP_DOMAIN_SORA,
+        statement_hash: `0x${"55".repeat(32)}`,
+        destination_binding: destinationBinding,
+      }),
+    /bundleBytes must not be empty/,
+  );
+});
+
+test("package dist entrypoint exports SCCP Substrate runtime proof helpers", async () => {
+  const publicInputs = {
+    version: 1,
+    message_id: `0x${"11".repeat(32)}`,
+    payload_hash: `0x${"22".repeat(32)}`,
+    target_domain: SCCP_DOMAIN_SORA_KUSAMA,
+    commitment_root: `0x${"33".repeat(32)}`,
+    finality_height: "19",
+    finality_block_hash: `0x${"44".repeat(32)}`,
+  };
+  const input = {
+    public_inputs: publicInputs,
+    bundle_bytes: new Uint8Array([5, 6, 7]),
+    source_proof_bytes: new Uint8Array([9, 10]),
+    source_domain: SCCP_DOMAIN_SORA,
+    statement_hash: `0x${"55".repeat(32)}`,
+    destination_binding_hash: `0x${"66".repeat(32)}`,
+  };
+  const request = buildSubstrateSccpProofRequest(input);
+
+  assert.equal(request.backend, SCCP_SUBSTRATE_RUNTIME_PROOF_BACKEND_V1);
+  assert.equal(request.targetDomain, SCCP_DOMAIN_SORA_KUSAMA);
+  assert.match(request.requestHash, /^0x[0-9a-f]{64}$/u);
+  assert.equal(Object.isFrozen(request), true);
+  const exposedBundleBytes = request.bundleBytes;
+  exposedBundleBytes[0] = 99;
+  assert.equal(request.bundleBytes[0], 5);
+  assert.notEqual(
+    request.requestHash,
+    buildSubstrateSccpProofRequest({
+      ...input,
+      bundle_bytes: new Uint8Array([5, 6, 7, 9]),
+    }).requestHash,
+  );
+
+  const prover = new SubstrateSccpProver({
+    prove: (callbackRequest) => {
+      assert.equal(callbackRequest.requestHash, request.requestHash);
+      return { proofBytes: new Uint8Array([1, 2, 3]) };
+    },
+  });
+  const result = await prover.prove(input);
+  assert.equal(result.requestHash, request.requestHash);
+  const submission = buildSubstrateSccpSubmission({ proofResult: result });
+  assert.equal(submission.requestHash, request.requestHash);
+  assert.equal(submission.envelopeEncoding, SCCP_SUBSTRATE_RUNTIME_CALL_SCALE_V1);
+  assert.equal(wrapSubstrateSccpProofResult([1, 2, 3], request).requestHash, request.requestHash);
+  assert.throws(
+    () =>
+      wrapSubstrateSccpProofResult(
+        new Uint8Array(SCCP_NATIVE_RECURSIVE_MAX_PROOF_BYTES + 1).fill(1),
+        request,
+    ),
+    /at most/,
+  );
+  assert.throws(
+    () =>
+      buildSubstrateSccpSubmission({
+        publicInputs,
+        proofBytes: new Uint8Array(SCCP_NATIVE_RECURSIVE_MAX_PROOF_BYTES + 1).fill(1),
+        bundleBytes: new Uint8Array([5, 6, 7]),
+        sourceProofBytes: new Uint8Array([9, 10]),
+        sourceDomain: SCCP_DOMAIN_SORA,
+        statementHash: `0x${"55".repeat(32)}`,
+        destinationBindingHash: `0x${"66".repeat(32)}`,
+      }),
+    /at most/,
+  );
+  assert.match(result.envelopeHash, /^0x[0-9a-f]{64}$/u);
+  const exposedProofBytes = result.proofBytes;
+  exposedProofBytes[0] = 99;
+  assert.equal(result.proofBytes[0], 1);
+});
+
+test("package dist entrypoint exports SCCP TON proof wrapper", () => {
+  const publicInputs = {
+    version: 1,
+    message_id: `0x${"11".repeat(32)}`,
+    payload_hash: `0x${"22".repeat(32)}`,
+    target_domain: SCCP_DOMAIN_TON,
+    commitment_root: `0x${"33".repeat(32)}`,
+    finality_height: "19",
+    finality_block_hash: `0x${"44".repeat(32)}`,
+  };
+  const request = buildTonSccpProofRequest({
+    public_inputs: publicInputs,
+    bundle_bytes: new Uint8Array([5, 6, 7]),
+    source_proof_bytes: new Uint8Array([9, 10]),
+    statement_hash: `0x${"55".repeat(32)}`,
+    destination_binding_hash: `0x${"66".repeat(32)}`,
+    source_state_verifier_hash: `0x${"77".repeat(32)}`,
+    source_adapter_deployment_hash: `0x${"88".repeat(32)}`,
+    source_adapter_deployment_receipt_hash: `0x${"99".repeat(32)}`,
+  });
+  const result = wrapTonSccpProofResult([1, 2, 3], request);
+  const submission = buildTonSccpSubmission({
+    proofResult: result,
+    bundleBytes: new Uint8Array([5, 6, 7]),
+  });
+
+  assert.equal(request.targetDomain, SCCP_DOMAIN_TON);
+  assert.equal(result.requestHash, request.requestHash);
+  assert.equal(submission.envelopeEncoding, SCCP_TON_MESSAGE_BODY_BOC_V1);
+  assert.throws(
+    () =>
+      wrapTonSccpProofResult(
+        new Uint8Array(SCCP_NATIVE_RECURSIVE_MAX_PROOF_BYTES + 1).fill(1),
+        request,
+    ),
+    /at most/,
+  );
+  assert.throws(
+    () =>
+      buildTonSccpSubmission({
+        publicInputs,
+        proofBytes: new Uint8Array(SCCP_NATIVE_RECURSIVE_MAX_PROOF_BYTES + 1).fill(1),
+        bundleBytes: new Uint8Array([5, 6, 7]),
+        statementHash: `0x${"55".repeat(32)}`,
+        destinationBindingHash: `0x${"66".repeat(32)}`,
+      }),
+    /proofResult must be a wrapped TON SCCP proof result/,
+  );
+  assert.match(result.envelopeHash, /^0x[0-9a-f]{64}$/u);
+  assert.ok(
+    canonicalTonSccpSourceStateVerificationProofBytes({
+      circuitId: SCCP_TON_SHARD_STATE_OPEN_VERIFY_CIRCUIT_ID_V1,
+      proofBytes: new Uint8Array([1, 2, 3]),
+    }).length > 0,
+  );
+  assert.throws(
+    () =>
+      canonicalTonSccpSourceStateVerificationProofBytes({
+        circuitId: SCCP_SOLANA_ACCOUNTS_LT_HASH_OPEN_VERIFY_CIRCUIT_ID_V1,
+        proofBytes: new Uint8Array([1, 2, 3]),
+      }),
+    /TON source-state/,
+  );
+});
+
+test("package dist entrypoint exports SCCP source record helpers", () => {
+  const material = {
+    sourceDomain: SCCP_DOMAIN_ETH,
+    sourceTrustAnchorHash: `0x${"44".repeat(32)}`,
+    consensusVerifierHash: `0x${"55".repeat(32)}`,
+    messageInclusionVerifierHash: `0x${"66".repeat(32)}`,
+    finalityPolicyHash: `0x${"88".repeat(32)}`,
+    bridgeAddress: `0x${"11".repeat(20)}`,
+    sourceBridgeEmitterCodeHash: `0x${"77".repeat(32)}`,
+  };
+  assert.ok(canonicalSccpSourceVerifierMaterialBytes(material).length > 0);
+  assert.equal(
+    sccpSourceVerifierMaterialHash(material),
+    "0x035c5a35f6412d45ed10389741016d067bd6d0b874a38cd744922c599e0a2fdd",
+  );
+  assert.equal(SCCP_SOURCE_ADAPTER_OPEN_VERIFY_CIRCUIT_ID_V1, "sccp-source-adapter-v1");
+  assert.equal(SCCP_SOURCE_ADAPTER_FASTPQ_PARAMETER_SET_V1, "fastpq-lane-balanced");
+  const sourceAdapterVerifierVkHash = sccpSourceAdapterVerifierVkHash(SCCP_DOMAIN_ETH);
+  assert.match(sourceAdapterVerifierVkHash, /^0x[0-9a-f]{64}$/u);
+  assert.notEqual(sourceAdapterVerifierVkHash, sccpSourceAdapterVerifierVkHash(SCCP_DOMAIN_BSC));
+  assert.throws(
+    () =>
+      sccpSourceAdapterVerifierVkHash({
+        sourceDomain: SCCP_DOMAIN_ETH,
+        targetDomain: SCCP_DOMAIN_SOL,
+      }),
+    /targetDomain must be SORA/,
+  );
+  const deployment = {
+    ...material,
+    deploymentReceiptHash: `0x${"aa".repeat(32)}`,
+  };
+  assert.ok(canonicalSccpSourceAdapterEngineDeploymentBytes(deployment).length > 0);
+  assert.equal(
+    sccpSourceAdapterEngineDeploymentHash(deployment),
+    "0xd08e3344760aabfb4ba891990c852846d04a5735647174ce6e3ab0f2cad57f4d",
+  );
+  assert.equal(sccpDestinationBindingKey(SCCP_DOMAIN_SOL), "sccp:0:3:sol:solana-program-v1:2");
+  assert.equal(
+    sccpDestinationBindingHash(SCCP_DOMAIN_SOL),
+    "0x078578f0aa27daa2972d6c19d1d26dbb6bf6ba1e8df84e283d7ef101fc46abf6",
+  );
+  assert.equal(
+    sccpSolanaFullLightClientGateHash({
+      sourceDomain: SCCP_DOMAIN_SOL,
+      sourceTrustAnchorHash: `0x${"44".repeat(32)}`,
+      consensusVerifierHash: `0x${"55".repeat(32)}`,
+      messageInclusionVerifierHash: `0x${"66".repeat(32)}`,
+      finalityPolicyHash: `0x${"88".repeat(32)}`,
+      sourceStateVerifierHash: `0x${"77".repeat(32)}`,
+      deploymentReceiptHash: `0x${"aa".repeat(32)}`,
+      solanaTowerReplayVerifierHash: `0x${"bb".repeat(32)}`,
+      solanaFullAccountsdbLatticeVerifierHash: `0x${"cc".repeat(32)}`,
+      solanaBankForkChoiceVerifierHash: `0x${"dd".repeat(32)}`,
+    }),
+    "0x2c94b86a665bb68708b762c678661f5e9879bd588627e93a640796eeaef970f9",
+  );
+  assert.throws(
+    () =>
+      sccpSolanaFullLightClientGateHash({
+        sourceDomain: SCCP_DOMAIN_SOL,
+        sourceTrustAnchorHash: `0x${"44".repeat(32)}`,
+        consensusVerifierHash: `0x${"55".repeat(32)}`,
+        messageInclusionVerifierHash: `0x${"66".repeat(32)}`,
+        finalityPolicyHash: `0x${"88".repeat(32)}`,
+        sourceStateVerifierHash: `0x${"77".repeat(32)}`,
+        deploymentReceiptHash: `0x${"aa".repeat(32)}`,
+        solanaTowerReplayVerifierHash: `0x${"bb".repeat(32)}`,
+        solanaFullAccountsdbLatticeVerifierHash: `0x${"bb".repeat(32)}`,
+        solanaBankForkChoiceVerifierHash: `0x${"dd".repeat(32)}`,
+      }),
+    /role-separated/,
+  );
+  assert.equal(
+    sccpTonFullLightClientGateHash({
+      sourceDomain: SCCP_DOMAIN_TON,
+      sourceTrustAnchorHash: `0x${"44".repeat(32)}`,
+      consensusVerifierHash: `0x${"55".repeat(32)}`,
+      messageInclusionVerifierHash: `0x${"66".repeat(32)}`,
+      finalityPolicyHash: `0x${"88".repeat(32)}`,
+      sourceStateVerifierHash: `0x${"77".repeat(32)}`,
+      deploymentReceiptHash: `0x${"aa".repeat(32)}`,
+      tonMasterchainConfigVerifierHash: `0x${"bb".repeat(32)}`,
+      tonValidatorSetTransitionVerifierHash: `0x${"cc".repeat(32)}`,
+      tonShardAccountsDictionaryVerifierHash: `0x${"dd".repeat(32)}`,
+    }),
+    "0xc32d8cfc2e273646abb00911b9a15e7ee0ab1721b04a6e89a060422dd3cc4596",
+  );
+});
+
+test("package dist entrypoint exports BSC validator-set payload helpers", () => {
+  const payload = canonicalBscValidatorSetPayloadBytes({
+    validatorAddresses: [`0x${"11".repeat(20)}`, `0x${"22".repeat(20)}`],
+    validatorPowers: [1n, 2n],
+  });
+  const metadataProof = {
+    version: 1,
+    stateRoot: `0x${"aa".repeat(32)}`,
+    nextValidatorSetPayloadHash: bscValidatorSetPayloadHash(payload),
+    validatorContractAddress: `0x${"00".repeat(18)}1000`,
+    accountProofNodes: [`0xf842a0${"11".repeat(32)}`],
+    storageRoot: `0x${"bb".repeat(32)}`,
+    validatorSetLengthSlot: `0x${"00".repeat(31)}01`,
+    validatorSetLengthValue: "0x02",
+    validatorSetLengthValueHash: bscValidatorSetStorageValueHash("0x02"),
+    validatorSetLengthProofNodes: [`0xe4822080a0${"22".repeat(32)}`],
+    validatorStorageProofs: [
+      {
+        version: 1,
+        validatorIndex: 0,
+        storageSlot: `0x${"33".repeat(32)}`,
+        storageValue: `0x94${"11".repeat(20)}`,
+        storageValueHash: bscValidatorSetStorageValueHash(`0x94${"11".repeat(20)}`),
+        storageProofNodes: [`0xe4822080a0${"44".repeat(32)}`],
+      },
+      {
+        version: 1,
+        validatorIndex: 1,
+        storageSlot: `0x${"55".repeat(32)}`,
+        storageValue: `0x94${"22".repeat(20)}`,
+        storageValueHash: bscValidatorSetStorageValueHash(`0x94${"22".repeat(20)}`),
+        storageProofNodes: [`0xe4822080a0${"66".repeat(32)}`],
+      },
+    ],
+  };
+
+  assert.equal(
+    Buffer.from(payload).toString("hex"),
+    `0102000000${"11".repeat(20)}0100000000000000${"22".repeat(20)}0200000000000000`,
+  );
+  assert.equal(
+    bscValidatorSetPayloadHash(payload),
+    "0xdc6190956bc147c9a0a2fbf1384d40a1deb4b211a709f229275d1ea5ac3f8370",
+  );
+  assert.equal(
+    bscValidatorSetHashFromPayload(payload),
+    "0x3ef5ecfb6dc4f5fc9e970cc18cd72164495c827e96f77851813973a286f5c762",
+  );
+  const commitValidatorPublicKeys = [
+    "0x0279be667ef9dcbbac55a06295ce870b07029bfcdb2dce28d959f2815b16f81798",
+    "0x02c6047f9441ed7d6d3045406e95c07cd85c778e4b8cef3ca7abac09b95c709ee5",
+    "0x02f9308a019258c31049344f85f89d5229b531c845836f99b08601f113bce036f9",
+    "0x02e493dbf1c10d80f3581e4904930b1404cc6c13900ee0758474fa94abe8c4cd13",
+  ];
+  const commitMessage = {
+    validatorEpoch: 2n,
+    blockNumber: 401n,
+    blockHash: `0x${"22".repeat(32)}`,
+    receiptsRoot: `0x${"33".repeat(32)}`,
+    validatorSetHash: "0xc5152802f6ca9ec72a4249646aca7476496f00b71ab5b1482c881a31fb42dd8c",
+  };
+  assert.equal(canonicalBscCommitMessageBytes(commitMessage).length, 117);
+  assert.equal(
+    bscCommitMessageHash(commitMessage),
+    "0x5832165d1a87ed49a323f2ecaecbef973489aed1a42e7eab369244e7abec43c7",
+  );
+  const commitSeal = {
+    totalPower: 4n,
+    signedPower: 3n,
+    commitMessageHash: bscCommitMessageHash(commitMessage),
+    validatorPublicKeys: commitValidatorPublicKeys,
+    validatorPowers: [1n, 1n, 1n, 1n],
+    signersBitmap: "0x07",
+    signatures: [
+      "0x1b8802069b82c3d4cb6d7bec82323853f36d965c1e71647560084e7c7a0de9c17c85fcc3c6222f905cbbc4ba5b5f3f005f07d144304184181be67b3d02d1ba9f00",
+      "0x921d39c29fb793c496f96cf647128232d228024ed2f3e68cc6a52aa4cf64facf6bbd9dfcf7d703165f7880e7e1310f34d1b0fb8ca6dd8f506bf289ba012387f001",
+      "0xcfa11aa1ec214278afdb4ef7f3c40af97a2784e0336afb5ebef345c0d2eaa9ef629ad2d25cf9709eb9b842fb2fb3f749ce365af97af6e7064771614312d3619600",
+    ],
+    validatorSetHash: commitMessage.validatorSetHash,
+  };
+  assert.equal(canonicalBscCommitSealBytes(commitSeal).length, 297);
+  assert.equal(
+    bscCommitSealHash(commitSeal),
+    "0xcd9d87b24d8c1cf7615cb4267cde5a3fc24bbb770807134ee75d4ddaba992172",
+  );
+  assert.equal(typeof bscValidatorSetPayloadFromParliaExtra, "function");
+  assert.equal(typeof bscValidatorSetPayloadFromHeaderRlp, "function");
+  assert.equal(canonicalBscValidatorSetMetadataProofBytes(metadataProof).length, 560);
+  assert.match(bscValidatorSetMetadataProofHash(metadataProof), /^0x[0-9a-f]{64}$/);
+  assert.equal(
+    canonicalBscValidatorSetTransitionMessageBytes({
+      sourceDomain: SCCP_DOMAIN_BSC,
+      fromValidatorEpoch: 1n,
+      toValidatorEpoch: 2n,
+      transitionBlockNumber: 400n,
+      transitionBlockHash: `0x${"77".repeat(32)}`,
+      parentValidatorSetHash: `0x${"88".repeat(32)}`,
+      nextValidatorSetHash: bscValidatorSetHashFromPayload(payload),
+      nextValidatorSetPayloadHash: bscValidatorSetPayloadHash(payload),
+      validatorSetMetadataProofHash: bscValidatorSetMetadataProofHash(metadataProof),
+    }).length,
+    189,
+  );
+  assert.match(
+    bscValidatorSetTransitionMessageHash({
+      sourceDomain: SCCP_DOMAIN_BSC,
+      fromValidatorEpoch: 1n,
+      toValidatorEpoch: 2n,
+      transitionBlockNumber: 400n,
+      transitionBlockHash: `0x${"77".repeat(32)}`,
+      parentValidatorSetHash: `0x${"88".repeat(32)}`,
+      nextValidatorSetHash: bscValidatorSetHashFromPayload(payload),
+      nextValidatorSetPayloadHash: bscValidatorSetPayloadHash(payload),
+      validatorSetMetadataProofHash: bscValidatorSetMetadataProofHash(metadataProof),
+    }),
+    /^0x[0-9a-f]{64}$/,
+  );
+});
+
+test("package dist entrypoint exports ETH sync-committee payload helpers", () => {
+  const payload = canonicalEthSyncCommitteePayloadBytes({
+    syncCommitteePublicKeys: [`0x${"33".repeat(48)}`, `0x${"44".repeat(48)}`],
+    syncCommitteeWeights: [3n, 4n],
+    syncCommitteePops: [`0x${"cc".repeat(96)}`, `0x${"dd".repeat(96)}`],
+  });
+
+  assert.equal(
+    ethSyncCommitteeHashFromPayload(payload),
+    "0xb3343685e8ab63a2d66bccebb6c03a149a53330389473b4a495598065c17b445",
+  );
+  assert.equal(
+    ethSyncCommitteePayloadHash(payload),
+    "0xfdba6ad2ff9acca564b1042eec01c2d6356d5e2ade5e653c9d47360e55d53e17",
+  );
+});
+
+test("package dist entrypoint exports ETH beacon execution-payload SSZ helpers", () => {
+  const headerRlp = sampleEthExecutionHeaderRlp();
+  const executionPayloadRoot = ethExecutionPayloadHeaderRootFromRlp(headerRlp);
+  const beaconBodyRoot = ethBeaconBodyRootFromExecutionPayloadBranch(executionPayloadRoot, [
+    `0x${"ee".repeat(32)}`,
+    `0x${"ff".repeat(32)}`,
+    `0x${"11".repeat(32)}`,
+    `0x${"22".repeat(32)}`,
+  ]);
+
+  assert.equal(
+    executionPayloadRoot,
+    "0xc029dda492d2e41ad72bd83f1727a67e5331f413ec29d5c31de955d0bea24624",
+  );
+  assert.equal(
+    beaconBodyRoot,
+    "0x431e6bef5e759e8fdf32d8e8ed1ff761933ddb4de24ec9ae8e2aa0d25fe861ba",
+  );
+  assert.equal(
+    ethBeaconBlockHeaderRoot({
+      beaconSlot: 320n,
+      beaconProposerIndex: 17n,
+      beaconParentRoot: `0x${"aa".repeat(32)}`,
+      beaconStateRoot: `0x${"bb".repeat(32)}`,
+      beaconBodyRoot,
+    }),
+    "0xd54b406debae26e6ebaef512cc4f9e6bc12cf02af0d4476895383b37f682a179",
+  );
+});
+
+test("package dist entrypoint exports TON validator-set transition helpers", () => {
+  const validatorSet = {
+    validatorPublicKeys: [`0x${"11".repeat(32)}`, `0x${"22".repeat(32)}`],
+    validatorWeights: [1n, 2n],
+  };
+  const nextValidatorSetPayload = canonicalTonValidatorSetPayloadBytes({
+    validatorPublicKeys: [`0x${"33".repeat(32)}`, `0x${"44".repeat(32)}`],
+    validatorWeights: [3n, 4n],
+  });
+  const parentValidatorSetHash = tonValidatorSetHash(validatorSet);
+  const message = {
+    sourceDomain: 4,
+    fromValidatorSetSeqno: 7n,
+    toValidatorSetSeqno: 8n,
+    masterchainSeqno: 19n,
+    masterchainWorkchainId: -1,
+    masterchainShard: 0x8000000000000000n,
+    masterchainBlockHash: `0x${"aa".repeat(32)}`,
+    masterchainFileHash: `0x${"a5".repeat(32)}`,
+    parentValidatorSetHash,
+    nextValidatorSetHash: tonValidatorSetHashFromPayload(nextValidatorSetPayload),
+    nextValidatorSetPayload,
+    nextValidatorSetPayloadHash: tonValidatorSetPayloadHash(nextValidatorSetPayload),
+    nextValidatorSetConfigHash: `0x${"cc".repeat(32)}`,
+  };
+
+  assert.equal(
+    parentValidatorSetHash,
+    "0x68bfccd52bc19cf8cdaffc611d58e53824d0aee395a4d813eca0bcefb3970938",
+  );
+  assert.equal(
+    Buffer.from(nextValidatorSetPayload).toString("hex"),
+    `0102000000${"33".repeat(32)}0300000000000000${"44".repeat(32)}0400000000000000`,
+  );
+  assert.equal(canonicalTonValidatorSetTransitionMessageBytes(message).length, 233);
+  assert.equal(
+    tonValidatorSetTransitionMessageHash(message),
+    "0x91eda926884eb1ae700e7b398c46f6d47fbb973efa322564894936140ccd2a19",
+  );
+});
+
+test("package dist entrypoint exports TON masterchain config proof helpers", () => {
+  const validatorSetPayload = canonicalTonValidatorSetPayloadBytes({
+    validatorPublicKeys: [`0x${"11".repeat(32)}`, `0x${"22".repeat(32)}`],
+    validatorWeights: [1n, 2n],
+  });
+  const validatorSetPayloadHash = tonValidatorSetPayloadHash(validatorSetPayload);
+  const configDictionaryProofBoc = Buffer.from(
+    "b5ee9c72010106010091000101c00101117fffffff80000008a002012b120000000100000002000200020000000000000003c00302087fff00000405005b14e3a049e28444444444444444444444444444444444444444444444444444444444444444400000000000000060005b14e3a049e288888888888888888888888888888888888888888888888888888888888888888000000000000000a0",
+    "hex",
+  );
+  const leaf = {
+    sourceDomain: 4,
+    masterchainSeqno: 19n,
+    masterchainWorkchainId: -1,
+    masterchainShard: 0x8000000000000000n,
+    masterchainBlockHash: `0x${"aa".repeat(32)}`,
+    masterchainFileHash: `0x${"a5".repeat(32)}`,
+    shardStateRoot: `0x${"cc".repeat(32)}`,
+    validatorSetHash: tonValidatorSetHashFromPayload(validatorSetPayload),
+    validatorSetPayloadHash,
+  };
+  const configLeafHash = tonMasterchainConfigLeafHash(leaf);
+  const proof = {
+    ...leaf,
+    configRoot: "0x5bf87008e0e76085d6db977b53a89329de49a4eed8fd1ff90d8c78f096ef05af",
+    configLeafHash,
+    configLeafIndex: SCCP_TON_CURRENT_VALIDATOR_SET_CONFIG_PARAM,
+    configValueHash: "0x1aa64eb5ca0b3cb254dfada709904ce81f8b327eed0d83f2522122a0a9dddd50",
+    configDictionaryProofBoc,
+    configInclusionBranch: [],
+  };
+
+  assert.equal(canonicalTonMasterchainConfigLeafBytes(leaf).length, 141);
+  assert.equal(tonHashmapEProofRootHash(configDictionaryProofBoc), proof.configRoot);
+  assert.deepEqual(
+    tonConfigValidatorSetPayloadFromProofBoc(configDictionaryProofBoc),
+    validatorSetPayload,
+  );
+  assert.equal(
+    tonConfigValidatorSetPayloadHashFromProofBoc(configDictionaryProofBoc),
+    validatorSetPayloadHash,
+  );
+  assert.equal(
+    configLeafHash,
+    "0xed92ba8082850092da7cc296a2184cc4576877aaee08c72748d96ea449b16e39",
+  );
+  assert.equal(canonicalTonMasterchainConfigProofBytes(proof).length, 411);
+  assert.equal(
+    tonMasterchainConfigProofHash(proof),
+    "0x9949285613a9e9dfb4ed3728bbede7ddea36fd82ac3d7eff3955dd75e9c4941c",
+  );
+});
+
+test("package dist entrypoint exports TON masterchain signature helpers", () => {
+  const validatorSet = {
+    validatorPublicKeys: [`0x${"11".repeat(32)}`, `0x${"22".repeat(32)}`],
+    validatorWeights: [1n, 2n],
+  };
+  const blockMessage = {
+    sourceDomain: 4,
+    masterchainSeqno: 19n,
+    masterchainWorkchainId: -1,
+    masterchainShard: 0x8000000000000000n,
+    masterchainBlockHash: `0x${"aa".repeat(32)}`,
+    masterchainFileHash: `0x${"a5".repeat(32)}`,
+    validatorSetHash: tonValidatorSetHash(validatorSet),
+    masterchainConfigRoot: "0x5bf87008e0e76085d6db977b53a89329de49a4eed8fd1ff90d8c78f096ef05af",
+    masterchainConfigProofHash: "0x9949285613a9e9dfb4ed3728bbede7ddea36fd82ac3d7eff3955dd75e9c4941c",
+    shardWorkchainId: 0,
+    shardShard: 0x8000000000000000n,
+    shardSeqno: 7n,
+    shardBlockHash: `0x${"bb".repeat(32)}`,
+    shardFileHash: `0x${"bc".repeat(32)}`,
+    shardStateRoot: `0x${"cc".repeat(32)}`,
+    transactionRoot: `0x${"dd".repeat(32)}`,
+    shardProofHash: `0x${"ee".repeat(32)}`,
+  };
+  const blockMessageHash = tonMasterchainBlockMessageHash(blockMessage);
+  const signatures = {
+    version: 1,
+    totalWeight: 3n,
+    signedWeight: 3n,
+    blockMessageHash,
+    ...validatorSet,
+    validatorSetHash: blockMessage.validatorSetHash,
+    signersBitmap: [0x03],
+    signatures: [new Uint8Array(64).fill(0xab), new Uint8Array(64).fill(0xcd)],
+  };
+
+  assert.equal(canonicalTonMasterchainBlockMessageBytes(blockMessage).length, 365);
+  assert.equal(
+    blockMessageHash,
+    "0x0ca07d5072adb7db3d6a0f831294c7e119c451884aaa1afcbb23e0df0911d8bd",
+  );
+  assert.equal(canonicalTonMasterchainValidatorSignaturesBytes(signatures).length, 322);
+  assert.equal(
+    tonMasterchainValidatorSignaturesHash(signatures),
+    "0x7a927ad3e689e4f3679fe1d1b8ea1088b914523b0c2da0d6dc0938e5e5cf8d15",
+  );
+});
+
+test("package dist entrypoint exports Substrate authority-set payload helpers", () => {
+  const payload = canonicalSubstrateAuthoritySetPayloadBytes({
+    authorityPublicKeys: [`0x${"11".repeat(32)}`, `0x${"22".repeat(32)}`],
+    authorityWeights: [1n, 2n],
+  });
+
+  assert.equal(
+    Buffer.from(payload).toString("hex"),
+    `0102000000${"11".repeat(32)}0100000000000000${"22".repeat(32)}0200000000000000`,
+  );
+  assert.equal(
+    substrateAuthoritySetPayloadHash(payload),
+    "0xdedc4ebe5f91162a5029cb67f88cdbbf94c2bf2b9d0d373bd3e670321565cc16",
+  );
+  assert.equal(
+    substrateAuthoritySetHashFromPayload(payload),
+    "0xde84b8b7a5409c0f2cff1191173d6caa681d902b35e42669106ec6ea3193a117",
+  );
+
+  const nextPayload = canonicalSubstrateAuthoritySetPayloadBytes({
+    authorityPublicKeys: [`0x${"aa".repeat(32)}`, `0x${"bb".repeat(32)}`, `0x${"cc".repeat(32)}`],
+    authorityWeights: [13n, 17n, 19n],
+  });
+  const message = {
+    sourceDomain: 6,
+    fromGrandpaSetId: 41n,
+    toGrandpaSetId: 42n,
+    transitionBlockNumber: 9001n,
+    transitionBlockHash: `0x${"44".repeat(32)}`,
+    parentAuthoritySetHash: "0xb2efd5d86304ea728a8a9ed4013aab8f3e10c0cf862e859c9cade55e660934ef",
+    nextAuthoritySetHash: substrateAuthoritySetHashFromPayload(nextPayload),
+    nextAuthoritySetPayloadHash: substrateAuthoritySetPayloadHash(nextPayload),
+  };
+  assert.equal(canonicalSubstrateAuthoritySetTransitionMessageBytes(message).length, 157);
+  assert.equal(
+    substrateAuthoritySetTransitionMessageHash(message),
+    "0x60589333bf798bf592b2642d0fbac39b4e9305576cd2ebe9dd1f448a97a0596b",
+  );
+});
+
+test("package dist entrypoint exports Substrate runtime-storage proof request helpers", () => {
+  const input = {
+    sourceDomain: 6,
+    sourceEventDigest: `0x${"34".repeat(32)}`,
+    sourceEventLeafIndex: 0n,
+    finalizedBlockNumber: 31n,
+    grandpaSetId: 32n,
+    blockHash: `0x${"aa".repeat(32)}`,
+    authoritySetHash: `0x${"cc".repeat(32)}`,
+    eventsRoot: `0x${"bb".repeat(32)}`,
+    inclusionBranch: [`0x${"ee".repeat(32)}`],
+    sourceTrustAnchorHash: `0x${"aa".repeat(32)}`,
+    consensusVerifierHash: `0x${"bb".repeat(32)}`,
+    messageInclusionVerifierHash: `0x${"cc".repeat(32)}`,
+    finalityPolicyHash: `0x${"dd".repeat(32)}`,
+    sourceStateVerifierHash: `0x${"12".repeat(32)}`,
+  };
+
+  assert.equal(
+    Buffer.from(canonicalSubstrateSccpRuntimeStorageVerificationStatementBytes(input)).toString("hex"),
+    Buffer.from(canonicalSubstrateSccpStorageProofBytes(input)).toString("hex"),
+  );
+  const publicInputsHash = substrateSccpRuntimeStorageProofPublicInputsHash(input);
+  const request = buildSubstrateSccpRuntimeStorageProofRequest(input);
+  assert.equal(Object.isFrozen(request), true);
+  assert.equal(Object.isFrozen(request.publicInputColumns), true);
+  assert.equal(Object.isFrozen(request.fastpqPublicInputs), true);
+  assert.equal(Object.isFrozen(request.fastpqTransitions), true);
+  assert.equal(request.runtimeStorageProofPublicInputsHash, publicInputsHash);
+  assert.equal(request.fastpqPublicInputs.slot, "31");
+  assert.equal(request.fastpqTransitions[0].key, "sccp:substrate:runtime-storage:v1:context");
+});
+
+test("package dist entrypoint exports TRON witness-schedule payload helpers", () => {
+  const payload = canonicalTronWitnessSchedulePayloadBytes({
+    witnessAddresses: [`0x41${"11".repeat(20)}`, `0x41${"22".repeat(20)}`],
+    witnessWeights: [1n, 2n],
+  });
+
+  assert.equal(
+    Buffer.from(payload).toString("hex"),
+    `010200000041${"11".repeat(20)}010000000000000041${"22".repeat(20)}0200000000000000`,
+  );
+  assert.equal(
+    tronWitnessSchedulePayloadHash(payload),
+    "0xd6087d6ea6a1b58b17523587f28e457d84d5d2214298f93a09dbb509ea2cf429",
+  );
+  assert.equal(
+    tronWitnessScheduleHashFromPayload(payload),
+    "0x0c5eca6f96572fe939e640d8951abd126d2e966ffc4e3d0d087dbff6052577be",
+  );
+  const solidMessage = {
+    sourceDomain: SCCP_DOMAIN_TRON,
+    solidBlockNumber: 12345n,
+    blockHash: "0x0000000000003039b6bc08fb34f737c093d9dd2adefccb04344715e2619c8286",
+    witnessScheduleHash: "0x0c5eca6f96572fe939e640d8951abd126d2e966ffc4e3d0d087dbff6052577be",
+    receiptRoot: `0x${"bb".repeat(32)}`,
+    transactionRoot: `0x${"dd".repeat(32)}`,
+    receiptProofHash: `0x${"cc".repeat(32)}`,
+  };
+  assert.equal(canonicalTronSolidBlockMessageBytes(solidMessage).length, 173);
+  assert.equal(
+    tronSolidBlockMessageHash(solidMessage),
+    "0x065173d89272a549b504258936729c5226dfdb866ccb9422757d95ec9fa6d688",
+  );
+  const sourceEventHash =
+    "0xbe9223cdfd6728fd2512f270a44f928fbd58df98f8e9e5fe13c4dc73503192e4";
+  const ownerAddress = "0x417e5f4552091a69125d5dfcb7b8c2659029395bdf";
+  const ownerSignature =
+    "0x79be667ef9dcbbac55a06295ce870b07029bfcdb2dce28d959f2815b16f81798" +
+    "38508a4cf743e4a97ab3550672d69d980545ff8d776f6e9bade4ff4196f3693b00";
+  const witnessSeal = {
+    totalWeight: 1n,
+    signedWeight: 1n,
+    solidBlockMessageHash: sourceEventHash,
+    witnessAddresses: [ownerAddress],
+    witnessWeights: [1n],
+    signersBitmap: "0x01",
+    signatures: [ownerSignature],
+  };
+  assert.equal(canonicalTronWitnessSealBytes(witnessSeal).length, 200);
+  assert.equal(
+    tronWitnessSealHash(witnessSeal),
+    "0x4266cf4de71c96e4fde925b686abbd50e67026f63ad90e0cf4899d4925d45849",
+  );
+  const parentScheduleHash =
+    "0x87174bbfde1c4b8473a6be18df37b60979c7609ebf1788ce8cf97604311474b6";
+  const transitionMessage = {
+    sourceDomain: SCCP_DOMAIN_TRON,
+    fromWitnessScheduleEpoch: 7n,
+    toWitnessScheduleEpoch: 8n,
+    transitionBlockNumber: 12345n,
+    transitionBlockHash: solidMessage.blockHash,
+    parentWitnessScheduleHash: parentScheduleHash,
+    nextWitnessScheduleHash: solidMessage.witnessScheduleHash,
+    nextWitnessSchedulePayload: payload,
+  };
+  assert.equal(canonicalTronWitnessScheduleTransitionMessageBytes(transitionMessage).length, 157);
+  assert.equal(
+    tronWitnessScheduleTransitionMessageHash(transitionMessage),
+    "0x6e53d3f7d1253223a70a163a02544a8df27b74171cb0c76c8f42d71419fabd43",
+  );
+  const transitionSeal = {
+    ...transitionMessage,
+    nextWitnessSchedulePayloadHash:
+      "0xd6087d6ea6a1b58b17523587f28e457d84d5d2214298f93a09dbb509ea2cf429",
+    transitionMessageHash:
+      "0x6e53d3f7d1253223a70a163a02544a8df27b74171cb0c76c8f42d71419fabd43",
+    sealProof: {
+      totalWeight: 1n,
+      signedWeight: 1n,
+      solidBlockMessageHash:
+        "0x6e53d3f7d1253223a70a163a02544a8df27b74171cb0c76c8f42d71419fabd43",
+      witnessAddresses: [ownerAddress],
+      witnessWeights: [1n],
+      signersBitmap: "0x01",
+      signatures: [
+        "0xc6047f9441ed7d6d3045406e95c07cd85c778e4b8cef3ca7abac09b95c709ee5" +
+          "65d3d639f676a837945854abb3f59c4b93355bb55a789e31a25aee261500932d01",
+      ],
+    },
+  };
+  assert.equal(canonicalTronWitnessScheduleTransitionSealBytes(transitionSeal).length, 456);
+  assert.equal(
+    tronWitnessScheduleTransitionSealHash(transitionSeal),
+    "0xbb3b7ef87bd3efb77d9b7f0a4dba8e7398827621d59039c694c285a7e2deacce",
+  );
+});
+
+test("package dist entrypoint exports TRON receipt-state transcript helpers", () => {
+  const input = {
+    sourceEventDigest: `0x${"34".repeat(32)}`,
+    receiptRoot: `0x${"bb".repeat(32)}`,
+    transactionRoot: "0x21789ae4e9fb0f13a9d7ef876ccbc90ee2fe1d1eddeec5c35e33e0a09c768079",
+    receiptRootIndex: 0n,
+    receiptTrieProofNodes: [`0xe4822080a0${"bb".repeat(32)}`],
+    inclusionBranch: [`0x${"ee".repeat(32)}`],
+  };
+
+  assert.equal(
+    Buffer.from(canonicalEvmReceiptRootMptValue(input.receiptRoot)).toString("hex"),
+    `f8409e736363703a65766d3a726563656970742d726f6f742d76616c75653a7631a0${"bb".repeat(32)}`,
+  );
+  assert.equal(
+    Buffer.from(canonicalTronReceiptRootMptValue(input.receiptRoot)).toString("hex"),
+    `f8419f736363703a74726f6e3a726563656970742d726f6f742d76616c75653a7631a0${"bb".repeat(32)}`,
+  );
+  assert.equal(canonicalTronSccpReceiptStateProofBytes(input).length, 186);
+  assert.equal(
+    tronSccpReceiptStateProofHash(input),
+    "0x847c5ee3e6f4f83fef4d754a9aed93fae38c6677011cae03b10228c17c60b13b",
+  );
+});
+
+test("package dist entrypoint exports TRON solid-block header transcript helpers", () => {
+  const parentRawHeader = canonicalTronRawBlockHeaderBytes({
+    number: 12344n,
+    txTrieRoot: `0x${"cc".repeat(32)}`,
+    accountStateRoot: `0x${"aa".repeat(32)}`,
+    parentBlockId: `0x${"bb".repeat(32)}`,
+    witnessAddress: `0x41${"11".repeat(20)}`,
+    headerVersion: 1,
+    timestampMs: 1700000012344n,
+  });
+  const parentRawHeaderHash =
+    "0x5647d462e78851c6701e5a1cd89912e6118f8aa18222c8b90867fedcca84c4d4";
+  const parentBlockId =
+    "0x0000000000003038701e5a1cd89912e6118f8aa18222c8b90867fedcca84c4d4";
+  const rawHeader = canonicalTronRawBlockHeaderBytes({
+    number: 12345n,
+    txTrieRoot: `0x${"dd".repeat(32)}`,
+    accountStateRoot: `0x${"ee".repeat(32)}`,
+    parentBlockId,
+    witnessAddress: `0x41${"11".repeat(20)}`,
+    headerVersion: 1,
+    timestampMs: 1700000012345n,
+  });
+  const rawHeaderHash =
+    "0x614a09275b6d0fffb6bc08fb34f737c093d9dd2adefccb04344715e2619c8286";
+  const blockId =
+    "0x0000000000003039b6bc08fb34f737c093d9dd2adefccb04344715e2619c8286";
+
+  assert.equal(tronRawBlockHeaderHash(parentRawHeader), parentRawHeaderHash);
+  assert.equal(tronRawBlockHeaderHash(rawHeader), rawHeaderHash);
+  assert.equal(tronBlockIdFromRawDataHash(12344n, parentRawHeaderHash), parentBlockId);
+  assert.equal(tronBlockIdFromRawDataHash(12345n, rawHeaderHash), blockId);
+  const tronHeaderSignature = (recoveryId) => {
+    const signature = new Uint8Array(65).fill(0xaa);
+    signature.fill(0x01, 32, 64);
+    signature[64] = recoveryId;
+    return signature;
+  };
+  const proof = {
+    rawData: rawHeader,
+    witnessSignature: tronHeaderSignature(0),
+    parentRawData: parentRawHeader,
+    parentWitnessSignature: tronHeaderSignature(27),
+    rawDataHash: rawHeaderHash,
+    parentRawDataHash: parentRawHeaderHash,
+    blockId,
+    txTrieRoot: `0x${"dd".repeat(32)}`,
+    accountStateRoot: `0x${"ee".repeat(32)}`,
+    parentBlockId,
+    witnessAddress: `0x41${"11".repeat(20)}`,
+    timestampMs: 1700000012345n,
+    headerVersion: 1,
+  };
+
+  assert.equal(canonicalTronSolidBlockHeaderProofBytes(proof).length, 650);
+  assert.equal(
+    tronSolidBlockHeaderProofHash(proof),
+    "0x25416bda5734ecef1ab9920d15f1011e962f6ff90e9c6247ff6b2ce34a5ab49f",
+  );
+  assert.throws(
+    () =>
+      canonicalTronSolidBlockHeaderProofBytes({
+        ...proof,
+        witnessSignature: new Uint8Array(65).fill(0xaa),
+      }),
+    /TRON header signatures must be canonical low-S/,
+  );
 });

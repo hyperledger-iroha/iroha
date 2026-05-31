@@ -203,4 +203,50 @@ Safety ==
   /\ EmptyDeliverHasNoReadyEntries
   /\ BundledDeliverBindsReadyEntries
 
+AllConcretePreimagesMatchSpec ==
+  \A c \in Cases:
+    ActualFields(c) = SpecFields(c)
+
+AllConcretePreimagesBindDomain ==
+  \A c \in Cases:
+    DomainFields \subseteq ActualFields(c)
+
+ConcreteReadyTypeAnchors ==
+  /\ ReadyTypeField \subseteq ActualFields("ready_preimage")
+  /\ ActualFields("ready_preimage") \cap DeliverTypeField = {}
+
+ConcreteDeliverTypeAnchors ==
+  \A c \in DeliverCases:
+    /\ DeliverTypeField \subseteq ActualFields(c)
+    /\ ActualFields(c) \cap ReadyTypeField = {}
+
+AllConcretePreimagesBindSubject ==
+  \A c \in Cases:
+    SubjectFields \subseteq ActualFields(c)
+
+AllConcretePreimagesExcludeSelfSignatures ==
+  \A c \in Cases:
+    ActualFields(c) \cap SelfSignatureFields = {}
+
+DeliverReadyCountAnchors ==
+  \A c \in DeliverCases:
+    "ready_count" \in ActualFields(c)
+
+EmptyDeliverEntryAnchors ==
+  ActualFields("deliver_empty") \cap (ReadyBundleFields \ {"ready_count"}) = {}
+
+BundledDeliverEntryAnchors ==
+  ReadyBundleFields \subseteq ActualFields("deliver_bundle")
+
+RbcPreimageSafetyAnchors ==
+  /\ AllConcretePreimagesMatchSpec
+  /\ AllConcretePreimagesBindDomain
+  /\ ConcreteReadyTypeAnchors
+  /\ ConcreteDeliverTypeAnchors
+  /\ AllConcretePreimagesBindSubject
+  /\ AllConcretePreimagesExcludeSelfSignatures
+  /\ DeliverReadyCountAnchors
+  /\ EmptyDeliverEntryAnchors
+  /\ BundledDeliverEntryAnchors
+
 ====

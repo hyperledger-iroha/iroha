@@ -5739,8 +5739,10 @@ impl Kura {
                 );
                 None
             } else if let Ok(height_usize) = usize::try_from(height)
-                && let Some(expected) =
-                    NonZeroUsize::new(height_usize).and_then(|height| self.get_block_hash(height))
+                && let Some(expected) = NonZeroUsize::new(height_usize).and_then(|height| {
+                    self.get_block_hash(height)
+                        .or_else(|| self.get_durable_block_hash(height))
+                })
                 && expected != sidecar.block_hash
             {
                 iroha_logger::warn!(
@@ -5785,8 +5787,10 @@ impl Kura {
                 return None;
             }
             if let Ok(height_usize) = usize::try_from(height)
-                && let Some(expected) =
-                    NonZeroUsize::new(height_usize).and_then(|height| self.get_block_hash(height))
+                && let Some(expected) = NonZeroUsize::new(height_usize).and_then(|height| {
+                    self.get_block_hash(height)
+                        .or_else(|| self.get_durable_block_hash(height))
+                })
                 && expected != sidecar.block_hash
             {
                 iroha_logger::warn!(

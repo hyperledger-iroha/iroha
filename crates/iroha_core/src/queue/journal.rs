@@ -86,6 +86,42 @@ pub struct QueuePlanJournal {
     tombstones: u64,
 }
 
+/// Deferred durability work requested by a journal append.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub struct QueuePlanJournalFlush {
+    sync_data: bool,
+    compact: bool,
+}
+
+impl QueuePlanJournalFlush {
+    /// Merge two deferred flush requests.
+    #[must_use]
+    pub fn combine(self, other: Self) -> Self {
+        Self {
+            sync_data: self.sync_data || other.sync_data,
+            compact: self.compact || other.compact,
+        }
+    }
+
+    /// Returns whether there is any deferred work.
+    #[must_use]
+    pub fn is_needed(self) -> bool {
+        self.sync_data || self.compact
+    }
+
+    /// Returns whether the journal data file should be synced.
+    #[must_use]
+    pub fn sync_data(self) -> bool {
+        self.sync_data
+    }
+
+    /// Returns whether journal compaction should be considered.
+    #[must_use]
+    pub fn compact(self) -> bool {
+        self.compact
+    }
+}
+
 impl QueuePlanJournal {
     /// Open or create a queue plan journal at `path`.
     ///
@@ -115,21 +151,74 @@ impl QueuePlanJournal {
         })
     }
 
-    /// Append a put frame.
+    /// Append a put frame and return deferred durability work for the caller.
     ///
     /// # Errors
     /// Returns I/O or Norito encoding errors mapped to I/O.
-    pub fn put(&mut self, record: QueuePlanJournalRecordV1) -> io::Result<()> {
-        self.append_frame(&QueuePlanJournalFrameV1::Put(record))
+    pub fn put_deferred_flush(
+        &mut self,
+        record: QueuePlanJournalRecordV1,
+    ) -> io::Result<QueuePlanJournalFlush> {
+        write_frame(&mut self.file, &QueuePlanJournalFrameV1::Put(record))?;
+        Ok(QueuePlanJournalFlush {
+            sync_data: self.durable_writes,
+            compact: false,
+        })
     }
 
-    /// Append a remove frame.
+    /// Append multiple remove frames and return deferred durability work for the caller.
     ///
     /// # Errors
     /// Returns I/O or Norito encoding errors mapped to I/O.
-    pub fn remove(&mut self, hash: SignedTxHash, plan_digest: Hash) -> io::Result<()> {
-        self.tombstones = self.tombstones.saturating_add(1);
-        self.append_frame(&QueuePlanJournalFrameV1::Remove { hash, plan_digest })
+    pub fn remove_many_deferred_flush<I>(
+        &mut self,
+        removals: I,
+    ) -> io::Result<QueuePlanJournalFlush>
+    where
+        I: IntoIterator<Item = (SignedTxHash, Hash)>,
+    {
+        let mut wrote_any = false;
+        for (hash, plan_digest) in removals {
+            self.tombstones = self.tombstones.saturating_add(1);
+            write_frame(
+                &mut self.file,
+                &QueuePlanJournalFrameV1::Remove { hash, plan_digest },
+            )?;
+            wrote_any = true;
+        }
+        if !wrote_any {
+            return Ok(QueuePlanJournalFlush::default());
+        }
+        Ok(QueuePlanJournalFlush {
+            sync_data: self.durable_writes,
+            compact: true,
+        })
+    }
+
+    /// Run deferred durability work produced by append methods.
+    ///
+    /// # Errors
+    /// Returns sync or compaction I/O errors.
+    #[cfg(test)]
+    pub fn flush_deferred(&mut self, flush: QueuePlanJournalFlush) -> io::Result<()> {
+        if !flush.is_needed() {
+            return Ok(());
+        }
+        if flush.sync_data {
+            self.file.sync_data()?;
+        }
+        if flush.compact {
+            self.compact_if_needed()?;
+        }
+        Ok(())
+    }
+
+    /// Clone the append file handle so callers can sync without holding the journal mutex.
+    ///
+    /// # Errors
+    /// Returns I/O errors from duplicating the file handle.
+    pub fn sync_file_clone(&self) -> io::Result<File> {
+        self.file.try_clone()
     }
 
     /// Replay live records from disk.
@@ -187,14 +276,6 @@ impl QueuePlanJournal {
             .open(&self.path)?;
         self.tombstones = 0;
         Ok(())
-    }
-
-    fn append_frame(&mut self, frame: &QueuePlanJournalFrameV1) -> io::Result<()> {
-        write_frame(&mut self.file, frame)?;
-        if self.durable_writes {
-            self.file.sync_data()?;
-        }
-        self.compact_if_needed()
     }
 }
 
@@ -332,14 +413,113 @@ mod tests {
         {
             let mut journal =
                 QueuePlanJournal::open(&path, 1024 * 1024, true).expect("open journal");
-            journal.put(first.clone()).expect("put first");
-            journal.put(second.clone()).expect("put second");
-            journal
-                .remove(first.signed_transaction_hash, first.plan_digest())
+            let first_flush = journal
+                .put_deferred_flush(first.clone())
+                .expect("put first");
+            let second_flush = journal
+                .put_deferred_flush(second.clone())
+                .expect("put second");
+            let remove_flush = journal
+                .remove_many_deferred_flush([(first.signed_transaction_hash, first.plan_digest())])
                 .expect("remove first");
+            journal
+                .flush_deferred(first_flush.combine(second_flush).combine(remove_flush))
+                .expect("flush journal");
         }
         let journal = QueuePlanJournal::open(&path, 1024 * 1024, true).expect("reopen journal");
         assert_eq!(journal.replay().expect("replay"), vec![second]);
+    }
+
+    #[test]
+    fn journal_deferred_flush_preserves_replay_order() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let path = dir.path().join("queue-plan-deferred.norito");
+        let first = record("deferred-first");
+        let second = record("deferred-second");
+        {
+            let mut journal =
+                QueuePlanJournal::open(&path, 1024 * 1024, true).expect("open journal");
+            let first_flush = journal
+                .put_deferred_flush(first.clone())
+                .expect("deferred first put");
+            assert!(first_flush.is_needed());
+            let second_flush = journal
+                .put_deferred_flush(second.clone())
+                .expect("deferred second put");
+            let remove_flush = journal
+                .remove_many_deferred_flush([(first.signed_transaction_hash, first.plan_digest())])
+                .expect("deferred remove");
+            journal
+                .flush_deferred(first_flush.combine(second_flush).combine(remove_flush))
+                .expect("flush deferred writes");
+        }
+
+        let journal = QueuePlanJournal::open(&path, 1024 * 1024, true).expect("reopen journal");
+        assert_eq!(journal.replay().expect("replay"), vec![second]);
+    }
+
+    #[test]
+    fn journal_sync_file_clone_can_flush_without_mutable_journal_borrow() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let path = dir.path().join("queue-plan-sync-clone.norito");
+        let record = record("sync-clone");
+        {
+            let mut journal =
+                QueuePlanJournal::open(&path, 1024 * 1024, true).expect("open journal");
+            let flush = journal
+                .put_deferred_flush(record.clone())
+                .expect("append record");
+            assert!(flush.sync_data());
+            assert!(!flush.compact());
+            let sync_file = journal.sync_file_clone().expect("clone sync handle");
+            sync_file.sync_data().expect("sync cloned handle");
+        }
+
+        let journal = QueuePlanJournal::open(&path, 1024 * 1024, true).expect("reopen journal");
+        assert_eq!(journal.replay().expect("replay"), vec![record]);
+    }
+
+    #[test]
+    fn journal_remove_many_replays_without_removed_records() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let path = dir.path().join("queue-plan.norito");
+        let first = record("first");
+        let second = record("second");
+        let third = record("third");
+        {
+            let mut journal =
+                QueuePlanJournal::open(&path, 1024 * 1024, true).expect("open journal");
+            let first_flush = journal
+                .put_deferred_flush(first.clone())
+                .expect("put first");
+            let second_flush = journal
+                .put_deferred_flush(second.clone())
+                .expect("put second");
+            let third_flush = journal
+                .put_deferred_flush(third.clone())
+                .expect("put third");
+            let remove_flush = journal
+                .remove_many_deferred_flush([
+                    (first.signed_transaction_hash, first.plan_digest()),
+                    (second.signed_transaction_hash, second.plan_digest()),
+                ])
+                .expect("remove first two records");
+            journal
+                .flush_deferred(
+                    first_flush
+                        .combine(second_flush)
+                        .combine(third_flush)
+                        .combine(remove_flush),
+                )
+                .expect("flush journal");
+        }
+
+        let journal = QueuePlanJournal::open(&path, 1024 * 1024, true).expect("reopen journal");
+        assert_eq!(journal.replay().expect("replay"), vec![third.clone()]);
+        assert_eq!(
+            read_frames(&path).expect("read compacted frames"),
+            vec![QueuePlanJournalFrameV1::Put(third)]
+        );
     }
 
     #[test]
@@ -384,7 +564,10 @@ mod tests {
             vec![first.clone()]
         );
 
-        journal.put(second.clone()).expect("append after repair");
+        let flush = journal
+            .put_deferred_flush(second.clone())
+            .expect("append after repair");
+        journal.flush_deferred(flush).expect("flush appended frame");
         let replayed = journal.replay().expect("replay appended");
         assert_eq!(replayed.len(), 2);
         assert!(replayed.contains(&first));
