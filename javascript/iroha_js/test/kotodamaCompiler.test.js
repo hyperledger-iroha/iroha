@@ -15,6 +15,10 @@ const CURRENT_ABI_V1_HASH_HEX = "73cefb1b419f97b9e2864cdc6545d3f80ae2328dc0fbe2f
 const CURRENT_ABI_V1_HASH_LITERAL =
   "hash:73CEFB1B419F97B9E2864CDC6545D3F80AE2328DC0FBE2FBD034CD51A837BA0D#4D00";
 const NORITO_HEADER_FLAG_COMPACT_LEN = 0x02;
+const CREATE_ELECTION_TYPE_NAME = "iroha_data_model::isi::zk::CreateElection";
+const SUBMIT_BALLOT_TYPE_NAME = "iroha_data_model::isi::zk::SubmitBallot";
+const FINALIZE_ELECTION_TYPE_NAME = "iroha_data_model::isi::zk::FinalizeElection";
+const UNSHIELD_TYPE_NAME = "iroha_data_model::isi::zk::Unshield";
 
 function irohaHashHex(bytes) {
   const digest = Buffer.from(blake2b256(bytes));
@@ -179,6 +183,16 @@ function littleEndianU64(value) {
   return bytes;
 }
 
+function littleEndianU128(value) {
+  let remaining = BigInt(value);
+  const bytes = Buffer.alloc(16);
+  for (let index = 0; index < bytes.length; index += 1) {
+    bytes[index] = Number(remaining & 0xffn);
+    remaining >>= 8n;
+  }
+  return bytes;
+}
+
 function compactLength(value) {
   const bytes = [];
   let remaining = value;
@@ -206,6 +220,44 @@ function encodeNoritoStringBare(value, flags = 0) {
   return Buffer.concat([encodeLength(bytes.length, flags), bytes]);
 }
 
+function encodeNoritoBytesBare(value) {
+  return Buffer.concat([littleEndianU64(value.length), Buffer.from(value)]);
+}
+
+function encodeNoritoU8Vec(value, flags = 0) {
+  return Buffer.concat([
+    littleEndianU64(value.length),
+    ...Array.from(value, (byte) => encodeStructField(Buffer.from([byte]), flags)),
+  ]);
+}
+
+function encodeNoritoVec(items, flags = 0) {
+  return Buffer.concat([
+    littleEndianU64(items.length),
+    ...items.map((item) => encodeStructField(item, flags)),
+  ]);
+}
+
+function encodeNoritoOption(value, flags = 0) {
+  return value === null
+    ? Buffer.from([0])
+    : Buffer.concat([Buffer.from([1]), encodeStructField(value, flags)]);
+}
+
+function encodeNoritoEnumVariantBare(tag, payload) {
+  if (payload === undefined) {
+    return littleEndianU32(tag);
+  }
+  return Buffer.concat([littleEndianU32(tag), littleEndianU64(payload.length), Buffer.from(payload)]);
+}
+
+function encodeNoritoEnumVariant(tag, payload, flags = 0) {
+  if (payload === undefined) {
+    return littleEndianU32(tag);
+  }
+  return Buffer.concat([littleEndianU32(tag), encodeLength(payload.length, flags), Buffer.from(payload)]);
+}
+
 function encodeNoritoTopLevel(payload, flags = 0) {
   const header = Buffer.alloc(40);
   header.write("NRT0", 0, "ascii");
@@ -215,8 +267,199 @@ function encodeNoritoTopLevel(payload, flags = 0) {
   return Buffer.concat([header, payload]);
 }
 
+function encodeNoritoTopLevelWithPadding(payload, flags = 0, align = 1) {
+  const framed = encodeNoritoTopLevel(payload, flags);
+  const padding = align <= 1 ? 0 : (align - (40 % align)) % align;
+  return padding === 0
+    ? framed
+    : Buffer.concat([framed.subarray(0, 40), Buffer.alloc(padding), framed.subarray(40)]);
+}
+
 function toHexLiteral(bytes) {
   return `0x${Buffer.from(bytes).toString("hex")}`;
+}
+
+function encodeNameBare(value) {
+  return encodeNoritoStringBare(value);
+}
+
+function encodeDomainIdBare(value) {
+  return encodeStructField(encodeNameBare(value));
+}
+
+function encodeRoleIdBare(value) {
+  return encodeStructField(encodeNameBare(value));
+}
+
+function encodeTriggerIdBare(value) {
+  return encodeStructField(encodeNameBare(value));
+}
+
+function encodeAssetDefinitionIdBare(bytes) {
+  return Buffer.from(bytes);
+}
+
+function encodeAccountIdBare(publicKey) {
+  return encodeNoritoEnumVariantBare(0, encodeNoritoStringBare(publicKey));
+}
+
+function encodeAccountIdCompact(publicKey) {
+  assert.match(publicKey, /^ed0120[0-9a-f]{64}$/i);
+  const compactPublicKey = Buffer.concat([
+    Buffer.from([0]),
+    Buffer.from(publicKey.slice(6), "hex"),
+  ]);
+  return encodeNoritoEnumVariant(0, encodeNoritoU8Vec(compactPublicKey, NORITO_HEADER_FLAG_COMPACT_LEN), NORITO_HEADER_FLAG_COMPACT_LEN);
+}
+
+function encodeEmptyMetadataBare() {
+  return littleEndianU64(0);
+}
+
+function encodeOptionNoneBare() {
+  return littleEndianU32(0);
+}
+
+function encodeEmptyVecBare() {
+  return littleEndianU64(0);
+}
+
+function encodeNewDomainBare(domain) {
+  return Buffer.concat([
+    encodeStructField(encodeDomainIdBare(domain)),
+    encodeStructField(encodeOptionNoneBare()),
+    encodeStructField(encodeEmptyMetadataBare()),
+  ]);
+}
+
+function encodeNewAccountBare(publicKey) {
+  return Buffer.concat([
+    encodeStructField(encodeAccountIdBare(publicKey)),
+    encodeStructField(encodeEmptyMetadataBare()),
+    encodeStructField(encodeOptionNoneBare()),
+    encodeStructField(encodeOptionNoneBare()),
+    encodeStructField(encodeEmptyVecBare()),
+  ]);
+}
+
+function encodeRoleBare(role) {
+  return Buffer.concat([
+    encodeStructField(encodeRoleIdBare(role)),
+    encodeStructField(encodeEmptyVecBare()),
+    encodeStructField(encodeEmptyMetadataBare()),
+  ]);
+}
+
+function encodeNewRoleBare(role, publicKey) {
+  return Buffer.concat([
+    encodeStructField(encodeRoleBare(role)),
+    encodeStructField(encodeAccountIdBare(publicKey)),
+  ]);
+}
+
+function encodeProofBoxBare(backend, proof, flags = 0) {
+  return Buffer.concat([
+    encodeStructField(encodeNoritoStringBare(backend, flags), flags),
+    encodeStructField(encodeNoritoBytesBare(proof), flags),
+  ]);
+}
+
+function encodeVerifyingKeyIdBare(backend, name, flags = 0) {
+  return Buffer.concat([
+    encodeStructField(encodeNoritoStringBare(backend, flags), flags),
+    encodeStructField(encodeNoritoStringBare(name, flags), flags),
+  ]);
+}
+
+function encodeProofAttachmentBare(backend = "halo2", proof = Buffer.from([1, 2, 3]), verifyingKey = "vk", flags = 0) {
+  return Buffer.concat([
+    encodeStructField(encodeNoritoStringBare(backend, flags), flags),
+    encodeStructField(encodeProofBoxBare(backend, proof, flags), flags),
+    encodeStructField(encodeVerifyingKeyIdBare(backend, verifyingKey, flags), flags),
+  ]);
+}
+
+function encodeInstructionLiteralWithOptions(wireId, payload, {
+  innerFlags = 0,
+  innerAlign = 1,
+  outerFlags = 0,
+} = {}) {
+  const framedPayload = encodeNoritoTopLevelWithPadding(payload, innerFlags, innerAlign);
+  const pair = Buffer.concat([
+    encodeStructField(encodeNoritoStringBare(wireId, outerFlags), outerFlags),
+    encodeStructField(encodeNoritoBytesBare(framedPayload), outerFlags),
+  ]);
+  return toHexLiteral(encodeNoritoTopLevel(pair, outerFlags));
+}
+
+function encodeInstructionLiteral(wireId, payload) {
+  return encodeInstructionLiteralWithOptions(wireId, payload);
+}
+
+function encodeRegisterInstructionLiteral(tag, object) {
+  return encodeInstructionLiteral("iroha.register", encodeNoritoEnumVariantBare(tag, encodeStructField(object)));
+}
+
+function encodeUnregisterInstructionLiteral(tag, object) {
+  return encodeInstructionLiteral("iroha.unregister", encodeNoritoEnumVariantBare(tag, encodeStructField(object)));
+}
+
+function encodeLogInstructionLiteral(level, message) {
+  return encodeInstructionLiteral("iroha.log", Buffer.concat([
+    encodeStructField(Buffer.from([level])),
+    encodeStructField(encodeNoritoStringBare(message)),
+  ]));
+}
+
+function encodeCreateElectionInstructionLiteral(electionId) {
+  const payload = Buffer.concat([
+    encodeStructField(encodeNoritoStringBare(electionId)),
+    encodeStructField(littleEndianU32(3)),
+    encodeStructField(Buffer.alloc(32, 1)),
+    encodeStructField(littleEndianU64(10)),
+    encodeStructField(littleEndianU64(20)),
+    encodeStructField(encodeVerifyingKeyIdBare("halo2", "ballot-vk")),
+    encodeStructField(encodeVerifyingKeyIdBare("halo2", "tally-vk")),
+    encodeStructField(encodeNoritoStringBare("vote-domain")),
+  ]);
+  return encodeInstructionLiteral(CREATE_ELECTION_TYPE_NAME, payload);
+}
+
+function encodeSubmitBallotInstructionLiteral(electionId) {
+  const payload = Buffer.concat([
+    encodeStructField(encodeNoritoStringBare(electionId)),
+    encodeStructField(encodeNoritoBytesBare(Buffer.from([4, 5, 6]))),
+    encodeStructField(encodeProofAttachmentBare()),
+    encodeStructField(Buffer.alloc(32, 2)),
+  ]);
+  return encodeInstructionLiteral(SUBMIT_BALLOT_TYPE_NAME, payload);
+}
+
+function encodeFinalizeElectionInstructionLiteral(electionId) {
+  const payload = Buffer.concat([
+    encodeStructField(encodeNoritoStringBare(electionId)),
+    encodeStructField(encodeNoritoVec([littleEndianU64(7), littleEndianU64(8)])),
+    encodeStructField(encodeProofAttachmentBare()),
+  ]);
+  return encodeInstructionLiteral(FINALIZE_ELECTION_TYPE_NAME, payload);
+}
+
+function encodeUnshieldInstructionLiteral({ assetDefinitionBytes, publicKey, amount }) {
+  const flags = NORITO_HEADER_FLAG_COMPACT_LEN;
+  const payload = Buffer.concat([
+    encodeStructField(assetDefinitionBytes, flags),
+    encodeStructField(encodeAccountIdCompact(publicKey), flags),
+    encodeStructField(littleEndianU128(amount), flags),
+    encodeStructField(encodeNoritoVec([Buffer.alloc(32, 3)], flags), flags),
+    encodeStructField(encodeNoritoVec([], flags), flags),
+    encodeStructField(encodeProofAttachmentBare("halo2", Buffer.from([7, 8]), "unshield-vk", flags), flags),
+    encodeStructField(encodeNoritoOption(null, flags), flags),
+  ]);
+  return encodeInstructionLiteralWithOptions(UNSHIELD_TYPE_NAME, payload, {
+    innerFlags: flags,
+    innerAlign: 16,
+    outerFlags: flags,
+  });
 }
 
 function encodeZkRootsGetRequestLiteral(assetId, max) {
@@ -3965,6 +4208,60 @@ seiyaku DynamicBuiltinValueTypes {
   assert.ok(compiled.artifactBytes.length > 0);
 });
 
+test("Kotodama compiler SDK rejects void static builtins used as values through the shared registry", () => {
+  const cases = [
+    {
+      name: "setvl",
+      statement: "let bad = setvl(8);",
+      expected: /setvl does not return a value/,
+    },
+    {
+      name: "legacy runtime control",
+      statement: "let bad = create_nfts_for_all_users();",
+      expected: /create_nfts_for_all_users does not return a value/,
+    },
+    {
+      name: "zk verify",
+      statement: 'let bad = zk_verify_transfer(norito_bytes("00"));',
+      expected: /zk_verify_transfer does not return a value/,
+    },
+    {
+      name: "subscription",
+      statement: "let bad = subscription_bill();",
+      expected: /subscription_bill does not return a value/,
+    },
+    {
+      name: "smart contract lifecycle",
+      statement: 'let bad = deactivate_contract_instance(norito_bytes("00"));',
+      expected: /deactivate_contract_instance does not return a value/,
+    },
+    {
+      name: "transfer batch boundary",
+      statement: "let bad = transfer_v1_batch_begin();",
+      expected: /transfer_v1_batch_begin does not return a value/,
+    },
+    {
+      name: "AXT helper",
+      statement: "let bad = axt_commit();",
+      expected: /axt_commit does not return a value/,
+    },
+  ];
+
+  for (const { name, statement, expected } of cases) {
+    const compiled = compileKotodamaProgram(`
+seiyaku VoidStaticBuiltinValueUse {
+  kotoage fn main() permission(Admin) {
+    ${statement}
+  }
+}
+`);
+
+    assert.equal(compiled.artifactBytes.length, 0, name);
+    assert.equal(compiled.diagnostics.length, 1, name);
+    assert.match(compiled.diagnostics[0].message, expected, name);
+  }
+});
+
 test("Kotodama compiler SDK validates exact-argument static builtins through the shared registry", () => {
   for (const [source, expected] of [
     [
@@ -3978,6 +4275,42 @@ seiyaku ExactArgInvalidCodec {
 }
 `,
       /encode_json expects \(Json\)/,
+    ],
+    [
+      `
+seiyaku ExactArgInvalidPointerConstructorArity {
+  fn helper() {
+    let account = account_id();
+  }
+
+  kotoage fn main() permission(Admin) {}
+}
+`,
+      /account_id expects one argument/,
+    ],
+    [
+      `
+seiyaku ExactArgInvalidPointerConstructorType {
+  fn helper() {
+    let account = account_id(json_object());
+  }
+
+  kotoage fn main() permission(Admin) {}
+}
+`,
+      /account_id expects string, matching pointer type, or Blob\|bytes \(NoritoBytes\)/,
+    ],
+    [
+      `
+seiyaku ExactArgInvalidPointerConstructorLiteral {
+  fn helper() {
+    let domain = domain_id("wonderland");
+  }
+
+  kotoage fn main() permission(Admin) {}
+}
+`,
+      /invalid DomainId literal `wonderland`/,
     ],
     [
       `
@@ -4774,6 +5107,196 @@ seiyaku ZkReadAccess {
   assert.ok(read?.read_keys.includes(`zk_asset:${assetDefinition}`));
   assert.ok(read?.read_keys.includes("zk:election:election-1:tally"));
   assert.equal(read?.read_keys.includes("*"), false);
+});
+
+test("Kotodama compiler SDK derives exact access hints for static direct ZK instruction payloads", () => {
+  const publicKey = "ed01200102030405060708090a0b0c0d0e0f101112131415161718191a1b1c1d1e1f20";
+  const account = renderCanonicalAccountIdLiteralFromPublicKeyLiteral(publicKey);
+  const assetDefinitionBytes = Buffer.from("1020304050604a7088aabbccddee0102", "hex");
+  const assetDefinition = "4ntVYZphKx9VaHoYBgtfzAviwCW7";
+  const asset = `${assetDefinition}#${account}`;
+  assert.notEqual(account, null);
+  assert.equal(normalizeAssetDefinitionIdLiteral(assetDefinition), assetDefinition);
+
+  const createElection = encodeCreateElectionInstructionLiteral("election-direct");
+  const submitBallot = encodeSubmitBallotInstructionLiteral("election-direct");
+  const finalizeElection = encodeFinalizeElectionInstructionLiteral("election-direct");
+  const unshield = encodeUnshieldInstructionLiteral({
+    assetDefinitionBytes,
+    publicKey,
+    amount: 42,
+  });
+  const compiled = compileKotodamaProgram(`
+seiyaku ZkInstructionAccess {
+  kotoage fn create_election_run() permission(Admin) {
+    execute_instruction(norito_bytes("${createElection}"));
+  }
+
+  kotoage fn submit_ballot_run() permission(Admin) {
+    execute_instruction(norito_bytes("${submitBallot}"));
+  }
+
+  kotoage fn finalize_election_run() permission(Admin) {
+    execute_instruction(norito_bytes("${finalizeElection}"));
+  }
+
+  kotoage fn unshield_run() permission(Admin) {
+    execute_instruction(norito_bytes("${unshield}"));
+  }
+}
+`);
+
+  assert.deepEqual(compiled.diagnostics, []);
+  assert.deepEqual(compiled.manifest?.entrypoints.map((entrypoint) => ({
+    name: entrypoint.name,
+    read_keys: entrypoint.read_keys,
+    write_keys: entrypoint.write_keys,
+    access_hints_complete: entrypoint.access_hints_complete,
+    access_hints_skipped: entrypoint.access_hints_skipped,
+  })), [
+    {
+      name: "create_election_run",
+      read_keys: [],
+      write_keys: ["zk:election:election-direct"],
+      access_hints_complete: true,
+      access_hints_skipped: [],
+    },
+    {
+      name: "submit_ballot_run",
+      read_keys: [],
+      write_keys: [
+        "zk:election:election-direct:ciphertexts",
+        "zk:election:election-direct:nullifiers",
+      ],
+      access_hints_complete: true,
+      access_hints_skipped: [],
+    },
+    {
+      name: "finalize_election_run",
+      read_keys: [],
+      write_keys: ["zk:election:election-direct:tally"],
+      access_hints_complete: true,
+      access_hints_skipped: [],
+    },
+    {
+      name: "unshield_run",
+      read_keys: [
+        `asset:${asset}`,
+        `account:${account}`,
+        `asset_def:${assetDefinition}`,
+        "domain:aid",
+        `asset_def.detail:${assetDefinition}:zk.unshield.last`,
+        `zk_asset:${assetDefinition}`,
+      ],
+      write_keys: [
+        `asset:${asset}`,
+        `asset_def.detail:${assetDefinition}:zk.unshield.last`,
+        `zk_asset:${assetDefinition}`,
+      ],
+      access_hints_complete: true,
+      access_hints_skipped: [],
+    },
+  ]);
+});
+
+test("Kotodama compiler SDK derives empty access hints for static log payloads", () => {
+  const log = encodeLogInstructionLiteral(2, "ready");
+  const compiled = compileKotodamaProgram(`
+seiyaku LogInstructionAccess {
+  kotoage fn log_run() permission(Admin) {
+    execute_instruction(norito_bytes("${log}"));
+  }
+}
+`);
+
+  assert.deepEqual(compiled.diagnostics, []);
+  assert.deepEqual(compiled.manifest?.entrypoints[0]?.read_keys, []);
+  assert.deepEqual(compiled.manifest?.entrypoints[0]?.write_keys, []);
+  assert.equal(compiled.manifest?.entrypoints[0]?.access_hints_complete, null);
+  assert.deepEqual(compiled.manifest?.entrypoints[0]?.access_hints_skipped, []);
+});
+
+test("Kotodama compiler SDK derives exact access hints for static register and unregister payloads", () => {
+  const publicKey = "ed01200102030405060708090a0b0c0d0e0f101112131415161718191a1b1c1d1e1f20";
+  const account = renderCanonicalAccountIdLiteralFromPublicKeyLiteral(publicKey);
+  assert.notEqual(account, null);
+  const assetDefinitionBytes = Buffer.from("1020304050604a7088aabbccddee0102", "hex");
+  const assetDefinition = "4ntVYZphKx9VaHoYBgtfzAviwCW7";
+  assert.equal(normalizeAssetDefinitionIdLiteral(assetDefinition), assetDefinition);
+
+  const registerDomain = encodeRegisterInstructionLiteral(1, encodeNewDomainBare("wonderland.universal"));
+  const registerAccount = encodeRegisterInstructionLiteral(2, encodeNewAccountBare(publicKey));
+  const registerDefinition = encodeRegisterInstructionLiteral(3, encodeStructField(encodeAssetDefinitionIdBare(assetDefinitionBytes)));
+  const registerRole = encodeRegisterInstructionLiteral(5, encodeNewRoleBare("auditor", publicKey));
+  const unregisterTrigger = encodeUnregisterInstructionLiteral(6, encodeTriggerIdBare("wake"));
+  const compiled = compileKotodamaProgram(`
+seiyaku RegisterInstructionAccess {
+  kotoage fn register_domain_run() permission(Admin) {
+    execute_instruction(norito_bytes("${registerDomain}"));
+  }
+
+  kotoage fn register_account_run() permission(Admin) {
+    execute_instruction(norito_bytes("${registerAccount}"));
+  }
+
+  kotoage fn register_definition_run() permission(Admin) {
+    execute_instruction(norito_bytes("${registerDefinition}"));
+  }
+
+  kotoage fn register_role_run() permission(Admin) {
+    execute_instruction(norito_bytes("${registerRole}"));
+  }
+
+  kotoage fn unregister_trigger_run() permission(Admin) {
+    execute_instruction(norito_bytes("${unregisterTrigger}"));
+  }
+}
+`);
+
+  assert.deepEqual(compiled.diagnostics, []);
+  assert.deepEqual(compiled.manifest?.entrypoints.map((entrypoint) => ({
+    name: entrypoint.name,
+    read_keys: entrypoint.read_keys,
+    write_keys: entrypoint.write_keys,
+    access_hints_complete: entrypoint.access_hints_complete,
+    access_hints_skipped: entrypoint.access_hints_skipped,
+  })), [
+    {
+      name: "register_domain_run",
+      read_keys: ["domain:wonderland.universal"],
+      write_keys: ["domain:wonderland.universal"],
+      access_hints_complete: true,
+      access_hints_skipped: [],
+    },
+    {
+      name: "register_account_run",
+      read_keys: [`account:${account}`],
+      write_keys: [`account:${account}`],
+      access_hints_complete: true,
+      access_hints_skipped: [],
+    },
+    {
+      name: "register_definition_run",
+      read_keys: [`asset_def:${assetDefinition}`, "domain:aid"],
+      write_keys: [`asset_def:${assetDefinition}`],
+      access_hints_complete: true,
+      access_hints_skipped: [],
+    },
+    {
+      name: "register_role_run",
+      read_keys: ["role:auditor"],
+      write_keys: ["role:auditor"],
+      access_hints_complete: true,
+      access_hints_skipped: [],
+    },
+    {
+      name: "unregister_trigger_run",
+      read_keys: ["trigger:wake"],
+      write_keys: ["trigger:wake", "trigger.repetitions:wake"],
+      access_hints_complete: true,
+      access_hints_skipped: [],
+    },
+  ]);
 });
 
 test("Kotodama compiler SDK emits typed direct query helpers", () => {
@@ -6709,6 +7232,38 @@ seiyaku RolePermissionHelpers {
   assert.notEqual(code.indexOf(syscallNeedle(0x35)), -1);
 });
 
+test("Kotodama compiler SDK derives exact permission management access from static tokens", () => {
+  const compiled = compileKotodamaProgram(`
+seiyaku PermissionTokenAccess {
+  kotoage fn run() permission(Admin) {
+    let account = authority();
+    let scoped = name("mint_asset:62Fk4FPcMuLvW5QjDGNF2a4jAmjM");
+    let object_token = json!{ type: "burn_asset:62Fk4FPcMuLvW5QjDGNF2a4jAmjM" };
+    let string_token = json("\\"transfer_asset:62Fk4FPcMuLvW5QjDGNF2a4jAmjM\\"");
+    grant_permission(account, scoped);
+    revoke_permission(account, object_token);
+    grant_permission(account, string_token);
+  }
+}
+`, { mode: "test" });
+
+  assert.deepEqual(compiled.diagnostics, []);
+  const entrypoint = compiled.manifest.entrypoints.find((entry) => entry.name === "run");
+  assert.ok(entrypoint);
+  assert.deepEqual(new Set(entrypoint.read_keys), new Set(["account:$authority"]));
+  assert.deepEqual(
+    new Set(entrypoint.write_keys),
+    new Set([
+      "account:$authority",
+      "perm.account:$authority:mint_asset",
+      "perm.account:$authority:burn_asset",
+      "perm.account:$authority:transfer_asset",
+    ]),
+  );
+  assert.equal(entrypoint.read_keys.includes("*"), false);
+  assert.equal(entrypoint.write_keys.includes("*"), false);
+});
+
 test("Kotodama compiler SDK emits peer and trigger management syscalls", () => {
   const compiled = compileKotodamaProgram(`
 seiyaku PeerTriggerHelpers {
@@ -6730,6 +7285,67 @@ seiyaku PeerTriggerHelpers {
   assert.notEqual(code.indexOf(syscallNeedle(0x40)), -1);
   assert.notEqual(code.indexOf(syscallNeedle(0x41)), -1);
   assert.notEqual(code.indexOf(syscallNeedle(0x42)), -1);
+});
+
+test("Kotodama compiler SDK derives exact trigger management access from static ids", () => {
+  const noritoTriggerJson = JSON.stringify([
+    "TlJUMAAAQetZvFUPBy9B61m8VQ8HLwA+AQAAAAAAAFTpjwhsEu+KABkAAAAAAAAA",
+    "EQAAAAAAAAAJAAAAAAAAAHRlYV9wYXJ0eRUBAAAAAAAAFAAAAAAAAAAAAAAACAAAA",
+    "AAAAAAAAAAAAAAAABAAAAAAAAAAAQAAAAQAAAAAAAAAAQAAAHgAAAAAAAAAGgAAAA",
+    "AAAAASAAAAAAAAAAoAAAAAAAAAd29uZGVybGFuZE4AAAAAAAAARgAAAAAAAABlZD",
+    "AxMjBDRTdGQTQ2QzlEQ0U3RUE0QjEyNUUyRTM2QkRCNjNFQTMzMDczRTc1OTBBQz",
+    "kyODE2QUUxRTg2MUI3MDQ4QjAzEAAAAAAAAAABAAAABAAAAAAAAAAAAAAAQQAAAA",
+    "AAAAABAAAAAAAAADEAAAAAAAAAEAAAAAAAAAAIAAAAAAAAAHRlYV90aW1lEQAAAAAA",
+    "AAAJAAAAAAAAAAEAAAAAAAAANQ==",
+  ].join(""));
+  const compiled = compileKotodamaProgram(`
+seiyaku TriggerManagementAccess {
+  kotoage fn run() permission(Admin) {
+    create_trigger(json!{ id: "wake", action: "noop" });
+    let nap = json("{\\"id\\":\\"nap\\",\\"action\\":\\"noop\\"}");
+    register_trigger(nap);
+    create_trigger(json(${JSON.stringify(noritoTriggerJson)}));
+    remove_trigger(name("wake"));
+    unregister_trigger(name("nap"));
+    set_trigger_enabled(name("wake"), 1);
+  }
+}
+`);
+  const entrypoint = compiled.manifest?.entrypoints[0];
+
+  assert.deepEqual(compiled.diagnostics, []);
+  assert.deepEqual(entrypoint?.read_keys, ["trigger:wake", "trigger:nap", "trigger:tea_party"]);
+  assert.deepEqual(entrypoint?.write_keys, [
+    "trigger:wake",
+    "trigger.repetitions:wake",
+    "trigger:nap",
+    "trigger.repetitions:nap",
+    "trigger:tea_party",
+    "trigger.repetitions:tea_party",
+  ]);
+  assert.equal(entrypoint?.access_hints_complete, true);
+  assert.deepEqual(entrypoint?.access_hints_skipped, []);
+});
+
+test("Kotodama compiler SDK keeps malformed base64 trigger JSON access opaque", () => {
+  const malformedTriggerJson = JSON.stringify(encodeNoritoTopLevel(Buffer.concat([
+    encodeStructField(encodeTriggerIdBare("fake")),
+    encodeStructField(Buffer.from([0xff])),
+  ])).toString("base64"));
+  const compiled = compileKotodamaProgram(`
+seiyaku MalformedTriggerAccess {
+  kotoage fn run() permission(Admin) {
+    create_trigger(json(${JSON.stringify(malformedTriggerJson)}));
+  }
+}
+`, { mode: "test" });
+  const entrypoint = compiled.manifest?.entrypoints[0];
+
+  assert.deepEqual(compiled.diagnostics, []);
+  assert.deepEqual(entrypoint?.read_keys, []);
+  assert.deepEqual(entrypoint?.write_keys, []);
+  assert.equal(entrypoint?.access_hints_complete, false);
+  assert.deepEqual(entrypoint?.access_hints_skipped, ["opaque ISI access is not compiler-resolved"]);
 });
 
 test("Kotodama compiler SDK emits VRF helper syscalls", () => {
@@ -8065,6 +8681,25 @@ seiyaku TestOnlyStaticValueTypes {
   assert.ok(compiled.artifactBytes.length > 0);
 });
 
+test("Kotodama compiler SDK rejects void test-only helpers used as values through the shared registry", () => {
+  const compiled = compileKotodamaProgram(`
+seiyaku TestOnlyVoidStaticValueTypes {
+  kotoage fn run() permission(Admin) {
+    assert(false);
+  }
+
+  #[test]
+  fn smoke() {
+    let bad = expect_reject_as("issuer", "run", json("{}"));
+  }
+}
+`, { mode: "test" });
+
+  assert.equal(compiled.artifactBytes.length, 0);
+  assert.equal(compiled.diagnostics.length, 1);
+  assert.match(compiled.diagnostics[0].message, /expect_reject_as.*does not return a value/);
+});
+
 test("Kotodama compiler SDK strips Rust test functions in production mode", () => {
   const compiled = compileKotodamaProgram(`
 seiyaku StrippedTests {
@@ -8455,7 +9090,7 @@ seiyaku InstructionBridgeValue {
 
   assert.equal(compiled.artifactBytes.length, 0);
   assert.equal(compiled.diagnostics.length, 1);
-  assert.match(compiled.diagnostics[0].message, /Function `execute_instruction` does not produce a value/);
+  assert.match(compiled.diagnostics[0].message, /execute_instruction does not return a value/);
 });
 
 test("Kotodama compiler SDK mirrors Rust lexer diagnostics for string and byte escapes", () => {
@@ -9304,7 +9939,8 @@ test("Kotodama compiler SDK requires fully qualified static DomainId literals", 
   const invalidConstructor = compileKotodamaProgram(`
 seiyaku InvalidDomainConstructor {
   kotoage fn run() permission(Admin) {
-    register_domain(domain("wonderland"));
+    let domain_id = domain("wonderland");
+    info(1);
   }
 }
 `);
@@ -9315,7 +9951,7 @@ seiyaku InvalidDomainTransferName {
     transfer_domain(authority(), domain_name, authority());
   }
 }
-`);
+`, { mode: "test" });
   const invalidTriggerMatcher = compileKotodamaProgram(`
 seiyaku InvalidDomainTriggerMatcher {
   kotoage fn run() {}
@@ -12959,6 +13595,39 @@ test("Kotodama compiler SDK rejects native escrow sample incomplete access metad
   );
 });
 
+test("Kotodama compiler SDK prioritizes production access metadata before literal validation for opaque effects", () => {
+  const registerDomainSource = readFileSync(
+    new URL("../../../crates/ivm/docs/examples/16_register_domain.ko", import.meta.url),
+    "utf8",
+  );
+  const nftSource = readFileSync(
+    new URL("../../../examples/nft/nft.ko", import.meta.url),
+    "utf8",
+  );
+  const registerDomain = compileKotodamaProgram(registerDomainSource, { sourceName: "16_register_domain.ko" });
+  const nft = compileKotodamaProgram(nftSource, { sourceName: "nft.ko" });
+  const registerDomainTestMode = compileKotodamaProgram(registerDomainSource, {
+    sourceName: "16_register_domain.ko",
+    mode: "test",
+  });
+
+  assert.equal(registerDomain.artifactBytes.length, 0);
+  assert.equal(registerDomain.diagnostics.length, 1);
+  assert.match(
+    registerDomain.diagnostics[0].message,
+    /E_ACCESS_INCOMPLETE: entrypoint `hajimari` has incomplete compiler-derived access metadata: opaque ISI access is not compiler-resolved/,
+  );
+  assert.equal(nft.artifactBytes.length, 0);
+  assert.equal(nft.diagnostics.length, 1);
+  assert.match(
+    nft.diagnostics[0].message,
+    /E_ACCESS_INCOMPLETE: entrypoint `transfer` has incomplete compiler-derived access metadata: opaque ISI access is not compiler-resolved/,
+  );
+  assert.equal(registerDomainTestMode.artifactBytes.length, 0);
+  assert.equal(registerDomainTestMode.diagnostics.length, 1);
+  assert.match(registerDomainTestMode.diagnostics[0].message, /invalid DomainId literal `wonderland`/);
+});
+
 test("Kotodama compiler SDK leaves aggregate-only entrypoint access unreported like Rust", () => {
   const compiled = compileKotodamaProgram(`
 seiyaku AggregateOnlyAccess {
@@ -13966,12 +14635,12 @@ test("Kotodama compiler SDK matches Rust static durable map iteration rows", () 
     [
       "state_map_take_value",
       "seiyaku T { state Entries: Map<int, int>; kotoage fn f() -> int { let acc = 0; for (k, v) in Entries.take(2) { acc = acc + v; } return acc; } }",
-      [["f", 932, 64]],
+      [["f", 928, 64]],
     ],
     [
       "state_map_take_increment_literal",
       "seiyaku T { state Entries: Map<int, int>; kotoage fn f() -> int { let acc = 0; for (k, v) in Entries.take(2) { acc = acc + 1; } return acc; } }",
-      [["f", 940, 64]],
+      [["f", 936, 64]],
     ],
   ];
 
@@ -14013,15 +14682,14 @@ seiyaku StaticStateMapForeachAssignment {
 `);
   const code = readArtifactCode(compiled.artifactBytes);
   const accumulatorUpdate = ivmWordsNeedle([
-    ivmWord(0x01, 7, 24, 5),
-    ivmWord(0x20, 24, 7, 0),
+    ivmWord(0x20, 7, 5, 0),
   ]);
 
   assert.deepEqual(compiled.diagnostics, []);
   assert.notEqual(
     code.indexOf(accumulatorUpdate),
     -1,
-    "static foreach body assignment should update the outer accumulator binding",
+    "static foreach body assignment should use Rust body-local zero-add lowering",
   );
   assert.notEqual(code.indexOf(ivmWordNeedle(ivmWord(0x20, 10, 24, 0))), -1);
 });
@@ -14069,12 +14737,12 @@ test("Kotodama compiler SDK matches docs/example static map iteration rows", () 
     [
       "../../../crates/ivm/docs/examples/14_map_sum_take2.ko",
       "14_map_sum_take2.ko",
-      [["sum_two", 932, 64]],
+      [["sum_two", 928, 64]],
     ],
     [
       "../../../examples/map/map.ko",
       "map.ko",
-      [["sum_first_two", 932, 64]],
+      [["sum_first_two", 928, 64]],
     ],
   ];
 
@@ -14095,8 +14763,8 @@ test("Kotodama compiler SDK matches docs/example static map iteration rows", () 
     assert.deepEqual(
       [177, 178].map((word) => code.readUInt32LE(word * 4)),
       [
-        ivmWord(0x01, 7, 24, 5),
-        ivmWord(0x20, 24, 7, 0),
+        ivmWord(0x20, 7, 5, 0),
+        ivmWord(0x46, 0, 0, 25),
       ],
     );
   }
@@ -15859,7 +16527,7 @@ test("Kotodama compiler SDK matches the tracked upstream corpus budget shape", (
     ["crates/ivm/docs/examples/11_detail_and_transfer.ko", [["set_cursor_and_transfer", 624, 48]]],
     ["crates/ivm/docs/examples/12_nft_flow.ko", [["nft_issue_and_transfer", 1008, 32]]],
     ["crates/ivm/docs/examples/13_register_and_mint.ko", [["register_and_mint", 560, 48]]],
-    ["crates/ivm/docs/examples/14_map_sum_take2.ko", [["sum_two", 932, 64]]],
+    ["crates/ivm/docs/examples/14_map_sum_take2.ko", [["sum_two", 928, 64]]],
     ["crates/ivm/docs/examples/15_modulo.ko", [["remainder", 488, 40], ["__entrypoint_impl__remainder", 196, 48]]],
     ["crates/ivm/docs/examples/16_dynamic_take.ko", [["bounded_take_sum", 356, 32], ["__entrypoint_impl__bounded_take_sum", 1212, 72]]],
     ["crates/ivm/docs/examples/16_register_domain.ko", null],
@@ -15903,7 +16571,7 @@ test("Kotodama compiler SDK matches the tracked upstream corpus budget shape", (
     ["docs/portal/static/norito-snippets/threshold-escrow.ko", [["main", 8, 8], ["assert_unopened", 776, 32], ["assert_open", 772, 32], ["assert_payer", 320, 32], ["__entrypoint_impl__open_escrow", 2140, 40], ["open_escrow", 384, 32], ["__entrypoint_impl__deposit", 1208, 64], ["deposit", 384, 32], ["release_if_ready", 1176, 48], ["refund", 2320, 48]]],
     ["docs/portal/static/norito-snippets/transfer-asset.ko", [["do_transfer", 376, 48]]],
     ["examples/hello/hello.ko", [["main", 220, 16], ["hajimari", 136, 16], ["write_detail", 500, 32]]],
-    ["examples/map/map.ko", [["sum_first_two", 932, 64]]],
+    ["examples/map/map.ko", [["sum_first_two", 928, 64]]],
     ["examples/nft/nft.ko", null],
     ["examples/transfer/transfer.ko", [["do_transfer", 376, 48]]],
     ["fuzz/attachments/zk/kotodama/zk_shield_example.ko", [["run", 924, 40]]],

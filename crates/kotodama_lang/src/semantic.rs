@@ -5973,6 +5973,8 @@ fn analyze_expr(expr: &Expr, vars: &mut HashMap<String, Type>) -> Result<TypedEx
                     | Builtin::AnonymousEscrowCancel
                     | Builtin::AnonymousEscrowOpenDispute
                     | Builtin::AnonymousEscrowResolveDispute
+                    | Builtin::TransferV1BatchBegin
+                    | Builtin::TransferV1BatchEnd
                     | Builtin::TransferV1BatchApply
                     | Builtin::TransferBatch),
                 ) = Builtin::from_name(&callee)

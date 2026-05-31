@@ -19,7 +19,9 @@ const DOMAIN_ID_TYPE_NAME = 'iroha_data_model::domain::model::DomainId';
 const NFT_ID_TYPE_NAME = 'iroha_data_model::nft::model::NftId';
 const DATA_SPACE_ID_TYPE_NAME = 'iroha_data_model::nexus::DataSpaceId';
 const INSTRUCTION_BOX_PAIR_TYPE_NAME = '(alloc::string::String, alloc::vec::Vec<u8>)';
+const CREATE_ELECTION_TYPE_NAME = 'iroha_data_model::isi::zk::CreateElection';
 const SUBMIT_BALLOT_TYPE_NAME = 'iroha_data_model::isi::zk::SubmitBallot';
+const FINALIZE_ELECTION_TYPE_NAME = 'iroha_data_model::isi::zk::FinalizeElection';
 const UNSHIELD_TYPE_NAME = 'iroha_data_model::isi::zk::Unshield';
 const NORITO_TYPE_NAME_SCHEMA_HASH_DOMAIN = 'norito:v1:type-name\0';
 const ABI_HASH_HEX = '73cefb1b419f97b9e2864cdc6545d3f80ae2328dc0fbe2fbd034cd51a837ba0d';
@@ -414,6 +416,12 @@ const PUBLIC_KEY_ALGORITHM_BY_MULTIHASH_DIGEST = new Map([
     [0xe7, 1],
     [0xee, 4],
     [0x1306, 10],
+]);
+const PUBLIC_KEY_MULTIHASH_DIGEST_BY_ALGORITHM = new Map([
+    [0, 0xed],
+    [1, 0xe7],
+    [4, 0xee],
+    [10, 0x1306],
 ]);
 const BASE58_VALUE_BY_CHAR = new Map([...BASE58_ALPHABET].map((char, index) => [char, index]));
 const textDecoder = new TextDecoder();
@@ -870,6 +878,8 @@ function testOnlyBuiltinSpec(name) {
                     { kind: 'strictType', type: 'Json', message: 'expect_reject_as expects a Json payload as its third argument' },
                 ],
                 semanticUsageArgIndexes: [2],
+                valueType: null,
+                kind: 'void',
                 message: 'expect_reject_as expects (string|Name literal actor, string|Name literal entrypoint, Json)',
             };
         case 'actor_account':
@@ -1054,6 +1064,8 @@ function zkVerifyBuiltinSpec(name) {
                 canonicalName: 'zk_verify_transfer',
                 syscall: SYSCALL_ZK_VERIFY_TRANSFER,
                 args: ['BlobLike'],
+                valueType: null,
+                kind: 'void',
                 message: 'zk_verify_transfer expects (Blob|bytes) where the argument is a pointer to NoritoBytes TLV in INPUT',
             };
         case 'zk_verify_unshield':
@@ -1062,6 +1074,8 @@ function zkVerifyBuiltinSpec(name) {
                 canonicalName: 'zk_verify_unshield',
                 syscall: SYSCALL_ZK_VERIFY_UNSHIELD,
                 args: ['BlobLike'],
+                valueType: null,
+                kind: 'void',
                 message: 'zk_verify_unshield expects (Blob|bytes) where the argument is a pointer to NoritoBytes TLV in INPUT',
             };
         case 'zk_verify_batch':
@@ -1070,6 +1084,8 @@ function zkVerifyBuiltinSpec(name) {
                 canonicalName: 'zk_verify_batch',
                 syscall: SYSCALL_ZK_VERIFY_BATCH,
                 args: ['BlobLike'],
+                valueType: null,
+                kind: 'void',
                 message: 'zk_verify_batch expects (Blob|bytes) where the argument is a pointer to NoritoBytes TLV in INPUT',
             };
         case 'zk_vote_verify_ballot':
@@ -1078,6 +1094,8 @@ function zkVerifyBuiltinSpec(name) {
                 canonicalName: 'zk_vote_verify_ballot',
                 syscall: SYSCALL_ZK_VOTE_VERIFY_BALLOT,
                 args: ['BlobLike'],
+                valueType: null,
+                kind: 'void',
                 message: 'zk_vote_verify_ballot expects (Blob|bytes) where the argument is a pointer to NoritoBytes TLV in INPUT',
             };
         case 'zk_vote_verify_tally':
@@ -1086,6 +1104,8 @@ function zkVerifyBuiltinSpec(name) {
                 canonicalName: 'zk_vote_verify_tally',
                 syscall: SYSCALL_ZK_VOTE_VERIFY_TALLY,
                 args: ['BlobLike'],
+                valueType: null,
+                kind: 'void',
                 message: 'zk_vote_verify_tally expects (Blob|bytes) where the argument is a pointer to NoritoBytes TLV in INPUT',
             };
         default:
@@ -1342,6 +1362,8 @@ function subscriptionBuiltinSpec(name) {
             return {
                 syscall: SYSCALL_SUBSCRIPTION_BILL,
                 args: [],
+                valueType: null,
+                kind: 'void',
                 message: 'subscription_bill expects no arguments',
                 hostSideEffect: true,
             };
@@ -1349,6 +1371,8 @@ function subscriptionBuiltinSpec(name) {
             return {
                 syscall: SYSCALL_SUBSCRIPTION_RECORD_USAGE,
                 args: [],
+                valueType: null,
+                kind: 'void',
                 message: 'subscription_record_usage expects no arguments',
                 hostSideEffect: true,
             };
@@ -1362,12 +1386,16 @@ function legacyHostRuntimeControlBuiltinSpec(name) {
             return {
                 syscall: SYSCALL_CREATE_NFTS_FOR_ALL_USERS,
                 args: [],
+                valueType: null,
+                kind: 'void',
                 message: 'create_nfts_for_all_users expects no arguments',
             };
         case 'set_execution_depth':
             return {
                 syscall: SYSCALL_SET_SMARTCONTRACT_EXECUTION_DEPTH,
                 args: ['numeric'],
+                valueType: null,
+                kind: 'void',
                 message: 'set_execution_depth expects one int arg',
             };
         default:
@@ -1672,7 +1700,7 @@ function managementBuiltinSpec(name) {
         case 'create_trigger':
             return {
                 syscall: SYSCALL_CREATE_TRIGGER,
-                kind: 'jsonOpaque',
+                kind: 'triggerJson',
                 args: ['Json'],
                 valueType: null,
                 message: 'create_trigger expects (Json)',
@@ -1682,7 +1710,7 @@ function managementBuiltinSpec(name) {
         case 'register_trigger':
             return {
                 syscall: SYSCALL_CREATE_TRIGGER,
-                kind: 'jsonOpaque',
+                kind: 'triggerJson',
                 args: ['Json'],
                 valueType: null,
                 message: 'register_trigger expects (Json)',
@@ -2001,7 +2029,7 @@ function intArithmeticBuiltinSpec(name) {
 function vectorBuiltinSpec(name) {
     switch (name) {
         case 'setvl':
-            return { opcode: OP_SETVL, arity: 1, args: ['numeric'], valueType: 'Unit', kind: 'void', operation: 'setvl', message: 'setvl expects one int arg', compileMessage: 'setvl expects exactly one int argument' };
+            return { opcode: OP_SETVL, arity: 1, args: ['numeric'], valueType: null, kind: 'void', operation: 'setvl', message: 'setvl expects one int arg', compileMessage: 'setvl expects exactly one int argument' };
         default:
             return null;
     }
@@ -2165,15 +2193,15 @@ function smartContractLifecycleBuiltinSpec(name) {
     const message = `${name} expects (Blob|bytes) pointer to NoritoBytes lifecycle request`;
     switch (name) {
         case 'deactivate_contract_instance':
-            return { syscall: SYSCALL_DEACTIVATE_CONTRACT_INSTANCE, args, message, hostSideEffect: true };
+            return { syscall: SYSCALL_DEACTIVATE_CONTRACT_INSTANCE, args, valueType: null, kind: 'void', message, hostSideEffect: true };
         case 'remove_smart_contract_bytes':
-            return { syscall: SYSCALL_REMOVE_SMART_CONTRACT_BYTES, args, message, hostSideEffect: true };
+            return { syscall: SYSCALL_REMOVE_SMART_CONTRACT_BYTES, args, valueType: null, kind: 'void', message, hostSideEffect: true };
         case 'register_smart_contract_code':
-            return { syscall: SYSCALL_REGISTER_SMART_CONTRACT_CODE, args, message, hostSideEffect: true };
+            return { syscall: SYSCALL_REGISTER_SMART_CONTRACT_CODE, args, valueType: null, kind: 'void', message, hostSideEffect: true };
         case 'register_smart_contract_bytes':
-            return { syscall: SYSCALL_REGISTER_SMART_CONTRACT_BYTES, args, message, hostSideEffect: true };
+            return { syscall: SYSCALL_REGISTER_SMART_CONTRACT_BYTES, args, valueType: null, kind: 'void', message, hostSideEffect: true };
         case 'activate_contract_instance':
-            return { syscall: SYSCALL_ACTIVATE_CONTRACT_INSTANCE, args, message, hostSideEffect: true };
+            return { syscall: SYSCALL_ACTIVATE_CONTRACT_INSTANCE, args, valueType: null, kind: 'void', message, hostSideEffect: true };
         default:
             return null;
     }
@@ -2184,6 +2212,8 @@ function transferBatchApplyBuiltinSpec(name) {
     return {
         syscall: SYSCALL_TRANSFER_V1_BATCH_APPLY,
         args: ['BlobLike'],
+        valueType: null,
+        kind: 'void',
         message: 'transfer_v1_batch_apply expects (Blob|bytes) Norito TransferAssetBatch',
         hostSideEffect: true,
     };
@@ -2193,6 +2223,7 @@ function transferBatchBuiltinSpec(name) {
         return null;
     return {
         valueType: null,
+        kind: 'void',
         args: [{
                 kind: 'variadicTuple',
                 min: 1,
@@ -2210,6 +2241,8 @@ function transferBatchBoundaryBuiltinSpec(name) {
             return {
                 syscall: SYSCALL_TRANSFER_V1_BATCH_BEGIN,
                 args: [],
+                valueType: null,
+                kind: 'void',
                 message: 'transfer_v1_batch_begin expects no arguments',
                 hostSideEffect: true,
             };
@@ -2217,6 +2250,8 @@ function transferBatchBoundaryBuiltinSpec(name) {
             return {
                 syscall: SYSCALL_TRANSFER_V1_BATCH_END,
                 args: [],
+                valueType: null,
+                kind: 'void',
                 message: 'transfer_v1_batch_end expects no arguments',
                 hostSideEffect: true,
             };
@@ -2229,6 +2264,8 @@ function axtBuiltinSpec(name) {
         case 'axt_begin':
             return {
                 syscall: SYSCALL_AXT_BEGIN,
+                valueType: null,
+                kind: 'void',
                 minArgs: 1,
                 maxArgs: 1,
                 message: 'axt_begin expects (AxtDescriptor)',
@@ -2241,6 +2278,8 @@ function axtBuiltinSpec(name) {
         case 'axt_touch':
             return {
                 syscall: SYSCALL_AXT_TOUCH,
+                valueType: null,
+                kind: 'void',
                 minArgs: 1,
                 maxArgs: 2,
                 message: 'axt_touch expects (DataSpaceId[, Blob|bytes manifest])',
@@ -2254,6 +2293,8 @@ function axtBuiltinSpec(name) {
         case 'verify_ds_proof':
             return {
                 syscall: SYSCALL_VERIFY_DS_PROOF,
+                valueType: null,
+                kind: 'void',
                 minArgs: 1,
                 maxArgs: 2,
                 message: 'verify_ds_proof expects (DataSpaceId[, ProofBlob])',
@@ -2267,6 +2308,8 @@ function axtBuiltinSpec(name) {
         case 'use_asset_handle':
             return {
                 syscall: SYSCALL_USE_ASSET_HANDLE,
+                valueType: null,
+                kind: 'void',
                 minArgs: 2,
                 maxArgs: 3,
                 message: 'use_asset_handle expects (AssetHandle, Blob|bytes intent[, ProofBlob])',
@@ -2287,6 +2330,8 @@ function axtBuiltinSpec(name) {
         case 'axt_commit':
             return {
                 syscall: SYSCALL_AXT_COMMIT,
+                valueType: null,
+                kind: 'void',
                 minArgs: 0,
                 maxArgs: 0,
                 message: 'axt_commit expects no arguments',
@@ -2506,9 +2551,12 @@ const STATIC_VALUE_TYPE_BUILTIN_SPEC_PROVIDERS = Object.freeze([
     sm4BuiltinSpec,
     sysvarBuiltinSpec,
     triggerEventBuiltinSpec,
+    zkVerifyBuiltinSpec,
     noritoReadBuiltinSpec,
     typedQueryBuiltinSpec,
     vendorBridgeBuiltinSpec,
+    subscriptionBuiltinSpec,
+    legacyHostRuntimeControlBuiltinSpec,
     callContractBuiltinSpec,
     resolveAccountAliasBuiltinSpec,
     accountBalanceBuiltinSpec,
@@ -2523,16 +2571,22 @@ const STATIC_VALUE_TYPE_BUILTIN_SPEC_PROVIDERS = Object.freeze([
     publicInputBuiltinSpec,
     debugBuiltinSpec,
     privacyOutputBuiltinSpec,
+    smartContractLifecycleBuiltinSpec,
     assertionLoggingBuiltinSpec,
     soracloudBuiltinSpec,
     stateHostBuiltinSpec,
     proofHeapBuiltinSpec,
     rawMemoryBuiltinSpec,
+    transferBatchApplyBuiltinSpec,
+    transferBatchBuiltinSpec,
+    transferBatchBoundaryBuiltinSpec,
+    axtBuiltinSpec,
     numericToIntBuiltinSpec,
     regularNumericCompareBuiltinSpec,
     schemaBuiltinSpec,
     vrfBuiltinSpec,
     intArithmeticBuiltinSpec,
+    vectorBuiltinSpec,
 ]);
 function staticBuiltinValueType(name) {
     for (const specProvider of STATIC_VALUE_TYPE_BUILTIN_SPEC_PROVIDERS) {
@@ -2616,6 +2670,7 @@ const EXACT_ARGUMENT_BUILTIN_SPEC_PROVIDERS = Object.freeze([
     mapEnumerationBuiltinSpec,
     testOnlyBuiltinSpec,
     vrfBuiltinSpec,
+    exactPointerConstructorBuiltinSpec,
     vendorBridgeBuiltinSpec,
     soracloudBuiltinSpec,
     subscriptionBuiltinSpec,
@@ -2677,6 +2732,12 @@ function exactArgumentMapAccessDescriptor(expectedTypes) {
         ? descriptor
         : null;
 }
+function exactArgumentPointerConstructorDescriptor(expectedTypes) {
+    const descriptor = expectedTypes.length === 1 ? expectedTypes[0] : null;
+    return typeof descriptor === 'object' && descriptor !== null && descriptor.kind === 'pointerConstructor'
+        ? descriptor
+        : null;
+}
 function exactArgumentBuiltinMessage(spec, argCount) {
     const variadicDescriptor = exactArgumentVariadicDescriptor(spec.args);
     if (variadicDescriptor !== null) {
@@ -2689,6 +2750,12 @@ function exactArgumentBuiltinMessage(spec, argCount) {
     const mapAccessDescriptor = exactArgumentMapAccessDescriptor(spec.args);
     if (mapAccessDescriptor !== null) {
         return mapAccessDescriptor.spec.message;
+    }
+    const pointerConstructorDescriptor = exactArgumentPointerConstructorDescriptor(spec.args);
+    if (pointerConstructorDescriptor !== null) {
+        return argCount === 1
+            ? `${pointerConstructorDescriptor.spec.canonicalName} expects ${pointerConstructorDescriptor.spec.expectedDescription}`
+            : `${pointerConstructorDescriptor.spec.canonicalName} expects one argument`;
     }
     const requiredArgCount = spec.args.filter((arg) => !(typeof arg === 'object' && arg !== null && arg.optional === true)).length;
     return argCount >= requiredArgCount && argCount <= spec.args.length
@@ -4359,9 +4426,15 @@ function decodeNoritoArchivePayload(bytes) {
         return null;
     try {
         const length = new NoritoAccessReader(bytes.slice(23, 31)).readU64LEAsNumber();
-        const payload = bytes.slice(40);
-        if (payload.length !== length)
+        const payloadSlice = bytes.slice(40);
+        const padding = payloadSlice.length - length;
+        if (padding < 0 || padding > 15)
             return null;
+        for (let index = 0; index < padding; index += 1) {
+            if (payloadSlice[index] !== 0)
+                return null;
+        }
+        const payload = payloadSlice.slice(padding);
         return {
             payload,
             flags: bytes[39],
@@ -4433,6 +4506,12 @@ function readNoritoLengthAt(bytes, offset, flags) {
     }
     return null;
 }
+function decodeNoritoU64Bare(bytes) {
+    return bytes.length === 8;
+}
+function decodeNoritoU128Bare(bytes) {
+    return bytes.length === 16;
+}
 function readNoritoLenPrefixedBytesAt(bytes, offset, flags) {
     const header = readNoritoLengthAt(bytes, offset, flags);
     if (!header)
@@ -4449,21 +4528,48 @@ function decodeNoritoStringBareWithFlags(bytes, flags) {
         return null;
     return textDecoder.decode(field.field);
 }
-function decodeNoritoEnumVariantBare(bytes) {
+function decodeBase64StandardBytes(value) {
+    if (!/^(?:[A-Za-z0-9+/]{4})*(?:[A-Za-z0-9+/]{2}==|[A-Za-z0-9+/]{3}=)?$/u.test(value)) {
+        return null;
+    }
     try {
-        const reader = new NoritoAccessReader(bytes);
-        const tag = reader.readU32LE();
-        if (reader.remaining() === 0) {
-            return { tag, payload: null };
+        if (typeof globalThis.atob === 'function') {
+            const decoded = globalThis.atob(value);
+            const bytes = new Uint8Array(decoded.length);
+            for (let index = 0; index < decoded.length; index += 1) {
+                bytes[index] = decoded.charCodeAt(index);
+            }
+            return bytes;
         }
-        const payload = reader.readLenPrefixedBytesU64();
-        if (reader.remaining() !== 0)
-            return null;
-        return { tag, payload };
+        const bufferCtor = globalThis.Buffer;
+        if (typeof bufferCtor?.from === 'function') {
+            return Uint8Array.from(bufferCtor.from(value, 'base64'));
+        }
     }
     catch {
         return null;
     }
+    return null;
+}
+function decodeNoritoEnumVariantBareWithFlags(bytes, flags) {
+    try {
+        if (bytes.length < 4)
+            return null;
+        const tag = new DataView(bytes.buffer, bytes.byteOffset, 4).getUint32(0, true);
+        if (bytes.length === 4) {
+            return { tag, payload: null };
+        }
+        const payload = readNoritoLenPrefixedBytesAt(bytes, 4, flags);
+        if (!payload || payload.offset !== bytes.length)
+            return null;
+        return { tag, payload: payload.field };
+    }
+    catch {
+        return null;
+    }
+}
+function decodeNoritoEnumVariantBare(bytes) {
+    return decodeNoritoEnumVariantBareWithFlags(bytes, 0);
 }
 function decodeNameBare(bytes) {
     return decodeNoritoStringBare(bytes);
@@ -4488,6 +4594,12 @@ function decodeRoleIdBare(bytes) {
 }
 function decodeTriggerIdBare(bytes) {
     return decodeSingleFieldNameWrapper(bytes);
+}
+function decodeTriggerIdBareWithFlags(bytes, flags) {
+    const fields = readNoritoStructFieldsWithFlags(bytes, flags, 1);
+    if (!fields)
+        return null;
+    return decodeNoritoStringBareWithFlags(fields[0], flags);
 }
 function decodeNftIdBare(bytes) {
     try {
@@ -4675,11 +4787,50 @@ function decodeProofBlobBare(bytes) {
         (field) => decodeNoritoOptionBareWith(field, (item) => decodeFixedBareLength(item, 8)),
     ], 1);
 }
-function decodeAccountIdBare(bytes) {
-    const controller = decodeNoritoEnumVariantBare(bytes);
+function decodeNoritoU8VecBareWithFlags(bytes, flags) {
+    try {
+        const reader = new NoritoAccessReader(bytes);
+        const count = reader.readU64LEAsNumber();
+        if (count > bytes.length)
+            return null;
+        const out = new Uint8Array(count);
+        let offset = 8;
+        for (let index = 0; index < count; index += 1) {
+            const item = readNoritoLenPrefixedBytesAt(bytes, offset, flags);
+            if (!item || item.field.length !== 1)
+                return null;
+            out[index] = item.field[0];
+            offset = item.offset;
+        }
+        if (offset !== bytes.length)
+            return null;
+        return out;
+    }
+    catch {
+        return null;
+    }
+}
+function canonicalPublicKeyLiteralFromCompactBytes(bytes) {
+    if (bytes.length < 2)
+        return null;
+    const digest = PUBLIC_KEY_MULTIHASH_DIGEST_BY_ALGORITHM.get(bytes[0]);
+    if (digest === undefined)
+        return null;
+    const payload = bytes.slice(1);
+    return bytesToHex(concatBytes(encodeCompactLength(digest), encodeCompactLength(payload.length), payload));
+}
+function decodePublicKeyLiteralBareWithFlags(bytes, flags) {
+    const stringLiteral = decodeNoritoStringBareWithFlags(bytes, flags);
+    if (stringLiteral !== null)
+        return stringLiteral;
+    const compactBytes = decodeNoritoU8VecBareWithFlags(bytes, flags);
+    return compactBytes === null ? null : canonicalPublicKeyLiteralFromCompactBytes(compactBytes);
+}
+function decodeAccountIdBare(bytes, flags = 0) {
+    const controller = decodeNoritoEnumVariantBareWithFlags(bytes, flags);
     if (!controller || controller.tag !== 0 || controller.payload === null)
         return null;
-    const publicKey = decodeNoritoStringBare(controller.payload);
+    const publicKey = decodePublicKeyLiteralBareWithFlags(controller.payload, flags);
     if (!publicKey)
         return null;
     return renderCanonicalAccountIdLiteralFromPublicKeyLiteral(publicKey);
@@ -4831,6 +4982,24 @@ function readWriteAssetAccess(asset, extraWrites = []) {
         writes: [keyAsset(asset.literal), ...extraWrites],
     };
 }
+function readWriteKeyAccess(key) {
+    return {
+        reads: [key],
+        writes: [key],
+    };
+}
+function readWriteTriggerAccess(id) {
+    return {
+        reads: [keyTrigger(id)],
+        writes: [keyTrigger(id), keyTriggerRepetitions(id)],
+    };
+}
+function readWriteAssetDefinitionRegistrationAccess(definition) {
+    return {
+        reads: [keyAssetDef(definition.literal), keyDomain(definition.domain)],
+        writes: [keyAssetDef(definition.literal)],
+    };
+}
 function mergeLiteralAccessSets(...sets) {
     const available = sets.filter((set) => set !== null);
     if (available.length === 0)
@@ -4839,6 +5008,317 @@ function mergeLiteralAccessSets(...sets) {
         reads: available.flatMap((set) => set.reads),
         writes: available.flatMap((set) => set.writes),
     };
+}
+function firstStructField(bytes) {
+    const reader = new NoritoAccessReader(bytes);
+    return reader.readLenPrefixedBytesU64();
+}
+function singleFieldStruct(bytes) {
+    const reader = new NoritoAccessReader(bytes);
+    const field = reader.readLenPrefixedBytesU64();
+    if (reader.remaining() !== 0)
+        return null;
+    return field;
+}
+function readNoritoStructFieldsWithFlags(bytes, flags, count) {
+    const fields = [];
+    let offset = 0;
+    for (let index = 0; index < count; index += 1) {
+        const field = readNoritoLenPrefixedBytesAt(bytes, offset, flags);
+        if (!field)
+            return null;
+        fields.push(field.field);
+        offset = field.offset;
+    }
+    return offset === bytes.length ? fields : null;
+}
+function decodeTriggerExecutableBareWithFlags(bytes, flags) {
+    const executable = decodeNoritoEnumVariantBareWithFlags(bytes, flags);
+    return executable !== null
+        && executable.payload !== null
+        && executable.tag >= 0
+        && executable.tag <= 3;
+}
+function decodeTriggerRepeatsBareWithFlags(bytes, flags) {
+    const repeats = decodeNoritoEnumVariantBareWithFlags(bytes, flags);
+    if (!repeats)
+        return false;
+    if (repeats.tag === 0)
+        return repeats.payload === null;
+    return repeats.tag === 1
+        && repeats.payload !== null
+        && decodeNoritoU32Bare(repeats.payload) !== null;
+}
+function decodeTriggerEventFilterBoxBareWithFlags(bytes, flags) {
+    const filter = decodeNoritoEnumVariantBareWithFlags(bytes, flags);
+    return filter !== null
+        && filter.payload !== null
+        && filter.tag >= 0
+        && filter.tag <= 4;
+}
+function decodeTriggerRetryPolicyBareWithFlags(bytes, flags) {
+    const fields = readNoritoStructFieldsWithFlags(bytes, flags, 2);
+    return fields !== null
+        && decodeNoritoU32Bare(fields[0]) !== null
+        && decodeNoritoU64Bare(fields[1]);
+}
+function decodeMetadataBareWithFlags(bytes, flags) {
+    return decodeNoritoVecBareWithFlags(bytes, flags, (item) => {
+        const fields = readNoritoStructFieldsWithFlags(item, flags, 2);
+        return fields !== null
+            && decodeNoritoStringBareWithFlags(fields[0], flags) !== null
+            && fields[1].length > 0;
+    });
+}
+function decodeTriggerActionBareWithFlags(bytes, flags) {
+    const fields = readNoritoStructFieldsWithFlags(bytes, flags, 6)
+        ?? readNoritoStructFieldsWithFlags(bytes, flags, 5);
+    if (fields === null)
+        return false;
+    const retryPolicyIsValid = fields.length === 5
+        || decodeNoritoOptionBareWithFlags(fields[4], flags, (item) => decodeTriggerRetryPolicyBareWithFlags(item, flags));
+    const metadataField = fields[fields.length - 1];
+    return fields !== null
+        && decodeTriggerExecutableBareWithFlags(fields[0], flags)
+        && decodeTriggerRepeatsBareWithFlags(fields[1], flags)
+        && fields[2].length > 0
+        && decodeTriggerEventFilterBoxBareWithFlags(fields[3], flags)
+        && retryPolicyIsValid
+        && metadataField !== undefined
+        && decodeMetadataBareWithFlags(metadataField, flags);
+}
+function decodeFixedBytesBareWithFlags(bytes, flags, length) {
+    if (bytes.length === length)
+        return true;
+    let offset = 0;
+    for (let index = 0; index < length; index += 1) {
+        const field = readNoritoLenPrefixedBytesAt(bytes, offset, flags);
+        if (!field || field.field.length !== 1)
+            return false;
+        offset = field.offset;
+    }
+    return offset === bytes.length;
+}
+function decodeNoritoOptionBareWithFlags(bytes, flags, decodeItem) {
+    if (bytes.length === 0)
+        return false;
+    const tag = bytes[0];
+    if (tag === 0)
+        return bytes.length === 1;
+    if (tag !== 1)
+        return false;
+    const item = readNoritoLenPrefixedBytesAt(bytes, 1, flags);
+    return item !== null && item.offset === bytes.length && decodeItem(item.field);
+}
+function decodeNoritoVecBareWithFlags(bytes, flags, decodeItem) {
+    try {
+        const reader = new NoritoAccessReader(bytes);
+        const count = reader.readU64LEAsNumber();
+        let offset = 8;
+        for (let index = 0; index < count; index += 1) {
+            const item = readNoritoLenPrefixedBytesAt(bytes, offset, flags);
+            if (!item || !decodeItem(item.field))
+                return false;
+            offset = item.offset;
+        }
+        return offset === bytes.length;
+    }
+    catch {
+        return false;
+    }
+}
+function decodeVerifyingKeyIdBareWithFlags(bytes, flags) {
+    const fields = readNoritoStructFieldsWithFlags(bytes, flags, 2);
+    return fields !== null
+        && decodeNoritoStringBareWithFlags(fields[0], flags) !== null
+        && decodeNoritoStringBareWithFlags(fields[1], flags) !== null;
+}
+function decodeProofBoxBareWithFlags(bytes, flags) {
+    const fields = readNoritoStructFieldsWithFlags(bytes, flags, 2);
+    return fields !== null
+        && decodeNoritoStringBareWithFlags(fields[0], flags) !== null
+        && decodeNoritoBytesBare(fields[1]) !== null;
+}
+function decodeProofAttachmentBareWithFlags(bytes, flags) {
+    const fields = readNoritoStructFieldsWithFlags(bytes, flags, 3);
+    return fields !== null
+        && decodeNoritoStringBareWithFlags(fields[0], flags) !== null
+        && decodeProofBoxBareWithFlags(fields[1], flags)
+        && decodeVerifyingKeyIdBareWithFlags(fields[2], flags);
+}
+function decodeZkCreateElectionLiteralAccess(payload, flags) {
+    const fields = readNoritoStructFieldsWithFlags(payload, flags, 8);
+    if (fields === null)
+        return null;
+    const electionId = decodeNoritoStringBareWithFlags(fields[0], flags);
+    if (electionId === null
+        || decodeNoritoU32Bare(fields[1]) === null
+        || !decodeFixedBytesBareWithFlags(fields[2], flags, 32)
+        || !decodeNoritoU64Bare(fields[3])
+        || !decodeNoritoU64Bare(fields[4])
+        || !decodeVerifyingKeyIdBareWithFlags(fields[5], flags)
+        || !decodeVerifyingKeyIdBareWithFlags(fields[6], flags)
+        || decodeNoritoStringBareWithFlags(fields[7], flags) === null) {
+        return null;
+    }
+    return { reads: [], writes: [`zk:election:${electionId}`] };
+}
+function decodeZkSubmitBallotLiteralAccess(payload, flags) {
+    const fields = readNoritoStructFieldsWithFlags(payload, flags, 4);
+    if (fields === null)
+        return null;
+    const electionId = decodeNoritoStringBareWithFlags(fields[0], flags);
+    if (electionId === null
+        || decodeNoritoBytesBare(fields[1]) === null
+        || !decodeProofAttachmentBareWithFlags(fields[2], flags)
+        || !decodeFixedBytesBareWithFlags(fields[3], flags, 32)) {
+        return null;
+    }
+    return {
+        reads: [],
+        writes: [
+            `zk:election:${electionId}:ciphertexts`,
+            `zk:election:${electionId}:nullifiers`,
+        ],
+    };
+}
+function decodeZkFinalizeElectionLiteralAccess(payload, flags) {
+    const fields = readNoritoStructFieldsWithFlags(payload, flags, 3);
+    if (fields === null)
+        return null;
+    const electionId = decodeNoritoStringBareWithFlags(fields[0], flags);
+    if (electionId === null
+        || !decodeNoritoVecBareWithFlags(fields[1], flags, decodeNoritoU64Bare)
+        || !decodeProofAttachmentBareWithFlags(fields[2], flags)) {
+        return null;
+    }
+    return { reads: [], writes: [`zk:election:${electionId}:tally`] };
+}
+function decodeZkUnshieldLiteralAccess(payload, flags) {
+    const fields = readNoritoStructFieldsWithFlags(payload, flags, 7);
+    if (fields === null)
+        return null;
+    const definition = decodeAssetDefinitionLiteral(fields[0]);
+    const account = decodeAccountIdBare(fields[1], flags);
+    if (definition === null
+        || account === null
+        || !decodeNoritoU128Bare(fields[2])
+        || !decodeNoritoVecBareWithFlags(fields[3], flags, (item) => decodeFixedBytesBareWithFlags(item, flags, 32))
+        || !decodeNoritoVecBareWithFlags(fields[4], flags, (item) => decodeFixedBytesBareWithFlags(item, flags, 32))
+        || !decodeProofAttachmentBareWithFlags(fields[5], flags)
+        || !decodeNoritoOptionBareWithFlags(fields[6], flags, (item) => decodeFixedBytesBareWithFlags(item, flags, 32))) {
+        return null;
+    }
+    const asset = buildAssetLiteral(definition, account);
+    const assetAccess = readWriteAssetAccess(asset, [
+        keyAssetDefDetail(definition.literal, 'zk.unshield.last'),
+        keyZkAsset(definition.literal),
+    ]);
+    return {
+        reads: [
+            ...assetAccess.reads,
+            keyAssetDefDetail(definition.literal, 'zk.unshield.last'),
+            keyZkAsset(definition.literal),
+        ],
+        writes: assetAccess.writes,
+    };
+}
+function decodeLogLiteralAccess(payload, flags) {
+    const fields = readNoritoStructFieldsWithFlags(payload, flags, 2);
+    if (fields === null)
+        return null;
+    const level = fields[0];
+    if (level.length !== 1 || level[0] > 4)
+        return null;
+    return decodeNoritoStringBareWithFlags(fields[1], flags) === null
+        ? null
+        : { reads: [], writes: [] };
+}
+function decodeRegisterLiteralAccess(payload) {
+    const variant = decodeNoritoEnumVariantBare(payload);
+    if (!variant || variant.payload === null)
+        return null;
+    try {
+        const objectField = singleFieldStruct(variant.payload);
+        if (!objectField)
+            return null;
+        switch (variant.tag) {
+            case 0:
+                return null;
+            case 1: {
+                const id = decodeDomainIdBare(firstStructField(objectField));
+                return id ? readWriteKeyAccess(keyDomain(id)) : null;
+            }
+            case 2: {
+                const id = decodeAccountIdBare(firstStructField(objectField));
+                return id ? readWriteKeyAccess(keyAccount(id)) : null;
+            }
+            case 3: {
+                const definition = decodeAssetDefinitionLiteral(firstStructField(objectField));
+                return definition ? readWriteAssetDefinitionRegistrationAccess(definition) : null;
+            }
+            case 4: {
+                const id = decodeNftIdBare(firstStructField(objectField));
+                return id ? readWriteKeyAccess(keyNft(id)) : null;
+            }
+            case 5: {
+                const role = decodeRoleIdBare(firstStructField(firstStructField(objectField)));
+                return role ? readWriteKeyAccess(keyRole(role)) : null;
+            }
+            case 6: {
+                const id = decodeTriggerIdBare(firstStructField(objectField));
+                return id ? readWriteTriggerAccess(id) : null;
+            }
+            default:
+                return null;
+        }
+    }
+    catch {
+        return null;
+    }
+}
+function decodeUnregisterLiteralAccess(payload) {
+    const variant = decodeNoritoEnumVariantBare(payload);
+    if (!variant || variant.payload === null)
+        return null;
+    try {
+        const objectField = singleFieldStruct(variant.payload);
+        if (!objectField)
+            return null;
+        switch (variant.tag) {
+            case 0:
+                return null;
+            case 1: {
+                const id = decodeDomainIdBare(objectField);
+                return id ? readWriteKeyAccess(keyDomain(id)) : null;
+            }
+            case 2: {
+                const id = decodeAccountIdBare(objectField);
+                return id ? readWriteKeyAccess(keyAccount(id)) : null;
+            }
+            case 3: {
+                const id = decodeAssetDefinitionIdBare(objectField);
+                return id ? readWriteKeyAccess(keyAssetDef(id)) : null;
+            }
+            case 4: {
+                const id = decodeNftIdBare(objectField);
+                return id ? readWriteKeyAccess(keyNft(id)) : null;
+            }
+            case 5: {
+                const id = decodeRoleIdBare(objectField);
+                return id ? readWriteKeyAccess(keyRole(id)) : null;
+            }
+            case 6: {
+                const id = decodeTriggerIdBare(objectField);
+                return id ? readWriteTriggerAccess(id) : null;
+            }
+            default:
+                return null;
+        }
+    }
+    catch {
+        return null;
+    }
 }
 function decodeSetOrRemoveKeyValueLiteralAccess(tag, payload) {
     try {
@@ -5134,19 +5614,24 @@ function decodeInstructionBoxLiteralAccess(raw) {
     if (!outer)
         return null;
     try {
-        const pair = new NoritoAccessReader(outer.payload);
-        const wireIdField = pair.readLenPrefixedBytesU64();
-        const framedPayloadField = pair.readLenPrefixedBytesU64();
-        if (pair.remaining() !== 0)
+        const wireIdField = readNoritoLenPrefixedBytesAt(outer.payload, 0, outer.flags);
+        const framedPayloadField = wireIdField === null
+            ? null
+            : readNoritoLenPrefixedBytesAt(outer.payload, wireIdField.offset, outer.flags);
+        if (wireIdField === null
+            || framedPayloadField === null
+            || framedPayloadField.offset !== outer.payload.length)
             return null;
-        const wireId = decodeNoritoStringBare(wireIdField);
-        const framedPayload = decodeNoritoBytesBare(framedPayloadField);
+        const wireId = decodeNoritoStringBareWithFlags(wireIdField.field, outer.flags);
+        const framedPayload = decodeNoritoBytesBare(framedPayloadField.field);
         if (!wireId || !framedPayload)
             return null;
         const inner = decodeNoritoArchivePayload(framedPayload);
         if (!inner)
             return null;
         switch (wireId) {
+            case 'iroha.log':
+                return decodeLogLiteralAccess(inner.payload, inner.flags);
             case 'iroha.set_key_value': {
                 const variant = decodeNoritoEnumVariantBare(inner.payload);
                 if (!variant || variant.payload === null)
@@ -5165,6 +5650,10 @@ function decodeInstructionBoxLiteralAccess(raw) {
                 return decodeGrantLiteralAccess(inner.payload);
             case 'iroha.execute_trigger':
                 return decodeExecuteTriggerLiteralAccess(inner.payload);
+            case 'iroha.register':
+                return decodeRegisterLiteralAccess(inner.payload);
+            case 'iroha.unregister':
+                return decodeUnregisterLiteralAccess(inner.payload);
             case 'iroha.transfer':
                 return decodeTransferLiteralAccess(inner.payload);
             case 'iroha.mint':
@@ -5175,6 +5664,14 @@ function decodeInstructionBoxLiteralAccess(raw) {
                 return decodeSetOrRemoveAssetKeyValueLiteralAccess(inner.payload, true);
             case 'iroha_data_model::isi::transparent::RemoveAssetKeyValue':
                 return decodeSetOrRemoveAssetKeyValueLiteralAccess(inner.payload, false);
+            case CREATE_ELECTION_TYPE_NAME:
+                return decodeZkCreateElectionLiteralAccess(inner.payload, inner.flags);
+            case SUBMIT_BALLOT_TYPE_NAME:
+                return decodeZkSubmitBallotLiteralAccess(inner.payload, inner.flags);
+            case FINALIZE_ELECTION_TYPE_NAME:
+                return decodeZkFinalizeElectionLiteralAccess(inner.payload, inner.flags);
+            case UNSHIELD_TYPE_NAME:
+                return decodeZkUnshieldLiteralAccess(inner.payload, inner.flags);
             default:
                 return null;
         }
@@ -9142,7 +9639,10 @@ function directJsonLiteralTextFromExpression(expression) {
         case 'string':
         case 'number':
         case 'boolean':
-            return JSON.stringify(buildJsonValue(expression));
+        {
+            const value = buildJsonValue(expression);
+            return typeof value === 'bigint' ? null : JSON.stringify(value);
+        }
         case 'call':
             if (expression.name !== 'json' || expression.args.length !== 1)
                 return null;
@@ -9159,6 +9659,64 @@ function directJsonLiteralTextFromExpression(expression) {
         default:
             return null;
     }
+}
+function triggerIdFromJsonLiteralText(jsonText) {
+    let value;
+    try {
+        value = JSON.parse(jsonText);
+    }
+    catch {
+        return null;
+    }
+    if (typeof value === 'string') {
+        return triggerIdFromNoritoTriggerJsonString(value);
+    }
+    if (value === null || typeof value !== 'object' || Array.isArray(value) || typeof value.id !== 'string') {
+        return null;
+    }
+    try {
+        return normalizeTriggerNameLikeLiteral(value.id, 'trigger', 1, 1);
+    }
+    catch {
+        return null;
+    }
+}
+function triggerIdFromNoritoTriggerJsonString(encoded) {
+    const bytes = decodeBase64StandardBytes(encoded);
+    if (!bytes)
+        return null;
+    const archive = decodeNoritoArchivePayload(bytes);
+    if (!archive)
+        return null;
+    const fields = readNoritoStructFieldsWithFlags(archive.payload, archive.flags, 2);
+    if (!fields)
+        return null;
+    const id = decodeTriggerIdBareWithFlags(fields[0], archive.flags);
+    if (id === null || !decodeTriggerActionBareWithFlags(fields[1], archive.flags))
+        return null;
+    try {
+        return normalizeTriggerNameLikeLiteral(id, 'trigger', 1, 1);
+    }
+    catch {
+        return null;
+    }
+}
+function permissionAccessNameFromLiteral(value) {
+    return value.split(':', 1)[0];
+}
+function permissionNameFromJsonLiteralText(jsonText) {
+    let value;
+    try {
+        value = JSON.parse(jsonText);
+    }
+    catch {
+        return null;
+    }
+    if (typeof value === 'string')
+        return permissionAccessNameFromLiteral(value);
+    if (value === null || typeof value !== 'object' || Array.isArray(value) || typeof value.type !== 'string')
+        return null;
+    return permissionAccessNameFromLiteral(value.type);
 }
 function statementsContainSetAccountDetail(statements) {
     return statements.some((statement) => {
@@ -11283,6 +11841,15 @@ function pointerConstructorBuiltinSpec(name) {
             ...spec,
         };
 }
+function exactPointerConstructorBuiltinSpec(name) {
+    const spec = pointerConstructorBuiltinSpec(name);
+    return spec === null
+        ? null
+        : {
+            ...spec,
+            args: [{ kind: 'pointerConstructor', spec }],
+        };
+}
 function isSemanticPointerConstructorArgAssignable(spec, argType) {
     if (spec === null || argType === null)
         return true;
@@ -11641,6 +12208,7 @@ class StudioCodeGenerator {
     reuseExpressionBindingsForLocals = false;
     activeDynamicStateMapBodySsaAssignments = false;
     activeDynamicStateMapZeroLocalNames = new Set();
+    suppressAccessLiteralErrors = false;
     scalarStateIntReadCache = new Map();
     scalarStateIntCacheableNames = new Set();
     scalarStateIntAssignmentCacheableNames = new Set();
@@ -11681,13 +12249,29 @@ class StudioCodeGenerator {
         summary.writes.add(GLOBAL_WILDCARD_KEY);
         summary.skipped.clear();
     }
-    addOpaqueIsiFallbackAccess(summary) {
+    addOpaqueIsiFallbackAccess(summary, { preSemantic = false } = {}) {
         if (summary.explicit)
             return;
         summary.reads.add(GLOBAL_WILDCARD_KEY);
         summary.writes.add(GLOBAL_WILDCARD_KEY);
         summary.incomplete = true;
         summary.skipped.add(OPAQUE_ISI_ACCESS_SKIP_REASON);
+        if (preSemantic)
+            summary.preSemanticAccessIncomplete = true;
+    }
+    isStaticDomainAccessPreflightCandidate(expression) {
+        return expression !== undefined && rematerializableDomainLiteralFromExpression(expression) !== null;
+    }
+    isStaticTransferDomainAccessPreflightCandidate(expression) {
+        return expression !== undefined
+            && (rematerializableDomainLiteralFromExpression(expression) !== null
+                || rematerializableNameLiteralFromExpression(expression) !== null);
+    }
+    isNftTransferAccessPreflightCandidate(args) {
+        return args.length >= 3
+            && args[0]?.kind === 'stateReference'
+            && args[1]?.kind === 'stateReference'
+            && args[2]?.kind === 'stateReference';
     }
     applyLiteralAccess(summary, access) {
         access.reads.forEach((key) => summary.reads.add(key));
@@ -11905,6 +12489,26 @@ class StudioCodeGenerator {
             return value;
         return renderCanonicalAccountIdLiteralFromPublicKeyLiteral(value);
     }
+    resolveAccessLiteral(callback) {
+        try {
+            return callback();
+        }
+        catch (error) {
+            if (this.suppressAccessLiteralErrors && error instanceof StudioCompileError)
+                return null;
+            throw error;
+        }
+    }
+    withSuppressedAccessLiteralErrors(callback) {
+        const previous = this.suppressAccessLiteralErrors;
+        this.suppressAccessLiteralErrors = true;
+        try {
+            return callback();
+        }
+        finally {
+            this.suppressAccessLiteralErrors = previous;
+        }
+    }
     resolveStaticAccountLiteral(expression, scope, literalScope, stack = new Set()) {
         if (expression.kind === 'authority') {
             return AUTHORITY_ACCOUNT_PLACEHOLDER;
@@ -11947,7 +12551,7 @@ class StudioCodeGenerator {
                 ? this.resolvePointerConstructorStaticStringLiteral(expression.args[0], scope)
                 : null;
         if (literal !== null) {
-            return normalizeAssetDefinitionIdLiteral(literal);
+            return this.resolveAccessLiteral(() => normalizeAssetDefinitionIdLiteral(literal));
         }
         if (expression.kind === 'call' && expression.args.length === 0) {
             const helperLiteral = this.resolveStaticAssetDefinitionHelperReturn(expression.name, stack);
@@ -12038,7 +12642,7 @@ class StudioCodeGenerator {
             ? this.resolvePointerConstructorStaticStringLiteral(expression.args[0], scope)
             : rematerializableDomainLiteralFromExpression(expression);
         if (literal !== null) {
-            return normalizeDomainIdLiteral(literal, expression.line, expression.column);
+            return this.resolveAccessLiteral(() => normalizeDomainIdLiteral(literal, expression.line, expression.column));
         }
         if (expression.kind === 'stateReference') {
             const localLiteral = literalScope.get(expression.name)?.domain;
@@ -12065,7 +12669,7 @@ class StudioCodeGenerator {
             return domainLiteral;
         const nameLiteral = this.resolveStaticNameLiteral(expression, scope, literalScope);
         if (nameLiteral !== null)
-            return normalizeDomainIdLiteral(nameLiteral, expression.line, expression.column);
+            return this.resolveAccessLiteral(() => normalizeDomainIdLiteral(nameLiteral, expression.line, expression.column));
         return null;
     }
     resolveStaticNftLiteral(expression, scope, literalScope, stack = new Set()) {
@@ -12073,7 +12677,7 @@ class StudioCodeGenerator {
             ? this.resolvePointerConstructorStaticStringLiteral(expression.args[0], scope)
             : null;
         if (literal !== null) {
-            return renderNftLiteral(parseNftLiteral(literal, expression.line, expression.column));
+            return this.resolveAccessLiteral(() => renderNftLiteral(parseNftLiteral(literal, expression.line, expression.column)));
         }
         if (expression.kind === 'stateReference') {
             const localLiteral = literalScope.get(expression.name)?.nft;
@@ -12101,7 +12705,7 @@ class StudioCodeGenerator {
                 ? this.resolveStaticStringLiteral(expression.args[0], scope)
                 : null;
         if (literal !== null) {
-            return normalizeTriggerNameLikeLiteral(literal, 'name', expression.line, expression.column);
+            return this.resolveAccessLiteral(() => normalizeTriggerNameLikeLiteral(literal, 'name', expression.line, expression.column));
         }
         if (expression.kind === 'stateReference') {
             const localLiteral = literalScope.get(expression.name)?.name;
@@ -12291,6 +12895,41 @@ class StudioCodeGenerator {
                 return null;
         }
     }
+    resolveStaticJsonLiteralText(expression, scope, literalScope, stack = new Set()) {
+        const direct = directJsonLiteralTextFromExpression(expression);
+        if (direct !== null)
+            return direct;
+        if (expression.kind === 'stateReference') {
+            const localLiteral = literalScope.get(expression.name)?.json;
+            if (typeof localLiteral === 'string')
+                return localLiteral;
+            if (scope.has(expression.name))
+                return null;
+            const decl = this.consts.get(expression.name);
+            if (!decl || stack.has(expression.name))
+                return null;
+            stack.add(expression.name);
+            try {
+                return this.resolveStaticJsonLiteralText(decl.value, scope, literalScope, stack);
+            }
+            finally {
+                stack.delete(expression.name);
+            }
+        }
+        return null;
+    }
+    resolveStaticTriggerJsonAccess(expression, scope, literalScope) {
+        const jsonText = this.resolveStaticJsonLiteralText(expression, scope, literalScope);
+        const triggerId = jsonText === null ? null : triggerIdFromJsonLiteralText(jsonText);
+        return triggerId === null ? null : readWriteTriggerAccess(triggerId);
+    }
+    resolveStaticPermissionName(expression, scope, literalScope) {
+        const nameLiteral = this.resolveStaticNameLiteral(expression, scope, literalScope);
+        if (nameLiteral !== null)
+            return permissionAccessNameFromLiteral(nameLiteral);
+        const jsonText = this.resolveStaticJsonLiteralText(expression, scope, literalScope);
+        return jsonText === null ? null : permissionNameFromJsonLiteralText(jsonText);
+    }
     collectBlockAccesses(statements, scope, summary, literalScope = new Map()) {
         for (const statement of statements) {
             this.collectStatementAccesses(statement, scope, summary, literalScope);
@@ -12307,6 +12946,7 @@ class StudioCodeGenerator {
                 const nameLiteral = this.resolveStaticNameLiteral(statement.value, scope, literalScope);
                 const nftLiteral = this.resolveStaticNftLiteral(statement.value, scope, literalScope);
                 const instructionAccess = this.resolveInlineInstructionAccess(statement.value, scope, literalScope);
+                const jsonLiteral = this.resolveStaticJsonLiteralText(statement.value, scope, literalScope);
                 scope.add(statement.name);
                 const localLiterals = {};
                 if (domainLiteral !== null) {
@@ -12329,6 +12969,9 @@ class StudioCodeGenerator {
                 }
                 if (instructionAccess !== null) {
                     localLiterals.instructionAccess = instructionAccess;
+                }
+                if (jsonLiteral !== null) {
+                    localLiterals.json = jsonLiteral;
                 }
                 if (Object.keys(localLiterals).length > 0)
                     literalScope.set(statement.name, localLiterals);
@@ -12717,7 +13360,9 @@ class StudioCodeGenerator {
                             summary.writes.add(key);
                         }
                         else {
-                            this.addOpaqueIsiFallbackAccess(summary);
+                            this.addOpaqueIsiFallbackAccess(summary, {
+                                preSemantic: this.isStaticDomainAccessPreflightCandidate(expression.args[0]),
+                            });
                         }
                     }
                     else if (lifecycleSpec.kind === 'account') {
@@ -12786,7 +13431,10 @@ class StudioCodeGenerator {
                             summary.writes.add(key);
                         }
                         else {
-                            this.addOpaqueIsiFallbackAccess(summary);
+                            this.addOpaqueIsiFallbackAccess(summary, {
+                                preSemantic: domainLiteral === null
+                                    && this.isStaticTransferDomainAccessPreflightCandidate(expression.args[1]),
+                            });
                         }
                     }
                 }
@@ -12805,17 +13453,23 @@ class StudioCodeGenerator {
                 }
                 const managementSpec = managementBuiltinSpec(expression.name);
                 if (managementSpec !== null) {
-                    if (managementSpec.kind === 'jsonOpaque') {
-                        this.addOpaqueIsiFallbackAccess(summary);
+                    if (managementSpec.kind === 'jsonOpaque' || managementSpec.kind === 'triggerJson') {
+                        const access = managementSpec.kind === 'triggerJson' && expression.args[0]
+                            ? this.resolveStaticTriggerJsonAccess(expression.args[0], scope, literalScope)
+                            : null;
+                        if (access) {
+                            this.applyLiteralAccess(summary, access);
+                        }
+                        else {
+                            this.addOpaqueIsiFallbackAccess(summary);
+                        }
                     }
                     else if (managementSpec.kind === 'triggerName' || managementSpec.kind === 'triggerEnabled') {
                         const trigger = expression.args[0]
                             ? this.resolveStaticNameLiteral(expression.args[0], scope, literalScope)
                             : null;
                         if (trigger !== null) {
-                            const key = keyTrigger(trigger);
-                            summary.reads.add(key);
-                            summary.writes.add(key);
+                            this.applyLiteralAccess(summary, readWriteTriggerAccess(trigger));
                         }
                         else {
                             this.addOpaqueIsiFallbackAccess(summary);
@@ -12856,7 +13510,7 @@ class StudioCodeGenerator {
                             ? this.resolveStaticAccountLiteral(expression.args[0], scope, literalScope)
                             : null;
                         const permission = expression.args[1]
-                            ? this.resolveStaticNameLiteral(expression.args[1], scope, literalScope)
+                            ? this.resolveStaticPermissionName(expression.args[1], scope, literalScope)
                             : null;
                         if (account !== null && permission !== null) {
                             summary.reads.add(keyAccount(account));
@@ -12897,7 +13551,9 @@ class StudioCodeGenerator {
                             addNftAccess(summary, nft);
                         }
                         else {
-                            this.addOpaqueIsiFallbackAccess(summary);
+                            this.addOpaqueIsiFallbackAccess(summary, {
+                                preSemantic: this.isNftTransferAccessPreflightCandidate(expression.args),
+                            });
                         }
                     }
                     else if (nftAssetOperationSpec.kind === 'metadata') {
@@ -12934,6 +13590,7 @@ class StudioCodeGenerator {
                     skipped: new Set(['recursive_call']),
                     explicit: fn.accessReads.length > 0 || fn.accessWrites.length > 0,
                     incomplete: false,
+                    preSemanticAccessIncomplete: false,
                     dynamicStateReads: false,
                     dynamicStateWrites: false,
                 };
@@ -12946,6 +13603,7 @@ class StudioCodeGenerator {
                 skipped: new Set(),
                 explicit: fn.accessReads.length > 0 || fn.accessWrites.length > 0,
                 incomplete: false,
+                preSemanticAccessIncomplete: false,
                 dynamicStateReads: false,
                 dynamicStateWrites: false,
             };
@@ -12959,6 +13617,7 @@ class StudioCodeGenerator {
             if (summary.explicit) {
                 summary.skipped.clear();
                 summary.incomplete = false;
+                summary.preSemanticAccessIncomplete = false;
             }
             stack.delete(fn.name);
             cache.set(fn.name, summary);
@@ -12967,6 +13626,24 @@ class StudioCodeGenerator {
         for (const fn of this.program.functions)
             visit(fn, new Set());
         return cache;
+    }
+    validateProductionAccessHintsBeforeSemantic(exportedEntrypoints) {
+        const functionAccess = this.withSuppressedAccessLiteralErrors(() => this.buildFunctionAccessSummaries());
+        for (const entrypoint of exportedEntrypoints) {
+            if (entrypoint.entrypointKind === 'view')
+                continue;
+            if (entrypoint.entrypointKind === 'kotoage' && entrypoint.permission === null)
+                continue;
+            const summary = functionAccess.get(entrypoint.name);
+            if (!summary || summary.explicit)
+                continue;
+            const skippedReasons = [...summary.skipped].sort();
+            if (!summary.preSemanticAccessIncomplete)
+                continue;
+            if (skippedReasons.length === 0)
+                continue;
+            throwProductionAccessHintError(entrypoint.name, skippedReasons);
+        }
     }
     collectDynamicMapIterationAccessHints() {
         const hints = new Map();
@@ -14453,6 +15130,30 @@ class StudioCodeGenerator {
             }
             throw new StudioCompileError(`semantic error: ${name} auto-default is only available for Map<*,int>; provide an explicit default for value type ${renderLocalBindingType(mapType.value)}`, line, column);
         }
+        const pointerConstructorDescriptor = exactArgumentPointerConstructorDescriptor(expectedTypes);
+        if (pointerConstructorDescriptor !== null) {
+            const { spec } = pointerConstructorDescriptor;
+            if (args.length !== 1) {
+                throw new StudioCompileError(`semantic error: ${spec.canonicalName} expects one argument`, line, column);
+            }
+            const argType = this.inferSemanticExpressionType(args[0], scopeTypes, stateHandles);
+            if (!isSemanticPointerConstructorArgAssignable(spec, argType)) {
+                throw new StudioCompileError(`semantic error: ${spec.canonicalName} expects ${spec.expectedDescription}`, line, column);
+            }
+            if (spec.validateLiteral === 'domain') {
+                const literal = literalStringFromExpression(args[0]);
+                if (literal !== null) {
+                    normalizeDomainIdLiteral(literal, args[0].line, args[0].column);
+                }
+            }
+            if (spec.validateLiteral === 'asset_definition') {
+                const literal = literalStringFromExpression(args[0]);
+                if (literal !== null) {
+                    validateAssetDefinitionIdLiteral(literal, args[0].line, args[0].column);
+                }
+            }
+            return;
+        }
         const requiredArgCount = expectedTypes.filter((expectedType) => !(typeof expectedType === 'object' && expectedType !== null && expectedType.optional === true)).length;
         if (args.length < requiredArgCount || args.length > expectedTypes.length) {
             throw new StudioCompileError(`semantic error: ${message}`, line, column);
@@ -14937,29 +15638,6 @@ class StudioCodeGenerator {
                 if (isMapNewCallName(expression.name)) {
                     if (expression.args.length !== 0) {
                         throw new StudioCompileError('semantic error: Map::new expects no arguments', expression.line, expression.column);
-                    }
-                    return;
-                }
-                const pointerConstructorSpec = pointerConstructorBuiltinSpec(expression.name);
-                if (pointerConstructorSpec !== null) {
-                    if (expression.args.length !== 1) {
-                        throw new StudioCompileError(`semantic error: ${pointerConstructorSpec.canonicalName} expects one argument`, expression.line, expression.column);
-                    }
-                    const argType = this.inferSemanticExpressionType(expression.args[0], scopeTypes, stateHandles);
-                    if (!isSemanticPointerConstructorArgAssignable(pointerConstructorSpec, argType)) {
-                        throw new StudioCompileError(`semantic error: ${pointerConstructorSpec.canonicalName} expects ${pointerConstructorSpec.expectedDescription}`, expression.line, expression.column);
-                    }
-                    if (pointerConstructorSpec.validateLiteral === 'domain') {
-                        const literal = literalStringFromExpression(expression.args[0]);
-                        if (literal !== null) {
-                            normalizeDomainIdLiteral(literal, expression.line, expression.column);
-                        }
-                    }
-                    if (pointerConstructorSpec.validateLiteral === 'asset_definition') {
-                        const literal = literalStringFromExpression(expression.args[0]);
-                        if (literal !== null) {
-                            validateAssetDefinitionIdLiteral(literal, expression.line, expression.column);
-                        }
                     }
                     return;
                 }
@@ -15632,6 +16310,9 @@ class StudioCodeGenerator {
         this.validateStateEntrypointParams(declaredEntrypoints);
         this.validatePublicEntrypointParamTypes(declaredEntrypoints);
         this.validateStateParamCallArguments();
+        if (this.compilerMode === 'production') {
+            this.validateProductionAccessHintsBeforeSemantic(exportedEntrypoints);
+        }
         this.validateSemanticExpressionUsageInFunctions();
         this.validateOnChainMapKeyPolicy();
         this.validateLoopControlContext();
@@ -17860,8 +18541,10 @@ class StudioCodeGenerator {
         const nestedLoopContext = { breakJumps: [], continueJumps: [] };
         const previousSsaAssignments = this.activeDynamicStateMapBodySsaAssignments;
         const previousZeroLocalNames = this.activeDynamicStateMapZeroLocalNames;
-        this.activeDynamicStateMapBodySsaAssignments = false;
-        this.activeDynamicStateMapZeroLocalNames = new Set();
+        this.activeDynamicStateMapBodySsaAssignments = true;
+        this.activeDynamicStateMapZeroLocalNames = new Set([...loopLocals]
+            .filter(([, binding]) => binding?.rematerializableIntLiteral === 0)
+            .map(([name]) => name));
         try {
             const bodyCarriedLiveNames = this.prepareForMapBodyLocals(loopLocals, locals, statement.body, liveAfterStatement, returnContext);
             this.compileStatementBlock(statement.body, new Set(callStack), loopLocals, returnContext, nestedLoopContext, bodyCarriedLiveNames, prepublishedPointerLocalNames);
@@ -24119,7 +24802,7 @@ class StudioCodeGenerator {
         if (expression.args.length !== spec.args.length) {
             throw new StudioCompileError(`${spec.compileMessage ?? spec.message} in the browser compiler.`, expression.line, expression.column);
         }
-        if (spec.kind === 'jsonOpaque') {
+        if (spec.kind === 'jsonOpaque' || spec.kind === 'triggerJson') {
             const jsonReg = this.compileExpressionAsJsonPointer(expression.args[0], callStack, locals);
             this.emitOnePointerSyscall(jsonReg, spec.syscall);
         }
@@ -28487,6 +29170,16 @@ class StudioCodeGenerator {
             return this.maybePrepublishLocalBinding(name, this.emitLocalMapNewBinding(defaultMapNewType(), expression.line, expression.column), prepublishedPointerLocalNames);
         }
         const valueType = this.inferExpressionValueType(expression, locals);
+        if (valueType === null) {
+            if (expression.kind === 'call') {
+                const binding = this.compileCallExpression(expression, callStack, locals, false, liveAfterStatement);
+                if (binding === null) {
+                    throw new StudioCompileError(`Function \`${expression.name}\` does not return a value in the browser compiler.`, expression.line, expression.column);
+                }
+                return this.maybePrepublishLocalBinding(name, binding, prepublishedPointerLocalNames);
+            }
+            throw new StudioCompileError(`Unable to infer type for local \`${name}\` in the browser compiler.`, expression.line, expression.column);
+        }
         if (isLocalMapType(valueType)) {
             return this.maybePrepublishLocalBinding(name, this.compileExpressionAsBindingForType(expression, valueType, callStack, locals), prepublishedPointerLocalNames);
         }
@@ -29438,9 +30131,6 @@ class StudioCodeGenerator {
                 const mapType = this.inferMapExpressionType(expression.args[0], locals);
                 return valueKindForType(mapType.value) === 'pointer';
             }
-            const vectorSpec = vectorBuiltinSpec(expression.name);
-            if (vectorSpec !== null)
-                return vectorSpec.kind === 'pointer';
             const callee = this.functions.get(expression.name);
             return callee?.returnType !== undefined && callee.returnType !== null && valueKindForType(callee.returnType) === 'pointer';
         }
@@ -29524,10 +30214,6 @@ class StudioCodeGenerator {
             if (dynamicValueTypeSpec !== null) {
                 const argTypes = expression.args.map((arg) => this.inferExpressionValueType(arg, locals));
                 return dynamicValueTypeSpec.valueTypeForArgs(argTypes);
-            }
-            const vendorBridgeSpec = vendorBridgeBuiltinSpec(expression.name);
-            if (vendorBridgeSpec !== null && vendorBridgeSpec.valueType === null) {
-                throw new StudioCompileError(`Function \`${expression.name}\` does not produce a value in the browser compiler.`, expression.line, expression.column);
             }
             const staticValueType = staticBuiltinValueType(expression.name);
             if (staticValueType !== NO_BUILTIN_VALUE_TYPE)
@@ -29713,14 +30399,17 @@ function normalizeKotodamaCompilerModeOption(mode) {
     }
     throw new StudioCompileError('Unknown Kotodama compiler mode; expected "production" or "test".', 1, 1);
 }
+function throwProductionAccessHintError(entrypointName, skippedReasons) {
+    const reasons = skippedReasons.length === 0
+        ? 'no reason recorded'
+        : skippedReasons.join('; ');
+    throw new StudioCompileError(`E_ACCESS_INCOMPLETE: entrypoint \`${entrypointName}\` has incomplete compiler-derived access metadata: ${reasons}`, undefined, undefined);
+}
 function validateProductionAccessHints(entrypoints) {
     const incompleteEntrypoint = entrypoints.find((entrypoint) => entrypoint.accessHintsComplete === false);
     if (incompleteEntrypoint === undefined)
         return;
-    const reasons = incompleteEntrypoint.accessHintsSkipped.length === 0
-        ? 'no reason recorded'
-        : incompleteEntrypoint.accessHintsSkipped.join('; ');
-    throw new StudioCompileError(`E_ACCESS_INCOMPLETE: entrypoint \`${incompleteEntrypoint.name}\` has incomplete compiler-derived access metadata: ${reasons}`, undefined, undefined);
+    throwProductionAccessHintError(incompleteEntrypoint.name, incompleteEntrypoint.accessHintsSkipped);
 }
 export function compileKotodamaStudioProgram(source, options = {}) {
     try {
