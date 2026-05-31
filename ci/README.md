@@ -788,6 +788,17 @@ frontier/fork/quorum/RBC/rbc-causality/rbc-deliver-acceptance/rbc-commit-process
   boundary handling, stale rejection, and future evidence admission. Its TLC
   cross-check independently exhausts the same eleven expected-failure configs as
   Apalache.
+  The `evidence-canonicalization` family covers canonical keys, subject
+  height/view extraction, block references, valid/invalid store insertion,
+  canonical storage keys, persistence defaults, duplicate rejection, and unset
+  penalty flags. Its TLC cross-check independently exhausts the same
+  thirty-seven expected-failure configs as Apalache.
+  The `evidence-validation` family covers kind/payload matching, double-vote
+  signature, phase, height, epoch, signer, block/root conflict, and precedence
+  checks, invalid proposal height, parent, and view-reset handling, and
+  censorship receipt transaction, signer, signature, quorum, deduplication, and
+  precedence checks. Its TLC cross-check independently exhausts the same
+  thirty-nine expected-failure configs as Apalache.
   The Sumeragi suite also includes the p2p-topology-refresh helper slice for
   empty, unchanged, changed, and stray refresh decisions, the local-seen latch,
   local-removal queue clearing, empty gossip updates, and trusted-peer network

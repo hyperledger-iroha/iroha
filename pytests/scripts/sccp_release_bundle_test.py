@@ -1186,13 +1186,64 @@ def test_release_bundle_verifier_rejects_artifact_field_type_drift(
         "sccp-all-lanes-summary.json bytes must be a non-negative integer"
         in verified.stdout
     )
-    assert "sccp-all-lanes-summary.json sha256 must be a string" in verified.stdout
+    assert (
+        "sccp-all-lanes-summary.json sha256 must be a canonical SHA-256 hex string"
+        in verified.stdout
+    )
     assert (
         "readiness report input artifact bytes must be a non-negative integer "
         "for evidence/00-complete.toml"
     ) in verified.stdout
     assert (
-        "readiness report input artifact sha256 must be a string for "
+        "readiness report input artifact sha256 must be a canonical SHA-256 hex string for "
+        "evidence/00-complete.toml"
+    ) in verified.stdout
+
+
+def test_release_bundle_verifier_rejects_artifact_digest_text_drift(
+    tmp_path: Path,
+) -> None:
+    """Manifest and report artifacts must carry canonical SHA-256 text."""
+
+    output_dir = build_ready_bundle(tmp_path)
+    report_path = output_dir / "sccp-release-readiness.json"
+    report = json.loads(report_path.read_text(encoding="utf-8"))
+    report["input_artifacts"][0]["sha256"] = "A" * 64
+    report_path.write_text(
+        json.dumps(report, indent=2, sort_keys=True) + "\n",
+        encoding="utf-8",
+    )
+    rewrite_manifest_artifact(output_dir, "sccp-release-readiness.json")
+
+    manifest_path = output_dir / "manifest.json"
+    manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+    for artifact in manifest["artifacts"]:
+        if artifact["path"] == "sccp-all-lanes-summary.json":
+            artifact["sha256"] = "0" * 63
+            break
+    else:
+        raise AssertionError("summary artifact not found")
+    manifest_path.write_text(
+        json.dumps(manifest, indent=2, sort_keys=True) + "\n",
+        encoding="utf-8",
+    )
+    rewrite_canonical_report_and_notes(output_dir)
+
+    verified = subprocess.run(
+        ["python3", str(VERIFY_SCRIPT), str(output_dir)],
+        check=False,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+        text=True,
+    )
+
+    assert verified.returncode == 1
+    assert (
+        "sccp-all-lanes-summary.json sha256 must be a canonical SHA-256 hex string"
+        in verified.stdout
+    )
+    assert (
+        "readiness report input artifact sha256 must be a canonical SHA-256 hex string for "
         "evidence/00-complete.toml"
     ) in verified.stdout
 

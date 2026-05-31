@@ -172,6 +172,14 @@ ALL_LANES_DESTINATION_BINDING_KEYS = (
     ALL_LANES_DESTINATION_BINDING_REQUIRED_KEYS
     | ALL_LANES_DESTINATION_BINDING_OPTIONAL_KEYS
 )
+ALL_LANES_EVM_DESTINATION_DOMAINS = {SCCP_DOMAIN_ETH, SCCP_DOMAIN_BSC}
+ALL_LANES_STATIC_DESTINATION_DOMAINS = {
+    SCCP_DOMAIN_SOL,
+    SCCP_DOMAIN_TON,
+    SCCP_DOMAIN_SORA_KUSAMA,
+    SCCP_DOMAIN_SORA_POLKADOT,
+    SCCP_DOMAIN_SORA2,
+}
 ALL_LANES_ROUTE_ALLOWLIST_KEYS = {
     "route_allowlist_hash",
     "expected_route_allowlist_hash",
@@ -300,6 +308,14 @@ def _sha256(path: Path) -> str:
     return hashlib.sha256(path.read_bytes()).hexdigest()
 
 
+def _is_canonical_sha256_text(value: Any) -> bool:
+    return (
+        isinstance(value, str)
+        and len(value) == 64
+        and all(symbol in "0123456789abcdef" for symbol in value)
+    )
+
+
 def _load_module(name: str, path: Path) -> Any:
     spec = importlib.util.spec_from_file_location(name, path)
     if spec is None or spec.loader is None:
@@ -410,8 +426,8 @@ def _artifact_errors(bundle_dir: Path, artifact: dict[str, Any]) -> list[str]:
         errors.append(
             f"{artifact_path} byte length mismatch: expected {expected_bytes}, got {actual_bytes}"
         )
-    if not isinstance(expected_hash, str):
-        errors.append(f"{artifact_path} sha256 must be a string")
+    if not _is_canonical_sha256_text(expected_hash):
+        errors.append(f"{artifact_path} sha256 must be a canonical SHA-256 hex string")
     elif expected_hash != actual_hash:
         errors.append(
             f"{artifact_path} sha256 mismatch: expected {expected_hash}, got {actual_hash}"
@@ -491,8 +507,11 @@ def _check_report_artifact(
             f"{label} artifact bytes must be a non-negative integer for {artifact_path}"
         )
     expected_hash = artifact.get("sha256")
-    if not isinstance(expected_hash, str):
-        errors.append(f"{label} artifact sha256 must be a string for {artifact_path}")
+    if not _is_canonical_sha256_text(expected_hash):
+        errors.append(
+            f"{label} artifact sha256 must be a canonical SHA-256 hex string "
+            f"for {artifact_path}"
+        )
     path_errors = _canonical_report_artifact_path_errors(label, artifact_path)
     if path_errors:
         errors.extend(path_errors)
@@ -2068,6 +2087,35 @@ def _all_lanes_lane_schema_errors(label: str, lanes: Any) -> list[str]:
                     type_label="20-byte",
                 )
             )
+            if domain in ALL_LANES_EVM_DESTINATION_DOMAINS:
+                for field in ("destination_network_id", "destination_bridge_address"):
+                    if field not in destination_binding:
+                        errors.append(
+                            f"{destination_label} {field} is required for "
+                            "EVM-family lanes"
+                        )
+            elif domain == SCCP_DOMAIN_TRON:
+                if "destination_network_id" not in destination_binding:
+                    errors.append(
+                        f"{destination_label} destination_network_id is required "
+                        "for TRON lanes"
+                    )
+                if "destination_bridge_address" in destination_binding:
+                    errors.append(
+                        f"{destination_label} destination_bridge_address is only "
+                        "valid for EVM-family lanes"
+                    )
+            elif domain in ALL_LANES_STATIC_DESTINATION_DOMAINS:
+                if "destination_network_id" in destination_binding:
+                    errors.append(
+                        f"{destination_label} destination_network_id is only valid "
+                        "for EVM-family or TRON lanes"
+                    )
+                if "destination_bridge_address" in destination_binding:
+                    errors.append(
+                        f"{destination_label} destination_bridge_address is only "
+                        "valid for EVM-family lanes"
+                    )
             errors.extend(
                 _matching_text_field_errors(
                     destination_label,

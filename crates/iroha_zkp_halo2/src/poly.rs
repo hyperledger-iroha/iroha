@@ -4,7 +4,8 @@ use crate::{
     IpaScalar, PolyOpenTranscriptMetadata,
     backend::{IpaBackend, traits::IpaGroup},
     errors::Error,
-    ipa::{IpaProof, IpaProver, IpaVerifier, commit_vec},
+    ipa::{IpaProof, IpaProver, commit_vec},
+    ipa::{IpaVerifierWitness, derive_ipa_verifier_witness},
     params::Params,
     transcript::Transcript,
 };
@@ -149,6 +150,33 @@ impl<B: IpaBackend> Polynomial<B> {
         proof: &IpaProof<B>,
         metadata: PolyOpenTranscriptMetadata,
     ) -> Result<(), Error> {
+        Self::derive_open_verifier_witness_with_metadata(
+            params, transcript, z, p_g, t, proof, metadata,
+        )
+        .map(|_| ())
+    }
+
+    /// Derive the verifier witness for an opening proof while binding the
+    /// supplied metadata into the Fiat-Shamir transcript.
+    ///
+    /// This is the transparent proof-derived witness path used by recursive
+    /// verifier preflight: the returned witness is reconstructed from the proof
+    /// envelope's public statement and proof bytes, and is returned only if the
+    /// final verifier group equality holds.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error when the parameter/opening dimensions are inconsistent,
+    /// the proof shape is invalid, or the final verifier equality fails.
+    pub fn derive_open_verifier_witness_with_metadata(
+        params: &Params<B>,
+        transcript: &mut Transcript,
+        z: B::Scalar,
+        p_g: B::Group,
+        t: B::Scalar,
+        proof: &IpaProof<B>,
+        metadata: PolyOpenTranscriptMetadata,
+    ) -> Result<IpaVerifierWitness<B>, Error> {
         let n = params.n();
         let mut b = Vec::with_capacity(n);
         let mut pow = B::Scalar::one();
@@ -157,7 +185,12 @@ impl<B: IpaBackend> Polynomial<B> {
             pow = pow.mul(z);
         }
         Self::absorb_statement(params, transcript, z, p_g, t, metadata);
-        IpaVerifier::<B>::verify(params, transcript, &b, p_g, t, proof)
+        let witness = derive_ipa_verifier_witness::<B>(params, transcript, &b, p_g, t, proof)?;
+        if witness.accumulation.final_q == witness.accumulation.expected_term {
+            Ok(witness)
+        } else {
+            Err(Error::VerificationFailed)
+        }
     }
 }
 

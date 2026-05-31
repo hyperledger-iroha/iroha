@@ -828,6 +828,58 @@ fn decode_envelope_accepts_large_max_k_limit() {
 }
 
 #[test]
+fn decode_envelope_limits_reject_oversized_vectors_before_dispatch() {
+    let limits = OpenVerifyLimits {
+        max_k: Some(2),
+        max_transcript_label_len: None,
+    };
+
+    let mut oversized_g = sample_pallas_envelope(4, "limit-oversized-g");
+    oversized_g.params.g.push(oversized_g.params.g[0]);
+    assert!(matches!(
+        nh::decode_envelope_with_limits(&oversized_g, limits),
+        Err(Error::EnvelopeLimitExceeded {
+            limit: "params_g_len",
+            max: 4,
+            actual: 5
+        })
+    ));
+
+    let mut oversized_h = sample_pallas_envelope(4, "limit-oversized-h");
+    oversized_h.params.h.push(oversized_h.params.h[0]);
+    assert!(matches!(
+        nh::decode_envelope_with_limits(&oversized_h, limits),
+        Err(Error::EnvelopeLimitExceeded {
+            limit: "params_h_len",
+            max: 4,
+            actual: 5
+        })
+    ));
+
+    let mut oversized_l = sample_pallas_envelope(4, "limit-oversized-l");
+    oversized_l.proof.l.push(oversized_l.proof.l[0]);
+    assert!(matches!(
+        nh::decode_envelope_with_limits(&oversized_l, limits),
+        Err(Error::EnvelopeLimitExceeded {
+            limit: "proof_l_rounds",
+            max: 2,
+            actual: 3
+        })
+    ));
+
+    let mut oversized_r = sample_pallas_envelope(4, "limit-oversized-r");
+    oversized_r.proof.r.push(oversized_r.proof.r[0]);
+    assert!(matches!(
+        nh::decode_envelope_with_limits(&oversized_r, limits),
+        Err(Error::EnvelopeLimitExceeded {
+            limit: "proof_r_rounds",
+            max: 2,
+            actual: 3
+        })
+    ));
+}
+
+#[test]
 fn params_from_wire_reports_version_and_curve_mismatch() {
     let params = pallas::Params::new(8).unwrap();
     let wire = nh::params_to_wire(&params);
@@ -2340,4 +2392,94 @@ fn batch_verify_rejects_tampered_bound_public_claims() {
             "tampered envelope unexpectedly verified: {tampered:?}"
         );
     }
+}
+
+#[test]
+fn pallas_open_envelope_derives_verifier_witness() {
+    let envelope = sample_pallas_envelope(8, "derive-envelope-witness");
+    let (params, witness) =
+        nh::derive_pallas_ipa_verifier_witness_from_envelope(&envelope).unwrap();
+    let nh::DecodedEnvelope::Pallas {
+        params: decoded_params,
+        proof,
+        z,
+        t,
+        p_g,
+    } = nh::decode_envelope(&envelope).unwrap()
+    else {
+        panic!("sample envelope must decode as Pallas");
+    };
+    assert_eq!(params.fingerprint(), decoded_params.fingerprint());
+    assert_eq!(witness.transcript_projection.n, params.n());
+    assert_eq!(
+        witness.accumulation.final_q,
+        witness.accumulation.expected_term
+    );
+
+    let b = pallas_evaluation_vector(params.n(), z);
+    let mut transcript = Transcript::new(&envelope.transcript_label);
+    absorb_pallas_poly_statement(
+        &mut transcript,
+        params.as_ref(),
+        z,
+        p_g,
+        t,
+        envelope.transcript_metadata(),
+    );
+    validate_ipa_verifier_witness::<PallasBackend>(
+        params.as_ref(),
+        &mut transcript,
+        &b,
+        p_g,
+        t,
+        proof.as_ref(),
+        &witness,
+    )
+    .unwrap();
+}
+
+#[test]
+fn pallas_open_envelope_witness_derivation_honors_limits() {
+    let envelope = sample_pallas_envelope(8, "derive-envelope-witness-limits");
+    nh::derive_pallas_ipa_verifier_witness_from_envelope_with_limits(
+        &envelope,
+        OpenVerifyLimits {
+            max_k: Some(3),
+            max_transcript_label_len: None,
+        },
+    )
+    .expect("n=8 envelope is inside max_k=3");
+
+    let err = nh::derive_pallas_ipa_verifier_witness_from_envelope_with_limits(
+        &envelope,
+        OpenVerifyLimits {
+            max_k: Some(2),
+            max_transcript_label_len: None,
+        },
+    )
+    .expect_err("n=8 envelope exceeds max_k=2");
+    assert!(matches!(
+        err,
+        Error::EnvelopeLimitExceeded {
+            limit: "max_k",
+            max: 4,
+            actual: 8
+        }
+    ));
+}
+
+#[test]
+fn pallas_open_envelope_witness_derivation_rejects_tampering() {
+    let envelope = sample_pallas_envelope(8, "derive-envelope-witness-tamper");
+    let mut bad_label = envelope.clone();
+    bad_label.transcript_label.push_str("-forged");
+    assert!(nh::derive_pallas_ipa_verifier_witness_from_envelope(&bad_label).is_err());
+
+    let mut bad_claim = envelope.clone();
+    bad_claim.public.t[0] ^= 0x01;
+    assert!(nh::derive_pallas_ipa_verifier_witness_from_envelope(&bad_claim).is_err());
+
+    let mut bad_proof = envelope;
+    bad_proof.proof.a_final[0] ^= 0x01;
+    assert!(nh::derive_pallas_ipa_verifier_witness_from_envelope(&bad_proof).is_err());
 }

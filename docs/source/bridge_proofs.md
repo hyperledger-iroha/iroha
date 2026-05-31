@@ -3896,7 +3896,10 @@ file's byte length and SHA-256 digest, and in strict release mode it also lists
 the byte length and SHA-256 digest of the ordinary-file corridor artifact for
 each passed phase, so reviewers can match public release notes to the exact
 TOML and validation artifacts that passed all-lanes validation without
-following symlinks or mutable aliases. It also renders a per-lane
+following symlinks or mutable aliases. Release-bundle verification requires
+those manifest and report digest fields to use canonical lowercase
+64-character SHA-256 hex text, so uppercase, short, or otherwise ambiguous
+digest strings cannot be published as artifact bindings. It also renders a per-lane
 cryptographic evidence table with
 the source verifier material hash, source adapter deployment hash, destination
 binding hash, route allowlist hash, route canary evidence hash, and route

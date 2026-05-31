@@ -2,6 +2,45 @@
 
 Last updated: 2026-05-31
 
+## 2026-05-31 SCCP release-bundle artifact digest canonicalization
+
+- Hardened `scripts/sccp_verify_release_bundle.py` so manifest artifacts and
+  readiness-report artifact references must carry canonical lowercase
+  64-character SHA-256 hex text before byte/hash equality checks run. This
+  rejects uppercase, short, non-string, or otherwise ambiguous digest fields
+  instead of letting public release notes carry noncanonical artifact bindings.
+- Added a release-bundle regression that mutates both a manifest artifact digest
+  and a readiness-report input artifact digest while keeping the rest of the
+  bundle structurally valid.
+- Updated the bridge-proof docs and roadmap to call out canonical artifact
+  digest binding for strict public release bundles.
+- Validation:
+  - `python3 -m py_compile scripts/sccp_verify_release_bundle.py pytests/scripts/sccp_release_bundle_test.py`
+  - `python3 -m pytest -q pytests/scripts/sccp_release_bundle_test.py -k 'artifact_field_type_drift or artifact_digest_text_drift'`
+    (`2 passed, 87 deselected`)
+  - `python3 -m pytest -q pytests/scripts/sccp_release_bundle_test.py`
+    (`89 passed`)
+  - `bash scripts/check_sccp_production_corridor.sh --phase evidence-scripts`
+    (`699 passed`)
+
+## 2026-05-31 Sumeragi evidence-canonicalization TLC cross-check
+
+- Extended `scripts/formal/sumeragi_tlc.sh` with
+  `evidence-canonicalization-fast` and `evidence-canonicalization-bug-*` modes
+  so the evidence canonicalization/deduplication model has independent TLC
+  coverage for canonical keys, subject height/view extraction, block references,
+  valid/invalid store insertion, canonical storage keys, persistence defaults,
+  duplicate rejection, and unset penalty flags.
+- Updated the formal docs, CI inventory, and roadmap to mark evidence
+  canonicalization/deduplication as a TLC-cross-checked Sumeragi helper.
+- Validation:
+  - `bash -n scripts/formal/sumeragi_tlc.sh`
+  - `python3 scripts/formal/check_sumeragi_formal_coverage.py`
+  - `JAVA_HOME=/opt/homebrew/Cellar/openjdk@21/21.0.11/libexec/openjdk.jdk/Contents/Home PATH="/opt/homebrew/Cellar/openjdk@21/21.0.11/libexec/openjdk.jdk/Contents/Home/bin:$PATH" APALACHE_ALLOW_DOCKER=0 target/apalache/toolchains/v0.52.2/bin/apalache-mc typecheck docs/formal/sumeragi/SumeragiEvidenceCanonicalizationGate.tla`
+  - `JAVA_HOME=/opt/homebrew/Cellar/openjdk@21/21.0.11/libexec/openjdk.jdk/Contents/Home PATH="/opt/homebrew/Cellar/openjdk@21/21.0.11/libexec/openjdk.jdk/Contents/Home/bin:$PATH" bash scripts/formal/sumeragi_tlc.sh evidence-canonicalization-fast`
+  - sequential `evidence-canonicalization-bug-*` TLC runs for all 37 mutation
+    configs, all producing the expected invariant failure
+
 ## 2026-05-31 SCCP release-bundle domain roster gate
 
 - Hardened `scripts/sccp_verify_release_bundle.py` so public all-lanes
@@ -617,6 +656,112 @@ Last updated: 2026-05-31
   - sequential `missing-qc-height-stall-bug-*` TLC runs for all 25 mutation
     configs, all producing the expected invariant failure
   - `git diff --check -- docs/formal/sumeragi/SumeragiMissingQcHeightStallGate.tla docs/formal/sumeragi/SumeragiMissingQcHeightStallGate_fast.cfg scripts/formal/sumeragi_tlc.sh docs/formal/sumeragi/README.md ci/README.md roadmap.md status.md`
+
+## 2026-05-31 Kagemusha final MSM and verifier-key coverage
+
+- Resolved stale recursive-verifier TODO wording on the low-level non-native
+  Vesta affine add/double wrappers. The active MSM and IPA verifier
+  compositions already route group operations through point-or-identity
+  encodings and complete-add constraints.
+- Added explicit final IPA MSM identity-output coverage for the bounded,
+  fixed-window, and shared-table fixed-window `Q = a*G + b*H + (a*b)*U`
+  wrappers. Zero final scalars now exercise the final comparison outputting the
+  canonical point at infinity while preserving the existing adversarial
+  product-link and public base/output substitution tests.
+- Recursive aggregation preverification now requires the supplied verifier key
+  to be the canonical semantic-circuit key before accepting an otherwise
+  self-consistent proof envelope. A forged verifier record whose inline key,
+  commitment, length, and envelope `vk_hash` all agree with the folded-token
+  key is rejected before backend verification. Recursive aggregation
+  verifier-key envelopes carry `CID1` circuit-id bindings too, and backend
+  verification rejects a matching raw `H2VK` payload replayed under a wrong
+  recursive aggregation circuit-family id.
+- Compact folded-token proving, proving-key derivation, and direct or
+  record-backed verification now enforce the canonical `kagemusha-folded-v1`
+  semantic verifier key before backend verification. A forged folded-token
+  verifier record using the recursive aggregation key is rejected even when the
+  record commitment and envelope `vk_hash` are made self-consistent.
+- Offline recursive proving, proving-key derivation, and chain-side verifier
+  resolution now enforce the canonical `offline-note-recursive` semantic
+  verifier key before proof creation or backend verification. A self-consistent
+  forged verifier record with a matching mutated commitment and envelope
+  `vk_hash` is rejected by the chain resolver. Offline recursive verifier-key
+  envelopes now carry a `CID1` circuit-id TLV, and backend verification rejects
+  replay where the raw `H2VK` payload matches but the verifier-key envelope
+  names another circuit family.
+- Kagemusha transfer admission and checked private-hop folding now enforce the
+  canonical confidential-transfer-v2 semantic verifier key before accepting
+  otherwise self-consistent asset bindings, verifier records, hop attachments,
+  or envelopes.
+- Confidential-transfer-v2 and unshield verifier-key generation now uses
+  process-local caches, and canonical verifier-key envelopes include a `CID1`
+  circuit-id TLV so unshield v2/v3 commitments remain semantically distinct
+  even when raw Halo2 verifier-key payloads can deserialize across related
+  circuits. Backend verification rejects supplied verifier-key envelopes whose
+  `CID1` value normalizes to a different circuit than the proof envelope, so a
+  cryptographically valid raw `H2VK` payload cannot be replayed under a
+  mismatched semantic circuit id. Canonical confidential v2 prover builders now
+  reuse cached derived Halo2 IPA proving keys while preserving the arbitrary-key
+  fallback for noncanonical test/custom keys, and backend verification now
+  dispatches the unshield v3 semantic circuit. Direct guard coverage accepts
+  cached canonical keys and rejects mutated bytes, wrong backends, empty keys,
+  cross-circuit unshield key substitution, and wrong-`CID1` proof verification.
+- Kagemusha folded verifier-key envelopes now also carry `CID1` circuit-id
+  bindings. Direct and record-backed folded-token guards still require the
+  canonical semantic verifier key, and backend verification rejects matching
+  raw `H2VK` payload replay under a wrong folded-token circuit-family id.
+- Kagemusha proof-derived Pallas opening preflight now rejects detached
+  polynomial-opening envelopes before witness derivation: transcript labels must
+  be non-empty and at most 128 bytes, and verifier-key commitment, public-input
+  schema, and hop-domain metadata must be present and non-zero.
+- Added heavyweight composed-circuit MockProver coverage for the LEN=4
+  multi-round shared-table IPA verifier slice. The ignored tests cover an honest
+  synthetic statement, a real Pallas opening translated into the Vesta verifier
+  circuit, public-instance substitution, `Q` splice, generator-fold splice,
+  challenge splice, and final-MSM splice. A direct normal-path run of the first
+  case was terminated after more than 20 minutes at full CPU, so routine
+  validation keeps these cases ignored and relies on the active builder,
+  native-Pallas-preflight, batch-preflight, and host-link adversarial tests.
+- The one-hop recursive verifier-slice now exposes two public verifier-binding
+  digests: the embedded verifier transcript-binding digest and a
+  scalar-projection digest over that transcript-binding digest, the public
+  `b`-reduction input scalars, challenge, inverse, and final folded `b` scalar.
+  The scalar projection is constrained with the same field-friendly Pow5
+  compressor, with active order-sensitivity coverage and heavyweight
+  MockProver splice coverage kept ignored by default.
+- Validation:
+  - `CARGO_INCREMENTAL=0 CARGO_TARGET_DIR=/tmp/iroha-codex-kagemusha-target cargo test -p iroha_core kagemusha_non_native_vesta_ipa_final --lib`
+  - `CARGO_INCREMENTAL=0 CARGO_TARGET_DIR=/tmp/iroha-codex-kagemusha-target cargo test -p iroha_core kagemusha_recursive_aggregation_proof_preverify --lib`
+  - `CARGO_INCREMENTAL=0 CARGO_TARGET_DIR=/tmp/iroha-codex-kagemusha-target cargo test -p iroha_core kagemusha_recursive_aggregation --lib -- --test-threads=1` (36 passed, 5 ignored heavyweight composed-circuit tests)
+  - `CARGO_INCREMENTAL=0 CARGO_TARGET_DIR=/tmp/iroha-codex-kagemusha-target cargo test -p iroha_core kagemusha_compact_payment_token --lib`
+  - `CARGO_INCREMENTAL=0 CARGO_TARGET_DIR=/tmp/iroha-codex-kagemusha-target cargo test -p iroha_core prove_offline_note_redeem_rejects_noncanonical_verifier_key --lib`
+  - `CARGO_INCREMENTAL=0 CARGO_TARGET_DIR=/tmp/iroha-codex-kagemusha-target cargo test -p iroha_core offline_note_rejects_recursive_verifier_record_mismatches --lib`
+  - `CARGO_INCREMENTAL=0 CARGO_TARGET_DIR=/tmp/iroha-codex-kagemusha-target cargo test -p iroha_core offline_note_rejects --lib`
+  - `CARGO_INCREMENTAL=0 CARGO_TARGET_DIR=/tmp/iroha-codex-kagemusha-target cargo test -p iroha_core kagemusha_verified_folded_public_inputs_from_bundle_with_records_rejects_bad_records --lib`
+  - `CARGO_INCREMENTAL=0 CARGO_TARGET_DIR=/tmp/iroha-codex-kagemusha-target cargo test -p iroha_core kagemusha_transfer_rejects_verifier_record_mismatches_before_proof_decode --lib`
+  - `CARGO_INCREMENTAL=0 CARGO_TARGET_DIR=/tmp/iroha-codex-kagemusha-target cargo test -p iroha_core kagemusha_verified_folded_public_inputs --lib`
+  - `CARGO_INCREMENTAL=0 CARGO_TARGET_DIR=/tmp/iroha-codex-kagemusha-target cargo test -p iroha_core kagemusha_transfer --lib`
+  - `CARGO_INCREMENTAL=0 CARGO_TARGET_DIR=/tmp/iroha-codex-kagemusha-target cargo test -p iroha_core confidential_transfer_v2_canonical_vk_guard_rejects_self_consistent_key_substitution --lib`
+  - `CARGO_INCREMENTAL=0 CARGO_TARGET_DIR=/tmp/iroha-codex-kagemusha-target cargo test -p iroha_core confidential_unshield_v2_v3_canonical_caches_reject_key_substitution --lib`
+  - `CARGO_INCREMENTAL=0 CARGO_TARGET_DIR=/tmp/iroha-codex-kagemusha-target cargo test -p iroha_core generated_confidential_v2_vk_records_parse_as_matching_circuits --lib`
+  - `CARGO_INCREMENTAL=0 CARGO_TARGET_DIR=/tmp/iroha-codex-kagemusha-target cargo test -p iroha_core generated_confidential_transfer_v2_one_input_one_output_verifies_against_generated_vk --lib`
+  - `CARGO_INCREMENTAL=0 CARGO_TARGET_DIR=/tmp/iroha-codex-kagemusha-target cargo test -p iroha_core generated_confidential_transfer_v2 --lib`
+  - `CARGO_INCREMENTAL=0 CARGO_TARGET_DIR=/tmp/iroha-codex-kagemusha-target cargo test -p iroha_core generated_confidential_unshield_v2_proof_verifies_against_cached_canonical_vk --lib`
+  - `CARGO_INCREMENTAL=0 CARGO_TARGET_DIR=/tmp/iroha-codex-kagemusha-target cargo test -p iroha_core generated_confidential_unshield_v3_proof_verifies_and_rejects_bad_change --lib`
+  - `CARGO_INCREMENTAL=0 CARGO_TARGET_DIR=/tmp/iroha-codex-kagemusha-target cargo test -p iroha_core offline_note_real_proof_rejects_wrong_cid_verifier_key_replay --lib`
+  - `CARGO_INCREMENTAL=0 CARGO_TARGET_DIR=/tmp/iroha-codex-kagemusha-target cargo test -p iroha_core kagemusha_compact_payment_token_rejects_cross_circuit_verifier_key --lib`
+  - `CARGO_INCREMENTAL=0 CARGO_TARGET_DIR=/tmp/iroha-codex-kagemusha-target cargo test -p iroha_core prove_offline_note_redeem_emits_real_halo2_ipa_proof --lib`
+  - `CARGO_INCREMENTAL=0 CARGO_TARGET_DIR=/tmp/iroha-codex-kagemusha-target cargo test -p iroha_core prove_kagemusha_compact_payment_token_emits_real_halo2_ipa_proof --lib`
+  - `CARGO_INCREMENTAL=0 CARGO_TARGET_DIR=/tmp/iroha-codex-kagemusha-target cargo test -p iroha_core kagemusha_pallas_ipa_batch_verifier_preflight_from_open_envelopes --lib`
+  - `CARGO_INCREMENTAL=0 CARGO_TARGET_DIR=/tmp/iroha-codex-kagemusha-target cargo test -p iroha_core kagemusha_verified_recursive_aggregation_evidence_from_pallas_open_envelopes --lib`
+  - `CARGO_INCREMENTAL=0 CARGO_TARGET_DIR=/tmp/iroha-codex-kagemusha-target cargo test -p iroha_core prove_verified_kagemusha_recursive_aggregation_proof_bundle_from_pallas_open_envelopes --lib`
+  - `CARGO_INCREMENTAL=0 CARGO_TARGET_DIR=/tmp/iroha-codex-kagemusha-target cargo test -p connect_norito_bridge kagemusha_verified_record_recursive_aggregation_proof_bundle --lib`
+  - `CARGO_INCREMENTAL=0 CARGO_TARGET_DIR=/tmp/iroha-codex-kagemusha-target cargo test -p iroha_core kagemusha_recursive_aggregation_real_proof_rejects_wrong_cid_verifier_key_replay --lib`
+  - `CARGO_INCREMENTAL=0 CARGO_TARGET_DIR=/tmp/iroha-codex-kagemusha-target cargo test -p iroha_core kagemusha_non_native_vesta_ipa_verifier_shared_table_circuit --lib -- --test-threads=1` (7 ignored heavyweight composed-circuit tests)
+  - `CARGO_INCREMENTAL=0 CARGO_TARGET_DIR=/tmp/iroha-codex-kagemusha-target cargo test -p iroha_core kagemusha_non_native_vesta_ipa_verifier_shared_table --lib -- --test-threads=1` (14 passed, 7 ignored heavyweight composed-circuit tests)
+  - `CARGO_INCREMENTAL=0 CARGO_TARGET_DIR=/tmp/iroha-codex-kagemusha-target cargo test -p iroha_data_model kagemusha_aggregation_mode_helpers_mark_recursive_mode_reserved --lib`
+  - `CARGO_INCREMENTAL=0 CARGO_TARGET_DIR=/tmp/iroha-codex-kagemusha-target cargo test -p iroha_core prove_kagemusha_compact_payment_token_rejects_reserved_recursive_mode --lib`
+  - `CARGO_INCREMENTAL=0 CARGO_TARGET_DIR=/tmp/iroha-codex-kagemusha-target cargo test -p iroha_core kagemusha_recursive_aggregation_one_hop_verifier_slice --lib -- --test-threads=1` (9 passed, 5 ignored heavyweight production/materialized-circuit tests)
 
 ## 2026-05-31 Sumeragi missing commit-QC actionable TLC cross-check
 

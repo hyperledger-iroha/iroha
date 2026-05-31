@@ -89,6 +89,200 @@ print(formats["i105_warning"])
 > ℹ️ Use i105 literals consistently across SDK samples and operator tooling.
 > For Sora network discriminant `753`, literals should start with the `sora` sentinel.
 
+## Ledger reads and faucet bootstrap
+
+`ToriiClient` includes convenience helpers for common ledger reads so
+applications do not need to duplicate Torii pagination, compatibility retries,
+or account-asset matching logic:
+
+```python
+from iroha_python import ToriiClient
+
+client = ToriiClient("https://taira.sora.org")
+
+exists = client.account_exists("adult@is", include_taira_prefix_variant=True)
+balance = client.asset_balance(
+    "adult@is",
+    "ds#wonderland.is",
+    include_taira_prefix_variant=True,
+)
+definition = client.get_asset_definition("ds#wonderland.is")
+
+puzzle = client.get_account_faucet_puzzle()
+anchor_height, nonce_hex = ToriiClient.solve_account_faucet_pow("adult@is", puzzle)
+response = client.submit_account_faucet_claim(
+    "adult@is",
+    pow_anchor_height=anchor_height,
+    pow_nonce_hex=nonce_hex,
+)
+```
+
+The same client owns the PoC-facing Torii application helpers for contract,
+SNS, and ZK bootstrap flows:
+
+```python
+deploy = client.deploy_contract_bundle(
+    authority="adult@is",
+    private_key="<multihash-private-key>",
+    contract_alias="boi-lock::is",
+    code_file="contracts/boi_lock.to",
+    wait=True,
+)
+
+call = client.call_contract_and_wait(
+    authority="adult@is",
+    private_key="<multihash-private-key>",
+    contract_alias="boi-lock::is",
+    entrypoint="create_lock",
+    payload={"amount": "10"},
+    gas_limit=100_000,
+)
+
+policy = client.get_sns_policy(2)
+registration = client.get_sns_name("domain", "wonderland.is")
+vk_active = client.zk_verifying_key_active("halo2/ipa", "vk_transfer")
+```
+
+ZK-capable assets can be registered and moved through the same transaction
+draft helpers, without shelling out to JavaScript tooling:
+
+```python
+client.register_zk_asset_and_wait(
+    chain_id="local",
+    authority="<asset-owner>",
+    private_key_hex="<64-hex-private-key>",
+    asset_definition_id="ds#wonderland.is",
+    vk_transfer="halo2/ipa:vk_transfer",
+    vk_unshield="halo2/ipa:vk_unshield",
+)
+
+client.shield_asset_and_wait(
+    chain_id="local",
+    authority="<payer>",
+    private_key_hex="<64-hex-private-key>",
+    asset_definition_id="ds#wonderland.is",
+    from_account_id="<payer>",
+    amount="7",
+    note_commitment="11" * 32,
+    ephemeral_public_key="22" * 32,
+    nonce="33" * 24,
+    ciphertext_b64="Y2lwaGVydGV4dA==",
+)
+
+prepared_proof = {
+    "backend": "halo2/ipa",
+    "proof_bytes": b"...",
+    "verifying_key_ref": "halo2/ipa:vk_transfer",
+}
+
+client.zk_transfer_prepared_and_wait(
+    chain_id="local",
+    authority="<payer>",
+    private_key_hex="<64-hex-private-key>",
+    asset_definition_id="ds#wonderland.is",
+    inputs=["aa" * 32],
+    outputs=["bb" * 32],
+    proof=prepared_proof,
+    root_hint="cc" * 32,
+)
+
+client.unshield_prepared_and_wait(
+    chain_id="local",
+    authority="<payer>",
+    private_key_hex="<64-hex-private-key>",
+    asset_definition_id="ds#wonderland.is",
+    to_account_id="<recipient>",
+    public_amount="3",
+    inputs=["dd" * 32],
+    proof=prepared_proof,
+    outputs=[],
+    root_hint="ee" * 32,
+)
+```
+
+## Dataspace lifecycle helpers
+
+SDK users can plan and check their own Nexus dataspaces without copying helper
+scripts. Planning is pure Python: it returns the manifest, config snippet, and
+rollout summary, and writing is explicit.
+
+```python
+from iroha_python import DataspaceSpec, ToriiClient, plan_dataspace, write_dataspace_plan
+
+spec = DataspaceSpec(
+    dataspace_alias="boi",
+    dataspace_id=42,
+    lane_alias="boi-payments",
+    lane_id=7,
+    governance_module="parliament",
+    settlement_handle="xor_global",
+    validators=["validator01"],
+    route_instructions=["TransferAsset"],
+)
+
+plan = plan_dataspace(spec)
+write_dataspace_plan(plan, "build/dataspaces", force=True)
+
+client = ToriiClient("http://127.0.0.1:8080")
+status = client.smoke_dataspace("boi")
+print(status.dataspace_id, status.ready)
+```
+
+The same client exposes dataspace-oriented Space Directory wrappers:
+
+```python
+client.publish_dataspace_manifest(
+    authority="<authority-account>",
+    private_key="<multihash-private-key>",
+    uaid="uaid:" + "11" * 32,
+    dataspace=42,
+    manifest={
+        "version": "1",
+        "entries": [{"effect": {"allow": True}}],
+    },
+)
+
+client.revoke_dataspace_manifest(
+    authority="<authority-account>",
+    private_key="<multihash-private-key>",
+    uaid="uaid:" + "11" * 32,
+    dataspace=42,
+    revoked_epoch=10,
+)
+```
+
+For dataspace-scoped balances, build the concrete asset bucket with
+`compose_asset_id` and submit mutations through the SDK transaction helpers:
+
+```python
+asset_id = client.compose_asset_id(
+    "<canonical-asset-definition-id>",
+    "<account-id>",
+    scope="dataspace:42",
+)
+
+client.mint_asset_and_wait(
+    chain_id="local",
+    authority="<asset-owner>",
+    private_key_hex="<64-hex-private-key>",
+    asset_id=asset_id,
+    quantity="100",
+)
+
+client.transfer_assets_and_wait(
+    chain_id="local",
+    authority="<payer>",
+    private_key_hex="<64-hex-private-key>",
+    transfers=[
+        {
+            "asset_id": asset_id,
+            "quantity": "10",
+            "destination": "<payee>",
+        }
+    ],
+)
+```
+
 ## RWA instructions
 
 `TransactionDraft` now mirrors the dedicated RWA lot family, including
@@ -1470,8 +1664,8 @@ no environment variables need to be exported.
   success or failure with configurable intervals, terminal-state handling, and
   callbacks for UI progress indicators.
 - Contracts API wrappers (`/v1/contracts/code`, `/v1/contracts/deploy`,
-  `/v1/contracts/code-bytes/{hash}`) round out
-  the Torii surface for manifest management.
+  `/v1/contracts/call`, `/v1/contracts/code-bytes/{hash}`), SNS helpers, and
+  ZK verifying-key helpers round out the Torii surface needed by PoC operators.
 - Ship optional Norito RPC helpers (`iroha_python.norito_rpc`) so callers can
   invoke Norito-encoded RPC endpoints without vendor-specific transports.
 

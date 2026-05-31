@@ -73,7 +73,7 @@ use sorafs_car::{
     },
 };
 
-const CONNECT_NORITO_BRIDGE_ABI_VERSION: u32 = 4;
+const CONNECT_NORITO_BRIDGE_ABI_VERSION: u32 = 5;
 
 const ERR_NULL_PTR: c_int = -1;
 const ERR_UTF8: c_int = -2;
@@ -3985,6 +3985,82 @@ fn prove_verified_kagemusha_compact_token_from_record_bundle(
     .map_err(|_| BridgeError::KagemushaProve)
 }
 
+/// Verify private Kagemusha hop proofs and Pallas opening envelopes, then generate a recursive proof bundle.
+///
+/// Inputs are Norito-archive bytes of
+/// `iroha_data_model::offline::KagemushaVerifiedFoldRecordBundle` and a
+/// `Vec<iroha_zkp_halo2::OpenVerifyEnvelope>`. The output is Norito-archive
+/// bytes of `KagemushaRecursiveAggregationProofBundle`.
+///
+/// This symbol is proof-carrying and admission-neutral: compact-token
+/// aggregation mode `2` remains reserved until the recursive circuit verifies
+/// private-hop opening evidence in-circuit.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn connect_norito_kagemusha_prove_verified_recursive_aggregation_proof_bundle_with_records_and_pallas_open_envelopes(
+    verified_record_bundle_norito_ptr: *const c_uchar,
+    verified_record_bundle_norito_len: c_ulong,
+    pallas_open_envelopes_norito_ptr: *const c_uchar,
+    pallas_open_envelopes_norito_len: c_ulong,
+    out_proof_bundle_ptr: *mut *mut c_uchar,
+    out_proof_bundle_len: *mut c_ulong,
+) -> c_int {
+    let result = (|| {
+        if verified_record_bundle_norito_ptr.is_null()
+            || pallas_open_envelopes_norito_ptr.is_null()
+            || out_proof_bundle_ptr.is_null()
+            || out_proof_bundle_len.is_null()
+        {
+            return Err(BridgeError::NullPtr);
+        }
+        let record_bundle_bytes = unsafe {
+            slice::from_raw_parts(
+                verified_record_bundle_norito_ptr,
+                verified_record_bundle_norito_len as usize,
+            )
+        };
+        let pallas_open_envelope_bytes = unsafe {
+            slice::from_raw_parts(
+                pallas_open_envelopes_norito_ptr,
+                pallas_open_envelopes_norito_len as usize,
+            )
+        };
+        let proof_bundle =
+            prove_verified_kagemusha_recursive_aggregation_proof_bundle_from_record_bundle_and_pallas_open_envelope_archive(
+                record_bundle_bytes,
+                pallas_open_envelope_bytes,
+            )?;
+        let archive = norito::to_bytes(&proof_bundle).map_err(|_| BridgeError::KagemushaProve)?;
+        unsafe { write_bytes_bridge(out_proof_bundle_ptr, out_proof_bundle_len, &archive) }
+    })();
+
+    bridge_result_to_code(result)
+}
+
+fn prove_verified_kagemusha_recursive_aggregation_proof_bundle_from_record_bundle_and_pallas_open_envelope_archive(
+    verified_record_bundle_archive: &[u8],
+    pallas_open_envelopes_archive: &[u8],
+) -> BridgeResult<iroha_data_model::offline::KagemushaRecursiveAggregationProofBundle> {
+    use iroha_core::zk::{
+        KAGEMUSHA_RECURSIVE_AGGREGATION_CIRCUIT_ID, kagemusha_recursive_aggregation_proof_vk_box,
+        prove_verified_kagemusha_recursive_aggregation_proof_bundle_from_record_bundle_and_pallas_open_envelope_archive,
+    };
+    use iroha_data_model::offline::KagemushaVerifiedFoldRecordBundle;
+
+    let record_bundle: KagemushaVerifiedFoldRecordBundle =
+        norito::decode_from_bytes(verified_record_bundle_archive)
+            .map_err(|_| BridgeError::KagemushaProve)?;
+    let vk_box =
+        kagemusha_recursive_aggregation_proof_vk_box().map_err(|_| BridgeError::KagemushaProve)?;
+    prove_verified_kagemusha_recursive_aggregation_proof_bundle_from_record_bundle_and_pallas_open_envelope_archive(
+        &record_bundle,
+        pallas_open_envelopes_archive,
+        KAGEMUSHA_RECURSIVE_AGGREGATION_CIRCUIT_ID,
+        &vk_box,
+        None,
+    )
+    .map_err(|_| BridgeError::KagemushaProve)
+}
+
 #[unsafe(no_mangle)]
 pub extern "C" fn connect_norito_free(ptr_: *mut c_uchar) {
     if !ptr_.is_null() {
@@ -4001,15 +4077,18 @@ mod offline_note_prover_tests {
     use iroha_core::zk::{
         KAGEMUSHA_HOP_MAX_PROOF_BYTES, OFFLINE_NOTE_RECURSIVE_CIRCUIT_ID, ZK_BACKEND_HALO2_IPA,
         confidential_v2, hash_vk, kagemusha_folded_vk_box,
+        kagemusha_pallas_open_envelope_metadata_for_verified_hop,
+        kagemusha_recursive_aggregation_proof_vk_box,
         kagemusha_verified_folded_public_inputs_from_record_bundle, offline_note_recursive_vk_box,
         verify_backend, verify_kagemusha_compact_payment_token,
+        verify_kagemusha_recursive_aggregation_proof_bundle,
     };
     use iroha_data_model::{
         confidential::ConfidentialStatus,
         offline::{
-            KagemushaCompactPaymentToken, KagemushaVerifiedFoldBundle,
-            KagemushaVerifiedFoldRecordBundle, KagemushaVerifiedFoldStep,
-            KagemushaVerifiedFoldVerifierRecord, OfflineNoteAuditBundle,
+            KagemushaCompactPaymentToken, KagemushaRecursiveAggregationProofBundle,
+            KagemushaVerifiedFoldBundle, KagemushaVerifiedFoldRecordBundle,
+            KagemushaVerifiedFoldStep, KagemushaVerifiedFoldVerifierRecord, OfflineNoteAuditBundle,
             OfflineNoteAuditOutputClaim, OfflineNoteIssue, OfflineNoteIssuedClaim,
             OfflineNoteKeyCertificate, OfflineNoteRecursiveProof, OfflineNoteRedeem,
         },
@@ -4231,6 +4310,17 @@ mod offline_note_prover_tests {
         norito::decode_from_bytes(&out).expect("decode Kagemusha compact token")
     }
 
+    fn decode_kagemusha_recursive_aggregation_proof_bundle(
+        out_ptr: *mut c_uchar,
+        out_len: c_ulong,
+    ) -> KagemushaRecursiveAggregationProofBundle {
+        assert!(!out_ptr.is_null(), "prover output pointer must be set");
+        let out = unsafe { slice::from_raw_parts(out_ptr, out_len as usize).to_vec() };
+        connect_norito_free(out_ptr);
+        norito::decode_from_bytes(&out)
+            .expect("decode Kagemusha recursive aggregation proof bundle")
+    }
+
     fn mutate_kagemusha_bundle_hop_envelope(
         bundle: &mut KagemushaVerifiedFoldBundle,
         mutate: impl FnOnce(&mut iroha_data_model::zk::OpenVerifyEnvelope),
@@ -4241,6 +4331,38 @@ mod offline_note_prover_tests {
         mutate(&mut envelope);
         bundle.steps[0].attachment.proof.bytes =
             norito::to_bytes(&envelope).expect("encode mutated OpenVerifyEnvelope");
+    }
+
+    fn sample_pallas_coeffs(n: usize) -> Vec<iroha_zkp_halo2::pallas::Scalar> {
+        (0..n)
+            .map(|index| iroha_zkp_halo2::pallas::Scalar::from((index + 1) as u64))
+            .collect()
+    }
+
+    fn sample_pallas_open_envelope_with_metadata(
+        n: usize,
+        label: &str,
+        metadata: iroha_zkp_halo2::PolyOpenTranscriptMetadata,
+    ) -> iroha_zkp_halo2::OpenVerifyEnvelope {
+        let params = iroha_zkp_halo2::pallas::Params::new(n).expect("Pallas params");
+        let poly = iroha_zkp_halo2::pallas::Polynomial::from_coeffs(sample_pallas_coeffs(n));
+        let commitment = poly.commit(&params).expect("Pallas commitment");
+        let z = iroha_zkp_halo2::pallas::Scalar::from(5_u64);
+        let mut transcript = iroha_zkp_halo2::Transcript::new(label);
+        let (proof, t) = poly
+            .open_with_metadata(&params, &mut transcript, z, commitment, metadata)
+            .expect("Pallas opening proof");
+        iroha_zkp_halo2::OpenVerifyEnvelope {
+            params: iroha_zkp_halo2::norito_helpers::params_to_wire(&params),
+            public: iroha_zkp_halo2::norito_helpers::poly_open_public::<
+                iroha_zkp_halo2::pallas::PallasBackend,
+            >(params.n(), z, t, commitment),
+            proof: iroha_zkp_halo2::norito_helpers::proof_to_wire(&proof),
+            transcript_label: label.to_owned(),
+            vk_commitment: metadata.vk_commitment,
+            public_inputs_schema_hash: metadata.public_inputs_schema_hash,
+            domain_tag: metadata.domain_tag,
+        }
     }
 
     fn assert_recursive_proof_verifies(
@@ -4261,7 +4383,7 @@ mod offline_note_prover_tests {
 
     #[test]
     fn bridge_abi_version_advertises_kagemusha_compact_prover() {
-        assert_eq!(unsafe { connect_norito_bridge_abi_version() }, 4);
+        assert_eq!(unsafe { connect_norito_bridge_abi_version() }, 5);
     }
 
     #[test]
@@ -4357,6 +4479,183 @@ mod offline_note_prover_tests {
                 .is_err(),
             "JNI helper must reject inactive verifier records"
         );
+    }
+
+    #[test]
+    fn kagemusha_verified_record_recursive_aggregation_proof_bundle_ffi_returns_verifying_bundle() {
+        let record_bundle = sample_kagemusha_verified_record_bundle();
+        let metadata = kagemusha_pallas_open_envelope_metadata_for_verified_hop(
+            &record_bundle.bundle.chain_id,
+            &record_bundle.bundle.asset,
+            0,
+            &record_bundle.bundle.steps[0],
+        )
+        .expect("Pallas open-envelope hop metadata");
+        let envelope = sample_pallas_open_envelope_with_metadata(
+            4,
+            "bridge-recursive-aggregation-open-envelope",
+            metadata,
+        );
+        let record_archive =
+            norito::to_bytes(&record_bundle).expect("encode record-backed verified fold bundle");
+        let envelope_archive =
+            norito::to_bytes(&vec![envelope]).expect("encode Pallas open-envelope archive");
+        let mut out_ptr: *mut c_uchar = ptr::null_mut();
+        let mut out_len: c_ulong = 0;
+
+        let status = unsafe {
+            connect_norito_kagemusha_prove_verified_recursive_aggregation_proof_bundle_with_records_and_pallas_open_envelopes(
+                record_archive.as_ptr(),
+                record_archive.len() as c_ulong,
+                envelope_archive.as_ptr(),
+                envelope_archive.len() as c_ulong,
+                &mut out_ptr,
+                &mut out_len,
+            )
+        };
+
+        assert_eq!(status, 0);
+        let proof_bundle = decode_kagemusha_recursive_aggregation_proof_bundle(out_ptr, out_len);
+        proof_bundle
+            .validate_evidence_binding()
+            .expect("recursive proof bundle evidence binding");
+        assert_eq!(proof_bundle.evidence.verifier_witness_count, 1);
+        let recursive_vk =
+            kagemusha_recursive_aggregation_proof_vk_box().expect("recursive aggregation VK");
+        assert!(
+            verify_kagemusha_recursive_aggregation_proof_bundle(&proof_bundle, &recursive_vk),
+            "bridge output must verify against the canonical recursive aggregation verifier"
+        );
+    }
+
+    #[cfg(any(
+        target_os = "android",
+        target_os = "linux",
+        target_os = "macos",
+        target_os = "windows"
+    ))]
+    #[test]
+    fn kagemusha_verified_record_recursive_aggregation_proof_bundle_jni_helper_uses_record_checks()
+    {
+        let record_bundle = sample_kagemusha_verified_record_bundle();
+        let metadata = kagemusha_pallas_open_envelope_metadata_for_verified_hop(
+            &record_bundle.bundle.chain_id,
+            &record_bundle.bundle.asset,
+            0,
+            &record_bundle.bundle.steps[0],
+        )
+        .expect("Pallas open-envelope hop metadata");
+        let envelope = sample_pallas_open_envelope_with_metadata(
+            4,
+            "bridge-recursive-aggregation-jni-open-envelope",
+            metadata,
+        );
+        let record_archive =
+            norito::to_bytes(&record_bundle).expect("encode record-backed verified fold bundle");
+        let envelope_archive =
+            norito::to_bytes(&vec![envelope]).expect("encode Pallas open-envelope archive");
+
+        let proof_bundle_archive =
+            java_kagemusha_prove_verified_recursive_aggregation_proof_bundle_with_records_and_pallas_open_envelopes(
+                &record_archive,
+                &envelope_archive,
+            )
+            .expect("JNI helper should produce recursive aggregation proof bundle archive");
+        let proof_bundle: KagemushaRecursiveAggregationProofBundle =
+            norito::decode_from_bytes(&proof_bundle_archive)
+                .expect("decode recursive aggregation proof bundle");
+        let recursive_vk =
+            kagemusha_recursive_aggregation_proof_vk_box().expect("recursive aggregation VK");
+        assert!(
+            verify_kagemusha_recursive_aggregation_proof_bundle(&proof_bundle, &recursive_vk),
+            "JNI helper output must verify against the canonical recursive aggregation verifier"
+        );
+
+        let mut inactive = record_bundle;
+        inactive.verifier_records[0].record.status = ConfidentialStatus::Withdrawn;
+        let inactive_archive = norito::to_bytes(&inactive).expect("encode inactive-record bundle");
+        assert!(
+            java_kagemusha_prove_verified_recursive_aggregation_proof_bundle_with_records_and_pallas_open_envelopes(
+                &inactive_archive,
+                &envelope_archive,
+            )
+            .is_err(),
+            "JNI helper must reject inactive verifier records"
+        );
+    }
+
+    #[test]
+    fn kagemusha_verified_record_recursive_aggregation_proof_bundle_ffi_rejects_adversarial_inputs()
+    {
+        let record_bundle = sample_kagemusha_verified_record_bundle();
+        let metadata = kagemusha_pallas_open_envelope_metadata_for_verified_hop(
+            &record_bundle.bundle.chain_id,
+            &record_bundle.bundle.asset,
+            0,
+            &record_bundle.bundle.steps[0],
+        )
+        .expect("Pallas open-envelope hop metadata");
+        let envelope = sample_pallas_open_envelope_with_metadata(
+            4,
+            "bridge-recursive-aggregation-reject-open-envelope",
+            metadata,
+        );
+        let record_archive =
+            norito::to_bytes(&record_bundle).expect("encode record-backed verified fold bundle");
+        let envelope_archive =
+            norito::to_bytes(&vec![envelope.clone()]).expect("encode Pallas open-envelope archive");
+        let mut out_ptr: *mut c_uchar = ptr::null_mut();
+        let mut out_len: c_ulong = 0;
+
+        let malformed_envelope_archive = b"not a norito archive";
+        let status = unsafe {
+            connect_norito_kagemusha_prove_verified_recursive_aggregation_proof_bundle_with_records_and_pallas_open_envelopes(
+                record_archive.as_ptr(),
+                record_archive.len() as c_ulong,
+                malformed_envelope_archive.as_ptr(),
+                malformed_envelope_archive.len() as c_ulong,
+                &mut out_ptr,
+                &mut out_len,
+            )
+        };
+        assert_eq!(status, ERR_KAGEMUSHA_PROVE);
+        assert!(out_ptr.is_null());
+        assert_eq!(out_len, 0);
+
+        let mut missing = record_bundle.clone();
+        missing.verifier_records.clear();
+        let missing_archive = norito::to_bytes(&missing).expect("encode missing-record bundle");
+        let status = unsafe {
+            connect_norito_kagemusha_prove_verified_recursive_aggregation_proof_bundle_with_records_and_pallas_open_envelopes(
+                missing_archive.as_ptr(),
+                missing_archive.len() as c_ulong,
+                envelope_archive.as_ptr(),
+                envelope_archive.len() as c_ulong,
+                &mut out_ptr,
+                &mut out_len,
+            )
+        };
+        assert_eq!(status, ERR_KAGEMUSHA_PROVE);
+        assert!(out_ptr.is_null());
+        assert_eq!(out_len, 0);
+
+        let mut wrong_schema = envelope;
+        wrong_schema.public_inputs_schema_hash = Some([0x7B; Hash::LENGTH]);
+        let wrong_schema_archive =
+            norito::to_bytes(&vec![wrong_schema]).expect("encode wrong-schema envelope archive");
+        let status = unsafe {
+            connect_norito_kagemusha_prove_verified_recursive_aggregation_proof_bundle_with_records_and_pallas_open_envelopes(
+                record_archive.as_ptr(),
+                record_archive.len() as c_ulong,
+                wrong_schema_archive.as_ptr(),
+                wrong_schema_archive.len() as c_ulong,
+                &mut out_ptr,
+                &mut out_len,
+            )
+        };
+        assert_eq!(status, ERR_KAGEMUSHA_PROVE);
+        assert!(out_ptr.is_null());
+        assert_eq!(out_len, 0);
     }
 
     #[test]
@@ -10885,6 +11184,30 @@ fn java_kagemusha_prove_verified_compact_payment_token_with_records(
     target_os = "macos",
     target_os = "windows"
 ))]
+fn java_kagemusha_prove_verified_recursive_aggregation_proof_bundle_with_records_and_pallas_open_envelopes(
+    record_bundle_archive: &[u8],
+    pallas_open_envelopes_archive: &[u8],
+) -> Result<Vec<u8>, String> {
+    let proof_bundle =
+        prove_verified_kagemusha_recursive_aggregation_proof_bundle_from_record_bundle_and_pallas_open_envelope_archive(
+            record_bundle_archive,
+            pallas_open_envelopes_archive,
+        )
+        .map_err(|_| {
+            "invalid Kagemusha recursive aggregation record bundle or Pallas open-envelope archive"
+                .to_string()
+        })?;
+    norito::to_bytes(&proof_bundle).map_err(|err| {
+        format!("failed to encode Kagemusha recursive aggregation proof bundle: {err}")
+    })
+}
+
+#[cfg(any(
+    target_os = "android",
+    target_os = "linux",
+    target_os = "macos",
+    target_os = "windows"
+))]
 fn java_native_kagemusha_prove_verified_compact_payment_token_with_records(
     env: &mut jni::JNIEnv<'_>,
     record_bundle_archive: jni::objects::JByteArray<'_>,
@@ -10897,6 +11220,46 @@ fn java_native_kagemusha_prove_verified_compact_payment_token_with_records(
             java_kagemusha_prove_verified_compact_payment_token_with_records(&archive_bytes)?;
         let array = env
             .byte_array_from_slice(&token_archive)
+            .map_err(|err| err.to_string())?;
+        Ok(array.into_raw())
+    })();
+    match result {
+        Ok(array) => array,
+        Err(message) => {
+            throw_java_illegal_argument(env, message);
+            std::ptr::null_mut()
+        }
+    }
+}
+
+#[cfg(any(
+    target_os = "android",
+    target_os = "linux",
+    target_os = "macos",
+    target_os = "windows"
+))]
+fn java_native_kagemusha_prove_verified_recursive_aggregation_proof_bundle_with_records_and_pallas_open_envelopes(
+    env: &mut jni::JNIEnv<'_>,
+    record_bundle_archive: jni::objects::JByteArray<'_>,
+    pallas_open_envelopes_archive: jni::objects::JByteArray<'_>,
+) -> jni::sys::jbyteArray {
+    let result = (|| -> Result<jni::sys::jbyteArray, String> {
+        let record_bundle_bytes =
+            read_java_byte_array(env, &record_bundle_archive, "recordBundleArchive")
+                .ok_or_else(|| "invalid Kagemusha verified fold record bundle bytes".to_string())?;
+        let pallas_open_envelope_bytes = read_java_byte_array(
+            env,
+            &pallas_open_envelopes_archive,
+            "pallasOpenEnvelopesArchive",
+        )
+        .ok_or_else(|| "invalid Kagemusha Pallas open-envelope archive bytes".to_string())?;
+        let proof_bundle_archive =
+            java_kagemusha_prove_verified_recursive_aggregation_proof_bundle_with_records_and_pallas_open_envelopes(
+                &record_bundle_bytes,
+                &pallas_open_envelope_bytes,
+            )?;
+        let array = env
+            .byte_array_from_slice(&proof_bundle_archive)
             .map_err(|err| err.to_string())?;
         Ok(array.into_raw())
     })();
@@ -11078,6 +11441,27 @@ pub unsafe extern "system" fn Java_org_hyperledger_iroha_sdk_offline_KagemushaCo
 ))]
 #[allow(clippy::missing_safety_doc)]
 #[unsafe(no_mangle)]
+pub unsafe extern "system" fn Java_org_hyperledger_iroha_sdk_offline_KagemushaRecursiveAggregationProofBundleProver_nativeProveVerifiedRecursiveAggregationProofBundleWithRecordsAndPallasOpenEnvelopes(
+    mut env: jni::JNIEnv<'_>,
+    _class: jni::objects::JClass<'_>,
+    record_bundle_archive: jni::objects::JByteArray<'_>,
+    pallas_open_envelopes_archive: jni::objects::JByteArray<'_>,
+) -> jni::sys::jbyteArray {
+    java_native_kagemusha_prove_verified_recursive_aggregation_proof_bundle_with_records_and_pallas_open_envelopes(
+        &mut env,
+        record_bundle_archive,
+        pallas_open_envelopes_archive,
+    )
+}
+
+#[cfg(any(
+    target_os = "android",
+    target_os = "linux",
+    target_os = "macos",
+    target_os = "windows"
+))]
+#[allow(clippy::missing_safety_doc)]
+#[unsafe(no_mangle)]
 pub unsafe extern "system" fn Java_org_hyperledger_iroha_android_offline_KagemushaCompactPaymentTokenProver_nativeProveVerifiedCompactPaymentTokenWithRecords(
     mut env: jni::JNIEnv<'_>,
     _class: jni::objects::JClass<'_>,
@@ -11086,6 +11470,27 @@ pub unsafe extern "system" fn Java_org_hyperledger_iroha_android_offline_Kagemus
     java_native_kagemusha_prove_verified_compact_payment_token_with_records(
         &mut env,
         record_bundle_archive,
+    )
+}
+
+#[cfg(any(
+    target_os = "android",
+    target_os = "linux",
+    target_os = "macos",
+    target_os = "windows"
+))]
+#[allow(clippy::missing_safety_doc)]
+#[unsafe(no_mangle)]
+pub unsafe extern "system" fn Java_org_hyperledger_iroha_android_offline_KagemushaRecursiveAggregationProofBundleProver_nativeProveVerifiedRecursiveAggregationProofBundleWithRecordsAndPallasOpenEnvelopes(
+    mut env: jni::JNIEnv<'_>,
+    _class: jni::objects::JClass<'_>,
+    record_bundle_archive: jni::objects::JByteArray<'_>,
+    pallas_open_envelopes_archive: jni::objects::JByteArray<'_>,
+) -> jni::sys::jbyteArray {
+    java_native_kagemusha_prove_verified_recursive_aggregation_proof_bundle_with_records_and_pallas_open_envelopes(
+        &mut env,
+        record_bundle_archive,
+        pallas_open_envelopes_archive,
     )
 }
 

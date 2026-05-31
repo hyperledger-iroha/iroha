@@ -32,32 +32,36 @@ use iroha_crypto::{
 use iroha_data_model::{
     account::Account,
     asset::{
-        definition::AssetConfidentialPolicy,
+        alias::AssetDefinitionAlias,
+        definition::{AssetBalancePolicy, AssetConfidentialPolicy},
         prelude::{AssetDefinition, AssetDefinitionId, AssetId, Mintable},
     },
     block::{
         BlockHeader,
         consensus::{LaneBlockCommitment, PERMISSIONED_TAG},
     },
+    confidential::ConfidentialEncryptedPayload,
     consensus::{
         CertPhase, Qc, QcAggregate, VALIDATOR_SET_HASH_VERSION_V1, default_chain_order_hash,
     },
     domain::prelude::{Domain, DomainId},
     events::time::{ExecutionTime, Schedule as TimeSchedule, TimeEventFilter},
     isi::{
-        Burn, ExecuteTrigger, InstructionBox, Mint, Register, RemoveKeyValue, SetKeyValue,
-        Transfer, Unregister,
+        Burn, ExecuteTrigger, Grant, InstructionBox, Mint, Register, RemoveKeyValue, Revoke,
+        SetKeyValue, Transfer, Unregister,
         repo::{RepoIsi, RepoMarginCallIsi, ReverseRepoIsi},
         settlement::{
             DvpIsi, PvpIsi, SettlementAtomicity, SettlementExecutionOrder, SettlementId,
             SettlementLeg, SettlementPlan,
         },
+        zk::{RegisterZkAsset, Shield, Unshield, ZkAssetMode, ZkTransfer},
     },
     metadata::Metadata,
     name::Name,
     nexus::{DataSpaceId, LaneId, LanePrivacyProof, LaneRelayEnvelope, compute_settlement_hash},
     nft::NftId,
     peer::PeerId,
+    permission::Permission,
     prelude::{AccountId, ChainId},
     proof::{ProofAttachment, ProofAttachmentList, ProofBox, VerifyingKeyId},
     repo::prelude::{RepoAgreementId, RepoCashLeg, RepoCollateralLeg, RepoGovernance},
@@ -90,7 +94,9 @@ use pyo3::{
     Bound, FromPyObject, create_exception,
     exceptions::{PyException, PyTypeError, PyValueError},
     prelude::*,
-    types::{PyAny, PyBytes, PyDict, PyDictMethods, PyList, PyModule, PyStringMethods, PyType},
+    types::{
+        PyAny, PyBytes, PyDict, PyDictMethods, PyList, PyModule, PyStringMethods, PyTuple, PyType,
+    },
     wrap_pyfunction,
 };
 use rand_core_06::OsRng as OsRng06;
@@ -426,6 +432,255 @@ fn fixed_array<const N: usize>(bytes: &[u8], context: &str) -> PyResult<[u8; N]>
     let mut arr = [0u8; N];
     arr.copy_from_slice(bytes);
     Ok(arr)
+}
+
+fn py_text(value: &Bound<'_, PyAny>, context: &str) -> PyResult<String> {
+    let text = value
+        .extract::<String>()
+        .map_err(|_| PyTypeError::new_err(format!("{context} must be a string")))?;
+    let trimmed = text.trim();
+    if trimmed.is_empty() {
+        return Err(PyValueError::new_err(format!(
+            "{context} must be non-empty"
+        )));
+    }
+    Ok(trimmed.to_owned())
+}
+
+fn py_bytes_or_hex(value: &Bound<'_, PyAny>, context: &str) -> PyResult<Vec<u8>> {
+    if let Ok(text) = value.extract::<String>() {
+        return parse_hex_bytes_py(&text, context);
+    }
+    value
+        .extract::<Vec<u8>>()
+        .map_err(|_| PyTypeError::new_err(format!("{context} must be bytes or hex string")))
+}
+
+fn py_bytes_or_base64(value: &Bound<'_, PyAny>, context: &str) -> PyResult<Vec<u8>> {
+    if let Ok(text) = value.extract::<String>() {
+        let trimmed = text.trim();
+        if trimmed.is_empty() {
+            return Err(PyValueError::new_err(format!(
+                "{context} must be non-empty"
+            )));
+        }
+        return BASE64.decode(trimmed.as_bytes()).map_err(|err| {
+            PyValueError::new_err(format!("failed to decode base64 {context}: {err}"))
+        });
+    }
+    value
+        .extract::<Vec<u8>>()
+        .map_err(|_| PyTypeError::new_err(format!("{context} must be bytes or base64 string")))
+}
+
+fn py_fixed_array<const N: usize>(value: &Bound<'_, PyAny>, context: &str) -> PyResult<[u8; N]> {
+    let bytes = py_bytes_or_hex(value, context)?;
+    fixed_array::<N>(&bytes, context)
+}
+
+fn py_fixed_array_list(value: &Bound<'_, PyAny>, context: &str) -> PyResult<Vec<[u8; 32]>> {
+    if let Ok(items) = value.cast::<PyList>() {
+        let mut parsed = Vec::with_capacity(items.len());
+        for (index, item) in items.iter().enumerate() {
+            parsed.push(py_fixed_array::<32>(&item, &format!("{context}[{index}]"))?);
+        }
+        return Ok(parsed);
+    }
+    if let Ok(items) = value.cast::<PyTuple>() {
+        let mut parsed = Vec::with_capacity(items.len());
+        for (index, item) in items.iter().enumerate() {
+            parsed.push(py_fixed_array::<32>(&item, &format!("{context}[{index}]"))?);
+        }
+        return Ok(parsed);
+    }
+    Err(PyTypeError::new_err(format!(
+        "{context} must be a list or tuple"
+    )))
+}
+
+fn ensure_unique_fixed_arrays(items: &[[u8; 32]], context: &str) -> PyResult<()> {
+    let mut seen = HashSet::with_capacity(items.len());
+    for (index, item) in items.iter().enumerate() {
+        if !seen.insert(*item) {
+            return Err(PyValueError::new_err(format!(
+                "{context}[{index}] duplicates an earlier value"
+            )));
+        }
+    }
+    Ok(())
+}
+
+fn dict_get_alias<'py>(
+    dict: &Bound<'py, PyDict>,
+    aliases: &[&str],
+) -> PyResult<Option<Bound<'py, PyAny>>> {
+    for alias in aliases {
+        if let Some(value) = dict.get_item(alias)? {
+            if !value.is_none() {
+                return Ok(Some(value));
+            }
+        }
+    }
+    Ok(None)
+}
+
+fn parse_zk_asset_mode(value: Option<&str>) -> PyResult<ZkAssetMode> {
+    match value.unwrap_or("Hybrid").trim() {
+        "Hybrid" | "hybrid" => Ok(ZkAssetMode::Hybrid),
+        "ZkNative" | "zk_native" | "zk-native" | "native" => Ok(ZkAssetMode::ZkNative),
+        other => Err(PyValueError::new_err(format!(
+            "invalid ZK asset mode `{other}`"
+        ))),
+    }
+}
+
+fn parse_u128_text(value: &str, context: &str) -> PyResult<u128> {
+    value.trim().parse::<u128>().map_err(|err| {
+        PyValueError::new_err(format!("{context} must be an unsigned integer: {err}"))
+    })
+}
+
+fn parse_verifying_key_id_text(value: &str, context: &str) -> PyResult<VerifyingKeyId> {
+    let trimmed = value.trim();
+    let Some((backend, name)) = trimmed.split_once(':') else {
+        return Err(PyValueError::new_err(format!(
+            "{context} must use 'backend:name' format"
+        )));
+    };
+    let backend = backend.trim();
+    let name = name.trim();
+    if backend.is_empty() || name.is_empty() {
+        return Err(PyValueError::new_err(format!(
+            "{context} must include both backend and name"
+        )));
+    }
+    let backend = Ident::from_str(backend).map_err(|err| {
+        PyValueError::new_err(format!("invalid {context} backend identifier: {err}"))
+    })?;
+    Ok(VerifyingKeyId::new(backend, name))
+}
+
+fn parse_verifying_key_id_py(
+    value: Option<&Bound<'_, PyAny>>,
+    context: &str,
+) -> PyResult<Option<VerifyingKeyId>> {
+    let Some(value) = value else {
+        return Ok(None);
+    };
+    if value.is_none() {
+        return Ok(None);
+    }
+    if let Ok(text) = value.extract::<String>() {
+        return parse_verifying_key_id_text(&text, context).map(Some);
+    }
+    let dict = value
+        .cast::<PyDict>()
+        .map_err(|_| PyTypeError::new_err(format!("{context} must be a string or mapping")))?;
+    let backend = dict_get_alias(dict, &["backend", "backendId"])?
+        .ok_or_else(|| PyValueError::new_err(format!("{context}.backend is required")))?;
+    let name = dict_get_alias(dict, &["name", "id", "key"])?
+        .ok_or_else(|| PyValueError::new_err(format!("{context}.name is required")))?;
+    let backend_text = py_text(&backend, &format!("{context}.backend"))?;
+    let name_text = py_text(&name, &format!("{context}.name"))?;
+    let backend = Ident::from_str(&backend_text).map_err(|err| {
+        PyValueError::new_err(format!("invalid {context} backend identifier: {err}"))
+    })?;
+    Ok(Some(VerifyingKeyId::new(backend, name_text)))
+}
+
+fn parse_required_verifying_key_id_py(
+    value: Option<&Bound<'_, PyAny>>,
+    context: &str,
+) -> PyResult<VerifyingKeyId> {
+    parse_verifying_key_id_py(value, context)?
+        .ok_or_else(|| PyValueError::new_err(format!("{context} is required")))
+}
+
+fn parse_optional_root_hint(
+    value: Option<&Bound<'_, PyAny>>,
+    context: &str,
+) -> PyResult<Option<[u8; 32]>> {
+    let Some(value) = value else {
+        return Ok(None);
+    };
+    if value.is_none() {
+        return Ok(None);
+    }
+    py_fixed_array::<32>(value, context).map(Some)
+}
+
+fn parse_zk_proof_attachment(value: &Bound<'_, PyAny>, context: &str) -> PyResult<ProofAttachment> {
+    let dict = value
+        .cast::<PyDict>()
+        .map_err(|_| PyTypeError::new_err(format!("{context} must be a mapping")))?;
+    let backend_value = dict_get_alias(dict, &["backend", "proof_backend", "proofBackend"])?
+        .ok_or_else(|| PyValueError::new_err(format!("{context}.backend is required")))?;
+    let backend_text = py_text(&backend_value, &format!("{context}.backend"))?;
+    let backend = Ident::from_str(&backend_text).map_err(|err| {
+        PyValueError::new_err(format!("invalid {context} backend identifier: {err}"))
+    })?;
+    let proof_value = dict_get_alias(
+        dict,
+        &[
+            "proof_bytes",
+            "proofBytes",
+            "proof_b64",
+            "proofB64",
+            "proofBase64",
+            "proof",
+        ],
+    )?
+    .ok_or_else(|| PyValueError::new_err(format!("{context}.proof_bytes is required")))?;
+    let proof_bytes = py_bytes_or_base64(&proof_value, &format!("{context}.proof_bytes"))?;
+    if proof_bytes.is_empty() {
+        return Err(PyValueError::new_err(format!(
+            "{context}.proof_bytes must be non-empty"
+        )));
+    }
+    let vk_value = dict_get_alias(
+        dict,
+        &[
+            "verifying_key_ref",
+            "verifyingKeyRef",
+            "vk_ref",
+            "vkRef",
+            "verifying_key",
+        ],
+    )?;
+    let vk_ref =
+        parse_required_verifying_key_id_py(vk_value.as_ref(), &format!("{context}.vk_ref"))?;
+    if vk_ref.backend != backend {
+        return Err(PyValueError::new_err(format!(
+            "{context}.vk_ref.backend must match {context}.backend"
+        )));
+    }
+    let mut attachment =
+        ProofAttachment::new_ref(backend.clone(), ProofBox::new(backend, proof_bytes), vk_ref);
+    if let Some(commitment) = dict_get_alias(
+        dict,
+        &[
+            "verifying_key_commitment",
+            "verifyingKeyCommitment",
+            "vk_commitment",
+            "vkCommitment",
+        ],
+    )? {
+        if !commitment.is_none() {
+            attachment.vk_commitment = Some(py_fixed_array::<32>(
+                &commitment,
+                &format!("{context}.verifying_key_commitment"),
+            )?);
+        }
+    }
+    if let Some(envelope_hash) = dict_get_alias(dict, &["envelope_hash", "envelopeHash"])? {
+        if !envelope_hash.is_none() {
+            attachment.envelope_hash = Some(py_fixed_array::<32>(
+                &envelope_hash,
+                &format!("{context}.envelope_hash"),
+            )?);
+        }
+    }
+    Ok(attachment)
 }
 
 fn extract_optional_dict<'py>(
@@ -5862,6 +6117,22 @@ fn parse_confidential_policy(mode: Option<&str>) -> PyResult<Option<AssetConfide
     Ok(Some(policy))
 }
 
+fn parse_balance_scope_policy(mode: Option<&str>) -> PyResult<Option<AssetBalancePolicy>> {
+    let Some(mode) = mode else {
+        return Ok(None);
+    };
+    let policy = match mode {
+        "Global" => AssetBalancePolicy::Global,
+        "DataspaceRestricted" => AssetBalancePolicy::DataspaceRestricted,
+        other => {
+            return Err(PyValueError::new_err(format!(
+                "invalid balance scope policy `{other}`; expected Global/DataspaceRestricted"
+            )));
+        }
+    };
+    Ok(Some(policy))
+}
+
 fn domain_id_to_py(py: Python<'_>, id: &DomainId) -> PyResult<Py<PyDomainId>> {
     Py::new(py, PyDomainId { inner: id.clone() })
 }
@@ -6129,15 +6400,19 @@ impl Instruction {
     }
 
     #[classmethod]
-    #[pyo3(signature = (definition_id, owner, *, scale=None, mintable=None, confidential_policy=None, metadata=None))]
+    #[pyo3(signature = (definition_id, owner, *, name=None, description=None, alias=None, scale=None, mintable=None, balance_scope_policy=None, confidential_policy=None, metadata=None))]
     #[allow(clippy::too_many_arguments)] // PyO3 signature mirrors the Python surface and requires explicit keyword params
     fn register_asset_definition_numeric<'py>(
         _cls: &Bound<'py, PyType>,
         py: Python<'py>,
         definition_id: &str,
         owner: &str,
+        name: Option<&str>,
+        description: Option<&str>,
+        alias: Option<&str>,
         scale: Option<u32>,
         mintable: Option<&str>,
+        balance_scope_policy: Option<&str>,
         confidential_policy: Option<&str>,
         metadata: Option<&Bound<'py, PyAny>>,
     ) -> PyResult<Self> {
@@ -6157,6 +6432,21 @@ impl Instruction {
         };
         let mut new_asset = AssetDefinition::new(definition_id, spec);
 
+        if let Some(name) = name {
+            new_asset = new_asset.with_name(name.to_owned());
+        }
+
+        if let Some(description) = description {
+            new_asset = new_asset.with_description(Some(description.to_owned()));
+        }
+
+        if let Some(alias) = alias {
+            let alias = alias.parse::<AssetDefinitionAlias>().map_err(|err| {
+                PyValueError::new_err(format!("invalid asset definition alias `{alias}`: {err}"))
+            })?;
+            new_asset = new_asset.with_alias(Some(alias));
+        }
+
         if let Some(meta) = metadata {
             let metadata = py_to_metadata(py, Some(meta))?;
             new_asset = new_asset.with_metadata(metadata);
@@ -6174,7 +6464,151 @@ impl Instruction {
             new_asset = new_asset.confidential_policy(policy);
         }
 
+        if let Some(policy) = parse_balance_scope_policy(balance_scope_policy)? {
+            new_asset = new_asset.with_balance_scope_policy(policy);
+        }
+
         let instruction = Register::<AssetDefinition>::asset_definition(new_asset);
+        Ok(Instruction::new(instruction.into()))
+    }
+
+    #[classmethod]
+    #[pyo3(signature = (asset_definition_id, *, mode=None, allow_shield=true, allow_unshield=true, vk_transfer=None, vk_unshield=None, vk_shield=None))]
+    #[allow(clippy::too_many_arguments)]
+    fn register_zk_asset<'py>(
+        _cls: &Bound<'py, PyType>,
+        asset_definition_id: &str,
+        mode: Option<&str>,
+        allow_shield: bool,
+        allow_unshield: bool,
+        vk_transfer: Option<&Bound<'py, PyAny>>,
+        vk_unshield: Option<&Bound<'py, PyAny>>,
+        vk_shield: Option<&Bound<'py, PyAny>>,
+    ) -> PyResult<Self> {
+        let asset: AssetDefinitionId = asset_definition_id.parse().map_err(|err| {
+            PyValueError::new_err(format!(
+                "invalid asset definition id `{asset_definition_id}`: {err}"
+            ))
+        })?;
+        let instruction = RegisterZkAsset::new(
+            asset,
+            parse_zk_asset_mode(mode)?,
+            allow_shield,
+            allow_unshield,
+            parse_verifying_key_id_py(vk_transfer, "vk_transfer")?,
+            parse_verifying_key_id_py(vk_unshield, "vk_unshield")?,
+            parse_verifying_key_id_py(vk_shield, "vk_shield")?,
+        );
+        Ok(Instruction::new(instruction.into()))
+    }
+
+    #[classmethod]
+    #[pyo3(signature = (asset_definition_id, from_account_id, amount, note_commitment, ephemeral_public_key, nonce, ciphertext))]
+    #[allow(clippy::too_many_arguments)]
+    fn shield_asset<'py>(
+        _cls: &Bound<'py, PyType>,
+        asset_definition_id: &str,
+        from_account_id: &str,
+        amount: &str,
+        note_commitment: &Bound<'py, PyAny>,
+        ephemeral_public_key: &Bound<'py, PyAny>,
+        nonce: &Bound<'py, PyAny>,
+        ciphertext: &Bound<'py, PyAny>,
+    ) -> PyResult<Self> {
+        let asset: AssetDefinitionId = asset_definition_id.parse().map_err(|err| {
+            PyValueError::new_err(format!(
+                "invalid asset definition id `{asset_definition_id}`: {err}"
+            ))
+        })?;
+        let from = parse_account_id(from_account_id)?;
+        ensure_ed25519_account(&from)?;
+        let amount = parse_u128_text(amount, "amount")?;
+        let note_commitment = py_fixed_array::<32>(note_commitment, "note_commitment")?;
+        let ephemeral_public_key =
+            py_fixed_array::<32>(ephemeral_public_key, "ephemeral_public_key")?;
+        let nonce = py_fixed_array::<24>(nonce, "nonce")?;
+        let ciphertext = py_bytes_or_base64(ciphertext, "ciphertext")?;
+        if ciphertext.is_empty() {
+            return Err(PyValueError::new_err("ciphertext must be non-empty"));
+        }
+        let encrypted_payload =
+            ConfidentialEncryptedPayload::new(ephemeral_public_key, nonce, ciphertext);
+        let instruction = Shield::new(asset, from, amount, note_commitment, encrypted_payload);
+        Ok(Instruction::new(instruction.into()))
+    }
+
+    #[classmethod]
+    #[pyo3(signature = (asset_definition_id, inputs, outputs, proof, *, root_hint=None))]
+    fn zk_transfer_prepared<'py>(
+        _cls: &Bound<'py, PyType>,
+        asset_definition_id: &str,
+        inputs: &Bound<'py, PyAny>,
+        outputs: &Bound<'py, PyAny>,
+        proof: &Bound<'py, PyAny>,
+        root_hint: Option<&Bound<'py, PyAny>>,
+    ) -> PyResult<Self> {
+        let asset: AssetDefinitionId = asset_definition_id.parse().map_err(|err| {
+            PyValueError::new_err(format!(
+                "invalid asset definition id `{asset_definition_id}`: {err}"
+            ))
+        })?;
+        let inputs = py_fixed_array_list(inputs, "inputs")?;
+        if inputs.is_empty() {
+            return Err(PyValueError::new_err(
+                "inputs must contain at least one nullifier",
+            ));
+        }
+        ensure_unique_fixed_arrays(&inputs, "inputs")?;
+        let outputs = py_fixed_array_list(outputs, "outputs")?;
+        if outputs.is_empty() {
+            return Err(PyValueError::new_err(
+                "outputs must contain at least one commitment",
+            ));
+        }
+        ensure_unique_fixed_arrays(&outputs, "outputs")?;
+        let proof = parse_zk_proof_attachment(proof, "proof")?;
+        let root_hint = parse_optional_root_hint(root_hint, "root_hint")?;
+        let instruction = ZkTransfer::new(asset, inputs, outputs, proof, root_hint);
+        Ok(Instruction::new(instruction.into()))
+    }
+
+    #[classmethod]
+    #[pyo3(signature = (asset_definition_id, to_account_id, public_amount, inputs, proof, *, outputs=None, root_hint=None))]
+    #[allow(clippy::too_many_arguments)]
+    fn unshield_prepared<'py>(
+        _cls: &Bound<'py, PyType>,
+        asset_definition_id: &str,
+        to_account_id: &str,
+        public_amount: &str,
+        inputs: &Bound<'py, PyAny>,
+        proof: &Bound<'py, PyAny>,
+        outputs: Option<&Bound<'py, PyAny>>,
+        root_hint: Option<&Bound<'py, PyAny>>,
+    ) -> PyResult<Self> {
+        let asset: AssetDefinitionId = asset_definition_id.parse().map_err(|err| {
+            PyValueError::new_err(format!(
+                "invalid asset definition id `{asset_definition_id}`: {err}"
+            ))
+        })?;
+        let to = parse_account_id(to_account_id)?;
+        ensure_ed25519_account(&to)?;
+        let public_amount = parse_u128_text(public_amount, "public_amount")?;
+        let inputs = py_fixed_array_list(inputs, "inputs")?;
+        if inputs.is_empty() {
+            return Err(PyValueError::new_err(
+                "inputs must contain at least one nullifier",
+            ));
+        }
+        ensure_unique_fixed_arrays(&inputs, "inputs")?;
+        let outputs = match outputs {
+            Some(value) if !value.is_none() => py_fixed_array_list(value, "outputs")?,
+            _ => Vec::new(),
+        };
+        ensure_unique_fixed_arrays(&outputs, "outputs")?;
+        let proof = parse_zk_proof_attachment(proof, "proof")?;
+        let root_hint = parse_optional_root_hint(root_hint, "root_hint")?;
+        let instruction =
+            Unshield::new_with_outputs(asset, to, public_amount, inputs, outputs, proof, root_hint);
         Ok(Instruction::new(instruction.into()))
     }
 
@@ -6220,6 +6654,44 @@ impl Instruction {
         ensure_ed25519_account(&destination)?;
         let quantity = parse_numeric(quantity)?;
         let instruction = Transfer::asset_numeric(asset_id, quantity, destination);
+        Ok(Instruction::new(instruction.into()))
+    }
+
+    #[classmethod]
+    #[pyo3(signature = (destination, name, *, payload=None))]
+    fn grant_account_permission<'py>(
+        cls: &Bound<'py, PyType>,
+        destination: &str,
+        name: &str,
+        payload: Option<&Bound<'py, PyAny>>,
+    ) -> PyResult<Self> {
+        let destination: AccountId = parse_account_id(destination)?;
+        ensure_ed25519_account(&destination)?;
+        let permission_name: Ident = name.parse().map_err(|err| {
+            PyValueError::new_err(format!("invalid permission name `{name}`: {err}"))
+        })?;
+        let payload = py_to_json_value(cls.py(), payload)?;
+        let permission = Permission::new(permission_name, payload);
+        let instruction = Grant::account_permission(permission, destination);
+        Ok(Instruction::new(instruction.into()))
+    }
+
+    #[classmethod]
+    #[pyo3(signature = (destination, name, *, payload=None))]
+    fn revoke_account_permission<'py>(
+        cls: &Bound<'py, PyType>,
+        destination: &str,
+        name: &str,
+        payload: Option<&Bound<'py, PyAny>>,
+    ) -> PyResult<Self> {
+        let destination: AccountId = parse_account_id(destination)?;
+        ensure_ed25519_account(&destination)?;
+        let permission_name: Ident = name.parse().map_err(|err| {
+            PyValueError::new_err(format!("invalid permission name `{name}`: {err}"))
+        })?;
+        let payload = py_to_json_value(cls.py(), payload)?;
+        let permission = Permission::new(permission_name, payload);
+        let instruction = Revoke::account_permission(permission, destination);
         Ok(Instruction::new(instruction.into()))
     }
 

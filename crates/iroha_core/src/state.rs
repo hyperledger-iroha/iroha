@@ -4650,6 +4650,12 @@ pub struct ZkAssetState {
     pub vk_unshield: Option<ZkAssetVerifierBinding>,
     /// Required verifying key for shield proofs (if configured).
     pub vk_shield: Option<ZkAssetVerifierBinding>,
+    /// Optional pool id when this asset definition stores an asset-hidden shielded pool.
+    #[norito(default)]
+    pub asset_hidden_pool_id: Option<String>,
+    /// Optional asset-set root that the asset-hidden pool verifier is bound to.
+    #[norito(default)]
+    pub asset_hidden_asset_set_root: Option<[u8; 32]>,
     /// Rolling set of frontier checkpoints (height, commitment count, root).
     pub frontier_checkpoints: Vec<FrontierCheckpoint>,
     #[norito(skip)]
@@ -4668,6 +4674,8 @@ impl Default for ZkAssetState {
             vk_transfer: None,
             vk_unshield: None,
             vk_shield: None,
+            asset_hidden_pool_id: None,
+            asset_hidden_asset_set_root: None,
             frontier_checkpoints: Vec::new(),
             tree: CanonMerkleTree::default(),
         }
@@ -4872,6 +4880,8 @@ impl json::JsonDeserialize for ZkAssetState {
         let mut vk_transfer = None;
         let mut vk_unshield = None;
         let mut vk_shield = None;
+        let mut asset_hidden_pool_id = None;
+        let mut asset_hidden_asset_set_root = None;
         let mut frontier_checkpoints = None;
 
         while let Some(key) = visitor.next_key()? {
@@ -4885,6 +4895,10 @@ impl json::JsonDeserialize for ZkAssetState {
                 "vk_transfer" => vk_transfer = Some(visitor.parse_value()?),
                 "vk_unshield" => vk_unshield = Some(visitor.parse_value()?),
                 "vk_shield" => vk_shield = Some(visitor.parse_value()?),
+                "asset_hidden_pool_id" => asset_hidden_pool_id = Some(visitor.parse_value()?),
+                "asset_hidden_asset_set_root" => {
+                    asset_hidden_asset_set_root = Some(visitor.parse_value()?);
+                }
                 "frontier_checkpoints" => frontier_checkpoints = Some(visitor.parse_value()?),
                 other => {
                     visitor.skip_value()?;
@@ -4915,6 +4929,8 @@ impl json::JsonDeserialize for ZkAssetState {
             vk_transfer: vk_transfer.unwrap_or(None),
             vk_unshield: vk_unshield.unwrap_or(None),
             vk_shield: vk_shield.unwrap_or(None),
+            asset_hidden_pool_id: asset_hidden_pool_id.unwrap_or(None),
+            asset_hidden_asset_set_root: asset_hidden_asset_set_root.unwrap_or(None),
             frontier_checkpoints: frontier_checkpoints.unwrap_or_default(),
             tree,
         })

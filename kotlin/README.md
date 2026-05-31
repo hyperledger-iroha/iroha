@@ -57,6 +57,10 @@ token prover for shielded offline-offline payments. Pass a Norito-encoded
 `KagemushaVerifiedFoldRecordBundle`; the JNI bridge verifies each private hop
 proof against its verifier record and returns a Norito-encoded
 `KagemushaCompactPaymentToken` when `connect_norito_bridge` is available.
+`KagemushaRecursiveAggregationProofBundleProver` exposes the matching
+admission-neutral recursive proof-bundle path. Pass the same record-bundle
+archive plus a Norito-encoded Pallas open-envelope archive to receive a
+Norito-encoded `KagemushaRecursiveAggregationProofBundle`.
 Legacy `SPEND_PENDING` records are migrated to `SPENT`, and legacy
 `CHANGE_PENDING` records are migrated to `SPENDABLE`.
 `OfflineNoteTransferHandoff` exposes one integration surface for local token

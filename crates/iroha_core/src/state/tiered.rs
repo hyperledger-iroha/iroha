@@ -3425,6 +3425,8 @@ mod measured_bytes_impls {
             total = total.saturating_add(self.vk_transfer.measured_bytes_extra());
             total = total.saturating_add(self.vk_unshield.measured_bytes_extra());
             total = total.saturating_add(self.vk_shield.measured_bytes_extra());
+            total = total.saturating_add(self.asset_hidden_pool_id.measured_bytes_extra());
+            total = total.saturating_add(self.asset_hidden_asset_set_root.measured_bytes_extra());
             total = total.saturating_add(self.frontier_checkpoints.measured_bytes_extra());
             total = total.saturating_add(self.tree.measured_bytes_extra());
             total

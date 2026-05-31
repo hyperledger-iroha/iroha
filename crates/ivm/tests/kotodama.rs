@@ -726,7 +726,7 @@ fn compile_emits_extended_query_and_authority_sysvar_helpers() {
             return sysvar_authority();
         }
     "#;
-    let code = Compiler::new().compile_source(src).expect("compile");
+    let code = test_compiler().compile_source(src).expect("compile");
     let (_, off) = parse_meta_offset(&code).unwrap();
     let code_region = &code[off..];
     for (name, syscall) in [
@@ -788,7 +788,7 @@ fn compile_emits_typed_query_get_helpers() {
             return instance;
         }
     "#;
-    let code = Compiler::new().compile_source(src).expect("compile");
+    let code = test_compiler().compile_source(src).expect("compile");
     let (_, off) = parse_meta_offset(&code).unwrap();
     let code_region = &code[off..];
     for (name, syscall) in [
@@ -910,7 +910,7 @@ fn compile_emits_zk_vrf_read_helpers() {
             return seed;
         }
     "#;
-    let code = Compiler::new().compile_source(src).expect("compile");
+    let code = test_compiler().compile_source(src).expect("compile");
     let (_, off) = parse_meta_offset(&code).unwrap();
     let code_region = &code[off..];
     for (name, syscall) in [

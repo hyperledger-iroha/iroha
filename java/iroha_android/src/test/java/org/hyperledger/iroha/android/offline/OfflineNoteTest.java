@@ -50,7 +50,9 @@ public final class OfflineNoteTest {
     instanceValuesMatchRustVectors();
     auditInstanceValuesRejectUnanchoredClaimsAndHiddenOutputs();
     kagemushaRecordBackedNativeProverValidatesInput();
+    kagemushaRecursiveAggregationNativeProverValidatesInput();
     kagemushaNativeAvailabilityRequiresJniEntrypoint();
+    kagemushaRecursiveAggregationNativeAvailabilityRequiresJniEntrypoint();
     nativeHalo2ProverProducesVerifyingPayloadWhenRequested();
     nativeHalo2ProverPerformanceWhenRequested();
     qrFixtureUsesSdkTextPrefix();
@@ -646,6 +648,29 @@ public final class OfflineNoteTest {
     }
   }
 
+  private static void kagemushaRecursiveAggregationNativeProverValidatesInput() {
+    assertThrows(
+        () ->
+            KagemushaRecursiveAggregationProofBundleProver
+                .proveVerifiedRecursiveAggregationProofBundleWithRecordsAndPallasOpenEnvelopes(
+                    new byte[0], new byte[] {0x01}),
+        "Kagemusha recursive aggregation native prover must reject empty record archives before JNI");
+    assertThrows(
+        () ->
+            KagemushaRecursiveAggregationProofBundleProver
+                .proveVerifiedRecursiveAggregationProofBundleWithRecordsAndPallasOpenEnvelopes(
+                    new byte[] {0x01}, new byte[0]),
+        "Kagemusha recursive aggregation native prover must reject empty Pallas envelope archives before JNI");
+    if (KagemushaRecursiveAggregationProofBundleProver.isNativeAvailable()) {
+      assertThrows(
+          () ->
+              KagemushaRecursiveAggregationProofBundleProver
+                  .proveVerifiedRecursiveAggregationProofBundleWithRecordsAndPallasOpenEnvelopes(
+                      new byte[] {0x01, 0x02}, new byte[] {0x03, 0x04}),
+          "Kagemusha recursive aggregation native prover must reject malformed archives");
+    }
+  }
+
   private static void kagemushaNativeAvailabilityRequiresJniEntrypoint() {
     assertTrue(
         KagemushaCompactPaymentTokenProver.detectNativeAvailability(
@@ -680,6 +705,42 @@ public final class OfflineNoteTest {
             },
             () -> {}),
         "native availability rejects a library blocked by the security manager");
+  }
+
+  private static void kagemushaRecursiveAggregationNativeAvailabilityRequiresJniEntrypoint() {
+    assertTrue(
+        KagemushaRecursiveAggregationProofBundleProver.detectNativeAvailability(
+            () -> {},
+            () -> {
+              throw new IllegalArgumentException("invalid archive");
+            }),
+        "recursive aggregation availability accepts the malformed-input error from a present JNI symbol");
+    assertTrue(
+        KagemushaRecursiveAggregationProofBundleProver.detectNativeAvailability(() -> {}, () -> {}),
+        "recursive aggregation availability accepts a probe that returns normally");
+    assertTrue(
+        !KagemushaRecursiveAggregationProofBundleProver.detectNativeAvailability(
+            () -> {},
+            () -> {
+              throw new UnsatisfiedLinkError("missing symbol");
+            }),
+        "recursive aggregation availability rejects a loaded library without the JNI symbol");
+    assertTrue(
+        !KagemushaRecursiveAggregationProofBundleProver.detectNativeAvailability(
+            () -> {
+              throw new UnsatisfiedLinkError("missing library");
+            },
+            () -> {
+              throw new AssertionError("probe must not run");
+            }),
+        "recursive aggregation availability rejects a missing library before probing symbols");
+    assertTrue(
+        !KagemushaRecursiveAggregationProofBundleProver.detectNativeAvailability(
+            () -> {
+              throw new SecurityException("denied");
+            },
+            () -> {}),
+        "recursive aggregation availability rejects a library blocked by the security manager");
   }
 
   private static void nativeHalo2ProverPerformanceWhenRequested() throws Exception {

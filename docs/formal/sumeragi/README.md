@@ -10663,6 +10663,8 @@ bash scripts/formal/sumeragi_tlc.sh vrf-penalties-report-fast
 bash scripts/formal/sumeragi_tlc.sh vote-admission-fast
 bash scripts/formal/sumeragi_tlc.sh vote-duplicate-key-fast
 bash scripts/formal/sumeragi_tlc.sh evidence-horizon-fast
+bash scripts/formal/sumeragi_tlc.sh evidence-canonicalization-fast
+bash scripts/formal/sumeragi_tlc.sh evidence-validation-fast
 bash scripts/formal/sumeragi_tlc.sh vote-verify-worker-config-fast
 bash scripts/formal/sumeragi_tlc.sh qc-verify-worker-config-fast
 bash scripts/formal/sumeragi_tlc.sh qc-signer-count-fast
@@ -11754,6 +11756,19 @@ freshness filtering: zero-horizon disablement, missing-subject defaulting,
 saturating lower-bound arithmetic, inclusive boundary handling, stale rejection,
 and future evidence admission. Its TLC cross-check independently exhausts the
 same eleven expected-failure configs as Apalache.
+`evidence-canonicalization-fast` and `evidence-canonicalization-bug-*`
+cross-check evidence canonicalization and persistence: canonical keys, subject
+height/view extraction, block references, valid/invalid store insertion,
+canonical storage keys, persistence defaults, duplicate rejection, and unset
+penalty flags. Its TLC cross-check independently exhausts the same thirty-seven
+expected-failure configs as Apalache.
+`evidence-validation-fast` and `evidence-validation-bug-*` cross-check
+fail-closed evidence validation: kind/payload matching, double-vote signature,
+phase, height, epoch, signer, block/root conflict, and precedence checks,
+invalid proposal height, parent, and view-reset handling, and censorship receipt
+transaction, signer, signature, quorum, deduplication, and precedence checks.
+Its TLC cross-check independently exhausts the same thirty-nine
+expected-failure configs as Apalache.
 `vote-verify-worker-config-fast` and `vote-verify-worker-config-bug-*`
 cross-check vote-signature verification worker count and queue-cap derivation.
 `qc-verify-worker-config-fast` and `qc-verify-worker-config-bug-*` cross-check

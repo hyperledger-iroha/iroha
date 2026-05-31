@@ -93,6 +93,33 @@ class OfflineNoteTest {
     }
 
     @Test
+    fun kagemushaRecursiveAggregationNativeProverValidatesInput() {
+        assertFailsWith<IllegalArgumentException> {
+            KagemushaRecursiveAggregationProofBundleProver
+                .proveVerifiedRecursiveAggregationProofBundleWithRecordsAndPallasOpenEnvelopes(
+                    ByteArray(0),
+                    byteArrayOf(0x01),
+                )
+        }
+        assertFailsWith<IllegalArgumentException> {
+            KagemushaRecursiveAggregationProofBundleProver
+                .proveVerifiedRecursiveAggregationProofBundleWithRecordsAndPallasOpenEnvelopes(
+                    byteArrayOf(0x01),
+                    ByteArray(0),
+                )
+        }
+        if (KagemushaRecursiveAggregationProofBundleProver.isNativeAvailable()) {
+            assertFailsWith<IllegalArgumentException> {
+                KagemushaRecursiveAggregationProofBundleProver
+                    .proveVerifiedRecursiveAggregationProofBundleWithRecordsAndPallasOpenEnvelopes(
+                        byteArrayOf(0x01, 0x02),
+                        byteArrayOf(0x03, 0x04),
+                    )
+            }
+        }
+    }
+
+    @Test
     fun kagemushaNativeAvailabilityRequiresJniEntrypoint() {
         assertTrue(
             KagemushaCompactPaymentTokenProver.detectNativeAvailability(
@@ -120,6 +147,40 @@ class OfflineNoteTest {
         )
         assertFalse(
             KagemushaCompactPaymentTokenProver.detectNativeAvailability(
+                loadLibrary = { throw SecurityException("denied") },
+                probeSymbol = {},
+            )
+        )
+    }
+
+    @Test
+    fun kagemushaRecursiveAggregationNativeAvailabilityRequiresJniEntrypoint() {
+        assertTrue(
+            KagemushaRecursiveAggregationProofBundleProver.detectNativeAvailability(
+                loadLibrary = {},
+                probeSymbol = { throw IllegalArgumentException("invalid archive") },
+            )
+        )
+        assertTrue(
+            KagemushaRecursiveAggregationProofBundleProver.detectNativeAvailability(
+                loadLibrary = {},
+                probeSymbol = {},
+            )
+        )
+        assertFalse(
+            KagemushaRecursiveAggregationProofBundleProver.detectNativeAvailability(
+                loadLibrary = {},
+                probeSymbol = { throw UnsatisfiedLinkError("missing symbol") },
+            )
+        )
+        assertFalse(
+            KagemushaRecursiveAggregationProofBundleProver.detectNativeAvailability(
+                loadLibrary = { throw UnsatisfiedLinkError("missing library") },
+                probeSymbol = { error("probe must not run") },
+            )
+        )
+        assertFalse(
+            KagemushaRecursiveAggregationProofBundleProver.detectNativeAvailability(
                 loadLibrary = { throw SecurityException("denied") },
                 probeSymbol = {},
             )

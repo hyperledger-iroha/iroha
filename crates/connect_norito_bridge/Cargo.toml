@@ -32,6 +32,7 @@ zeroize = { version = "1.8.2", default-features = false, features = ["alloc", "s
 
 [dev-dependencies]
 iroha_core = { workspace = true, features = ["iroha-core-tests"] }
+iroha_zkp_halo2 = { workspace = true }
 tempfile = { workspace = true }
 sorafs_chunker = { workspace = true }
 

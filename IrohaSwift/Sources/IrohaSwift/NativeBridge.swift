@@ -38,7 +38,7 @@ enum NoritoBridgeLoader {
         expectedBridgeAbiVersion(for: currentIdentifier())
     }
     private static let expectedHashes: [String: String] = [
-        "macos-arm64": "ff99df0b101af0555b42e1e98e4d12c50504be7c0395bf27232739e0f37328a7",
+        "macos-arm64": "4b3982de131e11db13fb0a44fe3cbe330ecbb8180a681c6f9c3506c35c6ffb4d",
         "ios-arm64": "26bb800e9dce021ef38306caef70dbba7928dd99c6612801fb1bbc520b52b7a9",
         "ios-arm64_x86_64-simulator": "d0f651e6dc837bff7e92b05c9bf1e3a2988fc6995cabee6e3aaa269a01ecd1b5"
     ]
@@ -56,7 +56,7 @@ enum NoritoBridgeLoader {
     }
 
     static func expectedBridgeAbiVersion(for identifier: String) -> UInt32 {
-        return 4
+        return 5
     }
 
     private static func packagedBinaryRelativePaths(for identifier: String = currentIdentifier()) -> [String] {
@@ -1602,6 +1602,11 @@ public final class NoritoNativeBridge: @unchecked Sendable {
         UnsafePointer<UInt8>?, CUnsignedLong,
         UnsafeMutablePointer<UnsafeMutablePointer<UInt8>?>?, UnsafeMutablePointer<CUnsignedLong>?
     ) -> Int32
+    private typealias KagemushaProveVerifiedRecursiveAggregationProofBundleWithRecordsAndPallasOpenEnvelopesFn = @convention(c) (
+        UnsafePointer<UInt8>?, CUnsignedLong,
+        UnsafePointer<UInt8>?, CUnsignedLong,
+        UnsafeMutablePointer<UnsafeMutablePointer<UInt8>?>?, UnsafeMutablePointer<CUnsignedLong>?
+    ) -> Int32
     private typealias PublicKeyFromPrivateFn = @convention(c) (
         UInt8,
         UnsafePointer<UInt8>?, CUnsignedLong,
@@ -1735,6 +1740,7 @@ public final class NoritoNativeBridge: @unchecked Sendable {
     private var daProofSummaryFn: DaProofSummaryFn? = nil
     private var blake3HashFn: Blake3HashFn? = nil
     private var kagemushaProveVerifiedCompactPaymentTokenWithRecordsFn: KagemushaProveVerifiedCompactPaymentTokenWithRecordsFn? = nil
+    private var kagemushaProveVerifiedRecursiveAggregationProofBundleWithRecordsAndPallasOpenEnvelopesFn: KagemushaProveVerifiedRecursiveAggregationProofBundleWithRecordsAndPallasOpenEnvelopesFn? = nil
 #else
     private let bridgeHandle: Any? = nil
     private let encodeTransferFn: Any? = nil
@@ -1839,6 +1845,7 @@ public final class NoritoNativeBridge: @unchecked Sendable {
     private let daProofSummaryFn: Any? = nil
     private let blake3HashFn: Any? = nil
     private let kagemushaProveVerifiedCompactPaymentTokenWithRecordsFn: Any? = nil
+    private let kagemushaProveVerifiedRecursiveAggregationProofBundleWithRecordsAndPallasOpenEnvelopesFn: Any? = nil
 #endif
 
 #if canImport(Darwin)
@@ -2406,6 +2413,17 @@ public final class NoritoNativeBridge: @unchecked Sendable {
             } else {
                 self.kagemushaProveVerifiedCompactPaymentTokenWithRecordsFn = nil
             }
+            if let kagemushaRecursiveSymbol = dlsym(
+                handle,
+                "connect_norito_kagemusha_prove_verified_recursive_aggregation_proof_bundle_with_records_and_pallas_open_envelopes"
+            ) {
+                self.kagemushaProveVerifiedRecursiveAggregationProofBundleWithRecordsAndPallasOpenEnvelopesFn = unsafeBitCast(
+                    kagemushaRecursiveSymbol,
+                    to: KagemushaProveVerifiedRecursiveAggregationProofBundleWithRecordsAndPallasOpenEnvelopesFn.self
+                )
+            } else {
+                self.kagemushaProveVerifiedRecursiveAggregationProofBundleWithRecordsAndPallasOpenEnvelopesFn = nil
+            }
             if let sm2DefaultSymbol = dlsym(handle, "connect_norito_sm2_default_distid") {
                 self.sm2DefaultDistidFn = unsafeBitCast(sm2DefaultSymbol, to: Sm2DefaultDistidFn.self)
             } else {
@@ -2533,6 +2551,7 @@ public final class NoritoNativeBridge: @unchecked Sendable {
             self.daProofSummaryFn = nil
             self.blake3HashFn = nil
             self.kagemushaProveVerifiedCompactPaymentTokenWithRecordsFn = nil
+            self.kagemushaProveVerifiedRecursiveAggregationProofBundleWithRecordsAndPallasOpenEnvelopesFn = nil
             self.encodeConfidentialPayloadFn = nil
             self.accountAddressParseFn = nil
             self.accountAddressRenderFn = nil
@@ -2630,6 +2649,15 @@ public final class NoritoNativeBridge: @unchecked Sendable {
         #if canImport(Darwin)
         guard bridgeEnabledForRuntime else { return false }
         return kagemushaProveVerifiedCompactPaymentTokenWithRecordsFn != nil && freeFn != nil
+        #else
+        return false
+        #endif
+    }
+
+    public var isKagemushaRecursiveAggregationProofBundleProverAvailable: Bool {
+        #if canImport(Darwin)
+        guard bridgeEnabledForRuntime else { return false }
+        return kagemushaProveVerifiedRecursiveAggregationProofBundleWithRecordsAndPallasOpenEnvelopesFn != nil && freeFn != nil
         #else
         return false
         #endif
@@ -5212,6 +5240,47 @@ public final class NoritoNativeBridge: @unchecked Sendable {
                 &outPtr,
                 &outLen
             )
+        }
+        if let error = NativeBridgeError.fromStatus(status) {
+            if let outPtr {
+                freeFn(outPtr)
+            }
+            throw error
+        }
+        guard let outPtr else {
+            throw NativeBridgeError.nullPointer
+        }
+        let data = Data(bytes: outPtr, count: Int(outLen))
+        freeFn(outPtr)
+        return data
+        #else
+        return nil
+        #endif
+    }
+
+    func proveKagemushaVerifiedRecursiveAggregationProofBundleWithRecordsAndPallasOpenEnvelopes(
+        recordBundleArchive: Data,
+        pallasOpenEnvelopesArchive: Data
+    ) throws -> Data? {
+        #if canImport(Darwin)
+        guard let kagemushaProveVerifiedRecursiveAggregationProofBundleWithRecordsAndPallasOpenEnvelopesFn, let freeFn else {
+            return nil
+        }
+        var outPtr: UnsafeMutablePointer<UInt8>? = nil
+        var outLen: CUnsignedLong = 0
+        let status = recordBundleArchive.withUnsafeBytes { recordBuffer -> Int32 in
+            let recordBaseAddress = recordBuffer.bindMemory(to: UInt8.self).baseAddress
+            return pallasOpenEnvelopesArchive.withUnsafeBytes { envelopeBuffer -> Int32 in
+                let envelopeBaseAddress = envelopeBuffer.bindMemory(to: UInt8.self).baseAddress
+                return kagemushaProveVerifiedRecursiveAggregationProofBundleWithRecordsAndPallasOpenEnvelopesFn(
+                    recordBaseAddress,
+                    CUnsignedLong(recordBuffer.count),
+                    envelopeBaseAddress,
+                    CUnsignedLong(envelopeBuffer.count),
+                    &outPtr,
+                    &outLen
+                )
+            }
         }
         if let error = NativeBridgeError.fromStatus(status) {
             if let outPtr {

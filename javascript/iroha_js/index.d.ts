@@ -23,6 +23,45 @@ export type CryptoAlgorithm =
   | "gost3410-2012-512-paramset-b"
   | "sm2";
 
+export type PrivacyCriterionKey =
+  | "hide_amount"
+  | "hide_sender"
+  | "hide_receiver"
+  | "hide_asset_type"
+  | "post_quantum";
+
+export interface PrivacyPqLayers {
+  proof: boolean;
+  authorization: boolean;
+  noteEncryption: boolean;
+}
+
+export interface PrivacyAlgorithmDescriptor {
+  id: string;
+  name: string;
+  shortName: string;
+  summary: string;
+  coveredCriteria: PrivacyCriterionKey[];
+  proofFamily: string;
+  publicInputsSchema: string | null;
+  verifierKeyId: string | null;
+  pqLayers: PrivacyPqLayers;
+  implementationStage?: string | null;
+  recommendedFor?: string[];
+  sourceReferences?: Array<{ label: string; url: string }>;
+  setupSteps?: string[];
+  executionSteps?: string[];
+  sdkEntrypoints: string[];
+  plannedSdkEntrypoints?: string[];
+  chainRequirements: string[];
+}
+
+export function getPrivacyCriteria(): PrivacyCriterionKey[];
+export function getPrivacyAlgorithmDescriptors(): PrivacyAlgorithmDescriptor[];
+export function getPrivacyAlgorithmDescriptor(
+  id: string,
+): PrivacyAlgorithmDescriptor | null;
+
 export interface CryptoKeyPair {
   algorithm: CryptoAlgorithm;
   publicKey: Buffer;
@@ -9495,6 +9534,21 @@ export interface ZkTransferInstructionInput {
   rootHint?: BinaryLike | null;
 }
 
+export interface AssetHiddenZkTransferInstructionInput {
+  poolId: string;
+  inputs: ReadonlyArray<BinaryLike>;
+  outputs: ReadonlyArray<BinaryLike>;
+  proof: ProofAttachmentInput;
+  rootHint?: BinaryLike | null;
+}
+
+export interface RegisterAssetHiddenZkPoolInstructionInput {
+  poolId: string;
+  storageAssetDefinitionId: string;
+  assetSetRoot: BinaryLike;
+  transferVerifyingKey: VerifyingKeyIdLike;
+}
+
 export interface UnshieldInstructionInput {
   assetDefinitionId: string;
   destinationAccountId: string;
@@ -13439,6 +13493,20 @@ export function buildShieldInstruction(input: ShieldInstructionInput): object;
 
 export function buildZkTransferInstruction(
   input: ZkTransferInstructionInput,
+): object;
+
+/**
+ * Build the asset-hidden transfer payload shape.
+ *
+ * The Rust data model and Norito encoder accept this instruction. Validator
+ * execution remains fail-closed until asset-pool verifier state exists.
+ */
+export function buildAssetHiddenZkTransferInstruction(
+  input: AssetHiddenZkTransferInstructionInput,
+): object;
+
+export function buildRegisterAssetHiddenZkPoolInstruction(
+  input: RegisterAssetHiddenZkPoolInstructionInput,
 ): object;
 
 export function buildUnshieldInstruction(input: UnshieldInstructionInput): object;

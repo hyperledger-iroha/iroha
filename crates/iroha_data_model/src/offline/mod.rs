@@ -44,9 +44,19 @@ pub const KAGEMUSHA_FOLDED_PUBLIC_INPUTS_DOMAIN: &str = "iroha:kagemusha:v1:fold
 /// Domain-separation tag for reserved Kagemusha recursive aggregation evidence.
 pub const KAGEMUSHA_RECURSIVE_AGGREGATION_EVIDENCE_DOMAIN: &str =
     "iroha:kagemusha:v1:recursive-aggregation-evidence";
+/// Domain-separation tag for recursive aggregation proof public inputs.
+pub const KAGEMUSHA_RECURSIVE_AGGREGATION_PROOF_PUBLIC_INPUTS_DOMAIN: &str =
+    "iroha:kagemusha:v1:recursive-aggregation-proof-public-inputs";
 /// Canonical verifier-witness profile for reserved Kagemusha recursive aggregation evidence.
 pub const KAGEMUSHA_RECURSIVE_VERIFIER_WITNESS_PROFILE_V1: &str =
     "pallas-ipa-transparent-v1/vesta-recursive-fixed-window-85x3";
+/// Canonical circuit id for proof-carrying Kagemusha recursive aggregation evidence.
+pub const KAGEMUSHA_RECURSIVE_AGGREGATION_PROOF_CIRCUIT_ID_V1: &str =
+    "kagemusha-recursive-aggregation-v1";
+/// Minimum Pallas IPA opening length accepted by reserved Kagemusha recursive evidence.
+pub const KAGEMUSHA_RECURSIVE_PALLAS_IPA_BATCH_MIN_LEN: u32 = 2;
+/// Maximum Pallas IPA opening length accepted by reserved Kagemusha recursive evidence.
+pub const KAGEMUSHA_RECURSIVE_PALLAS_IPA_BATCH_MAX_LEN: u32 = 128;
 /// Current Kagemusha aggregation mode: every private hop proof is verified before folding.
 pub const KAGEMUSHA_AGGREGATION_MODE_CHECKED_PREFOLD_V1: u16 = 1;
 /// Reserved Kagemusha aggregation mode for future in-circuit recursive proof aggregation.
@@ -62,7 +72,7 @@ pub const fn is_supported_kagemusha_aggregation_mode(mode: u16) -> bool {
 pub const fn unsupported_kagemusha_aggregation_mode_reason(mode: u16) -> &'static str {
     match mode {
         KAGEMUSHA_AGGREGATION_MODE_RECURSIVE_IN_CIRCUIT_V1 => {
-            "reserved for future in-circuit recursive aggregation; no recursive verifier is shipped in this release"
+            "reserved for future in-circuit recursive aggregation; private-hop verifier is not yet composed into compact-token admission"
         }
         _ => "unsupported or unknown Kagemusha aggregation mode",
     }
@@ -363,10 +373,63 @@ pub enum KagemushaFoldError {
         /// Verifier-witness profile carried by the evidence.
         actual: String,
     },
+    /// Recursive aggregation evidence declares an unsupported verifier opening length.
+    UnsupportedRecursiveVerifierOpeningLength {
+        /// Minimum supported opening length.
+        min: u32,
+        /// Maximum supported opening length.
+        max: u32,
+        /// Opening length carried by the evidence.
+        actual: u32,
+    },
+    /// Recursive aggregation evidence declares a non-power-of-two verifier opening length.
+    NonPowerOfTwoRecursiveVerifierOpeningLength {
+        /// Opening length carried by the evidence.
+        actual: u32,
+    },
     /// Recursive aggregation evidence carries an all-zero verifier parameter fingerprint.
     ZeroRecursiveVerifierParamsFingerprint,
+    /// Recursive aggregation evidence carries an all-zero fixed-window table schedule digest.
+    ZeroRecursiveFixedWindowTableScheduleDigest,
+    /// Recursive aggregation evidence carries an all-zero fixed-window shared-table manifest digest.
+    ZeroRecursiveFixedWindowSharedTableManifestDigest,
+    /// Recursive aggregation evidence carries an all-zero fixed-window table-base digest.
+    ZeroRecursiveFixedWindowTableBaseDigest,
     /// Recursive aggregation evidence carries an all-zero verifier-witness batch digest.
     ZeroRecursiveVerifierWitnessBatchDigest,
+    /// Recursive aggregation proof public inputs use an unsupported domain separator.
+    InvalidRecursiveAggregationProofPublicInputDomain {
+        /// Expected domain separator.
+        expected: &'static str,
+        /// Domain separator carried by the recursive proof public inputs.
+        actual: String,
+    },
+    /// Recursive aggregation proof public inputs do not match their evidence.
+    RecursiveAggregationProofPublicInputMismatch {
+        /// Name of the mismatched public-input field.
+        field: &'static str,
+    },
+    /// Recursive aggregation proof is not bound to its canonical public inputs.
+    RecursiveAggregationProofPublicInputHashMismatch {
+        /// Hash computed from the recursive proof public inputs.
+        expected: Hash,
+        /// Hash declared by the recursive proof.
+        actual: Hash,
+    },
+    /// Recursive aggregation proof backend does not match its verifier-key id.
+    RecursiveAggregationProofBackendMismatch {
+        /// Proof backend label.
+        proof_backend: String,
+        /// Verifier-key backend label.
+        verifier_key_backend: String,
+    },
+    /// Recursive aggregation proof verifier-key id does not use the canonical circuit id.
+    RecursiveAggregationProofCircuitIdMismatch {
+        /// Expected circuit id.
+        expected: &'static str,
+        /// Actual circuit id.
+        actual: String,
+    },
     /// A folded public-input digest column group is all-zero.
     ZeroFoldedPublicInputDigest {
         /// Name of the all-zero folded public-input digest field.
@@ -546,13 +609,56 @@ impl core::fmt::Display for KagemushaFoldError {
                 f,
                 "Kagemusha recursive aggregation verifier-witness profile must be {expected:?} (found {actual:?})"
             ),
+            Self::UnsupportedRecursiveVerifierOpeningLength { min, max, actual } => write!(
+                f,
+                "Kagemusha recursive aggregation verifier opening length must be {min}..={max} (found {actual})"
+            ),
+            Self::NonPowerOfTwoRecursiveVerifierOpeningLength { actual } => write!(
+                f,
+                "Kagemusha recursive aggregation verifier opening length must be a power of two (found {actual})"
+            ),
             Self::ZeroRecursiveVerifierParamsFingerprint => write!(
                 f,
                 "Kagemusha recursive aggregation verifier parameter fingerprint must be non-zero"
             ),
+            Self::ZeroRecursiveFixedWindowTableScheduleDigest => write!(
+                f,
+                "Kagemusha recursive aggregation fixed-window table schedule digest must be non-zero"
+            ),
+            Self::ZeroRecursiveFixedWindowSharedTableManifestDigest => write!(
+                f,
+                "Kagemusha recursive aggregation fixed-window shared-table manifest digest must be non-zero"
+            ),
+            Self::ZeroRecursiveFixedWindowTableBaseDigest => write!(
+                f,
+                "Kagemusha recursive aggregation fixed-window table base digest must be non-zero"
+            ),
             Self::ZeroRecursiveVerifierWitnessBatchDigest => write!(
                 f,
                 "Kagemusha recursive aggregation verifier-witness batch digest must be non-zero"
+            ),
+            Self::InvalidRecursiveAggregationProofPublicInputDomain { expected, actual } => write!(
+                f,
+                "Kagemusha recursive aggregation proof public-input domain must be {expected:?} (found {actual:?})"
+            ),
+            Self::RecursiveAggregationProofPublicInputMismatch { field } => write!(
+                f,
+                "Kagemusha recursive aggregation proof public input {field:?} does not match the evidence"
+            ),
+            Self::RecursiveAggregationProofPublicInputHashMismatch { .. } => write!(
+                f,
+                "Kagemusha recursive aggregation proof public-input hash does not match its public inputs"
+            ),
+            Self::RecursiveAggregationProofBackendMismatch {
+                proof_backend,
+                verifier_key_backend,
+            } => write!(
+                f,
+                "Kagemusha recursive aggregation proof backend {proof_backend:?} must match verifier-key backend {verifier_key_backend:?}"
+            ),
+            Self::RecursiveAggregationProofCircuitIdMismatch { expected, actual } => write!(
+                f,
+                "Kagemusha recursive aggregation proof circuit id must be {expected:?} (found {actual:?})"
             ),
             Self::ZeroFoldedPublicInputDigest { field } => write!(
                 f,
@@ -1099,12 +1205,96 @@ mod model {
         pub verifier_witness_count: u32,
         /// Canonical no-trusted-setup verifier-witness profile used by the native batch preflight.
         pub verifier_witness_profile: String,
+        /// Pallas IPA opening vector length used by the native verifier-witness batch.
+        pub verifier_opening_len: u32,
         /// Transparent parameter fingerprint used by the native verifier-witness batch.
         #[cfg_attr(feature = "json", norito(with = "crate::json_helpers::fixed_bytes"))]
         pub verifier_params_fingerprint: [u8; 32],
+        /// Poseidon2 digest of the deterministic shared fixed-window table schedule.
+        #[cfg_attr(feature = "json", norito(with = "crate::json_helpers::fixed_bytes"))]
+        pub fixed_window_table_schedule_digest: [u8; 32],
+        /// Poseidon2 digest of the compressed shared fixed-window table row manifest.
+        #[cfg_attr(feature = "json", norito(with = "crate::json_helpers::fixed_bytes"))]
+        pub fixed_window_shared_table_manifest_digest: [u8; 32],
+        /// Poseidon2 digest of the ordered fixed-window table bases validated by native preflight.
+        #[cfg_attr(feature = "json", norito(with = "crate::json_helpers::fixed_bytes"))]
+        pub fixed_window_table_base_digest: [u8; 32],
         /// Domain-separated digest emitted by the native verifier-witness batch preflight.
         #[cfg_attr(feature = "json", norito(with = "crate::json_helpers::fixed_bytes"))]
         pub verifier_witness_batch_digest: [u8; 32],
+    }
+
+    /// Public inputs that a recursive aggregation proof must expose.
+    ///
+    /// The values are derived from [`KagemushaRecursiveAggregationEvidence`] and
+    /// keep a future mode-2 recursive verifier proof bound to the exact
+    /// no-trusted-setup verifier-witness batch, opening width, and ordered
+    /// aggregation transcript it claims to compress.
+    #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Decode, Encode, IntoSchema)]
+    #[cfg_attr(
+        feature = "json",
+        derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
+    )]
+    pub struct KagemushaRecursiveAggregationProofPublicInputs {
+        /// Domain separator for recursive aggregation proof public inputs.
+        pub domain: String,
+        /// Poseidon2 digest of the canonical recursive aggregation evidence.
+        #[cfg_attr(feature = "json", norito(with = "crate::json_helpers::fixed_bytes"))]
+        pub evidence_digest: [u8; 32],
+        /// Poseidon2 digest of the ordered folded-hop aggregation transcript.
+        #[cfg_attr(feature = "json", norito(with = "crate::json_helpers::fixed_bytes"))]
+        pub aggregation_transcript_digest: [u8; 32],
+        /// Transparent parameter fingerprint used by the native verifier-witness batch.
+        #[cfg_attr(feature = "json", norito(with = "crate::json_helpers::fixed_bytes"))]
+        pub verifier_params_fingerprint: [u8; 32],
+        /// Poseidon2 digest of the deterministic shared fixed-window table schedule.
+        #[cfg_attr(feature = "json", norito(with = "crate::json_helpers::fixed_bytes"))]
+        pub fixed_window_table_schedule_digest: [u8; 32],
+        /// Poseidon2 digest of the compressed shared fixed-window table row manifest.
+        #[cfg_attr(feature = "json", norito(with = "crate::json_helpers::fixed_bytes"))]
+        pub fixed_window_shared_table_manifest_digest: [u8; 32],
+        /// Poseidon2 digest of the ordered fixed-window table bases validated by native preflight.
+        #[cfg_attr(feature = "json", norito(with = "crate::json_helpers::fixed_bytes"))]
+        pub fixed_window_table_base_digest: [u8; 32],
+        /// Domain-separated digest emitted by the native verifier-witness batch preflight.
+        #[cfg_attr(feature = "json", norito(with = "crate::json_helpers::fixed_bytes"))]
+        pub verifier_witness_batch_digest: [u8; 32],
+        /// Pallas IPA opening vector length used by the recursive verifier proof.
+        pub verifier_opening_len: u32,
+        /// Number of native verifier witnesses compressed by the recursive proof.
+        pub verifier_witness_count: u32,
+        /// Number of folded private hops represented by the aggregation transcript.
+        pub hop_count: u32,
+    }
+
+    /// Transparent proof claiming one recursive aggregation evidence statement.
+    #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Decode, Encode, IntoSchema)]
+    #[cfg_attr(
+        feature = "json",
+        derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
+    )]
+    pub struct KagemushaRecursiveAggregationProof {
+        /// Stable verifier key identifier for the recursive aggregation proof circuit.
+        pub verifier_key_id: VerifyingKeyId,
+        /// Public inputs exposed by the recursive aggregation proof.
+        pub public_inputs: KagemushaRecursiveAggregationProofPublicInputs,
+        /// Public input commitment hash.
+        pub public_inputs_hash: Hash,
+        /// Transparent proof payload encoded as an `OpenVerifyEnvelope`.
+        pub proof: ProofBox,
+    }
+
+    /// Recursive aggregation evidence paired with the proof that claims it.
+    #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Decode, Encode, IntoSchema)]
+    #[cfg_attr(
+        feature = "json",
+        derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
+    )]
+    pub struct KagemushaRecursiveAggregationProofBundle {
+        /// Canonical host-side evidence statement.
+        pub evidence: KagemushaRecursiveAggregationEvidence,
+        /// Transparent no-trusted-setup recursive proof bound to `evidence`.
+        pub recursive_proof: KagemushaRecursiveAggregationProof,
     }
 
     /// One private hop folded into a compact Kagemusha payment token.
@@ -1341,6 +1531,8 @@ const KAGEMUSHA_FOLD_TRANSCRIPT_DIGEST_DOMAIN: &str = "iroha:kagemusha:v1:fold-t
 pub const OFFLINE_NOTE_RECURSIVE_PUBLIC_INPUTS_SCHEMA: &[u8] = br#"{"schema":"offline_note_recursive","public_inputs":["public_inputs_hash_limb0","public_inputs_hash_limb1","public_inputs_hash_limb2","public_inputs_hash_limb3","proof_mode","input_count","output_count","input_amount_sum","output_amount_sum","input_nullifier_sum_limb0","output_commitment_sum_limb0","key_certificate_payload_hash_limb0","source_or_token_limb0","input_claim_hash_sum_limb0","output_claim_hash_sum_limb0","reserved_zero"]}"#;
 /// Canonical public-input schema descriptor for Kagemusha folded proofs.
 pub const KAGEMUSHA_FOLDED_PUBLIC_INPUTS_SCHEMA: &[u8] = br#"{"schema":"kagemusha_folded_v1","public_inputs":["public_inputs_hash_limb0","public_inputs_hash_limb1","public_inputs_hash_limb2","public_inputs_hash_limb3","aggregation_mode","hop_count","initial_root_limb0","initial_root_limb1","initial_root_limb2","initial_root_limb3","final_root_limb0","final_root_limb1","final_root_limb2","final_root_limb3","nullifier_digest_limb0","nullifier_digest_limb1","nullifier_digest_limb2","nullifier_digest_limb3","output_commitment_digest_limb0","output_commitment_digest_limb1","output_commitment_digest_limb2","output_commitment_digest_limb3","fold_digest_limb0","fold_digest_limb1","fold_digest_limb2","fold_digest_limb3","aggregation_transcript_digest_limb0","aggregation_transcript_digest_limb1","aggregation_transcript_digest_limb2","aggregation_transcript_digest_limb3"]}"#;
+/// Canonical public-input schema descriptor for Kagemusha recursive aggregation proofs.
+pub const KAGEMUSHA_RECURSIVE_AGGREGATION_PROOF_PUBLIC_INPUTS_SCHEMA: &[u8] = br#"{"schema":"kagemusha_recursive_aggregation_proof_v1","public_inputs":["public_inputs_hash_limb0","public_inputs_hash_limb1","public_inputs_hash_limb2","public_inputs_hash_limb3","evidence_digest_limb0","evidence_digest_limb1","evidence_digest_limb2","evidence_digest_limb3","aggregation_transcript_digest_limb0","aggregation_transcript_digest_limb1","aggregation_transcript_digest_limb2","aggregation_transcript_digest_limb3","verifier_params_fingerprint_limb0","verifier_params_fingerprint_limb1","verifier_params_fingerprint_limb2","verifier_params_fingerprint_limb3","fixed_window_table_schedule_digest_limb0","fixed_window_table_schedule_digest_limb1","fixed_window_table_schedule_digest_limb2","fixed_window_table_schedule_digest_limb3","fixed_window_shared_table_manifest_digest_limb0","fixed_window_shared_table_manifest_digest_limb1","fixed_window_shared_table_manifest_digest_limb2","fixed_window_shared_table_manifest_digest_limb3","fixed_window_table_base_digest_limb0","fixed_window_table_base_digest_limb1","fixed_window_table_base_digest_limb2","fixed_window_table_base_digest_limb3","verifier_witness_batch_digest_limb0","verifier_witness_batch_digest_limb1","verifier_witness_batch_digest_limb2","verifier_witness_batch_digest_limb3","verifier_opening_len","verifier_witness_count","hop_count"]}"#;
 
 #[derive(Debug, Clone, Decode, Encode)]
 struct KagemushaFoldStepDigestPreimage {
@@ -1406,6 +1598,12 @@ pub fn offline_note_recursive_public_inputs_schema_hash() -> [u8; Hash::LENGTH] 
 #[must_use]
 pub fn kagemusha_folded_public_inputs_schema_hash() -> [u8; Hash::LENGTH] {
     Hash::new(KAGEMUSHA_FOLDED_PUBLIC_INPUTS_SCHEMA).into()
+}
+
+/// Return the registry schema hash required for Kagemusha recursive aggregation proof verifiers.
+#[must_use]
+pub fn kagemusha_recursive_aggregation_proof_public_inputs_schema_hash() -> [u8; Hash::LENGTH] {
+    Hash::new(KAGEMUSHA_RECURSIVE_AGGREGATION_PROOF_PUBLIC_INPUTS_SCHEMA).into()
 }
 
 impl From<&OfflineNoteKeyCertificate> for OfflineNoteKeyCertificatePayload {
@@ -1697,6 +1895,13 @@ pub fn kagemusha_poseidon_aggregation_transcript_digest(
     statement: &KagemushaPoseidonAggregationTranscriptStatement,
 ) -> Result<[u8; Hash::LENGTH], KagemushaFoldError> {
     validate_kagemusha_aggregation_transcript_statement(statement)?;
+    kagemusha_poseidon_aggregation_transcript_shape_digest(statement)
+}
+
+fn kagemusha_poseidon_aggregation_transcript_shape_digest(
+    statement: &KagemushaPoseidonAggregationTranscriptStatement,
+) -> Result<[u8; Hash::LENGTH], KagemushaFoldError> {
+    validate_kagemusha_aggregation_transcript_statement_shape(statement)?;
     kagemusha_poseidon_preimage(&KagemushaPoseidonAggregationTranscriptPreimage {
         domain: KAGEMUSHA_POSEIDON_AGGREGATION_TRANSCRIPT_DOMAIN.to_owned(),
         statement: statement.clone(),
@@ -1925,8 +2130,9 @@ fn validate_kagemusha_aggregation_transcript_statement_shape(
 ///
 /// Returns [`KagemushaFoldError`] when the evidence does not declare reserved
 /// recursive mode `2`, its hop transcript is non-canonical, its witness count
-/// does not match the hop count, its verifier-witness profile is unsupported,
-/// or its verifier parameter/digest fields are all-zero.
+/// does not match the hop count, its verifier-witness profile or opening length
+/// is unsupported, or its verifier parameter, schedule, shared-table manifest,
+/// table-base, or batch digest fields are all-zero.
 pub fn validate_kagemusha_recursive_aggregation_evidence(
     evidence: &KagemushaRecursiveAggregationEvidence,
 ) -> Result<(), KagemushaFoldError> {
@@ -1957,11 +2163,52 @@ pub fn validate_kagemusha_recursive_aggregation_evidence(
             },
         );
     }
+    validate_kagemusha_recursive_verifier_opening_len(evidence.verifier_opening_len)?;
     if evidence.verifier_params_fingerprint == [0u8; Hash::LENGTH] {
         return Err(KagemushaFoldError::ZeroRecursiveVerifierParamsFingerprint);
     }
+    if evidence.fixed_window_table_schedule_digest == [0u8; Hash::LENGTH] {
+        return Err(KagemushaFoldError::ZeroRecursiveFixedWindowTableScheduleDigest);
+    }
+    if evidence.fixed_window_shared_table_manifest_digest == [0u8; Hash::LENGTH] {
+        return Err(KagemushaFoldError::ZeroRecursiveFixedWindowSharedTableManifestDigest);
+    }
+    if evidence.fixed_window_table_base_digest == [0u8; Hash::LENGTH] {
+        return Err(KagemushaFoldError::ZeroRecursiveFixedWindowTableBaseDigest);
+    }
     if evidence.verifier_witness_batch_digest == [0u8; Hash::LENGTH] {
         return Err(KagemushaFoldError::ZeroRecursiveVerifierWitnessBatchDigest);
+    }
+    Ok(())
+}
+
+/// Validate the Pallas IPA opening length accepted by reserved recursive evidence.
+///
+/// # Errors
+///
+/// Returns [`KagemushaFoldError`] when `opening_len` is outside the bounded
+/// power-of-two corridor used by the first recursive verifier profile.
+pub fn validate_kagemusha_recursive_verifier_opening_len(
+    opening_len: u32,
+) -> Result<(), KagemushaFoldError> {
+    if !(KAGEMUSHA_RECURSIVE_PALLAS_IPA_BATCH_MIN_LEN
+        ..=KAGEMUSHA_RECURSIVE_PALLAS_IPA_BATCH_MAX_LEN)
+        .contains(&opening_len)
+    {
+        return Err(
+            KagemushaFoldError::UnsupportedRecursiveVerifierOpeningLength {
+                min: KAGEMUSHA_RECURSIVE_PALLAS_IPA_BATCH_MIN_LEN,
+                max: KAGEMUSHA_RECURSIVE_PALLAS_IPA_BATCH_MAX_LEN,
+                actual: opening_len,
+            },
+        );
+    }
+    if !opening_len.is_power_of_two() {
+        return Err(
+            KagemushaFoldError::NonPowerOfTwoRecursiveVerifierOpeningLength {
+                actual: opening_len,
+            },
+        );
     }
     Ok(())
 }
@@ -1980,6 +2227,237 @@ pub fn kagemusha_recursive_aggregation_evidence_digest(
         domain: KAGEMUSHA_RECURSIVE_AGGREGATION_EVIDENCE_DOMAIN.to_owned(),
         evidence: evidence.clone(),
     })
+}
+
+/// Derive recursive aggregation proof public inputs from canonical evidence.
+///
+/// # Errors
+///
+/// Returns [`KagemushaFoldError`] when the evidence is non-canonical or when the
+/// derived public-input payload is not valid for the recursive proof corridor.
+pub fn kagemusha_recursive_aggregation_proof_public_inputs_from_evidence(
+    evidence: &KagemushaRecursiveAggregationEvidence,
+) -> Result<KagemushaRecursiveAggregationProofPublicInputs, KagemushaFoldError> {
+    validate_kagemusha_recursive_aggregation_evidence(evidence)?;
+    let public_inputs = KagemushaRecursiveAggregationProofPublicInputs {
+        domain: KAGEMUSHA_RECURSIVE_AGGREGATION_PROOF_PUBLIC_INPUTS_DOMAIN.to_owned(),
+        evidence_digest: kagemusha_recursive_aggregation_evidence_digest(evidence)?,
+        aggregation_transcript_digest: kagemusha_poseidon_aggregation_transcript_shape_digest(
+            &evidence.aggregation_statement,
+        )?,
+        verifier_params_fingerprint: evidence.verifier_params_fingerprint,
+        fixed_window_table_schedule_digest: evidence.fixed_window_table_schedule_digest,
+        fixed_window_shared_table_manifest_digest: evidence
+            .fixed_window_shared_table_manifest_digest,
+        fixed_window_table_base_digest: evidence.fixed_window_table_base_digest,
+        verifier_witness_batch_digest: evidence.verifier_witness_batch_digest,
+        verifier_opening_len: evidence.verifier_opening_len,
+        verifier_witness_count: evidence.verifier_witness_count,
+        hop_count: evidence.aggregation_statement.hop_count,
+    };
+    public_inputs.validate_context()?;
+    Ok(public_inputs)
+}
+
+impl KagemushaRecursiveAggregationProofPublicInputs {
+    /// Validate the recursive aggregation proof public-input context.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`KagemushaFoldError`] when the domain, digest fields, opening
+    /// length, or counts are outside the production recursive proof corridor.
+    pub fn validate_context(&self) -> Result<(), KagemushaFoldError> {
+        if self.domain != KAGEMUSHA_RECURSIVE_AGGREGATION_PROOF_PUBLIC_INPUTS_DOMAIN {
+            return Err(
+                KagemushaFoldError::InvalidRecursiveAggregationProofPublicInputDomain {
+                    expected: KAGEMUSHA_RECURSIVE_AGGREGATION_PROOF_PUBLIC_INPUTS_DOMAIN,
+                    actual: self.domain.clone(),
+                },
+            );
+        }
+        if self.evidence_digest == [0u8; Hash::LENGTH] {
+            return Err(
+                KagemushaFoldError::RecursiveAggregationProofPublicInputMismatch {
+                    field: "evidence_digest",
+                },
+            );
+        }
+        if self.aggregation_transcript_digest == [0u8; Hash::LENGTH] {
+            return Err(
+                KagemushaFoldError::RecursiveAggregationProofPublicInputMismatch {
+                    field: "aggregation_transcript_digest",
+                },
+            );
+        }
+        if self.verifier_params_fingerprint == [0u8; Hash::LENGTH] {
+            return Err(
+                KagemushaFoldError::RecursiveAggregationProofPublicInputMismatch {
+                    field: "verifier_params_fingerprint",
+                },
+            );
+        }
+        if self.fixed_window_table_schedule_digest == [0u8; Hash::LENGTH] {
+            return Err(
+                KagemushaFoldError::RecursiveAggregationProofPublicInputMismatch {
+                    field: "fixed_window_table_schedule_digest",
+                },
+            );
+        }
+        if self.fixed_window_shared_table_manifest_digest == [0u8; Hash::LENGTH] {
+            return Err(
+                KagemushaFoldError::RecursiveAggregationProofPublicInputMismatch {
+                    field: "fixed_window_shared_table_manifest_digest",
+                },
+            );
+        }
+        if self.fixed_window_table_base_digest == [0u8; Hash::LENGTH] {
+            return Err(
+                KagemushaFoldError::RecursiveAggregationProofPublicInputMismatch {
+                    field: "fixed_window_table_base_digest",
+                },
+            );
+        }
+        if self.verifier_witness_batch_digest == [0u8; Hash::LENGTH] {
+            return Err(
+                KagemushaFoldError::RecursiveAggregationProofPublicInputMismatch {
+                    field: "verifier_witness_batch_digest",
+                },
+            );
+        }
+        validate_kagemusha_recursive_verifier_opening_len(self.verifier_opening_len)?;
+        if self.hop_count == 0 {
+            return Err(KagemushaFoldError::Empty);
+        }
+        let hop_count =
+            usize::try_from(self.hop_count).map_err(|_| KagemushaFoldError::TooManyHops {
+                max: KAGEMUSHA_COMPACT_TOKEN_MAX_HOPS,
+                actual: usize::MAX,
+            })?;
+        if hop_count > KAGEMUSHA_COMPACT_TOKEN_MAX_HOPS {
+            return Err(KagemushaFoldError::TooManyHops {
+                max: KAGEMUSHA_COMPACT_TOKEN_MAX_HOPS,
+                actual: hop_count,
+            });
+        }
+        if self.verifier_witness_count != self.hop_count {
+            return Err(
+                KagemushaFoldError::RecursiveAggregationWitnessCountMismatch {
+                    expected: self.hop_count,
+                    actual: self.verifier_witness_count,
+                },
+            );
+        }
+        Ok(())
+    }
+
+    /// Deterministic hash that the recursive aggregation proof must expose.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error when the public-input payload cannot be serialized with Norito.
+    pub fn public_inputs_hash(&self) -> Result<Hash, norito::Error> {
+        to_bytes(self).map(Hash::new)
+    }
+}
+
+impl KagemushaRecursiveAggregationProof {
+    /// Validate that the proof envelope metadata is bound to its public inputs.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`KagemushaFoldError`] when the proof uses a non-production
+    /// backend, mismatched backend/circuit metadata, or an incorrect
+    /// public-input hash.
+    pub fn validate_public_input_binding(&self) -> Result<(), KagemushaFoldError> {
+        self.public_inputs.validate_context()?;
+        if !is_supported_kagemusha_proof_backend(&self.proof.backend) {
+            return Err(KagemushaFoldError::UnsupportedProofBackend {
+                backend: self.proof.backend.clone(),
+            });
+        }
+        if !is_supported_kagemusha_proof_backend(&self.verifier_key_id.backend) {
+            return Err(KagemushaFoldError::UnsupportedProofBackend {
+                backend: self.verifier_key_id.backend.clone(),
+            });
+        }
+        if self.proof.backend != self.verifier_key_id.backend {
+            return Err(
+                KagemushaFoldError::RecursiveAggregationProofBackendMismatch {
+                    proof_backend: self.proof.backend.clone(),
+                    verifier_key_backend: self.verifier_key_id.backend.clone(),
+                },
+            );
+        }
+        if self.verifier_key_id.name != KAGEMUSHA_RECURSIVE_AGGREGATION_PROOF_CIRCUIT_ID_V1 {
+            return Err(
+                KagemushaFoldError::RecursiveAggregationProofCircuitIdMismatch {
+                    expected: KAGEMUSHA_RECURSIVE_AGGREGATION_PROOF_CIRCUIT_ID_V1,
+                    actual: self.verifier_key_id.name.clone(),
+                },
+            );
+        }
+        let expected = self.public_inputs.public_inputs_hash()?;
+        if self.public_inputs_hash != expected {
+            return Err(
+                KagemushaFoldError::RecursiveAggregationProofPublicInputHashMismatch {
+                    expected,
+                    actual: self.public_inputs_hash,
+                },
+            );
+        }
+        Ok(())
+    }
+}
+
+impl KagemushaRecursiveAggregationProofBundle {
+    /// Validate that recursive proof public inputs are derived from this evidence.
+    ///
+    /// This still does not make aggregation mode `2` accepted for compact-token
+    /// admission. It provides the canonical proof-carrying surface that a future
+    /// recursive verifier can check before backend proof verification.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`KagemushaFoldError`] when evidence, proof metadata, or any
+    /// redundant public-input field is not canonical.
+    pub fn validate_evidence_binding(&self) -> Result<(), KagemushaFoldError> {
+        let expected =
+            kagemusha_recursive_aggregation_proof_public_inputs_from_evidence(&self.evidence)?;
+        self.recursive_proof.validate_public_input_binding()?;
+        validate_kagemusha_recursive_aggregation_proof_public_input_parity(
+            &expected,
+            &self.recursive_proof.public_inputs,
+        )
+    }
+}
+
+fn validate_kagemusha_recursive_aggregation_proof_public_input_parity(
+    expected: &KagemushaRecursiveAggregationProofPublicInputs,
+    actual: &KagemushaRecursiveAggregationProofPublicInputs,
+) -> Result<(), KagemushaFoldError> {
+    macro_rules! ensure_field {
+        ($field:ident) => {
+            if actual.$field != expected.$field {
+                return Err(
+                    KagemushaFoldError::RecursiveAggregationProofPublicInputMismatch {
+                        field: stringify!($field),
+                    },
+                );
+            }
+        };
+    }
+    ensure_field!(domain);
+    ensure_field!(evidence_digest);
+    ensure_field!(aggregation_transcript_digest);
+    ensure_field!(verifier_params_fingerprint);
+    ensure_field!(fixed_window_table_schedule_digest);
+    ensure_field!(fixed_window_shared_table_manifest_digest);
+    ensure_field!(fixed_window_table_base_digest);
+    ensure_field!(verifier_witness_batch_digest);
+    ensure_field!(verifier_opening_len);
+    ensure_field!(verifier_witness_count);
+    ensure_field!(hop_count);
+    Ok(())
 }
 
 struct KagemushaCanonicalFoldParts {
@@ -2140,18 +2618,25 @@ pub fn kagemusha_poseidon_aggregation_transcript_statement(
 /// [`kagemusha_folded_public_inputs`], then changes only the aggregation mode to
 /// reserved mode `2` and binds the canonical no-trusted-setup verifier-witness
 /// profile plus the caller-supplied native verifier-witness batch preflight
-/// fields.
+/// fields, including the verifier opening length and fixed-window table
+/// schedule, shared-table manifest, and base digests that the batch preflight
+/// and recursive table manifest bind.
 ///
 /// # Errors
 ///
 /// Returns [`KagemushaFoldError`] when the folded-hop witness is non-canonical,
-/// the verifier parameter fingerprint is all-zero, or the verifier-witness
-/// batch digest is all-zero.
+/// the verifier parameter fingerprint is all-zero, the fixed-window table
+/// schedule, shared-table manifest, or table-base digest is all-zero, or the
+/// verifier-witness batch digest is all-zero.
 pub fn kagemusha_recursive_aggregation_evidence_from_steps(
     chain_id: &ChainId,
     asset: &AssetDefinitionId,
     steps: &[KagemushaFoldStep],
+    verifier_opening_len: u32,
     verifier_params_fingerprint: [u8; Hash::LENGTH],
+    fixed_window_table_schedule_digest: [u8; Hash::LENGTH],
+    fixed_window_shared_table_manifest_digest: [u8; Hash::LENGTH],
+    fixed_window_table_base_digest: [u8; Hash::LENGTH],
     verifier_witness_batch_digest: [u8; Hash::LENGTH],
 ) -> Result<KagemushaRecursiveAggregationEvidence, KagemushaFoldError> {
     let mut aggregation_statement =
@@ -2160,8 +2645,12 @@ pub fn kagemusha_recursive_aggregation_evidence_from_steps(
     let evidence = KagemushaRecursiveAggregationEvidence {
         verifier_witness_count: aggregation_statement.hop_count,
         verifier_witness_profile: KAGEMUSHA_RECURSIVE_VERIFIER_WITNESS_PROFILE_V1.to_owned(),
+        verifier_opening_len,
         aggregation_statement,
         verifier_params_fingerprint,
+        fixed_window_table_schedule_digest,
+        fixed_window_shared_table_manifest_digest,
+        fixed_window_table_base_digest,
         verifier_witness_batch_digest,
     };
     validate_kagemusha_recursive_aggregation_evidence(&evidence)?;
@@ -2559,6 +3048,30 @@ mod offline_note_tests {
             )
             .expect("verifier-key digest"),
         }
+    }
+
+    fn sample_kagemusha_recursive_aggregation_evidence() -> KagemushaRecursiveAggregationEvidence {
+        let chain_id: ChainId = "kagemusha-recursive-chain".parse().expect("chain id");
+        let asset = kagemusha_asset("kgm-recursive");
+        let root0 = fixed_hash(b"kagemusha-recursive-root-0");
+        let root1 = fixed_hash(b"kagemusha-recursive-root-1");
+        let root2 = fixed_hash(b"kagemusha-recursive-root-2");
+        let steps = vec![
+            kagemusha_step(root0, root1, 0x20, 0x40, b"recursive-proof-hop-0"),
+            kagemusha_step(root1, root2, 0x60, 0x80, b"recursive-proof-hop-1"),
+        ];
+        kagemusha_recursive_aggregation_evidence_from_steps(
+            &chain_id,
+            &asset,
+            &steps,
+            4,
+            fixed_hash(b"recursive-pallas-params"),
+            fixed_hash(b"recursive-fixed-window-schedule"),
+            fixed_hash(b"recursive-fixed-window-shared-manifest"),
+            fixed_hash(b"recursive-fixed-window-bases"),
+            fixed_hash(b"recursive-pallas-witness-batch"),
+        )
+        .expect("recursive aggregation evidence")
     }
 
     #[test]
@@ -3093,6 +3606,18 @@ mod offline_note_tests {
             .contains("reserved for future in-circuit recursive aggregation")
         );
         assert!(
+            unsupported_kagemusha_aggregation_mode_reason(
+                KAGEMUSHA_AGGREGATION_MODE_RECURSIVE_IN_CIRCUIT_V1
+            )
+            .contains("private-hop verifier is not yet composed into compact-token admission")
+        );
+        assert!(
+            !unsupported_kagemusha_aggregation_mode_reason(
+                KAGEMUSHA_AGGREGATION_MODE_RECURSIVE_IN_CIRCUIT_V1
+            )
+            .contains("no recursive verifier")
+        );
+        assert!(
             unsupported_kagemusha_aggregation_mode_reason(0xFFFF)
                 .contains("unsupported or unknown")
         );
@@ -3165,13 +3690,21 @@ mod offline_note_tests {
             kagemusha_step(root0, root1, 0x20, 0x40, b"recursive-proof-hop-0"),
             kagemusha_step(root1, root2, 0x60, 0x80, b"recursive-proof-hop-1"),
         ];
+        let opening_len = 4;
         let params_fingerprint = fixed_hash(b"recursive-pallas-params");
+        let schedule_digest = fixed_hash(b"recursive-fixed-window-schedule");
+        let manifest_digest = fixed_hash(b"recursive-fixed-window-manifest");
+        let base_digest = fixed_hash(b"recursive-fixed-window-bases");
         let batch_digest = fixed_hash(b"recursive-pallas-witness-batch");
         let evidence = kagemusha_recursive_aggregation_evidence_from_steps(
             &chain_id,
             &asset,
             &steps,
+            opening_len,
             params_fingerprint,
+            schedule_digest,
+            manifest_digest,
+            base_digest,
             batch_digest,
         )
         .expect("recursive aggregation evidence");
@@ -3184,7 +3717,14 @@ mod offline_note_tests {
             evidence.verifier_witness_profile,
             KAGEMUSHA_RECURSIVE_VERIFIER_WITNESS_PROFILE_V1
         );
+        assert_eq!(evidence.verifier_opening_len, opening_len);
         assert_eq!(evidence.verifier_params_fingerprint, params_fingerprint);
+        assert_eq!(evidence.fixed_window_table_schedule_digest, schedule_digest);
+        assert_eq!(
+            evidence.fixed_window_shared_table_manifest_digest,
+            manifest_digest
+        );
+        assert_eq!(evidence.fixed_window_table_base_digest, base_digest);
         assert_eq!(evidence.verifier_witness_batch_digest, batch_digest);
         assert!(matches!(
             kagemusha_poseidon_aggregation_transcript_digest(&evidence.aggregation_statement),
@@ -3223,6 +3763,41 @@ mod offline_note_tests {
                 .expect("changed batch digest evidence")
         );
 
+        let mut changed_opening_len = evidence.clone();
+        changed_opening_len.verifier_opening_len = 8;
+        assert_ne!(
+            digest,
+            kagemusha_recursive_aggregation_evidence_digest(&changed_opening_len)
+                .expect("changed opening length evidence")
+        );
+
+        let mut changed_schedule = evidence.clone();
+        changed_schedule.fixed_window_table_schedule_digest =
+            fixed_hash(b"recursive-fixed-window-schedule-other");
+        assert_ne!(
+            digest,
+            kagemusha_recursive_aggregation_evidence_digest(&changed_schedule)
+                .expect("changed schedule digest evidence")
+        );
+
+        let mut changed_manifest = evidence.clone();
+        changed_manifest.fixed_window_shared_table_manifest_digest =
+            fixed_hash(b"recursive-fixed-window-manifest-other");
+        assert_ne!(
+            digest,
+            kagemusha_recursive_aggregation_evidence_digest(&changed_manifest)
+                .expect("changed shared-table manifest digest evidence")
+        );
+
+        let mut changed_base = evidence.clone();
+        changed_base.fixed_window_table_base_digest =
+            fixed_hash(b"recursive-fixed-window-bases-other");
+        assert_ne!(
+            digest,
+            kagemusha_recursive_aggregation_evidence_digest(&changed_base)
+                .expect("changed table-base digest evidence")
+        );
+
         let mut changed_profile = evidence.clone();
         changed_profile.verifier_witness_profile =
             "pallas-ipa-transparent-v1/vesta-recursive-fixed-window-unsafe".to_owned();
@@ -3257,7 +3832,11 @@ mod offline_note_tests {
             &chain_id,
             &asset,
             &steps,
+            4,
             fixed_hash(b"recursive-bad-params"),
+            fixed_hash(b"recursive-bad-schedule"),
+            fixed_hash(b"recursive-bad-manifest"),
+            fixed_hash(b"recursive-bad-bases"),
             fixed_hash(b"recursive-bad-batch"),
         )
         .expect("recursive aggregation evidence");
@@ -3315,6 +3894,21 @@ mod offline_note_tests {
                 KagemushaFoldError::UnsupportedRecursiveVerifierWitnessProfile { actual, .. }
             ) if actual == "pallas-ipa-transparent-v1/mock"
         ));
+
+        let mut unsupported_opening_len = evidence.clone();
+        unsupported_opening_len.verifier_opening_len = 1;
+        assert!(matches!(
+            validate_kagemusha_recursive_aggregation_evidence(&unsupported_opening_len),
+            Err(KagemushaFoldError::UnsupportedRecursiveVerifierOpeningLength { actual: 1, .. })
+        ));
+
+        let mut non_power_opening_len = evidence.clone();
+        non_power_opening_len.verifier_opening_len = 3;
+        assert!(matches!(
+            validate_kagemusha_recursive_aggregation_evidence(&non_power_opening_len),
+            Err(KagemushaFoldError::NonPowerOfTwoRecursiveVerifierOpeningLength { actual: 3 })
+        ));
+
         let bad_profile_bytes =
             to_bytes(&bad_profile).expect("encode unsupported-profile recursive evidence");
         let bad_profile_decoded: KagemushaRecursiveAggregationEvidence =
@@ -3332,6 +3926,20 @@ mod offline_note_tests {
         assert!(matches!(
             validate_kagemusha_recursive_aggregation_evidence(&zero_params),
             Err(KagemushaFoldError::ZeroRecursiveVerifierParamsFingerprint)
+        ));
+
+        let mut zero_schedule = evidence.clone();
+        zero_schedule.fixed_window_table_schedule_digest = [0u8; Hash::LENGTH];
+        assert!(matches!(
+            validate_kagemusha_recursive_aggregation_evidence(&zero_schedule),
+            Err(KagemushaFoldError::ZeroRecursiveFixedWindowTableScheduleDigest)
+        ));
+
+        let mut zero_bases = evidence.clone();
+        zero_bases.fixed_window_table_base_digest = [0u8; Hash::LENGTH];
+        assert!(matches!(
+            validate_kagemusha_recursive_aggregation_evidence(&zero_bases),
+            Err(KagemushaFoldError::ZeroRecursiveFixedWindowTableBaseDigest)
         ));
 
         let mut zero_batch = evidence.clone();
@@ -3370,7 +3978,39 @@ mod offline_note_tests {
                 &chain_id,
                 &asset,
                 &steps,
+                1,
+                fixed_hash(b"recursive-bad-params"),
+                fixed_hash(b"recursive-bad-schedule"),
+                fixed_hash(b"recursive-bad-manifest"),
+                fixed_hash(b"recursive-bad-bases"),
+                fixed_hash(b"recursive-bad-batch"),
+            ),
+            Err(KagemushaFoldError::UnsupportedRecursiveVerifierOpeningLength { actual: 1, .. })
+        ));
+        assert!(matches!(
+            kagemusha_recursive_aggregation_evidence_from_steps(
+                &chain_id,
+                &asset,
+                &steps,
+                3,
+                fixed_hash(b"recursive-bad-params"),
+                fixed_hash(b"recursive-bad-schedule"),
+                fixed_hash(b"recursive-bad-manifest"),
+                fixed_hash(b"recursive-bad-bases"),
+                fixed_hash(b"recursive-bad-batch"),
+            ),
+            Err(KagemushaFoldError::NonPowerOfTwoRecursiveVerifierOpeningLength { actual: 3 })
+        ));
+        assert!(matches!(
+            kagemusha_recursive_aggregation_evidence_from_steps(
+                &chain_id,
+                &asset,
+                &steps,
+                4,
                 [0u8; Hash::LENGTH],
+                fixed_hash(b"recursive-bad-schedule"),
+                fixed_hash(b"recursive-bad-manifest"),
+                fixed_hash(b"recursive-bad-bases"),
                 fixed_hash(b"recursive-bad-batch"),
             ),
             Err(KagemushaFoldError::ZeroRecursiveVerifierParamsFingerprint)
@@ -3380,7 +4020,53 @@ mod offline_note_tests {
                 &chain_id,
                 &asset,
                 &steps,
+                4,
                 fixed_hash(b"recursive-bad-params"),
+                [0u8; Hash::LENGTH],
+                fixed_hash(b"recursive-bad-manifest"),
+                fixed_hash(b"recursive-bad-bases"),
+                fixed_hash(b"recursive-bad-batch"),
+            ),
+            Err(KagemushaFoldError::ZeroRecursiveFixedWindowTableScheduleDigest)
+        ));
+        assert!(matches!(
+            kagemusha_recursive_aggregation_evidence_from_steps(
+                &chain_id,
+                &asset,
+                &steps,
+                4,
+                fixed_hash(b"recursive-bad-params"),
+                fixed_hash(b"recursive-bad-schedule"),
+                [0u8; Hash::LENGTH],
+                fixed_hash(b"recursive-bad-bases"),
+                fixed_hash(b"recursive-bad-batch"),
+            ),
+            Err(KagemushaFoldError::ZeroRecursiveFixedWindowSharedTableManifestDigest)
+        ));
+        assert!(matches!(
+            kagemusha_recursive_aggregation_evidence_from_steps(
+                &chain_id,
+                &asset,
+                &steps,
+                4,
+                fixed_hash(b"recursive-bad-params"),
+                fixed_hash(b"recursive-bad-schedule"),
+                fixed_hash(b"recursive-bad-manifest"),
+                [0u8; Hash::LENGTH],
+                fixed_hash(b"recursive-bad-batch"),
+            ),
+            Err(KagemushaFoldError::ZeroRecursiveFixedWindowTableBaseDigest)
+        ));
+        assert!(matches!(
+            kagemusha_recursive_aggregation_evidence_from_steps(
+                &chain_id,
+                &asset,
+                &steps,
+                4,
+                fixed_hash(b"recursive-bad-params"),
+                fixed_hash(b"recursive-bad-schedule"),
+                fixed_hash(b"recursive-bad-manifest"),
+                fixed_hash(b"recursive-bad-bases"),
                 [0u8; Hash::LENGTH],
             ),
             Err(KagemushaFoldError::ZeroRecursiveVerifierWitnessBatchDigest)
@@ -3394,6 +4080,252 @@ mod offline_note_tests {
                 "truncated recursive evidence archive at length {len} must reject"
             );
         }
+    }
+
+    #[test]
+    fn kagemusha_recursive_aggregation_proof_bundle_binds_evidence_and_roundtrips() {
+        let evidence = sample_kagemusha_recursive_aggregation_evidence();
+        let public_inputs =
+            kagemusha_recursive_aggregation_proof_public_inputs_from_evidence(&evidence)
+                .expect("recursive proof public inputs");
+        assert_eq!(
+            public_inputs.domain,
+            KAGEMUSHA_RECURSIVE_AGGREGATION_PROOF_PUBLIC_INPUTS_DOMAIN
+        );
+        assert_eq!(
+            public_inputs.evidence_digest,
+            kagemusha_recursive_aggregation_evidence_digest(&evidence)
+                .expect("recursive evidence digest")
+        );
+        assert_ne!(public_inputs.evidence_digest, [0u8; Hash::LENGTH]);
+        assert_ne!(
+            public_inputs.aggregation_transcript_digest,
+            [0u8; Hash::LENGTH]
+        );
+        assert_eq!(
+            public_inputs.verifier_params_fingerprint,
+            evidence.verifier_params_fingerprint
+        );
+        assert_eq!(
+            public_inputs.fixed_window_table_schedule_digest,
+            evidence.fixed_window_table_schedule_digest
+        );
+        assert_eq!(
+            public_inputs.fixed_window_shared_table_manifest_digest,
+            evidence.fixed_window_shared_table_manifest_digest
+        );
+        assert_eq!(
+            public_inputs.fixed_window_table_base_digest,
+            evidence.fixed_window_table_base_digest
+        );
+        assert_eq!(
+            public_inputs.verifier_witness_batch_digest,
+            evidence.verifier_witness_batch_digest
+        );
+        assert_eq!(
+            public_inputs.verifier_opening_len,
+            evidence.verifier_opening_len
+        );
+        assert_eq!(
+            public_inputs.verifier_witness_count,
+            evidence.verifier_witness_count
+        );
+        assert_eq!(
+            public_inputs.hop_count,
+            evidence.aggregation_statement.hop_count
+        );
+        assert_ne!(
+            kagemusha_recursive_aggregation_proof_public_inputs_schema_hash(),
+            [0u8; Hash::LENGTH]
+        );
+
+        let public_inputs_hash = public_inputs
+            .public_inputs_hash()
+            .expect("recursive proof public-input hash");
+        let recursive_proof = KagemushaRecursiveAggregationProof {
+            verifier_key_id: VerifyingKeyId::new(
+                "halo2/ipa",
+                KAGEMUSHA_RECURSIVE_AGGREGATION_PROOF_CIRCUIT_ID_V1,
+            ),
+            public_inputs,
+            public_inputs_hash,
+            proof: ProofBox::new("halo2/ipa".into(), vec![0xA5; 64]),
+        };
+        recursive_proof
+            .validate_public_input_binding()
+            .expect("recursive proof public inputs bind to proof metadata");
+        let bundle = KagemushaRecursiveAggregationProofBundle {
+            evidence,
+            recursive_proof,
+        };
+        bundle
+            .validate_evidence_binding()
+            .expect("recursive proof bundle binds evidence");
+
+        let bytes = to_bytes(&bundle).expect("encode recursive proof bundle");
+        let decoded: KagemushaRecursiveAggregationProofBundle =
+            norito::decode_from_bytes(&bytes).expect("decode recursive proof bundle");
+        assert_eq!(decoded, bundle);
+        decoded
+            .validate_evidence_binding()
+            .expect("decoded recursive proof bundle remains canonical");
+    }
+
+    #[test]
+    fn kagemusha_recursive_aggregation_proof_bundle_rejects_public_input_substitution() {
+        let evidence = sample_kagemusha_recursive_aggregation_evidence();
+        let public_inputs =
+            kagemusha_recursive_aggregation_proof_public_inputs_from_evidence(&evidence)
+                .expect("recursive proof public inputs");
+        let public_inputs_hash = public_inputs
+            .public_inputs_hash()
+            .expect("recursive proof public-input hash");
+        let recursive_proof = KagemushaRecursiveAggregationProof {
+            verifier_key_id: VerifyingKeyId::new(
+                "halo2/ipa",
+                KAGEMUSHA_RECURSIVE_AGGREGATION_PROOF_CIRCUIT_ID_V1,
+            ),
+            public_inputs,
+            public_inputs_hash,
+            proof: ProofBox::new("halo2/ipa".into(), vec![0xA5; 64]),
+        };
+        let bundle = KagemushaRecursiveAggregationProofBundle {
+            evidence,
+            recursive_proof,
+        };
+
+        let mut changed_batch = bundle.clone();
+        changed_batch
+            .recursive_proof
+            .public_inputs
+            .verifier_witness_batch_digest = fixed_hash(b"substituted-recursive-batch-digest");
+        changed_batch.recursive_proof.public_inputs_hash = changed_batch
+            .recursive_proof
+            .public_inputs
+            .public_inputs_hash()
+            .expect("changed public-input hash");
+        assert!(matches!(
+            changed_batch.validate_evidence_binding(),
+            Err(
+                KagemushaFoldError::RecursiveAggregationProofPublicInputMismatch {
+                    field: "verifier_witness_batch_digest"
+                }
+            )
+        ));
+
+        let mut changed_params = bundle.clone();
+        changed_params
+            .recursive_proof
+            .public_inputs
+            .verifier_params_fingerprint = fixed_hash(b"substituted-recursive-params");
+        changed_params.recursive_proof.public_inputs_hash = changed_params
+            .recursive_proof
+            .public_inputs
+            .public_inputs_hash()
+            .expect("changed public-input hash");
+        assert!(matches!(
+            changed_params.validate_evidence_binding(),
+            Err(
+                KagemushaFoldError::RecursiveAggregationProofPublicInputMismatch {
+                    field: "verifier_params_fingerprint"
+                }
+            )
+        ));
+
+        let mut changed_manifest = bundle.clone();
+        changed_manifest
+            .recursive_proof
+            .public_inputs
+            .fixed_window_shared_table_manifest_digest =
+            fixed_hash(b"substituted-recursive-shared-manifest");
+        changed_manifest.recursive_proof.public_inputs_hash = changed_manifest
+            .recursive_proof
+            .public_inputs
+            .public_inputs_hash()
+            .expect("changed public-input hash");
+        assert!(matches!(
+            changed_manifest.validate_evidence_binding(),
+            Err(
+                KagemushaFoldError::RecursiveAggregationProofPublicInputMismatch {
+                    field: "fixed_window_shared_table_manifest_digest"
+                }
+            )
+        ));
+
+        let mut changed_hash = bundle.clone();
+        changed_hash.recursive_proof.public_inputs_hash =
+            Hash::new(b"wrong-recursive-proof-public-input-hash");
+        assert!(matches!(
+            changed_hash.validate_evidence_binding(),
+            Err(KagemushaFoldError::RecursiveAggregationProofPublicInputHashMismatch { .. })
+        ));
+
+        let mut changed_domain = bundle.clone();
+        changed_domain.recursive_proof.public_inputs.domain =
+            "iroha:kagemusha:v1:recursive-proof-alias".to_owned();
+        changed_domain.recursive_proof.public_inputs_hash = changed_domain
+            .recursive_proof
+            .public_inputs
+            .public_inputs_hash()
+            .expect("changed domain public-input hash");
+        assert!(matches!(
+            changed_domain.validate_evidence_binding(),
+            Err(KagemushaFoldError::InvalidRecursiveAggregationProofPublicInputDomain { .. })
+        ));
+    }
+
+    #[test]
+    fn kagemusha_recursive_aggregation_proof_bundle_rejects_backend_and_circuit_substitution() {
+        let evidence = sample_kagemusha_recursive_aggregation_evidence();
+        let public_inputs =
+            kagemusha_recursive_aggregation_proof_public_inputs_from_evidence(&evidence)
+                .expect("recursive proof public inputs");
+        let public_inputs_hash = public_inputs
+            .public_inputs_hash()
+            .expect("recursive proof public-input hash");
+        let recursive_proof = KagemushaRecursiveAggregationProof {
+            verifier_key_id: VerifyingKeyId::new(
+                "halo2/ipa",
+                KAGEMUSHA_RECURSIVE_AGGREGATION_PROOF_CIRCUIT_ID_V1,
+            ),
+            public_inputs,
+            public_inputs_hash,
+            proof: ProofBox::new("halo2/ipa".into(), vec![0xA5; 64]),
+        };
+        let bundle = KagemushaRecursiveAggregationProofBundle {
+            evidence,
+            recursive_proof,
+        };
+
+        let mut backend_mismatch = bundle.clone();
+        backend_mismatch.recursive_proof.verifier_key_id = VerifyingKeyId::new(
+            "stark/fri",
+            KAGEMUSHA_RECURSIVE_AGGREGATION_PROOF_CIRCUIT_ID_V1,
+        );
+        assert!(matches!(
+            backend_mismatch.validate_evidence_binding(),
+            Err(KagemushaFoldError::RecursiveAggregationProofBackendMismatch { .. })
+        ));
+
+        let mut trusted_setup_backend = bundle.clone();
+        trusted_setup_backend.recursive_proof.proof =
+            ProofBox::new("halo2/kzg".into(), vec![0xA5; 64]);
+        assert!(matches!(
+            trusted_setup_backend.validate_evidence_binding(),
+            Err(KagemushaFoldError::UnsupportedProofBackend { backend })
+                if backend == "halo2/kzg"
+        ));
+
+        let mut wrong_circuit = bundle;
+        wrong_circuit.recursive_proof.verifier_key_id =
+            VerifyingKeyId::new("halo2/ipa", "kagemusha-recursive-aggregation-alias");
+        assert!(matches!(
+            wrong_circuit.validate_evidence_binding(),
+            Err(KagemushaFoldError::RecursiveAggregationProofCircuitIdMismatch {
+                actual,
+                ..
+            }) if actual == "kagemusha-recursive-aggregation-alias"
+        ));
     }
 
     #[test]

@@ -152,6 +152,48 @@ impl RegisterZkAsset {
 }
 
 isi! {
+    /// Register or update an asset-hidden shielded pool.
+    ///
+    /// The pool identifier is the public handle used by
+    /// [`AssetHiddenZkTransfer`]. The storage asset identifies the internal
+    /// shielded ledger state that owns the pool commitments and nullifiers; it
+    /// is not the transferred asset type.
+    #[cfg_attr(
+        feature = "json",
+        derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
+    )]
+    pub struct RegisterAssetHiddenZkPool {
+        /// Public pool identifier.
+        pub pool_id: String,
+        /// Internal asset definition used to persist pool ledger state.
+        pub storage_asset: AssetDefinitionId,
+        /// Commitment to the eligible asset set for this pool.
+        #[cfg_attr(feature = "json", norito(with = "crate::json_helpers::fixed_bytes"))]
+        pub asset_set_root: [u8; 32],
+        /// Verifying key for asset-hidden transfer proofs.
+        pub vk_transfer: crate::proof::VerifyingKeyId,
+    }
+}
+
+impl crate::seal::Instruction for RegisterAssetHiddenZkPool {}
+impl RegisterAssetHiddenZkPool {
+    /// Construct a new asset-hidden pool registration instruction.
+    pub fn new(
+        pool_id: String,
+        storage_asset: AssetDefinitionId,
+        asset_set_root: [u8; 32],
+        vk_transfer: crate::proof::VerifyingKeyId,
+    ) -> Self {
+        Self {
+            pool_id,
+            storage_asset,
+            asset_set_root,
+            vk_transfer,
+        }
+    }
+}
+
+isi! {
     /// Schedule a confidential policy transition for an asset definition.
     #[cfg_attr(
         feature = "json",
@@ -292,6 +334,53 @@ impl ZkTransfer {
     ) -> Self {
         Self {
             asset,
+            inputs,
+            outputs,
+            proof,
+            root_hint,
+        }
+    }
+}
+
+isi! {
+    /// Asset-hidden private transfer within a multi-asset shielded pool.
+    ///
+    /// This instruction intentionally does not reveal an `AssetDefinitionId`.
+    /// The referenced pool binds the asset set, verifier, nullifier domain, and
+    /// commitment tree off the public transfer surface.
+    #[cfg_attr(
+        feature = "json",
+        derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
+    )]
+    pub struct AssetHiddenZkTransfer {
+        /// Shielded asset pool identifier.
+        pub pool_id: String,
+        /// Spent nullifiers.
+        #[cfg_attr(feature = "json", norito(with = "crate::json_helpers::fixed_bytes::vec"))]
+        pub inputs: Vec<[u8; 32]>,
+        /// Output note commitments.
+        #[cfg_attr(feature = "json", norito(with = "crate::json_helpers::fixed_bytes::vec"))]
+        pub outputs: Vec<[u8; 32]>,
+        /// Proof attachment for the asset-hidden transfer.
+        pub proof: crate::proof::ProofAttachment,
+        /// Optional recent pool Merkle root used during proof construction.
+        #[cfg_attr(feature = "json", norito(with = "crate::json_helpers::fixed_bytes::option"))]
+        pub root_hint: Option<[u8; 32]>,
+    }
+}
+
+impl crate::seal::Instruction for AssetHiddenZkTransfer {}
+impl AssetHiddenZkTransfer {
+    /// Construct a new `AssetHiddenZkTransfer` instruction.
+    pub fn new(
+        pool_id: String,
+        inputs: Vec<[u8; 32]>,
+        outputs: Vec<[u8; 32]>,
+        proof: crate::proof::ProofAttachment,
+        root_hint: Option<[u8; 32]>,
+    ) -> Self {
+        Self {
+            pool_id,
             inputs,
             outputs,
             proof,
@@ -490,6 +579,13 @@ impl_zk_decode_from_slice!(RegisterZkAsset {
     vk_shield: Option<crate::proof::VerifyingKeyId>,
 });
 
+impl_zk_decode_from_slice!(RegisterAssetHiddenZkPool {
+    pool_id: String,
+    storage_asset: AssetDefinitionId,
+    asset_set_root: [u8; 32],
+    vk_transfer: crate::proof::VerifyingKeyId,
+});
+
 impl_zk_decode_from_slice!(ScheduleConfidentialPolicyTransition {
     asset: AssetDefinitionId,
     new_mode: ConfidentialPolicyMode,
@@ -513,6 +609,14 @@ impl_zk_decode_from_slice!(Shield {
 
 impl_zk_decode_from_slice!(ZkTransfer {
     asset: AssetDefinitionId,
+    inputs: Vec<[u8; 32]>,
+    outputs: Vec<[u8; 32]>,
+    proof: crate::proof::ProofAttachment,
+    root_hint: Option<[u8; 32]>,
+});
+
+impl_zk_decode_from_slice!(AssetHiddenZkTransfer {
+    pool_id: String,
     inputs: Vec<[u8; 32]>,
     outputs: Vec<[u8; 32]>,
     proof: crate::proof::ProofAttachment,
@@ -558,7 +662,7 @@ mod tests {
     use std::str::FromStr as _;
 
     use iroha_crypto::{Algorithm, KeyPair};
-    use norito::core::DecodeFromSlice;
+    use norito::core::{DecodeFromSlice, NoritoSerialize as _};
 
     use super::*;
     use crate::{
@@ -648,6 +752,12 @@ mod tests {
             Some(verifying_key("unshield")),
             Some(verifying_key("shield")),
         ));
+        assert_slice_roundtrip(RegisterAssetHiddenZkPool::new(
+            "boi-private-is-pool".to_owned(),
+            asset.clone(),
+            [0xA0; 32],
+            verifying_key("asset-hidden-transfer"),
+        ));
         assert_slice_roundtrip(ScheduleConfidentialPolicyTransition::new(
             asset.clone(),
             ConfidentialPolicyMode::Convertible,
@@ -672,6 +782,13 @@ mod tests {
             vec![[0x13; 32]],
             proof.clone(),
             Some([0x14; 32]),
+        ));
+        assert_slice_roundtrip(AssetHiddenZkTransfer::new(
+            "boi-private-is-pool".to_owned(),
+            vec![[0x18; 32]],
+            vec![[0x19; 32]],
+            proof.clone(),
+            Some([0x1A; 32]),
         ));
         assert_slice_roundtrip(Unshield::new_with_outputs(
             asset,
@@ -735,6 +852,16 @@ mod tests {
         );
         assert_registry_decodes(
             &registry,
+            std::any::type_name::<RegisterAssetHiddenZkPool>(),
+            RegisterAssetHiddenZkPool::new(
+                "boi-private-is-pool".to_owned(),
+                asset.clone(),
+                [0x44; 32],
+                verifying_key("asset-hidden-transfer"),
+            ),
+        );
+        assert_registry_decodes(
+            &registry,
             "zk::ScheduleConfidentialPolicyTransition",
             ScheduleConfidentialPolicyTransition::new(
                 asset.clone(),
@@ -748,6 +875,28 @@ mod tests {
             &registry,
             "zk::CancelConfidentialPolicyTransition",
             CancelConfidentialPolicyTransition::new(asset, Hash::new("policy-transition-stable")),
+        );
+        assert_registry_decodes(
+            &registry,
+            std::any::type_name::<AssetHiddenZkTransfer>(),
+            AssetHiddenZkTransfer::new(
+                "boi-private-is-pool".to_owned(),
+                vec![[0x41; 32]],
+                vec![[0x42; 32]],
+                proof_attachment(),
+                Some([0x43; 32]),
+            ),
+        );
+    }
+
+    #[test]
+    fn asset_hidden_transfer_schema_hash_matches_sdk_surface() {
+        assert_eq!(
+            AssetHiddenZkTransfer::schema_hash(),
+            [
+                0xDB, 0x10, 0xE2, 0x8D, 0xEF, 0x5C, 0xE4, 0x71, 0x5A, 0x0A, 0x20, 0xEF, 0xF6, 0x02,
+                0x59, 0xFC,
+            ]
         );
     }
 }

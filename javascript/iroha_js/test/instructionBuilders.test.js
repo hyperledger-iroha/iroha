@@ -49,17 +49,24 @@ import {
   buildClaimTwitterFollowRewardInstruction,
   buildSendToTwitterInstruction,
   buildCancelTwitterEscrowInstruction,
+  buildRegisterAssetHiddenZkPoolInstruction,
   buildRegisterZkAssetInstruction,
   buildScheduleConfidentialPolicyTransitionInstruction,
   buildCancelConfidentialPolicyTransitionInstruction,
   buildShieldInstruction,
   buildZkTransferInstruction,
+  buildAssetHiddenZkTransferInstruction,
   buildUnshieldInstruction,
   buildCreateElectionInstruction,
   buildSubmitBallotInstruction,
   buildFinalizeElectionInstruction,
   encodeInstruction,
 } from "../src/instructionBuilders.js";
+import {
+  getPrivacyAlgorithmDescriptor,
+  getPrivacyAlgorithmDescriptors,
+  getPrivacyCriteria,
+} from "../src/privacyAlgorithms.js";
 import { noritoDecodeInstruction, noritoEncodeInstruction } from "../src/norito.js";
 import { hasNoritoBinding, makeNativeTest, noritoRequiredMethods } from "./helpers/native.js";
 
@@ -84,6 +91,7 @@ import {
   normalizeAssetId as exportedNormalizeAssetId,
   normalizeAssetHoldingId as exportedNormalizeAssetHoldingId,
 } from "../src/index.js";
+import * as sdkExports from "../src/index.js";
 import { ValidationErrorCode } from "../src/validationError.js";
 import {
   AccountAddress,
@@ -1687,6 +1695,47 @@ test("buildRegisterZkAssetInstruction normalizes verifying key ids", () => {
   assert.deepEqual(payload.vk_unshield, { backend: "halo2/ipa", name: "vk_unshield" });
 });
 
+test("buildRegisterAssetHiddenZkPoolInstruction encodes pool verifier state", () => {
+  const assetSetRoot = Buffer.alloc(32, 0xa0);
+  const instruction = buildRegisterAssetHiddenZkPoolInstruction({
+    poolId: "boi-private-is-pool",
+    storageAssetDefinitionId: "62Fk4FPcMuLvW5QjDGNF2a4jAmjM",
+    assetSetRoot,
+    transferVerifyingKey: "halo2/ipa/poly-open:native_ipa_vk",
+  });
+  const payload = encodeAndDecode(instruction).zk.RegisterAssetHiddenZkPool;
+  assert.equal(payload.pool_id, "boi-private-is-pool");
+  assert.equal(payload.storage_asset, "62Fk4FPcMuLvW5QjDGNF2a4jAmjM");
+  assert.deepEqual(payload.asset_set_root, Array.from(assetSetRoot));
+  assert.deepEqual(payload.vk_transfer, {
+    backend: "halo2/ipa/poly-open",
+    name: "native_ipa_vk",
+  });
+});
+
+test("buildRegisterAssetHiddenZkPoolInstruction rejects adversarial pool registration", () => {
+  const validBase = {
+    poolId: "boi-private-is-pool",
+    storageAssetDefinitionId: "62Fk4FPcMuLvW5QjDGNF2a4jAmjM",
+    assetSetRoot: Buffer.alloc(32, 0xa0),
+    transferVerifyingKey: "halo2/ipa/poly-open:native_ipa_vk",
+  };
+  for (const payload of [
+    { ...validBase, poolId: "   " },
+    { ...validBase, assetSetRoot: Buffer.alloc(31, 0xa0) },
+    { ...validBase, assetSetRoot: Buffer.alloc(32, 0x00) },
+    { ...validBase, transferVerifyingKey: null },
+    { ...validBase, transferVerifyingKey: "missing-separator" },
+    { ...validBase, poolId: "pool-a", pool_id: "pool-b" },
+    { ...validBase, assetSetRoot: Buffer.alloc(32, 0xa0), asset_set_root: Buffer.alloc(32, 0xa1) },
+  ]) {
+    assert.throws(
+      () => buildRegisterAssetHiddenZkPoolInstruction(payload),
+      /registerAssetHiddenZkPool/,
+    );
+  }
+});
+
 test("buildScheduleConfidentialPolicyTransitionInstruction encodes transition metadata", () => {
   const transitionId = Buffer.alloc(32, 0xaa);
   const instruction = buildScheduleConfidentialPolicyTransitionInstruction({
@@ -1771,6 +1820,172 @@ test("buildZkTransferInstruction normalizes proof attachments", () => {
   assert.equal(payload.proof.backend, "halo2/ipa");
   assert.equal(payload.proof.vk_ref.name, "vk_transfer");
   assert.equal(payload.inputs.length, 1);
+});
+
+test("buildAssetHiddenZkTransferInstruction encodes pool transfer surface", () => {
+  const instruction = buildAssetHiddenZkTransferInstruction({
+    poolId: "boi-private-is-pool",
+    inputs: [Buffer.alloc(32, 0x11)],
+    outputs: [Buffer.alloc(32, 0x22)],
+    proof: {
+      backend: "halo2/ipa",
+      proof: Buffer.from("proof"),
+      verifyingKeyRef: "halo2/ipa:vk_asset_hidden_transfer",
+    },
+    rootHint: Buffer.alloc(32, 0x33),
+  });
+  const payload = encodeAndDecode(instruction).zk.AssetHiddenZkTransfer;
+  assert.equal(payload.pool_id, "boi-private-is-pool");
+  assert.deepEqual(payload.inputs[0], Array.from(Buffer.alloc(32, 0x11)));
+  assert.deepEqual(payload.outputs[0], Array.from(Buffer.alloc(32, 0x22)));
+  assert.deepEqual(payload.root_hint, Array.from(Buffer.alloc(32, 0x33)));
+  assert.equal(payload.proof.vk_ref.name, "vk_asset_hidden_transfer");
+});
+
+test("buildAssetHiddenZkTransferInstruction rejects adversarial pool payloads", () => {
+  const validBase = {
+    poolId: "boi-private-is-pool",
+    inputs: [Buffer.alloc(32, 0x11)],
+    outputs: [Buffer.alloc(32, 0x22)],
+    proof: {
+      backend: "halo2/ipa",
+      proof: Buffer.from("proof"),
+      verifyingKeyRef: "halo2/ipa:vk_asset_hidden_transfer",
+    },
+  };
+  for (const payload of [
+    { ...validBase, inputs: [] },
+    { ...validBase, outputs: [] },
+    { ...validBase, poolId: "   " },
+    { ...validBase, inputs: [Buffer.alloc(31)] },
+    { ...validBase, outputs: [Buffer.alloc(33)] },
+    { ...validBase, poolId: "pool-a", pool_id: "pool-b" },
+    { ...validBase, assetPoolId: "pool-a", asset_pool_id: "pool-b" },
+    { ...validBase, rootHint: Buffer.alloc(32), root_hint: Buffer.alloc(32) },
+  ]) {
+    assert.throws(
+      () => buildAssetHiddenZkTransferInstruction(payload),
+      /assetHiddenZkTransfer/,
+    );
+  }
+});
+
+test("privacy algorithm descriptors expose strict post-quantum MASP semantics", () => {
+  assert.deepEqual(getPrivacyCriteria(), [
+    "hide_amount",
+    "hide_sender",
+    "hide_receiver",
+    "hide_asset_type",
+    "post_quantum",
+  ]);
+  const algorithms = getPrivacyAlgorithmDescriptors();
+  const masp = getPrivacyAlgorithmDescriptor("asset-hidden-confidential-transfer-v1");
+  const orchard = getPrivacyAlgorithmDescriptor("orchard-halo2-actions-v1");
+  const penumbra = getPrivacyAlgorithmDescriptor("penumbra-masp-v1");
+  const fcmp = getPrivacyAlgorithmDescriptor("monero-fcmp-plus-plus-v1");
+  const miden = getPrivacyAlgorithmDescriptor("miden-stark-note-v1");
+  const aztec = getPrivacyAlgorithmDescriptor("aztec-private-rollup-v1");
+  const pq = getPrivacyAlgorithmDescriptor("pq-masp-stark-v0");
+  assert.ok(algorithms.some((algorithm) => algorithm.id === "confidential-transfer-v2"));
+  assert.ok(masp);
+  assert.ok(orchard);
+  assert.ok(penumbra);
+  assert.ok(fcmp);
+  assert.ok(miden);
+  assert.ok(aztec);
+  assert.ok(pq);
+  assert.equal(masp.pqLayers.proof, false);
+  assert.equal(masp.coveredCriteria.includes("post_quantum"), false);
+  assert.ok(masp.sdkEntrypoints.includes("buildAssetHiddenZkTransferInstruction"));
+  assert.ok(
+    masp.plannedSdkEntrypoints.includes("buildConfidentialAssetHiddenTransferProofV1"),
+  );
+  assert.equal(
+    masp.sdkEntrypoints.includes("buildConfidentialAssetHiddenTransferProofV1"),
+    false,
+  );
+  assert.equal(orchard.proofFamily, "halo2-pasta-action-bundle");
+  assert.equal(orchard.coveredCriteria.includes("hide_asset_type"), false);
+  assert.deepEqual(orchard.sdkEntrypoints, []);
+  assert.ok(orchard.plannedSdkEntrypoints.includes("buildOrchardActionBundleProofV1"));
+  assert.equal(penumbra.coveredCriteria.includes("hide_asset_type"), true);
+  assert.equal(penumbra.sourceReferences[0].url, "https://protocol.penumbra.zone/main/shielded_pool.html");
+  assert.deepEqual(penumbra.sdkEntrypoints, []);
+  assert.ok(penumbra.plannedSdkEntrypoints.includes("buildPenumbraShieldedPoolTransaction"));
+  assert.equal(fcmp.coveredCriteria.includes("hide_sender"), true);
+  assert.equal(miden.pqLayers.proof, true);
+  assert.equal(miden.pqLayers.authorization, false);
+  assert.equal(miden.coveredCriteria.includes("post_quantum"), false);
+  assert.equal(aztec.proofFamily, "plonkish-private-kernel-rollup");
+  assert.equal(aztec.coveredCriteria.includes("hide_receiver"), true);
+  assert.equal(aztec.coveredCriteria.includes("hide_asset_type"), false);
+  assert.equal(pq.proofFamily, "stark-fri");
+  assert.deepEqual(pq.pqLayers, {
+    proof: true,
+    authorization: true,
+    noteEncryption: true,
+  });
+  assert.ok(
+    pq.sourceReferences.some((reference) =>
+      reference.url === "https://csrc.nist.gov/pubs/fips/204/final"
+    ),
+  );
+  assert.ok(pq.sdkEntrypoints.includes("buildAssetHiddenZkTransferInstruction"));
+  assert.ok(pq.plannedSdkEntrypoints.includes("buildPqMaspStarkTransferProofV0"));
+  assert.equal(pq.sdkEntrypoints.includes("buildPqMaspStarkTransferProofV0"), false);
+  assert.equal(pq.coveredCriteria.includes("post_quantum"), true);
+});
+
+test("privacy algorithm descriptors only advertise exported SDK entrypoints", () => {
+  for (const descriptor of getPrivacyAlgorithmDescriptors()) {
+    for (const entrypoint of descriptor.sdkEntrypoints) {
+      assert.equal(
+        typeof sdkExports[entrypoint],
+        "function",
+        `${descriptor.id} sdk entrypoint ${entrypoint} must be exported`,
+      );
+    }
+    for (const entrypoint of descriptor.plannedSdkEntrypoints) {
+      assert.equal(
+        descriptor.sdkEntrypoints.includes(entrypoint),
+        false,
+        `${descriptor.id} planned entrypoint ${entrypoint} must not be listed as available`,
+      );
+    }
+  }
+  const masp = getPrivacyAlgorithmDescriptor("asset-hidden-confidential-transfer-v1");
+  assert.equal(typeof sdkExports.buildConfidentialAssetHiddenTransferProofV1, "undefined");
+  assert.ok(
+    masp.plannedSdkEntrypoints.includes("buildConfidentialAssetHiddenTransferProofV1"),
+  );
+});
+
+test("privacy algorithm descriptors return defensive copies", () => {
+  const first = getPrivacyAlgorithmDescriptor("pq-masp-stark-v0");
+  assert.ok(first);
+  first.coveredCriteria.length = 0;
+  first.pqLayers.proof = false;
+  first.sdkEntrypoints.push("maliciousEntrypoint");
+  first.plannedSdkEntrypoints.push("maliciousPlannedEntrypoint");
+  first.chainRequirements.push("malicious validator");
+  first.recommendedFor.push("malicious recommendation");
+  first.setupSteps.push("malicious setup");
+  first.sourceReferences[0].url = "https://malicious.invalid";
+
+  const second = getPrivacyAlgorithmDescriptor("pq-masp-stark-v0");
+  assert.ok(second);
+  assert.equal(second.coveredCriteria.includes("post_quantum"), true);
+  assert.equal(second.pqLayers.proof, true);
+  assert.equal(second.sdkEntrypoints.includes("maliciousEntrypoint"), false);
+  assert.equal(
+    second.plannedSdkEntrypoints.includes("maliciousPlannedEntrypoint"),
+    false,
+  );
+  assert.equal(second.chainRequirements.includes("malicious validator"), false);
+  assert.equal(second.recommendedFor.includes("malicious recommendation"), false);
+  assert.equal(second.setupSteps.includes("malicious setup"), false);
+  assert.equal(second.sourceReferences[0].url.startsWith("https://www.nist.gov/"), true);
+  assert.equal(getPrivacyAlgorithmDescriptor("missing"), null);
 });
 
 test("buildZkTransferInstruction rejects legacy inline verifying key fields", () => {
