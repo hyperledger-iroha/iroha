@@ -41,6 +41,26 @@ import { noritoEncodeInstruction } from "@iroha/iroha-js/norito";
 import { generateKeyPair } from "@iroha/iroha-js/crypto";
 ```
 
+For browser-safe Kotodama contract compilation, use the dedicated compiler
+subpath. It emits the same `.to` artifact bytes and manifest metadata used by
+Torii contract deployment without importing the Node-first SDK surface:
+
+```js
+import { compileKotodamaProgram } from "@iroha/iroha-js/kotodama-compiler";
+
+const compiled = compileKotodamaProgram(source, { sourceName: "contract.ko" });
+if (compiled.diagnostics.length > 0) {
+  throw new Error(compiled.diagnostics.map((item) => item.message).join("\n"));
+}
+
+console.log(compiled.codeHashHex);
+console.log(compiled.manifest);
+```
+
+The compiler defaults to production mode, which strips `#[test]` functions like
+Rust `CompilerMode::Production`. Pass `{ mode: "test" }` to retain supported
+Kotodama test helpers in local test artifacts.
+
 For browser-only Connect bootstrap without importing the Node-first `ToriiClient`
 surface, use the dedicated browser subpath:
 
@@ -2884,6 +2904,30 @@ across Torii's JSON endpoints (including query projections via
 `iterateAccountTransactionsQuery`, `iterateAssetHoldersQuery`, and
 `iterateTriggersQuery`).
 
+For FI wallet-style transaction explorers, prefer the viewer-scoped query helper.
+It posts to `/v1/transactions/visible/query`, lets Torii enforce the authenticated
+viewer scope, and accepts convenience filters without hand-writing a QueryEnvelope:
+
+```js
+import { ToriiClient } from "@iroha/iroha-js/torii";
+
+const torii = new ToriiClient("https://torii.example", {
+  config: {
+    toriiClient: {
+      defaultHeaders: { Authorization: `Bearer ${jwt}` },
+      timeoutMs: 10_000,
+    },
+  },
+});
+
+const { items } = await torii.queryVisibleTransactions({
+  assetId: "FkLLi7B7cSmSLxwi3cHjB6ZyyEWSXb",
+  sort: "newest",
+  limit: 25,
+  queryName: "WalletTxExplorer",
+});
+```
+
 When you need to pin iterator parity to specific Norito selectors, apply
 structured filters against the NFT definition (`id.definition_id`) or asset
 definition (`asset_id.definition_id`) fields and trim payloads with `select`
@@ -2913,15 +2957,15 @@ They are normalised via the same unsigned-integer validators before any request 
 exactly like `25` while still surfacing a `TypeError` when the value is negative,
 fractional, NaN, or otherwise invalid.
 
-The supported first-release offline HTTP surface is Offline V2 readiness. Offline V2 note
+The supported first-release offline HTTP surface is Offline readiness. Offline note
 issuance, redemption, and audit payloads are submitted as transaction instructions; legacy
-non-V2 offline HTTP
+legacy offline HTTP
 helpers are no longer exposed by this SDK because Torii now returns 404 for those routes.
 
 ```js
-const readiness = await torii.getOfflineV2Readiness();
-console.log("one-use notes ready", readiness.offline_note_v2);
-console.log("Fountain QR ready", readiness.offline_fountain_qr_v1);
+const readiness = await torii.getOfflineReadiness();
+console.log("one-use notes ready", readiness.offline_note);
+console.log("Fountain QR ready", readiness.offline_fountain_qr);
 ```
 
 for await (const assetDef of torii.iterateAssetDefinitions({

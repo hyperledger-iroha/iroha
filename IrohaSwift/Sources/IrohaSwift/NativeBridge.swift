@@ -2,6 +2,9 @@ import Foundation
 import CryptoKit
 #if canImport(Darwin)
 import Darwin
+#if IROHASWIFT_BRIDGE_PRESENT
+import NoritoBridge
+#endif
 
 enum BridgePolicyHint {
     private static let relativeBridgePath = "../dist/NoritoBridge.xcframework"
@@ -31,11 +34,13 @@ enum NoritoBridgeLoader {
     }
 
     static let expectedVersion = "0.1.0"
-    static let expectedBridgeAbiVersion: UInt32 = 2
+    static var expectedBridgeAbiVersion: UInt32 {
+        expectedBridgeAbiVersion(for: currentIdentifier())
+    }
     private static let expectedHashes: [String: String] = [
-        "macos-arm64": "7096b157ef1ee9bec0b2a238bbd79a76ddae4eaaabfdb960387151a00b175063",
-        "ios-arm64": "b253468efed1c94c2447a7475701bf27846480b45104c4e8cb077acd481dbb4d",
-        "ios-arm64_x86_64-simulator": "7d2db7b96a9c0b8f187d4763db853102937e5842211af77b70e65467634b6cb1"
+        "macos-arm64": "ff99df0b101af0555b42e1e98e4d12c50504be7c0395bf27232739e0f37328a7",
+        "ios-arm64": "26bb800e9dce021ef38306caef70dbba7928dd99c6612801fb1bbc520b52b7a9",
+        "ios-arm64_x86_64-simulator": "d0f651e6dc837bff7e92b05c9bf1e3a2988fc6995cabee6e3aaa269a01ecd1b5"
     ]
     private static let requiredSymbols = [
         "connect_norito_bridge_abi_version",
@@ -50,15 +55,19 @@ enum NoritoBridgeLoader {
         let hashes: [String: String]
     }
 
+    static func expectedBridgeAbiVersion(for identifier: String) -> UInt32 {
+        return 4
+    }
+
     private static func packagedBinaryRelativePaths(for identifier: String = currentIdentifier()) -> [String] {
         return ["libNoritoBridge.a", "NoritoBridge.framework/NoritoBridge"]
     }
 
     static func openHandle() -> (UnsafeMutableRawPointer?, ValidationStatus) {
         // Xcode 26 debug-dylib: app code lives in <name>.debug.dylib, not the main executable.
-        // dlopen(nil) returns a handle to the 57 KB stub. The stub may re-export a few symbols
+        // dlopen(nil) returns a handle to the 57 KB launcher image. It may re-export a few symbols
         // (e.g. connect_norito_free) so the dlsym probe succeeds, but calling heavier functions
-        // through the stub crashes. Always prefer the debug dylib.
+        // through that image crashes. Always prefer the debug dylib.
         if let execURL = Bundle.main.executableURL {
             let debugDylibURL = execURL.deletingLastPathComponent()
                 .appendingPathComponent(execURL.lastPathComponent + ".debug.dylib")
@@ -97,6 +106,12 @@ enum NoritoBridgeLoader {
             return (executableHandle, .valid(path: executableURL.path, identifier: currentIdentifier()))
         }
 
+        if let defaultHandle = rtldDefaultHandle(),
+           hasRequiredSymbols(in: defaultHandle) {
+            NSLog("[NoritoBridgeLoader] loaded bridge symbols from RTLD_DEFAULT")
+            return (defaultHandle, .valid(path: "RTLD_DEFAULT", identifier: currentIdentifier()))
+        }
+
         var lastFailure: ValidationStatus = .missing(path: defaultBridgeBinaryPath())
         for path in candidateLibraryPaths() {
             let status = validateBridge(at: path, allowUntrustedLocation: false)
@@ -125,11 +140,15 @@ enum NoritoBridgeLoader {
 
         if let defaultHandle = dlopen(nil, RTLD_NOW | RTLD_GLOBAL),
            hasRequiredSymbols(in: defaultHandle) {
-            NSLog("[NoritoBridgeLoader] loaded bridge symbols from RTLD_DEFAULT")
+            NSLog("[NoritoBridgeLoader] loaded bridge symbols from dlopen(nil)")
             return (defaultHandle, .valid(path: "RTLD_DEFAULT", identifier: currentIdentifier()))
         }
 
         return (nil, lastFailure)
+    }
+
+    private static func rtldDefaultHandle() -> UnsafeMutableRawPointer? {
+        UnsafeMutableRawPointer(bitPattern: UInt(bitPattern: -2))
     }
 
     private static func hasRequiredSymbols(in handle: UnsafeMutableRawPointer?) -> Bool {
@@ -269,7 +288,7 @@ enum NoritoBridgeLoader {
         return currentIdentifier()
     }
 
-    private static func currentIdentifier() -> String {
+    static func currentIdentifier() -> String {
         #if os(macOS)
         return "macos-arm64"
         #else
@@ -339,7 +358,7 @@ enum NoritoBridgeLoader {
         }
 
         // XCTest and simulator launches often expose the real build-products directory through
-        // dyld environment variables even when the app bundle only embeds a stub framework.
+        // dyld environment variables even when the app bundle only embeds a thin framework shell.
         let processInfo = ProcessInfo.processInfo
         for key in ["BUILT_PRODUCTS_DIR", "DYLD_FRAMEWORK_PATH", "DYLD_LIBRARY_PATH"] {
             guard let rawValue = processInfo.environment[key]?
@@ -474,6 +493,8 @@ enum NativeBridgeError: Error, Equatable {
     case offlineSerialize
     case offlineCommitment
     case offlineBlinding
+    case offlineNoteProve
+    case kagemushaProve
     case unsupportedAlgorithm
     case metadataTarget
     case metadataKey
@@ -526,6 +547,8 @@ enum NativeBridgeError: Error, Equatable {
         case -304: return .offlineSerialize
         case -305: return .offlineCommitment
         case -306: return .offlineBlinding
+        case -310: return .offlineNoteProve
+        case -311: return .kagemushaProve
         case -402: return .multisigSpec
         case -406: return .identifierReceipt
         case -403: return .verifyingKeyId
@@ -537,7 +560,7 @@ enum NativeBridgeError: Error, Equatable {
 
 public final class NoritoNativeBridge: @unchecked Sendable {
     public static let shared = NoritoNativeBridge()
-    private let bridgeStatus: NoritoBridgeLoader.ValidationStatus
+    private var bridgeStatus: NoritoBridgeLoader.ValidationStatus
     #if canImport(Darwin)
     private let chainDiscriminantLock = NSRecursiveLock()
     #endif
@@ -1575,6 +1598,10 @@ public final class NoritoNativeBridge: @unchecked Sendable {
         UnsafePointer<UInt8>?, CUnsignedLong,
         UnsafeMutablePointer<UnsafeMutablePointer<UInt8>?>?, UnsafeMutablePointer<CUnsignedLong>?
     ) -> Int32
+    private typealias KagemushaProveVerifiedCompactPaymentTokenWithRecordsFn = @convention(c) (
+        UnsafePointer<UInt8>?, CUnsignedLong,
+        UnsafeMutablePointer<UnsafeMutablePointer<UInt8>?>?, UnsafeMutablePointer<CUnsignedLong>?
+    ) -> Int32
     private typealias PublicKeyFromPrivateFn = @convention(c) (
         UInt8,
         UnsafePointer<UInt8>?, CUnsignedLong,
@@ -1707,6 +1734,7 @@ public final class NoritoNativeBridge: @unchecked Sendable {
     private var sorafsLocalFetchFn: SorafsLocalFetchFn? = nil
     private var daProofSummaryFn: DaProofSummaryFn? = nil
     private var blake3HashFn: Blake3HashFn? = nil
+    private var kagemushaProveVerifiedCompactPaymentTokenWithRecordsFn: KagemushaProveVerifiedCompactPaymentTokenWithRecordsFn? = nil
 #else
     private let bridgeHandle: Any? = nil
     private let encodeTransferFn: Any? = nil
@@ -1810,12 +1838,37 @@ public final class NoritoNativeBridge: @unchecked Sendable {
     private let sorafsLocalFetchFn: Any? = nil
     private let daProofSummaryFn: Any? = nil
     private let blake3HashFn: Any? = nil
+    private let kagemushaProveVerifiedCompactPaymentTokenWithRecordsFn: Any? = nil
 #endif
 
 #if canImport(Darwin)
 #endif
 
     #if canImport(Darwin)
+    private func installStaticallyLinkedTransferBridgeIfAvailable() {
+        #if IROHASWIFT_BRIDGE_PRESENT
+        let abiVersion = connect_norito_bridge_abi_version()
+        guard abiVersion == NoritoBridgeLoader.expectedBridgeAbiVersion else {
+            NSLog(
+                "[NoritoNativeBridge] statically linked transfer bridge ABI mismatch expected=%u actual=%u",
+                NoritoBridgeLoader.expectedBridgeAbiVersion,
+                abiVersion
+            )
+            return
+        }
+
+        self.encodeTransferFn = connect_norito_encode_transfer_signed_transaction
+        self.encodeTransferWithFeeSponsorFn = connect_norito_encode_transfer_signed_transaction_with_fee_sponsor
+        self.encodeTransferWithAlgFn = connect_norito_encode_transfer_signed_transaction_alg
+        self.encodeTransferWithFeeSponsorWithAlgFn =
+            connect_norito_encode_transfer_signed_transaction_with_fee_sponsor_alg
+        self.freeFn = connect_norito_free
+        self.setChainDiscriminantFn = connect_norito_set_chain_discriminant
+        self.bridgeStatus = .valid(path: "static", identifier: NoritoBridgeLoader.currentIdentifier())
+        NSLog("[NoritoNativeBridge] using statically linked Norito transfer bridge")
+        #endif
+    }
+
     private func withSignedOutputs<R>(
         signedPtr: inout UnsafeMutablePointer<UInt8>?,
         signedLen: inout UInt,
@@ -2342,6 +2395,17 @@ public final class NoritoNativeBridge: @unchecked Sendable {
             } else {
                 self.blake3HashFn = nil
             }
+            if let kagemushaSymbol = dlsym(
+                handle,
+                "connect_norito_kagemusha_prove_verified_compact_payment_token_with_records"
+            ) {
+                self.kagemushaProveVerifiedCompactPaymentTokenWithRecordsFn = unsafeBitCast(
+                    kagemushaSymbol,
+                    to: KagemushaProveVerifiedCompactPaymentTokenWithRecordsFn.self
+                )
+            } else {
+                self.kagemushaProveVerifiedCompactPaymentTokenWithRecordsFn = nil
+            }
             if let sm2DefaultSymbol = dlsym(handle, "connect_norito_sm2_default_distid") {
                 self.sm2DefaultDistidFn = unsafeBitCast(sm2DefaultSymbol, to: Sm2DefaultDistidFn.self)
             } else {
@@ -2468,6 +2532,7 @@ public final class NoritoNativeBridge: @unchecked Sendable {
             self.sorafsLocalFetchFn = nil
             self.daProofSummaryFn = nil
             self.blake3HashFn = nil
+            self.kagemushaProveVerifiedCompactPaymentTokenWithRecordsFn = nil
             self.encodeConfidentialPayloadFn = nil
             self.accountAddressParseFn = nil
             self.accountAddressRenderFn = nil
@@ -2517,6 +2582,10 @@ public final class NoritoNativeBridge: @unchecked Sendable {
             self.decodeControlPongFn = nil
         }
 
+        if self.encodeTransferFn == nil || self.freeFn == nil {
+            installStaticallyLinkedTransferBridgeIfAvailable()
+        }
+
         if let setAccelerationConfigFn {
             var defaults = ConnectNoritoAccelerationConfig(
                 enable_simd: 1,
@@ -2552,6 +2621,15 @@ public final class NoritoNativeBridge: @unchecked Sendable {
         #if canImport(Darwin)
         guard bridgeEnabledForRuntime else { return false }
         return encodeTransferFn != nil && freeFn != nil
+        #else
+        return false
+        #endif
+    }
+
+    public var isKagemushaCompactPaymentTokenProverAvailable: Bool {
+        #if canImport(Darwin)
+        guard bridgeEnabledForRuntime else { return false }
+        return kagemushaProveVerifiedCompactPaymentTokenWithRecordsFn != nil && freeFn != nil
         #else
         return false
         #endif
@@ -2639,7 +2717,7 @@ public final class NoritoNativeBridge: @unchecked Sendable {
                 && encodeZkTransferFn != nil
                 && encodeRegisterZkAssetFn != nil
         case .sm2:
-            return isSm2Available && hasAlgorithmEncoders
+            return isSm2Available && hasAlgorithmEncoders && canParseSm2TransactionAuthority()
         case .secp256k1:
             return secp256k1Supported && hasAlgorithmEncoders
         case .mlDsa:
@@ -2652,6 +2730,28 @@ public final class NoritoNativeBridge: @unchecked Sendable {
                 && verifyDetachedFn != nil
                 && hasAlgorithmEncoders
         }
+        #else
+        return false
+        #endif
+    }
+
+    private func canParseSm2TransactionAuthority() -> Bool {
+        #if canImport(Darwin) && IROHASWIFT_ENABLE_SM
+        guard isAccountAddressCodecAvailable else { return false }
+        let distid = Sm2Keypair.defaultDistid()
+        let seed = Data(repeating: 0xA5, count: Sm2Keypair.privateKeyLength)
+        guard let pair = sm2KeypairFromSeed(distid: distid, seed: seed),
+              let authority = try? AccountId.makeI105(
+                publicKey: pair.publicKey,
+                algorithm: "sm2",
+                distid: distid
+              ) else {
+            return false
+        }
+        return (try? parseAccountAddress(
+            literal: authority,
+            expectedPrefix: AccountId.defaultNetworkPrefix
+        )) != nil
         #else
         return false
         #endif
@@ -5092,6 +5192,39 @@ public final class NoritoNativeBridge: @unchecked Sendable {
         let jsonData = Data(bytes: jsonPtr, count: Int(jsonLen))
         freeFn(jsonPtr)
         return String(data: jsonData, encoding: .utf8)
+        #else
+        return nil
+        #endif
+    }
+
+    func proveKagemushaVerifiedCompactPaymentTokenWithRecords(recordBundleArchive: Data) throws -> Data? {
+        #if canImport(Darwin)
+        guard let kagemushaProveVerifiedCompactPaymentTokenWithRecordsFn, let freeFn else {
+            return nil
+        }
+        var outPtr: UnsafeMutablePointer<UInt8>? = nil
+        var outLen: CUnsignedLong = 0
+        let status = recordBundleArchive.withUnsafeBytes { buffer -> Int32 in
+            let baseAddress = buffer.bindMemory(to: UInt8.self).baseAddress
+            return kagemushaProveVerifiedCompactPaymentTokenWithRecordsFn(
+                baseAddress,
+                CUnsignedLong(buffer.count),
+                &outPtr,
+                &outLen
+            )
+        }
+        if let error = NativeBridgeError.fromStatus(status) {
+            if let outPtr {
+                freeFn(outPtr)
+            }
+            throw error
+        }
+        guard let outPtr else {
+            throw NativeBridgeError.nullPointer
+        }
+        let data = Data(bytes: outPtr, count: Int(outLen))
+        freeFn(outPtr)
+        return data
         #else
         return nil
         #endif

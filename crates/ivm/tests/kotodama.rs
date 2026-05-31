@@ -667,6 +667,420 @@ fn compile_emits_block_height_syscall() {
 }
 
 #[test]
+fn compile_emits_extended_sysvar_helpers() {
+    let src = r#"
+        fn f() {
+            let block_time = block_time_ms();
+            let chain = chain_id();
+            let contract = contract_address();
+            let name = entrypoint();
+            info(block_time);
+            info(tlv_len(chain));
+            info(tlv_len(contract));
+            info(tlv_len(name));
+        }
+    "#;
+    let code = Compiler::new().compile_source(src).expect("compile");
+    let (_, off) = parse_meta_offset(&code).unwrap();
+    let code_region = &code[off..];
+    for (name, syscall) in [
+        (
+            "SYSVAR_BLOCK_TIME_MS",
+            syscalls::SYSCALL_SYSVAR_BLOCK_TIME_MS,
+        ),
+        ("SYSVAR_CHAIN_ID", syscalls::SYSCALL_SYSVAR_CHAIN_ID),
+        (
+            "SYSVAR_CONTRACT_ADDRESS",
+            syscalls::SYSCALL_SYSVAR_CONTRACT_ADDRESS,
+        ),
+        ("SYSVAR_ENTRYPOINT", syscalls::SYSCALL_SYSVAR_ENTRYPOINT),
+    ] {
+        let want = encoding::wide::encode_syscallx(syscall).to_le_bytes();
+        assert!(
+            code_region.windows(want.len()).any(|window| window == want),
+            "{name} syscall not found"
+        );
+    }
+}
+
+#[test]
+fn semantic_rejects_extended_sysvar_helper_args() {
+    let prog = parse(r#"fn f() { let _chain = chain_id(1); }"#).unwrap();
+    let err = analyze(&prog).expect_err("expected sysvar arity error");
+    assert!(
+        err.message.contains("chain_id expects no arguments"),
+        "unexpected error: {}",
+        err.message
+    );
+}
+
+#[test]
+fn compile_emits_extended_query_and_authority_sysvar_helpers() {
+    let src = r#"
+        view fn query() -> bytes {
+            let response = query_execute_norito(norito_bytes(b"query"));
+            return response;
+        }
+
+        view fn caller() -> AccountId {
+            return sysvar_authority();
+        }
+    "#;
+    let code = Compiler::new().compile_source(src).expect("compile");
+    let (_, off) = parse_meta_offset(&code).unwrap();
+    let code_region = &code[off..];
+    for (name, syscall) in [
+        (
+            "QUERY_EXECUTE_NORITO",
+            syscalls::SYSCALL_QUERY_EXECUTE_NORITO,
+        ),
+        ("SYSVAR_AUTHORITY", syscalls::SYSCALL_SYSVAR_AUTHORITY),
+    ] {
+        let want = encoding::wide::encode_syscallx(syscall).to_le_bytes();
+        assert!(
+            code_region.windows(want.len()).any(|window| window == want),
+            "{name} syscall not found"
+        );
+    }
+}
+
+#[test]
+fn semantic_rejects_extended_query_and_authority_sysvar_helper_args() {
+    let prog = parse(r#"fn f() { let _response = query_execute_norito(1); }"#).unwrap();
+    let err = analyze(&prog).expect_err("expected query payload type error");
+    assert!(
+        err.message.contains(
+            "query_execute_norito expects (Blob|bytes) pointer to NoritoBytes QueryRequest"
+        ),
+        "unexpected error: {}",
+        err.message
+    );
+
+    let prog = parse(r#"fn f() { let _caller = sysvar_authority(1); }"#).unwrap();
+    let err = analyze(&prog).expect_err("expected sysvar arity error");
+    assert!(
+        err.message
+            .contains("sysvar_authority expects no arguments"),
+        "unexpected error: {}",
+        err.message
+    );
+}
+
+#[test]
+fn compile_emits_typed_query_get_helpers() {
+    let src = r#"
+        view fn read() -> bytes {
+            let account = query_get_account(sysvar_authority());
+            let asset = query_get_asset(norito_bytes(b"asset"));
+            let definition = query_get_asset_definition(asset_definition("62Fk4FPcMuLvW5QjDGNF2a4jAmjM"));
+            let domain = query_get_domain(domain("wonderland.universal"));
+            let nft = query_get_nft(nft_id("n0$wonderland.universal"));
+            let parameter = query_get_parameter(name("block.max_transactions"));
+            let manifest = query_get_contract_manifest(norito_bytes(b"hash"));
+            let instance = query_get_contract_instance(name("router::universal"));
+            info(tlv_len(account));
+            info(tlv_len(asset));
+            info(tlv_len(definition));
+            info(tlv_len(domain));
+            info(tlv_len(nft));
+            info(tlv_len(parameter));
+            info(tlv_len(manifest));
+            return instance;
+        }
+    "#;
+    let code = Compiler::new().compile_source(src).expect("compile");
+    let (_, off) = parse_meta_offset(&code).unwrap();
+    let code_region = &code[off..];
+    for (name, syscall) in [
+        ("QUERY_GET_ACCOUNT", syscalls::SYSCALL_QUERY_GET_ACCOUNT),
+        ("QUERY_GET_ASSET", syscalls::SYSCALL_QUERY_GET_ASSET),
+        (
+            "QUERY_GET_ASSET_DEFINITION",
+            syscalls::SYSCALL_QUERY_GET_ASSET_DEFINITION,
+        ),
+        ("QUERY_GET_DOMAIN", syscalls::SYSCALL_QUERY_GET_DOMAIN),
+        ("QUERY_GET_NFT", syscalls::SYSCALL_QUERY_GET_NFT),
+        ("QUERY_GET_PARAMETER", syscalls::SYSCALL_QUERY_GET_PARAMETER),
+        (
+            "QUERY_GET_CONTRACT_MANIFEST",
+            syscalls::SYSCALL_QUERY_GET_CONTRACT_MANIFEST,
+        ),
+        (
+            "QUERY_GET_CONTRACT_INSTANCE",
+            syscalls::SYSCALL_QUERY_GET_CONTRACT_INSTANCE,
+        ),
+    ] {
+        let want = encoding::wide::encode_syscallx(syscall).to_le_bytes();
+        assert!(
+            code_region.windows(want.len()).any(|window| window == want),
+            "{name} syscall not found"
+        );
+    }
+}
+
+#[test]
+fn manifest_includes_exact_access_hints_for_static_typed_query_get_helpers() {
+    use iroha_data_model::{
+        account::{AccountId, ParsedAccountId},
+        asset::id::{AssetDefinitionId, AssetId},
+    };
+
+    let account = AccountId::parse_encoded("sorauﾛ1Npﾃﾕヱﾇq11pｳﾘ2ｱ5ﾇｦiCJKjRﾔzｷNMNﾆｹﾕPCｳﾙFvｵE9LBLB")
+        .map(ParsedAccountId::into_account_id)
+        .expect("parse account literal");
+    let asset_definition = AssetDefinitionId::parse_address_literal("62Fk4FPcMuLvW5QjDGNF2a4jAmjM")
+        .expect("parse asset definition");
+    let asset = AssetId::of(asset_definition.clone(), account.clone());
+    let src = format!(
+        r#"
+        view fn read() -> bytes {{
+            let account = query_get_account(sysvar_authority());
+            let asset = query_get_asset(asset_id("{asset}"));
+            let definition = query_get_asset_definition(asset_definition("{asset_definition}"));
+            let domain = query_get_domain(domain("wonderland.universal"));
+            let nft = query_get_nft(nft_id("n0$wonderland.universal"));
+            info(tlv_len(account));
+            info(tlv_len(asset));
+            info(tlv_len(definition));
+            info(tlv_len(domain));
+            return nft;
+        }}
+    "#
+    );
+    let (_code, manifest) = Compiler::new()
+        .compile_source_with_manifest(&src)
+        .expect("compile manifest with typed query hints");
+    let entrypoints = manifest.entrypoints.expect("entrypoints must be present");
+    let read = entrypoints
+        .iter()
+        .find(|entry| entry.name == "read")
+        .expect("read entrypoint");
+    assert_eq!(read.access_hints_complete, Some(true));
+    assert!(read.access_hints_skipped.is_empty());
+    assert!(read.write_keys.is_empty());
+    assert!(read.read_keys.contains(&"account:$authority".to_string()));
+    assert!(read.read_keys.contains(&format!("account:{account}")));
+    assert!(read.read_keys.contains(&format!("asset:{asset}")));
+    assert!(
+        read.read_keys
+            .contains(&format!("asset_def:{asset_definition}"))
+    );
+    assert!(
+        read.read_keys
+            .contains(&"domain:wonderland.universal".to_string())
+    );
+    assert!(read.read_keys.contains(&"nft".to_string()));
+    assert!(
+        read.read_keys
+            .contains(&"nft:n0$wonderland.universal".to_string())
+    );
+    assert!(!read.read_keys.contains(&"*".to_string()));
+}
+
+#[test]
+fn semantic_rejects_typed_query_get_helper_args() {
+    let prog = parse(r#"fn f() { let _account = query_get_account(1); }"#).unwrap();
+    let err = analyze(&prog).expect_err("expected account query key type error");
+    assert!(
+        err.message
+            .contains("query_get_account expects (AccountId|Blob|bytes)"),
+        "unexpected error: {}",
+        err.message
+    );
+
+    let prog = parse(r#"fn f() { let _instance = query_get_contract_instance(1); }"#).unwrap();
+    let err = analyze(&prog).expect_err("expected contract instance query key type error");
+    assert!(
+        err.message
+            .contains("query_get_contract_instance expects (Name|Blob|bytes)"),
+        "unexpected error: {}",
+        err.message
+    );
+}
+
+#[test]
+fn compile_emits_zk_vrf_read_helpers() {
+    let src = r#"
+        view fn read() -> bytes {
+            let roots = zk_roots_get(norito_bytes(b"roots"));
+            let tally = zk_vote_get_tally(norito_bytes(b"tally"));
+            let seed = vrf_epoch_seed(norito_bytes(b"seed"));
+            info(tlv_len(roots));
+            info(tlv_len(tally));
+            return seed;
+        }
+    "#;
+    let code = Compiler::new().compile_source(src).expect("compile");
+    let (_, off) = parse_meta_offset(&code).unwrap();
+    let code_region = &code[off..];
+    for (name, syscall) in [
+        ("ZK_ROOTS_GET", syscalls::SYSCALL_ZK_ROOTS_GET),
+        ("ZK_VOTE_GET_TALLY", syscalls::SYSCALL_ZK_VOTE_GET_TALLY),
+        ("VRF_EPOCH_SEED", syscalls::SYSCALL_VRF_EPOCH_SEED),
+    ] {
+        let want = encoding::wide::encode_sys(instruction::wide::system::SCALL, syscall as u8)
+            .to_le_bytes();
+        assert!(
+            code_region.windows(want.len()).any(|window| window == want),
+            "{name} syscall not found"
+        );
+    }
+}
+
+#[test]
+fn manifest_includes_exact_access_hints_for_static_zk_read_requests() {
+    use iroha_data_model::asset::id::AssetDefinitionId;
+    use ivm::zk_verify::{RootsGetRequest, VoteGetTallyRequest};
+
+    let asset_definition =
+        AssetDefinitionId::parse_address_literal("62Fk4FPcMuLvW5QjDGNF2a4jAmjM")
+            .expect("parse asset definition");
+    let roots_payload = norito::to_bytes(&RootsGetRequest {
+        asset_id: asset_definition.to_string(),
+        max: 4,
+    })
+    .expect("encode roots request");
+    let tally_payload = norito::to_bytes(&VoteGetTallyRequest {
+        election_id: "election-1".to_string(),
+    })
+    .expect("encode tally request");
+    let src = format!(
+        r#"
+        view fn read() -> bytes {{
+            let roots = zk_roots_get(norito_bytes("0x{}"));
+            let tally = zk_vote_get_tally(norito_bytes("0x{}"));
+            info(tlv_len(roots));
+            return tally;
+        }}
+    "#,
+        hex(&roots_payload),
+        hex(&tally_payload)
+    );
+    let (_code, manifest) = Compiler::new()
+        .compile_source_with_manifest(&src)
+        .expect("compile manifest with ZK read hints");
+    let entrypoints = manifest.entrypoints.expect("entrypoints must be present");
+    let read = entrypoints
+        .iter()
+        .find(|entry| entry.name == "read")
+        .expect("read entrypoint");
+    assert_eq!(read.access_hints_complete, Some(true));
+    assert!(read.access_hints_skipped.is_empty());
+    assert!(read.write_keys.is_empty());
+    assert!(
+        read.read_keys
+            .contains(&format!("zk_asset:{asset_definition}"))
+    );
+    assert!(
+        read.read_keys
+            .contains(&"zk:election:election-1:tally".to_string())
+    );
+    assert!(!read.read_keys.contains(&"*".to_string()));
+}
+
+#[test]
+fn semantic_rejects_zk_vrf_read_helper_args() {
+    let prog = parse(r#"fn f() { let _seed = vrf_epoch_seed(1); }"#).unwrap();
+    let err = analyze(&prog).expect_err("expected vrf seed payload type error");
+    assert!(
+        err.message.contains(
+            "vrf_epoch_seed expects (Blob|bytes) pointer to NoritoBytes VrfEpochSeedRequest"
+        ),
+        "unexpected error: {}",
+        err.message
+    );
+}
+
+#[test]
+fn compile_emits_state_introspection_helpers() {
+    let src = r#"
+        fn f() {
+            let prefix = name("Orders");
+            let keys = state_keys(prefix, 0, 2);
+            let present = state_has(prefix);
+            let len = state_len(prefix);
+            let count = state_count(prefix);
+            info(tlv_len(keys));
+            if present {
+                info(len);
+            }
+            info(count);
+        }
+    "#;
+    let code = Compiler::new().compile_source(src).expect("compile");
+    let (_, off) = parse_meta_offset(&code).unwrap();
+    let code_region = &code[off..];
+    for (name, syscall) in [
+        ("STATE_KEYS", syscalls::SYSCALL_STATE_KEYS),
+        ("STATE_HAS", syscalls::SYSCALL_STATE_HAS),
+        ("STATE_LEN", syscalls::SYSCALL_STATE_LEN),
+        ("STATE_COUNT", syscalls::SYSCALL_STATE_COUNT),
+    ] {
+        let want = encoding::wide::encode_syscallx(syscall).to_le_bytes();
+        assert!(
+            code_region.windows(want.len()).any(|window| window == want),
+            "{name} syscall not found"
+        );
+    }
+}
+
+#[test]
+fn semantic_rejects_state_introspection_helper_args() {
+    let prog =
+        parse(r#"fn f() { let _keys = state_keys(name("Orders"), 0, blob("bad")); }"#).unwrap();
+    let err = analyze(&prog).expect_err("expected state_keys type error");
+    assert!(
+        err.message
+            .contains("state_keys expects (Name, int offset, int limit)"),
+        "unexpected error: {}",
+        err.message
+    );
+}
+
+#[test]
+fn compile_emits_extended_hash_syscalls() {
+    let src = r#"
+        fn f(payload: Blob) {
+            let b = blake2b256_hash(payload);
+            let k = keccak256_hash(payload);
+            let i = iroha_hash(payload);
+            info(tlv_len(b));
+            info(tlv_len(k));
+            info(tlv_len(i));
+        }
+    "#;
+    let code = Compiler::new().compile_source(src).expect("compile");
+    let (_, off) = parse_meta_offset(&code).unwrap();
+    let mut words = Vec::new();
+    let mut i = off;
+    while i + 4 <= code.len() {
+        words.push(u32::from_le_bytes(code[i..i + 4].try_into().unwrap()));
+        i += 4;
+    }
+    let scall = instruction::wide::system::SCALL;
+    for (name, syscall) in [
+        ("BLAKE2B256_HASH", syscalls::SYSCALL_BLAKE2B256_HASH),
+        ("KECCAK256_HASH", syscalls::SYSCALL_KECCAK256_HASH),
+        ("IROHA_HASH", syscalls::SYSCALL_IROHA_HASH),
+    ] {
+        let want = encoding::wide::encode_sys(scall, syscall as u8);
+        assert!(words.contains(&want), "{name} syscall not found");
+    }
+}
+
+#[test]
+fn semantic_rejects_extended_hash_non_blob_arg() {
+    let prog = parse(r#"fn f() { let digest = keccak256_hash(1); }"#).unwrap();
+    let err = analyze(&prog).expect_err("expected type error");
+    assert!(
+        err.message
+            .contains("keccak256_hash expects (Blob|bytes) argument pointing to INPUT TLV"),
+        "unexpected error: {}",
+        err.message
+    );
+}
+
+#[test]
 fn compile_emits_resolve_account_alias_syscall() {
     let src = r#"fn f() { let a = resolve_account_alias("banking@centralbank"); }"#;
     let code = Compiler::new().compile_source(src).expect("compile");

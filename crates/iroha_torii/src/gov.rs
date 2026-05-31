@@ -100,7 +100,7 @@ fn from_hex_nibble(c: u8) -> Option<u8> {
     }
 }
 
-use std::sync::Arc;
+use std::{collections::BTreeSet, sync::Arc};
 
 #[derive(Debug, JsonDeserialize, JsonSerialize, Clone, Copy)]
 /// Inclusive height window used for governance scheduling.
@@ -2480,12 +2480,15 @@ pub async fn handle_gov_council_current(
     hasher.update(&beacon_bytes);
     let seed = hasher.finalize();
 
-    // Eligibility: bonded citizens only. The bond is an anti-Sybil floor, not a vote weight.
-    let required_bond = gov_cfg.citizenship_bond_amount;
-    let mut elig: Vec<iroha_data_model::account::AccountId> = Vec::new();
-    for (account_id, record) in world.citizens().iter() {
-        if record.amount >= required_bond && record.cooldown_until <= height {
-            elig.push(account_id.clone());
+    // Eligibility follows the configured parliament stake asset. The stake is
+    // only an anti-Sybil floor; every qualifying account receives one draw.
+    let required_stake = iroha_primitives::numeric::Numeric::new(gov_cfg.parliament_min_stake, 0);
+    let mut elig: BTreeSet<iroha_data_model::account::AccountId> = BTreeSet::new();
+    for (asset_id, balance) in world.assets().iter() {
+        if asset_id.definition() == &gov_cfg.parliament_eligibility_asset_id
+            && balance.as_ref() >= &required_stake
+        {
+            elig.insert(asset_id.account().clone());
         }
     }
     // Score eligible accounts by hash(tag|seed|account_id_bytes)

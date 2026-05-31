@@ -115,11 +115,14 @@ Init ==
   checked = 0
 
 Next ==
-  UNCHANGED vars
+  \/ /\ checked < 20
+     /\ checked' = checked + 1
+  \/ /\ checked = 20
+     /\ UNCHANGED vars
 
 TypeInvariant ==
   /\ Bug \in Bugs
-  /\ checked \in 0..1
+  /\ checked \in 0..20
 
 ActionableSourceSafety ==
   /\ OwnerActiveExact
@@ -148,5 +151,37 @@ LiveCleanupPreserveSafety ==
 SafetyFast ==
   /\ ActionableSourceSafety
   /\ LiveCleanupPreserveSafety
+
+ActionableSourceAnchors ==
+  /\ ActionableSourceSafety
+  /\ OwnerActiveExact
+  /\ VoteEvidenceExact
+  /\ DependencyBacklogExact
+  /\ RbcSenderActivityExact
+  /\ MissingBlockActivityExact
+  /\ MissingCommitActivityExact
+  /\ VoteBackedRecoveryExact
+  /\ ~ActionableWithoutSourceAccepted
+  /\ ~OwnerWrongViewAccepted
+  /\ ~VoteWrongViewAccepted
+  /\ ~DependencyStaleAccepted
+  /\ ~SenderStaleAccepted
+  /\ ~MissingBlockWrongViewAccepted
+  /\ ~MissingCommitWrongPhaseAccepted
+  /\ ~VoteBackedPassiveAccepted
+
+LiveCleanupPreserveAnchors ==
+  /\ LiveCleanupPreserveSafety
+  /\ PreserveOwnerSource
+  /\ PreserveRecoverySource
+  /\ ~PreserveNonFrontierHeightAccepted
+  /\ ~PreserveStaleCurrentViewAccepted
+  /\ ~PreserveNoActionableAccepted
+
+FrontierQuorumOwnerActionableSafetyAnchors ==
+  /\ ActionableSourceAnchors
+  /\ LiveCleanupPreserveAnchors
+
+Safety == FrontierQuorumOwnerActionableSafetyAnchors
 
 ====

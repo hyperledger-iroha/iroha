@@ -1,3 +1,40 @@
+[build-system]
+requires = ["setuptools", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "iroha-torii-client"
+version = "0.0.1"
+description = "Lightweight Torii HTTP client helpers for Hyperledger Iroha."
+authors = [{name = "Hyperledger Iroha Contributors"}]
+license = {text = "Apache-2.0"}
+requires-python = ">=3.9"
+dependencies = [
+  "requests>=2.31",
+]
+keywords = ["iroha", "torii", "sdk", "blockchain"]
+classifiers = [
+  "Development Status :: 2 - Pre-Alpha",
+  "Intended Audience :: Developers",
+  "License :: OSI Approved :: Apache Software License",
+  "Programming Language :: Python",
+  "Programming Language :: Python :: 3",
+  "Programming Language :: Python :: 3.9",
+  "Programming Language :: Python :: 3.10",
+  "Programming Language :: Python :: 3.11",
+  "Programming Language :: Python :: 3.12",
+  "Topic :: Software Development :: Libraries :: Python Modules",
+]
+
+[project.urls]
+Homepage = "https://github.com/hyperledger/iroha"
+Repository = "https://github.com/hyperledger/iroha"
+
+[tool.setuptools]
+include-package-data = true
+packages = ["iroha_torii_client"]
+package-dir = {"iroha_torii_client" = "."}
+
 [tool.ruff]
 line-length = 100
 target-version = "py39"

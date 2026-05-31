@@ -163,11 +163,14 @@ Init ==
   checked = 0
 
 Next ==
-  UNCHANGED vars
+  \/ /\ checked < 32
+     /\ checked' = checked + 1
+  \/ /\ checked = 32
+     /\ UNCHANGED vars
 
 TypeInvariant ==
   /\ Bug \in Bugs
-  /\ checked \in 0..1
+  /\ checked \in 0..32
 
 DependencyProgressSafety ==
   /\ DependencyFrontierProgressExact
@@ -220,5 +223,65 @@ SafetyFast ==
   /\ ValidationSafety
   /\ DeferredBlockSyncSafety
   /\ NoSpuriousReassemblySafety
+
+DependencyProgressAnchors ==
+  /\ DependencyProgressSafety
+  /\ DependencyFrontierProgressExact
+  /\ DependencyStormProgressExact
+  /\ ~DependencyStaleProgressAccepted
+  /\ ~DependencyNoPayloadBacklogAccepted
+  /\ ~DependencyWrongHeightAccepted
+
+IngressAnchors ==
+  /\ IngressSafety
+  /\ SameSlotIngressExact
+  /\ ~IngressNoBacklogAccepted
+  /\ ~IngressWrongViewAccepted
+
+SenderActivityAnchors ==
+  /\ SenderActivitySafety
+  /\ SenderPayloadRebroadcastExact
+  /\ SenderTargetedPayloadRescueExact
+  /\ SenderInitRepairExact
+  /\ SenderChunkRepairExact
+  /\ SenderReadyRebroadcastExact
+  /\ SenderDeliverRebroadcastExact
+  /\ SenderReadyDeferralExact
+  /\ SenderDeliverDeferralExact
+  /\ SenderOutboundChunksExact
+  /\ SenderPersistInflightExact
+  /\ SenderPersistPendingRefreshExact
+  /\ SenderSeedInflightExact
+  /\ ~SenderStaleTimedAccepted
+  /\ ~SenderWrongHeightTimedAccepted
+  /\ ~SenderWrongHeightUntimedAccepted
+
+ValidationAnchors ==
+  /\ ValidationSafety
+  /\ ValidationInflightExact
+  /\ ~ValidationAbortedAccepted
+  /\ ~ValidationWrongHeightAccepted
+  /\ ~ValidationWrongViewAccepted
+  /\ ~ValidationNonPendingAccepted
+
+DeferredBlockSyncAnchors ==
+  /\ DeferredBlockSyncSafety
+  /\ DeferredBlockSyncExact
+  /\ ~DeferredWrongHeightAccepted
+  /\ ~DeferredWrongViewAccepted
+
+NoSpuriousReassemblyAnchors ==
+  /\ NoSpuriousReassemblySafety
+  /\ ~ReassemblyWithoutSourceAccepted
+
+FrontierReassemblyActivitySafetyAnchors ==
+  /\ DependencyProgressAnchors
+  /\ IngressAnchors
+  /\ SenderActivityAnchors
+  /\ ValidationAnchors
+  /\ DeferredBlockSyncAnchors
+  /\ NoSpuriousReassemblyAnchors
+
+Safety == FrontierReassemblyActivitySafetyAnchors
 
 ====

@@ -42,7 +42,7 @@ from iroha_torii_client.client import (
     NetworkTimeSnapshot,
     NetworkTimeStatus,
     MultisigResponse,
-    OfflineV2Readiness,
+    OfflineReadiness,
     SubscriptionActionResult,
     SubscriptionCreateResult,
     SubscriptionListItem,
@@ -5992,7 +5992,11 @@ class ToriiStatusMetrics:
 
     commit_latency_ms: int
     queue_size: int
+    queue_queued: int
+    queue_inflight: int
     queue_delta: int
+    time_since_last_block_ms: int
+    time_since_last_non_empty_block_ms: int
     da_reschedule_delta: int
     tx_approved_delta: int
     tx_rejected_delta: int
@@ -6008,7 +6012,11 @@ class ToriiStatusMetrics:
             return cls(
                 commit_latency_ms=current.commit_time_ms,
                 queue_size=current.queue_size,
+                queue_queued=current.queue_queued,
+                queue_inflight=current.queue_inflight,
                 queue_delta=0,
+                time_since_last_block_ms=current.time_since_last_block_ms,
+                time_since_last_non_empty_block_ms=current.time_since_last_non_empty_block_ms,
                 da_reschedule_delta=0,
                 tx_approved_delta=0,
                 tx_rejected_delta=0,
@@ -6017,7 +6025,11 @@ class ToriiStatusMetrics:
         return cls(
             commit_latency_ms=current.commit_time_ms,
             queue_size=current.queue_size,
+            queue_queued=current.queue_queued,
+            queue_inflight=current.queue_inflight,
             queue_delta=current.queue_size - previous.queue_size,
+            time_since_last_block_ms=current.time_since_last_block_ms,
+            time_since_last_non_empty_block_ms=current.time_since_last_non_empty_block_ms,
             da_reschedule_delta=max(
                 0, current.da_reschedule_total - previous.da_reschedule_total
             ),
@@ -6168,8 +6180,15 @@ class ToriiLaneGovernanceSnapshot:
 class ToriiStatusPayload:
     """Decoded `/v1/status` payload with convenient integer accessors and lane summaries."""
 
+    observed_at_ms: int
     peers: int
     queue_size: int
+    queue_queued: int
+    queue_inflight: int
+    last_block_committed_at_ms: int
+    last_non_empty_block_committed_at_ms: int
+    time_since_last_block_ms: int
+    time_since_last_non_empty_block_ms: int
     commit_time_ms: int
     da_reschedule_total: int
     txs_approved: int
@@ -6552,8 +6571,19 @@ class ToriiStatusPayload:
         )
 
         return cls(
+            observed_at_ms=_coerce_int("observed_at_ms"),
             peers=_coerce_int("peers"),
             queue_size=_coerce_int("queue_size"),
+            queue_queued=_coerce_int("queue_queued"),
+            queue_inflight=_coerce_int("queue_inflight"),
+            last_block_committed_at_ms=_coerce_int("last_block_committed_at_ms"),
+            last_non_empty_block_committed_at_ms=_coerce_int(
+                "last_non_empty_block_committed_at_ms"
+            ),
+            time_since_last_block_ms=_coerce_int("time_since_last_block_ms"),
+            time_since_last_non_empty_block_ms=_coerce_int(
+                "time_since_last_non_empty_block_ms"
+            ),
             commit_time_ms=_coerce_int("commit_time_ms"),
             da_reschedule_total=_coerce_int("da_reschedule_total"),
             txs_approved=_coerce_int("txs_approved"),
@@ -6567,6 +6597,19 @@ class ToriiStatusPayload:
             lane_governance_sealed_aliases=lane_governance_sealed_aliases,
             raw=dict(payload),
         )
+
+    @property
+    def liveness_elapsed_ms(self) -> int:
+        """Return elapsed block time used for queue-aware stall checks."""
+
+        if self.time_since_last_non_empty_block_ms > 0:
+            return self.time_since_last_non_empty_block_ms
+        return self.time_since_last_block_ms
+
+    def is_queue_stalled(self, stall_threshold_ms: int) -> bool:
+        """Classify stalls only when queued work exists and elapsed block time exceeds the threshold."""
+
+        return self.queue_size > 0 and self.liveness_elapsed_ms > int(stall_threshold_ms)
 
 
 @dataclass(frozen=True)
@@ -6582,6 +6625,51 @@ class ToriiStatusSnapshot:
         """Return ``True`` when the underlying metrics observed any movement."""
 
         return self.metrics.has_activity
+
+
+@dataclass(frozen=True)
+class ToriiPipelinePreflight:
+    """Typed response from `GET /v1/pipeline/preflight`."""
+
+    schema_version: int
+    chain_height: int
+    sumeragi: Mapping[str, Any]
+    admission: Mapping[str, Any]
+    block: Mapping[str, Any]
+    pipeline: Mapping[str, Any]
+    queue: Mapping[str, Any]
+    fees: Mapping[str, Any]
+    raw: Mapping[str, Any] = field(default_factory=dict)
+
+    @property
+    def stall_threshold_ms(self) -> int:
+        return int(self.sumeragi.get("stall_threshold_ms", 0))
+
+    def is_status_stalled(self, status: ToriiStatusPayload) -> bool:
+        return status.is_queue_stalled(self.stall_threshold_ms)
+
+    @classmethod
+    def from_payload(cls, payload: Mapping[str, Any]) -> "ToriiPipelinePreflight":
+        if not isinstance(payload, Mapping):
+            raise TypeError("pipeline preflight response must be a JSON object")
+
+        def _mapping(name: str) -> Mapping[str, Any]:
+            value = payload.get(name)
+            if not isinstance(value, Mapping):
+                raise TypeError(f"pipeline preflight `{name}` must be a JSON object")
+            return dict(value)
+
+        return cls(
+            schema_version=int(payload.get("schema_version", 0)),
+            chain_height=int(payload.get("chain_height", 0)),
+            sumeragi=_mapping("sumeragi"),
+            admission=_mapping("admission"),
+            block=_mapping("block"),
+            pipeline=_mapping("pipeline"),
+            queue=_mapping("queue"),
+            fees=_mapping("fees"),
+            raw=dict(payload),
+        )
 
 
 class _ToriiStatusState:
@@ -6976,7 +7064,7 @@ __all__ = [
     "AssetHolderListPage",
     "AccountPermissionRecord",
     "AccountPermissionListPage",
-    "OfflineV2Readiness",
+    "OfflineReadiness",
     "SubscriptionPlanCreateResult",
     "SubscriptionPlanListItem",
     "SubscriptionPlanListPage",
@@ -7048,6 +7136,14 @@ _DEFAULT_SUCCESS_STATUSES = frozenset({"Approved", "Committed", "Applied"})
 _DEFAULT_FAILURE_STATUSES = frozenset({"Rejected", "Expired"})
 _DEFAULT_RETRY_STATUSES = frozenset({502, 503, 504})
 _DEFAULT_RETRY_METHODS = frozenset({"GET", "HEAD", "OPTIONS"})
+_TRANSACTION_STATUS_SCOPES = frozenset({"local", "global"})
+
+
+def _normalize_transaction_status_scope(value: str, context: str) -> str:
+    normalized = _require_non_empty_string(value, context).lower()
+    if normalized not in _TRANSACTION_STATUS_SCOPES:
+        raise ValueError(f"{context} must be one of: local, global")
+    return normalized
 
 try:  # pragma: no cover - optional dependency
     import websocket
@@ -7283,6 +7379,7 @@ class ToriiClient(_BaseToriiClient):
         interval: float = 1.0,
         timeout: Optional[float] = 30.0,
         max_attempts: Optional[int] = None,
+        scope: str = "global",
         success_statuses: Optional[Iterable[str]] = None,
         failure_statuses: Optional[Iterable[str]] = None,
         on_status: Optional[Callable[[Optional[str], Any, int], None]] = None,
@@ -7303,6 +7400,7 @@ class ToriiClient(_BaseToriiClient):
             interval=interval,
             timeout=timeout,
             max_attempts=max_attempts,
+            scope=scope,
             success_statuses=success_statuses,
             failure_statuses=failure_statuses,
             on_status=on_status,
@@ -7342,6 +7440,7 @@ class ToriiClient(_BaseToriiClient):
         interval: float = 1.0,
         timeout: Optional[float] = 30.0,
         max_attempts: Optional[int] = None,
+        scope: str = "global",
         success_statuses: Optional[Iterable[str]] = None,
         failure_statuses: Optional[Iterable[str]] = None,
         on_status: Optional[Callable[[Optional[str], Any, int], None]] = None,
@@ -7354,6 +7453,7 @@ class ToriiClient(_BaseToriiClient):
             interval=interval,
             timeout=timeout,
             max_attempts=max_attempts,
+            scope=scope,
             success_statuses=success_statuses,
             failure_statuses=failure_statuses,
             on_status=on_status,
@@ -7366,6 +7466,7 @@ class ToriiClient(_BaseToriiClient):
         interval: float = 1.0,
         timeout: Optional[float] = 30.0,
         max_attempts: Optional[int] = None,
+        scope: str = "global",
         success_statuses: Optional[Iterable[str]] = None,
         failure_statuses: Optional[Iterable[str]] = None,
         on_status: Optional[Callable[[Optional[str], Any, int], None]] = None,
@@ -7394,6 +7495,7 @@ class ToriiClient(_BaseToriiClient):
             interval=interval,
             timeout=timeout,
             max_attempts=max_attempts,
+            scope=scope,
             success_statuses=success_statuses,
             failure_statuses=failure_statuses,
             on_status=on_status,
@@ -8080,6 +8182,18 @@ class ToriiClient(_BaseToriiClient):
             status=status_payload,
             metrics=metrics,
         )
+
+    def get_pipeline_preflight(self) -> ToriiPipelinePreflight:
+        """Return pipeline preflight diagnostics (`GET /v1/pipeline/preflight`)."""
+
+        payload = self.request_json(
+            "GET", "/v1/pipeline/preflight", expected_status=(200,)
+        )
+        if payload is None:
+            raise TypeError("pipeline preflight response body was empty")
+        if not isinstance(payload, Mapping):
+            raise TypeError("pipeline preflight response must be a JSON object")
+        return ToriiPipelinePreflight.from_payload(payload)
 
     def get_health(self) -> Optional[Any]:
         """Return Torii health information (`GET /v1/health`)."""
@@ -9098,6 +9212,7 @@ class ToriiClient(_BaseToriiClient):
         interval: float = 1.0,
         timeout: Optional[float] = 30.0,
         max_attempts: Optional[int] = None,
+        scope: str = "global",
         success_statuses: Optional[Iterable[str]] = None,
         failure_statuses: Optional[Iterable[str]] = None,
         on_status: Optional[Callable[[Optional[str], Any, int], None]] = None,
@@ -9137,6 +9252,7 @@ class ToriiClient(_BaseToriiClient):
                 interval=interval,
                 timeout=timeout,
                 max_attempts=max_attempts,
+                scope=scope,
                 success_statuses=success_statuses,
                 failure_statuses=failure_statuses,
                 on_status=on_status,
@@ -9147,13 +9263,19 @@ class ToriiClient(_BaseToriiClient):
             response = {}
         return envelope_out, response
 
-    def get_transaction_status(self, hash_hex: str) -> Optional[Any]:
+    def get_transaction_status(
+        self,
+        hash_hex: str,
+        *,
+        scope: str = "global",
+    ) -> Optional[Any]:
         """Fetch transaction pipeline status for the given hash (hex encoded)."""
 
+        scope = _normalize_transaction_status_scope(scope, "get_transaction_status.scope")
         response = self._request(
             "GET",
             "/v1/pipeline/transactions/status",
-            params={"hash": hash_hex},
+            params={"hash": hash_hex, "scope": scope},
         )
         if response.status_code == 404:
             return None
@@ -9167,6 +9289,7 @@ class ToriiClient(_BaseToriiClient):
         interval: float = 1.0,
         timeout: Optional[float] = 30.0,
         max_attempts: Optional[int] = None,
+        scope: str = "global",
         success_statuses: Optional[Iterable[str]] = None,
         failure_statuses: Optional[Iterable[str]] = None,
         on_status: Optional[Callable[[Optional[str], Any, int], None]] = None,
@@ -9179,6 +9302,7 @@ class ToriiClient(_BaseToriiClient):
         a failure status is observed within the configured bounds.
         """
 
+        scope = _normalize_transaction_status_scope(scope, "wait_for_transaction_status.scope")
         success_set = (
             frozenset(str(s) for s in success_statuses)
             if success_statuses is not None
@@ -9195,7 +9319,7 @@ class ToriiClient(_BaseToriiClient):
 
         while True:
             attempts += 1
-            payload = self.get_transaction_status(hash_hex)
+            payload = self.get_transaction_status(hash_hex, scope=scope)
             status = _extract_pipeline_status_kind(payload)
 
             if on_status is not None:

@@ -259,9 +259,12 @@ public final class SubscriptionToriiClient {
   }
 
   private <T> CompletableFuture<T> unsupportedServerSideSigning(final String endpoint) {
-    throw new UnsupportedOperationException(
-        endpoint
-            + " no longer accepts server-side signing inputs; submit a locally signed transaction instead.");
+    final CompletableFuture<T> future = new CompletableFuture<>();
+    future.completeExceptionally(
+        new SubscriptionToriiException(
+            endpoint
+                + " no longer accepts server-side signing inputs; submit a locally signed transaction instead."));
+    return future;
   }
 
   private <T> CompletableFuture<T> executeHttpRequest(

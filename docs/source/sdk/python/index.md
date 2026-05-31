@@ -77,16 +77,16 @@ holders = client.list_asset_holders("62Fk4FPcMuLvW5QjDGNF2a4jAmjM", asset_id=ass
 print(assets, txs, holders)
 ```
 
-## Offline V2 readiness
+## Offline readiness
 
-Use `GET /v1/offline/v2/readiness` through `get_offline_v2_readiness()` for offline feature discovery.
-Offline V2 note issuance, redemption, and audit payloads are submitted as transaction instructions;
-non-V2 offline HTTP routes are no longer published by Torii.
+Use `GET /v1/offline/readiness` through `get_offline_readiness()` for offline feature discovery.
+Offline note issuance, redemption, and audit payloads are submitted as transaction instructions;
+legacy offline HTTP routes are no longer published by Torii.
 
 ```python
 from iroha_python import ToriiClient
 
 client = ToriiClient("https://torii.sora.example")
-readiness = client.get_offline_v2_readiness()
-print("offline notes", readiness.offline_note_v2)
+readiness = client.get_offline_readiness()
+print("offline notes", readiness.offline_note)
 ```

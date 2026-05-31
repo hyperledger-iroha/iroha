@@ -211,11 +211,11 @@ allowed_curve_ids = [1, 3, 4]
 
 [nexus]
 enabled = true
-lane_count = 3
+lane_count = 4
 
 [nexus.autoscale]
 enabled = true
-min_lanes = 3
+min_lanes = 4
 max_lanes = 5
 target_block_ms = 1000
 scale_out_latency_ratio = 1.50
@@ -267,6 +267,13 @@ description = "Zero-knowledge attachments"
 dataspace = "zk"
 metadata = {}
 
+[[nexus.lane_catalog]]
+index = 3
+alias = "external-poc"
+description = "External PoC traffic"
+dataspace = "is"
+metadata = { "scheduler.teu_capacity" = "25000000" }
+
 [[nexus.dataspace_catalog]]
 alias = "universal"
 id = 0
@@ -283,6 +290,12 @@ alias = "zk"
 id = 2
 manifest_hash = "0200000000000000000000000000000000000000000000000000000000000000"
 description = "Zero-knowledge proofs and attachments"
+
+[[nexus.dataspace_catalog]]
+alias = "is"
+id = 6647857470246403404
+manifest_hash = "4cbd76b725ef415c000000000000000000000000000000000000000000000000"
+description = "External PoC data space"
 
 [nexus.governance]
 default_module = "parliament"

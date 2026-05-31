@@ -39,6 +39,7 @@ use iroha_data_model::{
         },
         json::PredicateJson,
     },
+    zk::{BackendTag, OpenVerifyEnvelope},
 };
 use iroha_primitives::numeric::Numeric;
 use mv::storage::StorageReadOnly;
@@ -256,10 +257,66 @@ fn ensure_single_escrow_nullifier(nullifiers: &[[u8; 32]]) -> Result<(), Error> 
     Ok(())
 }
 
+fn ensure_close_proof_uses_canonical_transfer_v2_envelope(
+    proof: &ProofAttachment,
+) -> Result<(), Error> {
+    if proof.backend != proof.proof.backend {
+        return Err(validation_err(
+            "anonymous escrow close proof backend mismatch",
+        ));
+    }
+    if proof.backend.as_str() != crate::zk::ZK_BACKEND_HALO2_IPA {
+        return Err(validation_err(
+            "anonymous escrow close proof requires halo2/ipa backend",
+        ));
+    }
+    let envelope: OpenVerifyEnvelope =
+        norito::decode_from_bytes(&proof.proof.bytes).map_err(|_| {
+            validation_err("anonymous escrow close proof must use OpenVerifyEnvelope payload")
+        })?;
+    if envelope.backend != BackendTag::Halo2IpaPasta {
+        return Err(validation_err(
+            "anonymous escrow close proof unexpected OpenVerifyEnvelope backend tag",
+        ));
+    }
+    if !crate::zk::confidential_v2::is_confidential_transfer_v2_circuit_id(&envelope.circuit_id) {
+        return Err(validation_err(
+            "anonymous escrow close proof requires confidential transfer v2 circuit",
+        ));
+    }
+    if envelope.public_inputs
+        != crate::zk::confidential_v2::CONFIDENTIAL_TRANSFER_V2_PUBLIC_INPUTS_SCHEMA_V1
+    {
+        return Err(validation_err(
+            "anonymous escrow close proof public inputs schema mismatch",
+        ));
+    }
+    if !envelope.aux.is_empty() {
+        return Err(validation_err(
+            "anonymous escrow close proof envelope auxiliary bytes must be empty",
+        ));
+    }
+    if envelope.vk_hash == [0u8; 32] {
+        return Err(validation_err(
+            "anonymous escrow close proof verifier key hash must be non-zero",
+        ));
+    }
+    if proof
+        .vk_commitment
+        .is_some_and(|commitment| commitment != envelope.vk_hash)
+    {
+        return Err(validation_err(
+            "anonymous escrow close proof verifier key commitment mismatch",
+        ));
+    }
+    Ok(())
+}
+
 fn ensure_close_proof_spends_escrow_commitment(
     proof: &ProofAttachment,
     escrow_commitment: [u8; 32],
 ) -> Result<(), Error> {
+    ensure_close_proof_uses_canonical_transfer_v2_envelope(proof)?;
     let (input_commitments, _nullifiers, _outputs, _root, _asset_tag, _chain_tag) =
         crate::zk::confidential_v2::parse_transfer_public_inputs(&proof.proof.bytes).map_err(
             |err| {
@@ -1829,8 +1886,10 @@ mod tests {
         let outer = iroha_data_model::zk::OpenVerifyEnvelope {
             backend: iroha_data_model::zk::BackendTag::Halo2IpaPasta,
             circuit_id: crate::zk::confidential_v2::CONFIDENTIAL_TRANSFER_V2_CIRCUIT_ID.to_owned(),
-            vk_hash: [0u8; 32],
-            public_inputs: Vec::new(),
+            vk_hash: [0x99; 32],
+            public_inputs:
+                crate::zk::confidential_v2::CONFIDENTIAL_TRANSFER_V2_PUBLIC_INPUTS_SCHEMA_V1
+                    .to_vec(),
             proof_bytes: inner,
             aux: Vec::new(),
         };
@@ -1849,6 +1908,20 @@ mod tests {
             envelope_hash: None,
             lane_privacy: None,
         }
+    }
+
+    fn tamper_anonymous_close_proof_envelope(
+        mut proof: ProofAttachment,
+        mutate: impl FnOnce(&mut OpenVerifyEnvelope),
+    ) -> ProofAttachment {
+        let mut envelope: OpenVerifyEnvelope =
+            norito::decode_from_bytes(&proof.proof.bytes).expect("decode proof envelope");
+        mutate(&mut envelope);
+        proof.proof = iroha_data_model::proof::ProofBox::new(
+            proof.proof.backend.clone(),
+            norito::to_bytes(&envelope).expect("encode proof envelope"),
+        );
+        proof
     }
 
     fn grant_court_permission(state_transaction: &mut StateTransaction<'_, '_>, court: &AccountId) {
@@ -1967,6 +2040,84 @@ mod tests {
             err.to_string().contains("exactly one escrow commitment"),
             "unexpected error: {err}"
         );
+    }
+
+    #[test]
+    fn anonymous_escrow_close_proof_rejects_noncanonical_envelope_before_public_input_trust() {
+        let escrow_commitment = [0x22; 32];
+
+        for (suffix, proof, expected_msg) in [
+            (
+                "backend_tag",
+                tamper_anonymous_close_proof_envelope(
+                    anonymous_close_proof_with_input_commitments([escrow_commitment, [0; 32]]),
+                    |envelope| envelope.backend = BackendTag::Stark,
+                ),
+                "unexpected OpenVerifyEnvelope backend tag",
+            ),
+            (
+                "circuit_id",
+                tamper_anonymous_close_proof_envelope(
+                    anonymous_close_proof_with_input_commitments([escrow_commitment, [0; 32]]),
+                    |envelope| envelope.circuit_id = "halo2/pasta/ipa/vote-ballot".to_owned(),
+                ),
+                "requires confidential transfer v2 circuit",
+            ),
+            (
+                "schema",
+                tamper_anonymous_close_proof_envelope(
+                    anonymous_close_proof_with_input_commitments([escrow_commitment, [0; 32]]),
+                    |envelope| envelope.public_inputs = b"wrong-schema".to_vec(),
+                ),
+                "public inputs schema mismatch",
+            ),
+            (
+                "aux",
+                tamper_anonymous_close_proof_envelope(
+                    anonymous_close_proof_with_input_commitments([escrow_commitment, [0; 32]]),
+                    |envelope| envelope.aux = b"side-channel".to_vec(),
+                ),
+                "envelope auxiliary bytes must be empty",
+            ),
+            (
+                "zero_vk_hash",
+                tamper_anonymous_close_proof_envelope(
+                    anonymous_close_proof_with_input_commitments([escrow_commitment, [0; 32]]),
+                    |envelope| envelope.vk_hash = [0u8; 32],
+                ),
+                "verifier key hash must be non-zero",
+            ),
+            (
+                "vk_commitment",
+                {
+                    let mut proof =
+                        anonymous_close_proof_with_input_commitments([escrow_commitment, [0; 32]]);
+                    proof.vk_commitment = Some([0x55; 32]);
+                    proof
+                },
+                "verifier key commitment mismatch",
+            ),
+            (
+                "attachment_backend",
+                {
+                    let mut proof =
+                        anonymous_close_proof_with_input_commitments([escrow_commitment, [0; 32]]);
+                    let bytes = proof.proof.bytes.clone();
+                    proof.proof =
+                        iroha_data_model::proof::ProofBox::new("halo2/ipa/other".into(), bytes);
+                    proof
+                },
+                "backend mismatch",
+            ),
+        ] {
+            let err = ensure_close_proof_spends_escrow_commitment(&proof, escrow_commitment)
+                .expect_err("noncanonical close proof should fail before public input trust");
+            let msg = err.to_string();
+            assert!(
+                msg.contains(expected_msg),
+                "case {suffix}: expected {expected_msg:?}, got {msg:?}"
+            );
+        }
     }
 
     #[test]

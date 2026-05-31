@@ -455,17 +455,19 @@ public enum AccountId {
     /// converts a public key to the correct format.
     ///
     /// - Parameters:
-    ///   - publicKey: Public key bytes (32 bytes for ed25519, 33 for secp256k1)
-    ///   - algorithm: Signing algorithm ("ed25519" or "secp256k1"), defaults to "ed25519"
+    ///   - publicKey: Public key bytes (32 bytes for ed25519, 33 for secp256k1, 65-byte SEC1 for SM2)
+    ///   - algorithm: Signing algorithm, defaults to "ed25519"
+    ///   - distid: SM2 distinguishing identifier. Defaults to the bridge's SM2 default when omitted.
     ///   - networkPrefix: Network prefix for i105 encoding (defaults to Iroha mainnet)
     /// - Returns: Account ID in format `<i105>`
     /// - Throws: `AccountAddressError` if conversion fails
     public static func makeI105(
         publicKey: Data,
         algorithm: String = "ed25519",
+        distid: String? = nil,
         networkPrefix: UInt16 = defaultNetworkPrefix
     ) throws -> String {
-        let address = try AccountAddress.fromAccount(publicKey: publicKey, algorithm: algorithm)
+        let address = try AccountAddress.fromAccount(publicKey: publicKey, algorithm: algorithm, distid: distid)
         return try address.toI105(networkPrefix: networkPrefix)
     }
 

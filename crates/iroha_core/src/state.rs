@@ -78,9 +78,10 @@ use iroha_data_model::{
         AxtPolicySnapshot, AxtReplayRecord, DataSpaceId, DomainCommittee, DomainEndorsement,
         DomainEndorsementPolicy, DomainEndorsementRecord, LANE_RELAY_FASTPQ_EFFECT_TYPE, LaneId,
         LaneRelayEmergencyValidatorSet, LaneRelayEnvelope, LaneRelayError, LaneRelayQuorumContext,
-        PublicLaneRewardRecord, PublicLaneStakeShare, PublicLaneValidatorRecord,
-        PublicLaneValidatorStatus, UniversalAccountId, VERIFIED_LANE_RELAY_STATE_KEY_PREFIX,
-        VerifiedLaneRelayRecord, lane_relay_fastpq_claim_digest,
+        PublicLaneRewardRecord, PublicLaneStakeShare, PublicLaneUnbonding,
+        PublicLaneValidatorRecord, PublicLaneValidatorStatus, UniversalAccountId,
+        VERIFIED_LANE_RELAY_STATE_KEY_PREFIX, VerifiedLaneRelayRecord,
+        lane_relay_fastpq_claim_digest,
     },
     nft::{NftEntry, NftValue},
     oracle::{
@@ -186,6 +187,7 @@ pub(crate) use tiered::TieredStateBackend;
 use tiered::{TieredKeyHandle, TieredSnapshotDiff, TieredSnapshotPayload};
 
 const HARD_FORK_SNAPSHOT_BOOTSTRAP_ENV: &str = "IROHA_HARD_FORK_SNAPSHOT_BOOTSTRAP";
+const HARD_FORK_PUBLIC_LANE_STATE_MANIFEST_ENV: &str = "IROHA_HARD_FORK_PUBLIC_LANE_STATE_MANIFEST";
 
 fn hard_fork_snapshot_bootstrap_enabled() -> bool {
     std::env::var_os(HARD_FORK_SNAPSHOT_BOOTSTRAP_ENV).is_some()
@@ -536,7 +538,7 @@ macro_rules! build_world_block {
             repo_agreements_by_counterparty: $state.repo_agreements_by_counterparty.$method(),
             repo_agreements_by_custodian: $state.repo_agreements_by_custodian.$method(),
             settlement_ledgers: $state.settlement_ledgers.$method(),
-            offline_note_v2_replay_keys: $state.offline_note_v2_replay_keys.$method(),
+            offline_note_replay_keys: $state.offline_note_replay_keys.$method(),
             public_lane_validators: $state.public_lane_validators.$method(),
             public_lane_stake_shares: $state.public_lane_stake_shares.$method(),
             public_lane_rewards: $state.public_lane_rewards.$method(),
@@ -749,7 +751,7 @@ macro_rules! build_world_transaction {
             repo_agreements_by_counterparty: $state.repo_agreements_by_counterparty.transaction(),
             repo_agreements_by_custodian: $state.repo_agreements_by_custodian.transaction(),
             settlement_ledgers: $state.settlement_ledgers.transaction(),
-            offline_note_v2_replay_keys: $state.offline_note_v2_replay_keys.transaction(),
+            offline_note_replay_keys: $state.offline_note_replay_keys.transaction(),
             public_lane_validators: $state.public_lane_validators.transaction(),
             public_lane_stake_shares: $state.public_lane_stake_shares.transaction(),
             public_lane_rewards: $state.public_lane_rewards.transaction(),
@@ -2017,8 +2019,8 @@ pub struct World {
     pub(crate) repo_agreements_by_custodian: Storage<AccountId, BTreeSet<RepoAgreementId>>,
     /// Settlement audit trails keyed by settlement identifier.
     pub(crate) settlement_ledgers: Storage<SettlementId, SettlementLedger>,
-    /// Offline V2 replay keys used for issued notes, certificates, nullifiers, and audit tokens.
-    pub(crate) offline_note_v2_replay_keys: Storage<Hash, ()>,
+    /// Offline replay keys used for issued notes, certificates, nullifiers, and audit tokens.
+    pub(crate) offline_note_replay_keys: Storage<Hash, ()>,
     /// Public-lane validators keyed by `(lane_id, validator account id)`.
     #[norito(skip)]
     pub(crate) public_lane_validators: Storage<(LaneId, AccountId), PublicLaneValidatorRecord>,
@@ -2467,8 +2469,8 @@ pub struct WorldBlock<'world> {
         StorageBlock<'world, AccountId, BTreeSet<RepoAgreementId>>,
     /// Settlement audit trails keyed by settlement identifier.
     pub(crate) settlement_ledgers: StorageBlock<'world, SettlementId, SettlementLedger>,
-    /// Offline V2 replay keys used for issued notes, certificates, nullifiers, and audit tokens.
-    pub(crate) offline_note_v2_replay_keys: StorageBlock<'world, Hash, ()>,
+    /// Offline replay keys used for issued notes, certificates, nullifiers, and audit tokens.
+    pub(crate) offline_note_replay_keys: StorageBlock<'world, Hash, ()>,
     /// Public lane validator registry.
     pub(crate) public_lane_validators:
         StorageBlock<'world, (LaneId, AccountId), PublicLaneValidatorRecord>,
@@ -2519,6 +2521,18 @@ pub struct WorldBlock<'world> {
 }
 
 impl<'world> WorldBlock<'world> {
+    /// Return trigger completion events emitted during the current block without
+    /// draining the live event buffer.
+    pub(crate) fn trigger_completions(&self) -> Vec<TriggerCompletedEvent> {
+        self.external_event_buf
+            .iter()
+            .filter_map(|event| match event {
+                EventBox::TriggerCompleted(completed) => Some(completed.clone()),
+                _ => None,
+            })
+            .collect()
+    }
+
     /// Drain and return any events that were emitted into the external buffer during
     /// the current block application. Intended for tests and block-assembly paths.
     pub fn take_external_events(&mut self) -> Vec<EventBox> {
@@ -2593,7 +2607,7 @@ impl<'world> WorldBlock<'world> {
         collect_reverts!(self.governance_slashes, GovernanceSlash);
         collect_reverts!(self.council, Council);
         collect_reverts!(self.parliament_bodies, ParliamentBodies);
-        collect_reverts!(self.offline_note_v2_replay_keys, OfflineNoteV2ReplayKey);
+        collect_reverts!(self.offline_note_replay_keys, OfflineNoteReplayKey);
 
         diff
     }
@@ -2643,7 +2657,7 @@ impl<'world> WorldBlock<'world> {
         collect_payload!(self.governance_slashes, GovernanceSlash);
         collect_payload!(self.council, Council);
         collect_payload!(self.parliament_bodies, ParliamentBodies);
-        collect_payload!(self.offline_note_v2_replay_keys, OfflineNoteV2ReplayKey);
+        collect_payload!(self.offline_note_replay_keys, OfflineNoteReplayKey);
 
         payload
     }
@@ -3120,8 +3134,8 @@ pub struct WorldTransaction<'block, 'world> {
     /// Settlement audit trails keyed by settlement identifier.
     pub(crate) settlement_ledgers:
         StorageTransaction<'block, 'world, SettlementId, SettlementLedger>,
-    /// Offline V2 replay keys used for issued notes, certificates, nullifiers, and audit tokens.
-    pub(crate) offline_note_v2_replay_keys: StorageTransaction<'block, 'world, Hash, ()>,
+    /// Offline replay keys used for issued notes, certificates, nullifiers, and audit tokens.
+    pub(crate) offline_note_replay_keys: StorageTransaction<'block, 'world, Hash, ()>,
     pub(crate) public_lane_validators:
         StorageTransaction<'block, 'world, (LaneId, AccountId), PublicLaneValidatorRecord>,
     pub(crate) public_lane_stake_shares:
@@ -4548,8 +4562,8 @@ pub struct WorldView<'world> {
         StorageView<'world, AccountId, BTreeSet<RepoAgreementId>>,
     /// Settlement audit trails keyed by settlement identifier.
     pub(crate) settlement_ledgers: StorageView<'world, SettlementId, SettlementLedger>,
-    /// Offline V2 replay keys used for issued notes, certificates, nullifiers, and audit tokens.
-    pub(crate) offline_note_v2_replay_keys: StorageView<'world, Hash, ()>,
+    /// Offline replay keys used for issued notes, certificates, nullifiers, and audit tokens.
+    pub(crate) offline_note_replay_keys: StorageView<'world, Hash, ()>,
     pub(crate) public_lane_validators:
         StorageView<'world, (LaneId, AccountId), PublicLaneValidatorRecord>,
     pub(crate) public_lane_stake_shares:
@@ -7084,6 +7098,8 @@ pub struct State {
     pub oracle: iroha_config::parameters::actual::Oracle,
     /// Deterministic pacing governor configuration snapshot.
     pub pacing_governor: iroha_config::parameters::actual::SumeragiPacingGovernor,
+    /// Runtime DA quorum timeout multiplier used for Sumeragi liveness budgets.
+    sumeragi_da_quorum_timeout_multiplier: u32,
     /// Streaming configuration snapshot (spool paths, codec defaults).
     streaming: iroha_config::parameters::actual::Streaming,
     /// Cryptography configuration (enabled algorithms, defaults).
@@ -9393,6 +9409,47 @@ mod accounts_snapshot_tests {
         assert!(Arc::ptr_eq(&first, &second));
         assert_eq!(first.len(), 1);
         assert_eq!(&first[0], &account_id);
+    }
+}
+
+#[cfg(test)]
+mod sumeragi_timing_tests {
+    use std::{sync::Arc, time::Duration};
+
+    use super::*;
+
+    #[test]
+    fn sumeragi_commit_quorum_timeout_uses_runtime_da_multiplier() {
+        let kura = crate::kura::Kura::blank_kura_for_testing();
+        let query = crate::query::store::LiveQueryStore::start_test();
+        let mut state = State::new_for_testing(World::default(), Arc::clone(&kura), query);
+
+        assert_eq!(
+            state.sumeragi_commit_quorum_timeout(),
+            Duration::from_millis(400)
+        );
+
+        let config = SumeragiPolicyConfig {
+            collectors_k: usize::from(iroha_config::parameters::defaults::sumeragi::COLLECTORS_K),
+            collectors_redundant_send_r:
+                iroha_config::parameters::defaults::sumeragi::COLLECTORS_REDUNDANT_SEND_R,
+            policy_flags: SumeragiPolicyFlags::new(true, false),
+            da_quorum_timeout_multiplier: 3,
+            key_activation_lead_blocks:
+                iroha_config::parameters::defaults::sumeragi::KEY_ACTIVATION_LEAD_BLOCKS,
+            key_overlap_grace_blocks:
+                iroha_config::parameters::defaults::sumeragi::KEY_OVERLAP_GRACE_BLOCKS,
+            key_expiry_grace_blocks:
+                iroha_config::parameters::defaults::sumeragi::KEY_EXPIRY_GRACE_BLOCKS,
+            key_allowed_algorithms: BTreeSet::new(),
+            key_allowed_hsm_providers: BTreeSet::new(),
+        };
+        state.set_sumeragi_parameters(config);
+
+        assert_eq!(
+            state.sumeragi_commit_quorum_timeout(),
+            Duration::from_millis(600)
+        );
     }
 }
 
@@ -13451,7 +13508,7 @@ impl World {
             repo_agreements_by_counterparty: self.repo_agreements_by_counterparty.view(),
             repo_agreements_by_custodian: self.repo_agreements_by_custodian.view(),
             settlement_ledgers: self.settlement_ledgers.view(),
-            offline_note_v2_replay_keys: self.offline_note_v2_replay_keys.view(),
+            offline_note_replay_keys: self.offline_note_replay_keys.view(),
             public_lane_validators: self.public_lane_validators.view(),
             public_lane_stake_shares: self.public_lane_stake_shares.view(),
             public_lane_rewards: self.public_lane_rewards.view(),
@@ -14037,8 +14094,8 @@ pub trait WorldReadOnly {
     ) -> &impl StorageReadOnly<AccountId, BTreeSet<RepoAgreementId>>;
     /// Settlement audit trails (read-only).
     fn settlement_ledgers(&self) -> &impl StorageReadOnly<SettlementId, SettlementLedger>;
-    /// Offline V2 replay keys (read-only).
-    fn offline_note_v2_replay_keys(&self) -> &impl StorageReadOnly<Hash, ()>;
+    /// Offline replay keys (read-only).
+    fn offline_note_replay_keys(&self) -> &impl StorageReadOnly<Hash, ()>;
     /// Public lane validators keyed by `(lane_id, validator)` (read-only).
     fn public_lane_validators(
         &self,
@@ -15427,8 +15484,8 @@ macro_rules! impl_world_ro {
             fn settlement_ledgers(&self) -> &impl StorageReadOnly<SettlementId, SettlementLedger> {
                 &self.settlement_ledgers
             }
-            fn offline_note_v2_replay_keys(&self) -> &impl StorageReadOnly<Hash, ()> {
-                &self.offline_note_v2_replay_keys
+            fn offline_note_replay_keys(&self) -> &impl StorageReadOnly<Hash, ()> {
+                &self.offline_note_replay_keys
             }
             fn public_lane_validators(
                 &self,
@@ -15887,7 +15944,7 @@ impl<'world> WorldBlock<'world> {
             repo_agreements_by_counterparty,
             repo_agreements_by_custodian,
             settlement_ledgers,
-            offline_note_v2_replay_keys,
+            offline_note_replay_keys,
             public_lane_validators,
             public_lane_stake_shares,
             public_lane_rewards,
@@ -15994,7 +16051,7 @@ impl<'world> WorldBlock<'world> {
         repo_agreements_by_counterparty.commit();
         repo_agreements_by_custodian.commit();
         settlement_ledgers.commit();
-        offline_note_v2_replay_keys.commit();
+        offline_note_replay_keys.commit();
         domain_committees.commit();
         domain_endorsement_policies.commit();
         domain_endorsements.commit();
@@ -17132,7 +17189,7 @@ impl<'block, 'world> WorldTransaction<'block, 'world> {
             manifest_aliases,
             replication_orders,
             settlement_ledgers,
-            offline_note_v2_replay_keys,
+            offline_note_replay_keys,
             public_lane_validators,
             public_lane_stake_shares,
             public_lane_rewards,
@@ -17240,7 +17297,7 @@ impl<'block, 'world> WorldTransaction<'block, 'world> {
         self.soradns_last_publish_ms.apply();
         self.soradns_history_len.apply();
         settlement_ledgers.apply();
-        offline_note_v2_replay_keys.apply();
+        offline_note_replay_keys.apply();
         domain_committees.apply();
         domain_endorsement_policies.apply();
         domain_endorsements.apply();
@@ -17894,6 +17951,8 @@ pub struct SumeragiPolicyConfig {
     pub collectors_redundant_send_r: u8,
     /// Boolean policy toggles.
     pub policy_flags: SumeragiPolicyFlags,
+    /// Multiplier applied to DA commit-quorum timeout budgets.
+    pub da_quorum_timeout_multiplier: u32,
     /// Lead-time (in blocks) required before a new consensus key activates.
     pub key_activation_lead_blocks: u64,
     /// Overlap/grace window (in blocks) permitting dual-signing during rotation.
@@ -17912,6 +17971,7 @@ impl From<&iroha_config::parameters::actual::Sumeragi> for SumeragiPolicyConfig 
             collectors_k: cfg.collectors.k,
             collectors_redundant_send_r: cfg.collectors.redundant_send_r,
             policy_flags: SumeragiPolicyFlags::new(cfg.da.enabled, cfg.keys.require_hsm),
+            da_quorum_timeout_multiplier: cfg.da.quorum_timeout_multiplier.max(1),
             key_activation_lead_blocks: cfg.keys.activation_lead_blocks,
             key_overlap_grace_blocks: cfg.keys.overlap_grace_blocks,
             key_expiry_grace_blocks: cfg.keys.expiry_grace_blocks,
@@ -17927,6 +17987,8 @@ impl From<&iroha_data_model::parameter::system::SumeragiParameters> for Sumeragi
             collectors_k: usize::from(cfg.collectors_k),
             collectors_redundant_send_r: cfg.collectors_redundant_send_r,
             policy_flags: SumeragiPolicyFlags::new(cfg.da_enabled, cfg.key_require_hsm),
+            da_quorum_timeout_multiplier:
+                iroha_config::parameters::defaults::sumeragi::DA_QUORUM_TIMEOUT_MULTIPLIER,
             key_activation_lead_blocks: cfg.key_activation_lead_blocks,
             key_overlap_grace_blocks: cfg.key_overlap_grace_blocks,
             key_expiry_grace_blocks: cfg.key_expiry_grace_blocks,
@@ -19596,6 +19658,8 @@ impl State {
             )),
             oracle: default_oracle(),
             pacing_governor: iroha_config::parameters::actual::SumeragiPacingGovernor::default(),
+            sumeragi_da_quorum_timeout_multiplier:
+                iroha_config::parameters::defaults::sumeragi::DA_QUORUM_TIMEOUT_MULTIPLIER,
             streaming,
             nexus: parking_lot::RwLock::new(nexus),
             nexus_storage_budget_last_check_height: AtomicU64::new(0),
@@ -21105,6 +21169,20 @@ impl State {
             .view()
             .sumeragi()
             .effective_block_time()
+    }
+
+    /// Effective Sumeragi commit-quorum timeout from current chain parameters and runtime config.
+    #[track_caller]
+    #[must_use]
+    pub fn sumeragi_commit_quorum_timeout(&self) -> Duration {
+        let params = self.world.parameters.view();
+        let sumeragi = params.sumeragi();
+        crate::sumeragi::main_loop::commit_quorum_timeout_from_durations(
+            sumeragi.effective_block_time(),
+            sumeragi.effective_commit_time(),
+            sumeragi.da_enabled(),
+            self.sumeragi_da_quorum_timeout_multiplier.max(1),
+        )
     }
 
     /// Return whether the canonical account exists in current world state.
@@ -22832,6 +22910,7 @@ impl State {
     /// Update consensus policy parameters sourced from configuration.
     pub fn set_sumeragi_parameters(&mut self, sumeragi: impl Into<self::SumeragiPolicyConfig>) {
         let policy = sumeragi.into();
+        self.sumeragi_da_quorum_timeout_multiplier = policy.da_quorum_timeout_multiplier.max(1);
         let mut params_block = self.world.parameters.block();
         let mut sys = params_block.sumeragi.clone();
         // Keep collector topology (`collectors_k`, `collectors_redundant_send_r`) anchored to
@@ -33549,6 +33628,13 @@ impl StateTransaction<'_, '_> {
         }
     }
 
+    fn trigger_host_args(&self, event: &EventBox, fallback: Json) -> Json {
+        match event {
+            EventBox::ExecuteTrigger(_) | EventBox::Data(_) => self.trigger_args_from_event(event),
+            _ => fallback,
+        }
+    }
+
     fn trigger_args_from_data_event(&self, event: &data_pre::DataEvent) -> Json {
         use data_pre::{AccountEvent, AssetEvent, DataEvent, DomainEvent};
 
@@ -33768,12 +33854,14 @@ impl StateTransaction<'_, '_> {
                     })?;
                 }
                 let contract_runtime_context = contract_call_context.runtime_context();
+                let host_args =
+                    self.trigger_host_args(&event, contract_call_context.args().clone());
                 let accounts = self.trigger_accounts_snapshot();
                 let mut host =
                     crate::smartcontracts::ivm::host::CoreHostImpl::with_accounts_and_args(
                         authority.clone(),
                         accounts,
-                        contract_call_context.args().clone(),
+                        host_args,
                     );
                 let current_block_time_ms =
                     u64::try_from(self._curr_block.creation_time().as_millis())
@@ -33889,9 +33977,10 @@ impl StateTransaction<'_, '_> {
                             ))
                         })?;
                     }
-                    let host_args = contract_call_context
+                    let fallback_args = contract_call_context
                         .as_ref()
                         .map_or(trigger_args, |context| context.args().clone());
+                    let host_args = self.trigger_host_args(&event, fallback_args);
                     let contract_runtime_context = contract_call_context
                         .as_ref()
                         .and_then(|context| context.runtime_context());
@@ -34538,7 +34627,7 @@ pub(crate) struct SnapshotSpaceDirectoryManifestSet {
 pub(crate) mod deserialize {
     use std::marker::PhantomData;
 
-    use norito::codec::DecodeAll;
+    use norito::codec::{Decode, DecodeAll};
     use norito::json::{self, JsonDeserialize};
 
     use super::{default_oracle, *};
@@ -34612,29 +34701,88 @@ pub(crate) mod deserialize {
 
             drain_unknown(&map, "state");
 
-            world.public_lane_validators = decode_snapshot_records::<PublicLaneValidatorRecord>(
-                public_lane_validators,
-                "public_lane_validators",
-            )?
-            .into_iter()
-            .map(|record| ((record.lane_id, record.validator.clone()), record))
-            .collect();
-            world.public_lane_stake_shares = decode_snapshot_records::<PublicLaneStakeShare>(
-                public_lane_stake_shares,
-                "public_lane_stake_shares",
-            )?
-            .into_iter()
-            .map(|record| {
-                (
-                    (
-                        record.lane_id,
-                        record.validator.clone(),
-                        record.staker.clone(),
+            let public_lane_validator_blob_count = public_lane_validators.len();
+            let public_lane_stake_share_blob_count = public_lane_stake_shares.len();
+            let external_public_lane_state = load_external_public_lane_state_manifest()?;
+
+            let mut public_lane_validator_records =
+                decode_public_lane_validator_records(public_lane_validators)?;
+            let mut public_lane_stake_share_records =
+                decode_public_lane_stake_share_records(public_lane_stake_shares)?;
+
+            if let Some(external) = external_public_lane_state {
+                if !external.validators.is_empty() {
+                    if public_lane_validator_records.is_empty() {
+                        eprintln!(
+                            "snapshot hard-fork compatibility: restoring {} public-lane validators from `{}`",
+                            external.validators.len(),
+                            HARD_FORK_PUBLIC_LANE_STATE_MANIFEST_ENV
+                        );
+                        public_lane_validator_records = external.validators;
+                    } else {
+                        eprintln!(
+                            "snapshot hard-fork compatibility: ignoring `{}` because persisted public-lane validators decoded successfully",
+                            HARD_FORK_PUBLIC_LANE_STATE_MANIFEST_ENV
+                        );
+                    }
+                }
+                if !external.stake_shares.is_empty() {
+                    if public_lane_stake_share_records.is_empty() {
+                        eprintln!(
+                            "snapshot hard-fork compatibility: restoring {} public-lane stake shares from `{}`",
+                            external.stake_shares.len(),
+                            HARD_FORK_PUBLIC_LANE_STATE_MANIFEST_ENV
+                        );
+                        public_lane_stake_share_records = external.stake_shares;
+                    } else {
+                        eprintln!(
+                            "snapshot hard-fork compatibility: ignoring `{}` because persisted public-lane stake shares decoded successfully",
+                            HARD_FORK_PUBLIC_LANE_STATE_MANIFEST_ENV
+                        );
+                    }
+                }
+            }
+
+            if hard_fork_snapshot_bootstrap_enabled()
+                && public_lane_validator_blob_count > 0
+                && public_lane_validator_records.is_empty()
+            {
+                return Err(json::Error::InvalidField {
+                    field: "public_lane_validators".to_owned(),
+                    message: format!(
+                        "legacy public-lane validators could not be decoded; set `{HARD_FORK_PUBLIC_LANE_STATE_MANIFEST_ENV}` to a preservation manifest"
                     ),
-                    record,
-                )
-            })
-            .collect();
+                });
+            }
+            if hard_fork_snapshot_bootstrap_enabled()
+                && public_lane_stake_share_blob_count > 0
+                && public_lane_stake_share_records.is_empty()
+            {
+                return Err(json::Error::InvalidField {
+                    field: "public_lane_stake_shares".to_owned(),
+                    message: format!(
+                        "legacy public-lane stake shares could not be decoded; set `{HARD_FORK_PUBLIC_LANE_STATE_MANIFEST_ENV}` to a preservation manifest"
+                    ),
+                });
+            }
+
+            world.public_lane_validators = public_lane_validator_records
+                .into_iter()
+                .map(|record| ((record.lane_id, record.validator.clone()), record))
+                .collect();
+            world.public_lane_stake_shares = public_lane_stake_share_records
+                .into_iter()
+                .map(|record| {
+                    (
+                        (
+                            record.lane_id,
+                            record.validator.clone(),
+                            record.staker.clone(),
+                        ),
+                        record,
+                    )
+                })
+                .collect();
             world.public_lane_rewards = decode_snapshot_records::<PublicLaneRewardRecord>(
                 public_lane_rewards,
                 "public_lane_rewards",
@@ -34694,6 +34842,496 @@ pub(crate) mod deserialize {
                 })
             })
             .collect()
+    }
+
+    #[derive(Decode)]
+    struct LegacyPublicLaneValidatorRecord {
+        lane_id: LaneId,
+        validator: AccountId,
+        stake_account: AccountId,
+        total_stake: Numeric,
+        self_stake: Numeric,
+        metadata: Metadata,
+        status: PublicLaneValidatorStatus,
+        activation_epoch: Option<u64>,
+        activation_height: Option<u64>,
+        last_reward_epoch: Option<u64>,
+    }
+
+    #[derive(Decode)]
+    struct LegacyPublicLaneStakeShareRecord {
+        lane_id: LaneId,
+        validator: AccountId,
+        staker: AccountId,
+        bonded: Numeric,
+        pending_unbonds: BTreeMap<Hash, PublicLaneUnbonding>,
+        metadata: Metadata,
+    }
+
+    #[derive(Decode)]
+    struct LegacyPublicLaneStakeShareWithoutPendingUnbonds {
+        lane_id: LaneId,
+        validator: AccountId,
+        staker: AccountId,
+        bonded: Numeric,
+        metadata: Metadata,
+    }
+
+    #[derive(Default)]
+    struct ExternalPublicLaneState {
+        validators: Vec<PublicLaneValidatorRecord>,
+        stake_shares: Vec<PublicLaneStakeShare>,
+    }
+
+    fn load_external_public_lane_state_manifest()
+    -> Result<Option<ExternalPublicLaneState>, json::Error> {
+        if !hard_fork_snapshot_bootstrap_enabled() {
+            return Ok(None);
+        }
+        let Some(path) = std::env::var_os(HARD_FORK_PUBLIC_LANE_STATE_MANIFEST_ENV) else {
+            return Ok(None);
+        };
+        let path = PathBuf::from(path);
+        let body = std::fs::read_to_string(&path).map_err(|err| json::Error::InvalidField {
+            field: HARD_FORK_PUBLIC_LANE_STATE_MANIFEST_ENV.to_owned(),
+            message: format!("failed to read `{}`: {err}", path.display()),
+        })?;
+        let value: json::Value =
+            json::from_json(&body).map_err(|err| json::Error::InvalidField {
+                field: HARD_FORK_PUBLIC_LANE_STATE_MANIFEST_ENV.to_owned(),
+                message: format!("failed to parse `{}` as JSON: {err}", path.display()),
+            })?;
+        let state =
+            parse_external_public_lane_state(&value).map_err(|err| json::Error::InvalidField {
+                field: HARD_FORK_PUBLIC_LANE_STATE_MANIFEST_ENV.to_owned(),
+                message: format!("invalid `{}`: {err}", path.display()),
+            })?;
+        Ok(Some(state))
+    }
+
+    fn parse_external_public_lane_state(
+        value: &json::Value,
+    ) -> Result<ExternalPublicLaneState, json::Error> {
+        let object = value.as_object().ok_or_else(|| {
+            json::Error::Message("expected top-level public-lane manifest object".to_owned())
+        })?;
+        let validators = parse_public_lane_validator_manifest(
+            object
+                .get("validators")
+                .ok_or_else(|| json::Error::missing_field("validators"))?,
+        )?;
+        let stake_shares = parse_public_lane_stake_share_manifest(
+            object
+                .get("stake_shares")
+                .ok_or_else(|| json::Error::missing_field("stake_shares"))?,
+        )?;
+        Ok(ExternalPublicLaneState {
+            validators,
+            stake_shares,
+        })
+    }
+
+    fn parse_public_lane_validator_manifest(
+        value: &json::Value,
+    ) -> Result<Vec<PublicLaneValidatorRecord>, json::Error> {
+        let items = value.as_array().ok_or_else(|| {
+            json::Error::Message("expected `validators` to be an array".to_owned())
+        })?;
+        let mut records = Vec::with_capacity(items.len());
+        for (index, item) in items.iter().enumerate() {
+            let field = format!("validators[{index}]");
+            records.push(PublicLaneValidatorRecord {
+                lane_id: parse_public_lane_id(item, &field)?,
+                validator: parse_public_lane_account(item, "validator", &field)?,
+                peer_id: parse_public_lane_peer_id(item, "peer_id", &field)?,
+                stake_account: parse_public_lane_account(item, "stake_account", &field)?,
+                total_stake: parse_public_lane_numeric(item, "total_stake", &field)?,
+                self_stake: parse_public_lane_numeric(item, "self_stake", &field)?,
+                metadata: parse_public_lane_metadata(item, &field)?,
+                status: parse_public_lane_validator_status(
+                    get_public_lane_field(item, "status", &field)?,
+                    &format!("{field}.status"),
+                )?,
+                activation_epoch: parse_public_lane_optional_u64(item, "activation_epoch", &field)?,
+                activation_height: parse_public_lane_optional_u64(
+                    item,
+                    "activation_height",
+                    &field,
+                )?,
+                last_reward_epoch: parse_public_lane_optional_u64(
+                    item,
+                    "last_reward_epoch",
+                    &field,
+                )?,
+            });
+        }
+        Ok(records)
+    }
+
+    fn parse_public_lane_stake_share_manifest(
+        value: &json::Value,
+    ) -> Result<Vec<PublicLaneStakeShare>, json::Error> {
+        let items = value.as_array().ok_or_else(|| {
+            json::Error::Message("expected `stake_shares` to be an array".to_owned())
+        })?;
+        let mut records = Vec::with_capacity(items.len());
+        for (index, item) in items.iter().enumerate() {
+            let field = format!("stake_shares[{index}]");
+            records.push(PublicLaneStakeShare {
+                lane_id: parse_public_lane_id(item, &field)?,
+                validator: parse_public_lane_account(item, "validator", &field)?,
+                staker: parse_public_lane_account(item, "staker", &field)?,
+                bonded: parse_public_lane_numeric(item, "bonded", &field)?,
+                pending_unbonds: parse_public_lane_pending_unbonds(item, &field)?,
+                metadata: parse_public_lane_metadata(item, &field)?,
+            });
+        }
+        Ok(records)
+    }
+
+    fn get_public_lane_field<'a>(
+        value: &'a json::Value,
+        key: &str,
+        field: &str,
+    ) -> Result<&'a json::Value, json::Error> {
+        value
+            .as_object()
+            .and_then(|object| object.get(key))
+            .ok_or_else(|| json::Error::InvalidField {
+                field: format!("{field}.{key}"),
+                message: "missing field".to_owned(),
+            })
+    }
+
+    fn parse_public_lane_id(value: &json::Value, field: &str) -> Result<LaneId, json::Error> {
+        let lane = get_public_lane_field(value, "lane_id", field)?
+            .as_u64()
+            .ok_or_else(|| json::Error::InvalidField {
+                field: format!("{field}.lane_id"),
+                message: "expected unsigned integer".to_owned(),
+            })?;
+        let lane = u32::try_from(lane).map_err(|_| json::Error::InvalidField {
+            field: format!("{field}.lane_id"),
+            message: "lane id overflow".to_owned(),
+        })?;
+        Ok(LaneId::new(lane))
+    }
+
+    fn parse_public_lane_string(
+        value: &json::Value,
+        key: &str,
+        field: &str,
+    ) -> Result<String, json::Error> {
+        Ok(get_public_lane_field(value, key, field)?
+            .as_str()
+            .ok_or_else(|| json::Error::InvalidField {
+                field: format!("{field}.{key}"),
+                message: "expected string".to_owned(),
+            })?
+            .to_owned())
+    }
+
+    fn parse_public_lane_account(
+        value: &json::Value,
+        key: &str,
+        field: &str,
+    ) -> Result<AccountId, json::Error> {
+        let literal = parse_public_lane_string(value, key, field)?;
+        AccountId::parse_encoded(&literal)
+            .map(iroha_data_model::account::ParsedAccountId::into_account_id)
+            .map_err(|err| json::Error::InvalidField {
+                field: format!("{field}.{key}"),
+                message: err.to_string(),
+            })
+    }
+
+    fn parse_public_lane_peer_id(
+        value: &json::Value,
+        key: &str,
+        field: &str,
+    ) -> Result<PeerId, json::Error> {
+        let literal = parse_public_lane_string(value, key, field)?;
+        literal
+            .parse::<PeerId>()
+            .map_err(|err| json::Error::InvalidField {
+                field: format!("{field}.{key}"),
+                message: err.to_string(),
+            })
+    }
+
+    fn parse_public_lane_numeric(
+        value: &json::Value,
+        key: &str,
+        field: &str,
+    ) -> Result<Numeric, json::Error> {
+        let literal = parse_public_lane_string(value, key, field)?;
+        literal
+            .parse::<Numeric>()
+            .map_err(|err| json::Error::InvalidField {
+                field: format!("{field}.{key}"),
+                message: err.to_string(),
+            })
+    }
+
+    fn parse_public_lane_optional_u64(
+        value: &json::Value,
+        key: &str,
+        field: &str,
+    ) -> Result<Option<u64>, json::Error> {
+        let Some(field_value) = value.as_object().and_then(|object| object.get(key)) else {
+            return Ok(None);
+        };
+        if field_value.is_null() {
+            return Ok(None);
+        }
+        field_value
+            .as_u64()
+            .map(Some)
+            .ok_or_else(|| json::Error::InvalidField {
+                field: format!("{field}.{key}"),
+                message: "expected unsigned integer or null".to_owned(),
+            })
+    }
+
+    fn parse_public_lane_metadata(
+        value: &json::Value,
+        field: &str,
+    ) -> Result<Metadata, json::Error> {
+        let Some(metadata) = value.as_object().and_then(|object| object.get("metadata")) else {
+            return Ok(Metadata::default());
+        };
+        Metadata::json_from_value(metadata).map_err(|err| json::Error::InvalidField {
+            field: format!("{field}.metadata"),
+            message: err.to_string(),
+        })
+    }
+
+    fn parse_public_lane_validator_status(
+        value: &json::Value,
+        field: &str,
+    ) -> Result<PublicLaneValidatorStatus, json::Error> {
+        let status_type = value
+            .as_object()
+            .and_then(|object| object.get("type"))
+            .and_then(json::Value::as_str)
+            .ok_or_else(|| json::Error::InvalidField {
+                field: format!("{field}.type"),
+                message: "expected status type string".to_owned(),
+            })?;
+        match status_type {
+            "PendingActivation" => Ok(PublicLaneValidatorStatus::PendingActivation(
+                get_public_lane_field(value, "activates_at_epoch", field)?
+                    .as_u64()
+                    .ok_or_else(|| json::Error::InvalidField {
+                        field: format!("{field}.activates_at_epoch"),
+                        message: "expected unsigned integer".to_owned(),
+                    })?,
+            )),
+            "Active" => Ok(PublicLaneValidatorStatus::Active),
+            "Jailed" => Ok(PublicLaneValidatorStatus::Jailed(parse_public_lane_string(
+                value, "reason", field,
+            )?)),
+            "Exiting" => Ok(PublicLaneValidatorStatus::Exiting(
+                get_public_lane_field(value, "releases_at_ms", field)?
+                    .as_u64()
+                    .ok_or_else(|| json::Error::InvalidField {
+                        field: format!("{field}.releases_at_ms"),
+                        message: "expected unsigned integer".to_owned(),
+                    })?,
+            )),
+            "Exited" => Ok(PublicLaneValidatorStatus::Exited),
+            "Slashed" => {
+                let slash_id = parse_public_lane_string(value, "slash_id", field)?;
+                slash_id
+                    .parse::<Hash>()
+                    .map(PublicLaneValidatorStatus::Slashed)
+                    .map_err(|err| json::Error::InvalidField {
+                        field: format!("{field}.slash_id"),
+                        message: err.to_string(),
+                    })
+            }
+            other => Err(json::Error::InvalidField {
+                field: format!("{field}.type"),
+                message: format!("unsupported validator status `{other}`"),
+            }),
+        }
+    }
+
+    fn parse_public_lane_pending_unbonds(
+        value: &json::Value,
+        field: &str,
+    ) -> Result<BTreeMap<Hash, PublicLaneUnbonding>, json::Error> {
+        let Some(pending_unbonds) = value
+            .as_object()
+            .and_then(|object| object.get("pending_unbonds"))
+        else {
+            return Ok(BTreeMap::new());
+        };
+        let items = pending_unbonds
+            .as_array()
+            .ok_or_else(|| json::Error::InvalidField {
+                field: format!("{field}.pending_unbonds"),
+                message: "expected array".to_owned(),
+            })?;
+        let mut map = BTreeMap::new();
+        for (index, item) in items.iter().enumerate() {
+            let item_field = format!("{field}.pending_unbonds[{index}]");
+            let request_id = parse_public_lane_string(item, "request_id", &item_field)?
+                .parse::<Hash>()
+                .map_err(|err| json::Error::InvalidField {
+                    field: format!("{item_field}.request_id"),
+                    message: err.to_string(),
+                })?;
+            let amount = parse_public_lane_numeric(item, "amount", &item_field)?;
+            let release_at_ms = get_public_lane_field(item, "release_at_ms", &item_field)?
+                .as_u64()
+                .ok_or_else(|| json::Error::InvalidField {
+                    field: format!("{item_field}.release_at_ms"),
+                    message: "expected unsigned integer".to_owned(),
+                })?;
+            let unbonding = PublicLaneUnbonding {
+                request_id,
+                amount,
+                release_at_ms,
+            };
+            if map.insert(request_id, unbonding).is_some() {
+                return Err(json::Error::InvalidField {
+                    field: item_field,
+                    message: "duplicate pending unbond request_id".to_owned(),
+                });
+            }
+        }
+        Ok(map)
+    }
+
+    fn decode_public_lane_validator_records(
+        records: Vec<SnapshotNoritoBlob>,
+    ) -> Result<Vec<PublicLaneValidatorRecord>, json::Error> {
+        let record_count = records.len();
+        let mut decoded = Vec::with_capacity(record_count);
+        for (index, record) in records.into_iter().enumerate() {
+            let bytes =
+                hex::decode(&record.encoded_hex).map_err(|err| json::Error::InvalidField {
+                    field: "public_lane_validators".to_owned(),
+                    message: format!("record {index} hex decode failed: {err}"),
+                })?;
+            let mut cursor = bytes.as_slice();
+            match PublicLaneValidatorRecord::decode_all(&mut cursor) {
+                Ok(record) => decoded.push(record),
+                Err(primary) if hard_fork_snapshot_bootstrap_enabled() => {
+                    let mut legacy_cursor = bytes.as_slice();
+                    match LegacyPublicLaneValidatorRecord::decode_all(&mut legacy_cursor) {
+                        Ok(record) => {
+                            let Some(peer_public_key) = record.validator.try_signatory().cloned()
+                            else {
+                                eprintln!(
+                                    "snapshot hard-fork compatibility: discarding {record_count} persisted `public_lane_validators` records because record {index} has a legacy validator account without a single-key signatory"
+                                );
+                                return Ok(Vec::new());
+                            };
+                            eprintln!(
+                                "snapshot hard-fork compatibility: decoded persisted `public_lane_validators` record {index} with legacy struct fallback after primary decode failed: {primary}"
+                            );
+                            decoded.push(PublicLaneValidatorRecord {
+                                lane_id: record.lane_id,
+                                validator: record.validator,
+                                peer_id: PeerId::from(peer_public_key),
+                                stake_account: record.stake_account,
+                                total_stake: record.total_stake,
+                                self_stake: record.self_stake,
+                                metadata: record.metadata,
+                                status: record.status,
+                                activation_epoch: record.activation_epoch,
+                                activation_height: record.activation_height,
+                                last_reward_epoch: record.last_reward_epoch,
+                            });
+                        }
+                        Err(fallback) => {
+                            eprintln!(
+                                "snapshot hard-fork compatibility: discarding {record_count} persisted `public_lane_validators` records because record {index} could not be decoded: primary={primary}; tuple fallback={fallback}"
+                            );
+                            return Ok(Vec::new());
+                        }
+                    }
+                }
+                Err(err) => {
+                    return Err(json::Error::InvalidField {
+                        field: "public_lane_validators".to_owned(),
+                        message: format!("record {index} norito decode failed: {err}"),
+                    });
+                }
+            }
+        }
+        Ok(decoded)
+    }
+
+    fn decode_public_lane_stake_share_records(
+        records: Vec<SnapshotNoritoBlob>,
+    ) -> Result<Vec<PublicLaneStakeShare>, json::Error> {
+        let record_count = records.len();
+        let mut decoded = Vec::with_capacity(record_count);
+        for (index, record) in records.into_iter().enumerate() {
+            let bytes =
+                hex::decode(&record.encoded_hex).map_err(|err| json::Error::InvalidField {
+                    field: "public_lane_stake_shares".to_owned(),
+                    message: format!("record {index} hex decode failed: {err}"),
+                })?;
+            let mut cursor = bytes.as_slice();
+            match PublicLaneStakeShare::decode_all(&mut cursor) {
+                Ok(record) => decoded.push(record),
+                Err(primary) if hard_fork_snapshot_bootstrap_enabled() => {
+                    let mut legacy_cursor = bytes.as_slice();
+                    match LegacyPublicLaneStakeShareRecord::decode_all(&mut legacy_cursor) {
+                        Ok(record) => {
+                            eprintln!(
+                                "snapshot hard-fork compatibility: decoded persisted `public_lane_stake_shares` record {index} with legacy struct fallback after primary decode failed: {primary}"
+                            );
+                            decoded.push(PublicLaneStakeShare {
+                                lane_id: record.lane_id,
+                                validator: record.validator,
+                                staker: record.staker,
+                                bonded: record.bonded,
+                                pending_unbonds: record.pending_unbonds,
+                                metadata: record.metadata,
+                            });
+                        }
+                        Err(fallback) => {
+                            let mut legacy_without_unbonds_cursor = bytes.as_slice();
+                            match LegacyPublicLaneStakeShareWithoutPendingUnbonds::decode_all(
+                                &mut legacy_without_unbonds_cursor,
+                            ) {
+                                Ok(record) => {
+                                    eprintln!(
+                                        "snapshot hard-fork compatibility: decoded persisted `public_lane_stake_shares` record {index} without pending_unbonds after primary decode failed: {primary}"
+                                    );
+                                    decoded.push(PublicLaneStakeShare {
+                                        lane_id: record.lane_id,
+                                        validator: record.validator,
+                                        staker: record.staker,
+                                        bonded: record.bonded,
+                                        pending_unbonds: BTreeMap::new(),
+                                        metadata: record.metadata,
+                                    });
+                                }
+                                Err(fallback_without_unbonds) => {
+                                    eprintln!(
+                                        "snapshot hard-fork compatibility: discarding {record_count} persisted `public_lane_stake_shares` records because record {index} could not be decoded: primary={primary}; tuple fallback={fallback}; no-unbonds fallback={fallback_without_unbonds}"
+                                    );
+                                    return Ok(Vec::new());
+                                }
+                            }
+                        }
+                    }
+                }
+                Err(err) => {
+                    return Err(json::Error::InvalidField {
+                        field: "public_lane_stake_shares".to_owned(),
+                        message: format!("record {index} norito decode failed: {err}"),
+                    });
+                }
+            }
+        }
+        Ok(decoded)
     }
 
     fn decode_space_directory_manifest_sets(
@@ -34756,14 +35394,55 @@ pub(crate) mod deserialize {
         policies: &Storage<RamLfeProgramId, RamLfeProgramPolicy>,
     ) -> Result<(), json::Error> {
         for (program_id, policy) in policies.view().iter() {
-            crate::smartcontracts::isi::ram_lfe::validate_program_policy(policy).map_err(
-                |err| json::Error::InvalidField {
-                    field: format!("world.ram_lfe_program_policies.{program_id}"),
-                    message: err.to_string(),
-                },
-            )?;
+            match crate::smartcontracts::isi::ram_lfe::validate_program_policy(policy) {
+                Ok(()) => {}
+                Err(err) if hard_fork_snapshot_bootstrap_enabled() => {
+                    eprintln!(
+                        "snapshot hard-fork compatibility: preserving RAM-LFE program policy `{program_id}` despite legacy validation failure: {err}"
+                    );
+                }
+                Err(err) => {
+                    return Err(json::Error::InvalidField {
+                        field: format!("world.ram_lfe_program_policies.{program_id}"),
+                        message: err.to_string(),
+                    });
+                }
+            }
         }
         Ok(())
+    }
+
+    fn take_ram_lfe_program_policies(
+        map: &mut json::native::Map,
+    ) -> Result<Storage<RamLfeProgramId, RamLfeProgramPolicy>, json::Error> {
+        let Some(mut value) = map.remove("ram_lfe_program_policies") else {
+            return Ok(Storage::default());
+        };
+        if hard_fork_snapshot_bootstrap_enabled()
+            && let json::Value::Object(storage) = &mut value
+            && let Some(json::Value::Object(blocks)) = storage.get_mut("blocks")
+        {
+            let mut patched = 0_usize;
+            for policy in blocks.values_mut() {
+                if let json::Value::Object(policy_map) = policy
+                    && !policy_map.contains_key("output_opening_public_key")
+                    && let Some(resolver_public_key) =
+                        policy_map.get("resolver_public_key").cloned()
+                {
+                    policy_map.insert("output_opening_public_key".to_owned(), resolver_public_key);
+                    patched += 1;
+                }
+            }
+            if patched > 0 {
+                eprintln!(
+                    "snapshot hard-fork compatibility: filled `output_opening_public_key` from `resolver_public_key` for {patched} RAM-LFE program policies"
+                );
+            }
+        }
+        json::value::from_value(value).map_err(|err| json::Error::InvalidField {
+            field: "ram_lfe_program_policies".to_owned(),
+            message: err.to_string(),
+        })
     }
 
     fn take_optional_default_lossy<T>(
@@ -34805,6 +35484,31 @@ pub(crate) mod deserialize {
             }
             Err(err) => Err(err),
         }
+    }
+
+    fn take_optional_default_hard_fork_lossy<T>(
+        map: &mut json::native::Map,
+        key: &str,
+    ) -> Result<T, json::Error>
+    where
+        T: JsonDeserialize + Default,
+    {
+        map.remove(key).map_or_else(
+            || Ok(T::default()),
+            |value| match json::value::from_value(value) {
+                Ok(parsed) => Ok(parsed),
+                Err(err) if hard_fork_snapshot_bootstrap_enabled() => {
+                    eprintln!(
+                        "snapshot hard-fork compatibility: discarding persisted `{key}` value because it could not be decoded: {err}"
+                    );
+                    Ok(T::default())
+                }
+                Err(err) => Err(json::Error::InvalidField {
+                    field: key.to_owned(),
+                    message: err.to_string(),
+                }),
+            },
+        )
     }
 
     fn take_parameters_cell(
@@ -34882,7 +35586,7 @@ pub(crate) mod deserialize {
         let account_aliases_by_account =
             take_optional_default(&mut map, "account_aliases_by_account")?;
         let account_scope_directory = take_optional_default(&mut map, "account_scope_directory")?;
-        let ram_lfe_program_policies = take_optional_default(&mut map, "ram_lfe_program_policies")?;
+        let ram_lfe_program_policies = take_ram_lfe_program_policies(&mut map)?;
         validate_ram_lfe_program_policies(&ram_lfe_program_policies)?;
         let identifier_policies = take_optional_default(&mut map, "identifier_policies")?;
         let identifier_claims = take_optional_default(&mut map, "identifier_claims")?;
@@ -34939,7 +35643,7 @@ pub(crate) mod deserialize {
         let proofs = take_optional_default(&mut map, "proofs")?;
         let proof_tags = take_optional_default(&mut map, "proof_tags")?;
         let proofs_by_tag = take_optional_default(&mut map, "proofs_by_tag")?;
-        let commit_qcs = take_optional_default(&mut map, "commit_qcs")?;
+        let commit_qcs = take_optional_default_hard_fork_lossy(&mut map, "commit_qcs")?;
         let contract_manifests = take_optional_default(&mut map, "contract_manifests")?;
         let contract_code = take_optional_default(&mut map, "contract_code")?;
         let contract_instances = take_optional_default(&mut map, "contract_instances")?;
@@ -35024,8 +35728,7 @@ pub(crate) mod deserialize {
         let vrf_epochs = take_optional_default(&mut map, "vrf_epochs")?;
         let repo_agreements = take_optional_default(&mut map, "repo_agreements")?;
         let settlement_ledgers = take_optional_default(&mut map, "settlement_ledgers")?;
-        let offline_note_v2_replay_keys =
-            take_optional_default(&mut map, "offline_note_v2_replay_keys")?;
+        let offline_note_replay_keys = take_optional_default(&mut map, "offline_note_replay_keys")?;
         let lane_relay_emergency_validators =
             take_optional_default(&mut map, "lane_relay_emergency_validators")?;
         let manifest_aliases = take_optional_default(&mut map, "manifest_aliases")?;
@@ -35190,7 +35893,7 @@ pub(crate) mod deserialize {
             repo_agreements_by_counterparty: Storage::default(),
             repo_agreements_by_custodian: Storage::default(),
             settlement_ledgers,
-            offline_note_v2_replay_keys,
+            offline_note_replay_keys,
             domain_committees: Storage::default(),
             domain_endorsement_policies: Storage::default(),
             domain_endorsements: Storage::default(),
@@ -35426,6 +36129,8 @@ pub(crate) mod deserialize {
             query_handle,
             oracle: default_oracle(),
             pacing_governor: iroha_config::parameters::actual::SumeragiPacingGovernor::default(),
+            sumeragi_da_quorum_timeout_multiplier:
+                iroha_config::parameters::defaults::sumeragi::DA_QUORUM_TIMEOUT_MULTIPLIER,
             pipeline,
             pipeline_parallelism,
             soracloud_runtime: parking_lot::RwLock::new(None),
@@ -52111,6 +52816,120 @@ mod tests {
             eprintln!("after execute_called_trigger");
             stx.apply();
             state_block.commit().unwrap();
+        }
+    }
+
+    #[test]
+    fn execute_called_contract_call_trigger_uses_event_args_for_trigger_event() {
+        use iroha_data_model::{
+            events::execute_trigger::{ExecuteTriggerEvent, ExecuteTriggerEventFilter},
+            smart_contract::ContractAddress,
+            transaction::{Executable, executable::ContractInvocation},
+            trigger::{
+                Trigger,
+                action::{Action, Repeats},
+            },
+        };
+        use iroha_test_samples::ALICE_KEYPAIR;
+        use ivm::KotodamaCompiler;
+
+        use crate::smartcontracts::code::{
+            activate_instance, register_code_bytes, register_manifest,
+        };
+
+        let kura = Kura::blank_kura_for_testing();
+        let query_handle = LiveQueryStore::start_test();
+        let state = State::new(World::default(), kura, query_handle);
+
+        let src = r#"
+            seiyaku TriggerPayloadProbe {
+              kotoage fn native_by_call_settle() {
+                let ev = trigger_event();
+                let condition_code = ev.get_int(name("condition_code"));
+                assert(condition_code == 7, "condition_code mismatch");
+              }
+
+              register_trigger semantic_probe_decl {
+                call native_by_call_settle;
+                on execute trigger semantic_probe_decl;
+              }
+            }
+        "#;
+        let (code, mut manifest) = KotodamaCompiler::new()
+            .compile_source_with_manifest(src)
+            .expect("compile contract-call trigger probe");
+
+        let trigger_id: TriggerId = "contract_call_payload_probe".parse().unwrap();
+        let contract_address = ContractAddress::derive(
+            iroha_data_model::account::address::chain_discriminant(),
+            &ALICE_ID,
+            0,
+            DataSpaceId::UNIVERSAL,
+        )
+        .expect("derive contract address");
+
+        let block1 = new_dummy_block_with_payload(|header| {
+            header.set_height(NonZeroU64::new(1).unwrap());
+            header.creation_time_ms = 1;
+        });
+        {
+            let mut state_block = state.block(block1.as_ref().header());
+            let mut stx = state_block.transaction();
+
+            Register::domain(Domain::new(
+                DomainId::try_new("wonderland", "universal").unwrap(),
+            ))
+            .execute(&ALICE_ID, &mut stx)
+            .unwrap();
+            Register::account(new_sample_account(&ALICE_ID))
+                .execute(&ALICE_ID, &mut stx)
+                .unwrap();
+
+            let code_hash =
+                register_code_bytes(&ALICE_ID, code, &mut stx).expect("register contract bytecode");
+            manifest.code_hash = Some(code_hash);
+            let manifest = manifest.signed(&ALICE_KEYPAIR);
+            register_manifest(&ALICE_ID, manifest, &mut stx).expect("register contract manifest");
+            activate_instance(&ALICE_ID, contract_address.clone(), code_hash, &mut stx)
+                .expect("activate contract instance");
+
+            let trigger = Trigger::new(
+                trigger_id.clone(),
+                Action::new(
+                    Executable::ContractCall(ContractInvocation {
+                        contract_address: contract_address.clone(),
+                        entrypoint: "native_by_call_settle".to_owned(),
+                        payload: None,
+                    }),
+                    Repeats::Indefinitely,
+                    ALICE_ID.clone(),
+                    ExecuteTriggerEventFilter::new()
+                        .for_trigger(trigger_id.clone())
+                        .under_authority(ALICE_ID.clone()),
+                ),
+            );
+            Register::trigger(trigger)
+                .execute(&ALICE_ID, &mut stx)
+                .unwrap();
+
+            stx.apply();
+            state_block.commit().unwrap();
+        }
+
+        let block2 = new_dummy_block_with_payload(|header| {
+            header.set_height(NonZeroU64::new(2).unwrap());
+            header.creation_time_ms = 2;
+        });
+        {
+            let mut state_block = state.block(block2.as_ref().header());
+            let mut stx = state_block.transaction();
+            let event = ExecuteTriggerEvent {
+                trigger_id: trigger_id.clone(),
+                authority: ALICE_ID.clone(),
+                args: Json::from_string_unchecked(r#"{"condition_code":7}"#.to_owned()),
+            };
+            stx.execute_called_trigger(&trigger_id, &event)
+                .expect("contract-call trigger should read by-call args via trigger_event");
         }
     }
 

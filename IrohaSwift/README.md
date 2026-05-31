@@ -4,7 +4,7 @@ Swift SDK targeting Hyperledger Iroha v2 and Sora Nexus (Iroha v3) nodes on Appl
 
 Features:
 - Torii HTTP client (balances, transactions, explorer instructions/transactions/RWAs, subscriptions, VPN quote/session/receipt flows, pipeline recovery, time service, ZK attachments, prover reports, contracts)
-- Offline V2 note models, transaction builders, proof binding helpers, and readiness discovery through `/v1/offline/v2/readiness`
+- Offline note models, transaction builders, proof binding helpers, and readiness discovery through `/v1/offline/readiness`
 - Health & metrics helpers (fetch `/v1/health` text probe and `/v1/metrics` Prometheus/JSON payloads)
 - Norito envelope encoder (header + CRC64-XZ)
 - Required Native NoritoBridge integration (`dist/NoritoBridge.xcframework`) powering transfer/mint/burn builders and JSON inspection helpers
@@ -559,10 +559,10 @@ if #available(iOS 15, macOS 12, *) {
 }
 ```
 
-Offline V2 note issuance starts with the Torii issuer flow, where wallets supply
-their own canonical note commitment to `/v1/offline/v2/notes/issue`.
+Offline note issuance starts with the Torii issuer flow, where wallets supply
+their own canonical note commitment to `/v1/offline/notes/issue`.
 Redemption and audit payloads are submitted as direct transaction instructions.
-The Swift SDK no longer publishes non-V2 offline HTTP helpers.
+The Swift SDK no longer publishes legacy offline HTTP helpers.
 
 ### Offline transaction queue
 
@@ -582,48 +582,81 @@ operators can archive or inspect them later. When Torii rejects a replayed trans
 SDK surfaces `IrohaSDKError.toriiRejected` and leaves the remaining entries untouched so
 apps can decide how to remediate.
 
-### Offline V2 APIs
+### Offline APIs
 
-Torii exposes `/v1/offline/v2/readiness` for offline HTTP discovery and keeps
+Torii exposes `/v1/offline/readiness` for offline HTTP discovery and keeps
 the issuer POST flow for key refill plus note issuance. Wallets derive note
 commitments locally and pass the bare 64-character commitment hex to
-`/v1/offline/v2/notes/issue`; Torii returns settlement lineage metadata without
+`/v1/offline/notes/issue`; Torii returns settlement lineage metadata without
 deriving the note commitment from `settlement.entry_hash`. Redemption and audit
-payloads are submitted as direct transaction instructions; the legacy non-V2
+payloads are submitted as direct transaction instructions; the legacy legacy
 offline HTTP routes are no longer published.
-Swift exposes `OfflineNoteIssueV2`, `OfflineNoteRedeemV2`, and `OfflineNoteAuditBundleV2`
-models plus `buildIssueOfflineNoteV2`, `buildRedeemOfflineNoteV2`, and
-`buildAuditOfflineNoteV2` transaction builders on `IrohaSDK`. Redeem and audit builders verify
-that the recursive proof's public-input hash matches the canonical Swift/Rust Norito payload
-before signing, so callers pass real prover output instead of mock-proof placeholders.
-`OfflineNoteV2Wallet` adds the app-facing one-call flow for load, receive
+Swift exposes `OfflineNoteIssue`, `OfflineNoteRedeem`, and `OfflineNoteAuditBundle`
+models plus `buildIssueOfflineNote`, `buildRedeemOfflineNote`,
+`buildAuditOfflineNote`, and `buildDefundOfflineNote` transaction builders on
+`IrohaSDK`. Redeem and audit builders verify that the recursive proof's public-input hash
+matches the canonical Swift/Rust Norito payload before signing, so callers pass prover output
+that is bound to the exact public inputs being submitted.
+
+`buildRedeemOfflineNote` signs a single redeem instruction. It is only appropriate when the
+source note's issued claim is already recorded on-chain, such as issuer-loaded notes or outputs
+whose audit lineage has already been published. P2P offline cash is a bearer transfer: the
+recipient must not require the note to have been pre-issued on-chain before accepting or
+redeeming it. For bearer defunding, use `DefundOfflineNoteRequest` through
+`buildDefundOfflineNote` or `submit(defundOfflineNote:...)`; it puts the ordered
+`bearerAuditTrail` audits before the final `RedeemOfflineNote` instruction in the same signed
+transaction, so the output claim is anchored and redeemed atomically.
+
+`OfflineNoteWallet` adds the app-facing one-call flow for load, receive
 request preparation, P2P pay, accept, optional audit publication, redeem
 submission, and sync. Offline-to-offline pay/accept is local-final and
 irrevocable: the sender immediately records spent inputs and spendable change,
 while the recipient marks the matched pending output spendable after local
 token and proof verification. No online sync is required for the value transfer.
-`publishAudit` is a separate online evidence-submission step and does not change
+Payment tokens carry the bearer audit trail needed to defund received notes; accepted P2P notes
+persist that trail locally, and wallet `redeem(_:)` submits an atomic defund instead of a naked
+redeem. `publishAudit` is a separate online evidence-submission step and does not change
 wallet note spendability. The first release surface is dependency-injected:
 apps provide Torii canonical auth, device binding, attestation, proof
 generation/verification, transaction submission, and persistent storage.
 `sync()` can also use an app-provided transaction-outcome resolver to finalize
 redeem-pending note records after redeem finality. The SDK includes an in-memory store, a
-`ToriiOfflineNoteV2IssuerClient` for body-signed key-refill plus note-issue
-loads, and a direct `IrohaSDK` audit/redeem submitter.
-`OfflineNoteV2TransferHandoff` wraps the canonical payment token into app-facing
+`ToriiOfflineNoteIssuerClient` for body-signed key-refill plus note-issue
+loads, and a direct `IrohaSDK` audit/redeem/defund submitter.
+`KagemushaCompactPaymentTokenProver` exposes the native record-backed compact
+token prover for shielded offline-offline payments. Pass a Norito-encoded
+`KagemushaVerifiedFoldRecordBundle`; the bridge verifies each private hop proof
+against its verifier record and returns a Norito-encoded
+`KagemushaCompactPaymentToken` when an ABI 4 `NoritoBridge` is available.
+
+`OfflineBearerCashWallet` is the app-facing Offline Bearer Cash surface. It is
+the Offline Note wallet under the cash naming layer, so value is represented by
+note commitments, note secrets, nullifiers, audit lineage, and issuer-signed
+hardware key certificates instead of a separate mutable purse protocol.
+
+`OfflineNoteTransferHandoff` wraps the canonical payment token into app-facing
 transfer modalities. Use `qrStreamingFrameBytes(for:)` for animated/binary QR
 flows, `nfcFrameBytes(for:)` for APDU-sized NFC frame exchange, and
 `nearbyPayload(for:)` or `nearbyFrameBytes(for:)` for MultipeerConnectivity or
-other nearby byte channels. `OfflineNoteV2TransferStreamReceiver` reconstructs
-stream frames back into a payment token, and `OfflineNoteV2TransferCapabilities`
+other nearby byte channels. `OfflineNoteTransferStreamReceiver` reconstructs
+stream frames back into a payment token, and `OfflineNoteTransferCapabilities`
 keeps NFC disabled on iOS unless the app explicitly opts in after confirming an
 allowed Core NFC HCE/CardSession use case and entitlement. Apps that want the
-png2-style NFC handoff can use `OfflineNoteV2NfcApduProtocol` directly: select
+png2-style NFC handoff can use `OfflineNoteNfcApduProtocol` directly: select
 the Iroha AID, read/write the 40-byte metadata header, transfer chunks, then
 commit and poll/read a local `receiptAck` payload. The default write helper
 `nfcPaymentTokenWriteAPDUs(for:)` uses Android-safe 240-byte chunks because many
 Android NFC stacks cannot reliably carry larger APDUs; iOS-to-iOS integrations
 can opt into the extended helpers only after both peers advertise support.
+`IrohaSwiftMobileTransports` adds an optional iOS CoreNFC implementation around
+that same APDU protocol. Configure `IrohaOfflineNfcConfiguration` with the app's
+AID, keep `cardSessionRuntimeEnabled` false unless the build has an allowed HCE
+entitlement/profile, and use `IrohaOfflineNfcReaderService` plus
+`IrohaOfflineNfcCardSessionController` for sender/receiver flows. The module
+logs only state, counts, status words, and sanitized error codes. `IrohaSwiftTransferUI`
+contains reusable SwiftUI QR/NFC/Nearby widgets and the QR fountain frame
+cycler used by wallet apps that want the png2-style transfer surface without
+copying transport logic.
 The app-facing receiver rejects completed streams whose QR envelope kind is not
 a payment token, and direct payload decoding enforces the payment-token content
 type before Norito decode. The QR stream decoder also rejects non-canonical
@@ -636,12 +669,12 @@ lengths; no-offset APDUs also reject smuggled nonzero P1/P2 bytes. Nearby
 decoding rejects fractional versions, unknown fields inside legacy
 pairing-challenge objects, and challenge/receipt ACK content-type downgrades
 instead of ignoring smuggled JSON.
-`OfflineNoteV2NearbyEnvelope` provides the matching sorted-key JSON envelope
+`OfflineNoteNearbyEnvelope` provides the matching sorted-key JSON envelope
 with unpadded base64url payloads, the pairing-image challenge used before
 sending a payment token, and the local receipt ACK returned by the receiver.
 None of these local transports require online sync for offline-to-offline value
 transfer.
-`OfflineNoteV2KeychainStore` writes wallet state through revisioned
+`OfflineNoteKeychainStore` writes wallet state through revisioned
 ThisDeviceOnly Keychain records and deletes the previous revision after each
 commit, so app-container rollback cannot revive an earlier note set without the
 deleted revision item. Legacy `spendPending` records decode as `spent`, and
@@ -652,10 +685,10 @@ source note commitment, nullifiers, certified key payload, recipient, asset, and
 previously issued note claim before escrowed value is released. Optional audit bundles bind their
 token id, observed nullifiers, output commitments, and certified key payload to the proof, and the
 certified key must have been issued on-ledger first.
-Recursive proofs must name an active `offline_note_v2` verifier key in WSV, carry an
-`OpenVerifyEnvelope`, match `offline_note_v2_recursive_public_inputs_schema_hash()`, and expose the
-semantic Offline V2 instance columns advertised by `/v1/offline/v2/readiness`. The readiness
-payload includes the canonical `halo2/ipa` verifier key id for `offline-note-v2-recursive-v1`;
+Recursive proofs must name an active `offline_note` verifier key in WSV, carry an
+`OpenVerifyEnvelope`, match `offline_note_recursive_public_inputs_schema_hash()`, and expose the
+semantic Offline instance columns advertised by `/v1/offline/readiness`. The readiness
+payload includes the canonical `halo2/ipa` verifier key id for `offline-note-recursive`;
 wallets should submit only real prover output for that verifier.
 
 Submission retries can be tuned with `PipelineSubmitOptions` (default: 3 retries, 0.5s
@@ -1130,9 +1163,14 @@ directory, mirrors the contents into `IrohaSwift/Fixtures`, and records the arch
 path, digest, and `source_kind=archive` in `artifacts/swift_fixture_regen_state.json`
 so CI cadence checks and dashboards continue to track ownership.
 
-### Connect (WalletConnect-style relay, scaffold)
+### Connect (WalletConnect-style relay)
 
-The SDK ships an early `ConnectClient` wrapper that manages the raw WebSocket session. Frame encoding/decoding flows through `ConnectCodec`, which now requires the Norito bridge (throws `ConnectCodecError.bridgeUnavailable` when the XCFramework is absent). Use `ConnectCrypto` to generate Connect X25519 key pairs and derive directional session keys from the bridge:
+The SDK ships `ConnectClient` and `ConnectSession` helpers for WebSocket
+session management, typed frame exchange, and encrypted envelope handling.
+Frame encoding/decoding flows through `ConnectCodec`, which requires the Norito
+bridge (throws `ConnectCodecError.bridgeUnavailable` when the XCFramework is
+absent). Use `ConnectCrypto` to generate Connect X25519 key pairs and derive
+directional session keys from the bridge:
 
 ```swift
 let connectURL = URL(string: "wss://node.example/v1/connect/ws?sid=\(sid)&role=app")!

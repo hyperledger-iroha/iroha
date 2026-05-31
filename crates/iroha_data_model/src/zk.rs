@@ -63,7 +63,11 @@ pub struct OpenVerifyEnvelope {
     pub backend: BackendTag,
     /// Circuit identifier string (backend-specific; opaque to host).
     pub circuit_id: String,
-    /// Domain-separated verifying-key hash if known; all zeros if inline.
+    /// Domain-separated verifying-key hash.
+    ///
+    /// Generic codecs may still represent an unavailable key binding as all
+    /// zeros, but chain admission for registered proof attachments requires an
+    /// exact match with the active verifier-key commitment.
     #[cfg_attr(feature = "json", norito(with = "crate::json_helpers::fixed_bytes"))]
     pub vk_hash: [u8; 32],
     /// Public-input metadata bytes (opaque; backend-specific canonical encoding).
@@ -75,6 +79,9 @@ pub struct OpenVerifyEnvelope {
     /// Proof bytes (opaque, backend-specific canonical encoding).
     pub proof_bytes: Vec<u8>,
     /// Opaque aux map encoded as JSON bytes (for small structured extras).
+    ///
+    /// Production chain proof-admission paths require this to be empty unless a
+    /// future instruction explicitly defines and validates auxiliary semantics.
     pub aux: Vec<u8>,
 }
 

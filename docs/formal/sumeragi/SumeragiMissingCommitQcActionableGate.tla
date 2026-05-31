@@ -312,11 +312,14 @@ Init ==
   checked = 0
 
 Next ==
-  UNCHANGED vars
+  \/ /\ checked < 25
+     /\ checked' = checked + 1
+  \/ /\ checked = 25
+     /\ UNCHANGED vars
 
 TypeInvariant ==
   /\ Bug \in Bugs
-  /\ checked = 0
+  /\ checked \in 0..25
   /\ \A c \in Cases:
        /\ (c \in ActionableCases => SpecActionable(c) \in BOOLEAN)
        /\ (c \in ActionableCases => ActualActionable(c) \in BOOLEAN)
@@ -385,5 +388,62 @@ SafetyFast ==
   /\ NonActionableDependenciesRejected
   /\ SubjectHeightMappingPreserved
   /\ LocalPayloadPreserveRequiresExactCommitOwnerSlot
+
+SpecComparisonAnchors ==
+  /\ ActionableMatchesSpec
+  /\ PreserveMatchesSpec
+  /\ SubjectHeightMatchesSpec
+
+PayloadActionableAnchors ==
+  /\ PayloadRequiredForActionableRepair
+  /\ ActualActionable(PendingPayloadOk)
+  /\ ActualActionable(LocalPayloadOk)
+  /\ ActualActionable(BothPayloadSourcesOk)
+  /\ ~ActualActionable(PendingPayloadWrongHeight)
+  /\ ~ActualActionable(PendingPayloadWrongView)
+  /\ ~ActualActionable(LocalPayloadWrongHeight)
+  /\ ~ActualActionable(LocalPayloadWrongView)
+  /\ ~ActualActionable(NoPayload)
+
+RejectedRepairAnchors ==
+  /\ CachedQcAndSupersededRepairRejected
+  /\ NonActionableDependenciesRejected
+  /\ ~ActualActionable(CachedCommitQc)
+  /\ ~ActualActionable(HigherNewViewQuorum)
+  /\ ActualActionable(HigherNewViewWrongHeight)
+  /\ ActualActionable(HigherNewViewEqualView)
+  /\ ~ActualActionable(NonActionableObsoleteCommit)
+  /\ ~ActualActionable(NonActionableSupersededOwner)
+  /\ ~ActualActionable(NonActionableLockRejected)
+
+SubjectHeightAnchors ==
+  /\ SubjectHeightMappingPreserved
+  /\ ActualSubjectHeight(NewViewParentObsolete) = CommittedHeight
+  /\ ActualSubjectHeight(PrepareSameHeightNotParent) = CommittedFrontierHeight
+  /\ ActualSubjectHeight(NewViewZeroSaturates) = 0
+  /\ ~ActualActionable(NewViewParentObsolete)
+  /\ ActualActionable(PrepareSameHeightNotParent)
+
+LocalPayloadPreserveAnchors ==
+  /\ LocalPayloadPreserveRequiresExactCommitOwnerSlot
+  /\ ActualPreserve(PreserveAuthoritativeOwner)
+  /\ ActualPreserve(PreserveFrontierOwner)
+  /\ ActualPreserve(PreserveBothOwners)
+  /\ ~ActualPreserve(PreserveNonCommitPhase)
+  /\ ~ActualPreserve(PreserveCachedQc)
+  /\ ~ActualPreserve(PreserveWrongOwner)
+  /\ ~ActualPreserve(PreserveLocalWrongHeight)
+  /\ ~ActualPreserve(PreserveLocalWrongView)
+  /\ ~ActualPreserve(PreserveNoLocalPayload)
+
+MissingCommitQcActionableSafetyAnchors ==
+  /\ SpecComparisonAnchors
+  /\ PayloadActionableAnchors
+  /\ RejectedRepairAnchors
+  /\ SubjectHeightAnchors
+  /\ LocalPayloadPreserveAnchors
+
+Safety ==
+  MissingCommitQcActionableSafetyAnchors
 
 ====

@@ -176,8 +176,8 @@ test("submitTransactionEntrypoint waits for a terminal status", async () => {
     submitted.push(Buffer.from(payload));
     return { accepted: true };
   };
-  client.getTransactionStatus = async (hashHex) => {
-    polled.push(hashHex);
+  client.getTransactionStatus = async (hashHex, options = {}) => {
+    polled.push({ hashHex, options });
     return { status: polled.length > 1 ? "Committed" : "Pending" };
   };
 
@@ -193,7 +193,119 @@ test("submitTransactionEntrypoint waits for a terminal status", async () => {
   );
 
   assert.deepEqual(Array.from(submitted[0]), [9, 8, 7]);
-  assert.equal(polled[0], "ab".repeat(32));
+  assert.equal(polled[0].hashHex, "ab".repeat(32));
+  assert.equal(polled[0].options.scope, undefined);
   assert.equal(result.hash, "ab".repeat(32));
   assert.equal(result.status.status, "Committed");
 });
+
+test("submitTransactionEntrypoint inherits client transaction status scope", async () => {
+  const seenUrls = [];
+  const hashHex = "ac".repeat(32);
+  const client = new ToriiClient("https://example.test", {
+    transactionStatusScope: "local",
+    fetchImpl: async (url) => {
+      seenUrls.push(url);
+      return createResponse({
+        status: 200,
+        jsonData: { status: "Committed" },
+        headers: { "content-type": "application/json" },
+      });
+    },
+  });
+  client.submitTransaction = async () => ({ accepted: true });
+
+  await submitTransactionEntrypoint(client, Buffer.from([1]), {
+    hashHex,
+    waitForCommit: true,
+    pollIntervalMs: 0,
+    timeoutMs: 100,
+  });
+
+  assert.deepEqual(seenUrls, [
+    `https://example.test/v1/pipeline/transactions/status?hash=${hashHex}&scope=local`,
+  ]);
+});
+
+test("submitTransactionEntrypoint explicit scope overrides client configuration", async () => {
+  const seenUrls = [];
+  const hashHex = "ad".repeat(32);
+  const client = new ToriiClient("https://example.test", {
+    transactionStatusScope: "local",
+    fetchImpl: async (url) => {
+      seenUrls.push(url);
+      return createResponse({
+        status: 200,
+        jsonData: { status: "Committed" },
+        headers: { "content-type": "application/json" },
+      });
+    },
+  });
+  client.submitTransaction = async () => ({ accepted: true });
+
+  await submitTransactionEntrypoint(client, Buffer.from([1]), {
+    hashHex,
+    waitForCommit: true,
+    pollIntervalMs: 0,
+    timeoutMs: 100,
+    scope: "global",
+  });
+
+  assert.deepEqual(seenUrls, [
+    `https://example.test/v1/pipeline/transactions/status?hash=${hashHex}&scope=global`,
+  ]);
+});
+
+test("submitTransactionEntrypoint null scope inherits client configuration", async () => {
+  const seenUrls = [];
+  const hashHex = "ae".repeat(32);
+  const client = new ToriiClient("https://example.test", {
+    transactionStatusScope: "auto",
+    fetchImpl: async (url) => {
+      seenUrls.push(url);
+      return createResponse({
+        status: 200,
+        jsonData: { status: "Committed" },
+        headers: { "content-type": "application/json" },
+      });
+    },
+  });
+  client.submitTransaction = async () => ({ accepted: true });
+
+  await submitTransactionEntrypoint(client, Buffer.from([1]), {
+    hashHex,
+    waitForCommit: true,
+    pollIntervalMs: 0,
+    timeoutMs: 100,
+    scope: null,
+  });
+
+  assert.deepEqual(seenUrls, [
+    `https://example.test/v1/pipeline/transactions/status?hash=${hashHex}&scope=auto`,
+  ]);
+});
+
+function createResponse({ status, jsonData = {}, textBody, headers }) {
+  return {
+    status,
+    json: async () => jsonData,
+    arrayBuffer: async () =>
+      new TextEncoder().encode(textBody ?? JSON.stringify(jsonData ?? {})).buffer,
+    text: async () =>
+      typeof textBody === "string" ? textBody : JSON.stringify(jsonData ?? {}),
+    headers: {
+      get(name) {
+        if (!headers) {
+          return null;
+        }
+        const normalized = name.toLowerCase();
+        for (const [key, value] of Object.entries(headers)) {
+          if (key.toLowerCase() === normalized) {
+            return value;
+          }
+        }
+        return null;
+      },
+    },
+  };
+}

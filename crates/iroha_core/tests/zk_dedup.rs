@@ -24,7 +24,7 @@ fn dedup_allows_same_proof_with_different_commitments() {
     let mut block = state.block(header);
     let mut stx = block.transaction();
 
-    let proof = ProofBox::new("halo2/ipa".into(), vec![1, 2, 3, 4]);
+    let proof = ProofBox::new("preverify/test".into(), vec![1, 2, 3, 4]);
 
     // No commitment: first pass accepted, second duplicate
     let r1 = stx.preverify_proof(&proof, None, 100_000, None, None, true);

@@ -37,7 +37,7 @@ use iroha_primitives::json::Json;
 use norito::json::{self, native::Number as JsonNumber};
 
 use super::ast::*;
-use crate::builtins::Builtin;
+use crate::builtins::{Builtin, PointerConstructor};
 
 /// First-release dynamic state-map iteration limit.
 ///
@@ -107,6 +107,10 @@ pub enum Type {
     AssetHandle,
     /// Proof material supplied by dataspace verifiers.
     ProofBlob,
+    /// Soracloud host request envelope pointer.
+    SoracloudRequest,
+    /// Soracloud host response envelope pointer.
+    SoracloudResponse,
     AccountId,
     AssetDefinitionId,
     AssetId,
@@ -202,12 +206,16 @@ thread_local! {
     static FUNCTION_PARAMS: RefCell<HashMap<String, Vec<TypedParam>>> = RefCell::new(HashMap::new());
     static FUNCTION_SUMMARY: RefCell<HashMap<String, FunctionSummary>> = RefCell::new(HashMap::new());
     static CURRENT_FUNCTION_MODIFIERS: RefCell<Option<FunctionModifiers>> = const { RefCell::new(None) };
+    static CURRENT_FUNCTION_NAME: RefCell<Option<String>> = const { RefCell::new(None) };
+    static TRIGGER_CALLBACK_FUNCTIONS: RefCell<HashSet<String>> = RefCell::new(HashSet::new());
     static CURRENT_STATE_PARAM_NAMES: RefCell<HashSet<String>> = RefCell::new(HashSet::new());
 }
 
 const SENSITIVE_SYSCALLS: &[&str] = &[
+    "add_signatory",
+    "remove_signatory",
+    "set_account_quorum",
     "set_account_detail",
-    "transfer_asset",
     "escrow_open_offer",
     "escrow_accept",
     "escrow_mark_payment_sent",
@@ -215,8 +223,26 @@ const SENSITIVE_SYSCALLS: &[&str] = &[
     "escrow_cancel",
     "escrow_open_dispute",
     "escrow_resolve_dispute",
+    "anonymous_escrow_open_offer",
+    "anonymous_escrow_accept",
+    "anonymous_escrow_mark_payment_sent",
+    "anonymous_escrow_release",
+    "anonymous_escrow_cancel",
+    "anonymous_escrow_open_dispute",
+    "anonymous_escrow_resolve_dispute",
+    "soracloud_read_committed_state",
+    "soracloud_emit_state_mutation",
+    "soracloud_emit_mailbox_message",
+    "soracloud_append_journal",
+    "soracloud_publish_checkpoint",
+    "soracloud_read_secret",
+    "soracloud_read_credential",
+    "soracloud_egress_fetch",
+    "soracloud_read_config",
+    "soracloud_read_secret_envelope",
     "transfer_v1_batch_begin",
     "transfer_v1_batch_end",
+    "transfer_v1_batch_apply",
     "mint_asset",
     "burn_asset",
     "register_asset",
@@ -237,6 +263,11 @@ const SENSITIVE_SYSCALLS: &[&str] = &[
     "remove_trigger",
     "unregister_trigger",
     "set_trigger_enabled",
+    "deactivate_contract_instance",
+    "remove_smart_contract_bytes",
+    "register_smart_contract_code",
+    "register_smart_contract_bytes",
+    "activate_contract_instance",
     "grant_permission",
     "revoke_permission",
     "create_role",
@@ -252,7 +283,12 @@ const INSTRUCTION_EMITTING_BUILTINS: &[&str] = &[
     "call_contract",
 ];
 
-const HOST_SIDE_EFFECT_BUILTINS: &[&str] = &["subscription_bill", "subscription_record_usage"];
+const HOST_SIDE_EFFECT_BUILTINS: &[&str] = &[
+    "subscription_bill",
+    "subscription_record_usage",
+    "use_nullifier",
+    "commit_output",
+];
 
 pub fn analyze(program: &Program) -> Result<TypedProgram, SemanticError> {
     // Collect struct definitions up front and publish to thread-local env for this analysis pass.
@@ -261,13 +297,18 @@ pub fn analyze(program: &Program) -> Result<TypedProgram, SemanticError> {
     let mut const_decls: Vec<ConstDecl> = Vec::new();
     let mut fn_returns: HashMap<String, Type> = HashMap::new();
     let mut fn_modifiers: HashMap<String, FunctionModifiers> = HashMap::new();
+    let mut trigger_callbacks: HashSet<String> = HashSet::new();
     let mut kotoba_entries: Vec<KotobaEntry> = Vec::new();
     FUNCTION_SUMMARY.with(|map| map.borrow_mut().clear());
     CONST_ENV.with(|env| env.borrow_mut().clear());
     FUNCTION_MODIFIERS.with(|env| env.borrow_mut().clear());
     FUNCTION_PARAMS.with(|env| env.borrow_mut().clear());
+    TRIGGER_CALLBACK_FUNCTIONS.with(|callbacks| callbacks.borrow_mut().clear());
     CURRENT_FUNCTION_MODIFIERS.with(|mods| {
         mods.borrow_mut().take();
+    });
+    CURRENT_FUNCTION_NAME.with(|name| {
+        name.borrow_mut().take();
     });
     CURRENT_STATE_PARAM_NAMES.with(|env| env.borrow_mut().clear());
     for item in &program.items {
@@ -294,7 +335,9 @@ pub fn analyze(program: &Program) -> Result<TypedProgram, SemanticError> {
                 fn_returns.insert(f.name.clone(), ret);
                 fn_modifiers.insert(f.name.clone(), f.modifiers.clone());
             }
-            Item::Trigger(_) => {}
+            Item::Trigger(trigger) => {
+                trigger_callbacks.insert(trigger.call.entrypoint.clone());
+            }
             Item::Kotoba(block) => {
                 kotoba_entries.extend(block.entries.clone());
             }
@@ -323,6 +366,7 @@ pub fn analyze(program: &Program) -> Result<TypedProgram, SemanticError> {
     STATE_ENV.with(|env| env.replace(resolved_state));
     FUNCTION_RETURNS.with(|env| env.replace(fn_returns));
     FUNCTION_MODIFIERS.with(|env| env.replace(fn_modifiers.clone()));
+    TRIGGER_CALLBACK_FUNCTIONS.with(|callbacks| callbacks.replace(trigger_callbacks));
     let mut fn_params: HashMap<String, Vec<TypedParam>> = HashMap::new();
     for item in &program.items {
         let Item::Function(f) = item else { continue };
@@ -447,6 +491,8 @@ fn type_name(ty: &Type) -> String {
         Type::AxtDescriptor => "AxtDescriptor".into(),
         Type::AssetHandle => "AssetHandle".into(),
         Type::ProofBlob => "ProofBlob".into(),
+        Type::SoracloudRequest => "SoracloudRequest".into(),
+        Type::SoracloudResponse => "SoracloudResponse".into(),
         Type::AccountId => "AccountId".into(),
         Type::AssetDefinitionId => "AssetDefinitionId".into(),
         Type::AssetId => "AssetId".into(),
@@ -1562,6 +1608,41 @@ pub(crate) fn is_blob_like(ty: &Type) -> bool {
     matches!(resolve_struct_type(ty), Type::Blob | Type::Bytes)
 }
 
+fn pointer_constructor_type(constructor: PointerConstructor) -> Type {
+    match constructor {
+        PointerConstructor::AccountId => Type::AccountId,
+        PointerConstructor::AssetDefinition => Type::AssetDefinitionId,
+        PointerConstructor::AssetId => Type::AssetId,
+        PointerConstructor::NftId => Type::NftId,
+        PointerConstructor::Domain | PointerConstructor::DomainId => Type::DomainId,
+        PointerConstructor::Name => Type::Name,
+        PointerConstructor::Json => Type::Json,
+        PointerConstructor::Blob | PointerConstructor::NoritoBytes => Type::Bytes,
+        PointerConstructor::DataSpaceId => Type::DataSpaceId,
+        PointerConstructor::AxtDescriptor => Type::AxtDescriptor,
+        PointerConstructor::AssetHandle => Type::AssetHandle,
+        PointerConstructor::ProofBlob => Type::ProofBlob,
+        PointerConstructor::SoracloudRequest => Type::SoracloudRequest,
+        PointerConstructor::SoracloudResponse => Type::SoracloudResponse,
+    }
+}
+
+fn pointer_constructor_expected_description(constructor: PointerConstructor) -> &'static str {
+    match constructor {
+        PointerConstructor::Json => "string, Json, or Blob (NoritoBytes)",
+        PointerConstructor::Name => "string, Name, or Blob (NoritoBytes)",
+        PointerConstructor::Blob | PointerConstructor::NoritoBytes => "string or Blob|bytes",
+        PointerConstructor::DataSpaceId => "string, DataSpaceId, or Blob|bytes (NoritoBytes)",
+        PointerConstructor::SoracloudRequest => {
+            "string, SoracloudRequest, or Blob|bytes (NoritoBytes)"
+        }
+        PointerConstructor::SoracloudResponse => {
+            "string, SoracloudResponse, or Blob|bytes (NoritoBytes)"
+        }
+        _ => "string, matching pointer type, or Blob|bytes (NoritoBytes)",
+    }
+}
+
 fn is_eq_comparable_type(ty: &Type) -> bool {
     match resolve_struct_type(ty) {
         ty if is_numeric_type(&ty) => true,
@@ -1584,6 +1665,8 @@ pub fn is_pointer_type(ty: &Type) -> bool {
             | Type::AxtDescriptor
             | Type::AssetHandle
             | Type::ProofBlob
+            | Type::SoracloudRequest
+            | Type::SoracloudResponse
     )
 }
 
@@ -1756,11 +1839,16 @@ fn analyze_function(func: &Function) -> Result<TypedFunction, SemanticError> {
     let expected_ret = parse_declared_type(&func.ret_ty)?;
     let previous_modifiers =
         CURRENT_FUNCTION_MODIFIERS.with(|mods| mods.borrow_mut().replace(func.modifiers.clone()));
+    let previous_name =
+        CURRENT_FUNCTION_NAME.with(|name| name.borrow_mut().replace(func.name.clone()));
     let previous_state_params = CURRENT_STATE_PARAM_NAMES
         .with(|env| std::mem::replace(&mut *env.borrow_mut(), state_param_names.clone()));
     let body_result = analyze_block(&func.body, &mut vars, expected_ret.as_ref(), 0);
     CURRENT_FUNCTION_MODIFIERS.with(|mods| {
         *mods.borrow_mut() = previous_modifiers;
+    });
+    CURRENT_FUNCTION_NAME.with(|name| {
+        *name.borrow_mut() = previous_name;
     });
     CURRENT_STATE_PARAM_NAMES.with(|env| {
         *env.borrow_mut() = previous_state_params;
@@ -1806,8 +1894,11 @@ fn analyze_function(func: &Function) -> Result<TypedFunction, SemanticError> {
 fn reject_public_payload_helper(name: &str) -> Result<(), SemanticError> {
     let forbidden = CURRENT_FUNCTION_MODIFIERS.with(|mods| {
         mods.borrow().as_ref().is_some_and(|modifiers| {
+            if modifiers.kind == FunctionKind::View {
+                return true;
+            }
             modifiers.visibility == FunctionVisibility::Public
-                || modifiers.kind == FunctionKind::View
+                && !current_public_trigger_callback_allows_payload_helper()
         })
     });
     if forbidden {
@@ -1818,6 +1909,14 @@ fn reject_public_payload_helper(name: &str) -> Result<(), SemanticError> {
         });
     }
     Ok(())
+}
+
+fn current_public_trigger_callback_allows_payload_helper() -> bool {
+    let current = CURRENT_FUNCTION_NAME.with(|name| name.borrow().clone());
+    let Some(current) = current else {
+        return false;
+    };
+    TRIGGER_CALLBACK_FUNCTIONS.with(|callbacks| callbacks.borrow().contains(&current))
 }
 
 fn current_function_is_test() -> bool {
@@ -2977,11 +3076,71 @@ fn analyze_statement(
     }
 }
 
+fn query_helper_accepts_arg(builtin: Builtin, ty: &Type) -> bool {
+    match builtin {
+        Builtin::QueryExecuteNorito
+        | Builtin::QueryGetContractManifest
+        | Builtin::ZkRootsGet
+        | Builtin::ZkVoteGetTally
+        | Builtin::VrfEpochSeed => is_blob_like(ty),
+        Builtin::QueryGetAccount => matches!(ty, Type::AccountId) || is_blob_like(ty),
+        Builtin::QueryGetAsset => matches!(ty, Type::AssetId) || is_blob_like(ty),
+        Builtin::QueryGetAssetDefinition => {
+            matches!(ty, Type::AssetDefinitionId) || is_blob_like(ty)
+        }
+        Builtin::QueryGetDomain => matches!(ty, Type::DomainId) || is_blob_like(ty),
+        Builtin::QueryGetNft => matches!(ty, Type::NftId) || is_blob_like(ty),
+        Builtin::QueryGetParameter => matches!(ty, Type::Name) || is_blob_like(ty),
+        Builtin::QueryGetContractInstance => matches!(ty, Type::Name) || is_blob_like(ty),
+        _ => false,
+    }
+}
+
+fn direct_json_getter_type(builtin: Builtin) -> Option<Type> {
+    Some(match builtin {
+        Builtin::JsonGetIntDirect => Type::Int,
+        Builtin::JsonGetNumericDirect => Type::Amount,
+        Builtin::JsonGetJsonDirect => Type::Json,
+        Builtin::JsonGetNameDirect => Type::Name,
+        Builtin::JsonGetAccountIdDirect => Type::AccountId,
+        Builtin::JsonGetAssetDefinitionIdDirect => Type::AssetDefinitionId,
+        Builtin::JsonGetNftIdDirect => Type::NftId,
+        Builtin::JsonGetBlobHexDirect => Type::Bytes,
+        _ => return None,
+    })
+}
+
 fn analyze_surface_builtin_call(
     builtin: Builtin,
     mut arg_typed: Vec<TypedExpr>,
 ) -> Result<TypedExpr, SemanticError> {
     match builtin {
+        Builtin::PointerConstructor(constructor) => {
+            let name = constructor.name();
+            if arg_typed.len() != 1 {
+                return Err(SemanticError {
+                    message: format!("{name} expects one argument"),
+                });
+            }
+            let arg_ty = resolve_struct_type(&arg_typed[0].ty);
+            let ty = pointer_constructor_type(constructor);
+            let ok = matches!(arg_ty, Type::String) || arg_ty == ty || is_blob_like(&arg_ty);
+            if !ok {
+                return Err(SemanticError {
+                    message: format!(
+                        "{name} expects {}",
+                        pointer_constructor_expected_description(constructor)
+                    ),
+                });
+            }
+            Ok(TypedExpr {
+                expr: ExprKind::Call {
+                    name: name.to_string(),
+                    args: arg_typed,
+                },
+                ty,
+            })
+        }
         Builtin::GetOrDefault => {
             if arg_typed.len() != 3 {
                 return Err(SemanticError {
@@ -3285,6 +3444,1398 @@ fn analyze_surface_builtin_call(
                 ty: Type::Unit,
             })
         }
+        Builtin::StateKeys => {
+            if arg_typed.len() != 3
+                || arg_typed[0].ty != Type::Name
+                || !is_int_like(&arg_typed[1].ty)
+                || !is_int_like(&arg_typed[2].ty)
+            {
+                return Err(SemanticError {
+                    message: "state_keys expects (Name, int offset, int limit)".into(),
+                });
+            }
+            Ok(TypedExpr {
+                expr: ExprKind::Call {
+                    name: builtin.name().to_string(),
+                    args: arg_typed,
+                },
+                ty: Type::Bytes,
+            })
+        }
+        Builtin::StateHas => {
+            if arg_typed.len() != 1 || arg_typed[0].ty != Type::Name {
+                return Err(SemanticError {
+                    message: "state_has expects (Name)".into(),
+                });
+            }
+            Ok(TypedExpr {
+                expr: ExprKind::Call {
+                    name: builtin.name().to_string(),
+                    args: arg_typed,
+                },
+                ty: Type::Bool,
+            })
+        }
+        Builtin::StateLen => {
+            if arg_typed.len() != 1 || arg_typed[0].ty != Type::Name {
+                return Err(SemanticError {
+                    message: "state_len expects (Name)".into(),
+                });
+            }
+            Ok(TypedExpr {
+                expr: ExprKind::Call {
+                    name: builtin.name().to_string(),
+                    args: arg_typed,
+                },
+                ty: Type::Int,
+            })
+        }
+        Builtin::StateCount => {
+            if arg_typed.len() != 1 || arg_typed[0].ty != Type::Name {
+                return Err(SemanticError {
+                    message: "state_count expects (Name)".into(),
+                });
+            }
+            Ok(TypedExpr {
+                expr: ExprKind::Call {
+                    name: builtin.name().to_string(),
+                    args: arg_typed,
+                },
+                ty: Type::Int,
+            })
+        }
+        Builtin::QueryExecuteNorito
+        | Builtin::QueryGetAccount
+        | Builtin::QueryGetAsset
+        | Builtin::QueryGetAssetDefinition
+        | Builtin::QueryGetDomain
+        | Builtin::QueryGetNft
+        | Builtin::QueryGetParameter
+        | Builtin::QueryGetContractManifest
+        | Builtin::QueryGetContractInstance
+        | Builtin::ZkRootsGet
+        | Builtin::ZkVoteGetTally
+        | Builtin::VrfEpochSeed => {
+            if arg_typed.len() != 1 || !query_helper_accepts_arg(builtin, &arg_typed[0].ty) {
+                let expected = match builtin {
+                    Builtin::QueryExecuteNorito => {
+                        "query_execute_norito expects (Blob|bytes) pointer to NoritoBytes QueryRequest"
+                    }
+                    Builtin::QueryGetAccount => "query_get_account expects (AccountId|Blob|bytes)",
+                    Builtin::QueryGetAsset => "query_get_asset expects (AssetId|Blob|bytes)",
+                    Builtin::QueryGetAssetDefinition => {
+                        "query_get_asset_definition expects (AssetDefinitionId|Blob|bytes)"
+                    }
+                    Builtin::QueryGetDomain => "query_get_domain expects (DomainId|Blob|bytes)",
+                    Builtin::QueryGetNft => "query_get_nft expects (NftId|Blob|bytes)",
+                    Builtin::QueryGetParameter => "query_get_parameter expects (Name|Blob|bytes)",
+                    Builtin::QueryGetContractManifest => {
+                        "query_get_contract_manifest expects (Blob|bytes) Norito Hash"
+                    }
+                    Builtin::QueryGetContractInstance => {
+                        "query_get_contract_instance expects (Name|Blob|bytes)"
+                    }
+                    Builtin::ZkRootsGet => {
+                        "zk_roots_get expects (Blob|bytes) pointer to NoritoBytes RootsGetRequest"
+                    }
+                    Builtin::ZkVoteGetTally => {
+                        "zk_vote_get_tally expects (Blob|bytes) pointer to NoritoBytes VoteGetTallyRequest"
+                    }
+                    Builtin::VrfEpochSeed => {
+                        "vrf_epoch_seed expects (Blob|bytes) pointer to NoritoBytes VrfEpochSeedRequest"
+                    }
+                    _ => unreachable!(),
+                };
+                return Err(SemanticError {
+                    message: expected.into(),
+                });
+            }
+            Ok(TypedExpr {
+                expr: ExprKind::Call {
+                    name: builtin.name().to_string(),
+                    args: arg_typed,
+                },
+                ty: Type::Bytes,
+            })
+        }
+        Builtin::BuildSubmitBallotInline => {
+            if arg_typed.len() != 6
+                || !(arg_typed[0].ty == Type::String
+                    && is_blob_like(&arg_typed[1].ty)
+                    && is_blob_like(&arg_typed[2].ty)
+                    && arg_typed[3].ty == Type::String
+                    && is_blob_like(&arg_typed[4].ty)
+                    && is_blob_like(&arg_typed[5].ty))
+            {
+                return Err(SemanticError {
+                    message: "build_submit_ballot_inline expects (string election_id, Blob|bytes ciphertext, Blob|bytes nullifier32, string backend, Blob|bytes proof, Blob|bytes vk)".into(),
+                });
+            }
+            Ok(TypedExpr {
+                expr: ExprKind::Call {
+                    name: builtin.name().to_string(),
+                    args: arg_typed,
+                },
+                ty: Type::Bytes,
+            })
+        }
+        Builtin::BuildUnshieldInline => {
+            if arg_typed.len() != 7
+                || !(arg_typed[0].ty == Type::AssetDefinitionId
+                    && arg_typed[1].ty == Type::AccountId
+                    && is_int_like(&arg_typed[2].ty)
+                    && is_blob_like(&arg_typed[3].ty)
+                    && arg_typed[4].ty == Type::String
+                    && is_blob_like(&arg_typed[5].ty)
+                    && is_blob_like(&arg_typed[6].ty))
+            {
+                return Err(SemanticError {
+                    message: "build_unshield_inline expects (AssetDefinitionId, AccountId, int amount, Blob|bytes inputs32, string backend, Blob|bytes proof, Blob|bytes vk)".into(),
+                });
+            }
+            Ok(TypedExpr {
+                expr: ExprKind::Call {
+                    name: builtin.name().to_string(),
+                    args: arg_typed,
+                },
+                ty: Type::Bytes,
+            })
+        }
+        Builtin::ExecuteInstruction
+        | Builtin::ScExecuteSubmitBallot
+        | Builtin::ScExecuteUnshield => {
+            let name = builtin.name();
+            if arg_typed.len() != 1 || !is_blob_like(&arg_typed[0].ty) {
+                return Err(SemanticError {
+                    message: format!(
+                        "{name} expects (Blob|bytes) where the argument is a pointer to NoritoBytes TLV in INPUT"
+                    ),
+                });
+            }
+            Ok(TypedExpr {
+                expr: ExprKind::Call {
+                    name: name.to_string(),
+                    args: arg_typed,
+                },
+                ty: Type::Unit,
+            })
+        }
+        Builtin::ExecuteQuery => {
+            let name = builtin.name();
+            if arg_typed.len() != 1 || !is_blob_like(&arg_typed[0].ty) {
+                return Err(SemanticError {
+                    message: format!(
+                        "{name} expects (Blob|bytes) where the argument is a pointer to NoritoBytes TLV in INPUT"
+                    ),
+                });
+            }
+            Ok(TypedExpr {
+                expr: ExprKind::Call {
+                    name: name.to_string(),
+                    args: arg_typed,
+                },
+                ty: Type::Bytes,
+            })
+        }
+        Builtin::CallContract => {
+            if arg_typed.len() != 3
+                || !(arg_typed[0].ty == Type::String || is_blob_like(&arg_typed[0].ty))
+                || !(arg_typed[1].ty == Type::String || is_blob_like(&arg_typed[1].ty))
+                || arg_typed[2].ty != Type::Json
+            {
+                return Err(SemanticError {
+                    message: "call_contract expects (String|Blob, String|Blob, Json)".into(),
+                });
+            }
+            Ok(TypedExpr {
+                expr: ExprKind::Call {
+                    name: builtin.name().to_string(),
+                    args: arg_typed,
+                },
+                ty: Type::Bytes,
+            })
+        }
+        Builtin::ResolveAccountAlias => {
+            if arg_typed.len() != 1
+                || !(arg_typed[0].ty == Type::String || is_blob_like(&arg_typed[0].ty))
+            {
+                return Err(SemanticError {
+                    message: "resolve_account_alias expects (String|Blob)".into(),
+                });
+            }
+            Ok(TypedExpr {
+                expr: ExprKind::Call {
+                    name: builtin.name().to_string(),
+                    args: arg_typed,
+                },
+                ty: Type::AccountId,
+            })
+        }
+        Builtin::SubscriptionBill | Builtin::SubscriptionRecordUsage => {
+            let name = builtin.name();
+            if !arg_typed.is_empty() {
+                return Err(SemanticError {
+                    message: format!("{name} expects no arguments"),
+                });
+            }
+            Ok(TypedExpr {
+                expr: ExprKind::Call {
+                    name: name.to_string(),
+                    args: arg_typed,
+                },
+                ty: Type::Unit,
+            })
+        }
+        Builtin::ZkVerifyTransfer
+        | Builtin::ZkVerifyUnshield
+        | Builtin::ZkVerifyBatch
+        | Builtin::ZkVoteVerifyBallot
+        | Builtin::ZkVoteVerifyTally => {
+            let name = builtin.name();
+            if arg_typed.len() != 1 || !is_blob_like(&arg_typed[0].ty) {
+                return Err(SemanticError {
+                    message: format!(
+                        "{name} expects (Blob|bytes) where the argument is a pointer to NoritoBytes TLV in INPUT"
+                    ),
+                });
+            }
+            Ok(TypedExpr {
+                expr: ExprKind::Call {
+                    name: name.to_string(),
+                    args: arg_typed,
+                },
+                ty: Type::Unit,
+            })
+        }
+        Builtin::VrfVerify => {
+            if arg_typed.len() != 4 {
+                return Err(SemanticError {
+                    message: "vrf_verify expects (Blob, Blob, Blob, int variant)".into(),
+                });
+            }
+            if arg_typed[..3].iter().any(|t| !is_blob_like(&t.ty)) || !is_int_like(&arg_typed[3].ty)
+            {
+                return Err(SemanticError {
+                    message: "vrf_verify expects (Blob|bytes, Blob|bytes, Blob|bytes, int variant)"
+                        .into(),
+                });
+            }
+            Ok(TypedExpr {
+                expr: ExprKind::Call {
+                    name: builtin.name().to_string(),
+                    args: arg_typed,
+                },
+                ty: Type::Bytes,
+            })
+        }
+        Builtin::VrfVerifyBatch => {
+            if arg_typed.len() != 1 || !is_blob_like(&arg_typed[0].ty) {
+                return Err(SemanticError {
+                    message: "vrf_verify_batch expects (Blob|bytes)".into(),
+                });
+            }
+            Ok(TypedExpr {
+                expr: ExprKind::Call {
+                    name: builtin.name().to_string(),
+                    args: arg_typed,
+                },
+                ty: Type::Bytes,
+            })
+        }
+        Builtin::Sm3Hash
+        | Builtin::Sha256Hash
+        | Builtin::Sha3Hash
+        | Builtin::Blake2b256Hash
+        | Builtin::Keccak256Hash
+        | Builtin::IrohaHash => {
+            if arg_typed.len() != 1 || !is_blob_like(&arg_typed[0].ty) {
+                return Err(SemanticError {
+                    message: format!(
+                        "{} expects (Blob|bytes) argument pointing to INPUT TLV",
+                        builtin.name()
+                    ),
+                });
+            }
+            Ok(TypedExpr {
+                expr: ExprKind::Call {
+                    name: builtin.name().to_string(),
+                    args: arg_typed,
+                },
+                ty: Type::Bytes,
+            })
+        }
+        Builtin::Sm2Verify => {
+            if arg_typed.len() != 3 && arg_typed.len() != 4 {
+                return Err(SemanticError {
+                    message: "sm2_verify expects (Blob, Blob, Blob) or (Blob, Blob, Blob, Blob) where arguments reference INPUT TLVs".into(),
+                });
+            }
+            if arg_typed[..3].iter().any(|t| !is_blob_like(&t.ty)) {
+                return Err(SemanticError {
+                    message: "sm2_verify expects message, signature, and public key as Blob|bytes pointers".into(),
+                });
+            }
+            if arg_typed.len() == 4 && !is_blob_like(&arg_typed[3].ty) {
+                return Err(SemanticError {
+                    message: "sm2_verify optional distid must be provided as Blob|bytes pointer"
+                        .into(),
+                });
+            }
+            Ok(TypedExpr {
+                expr: ExprKind::Call {
+                    name: builtin.name().to_string(),
+                    args: arg_typed,
+                },
+                ty: Type::Bool,
+            })
+        }
+        Builtin::VerifySignature => {
+            if arg_typed.len() != 4 {
+                return Err(SemanticError {
+                    message: "verify_signature expects (Blob, Blob, Blob, int) arguments".into(),
+                });
+            }
+            if arg_typed[..3].iter().any(|t| !is_blob_like(&t.ty)) {
+                return Err(SemanticError {
+                    message: "verify_signature expects message, signature, and public key as Blob|bytes pointers"
+                        .into(),
+                });
+            }
+            if !is_int_like(&arg_typed[3].ty) {
+                return Err(SemanticError {
+                    message: "verify_signature expects scheme code as int".into(),
+                });
+            }
+            Ok(TypedExpr {
+                expr: ExprKind::Call {
+                    name: builtin.name().to_string(),
+                    args: arg_typed,
+                },
+                ty: Type::Bool,
+            })
+        }
+        Builtin::Sm4GcmSeal | Builtin::Sm4GcmOpen => {
+            if arg_typed.len() != 4 || arg_typed.iter().any(|t| !is_blob_like(&t.ty)) {
+                return Err(SemanticError {
+                    message: format!(
+                        "{} expects (Blob|bytes, Blob|bytes, Blob|bytes, Blob|bytes)",
+                        builtin.name()
+                    ),
+                });
+            }
+            Ok(TypedExpr {
+                expr: ExprKind::Call {
+                    name: builtin.name().to_string(),
+                    args: arg_typed,
+                },
+                ty: Type::Bytes,
+            })
+        }
+        Builtin::Sm4CcmSeal | Builtin::Sm4CcmOpen => {
+            if arg_typed.len() != 4 && arg_typed.len() != 5 {
+                return Err(SemanticError {
+                    message: format!(
+                        "{} expects (Blob|bytes, Blob|bytes, Blob|bytes, Blob|bytes[, int])",
+                        builtin.name()
+                    ),
+                });
+            }
+            if arg_typed[..4].iter().any(|t| !is_blob_like(&t.ty)) {
+                let data_label = match builtin {
+                    Builtin::Sm4CcmSeal => "plaintext",
+                    Builtin::Sm4CcmOpen => "ciphertext",
+                    _ => unreachable!(),
+                };
+                return Err(SemanticError {
+                    message: format!(
+                        "{} expects key, nonce, aad, {data_label} as Blob|bytes pointers",
+                        builtin.name()
+                    ),
+                });
+            }
+            if arg_typed.len() == 5 && !is_int_like(&arg_typed[4].ty) {
+                return Err(SemanticError {
+                    message: format!("{} optional tag length must be int", builtin.name()),
+                });
+            }
+            Ok(TypedExpr {
+                expr: ExprKind::Call {
+                    name: builtin.name().to_string(),
+                    args: arg_typed,
+                },
+                ty: Type::Bytes,
+            })
+        }
+        Builtin::GetAccountBalance => {
+            if arg_typed.len() != 2
+                || !(arg_typed[0].ty == Type::AccountId
+                    && arg_typed[1].ty == Type::AssetDefinitionId)
+            {
+                return Err(SemanticError {
+                    message: "get_account_balance expects (AccountId, AssetDefinitionId)".into(),
+                });
+            }
+            Ok(TypedExpr {
+                expr: ExprKind::Call {
+                    name: builtin.name().to_string(),
+                    args: arg_typed,
+                },
+                ty: Type::Balance,
+            })
+        }
+        Builtin::GetPublicInput => {
+            if arg_typed.len() != 1 || arg_typed[0].ty != Type::Name {
+                return Err(SemanticError {
+                    message: "get_public_input expects (Name)".into(),
+                });
+            }
+            Ok(TypedExpr {
+                expr: ExprKind::Call {
+                    name: builtin.name().to_string(),
+                    args: arg_typed,
+                },
+                ty: Type::Bytes,
+            })
+        }
+        Builtin::DebugPrint => {
+            if arg_typed.len() != 1 || !is_int_like(&arg_typed[0].ty) {
+                return Err(SemanticError {
+                    message: "debug_print expects (int value)".into(),
+                });
+            }
+            Ok(TypedExpr {
+                expr: ExprKind::Call {
+                    name: builtin.name().to_string(),
+                    args: arg_typed,
+                },
+                ty: Type::Unit,
+            })
+        }
+        Builtin::DebugLog => {
+            if arg_typed.len() != 1
+                || !(arg_typed[0].ty == Type::Json || is_blob_like(&arg_typed[0].ty))
+            {
+                return Err(SemanticError {
+                    message: "debug_log expects (Json|Blob|bytes payload)".into(),
+                });
+            }
+            Ok(TypedExpr {
+                expr: ExprKind::Call {
+                    name: builtin.name().to_string(),
+                    args: arg_typed,
+                },
+                ty: Type::Unit,
+            })
+        }
+        Builtin::Assert | Builtin::Require => {
+            let ok = match arg_typed.len() {
+                1 => arg_typed[0].ty == Type::Bool,
+                2 => {
+                    arg_typed[0].ty == Type::Bool
+                        && (arg_typed[1].ty == Type::String || is_int_like(&arg_typed[1].ty))
+                }
+                _ => false,
+            };
+            if !ok {
+                return Err(SemanticError {
+                    message: format!("{} expects (bool) or (bool, string|int)", builtin.name()),
+                });
+            }
+            Ok(TypedExpr {
+                expr: ExprKind::Call {
+                    name: builtin.name().to_string(),
+                    args: arg_typed,
+                },
+                ty: Type::Unit,
+            })
+        }
+        Builtin::Info => {
+            if arg_typed.len() != 1
+                || !(arg_typed[0].ty == Type::String || is_int_like(&arg_typed[0].ty))
+            {
+                return Err(SemanticError {
+                    message: "info expects (string|int)".into(),
+                });
+            }
+            Ok(TypedExpr {
+                expr: ExprKind::Call {
+                    name: builtin.name().to_string(),
+                    args: arg_typed,
+                },
+                ty: Type::Unit,
+            })
+        }
+        Builtin::AssertEq => {
+            if arg_typed.len() != 2 || !arg_typed.iter().all(|t| is_int_like(&t.ty)) {
+                return Err(SemanticError {
+                    message: "assert_eq expects two int args".into(),
+                });
+            }
+            Ok(TypedExpr {
+                expr: ExprKind::Call {
+                    name: builtin.name().to_string(),
+                    args: arg_typed,
+                },
+                ty: Type::Unit,
+            })
+        }
+        Builtin::SetAccountDetail => {
+            if arg_typed.len() != 3
+                || !(arg_typed[0].ty == Type::AccountId
+                    && arg_typed[1].ty == Type::Name
+                    && arg_typed[2].ty == Type::Json)
+            {
+                return Err(SemanticError {
+                    message: "set_account_detail expects (AccountId, Name, Json)".into(),
+                });
+            }
+            Ok(TypedExpr {
+                expr: ExprKind::Call {
+                    name: builtin.name().to_string(),
+                    args: arg_typed,
+                },
+                ty: Type::Unit,
+            })
+        }
+        Builtin::MintAsset | Builtin::BurnAsset => {
+            if arg_typed.len() != 3
+                || !(arg_typed[0].ty == Type::AccountId
+                    && arg_typed[1].ty == Type::AssetDefinitionId
+                    && is_int_like(&arg_typed[2].ty))
+            {
+                return Err(SemanticError {
+                    message: format!(
+                        "{} expects (AccountId, AssetDefinitionId, numeric)",
+                        builtin.name()
+                    ),
+                });
+            }
+            Ok(TypedExpr {
+                expr: ExprKind::Call {
+                    name: builtin.name().to_string(),
+                    args: arg_typed,
+                },
+                ty: Type::Unit,
+            })
+        }
+        Builtin::TransferAsset => {
+            if arg_typed.len() != 4
+                || !(arg_typed[0].ty == Type::AccountId
+                    && arg_typed[1].ty == Type::AccountId
+                    && arg_typed[2].ty == Type::AssetDefinitionId
+                    && is_int_like(&arg_typed[3].ty))
+            {
+                return Err(SemanticError {
+                    message:
+                        "transfer_asset expects (AccountId, AccountId, AssetDefinitionId, numeric)"
+                            .into(),
+                });
+            }
+            Ok(TypedExpr {
+                expr: ExprKind::Call {
+                    name: builtin.name().to_string(),
+                    args: arg_typed,
+                },
+                ty: Type::Unit,
+            })
+        }
+        Builtin::NftMintAsset => {
+            if arg_typed.len() != 2
+                || !(arg_typed[0].ty == Type::NftId && arg_typed[1].ty == Type::AccountId)
+            {
+                return Err(SemanticError {
+                    message: "nft_mint_asset expects (NftId, AccountId)".into(),
+                });
+            }
+            Ok(TypedExpr {
+                expr: ExprKind::Call {
+                    name: builtin.name().to_string(),
+                    args: arg_typed,
+                },
+                ty: Type::Unit,
+            })
+        }
+        Builtin::NftSetMetadata => {
+            if arg_typed.len() != 3
+                || !(arg_typed[0].ty == Type::NftId
+                    && arg_typed[1].ty == Type::Name
+                    && arg_typed[2].ty == Type::Json)
+            {
+                return Err(SemanticError {
+                    message: "nft_set_metadata expects (NftId, Name, Json)".into(),
+                });
+            }
+            Ok(TypedExpr {
+                expr: ExprKind::Call {
+                    name: builtin.name().to_string(),
+                    args: arg_typed,
+                },
+                ty: Type::Unit,
+            })
+        }
+        Builtin::NftBurnAsset => {
+            if arg_typed.len() != 1 || arg_typed[0].ty != Type::NftId {
+                return Err(SemanticError {
+                    message: "nft_burn_asset expects (NftId)".into(),
+                });
+            }
+            Ok(TypedExpr {
+                expr: ExprKind::Call {
+                    name: builtin.name().to_string(),
+                    args: arg_typed,
+                },
+                ty: Type::Unit,
+            })
+        }
+        Builtin::NftTransferAsset => {
+            if arg_typed.len() != 3
+                || !(arg_typed[0].ty == Type::AccountId
+                    && arg_typed[1].ty == Type::NftId
+                    && arg_typed[2].ty == Type::AccountId)
+            {
+                return Err(SemanticError {
+                    message: "nft_transfer_asset expects (AccountId, NftId, AccountId)".into(),
+                });
+            }
+            Ok(TypedExpr {
+                expr: ExprKind::Call {
+                    name: builtin.name().to_string(),
+                    args: arg_typed,
+                },
+                ty: Type::Unit,
+            })
+        }
+        Builtin::RegisterDomain | Builtin::UnregisterDomain => {
+            if arg_typed.len() != 1 || arg_typed[0].ty != Type::DomainId {
+                return Err(SemanticError {
+                    message: format!("{} expects (DomainId)", builtin.name()),
+                });
+            }
+            Ok(TypedExpr {
+                expr: ExprKind::Call {
+                    name: builtin.name().to_string(),
+                    args: arg_typed,
+                },
+                ty: Type::Unit,
+            })
+        }
+        Builtin::TransferDomain => {
+            if arg_typed.len() != 3
+                || arg_typed[0].ty != Type::AccountId
+                || !matches!(arg_typed[1].ty, Type::DomainId | Type::Name)
+                || arg_typed[2].ty != Type::AccountId
+            {
+                return Err(SemanticError {
+                    message: "transfer_domain expects (AccountId, DomainId, AccountId)".into(),
+                });
+            }
+            Ok(TypedExpr {
+                expr: ExprKind::Call {
+                    name: builtin.name().to_string(),
+                    args: arg_typed,
+                },
+                ty: Type::Unit,
+            })
+        }
+        Builtin::RegisterAccount | Builtin::UnregisterAccount => {
+            if arg_typed.len() != 1 || arg_typed[0].ty != Type::AccountId {
+                return Err(SemanticError {
+                    message: format!("{} expects (AccountId)", builtin.name()),
+                });
+            }
+            Ok(TypedExpr {
+                expr: ExprKind::Call {
+                    name: builtin.name().to_string(),
+                    args: arg_typed,
+                },
+                ty: Type::Unit,
+            })
+        }
+        Builtin::RegisterAsset => {
+            if arg_typed.len() != 4
+                || arg_typed[0].ty != Type::AssetDefinitionId
+                || arg_typed[1].ty != Type::String
+                || !is_int_like(&arg_typed[2].ty)
+                || !is_int_like(&arg_typed[3].ty)
+            {
+                return Err(SemanticError {
+                    message: "register_asset expects (AssetDefinitionId, string, int, int)".into(),
+                });
+            }
+            Ok(TypedExpr {
+                expr: ExprKind::Call {
+                    name: builtin.name().to_string(),
+                    args: arg_typed,
+                },
+                ty: Type::Unit,
+            })
+        }
+        Builtin::CreateNewAsset => {
+            if arg_typed.len() != 5
+                || arg_typed[0].ty != Type::AssetDefinitionId
+                || arg_typed[1].ty != Type::String
+                || !is_int_like(&arg_typed[2].ty)
+                || arg_typed[3].ty != Type::AccountId
+                || !is_int_like(&arg_typed[4].ty)
+            {
+                return Err(SemanticError {
+                    message:
+                        "create_new_asset expects (AssetDefinitionId, string, int, AccountId, int)"
+                            .into(),
+                });
+            }
+            Ok(TypedExpr {
+                expr: ExprKind::Call {
+                    name: builtin.name().to_string(),
+                    args: arg_typed,
+                },
+                ty: Type::Unit,
+            })
+        }
+        Builtin::UnregisterAsset => {
+            if arg_typed.len() != 1 || arg_typed[0].ty != Type::AssetDefinitionId {
+                return Err(SemanticError {
+                    message: "unregister_asset expects (AssetDefinitionId)".into(),
+                });
+            }
+            Ok(TypedExpr {
+                expr: ExprKind::Call {
+                    name: builtin.name().to_string(),
+                    args: arg_typed,
+                },
+                ty: Type::Unit,
+            })
+        }
+        Builtin::RegisterPeer | Builtin::UnregisterPeer => {
+            let name = builtin.name();
+            if arg_typed.len() != 1 || arg_typed[0].ty != Type::Json {
+                return Err(SemanticError {
+                    message: format!("{name} expects (Json)"),
+                });
+            }
+            Ok(TypedExpr {
+                expr: ExprKind::Call {
+                    name: name.to_string(),
+                    args: arg_typed,
+                },
+                ty: Type::Unit,
+            })
+        }
+        Builtin::CreateTrigger | Builtin::RegisterTrigger => {
+            let name = builtin.name();
+            if arg_typed.len() != 1 || arg_typed[0].ty != Type::Json {
+                return Err(SemanticError {
+                    message: format!("{name} expects (Json)"),
+                });
+            }
+            Ok(TypedExpr {
+                expr: ExprKind::Call {
+                    name: name.to_string(),
+                    args: arg_typed,
+                },
+                ty: Type::Unit,
+            })
+        }
+        Builtin::RemoveTrigger | Builtin::UnregisterTrigger => {
+            let name = builtin.name();
+            if arg_typed.len() != 1 || arg_typed[0].ty != Type::Name {
+                return Err(SemanticError {
+                    message: format!("{name} expects (Name)"),
+                });
+            }
+            Ok(TypedExpr {
+                expr: ExprKind::Call {
+                    name: name.to_string(),
+                    args: arg_typed,
+                },
+                ty: Type::Unit,
+            })
+        }
+        Builtin::SetTriggerEnabled => {
+            if arg_typed.len() != 2
+                || arg_typed[0].ty != Type::Name
+                || !is_int_like(&arg_typed[1].ty)
+            {
+                return Err(SemanticError {
+                    message: "set_trigger_enabled expects (Name, int)".into(),
+                });
+            }
+            Ok(TypedExpr {
+                expr: ExprKind::Call {
+                    name: builtin.name().to_string(),
+                    args: arg_typed,
+                },
+                ty: Type::Unit,
+            })
+        }
+        Builtin::CreateRole => {
+            if arg_typed.len() != 2
+                || arg_typed[0].ty != Type::Name
+                || arg_typed[1].ty != Type::Json
+            {
+                return Err(SemanticError {
+                    message: "create_role expects (Name, Json)".into(),
+                });
+            }
+            Ok(TypedExpr {
+                expr: ExprKind::Call {
+                    name: builtin.name().to_string(),
+                    args: arg_typed,
+                },
+                ty: Type::Unit,
+            })
+        }
+        Builtin::DeleteRole => {
+            if arg_typed.len() != 1 || arg_typed[0].ty != Type::Name {
+                return Err(SemanticError {
+                    message: "delete_role expects (Name)".into(),
+                });
+            }
+            Ok(TypedExpr {
+                expr: ExprKind::Call {
+                    name: builtin.name().to_string(),
+                    args: arg_typed,
+                },
+                ty: Type::Unit,
+            })
+        }
+        Builtin::GrantRole | Builtin::RevokeRole => {
+            if arg_typed.len() != 2
+                || arg_typed[0].ty != Type::AccountId
+                || arg_typed[1].ty != Type::Name
+            {
+                return Err(SemanticError {
+                    message: "grant/revoke_role expects (AccountId, Name)".into(),
+                });
+            }
+            Ok(TypedExpr {
+                expr: ExprKind::Call {
+                    name: builtin.name().to_string(),
+                    args: arg_typed,
+                },
+                ty: Type::Unit,
+            })
+        }
+        Builtin::GrantPermission | Builtin::RevokePermission => {
+            if arg_typed.len() != 2
+                || arg_typed[0].ty != Type::AccountId
+                || !(arg_typed[1].ty == Type::Name || arg_typed[1].ty == Type::Json)
+            {
+                return Err(SemanticError {
+                    message: "grant/revoke_permission expects (AccountId, Name|Json)".into(),
+                });
+            }
+            Ok(TypedExpr {
+                expr: ExprKind::Call {
+                    name: builtin.name().to_string(),
+                    args: arg_typed,
+                },
+                ty: Type::Unit,
+            })
+        }
+        Builtin::EscrowOpenOffer => {
+            if !(arg_typed.len() == 3 || arg_typed.len() == 4)
+                || !(arg_typed[0].ty == Type::Name
+                    && arg_typed[1].ty == Type::AssetDefinitionId
+                    && is_int_like(&arg_typed[2].ty))
+                || (arg_typed.len() == 4 && !is_blob_like(&arg_typed[3].ty))
+            {
+                return Err(SemanticError {
+                    message:
+                        "escrow_open_offer expects (Name, AssetDefinitionId, numeric[, Blob|bytes evidence_hashes])"
+                            .into(),
+                });
+            }
+            Ok(TypedExpr {
+                expr: ExprKind::Call {
+                    name: builtin.name().to_string(),
+                    args: arg_typed,
+                },
+                ty: Type::Unit,
+            })
+        }
+        Builtin::EscrowAccept
+        | Builtin::EscrowMarkPaymentSent
+        | Builtin::EscrowRelease
+        | Builtin::EscrowCancel => {
+            let name = builtin.name();
+            if arg_typed.len() != 1 || arg_typed[0].ty != Type::Name {
+                return Err(SemanticError {
+                    message: format!("{name} expects (Name)"),
+                });
+            }
+            Ok(TypedExpr {
+                expr: ExprKind::Call {
+                    name: name.to_string(),
+                    args: arg_typed,
+                },
+                ty: Type::Unit,
+            })
+        }
+        Builtin::EscrowOpenDispute => {
+            if !(arg_typed.len() == 1 || arg_typed.len() == 2)
+                || arg_typed[0].ty != Type::Name
+                || (arg_typed.len() == 2 && !is_blob_like(&arg_typed[1].ty))
+            {
+                return Err(SemanticError {
+                    message: "escrow_open_dispute expects (Name[, Blob|bytes evidence_hashes])"
+                        .into(),
+                });
+            }
+            Ok(TypedExpr {
+                expr: ExprKind::Call {
+                    name: builtin.name().to_string(),
+                    args: arg_typed,
+                },
+                ty: Type::Unit,
+            })
+        }
+        Builtin::EscrowResolveDispute => {
+            if !(arg_typed.len() == 3 || arg_typed.len() == 4)
+                || !(arg_typed[0].ty == Type::Name
+                    && is_int_like(&arg_typed[1].ty)
+                    && is_int_like(&arg_typed[2].ty))
+                || (arg_typed.len() == 4 && !is_blob_like(&arg_typed[3].ty))
+            {
+                return Err(SemanticError {
+                    message: "escrow_resolve_dispute expects (Name, numeric, numeric[, Blob|bytes evidence_hashes])"
+                        .into(),
+                });
+            }
+            Ok(TypedExpr {
+                expr: ExprKind::Call {
+                    name: builtin.name().to_string(),
+                    args: arg_typed,
+                },
+                ty: Type::Unit,
+            })
+        }
+        Builtin::AnonymousEscrowOpenOffer
+        | Builtin::AnonymousEscrowRelease
+        | Builtin::AnonymousEscrowCancel
+        | Builtin::AnonymousEscrowResolveDispute => {
+            let name = builtin.name();
+            if arg_typed.len() != 1 || !is_blob_like(&arg_typed[0].ty) {
+                return Err(SemanticError {
+                    message: format!("{name} expects (Blob|bytes) Norito request payload"),
+                });
+            }
+            Ok(TypedExpr {
+                expr: ExprKind::Call {
+                    name: name.to_string(),
+                    args: arg_typed,
+                },
+                ty: Type::Unit,
+            })
+        }
+        Builtin::AnonymousEscrowAccept | Builtin::AnonymousEscrowMarkPaymentSent => {
+            let name = builtin.name();
+            if arg_typed.len() != 1 || arg_typed[0].ty != Type::Name {
+                return Err(SemanticError {
+                    message: format!("{name} expects (Name)"),
+                });
+            }
+            Ok(TypedExpr {
+                expr: ExprKind::Call {
+                    name: name.to_string(),
+                    args: arg_typed,
+                },
+                ty: Type::Unit,
+            })
+        }
+        Builtin::AnonymousEscrowOpenDispute => {
+            if !(arg_typed.len() == 1 || arg_typed.len() == 2)
+                || arg_typed[0].ty != Type::Name
+                || (arg_typed.len() == 2 && !is_blob_like(&arg_typed[1].ty))
+            {
+                return Err(SemanticError {
+                    message:
+                        "anonymous_escrow_open_dispute expects (Name[, Blob|bytes evidence_hashes])"
+                            .into(),
+                });
+            }
+            Ok(TypedExpr {
+                expr: ExprKind::Call {
+                    name: builtin.name().to_string(),
+                    args: arg_typed,
+                },
+                ty: Type::Unit,
+            })
+        }
+        Builtin::Alloc => {
+            if arg_typed.len() != 1 || !is_int_like(&arg_typed[0].ty) {
+                return Err(SemanticError {
+                    message: "alloc expects (int bytes)".into(),
+                });
+            }
+            Ok(TypedExpr {
+                expr: ExprKind::Call {
+                    name: builtin.name().to_string(),
+                    args: arg_typed,
+                },
+                ty: Type::Int,
+            })
+        }
+        Builtin::ProveExecution => {
+            if !arg_typed.is_empty() {
+                return Err(SemanticError {
+                    message: "prove_execution expects no arguments".into(),
+                });
+            }
+            Ok(TypedExpr {
+                expr: ExprKind::Call {
+                    name: builtin.name().to_string(),
+                    args: arg_typed,
+                },
+                ty: Type::Bytes,
+            })
+        }
+        Builtin::GrowHeap => {
+            if arg_typed.len() != 1 || !is_int_like(&arg_typed[0].ty) {
+                return Err(SemanticError {
+                    message: "grow_heap expects (int bytes)".into(),
+                });
+            }
+            Ok(TypedExpr {
+                expr: ExprKind::Call {
+                    name: builtin.name().to_string(),
+                    args: arg_typed,
+                },
+                ty: Type::Int,
+            })
+        }
+        Builtin::VerifyProof => {
+            if arg_typed.len() != 1 || !is_blob_like(&arg_typed[0].ty) {
+                return Err(SemanticError {
+                    message:
+                        "verify_proof expects (Blob|bytes) pointer to NoritoBytes OpenVerifyEnvelope"
+                            .into(),
+                });
+            }
+            Ok(TypedExpr {
+                expr: ExprKind::Call {
+                    name: builtin.name().to_string(),
+                    args: arg_typed,
+                },
+                ty: Type::Bool,
+            })
+        }
+        Builtin::GetMerklePath => {
+            let valid_arity = (2..=3).contains(&arg_typed.len());
+            if !valid_arity || arg_typed.iter().any(|arg| !is_int_like(&arg.ty)) {
+                return Err(SemanticError {
+                    message:
+                        "get_merkle_path expects (int address, int output_ptr[, int root_output_ptr])"
+                            .into(),
+                });
+            }
+            Ok(TypedExpr {
+                expr: ExprKind::Call {
+                    name: builtin.name().to_string(),
+                    args: arg_typed,
+                },
+                ty: Type::Int,
+            })
+        }
+        Builtin::GetMerkleCompact | Builtin::GetRegisterMerkleCompact => {
+            let valid_arity = (2..=4).contains(&arg_typed.len());
+            if !valid_arity || arg_typed.iter().any(|arg| !is_int_like(&arg.ty)) {
+                return Err(SemanticError {
+                    message: format!(
+                        "{} expects (int address_or_register, int output_ptr[, int max_depth[, int root_output_ptr]])",
+                        builtin.name()
+                    ),
+                });
+            }
+            Ok(TypedExpr {
+                expr: ExprKind::Call {
+                    name: builtin.name().to_string(),
+                    args: arg_typed,
+                },
+                ty: Type::Int,
+            })
+        }
+        Builtin::GetPrivateInput => {
+            if arg_typed.len() != 1 || !is_int_like(&arg_typed[0].ty) {
+                return Err(SemanticError {
+                    message: "get_private_input expects (int index)".into(),
+                });
+            }
+            Ok(TypedExpr {
+                expr: ExprKind::Call {
+                    name: builtin.name().to_string(),
+                    args: arg_typed,
+                },
+                ty: Type::Int,
+            })
+        }
+        Builtin::UseNullifier => {
+            if arg_typed.len() != 1 || !is_int_like(&arg_typed[0].ty) {
+                return Err(SemanticError {
+                    message: "use_nullifier expects (int nullifier)".into(),
+                });
+            }
+            Ok(TypedExpr {
+                expr: ExprKind::Call {
+                    name: builtin.name().to_string(),
+                    args: arg_typed,
+                },
+                ty: Type::Unit,
+            })
+        }
+        Builtin::CommitOutput => {
+            if !arg_typed.is_empty() {
+                return Err(SemanticError {
+                    message: "commit_output expects no arguments".into(),
+                });
+            }
+            Ok(TypedExpr {
+                expr: ExprKind::Call {
+                    name: builtin.name().to_string(),
+                    args: arg_typed,
+                },
+                ty: Type::Unit,
+            })
+        }
+        Builtin::CreateNftsForAllUsers => {
+            if !arg_typed.is_empty() {
+                return Err(SemanticError {
+                    message: "create_nfts_for_all_users expects no arguments".into(),
+                });
+            }
+            Ok(TypedExpr {
+                expr: ExprKind::Call {
+                    name: builtin.name().to_string(),
+                    args: arg_typed,
+                },
+                ty: Type::Unit,
+            })
+        }
+        Builtin::SetExecutionDepth => {
+            if arg_typed.len() != 1 || !is_int_like(&arg_typed[0].ty) {
+                return Err(SemanticError {
+                    message: "set_execution_depth expects one int arg".into(),
+                });
+            }
+            Ok(TypedExpr {
+                expr: ExprKind::Call {
+                    name: builtin.name().to_string(),
+                    args: arg_typed,
+                },
+                ty: Type::Unit,
+            })
+        }
+        Builtin::TransferV1BatchBegin | Builtin::TransferV1BatchEnd => {
+            if !arg_typed.is_empty() {
+                return Err(SemanticError {
+                    message: format!("{} expects ()", builtin.name()),
+                });
+            }
+            Ok(TypedExpr {
+                expr: ExprKind::Call {
+                    name: builtin.name().to_string(),
+                    args: arg_typed,
+                },
+                ty: Type::Unit,
+            })
+        }
+        Builtin::TransferV1BatchApply => {
+            if arg_typed.len() != 1 || !is_blob_like(&arg_typed[0].ty) {
+                return Err(SemanticError {
+                    message:
+                        "transfer_v1_batch_apply expects (Blob|bytes) Norito TransferAssetBatch"
+                            .into(),
+                });
+            }
+            Ok(TypedExpr {
+                expr: ExprKind::Call {
+                    name: builtin.name().to_string(),
+                    args: arg_typed,
+                },
+                ty: Type::Unit,
+            })
+        }
+        Builtin::TransferBatch => {
+            ensure_transfer_batch_args(&arg_typed)?;
+            Ok(TypedExpr {
+                expr: ExprKind::Call {
+                    name: builtin.name().to_string(),
+                    args: arg_typed,
+                },
+                ty: Type::Unit,
+            })
+        }
+        Builtin::AxtBegin => {
+            if arg_typed.len() != 1 || arg_typed[0].ty != Type::AxtDescriptor {
+                return Err(SemanticError {
+                    message: "axt_begin expects (AxtDescriptor)".into(),
+                });
+            }
+            Ok(TypedExpr {
+                expr: ExprKind::Call {
+                    name: builtin.name().to_string(),
+                    args: arg_typed,
+                },
+                ty: Type::Unit,
+            })
+        }
+        Builtin::AxtTouch => {
+            if arg_typed.is_empty()
+                || arg_typed.len() > 2
+                || arg_typed[0].ty != Type::DataSpaceId
+                || (arg_typed.len() == 2 && !is_blob_like(&arg_typed[1].ty))
+            {
+                return Err(SemanticError {
+                    message: "axt_touch expects (DataSpaceId[, Blob|bytes manifest])".into(),
+                });
+            }
+            Ok(TypedExpr {
+                expr: ExprKind::Call {
+                    name: builtin.name().to_string(),
+                    args: arg_typed,
+                },
+                ty: Type::Unit,
+            })
+        }
+        Builtin::VerifyDsProof => {
+            if arg_typed.is_empty()
+                || arg_typed.len() > 2
+                || arg_typed[0].ty != Type::DataSpaceId
+                || (arg_typed.len() == 2 && arg_typed[1].ty != Type::ProofBlob)
+            {
+                return Err(SemanticError {
+                    message: "verify_ds_proof expects (DataSpaceId[, ProofBlob])".into(),
+                });
+            }
+            Ok(TypedExpr {
+                expr: ExprKind::Call {
+                    name: builtin.name().to_string(),
+                    args: arg_typed,
+                },
+                ty: Type::Unit,
+            })
+        }
+        Builtin::UseAssetHandle => {
+            if arg_typed.len() != 2 && arg_typed.len() != 3 {
+                return Err(SemanticError {
+                    message:
+                        "use_asset_handle expects (AssetHandle, Blob|bytes intent[, ProofBlob])"
+                            .into(),
+                });
+            }
+            if arg_typed[0].ty != Type::AssetHandle || !is_blob_like(&arg_typed[1].ty) {
+                return Err(SemanticError {
+                    message:
+                        "use_asset_handle expects (AssetHandle, Blob|bytes intent[, ProofBlob])"
+                            .into(),
+                });
+            }
+            if arg_typed.len() == 3 && arg_typed[2].ty != Type::ProofBlob {
+                return Err(SemanticError {
+                    message: "use_asset_handle expects (AssetHandle, Blob intent[, ProofBlob])"
+                        .into(),
+                });
+            }
+            Ok(TypedExpr {
+                expr: ExprKind::Call {
+                    name: builtin.name().to_string(),
+                    args: arg_typed,
+                },
+                ty: Type::Unit,
+            })
+        }
+        Builtin::AxtCommit => {
+            if !arg_typed.is_empty() {
+                return Err(SemanticError {
+                    message: "axt_commit expects no arguments".into(),
+                });
+            }
+            Ok(TypedExpr {
+                expr: ExprKind::Call {
+                    name: builtin.name().to_string(),
+                    args: arg_typed,
+                },
+                ty: Type::Unit,
+            })
+        }
+        Builtin::DeactivateContractInstance
+        | Builtin::RemoveSmartContractBytes
+        | Builtin::RegisterSmartContractCode
+        | Builtin::RegisterSmartContractBytes
+        | Builtin::ActivateContractInstance => {
+            if arg_typed.len() != 1 || !is_blob_like(&arg_typed[0].ty) {
+                return Err(SemanticError {
+                    message: format!(
+                        "{} expects (Blob|bytes) pointer to NoritoBytes lifecycle request",
+                        builtin.name()
+                    ),
+                });
+            }
+            Ok(TypedExpr {
+                expr: ExprKind::Call {
+                    name: builtin.name().to_string(),
+                    args: arg_typed,
+                },
+                ty: Type::Unit,
+            })
+        }
+        Builtin::SoracloudReadCommittedState
+        | Builtin::SoracloudEmitStateMutation
+        | Builtin::SoracloudEmitMailboxMessage
+        | Builtin::SoracloudAppendJournal
+        | Builtin::SoracloudPublishCheckpoint
+        | Builtin::SoracloudReadSecret
+        | Builtin::SoracloudReadCredential
+        | Builtin::SoracloudEgressFetch
+        | Builtin::SoracloudReadConfig
+        | Builtin::SoracloudReadSecretEnvelope => {
+            if arg_typed.len() != 1
+                || resolve_struct_type(&arg_typed[0].ty) != Type::SoracloudRequest
+            {
+                return Err(SemanticError {
+                    message: format!("{} expects (SoracloudRequest)", builtin.name()),
+                });
+            }
+            Ok(TypedExpr {
+                expr: ExprKind::Call {
+                    name: builtin.name().to_string(),
+                    args: arg_typed,
+                },
+                ty: Type::SoracloudResponse,
+            })
+        }
+        Builtin::AddSignatory | Builtin::RemoveSignatory => {
+            if arg_typed.len() != 2
+                || !(arg_typed[0].ty == Type::AccountId && arg_typed[1].ty == Type::Json)
+            {
+                return Err(SemanticError {
+                    message: format!("{} expects (AccountId, Json)", builtin.name()),
+                });
+            }
+            Ok(TypedExpr {
+                expr: ExprKind::Call {
+                    name: builtin.name().to_string(),
+                    args: arg_typed,
+                },
+                ty: Type::Unit,
+            })
+        }
+        Builtin::SetAccountQuorum => {
+            if arg_typed.len() != 2
+                || !(arg_typed[0].ty == Type::AccountId && is_int_like(&arg_typed[1].ty))
+            {
+                return Err(SemanticError {
+                    message: "set_account_quorum expects (AccountId, numeric)".into(),
+                });
+            }
+            Ok(TypedExpr {
+                expr: ExprKind::Call {
+                    name: builtin.name().to_string(),
+                    args: arg_typed,
+                },
+                ty: Type::Unit,
+            })
+        }
         Builtin::Path => {
             if arg_typed.len() != 2 || arg_typed[0].ty != Type::Name {
                 return Err(SemanticError {
@@ -3302,6 +4853,84 @@ fn analyze_surface_builtin_call(
                     args: arg_typed,
                 },
                 ty: Type::Name,
+            })
+        }
+        Builtin::NameDecode => {
+            if arg_typed.len() != 1 || !is_blob_like(&arg_typed[0].ty) {
+                return Err(SemanticError {
+                    message: "name_decode expects (Blob|bytes)".into(),
+                });
+            }
+            Ok(TypedExpr {
+                expr: ExprKind::Call {
+                    name: builtin.name().to_string(),
+                    args: arg_typed,
+                },
+                ty: Type::Name,
+            })
+        }
+        Builtin::TlvEq => {
+            if arg_typed.len() != 2 {
+                return Err(SemanticError {
+                    message: "tlv_eq expects (pointer-ABI, pointer-ABI)".into(),
+                });
+            }
+            for arg in &arg_typed {
+                let ty = resolve_struct_type(&arg.ty);
+                if !(is_pointer_type(&ty) || is_blob_like(&ty) || ty == Type::Json) {
+                    return Err(SemanticError {
+                        message: "tlv_eq expects (pointer-ABI, pointer-ABI)".into(),
+                    });
+                }
+            }
+            Ok(TypedExpr {
+                expr: ExprKind::Call {
+                    name: builtin.name().to_string(),
+                    args: arg_typed,
+                },
+                ty: Type::Bool,
+            })
+        }
+        Builtin::TlvLen => {
+            if arg_typed.len() != 1 {
+                return Err(SemanticError {
+                    message: "tlv_len expects one argument".into(),
+                });
+            }
+            let ty = resolve_struct_type(&arg_typed[0].ty);
+            if !(is_pointer_type(&ty) || is_blob_like(&ty) || ty == Type::Json) {
+                return Err(SemanticError {
+                    message: "tlv_len expects a pointer-ABI type, Json, or Blob|bytes argument"
+                        .into(),
+                });
+            }
+            Ok(TypedExpr {
+                expr: ExprKind::Call {
+                    name: builtin.name().to_string(),
+                    args: arg_typed,
+                },
+                ty: Type::Int,
+            })
+        }
+        Builtin::PointerToNorito => {
+            if arg_typed.len() != 1 {
+                return Err(SemanticError {
+                    message: "pointer_to_norito expects one argument".into(),
+                });
+            }
+            let ty = resolve_struct_type(&arg_typed[0].ty);
+            if !(is_pointer_type(&ty) || is_blob_like(&ty)) {
+                return Err(SemanticError {
+                    message: "pointer_to_norito expects a pointer-ABI type or Blob|bytes argument"
+                        .into(),
+                });
+            }
+            Ok(TypedExpr {
+                expr: ExprKind::Call {
+                    name: builtin.name().to_string(),
+                    args: arg_typed,
+                },
+                ty: Type::Bytes,
             })
         }
         Builtin::JsonObject => {
@@ -3354,6 +4983,464 @@ fn analyze_surface_builtin_call(
                 ty: Type::Json,
             })
         }
+        Builtin::EncodeInt => {
+            if arg_typed.len() != 1 || !is_int_like(&arg_typed[0].ty) {
+                return Err(SemanticError {
+                    message: "encode_int expects (int)".into(),
+                });
+            }
+            Ok(TypedExpr {
+                expr: ExprKind::Call {
+                    name: builtin.name().to_string(),
+                    args: arg_typed,
+                },
+                ty: Type::Bytes,
+            })
+        }
+        Builtin::DecodeInt => {
+            if arg_typed.len() != 1 || !is_blob_like(&arg_typed[0].ty) {
+                return Err(SemanticError {
+                    message: "decode_int expects (Blob|bytes)".into(),
+                });
+            }
+            Ok(TypedExpr {
+                expr: ExprKind::Call {
+                    name: builtin.name().to_string(),
+                    args: arg_typed,
+                },
+                ty: Type::Int,
+            })
+        }
+        Builtin::EncodeJson => {
+            if arg_typed.len() != 1 || arg_typed[0].ty != Type::Json {
+                return Err(SemanticError {
+                    message: "encode_json expects (Json)".into(),
+                });
+            }
+            Ok(TypedExpr {
+                expr: ExprKind::Call {
+                    name: builtin.name().to_string(),
+                    args: arg_typed,
+                },
+                ty: Type::Bytes,
+            })
+        }
+        Builtin::DecodeJson => {
+            if arg_typed.len() != 1 || !is_blob_like(&arg_typed[0].ty) {
+                return Err(SemanticError {
+                    message: "decode_json expects (Blob|bytes)".into(),
+                });
+            }
+            Ok(TypedExpr {
+                expr: ExprKind::Call {
+                    name: builtin.name().to_string(),
+                    args: arg_typed,
+                },
+                ty: Type::Json,
+            })
+        }
+        Builtin::JsonSetIntDirect => {
+            if arg_typed.len() != 3
+                || arg_typed[0].ty != Type::Json
+                || arg_typed[1].ty != Type::Name
+                || !is_int_like(&arg_typed[2].ty)
+            {
+                return Err(SemanticError {
+                    message: "json_set_int_direct expects (Json, Name, int)".into(),
+                });
+            }
+            Ok(TypedExpr {
+                expr: ExprKind::Call {
+                    name: builtin.name().to_string(),
+                    args: arg_typed,
+                },
+                ty: Type::Json,
+            })
+        }
+        Builtin::JsonSetAccountIdDirect => {
+            if arg_typed.len() != 3
+                || arg_typed[0].ty != Type::Json
+                || arg_typed[1].ty != Type::Name
+                || arg_typed[2].ty != Type::AccountId
+            {
+                return Err(SemanticError {
+                    message: "json_set_account_id_direct expects (Json, Name, AccountId)".into(),
+                });
+            }
+            Ok(TypedExpr {
+                expr: ExprKind::Call {
+                    name: builtin.name().to_string(),
+                    args: arg_typed,
+                },
+                ty: Type::Json,
+            })
+        }
+        Builtin::JsonGetIntDirect
+        | Builtin::JsonGetNumericDirect
+        | Builtin::JsonGetJsonDirect
+        | Builtin::JsonGetNameDirect
+        | Builtin::JsonGetAccountIdDirect
+        | Builtin::JsonGetAssetDefinitionIdDirect
+        | Builtin::JsonGetNftIdDirect
+        | Builtin::JsonGetBlobHexDirect => {
+            reject_public_payload_helper(builtin.name())?;
+            if arg_typed.len() != 2
+                || arg_typed[0].ty != Type::Json
+                || arg_typed[1].ty != Type::Name
+            {
+                return Err(SemanticError {
+                    message: format!("{} expects (Json, Name)", builtin.name()),
+                });
+            }
+            let ty = direct_json_getter_type(builtin).expect("direct JSON getter type");
+            Ok(TypedExpr {
+                expr: ExprKind::Call {
+                    name: builtin.name().to_string(),
+                    args: arg_typed,
+                },
+                ty,
+            })
+        }
+        Builtin::BuildPathKeyNoritoDirect => {
+            if arg_typed.len() != 2
+                || arg_typed[0].ty != Type::Name
+                || !is_blob_like(&arg_typed[1].ty)
+            {
+                return Err(SemanticError {
+                    message: "build_path_key_norito_direct expects (Name, Blob|bytes)".into(),
+                });
+            }
+            Ok(TypedExpr {
+                expr: ExprKind::Call {
+                    name: builtin.name().to_string(),
+                    args: arg_typed,
+                },
+                ty: Type::Name,
+            })
+        }
+        Builtin::SchemaEncode => {
+            if arg_typed.len() != 2
+                || arg_typed[0].ty != Type::Name
+                || arg_typed[1].ty != Type::Json
+            {
+                return Err(SemanticError {
+                    message: "encode_schema expects (Name, Json)".into(),
+                });
+            }
+            Ok(TypedExpr {
+                expr: ExprKind::Call {
+                    name: builtin.name().to_string(),
+                    args: arg_typed,
+                },
+                ty: Type::Bytes,
+            })
+        }
+        Builtin::SchemaDecode => {
+            if arg_typed.len() != 2
+                || arg_typed[0].ty != Type::Name
+                || !is_blob_like(&arg_typed[1].ty)
+            {
+                return Err(SemanticError {
+                    message: "decode_schema expects (Name, Blob|bytes)".into(),
+                });
+            }
+            Ok(TypedExpr {
+                expr: ExprKind::Call {
+                    name: builtin.name().to_string(),
+                    args: arg_typed,
+                },
+                ty: Type::Json,
+            })
+        }
+        Builtin::SchemaInfo => {
+            if arg_typed.len() != 1 || arg_typed[0].ty != Type::Name {
+                return Err(SemanticError {
+                    message: "schema_info expects (Name)".into(),
+                });
+            }
+            Ok(TypedExpr {
+                expr: ExprKind::Call {
+                    name: builtin.name().to_string(),
+                    args: arg_typed,
+                },
+                ty: Type::Json,
+            })
+        }
+        Builtin::SchemaEncodeDirect => {
+            if arg_typed.len() != 2
+                || arg_typed[0].ty != Type::Name
+                || arg_typed[1].ty != Type::Json
+            {
+                return Err(SemanticError {
+                    message: "encode_schema_direct expects (Name, Json)".into(),
+                });
+            }
+            Ok(TypedExpr {
+                expr: ExprKind::Call {
+                    name: builtin.name().to_string(),
+                    args: arg_typed,
+                },
+                ty: Type::Bytes,
+            })
+        }
+        Builtin::SchemaDecodeDirect => {
+            if arg_typed.len() != 2
+                || arg_typed[0].ty != Type::Name
+                || !is_blob_like(&arg_typed[1].ty)
+            {
+                return Err(SemanticError {
+                    message: "decode_schema_direct expects (Name, Blob|bytes)".into(),
+                });
+            }
+            Ok(TypedExpr {
+                expr: ExprKind::Call {
+                    name: builtin.name().to_string(),
+                    args: arg_typed,
+                },
+                ty: Type::Json,
+            })
+        }
+        Builtin::SchemaInfoDirect => {
+            if arg_typed.len() != 1 || arg_typed[0].ty != Type::Name {
+                return Err(SemanticError {
+                    message: "schema_info_direct expects (Name)".into(),
+                });
+            }
+            Ok(TypedExpr {
+                expr: ExprKind::Call {
+                    name: builtin.name().to_string(),
+                    args: arg_typed,
+                },
+                ty: Type::Json,
+            })
+        }
+        Builtin::NumericToInt => {
+            if arg_typed.len() != 1 || !is_wide_numeric_type(&arg_typed[0].ty) {
+                return Err(SemanticError {
+                    message: "numeric_to_int expects (Amount|Balance|fixed_u128)".into(),
+                });
+            }
+            Ok(TypedExpr {
+                expr: ExprKind::Call {
+                    name: builtin.name().to_string(),
+                    args: arg_typed,
+                },
+                ty: Type::Int,
+            })
+        }
+        Builtin::NumericNeg => {
+            if arg_typed.len() != 1 || !is_wide_numeric_type(&arg_typed[0].ty) {
+                return Err(SemanticError {
+                    message: "numeric_neg expects (Amount|Balance|fixed_u128)".into(),
+                });
+            }
+            Ok(TypedExpr {
+                expr: ExprKind::Call {
+                    name: builtin.name().to_string(),
+                    args: arg_typed.clone(),
+                },
+                ty: resolve_struct_type(&arg_typed[0].ty),
+            })
+        }
+        Builtin::NumericToIntDirect => {
+            if arg_typed.len() != 1 || !is_wide_numeric_type(&arg_typed[0].ty) {
+                return Err(SemanticError {
+                    message: "numeric_to_int_direct expects (Amount|Balance|fixed_u128)".into(),
+                });
+            }
+            Ok(TypedExpr {
+                expr: ExprKind::Call {
+                    name: builtin.name().to_string(),
+                    args: arg_typed,
+                },
+                ty: Type::Int,
+            })
+        }
+        Builtin::NumericNegDirect => {
+            if arg_typed.len() != 1 || !is_wide_numeric_type(&arg_typed[0].ty) {
+                return Err(SemanticError {
+                    message: "numeric_neg_direct expects (Amount|Balance|fixed_u128)".into(),
+                });
+            }
+            Ok(TypedExpr {
+                expr: ExprKind::Call {
+                    name: builtin.name().to_string(),
+                    args: arg_typed.clone(),
+                },
+                ty: resolve_struct_type(&arg_typed[0].ty),
+            })
+        }
+        Builtin::NumericAdd
+        | Builtin::NumericSub
+        | Builtin::NumericMul
+        | Builtin::NumericDiv
+        | Builtin::NumericRem
+        | Builtin::NumericAddDirect
+        | Builtin::NumericSubDirect
+        | Builtin::NumericMulDirect
+        | Builtin::NumericDivDirect
+        | Builtin::NumericRemDirect => {
+            let builtin = builtin;
+            if arg_typed.len() != 2
+                || !is_wide_numeric_type(&arg_typed[0].ty)
+                || !is_wide_numeric_type(&arg_typed[1].ty)
+            {
+                return Err(SemanticError {
+                    message: format!(
+                        "{} expects (Amount|Balance|fixed_u128, Amount|Balance|fixed_u128)",
+                        builtin.name()
+                    ),
+                });
+            }
+            let Some(result_ty) = numeric_result_type(&arg_typed[0].ty, &arg_typed[1].ty) else {
+                return Err(SemanticError {
+                    message: format!(
+                        "{} expects compatible wide numeric operands",
+                        builtin.name()
+                    ),
+                });
+            };
+            if !is_wide_numeric_type(&result_ty) {
+                return Err(SemanticError {
+                    message: format!("{} expects wide numeric operands", builtin.name()),
+                });
+            }
+            Ok(TypedExpr {
+                expr: ExprKind::Call {
+                    name: builtin.name().to_string(),
+                    args: arg_typed,
+                },
+                ty: result_ty,
+            })
+        }
+        Builtin::NumericEq
+        | Builtin::NumericNe
+        | Builtin::NumericLt
+        | Builtin::NumericLe
+        | Builtin::NumericGt
+        | Builtin::NumericGe
+        | Builtin::NumericEqDirect
+        | Builtin::NumericNeDirect
+        | Builtin::NumericLtDirect
+        | Builtin::NumericLeDirect
+        | Builtin::NumericGtDirect
+        | Builtin::NumericGeDirect => {
+            let builtin = builtin;
+            if arg_typed.len() != 2
+                || !is_wide_numeric_type(&arg_typed[0].ty)
+                || !is_wide_numeric_type(&arg_typed[1].ty)
+                || numeric_result_type(&arg_typed[0].ty, &arg_typed[1].ty).is_none()
+            {
+                return Err(SemanticError {
+                    message: format!(
+                        "{} expects compatible wide numeric operands",
+                        builtin.name()
+                    ),
+                });
+            }
+            Ok(TypedExpr {
+                expr: ExprKind::Call {
+                    name: builtin.name().to_string(),
+                    args: arg_typed,
+                },
+                ty: Type::Bool,
+            })
+        }
+        Builtin::Isqrt | Builtin::Abs => {
+            let name = builtin.name();
+            if arg_typed.len() != 1 || !is_int_like(&arg_typed[0].ty) {
+                return Err(SemanticError {
+                    message: format!("{name} expects (int)"),
+                });
+            }
+            Ok(TypedExpr {
+                expr: ExprKind::Call {
+                    name: name.to_string(),
+                    args: arg_typed,
+                },
+                ty: Type::Int,
+            })
+        }
+        Builtin::Min | Builtin::Max | Builtin::DivCeil | Builtin::Gcd | Builtin::Mean => {
+            let name = builtin.name();
+            if arg_typed.len() != 2
+                || !is_int_like(&arg_typed[0].ty)
+                || !is_int_like(&arg_typed[1].ty)
+            {
+                return Err(SemanticError {
+                    message: format!("{name} expects (int, int)"),
+                });
+            }
+            Ok(TypedExpr {
+                expr: ExprKind::Call {
+                    name: name.to_string(),
+                    args: arg_typed,
+                },
+                ty: Type::Int,
+            })
+        }
+        Builtin::Poseidon2 | Builtin::Valcom => {
+            let name = builtin.name();
+            let message = if builtin == Builtin::Poseidon2 {
+                "poseidon2 expects two int args"
+            } else {
+                "valcom expects two int args"
+            };
+            if arg_typed.len() != 2 || !arg_typed.iter().all(|arg| is_int_like(&arg.ty)) {
+                return Err(SemanticError {
+                    message: message.into(),
+                });
+            }
+            Ok(TypedExpr {
+                expr: ExprKind::Call {
+                    name: name.to_string(),
+                    args: arg_typed,
+                },
+                ty: Type::Int,
+            })
+        }
+        Builtin::Poseidon6 => {
+            if arg_typed.len() != 6 || !arg_typed.iter().all(|arg| is_int_like(&arg.ty)) {
+                return Err(SemanticError {
+                    message: "poseidon6 expects six int args".into(),
+                });
+            }
+            Ok(TypedExpr {
+                expr: ExprKind::Call {
+                    name: builtin.name().to_string(),
+                    args: arg_typed,
+                },
+                ty: Type::Int,
+            })
+        }
+        Builtin::Pubkgen => {
+            if arg_typed.len() != 1 || !is_int_like(&arg_typed[0].ty) {
+                return Err(SemanticError {
+                    message: "pubkgen expects one int arg".into(),
+                });
+            }
+            Ok(TypedExpr {
+                expr: ExprKind::Call {
+                    name: builtin.name().to_string(),
+                    args: arg_typed,
+                },
+                ty: Type::Int,
+            })
+        }
+        Builtin::SetVl => {
+            if arg_typed.len() != 1 || !is_int_like(&arg_typed[0].ty) {
+                return Err(SemanticError {
+                    message: "setvl expects one int arg".into(),
+                });
+            }
+            Ok(TypedExpr {
+                expr: ExprKind::Call {
+                    name: builtin.name().to_string(),
+                    args: arg_typed,
+                },
+                ty: Type::Unit,
+            })
+        }
         Builtin::GetInt
         | Builtin::GetNumeric
         | Builtin::GetJson
@@ -3388,6 +5475,63 @@ fn analyze_surface_builtin_call(
                     args: arg_typed,
                 },
                 ty,
+            })
+        }
+        Builtin::TriggerEvent => {
+            reject_public_payload_helper(builtin.name())?;
+            if !arg_typed.is_empty() {
+                return Err(SemanticError {
+                    message: "trigger_event expects no arguments".into(),
+                });
+            }
+            Ok(TypedExpr {
+                expr: ExprKind::Call {
+                    name: builtin.name().to_string(),
+                    args: arg_typed,
+                },
+                ty: Type::Json,
+            })
+        }
+        Builtin::Authority | Builtin::SysvarAuthority => {
+            if !arg_typed.is_empty() {
+                return Err(SemanticError {
+                    message: format!("{} expects no arguments", builtin.name()),
+                });
+            }
+            Ok(TypedExpr {
+                expr: ExprKind::Call {
+                    name: builtin.name().to_string(),
+                    args: arg_typed,
+                },
+                ty: Type::AccountId,
+            })
+        }
+        Builtin::CurrentTimeMs | Builtin::BlockHeight | Builtin::BlockTimeMs => {
+            if !arg_typed.is_empty() {
+                return Err(SemanticError {
+                    message: format!("{} expects no arguments", builtin.name()),
+                });
+            }
+            Ok(TypedExpr {
+                expr: ExprKind::Call {
+                    name: builtin.name().to_string(),
+                    args: arg_typed,
+                },
+                ty: Type::Int,
+            })
+        }
+        Builtin::ChainId | Builtin::ContractAddress | Builtin::Entrypoint => {
+            if !arg_typed.is_empty() {
+                return Err(SemanticError {
+                    message: format!("{} expects no arguments", builtin.name()),
+                });
+            }
+            Ok(TypedExpr {
+                expr: ExprKind::Call {
+                    name: builtin.name().to_string(),
+                    args: arg_typed,
+                },
+                ty: Type::Bytes,
             })
         }
     }
@@ -3782,149 +5926,64 @@ fn analyze_expr(expr: &Expr, vars: &mut HashMap<String, Type>) -> Result<TypedEx
                 for a in &args[1..] {
                     arg_typed.push(analyze_expr(a, vars)?);
                 }
+                if let Some(
+                    builtin @ (Builtin::SetAccountDetail
+                    | Builtin::AddSignatory
+                    | Builtin::RemoveSignatory
+                    | Builtin::SetAccountQuorum
+                    | Builtin::MintAsset
+                    | Builtin::BurnAsset
+                    | Builtin::TransferAsset
+                    | Builtin::NftMintAsset
+                    | Builtin::NftSetMetadata
+                    | Builtin::NftBurnAsset
+                    | Builtin::NftTransferAsset
+                    | Builtin::RegisterDomain
+                    | Builtin::UnregisterDomain
+                    | Builtin::TransferDomain
+                    | Builtin::RegisterAccount
+                    | Builtin::UnregisterAccount
+                    | Builtin::RegisterAsset
+                    | Builtin::CreateNewAsset
+                    | Builtin::UnregisterAsset
+                    | Builtin::RegisterPeer
+                    | Builtin::UnregisterPeer
+                    | Builtin::CreateTrigger
+                    | Builtin::RegisterTrigger
+                    | Builtin::RemoveTrigger
+                    | Builtin::UnregisterTrigger
+                    | Builtin::SetTriggerEnabled
+                    | Builtin::CreateRole
+                    | Builtin::DeleteRole
+                    | Builtin::GrantRole
+                    | Builtin::RevokeRole
+                    | Builtin::GrantPermission
+                    | Builtin::RevokePermission
+                    | Builtin::EscrowOpenOffer
+                    | Builtin::EscrowAccept
+                    | Builtin::EscrowMarkPaymentSent
+                    | Builtin::EscrowRelease
+                    | Builtin::EscrowCancel
+                    | Builtin::EscrowOpenDispute
+                    | Builtin::EscrowResolveDispute
+                    | Builtin::AnonymousEscrowOpenOffer
+                    | Builtin::AnonymousEscrowAccept
+                    | Builtin::AnonymousEscrowMarkPaymentSent
+                    | Builtin::AnonymousEscrowRelease
+                    | Builtin::AnonymousEscrowCancel
+                    | Builtin::AnonymousEscrowOpenDispute
+                    | Builtin::AnonymousEscrowResolveDispute
+                    | Builtin::TransferV1BatchBegin
+                    | Builtin::TransferV1BatchEnd
+                    | Builtin::TransferV1BatchApply
+                    | Builtin::TransferBatch),
+                ) = Builtin::from_name(&callee)
+                {
+                    return analyze_surface_builtin_call(builtin, arg_typed);
+                }
 
                 // Re-use normal builtin typing by matching on the resolved callee name.
                 return match callee.as_str() {
-                    // First slice: translate to existing builtins
-                    "set_account_detail" => {
-                        if arg_typed.len() != 3
-                            || !(arg_typed[0].ty == Type::AccountId
-                                && arg_typed[1].ty == Type::Name
-                                && arg_typed[2].ty == Type::Json)
-                        {
-                            return Err(SemanticError {
-                                message: "set_account_detail expects (AccountId, Name, Json)"
-                                    .into(),
-                            });
-                        }
-                        Ok(TypedExpr {
-                            expr: ExprKind::Call {
-                                name: callee,
-                                args: arg_typed,
-                            },
-                            ty: Type::Unit,
-                        })
-                    }
-                    "transfer_asset" => {
-                        if arg_typed.len() != 4
-                            || !(arg_typed[0].ty == Type::AccountId
-                                && arg_typed[1].ty == Type::AccountId
-                                && arg_typed[2].ty == Type::AssetDefinitionId
-                                && is_int_like(&arg_typed[3].ty))
-                        {
-                            return Err(SemanticError {
-                                message: "transfer_asset expects (AccountId, AccountId, AssetDefinitionId, int)".into(),
-                            });
-                        }
-                        Ok(TypedExpr {
-                            expr: ExprKind::Call {
-                                name: callee,
-                                args: arg_typed,
-                            },
-                            ty: Type::Unit,
-                        })
-                    }
-                    "escrow_open_offer" => {
-                        if !(arg_typed.len() == 3 || arg_typed.len() == 4)
-                            || !(arg_typed[0].ty == Type::Name
-                                && arg_typed[1].ty == Type::AssetDefinitionId
-                                && is_int_like(&arg_typed[2].ty))
-                            || (arg_typed.len() == 4 && !is_blob_like(&arg_typed[3].ty))
-                        {
-                            return Err(SemanticError {
-                                message:
-                                    "escrow_open_offer expects (Name, AssetDefinitionId, numeric[, Blob|bytes evidence_hashes])"
-                                        .into(),
-                            });
-                        }
-                        Ok(TypedExpr {
-                            expr: ExprKind::Call {
-                                name: callee,
-                                args: arg_typed,
-                            },
-                            ty: Type::Unit,
-                        })
-                    }
-                    "escrow_accept"
-                    | "escrow_mark_payment_sent"
-                    | "escrow_release"
-                    | "escrow_cancel" => {
-                        if arg_typed.len() != 1 || arg_typed[0].ty != Type::Name {
-                            return Err(SemanticError {
-                                message: format!("{callee} expects (Name)"),
-                            });
-                        }
-                        Ok(TypedExpr {
-                            expr: ExprKind::Call {
-                                name: callee,
-                                args: arg_typed,
-                            },
-                            ty: Type::Unit,
-                        })
-                    }
-                    "escrow_open_dispute" => {
-                        if !(arg_typed.len() == 1 || arg_typed.len() == 2)
-                            || arg_typed[0].ty != Type::Name
-                            || (arg_typed.len() == 2 && !is_blob_like(&arg_typed[1].ty))
-                        {
-                            return Err(SemanticError {
-                                message:
-                                    "escrow_open_dispute expects (Name[, Blob|bytes evidence_hashes])"
-                                        .into(),
-                            });
-                        }
-                        Ok(TypedExpr {
-                            expr: ExprKind::Call {
-                                name: callee,
-                                args: arg_typed,
-                            },
-                            ty: Type::Unit,
-                        })
-                    }
-                    "escrow_resolve_dispute" => {
-                        if !(arg_typed.len() == 3 || arg_typed.len() == 4)
-                            || !(arg_typed[0].ty == Type::Name
-                                && is_int_like(&arg_typed[1].ty)
-                                && is_int_like(&arg_typed[2].ty))
-                            || (arg_typed.len() == 4 && !is_blob_like(&arg_typed[3].ty))
-                        {
-                            return Err(SemanticError {
-                                message: "escrow_resolve_dispute expects (Name, numeric, numeric[, Blob|bytes evidence_hashes])"
-                                    .into(),
-                            });
-                        }
-                        Ok(TypedExpr {
-                            expr: ExprKind::Call {
-                                name: callee,
-                                args: arg_typed,
-                            },
-                            ty: Type::Unit,
-                        })
-                    }
-                    "transfer_v1_batch_begin" | "transfer_v1_batch_end" => {
-                        if !arg_typed.is_empty() {
-                            return Err(SemanticError {
-                                message: format!("{callee} expects ()"),
-                            });
-                        }
-                        Ok(TypedExpr {
-                            expr: ExprKind::Call {
-                                name: callee,
-                                args: arg_typed,
-                            },
-                            ty: Type::Unit,
-                        })
-                    }
-                    "transfer_batch" => {
-                        ensure_transfer_batch_args(&arg_typed)?;
-                        Ok(TypedExpr {
-                            expr: ExprKind::Call {
-                                name: callee,
-                                args: arg_typed,
-                            },
-                            ty: Type::Unit,
-                        })
-                    }
                     // Fallback: user-defined calls use recorded return types when available.
                     other => {
                         if is_user_defined_function(other)
@@ -4006,409 +6065,6 @@ fn analyze_expr(expr: &Expr, vars: &mut HashMap<String, Type>) -> Result<TypedEx
                 return analyze_surface_builtin_call(builtin, arg_typed);
             }
             match name.as_str() {
-                // get_or_default(Map<int,int>, int, int) -> int (utility)
-                "get_or_default" => {
-                    if arg_typed.len() != 3 {
-                        return Err(SemanticError {
-                            message: "get_or_default expects (Map<K,V>, K, V)".into(),
-                        });
-                    }
-                    let (key_ty, value_ty) = match &arg_typed[0].ty {
-                        Type::Map(k, v) => (k.as_ref().clone(), v.as_ref().clone()),
-                        other => {
-                            return Err(SemanticError {
-                                message: format!(
-                                    "get_or_default expects Map<K,V> as first arg, got {}",
-                                    type_name(other)
-                                ),
-                            });
-                        }
-                    };
-                    ensure_assignable_and_coerce(&key_ty, &mut arg_typed[1])?;
-                    ensure_assignable_and_coerce(&value_ty, &mut arg_typed[2])?;
-                    ensure_in_memory_map_word_types(&arg_typed[0])?;
-                    let value_ty = match resolve_struct_type(&arg_typed[0].ty) {
-                        Type::Map(_, v) => *v,
-                        _ => Type::Int,
-                    };
-                    Ok(TypedExpr {
-                        expr: ExprKind::Call {
-                            name: name.clone(),
-                            args: arg_typed,
-                        },
-                        ty: resolve_struct_type(&value_ty),
-                    })
-                }
-                // Map contains helper: contains(Map<K,V>, K) -> bool
-                "contains" => {
-                    if arg_typed.len() != 2 {
-                        return Err(SemanticError {
-                            message: "contains expects (Map<K,V>, K)".into(),
-                        });
-                    }
-                    match &arg_typed[0].ty {
-                        Type::Map(k, _v) => {
-                            ensure_assignable_and_coerce(&k.clone(), &mut arg_typed[1])?;
-                            ensure_in_memory_map_word_types(&arg_typed[0])?;
-                            Ok(TypedExpr {
-                                expr: ExprKind::Call {
-                                    name: name.clone(),
-                                    args: arg_typed,
-                                },
-                                ty: Type::Bool,
-                            })
-                        }
-                        other => Err(SemanticError {
-                            message: format!(
-                                "contains expects Map<K,V> as first arg, got {}",
-                                type_name(other)
-                            ),
-                        }),
-                    }
-                }
-                // get_or(Map<int,int>, int) -> int
-                // Deterministic lowering returns the existing value or the supplied default without mutating the map.
-                "get_or" => {
-                    let original_len = arg_typed.len();
-                    if original_len != 2 && original_len != 3 {
-                        return Err(SemanticError {
-                            message: "get_or expects (Map<K,V>, K[, V])".into(),
-                        });
-                    }
-                    let mut call_args = arg_typed;
-                    let map_ty = resolve_struct_type(&call_args[0].ty);
-                    let (map_key_ty, map_value_ty) = match map_ty {
-                        Type::Map(k, v) => (*k, *v),
-                        other => {
-                            return Err(SemanticError {
-                                message: format!(
-                                    "get_or expects Map<K,V> as first arg, got {}",
-                                    type_name(&other)
-                                ),
-                            });
-                        }
-                    };
-                    let resolved_key_ty = resolve_struct_type(&map_key_ty);
-                    let resolved_value_ty = resolve_struct_type(&map_value_ty);
-                    ensure_assignable_and_coerce(&resolved_key_ty, &mut call_args[1])?;
-                    ensure_in_memory_map_word_types(&call_args[0])?;
-
-                    if original_len == 2 {
-                        match resolve_struct_type(&resolved_value_ty) {
-                            Type::Int => {
-                                call_args.push(TypedExpr {
-                                    expr: ExprKind::Number(0),
-                                    ty: Type::Int,
-                                });
-                            }
-                            other => {
-                                if is_pointer_type(&other) {
-                                    return Err(SemanticError {
-                                        message: format!(
-                                            "get_or requires an explicit default for pointer-valued maps (value type {})",
-                                            type_name(&other)
-                                        ),
-                                    });
-                                }
-                                return Err(SemanticError {
-                                    message: format!(
-                                        "get_or auto-default is only available for Map<*,int>; provide an explicit default for value type {}",
-                                        type_name(&other)
-                                    ),
-                                });
-                            }
-                        }
-                    } else {
-                        ensure_assignable_and_coerce(&resolved_value_ty, &mut call_args[2])?;
-                    }
-                    Ok(TypedExpr {
-                        expr: ExprKind::Call {
-                            name: name.clone(),
-                            args: call_args,
-                        },
-                        ty: resolved_value_ty,
-                    })
-                }
-                // ensure(Map<int,int>, int) -> int
-                // Deterministic lowering: durable path uses STATE_GET/SET with Norito-encoded 0 when missing;
-                // ephemeral path compares and inserts 0 on mismatch.
-                "ensure" => {
-                    let in_view = CURRENT_FUNCTION_MODIFIERS.with(|mods| {
-                        mods.borrow()
-                            .as_ref()
-                            .is_some_and(|modifiers| modifiers.kind == FunctionKind::View)
-                    });
-                    if in_view {
-                        return Err(SemanticError {
-                            message: "view entrypoints cannot use mutating map helper `ensure`; use `get_or` instead".into(),
-                        });
-                    }
-                    let original_len = arg_typed.len();
-                    if original_len != 2 && original_len != 3 {
-                        return Err(SemanticError {
-                            message: "ensure expects (Map<K,V>, K[, V])".into(),
-                        });
-                    }
-                    let mut call_args = arg_typed;
-                    let map_ty = resolve_struct_type(&call_args[0].ty);
-                    let (map_key_ty, map_value_ty) = match map_ty {
-                        Type::Map(k, v) => (*k, *v),
-                        other => {
-                            return Err(SemanticError {
-                                message: format!(
-                                    "ensure expects Map<K,V> as first arg, got {}",
-                                    type_name(&other)
-                                ),
-                            });
-                        }
-                    };
-                    let resolved_key_ty = resolve_struct_type(&map_key_ty);
-                    let resolved_value_ty = resolve_struct_type(&map_value_ty);
-                    ensure_assignable_and_coerce(&resolved_key_ty, &mut call_args[1])?;
-                    ensure_in_memory_map_word_types(&call_args[0])?;
-
-                    if original_len == 2 {
-                        match resolve_struct_type(&resolved_value_ty) {
-                            Type::Int => {
-                                call_args.push(TypedExpr {
-                                    expr: ExprKind::Number(0),
-                                    ty: Type::Int,
-                                });
-                            }
-                            other => {
-                                if is_pointer_type(&other) {
-                                    return Err(SemanticError {
-                                        message: format!(
-                                            "ensure requires an explicit default for pointer-valued maps (value type {})",
-                                            type_name(&other)
-                                        ),
-                                    });
-                                }
-                                return Err(SemanticError {
-                                    message: format!(
-                                        "ensure auto-default is only available for Map<*,int>; provide an explicit default for value type {}",
-                                        type_name(&other)
-                                    ),
-                                });
-                            }
-                        }
-                    } else {
-                        ensure_assignable_and_coerce(&resolved_value_ty, &mut call_args[2])?;
-                    }
-                    Ok(TypedExpr {
-                        expr: ExprKind::Call {
-                            name: "ensure".to_string(),
-                            args: call_args,
-                        },
-                        ty: resolved_value_ty,
-                    })
-                }
-                // keys_take2(Map<int,int>, start:int, which:int{0,1}) -> int
-                // values_take2(Map<int,int>, start:int, which:int{0,1}) -> int
-                // Fixed-cap guarded iterator helpers returning a single element selected by `which`.
-                "keys_take2" | "values_take2" => {
-                    if arg_typed.len() != 3 {
-                        return Err(SemanticError {
-                            message: format!("{name} expects (Map<int,int>, int start, int which)"),
-                        });
-                    }
-                    match &arg_typed[0].ty {
-                        Type::Map(k, v)
-                            if matches!(resolve_struct_type(k), Type::Int)
-                                && matches!(resolve_struct_type(v), Type::Int) => {}
-                        other => {
-                            return Err(SemanticError {
-                                message: format!(
-                                    "{name} expects Map<int,int> as first arg, got {}",
-                                    type_name(other)
-                                ),
-                            });
-                        }
-                    }
-                    if !matches!(resolve_struct_type(&arg_typed[1].ty), Type::Int)
-                        || !matches!(resolve_struct_type(&arg_typed[2].ty), Type::Int)
-                    {
-                        return Err(SemanticError {
-                            message: format!("{name} expects (Map<int,int>, int, int)"),
-                        });
-                    }
-                    Ok(TypedExpr {
-                        expr: ExprKind::Call {
-                            name: name.clone(),
-                            args: arg_typed,
-                        },
-                        ty: Type::Int,
-                    })
-                }
-                // keys_values_take2(Map<int,int>, start:int, which:int{0,1}) -> (int, int)
-                "keys_values_take2" => {
-                    if arg_typed.len() != 3 {
-                        return Err(SemanticError {
-                            message: "keys_values_take2 expects (Map<int,int>, int, int)".into(),
-                        });
-                    }
-                    match &arg_typed[0].ty {
-                        Type::Map(k, v)
-                            if matches!(resolve_struct_type(k), Type::Int)
-                                && matches!(resolve_struct_type(v), Type::Int) => {}
-                        other => {
-                            return Err(SemanticError {
-                                message: format!(
-                                    "keys_values_take2 expects Map<int,int> as first arg, got {}",
-                                    type_name(other)
-                                ),
-                            });
-                        }
-                    }
-                    if !matches!(resolve_struct_type(&arg_typed[1].ty), Type::Int)
-                        || !matches!(resolve_struct_type(&arg_typed[2].ty), Type::Int)
-                    {
-                        return Err(SemanticError {
-                            message: "keys_values_take2 expects (Map<int,int>, int, int)".into(),
-                        });
-                    }
-                    Ok(TypedExpr {
-                        expr: ExprKind::Call {
-                            name: name.clone(),
-                            args: arg_typed,
-                        },
-                        ty: Type::Tuple(vec![Type::Int, Type::Int]),
-                    })
-                }
-                // Durable state host helpers (pointer‑ABI):
-                // state_get(Name) -> Blob; state_set(Name, NoritoBytes) -> unit; state_del(Name) -> unit
-                "state_get" => {
-                    if arg_typed.len() != 1 || arg_typed[0].ty != Type::Name {
-                        return Err(SemanticError {
-                            message: "state_get expects (Name)".into(),
-                        });
-                    }
-                    Ok(TypedExpr {
-                        expr: ExprKind::Call {
-                            name: name.clone(),
-                            args: arg_typed,
-                        },
-                        ty: Type::Bytes,
-                    })
-                }
-                "state_set" => {
-                    if arg_typed.len() != 2
-                        || !(arg_typed[0].ty == Type::Name && is_blob_like(&arg_typed[1].ty))
-                    {
-                        return Err(SemanticError {
-                            message: "state_set expects (Name, Blob|bytes)".into(),
-                        });
-                    }
-                    Ok(TypedExpr {
-                        expr: ExprKind::Call {
-                            name: name.clone(),
-                            args: arg_typed,
-                        },
-                        ty: Type::Unit,
-                    })
-                }
-                "state_del" => {
-                    if arg_typed.len() != 1 || arg_typed[0].ty != Type::Name {
-                        return Err(SemanticError {
-                            message: "state_del expects (Name)".into(),
-                        });
-                    }
-                    Ok(TypedExpr {
-                        expr: ExprKind::Call {
-                            name: name.clone(),
-                            args: arg_typed,
-                        },
-                        ty: Type::Unit,
-                    })
-                }
-                "path" => {
-                    if arg_typed.len() != 2 || arg_typed[0].ty != Type::Name {
-                        return Err(SemanticError {
-                            message: "path expects (Name, int|Blob|bytes)".into(),
-                        });
-                    }
-                    if !(is_int_like(&arg_typed[1].ty) || is_blob_like(&arg_typed[1].ty)) {
-                        return Err(SemanticError {
-                            message: "path expects (Name, int|Blob|bytes)".into(),
-                        });
-                    }
-                    Ok(TypedExpr {
-                        expr: ExprKind::Call {
-                            name: "path".to_string(),
-                            args: arg_typed,
-                        },
-                        ty: Type::Name,
-                    })
-                }
-                // ZK verify intrinsics: expect one Blob argument (pointer to INPUT Norito TLV)
-                "zk_verify_transfer"
-                | "zk_verify_unshield"
-                | "zk_verify_batch"
-                | "zk_vote_verify_ballot"
-                | "zk_vote_verify_tally" => {
-                    if arg_typed.len() != 1 || !is_blob_like(&arg_typed[0].ty) {
-                        return Err(SemanticError {
-                            message: format!(
-                                "{name} expects (Blob|bytes) where the argument is a pointer to NoritoBytes TLV in INPUT"
-                            ),
-                        });
-                    }
-                    Ok(TypedExpr {
-                        expr: ExprKind::Call {
-                            name: name.clone(),
-                            args: arg_typed,
-                        },
-                        ty: Type::Unit,
-                    })
-                }
-                // Vendor bridge helpers: enqueue ISI via SMARTCONTRACT_EXECUTE_INSTRUCTION with NoritoBytes TLV pointer
-                "sc_execute_submit_ballot" | "sc_execute_unshield" | "execute_instruction" => {
-                    if arg_typed.len() != 1 || !is_blob_like(&arg_typed[0].ty) {
-                        return Err(SemanticError {
-                            message: format!(
-                                "{name} expects (Blob|bytes) where the argument is a pointer to NoritoBytes TLV in INPUT"
-                            ),
-                        });
-                    }
-                    Ok(TypedExpr {
-                        expr: ExprKind::Call {
-                            name: name.clone(),
-                            args: arg_typed,
-                        },
-                        ty: Type::Unit,
-                    })
-                }
-                // Vendor bridge helper: execute query via SMARTCONTRACT_EXECUTE_QUERY.
-                "execute_query" => {
-                    if arg_typed.len() != 1 || !is_blob_like(&arg_typed[0].ty) {
-                        return Err(SemanticError {
-                            message: format!(
-                                "{name} expects (Blob|bytes) where the argument is a pointer to NoritoBytes TLV in INPUT"
-                            ),
-                        });
-                    }
-                    Ok(TypedExpr {
-                        expr: ExprKind::Call {
-                            name: name.clone(),
-                            args: arg_typed,
-                        },
-                        ty: Type::Bytes,
-                    })
-                }
-                "subscription_bill" | "subscription_record_usage" => {
-                    if !arg_typed.is_empty() {
-                        return Err(SemanticError {
-                            message: format!("{name} expects no arguments"),
-                        });
-                    }
-                    Ok(TypedExpr {
-                        expr: ExprKind::Call {
-                            name: name.clone(),
-                            args: arg_typed,
-                        },
-                        ty: Type::Unit,
-                    })
-                }
                 "Map::new" => {
                     if !arg_typed.is_empty() {
                         return Err(SemanticError {
@@ -4423,190 +6079,6 @@ fn analyze_expr(expr: &Expr, vars: &mut HashMap<String, Type>) -> Result<TypedEx
                         ty: Type::Map(Box::new(Type::Int), Box::new(Type::Int)),
                     })
                 }
-                // Typed constructors for pointer-ABI arguments
-                "account_id" | "asset_definition" | "asset_id" | "nft_id" | "name" | "json"
-                | "domain" | "domain_id" | "blob" | "norito_bytes" | "dataspace_id"
-                | "axt_descriptor" | "asset_handle" | "proof_blob" => {
-                    if arg_typed.len() != 1 {
-                        return Err(SemanticError {
-                            message: format!("{name} expects one argument"),
-                        });
-                    }
-                    let arg_ty = resolve_struct_type(&arg_typed[0].ty);
-                    let (ty, allow_blob, allow_int) = match name.as_str() {
-                        "account_id" => (Type::AccountId, true, false),
-                        "asset_definition" => (Type::AssetDefinitionId, true, false),
-                        "asset_id" => (Type::AssetId, true, false),
-                        "nft_id" => (Type::NftId, true, false),
-                        "domain" | "domain_id" => (Type::DomainId, true, false),
-                        "name" => (Type::Name, true, false),
-                        "json" => (Type::Json, true, false),
-                        "blob" | "norito_bytes" => (Type::Bytes, true, false),
-                        "dataspace_id" => (Type::DataSpaceId, true, false),
-                        "axt_descriptor" => (Type::AxtDescriptor, true, false),
-                        "asset_handle" => (Type::AssetHandle, true, false),
-                        "proof_blob" => (Type::ProofBlob, true, false),
-                        _ => unreachable!(),
-                    };
-                    let ok = matches!(arg_ty, Type::String)
-                        || (allow_int && is_int_like(&arg_ty))
-                        || arg_ty == ty
-                        || (allow_blob && is_blob_like(&arg_ty))
-                        || (matches!(arg_ty, Type::Json) && matches!(ty, Type::Json))
-                        || (matches!(arg_ty, Type::Name) && matches!(ty, Type::Name));
-                    if !ok {
-                        let expected = match name.as_str() {
-                            "json" => "string, Json, or Blob (NoritoBytes)",
-                            "name" => "string, Name, or Blob (NoritoBytes)",
-                            "blob" | "norito_bytes" => "string or Blob|bytes",
-                            "dataspace_id" => "string, DataSpaceId, or Blob|bytes (NoritoBytes)",
-                            _ => "string, matching pointer type, or Blob|bytes (NoritoBytes)",
-                        };
-                        return Err(SemanticError {
-                            message: format!("{name} expects {expected}"),
-                        });
-                    }
-                    Ok(TypedExpr {
-                        expr: ExprKind::Call {
-                            name: name.clone(),
-                            args: arg_typed,
-                        },
-                        ty,
-                    })
-                }
-                // Current authority account id (contextual)
-                "authority" => {
-                    if !arg_typed.is_empty() {
-                        return Err(SemanticError {
-                            message: "authority expects no arguments".into(),
-                        });
-                    }
-                    Ok(TypedExpr {
-                        expr: ExprKind::Call {
-                            name: name.clone(),
-                            args: vec![],
-                        },
-                        ty: Type::AccountId,
-                    })
-                }
-                "current_time_ms" => {
-                    if !arg_typed.is_empty() {
-                        return Err(SemanticError {
-                            message: "current_time_ms expects no arguments".into(),
-                        });
-                    }
-                    Ok(TypedExpr {
-                        expr: ExprKind::Call {
-                            name: name.clone(),
-                            args: vec![],
-                        },
-                        ty: Type::Int,
-                    })
-                }
-                "block_height" => {
-                    if !arg_typed.is_empty() {
-                        return Err(SemanticError {
-                            message: "block_height expects no arguments".into(),
-                        });
-                    }
-                    Ok(TypedExpr {
-                        expr: ExprKind::Call {
-                            name: name.clone(),
-                            args: vec![],
-                        },
-                        ty: Type::Int,
-                    })
-                }
-                "resolve_account_alias" => {
-                    if arg_typed.len() != 1
-                        || !(arg_typed[0].ty == Type::String || is_blob_like(&arg_typed[0].ty))
-                    {
-                        return Err(SemanticError {
-                            message: "resolve_account_alias expects (String|Blob)".into(),
-                        });
-                    }
-                    Ok(TypedExpr {
-                        expr: ExprKind::Call {
-                            name: name.clone(),
-                            args: arg_typed,
-                        },
-                        ty: Type::AccountId,
-                    })
-                }
-                "call_contract" => {
-                    if arg_typed.len() != 3
-                        || !(arg_typed[0].ty == Type::String || is_blob_like(&arg_typed[0].ty))
-                        || !(arg_typed[1].ty == Type::String || is_blob_like(&arg_typed[1].ty))
-                        || arg_typed[2].ty != Type::Json
-                    {
-                        return Err(SemanticError {
-                            message: "call_contract expects (String|Blob, String|Blob, Json)"
-                                .into(),
-                        });
-                    }
-                    Ok(TypedExpr {
-                        expr: ExprKind::Call {
-                            name: name.clone(),
-                            args: arg_typed,
-                        },
-                        ty: Type::Bytes,
-                    })
-                }
-                // Current trigger event payload as Json (data/by-call triggers).
-                "trigger_event" => {
-                    reject_public_payload_helper(name.as_str())?;
-                    if !arg_typed.is_empty() {
-                        return Err(SemanticError {
-                            message: "trigger_event expects no arguments".into(),
-                        });
-                    }
-                    Ok(TypedExpr {
-                        expr: ExprKind::Call {
-                            name: name.clone(),
-                            args: vec![],
-                        },
-                        ty: Type::Json,
-                    })
-                }
-                "assert" => {
-                    let ok = match arg_typed.len() {
-                        1 => arg_typed[0].ty == Type::Bool,
-                        2 => {
-                            arg_typed[0].ty == Type::Bool
-                                && (arg_typed[1].ty == Type::String
-                                    || is_int_like(&arg_typed[1].ty))
-                        }
-                        _ => false,
-                    };
-                    if !ok {
-                        return Err(SemanticError {
-                            message: "assert expects (bool) or (bool, string|int)".into(),
-                        });
-                    }
-                    Ok(TypedExpr {
-                        expr: ExprKind::Call {
-                            name: name.clone(),
-                            args: arg_typed,
-                        },
-                        ty: Type::Unit,
-                    })
-                }
-                "info" => {
-                    if arg_typed.len() != 1
-                        || !(arg_typed[0].ty == Type::String || is_int_like(&arg_typed[0].ty))
-                    {
-                        return Err(SemanticError {
-                            message: "info expects (string|int)".into(),
-                        });
-                    }
-                    Ok(TypedExpr {
-                        expr: ExprKind::Call {
-                            name: name.clone(),
-                            args: arg_typed,
-                        },
-                        ty: Type::Unit,
-                    })
-                }
                 "call" => Ok(TypedExpr {
                     expr: ExprKind::Call {
                         name: name.clone(),
@@ -4614,1387 +6086,6 @@ fn analyze_expr(expr: &Expr, vars: &mut HashMap<String, Type>) -> Result<TypedEx
                     },
                     ty: Type::Unit,
                 }),
-                "min" | "max" | "mean" => {
-                    if arg_typed.len() != 2
-                        || !is_int_like(&arg_typed[0].ty)
-                        || !is_int_like(&arg_typed[1].ty)
-                    {
-                        return Err(SemanticError {
-                            message: format!("{name} expects (int, int)"),
-                        });
-                    }
-                    Ok(TypedExpr {
-                        expr: ExprKind::Call {
-                            name: name.clone(),
-                            args: arg_typed,
-                        },
-                        ty: Type::Int,
-                    })
-                }
-                "abs" => {
-                    if arg_typed.len() != 1 || !is_int_like(&arg_typed[0].ty) {
-                        return Err(SemanticError {
-                            message: "abs expects (int)".into(),
-                        });
-                    }
-                    Ok(TypedExpr {
-                        expr: ExprKind::Call {
-                            name: name.clone(),
-                            args: arg_typed,
-                        },
-                        ty: Type::Int,
-                    })
-                }
-                "div_ceil" => {
-                    if arg_typed.len() != 2
-                        || !is_int_like(&arg_typed[0].ty)
-                        || !is_int_like(&arg_typed[1].ty)
-                    {
-                        return Err(SemanticError {
-                            message: "div_ceil expects (int, int)".into(),
-                        });
-                    }
-                    Ok(TypedExpr {
-                        expr: ExprKind::Call {
-                            name: name.clone(),
-                            args: arg_typed,
-                        },
-                        ty: Type::Int,
-                    })
-                }
-                "gcd" => {
-                    if arg_typed.len() != 2
-                        || !is_int_like(&arg_typed[0].ty)
-                        || !is_int_like(&arg_typed[1].ty)
-                    {
-                        return Err(SemanticError {
-                            message: "gcd expects (int, int)".into(),
-                        });
-                    }
-                    Ok(TypedExpr {
-                        expr: ExprKind::Call {
-                            name: name.clone(),
-                            args: arg_typed,
-                        },
-                        ty: Type::Int,
-                    })
-                }
-                "isqrt" => {
-                    if arg_typed.len() != 1 || !is_int_like(&arg_typed[0].ty) {
-                        return Err(SemanticError {
-                            message: "isqrt expects (int)".into(),
-                        });
-                    }
-                    Ok(TypedExpr {
-                        expr: ExprKind::Call {
-                            name: name.clone(),
-                            args: arg_typed,
-                        },
-                        ty: Type::Int,
-                    })
-                }
-                "poseidon2" => {
-                    if arg_typed.len() != 2 || !arg_typed.iter().all(|t| is_int_like(&t.ty)) {
-                        return Err(SemanticError {
-                            message: "poseidon2 expects two int args".into(),
-                        });
-                    }
-                    Ok(TypedExpr {
-                        expr: ExprKind::Call {
-                            name: name.clone(),
-                            args: arg_typed,
-                        },
-                        ty: Type::Int,
-                    })
-                }
-                "poseidon6" => {
-                    if arg_typed.len() != 6 || !arg_typed.iter().all(|t| is_int_like(&t.ty)) {
-                        return Err(SemanticError {
-                            message: "poseidon6 expects six int args".into(),
-                        });
-                    }
-                    Ok(TypedExpr {
-                        expr: ExprKind::Call {
-                            name: name.clone(),
-                            args: arg_typed,
-                        },
-                        ty: Type::Int,
-                    })
-                }
-                "sm3_hash" => {
-                    if arg_typed.len() != 1 || !is_blob_like(&arg_typed[0].ty) {
-                        return Err(SemanticError {
-                            message: "sm3_hash expects (Blob|bytes) argument pointing to INPUT TLV"
-                                .into(),
-                        });
-                    }
-                    Ok(TypedExpr {
-                        expr: ExprKind::Call {
-                            name: name.clone(),
-                            args: arg_typed,
-                        },
-                        ty: Type::Bytes,
-                    })
-                }
-                "sha256_hash" => {
-                    if arg_typed.len() != 1 || !is_blob_like(&arg_typed[0].ty) {
-                        return Err(SemanticError {
-                            message:
-                                "sha256_hash expects (Blob|bytes) argument pointing to INPUT TLV"
-                                    .into(),
-                        });
-                    }
-                    Ok(TypedExpr {
-                        expr: ExprKind::Call {
-                            name: name.clone(),
-                            args: arg_typed,
-                        },
-                        ty: Type::Bytes,
-                    })
-                }
-                "sha3_hash" => {
-                    if arg_typed.len() != 1 || !is_blob_like(&arg_typed[0].ty) {
-                        return Err(SemanticError {
-                            message:
-                                "sha3_hash expects (Blob|bytes) argument pointing to INPUT TLV"
-                                    .into(),
-                        });
-                    }
-                    Ok(TypedExpr {
-                        expr: ExprKind::Call {
-                            name: name.clone(),
-                            args: arg_typed,
-                        },
-                        ty: Type::Bytes,
-                    })
-                }
-                "sm2_verify" => {
-                    if arg_typed.len() != 3 && arg_typed.len() != 4 {
-                        return Err(SemanticError {
-                            message: "sm2_verify expects (Blob, Blob, Blob) or (Blob, Blob, Blob, Blob) where arguments reference INPUT TLVs".into(),
-                        });
-                    }
-                    if arg_typed[..3].iter().any(|t| !is_blob_like(&t.ty)) {
-                        return Err(SemanticError {
-                            message: "sm2_verify expects message, signature, and public key as Blob|bytes pointers".into(),
-                        });
-                    }
-                    if arg_typed.len() == 4 && !is_blob_like(&arg_typed[3].ty) {
-                        return Err(SemanticError {
-                            message:
-                                "sm2_verify optional distid must be provided as Blob|bytes pointer"
-                                    .into(),
-                        });
-                    }
-                    Ok(TypedExpr {
-                        expr: ExprKind::Call {
-                            name: name.clone(),
-                            args: arg_typed,
-                        },
-                        ty: Type::Bool,
-                    })
-                }
-                "verify_signature" => {
-                    if arg_typed.len() != 4 {
-                        return Err(SemanticError {
-                            message: "verify_signature expects (Blob, Blob, Blob, int) arguments"
-                                .into(),
-                        });
-                    }
-                    if arg_typed[..3].iter().any(|t| !is_blob_like(&t.ty)) {
-                        return Err(SemanticError {
-                            message:
-                                "verify_signature expects message, signature, and public key as Blob|bytes pointers"
-                                    .into(),
-                        });
-                    }
-                    if !is_int_like(&arg_typed[3].ty) {
-                        return Err(SemanticError {
-                            message: "verify_signature expects scheme code as int".into(),
-                        });
-                    }
-                    Ok(TypedExpr {
-                        expr: ExprKind::Call {
-                            name: name.clone(),
-                            args: arg_typed,
-                        },
-                        ty: Type::Bool,
-                    })
-                }
-                "sm4_gcm_seal" => {
-                    if arg_typed.len() != 4 || arg_typed.iter().any(|t| !is_blob_like(&t.ty)) {
-                        return Err(SemanticError {
-                            message: "sm4_gcm_seal expects (Blob|bytes, Blob|bytes, Blob|bytes, Blob|bytes)".into(),
-                        });
-                    }
-                    Ok(TypedExpr {
-                        expr: ExprKind::Call {
-                            name: name.clone(),
-                            args: arg_typed,
-                        },
-                        ty: Type::Bytes,
-                    })
-                }
-                "sm4_gcm_open" => {
-                    if arg_typed.len() != 4 || arg_typed.iter().any(|t| !is_blob_like(&t.ty)) {
-                        return Err(SemanticError {
-                            message: "sm4_gcm_open expects (Blob|bytes, Blob|bytes, Blob|bytes, Blob|bytes)".into(),
-                        });
-                    }
-                    Ok(TypedExpr {
-                        expr: ExprKind::Call {
-                            name: name.clone(),
-                            args: arg_typed,
-                        },
-                        ty: Type::Bytes,
-                    })
-                }
-                "sm4_ccm_seal" => {
-                    if arg_typed.len() != 4 && arg_typed.len() != 5 {
-                        return Err(SemanticError {
-                            message: "sm4_ccm_seal expects (Blob|bytes, Blob|bytes, Blob|bytes, Blob|bytes[, int])".into(),
-                        });
-                    }
-                    if arg_typed[..4].iter().any(|t| !is_blob_like(&t.ty)) {
-                        return Err(SemanticError {
-                            message: "sm4_ccm_seal expects key, nonce, aad, plaintext as Blob|bytes pointers"
-                                .into(),
-                        });
-                    }
-                    if arg_typed.len() == 5 && !is_int_like(&arg_typed[4].ty) {
-                        return Err(SemanticError {
-                            message: "sm4_ccm_seal optional tag length must be int".into(),
-                        });
-                    }
-                    Ok(TypedExpr {
-                        expr: ExprKind::Call {
-                            name: name.clone(),
-                            args: arg_typed,
-                        },
-                        ty: Type::Bytes,
-                    })
-                }
-                "sm4_ccm_open" => {
-                    if arg_typed.len() != 4 && arg_typed.len() != 5 {
-                        return Err(SemanticError {
-                            message: "sm4_ccm_open expects (Blob|bytes, Blob|bytes, Blob|bytes, Blob|bytes[, int])".into(),
-                        });
-                    }
-                    if arg_typed[..4].iter().any(|t| !is_blob_like(&t.ty)) {
-                        return Err(SemanticError {
-                            message: "sm4_ccm_open expects key, nonce, aad, ciphertext as Blob|bytes pointers"
-                                .into(),
-                        });
-                    }
-                    if arg_typed.len() == 5 && !is_int_like(&arg_typed[4].ty) {
-                        return Err(SemanticError {
-                            message: "sm4_ccm_open optional tag length must be int".into(),
-                        });
-                    }
-                    Ok(TypedExpr {
-                        expr: ExprKind::Call {
-                            name: name.clone(),
-                            args: arg_typed,
-                        },
-                        ty: Type::Bytes,
-                    })
-                }
-                // Encoding helpers for durable state values
-                "encode_int" => {
-                    if arg_typed.len() != 1 || !is_int_like(&arg_typed[0].ty) {
-                        return Err(SemanticError {
-                            message: "encode_int expects (int)".into(),
-                        });
-                    }
-                    Ok(TypedExpr {
-                        expr: ExprKind::Call {
-                            name: name.clone(),
-                            args: arg_typed,
-                        },
-                        ty: Type::Bytes,
-                    })
-                }
-                "decode_int" => {
-                    if arg_typed.len() != 1 || !is_blob_like(&arg_typed[0].ty) {
-                        return Err(SemanticError {
-                            message: "decode_int expects (Blob|bytes)".into(),
-                        });
-                    }
-                    Ok(TypedExpr {
-                        expr: ExprKind::Call {
-                            name: name.clone(),
-                            args: arg_typed,
-                        },
-                        ty: Type::Int,
-                    })
-                }
-                // JSON helpers
-                "encode_json" => {
-                    if arg_typed.len() != 1 || arg_typed[0].ty != Type::Json {
-                        return Err(SemanticError {
-                            message: "encode_json expects (Json)".into(),
-                        });
-                    }
-                    Ok(TypedExpr {
-                        expr: ExprKind::Call {
-                            name: name.clone(),
-                            args: arg_typed,
-                        },
-                        ty: Type::Bytes,
-                    })
-                }
-                "decode_json" => {
-                    if arg_typed.len() != 1 || !is_blob_like(&arg_typed[0].ty) {
-                        return Err(SemanticError {
-                            message: "decode_json expects (Blob|bytes)".into(),
-                        });
-                    }
-                    Ok(TypedExpr {
-                        expr: ExprKind::Call {
-                            name: name.clone(),
-                            args: arg_typed,
-                        },
-                        ty: Type::Json,
-                    })
-                }
-                "tlv_len" => {
-                    if arg_typed.len() != 1 {
-                        return Err(SemanticError {
-                            message: "tlv_len expects one argument".into(),
-                        });
-                    }
-                    let ty = resolve_struct_type(&arg_typed[0].ty);
-                    if !(is_pointer_type(&ty) || is_blob_like(&ty) || ty == Type::Json) {
-                        return Err(SemanticError {
-                            message:
-                                "tlv_len expects a pointer-ABI type, Json, or Blob|bytes argument"
-                                    .into(),
-                        });
-                    }
-                    Ok(TypedExpr {
-                        expr: ExprKind::Call {
-                            name: name.clone(),
-                            args: arg_typed,
-                        },
-                        ty: Type::Int,
-                    })
-                }
-                "get_int" => {
-                    reject_public_payload_helper("get_int")?;
-                    if arg_typed.len() != 2
-                        || arg_typed[0].ty != Type::Json
-                        || arg_typed[1].ty != Type::Name
-                    {
-                        return Err(SemanticError {
-                            message: "get_int expects (Json, Name)".into(),
-                        });
-                    }
-                    Ok(TypedExpr {
-                        expr: ExprKind::Call {
-                            name: "get_int".to_string(),
-                            args: arg_typed,
-                        },
-                        ty: Type::Int,
-                    })
-                }
-                "get_numeric" => {
-                    reject_public_payload_helper("get_numeric")?;
-                    if arg_typed.len() != 2
-                        || arg_typed[0].ty != Type::Json
-                        || arg_typed[1].ty != Type::Name
-                    {
-                        return Err(SemanticError {
-                            message: "get_numeric expects (Json, Name)".into(),
-                        });
-                    }
-                    Ok(TypedExpr {
-                        expr: ExprKind::Call {
-                            name: "get_numeric".to_string(),
-                            args: arg_typed,
-                        },
-                        ty: Type::Amount,
-                    })
-                }
-                "get_json" => {
-                    reject_public_payload_helper("get_json")?;
-                    if arg_typed.len() != 2
-                        || arg_typed[0].ty != Type::Json
-                        || arg_typed[1].ty != Type::Name
-                    {
-                        return Err(SemanticError {
-                            message: "get_json expects (Json, Name)".into(),
-                        });
-                    }
-                    Ok(TypedExpr {
-                        expr: ExprKind::Call {
-                            name: "get_json".to_string(),
-                            args: arg_typed,
-                        },
-                        ty: Type::Json,
-                    })
-                }
-                "get_name" => {
-                    reject_public_payload_helper("get_name")?;
-                    if arg_typed.len() != 2
-                        || arg_typed[0].ty != Type::Json
-                        || arg_typed[1].ty != Type::Name
-                    {
-                        return Err(SemanticError {
-                            message: "get_name expects (Json, Name)".into(),
-                        });
-                    }
-                    Ok(TypedExpr {
-                        expr: ExprKind::Call {
-                            name: "get_name".to_string(),
-                            args: arg_typed,
-                        },
-                        ty: Type::Name,
-                    })
-                }
-                "get_account_id" => {
-                    reject_public_payload_helper("get_account_id")?;
-                    if arg_typed.len() != 2
-                        || arg_typed[0].ty != Type::Json
-                        || arg_typed[1].ty != Type::Name
-                    {
-                        return Err(SemanticError {
-                            message: "get_account_id expects (Json, Name)".into(),
-                        });
-                    }
-                    Ok(TypedExpr {
-                        expr: ExprKind::Call {
-                            name: "get_account_id".to_string(),
-                            args: arg_typed,
-                        },
-                        ty: Type::AccountId,
-                    })
-                }
-                "get_asset_definition_id" => {
-                    reject_public_payload_helper("get_asset_definition_id")?;
-                    if arg_typed.len() != 2
-                        || arg_typed[0].ty != Type::Json
-                        || arg_typed[1].ty != Type::Name
-                    {
-                        return Err(SemanticError {
-                            message: "get_asset_definition_id expects (Json, Name)".into(),
-                        });
-                    }
-                    Ok(TypedExpr {
-                        expr: ExprKind::Call {
-                            name: "get_asset_definition_id".to_string(),
-                            args: arg_typed,
-                        },
-                        ty: Type::AssetDefinitionId,
-                    })
-                }
-                "get_nft_id" => {
-                    reject_public_payload_helper("get_nft_id")?;
-                    if arg_typed.len() != 2
-                        || arg_typed[0].ty != Type::Json
-                        || arg_typed[1].ty != Type::Name
-                    {
-                        return Err(SemanticError {
-                            message: "get_nft_id expects (Json, Name)".into(),
-                        });
-                    }
-                    Ok(TypedExpr {
-                        expr: ExprKind::Call {
-                            name: "get_nft_id".to_string(),
-                            args: arg_typed,
-                        },
-                        ty: Type::NftId,
-                    })
-                }
-                "get_blob_hex" => {
-                    reject_public_payload_helper("get_blob_hex")?;
-                    if arg_typed.len() != 2
-                        || arg_typed[0].ty != Type::Json
-                        || arg_typed[1].ty != Type::Name
-                    {
-                        return Err(SemanticError {
-                            message: "get_blob_hex expects (Json, Name)".into(),
-                        });
-                    }
-                    Ok(TypedExpr {
-                        expr: ExprKind::Call {
-                            name: "get_blob_hex".to_string(),
-                            args: arg_typed,
-                        },
-                        ty: Type::Bytes,
-                    })
-                }
-
-                // Schema helpers (placeholder)
-                "encode_schema" => {
-                    if arg_typed.len() != 2
-                        || !(arg_typed[0].ty == Type::Name && arg_typed[1].ty == Type::Json)
-                    {
-                        return Err(SemanticError {
-                            message: "encode_schema expects (Name, Json)".into(),
-                        });
-                    }
-                    Ok(TypedExpr {
-                        expr: ExprKind::Call {
-                            name: name.clone(),
-                            args: arg_typed,
-                        },
-                        ty: Type::Bytes,
-                    })
-                }
-                "decode_schema" => {
-                    if arg_typed.len() != 2
-                        || !(arg_typed[0].ty == Type::Name && is_blob_like(&arg_typed[1].ty))
-                    {
-                        return Err(SemanticError {
-                            message: "decode_schema expects (Name, Blob|bytes)".into(),
-                        });
-                    }
-                    Ok(TypedExpr {
-                        expr: ExprKind::Call {
-                            name: name.clone(),
-                            args: arg_typed,
-                        },
-                        ty: Type::Json,
-                    })
-                }
-                "schema_info" => {
-                    if arg_typed.len() != 1 || arg_typed[0].ty != Type::Name {
-                        return Err(SemanticError {
-                            message: "schema_info expects (Name)".into(),
-                        });
-                    }
-                    Ok(TypedExpr {
-                        expr: ExprKind::Call {
-                            name: name.clone(),
-                            args: arg_typed,
-                        },
-                        ty: Type::Json,
-                    })
-                }
-                "pointer_to_norito" => {
-                    if arg_typed.len() != 1 {
-                        return Err(SemanticError {
-                            message: "pointer_to_norito expects one argument".into(),
-                        });
-                    }
-                    let ty = resolve_struct_type(&arg_typed[0].ty);
-                    if !(is_pointer_type(&ty) || is_blob_like(&ty)) {
-                        return Err(SemanticError {
-                            message: "pointer_to_norito expects a pointer-ABI type or Blob|bytes argument"
-                                    .into(),
-                        });
-                    }
-                    Ok(TypedExpr {
-                        expr: ExprKind::Call {
-                            name: name.clone(),
-                            args: arg_typed,
-                        },
-                        ty: Type::Bytes,
-                    })
-                }
-                "valcom" => {
-                    if arg_typed.len() != 2 || !arg_typed.iter().all(|t| is_int_like(&t.ty)) {
-                        return Err(SemanticError {
-                            message: "valcom expects two int args".into(),
-                        });
-                    }
-                    Ok(TypedExpr {
-                        expr: ExprKind::Call {
-                            name: name.clone(),
-                            args: arg_typed,
-                        },
-                        ty: Type::Int,
-                    })
-                }
-                "pubkgen" => {
-                    if arg_typed.len() != 1 || !is_int_like(&arg_typed[0].ty) {
-                        return Err(SemanticError {
-                            message: "pubkgen expects one int arg".into(),
-                        });
-                    }
-                    Ok(TypedExpr {
-                        expr: ExprKind::Call {
-                            name: name.clone(),
-                            args: arg_typed,
-                        },
-                        ty: Type::Int,
-                    })
-                }
-                "vrf_verify" => {
-                    if arg_typed.len() != 4 {
-                        return Err(SemanticError {
-                            message: "vrf_verify expects (Blob, Blob, Blob, int variant)".into(),
-                        });
-                    }
-                    if arg_typed[..3].iter().any(|t| !is_blob_like(&t.ty))
-                        || !is_int_like(&arg_typed[3].ty)
-                    {
-                        return Err(SemanticError {
-                            message: "vrf_verify expects (Blob|bytes, Blob|bytes, Blob|bytes, int variant)".into(),
-                        });
-                    }
-                    Ok(TypedExpr {
-                        expr: ExprKind::Call {
-                            name: name.clone(),
-                            args: arg_typed,
-                        },
-                        ty: Type::Bytes,
-                    })
-                }
-                "vrf_verify_batch" => {
-                    if arg_typed.len() != 1 || !is_blob_like(&arg_typed[0].ty) {
-                        return Err(SemanticError {
-                            message: "vrf_verify_batch expects (Blob|bytes)".into(),
-                        });
-                    }
-                    Ok(TypedExpr {
-                        expr: ExprKind::Call {
-                            name: name.clone(),
-                            args: arg_typed,
-                        },
-                        ty: Type::Bytes,
-                    })
-                }
-                "axt_begin" => {
-                    if arg_typed.len() != 1 || arg_typed[0].ty != Type::AxtDescriptor {
-                        return Err(SemanticError {
-                            message: "axt_begin expects (AxtDescriptor)".into(),
-                        });
-                    }
-                    Ok(TypedExpr {
-                        expr: ExprKind::Call {
-                            name: name.clone(),
-                            args: arg_typed,
-                        },
-                        ty: Type::Unit,
-                    })
-                }
-                "axt_touch" => {
-                    if arg_typed.is_empty() || arg_typed.len() > 2 {
-                        return Err(SemanticError {
-                            message: "axt_touch expects (DataSpaceId[, Blob|bytes manifest])"
-                                .into(),
-                        });
-                    }
-                    if arg_typed[0].ty != Type::DataSpaceId {
-                        return Err(SemanticError {
-                            message: "axt_touch expects (DataSpaceId[, Blob|bytes manifest])"
-                                .into(),
-                        });
-                    }
-                    if arg_typed.len() == 2 && !is_blob_like(&arg_typed[1].ty) {
-                        return Err(SemanticError {
-                            message: "axt_touch expects (DataSpaceId[, Blob|bytes manifest])"
-                                .into(),
-                        });
-                    }
-                    Ok(TypedExpr {
-                        expr: ExprKind::Call {
-                            name: name.clone(),
-                            args: arg_typed,
-                        },
-                        ty: Type::Unit,
-                    })
-                }
-                "verify_ds_proof" => {
-                    if arg_typed.is_empty() || arg_typed.len() > 2 {
-                        return Err(SemanticError {
-                            message: "verify_ds_proof expects (DataSpaceId[, ProofBlob])".into(),
-                        });
-                    }
-                    if arg_typed[0].ty != Type::DataSpaceId {
-                        return Err(SemanticError {
-                            message: "verify_ds_proof expects (DataSpaceId[, ProofBlob])".into(),
-                        });
-                    }
-                    if arg_typed.len() == 2 && arg_typed[1].ty != Type::ProofBlob {
-                        return Err(SemanticError {
-                            message: "verify_ds_proof expects (DataSpaceId[, ProofBlob])".into(),
-                        });
-                    }
-                    Ok(TypedExpr {
-                        expr: ExprKind::Call {
-                            name: name.clone(),
-                            args: arg_typed,
-                        },
-                        ty: Type::Unit,
-                    })
-                }
-                "use_asset_handle" => {
-                    if arg_typed.len() != 2 && arg_typed.len() != 3 {
-                        return Err(SemanticError {
-                            message:
-                                "use_asset_handle expects (AssetHandle, Blob|bytes intent[, ProofBlob])"
-                                    .into(),
-                        });
-                    }
-                    if arg_typed[0].ty != Type::AssetHandle || !is_blob_like(&arg_typed[1].ty) {
-                        return Err(SemanticError {
-                            message:
-                                "use_asset_handle expects (AssetHandle, Blob|bytes intent[, ProofBlob])"
-                                    .into(),
-                        });
-                    }
-                    if arg_typed.len() == 3 && arg_typed[2].ty != Type::ProofBlob {
-                        return Err(SemanticError {
-                            message:
-                                "use_asset_handle expects (AssetHandle, Blob intent[, ProofBlob])"
-                                    .into(),
-                        });
-                    }
-                    Ok(TypedExpr {
-                        expr: ExprKind::Call {
-                            name: name.clone(),
-                            args: arg_typed,
-                        },
-                        ty: Type::Unit,
-                    })
-                }
-                "axt_commit" => {
-                    if !arg_typed.is_empty() {
-                        return Err(SemanticError {
-                            message: "axt_commit expects no arguments".into(),
-                        });
-                    }
-                    Ok(TypedExpr {
-                        expr: ExprKind::Call {
-                            name: name.clone(),
-                            args: arg_typed,
-                        },
-                        ty: Type::Unit,
-                    })
-                }
-                // Host helper: create one NFT per known account (no args)
-                "create_nfts_for_all_users" => {
-                    if !arg_typed.is_empty() {
-                        return Err(SemanticError {
-                            message: "create_nfts_for_all_users expects no arguments".into(),
-                        });
-                    }
-                    Ok(TypedExpr {
-                        expr: ExprKind::Call {
-                            name: name.clone(),
-                            args: arg_typed,
-                        },
-                        ty: Type::Unit,
-                    })
-                }
-                // Host helper: set SmartContract execution depth
-                "set_execution_depth" => {
-                    if arg_typed.len() != 1 || !is_int_like(&arg_typed[0].ty) {
-                        return Err(SemanticError {
-                            message: "set_execution_depth expects one int arg".into(),
-                        });
-                    }
-                    Ok(TypedExpr {
-                        expr: ExprKind::Call {
-                            name: name.clone(),
-                            args: arg_typed,
-                        },
-                        ty: Type::Unit,
-                    })
-                }
-                // Host helper: set logical vector length (SETVL immediate)
-                "setvl" => {
-                    if arg_typed.len() != 1 || !is_int_like(&arg_typed[0].ty) {
-                        return Err(SemanticError {
-                            message: "setvl expects one int arg".into(),
-                        });
-                    }
-                    Ok(TypedExpr {
-                        expr: ExprKind::Call {
-                            name: name.clone(),
-                            args: arg_typed,
-                        },
-                        ty: Type::Unit,
-                    })
-                }
-                // Host helper: set account detail using typed args
-                "set_account_detail" => {
-                    if arg_typed.len() != 3
-                        || !(arg_typed[0].ty == Type::AccountId
-                            && arg_typed[1].ty == Type::Name
-                            && arg_typed[2].ty == Type::Json)
-                    {
-                        return Err(SemanticError {
-                            message: "set_account_detail expects (AccountId, Name, Json)".into(),
-                        });
-                    }
-                    Ok(TypedExpr {
-                        expr: ExprKind::Call {
-                            name: name.clone(),
-                            args: arg_typed,
-                        },
-                        ty: Type::Unit,
-                    })
-                }
-                // Builders: construct Norito InstructionBox in data section and return Blob pointer
-                "build_submit_ballot_inline" => {
-                    if arg_typed.len() != 6
-                        || !(arg_typed[0].ty == Type::String
-                            && is_blob_like(&arg_typed[1].ty)
-                            && is_blob_like(&arg_typed[2].ty)
-                            && arg_typed[3].ty == Type::String
-                            && is_blob_like(&arg_typed[4].ty)
-                            && is_blob_like(&arg_typed[5].ty))
-                    {
-                        eprintln!(
-                            "[semantic] build_submit_ballot_inline arg types: {:?}",
-                            arg_typed.iter().map(|a| a.ty.clone()).collect::<Vec<_>>()
-                        );
-                        return Err(SemanticError {
-                            message: "build_submit_ballot_inline expects (string election_id, Blob|bytes ciphertext, Blob|bytes nullifier32, string backend, Blob|bytes proof, Blob|bytes vk)".into(),
-                        });
-                    }
-                    Ok(TypedExpr {
-                        expr: ExprKind::Call {
-                            name: name.clone(),
-                            args: arg_typed,
-                        },
-                        ty: Type::Bytes,
-                    })
-                }
-                "build_unshield_inline" => {
-                    if arg_typed.len() != 7
-                        || !(arg_typed[0].ty == Type::AssetDefinitionId
-                            && arg_typed[1].ty == Type::AccountId
-                            && is_int_like(&arg_typed[2].ty)
-                            && is_blob_like(&arg_typed[3].ty)
-                            && arg_typed[4].ty == Type::String
-                            && is_blob_like(&arg_typed[5].ty)
-                            && is_blob_like(&arg_typed[6].ty))
-                    {
-                        return Err(SemanticError {
-                            message: "build_unshield_inline expects (AssetDefinitionId, AccountId, int amount, Blob|bytes inputs32, string backend, Blob|bytes proof, Blob|bytes vk)".into(),
-                        });
-                    }
-                    Ok(TypedExpr {
-                        expr: ExprKind::Call {
-                            name: name.clone(),
-                            args: arg_typed,
-                        },
-                        ty: Type::Bytes,
-                    })
-                }
-                "mint_asset" => {
-                    if arg_typed.len() != 3
-                        || !(arg_typed[0].ty == Type::AccountId
-                            && arg_typed[1].ty == Type::AssetDefinitionId
-                            && is_int_like(&arg_typed[2].ty))
-                    {
-                        return Err(SemanticError {
-                            message: "mint_asset expects (AccountId, AssetDefinitionId, numeric)"
-                                .into(),
-                        });
-                    }
-                    Ok(TypedExpr {
-                        expr: ExprKind::Call {
-                            name: name.clone(),
-                            args: arg_typed,
-                        },
-                        ty: Type::Unit,
-                    })
-                }
-                "burn_asset" => {
-                    if arg_typed.len() != 3
-                        || !(arg_typed[0].ty == Type::AccountId
-                            && arg_typed[1].ty == Type::AssetDefinitionId
-                            && is_int_like(&arg_typed[2].ty))
-                    {
-                        return Err(SemanticError {
-                            message: "burn_asset expects (AccountId, AssetDefinitionId, numeric)"
-                                .into(),
-                        });
-                    }
-                    Ok(TypedExpr {
-                        expr: ExprKind::Call {
-                            name: name.clone(),
-                            args: arg_typed,
-                        },
-                        ty: Type::Unit,
-                    })
-                }
-                "transfer_asset" => {
-                    if arg_typed.len() != 4
-                        || !(arg_typed[0].ty == Type::AccountId
-                            && arg_typed[1].ty == Type::AccountId
-                            && arg_typed[2].ty == Type::AssetDefinitionId
-                            && is_int_like(&arg_typed[3].ty))
-                    {
-                        return Err(SemanticError {
-                            message:
-                                "transfer_asset expects (AccountId, AccountId, AssetDefinitionId, numeric)"
-                                    .into(),
-                        });
-                    }
-                    Ok(TypedExpr {
-                        expr: ExprKind::Call {
-                            name: name.clone(),
-                            args: arg_typed,
-                        },
-                        ty: Type::Unit,
-                    })
-                }
-                "escrow_open_offer" => {
-                    if !(arg_typed.len() == 3 || arg_typed.len() == 4)
-                        || !(arg_typed[0].ty == Type::Name
-                            && arg_typed[1].ty == Type::AssetDefinitionId
-                            && is_int_like(&arg_typed[2].ty))
-                        || (arg_typed.len() == 4 && !is_blob_like(&arg_typed[3].ty))
-                    {
-                        return Err(SemanticError {
-                            message: "escrow_open_offer expects (Name, AssetDefinitionId, numeric[, Blob|bytes evidence_hashes])"
-                                .into(),
-                        });
-                    }
-                    Ok(TypedExpr {
-                        expr: ExprKind::Call {
-                            name: name.clone(),
-                            args: arg_typed,
-                        },
-                        ty: Type::Unit,
-                    })
-                }
-                "escrow_accept"
-                | "escrow_mark_payment_sent"
-                | "escrow_release"
-                | "escrow_cancel" => {
-                    if arg_typed.len() != 1 || arg_typed[0].ty != Type::Name {
-                        return Err(SemanticError {
-                            message: format!("{name} expects (Name)"),
-                        });
-                    }
-                    Ok(TypedExpr {
-                        expr: ExprKind::Call {
-                            name: name.clone(),
-                            args: arg_typed,
-                        },
-                        ty: Type::Unit,
-                    })
-                }
-                "escrow_open_dispute" => {
-                    if !(arg_typed.len() == 1 || arg_typed.len() == 2)
-                        || arg_typed[0].ty != Type::Name
-                        || (arg_typed.len() == 2 && !is_blob_like(&arg_typed[1].ty))
-                    {
-                        return Err(SemanticError {
-                            message:
-                                "escrow_open_dispute expects (Name[, Blob|bytes evidence_hashes])"
-                                    .into(),
-                        });
-                    }
-                    Ok(TypedExpr {
-                        expr: ExprKind::Call {
-                            name: name.clone(),
-                            args: arg_typed,
-                        },
-                        ty: Type::Unit,
-                    })
-                }
-                "escrow_resolve_dispute" => {
-                    if !(arg_typed.len() == 3 || arg_typed.len() == 4)
-                        || !(arg_typed[0].ty == Type::Name
-                            && is_int_like(&arg_typed[1].ty)
-                            && is_int_like(&arg_typed[2].ty))
-                        || (arg_typed.len() == 4 && !is_blob_like(&arg_typed[3].ty))
-                    {
-                        return Err(SemanticError {
-                            message: "escrow_resolve_dispute expects (Name, numeric, numeric[, Blob|bytes evidence_hashes])"
-                                .into(),
-                        });
-                    }
-                    Ok(TypedExpr {
-                        expr: ExprKind::Call {
-                            name: name.clone(),
-                            args: arg_typed,
-                        },
-                        ty: Type::Unit,
-                    })
-                }
-                "transfer_v1_batch_begin" | "transfer_v1_batch_end" => {
-                    if !arg_typed.is_empty() {
-                        return Err(SemanticError {
-                            message: format!("{name} expects ()"),
-                        });
-                    }
-                    Ok(TypedExpr {
-                        expr: ExprKind::Call {
-                            name: name.clone(),
-                            args: arg_typed,
-                        },
-                        ty: Type::Unit,
-                    })
-                }
-                "transfer_batch" => {
-                    ensure_transfer_batch_args(&arg_typed)?;
-                    Ok(TypedExpr {
-                        expr: ExprKind::Call {
-                            name: name.clone(),
-                            args: arg_typed,
-                        },
-                        ty: Type::Unit,
-                    })
-                }
-                "nft_mint_asset" => {
-                    if arg_typed.len() != 2
-                        || !(arg_typed[0].ty == Type::NftId && arg_typed[1].ty == Type::AccountId)
-                    {
-                        return Err(SemanticError {
-                            message: "nft_mint_asset expects (NftId, AccountId)".into(),
-                        });
-                    }
-                    Ok(TypedExpr {
-                        expr: ExprKind::Call {
-                            name: name.clone(),
-                            args: arg_typed,
-                        },
-                        ty: Type::Unit,
-                    })
-                }
-                "nft_set_metadata" => {
-                    if arg_typed.len() != 3
-                        || !(arg_typed[0].ty == Type::NftId
-                            && arg_typed[1].ty == Type::Name
-                            && arg_typed[2].ty == Type::Json)
-                    {
-                        return Err(SemanticError {
-                            message: "nft_set_metadata expects (NftId, Name, Json)".into(),
-                        });
-                    }
-                    Ok(TypedExpr {
-                        expr: ExprKind::Call {
-                            name: name.clone(),
-                            args: arg_typed,
-                        },
-                        ty: Type::Unit,
-                    })
-                }
-                "nft_burn_asset" => {
-                    if arg_typed.len() != 1 || arg_typed[0].ty != Type::NftId {
-                        return Err(SemanticError {
-                            message: "nft_burn_asset expects (NftId)".into(),
-                        });
-                    }
-                    Ok(TypedExpr {
-                        expr: ExprKind::Call {
-                            name: name.clone(),
-                            args: arg_typed,
-                        },
-                        ty: Type::Unit,
-                    })
-                }
-                "nft_transfer_asset" => {
-                    if arg_typed.len() != 3
-                        || !(arg_typed[0].ty == Type::AccountId
-                            && arg_typed[1].ty == Type::NftId
-                            && arg_typed[2].ty == Type::AccountId)
-                    {
-                        return Err(SemanticError {
-                            message: "nft_transfer_asset expects (AccountId, NftId, AccountId)"
-                                .into(),
-                        });
-                    }
-                    Ok(TypedExpr {
-                        expr: ExprKind::Call {
-                            name: name.clone(),
-                            args: arg_typed,
-                        },
-                        ty: Type::Unit,
-                    })
-                }
-                "register_asset" => {
-                    if arg_typed.len() != 4
-                        || arg_typed[0].ty != Type::AssetDefinitionId
-                        || arg_typed[1].ty != Type::String
-                        || !is_int_like(&arg_typed[2].ty)
-                        || !is_int_like(&arg_typed[3].ty)
-                    {
-                        return Err(SemanticError {
-                            message: "register_asset expects (AssetDefinitionId, string, int, int)"
-                                .into(),
-                        });
-                    }
-                    Ok(TypedExpr {
-                        expr: ExprKind::Call {
-                            name: name.clone(),
-                            args: arg_typed,
-                        },
-                        ty: Type::Unit,
-                    })
-                }
-                "create_new_asset" => {
-                    if arg_typed.len() != 5
-                        || arg_typed[0].ty != Type::AssetDefinitionId
-                        || arg_typed[1].ty != Type::String
-                        || !is_int_like(&arg_typed[2].ty)
-                        || arg_typed[3].ty != Type::AccountId
-                        || !is_int_like(&arg_typed[4].ty)
-                    {
-                        return Err(SemanticError {
-                            message:
-                                "create_new_asset expects (AssetDefinitionId, string, int, AccountId, int)"
-                                    .into(),
-                        });
-                    }
-                    Ok(TypedExpr {
-                        expr: ExprKind::Call {
-                            name: name.clone(),
-                            args: arg_typed,
-                        },
-                        ty: Type::Unit,
-                    })
-                }
-                "assert_eq" => {
-                    if arg_typed.len() != 2 || !arg_typed.iter().all(|t| is_int_like(&t.ty)) {
-                        return Err(SemanticError {
-                            message: "assert_eq expects two int args".into(),
-                        });
-                    }
-                    Ok(TypedExpr {
-                        expr: ExprKind::Call {
-                            name: name.clone(),
-                            args: arg_typed,
-                        },
-                        ty: Type::Unit,
-                    })
-                }
-                // Peers
-                "register_peer" => {
-                    if arg_typed.len() != 1 || arg_typed[0].ty != Type::Json {
-                        return Err(SemanticError {
-                            message: "register_peer expects (Json)".into(),
-                        });
-                    }
-                    Ok(TypedExpr {
-                        expr: ExprKind::Call {
-                            name: name.clone(),
-                            args: arg_typed,
-                        },
-                        ty: Type::Unit,
-                    })
-                }
-                "unregister_peer" => {
-                    if arg_typed.len() != 1 || arg_typed[0].ty != Type::Json {
-                        return Err(SemanticError {
-                            message: "unregister_peer expects (Json)".into(),
-                        });
-                    }
-                    Ok(TypedExpr {
-                        expr: ExprKind::Call {
-                            name: name.clone(),
-                            args: arg_typed,
-                        },
-                        ty: Type::Unit,
-                    })
-                }
-                // Triggers
-                "create_trigger" | "register_trigger" => {
-                    if arg_typed.len() != 1 || arg_typed[0].ty != Type::Json {
-                        return Err(SemanticError {
-                            message: format!("{name} expects (Json)"),
-                        });
-                    }
-                    Ok(TypedExpr {
-                        expr: ExprKind::Call {
-                            name: name.clone(),
-                            args: arg_typed,
-                        },
-                        ty: Type::Unit,
-                    })
-                }
-                "remove_trigger" | "unregister_trigger" => {
-                    if arg_typed.len() != 1 || arg_typed[0].ty != Type::Name {
-                        return Err(SemanticError {
-                            message: format!("{name} expects (Name)"),
-                        });
-                    }
-                    Ok(TypedExpr {
-                        expr: ExprKind::Call {
-                            name: name.clone(),
-                            args: arg_typed,
-                        },
-                        ty: Type::Unit,
-                    })
-                }
-                "set_trigger_enabled" => {
-                    if arg_typed.len() != 2
-                        || arg_typed[0].ty != Type::Name
-                        || !is_int_like(&arg_typed[1].ty)
-                    {
-                        return Err(SemanticError {
-                            message: "set_trigger_enabled expects (Name, int)".into(),
-                        });
-                    }
-                    Ok(TypedExpr {
-                        expr: ExprKind::Call {
-                            name: name.clone(),
-                            args: arg_typed,
-                        },
-                        ty: Type::Unit,
-                    })
-                }
-                // Permissions
-                "grant_permission" | "revoke_permission" => {
-                    if arg_typed.len() != 2
-                        || arg_typed[0].ty != Type::AccountId
-                        || !(arg_typed[1].ty == Type::Name || arg_typed[1].ty == Type::Json)
-                    {
-                        return Err(SemanticError {
-                            message: "grant/revoke_permission expects (AccountId, Name|Json)"
-                                .into(),
-                        });
-                    }
-                    Ok(TypedExpr {
-                        expr: ExprKind::Call {
-                            name: name.clone(),
-                            args: arg_typed,
-                        },
-                        ty: Type::Unit,
-                    })
-                }
-                // Roles
-                "create_role" => {
-                    if arg_typed.len() != 2
-                        || arg_typed[0].ty != Type::Name
-                        || arg_typed[1].ty != Type::Json
-                    {
-                        return Err(SemanticError {
-                            message: "create_role expects (Name, Json)".into(),
-                        });
-                    }
-                    Ok(TypedExpr {
-                        expr: ExprKind::Call {
-                            name: name.clone(),
-                            args: arg_typed,
-                        },
-                        ty: Type::Unit,
-                    })
-                }
-                "delete_role" => {
-                    if arg_typed.len() != 1 || arg_typed[0].ty != Type::Name {
-                        return Err(SemanticError {
-                            message: "delete_role expects (Name)".into(),
-                        });
-                    }
-                    Ok(TypedExpr {
-                        expr: ExprKind::Call {
-                            name: name.clone(),
-                            args: arg_typed,
-                        },
-                        ty: Type::Unit,
-                    })
-                }
-                "grant_role" | "revoke_role" => {
-                    if arg_typed.len() != 2
-                        || arg_typed[0].ty != Type::AccountId
-                        || arg_typed[1].ty != Type::Name
-                    {
-                        return Err(SemanticError {
-                            message: "grant/revoke_role expects (AccountId, Name)".into(),
-                        });
-                    }
-                    Ok(TypedExpr {
-                        expr: ExprKind::Call {
-                            name: name.clone(),
-                            args: arg_typed,
-                        },
-                        ty: Type::Unit,
-                    })
-                }
-                "register_domain" => {
-                    if arg_typed.len() != 1 || arg_typed[0].ty != Type::DomainId {
-                        return Err(SemanticError {
-                            message: "register_domain expects (DomainId)".into(),
-                        });
-                    }
-                    Ok(TypedExpr {
-                        expr: ExprKind::Call {
-                            name: name.clone(),
-                            args: arg_typed,
-                        },
-                        ty: Type::Unit,
-                    })
-                }
-                "register_account" => {
-                    if arg_typed.len() != 1 || arg_typed[0].ty != Type::AccountId {
-                        return Err(SemanticError {
-                            message: "register_account expects (AccountId)".into(),
-                        });
-                    }
-                    Ok(TypedExpr {
-                        expr: ExprKind::Call {
-                            name: name.clone(),
-                            args: arg_typed,
-                        },
-                        ty: Type::Unit,
-                    })
-                }
-                "unregister_account" => {
-                    if arg_typed.len() != 1 || arg_typed[0].ty != Type::AccountId {
-                        return Err(SemanticError {
-                            message: "unregister_account expects (AccountId)".into(),
-                        });
-                    }
-                    Ok(TypedExpr {
-                        expr: ExprKind::Call {
-                            name: name.clone(),
-                            args: arg_typed,
-                        },
-                        ty: Type::Unit,
-                    })
-                }
-                "unregister_asset" => {
-                    if arg_typed.len() != 1 || arg_typed[0].ty != Type::AssetDefinitionId {
-                        return Err(SemanticError {
-                            message: "unregister_asset expects (AssetDefinitionId)".into(),
-                        });
-                    }
-                    Ok(TypedExpr {
-                        expr: ExprKind::Call {
-                            name: name.clone(),
-                            args: arg_typed,
-                        },
-                        ty: Type::Unit,
-                    })
-                }
-                "unregister_domain" => {
-                    if arg_typed.len() != 1 || arg_typed[0].ty != Type::DomainId {
-                        return Err(SemanticError {
-                            message: "unregister_domain expects (DomainId)".into(),
-                        });
-                    }
-                    Ok(TypedExpr {
-                        expr: ExprKind::Call {
-                            name: name.clone(),
-                            args: arg_typed,
-                        },
-                        ty: Type::Unit,
-                    })
-                }
-                "transfer_domain" => {
-                    if arg_typed.len() != 3
-                        || arg_typed[0].ty != Type::AccountId
-                        || arg_typed[2].ty != Type::AccountId
-                    {
-                        return Err(SemanticError {
-                            message: "transfer_domain expects (AccountId, DomainId, AccountId)"
-                                .into(),
-                        });
-                    }
-                    if !matches!(arg_typed[1].ty, Type::DomainId | Type::Name) {
-                        return Err(SemanticError {
-                            message: "transfer_domain expects (AccountId, DomainId, AccountId)"
-                                .into(),
-                        });
-                    }
-                    Ok(TypedExpr {
-                        expr: ExprKind::Call {
-                            name: name.clone(),
-                            args: arg_typed,
-                        },
-                        ty: Type::Unit,
-                    })
-                }
                 _ => {
                     if let Some(signature) =
                         FUNCTION_PARAMS.with(|env| env.borrow().get(&name).cloned())
@@ -6177,6 +6268,8 @@ fn convert_type_expr(ty: &TypeExpr) -> Result<Type, SemanticError> {
             "AxtDescriptor" => Type::AxtDescriptor,
             "AssetHandle" => Type::AssetHandle,
             "ProofBlob" => Type::ProofBlob,
+            "SoracloudRequest" => Type::SoracloudRequest,
+            "SoracloudResponse" => Type::SoracloudResponse,
             "unit" | "()" => Type::Unit,
             // Recognize common Iroha types by name
             "AccountId" => Type::AccountId,
@@ -7952,6 +8045,28 @@ mod tests {
             "unexpected error message: {}",
             err.message
         );
+    }
+
+    #[test]
+    fn trigger_callbacks_accept_trigger_event_payload_helpers() {
+        let program = parse(
+            r#"
+            seiyaku Demo {
+                kotoage fn run() {
+                    let ev = trigger_event();
+                    let _escrow_id = ev.get_name(name("escrow_id"));
+                    let _condition_code = ev.get_int(name("condition_code"));
+                }
+
+                register_trigger wake {
+                    call run;
+                    on execute trigger wake;
+                }
+            }
+            "#,
+        )
+        .expect("parse trigger callback trigger_event");
+        analyze(&program).expect("trigger callback trigger_event should type-check");
     }
 
     #[test]

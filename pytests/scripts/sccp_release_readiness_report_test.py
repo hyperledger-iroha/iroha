@@ -159,8 +159,34 @@ def test_release_readiness_json_tracks_corridor_phase_results(tmp_path: Path) ->
     assert surfaces["eth,bsc"]["proof_backend"] == "evm-groth16-bn254-v1"
     assert surfaces["tron"]["proof_backend"] == "tron-groth16-bn254-v1"
     assert surfaces["substrate"]["proof_backend"] == "substrate-runtime-v1"
+    assert "canonicalEvmSccpReceiptProofBytes" in surfaces["eth,bsc"]["sdk_helpers"]
+    assert "canonicalBscSccpReceiptProofBytes" in surfaces["eth,bsc"]["sdk_helpers"]
+    assert "canonicalTronSccpReceiptStateProofBytes" in surfaces["tron"]["sdk_helpers"]
+    assert (
+        "canonicalTronSccpTransactionSourceProofBytes"
+        in surfaces["tron"]["sdk_helpers"]
+    )
+    assert (
+        "buildSubstrateSccpRuntimeStorageProofRequest"
+        in surfaces["substrate"]["sdk_helpers"]
+    )
     assert "buildTonSccpSubmission" in surfaces["ton"]["sdk_helpers"]
+    assert (
+        "buildSolanaSccpAccountsLtHashProofRequest"
+        in surfaces["sol"]["sdk_helpers"]
+    )
+    assert (
+        "buildSolanaSccpFullLightClientAuditProofRequests"
+        in surfaces["sol"]["sdk_helpers"]
+    )
+    assert "SolanaSccpSourceStateProver" in surfaces["sol"]["sdk_helpers"]
     assert "TON internal message body BOC" in surfaces["ton"]["on_chain_submission"]
+    assert "buildTonShardStateProofRequest" in surfaces["ton"]["sdk_helpers"]
+    assert (
+        "buildTonSccpFullLightClientAuditProofRequests"
+        in surfaces["ton"]["sdk_helpers"]
+    )
+    assert "TonSccpSourceStateProver" in surfaces["ton"]["sdk_helpers"]
     assert surfaces["ton"]["required_phases"] == [
         "js-sdk",
         "python-sdk",

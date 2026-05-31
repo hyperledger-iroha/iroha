@@ -670,7 +670,7 @@ async fn torii_json_get(
         }
     }
 
-    let request = reqwest::Client::new()
+    let request = integration_tests::http::client()
         .get(url)
         .header(reqwest::header::ACCEPT, "application/json");
     let response = add_client_headers(client, request, true, true)
@@ -736,7 +736,7 @@ async fn torii_json_get_as_account(
     let message =
         canonical_request_signature_message(&Method::GET, &uri, &[], timestamp_ms, &nonce);
     let signature = Signature::new(client.key_pair.private_key(), &message);
-    let response = reqwest::Client::new()
+    let response = integration_tests::http::client()
         .get(url)
         .header(reqwest::header::ACCEPT, "application/json")
         .header(HEADER_ACCOUNT, account.to_string())
@@ -834,7 +834,7 @@ async fn submit_transaction_raw(
     client: &Client,
     transaction: &SignedTransaction,
 ) -> Result<RoutedTransactionSubmitResponse> {
-    let request = reqwest::Client::new()
+    let request = integration_tests::http::client()
         .post(
             client
                 .torii_url

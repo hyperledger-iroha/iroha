@@ -392,6 +392,9 @@ def test_release_bundle_writes_hash_bound_public_artifacts(tmp_path: Path) -> No
     verification = json.loads(verified.stdout)
     assert verification["verified"] is True
     assert verification["errors"] == []
+    assert verification["manifest_sha256"] == hashlib.sha256(
+        manifest_json.read_bytes()
+    ).hexdigest()
 
 
 def test_release_bundle_verifier_rejects_tampered_artifact(tmp_path: Path) -> None:
@@ -672,6 +675,169 @@ def test_release_bundle_verifier_rejects_release_notes_drift(
     assert verified.returncode == 1
     assert "release notes attachment does not match manifest and report" in (
         verified.stdout
+    )
+
+
+def test_release_bundle_verifier_rejects_manifest_artifact_order_drift(
+    tmp_path: Path,
+) -> None:
+    """The manifest artifact table must keep the bundle builder's public order."""
+
+    output_dir = build_ready_bundle(tmp_path)
+    manifest_path = output_dir / "manifest.json"
+    manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+    manifest["artifacts"][0], manifest["artifacts"][1] = (
+        manifest["artifacts"][1],
+        manifest["artifacts"][0],
+    )
+    manifest_path.write_text(
+        json.dumps(manifest, indent=2, sort_keys=True) + "\n",
+        encoding="utf-8",
+    )
+    rewrite_canonical_report_and_notes(output_dir)
+
+    verified = subprocess.run(
+        ["python3", str(VERIFY_SCRIPT), str(output_dir)],
+        check=False,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+        text=True,
+    )
+
+    assert verified.returncode == 1
+    assert (
+        "manifest artifact order does not match canonical release bundle order"
+        in verified.stdout
+    )
+
+
+def test_release_bundle_verifier_rejects_noncanonical_json_serialization(
+    tmp_path: Path,
+) -> None:
+    """Public JSON roots must keep the bundle builder's canonical byte form."""
+
+    output_dir = build_ready_bundle(tmp_path)
+    for relative_path in (
+        "sccp-release-readiness.json",
+        "sccp-all-lanes-summary.json",
+    ):
+        path = output_dir / relative_path
+        payload = json.loads(path.read_text(encoding="utf-8"))
+        path.write_text(
+            json.dumps(payload, separators=(",", ":")),
+            encoding="utf-8",
+        )
+        rewrite_manifest_artifact(output_dir, relative_path)
+    rewrite_canonical_report_and_notes(output_dir)
+
+    manifest_path = output_dir / "manifest.json"
+    manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+    manifest_path.write_text(
+        json.dumps(manifest, separators=(",", ":")),
+        encoding="utf-8",
+    )
+
+    verified = subprocess.run(
+        ["python3", str(VERIFY_SCRIPT), str(output_dir)],
+        check=False,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+        text=True,
+    )
+
+    assert verified.returncode == 1
+    assert (
+        "manifest JSON is not canonical release-bundle serialization"
+        in verified.stdout
+    )
+    assert (
+        "readiness report JSON is not canonical release-bundle serialization"
+        in verified.stdout
+    )
+    assert (
+        "all-lanes summary JSON is not canonical release-bundle serialization"
+        in verified.stdout
+    )
+
+
+def test_release_bundle_verifier_rejects_duplicate_json_keys(
+    tmp_path: Path,
+) -> None:
+    """Public JSON roots must reject duplicate keys before semantic review."""
+
+    output_dir = build_ready_bundle(tmp_path)
+    manifest_path = output_dir / "manifest.json"
+    manifest_text = manifest_path.read_text(encoding="utf-8")
+    manifest_path.write_text(
+        manifest_text.replace(
+            '  "schema": "sccp-release-bundle-v1"\n',
+            (
+                '  "schema": "sccp-release-bundle-v1",\n'
+                '  "schema": "sccp-release-bundle-v1"\n'
+            ),
+            1,
+        ),
+        encoding="utf-8",
+    )
+
+    verified = subprocess.run(
+        ["python3", str(VERIFY_SCRIPT), str(output_dir)],
+        check=False,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+        text=True,
+    )
+
+    assert verified.returncode == 1
+    assert "manifest JSON contains duplicate key: schema" in verified.stdout
+
+
+def test_release_bundle_verifier_rejects_report_summary_duplicate_json_keys(
+    tmp_path: Path,
+) -> None:
+    """Readiness report and all-lanes summary JSON roots reject duplicate keys."""
+
+    output_dir = build_ready_bundle(tmp_path)
+    report_path = output_dir / "sccp-release-readiness.json"
+    report_text = report_path.read_text(encoding="utf-8")
+    report_path.write_text(
+        report_text.replace(
+            '  "production_ready": true,\n',
+            '  "production_ready": true,\n  "production_ready": true,\n',
+            1,
+        ),
+        encoding="utf-8",
+    )
+    rewrite_manifest_artifact(output_dir, "sccp-release-readiness.json")
+
+    summary_path = output_dir / "sccp-all-lanes-summary.json"
+    summary_text = summary_path.read_text(encoding="utf-8")
+    summary_path.write_text(
+        summary_text.replace(
+            '  "production_ready": true,\n',
+            '  "production_ready": true,\n  "production_ready": true,\n',
+            1,
+        ),
+        encoding="utf-8",
+    )
+    rewrite_manifest_artifact(output_dir, "sccp-all-lanes-summary.json")
+
+    verified = subprocess.run(
+        ["python3", str(VERIFY_SCRIPT), str(output_dir)],
+        check=False,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+        text=True,
+    )
+
+    assert verified.returncode == 1
+    assert (
+        "readiness report JSON contains duplicate key: production_ready"
+        in verified.stdout
+    )
+    assert (
+        "all-lanes summary JSON contains duplicate key: production_ready"
+        in verified.stdout
     )
 
 
@@ -2049,7 +2215,7 @@ def test_release_bundle_verifier_rejects_all_lanes_route_canary_field_drift(
     ) in verified.stdout
     assert (
         "readiness report embedded evidence lane domain 5 route_allowlist "
-        "route_canary transaction_owner_address must be a canonical "
+        "route_canary transaction_owner_address must be a non-zero canonical "
         "0x41-prefixed 21-byte hex string"
     ) in verified.stdout
     assert (
@@ -2075,8 +2241,699 @@ def test_release_bundle_verifier_rejects_all_lanes_route_canary_field_drift(
     ) in verified.stdout
     assert (
         "all-lanes summary lane domain 5 route_allowlist route_canary "
-        "transaction_owner_address must be a canonical 0x41-prefixed "
+        "transaction_owner_address must be a non-zero canonical 0x41-prefixed "
         "21-byte hex string"
+    ) in verified.stdout
+
+
+def test_release_bundle_verifier_rejects_tron_route_canary_zero_addresses(
+    tmp_path: Path,
+) -> None:
+    """TRON route-canary owner and recovered signer addresses must be non-zero."""
+
+    def mutate_lanes(lanes: list[dict]) -> None:
+        by_domain = {lane["domain"]: lane for lane in lanes}
+        tron_canary = by_domain[5]["route_allowlist"]["route_canary"]
+        zero_address = "0x41" + "00" * 20
+        tron_canary["transaction_owner_address"] = zero_address
+        tron_canary["signature_recovered_address"] = zero_address
+
+    output_dir = build_ready_bundle(tmp_path)
+    report_path = output_dir / "sccp-release-readiness.json"
+    report = json.loads(report_path.read_text(encoding="utf-8"))
+    mutate_lanes(report["evidence"]["lanes"])
+    report_path.write_text(
+        json.dumps(report, indent=2, sort_keys=True) + "\n",
+        encoding="utf-8",
+    )
+
+    summary_path = output_dir / "sccp-all-lanes-summary.json"
+    summary = json.loads(summary_path.read_text(encoding="utf-8"))
+    mutate_lanes(summary["lanes"])
+    summary_path.write_text(
+        json.dumps(summary, indent=2, sort_keys=True) + "\n",
+        encoding="utf-8",
+    )
+
+    rewrite_manifest_artifact(output_dir, "sccp-release-readiness.json")
+    rewrite_manifest_artifact(output_dir, "sccp-all-lanes-summary.json")
+    rewrite_canonical_report_and_notes(output_dir)
+
+    verified = subprocess.run(
+        ["python3", str(VERIFY_SCRIPT), str(output_dir)],
+        check=False,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+        text=True,
+    )
+
+    assert verified.returncode == 1
+    assert (
+        "readiness report embedded evidence lane domain 5 route_allowlist "
+        "route_canary transaction_owner_address must be a non-zero canonical "
+        "0x41-prefixed 21-byte hex string"
+    ) in verified.stdout
+    assert (
+        "readiness report embedded evidence lane domain 5 route_allowlist "
+        "route_canary signature_recovered_address must be a non-zero canonical "
+        "0x41-prefixed 21-byte hex string"
+    ) in verified.stdout
+    assert (
+        "all-lanes summary lane domain 5 route_allowlist route_canary "
+        "transaction_owner_address must be a non-zero canonical 0x41-prefixed "
+        "21-byte hex string"
+    ) in verified.stdout
+    assert (
+        "all-lanes summary lane domain 5 route_allowlist route_canary "
+        "signature_recovered_address must be a non-zero canonical "
+        "0x41-prefixed 21-byte hex string"
+    ) in verified.stdout
+
+
+def test_release_bundle_verifier_rejects_tron_route_canary_zero_binding_hashes(
+    tmp_path: Path,
+) -> None:
+    """TRON route-canary common binding hashes must be non-zero."""
+
+    common_hash_fields = (
+        "evidence_hash",
+        "route_allowlist_hash",
+        "destination_binding_hash",
+    )
+
+    def mutate_lanes(lanes: list[dict]) -> None:
+        by_domain = {lane["domain"]: lane for lane in lanes}
+        tron_canary = by_domain[5]["route_allowlist"]["route_canary"]
+        for field in common_hash_fields:
+            tron_canary[field] = "0x" + "00" * 32
+
+    output_dir = build_ready_bundle(tmp_path)
+    report_path = output_dir / "sccp-release-readiness.json"
+    report = json.loads(report_path.read_text(encoding="utf-8"))
+    mutate_lanes(report["evidence"]["lanes"])
+    report_path.write_text(
+        json.dumps(report, indent=2, sort_keys=True) + "\n",
+        encoding="utf-8",
+    )
+
+    summary_path = output_dir / "sccp-all-lanes-summary.json"
+    summary = json.loads(summary_path.read_text(encoding="utf-8"))
+    mutate_lanes(summary["lanes"])
+    summary_path.write_text(
+        json.dumps(summary, indent=2, sort_keys=True) + "\n",
+        encoding="utf-8",
+    )
+
+    rewrite_manifest_artifact(output_dir, "sccp-release-readiness.json")
+    rewrite_manifest_artifact(output_dir, "sccp-all-lanes-summary.json")
+    rewrite_canonical_report_and_notes(output_dir)
+
+    verified = subprocess.run(
+        ["python3", str(VERIFY_SCRIPT), str(output_dir)],
+        check=False,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+        text=True,
+    )
+
+    assert verified.returncode == 1
+    for label in (
+        "readiness report embedded evidence lane domain 5 route_allowlist "
+        "route_canary",
+        "all-lanes summary lane domain 5 route_allowlist route_canary",
+    ):
+        for field in common_hash_fields:
+            assert (
+                f"{label} {field} must be a non-zero canonical bytes32 hex string"
+                in verified.stdout
+            )
+
+
+def test_release_bundle_verifier_rejects_tron_route_canary_zero_transcript_words(
+    tmp_path: Path,
+) -> None:
+    """TRON route-canary transcript words must match runtime non-zero policy."""
+
+    transcript_fields = (
+        "transaction_id",
+        "message_id",
+        "call_data_sha256",
+        "payload_hash",
+        "statement_hash",
+        "commitment_root",
+        "finality_height",
+        "finality_block_hash",
+        "signature_sha256",
+    )
+
+    def mutate_lanes(lanes: list[dict]) -> None:
+        by_domain = {lane["domain"]: lane for lane in lanes}
+        tron_canary = by_domain[5]["route_allowlist"]["route_canary"]
+        for field in transcript_fields:
+            tron_canary[field] = "0x" + "00" * 32
+
+    output_dir = build_ready_bundle(tmp_path)
+    report_path = output_dir / "sccp-release-readiness.json"
+    report = json.loads(report_path.read_text(encoding="utf-8"))
+    mutate_lanes(report["evidence"]["lanes"])
+    report_path.write_text(
+        json.dumps(report, indent=2, sort_keys=True) + "\n",
+        encoding="utf-8",
+    )
+
+    summary_path = output_dir / "sccp-all-lanes-summary.json"
+    summary = json.loads(summary_path.read_text(encoding="utf-8"))
+    mutate_lanes(summary["lanes"])
+    summary_path.write_text(
+        json.dumps(summary, indent=2, sort_keys=True) + "\n",
+        encoding="utf-8",
+    )
+
+    rewrite_manifest_artifact(output_dir, "sccp-release-readiness.json")
+    rewrite_manifest_artifact(output_dir, "sccp-all-lanes-summary.json")
+    rewrite_canonical_report_and_notes(output_dir)
+
+    verified = subprocess.run(
+        ["python3", str(VERIFY_SCRIPT), str(output_dir)],
+        check=False,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+        text=True,
+    )
+
+    assert verified.returncode == 1
+    for label in (
+        "readiness report embedded evidence lane domain 5 route_allowlist "
+        "route_canary",
+        "all-lanes summary lane domain 5 route_allowlist route_canary",
+    ):
+        for field in transcript_fields:
+            assert (
+                f"{label} {field} must be a non-zero canonical bytes32 hex string"
+                in verified.stdout
+            )
+
+
+def test_release_bundle_verifier_rejects_evm_route_canary_zero_transcript_words(
+    tmp_path: Path,
+) -> None:
+    """EVM route-canary transcript words must match runtime non-zero policy."""
+
+    transcript_fields = (
+        "transaction_hash",
+        "call_data_sha256",
+        "message_id",
+        "payload_hash",
+        "statement_hash",
+        "commitment_root",
+        "finality_height",
+        "finality_block_hash",
+    )
+
+    def mutate_lanes(lanes: list[dict]) -> None:
+        by_domain = {lane["domain"]: lane for lane in lanes}
+        for domain in (1, 2):
+            evm_canary = by_domain[domain]["route_allowlist"]["route_canary"]
+            for field in transcript_fields:
+                evm_canary[field] = "0x" + "00" * 32
+
+    output_dir = build_ready_bundle(tmp_path)
+    report_path = output_dir / "sccp-release-readiness.json"
+    report = json.loads(report_path.read_text(encoding="utf-8"))
+    mutate_lanes(report["evidence"]["lanes"])
+    report_path.write_text(
+        json.dumps(report, indent=2, sort_keys=True) + "\n",
+        encoding="utf-8",
+    )
+
+    summary_path = output_dir / "sccp-all-lanes-summary.json"
+    summary = json.loads(summary_path.read_text(encoding="utf-8"))
+    mutate_lanes(summary["lanes"])
+    summary_path.write_text(
+        json.dumps(summary, indent=2, sort_keys=True) + "\n",
+        encoding="utf-8",
+    )
+
+    rewrite_manifest_artifact(output_dir, "sccp-release-readiness.json")
+    rewrite_manifest_artifact(output_dir, "sccp-all-lanes-summary.json")
+    rewrite_canonical_report_and_notes(output_dir)
+
+    verified = subprocess.run(
+        ["python3", str(VERIFY_SCRIPT), str(output_dir)],
+        check=False,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+        text=True,
+    )
+
+    assert verified.returncode == 1
+    for domain in (1, 2):
+        for label in (
+            f"readiness report embedded evidence lane domain {domain} "
+            "route_allowlist route_canary",
+            f"all-lanes summary lane domain {domain} route_allowlist route_canary",
+        ):
+            for field in transcript_fields:
+                assert (
+                    f"{label} {field} must be a non-zero canonical bytes32 "
+                    "hex string"
+                in verified.stdout
+            )
+
+
+def test_release_bundle_verifier_rejects_evm_route_canary_transcript_hash_reuse(
+    tmp_path: Path,
+) -> None:
+    """EVM route-canary transcript hash roles must stay distinct."""
+
+    def mutate_lanes(lanes: list[dict]) -> None:
+        by_domain = {lane["domain"]: lane for lane in lanes}
+        evm_canary = by_domain[1]["route_allowlist"]["route_canary"]
+        evm_canary["payload_hash"] = evm_canary["call_data_sha256"]
+
+    output_dir = build_ready_bundle(tmp_path)
+    report_path = output_dir / "sccp-release-readiness.json"
+    report = json.loads(report_path.read_text(encoding="utf-8"))
+    mutate_lanes(report["evidence"]["lanes"])
+    report_path.write_text(
+        json.dumps(report, indent=2, sort_keys=True) + "\n",
+        encoding="utf-8",
+    )
+
+    summary_path = output_dir / "sccp-all-lanes-summary.json"
+    summary = json.loads(summary_path.read_text(encoding="utf-8"))
+    mutate_lanes(summary["lanes"])
+    summary_path.write_text(
+        json.dumps(summary, indent=2, sort_keys=True) + "\n",
+        encoding="utf-8",
+    )
+
+    rewrite_manifest_artifact(output_dir, "sccp-release-readiness.json")
+    rewrite_manifest_artifact(output_dir, "sccp-all-lanes-summary.json")
+    rewrite_canonical_report_and_notes(output_dir)
+
+    verified = subprocess.run(
+        ["python3", str(VERIFY_SCRIPT), str(output_dir)],
+        check=False,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+        text=True,
+    )
+
+    assert verified.returncode == 1
+    assert (
+        "readiness report embedded evidence lane domain 1 route_allowlist "
+        "route_canary transcript hash payload_hash must not reuse "
+        "call_data_sha256"
+    ) in verified.stdout
+    assert (
+        "all-lanes summary lane domain 1 route_allowlist route_canary "
+        "transcript hash payload_hash must not reuse call_data_sha256"
+    ) in verified.stdout
+
+
+def test_release_bundle_verifier_rejects_evm_route_canary_governed_hash_reuse(
+    tmp_path: Path,
+) -> None:
+    """EVM route-canary hashes must not reuse governed lane hash roles."""
+
+    def mutate_lanes(lanes: list[dict]) -> None:
+        by_domain = {lane["domain"]: lane for lane in lanes}
+        evm_lane = by_domain[1]
+        evm_canary = evm_lane["route_allowlist"]["route_canary"]
+        evm_canary["message_id"] = evm_lane["source_record_hashes"][
+            "source_verifier_material_hash"
+        ]
+
+    output_dir = build_ready_bundle(tmp_path)
+    report_path = output_dir / "sccp-release-readiness.json"
+    report = json.loads(report_path.read_text(encoding="utf-8"))
+    mutate_lanes(report["evidence"]["lanes"])
+    report_path.write_text(
+        json.dumps(report, indent=2, sort_keys=True) + "\n",
+        encoding="utf-8",
+    )
+
+    summary_path = output_dir / "sccp-all-lanes-summary.json"
+    summary = json.loads(summary_path.read_text(encoding="utf-8"))
+    mutate_lanes(summary["lanes"])
+    summary_path.write_text(
+        json.dumps(summary, indent=2, sort_keys=True) + "\n",
+        encoding="utf-8",
+    )
+
+    rewrite_manifest_artifact(output_dir, "sccp-release-readiness.json")
+    rewrite_manifest_artifact(output_dir, "sccp-all-lanes-summary.json")
+    rewrite_canonical_report_and_notes(output_dir)
+
+    verified = subprocess.run(
+        ["python3", str(VERIFY_SCRIPT), str(output_dir)],
+        check=False,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+        text=True,
+    )
+
+    assert verified.returncode == 1
+    assert (
+        "readiness report embedded evidence lane domain 1 route_allowlist "
+        "route_canary hash role message_id must not reuse "
+        "source_verifier_material_hash"
+    ) in verified.stdout
+    assert (
+        "all-lanes summary lane domain 1 route_allowlist route_canary "
+        "hash role message_id must not reuse source_verifier_material_hash"
+    ) in verified.stdout
+
+
+def test_release_bundle_verifier_rejects_ton_route_canary_zero_live_hashes(
+    tmp_path: Path,
+) -> None:
+    """TON route-canary live-account hashes must match runtime non-zero policy."""
+
+    live_hash_fields = ("ton_account_state_hash", "ton_last_transaction_hash")
+
+    def mutate_lanes(lanes: list[dict]) -> None:
+        by_domain = {lane["domain"]: lane for lane in lanes}
+        ton_canary = by_domain[4]["route_allowlist"]["route_canary"]
+        for field in live_hash_fields:
+            ton_canary[field] = "0x" + "00" * 32
+
+    output_dir = build_ready_bundle(tmp_path)
+    report_path = output_dir / "sccp-release-readiness.json"
+    report = json.loads(report_path.read_text(encoding="utf-8"))
+    mutate_lanes(report["evidence"]["lanes"])
+    report_path.write_text(
+        json.dumps(report, indent=2, sort_keys=True) + "\n",
+        encoding="utf-8",
+    )
+
+    summary_path = output_dir / "sccp-all-lanes-summary.json"
+    summary = json.loads(summary_path.read_text(encoding="utf-8"))
+    mutate_lanes(summary["lanes"])
+    summary_path.write_text(
+        json.dumps(summary, indent=2, sort_keys=True) + "\n",
+        encoding="utf-8",
+    )
+
+    rewrite_manifest_artifact(output_dir, "sccp-release-readiness.json")
+    rewrite_manifest_artifact(output_dir, "sccp-all-lanes-summary.json")
+    rewrite_canonical_report_and_notes(output_dir)
+
+    verified = subprocess.run(
+        ["python3", str(VERIFY_SCRIPT), str(output_dir)],
+        check=False,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+        text=True,
+    )
+
+    assert verified.returncode == 1
+    for label in (
+        "readiness report embedded evidence lane domain 4 route_allowlist "
+        "route_canary",
+        "all-lanes summary lane domain 4 route_allowlist route_canary",
+    ):
+        for field in live_hash_fields:
+            assert (
+                f"{label} {field} must be a non-zero canonical bytes32 hex string"
+                in verified.stdout
+            )
+
+
+def test_release_bundle_verifier_rejects_ton_route_canary_hash_role_reuse(
+    tmp_path: Path,
+) -> None:
+    """TON route-canary live-account hashes must not replay governed hashes."""
+
+    def mutate_lanes(lanes: list[dict]) -> None:
+        by_domain = {lane["domain"]: lane for lane in lanes}
+        ton_lane = by_domain[4]
+        ton_canary = ton_lane["route_allowlist"]["route_canary"]
+        ton_canary["ton_account_state_hash"] = ton_lane["destination_binding"][
+            "destination_binding_hash"
+        ]
+        ton_canary["ton_last_transaction_hash"] = ton_lane["route_allowlist"][
+            "route_allowlist_hash"
+        ]
+
+    output_dir = build_ready_bundle(tmp_path)
+    report_path = output_dir / "sccp-release-readiness.json"
+    report = json.loads(report_path.read_text(encoding="utf-8"))
+    mutate_lanes(report["evidence"]["lanes"])
+    report_path.write_text(
+        json.dumps(report, indent=2, sort_keys=True) + "\n",
+        encoding="utf-8",
+    )
+
+    summary_path = output_dir / "sccp-all-lanes-summary.json"
+    summary = json.loads(summary_path.read_text(encoding="utf-8"))
+    mutate_lanes(summary["lanes"])
+    summary_path.write_text(
+        json.dumps(summary, indent=2, sort_keys=True) + "\n",
+        encoding="utf-8",
+    )
+
+    rewrite_manifest_artifact(output_dir, "sccp-release-readiness.json")
+    rewrite_manifest_artifact(output_dir, "sccp-all-lanes-summary.json")
+    rewrite_canonical_report_and_notes(output_dir)
+
+    verified = subprocess.run(
+        ["python3", str(VERIFY_SCRIPT), str(output_dir)],
+        check=False,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+        text=True,
+    )
+
+    assert verified.returncode == 1
+    for label in (
+        "readiness report embedded evidence lane domain 4 route_allowlist "
+        "route_canary",
+        "all-lanes summary lane domain 4 route_allowlist route_canary",
+    ):
+        assert (
+            f"{label} hash role ton_account_state_hash must not reuse "
+            "destination_binding_hash"
+        ) in verified.stdout
+        assert (
+            f"{label} hash role ton_last_transaction_hash must not reuse "
+            "route_allowlist_hash"
+        ) in verified.stdout
+
+
+def test_release_bundle_verifier_rejects_substrate_route_canary_zero_finalized_head(
+    tmp_path: Path,
+) -> None:
+    """Substrate route-canary finalized heads must be non-zero bytes32 values."""
+
+    substrate_domains = (6, 7, 8)
+
+    def mutate_lanes(lanes: list[dict]) -> None:
+        by_domain = {lane["domain"]: lane for lane in lanes}
+        for domain in substrate_domains:
+            substrate_canary = by_domain[domain]["route_allowlist"]["route_canary"]
+            substrate_canary["substrate_finalized_head"] = "0x" + "00" * 32
+
+    output_dir = build_ready_bundle(tmp_path)
+    report_path = output_dir / "sccp-release-readiness.json"
+    report = json.loads(report_path.read_text(encoding="utf-8"))
+    mutate_lanes(report["evidence"]["lanes"])
+    report_path.write_text(
+        json.dumps(report, indent=2, sort_keys=True) + "\n",
+        encoding="utf-8",
+    )
+
+    summary_path = output_dir / "sccp-all-lanes-summary.json"
+    summary = json.loads(summary_path.read_text(encoding="utf-8"))
+    mutate_lanes(summary["lanes"])
+    summary_path.write_text(
+        json.dumps(summary, indent=2, sort_keys=True) + "\n",
+        encoding="utf-8",
+    )
+
+    rewrite_manifest_artifact(output_dir, "sccp-release-readiness.json")
+    rewrite_manifest_artifact(output_dir, "sccp-all-lanes-summary.json")
+    rewrite_canonical_report_and_notes(output_dir)
+
+    verified = subprocess.run(
+        ["python3", str(VERIFY_SCRIPT), str(output_dir)],
+        check=False,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+        text=True,
+    )
+
+    assert verified.returncode == 1
+    for domain in substrate_domains:
+        for label in (
+            f"readiness report embedded evidence lane domain {domain} "
+            "route_allowlist route_canary",
+            f"all-lanes summary lane domain {domain} route_allowlist route_canary",
+        ):
+            assert (
+                f"{label} substrate_finalized_head must be a non-zero canonical "
+                "bytes32 hex string"
+            ) in verified.stdout
+
+
+def test_release_bundle_verifier_rejects_tron_route_canary_transcript_hash_reuse(
+    tmp_path: Path,
+) -> None:
+    """TRON route-canary transcript hash roles must stay distinct."""
+
+    def mutate_lanes(lanes: list[dict]) -> None:
+        by_domain = {lane["domain"]: lane for lane in lanes}
+        tron_canary = by_domain[5]["route_allowlist"]["route_canary"]
+        tron_canary["signature_sha256"] = tron_canary["finality_block_hash"]
+
+    output_dir = build_ready_bundle(tmp_path)
+    report_path = output_dir / "sccp-release-readiness.json"
+    report = json.loads(report_path.read_text(encoding="utf-8"))
+    mutate_lanes(report["evidence"]["lanes"])
+    report_path.write_text(
+        json.dumps(report, indent=2, sort_keys=True) + "\n",
+        encoding="utf-8",
+    )
+
+    summary_path = output_dir / "sccp-all-lanes-summary.json"
+    summary = json.loads(summary_path.read_text(encoding="utf-8"))
+    mutate_lanes(summary["lanes"])
+    summary_path.write_text(
+        json.dumps(summary, indent=2, sort_keys=True) + "\n",
+        encoding="utf-8",
+    )
+
+    rewrite_manifest_artifact(output_dir, "sccp-release-readiness.json")
+    rewrite_manifest_artifact(output_dir, "sccp-all-lanes-summary.json")
+    rewrite_canonical_report_and_notes(output_dir)
+
+    verified = subprocess.run(
+        ["python3", str(VERIFY_SCRIPT), str(output_dir)],
+        check=False,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+        text=True,
+    )
+
+    assert verified.returncode == 1
+    assert (
+        "readiness report embedded evidence lane domain 5 route_allowlist "
+        "route_canary transcript hash signature_sha256 must not reuse "
+        "finality_block_hash"
+    ) in verified.stdout
+    assert (
+        "all-lanes summary lane domain 5 route_allowlist route_canary "
+        "transcript hash signature_sha256 must not reuse finality_block_hash"
+    ) in verified.stdout
+
+
+def test_release_bundle_verifier_rejects_tron_route_canary_governed_hash_reuse(
+    tmp_path: Path,
+) -> None:
+    """TRON route-canary hashes must not reuse governed lane hash roles."""
+
+    def mutate_lanes(lanes: list[dict]) -> None:
+        by_domain = {lane["domain"]: lane for lane in lanes}
+        tron_lane = by_domain[5]
+        tron_canary = tron_lane["route_allowlist"]["route_canary"]
+        tron_canary["message_id"] = tron_lane["source_record_hashes"][
+            "source_adapter_engine_deployment_hash"
+        ]
+
+    output_dir = build_ready_bundle(tmp_path)
+    report_path = output_dir / "sccp-release-readiness.json"
+    report = json.loads(report_path.read_text(encoding="utf-8"))
+    mutate_lanes(report["evidence"]["lanes"])
+    report_path.write_text(
+        json.dumps(report, indent=2, sort_keys=True) + "\n",
+        encoding="utf-8",
+    )
+
+    summary_path = output_dir / "sccp-all-lanes-summary.json"
+    summary = json.loads(summary_path.read_text(encoding="utf-8"))
+    mutate_lanes(summary["lanes"])
+    summary_path.write_text(
+        json.dumps(summary, indent=2, sort_keys=True) + "\n",
+        encoding="utf-8",
+    )
+
+    rewrite_manifest_artifact(output_dir, "sccp-release-readiness.json")
+    rewrite_manifest_artifact(output_dir, "sccp-all-lanes-summary.json")
+    rewrite_canonical_report_and_notes(output_dir)
+
+    verified = subprocess.run(
+        ["python3", str(VERIFY_SCRIPT), str(output_dir)],
+        check=False,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+        text=True,
+    )
+
+    assert verified.returncode == 1
+    assert (
+        "readiness report embedded evidence lane domain 5 route_allowlist "
+        "route_canary hash role message_id must not reuse "
+        "source_adapter_engine_deployment_hash"
+    ) in verified.stdout
+    assert (
+        "all-lanes summary lane domain 5 route_allowlist route_canary "
+        "hash role message_id must not reuse "
+        "source_adapter_engine_deployment_hash"
+    ) in verified.stdout
+
+
+def test_release_bundle_verifier_rejects_tron_route_canary_recovered_owner_drift(
+    tmp_path: Path,
+) -> None:
+    """TRON route-canary signer evidence must bind recovered signer to owner."""
+
+    def mutate_lanes(lanes: list[dict]) -> None:
+        by_domain = {lane["domain"]: lane for lane in lanes}
+        tron_canary = by_domain[5]["route_allowlist"]["route_canary"]
+        replacement = "0x41" + "22" * 20
+        if tron_canary["transaction_owner_address"] == replacement:
+            replacement = "0x41" + "33" * 20
+        tron_canary["signature_recovered_address"] = replacement
+
+    output_dir = build_ready_bundle(tmp_path)
+    report_path = output_dir / "sccp-release-readiness.json"
+    report = json.loads(report_path.read_text(encoding="utf-8"))
+    mutate_lanes(report["evidence"]["lanes"])
+    report_path.write_text(
+        json.dumps(report, indent=2, sort_keys=True) + "\n",
+        encoding="utf-8",
+    )
+
+    summary_path = output_dir / "sccp-all-lanes-summary.json"
+    summary = json.loads(summary_path.read_text(encoding="utf-8"))
+    mutate_lanes(summary["lanes"])
+    summary_path.write_text(
+        json.dumps(summary, indent=2, sort_keys=True) + "\n",
+        encoding="utf-8",
+    )
+
+    rewrite_manifest_artifact(output_dir, "sccp-release-readiness.json")
+    rewrite_manifest_artifact(output_dir, "sccp-all-lanes-summary.json")
+    rewrite_canonical_report_and_notes(output_dir)
+
+    verified = subprocess.run(
+        ["python3", str(VERIFY_SCRIPT), str(output_dir)],
+        check=False,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+        text=True,
+    )
+
+    assert verified.returncode == 1
+    assert (
+        "readiness report embedded evidence lane domain 5 route_allowlist "
+        "route_canary signature_recovered_address must match "
+        "transaction_owner_address"
+    ) in verified.stdout
+    assert (
+        "all-lanes summary lane domain 5 route_allowlist route_canary "
+        "signature_recovered_address must match transaction_owner_address"
     ) in verified.stdout
 
 
@@ -2404,6 +3261,81 @@ def test_release_bundle_verifier_rejects_crypto_evidence_hash_drift(
     )
 
     assert verified.returncode == 1
+    assert (
+        "readiness report cryptographic_evidence does not match embedded lane evidence"
+        in verified.stdout
+    )
+
+
+def test_release_bundle_verifier_rejects_crypto_evidence_field_binding_drift(
+    tmp_path: Path,
+) -> None:
+    """Every public crypto field must bind to the embedded lane field it names."""
+
+    def replacement_hash(current: str) -> str:
+        candidate = "0x" + "55" * 32
+        if current == candidate:
+            return "0x" + "66" * 32
+        return candidate
+
+    output_dir = build_ready_bundle(tmp_path)
+    report_path = output_dir / "sccp-release-readiness.json"
+    report = json.loads(report_path.read_text(encoding="utf-8"))
+    row = report["cryptographic_evidence"][0]
+    for field in (
+        "source_verifier_material_hash",
+        "source_adapter_engine_deployment_hash",
+        "destination_binding_hash",
+        "route_allowlist_hash",
+        "route_canary_evidence_hash",
+    ):
+        row[field] = replacement_hash(row[field])
+    row["route_canary_evidence_source"] = "forged-route-canary"
+    row["route_canary_evidence_bound"] = False
+    report_path.write_text(
+        json.dumps(report, indent=2, sort_keys=True) + "\n",
+        encoding="utf-8",
+    )
+    rewrite_manifest_artifact(output_dir, "sccp-release-readiness.json")
+    rewrite_canonical_report_and_notes(output_dir)
+
+    verified = subprocess.run(
+        ["python3", str(VERIFY_SCRIPT), str(output_dir)],
+        check=False,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+        text=True,
+    )
+
+    assert verified.returncode == 1
+    for field, lane_field in (
+        (
+            "source_verifier_material_hash",
+            "source_record_hashes.source_verifier_material_hash",
+        ),
+        (
+            "source_adapter_engine_deployment_hash",
+            "source_record_hashes.source_adapter_engine_deployment_hash",
+        ),
+        ("destination_binding_hash", "destination_binding.destination_binding_hash"),
+        ("route_allowlist_hash", "route_allowlist.route_allowlist_hash"),
+        (
+            "route_canary_evidence_hash",
+            "route_allowlist.route_canary.evidence_hash",
+        ),
+        (
+            "route_canary_evidence_source",
+            "route_allowlist.route_canary.evidence_source",
+        ),
+        (
+            "route_canary_evidence_bound",
+            "route_allowlist.route_canary.evidence_bound",
+        ),
+    ):
+        assert (
+            "readiness report cryptographic evidence row 0 "
+            f"{field} must match embedded lane {lane_field}"
+        ) in verified.stdout
     assert (
         "readiness report cryptographic_evidence does not match embedded lane evidence"
         in verified.stdout

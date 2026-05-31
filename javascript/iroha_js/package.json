@@ -18,7 +18,16 @@
       "import": "./dist/instructionBuilders.js",
       "types": "./index.d.ts"
     },
-    "./torii": "./dist/toriiClient.js",
+    "./torii": {
+      "browser": "./dist/toriiBrowserClient.js",
+      "import": "./dist/toriiClient.js",
+      "types": "./index.d.ts"
+    },
+    "./torii-browser": {
+      "import": "./dist/toriiBrowserClient.js",
+      "browser": "./dist/toriiBrowserClient.js",
+      "types": "./index.d.ts"
+    },
     "./norito": "./dist/norito.js",
     "./canonical-request": {
       "import": "./dist/canonicalRequest.js",
@@ -36,6 +45,15 @@
     "./connect-browser": {
       "import": "./dist/connect.browser.js",
       "types": "./connect.browser.d.ts"
+    },
+    "./nexus-app": {
+      "import": "./dist/nexusApp.js",
+      "types": "./nexus-app.d.ts"
+    },
+    "./kotodama-compiler": {
+      "import": "./dist/kotodamaCompiler/index.js",
+      "browser": "./dist/kotodamaCompiler/index.js",
+      "types": "./kotodama-compiler.d.ts"
     }
   },
   "typesVersions": {
@@ -47,6 +65,9 @@
         "./index.d.ts"
       ],
       "torii": [
+        "./index.d.ts"
+      ],
+      "torii-browser": [
         "./index.d.ts"
       ],
       "norito": [
@@ -63,6 +84,12 @@
       ],
       "connect-browser": [
         "./connect.browser.d.ts"
+      ],
+      "nexus-app": [
+        "./nexus-app.d.ts"
+      ],
+      "kotodama-compiler": [
+        "./kotodama-compiler.d.ts"
       ]
     }
   },
@@ -109,6 +136,8 @@
     "README.md",
     "index.d.ts",
     "connect.browser.d.ts",
+    "nexus-app.d.ts",
+    "kotodama-compiler.d.ts",
     "package.json",
     "native/iroha_js_host.checksums.json",
     "dist",

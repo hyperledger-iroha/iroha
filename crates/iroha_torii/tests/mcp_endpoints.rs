@@ -1,7 +1,7 @@
 #![allow(clippy::all, clippy::pedantic, clippy::nursery, clippy::restriction)]
 //! Integration coverage for Torii MCP endpoints.
 
-use std::{net::SocketAddr, num::NonZeroU32, sync::Arc};
+use std::{collections::BTreeSet, net::SocketAddr, num::NonZeroU32, sync::Arc};
 
 use axum::{
     body::{Body, Bytes},
@@ -21,6 +21,7 @@ use norito::json::Value;
 use tower::ServiceExt as _;
 
 const TEST_ACCOUNT_I105: &str = "sorauﾛ1NﾗhBUd2BﾂｦﾄiﾔﾆﾂﾇKSﾃaﾘﾒﾓQﾗrﾒoﾘﾅnｳﾘbQｳQJﾆLJ5HSE";
+const TOOL_LIST_PAGE_LIMIT: usize = 128;
 
 fn build_router(cfg: iroha_config::parameters::actual::Root) -> axum::Router {
     let (kiso, _child) = KisoHandle::start(cfg.clone());
@@ -147,9 +148,10 @@ async fn post_mcp_with_headers(
 
 async fn list_all_tool_names(app: &axum::Router) -> Vec<String> {
     let mut cursor: Option<String> = None;
+    let mut seen_cursors = BTreeSet::new();
     let mut names = Vec::new();
 
-    loop {
+    for _ in 0..TOOL_LIST_PAGE_LIMIT {
         let payload = if let Some(cursor_value) = cursor.clone() {
             norito::json!({
                 "jsonrpc": "2.0",
@@ -179,23 +181,22 @@ async fn list_all_tool_names(app: &axum::Router) -> Vec<String> {
             names.push(name.to_owned());
         }
 
-        cursor = result
-            .get("nextCursor")
-            .and_then(Value::as_str)
-            .map(str::to_owned);
-        if cursor.is_none() {
-            break;
+        let next_cursor = checked_next_tools_cursor(result, cursor.as_deref(), &mut seen_cursors);
+        if next_cursor.is_none() {
+            return names;
         }
+        cursor = next_cursor;
     }
 
-    names
+    panic!("tools/list pagination exceeded {TOOL_LIST_PAGE_LIMIT} pages");
 }
 
 async fn list_all_tools(app: &axum::Router) -> Vec<Value> {
     let mut cursor: Option<String> = None;
+    let mut seen_cursors = BTreeSet::new();
     let mut tools = Vec::new();
 
-    loop {
+    for _ in 0..TOOL_LIST_PAGE_LIMIT {
         let payload = if let Some(cursor_value) = cursor.clone() {
             norito::json!({
                 "jsonrpc": "2.0",
@@ -222,22 +223,21 @@ async fn list_all_tools(app: &axum::Router) -> Vec<Value> {
             .expect("tools array");
         tools.extend(page.iter().cloned());
 
-        cursor = result
-            .get("nextCursor")
-            .and_then(Value::as_str)
-            .map(str::to_owned);
-        if cursor.is_none() {
-            break;
+        let next_cursor = checked_next_tools_cursor(result, cursor.as_deref(), &mut seen_cursors);
+        if next_cursor.is_none() {
+            return tools;
         }
+        cursor = next_cursor;
     }
 
-    tools
+    panic!("tools/list pagination exceeded {TOOL_LIST_PAGE_LIMIT} pages");
 }
 
 async fn find_tool(app: &axum::Router, target_name: &str) -> Value {
     let mut cursor: Option<String> = None;
+    let mut seen_cursors = BTreeSet::new();
 
-    loop {
+    for _ in 0..TOOL_LIST_PAGE_LIMIT {
         let payload = if let Some(cursor_value) = cursor.clone() {
             norito::json!({
                 "jsonrpc": "2.0",
@@ -268,16 +268,37 @@ async fn find_tool(app: &axum::Router, target_name: &str) -> Value {
             }
         }
 
-        cursor = result
-            .get("nextCursor")
-            .and_then(Value::as_str)
-            .map(str::to_owned);
-        if cursor.is_none() {
-            break;
+        let next_cursor = checked_next_tools_cursor(result, cursor.as_deref(), &mut seen_cursors);
+        if next_cursor.is_none() {
+            panic!("tool {target_name} not found in tools/list");
         }
+        cursor = next_cursor;
     }
 
-    panic!("tool {target_name} not found in tools/list");
+    panic!(
+        "tools/list pagination exceeded {TOOL_LIST_PAGE_LIMIT} pages while searching for {target_name}"
+    );
+}
+
+fn checked_next_tools_cursor(
+    result: &Value,
+    requested_cursor: Option<&str>,
+    seen_cursors: &mut BTreeSet<String>,
+) -> Option<String> {
+    let next_cursor = result
+        .get("nextCursor")
+        .and_then(Value::as_str)
+        .map(str::to_owned)?;
+    assert_ne!(
+        requested_cursor,
+        Some(next_cursor.as_str()),
+        "tools/list returned an unchanged nextCursor"
+    );
+    assert!(
+        seen_cursors.insert(next_cursor.clone()),
+        "tools/list repeated cursor {next_cursor}"
+    );
+    Some(next_cursor)
 }
 
 fn structured_content(response: &Value) -> &norito::json::Map {
@@ -556,12 +577,10 @@ async fn mcp_jsonrpc_initialize_list_and_call_connect_ticket() {
         .and_then(Value::as_array)
         .expect("tools list page2");
     assert_eq!(page2_tools.len(), 2);
-    let connect_ticket_listed = list_all_tool_names(&app)
-        .await
-        .iter()
-        .any(|name| name == "connect.ws.ticket");
-    assert!(
-        connect_ticket_listed,
+    let connect_ticket_tool = find_tool(&app, "connect.ws.ticket").await;
+    assert_eq!(
+        connect_ticket_tool.get("name").and_then(Value::as_str),
+        Some("connect.ws.ticket"),
         "connect.ws.ticket should be discoverable across paginated tools/list responses"
     );
 
@@ -2292,10 +2311,6 @@ async fn mcp_tools_list_exposes_account_and_transaction_interfaces() {
         "expected account transaction MCP tool"
     );
     assert!(
-        names.iter().any(|name| name == "torii.post_transaction"),
-        "expected transaction submission MCP tool"
-    );
-    assert!(
         names.iter().any(|name| name == "iroha.health"),
         "expected agent-friendly node health MCP tool"
     );
@@ -2946,16 +2961,16 @@ async fn mcp_tools_list_exposes_account_and_transaction_interfaces() {
         "expected agent-friendly rwa query MCP tool"
     );
     assert!(
-        names
+        !names
             .iter()
-            .any(|name| name == "iroha.offline.transfers.list"),
-        "expected agent-friendly offline transfer list MCP tool"
+            .any(|name| name.starts_with("iroha.offline.transfers.")),
+        "legacy offline transfer MCP compatibility tools should not be advertised"
     );
     assert!(
-        names
+        !names
             .iter()
-            .any(|name| name == "iroha.offline.revocations.list"),
-        "expected agent-friendly offline revocation list MCP tool"
+            .any(|name| name.starts_with("iroha.offline.revocations.")),
+        "legacy offline revocation MCP compatibility tools should not be advertised"
     );
     assert!(
         names
@@ -4009,164 +4024,6 @@ async fn mcp_jsonrpc_tools_call_agent_alias_rwas_query_accepts_flat_envelope_fie
         !tool_is_error(&call),
         "rwas query alias with flat envelope fields should dispatch successfully"
     );
-    let structured = structured_content(&call);
-    assert_eq!(structured.get("status").and_then(Value::as_u64), Some(200));
-}
-
-#[tokio::test]
-async fn mcp_jsonrpc_tools_call_agent_alias_offline_transfers_list_accepts_flat_query_fields() {
-    let _data_dir = test_utils::TestDataDirGuard::new();
-    let mut cfg = test_utils::mk_minimal_root_cfg();
-    cfg.torii.mcp.enabled = true;
-
-    let app = build_router(cfg);
-    let (status, call) = post_mcp(
-        &app,
-        norito::json!({
-            "jsonrpc": "2.0",
-            "id": 106160,
-            "method": "tools/call",
-            "params": {
-                "name": "iroha.offline.transfers.list",
-                "arguments": {
-                    "limit": 2
-                }
-            }
-        }),
-    )
-    .await;
-
-    assert_eq!(status, StatusCode::OK);
-    assert!(
-        !tool_is_error(&call),
-        "offline transfer list compatibility alias should return structured success"
-    );
-    let structured = structured_content(&call);
-    assert_eq!(structured.get("status").and_then(Value::as_u64), Some(200));
-}
-
-#[tokio::test]
-async fn mcp_jsonrpc_tools_call_agent_alias_offline_transfers_get_accepts_bundle_shortcut() {
-    let _data_dir = test_utils::TestDataDirGuard::new();
-    let mut cfg = test_utils::mk_minimal_root_cfg();
-    cfg.torii.mcp.enabled = true;
-
-    let app = build_router(cfg);
-    let (status, call) = post_mcp(
-        &app,
-        norito::json!({
-            "jsonrpc": "2.0",
-            "id": 106161,
-            "method": "tools/call",
-            "params": {
-                "name": "iroha.offline.transfers.get",
-                "arguments": {
-                    "bundle": "legacy-bundle-001"
-                }
-            }
-        }),
-    )
-    .await;
-
-    assert_eq!(status, StatusCode::OK);
-    assert!(
-        tool_is_error(&call),
-        "offline transfer bundle compatibility alias should report missing legacy bundles as a tool error"
-    );
-    let structured = structured_content(&call);
-    assert_eq!(structured.get("status").and_then(Value::as_u64), Some(404));
-}
-
-#[tokio::test]
-async fn mcp_jsonrpc_tools_call_agent_alias_offline_transfers_query_accepts_flat_envelope_fields() {
-    let _data_dir = test_utils::TestDataDirGuard::new();
-    let mut cfg = test_utils::mk_minimal_root_cfg();
-    cfg.torii.mcp.enabled = true;
-
-    let app = build_router(cfg);
-    let (status, call) = post_mcp(
-        &app,
-        norito::json!({
-            "jsonrpc": "2.0",
-            "id": 106162,
-            "method": "tools/call",
-            "params": {
-                "name": "iroha.offline.transfers.query",
-                "arguments": {
-                    "limit": 2
-                }
-            }
-        }),
-    )
-    .await;
-
-    assert_eq!(status, StatusCode::OK);
-    assert!(
-        !tool_is_error(&call),
-        "offline transfer query compatibility alias should return structured success"
-    );
-    let structured = structured_content(&call);
-    assert_eq!(structured.get("status").and_then(Value::as_u64), Some(200));
-}
-
-#[tokio::test]
-async fn mcp_jsonrpc_tools_call_agent_alias_offline_revocations_list_accepts_flat_query_fields() {
-    let _data_dir = test_utils::TestDataDirGuard::new();
-    let mut cfg = test_utils::mk_minimal_root_cfg();
-    cfg.torii.mcp.enabled = true;
-
-    let app = build_router(cfg);
-    let (status, call) = post_mcp(
-        &app,
-        norito::json!({
-            "jsonrpc": "2.0",
-            "id": 106163,
-            "method": "tools/call",
-            "params": {
-                "name": "iroha.offline.revocations.list",
-                "arguments": {
-                    "limit": 2
-                }
-            }
-        }),
-    )
-    .await;
-
-    assert_eq!(status, StatusCode::OK);
-    assert!(
-        !tool_is_error(&call),
-        "offline revocation list compatibility alias should return structured success"
-    );
-    let structured = structured_content(&call);
-    assert_eq!(structured.get("status").and_then(Value::as_u64), Some(200));
-}
-
-#[tokio::test]
-async fn mcp_jsonrpc_tools_call_agent_alias_offline_revocations_bundle_dispatches_route() {
-    let _data_dir = test_utils::TestDataDirGuard::new();
-    let mut cfg = test_utils::mk_minimal_root_cfg();
-    cfg.torii.mcp.enabled = true;
-
-    let app = build_router(cfg);
-    let (status, call) = post_mcp(
-        &app,
-        norito::json!({
-            "jsonrpc": "2.0",
-            "id": 106164,
-            "method": "tools/call",
-            "params": {
-                "name": "iroha.offline.revocations.bundle",
-                "arguments": {
-                    "bundle": {
-                        "id": "legacy-revocation-bundle-001"
-                    }
-                }
-            }
-        }),
-    )
-    .await;
-
-    assert_eq!(status, StatusCode::OK);
     let structured = structured_content(&call);
     assert_eq!(structured.get("status").and_then(Value::as_u64), Some(200));
 }

@@ -218,8 +218,42 @@ ALL_LANES_ROUTE_CANARY_SOURCE_BY_DOMAIN = {
 }
 
 
+class DuplicateJsonKeyError(ValueError):
+    """Raised when a public JSON root contains a duplicate object key."""
+
+    def __init__(self, key: str) -> None:
+        super().__init__(key)
+        self.key = key
+
+
+def _reject_duplicate_json_keys(pairs: list[tuple[str, Any]]) -> dict[str, Any]:
+    payload: dict[str, Any] = {}
+    for key, value in pairs:
+        if key in payload:
+            raise DuplicateJsonKeyError(key)
+        payload[key] = value
+    return payload
+
+
 def _load_json(path: Path) -> Any:
-    return json.loads(path.read_text(encoding="utf-8"))
+    return json.loads(
+        path.read_text(encoding="utf-8"),
+        object_pairs_hook=_reject_duplicate_json_keys,
+    )
+
+
+def _canonical_json_text(payload: Any) -> str:
+    return json.dumps(payload, indent=2, sort_keys=True) + "\n"
+
+
+def _canonical_json_file_errors(label: str, path: Path, payload: Any) -> list[str]:
+    try:
+        text = path.read_text(encoding="utf-8")
+    except OSError as exc:
+        return [f"cannot load {label} JSON for canonical serialization check: {exc}"]
+    if text != _canonical_json_text(payload):
+        return [f"{label} JSON is not canonical release-bundle serialization"]
+    return []
 
 
 def _sha256(path: Path) -> str:
@@ -552,6 +586,44 @@ def _expected_release_notes_attachment(
     return module._release_notes_attachment(report, attachment_artifacts)
 
 
+def _manifest_artifact_paths_in_order(artifacts: list[Any]) -> list[str]:
+    paths: list[str] = []
+    for artifact in artifacts:
+        if not isinstance(artifact, dict):
+            continue
+        artifact_path, path_errors = _canonical_artifact_path(artifact)
+        if not path_errors and artifact_path is not None:
+            paths.append(artifact_path)
+    return paths
+
+
+def _expected_manifest_artifact_order(report: dict[str, Any]) -> list[str]:
+    paths = [
+        "sccp-release-readiness.md",
+        "sccp-release-readiness.json",
+        "sccp-all-lanes-summary.json",
+        *_expected_input_paths(report),
+    ]
+
+    corridor = report.get("corridor")
+    if isinstance(corridor, dict):
+        phases = corridor.get("phases")
+        phase_artifacts = corridor.get("evidence_artifacts")
+        if isinstance(phases, dict) and isinstance(phase_artifacts, dict):
+            for phase in _report_module()._corridor_phases():
+                if phases.get(phase) != "passed":
+                    continue
+                artifact = phase_artifacts.get(phase)
+                if not isinstance(artifact, dict):
+                    continue
+                artifact_path, path_errors = _canonical_artifact_path(artifact)
+                if not path_errors and artifact_path is not None:
+                    paths.append(artifact_path)
+
+    paths.append("sccp-release-notes-attachment.md")
+    return paths
+
+
 def _expected_submission_surfaces(report: dict[str, Any]) -> list[dict[str, Any]]:
     corridor = report.get("corridor")
     phase_status = {}
@@ -790,6 +862,45 @@ def _cryptographic_evidence_lane_binding_errors(
                 "readiness report cryptographic evidence row "
                 f"{index} chain must match lane chain"
             )
+        field_bindings = (
+            (
+                "source_verifier_material_hash",
+                ("source_record_hashes", "source_verifier_material_hash"),
+            ),
+            (
+                "source_adapter_engine_deployment_hash",
+                ("source_record_hashes", "source_adapter_engine_deployment_hash"),
+            ),
+            ("destination_binding_hash", ("destination_binding", "destination_binding_hash")),
+            ("route_allowlist_hash", ("route_allowlist", "route_allowlist_hash")),
+            (
+                "route_canary_evidence_hash",
+                ("route_allowlist", "route_canary", "evidence_hash"),
+            ),
+            (
+                "route_canary_evidence_source",
+                ("route_allowlist", "route_canary", "evidence_source"),
+            ),
+            (
+                "route_canary_evidence_bound",
+                ("route_allowlist", "route_canary", "evidence_bound"),
+            ),
+        )
+        for field, lane_path in field_bindings:
+            if field not in row:
+                continue
+            expected: Any = lane
+            for segment in lane_path:
+                if not isinstance(expected, dict) or segment not in expected:
+                    expected = None
+                    break
+                expected = expected[segment]
+            if expected is not None and row.get(field) != expected:
+                lane_field = ".".join(lane_path)
+                errors.append(
+                    "readiness report cryptographic evidence row "
+                    f"{index} {field} must match embedded lane {lane_field}"
+                )
     return errors
 
 
@@ -889,6 +1000,54 @@ def _fixed_hex_field_errors(
     return []
 
 
+def _nonzero_fixed_hex_field_errors(
+    label: str,
+    payload: dict[str, Any],
+    field: str,
+    *,
+    byte_length: int,
+    type_label: str,
+) -> list[str]:
+    errors = _fixed_hex_field_errors(
+        label,
+        payload,
+        field,
+        byte_length=byte_length,
+        type_label=type_label,
+    )
+    if errors or field not in payload:
+        return errors
+    value = payload.get(field)
+    if isinstance(value, str) and all(char == "0" for char in value[2:]):
+        return [
+            f"{label} {field} must be a non-zero canonical {type_label} hex string"
+        ]
+    return []
+
+
+def _distinct_nonzero_hex_field_errors(
+    label: str,
+    fields: tuple[tuple[str, Any], ...],
+    *,
+    byte_length: int,
+) -> list[str]:
+    errors: list[str] = []
+    seen: dict[str, str] = {}
+    for field, value in fields:
+        if (
+            not _is_canonical_fixed_hex_text(value, byte_length=byte_length)
+            or not isinstance(value, str)
+            or all(char == "0" for char in value[2:])
+        ):
+            continue
+        previous_field = seen.get(value)
+        if previous_field is not None:
+            errors.append(f"{label} {field} must not reuse {previous_field}")
+            continue
+        seen[value] = field
+    return errors
+
+
 def _decimal_text_field_errors(
     label: str,
     payload: dict[str, Any],
@@ -912,13 +1071,21 @@ def _tron_address_field_errors(
     if field not in payload:
         return []
     value = payload.get(field)
-    if not _is_canonical_fixed_hex_text(value, byte_length=21) or not value.startswith(
-        "0x41"
-    ):
+    if not _is_canonical_tron_address_text(value):
         return [
-            f"{label} {field} must be a canonical 0x41-prefixed 21-byte hex string"
+            f"{label} {field} must be a non-zero canonical 0x41-prefixed "
+            "21-byte hex string"
         ]
     return []
+
+
+def _is_canonical_tron_address_text(value: Any) -> bool:
+    return (
+        isinstance(value, str)
+        and _is_canonical_fixed_hex_text(value, byte_length=21)
+        and value.startswith("0x41")
+        and any(byte != "0" for byte in value[4:])
+    )
 
 
 def _matching_text_field_errors(
@@ -955,7 +1122,7 @@ def _all_lanes_route_canary_schema_errors(
         "destination_binding_hash",
     ):
         errors.extend(
-            _fixed_hex_field_errors(
+            _nonzero_fixed_hex_field_errors(
                 label,
                 route_canary,
                 field,
@@ -1014,7 +1181,7 @@ def _all_lanes_route_canary_schema_errors(
             "finality_block_hash",
         ):
             errors.extend(
-                _fixed_hex_field_errors(
+                _nonzero_fixed_hex_field_errors(
                     label,
                     route_canary,
                     field,
@@ -1022,6 +1189,58 @@ def _all_lanes_route_canary_schema_errors(
                     type_label="bytes32",
                 )
             )
+        evm_transcript_hash_fields = (
+            "transaction_hash",
+            "call_data_sha256",
+            "message_id",
+            "payload_hash",
+            "statement_hash",
+            "commitment_root",
+            "finality_block_hash",
+        )
+        errors.extend(
+            _distinct_nonzero_hex_field_errors(
+                f"{label} transcript hash",
+                tuple(
+                    (field, route_canary.get(field))
+                    for field in evm_transcript_hash_fields
+                ),
+                byte_length=32,
+            )
+        )
+        governed_hash_fields: list[tuple[str, Any]] = []
+        source_hashes = lane.get("source_record_hashes")
+        if isinstance(source_hashes, dict):
+            governed_hash_fields.extend(
+                (
+                    (field, source_hashes.get(field))
+                    for field in (
+                        "source_verifier_material_hash",
+                        "source_adapter_engine_deployment_hash",
+                    )
+                )
+            )
+        if isinstance(route_allowlist, dict):
+            governed_hash_fields.append(
+                ("route_allowlist_hash", route_allowlist.get("route_allowlist_hash"))
+            )
+        if isinstance(destination_binding, dict):
+            governed_hash_fields.append(
+                (
+                    "destination_binding_hash",
+                    destination_binding.get("destination_binding_hash"),
+                )
+            )
+        governed_hash_fields.extend(
+            (field, route_canary.get(field)) for field in evm_transcript_hash_fields
+        )
+        errors.extend(
+            _distinct_nonzero_hex_field_errors(
+                f"{label} hash role",
+                tuple(governed_hash_fields),
+                byte_length=32,
+            )
+        )
         errors.extend(_u32_field_errors(label, route_canary, "log_index"))
         errors.extend(
             _expected_u32_field_errors(
@@ -1064,7 +1283,7 @@ def _all_lanes_route_canary_schema_errors(
             "signature_sha256",
         ):
             errors.extend(
-                _fixed_hex_field_errors(
+                _nonzero_fixed_hex_field_errors(
                     label,
                     route_canary,
                     field,
@@ -1074,6 +1293,70 @@ def _all_lanes_route_canary_schema_errors(
             )
         for field in ("transaction_owner_address", "signature_recovered_address"):
             errors.extend(_tron_address_field_errors(label, route_canary, field))
+        transaction_owner_address = route_canary.get("transaction_owner_address")
+        signature_recovered_address = route_canary.get("signature_recovered_address")
+        if (
+            _is_canonical_tron_address_text(transaction_owner_address)
+            and _is_canonical_tron_address_text(signature_recovered_address)
+            and signature_recovered_address != transaction_owner_address
+        ):
+            errors.append(
+                f"{label} signature_recovered_address must match "
+                "transaction_owner_address"
+            )
+        tron_transcript_hash_fields = (
+            "transaction_id",
+            "message_id",
+            "call_data_sha256",
+            "payload_hash",
+            "statement_hash",
+            "commitment_root",
+            "finality_block_hash",
+            "signature_sha256",
+        )
+        errors.extend(
+            _distinct_nonzero_hex_field_errors(
+                f"{label} transcript hash",
+                tuple(
+                    (field, route_canary.get(field))
+                    for field in tron_transcript_hash_fields
+                ),
+                byte_length=32,
+            )
+        )
+        governed_hash_fields: list[tuple[str, Any]] = []
+        source_hashes = lane.get("source_record_hashes")
+        if isinstance(source_hashes, dict):
+            governed_hash_fields.extend(
+                (
+                    (field, source_hashes.get(field))
+                    for field in (
+                        "source_verifier_material_hash",
+                        "source_adapter_engine_deployment_hash",
+                    )
+                )
+            )
+        if isinstance(route_allowlist, dict):
+            governed_hash_fields.append(
+                ("route_allowlist_hash", route_allowlist.get("route_allowlist_hash"))
+            )
+        if isinstance(destination_binding, dict):
+            governed_hash_fields.append(
+                (
+                    "destination_binding_hash",
+                    destination_binding.get("destination_binding_hash"),
+                )
+            )
+        governed_hash_fields.extend(
+            (field, route_canary.get(field)) for field in tron_transcript_hash_fields
+        )
+        errors.extend(
+            _distinct_nonzero_hex_field_errors(
+                f"{label} hash role",
+                tuple(governed_hash_fields),
+                byte_length=32,
+            )
+        )
         errors.extend(_u32_field_errors(label, route_canary, "log_index"))
         errors.extend(
             _expected_u32_field_errors(
@@ -1127,7 +1410,7 @@ def _all_lanes_route_canary_schema_errors(
     elif domain == SCCP_DOMAIN_TON:
         for field in ("ton_account_state_hash", "ton_last_transaction_hash"):
             errors.extend(
-                _fixed_hex_field_errors(
+                _nonzero_fixed_hex_field_errors(
                     label,
                     route_canary,
                     field,
@@ -1143,13 +1426,50 @@ def _all_lanes_route_canary_schema_errors(
                 positive=True,
             )
         )
+        ton_hash_fields = (
+            "ton_account_state_hash",
+            "ton_last_transaction_hash",
+        )
+        governed_hash_fields = []
+        source_hashes = lane.get("source_record_hashes")
+        if isinstance(source_hashes, dict):
+            governed_hash_fields.extend(
+                (
+                    (field, source_hashes.get(field))
+                    for field in (
+                        "source_verifier_material_hash",
+                        "source_adapter_engine_deployment_hash",
+                    )
+                )
+            )
+        if isinstance(route_allowlist, dict):
+            governed_hash_fields.append(
+                ("route_allowlist_hash", route_allowlist.get("route_allowlist_hash"))
+            )
+        if isinstance(destination_binding, dict):
+            governed_hash_fields.append(
+                (
+                    "destination_binding_hash",
+                    destination_binding.get("destination_binding_hash"),
+                )
+            )
+        governed_hash_fields.extend(
+            (field, route_canary.get(field)) for field in ton_hash_fields
+        )
+        errors.extend(
+            _distinct_nonzero_hex_field_errors(
+                f"{label} hash role",
+                tuple(governed_hash_fields),
+                byte_length=32,
+            )
+        )
     elif domain in (
         SCCP_DOMAIN_SORA_KUSAMA,
         SCCP_DOMAIN_SORA_POLKADOT,
         SCCP_DOMAIN_SORA2,
     ):
         errors.extend(
-            _fixed_hex_field_errors(
+            _nonzero_fixed_hex_field_errors(
                 label,
                 route_canary,
                 "substrate_finalized_head",
@@ -1669,18 +1989,25 @@ def verify_bundle(bundle_dir: Path) -> dict[str, Any]:
 
     errors: list[str] = []
     manifest_path = bundle_dir / "manifest.json"
+    manifest_sha256: str | None = None
     if manifest_path.is_symlink():
         return {
             "verified": False,
             "errors": ["manifest is a symlink: manifest.json"],
             "artifacts": [],
+            "manifest_sha256": None,
         }
     if not manifest_path.is_file():
         return {
             "verified": False,
             "errors": [f"missing manifest: {manifest_path}"],
             "artifacts": [],
+            "manifest_sha256": None,
         }
+    try:
+        manifest_sha256 = _sha256(manifest_path)
+    except OSError:
+        manifest_sha256 = None
     try:
         manifest = _load_json(manifest_path)
     except json.JSONDecodeError as exc:
@@ -1688,13 +2015,23 @@ def verify_bundle(bundle_dir: Path) -> dict[str, Any]:
             "verified": False,
             "errors": [f"manifest is not valid JSON: {exc}"],
             "artifacts": [],
+            "manifest_sha256": manifest_sha256,
+        }
+    except DuplicateJsonKeyError as exc:
+        return {
+            "verified": False,
+            "errors": [f"manifest JSON contains duplicate key: {exc.key}"],
+            "artifacts": [],
+            "manifest_sha256": manifest_sha256,
         }
     if not isinstance(manifest, dict):
         return {
             "verified": False,
             "errors": ["manifest is not a JSON object"],
             "artifacts": [],
+            "manifest_sha256": manifest_sha256,
         }
+    errors.extend(_canonical_json_file_errors("manifest", manifest_path, manifest))
 
     for key in sorted(set(manifest) - MANIFEST_KEYS):
         errors.append(f"manifest contains unknown top-level field: {key}")
@@ -1735,12 +2072,19 @@ def verify_bundle(bundle_dir: Path) -> dict[str, Any]:
     notes_path = bundle_dir / "sccp-release-notes-attachment.md"
     try:
         report = _load_json(report_path)
+    except DuplicateJsonKeyError as exc:
+        report = {}
+        errors.append(f"readiness report JSON contains duplicate key: {exc.key}")
     except (OSError, json.JSONDecodeError) as exc:
         report = {}
         errors.append(f"cannot load readiness report JSON: {exc}")
     if not isinstance(report, dict) or not report:
         errors.append("readiness report JSON must be a non-empty object")
         report = {}
+    else:
+        errors.extend(
+            _canonical_json_file_errors("readiness report", report_path, report)
+        )
     for key in sorted(set(report) - READINESS_REPORT_KEYS):
         errors.append(
             f"readiness report contains unknown top-level field: {key}"
@@ -1750,12 +2094,19 @@ def verify_bundle(bundle_dir: Path) -> dict[str, Any]:
             errors.append(f"readiness report missing top-level field: {key}")
     try:
         summary = _load_json(summary_path)
+    except DuplicateJsonKeyError as exc:
+        summary = {}
+        errors.append(f"all-lanes summary JSON contains duplicate key: {exc.key}")
     except (OSError, json.JSONDecodeError) as exc:
         summary = {}
         errors.append(f"cannot load all-lanes summary JSON: {exc}")
     if not isinstance(summary, dict) or not summary:
         errors.append("all-lanes summary JSON must be a non-empty object")
         summary = {}
+    else:
+        errors.extend(
+            _canonical_json_file_errors("all-lanes summary", summary_path, summary)
+        )
     report_evidence: dict[str, Any] = {}
     report_release_checklist: dict[str, Any] = {}
     report_corridor: dict[str, Any] = {}
@@ -1827,6 +2178,16 @@ def verify_bundle(bundle_dir: Path) -> dict[str, Any]:
                 "manifest missing readiness report referenced artifact: "
                 f"{missing}"
             )
+        try:
+            expected_order = _expected_manifest_artifact_order(report)
+        except Exception as exc:
+            errors.append(f"cannot compute canonical manifest artifact order: {exc}")
+        else:
+            if _manifest_artifact_paths_in_order(artifacts) != expected_order:
+                errors.append(
+                    "manifest artifact order does not match canonical "
+                    "release bundle order"
+                )
     if report:
         try:
             report_markdown = report_md_path.read_text(encoding="utf-8")
@@ -2082,6 +2443,7 @@ def verify_bundle(bundle_dir: Path) -> dict[str, Any]:
         "verified": not errors,
         "errors": errors,
         "artifacts": artifacts,
+        "manifest_sha256": manifest_sha256,
     }
 
 

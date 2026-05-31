@@ -23,7 +23,7 @@ interface IrohaClient {
     fun submitTransactionJson(encodedVersionedTransactionJson: ByteArray): CompletableFuture<ClientResponse> {
         val future = CompletableFuture<ClientResponse>()
         future.completeExceptionally(
-            UnsupportedOperationException("submitTransactionJson not supported")
+            IllegalStateException("submitTransactionJson requires a concrete IrohaClient implementation")
         )
         return future
     }
@@ -68,7 +68,7 @@ interface IrohaClient {
     fun submitTransactionEntrypoint(encodedVersionedEntrypoint: ByteArray): CompletableFuture<ClientResponse> {
         val future = CompletableFuture<ClientResponse>()
         future.completeExceptionally(
-            UnsupportedOperationException("submitTransactionEntrypoint not supported")
+            IllegalStateException("submitTransactionEntrypoint requires a concrete IrohaClient implementation")
         )
         return future
     }
@@ -79,7 +79,7 @@ interface IrohaClient {
     fun submitTransactionEntrypointJson(encodedVersionedEntrypointJson: ByteArray): CompletableFuture<ClientResponse> {
         val future = CompletableFuture<ClientResponse>()
         future.completeExceptionally(
-            UnsupportedOperationException("submitTransactionEntrypointJson not supported")
+            IllegalStateException("submitTransactionEntrypointJson requires a concrete IrohaClient implementation")
         )
         return future
     }
@@ -95,7 +95,7 @@ interface IrohaClient {
     ): CompletableFuture<Map<String, Any>> {
         val future = CompletableFuture<Map<String, Any>>()
         future.completeExceptionally(
-            UnsupportedOperationException("waitForTransactionStatus not supported")
+            IllegalStateException("waitForTransactionStatus requires a concrete IrohaClient implementation")
         )
         return future
     }
@@ -109,7 +109,7 @@ interface IrohaClient {
     fun proposeMultisig(request: MultisigProposeRequest): CompletableFuture<MultisigResponse> {
         val future = CompletableFuture<MultisigResponse>()
         future.completeExceptionally(
-            UnsupportedOperationException("proposeMultisig not supported by this client")
+            IllegalStateException("proposeMultisig requires a concrete IrohaClient implementation")
         )
         return future
     }
@@ -123,7 +123,7 @@ interface IrohaClient {
     fun resolveAccountAlias(alias: String): CompletableFuture<Optional<AccountAliasResolution>> {
         val future = CompletableFuture<Optional<AccountAliasResolution>>()
         future.completeExceptionally(
-            UnsupportedOperationException("resolveAccountAlias not supported by this client")
+            IllegalStateException("resolveAccountAlias requires a concrete IrohaClient implementation")
         )
         return future
     }

@@ -135,6 +135,22 @@ public final class NoritoTests {
     return data;
   }
 
+  private static byte[] withTrailing(byte[] data) {
+    byte[] out = Arrays.copyOf(data, data.length + 1);
+    out[out.length - 1] = 0x55;
+    return out;
+  }
+
+  private static void expectIllegal(Runnable runnable, String context) {
+    boolean failed = false;
+    try {
+      runnable.run();
+    } catch (IllegalArgumentException ex) {
+      failed = true;
+    }
+    assert failed : "Expected IllegalArgumentException for " + context;
+  }
+
   private static void writeShortLe(ByteArrayOutputStream out, short value) {
     out.write(value & 0xFF);
     out.write((value >>> 8) & 0xFF);
@@ -749,6 +765,89 @@ public final class NoritoTests {
     List<NoritoColumnar.BytesOptionalRow> optionalDecodedAos =
         NoritoAoS.decodeU64OptionalBytes(optionalAos);
     assert optionalDecodedAos.equals(optionalRows);
+
+    List<NoritoColumnar.OptionalStringBoolRow> optionalStringRows =
+        List.of(
+            new NoritoColumnar.OptionalStringBoolRow(1L, "a", false),
+            new NoritoColumnar.OptionalStringBoolRow(2L, null, true),
+            new NoritoColumnar.OptionalStringBoolRow(3L, "bc", false));
+    byte[] optionalStringColumnar = NoritoColumnar.encodeNcbU64OptionalStringBool(optionalStringRows);
+    assert toHex(optionalStringColumnar).equals(
+            "030000005b000000010000000000000002020500000000000000010000000300000061626302")
+        : "Optional string columnar encoding mismatch";
+    assert NoritoColumnar.decodeNcbU64OptionalStringBool(optionalStringColumnar)
+        .equals(optionalStringRows);
+    assert NoritoColumnar.decodeRowsU64OptionalStringBoolAdaptive(
+            NoritoColumnar.encodeRowsU64OptionalStringBoolAdaptive(optionalStringRows))
+        .equals(optionalStringRows);
+    assert NoritoAoS.decodeU64OptionalStringBool(
+            NoritoAoS.encodeU64OptionalStringBool(optionalStringRows))
+        .equals(optionalStringRows);
+
+    List<NoritoColumnar.OptionalU32BoolRow> optionalU32Rows =
+        List.of(
+            new NoritoColumnar.OptionalU32BoolRow(1L, 7L, false),
+            new NoritoColumnar.OptionalU32BoolRow(2L, null, true),
+            new NoritoColumnar.OptionalU32BoolRow(3L, 9L, false));
+    byte[] optionalU32Columnar = NoritoColumnar.encodeNcbU64OptionalU32Bool(optionalU32Rows);
+    assert toHex(optionalU32Columnar).equals(
+            "030000005c0000000100000000000000020205000000070000000900000002")
+        : "Optional u32 columnar encoding mismatch";
+    assert NoritoColumnar.decodeNcbU64OptionalU32Bool(optionalU32Columnar).equals(optionalU32Rows);
+    assert NoritoColumnar.decodeRowsU64OptionalU32BoolAdaptive(
+            NoritoColumnar.encodeRowsU64OptionalU32BoolAdaptive(optionalU32Rows))
+        .equals(optionalU32Rows);
+    assert NoritoAoS.decodeU64OptionalU32Bool(NoritoAoS.encodeU64OptionalU32Bool(optionalU32Rows))
+        .equals(optionalU32Rows);
+
+    List<NoritoColumnar.BytesBoolRow> bytesBoolRows =
+        List.of(
+            new NoritoColumnar.BytesBoolRow(1L, new byte[] {'a', 'b', 'c'}, true),
+            new NoritoColumnar.BytesBoolRow(2L, new byte[] {0x00, (byte) 0xFF}, false));
+    byte[] bytesBoolColumnar = NoritoColumnar.encodeNcbU64BytesBool(bytesBoolRows);
+    assert toHex(bytesBoolColumnar).equals(
+            "020000005400000001000000000000000200000000000000030000000500000061626300ff01")
+        : "Bytes bool columnar encoding mismatch";
+    assert NoritoColumnar.decodeNcbU64BytesBool(bytesBoolColumnar).equals(bytesBoolRows);
+    byte[] bytesBoolAdaptive = NoritoColumnar.encodeRowsU64BytesBoolAdaptive(bytesBoolRows);
+    assert toHex(bytesBoolAdaptive).equals(
+            "0002010100000000000000036162630102000000000000000200ff00")
+        : "Bytes bool adaptive encoding mismatch";
+    assert NoritoColumnar.decodeRowsU64BytesBoolAdaptive(bytesBoolAdaptive).equals(bytesBoolRows);
+    assert NoritoAoS.decodeU64BytesBool(NoritoAoS.encodeU64BytesBool(bytesBoolRows))
+        .equals(bytesBoolRows);
+
+    expectIllegal(
+        () -> NoritoColumnar.decodeNcbU64OptionalStringBool(withTrailing(optionalStringColumnar)),
+        "optional string columnar trailing bytes");
+    byte[] badOptionalStringPresence = optionalStringColumnar.clone();
+    badOptionalStringPresence[18] |= (byte) 0x08;
+    expectIllegal(
+        () -> NoritoColumnar.decodeNcbU64OptionalStringBool(badOptionalStringPresence),
+        "optional string presence padding");
+    byte[] badOptionalStringUtf8 = optionalStringColumnar.clone();
+    badOptionalStringUtf8[34] = (byte) 0xFF;
+    expectIllegal(
+        () -> NoritoColumnar.decodeNcbU64OptionalStringBool(badOptionalStringUtf8),
+        "optional string invalid UTF-8");
+    byte[] badBytesBoolFlags = bytesBoolColumnar.clone();
+    badBytesBoolFlags[badBytesBoolFlags.length - 1] |= (byte) 0x04;
+    expectIllegal(
+        () -> NoritoColumnar.decodeNcbU64BytesBool(badBytesBoolFlags),
+        "bytes bool flag padding");
+    expectIllegal(
+        () ->
+            NoritoColumnar.decodeNcbU64BytesBool(
+                Arrays.copyOf(bytesBoolColumnar, bytesBoolColumnar.length - 1)),
+        "bytes bool truncated flags");
+    byte[] badOptionalU32Aos = NoritoAoS.encodeU64OptionalU32Bool(optionalU32Rows);
+    badOptionalU32Aos[10] = 2;
+    expectIllegal(
+        () -> NoritoAoS.decodeU64OptionalU32Bool(badOptionalU32Aos),
+        "optional u32 invalid AoS presence flag");
+    expectIllegal(
+        () -> new NoritoColumnar.OptionalU32BoolRow(1L, 0x1_0000_0000L, false),
+        "optional u32 constructor bounds");
 
     List<NoritoColumnar.EnumBoolRow> enumRows = List.of(
         new NoritoColumnar.EnumBoolRow(10L, new NoritoColumnar.EnumName("x"), false),

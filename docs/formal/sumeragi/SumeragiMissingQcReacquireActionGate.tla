@@ -363,4 +363,61 @@ SafetyFast ==
   /\ RangePullSafety
   /\ ResultSafety
 
+PriorAnchors ==
+  /\ PriorSafety
+  /\ ImplementationActions(PriorDifferentView) = SpecActions(PriorDifferentView)
+  /\ ImplementationActions(PriorSameView) = SpecActions(PriorSameView)
+  /\ ImplementationActions(PriorOtherHeight) = SpecActions(PriorOtherHeight)
+
+AttemptAnchors ==
+  /\ AttemptSafety
+  /\ ImplementationActions(AttemptRecordExact) = SpecActions(AttemptRecordExact)
+  /\ ImplementationActions(NoSignalThrottle) = SpecActions(NoSignalThrottle)
+  /\ ImplementationActions(DependencySignalsNoThrottle) =
+       SpecActions(DependencySignalsNoThrottle)
+
+SuppressionAnchors ==
+  /\ SuppressionSafety
+  /\ ImplementationActions(SuppressedNoWork) = SpecActions(SuppressedNoWork)
+  /\ ImplementationActions(SuppressedSidecar) = SpecActions(SuppressedSidecar)
+
+HighestFetchAnchors ==
+  /\ HighestFetchSafety
+  /\ ImplementationActions(ObservedHeadFetch) = SpecActions(ObservedHeadFetch)
+  /\ ImplementationActions(FarAheadFrontierUnresolved) =
+       SpecActions(FarAheadFrontierUnresolved)
+  /\ ImplementationActions(FarAheadNoFrontierUnresolved) =
+       SpecActions(FarAheadNoFrontierUnresolved)
+  /\ ImplementationActions(NoObservedHead) = SpecActions(NoObservedHead)
+
+RangePullAnchors ==
+  /\ RangePullSafety
+  /\ ImplementationActions(LockLagRetarget) = SpecActions(LockLagRetarget)
+  /\ ImplementationActions(LockLagNotLower) = SpecActions(LockLagNotLower)
+  /\ ImplementationActions(BroadTierSameHeight) = SpecActions(BroadTierSameHeight)
+  /\ ImplementationActions(BroadTierLockLagDifferentHeight) =
+       SpecActions(BroadTierLockLagDifferentHeight)
+  /\ ImplementationActions(NarrowTierDefault) = SpecActions(NarrowTierDefault)
+  /\ ImplementationActions(AnchorPullSuccess) = SpecActions(AnchorPullSuccess)
+  /\ ImplementationActions(AnchorPullNoEmit) = SpecActions(AnchorPullNoEmit)
+
+ResultAnchors ==
+  /\ ResultSafety
+  /\ ImplementationActions(SidecarOnlySuccess) = SpecActions(SidecarOnlySuccess)
+  /\ ImplementationActions(HighestOnlySuccess) = SpecActions(HighestOnlySuccess)
+  /\ ImplementationActions(NoWorkNoSuppress) = SpecActions(NoWorkNoSuppress)
+  /\ ImplementationActions(RequestedSuccessCounter) = SpecActions(RequestedSuccessCounter)
+  /\ ImplementationActions(TriggeredSuccessCounter) = SpecActions(TriggeredSuccessCounter)
+
+MissingQcReacquireActionSafetyAnchors ==
+  /\ PriorAnchors
+  /\ AttemptAnchors
+  /\ SuppressionAnchors
+  /\ HighestFetchAnchors
+  /\ RangePullAnchors
+  /\ ResultAnchors
+
+Safety ==
+  MissingQcReacquireActionSafetyAnchors
+
 ====

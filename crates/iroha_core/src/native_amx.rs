@@ -265,6 +265,24 @@ impl NativeAmxSessionCache {
             .map(|session| session.votes_for_body(body))
             .unwrap_or_default()
     }
+
+    /// Return exact-body votes restricted to the validator set used for QC assembly.
+    #[must_use]
+    pub fn sorted_votes_for_body_from(
+        &self,
+        key: NativeAmxSessionKey,
+        body: &NativeAmxAttestationBodyV1,
+        validator_set: &[PeerId],
+    ) -> Vec<NativeAmxVoteV1> {
+        self.sorted_votes_for_body(key, body)
+            .into_iter()
+            .filter(|vote| {
+                validator_set
+                    .iter()
+                    .any(|validator| validator == &vote.signer)
+            })
+            .collect()
+    }
 }
 
 #[cfg(test)]
@@ -362,6 +380,39 @@ mod tests {
         assert_eq!(
             cache.sorted_votes_for_body(key, &other_leg.body),
             vec![other_leg]
+        );
+    }
+
+    #[test]
+    fn session_cache_filters_exact_body_votes_to_validator_set() {
+        let mut cache = NativeAmxSessionCache::new(NonZeroUsize::new(4).expect("nonzero"));
+        let allowed_keypair = KeyPair::random_with_algorithm(Algorithm::BlsNormal);
+        let unknown_keypair = KeyPair::random_with_algorithm(Algorithm::BlsNormal);
+        let allowed = PeerId::new(allowed_keypair.public_key().clone());
+        let unknown = PeerId::new(unknown_keypair.public_key().clone());
+        let body = body(NativeAmxPhase::Prepare);
+        let allowed_vote = NativeAmxVoteV1 {
+            body,
+            signer: allowed.clone(),
+            bls_signature: vec![1],
+        };
+        let unknown_vote = NativeAmxVoteV1 {
+            body,
+            signer: unknown,
+            bls_signature: vec![2],
+        };
+        let key = NativeAmxSessionKey::from_body(&body);
+
+        cache
+            .insert_vote(allowed_vote.clone())
+            .expect("allowed signer vote");
+        cache
+            .insert_vote(unknown_vote)
+            .expect("unknown signer vote");
+
+        assert_eq!(
+            cache.sorted_votes_for_body_from(key, &body, &[allowed]),
+            vec![allowed_vote]
         );
     }
 

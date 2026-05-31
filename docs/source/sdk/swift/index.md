@@ -211,21 +211,21 @@ decide whether to discard or resubmit the affected envelope.
 
 ### Offline circulation modes
 
-Offline value flows use Offline V2 note issuance, redemption, and audit instructions submitted
-through normal transactions. Torii HTTP discovery is limited to the Offline V2 readiness endpoint.
+Offline value flows use Offline note issuance, redemption, and audit instructions submitted
+through normal transactions. Torii HTTP discovery is limited to the Offline readiness endpoint.
 
-Offline V2 uses note challenges, payment tokens, and receipt acks carried over Fountain QR frames.
+Offline uses note challenges, payment tokens, and receipt acks carried over Fountain QR frames.
 
-### Offline V2 APIs
+### Offline APIs
 
-Torii exposes only `/v1/offline/v2/readiness` for offline HTTP discovery. Offline V2 note
-issuance, redemption, and audit payloads are submitted as transaction instructions; non-V2
+Torii exposes only `/v1/offline/readiness` for offline HTTP discovery. Offline note
+issuance, redemption, and audit payloads are submitted as transaction instructions; legacy
 offline HTTP routes are no longer published.
 
 ### Offline audit logging
 
-Offline V2 wallet state is V2-only. App startup should discard non-V2 local state instead of
-migrating it.
+Offline wallet state uses the first-release schema only. App startup should discard legacy
+local state instead of migrating it.
 
 ## SoraFS orchestrator client
 

@@ -97,6 +97,53 @@ def test_sccp_production_corridor_swift_phase_covers_submit_payloads() -> None:
     ) in script
 
 
+def test_sccp_production_corridor_swift_phase_materializes_bridge_first() -> None:
+    """The Swift phase must provide NoritoBridge before SwiftPM resolution."""
+
+    script = SCRIPT.read_text(encoding="utf-8")
+    phase_start = script.index("phase_swift_sdk()")
+    phase_end = script.index("phase_kotlin_sdk()")
+    phase_body = script[phase_start:phase_end]
+
+    assert 'local bridge_dir="$ROOT/dist/NoritoBridge.xcframework"' in script
+    assert 'local bridge_zip="$ROOT/dist/NoritoBridge.xcframework.zip"' in script
+    assert 'run_cmd unzip -q -o "$bridge_zip" -d "$ROOT/dist"' in script
+    assert 'run_cmd rustup target add "${rust_targets[@]}"' in script
+    assert 'run_cmd bash "$ROOT/scripts/build_norito_xcframework.sh"' in script
+    assert phase_body.index("ensure_swift_bridge_artifact") < phase_body.index(
+        "swift test --filter SccpSolanaProverTests"
+    )
+
+
+def test_sccp_production_corridor_swift_dry_run_prints_bridge_materialization() -> None:
+    """Dry-run mode must show bridge materialization before Swift tests."""
+
+    completed = subprocess.run(
+        [
+            "bash",
+            str(SCRIPT),
+            "--dry-run",
+            "--phase",
+            "swift-sdk",
+        ],
+        check=True,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+        text=True,
+    )
+
+    materialization_positions = [
+        completed.stdout.find(marker)
+        for marker in ("+ rustup target add aarch64-apple-ios", "+ unzip -q -o ")
+        if completed.stdout.find(marker) >= 0
+    ]
+
+    assert materialization_positions
+    assert min(materialization_positions) < completed.stdout.index(
+        "swift test --filter SccpSolanaProverTests"
+    )
+
+
 def test_sccp_production_corridor_dry_run_prints_selected_phase_commands() -> None:
     """The release runner can print selected heavyweight phases without running them."""
 

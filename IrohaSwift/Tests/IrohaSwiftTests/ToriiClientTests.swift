@@ -7217,7 +7217,7 @@ final class ToriiClientTests: XCTestCase {
             XCTAssertEqual(components?.queryItems?.first?.value, "deadbeef")
             let response = HTTPURLResponse(url: request.url!, statusCode: 200, httpVersion: nil, headerFields: ["Content-Type": "application/json"])!
             let body = """
-            {"kind":"Transaction","content":{"hash":"deadbeef","status":{"kind":"Committed","content":null}}}
+            {"hash":"deadbeef","status":{"kind":"Rejected","block_height":12,"rejection_reason":{"Validation":"missing permission"}},"summary":"Rejected: missing permission","diagnostics":[{"category":"validation","code":"validation","message":"missing permission","decoded_reason":"missing permission","raw_reason":"Validation(missing permission)"}],"scope":"local","resolved_from":"state"}
             """.data(using: .utf8)!
             return (response, body)
         }
@@ -7229,7 +7229,8 @@ final class ToriiClientTests: XCTestCase {
 
         let status = try await sdk.getTransactionStatus(hashHex: "deadbeef")
         XCTAssertEqual(status?.kind, "Transaction")
-        XCTAssertEqual(status?.content.status.kind, "Committed")
+        XCTAssertEqual(status?.content.status.kind, "Rejected")
+        XCTAssertEqual(status?.primaryDiagnostic?.message, "missing permission")
     }
 
     @available(iOS 15.0, macOS 12.0, *)
@@ -7268,6 +7269,39 @@ final class ToriiClientTests: XCTestCase {
             expectation.fulfill()
         }
         waitForExpectations(timeout: 1)
+    }
+
+    @available(iOS 15.0, macOS 12.0, *)
+    func testGetPipelinePreflightAsync() async throws {
+        let payload = """
+        {"schema_version":1,"chain_height":42,"sumeragi":{"block_time_ms":1000,"commit_time_ms":2000,"stall_threshold_ms":6000},"admission":{"max_signatures":32,"max_instructions":4096,"max_tx_bytes":1048576,"max_decompressed_bytes":1048576,"max_metadata_depth":16},"block":{"max_transactions":512},"pipeline":{"signature_batch_max":0,"signature_batch_max_ed25519":64,"signature_batch_max_secp256k1":16,"signature_batch_max_pqc":8,"signature_batch_max_bls":16,"overlay_max_instructions":0,"ivm_max_decoded_instructions":1048576},"queue":{"size":2,"queued":1,"inflight":1},"fees":{"fee_asset_id":"xor#sora","fee_sink_account_id":"fees@system","base_fee":"0","per_byte_fee":"0","per_instruction_fee":"0","per_gas_unit_fee":"0","sponsorship_enabled":false,"sponsor_max_fee":"0","sponsor_verified_balance_safety_floor":"0","canonical_sponsor_account_id":null,"fee_receipts_activation_height":7,"external_settlement_enabled":false,"burn_from_unix_timestamp_ms":0,"settlement_mode":"direct","successful_claim_fee_exempt_authorities":["authority@system"]}}
+        """.data(using: .utf8)!
+
+        StubURLProtocol.handler = { request in
+            XCTAssertEqual(request.url?.path, "/v1/pipeline/preflight")
+            let response = HTTPURLResponse(url: request.url!, statusCode: 200, httpVersion: nil, headerFields: ["Content-Type": "application/json"])!
+            return (response, payload)
+        }
+
+        let preflight = try await makeClient().getPipelinePreflight()
+        let status = try ToriiStatusPayload(raw: [
+            "peers": .number(1),
+            "queue_size": .number(2),
+            "time_since_last_non_empty_block_ms": .number(6001),
+            "commit_time_ms": .number(30),
+            "txs_approved": .number(0),
+            "txs_rejected": .number(0),
+            "view_changes": .number(0)
+        ])
+        XCTAssertEqual(preflight.schemaVersion, 1)
+        XCTAssertEqual(preflight.chainHeight, 42)
+        XCTAssertEqual(preflight.sumeragi.stallThresholdMs, 6000)
+        XCTAssertEqual(preflight.admission.maxTxBytes, 1048576)
+        XCTAssertEqual(preflight.pipeline.signatureBatchMaxEd25519, 64)
+        XCTAssertEqual(preflight.queue.queued, 1)
+        XCTAssertEqual(preflight.fees.baseFee, .string("0"))
+        XCTAssertEqual(preflight.fees.successfulClaimFeeExemptAuthorities, ["authority@system"])
+        XCTAssertTrue(preflight.isStatusStalled(status))
     }
 
     @available(iOS 15.0, macOS 12.0, *)
@@ -7373,28 +7407,28 @@ final class ToriiClientTests: XCTestCase {
     }
 
     @available(iOS 15.0, macOS 12.0, *)
-    func testGetOfflineV2ReadinessParsesRecursiveVerifierMetadata() async throws {
+    func testGetOfflineReadinessParsesRecursiveVerifierMetadata() async throws {
         let payload = """
         {
-          "offline_note_v2": true,
+          "offline_note": true,
           "offline_one_use_keys": true,
           "offline_recursive_note_proof": true,
           "offline_recursive_note_proof_backend": "halo2/ipa",
-          "offline_recursive_note_proof_circuit_id": "offline-note-v2-recursive-v1",
+          "offline_recursive_note_proof_circuit_id": "offline-note-recursive",
           "offline_recursive_note_proof_public_inputs_schema_hash": "\(String(repeating: "a", count: 64))",
           "offline_recursive_note_proof_public_instance_columns": 16,
           "offline_recursive_note_proof_verifier_key_id": {
             "backend": "halo2/ipa",
-            "name": "offline-note-v2-recursive-v1"
+            "name": "offline-note-recursive"
           },
-          "offline_fountain_qr_v1": true,
+          "offline_fountain_qr": true,
           "offline_sync_optional": true,
           "offline_telemetry": true
         }
         """.data(using: .utf8)!
 
         StubURLProtocol.handler = { request in
-            XCTAssertEqual(request.url?.path, "/v1/offline/v2/readiness")
+            XCTAssertEqual(request.url?.path, "/v1/offline/readiness")
             XCTAssertEqual(request.value(forHTTPHeaderField: "Accept"), "application/json")
             let response = HTTPURLResponse(url: request.url!,
                                            statusCode: 200,
@@ -7403,12 +7437,13 @@ final class ToriiClientTests: XCTestCase {
             return (response, payload)
         }
 
-        let readiness = try await makeClient().getOfflineV2Readiness()
-        XCTAssertTrue(readiness.offlineNoteV2)
+        let readiness = try await makeClient().getOfflineReadiness()
+        XCTAssertTrue(readiness.offlineNote)
         XCTAssertTrue(readiness.offlineRecursiveNoteProof)
+        XCTAssertTrue(readiness.offlineFountainQr)
         XCTAssertTrue(readiness.hasCanonicalRecursiveVerifierMetadata)
         XCTAssertEqual(readiness.offlineRecursiveNoteProofVerifierKeyId?.backend, "halo2/ipa")
-        XCTAssertEqual(readiness.offlineRecursiveNoteProofVerifierKeyId?.name, "offline-note-v2-recursive-v1")
+        XCTAssertEqual(readiness.offlineRecursiveNoteProofVerifierKeyId?.name, OfflineNoteConstants.recursiveVerifierName)
     }
 
     @available(iOS 15.0, macOS 12.0, *)
@@ -10176,10 +10211,10 @@ id: 88
     func testStatusSnapshotTracksMetrics() async throws {
         var responses = [
             """
-            {"peers":2,"queue_size":4,"commit_time_ms":45,"txs_approved":5,"txs_rejected":1,"view_changes":0}
+            {"observed_at_ms":10000,"peers":2,"queue_size":4,"queue_queued":3,"queue_inflight":1,"last_block_committed_at_ms":9900,"last_non_empty_block_committed_at_ms":9000,"time_since_last_block_ms":100,"time_since_last_non_empty_block_ms":1000,"commit_time_ms":45,"txs_approved":5,"txs_rejected":1,"view_changes":0}
             """.data(using: .utf8)!,
             """
-            {"peers":3,"queue_size":11,"commit_time_ms":120,"txs_approved":9,"txs_rejected":3,"view_changes":2}
+            {"observed_at_ms":11000,"peers":3,"queue_size":11,"queue_queued":8,"queue_inflight":3,"last_block_committed_at_ms":10900,"last_non_empty_block_committed_at_ms":10000,"time_since_last_block_ms":100,"time_since_last_non_empty_block_ms":1000,"commit_time_ms":120,"txs_approved":9,"txs_rejected":3,"view_changes":2}
             """.data(using: .utf8)!,
         ]
 
@@ -10201,12 +10236,19 @@ id: 88
         let client = makeClient()
         let first = try await client.getStatusSnapshot()
         XCTAssertEqual(first.status.queueSize, 4)
+        XCTAssertEqual(first.status.queueQueued, 3)
+        XCTAssertEqual(first.status.queueInflight, 1)
+        XCTAssertEqual(first.metrics.timeSinceLastNonEmptyBlockMs, 1000)
+        XCTAssertTrue(first.status.isQueueStalled(stallThresholdMs: 999))
+        XCTAssertFalse(first.status.isQueueStalled(stallThresholdMs: 1000))
         XCTAssertEqual(first.metrics.queueDelta, 0)
         XCTAssertEqual(first.metrics.txApprovedDelta, 0)
         XCTAssertFalse(first.metrics.hasActivity)
 
         let second = try await client.getStatusSnapshot()
         XCTAssertEqual(second.status.queueSize, 11)
+        XCTAssertEqual(second.metrics.queueQueued, 8)
+        XCTAssertEqual(second.metrics.queueInflight, 3)
         XCTAssertEqual(second.metrics.queueDelta, 7)
         XCTAssertEqual(second.metrics.txApprovedDelta, 4)
         XCTAssertEqual(second.metrics.txRejectedDelta, 2)
@@ -10260,11 +10302,29 @@ id: 88
             "txs_rejected": .number(1),
             "view_changes": .number(0),
             "lane_governance_sealed_total": .number(2),
-            "lane_governance_sealed_aliases": .array([.string("public"), .string("payments")])
+            "lane_governance_sealed_aliases": .array([.string("public"), .string("payments")]),
+            "dataspace_catalog": .array([
+                .object([
+                    "lane_id": .number(7),
+                    "lane_alias": .string("lane-alpha"),
+                    "dataspace_id": .number(9),
+                    "alias": .string("alpha"),
+                    "visibility": .string("restricted"),
+                    "storage_profile": .string("balanced"),
+                    "manifest_required": .bool(true),
+                    "manifest_ready": .bool(false),
+                    "sealed": .bool(true),
+                    "manifest_path": .null,
+                    "protected_namespaces": .array([.string("alpha")])
+                ])
+            ])
         ])
 
         XCTAssertEqual(payload.laneGovernanceSealedTotal, 2)
         XCTAssertEqual(payload.laneGovernanceSealedAliases, ["public", "payments"])
+        XCTAssertEqual(payload.dataspaceCatalog.first?.alias, "alpha")
+        XCTAssertEqual(try payload.requireDataspace(alias: "alpha").sealed, true)
+        XCTAssertEqual(payload.dataspace(id: 9)?.manifestRequired, true)
     }
 
     func testStatusPayloadDefaultsGovernanceSealsWhenMissing() throws {
@@ -10279,6 +10339,7 @@ id: 88
 
         XCTAssertEqual(payload.laneGovernanceSealedTotal, 0)
         XCTAssertTrue(payload.laneGovernanceSealedAliases.isEmpty)
+        XCTAssertTrue(payload.dataspaceCatalog.isEmpty)
     }
 
     func testGetTimeStatusCompletion() {
@@ -10652,7 +10713,7 @@ id: 88
         let abiHash = String(repeating: "b", count: 64)
         let txHash = String(repeating: "c", count: 64)
         let payload = """
-        {"ok":true,"contract_alias":"mint::universal","contract_address":"tairac1qyqqqqqqqqqqqqputuv64zhf0a0a4hhlqdj2lhnwuzq4xjqddcyq8","previous_contract_address":"tairac1qyqqqqqqqqqqqqputuv64zhf0a0a4hhlqdj2lhnwuzq4xjqddcyq9","upgraded":true,"dataspace":"universal","deploy_nonce":7,"tx_hash_hex":"\(txHash)","code_hash_hex":"\(codeHash)","abi_hash_hex":"\(abiHash)"}
+        {"ok":true,"contract_alias":"mint::universal","contract_address":"tairac1qyqqqqqqqqqqqqputuv64zhf0a0a4hhlqdj2lhnwuzq4xjqddcyq8","previous_contract_address":"tairac1qyqqqqqqqqqqqqputuv64zhf0a0a4hhlqdj2lhnwuzq4xjqddcyq9","upgraded":true,"dataspace":"universal","deploy_nonce":7,"tx_hash_hex":"\(txHash)","pipeline_status":{"hash":"\(txHash)","status":{"kind":"Queued","block_height":null,"rejection_reason":null},"summary":"Queued","diagnostics":[],"scope":"local","resolved_from":"queue"},"code_hash_hex":"\(codeHash)","abi_hash_hex":"\(abiHash)"}
         """.data(using: .utf8)!
         let response = try JSONDecoder().decode(ToriiDeployContractResponse.self, from: payload)
         XCTAssertTrue(response.ok)
@@ -10663,6 +10724,7 @@ id: 88
         XCTAssertEqual(response.dataspace, "universal")
         XCTAssertEqual(response.deployNonce, 7)
         XCTAssertEqual(response.txHashHex, txHash)
+        XCTAssertEqual(response.pipelineStatus?.content.status.kind, "Queued")
         XCTAssertEqual(response.codeHashHex, codeHash)
         XCTAssertEqual(response.abiHashHex, abiHash)
     }
@@ -10726,7 +10788,7 @@ id: 88
                                            httpVersion: nil,
                                            headerFields: ["Content-Type": "application/json"])!
             let bodyData = """
-            {"ok":true,"submitted":true,"dataspace":"universal","contract_address":"tairac1qyqqqqqqqqqqqqputuv64zhf0a0a4hhlqdj2lhnwuzq4xjqddcyq8","code_hash_hex":"\(codeHash)","abi_hash_hex":"\(abiHash)","creation_time_ms":321,"tx_hash_hex":"\(txHash)","transaction_scaffold_b64":"Aw==","signed_transaction_b64":"AQ==","signing_message_b64":"Ag==","entrypoint":"create"}
+            {"ok":true,"submitted":true,"dataspace":"universal","contract_address":"tairac1qyqqqqqqqqqqqqputuv64zhf0a0a4hhlqdj2lhnwuzq4xjqddcyq8","code_hash_hex":"\(codeHash)","abi_hash_hex":"\(abiHash)","creation_time_ms":321,"tx_hash_hex":"\(txHash)","pipeline_status":{"hash":"\(txHash)","status":{"kind":"Rejected","block_height":12,"rejection_reason":{"Validation":"missing permission"}},"summary":"Rejected: missing permission","diagnostics":[{"category":"validation","code":"validation","message":"missing permission","decoded_reason":"missing permission","raw_reason":"Validation(missing permission)"}],"scope":"local","resolved_from":"state"},"transaction_scaffold_b64":"Aw==","signed_transaction_b64":"AQ==","signing_message_b64":"Ag==","entrypoint":"create"}
             """.data(using: .utf8)!
             return (response, bodyData)
         }
@@ -10754,6 +10816,9 @@ id: 88
                 XCTAssertEqual(response.abiHashHex, abiHash)
                 XCTAssertEqual(response.creationTimeMs, 321)
                 XCTAssertEqual(response.txHashHex, txHash)
+                XCTAssertEqual(response.pipelineStatus?.content.status.rejectionReason, #"{"Validation":"missing permission"}"#)
+                XCTAssertEqual(response.pipelineStatus?.primaryDiagnostic?.decodedReason, "missing permission")
+                XCTAssertEqual(response.pipelineStatus?.isRejected, true)
                 XCTAssertEqual(response.transactionScaffoldB64, "Aw==")
                 XCTAssertEqual(response.signedTransactionB64, "AQ==")
                 XCTAssertEqual(response.signingMessageB64, "Ag==")
@@ -11749,7 +11814,7 @@ id: 88
             XCTAssertEqual(components?.queryItems?.first?.value, "deadbeef")
             let response = HTTPURLResponse(url: request.url!, statusCode: 200, httpVersion: nil, headerFields: ["Content-Type": "application/json"])!
             let body = """
-            {"kind":"Transaction","content":{"hash":"deadbeef","status":{"kind":"Committed","content":null}}}
+            {"hash":"deadbeef","status":{"kind":"Rejected","block_height":12,"rejection_reason":{"Validation":"missing permission"}},"summary":"Rejected: missing permission","diagnostics":[{"category":"validation","code":"validation","message":"missing permission","decoded_reason":"missing permission","raw_reason":"Validation(missing permission)"}],"scope":"local","resolved_from":"state"}
             """.data(using: .utf8)!
             return (response, body)
         }
@@ -11758,7 +11823,13 @@ id: 88
             switch result {
             case .success(let status):
                 XCTAssertEqual(status?.kind, "Transaction")
-                XCTAssertEqual(status?.content.status.kind, "Committed")
+                XCTAssertEqual(status?.content.status.kind, "Rejected")
+                XCTAssertEqual(status?.content.status.rejectionReason, #"{"Validation":"missing permission"}"#)
+                XCTAssertEqual(status?.summary, "Rejected: missing permission")
+                XCTAssertEqual(status?.primaryDiagnostic?.decodedReason, "missing permission")
+                XCTAssertEqual(status?.scope, "local")
+                XCTAssertEqual(status?.resolvedFrom, "state")
+                XCTAssertEqual(status?.isRejected, true)
             case .failure(let error):
                 XCTFail("unexpected error: \(error)")
             }
@@ -12160,13 +12231,14 @@ id: 88
         XCTAssertFalse(PipelineTransactionState.approved.isKnownTerminalSuccess)
 
         let flatJSON = """
-        {"hash":"facefeed","resolved_from":"cache","scope":"auto","status":{"block_height":64,"kind":"Applied"}}
+        {"hash":"facefeed","resolved_from":"cache","scope":"auto","status":{"block_height":64,"kind":"Applied"},"diagnostics":[]}
         """.data(using: .utf8)!
         let flat = try JSONDecoder().decode(ToriiPipelineTransactionStatus.self, from: flatJSON)
         XCTAssertEqual(flat.kind, "Transaction")
         XCTAssertEqual(flat.content.hash, "facefeed")
         XCTAssertEqual(flat.content.status.state, .applied)
         XCTAssertTrue(flat.content.status.state.isTerminalSuccess)
+        XCTAssertTrue(flat.isCommitted)
 
         let other = PipelineTransactionState(kind: "CustomStatus")
         if case let .other(value) = other {

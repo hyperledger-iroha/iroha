@@ -9,9 +9,12 @@ use std::{
 
 use eyre::{Result, WrapErr, ensure, eyre};
 
+use crate::process::{build_timeout, output_with_timeout};
+
 const KAGAMI_BIN_ENV: &str = "KAGAMI_BIN";
 const IROHA_TEST_SKIP_BUILD_ENV: &str = "IROHA_TEST_SKIP_BUILD";
 const IROHA_TEST_TARGET_DIR_ENV: &str = "IROHA_TEST_TARGET_DIR";
+const IROHA_TEST_TARGET_SUBDIR: &str = "iroha-test-network";
 
 static KAGAMI_BIN: OnceLock<PathBuf> = OnceLock::new();
 
@@ -80,11 +83,12 @@ fn kagami_candidates(repo: &Path, profile: &str, bin: &str) -> Vec<PathBuf> {
     };
 
     if let Ok(path) = env::var("CARGO_TARGET_DIR") {
-        push_root(resolve_target_dir(repo, PathBuf::from(path)));
+        push_root(resolve_target_dir(repo, PathBuf::from(path)).join(IROHA_TEST_TARGET_SUBDIR));
     }
     if let Ok(path) = env::var(IROHA_TEST_TARGET_DIR_ENV) {
         push_root(resolve_target_dir(repo, PathBuf::from(path)));
     }
+    push_root(default_test_target_dir(repo));
     push_root(repo.join("target"));
 
     candidates
@@ -96,6 +100,20 @@ fn resolve_target_dir(repo: &Path, path: PathBuf) -> PathBuf {
     } else {
         repo.join(path)
     }
+}
+
+fn default_test_target_dir(repo: &Path) -> PathBuf {
+    repo.join("target").join(IROHA_TEST_TARGET_SUBDIR)
+}
+
+fn kagami_build_target_dir(repo: &Path) -> PathBuf {
+    if let Ok(path) = env::var(IROHA_TEST_TARGET_DIR_ENV) {
+        return resolve_target_dir(repo, PathBuf::from(path));
+    }
+    if let Ok(path) = env::var("CARGO_TARGET_DIR") {
+        return resolve_target_dir(repo, PathBuf::from(path)).join(IROHA_TEST_TARGET_SUBDIR);
+    }
+    default_test_target_dir(repo)
 }
 
 fn canonicalize_repo_relative(path: PathBuf) -> Result<PathBuf> {
@@ -118,17 +136,20 @@ fn skip_build_enabled() -> bool {
 fn build_kagami(repo: &Path, profile: &str) -> Result<()> {
     let cargo = env::var("CARGO").unwrap_or_else(|_| "cargo".to_owned());
     let mut command = Command::new(cargo);
+    let target_dir = kagami_build_target_dir(repo);
     command
         .current_dir(repo)
         .arg("build")
         .arg("-p")
         .arg("iroha_kagami")
         .arg("--bin")
-        .arg("kagami");
+        .arg("kagami")
+        .env("CARGO_TARGET_DIR", &target_dir);
     if profile != "debug" {
         command.arg("--profile").arg(profile);
     }
-    let output = command.output().wrap_err("build kagami binary")?;
+    let output =
+        output_with_timeout(&mut command, build_timeout()).wrap_err("build kagami binary")?;
     ensure!(
         output.status.success(),
         "failed to build kagami: {}",

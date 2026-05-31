@@ -41,6 +41,11 @@ object RegisterAccountWirePayloadEncoder {
         return InstructionBox.fromWirePayload(WIRE_NAME, wirePayload)
     }
 
+    /** Decodes a Norito-framed `RegisterBox::Account` payload. */
+    @JvmStatic
+    internal fun decodeRegisterAccountPayload(wirePayload: ByteArray): String =
+        NoritoCodec.decode(wirePayload, RegisterBoxAccountAdapter(), SCHEMA_PATH)
+
     private fun encodeRegisterBox(accountId: String): ByteArray {
         return NoritoCodec.encode(accountId, SCHEMA_PATH, RegisterBoxAccountAdapter())
     }
@@ -117,6 +122,69 @@ object RegisterAccountWirePayloadEncoder {
         }
 
         override fun decode(decoder: NoritoDecoder): String =
-            throw UnsupportedOperationException("Decoding RegisterBox payloads is not supported")
+            decodeRegisterBox(decoder)
+
+        private fun decodeRegisterBox(decoder: NoritoDecoder): String {
+            val discriminant = decoder.readUInt(32)
+            require(discriminant == REGISTER_BOX_ACCOUNT_DISCRIMINANT) {
+                "Unsupported RegisterBox discriminant: $discriminant"
+            }
+            val payloadLength = checkedLength(
+                decoder.readLength((decoder.flags and NoritoHeader.COMPACT_LEN) != 0),
+                "RegisterBox::Account payload",
+            )
+            val payload = decoder.readBytes(payloadLength)
+            val child = NoritoDecoder(payload, decoder.flags, decoder.flagsHint)
+            val accountId = decodeRegisterAccountStruct(child)
+            require(child.remaining() == 0) { "Trailing bytes after RegisterBox::Account payload" }
+            return accountId
+        }
+
+        private fun decodeRegisterAccountStruct(decoder: NoritoDecoder): String {
+            val newAccountPayload = decodeSizedRawField(decoder, "Register<Account>.object")
+            val child = NoritoDecoder(newAccountPayload, decoder.flags, decoder.flagsHint)
+            val accountId = decodeNewAccount(child)
+            require(child.remaining() == 0) { "Trailing bytes after NewAccount payload" }
+            return accountId
+        }
+
+        private fun decodeNewAccount(decoder: NoritoDecoder): String {
+            val accountPayload = decodeSizedRawField(decoder, "NewAccount.id")
+            val accountId = TransferWirePayloadEncoder.decodeAccountIdPayload(
+                accountPayload,
+                decoder.flags,
+                decoder.flagsHint,
+            )
+            requireEmptySequence(decodeSizedRawField(decoder, "NewAccount.metadata"), "NewAccount.metadata")
+            requireNone(decodeSizedRawField(decoder, "NewAccount.label"), "NewAccount.label")
+            requireNone(decodeSizedRawField(decoder, "NewAccount.uaid"), "NewAccount.uaid")
+            requireEmptySequence(decodeSizedRawField(decoder, "NewAccount.opaque_ids"), "NewAccount.opaque_ids")
+            return accountId
+        }
+    }
+
+    private fun decodeSizedRawField(decoder: NoritoDecoder, fieldName: String): ByteArray {
+        val payloadLength = checkedLength(
+            decoder.readLength((decoder.flags and NoritoHeader.COMPACT_LEN) != 0),
+            "$fieldName payload",
+        )
+        return decoder.readBytes(payloadLength)
+    }
+
+    private fun checkedLength(length: Long, fieldName: String): Int {
+        require(length >= 0L) { "$fieldName must be non-negative" }
+        require(length <= Int.MAX_VALUE) { "$fieldName too large" }
+        return length.toInt()
+    }
+
+    private fun requireEmptySequence(payload: ByteArray, fieldName: String) {
+        val decoder = NoritoDecoder(payload, 0, NoritoHeader.MINOR_VERSION)
+        val count = decoder.readUInt(64)
+        require(count == 0L) { "$fieldName must be empty" }
+        require(decoder.remaining() == 0) { "Trailing bytes after $fieldName" }
+    }
+
+    private fun requireNone(payload: ByteArray, fieldName: String) {
+        require(payload.size == 1 && payload[0].toInt() == 0) { "$fieldName must be Option::None" }
     }
 }

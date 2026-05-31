@@ -14,6 +14,8 @@ import {
   TransactionTimeoutError,
   IsoMessageTimeoutError,
   buildRbcSampleRequest,
+  statusLivenessElapsedMs,
+  isStatusQueueStalled,
 } from "../src/toriiClient.js";
 import {
   resolveToriiClientConfig,
@@ -658,6 +660,31 @@ function createPipelineRecoveryPayload(overrides = {}) {
       ...(overrides.dag ?? {}),
     },
     txs: baseTxs,
+    ...overrides,
+  };
+}
+
+function createPipelineRecoveryFastpqProofsPayload(overrides = {}) {
+  const baseProofs =
+    overrides.proofs ??
+    [
+      {
+        entry_hash: fakeHashHex(0x22),
+        batch_index: 0,
+        parameter: "fastpq-lane-balanced",
+        transition_count: 2,
+        trace_commitment: fakeHashHex(0x33),
+        proof_digest: fakeHashHex(0x44),
+        batch: "YmF0Y2g=",
+        proof: "cHJvb2Y=",
+        batch_compact: false,
+        batch_reconstructed_from_block: true,
+      },
+    ];
+  return {
+    height: 42,
+    block_hash: fakeHashHex(0xbb),
+    proofs: baseProofs,
     ...overrides,
   };
 }
@@ -6858,7 +6885,7 @@ test("getTransactionStatus queries pipeline endpoint", async () => {
   const fetchImpl = async (url) => {
     assert.equal(
       url,
-      `${BASE_URL}/v1/pipeline/transactions/status?hash=${hashParam}&scope=auto`,
+      `${BASE_URL}/v1/pipeline/transactions/status?hash=${hashParam}&scope=global`,
     );
     return createResponse({
       status: 200,
@@ -6882,14 +6909,14 @@ test("getTransactionStatus normalizes typed pipeline status responses", async ()
   const fetchImpl = async (url) => {
     assert.equal(
       url,
-      `${BASE_URL}/v1/pipeline/transactions/status?hash=${hashHex}&scope=auto`,
+      `${BASE_URL}/v1/pipeline/transactions/status?hash=${hashHex}&scope=global`,
     );
     return createResponse({
       status: 200,
       jsonData: {
         hash: hashHex,
         resolved_from: "state",
-        scope: "auto",
+        scope: "global",
         status: {
           kind: "Applied",
           block_height: 7,
@@ -6903,7 +6930,7 @@ test("getTransactionStatus normalizes typed pipeline status responses", async ()
   assert.deepEqual(result, {
     hash: hashHex,
     resolved_from: "state",
-    scope: "auto",
+    scope: "global",
     status: {
       kind: "Applied",
       block_height: 7,
@@ -6951,6 +6978,7 @@ test("getTransactionStatus fans out to alternate endpoints in auto scope", async
   };
   const client = new ToriiClient(BASE_URL, {
     fetchImpl,
+    transactionStatusScope: "auto",
     statusEndpoints: [alternateBaseUrl],
   });
   const payload = await client.getTransactionStatus(hashHex);
@@ -7046,7 +7074,7 @@ test("getTransactionStatus validates scope option", async () => {
       attempts += 1;
       assert.equal(
         url,
-        `${BASE_URL}/v1/pipeline/transactions/status?hash=${hash}&scope=auto`,
+        `${BASE_URL}/v1/pipeline/transactions/status?hash=${hash}&scope=global`,
       );
       if (attempts === 1) {
         return createResponse({ status: 425, jsonData: { status: "TooEarly" } });
@@ -7078,7 +7106,7 @@ test("getTransactionStatus returns null when Torii responds with 404", async () 
   const fetchImpl = async (url) => {
     assert.equal(
       url,
-      `${BASE_URL}/v1/pipeline/transactions/status?hash=${hashHex}&scope=auto`,
+      `${BASE_URL}/v1/pipeline/transactions/status?hash=${hashHex}&scope=global`,
     );
     return createResponse({ status: 404 });
   };
@@ -7479,6 +7507,173 @@ test("getPipelineRecoveryTyped rejects malformed payloads", async () => {
   );
 });
 
+test("getPipelinePreflight fetches diagnostics and classifies queue stalls", async () => {
+  const payload = {
+    schema_version: 1,
+    chain_height: 42,
+    sumeragi: {
+      block_time_ms: 1_000,
+      commit_time_ms: 2_000,
+      stall_threshold_ms: 6_000,
+    },
+    admission: {
+      max_signatures: 32,
+      max_instructions: 4096,
+      max_tx_bytes: 1_048_576,
+      max_decompressed_bytes: 1_048_576,
+      max_metadata_depth: 16,
+    },
+    block: { max_transactions: 512 },
+    pipeline: {
+      signature_batch_max: 0,
+      signature_batch_max_ed25519: 64,
+      signature_batch_max_secp256k1: 16,
+      signature_batch_max_pqc: 8,
+      signature_batch_max_bls: 16,
+      overlay_max_instructions: 0,
+      ivm_max_decoded_instructions: 1_048_576,
+    },
+    queue: { size: 2, queued: 1, inflight: 1 },
+    fees: {
+      fee_asset_id: "xor#sora",
+      fee_sink_account_id: "fees@system",
+      base_fee: "0",
+      per_byte_fee: "0",
+      per_instruction_fee: "0",
+      per_gas_unit_fee: "0",
+      sponsorship_enabled: false,
+      sponsor_max_fee: "0",
+      sponsor_verified_balance_safety_floor: "0",
+      canonical_sponsor_account_id: null,
+      fee_receipts_activation_height: 7,
+      external_settlement_enabled: false,
+      burn_from_unix_timestamp_ms: 0,
+      settlement_mode: "direct",
+      successful_claim_fee_exempt_authorities: ["authority@system"],
+    },
+  };
+  let capturedUrl;
+  const fetchImpl = async (url, init) => {
+    capturedUrl = url;
+    assert.equal(init?.method, "GET");
+    assert.equal(init?.headers?.Accept, "application/json");
+    return createResponse({
+      status: 200,
+      jsonData: payload,
+      headers: { "content-type": "application/json" },
+    });
+  };
+  const client = new ToriiClient(BASE_URL, { fetchImpl });
+  const result = await client.getPipelinePreflight();
+  const status = {
+    queue_size: 2,
+    time_since_last_block_ms: 100,
+    time_since_last_non_empty_block_ms: 6_001,
+  };
+
+  assert.equal(capturedUrl, `${BASE_URL}/v1/pipeline/preflight`);
+  assert.equal(result.schema_version, 1);
+  assert.equal(result.sumeragi.stall_threshold_ms, 6_000);
+  assert.equal(result.admission.max_tx_bytes, 1_048_576);
+  assert.equal(result.pipeline.signature_batch_max_ed25519, 64);
+  assert.equal(result.queue.queued, 1);
+  assert.equal(result.fees.base_fee, "0");
+  assert.deepEqual(result.fees.successful_claim_fee_exempt_authorities, ["authority@system"]);
+  assert.equal(result.isStatusStalled(status), true);
+});
+
+test("getPipelineRecoveryFastpqProofs fetches committed proof batches", async () => {
+  const fixture = createPipelineRecoveryFastpqProofsPayload({ height: 7 });
+  const controller = new AbortController();
+  let capturedUrl;
+  const fetchImpl = async (url, init) => {
+    capturedUrl = url;
+    assert.equal(init?.method, "GET");
+    assert.equal(init?.signal, controller.signal);
+    return createResponse({
+      status: 200,
+      jsonData: fixture,
+      headers: { "content-type": "application/json" },
+    });
+  };
+  const client = new ToriiClient(BASE_URL, { fetchImpl });
+  const payload = await client.getPipelineRecoveryFastpqProofs(7n, {
+    signal: controller.signal,
+  });
+  assert.equal(capturedUrl, `${BASE_URL}/v1/pipeline/recovery/7/fastpq-proofs`);
+  assert.deepEqual(payload, fixture);
+});
+
+test("getPipelineRecoveryFastpqProofs returns null for missing heights", async () => {
+  const fetchImpl = async () => createResponse({ status: 404 });
+  const client = new ToriiClient(BASE_URL, { fetchImpl });
+  const payload = await client.getPipelineRecoveryFastpqProofs(99);
+  assert.equal(payload, null);
+});
+
+test("getPipelineRecoveryFastpqProofsTyped normalises proof snapshots", async () => {
+  const proof = {
+    entry_hash: fakeHashHex(0x55),
+    batch_index: 3,
+    parameter: "fastpq-lane-balanced",
+    transition_count: 5,
+    trace_commitment: fakeHashHex(0x66),
+    proof_digest: fakeHashHex(0x77),
+    batch: "YmF0Y2gtMg==",
+    proof: "",
+    batch_compact: false,
+    batch_reconstructed_from_block: true,
+    batch_reconstruction_error: null,
+  };
+  const payload = createPipelineRecoveryFastpqProofsPayload({
+    height: 123,
+    block_hash: fakeHashHex(0x88),
+    proofs: [proof],
+  });
+  const fetchImpl = async () =>
+    createResponse({
+      status: 200,
+      jsonData: payload,
+      headers: { "content-type": "application/json" },
+    });
+  const client = new ToriiClient(BASE_URL, { fetchImpl });
+  const result = await client.getPipelineRecoveryFastpqProofsTyped(123);
+  assert.deepEqual(result, {
+    height: 123,
+    blockHashHex: payload.block_hash.toLowerCase(),
+    proofs: [
+      {
+        entryHash: proof.entry_hash.toLowerCase(),
+        batchIndex: 3,
+        parameter: "fastpq-lane-balanced",
+        transitionCount: 5,
+        traceCommitment: proof.trace_commitment.toLowerCase(),
+        proofDigest: proof.proof_digest.toLowerCase(),
+        batchBase64: "YmF0Y2gtMg==",
+        proofBase64: "",
+        batchCompact: false,
+        batchReconstructedFromBlock: true,
+        batchReconstructionError: null,
+        raw: proof,
+      },
+    ],
+  });
+});
+
+test("getPipelineRecoveryFastpqProofsTyped rejects malformed payloads", async () => {
+  const fetchImpl = async () =>
+    createResponse({
+      status: 200,
+      jsonData: { height: 1, block_hash: fakeHashHex(0x99), proofs: {} },
+      headers: { "content-type": "application/json" },
+    });
+  const client = new ToriiClient(BASE_URL, { fetchImpl });
+  await assert.rejects(
+    () => client.getPipelineRecoveryFastpqProofsTyped(1),
+    /FASTPQ proofs response\.proofs must be an array/,
+  );
+});
+
 test("extractPipelineStatusKind returns nested status kind", () => {
   const payload = {
     kind: "Transaction",
@@ -7572,6 +7767,19 @@ test("waitForTransactionStatus validates signal option type", async () => {
   );
 });
 
+test("waitForTransactionStatus validates scope option", async () => {
+  const client = new ToriiClient(BASE_URL, { fetchImpl: async () => createResponse({ status: 200 }) });
+  const hashHex = "ce".repeat(32);
+  await assert.rejects(
+    () => client.waitForTransactionStatus(hashHex, { scope: "global&scope=local" }),
+    /waitForTransactionStatus options\.scope must be one of: local, auto, global/,
+  );
+  await assert.rejects(
+    () => client.waitForTransactionStatus(hashHex, { scope: "global,local" }),
+    /waitForTransactionStatus options\.scope must be one of: local, auto, global/,
+  );
+});
+
 test("waitForTransactionStatus enforces onStatus callback type", async () => {
   const client = new ToriiClient(BASE_URL, { fetchImpl: async () => createResponse({ status: 200 }) });
   await assert.rejects(
@@ -7620,9 +7828,11 @@ test("waitForTransactionStatus forwards signal and aborts polling", async () => 
   const controller = new AbortController();
   let attempts = 0;
   let seenSignal = null;
+  let seenScope = null;
   client.getTransactionStatus = async (_hashHex, options = {}) => {
     attempts += 1;
     seenSignal = options.signal ?? null;
+    seenScope = options.scope ?? null;
     controller.abort(new Error("stop polling"));
     return {
       kind: "Transaction",
@@ -7642,6 +7852,116 @@ test("waitForTransactionStatus forwards signal and aborts polling", async () => 
   );
   assert.equal(attempts, 1);
   assert.equal(seenSignal, controller.signal);
+  assert.equal(seenScope, null);
+});
+
+test("waitForTransactionStatus forwards explicit local scope", async () => {
+  const client = new ToriiClient(BASE_URL, { fetchImpl: async () => createResponse({ status: 200 }) });
+  const txHash = "67".repeat(32);
+  const observed = [];
+  client.getTransactionStatus = async (_hashHex, options = {}) => {
+    observed.push(options);
+    return {
+      kind: "Transaction",
+      content: { hash: txHash, status: { kind: "Committed", content: null } },
+    };
+  };
+
+  await client.waitForTransactionStatus(txHash, {
+    intervalMs: 0,
+    maxAttempts: 1,
+    scope: "local",
+  });
+
+  assert.equal(observed.length, 1);
+  assert.equal(observed[0].scope, "local");
+});
+
+test("waitForTransactionStatus explicit scope overrides configured scope", async () => {
+  const txHash = "69".repeat(32);
+  const seenUrls = [];
+  const client = new ToriiClient(BASE_URL, {
+    transactionStatusScope: "local",
+    fetchImpl: async (url) => {
+      seenUrls.push(url);
+      return createResponse({
+        status: 200,
+        jsonData: {
+          kind: "Transaction",
+          content: { hash: txHash, status: { kind: "Committed", content: null } },
+        },
+        headers: { "content-type": "application/json" },
+      });
+    },
+  });
+
+  await client.waitForTransactionStatus(txHash, {
+    intervalMs: 0,
+    maxAttempts: 1,
+    scope: "global",
+  });
+
+  assert.deepEqual(seenUrls, [
+    `${BASE_URL}/v1/pipeline/transactions/status?hash=${txHash}&scope=global`,
+  ]);
+});
+
+test("waitForTransactionStatus inherits configured transaction status scope", async () => {
+  const txHash = "68".repeat(32);
+  const seenUrls = [];
+  const fetchImpl = async (url) => {
+    seenUrls.push(url);
+    return createResponse({
+      status: 200,
+      jsonData: {
+        kind: "Transaction",
+        content: { hash: txHash, status: { kind: "Committed", content: null } },
+      },
+      headers: { "content-type": "application/json" },
+    });
+  };
+  const client = new ToriiClient(BASE_URL, {
+    fetchImpl,
+    transactionStatusScope: "local",
+  });
+
+  await client.waitForTransactionStatus(txHash, {
+    intervalMs: 0,
+    maxAttempts: 1,
+  });
+
+  assert.deepEqual(seenUrls, [
+    `${BASE_URL}/v1/pipeline/transactions/status?hash=${txHash}&scope=local`,
+  ]);
+});
+
+test("waitForTransactionStatus treats null scope as inherited configured scope", async () => {
+  const txHash = "6a".repeat(32);
+  const seenUrls = [];
+  const client = new ToriiClient(BASE_URL, {
+    fetchImpl: async (url) => {
+      seenUrls.push(url);
+      return createResponse({
+        status: 200,
+        jsonData: {
+          kind: "Transaction",
+          content: { hash: txHash, status: { kind: "Committed", content: null } },
+        },
+        headers: { "content-type": "application/json" },
+      });
+    },
+    transactionStatusScope: "auto",
+  });
+
+  await client.waitForTransactionStatus(txHash, {
+    intervalMs: 0,
+    maxAttempts: 1,
+    scope: null,
+  });
+
+  assert.deepEqual(seenUrls, [
+    `${BASE_URL}/v1/pipeline/transactions/status?hash=${txHash}&scope=auto`,
+  ]);
 });
 
 test("waitForTransactionStatusTyped normalises payload", async () => {
@@ -7722,7 +8042,7 @@ test("waitForTransactionStatus surfaces rejection reason on failure status", asy
       error instanceof TransactionStatusError
       && error.status === "Rejected"
       && error.rejectionReason === rejectionReason
-      && String(error.message).includes(`reason=${rejectionReason}`),
+      && String(error.message).includes(`rejection_reason=${rejectionReason}`),
   );
 });
 
@@ -8956,8 +9276,15 @@ test("getSumeragiTelemetryTyped rejects malformed telemetry payloads", async () 
 test("getStatusSnapshot normalizes payload and tracks metrics", async () => {
   const payloads = [
     {
+      observed_at_ms: 10_000,
       peers: "5",
       queue_size: 3,
+      queue_queued: 2,
+      queue_inflight: 1,
+      last_block_committed_at_ms: 9_900,
+      last_non_empty_block_committed_at_ms: 9_000,
+      time_since_last_block_ms: 100,
+      time_since_last_non_empty_block_ms: 1_000,
       commit_time_ms: 420,
       da_reschedule_total: "7",
       txs_approved: 100,
@@ -9009,6 +9336,20 @@ test("getStatusSnapshot normalizes payload and tracks metrics", async () => {
           block_hash: "facedead",
         },
       ],
+      dataspace_catalog: [
+        {
+          lane_id: 7,
+          lane_alias: "lane-archive",
+          dataspace_id: 9,
+          alias: "archive",
+          visibility: "public",
+          storage_profile: "full_replica",
+          manifest_required: true,
+          manifest_ready: false,
+          manifest_path: null,
+          protected_namespaces: ["finance"],
+        },
+      ],
       lane_governance: [
         {
           lane_id: 7,
@@ -9042,8 +9383,15 @@ test("getStatusSnapshot normalizes payload and tracks metrics", async () => {
       lane_governance_sealed_aliases: ["archive", "payments"],
     },
     {
+      observed_at_ms: 11_000,
       peers: 5,
       queue_size: 1,
+      queue_queued: 1,
+      queue_inflight: 0,
+      last_block_committed_at_ms: 10_900,
+      last_non_empty_block_committed_at_ms: 10_000,
+      time_since_last_block_ms: 100,
+      time_since_last_non_empty_block_ms: 1_000,
       commit_time_ms: 250,
       da_reschedule_total: 9,
       txs_approved: 103,
@@ -9093,6 +9441,21 @@ test("getStatusSnapshot normalizes payload and tracks metrics", async () => {
           rbc_bytes_total: 96,
           teu_total: 24,
           block_hash: "feedbead",
+        },
+      ],
+      dataspace_catalog: [
+        {
+          lane_id: 8,
+          lane_alias: "lane-payments",
+          dataspace_id: 4,
+          alias: "payments",
+          visibility: "public",
+          storage_profile: "full_replica",
+          manifest_required: true,
+          manifest_ready: true,
+          sealed: false,
+          manifest_path: "/etc/iroha/lanes/payments.json",
+          protected_namespaces: ["treasury"],
         },
       ],
       lane_governance: [
@@ -9148,8 +9511,15 @@ test("getStatusSnapshot normalizes payload and tracks metrics", async () => {
   };
   const client = new ToriiClient(BASE_URL, { fetchImpl });
   const first = await client.getStatusSnapshot();
+  assert.equal(first.status.observed_at_ms, 10_000);
   assert.equal(first.status.peers, 5);
   assert.equal(first.status.queue_size, 3);
+  assert.equal(first.status.queue_queued, 2);
+  assert.equal(first.status.queue_inflight, 1);
+  assert.equal(first.metrics.time_since_last_non_empty_block_ms, 1_000);
+  assert.equal(statusLivenessElapsedMs(first.status), 1_000);
+  assert.equal(isStatusQueueStalled(first.status, 999), true);
+  assert.equal(isStatusQueueStalled(first.status, 1_000), false);
   assert.equal(first.status.da_reschedule_total, 7);
   assert.equal(first.metrics.commit_latency_ms, 420);
   assert.equal(first.metrics.queue_delta, 0);
@@ -9179,6 +9549,21 @@ test("getStatusSnapshot normalizes payload and tracks metrics", async () => {
       rbc_bytes_total: 128,
       teu_total: 16,
       block_hash: "facedead",
+    },
+  ]);
+  assert.deepEqual(first.status.dataspace_catalog, [
+    {
+      lane_id: 7,
+      lane_alias: "lane-archive",
+      dataspace_id: 9,
+      alias: "archive",
+      visibility: "public",
+      storage_profile: "full_replica",
+      manifest_required: true,
+      manifest_ready: false,
+      sealed: true,
+      manifest_path: null,
+      protected_namespaces: ["finance"],
     },
   ]);
   assert.deepEqual(first.status.lane_governance, [
@@ -9222,6 +9607,8 @@ test("getStatusSnapshot normalizes payload and tracks metrics", async () => {
 
   const second = await client.getStatusSnapshot();
   assert.equal(second.status.queue_size, 1);
+  assert.equal(second.metrics.queue_queued, 1);
+  assert.equal(second.metrics.queue_inflight, 0);
   assert.equal(second.metrics.queue_delta, -2);
   assert.equal(second.metrics.da_reschedule_delta, 2);
   assert.equal(second.metrics.tx_approved_delta, 3);
@@ -14020,7 +14407,7 @@ test("getMetrics forwards AbortSignal", async () => {
 
 test("getBlock fetches block by height", async () => {
   const fetchImpl = async (url) => {
-    assert.equal(url, `${BASE_URL}/v1/blocks/42`);
+    assert.equal(url, `${BASE_URL}/v1/explorer/blocks/42`);
     return createResponse({
       status: 200,
       jsonData: {
@@ -14051,7 +14438,7 @@ test("getBlock fetches block by height", async () => {
 test("getBlock forwards AbortSignal", async () => {
   const controller = new AbortController();
   const fetchImpl = async (url, init) => {
-    assert.equal(url, `${BASE_URL}/v1/blocks/7`);
+    assert.equal(url, `${BASE_URL}/v1/explorer/blocks/7`);
     assert.strictEqual(init.signal, controller.signal);
     return createResponse({
       status: 200,
@@ -14087,7 +14474,7 @@ test("getBlock returns null when Torii replies 404", async () => {
 
 test("listBlocks encodes pagination parameters", async () => {
   const fetchImpl = async (url) => {
-    assert.equal(url, `${BASE_URL}/v1/blocks?offset_height=10&limit=5`);
+    assert.equal(url, `${BASE_URL}/v1/explorer/blocks?page=2&per_page=5`);
     return createResponse({
       status: 200,
       jsonData: {
@@ -14113,7 +14500,7 @@ test("listBlocks encodes pagination parameters", async () => {
     });
   };
   const client = new ToriiClient(BASE_URL, { fetchImpl });
-  const result = await client.listBlocks({ offsetHeight: 10, limit: 5 });
+  const result = await client.listBlocks({ page: 2, perPage: 5 });
   assert.deepEqual(result, {
     pagination: {
       page: 1,
@@ -14135,14 +14522,14 @@ test("listBlocks encodes pagination parameters", async () => {
   });
 });
 
-test("getBlock rejects invalid heights", async () => {
+test("getBlock rejects empty identifiers", async () => {
   const fetchImpl = async () => {
     throw new Error("should not fetch");
   };
   const client = new ToriiClient(BASE_URL, { fetchImpl });
   await assert.rejects(
-    () => client.getBlock(-1),
-    /non-negative integer/,
+    () => client.getBlock("  "),
+    /must not be empty/,
   );
 });
 
@@ -14167,8 +14554,8 @@ test("listBlocks validates pagination bounds", async () => {
     /positive integer/,
   );
   await assert.rejects(
-    () => client.listBlocks({ offsetHeight: -5 }),
-    /non-negative integer/,
+    () => client.listBlocks({ page: -5 }),
+    /positive integer/,
   );
 });
 
@@ -15283,16 +15670,17 @@ test("listAccountAssets encodes assetId filters", async () => {
   const fetchImpl = async (url) => {
     const parsed = new URL(url);
     assert.equal(parsed.pathname, accountPath(FIXTURE_ALICE_ID, "/assets"));
-    assert.equal(parsed.searchParams.get("asset_id"), normalizedAssetId);
+    assert.equal(parsed.searchParams.get("asset"), normalizedAssetId);
     return createResponse({
       status: 200,
-      jsonData: { items: [{ asset_id: normalizedAssetId, quantity: "10" }], total: 1 },
+      jsonData: { items: [{ asset: normalizedAssetId, quantity: "10" }], total: 1 },
       headers: { "content-type": "application/json" },
     });
   };
   const client = new ToriiClient(BASE_URL, { fetchImpl });
   const payload = await client.listAccountAssets(FIXTURE_ALICE_ID, { assetId });
   assert.equal(payload.items[0].asset_id, normalizedAssetId);
+  assert.equal(payload.items[0].asset, normalizedAssetId);
 });
 
 test("listAccountAssets rejects malformed asset filters", async () => {
@@ -15851,6 +16239,98 @@ test("queryAccountTransactions posts structured envelope", async () => {
   assert.deepEqual(capturedBody.sort, [{ key: "timestamp_ms", order: "desc" }]);
   assert.equal(capturedBody.fetch_size, 5);
   assert.equal(capturedBody.query, "AccountTransactions");
+});
+
+test("queryTransactions posts structured envelope", async () => {
+  let capturedPath;
+  let capturedBody;
+  const fetchImpl = async (url, init) => {
+    const parsed = new URL(url);
+    capturedPath = parsed.pathname;
+    assert.equal(init.method, "POST");
+    capturedBody = JSON.parse(init.body);
+    return createResponse({
+      status: 200,
+      jsonData: { items: [], total: 0 },
+      headers: { "content-type": "application/json" },
+    });
+  };
+  const client = new ToriiClient(BASE_URL, { fetchImpl });
+  await client.queryTransactions({
+    filter: { op: "eq", args: ["asset_id", "pkr#sbp"] },
+    sort: [{ key: "timestamp_ms", order: "desc" }],
+    fetchSize: 10,
+    queryName: "Transactions",
+  });
+  assert.equal(capturedPath, "/v1/transactions/query");
+  assert.deepEqual(capturedBody.filter, { op: "eq", args: ["asset_id", "pkr#sbp"] });
+  assert.deepEqual(capturedBody.sort, [{ key: "timestamp_ms", order: "desc" }]);
+  assert.equal(capturedBody.fetch_size, 10);
+  assert.equal(capturedBody.query, "Transactions");
+});
+
+test("queryVisibleTransactions builds convenience transaction filters", async () => {
+  let capturedPath;
+  let capturedBody;
+  const fetchImpl = async (url, init) => {
+    const parsed = new URL(url);
+    capturedPath = parsed.pathname;
+    assert.equal(init.method, "POST");
+    capturedBody = JSON.parse(init.body);
+    return createResponse({
+      status: 200,
+      jsonData: { items: [], total: 0 },
+      headers: { "content-type": "application/json" },
+    });
+  };
+  const client = new ToriiClient(BASE_URL, { fetchImpl });
+  await client.queryVisibleTransactions({
+    assetId: "FkLLi7B7cSmSLxwi3cHjB6ZyyEWSXb",
+    resultOk: true,
+    sinceTimestampMs: 1700000000000,
+    sort: "newest",
+    fetchSize: 25,
+    queryName: "VisibleTransactions",
+  });
+  assert.equal(capturedPath, "/v1/transactions/visible/query");
+  assert.deepEqual(capturedBody.filter, {
+    op: "and",
+    args: [
+      { op: "eq", args: ["asset_id", "FkLLi7B7cSmSLxwi3cHjB6ZyyEWSXb"] },
+      { op: "eq", args: ["result_ok", true] },
+      { op: "gte", args: ["timestamp_ms", 1700000000000] },
+    ],
+  });
+  assert.deepEqual(capturedBody.sort, [
+    { key: "timestamp_ms", order: "desc" },
+    { key: "entrypoint_hash", order: "desc" },
+  ]);
+  assert.equal(capturedBody.fetch_size, 25);
+  assert.equal(capturedBody.query, "VisibleTransactions");
+});
+
+test("queryAccountTransactions merges raw and convenience filters", async () => {
+  let capturedBody;
+  const fetchImpl = async (_url, init) => {
+    capturedBody = JSON.parse(init.body);
+    return createResponse({
+      status: 200,
+      jsonData: { items: [], total: 0 },
+      headers: { "content-type": "application/json" },
+    });
+  };
+  const client = new ToriiClient(BASE_URL, { fetchImpl });
+  await client.queryAccountTransactions(FIXTURE_ALICE_ID, {
+    filter: { op: "eq", args: ["authority", FIXTURE_ALICE_ID] },
+    assetId: "FkLLi7B7cSmSLxwi3cHjB6ZyyEWSXb",
+  });
+  assert.deepEqual(capturedBody.filter, {
+    op: "and",
+    args: [
+      { op: "eq", args: ["authority", FIXTURE_ALICE_ID] },
+      { op: "eq", args: ["asset_id", "FkLLi7B7cSmSLxwi3cHjB6ZyyEWSXb"] },
+    ],
+  });
 });
 
 test("iterateAccountTransactions paginates results", async () => {
@@ -18388,6 +18868,44 @@ test("deployContract submits base64 payload and returns response", async () => {
   assert.deepEqual(result, responsePayload);
 });
 
+test("deployContract exposes optional pipeline_status diagnostics", async () => {
+  const txHash = "a".repeat(64);
+  const fetchImpl = async () =>
+    createResponse({
+      status: 200,
+      jsonData: {
+        ok: true,
+        contract_alias: "router::universal",
+        contract_address: "tairac1qyqqqqqqqqqqqq95fes93ygegsv5enq9mqsz6x4lv4vp9ggff82m7",
+        previous_contract_address: null,
+        upgraded: false,
+        dataspace: "universal",
+        deploy_nonce: 7,
+        tx_hash_hex: txHash,
+        pipeline_status: {
+          hash: txHash,
+          status: { kind: "Queued", block_height: null, rejection_reason: null },
+          summary: "Queued",
+          diagnostics: [],
+          scope: "local",
+          resolved_from: "queue",
+        },
+        code_hash_hex: "b".repeat(64),
+        abi_hash_hex: "c".repeat(64),
+      },
+      headers: { "content-type": "application/json" },
+    });
+  const client = new ToriiClient(BASE_URL, { fetchImpl });
+  const result = await client.deployContract({
+    authority: FIXTURE_ALICE_ID,
+    privateKey: "ed25519:deadbeef",
+    contractAlias: "router::universal",
+    codeB64: Buffer.from("payload"),
+  });
+  assert.equal(result.pipeline_status?.status?.kind, "Queued");
+  assert.equal(result.pipeline_status?.content?.hash, txHash);
+});
+
 test("deployContract rejects invalid base64 payloads", async () => {
   const client = new ToriiClient(BASE_URL, {
     fetchImpl: async () => {
@@ -18598,6 +19116,43 @@ test("callContract posts payload metadata and normalizes response", async () => 
     signed_transaction_b64: null,
     signing_message_b64: null,
   });
+});
+
+test("callContract exposes optional pipeline_status diagnostics", async () => {
+  const txHash = "3".repeat(64);
+  const fetchImpl = async () =>
+    createResponse({
+      status: 200,
+      jsonData: {
+        ok: true,
+        submitted: true,
+        dataspace: "universal",
+        contract_address: "tairac1qyqqqqqqqqqqqq95fes93ygegsv5enq9mqsz6x4lv4vp9ggff82m7",
+        code_hash_hex: "1".repeat(64),
+        abi_hash_hex: "2".repeat(64),
+        tx_hash_hex: txHash,
+        pipeline_status: {
+          hash: txHash,
+          status: { kind: "Rejected", block_height: 12, rejection_reason: "missing permission" },
+          summary: "Rejected: missing permission",
+          diagnostics: [],
+          scope: "local",
+          resolved_from: "state",
+        },
+        creation_time_ms: 42,
+        entrypoint: "increment",
+      },
+      headers: { "content-type": "application/json" },
+    });
+  const client = new ToriiClient(BASE_URL, { fetchImpl });
+  const result = await client.callContract({
+    authority: FIXTURE_ALICE_ID,
+    privateKey: "ed25519:deadbeef",
+    contractAddress: "tairac1qyqqqqqqqqqqqq95fes93ygegsv5enq9mqsz6x4lv4vp9ggff82m7",
+    gasLimit: 42,
+  });
+  assert.equal(result.pipeline_status?.status?.kind, "Rejected");
+  assert.equal(result.pipeline_status?.content?.hash, txHash);
 });
 
 test("callContract rejects missing gasLimit", async () => {
@@ -19549,13 +20104,13 @@ test("queryTriggers rejects unsupported option keys", async () => {
   assert.equal(fetchCalled, false);
 });
 
-test("getOfflineV2Readiness fetches canonical readiness payload", async () => {
+test("getOfflineReadiness fetches canonical readiness payload", async () => {
   let capturedRequest = null;
   const readiness = {
-    offline_note_v2: true,
+    offline_note: true,
     offline_one_use_keys: true,
     offline_recursive_note_proof: false,
-    offline_fountain_qr_v1: true,
+    offline_fountain_qr: true,
     offline_sync_optional: true,
     offline_telemetry: true,
   };
@@ -19570,10 +20125,10 @@ test("getOfflineV2Readiness fetches canonical readiness payload", async () => {
     },
   });
 
-  const response = await client.getOfflineV2Readiness();
+  const response = await client.getOfflineReadiness();
 
   assert.ok(capturedRequest, "request not captured");
-  assert.equal(capturedRequest.url, `${BASE_URL}/v1/offline/v2/readiness`);
+  assert.equal(capturedRequest.url, `${BASE_URL}/v1/offline/readiness`);
   assert.equal(capturedRequest.init.method, "GET");
   assert.equal(capturedRequest.init.headers.Accept, "application/json");
   assert.deepEqual(response, readiness);

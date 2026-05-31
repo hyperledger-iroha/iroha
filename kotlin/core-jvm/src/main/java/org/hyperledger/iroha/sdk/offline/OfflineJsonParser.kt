@@ -8,14 +8,14 @@ import org.hyperledger.iroha.sdk.client.JsonParser
 object OfflineJsonParser {
 
     @JvmStatic
-    fun parseOfflineV2Readiness(payload: ByteArray): OfflineV2Readiness {
+    fun parseOfflineReadiness(payload: ByteArray): OfflineReadiness {
         val root = parse(payload)
         val obj = expectObject(root, "root")
-        return OfflineV2Readiness(
-            asBoolean(obj["offline_note_v2"], "offline_note_v2"),
+        return OfflineReadiness(
+            asBoolean(obj["offline_note"], "offline_note"),
             asBoolean(obj["offline_one_use_keys"], "offline_one_use_keys"),
             asBoolean(obj["offline_recursive_note_proof"], "offline_recursive_note_proof"),
-            asBoolean(obj["offline_fountain_qr_v1"], "offline_fountain_qr_v1"),
+            asBoolean(obj["offline_fountain_qr"], "offline_fountain_qr"),
             asBoolean(obj["offline_sync_optional"], "offline_sync_optional"),
             asBoolean(obj["offline_telemetry"], "offline_telemetry"),
         )
@@ -61,7 +61,7 @@ object OfflineJsonParser {
     }
 
     @JvmStatic
-    fun parseStarkEnvelope(payload: ByteArray): OfflineStarkVerifyEnvelopeV1 {
+    fun parseStarkEnvelope(payload: ByteArray): OfflineStarkVerifyEnvelope {
         val obj = expectObject(parse(payload), "root")
         return parseStarkEnvelopeObject(obj, "root")
     }
@@ -178,8 +178,8 @@ object OfflineJsonParser {
     private fun parseStarkEnvelopeObject(
         obj: Map<String, Any>,
         path: String,
-    ): OfflineStarkVerifyEnvelopeV1 =
-        OfflineStarkVerifyEnvelopeV1(
+    ): OfflineStarkVerifyEnvelope =
+        OfflineStarkVerifyEnvelope(
             parseStarkFriParamsObject(expectObject(obj["params"], "$path.params"), "$path.params"),
             parseStarkProofObject(expectObject(obj["proof"], "$path.proof"), "$path.proof"),
             asString(obj["transcript_label"], "$path.transcript_label"),
@@ -188,8 +188,8 @@ object OfflineJsonParser {
     private fun parseStarkFriParamsObject(
         obj: Map<String, Any>,
         path: String,
-    ): OfflineStarkFriParamsV1 =
-        OfflineStarkFriParamsV1(
+    ): OfflineStarkFriParams =
+        OfflineStarkFriParams(
             JsonNumbers.asInt(obj["version"], "$path.version"),
             JsonNumbers.asInt(obj["n_log2"], "$path.n_log2"),
             JsonNumbers.asInt(obj["blowup_log2"], "$path.blowup_log2"),
@@ -200,7 +200,7 @@ object OfflineJsonParser {
             asString(obj["domain_tag"], "$path.domain_tag"),
         )
 
-    private fun parseStarkProofObject(obj: Map<String, Any>, path: String): OfflineStarkProofV1 {
+    private fun parseStarkProofObject(obj: Map<String, Any>, path: String): OfflineStarkProof {
         val queriesRaw = asArray(obj["queries"], "$path.queries")
         val queries = queriesRaw.indices.map { i ->
             val chain = asArray(queriesRaw[i], "$path.queries[$i]")
@@ -218,7 +218,7 @@ object OfflineJsonParser {
             }
         }
         val air = obj["air"]?.let { parseStarkAirProofObject(expectObject(it, "$path.air"), "$path.air") }
-        return OfflineStarkProofV1(
+        return OfflineStarkProof(
             JsonNumbers.asInt(obj["version"], "$path.version"),
             parseStarkCommitmentsObject(expectObject(obj["commits"], "$path.commits"), "$path.commits"),
             queries,
@@ -230,11 +230,11 @@ object OfflineJsonParser {
     private fun parseStarkCommitmentsObject(
         obj: Map<String, Any>,
         path: String,
-    ): OfflineStarkCommitmentsV1 {
+    ): OfflineStarkCommitments {
         val rootsRaw = asArray(obj["roots"], "$path.roots")
         val roots = rootsRaw.indices.map { i -> asBytes(rootsRaw[i], "$path.roots[$i]") }
         val compRoot = obj["comp_root"]?.let { asBytes(it, "$path.comp_root") }
-        return OfflineStarkCommitmentsV1(
+        return OfflineStarkCommitments(
             JsonNumbers.asInt(obj["version"], "$path.version"),
             roots,
             compRoot,
@@ -244,8 +244,8 @@ object OfflineJsonParser {
     private fun parseFoldDecommitObject(
         obj: Map<String, Any>,
         path: String,
-    ): OfflineFoldDecommitV1 =
-        OfflineFoldDecommitV1(
+    ): OfflineFoldDecommit =
+        OfflineFoldDecommit(
             asLong(obj["j"], "$path.j"),
             asBigInteger(obj["y0"], "$path.y0"),
             asBigInteger(obj["y1"], "$path.y1"),
@@ -265,12 +265,12 @@ object OfflineJsonParser {
     private fun parseCompositionValueObject(
         obj: Map<String, Any>,
         path: String,
-    ): OfflineStarkCompositionValueV1 {
+    ): OfflineStarkCompositionValue {
         val termsRaw = asArray(obj["aux_terms"], "$path.aux_terms")
         val terms = termsRaw.indices.map { i ->
             parseCompositionTermObject(expectObject(termsRaw[i], "$path.aux_terms[$i]"), "$path.aux_terms[$i]")
         }
-        return OfflineStarkCompositionValueV1(
+        return OfflineStarkCompositionValue(
             asBigInteger(obj["leaf"], "$path.leaf"),
             asBigInteger(obj["constant"], "$path.constant"),
             asBigInteger(obj["z_coeff"], "$path.z_coeff"),
@@ -282,8 +282,8 @@ object OfflineJsonParser {
     private fun parseCompositionTermObject(
         obj: Map<String, Any>,
         path: String,
-    ): OfflineStarkCompositionTermV1 =
-        OfflineStarkCompositionTermV1(
+    ): OfflineStarkCompositionTerm =
+        OfflineStarkCompositionTerm(
             asLong(obj["wire_index"], "$path.wire_index"),
             asBigInteger(obj["value"], "$path.value"),
             asBigInteger(obj["coeff"], "$path.coeff"),
@@ -292,12 +292,12 @@ object OfflineJsonParser {
     private fun parseStarkAirProofObject(
         obj: Map<String, Any>,
         path: String,
-    ): OfflineStarkAirProofV1 {
+    ): OfflineStarkAirProof {
         val openingsRaw = asArray(obj["openings"], "$path.openings")
         val openings = openingsRaw.indices.map { i ->
             parseStarkAirOpeningObject(expectObject(openingsRaw[i], "$path.openings[$i]"), "$path.openings[$i]")
         }
-        return OfflineStarkAirProofV1(
+        return OfflineStarkAirProof(
             JsonNumbers.asInt(obj["version"], "$path.version"),
             asString(obj["circuit_id"], "$path.circuit_id"),
             asBytes(obj["public_digest"], "$path.public_digest"),
@@ -311,12 +311,12 @@ object OfflineJsonParser {
     private fun parseStarkAirOpeningObject(
         obj: Map<String, Any>,
         path: String,
-    ): OfflineStarkAirOpeningV1 {
+    ): OfflineStarkAirOpening {
         val rowRaw = asArray(obj["row"], "$path.row")
         val row = rowRaw.indices.map { i -> asBigInteger(rowRaw[i], "$path.row[$i]") }
         val nextRowRaw = asArray(obj["next_row"], "$path.next_row")
         val nextRow = nextRowRaw.indices.map { i -> asBigInteger(nextRowRaw[i], "$path.next_row[$i]") }
-        return OfflineStarkAirOpeningV1(
+        return OfflineStarkAirOpening(
             asLong(obj["index"], "$path.index"),
             row,
             nextRow,

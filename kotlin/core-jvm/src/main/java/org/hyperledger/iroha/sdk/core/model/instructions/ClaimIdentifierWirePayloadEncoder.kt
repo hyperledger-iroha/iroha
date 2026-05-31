@@ -37,6 +37,38 @@ object ClaimIdentifierWirePayloadEncoder {
         return InstructionBox.fromWirePayload(WIRE_NAME, wirePayload)
     }
 
+    /** Decodes a Norito-framed `ClaimIdentifier` payload. */
+    @JvmStatic
+    internal fun decodePayload(wirePayload: ByteArray): DecodedClaimIdentifierPayload {
+        val payload = NoritoCodec.decode(wirePayload, ClaimIdentifierPayloadAdapter(), SCHEMA_PATH)
+        return DecodedClaimIdentifierPayload(
+            accountId = TransferWirePayloadEncoder.decodeAccountIdPayload(payload.accountPayload),
+            receiptPayloadBytes = payload.receiptPayload,
+            attestationPayloadBytes = payload.attestationPayload,
+        )
+    }
+
+    internal data class DecodedClaimIdentifierPayload(
+        val accountId: String,
+        val receiptPayloadBytes: ByteArray,
+        val attestationPayloadBytes: ByteArray,
+    ) {
+        override fun equals(other: Any?): Boolean {
+            if (this === other) return true
+            if (other !is DecodedClaimIdentifierPayload) return false
+            return accountId == other.accountId &&
+                receiptPayloadBytes.contentEquals(other.receiptPayloadBytes) &&
+                attestationPayloadBytes.contentEquals(other.attestationPayloadBytes)
+        }
+
+        override fun hashCode(): Int {
+            var result = accountId.hashCode()
+            result = 31 * result + receiptPayloadBytes.contentHashCode()
+            result = 31 * result + attestationPayloadBytes.contentHashCode()
+            return result
+        }
+    }
+
     private class ClaimIdentifierPayload(accountPayload: ByteArray, receiptPayload: ByteArray, attestationPayload: ByteArray) {
         val accountPayload: ByteArray = accountPayload.clone()
         val receiptPayload: ByteArray = receiptPayload.clone()
@@ -48,7 +80,11 @@ object ClaimIdentifierWirePayloadEncoder {
             encodeSizedField(encoder, PASSTHROUGH_ADAPTER, value.accountPayload)
             encodeSizedField(encoder, RECEIPT_ADAPTER, ReceiptPayload(value.receiptPayload, value.attestationPayload))
         }
-        override fun decode(decoder: NoritoDecoder): ClaimIdentifierPayload = throw UnsupportedOperationException("Decoding ClaimIdentifier is not supported")
+        override fun decode(decoder: NoritoDecoder): ClaimIdentifierPayload {
+            val accountPayload = decodeSizedField(decoder, PASSTHROUGH_ADAPTER, "ClaimIdentifier.account_id")
+            val receipt = decodeSizedField(decoder, RECEIPT_ADAPTER, "ClaimIdentifier.receipt")
+            return ClaimIdentifierPayload(accountPayload, receipt.payloadBytes, receipt.attestationBytes)
+        }
         companion object {
             private val PASSTHROUGH_ADAPTER = PassthroughBytesAdapter()
             private val RECEIPT_ADAPTER = ReceiptPayloadAdapter()
@@ -65,7 +101,11 @@ object ClaimIdentifierWirePayloadEncoder {
             encodeSizedField(encoder, PASSTHROUGH_ADAPTER, value.payloadBytes)
             encodeSizedField(encoder, PASSTHROUGH_ADAPTER, value.attestationBytes)
         }
-        override fun decode(decoder: NoritoDecoder): ReceiptPayload = throw UnsupportedOperationException("Decoding identifier receipts is not supported")
+        override fun decode(decoder: NoritoDecoder): ReceiptPayload {
+            val payloadBytes = decodeSizedField(decoder, PASSTHROUGH_ADAPTER, "IdentifierReceipt.payload")
+            val attestationBytes = decodeSizedField(decoder, PASSTHROUGH_ADAPTER, "IdentifierReceipt.attestation")
+            return ReceiptPayload(payloadBytes, attestationBytes)
+        }
         companion object { private val PASSTHROUGH_ADAPTER = PassthroughBytesAdapter() }
     }
 
@@ -74,7 +114,11 @@ object ClaimIdentifierWirePayloadEncoder {
             require(value.isNotEmpty()) { "payload bytes must not be empty" }
             encoder.writeBytes(value)
         }
-        override fun decode(decoder: NoritoDecoder): ByteArray = throw UnsupportedOperationException("Decoding passthrough payloads is not supported")
+        override fun decode(decoder: NoritoDecoder): ByteArray {
+            val payload = decoder.readBytes(decoder.remaining())
+            require(payload.isNotEmpty()) { "payload bytes must not be empty" }
+            return payload
+        }
     }
 
     private fun <T> encodeSizedField(encoder: NoritoEncoder, adapter: TypeAdapter<T>, value: T) {
@@ -84,6 +128,16 @@ object ClaimIdentifierWirePayloadEncoder {
         val compact = (encoder.flags and NoritoHeader.COMPACT_LEN) != 0
         encoder.writeLength(payload.size.toLong(), compact)
         encoder.writeBytes(payload)
+    }
+
+    private fun <T> decodeSizedField(decoder: NoritoDecoder, adapter: TypeAdapter<T>, fieldName: String): T {
+        val length = decoder.readLength((decoder.flags and NoritoHeader.COMPACT_LEN) != 0)
+        require(length <= Int.MAX_VALUE) { "$fieldName payload too large" }
+        val payload = decoder.readBytes(length.toInt())
+        val child = NoritoDecoder(payload, decoder.flags, decoder.flagsHint)
+        val value = adapter.decode(child)
+        require(child.remaining() == 0) { "Trailing bytes after $fieldName payload" }
+        return value
     }
 
     private fun requireNonBlank(value: String?, field: String): String {

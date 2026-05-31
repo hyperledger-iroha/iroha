@@ -135,11 +135,14 @@ Init ==
   checked = 0
 
 Next ==
-  UNCHANGED vars
+  \/ /\ checked < 25
+     /\ checked' = checked + 1
+  \/ /\ checked = 25
+     /\ UNCHANGED vars
 
 TypeInvariant ==
   /\ Bug \in Bugs
-  /\ checked \in 0..1
+  /\ checked \in 0..25
 
 TrackedHintSafety ==
   /\ TrackedExactSelected
@@ -182,5 +185,54 @@ SafetyFast ==
   /\ ObservedHeadSafety
   /\ CacheHintSafety
   /\ SidecarCommitQcSafety
+
+TrackedHintAnchors ==
+  /\ TrackedHintSafety
+  /\ TrackedExactSelected
+  /\ TrackedWrongHeightRejected
+  /\ TrackedAuthoritativeRejected
+  /\ TrackedHigherPhaseSelected
+  /\ TrackedHigherViewSelected
+  /\ TrackedHigherHashSelected
+  /\ TrackedPrecedesDeferred
+
+DeferredHintAnchors ==
+  /\ DeferredHintSafety
+  /\ DeferredExactSelected
+  /\ DeferredPrecedesObserved
+
+ObservedHeadAnchors ==
+  /\ ObservedHeadSafety
+  /\ ObservedExactSelected
+  /\ ObservedWrongHeightRejected
+  /\ ObservedAuthoritativeRejected
+
+CacheHintAnchors ==
+  /\ CacheHintSafety
+  /\ CachePrepareExactSelected
+  /\ CacheCommitExactSelected
+  /\ CacheNewViewRejected
+  /\ CacheWrongHeightRejected
+  /\ CacheAuthoritativeRejected
+  /\ CacheHigherPhaseSelected
+  /\ CacheHigherViewSelected
+  /\ CacheHigherHashSelected
+
+SidecarCommitQcAnchors ==
+  /\ SidecarCommitQcSafety
+  /\ SidecarCommitQcExactAccepted
+  /\ SidecarPrepareQcRejected
+  /\ SidecarWrongHeightQcRejected
+  /\ SidecarWrongHashQcRejected
+  /\ SidecarAbsentQcRejected
+
+FrontierSidecarExpectedHashSafetyAnchors ==
+  /\ TrackedHintAnchors
+  /\ DeferredHintAnchors
+  /\ ObservedHeadAnchors
+  /\ CacheHintAnchors
+  /\ SidecarCommitQcAnchors
+
+Safety == FrontierSidecarExpectedHashSafetyAnchors
 
 ====

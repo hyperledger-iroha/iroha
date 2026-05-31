@@ -3315,6 +3315,33 @@ def test_all_lanes_rejects_tron_route_canary_transcript_hash_reuse():
         )
 
 
+def test_all_lanes_rejects_tron_route_canary_governed_hash_role_reuse():
+    module = load_evidence_module()
+    records = complete_bundle(module)
+    tron_index = list(module.SCCP_CORE_REMOTE_DOMAINS).index(module.SCCP_DOMAIN_TRON)
+    profile = module.LANE_PROFILES[module.SCCP_DOMAIN_TRON]
+    material = records["sccp_source_verifier_materials"][tron_index]
+    deployment = records["sccp_source_adapter_engine_deployments"][tron_index]
+    source_hashes = module._canonical_source_record_hashes(
+        profile,
+        material,
+        deployment,
+    )
+    route = records["sccp_route_allowlists"][tron_index]
+    route["_comment_tron_route_canary_message_id"] = source_hashes[
+        "source_adapter_engine_deployment_hash"
+    ]
+
+    summary = module.validate_evidence_bundle(records)
+
+    blockers = "\n".join(summary["blockers"])
+    assert summary["production_ready"] is False
+    assert (
+        "TRON route canary hash role tron_route_canary_message_id must not reuse "
+        "source_adapter_engine_deployment_hash"
+    ) in blockers
+
+
 def test_all_lanes_rejects_tron_route_canary_signature_metadata_drift():
     module = load_evidence_module()
 
@@ -3593,6 +3620,33 @@ def test_all_lanes_rejects_evm_route_canary_transcript_hash_reuse():
         assert "EVM route canary transcript hash" in "\n".join(
             summary["blockers"]
         )
+
+
+def test_all_lanes_rejects_evm_route_canary_governed_hash_role_reuse():
+    module = load_evidence_module()
+    records = complete_bundle(module)
+    eth_index = list(module.SCCP_CORE_REMOTE_DOMAINS).index(module.SCCP_DOMAIN_ETH)
+    profile = module.LANE_PROFILES[module.SCCP_DOMAIN_ETH]
+    material = records["sccp_source_verifier_materials"][eth_index]
+    deployment = records["sccp_source_adapter_engine_deployments"][eth_index]
+    source_hashes = module._canonical_source_record_hashes(
+        profile,
+        material,
+        deployment,
+    )
+    route = records["sccp_route_allowlists"][eth_index]
+    route["_comment_evm_route_canary_message_id"] = source_hashes[
+        "source_verifier_material_hash"
+    ]
+
+    summary = module.validate_evidence_bundle(records)
+
+    blockers = "\n".join(summary["blockers"])
+    assert summary["production_ready"] is False
+    assert (
+        "EVM route canary hash role evm_route_canary_message_id must not reuse "
+        "source_verifier_material_hash"
+    ) in blockers
 
 
 def test_all_lanes_rejects_evm_route_canary_transcript_on_non_evm_route():
@@ -5069,6 +5123,36 @@ def test_all_lanes_rejects_ton_route_canary_live_account_hash_role_reuse():
         "TON route canary account state hash must differ from last transaction hash"
         in blockers
     )
+
+
+def test_all_lanes_rejects_ton_route_canary_governed_hash_role_reuse():
+    module = load_evidence_module()
+    records = complete_bundle(module)
+    ton_index = list(module.SCCP_CORE_REMOTE_DOMAINS).index(module.SCCP_DOMAIN_TON)
+    profile = module.LANE_PROFILES[module.SCCP_DOMAIN_TON]
+    material = records["sccp_source_verifier_materials"][ton_index]
+    deployment = records["sccp_source_adapter_engine_deployments"][ton_index]
+    source_hashes = module._canonical_source_record_hashes(
+        profile,
+        material,
+        deployment,
+    )
+    source_material_hash = source_hashes["source_verifier_material_hash"]
+    ton_destination = records["sccp_destination_rollouts"][ton_index]
+    ton_route = records["sccp_route_allowlists"][ton_index]
+    ton_destination["ton_account_state_hash"] = source_material_hash
+    ton_destination["_comment_ton_account_state_hash"] = source_material_hash
+    ton_route["ton_route_canary_account_state_hash"] = source_material_hash
+    ton_route["_comment_ton_route_canary_account_state_hash"] = source_material_hash
+
+    summary = module.validate_evidence_bundle(records)
+
+    blockers = "\n".join(summary["blockers"])
+    assert summary["production_ready"] is False
+    assert (
+        "TON route canary hash role ton_route_canary_account_state_hash must not "
+        "reuse source_verifier_material_hash"
+    ) in blockers
 
 
 def test_all_lanes_accepts_verified_substrate_live_toml(tmp_path):

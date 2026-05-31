@@ -1,55 +1,111 @@
 use super::*;
-use crate::offline::{OfflineNoteAuditBundleV2, OfflineNoteIssueV2, OfflineNoteRedeemV2};
+use crate::{
+    asset::AssetDefinitionId,
+    offline::{OfflineNoteAuditBundle, OfflineNoteIssue, OfflineNoteRedeem},
+    proof::ProofAttachment,
+};
 
 isi! {
-    /// Issue a production Offline V2 bearer note.
-    pub struct IssueOfflineNoteV2 {
+    /// Issue a production Offline bearer note.
+    pub struct IssueOfflineNote {
         /// Compact note issuance record.
-        pub issue: OfflineNoteIssueV2,
+        pub issue: OfflineNoteIssue,
     }
 }
 
 isi! {
-    /// Redeem a production Offline V2 bearer note token.
-    pub struct RedeemOfflineNoteV2 {
+    /// Redeem a production Offline bearer note claim.
+    ///
+    /// This instruction consumes a claim that is already known to ledger state. For a
+    /// peer-to-peer bearer output that has not been audited yet, submit the ordered
+    /// `AuditOfflineNote` lineage before this instruction in the same transaction.
+    pub struct RedeemOfflineNote {
         /// Compact recursive proof and consumed nullifiers.
-        pub redemption: OfflineNoteRedeemV2,
+        pub redemption: OfflineNoteRedeem,
     }
 }
 
 isi! {
-    /// Submit an optional Offline V2 audit bundle without requiring online settlement for finality.
-    pub struct AuditOfflineNoteV2 {
+    /// Submit an Offline audit bundle.
+    ///
+    /// Audits are optional for offline transfer finality, but they are the lineage that makes
+    /// peer-to-peer bearer outputs recognizable to the ledger before later defunding.
+    pub struct AuditOfflineNote {
         /// Compact audit payload.
-        pub audit: OfflineNoteAuditBundleV2,
+        pub audit: OfflineNoteAuditBundle,
     }
 }
 
-impl crate::seal::Instruction for IssueOfflineNoteV2 {}
-impl crate::seal::Instruction for RedeemOfflineNoteV2 {}
-impl crate::seal::Instruction for AuditOfflineNoteV2 {}
+isi! {
+    /// Settle a Kagemusha offline-offline shielded transfer.
+    ///
+    /// This is the default private offline-offline settlement surface. It uses the same
+    /// transparent shielded ledger accumulator as ZK assets: input nullifiers are consumed,
+    /// output commitments are appended, and the proof must be verified against the asset's
+    /// configured transparent verifier.
+    pub struct KagemushaTransfer {
+        /// Shielded asset definition id.
+        pub asset: AssetDefinitionId,
+        /// Spent nullifiers.
+        #[cfg_attr(feature = "json", norito(with = "crate::json_helpers::fixed_bytes::vec"))]
+        pub inputs: Vec<[u8; 32]>,
+        /// Output note commitments.
+        #[cfg_attr(feature = "json", norito(with = "crate::json_helpers::fixed_bytes::vec"))]
+        pub outputs: Vec<[u8; 32]>,
+        /// Proof attachment for the private transfer.
+        pub proof: ProofAttachment,
+        /// Optional recent Merkle root used during proof construction.
+        #[cfg_attr(feature = "json", norito(with = "crate::json_helpers::fixed_bytes::option"))]
+        pub root_hint: Option<[u8; 32]>,
+    }
+}
 
-impl IssueOfflineNoteV2 {
-    /// Construct an Offline V2 note issuance instruction.
+impl crate::seal::Instruction for IssueOfflineNote {}
+impl crate::seal::Instruction for RedeemOfflineNote {}
+impl crate::seal::Instruction for AuditOfflineNote {}
+impl crate::seal::Instruction for KagemushaTransfer {}
+
+impl IssueOfflineNote {
+    /// Construct an Offline note issuance instruction.
     #[must_use]
-    pub fn new(issue: OfflineNoteIssueV2) -> Self {
+    pub fn new(issue: OfflineNoteIssue) -> Self {
         Self { issue }
     }
 }
 
-impl RedeemOfflineNoteV2 {
-    /// Construct an Offline V2 note redemption instruction.
+impl RedeemOfflineNote {
+    /// Construct an Offline note redemption instruction.
     #[must_use]
-    pub fn new(redemption: OfflineNoteRedeemV2) -> Self {
+    pub fn new(redemption: OfflineNoteRedeem) -> Self {
         Self { redemption }
     }
 }
 
-impl AuditOfflineNoteV2 {
-    /// Construct an Offline V2 optional audit instruction.
+impl AuditOfflineNote {
+    /// Construct an Offline optional audit instruction.
     #[must_use]
-    pub fn new(audit: OfflineNoteAuditBundleV2) -> Self {
+    pub fn new(audit: OfflineNoteAuditBundle) -> Self {
         Self { audit }
+    }
+}
+
+impl KagemushaTransfer {
+    /// Construct a Kagemusha shielded offline-offline transfer instruction.
+    #[must_use]
+    pub fn new(
+        asset: AssetDefinitionId,
+        inputs: Vec<[u8; 32]>,
+        outputs: Vec<[u8; 32]>,
+        proof: ProofAttachment,
+        root_hint: Option<[u8; 32]>,
+    ) -> Self {
+        Self {
+            asset,
+            inputs,
+            outputs,
+            proof,
+            root_hint,
+        }
     }
 }
 
@@ -81,15 +137,60 @@ macro_rules! impl_decode_one_offline_field {
     };
 }
 
-impl_decode_one_offline_field!(IssueOfflineNoteV2 {
-    issue: OfflineNoteIssueV2
+impl_decode_one_offline_field!(IssueOfflineNote {
+    issue: OfflineNoteIssue
 });
-impl_decode_one_offline_field!(RedeemOfflineNoteV2 {
-    redemption: OfflineNoteRedeemV2
+impl_decode_one_offline_field!(RedeemOfflineNote {
+    redemption: OfflineNoteRedeem
 });
-impl_decode_one_offline_field!(AuditOfflineNoteV2 {
-    audit: OfflineNoteAuditBundleV2
+impl_decode_one_offline_field!(AuditOfflineNote {
+    audit: OfflineNoteAuditBundle
 });
+
+impl<'a> norito::core::DecodeFromSlice<'a> for KagemushaTransfer {
+    fn decode_from_slice(bytes: &'a [u8]) -> Result<(Self, usize), norito::core::Error> {
+        let flags = offline_decode_flags();
+        if flags & norito::core::header_flags::PACKED_STRUCT != 0 {
+            return super::decode_packed_instruction_payload::<Self>(bytes);
+        }
+
+        let mut offset = 0usize;
+        let asset = super::decode_aos_canonical_field::<AssetDefinitionId>(
+            super::read_aos_field(bytes, &mut offset, flags)?,
+            flags,
+        )?;
+        let inputs = super::decode_aos_canonical_field::<Vec<[u8; 32]>>(
+            super::read_aos_field(bytes, &mut offset, flags)?,
+            flags,
+        )?;
+        let outputs = super::decode_aos_canonical_field::<Vec<[u8; 32]>>(
+            super::read_aos_field(bytes, &mut offset, flags)?,
+            flags,
+        )?;
+        let proof = super::decode_aos_canonical_field::<ProofAttachment>(
+            super::read_aos_field(bytes, &mut offset, flags)?,
+            flags,
+        )?;
+        let root_hint = super::decode_aos_canonical_field::<Option<[u8; 32]>>(
+            super::read_aos_field(bytes, &mut offset, flags)?,
+            flags,
+        )?;
+        if offset != bytes.len() {
+            return Err(norito::core::Error::LengthMismatch);
+        }
+        norito::core::note_payload_access(bytes, offset);
+        Ok((
+            Self {
+                asset,
+                inputs,
+                outputs,
+                proof,
+                root_hint,
+            },
+            offset,
+        ))
+    }
+}
 
 #[cfg(test)]
 mod tests {
@@ -103,10 +204,10 @@ mod tests {
         asset::{AssetDefinitionId, AssetId},
         domain::DomainId,
         offline::{
-            OfflineNoteAuditOutputClaimV2, OfflineNoteIssuedClaimV2, OfflineNoteKeyCertificateV2,
-            OfflineNoteRecursiveProofV2,
+            OfflineNoteAuditOutputClaim, OfflineNoteIssuedClaim, OfflineNoteKeyCertificate,
+            OfflineNoteRecursiveProof,
         },
-        proof::{ProofBox, VerifyingKeyId},
+        proof::{ProofAttachment, ProofBox, VerifyingKeyId},
     };
 
     fn account() -> AccountId {
@@ -122,15 +223,15 @@ mod tests {
         AssetId::of(asset_definition_id, account_id.clone())
     }
 
-    fn key_certificate(account_id: AccountId) -> OfflineNoteKeyCertificateV2 {
-        OfflineNoteKeyCertificateV2 {
-            version: 2,
+    fn key_certificate(account_id: AccountId) -> OfflineNoteKeyCertificate {
+        OfflineNoteKeyCertificate {
+            version: crate::offline::OFFLINE_NOTE_KEY_CERTIFICATE_VERSION,
             platform: "ios-appattest".to_owned(),
             key_id: "one-use-key".to_owned(),
             device_id: "device-1".to_owned(),
             account_id,
             public_key: vec![0x01, 0x02, 0x03],
-            assertion_scheme: "apple-appattest-counter-v1".to_owned(),
+            assertion_scheme: "apple-appattest-counter".to_owned(),
             assertion_key_algorithm: "app-attest-p256".to_owned(),
             assertion_public_key: vec![0x04; 65],
             assertion_usage_count_limit: None,
@@ -139,17 +240,17 @@ mod tests {
         }
     }
 
-    fn proof() -> OfflineNoteRecursiveProofV2 {
-        OfflineNoteRecursiveProofV2 {
-            verifier_key_id: VerifyingKeyId::new("halo2/ipa", "offline-note-v2-recursive-v1"),
-            public_inputs_hash: Hash::new(b"offline-v2-public-inputs"),
+    fn proof() -> OfflineNoteRecursiveProof {
+        OfflineNoteRecursiveProof {
+            verifier_key_id: VerifyingKeyId::new("halo2/ipa", "offline-note-recursive"),
+            public_inputs_hash: Hash::new(b"offline-public-inputs"),
             proof: ProofBox::new("halo2/ipa".into(), vec![0xCA, 0xFE]),
         }
     }
 
-    fn issue() -> OfflineNoteIssueV2 {
+    fn issue() -> OfflineNoteIssue {
         let account_id = account();
-        OfflineNoteIssueV2 {
+        OfflineNoteIssue {
             note_commitment: Hash::new(b"note-commitment"),
             key_certificate: key_certificate(account_id.clone()),
             asset: asset_id(&account_id),
@@ -157,9 +258,9 @@ mod tests {
         }
     }
 
-    fn redemption() -> OfflineNoteRedeemV2 {
+    fn redemption() -> OfflineNoteRedeem {
         let account_id = account();
-        OfflineNoteRedeemV2 {
+        OfflineNoteRedeem {
             source_note_commitment: Hash::new(b"note-commitment"),
             input_nullifiers: vec![Hash::new(b"input-nullifier")],
             sender_key_certificate: key_certificate(account_id.clone()),
@@ -170,17 +271,17 @@ mod tests {
         }
     }
 
-    fn audit() -> OfflineNoteAuditBundleV2 {
+    fn audit() -> OfflineNoteAuditBundle {
         let issue = issue();
-        OfflineNoteAuditBundleV2 {
+        OfflineNoteAuditBundle {
             token_id: Hash::new(b"token"),
             sender_key_certificate: issue.key_certificate.clone(),
             input_nullifiers: vec![Hash::new(b"audit-nullifier")],
             input_claims: vec![
-                OfflineNoteIssuedClaimV2::from_issue(&issue).expect("audit input claim"),
+                OfflineNoteIssuedClaim::from_issue(&issue).expect("audit input claim"),
             ],
             output_commitments: vec![Hash::new(b"output-note")],
-            output_claims: vec![OfflineNoteAuditOutputClaimV2 {
+            output_claims: vec![OfflineNoteAuditOutputClaim {
                 note_commitment: Hash::new(b"output-note"),
                 key_certificate: issue.key_certificate,
                 asset: issue.asset,
@@ -188,6 +289,20 @@ mod tests {
             }],
             recursive_proof: proof(),
         }
+    }
+
+    fn kagemusha_transfer() -> KagemushaTransfer {
+        KagemushaTransfer::new(
+            issue().asset.definition().clone(),
+            vec![[0x11; 32]],
+            vec![[0x22; 32], [0x33; 32]],
+            ProofAttachment::new_ref(
+                "halo2/ipa".into(),
+                ProofBox::new("halo2/ipa".into(), vec![0xCA, 0xFE]),
+                VerifyingKeyId::new("halo2/ipa", "offline-kagemusha-transfer"),
+            ),
+            Some([0x44; 32]),
+        )
     }
 
     fn assert_slice_roundtrip<T>(value: T)
@@ -220,21 +335,24 @@ mod tests {
     }
 
     #[test]
-    fn offline_note_v2_decode_from_slice_roundtrips() {
-        assert_slice_roundtrip(IssueOfflineNoteV2::new(issue()));
-        assert_slice_roundtrip(RedeemOfflineNoteV2::new(redemption()));
-        assert_slice_roundtrip(AuditOfflineNoteV2::new(audit()));
+    fn offline_note_decode_from_slice_roundtrips() {
+        assert_slice_roundtrip(IssueOfflineNote::new(issue()));
+        assert_slice_roundtrip(RedeemOfflineNote::new(redemption()));
+        assert_slice_roundtrip(AuditOfflineNote::new(audit()));
+        assert_slice_roundtrip(kagemusha_transfer());
     }
 
     #[test]
-    fn offline_note_v2_registry_decodes_type_names() {
+    fn offline_note_registry_decodes_type_names() {
         let registry = crate::isi::InstructionRegistry::new()
-            .register_slice::<IssueOfflineNoteV2>()
-            .register_slice::<RedeemOfflineNoteV2>()
-            .register_slice::<AuditOfflineNoteV2>();
+            .register_slice::<IssueOfflineNote>()
+            .register_slice::<RedeemOfflineNote>()
+            .register_slice::<AuditOfflineNote>()
+            .register_slice::<KagemushaTransfer>();
 
-        assert_registry_decodes(&registry, IssueOfflineNoteV2::new(issue()));
-        assert_registry_decodes(&registry, RedeemOfflineNoteV2::new(redemption()));
-        assert_registry_decodes(&registry, AuditOfflineNoteV2::new(audit()));
+        assert_registry_decodes(&registry, IssueOfflineNote::new(issue()));
+        assert_registry_decodes(&registry, RedeemOfflineNote::new(redemption()));
+        assert_registry_decodes(&registry, AuditOfflineNote::new(audit()));
+        assert_registry_decodes(&registry, kagemusha_transfer());
     }
 }

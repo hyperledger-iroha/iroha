@@ -527,6 +527,13 @@ public enum OfflineNorito {
     /// produce byte-identical output.
     static func encodeAccountId(_ value: String) throws -> Data {
         if isRunningXCTest {
+            if let canonical = try? canonicalizeEncodedAccountId(value),
+               let address = try? AccountAddress.parseEncoded(
+                canonical,
+                expectedPrefix: defaultNetworkPrefix
+               ) {
+                return try address.noritoAccountControllerPayload()
+            }
             let canonical = try canonicalizeAccountIdWithoutNativeParse(value)
             var accountControllerPayload = OfflineNoritoWriter()
             accountControllerPayload.writeUInt32LE(0)

@@ -1,5 +1,7 @@
 /// <reference types="node" />
 
+export * from "./kotodama-compiler";
+
 export type JsonValue =
   | null
   | boolean
@@ -4672,8 +4674,12 @@ export function extractConfidentialGasConfig(
 ): ConfidentialGasSchedule | null;
 
 export interface BlockListOptions {
-  offsetHeight?: NumericLike;
+  page?: NumericLike;
+  page_number?: NumericLike;
+  perPage?: NumericLike;
+  per_page?: NumericLike;
   limit?: NumericLike;
+  signal?: AbortSignal;
 }
 
 export interface EventStreamOptions {
@@ -4758,6 +4764,14 @@ export interface IterableQueryOptions extends IterableListOptions {
   select?: ReadonlyArray<Record<string, unknown>>;
 }
 
+export interface TransactionQueryOptions extends IterableQueryOptions {
+  assetId?: string;
+  authority?: string;
+  resultOk?: boolean;
+  sinceTimestampMs?: NumericLike;
+  untilTimestampMs?: NumericLike;
+}
+
 export interface PaginationIteratorOptions extends IterableListOptions {
   pageSize?: NumericLike;
   maxItems?: NumericLike;
@@ -4769,6 +4783,14 @@ export interface AccountAssetIteratorOptions extends PaginationIteratorOptions {
 
 export interface AccountTransactionIteratorOptions extends PaginationIteratorOptions {
   assetId?: string;
+}
+
+export interface TransactionIteratorOptions extends PaginationIteratorOptions {
+  assetId?: string;
+  authority?: string;
+  resultOk?: boolean;
+  sinceTimestampMs?: NumericLike;
+  untilTimestampMs?: NumericLike;
 }
 
 export interface AssetHolderIteratorOptions extends PaginationIteratorOptions {
@@ -5118,6 +5140,7 @@ export interface ToriiRwaListItem {
   id: string;
 }
 export interface ToriiAccountAssetItem {
+  asset: string;
   asset_id: string;
   quantity: string;
 }
@@ -5130,6 +5153,7 @@ export interface ToriiAccountTransactionItem {
   timestamp_ms?: number;
   entrypoint_hash: string;
   result_ok: boolean;
+  asset_id?: string | string[];
 }
 
 export interface ToriiContractActivityItem {
@@ -5736,7 +5760,7 @@ export type ToriiPipelineEvent =
 
 export interface ToriiPipelineTransactionStatusStatus {
   kind: string;
-  content: string | null;
+  content: unknown;
   [key: string]: unknown;
 }
 
@@ -6547,6 +6571,7 @@ export interface ToriiClientOptions extends ToriiClientRetryOptions {
 
 export interface TransactionStatusPollOptions {
   signal?: AbortSignal;
+  scope?: "local" | "auto" | "global";
   intervalMs?: number;
   timeoutMs?: number | null;
   maxAttempts?: number | null;
@@ -7558,19 +7583,26 @@ export interface SubscriptionActionResponse {
   tx_hash_hex: string;
 }
 
-export interface ToriiOfflineV2ReadinessResponse {
-  offline_note_v2: boolean;
+export interface ToriiOfflineReadinessResponse {
+  offline_note: boolean;
   offline_one_use_keys: boolean;
   offline_recursive_note_proof: boolean;
-  offline_fountain_qr_v1: boolean;
+  offline_fountain_qr: boolean;
   offline_sync_optional: boolean;
   offline_telemetry: boolean;
   [key: string]: unknown;
 }
 
 export interface ToriiStatusPayload {
+  observed_at_ms: number;
   peers: number;
   queue_size: number;
+  queue_queued: number;
+  queue_inflight: number;
+  last_block_committed_at_ms: number;
+  last_non_empty_block_committed_at_ms: number;
+  time_since_last_block_ms: number;
+  time_since_last_non_empty_block_ms: number;
   commit_time_ms: number;
   da_reschedule_total: number;
   txs_approved: number;
@@ -7580,6 +7612,7 @@ export interface ToriiStatusPayload {
   lane_commitments: ToriiLaneCommitmentSnapshot[];
   dataspace_commitments: ToriiDataspaceCommitmentSnapshot[];
   lane_governance: ToriiLaneGovernanceSnapshot[];
+  dataspace_catalog: ToriiDataspaceCatalogEntry[];
   lane_governance_sealed_total: number;
   lane_governance_sealed_aliases: ReadonlyArray<string>;
   raw: Record<string, unknown>;
@@ -7588,7 +7621,11 @@ export interface ToriiStatusPayload {
 export interface ToriiStatusMetrics {
   commit_latency_ms: number;
   queue_size: number;
+  queue_queued: number;
+  queue_inflight: number;
   queue_delta: number;
+  time_since_last_block_ms: number;
+  time_since_last_non_empty_block_ms: number;
   da_reschedule_delta: number;
   tx_approved_delta: number;
   tx_rejected_delta: number;
@@ -7596,11 +7633,87 @@ export interface ToriiStatusMetrics {
   has_activity: boolean;
 }
 
+export interface ToriiDataspaceCatalogEntry {
+  lane_id: number;
+  lane_alias: string;
+  dataspace_id: number;
+  alias: string;
+  visibility: string;
+  storage_profile: string;
+  manifest_required: boolean;
+  manifest_ready: boolean;
+  sealed: boolean;
+  manifest_path: string | null;
+  protected_namespaces: string[];
+}
+
 export interface ToriiStatusSnapshot {
   timestamp: number;
   status: ToriiStatusPayload;
   metrics: ToriiStatusMetrics;
 }
+
+export interface ToriiPipelinePreflight {
+  schema_version: number;
+  chain_height: number;
+  sumeragi: {
+    block_time_ms: number;
+    commit_time_ms: number;
+    stall_threshold_ms: number;
+  };
+  admission: {
+    max_signatures: number;
+    max_instructions: number;
+    max_tx_bytes: number;
+    max_decompressed_bytes: number;
+    max_metadata_depth: number;
+  };
+  block: {
+    max_transactions: number;
+  };
+  pipeline: {
+    signature_batch_max: number;
+    signature_batch_max_ed25519: number;
+    signature_batch_max_secp256k1: number;
+    signature_batch_max_pqc: number;
+    signature_batch_max_bls: number;
+    overlay_max_instructions: number;
+    ivm_max_decoded_instructions: number;
+  };
+  queue: {
+    size: number;
+    queued: number;
+    inflight: number;
+  };
+  fees: {
+    fee_asset_id: string;
+    fee_sink_account_id: string;
+    base_fee: unknown;
+    per_byte_fee: unknown;
+    per_instruction_fee: unknown;
+    per_gas_unit_fee: unknown;
+    sponsorship_enabled: boolean;
+    sponsor_max_fee: unknown;
+    sponsor_verified_balance_safety_floor: unknown;
+    canonical_sponsor_account_id: string | null;
+    fee_receipts_activation_height: number;
+    external_settlement_enabled: boolean;
+    burn_from_unix_timestamp_ms: number;
+    settlement_mode: string;
+    successful_claim_fee_exempt_authorities: string[];
+  };
+  raw: Readonly<Record<string, unknown>>;
+  isStatusStalled(status: ToriiStatusPayload | Record<string, unknown>): boolean;
+}
+
+export function statusLivenessElapsedMs(
+  status: ToriiStatusPayload | Record<string, unknown>,
+): number;
+
+export function isStatusQueueStalled(
+  status: ToriiStatusPayload | Record<string, unknown>,
+  stallThresholdMs: number | string | bigint,
+): boolean;
 
 export interface ToriiNetworkTimeNow {
   timestampMs: number;
@@ -8230,6 +8343,27 @@ export interface ToriiPipelineRecoverySidecar {
   height: number;
   dag: ToriiPipelineDagSnapshot;
   txs: ReadonlyArray<ToriiPipelineTxSnapshot>;
+}
+
+export interface ToriiPipelineRecoveryFastpqProof {
+  entryHash: string;
+  batchIndex: number;
+  parameter: string;
+  transitionCount: number;
+  traceCommitment: string;
+  proofDigest: string;
+  batchBase64: string | null;
+  proofBase64: string | null;
+  batchCompact: boolean | null;
+  batchReconstructedFromBlock: boolean | null;
+  batchReconstructionError: string | null;
+  raw: Readonly<Record<string, unknown>>;
+}
+
+export interface ToriiPipelineRecoveryFastpqProofs {
+  height: number;
+  blockHashHex: string;
+  proofs: ReadonlyArray<ToriiPipelineRecoveryFastpqProof>;
 }
 
 export interface ToriiSumeragiStatus {
@@ -9566,6 +9700,7 @@ export interface DeployContractResponse {
   dataspace: string | null;
   deploy_nonce: number | null;
   tx_hash_hex: string | null;
+  pipeline_status?: ToriiPipelineTransactionStatus | null;
   code_hash_hex: string;
   abi_hash_hex: string;
 }
@@ -9607,6 +9742,7 @@ export interface ContractCallResponse {
   abi_hash_hex: string;
   creation_time_ms: number;
   tx_hash_hex: string | null;
+  pipeline_status?: ToriiPipelineTransactionStatus | null;
   entrypoint: string | null;
   transaction_scaffold_b64: string | null;
   signed_transaction_b64: string | null;
@@ -10911,6 +11047,72 @@ export interface InstructionBuilders {
   };
 }
 
+export interface ToriiBrowserClientOptions {
+  fetchImpl?: typeof fetch;
+  defaultHeaders?: Record<string, string>;
+  timeoutMs?: NumericLike;
+  config?: {
+    toriiClient?: {
+      timeoutMs?: NumericLike;
+      defaultHeaders?: Record<string, string>;
+    };
+  };
+}
+
+export declare class ToriiBrowserHttpError extends Error {
+  readonly response: Response;
+  readonly status: number;
+  readonly bodyText: string;
+}
+
+export declare class ToriiBrowserClient {
+  constructor(baseUrl: string | URL, options?: ToriiBrowserClientOptions);
+  listExplorerAccounts(options?: Record<string, unknown>): Promise<unknown>;
+  getExplorerAccount(accountId: string, options?: Record<string, unknown>): Promise<unknown>;
+  listExplorerDomains(options?: Record<string, unknown>): Promise<unknown>;
+  getExplorerDomain(domainId: string, options?: Record<string, unknown>): Promise<unknown>;
+  listExplorerAssets(options?: Record<string, unknown>): Promise<unknown>;
+  getExplorerAsset(assetId: string, options?: Record<string, unknown>): Promise<unknown>;
+  listAccountAssets(accountId: string, options?: Record<string, unknown>): Promise<unknown>;
+  queryAccountTransactions<T = ToriiAccountTransactionItem>(
+    accountId: string,
+    options?: TransactionQueryOptions,
+  ): Promise<ToriiIterableListResponse<T>>;
+  queryTransactions<T = ToriiAccountTransactionItem>(
+    options?: TransactionQueryOptions,
+  ): Promise<ToriiIterableListResponse<T>>;
+  queryVisibleTransactions<T = ToriiAccountTransactionItem>(
+    options?: TransactionQueryOptions,
+  ): Promise<ToriiIterableListResponse<T>>;
+  listAssetHolders(assetDefinitionId: string, options?: Record<string, unknown>): Promise<unknown>;
+  listAssetDefinitions(options?: Record<string, unknown>): Promise<unknown>;
+  getAssetDefinition(assetDefinitionId: string, options?: Record<string, unknown>): Promise<unknown>;
+  listExplorerAssetDefinitions(options?: Record<string, unknown>): Promise<unknown>;
+  getExplorerAssetDefinitionEconometrics(assetDefinitionId: string, options?: Record<string, unknown>): Promise<unknown>;
+  getExplorerAssetDefinitionSnapshot(assetDefinitionId: string, options?: Record<string, unknown>): Promise<unknown>;
+  listExplorerNfts(options?: Record<string, unknown>): Promise<unknown>;
+  getExplorerNft(nftId: string, options?: Record<string, unknown>): Promise<unknown>;
+  listExplorerRwas(options?: Record<string, unknown>): Promise<unknown>;
+  getExplorerRwa(rwaId: string, options?: Record<string, unknown>): Promise<unknown>;
+  listExplorerBlocks(options?: Record<string, unknown>): Promise<unknown>;
+  getExplorerBlock(identifier: string | number | bigint, options?: Record<string, unknown>): Promise<unknown>;
+  getExplorerMetrics(options?: Record<string, unknown>): Promise<unknown>;
+  getExplorerHealth(options?: Record<string, unknown>): Promise<unknown>;
+  listExplorerTransactions(options?: Record<string, unknown>): Promise<unknown>;
+  listLatestExplorerTransactions(options?: Record<string, unknown>): Promise<unknown>;
+  getExplorerTransaction(hash: string, options?: Record<string, unknown>): Promise<unknown>;
+  listExplorerInstructions(options?: Record<string, unknown>): Promise<unknown>;
+  listLatestExplorerInstructions(options?: Record<string, unknown>): Promise<unknown>;
+  getExplorerInstruction(transactionHash: string, index: number, options?: Record<string, unknown>): Promise<unknown>;
+  getExplorerInstructionContractView(transactionHash: string, index: number, options?: Record<string, unknown>): Promise<unknown>;
+  getSumeragiStatus(options?: Record<string, unknown>): Promise<unknown>;
+  getSumeragiTelemetry(options?: Record<string, unknown>): Promise<unknown>;
+  listKaigiRelays(options?: Record<string, unknown>): Promise<unknown>;
+  getKaigiRelay(relayId: string, options?: Record<string, unknown>): Promise<unknown>;
+  getKaigiRelaysHealth(options?: Record<string, unknown>): Promise<unknown>;
+  deployContract(request: Record<string, unknown>, options?: Record<string, unknown>): Promise<unknown>;
+}
+
 export declare class ToriiClient {
   constructor(baseUrl: string, options?: ToriiClientOptions);
   listAccounts<T = ToriiAccountListItem>(
@@ -11045,7 +11247,13 @@ export declare class ToriiClient {
   ): Promise<ToriiIterableListResponse<T>>;
   queryAccountTransactions<T = ToriiAccountTransactionItem>(
     accountId: string,
-    options?: IterableQueryOptions,
+    options?: TransactionQueryOptions,
+  ): Promise<ToriiIterableListResponse<T>>;
+  queryTransactions<T = ToriiAccountTransactionItem>(
+    options?: TransactionQueryOptions,
+  ): Promise<ToriiIterableListResponse<T>>;
+  queryVisibleTransactions<T = ToriiAccountTransactionItem>(
+    options?: TransactionQueryOptions,
   ): Promise<ToriiIterableListResponse<T>>;
   iterateAccountTransactions<T = ToriiAccountTransactionItem>(
     accountId: string,
@@ -11054,6 +11262,12 @@ export declare class ToriiClient {
   iterateAccountTransactionsQuery<T = ToriiAccountTransactionItem>(
     accountId: string,
     options?: PaginationIteratorOptions,
+  ): AsyncGenerator<T, void, unknown>;
+  iterateTransactionsQuery<T = ToriiAccountTransactionItem>(
+    options?: TransactionIteratorOptions,
+  ): AsyncGenerator<T, void, unknown>;
+  iterateVisibleTransactionsQuery<T = ToriiAccountTransactionItem>(
+    options?: TransactionIteratorOptions,
   ): AsyncGenerator<T, void, unknown>;
   listAssetHolders<T = ToriiAssetHolderItem>(
     assetDefinitionId: string,
@@ -11275,7 +11489,12 @@ export declare class ToriiClient {
   submitTransaction(payload: ArrayBufferView | ArrayBuffer | Buffer): Promise<unknown>;
   getTransactionStatus(
     hashHex: string,
-    options?: { allowShortHash?: boolean; signal?: AbortSignal },
+    options?: {
+      allowShortHash?: boolean;
+      signal?: AbortSignal;
+      scope?: "local" | "auto" | "global";
+      endpoints?: ReadonlyArray<string> | string;
+    },
   ): Promise<ToriiPipelineTransactionStatus | null>;
   waitForTransactionStatus(
     hashHex: string,
@@ -11287,7 +11506,12 @@ export declare class ToriiClient {
   ): Promise<ToriiPipelineTransactionStatus>;
   getTransactionStatusTyped(
     hashHex: string,
-    options?: { allowShortHash?: boolean; signal?: AbortSignal },
+    options?: {
+      allowShortHash?: boolean;
+      signal?: AbortSignal;
+      scope?: "local" | "auto" | "global";
+      endpoints?: ReadonlyArray<string> | string;
+    },
   ): Promise<ToriiPipelineStatus | null>;
   waitForTransactionStatusTyped(
     hashHex: string,
@@ -11303,6 +11527,15 @@ export declare class ToriiClient {
   getPipelineRecoveryTyped(
     height: number | string | bigint,
   ): Promise<ToriiPipelineRecoverySidecar | null>;
+  getPipelinePreflight(options?: { signal?: AbortSignal }): Promise<ToriiPipelinePreflight>;
+  getPipelineRecoveryFastpqProofs(
+    height: number | string | bigint,
+    options?: { signal?: AbortSignal },
+  ): Promise<Record<string, unknown> | null>;
+  getPipelineRecoveryFastpqProofsTyped(
+    height: number | string | bigint,
+    options?: { signal?: AbortSignal },
+  ): Promise<ToriiPipelineRecoveryFastpqProofs | null>;
   getHealth(options?: { signal?: AbortSignal }): Promise<ToriiHealthStatus | null>;
   getConfiguration(): Promise<unknown | null>;
   getConfigurationTyped(): Promise<ToriiConfigurationSnapshot | null>;
@@ -11871,9 +12104,9 @@ export declare class ToriiClient {
     request: SubscriptionUsageRequest,
     options?: { signal?: AbortSignal },
   ): Promise<SubscriptionActionResponse>;
-  getOfflineV2Readiness(
+  getOfflineReadiness(
     options?: { signal?: AbortSignal },
-  ): Promise<ToriiOfflineV2ReadinessResponse>;
+  ): Promise<ToriiOfflineReadinessResponse>;
 }
 
 export interface NoritoRpcClientOptions {
@@ -12295,9 +12528,9 @@ export const OfflineQrStreamFrameEncoding: Readonly<{
 
 export const OfflineQrPayloadKind: Readonly<{
   unspecified: number;
-  offlineReceiveRequestV2: number;
-  offlinePaymentTokenV2: number;
-  offlineReceiptAckV2: number;
+  offlineReceiveRequest: number;
+  offlinePaymentToken: number;
+  offlineReceiptAck: number;
 }>;
 
 export class OfflineQrStreamOptions {
@@ -12308,7 +12541,6 @@ export class OfflineQrStreamOptions {
 }
 
 export class OfflineQrStreamEnvelope {
-  readonly version: number;
   readonly flags: number;
   readonly encoding: number;
   readonly parityGroup: number;
@@ -13529,3 +13761,5 @@ export function buildSoracloudPrivateUploadedModelReceiptQuery(
 export function privateUploadedModelReceiptInstruction(
   response: Record<string, unknown>,
 ): SoracloudTxInstruction;
+
+export * from "./nexus-app";

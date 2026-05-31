@@ -102,11 +102,14 @@ Init ==
   checked = 0
 
 Next ==
-  UNCHANGED vars
+  \/ /\ checked < 17
+     /\ checked' = checked + 1
+  \/ /\ checked = 17
+     /\ UNCHANGED vars
 
 TypeInvariant ==
   /\ Bug \in Bugs
-  /\ checked \in 0..1
+  /\ checked \in 0..17
 
 SuppressionPositiveSafety ==
   /\ SuppressWithSlotLiveness
@@ -135,5 +138,39 @@ SafetyFast ==
   /\ SuppressionPositiveSafety
   /\ SuppressionNegativeSafety
   /\ SuppressedBranchEffectSafety
+
+SuppressionPositiveAnchors ==
+  /\ SuppressionPositiveSafety
+  /\ SuppressWithSlotLiveness
+  /\ SuppressWithPendingBlock
+  /\ SuppressWithObservedEqual
+  /\ SuppressWithObservedLower
+
+SuppressionNegativeAnchors ==
+  /\ SuppressionNegativeSafety
+  /\ RejectResilienceDisabled
+  /\ RejectNoDependencySignals
+  /\ RejectPriorSameHeightReacquire
+  /\ RejectBelowFrontierHeight
+  /\ RejectAboveFrontierHeight
+  /\ RejectObservedFutureHead
+  /\ RejectCommitPhaseDependency
+  /\ RejectMissingQcDependency
+  /\ RejectNoRoundLiveness
+
+SuppressedBranchEffectAnchors ==
+  /\ SuppressedBranchEffectSafety
+  /\ SuppressedRecordsAttempt
+  /\ SuppressedBlocksHighestQcFetch
+  /\ SuppressedBlocksAnchorPull
+  /\ SuppressedStillAllowsSidecarHint
+
+LiveFrontierIdleMissingQcSafetyAnchors ==
+  /\ SuppressionPositiveAnchors
+  /\ SuppressionNegativeAnchors
+  /\ SuppressedBranchEffectAnchors
+
+Safety ==
+  LiveFrontierIdleMissingQcSafetyAnchors
 
 ====

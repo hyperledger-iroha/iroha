@@ -42,8 +42,10 @@
   and fixed-length hash/signature handling with the Rust codec.
 - Streaming resume parity: `KeyUpdateState`/`ContentKeyState` snapshot helpers
   plus baseline RLE block decoding with explicit end-of-block validation.
-- Columnar helpers: NCB/AoS layouts for `(u64, String, boolean)`, `(u64, bytes)`
-  (including optional bytes), and `(u64, enum(Name|Code), boolean)` rows.
+- Columnar helpers: NCB/AoS layouts for `(u64, String, boolean)`,
+  `(u64, Optional<String>, boolean)`, `(u64, Optional<u32>, boolean)`,
+  `(u64, bytes)`, `(u64, bytes, boolean)` (including optional bytes), and
+  `(u64, enum(Name|Code), boolean)` rows.
 - Schema hashing: first 16 bytes of domain-separated SHA-256 over the canonical
   type name or structural schema JSON.
 - CLI utility: `NoritoDump` prints header fields for inspection.
@@ -109,7 +111,8 @@
   but the pure-Java implementation remains the source of truth.
 
 ## Maintenance Notes
-- The Norito Rust crate's `build.rs` invokes `scripts/check_norito_bindings_sync.sh`
-  (a thin shell wrapper around the Python helper) to ensure updates to the Rust codec are mirrored in both the Python and Java
-  bindings. Packaged builds without the sync script automatically skip the
-  guard; manual bypass hooks are intentionally unavailable.
+- Run `scripts/check_norito_bindings_sync.sh` (a thin shell wrapper around the
+  Python helper) to ensure updates to the Rust codec are mirrored in the Python,
+  Java, and Kotlin bindings. CI should invoke the script directly. The Norito
+  Rust crate's `build.rs` keeps ordinary Cargo builds lightweight and only runs
+  the sync guard when `NORITO_CHECK_BINDINGS_SYNC=1` is set.

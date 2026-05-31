@@ -5,6 +5,7 @@ import org.hyperledger.iroha.sdk.core.model.WirePayload
 import kotlin.test.Test
 import kotlin.test.assertContentEquals
 import kotlin.test.assertEquals
+import kotlin.test.assertFailsWith
 import kotlin.test.assertIs
 
 /**
@@ -33,6 +34,11 @@ class RegisterAccountWirePayloadEncoderParityTest {
         assertEquals("iroha.register", instruction.name)
         val wirePayload = assertIs<WirePayload>(instruction.payload)
         val kotlinHex = FixtureGeneratorRunner.bytesToHex(wirePayload.payloadBytes)
+        val decodedAccountId = RegisterAccountWirePayloadEncoder.decodeRegisterAccountPayload(
+            wirePayload.payloadBytes,
+        )
+
+        assertEquals(accountId, decodedAccountId)
 
         assertContentEquals(
             FixtureGeneratorRunner.hexToBytes(rustHex),
@@ -42,5 +48,14 @@ class RegisterAccountWirePayloadEncoderParityTest {
                 "  Rust:   $rustHex\n" +
                 "  Kotlin: $kotlinHex",
         )
+
+        assertFailsWith<IllegalArgumentException> {
+            RegisterAccountWirePayloadEncoder.decodeRegisterAccountPayload(wirePayload.payloadBytes.copyOf(12))
+        }
+        val mutated = wirePayload.payloadBytes.copyOf()
+        mutated[mutated.lastIndex] = (mutated.last().toInt() xor 0x01).toByte()
+        assertFailsWith<IllegalArgumentException> {
+            RegisterAccountWirePayloadEncoder.decodeRegisterAccountPayload(mutated)
+        }
     }
 }

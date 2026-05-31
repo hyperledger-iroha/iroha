@@ -53,10 +53,10 @@ client = create_torii_client(
 )
 ```
 
-## Offline V2 readiness
+## Offline readiness
 
-Torii exposes only the Offline V2 readiness endpoint for offline HTTP discovery.
-Offline V2 note issuance, redemption, and audit payloads are submitted as
+Torii exposes only the Offline readiness endpoint for offline HTTP discovery.
+Offline note issuance, redemption, and audit payloads are submitted as
 transaction instructions.
 
 ```python
@@ -64,8 +64,8 @@ from iroha_python import ToriiClient
 
 client = ToriiClient("http://127.0.0.1:8080", auth_token="dev-token")
 
-readiness = client.get_offline_v2_readiness()
-print("offline notes", readiness.offline_note_v2)
+readiness = client.get_offline_readiness()
+print("offline notes", readiness.offline_note)
 ```
 
 ## Account addresses
@@ -615,7 +615,7 @@ The script prints the typed `ConnectSessionInfo`, shows the current `ConnectStat
 
 Pass `--app-name` (optionally with `--app-url` and `--app-icon-hash`) to embed display metadata in the control frame so wallets can render the requesting application context. Alternatively, provide `--app-metadata-file metadata.json` with a JSON object containing `name` (and optional `url`, `icon_hash`) to keep CLI flags tidy. A starter template lives at `python/iroha_python/src/iroha_python/examples/connect_app_metadata.json`. Use `--frame-output <path>` (with optional `--frame-output-format binary`) to persist the encoded frame, `--frame-json-output <path>` for a base64-friendly JSON blob, and `--status-json-output <path>` to dump the typed Connect status snapshot for later automation.
 
-Run `python -m iroha_python.examples.connect_flow --write-app-metadata-template connect_app_metadata.json` to scaffold the sample metadata file without contacting a node. When you only need runtime telemetry, pass `--status-only` (optionally with `--status-json-output status.json`) to skip session creation entirely.
+Run `python -m iroha_python.examples.connect_flow --write-app-metadata-template connect_app_metadata.json` to write the sample metadata file without contacting a node. When you only need runtime telemetry, pass `--status-only` (optionally with `--status-json-output status.json`) to skip session creation entirely.
 
 ```python
 info = client.create_connect_session_info({"role": "app", "sid": "base64url-sid"})

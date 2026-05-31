@@ -8,6 +8,7 @@ import java.util.List;
 import java.util.Map;
 import java.util.Queue;
 import java.util.concurrent.CompletableFuture;
+import java.util.concurrent.CompletionException;
 import org.hyperledger.iroha.android.client.transport.TransportRequest;
 import org.hyperledger.iroha.android.client.transport.TransportResponse;
 import org.hyperledger.iroha.android.subscriptions.SubscriptionActionRequest;
@@ -32,9 +33,11 @@ public final class SubscriptionToriiClientTests {
       final String endpoint, final Runnable action) {
     try {
       action.run();
-    } catch (final UnsupportedOperationException expected) {
-      assert expected.getMessage().contains(endpoint) : "missing endpoint in error message";
-      assert expected.getMessage().contains("locally signed transaction")
+    } catch (final CompletionException expected) {
+      assert expected.getCause() instanceof SubscriptionToriiException
+          : "expected SubscriptionToriiException cause";
+      assert expected.getCause().getMessage().contains(endpoint) : "missing endpoint in error message";
+      assert expected.getCause().getMessage().contains("locally signed transaction")
           : "missing remediation in error message";
       return;
     }

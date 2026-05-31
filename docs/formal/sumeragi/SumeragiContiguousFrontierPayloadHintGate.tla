@@ -178,11 +178,14 @@ Init ==
   checked = 0
 
 Next ==
-  UNCHANGED vars
+  \/ /\ checked < 13
+     /\ checked' = checked + 1
+  \/ /\ checked = 13
+     /\ UNCHANGED vars
 
 TypeInvariant ==
   /\ Bug \in BugSet
-  /\ checked = 0
+  /\ checked \in 0..13
   /\ \A phase \in Phases: ActualPhaseRank(phase) \in 1..4
   /\ \A c \in Cases: ActualSource(c) \in Sources
   /\ \A c \in Cases: ActualHash(c) \in 0..9
@@ -237,5 +240,67 @@ SafetyFast ==
   /\ MarkerFallbackStable
   /\ MarkerEligibilityStable
   /\ EmptyFallbackStable
+
+PhaseRankAnchors ==
+  /\ PhaseRanksExact
+  /\ ActualPhaseRank(Commit) = 3
+  /\ ActualPhaseRank(Prepare) = 2
+  /\ ActualPhaseRank(NewView) = 1
+
+SelectionAnchors ==
+  /\ SelectionExact
+  /\ \A c \in Cases:
+       /\ ActualSource(c) = SpecSource(c)
+       /\ ActualHash(c) = SpecHash(c)
+
+DeferredOrderingAnchors ==
+  /\ DeferredOrderingStable
+  /\ ActualHash(DeferredCommitOverPrepare) = 8
+  /\ ActualHash(DeferredPrepareOverNewView) = 6
+  /\ ActualHash(DeferredViewTieBreak) = 5
+  /\ ActualHash(DeferredHashTieBreak) = 9
+
+DeferredEligibilityAnchors ==
+  /\ DeferredEligibilityStable
+  /\ ActualSource(WrongHeightDeferredIgnored) = MarkerSource
+  /\ ActualHash(WrongHeightDeferredIgnored) = 3
+  /\ ActualSource(NonActionableDeferredIgnored) = MarkerSource
+  /\ ActualHash(NonActionableDeferredIgnored) = 4
+
+DeferredPrecedenceAnchors ==
+  /\ DeferredPrecedenceStable
+  /\ ActualSource(DeferredPreemptsMarker) = DeferredSource
+  /\ ActualHash(DeferredPreemptsMarker) = 2
+
+MarkerFallbackAnchors ==
+  /\ MarkerFallbackStable
+  /\ ActualSource(MarkerOnly) = MarkerSource
+  /\ ActualHash(MarkerOnly) = 5
+  /\ ActualHash(MarkerViewTieBreak) = 4
+  /\ ActualHash(MarkerHashTieBreak) = 8
+
+MarkerEligibilityAnchors ==
+  /\ MarkerEligibilityStable
+  /\ ActualSource(WrongHeightMarkerIgnored) = MarkerSource
+  /\ ActualHash(WrongHeightMarkerIgnored) = 2
+  /\ ActualSource(NonActionableMarkerIgnored) = MarkerSource
+  /\ ActualHash(NonActionableMarkerIgnored) = 2
+
+EmptyFallbackAnchors ==
+  /\ EmptyFallbackStable
+  /\ ActualSource(NoEligible) = NoneSource
+  /\ ActualHash(NoEligible) = 0
+
+ContiguousFrontierPayloadHintSafetyAnchors ==
+  /\ PhaseRankAnchors
+  /\ SelectionAnchors
+  /\ DeferredOrderingAnchors
+  /\ DeferredEligibilityAnchors
+  /\ DeferredPrecedenceAnchors
+  /\ MarkerFallbackAnchors
+  /\ MarkerEligibilityAnchors
+  /\ EmptyFallbackAnchors
+
+Safety == ContiguousFrontierPayloadHintSafetyAnchors
 
 ====

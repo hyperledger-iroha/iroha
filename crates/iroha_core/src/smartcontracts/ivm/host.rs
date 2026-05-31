@@ -2435,8 +2435,27 @@ impl<QS: Default + QueryStateAccess> CoreHostImpl<QS> {
         &mut self,
         map: BTreeMap<VerifyingKeyId, VerifyingKeyRecord>,
     ) -> Result<(), ivm::VMError> {
-        // Early sanity: ensure commitments match stored key bytes when present.
-        for rec in map.values() {
+        // Early sanity: ensure commitments and backend labels match the
+        // production no-trusted-setup verifier policy.
+        for (id, rec) in &map {
+            if !matches!(rec.backend, BackendTag::Halo2IpaPasta | BackendTag::Stark) {
+                return Err(ivm::VMError::NoritoInvalid);
+            }
+            let backend_label = Self::backend_label_for_record(id, rec);
+            if crate::zk::is_trusted_setup_backend_label(&backend_label) {
+                return Err(ivm::VMError::NoritoInvalid);
+            }
+            if crate::zk::is_developer_only_backend_label(&backend_label) {
+                return Err(ivm::VMError::NoritoInvalid);
+            }
+            if rec.backend == BackendTag::Halo2IpaPasta && !backend_label.starts_with("halo2/") {
+                return Err(ivm::VMError::NoritoInvalid);
+            }
+            if rec.backend == BackendTag::Stark
+                && !crate::zk::is_stark_fri_v1_backend(&backend_label)
+            {
+                return Err(ivm::VMError::NoritoInvalid);
+            }
             if let Some(ref vk) = rec.key {
                 let c = crate::zk::hash_vk(vk);
                 if c != rec.commitment {
@@ -2448,9 +2467,13 @@ impl<QS: Default + QueryStateAccess> CoreHostImpl<QS> {
         Ok(())
     }
 
-    fn backend_label_for_record(rec: &VerifyingKeyRecord) -> String {
+    fn backend_label_for_record(id: &VerifyingKeyId, rec: &VerifyingKeyRecord) -> String {
         if let Some(ref vk) = rec.key {
             return vk.backend.clone();
+        }
+        let registry_backend = id.backend.as_str();
+        if !registry_backend.is_empty() {
+            return registry_backend.to_string();
         }
         if let Some(prefix) = rec.circuit_id.split(':').next() {
             if !prefix.is_empty() {
@@ -2543,11 +2566,10 @@ impl<QS: Default + QueryStateAccess> CoreHostImpl<QS> {
         &self,
         vk_commitment: [u8; 32],
     ) -> Result<(VerifyingKeyRecord, String), u64> {
-        let vk_rec = self
+        let (vk_id, vk_rec) = self
             .verifying_keys
-            .values()
-            .find(|r| r.commitment == vk_commitment)
-            .cloned()
+            .iter()
+            .find(|(_, r)| r.commitment == vk_commitment)
             .ok_or(ivm::host::ERR_VK_MISSING)?;
         if !matches!(
             vk_rec.backend,
@@ -2558,8 +2580,14 @@ impl<QS: Default + QueryStateAccess> CoreHostImpl<QS> {
         if !vk_rec.is_active() {
             return Err(ivm::host::ERR_VK_INACTIVE);
         }
-        let backend_label = Self::backend_label_for_record(&vk_rec);
-        Ok((vk_rec, backend_label))
+        let backend_label = Self::backend_label_for_record(vk_id, vk_rec);
+        if crate::zk::is_trusted_setup_backend_label(&backend_label) {
+            return Err(ivm::host::ERR_BACKEND);
+        }
+        if crate::zk::is_developer_only_backend_label(&backend_label) {
+            return Err(ivm::host::ERR_BACKEND);
+        }
+        Ok((vk_rec.clone(), backend_label))
     }
 
     fn validate_proof_len(
@@ -2640,6 +2668,9 @@ impl<QS: Default + QueryStateAccess> CoreHostImpl<QS> {
         let env: iroha_data_model::zk::OpenVerifyEnvelope =
             norito::decode_from_bytes(payload).map_err(|_| ivm::host::ERR_DECODE)?;
         self.validate_envelope_header(&env, payload.len())?;
+        if !env.aux.is_empty() {
+            return Err(ivm::host::ERR_VK_MISMATCH);
+        }
         if env.vk_hash == [0u8; 32] {
             return Err(ivm::host::ERR_VK_MISSING);
         }
@@ -17080,6 +17111,7 @@ seiyaku Vault {
     #[test]
     fn backend_label_prefers_stored_vk_backend_and_prefix() {
         crate::test_alias::ensure();
+        let id = VerifyingKeyId::new("halo2/ipa", "test_circuit");
         let mut rec = VerifyingKeyRecord::new_with_owner(
             1,
             "halo2/ipa:test_circuit",
@@ -17090,17 +17122,130 @@ seiyaku Vault {
             [0u8; 32],
             [1u8; 32],
         );
-        // When no stored VK bytes are present, use the circuit_id prefix before ':'
+        // When no stored VK bytes are present, use the registry key backend.
         assert_eq!(
-            CoreHost::backend_label_for_record(&rec),
+            CoreHost::backend_label_for_record(&id, &rec),
             "halo2/ipa".to_string()
         );
         // Stored VK backend must override the circuit prefix.
         rec.key = Some(VerifyingKeyBox::new("custom/backend".into(), vec![1, 2, 3]));
         assert_eq!(
-            CoreHost::backend_label_for_record(&rec),
+            CoreHost::backend_label_for_record(&id, &rec),
             "custom/backend".to_string()
         );
+    }
+
+    #[test]
+    fn set_verifying_keys_accepts_keyless_record_backend_from_registry_key() {
+        crate::test_alias::ensure();
+        let mut host = CoreHost::new(fixture_account("alice"));
+        let commitment = [0x77; 32];
+        let mut rec = active_vk_record(
+            commitment,
+            [0x42; 32],
+            "halo2/ipa",
+            "offline-note-recursive",
+            "core",
+            Vec::new(),
+        );
+        rec.key = None;
+
+        let mut map = BTreeMap::new();
+        map.insert(
+            VerifyingKeyId::new("halo2/ipa", "offline-note-recursive"),
+            rec,
+        );
+
+        host.set_verifying_keys(map)
+            .expect("keyless record should use the registry backend label");
+    }
+
+    #[test]
+    fn load_vk_record_any_namespace_uses_keyless_registry_backend() {
+        crate::test_alias::ensure();
+        let mut host = CoreHost::new(fixture_account("alice"));
+        let commitment = [0x78; 32];
+        let mut rec = active_vk_record(
+            commitment,
+            [0x42; 32],
+            "halo2/ipa",
+            "kagemusha-folded-v1",
+            "core",
+            Vec::new(),
+        );
+        rec.key = None;
+
+        let mut map = BTreeMap::new();
+        map.insert(VerifyingKeyId::new("halo2/ipa", "kagemusha-folded-v1"), rec);
+        host.set_verifying_keys(map)
+            .expect("keyless record should be accepted");
+
+        let (_, backend_label) = host
+            .load_vk_record_any_namespace(commitment)
+            .expect("commitment should resolve");
+        assert_eq!(backend_label, "halo2/ipa");
+    }
+
+    #[test]
+    fn set_verifying_keys_rejects_trusted_setup_backend_labels() {
+        crate::test_alias::ensure();
+        for backend in [
+            "halo2/kzg",
+            "halo2/ipa:KZG",
+            "halo2/ipa: KZG",
+            "halo2/bn254",
+            "groth16/bn254",
+        ] {
+            let mut host = CoreHost::new(fixture_account("alice"));
+            let vk_bytes = vec![1, 2, 3, 4];
+            let commitment = CoreHost::hash_vk_bytes(backend, &vk_bytes);
+            let rec = active_vk_record(
+                commitment,
+                [0x42; 32],
+                backend,
+                "halo2/ipa:test-circuit",
+                "core",
+                vk_bytes,
+            );
+            let mut map = BTreeMap::new();
+            map.insert(VerifyingKeyId::new(backend, "vk"), rec);
+            assert!(
+                host.set_verifying_keys(map).is_err(),
+                "case {backend} must be rejected"
+            );
+        }
+    }
+
+    #[test]
+    fn set_verifying_keys_rejects_developer_only_backend_labels() {
+        crate::test_alias::ensure();
+        for backend in [
+            "debug/halo2/ipa",
+            "halo2/debug",
+            "halo2/mock",
+            "halo2/ipa:Mock-Proof",
+            "stark/fri/debug",
+            "stark/fri/Debug",
+            "stark/fri/mock",
+        ] {
+            let mut host = CoreHost::new(fixture_account("alice"));
+            let vk_bytes = vec![1, 2, 3, 4];
+            let commitment = CoreHost::hash_vk_bytes(backend, &vk_bytes);
+            let rec = active_vk_record(
+                commitment,
+                [0x42; 32],
+                backend,
+                &format!("{backend}:test-circuit"),
+                "core",
+                vk_bytes,
+            );
+            let mut map = BTreeMap::new();
+            map.insert(VerifyingKeyId::new(backend, "vk"), rec);
+            assert!(
+                host.set_verifying_keys(map).is_err(),
+                "case {backend} must be rejected"
+            );
+        }
     }
 
     #[test]
@@ -18536,6 +18681,22 @@ seiyaku Vault {
             Err(ivm::host::ERR_VK_MISSING)
         );
 
+        // Opaque auxiliary metadata is not admitted by the registered-key guard.
+        let mut env_aux: iroha_data_model::zk::OpenVerifyEnvelope =
+            norito::decode_from_bytes(&dummy_env(
+                circuit_id,
+                commitment,
+                public_inputs.clone(),
+                vec![0xAA; 16],
+            ))
+            .expect("decode dummy envelope");
+        env_aux.aux = b"ignored-hint".to_vec();
+        let env_aux = norito::to_bytes(&env_aux).expect("encode aux envelope");
+        assert_eq!(
+            host.enforce_zk_envelope(&env_aux, "transfer"),
+            Err(ivm::host::ERR_VK_MISMATCH)
+        );
+
         // Happy-path still succeeds.
         let env_ok = dummy_env(circuit_id, commitment, public_inputs, vec![0xAA; 16]);
         assert!(host.enforce_zk_envelope(&env_ok, "transfer").is_ok());
@@ -18564,6 +18725,42 @@ seiyaku Vault {
         assert!(gas > 0, "verification prechecks still charge proof gas");
         assert_eq!(vm.register(10), 0);
         assert_eq!(vm.register(11), ivm::host::ERR_VK_MISSING);
+    }
+
+    #[test]
+    fn generic_verify_proof_syscall_rejects_injected_developer_only_vk_snapshot() {
+        crate::test_alias::ensure();
+        let mut host = CoreHost::new(fixture_account("alice"));
+        host.set_chain_id_bytes(b"chain".to_vec());
+        host.set_current_manifest_id(Some("core".to_string()));
+
+        let backend = "halo2/mock";
+        let circuit_id = "halo2/mock:dev-circuit";
+        let public_inputs = vec![1u8, 2, 3, 4];
+        let vk_bytes = vec![4, 3, 2, 1];
+        let commitment = CoreHost::hash_vk_bytes(backend, &vk_bytes);
+        let rec = active_vk_record(
+            commitment,
+            schema_hash(&public_inputs),
+            backend,
+            circuit_id,
+            "core",
+            vk_bytes,
+        );
+        host.verifying_keys
+            .insert(VerifyingKeyId::new(backend, "vk"), rec);
+
+        let payload = dummy_env(circuit_id, commitment, public_inputs, vec![0xAA; 16]);
+        let mut vm = IVM::new(1_000_000);
+        let ptr = store_tlv(&mut vm, PointerType::NoritoBytes, &payload);
+        vm.set_register(10, ptr);
+
+        let gas = host
+            .syscall(ivm_sys::SYSCALL_VERIFY_PROOF, &mut vm)
+            .expect("generic verify proof syscall");
+        assert!(gas > 0, "verification prechecks still charge proof gas");
+        assert_eq!(vm.register(10), 0);
+        assert_eq!(vm.register(11), ivm::host::ERR_BACKEND);
     }
 
     #[cfg(feature = "zk-stark")]

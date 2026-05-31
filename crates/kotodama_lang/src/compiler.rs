@@ -487,6 +487,8 @@ enum DataKind {
     AxtDescriptor,
     AssetHandle,
     ProofBlob,
+    SoracloudRequest,
+    SoracloudResponse,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, Hash)]
@@ -515,6 +517,8 @@ fn pointer_type_for_kind(kind: ir::DataRefKind) -> Option<PointerType> {
         AxtDescriptor => Some(PointerType::AxtDescriptor),
         AssetHandle => Some(PointerType::AssetHandle),
         ProofBlob => Some(PointerType::ProofBlob),
+        SoracloudRequest => Some(PointerType::SoracloudRequest),
+        SoracloudResponse => Some(PointerType::SoracloudResponse),
     }
 }
 
@@ -534,6 +538,8 @@ fn data_key_for_pointer(kind: ir::DataRefKind, value: &str) -> DataKey {
         AxtDescriptor => DataKey(DataKind::AxtDescriptor, value.to_owned()),
         AssetHandle => DataKey(DataKind::AssetHandle, value.to_owned()),
         ProofBlob => DataKey(DataKind::ProofBlob, value.to_owned()),
+        SoracloudRequest => DataKey(DataKind::SoracloudRequest, value.to_owned()),
+        SoracloudResponse => DataKey(DataKind::SoracloudResponse, value.to_owned()),
     }
 }
 
@@ -619,6 +625,20 @@ fn encode_pointer_tlv_bytes(kind: ir::DataRefKind, raw: &str) -> Option<Vec<u8>>
             let bytes = decode_hex_or_raw_bytes(raw).ok()?;
             let value: crate::axt::ProofBlob = decode_from_bytes(&bytes).ok()?;
             (PointerType::ProofBlob, to_bytes(&value).ok()?)
+        }
+        DRK::SoracloudRequest => {
+            let bytes = decode_hex_or_raw_bytes(raw).ok()?;
+            let value: iroha_data_model::soracloud::SoracloudHostRequestEnvelopeV1 =
+                decode_from_bytes(&bytes).ok()?;
+            value.validate().ok()?;
+            (PointerType::SoracloudRequest, to_bytes(&value).ok()?)
+        }
+        DRK::SoracloudResponse => {
+            let bytes = decode_hex_or_raw_bytes(raw).ok()?;
+            let value: iroha_data_model::soracloud::SoracloudHostResponseEnvelopeV1 =
+                decode_from_bytes(&bytes).ok()?;
+            value.validate().ok()?;
+            (PointerType::SoracloudResponse, to_bytes(&value).ok()?)
         }
     };
 
@@ -776,6 +796,8 @@ mod tests {
             (AxtDescriptor, PointerType::AxtDescriptor),
             (AssetHandle, PointerType::AssetHandle),
             (ProofBlob, PointerType::ProofBlob),
+            (SoracloudRequest, PointerType::SoracloudRequest),
+            (SoracloudResponse, PointerType::SoracloudResponse),
         ];
         for (kind, expected) in cases {
             let ty = pointer_type_for_kind(kind);
@@ -1131,6 +1153,13 @@ fn main() {
   escrow_cancel(name("aitai_offer"));
   escrow_open_dispute(name("aitai_offer"), evidence);
   escrow_resolve_dispute(name("aitai_offer"), 6, 4, evidence);
+  call escrow_open_offer(name("aitai_offer_call"), asset_definition("62Fk4FPcMuLvW5QjDGNF2a4jAmjM"), 11, evidence);
+  call escrow_accept(name("aitai_offer_call"));
+  call escrow_mark_payment_sent(name("aitai_offer_call"));
+  call escrow_release(name("aitai_offer_call"));
+  call escrow_cancel(name("aitai_offer_call"));
+  call escrow_open_dispute(name("aitai_offer_call"), evidence);
+  call escrow_resolve_dispute(name("aitai_offer_call"), 7, 4, evidence);
 }
 "#;
         let compiler = test_mode_compiler();
@@ -1171,6 +1200,3869 @@ fn main() {
                 "expected {label} syscall in compiled code"
             );
         }
+    }
+
+    #[test]
+    fn native_anonymous_escrow_builtins_emit_escrow_syscalls() {
+        let src = r#"
+fn main() {
+  let request = norito_bytes("00");
+  let evidence = norito_bytes("01");
+  anonymous_escrow_open_offer(request);
+  anonymous_escrow_accept(name("shielded_offer"));
+  anonymous_escrow_mark_payment_sent(name("shielded_offer"));
+  anonymous_escrow_release(request);
+  anonymous_escrow_cancel(request);
+  anonymous_escrow_open_dispute(name("shielded_offer"), evidence);
+  anonymous_escrow_resolve_dispute(request);
+  call anonymous_escrow_open_offer(request);
+  call anonymous_escrow_accept(name("shielded_offer_call"));
+  call anonymous_escrow_mark_payment_sent(name("shielded_offer_call"));
+  call anonymous_escrow_release(request);
+  call anonymous_escrow_cancel(request);
+  call anonymous_escrow_open_dispute(name("shielded_offer_call"), evidence);
+  call anonymous_escrow_resolve_dispute(request);
+}
+"#;
+        let compiler = test_mode_compiler();
+        let bytes = compiler
+            .compile_source(src)
+            .expect("compile native anonymous escrow builtins");
+        let parsed = ProgramMetadata::parse(&bytes).expect("parse metadata");
+        let code = &bytes[parsed.code_offset..];
+
+        for (syscall, label) in [
+            (
+                ivm_abi::syscalls::SYSCALL_ANONYMOUS_ESCROW_OPEN_OFFER,
+                "ANONYMOUS_ESCROW_OPEN_OFFER",
+            ),
+            (
+                ivm_abi::syscalls::SYSCALL_ANONYMOUS_ESCROW_ACCEPT,
+                "ANONYMOUS_ESCROW_ACCEPT",
+            ),
+            (
+                ivm_abi::syscalls::SYSCALL_ANONYMOUS_ESCROW_MARK_PAYMENT_SENT,
+                "ANONYMOUS_ESCROW_MARK_PAYMENT_SENT",
+            ),
+            (
+                ivm_abi::syscalls::SYSCALL_ANONYMOUS_ESCROW_RELEASE,
+                "ANONYMOUS_ESCROW_RELEASE",
+            ),
+            (
+                ivm_abi::syscalls::SYSCALL_ANONYMOUS_ESCROW_CANCEL,
+                "ANONYMOUS_ESCROW_CANCEL",
+            ),
+            (
+                ivm_abi::syscalls::SYSCALL_ANONYMOUS_ESCROW_OPEN_DISPUTE,
+                "ANONYMOUS_ESCROW_OPEN_DISPUTE",
+            ),
+            (
+                ivm_abi::syscalls::SYSCALL_ANONYMOUS_ESCROW_RESOLVE_DISPUTE,
+                "ANONYMOUS_ESCROW_RESOLVE_DISPUTE",
+            ),
+        ] {
+            let needle = encoding::wide::encode_sys(
+                instruction::wide::system::SCALL,
+                u8::try_from(syscall).expect("anonymous escrow syscall id fits in u8"),
+            )
+            .to_le_bytes();
+            assert!(
+                code.windows(needle.len()).any(|window| window == needle),
+                "expected {label} syscall in compiled code"
+            );
+        }
+    }
+
+    #[test]
+    fn escrow_builtins_reject_invalid_arguments() {
+        for (src, expected) in [
+            (
+                r#"
+fn main() {
+  escrow_open_offer(name("deal"), name("rose"), 10);
+}
+"#,
+                "escrow_open_offer expects (Name, AssetDefinitionId, numeric[, Blob|bytes evidence_hashes])",
+            ),
+            (
+                r#"
+fn main() {
+  call escrow_accept(1);
+}
+"#,
+                "escrow_accept expects (Name)",
+            ),
+            (
+                r#"
+fn main() {
+  escrow_open_dispute(name("deal"), 1);
+}
+"#,
+                "escrow_open_dispute expects (Name[, Blob|bytes evidence_hashes])",
+            ),
+            (
+                r#"
+fn main() {
+  call escrow_resolve_dispute(name("deal"), name("buyer"), 4);
+}
+"#,
+                "escrow_resolve_dispute expects (Name, numeric, numeric[, Blob|bytes evidence_hashes])",
+            ),
+            (
+                r#"
+fn main() {
+  anonymous_escrow_open_offer(name("deal"));
+}
+"#,
+                "anonymous_escrow_open_offer expects (Blob|bytes) Norito request payload",
+            ),
+            (
+                r#"
+fn main() {
+  call anonymous_escrow_accept(1);
+}
+"#,
+                "anonymous_escrow_accept expects (Name)",
+            ),
+            (
+                r#"
+fn main() {
+  anonymous_escrow_open_dispute(name("deal"), 1);
+}
+"#,
+                "anonymous_escrow_open_dispute expects (Name[, Blob|bytes evidence_hashes])",
+            ),
+        ] {
+            let parsed = parse(src).expect("parse invalid escrow source");
+            let err = analyze(&parsed).expect_err("semantic analysis should reject escrow args");
+            assert!(
+                err.message.contains(expected),
+                "expected error containing {expected:?}, got {}",
+                err.message
+            );
+        }
+    }
+
+    #[test]
+    fn soracloud_runtime_builtins_emit_soracloud_syscalls() {
+        let src = r#"
+fn main(request: SoracloudRequest) {
+  let _read_state = soracloud_read_committed_state(request);
+  let _mutation = soracloud_emit_state_mutation(request);
+  let _mailbox = soracloud_emit_mailbox_message(request);
+  let _journal = soracloud_append_journal(request);
+  let _checkpoint = soracloud_publish_checkpoint(request);
+  let _secret = soracloud_read_secret(request);
+  let _credential = soracloud_read_credential(request);
+  let _fetch = soracloud_egress_fetch(request);
+  let _config = soracloud_read_config(request);
+  let _secret_envelope = soracloud_read_secret_envelope(request);
+}
+"#;
+        let compiler = test_mode_compiler();
+        let bytes = compiler
+            .compile_source(src)
+            .expect("compile Soracloud runtime builtins");
+        let parsed = ProgramMetadata::parse(&bytes).expect("parse metadata");
+        let code = &bytes[parsed.code_offset..];
+
+        for (syscall, label) in [
+            (
+                ivm_abi::syscalls::SYSCALL_SORACLOUD_READ_COMMITTED_STATE,
+                "SORACLOUD_READ_COMMITTED_STATE",
+            ),
+            (
+                ivm_abi::syscalls::SYSCALL_SORACLOUD_EMIT_STATE_MUTATION,
+                "SORACLOUD_EMIT_STATE_MUTATION",
+            ),
+            (
+                ivm_abi::syscalls::SYSCALL_SORACLOUD_EMIT_MAILBOX_MESSAGE,
+                "SORACLOUD_EMIT_MAILBOX_MESSAGE",
+            ),
+            (
+                ivm_abi::syscalls::SYSCALL_SORACLOUD_APPEND_JOURNAL,
+                "SORACLOUD_APPEND_JOURNAL",
+            ),
+            (
+                ivm_abi::syscalls::SYSCALL_SORACLOUD_PUBLISH_CHECKPOINT,
+                "SORACLOUD_PUBLISH_CHECKPOINT",
+            ),
+            (
+                ivm_abi::syscalls::SYSCALL_SORACLOUD_READ_SECRET,
+                "SORACLOUD_READ_SECRET",
+            ),
+            (
+                ivm_abi::syscalls::SYSCALL_SORACLOUD_READ_CREDENTIAL,
+                "SORACLOUD_READ_CREDENTIAL",
+            ),
+            (
+                ivm_abi::syscalls::SYSCALL_SORACLOUD_EGRESS_FETCH,
+                "SORACLOUD_EGRESS_FETCH",
+            ),
+            (
+                ivm_abi::syscalls::SYSCALL_SORACLOUD_READ_CONFIG,
+                "SORACLOUD_READ_CONFIG",
+            ),
+            (
+                ivm_abi::syscalls::SYSCALL_SORACLOUD_READ_SECRET_ENVELOPE,
+                "SORACLOUD_READ_SECRET_ENVELOPE",
+            ),
+        ] {
+            let needle = encoding::wide::encode_sys(
+                instruction::wide::system::SCALL,
+                u8::try_from(syscall).expect("Soracloud syscall id fits in u8"),
+            )
+            .to_le_bytes();
+            assert!(
+                code.windows(needle.len()).any(|window| window == needle),
+                "expected {label} syscall in compiled code"
+            );
+        }
+    }
+
+    #[test]
+    fn soracloud_runtime_builtins_reject_norito_bytes_request_argument() {
+        let parsed = parse(
+            r#"
+fn main() {
+  let request = norito_bytes("00");
+  let _response = soracloud_read_config(request);
+}
+"#,
+        )
+        .expect("parse source");
+        let err = analyze(&parsed).expect_err("semantic analysis should reject request type");
+        assert!(
+            err.message
+                .contains("soracloud_read_config expects (SoracloudRequest)"),
+            "unexpected semantic error: {}",
+            err.message
+        );
+    }
+
+    #[test]
+    fn account_multisig_admin_builtins_emit_account_admin_syscalls() {
+        let account = sample_account_literal();
+        let src = format!(
+            r#"
+fn main() {{
+  let account = account_id("{account}");
+  let signatory = json("\"ed012059C8A4DA1EBB5380F74ABA51F502714652FDCCE9611FAFB9904E4A3C4D382774\"");
+  add_signatory(account, signatory);
+  remove_signatory(account, signatory);
+  set_account_quorum(account, 2);
+  call add_signatory(account, signatory);
+  call remove_signatory(account, signatory);
+  call set_account_quorum(account, 3);
+}}
+"#
+        );
+        let compiler = test_mode_compiler();
+        let (bytes, manifest) = compiler
+            .compile_source_with_manifest(&src)
+            .expect("compile account multisig admin builtins");
+        let parsed = ProgramMetadata::parse(&bytes).expect("parse metadata");
+        let code = &bytes[parsed.code_offset..];
+
+        for (syscall, label) in [
+            (ivm_abi::syscalls::SYSCALL_ADD_SIGNATORY, "ADD_SIGNATORY"),
+            (
+                ivm_abi::syscalls::SYSCALL_REMOVE_SIGNATORY,
+                "REMOVE_SIGNATORY",
+            ),
+            (
+                ivm_abi::syscalls::SYSCALL_SET_ACCOUNT_QUORUM,
+                "SET_ACCOUNT_QUORUM",
+            ),
+        ] {
+            let needle = encoding::wide::encode_sys(
+                instruction::wide::system::SCALL,
+                u8::try_from(syscall).expect("account admin syscall id fits in u8"),
+            )
+            .to_le_bytes();
+            assert!(
+                code.windows(needle.len()).any(|window| window == needle),
+                "expected {label} syscall in compiled code"
+            );
+        }
+
+        let hints = manifest
+            .access_set_hints
+            .expect("expected account multisig access hints");
+        assert!(hints.read_keys.contains(&format!("account:{account}")));
+        assert!(hints.write_keys.contains(&format!("account:{account}")));
+        assert!(!hints.read_keys.contains(&GLOBAL_WILDCARD_KEY.to_string()));
+        assert!(!hints.write_keys.contains(&GLOBAL_WILDCARD_KEY.to_string()));
+    }
+
+    #[test]
+    fn account_multisig_admin_builtins_reject_invalid_arguments() {
+        for (src, expected) in [
+            (
+                r#"
+fn main(account: AccountId) {
+  add_signatory(account, name("not_json"));
+}
+"#,
+                "add_signatory expects (AccountId, Json)",
+            ),
+            (
+                r#"
+fn main(account: AccountId) {
+  call set_account_quorum(account, json("{}"));
+}
+"#,
+                "set_account_quorum expects (AccountId, numeric)",
+            ),
+        ] {
+            let parsed = parse(src).expect("parse source");
+            let err =
+                analyze(&parsed).expect_err("semantic analysis should reject account admin args");
+            assert!(
+                err.message.contains(expected),
+                "expected `{expected}`, got `{}`",
+                err.message
+            );
+        }
+    }
+
+    #[test]
+    fn account_balance_query_builtin_emits_balance_syscall_and_exact_reads() {
+        let account = sample_account_literal();
+        let asset_definition = "62Fk4FPcMuLvW5QjDGNF2a4jAmjM";
+        let src = format!(
+            r#"
+view fn read() -> Balance {{
+  let account = account_id("{account}");
+  let asset = asset_definition("{asset_definition}");
+  return get_account_balance(account, asset);
+}}
+"#
+        );
+        let compiler = test_mode_compiler();
+        let (bytes, manifest) = compiler
+            .compile_source_with_manifest(&src)
+            .expect("compile account balance query builtin");
+        let parsed = ProgramMetadata::parse(&bytes).expect("parse metadata");
+        let code = &bytes[parsed.code_offset..];
+        let needle = encoding::wide::encode_sys(
+            instruction::wide::system::SCALL,
+            u8::try_from(ivm_abi::syscalls::SYSCALL_GET_ACCOUNT_BALANCE)
+                .expect("account balance syscall id fits in u8"),
+        )
+        .to_le_bytes();
+
+        assert!(
+            code.windows(needle.len()).any(|window| window == needle),
+            "expected GET_ACCOUNT_BALANCE syscall in compiled code"
+        );
+
+        let entrypoints = manifest.entrypoints.expect("entrypoints must be present");
+        let read = entrypoints
+            .iter()
+            .find(|entry| entry.name == "read")
+            .expect("read entrypoint");
+        assert_eq!(read.access_hints_complete, Some(true));
+        assert!(read.access_hints_skipped.is_empty());
+        assert!(read.write_keys.is_empty());
+        assert!(read.read_keys.contains(&format!("account:{account}")));
+        assert!(
+            read.read_keys
+                .contains(&format!("asset:{asset_definition}#{account}"))
+        );
+        assert!(
+            read.read_keys
+                .contains(&format!("asset_def:{asset_definition}"))
+        );
+    }
+
+    #[test]
+    fn account_balance_query_builtin_rejects_invalid_arguments() {
+        let parsed = parse(
+            r#"
+fn main(account: AccountId) {
+  let _balance = get_account_balance(account, name("not_asset"));
+}
+"#,
+        )
+        .expect("parse source");
+        let err =
+            analyze(&parsed).expect_err("semantic analysis should reject account balance args");
+        assert!(
+            err.message
+                .contains("get_account_balance expects (AccountId, AssetDefinitionId)"),
+            "unexpected semantic error: {}",
+            err.message
+        );
+    }
+
+    #[test]
+    fn set_account_detail_builtin_emits_syscall_and_exact_access() {
+        let account = sample_account_literal();
+        let src = format!(
+            r#"
+fn main() {{
+  set_account_detail(account_id("{account}"), name("status"), json("{{}}"));
+  call set_account_detail(account_id("{account}"), name("mirror"), json("{{}}"));
+}}
+"#
+        );
+        let compiler = test_mode_compiler();
+        let (bytes, manifest) = compiler
+            .compile_source_with_manifest(&src)
+            .expect("compile set_account_detail builtin");
+        let parsed = ProgramMetadata::parse(&bytes).expect("parse metadata");
+        let code = &bytes[parsed.code_offset..];
+
+        for (syscall, label) in [
+            (
+                ivm_abi::syscalls::SYSCALL_INPUT_PUBLISH_TLV,
+                "INPUT_PUBLISH_TLV",
+            ),
+            (
+                ivm_abi::syscalls::SYSCALL_SET_ACCOUNT_DETAIL,
+                "SET_ACCOUNT_DETAIL",
+            ),
+        ] {
+            let needle = encoding::wide::encode_sys(
+                instruction::wide::system::SCALL,
+                u8::try_from(syscall).expect("account-detail syscall id fits in u8"),
+            )
+            .to_le_bytes();
+            assert!(
+                code.windows(needle.len()).any(|window| window == needle),
+                "expected {label} syscall in compiled code"
+            );
+        }
+
+        let hints = manifest
+            .access_set_hints
+            .expect("expected account detail access hints");
+        assert!(hints.read_keys.contains(&format!("account:{account}")));
+        for key in ["status", "mirror"] {
+            let detail = format!("account.detail:{account}:{key}");
+            assert!(hints.read_keys.contains(&detail));
+            assert!(hints.write_keys.contains(&detail));
+        }
+        assert!(!hints.read_keys.contains(&GLOBAL_WILDCARD_KEY.to_string()));
+        assert!(!hints.write_keys.contains(&GLOBAL_WILDCARD_KEY.to_string()));
+    }
+
+    #[test]
+    fn set_account_detail_builtin_rejects_invalid_arguments() {
+        for (src, expected) in [
+            (
+                r#"
+fn main(account: AccountId) {
+  set_account_detail(account, 1, json("{}"));
+}
+"#,
+                "set_account_detail expects (AccountId, Name, Json)",
+            ),
+            (
+                r#"
+fn main(account: AccountId) {
+  call set_account_detail(account, name("status"), name("not_json"));
+}
+"#,
+                "set_account_detail expects (AccountId, Name, Json)",
+            ),
+        ] {
+            let parsed = parse(src).expect("parse source");
+            let err =
+                analyze(&parsed).expect_err("semantic analysis should reject account detail args");
+            assert!(
+                err.message.contains(expected),
+                "expected `{expected}`, got `{}`",
+                err.message
+            );
+        }
+    }
+
+    #[test]
+    fn native_asset_operation_builtins_emit_syscalls_and_exact_access() {
+        let from = sample_account_id();
+        let to = sample_account_id_alt();
+        let from_literal = from.to_string();
+        let to_literal = to.to_string();
+        let asset_literal = "62Fk4FPcMuLvW5QjDGNF2a4jAmjM";
+        let asset_definition =
+            iroha_data_model::asset::id::AssetDefinitionId::parse_address_literal(asset_literal)
+                .expect("asset definition literal");
+        let from_asset =
+            iroha_data_model::asset::id::AssetId::of(asset_definition.clone(), from.clone());
+        let to_asset =
+            iroha_data_model::asset::id::AssetId::of(asset_definition.clone(), to.clone());
+        let src = format!(
+            r#"
+fn main() {{
+  transfer_asset(account_id("{from_literal}"), account_id("{to_literal}"), asset_definition("{asset_literal}"), 1);
+  mint_asset(account_id("{to_literal}"), asset_definition("{asset_literal}"), 2);
+  burn_asset(account_id("{from_literal}"), asset_definition("{asset_literal}"), 1);
+  call transfer_asset(account_id("{to_literal}"), account_id("{from_literal}"), asset_definition("{asset_literal}"), 1);
+  call mint_asset(account_id("{from_literal}"), asset_definition("{asset_literal}"), 2);
+  call burn_asset(account_id("{to_literal}"), asset_definition("{asset_literal}"), 1);
+}}
+"#
+        );
+        let compiler = test_mode_compiler();
+        let (bytes, manifest) = compiler
+            .compile_source_with_manifest(&src)
+            .expect("compile native asset operation builtins");
+        let parsed = ProgramMetadata::parse(&bytes).expect("parse metadata");
+        let code = &bytes[parsed.code_offset..];
+
+        for (syscall, label) in [
+            (ivm_abi::syscalls::SYSCALL_TRANSFER_ASSET, "TRANSFER_ASSET"),
+            (ivm_abi::syscalls::SYSCALL_MINT_ASSET, "MINT_ASSET"),
+            (ivm_abi::syscalls::SYSCALL_BURN_ASSET, "BURN_ASSET"),
+        ] {
+            let needle = encoding::wide::encode_sys(
+                instruction::wide::system::SCALL,
+                u8::try_from(syscall).expect("asset operation syscall id fits in u8"),
+            )
+            .to_le_bytes();
+            assert!(
+                code.windows(needle.len()).any(|window| window == needle),
+                "expected {label} syscall in compiled code"
+            );
+        }
+
+        let hints = manifest
+            .access_set_hints
+            .expect("expected asset operation access hints");
+        assert!(
+            hints
+                .read_keys
+                .contains(&format!("asset_def:{asset_definition}"))
+        );
+        for key in [format!("account:{from}"), format!("account:{to}")] {
+            assert!(hints.read_keys.contains(&key), "missing read key {key}");
+        }
+        for key in [format!("asset:{from_asset}"), format!("asset:{to_asset}")] {
+            assert!(hints.read_keys.contains(&key), "missing read key {key}");
+            assert!(hints.write_keys.contains(&key), "missing write key {key}");
+        }
+        assert!(!hints.read_keys.contains(&GLOBAL_WILDCARD_KEY.to_string()));
+        assert!(!hints.write_keys.contains(&GLOBAL_WILDCARD_KEY.to_string()));
+    }
+
+    #[test]
+    fn native_asset_operation_builtins_reject_invalid_arguments() {
+        for (src, expected) in [
+            (
+                r#"
+fn main(account: AccountId) {
+  transfer_asset(account, account, name("not_asset"), 1);
+}
+"#,
+                "transfer_asset expects (AccountId, AccountId, AssetDefinitionId, numeric)",
+            ),
+            (
+                r#"
+fn main(account: AccountId, asset: AssetDefinitionId) {
+  call mint_asset(account, asset, json("{}"));
+}
+"#,
+                "mint_asset expects (AccountId, AssetDefinitionId, numeric)",
+            ),
+            (
+                r#"
+fn main(account: AccountId, asset: AssetDefinitionId) {
+  call burn_asset(account, name("not_asset"), 1);
+}
+"#,
+                "burn_asset expects (AccountId, AssetDefinitionId, numeric)",
+            ),
+        ] {
+            let parsed = parse(src).expect("parse source");
+            let err =
+                analyze(&parsed).expect_err("semantic analysis should reject asset operation args");
+            assert!(
+                err.message.contains(expected),
+                "expected `{expected}`, got `{}`",
+                err.message
+            );
+        }
+    }
+
+    #[test]
+    fn nft_asset_operation_builtins_emit_syscalls_and_exact_access() {
+        let owner = sample_account_id();
+        let recipient = sample_account_id_alt();
+        let owner_literal = owner.to_string();
+        let recipient_literal = recipient.to_string();
+        let nft = "n0$wonderland.universal";
+        let nft_alt = "n1$wonderland.universal";
+        let src = format!(
+            r#"
+fn main() {{
+  nft_mint_asset(nft_id("{nft}"), account_id("{owner_literal}"));
+  nft_set_metadata(nft_id("{nft}"), name("issued"), json("{{\"meta\":1}}"));
+  nft_transfer_asset(account_id("{owner_literal}"), nft_id("{nft}"), account_id("{recipient_literal}"));
+  nft_burn_asset(nft_id("{nft}"));
+  call nft_mint_asset(nft_id("{nft_alt}"), account_id("{recipient_literal}"));
+  call nft_set_metadata(nft_id("{nft_alt}"), name("mirror"), json("{{\"meta\":2}}"));
+  call nft_transfer_asset(account_id("{recipient_literal}"), nft_id("{nft_alt}"), account_id("{owner_literal}"));
+  call nft_burn_asset(nft_id("{nft_alt}"));
+}}
+"#
+        );
+        let compiler = test_mode_compiler();
+        let (bytes, manifest) = compiler
+            .compile_source_with_manifest(&src)
+            .expect("compile NFT asset operation builtins");
+        let parsed = ProgramMetadata::parse(&bytes).expect("parse metadata");
+        let code = &bytes[parsed.code_offset..];
+
+        for (syscall, label) in [
+            (ivm_abi::syscalls::SYSCALL_NFT_MINT_ASSET, "NFT_MINT_ASSET"),
+            (
+                ivm_abi::syscalls::SYSCALL_NFT_SET_METADATA,
+                "NFT_SET_METADATA",
+            ),
+            (
+                ivm_abi::syscalls::SYSCALL_NFT_TRANSFER_ASSET,
+                "NFT_TRANSFER_ASSET",
+            ),
+            (ivm_abi::syscalls::SYSCALL_NFT_BURN_ASSET, "NFT_BURN_ASSET"),
+        ] {
+            let needle = encoding::wide::encode_sys(
+                instruction::wide::system::SCALL,
+                u8::try_from(syscall).expect("NFT operation syscall id fits in u8"),
+            )
+            .to_le_bytes();
+            assert!(
+                code.windows(needle.len()).any(|window| window == needle),
+                "expected {label} syscall in compiled code"
+            );
+        }
+
+        let hints = manifest
+            .access_set_hints
+            .expect("expected NFT operation access hints");
+        assert!(hints.read_keys.contains(&NFT_COARSE_KEY.to_string()));
+        assert!(hints.write_keys.contains(&NFT_COARSE_KEY.to_string()));
+        for key in [
+            format!("account:{owner}"),
+            format!("account:{recipient}"),
+            format!("nft:{nft}"),
+            format!("nft:{nft_alt}"),
+        ] {
+            assert!(hints.read_keys.contains(&key), "missing read key {key}");
+        }
+        for key in [format!("nft:{nft}"), format!("nft:{nft_alt}")] {
+            assert!(hints.write_keys.contains(&key), "missing write key {key}");
+        }
+        for detail in [
+            format!("nft.detail:{nft}:issued"),
+            format!("nft.detail:{nft_alt}:mirror"),
+        ] {
+            assert!(
+                hints.read_keys.contains(&detail),
+                "missing read detail {detail}"
+            );
+            assert!(
+                hints.write_keys.contains(&detail),
+                "missing write detail {detail}"
+            );
+        }
+        assert!(!hints.read_keys.contains(&GLOBAL_WILDCARD_KEY.to_string()));
+        assert!(!hints.write_keys.contains(&GLOBAL_WILDCARD_KEY.to_string()));
+    }
+
+    #[test]
+    fn nft_asset_operation_builtins_reject_invalid_arguments() {
+        for (src, expected) in [
+            (
+                r#"
+fn main(account: AccountId) {
+  nft_mint_asset(name("bad"), account);
+}
+"#,
+                "nft_mint_asset expects (NftId, AccountId)",
+            ),
+            (
+                r#"
+fn main(nft: NftId) {
+  call nft_set_metadata(nft, 1, json("{}"));
+}
+"#,
+                "nft_set_metadata expects (NftId, Name, Json)",
+            ),
+            (
+                r#"
+fn main() {
+  nft_burn_asset(name("bad"));
+}
+"#,
+                "nft_burn_asset expects (NftId)",
+            ),
+            (
+                r#"
+fn main(account: AccountId, nft: NftId) {
+  call nft_transfer_asset(account, nft, name("bad"));
+}
+"#,
+                "nft_transfer_asset expects (AccountId, NftId, AccountId)",
+            ),
+        ] {
+            let parsed = parse(src).expect("parse source");
+            let err =
+                analyze(&parsed).expect_err("semantic analysis should reject NFT operation args");
+            assert!(
+                err.message.contains(expected),
+                "expected `{expected}`, got `{}`",
+                err.message
+            );
+        }
+    }
+
+    #[test]
+    fn lifecycle_builtins_emit_syscalls_and_exact_access() {
+        let owner = sample_account_id();
+        let recipient = sample_account_id_alt();
+        let owner_literal = owner.to_string();
+        let recipient_literal = recipient.to_string();
+        let domain = "wonderland.universal";
+        let asset_literal = "62Fk4FPcMuLvW5QjDGNF2a4jAmjM";
+        let asset_definition =
+            iroha_data_model::asset::id::AssetDefinitionId::parse_address_literal(asset_literal)
+                .expect("asset definition literal");
+        let owner_asset =
+            iroha_data_model::asset::id::AssetId::of(asset_definition.clone(), owner.clone());
+        let src = format!(
+            r#"
+fn main() {{
+  let domain_id = domain("{domain}");
+  let owner = account_id("{owner_literal}");
+  let recipient = account_id("{recipient_literal}");
+  let asset = asset_definition("{asset_literal}");
+  register_domain(domain_id);
+  unregister_domain(domain_id);
+  transfer_domain(owner, domain_id, recipient);
+  register_account(owner);
+  unregister_account(recipient);
+  register_asset(asset, "ROSE", 0, 1);
+  create_new_asset(asset, "ROSE", 7, owner, 1);
+  unregister_asset(asset);
+  call register_domain(domain_id);
+  call unregister_domain(domain_id);
+  call transfer_domain(owner, domain_id, recipient);
+  call register_account(recipient);
+  call unregister_account(owner);
+  call register_asset(asset, "ROSE", 0, 1);
+  call create_new_asset(asset, "ROSE", 3, owner, 1);
+  call unregister_asset(asset);
+}}
+"#
+        );
+        let compiler = test_mode_compiler();
+        let (bytes, manifest) = compiler
+            .compile_source_with_manifest(&src)
+            .expect("compile lifecycle builtins");
+        let parsed = ProgramMetadata::parse(&bytes).expect("parse metadata");
+        let code = &bytes[parsed.code_offset..];
+
+        for (syscall, label) in [
+            (
+                ivm_abi::syscalls::SYSCALL_REGISTER_DOMAIN,
+                "REGISTER_DOMAIN",
+            ),
+            (
+                ivm_abi::syscalls::SYSCALL_UNREGISTER_DOMAIN,
+                "UNREGISTER_DOMAIN",
+            ),
+            (
+                ivm_abi::syscalls::SYSCALL_TRANSFER_DOMAIN,
+                "TRANSFER_DOMAIN",
+            ),
+            (
+                ivm_abi::syscalls::SYSCALL_REGISTER_ACCOUNT,
+                "REGISTER_ACCOUNT",
+            ),
+            (
+                ivm_abi::syscalls::SYSCALL_UNREGISTER_ACCOUNT,
+                "UNREGISTER_ACCOUNT",
+            ),
+            (ivm_abi::syscalls::SYSCALL_REGISTER_ASSET, "REGISTER_ASSET"),
+            (
+                ivm_abi::syscalls::SYSCALL_UNREGISTER_ASSET,
+                "UNREGISTER_ASSET",
+            ),
+            (ivm_abi::syscalls::SYSCALL_MINT_ASSET, "MINT_ASSET"),
+        ] {
+            let needle = encoding::wide::encode_sys(
+                instruction::wide::system::SCALL,
+                u8::try_from(syscall).expect("lifecycle syscall id fits in u8"),
+            )
+            .to_le_bytes();
+            assert!(
+                code.windows(needle.len()).any(|window| window == needle),
+                "expected {label} syscall in compiled code"
+            );
+        }
+
+        let hints = manifest
+            .access_set_hints
+            .expect("expected lifecycle access hints");
+        for key in [
+            format!("domain:{domain}"),
+            format!("account:{owner}"),
+            format!("account:{recipient}"),
+            format!("asset_def:{asset_definition}"),
+            format!("asset:{owner_asset}"),
+        ] {
+            assert!(hints.read_keys.contains(&key), "missing read key {key}");
+        }
+        for key in [
+            format!("domain:{domain}"),
+            format!("account:{owner}"),
+            format!("account:{recipient}"),
+            format!("asset_def:{asset_definition}"),
+            format!("asset:{owner_asset}"),
+        ] {
+            assert!(hints.write_keys.contains(&key), "missing write key {key}");
+        }
+        assert!(!hints.read_keys.contains(&GLOBAL_WILDCARD_KEY.to_string()));
+        assert!(!hints.write_keys.contains(&GLOBAL_WILDCARD_KEY.to_string()));
+    }
+
+    #[test]
+    fn lifecycle_builtins_reject_invalid_arguments() {
+        for (src, expected) in [
+            (
+                r#"
+fn main() {
+  call register_domain(name("bad"));
+}
+"#,
+                "register_domain expects (DomainId)",
+            ),
+            (
+                r#"
+fn main() {
+  register_account(name("bad"));
+}
+"#,
+                "register_account expects (AccountId)",
+            ),
+            (
+                r#"
+fn main() {
+  unregister_asset(name("bad"));
+}
+"#,
+                "unregister_asset expects (AssetDefinitionId)",
+            ),
+            (
+                r#"
+fn main(asset: AssetDefinitionId) {
+  register_asset(name("bad"), "ROSE", 1, 0);
+}
+"#,
+                "register_asset expects (AssetDefinitionId, string, int, int)",
+            ),
+            (
+                r#"
+fn main(asset: AssetDefinitionId, account: AccountId) {
+  call create_new_asset(asset, json("{}"), 1, account, 0);
+}
+"#,
+                "create_new_asset expects (AssetDefinitionId, string, int, AccountId, int)",
+            ),
+            (
+                r#"
+fn main(account: AccountId) {
+  transfer_domain(account, json("{}"), account);
+}
+"#,
+                "transfer_domain expects (AccountId, DomainId, AccountId)",
+            ),
+        ] {
+            let parsed = parse(src).expect("parse source");
+            let err = analyze(&parsed)
+                .expect_err("semantic analysis should reject lifecycle operation args");
+            assert!(
+                err.message.contains(expected),
+                "expected `{expected}`, got `{}`",
+                err.message
+            );
+        }
+    }
+
+    #[test]
+    fn peer_trigger_management_builtins_emit_syscalls() {
+        let src = r#"
+fn main() {
+  let trigger = name("wake");
+  register_peer(json("{}"));
+  unregister_peer(json("{}"));
+  create_trigger(json("{}"));
+  register_trigger(json("{}"));
+  remove_trigger(trigger);
+  unregister_trigger(trigger);
+  set_trigger_enabled(trigger, 1);
+  call register_peer(json("{}"));
+  call unregister_peer(json("{}"));
+  call create_trigger(json("{}"));
+  call register_trigger(json("{}"));
+  call remove_trigger(trigger);
+  call unregister_trigger(trigger);
+  call set_trigger_enabled(trigger, 0);
+}
+"#;
+        let compiler = test_mode_compiler();
+        let bytes = compiler
+            .compile_source(src)
+            .expect("compile peer/trigger management builtins");
+        let parsed = ProgramMetadata::parse(&bytes).expect("parse metadata");
+        let code = &bytes[parsed.code_offset..];
+
+        for (syscall, label) in [
+            (ivm_abi::syscalls::SYSCALL_REGISTER_PEER, "REGISTER_PEER"),
+            (
+                ivm_abi::syscalls::SYSCALL_UNREGISTER_PEER,
+                "UNREGISTER_PEER",
+            ),
+            (ivm_abi::syscalls::SYSCALL_CREATE_TRIGGER, "CREATE_TRIGGER"),
+            (ivm_abi::syscalls::SYSCALL_REMOVE_TRIGGER, "REMOVE_TRIGGER"),
+            (
+                ivm_abi::syscalls::SYSCALL_SET_TRIGGER_ENABLED,
+                "SET_TRIGGER_ENABLED",
+            ),
+        ] {
+            let needle = encoding::wide::encode_sys(
+                instruction::wide::system::SCALL,
+                u8::try_from(syscall).expect("peer/trigger syscall id fits in u8"),
+            )
+            .to_le_bytes();
+            assert!(
+                code.windows(needle.len()).any(|window| window == needle),
+                "expected {label} syscall in compiled code"
+            );
+        }
+    }
+
+    #[test]
+    fn peer_trigger_management_builtins_report_exact_trigger_access() {
+        let src = r#"
+fn main() {
+  let trigger = name("wake");
+  remove_trigger(trigger);
+  unregister_trigger(trigger);
+  set_trigger_enabled(trigger, 1);
+  call remove_trigger(trigger);
+  call unregister_trigger(trigger);
+  call set_trigger_enabled(trigger, 0);
+}
+"#;
+        let compiler = test_mode_compiler();
+        let (_bytes, manifest) = compiler
+            .compile_source_with_manifest(src)
+            .expect("compile trigger access builtins");
+        let hints = manifest
+            .access_set_hints
+            .expect("expected trigger access hints");
+        let trigger_key = "trigger:wake".to_string();
+        assert!(hints.read_keys.contains(&trigger_key));
+        assert!(hints.write_keys.contains(&trigger_key));
+        assert!(!hints.read_keys.contains(&GLOBAL_WILDCARD_KEY.to_string()));
+        assert!(!hints.write_keys.contains(&GLOBAL_WILDCARD_KEY.to_string()));
+    }
+
+    #[test]
+    fn role_permission_management_builtins_emit_syscalls_and_exact_access() {
+        let account = sample_account_id();
+        let account_literal = account.to_string();
+        let src = format!(
+            r#"
+fn main() {{
+  let account = account_id("{account_literal}");
+  let role = name("auditor");
+  let perm = name("read_blocks");
+  create_role(role, json("{{}}"));
+  grant_role(account, role);
+  revoke_role(account, role);
+  grant_permission(account, perm);
+  revoke_permission(account, perm);
+  delete_role(role);
+  call create_role(role, json("{{}}"));
+  call grant_role(account, role);
+  call revoke_role(account, role);
+  call grant_permission(account, perm);
+  call revoke_permission(account, perm);
+  call delete_role(role);
+}}
+"#
+        );
+        let compiler = test_mode_compiler();
+        let (bytes, manifest) = compiler
+            .compile_source_with_manifest(&src)
+            .expect("compile role/permission management builtins");
+        let parsed = ProgramMetadata::parse(&bytes).expect("parse metadata");
+        let code = &bytes[parsed.code_offset..];
+
+        for (syscall, label) in [
+            (ivm_abi::syscalls::SYSCALL_CREATE_ROLE, "CREATE_ROLE"),
+            (ivm_abi::syscalls::SYSCALL_DELETE_ROLE, "DELETE_ROLE"),
+            (ivm_abi::syscalls::SYSCALL_GRANT_ROLE, "GRANT_ROLE"),
+            (ivm_abi::syscalls::SYSCALL_REVOKE_ROLE, "REVOKE_ROLE"),
+            (
+                ivm_abi::syscalls::SYSCALL_GRANT_PERMISSION,
+                "GRANT_PERMISSION",
+            ),
+            (
+                ivm_abi::syscalls::SYSCALL_REVOKE_PERMISSION,
+                "REVOKE_PERMISSION",
+            ),
+        ] {
+            let needle = encoding::wide::encode_sys(
+                instruction::wide::system::SCALL,
+                u8::try_from(syscall).expect("role/permission syscall id fits in u8"),
+            )
+            .to_le_bytes();
+            assert!(
+                code.windows(needle.len()).any(|window| window == needle),
+                "expected {label} syscall in compiled code"
+            );
+        }
+
+        let hints = manifest
+            .access_set_hints
+            .expect("expected role/permission access hints");
+        for key in [format!("account:{account}"), "role:auditor".to_string()] {
+            assert!(hints.read_keys.contains(&key), "missing read key {key}");
+        }
+        for key in [
+            format!("account:{account}"),
+            "role:auditor".to_string(),
+            format!("role.binding:{account}:auditor"),
+            format!("perm.account:{account}:read_blocks"),
+        ] {
+            assert!(hints.write_keys.contains(&key), "missing write key {key}");
+        }
+        assert!(!hints.read_keys.contains(&GLOBAL_WILDCARD_KEY.to_string()));
+        assert!(!hints.write_keys.contains(&GLOBAL_WILDCARD_KEY.to_string()));
+    }
+
+    #[test]
+    fn role_permission_peer_trigger_builtins_reject_invalid_arguments() {
+        for (src, expected) in [
+            (
+                r#"
+fn main() {
+  call register_peer(name("bad"));
+}
+"#,
+                "register_peer expects (Json)",
+            ),
+            (
+                r#"
+fn main() {
+  create_trigger(name("bad"));
+}
+"#,
+                "create_trigger expects (Json)",
+            ),
+            (
+                r#"
+fn main() {
+  call unregister_trigger(json("{}"));
+}
+"#,
+                "unregister_trigger expects (Name)",
+            ),
+            (
+                r#"
+fn main() {
+  set_trigger_enabled(name("wake"), json("{}"));
+}
+"#,
+                "set_trigger_enabled expects (Name, int)",
+            ),
+            (
+                r#"
+fn main() {
+  create_role(name("auditor"), name("read_blocks"));
+}
+"#,
+                "create_role expects (Name, Json)",
+            ),
+            (
+                r#"
+fn main() {
+  call delete_role(json("{}"));
+}
+"#,
+                "delete_role expects (Name)",
+            ),
+            (
+                r#"
+fn main(account: AccountId) {
+  grant_role(account, json("{}"));
+}
+"#,
+                "grant/revoke_role expects (AccountId, Name)",
+            ),
+            (
+                r#"
+fn main(account: AccountId) {
+  call revoke_permission(account, 1);
+}
+"#,
+                "grant/revoke_permission expects (AccountId, Name|Json)",
+            ),
+        ] {
+            let parsed = parse(src).expect("parse source");
+            let err = analyze(&parsed)
+                .expect_err("semantic analysis should reject management helper args");
+            assert!(
+                err.message.contains(expected),
+                "expected `{expected}`, got `{}`",
+                err.message
+            );
+        }
+    }
+
+    #[test]
+    fn public_input_builtin_emits_public_input_syscall_and_complete_access() {
+        let src = r#"
+view fn read_input() -> bytes {
+  return get_public_input(name("proof_payload"));
+}
+"#;
+        let compiler = test_mode_compiler();
+        let (bytes, manifest) = compiler
+            .compile_source_with_manifest(src)
+            .expect("compile get_public_input builtin");
+        let parsed = ProgramMetadata::parse(&bytes).expect("parse metadata");
+        let code = &bytes[parsed.code_offset..];
+
+        for (syscall, label) in [
+            (
+                ivm_abi::syscalls::SYSCALL_INPUT_PUBLISH_TLV,
+                "INPUT_PUBLISH_TLV",
+            ),
+            (
+                ivm_abi::syscalls::SYSCALL_GET_PUBLIC_INPUT,
+                "GET_PUBLIC_INPUT",
+            ),
+        ] {
+            let needle = encoding::wide::encode_sys(
+                instruction::wide::system::SCALL,
+                u8::try_from(syscall).expect("public-input syscall id fits in u8"),
+            )
+            .to_le_bytes();
+            assert!(
+                code.windows(needle.len()).any(|window| window == needle),
+                "expected {label} syscall in compiled code"
+            );
+        }
+
+        let entrypoints = manifest.entrypoints.expect("entrypoints must be present");
+        let read_input = entrypoints
+            .iter()
+            .find(|entry| entry.name == "read_input")
+            .expect("read_input entrypoint");
+        assert_ne!(read_input.access_hints_complete, Some(false));
+        assert!(read_input.access_hints_skipped.is_empty());
+        assert!(read_input.read_keys.is_empty());
+        assert!(read_input.write_keys.is_empty());
+    }
+
+    #[test]
+    fn public_input_builtin_rejects_invalid_arguments() {
+        let parsed = parse(
+            r#"
+fn main() {
+  let _payload = get_public_input(1);
+}
+"#,
+        )
+        .expect("parse source");
+        let err =
+            analyze(&parsed).expect_err("semantic analysis should reject public input key type");
+        assert!(
+            err.message.contains("get_public_input expects (Name)"),
+            "unexpected semantic error: {}",
+            err.message
+        );
+    }
+
+    #[test]
+    fn debug_builtins_emit_debug_syscalls_and_complete_access() {
+        let src = r#"
+view fn inspect() -> int {
+  debug_print(42);
+  debug_log(json!{ status: "ok" });
+  debug_log(blob("hello"));
+  debug_log(norito_bytes("00"));
+  return 1;
+}
+"#;
+        let compiler = test_mode_compiler();
+        let (bytes, manifest) = compiler
+            .compile_source_with_manifest(src)
+            .expect("compile debug builtins");
+        let parsed = ProgramMetadata::parse(&bytes).expect("parse metadata");
+        let code = &bytes[parsed.code_offset..];
+
+        for (syscall, label) in [
+            (ivm_abi::syscalls::SYSCALL_DEBUG_PRINT, "DEBUG_PRINT"),
+            (ivm_abi::syscalls::SYSCALL_DEBUG_LOG, "DEBUG_LOG"),
+        ] {
+            let needle = encoding::wide::encode_sys(
+                instruction::wide::system::SCALL,
+                u8::try_from(syscall).expect("debug syscall id fits in u8"),
+            )
+            .to_le_bytes();
+            assert!(
+                code.windows(needle.len()).any(|window| window == needle),
+                "expected {label} syscall in compiled code"
+            );
+        }
+
+        let publish_needle = encoding::wide::encode_sys(
+            instruction::wide::system::SCALL,
+            ivm_abi::syscalls::SYSCALL_INPUT_PUBLISH_TLV as u8,
+        )
+        .to_le_bytes();
+        assert!(
+            !code
+                .windows(publish_needle.len())
+                .any(|window| window == publish_needle),
+            "debug helpers must not publish host input TLVs"
+        );
+
+        let entrypoints = manifest.entrypoints.expect("entrypoints must be present");
+        let inspect = entrypoints
+            .iter()
+            .find(|entry| entry.name == "inspect")
+            .expect("inspect entrypoint");
+        assert_ne!(inspect.access_hints_complete, Some(false));
+        assert!(inspect.access_hints_skipped.is_empty());
+        assert!(inspect.read_keys.is_empty());
+        assert!(inspect.write_keys.is_empty());
+    }
+
+    #[test]
+    fn debug_builtins_reject_invalid_arguments() {
+        for (src, expected) in [
+            (
+                r#"
+fn main() {
+  debug_print(name("not_int"));
+}
+"#,
+                "debug_print expects (int value)",
+            ),
+            (
+                r#"
+fn main() {
+  debug_log(name("not_payload"));
+}
+"#,
+                "debug_log expects (Json|Blob|bytes payload)",
+            ),
+        ] {
+            let parsed = parse(src).expect("parse source");
+            let err = analyze(&parsed).expect_err("semantic analysis should reject invalid args");
+            assert!(
+                err.message.contains(expected),
+                "expected `{expected}`, got `{}`",
+                err.message
+            );
+        }
+    }
+
+    #[test]
+    fn assertion_logging_builtins_emit_abort_and_log_syscalls() {
+        let src = r#"
+view fn inspect() -> int {
+  info("ready");
+  info(7);
+  assert(true);
+  require(true);
+  assert_eq(1, 1);
+  return 1;
+}
+"#;
+        let compiler = test_mode_compiler();
+        let (bytes, manifest) = compiler
+            .compile_source_with_manifest(src)
+            .expect("compile assertion/logging builtins");
+        let parsed = ProgramMetadata::parse(&bytes).expect("parse metadata");
+        let code = &bytes[parsed.code_offset..];
+
+        for (syscall, label) in [
+            (ivm_abi::syscalls::SYSCALL_DEBUG_LOG, "DEBUG_LOG"),
+            (ivm_abi::syscalls::SYSCALL_ABORT, "ABORT"),
+        ] {
+            let needle = encoding::wide::encode_sys(
+                instruction::wide::system::SCALL,
+                u8::try_from(syscall).expect("assertion/logging syscall id fits in u8"),
+            )
+            .to_le_bytes();
+            assert!(
+                code.windows(needle.len()).any(|window| window == needle),
+                "expected {label} syscall in compiled code"
+            );
+        }
+
+        let entrypoints = manifest.entrypoints.expect("entrypoints must be present");
+        let inspect = entrypoints
+            .iter()
+            .find(|entry| entry.name == "inspect")
+            .expect("inspect entrypoint");
+        assert_ne!(inspect.access_hints_complete, Some(false));
+        assert!(inspect.access_hints_skipped.is_empty());
+        assert!(inspect.read_keys.is_empty());
+        assert!(inspect.write_keys.is_empty());
+    }
+
+    #[test]
+    fn assertion_logging_builtins_reject_invalid_arguments() {
+        for (src, expected) in [
+            (
+                r#"
+fn main() {
+  assert(1);
+}
+"#,
+                "assert expects (bool) or (bool, string|int)",
+            ),
+            (
+                r#"
+fn main() {
+  require(true, false);
+}
+"#,
+                "require expects (bool) or (bool, string|int)",
+            ),
+            (
+                r#"
+fn main() {
+  info(name("not_scalar"));
+}
+"#,
+                "info expects (string|int)",
+            ),
+            (
+                r#"
+fn main() {
+  assert_eq(true, 1);
+}
+"#,
+                "assert_eq expects two int args",
+            ),
+        ] {
+            let parsed = parse(src).expect("parse source");
+            let err = analyze(&parsed).expect_err("semantic analysis should reject invalid args");
+            assert!(
+                err.message.contains(expected),
+                "expected `{expected}`, got `{}`",
+                err.message
+            );
+        }
+    }
+
+    #[test]
+    fn privacy_output_builtins_emit_runtime_syscalls() {
+        let src = r#"
+fn main() {
+  let secret = get_private_input(0);
+  use_nullifier(secret);
+  commit_output();
+}
+"#;
+        let compiler = test_mode_compiler();
+        let bytes = compiler
+            .compile_source(src)
+            .expect("compile privacy/output builtins");
+        let parsed = ProgramMetadata::parse(&bytes).expect("parse metadata");
+        let code = &bytes[parsed.code_offset..];
+
+        for (syscall, label) in [
+            (
+                ivm_abi::syscalls::SYSCALL_GET_PRIVATE_INPUT,
+                "GET_PRIVATE_INPUT",
+            ),
+            (ivm_abi::syscalls::SYSCALL_USE_NULLIFIER, "USE_NULLIFIER"),
+            (ivm_abi::syscalls::SYSCALL_COMMIT_OUTPUT, "COMMIT_OUTPUT"),
+        ] {
+            let needle = encoding::wide::encode_sys(
+                instruction::wide::system::SCALL,
+                u8::try_from(syscall).expect("privacy/output syscall id fits in u8"),
+            )
+            .to_le_bytes();
+            assert!(
+                code.windows(needle.len()).any(|window| window == needle),
+                "expected {label} syscall in compiled code"
+            );
+        }
+    }
+
+    #[test]
+    fn privacy_output_builtins_reject_invalid_arguments() {
+        for (src, expected) in [
+            (
+                r#"
+fn main() {
+  let _secret = get_private_input(name("not_index"));
+}
+"#,
+                "get_private_input expects (int index)",
+            ),
+            (
+                r#"
+fn main() {
+  use_nullifier(name("not_nullifier"));
+}
+"#,
+                "use_nullifier expects (int nullifier)",
+            ),
+            (
+                r#"
+fn main() {
+  commit_output(1);
+}
+"#,
+                "commit_output expects no arguments",
+            ),
+        ] {
+            let parsed = parse(src).expect("parse source");
+            let err = analyze(&parsed).expect_err("semantic analysis should reject invalid args");
+            assert!(
+                err.message.contains(expected),
+                "expected `{expected}`, got `{}`",
+                err.message
+            );
+        }
+    }
+
+    #[test]
+    fn smart_contract_lifecycle_builtins_emit_lifecycle_syscalls() {
+        let src = r#"
+fn main() {
+  let request = norito_bytes("00");
+  deactivate_contract_instance(request);
+  remove_smart_contract_bytes(request);
+  register_smart_contract_code(request);
+  register_smart_contract_bytes(request);
+  activate_contract_instance(request);
+}
+"#;
+        let compiler = test_mode_compiler();
+        let bytes = compiler
+            .compile_source(src)
+            .expect("compile smart-contract lifecycle builtins");
+        let parsed = ProgramMetadata::parse(&bytes).expect("parse metadata");
+        let code = &bytes[parsed.code_offset..];
+
+        for (syscall, label) in [
+            (
+                ivm_abi::syscalls::SYSCALL_DEACTIVATE_CONTRACT_INSTANCE,
+                "DEACTIVATE_CONTRACT_INSTANCE",
+            ),
+            (
+                ivm_abi::syscalls::SYSCALL_REMOVE_SMART_CONTRACT_BYTES,
+                "REMOVE_SMART_CONTRACT_BYTES",
+            ),
+            (
+                ivm_abi::syscalls::SYSCALL_REGISTER_SMART_CONTRACT_CODE,
+                "REGISTER_SMART_CONTRACT_CODE",
+            ),
+            (
+                ivm_abi::syscalls::SYSCALL_REGISTER_SMART_CONTRACT_BYTES,
+                "REGISTER_SMART_CONTRACT_BYTES",
+            ),
+            (
+                ivm_abi::syscalls::SYSCALL_ACTIVATE_CONTRACT_INSTANCE,
+                "ACTIVATE_CONTRACT_INSTANCE",
+            ),
+        ] {
+            let needle = encoding::wide::encode_sys(
+                instruction::wide::system::SCALL,
+                u8::try_from(syscall).expect("lifecycle syscall id fits in u8"),
+            )
+            .to_le_bytes();
+            assert!(
+                code.windows(needle.len()).any(|window| window == needle),
+                "expected {label} syscall in compiled code"
+            );
+        }
+    }
+
+    #[test]
+    fn smart_contract_lifecycle_builtins_reject_invalid_arguments() {
+        let parsed = parse(
+            r#"
+fn main() {
+  register_smart_contract_code(name("not_request"));
+}
+"#,
+        )
+        .expect("parse source");
+        let err =
+            analyze(&parsed).expect_err("semantic analysis should reject lifecycle request type");
+        assert!(
+            err.message.contains(
+                "register_smart_contract_code expects (Blob|bytes) pointer to NoritoBytes lifecycle request"
+            ),
+            "unexpected semantic error: {}",
+            err.message
+        );
+    }
+
+    #[test]
+    fn fastpq_batch_apply_builtin_emits_batch_apply_syscall_and_opaque_access() {
+        let src = r#"
+kotoage fn apply_batch() permission(Admin) {
+  let batch = norito_bytes("00");
+  transfer_v1_batch_apply(batch);
+}
+"#;
+        let compiler = test_mode_compiler();
+        let (bytes, manifest) = compiler
+            .compile_source_with_manifest(src)
+            .expect("compile transfer_v1_batch_apply builtin");
+        let parsed = ProgramMetadata::parse(&bytes).expect("parse metadata");
+        let code = &bytes[parsed.code_offset..];
+
+        for (syscall, label) in [
+            (
+                ivm_abi::syscalls::SYSCALL_INPUT_PUBLISH_TLV,
+                "INPUT_PUBLISH_TLV",
+            ),
+            (
+                ivm_abi::syscalls::SYSCALL_TRANSFER_V1_BATCH_APPLY,
+                "TRANSFER_V1_BATCH_APPLY",
+            ),
+        ] {
+            let needle = encoding::wide::encode_sys(
+                instruction::wide::system::SCALL,
+                u8::try_from(syscall).expect("FASTPQ batch apply syscall id fits in u8"),
+            )
+            .to_le_bytes();
+            assert!(
+                code.windows(needle.len()).any(|window| window == needle),
+                "expected {label} syscall in compiled code"
+            );
+        }
+
+        let entrypoints = manifest.entrypoints.expect("entrypoints must be present");
+        let apply_batch = entrypoints
+            .iter()
+            .find(|entry| entry.name == "apply_batch")
+            .expect("apply_batch entrypoint");
+        assert_eq!(apply_batch.access_hints_complete, Some(false));
+        assert_eq!(
+            apply_batch.access_hints_skipped,
+            vec!["opaque ISI access is not compiler-resolved".to_string()]
+        );
+        assert!(apply_batch.read_keys.is_empty());
+        assert!(apply_batch.write_keys.is_empty());
+    }
+
+    #[test]
+    fn fastpq_batch_apply_builtin_rejects_invalid_arguments() {
+        let parsed = parse(
+            r#"
+fn main() {
+  transfer_v1_batch_apply(name("not_batch"));
+}
+"#,
+        )
+        .expect("parse source");
+        let err = analyze(&parsed).expect_err("semantic analysis should reject batch payload type");
+        assert!(
+            err.message
+                .contains("transfer_v1_batch_apply expects (Blob|bytes) Norito TransferAssetBatch"),
+            "unexpected semantic error: {}",
+            err.message
+        );
+    }
+
+    #[test]
+    fn fastpq_batch_boundary_builtins_emit_boundary_syscalls_and_complete_access() {
+        let src = r#"
+kotoage fn batch() permission(Admin) {
+  transfer_v1_batch_begin();
+  transfer_v1_batch_end();
+  call transfer_v1_batch_begin();
+  call transfer_v1_batch_end();
+}
+"#;
+        let compiler = test_mode_compiler();
+        let (bytes, manifest) = compiler
+            .compile_source_with_manifest(src)
+            .expect("compile transfer V1 batch boundary builtins");
+        let parsed = ProgramMetadata::parse(&bytes).expect("parse metadata");
+        let code = &bytes[parsed.code_offset..];
+
+        for (syscall, label) in [
+            (
+                ivm_abi::syscalls::SYSCALL_TRANSFER_V1_BATCH_BEGIN,
+                "TRANSFER_V1_BATCH_BEGIN",
+            ),
+            (
+                ivm_abi::syscalls::SYSCALL_TRANSFER_V1_BATCH_END,
+                "TRANSFER_V1_BATCH_END",
+            ),
+        ] {
+            let needle = encoding::wide::encode_sys(
+                instruction::wide::system::SCALL,
+                u8::try_from(syscall).expect("FASTPQ batch boundary syscall id fits in u8"),
+            )
+            .to_le_bytes();
+            let count = code
+                .windows(needle.len())
+                .filter(|window| *window == needle)
+                .count();
+            assert!(
+                count == 2,
+                "expected direct and call-sugar {label} syscalls in compiled code, got {count}"
+            );
+        }
+
+        let publish_tlv = encoding::wide::encode_sys(
+            instruction::wide::system::SCALL,
+            ivm_abi::syscalls::SYSCALL_INPUT_PUBLISH_TLV as u8,
+        )
+        .to_le_bytes();
+        assert!(
+            !code
+                .windows(publish_tlv.len())
+                .any(|window| window == publish_tlv),
+            "batch boundary helpers must not publish input TLVs"
+        );
+
+        let entrypoints = manifest.entrypoints.expect("entrypoints must be present");
+        let batch = entrypoints
+            .iter()
+            .find(|entry| entry.name == "batch")
+            .expect("batch entrypoint");
+        assert_ne!(batch.access_hints_complete, Some(false));
+        assert!(batch.access_hints_skipped.is_empty());
+        assert!(batch.read_keys.is_empty());
+        assert!(batch.write_keys.is_empty());
+    }
+
+    #[test]
+    fn fastpq_batch_boundary_builtins_reject_invalid_arguments() {
+        for (src, expected) in [
+            (
+                r#"
+fn main() {
+  transfer_v1_batch_begin(1);
+}
+"#,
+                "transfer_v1_batch_begin expects ()",
+            ),
+            (
+                r#"
+fn main() {
+  transfer_v1_batch_end(1);
+}
+"#,
+                "transfer_v1_batch_end expects ()",
+            ),
+            (
+                r#"
+fn main() {
+  call transfer_v1_batch_begin(1);
+}
+"#,
+                "transfer_v1_batch_begin expects ()",
+            ),
+            (
+                r#"
+fn main() {
+  call transfer_v1_batch_end(1);
+}
+"#,
+                "transfer_v1_batch_end expects ()",
+            ),
+        ] {
+            let parsed = parse(src).expect("parse source");
+            let err = analyze(&parsed).expect_err("semantic analysis should reject boundary args");
+            assert!(
+                err.message.contains(expected),
+                "expected `{expected}`, got `{}`",
+                err.message
+            );
+        }
+    }
+
+    #[test]
+    fn transfer_batch_builtin_lowers_entries_between_boundaries() {
+        let src = r#"
+fn main() {
+  let asset = asset_definition("62Fk4FPcMuLvW5QjDGNF2a4jAmjM");
+  transfer_batch((authority(), authority(), asset, 5));
+  call transfer_batch((authority(), authority(), asset, 7));
+}
+"#;
+        let parsed = parse(src).expect("parse transfer_batch source");
+        let typed = analyze(&parsed).expect("analyze transfer_batch source");
+        let ir = ir::lower(&typed).expect("lower transfer_batch source");
+
+        let mut begins = 0;
+        let mut transfers = 0;
+        let mut ends = 0;
+        for instr in ir
+            .functions
+            .iter()
+            .flat_map(|function| function.blocks.iter())
+            .flat_map(|block| block.instrs.iter())
+        {
+            match instr {
+                ir::Instr::TransferBatchBegin => begins += 1,
+                ir::Instr::TransferAsset { .. } => transfers += 1,
+                ir::Instr::TransferBatchEnd => ends += 1,
+                _ => {}
+            }
+        }
+
+        assert_eq!(begins, 2, "expected direct and call-sugar batch begin");
+        assert_eq!(transfers, 2, "expected one transfer per batch entry");
+        assert_eq!(ends, 2, "expected direct and call-sugar batch end");
+    }
+
+    #[test]
+    fn transfer_batch_builtin_rejects_invalid_arguments() {
+        for (src, expected) in [
+            (
+                r#"
+fn main() {
+  transfer_batch();
+}
+"#,
+                "transfer_batch expects at least one entry",
+            ),
+            (
+                r#"
+fn main() {
+  call transfer_batch(authority());
+}
+"#,
+                "transfer_batch expects (AccountId, AccountId, AssetDefinitionId, int) tuple entries",
+            ),
+        ] {
+            let parsed = parse(src).expect("parse invalid transfer_batch source");
+            let err =
+                analyze(&parsed).expect_err("semantic analysis should reject transfer_batch args");
+            assert!(
+                err.message.contains(expected),
+                "expected error containing {expected:?}, got {}",
+                err.message
+            );
+        }
+    }
+
+    #[test]
+    fn axt_builtins_emit_axt_syscalls_and_incomplete_access() {
+        let src = r#"
+kotoage fn run() permission(Admin) {
+  let ds = dataspace_id("7");
+  let desc = axt_descriptor(norito_bytes("0x00"));
+  let handle = asset_handle(norito_bytes("0x01"));
+  let proof = proof_blob(norito_bytes("0x02"));
+  axt_begin(desc);
+  axt_touch(ds, norito_bytes("manifest"));
+  axt_touch(ds);
+  verify_ds_proof(ds, proof);
+  verify_ds_proof(ds);
+  use_asset_handle(handle, norito_bytes("intent"), proof);
+  use_asset_handle(handle, norito_bytes("intent"));
+  axt_commit();
+}
+"#;
+        let compiler = test_mode_compiler();
+        let (bytes, manifest) = compiler
+            .compile_source_with_manifest(src)
+            .expect("compile AXT builtins");
+        let parsed = ProgramMetadata::parse(&bytes).expect("parse metadata");
+        let code = &bytes[parsed.code_offset..];
+
+        for (syscall, label) in [
+            (ivm_abi::syscalls::SYSCALL_AXT_BEGIN, "AXT_BEGIN"),
+            (ivm_abi::syscalls::SYSCALL_AXT_TOUCH, "AXT_TOUCH"),
+            (
+                ivm_abi::syscalls::SYSCALL_VERIFY_DS_PROOF,
+                "VERIFY_DS_PROOF",
+            ),
+            (
+                ivm_abi::syscalls::SYSCALL_USE_ASSET_HANDLE,
+                "USE_ASSET_HANDLE",
+            ),
+            (ivm_abi::syscalls::SYSCALL_AXT_COMMIT, "AXT_COMMIT"),
+            (
+                ivm_abi::syscalls::SYSCALL_INPUT_PUBLISH_TLV,
+                "INPUT_PUBLISH_TLV",
+            ),
+        ] {
+            let needle = encoding::wide::encode_sys(
+                instruction::wide::system::SCALL,
+                u8::try_from(syscall).expect("AXT syscall id fits in u8"),
+            )
+            .to_le_bytes();
+            assert!(
+                code.windows(needle.len()).any(|window| window == needle),
+                "expected {label} syscall in compiled code"
+            );
+        }
+
+        let entrypoints = manifest.entrypoints.expect("entrypoints must be present");
+        let run = entrypoints
+            .iter()
+            .find(|entry| entry.name == "run")
+            .expect("run entrypoint");
+        assert_eq!(run.access_hints_complete, Some(false));
+        assert!(!run.access_hints_skipped.is_empty());
+    }
+
+    #[test]
+    fn axt_builtins_reject_invalid_arguments() {
+        for (src, expected) in [
+            (
+                r#"
+fn main() {
+  axt_begin(norito_bytes("00"));
+}
+"#,
+                "axt_begin expects (AxtDescriptor)",
+            ),
+            (
+                r#"
+fn main() {
+  axt_touch(dataspace_id("7"), 1);
+}
+"#,
+                "axt_touch expects (DataSpaceId[, Blob|bytes manifest])",
+            ),
+            (
+                r#"
+fn main() {
+  verify_ds_proof(dataspace_id("7"), norito_bytes("00"));
+}
+"#,
+                "verify_ds_proof expects (DataSpaceId[, ProofBlob])",
+            ),
+            (
+                r#"
+fn main() {
+  use_asset_handle(asset_handle(norito_bytes("00")), 1);
+}
+"#,
+                "use_asset_handle expects (AssetHandle, Blob|bytes intent[, ProofBlob])",
+            ),
+            (
+                r#"
+fn main() {
+  axt_commit(1);
+}
+"#,
+                "axt_commit expects no arguments",
+            ),
+        ] {
+            let parsed = parse(src).expect("parse source");
+            let err = analyze(&parsed).expect_err("semantic analysis should reject AXT args");
+            assert!(
+                err.message.contains(expected),
+                "expected `{expected}`, got `{}`",
+                err.message
+            );
+        }
+    }
+
+    #[test]
+    fn verify_proof_builtin_emits_verify_proof_syscall_and_complete_access() {
+        let src = r#"
+view fn check() -> int {
+  let envelope = norito_bytes("00");
+  if verify_proof(envelope) {
+    return 1;
+  }
+  return 0;
+}
+"#;
+        let compiler = test_mode_compiler();
+        let (bytes, manifest) = compiler
+            .compile_source_with_manifest(src)
+            .expect("compile verify_proof builtin");
+        let parsed = ProgramMetadata::parse(&bytes).expect("parse metadata");
+        let code = &bytes[parsed.code_offset..];
+
+        for (syscall, label) in [
+            (
+                ivm_abi::syscalls::SYSCALL_INPUT_PUBLISH_TLV,
+                "INPUT_PUBLISH_TLV",
+            ),
+            (ivm_abi::syscalls::SYSCALL_VERIFY_PROOF, "VERIFY_PROOF"),
+        ] {
+            let needle = encoding::wide::encode_sys(
+                instruction::wide::system::SCALL,
+                u8::try_from(syscall).expect("verify_proof syscall id fits in u8"),
+            )
+            .to_le_bytes();
+            assert!(
+                code.windows(needle.len()).any(|window| window == needle),
+                "expected {label} syscall in compiled code"
+            );
+        }
+
+        let entrypoints = manifest.entrypoints.expect("entrypoints must be present");
+        let check = entrypoints
+            .iter()
+            .find(|entry| entry.name == "check")
+            .expect("check entrypoint");
+        assert_ne!(check.access_hints_complete, Some(false));
+        assert!(check.access_hints_skipped.is_empty());
+        assert!(check.read_keys.is_empty());
+        assert!(check.write_keys.is_empty());
+    }
+
+    #[test]
+    fn verify_proof_builtin_rejects_invalid_arguments() {
+        let parsed = parse(
+            r#"
+fn main() {
+  let _ok = verify_proof(name("not_envelope"));
+}
+"#,
+        )
+        .expect("parse source");
+        let err = analyze(&parsed).expect_err("semantic analysis should reject proof payload type");
+        assert!(
+            err.message.contains(
+                "verify_proof expects (Blob|bytes) pointer to NoritoBytes OpenVerifyEnvelope"
+            ),
+            "unexpected semantic error: {}",
+            err.message
+        );
+    }
+
+    #[test]
+    fn prove_execution_builtin_emits_prove_execution_syscall_and_complete_access() {
+        let src = r#"
+view fn proof() -> bytes {
+  return prove_execution();
+}
+"#;
+        let compiler = test_mode_compiler();
+        let (bytes, manifest) = compiler
+            .compile_source_with_manifest(src)
+            .expect("compile prove_execution builtin");
+        let parsed = ProgramMetadata::parse(&bytes).expect("parse metadata");
+        let code = &bytes[parsed.code_offset..];
+        let needle = encoding::wide::encode_sys(
+            instruction::wide::system::SCALL,
+            u8::try_from(ivm_abi::syscalls::SYSCALL_PROVE_EXECUTION)
+                .expect("prove_execution syscall id fits in u8"),
+        )
+        .to_le_bytes();
+
+        assert!(
+            code.windows(needle.len()).any(|window| window == needle),
+            "expected PROVE_EXECUTION syscall in compiled code"
+        );
+        let entrypoints = manifest.entrypoints.expect("entrypoints must be present");
+        let proof = entrypoints
+            .iter()
+            .find(|entry| entry.name == "proof")
+            .expect("proof entrypoint");
+        assert_ne!(proof.access_hints_complete, Some(false));
+        assert!(proof.access_hints_skipped.is_empty());
+        assert!(proof.read_keys.is_empty());
+        assert!(proof.write_keys.is_empty());
+    }
+
+    #[test]
+    fn prove_execution_builtin_rejects_arguments() {
+        let parsed = parse(
+            r#"
+fn main() {
+  let _proof = prove_execution(1);
+}
+"#,
+        )
+        .expect("parse source");
+        let err = analyze(&parsed).expect_err("semantic analysis should reject proof arguments");
+        assert!(
+            err.message.contains("prove_execution expects no arguments"),
+            "unexpected semantic error: {}",
+            err.message
+        );
+    }
+
+    #[test]
+    fn grow_heap_builtin_emits_grow_heap_syscall_and_complete_access() {
+        let src = r#"
+view fn grow() -> int {
+  return grow_heap(4096);
+}
+"#;
+        let compiler = test_mode_compiler();
+        let (bytes, manifest) = compiler
+            .compile_source_with_manifest(src)
+            .expect("compile grow_heap builtin");
+        let parsed = ProgramMetadata::parse(&bytes).expect("parse metadata");
+        let code = &bytes[parsed.code_offset..];
+        let needle = encoding::wide::encode_sys(
+            instruction::wide::system::SCALL,
+            u8::try_from(ivm_abi::syscalls::SYSCALL_GROW_HEAP)
+                .expect("grow_heap syscall id fits in u8"),
+        )
+        .to_le_bytes();
+
+        assert!(
+            code.windows(needle.len()).any(|window| window == needle),
+            "expected GROW_HEAP syscall in compiled code"
+        );
+        let entrypoints = manifest.entrypoints.expect("entrypoints must be present");
+        let grow = entrypoints
+            .iter()
+            .find(|entry| entry.name == "grow")
+            .expect("grow entrypoint");
+        assert_ne!(grow.access_hints_complete, Some(false));
+        assert!(grow.access_hints_skipped.is_empty());
+        assert!(grow.read_keys.is_empty());
+        assert!(grow.write_keys.is_empty());
+    }
+
+    #[test]
+    fn grow_heap_builtin_rejects_invalid_arguments() {
+        let parsed = parse(
+            r#"
+fn main() {
+  let _limit = grow_heap(name("not_bytes"));
+}
+"#,
+        )
+        .expect("parse source");
+        let err = analyze(&parsed).expect_err("semantic analysis should reject byte count type");
+        assert!(
+            err.message.contains("grow_heap expects (int bytes)"),
+            "unexpected semantic error: {}",
+            err.message
+        );
+    }
+
+    #[test]
+    fn raw_memory_merkle_builtins_emit_alloc_and_merkle_syscalls() {
+        let src = r#"
+view fn merkle() -> int {
+  let out = alloc(2048);
+  let root = alloc(32);
+  let path_len = get_merkle_path(out, out, root);
+  let compact_len = get_merkle_compact(out, out, 16, root);
+  let register_len = get_register_merkle_compact(10, out, 8, root);
+  return path_len + compact_len + register_len;
+}
+"#;
+        let compiler = test_mode_compiler();
+        let (bytes, manifest) = compiler
+            .compile_source_with_manifest(src)
+            .expect("compile raw memory Merkle builtins");
+        let parsed = ProgramMetadata::parse(&bytes).expect("parse metadata");
+        let code = &bytes[parsed.code_offset..];
+        for syscall in [
+            ivm_abi::syscalls::SYSCALL_ALLOC,
+            ivm_abi::syscalls::SYSCALL_GET_MERKLE_PATH,
+            ivm_abi::syscalls::SYSCALL_GET_MERKLE_COMPACT,
+            ivm_abi::syscalls::SYSCALL_GET_REGISTER_MERKLE_COMPACT,
+        ] {
+            let needle = encoding::wide::encode_sys(
+                instruction::wide::system::SCALL,
+                u8::try_from(syscall).expect("raw memory syscall id fits in u8"),
+            )
+            .to_le_bytes();
+            assert!(
+                code.windows(needle.len()).any(|window| window == needle),
+                "expected syscall 0x{syscall:x} in compiled code"
+            );
+        }
+        let input_publish = encoding::wide::encode_sys(
+            instruction::wide::system::SCALL,
+            u8::try_from(ivm_abi::syscalls::SYSCALL_INPUT_PUBLISH_TLV)
+                .expect("input publish syscall id fits in u8"),
+        )
+        .to_le_bytes();
+        assert!(
+            !code
+                .windows(input_publish.len())
+                .any(|window| window == input_publish),
+            "raw memory Merkle helpers should not publish pointer TLVs"
+        );
+        let entrypoints = manifest.entrypoints.expect("entrypoints must be present");
+        let merkle = entrypoints
+            .iter()
+            .find(|entry| entry.name == "merkle")
+            .expect("merkle entrypoint");
+        assert_ne!(merkle.access_hints_complete, Some(false));
+        assert!(merkle.access_hints_skipped.is_empty());
+        assert!(merkle.read_keys.is_empty());
+        assert!(merkle.write_keys.is_empty());
+    }
+
+    #[test]
+    fn raw_memory_merkle_builtins_reject_invalid_arguments() {
+        let parsed = parse(
+            r#"
+fn main() {
+  let _path = get_merkle_path(name("address"), 1);
+}
+"#,
+        )
+        .expect("parse source");
+        let err = analyze(&parsed).expect_err("semantic analysis should reject Merkle args");
+        assert!(
+            err.message.contains("get_merkle_path expects"),
+            "unexpected semantic error: {}",
+            err.message
+        );
+    }
+
+    #[test]
+    fn direct_codec_numeric_builtins_emit_direct_syscalls_and_complete_access() {
+        let src = r#"
+fn direct_helpers() -> int {
+  let payload = json!{
+    amount: 7,
+    count: 3,
+    nested: { ok: true },
+    label: "ExampleName",
+    owner: "alice@wonderland",
+    asset: "rose#wonderland",
+    nft: "n0$wonderland",
+    blob: "0102"
+  };
+  let amount: Amount = json_get_numeric_direct(payload, name("amount"));
+  let sum: Amount = numeric_add_direct(amount, amount);
+  let diff: Amount = numeric_sub_direct(sum, amount);
+  let product: Amount = numeric_mul_direct(diff, amount);
+  let quotient: Amount = numeric_div_direct(product, amount);
+  let remainder: Amount = numeric_rem_direct(product, amount);
+  let negated: Amount = numeric_neg_direct(remainder);
+  let same = numeric_eq_direct(sum, sum);
+  let different = numeric_ne_direct(sum, diff);
+  let lower = numeric_lt_direct(diff, sum);
+  let lower_or_equal = numeric_le_direct(diff, sum);
+  let greater = numeric_gt_direct(sum, diff);
+  let greater_or_equal = numeric_ge_direct(sum, diff);
+  let nested = json_get_json_direct(payload, name("nested"));
+  let label = json_get_name_direct(payload, name("label"));
+  let owner = json_get_account_id_direct(payload, name("owner"));
+  let asset = json_get_asset_definition_id_direct(payload, name("asset"));
+  let nft = json_get_nft_id_direct(payload, name("nft"));
+  let blob = json_get_blob_hex_direct(payload, name("blob"));
+  let with_count = json_set_int_direct(payload, name("count"), json_get_int_direct(payload, name("count")));
+  let with_owner = json_set_account_id_direct(with_count, name("owner"), owner);
+  let path = build_path_key_norito_direct(label, blob);
+  let schema = schema_info_direct(path);
+  let encoded = encode_schema_direct(name("example.schema"), with_owner);
+  let decoded = decode_schema_direct(name("example.schema"), encoded);
+  if same && different && lower && lower_or_equal && greater && greater_or_equal {
+    return numeric_to_int_direct(negated);
+  }
+  return json_get_int_direct(decoded, name("count"));
+}
+
+kotoage fn run() permission(Admin) {
+  info(direct_helpers());
+}
+"#;
+        let compiler = test_mode_compiler();
+        let (bytes, manifest) = compiler
+            .compile_source_with_manifest(src)
+            .expect("compile direct helper builtins");
+        let parsed = ProgramMetadata::parse(&bytes).expect("parse metadata");
+        let code = &bytes[parsed.code_offset..];
+        for (syscall, label) in [
+            (
+                ivm_abi::syscalls::SYSCALL_JSON_GET_I64_DIRECT,
+                "JSON_GET_I64_DIRECT",
+            ),
+            (
+                ivm_abi::syscalls::SYSCALL_JSON_GET_JSON_DIRECT,
+                "JSON_GET_JSON_DIRECT",
+            ),
+            (
+                ivm_abi::syscalls::SYSCALL_JSON_GET_NAME_DIRECT,
+                "JSON_GET_NAME_DIRECT",
+            ),
+            (
+                ivm_abi::syscalls::SYSCALL_JSON_GET_ACCOUNT_ID_DIRECT,
+                "JSON_GET_ACCOUNT_ID_DIRECT",
+            ),
+            (
+                ivm_abi::syscalls::SYSCALL_JSON_GET_NFT_ID_DIRECT,
+                "JSON_GET_NFT_ID_DIRECT",
+            ),
+            (
+                ivm_abi::syscalls::SYSCALL_JSON_GET_BLOB_HEX_DIRECT,
+                "JSON_GET_BLOB_HEX_DIRECT",
+            ),
+            (
+                ivm_abi::syscalls::SYSCALL_JSON_GET_NUMERIC_DIRECT,
+                "JSON_GET_NUMERIC_DIRECT",
+            ),
+            (
+                ivm_abi::syscalls::SYSCALL_JSON_GET_ASSET_DEFINITION_ID_DIRECT,
+                "JSON_GET_ASSET_DEFINITION_ID_DIRECT",
+            ),
+            (
+                ivm_abi::syscalls::SYSCALL_JSON_SET_I64_DIRECT,
+                "JSON_SET_I64_DIRECT",
+            ),
+            (
+                ivm_abi::syscalls::SYSCALL_JSON_SET_ACCOUNT_ID_DIRECT,
+                "JSON_SET_ACCOUNT_ID_DIRECT",
+            ),
+            (
+                ivm_abi::syscalls::SYSCALL_BUILD_PATH_KEY_NORITO_DIRECT,
+                "BUILD_PATH_KEY_NORITO_DIRECT",
+            ),
+            (
+                ivm_abi::syscalls::SYSCALL_SCHEMA_INFO_DIRECT,
+                "SCHEMA_INFO_DIRECT",
+            ),
+            (
+                ivm_abi::syscalls::SYSCALL_SCHEMA_ENCODE_DIRECT,
+                "SCHEMA_ENCODE_DIRECT",
+            ),
+            (
+                ivm_abi::syscalls::SYSCALL_SCHEMA_DECODE_DIRECT,
+                "SCHEMA_DECODE_DIRECT",
+            ),
+            (
+                ivm_abi::syscalls::SYSCALL_NUMERIC_TO_INT_DIRECT,
+                "NUMERIC_TO_INT_DIRECT",
+            ),
+            (
+                ivm_abi::syscalls::SYSCALL_NUMERIC_ADD_DIRECT,
+                "NUMERIC_ADD_DIRECT",
+            ),
+            (
+                ivm_abi::syscalls::SYSCALL_NUMERIC_SUB_DIRECT,
+                "NUMERIC_SUB_DIRECT",
+            ),
+            (
+                ivm_abi::syscalls::SYSCALL_NUMERIC_MUL_DIRECT,
+                "NUMERIC_MUL_DIRECT",
+            ),
+            (
+                ivm_abi::syscalls::SYSCALL_NUMERIC_DIV_DIRECT,
+                "NUMERIC_DIV_DIRECT",
+            ),
+            (
+                ivm_abi::syscalls::SYSCALL_NUMERIC_REM_DIRECT,
+                "NUMERIC_REM_DIRECT",
+            ),
+            (
+                ivm_abi::syscalls::SYSCALL_NUMERIC_NEG_DIRECT,
+                "NUMERIC_NEG_DIRECT",
+            ),
+            (
+                ivm_abi::syscalls::SYSCALL_NUMERIC_EQ_DIRECT,
+                "NUMERIC_EQ_DIRECT",
+            ),
+            (
+                ivm_abi::syscalls::SYSCALL_NUMERIC_NE_DIRECT,
+                "NUMERIC_NE_DIRECT",
+            ),
+            (
+                ivm_abi::syscalls::SYSCALL_NUMERIC_LT_DIRECT,
+                "NUMERIC_LT_DIRECT",
+            ),
+            (
+                ivm_abi::syscalls::SYSCALL_NUMERIC_LE_DIRECT,
+                "NUMERIC_LE_DIRECT",
+            ),
+            (
+                ivm_abi::syscalls::SYSCALL_NUMERIC_GT_DIRECT,
+                "NUMERIC_GT_DIRECT",
+            ),
+            (
+                ivm_abi::syscalls::SYSCALL_NUMERIC_GE_DIRECT,
+                "NUMERIC_GE_DIRECT",
+            ),
+        ] {
+            let needle = encoding::wide::encode_sys(
+                instruction::wide::system::SCALL,
+                u8::try_from(syscall).expect("direct helper syscall id fits in u8"),
+            )
+            .to_le_bytes();
+            assert!(
+                code.windows(needle.len()).any(|window| window == needle),
+                "expected {label} syscall in compiled code"
+            );
+        }
+        let input_publish = encoding::wide::encode_sys(
+            instruction::wide::system::SCALL,
+            u8::try_from(ivm_abi::syscalls::SYSCALL_INPUT_PUBLISH_TLV)
+                .expect("input publish syscall id fits in u8"),
+        )
+        .to_le_bytes();
+        assert!(
+            !code
+                .windows(input_publish.len())
+                .any(|window| window == input_publish),
+            "direct helper builtins should not publish pointer TLVs"
+        );
+        let entrypoints = manifest.entrypoints.expect("entrypoints must be present");
+        let run = entrypoints
+            .iter()
+            .find(|entry| entry.name == "run")
+            .expect("run entrypoint");
+        assert_ne!(run.access_hints_complete, Some(false));
+        assert!(run.access_hints_skipped.is_empty());
+        assert!(run.read_keys.is_empty());
+        assert!(run.write_keys.is_empty());
+    }
+
+    #[test]
+    fn direct_codec_numeric_builtins_reject_invalid_arguments() {
+        let parsed = parse(
+            r#"
+fn main() {
+  let bad = numeric_add_direct(1, 1);
+}
+"#,
+        )
+        .expect("parse source");
+        let err =
+            analyze(&parsed).expect_err("semantic analysis should reject raw int direct numerics");
+        assert!(
+            err.message.contains("numeric_add_direct expects"),
+            "unexpected semantic error: {}",
+            err.message
+        );
+
+        let parsed = parse(
+            r#"
+fn main() {
+  let bad = json_get_int_direct(name("payload"), name("count"));
+}
+"#,
+        )
+        .expect("parse source");
+        let err =
+            analyze(&parsed).expect_err("semantic analysis should reject direct JSON arg types");
+        assert!(
+            err.message
+                .contains("json_get_int_direct expects (Json, Name)"),
+            "unexpected semantic error: {}",
+            err.message
+        );
+    }
+
+    #[test]
+    fn schema_builtins_emit_regular_schema_syscalls() {
+        let src = r#"
+fn schema_helpers() {
+  let schema = name("example.schema");
+  let encoded = encode_schema(schema, json!{ count: 3 });
+  let _decoded = decode_schema(schema, encoded);
+  let _info = schema_info(schema);
+}
+"#;
+        let compiler = test_mode_compiler();
+        let bytes = compiler
+            .compile_source(src)
+            .expect("compile regular schema helpers");
+        let parsed = ProgramMetadata::parse(&bytes).expect("parse metadata");
+        let code = &bytes[parsed.code_offset..];
+
+        for (syscall, label) in [
+            (
+                ivm_abi::syscalls::SYSCALL_INPUT_PUBLISH_TLV,
+                "INPUT_PUBLISH_TLV",
+            ),
+            (ivm_abi::syscalls::SYSCALL_SCHEMA_ENCODE, "SCHEMA_ENCODE"),
+            (ivm_abi::syscalls::SYSCALL_SCHEMA_DECODE, "SCHEMA_DECODE"),
+            (ivm_abi::syscalls::SYSCALL_SCHEMA_INFO, "SCHEMA_INFO"),
+        ] {
+            let needle = encoding::wide::encode_sys(
+                instruction::wide::system::SCALL,
+                u8::try_from(syscall).expect("schema syscall id fits in u8"),
+            )
+            .to_le_bytes();
+            assert!(
+                code.windows(needle.len()).any(|window| window == needle),
+                "expected {label} syscall in compiled code"
+            );
+        }
+    }
+
+    #[test]
+    fn schema_builtins_reject_invalid_arguments() {
+        for (src, expected) in [
+            (
+                r#"
+fn main() {
+  let _bad = encode_schema(name("example.schema"), 1);
+}
+"#,
+                "encode_schema expects (Name, Json)",
+            ),
+            (
+                r#"
+fn main() {
+  let _bad = decode_schema(1, norito_bytes("00"));
+}
+"#,
+                "decode_schema expects (Name, Blob|bytes)",
+            ),
+            (
+                r#"
+fn main() {
+  let _bad = schema_info(1);
+}
+"#,
+                "schema_info expects (Name)",
+            ),
+        ] {
+            let parsed = parse(src).expect("parse source");
+            let err = analyze(&parsed).expect_err("semantic analysis should reject schema args");
+            assert!(
+                err.message.contains(expected),
+                "expected `{expected}`, got `{}`",
+                err.message
+            );
+        }
+    }
+
+    #[test]
+    fn vrf_builtins_emit_vrf_syscalls() {
+        let src = r#"
+fn verify(payload: Blob) {
+  let _proof = vrf_verify(payload, payload, payload, 1);
+  let _batch = vrf_verify_batch(payload);
+}
+
+fn main() {
+  verify(blob("0x010203"));
+}
+"#;
+        let compiler = test_mode_compiler();
+        let bytes = compiler.compile_source(src).expect("compile VRF helpers");
+        let parsed = ProgramMetadata::parse(&bytes).expect("parse metadata");
+        let code = &bytes[parsed.code_offset..];
+
+        for (syscall, label) in [
+            (
+                ivm_abi::syscalls::SYSCALL_INPUT_PUBLISH_TLV,
+                "INPUT_PUBLISH_TLV",
+            ),
+            (ivm_abi::syscalls::SYSCALL_VRF_VERIFY, "VRF_VERIFY"),
+            (
+                ivm_abi::syscalls::SYSCALL_VRF_VERIFY_BATCH,
+                "VRF_VERIFY_BATCH",
+            ),
+        ] {
+            let needle = encoding::wide::encode_sys(
+                instruction::wide::system::SCALL,
+                u8::try_from(syscall).expect("VRF syscall id fits in u8"),
+            )
+            .to_le_bytes();
+            assert!(
+                code.windows(needle.len()).any(|window| window == needle),
+                "expected {label} syscall in compiled code"
+            );
+        }
+    }
+
+    #[test]
+    fn vrf_builtins_reject_invalid_arguments() {
+        for (src, expected) in [
+            (
+                r#"
+fn main() {
+  let payload = blob("0x010203");
+  let _bad = vrf_verify(payload, payload, payload, name("variant"));
+}
+"#,
+                "vrf_verify expects (Blob|bytes, Blob|bytes, Blob|bytes, int variant)",
+            ),
+            (
+                r#"
+fn main() {
+  let _bad = vrf_verify_batch(1);
+}
+"#,
+                "vrf_verify_batch expects (Blob|bytes)",
+            ),
+        ] {
+            let parsed = parse(src).expect("parse source");
+            let err = analyze(&parsed).expect_err("semantic analysis should reject VRF args");
+            assert!(
+                err.message.contains(expected),
+                "expected `{expected}`, got `{}`",
+                err.message
+            );
+        }
+    }
+
+    #[test]
+    fn zk_verify_builtins_emit_verify_syscalls() {
+        let src = r#"
+fn verify(payload: Blob) {
+  zk_verify_transfer(payload);
+  zk_verify_unshield(payload);
+  zk_verify_batch(payload);
+  zk_vote_verify_ballot(payload);
+  zk_vote_verify_tally(payload);
+}
+
+fn verify_namespaced(payload: Blob) {
+  zk::verify_transfer(payload);
+  zk::verify_unshield(payload);
+  zk::verify_batch(payload);
+  zk::vote::verify_ballot(payload);
+  zk::vote::verify_tally(payload);
+}
+
+fn main() {
+  let payload = blob("0x010203");
+  verify(payload);
+  verify_namespaced(payload);
+}
+"#;
+        let compiler = test_mode_compiler();
+        let bytes = compiler
+            .compile_source(src)
+            .expect("compile ZK verify helpers");
+        let parsed = ProgramMetadata::parse(&bytes).expect("parse metadata");
+        let code = &bytes[parsed.code_offset..];
+
+        for (syscall, label) in [
+            (
+                ivm_abi::syscalls::SYSCALL_INPUT_PUBLISH_TLV,
+                "INPUT_PUBLISH_TLV",
+            ),
+            (
+                ivm_abi::syscalls::SYSCALL_ZK_VERIFY_TRANSFER,
+                "ZK_VERIFY_TRANSFER",
+            ),
+            (
+                ivm_abi::syscalls::SYSCALL_ZK_VERIFY_UNSHIELD,
+                "ZK_VERIFY_UNSHIELD",
+            ),
+            (
+                ivm_abi::syscalls::SYSCALL_ZK_VERIFY_BATCH,
+                "ZK_VERIFY_BATCH",
+            ),
+            (
+                ivm_abi::syscalls::SYSCALL_ZK_VOTE_VERIFY_BALLOT,
+                "ZK_VOTE_VERIFY_BALLOT",
+            ),
+            (
+                ivm_abi::syscalls::SYSCALL_ZK_VOTE_VERIFY_TALLY,
+                "ZK_VOTE_VERIFY_TALLY",
+            ),
+        ] {
+            let needle = encoding::wide::encode_sys(
+                instruction::wide::system::SCALL,
+                u8::try_from(syscall).expect("ZK syscall id fits in u8"),
+            )
+            .to_le_bytes();
+            assert!(
+                code.windows(needle.len()).any(|window| window == needle),
+                "expected {label} syscall in compiled code"
+            );
+        }
+    }
+
+    #[test]
+    fn zk_verify_builtins_reject_invalid_arguments() {
+        for (src, expected) in [
+            (
+                r#"
+fn main() {
+  zk_verify_transfer(1);
+}
+"#,
+                "zk_verify_transfer expects (Blob|bytes) where the argument is a pointer to NoritoBytes TLV in INPUT",
+            ),
+            (
+                r#"
+fn main() {
+  zk::vote::verify_tally(1);
+}
+"#,
+                "zk_vote_verify_tally expects (Blob|bytes) where the argument is a pointer to NoritoBytes TLV in INPUT",
+            ),
+        ] {
+            let parsed = parse(src).expect("parse source");
+            let err = analyze(&parsed).expect_err("semantic analysis should reject ZK verify args");
+            assert!(
+                err.message.contains(expected),
+                "expected `{expected}`, got `{}`",
+                err.message
+            );
+        }
+    }
+
+    #[test]
+    fn inline_zk_builder_builtins_lower_to_ir() {
+        let account = sample_account_literal();
+        let src = format!(
+            r#"
+fn main() {{
+  let _ballot = build_submit_ballot_inline(
+    "election",
+    blob("00"),
+    blob("0000000000000000000000000000000000000000000000000000000000000000"),
+    "halo2",
+    blob("proof"),
+    blob("vk")
+  );
+  let _unshield = build_unshield_inline(
+    asset_definition("62Fk4FPcMuLvW5QjDGNF2a4jAmjM"),
+    account_id("{account}"),
+    5,
+    blob("0000000000000000000000000000000000000000000000000000000000000000"),
+    "halo2",
+    blob("proof"),
+    blob("vk")
+  );
+}}
+"#
+        );
+        let parsed = parse(&src).expect("parse inline builder source");
+        let typed = analyze(&parsed).expect("analyze inline builder source");
+        let ir = ir::lower(&typed).expect("lower inline builder source");
+
+        let mut saw_submit = false;
+        let mut saw_unshield = false;
+        for instr in ir
+            .functions
+            .iter()
+            .flat_map(|function| function.blocks.iter())
+            .flat_map(|block| block.instrs.iter())
+        {
+            match instr {
+                ir::Instr::BuildSubmitBallotInline { .. } => saw_submit = true,
+                ir::Instr::BuildUnshieldInline { .. } => saw_unshield = true,
+                _ => {}
+            }
+        }
+
+        assert!(saw_submit, "expected BuildSubmitBallotInline IR");
+        assert!(saw_unshield, "expected BuildUnshieldInline IR");
+    }
+
+    #[test]
+    fn inline_zk_builder_builtins_reject_invalid_arguments() {
+        for (src, expected) in [
+            (
+                r#"
+fn main() {
+  let _bytes = build_submit_ballot_inline("election", 1, blob("00"), "halo2", blob("proof"), blob("vk"));
+}
+"#,
+                "build_submit_ballot_inline expects (string election_id, Blob|bytes ciphertext, Blob|bytes nullifier32, string backend, Blob|bytes proof, Blob|bytes vk)",
+            ),
+            (
+                r#"
+fn main() {
+  let _bytes = build_unshield_inline(name("asset"), authority(), 1, blob("00"), "halo2", blob("proof"), blob("vk"));
+}
+"#,
+                "build_unshield_inline expects (AssetDefinitionId, AccountId, int amount, Blob|bytes inputs32, string backend, Blob|bytes proof, Blob|bytes vk)",
+            ),
+            (
+                r#"
+fn main() {
+  let _bytes = build_unshield_inline(asset_definition("62Fk4FPcMuLvW5QjDGNF2a4jAmjM"), authority(), 1, blob("00"), "halo2", 1, blob("vk"));
+}
+"#,
+                "build_unshield_inline expects (AssetDefinitionId, AccountId, int amount, Blob|bytes inputs32, string backend, Blob|bytes proof, Blob|bytes vk)",
+            ),
+        ] {
+            let parsed = parse(src).expect("parse invalid inline builder source");
+            let err =
+                analyze(&parsed).expect_err("semantic analysis should reject inline builder args");
+            assert!(
+                err.message.contains(expected),
+                "expected error containing {expected:?}, got {}",
+                err.message
+            );
+        }
+    }
+
+    #[test]
+    fn vendor_bridge_and_subscription_builtins_emit_syscalls() {
+        let src = r#"
+kotoage fn run() permission(Admin) {
+  let payload = norito_bytes("0x0102");
+  execute_instruction(payload);
+  sc_execute_submit_ballot(payload);
+  sc_execute_unshield(payload);
+  let result = execute_query(payload);
+  info(tlv_len(result));
+  subscription_bill();
+  subscription_record_usage();
+}
+"#;
+        let compiler = test_mode_compiler();
+        let bytes = compiler
+            .compile_source(src)
+            .expect("compile vendor bridge and subscription helpers");
+        let parsed = ProgramMetadata::parse(&bytes).expect("parse metadata");
+        let code = &bytes[parsed.code_offset..];
+
+        let syscall_needle = |syscall: u32| {
+            encoding::wide::encode_sys(
+                instruction::wide::system::SCALL,
+                u8::try_from(syscall).expect("test syscall id fits in u8"),
+            )
+            .to_le_bytes()
+        };
+
+        let execute_instruction =
+            syscall_needle(ivm_abi::syscalls::SYSCALL_SMARTCONTRACT_EXECUTE_INSTRUCTION);
+        let execute_instruction_count = code
+            .windows(execute_instruction.len())
+            .filter(|window| *window == execute_instruction)
+            .count();
+        assert_eq!(
+            execute_instruction_count, 3,
+            "execute_instruction and sc_execute aliases should lower to SMARTCONTRACT_EXECUTE_INSTRUCTION"
+        );
+
+        for (syscall, label) in [
+            (
+                ivm_abi::syscalls::SYSCALL_INPUT_PUBLISH_TLV,
+                "INPUT_PUBLISH_TLV",
+            ),
+            (
+                ivm_abi::syscalls::SYSCALL_SMARTCONTRACT_EXECUTE_QUERY,
+                "SMARTCONTRACT_EXECUTE_QUERY",
+            ),
+            (
+                ivm_abi::syscalls::SYSCALL_SUBSCRIPTION_BILL,
+                "SUBSCRIPTION_BILL",
+            ),
+            (
+                ivm_abi::syscalls::SYSCALL_SUBSCRIPTION_RECORD_USAGE,
+                "SUBSCRIPTION_RECORD_USAGE",
+            ),
+        ] {
+            let needle = syscall_needle(syscall);
+            assert!(
+                code.windows(needle.len()).any(|window| window == needle),
+                "expected {label} syscall in compiled code"
+            );
+        }
+    }
+
+    #[test]
+    fn vendor_bridge_and_subscription_builtins_reject_invalid_arguments() {
+        for (src, expected) in [
+            (
+                r#"
+fn main() {
+  execute_instruction(1);
+}
+"#,
+                "execute_instruction expects (Blob|bytes) where the argument is a pointer to NoritoBytes TLV in INPUT",
+            ),
+            (
+                r#"
+fn main() {
+  let _bad = execute_query(1);
+}
+"#,
+                "execute_query expects (Blob|bytes) where the argument is a pointer to NoritoBytes TLV in INPUT",
+            ),
+            (
+                r#"
+fn main() {
+  subscription_record_usage(1);
+}
+"#,
+                "subscription_record_usage expects no arguments",
+            ),
+        ] {
+            let parsed = parse(src).expect("parse source");
+            let err = analyze(&parsed)
+                .expect_err("semantic analysis should reject bridge/subscription args");
+            assert!(
+                err.message.contains(expected),
+                "expected `{expected}`, got `{}`",
+                err.message
+            );
+        }
+    }
+
+    #[test]
+    fn call_contract_builtin_emits_call_contract_syscall() {
+        let src = r#"
+seiyaku Relay {
+  kotoage fn run(target: bytes, payload: Json) -> bytes permission(Admin) {
+    return call_contract(target, "settle", payload);
+  }
+}
+"#;
+        let compiler = test_mode_compiler();
+        let bytes = compiler
+            .compile_source(src)
+            .expect("compile call_contract helper");
+        let parsed = ProgramMetadata::parse(&bytes).expect("parse metadata");
+        let code = &bytes[parsed.code_offset..];
+        let needle = encoding::wide::encode_sys(
+            instruction::wide::system::SCALL,
+            ivm_abi::syscalls::SYSCALL_CALL_CONTRACT as u8,
+        )
+        .to_le_bytes();
+        assert!(
+            code.windows(needle.len()).any(|window| window == needle),
+            "expected CALL_CONTRACT syscall in compiled code"
+        );
+    }
+
+    #[test]
+    fn call_contract_builtin_rejects_invalid_arguments() {
+        for (src, expected) in [
+            (
+                r#"
+fn main() {
+  let _bad = call_contract(json_object(), "settle", json!{ amount: 1 });
+}
+"#,
+                "call_contract expects (String|Blob, String|Blob, Json)",
+            ),
+            (
+                r#"
+fn main() {
+  let _bad = call_contract("target", "settle", name("not_json"));
+}
+"#,
+                "call_contract expects (String|Blob, String|Blob, Json)",
+            ),
+        ] {
+            let parsed = parse(src).expect("parse source");
+            let err = analyze(&parsed).expect_err("semantic analysis should reject call_contract");
+            assert!(
+                err.message.contains(expected),
+                "expected `{expected}`, got `{}`",
+                err.message
+            );
+        }
+    }
+
+    #[test]
+    fn hash_builtins_emit_hash_syscalls_and_complete_access() {
+        let src = r#"
+view fn digest() -> int {
+  let payload = blob("0x010203");
+  let sm3 = sm3_hash(payload);
+  let sm3_namespaced = sm::hash(payload);
+  let sm3_explicit_namespaced = sm::sm3_hash(payload);
+  let sha256 = sha256_hash(payload);
+  let sha3 = sha3_hash(payload);
+  let blake2b = blake2b256_hash(payload);
+  let keccak = keccak256_hash(payload);
+  let iroha = iroha_hash(payload);
+  let _a = tlv_len(sm3);
+  let _b = tlv_len(sm3_namespaced);
+  let _c = tlv_len(sm3_explicit_namespaced);
+  let _d = tlv_len(sha256);
+  let _e = tlv_len(sha3);
+  let _f = tlv_len(blake2b);
+  let _g = tlv_len(keccak);
+  return tlv_len(iroha);
+}
+"#;
+        let compiler = test_mode_compiler();
+        let (bytes, manifest) = compiler
+            .compile_source_with_manifest(src)
+            .expect("compile hash helpers");
+        let parsed = ProgramMetadata::parse(&bytes).expect("parse metadata");
+        let code = &bytes[parsed.code_offset..];
+
+        for (syscall, label) in [
+            (
+                ivm_abi::syscalls::SYSCALL_INPUT_PUBLISH_TLV,
+                "INPUT_PUBLISH_TLV",
+            ),
+            (ivm_abi::syscalls::SYSCALL_SM3_HASH, "SM3_HASH"),
+            (ivm_abi::syscalls::SYSCALL_SHA256_HASH, "SHA256_HASH"),
+            (ivm_abi::syscalls::SYSCALL_SHA3_HASH, "SHA3_HASH"),
+            (
+                ivm_abi::syscalls::SYSCALL_BLAKE2B256_HASH,
+                "BLAKE2B256_HASH",
+            ),
+            (ivm_abi::syscalls::SYSCALL_KECCAK256_HASH, "KECCAK256_HASH"),
+            (ivm_abi::syscalls::SYSCALL_IROHA_HASH, "IROHA_HASH"),
+        ] {
+            let needle = encoding::wide::encode_sys(
+                instruction::wide::system::SCALL,
+                u8::try_from(syscall).expect("hash syscall id fits in u8"),
+            )
+            .to_le_bytes();
+            assert!(
+                code.windows(needle.len()).any(|window| window == needle),
+                "expected {label} syscall in compiled code"
+            );
+        }
+
+        let entrypoints = manifest.entrypoints.expect("entrypoints must be present");
+        let digest = entrypoints
+            .iter()
+            .find(|entry| entry.name == "digest")
+            .expect("digest entrypoint");
+        assert_ne!(digest.access_hints_complete, Some(false));
+        assert!(digest.access_hints_skipped.is_empty());
+        assert!(digest.read_keys.is_empty());
+        assert!(digest.write_keys.is_empty());
+    }
+
+    #[test]
+    fn hash_builtins_reject_invalid_arguments() {
+        for (src, expected) in [
+            (
+                r#"
+fn main() {
+  let _bad = sha256_hash(1);
+}
+"#,
+                "sha256_hash expects (Blob|bytes) argument pointing to INPUT TLV",
+            ),
+            (
+                r#"
+fn main() {
+  let _bad = sm::hash(1);
+}
+"#,
+                "sm3_hash expects (Blob|bytes) argument pointing to INPUT TLV",
+            ),
+        ] {
+            let parsed = parse(src).expect("parse source");
+            let err = analyze(&parsed).expect_err("semantic analysis should reject hash args");
+            assert!(
+                err.message.contains(expected),
+                "expected `{expected}`, got `{}`",
+                err.message
+            );
+        }
+    }
+
+    #[test]
+    fn crypto_builtins_emit_signature_and_sm4_syscalls_and_complete_access() {
+        let src = r#"
+view fn crypt() -> int {
+  let payload = blob("0x010203");
+  let sm2 = sm2_verify(payload, payload, payload);
+  let sm2_distid = sm::verify_with_distid(payload, payload, payload, payload);
+  let generic = verify_signature(payload, payload, payload, 0);
+  let gcm = sm::gcm_seal(payload, payload, payload, payload);
+  let opened_gcm = sm::open_gcm(payload, payload, payload, gcm);
+  let ccm = sm::seal_ccm(payload, payload, payload, payload, 12);
+  let opened_ccm = sm::open_ccm(payload, payload, payload, ccm);
+  if !sm2 {
+    return 0;
+  }
+  if !sm2_distid {
+    return 0;
+  }
+  if !generic {
+    return 0;
+  }
+  return tlv_len(opened_gcm) + tlv_len(opened_ccm);
+}
+"#;
+        let compiler = test_mode_compiler();
+        let (bytes, manifest) = compiler
+            .compile_source_with_manifest(src)
+            .expect("compile crypto helpers");
+        let parsed = ProgramMetadata::parse(&bytes).expect("parse metadata");
+        let code = &bytes[parsed.code_offset..];
+
+        for (syscall, label) in [
+            (
+                ivm_abi::syscalls::SYSCALL_INPUT_PUBLISH_TLV,
+                "INPUT_PUBLISH_TLV",
+            ),
+            (ivm_abi::syscalls::SYSCALL_SM2_VERIFY, "SM2_VERIFY"),
+            (
+                ivm_abi::syscalls::SYSCALL_VERIFY_SIGNATURE,
+                "VERIFY_SIGNATURE",
+            ),
+            (ivm_abi::syscalls::SYSCALL_SM4_GCM_SEAL, "SM4_GCM_SEAL"),
+            (ivm_abi::syscalls::SYSCALL_SM4_GCM_OPEN, "SM4_GCM_OPEN"),
+            (ivm_abi::syscalls::SYSCALL_SM4_CCM_SEAL, "SM4_CCM_SEAL"),
+            (ivm_abi::syscalls::SYSCALL_SM4_CCM_OPEN, "SM4_CCM_OPEN"),
+        ] {
+            let needle = encoding::wide::encode_sys(
+                instruction::wide::system::SCALL,
+                u8::try_from(syscall).expect("crypto syscall id fits in u8"),
+            )
+            .to_le_bytes();
+            assert!(
+                code.windows(needle.len()).any(|window| window == needle),
+                "expected {label} syscall in compiled code"
+            );
+        }
+
+        let entrypoints = manifest.entrypoints.expect("entrypoints must be present");
+        let crypt = entrypoints
+            .iter()
+            .find(|entry| entry.name == "crypt")
+            .expect("crypt entrypoint");
+        assert_ne!(crypt.access_hints_complete, Some(false));
+        assert!(crypt.access_hints_skipped.is_empty());
+        assert!(crypt.read_keys.is_empty());
+        assert!(crypt.write_keys.is_empty());
+    }
+
+    #[test]
+    fn crypto_builtins_reject_invalid_arguments() {
+        for (src, expected) in [
+            (
+                r#"
+fn main() {
+  let payload = blob("0x010203");
+  let _bad = sm2_verify(payload, payload);
+}
+"#,
+                "sm2_verify expects (Blob, Blob, Blob) or (Blob, Blob, Blob, Blob) where arguments reference INPUT TLVs",
+            ),
+            (
+                r#"
+fn main() {
+  let payload = blob("0x010203");
+  let _bad = sm2_verify(payload, payload, payload, 1);
+}
+"#,
+                "sm2_verify optional distid must be provided as Blob|bytes pointer",
+            ),
+            (
+                r#"
+fn main() {
+  let payload = blob("0x010203");
+  let _bad = verify_signature(payload, payload, payload, name("scheme"));
+}
+"#,
+                "verify_signature expects scheme code as int",
+            ),
+            (
+                r#"
+fn main() {
+  let payload = blob("0x010203");
+  let _bad = sm4_gcm_seal(payload, payload, payload, 1);
+}
+"#,
+                "sm4_gcm_seal expects (Blob|bytes, Blob|bytes, Blob|bytes, Blob|bytes)",
+            ),
+            (
+                r#"
+fn main() {
+  let payload = blob("0x010203");
+  let _bad = sm4_ccm_seal(payload, payload, payload, payload, name("tag"));
+}
+"#,
+                "sm4_ccm_seal optional tag length must be int",
+            ),
+        ] {
+            let parsed = parse(src).expect("parse source");
+            let err = analyze(&parsed).expect_err("semantic analysis should reject crypto args");
+            assert!(
+                err.message.contains(expected),
+                "expected `{expected}`, got `{}`",
+                err.message
+            );
+        }
+    }
+
+    #[test]
+    fn codec_builtins_emit_encode_decode_syscalls_and_complete_access() {
+        let src = r#"
+view fn roundtrip() -> int {
+  let int_bytes = encode_int(7);
+  let decoded = decode_int(int_bytes);
+  let json_bytes = encode_json(json!{ value: 7 });
+  let decoded_json = decode_json(json_bytes);
+  let encoded_again = encode_json(decoded_json);
+  return decoded + tlv_len(encoded_again);
+}
+"#;
+        let compiler = test_mode_compiler();
+        let (bytes, manifest) = compiler
+            .compile_source_with_manifest(src)
+            .expect("compile codec helpers");
+        let parsed = ProgramMetadata::parse(&bytes).expect("parse metadata");
+        let code = &bytes[parsed.code_offset..];
+
+        for (syscall, label) in [
+            (ivm_abi::syscalls::SYSCALL_ENCODE_INT, "ENCODE_INT"),
+            (ivm_abi::syscalls::SYSCALL_DECODE_INT, "DECODE_INT"),
+            (ivm_abi::syscalls::SYSCALL_JSON_ENCODE, "JSON_ENCODE"),
+            (ivm_abi::syscalls::SYSCALL_JSON_DECODE, "JSON_DECODE"),
+        ] {
+            let needle = encoding::wide::encode_sys(
+                instruction::wide::system::SCALL,
+                u8::try_from(syscall).expect("codec syscall id fits in u8"),
+            )
+            .to_le_bytes();
+            assert!(
+                code.windows(needle.len()).any(|window| window == needle),
+                "expected {label} syscall in compiled code"
+            );
+        }
+
+        let entrypoints = manifest.entrypoints.expect("entrypoints must be present");
+        let roundtrip = entrypoints
+            .iter()
+            .find(|entry| entry.name == "roundtrip")
+            .expect("roundtrip entrypoint");
+        assert_ne!(roundtrip.access_hints_complete, Some(false));
+        assert!(roundtrip.access_hints_skipped.is_empty());
+        assert!(roundtrip.read_keys.is_empty());
+        assert!(roundtrip.write_keys.is_empty());
+    }
+
+    #[test]
+    fn codec_builtins_reject_invalid_arguments() {
+        for (src, expected) in [
+            (
+                r#"
+fn main() {
+  let _bad = encode_int(name("not_int"));
+}
+"#,
+                "encode_int expects (int)",
+            ),
+            (
+                r#"
+fn main() {
+  let _bad = decode_int(1);
+}
+"#,
+                "decode_int expects (Blob|bytes)",
+            ),
+            (
+                r#"
+fn main() {
+  let _bad = encode_json(name("not_json"));
+}
+"#,
+                "encode_json expects (Json)",
+            ),
+            (
+                r#"
+fn main() {
+  let _bad = decode_json(1);
+}
+"#,
+                "decode_json expects (Blob|bytes)",
+            ),
+        ] {
+            let parsed = parse(src).expect("parse source");
+            let err = analyze(&parsed).expect_err("semantic analysis should reject codec args");
+            assert!(
+                err.message.contains(expected),
+                "expected `{expected}`, got `{}`",
+                err.message
+            );
+        }
+    }
+
+    #[test]
+    fn math_vector_scalar_builtins_emit_opcodes_and_complete_access() {
+        let src = r#"
+view fn scalar_math() -> int {
+  setvl(8);
+  let a = abs(-5);
+  let b = min(1, 2);
+  let c = max(3, 4);
+  let d = div_ceil(5, 2);
+  let e = gcd(21, 6);
+  let f = mean(2, 8);
+  let g = isqrt(16);
+  let h = poseidon2(1, 2);
+  let i = pubkgen(3);
+  let j = valcom(4, 5);
+  return a + b + c + d + e + f + g + h + i + j;
+}
+"#;
+        let compiler = test_mode_compiler();
+        let (bytes, manifest) = compiler
+            .compile_source_with_manifest(src)
+            .expect("compile math/vector/scalar helpers");
+        let parsed = ProgramMetadata::parse(&bytes).expect("parse metadata");
+        let opcodes: Vec<_> = bytes[parsed.code_offset..]
+            .chunks_exact(4)
+            .map(|chunk| {
+                let word = u32::from_le_bytes(<[u8; 4]>::try_from(chunk).unwrap());
+                instruction::wide::opcode(word)
+            })
+            .collect();
+
+        for (opcode, label) in [
+            (instruction::wide::arithmetic::ABS, "ABS"),
+            (instruction::wide::arithmetic::MIN, "MIN"),
+            (instruction::wide::arithmetic::MAX, "MAX"),
+            (instruction::wide::arithmetic::DIV_CEIL, "DIV_CEIL"),
+            (instruction::wide::arithmetic::GCD, "GCD"),
+            (instruction::wide::arithmetic::MEAN, "MEAN"),
+            (instruction::wide::arithmetic::ISQRT, "ISQRT"),
+            (instruction::wide::crypto::POSEIDON2, "POSEIDON2"),
+            (instruction::wide::crypto::PUBKGEN, "PUBKGEN"),
+            (instruction::wide::crypto::VALCOM, "VALCOM"),
+            (instruction::wide::crypto::SETVL, "SETVL"),
+        ] {
+            assert!(
+                opcodes.contains(&opcode),
+                "expected {label} opcode in compiled code"
+            );
+        }
+
+        let entrypoints = manifest.entrypoints.expect("entrypoints must be present");
+        let scalar_math = entrypoints
+            .iter()
+            .find(|entry| entry.name == "scalar_math")
+            .expect("scalar_math entrypoint");
+        assert_ne!(scalar_math.access_hints_complete, Some(false));
+        assert!(scalar_math.access_hints_skipped.is_empty());
+        assert!(scalar_math.read_keys.is_empty());
+        assert!(scalar_math.write_keys.is_empty());
+    }
+
+    #[test]
+    fn math_vector_scalar_builtins_reject_invalid_arguments() {
+        for (src, expected) in [
+            (
+                r#"
+fn main() {
+  let _bad = isqrt(name("not_int"));
+}
+"#,
+                "isqrt expects (int)",
+            ),
+            (
+                r#"
+fn main() {
+  let _bad = min(1, name("not_int"));
+}
+"#,
+                "min expects (int, int)",
+            ),
+            (
+                r#"
+fn main() {
+  let _bad = poseidon2(1, name("not_int"));
+}
+"#,
+                "poseidon2 expects two int args",
+            ),
+            (
+                r#"
+fn main() {
+  let _bad = poseidon6(1, 2, 3, 4, 5, name("not_int"));
+}
+"#,
+                "poseidon6 expects six int args",
+            ),
+            (
+                r#"
+fn main() {
+  let _bad = pubkgen(name("not_int"));
+}
+"#,
+                "pubkgen expects one int arg",
+            ),
+            (
+                r#"
+fn main() {
+  let _bad = valcom(1, name("not_int"));
+}
+"#,
+                "valcom expects two int args",
+            ),
+            (
+                r#"
+fn main() {
+  setvl(name("not_int"));
+}
+"#,
+                "setvl expects one int arg",
+            ),
+        ] {
+            let parsed = parse(src).expect("parse source");
+            let err =
+                analyze(&parsed).expect_err("semantic analysis should reject helper arguments");
+            assert!(
+                err.message.contains(expected),
+                "expected `{expected}`, got `{}`",
+                err.message
+            );
+        }
+    }
+
+    #[test]
+    fn numeric_neg_builtin_emits_regular_numeric_neg_syscall_and_complete_access() {
+        let src = r#"
+view fn negate() -> Amount {
+  let value: Amount = 7;
+  return numeric_neg(value);
+}
+"#;
+        let compiler = test_mode_compiler();
+        let (bytes, manifest) = compiler
+            .compile_source_with_manifest(src)
+            .expect("compile numeric_neg builtin");
+        let parsed = ProgramMetadata::parse(&bytes).expect("parse metadata");
+        let code = &bytes[parsed.code_offset..];
+
+        for (syscall, label) in [
+            (
+                ivm_abi::syscalls::SYSCALL_INPUT_PUBLISH_TLV,
+                "INPUT_PUBLISH_TLV",
+            ),
+            (ivm_abi::syscalls::SYSCALL_NUMERIC_NEG, "NUMERIC_NEG"),
+        ] {
+            let needle = encoding::wide::encode_sys(
+                instruction::wide::system::SCALL,
+                u8::try_from(syscall).expect("numeric_neg syscall id fits in u8"),
+            )
+            .to_le_bytes();
+            assert!(
+                code.windows(needle.len()).any(|window| window == needle),
+                "expected {label} syscall in compiled code"
+            );
+        }
+
+        let direct_neg = encoding::wide::encode_sys(
+            instruction::wide::system::SCALL,
+            u8::try_from(ivm_abi::syscalls::SYSCALL_NUMERIC_NEG_DIRECT)
+                .expect("direct numeric neg syscall id fits in u8"),
+        )
+        .to_le_bytes();
+        assert!(
+            !code
+                .windows(direct_neg.len())
+                .any(|window| window == direct_neg),
+            "numeric_neg must use the regular published-TLV syscall"
+        );
+
+        let entrypoints = manifest.entrypoints.expect("entrypoints must be present");
+        let negate = entrypoints
+            .iter()
+            .find(|entry| entry.name == "negate")
+            .expect("negate entrypoint");
+        assert_ne!(negate.access_hints_complete, Some(false));
+        assert!(negate.access_hints_skipped.is_empty());
+        assert!(negate.read_keys.is_empty());
+        assert!(negate.write_keys.is_empty());
+    }
+
+    #[test]
+    fn numeric_neg_builtin_rejects_invalid_arguments() {
+        let parsed = parse(
+            r#"
+fn main() {
+  let bad = numeric_neg(1);
+}
+"#,
+        )
+        .expect("parse source");
+        let err =
+            analyze(&parsed).expect_err("semantic analysis should reject raw int numeric_neg");
+        assert!(
+            err.message
+                .contains("numeric_neg expects (Amount|Balance|fixed_u128)"),
+            "unexpected semantic error: {}",
+            err.message
+        );
+    }
+
+    #[test]
+    fn numeric_to_int_builtin_emits_regular_numeric_to_int_syscall_and_complete_access() {
+        let src = r#"
+view fn convert() -> int {
+  let value: Amount = 7;
+  return numeric_to_int(value);
+}
+"#;
+        let compiler = test_mode_compiler();
+        let (bytes, manifest) = compiler
+            .compile_source_with_manifest(src)
+            .expect("compile numeric_to_int builtin");
+        let parsed = ProgramMetadata::parse(&bytes).expect("parse metadata");
+        let code = &bytes[parsed.code_offset..];
+
+        for (syscall, label) in [
+            (
+                ivm_abi::syscalls::SYSCALL_INPUT_PUBLISH_TLV,
+                "INPUT_PUBLISH_TLV",
+            ),
+            (ivm_abi::syscalls::SYSCALL_NUMERIC_TO_INT, "NUMERIC_TO_INT"),
+        ] {
+            let needle = encoding::wide::encode_sys(
+                instruction::wide::system::SCALL,
+                u8::try_from(syscall).expect("numeric_to_int syscall id fits in u8"),
+            )
+            .to_le_bytes();
+            assert!(
+                code.windows(needle.len()).any(|window| window == needle),
+                "expected {label} syscall in compiled code"
+            );
+        }
+
+        let direct_to_int = encoding::wide::encode_sys(
+            instruction::wide::system::SCALL,
+            u8::try_from(ivm_abi::syscalls::SYSCALL_NUMERIC_TO_INT_DIRECT)
+                .expect("direct numeric_to_int syscall id fits in u8"),
+        )
+        .to_le_bytes();
+        assert!(
+            !code
+                .windows(direct_to_int.len())
+                .any(|window| window == direct_to_int),
+            "numeric_to_int must use the regular published-TLV syscall"
+        );
+
+        let entrypoints = manifest.entrypoints.expect("entrypoints must be present");
+        let convert = entrypoints
+            .iter()
+            .find(|entry| entry.name == "convert")
+            .expect("convert entrypoint");
+        assert_ne!(convert.access_hints_complete, Some(false));
+        assert!(convert.access_hints_skipped.is_empty());
+        assert!(convert.read_keys.is_empty());
+        assert!(convert.write_keys.is_empty());
+    }
+
+    #[test]
+    fn numeric_to_int_builtin_rejects_invalid_arguments() {
+        let parsed = parse(
+            r#"
+fn main() {
+  let bad = numeric_to_int(1);
+}
+"#,
+        )
+        .expect("parse source");
+        let err =
+            analyze(&parsed).expect_err("semantic analysis should reject raw int numeric_to_int");
+        assert!(
+            err.message
+                .contains("numeric_to_int expects (Amount|Balance|fixed_u128)"),
+            "unexpected semantic error: {}",
+            err.message
+        );
+    }
+
+    #[test]
+    fn numeric_binary_builtins_emit_regular_numeric_syscalls_and_complete_access() {
+        let src = r#"
+view fn compute() -> Amount {
+  let left: Amount = 7;
+  let right: Amount = 3;
+  return numeric_add(left, numeric_rem(left, right));
+}
+"#;
+        let compiler = test_mode_compiler();
+        let (bytes, manifest) = compiler
+            .compile_source_with_manifest(src)
+            .expect("compile numeric binary builtins");
+        let parsed = ProgramMetadata::parse(&bytes).expect("parse metadata");
+        let code = &bytes[parsed.code_offset..];
+
+        for (syscall, label) in [
+            (
+                ivm_abi::syscalls::SYSCALL_INPUT_PUBLISH_TLV,
+                "INPUT_PUBLISH_TLV",
+            ),
+            (ivm_abi::syscalls::SYSCALL_NUMERIC_ADD, "NUMERIC_ADD"),
+            (ivm_abi::syscalls::SYSCALL_NUMERIC_REM, "NUMERIC_REM"),
+        ] {
+            let needle = encoding::wide::encode_sys(
+                instruction::wide::system::SCALL,
+                u8::try_from(syscall).expect("numeric binary syscall id fits in u8"),
+            )
+            .to_le_bytes();
+            assert!(
+                code.windows(needle.len()).any(|window| window == needle),
+                "expected {label} syscall in compiled code"
+            );
+        }
+
+        for (syscall, label) in [
+            (
+                ivm_abi::syscalls::SYSCALL_NUMERIC_ADD_DIRECT,
+                "NUMERIC_ADD_DIRECT",
+            ),
+            (
+                ivm_abi::syscalls::SYSCALL_NUMERIC_REM_DIRECT,
+                "NUMERIC_REM_DIRECT",
+            ),
+        ] {
+            let needle = encoding::wide::encode_sys(
+                instruction::wide::system::SCALL,
+                u8::try_from(syscall).expect("direct numeric binary syscall id fits in u8"),
+            )
+            .to_le_bytes();
+            assert!(
+                !code.windows(needle.len()).any(|window| window == needle),
+                "regular numeric helpers must not emit {label}"
+            );
+        }
+
+        let entrypoints = manifest.entrypoints.expect("entrypoints must be present");
+        let compute = entrypoints
+            .iter()
+            .find(|entry| entry.name == "compute")
+            .expect("compute entrypoint");
+        assert_ne!(compute.access_hints_complete, Some(false));
+        assert!(compute.access_hints_skipped.is_empty());
+        assert!(compute.read_keys.is_empty());
+        assert!(compute.write_keys.is_empty());
+    }
+
+    #[test]
+    fn numeric_compare_builtins_emit_regular_numeric_syscalls_and_complete_access() {
+        let src = r#"
+view fn compare() -> int {
+  let left: Amount = 7;
+  let right: Amount = 3;
+  if numeric_ge(left, right) {
+    return 1;
+  }
+  return 0;
+}
+"#;
+        let compiler = test_mode_compiler();
+        let (bytes, manifest) = compiler
+            .compile_source_with_manifest(src)
+            .expect("compile numeric comparison builtins");
+        let parsed = ProgramMetadata::parse(&bytes).expect("parse metadata");
+        let code = &bytes[parsed.code_offset..];
+
+        for (syscall, label) in [
+            (
+                ivm_abi::syscalls::SYSCALL_INPUT_PUBLISH_TLV,
+                "INPUT_PUBLISH_TLV",
+            ),
+            (ivm_abi::syscalls::SYSCALL_NUMERIC_GE, "NUMERIC_GE"),
+        ] {
+            let needle = encoding::wide::encode_sys(
+                instruction::wide::system::SCALL,
+                u8::try_from(syscall).expect("numeric comparison syscall id fits in u8"),
+            )
+            .to_le_bytes();
+            assert!(
+                code.windows(needle.len()).any(|window| window == needle),
+                "expected {label} syscall in compiled code"
+            );
+        }
+
+        let direct_ge = encoding::wide::encode_sys(
+            instruction::wide::system::SCALL,
+            u8::try_from(ivm_abi::syscalls::SYSCALL_NUMERIC_GE_DIRECT)
+                .expect("direct numeric_ge syscall id fits in u8"),
+        )
+        .to_le_bytes();
+        assert!(
+            !code
+                .windows(direct_ge.len())
+                .any(|window| window == direct_ge),
+            "regular numeric comparison helper must not emit NUMERIC_GE_DIRECT"
+        );
+
+        let entrypoints = manifest.entrypoints.expect("entrypoints must be present");
+        let compare = entrypoints
+            .iter()
+            .find(|entry| entry.name == "compare")
+            .expect("compare entrypoint");
+        assert_ne!(compare.access_hints_complete, Some(false));
+        assert!(compare.access_hints_skipped.is_empty());
+        assert!(compare.read_keys.is_empty());
+        assert!(compare.write_keys.is_empty());
+    }
+
+    #[test]
+    fn numeric_binary_builtins_reject_invalid_arguments() {
+        let parsed = parse(
+            r#"
+fn main() {
+  let value: Amount = 7;
+  let bad = numeric_add(1, value);
+}
+"#,
+        )
+        .expect("parse source");
+        let err =
+            analyze(&parsed).expect_err("semantic analysis should reject raw int numeric_add");
+        assert!(
+            err.message.contains(
+                "numeric_add expects (Amount|Balance|fixed_u128, Amount|Balance|fixed_u128)"
+            ),
+            "unexpected semantic error: {}",
+            err.message
+        );
+    }
+
+    #[test]
+    fn name_decode_builtin_emits_name_decode_syscall_and_complete_access() {
+        let src = r#"
+view fn decode() -> Name {
+  return name_decode(norito_bytes("70726f6265"));
+}
+"#;
+        let compiler = test_mode_compiler();
+        let (bytes, manifest) = compiler
+            .compile_source_with_manifest(src)
+            .expect("compile name_decode builtin");
+        let parsed = ProgramMetadata::parse(&bytes).expect("parse metadata");
+        let code = &bytes[parsed.code_offset..];
+
+        for (syscall, label) in [
+            (
+                ivm_abi::syscalls::SYSCALL_INPUT_PUBLISH_TLV,
+                "INPUT_PUBLISH_TLV",
+            ),
+            (ivm_abi::syscalls::SYSCALL_NAME_DECODE, "NAME_DECODE"),
+        ] {
+            let needle = encoding::wide::encode_sys(
+                instruction::wide::system::SCALL,
+                u8::try_from(syscall).expect("name_decode syscall id fits in u8"),
+            )
+            .to_le_bytes();
+            assert!(
+                code.windows(needle.len()).any(|window| window == needle),
+                "expected {label} syscall in compiled code"
+            );
+        }
+
+        let entrypoints = manifest.entrypoints.expect("entrypoints must be present");
+        let decode = entrypoints
+            .iter()
+            .find(|entry| entry.name == "decode")
+            .expect("decode entrypoint");
+        assert_ne!(decode.access_hints_complete, Some(false));
+        assert!(decode.access_hints_skipped.is_empty());
+        assert!(decode.read_keys.is_empty());
+        assert!(decode.write_keys.is_empty());
+    }
+
+    #[test]
+    fn name_decode_builtin_rejects_invalid_arguments() {
+        let parsed = parse(
+            r#"
+fn main() {
+  let bad = name_decode(1);
+}
+"#,
+        )
+        .expect("parse source");
+        let err =
+            analyze(&parsed).expect_err("semantic analysis should reject raw int name_decode");
+        assert!(
+            err.message.contains("name_decode expects (Blob|bytes)"),
+            "unexpected semantic error: {}",
+            err.message
+        );
+    }
+
+    #[test]
+    fn tlv_eq_builtin_emits_tlv_eq_syscall_and_complete_access() {
+        let src = r#"
+view fn compare() -> int {
+  let left = name("probe");
+  let right = name_decode(norito_bytes("70726f6265"));
+  if tlv_eq(left, right) {
+    return 1;
+  }
+  return 0;
+}
+"#;
+        let compiler = test_mode_compiler();
+        let (bytes, manifest) = compiler
+            .compile_source_with_manifest(src)
+            .expect("compile tlv_eq builtin");
+        let parsed = ProgramMetadata::parse(&bytes).expect("parse metadata");
+        let code = &bytes[parsed.code_offset..];
+
+        for (syscall, label) in [
+            (
+                ivm_abi::syscalls::SYSCALL_INPUT_PUBLISH_TLV,
+                "INPUT_PUBLISH_TLV",
+            ),
+            (ivm_abi::syscalls::SYSCALL_TLV_EQ, "TLV_EQ"),
+        ] {
+            let needle = encoding::wide::encode_sys(
+                instruction::wide::system::SCALL,
+                u8::try_from(syscall).expect("tlv_eq syscall id fits in u8"),
+            )
+            .to_le_bytes();
+            assert!(
+                code.windows(needle.len()).any(|window| window == needle),
+                "expected {label} syscall in compiled code"
+            );
+        }
+
+        let entrypoints = manifest.entrypoints.expect("entrypoints must be present");
+        let compare = entrypoints
+            .iter()
+            .find(|entry| entry.name == "compare")
+            .expect("compare entrypoint");
+        assert_ne!(compare.access_hints_complete, Some(false));
+        assert!(compare.access_hints_skipped.is_empty());
+        assert!(compare.read_keys.is_empty());
+        assert!(compare.write_keys.is_empty());
+    }
+
+    #[test]
+    fn tlv_eq_builtin_rejects_invalid_arguments() {
+        let parsed = parse(
+            r#"
+fn main() {
+  let bad = tlv_eq(1, name("probe"));
+}
+"#,
+        )
+        .expect("parse source");
+        let err = analyze(&parsed).expect_err("semantic analysis should reject raw int tlv_eq");
+        assert!(
+            err.message
+                .contains("tlv_eq expects (pointer-ABI, pointer-ABI)"),
+            "unexpected semantic error: {}",
+            err.message
+        );
+    }
+
+    #[test]
+    fn tlv_len_builtin_emits_tlv_len_syscall_and_complete_access() {
+        let src = r#"
+view fn length() -> int {
+  return tlv_len(name("probe"));
+}
+"#;
+        let compiler = test_mode_compiler();
+        let (bytes, manifest) = compiler
+            .compile_source_with_manifest(src)
+            .expect("compile tlv_len builtin");
+        let parsed = ProgramMetadata::parse(&bytes).expect("parse metadata");
+        let code = &bytes[parsed.code_offset..];
+
+        for (syscall, label) in [
+            (
+                ivm_abi::syscalls::SYSCALL_INPUT_PUBLISH_TLV,
+                "INPUT_PUBLISH_TLV",
+            ),
+            (ivm_abi::syscalls::SYSCALL_TLV_LEN, "TLV_LEN"),
+        ] {
+            let needle = encoding::wide::encode_sys(
+                instruction::wide::system::SCALL,
+                u8::try_from(syscall).expect("tlv_len syscall id fits in u8"),
+            )
+            .to_le_bytes();
+            assert!(
+                code.windows(needle.len()).any(|window| window == needle),
+                "expected {label} syscall in compiled code"
+            );
+        }
+
+        let entrypoints = manifest.entrypoints.expect("entrypoints must be present");
+        let length = entrypoints
+            .iter()
+            .find(|entry| entry.name == "length")
+            .expect("length entrypoint");
+        assert_ne!(length.access_hints_complete, Some(false));
+        assert!(length.access_hints_skipped.is_empty());
+        assert!(length.read_keys.is_empty());
+        assert!(length.write_keys.is_empty());
+    }
+
+    #[test]
+    fn tlv_len_builtin_rejects_invalid_arguments() {
+        let parsed = parse(
+            r#"
+fn main() {
+  let bad = tlv_len(1);
+}
+"#,
+        )
+        .expect("parse source");
+        let err = analyze(&parsed).expect_err("semantic analysis should reject raw int tlv_len");
+        assert!(
+            err.message
+                .contains("tlv_len expects a pointer-ABI type, Json, or Blob|bytes argument"),
+            "unexpected semantic error: {}",
+            err.message
+        );
+    }
+
+    #[test]
+    fn pointer_to_norito_builtin_emits_pointer_to_norito_syscall_and_complete_access() {
+        let src = r#"
+view fn encode() -> bytes {
+  return pointer_to_norito(name("probe"));
+}
+"#;
+        let compiler = test_mode_compiler();
+        let (bytes, manifest) = compiler
+            .compile_source_with_manifest(src)
+            .expect("compile pointer_to_norito builtin");
+        let parsed = ProgramMetadata::parse(&bytes).expect("parse metadata");
+        let code = &bytes[parsed.code_offset..];
+
+        for (syscall, label) in [
+            (
+                ivm_abi::syscalls::SYSCALL_INPUT_PUBLISH_TLV,
+                "INPUT_PUBLISH_TLV",
+            ),
+            (
+                ivm_abi::syscalls::SYSCALL_POINTER_TO_NORITO,
+                "POINTER_TO_NORITO",
+            ),
+        ] {
+            let needle = encoding::wide::encode_sys(
+                instruction::wide::system::SCALL,
+                u8::try_from(syscall).expect("pointer_to_norito syscall id fits in u8"),
+            )
+            .to_le_bytes();
+            assert!(
+                code.windows(needle.len()).any(|window| window == needle),
+                "expected {label} syscall in compiled code"
+            );
+        }
+
+        let entrypoints = manifest.entrypoints.expect("entrypoints must be present");
+        let encode = entrypoints
+            .iter()
+            .find(|entry| entry.name == "encode")
+            .expect("encode entrypoint");
+        assert_ne!(encode.access_hints_complete, Some(false));
+        assert!(encode.access_hints_skipped.is_empty());
+        assert!(encode.read_keys.is_empty());
+        assert!(encode.write_keys.is_empty());
+    }
+
+    #[test]
+    fn pointer_to_norito_builtin_rejects_invalid_arguments() {
+        let parsed = parse(
+            r#"
+fn main() {
+  let bad = pointer_to_norito(json!{ ok: true });
+}
+"#,
+        )
+        .expect("parse source");
+        let err =
+            analyze(&parsed).expect_err("semantic analysis should reject JSON pointer_to_norito");
+        assert!(
+            err.message
+                .contains("pointer_to_norito expects a pointer-ABI type or Blob|bytes argument"),
+            "unexpected semantic error: {}",
+            err.message
+        );
     }
 
     #[test]
@@ -1233,6 +5125,176 @@ fn main() {
                 .any(|window| window == needle),
             "expected RESOLVE_ACCOUNT_ALIAS syscall for builtin alias resolution"
         );
+    }
+
+    #[test]
+    fn resolve_account_alias_builtin_rejects_invalid_arguments() {
+        let parsed = parse(r#"fn main() { let _acct = resolve_account_alias(json_object()); }"#)
+            .expect("parse invalid alias resolution");
+        let err = analyze(&parsed).expect_err("semantic analysis should reject alias arg type");
+        assert!(
+            err.message
+                .contains("resolve_account_alias expects (String|Blob)"),
+            "unexpected semantic error: {}",
+            err.message
+        );
+    }
+
+    #[test]
+    fn runtime_sysvar_builtins_emit_syscalls() {
+        let compiler = test_mode_compiler();
+        let bytes = compiler
+            .compile_source(
+                r#"
+fn main() {
+  let _authority = authority();
+  let _sysvar_authority = sysvar_authority();
+  let _now = current_time_ms();
+  let _height = block_height();
+  let _block_time = block_time_ms();
+  let _chain = chain_id();
+  let _contract = contract_address();
+  let _entry = entrypoint();
+}
+"#,
+            )
+            .expect("compile runtime sysvars");
+        let parsed = ProgramMetadata::parse(&bytes).expect("parse metadata");
+        let code = &bytes[parsed.code_offset..];
+
+        for (syscall, label) in [
+            (ivm_abi::syscalls::SYSCALL_GET_AUTHORITY, "GET_AUTHORITY"),
+            (
+                ivm_abi::syscalls::SYSCALL_SYSVAR_AUTHORITY,
+                "SYSVAR_AUTHORITY",
+            ),
+            (
+                ivm_abi::syscalls::SYSCALL_CURRENT_TIME_MS,
+                "CURRENT_TIME_MS",
+            ),
+            (
+                ivm_abi::syscalls::SYSCALL_SYSVAR_BLOCK_HEIGHT,
+                "SYSVAR_BLOCK_HEIGHT",
+            ),
+            (
+                ivm_abi::syscalls::SYSCALL_SYSVAR_BLOCK_TIME_MS,
+                "SYSVAR_BLOCK_TIME_MS",
+            ),
+            (
+                ivm_abi::syscalls::SYSCALL_SYSVAR_CHAIN_ID,
+                "SYSVAR_CHAIN_ID",
+            ),
+            (
+                ivm_abi::syscalls::SYSCALL_SYSVAR_CONTRACT_ADDRESS,
+                "SYSVAR_CONTRACT_ADDRESS",
+            ),
+            (
+                ivm_abi::syscalls::SYSCALL_SYSVAR_ENTRYPOINT,
+                "SYSVAR_ENTRYPOINT",
+            ),
+        ] {
+            let word = if let Ok(imm8) = u8::try_from(syscall) {
+                encoding::wide::encode_sys(instruction::wide::system::SCALL, imm8)
+            } else {
+                encoding::wide::encode_syscallx(syscall)
+            };
+            let needle = word.to_le_bytes();
+            assert!(
+                code.windows(needle.len()).any(|window| window == needle),
+                "expected {label} syscall"
+            );
+        }
+    }
+
+    #[test]
+    fn runtime_sysvar_builtins_reject_invalid_arguments() {
+        for (source, expected) in [
+            (
+                r#"fn main() { let _authority = authority(1); }"#,
+                "authority expects no arguments",
+            ),
+            (
+                r#"fn main() { let _height = block_height(1); }"#,
+                "block_height expects no arguments",
+            ),
+            (
+                r#"fn main() { let _chain = chain_id(1); }"#,
+                "chain_id expects no arguments",
+            ),
+            (
+                r#"fn main() { let _caller = sysvar_authority(1); }"#,
+                "sysvar_authority expects no arguments",
+            ),
+        ] {
+            let parsed = parse(source).expect("parse invalid runtime sysvar call");
+            let err = analyze(&parsed).expect_err("semantic analysis should reject sysvar arity");
+            assert!(
+                err.message.contains(expected),
+                "unexpected semantic error: {}",
+                err.message
+            );
+        }
+    }
+
+    #[test]
+    fn legacy_host_runtime_control_builtins_emit_syscalls() {
+        let compiler = test_mode_compiler();
+        let bytes = compiler
+            .compile_source(
+                r#"
+fn main() {
+  create_nfts_for_all_users();
+  set_execution_depth(3);
+}
+"#,
+            )
+            .expect("compile legacy host runtime controls");
+        let parsed = ProgramMetadata::parse(&bytes).expect("parse metadata");
+        let code = &bytes[parsed.code_offset..];
+
+        for (syscall, label) in [
+            (
+                ivm_abi::syscalls::SYSCALL_CREATE_NFTS_FOR_ALL_USERS,
+                "CREATE_NFTS_FOR_ALL_USERS",
+            ),
+            (
+                ivm_abi::syscalls::SYSCALL_SET_SMARTCONTRACT_EXECUTION_DEPTH,
+                "SET_SMARTCONTRACT_EXECUTION_DEPTH",
+            ),
+        ] {
+            let needle = encoding::wide::encode_sys(
+                instruction::wide::system::SCALL,
+                u8::try_from(syscall).expect("legacy runtime control syscall fits imm8"),
+            )
+            .to_le_bytes();
+            assert!(
+                code.windows(needle.len()).any(|window| window == needle),
+                "expected {label} syscall"
+            );
+        }
+    }
+
+    #[test]
+    fn legacy_host_runtime_control_builtins_reject_invalid_arguments() {
+        for (source, expected) in [
+            (
+                r#"fn main() { create_nfts_for_all_users(1); }"#,
+                "create_nfts_for_all_users expects no arguments",
+            ),
+            (
+                r#"fn main() { set_execution_depth("deep"); }"#,
+                "set_execution_depth expects one int arg",
+            ),
+        ] {
+            let parsed = parse(source).expect("parse invalid legacy runtime control call");
+            let err =
+                analyze(&parsed).expect_err("semantic analysis should reject runtime control args");
+            assert!(
+                err.message.contains(expected),
+                "unexpected semantic error: {}",
+                err.message
+            );
+        }
     }
 
     #[test]
@@ -2223,6 +6285,52 @@ fn main() {{
             .expect("main entrypoint");
         assert_eq!(main.access_hints_complete, Some(true));
         assert!(main.access_hints_skipped.is_empty());
+    }
+
+    #[test]
+    fn manifest_access_set_hints_include_sysvar_authority_placeholders() {
+        let asset_literal = "62Fk4FPcMuLvW5QjDGNF2a4jAmjM";
+        let source = format!(
+            r#"
+fn main() {{
+  let caller = sysvar_authority();
+  let asset = asset_definition("{asset_literal}");
+  transfer_asset(caller, caller, asset, 1);
+  set_account_detail(caller, name("status"), json("{{}}"));
+}}
+"#
+        );
+
+        let compiler = Compiler::new();
+        let (_bytes, manifest) = compiler
+            .compile_source_with_manifest(&source)
+            .expect("compile manifest");
+        let hints = manifest
+            .access_set_hints
+            .expect("expected access_set_hints");
+        let authority_asset = format!("asset:{asset_literal}:$authority");
+        let authority_detail = "account.detail:$authority:status".to_owned();
+
+        assert!(hints.read_keys.contains(&AUTHORITY_ACCOUNT_KEY.to_owned()));
+        assert!(hints.read_keys.contains(&authority_asset));
+        assert!(hints.write_keys.contains(&authority_asset));
+        assert!(hints.read_keys.contains(&authority_detail));
+        assert!(hints.write_keys.contains(&authority_detail));
+        assert!(!hints.read_keys.contains(&GLOBAL_WILDCARD_KEY.to_string()));
+        assert!(!hints.write_keys.contains(&GLOBAL_WILDCARD_KEY.to_string()));
+
+        let entrypoints = manifest.entrypoints.expect("entrypoints present");
+        let main = entrypoints
+            .iter()
+            .find(|entry| entry.name == "main")
+            .expect("main entrypoint");
+        assert_eq!(main.access_hints_complete, Some(true));
+        assert!(main.access_hints_skipped.is_empty());
+        assert!(main.read_keys.contains(&AUTHORITY_ACCOUNT_KEY.to_owned()));
+        assert!(main.read_keys.contains(&authority_asset));
+        assert!(main.write_keys.contains(&authority_asset));
+        assert!(main.read_keys.contains(&authority_detail));
+        assert!(main.write_keys.contains(&authority_detail));
     }
 
     #[test]
@@ -4460,7 +8568,9 @@ impl Compiler {
                     if let ir::Instr::ActorAccount { dest, .. } = instr {
                         dataref_kind_map.insert((func_idx, *dest), DRK::Account);
                     }
-                    if let ir::Instr::GetAuthority { dest } = instr {
+                    if let ir::Instr::GetAuthority { dest } | ir::Instr::SysvarAuthority { dest } =
+                        instr
+                    {
                         dataref_kind_map.insert((func_idx, *dest), DRK::Account);
                         authority_account_temps.insert((func_idx, *dest));
                     }
@@ -4754,6 +8864,8 @@ impl Compiler {
                             ir::DataRefKind::AxtDescriptor => "axt_descriptor",
                             ir::DataRefKind::AssetHandle => "asset_handle",
                             ir::DataRefKind::ProofBlob => "proof_blob",
+                            ir::DataRefKind::SoracloudRequest => "soracloud_request",
+                            ir::DataRefKind::SoracloudResponse => "soracloud_response",
                         };
                         let msg = format!(
                             "{name} expects a string literal; pass a literal or Blob|bytes"
@@ -5595,6 +9707,63 @@ impl Compiler {
                             );
                             code.extend_from_slice(&word.to_le_bytes());
                         }
+                        Instr::AddSignatory { account, signatory }
+                        | Instr::RemoveSignatory { account, signatory } => {
+                            if let Some(acc_str) = string_map.get(&(func_idx, *account)) {
+                                let key_acc = DataKey(DataKind::Account, acc_str.clone());
+                                emit_literal_stub(&mut code, &mut fixups, 10, key_acc);
+                            } else {
+                                let r = src_reg(account, scratch1, &mut code)?;
+                                push_word(&mut code, encode_addi(10, r, 0)?);
+                            }
+                            if let Some(json) = string_map.get(&(func_idx, *signatory)) {
+                                let key_json = DataKey(DataKind::Json, json.clone());
+                                emit_literal_stub(&mut code, &mut fixups, 11, key_json);
+                            } else {
+                                let r = src_reg(signatory, scratch2, &mut code)?;
+                                push_word(&mut code, encode_addi(11, r, 0)?);
+                            }
+                            let pub_word = encoding::wide::encode_sys(
+                                instruction::wide::system::SCALL,
+                                syscalls::SYSCALL_INPUT_PUBLISH_TLV as u8,
+                            );
+                            code.extend_from_slice(&pub_word.to_le_bytes());
+                            push_word(&mut code, encode_addi(12, 10, 0)?);
+                            push_word(&mut code, encode_addi(10, 11, 0)?);
+                            code.extend_from_slice(&pub_word.to_le_bytes());
+                            push_word(&mut code, encode_addi(11, 10, 0)?);
+                            push_word(&mut code, encode_addi(10, 12, 0)?);
+                            let syscall = match instr {
+                                Instr::AddSignatory { .. } => syscalls::SYSCALL_ADD_SIGNATORY,
+                                _ => syscalls::SYSCALL_REMOVE_SIGNATORY,
+                            };
+                            let word = encoding::wide::encode_sys(
+                                instruction::wide::system::SCALL,
+                                syscall as u8,
+                            );
+                            code.extend_from_slice(&word.to_le_bytes());
+                        }
+                        Instr::SetAccountQuorum { account, quorum } => {
+                            if let Some(acc_str) = string_map.get(&(func_idx, *account)) {
+                                let key_acc = DataKey(DataKind::Account, acc_str.clone());
+                                emit_literal_stub(&mut code, &mut fixups, 10, key_acc);
+                            } else {
+                                let r = src_reg(account, scratch1, &mut code)?;
+                                push_word(&mut code, encode_addi(10, r, 0)?);
+                            }
+                            let r_quorum = src_reg(quorum, scratch2, &mut code)?;
+                            push_word(&mut code, encode_addi(11, r_quorum, 0)?);
+                            let pub_word = encoding::wide::encode_sys(
+                                instruction::wide::system::SCALL,
+                                syscalls::SYSCALL_INPUT_PUBLISH_TLV as u8,
+                            );
+                            code.extend_from_slice(&pub_word.to_le_bytes());
+                            let word = encoding::wide::encode_sys(
+                                instruction::wide::system::SCALL,
+                                syscalls::SYSCALL_SET_ACCOUNT_QUORUM as u8,
+                            );
+                            code.extend_from_slice(&word.to_le_bytes());
+                        }
                         Instr::UnregisterAsset { asset } => {
                             if let Some(ad_str) = string_map.get(&(func_idx, *asset)) {
                                 let key = DataKey(DataKind::AssetDef, ad_str.clone());
@@ -5906,6 +10075,123 @@ impl Compiler {
                             code.extend_from_slice(&word.to_le_bytes());
                             uses_zk = true;
                         }
+                        Instr::ProveExecution { dest } => {
+                            push_syscall(&mut code, syscalls::SYSCALL_PROVE_EXECUTION);
+                            let (rd, spilled, imm) = dst_reg(dest);
+                            push_word(&mut code, encode_addi(rd, 10, 0)?);
+                            spill_back(dest, rd, spilled, imm, &mut code)?;
+                        }
+                        Instr::Alloc { dest, bytes } => {
+                            let r = src_reg(bytes, scratch1, &mut code)?;
+                            push_word(&mut code, encode_addi(10, r, 0)?);
+                            push_syscall(&mut code, syscalls::SYSCALL_ALLOC);
+                            let (rd, spilled, imm) = dst_reg(dest);
+                            push_word(&mut code, encode_addi(rd, 10, 0)?);
+                            spill_back(dest, rd, spilled, imm, &mut code)?;
+                        }
+                        Instr::GrowHeap { dest, bytes } => {
+                            let r = src_reg(bytes, scratch1, &mut code)?;
+                            push_word(&mut code, encode_addi(10, r, 0)?);
+                            push_syscall(&mut code, syscalls::SYSCALL_GROW_HEAP);
+                            let (rd, spilled, imm) = dst_reg(dest);
+                            push_word(&mut code, encode_addi(rd, 10, 0)?);
+                            spill_back(dest, rd, spilled, imm, &mut code)?;
+                        }
+                        Instr::GetMerklePath {
+                            dest,
+                            address,
+                            output,
+                            root_output,
+                        } => {
+                            let address_reg = src_reg(address, scratch1, &mut code)?;
+                            push_word(&mut code, encode_addi(10, address_reg, 0)?);
+                            let output_reg = src_reg(output, scratch2, &mut code)?;
+                            push_word(&mut code, encode_addi(11, output_reg, 0)?);
+                            if let Some(root_output) = root_output {
+                                let root_reg = src_reg(root_output, scratch1, &mut code)?;
+                                push_word(&mut code, encode_addi(12, root_reg, 0)?);
+                            } else {
+                                push_word(&mut code, encode_addi(12, 0, 0)?);
+                            }
+                            push_syscall(&mut code, syscalls::SYSCALL_GET_MERKLE_PATH);
+                            let (rd, spilled, imm) = dst_reg(dest);
+                            push_word(&mut code, encode_addi(rd, 10, 0)?);
+                            spill_back(dest, rd, spilled, imm, &mut code)?;
+                        }
+                        Instr::GetMerkleCompact {
+                            dest,
+                            address,
+                            output,
+                            max_depth,
+                            root_output,
+                        } => {
+                            let address_reg = src_reg(address, scratch1, &mut code)?;
+                            push_word(&mut code, encode_addi(10, address_reg, 0)?);
+                            let output_reg = src_reg(output, scratch2, &mut code)?;
+                            push_word(&mut code, encode_addi(11, output_reg, 0)?);
+                            if let Some(max_depth) = max_depth {
+                                let depth_reg = src_reg(max_depth, scratch1, &mut code)?;
+                                push_word(&mut code, encode_addi(12, depth_reg, 0)?);
+                            } else {
+                                push_word(&mut code, encode_addi(12, 0, 0)?);
+                            }
+                            if let Some(root_output) = root_output {
+                                let root_reg = src_reg(root_output, scratch1, &mut code)?;
+                                push_word(&mut code, encode_addi(13, root_reg, 0)?);
+                            } else {
+                                push_word(&mut code, encode_addi(13, 0, 0)?);
+                            }
+                            push_syscall(&mut code, syscalls::SYSCALL_GET_MERKLE_COMPACT);
+                            let (rd, spilled, imm) = dst_reg(dest);
+                            push_word(&mut code, encode_addi(rd, 10, 0)?);
+                            spill_back(dest, rd, spilled, imm, &mut code)?;
+                        }
+                        Instr::GetRegisterMerkleCompact {
+                            dest,
+                            register_index,
+                            output,
+                            max_depth,
+                            root_output,
+                        } => {
+                            let index_reg = src_reg(register_index, scratch1, &mut code)?;
+                            push_word(&mut code, encode_addi(10, index_reg, 0)?);
+                            let output_reg = src_reg(output, scratch2, &mut code)?;
+                            push_word(&mut code, encode_addi(11, output_reg, 0)?);
+                            if let Some(max_depth) = max_depth {
+                                let depth_reg = src_reg(max_depth, scratch1, &mut code)?;
+                                push_word(&mut code, encode_addi(12, depth_reg, 0)?);
+                            } else {
+                                push_word(&mut code, encode_addi(12, 0, 0)?);
+                            }
+                            if let Some(root_output) = root_output {
+                                let root_reg = src_reg(root_output, scratch1, &mut code)?;
+                                push_word(&mut code, encode_addi(13, root_reg, 0)?);
+                            } else {
+                                push_word(&mut code, encode_addi(13, 0, 0)?);
+                            }
+                            push_syscall(&mut code, syscalls::SYSCALL_GET_REGISTER_MERKLE_COMPACT);
+                            let (rd, spilled, imm) = dst_reg(dest);
+                            push_word(&mut code, encode_addi(rd, 10, 0)?);
+                            spill_back(dest, rd, spilled, imm, &mut code)?;
+                        }
+                        Instr::VerifyProof { dest, payload } => {
+                            if let Some(pstr) = string_map.get(&(func_idx, *payload)) {
+                                let key = DataKey(DataKind::NoritoBytes, pstr.clone());
+                                emit_literal_stub(&mut code, &mut fixups, 10, key);
+                            } else {
+                                let r = src_reg(payload, scratch1, &mut code)?;
+                                push_word(&mut code, encode_addi(10, r, 0)?);
+                            }
+                            let pub_word = encoding::wide::encode_sys(
+                                instruction::wide::system::SCALL,
+                                syscalls::SYSCALL_INPUT_PUBLISH_TLV as u8,
+                            );
+                            code.extend_from_slice(&pub_word.to_le_bytes());
+                            push_syscall(&mut code, syscalls::SYSCALL_VERIFY_PROOF);
+                            let (rd, spilled, imm) = dst_reg(dest);
+                            push_word(&mut code, encode_addi(rd, 10, 0)?);
+                            spill_back(dest, rd, spilled, imm, &mut code)?;
+                        }
                         Instr::VendorExecuteInstruction { payload } => {
                             if let Some(pstr) = string_map.get(&(func_idx, *payload)) {
                                 let key = DataKey(DataKind::NoritoBytes, pstr.clone());
@@ -5945,6 +10231,199 @@ impl Compiler {
                                 syscalls::SYSCALL_SMARTCONTRACT_EXECUTE_QUERY as u8,
                             );
                             code.extend_from_slice(&word.to_le_bytes());
+                            let (rd, spilled, imm) = dst_reg(dest);
+                            push_word(&mut code, encode_addi(rd, 10, 0)?);
+                            spill_back(dest, rd, spilled, imm, &mut code)?;
+                        }
+                        Instr::QueryExecuteNorito { dest, payload } => {
+                            if let Some(pstr) = string_map.get(&(func_idx, *payload)) {
+                                let key = DataKey(DataKind::NoritoBytes, pstr.clone());
+                                emit_literal_stub(&mut code, &mut fixups, 10, key);
+                            } else {
+                                let r = src_reg(payload, scratch1, &mut code)?;
+                                push_word(&mut code, encode_addi(10, r, 0)?);
+                            }
+                            let pub_word = encoding::wide::encode_sys(
+                                instruction::wide::system::SCALL,
+                                syscalls::SYSCALL_INPUT_PUBLISH_TLV as u8,
+                            );
+                            code.extend_from_slice(&pub_word.to_le_bytes());
+                            push_syscall(&mut code, syscalls::SYSCALL_QUERY_EXECUTE_NORITO);
+                            let (rd, spilled, imm) = dst_reg(dest);
+                            push_word(&mut code, encode_addi(rd, 10, 0)?);
+                            spill_back(dest, rd, spilled, imm, &mut code)?;
+                        }
+                        Instr::QueryGet { dest, key, syscall } => {
+                            let r = src_reg(key, scratch1, &mut code)?;
+                            push_word(&mut code, encode_addi(10, r, 0)?);
+                            let pub_word = encoding::wide::encode_sys(
+                                instruction::wide::system::SCALL,
+                                syscalls::SYSCALL_INPUT_PUBLISH_TLV as u8,
+                            );
+                            code.extend_from_slice(&pub_word.to_le_bytes());
+                            push_syscall(&mut code, *syscall);
+                            let (rd, spilled, imm) = dst_reg(dest);
+                            push_word(&mut code, encode_addi(rd, 10, 0)?);
+                            spill_back(dest, rd, spilled, imm, &mut code)?;
+                        }
+                        Instr::GetAccountBalance {
+                            dest,
+                            account,
+                            asset,
+                        } => {
+                            if let Some(account_str) = string_map.get(&(func_idx, *account)) {
+                                emit_literal_stub(
+                                    &mut code,
+                                    &mut fixups,
+                                    10,
+                                    DataKey(DataKind::Account, account_str.clone()),
+                                );
+                            } else {
+                                let r = src_reg(account, scratch1, &mut code)?;
+                                push_word(&mut code, encode_addi(10, r, 0)?);
+                            }
+                            if let Some(asset_str) = string_map.get(&(func_idx, *asset)) {
+                                emit_literal_stub(
+                                    &mut code,
+                                    &mut fixups,
+                                    11,
+                                    DataKey(DataKind::AssetDef, asset_str.clone()),
+                                );
+                            } else {
+                                let r = src_reg(asset, scratch2, &mut code)?;
+                                push_word(&mut code, encode_addi(11, r, 0)?);
+                            }
+                            let pub_word = encoding::wide::encode_sys(
+                                instruction::wide::system::SCALL,
+                                syscalls::SYSCALL_INPUT_PUBLISH_TLV as u8,
+                            );
+                            code.extend_from_slice(&pub_word.to_le_bytes());
+                            push_word(&mut code, encode_addi(12, 10, 0)?);
+                            push_word(&mut code, encode_addi(10, 11, 0)?);
+                            code.extend_from_slice(&pub_word.to_le_bytes());
+                            push_word(&mut code, encode_addi(11, 10, 0)?);
+                            push_word(&mut code, encode_addi(10, 12, 0)?);
+                            push_syscall(&mut code, syscalls::SYSCALL_GET_ACCOUNT_BALANCE);
+                            let (rd, spilled, imm) = dst_reg(dest);
+                            push_word(&mut code, encode_addi(rd, 10, 0)?);
+                            spill_back(dest, rd, spilled, imm, &mut code)?;
+                        }
+                        Instr::GetPublicInput { dest, key } => {
+                            if !durable_enabled {
+                                return Err(i18n::translate(
+                                    self.lang,
+                                    Message::UnsupportedBinaryOp(durable_required_msg),
+                                ));
+                            }
+                            if dataref_kind_map.get(&(func_idx, *key))
+                                == Some(&ir::DataRefKind::Name)
+                                && let Some(raw_key) = string_map.get(&(func_idx, *key))
+                            {
+                                emit_literal_stub(
+                                    &mut code,
+                                    &mut fixups,
+                                    10,
+                                    DataKey(DataKind::Name, raw_key.clone()),
+                                );
+                            } else {
+                                let r = src_reg(key, scratch1, &mut code)?;
+                                push_word(&mut code, encode_addi(10, r, 0)?);
+                            }
+                            let pub_word = encoding::wide::encode_sys(
+                                instruction::wide::system::SCALL,
+                                syscalls::SYSCALL_INPUT_PUBLISH_TLV as u8,
+                            );
+                            code.extend_from_slice(&pub_word.to_le_bytes());
+                            push_syscall(&mut code, syscalls::SYSCALL_GET_PUBLIC_INPUT);
+                            let (rd, spilled, imm) = dst_reg(dest);
+                            push_word(&mut code, encode_addi(rd, 10, 0)?);
+                            spill_back(dest, rd, spilled, imm, &mut code)?;
+                        }
+                        Instr::GetPrivateInput { dest, index } => {
+                            let r = src_reg(index, scratch1, &mut code)?;
+                            push_word(&mut code, encode_addi(10, r, 0)?);
+                            push_syscall(&mut code, syscalls::SYSCALL_GET_PRIVATE_INPUT);
+                            let (rd, spilled, imm) = dst_reg(dest);
+                            push_word(&mut code, encode_addi(rd, 10, 0)?);
+                            spill_back(dest, rd, spilled, imm, &mut code)?;
+                        }
+                        Instr::UseNullifier { nullifier } => {
+                            let r = src_reg(nullifier, scratch1, &mut code)?;
+                            push_word(&mut code, encode_addi(10, r, 0)?);
+                            push_syscall(&mut code, syscalls::SYSCALL_USE_NULLIFIER);
+                        }
+                        Instr::CommitOutput => {
+                            push_syscall(&mut code, syscalls::SYSCALL_COMMIT_OUTPUT);
+                        }
+                        Instr::SmartContractLifecycle { payload, syscall } => {
+                            if let Some(pstr) = string_map.get(&(func_idx, *payload)) {
+                                let key = DataKey(DataKind::NoritoBytes, pstr.clone());
+                                emit_literal_stub(&mut code, &mut fixups, 10, key);
+                            } else {
+                                let r = src_reg(payload, scratch1, &mut code)?;
+                                push_word(&mut code, encode_addi(10, r, 0)?);
+                            }
+                            let pub_word = encoding::wide::encode_sys(
+                                instruction::wide::system::SCALL,
+                                syscalls::SYSCALL_INPUT_PUBLISH_TLV as u8,
+                            );
+                            code.extend_from_slice(&pub_word.to_le_bytes());
+                            push_syscall(&mut code, *syscall);
+                        }
+                        Instr::TransferBatchApply { payload } => {
+                            if let Some(pstr) = string_map.get(&(func_idx, *payload)) {
+                                let key = DataKey(DataKind::NoritoBytes, pstr.clone());
+                                emit_literal_stub(&mut code, &mut fixups, 10, key);
+                            } else {
+                                let r = src_reg(payload, scratch1, &mut code)?;
+                                push_word(&mut code, encode_addi(10, r, 0)?);
+                            }
+                            let pub_word = encoding::wide::encode_sys(
+                                instruction::wide::system::SCALL,
+                                syscalls::SYSCALL_INPUT_PUBLISH_TLV as u8,
+                            );
+                            code.extend_from_slice(&pub_word.to_le_bytes());
+                            push_syscall(&mut code, syscalls::SYSCALL_TRANSFER_V1_BATCH_APPLY);
+                        }
+                        Instr::ZkRootsGet { dest, payload }
+                        | Instr::ZkVoteGetTally { dest, payload }
+                        | Instr::VrfEpochSeed { dest, payload } => {
+                            if let Some(pstr) = string_map.get(&(func_idx, *payload)) {
+                                let key = DataKey(DataKind::NoritoBytes, pstr.clone());
+                                emit_literal_stub(&mut code, &mut fixups, 10, key);
+                            } else {
+                                let r = src_reg(payload, scratch1, &mut code)?;
+                                push_word(&mut code, encode_addi(10, r, 0)?);
+                            }
+                            let pub_word = encoding::wide::encode_sys(
+                                instruction::wide::system::SCALL,
+                                syscalls::SYSCALL_INPUT_PUBLISH_TLV as u8,
+                            );
+                            code.extend_from_slice(&pub_word.to_le_bytes());
+                            let syscall = match instr {
+                                Instr::ZkRootsGet { .. } => syscalls::SYSCALL_ZK_ROOTS_GET,
+                                Instr::ZkVoteGetTally { .. } => syscalls::SYSCALL_ZK_VOTE_GET_TALLY,
+                                Instr::VrfEpochSeed { .. } => syscalls::SYSCALL_VRF_EPOCH_SEED,
+                                _ => unreachable!(),
+                            };
+                            push_syscall(&mut code, syscall);
+                            let (rd, spilled, imm) = dst_reg(dest);
+                            push_word(&mut code, encode_addi(rd, 10, 0)?);
+                            spill_back(dest, rd, spilled, imm, &mut code)?;
+                        }
+                        Instr::SoracloudHostCall {
+                            dest,
+                            request,
+                            syscall,
+                        } => {
+                            let r = src_reg(request, scratch1, &mut code)?;
+                            push_word(&mut code, encode_addi(10, r, 0)?);
+                            let pub_word = encoding::wide::encode_sys(
+                                instruction::wide::system::SCALL,
+                                syscalls::SYSCALL_INPUT_PUBLISH_TLV as u8,
+                            );
+                            code.extend_from_slice(&pub_word.to_le_bytes());
+                            push_syscall(&mut code, *syscall);
                             let (rd, spilled, imm) = dst_reg(dest);
                             push_word(&mut code, encode_addi(rd, 10, 0)?);
                             spill_back(dest, rd, spilled, imm, &mut code)?;
@@ -6472,6 +10951,108 @@ impl Compiler {
                             );
                             code.extend_from_slice(&word.to_le_bytes());
                         }
+                        Instr::AnonymousEscrowOpenOffer { request }
+                        | Instr::AnonymousEscrowRelease { request }
+                        | Instr::AnonymousEscrowCancel { request }
+                        | Instr::AnonymousEscrowResolveDispute { request } => {
+                            if let Some(pstr) = string_map.get(&(func_idx, *request)) {
+                                let key = DataKey(DataKind::NoritoBytes, pstr.clone());
+                                emit_literal_stub(&mut code, &mut fixups, 10, key);
+                            } else {
+                                let r_request = src_reg(request, scratch1, &mut code)?;
+                                push_word(&mut code, encode_addi(10, r_request, 0)?);
+                            }
+                            let pub_word = encoding::wide::encode_sys(
+                                instruction::wide::system::SCALL,
+                                syscalls::SYSCALL_INPUT_PUBLISH_TLV as u8,
+                            );
+                            code.extend_from_slice(&pub_word.to_le_bytes());
+                            let syscall = match instr {
+                                Instr::AnonymousEscrowOpenOffer { .. } => {
+                                    syscalls::SYSCALL_ANONYMOUS_ESCROW_OPEN_OFFER
+                                }
+                                Instr::AnonymousEscrowRelease { .. } => {
+                                    syscalls::SYSCALL_ANONYMOUS_ESCROW_RELEASE
+                                }
+                                Instr::AnonymousEscrowCancel { .. } => {
+                                    syscalls::SYSCALL_ANONYMOUS_ESCROW_CANCEL
+                                }
+                                Instr::AnonymousEscrowResolveDispute { .. } => {
+                                    syscalls::SYSCALL_ANONYMOUS_ESCROW_RESOLVE_DISPUTE
+                                }
+                                _ => unreachable!(),
+                            };
+                            let word = encoding::wide::encode_sys(
+                                instruction::wide::system::SCALL,
+                                syscall as u8,
+                            );
+                            code.extend_from_slice(&word.to_le_bytes());
+                        }
+                        Instr::AnonymousEscrowAccept { escrow }
+                        | Instr::AnonymousEscrowMarkPaymentSent { escrow } => {
+                            if let Some(escrow_str) = string_map
+                                .get(&(func_idx, *escrow))
+                                .map(|s| DataKey(DataKind::Name, s.clone()))
+                            {
+                                emit_literal_stub(&mut code, &mut fixups, 10, escrow_str);
+                            } else {
+                                let r_escrow = src_reg(escrow, scratch1, &mut code)?;
+                                push_word(&mut code, encode_addi(10, r_escrow, 0)?);
+                            }
+                            let pub_word = encoding::wide::encode_sys(
+                                instruction::wide::system::SCALL,
+                                syscalls::SYSCALL_INPUT_PUBLISH_TLV as u8,
+                            );
+                            code.extend_from_slice(&pub_word.to_le_bytes());
+                            let syscall = match instr {
+                                Instr::AnonymousEscrowAccept { .. } => {
+                                    syscalls::SYSCALL_ANONYMOUS_ESCROW_ACCEPT
+                                }
+                                Instr::AnonymousEscrowMarkPaymentSent { .. } => {
+                                    syscalls::SYSCALL_ANONYMOUS_ESCROW_MARK_PAYMENT_SENT
+                                }
+                                _ => unreachable!(),
+                            };
+                            let word = encoding::wide::encode_sys(
+                                instruction::wide::system::SCALL,
+                                syscall as u8,
+                            );
+                            code.extend_from_slice(&word.to_le_bytes());
+                        }
+                        Instr::AnonymousEscrowOpenDispute {
+                            escrow,
+                            evidence_hashes,
+                        } => {
+                            if let Some(escrow_str) = string_map
+                                .get(&(func_idx, *escrow))
+                                .map(|s| DataKey(DataKind::Name, s.clone()))
+                            {
+                                emit_literal_stub(&mut code, &mut fixups, 10, escrow_str);
+                            } else {
+                                let r_escrow = src_reg(escrow, scratch1, &mut code)?;
+                                push_word(&mut code, encode_addi(10, r_escrow, 0)?);
+                            }
+                            let pub_word = encoding::wide::encode_sys(
+                                instruction::wide::system::SCALL,
+                                syscalls::SYSCALL_INPUT_PUBLISH_TLV as u8,
+                            );
+                            code.extend_from_slice(&pub_word.to_le_bytes());
+                            if let Some(evidence_hashes) = evidence_hashes {
+                                push_word(&mut code, encode_addi(14, 10, 0)?);
+                                let r_evidence = src_reg(evidence_hashes, scratch2, &mut code)?;
+                                push_word(&mut code, encode_addi(10, r_evidence, 0)?);
+                                code.extend_from_slice(&pub_word.to_le_bytes());
+                                push_word(&mut code, encode_addi(11, 10, 0)?);
+                                push_word(&mut code, encode_addi(10, 14, 0)?);
+                            } else {
+                                push_word(&mut code, encode_addi(11, 0, 0)?);
+                            }
+                            let word = encoding::wide::encode_sys(
+                                instruction::wide::system::SCALL,
+                                syscalls::SYSCALL_ANONYMOUS_ESCROW_OPEN_DISPUTE as u8,
+                            );
+                            code.extend_from_slice(&word.to_le_bytes());
+                        }
                         Instr::TransferBatchBegin => {
                             let word = encoding::wide::encode_sys(
                                 instruction::wide::system::SCALL,
@@ -6764,6 +11345,12 @@ impl Compiler {
                             push_word(&mut code, encode_addi(rd, 10, 0)?);
                             spill_back(dest, rd, spilled, imm, &mut code)?;
                         }
+                        Instr::SysvarAuthority { dest } => {
+                            push_syscall(&mut code, syscalls::SYSCALL_SYSVAR_AUTHORITY);
+                            let (rd, spilled, imm) = dst_reg(dest);
+                            push_word(&mut code, encode_addi(rd, 10, 0)?);
+                            spill_back(dest, rd, spilled, imm, &mut code)?;
+                        }
                         Instr::CurrentTimeMs { dest } => {
                             let word = encoding::wide::encode_sys(
                                 instruction::wide::system::SCALL,
@@ -6776,6 +11363,30 @@ impl Compiler {
                         }
                         Instr::BlockHeight { dest } => {
                             push_syscall(&mut code, syscalls::SYSCALL_SYSVAR_BLOCK_HEIGHT);
+                            let (rd, spilled, imm) = dst_reg(dest);
+                            push_word(&mut code, encode_addi(rd, 10, 0)?);
+                            spill_back(dest, rd, spilled, imm, &mut code)?;
+                        }
+                        Instr::BlockTimeMs { dest } => {
+                            push_syscall(&mut code, syscalls::SYSCALL_SYSVAR_BLOCK_TIME_MS);
+                            let (rd, spilled, imm) = dst_reg(dest);
+                            push_word(&mut code, encode_addi(rd, 10, 0)?);
+                            spill_back(dest, rd, spilled, imm, &mut code)?;
+                        }
+                        Instr::ChainId { dest } => {
+                            push_syscall(&mut code, syscalls::SYSCALL_SYSVAR_CHAIN_ID);
+                            let (rd, spilled, imm) = dst_reg(dest);
+                            push_word(&mut code, encode_addi(rd, 10, 0)?);
+                            spill_back(dest, rd, spilled, imm, &mut code)?;
+                        }
+                        Instr::ContractAddress { dest } => {
+                            push_syscall(&mut code, syscalls::SYSCALL_SYSVAR_CONTRACT_ADDRESS);
+                            let (rd, spilled, imm) = dst_reg(dest);
+                            push_word(&mut code, encode_addi(rd, 10, 0)?);
+                            spill_back(dest, rd, spilled, imm, &mut code)?;
+                        }
+                        Instr::Entrypoint { dest } => {
+                            push_syscall(&mut code, syscalls::SYSCALL_SYSVAR_ENTRYPOINT);
                             let (rd, spilled, imm) = dst_reg(dest);
                             push_word(&mut code, encode_addi(rd, 10, 0)?);
                             spill_back(dest, rd, spilled, imm, &mut code)?;
@@ -7180,6 +11791,72 @@ impl Compiler {
                             push_word(&mut code, encode_addi(rd, 10, 0)?);
                             spill_back(dest, rd, spilled, imm, &mut code)?;
                         }
+                        Instr::Blake2b256Hash { dest, message } => {
+                            if let Some(bytes) = string_map.get(&(func_idx, *message)) {
+                                let key = DataKey(DataKind::Blob, bytes.clone());
+                                emit_literal_stub(&mut code, &mut fixups, 10, key);
+                            } else {
+                                let rs = src_reg(message, scratch1, &mut code)?;
+                                push_word(&mut code, encode_addi(10, rs, 0)?);
+                            }
+                            let publish = encoding::wide::encode_sys(
+                                instruction::wide::system::SCALL,
+                                syscalls::SYSCALL_INPUT_PUBLISH_TLV as u8,
+                            );
+                            code.extend_from_slice(&publish.to_le_bytes());
+                            let call = encoding::wide::encode_sys(
+                                instruction::wide::system::SCALL,
+                                syscalls::SYSCALL_BLAKE2B256_HASH as u8,
+                            );
+                            code.extend_from_slice(&call.to_le_bytes());
+                            let (rd, spilled, imm) = dst_reg(dest);
+                            push_word(&mut code, encode_addi(rd, 10, 0)?);
+                            spill_back(dest, rd, spilled, imm, &mut code)?;
+                        }
+                        Instr::Keccak256Hash { dest, message } => {
+                            if let Some(bytes) = string_map.get(&(func_idx, *message)) {
+                                let key = DataKey(DataKind::Blob, bytes.clone());
+                                emit_literal_stub(&mut code, &mut fixups, 10, key);
+                            } else {
+                                let rs = src_reg(message, scratch1, &mut code)?;
+                                push_word(&mut code, encode_addi(10, rs, 0)?);
+                            }
+                            let publish = encoding::wide::encode_sys(
+                                instruction::wide::system::SCALL,
+                                syscalls::SYSCALL_INPUT_PUBLISH_TLV as u8,
+                            );
+                            code.extend_from_slice(&publish.to_le_bytes());
+                            let call = encoding::wide::encode_sys(
+                                instruction::wide::system::SCALL,
+                                syscalls::SYSCALL_KECCAK256_HASH as u8,
+                            );
+                            code.extend_from_slice(&call.to_le_bytes());
+                            let (rd, spilled, imm) = dst_reg(dest);
+                            push_word(&mut code, encode_addi(rd, 10, 0)?);
+                            spill_back(dest, rd, spilled, imm, &mut code)?;
+                        }
+                        Instr::IrohaHash { dest, message } => {
+                            if let Some(bytes) = string_map.get(&(func_idx, *message)) {
+                                let key = DataKey(DataKind::Blob, bytes.clone());
+                                emit_literal_stub(&mut code, &mut fixups, 10, key);
+                            } else {
+                                let rs = src_reg(message, scratch1, &mut code)?;
+                                push_word(&mut code, encode_addi(10, rs, 0)?);
+                            }
+                            let publish = encoding::wide::encode_sys(
+                                instruction::wide::system::SCALL,
+                                syscalls::SYSCALL_INPUT_PUBLISH_TLV as u8,
+                            );
+                            code.extend_from_slice(&publish.to_le_bytes());
+                            let call = encoding::wide::encode_sys(
+                                instruction::wide::system::SCALL,
+                                syscalls::SYSCALL_IROHA_HASH as u8,
+                            );
+                            code.extend_from_slice(&call.to_le_bytes());
+                            let (rd, spilled, imm) = dst_reg(dest);
+                            push_word(&mut code, encode_addi(rd, 10, 0)?);
+                            spill_back(dest, rd, spilled, imm, &mut code)?;
+                        }
                         Instr::Sm2Verify {
                             dest,
                             message,
@@ -7487,6 +12164,27 @@ impl Compiler {
                                 syscalls::SYSCALL_DEBUG_LOG as u8,
                             );
                             code.extend_from_slice(&word.to_le_bytes());
+                        }
+                        Instr::DebugPrint { value } => {
+                            let r_value = src_reg(value, scratch1, &mut code)?;
+                            push_word(&mut code, encode_addi(10, r_value, 0)?);
+                            push_syscall(&mut code, syscalls::SYSCALL_DEBUG_PRINT);
+                        }
+                        Instr::DebugLog { payload } => {
+                            if let Some(kind) = dataref_kind_map.get(&(func_idx, *payload))
+                                && let Some(raw) = string_map.get(&(func_idx, *payload))
+                            {
+                                emit_literal_stub(
+                                    &mut code,
+                                    &mut fixups,
+                                    10,
+                                    data_key_for_pointer(*kind, raw),
+                                );
+                            } else {
+                                let r_payload = src_reg(payload, scratch1, &mut code)?;
+                                push_word(&mut code, encode_addi(10, r_payload, 0)?);
+                            }
+                            push_syscall(&mut code, syscalls::SYSCALL_DEBUG_LOG);
                         }
                         Instr::MapNew { dest } => {
                             let (rd, spilled, imm) = dst_reg(dest);
@@ -7844,6 +12542,119 @@ impl Compiler {
                             );
                             code.extend_from_slice(&word.to_le_bytes());
                         }
+                        Instr::StateKeys {
+                            dest,
+                            prefix,
+                            offset,
+                            limit,
+                        } => {
+                            if !durable_enabled {
+                                return Err(i18n::translate(
+                                    self.lang,
+                                    Message::UnsupportedBinaryOp(
+                                        "durable state requires ABI v1. Add `meta { abi_version: 1; }` or compile with `--abi 1`.",
+                                    ),
+                                ));
+                            }
+                            if let Some(s) = string_map.get(&(func_idx, *prefix)) {
+                                let key = DataKey(DataKind::Name, s.clone());
+                                emit_literal_stub(&mut code, &mut fixups, 10, key);
+                            } else {
+                                let r = src_reg(prefix, scratch1, &mut code)?;
+                                push_word(&mut code, encode_addi(10, r, 0)?);
+                            }
+                            let pub_word = encoding::wide::encode_sys(
+                                instruction::wide::system::SCALL,
+                                syscalls::SYSCALL_INPUT_PUBLISH_TLV as u8,
+                            );
+                            code.extend_from_slice(&pub_word.to_le_bytes());
+                            let offset_reg = src_reg(offset, scratch1, &mut code)?;
+                            push_word(&mut code, encode_addi(11, offset_reg, 0)?);
+                            let limit_reg = src_reg(limit, scratch1, &mut code)?;
+                            push_word(&mut code, encode_addi(12, limit_reg, 0)?);
+                            push_syscall(&mut code, syscalls::SYSCALL_STATE_KEYS);
+                            let (rd, spilled, imm) = dst_reg(dest);
+                            push_word(&mut code, encode_addi(rd, 10, 0)?);
+                            spill_back(dest, rd, spilled, imm, &mut code)?;
+                        }
+                        Instr::StateHas { dest, path } => {
+                            if !durable_enabled {
+                                return Err(i18n::translate(
+                                    self.lang,
+                                    Message::UnsupportedBinaryOp(
+                                        "durable state requires ABI v1. Add `meta { abi_version: 1; }` or compile with `--abi 1`.",
+                                    ),
+                                ));
+                            }
+                            if let Some(s) = string_map.get(&(func_idx, *path)) {
+                                let key = DataKey(DataKind::Name, s.clone());
+                                emit_literal_stub(&mut code, &mut fixups, 10, key);
+                            } else {
+                                let r = src_reg(path, scratch1, &mut code)?;
+                                push_word(&mut code, encode_addi(10, r, 0)?);
+                            }
+                            let pub_word = encoding::wide::encode_sys(
+                                instruction::wide::system::SCALL,
+                                syscalls::SYSCALL_INPUT_PUBLISH_TLV as u8,
+                            );
+                            code.extend_from_slice(&pub_word.to_le_bytes());
+                            push_syscall(&mut code, syscalls::SYSCALL_STATE_HAS);
+                            let (rd, spilled, imm) = dst_reg(dest);
+                            push_word(&mut code, encode_addi(rd, 10, 0)?);
+                            spill_back(dest, rd, spilled, imm, &mut code)?;
+                        }
+                        Instr::StateLen { dest, path } => {
+                            if !durable_enabled {
+                                return Err(i18n::translate(
+                                    self.lang,
+                                    Message::UnsupportedBinaryOp(
+                                        "durable state requires ABI v1. Add `meta { abi_version: 1; }` or compile with `--abi 1`.",
+                                    ),
+                                ));
+                            }
+                            if let Some(s) = string_map.get(&(func_idx, *path)) {
+                                let key = DataKey(DataKind::Name, s.clone());
+                                emit_literal_stub(&mut code, &mut fixups, 10, key);
+                            } else {
+                                let r = src_reg(path, scratch1, &mut code)?;
+                                push_word(&mut code, encode_addi(10, r, 0)?);
+                            }
+                            let pub_word = encoding::wide::encode_sys(
+                                instruction::wide::system::SCALL,
+                                syscalls::SYSCALL_INPUT_PUBLISH_TLV as u8,
+                            );
+                            code.extend_from_slice(&pub_word.to_le_bytes());
+                            push_syscall(&mut code, syscalls::SYSCALL_STATE_LEN);
+                            let (rd, spilled, imm) = dst_reg(dest);
+                            push_word(&mut code, encode_addi(rd, 10, 0)?);
+                            spill_back(dest, rd, spilled, imm, &mut code)?;
+                        }
+                        Instr::StateCount { dest, prefix } => {
+                            if !durable_enabled {
+                                return Err(i18n::translate(
+                                    self.lang,
+                                    Message::UnsupportedBinaryOp(
+                                        "durable state requires ABI v1. Add `meta { abi_version: 1; }` or compile with `--abi 1`.",
+                                    ),
+                                ));
+                            }
+                            if let Some(s) = string_map.get(&(func_idx, *prefix)) {
+                                let key = DataKey(DataKind::Name, s.clone());
+                                emit_literal_stub(&mut code, &mut fixups, 10, key);
+                            } else {
+                                let r = src_reg(prefix, scratch1, &mut code)?;
+                                push_word(&mut code, encode_addi(10, r, 0)?);
+                            }
+                            let pub_word = encoding::wide::encode_sys(
+                                instruction::wide::system::SCALL,
+                                syscalls::SYSCALL_INPUT_PUBLISH_TLV as u8,
+                            );
+                            code.extend_from_slice(&pub_word.to_le_bytes());
+                            push_syscall(&mut code, syscalls::SYSCALL_STATE_COUNT);
+                            let (rd, spilled, imm) = dst_reg(dest);
+                            push_word(&mut code, encode_addi(rd, 10, 0)?);
+                            spill_back(dest, rd, spilled, imm, &mut code)?;
+                        }
                         Instr::DecodeInt { dest, blob } => {
                             if !durable_enabled {
                                 return Err(i18n::translate(
@@ -7972,6 +12783,42 @@ impl Compiler {
                             let word = encoding::wide::encode_sys(
                                 instruction::wide::system::SCALL,
                                 syscalls::SYSCALL_NUMERIC_TO_INT as u8,
+                            );
+                            code.extend_from_slice(&word.to_le_bytes());
+                            let (rd, spilled, imm) = dst_reg(dest);
+                            push_word(&mut code, encode_addi(rd, 10, 0)?);
+                            spill_back(dest, rd, spilled, imm, &mut code)?;
+                        }
+                        Instr::NumericNeg { dest, value } => {
+                            if !durable_enabled {
+                                return Err(i18n::translate(
+                                    self.lang,
+                                    Message::UnsupportedBinaryOp(durable_required_msg),
+                                ));
+                            }
+                            if let Some(kind) = dataref_kind_map.get(&(func_idx, *value)).copied()
+                                && let Some(lit) = string_map.get(&(func_idx, *value)).cloned()
+                            {
+                                let key = data_key_for_pointer(kind, &lit);
+                                emit_literal_stub(&mut code, &mut fixups, 10, key);
+                            } else {
+                                if string_map.contains_key(&(func_idx, *value))
+                                    && !dataref_kind_map.contains_key(&(func_idx, *value))
+                                {
+                                    return Err(i18n::translate(
+                                        self.lang,
+                                        Message::SemanticError(
+                                            "numeric literal missing ABI metadata during numeric lowering",
+                                        ),
+                                    ));
+                                }
+                                let r = src_reg(value, scratch1, &mut code)?;
+                                push_word(&mut code, encode_addi(10, r, 0)?);
+                            }
+                            code.extend_from_slice(&publish_tlv);
+                            let word = encoding::wide::encode_sys(
+                                instruction::wide::system::SCALL,
+                                syscalls::SYSCALL_NUMERIC_NEG as u8,
                             );
                             code.extend_from_slice(&word.to_le_bytes());
                             let (rd, spilled, imm) = dst_reg(dest);
@@ -8118,6 +12965,46 @@ impl Compiler {
                                 num as u8,
                             );
                             code.extend_from_slice(&word.to_le_bytes());
+                            let (rd, spilled, imm) = dst_reg(dest);
+                            push_word(&mut code, encode_addi(rd, 10, 0)?);
+                            spill_back(dest, rd, spilled, imm, &mut code)?;
+                        }
+                        Instr::DirectHelperSyscall {
+                            dest,
+                            syscall,
+                            args,
+                        } => {
+                            if !durable_enabled {
+                                return Err(i18n::translate(
+                                    self.lang,
+                                    Message::UnsupportedBinaryOp(durable_required_msg),
+                                ));
+                            }
+                            for (idx, arg) in args.iter().enumerate() {
+                                let target = 10u8.checked_add(idx as u8).ok_or_else(|| {
+                                    i18n::translate(
+                                        self.lang,
+                                        Message::SemanticError(
+                                            "direct helper syscall has too many arguments",
+                                        ),
+                                    )
+                                })?;
+                                if let Some(kind) = dataref_kind_map.get(&(func_idx, *arg)).copied()
+                                    && let Some(lit) = string_map.get(&(func_idx, *arg)).cloned()
+                                {
+                                    let key = data_key_for_pointer(kind, &lit);
+                                    emit_literal_stub(&mut code, &mut fixups, target, key);
+                                } else {
+                                    let scratch = if target == scratch1 {
+                                        scratch2
+                                    } else {
+                                        scratch1
+                                    };
+                                    let r = src_reg(arg, scratch, &mut code)?;
+                                    push_word(&mut code, encode_addi(target, r, 0)?);
+                                }
+                            }
+                            push_syscall(&mut code, *syscall);
                             let (rd, spilled, imm) = dst_reg(dest);
                             push_word(&mut code, encode_addi(rd, 10, 0)?);
                             spill_back(dest, rd, spilled, imm, &mut code)?;
@@ -9373,6 +14260,8 @@ impl Compiler {
                 DRK::AxtDescriptor => DataKey(DataKind::AxtDescriptor, v.clone()),
                 DRK::AssetHandle => DataKey(DataKind::AssetHandle, v.clone()),
                 DRK::ProofBlob => DataKey(DataKind::ProofBlob, v.clone()),
+                DRK::SoracloudRequest => DataKey(DataKind::SoracloudRequest, v.clone()),
+                DRK::SoracloudResponse => DataKey(DataKind::SoracloudResponse, v.clone()),
             };
             key_order.insert(dk);
         }
@@ -9581,6 +14470,54 @@ impl Compiler {
                         })?,
                     )
                 }
+                DataKey(DataKind::SoracloudRequest, s) => {
+                    let bytes = decode_hex_or_raw_bytes(s).map_err(|e| {
+                        let err = format!("invalid SoracloudRequest literal `{s}`: {e}");
+                        i18n::translate(self.lang, Message::SemanticError(&err))
+                    })?;
+                    let value: iroha_data_model::soracloud::SoracloudHostRequestEnvelopeV1 =
+                        decode_from_bytes(&bytes).map_err(|e| {
+                            let err = format!(
+                                "invalid SoracloudRequest literal `{s}`: cannot decode ({e})"
+                            );
+                            i18n::translate(self.lang, Message::SemanticError(&err))
+                        })?;
+                    value.validate().map_err(|e| {
+                        let err = format!("invalid SoracloudRequest literal `{s}`: {e}");
+                        i18n::translate(self.lang, Message::SemanticError(&err))
+                    })?;
+                    (
+                        PointerType::SoracloudRequest as u16,
+                        to_bytes(&value).map_err(|e| e.to_string()).map_err(|e| {
+                            let err = format!("invalid SoracloudRequest literal `{s}`: {e}");
+                            i18n::translate(self.lang, Message::SemanticError(&err))
+                        })?,
+                    )
+                }
+                DataKey(DataKind::SoracloudResponse, s) => {
+                    let bytes = decode_hex_or_raw_bytes(s).map_err(|e| {
+                        let err = format!("invalid SoracloudResponse literal `{s}`: {e}");
+                        i18n::translate(self.lang, Message::SemanticError(&err))
+                    })?;
+                    let value: iroha_data_model::soracloud::SoracloudHostResponseEnvelopeV1 =
+                        decode_from_bytes(&bytes).map_err(|e| {
+                            let err = format!(
+                                "invalid SoracloudResponse literal `{s}`: cannot decode ({e})"
+                            );
+                            i18n::translate(self.lang, Message::SemanticError(&err))
+                        })?;
+                    value.validate().map_err(|e| {
+                        let err = format!("invalid SoracloudResponse literal `{s}`: {e}");
+                        i18n::translate(self.lang, Message::SemanticError(&err))
+                    })?;
+                    (
+                        PointerType::SoracloudResponse as u16,
+                        to_bytes(&value).map_err(|e| e.to_string()).map_err(|e| {
+                            let err = format!("invalid SoracloudResponse literal `{s}`: {e}");
+                            i18n::translate(self.lang, Message::SemanticError(&err))
+                        })?,
+                    )
+                }
             };
             // TLV envelope: type_id (be), version=1, len (be u32), payload, hash (32 bytes blake2b-32)
             let mut v = Vec::with_capacity(2 + 1 + 4 + payload.len() + 32);
@@ -9606,6 +14543,22 @@ impl Compiler {
             &hint_reports,
             &entrypoint_start_offsets,
         )?;
+        if self.opts.mode == CompilerMode::Production {
+            if let Some(entrypoint) = entrypoint_descriptors
+                .iter()
+                .find(|entrypoint| entrypoint.access_hints_complete == Some(false))
+            {
+                let reasons = if entrypoint.access_hints_skipped.is_empty() {
+                    "no reason recorded".to_owned()
+                } else {
+                    entrypoint.access_hints_skipped.join("; ")
+                };
+                return Err(format!(
+                    "E_ACCESS_INCOMPLETE: entrypoint `{}` has incomplete compiler-derived access metadata: {reasons}",
+                    entrypoint.name
+                ));
+            }
+        }
         let state_descriptors = build_state_descriptors(&typed)?;
         let access_set_hints = build_access_set_hints(
             &typed,
@@ -10399,7 +15352,12 @@ fn build_state_type_descriptor(ty: &semantic::Type) -> Result<EmbeddedStateType,
                 "state type `{name}` was not resolved before CNTR schema emission"
             ));
         }
-        Type::Unit | Type::AxtDescriptor | Type::AssetHandle | Type::ProofBlob => {
+        Type::Unit
+        | Type::AxtDescriptor
+        | Type::AssetHandle
+        | Type::ProofBlob
+        | Type::SoracloudRequest
+        | Type::SoracloudResponse => {
             return Err("state type is not supported in embedded state schemas".to_string());
         }
     })
@@ -10464,9 +15422,31 @@ fn derive_state_access_hints(
         for bb in &func.blocks {
             for instr in &bb.instrs {
                 match instr {
-                    ir::Instr::StateGet { path, .. } => {
+                    ir::Instr::StateGet { path, .. }
+                    | ir::Instr::StateHas { path, .. }
+                    | ir::Instr::StateLen { path, .. } => {
                         if let Some(key) =
                             render_state_hint(state_path_hints.get(&(func_idx, *path)))
+                        {
+                            insert_state_hint(&mut access_sets[func_idx].reads, key);
+                        } else {
+                            hint_diagnostics.state_wildcards =
+                                hint_diagnostics.state_wildcards.saturating_add(1);
+                            record_hint_skip(
+                                &mut hint_skips[func_idx],
+                                "dynamic state path is not compiler-resolved",
+                            );
+                            access_sets[func_idx]
+                                .reads
+                                .insert(STATE_WILDCARD_KEY.to_string());
+                            access_sets[func_idx]
+                                .writes
+                                .insert(STATE_WILDCARD_KEY.to_string());
+                        }
+                    }
+                    ir::Instr::StateKeys { prefix, .. } | ir::Instr::StateCount { prefix, .. } => {
+                        if let Some(key) =
+                            render_state_hint(state_path_hints.get(&(func_idx, *prefix)))
                         {
                             insert_state_hint(&mut access_sets[func_idx].reads, key);
                         } else {
@@ -10546,13 +15526,25 @@ fn record_isi_access(
         };
     match instr {
         ir::Instr::TransferBatchBegin | ir::Instr::TransferBatchEnd => {}
+        ir::Instr::TransferBatchApply { .. } => {
+            apply_fallback(access_set, hint_diagnostics);
+        }
         ir::Instr::EscrowOpenOffer { .. }
         | ir::Instr::EscrowAccept { .. }
         | ir::Instr::EscrowMarkPaymentSent { .. }
         | ir::Instr::EscrowRelease { .. }
         | ir::Instr::EscrowCancel { .. }
         | ir::Instr::EscrowOpenDispute { .. }
-        | ir::Instr::EscrowResolveDispute { .. } => apply_fallback(access_set, hint_diagnostics),
+        | ir::Instr::EscrowResolveDispute { .. }
+        | ir::Instr::AnonymousEscrowOpenOffer { .. }
+        | ir::Instr::AnonymousEscrowAccept { .. }
+        | ir::Instr::AnonymousEscrowMarkPaymentSent { .. }
+        | ir::Instr::AnonymousEscrowRelease { .. }
+        | ir::Instr::AnonymousEscrowCancel { .. }
+        | ir::Instr::AnonymousEscrowOpenDispute { .. }
+        | ir::Instr::AnonymousEscrowResolveDispute { .. } => {
+            apply_fallback(access_set, hint_diagnostics)
+        }
         ir::Instr::TransferAsset {
             from, to, asset, ..
         } => {
@@ -10596,6 +15588,19 @@ fn record_isi_access(
             add_domain_rw(access_set, &id);
         }
         ir::Instr::RegisterAccount { account } | ir::Instr::UnregisterAccount { account } => {
+            let Some(id) = account_access_hint_for_temp(
+                string_map,
+                authority_account_temps,
+                func_idx,
+                *account,
+            ) else {
+                return apply_fallback(access_set, hint_diagnostics);
+            };
+            add_account_hint_rw(access_set, &id);
+        }
+        ir::Instr::AddSignatory { account, .. }
+        | ir::Instr::RemoveSignatory { account, .. }
+        | ir::Instr::SetAccountQuorum { account, .. } => {
             let Some(id) = account_access_hint_for_temp(
                 string_map,
                 authority_account_temps,
@@ -10755,7 +15760,8 @@ fn record_isi_access(
                 apply_fallback(access_set, hint_diagnostics);
             }
         }
-        ir::Instr::VendorExecuteQuery { payload, .. } => {
+        ir::Instr::VendorExecuteQuery { payload, .. }
+        | ir::Instr::QueryExecuteNorito { payload, .. } => {
             let Some(raw) = string_map.get(&(func_idx, *payload)) else {
                 return apply_fallback(access_set, hint_diagnostics);
             };
@@ -10765,6 +15771,65 @@ fn record_isi_access(
             if record_query_request_access(&request, access_set).is_none() {
                 apply_fallback(access_set, hint_diagnostics);
             }
+        }
+        ir::Instr::QueryGet { key, syscall, .. } => {
+            if record_typed_query_get_access(
+                *key,
+                *syscall,
+                string_map,
+                authority_account_temps,
+                func_idx,
+                access_set,
+            )
+            .is_none()
+            {
+                apply_fallback(access_set, hint_diagnostics);
+            }
+        }
+        ir::Instr::GetAccountBalance { account, asset, .. } => {
+            let account = account_access_hint_for_temp(
+                string_map,
+                authority_account_temps,
+                func_idx,
+                *account,
+            );
+            let asset = parse_temp::<AssetDefinitionId>(string_map, func_idx, *asset);
+            match (account, asset) {
+                (Some(account), Some(asset)) => {
+                    add_asset_r_for_account_hint(access_set, &asset, &account);
+                }
+                _ => apply_fallback(access_set, hint_diagnostics),
+            }
+        }
+        ir::Instr::GetPublicInput { .. }
+        | ir::Instr::GetPrivateInput { .. }
+        | ir::Instr::DebugPrint { .. }
+        | ir::Instr::DebugLog { .. }
+        | ir::Instr::CommitOutput => {}
+        ir::Instr::UseNullifier { .. } => {
+            apply_fallback(access_set, hint_diagnostics);
+        }
+        ir::Instr::SmartContractLifecycle { .. } => {
+            apply_fallback(access_set, hint_diagnostics);
+        }
+        ir::Instr::ZkRootsGet { payload, .. } => {
+            let Some(raw) = string_map.get(&(func_idx, *payload)) else {
+                return apply_fallback(access_set, hint_diagnostics);
+            };
+            if record_zk_roots_get_access(raw, access_set).is_none() {
+                apply_fallback(access_set, hint_diagnostics);
+            }
+        }
+        ir::Instr::ZkVoteGetTally { payload, .. } => {
+            let Some(raw) = string_map.get(&(func_idx, *payload)) else {
+                return apply_fallback(access_set, hint_diagnostics);
+            };
+            if record_zk_vote_get_tally_access(raw, access_set).is_none() {
+                apply_fallback(access_set, hint_diagnostics);
+            }
+        }
+        ir::Instr::VrfEpochSeed { .. } => {
+            apply_fallback(access_set, hint_diagnostics);
         }
         ir::Instr::BuildSubmitBallotInline { .. } | ir::Instr::BuildUnshieldInline { .. } => {}
         ir::Instr::TransferDomain { domain, to } => {
@@ -10788,7 +15853,7 @@ fn record_isi_access(
             };
             add_nft_detail_rw(access_set, &id, &key);
         }
-        // AXT/ZK helpers carry opaque payloads; fall back to wildcard.
+        // AXT/ZK/Soracloud helpers carry opaque host payloads; fall back to wildcard.
         ir::Instr::RegisterPeer { .. }
         | ir::Instr::UnregisterPeer { .. }
         | ir::Instr::InvokeEntrypointAs { .. }
@@ -10802,24 +15867,29 @@ fn record_isi_access(
         | ir::Instr::AxtTouch { .. }
         | ir::Instr::VerifyDsProof { .. }
         | ir::Instr::UseAssetHandle { .. }
-        | ir::Instr::AxtCommit => apply_fallback(access_set, hint_diagnostics),
+        | ir::Instr::AxtCommit
+        | ir::Instr::SoracloudHostCall { .. } => apply_fallback(access_set, hint_diagnostics),
         _ => apply_fallback(access_set, hint_diagnostics),
+    }
+}
+
+fn decode_norito_literal_payload(raw: &str) -> Option<Vec<u8>> {
+    let bytes = decode_hex_or_raw_bytes(raw).ok()?;
+    match crate::pointer_abi::validate_tlv_bytes(&bytes) {
+        Ok(tlv) => {
+            if tlv.type_id != PointerType::NoritoBytes {
+                return None;
+            }
+            Some(tlv.payload.to_vec())
+        }
+        Err(_) => Some(bytes),
     }
 }
 
 fn decode_instruction_box_literal(raw: &str) -> Option<InstructionBox> {
     use iroha_data_model::isi::zk as DMZk;
 
-    let bytes = decode_hex_or_raw_bytes(raw).ok()?;
-    let payload = match crate::pointer_abi::validate_tlv_bytes(&bytes) {
-        Ok(tlv) => {
-            if tlv.type_id != PointerType::NoritoBytes {
-                return None;
-            }
-            tlv.payload.to_vec()
-        }
-        Err(_) => bytes,
-    };
+    let payload = decode_norito_literal_payload(raw)?;
     if let Ok(instr) = norito::decode_from_bytes::<InstructionBox>(&payload) {
         return Some(instr);
     }
@@ -10846,17 +15916,77 @@ fn access_for_instruction_literal(raw: &str) -> Option<AccessSets> {
 }
 
 fn decode_query_request_literal(raw: &str) -> Option<QueryRequest> {
-    let bytes = decode_hex_or_raw_bytes(raw).ok()?;
-    let payload = match crate::pointer_abi::validate_tlv_bytes(&bytes) {
-        Ok(tlv) => {
-            if tlv.type_id != PointerType::NoritoBytes {
-                return None;
-            }
-            tlv.payload.to_vec()
-        }
-        Err(_) => bytes,
-    };
+    let payload = decode_norito_literal_payload(raw)?;
     norito::decode_from_bytes(&payload).ok()
+}
+
+fn record_zk_roots_get_access(raw: &str, access_set: &mut AccessSets) -> Option<()> {
+    let payload = decode_norito_literal_payload(raw)?;
+    let (payload, flags) = decode_norito_archive_payload(&payload)?;
+    let mut fields = payload;
+    let asset_field = take_norito_len_prefixed(&mut fields, flags)?;
+    let max_field = take_norito_len_prefixed(&mut fields, flags)?;
+    if !fields.is_empty() || decode_norito_u32_bare(max_field).is_none() {
+        return None;
+    }
+    let asset_id = decode_norito_string_bare(asset_field, flags)?;
+    let asset = asset_id.parse().ok()?;
+    add_zk_asset_r(access_set, &asset);
+    Some(())
+}
+
+fn record_zk_vote_get_tally_access(raw: &str, access_set: &mut AccessSets) -> Option<()> {
+    let payload = decode_norito_literal_payload(raw)?;
+    let (payload, flags) = decode_norito_archive_payload(&payload)?;
+    let mut fields = payload;
+    let election_id_field = take_norito_len_prefixed(&mut fields, flags)?;
+    if !fields.is_empty() {
+        return None;
+    }
+    let election_id = decode_norito_string_bare(election_id_field, flags)?;
+    add_zk_election_tally_r(access_set, &election_id);
+    Some(())
+}
+
+fn decode_norito_archive_payload(bytes: &[u8]) -> Option<(&[u8], u8)> {
+    if bytes.len() < norito::core::Header::SIZE || &bytes[0..4] != b"NRT0" || bytes[22] != 0 {
+        return None;
+    }
+    let len = u64::from_le_bytes(bytes[23..31].try_into().ok()?);
+    let payload = &bytes[norito::core::Header::SIZE..];
+    if payload.len() != usize::try_from(len).ok()? {
+        return None;
+    }
+    let flags = bytes[39];
+    norito::core::validate_header_flags(flags).ok()?;
+    Some((payload, flags))
+}
+
+fn take_norito_len_prefixed<'a>(bytes: &mut &'a [u8], flags: u8) -> Option<&'a [u8]> {
+    let (len, header_len) = norito::core::read_len_from_slice_with_flags(bytes, flags).ok()?;
+    let end = header_len.checked_add(len)?;
+    if bytes.len() < end {
+        return None;
+    }
+    let field = &bytes[header_len..end];
+    *bytes = &bytes[end..];
+    Some(field)
+}
+
+fn decode_norito_string_bare(bytes: &[u8], flags: u8) -> Option<String> {
+    let mut bytes = bytes;
+    let raw = take_norito_len_prefixed(&mut bytes, flags)?;
+    if !bytes.is_empty() {
+        return None;
+    }
+    std::str::from_utf8(raw).ok().map(ToOwned::to_owned)
+}
+
+fn decode_norito_u32_bare(bytes: &[u8]) -> Option<u32> {
+    if bytes.len() != 4 {
+        return None;
+    }
+    Some(u32::from_le_bytes(bytes.try_into().ok()?))
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -11175,6 +16305,45 @@ fn record_singular_query_access(
     match query {
         SingularQueryBox::FindAssetById(q) => {
             add_asset_r(access_set, q.asset_id());
+            Some(())
+        }
+        _ => None,
+    }
+}
+
+fn record_typed_query_get_access(
+    key: ir::Temp,
+    syscall: u32,
+    string_map: &HashMap<(usize, ir::Temp), String>,
+    authority_account_temps: &HashSet<(usize, ir::Temp)>,
+    func_idx: usize,
+    access_set: &mut AccessSets,
+) -> Option<()> {
+    match syscall {
+        syscalls::SYSCALL_QUERY_GET_ACCOUNT => {
+            let account =
+                account_access_hint_for_temp(string_map, authority_account_temps, func_idx, key)?;
+            add_account_hint_r(access_set, &account);
+            Some(())
+        }
+        syscalls::SYSCALL_QUERY_GET_ASSET => {
+            let id = parse_temp::<AssetId>(string_map, func_idx, key)?;
+            add_asset_r(access_set, &id);
+            Some(())
+        }
+        syscalls::SYSCALL_QUERY_GET_ASSET_DEFINITION => {
+            let id = parse_temp::<AssetDefinitionId>(string_map, func_idx, key)?;
+            add_asset_def_r(access_set, &id);
+            Some(())
+        }
+        syscalls::SYSCALL_QUERY_GET_DOMAIN => {
+            let id = parse_domain_temp(string_map, func_idx, key)?;
+            add_domain_r(access_set, &id);
+            Some(())
+        }
+        syscalls::SYSCALL_QUERY_GET_NFT => {
+            let id = parse_temp::<NftId>(string_map, func_idx, key)?;
+            add_nft_r(access_set, &id);
             Some(())
         }
         _ => None,
@@ -11654,6 +16823,18 @@ fn add_asset_r(set: &mut AccessSets, id: &AssetId) {
     add_asset_def_r(set, id.definition());
 }
 
+fn add_asset_r_for_account_hint(
+    set: &mut AccessSets,
+    definition: &AssetDefinitionId,
+    account: &AccountAccessHint,
+) {
+    set.reads
+        .insert(key_asset_for_account_hint(definition, account));
+    add_account_hint_r(set, account);
+    add_asset_def_domain_r_if_projected(set, definition);
+    add_asset_def_r(set, definition);
+}
+
 fn add_asset_def_detail_rw(set: &mut AccessSets, id: &AssetDefinitionId, key: &Name) {
     add_asset_def_r(set, id);
     let detail = key_asset_def_detail(id, key);
@@ -11665,6 +16846,10 @@ fn add_zk_asset_rw(set: &mut AccessSets, id: &AssetDefinitionId) {
     let key = key_zk_asset(id);
     set.reads.insert(key.clone());
     set.writes.insert(key);
+}
+
+fn add_zk_asset_r(set: &mut AccessSets, id: &AssetDefinitionId) {
+    set.reads.insert(key_zk_asset(id));
 }
 
 fn add_zk_election_w(set: &mut AccessSets, election_id: &str) {
@@ -11681,6 +16866,10 @@ fn add_zk_election_submit_w(set: &mut AccessSets, election_id: &str) {
 fn add_zk_election_tally_w(set: &mut AccessSets, election_id: &str) {
     set.writes
         .insert(format!("zk:election:{election_id}:tally"));
+}
+
+fn add_zk_election_tally_r(set: &mut AccessSets, election_id: &str) {
+    set.reads.insert(format!("zk:election:{election_id}:tally"));
 }
 
 fn add_asset_rw(set: &mut AccessSets, id: &AssetId) {
@@ -11755,6 +16944,11 @@ fn add_nft_rw(set: &mut AccessSets, id: &NftId) {
     set.writes.insert(key);
 }
 
+fn add_nft_r(set: &mut AccessSets, id: &NftId) {
+    set.reads.insert(NFT_COARSE_KEY.to_string());
+    set.reads.insert(key_nft(id));
+}
+
 fn add_nft_coarse_rw(set: &mut AccessSets) {
     set.reads.insert(NFT_COARSE_KEY.to_string());
     set.writes.insert(NFT_COARSE_KEY.to_string());
@@ -11817,8 +17011,16 @@ fn instr_queues_isi(instr: &ir::Instr) -> bool {
             | ir::Instr::EscrowCancel { .. }
             | ir::Instr::EscrowOpenDispute { .. }
             | ir::Instr::EscrowResolveDispute { .. }
+            | ir::Instr::AnonymousEscrowOpenOffer { .. }
+            | ir::Instr::AnonymousEscrowAccept { .. }
+            | ir::Instr::AnonymousEscrowMarkPaymentSent { .. }
+            | ir::Instr::AnonymousEscrowRelease { .. }
+            | ir::Instr::AnonymousEscrowCancel { .. }
+            | ir::Instr::AnonymousEscrowOpenDispute { .. }
+            | ir::Instr::AnonymousEscrowResolveDispute { .. }
             | ir::Instr::TransferBatchBegin
             | ir::Instr::TransferBatchEnd
+            | ir::Instr::TransferBatchApply { .. }
             | ir::Instr::MintAsset { .. }
             | ir::Instr::BurnAsset { .. }
             | ir::Instr::SetAccountDetail { .. }
@@ -11828,6 +17030,9 @@ fn instr_queues_isi(instr: &ir::Instr) -> bool {
             | ir::Instr::TransferNft { .. }
             | ir::Instr::RegisterDomain { .. }
             | ir::Instr::RegisterAccount { .. }
+            | ir::Instr::AddSignatory { .. }
+            | ir::Instr::RemoveSignatory { .. }
+            | ir::Instr::SetAccountQuorum { .. }
             | ir::Instr::UnregisterDomain { .. }
             | ir::Instr::UnregisterAsset { .. }
             | ir::Instr::UnregisterAccount { .. }
@@ -11845,6 +17050,14 @@ fn instr_queues_isi(instr: &ir::Instr) -> bool {
             | ir::Instr::TransferDomain { .. }
             | ir::Instr::VendorExecuteInstruction { .. }
             | ir::Instr::VendorExecuteQuery { .. }
+            | ir::Instr::QueryExecuteNorito { .. }
+            | ir::Instr::QueryGet { .. }
+            | ir::Instr::GetAccountBalance { .. }
+            | ir::Instr::UseNullifier { .. }
+            | ir::Instr::SmartContractLifecycle { .. }
+            | ir::Instr::ZkRootsGet { .. }
+            | ir::Instr::ZkVoteGetTally { .. }
+            | ir::Instr::VrfEpochSeed { .. }
             | ir::Instr::CallContract { .. }
             | ir::Instr::InvokeEntrypointAs { .. }
             | ir::Instr::ExpectRejectAs { .. }
@@ -11860,6 +17073,7 @@ fn instr_queues_isi(instr: &ir::Instr) -> bool {
             | ir::Instr::VerifyDsProof { .. }
             | ir::Instr::UseAssetHandle { .. }
             | ir::Instr::AxtCommit
+            | ir::Instr::SoracloudHostCall { .. }
     )
 }
 

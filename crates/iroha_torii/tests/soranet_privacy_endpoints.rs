@@ -4,7 +4,10 @@
 
 use std::time::{SystemTime, UNIX_EPOCH};
 
-use axum::{http::StatusCode, response::IntoResponse};
+use axum::{
+    http::{StatusCode, header},
+    response::IntoResponse,
+};
 use http_body_util::BodyExt;
 use iroha_config::parameters::actual::TelemetryProfile;
 use iroha_data_model::soranet::privacy_metrics::{
@@ -18,12 +21,18 @@ use iroha_torii::{
 use norito::json::Value;
 
 async fn norito_json_response_value(response: axum::response::Response) -> Value {
+    assert_eq!(
+        response
+            .headers()
+            .get(header::CONTENT_TYPE)
+            .and_then(|value| value.to_str().ok()),
+        Some("application/json")
+    );
     let body_bytes = BodyExt::collect(response.into_body())
         .await
         .unwrap()
         .to_bytes();
-    let body_json: String = norito::decode_from_bytes(&body_bytes).unwrap();
-    norito::json::from_str(&body_json).unwrap()
+    norito::json::from_slice(&body_bytes).unwrap()
 }
 
 #[tokio::test]

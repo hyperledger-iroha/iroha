@@ -48,6 +48,7 @@ public final class NoritoCodecAdapterTests {
     javaCodecEncodesAccountIdAuthority();
     javaCodecEncodesMultisigAuthority();
     javaCodecEncodesMultisigSignatures();
+    javaCodecRejectsMalformedSignedTransactions();
     javaCodecEncodesChainIdLayout();
     javaCodecSupportsInstructionsVariant();
     javaCodecSupportsWireInstructionPayloads();
@@ -215,6 +216,28 @@ public final class NoritoCodecAdapterTests {
     final SignedTransaction withMultisig =
         signed.toBuilder().setMultisigSignatures(multisig).build();
     final byte[] encodedSigned = SignedTransactionEncoder.encode(withMultisig);
+    final SignedTransaction decodedSigned = SignedTransactionEncoder.decode(encodedSigned);
+    assert Arrays.equals(encodedPayload, decodedSigned.encodedPayload())
+        : "Decoded signed payload must match";
+    assert Arrays.equals(signature, decodedSigned.signature()) : "Decoded signature must match";
+    final MultisigSignatures decodedMultisig =
+        decodedSigned
+            .multisigSignatures()
+            .orElseThrow(() -> new IllegalStateException("Decoded multisig bundle missing"));
+    assert decodedMultisig.signatures().size() == 2 : "Decoded multisig count must match";
+    assert Arrays.equals(sigA.publicKey(), decodedMultisig.signatures().get(0).publicKey())
+        : "Decoded first multisig public key must match";
+    assert Arrays.equals(sigB.signature(), decodedMultisig.signatures().get(1).signature())
+        : "Decoded second multisig signature must match";
+    assert Arrays.equals(encodedSigned, SignedTransactionEncoder.encode(decodedSigned))
+        : "Decoded signed transaction must re-encode canonically";
+
+    final byte[] versioned = SignedTransactionEncoder.encodeVersioned(withMultisig);
+    final SignedTransaction decodedVersioned = SignedTransactionEncoder.decodeVersioned(versioned);
+    assert Arrays.equals(encodedPayload, decodedVersioned.encodedPayload())
+        : "Decoded versioned signed payload must match";
+    assert Arrays.equals(signature, decodedVersioned.signature())
+        : "Decoded versioned signature must match";
 
     final NoritoDecoder decoder = canonicalDecoder(encodedSigned);
     readField(decoder, "signed.signature");
@@ -242,6 +265,32 @@ public final class NoritoCodecAdapterTests {
     assertMultisigSignaturePayload(secondDecoder, sigB, "multisig[1]");
     assert secondDecoder.remaining() == 0 : "multisig[1] payload should not have trailing bytes";
     assert multisigDecoder.remaining() == 0 : "Multisig payload should not have trailing bytes";
+  }
+
+  private static void javaCodecRejectsMalformedSignedTransactions() throws NoritoException {
+    final TransactionPayload payload =
+        TransactionPayload.builder()
+            .setChainId("00000003")
+            .setAuthority(sampleAuthority((byte) 0x12))
+            .setCreationTimeMs(1_735_000_001_000L)
+            .setExecutable(Executable.ivm(new byte[] {0x01}))
+            .build();
+    final NoritoJavaCodecAdapter adapter = new NoritoJavaCodecAdapter();
+    final SignedTransaction signed =
+        new SignedTransaction(
+            adapter.encodeTransaction(payload),
+            fill(0x66, 64),
+            new byte[0],
+            adapter.schemaName());
+    final byte[] encoded = SignedTransactionEncoder.encode(signed);
+
+    expectNoritoFailure(() -> SignedTransactionEncoder.decode(new byte[0]));
+    expectNoritoFailure(() -> SignedTransactionEncoder.decode(Arrays.copyOf(encoded, 12)));
+    final byte[] mutated = Arrays.copyOf(encoded, encoded.length);
+    mutated[mutated.length - 1] ^= 0x01;
+    expectNoritoFailure(() -> SignedTransactionEncoder.decode(mutated));
+    expectNoritoFailure(() -> SignedTransactionEncoder.decodeVersioned(new byte[0]));
+    expectNoritoFailure(() -> SignedTransactionEncoder.decodeVersioned(new byte[] {0x02}));
   }
 
   private static void javaCodecEncodesChainIdLayout() throws NoritoException {
@@ -608,6 +657,19 @@ public final class NoritoCodecAdapterTests {
     final byte[] out = new byte[length];
     Arrays.fill(out, (byte) value);
     return out;
+  }
+
+  private static void expectNoritoFailure(final CheckedNoritoRunnable action) {
+    try {
+      action.run();
+      throw new AssertionError("Expected NoritoException");
+    } catch (final NoritoException expected) {
+      assert expected.getMessage() != null : "Norito failure should carry a message";
+    }
+  }
+
+  private interface CheckedNoritoRunnable {
+    void run() throws NoritoException;
   }
 
   private static java.util.Optional<byte[]> decodeOptionPayload(

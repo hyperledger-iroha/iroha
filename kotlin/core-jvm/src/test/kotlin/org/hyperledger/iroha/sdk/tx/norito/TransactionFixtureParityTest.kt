@@ -11,6 +11,7 @@ import org.hyperledger.iroha.sdk.norito.NoritoCodec
 import org.hyperledger.iroha.sdk.norito.NoritoDecoder
 import org.hyperledger.iroha.sdk.norito.NoritoHeader
 import org.hyperledger.iroha.sdk.norito.TypeAdapter
+import org.hyperledger.iroha.sdk.tx.MultisigSignature
 import org.hyperledger.iroha.sdk.tx.SignedTransaction
 import org.hyperledger.iroha.sdk.tx.SignedTransactionHasher
 import kotlin.test.Test
@@ -161,6 +162,93 @@ class TransactionFixtureParityTest {
                 versioned.copyOfRange(1, versioned.size),
                 "${fixture.name}: versioned signed payload mismatch",
             )
+
+            val decodedSigned = SignedTransactionEncoder.decode(signedBytes)
+            assertContentEquals(
+                payloadBytes,
+                decodedSigned.encodedPayload(),
+                "${fixture.name}: decoded signed payload mismatch",
+            )
+            assertContentEquals(
+                signedParts.signature,
+                decodedSigned.signature(),
+                "${fixture.name}: decoded signature mismatch",
+            )
+            assertEquals(
+                false,
+                decodedSigned.multisigSignatures().isPresent,
+                "${fixture.name}: unexpected multisig signatures",
+            )
+            assertContentEquals(
+                signedBytes,
+                SignedTransactionEncoder.encode(decodedSigned),
+                "${fixture.name}: decoded signed transaction re-encoding drift",
+            )
+
+            val decodedVersioned = SignedTransactionEncoder.decodeVersioned(versioned)
+            assertContentEquals(
+                payloadBytes,
+                decodedVersioned.encodedPayload(),
+                "${fixture.name}: decoded versioned payload mismatch",
+            )
+            assertContentEquals(
+                signedParts.signature,
+                decodedVersioned.signature(),
+                "${fixture.name}: decoded versioned signature mismatch",
+            )
+        }
+    }
+
+    @Test
+    fun `signed transaction decoder round-trips multisig signatures`() {
+        val payload = AndroidFixtureSupport.loadPayloadFixtures().first().materializePayload(adapter)
+        val payloadBytes = adapter.encodeTransaction(payload)
+        val memberPublicKey = ByteArray(32) { (0x41 + it).toByte() }
+        val memberSignature = ByteArray(64) { ((0x80 + it) and 0xFF).toByte() }
+        val multisigSignature = MultisigSignature.fromCurveId(0x01, memberPublicKey, memberSignature)
+        val signed = SignedTransaction.builder()
+            .setEncodedPayload(payloadBytes)
+            .setSignature(ByteArray(64) { (it + 1).toByte() })
+            .setPublicKey(ByteArray(0))
+            .setSchemaName(SIGNED_SCHEMA)
+            .setMultisigSignatures(listOf(multisigSignature))
+            .build()
+
+        val encoded = SignedTransactionEncoder.encode(signed)
+        val decoded = SignedTransactionEncoder.decode(encoded)
+
+        assertContentEquals(payloadBytes, decoded.encodedPayload())
+        assertContentEquals(signed.signature(), decoded.signature())
+        val decodedMultisig = assertNotNull(decoded.multisigSignatures().orElse(null))
+        val decodedSignature = decodedMultisig.signatures.single()
+        assertEquals(0x01, decodedSignature.curveId)
+        assertContentEquals(memberPublicKey, decodedSignature.publicKey())
+        assertContentEquals(memberSignature, decodedSignature.signature())
+        assertContentEquals(encoded, SignedTransactionEncoder.encode(decoded))
+    }
+
+    @Test
+    fun `signed transaction decoder rejects adversarial envelopes`() {
+        val fixture = AndroidFixtureSupport.loadManifestFixtures().first()
+        val signedBytes = Base64.getDecoder().decode(fixture.signedBase64)
+
+        assertFailsWith<NoritoException> {
+            SignedTransactionEncoder.decode(ByteArray(0))
+        }
+        assertFailsWith<NoritoException> {
+            SignedTransactionEncoder.decode(signedBytes.copyOf(signedBytes.size - 1))
+        }
+        assertFailsWith<NoritoException> {
+            SignedTransactionEncoder.decode(signedBytes + byteArrayOf(0))
+        }
+        assertFailsWith<NoritoException> {
+            SignedTransactionEncoder.decodeVersioned(ByteArray(0))
+        }
+        assertFailsWith<NoritoException> {
+            SignedTransactionEncoder.decodeVersioned(byteArrayOf(0x02.toByte()) + signedBytes)
+        }
+        assertFailsWith<NoritoException> {
+            SignedTransactionEncoder.decodeVersioned(byteArrayOf(VERSION_BYTE))
         }
     }
 

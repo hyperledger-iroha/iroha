@@ -10,7 +10,7 @@ use iroha_primitives::numeric::Numeric;
 
 use super::{
     ast::{BinaryOp, UnaryOp},
-    builtins::Builtin,
+    builtins::{Builtin, PointerConstructor},
     semantic::{
         self, Type, TypedBlock, TypedExpr, TypedFunction, TypedItem, TypedParam, TypedProgram,
         TypedStatement, state_env_snapshot,
@@ -123,6 +123,11 @@ pub enum Instr {
         dest: Temp,
         value: Temp,
     },
+    /// Numeric unary negation using a NoritoBytes payload.
+    NumericNeg {
+        dest: Temp,
+        value: Temp,
+    },
     /// Numeric arithmetic using NoritoBytes payloads.
     NumericBinary {
         dest: Temp,
@@ -136,6 +141,12 @@ pub enum Instr {
         op: BinaryOp,
         left: Temp,
         right: Temp,
+    },
+    /// ABI helper syscall that accepts already-validated pointer-ABI operands directly.
+    DirectHelperSyscall {
+        dest: Temp,
+        syscall: u32,
+        args: Vec<Temp>,
     },
     Min {
         dest: Temp,
@@ -205,6 +216,21 @@ pub enum Instr {
     },
     /// Compute SHA3-256 hash of a Blob pointer and return the resulting Blob pointer.
     Sha3Hash {
+        dest: Temp,
+        message: Temp,
+    },
+    /// Compute Blake2b-256 hash of a Blob pointer and return the resulting Blob pointer.
+    Blake2b256Hash {
+        dest: Temp,
+        message: Temp,
+    },
+    /// Compute Keccak-256 hash of a Blob pointer and return the resulting Blob pointer.
+    Keccak256Hash {
+        dest: Temp,
+        message: Temp,
+    },
+    /// Compute Iroha's canonical ledger hash of a Blob pointer and return the resulting Blob pointer.
+    IrohaHash {
         dest: Temp,
         message: Temp,
     },
@@ -315,10 +341,43 @@ pub enum Instr {
         seller_amount: Temp,
         evidence_hashes: Option<Temp>,
     },
+    /// Open and fund a native anonymous asset escrow from an opaque request payload.
+    AnonymousEscrowOpenOffer {
+        request: Temp,
+    },
+    /// Accept a native anonymous asset escrow.
+    AnonymousEscrowAccept {
+        escrow: Temp,
+    },
+    /// Mark anonymous escrow off-chain payment as sent.
+    AnonymousEscrowMarkPaymentSent {
+        escrow: Temp,
+    },
+    /// Release a paid anonymous escrow from an opaque request payload.
+    AnonymousEscrowRelease {
+        request: Temp,
+    },
+    /// Cancel an anonymous escrow from an opaque request payload.
+    AnonymousEscrowCancel {
+        request: Temp,
+    },
+    /// Open an anonymous escrow dispute.
+    AnonymousEscrowOpenDispute {
+        escrow: Temp,
+        evidence_hashes: Option<Temp>,
+    },
+    /// Resolve a disputed anonymous escrow from an opaque request payload.
+    AnonymousEscrowResolveDispute {
+        request: Temp,
+    },
     /// Begin a FASTPQ transfer batch scope.
     TransferBatchBegin,
     /// End the current FASTPQ transfer batch scope.
     TransferBatchEnd,
+    /// Submit a pre-encoded FASTPQ TransferAssetBatch Norito payload.
+    TransferBatchApply {
+        payload: Temp,
+    },
     /// Call the `mint_asset` syscall with account, asset and amount parameters.
     MintAsset {
         account: Temp,
@@ -348,6 +407,14 @@ pub enum Instr {
     /// Log an info message (development only).
     Info {
         msg: Temp,
+    },
+    /// Debug-print a raw integer value.
+    DebugPrint {
+        value: Temp,
+    },
+    /// Debug-log a Json/Blob/NoritoBytes TLV pointer.
+    DebugLog {
+        payload: Temp,
     },
     /// Allocate a new map (heap allocation of 16 bytes) and return its pointer in `dest`.
     MapNew {
@@ -459,6 +526,21 @@ pub enum Instr {
     RegisterAccount {
         account: Temp,
     },
+    /// Add a JSON-encoded PublicKey signatory to an account.
+    AddSignatory {
+        account: Temp,
+        signatory: Temp,
+    },
+    /// Remove a JSON-encoded PublicKey signatory from an account.
+    RemoveSignatory {
+        account: Temp,
+        signatory: Temp,
+    },
+    /// Set the non-zero multisig quorum for an account.
+    SetAccountQuorum {
+        account: Temp,
+        quorum: Temp,
+    },
     /// Unregister a Domain by id.
     UnregisterDomain {
         domain: Temp,
@@ -539,12 +621,32 @@ pub enum Instr {
     GetAuthority {
         dest: Temp,
     },
+    /// Load current authority AccountId pointer through the extended sysvar surface.
+    SysvarAuthority {
+        dest: Temp,
+    },
     /// Load the current trusted host time in unix milliseconds into `dest`.
     CurrentTimeMs {
         dest: Temp,
     },
     /// Load the current trusted host block height into `dest`.
     BlockHeight {
+        dest: Temp,
+    },
+    /// Load the current trusted host block time in unix milliseconds into `dest`.
+    BlockTimeMs {
+        dest: Temp,
+    },
+    /// Load the current chain identifier Blob pointer into `dest`.
+    ChainId {
+        dest: Temp,
+    },
+    /// Load the current contract address NoritoBytes pointer into `dest`.
+    ContractAddress {
+        dest: Temp,
+    },
+    /// Load the current entrypoint name Blob pointer into `dest`.
+    Entrypoint {
         dest: Temp,
     },
     /// Resolve a canonical account alias string to the current AccountId.
@@ -562,6 +664,11 @@ pub enum Instr {
     /// Load trigger event payload (`Json*`) into `dest` (host-provided).
     GetTriggerEvent {
         dest: Temp,
+    },
+    /// Load an arbitrary host-provided public input TLV by Name key.
+    GetPublicInput {
+        dest: Temp,
+        key: Temp,
     },
     /// Test-only nested runtime entrypoint call as a named fixture actor.
     InvokeEntrypointAs {
@@ -598,12 +705,102 @@ pub enum Instr {
         /// Temp holding pointer to NoritoBytes TLV (INPUT)
         payload: Temp,
     },
+    /// Execution proof summary as NoritoBytes returned by the host.
+    ProveExecution {
+        dest: Temp,
+    },
+    /// Grow VM heap by `bytes`, returning the new heap limit.
+    GrowHeap {
+        dest: Temp,
+        bytes: Temp,
+    },
+    /// Write Merkle path for raw VM memory address to raw memory buffer.
+    GetMerklePath {
+        dest: Temp,
+        address: Temp,
+        output: Temp,
+        root_output: Option<Temp>,
+    },
+    /// Write compact Merkle proof for raw VM memory address to raw memory buffer.
+    GetMerkleCompact {
+        dest: Temp,
+        address: Temp,
+        output: Temp,
+        max_depth: Option<Temp>,
+        root_output: Option<Temp>,
+    },
+    /// Write compact Merkle proof for register leaf to raw memory buffer.
+    GetRegisterMerkleCompact {
+        dest: Temp,
+        register_index: Temp,
+        output: Temp,
+        max_depth: Option<Temp>,
+        root_output: Option<Temp>,
+    },
+    /// Generic OpenVerify proof verification returning r10 = 0/1.
+    VerifyProof {
+        dest: Temp,
+        payload: Temp,
+    },
     /// Vendor bridge: SMARTCONTRACT_EXECUTE_INSTRUCTION with NoritoBytes `InstructionBox` in r10.
     VendorExecuteInstruction {
         payload: Temp,
     },
     /// Vendor bridge: SMARTCONTRACT_EXECUTE_QUERY with NoritoBytes `QueryRequest` in r10.
     VendorExecuteQuery {
+        dest: Temp,
+        payload: Temp,
+    },
+    /// Extended query bridge: QUERY_EXECUTE_NORITO with NoritoBytes `QueryRequest` in r10.
+    QueryExecuteNorito {
+        dest: Temp,
+        payload: Temp,
+    },
+    /// Direct typed query helper: r10 = pointer key, syscall returns NoritoBytes in r10.
+    QueryGet {
+        dest: Temp,
+        key: Temp,
+        syscall: u32,
+    },
+    /// Host balance query: r10 = &AccountId, r11 = &AssetDefinitionId; returns &NoritoBytes(Numeric).
+    GetAccountBalance {
+        dest: Temp,
+        account: Temp,
+        asset: Temp,
+    },
+    /// Allocate `bytes` on the VM heap, returning the raw heap pointer.
+    Alloc {
+        dest: Temp,
+        bytes: Temp,
+    },
+    /// Read a host-provided private input by numeric index.
+    GetPrivateInput {
+        dest: Temp,
+        index: Temp,
+    },
+    /// Record a nullifier and reject if it was already used.
+    UseNullifier {
+        nullifier: Temp,
+    },
+    /// Commit the VM OUTPUT region to the host.
+    CommitOutput,
+    /// Smart-contract lifecycle governance/runtime helper with NoritoBytes request in r10.
+    SmartContractLifecycle {
+        payload: Temp,
+        syscall: u32,
+    },
+    /// Read recent ZK roots with a NoritoBytes request in r10.
+    ZkRootsGet {
+        dest: Temp,
+        payload: Temp,
+    },
+    /// Read finalized ZK vote tally with a NoritoBytes request in r10.
+    ZkVoteGetTally {
+        dest: Temp,
+        payload: Temp,
+    },
+    /// Read VRF epoch seed with a NoritoBytes request in r10.
+    VrfEpochSeed {
         dest: Temp,
         payload: Temp,
     },
@@ -624,6 +821,28 @@ pub enum Instr {
     /// Durable state delete: r10 = &Name path
     StateDel {
         path: Temp,
+    },
+    /// Durable state key enumeration: r10 = &Name prefix; r11 = offset; r12 = limit.
+    StateKeys {
+        dest: Temp,
+        prefix: Temp,
+        offset: Temp,
+        limit: Temp,
+    },
+    /// Durable state key presence: r10 = &Name path; returns present flag in dest.
+    StateHas {
+        dest: Temp,
+        path: Temp,
+    },
+    /// Durable state value payload length: r10 = &Name path; returns length in dest.
+    StateLen {
+        dest: Temp,
+        path: Temp,
+    },
+    /// Durable state key count for prefix: r10 = &Name prefix; returns total in dest.
+    StateCount {
+        dest: Temp,
+        prefix: Temp,
     },
     /// Decode a NoritoBytes blob containing an ASCII decimal integer; result in dest.
     DecodeInt {
@@ -823,6 +1042,12 @@ pub enum Instr {
     },
     /// Commit the active AXT envelope.
     AxtCommit,
+    /// Execute a Soracloud runtime host operation with request pointer in r10.
+    SoracloudHostCall {
+        dest: Temp,
+        request: Temp,
+        syscall: u32,
+    },
 }
 
 /// Kinds of typed data references supported by the pointer-ABI.
@@ -842,6 +1067,8 @@ pub enum DataRefKind {
     AxtDescriptor,
     AssetHandle,
     ProofBlob,
+    SoracloudRequest,
+    SoracloudResponse,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -871,6 +1098,8 @@ fn pointer_kind_for_type(ty: &Type) -> Option<DataRefKind> {
         Type::AxtDescriptor => Some(DataRefKind::AxtDescriptor),
         Type::AssetHandle => Some(DataRefKind::AssetHandle),
         Type::ProofBlob => Some(DataRefKind::ProofBlob),
+        Type::SoracloudRequest => Some(DataRefKind::SoracloudRequest),
+        Type::SoracloudResponse => Some(DataRefKind::SoracloudResponse),
         Type::Blob | Type::Bytes => Some(DataRefKind::Blob),
         _ => None,
     }
@@ -2420,6 +2649,436 @@ fn lower_expr_as_numeric(
     }
 }
 
+fn query_get_syscall(builtin: Builtin) -> u32 {
+    match builtin {
+        Builtin::QueryGetAccount => crate::syscalls::SYSCALL_QUERY_GET_ACCOUNT,
+        Builtin::QueryGetAsset => crate::syscalls::SYSCALL_QUERY_GET_ASSET,
+        Builtin::QueryGetAssetDefinition => crate::syscalls::SYSCALL_QUERY_GET_ASSET_DEFINITION,
+        Builtin::QueryGetDomain => crate::syscalls::SYSCALL_QUERY_GET_DOMAIN,
+        Builtin::QueryGetNft => crate::syscalls::SYSCALL_QUERY_GET_NFT,
+        Builtin::QueryGetParameter => crate::syscalls::SYSCALL_QUERY_GET_PARAMETER,
+        Builtin::QueryGetContractManifest => crate::syscalls::SYSCALL_QUERY_GET_CONTRACT_MANIFEST,
+        Builtin::QueryGetContractInstance => crate::syscalls::SYSCALL_QUERY_GET_CONTRACT_INSTANCE,
+        _ => unreachable!("query_get_syscall called for non-query builtin"),
+    }
+}
+
+fn zk_verify_syscall(builtin: Builtin) -> u32 {
+    match builtin {
+        Builtin::ZkVerifyTransfer => crate::syscalls::SYSCALL_ZK_VERIFY_TRANSFER,
+        Builtin::ZkVerifyUnshield => crate::syscalls::SYSCALL_ZK_VERIFY_UNSHIELD,
+        Builtin::ZkVerifyBatch => crate::syscalls::SYSCALL_ZK_VERIFY_BATCH,
+        Builtin::ZkVoteVerifyBallot => crate::syscalls::SYSCALL_ZK_VOTE_VERIFY_BALLOT,
+        Builtin::ZkVoteVerifyTally => crate::syscalls::SYSCALL_ZK_VOTE_VERIFY_TALLY,
+        _ => unreachable!("zk_verify_syscall called for non-ZK-verify builtin"),
+    }
+}
+
+fn soracloud_syscall(builtin: Builtin) -> u32 {
+    match builtin {
+        Builtin::SoracloudReadCommittedState => {
+            crate::syscalls::SYSCALL_SORACLOUD_READ_COMMITTED_STATE
+        }
+        Builtin::SoracloudEmitStateMutation => {
+            crate::syscalls::SYSCALL_SORACLOUD_EMIT_STATE_MUTATION
+        }
+        Builtin::SoracloudEmitMailboxMessage => {
+            crate::syscalls::SYSCALL_SORACLOUD_EMIT_MAILBOX_MESSAGE
+        }
+        Builtin::SoracloudAppendJournal => crate::syscalls::SYSCALL_SORACLOUD_APPEND_JOURNAL,
+        Builtin::SoracloudPublishCheckpoint => {
+            crate::syscalls::SYSCALL_SORACLOUD_PUBLISH_CHECKPOINT
+        }
+        Builtin::SoracloudReadSecret => crate::syscalls::SYSCALL_SORACLOUD_READ_SECRET,
+        Builtin::SoracloudReadCredential => crate::syscalls::SYSCALL_SORACLOUD_READ_CREDENTIAL,
+        Builtin::SoracloudEgressFetch => crate::syscalls::SYSCALL_SORACLOUD_EGRESS_FETCH,
+        Builtin::SoracloudReadConfig => crate::syscalls::SYSCALL_SORACLOUD_READ_CONFIG,
+        Builtin::SoracloudReadSecretEnvelope => {
+            crate::syscalls::SYSCALL_SORACLOUD_READ_SECRET_ENVELOPE
+        }
+        _ => unreachable!("soracloud_syscall called for non-Soracloud builtin"),
+    }
+}
+
+fn smart_contract_lifecycle_syscall(builtin: Builtin) -> u32 {
+    match builtin {
+        Builtin::DeactivateContractInstance => {
+            crate::syscalls::SYSCALL_DEACTIVATE_CONTRACT_INSTANCE
+        }
+        Builtin::RemoveSmartContractBytes => crate::syscalls::SYSCALL_REMOVE_SMART_CONTRACT_BYTES,
+        Builtin::RegisterSmartContractCode => crate::syscalls::SYSCALL_REGISTER_SMART_CONTRACT_CODE,
+        Builtin::RegisterSmartContractBytes => {
+            crate::syscalls::SYSCALL_REGISTER_SMART_CONTRACT_BYTES
+        }
+        Builtin::ActivateContractInstance => crate::syscalls::SYSCALL_ACTIVATE_CONTRACT_INSTANCE,
+        _ => unreachable!("smart_contract_lifecycle_syscall called for non-lifecycle builtin"),
+    }
+}
+
+fn direct_helper_syscall(builtin: Builtin) -> Option<u32> {
+    Some(match builtin {
+        Builtin::JsonGetIntDirect => crate::syscalls::SYSCALL_JSON_GET_I64_DIRECT,
+        Builtin::JsonGetJsonDirect => crate::syscalls::SYSCALL_JSON_GET_JSON_DIRECT,
+        Builtin::JsonGetNameDirect => crate::syscalls::SYSCALL_JSON_GET_NAME_DIRECT,
+        Builtin::JsonGetAccountIdDirect => crate::syscalls::SYSCALL_JSON_GET_ACCOUNT_ID_DIRECT,
+        Builtin::JsonGetNftIdDirect => crate::syscalls::SYSCALL_JSON_GET_NFT_ID_DIRECT,
+        Builtin::JsonGetBlobHexDirect => crate::syscalls::SYSCALL_JSON_GET_BLOB_HEX_DIRECT,
+        Builtin::JsonGetNumericDirect => crate::syscalls::SYSCALL_JSON_GET_NUMERIC_DIRECT,
+        Builtin::JsonGetAssetDefinitionIdDirect => {
+            crate::syscalls::SYSCALL_JSON_GET_ASSET_DEFINITION_ID_DIRECT
+        }
+        Builtin::JsonSetIntDirect => crate::syscalls::SYSCALL_JSON_SET_I64_DIRECT,
+        Builtin::JsonSetAccountIdDirect => crate::syscalls::SYSCALL_JSON_SET_ACCOUNT_ID_DIRECT,
+        Builtin::BuildPathKeyNoritoDirect => crate::syscalls::SYSCALL_BUILD_PATH_KEY_NORITO_DIRECT,
+        Builtin::SchemaInfoDirect => crate::syscalls::SYSCALL_SCHEMA_INFO_DIRECT,
+        Builtin::SchemaEncodeDirect => crate::syscalls::SYSCALL_SCHEMA_ENCODE_DIRECT,
+        Builtin::SchemaDecodeDirect => crate::syscalls::SYSCALL_SCHEMA_DECODE_DIRECT,
+        Builtin::NumericToIntDirect => crate::syscalls::SYSCALL_NUMERIC_TO_INT_DIRECT,
+        Builtin::NumericAddDirect => crate::syscalls::SYSCALL_NUMERIC_ADD_DIRECT,
+        Builtin::NumericSubDirect => crate::syscalls::SYSCALL_NUMERIC_SUB_DIRECT,
+        Builtin::NumericMulDirect => crate::syscalls::SYSCALL_NUMERIC_MUL_DIRECT,
+        Builtin::NumericDivDirect => crate::syscalls::SYSCALL_NUMERIC_DIV_DIRECT,
+        Builtin::NumericRemDirect => crate::syscalls::SYSCALL_NUMERIC_REM_DIRECT,
+        Builtin::NumericNegDirect => crate::syscalls::SYSCALL_NUMERIC_NEG_DIRECT,
+        Builtin::NumericEqDirect => crate::syscalls::SYSCALL_NUMERIC_EQ_DIRECT,
+        Builtin::NumericNeDirect => crate::syscalls::SYSCALL_NUMERIC_NE_DIRECT,
+        Builtin::NumericLtDirect => crate::syscalls::SYSCALL_NUMERIC_LT_DIRECT,
+        Builtin::NumericLeDirect => crate::syscalls::SYSCALL_NUMERIC_LE_DIRECT,
+        Builtin::NumericGtDirect => crate::syscalls::SYSCALL_NUMERIC_GT_DIRECT,
+        Builtin::NumericGeDirect => crate::syscalls::SYSCALL_NUMERIC_GE_DIRECT,
+        _ => return None,
+    })
+}
+
+fn numeric_binary_builtin_op(builtin: Builtin) -> Option<BinaryOp> {
+    Some(match builtin {
+        Builtin::NumericAdd => BinaryOp::Add,
+        Builtin::NumericSub => BinaryOp::Sub,
+        Builtin::NumericMul => BinaryOp::Mul,
+        Builtin::NumericDiv => BinaryOp::Div,
+        Builtin::NumericRem => BinaryOp::Mod,
+        _ => return None,
+    })
+}
+
+fn numeric_compare_builtin_op(builtin: Builtin) -> Option<BinaryOp> {
+    Some(match builtin {
+        Builtin::NumericEq => BinaryOp::Eq,
+        Builtin::NumericNe => BinaryOp::Ne,
+        Builtin::NumericLt => BinaryOp::Lt,
+        Builtin::NumericLe => BinaryOp::Le,
+        Builtin::NumericGt => BinaryOp::Gt,
+        Builtin::NumericGe => BinaryOp::Ge,
+        _ => return None,
+    })
+}
+
+fn lower_hash_builtin_call(
+    ctx: &mut LowerCtx,
+    builtin: Builtin,
+    args: &[semantic::TypedExpr],
+    vars: &mut HashMap<String, Temp>,
+) -> Temp {
+    let message = lower_expr(ctx, &args[0], vars);
+    let dest = ctx.new_temp();
+    let instr = match builtin {
+        Builtin::Sm3Hash => Instr::Sm3Hash { dest, message },
+        Builtin::Sha256Hash => Instr::Sha256Hash { dest, message },
+        Builtin::Sha3Hash => Instr::Sha3Hash { dest, message },
+        Builtin::Blake2b256Hash => Instr::Blake2b256Hash { dest, message },
+        Builtin::Keccak256Hash => Instr::Keccak256Hash { dest, message },
+        Builtin::IrohaHash => Instr::IrohaHash { dest, message },
+        _ => unreachable!("non-hash builtin passed to lower_hash_builtin_call"),
+    };
+    ctx.current_instr(instr);
+    dest
+}
+
+fn lower_signature_builtin_call(
+    ctx: &mut LowerCtx,
+    builtin: Builtin,
+    args: &[semantic::TypedExpr],
+    vars: &mut HashMap<String, Temp>,
+) -> Temp {
+    let message = lower_expr(ctx, &args[0], vars);
+    let signature = lower_expr(ctx, &args[1], vars);
+    let public_key = lower_expr(ctx, &args[2], vars);
+    let dest = ctx.new_temp();
+    match builtin {
+        Builtin::Sm2Verify => {
+            let distid = args.get(3).map(|arg| lower_expr(ctx, arg, vars));
+            ctx.current_instr(Instr::Sm2Verify {
+                dest,
+                message,
+                signature,
+                public_key,
+                distid,
+            });
+        }
+        Builtin::VerifySignature => {
+            let scheme = lower_expr(ctx, &args[3], vars);
+            ctx.current_instr(Instr::VerifySignature {
+                dest,
+                message,
+                signature,
+                public_key,
+                scheme,
+            });
+        }
+        _ => unreachable!("non-signature builtin passed to lower_signature_builtin_call"),
+    }
+    dest
+}
+
+fn lower_sm4_builtin_call(
+    ctx: &mut LowerCtx,
+    builtin: Builtin,
+    args: &[semantic::TypedExpr],
+    vars: &mut HashMap<String, Temp>,
+) -> Temp {
+    let key = lower_expr(ctx, &args[0], vars);
+    let nonce = lower_expr(ctx, &args[1], vars);
+    let aad = lower_expr(ctx, &args[2], vars);
+    let data = lower_expr(ctx, &args[3], vars);
+    let dest = ctx.new_temp();
+    match builtin {
+        Builtin::Sm4GcmSeal => ctx.current_instr(Instr::Sm4GcmSeal {
+            dest,
+            key,
+            nonce,
+            aad,
+            plaintext: data,
+        }),
+        Builtin::Sm4GcmOpen => ctx.current_instr(Instr::Sm4GcmOpen {
+            dest,
+            key,
+            nonce,
+            aad,
+            ciphertext_and_tag: data,
+        }),
+        Builtin::Sm4CcmSeal => {
+            let tag_len = args.get(4).map(|arg| lower_expr(ctx, arg, vars));
+            ctx.current_instr(Instr::Sm4CcmSeal {
+                dest,
+                key,
+                nonce,
+                aad,
+                plaintext: data,
+                tag_len,
+            });
+        }
+        Builtin::Sm4CcmOpen => {
+            let tag_len = args.get(4).map(|arg| lower_expr(ctx, arg, vars));
+            ctx.current_instr(Instr::Sm4CcmOpen {
+                dest,
+                key,
+                nonce,
+                aad,
+                ciphertext_and_tag: data,
+                tag_len,
+            });
+        }
+        _ => unreachable!("non-SM4 builtin passed to lower_sm4_builtin_call"),
+    }
+    dest
+}
+
+fn lower_direct_helper_call(
+    ctx: &mut LowerCtx,
+    builtin: Builtin,
+    args: &[semantic::TypedExpr],
+    vars: &mut HashMap<String, Temp>,
+) -> Temp {
+    let syscall = direct_helper_syscall(builtin).expect("direct helper syscall");
+    let mut lowered_args = Vec::with_capacity(args.len());
+    for (idx, arg) in args.iter().enumerate() {
+        let temp = if builtin == Builtin::JsonSetIntDirect && idx == 2 {
+            lower_expr_as_int(ctx, arg, vars)
+        } else {
+            lower_expr(ctx, arg, vars)
+        };
+        lowered_args.push(temp);
+    }
+    let dest = ctx.new_temp();
+    ctx.current_instr(Instr::DirectHelperSyscall {
+        dest,
+        syscall,
+        args: lowered_args,
+    });
+    dest
+}
+
+fn pointer_constructor_kind_and_type(constructor: PointerConstructor) -> (DataRefKind, Type) {
+    match constructor {
+        PointerConstructor::AccountId => (DataRefKind::Account, Type::AccountId),
+        PointerConstructor::AssetDefinition => (DataRefKind::AssetDef, Type::AssetDefinitionId),
+        PointerConstructor::AssetId => (DataRefKind::AssetId, Type::AssetId),
+        PointerConstructor::NftId => (DataRefKind::NftId, Type::NftId),
+        PointerConstructor::Domain | PointerConstructor::DomainId => {
+            (DataRefKind::Domain, Type::DomainId)
+        }
+        PointerConstructor::Name => (DataRefKind::Name, Type::Name),
+        PointerConstructor::Json => (DataRefKind::Json, Type::Json),
+        PointerConstructor::Blob => (DataRefKind::Blob, Type::Bytes),
+        PointerConstructor::NoritoBytes => (DataRefKind::NoritoBytes, Type::Bytes),
+        PointerConstructor::DataSpaceId => (DataRefKind::DataSpaceId, Type::DataSpaceId),
+        PointerConstructor::AxtDescriptor => (DataRefKind::AxtDescriptor, Type::AxtDescriptor),
+        PointerConstructor::AssetHandle => (DataRefKind::AssetHandle, Type::AssetHandle),
+        PointerConstructor::ProofBlob => (DataRefKind::ProofBlob, Type::ProofBlob),
+        PointerConstructor::SoracloudRequest => {
+            (DataRefKind::SoracloudRequest, Type::SoracloudRequest)
+        }
+        PointerConstructor::SoracloudResponse => {
+            (DataRefKind::SoracloudResponse, Type::SoracloudResponse)
+        }
+    }
+}
+
+fn lower_pointer_constructor_call(
+    ctx: &mut LowerCtx,
+    constructor: PointerConstructor,
+    args: &[semantic::TypedExpr],
+    vars: &mut HashMap<String, Temp>,
+) -> Temp {
+    if args.len() != 1 {
+        let t = ctx.new_temp();
+        ctx.current_instr(Instr::Const { dest: t, value: 0 });
+        return t;
+    }
+    let arg = &args[0];
+    let (kind, target_ty) = pointer_constructor_kind_and_type(constructor);
+    if let semantic::ExprKind::String(s) = &arg.expr {
+        if constructor == PointerConstructor::AccountId
+            && account_id_literal_uses_alias_resolution(s)
+        {
+            let alias = ctx.new_temp();
+            ctx.current_instr(Instr::DataRef {
+                dest: alias,
+                kind: DataRefKind::Blob,
+                value: s.clone(),
+            });
+            let dest = ctx.new_temp();
+            ctx.current_instr(Instr::ResolveAccountAlias { dest, alias });
+            return dest;
+        }
+        let dest = ctx.new_temp();
+        ctx.current_instr(Instr::DataRef {
+            dest,
+            kind,
+            value: s.clone(),
+        });
+        return dest;
+    }
+    if constructor == PointerConstructor::NoritoBytes
+        && let semantic::ExprKind::Bytes(bytes) = &arg.expr
+    {
+        let dest = ctx.new_temp();
+        let hex = hex::encode(bytes);
+        ctx.current_instr(Instr::DataRef {
+            dest,
+            kind: DataRefKind::NoritoBytes,
+            value: format!("0x{hex}"),
+        });
+        return dest;
+    }
+    let src = lower_expr(ctx, arg, vars);
+    let resolved_arg = semantic::resolve_struct_type(&arg.ty);
+    match (target_ty.clone(), resolved_arg.clone()) {
+        (Type::Blob | Type::Bytes, _) => src,
+        (t, arg_ty) if t == arg_ty => src,
+        (Type::Json, ty) if semantic::is_blob_like(&ty) => {
+            let dest = ctx.new_temp();
+            ctx.current_instr(Instr::JsonDecode { dest, blob: src });
+            dest
+        }
+        (Type::Name, ty) if semantic::is_blob_like(&ty) => {
+            let dest = ctx.new_temp();
+            ctx.current_instr(Instr::NameDecode { dest, blob: src });
+            dest
+        }
+        (_, Type::String) => {
+            let dest = ctx.new_temp();
+            ctx.current_instr(Instr::PointerFromString { dest, kind, src });
+            dest
+        }
+        (_, ty) if semantic::is_blob_like(&ty) => {
+            let dest = ctx.new_temp();
+            ctx.current_instr(Instr::PointerFromNorito {
+                dest,
+                blob: src,
+                kind,
+            });
+            dest
+        }
+        _ => src,
+    }
+}
+
+fn lower_transfer_batch_call(
+    ctx: &mut LowerCtx,
+    args: &[semantic::TypedExpr],
+    vars: &mut HashMap<String, Temp>,
+) -> Temp {
+    ctx.current_instr(Instr::TransferBatchBegin);
+    for entry in args {
+        let tuple = lower_expr(ctx, entry, vars);
+        let from = ctx.new_temp();
+        ctx.current_instr(Instr::TupleGet {
+            dest: from,
+            tuple,
+            index: 0,
+        });
+        let to = ctx.new_temp();
+        ctx.current_instr(Instr::TupleGet {
+            dest: to,
+            tuple,
+            index: 1,
+        });
+        let asset = ctx.new_temp();
+        ctx.current_instr(Instr::TupleGet {
+            dest: asset,
+            tuple,
+            index: 2,
+        });
+        let amount_raw = ctx.new_temp();
+        ctx.current_instr(Instr::TupleGet {
+            dest: amount_raw,
+            tuple,
+            index: 3,
+        });
+        let amount = if let Type::Tuple(items) = semantic::resolve_struct_type(&entry.ty) {
+            let entry_ty = items.get(3);
+            if entry_ty.is_some_and(semantic::is_wide_numeric_type) {
+                amount_raw
+            } else {
+                let out = ctx.new_temp();
+                ctx.current_instr(Instr::NumericFromInt {
+                    dest: out,
+                    value: amount_raw,
+                });
+                out
+            }
+        } else {
+            let out = ctx.new_temp();
+            ctx.current_instr(Instr::NumericFromInt {
+                dest: out,
+                value: amount_raw,
+            });
+            out
+        };
+        ctx.current_instr(Instr::TransferAsset {
+            from,
+            to,
+            asset,
+            amount,
+        });
+    }
+    ctx.current_instr(Instr::TransferBatchEnd);
+    let t = ctx.new_temp();
+    ctx.current_instr(Instr::Const { dest: t, value: 0 });
+    t
+}
+
 fn lower_surface_builtin_call(
     ctx: &mut LowerCtx,
     builtin: Builtin,
@@ -2427,6 +3086,62 @@ fn lower_surface_builtin_call(
     vars: &mut HashMap<String, Temp>,
 ) -> Temp {
     match builtin {
+        Builtin::PointerConstructor(constructor) => {
+            lower_pointer_constructor_call(ctx, constructor, args, vars)
+        }
+        Builtin::JsonSetIntDirect
+        | Builtin::JsonSetAccountIdDirect
+        | Builtin::JsonGetIntDirect
+        | Builtin::JsonGetNumericDirect
+        | Builtin::JsonGetJsonDirect
+        | Builtin::JsonGetNameDirect
+        | Builtin::JsonGetAccountIdDirect
+        | Builtin::JsonGetAssetDefinitionIdDirect
+        | Builtin::JsonGetNftIdDirect
+        | Builtin::JsonGetBlobHexDirect
+        | Builtin::BuildPathKeyNoritoDirect
+        | Builtin::SchemaEncodeDirect
+        | Builtin::SchemaDecodeDirect
+        | Builtin::SchemaInfoDirect
+        | Builtin::NumericToIntDirect
+        | Builtin::NumericAddDirect
+        | Builtin::NumericSubDirect
+        | Builtin::NumericMulDirect
+        | Builtin::NumericDivDirect
+        | Builtin::NumericRemDirect
+        | Builtin::NumericNegDirect
+        | Builtin::NumericEqDirect
+        | Builtin::NumericNeDirect
+        | Builtin::NumericLtDirect
+        | Builtin::NumericLeDirect
+        | Builtin::NumericGtDirect
+        | Builtin::NumericGeDirect => lower_direct_helper_call(ctx, builtin, args, vars),
+        Builtin::SchemaEncode => {
+            let schema = lower_expr(ctx, &args[0], vars);
+            let json = lower_expr(ctx, &args[1], vars);
+            let dest = ctx.new_temp();
+            ctx.current_instr(Instr::SchemaEncode { dest, schema, json });
+            dest
+        }
+        Builtin::SchemaDecode => {
+            let schema = lower_expr(ctx, &args[0], vars);
+            let blob = lower_expr(ctx, &args[1], vars);
+            let dest = ctx.new_temp();
+            ctx.current_instr(Instr::SchemaDecode { dest, schema, blob });
+            dest
+        }
+        Builtin::SchemaInfo => {
+            let schema = lower_expr(ctx, &args[0], vars);
+            let dest = ctx.new_temp();
+            ctx.current_instr(Instr::SchemaInfo { dest, schema });
+            dest
+        }
+        Builtin::NumericNeg => {
+            let value = lower_expr(ctx, &args[0], vars);
+            let dest = ctx.new_temp();
+            ctx.current_instr(Instr::NumericNeg { dest, value });
+            dest
+        }
         Builtin::JsonObject => {
             let d = ctx.new_temp();
             ctx.current_instr(Instr::JsonObject { dest: d });
@@ -2457,6 +3172,30 @@ fn lower_surface_builtin_call(
                 value: v,
             });
             d
+        }
+        Builtin::EncodeInt => {
+            let value = lower_expr_as_int(ctx, &args[0], vars);
+            let dest = ctx.new_temp();
+            ctx.current_instr(Instr::EncodeInt { dest, value });
+            dest
+        }
+        Builtin::DecodeInt => {
+            let blob = lower_expr(ctx, &args[0], vars);
+            let dest = ctx.new_temp();
+            ctx.current_instr(Instr::DecodeInt { dest, blob });
+            dest
+        }
+        Builtin::EncodeJson => {
+            let json = lower_expr(ctx, &args[0], vars);
+            let dest = ctx.new_temp();
+            ctx.current_instr(Instr::JsonEncode { dest, json });
+            dest
+        }
+        Builtin::DecodeJson => {
+            let blob = lower_expr(ctx, &args[0], vars);
+            let dest = ctx.new_temp();
+            ctx.current_instr(Instr::JsonDecode { dest, blob });
+            dest
         }
         Builtin::GetInt => {
             let j = lower_expr(ctx, &args[0], vars);
@@ -2546,6 +3285,51 @@ fn lower_surface_builtin_call(
             });
             d
         }
+        Builtin::TriggerEvent => {
+            let dest = ctx.new_temp();
+            ctx.current_instr(Instr::GetTriggerEvent { dest });
+            dest
+        }
+        Builtin::Authority => {
+            let dest = ctx.new_temp();
+            ctx.current_instr(Instr::GetAuthority { dest });
+            dest
+        }
+        Builtin::SysvarAuthority => {
+            let dest = ctx.new_temp();
+            ctx.current_instr(Instr::SysvarAuthority { dest });
+            dest
+        }
+        Builtin::CurrentTimeMs => {
+            let dest = ctx.new_temp();
+            ctx.current_instr(Instr::CurrentTimeMs { dest });
+            dest
+        }
+        Builtin::BlockHeight => {
+            let dest = ctx.new_temp();
+            ctx.current_instr(Instr::BlockHeight { dest });
+            dest
+        }
+        Builtin::BlockTimeMs => {
+            let dest = ctx.new_temp();
+            ctx.current_instr(Instr::BlockTimeMs { dest });
+            dest
+        }
+        Builtin::ChainId => {
+            let dest = ctx.new_temp();
+            ctx.current_instr(Instr::ChainId { dest });
+            dest
+        }
+        Builtin::ContractAddress => {
+            let dest = ctx.new_temp();
+            ctx.current_instr(Instr::ContractAddress { dest });
+            dest
+        }
+        Builtin::Entrypoint => {
+            let dest = ctx.new_temp();
+            ctx.current_instr(Instr::Entrypoint { dest });
+            dest
+        }
         Builtin::Path => {
             let base = lower_expr(ctx, &args[0], vars);
             let d = ctx.new_temp();
@@ -2564,6 +3348,159 @@ fn lower_surface_builtin_call(
             }
             d
         }
+        Builtin::NameDecode => {
+            let blob = lower_expr(ctx, &args[0], vars);
+            let dest = ctx.new_temp();
+            ctx.current_instr(Instr::NameDecode { dest, blob });
+            dest
+        }
+        Builtin::TlvEq => {
+            let left = lower_expr(ctx, &args[0], vars);
+            let right = lower_expr(ctx, &args[1], vars);
+            let dest = ctx.new_temp();
+            ctx.current_instr(Instr::PointerEq { dest, left, right });
+            dest
+        }
+        Builtin::TlvLen => {
+            let value = lower_expr(ctx, &args[0], vars);
+            let dest = ctx.new_temp();
+            ctx.current_instr(Instr::TlvLen { dest, value });
+            dest
+        }
+        Builtin::PointerToNorito => {
+            let value = lower_expr(ctx, &args[0], vars);
+            let dest = ctx.new_temp();
+            ctx.current_instr(Instr::PointerToNorito { dest, value });
+            dest
+        }
+        Builtin::NumericToInt => {
+            let value = lower_expr(ctx, &args[0], vars);
+            let dest = ctx.new_temp();
+            ctx.current_instr(Instr::NumericToInt { dest, value });
+            dest
+        }
+        builtin @ (Builtin::NumericAdd
+        | Builtin::NumericSub
+        | Builtin::NumericMul
+        | Builtin::NumericDiv
+        | Builtin::NumericRem) => {
+            let left = lower_expr(ctx, &args[0], vars);
+            let right = lower_expr(ctx, &args[1], vars);
+            let dest = ctx.new_temp();
+            ctx.current_instr(Instr::NumericBinary {
+                dest,
+                op: numeric_binary_builtin_op(builtin).expect("numeric binary builtin op"),
+                left,
+                right,
+            });
+            dest
+        }
+        builtin @ (Builtin::NumericEq
+        | Builtin::NumericNe
+        | Builtin::NumericLt
+        | Builtin::NumericLe
+        | Builtin::NumericGt
+        | Builtin::NumericGe) => {
+            let left = lower_expr(ctx, &args[0], vars);
+            let right = lower_expr(ctx, &args[1], vars);
+            let dest = ctx.new_temp();
+            ctx.current_instr(Instr::NumericCompare {
+                dest,
+                op: numeric_compare_builtin_op(builtin).expect("numeric compare builtin op"),
+                left,
+                right,
+            });
+            dest
+        }
+        Builtin::Isqrt => {
+            let src = lower_expr_as_int(ctx, &args[0], vars);
+            let dest = ctx.new_temp();
+            ctx.current_instr(Instr::Isqrt { dest, src });
+            dest
+        }
+        Builtin::Abs => {
+            let src = lower_expr_as_int(ctx, &args[0], vars);
+            let dest = ctx.new_temp();
+            ctx.current_instr(Instr::Abs { dest, src });
+            dest
+        }
+        Builtin::Min => {
+            let a = lower_expr_as_int(ctx, &args[0], vars);
+            let b = lower_expr_as_int(ctx, &args[1], vars);
+            let dest = ctx.new_temp();
+            ctx.current_instr(Instr::Min { dest, a, b });
+            dest
+        }
+        Builtin::Max => {
+            let a = lower_expr_as_int(ctx, &args[0], vars);
+            let b = lower_expr_as_int(ctx, &args[1], vars);
+            let dest = ctx.new_temp();
+            ctx.current_instr(Instr::Max { dest, a, b });
+            dest
+        }
+        Builtin::DivCeil => {
+            let num = lower_expr_as_int(ctx, &args[0], vars);
+            let denom = lower_expr_as_int(ctx, &args[1], vars);
+            let dest = ctx.new_temp();
+            ctx.current_instr(Instr::DivCeil { dest, num, denom });
+            dest
+        }
+        Builtin::Gcd => {
+            let a = lower_expr_as_int(ctx, &args[0], vars);
+            let b = lower_expr_as_int(ctx, &args[1], vars);
+            let dest = ctx.new_temp();
+            ctx.current_instr(Instr::Gcd { dest, a, b });
+            dest
+        }
+        Builtin::Mean => {
+            let a = lower_expr_as_int(ctx, &args[0], vars);
+            let b = lower_expr_as_int(ctx, &args[1], vars);
+            let dest = ctx.new_temp();
+            ctx.current_instr(Instr::Mean { dest, a, b });
+            dest
+        }
+        Builtin::Poseidon2 => {
+            let a = lower_expr_as_int(ctx, &args[0], vars);
+            let b = lower_expr_as_int(ctx, &args[1], vars);
+            let dest = ctx.new_temp();
+            ctx.current_instr(Instr::Poseidon2 { dest, a, b });
+            dest
+        }
+        Builtin::Poseidon6 => {
+            let mut lowered_args = [Temp(0); 6];
+            for (index, arg) in args.iter().enumerate() {
+                lowered_args[index] = lower_expr_as_int(ctx, arg, vars);
+            }
+            let dest = ctx.new_temp();
+            ctx.current_instr(Instr::Poseidon6 {
+                dest,
+                args: lowered_args,
+            });
+            dest
+        }
+        Builtin::Pubkgen => {
+            let src = lower_expr_as_int(ctx, &args[0], vars);
+            let dest = ctx.new_temp();
+            ctx.current_instr(Instr::Pubkgen { dest, src });
+            dest
+        }
+        Builtin::Valcom => {
+            let value = lower_expr_as_int(ctx, &args[0], vars);
+            let blind = lower_expr_as_int(ctx, &args[1], vars);
+            let dest = ctx.new_temp();
+            ctx.current_instr(Instr::Valcom { dest, value, blind });
+            dest
+        }
+        Builtin::SetVl => {
+            let value = lower_expr_as_int(ctx, &args[0], vars);
+            ctx.current_instr(Instr::SetVl { value });
+            let temp = ctx.new_temp();
+            ctx.current_instr(Instr::Const {
+                dest: temp,
+                value: 0,
+            });
+            temp
+        }
         Builtin::StateGet => {
             let p = lower_expr(ctx, &args[0], vars);
             let d = ctx.new_temp();
@@ -2581,6 +3518,892 @@ fn lower_surface_builtin_call(
         Builtin::StateDel => {
             let path = lower_expr(ctx, &args[0], vars);
             ctx.current_instr(Instr::StateDel { path });
+            let t = ctx.new_temp();
+            ctx.current_instr(Instr::Const { dest: t, value: 0 });
+            t
+        }
+        Builtin::StateKeys => {
+            let prefix = lower_expr(ctx, &args[0], vars);
+            let offset = lower_expr_as_int(ctx, &args[1], vars);
+            let limit = lower_expr_as_int(ctx, &args[2], vars);
+            let dest = ctx.new_temp();
+            ctx.current_instr(Instr::StateKeys {
+                dest,
+                prefix,
+                offset,
+                limit,
+            });
+            dest
+        }
+        Builtin::StateHas => {
+            let path = lower_expr(ctx, &args[0], vars);
+            let dest = ctx.new_temp();
+            ctx.current_instr(Instr::StateHas { dest, path });
+            dest
+        }
+        Builtin::StateLen => {
+            let path = lower_expr(ctx, &args[0], vars);
+            let dest = ctx.new_temp();
+            ctx.current_instr(Instr::StateLen { dest, path });
+            dest
+        }
+        Builtin::StateCount => {
+            let prefix = lower_expr(ctx, &args[0], vars);
+            let dest = ctx.new_temp();
+            ctx.current_instr(Instr::StateCount { dest, prefix });
+            dest
+        }
+        Builtin::QueryExecuteNorito => {
+            let payload = lower_expr(ctx, &args[0], vars);
+            let dest = ctx.new_temp();
+            ctx.current_instr(Instr::QueryExecuteNorito { dest, payload });
+            dest
+        }
+        Builtin::QueryGetAccount
+        | Builtin::QueryGetAsset
+        | Builtin::QueryGetAssetDefinition
+        | Builtin::QueryGetDomain
+        | Builtin::QueryGetNft
+        | Builtin::QueryGetParameter
+        | Builtin::QueryGetContractManifest
+        | Builtin::QueryGetContractInstance => {
+            let key = lower_expr(ctx, &args[0], vars);
+            let dest = ctx.new_temp();
+            ctx.current_instr(Instr::QueryGet {
+                dest,
+                key,
+                syscall: query_get_syscall(builtin),
+            });
+            dest
+        }
+        Builtin::BuildSubmitBallotInline => {
+            let election_id = lower_expr(ctx, &args[0], vars);
+            let ciphertext = lower_expr(ctx, &args[1], vars);
+            let nullifier = lower_expr(ctx, &args[2], vars);
+            let backend = lower_expr(ctx, &args[3], vars);
+            let proof = lower_expr(ctx, &args[4], vars);
+            let vk = lower_expr(ctx, &args[5], vars);
+            let dest = ctx.new_temp();
+            ctx.current_instr(Instr::BuildSubmitBallotInline {
+                dest,
+                election_id,
+                ciphertext,
+                nullifier,
+                backend,
+                proof,
+                vk,
+            });
+            dest
+        }
+        Builtin::BuildUnshieldInline => {
+            let asset = lower_expr(ctx, &args[0], vars);
+            let to = lower_expr(ctx, &args[1], vars);
+            let amount = lower_expr_as_int(ctx, &args[2], vars);
+            let inputs = lower_expr(ctx, &args[3], vars);
+            let backend = lower_expr(ctx, &args[4], vars);
+            let proof = lower_expr(ctx, &args[5], vars);
+            let vk = lower_expr(ctx, &args[6], vars);
+            let dest = ctx.new_temp();
+            ctx.current_instr(Instr::BuildUnshieldInline {
+                dest,
+                asset,
+                to,
+                amount,
+                inputs,
+                backend,
+                proof,
+                vk,
+            });
+            dest
+        }
+        Builtin::ExecuteInstruction
+        | Builtin::ScExecuteSubmitBallot
+        | Builtin::ScExecuteUnshield => {
+            let payload = lower_expr(ctx, &args[0], vars);
+            ctx.current_instr(Instr::VendorExecuteInstruction { payload });
+            let temp = ctx.new_temp();
+            ctx.current_instr(Instr::Const {
+                dest: temp,
+                value: 0,
+            });
+            temp
+        }
+        Builtin::ExecuteQuery => {
+            let payload = lower_expr(ctx, &args[0], vars);
+            let dest = ctx.new_temp();
+            ctx.current_instr(Instr::VendorExecuteQuery { dest, payload });
+            dest
+        }
+        Builtin::CallContract => {
+            let contract = lower_expr(ctx, &args[0], vars);
+            let entrypoint = lower_expr(ctx, &args[1], vars);
+            let payload = lower_expr(ctx, &args[2], vars);
+            let dest = ctx.new_temp();
+            ctx.current_instr(Instr::CallContract {
+                dest,
+                contract,
+                entrypoint,
+                payload,
+            });
+            dest
+        }
+        Builtin::ResolveAccountAlias => {
+            let alias = lower_expr(ctx, &args[0], vars);
+            let dest = ctx.new_temp();
+            ctx.current_instr(Instr::ResolveAccountAlias { dest, alias });
+            dest
+        }
+        Builtin::SubscriptionBill => {
+            ctx.current_instr(Instr::SubscriptionBill);
+            let temp = ctx.new_temp();
+            ctx.current_instr(Instr::Const {
+                dest: temp,
+                value: 0,
+            });
+            temp
+        }
+        Builtin::SubscriptionRecordUsage => {
+            ctx.current_instr(Instr::SubscriptionRecordUsage);
+            let temp = ctx.new_temp();
+            ctx.current_instr(Instr::Const {
+                dest: temp,
+                value: 0,
+            });
+            temp
+        }
+        Builtin::GetAccountBalance => {
+            let account = lower_expr(ctx, &args[0], vars);
+            let asset = lower_expr(ctx, &args[1], vars);
+            let dest = ctx.new_temp();
+            ctx.current_instr(Instr::GetAccountBalance {
+                dest,
+                account,
+                asset,
+            });
+            dest
+        }
+        Builtin::GetPublicInput => {
+            let key = lower_expr(ctx, &args[0], vars);
+            let dest = ctx.new_temp();
+            ctx.current_instr(Instr::GetPublicInput { dest, key });
+            dest
+        }
+        Builtin::DebugPrint => {
+            let value = lower_expr_as_int(ctx, &args[0], vars);
+            ctx.current_instr(Instr::DebugPrint { value });
+            let t = ctx.new_temp();
+            ctx.current_instr(Instr::Const { dest: t, value: 0 });
+            t
+        }
+        Builtin::DebugLog => {
+            let payload = lower_expr(ctx, &args[0], vars);
+            ctx.current_instr(Instr::DebugLog { payload });
+            let t = ctx.new_temp();
+            ctx.current_instr(Instr::Const { dest: t, value: 0 });
+            t
+        }
+        Builtin::Assert => {
+            let cond = lower_expr(ctx, &args[0], vars);
+            if args.len() > 1 {
+                let _ = lower_expr(ctx, &args[1], vars);
+            }
+            ctx.current_instr(Instr::Assert { cond });
+            let t = ctx.new_temp();
+            ctx.current_instr(Instr::Const { dest: t, value: 0 });
+            t
+        }
+        Builtin::Require => {
+            let cond = lower_expr(ctx, &args[0], vars);
+            if args.len() > 1 {
+                let _ = lower_expr(ctx, &args[1], vars);
+            }
+            let reject = ctx.new_temp();
+            ctx.current_instr(Instr::Unary {
+                dest: reject,
+                op: UnaryOp::Not,
+                operand: cond,
+            });
+            ctx.current_instr(Instr::AbortIf { cond: reject });
+            let t = ctx.new_temp();
+            ctx.current_instr(Instr::Const { dest: t, value: 0 });
+            t
+        }
+        Builtin::Info => {
+            let msg = if semantic::is_numeric_type(&args[0].ty) {
+                let value = lower_expr_as_int(ctx, &args[0], vars);
+                let encoded = ctx.new_temp();
+                ctx.current_instr(Instr::EncodeInt {
+                    dest: encoded,
+                    value,
+                });
+                encoded
+            } else {
+                lower_expr(ctx, &args[0], vars)
+            };
+            ctx.current_instr(Instr::Info { msg });
+            let t = ctx.new_temp();
+            ctx.current_instr(Instr::Const { dest: t, value: 0 });
+            t
+        }
+        Builtin::AssertEq => {
+            let left = lower_expr(ctx, &args[0], vars);
+            let right = lower_expr(ctx, &args[1], vars);
+            ctx.current_instr(Instr::AssertEq { left, right });
+            let t = ctx.new_temp();
+            ctx.current_instr(Instr::Const { dest: t, value: 0 });
+            t
+        }
+        Builtin::SetAccountDetail => {
+            let account = lower_expr(ctx, &args[0], vars);
+            let key = lower_expr(ctx, &args[1], vars);
+            let value = lower_expr(ctx, &args[2], vars);
+            ctx.current_instr(Instr::SetAccountDetail {
+                account,
+                key,
+                value,
+            });
+            let t = ctx.new_temp();
+            ctx.current_instr(Instr::Const { dest: t, value: 0 });
+            t
+        }
+        Builtin::MintAsset => {
+            let acc = lower_expr(ctx, &args[0], vars);
+            let asset = lower_expr(ctx, &args[1], vars);
+            let amt = match &args[2].expr {
+                semantic::ExprKind::Number(0) if !semantic::is_wide_numeric_type(&args[2].ty) => {
+                    let t = ctx.new_temp();
+                    ctx.current_instr(Instr::Const { dest: t, value: 0 });
+                    t
+                }
+                _ => lower_expr_as_numeric(ctx, &args[2], vars),
+            };
+            ctx.current_instr(Instr::MintAsset {
+                account: acc,
+                asset,
+                amount: amt,
+            });
+            let t = ctx.new_temp();
+            ctx.current_instr(Instr::Const { dest: t, value: 0 });
+            t
+        }
+        Builtin::BurnAsset => {
+            let acc = lower_expr(ctx, &args[0], vars);
+            let asset = lower_expr(ctx, &args[1], vars);
+            let amt = lower_expr_as_numeric(ctx, &args[2], vars);
+            ctx.current_instr(Instr::BurnAsset {
+                account: acc,
+                asset,
+                amount: amt,
+            });
+            let t = ctx.new_temp();
+            ctx.current_instr(Instr::Const { dest: t, value: 0 });
+            t
+        }
+        Builtin::TransferAsset => {
+            let from = lower_expr(ctx, &args[0], vars);
+            let to = lower_expr(ctx, &args[1], vars);
+            let asset = lower_expr(ctx, &args[2], vars);
+            let amt = lower_expr_as_numeric(ctx, &args[3], vars);
+            ctx.current_instr(Instr::TransferAsset {
+                from,
+                to,
+                asset,
+                amount: amt,
+            });
+            let t = ctx.new_temp();
+            ctx.current_instr(Instr::Const { dest: t, value: 0 });
+            t
+        }
+        Builtin::NftMintAsset => {
+            let nft = lower_expr(ctx, &args[0], vars);
+            let owner = lower_expr(ctx, &args[1], vars);
+            ctx.current_instr(Instr::CreateNft { nft, owner });
+            let t = ctx.new_temp();
+            ctx.current_instr(Instr::Const { dest: t, value: 0 });
+            t
+        }
+        Builtin::NftSetMetadata => {
+            let nft = lower_expr(ctx, &args[0], vars);
+            let key = lower_expr(ctx, &args[1], vars);
+            let json = lower_expr(ctx, &args[2], vars);
+            ctx.current_instr(Instr::SetNftData { nft, key, json });
+            let t = ctx.new_temp();
+            ctx.current_instr(Instr::Const { dest: t, value: 0 });
+            t
+        }
+        Builtin::NftBurnAsset => {
+            let nft = lower_expr(ctx, &args[0], vars);
+            ctx.current_instr(Instr::BurnNft { nft });
+            let t = ctx.new_temp();
+            ctx.current_instr(Instr::Const { dest: t, value: 0 });
+            t
+        }
+        Builtin::NftTransferAsset => {
+            let from = lower_expr(ctx, &args[0], vars);
+            let nft = lower_expr(ctx, &args[1], vars);
+            let to = lower_expr(ctx, &args[2], vars);
+            ctx.current_instr(Instr::TransferNft { from, nft, to });
+            let t = ctx.new_temp();
+            ctx.current_instr(Instr::Const { dest: t, value: 0 });
+            t
+        }
+        Builtin::RegisterDomain => {
+            let domain = lower_expr(ctx, &args[0], vars);
+            ctx.current_instr(Instr::RegisterDomain { domain });
+            let t = ctx.new_temp();
+            ctx.current_instr(Instr::Const { dest: t, value: 0 });
+            t
+        }
+        Builtin::UnregisterDomain => {
+            let domain = lower_expr(ctx, &args[0], vars);
+            ctx.current_instr(Instr::UnregisterDomain { domain });
+            let t = ctx.new_temp();
+            ctx.current_instr(Instr::Const { dest: t, value: 0 });
+            t
+        }
+        Builtin::TransferDomain => {
+            let domain = lower_expr(ctx, &args[1], vars);
+            let to = lower_expr(ctx, &args[2], vars);
+            ctx.current_instr(Instr::TransferDomain { domain, to });
+            let t = ctx.new_temp();
+            ctx.current_instr(Instr::Const { dest: t, value: 0 });
+            t
+        }
+        Builtin::RegisterAccount => {
+            let account = lower_expr(ctx, &args[0], vars);
+            ctx.current_instr(Instr::RegisterAccount { account });
+            let t = ctx.new_temp();
+            ctx.current_instr(Instr::Const { dest: t, value: 0 });
+            t
+        }
+        Builtin::UnregisterAccount => {
+            let account = lower_expr(ctx, &args[0], vars);
+            ctx.current_instr(Instr::UnregisterAccount { account });
+            let t = ctx.new_temp();
+            ctx.current_instr(Instr::Const { dest: t, value: 0 });
+            t
+        }
+        Builtin::RegisterAsset => {
+            let asset = lower_expr(ctx, &args[0], vars);
+            let symbol = lower_expr(ctx, &args[1], vars);
+            let quantity = lower_expr_as_numeric(ctx, &args[2], vars);
+            let mintable = lower_expr(ctx, &args[3], vars);
+            ctx.current_instr(Instr::RegisterAsset {
+                asset,
+                symbol,
+                quantity,
+                mintable,
+            });
+            let t = ctx.new_temp();
+            ctx.current_instr(Instr::Const { dest: t, value: 0 });
+            t
+        }
+        Builtin::CreateNewAsset => {
+            let asset = lower_expr(ctx, &args[0], vars);
+            let symbol = lower_expr(ctx, &args[1], vars);
+            let quantity = lower_expr_as_numeric(ctx, &args[2], vars);
+            let account = lower_expr(ctx, &args[3], vars);
+            let mintable = lower_expr(ctx, &args[4], vars);
+            ctx.current_instr(Instr::CreateNewAsset {
+                asset,
+                symbol,
+                quantity,
+                account,
+                mintable,
+            });
+            let t = ctx.new_temp();
+            ctx.current_instr(Instr::Const { dest: t, value: 0 });
+            t
+        }
+        Builtin::UnregisterAsset => {
+            let asset = lower_expr(ctx, &args[0], vars);
+            ctx.current_instr(Instr::UnregisterAsset { asset });
+            let t = ctx.new_temp();
+            ctx.current_instr(Instr::Const { dest: t, value: 0 });
+            t
+        }
+        Builtin::RegisterPeer => {
+            let json = lower_expr(ctx, &args[0], vars);
+            ctx.current_instr(Instr::RegisterPeer { json });
+            let t = ctx.new_temp();
+            ctx.current_instr(Instr::Const { dest: t, value: 0 });
+            t
+        }
+        Builtin::UnregisterPeer => {
+            let json = lower_expr(ctx, &args[0], vars);
+            ctx.current_instr(Instr::UnregisterPeer { json });
+            let t = ctx.new_temp();
+            ctx.current_instr(Instr::Const { dest: t, value: 0 });
+            t
+        }
+        Builtin::CreateTrigger | Builtin::RegisterTrigger => {
+            let json = lower_expr(ctx, &args[0], vars);
+            ctx.current_instr(Instr::CreateTrigger { json });
+            let t = ctx.new_temp();
+            ctx.current_instr(Instr::Const { dest: t, value: 0 });
+            t
+        }
+        Builtin::RemoveTrigger | Builtin::UnregisterTrigger => {
+            let name = lower_expr(ctx, &args[0], vars);
+            ctx.current_instr(Instr::RemoveTrigger { name });
+            let t = ctx.new_temp();
+            ctx.current_instr(Instr::Const { dest: t, value: 0 });
+            t
+        }
+        Builtin::SetTriggerEnabled => {
+            let name = lower_expr(ctx, &args[0], vars);
+            let enabled = lower_expr(ctx, &args[1], vars);
+            ctx.current_instr(Instr::SetTriggerEnabled { name, enabled });
+            let t = ctx.new_temp();
+            ctx.current_instr(Instr::Const { dest: t, value: 0 });
+            t
+        }
+        Builtin::CreateRole => {
+            let name = lower_expr(ctx, &args[0], vars);
+            let json = lower_expr(ctx, &args[1], vars);
+            ctx.current_instr(Instr::CreateRole { name, json });
+            let t = ctx.new_temp();
+            ctx.current_instr(Instr::Const { dest: t, value: 0 });
+            t
+        }
+        Builtin::DeleteRole => {
+            let name = lower_expr(ctx, &args[0], vars);
+            ctx.current_instr(Instr::DeleteRole { name });
+            let t = ctx.new_temp();
+            ctx.current_instr(Instr::Const { dest: t, value: 0 });
+            t
+        }
+        Builtin::GrantRole => {
+            let account = lower_expr(ctx, &args[0], vars);
+            let name = lower_expr(ctx, &args[1], vars);
+            ctx.current_instr(Instr::GrantRole { account, name });
+            let t = ctx.new_temp();
+            ctx.current_instr(Instr::Const { dest: t, value: 0 });
+            t
+        }
+        Builtin::RevokeRole => {
+            let account = lower_expr(ctx, &args[0], vars);
+            let name = lower_expr(ctx, &args[1], vars);
+            ctx.current_instr(Instr::RevokeRole { account, name });
+            let t = ctx.new_temp();
+            ctx.current_instr(Instr::Const { dest: t, value: 0 });
+            t
+        }
+        Builtin::GrantPermission => {
+            let account = lower_expr(ctx, &args[0], vars);
+            let token = lower_expr(ctx, &args[1], vars);
+            ctx.current_instr(Instr::GrantPermission { account, token });
+            let t = ctx.new_temp();
+            ctx.current_instr(Instr::Const { dest: t, value: 0 });
+            t
+        }
+        Builtin::RevokePermission => {
+            let account = lower_expr(ctx, &args[0], vars);
+            let token = lower_expr(ctx, &args[1], vars);
+            ctx.current_instr(Instr::RevokePermission { account, token });
+            let t = ctx.new_temp();
+            ctx.current_instr(Instr::Const { dest: t, value: 0 });
+            t
+        }
+        Builtin::EscrowOpenOffer => {
+            let escrow = lower_expr(ctx, &args[0], vars);
+            let asset = lower_expr(ctx, &args[1], vars);
+            let amount = lower_expr_as_numeric(ctx, &args[2], vars);
+            let evidence_hashes = args.get(3).map(|arg| lower_expr(ctx, arg, vars));
+            ctx.current_instr(Instr::EscrowOpenOffer {
+                escrow,
+                asset,
+                amount,
+                evidence_hashes,
+            });
+            let t = ctx.new_temp();
+            ctx.current_instr(Instr::Const { dest: t, value: 0 });
+            t
+        }
+        Builtin::EscrowAccept => {
+            let escrow = lower_expr(ctx, &args[0], vars);
+            ctx.current_instr(Instr::EscrowAccept { escrow });
+            let t = ctx.new_temp();
+            ctx.current_instr(Instr::Const { dest: t, value: 0 });
+            t
+        }
+        Builtin::EscrowMarkPaymentSent => {
+            let escrow = lower_expr(ctx, &args[0], vars);
+            ctx.current_instr(Instr::EscrowMarkPaymentSent { escrow });
+            let t = ctx.new_temp();
+            ctx.current_instr(Instr::Const { dest: t, value: 0 });
+            t
+        }
+        Builtin::EscrowRelease => {
+            let escrow = lower_expr(ctx, &args[0], vars);
+            ctx.current_instr(Instr::EscrowRelease { escrow });
+            let t = ctx.new_temp();
+            ctx.current_instr(Instr::Const { dest: t, value: 0 });
+            t
+        }
+        Builtin::EscrowCancel => {
+            let escrow = lower_expr(ctx, &args[0], vars);
+            ctx.current_instr(Instr::EscrowCancel { escrow });
+            let t = ctx.new_temp();
+            ctx.current_instr(Instr::Const { dest: t, value: 0 });
+            t
+        }
+        Builtin::EscrowOpenDispute => {
+            let escrow = lower_expr(ctx, &args[0], vars);
+            let evidence_hashes = args.get(1).map(|arg| lower_expr(ctx, arg, vars));
+            ctx.current_instr(Instr::EscrowOpenDispute {
+                escrow,
+                evidence_hashes,
+            });
+            let t = ctx.new_temp();
+            ctx.current_instr(Instr::Const { dest: t, value: 0 });
+            t
+        }
+        Builtin::EscrowResolveDispute => {
+            let escrow = lower_expr(ctx, &args[0], vars);
+            let buyer_amount = lower_expr_as_numeric(ctx, &args[1], vars);
+            let seller_amount = lower_expr_as_numeric(ctx, &args[2], vars);
+            let evidence_hashes = args.get(3).map(|arg| lower_expr(ctx, arg, vars));
+            ctx.current_instr(Instr::EscrowResolveDispute {
+                escrow,
+                buyer_amount,
+                seller_amount,
+                evidence_hashes,
+            });
+            let t = ctx.new_temp();
+            ctx.current_instr(Instr::Const { dest: t, value: 0 });
+            t
+        }
+        Builtin::AnonymousEscrowOpenOffer => {
+            let request = lower_expr(ctx, &args[0], vars);
+            ctx.current_instr(Instr::AnonymousEscrowOpenOffer { request });
+            let t = ctx.new_temp();
+            ctx.current_instr(Instr::Const { dest: t, value: 0 });
+            t
+        }
+        Builtin::AnonymousEscrowAccept => {
+            let escrow = lower_expr(ctx, &args[0], vars);
+            ctx.current_instr(Instr::AnonymousEscrowAccept { escrow });
+            let t = ctx.new_temp();
+            ctx.current_instr(Instr::Const { dest: t, value: 0 });
+            t
+        }
+        Builtin::AnonymousEscrowMarkPaymentSent => {
+            let escrow = lower_expr(ctx, &args[0], vars);
+            ctx.current_instr(Instr::AnonymousEscrowMarkPaymentSent { escrow });
+            let t = ctx.new_temp();
+            ctx.current_instr(Instr::Const { dest: t, value: 0 });
+            t
+        }
+        Builtin::AnonymousEscrowRelease => {
+            let request = lower_expr(ctx, &args[0], vars);
+            ctx.current_instr(Instr::AnonymousEscrowRelease { request });
+            let t = ctx.new_temp();
+            ctx.current_instr(Instr::Const { dest: t, value: 0 });
+            t
+        }
+        Builtin::AnonymousEscrowCancel => {
+            let request = lower_expr(ctx, &args[0], vars);
+            ctx.current_instr(Instr::AnonymousEscrowCancel { request });
+            let t = ctx.new_temp();
+            ctx.current_instr(Instr::Const { dest: t, value: 0 });
+            t
+        }
+        Builtin::AnonymousEscrowOpenDispute => {
+            let escrow = lower_expr(ctx, &args[0], vars);
+            let evidence_hashes = args.get(1).map(|arg| lower_expr(ctx, arg, vars));
+            ctx.current_instr(Instr::AnonymousEscrowOpenDispute {
+                escrow,
+                evidence_hashes,
+            });
+            let t = ctx.new_temp();
+            ctx.current_instr(Instr::Const { dest: t, value: 0 });
+            t
+        }
+        Builtin::AnonymousEscrowResolveDispute => {
+            let request = lower_expr(ctx, &args[0], vars);
+            ctx.current_instr(Instr::AnonymousEscrowResolveDispute { request });
+            let t = ctx.new_temp();
+            ctx.current_instr(Instr::Const { dest: t, value: 0 });
+            t
+        }
+        Builtin::Alloc => {
+            let bytes = lower_expr_as_int(ctx, &args[0], vars);
+            let dest = ctx.new_temp();
+            ctx.current_instr(Instr::Alloc { dest, bytes });
+            dest
+        }
+        Builtin::GetPrivateInput => {
+            let index = lower_expr_as_int(ctx, &args[0], vars);
+            let dest = ctx.new_temp();
+            ctx.current_instr(Instr::GetPrivateInput { dest, index });
+            dest
+        }
+        Builtin::UseNullifier => {
+            let nullifier = lower_expr_as_int(ctx, &args[0], vars);
+            ctx.current_instr(Instr::UseNullifier { nullifier });
+            let t = ctx.new_temp();
+            ctx.current_instr(Instr::Const { dest: t, value: 0 });
+            t
+        }
+        Builtin::CommitOutput => {
+            ctx.current_instr(Instr::CommitOutput);
+            let t = ctx.new_temp();
+            ctx.current_instr(Instr::Const { dest: t, value: 0 });
+            t
+        }
+        Builtin::CreateNftsForAllUsers => {
+            ctx.current_instr(Instr::CreateNftsForAllUsers);
+            let t = ctx.new_temp();
+            ctx.current_instr(Instr::Const { dest: t, value: 0 });
+            t
+        }
+        Builtin::SetExecutionDepth => {
+            let value = lower_expr_as_int(ctx, &args[0], vars);
+            ctx.current_instr(Instr::SetExecutionDepth { value });
+            let t = ctx.new_temp();
+            ctx.current_instr(Instr::Const { dest: t, value: 0 });
+            t
+        }
+        Builtin::TransferV1BatchBegin => {
+            ctx.current_instr(Instr::TransferBatchBegin);
+            let t = ctx.new_temp();
+            ctx.current_instr(Instr::Const { dest: t, value: 0 });
+            t
+        }
+        Builtin::TransferV1BatchEnd => {
+            ctx.current_instr(Instr::TransferBatchEnd);
+            let t = ctx.new_temp();
+            ctx.current_instr(Instr::Const { dest: t, value: 0 });
+            t
+        }
+        Builtin::TransferV1BatchApply => {
+            let payload = lower_expr(ctx, &args[0], vars);
+            ctx.current_instr(Instr::TransferBatchApply { payload });
+            let t = ctx.new_temp();
+            ctx.current_instr(Instr::Const { dest: t, value: 0 });
+            t
+        }
+        Builtin::TransferBatch => lower_transfer_batch_call(ctx, args, vars),
+        Builtin::AxtBegin => {
+            let desc = lower_expr(ctx, &args[0], vars);
+            ctx.current_instr(Instr::AxtBegin { descriptor: desc });
+            let t = ctx.new_temp();
+            ctx.current_instr(Instr::Const { dest: t, value: 0 });
+            t
+        }
+        Builtin::AxtTouch => {
+            let dsid = lower_expr(ctx, &args[0], vars);
+            let manifest = args.get(1).map(|m| lower_expr(ctx, m, vars));
+            ctx.current_instr(Instr::AxtTouch { dsid, manifest });
+            let t = ctx.new_temp();
+            ctx.current_instr(Instr::Const { dest: t, value: 0 });
+            t
+        }
+        Builtin::VerifyDsProof => {
+            let dsid = lower_expr(ctx, &args[0], vars);
+            let proof = args.get(1).map(|p| lower_expr(ctx, p, vars));
+            ctx.current_instr(Instr::VerifyDsProof { dsid, proof });
+            let t = ctx.new_temp();
+            ctx.current_instr(Instr::Const { dest: t, value: 0 });
+            t
+        }
+        Builtin::UseAssetHandle => {
+            let handle = lower_expr(ctx, &args[0], vars);
+            let intent = lower_expr(ctx, &args[1], vars);
+            let proof = args.get(2).map(|p| lower_expr(ctx, p, vars));
+            ctx.current_instr(Instr::UseAssetHandle {
+                handle,
+                intent,
+                proof,
+            });
+            let t = ctx.new_temp();
+            ctx.current_instr(Instr::Const { dest: t, value: 0 });
+            t
+        }
+        Builtin::AxtCommit => {
+            ctx.current_instr(Instr::AxtCommit);
+            let t = ctx.new_temp();
+            ctx.current_instr(Instr::Const { dest: t, value: 0 });
+            t
+        }
+        Builtin::DeactivateContractInstance
+        | Builtin::RemoveSmartContractBytes
+        | Builtin::RegisterSmartContractCode
+        | Builtin::RegisterSmartContractBytes
+        | Builtin::ActivateContractInstance => {
+            let payload = lower_expr(ctx, &args[0], vars);
+            ctx.current_instr(Instr::SmartContractLifecycle {
+                payload,
+                syscall: smart_contract_lifecycle_syscall(builtin),
+            });
+            let t = ctx.new_temp();
+            ctx.current_instr(Instr::Const { dest: t, value: 0 });
+            t
+        }
+        Builtin::ZkRootsGet => {
+            let payload = lower_expr(ctx, &args[0], vars);
+            let dest = ctx.new_temp();
+            ctx.current_instr(Instr::ZkRootsGet { dest, payload });
+            dest
+        }
+        Builtin::ZkVoteGetTally => {
+            let payload = lower_expr(ctx, &args[0], vars);
+            let dest = ctx.new_temp();
+            ctx.current_instr(Instr::ZkVoteGetTally { dest, payload });
+            dest
+        }
+        builtin @ (Builtin::ZkVerifyTransfer
+        | Builtin::ZkVerifyUnshield
+        | Builtin::ZkVerifyBatch
+        | Builtin::ZkVoteVerifyBallot
+        | Builtin::ZkVoteVerifyTally) => {
+            let payload = lower_expr(ctx, &args[0], vars);
+            ctx.current_instr(Instr::ZkVerify {
+                number: zk_verify_syscall(builtin),
+                payload,
+            });
+            let temp = ctx.new_temp();
+            ctx.current_instr(Instr::Const {
+                dest: temp,
+                value: 0,
+            });
+            temp
+        }
+        Builtin::VrfEpochSeed => {
+            let payload = lower_expr(ctx, &args[0], vars);
+            let dest = ctx.new_temp();
+            ctx.current_instr(Instr::VrfEpochSeed { dest, payload });
+            dest
+        }
+        Builtin::VrfVerify => {
+            let input = lower_expr(ctx, &args[0], vars);
+            let public_key = lower_expr(ctx, &args[1], vars);
+            let proof = lower_expr(ctx, &args[2], vars);
+            let variant = lower_expr(ctx, &args[3], vars);
+            let dest = ctx.new_temp();
+            ctx.current_instr(Instr::VrfVerify {
+                dest,
+                input,
+                public_key,
+                proof,
+                variant,
+            });
+            dest
+        }
+        Builtin::VrfVerifyBatch => {
+            let batch = lower_expr(ctx, &args[0], vars);
+            let dest = ctx.new_temp();
+            ctx.current_instr(Instr::VrfVerifyBatch { dest, batch });
+            dest
+        }
+        Builtin::Sm3Hash
+        | Builtin::Sha256Hash
+        | Builtin::Sha3Hash
+        | Builtin::Blake2b256Hash
+        | Builtin::Keccak256Hash
+        | Builtin::IrohaHash => lower_hash_builtin_call(ctx, builtin, args, vars),
+        Builtin::Sm2Verify | Builtin::VerifySignature => {
+            lower_signature_builtin_call(ctx, builtin, args, vars)
+        }
+        Builtin::Sm4GcmSeal | Builtin::Sm4GcmOpen | Builtin::Sm4CcmSeal | Builtin::Sm4CcmOpen => {
+            lower_sm4_builtin_call(ctx, builtin, args, vars)
+        }
+        Builtin::ProveExecution => {
+            let dest = ctx.new_temp();
+            ctx.current_instr(Instr::ProveExecution { dest });
+            dest
+        }
+        Builtin::GrowHeap => {
+            let bytes = lower_expr_as_int(ctx, &args[0], vars);
+            let dest = ctx.new_temp();
+            ctx.current_instr(Instr::GrowHeap { dest, bytes });
+            dest
+        }
+        Builtin::GetMerklePath => {
+            let address = lower_expr_as_int(ctx, &args[0], vars);
+            let output = lower_expr_as_int(ctx, &args[1], vars);
+            let root_output = args.get(2).map(|arg| lower_expr_as_int(ctx, arg, vars));
+            let dest = ctx.new_temp();
+            ctx.current_instr(Instr::GetMerklePath {
+                dest,
+                address,
+                output,
+                root_output,
+            });
+            dest
+        }
+        Builtin::GetMerkleCompact => {
+            let address = lower_expr_as_int(ctx, &args[0], vars);
+            let output = lower_expr_as_int(ctx, &args[1], vars);
+            let max_depth = args.get(2).map(|arg| lower_expr_as_int(ctx, arg, vars));
+            let root_output = args.get(3).map(|arg| lower_expr_as_int(ctx, arg, vars));
+            let dest = ctx.new_temp();
+            ctx.current_instr(Instr::GetMerkleCompact {
+                dest,
+                address,
+                output,
+                max_depth,
+                root_output,
+            });
+            dest
+        }
+        Builtin::GetRegisterMerkleCompact => {
+            let register_index = lower_expr_as_int(ctx, &args[0], vars);
+            let output = lower_expr_as_int(ctx, &args[1], vars);
+            let max_depth = args.get(2).map(|arg| lower_expr_as_int(ctx, arg, vars));
+            let root_output = args.get(3).map(|arg| lower_expr_as_int(ctx, arg, vars));
+            let dest = ctx.new_temp();
+            ctx.current_instr(Instr::GetRegisterMerkleCompact {
+                dest,
+                register_index,
+                output,
+                max_depth,
+                root_output,
+            });
+            dest
+        }
+        Builtin::VerifyProof => {
+            let payload = lower_expr(ctx, &args[0], vars);
+            let dest = ctx.new_temp();
+            ctx.current_instr(Instr::VerifyProof { dest, payload });
+            dest
+        }
+        Builtin::SoracloudReadCommittedState
+        | Builtin::SoracloudEmitStateMutation
+        | Builtin::SoracloudEmitMailboxMessage
+        | Builtin::SoracloudAppendJournal
+        | Builtin::SoracloudPublishCheckpoint
+        | Builtin::SoracloudReadSecret
+        | Builtin::SoracloudReadCredential
+        | Builtin::SoracloudEgressFetch
+        | Builtin::SoracloudReadConfig
+        | Builtin::SoracloudReadSecretEnvelope => {
+            let request = lower_expr(ctx, &args[0], vars);
+            let dest = ctx.new_temp();
+            ctx.current_instr(Instr::SoracloudHostCall {
+                dest,
+                request,
+                syscall: soracloud_syscall(builtin),
+            });
+            dest
+        }
+        Builtin::AddSignatory | Builtin::RemoveSignatory => {
+            let account = lower_expr(ctx, &args[0], vars);
+            let signatory = lower_expr(ctx, &args[1], vars);
+            if builtin == Builtin::AddSignatory {
+                ctx.current_instr(Instr::AddSignatory { account, signatory });
+            } else {
+                ctx.current_instr(Instr::RemoveSignatory { account, signatory });
+            }
+            let t = ctx.new_temp();
+            ctx.current_instr(Instr::Const { dest: t, value: 0 });
+            t
+        }
+        Builtin::SetAccountQuorum => {
+            let account = lower_expr(ctx, &args[0], vars);
+            let quorum = lower_expr_as_int(ctx, &args[1], vars);
+            ctx.current_instr(Instr::SetAccountQuorum { account, quorum });
             let t = ctx.new_temp();
             ctx.current_instr(Instr::Const { dest: t, value: 0 });
             t
@@ -3315,392 +5138,9 @@ fn lower_expr(ctx: &mut LowerCtx, expr: &TypedExpr, vars: &mut HashMap<String, T
                 return lower_surface_builtin_call(ctx, builtin, args, vars);
             }
             match name.as_str() {
-                "encode_int" => {
-                    let v = lower_expr(ctx, &args[0], vars);
-                    let d = ctx.new_temp();
-                    ctx.current_instr(Instr::EncodeInt { dest: d, value: v });
-                    d
-                }
-                "decode_int" => {
-                    let b = lower_expr(ctx, &args[0], vars);
-                    let d = ctx.new_temp();
-                    ctx.current_instr(Instr::DecodeInt { dest: d, blob: b });
-                    d
-                }
-                "encode_json" => {
-                    let j = lower_expr(ctx, &args[0], vars);
-                    let d = ctx.new_temp();
-                    ctx.current_instr(Instr::JsonEncode { dest: d, json: j });
-                    d
-                }
-                "decode_json" => {
-                    let b = lower_expr(ctx, &args[0], vars);
-                    let d = ctx.new_temp();
-                    ctx.current_instr(Instr::JsonDecode { dest: d, blob: b });
-                    d
-                }
-                "tlv_len" => {
-                    let v = lower_expr(ctx, &args[0], vars);
-                    let d = ctx.new_temp();
-                    ctx.current_instr(Instr::TlvLen { dest: d, value: v });
-                    d
-                }
-                "get_int" => {
-                    let j = lower_expr(ctx, &args[0], vars);
-                    let k = lower_expr(ctx, &args[1], vars);
-                    let d = ctx.new_temp();
-                    ctx.current_instr(Instr::JsonGetInt {
-                        dest: d,
-                        json: j,
-                        key: k,
-                    });
-                    d
-                }
-                "get_numeric" => {
-                    let j = lower_expr(ctx, &args[0], vars);
-                    let k = lower_expr(ctx, &args[1], vars);
-                    let d = ctx.new_temp();
-                    ctx.current_instr(Instr::JsonGetNumeric {
-                        dest: d,
-                        json: j,
-                        key: k,
-                    });
-                    d
-                }
-                "get_json" => {
-                    let j = lower_expr(ctx, &args[0], vars);
-                    let k = lower_expr(ctx, &args[1], vars);
-                    let d = ctx.new_temp();
-                    ctx.current_instr(Instr::JsonGetJson {
-                        dest: d,
-                        json: j,
-                        key: k,
-                    });
-                    d
-                }
-                "get_name" => {
-                    let j = lower_expr(ctx, &args[0], vars);
-                    let k = lower_expr(ctx, &args[1], vars);
-                    let d = ctx.new_temp();
-                    ctx.current_instr(Instr::JsonGetName {
-                        dest: d,
-                        json: j,
-                        key: k,
-                    });
-                    d
-                }
-                "get_account_id" => {
-                    let j = lower_expr(ctx, &args[0], vars);
-                    let k = lower_expr(ctx, &args[1], vars);
-                    let d = ctx.new_temp();
-                    ctx.current_instr(Instr::JsonGetAccountId {
-                        dest: d,
-                        json: j,
-                        key: k,
-                    });
-                    d
-                }
-                "get_asset_definition_id" => {
-                    let j = lower_expr(ctx, &args[0], vars);
-                    let k = lower_expr(ctx, &args[1], vars);
-                    let d = ctx.new_temp();
-                    ctx.current_instr(Instr::JsonGetAssetDefinitionId {
-                        dest: d,
-                        json: j,
-                        key: k,
-                    });
-                    d
-                }
-                "get_nft_id" => {
-                    let j = lower_expr(ctx, &args[0], vars);
-                    let k = lower_expr(ctx, &args[1], vars);
-                    let d = ctx.new_temp();
-                    ctx.current_instr(Instr::JsonGetNftId {
-                        dest: d,
-                        json: j,
-                        key: k,
-                    });
-                    d
-                }
-                "get_blob_hex" => {
-                    let j = lower_expr(ctx, &args[0], vars);
-                    let k = lower_expr(ctx, &args[1], vars);
-                    let d = ctx.new_temp();
-                    ctx.current_instr(Instr::JsonGetBlobHex {
-                        dest: d,
-                        json: j,
-                        key: k,
-                    });
-                    d
-                }
-                "encode_schema" => {
-                    let s = lower_expr(ctx, &args[0], vars);
-                    let j = lower_expr(ctx, &args[1], vars);
-                    let d = ctx.new_temp();
-                    ctx.current_instr(Instr::SchemaEncode {
-                        dest: d,
-                        schema: s,
-                        json: j,
-                    });
-                    d
-                }
-                "decode_schema" => {
-                    let s = lower_expr(ctx, &args[0], vars);
-                    let b = lower_expr(ctx, &args[1], vars);
-                    let d = ctx.new_temp();
-                    ctx.current_instr(Instr::SchemaDecode {
-                        dest: d,
-                        schema: s,
-                        blob: b,
-                    });
-                    d
-                }
-                "schema_info" => {
-                    let s = lower_expr(ctx, &args[0], vars);
-                    let d = ctx.new_temp();
-                    ctx.current_instr(Instr::SchemaInfo { dest: d, schema: s });
-                    d
-                }
-                "pointer_to_norito" => {
-                    let v = lower_expr(ctx, &args[0], vars);
-                    let d = ctx.new_temp();
-                    ctx.current_instr(Instr::PointerToNorito { dest: d, value: v });
-                    d
-                }
-                "path" => {
-                    let base = lower_expr(ctx, &args[0], vars);
-                    let d = ctx.new_temp();
-                    if semantic::is_numeric_type(&args[1].ty) {
-                        let key = lower_expr_as_int(ctx, &args[1], vars);
-                        ctx.current_instr(Instr::PathMapKey { dest: d, base, key });
-                    } else if semantic::is_blob_like(&args[1].ty) {
-                        let blob = lower_expr(ctx, &args[1], vars);
-                        ctx.current_instr(Instr::PathMapKeyNorito {
-                            dest: d,
-                            base,
-                            key_blob: blob,
-                        });
-                    } else {
-                        panic!("path expects int-like or blob-like key")
-                    }
-                    d
-                }
-                "state_get" => {
-                    let p = lower_expr(ctx, &args[0], vars);
-                    let d = ctx.new_temp();
-                    ctx.current_instr(Instr::StateGet { dest: d, path: p });
-                    d
-                }
-                "state_set" => {
-                    let path = lower_expr(ctx, &args[0], vars);
-                    let val = lower_expr(ctx, &args[1], vars);
-                    ctx.current_instr(Instr::StateSet { path, value: val });
-                    let t = ctx.new_temp();
-                    ctx.current_instr(Instr::Const { dest: t, value: 0 });
-                    t
-                }
-                "state_del" => {
-                    let path = lower_expr(ctx, &args[0], vars);
-                    ctx.current_instr(Instr::StateDel { path });
-                    let t = ctx.new_temp();
-                    ctx.current_instr(Instr::Const { dest: t, value: 0 });
-                    t
-                }
-                // Pointer-ABI constructors: accept string literals (or temps derived from them)
-                // and lower to typed pointers that codegen wires into Norito TLV fixups.
-                // `account_id("alias@dataspace")` is special-cased below to preserve runtime
-                // alias resolution against the current WSV binding rather than baking a stale
-                // canonical account into the artifact.
-                "account_id" | "asset_definition" | "asset_id" | "nft_id" | "name" | "json"
-                | "domain" | "domain_id" | "blob" | "norito_bytes" | "dataspace_id"
-                | "axt_descriptor" | "asset_handle" | "proof_blob" => {
-                    // Expect a single argument
-                    if args.len() != 1 {
-                        let t = ctx.new_temp();
-                        ctx.current_instr(Instr::Const { dest: t, value: 0 });
-                        return t;
-                    }
-                    let arg = &args[0];
-                    let (kind, target_ty) = match name.as_str() {
-                        "account_id" => (DataRefKind::Account, Type::AccountId),
-                        "asset_definition" => (DataRefKind::AssetDef, Type::AssetDefinitionId),
-                        "asset_id" => (DataRefKind::AssetId, Type::AssetId),
-                        "nft_id" => (DataRefKind::NftId, Type::NftId),
-                        "domain" | "domain_id" => (DataRefKind::Domain, Type::DomainId),
-                        "name" => (DataRefKind::Name, Type::Name),
-                        "json" => (DataRefKind::Json, Type::Json),
-                        "blob" => (DataRefKind::Blob, Type::Bytes),
-                        "norito_bytes" => (DataRefKind::NoritoBytes, Type::Bytes),
-                        "dataspace_id" => (DataRefKind::DataSpaceId, Type::DataSpaceId),
-                        "axt_descriptor" => (DataRefKind::AxtDescriptor, Type::AxtDescriptor),
-                        "asset_handle" => (DataRefKind::AssetHandle, Type::AssetHandle),
-                        "proof_blob" => (DataRefKind::ProofBlob, Type::ProofBlob),
-                        _ => unreachable!(),
-                    };
-                    if let semantic::ExprKind::String(s) = &arg.expr {
-                        if name == "account_id" && account_id_literal_uses_alias_resolution(s) {
-                            let alias = ctx.new_temp();
-                            ctx.current_instr(Instr::DataRef {
-                                dest: alias,
-                                kind: DataRefKind::Blob,
-                                value: s.clone(),
-                            });
-                            let dest = ctx.new_temp();
-                            ctx.current_instr(Instr::ResolveAccountAlias { dest, alias });
-                            return dest;
-                        }
-                        let dest = ctx.new_temp();
-                        ctx.current_instr(Instr::DataRef {
-                            dest,
-                            kind,
-                            value: s.clone(),
-                        });
-                        return dest;
-                    }
-                    if name == "norito_bytes"
-                        && let semantic::ExprKind::Bytes(bytes) = &arg.expr
-                    {
-                        let dest = ctx.new_temp();
-                        let hex = hex::encode(bytes);
-                        ctx.current_instr(Instr::DataRef {
-                            dest,
-                            kind: DataRefKind::NoritoBytes,
-                            value: format!("0x{hex}"),
-                        });
-                        return dest;
-                    }
-                    let src = lower_expr(ctx, arg, vars);
-                    let resolved_arg = semantic::resolve_struct_type(&arg.ty);
-                    match (target_ty.clone(), resolved_arg.clone()) {
-                        (Type::Blob | Type::Bytes, _) => src,
-                        (t, arg_ty) if t == arg_ty => src,
-                        (Type::Json, ty) if semantic::is_blob_like(&ty) => {
-                            let dest = ctx.new_temp();
-                            ctx.current_instr(Instr::JsonDecode { dest, blob: src });
-                            dest
-                        }
-                        (Type::Name, ty) if semantic::is_blob_like(&ty) => {
-                            let dest = ctx.new_temp();
-                            ctx.current_instr(Instr::NameDecode { dest, blob: src });
-                            dest
-                        }
-                        (_, Type::String) => {
-                            let dest = ctx.new_temp();
-                            ctx.current_instr(Instr::PointerFromString { dest, kind, src });
-                            dest
-                        }
-                        (_, ty) if semantic::is_blob_like(&ty) => {
-                            let dest = ctx.new_temp();
-                            ctx.current_instr(Instr::PointerFromNorito {
-                                dest,
-                                blob: src,
-                                kind,
-                            });
-                            dest
-                        }
-                        _ => src,
-                    }
-                }
                 "Map::new" | "map_new" => {
                     let t = ctx.new_temp();
                     ctx.current_instr(Instr::MapNew { dest: t });
-                    t
-                }
-                "assert" => {
-                    let cond = lower_expr(ctx, &args[0], vars);
-                    if args.len() > 1 {
-                        let _ = lower_expr(ctx, &args[1], vars);
-                    }
-                    ctx.current_instr(Instr::Assert { cond });
-                    let u = ctx.new_temp();
-                    ctx.current_instr(Instr::Const { dest: u, value: 0 });
-                    u
-                }
-                "require" => {
-                    let cond = lower_expr(ctx, &args[0], vars);
-                    if args.len() > 1 {
-                        let _ = lower_expr(ctx, &args[1], vars);
-                    }
-                    let t = ctx.new_temp();
-                    ctx.current_instr(Instr::Unary {
-                        dest: t,
-                        op: UnaryOp::Not,
-                        operand: cond,
-                    });
-                    ctx.current_instr(Instr::AbortIf { cond: t });
-                    let u = ctx.new_temp();
-                    ctx.current_instr(Instr::Const { dest: u, value: 0 });
-                    u
-                }
-                "info" => {
-                    let msg = if semantic::is_numeric_type(&args[0].ty) {
-                        let value = lower_expr_as_int(ctx, &args[0], vars);
-                        let encoded = ctx.new_temp();
-                        ctx.current_instr(Instr::EncodeInt {
-                            dest: encoded,
-                            value,
-                        });
-                        encoded
-                    } else {
-                        lower_expr(ctx, &args[0], vars)
-                    };
-                    ctx.current_instr(Instr::Info { msg });
-                    let t = ctx.new_temp();
-                    ctx.current_instr(Instr::Const { dest: t, value: 0 });
-                    t
-                }
-                "create_nfts_for_all_users" => {
-                    ctx.current_instr(Instr::CreateNftsForAllUsers);
-                    let t = ctx.new_temp();
-                    ctx.current_instr(Instr::Const { dest: t, value: 0 });
-                    t
-                }
-                "set_execution_depth" => {
-                    let v = lower_expr_as_int(ctx, &args[0], vars);
-                    ctx.current_instr(Instr::SetExecutionDepth { value: v });
-                    let t = ctx.new_temp();
-                    ctx.current_instr(Instr::Const { dest: t, value: 0 });
-                    t
-                }
-                "setvl" => {
-                    let v = lower_expr_as_int(ctx, &args[0], vars);
-                    ctx.current_instr(Instr::SetVl { value: v });
-                    let t = ctx.new_temp();
-                    ctx.current_instr(Instr::Const { dest: t, value: 0 });
-                    t
-                }
-                "set_account_detail" => {
-                    let a = lower_expr(ctx, &args[0], vars);
-                    let k = lower_expr(ctx, &args[1], vars);
-                    let v = lower_expr(ctx, &args[2], vars);
-                    ctx.current_instr(Instr::SetAccountDetail {
-                        account: a,
-                        key: k,
-                        value: v,
-                    });
-                    let t = ctx.new_temp();
-                    ctx.current_instr(Instr::Const { dest: t, value: 0 });
-                    t
-                }
-                // Typed constructors for pointer-ABI
-                "authority" => {
-                    let t = ctx.new_temp();
-                    ctx.current_instr(Instr::GetAuthority { dest: t });
-                    t
-                }
-                "current_time_ms" => {
-                    let t = ctx.new_temp();
-                    ctx.current_instr(Instr::CurrentTimeMs { dest: t });
-                    t
-                }
-                "block_height" => {
-                    let t = ctx.new_temp();
-                    ctx.current_instr(Instr::BlockHeight { dest: t });
-                    t
-                }
-                "trigger_event" => {
-                    let t = ctx.new_temp();
-                    ctx.current_instr(Instr::GetTriggerEvent { dest: t });
                     t
                 }
                 "invoke_entrypoint_as" => {
@@ -3794,1395 +5234,6 @@ fn lower_expr(ctx: &mut LowerCtx, expr: &TypedExpr, vars: &mut HashMap<String, T
                         message,
                     });
                     dest
-                }
-                "isqrt" => {
-                    let v = lower_expr_as_int(ctx, &args[0], vars);
-                    let t = ctx.new_temp();
-                    ctx.current_instr(Instr::Isqrt { dest: t, src: v });
-                    t
-                }
-                "abs" => {
-                    let v = lower_expr_as_int(ctx, &args[0], vars);
-                    let t = ctx.new_temp();
-                    ctx.current_instr(Instr::Abs { dest: t, src: v });
-                    t
-                }
-                "min" => {
-                    let a = lower_expr_as_int(ctx, &args[0], vars);
-                    let b = lower_expr_as_int(ctx, &args[1], vars);
-                    let t = ctx.new_temp();
-                    ctx.current_instr(Instr::Min { dest: t, a, b });
-                    t
-                }
-                "max" => {
-                    let a = lower_expr_as_int(ctx, &args[0], vars);
-                    let b = lower_expr_as_int(ctx, &args[1], vars);
-                    let t = ctx.new_temp();
-                    ctx.current_instr(Instr::Max { dest: t, a, b });
-                    t
-                }
-                "div_ceil" => {
-                    let num = lower_expr_as_int(ctx, &args[0], vars);
-                    let denom = lower_expr_as_int(ctx, &args[1], vars);
-                    let t = ctx.new_temp();
-                    ctx.current_instr(Instr::DivCeil {
-                        dest: t,
-                        num,
-                        denom,
-                    });
-                    t
-                }
-                "gcd" => {
-                    let a = lower_expr_as_int(ctx, &args[0], vars);
-                    let b = lower_expr_as_int(ctx, &args[1], vars);
-                    let t = ctx.new_temp();
-                    ctx.current_instr(Instr::Gcd { dest: t, a, b });
-                    t
-                }
-                "mean" => {
-                    let a = lower_expr_as_int(ctx, &args[0], vars);
-                    let b = lower_expr_as_int(ctx, &args[1], vars);
-                    let t = ctx.new_temp();
-                    ctx.current_instr(Instr::Mean { dest: t, a, b });
-                    t
-                }
-                "poseidon2" => {
-                    let a = lower_expr_as_int(ctx, &args[0], vars);
-                    let b = lower_expr_as_int(ctx, &args[1], vars);
-                    let t = ctx.new_temp();
-                    ctx.current_instr(Instr::Poseidon2 { dest: t, a, b });
-                    t
-                }
-                "nft_mint_asset" => {
-                    let nft = lower_expr(ctx, &args[0], vars);
-                    let owner = lower_expr(ctx, &args[1], vars);
-                    ctx.current_instr(Instr::CreateNft { nft, owner });
-                    let t = ctx.new_temp();
-                    ctx.current_instr(Instr::Const { dest: t, value: 0 });
-                    t
-                }
-                "nft_set_metadata" => {
-                    let nft = lower_expr(ctx, &args[0], vars);
-                    let key = lower_expr(ctx, &args[1], vars);
-                    let json = lower_expr(ctx, &args[2], vars);
-                    ctx.current_instr(Instr::SetNftData { nft, key, json });
-                    let t = ctx.new_temp();
-                    ctx.current_instr(Instr::Const { dest: t, value: 0 });
-                    t
-                }
-                "nft_burn_asset" => {
-                    let nft = lower_expr(ctx, &args[0], vars);
-                    ctx.current_instr(Instr::BurnNft { nft });
-                    let t = ctx.new_temp();
-                    ctx.current_instr(Instr::Const { dest: t, value: 0 });
-                    t
-                }
-                "nft_transfer_asset" => {
-                    let from = lower_expr(ctx, &args[0], vars);
-                    let nft = lower_expr(ctx, &args[1], vars);
-                    let to = lower_expr(ctx, &args[2], vars);
-                    ctx.current_instr(Instr::TransferNft { from, nft, to });
-                    let t = ctx.new_temp();
-                    ctx.current_instr(Instr::Const { dest: t, value: 0 });
-                    t
-                }
-                "poseidon6" => {
-                    let mut arr = [Temp(0); 6];
-                    for (i, arg) in args.iter().enumerate() {
-                        arr[i] = lower_expr_as_int(ctx, arg, vars);
-                    }
-                    let t = ctx.new_temp();
-                    ctx.current_instr(Instr::Poseidon6 { dest: t, args: arr });
-                    t
-                }
-                "sm3_hash" => {
-                    let msg = lower_expr(ctx, &args[0], vars);
-                    let t = ctx.new_temp();
-                    ctx.current_instr(Instr::Sm3Hash {
-                        dest: t,
-                        message: msg,
-                    });
-                    t
-                }
-                "sha256_hash" => {
-                    let msg = lower_expr(ctx, &args[0], vars);
-                    let t = ctx.new_temp();
-                    ctx.current_instr(Instr::Sha256Hash {
-                        dest: t,
-                        message: msg,
-                    });
-                    t
-                }
-                "sha3_hash" => {
-                    let msg = lower_expr(ctx, &args[0], vars);
-                    let t = ctx.new_temp();
-                    ctx.current_instr(Instr::Sha3Hash {
-                        dest: t,
-                        message: msg,
-                    });
-                    t
-                }
-                "sm2_verify" => {
-                    let msg = lower_expr(ctx, &args[0], vars);
-                    let sig = lower_expr(ctx, &args[1], vars);
-                    let pk = lower_expr(ctx, &args[2], vars);
-                    let distid = if args.len() == 4 {
-                        Some(lower_expr(ctx, &args[3], vars))
-                    } else {
-                        None
-                    };
-                    let t = ctx.new_temp();
-                    ctx.current_instr(Instr::Sm2Verify {
-                        dest: t,
-                        message: msg,
-                        signature: sig,
-                        public_key: pk,
-                        distid,
-                    });
-                    t
-                }
-                "verify_signature" => {
-                    let msg = lower_expr(ctx, &args[0], vars);
-                    let sig = lower_expr(ctx, &args[1], vars);
-                    let pk = lower_expr(ctx, &args[2], vars);
-                    let scheme = lower_expr(ctx, &args[3], vars);
-                    let t = ctx.new_temp();
-                    ctx.current_instr(Instr::VerifySignature {
-                        dest: t,
-                        message: msg,
-                        signature: sig,
-                        public_key: pk,
-                        scheme,
-                    });
-                    t
-                }
-                "sm4_gcm_seal" => {
-                    let key = lower_expr(ctx, &args[0], vars);
-                    let nonce = lower_expr(ctx, &args[1], vars);
-                    let aad = lower_expr(ctx, &args[2], vars);
-                    let plaintext = lower_expr(ctx, &args[3], vars);
-                    let t = ctx.new_temp();
-                    ctx.current_instr(Instr::Sm4GcmSeal {
-                        dest: t,
-                        key,
-                        nonce,
-                        aad,
-                        plaintext,
-                    });
-                    t
-                }
-                "sm4_gcm_open" => {
-                    let key = lower_expr(ctx, &args[0], vars);
-                    let nonce = lower_expr(ctx, &args[1], vars);
-                    let aad = lower_expr(ctx, &args[2], vars);
-                    let cipher = lower_expr(ctx, &args[3], vars);
-                    let t = ctx.new_temp();
-                    ctx.current_instr(Instr::Sm4GcmOpen {
-                        dest: t,
-                        key,
-                        nonce,
-                        aad,
-                        ciphertext_and_tag: cipher,
-                    });
-                    t
-                }
-                "sm4_ccm_seal" => {
-                    let key = lower_expr(ctx, &args[0], vars);
-                    let nonce = lower_expr(ctx, &args[1], vars);
-                    let aad = lower_expr(ctx, &args[2], vars);
-                    let plaintext = lower_expr(ctx, &args[3], vars);
-                    let tag_len = if args.len() == 5 {
-                        Some(lower_expr(ctx, &args[4], vars))
-                    } else {
-                        None
-                    };
-                    let t = ctx.new_temp();
-                    ctx.current_instr(Instr::Sm4CcmSeal {
-                        dest: t,
-                        key,
-                        nonce,
-                        aad,
-                        plaintext,
-                        tag_len,
-                    });
-                    t
-                }
-                "sm4_ccm_open" => {
-                    let key = lower_expr(ctx, &args[0], vars);
-                    let nonce = lower_expr(ctx, &args[1], vars);
-                    let aad = lower_expr(ctx, &args[2], vars);
-                    let cipher = lower_expr(ctx, &args[3], vars);
-                    let tag_len = if args.len() == 5 {
-                        Some(lower_expr(ctx, &args[4], vars))
-                    } else {
-                        None
-                    };
-                    let t = ctx.new_temp();
-                    ctx.current_instr(Instr::Sm4CcmOpen {
-                        dest: t,
-                        key,
-                        nonce,
-                        aad,
-                        ciphertext_and_tag: cipher,
-                        tag_len,
-                    });
-                    t
-                }
-                "contains" => {
-                    // contains(map, key) -> bool
-                    let mexpr = &args[0];
-                    let kexpr = &args[1];
-                    let key_tmp = lower_expr(ctx, kexpr, vars);
-                    // Durable path when map is a tracked state map name
-                    if let Some(bn) = state_map_base_name(mexpr)
-                        && let Some(spec) = ctx.state_map_configs.get(&bn).cloned()
-                        && let Some(key_codec) = key_codec_for_type(&spec.key)
-                    {
-                        let anchor = state_map_anchor_base_name(&bn, &spec.value);
-                        // Durable check: build path and STATE_GET; return (r10 != 0)
-                        let t_path = build_state_path(ctx, &anchor, key_tmp, &key_codec);
-                        let t_blob = ctx.new_temp();
-                        ctx.current_instr(Instr::StateGet {
-                            dest: t_blob,
-                            path: t_path,
-                        });
-                        let zero = ctx.new_temp();
-                        ctx.current_instr(Instr::Const {
-                            dest: zero,
-                            value: 0,
-                        });
-                        let out = ctx.new_temp();
-                        ctx.current_instr(Instr::Binary {
-                            dest: out,
-                            op: BinaryOp::Ne,
-                            left: t_blob,
-                            right: zero,
-                        });
-                        return out;
-                    }
-                    // Ephemeral path: load stored key and compare equality
-                    let m = lower_expr(ctx, mexpr, vars);
-                    let sk = ctx.new_temp();
-                    let dummy_v = ctx.new_temp();
-                    ctx.current_instr(Instr::MapLoadPair {
-                        dest_key: sk,
-                        dest_val: dummy_v,
-                        map: m,
-                        offset: 0,
-                    });
-                    lower_map_key_eq(ctx, &kexpr.ty, sk, key_tmp)
-                }
-                "has" => {
-                    // Alias to contains(map, key) -> bool
-                    let mexpr = &args[0];
-                    let kexpr = &args[1];
-                    let key_tmp = lower_expr(ctx, kexpr, vars);
-                    // Durable path when map is a tracked state map name
-                    if let Some(bn) = state_map_base_name(mexpr)
-                        && let Some(spec) = ctx.state_map_configs.get(&bn).cloned()
-                        && let Some(key_codec) = key_codec_for_type(&spec.key)
-                    {
-                        let anchor = state_map_anchor_base_name(&bn, &spec.value);
-                        let t_path = build_state_path(ctx, &anchor, key_tmp, &key_codec);
-                        let t_blob = ctx.new_temp();
-                        ctx.current_instr(Instr::StateGet {
-                            dest: t_blob,
-                            path: t_path,
-                        });
-                        let zero = ctx.new_temp();
-                        ctx.current_instr(Instr::Const {
-                            dest: zero,
-                            value: 0,
-                        });
-                        let out = ctx.new_temp();
-                        ctx.current_instr(Instr::Binary {
-                            dest: out,
-                            op: BinaryOp::Ne,
-                            left: t_blob,
-                            right: zero,
-                        });
-                        return out;
-                    }
-                    // Ephemeral path
-                    let m = lower_expr(ctx, mexpr, vars);
-                    let sk = ctx.new_temp();
-                    let dummy_v = ctx.new_temp();
-                    ctx.current_instr(Instr::MapLoadPair {
-                        dest_key: sk,
-                        dest_val: dummy_v,
-                        map: m,
-                        offset: 0,
-                    });
-                    lower_map_key_eq(ctx, &kexpr.ty, sk, key_tmp)
-                }
-                "get_or_default" => {
-                    let mexpr = &args[0];
-                    let kexpr = &args[1];
-                    let dexpr = &args[2];
-                    let key_tmp = lower_expr(ctx, kexpr, vars);
-                    // Durable path
-                    if let Some(bn) = state_map_base_name(mexpr)
-                        && let Some(spec) = ctx.state_map_configs.get(&bn).cloned()
-                        && let Some(key_codec) = key_codec_for_type(&spec.key)
-                    {
-                        let anchor = state_map_anchor_base_name(&bn, &spec.value);
-                        let t_path = build_state_path(ctx, &anchor, key_tmp, &key_codec);
-                        let t_blob = ctx.new_temp();
-                        ctx.current_instr(Instr::StateGet {
-                            dest: t_blob,
-                            path: t_path,
-                        });
-                        let zero = ctx.new_temp();
-                        ctx.current_instr(Instr::Const {
-                            dest: zero,
-                            value: 0,
-                        });
-                        let result = ctx.new_temp();
-                        // Build branch on t_blob != 0
-                        let cond = ctx.new_temp();
-                        ctx.current_instr(Instr::Binary {
-                            dest: cond,
-                            op: BinaryOp::Ne,
-                            left: t_blob,
-                            right: zero,
-                        });
-                        let then_bb = ctx.new_label();
-                        let else_bb = ctx.new_label();
-                        let end_bb = ctx.new_label();
-                        ctx.finish_current(Terminator::Branch {
-                            cond,
-                            then_bb,
-                            else_bb,
-                        });
-                        // Then: decode stored value and return it
-                        ctx.start_block(then_bb);
-                        let decoded =
-                            lower_state_map_get_value(ctx, &bn, key_tmp, &spec.key, &spec.value)
-                                .expect("durable map value should decode");
-                        ctx.current_instr(Instr::Copy {
-                            dest: result,
-                            src: decoded,
-                        });
-                        ctx.finish_current(Terminator::Jump(end_bb));
-                        // Else: return default expression
-                        ctx.start_block(else_bb);
-                        let def = lower_expr(ctx, dexpr, vars);
-                        ctx.current_instr(Instr::Copy {
-                            dest: result,
-                            src: def,
-                        });
-                        ctx.finish_current(Terminator::Jump(end_bb));
-                        // End
-                        ctx.start_block(end_bb);
-                        return result; // preserve original logic
-                    }
-                    // Ephemeral: compare key and return value or default
-                    let m = lower_expr(ctx, mexpr, vars);
-                    let d = lower_expr(ctx, dexpr, vars);
-                    let sk = ctx.new_temp();
-                    let sv = ctx.new_temp();
-                    ctx.current_instr(Instr::MapLoadPair {
-                        dest_key: sk,
-                        dest_val: sv,
-                        map: m,
-                        offset: 0,
-                    });
-                    let zero = ctx.new_temp();
-                    ctx.current_instr(Instr::Const {
-                        dest: zero,
-                        value: 0,
-                    });
-                    let result = ctx.new_temp();
-                    let cond = lower_map_key_eq(ctx, &kexpr.ty, sk, key_tmp);
-                    let then_bb = ctx.new_label();
-                    let else_bb = ctx.new_label();
-                    let end_bb = ctx.new_label();
-                    ctx.finish_current(Terminator::Branch {
-                        cond,
-                        then_bb,
-                        else_bb,
-                    });
-                    // Then: return sv
-                    ctx.start_block(then_bb);
-                    ctx.current_instr(Instr::Binary {
-                        dest: result,
-                        op: BinaryOp::Add,
-                        left: sv,
-                        right: zero,
-                    });
-                    ctx.finish_current(Terminator::Jump(end_bb));
-                    // Else: return d
-                    ctx.start_block(else_bb);
-                    ctx.current_instr(Instr::Binary {
-                        dest: result,
-                        op: BinaryOp::Add,
-                        left: d,
-                        right: zero,
-                    });
-                    ctx.finish_current(Terminator::Jump(end_bb));
-                    // End and return the selected result
-                    ctx.start_block(end_bb);
-                    result
-                }
-                "get_or" => {
-                    // Like get_or_default(map, key, default) but never mutates the backing map.
-                    let mexpr = &args[0];
-                    let kexpr = &args[1];
-                    let dexpr = &args[2];
-                    let key_tmp = lower_expr(ctx, kexpr, vars);
-                    // Durable path
-                    if let Some(bn) = state_map_base_name(mexpr)
-                        && let Some(spec) = ctx.state_map_configs.get(&bn)
-                        && let (Some(key_codec), Some(value_codec)) = (
-                            key_codec_for_type(&spec.key),
-                            value_codec_for_type(&spec.value),
-                        )
-                    {
-                        let t_path = build_state_path(ctx, &bn, key_tmp, &key_codec);
-                        let t_blob = ctx.new_temp();
-                        ctx.current_instr(Instr::StateGet {
-                            dest: t_blob,
-                            path: t_path,
-                        });
-                        let zero = ctx.new_temp();
-                        ctx.current_instr(Instr::Const {
-                            dest: zero,
-                            value: 0,
-                        });
-                        let result = ctx.new_temp();
-                        let cond = ctx.new_temp();
-                        ctx.current_instr(Instr::Binary {
-                            dest: cond,
-                            op: BinaryOp::Ne,
-                            left: t_blob,
-                            right: zero,
-                        });
-                        let then_bb = ctx.new_label();
-                        let else_bb = ctx.new_label();
-                        let end_bb = ctx.new_label();
-                        ctx.finish_current(Terminator::Branch {
-                            cond,
-                            then_bb,
-                            else_bb,
-                        });
-                        // Then: decode existing value and return it
-                        ctx.start_block(then_bb);
-                        let existing = decode_value_from_norito(ctx, t_blob, &value_codec);
-                        ctx.current_instr(Instr::Binary {
-                            dest: result,
-                            op: BinaryOp::Add,
-                            left: existing,
-                            right: zero,
-                        });
-                        ctx.finish_current(Terminator::Jump(end_bb));
-                        // Else: return default without persisting it
-                        ctx.start_block(else_bb);
-                        let def = lower_expr(ctx, dexpr, vars);
-                        ctx.current_instr(Instr::Binary {
-                            dest: result,
-                            op: BinaryOp::Add,
-                            left: def,
-                            right: zero,
-                        });
-                        ctx.finish_current(Terminator::Jump(end_bb));
-                        // End and return result
-                        ctx.start_block(end_bb);
-                        return result;
-                    }
-                    // Ephemeral path: compare and return default if mismatch.
-                    let m = lower_expr(ctx, mexpr, vars);
-                    let sk = ctx.new_temp();
-                    let sv = ctx.new_temp();
-                    ctx.current_instr(Instr::MapLoadPair {
-                        dest_key: sk,
-                        dest_val: sv,
-                        map: m,
-                        offset: 0,
-                    });
-                    let zero = ctx.new_temp();
-                    ctx.current_instr(Instr::Const {
-                        dest: zero,
-                        value: 0,
-                    });
-                    let result = ctx.new_temp();
-                    let cond = lower_map_key_eq(ctx, &kexpr.ty, sk, key_tmp);
-                    let then_bb = ctx.new_label();
-                    let else_bb = ctx.new_label();
-                    let end_bb = ctx.new_label();
-                    ctx.finish_current(Terminator::Branch {
-                        cond,
-                        then_bb,
-                        else_bb,
-                    });
-                    // Then: return existing value
-                    ctx.start_block(then_bb);
-                    ctx.current_instr(Instr::Binary {
-                        dest: result,
-                        op: BinaryOp::Add,
-                        left: sv,
-                        right: zero,
-                    });
-                    ctx.finish_current(Terminator::Jump(end_bb));
-                    // Else: return default without inserting it
-                    ctx.start_block(else_bb);
-                    let def = lower_expr(ctx, dexpr, vars);
-                    ctx.current_instr(Instr::Binary {
-                        dest: result,
-                        op: BinaryOp::Add,
-                        left: def,
-                        right: zero,
-                    });
-                    ctx.finish_current(Terminator::Jump(end_bb));
-                    // End and return the selected result
-                    ctx.start_block(end_bb);
-                    result
-                }
-                "ensure" => {
-                    // Like get_or_default(map, key, default) but inserts the default deterministically when missing.
-                    let mexpr = &args[0];
-                    let kexpr = &args[1];
-                    let dexpr = &args[2];
-                    let key_tmp = lower_expr(ctx, kexpr, vars);
-                    // Durable path
-                    if let Some(bn) = state_map_base_name(mexpr)
-                        && let Some(spec) = ctx.state_map_configs.get(&bn).cloned()
-                        && let Some(key_codec) = key_codec_for_type(&spec.key)
-                    {
-                        let anchor = state_map_anchor_base_name(&bn, &spec.value);
-                        let t_path = build_state_path(ctx, &anchor, key_tmp, &key_codec);
-                        let t_blob = ctx.new_temp();
-                        ctx.current_instr(Instr::StateGet {
-                            dest: t_blob,
-                            path: t_path,
-                        });
-                        let zero = ctx.new_temp();
-                        ctx.current_instr(Instr::Const {
-                            dest: zero,
-                            value: 0,
-                        });
-                        let result = ctx.new_temp();
-                        let cond = ctx.new_temp();
-                        ctx.current_instr(Instr::Binary {
-                            dest: cond,
-                            op: BinaryOp::Ne,
-                            left: t_blob,
-                            right: zero,
-                        });
-                        let then_bb = ctx.new_label();
-                        let else_bb = ctx.new_label();
-                        let end_bb = ctx.new_label();
-                        ctx.finish_current(Terminator::Branch {
-                            cond,
-                            then_bb,
-                            else_bb,
-                        });
-                        // Then: decode existing value and return it
-                        ctx.start_block(then_bb);
-                        let existing =
-                            lower_state_map_get_value(ctx, &bn, key_tmp, &spec.key, &spec.value)
-                                .expect("durable map value should decode");
-                        ctx.current_instr(Instr::Copy {
-                            dest: result,
-                            src: existing,
-                        });
-                        ctx.finish_current(Terminator::Jump(end_bb));
-                        // Else: encode default, persist, and return default
-                        ctx.start_block(else_bb);
-                        let def = lower_expr(ctx, dexpr, vars);
-                        let _ = lower_state_map_set_value(
-                            ctx,
-                            &bn,
-                            key_tmp,
-                            &spec.key,
-                            &spec.value,
-                            def,
-                        );
-                        ctx.current_instr(Instr::Copy {
-                            dest: result,
-                            src: def,
-                        });
-                        ctx.finish_current(Terminator::Jump(end_bb));
-                        // End and return result
-                        ctx.start_block(end_bb);
-                        return result;
-                    }
-                    // Ephemeral path: compare and insert default if mismatch
-                    let m = lower_expr(ctx, mexpr, vars);
-                    let sk = ctx.new_temp();
-                    let sv = ctx.new_temp();
-                    ctx.current_instr(Instr::MapLoadPair {
-                        dest_key: sk,
-                        dest_val: sv,
-                        map: m,
-                        offset: 0,
-                    });
-                    let zero = ctx.new_temp();
-                    ctx.current_instr(Instr::Const {
-                        dest: zero,
-                        value: 0,
-                    });
-                    let result = ctx.new_temp();
-                    let cond = lower_map_key_eq(ctx, &kexpr.ty, sk, key_tmp);
-                    let then_bb = ctx.new_label();
-                    let else_bb = ctx.new_label();
-                    let end_bb = ctx.new_label();
-                    ctx.finish_current(Terminator::Branch {
-                        cond,
-                        then_bb,
-                        else_bb,
-                    });
-                    // Then: return existing value
-                    ctx.start_block(then_bb);
-                    ctx.current_instr(Instr::Binary {
-                        dest: result,
-                        op: BinaryOp::Add,
-                        left: sv,
-                        right: zero,
-                    });
-                    ctx.finish_current(Terminator::Jump(end_bb));
-                    // Else: insert default and return it
-                    ctx.start_block(else_bb);
-                    let def = lower_expr(ctx, dexpr, vars);
-                    ctx.current_instr(Instr::MapSet {
-                        map: m,
-                        key: key_tmp,
-                        value: def,
-                    });
-                    ctx.current_instr(Instr::Binary {
-                        dest: result,
-                        op: BinaryOp::Add,
-                        left: def,
-                        right: zero,
-                    });
-                    ctx.finish_current(Terminator::Jump(end_bb));
-                    // End and return the selected result
-                    ctx.start_block(end_bb);
-                    result
-                }
-                "keys_take2" | "values_take2" => {
-                    // Fixed-cap guarded iterator helper: return map key/value at (start + (which & 1))
-                    // Only ephemeral maps are supported here.
-                    let base = lower_expr(ctx, &args[0], vars);
-                    let start_t = lower_expr_as_int(ctx, &args[1], vars);
-                    let which_t = lower_expr_as_int(ctx, &args[2], vars);
-                    // mask = which & 1
-                    let one = ctx.new_temp();
-                    ctx.current_instr(Instr::Const {
-                        dest: one,
-                        value: 1,
-                    });
-                    let masked = ctx.new_temp();
-                    ctx.current_instr(Instr::Binary {
-                        dest: masked,
-                        op: BinaryOp::And,
-                        left: which_t,
-                        right: one,
-                    });
-                    // index = start + masked
-                    let idx = ctx.new_temp();
-                    ctx.current_instr(Instr::Binary {
-                        dest: idx,
-                        op: BinaryOp::Add,
-                        left: start_t,
-                        right: masked,
-                    });
-                    // bytes = idx * 16
-                    let sixteen = ctx.new_temp();
-                    ctx.current_instr(Instr::Const {
-                        dest: sixteen,
-                        value: 16,
-                    });
-                    let bytes = ctx.new_temp();
-                    ctx.current_instr(Instr::Binary {
-                        dest: bytes,
-                        op: BinaryOp::Mul,
-                        left: idx,
-                        right: sixteen,
-                    });
-                    // addr = base + bytes
-                    let addr = ctx.new_temp();
-                    ctx.current_instr(Instr::Binary {
-                        dest: addr,
-                        op: BinaryOp::Add,
-                        left: base,
-                        right: bytes,
-                    });
-                    // Load pair at addr
-                    let k = ctx.new_temp();
-                    let v = ctx.new_temp();
-                    ctx.current_instr(Instr::Load64Imm {
-                        dest: k,
-                        base: addr,
-                        imm: 0,
-                    });
-                    ctx.current_instr(Instr::Load64Imm {
-                        dest: v,
-                        base: addr,
-                        imm: 8,
-                    });
-                    if name == "keys_take2" { k } else { v }
-                }
-                "keys_values_take2" => {
-                    // Build pair (k,v) at start + (which & 1) and return as tuple
-                    let base = lower_expr(ctx, &args[0], vars);
-                    let start_t = lower_expr_as_int(ctx, &args[1], vars);
-                    let which_t = lower_expr_as_int(ctx, &args[2], vars);
-                    // mask which to 0/1
-                    let one = ctx.new_temp();
-                    ctx.current_instr(Instr::Const {
-                        dest: one,
-                        value: 1,
-                    });
-                    let masked = ctx.new_temp();
-                    ctx.current_instr(Instr::Binary {
-                        dest: masked,
-                        op: BinaryOp::And,
-                        left: which_t,
-                        right: one,
-                    });
-                    // idx = start + masked
-                    let idx = ctx.new_temp();
-                    ctx.current_instr(Instr::Binary {
-                        dest: idx,
-                        op: BinaryOp::Add,
-                        left: start_t,
-                        right: masked,
-                    });
-                    // bytes = idx * 16
-                    let sixteen = ctx.new_temp();
-                    ctx.current_instr(Instr::Const {
-                        dest: sixteen,
-                        value: 16,
-                    });
-                    let bytes = ctx.new_temp();
-                    ctx.current_instr(Instr::Binary {
-                        dest: bytes,
-                        op: BinaryOp::Mul,
-                        left: idx,
-                        right: sixteen,
-                    });
-                    // addr = base + bytes
-                    let addr = ctx.new_temp();
-                    ctx.current_instr(Instr::Binary {
-                        dest: addr,
-                        op: BinaryOp::Add,
-                        left: base,
-                        right: bytes,
-                    });
-                    // Load key and value
-                    let k = ctx.new_temp();
-                    let v = ctx.new_temp();
-                    ctx.current_instr(Instr::Load64Imm {
-                        dest: k,
-                        base: addr,
-                        imm: 0,
-                    });
-                    ctx.current_instr(Instr::Load64Imm {
-                        dest: v,
-                        base: addr,
-                        imm: 8,
-                    });
-                    let tup = ctx.new_temp();
-                    ctx.current_instr(Instr::TuplePack {
-                        dest: tup,
-                        items: vec![k, v],
-                    });
-                    tup
-                }
-                // ZK verify intrinsics
-                "zk_verify_transfer" => {
-                    let p = lower_expr(ctx, &args[0], vars);
-                    ctx.current_instr(Instr::ZkVerify {
-                        number: crate::syscalls::SYSCALL_ZK_VERIFY_TRANSFER,
-                        payload: p,
-                    });
-                    let t = ctx.new_temp();
-                    ctx.current_instr(Instr::Const { dest: t, value: 0 });
-                    t
-                }
-                "zk_verify_unshield" => {
-                    let p = lower_expr(ctx, &args[0], vars);
-                    ctx.current_instr(Instr::ZkVerify {
-                        number: crate::syscalls::SYSCALL_ZK_VERIFY_UNSHIELD,
-                        payload: p,
-                    });
-                    let t = ctx.new_temp();
-                    ctx.current_instr(Instr::Const { dest: t, value: 0 });
-                    t
-                }
-                "zk_verify_batch" => {
-                    let p = lower_expr(ctx, &args[0], vars);
-                    ctx.current_instr(Instr::ZkVerify {
-                        number: crate::syscalls::SYSCALL_ZK_VERIFY_BATCH,
-                        payload: p,
-                    });
-                    let t = ctx.new_temp();
-                    ctx.current_instr(Instr::Const { dest: t, value: 0 });
-                    t
-                }
-                "zk_vote_verify_ballot" => {
-                    let p = lower_expr(ctx, &args[0], vars);
-                    ctx.current_instr(Instr::ZkVerify {
-                        number: crate::syscalls::SYSCALL_ZK_VOTE_VERIFY_BALLOT,
-                        payload: p,
-                    });
-                    let t = ctx.new_temp();
-                    ctx.current_instr(Instr::Const { dest: t, value: 0 });
-                    t
-                }
-                "zk_vote_verify_tally" => {
-                    let p = lower_expr(ctx, &args[0], vars);
-                    ctx.current_instr(Instr::ZkVerify {
-                        number: crate::syscalls::SYSCALL_ZK_VOTE_VERIFY_TALLY,
-                        payload: p,
-                    });
-                    let t = ctx.new_temp();
-                    ctx.current_instr(Instr::Const { dest: t, value: 0 });
-                    t
-                }
-                // Vendor bridge wrappers
-                "sc_execute_submit_ballot" | "sc_execute_unshield" | "execute_instruction" => {
-                    let p = lower_expr(ctx, &args[0], vars);
-                    ctx.current_instr(Instr::VendorExecuteInstruction { payload: p });
-                    let t = ctx.new_temp();
-                    ctx.current_instr(Instr::Const { dest: t, value: 0 });
-                    t
-                }
-                "execute_query" => {
-                    let p = lower_expr(ctx, &args[0], vars);
-                    let d = ctx.new_temp();
-                    ctx.current_instr(Instr::VendorExecuteQuery {
-                        dest: d,
-                        payload: p,
-                    });
-                    d
-                }
-                "subscription_bill" => {
-                    ctx.current_instr(Instr::SubscriptionBill);
-                    let t = ctx.new_temp();
-                    ctx.current_instr(Instr::Const { dest: t, value: 0 });
-                    t
-                }
-                "subscription_record_usage" => {
-                    ctx.current_instr(Instr::SubscriptionRecordUsage);
-                    let t = ctx.new_temp();
-                    ctx.current_instr(Instr::Const { dest: t, value: 0 });
-                    t
-                }
-                "resolve_account_alias" => {
-                    let alias = lower_expr(ctx, &args[0], vars);
-                    let dest = ctx.new_temp();
-                    ctx.current_instr(Instr::ResolveAccountAlias { dest, alias });
-                    dest
-                }
-                "call_contract" => {
-                    let contract = lower_expr(ctx, &args[0], vars);
-                    let entrypoint = lower_expr(ctx, &args[1], vars);
-                    let payload = lower_expr(ctx, &args[2], vars);
-                    let dest = ctx.new_temp();
-                    ctx.current_instr(Instr::CallContract {
-                        dest,
-                        contract,
-                        entrypoint,
-                        payload,
-                    });
-                    dest
-                }
-                "build_submit_ballot_inline" => {
-                    let election_id = lower_expr(ctx, &args[0], vars);
-                    let ciphertext = lower_expr(ctx, &args[1], vars);
-                    let nullifier = lower_expr(ctx, &args[2], vars);
-                    let backend = lower_expr(ctx, &args[3], vars);
-                    let proof = lower_expr(ctx, &args[4], vars);
-                    let vk = lower_expr(ctx, &args[5], vars);
-                    let dest = ctx.new_temp();
-                    ctx.current_instr(Instr::BuildSubmitBallotInline {
-                        dest,
-                        election_id,
-                        ciphertext,
-                        nullifier,
-                        backend,
-                        proof,
-                        vk,
-                    });
-                    dest
-                }
-                "build_unshield_inline" => {
-                    let asset = lower_expr(ctx, &args[0], vars);
-                    let to = lower_expr(ctx, &args[1], vars);
-                    let amount = lower_expr_as_int(ctx, &args[2], vars);
-                    let inputs = lower_expr(ctx, &args[3], vars);
-                    let backend = lower_expr(ctx, &args[4], vars);
-                    let proof = lower_expr(ctx, &args[5], vars);
-                    let vk = lower_expr(ctx, &args[6], vars);
-                    let dest = ctx.new_temp();
-                    ctx.current_instr(Instr::BuildUnshieldInline {
-                        dest,
-                        asset,
-                        to,
-                        amount,
-                        inputs,
-                        backend,
-                        proof,
-                        vk,
-                    });
-                    dest
-                }
-                "valcom" => {
-                    let v = lower_expr_as_int(ctx, &args[0], vars);
-                    let bl = lower_expr_as_int(ctx, &args[1], vars);
-                    let t = ctx.new_temp();
-                    ctx.current_instr(Instr::Valcom {
-                        dest: t,
-                        value: v,
-                        blind: bl,
-                    });
-                    t
-                }
-                "pubkgen" => {
-                    let s = lower_expr_as_int(ctx, &args[0], vars);
-                    let t = ctx.new_temp();
-                    ctx.current_instr(Instr::Pubkgen { dest: t, src: s });
-                    t
-                }
-                "vrf_verify" => {
-                    let input = lower_expr(ctx, &args[0], vars);
-                    let pk = lower_expr(ctx, &args[1], vars);
-                    let proof = lower_expr(ctx, &args[2], vars);
-                    let variant = lower_expr(ctx, &args[3], vars);
-                    let dest = ctx.new_temp();
-                    ctx.current_instr(Instr::VrfVerify {
-                        dest,
-                        input,
-                        public_key: pk,
-                        proof,
-                        variant,
-                    });
-                    dest
-                }
-                "vrf_verify_batch" => {
-                    let batch = lower_expr(ctx, &args[0], vars);
-                    let dest = ctx.new_temp();
-                    ctx.current_instr(Instr::VrfVerifyBatch { dest, batch });
-                    dest
-                }
-                "axt_begin" => {
-                    let desc = lower_expr(ctx, &args[0], vars);
-                    ctx.current_instr(Instr::AxtBegin { descriptor: desc });
-                    let t = ctx.new_temp();
-                    ctx.current_instr(Instr::Const { dest: t, value: 0 });
-                    t
-                }
-                "axt_touch" => {
-                    let dsid = lower_expr(ctx, &args[0], vars);
-                    let manifest = args.get(1).map(|m| lower_expr(ctx, m, vars));
-                    ctx.current_instr(Instr::AxtTouch { dsid, manifest });
-                    let t = ctx.new_temp();
-                    ctx.current_instr(Instr::Const { dest: t, value: 0 });
-                    t
-                }
-                "verify_ds_proof" => {
-                    let dsid = lower_expr(ctx, &args[0], vars);
-                    let proof = args.get(1).map(|p| lower_expr(ctx, p, vars));
-                    ctx.current_instr(Instr::VerifyDsProof { dsid, proof });
-                    let t = ctx.new_temp();
-                    ctx.current_instr(Instr::Const { dest: t, value: 0 });
-                    t
-                }
-                "use_asset_handle" => {
-                    let handle = lower_expr(ctx, &args[0], vars);
-                    let intent = lower_expr(ctx, &args[1], vars);
-                    let proof = args.get(2).map(|p| lower_expr(ctx, p, vars));
-                    ctx.current_instr(Instr::UseAssetHandle {
-                        handle,
-                        intent,
-                        proof,
-                    });
-                    let t = ctx.new_temp();
-                    ctx.current_instr(Instr::Const { dest: t, value: 0 });
-                    t
-                }
-                "axt_commit" => {
-                    ctx.current_instr(Instr::AxtCommit);
-                    let t = ctx.new_temp();
-                    ctx.current_instr(Instr::Const { dest: t, value: 0 });
-                    t
-                }
-                "mint_asset" => {
-                    let acc = lower_expr(ctx, &args[0], vars);
-                    let asset = lower_expr(ctx, &args[1], vars);
-                    let amt = match &args[2].expr {
-                        semantic::ExprKind::Number(0)
-                            if !semantic::is_wide_numeric_type(&args[2].ty) =>
-                        {
-                            let t = ctx.new_temp();
-                            ctx.current_instr(Instr::Const { dest: t, value: 0 });
-                            t
-                        }
-                        _ => lower_expr_as_numeric(ctx, &args[2], vars),
-                    };
-                    ctx.current_instr(Instr::MintAsset {
-                        account: acc,
-                        asset,
-                        amount: amt,
-                    });
-                    let t = ctx.new_temp();
-                    ctx.current_instr(Instr::Const { dest: t, value: 0 });
-                    t
-                }
-                "burn_asset" => {
-                    let acc = lower_expr(ctx, &args[0], vars);
-                    let asset = lower_expr(ctx, &args[1], vars);
-                    let amt = lower_expr_as_numeric(ctx, &args[2], vars);
-                    ctx.current_instr(Instr::BurnAsset {
-                        account: acc,
-                        asset,
-                        amount: amt,
-                    });
-                    let t = ctx.new_temp();
-                    ctx.current_instr(Instr::Const { dest: t, value: 0 });
-                    t
-                }
-                "transfer_asset" => {
-                    let from = lower_expr(ctx, &args[0], vars);
-                    let to = lower_expr(ctx, &args[1], vars);
-                    let asset = lower_expr(ctx, &args[2], vars);
-                    let amt = lower_expr_as_numeric(ctx, &args[3], vars);
-                    ctx.current_instr(Instr::TransferAsset {
-                        from,
-                        to,
-                        asset,
-                        amount: amt,
-                    });
-                    let t = ctx.new_temp();
-                    ctx.current_instr(Instr::Const { dest: t, value: 0 });
-                    t
-                }
-                "escrow_open_offer" => {
-                    let escrow = lower_expr(ctx, &args[0], vars);
-                    let asset = lower_expr(ctx, &args[1], vars);
-                    let amount = lower_expr_as_numeric(ctx, &args[2], vars);
-                    let evidence_hashes = args.get(3).map(|arg| lower_expr(ctx, arg, vars));
-                    ctx.current_instr(Instr::EscrowOpenOffer {
-                        escrow,
-                        asset,
-                        amount,
-                        evidence_hashes,
-                    });
-                    let t = ctx.new_temp();
-                    ctx.current_instr(Instr::Const { dest: t, value: 0 });
-                    t
-                }
-                "escrow_accept" => {
-                    let escrow = lower_expr(ctx, &args[0], vars);
-                    ctx.current_instr(Instr::EscrowAccept { escrow });
-                    let t = ctx.new_temp();
-                    ctx.current_instr(Instr::Const { dest: t, value: 0 });
-                    t
-                }
-                "escrow_mark_payment_sent" => {
-                    let escrow = lower_expr(ctx, &args[0], vars);
-                    ctx.current_instr(Instr::EscrowMarkPaymentSent { escrow });
-                    let t = ctx.new_temp();
-                    ctx.current_instr(Instr::Const { dest: t, value: 0 });
-                    t
-                }
-                "escrow_release" => {
-                    let escrow = lower_expr(ctx, &args[0], vars);
-                    ctx.current_instr(Instr::EscrowRelease { escrow });
-                    let t = ctx.new_temp();
-                    ctx.current_instr(Instr::Const { dest: t, value: 0 });
-                    t
-                }
-                "escrow_cancel" => {
-                    let escrow = lower_expr(ctx, &args[0], vars);
-                    ctx.current_instr(Instr::EscrowCancel { escrow });
-                    let t = ctx.new_temp();
-                    ctx.current_instr(Instr::Const { dest: t, value: 0 });
-                    t
-                }
-                "escrow_open_dispute" => {
-                    let escrow = lower_expr(ctx, &args[0], vars);
-                    let evidence_hashes = args.get(1).map(|arg| lower_expr(ctx, arg, vars));
-                    ctx.current_instr(Instr::EscrowOpenDispute {
-                        escrow,
-                        evidence_hashes,
-                    });
-                    let t = ctx.new_temp();
-                    ctx.current_instr(Instr::Const { dest: t, value: 0 });
-                    t
-                }
-                "escrow_resolve_dispute" => {
-                    let escrow = lower_expr(ctx, &args[0], vars);
-                    let buyer_amount = lower_expr_as_numeric(ctx, &args[1], vars);
-                    let seller_amount = lower_expr_as_numeric(ctx, &args[2], vars);
-                    let evidence_hashes = args.get(3).map(|arg| lower_expr(ctx, arg, vars));
-                    ctx.current_instr(Instr::EscrowResolveDispute {
-                        escrow,
-                        buyer_amount,
-                        seller_amount,
-                        evidence_hashes,
-                    });
-                    let t = ctx.new_temp();
-                    ctx.current_instr(Instr::Const { dest: t, value: 0 });
-                    t
-                }
-                "transfer_batch" => {
-                    ctx.current_instr(Instr::TransferBatchBegin);
-                    for entry in args {
-                        let tuple = lower_expr(ctx, entry, vars);
-                        let from = ctx.new_temp();
-                        ctx.current_instr(Instr::TupleGet {
-                            dest: from,
-                            tuple,
-                            index: 0,
-                        });
-                        let to = ctx.new_temp();
-                        ctx.current_instr(Instr::TupleGet {
-                            dest: to,
-                            tuple,
-                            index: 1,
-                        });
-                        let asset = ctx.new_temp();
-                        ctx.current_instr(Instr::TupleGet {
-                            dest: asset,
-                            tuple,
-                            index: 2,
-                        });
-                        let amount_raw = ctx.new_temp();
-                        ctx.current_instr(Instr::TupleGet {
-                            dest: amount_raw,
-                            tuple,
-                            index: 3,
-                        });
-                        let amount =
-                            if let Type::Tuple(items) = semantic::resolve_struct_type(&entry.ty) {
-                                let entry_ty = items.get(3);
-                                if entry_ty.is_some_and(semantic::is_wide_numeric_type) {
-                                    amount_raw
-                                } else {
-                                    let out = ctx.new_temp();
-                                    ctx.current_instr(Instr::NumericFromInt {
-                                        dest: out,
-                                        value: amount_raw,
-                                    });
-                                    out
-                                }
-                            } else {
-                                let out = ctx.new_temp();
-                                ctx.current_instr(Instr::NumericFromInt {
-                                    dest: out,
-                                    value: amount_raw,
-                                });
-                                out
-                            };
-                        ctx.current_instr(Instr::TransferAsset {
-                            from,
-                            to,
-                            asset,
-                            amount,
-                        });
-                    }
-                    ctx.current_instr(Instr::TransferBatchEnd);
-                    let t = ctx.new_temp();
-                    ctx.current_instr(Instr::Const { dest: t, value: 0 });
-                    t
-                }
-                "transfer_v1_batch_begin" => {
-                    ctx.current_instr(Instr::TransferBatchBegin);
-                    let t = ctx.new_temp();
-                    ctx.current_instr(Instr::Const { dest: t, value: 0 });
-                    t
-                }
-                "transfer_v1_batch_end" => {
-                    ctx.current_instr(Instr::TransferBatchEnd);
-                    let t = ctx.new_temp();
-                    ctx.current_instr(Instr::Const { dest: t, value: 0 });
-                    t
-                }
-                "register_domain" => {
-                    let d = lower_expr(ctx, &args[0], vars);
-                    ctx.current_instr(Instr::RegisterDomain { domain: d });
-                    let t = ctx.new_temp();
-                    ctx.current_instr(Instr::Const { dest: t, value: 0 });
-                    t
-                }
-                "register_account" => {
-                    let a = lower_expr(ctx, &args[0], vars);
-                    ctx.current_instr(Instr::RegisterAccount { account: a });
-                    let t = ctx.new_temp();
-                    ctx.current_instr(Instr::Const { dest: t, value: 0 });
-                    t
-                }
-                "unregister_domain" => {
-                    let d = lower_expr(ctx, &args[0], vars);
-                    ctx.current_instr(Instr::UnregisterDomain { domain: d });
-                    let t = ctx.new_temp();
-                    ctx.current_instr(Instr::Const { dest: t, value: 0 });
-                    t
-                }
-                "unregister_account" => {
-                    let a = lower_expr(ctx, &args[0], vars);
-                    ctx.current_instr(Instr::UnregisterAccount { account: a });
-                    let t = ctx.new_temp();
-                    ctx.current_instr(Instr::Const { dest: t, value: 0 });
-                    t
-                }
-                "unregister_asset" => {
-                    let ad = lower_expr(ctx, &args[0], vars);
-                    ctx.current_instr(Instr::UnregisterAsset { asset: ad });
-                    let t = ctx.new_temp();
-                    ctx.current_instr(Instr::Const { dest: t, value: 0 });
-                    t
-                }
-                "register_peer" => {
-                    let j = lower_expr(ctx, &args[0], vars);
-                    ctx.current_instr(Instr::RegisterPeer { json: j });
-                    let t = ctx.new_temp();
-                    ctx.current_instr(Instr::Const { dest: t, value: 0 });
-                    t
-                }
-                "unregister_peer" => {
-                    let j = lower_expr(ctx, &args[0], vars);
-                    ctx.current_instr(Instr::UnregisterPeer { json: j });
-                    let t = ctx.new_temp();
-                    ctx.current_instr(Instr::Const { dest: t, value: 0 });
-                    t
-                }
-                "create_trigger" | "register_trigger" => {
-                    let j = lower_expr(ctx, &args[0], vars);
-                    ctx.current_instr(Instr::CreateTrigger { json: j });
-                    let t = ctx.new_temp();
-                    ctx.current_instr(Instr::Const { dest: t, value: 0 });
-                    t
-                }
-                "remove_trigger" | "unregister_trigger" => {
-                    let n = lower_expr(ctx, &args[0], vars);
-                    ctx.current_instr(Instr::RemoveTrigger { name: n });
-                    let t = ctx.new_temp();
-                    ctx.current_instr(Instr::Const { dest: t, value: 0 });
-                    t
-                }
-                "set_trigger_enabled" => {
-                    let n = lower_expr(ctx, &args[0], vars);
-                    let e = lower_expr(ctx, &args[1], vars);
-                    ctx.current_instr(Instr::SetTriggerEnabled {
-                        name: n,
-                        enabled: e,
-                    });
-                    let t = ctx.new_temp();
-                    ctx.current_instr(Instr::Const { dest: t, value: 0 });
-                    t
-                }
-                "grant_permission" => {
-                    let a = lower_expr(ctx, &args[0], vars);
-                    let tok = lower_expr(ctx, &args[1], vars);
-                    ctx.current_instr(Instr::GrantPermission {
-                        account: a,
-                        token: tok,
-                    });
-                    let t = ctx.new_temp();
-                    ctx.current_instr(Instr::Const { dest: t, value: 0 });
-                    t
-                }
-                "revoke_permission" => {
-                    let a = lower_expr(ctx, &args[0], vars);
-                    let tok = lower_expr(ctx, &args[1], vars);
-                    ctx.current_instr(Instr::RevokePermission {
-                        account: a,
-                        token: tok,
-                    });
-                    let t = ctx.new_temp();
-                    ctx.current_instr(Instr::Const { dest: t, value: 0 });
-                    t
-                }
-                "create_role" => {
-                    let n = lower_expr(ctx, &args[0], vars);
-                    let j = lower_expr(ctx, &args[1], vars);
-                    ctx.current_instr(Instr::CreateRole { name: n, json: j });
-                    let t = ctx.new_temp();
-                    ctx.current_instr(Instr::Const { dest: t, value: 0 });
-                    t
-                }
-                "delete_role" => {
-                    let n = lower_expr(ctx, &args[0], vars);
-                    ctx.current_instr(Instr::DeleteRole { name: n });
-                    let t = ctx.new_temp();
-                    ctx.current_instr(Instr::Const { dest: t, value: 0 });
-                    t
-                }
-                "grant_role" => {
-                    let a = lower_expr(ctx, &args[0], vars);
-                    let n = lower_expr(ctx, &args[1], vars);
-                    ctx.current_instr(Instr::GrantRole {
-                        account: a,
-                        name: n,
-                    });
-                    let t = ctx.new_temp();
-                    ctx.current_instr(Instr::Const { dest: t, value: 0 });
-                    t
-                }
-                "revoke_role" => {
-                    let a = lower_expr(ctx, &args[0], vars);
-                    let n = lower_expr(ctx, &args[1], vars);
-                    ctx.current_instr(Instr::RevokeRole {
-                        account: a,
-                        name: n,
-                    });
-                    let t = ctx.new_temp();
-                    ctx.current_instr(Instr::Const { dest: t, value: 0 });
-                    t
-                }
-                "transfer_domain" => {
-                    // Signature: (from: AccountId, domain: DomainId, to: AccountId)
-                    // Lowering uses only domain and to; the host infers authority as caller.
-                    let d = lower_expr(ctx, &args[1], vars);
-                    let to = lower_expr(ctx, &args[2], vars);
-                    ctx.current_instr(Instr::TransferDomain { domain: d, to });
-                    let t = ctx.new_temp();
-                    ctx.current_instr(Instr::Const { dest: t, value: 0 });
-                    t
-                }
-                "register_asset" => {
-                    let asset = lower_expr(ctx, &args[0], vars);
-                    let symbol = lower_expr(ctx, &args[1], vars);
-                    let qty = lower_expr_as_numeric(ctx, &args[2], vars);
-                    let mint = lower_expr(ctx, &args[3], vars);
-                    ctx.current_instr(Instr::RegisterAsset {
-                        asset,
-                        symbol,
-                        quantity: qty,
-                        mintable: mint,
-                    });
-                    let t = ctx.new_temp();
-                    ctx.current_instr(Instr::Const { dest: t, value: 0 });
-                    t
-                }
-                "create_new_asset" => {
-                    let asset = lower_expr(ctx, &args[0], vars);
-                    let symbol = lower_expr(ctx, &args[1], vars);
-                    let qty = lower_expr_as_numeric(ctx, &args[2], vars);
-                    let account = lower_expr(ctx, &args[3], vars);
-                    let mint = lower_expr(ctx, &args[4], vars);
-                    ctx.current_instr(Instr::CreateNewAsset {
-                        asset,
-                        symbol,
-                        quantity: qty,
-                        account,
-                        mintable: mint,
-                    });
-                    let t = ctx.new_temp();
-                    ctx.current_instr(Instr::Const { dest: t, value: 0 });
-                    t
-                }
-                "assert_eq" => {
-                    let l = lower_expr(ctx, &args[0], vars);
-                    let r = lower_expr(ctx, &args[1], vars);
-                    ctx.current_instr(Instr::AssertEq { left: l, right: r });
-                    // return dummy temp for unit
-                    let t = ctx.new_temp();
-                    ctx.current_instr(Instr::Const { dest: t, value: 0 });
-                    t
                 }
                 _ => {
                     // User-defined function call: pass args; capture result(s) if any.

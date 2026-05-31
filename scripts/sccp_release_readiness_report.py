@@ -30,7 +30,9 @@ USER_PROVER_SUBMISSION_SURFACES: tuple[dict[str, Any], ...] = (
         "lanes": "eth,bsc",
         "proof_backend": "evm-groth16-bn254-v1",
         "sdk_helpers": (
-            "buildEvmSccpProofRequest, EvmSccpProver, "
+            "buildEvmSccpProofRequest, canonicalEvmSccpReceiptProofBytes, "
+            "evmSccpReceiptProofHash, canonicalBscSccpReceiptProofBytes, "
+            "bscSccpReceiptProofHash, EvmSccpProver, "
             "buildEvmSccpSubmission, buildEvmSccpBridgeProofSubmitPayload"
         ),
         "on_chain_submission": (
@@ -43,7 +45,10 @@ USER_PROVER_SUBMISSION_SURFACES: tuple[dict[str, Any], ...] = (
         "lanes": "tron",
         "proof_backend": "tron-groth16-bn254-v1",
         "sdk_helpers": (
-            "buildTronSccpProofRequest, TronSccpProver, "
+            "buildTronSccpProofRequest, canonicalTronSccpReceiptProofBytes, "
+            "canonicalTronSccpReceiptStateProofBytes, "
+            "canonicalTronSccpTransactionSourceProofBytes, "
+            "tronSccpTransactionSourceProofHash, TronSccpProver, "
             "buildTronSccpSubmission, buildTronSccpBridgeProofSubmitPayload"
         ),
         "on_chain_submission": (
@@ -56,7 +61,10 @@ USER_PROVER_SUBMISSION_SURFACES: tuple[dict[str, Any], ...] = (
         "lanes": "sol",
         "proof_backend": "solana-program-v1",
         "sdk_helpers": (
-            "buildSolanaSccpProofRequest, SolanaSccpProver, "
+            "buildSolanaSccpProofRequest, "
+            "buildSolanaSccpAccountsLtHashProofRequest, "
+            "buildSolanaSccpFullLightClientAuditProofRequests, "
+            "SolanaSccpSourceStateProver, SolanaSccpProver, "
             "buildSolanaSccpSubmission"
         ),
         "on_chain_submission": "Solana verifier-program instruction envelope",
@@ -66,7 +74,9 @@ USER_PROVER_SUBMISSION_SURFACES: tuple[dict[str, Any], ...] = (
         "lanes": "ton",
         "proof_backend": "ton-contract-v1",
         "sdk_helpers": (
-            "buildTonSccpProofRequest, TonSccpProver, "
+            "buildTonSccpProofRequest, buildTonShardStateProofRequest, "
+            "buildTonSccpFullLightClientAuditProofRequests, "
+            "TonSccpSourceStateProver, TonSccpProver, "
             "buildTonSccpSubmission"
         ),
         "on_chain_submission": "TON internal message body BOC",
@@ -76,7 +86,9 @@ USER_PROVER_SUBMISSION_SURFACES: tuple[dict[str, Any], ...] = (
         "lanes": "substrate",
         "proof_backend": "substrate-runtime-v1",
         "sdk_helpers": (
-            "buildSubstrateSccpProofRequest, SubstrateSccpProver, "
+            "buildSubstrateSccpProofRequest, "
+            "buildSubstrateSccpRuntimeStorageProofRequest, "
+            "SubstrateSccpProver, "
             "buildSubstrateSccpSubmission"
         ),
         "on_chain_submission": "Substrate runtime call envelope",

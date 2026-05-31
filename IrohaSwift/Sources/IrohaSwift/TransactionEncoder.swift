@@ -143,14 +143,41 @@ struct TransactionInputValidator {
         if trimmed.rangeOfCharacter(from: .whitespacesAndNewlines) != nil {
             throw TransactionInputError.malformedAssetDefinitionId(trimmed)
         }
-        guard AssetDefinitionAddress.looksCanonical(trimmed) else {
+        let definitionLiteral: String
+        let scopeSuffix: String
+        if let (definition, scope) = parseAssetBalanceScopeSuffix(trimmed) {
+            definitionLiteral = definition
+            scopeSuffix = scope
+        } else {
+            definitionLiteral = trimmed
+            scopeSuffix = ""
+        }
+        guard AssetDefinitionAddress.looksCanonical(definitionLiteral) else {
             throw TransactionInputError.malformedAssetDefinitionId(trimmed)
         }
-        if NoritoNativeBridge.shared.blake3Hash(data: Data()) != nil,
-           AssetDefinitionAddress.decode(trimmed) == nil {
+        if AssetDefinitionAddress.decode(definitionLiteral) == nil {
             throw TransactionInputError.malformedAssetDefinitionId(trimmed)
         }
-        return trimmed
+        return definitionLiteral + scopeSuffix
+    }
+
+    private static func parseAssetBalanceScopeSuffix(_ value: String) -> (String, String)? {
+        guard value.contains("#") else {
+            return nil
+        }
+        let marker = "#dataspace:"
+        guard let markerRange = value.range(of: marker) else {
+            return ("", "")
+        }
+        let definition = String(value[..<markerRange.lowerBound])
+        let rawDataspaceId = String(value[markerRange.upperBound...])
+        guard !definition.isEmpty,
+              !rawDataspaceId.isEmpty,
+              !rawDataspaceId.contains("#"),
+              let dataspaceId = UInt64(rawDataspaceId) else {
+            return ("", "")
+        }
+        return (definition, "\(marker)\(dataspaceId)")
     }
 
     static func sanitizeDomainId(_ domainId: String, field: String) throws -> String {

@@ -164,7 +164,11 @@ fn zk_gas_per_commitment() -> u64 {
 }
 
 fn halo2_public_input_count(attachment: &ProofAttachment) -> Option<u64> {
-    if !attachment.backend.as_str().starts_with("halo2/") {
+    let backend = attachment.backend.as_str();
+    if crate::zk::is_trusted_setup_backend_label(backend)
+        || crate::zk::is_developer_only_backend_label(backend)
+        || !backend.starts_with("halo2/")
+    {
         return None;
     }
     let env: OpenVerifyEnvelope = decode_from_bytes(&attachment.proof.bytes).ok()?;
@@ -402,6 +406,13 @@ pub fn meter_instruction(instr: &InstructionBox) -> u64 {
             transfer.outputs.len(),
         );
     }
+    if let Some(transfer) = any.downcast_ref::<dm_isi::offline::KagemushaTransfer>() {
+        return gas_for_proof_attachment(
+            &transfer.proof,
+            transfer.inputs.len(),
+            transfer.outputs.len(),
+        );
+    }
     if let Some(unshield) = any.downcast_ref::<dm_isi::zk::Unshield>() {
         return gas_for_proof_attachment(&unshield.proof, unshield.inputs.len(), 0);
     }
@@ -443,6 +454,13 @@ pub fn confidential_gas_cost(instr: &InstructionBox) -> u64 {
         return zk_gas_per_commitment();
     }
     if let Some(transfer) = any.downcast_ref::<dm_isi::zk::ZkTransfer>() {
+        return gas_for_proof_attachment(
+            &transfer.proof,
+            transfer.inputs.len(),
+            transfer.outputs.len(),
+        );
+    }
+    if let Some(transfer) = any.downcast_ref::<dm_isi::offline::KagemushaTransfer>() {
         return gas_for_proof_attachment(
             &transfer.proof,
             transfer.inputs.len(),
@@ -744,6 +762,46 @@ mod tests {
     }
 
     #[test]
+    fn kagemusha_transfer_gas_matches_shielded_transfer_metering() {
+        let _gas_lock = super::lock_confidential_gas_for_tests();
+        use iroha_data_model::{
+            isi::offline::KagemushaTransfer, prelude::AssetDefinitionId, proof::VerifyingKeyId,
+        };
+
+        let schedule = super::ConfidentialGasSchedule::default();
+        super::configure_confidential_gas(schedule);
+        let fixture = halo2_fixture_envelope("halo2/ipa:kagemusha-transfer-gas", [0u8; 32]);
+        let proof_box = fixture.proof_box("halo2/ipa");
+        let attachment = ProofAttachment::new_ref(
+            proof_box.backend.clone(),
+            proof_box,
+            VerifyingKeyId::new("halo2/ipa", "vk-kagemusha-transfer"),
+        );
+        let proof_bytes = attachment.proof.bytes.len() as u64;
+        let public_inputs = (fixture.public_inputs.len() / super::FIELD_ELEMENT_BYTES) as u64;
+        let asset: AssetDefinitionId = iroha_data_model::asset::AssetDefinitionId::new(
+            DomainId::try_new("domain", "universal").unwrap(),
+            "shield".parse().unwrap(),
+        );
+        let transfer = KagemushaTransfer::new(
+            asset,
+            vec![[0xAA; 32], [0xBB; 32]],
+            vec![[0xCC; 32], [0xDD; 32]],
+            attachment,
+            Some([0xEE; 32]),
+        );
+        let transfer_instr = InstructionBox::from(transfer);
+        let gas = meter_instruction(&transfer_instr);
+        let expected = schedule.base_verify
+            + schedule.per_public_input.saturating_mul(public_inputs)
+            + schedule.per_proof_byte.saturating_mul(proof_bytes)
+            + schedule.per_nullifier.saturating_mul(2)
+            + schedule.per_commitment.saturating_mul(2);
+        assert_eq!(gas, expected);
+        assert_eq!(confidential_gas_cost(&transfer_instr), expected);
+    }
+
+    #[test]
     fn anonymous_escrow_gas_matches_internal_transfers() {
         let _gas_lock = super::lock_confidential_gas_for_tests();
         use iroha_crypto::Hash;
@@ -890,6 +948,22 @@ mod tests {
         let proof_bytes = attachment.proof.bytes.len() as u64;
         let public_inputs =
             halo2_public_input_count(&attachment).expect("fixture exposes halo2 public inputs");
+        for backend in ["halo2/ipa: KZG", "halo2/ipa:Mock-Proof"] {
+            let rejected_proof = iroha_data_model::proof::ProofBox::new(
+                backend.to_owned(),
+                attachment.proof.bytes.clone(),
+            );
+            let rejected_attachment = iroha_data_model::proof::ProofAttachment::new_ref(
+                backend.to_owned(),
+                rejected_proof,
+                VerifyingKeyId::new(backend, "vk-config-gas-rejected"),
+            );
+            assert_eq!(
+                halo2_public_input_count(&rejected_attachment),
+                None,
+                "non-production backend {backend} must not be decoded for gas metadata"
+            );
+        }
 
         let verify_instr: InstructionBox = VerifyProof::new(attachment.clone()).into();
         let verify_gas = meter_instruction(&verify_instr);

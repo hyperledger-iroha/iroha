@@ -53,9 +53,13 @@ fn push_config() -> actual::Push {
 fn build_torii(
     push: actual::Push,
     account_id: &AccountId,
-) -> (Torii, axum::Router, tempfile::TempDir) {
+) -> (
+    Torii,
+    axum::Router,
+    iroha_torii::test_utils::TestDataDirGuard,
+) {
     let mut cfg = iroha_torii::test_utils::mk_minimal_root_cfg();
-    let data_dir = tempfile::tempdir().expect("torii data dir");
+    let data_dir = iroha_torii::test_utils::TestDataDirGuard::new();
     cfg.torii.data_dir = data_dir.path().to_path_buf();
     cfg.torii.push = push;
     let (kiso, _child) = KisoHandle::start(cfg.clone());

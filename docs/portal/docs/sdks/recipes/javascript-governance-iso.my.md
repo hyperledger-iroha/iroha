@@ -379,13 +379,13 @@ main().catch((error) => {
 တိကျမှု၊ မက်တာဒေတာကို ခွဲခြမ်းစိတ်ဖြာခြင်းမရှိဘဲ စီမံထားသော)၊
 
 ```bash
-# Check Offline V2 readiness
+# Check Offline readiness
 TORII_URL=https://torii.nexus.example \
 node -e '
   import { ToriiClient } from "@iroha/iroha-js";
   const client = new ToriiClient(process.env.TORII_URL);
-  const readiness = await client.getOfflineV2Readiness();
-  console.log(readiness.offline_note_v2, readiness.offline_recursive_note_proof);
+  const readiness = await client.getOfflineReadiness();
+  console.log(readiness.offline_note, readiness.offline_recursive_note_proof);
 '
 ```
 

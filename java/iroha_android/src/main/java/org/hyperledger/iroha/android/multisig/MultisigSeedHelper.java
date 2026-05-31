@@ -12,6 +12,7 @@ import org.hyperledger.iroha.android.address.AccountAddress;
 import org.hyperledger.iroha.android.address.PublicKeyCodec;
 import org.hyperledger.iroha.android.crypto.Blake2b;
 import org.hyperledger.iroha.norito.NoritoAdapters;
+import org.hyperledger.iroha.norito.NoritoDecoder;
 import org.hyperledger.iroha.norito.NoritoEncoder;
 import org.hyperledger.iroha.norito.NoritoHeader;
 import org.hyperledger.iroha.norito.TypeAdapter;
@@ -116,6 +117,21 @@ public final class MultisigSeedHelper {
     final boolean compact = (encoder.flags() & NoritoHeader.COMPACT_LEN) != 0;
     encoder.writeLength(payload.length, compact);
     encoder.writeBytes(payload);
+  }
+
+  private static <T> T decodeSizedField(
+      final NoritoDecoder decoder, final TypeAdapter<T> adapter) {
+    final long length = decoder.readLength((decoder.flags() & NoritoHeader.COMPACT_LEN) != 0);
+    if (length > Integer.MAX_VALUE) {
+      throw new IllegalArgumentException("Sized field payload too large");
+    }
+    final byte[] payload = decoder.readBytes((int) length);
+    final NoritoDecoder child = new NoritoDecoder(payload, decoder.flags(), decoder.flagsHint());
+    final T value = adapter.decode(child);
+    if (child.remaining() != 0) {
+      throw new IllegalArgumentException("Trailing bytes after sized field payload");
+    }
+    return value;
   }
 
   private static Optional<AccountIdParts> parseAccountIdParts(final String accountId) {
@@ -239,7 +255,22 @@ public final class MultisigSeedHelper {
 
         @Override
         public AccountIdParts decode(final org.hyperledger.iroha.norito.NoritoDecoder decoder) {
-          throw new UnsupportedOperationException("AccountController decode is not supported");
+          final long tag = ENUM_TAG_ADAPTER.decode(decoder);
+          if (tag != 0L) {
+            throw new IllegalArgumentException("Only single-key AccountController seeds are supported");
+          }
+          final String publicKeyLiteral = decodeSizedField(decoder, STRING_ADAPTER);
+          final PublicKeyCodec.PublicKeyPayload payload =
+              PublicKeyCodec.decodePublicKeyLiteral(publicKeyLiteral);
+          if (payload == null) {
+            throw new IllegalArgumentException("Invalid AccountController public key literal");
+          }
+          final int algorithmTag = algorithmTagForCurveId(payload.curveId());
+          if (algorithmTag < 0) {
+            throw new IllegalArgumentException(
+                "Unsupported AccountController curve id: " + payload.curveId());
+          }
+          return new AccountIdParts(payload.curveId(), algorithmTag, payload.keyBytes());
         }
       };
 

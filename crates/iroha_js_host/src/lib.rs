@@ -114,6 +114,7 @@ use iroha_data_model::{
             ActivateContractInstance, DeactivateContractInstance, RegisterSmartContractBytes,
             RegisterSmartContractCode, RemoveSmartContractBytes,
         },
+        sns::RegisterSnsName,
         social::{CancelTwitterEscrow, ClaimTwitterFollowReward, SendToTwitter},
         zk::{
             CancelConfidentialPolicyTransition, CreateElection, FinalizeElection, RegisterZkAsset,
@@ -139,6 +140,7 @@ use iroha_data_model::{
     role::{NewRole, Role, RoleId},
     rwa::{NewRwa, RwaControlPolicy, RwaId, RwaParentRef},
     smart_contract::manifest::{ContractManifest, ManifestProvenance},
+    sns::RegisterNameRequestV1,
     soracloud::{
         SecretEnvelopeV1, encode_agent_deploy_provenance_payload,
         encode_bundle_with_materials_provenance_payload,
@@ -6359,6 +6361,11 @@ fn value_to_instruction(value: json::Value) -> napi::Result<InstructionBox> {
                     "unsupported Unregister instruction variant; expected keys: Peer, Domain, Account, AssetDefinition, Nft, Role, Trigger",
                 ));
             }
+            if let Some(register_sns_value) = remove_case_insensitive(&mut map, "RegisterSnsName") {
+                let request: RegisterNameRequestV1 =
+                    json::from_value(register_sns_value).map_err(norito_to_napi)?;
+                return Ok(InstructionBox::from(RegisterSnsName::new(request)));
+            }
             if let Some(json::Value::Object(mut burn_map)) = map.remove("Burn") {
                 if let Some(json::Value::Object(mut asset_fields)) = burn_map.remove("Asset") {
                     let quantity_value = asset_fields.remove("object").ok_or_else(|| {
@@ -8937,6 +8944,21 @@ pub fn encode_signed_transaction_norito(bytes: Uint8Array) -> napi::Result<Buffe
     ensure_packed_struct_disabled();
     let tx = decode_signed_transaction(bytes.as_ref())?;
     let encoded = norito::to_bytes(&tx).map_err(norito_to_napi)?;
+    Ok(Buffer::from(encoded))
+}
+
+/// Convert a signed transaction payload into versioned adaptive Norito bytes.
+///
+/// This is the public `/transaction` payload shape accepted by Torii routes
+/// that decode `SignedTransaction::decode_all_versioned`.
+#[napi]
+#[allow(clippy::needless_pass_by_value)] // Uint8Array boundary requires ownership
+pub fn encode_signed_transaction_versioned(bytes: Uint8Array) -> napi::Result<Buffer> {
+    ensure_packed_struct_disabled();
+    let tx = decode_signed_transaction(bytes.as_ref())?;
+    let mut encoded = Vec::with_capacity(bytes.len() + 1);
+    encoded.push(1);
+    encoded.extend(norito::codec::encode_adaptive(&tx));
     Ok(Buffer::from(encoded))
 }
 

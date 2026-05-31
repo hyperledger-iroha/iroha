@@ -1199,6 +1199,7 @@ fn runtime_nexus_registration_reports_lane_lifecycle_costs() -> Result<()> {
     }
 
     let http = reqwest::Client::builder()
+        .timeout(integration_tests::http::request_timeout())
         .build()
         .wrap_err("build reqwest client for lifecycle benchmark")?;
     let bench_iterations = benchmark_iterations();

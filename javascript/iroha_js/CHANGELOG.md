@@ -11,9 +11,9 @@ All notable changes to `@iroha/iroha-js` are documented in this file.
 - `ToriiClient.callContract` now requires a `gasLimit` in the request payload so
   callers always supply the on-chain gas cap; typings, README docs, and test
   coverage reflect the stricter contract.【javascript/iroha_js/src/toriiClient.js:15360】【javascript/iroha_js/index.d.ts:4477】【javascript/iroha_js/test/toriiClient.test.js:13919】【javascript/iroha_js/test/integrationTorii.test.js:2701】【javascript/iroha_js/README.md:1909】
-- Removed JS client helpers for non-V2 offline HTTP routes that Torii no longer
-  mounts. `getOfflineV2Readiness()` is
-  the supported readiness probe for `/v1/offline/v2/readiness`.
+- Removed JS client helpers for legacy offline HTTP routes that Torii no longer
+  mounts. `getOfflineReadiness()` is
+  the supported readiness probe for `/v1/offline/readiness`.
 - Constrained the JS SDK to the first-release surface: Connect WebSocket URLs no longer accept token
   query parameters, Torii health snapshots now only parse JSON responses, the `X-Iroha-API-Token`
   alias is no longer emitted, V1 telemetry counter aliases are dropped, and account address

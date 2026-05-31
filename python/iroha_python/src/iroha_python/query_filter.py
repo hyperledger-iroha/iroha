@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from abc import ABC, abstractmethod
 from dataclasses import dataclass
 from typing import Any, Dict, Iterable, Mapping, Sequence
 
@@ -29,11 +30,12 @@ __all__ = [
 ]
 
 
-class FilterExpr:
+class FilterExpr(ABC):
     """Base class for filter expressions."""
 
+    @abstractmethod
     def to_dict(self) -> Dict[str, Any]:
-        raise NotImplementedError
+        """Return the JSON representation of this filter expression."""
 
 
 @dataclass

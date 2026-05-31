@@ -16226,15 +16226,28 @@ impl Actor {
     ) -> Option<crate::sumeragi::consensus::QcHeaderRef> {
         let height_usize = usize::try_from(height).ok()?;
         let block_height = NonZeroUsize::new(height_usize)?;
-        let block = self.kura.get_block(block_height)?;
-        let header = block.header();
-        let height = header.height().get();
+        if let Some(block) = self.kura.get_block(block_height) {
+            let header = block.header();
+            let height = header.height().get();
+            let epoch = self.epoch_for_height(height);
+            return Some(crate::sumeragi::consensus::QcHeaderRef {
+                height,
+                view: header.view_change_index(),
+                epoch,
+                subject_block_hash: block.hash(),
+                phase: crate::sumeragi::consensus::Phase::Commit,
+            });
+        }
+        let subject_block_hash = self
+            .kura
+            .block_hash_at_height(block_height)
+            .or_else(|| self.kura.get_durable_block_hash(block_height))?;
         let epoch = self.epoch_for_height(height);
         Some(crate::sumeragi::consensus::QcHeaderRef {
             height,
-            view: header.view_change_index(),
+            view: 0,
             epoch,
-            subject_block_hash: block.hash(),
+            subject_block_hash,
             phase: crate::sumeragi::consensus::Phase::Commit,
         })
     }
@@ -23246,23 +23259,66 @@ impl Actor {
         body: NativeAmxAttestationBodyV1,
         expected_phase: NativeAmxPhase,
     ) {
+        let Some(vote) = self.local_native_amx_vote(body, expected_phase, Some(&sender)) else {
+            return;
+        };
+        let message = match expected_phase {
+            NativeAmxPhase::Prepare => NativeAmxMessage::PrepareVote(vote),
+            NativeAmxPhase::Commit => NativeAmxMessage::CommitVote(vote),
+        };
+        self.schedule_background(BackgroundRequest::PostNativeAmx {
+            peer: sender,
+            message,
+        });
+    }
+
+    fn request_native_amx_attestation_votes(
+        &mut self,
+        validator_set: &[PeerId],
+        body: NativeAmxAttestationBodyV1,
+    ) {
+        let local_peer = self.common_config.peer.id().clone();
+        for peer in validator_set {
+            if peer == &local_peer {
+                if let Some(vote) = self.local_native_amx_vote(body, body.phase, None) {
+                    self.record_native_amx_vote(vote);
+                }
+                continue;
+            }
+            let message = match body.phase {
+                NativeAmxPhase::Prepare => NativeAmxMessage::PrepareRequest(body),
+                NativeAmxPhase::Commit => NativeAmxMessage::CommitRequest(body),
+            };
+            self.schedule_background(BackgroundRequest::PostNativeAmx {
+                peer: peer.clone(),
+                message,
+            });
+        }
+    }
+
+    fn local_native_amx_vote(
+        &self,
+        body: NativeAmxAttestationBodyV1,
+        expected_phase: NativeAmxPhase,
+        sender: Option<&PeerId>,
+    ) -> Option<NativeAmxVoteV1> {
         if body.phase != expected_phase {
             iroha_logger::warn!(
                 expected = ?expected_phase,
                 actual = ?body.phase,
-                %sender,
+                sender = ?sender,
                 "dropping native AMX request with wrong phase"
             );
-            return;
+            return None;
         }
 
         let local_peer = self.common_config.peer.id().clone();
         if !roster_member_allowed_bls(&local_peer) {
             iroha_logger::warn!(
-                %sender,
+                sender = ?sender,
                 "dropping native AMX request because local consensus key is not BLS-normal"
             );
-            return;
+            return None;
         }
         {
             let world = self.state.world_view();
@@ -23274,12 +23330,12 @@ impl Actor {
             .is_none()
             {
                 iroha_logger::warn!(
-                    %sender,
+                    sender = ?sender,
                     %local_peer,
                     height = body.planned_coordinator_block_height,
                     "dropping native AMX request because local consensus key has no live PoP"
                 );
-                return;
+                return None;
             }
         }
 
@@ -23289,19 +23345,11 @@ impl Actor {
         )
         .payload()
         .to_vec();
-        let vote = NativeAmxVoteV1 {
+        Some(NativeAmxVoteV1 {
             body,
             signer: local_peer,
             bls_signature,
-        };
-        let message = match expected_phase {
-            NativeAmxPhase::Prepare => NativeAmxMessage::PrepareVote(vote),
-            NativeAmxPhase::Commit => NativeAmxMessage::CommitVote(vote),
-        };
-        self.schedule_background(BackgroundRequest::PostNativeAmx {
-            peer: sender,
-            message,
-        });
+        })
     }
 
     fn record_native_amx_vote(&mut self, vote: NativeAmxVoteV1) {
@@ -40554,7 +40602,7 @@ fn commit_quorum_timeout_for_params(
 }
 
 /// Derive the commit quorum timeout from block/commit times.
-pub(super) fn commit_quorum_timeout_from_durations(
+pub(crate) fn commit_quorum_timeout_from_durations(
     block_time: Duration,
     commit_time: Duration,
     da_enabled: bool,

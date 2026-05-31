@@ -65,7 +65,8 @@ pub use router::{
     ConfigLaneRouter, LaneRouter, NativeAmxRoutingPlan, RouteLeg, RouteLegRole, RoutingDecision,
     RoutingPlan, RoutingResolveError, SingleLaneRouter, evaluate_policy,
     evaluate_policy_plan_with_catalog, evaluate_policy_plan_with_catalog_and_world,
-    evaluate_policy_with_catalog, evaluate_policy_with_catalog_and_world,
+    evaluate_policy_plan_with_catalog_and_world_at, evaluate_policy_with_catalog,
+    evaluate_policy_with_catalog_and_world, evaluate_policy_with_catalog_and_world_at,
     resolve_query_routing_decision, resolve_routing_decision,
 };
 use thiserror::Error;
@@ -309,6 +310,7 @@ pub struct Queue {
     /// Local enqueue timestamp in milliseconds for hashes still waiting in `tx_hashes`.
     queued_tx_enqueued_at_ms: DashMap<SignedTxHash, u64>,
     /// FIFO enqueue-age index used to read the oldest queued transaction without scanning.
+    /// Also serializes `tx_hashes` updates with this age index.
     queued_age_ring: parking_lot::Mutex<VecDeque<(SignedTxHash, u64)>>,
     /// Cached count of hashes still waiting in `tx_hashes`.
     queued_count: AtomicUsize,
@@ -3124,11 +3126,11 @@ impl Queue {
                         .unwrap_or_else(|| Self::encode_gossip_payload(tx_arc.as_accepted()))
                 });
 
-                let mut pushed = self.tx_hashes.push(hash).is_ok();
+                let mut pushed = self.push_queued_hash(hash, enqueued_at_ms);
                 if !pushed {
                     let compacted = self.compact_hash_queue_locked();
                     if compacted > 0 {
-                        pushed = self.tx_hashes.push(hash).is_ok();
+                        pushed = self.push_queued_hash(hash, enqueued_at_ms);
                     }
                 }
                 if !pushed {
@@ -3156,7 +3158,6 @@ impl Queue {
                     });
                     break;
                 }
-                self.record_queued_age(hash, enqueued_at_ms);
                 self.tx_encoded_len.insert(hash, encoded_len);
                 if let Some(payload) = gossip_payload {
                     self.tx_gossip_payloads.insert(hash, payload);
@@ -3591,15 +3592,12 @@ impl Queue {
             self.routing_plans.insert(hash, routing_plan.clone());
             routing_ledger::record_plan(hash, routing_plan.clone());
             self.tx_enqueued_at_ms.insert(hash, enqueue_at_ms);
-            self.record_queued_age(hash, enqueue_at_ms);
             let journal_payload = Self::encode_gossip_payload(tx_arc.as_accepted());
-            let mut pushed = self.tx_hashes.push(hash).is_ok();
-            let mut restore_queued_age_after_compaction = false;
+            let mut pushed = self.push_queued_hash(hash, enqueue_at_ms);
             if !pushed {
                 let compacted = self.compact_hash_queue_locked();
                 if compacted > 0 {
-                    restore_queued_age_after_compaction = true;
-                    pushed = self.tx_hashes.push(hash).is_ok();
+                    pushed = self.push_queued_hash(hash, enqueue_at_ms);
                 }
             }
             if !pushed {
@@ -3627,9 +3625,6 @@ impl Queue {
                     ),
                     err: Error::Full,
                 });
-            }
-            if restore_queued_age_after_compaction {
-                self.record_queued_age(hash, enqueue_at_ms);
             }
             self.tx_encoded_len.insert(hash, encoded_len);
             self.tx_gas_cost.insert(hash, proposal_gas_cost);
@@ -3706,7 +3701,13 @@ impl Queue {
         {
             let _guard = self.push_remove_lock.lock();
             let mut journal_removals = Vec::new();
-            while let Some(hash) = self.tx_hashes.pop() {
+            let queued_hashes = {
+                let mut age_ring = self.queued_age_ring.lock();
+                let hashes = core::iter::from_fn(|| self.tx_hashes.pop()).collect::<Vec<_>>();
+                self.clear_queued_age_index_locked(&mut age_ring);
+                hashes
+            };
+            for hash in queued_hashes {
                 if self.txs.remove(&hash).is_some() {
                     self.untrack_active_transaction();
                 }
@@ -3752,7 +3753,6 @@ impl Queue {
             self.tx_enqueued_at_ms.clear();
             self.routing_decisions.clear();
             self.routing_plans.clear();
-            self.clear_queued_age_index();
             self.tx_gossip_payloads.clear();
             #[cfg(feature = "telemetry")]
             {
@@ -3789,7 +3789,7 @@ impl Queue {
             .unwrap_or(u64::MAX)
             .saturating_add(1);
         loop {
-            let hash = if let Some(hash) = self.tx_hashes.pop() {
+            let hash = if let Some(hash) = self.pop_queued_hash() {
                 hash
             } else {
                 if self.resync_hash_queue_if_needed(state_view) {
@@ -3797,7 +3797,6 @@ impl Queue {
                 }
                 return None;
             };
-            self.remove_queued_age(&hash);
             if self.removed_hashes.remove(&hash).is_some() {
                 continue;
             }
@@ -3985,7 +3984,7 @@ impl Queue {
         let committed_transactions = state.transactions.view();
         let mut state_access = LazyAdmissionStateAccess::new(state);
         loop {
-            let hash = if let Some(hash) = self.tx_hashes.pop() {
+            let hash = if let Some(hash) = self.pop_queued_hash() {
                 hash
             } else {
                 if self.resync_hash_queue_if_needed_with_telemetry(backpressure_telemetry) {
@@ -3993,7 +3992,6 @@ impl Queue {
                 }
                 return None;
             };
-            self.remove_queued_age(&hash);
             if self.removed_hashes.remove(&hash).is_some() {
                 continue;
             }
@@ -4186,22 +4184,27 @@ impl Queue {
 
         let mut inserted = 0usize;
         let mut inserted_hashes = Vec::new();
-        for hash in hashes {
-            if self.tx_hashes.push(hash).is_err() {
-                warn!(
-                    queued = self.tx_hashes.len(),
-                    total,
-                    "queue hash resync reached capacity before re-enqueuing all transactions"
-                );
-                break;
+        {
+            let mut age_ring = self.queued_age_ring.lock();
+            for hash in hashes {
+                if self.tx_hashes.push(hash).is_err() {
+                    warn!(
+                        queued = self.tx_hashes.len(),
+                        total,
+                        "queue hash resync reached capacity before re-enqueuing all transactions"
+                    );
+                    break;
+                }
+                self.removed_hashes.remove(&hash);
+                inserted_hashes.push(hash);
+                inserted = inserted.saturating_add(1);
             }
-            self.removed_hashes.remove(&hash);
-            inserted_hashes.push(hash);
-            inserted = inserted.saturating_add(1);
+            if inserted > 0 {
+                self.rebuild_queued_age_index_locked(&mut age_ring, inserted_hashes);
+            }
         }
 
         if inserted > 0 {
-            self.rebuild_queued_age_index(inserted_hashes);
             self.removed_hashes.clear();
             self.publish_backpressure_state(self.active_len(), backpressure_telemetry);
             warn!(
@@ -4233,6 +4236,7 @@ impl Queue {
 
     /// Return the number of transactions still awaiting selection from the queue.
     pub fn queued_len(&self) -> usize {
+        let _age_ring = self.queued_age_ring.lock();
         if self.tx_hashes.is_empty() {
             return 0;
         }
@@ -4545,7 +4549,12 @@ impl Queue {
         )
     }
 
-    fn record_queued_age(&self, hash: SignedTxHash, enqueued_at_ms: u64) {
+    fn record_queued_age_locked(
+        &self,
+        age_ring: &mut VecDeque<(SignedTxHash, u64)>,
+        hash: SignedTxHash,
+        enqueued_at_ms: u64,
+    ) {
         if self
             .queued_tx_enqueued_at_ms
             .insert(hash, enqueued_at_ms)
@@ -4553,30 +4562,49 @@ impl Queue {
         {
             self.track_queued_hash();
         }
-        self.queued_age_ring
-            .lock()
-            .push_back((hash, enqueued_at_ms));
+        age_ring.push_back((hash, enqueued_at_ms));
     }
 
-    fn remove_queued_age(&self, hash: &SignedTxHash) {
+    fn push_queued_hash(&self, hash: SignedTxHash, enqueued_at_ms: u64) -> bool {
+        let mut age_ring = self.queued_age_ring.lock();
+        if self.tx_hashes.push(hash).is_err() {
+            return false;
+        }
+        self.record_queued_age_locked(&mut age_ring, hash, enqueued_at_ms);
+        true
+    }
+
+    fn pop_queued_hash(&self) -> Option<SignedTxHash> {
+        let _age_ring = self.queued_age_ring.lock();
+        let hash = self.tx_hashes.pop()?;
+        self.remove_queued_age_locked(&hash);
+        Some(hash)
+    }
+
+    fn remove_queued_age_locked(&self, hash: &SignedTxHash) {
         if self.queued_tx_enqueued_at_ms.remove(hash).is_some() {
             self.untrack_queued_hash();
         }
     }
 
-    fn clear_queued_age_index(&self) {
+    fn remove_queued_age(&self, hash: &SignedTxHash) {
+        let _age_ring = self.queued_age_ring.lock();
+        self.remove_queued_age_locked(hash);
+    }
+
+    fn clear_queued_age_index_locked(&self, age_ring: &mut VecDeque<(SignedTxHash, u64)>) {
         self.queued_tx_enqueued_at_ms.clear();
-        self.queued_age_ring.lock().clear();
+        age_ring.clear();
         self.queued_count.store(0, Ordering::Relaxed);
     }
 
     fn oldest_queued_tx_age_ms(&self) -> u64 {
+        let mut ring = self.queued_age_ring.lock();
         if self.tx_hashes.is_empty() {
-            self.queued_age_ring.lock().clear();
+            ring.clear();
             return 0;
         }
         let now_ms = Self::duration_to_millis(self.time_source.get_unix_time());
-        let mut ring = self.queued_age_ring.lock();
         while let Some(&(hash, enqueued_at_ms)) = ring.front() {
             if self
                 .queued_tx_enqueued_at_ms
@@ -4590,8 +4618,12 @@ impl Queue {
         0
     }
 
-    fn rebuild_queued_age_index(&self, queued_hashes: impl IntoIterator<Item = SignedTxHash>) {
-        self.clear_queued_age_index();
+    fn rebuild_queued_age_index_locked(
+        &self,
+        age_ring: &mut VecDeque<(SignedTxHash, u64)>,
+        queued_hashes: impl IntoIterator<Item = SignedTxHash>,
+    ) {
+        self.clear_queued_age_index_locked(age_ring);
         let mut age_entries = Vec::new();
         let mut inserted = 0usize;
         for hash in queued_hashes {
@@ -4612,8 +4644,14 @@ impl Queue {
             age_entries.push((hash, enqueued_at_ms));
         }
         age_entries.sort_by_key(|(_, enqueued_at_ms)| *enqueued_at_ms);
-        self.queued_age_ring.lock().extend(age_entries);
+        age_ring.extend(age_entries);
         self.queued_count.store(inserted, Ordering::Relaxed);
+    }
+
+    #[cfg(any(test, feature = "iroha-core-tests"))]
+    fn rebuild_queued_age_index(&self, queued_hashes: impl IntoIterator<Item = SignedTxHash>) {
+        let mut age_ring = self.queued_age_ring.lock();
+        self.rebuild_queued_age_index_locked(&mut age_ring, queued_hashes);
     }
 
     fn pressure_snapshot_with_tracked_count(
@@ -4792,6 +4830,7 @@ impl Queue {
         let mut retained = Vec::with_capacity(self.active_len());
         let mut dropped = 0usize;
         let mut inserted_hashes = Vec::new();
+        let mut age_ring = self.queued_age_ring.lock();
         while let Some(hash) = self.tx_hashes.pop() {
             self.removed_hashes.remove(&hash);
             if self.txs.contains_key(&hash) {
@@ -4811,7 +4850,7 @@ impl Queue {
             }
             inserted_hashes.push(hash);
         }
-        self.rebuild_queued_age_index(inserted_hashes);
+        self.rebuild_queued_age_index_locked(&mut age_ring, inserted_hashes);
         self.removed_hashes.clear();
         dropped
     }

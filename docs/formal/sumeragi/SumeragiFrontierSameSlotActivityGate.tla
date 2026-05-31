@@ -184,11 +184,14 @@ Init ==
   checked = 0
 
 Next ==
-  UNCHANGED vars
+  \/ /\ checked < 36
+     /\ checked' = checked + 1
+  \/ /\ checked = 36
+     /\ UNCHANGED vars
 
 TypeInvariant ==
   /\ Bug \in Bugs
-  /\ checked \in 0..1
+  /\ checked \in 0..36
 
 PayloadProgressSafety ==
   /\ PayloadCachedExact
@@ -247,5 +250,71 @@ SafetyFast ==
   /\ MissingBlockRequestSafety
   /\ MissingCommitQcRepairSafety
   /\ MissingPayloadRecoverySafety
+
+PayloadProgressAnchors ==
+  /\ PayloadProgressSafety
+  /\ PayloadCachedExact
+  /\ PayloadPendingExact
+  /\ PayloadCommitInflightExact
+  /\ PayloadFrontierSlotExact
+  /\ ~PayloadOldView
+  /\ ~PayloadWrongHeight
+  /\ ~PayloadFinalizedSlot
+  /\ ~PayloadStaleSlot
+  /\ ~PayloadBodyPresent
+
+IngressAnchors ==
+  /\ IngressSafety
+  /\ IngressExact
+  /\ ~IngressNoBacklog
+  /\ ~IngressNoPayloadProgress
+
+VoteBackedAnchors ==
+  /\ VoteBackedSafety
+  /\ VoteBackedSlotExact
+  /\ VoteBackedWorkExact
+  /\ ~VoteBackedOldView
+  /\ ~VoteBackedPassiveSlot
+  /\ ~VoteBackedStaleSlot
+  /\ ~VoteBackedNoEvidence
+  /\ ~VoteBackedWrongPhaseWork
+  /\ ~VoteBackedWrongEpochWork
+  /\ ~VoteBackedBookkeepingOnly
+
+MissingBlockRequestAnchors ==
+  /\ MissingBlockRequestSafety
+  /\ MissingBlockExact
+  /\ ~MissingBlockOldView
+  /\ ~MissingBlockWrongPhase
+  /\ ~MissingBlockStale
+  /\ ~MissingBlockNoActionableDependency
+
+MissingCommitQcRepairAnchors ==
+  /\ MissingCommitQcRepairSafety
+  /\ MissingCommitExact
+  /\ ~MissingCommitOldView
+  /\ ~MissingCommitPreparePhase
+  /\ ~MissingCommitStale
+  /\ ~MissingCommitNoActionableDependency
+
+MissingPayloadRecoveryAnchors ==
+  /\ MissingPayloadRecoverySafety
+  /\ MissingPayloadSlotExact
+  /\ MissingPayloadDeferredExact
+  /\ ~MissingPayloadOldView
+  /\ ~MissingPayloadBodyPresent
+  /\ ~MissingPayloadWrongPhase
+  /\ ~MissingPayloadStale
+  /\ ~MissingPayloadNoActionableDependency
+
+FrontierSameSlotActivitySafetyAnchors ==
+  /\ PayloadProgressAnchors
+  /\ IngressAnchors
+  /\ VoteBackedAnchors
+  /\ MissingBlockRequestAnchors
+  /\ MissingCommitQcRepairAnchors
+  /\ MissingPayloadRecoveryAnchors
+
+Safety == FrontierSameSlotActivitySafetyAnchors
 
 ====

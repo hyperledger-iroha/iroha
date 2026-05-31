@@ -763,7 +763,7 @@ async fn torii_json_get(
         }
     }
 
-    let request = reqwest::Client::new()
+    let request = integration_tests::http::client()
         .get(url)
         .header(reqwest::header::ACCEPT, "application/json");
     let response = add_client_headers(client, request).send().await?;

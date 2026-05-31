@@ -1309,12 +1309,12 @@ final class Halo2PastaTests: XCTestCase {
         XCTAssertEqual((VestaProjective.identity + VestaAffine.generator.projective).toAffine(), .generator)
     }
 
-    func testOfflineNoteV2InstanceValuesMatchIrohaFixture() throws {
+    func testOfflineNoteInstanceValuesMatchIrohaFixture() throws {
         let fixture = try Self.loadFixture()
         let audit = try Self.audit(fixture)
         let redeem = try Self.redeem(fixture)
 
-        let auditValues = try OfflineNoteV2InstanceBuilder.auditInstanceValues(for: audit)
+        let auditValues = try OfflineNoteInstanceBuilder.auditInstanceValues(for: audit)
         let expectedAuditPublicValues = try Self.expectedAuditPublicValues(fixture: fixture, audit: audit)
         XCTAssertEqual(auditValues.publicValues, expectedAuditPublicValues)
         XCTAssertEqual(
@@ -1323,11 +1323,11 @@ final class Halo2PastaTests: XCTestCase {
         )
         XCTAssertEqual(auditValues.inputAmounts, [52, 0, 0, 0])
         XCTAssertEqual(auditValues.outputAmounts, [5, 47])
-        XCTAssertEqual(auditValues.publicInstanceColumns()[0], [OfflineNoteV2InstanceValues.instanceScalarBytes(
+        XCTAssertEqual(auditValues.publicInstanceColumns()[0], [OfflineNoteInstanceValues.instanceScalarBytes(
             expectedAuditPublicValues[0]
         )])
 
-        let redeemValues = try OfflineNoteV2InstanceBuilder.redeemInstanceValues(for: redeem)
+        let redeemValues = try OfflineNoteInstanceBuilder.redeemInstanceValues(for: redeem)
         XCTAssertEqual(
             redeemValues.publicValues,
             try Self.expectedRedeemPublicValues(fixture: fixture, redemption: redeem)
@@ -1340,85 +1340,97 @@ final class Halo2PastaTests: XCTestCase {
         XCTAssertEqual(redeemValues.outputAmounts, [5, 0])
     }
 
-    func testOfflineNoteV2NativeHalo2ProofEnvelopeFitsQrBudget() throws {
+    func testOfflineNoteNativeHalo2ProofEnvelopeFitsQrBudget() throws {
         let fixture = try Self.loadFixture()
-        try Halo2OfflineNoteV2Prover.prewarm()
+        try Halo2OfflineNoteProver.prewarm()
         let audit = try Self.audit(fixture)
-        let auditValues = try OfflineNoteV2InstanceBuilder.auditInstanceValues(for: audit)
-        let zk1Payload = try Halo2OfflineNoteV2Prover.proveZK1Payload(instanceValues: auditValues)
-        XCTAssertTrue(try Halo2OfflineNoteV2Prover.verifyZK1Payload(
+        let auditValues = try OfflineNoteInstanceBuilder.auditInstanceValues(for: audit)
+        let zk1Payload = try Halo2OfflineNoteProver.proveZK1Payload(instanceValues: auditValues)
+        XCTAssertTrue(try Halo2OfflineNoteProver.verifyZK1Payload(
             zk1Payload,
             publicValues: auditValues.publicValues
         ))
         var mismatchedPublicValues = auditValues.publicValues
         mismatchedPublicValues[15] ^= 1
-        XCTAssertFalse(try Halo2OfflineNoteV2Prover.verifyZK1Payload(
+        XCTAssertFalse(try Halo2OfflineNoteProver.verifyZK1Payload(
             zk1Payload,
             publicValues: mismatchedPublicValues
         ))
 
         var tamperedPayload = zk1Payload
         tamperedPayload[12] ^= 0x01
-        XCTAssertFalse((try? Halo2OfflineNoteV2Prover.verifyZK1Payload(
+        XCTAssertFalse((try? Halo2OfflineNoteProver.verifyZK1Payload(
             tamperedPayload,
             publicValues: auditValues.publicValues
         )) == true)
 
-        let proof = try Halo2OfflineNoteV2Prover.proveAudit(audit)
-        if let proofOut = ProcessInfo.processInfo.environment["IROHA_SWIFT_OFFLINE_V2_PROOF_OUT"] {
+        let proof = try Halo2OfflineNoteProver.proveAudit(audit)
+        if let proofOut = ProcessInfo.processInfo.environment["IROHA_SWIFT_OFFLINE_PROOF_OUT"] {
             try proof.proof.bytes.write(to: URL(fileURLWithPath: proofOut))
         }
-        if let externalPayload = ProcessInfo.processInfo.environment["IROHA_SWIFT_OFFLINE_V2_VERIFY_PAYLOAD_IN"] {
+        if let externalPayload = ProcessInfo.processInfo.environment["IROHA_SWIFT_OFFLINE_VERIFY_PAYLOAD_IN"] {
             let payload = try Data(contentsOf: URL(fileURLWithPath: externalPayload))
-            XCTAssertTrue(try Halo2OfflineNoteV2Prover.verifyZK1Payload(payload, publicValues: auditValues.publicValues))
+            XCTAssertTrue(try Halo2OfflineNoteProver.verifyZK1Payload(payload, publicValues: auditValues.publicValues))
         }
-        XCTAssertLessThan(proof.proof.bytes.count, Halo2OfflineNoteV2Prover.maxEnvelopeBytes)
+        XCTAssertLessThan(proof.proof.bytes.count, Halo2OfflineNoteProver.maxEnvelopeBytes)
         XCTAssertEqual(
-            try Halo2OfflineNoteV2Prover.publicValues(fromOpenVerifyEnvelope: proof.proof.bytes),
+            try Halo2OfflineNoteProver.publicValues(fromOpenVerifyEnvelope: proof.proof.bytes),
             auditValues.publicValues
         )
-        XCTAssertTrue(try Halo2OfflineNoteV2Prover.verifyOpenVerifyEnvelope(
+        XCTAssertEqual(
+            try Halo2OfflineNoteProver.proveOpenVerifyEnvelope(instanceValues: auditValues).count > 0,
+            true
+        )
+        XCTAssertTrue(try Halo2OfflineNoteProver.verifyOpenVerifyEnvelope(
             proof.proof.bytes,
             publicValues: auditValues.publicValues
+        ))
+        XCTAssertTrue(try Halo2OfflineNoteProver.verifyOpenVerifyEnvelope(
+            proof.proof.bytes,
+            publicInputsHashHex: fixture.chainVectors.audit.publicInputsHash
+        ))
+        XCTAssertFalse(try Halo2OfflineNoteProver.verifyOpenVerifyEnvelope(
+            proof.proof.bytes,
+            publicInputsHashHex: String(repeating: "0", count: 64)
         ))
         XCTAssertEqual(proof.publicInputsHash, Data(hexString: fixture.chainVectors.audit.publicInputsHash))
         try audit.replacingRecursiveProof(proof).validateProofBinding()
     }
 
-    func testOfflineNoteV2NativeHalo2ProofPerformanceWhenRequested() throws {
+    func testOfflineNoteNativeHalo2ProofPerformanceWhenRequested() throws {
         let env = ProcessInfo.processInfo.environment
-        guard env["IROHA_SWIFT_OFFLINE_V2_BENCH"] == "1" else {
-            throw XCTSkip("set IROHA_SWIFT_OFFLINE_V2_BENCH=1 to run the Offline V2 proof benchmark")
+        guard env["IROHA_SWIFT_OFFLINE_BENCH"] == "1" else {
+            throw XCTSkip("set IROHA_SWIFT_OFFLINE_BENCH=1 to run the Offline proof benchmark")
         }
-        let iterations = env["IROHA_SWIFT_OFFLINE_V2_BENCH_ITERATIONS"].flatMap(Int.init) ?? 20
+        let iterations = env["IROHA_SWIFT_OFFLINE_BENCH_ITERATIONS"].flatMap(Int.init) ?? 20
         XCTAssertGreaterThan(iterations, 0)
         let medianBudgetSeconds = benchmarkBudgetSeconds(
             env: env,
-            key: "IROHA_SWIFT_OFFLINE_V2_BENCH_MEDIAN_BUDGET_MS",
+            key: "IROHA_SWIFT_OFFLINE_BENCH_MEDIAN_BUDGET_MS",
             defaultMilliseconds: 850
         )
         let p95BudgetSeconds = benchmarkBudgetSeconds(
             env: env,
-            key: "IROHA_SWIFT_OFFLINE_V2_BENCH_P95_BUDGET_MS",
+            key: "IROHA_SWIFT_OFFLINE_BENCH_P95_BUDGET_MS",
             defaultMilliseconds: 1_200
         )
 
         let fixture = try Self.loadFixture()
         let audit = try Self.audit(fixture)
         let redeem = try Self.redeem(fixture)
-        try Halo2OfflineNoteV2Prover.prewarm()
-        _ = try Halo2OfflineNoteV2Prover.proveAudit(audit)
-        _ = try Halo2OfflineNoteV2Prover.proveRedeem(redeem)
+        try Halo2OfflineNoteProver.prewarm()
+        _ = try Halo2OfflineNoteProver.proveAudit(audit)
+        _ = try Halo2OfflineNoteProver.proveRedeem(redeem)
 
         let auditSeconds = try benchmarkSeconds(iterations: iterations) {
-            _ = try Halo2OfflineNoteV2Prover.proveAudit(audit)
+            _ = try Halo2OfflineNoteProver.proveAudit(audit)
         }
         let redeemSeconds = try benchmarkSeconds(iterations: iterations) {
-            _ = try Halo2OfflineNoteV2Prover.proveRedeem(redeem)
+            _ = try Halo2OfflineNoteProver.proveRedeem(redeem)
         }
         let auditMetrics = benchmarkMetrics(auditSeconds)
         let redeemMetrics = benchmarkMetrics(redeemSeconds)
-        print("offline_note_v2_swift_bench audit=\(auditMetrics.summary) redeem=\(redeemMetrics.summary)")
+        print("offline_note_swift_bench audit=\(auditMetrics.summary) redeem=\(redeemMetrics.summary)")
         XCTAssertLessThanOrEqual(
             auditMetrics.median,
             medianBudgetSeconds,
@@ -1441,83 +1453,83 @@ final class Halo2PastaTests: XCTestCase {
         )
     }
 
-    func testOfflineNoteV2ProofPayloadRejectsMalformedInputs() throws {
-        let publicValues = [UInt64](repeating: 0, count: OfflineNoteV2InstanceValues.publicValueCount)
-        XCTAssertThrowsError(try Halo2OfflineNoteV2Prover.verifyZK1Payload(
+    func testOfflineNoteProofPayloadRejectsMalformedInputs() throws {
+        let publicValues = [UInt64](repeating: 0, count: OfflineNoteInstanceValues.publicValueCount)
+        XCTAssertThrowsError(try Halo2OfflineNoteProver.verifyZK1Payload(
             Data([0x5A, 0x4B, 0x31]),
             publicValues: publicValues
         )) { error in
-            XCTAssertEqual(error as? Halo2OfflineNoteV2ProverError, .invalidZK1Payload)
+            XCTAssertEqual(error as? Halo2OfflineNoteProverError, .invalidZK1Payload)
         }
 
-        XCTAssertThrowsError(try Halo2OfflineNoteV2Prover.verifyZK1Payload(
+        XCTAssertThrowsError(try Halo2OfflineNoteProver.verifyZK1Payload(
             Data([0x5A, 0x4B, 0x31, 0x00]),
             publicValues: Array(publicValues.dropLast())
         )) { error in
-            XCTAssertEqual(error as? Halo2OfflineNoteV2ProverError, .invalidInstanceValues)
+            XCTAssertEqual(error as? Halo2OfflineNoteProverError, .invalidInstanceValues)
         }
     }
 
-    func testOfflineNoteV2ProofPayloadRejectsMalformedTLVs() throws {
-        let publicValues = [UInt64](repeating: 0, count: OfflineNoteV2InstanceValues.publicValueCount)
-        XCTAssertThrowsError(try Halo2OfflineNoteV2Prover.verifyZK1Payload(
+    func testOfflineNoteProofPayloadRejectsMalformedTLVs() throws {
+        let publicValues = [UInt64](repeating: 0, count: OfflineNoteInstanceValues.publicValueCount)
+        XCTAssertThrowsError(try Halo2OfflineNoteProver.verifyZK1Payload(
             Self.zk1Payload(proof: nil, publicValues: publicValues),
             publicValues: publicValues
         )) { error in
-            XCTAssertEqual(error as? Halo2OfflineNoteV2ProverError, .invalidZK1Payload)
+            XCTAssertEqual(error as? Halo2OfflineNoteProverError, .invalidZK1Payload)
         }
-        XCTAssertThrowsError(try Halo2OfflineNoteV2Prover.verifyZK1Payload(
+        XCTAssertThrowsError(try Halo2OfflineNoteProver.verifyZK1Payload(
             Self.zk1Payload(proof: Data(), publicValues: publicValues),
             publicValues: publicValues
         )) { error in
-            XCTAssertEqual(error as? Halo2OfflineNoteV2ProverError, .invalidZK1Payload)
+            XCTAssertEqual(error as? Halo2OfflineNoteProverError, .invalidZK1Payload)
         }
-        XCTAssertThrowsError(try Halo2OfflineNoteV2Prover.verifyZK1Payload(
+        XCTAssertThrowsError(try Halo2OfflineNoteProver.verifyZK1Payload(
             Self.zk1Payload(proof: Data([1]), publicValues: publicValues, rows: 2),
             publicValues: publicValues
         )) { error in
-            XCTAssertEqual(error as? Halo2OfflineNoteV2ProverError, .invalidZK1Payload)
+            XCTAssertEqual(error as? Halo2OfflineNoteProverError, .invalidZK1Payload)
         }
-        XCTAssertThrowsError(try Halo2OfflineNoteV2Prover.verifyZK1Payload(
+        XCTAssertThrowsError(try Halo2OfflineNoteProver.verifyZK1Payload(
             Self.zk1Payload(proof: Data([1]), publicValues: publicValues) { instances in
                 instances[16] = 1
             },
             publicValues: publicValues
         )) { error in
-            XCTAssertEqual(error as? Halo2OfflineNoteV2ProverError, .invalidZK1Payload)
+            XCTAssertEqual(error as? Halo2OfflineNoteProverError, .invalidZK1Payload)
         }
     }
 
-    func testOfflineNoteV2InstanceValuesRejectInvalidWitnessShapes() throws {
-        XCTAssertThrowsError(try OfflineNoteV2InstanceValues(
-            publicValues: [UInt64](repeating: 0, count: OfflineNoteV2InstanceValues.publicValueCount - 1),
-            inputAmounts: [UInt64](repeating: 0, count: OfflineNoteV2InstanceValues.maxInputAmounts),
-            outputAmounts: [UInt64](repeating: 0, count: OfflineNoteV2InstanceValues.maxOutputAmounts)
+    func testOfflineNoteInstanceValuesRejectInvalidWitnessShapes() throws {
+        XCTAssertThrowsError(try OfflineNoteInstanceValues(
+            publicValues: [UInt64](repeating: 0, count: OfflineNoteInstanceValues.publicValueCount - 1),
+            inputAmounts: [UInt64](repeating: 0, count: OfflineNoteInstanceValues.maxInputAmounts),
+            outputAmounts: [UInt64](repeating: 0, count: OfflineNoteInstanceValues.maxOutputAmounts)
         )) { error in
-            XCTAssertEqual(error as? OfflineNoteV2InstanceError, .invalidPublicValueCount(15))
+            XCTAssertEqual(error as? OfflineNoteInstanceError, .invalidPublicValueCount(15))
         }
-        XCTAssertThrowsError(try OfflineNoteV2InstanceValues(
-            publicValues: [UInt64](repeating: 0, count: OfflineNoteV2InstanceValues.publicValueCount),
-            inputAmounts: [UInt64](repeating: 0, count: OfflineNoteV2InstanceValues.maxInputAmounts - 1),
-            outputAmounts: [UInt64](repeating: 0, count: OfflineNoteV2InstanceValues.maxOutputAmounts)
+        XCTAssertThrowsError(try OfflineNoteInstanceValues(
+            publicValues: [UInt64](repeating: 0, count: OfflineNoteInstanceValues.publicValueCount),
+            inputAmounts: [UInt64](repeating: 0, count: OfflineNoteInstanceValues.maxInputAmounts - 1),
+            outputAmounts: [UInt64](repeating: 0, count: OfflineNoteInstanceValues.maxOutputAmounts)
         )) { error in
-            XCTAssertEqual(error as? OfflineNoteV2InstanceError, .invalidInputAmountCount(3))
+            XCTAssertEqual(error as? OfflineNoteInstanceError, .invalidInputAmountCount(3))
         }
-        XCTAssertThrowsError(try OfflineNoteV2InstanceValues(
-            publicValues: [UInt64](repeating: 0, count: OfflineNoteV2InstanceValues.publicValueCount),
-            inputAmounts: [UInt64](repeating: 0, count: OfflineNoteV2InstanceValues.maxInputAmounts),
-            outputAmounts: [UInt64](repeating: 0, count: OfflineNoteV2InstanceValues.maxOutputAmounts - 1)
+        XCTAssertThrowsError(try OfflineNoteInstanceValues(
+            publicValues: [UInt64](repeating: 0, count: OfflineNoteInstanceValues.publicValueCount),
+            inputAmounts: [UInt64](repeating: 0, count: OfflineNoteInstanceValues.maxInputAmounts),
+            outputAmounts: [UInt64](repeating: 0, count: OfflineNoteInstanceValues.maxOutputAmounts - 1)
         )) { error in
-            XCTAssertEqual(error as? OfflineNoteV2InstanceError, .invalidOutputAmountCount(1))
+            XCTAssertEqual(error as? OfflineNoteInstanceError, .invalidOutputAmountCount(1))
         }
     }
 
-    func testOfflineNoteV2InstanceBuilderRejectsCountAndAmountViolations() throws {
+    func testOfflineNoteInstanceBuilderRejectsCountAndAmountViolations() throws {
         let fixture = try Self.loadFixture()
         let audit = try Self.audit(fixture)
-        let repeatedInputClaims = [OfflineNoteIssuedClaimV2](repeating: audit.inputClaims[0], count: 5)
+        let repeatedInputClaims = [OfflineNoteIssuedClaim](repeating: audit.inputClaims[0], count: 5)
         let repeatedInputNullifiers = [Data](repeating: audit.inputNullifiers[0], count: 5)
-        let tooManyInputs = try OfflineNoteAuditBundleV2(
+        let tooManyInputs = try OfflineNoteAuditBundle(
             tokenId: audit.tokenId,
             senderKeyCertificate: audit.senderKeyCertificate,
             inputNullifiers: repeatedInputNullifiers,
@@ -1526,31 +1538,82 @@ final class Halo2PastaTests: XCTestCase {
             outputClaims: audit.outputClaims,
             recursiveProof: audit.recursiveProof
         )
-        XCTAssertThrowsError(try OfflineNoteV2InstanceBuilder.auditInstanceValues(for: tooManyInputs)) { error in
-            XCTAssertEqual(error as? OfflineNoteV2InstanceError, .invalidCount(label: "audit input", count: 5, max: 4))
+        XCTAssertThrowsError(try OfflineNoteInstanceBuilder.auditInstanceValues(for: tooManyInputs)) { error in
+            XCTAssertEqual(error as? OfflineNoteInstanceError, .invalidCount(label: "audit input", count: 5, max: 4))
         }
 
-        let tooManyOutputs = try OfflineNoteAuditBundleV2(
+        let tooManyOutputs = try OfflineNoteAuditBundle(
             tokenId: audit.tokenId,
             senderKeyCertificate: audit.senderKeyCertificate,
             inputNullifiers: audit.inputNullifiers,
             inputClaims: audit.inputClaims,
             outputCommitments: [Data](repeating: audit.outputCommitments[0], count: 3),
-            outputClaims: [OfflineNoteAuditOutputClaimV2](repeating: audit.outputClaims[0], count: 3),
+            outputClaims: [OfflineNoteAuditOutputClaim](repeating: audit.outputClaims[0], count: 3),
             recursiveProof: audit.recursiveProof
         )
-        XCTAssertThrowsError(try OfflineNoteV2InstanceBuilder.auditInstanceValues(for: tooManyOutputs)) { error in
-            XCTAssertEqual(error as? OfflineNoteV2InstanceError, .invalidCount(label: "audit output", count: 3, max: 2))
+        XCTAssertThrowsError(try OfflineNoteInstanceBuilder.auditInstanceValues(for: tooManyOutputs)) { error in
+            XCTAssertEqual(error as? OfflineNoteInstanceError, .invalidCount(label: "audit output", count: 3, max: 2))
+        }
+
+        XCTAssertThrowsError(try OfflineNoteAuditBundle(
+            tokenId: audit.tokenId,
+            senderKeyCertificate: audit.senderKeyCertificate,
+            inputNullifiers: audit.inputNullifiers,
+            inputClaims: audit.inputClaims,
+            outputCommitments: audit.outputCommitments + [Self.flippedHash(audit.outputCommitments[0])],
+            outputClaims: audit.outputClaims,
+            recursiveProof: audit.recursiveProof
+        )) { error in
+            XCTAssertEqual(
+                error as? OfflineNoteError,
+                .auditOutputCountMismatch(
+                    commitments: audit.outputCommitments.count + 1,
+                    claims: audit.outputClaims.count
+                )
+            )
+        }
+
+        XCTAssertGreaterThan(audit.outputCommitments.count, 1)
+        XCTAssertThrowsError(try OfflineNoteAuditBundle(
+            tokenId: audit.tokenId,
+            senderKeyCertificate: audit.senderKeyCertificate,
+            inputNullifiers: audit.inputNullifiers,
+            inputClaims: audit.inputClaims,
+            outputCommitments: Array(audit.outputCommitments.reversed()),
+            outputClaims: audit.outputClaims,
+            recursiveProof: audit.recursiveProof
+        )) { error in
+            XCTAssertEqual(error as? OfflineNoteError, .auditOutputClaimOrderMismatch(index: 0))
+        }
+
+        let forgedClaim = try OfflineNoteIssuedClaim(
+            domain: audit.inputClaims[0].domain,
+            noteCommitment: audit.inputClaims[0].noteCommitment,
+            keyCertificatePayloadHash: Self.flippedHash(audit.inputClaims[0].keyCertificatePayloadHash),
+            assetId: audit.inputClaims[0].assetId,
+            amount: audit.inputClaims[0].amount
+        )
+        let forgedAudit = try OfflineNoteAuditBundle(
+            tokenId: audit.tokenId,
+            senderKeyCertificate: audit.senderKeyCertificate,
+            inputNullifiers: audit.inputNullifiers,
+            inputClaims: [forgedClaim],
+            outputCommitments: audit.outputCommitments,
+            outputClaims: audit.outputClaims,
+            recursiveProof: audit.recursiveProof
+        )
+        XCTAssertThrowsError(try OfflineNoteInstanceBuilder.auditInstanceValues(for: forgedAudit)) { error in
+            XCTAssertEqual(error as? OfflineNoteInstanceError, .auditInputCertificateMismatch)
         }
 
         var mismatchedOutputClaims = audit.outputClaims
-        mismatchedOutputClaims[0] = try OfflineNoteAuditOutputClaimV2(
+        mismatchedOutputClaims[0] = try OfflineNoteAuditOutputClaim(
             noteCommitment: mismatchedOutputClaims[0].noteCommitment,
             keyCertificate: mismatchedOutputClaims[0].keyCertificate,
             assetId: mismatchedOutputClaims[0].assetId,
             amount: "6"
         )
-        let mismatchedAmounts = try OfflineNoteAuditBundleV2(
+        let mismatchedAmounts = try OfflineNoteAuditBundle(
             tokenId: audit.tokenId,
             senderKeyCertificate: audit.senderKeyCertificate,
             inputNullifiers: audit.inputNullifiers,
@@ -1559,25 +1622,25 @@ final class Halo2PastaTests: XCTestCase {
             outputClaims: mismatchedOutputClaims,
             recursiveProof: audit.recursiveProof
         )
-        XCTAssertThrowsError(try OfflineNoteV2InstanceBuilder.auditInstanceValues(for: mismatchedAmounts)) { error in
-            XCTAssertEqual(error as? OfflineNoteV2InstanceError, .amountConservationMismatch(input: 52, output: 53))
+        XCTAssertThrowsError(try OfflineNoteInstanceBuilder.auditInstanceValues(for: mismatchedAmounts)) { error in
+            XCTAssertEqual(error as? OfflineNoteInstanceError, .amountConservationMismatch(input: 52, output: 53))
         }
 
-        let maxClaim = try OfflineNoteIssuedClaimV2(
+        let maxClaim = try OfflineNoteIssuedClaim(
             domain: audit.inputClaims[0].domain,
             noteCommitment: audit.inputClaims[0].noteCommitment,
             keyCertificatePayloadHash: audit.inputClaims[0].keyCertificatePayloadHash,
             assetId: audit.inputClaims[0].assetId,
             amount: String(UInt64.max)
         )
-        let oneClaim = try OfflineNoteIssuedClaimV2(
+        let oneClaim = try OfflineNoteIssuedClaim(
             domain: audit.inputClaims[0].domain,
             noteCommitment: audit.inputClaims[0].noteCommitment,
             keyCertificatePayloadHash: audit.inputClaims[0].keyCertificatePayloadHash,
             assetId: audit.inputClaims[0].assetId,
             amount: "1"
         )
-        let overflowingInputs = try OfflineNoteAuditBundleV2(
+        let overflowingInputs = try OfflineNoteAuditBundle(
             tokenId: audit.tokenId,
             senderKeyCertificate: audit.senderKeyCertificate,
             inputNullifiers: [audit.inputNullifiers[0], audit.inputNullifiers[0]],
@@ -1586,12 +1649,12 @@ final class Halo2PastaTests: XCTestCase {
             outputClaims: audit.outputClaims,
             recursiveProof: audit.recursiveProof
         )
-        XCTAssertThrowsError(try OfflineNoteV2InstanceBuilder.auditInstanceValues(for: overflowingInputs)) { error in
-            XCTAssertEqual(error as? OfflineNoteV2InstanceError, .amountSumOverflow("input"))
+        XCTAssertThrowsError(try OfflineNoteInstanceBuilder.auditInstanceValues(for: overflowingInputs)) { error in
+            XCTAssertEqual(error as? OfflineNoteInstanceError, .amountSumOverflow("input"))
         }
     }
 
-    func testOfflineNoteV2InstanceBuilderNormalizesDecimalWitnessAmounts() throws {
+    func testOfflineNoteInstanceBuilderNormalizesDecimalWitnessAmounts() throws {
         let audit = try Self.audit(Self.loadFixture())
         let decimalAudit = try Self.audit(
             audit,
@@ -1599,7 +1662,7 @@ final class Halo2PastaTests: XCTestCase {
             outputAmounts: ["0.70", "0.5"]
         )
 
-        let values = try OfflineNoteV2InstanceBuilder.auditInstanceValues(for: decimalAudit)
+        let values = try OfflineNoteInstanceBuilder.auditInstanceValues(for: decimalAudit)
 
         XCTAssertEqual(values.inputAmounts, [12, 0, 0, 0])
         XCTAssertEqual(values.outputAmounts, [7, 5])
@@ -1607,7 +1670,7 @@ final class Halo2PastaTests: XCTestCase {
         XCTAssertEqual(values.publicValues[8], 12)
     }
 
-    func testOfflineNoteV2InstanceBuilderRejectsNegativeOversizedAndOutputOverflowAmounts() throws {
+    func testOfflineNoteInstanceBuilderRejectsNegativeOversizedAndOutputOverflowAmounts() throws {
         let audit = try Self.audit(Self.loadFixture())
 
         let negative = try Self.audit(
@@ -1615,8 +1678,8 @@ final class Halo2PastaTests: XCTestCase {
             replacingInputAmounts: ["1"],
             outputAmounts: ["-1", "2"]
         )
-        XCTAssertThrowsError(try OfflineNoteV2InstanceBuilder.auditInstanceValues(for: negative)) { error in
-            XCTAssertEqual(error as? OfflineNoteV2InstanceError, .negativeAmount("-1"))
+        XCTAssertThrowsError(try OfflineNoteInstanceBuilder.auditInstanceValues(for: negative)) { error in
+            XCTAssertEqual(error as? OfflineNoteInstanceError, .negativeAmount("-1"))
         }
 
         let oversized = try Self.audit(
@@ -1624,9 +1687,9 @@ final class Halo2PastaTests: XCTestCase {
             replacingInputAmounts: ["18446744073709551616"],
             outputAmounts: ["0", "0"]
         )
-        XCTAssertThrowsError(try OfflineNoteV2InstanceBuilder.auditInstanceValues(for: oversized)) { error in
+        XCTAssertThrowsError(try OfflineNoteInstanceBuilder.auditInstanceValues(for: oversized)) { error in
             XCTAssertEqual(
-                error as? OfflineNoteV2InstanceError,
+                error as? OfflineNoteInstanceError,
                 .amountDoesNotFitUInt64("18446744073709551616")
             )
         }
@@ -1636,8 +1699,8 @@ final class Halo2PastaTests: XCTestCase {
             replacingInputAmounts: ["0"],
             outputAmounts: [String(UInt64.max), "1"]
         )
-        XCTAssertThrowsError(try OfflineNoteV2InstanceBuilder.auditInstanceValues(for: overflowingOutput)) { error in
-            XCTAssertEqual(error as? OfflineNoteV2InstanceError, .amountSumOverflow("output"))
+        XCTAssertThrowsError(try OfflineNoteInstanceBuilder.auditInstanceValues(for: overflowingOutput)) { error in
+            XCTAssertEqual(error as? OfflineNoteInstanceError, .amountSumOverflow("output"))
         }
     }
 
@@ -1800,7 +1863,7 @@ final class Halo2PastaTests: XCTestCase {
         appendUInt32LE(columns, to: &instances)
         appendUInt32LE(rows, to: &instances)
         for value in publicValues {
-            instances.append(OfflineNoteV2InstanceValues.instanceScalarBytes(value))
+            instances.append(OfflineNoteInstanceValues.instanceScalarBytes(value))
         }
         mutateInstances?(&instances)
         appendTLV(tag: "I10P", value: instances, to: &payload)
@@ -1825,47 +1888,47 @@ final class Halo2PastaTests: XCTestCase {
         }
     }
 
-    private static func redeem(_ fixture: Halo2OfflineInteropFixture) throws -> OfflineNoteRedeemV2 {
+    private static func redeem(_ fixture: Halo2OfflineInteropFixture) throws -> OfflineNoteRedeem {
         let vector = fixture.chainVectors.redeem
-        return try OfflineNoteRedeemV2(
+        return try OfflineNoteRedeem(
             sourceNoteCommitment: hex(vector.sourceNoteCommitment),
             inputNullifiers: try vector.inputNullifiers.map(hex),
             senderKeyCertificate: certificate(fixture.paymentToken.recipientKeyCertificate),
             recipient: fixture.paymentToken.recipientAccountId,
             assetId: vector.assetId,
             amount: vector.amount,
-            recursiveProof: OfflineNoteRecursiveProofV2(
+            recursiveProof: OfflineNoteRecursiveProof(
                 publicInputsHash: hex(vector.publicInputsHash),
-                proofBytes: Data("offline-v2-vector-redeem-proof".utf8)
+                proofBytes: Data("offline-vector-redeem-proof".utf8)
             )
         )
     }
 
-    private static func audit(_ fixture: Halo2OfflineInteropFixture) throws -> OfflineNoteAuditBundleV2 {
+    private static func audit(_ fixture: Halo2OfflineInteropFixture) throws -> OfflineNoteAuditBundle {
         let vector = fixture.chainVectors.audit
-        return try OfflineNoteAuditBundleV2(
+        return try OfflineNoteAuditBundle(
             tokenId: hex(vector.tokenId),
             senderKeyCertificate: certificate(fixture.paymentToken.senderKeyCertificate),
             inputNullifiers: try vector.inputNullifiers.map(hex),
             inputClaims: try fixture.paymentToken.inputClaims.map(issuedClaim),
             outputCommitments: try vector.outputCommitments.map(hex),
             outputClaims: try fixture.paymentToken.outputClaims.map(auditOutputClaim),
-            recursiveProof: OfflineNoteRecursiveProofV2(
+            recursiveProof: OfflineNoteRecursiveProof(
                 publicInputsHash: hex(vector.publicInputsHash),
-                proofBytes: Data("offline-v2-vector-audit-proof".utf8)
+                proofBytes: Data("offline-vector-audit-proof".utf8)
             )
         )
     }
 
     private static func audit(
-        _ audit: OfflineNoteAuditBundleV2,
+        _ audit: OfflineNoteAuditBundle,
         replacingInputAmounts inputAmounts: [String],
         outputAmounts: [String]
-    ) throws -> OfflineNoteAuditBundleV2 {
+    ) throws -> OfflineNoteAuditBundle {
         XCTAssertEqual(inputAmounts.count, audit.inputClaims.count)
         XCTAssertEqual(outputAmounts.count, audit.outputClaims.count)
         let inputClaims = try zip(audit.inputClaims, inputAmounts).map { claim, amount in
-            try OfflineNoteIssuedClaimV2(
+            try OfflineNoteIssuedClaim(
                 domain: claim.domain,
                 noteCommitment: claim.noteCommitment,
                 keyCertificatePayloadHash: claim.keyCertificatePayloadHash,
@@ -1874,14 +1937,14 @@ final class Halo2PastaTests: XCTestCase {
             )
         }
         let outputClaims = try zip(audit.outputClaims, outputAmounts).map { claim, amount in
-            try OfflineNoteAuditOutputClaimV2(
+            try OfflineNoteAuditOutputClaim(
                 noteCommitment: claim.noteCommitment,
                 keyCertificate: claim.keyCertificate,
                 assetId: claim.assetId,
                 amount: amount
             )
         }
-        return try OfflineNoteAuditBundleV2(
+        return try OfflineNoteAuditBundle(
             tokenId: audit.tokenId,
             senderKeyCertificate: audit.senderKeyCertificate,
             inputNullifiers: audit.inputNullifiers,
@@ -1892,8 +1955,8 @@ final class Halo2PastaTests: XCTestCase {
         )
     }
 
-    private static func certificate(_ json: Halo2OfflineCertificateJSON) throws -> OfflineNoteKeyCertificateV2 {
-        try OfflineNoteKeyCertificateV2(
+    private static func certificate(_ json: Halo2OfflineCertificateJSON) throws -> OfflineNoteKeyCertificate {
+        try OfflineNoteKeyCertificate(
             version: json.version,
             platform: json.platform,
             keyId: json.keyId,
@@ -1909,8 +1972,8 @@ final class Halo2PastaTests: XCTestCase {
         )
     }
 
-    private static func issuedClaim(_ json: Halo2OfflineInputClaimJSON) throws -> OfflineNoteIssuedClaimV2 {
-        try OfflineNoteIssuedClaimV2(
+    private static func issuedClaim(_ json: Halo2OfflineInputClaimJSON) throws -> OfflineNoteIssuedClaim {
+        try OfflineNoteIssuedClaim(
             domain: json.domain,
             noteCommitment: hex(json.noteCommitment),
             keyCertificatePayloadHash: hex(json.keyCertificatePayloadHash),
@@ -1919,8 +1982,8 @@ final class Halo2PastaTests: XCTestCase {
         )
     }
 
-    private static func auditOutputClaim(_ json: Halo2OfflineOutputClaimJSON) throws -> OfflineNoteAuditOutputClaimV2 {
-        try OfflineNoteAuditOutputClaimV2(
+    private static func auditOutputClaim(_ json: Halo2OfflineOutputClaimJSON) throws -> OfflineNoteAuditOutputClaim {
+        try OfflineNoteAuditOutputClaim(
             noteCommitment: hex(json.noteCommitment),
             keyCertificate: certificate(json.keyCertificate),
             assetId: "\(json.assetDefinitionId)#\(json.accountId)",
@@ -1930,13 +1993,13 @@ final class Halo2PastaTests: XCTestCase {
 
     private static func expectedAuditPublicValues(
         fixture: Halo2OfflineInteropFixture,
-        audit: OfflineNoteAuditBundleV2
+        audit: OfflineNoteAuditBundle
     ) throws -> [UInt64] {
         let vector = fixture.chainVectors.audit
         let publicHashLimbs = try hashLimbsLE(hex(vector.publicInputsHash))
         let inputClaimHashes = try audit.inputClaims.map { try $0.claimHash() }
         let outputClaimHashes = try audit.outputClaims.map {
-            try OfflineNoteIssuedClaimV2.fromAuditOutput($0).claimHash()
+            try OfflineNoteIssuedClaim.fromAuditOutput($0).claimHash()
         }
         return try publicHashLimbs + [
             2,
@@ -1956,7 +2019,7 @@ final class Halo2PastaTests: XCTestCase {
 
     private static func expectedRedeemPublicValues(
         fixture: Halo2OfflineInteropFixture,
-        redemption: OfflineNoteRedeemV2
+        redemption: OfflineNoteRedeem
     ) throws -> [UInt64] {
         let vector = fixture.chainVectors.redeem
         let publicHashLimbs = try hashLimbsLE(hex(vector.publicInputsHash))
@@ -1991,6 +2054,12 @@ final class Halo2PastaTests: XCTestCase {
         return out
     }
 
+    private static func flippedHash(_ hash: Data) -> Data {
+        var copy = hash
+        copy[copy.startIndex] ^= 0x01
+        return copy
+    }
+
     private static func hashLimb0Sum(_ hashes: [Data]) throws -> UInt64 {
         try hashes.reduce(UInt64(0)) { sum, hash in
             sum &+ (try hashLimb0(hash))
@@ -2021,7 +2090,7 @@ final class Halo2PastaTests: XCTestCase {
         let testFile = URL(fileURLWithPath: #filePath)
         let fixtureURL = testFile
             .deletingLastPathComponent()
-            .appendingPathComponent("../../../fixtures/offline/interop_contract_v2.json")
+            .appendingPathComponent("../../../fixtures/offline/interop_contract.json")
             .standardizedFileURL
         let data = try Data(contentsOf: fixtureURL)
         return try JSONDecoder().decode(Halo2OfflineInteropFixture.self, from: data)

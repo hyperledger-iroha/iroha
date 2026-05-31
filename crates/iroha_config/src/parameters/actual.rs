@@ -5796,7 +5796,7 @@ pub struct Torii {
     pub onboarding: Option<ToriiOnboarding>,
     /// Optional app-facing faucet configuration.
     pub faucet: Option<ToriiFaucet>,
-    /// Optional app-facing Offline Notes V2 issuer configuration.
+    /// Optional app-facing Offline Notes issuer configuration.
     pub offline_issuer: Option<ToriiOfflineIssuer>,
     /// Optional RAM-LFE runtime configuration.
     pub ram_lfe: Option<ToriiRamLfe>,
@@ -6429,12 +6429,12 @@ pub struct ToriiFaucet {
     pub pow_vrf_seed_enabled: bool,
 }
 
-/// Offline Notes V2 issuer configuration exposed to Torii.
+/// Offline Notes issuer configuration exposed to Torii.
 #[derive(Debug, Clone)]
 pub struct ToriiOfflineIssuer {
     /// Account derived from the issuer private key; must hold `CanManageOfflineEscrow`.
     pub authority: AccountId,
-    /// Key pair used to sign certificates and submit `IssueOfflineNoteV2`.
+    /// Key pair used to sign certificates and submit `IssueOfflineNote`.
     pub key_pair: KeyPair,
     /// Public key used to verify middleware attestation receipts.
     pub attestation_verifier_public_key: PublicKey,
@@ -8351,7 +8351,7 @@ impl Default for Repo {
     }
 }
 
-/// Offline V2 note retention policy parameters.
+/// Offline note retention policy parameters.
 #[derive(Debug, Clone)]
 pub struct Offline {
     /// Minimum number of blocks to keep note records in hot storage.
@@ -8362,10 +8362,17 @@ pub struct Offline {
     pub cold_retention_blocks: u64,
     /// Maximum number of archived note records pruned per retention pass.
     pub prune_batch_size: usize,
-    /// Whether Offline V2 notes must be escrow-backed.
+    /// Whether Offline notes must be escrow-backed.
     pub escrow_required: bool,
-    /// Escrow accounts keyed by asset definition for Offline V2 notes.
+    /// Escrow accounts keyed by asset definition for Offline notes.
     pub escrow_accounts: BTreeMap<AssetDefinitionId, AccountId>,
+    /// Whether Kagemusha shielded offline-offline payments are active.
+    ///
+    /// `KagemushaTransfer` enforces this gate before forwarding to the shared
+    /// shielded ZK asset accumulator.
+    pub kagemusha_enabled: bool,
+    /// Whether nodes force legacy bearer-audit lineage during migration.
+    pub kagemusha_force_legacy: bool,
 }
 
 impl Default for Offline {
@@ -8377,6 +8384,8 @@ impl Default for Offline {
             prune_batch_size: defaults::settlement::offline::PRUNE_BATCH_SIZE,
             escrow_required: false,
             escrow_accounts: BTreeMap::new(),
+            kagemusha_enabled: defaults::settlement::offline::KAGEMUSHA_ENABLED,
+            kagemusha_force_legacy: defaults::settlement::offline::KAGEMUSHA_FORCE_LEGACY,
         }
     }
 }
@@ -9522,6 +9531,19 @@ impl Default for FraudMonitoring {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn offline_defaults_keep_kagemusha_enabled_without_legacy_fallback() {
+        let offline = Offline::default();
+        assert!(
+            offline.kagemusha_enabled,
+            "Kagemusha must remain enabled by default"
+        );
+        assert!(
+            !offline.kagemusha_force_legacy,
+            "legacy Kagemusha fallback must remain opt-in"
+        );
+    }
 
     #[test]
     fn nexus_storage_budget_component_from_str_matches_persisted_labels() {

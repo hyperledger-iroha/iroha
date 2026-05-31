@@ -10576,10 +10576,10 @@ pub struct Repo {
     pub collateral_substitution_matrix: BTreeMap<AssetDefinitionId, Vec<AssetDefinitionId>>,
 }
 
-/// User-level configuration for Offline V2 note retention.
+/// User-level configuration for Offline note retention.
 #[derive(Debug, ReadConfig, Clone)]
 pub struct Offline {
-    /// Minimum number of blocks to keep Offline V2 note records in hot storage.
+    /// Minimum number of blocks to keep Offline note records in hot storage.
     #[config(default = "defaults::settlement::offline::HOT_RETENTION_BLOCKS")]
     pub hot_retention_blocks: u64,
     /// Maximum number of note records to archive per retention pass.
@@ -10591,12 +10591,18 @@ pub struct Offline {
     /// Maximum number of archived note records pruned per pass.
     #[config(default = "defaults::settlement::offline::PRUNE_BATCH_SIZE")]
     pub prune_batch_size: usize,
-    /// Require Offline V2 notes to be escrow-backed.
+    /// Require Offline notes to be escrow-backed.
     #[config(default = "false")]
     pub escrow_required: bool,
     /// Escrow account bindings keyed by asset definition id.
     #[config(default = "BTreeMap::new()")]
     pub escrow_accounts: BTreeMap<String, String>,
+    /// Enable Kagemusha shielded offline-offline payments.
+    #[config(default = "defaults::settlement::offline::KAGEMUSHA_ENABLED")]
+    pub kagemusha_enabled: bool,
+    /// Force legacy bearer-audit lineage instead of Kagemusha during migration fallback.
+    #[config(default = "defaults::settlement::offline::KAGEMUSHA_FORCE_LEGACY")]
+    pub kagemusha_force_legacy: bool,
 }
 
 impl Default for Offline {
@@ -10608,6 +10614,8 @@ impl Default for Offline {
             prune_batch_size: defaults::settlement::offline::PRUNE_BATCH_SIZE,
             escrow_required: false,
             escrow_accounts: BTreeMap::new(),
+            kagemusha_enabled: defaults::settlement::offline::KAGEMUSHA_ENABLED,
+            kagemusha_force_legacy: defaults::settlement::offline::KAGEMUSHA_FORCE_LEGACY,
         }
     }
 }
@@ -10833,6 +10841,8 @@ impl Offline {
             prune_batch_size,
             escrow_required,
             escrow_accounts,
+            kagemusha_enabled,
+            kagemusha_force_legacy,
         } = self;
         if hot_retention_blocks == 0 {
             emitter.emit(ParseError::InvalidSettlementConfig.into());
@@ -10886,6 +10896,8 @@ impl Offline {
             prune_batch_size,
             escrow_required,
             escrow_accounts: escrow_bindings,
+            kagemusha_enabled,
+            kagemusha_force_legacy,
         }
     }
 }
@@ -16203,7 +16215,7 @@ pub struct Torii {
     pub onboarding: Option<ToriiOnboarding>,
     /// Optional faucet configuration for app API endpoints.
     pub faucet: Option<ToriiFaucet>,
-    /// Optional Offline Notes V2 issuer configuration for app API endpoints.
+    /// Optional Offline Notes issuer configuration for app API endpoints.
     pub offline_issuer: Option<ToriiOfflineIssuer>,
     /// Optional RAM-LFE runtime configuration for app API endpoints.
     pub ram_lfe: Option<ToriiRamLfe>,
@@ -17793,13 +17805,13 @@ impl ToriiFaucet {
     }
 }
 
-/// Offline Notes V2 issuer configuration for app-facing wallet load helpers.
+/// Offline Notes issuer configuration for app-facing wallet load helpers.
 #[derive(Debug, ReadConfig, Clone, norito::JsonDeserialize)]
 pub struct ToriiOfflineIssuer {
     /// Master enable switch (defaults to enabled when the section is present).
     #[config(default = "true")]
     pub enabled: bool,
-    /// Private key for the privileged Offline V2 issuer account.
+    /// Private key for the privileged Offline issuer account.
     #[config(env = "TORII_OFFLINE_ISSUER_PRIVATE_KEY")]
     pub private_key: Option<ExposedPrivateKey>,
     /// Public key for the trusted middleware that verifies platform attestations.
@@ -18103,11 +18115,18 @@ pub struct ToriiRamLfeProgram {
     /// Hidden derivation secret encoded as hex.
     pub secret_hex: String,
     /// Norito-encoded hidden BFV RAM-FHE program encoded as hex.
-    pub hidden_program_hex: String,
+    pub hidden_program_hex: Option<String>,
     /// Private key used to sign receipts for this program.
     pub signer_private_key: ExposedPrivateKey,
     /// Optional receipt TTL expressed in milliseconds.
     pub receipt_ttl_ms: Option<DurationMs>,
+}
+
+fn default_ram_lfe_hidden_program_hex() -> String {
+    let bytes = iroha_crypto::default_bfv_programmed_hidden_program()
+        .to_bytes()
+        .expect("default RAM-LFE hidden program should encode");
+    hex::encode(bytes)
 }
 
 impl ToriiRamLfeProgram {
@@ -18126,7 +18145,10 @@ impl ToriiRamLfeProgram {
         if secret.is_empty() {
             panic!("torii.ram_lfe.programs[{index}].secret_hex must not be empty");
         }
-        let hidden_program_literal = self.hidden_program_hex.trim().trim_start_matches("0x");
+        let hidden_program_hex = self
+            .hidden_program_hex
+            .unwrap_or_else(default_ram_lfe_hidden_program_hex);
+        let hidden_program_literal = hidden_program_hex.trim().trim_start_matches("0x");
         let hidden_program_bytes = Vec::from_hex(hidden_program_literal).unwrap_or_else(|err| {
             panic!("invalid torii.ram_lfe.programs[{index}].hidden_program_hex: {err}")
         });

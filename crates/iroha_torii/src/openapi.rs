@@ -88,7 +88,7 @@ fn tags_section() -> Value {
     offline.insert(
         "description".into(),
         Value::String(
-            "Offline V2 readiness and issuer endpoints. Issuer POSTs carry canonical auth in the JSON body instead of X-Iroha-* headers."
+            "Offline readiness and issuer endpoints. Issuer POSTs carry canonical auth in the JSON body instead of X-Iroha-* headers."
                 .to_owned(),
         ),
     );
@@ -660,35 +660,75 @@ fn da_paths() -> Map {
 fn offline_paths() -> Map {
     let mut paths = Map::new();
     paths.insert(
-        "/v1/offline/v2/readiness".to_owned(),
+        "/v1/offline/readiness".to_owned(),
         Value::Object(json_get_operation(
             "Offline",
-            "Report Offline V2 feature readiness.",
-            "Returns V2 readiness signals for device-bound one-use notes and Fountain QR transport.",
+            "Report Offline feature readiness.",
+            "Returns readiness signals for device-bound one-use notes and Fountain QR transport.",
+            "#/components/schemas/JsonValue",
+            Vec::new(),
+        )),
+    );
+    paths.insert(
+        "/v1/offline/policy".to_owned(),
+        Value::Object(json_post_operation(
+            "Offline",
+            "Synchronize Offline policy.",
+            "POST the current Offline revocation policy snapshot used by Torii to build signed revocation bundles.",
+            "#/components/schemas/JsonValue",
+            "#/components/schemas/JsonValue",
+            Vec::new(),
+        )),
+    );
+    let mut revocation_operations = json_get_operation(
+        "Offline",
+        "List Offline revocations.",
+        "Returns the current Offline revocation policy snapshot held by Torii.",
+        "#/components/schemas/JsonValue",
+        Vec::new(),
+    );
+    revocation_operations.extend(json_post_operation(
+        "Offline",
+        "Register an Offline revocation.",
+        "POST account, verdict, or asset-limit revocation material into the Torii Offline policy snapshot.",
+        "#/components/schemas/JsonValue",
+        "#/components/schemas/JsonValue",
+        Vec::new(),
+    ));
+    paths.insert(
+        "/v1/offline/revocations".to_owned(),
+        Value::Object(revocation_operations),
+    );
+    paths.insert(
+        "/v1/offline/revocations/bundle".to_owned(),
+        Value::Object(json_get_operation(
+            "Offline",
+            "Fetch signed Offline revocation bundle.",
+            "Returns issuer-signed Offline revocation state for wallet fail-closed send policy.",
             "#/components/schemas/JsonValue",
             Vec::new(),
         )),
     );
     for (path, summary, description) in [
         (
-            "/v1/offline/v2/keys/refill",
-            "Refill Offline V2 issuer keys.",
+            "/v1/offline/keys/refill",
+            "Refill Offline issuer keys.",
             "POST issuer key-refill material. The JSON body must include account_id, timestamp_ms, nonce, and exactly one of signature_base64 or witness_base64. The canonical request signs the body after removing only the top-level proof fields. Legacy X-Iroha-* app-auth headers are rejected on this endpoint.",
         ),
         (
-            "/v1/offline/v2/notes/issue",
-            "Issue an Offline V2 note.",
-            "POST an Offline V2 note issuance request. The JSON body must include account_id, timestamp_ms, nonce, and exactly one of signature_base64 or witness_base64. The canonical request signs the body after removing only the top-level proof fields. Legacy X-Iroha-* app-auth headers are rejected on this endpoint.",
+            "/v1/offline/notes/issue",
+            "Issue an Offline note.",
+            "POST an Offline note issuance request. The JSON body must include account_id, timestamp_ms, nonce, and exactly one of signature_base64 or witness_base64. The canonical request signs the body after removing only the top-level proof fields. Legacy X-Iroha-* app-auth headers are rejected on this endpoint.",
         ),
         (
-            "/v1/offline/v2/notes/redeem",
-            "Redeem an Offline V2 note.",
-            "POST an Offline V2 note redemption request. The JSON body must include account_id, timestamp_ms, nonce, and exactly one of signature_base64 or witness_base64. The canonical request signs the body after removing only the top-level proof fields. Legacy X-Iroha-* app-auth headers are rejected on this endpoint.",
+            "/v1/offline/notes/redeem",
+            "Redeem an Offline note.",
+            "POST an Offline note redemption request. The JSON body must include account_id, timestamp_ms, nonce, and exactly one of signature_base64 or witness_base64. The canonical request signs the body after removing only the top-level proof fields. Legacy X-Iroha-* app-auth headers are rejected on this endpoint.",
         ),
         (
-            "/v1/offline/v2/audit",
-            "Submit an Offline V2 audit request.",
-            "POST an Offline V2 audit request. The JSON body must include account_id, timestamp_ms, nonce, and exactly one of signature_base64 or witness_base64. The canonical request signs the body after removing only the top-level proof fields. Legacy X-Iroha-* app-auth headers are rejected on this endpoint.",
+            "/v1/offline/audit",
+            "Submit an Offline audit request.",
+            "POST an Offline audit request. The JSON body must include account_id, timestamp_ms, nonce, and exactly one of signature_base64 or witness_base64. The canonical request signs the body after removing only the top-level proof fields. Legacy X-Iroha-* app-auth headers are rejected on this endpoint.",
         ),
     ] {
         paths.insert(
@@ -697,7 +737,7 @@ fn offline_paths() -> Map {
                 "Offline",
                 summary,
                 description,
-                "#/components/schemas/OfflineV2IssuerBodyAuthRequest",
+                "#/components/schemas/OfflineIssuerBodyAuthRequest",
                 "#/components/schemas/JsonValue",
                 Vec::new(),
             )),
@@ -1215,6 +1255,30 @@ fn system_paths() -> Map {
             Vec::new(),
         )),
     );
+    let mut pipeline_preflight = json_get_operation(
+        "System",
+        "Fetch pipeline preflight diagnostics.",
+        "Return transaction admission, queue, fee, and consensus liveness budgets used by clients before submitting transactions. Defaults to application/x-norito when Accept is omitted or */*; application/json returns the same typed payload encoded as JSON.",
+        "#/components/schemas/PipelinePreflightResponse",
+        Vec::new(),
+    );
+    if let Some(Value::Object(get_op)) = pipeline_preflight.get_mut("get") {
+        if let Some(Value::Object(responses)) = get_op.get_mut("responses") {
+            responses.insert(
+                "200".to_owned(),
+                Value::Object(single_dual_format_response(
+                    "#/components/schemas/PipelinePreflightResponse",
+                ))
+                .get("200")
+                .cloned()
+                .expect("200 response present"),
+            );
+        }
+    }
+    paths.insert(
+        "/v1/pipeline/preflight".to_owned(),
+        Value::Object(pipeline_preflight),
+    );
     paths.insert(
         "/v1/pipeline/recovery/{height}".to_owned(),
         Value::Object(json_get_operation(
@@ -1371,6 +1435,28 @@ fn transaction_paths() -> Map {
             "Transactions",
             "List transaction history entries.",
             "Return the app-facing transaction history view for the active query filters.",
+            "#/components/schemas/JsonValue",
+            Vec::new(),
+        )),
+    );
+    paths.insert(
+        "/v1/transactions/query".to_owned(),
+        Value::Object(json_post_operation(
+            "Transactions",
+            "Query committed transactions.",
+            "Query committed transactions with the structured QueryEnvelope filter, sort, projection, and pagination shape. This global endpoint is intended for privileged operators and developer tooling.",
+            "#/components/schemas/JsonValue",
+            "#/components/schemas/JsonValue",
+            Vec::new(),
+        )),
+    );
+    paths.insert(
+        "/v1/transactions/visible/query".to_owned(),
+        Value::Object(json_post_operation(
+            "Transactions",
+            "Query visible transactions.",
+            "Query committed transactions visible to the authenticated viewer. Torii derives viewer scope from Authorization headers before applying the QueryEnvelope filter, sort, projection, and pagination shape.",
+            "#/components/schemas/JsonValue",
             "#/components/schemas/JsonValue",
             Vec::new(),
         )),
@@ -7898,10 +7984,10 @@ fn openapi_schemas() -> Map {
         }),
     );
     schemas.insert(
-        "OfflineV2IssuerBodyAuthRequest".to_owned(),
+        "OfflineIssuerBodyAuthRequest".to_owned(),
         norito::json!({
             "type": "object",
-            "description": "Offline V2 issuer POST body. Top-level account_id, timestamp_ms, nonce, and exactly one proof field authenticate the request body. The canonical signed body removes only top-level signature_base64 and witness_base64, so nested fields with those names remain signed business data.",
+            "description": "Offline issuer POST body. Top-level account_id, timestamp_ms, nonce, and exactly one proof field authenticate the request body. The canonical signed body removes only top-level signature_base64 and witness_base64, so nested fields with those names remain signed business data.",
             "required": ["account_id", "timestamp_ms", "nonce"],
             "additionalProperties": true,
             "properties": {
@@ -7986,6 +8072,102 @@ fn openapi_schemas() -> Map {
                     "type": "string",
                     "enum": ["cache", "queue", "state"],
                     "description": "Source used by Torii to resolve the status."
+                }
+            }
+        }),
+    );
+    schemas.insert(
+        "PipelinePreflightResponse".to_owned(),
+        norito::json!({
+            "type": "object",
+            "required": ["schema_version", "chain_height", "sumeragi", "admission", "block", "pipeline", "queue", "fees"],
+            "additionalProperties": false,
+            "properties": {
+                "schema_version": { "type": "integer", "format": "uint64", "minimum": 1 },
+                "chain_height": { "type": "integer", "format": "uint64", "minimum": 0 },
+                "sumeragi": {
+                    "type": "object",
+                    "required": ["block_time_ms", "commit_time_ms", "stall_threshold_ms"],
+                    "additionalProperties": false,
+                    "properties": {
+                        "block_time_ms": { "type": "integer", "format": "uint64", "minimum": 0 },
+                        "commit_time_ms": { "type": "integer", "format": "uint64", "minimum": 0 },
+                        "stall_threshold_ms": {
+                            "type": "integer",
+                            "format": "uint64",
+                            "minimum": 1,
+                            "description": "Effective Sumeragi commit-quorum timeout used before clients classify queued transactions as stalled."
+                        }
+                    }
+                },
+                "admission": {
+                    "type": "object",
+                    "required": ["max_signatures", "max_instructions", "max_tx_bytes", "max_decompressed_bytes", "max_metadata_depth"],
+                    "additionalProperties": false,
+                    "properties": {
+                        "max_signatures": { "type": "integer", "format": "uint64", "minimum": 0 },
+                        "max_instructions": { "type": "integer", "format": "uint64", "minimum": 0 },
+                        "max_tx_bytes": { "type": "integer", "format": "uint64", "minimum": 0 },
+                        "max_decompressed_bytes": { "type": "integer", "format": "uint64", "minimum": 0 },
+                        "max_metadata_depth": { "type": "integer", "format": "uint64", "minimum": 0 }
+                    }
+                },
+                "block": {
+                    "type": "object",
+                    "required": ["max_transactions"],
+                    "additionalProperties": false,
+                    "properties": {
+                        "max_transactions": { "type": "integer", "format": "uint64", "minimum": 0 }
+                    }
+                },
+                "pipeline": {
+                    "type": "object",
+                    "required": ["signature_batch_max", "signature_batch_max_ed25519", "signature_batch_max_secp256k1", "signature_batch_max_pqc", "signature_batch_max_bls", "overlay_max_instructions", "ivm_max_decoded_instructions"],
+                    "additionalProperties": false,
+                    "properties": {
+                        "signature_batch_max": { "type": "integer", "format": "uint64", "minimum": 0 },
+                        "signature_batch_max_ed25519": { "type": "integer", "format": "uint64", "minimum": 0 },
+                        "signature_batch_max_secp256k1": { "type": "integer", "format": "uint64", "minimum": 0 },
+                        "signature_batch_max_pqc": { "type": "integer", "format": "uint64", "minimum": 0 },
+                        "signature_batch_max_bls": { "type": "integer", "format": "uint64", "minimum": 0 },
+                        "overlay_max_instructions": { "type": "integer", "format": "uint64", "minimum": 0 },
+                        "ivm_max_decoded_instructions": { "type": "integer", "format": "uint64", "minimum": 0 }
+                    }
+                },
+                "queue": {
+                    "type": "object",
+                    "required": ["size", "queued", "inflight"],
+                    "additionalProperties": false,
+                    "properties": {
+                        "size": { "type": "integer", "format": "uint64", "minimum": 0 },
+                        "queued": { "type": "integer", "format": "uint64", "minimum": 0 },
+                        "inflight": { "type": "integer", "format": "uint64", "minimum": 0 }
+                    }
+                },
+                "fees": {
+                    "type": "object",
+                    "required": ["fee_asset_id", "fee_sink_account_id", "base_fee", "per_byte_fee", "per_instruction_fee", "per_gas_unit_fee", "sponsorship_enabled", "sponsor_max_fee", "sponsor_verified_balance_safety_floor", "fee_receipts_activation_height", "external_settlement_enabled", "burn_from_unix_timestamp_ms", "settlement_mode", "successful_claim_fee_exempt_authorities"],
+                    "additionalProperties": false,
+                    "properties": {
+                        "fee_asset_id": { "type": "string" },
+                        "fee_sink_account_id": { "type": "string" },
+                        "base_fee": { "$ref": "#/components/schemas/JsonValue" },
+                        "per_byte_fee": { "$ref": "#/components/schemas/JsonValue" },
+                        "per_instruction_fee": { "$ref": "#/components/schemas/JsonValue" },
+                        "per_gas_unit_fee": { "$ref": "#/components/schemas/JsonValue" },
+                        "sponsorship_enabled": { "type": "boolean" },
+                        "sponsor_max_fee": { "$ref": "#/components/schemas/JsonValue" },
+                        "sponsor_verified_balance_safety_floor": { "$ref": "#/components/schemas/JsonValue" },
+                        "canonical_sponsor_account_id": { "type": ["string", "null"] },
+                        "fee_receipts_activation_height": { "type": "integer", "format": "uint64", "minimum": 0 },
+                        "external_settlement_enabled": { "type": "boolean" },
+                        "burn_from_unix_timestamp_ms": { "type": "integer", "format": "uint64", "minimum": 0 },
+                        "settlement_mode": { "type": "string" },
+                        "successful_claim_fee_exempt_authorities": {
+                            "type": "array",
+                            "items": { "type": "string" }
+                        }
+                    }
                 }
             }
         }),
@@ -11366,6 +11548,7 @@ mod tests {
         assert!(paths.contains_key("/v1/nexus/public_lanes/{lane_id}/stake"));
         assert!(paths.contains_key("/v1/repo/agreements"));
         assert!(paths.contains_key("/v1/repo/agreements/query"));
+        assert!(paths.contains_key("/v1/pipeline/preflight"));
         assert!(paths.contains_key(uri::TRANSACTION));
         assert!(paths.contains_key(uri::TRANSACTION_ENTRYPOINT));
         assert!(paths.contains_key(uri::TRANSACTIONS_BATCH));
@@ -11432,10 +11615,12 @@ mod tests {
         assert!(paths.contains_key("/v1/runtime/abi/active"));
         assert!(paths.contains_key("/v1/accounts"));
         assert!(paths.contains_key("/v1/transactions/history"));
+        assert!(paths.contains_key("/v1/transactions/query"));
+        assert!(paths.contains_key("/v1/transactions/visible/query"));
         assert!(paths.contains_key("/v1/contracts/activity"));
         assert!(paths.contains_key("/v1/contracts/events"));
         assert!(paths.contains_key("/v1/contracts/events/sse"));
-        assert!(paths.contains_key("/v1/offline/v2/readiness"));
+        assert!(paths.contains_key("/v1/offline/readiness"));
         assert!(paths.contains_key("/v1/ram-lfe/program-policies"));
         assert!(paths.contains_key("/v1/ram-lfe/programs/{program_id}/execute"));
         assert!(paths.contains_key("/v1/ram-lfe/receipts/verify"));
@@ -11448,12 +11633,15 @@ mod tests {
         assert!(paths.contains_key("/v1/soranet/privacy/event"));
         assert!(paths.contains_key("/v1/webhooks"));
         assert!(paths.contains_key("/v1/notify/devices"));
-        assert!(paths.contains_key("/v1/offline/v2/keys/refill"));
-        assert!(paths.contains_key("/v1/offline/v2/notes/issue"));
-        assert!(paths.contains_key("/v1/offline/v2/notes/redeem"));
-        assert!(paths.contains_key("/v1/offline/v2/audit"));
+        assert!(paths.contains_key("/v1/offline/keys/refill"));
+        assert!(paths.contains_key("/v1/offline/notes/issue"));
+        assert!(paths.contains_key("/v1/offline/notes/redeem"));
+        assert!(paths.contains_key("/v1/offline/audit"));
+        assert!(paths.contains_key("/v1/offline/policy"));
+        assert!(paths.contains_key("/v1/offline/revocations"));
+        assert!(paths.contains_key("/v1/offline/revocations/bundle"));
         let refill_post = paths
-            .get("/v1/offline/v2/keys/refill")
+            .get("/v1/offline/keys/refill")
             .and_then(Value::as_object)
             .and_then(|path| path.get("post"))
             .and_then(Value::as_object)
@@ -11478,21 +11666,21 @@ mod tests {
             .expect("offline refill request schema");
         assert_eq!(
             refill_request_schema,
-            "#/components/schemas/OfflineV2IssuerBodyAuthRequest"
+            "#/components/schemas/OfflineIssuerBodyAuthRequest"
         );
     }
 
     #[test]
-    fn generated_spec_documents_offline_v2_body_auth_schema() {
+    fn generated_spec_documents_offline_body_auth_schema() {
         let doc = generate_spec();
         let schema = doc
             .get("components")
             .and_then(Value::as_object)
             .and_then(|components| components.get("schemas"))
             .and_then(Value::as_object)
-            .and_then(|schemas| schemas.get("OfflineV2IssuerBodyAuthRequest"))
+            .and_then(|schemas| schemas.get("OfflineIssuerBodyAuthRequest"))
             .and_then(Value::as_object)
-            .expect("Offline V2 body auth schema");
+            .expect("Offline body auth schema");
         let required = schema
             .get("required")
             .and_then(Value::as_array)
@@ -12092,6 +12280,55 @@ mod tests {
     }
 
     #[test]
+    fn pipeline_preflight_documents_typed_response() {
+        let doc = generate_spec();
+        let paths = doc
+            .get("paths")
+            .and_then(Value::as_object)
+            .expect("paths section");
+        let preflight = paths
+            .get("/v1/pipeline/preflight")
+            .and_then(Value::as_object)
+            .expect("pipeline preflight path");
+        let get = preflight
+            .get("get")
+            .and_then(Value::as_object)
+            .expect("get op");
+        let responses = get
+            .get("responses")
+            .and_then(Value::as_object)
+            .expect("responses");
+        let response_200 = responses
+            .get("200")
+            .and_then(Value::as_object)
+            .expect("200 response");
+        let content = response_200
+            .get("content")
+            .and_then(Value::as_object)
+            .expect("pipeline preflight content");
+        assert!(content.contains_key("application/json"));
+        assert!(content.contains_key("application/x-norito"));
+        let schema_ref = content
+            .get("application/json")
+            .and_then(Value::as_object)
+            .and_then(|media| media.get("schema"))
+            .and_then(Value::as_object)
+            .and_then(|schema| schema.get("$ref"))
+            .and_then(Value::as_str);
+        assert_eq!(
+            schema_ref,
+            Some("#/components/schemas/PipelinePreflightResponse")
+        );
+        let schemas = doc
+            .get("components")
+            .and_then(Value::as_object)
+            .and_then(|components| components.get("schemas"))
+            .and_then(Value::as_object)
+            .expect("schemas section");
+        assert!(schemas.contains_key("PipelinePreflightResponse"));
+    }
+
+    #[test]
     fn account_get_documents_canonical_dual_format_read() {
         let doc = generate_spec();
         let paths = doc
@@ -12472,7 +12709,7 @@ mod tests {
             PathCase {
                 label: "offline",
                 builder: offline_paths,
-                expected: "/v1/offline/v2/readiness",
+                expected: "/v1/offline/readiness",
             },
             PathCase {
                 label: "system",

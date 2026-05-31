@@ -128,7 +128,7 @@ pub enum PinRecordValidationError {
 /// Alias binding that maps a human-friendly alias to a manifest CID.
 #[derive(Debug, Clone, NoritoSerialize, NoritoDeserialize, PartialEq, Eq)]
 pub struct AliasBindingV1 {
-    /// Alias identifier (`namespace/name` style, lower-case ASCII).
+    /// Alias identifier (`namespace/name` or account-style `name@domain` lower-case ASCII).
     pub alias: String,
     /// Manifest CID bound to the alias at `bound_at`.
     pub manifest_cid: Vec<u8>,
@@ -165,10 +165,9 @@ fn validate_alias(alias: &str) -> Result<(), AliasBindingValidationError> {
             length: trimmed.len(),
         });
     }
-    if !trimmed
-        .chars()
-        .all(|c| c.is_ascii_lowercase() || c.is_ascii_digit() || matches!(c, '.' | '-' | '_' | '/'))
-    {
+    if !trimmed.chars().all(|c| {
+        c.is_ascii_lowercase() || c.is_ascii_digit() || matches!(c, '.' | '-' | '_' | '/' | '@')
+    }) {
         return Err(AliasBindingValidationError::InvalidAliasCharacters {
             alias: trimmed.to_owned(),
         });
@@ -718,6 +717,18 @@ mod tests {
     fn alias_binding_validation() {
         let binding = sample_alias_binding();
         binding.validate().expect("valid alias binding");
+    }
+
+    #[test]
+    fn alias_binding_accepts_account_style_alias() {
+        let binding = AliasBindingV1 {
+            alias: "alias@capability.dataspace".into(),
+            manifest_cid: b"cid".to_vec(),
+            bound_at: 1,
+            expiry_epoch: 2,
+        };
+
+        binding.validate().expect("account-style alias");
     }
 
     #[test]

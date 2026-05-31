@@ -2,7 +2,9 @@ package org.hyperledger.iroha.sdk.client
 
 import java.net.URI
 import java.util.concurrent.CompletableFuture
+import java.util.concurrent.CompletionException
 import kotlin.test.Test
+import kotlin.test.assertIs
 import kotlin.test.assertFailsWith
 import org.hyperledger.iroha.sdk.address.AccountAddress
 import org.hyperledger.iroha.sdk.client.stream.ServerSentEvent
@@ -17,6 +19,7 @@ import org.hyperledger.iroha.sdk.client.websocket.ToriiWebSocketClient
 import org.hyperledger.iroha.sdk.client.websocket.ToriiWebSocketListener
 import org.hyperledger.iroha.sdk.client.websocket.ToriiWebSocketOptions
 import org.hyperledger.iroha.sdk.subscriptions.SubscriptionPlanCreateRequest
+import org.hyperledger.iroha.sdk.subscriptions.SubscriptionToriiException
 
 class TransportSecurityClientTest {
     @Test
@@ -52,7 +55,7 @@ class TransportSecurityClientTest {
             .build()
 
         assertFailsWith<IllegalArgumentException> {
-            client.getOfflineV2Readiness()
+            client.getOfflineReadiness()
         }
     }
 
@@ -63,15 +66,16 @@ class TransportSecurityClientTest {
             .baseUri(URI.create("http://example.com"))
             .build()
 
-        assertFailsWith<UnsupportedOperationException> {
+        val error = assertFailsWith<CompletionException> {
             client.createSubscriptionPlan(
                 SubscriptionPlanCreateRequest(
                     authority = sampleAuthority(0x42),
                     planId = "plan#subs",
                     plan = mapOf("kind" to "fixed"),
                 ),
-            )
+            ).join()
         }
+        assertIs<SubscriptionToriiException>(error.cause)
     }
 
     @Test

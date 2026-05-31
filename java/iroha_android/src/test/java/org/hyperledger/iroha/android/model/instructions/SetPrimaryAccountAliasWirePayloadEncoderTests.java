@@ -5,9 +5,11 @@ import static org.junit.Assert.assertFalse;
 import static org.junit.Assert.assertThrows;
 
 import java.nio.charset.StandardCharsets;
+import java.util.Arrays;
 import java.util.Map;
 import org.hyperledger.iroha.android.model.InstructionBox;
 import org.hyperledger.iroha.android.testing.TestAccountIds;
+import org.hyperledger.iroha.norito.CRC64;
 import org.hyperledger.iroha.norito.NoritoAdapters;
 import org.hyperledger.iroha.norito.NoritoDecoder;
 import org.hyperledger.iroha.norito.NoritoHeader;
@@ -66,6 +68,40 @@ public class SetPrimaryAccountAliasWirePayloadEncoderTests {
   }
 
   @Test
+  public void decodeRoundTripsDomainAlias() {
+    final String accountId = TestAccountIds.ed25519Authority(0x31);
+    final InstructionBox instruction =
+        SetPrimaryAccountAliasWirePayloadEncoder.encode(
+            accountId, "tidal-river-4161", "mibank", 10L);
+
+    final SetPrimaryAccountAliasWirePayloadEncoder.DecodedSetPrimaryAccountAliasPayload decoded =
+        SetPrimaryAccountAliasWirePayloadEncoder.decodePayload(wirePayloadBytes(instruction));
+
+    assertEquals(accountId, decoded.accountId());
+    final SetPrimaryAccountAliasWirePayloadEncoder.DecodedAccountAlias alias =
+        decoded.alias().orElseThrow();
+    assertEquals("tidal-river-4161", alias.alias());
+    assertEquals("mibank", alias.aliasDomain().orElseThrow());
+    assertEquals(10L, alias.dataspace());
+    assertFalse(decoded.leaseExpiryMs().isPresent());
+  }
+
+  @Test
+  public void decodeRejectsTrailingPayloadBytes() {
+    final InstructionBox instruction =
+        SetPrimaryAccountAliasWirePayloadEncoder.encode(
+            TestAccountIds.ed25519Authority(0x31), "tidal-river-4161", "mibank", 10L);
+    final NoritoHeader.DecodeResult decoded =
+        NoritoHeader.decode(wirePayloadBytes(instruction), null);
+    decoded.header().validateChecksum(decoded.payload());
+    final byte[] mutated = Arrays.copyOf(decoded.payload(), decoded.payload().length + 1);
+
+    assertThrows(
+        IllegalArgumentException.class,
+        () -> SetPrimaryAccountAliasWirePayloadEncoder.decodePayload(reframe(decoded.header(), mutated)));
+  }
+
+  @Test
   public void encodeRejectsNegativeDataspace() {
     final IllegalArgumentException error =
         assertThrows(
@@ -78,11 +114,15 @@ public class SetPrimaryAccountAliasWirePayloadEncoderTests {
   }
 
   private static DecodedNorito decodeWirePayload(final InstructionBox instruction) {
-    final InstructionBox.WirePayload wirePayload =
-        (InstructionBox.WirePayload) instruction.payload();
-    final NoritoHeader.DecodeResult decoded = NoritoHeader.decode(wirePayload.payloadBytes(), null);
+    final NoritoHeader.DecodeResult decoded = NoritoHeader.decode(wirePayloadBytes(instruction), null);
     decoded.header().validateChecksum(decoded.payload());
     return new DecodedNorito(decoded.header(), decoded.payload());
+  }
+
+  private static byte[] wirePayloadBytes(final InstructionBox instruction) {
+    final InstructionBox.WirePayload wirePayload =
+        (InstructionBox.WirePayload) instruction.payload();
+    return wirePayload.payloadBytes();
   }
 
   private static byte[] readSizedField(final NoritoDecoder decoder) {
@@ -107,6 +147,22 @@ public class SetPrimaryAccountAliasWirePayloadEncoderTests {
     final T value = adapter.decode(child);
     assertEquals("trailing bytes after " + field, 0, child.remaining());
     return value;
+  }
+
+  private static byte[] reframe(final NoritoHeader header, final byte[] payload) {
+    final NoritoHeader reframed =
+        new NoritoHeader(
+            header.schemaHash(),
+            payload.length,
+            CRC64.compute(payload),
+            header.flags(),
+            NoritoHeader.COMPRESSION_NONE,
+            header.minor());
+    final byte[] headerBytes = reframed.encode();
+    final byte[] out = new byte[headerBytes.length + payload.length];
+    System.arraycopy(headerBytes, 0, out, 0, headerBytes.length);
+    System.arraycopy(payload, 0, out, headerBytes.length, payload.length);
+    return out;
   }
 
   private static final class DecodedNorito {

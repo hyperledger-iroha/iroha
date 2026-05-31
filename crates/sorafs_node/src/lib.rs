@@ -134,7 +134,7 @@ enum GcEvictionPolicy {
 }
 use std::{
     collections::{HashMap, HashSet, hash_map::Entry},
-    fs,
+    env, fs,
     io::Read,
     sync::{Arc, RwLock},
     time::{SystemTime, UNIX_EPOCH},
@@ -430,6 +430,14 @@ pub enum ReconciliationError {
     Validation(#[from] ReconciliationValidationError),
 }
 
+fn hard_fork_snapshot_bootstrap_enabled() -> bool {
+    hard_fork_snapshot_bootstrap_enabled_from(env::var_os("IROHA_HARD_FORK_SNAPSHOT_BOOTSTRAP"))
+}
+
+fn hard_fork_snapshot_bootstrap_enabled_from(value: Option<std::ffi::OsString>) -> bool {
+    value.is_some()
+}
+
 impl NodeHandle {
     /// Construct a new handle for the embedded storage worker.
     #[must_use]
@@ -451,11 +459,24 @@ impl NodeHandle {
         let capacity_limit = config.max_capacity_bytes().0;
 
         let storage = if config.enabled() {
-            let backend = Arc::new(StorageBackend::new(config.clone()).unwrap_or_else(|err| {
-                panic!("failed to initialise SoraFS storage backend: {err}")
-            }));
-            schedulers.update_storage_bytes(backend.total_bytes(), capacity_limit);
-            Some(backend)
+            match StorageBackend::new(config.clone()) {
+                Ok(backend) => {
+                    let backend = Arc::new(backend);
+                    schedulers.update_storage_bytes(backend.total_bytes(), capacity_limit);
+                    Some(backend)
+                }
+                Err(StorageError::Norito(err)) if hard_fork_snapshot_bootstrap_enabled() => {
+                    iroha_logger::warn!(
+                        %err,
+                        "hard-fork snapshot bootstrap: disabling SoraFS storage backend after legacy Norito decode failure"
+                    );
+                    schedulers.update_storage_bytes(0, capacity_limit);
+                    None
+                }
+                Err(err) => {
+                    panic!("failed to initialise SoraFS storage backend: {err}")
+                }
+            }
         } else {
             schedulers.update_storage_bytes(0, capacity_limit);
             None
@@ -1827,7 +1848,7 @@ impl NodeHandle {
     /// Whether the storage worker is currently enabled.
     #[must_use]
     pub fn is_enabled(&self) -> bool {
-        self.config.enabled()
+        self.storage.is_some()
     }
 
     /// Record a capacity declaration captured by Torii.
@@ -4300,6 +4321,24 @@ mod tests {
         assert_eq!(observed.alias(), cfg.alias());
         assert_eq!(observed.adverts().topics(), cfg.adverts().topics());
         assert!(handle.storage().is_some());
+    }
+
+    #[test]
+    fn node_handle_is_disabled_when_backend_is_unavailable() {
+        let (cfg, _dir) = storage_config_with_temp_dir();
+        let mut handle = NodeHandle::new(cfg);
+
+        handle.storage = None;
+
+        assert!(!handle.is_enabled());
+    }
+
+    #[test]
+    fn hard_fork_bootstrap_flag_is_presence_based() {
+        assert!(!hard_fork_snapshot_bootstrap_enabled_from(None));
+        assert!(hard_fork_snapshot_bootstrap_enabled_from(Some(
+            std::ffi::OsString::new()
+        )));
     }
 
     #[test]

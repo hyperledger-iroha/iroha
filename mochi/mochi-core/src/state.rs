@@ -1126,9 +1126,8 @@ mod tests {
             "TwitterBindingRecord"
         );
         assert_eq!(
-            batch_label(&QueryOutputBatchBox::RwaId(Vec::new())),
-            "RwaId"
+            batch_label(&QueryOutputBatchBox::DefiOracleAttestation(Vec::new())),
+            "DefiOracleAttestation"
         );
-        assert_eq!(batch_label(&QueryOutputBatchBox::Rwa(Vec::new())), "Rwa");
     }
 }

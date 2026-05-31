@@ -114,6 +114,18 @@ enum AssetDefinitionAddress {
     }
 }
 
+public enum AssetDefinitionAddressCodec {
+    public static func canonicalDefinitionLiteral(_ rawLiteral: String?) -> String? {
+        let trimmed = rawLiteral?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+        guard !trimmed.isEmpty,
+              trimmed.rangeOfCharacter(from: .whitespacesAndNewlines) == nil,
+              AssetDefinitionAddress.decode(trimmed) != nil else {
+            return nil
+        }
+        return trimmed
+    }
+}
+
 private enum AssetDefinitionAddressBlake3 {
     private static let iv: [UInt32] = [
         0x6A09E667, 0xBB67AE85, 0x3C6EF372, 0xA54FF53A,

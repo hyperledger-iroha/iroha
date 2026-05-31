@@ -291,8 +291,9 @@ canonical source-material, source-adapter-deployment, and destination-binding
 tuple before those fields are emitted. Supplying
 `--route-canary-transaction-id <txid>` makes the live helper read the
 destination verifier transaction receipt, verify the `MessageProofAccepted`
-log against the deployed binding/backend/family/network views, fetch the raw
-`TriggerSmartContract` transaction, parse the hashed `raw_data_hex`, require
+log against the deployed binding/backend/family/network views, require exactly
+one matching accepted-proof log, fetch the raw `TriggerSmartContract`
+transaction, parse the hashed `raw_data_hex`, require
 the visible transaction `owner_address` to match the owner encoded in that raw
 transaction body, require the canonical low-S recoverable secp256k1 signature
 to recover to that transaction owner, and verify that its
@@ -321,10 +322,17 @@ from the accepted proof event, the submitted verifier call, or the
 `sccp_tron_route_canary_raw_data_owner_matches_transaction = "true"` plus the
 signature hash, recovered address, and
 `sccp_tron_route_canary_signature_recovers_to_owner = "true"` audit comments. The
-replayed JSON-to-TOML gate also revalidates the submitted selector, proof tuple
+release-bundle verifier also rejects readiness/all-lanes JSON where either TRON
+owner address is zero, any route-canary binding hash or transaction transcript
+word is zero, any distinct TRON canary hash role is reused, or the recovered
+TRON address drifts from the transaction owner. The replayed JSON-to-TOML gate
+also revalidates the submitted selector, proof tuple
 length/version/source domain, public-input message id, target domain, commitment
 root, statement hash, event source domain, destination binding, backend, proof
 family, network id, and recomputed canary hash before emitting production TOML.
+Source-event transaction readback uses the same single-governed-log policy for
+`SccpSourceEvent(bytes32)`, so ambiguous TRON receipts fail closed instead of
+choosing the first matching log.
 The offline direct renderer also requires the same `--route-canary-transaction-*`
 metadata plus `--route-canary-used-message-proof` and
 `--route-canary-raw-data-owner-matches-transaction`, plus the
@@ -421,8 +429,9 @@ The shared contract smoke constructs a deterministic self-consistent BN254 proof
 for the test verifying key and submits it through this TRON wrapper, asserting
 the public-input preflight negatives, source-domain overflow rejection, zero
 proof-point, off-curve G2, non-prime-subgroup G2, wrong-statement, and
-wrong-deployment-binding negatives, the `MessageProofAccepted` event fields,
-and replay rejection after acceptance.
+post-generation payload/finality-height/finality-block signal drift,
+wrong-deployment-binding negatives, the `MessageProofAccepted` event fields, and
+replay rejection after acceptance.
 
 Reference TRON sources:
 

@@ -40,7 +40,11 @@ fn stark_vk_bytes(circuit_id: &str) -> Vec<u8> {
     norito::to_bytes(&payload).expect("encode stark vk payload")
 }
 
-fn stark_open_verify_envelope_bytes(circuit_id: &str, schema_descriptor: &[u8]) -> Vec<u8> {
+fn stark_open_verify_envelope_bytes(
+    circuit_id: &str,
+    schema_descriptor: &[u8],
+    vk_hash: [u8; 32],
+) -> Vec<u8> {
     let open = StarkFriOpenProofV1 {
         version: 1,
         public_inputs: vec![vec![[0xAA; 32]], vec![[0xBB; 32]]],
@@ -50,73 +54,36 @@ fn stark_open_verify_envelope_bytes(circuit_id: &str, schema_descriptor: &[u8]) 
     let env = OpenVerifyEnvelope::new(
         BackendTag::Stark,
         circuit_id,
-        [0u8; 32],
+        vk_hash,
         schema_descriptor.to_vec(),
         open_bytes,
     );
     norito::to_bytes(&env).expect("encode OpenVerifyEnvelope")
 }
 
-fn prepare_state() -> (State, AccountId, AssetDefinitionId) {
-    let kura = Kura::blank_kura_for_testing();
-    let query = LiveQueryStore::start_test();
-    #[cfg(feature = "telemetry")]
-    let mut state = State::new(
-        iroha_core::state::World::new(),
-        kura,
-        query,
-        iroha_core::telemetry::StateTelemetry::default(),
-    );
-    #[cfg(not(feature = "telemetry"))]
-    let mut state = State::new(iroha_core::state::World::new(), kura, query);
-    state.zk.stark.enabled = true;
-
-    let header = iroha_data_model::block::BlockHeader::new(nonzero!(1_u64), None, None, None, 0, 0);
-    let mut block = state.block(header);
-    let mut stx = block.transaction();
-    let executor = stx.world.executor().clone();
-
-    let domain_id: DomainId = DomainId::try_new("zkd", "universal").unwrap();
-    let (owner, _owner_key) = gen_account_in("zkd");
-    let asset_def_id: AssetDefinitionId = iroha_data_model::asset::AssetDefinitionId::new(
-        DomainId::try_new("zkd", "universal").unwrap(),
-        "zcoin".parse().unwrap(),
-    );
-
-    for instr in [
-        Register::domain(Domain::new(domain_id)).into(),
-        Register::account(NewAccount::new(owner.clone())).into(),
-        Register::asset_definition(
-            AssetDefinition::numeric(asset_def_id.clone())
-                .with_name(asset_def_id.name().to_string()),
-        )
-        .into(),
-        RegisterZkAsset::new(
-            asset_def_id.clone(),
-            ZkAssetMode::Hybrid,
-            true,
-            true,
-            None,
-            None,
-            None,
-        )
-        .into(),
-    ] {
-        executor
-            .clone()
-            .execute_instruction(&mut stx, &owner, instr)
-            .expect("bootstrap");
-    }
-
-    stx.apply();
-    block.commit().expect("commit bootstrap block");
-
-    (state, owner, asset_def_id)
+fn stark_open_verify_envelope_bytes_with_aux(
+    circuit_id: &str,
+    schema_descriptor: &[u8],
+    vk_hash: [u8; 32],
+    aux: Vec<u8>,
+) -> Vec<u8> {
+    let mut envelope: OpenVerifyEnvelope = norito::decode_from_bytes(
+        &stark_open_verify_envelope_bytes(circuit_id, schema_descriptor, vk_hash),
+    )
+    .expect("decode generated OpenVerifyEnvelope");
+    envelope.aux = aux;
+    norito::to_bytes(&envelope).expect("encode OpenVerifyEnvelope with aux")
 }
 
 fn prepare_state_with_bound_stark_vk(
     schema_descriptor: &[u8],
-) -> (State, AccountId, AssetDefinitionId, VerifyingKeyId) {
+) -> (
+    State,
+    AccountId,
+    AssetDefinitionId,
+    VerifyingKeyId,
+    [u8; 32],
+) {
     let kura = Kura::blank_kura_for_testing();
     let query = LiveQueryStore::start_test();
     #[cfg(feature = "telemetry")]
@@ -217,7 +184,7 @@ fn prepare_state_with_bound_stark_vk(
     stx.apply();
     block.commit().expect("commit bootstrap block");
 
-    (state, owner, asset_def_id, vk_id)
+    (state, owner, asset_def_id, vk_id, commitment)
 }
 
 fn raw_stark_envelope_bytes() -> Vec<u8> {
@@ -246,6 +213,7 @@ fn raw_stark_envelope_bytes() -> Vec<u8> {
             },
             queries: Vec::new(),
             comp_values: None,
+            air: None,
         },
         transcript_label: "RAW-STARK".to_owned(),
     };
@@ -254,7 +222,8 @@ fn raw_stark_envelope_bytes() -> Vec<u8> {
 
 #[test]
 fn zk_transfer_rejects_raw_stark_envelope() {
-    let (state, owner, asset_def_id) = prepare_state();
+    let (state, owner, asset_def_id, vk_id, _vk_commitment) =
+        prepare_state_with_bound_stark_vk(b"schema:raw-transfer:v1");
     let header = iroha_data_model::block::BlockHeader::new(nonzero!(2_u64), None, None, None, 0, 0);
     let mut block = state.block(header);
     let mut stx = block.transaction();
@@ -262,11 +231,7 @@ fn zk_transfer_rejects_raw_stark_envelope() {
 
     // Proof bytes are a (Norito-encoded) raw STARK envelope, not an OpenVerifyEnvelope wrapper.
     let proof = ProofBox::new(BACKEND.into(), raw_stark_envelope_bytes());
-    let attachment = ProofAttachment::new_ref(
-        BACKEND.into(),
-        proof,
-        VerifyingKeyId::new(BACKEND, "raw_stark_vk"),
-    );
+    let attachment = ProofAttachment::new_ref(BACKEND.into(), proof, vk_id);
 
     let transfer = ZkTransfer::new(asset_def_id, Vec::new(), vec![[1u8; 32]], attachment, None);
 
@@ -291,13 +256,15 @@ fn zk_transfer_rejects_raw_stark_envelope() {
 fn zk_transfer_rejects_stark_open_verify_envelope_with_schema_hash_mismatch() {
     let expected_schema = b"schema:transfer:v1";
     let wrong_schema = b"schema:transfer:v2";
-    let (state, owner, asset_def_id, vk_id) = prepare_state_with_bound_stark_vk(expected_schema);
+    let (state, owner, asset_def_id, vk_id, vk_commitment) =
+        prepare_state_with_bound_stark_vk(expected_schema);
     let header = iroha_data_model::block::BlockHeader::new(nonzero!(2_u64), None, None, None, 0, 0);
     let mut block = state.block(header);
     let mut stx = block.transaction();
     let executor = stx.world.executor().clone();
 
-    let proof_payload = stark_open_verify_envelope_bytes(STARK_TRANSFER_CIRCUIT, wrong_schema);
+    let proof_payload =
+        stark_open_verify_envelope_bytes(STARK_TRANSFER_CIRCUIT, wrong_schema, vk_commitment);
     let proof = ProofBox::new(BACKEND.into(), proof_payload);
     let attachment = ProofAttachment::new_ref(BACKEND.into(), proof, vk_id);
     let transfer = ZkTransfer::new(asset_def_id, Vec::new(), vec![[0x11; 32]], attachment, None);
@@ -320,16 +287,87 @@ fn zk_transfer_rejects_stark_open_verify_envelope_with_schema_hash_mismatch() {
 }
 
 #[test]
-fn unshield_rejects_stark_open_verify_envelope_with_schema_hash_mismatch() {
-    let expected_schema = b"schema:unshield:v1";
-    let wrong_schema = b"schema:unshield:v2";
-    let (state, owner, asset_def_id, vk_id) = prepare_state_with_bound_stark_vk(expected_schema);
+fn zk_transfer_rejects_stark_open_verify_envelope_with_zero_vk_hash() {
+    let schema = b"schema:transfer:v1";
+    let (state, owner, asset_def_id, vk_id, _vk_commitment) =
+        prepare_state_with_bound_stark_vk(schema);
     let header = iroha_data_model::block::BlockHeader::new(nonzero!(2_u64), None, None, None, 0, 0);
     let mut block = state.block(header);
     let mut stx = block.transaction();
     let executor = stx.world.executor().clone();
 
-    let proof_payload = stark_open_verify_envelope_bytes(STARK_TRANSFER_CIRCUIT, wrong_schema);
+    let proof_payload = stark_open_verify_envelope_bytes(STARK_TRANSFER_CIRCUIT, schema, [0u8; 32]);
+    let proof = ProofBox::new(BACKEND.into(), proof_payload);
+    let attachment = ProofAttachment::new_ref(BACKEND.into(), proof, vk_id);
+    let transfer = ZkTransfer::new(asset_def_id, Vec::new(), vec![[0x11; 32]], attachment, None);
+
+    let err = executor
+        .execute_instruction(&mut stx, &owner, transfer.into())
+        .expect_err("zero verifier-key hash must be rejected before verification");
+    let iroha_data_model::executor::ValidationFail::InstructionFailed(inner) = err else {
+        panic!("unexpected error: {err:?}");
+    };
+    let iroha_data_model::isi::error::InstructionExecutionError::InvariantViolation(message) =
+        inner
+    else {
+        panic!("unexpected error: {inner:?}");
+    };
+    assert!(
+        message.contains("verifying key commitment mismatch"),
+        "unexpected error: {message}"
+    );
+}
+
+#[test]
+fn zk_transfer_rejects_stark_open_verify_envelope_with_auxiliary_bytes() {
+    let schema = b"schema:transfer:v1";
+    let (state, owner, asset_def_id, vk_id, vk_commitment) =
+        prepare_state_with_bound_stark_vk(schema);
+    let header = iroha_data_model::block::BlockHeader::new(nonzero!(2_u64), None, None, None, 0, 0);
+    let mut block = state.block(header);
+    let mut stx = block.transaction();
+    let executor = stx.world.executor().clone();
+
+    let proof_payload = stark_open_verify_envelope_bytes_with_aux(
+        STARK_TRANSFER_CIRCUIT,
+        schema,
+        vk_commitment,
+        b"ignored-hint".to_vec(),
+    );
+    let proof = ProofBox::new(BACKEND.into(), proof_payload);
+    let attachment = ProofAttachment::new_ref(BACKEND.into(), proof, vk_id);
+    let transfer = ZkTransfer::new(asset_def_id, Vec::new(), vec![[0x11; 32]], attachment, None);
+
+    let err = executor
+        .execute_instruction(&mut stx, &owner, transfer.into())
+        .expect_err("auxiliary bytes must be rejected before verification");
+    let iroha_data_model::executor::ValidationFail::InstructionFailed(inner) = err else {
+        panic!("unexpected error: {err:?}");
+    };
+    let iroha_data_model::isi::error::InstructionExecutionError::InvariantViolation(message) =
+        inner
+    else {
+        panic!("unexpected error: {inner:?}");
+    };
+    assert!(
+        message.contains("envelope auxiliary bytes must be empty"),
+        "unexpected error: {message}"
+    );
+}
+
+#[test]
+fn unshield_rejects_stark_open_verify_envelope_with_schema_hash_mismatch() {
+    let expected_schema = b"schema:unshield:v1";
+    let wrong_schema = b"schema:unshield:v2";
+    let (state, owner, asset_def_id, vk_id, vk_commitment) =
+        prepare_state_with_bound_stark_vk(expected_schema);
+    let header = iroha_data_model::block::BlockHeader::new(nonzero!(2_u64), None, None, None, 0, 0);
+    let mut block = state.block(header);
+    let mut stx = block.transaction();
+    let executor = stx.world.executor().clone();
+
+    let proof_payload =
+        stark_open_verify_envelope_bytes(STARK_TRANSFER_CIRCUIT, wrong_schema, vk_commitment);
     let proof = ProofBox::new(BACKEND.into(), proof_payload);
     let attachment = ProofAttachment::new_ref(BACKEND.into(), proof, vk_id);
     let unshield = Unshield::new(
@@ -359,19 +397,99 @@ fn unshield_rejects_stark_open_verify_envelope_with_schema_hash_mismatch() {
 }
 
 #[test]
+fn unshield_rejects_stark_open_verify_envelope_with_zero_vk_hash() {
+    let schema = b"schema:unshield:v1";
+    let (state, owner, asset_def_id, vk_id, _vk_commitment) =
+        prepare_state_with_bound_stark_vk(schema);
+    let header = iroha_data_model::block::BlockHeader::new(nonzero!(2_u64), None, None, None, 0, 0);
+    let mut block = state.block(header);
+    let mut stx = block.transaction();
+    let executor = stx.world.executor().clone();
+
+    let proof_payload = stark_open_verify_envelope_bytes(STARK_TRANSFER_CIRCUIT, schema, [0u8; 32]);
+    let proof = ProofBox::new(BACKEND.into(), proof_payload);
+    let attachment = ProofAttachment::new_ref(BACKEND.into(), proof, vk_id);
+    let unshield = Unshield::new(
+        asset_def_id,
+        owner.clone(),
+        1u128,
+        Vec::new(),
+        attachment,
+        None,
+    );
+
+    let err = executor
+        .execute_instruction(&mut stx, &owner, unshield.into())
+        .expect_err("zero verifier-key hash must be rejected before verification");
+    let iroha_data_model::executor::ValidationFail::InstructionFailed(inner) = err else {
+        panic!("unexpected error: {err:?}");
+    };
+    let iroha_data_model::isi::error::InstructionExecutionError::InvariantViolation(message) =
+        inner
+    else {
+        panic!("unexpected error: {inner:?}");
+    };
+    assert!(
+        message.contains("verifying key commitment mismatch"),
+        "unexpected error: {message}"
+    );
+}
+
+#[test]
+fn unshield_rejects_stark_open_verify_envelope_with_auxiliary_bytes() {
+    let schema = b"schema:unshield:v1";
+    let (state, owner, asset_def_id, vk_id, vk_commitment) =
+        prepare_state_with_bound_stark_vk(schema);
+    let header = iroha_data_model::block::BlockHeader::new(nonzero!(2_u64), None, None, None, 0, 0);
+    let mut block = state.block(header);
+    let mut stx = block.transaction();
+    let executor = stx.world.executor().clone();
+
+    let proof_payload = stark_open_verify_envelope_bytes_with_aux(
+        STARK_TRANSFER_CIRCUIT,
+        schema,
+        vk_commitment,
+        b"ignored-hint".to_vec(),
+    );
+    let proof = ProofBox::new(BACKEND.into(), proof_payload);
+    let attachment = ProofAttachment::new_ref(BACKEND.into(), proof, vk_id);
+    let unshield = Unshield::new(
+        asset_def_id,
+        owner.clone(),
+        1u128,
+        Vec::new(),
+        attachment,
+        None,
+    );
+
+    let err = executor
+        .execute_instruction(&mut stx, &owner, unshield.into())
+        .expect_err("auxiliary bytes must be rejected before verification");
+    let iroha_data_model::executor::ValidationFail::InstructionFailed(inner) = err else {
+        panic!("unexpected error: {err:?}");
+    };
+    let iroha_data_model::isi::error::InstructionExecutionError::InvariantViolation(message) =
+        inner
+    else {
+        panic!("unexpected error: {inner:?}");
+    };
+    assert!(
+        message.contains("envelope auxiliary bytes must be empty"),
+        "unexpected error: {message}"
+    );
+}
+
+#[test]
 fn unshield_rejects_raw_stark_envelope() {
-    let (state, owner, asset_def_id) = prepare_state();
+    let (state, owner, asset_def_id, vk_id, _vk_commitment) =
+        prepare_state_with_bound_stark_vk(b"schema:raw-unshield:v1");
     let header = iroha_data_model::block::BlockHeader::new(nonzero!(2_u64), None, None, None, 0, 0);
     let mut block = state.block(header);
     let mut stx = block.transaction();
     let executor = stx.world.executor().clone();
 
     let proof = ProofBox::new(BACKEND.into(), raw_stark_envelope_bytes());
-    let attachment = ProofAttachment::new_ref(
-        BACKEND.into(),
-        proof,
-        VerifyingKeyId::new(BACKEND, "raw_stark_vk"),
-    );
+    let attachment = ProofAttachment::new_ref(BACKEND.into(), proof, vk_id);
 
     let unshield = Unshield::new(
         asset_def_id,

@@ -41,7 +41,7 @@ interface TransportWebSocket {
     private fun unsupported(operation: String): CompletableFuture<Void> {
         val failed = CompletableFuture<Void>()
         failed.completeExceptionally(
-            UnsupportedOperationException("$operation is not supported by this transport")
+            IllegalStateException("$operation is not supported by this transport")
         )
         return failed
     }

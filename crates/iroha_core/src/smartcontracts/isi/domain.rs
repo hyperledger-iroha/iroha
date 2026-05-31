@@ -69,13 +69,26 @@ pub mod isi {
     }
 
     fn dataspace_id_for_alias_segment(
-        catalog: &DataSpaceCatalog,
+        state_transaction: &StateTransaction<'_, '_>,
         dataspace_alias: &str,
     ) -> Option<DataSpaceId> {
-        if dataspace_alias.eq_ignore_ascii_case("universal") {
-            return Some(DataSpaceId::UNIVERSAL);
-        }
-        catalog.by_alias(dataspace_alias).map(|entry| entry.id)
+        crate::sns::active_dataspace_id_by_alias(
+            &state_transaction.world,
+            &state_transaction.nexus.dataspace_catalog,
+            dataspace_alias,
+            state_transaction.block_unix_timestamp_ms(),
+        )
+        .or_else(|| {
+            if dataspace_alias.eq_ignore_ascii_case("universal") {
+                Some(DataSpaceId::UNIVERSAL)
+            } else {
+                state_transaction
+                    .nexus
+                    .dataspace_catalog
+                    .by_alias(dataspace_alias)
+                    .map(|entry| entry.id)
+            }
+        })
     }
 
     fn asset_definition_home_dataspace_for_alias(
@@ -93,9 +106,7 @@ pub mod isi {
             });
 
         match dataspace_alias {
-            Some(alias) => {
-                dataspace_id_for_alias_segment(&state_transaction.nexus.dataspace_catalog, &alias)
-            }
+            Some(alias) => dataspace_id_for_alias_segment(state_transaction, &alias),
             None if definition.balance_scope_policy() == AssetBalancePolicy::Global => {
                 Some(DataSpaceId::UNIVERSAL)
             }
@@ -390,22 +401,71 @@ pub mod isi {
         }
     }
 
+    fn resolve_contract_alias_components(
+        state_transaction: &StateTransaction<'_, '_>,
+        alias: &ContractAlias,
+    ) -> Result<(Name, Option<AccountAliasDomain>, DataSpaceId), InstructionExecutionError> {
+        let label_name = alias.name_segment().parse::<Name>().map_err(|_| {
+            InstructionExecutionError::InvalidParameter(InvalidParameterError::SmartContract(
+                "contract alias name segment is invalid".into(),
+            ))
+        })?;
+        let domain = alias
+            .domain_segment()
+            .map(str::parse::<AccountAliasDomain>)
+            .map(|result| {
+                result.map_err(|_| {
+                    InstructionExecutionError::InvalidParameter(
+                        InvalidParameterError::SmartContract(
+                            "contract alias domain segment is invalid".into(),
+                        ),
+                    )
+                })
+            })
+            .transpose()?;
+        let dataspace =
+            dataspace_id_for_alias_segment(state_transaction, alias.dataspace_segment())
+                .ok_or_else(|| {
+                    InstructionExecutionError::InvalidParameter(
+                        InvalidParameterError::SmartContract(
+                            format!(
+                                "unknown or inactive dataspace alias `{}` in contract alias",
+                                alias.dataspace_segment()
+                            )
+                            .into(),
+                        ),
+                    )
+                })?;
+        Ok((label_name, domain, dataspace))
+    }
+
+    fn account_alias_selector_for_contract_alias(
+        alias: &ContractAlias,
+    ) -> Result<iroha_data_model::sns::NameSelectorV1, InstructionExecutionError> {
+        let account_alias_literal = alias.domain_segment().map_or_else(
+            || format!("{}@{}", alias.name_segment(), alias.dataspace_segment()),
+            |domain| {
+                format!(
+                    "{}@{}.{}",
+                    alias.name_segment(),
+                    domain,
+                    alias.dataspace_segment()
+                )
+            },
+        );
+        Ok(iroha_data_model::sns::NameSelectorV1 {
+            version: iroha_data_model::sns::NameSelectorV1::VERSION,
+            suffix_id: crate::sns::ACCOUNT_ALIAS_SUFFIX_ID,
+            label: account_alias_literal,
+        })
+    }
+
     fn ensure_account_alias_namespace_available_for_contract_alias(
         state_transaction: &StateTransaction<'_, '_>,
         alias: &ContractAlias,
     ) -> Result<(), InstructionExecutionError> {
-        let catalog = &state_transaction.nexus.dataspace_catalog;
-        let (label_name, domain, dataspace) = alias.resolve_components(catalog).map_err(|err| {
-            InstructionExecutionError::InvalidParameter(InvalidParameterError::SmartContract(
-                err.to_string().into(),
-            ))
-        })?;
-        let label = AccountAlias::new_in_dataspace(label_name, domain, dataspace);
-        let selector = crate::sns::selector_for_account_alias(&label, catalog).map_err(|err| {
-            InstructionExecutionError::InvalidParameter(InvalidParameterError::SmartContract(
-                err.to_string().into(),
-            ))
-        })?;
+        resolve_contract_alias_components(state_transaction, alias)?;
+        let selector = account_alias_selector_for_contract_alias(alias)?;
         let storage_key = crate::sns::record_storage_key(&selector);
         let Some(bytes) = state_transaction
             .world
@@ -2593,42 +2653,38 @@ pub mod isi {
                 .into());
             }
 
-            let contract_dataspace_id = contract_address.dataspace_id().map_err(|err| {
-                InstructionExecutionError::InvalidParameter(InvalidParameterError::SmartContract(
-                    err.to_string().into(),
-                ))
-            })?;
-            if state_transaction
-                .nexus
-                .dataspace_catalog
-                .by_id(contract_dataspace_id)
-                .is_none()
-            {
-                return Err(InstructionExecutionError::InvariantViolation(
-                    "contract address dataspace is unknown".to_owned().into(),
-                )
-                .into());
-            }
             if let Some(alias) = alias {
-                if state_transaction
+                let contract_dataspace_id = contract_address.dataspace_id().map_err(|err| {
+                    InstructionExecutionError::InvalidParameter(
+                        InvalidParameterError::SmartContract(err.to_string().into()),
+                    )
+                })?;
+                let contract_deployed = state_transaction
                     .world
                     .contract_instances()
                     .get(&contract_address)
-                    .is_none()
+                    .is_some();
+                if !contract_deployed
+                    && state_transaction
+                        .nexus
+                        .dataspace_catalog
+                        .by_id(contract_dataspace_id)
+                        .is_none()
                 {
+                    return Err(InstructionExecutionError::InvariantViolation(
+                        "contract address dataspace is unknown".to_owned().into(),
+                    )
+                    .into());
+                }
+                if !contract_deployed {
                     return Err(InstructionExecutionError::InvariantViolation(
                         format!("contract {contract_address} is not deployed").into(),
                     )
                     .into());
                 }
 
-                let (_, _, alias_dataspace_id) = alias
-                    .resolve_components(&state_transaction.nexus.dataspace_catalog)
-                    .map_err(|err| {
-                        InstructionExecutionError::InvalidParameter(
-                            InvalidParameterError::SmartContract(err.to_string().into()),
-                        )
-                    })?;
+                let (_, _, alias_dataspace_id) =
+                    resolve_contract_alias_components(state_transaction, &alias)?;
                 if alias_dataspace_id != contract_dataspace_id {
                     return Err(InstructionExecutionError::InvalidParameter(
                         InvalidParameterError::SmartContract(
@@ -3914,6 +3970,30 @@ mod tests {
                 }),
             );
         }
+    }
+
+    fn seed_dataspace_alias_lease(
+        tx: &mut StateTransaction<'_, '_>,
+        owner: &AccountId,
+        alias: &str,
+    ) {
+        let selector = crate::sns::selector_for_dataspace_alias(alias).expect("selector");
+        let address = AccountAddress::from_account_id(owner).expect("account address");
+        let record = NameRecordV1::new(
+            selector.clone(),
+            owner.clone(),
+            vec![NameControllerV1::account(&address)],
+            0,
+            0,
+            u64::MAX,
+            u64::MAX,
+            u64::MAX,
+            Metadata::default(),
+        );
+        tx.world.smart_contract_state.insert(
+            crate::sns::record_storage_key(&selector),
+            norito::codec::Encode::encode(&record),
+        );
     }
 
     fn seed_domainful_alias_manage_permissions(
@@ -7648,14 +7728,14 @@ mod tests {
         let mut state = test_state();
         let authority = (*ALICE_ID).clone();
         let paynet = DataSpaceId::new(7);
-        let domain_id: DomainId = DomainId::try_new("digital-kina", "paynet").expect("domain id");
+        let domain_id: DomainId = DomainId::try_new("private-unit", "paynet").expect("domain id");
         seed_domain(&mut state, &domain_id, &authority);
 
         let definition_id =
-            AssetDefinitionId::new(domain_id, "kina".parse().expect("asset definition name"));
+            AssetDefinitionId::new(domain_id, "unit".parse().expect("asset definition name"));
         let new_definition = NewAssetDefinition {
             id: definition_id,
-            name: "Digital Kina".to_owned(),
+            name: "Private Unit".to_owned(),
             description: None,
             alias: None,
             spec: NumericSpec::integer(),
@@ -7718,14 +7798,14 @@ mod tests {
         let mut state = test_state();
         let authority = (*ALICE_ID).clone();
         let paynet = DataSpaceId::new(7);
-        let domain_id: DomainId = DomainId::try_new("digital-kina", "paynet").expect("domain id");
+        let domain_id: DomainId = DomainId::try_new("private-unit", "paynet").expect("domain id");
         seed_domain(&mut state, &domain_id, &authority);
 
         let definition_id =
-            AssetDefinitionId::new(domain_id, "kina".parse().expect("asset definition name"));
+            AssetDefinitionId::new(domain_id, "unit".parse().expect("asset definition name"));
         let new_definition = NewAssetDefinition {
             id: definition_id,
-            name: "Digital Kina".to_owned(),
+            name: "Private Unit".to_owned(),
             description: None,
             alias: None,
             spec: NumericSpec::integer(),
@@ -7754,14 +7834,14 @@ mod tests {
         let mut state = test_state();
         let authority = (*ALICE_ID).clone();
         let paynet = DataSpaceId::new(7);
-        let domain_id: DomainId = DomainId::try_new("digital-kina", "universal").expect("domain");
+        let domain_id: DomainId = DomainId::try_new("private-unit", "universal").expect("domain");
         seed_domain(&mut state, &domain_id, &authority);
 
-        let definition_id = AssetDefinitionId::new(domain_id, "kina".parse().expect("name"));
-        let alias: AssetDefinitionAlias = "kina#paynet".parse().expect("alias");
+        let definition_id = AssetDefinitionId::new(domain_id, "unit".parse().expect("name"));
+        let alias: AssetDefinitionAlias = "unit#paynet".parse().expect("alias");
         let new_definition = NewAssetDefinition {
             id: definition_id.clone(),
-            name: "kina".to_owned(),
+            name: "unit".to_owned(),
             description: None,
             alias: Some(alias.clone()),
             spec: NumericSpec::integer(),
@@ -7794,14 +7874,14 @@ mod tests {
         let mut state = test_state();
         let authority = (*ALICE_ID).clone();
         let paynet = DataSpaceId::new(7);
-        let domain_id: DomainId = DomainId::try_new("digital-kina", "universal").expect("domain");
+        let domain_id: DomainId = DomainId::try_new("private-unit", "universal").expect("domain");
         seed_domain(&mut state, &domain_id, &authority);
 
-        let definition_id = AssetDefinitionId::new(domain_id, "kina".parse().expect("name"));
-        let alias: AssetDefinitionAlias = "kina#paynet".parse().expect("alias");
+        let definition_id = AssetDefinitionId::new(domain_id, "unit".parse().expect("name"));
+        let alias: AssetDefinitionAlias = "unit#paynet".parse().expect("alias");
         let new_definition = NewAssetDefinition {
             id: definition_id,
-            name: "kina".to_owned(),
+            name: "unit".to_owned(),
             description: None,
             alias: Some(alias),
             spec: NumericSpec::integer(),
@@ -7834,14 +7914,14 @@ mod tests {
         let mut state = test_state();
         let authority = (*ALICE_ID).clone();
         let paynet = DataSpaceId::new(7);
-        let domain_id: DomainId = DomainId::try_new("digital-kina", "paynet").expect("domain");
+        let domain_id: DomainId = DomainId::try_new("private-unit", "paynet").expect("domain");
         seed_domain(&mut state, &domain_id, &authority);
 
-        let definition_id = AssetDefinitionId::new(domain_id, "kina".parse().expect("name"));
-        let alias: AssetDefinitionAlias = "kina#universal".parse().expect("alias");
+        let definition_id = AssetDefinitionId::new(domain_id, "unit".parse().expect("name"));
+        let alias: AssetDefinitionAlias = "unit#universal".parse().expect("alias");
         let new_definition = NewAssetDefinition {
             id: definition_id.clone(),
-            name: "kina".to_owned(),
+            name: "unit".to_owned(),
             description: None,
             alias: Some(alias.clone()),
             spec: NumericSpec::integer(),
@@ -7875,14 +7955,14 @@ mod tests {
         let authority = (*ALICE_ID).clone();
         let paynet = DataSpaceId::new(7);
         let domain_id: DomainId =
-            DomainId::try_new("restricted-kina", "universal").expect("domain");
+            DomainId::try_new("restricted-unit", "universal").expect("domain");
         seed_domain(&mut state, &domain_id, &authority);
 
-        let definition_id = AssetDefinitionId::new(domain_id, "kina".parse().expect("name"));
-        let alias: AssetDefinitionAlias = "kina#paynet".parse().expect("alias");
+        let definition_id = AssetDefinitionId::new(domain_id, "unit".parse().expect("name"));
+        let alias: AssetDefinitionAlias = "unit#paynet".parse().expect("alias");
         let new_definition = NewAssetDefinition {
             id: definition_id.clone(),
-            name: "kina".to_owned(),
+            name: "unit".to_owned(),
             description: None,
             alias: Some(alias.clone()),
             spec: NumericSpec::integer(),
@@ -8114,10 +8194,10 @@ mod tests {
         let domain_id: DomainId = DomainId::try_new("alias-global", "universal").expect("domain");
         seed_domain(&mut state, &domain_id, &authority);
 
-        let definition_id = AssetDefinitionId::new(domain_id, "pgk".parse().expect("name"));
+        let definition_id = AssetDefinitionId::new(domain_id, "unit".parse().expect("name"));
         let definition = NewAssetDefinition {
             id: definition_id.clone(),
-            name: "pgk".to_owned(),
+            name: "unit".to_owned(),
             description: None,
             alias: None,
             spec: NumericSpec::integer(),
@@ -8137,7 +8217,7 @@ mod tests {
             .execute(&authority, &mut tx)
             .expect("register global definition");
 
-        let alias: AssetDefinitionAlias = "pgk#paynet".parse().expect("alias");
+        let alias: AssetDefinitionAlias = "unit#paynet".parse().expect("alias");
         let err = SetAssetDefinitionAlias::bind(definition_id, alias, None)
             .execute(&authority, &mut tx)
             .expect_err("global alias must not move home to restricted dataspace");
@@ -8155,10 +8235,10 @@ mod tests {
         let domain_id: DomainId = DomainId::try_new("alias-public", "universal").expect("domain");
         seed_domain(&mut state, &domain_id, &authority);
 
-        let definition_id = AssetDefinitionId::new(domain_id, "pgk".parse().expect("name"));
+        let definition_id = AssetDefinitionId::new(domain_id, "unit".parse().expect("name"));
         let definition = NewAssetDefinition {
             id: definition_id.clone(),
-            name: "pgk".to_owned(),
+            name: "unit".to_owned(),
             description: None,
             alias: None,
             spec: NumericSpec::integer(),
@@ -8178,7 +8258,7 @@ mod tests {
             .execute(&authority, &mut tx)
             .expect("register global definition");
 
-        let alias: AssetDefinitionAlias = "pgk#paynet".parse().expect("alias");
+        let alias: AssetDefinitionAlias = "unit#paynet".parse().expect("alias");
         SetAssetDefinitionAlias::bind(definition_id.clone(), alias.clone(), None)
             .execute(&authority, &mut tx)
             .expect("public dataspace may home a global asset alias");
@@ -8196,7 +8276,7 @@ mod tests {
         let domain_id: DomainId = DomainId::try_new("alias-universal", "paynet").expect("domain");
         seed_domain(&mut state, &domain_id, &authority);
 
-        let definition_id = AssetDefinitionId::new(domain_id, "pgk".parse().expect("name"));
+        let definition_id = AssetDefinitionId::new(domain_id, "unit".parse().expect("name"));
         let header = BlockHeader::new(nonzero!(1_u64), None, None, None, 10_000, 0);
         let mut block = state.block(header);
         let mut tx = block.transaction();
@@ -8205,12 +8285,12 @@ mod tests {
         tx.world.insert_asset_definition_entry(
             definition_id.clone(),
             AssetDefinition::numeric(definition_id.clone())
-                .with_name("pgk".to_owned())
+                .with_name("unit".to_owned())
                 .with_balance_scope_policy(iroha_data_model::asset::AssetBalancePolicy::Global)
                 .build(&authority),
         );
 
-        let alias: AssetDefinitionAlias = "pgk#universal".parse().expect("alias");
+        let alias: AssetDefinitionAlias = "unit#universal".parse().expect("alias");
         SetAssetDefinitionAlias::bind(definition_id.clone(), alias.clone(), None)
             .execute(&authority, &mut tx)
             .expect("universal dataspace may home a global asset alias");
@@ -8229,10 +8309,10 @@ mod tests {
             DomainId::try_new("alias-clear-universal", "universal").expect("domain");
         seed_domain(&mut state, &domain_id, &authority);
 
-        let definition_id = AssetDefinitionId::new(domain_id, "pgk".parse().expect("name"));
+        let definition_id = AssetDefinitionId::new(domain_id, "unit".parse().expect("name"));
         let definition = NewAssetDefinition {
             id: definition_id.clone(),
-            name: "pgk".to_owned(),
+            name: "unit".to_owned(),
             description: None,
             alias: None,
             spec: NumericSpec::integer(),
@@ -8250,7 +8330,7 @@ mod tests {
             .execute(&authority, &mut tx)
             .expect("register global definition");
 
-        let alias: AssetDefinitionAlias = "pgk#universal".parse().expect("alias");
+        let alias: AssetDefinitionAlias = "unit#universal".parse().expect("alias");
         SetAssetDefinitionAlias::bind(definition_id.clone(), alias.clone(), None)
             .execute(&authority, &mut tx)
             .expect("bind universal alias");
@@ -8273,9 +8353,9 @@ mod tests {
         let authority = (*ALICE_ID).clone();
         let paynet = DataSpaceId::new(7);
         let domain_id: DomainId = DomainId::try_new("cash", "paynet").expect("domain");
-        let definition_id = AssetDefinitionId::new(domain_id, "pgk".parse().expect("name"));
+        let definition_id = AssetDefinitionId::new(domain_id, "unit".parse().expect("name"));
         let definition = AssetDefinition::numeric(definition_id.clone())
-            .with_name("pgk".to_owned())
+            .with_name("unit".to_owned())
             .with_balance_scope_policy(iroha_data_model::asset::AssetBalancePolicy::Global)
             .build(&authority);
 
@@ -8289,7 +8369,7 @@ mod tests {
         tx.world
             .bind_asset_definition_alias(
                 &definition_id,
-                "pgk#universal".parse().expect("alias"),
+                "unit#universal".parse().expect("alias"),
                 None,
                 None,
                 10_000,
@@ -8314,10 +8394,10 @@ mod tests {
             DomainId::try_new("alias-restricted", "universal").expect("domain");
         seed_domain(&mut state, &domain_id, &authority);
 
-        let definition_id = AssetDefinitionId::new(domain_id, "pgk".parse().expect("name"));
+        let definition_id = AssetDefinitionId::new(domain_id, "unit".parse().expect("name"));
         let definition = NewAssetDefinition {
             id: definition_id.clone(),
-            name: "pgk".to_owned(),
+            name: "unit".to_owned(),
             description: None,
             alias: None,
             spec: NumericSpec::integer(),
@@ -8337,7 +8417,7 @@ mod tests {
             .execute(&authority, &mut tx)
             .expect("register restricted definition");
 
-        let alias: AssetDefinitionAlias = "pgk#paynet".parse().expect("alias");
+        let alias: AssetDefinitionAlias = "unit#paynet".parse().expect("alias");
         SetAssetDefinitionAlias::bind(definition_id.clone(), alias.clone(), None)
             .execute(&authority, &mut tx)
             .expect("restricted asset alias may use restricted dataspace");
@@ -8358,10 +8438,10 @@ mod tests {
         seed_account(&mut state, &ALICE_ID, &domain_id);
         seed_account(&mut state, &BOB_ID, &domain_id);
 
-        let definition_id = AssetDefinitionId::new(domain_id, "pgk".parse().expect("name"));
+        let definition_id = AssetDefinitionId::new(domain_id, "unit".parse().expect("name"));
         let definition = NewAssetDefinition {
             id: definition_id.clone(),
-            name: "Digital Kina".to_owned(),
+            name: "Private Unit".to_owned(),
             description: None,
             alias: None,
             spec: NumericSpec::integer(),
@@ -8471,10 +8551,10 @@ mod tests {
             DomainId::try_new("policy-missing-migration", "universal").expect("domain id");
         seed_domain(&mut state, &domain_id, &authority);
 
-        let definition_id = AssetDefinitionId::new(domain_id, "pgk".parse().expect("name"));
+        let definition_id = AssetDefinitionId::new(domain_id, "unit".parse().expect("name"));
         let definition = NewAssetDefinition {
             id: definition_id.clone(),
-            name: "Digital Kina".to_owned(),
+            name: "Private Unit".to_owned(),
             description: None,
             alias: None,
             spec: NumericSpec::integer(),
@@ -8520,10 +8600,10 @@ mod tests {
             DomainId::try_new("policy-noop-migration", "universal").expect("domain id");
         seed_domain(&mut state, &domain_id, &authority);
 
-        let definition_id = AssetDefinitionId::new(domain_id, "pgk".parse().expect("name"));
+        let definition_id = AssetDefinitionId::new(domain_id, "unit".parse().expect("name"));
         let definition = NewAssetDefinition {
             id: definition_id.clone(),
-            name: "Digital Kina".to_owned(),
+            name: "Private Unit".to_owned(),
             description: None,
             alias: None,
             spec: NumericSpec::integer(),
@@ -8569,10 +8649,10 @@ mod tests {
             DomainId::try_new("policy-noop-ok", "universal").expect("domain id");
         seed_domain(&mut state, &domain_id, &authority);
 
-        let definition_id = AssetDefinitionId::new(domain_id, "pgk".parse().expect("name"));
+        let definition_id = AssetDefinitionId::new(domain_id, "unit".parse().expect("name"));
         let definition = NewAssetDefinition {
             id: definition_id.clone(),
-            name: "Digital Kina".to_owned(),
+            name: "Private Unit".to_owned(),
             description: None,
             alias: None,
             spec: NumericSpec::integer(),
@@ -8615,10 +8695,10 @@ mod tests {
             DomainId::try_new("policy-empty-migration", "universal").expect("domain id");
         seed_domain(&mut state, &domain_id, &authority);
 
-        let definition_id = AssetDefinitionId::new(domain_id, "pgk".parse().expect("name"));
+        let definition_id = AssetDefinitionId::new(domain_id, "unit".parse().expect("name"));
         let definition = NewAssetDefinition {
             id: definition_id.clone(),
-            name: "Digital Kina".to_owned(),
+            name: "Private Unit".to_owned(),
             description: None,
             alias: None,
             spec: NumericSpec::integer(),
@@ -8671,10 +8751,10 @@ mod tests {
             DomainId::try_new("policy-unknown-migration", "universal").expect("domain id");
         seed_domain(&mut state, &domain_id, &authority);
 
-        let definition_id = AssetDefinitionId::new(domain_id, "pgk".parse().expect("name"));
+        let definition_id = AssetDefinitionId::new(domain_id, "unit".parse().expect("name"));
         let definition = NewAssetDefinition {
             id: definition_id.clone(),
-            name: "Digital Kina".to_owned(),
+            name: "Private Unit".to_owned(),
             description: None,
             alias: None,
             spec: NumericSpec::integer(),
@@ -8720,10 +8800,10 @@ mod tests {
             DomainId::try_new("policy-restricted", "universal").expect("domain id");
         seed_domain(&mut state, &domain_id, &authority);
 
-        let definition_id = AssetDefinitionId::new(domain_id, "pgk".parse().expect("name"));
+        let definition_id = AssetDefinitionId::new(domain_id, "unit".parse().expect("name"));
         let definition = NewAssetDefinition {
             id: definition_id.clone(),
-            name: "Digital Kina".to_owned(),
+            name: "Private Unit".to_owned(),
             description: None,
             alias: None,
             spec: NumericSpec::integer(),
@@ -8793,6 +8873,73 @@ mod tests {
     }
 
     #[test]
+    fn set_contract_alias_allows_active_dynamic_sns_dataspace() {
+        let state = test_state();
+        let authority = (*ALICE_ID).clone();
+        let dynamic_dataspace =
+            crate::sns::dataspace_id_for_sns_alias("is").expect("dynamic dataspace id");
+        let contract_address =
+            ContractAddress::derive(0, &authority, 0, dynamic_dataspace).expect("address");
+
+        let header = BlockHeader::new(nonzero!(1_u64), None, None, None, 10_000, 0);
+        let mut block = state.block(header);
+        let mut tx = block.transaction();
+        seed_dataspace_alias_lease(&mut tx, &authority, "is");
+        tx.world.contract_instances.insert(
+            contract_address.clone(),
+            Hash::new("dynamic-contract-alias"),
+        );
+
+        let alias: ContractAlias = "router::is".parse().expect("alias");
+        SetContractAlias::bind(contract_address.clone(), alias.clone(), Some(11_000))
+            .execute(&authority, &mut tx)
+            .expect("bind dynamic dataspace contract alias");
+
+        assert_eq!(
+            tx.world.contract_aliases.get(&alias),
+            Some(&contract_address)
+        );
+        assert_eq!(
+            tx.world
+                .contract_alias_bindings
+                .get(&contract_address)
+                .map(|record| record.alias.clone()),
+            Some(alias)
+        );
+    }
+
+    #[test]
+    fn set_contract_alias_rejects_unknown_dynamic_dataspace_alias() {
+        let state = test_state();
+        let authority = (*ALICE_ID).clone();
+        let dynamic_dataspace = DataSpaceId::new(4_242);
+        let contract_address =
+            ContractAddress::derive(0, &authority, 0, dynamic_dataspace).expect("address");
+
+        let header = BlockHeader::new(nonzero!(1_u64), None, None, None, 10_000, 0);
+        let mut block = state.block(header);
+        let mut tx = block.transaction();
+        tx.world.contract_instances.insert(
+            contract_address.clone(),
+            Hash::new("dynamic-contract-alias"),
+        );
+
+        let err = SetContractAlias::bind(
+            contract_address,
+            "router::missing".parse().expect("alias"),
+            Some(11_000),
+        )
+        .execute(&authority, &mut tx)
+        .expect_err("unknown dynamic dataspace must fail closed");
+
+        let err_debug = format!("{err:?}");
+        assert!(
+            err_debug.contains("unknown or inactive dataspace alias `missing`"),
+            "unexpected error: {err_debug}"
+        );
+    }
+
+    #[test]
     fn set_contract_alias_clear_allows_stale_undeployed_binding() {
         let state = test_state();
         let authority = (*ALICE_ID).clone();
@@ -8830,6 +8977,90 @@ mod tests {
                 .get(&"router::universal".parse::<ContractAlias>().expect("alias"))
                 .is_none(),
             "alias index should be removed"
+        );
+    }
+
+    #[test]
+    fn set_contract_alias_clear_allows_stale_dynamic_dataspace_binding() {
+        let state = test_state();
+        let authority = (*ALICE_ID).clone();
+        let dynamic_dataspace =
+            crate::sns::dataspace_id_for_sns_alias("is").expect("dynamic dataspace id");
+        let contract_address =
+            ContractAddress::derive(0, &authority, 0, dynamic_dataspace).expect("address");
+        let alias: ContractAlias = "router::is".parse().expect("alias");
+
+        let header = BlockHeader::new(nonzero!(1_u64), None, None, None, 10_000, 0);
+        let mut block = state.block(header);
+        let mut tx = block.transaction();
+        tx.world
+            .bind_contract_alias(&contract_address, alias.clone(), None, None, 10_000)
+            .expect("seed stale dynamic contract alias");
+
+        SetContractAlias::clear(contract_address.clone())
+            .execute(&authority, &mut tx)
+            .expect("clear should tolerate undeployed dynamic alias");
+
+        assert!(
+            tx.world
+                .contract_alias_bindings
+                .get(&contract_address)
+                .is_none(),
+            "binding index should be removed"
+        );
+        assert!(
+            tx.world.contract_aliases.get(&alias).is_none(),
+            "alias index should be removed"
+        );
+    }
+
+    #[test]
+    fn set_contract_alias_clear_allows_unknown_dynamic_dataspace_without_binding() {
+        let state = test_state();
+        let authority = (*ALICE_ID).clone();
+        let contract_address =
+            ContractAddress::derive(0, &authority, 0, DataSpaceId::new(4_242)).expect("address");
+
+        let header = BlockHeader::new(nonzero!(1_u64), None, None, None, 10_000, 0);
+        let mut block = state.block(header);
+        let mut tx = block.transaction();
+
+        SetContractAlias::clear(contract_address.clone())
+            .execute(&authority, &mut tx)
+            .expect("clear should be a no-op for unknown undeployed dynamic address");
+
+        assert!(
+            tx.world
+                .contract_alias_bindings
+                .get(&contract_address)
+                .is_none(),
+            "clear should not create a binding"
+        );
+    }
+
+    #[test]
+    fn set_contract_alias_clear_rejects_lease_without_alias() {
+        let state = test_state();
+        let authority = (*ALICE_ID).clone();
+        let contract_address =
+            ContractAddress::derive(0, &authority, 0, DataSpaceId::new(4_242)).expect("address");
+
+        let header = BlockHeader::new(nonzero!(1_u64), None, None, None, 10_000, 0);
+        let mut block = state.block(header);
+        let mut tx = block.transaction();
+
+        let err = SetContractAlias {
+            contract_address,
+            alias: None,
+            lease_expiry_ms: Some(11_000),
+        }
+        .execute(&authority, &mut tx)
+        .expect_err("lease metadata without alias must fail");
+
+        let err_debug = format!("{err:?}");
+        assert!(
+            err_debug.contains("lease_expiry_ms requires alias binding"),
+            "unexpected error: {err_debug}"
         );
     }
 

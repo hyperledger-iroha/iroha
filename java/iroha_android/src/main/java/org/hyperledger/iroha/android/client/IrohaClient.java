@@ -25,7 +25,8 @@ public interface IrohaClient {
       final byte[] encodedVersionedTransactionJson) {
     final CompletableFuture<ClientResponse> future = new CompletableFuture<>();
     future.completeExceptionally(
-        new UnsupportedOperationException("submitTransactionJson not supported"));
+        new IllegalStateException(
+            "submitTransactionJson requires a concrete IrohaClient implementation"));
     return future;
   }
 
@@ -69,7 +70,8 @@ public interface IrohaClient {
       final byte[] encodedVersionedEntrypoint) {
     final CompletableFuture<ClientResponse> future = new CompletableFuture<>();
     future.completeExceptionally(
-        new UnsupportedOperationException("submitTransactionEntrypoint not supported"));
+        new IllegalStateException(
+            "submitTransactionEntrypoint requires a concrete IrohaClient implementation"));
     return future;
   }
 
@@ -78,7 +80,8 @@ public interface IrohaClient {
       final byte[] encodedVersionedEntrypointJson) {
     final CompletableFuture<ClientResponse> future = new CompletableFuture<>();
     future.completeExceptionally(
-        new UnsupportedOperationException("submitTransactionEntrypointJson not supported"));
+        new IllegalStateException(
+            "submitTransactionEntrypointJson requires a concrete IrohaClient implementation"));
     return future;
   }
 
@@ -91,7 +94,8 @@ public interface IrohaClient {
       final String hashHex, final PipelineStatusOptions options) {
     final CompletableFuture<Map<String, Object>> future = new CompletableFuture<>();
     future.completeExceptionally(
-        new UnsupportedOperationException("waitForTransactionStatus not supported"));
+        new IllegalStateException(
+            "waitForTransactionStatus requires a concrete IrohaClient implementation"));
     return future;
   }
 
@@ -99,7 +103,8 @@ public interface IrohaClient {
       final String hashHex, final PipelineStatusOptions options) {
     final CompletableFuture<Map<String, Object>> future = new CompletableFuture<>();
     future.completeExceptionally(
-        new UnsupportedOperationException("waitForTransactionStatusStream not supported"));
+        new IllegalStateException(
+            "waitForTransactionStatusStream requires a concrete IrohaClient implementation"));
     return future;
   }
 
@@ -113,7 +118,8 @@ public interface IrohaClient {
       final MultisigProposeRequest request) {
     final CompletableFuture<MultisigResponse> future = new CompletableFuture<>();
     future.completeExceptionally(
-        new UnsupportedOperationException("proposeMultisig not supported by this client"));
+        new IllegalStateException(
+            "proposeMultisig requires a concrete IrohaClient implementation"));
     return future;
   }
 
@@ -128,7 +134,8 @@ public interface IrohaClient {
       final String alias) {
     final CompletableFuture<Optional<AccountAliasResolution>> future = new CompletableFuture<>();
     future.completeExceptionally(
-        new UnsupportedOperationException("resolveAccountAlias not supported by this client"));
+        new IllegalStateException(
+            "resolveAccountAlias requires a concrete IrohaClient implementation"));
     return future;
   }
 }

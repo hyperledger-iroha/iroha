@@ -2097,10 +2097,10 @@ mod tests {
             iroha_crypto::bls_normal_pop_prove(bls.private_key()).expect("BLS PoP generation"),
         );
 
-        let vk_id = iroha_data_model::proof::VerifyingKeyId::new("halo2/ipa", "offline-v2-test");
+        let vk_id = iroha_data_model::proof::VerifyingKeyId::new("halo2/ipa", "offline-test");
         let mut record = iroha_data_model::proof::VerifyingKeyRecord::new(
             1,
-            "offline-v2-test",
+            "offline-test",
             iroha_data_model::zk::BackendTag::Halo2IpaPasta,
             "pallas",
             [0xAA; 32],

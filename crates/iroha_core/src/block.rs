@@ -911,7 +911,7 @@ use crate::{
     },
     prelude::*,
     queue::{
-        evaluate_policy_plan_with_catalog_and_world, resolve_routing_decision, routing_ledger,
+        evaluate_policy_plan_with_catalog_and_world_at, resolve_routing_decision, routing_ledger,
     },
     smartcontracts::isi::triggers::{set::SetReadOnly, specialized::LoadedActionTrait},
     state::{
@@ -2651,6 +2651,34 @@ mod pending {
             latest_block: Option<&SignedBlock>,
         ) -> BlockBuilder<Chained> {
             let mut header = self.make_header(latest_block, view_change_index);
+            if header.confidential_features().is_none() {
+                header.set_confidential_features(Some(EMPTY_CONFIDENTIAL_FEATURE_DIGEST));
+            }
+            BlockBuilder(Chained {
+                header,
+                transactions: self.0.transactions,
+                da_commitments: None,
+                da_proof_policies: None,
+                da_pin_intents: None,
+                previous_roster_evidence: None,
+                npos_consensus_effects: None,
+                execution_context: None,
+            })
+        }
+
+        /// Chain the block to a known parent hash when the parent body is unavailable.
+        pub fn chain_with_parent_hash(
+            self,
+            view_change_index: u64,
+            parent_height: u64,
+            parent_hash: HashOf<BlockHeader>,
+        ) -> BlockBuilder<Chained> {
+            let mut header = self.make_header(None, view_change_index);
+            header.set_height(
+                core::num::NonZeroU64::new(parent_height.saturating_add(1))
+                    .expect("parent height plus one is non-zero"),
+            );
+            header.set_prev_block_hash(Some(parent_hash));
             if header.confidential_features().is_none() {
                 header.set_confidential_features(Some(EMPTY_CONFIDENTIAL_FEATURE_DIGEST));
             }
@@ -5624,17 +5652,34 @@ pub(crate) mod valid {
                     check_genesis_block(block, genesis_account, chain_id)?;
                 }
             } else {
-                let prev_block_time = if soft_fork {
+                let prev_block = if soft_fork {
                     state.prev_block()
                 } else {
                     state.latest_block()
-                }
-                .expect("INTERNAL BUG: Genesis not committed")
-                .header()
-                .creation_time();
+                };
 
-                if block.header().creation_time() <= prev_block_time {
-                    return Err(BlockValidationError::BlockInThePast);
+                if let Some(prev_block) = prev_block {
+                    let prev_block_time = prev_block.header().creation_time();
+
+                    if block.header().creation_time() <= prev_block_time {
+                        return Err(BlockValidationError::BlockInThePast);
+                    }
+                } else if expected_prev_block_hash == actual_prev_block_hash
+                    && actual_prev_block_hash.is_some()
+                    && state_height > 0
+                {
+                    iroha_logger::warn!(
+                        block_height = block.header().height().get(),
+                        block_hash = ?block.hash(),
+                        parent_hash = ?actual_prev_block_hash,
+                        state_height,
+                        "skipping previous block timestamp check because legacy hard-fork state has hash-only parent context"
+                    );
+                } else {
+                    return Err(BlockValidationError::PrevBlockHashMismatch {
+                        expected: expected_prev_block_hash,
+                        actual: actual_prev_block_hash,
+                    });
                 }
 
                 if !skip_block_signatures {
@@ -6064,12 +6109,15 @@ pub(crate) mod valid {
                 let accepted = crate::tx::AcceptedTransaction::new_unchecked_entrypoint(
                     Cow::Owned(entrypoint.clone()),
                 );
-                let plan = evaluate_policy_plan_with_catalog_and_world(
+                let routing_ledger_time_ms =
+                    u64::try_from(block.header().creation_time().as_millis()).unwrap_or(u64::MAX);
+                let plan = evaluate_policy_plan_with_catalog_and_world_at(
                     &nexus.routing_policy,
                     &nexus.lane_catalog,
                     &nexus.dataspace_catalog,
                     &accepted,
                     state.world(),
+                    routing_ledger_time_ms,
                 )
                 .map_err(|err| {
                     Self::execution_context_error(format!(
@@ -6998,6 +7046,8 @@ pub(crate) mod valid {
             };
             let start = timings.as_ref().map(|_| Instant::now());
             let n = entrypoints.len();
+            let routing_ledger_time_ms =
+                u64::try_from(block.header().creation_time().as_millis()).unwrap_or(u64::MAX);
             #[allow(clippy::disallowed_types)]
             let tx_hashes: std::collections::HashSet<_> = entrypoints
                 .iter()
@@ -7028,12 +7078,13 @@ pub(crate) mod valid {
                     let accepted = crate::tx::AcceptedTransaction::new_unchecked_entrypoint(
                         Cow::Borrowed(entrypoint),
                     );
-                    match evaluate_policy_plan_with_catalog_and_world(
+                    match evaluate_policy_plan_with_catalog_and_world_at(
                         routing_policy,
                         lane_catalog,
                         dataspace_catalog,
                         &accepted,
                         &state_block.world,
+                        routing_ledger_time_ms,
                     ) {
                         Ok(plan) => {
                             decisions.push(plan.coordinator_route());
@@ -7163,6 +7214,7 @@ pub(crate) mod valid {
                 state_block.drain_transfer_transcripts_with_pending(fastpq_digest_batch);
             let axt_envelopes = state_block.drain_axt_envelopes();
             let axt_policy_snapshot = Some(state_block.axt_policy_snapshot());
+            let trigger_completions = state_block.world.trigger_completions();
             block
                 .set_transaction_results_with_transcripts(
                     time_trgs,
@@ -7173,6 +7225,7 @@ pub(crate) mod valid {
                     axt_policy_snapshot,
                 )
                 .map_err(|_| BlockValidationError::MerkleRootMismatch)?;
+            block.set_trigger_completions(trigger_completions);
             if let (Some(timings), Some(start)) = (timings.as_deref_mut(), start) {
                 let elapsed = to_ms(start.elapsed());
                 timings.execution_tx_apply_ms = elapsed;
@@ -7398,6 +7451,8 @@ pub(crate) mod valid {
             let crypto_cfg = Arc::clone(&state_block.crypto);
             let chain_id = state_block.chain_id.clone();
             let block_creation_time = block.header().creation_time();
+            let routing_ledger_time_ms =
+                u64::try_from(block_creation_time.as_millis()).unwrap_or(u64::MAX);
             let is_genesis_block = block.header().is_genesis();
             let debug_trace_scheduler_inputs = state_block.pipeline.debug_trace_scheduler_inputs;
             let debug_trace_tx_eval = state_block.pipeline.debug_trace_tx_eval;
@@ -7441,12 +7496,13 @@ pub(crate) mod valid {
                                     let accepted = crate::tx::AcceptedTransaction::new_unchecked(
                                         Cow::Borrowed(*tx),
                                     );
-                                    evaluate_policy_plan_with_catalog_and_world(
+                                    evaluate_policy_plan_with_catalog_and_world_at(
                                         routing_policy,
                                         &lane_catalog,
                                         &dataspace_catalog,
                                         &accepted,
                                         &state_block.world,
+                                        routing_ledger_time_ms,
                                     )
                                     .map(|plan| plan.coordinator_route())
                                 })
@@ -7458,12 +7514,13 @@ pub(crate) mod valid {
                                 let accepted = crate::tx::AcceptedTransaction::new_unchecked(
                                     Cow::Borrowed(*tx),
                                 );
-                                evaluate_policy_plan_with_catalog_and_world(
+                                evaluate_policy_plan_with_catalog_and_world_at(
                                     routing_policy,
                                     &lane_catalog,
                                     &dataspace_catalog,
                                     &accepted,
                                     &state_block.world,
+                                    routing_ledger_time_ms,
                                 )
                                 .map(|plan| plan.coordinator_route())
                             })
@@ -7474,12 +7531,13 @@ pub(crate) mod valid {
                         .map(|tx| {
                             let accepted =
                                 crate::tx::AcceptedTransaction::new_unchecked(Cow::Borrowed(*tx));
-                            evaluate_policy_plan_with_catalog_and_world(
+                            evaluate_policy_plan_with_catalog_and_world_at(
                                 routing_policy,
                                 &lane_catalog,
                                 &dataspace_catalog,
                                 &accepted,
                                 &state_block.world,
+                                routing_ledger_time_ms,
                             )
                             .map(|plan| plan.coordinator_route())
                         })
@@ -11224,6 +11282,7 @@ pub(crate) mod valid {
             let axt_start = timings.as_ref().map(|_| Instant::now());
             let axt_envelopes = state_block.drain_axt_envelopes();
             let axt_policy_snapshot = Some(state_block.axt_policy_snapshot());
+            let trigger_completions = state_block.world.trigger_completions();
             if let (Some(timings), Some(start)) = (timings.as_deref_mut(), axt_start) {
                 timings.execution_tx_finalize_axt_ms = to_ms(start.elapsed());
             }
@@ -11238,6 +11297,7 @@ pub(crate) mod valid {
                     axt_policy_snapshot,
                 )
                 .map_err(|_| BlockValidationError::MerkleRootMismatch)?;
+            block.set_trigger_completions(trigger_completions);
             if let (Some(timings), Some(start)) = (timings.as_deref_mut(), set_results_start) {
                 timings.execution_tx_finalize_set_results_ms = to_ms(start.elapsed());
             }

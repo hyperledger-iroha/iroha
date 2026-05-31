@@ -159,11 +159,14 @@ Init ==
   checked = 0
 
 Next ==
-  UNCHANGED vars
+  \/ /\ checked < 12
+     /\ checked' = checked + 1
+  \/ /\ checked = 12
+     /\ UNCHANGED vars
 
 TypeInvariant ==
   /\ Bug \in BugSet
-  /\ checked = 0
+  /\ checked \in 0..12
   /\ \A c \in Cases: ActualGate(c) \in BOOLEAN
   /\ \A c \in Cases: ActualRetarget(c) \in BOOLEAN
   /\ \A c \in Cases: ActualSource(c) \in Sources
@@ -218,5 +221,62 @@ SafetyFast ==
   /\ ProgressGateStable
   /\ RequestBranchStable
   /\ RewriteStable
+
+GateAnchors ==
+  /\ GateExact
+  /\ \A c \in Cases: ActualGate(c) = SpecGate(c)
+
+RetargetAnchors ==
+  /\ RetargetExact
+  /\ \A c \in Cases: ActualRetarget(c) = SpecRetarget(c)
+
+RewriteAnchors ==
+  /\ RewriteExact
+  /\ \A c \in Cases:
+       /\ ActualSource(c) = SpecSource(c)
+       /\ ActualTarget(c) = SpecTarget(c)
+
+StallBypassAnchors ==
+  /\ StallBypassStable
+  /\ ActualGate(StallActiveRetarget)
+  /\ ~ActualGate(StallWrongFrontierRejected)
+  /\ ActualRetarget(StallActiveRetarget)
+  /\ ~ActualRetarget(StallWrongFrontierRejected)
+
+ProgressGateAnchors ==
+  /\ ProgressGateStable
+  /\ ActualRetarget(UnchangedProgressRetarget)
+  /\ ActualRetarget(EqualProgressRetarget)
+  /\ ActualRetarget(ClearedProgressRetarget)
+  /\ ~ActualRetarget(CreatedProgressNoRetarget)
+  /\ ~ActualRetarget(AdvancedProgressNoRetarget)
+  /\ ~ActualRetarget(NoPreviousEmitNoRetarget)
+  /\ ~ActualRetarget(AbsentGateNoRetarget)
+
+RequestBranchAnchors ==
+  /\ RequestBranchStable
+  /\ ~ActualRetarget(NoHintNoRetarget)
+  /\ ~ActualRetarget(SameHashNoRetarget)
+  /\ ~ActualRetarget(NonFrontierParentNoRetarget)
+
+RewriteStableAnchors ==
+  /\ RewriteStable
+  /\ ActualSource(StallActiveRetarget) = QcHintSource
+  /\ ActualTarget(StallActiveRetarget) = HintHash
+  /\ ActualSource(UnchangedProgressRetarget) = QcHintSource
+  /\ ActualTarget(UnchangedProgressRetarget) = HintHash
+  /\ ActualSource(NoPreviousEmitNoRetarget) = ExpectedSource
+  /\ ActualTarget(NoPreviousEmitNoRetarget) = ExpectedHash
+
+FrontierParentQcHintRetargetSafetyAnchors ==
+  /\ GateAnchors
+  /\ RetargetAnchors
+  /\ RewriteAnchors
+  /\ StallBypassAnchors
+  /\ ProgressGateAnchors
+  /\ RequestBranchAnchors
+  /\ RewriteStableAnchors
+
+Safety == FrontierParentQcHintRetargetSafetyAnchors
 
 ====

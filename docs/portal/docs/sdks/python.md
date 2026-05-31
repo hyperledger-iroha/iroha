@@ -5,6 +5,10 @@ interact with Torii from scripts, notebooks, or web backends. This quickstart
 covers installation, transaction submission, and event streaming. For deeper
 coverage see `python/iroha_python/README.md` in the repository.
 
+For SORA Nexus wallet-approved app transfers, import
+`NexusAppClient` from `iroha_python.nexus_app`; see
+[Nexus App Facade](./nexus-app-facade).
+
 ## 1. Install
 
 ```bash
@@ -91,18 +95,18 @@ holders = client.list_asset_holders("62Fk4FPcMuLvW5QjDGNF2a4jAmjM", asset_id=ass
 print(assets, txs, holders)
 ```
 
-## 5. Offline V2 readiness
+## 5. Offline readiness
 
-Use `GET /v1/offline/v2/readiness` through `get_offline_v2_readiness()` for offline feature discovery.
-Offline V2 note issuance, redemption, and audit payloads are submitted as transaction instructions;
+Use `GET /v1/offline/readiness` through `get_offline_readiness()` for offline feature discovery.
+Offline note issuance, redemption, and audit payloads are submitted as transaction instructions;
 legacy offline allowance, reserve, revocation, transfer-history, and cash HTTP routes are no longer published by Torii.
 
 ```python
 from iroha_python import ToriiClient
 
 client = ToriiClient("http://127.0.0.1:8080")
-readiness = client.get_offline_v2_readiness()
-print("offline notes", readiness.offline_note_v2)
+readiness = client.get_offline_readiness()
+print("offline notes", readiness.offline_note)
 ```
 ## 6. Stream events
 

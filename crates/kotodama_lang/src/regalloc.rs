@@ -367,20 +367,34 @@ fn visit_instr_uses<F: FnMut(Temp)>(instr: &Instr, mut f: F) {
         | SubscriptionRecordUsage
         | DataRef { .. }
         | GetAuthority { .. }
+        | SysvarAuthority { .. }
         | CurrentTimeMs { .. }
         | BlockHeight { .. }
+        | BlockTimeMs { .. }
+        | ChainId { .. }
+        | ContractAddress { .. }
+        | Entrypoint { .. }
         | GetTriggerEvent { .. }
+        | ProveExecution { .. }
         | TransferBatchBegin
-        | TransferBatchEnd => {}
+        | TransferBatchEnd
+        | CommitOutput => {}
         Binary { left, right, .. } => {
             f(*left);
             f(*right);
         }
         Unary { operand, .. } => f(*operand),
-        NumericFromInt { value, .. } | NumericToInt { value, .. } => f(*value),
+        NumericFromInt { value, .. } | NumericToInt { value, .. } | NumericNeg { value, .. } => {
+            f(*value)
+        }
         NumericBinary { left, right, .. } | NumericCompare { left, right, .. } => {
             f(*left);
             f(*right);
+        }
+        DirectHelperSyscall { args, .. } => {
+            for arg in args {
+                f(*arg);
+            }
         }
         Min { a, b, .. } | Max { a, b, .. } | Gcd { a, b, .. } | Mean { a, b, .. } => {
             f(*a);
@@ -502,7 +516,21 @@ fn visit_instr_uses<F: FnMut(Temp)>(instr: &Instr, mut f: F) {
         | EscrowMarkPaymentSent { escrow }
         | EscrowRelease { escrow }
         | EscrowCancel { escrow } => f(*escrow),
+        AnonymousEscrowOpenOffer { request }
+        | AnonymousEscrowRelease { request }
+        | AnonymousEscrowCancel { request }
+        | AnonymousEscrowResolveDispute { request } => f(*request),
+        AnonymousEscrowAccept { escrow } | AnonymousEscrowMarkPaymentSent { escrow } => f(*escrow),
         EscrowOpenDispute {
+            escrow,
+            evidence_hashes,
+        } => {
+            f(*escrow);
+            if let Some(evidence_hashes) = evidence_hashes {
+                f(*evidence_hashes);
+            }
+        }
+        AnonymousEscrowOpenDispute {
             escrow,
             evidence_hashes,
         } => {
@@ -532,6 +560,8 @@ fn visit_instr_uses<F: FnMut(Temp)>(instr: &Instr, mut f: F) {
         Assert { cond } => f(*cond),
         AbortIf { cond } => f(*cond),
         Info { msg } => f(*msg),
+        DebugPrint { value } => f(*value),
+        DebugLog { payload } => f(*payload),
         PointerFromString { src, .. } => f(*src),
         MapGet { map, key, .. } => {
             f(*map);
@@ -588,6 +618,14 @@ fn visit_instr_uses<F: FnMut(Temp)>(instr: &Instr, mut f: F) {
             f(*to);
         }
         RegisterAccount { account } | UnregisterAccount { account } => f(*account),
+        AddSignatory { account, signatory } | RemoveSignatory { account, signatory } => {
+            f(*account);
+            f(*signatory);
+        }
+        SetAccountQuorum { account, quorum } => {
+            f(*account);
+            f(*quorum);
+        }
         GrantPermission { account, token } | RevokePermission { account, token } => {
             f(*account);
             f(*token);
@@ -609,7 +647,10 @@ fn visit_instr_uses<F: FnMut(Temp)>(instr: &Instr, mut f: F) {
         }
         Instr::Sm3Hash { message, .. }
         | Instr::Sha256Hash { message, .. }
-        | Instr::Sha3Hash { message, .. } => f(*message),
+        | Instr::Sha3Hash { message, .. }
+        | Instr::Blake2b256Hash { message, .. }
+        | Instr::Keccak256Hash { message, .. }
+        | Instr::IrohaHash { message, .. } => f(*message),
         Instr::Sm2Verify {
             message,
             signature,
@@ -693,14 +734,90 @@ fn visit_instr_uses<F: FnMut(Temp)>(instr: &Instr, mut f: F) {
             }
         }
         Instr::ZkVerify { payload, .. }
+        | Instr::VerifyProof { payload, .. }
         | Instr::VendorExecuteInstruction { payload }
-        | Instr::VendorExecuteQuery { payload, .. } => f(*payload),
+        | Instr::VendorExecuteQuery { payload, .. }
+        | Instr::QueryExecuteNorito { payload, .. }
+        | Instr::QueryGet { key: payload, .. }
+        | Instr::TransferBatchApply { payload }
+        | Instr::SmartContractLifecycle { payload, .. }
+        | Instr::ZkRootsGet { payload, .. }
+        | Instr::ZkVoteGetTally { payload, .. }
+        | Instr::VrfEpochSeed { payload, .. }
+        | Instr::SoracloudHostCall {
+            request: payload, ..
+        } => f(*payload),
+        Instr::GetAccountBalance { account, asset, .. } => {
+            f(*account);
+            f(*asset);
+        }
+        Instr::Alloc { bytes, .. } => f(*bytes),
+        Instr::GrowHeap { bytes, .. } => f(*bytes),
+        Instr::GetMerklePath {
+            address,
+            output,
+            root_output,
+            ..
+        } => {
+            f(*address);
+            f(*output);
+            if let Some(root_output) = root_output {
+                f(*root_output);
+            }
+        }
+        Instr::GetMerkleCompact {
+            address,
+            output,
+            max_depth,
+            root_output,
+            ..
+        } => {
+            f(*address);
+            f(*output);
+            if let Some(max_depth) = max_depth {
+                f(*max_depth);
+            }
+            if let Some(root_output) = root_output {
+                f(*root_output);
+            }
+        }
+        Instr::GetRegisterMerkleCompact {
+            register_index,
+            output,
+            max_depth,
+            root_output,
+            ..
+        } => {
+            f(*register_index);
+            f(*output);
+            if let Some(max_depth) = max_depth {
+                f(*max_depth);
+            }
+            if let Some(root_output) = root_output {
+                f(*root_output);
+            }
+        }
+        Instr::GetPrivateInput { index, .. } => f(*index),
+        Instr::GetPublicInput { key, .. } => f(*key),
+        Instr::UseNullifier { nullifier } => f(*nullifier),
         StateGet { path, .. } => f(*path),
         StateSet { path, value } => {
             f(*path);
             f(*value);
         }
         StateDel { path } => f(*path),
+        StateKeys {
+            prefix,
+            offset,
+            limit,
+            ..
+        } => {
+            f(*prefix);
+            f(*offset);
+            f(*limit);
+        }
+        StateHas { path, .. } | StateLen { path, .. } => f(*path),
+        StateCount { prefix, .. } => f(*prefix),
         DecodeInt { blob, .. } | JsonDecode { blob, .. } | NameDecode { blob, .. } => f(*blob),
         TlvLen { value, .. } => f(*value),
         JsonSetInt {
@@ -862,9 +979,24 @@ fn dest_temp(instr: &Instr) -> Option<Temp> {
         | Instr::Valcom { dest, .. }
         | Instr::MapNew { dest }
         | Instr::GetAuthority { dest }
+        | Instr::SysvarAuthority { dest }
         | Instr::CurrentTimeMs { dest }
         | Instr::BlockHeight { dest }
+        | Instr::BlockTimeMs { dest }
+        | Instr::ChainId { dest }
+        | Instr::ContractAddress { dest }
+        | Instr::Entrypoint { dest }
         | Instr::CallContract { dest, .. }
+        | Instr::QueryExecuteNorito { dest, .. }
+        | Instr::QueryGet { dest, .. }
+        | Instr::GetAccountBalance { dest, .. }
+        | Instr::Alloc { dest, .. }
+        | Instr::GetPublicInput { dest, .. }
+        | Instr::GetPrivateInput { dest, .. }
+        | Instr::ZkRootsGet { dest, .. }
+        | Instr::ZkVoteGetTally { dest, .. }
+        | Instr::VrfEpochSeed { dest, .. }
+        | Instr::SoracloudHostCall { dest, .. }
         | Instr::ResolveAccountAlias { dest, .. }
         | Instr::GetTriggerEvent { dest }
         | Instr::ActorAccount { dest, .. }
@@ -876,16 +1008,31 @@ fn dest_temp(instr: &Instr) -> Option<Temp> {
         | Instr::PointerFromNorito { dest, .. }
         | Instr::Load64Imm { dest, .. }
         | Instr::StateGet { dest, .. }
+        | Instr::StateKeys { dest, .. }
+        | Instr::StateHas { dest, .. }
+        | Instr::StateLen { dest, .. }
+        | Instr::StateCount { dest, .. }
         | Instr::NumericFromInt { dest, .. }
         | Instr::NumericToInt { dest, .. }
+        | Instr::NumericNeg { dest, .. }
         | Instr::NumericBinary { dest, .. }
-        | Instr::NumericCompare { dest, .. } => Some(*dest),
+        | Instr::NumericCompare { dest, .. }
+        | Instr::DirectHelperSyscall { dest, .. } => Some(*dest),
         Instr::SchemaInfo { dest, .. } => Some(*dest),
         Instr::Sm3Hash { dest, .. }
         | Instr::Sha256Hash { dest, .. }
-        | Instr::Sha3Hash { dest, .. } => Some(*dest),
+        | Instr::Sha3Hash { dest, .. }
+        | Instr::Blake2b256Hash { dest, .. }
+        | Instr::Keccak256Hash { dest, .. }
+        | Instr::IrohaHash { dest, .. } => Some(*dest),
         Instr::Sm2Verify { dest, .. } => Some(*dest),
         Instr::VerifySignature { dest, .. } => Some(*dest),
+        Instr::ProveExecution { dest } => Some(*dest),
+        Instr::GrowHeap { dest, .. } => Some(*dest),
+        Instr::GetMerklePath { dest, .. }
+        | Instr::GetMerkleCompact { dest, .. }
+        | Instr::GetRegisterMerkleCompact { dest, .. } => Some(*dest),
+        Instr::VerifyProof { dest, .. } => Some(*dest),
         Instr::Sm4GcmSeal { dest, .. } => Some(*dest),
         Instr::Sm4GcmOpen { dest, .. } => Some(*dest),
         Instr::Sm4CcmSeal { dest, .. } => Some(*dest),
@@ -932,6 +1079,13 @@ fn dest_temp(instr: &Instr) -> Option<Temp> {
         | Instr::EscrowCancel { .. }
         | Instr::EscrowOpenDispute { .. }
         | Instr::EscrowResolveDispute { .. }
+        | Instr::AnonymousEscrowOpenOffer { .. }
+        | Instr::AnonymousEscrowAccept { .. }
+        | Instr::AnonymousEscrowMarkPaymentSent { .. }
+        | Instr::AnonymousEscrowRelease { .. }
+        | Instr::AnonymousEscrowCancel { .. }
+        | Instr::AnonymousEscrowOpenDispute { .. }
+        | Instr::AnonymousEscrowResolveDispute { .. }
         | Instr::MintAsset { .. }
         | Instr::BurnAsset { .. }
         | Instr::CreateNft { .. }
@@ -942,6 +1096,9 @@ fn dest_temp(instr: &Instr) -> Option<Temp> {
         | Instr::SetAccountDetail { .. }
         | Instr::RegisterDomain { .. }
         | Instr::RegisterAccount { .. }
+        | Instr::AddSignatory { .. }
+        | Instr::RemoveSignatory { .. }
+        | Instr::SetAccountQuorum { .. }
         | Instr::UnregisterDomain { .. }
         | Instr::UnregisterAsset { .. }
         | Instr::UnregisterAccount { .. }
@@ -962,6 +1119,8 @@ fn dest_temp(instr: &Instr) -> Option<Temp> {
         | Instr::Assert { .. }
         | Instr::AbortIf { .. }
         | Instr::Info { .. }
+        | Instr::DebugPrint { .. }
+        | Instr::DebugLog { .. }
         | Instr::MapSet { .. }
         | Instr::SetNftData { .. }
         | Instr::BurnNft { .. }
@@ -975,6 +1134,10 @@ fn dest_temp(instr: &Instr) -> Option<Temp> {
         | Instr::AxtCommit
         | Instr::TransferBatchBegin
         | Instr::TransferBatchEnd
+        | Instr::TransferBatchApply { .. }
+        | Instr::UseNullifier { .. }
+        | Instr::CommitOutput
+        | Instr::SmartContractLifecycle { .. }
         | Instr::ExpectRejectAs { .. } => None,
         Instr::CallMulti { .. } | Instr::MapLoadPair { .. } => None,
     }

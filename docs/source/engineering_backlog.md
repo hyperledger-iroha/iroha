@@ -636,23 +636,23 @@ track detailed unfinished engineering work.
   - Fold the Connect session/relay changes into the next broader
     `cargo test -p iroha_torii`, `cargo test --workspace`, and workspace clippy
     corridor when validation budget allows.
-- Carry Offline V2 real-proof support through the remaining release corridor.
+- Carry Offline real-proof support through the remaining release corridor.
   - The native bridge prover FFI focused corridor is green as of 2026-04-30. Fold it into a broader `cargo test -p iroha_core --lib`, SDK test, and workspace clippy corridor when validation budget allows.
   - Offline-to-offline SDK local-final semantics, trusted Ed25519 issuer
     certificate verification, and Android rollback fail-closed storage checks
     are green as of 2026-05-17 across Swift, Kotlin/JVM, Java Android, iOS
     simulator XCTest, and Android emulator instrumentation. Fold this into the
     next full workspace test/clippy corridor when validation budget allows.
-  - The pure Swift Offline V2 prover hot path is green as of 2026-05-01 with
+  - The pure Swift Offline prover hot path is green as of 2026-05-01 with
     subsecond median native audit/redeem proofs on macOS arm64. Keep that
     benchmark in the next iOS-device corridor and broaden Swift package
     validation when budget allows.
-  - Kotlin/JVM and Java Android now have the native Offline V2 instance-value
+  - Kotlin/JVM and Java Android now have the native Offline instance-value
     groundwork and pure Java Halo2/IPA prover path, including focused JVM and
     Android harness coverage plus env-gated benchmark hooks. Keep the native
     prover tests, Swift/JVM cross-verification payload, and larger benchmark
     iteration counts in the next device and full-SDK corridor.
-  - The Torii Offline V2 issuer hardening focused corridor is green as of
+  - The Torii Offline issuer hardening focused corridor is green as of
     2026-05-01. Fold it into the next broader `cargo test -p iroha_torii`,
     SDK, workspace test, and workspace clippy corridor when validation budget
     allows.
@@ -1118,7 +1118,7 @@ track detailed unfinished engineering work.
     account alias binding/lease instructions, contract-alias instructions,
     account-recovery instructions, RAM-LFE program-policy instructions,
     hidden-identifier instructions, consensus-key lifecycle instructions,
-    domain-endorsement instructions, verifying-key instructions, Offline V2
+    domain-endorsement instructions, verifying-key instructions, Offline
     note instructions, verified Nexus lane-relay/fee-budget instructions,
     native and anonymous asset escrow lifecycle instructions, Musubi
     package-registry instructions, smart-contract-code

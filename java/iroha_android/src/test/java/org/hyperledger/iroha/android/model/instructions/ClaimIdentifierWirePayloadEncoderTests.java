@@ -15,6 +15,7 @@ import org.hyperledger.iroha.android.client.IdentifierResolutionReceipt;
 import org.hyperledger.iroha.android.client.RamLfeOutputOpening;
 import org.hyperledger.iroha.android.client.RamLfeOutputOpeningPayload;
 import org.hyperledger.iroha.android.model.InstructionBox;
+import org.hyperledger.iroha.norito.CRC64;
 import org.hyperledger.iroha.norito.NoritoDecoder;
 import org.hyperledger.iroha.norito.NoritoHeader;
 
@@ -29,6 +30,8 @@ public final class ClaimIdentifierWirePayloadEncoderTests {
   public static void main(String[] args) throws Exception {
     claimIdentifierEncodesExpectedWirePayload();
     claimIdentifierMatchesRustCanonicalFixture();
+    claimIdentifierDecoderRejectsTrailingPayloadBytes();
+    claimIdentifierDecoderRejectsEmptyAccountPayload();
     printClaimIdentifierWirePayloadHex();
   }
 
@@ -90,6 +93,14 @@ public final class ClaimIdentifierWirePayloadEncoderTests {
             embeddedAttestation,
             IdentifierReceiptCanonicalEncoder.encodeAttestation(receipt.attestation()))
         : "Receipt attestation bytes mismatch";
+
+    final ClaimIdentifierWirePayloadEncoder.DecodedClaimIdentifierPayload roundTrip =
+        ClaimIdentifierWirePayloadEncoder.decodePayload(wirePayload.payloadBytes());
+    assert ACCOUNT_ID.equals(roundTrip.accountId()) : "decoded ClaimIdentifier account mismatch";
+    assert java.util.Arrays.equals(embeddedPayload, roundTrip.receiptPayloadBytes())
+        : "decoded ClaimIdentifier receipt payload mismatch";
+    assert java.util.Arrays.equals(embeddedAttestation, roundTrip.attestationPayloadBytes())
+        : "decoded ClaimIdentifier attestation mismatch";
   }
 
   private static void printClaimIdentifierWirePayloadHex() {
@@ -178,6 +189,43 @@ public final class ClaimIdentifierWirePayloadEncoderTests {
             + actualFramedHex;
   }
 
+  private static void claimIdentifierDecoderRejectsTrailingPayloadBytes() {
+    final InstructionBox instruction =
+        ClaimIdentifierWirePayloadEncoder.encode(ACCOUNT_ID, sampleReceipt(ACCOUNT_ID, "A1B2C3D4"));
+    final InstructionBox.WirePayload wirePayload = (InstructionBox.WirePayload) instruction.payload();
+    final NoritoHeader.DecodeResult decoded =
+        NoritoHeader.decode(wirePayload.payloadBytes(), null);
+    decoded.header().validateChecksum(decoded.payload());
+    final byte[] mutated = java.util.Arrays.copyOf(decoded.payload(), decoded.payload().length + 1);
+
+    boolean threw = false;
+    try {
+      ClaimIdentifierWirePayloadEncoder.decodePayload(reframe(decoded.header(), mutated));
+    } catch (final IllegalArgumentException ex) {
+      threw = ex.getMessage() != null && ex.getMessage().contains("Trailing bytes");
+    }
+    assert threw : "ClaimIdentifier decoder must reject trailing payload bytes";
+  }
+
+  private static void claimIdentifierDecoderRejectsEmptyAccountPayload() {
+    final InstructionBox instruction =
+        ClaimIdentifierWirePayloadEncoder.encode(ACCOUNT_ID, sampleReceipt(ACCOUNT_ID, "A1B2C3D4"));
+    final InstructionBox.WirePayload wirePayload = (InstructionBox.WirePayload) instruction.payload();
+    final NoritoHeader.DecodeResult decoded =
+        NoritoHeader.decode(wirePayload.payloadBytes(), null);
+    decoded.header().validateChecksum(decoded.payload());
+    final byte[] mutated = decoded.payload().clone();
+    mutated[0] = 0;
+
+    boolean threw = false;
+    try {
+      ClaimIdentifierWirePayloadEncoder.decodePayload(reframe(decoded.header(), mutated));
+    } catch (final IllegalArgumentException ex) {
+      threw = ex.getMessage() != null && ex.getMessage().contains("payload bytes must not be empty");
+    }
+    assert threw : "ClaimIdentifier decoder must reject empty AccountId payloads";
+  }
+
   private static RamLfeOutputOpening sampleOpening(
       final String programId, final String signatureHex) {
     return sampleOpening(programId, signatureHex, "EE".repeat(32));
@@ -198,6 +246,33 @@ public final class ClaimIdentifierWirePayloadEncoderTests {
         signatureHex);
   }
 
+  private static IdentifierResolutionReceipt sampleReceipt(
+      final String accountId, final String signatureHex) {
+    final IdentifierResolutionPayload payload =
+        new IdentifierResolutionPayload(
+            "phone#retail",
+            new IdentifierResolutionExecutionPayload(
+                "identifier_lookup_retail",
+                "11".repeat(32),
+                "bfv-affine-sha3-256-v1",
+                "signed",
+                "AA".repeat(32),
+                "BB".repeat(32),
+                "CC".repeat(32),
+                "DD".repeat(32),
+                "22".repeat(32),
+                "33".repeat(32),
+                42L,
+                142L),
+            sampleOpening("identifier_lookup_retail", signatureHex),
+            "opaque:" + "44".repeat(32),
+            "55".repeat(32),
+            "uaid:" + "66".repeat(32),
+            accountId);
+    return new IdentifierResolutionReceipt(
+        payload, new IdentifierReceiptAttestation("signed", signatureHex, null, null));
+  }
+
   private static byte[] readSizedField(final NoritoDecoder decoder) {
     final long length = decoder.readLength(decoder.compactLenActive());
     return decoder.readBytes(Math.toIntExact(length));
@@ -209,6 +284,22 @@ public final class ClaimIdentifierWirePayloadEncoderTests {
       out.append(String.format("%02X", current));
     }
     return out.toString();
+  }
+
+  private static byte[] reframe(final NoritoHeader header, final byte[] payload) {
+    final NoritoHeader reframed =
+        new NoritoHeader(
+            header.schemaHash(),
+            payload.length,
+            CRC64.compute(payload),
+            header.flags(),
+            NoritoHeader.COMPRESSION_NONE,
+            header.minor());
+    final byte[] headerBytes = reframed.encode();
+    final byte[] out = new byte[headerBytes.length + payload.length];
+    System.arraycopy(headerBytes, 0, out, 0, headerBytes.length);
+    System.arraycopy(payload, 0, out, headerBytes.length, payload.length);
+    return out;
   }
 
   private static String[] runFixtureGenerator(final String subcommand) throws Exception {

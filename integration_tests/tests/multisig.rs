@@ -11,6 +11,7 @@ use std::{
 use eyre::{Result, WrapErr, eyre};
 use integration_tests::{
     binary_resolver::{iroha_program, prepare_iroha_cli_test_environment},
+    process::{output_with_timeout, process_timeout},
     sandbox,
 };
 use iroha::{
@@ -267,7 +268,7 @@ fn post_torii_app_json<T: norito::json::JsonSerialize + ?Sized>(
 ) -> Result<JsonValue> {
     let payload = norito::json::to_vec(body)?;
     let response_body = rt.block_on(async {
-        let response = reqwest::Client::new()
+        let response = integration_tests::http::client()
             .post(endpoint)
             .header(CONTENT_TYPE, "application/json")
             .body(payload)
@@ -520,8 +521,8 @@ fn run_multisig_list_all_cli(
         .arg("multisig")
         .arg("list")
         .arg("all")
-        .args(list_args)
-        .output()
+        .args(list_args);
+    output_with_timeout(&mut command, process_timeout())
         .wrap_err("run `iroha ledger multisig list all`")
 }
 

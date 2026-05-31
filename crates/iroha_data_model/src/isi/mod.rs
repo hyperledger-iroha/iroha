@@ -1078,21 +1078,27 @@ impl From<crate::isi::musubi::AssertMusubiReleaseExists> for InstructionBox {
         InstructionBox(Box::new(i))
     }
 }
-// Allow direct boxing of Offline V2 note instructions.
-impl From<crate::isi::offline::IssueOfflineNoteV2> for InstructionBox {
-    fn from(i: crate::isi::offline::IssueOfflineNoteV2) -> Self {
+// Allow direct boxing of Offline note instructions.
+impl From<crate::isi::offline::IssueOfflineNote> for InstructionBox {
+    fn from(i: crate::isi::offline::IssueOfflineNote) -> Self {
         InstructionBox(Box::new(i))
     }
 }
 
-impl From<crate::isi::offline::RedeemOfflineNoteV2> for InstructionBox {
-    fn from(i: crate::isi::offline::RedeemOfflineNoteV2) -> Self {
+impl From<crate::isi::offline::RedeemOfflineNote> for InstructionBox {
+    fn from(i: crate::isi::offline::RedeemOfflineNote) -> Self {
         InstructionBox(Box::new(i))
     }
 }
 
-impl From<crate::isi::offline::AuditOfflineNoteV2> for InstructionBox {
-    fn from(i: crate::isi::offline::AuditOfflineNoteV2) -> Self {
+impl From<crate::isi::offline::AuditOfflineNote> for InstructionBox {
+    fn from(i: crate::isi::offline::AuditOfflineNote) -> Self {
+        InstructionBox(Box::new(i))
+    }
+}
+
+impl From<crate::isi::offline::KagemushaTransfer> for InstructionBox {
+    fn from(i: crate::isi::offline::KagemushaTransfer) -> Self {
         InstructionBox(Box::new(i))
     }
 }
@@ -4668,12 +4674,12 @@ mod tests {
     }
 
     #[test]
-    fn offline_note_v2_instructions_are_registered_and_boxable() {
+    fn offline_note_instructions_are_registered_and_boxable() {
         use crate::offline::{
-            OfflineNoteAuditBundleV2, OfflineNoteIssueV2, OfflineNoteIssuedClaimV2,
-            OfflineNoteKeyCertificateV2, OfflineNoteRecursiveProofV2, OfflineNoteRedeemV2,
+            OfflineNoteAuditBundle, OfflineNoteIssue, OfflineNoteIssuedClaim,
+            OfflineNoteKeyCertificate, OfflineNoteRecursiveProof, OfflineNoteRedeem,
         };
-        use crate::proof::{ProofBox, VerifyingKeyId};
+        use crate::proof::{ProofAttachment, ProofBox, VerifyingKeyId};
         use iroha_crypto::{Hash, Signature};
 
         let registry = crate::instruction_registry::default();
@@ -4687,19 +4693,19 @@ mod tests {
             "xor".parse().expect("asset name"),
         );
         let asset_id = AssetId::of(asset_definition_id, account_id.clone());
-        let proof = OfflineNoteRecursiveProofV2 {
-            verifier_key_id: VerifyingKeyId::new("halo2/ipa", "offline-note-v2-recursive-v1"),
-            public_inputs_hash: Hash::new(b"offline-v2-public-inputs"),
+        let proof = OfflineNoteRecursiveProof {
+            verifier_key_id: VerifyingKeyId::new("halo2/ipa", "offline-note-recursive"),
+            public_inputs_hash: Hash::new(b"offline-public-inputs"),
             proof: ProofBox::new("halo2/ipa".into(), vec![0xCA, 0xFE]),
         };
-        let key_certificate = OfflineNoteKeyCertificateV2 {
-            version: 2,
+        let key_certificate = OfflineNoteKeyCertificate {
+            version: crate::offline::OFFLINE_NOTE_KEY_CERTIFICATE_VERSION,
             platform: "ios-appattest".to_owned(),
             key_id: "one-use-key".to_owned(),
             device_id: "device-1".to_owned(),
             account_id: account_id.clone(),
             public_key: vec![0x01, 0x02, 0x03],
-            assertion_scheme: "apple-appattest-counter-v1".to_owned(),
+            assertion_scheme: "apple-appattest-counter".to_owned(),
             assertion_key_algorithm: "app-attest-p256".to_owned(),
             assertion_public_key: vec![0x04; 65],
             assertion_usage_count_limit: None,
@@ -4707,13 +4713,13 @@ mod tests {
             issuer_signature: Signature::from_bytes(&[0xAB; 64]),
         };
 
-        let issue = crate::isi::offline::IssueOfflineNoteV2::new(OfflineNoteIssueV2 {
+        let issue = crate::isi::offline::IssueOfflineNote::new(OfflineNoteIssue {
             note_commitment: Hash::new(b"note-commitment"),
             key_certificate: key_certificate.clone(),
             asset: asset_id.clone(),
             amount: Numeric::new(10, 0),
         });
-        let redemption = crate::isi::offline::RedeemOfflineNoteV2::new(OfflineNoteRedeemV2 {
+        let redemption = crate::isi::offline::RedeemOfflineNote::new(OfflineNoteRedeem {
             source_note_commitment: Hash::new(b"note-commitment"),
             input_nullifiers: vec![Hash::new(b"input-nullifier")],
             sender_key_certificate: key_certificate.clone(),
@@ -4722,15 +4728,15 @@ mod tests {
             amount: Numeric::new(10, 0),
             recursive_proof: proof.clone(),
         });
-        let audit = crate::isi::offline::AuditOfflineNoteV2::new(OfflineNoteAuditBundleV2 {
+        let audit = crate::isi::offline::AuditOfflineNote::new(OfflineNoteAuditBundle {
             token_id: Hash::new(b"token"),
             sender_key_certificate: key_certificate.clone(),
             input_nullifiers: vec![Hash::new(b"audit-nullifier")],
             input_claims: vec![
-                OfflineNoteIssuedClaimV2::from_issue(&issue.issue).expect("audit input claim"),
+                OfflineNoteIssuedClaim::from_issue(&issue.issue).expect("audit input claim"),
             ],
             output_commitments: vec![Hash::new(b"output-note")],
-            output_claims: vec![crate::offline::OfflineNoteAuditOutputClaimV2 {
+            output_claims: vec![crate::offline::OfflineNoteAuditOutputClaim {
                 note_commitment: Hash::new(b"output-note"),
                 key_certificate,
                 asset: asset_id,
@@ -4738,22 +4744,38 @@ mod tests {
             }],
             recursive_proof: proof,
         });
+        let kagemusha = crate::isi::offline::KagemushaTransfer::new(
+            issue.issue.asset.definition().clone(),
+            vec![[0x11; 32]],
+            vec![[0x22; 32], [0x33; 32]],
+            ProofAttachment::new_ref(
+                "halo2/ipa".into(),
+                ProofBox::new("halo2/ipa".into(), vec![0xCA, 0xFE]),
+                VerifyingKeyId::new("halo2/ipa", "offline-kagemusha-transfer"),
+            ),
+            Some([0x44; 32]),
+        );
 
         let cases: Vec<(&'static str, InstructionBox, Vec<u8>)> = vec![
             (
-                std::any::type_name::<crate::isi::offline::IssueOfflineNoteV2>(),
+                std::any::type_name::<crate::isi::offline::IssueOfflineNote>(),
                 issue.clone().into(),
                 norito::to_bytes(&issue).expect("encode issue instruction"),
             ),
             (
-                std::any::type_name::<crate::isi::offline::RedeemOfflineNoteV2>(),
+                std::any::type_name::<crate::isi::offline::RedeemOfflineNote>(),
                 redemption.clone().into(),
                 norito::to_bytes(&redemption).expect("encode redemption instruction"),
             ),
             (
-                std::any::type_name::<crate::isi::offline::AuditOfflineNoteV2>(),
+                std::any::type_name::<crate::isi::offline::AuditOfflineNote>(),
                 audit.clone().into(),
                 norito::to_bytes(&audit).expect("encode audit instruction"),
+            ),
+            (
+                std::any::type_name::<crate::isi::offline::KagemushaTransfer>(),
+                kagemusha.clone().into(),
+                norito::to_bytes(&kagemusha).expect("encode kagemusha instruction"),
             ),
         ];
 

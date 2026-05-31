@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+from abc import ABC, abstractmethod
 from dataclasses import dataclass
 from typing import Any, Dict, Mapping, Optional
 
@@ -19,11 +20,12 @@ __all__ = [
 ]
 
 
-class EventFilter:
+class EventFilter(ABC):
     """Base class for event filter helpers."""
 
+    @abstractmethod
     def to_dict(self) -> Dict[str, Any]:
-        raise NotImplementedError
+        """Return the Torii event-filter JSON payload."""
 
     def to_json(self) -> str:
         return json.dumps(self.to_dict(), separators=(",", ":"), sort_keys=False)

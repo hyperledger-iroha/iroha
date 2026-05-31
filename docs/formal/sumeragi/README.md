@@ -10636,6 +10636,17 @@ bash scripts/formal/sumeragi_tlc.sh pipeline-event-emission-fast
 bash scripts/formal/sumeragi_tlc.sh block-message-wire-fast
 bash scripts/formal/sumeragi_tlc.sh block-created-frontier-wire-fast
 bash scripts/formal/sumeragi_tlc.sh cached-proposal-rebroadcast-fast
+bash scripts/formal/sumeragi_tlc.sh frontier-same-slot-activity-fast
+bash scripts/formal/sumeragi_tlc.sh frontier-reassembly-activity-fast
+bash scripts/formal/sumeragi_tlc.sh frontier-quorum-owner-actionable-fast
+bash scripts/formal/sumeragi_tlc.sh frontier-sidecar-retarget-fast
+bash scripts/formal/sumeragi_tlc.sh frontier-sidecar-expected-hash-fast
+bash scripts/formal/sumeragi_tlc.sh contiguous-frontier-payload-hint-fast
+bash scripts/formal/sumeragi_tlc.sh frontier-parent-qc-hint-retarget-fast
+bash scripts/formal/sumeragi_tlc.sh live-frontier-idle-missing-qc-fast
+bash scripts/formal/sumeragi_tlc.sh missing-qc-reacquire-admission-fast
+bash scripts/formal/sumeragi_tlc.sh missing-qc-reacquire-action-fast
+bash scripts/formal/sumeragi_tlc.sh missing-commit-qc-actionable-fast
 bash scripts/formal/sumeragi_tlc.sh vote-verify-worker-config-fast
 bash scripts/formal/sumeragi_tlc.sh qc-verify-worker-config-fast
 bash scripts/formal/sumeragi_tlc.sh qc-signer-count-fast
@@ -11546,6 +11557,89 @@ remote-leader relay, remote-only fanout for `BlockCreated`, proposal hints,
 proposal metadata, and successful block-hash returns. Its TLC cross-check
 independently exhausts the same twenty-five expected-failure configs as
 Apalache.
+`frontier-same-slot-activity-fast` and
+`frontier-same-slot-activity-bug-*` cross-check exact-slot frontier recovery
+activity helpers: payload progress evidence, ingress backlog/payload gates,
+vote-backed activity evidence, missing-block request actionability,
+missing-commit-QC repair actionability, missing-payload recovery actionability,
+old-view and wrong-height suppression, stale-window rejection, and
+bookkeeping-only refresh exclusion. Its TLC cross-check independently exhausts
+the same thirty-six expected-failure configs as Apalache.
+`frontier-reassembly-activity-fast` and
+`frontier-reassembly-activity-bug-*` cross-check frontier reassembly activity:
+fresh dependency progress with payload backlog, exact same-slot ingress,
+same-height RBC sender and deferral work, validation work, deferred block-sync
+updates, stale and wrong-height/view rejection, and no-source suppression. Its
+TLC cross-check independently exhausts the same thirty-two expected-failure
+configs as Apalache.
+`frontier-quorum-owner-actionable-fast` and
+`frontier-quorum-owner-actionable-bug-*` cross-check live contiguous-frontier
+cleanup preservation: owner, vote, dependency backlog, RBC sender,
+missing-block, missing-commit-QC, and vote-backed recovery sources, stale or
+wrong-view rejection, passive-work rejection, committed+1 height gating,
+current-view gating, and no-actionable-source suppression. Its TLC cross-check
+independently exhausts the same twenty expected-failure configs as Apalache.
+`frontier-sidecar-retarget-fast` and `frontier-sidecar-retarget-bug-*`
+cross-check contiguous-frontier sidecar retargeting: narrow override reasons,
+quarantine and stall/progress gates, confirmation by local payload, commit QC,
+or override, tracked and untracked sidecar routing, commit-certified reacquire
+with local evidence, and rejection of missing expected hashes, same-hash
+sidecars, and authoritative payloads. Its TLC cross-check independently
+exhausts the same twenty-seven expected-failure configs as Apalache.
+`frontier-sidecar-expected-hash-fast` and
+`frontier-sidecar-expected-hash-bug-*` cross-check sidecar expected-hash
+selection: tracked request precedence, deferred-hint and observed-head source
+ordering, exact height and authoritative-payload filtering, deterministic
+phase/view/hash tie-breaks, cached Prepare/Commit QC selection, and sidecar
+Commit-QC view rejection for absent, Prepare, wrong-height, or wrong-hash QCs.
+Its TLC cross-check independently exhausts the same twenty-five
+expected-failure configs as Apalache.
+`contiguous-frontier-payload-hint-fast` and
+`contiguous-frontier-payload-hint-bug-*` cross-check contiguous-frontier
+payload-hint selection: Commit/Prepare/NewView phase ranking, deferred-QC
+priority over proposal markers, exact height and actionable filtering,
+deferred view/hash tie-breaks, marker fallback view/hash tie-breaks, and empty
+fallback behavior. Its TLC cross-check independently exhausts the same thirteen
+expected-failure configs as Apalache.
+`frontier-parent-qc-hint-retarget-fast` and
+`frontier-parent-qc-hint-retarget-bug-*` cross-check contiguous-frontier
+missing-parent retargeting: exact-frontier stall bypass, canonical reanchor
+dependency-progress gating, previous-emission requirements, parent height
+matching, absent/same-hash hint rejection, and QC-hint target rewrite. Its TLC
+cross-check independently exhausts the same twelve expected-failure configs as
+Apalache.
+`live-frontier-idle-missing-qc-fast` and
+`live-frontier-idle-missing-qc-bug-*` cross-check live-frontier idle missing-QC
+reacquire suppression: slot/pending-block liveness, observed head
+equality/lower acceptance, resilience/dependency/prior-attempt/height and
+future-head rejection, explicit commit or missing-QC dependency escape hatches,
+no-liveness rejection, attempt recording, broad highest-QC fetch and anchor-pull
+suppression, and sidecar hint preservation. Its TLC cross-check independently
+exhausts the same seventeen expected-failure configs as Apalache.
+`missing-qc-reacquire-admission-fast` and
+`missing-qc-reacquire-admission-bug-*` cross-check missing-QC reacquire
+admission: duplicate-attempt rejection, proposal-observed commit/missing-QC/
+frontier dependency admission, no-dependency proposal rejection,
+resilience-backed concrete dependency requirements, no-dependency height-window
+throttling and cleanup, dependency-signal and repeated-timeout admission,
+no-source rejection, and empty-frontier fallback gating. Its TLC cross-check
+independently exhausts the same twenty-one expected-failure configs as Apalache.
+`missing-qc-reacquire-action-fast` and
+`missing-qc-reacquire-action-bug-*` cross-check missing-QC reacquire action
+orchestration: prior-attempt classification, exact attempt recording,
+no-signal throttle marking, dependency-signal throttle bypass, suppression
+checks and side effects, sidecar request success, observed-head and far-ahead
+highest-QC fetch gating, lock-lag range-pull retargeting, broad-tier promotion,
+cooldown clearing, anchor-pull outcomes, success-counter accounting, and final
+return values. Its TLC cross-check independently exhausts the same thirty-one
+expected-failure configs as Apalache.
+`missing-commit-qc-actionable-fast` and
+`missing-commit-qc-actionable-bug-*` cross-check missing commit-QC actionable
+repair: exact pending/local payload matching, cached commit-QC and higher
+NEW_VIEW quorum rejection, non-actionable dependency filtering, NEW_VIEW and
+Prepare subject-height mapping, and stale-prune preservation for local payloads
+owned by the authoritative or frontier slot. Its TLC cross-check independently
+exhausts the same twenty-five expected-failure configs as Apalache.
 `vote-verify-worker-config-fast` and `vote-verify-worker-config-bug-*`
 cross-check vote-signature verification worker count and queue-cap derivation.
 `qc-verify-worker-config-fast` and `qc-verify-worker-config-bug-*` cross-check

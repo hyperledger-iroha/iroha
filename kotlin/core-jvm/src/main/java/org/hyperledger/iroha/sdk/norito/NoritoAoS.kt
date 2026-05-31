@@ -4,6 +4,9 @@
 package org.hyperledger.iroha.sdk.norito
 
 import java.io.ByteArrayOutputStream
+import java.nio.ByteBuffer
+import java.nio.charset.CharacterCodingException
+import java.nio.charset.CodingErrorAction
 import java.nio.charset.StandardCharsets
 
 private const val VERSION = 0x1
@@ -141,6 +144,161 @@ internal object NoritoAoS {
     }
 
     @JvmStatic
+    fun encodeU64OptionalStringBool(rows: List<NoritoColumnar.OptionalStringBoolRow>): ByteArray {
+        val out = ByteArrayOutputStream()
+        writeVarint(out, rows.size)
+        out.write(VERSION)
+        for (row in rows) {
+            writeLong(out, row.id)
+            val value = row.value
+            if (value == null) {
+                out.write(0)
+            } else {
+                out.write(1)
+                val data = value.toByteArray(StandardCharsets.UTF_8)
+                writeVarint(out, data.size)
+                out.write(data, 0, data.size)
+            }
+            out.write(if (row.flag) 1 else 0)
+        }
+        return out.toByteArray()
+    }
+
+    @JvmStatic
+    fun decodeU64OptionalStringBool(body: ByteArray): List<NoritoColumnar.OptionalStringBoolRow> {
+        val lenRes = Varint.decode(body, 0)
+        val length = lenRes.value.toInt()
+        var offset = lenRes.nextOffset
+        val version = body[offset++].toInt() and 0xFF
+        require(version == VERSION) { "Unsupported AoS version byte: $version" }
+        val rows = ArrayList<NoritoColumnar.OptionalStringBoolRow>(length)
+        for (i in 0 until length) {
+            require(offset + 8 <= body.size) { "AoS optional string payload truncated (id)" }
+            val id = readLong(body, offset)
+            offset += 8
+            require(offset < body.size) { "AoS optional string payload truncated (presence)" }
+            val present = body[offset++].toInt() and 0xFF
+            val value: String? = when (present) {
+                0 -> null
+                1 -> {
+                    val lenVal = Varint.decode(body, offset)
+                    val dataLen = lenVal.value.toInt()
+                    offset = lenVal.nextOffset
+                    require(offset + dataLen <= body.size) {
+                        "AoS optional string row exceeds payload bounds"
+                    }
+                    val decoded = decodeUtf8Strict(body, offset, offset + dataLen)
+                    offset += dataLen
+                    decoded
+                }
+                else -> throw IllegalArgumentException(
+                    "Invalid presence flag in AoS optional string payload"
+                )
+            }
+            require(offset < body.size) { "AoS optional string payload truncated (flag)" }
+            val flag = (body[offset++].toInt() and 0xFF) != 0
+            rows.add(NoritoColumnar.OptionalStringBoolRow(id, value, flag))
+        }
+        require(offset == body.size) { "Trailing bytes after AoS optional string decode" }
+        return rows
+    }
+
+    @JvmStatic
+    fun encodeU64OptionalU32Bool(rows: List<NoritoColumnar.OptionalU32BoolRow>): ByteArray {
+        val out = ByteArrayOutputStream()
+        writeVarint(out, rows.size)
+        out.write(VERSION)
+        for (row in rows) {
+            writeLong(out, row.id)
+            val value = row.value
+            if (value == null) {
+                out.write(0)
+            } else {
+                out.write(1)
+                writeU32(out, value)
+            }
+            out.write(if (row.flag) 1 else 0)
+        }
+        return out.toByteArray()
+    }
+
+    @JvmStatic
+    fun decodeU64OptionalU32Bool(body: ByteArray): List<NoritoColumnar.OptionalU32BoolRow> {
+        val lenRes = Varint.decode(body, 0)
+        val length = lenRes.value.toInt()
+        var offset = lenRes.nextOffset
+        val version = body[offset++].toInt() and 0xFF
+        require(version == VERSION) { "Unsupported AoS version byte: $version" }
+        val rows = ArrayList<NoritoColumnar.OptionalU32BoolRow>(length)
+        for (i in 0 until length) {
+            require(offset + 8 <= body.size) { "AoS optional u32 payload truncated (id)" }
+            val id = readLong(body, offset)
+            offset += 8
+            require(offset < body.size) { "AoS optional u32 payload truncated (presence)" }
+            val present = body[offset++].toInt() and 0xFF
+            val value: Long? = when (present) {
+                0 -> null
+                1 -> {
+                    require(offset + 4 <= body.size) { "AoS optional u32 payload truncated (value)" }
+                    val decoded = Integer.toUnsignedLong(readU32(body, offset))
+                    offset += 4
+                    decoded
+                }
+                else -> throw IllegalArgumentException(
+                    "Invalid presence flag in AoS optional u32 payload"
+                )
+            }
+            require(offset < body.size) { "AoS optional u32 payload truncated (flag)" }
+            val flag = (body[offset++].toInt() and 0xFF) != 0
+            rows.add(NoritoColumnar.OptionalU32BoolRow(id, value, flag))
+        }
+        require(offset == body.size) { "Trailing bytes after AoS optional u32 decode" }
+        return rows
+    }
+
+    @JvmStatic
+    fun encodeU64BytesBool(rows: List<NoritoColumnar.BytesBoolRow>): ByteArray {
+        val out = ByteArrayOutputStream()
+        writeVarint(out, rows.size)
+        out.write(VERSION)
+        for (row in rows) {
+            writeLong(out, row.id)
+            val data = row.data
+            writeVarint(out, data.size)
+            out.write(data, 0, data.size)
+            out.write(if (row.flag) 1 else 0)
+        }
+        return out.toByteArray()
+    }
+
+    @JvmStatic
+    fun decodeU64BytesBool(body: ByteArray): List<NoritoColumnar.BytesBoolRow> {
+        val lenRes = Varint.decode(body, 0)
+        val length = lenRes.value.toInt()
+        var offset = lenRes.nextOffset
+        val version = body[offset++].toInt() and 0xFF
+        require(version == VERSION) { "Unsupported AoS version byte: $version" }
+        val rows = ArrayList<NoritoColumnar.BytesBoolRow>(length)
+        for (i in 0 until length) {
+            require(offset + 8 <= body.size) { "AoS bytes bool payload truncated (id)" }
+            val id = readLong(body, offset)
+            offset += 8
+            val lenVal = Varint.decode(body, offset)
+            val dataLen = lenVal.value.toInt()
+            offset = lenVal.nextOffset
+            require(offset + dataLen <= body.size) { "AoS bytes bool row exceeds payload bounds" }
+            val data = ByteArray(dataLen)
+            System.arraycopy(body, offset, data, 0, dataLen)
+            offset += dataLen
+            require(offset < body.size) { "AoS bytes bool payload truncated (flag)" }
+            val flag = (body[offset++].toInt() and 0xFF) != 0
+            rows.add(NoritoColumnar.BytesBoolRow(id, data, flag))
+        }
+        require(offset == body.size) { "Trailing bytes after AoS bytes bool decode" }
+        return rows
+    }
+
+    @JvmStatic
     fun encodeU64EnumBool(rows: List<NoritoColumnar.EnumBoolRow>): ByteArray {
         val out = ByteArrayOutputStream()
         // Historical enum AoS layout omits the version byte to preserve golden payloads.
@@ -228,6 +386,17 @@ internal object NoritoAoS {
         out.write(((value ushr 8) and 0xFF).toInt())
         out.write(((value ushr 16) and 0xFF).toInt())
         out.write(((value ushr 24) and 0xFF).toInt())
+    }
+
+    private fun decodeUtf8Strict(bytes: ByteArray, start: Int, end: Int): String = try {
+        StandardCharsets.UTF_8
+            .newDecoder()
+            .onMalformedInput(CodingErrorAction.REPORT)
+            .onUnmappableCharacter(CodingErrorAction.REPORT)
+            .decode(ByteBuffer.wrap(bytes, start, end - start))
+            .toString()
+    } catch (ex: CharacterCodingException) {
+        throw IllegalArgumentException("Invalid UTF-8 in AoS string payload", ex)
     }
 
     private fun readLong(data: ByteArray, offset: Int): Long {

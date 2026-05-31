@@ -413,7 +413,12 @@ fn verify_with_config(
     if record_circuit_id != envelope.circuit_id {
         return Err(privacy_error("privacy proof circuit mismatch"));
     }
-    if envelope.vk_hash != [0u8; 32] && envelope.vk_hash != record_commitment {
+    if !envelope.aux.is_empty() {
+        return Err(privacy_error(
+            "privacy proof envelope auxiliary bytes must be empty",
+        ));
+    }
+    if envelope.vk_hash != record_commitment {
         return Err(privacy_error("privacy proof verifier commitment mismatch"));
     }
 

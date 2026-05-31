@@ -39,8 +39,11 @@ pub mod isi {
     use iroha_data_model::{
         Level,
         account::AccountController,
-        asset::definition::{
-            AssetConfidentialPolicy, ConfidentialPolicyMode, ConfidentialPolicyTransition,
+        asset::{
+            AssetBalancePolicy, AssetBalanceScope,
+            definition::{
+                AssetConfidentialPolicy, ConfidentialPolicyMode, ConfidentialPolicyTransition,
+            },
         },
         confidential::ConfidentialStatus,
         consensus::{ConsensusKeyId, ConsensusKeyRecord, ConsensusKeyRole, ConsensusKeyStatus},
@@ -601,7 +604,10 @@ pub mod isi {
         proof: &iroha_data_model::proof::ProofBox,
     ) -> Option<ZkOpenVerifyEnvelope> {
         let backend = proof.backend.as_str();
-        if !(backend.starts_with("halo2/") || crate::zk::is_stark_fri_v1_backend(backend)) {
+        if crate::zk::is_trusted_setup_backend_label(backend)
+            || crate::zk::is_developer_only_backend_label(backend)
+            || !(backend.starts_with("halo2/") || crate::zk::is_stark_fri_v1_backend(backend))
+        {
             return None;
         }
         norito::decode_from_bytes::<ZkOpenVerifyEnvelope>(&proof.bytes).ok()
@@ -714,6 +720,28 @@ pub mod isi {
         Ok(())
     }
 
+    fn is_no_trusted_setup_halo2_backend_id(backend: &str) -> bool {
+        backend.starts_with("halo2/") && !crate::zk::is_trusted_setup_backend_label(backend)
+    }
+
+    fn ensure_production_verifying_key_backend_id(backend: &str) -> Result<(), Error> {
+        if crate::zk::is_trusted_setup_backend_label(backend) {
+            return Err(InstructionExecutionError::InvalidParameter(
+                InvalidParameterError::SmartContract(
+                    "trusted-setup verifying key backends are not supported".into(),
+                ),
+            ));
+        }
+        if crate::zk::is_developer_only_backend_label(backend) {
+            return Err(InstructionExecutionError::InvalidParameter(
+                InvalidParameterError::SmartContract(
+                    "developer-only verifying key backends are not supported".into(),
+                ),
+            ));
+        }
+        Ok(())
+    }
+
     fn normalize_stark_fri_circuit_id(backend: &str, raw: &str) -> Option<String> {
         let trimmed = raw.trim();
         if trimmed.is_empty() || trimmed == backend {
@@ -730,12 +758,17 @@ pub mod isi {
         Some(format!("{backend}:{trimmed}"))
     }
 
-    fn validate_vote_envelope_metadata(
+    fn validate_open_verify_envelope_metadata(
         label: &str,
         backend: &str,
         envelope: &ZkOpenVerifyEnvelope,
         vk_record: &VerifyingKeyRecord,
     ) -> Result<(), Error> {
+        if !envelope.aux.is_empty() {
+            return Err(InstructionExecutionError::InvariantViolation(
+                format!("{label} envelope auxiliary bytes must be empty").into(),
+            ));
+        }
         if !circuit_id_matches(backend, &vk_record.circuit_id, &envelope.circuit_id) {
             return Err(InstructionExecutionError::InvariantViolation(
                 format!("{label} verifying key circuit mismatch").into(),
@@ -749,12 +782,63 @@ pub mod isi {
                 ));
             }
         }
-        if envelope.vk_hash != [0u8; 32] && envelope.vk_hash != vk_record.commitment {
+        if envelope.vk_hash != vk_record.commitment {
             return Err(InstructionExecutionError::InvariantViolation(
                 format!("{label} verifying key commitment mismatch").into(),
             ));
         }
         Ok(())
+    }
+
+    fn validate_confidential_v2_open_verify_envelope_metadata(
+        label: &str,
+        attachment: &iroha_data_model::proof::ProofAttachment,
+        state_transaction: &StateTransaction<'_, '_>,
+        vk_record: &VerifyingKeyRecord,
+        expected_public_inputs: &[u8],
+    ) -> Result<(), Error> {
+        let envelope: ZkOpenVerifyEnvelope = norito::decode_from_bytes(&attachment.proof.bytes)
+            .map_err(|_| {
+                InstructionExecutionError::InvariantViolation(
+                    format!("{label} proof must use OpenVerifyEnvelope payload").into(),
+                )
+            })?;
+        if envelope.backend != BackendTag::Halo2IpaPasta {
+            return Err(InstructionExecutionError::InvariantViolation(
+                format!("{label} unexpected OpenVerifyEnvelope backend tag").into(),
+            ));
+        }
+        if envelope.public_inputs != expected_public_inputs {
+            return Err(InstructionExecutionError::InvariantViolation(
+                format!("{label} public inputs schema mismatch").into(),
+            ));
+        }
+        if crate::zk::confidential_v2::normalize_confidential_circuit_id(&envelope.circuit_id)
+            != crate::zk::confidential_v2::normalize_confidential_circuit_id(&vk_record.circuit_id)
+        {
+            return Err(InstructionExecutionError::InvariantViolation(
+                format!("{label} verifying key circuit mismatch").into(),
+            ));
+        }
+        let circuit_key = (vk_record.circuit_id.clone(), vk_record.version);
+        match state_transaction
+            .world
+            .verifying_keys_by_circuit
+            .get(&circuit_key)
+        {
+            Some(active_id) if active_id == &attachment.vk_ref => {}
+            _ => {
+                return Err(InstructionExecutionError::InvariantViolation(
+                    format!("{label} verifying key circuit/version not active").into(),
+                ));
+            }
+        }
+        validate_open_verify_envelope_metadata(
+            label,
+            attachment.backend.as_str(),
+            &envelope,
+            vk_record,
+        )
     }
 
     fn enforce_vk_max_proof_bytes(
@@ -843,6 +927,13 @@ pub mod isi {
                 "confidential transfer v2 requires halo2/ipa backend".into(),
             ));
         }
+        validate_confidential_v2_open_verify_envelope_metadata(
+            "confidential transfer v2",
+            attachment,
+            state_transaction,
+            vk_record,
+            crate::zk::confidential_v2::CONFIDENTIAL_TRANSFER_V2_PUBLIC_INPUTS_SCHEMA_V1,
+        )?;
         if transfer.inputs().is_empty()
             || transfer.inputs().len() > 2
             || transfer.outputs().is_empty()
@@ -987,6 +1078,13 @@ pub mod isi {
                 "confidential unshield v2 requires halo2/ipa backend".into(),
             ));
         }
+        validate_confidential_v2_open_verify_envelope_metadata(
+            "confidential unshield v2",
+            attachment,
+            state_transaction,
+            vk_record,
+            crate::zk::confidential_v2::CONFIDENTIAL_UNSHIELD_V2_PUBLIC_INPUTS_SCHEMA_V1,
+        )?;
         if unshield.inputs().is_empty() || unshield.inputs().len() > 2 {
             return Err(InstructionExecutionError::InvariantViolation(
                 "confidential unshield v2 requires 1-2 inputs".into(),
@@ -1063,6 +1161,13 @@ pub mod isi {
                 "confidential unshield v3 requires halo2/ipa backend".into(),
             ));
         }
+        validate_confidential_v2_open_verify_envelope_metadata(
+            "confidential unshield v3",
+            attachment,
+            state_transaction,
+            vk_record,
+            crate::zk::confidential_v2::CONFIDENTIAL_UNSHIELD_V3_PUBLIC_INPUTS_SCHEMA_V1,
+        )?;
         if unshield.inputs().is_empty() || unshield.inputs().len() > 2 {
             return Err(InstructionExecutionError::InvariantViolation(
                 "confidential unshield v3 requires 1-2 inputs".into(),
@@ -2005,10 +2110,12 @@ pub mod isi {
                             ),
                         ));
                     }
-                    if !id_backend.starts_with("halo2/") || id_backend.contains("bn254") {
+                    ensure_production_verifying_key_backend_id(id_backend)?;
+                    if !is_no_trusted_setup_halo2_backend_id(id_backend) {
                         return Err(InstructionExecutionError::InvalidParameter(
                             InvalidParameterError::SmartContract(
-                                "verifying key id backend must target halo2 IPA (no bn254)".into(),
+                                "verifying key id backend must target no-trusted-setup Halo2 IPA"
+                                    .into(),
                             ),
                         ));
                     }
@@ -2021,6 +2128,7 @@ pub mod isi {
                             ),
                         ));
                     }
+                    ensure_production_verifying_key_backend_id(id_backend)?;
                     if !crate::zk::is_stark_fri_v1_backend(id_backend) {
                         return Err(InstructionExecutionError::InvalidParameter(
                             InvalidParameterError::SmartContract(
@@ -2048,6 +2156,13 @@ pub mod isi {
                 if vk.backend != id.backend {
                     return Err(InstructionExecutionError::InvariantViolation(
                         "vk backend does not match id backend".into(),
+                    ));
+                }
+                if u32::try_from(vk.bytes.len()).ok() != Some(record.vk_len) {
+                    return Err(InstructionExecutionError::InvalidParameter(
+                        InvalidParameterError::SmartContract(
+                            "verifying key vk_len must match inline key bytes length".into(),
+                        ),
                     ));
                 }
                 if record.backend == BackendTag::Stark {
@@ -3325,7 +3440,7 @@ pub mod isi {
             };
             if let Some(envelope) = inputs.envelope.as_ref() {
                 if let Err(err) =
-                    validate_vote_envelope_metadata("ballot", backend, envelope, &vk_rec)
+                    validate_open_verify_envelope_metadata("ballot", backend, envelope, &vk_rec)
                 {
                     let _ = governance_slash_percent(
                         &self.election_id,
@@ -5965,10 +6080,12 @@ pub mod isi {
                         ),
                     ));
                 }
-                if !id_backend.starts_with("halo2/") || id_backend.contains("bn254") {
+                ensure_production_verifying_key_backend_id(id_backend)?;
+                if !is_no_trusted_setup_halo2_backend_id(id_backend) {
                     return Err(InstructionExecutionError::InvalidParameter(
                         InvalidParameterError::SmartContract(
-                            "verifying key id backend must target halo2 IPA (no bn254)".into(),
+                            "verifying key id backend must target no-trusted-setup Halo2 IPA"
+                                .into(),
                         ),
                     ));
                 }
@@ -5981,6 +6098,7 @@ pub mod isi {
                         ),
                     ));
                 }
+                ensure_production_verifying_key_backend_id(id_backend)?;
                 if !crate::zk::is_stark_fri_v1_backend(id_backend) {
                     return Err(InstructionExecutionError::InvalidParameter(
                         InvalidParameterError::SmartContract(
@@ -6006,6 +6124,13 @@ pub mod isi {
             if vk.backend != id.backend {
                 return Err(InstructionExecutionError::InvariantViolation(
                     "vk backend does not match id backend".into(),
+                ));
+            }
+            if u32::try_from(vk.bytes.len()).ok() != Some(new.vk_len) {
+                return Err(InstructionExecutionError::InvalidParameter(
+                    InvalidParameterError::SmartContract(
+                        "verifying key vk_len must match inline key bytes length".into(),
+                    ),
                 ));
             }
             if new.backend == BackendTag::Stark {
@@ -6858,6 +6983,20 @@ pub mod isi {
                 "verifying key backend mismatch".into(),
             ));
         }
+        if crate::zk::is_trusted_setup_backend_label(attachment.backend.as_str()) {
+            return Err(InstructionExecutionError::InvalidParameter(
+                InvalidParameterError::SmartContract(
+                    "trusted-setup proof backends are not supported".into(),
+                ),
+            ));
+        }
+        if crate::zk::is_developer_only_backend_label(attachment.backend.as_str()) {
+            return Err(InstructionExecutionError::InvalidParameter(
+                InvalidParameterError::SmartContract(
+                    "developer-only proof backends are not supported".into(),
+                ),
+            ));
+        }
         if expects_envelope && envelope_meta.is_none() {
             return Err(InstructionExecutionError::InvalidParameter(
                 InvalidParameterError::SmartContract(
@@ -6877,11 +7016,13 @@ pub mod isi {
     }
 
     fn open_verify_backend_tag_matches(backend: &str, tag: BackendTag) -> bool {
+        if crate::zk::is_trusted_setup_backend_label(backend)
+            || crate::zk::is_developer_only_backend_label(backend)
+        {
+            return false;
+        }
         if crate::zk::is_stark_fri_v1_backend(backend) {
             return tag == BackendTag::Stark;
-        }
-        if backend == "halo2/bn254" || backend.starts_with("halo2/bn254/") {
-            return tag == BackendTag::Halo2Bn254;
         }
         if backend.starts_with("halo2/") {
             return tag == BackendTag::Halo2IpaPasta;
@@ -8549,28 +8690,7 @@ pub mod isi {
             }
         }
         if let Some(env) = envelope {
-            if !circuit_id_matches(
-                attachment.backend.as_str(),
-                &rec.circuit_id,
-                &env.circuit_id,
-            ) {
-                return Err(InstructionExecutionError::InvariantViolation(
-                    "verifying key circuit mismatch".into(),
-                ));
-            }
-            if rec.public_inputs_schema_hash != [0u8; 32] {
-                let observed_hash: [u8; 32] = CryptoHash::new(&env.public_inputs).into();
-                if rec.public_inputs_schema_hash != observed_hash {
-                    return Err(InstructionExecutionError::InvariantViolation(
-                        "public inputs schema hash mismatch".into(),
-                    ));
-                }
-            }
-            if env.vk_hash != [0u8; 32] && env.vk_hash != rec.commitment {
-                return Err(InstructionExecutionError::InvariantViolation(
-                    "verifying key commitment mismatch".into(),
-                ));
-            }
+            validate_open_verify_envelope_metadata("proof", attachment.backend.as_str(), env, rec)?;
         }
 
         Ok(Some(rec.commitment))
@@ -9693,6 +9813,46 @@ pub mod isi {
         }
     }
 
+    fn shield_public_asset_id(
+        state_transaction: &StateTransaction<'_, '_>,
+        asset_def_id: &AssetDefinitionId,
+        account_id: &AccountId,
+    ) -> Result<AssetId, Error> {
+        let asset_definition = state_transaction
+            .world
+            .asset_definition(asset_def_id)
+            .map_err(Error::from)?;
+        let scope = match asset_definition.balance_scope_policy() {
+            AssetBalancePolicy::Global => AssetBalanceScope::Global,
+            AssetBalancePolicy::DataspaceRestricted => {
+                let route_dataspace = state_transaction
+                    .current_dataspace_id
+                    .or(state_transaction.world.current_dataspace_id);
+                let dataspace = if let Some(dataspace) = route_dataspace
+                    .filter(|dataspace| *dataspace != DataSpaceId::UNIVERSAL)
+                {
+                    Some(dataspace)
+                } else {
+                    crate::smartcontracts::isi::asset::isi::unique_account_dataspace_hint(
+                        state_transaction,
+                        account_id,
+                    )?
+                }
+                .ok_or_else(|| {
+                    InstructionExecutionError::InvariantViolation(
+                        "dataspace-restricted shield requires a non-universal execution dataspace or a single account dataspace binding"
+                            .into(),
+                    )
+                })?;
+                AssetBalanceScope::Dataspace(dataspace)
+            }
+        };
+        let asset_id = AssetId::with_scope(asset_def_id.clone(), account_id.clone(), scope);
+        state_transaction
+            .world
+            .resolve_asset_id_for_current_scope(&asset_id)
+    }
+
     impl Execute for zk::Shield {
         #[allow(clippy::too_many_lines)]
         fn execute(
@@ -9702,7 +9862,6 @@ pub mod isi {
         ) -> Result<(), Error> {
             // Debit public balance by burning, then append a note commitment to shielded ledger.
             // Policy: ZkNative always ok; Hybrid requires allow_shield.
-            let asset_id = AssetId::of(self.asset().clone(), self.from().clone());
             let def_id = self.asset().clone();
             let policy_mode = apply_policy_if_due(state_transaction, &def_id)?.mode();
             match policy_mode {
@@ -9726,6 +9885,7 @@ pub mod isi {
                 }
                 ConfidentialPolicyMode::ShieldedOnly => {}
             }
+            let asset_id = shield_public_asset_id(state_transaction, &def_id, self.from())?;
             if !self.enc_payload().is_supported() {
                 return Err(InstructionExecutionError::InvalidParameter(
                     InvalidParameterError::SmartContract(format!(
@@ -9919,28 +10079,12 @@ pub mod isi {
                     ));
                 }
                 if let Some(record) = vk_record.as_ref() {
-                    if !circuit_id_matches(
+                    validate_open_verify_envelope_metadata(
+                        "transfer",
                         attachment.backend.as_str(),
-                        &record.circuit_id,
-                        &env.circuit_id,
-                    ) {
-                        return Err(InstructionExecutionError::InvariantViolation(
-                            "transfer verifying key circuit mismatch".into(),
-                        ));
-                    }
-                    if record.public_inputs_schema_hash != [0u8; 32] {
-                        let observed_hash: [u8; 32] = CryptoHash::new(&env.public_inputs).into();
-                        if record.public_inputs_schema_hash != observed_hash {
-                            return Err(InstructionExecutionError::InvariantViolation(
-                                "public inputs schema hash mismatch".into(),
-                            ));
-                        }
-                    }
-                    if env.vk_hash != [0u8; 32] && env.vk_hash != record.commitment {
-                        return Err(InstructionExecutionError::InvariantViolation(
-                            "verifying key commitment mismatch".into(),
-                        ));
-                    }
+                        &env,
+                        record,
+                    )?;
                 }
             }
             let proof_len = attachment.proof.bytes.len();
@@ -10198,28 +10342,12 @@ pub mod isi {
                     ));
                 }
                 if let Some(record) = vk_record.as_ref() {
-                    if !circuit_id_matches(
+                    validate_open_verify_envelope_metadata(
+                        "unshield",
                         attachment.backend.as_str(),
-                        &record.circuit_id,
-                        &env.circuit_id,
-                    ) {
-                        return Err(InstructionExecutionError::InvariantViolation(
-                            "unshield verifying key circuit mismatch".into(),
-                        ));
-                    }
-                    if record.public_inputs_schema_hash != [0u8; 32] {
-                        let observed_hash: [u8; 32] = CryptoHash::new(&env.public_inputs).into();
-                        if record.public_inputs_schema_hash != observed_hash {
-                            return Err(InstructionExecutionError::InvariantViolation(
-                                "public inputs schema hash mismatch".into(),
-                            ));
-                        }
-                    }
-                    if env.vk_hash != [0u8; 32] && env.vk_hash != record.commitment {
-                        return Err(InstructionExecutionError::InvariantViolation(
-                            "verifying key commitment mismatch".into(),
-                        ));
-                    }
+                        &env,
+                        record,
+                    )?;
                 }
             }
             let proof_len = attachment.proof.bytes.len();
@@ -10734,7 +10862,7 @@ pub mod isi {
             }
             let inputs = extract_vote_public_inputs(backend, &self.ballot_proof.proof.bytes)?;
             if let Some(envelope) = inputs.envelope.as_ref() {
-                validate_vote_envelope_metadata("ballot", backend, envelope, &vk_rec)?;
+                validate_open_verify_envelope_metadata("ballot", backend, envelope, &vk_rec)?;
             }
             let (commit_bytes, root_bytes) = ballot_inputs_from_columns(&inputs.columns)?;
             if root_bytes != st.eligible_root {
@@ -10856,7 +10984,7 @@ pub mod isi {
             }
             let inputs = extract_vote_public_inputs(backend, &att.proof.bytes)?;
             if let Some(envelope) = inputs.envelope.as_ref() {
-                validate_vote_envelope_metadata("tally", backend, envelope, &vk_rec)?;
+                validate_open_verify_envelope_metadata("tally", backend, envelope, &vk_rec)?;
             }
             let expected_tally = tally_from_columns(&inputs.columns, expected_tally_len)?;
             if expected_tally != *self.tally() {
@@ -15357,7 +15485,7 @@ pub mod isi {
         }
 
         #[test]
-        fn validate_vote_envelope_metadata_checks_circuit_and_commitment() {
+        fn validate_open_verify_envelope_metadata_checks_circuit_and_commitment() {
             let vk_box = VerifyingKeyBox::new("halo2/ipa".into(), vec![1, 2, 3, 4]);
             let commitment = hash_vk(&vk_box);
             let mut vk_rec = VerifyingKeyRecord::new_with_owner(
@@ -15380,8 +15508,13 @@ pub mod isi {
                 Vec::new(),
             );
             assert!(
-                validate_vote_envelope_metadata("ballot", "halo2/ipa", &bad_circuit, &vk_rec)
-                    .is_err()
+                validate_open_verify_envelope_metadata(
+                    "ballot",
+                    "halo2/ipa",
+                    &bad_circuit,
+                    &vk_rec
+                )
+                .is_err()
             );
 
             let mut bad_hash = commitment;
@@ -15394,8 +15527,48 @@ pub mod isi {
                 Vec::new(),
             );
             assert!(
-                validate_vote_envelope_metadata("ballot", "halo2/ipa", &bad_commitment, &vk_rec)
-                    .is_err()
+                validate_open_verify_envelope_metadata(
+                    "ballot",
+                    "halo2/ipa",
+                    &bad_commitment,
+                    &vk_rec
+                )
+                .is_err()
+            );
+
+            let zero_commitment = OpenVerifyEnvelope::new(
+                BackendTag::Halo2IpaPasta,
+                "halo2/ipa:test-circuit",
+                [0u8; 32],
+                Vec::new(),
+                Vec::new(),
+            );
+            assert!(
+                validate_open_verify_envelope_metadata(
+                    "ballot",
+                    "halo2/ipa",
+                    &zero_commitment,
+                    &vk_rec
+                )
+                .is_err()
+            );
+
+            let mut non_empty_aux = OpenVerifyEnvelope::new(
+                BackendTag::Halo2IpaPasta,
+                "halo2/ipa:test-circuit",
+                commitment,
+                Vec::new(),
+                Vec::new(),
+            );
+            non_empty_aux.aux = b"ignored-hint".to_vec();
+            assert!(
+                validate_open_verify_envelope_metadata(
+                    "ballot",
+                    "halo2/ipa",
+                    &non_empty_aux,
+                    &vk_rec
+                )
+                .is_err()
             );
 
             let ok = OpenVerifyEnvelope::new(
@@ -15405,11 +15578,13 @@ pub mod isi {
                 Vec::new(),
                 Vec::new(),
             );
-            assert!(validate_vote_envelope_metadata("ballot", "halo2/ipa", &ok, &vk_rec).is_ok());
+            assert!(
+                validate_open_verify_envelope_metadata("ballot", "halo2/ipa", &ok, &vk_rec).is_ok()
+            );
         }
 
         #[test]
-        fn validate_vote_envelope_metadata_checks_schema_hash() {
+        fn validate_open_verify_envelope_metadata_checks_schema_hash() {
             let vk_box = VerifyingKeyBox::new("halo2/ipa".into(), vec![9, 8, 7, 6]);
             let commitment = hash_vk(&vk_box);
             let schema = b"schema:voting:v1".to_vec();
@@ -15433,7 +15608,9 @@ pub mod isi {
                 schema.clone(),
                 Vec::new(),
             );
-            assert!(validate_vote_envelope_metadata("ballot", "halo2/ipa", &ok, &vk_rec).is_ok());
+            assert!(
+                validate_open_verify_envelope_metadata("ballot", "halo2/ipa", &ok, &vk_rec).is_ok()
+            );
 
             let bad = OpenVerifyEnvelope::new(
                 BackendTag::Halo2IpaPasta,
@@ -15442,7 +15619,10 @@ pub mod isi {
                 b"schema:voting:v2".to_vec(),
                 Vec::new(),
             );
-            assert!(validate_vote_envelope_metadata("ballot", "halo2/ipa", &bad, &vk_rec).is_err());
+            assert!(
+                validate_open_verify_envelope_metadata("ballot", "halo2/ipa", &bad, &vk_rec)
+                    .is_err()
+            );
         }
 
         #[test]
@@ -15532,6 +15712,25 @@ pub mod isi {
         }
 
         #[test]
+        fn decode_open_verify_envelope_skips_non_production_backend_labels() {
+            let envelope = OpenVerifyEnvelope::new(
+                BackendTag::Halo2IpaPasta,
+                "halo2/ipa:tiny-add",
+                [0u8; 32],
+                vec![1, 2, 3],
+                vec![4, 5, 6],
+            );
+            let bytes = norito::to_bytes(&envelope).expect("encode OpenVerifyEnvelope");
+            for backend in ["halo2/ipa: KZG", "halo2/ipa:Mock-Proof"] {
+                let proof_box = ProofBox::new(backend.into(), bytes.clone());
+                assert!(
+                    decode_open_verify_envelope(&proof_box).is_none(),
+                    "non-production backend {backend} must not be decoded before validation"
+                );
+            }
+        }
+
+        #[test]
         fn open_verify_backend_tag_matches_rejects_cross_family_tags() {
             assert!(open_verify_backend_tag_matches(
                 "halo2/ipa",
@@ -15541,12 +15740,16 @@ pub mod isi {
                 "halo2/ipa",
                 BackendTag::Halo2Bn254
             ));
-            assert!(open_verify_backend_tag_matches(
+            assert!(!open_verify_backend_tag_matches(
                 "halo2/bn254",
                 BackendTag::Halo2Bn254
             ));
             assert!(!open_verify_backend_tag_matches(
                 "halo2/bn254",
+                BackendTag::Halo2IpaPasta
+            ));
+            assert!(!open_verify_backend_tag_matches(
+                "halo2/kzg",
                 BackendTag::Halo2IpaPasta
             ));
             assert!(open_verify_backend_tag_matches(
@@ -15613,6 +15816,56 @@ pub mod isi {
                 msg.contains("OpenVerifyEnvelope"),
                 "unexpected error: {msg}"
             );
+
+            let trusted_setup_proof = ProofBox::new(
+                "halo2/kzg".into(),
+                norito::to_bytes(&envelope).expect("encode envelope"),
+            );
+            let trusted_setup_attachment = ProofAttachment::new_ref(
+                "halo2/kzg".into(),
+                trusted_setup_proof.clone(),
+                VerifyingKeyId::new("halo2/kzg", "vk"),
+            );
+            let err = validate_proof_attachment(
+                &trusted_setup_attachment,
+                &trusted_setup_proof,
+                true,
+                Some(&envelope),
+            )
+            .expect_err("trusted-setup attachment backend must fail before envelope use");
+            let msg = smart_contract_instruction_error_message(err);
+            assert!(msg.contains("trusted-setup"), "unexpected error: {msg}");
+
+            let developer_only_proof = ProofBox::new(
+                "halo2/mock".into(),
+                norito::to_bytes(&envelope).expect("encode envelope"),
+            );
+            let developer_only_attachment = ProofAttachment::new_ref(
+                "halo2/mock".into(),
+                developer_only_proof.clone(),
+                VerifyingKeyId::new("halo2/mock", "vk"),
+            );
+            let err = validate_proof_attachment(
+                &developer_only_attachment,
+                &developer_only_proof,
+                true,
+                Some(&envelope),
+            )
+            .expect_err("developer-only attachment backend must fail before envelope use");
+            let msg = smart_contract_instruction_error_message(err);
+            assert!(msg.contains("developer-only"), "unexpected error: {msg}");
+            assert!(!open_verify_backend_tag_matches(
+                "halo2/debug",
+                BackendTag::Halo2IpaPasta
+            ));
+            assert!(!open_verify_backend_tag_matches(
+                "halo2/mock",
+                BackendTag::Halo2IpaPasta
+            ));
+            assert!(!open_verify_backend_tag_matches(
+                "stark/fri/mock",
+                BackendTag::Stark
+            ));
         }
 
         #[test]
@@ -15658,6 +15911,25 @@ pub mod isi {
             let resolved = resolve_vk_commitment(&attachment, Some(&envelope), &stx)
                 .expect("resolve vk commitment");
             assert_eq!(resolved, Some(commitment));
+
+            let zero_commitment_envelope = OpenVerifyEnvelope::new(
+                BackendTag::Halo2IpaPasta,
+                "halo2/ipa:tiny-add2inst-public",
+                [0u8; 32],
+                Vec::new(),
+                Vec::new(),
+            );
+            assert!(
+                resolve_vk_commitment(&attachment, Some(&zero_commitment_envelope), &stx).is_err(),
+                "OpenVerifyEnvelope vk_hash must bind the registered verifying-key commitment"
+            );
+
+            let mut aux_envelope = envelope;
+            aux_envelope.aux = b"ignored-hint".to_vec();
+            assert!(
+                resolve_vk_commitment(&attachment, Some(&aux_envelope), &stx).is_err(),
+                "OpenVerifyEnvelope aux bytes are not admitted into chain proof records"
+            );
         }
 
         #[test]
@@ -15914,6 +16186,357 @@ pub mod isi {
             .expect("dataspace catalog");
             stx.nexus.dataspace_catalog = dataspace_catalog.clone();
             stx.world.dataspace_catalog = dataspace_catalog;
+        }
+
+        fn restricted_shield_fixture(
+            account_uaid: Option<UniversalAccountId>,
+            bindings: &[(UniversalAccountId, DataSpaceId)],
+            balances: &[(AssetBalanceScope, u64)],
+        ) -> (State, AssetDefinitionId, Vec<AssetId>) {
+            let domain_id: DomainId =
+                DomainId::try_new("wonderland", "universal").expect("domain id parses");
+            let domain = Domain::new(domain_id.clone()).build(&ALICE_ID);
+            let account = new_account_in_domain(&ALICE_ID)
+                .with_uaid(account_uaid)
+                .build(&ALICE_ID);
+            let asset_def_id =
+                AssetDefinitionId::new(domain_id.clone(), "ticket".parse().expect("asset name"));
+            let asset_definition = AssetDefinition::numeric(asset_def_id.clone())
+                .with_name(asset_def_id.name().to_string())
+                .with_balance_scope_policy(AssetBalancePolicy::DataspaceRestricted)
+                .confidential_policy(AssetConfidentialPolicy::convertible())
+                .build(&ALICE_ID);
+            let asset_ids: Vec<_> = balances
+                .iter()
+                .map(|(scope, _)| {
+                    AssetId::with_scope(asset_def_id.clone(), ALICE_ID.clone(), *scope)
+                })
+                .collect();
+            let assets: Vec<_> = asset_ids
+                .iter()
+                .zip(balances.iter())
+                .map(|(asset_id, (_, amount))| {
+                    Asset::new(asset_id.clone(), Numeric::new(*amount, 0))
+                })
+                .collect();
+            let mut world = World::with_assets([domain], [account], [asset_definition], assets, []);
+            world.zk_assets.insert(asset_def_id.clone(), {
+                let mut state = crate::state::ZkAssetState::default();
+                state.mode = iroha_data_model::isi::zk::ZkAssetMode::Hybrid;
+                state.allow_shield = true;
+                state
+            });
+
+            let kura = Kura::blank_kura_for_testing();
+            let query_handle = LiveQueryStore::start_test();
+            let mut state = State::new(world, kura, query_handle);
+            let mut grouped: BTreeMap<
+                UniversalAccountId,
+                crate::nexus::space_directory::UaidDataspaceBindings,
+            > = BTreeMap::new();
+            for (uaid, dataspace) in bindings {
+                grouped
+                    .entry(*uaid)
+                    .or_default()
+                    .bind_account(*dataspace, ALICE_ID.clone());
+            }
+            for (uaid, bindings) in grouped {
+                state.world.uaid_accounts.insert(uaid, ALICE_ID.clone());
+                state.world.uaid_dataspaces.insert(uaid, bindings);
+            }
+            (state, asset_def_id, asset_ids)
+        }
+
+        fn shield_amount(
+            stx: &mut StateTransaction<'_, '_>,
+            asset_def_id: &AssetDefinitionId,
+            amount: u128,
+        ) -> Result<(), InstructionExecutionError> {
+            iroha_data_model::isi::zk::Shield::new(
+                asset_def_id.clone(),
+                ALICE_ID.clone(),
+                amount,
+                [3; 32],
+                iroha_data_model::confidential::ConfidentialEncryptedPayload::default(),
+            )
+            .execute(&ALICE_ID, stx)
+        }
+
+        fn numeric_balance(stx: &StateTransaction<'_, '_>, asset_id: &AssetId) -> Numeric {
+            stx.world
+                .assets
+                .get(asset_id)
+                .expect("asset balance exists")
+                .as_ref()
+                .clone()
+        }
+
+        fn commitment_count(
+            stx: &StateTransaction<'_, '_>,
+            asset_def_id: &AssetDefinitionId,
+        ) -> usize {
+            stx.world
+                .zk_assets
+                .get(asset_def_id)
+                .map_or(0, |state| state.commitments.len())
+        }
+
+        #[test]
+        fn shield_restricted_asset_uses_unique_account_dataspace_on_universal_route() {
+            let dataspace = DataSpaceId::new(7);
+            let uaid = UniversalAccountId::from_hash(Hash::new(b"uaid::shield-source"));
+            let (state, asset_def_id, asset_ids) = restricted_shield_fixture(
+                Some(uaid),
+                &[(uaid, dataspace)],
+                &[(AssetBalanceScope::Dataspace(dataspace), 10)],
+            );
+            let scoped_asset_id = asset_ids[0].clone();
+            let block = new_dummy_block();
+            let mut state_block = state.block(block.as_ref().header());
+            let mut stx = state_block.transaction();
+            stx.current_dataspace_id = Some(DataSpaceId::UNIVERSAL);
+            stx.world.current_dataspace_id = Some(DataSpaceId::UNIVERSAL);
+            assert!(
+                stx.world
+                    .uaid_dataspaces
+                    .iter()
+                    .any(|(_, bindings)| bindings.is_bound_to(dataspace, &ALICE_ID)),
+                "fixture must expose the account dataspace binding"
+            );
+            assert_eq!(
+                crate::smartcontracts::isi::asset::isi::unique_account_dataspace_hint(
+                    &stx, &ALICE_ID
+                )
+                .expect("dataspace hint resolves"),
+                Some(dataspace)
+            );
+
+            shield_amount(&mut stx, &asset_def_id, 3)
+                .expect("shield must debit the account's scoped transparent balance");
+
+            assert_eq!(numeric_balance(&stx, &scoped_asset_id), Numeric::new(7, 0));
+            let universal_asset_id = AssetId::with_scope(
+                asset_def_id.clone(),
+                ALICE_ID.clone(),
+                AssetBalanceScope::Dataspace(DataSpaceId::UNIVERSAL),
+            );
+            assert!(
+                stx.world.assets.get(&universal_asset_id).is_none(),
+                "universal route must not debit a universal bucket when the account has one private dataspace binding"
+            );
+            assert_eq!(commitment_count(&stx, &asset_def_id), 1);
+        }
+
+        #[test]
+        fn shield_restricted_asset_uses_non_universal_route_without_account_binding() {
+            let dataspace = DataSpaceId::new(7);
+            let (state, asset_def_id, asset_ids) = restricted_shield_fixture(
+                None,
+                &[],
+                &[(AssetBalanceScope::Dataspace(dataspace), 10)],
+            );
+            let block = new_dummy_block();
+            let mut state_block = state.block(block.as_ref().header());
+            let mut stx = state_block.transaction();
+            stx.current_dataspace_id = Some(dataspace);
+            stx.world.current_dataspace_id = Some(dataspace);
+
+            shield_amount(&mut stx, &asset_def_id, 4)
+                .expect("non-universal route determines the restricted public bucket");
+
+            assert_eq!(numeric_balance(&stx, &asset_ids[0]), Numeric::new(6, 0));
+            assert_eq!(commitment_count(&stx, &asset_def_id), 1);
+        }
+
+        #[test]
+        fn shield_restricted_asset_non_universal_route_overrides_ambiguous_bindings() {
+            let first_dataspace = DataSpaceId::new(7);
+            let route_dataspace = DataSpaceId::new(8);
+            let uaid = UniversalAccountId::from_hash(Hash::new(b"uaid::route-shield"));
+            let (state, asset_def_id, asset_ids) = restricted_shield_fixture(
+                Some(uaid),
+                &[(uaid, first_dataspace), (uaid, route_dataspace)],
+                &[
+                    (AssetBalanceScope::Dataspace(first_dataspace), 10),
+                    (AssetBalanceScope::Dataspace(route_dataspace), 11),
+                ],
+            );
+            let block = new_dummy_block();
+            let mut state_block = state.block(block.as_ref().header());
+            let mut stx = state_block.transaction();
+            stx.current_dataspace_id = Some(route_dataspace);
+            stx.world.current_dataspace_id = Some(route_dataspace);
+
+            shield_amount(&mut stx, &asset_def_id, 4)
+                .expect("non-universal route must select the route bucket directly");
+
+            assert_eq!(numeric_balance(&stx, &asset_ids[0]), Numeric::new(10, 0));
+            assert_eq!(numeric_balance(&stx, &asset_ids[1]), Numeric::new(7, 0));
+            assert_eq!(commitment_count(&stx, &asset_def_id), 1);
+        }
+
+        #[test]
+        fn shield_restricted_asset_rejects_universal_route_without_account_dataspace() {
+            let universal_asset_id = AssetBalanceScope::Dataspace(DataSpaceId::UNIVERSAL);
+            let (state, asset_def_id, asset_ids) =
+                restricted_shield_fixture(None, &[], &[(universal_asset_id, 10)]);
+            let block = new_dummy_block();
+            let mut state_block = state.block(block.as_ref().header());
+            let mut stx = state_block.transaction();
+            stx.current_dataspace_id = Some(DataSpaceId::UNIVERSAL);
+            stx.world.current_dataspace_id = Some(DataSpaceId::UNIVERSAL);
+
+            let err = shield_amount(&mut stx, &asset_def_id, 3)
+                .expect_err("universal route without a unique binding must not choose a bucket");
+
+            match err {
+                InstructionExecutionError::InvariantViolation(message) => assert!(
+                    message.contains("dataspace-restricted shield requires"),
+                    "unexpected invariant message: {message}"
+                ),
+                other => panic!("unexpected error: {other:?}"),
+            }
+            assert_eq!(numeric_balance(&stx, &asset_ids[0]), Numeric::new(10, 0));
+            assert_eq!(commitment_count(&stx, &asset_def_id), 0);
+        }
+
+        #[test]
+        fn shield_restricted_asset_rejects_ambiguous_universal_route_bindings() {
+            let first_dataspace = DataSpaceId::new(7);
+            let second_dataspace = DataSpaceId::new(8);
+            let uaid = UniversalAccountId::from_hash(Hash::new(b"uaid::ambiguous-shield"));
+            let (state, asset_def_id, asset_ids) = restricted_shield_fixture(
+                Some(uaid),
+                &[(uaid, first_dataspace), (uaid, second_dataspace)],
+                &[
+                    (AssetBalanceScope::Dataspace(first_dataspace), 10),
+                    (AssetBalanceScope::Dataspace(second_dataspace), 11),
+                ],
+            );
+            let block = new_dummy_block();
+            let mut state_block = state.block(block.as_ref().header());
+            let mut stx = state_block.transaction();
+            stx.current_dataspace_id = Some(DataSpaceId::UNIVERSAL);
+            stx.world.current_dataspace_id = Some(DataSpaceId::UNIVERSAL);
+
+            let err = shield_amount(&mut stx, &asset_def_id, 3)
+                .expect_err("ambiguous account bindings must not be guessed");
+
+            match err {
+                InstructionExecutionError::InvariantViolation(message) => assert!(
+                    message.contains("multiple dataspaces"),
+                    "unexpected invariant message: {message}"
+                ),
+                other => panic!("unexpected error: {other:?}"),
+            }
+            assert_eq!(numeric_balance(&stx, &asset_ids[0]), Numeric::new(10, 0));
+            assert_eq!(numeric_balance(&stx, &asset_ids[1]), Numeric::new(11, 0));
+            assert_eq!(commitment_count(&stx, &asset_def_id), 0);
+        }
+
+        #[test]
+        fn shield_restricted_asset_ignores_stale_unrelated_uaid_binding() {
+            let dataspace = DataSpaceId::new(7);
+            let account_uaid = UniversalAccountId::from_hash(Hash::new(b"uaid::shield-account"));
+            let stale_uaid = UniversalAccountId::from_hash(Hash::new(b"uaid::stale-shield"));
+            let (state, asset_def_id, asset_ids) = restricted_shield_fixture(
+                Some(account_uaid),
+                &[(stale_uaid, dataspace)],
+                &[(AssetBalanceScope::Dataspace(dataspace), 10)],
+            );
+            let block = new_dummy_block();
+            let mut state_block = state.block(block.as_ref().header());
+            let mut stx = state_block.transaction();
+            stx.current_dataspace_id = Some(DataSpaceId::UNIVERSAL);
+            stx.world.current_dataspace_id = Some(DataSpaceId::UNIVERSAL);
+
+            let err = shield_amount(&mut stx, &asset_def_id, 3)
+                .expect_err("stale bindings for another UAID must not select a shield bucket");
+
+            match err {
+                InstructionExecutionError::InvariantViolation(message) => assert!(
+                    message.contains("dataspace-restricted shield requires"),
+                    "unexpected invariant message: {message}"
+                ),
+                other => panic!("unexpected error: {other:?}"),
+            }
+            assert_eq!(numeric_balance(&stx, &asset_ids[0]), Numeric::new(10, 0));
+            assert_eq!(commitment_count(&stx, &asset_def_id), 0);
+        }
+
+        #[test]
+        fn shield_restricted_asset_does_not_fall_back_to_universal_bucket() {
+            let dataspace = DataSpaceId::new(7);
+            let uaid = UniversalAccountId::from_hash(Hash::new(b"uaid::no-fallback-shield"));
+            let (state, asset_def_id, asset_ids) = restricted_shield_fixture(
+                Some(uaid),
+                &[(uaid, dataspace)],
+                &[(AssetBalanceScope::Dataspace(DataSpaceId::UNIVERSAL), 10)],
+            );
+            let block = new_dummy_block();
+            let mut state_block = state.block(block.as_ref().header());
+            let mut stx = state_block.transaction();
+            stx.current_dataspace_id = Some(DataSpaceId::UNIVERSAL);
+            stx.world.current_dataspace_id = Some(DataSpaceId::UNIVERSAL);
+
+            let err = shield_amount(&mut stx, &asset_def_id, 3)
+                .expect_err("missing private bucket must not debit a universal bucket");
+
+            assert!(
+                matches!(err, InstructionExecutionError::Find(FindError::Asset(_)))
+                    || err.to_string().contains("NotEnoughQuantity"),
+                "unexpected error: {err:?}"
+            );
+            assert_eq!(numeric_balance(&stx, &asset_ids[0]), Numeric::new(10, 0));
+            assert_eq!(commitment_count(&stx, &asset_def_id), 0);
+        }
+
+        #[test]
+        fn shield_global_asset_still_uses_global_bucket_on_universal_route() {
+            let domain_id: DomainId =
+                DomainId::try_new("wonderland", "universal").expect("domain id parses");
+            let domain = Domain::new(domain_id.clone()).build(&ALICE_ID);
+            let account = new_account_in_domain(&ALICE_ID).build(&ALICE_ID);
+            let asset_def_id =
+                AssetDefinitionId::new(domain_id.clone(), "coupon".parse().expect("asset name"));
+            let asset_definition = AssetDefinition::numeric(asset_def_id.clone())
+                .with_name(asset_def_id.name().to_string())
+                .with_balance_scope_policy(AssetBalancePolicy::Global)
+                .confidential_policy(AssetConfidentialPolicy::convertible())
+                .build(&ALICE_ID);
+            let asset_id = AssetId::of(asset_def_id.clone(), ALICE_ID.clone());
+            let asset = Asset::new(asset_id.clone(), Numeric::new(10, 0));
+            let mut world =
+                World::with_assets([domain], [account], [asset_definition], [asset], []);
+            world.zk_assets.insert(asset_def_id.clone(), {
+                let mut state = crate::state::ZkAssetState::default();
+                state.mode = iroha_data_model::isi::zk::ZkAssetMode::Hybrid;
+                state.allow_shield = true;
+                state
+            });
+            let kura = Kura::blank_kura_for_testing();
+            let query_handle = LiveQueryStore::start_test();
+            let state = State::new(world, kura, query_handle);
+            let block = new_dummy_block();
+            let mut state_block = state.block(block.as_ref().header());
+            let mut stx = state_block.transaction();
+            stx.current_dataspace_id = Some(DataSpaceId::UNIVERSAL);
+            stx.world.current_dataspace_id = Some(DataSpaceId::UNIVERSAL);
+
+            shield_amount(&mut stx, &asset_def_id, 3)
+                .expect("global assets must keep using the global public bucket");
+
+            assert_eq!(numeric_balance(&stx, &asset_id), Numeric::new(7, 0));
+            let universal_asset_id = AssetId::with_scope(
+                asset_def_id.clone(),
+                ALICE_ID.clone(),
+                AssetBalanceScope::Dataspace(DataSpaceId::UNIVERSAL),
+            );
+            assert!(
+                stx.world.assets.get(&universal_asset_id).is_none(),
+                "global shield must not move balances into a dataspace bucket"
+            );
+            assert_eq!(commitment_count(&stx, &asset_def_id), 1);
         }
 
         fn seed_manifest_record(
@@ -18502,6 +19125,346 @@ pub mod isi {
         }
 
         #[test]
+        fn confidential_transfer_v2_rejects_noncanonical_envelope_metadata_before_proof_decode() {
+            #[derive(Clone, Copy)]
+            enum Tamper {
+                BackendTag,
+                CircuitId,
+                PublicInputsSchema,
+                AuxiliaryBytes,
+                ZeroVerifyingKeyHash,
+                VerifyingKeyHash,
+                MissingCircuitIndex,
+            }
+
+            for (suffix, tamper, expected_msg) in [
+                (
+                    "backend",
+                    Tamper::BackendTag,
+                    "unexpected OpenVerifyEnvelope backend tag",
+                ),
+                (
+                    "circuit",
+                    Tamper::CircuitId,
+                    "verifying key circuit mismatch",
+                ),
+                (
+                    "schema",
+                    Tamper::PublicInputsSchema,
+                    "public inputs schema mismatch",
+                ),
+                (
+                    "aux",
+                    Tamper::AuxiliaryBytes,
+                    "envelope auxiliary bytes must be empty",
+                ),
+                (
+                    "zero_vk_hash",
+                    Tamper::ZeroVerifyingKeyHash,
+                    "verifying key commitment mismatch",
+                ),
+                (
+                    "wrong_vk_hash",
+                    Tamper::VerifyingKeyHash,
+                    "verifying key commitment mismatch",
+                ),
+                (
+                    "missing_circuit_index",
+                    Tamper::MissingCircuitIndex,
+                    "verifying key circuit/version not active",
+                ),
+            ] {
+                let kura = Kura::blank_kura_for_testing();
+                let query_handle = LiveQueryStore::start_test();
+                let state = State::new(World::default(), kura, query_handle);
+                let header = iroha_data_model::block::BlockHeader::new(
+                    NonZeroU64::new(1).unwrap(),
+                    None,
+                    None,
+                    None,
+                    0,
+                    0,
+                );
+                let mut block = state.block(header);
+                let mut stx = block.transaction();
+
+                let vk_id =
+                    VerifyingKeyId::new("halo2/ipa", format!("vk_conf_v2_{suffix}").as_str());
+                let vk_box = VerifyingKeyBox::new("halo2/ipa".into(), vec![1, 3, 3, 7]);
+                let vk_commitment = hash_vk(&vk_box);
+                let expected_schema =
+                    crate::zk::confidential_v2::CONFIDENTIAL_TRANSFER_V2_PUBLIC_INPUTS_SCHEMA_V1;
+                let public_inputs_schema_hash = if matches!(tamper, Tamper::PublicInputsSchema) {
+                    [0u8; 32]
+                } else {
+                    CryptoHash::new(expected_schema).into()
+                };
+                let mut record = VerifyingKeyRecord::new_with_owner(
+                    1,
+                    crate::zk::confidential_v2::CONFIDENTIAL_TRANSFER_V2_CIRCUIT_ID.to_owned(),
+                    None,
+                    "test",
+                    BackendTag::Halo2IpaPasta,
+                    "pallas",
+                    public_inputs_schema_hash,
+                    vk_commitment,
+                );
+                record.vk_len = 4;
+                record.status = ConfidentialStatus::Active;
+                record.key = Some(vk_box);
+                record.gas_schedule_id = Some("halo2_default".into());
+                stx.world
+                    .verifying_keys
+                    .insert(vk_id.clone(), record.clone());
+                if !matches!(tamper, Tamper::MissingCircuitIndex) {
+                    stx.world
+                        .verifying_keys_by_circuit
+                        .insert((record.circuit_id.clone(), record.version), vk_id.clone());
+                }
+
+                let mut envelope = OpenVerifyEnvelope {
+                    backend: BackendTag::Halo2IpaPasta,
+                    circuit_id: record.circuit_id.clone(),
+                    vk_hash: vk_commitment,
+                    public_inputs: expected_schema.to_vec(),
+                    proof_bytes: vec![0xAA, 0xBB, 0xCC],
+                    aux: Vec::new(),
+                };
+                match tamper {
+                    Tamper::BackendTag => envelope.backend = BackendTag::Stark,
+                    Tamper::CircuitId => envelope.circuit_id = "halo2/pasta/ipa/vote-ballot".into(),
+                    Tamper::PublicInputsSchema => {
+                        envelope.public_inputs = b"not the confidential transfer schema".to_vec();
+                    }
+                    Tamper::AuxiliaryBytes => envelope.aux = b"fee-binding".to_vec(),
+                    Tamper::ZeroVerifyingKeyHash => envelope.vk_hash = [0u8; 32],
+                    Tamper::VerifyingKeyHash => envelope.vk_hash[0] ^= 0x80,
+                    Tamper::MissingCircuitIndex => {}
+                }
+                let proof_box = ProofBox::new(
+                    "halo2/ipa".into(),
+                    norito::to_bytes(&envelope).expect("encode envelope"),
+                );
+                let attachment = ProofAttachment::new_ref("halo2/ipa".into(), proof_box, vk_id);
+
+                let err = super::validate_confidential_v2_open_verify_envelope_metadata(
+                    "confidential transfer v2",
+                    &attachment,
+                    &stx,
+                    &record,
+                    expected_schema,
+                )
+                .expect_err("tampered confidential transfer v2 envelope must be rejected");
+                let msg = smart_contract_instruction_error_message(err);
+                assert!(
+                    msg.contains(expected_msg),
+                    "expected {expected_msg:?}, got {msg:?}"
+                );
+            }
+        }
+
+        #[test]
+        fn confidential_transfer_v2_accepts_canonical_envelope_metadata_before_proof_decode() {
+            let kura = Kura::blank_kura_for_testing();
+            let query_handle = LiveQueryStore::start_test();
+            let state = State::new(World::default(), kura, query_handle);
+            let header = iroha_data_model::block::BlockHeader::new(
+                NonZeroU64::new(1).unwrap(),
+                None,
+                None,
+                None,
+                0,
+                0,
+            );
+            let mut block = state.block(header);
+            let mut stx = block.transaction();
+
+            let vk_id = VerifyingKeyId::new("halo2/ipa", "vk_conf_v2_canonical");
+            let vk_box = VerifyingKeyBox::new("halo2/ipa".into(), vec![2, 4, 6, 8]);
+            let vk_commitment = hash_vk(&vk_box);
+            let expected_schema =
+                crate::zk::confidential_v2::CONFIDENTIAL_TRANSFER_V2_PUBLIC_INPUTS_SCHEMA_V1;
+            let mut record = VerifyingKeyRecord::new_with_owner(
+                1,
+                crate::zk::confidential_v2::CONFIDENTIAL_TRANSFER_V2_CIRCUIT_ID.to_owned(),
+                None,
+                "test",
+                BackendTag::Halo2IpaPasta,
+                "pallas",
+                CryptoHash::new(expected_schema).into(),
+                vk_commitment,
+            );
+            record.vk_len = 4;
+            record.status = ConfidentialStatus::Active;
+            record.key = Some(vk_box);
+            record.gas_schedule_id = Some("halo2_default".into());
+            stx.world
+                .verifying_keys
+                .insert(vk_id.clone(), record.clone());
+            stx.world
+                .verifying_keys_by_circuit
+                .insert((record.circuit_id.clone(), record.version), vk_id.clone());
+
+            let envelope = OpenVerifyEnvelope {
+                backend: BackendTag::Halo2IpaPasta,
+                circuit_id: record.circuit_id.clone(),
+                vk_hash: vk_commitment,
+                public_inputs: expected_schema.to_vec(),
+                proof_bytes: vec![0xAA, 0xBB, 0xCC],
+                aux: Vec::new(),
+            };
+            let proof_box = ProofBox::new(
+                "halo2/ipa".into(),
+                norito::to_bytes(&envelope).expect("encode envelope"),
+            );
+            let attachment = ProofAttachment::new_ref("halo2/ipa".into(), proof_box, vk_id);
+
+            super::validate_confidential_v2_open_verify_envelope_metadata(
+                "confidential transfer v2",
+                &attachment,
+                &stx,
+                &record,
+                expected_schema,
+            )
+            .expect("canonical confidential transfer v2 envelope metadata should pass");
+        }
+
+        #[test]
+        fn confidential_unshield_v2_v3_reject_noncanonical_envelope_metadata_before_proof_decode() {
+            #[derive(Clone, Copy)]
+            enum Tamper {
+                BackendTag,
+                PublicInputsSchema,
+                AuxiliaryBytes,
+                MissingCircuitIndex,
+            }
+
+            for (role_suffix, label, circuit_id, expected_schema) in [
+                (
+                    "unshield_v2",
+                    "confidential unshield v2",
+                    crate::zk::confidential_v2::CONFIDENTIAL_UNSHIELD_V2_CIRCUIT_ID,
+                    crate::zk::confidential_v2::CONFIDENTIAL_UNSHIELD_V2_PUBLIC_INPUTS_SCHEMA_V1,
+                ),
+                (
+                    "unshield_v3",
+                    "confidential unshield v3",
+                    crate::zk::confidential_v2::CONFIDENTIAL_UNSHIELD_V3_CIRCUIT_ID,
+                    crate::zk::confidential_v2::CONFIDENTIAL_UNSHIELD_V3_PUBLIC_INPUTS_SCHEMA_V1,
+                ),
+            ] {
+                for (suffix, tamper, expected_msg) in [
+                    (
+                        "backend",
+                        Tamper::BackendTag,
+                        "unexpected OpenVerifyEnvelope backend tag",
+                    ),
+                    (
+                        "schema",
+                        Tamper::PublicInputsSchema,
+                        "public inputs schema mismatch",
+                    ),
+                    (
+                        "aux",
+                        Tamper::AuxiliaryBytes,
+                        "envelope auxiliary bytes must be empty",
+                    ),
+                    (
+                        "missing_circuit_index",
+                        Tamper::MissingCircuitIndex,
+                        "verifying key circuit/version not active",
+                    ),
+                ] {
+                    let kura = Kura::blank_kura_for_testing();
+                    let query_handle = LiveQueryStore::start_test();
+                    let state = State::new(World::default(), kura, query_handle);
+                    let header = iroha_data_model::block::BlockHeader::new(
+                        NonZeroU64::new(1).unwrap(),
+                        None,
+                        None,
+                        None,
+                        0,
+                        0,
+                    );
+                    let mut block = state.block(header);
+                    let mut stx = block.transaction();
+
+                    let vk_id = VerifyingKeyId::new(
+                        "halo2/ipa",
+                        format!("vk_conf_{role_suffix}_{suffix}").as_str(),
+                    );
+                    let vk_box = VerifyingKeyBox::new("halo2/ipa".into(), vec![5, 8, 13, 21]);
+                    let vk_commitment = hash_vk(&vk_box);
+                    let public_inputs_schema_hash = if matches!(tamper, Tamper::PublicInputsSchema)
+                    {
+                        [0u8; 32]
+                    } else {
+                        CryptoHash::new(expected_schema).into()
+                    };
+                    let mut record = VerifyingKeyRecord::new_with_owner(
+                        1,
+                        circuit_id.to_owned(),
+                        None,
+                        "test",
+                        BackendTag::Halo2IpaPasta,
+                        "pallas",
+                        public_inputs_schema_hash,
+                        vk_commitment,
+                    );
+                    record.vk_len = 4;
+                    record.status = ConfidentialStatus::Active;
+                    record.key = Some(vk_box);
+                    record.gas_schedule_id = Some("halo2_default".into());
+                    stx.world
+                        .verifying_keys
+                        .insert(vk_id.clone(), record.clone());
+                    if !matches!(tamper, Tamper::MissingCircuitIndex) {
+                        stx.world
+                            .verifying_keys_by_circuit
+                            .insert((record.circuit_id.clone(), record.version), vk_id.clone());
+                    }
+
+                    let mut envelope = OpenVerifyEnvelope {
+                        backend: BackendTag::Halo2IpaPasta,
+                        circuit_id: record.circuit_id.clone(),
+                        vk_hash: vk_commitment,
+                        public_inputs: expected_schema.to_vec(),
+                        proof_bytes: vec![0xDD, 0xEE, 0xFF],
+                        aux: Vec::new(),
+                    };
+                    match tamper {
+                        Tamper::BackendTag => envelope.backend = BackendTag::Stark,
+                        Tamper::PublicInputsSchema => {
+                            envelope.public_inputs =
+                                b"not the confidential unshield schema".to_vec();
+                        }
+                        Tamper::AuxiliaryBytes => envelope.aux = b"side-channel".to_vec(),
+                        Tamper::MissingCircuitIndex => {}
+                    }
+                    let proof_box = ProofBox::new(
+                        "halo2/ipa".into(),
+                        norito::to_bytes(&envelope).expect("encode envelope"),
+                    );
+                    let attachment = ProofAttachment::new_ref("halo2/ipa".into(), proof_box, vk_id);
+
+                    let err = super::validate_confidential_v2_open_verify_envelope_metadata(
+                        label,
+                        &attachment,
+                        &stx,
+                        &record,
+                        expected_schema,
+                    )
+                    .expect_err("tampered confidential unshield envelope must be rejected");
+                    let msg = smart_contract_instruction_error_message(err);
+                    assert!(
+                        msg.contains(expected_msg),
+                        "expected {expected_msg:?}, got {msg:?}"
+                    );
+                }
+            }
+        }
+
+        #[test]
         fn register_domain_rejects_labels_failing_norm_current() {
             let err = DomainId::try_new("wÍḷd-card", "universal")
                 .expect_err("label violating STD3 must be rejected");
@@ -19280,6 +20243,52 @@ pub mod isi {
         }
 
         #[test]
+        fn register_vk_rejects_inline_key_length_mismatch() {
+            let kura = Kura::blank_kura_for_testing();
+            let query_handle = LiveQueryStore::start_test();
+            let state = State::new(World::default(), kura, query_handle);
+
+            let block = new_dummy_block();
+            let mut state_block = state.block(block.as_ref().header());
+            let mut stx = state_block.transaction();
+            bootstrap_alice_account(&mut stx);
+            let perm = Permission::new(
+                "CanManageVerifyingKeys".parse().unwrap(),
+                iroha_primitives::json::Json::new(()),
+            );
+            Grant::account_permission(perm, ALICE_ID.clone())
+                .execute(&ALICE_ID, &mut stx)
+                .expect("grant manage vk");
+            stx.apply();
+
+            let mut stx = state_block.transaction();
+            let exec = Executor::default();
+            let id = VerifyingKeyId::new("halo2/ipa", "vk_bad_len");
+            let vk_box = VerifyingKeyBox::new("halo2/ipa".into(), vec![1, 2, 3]);
+            let mut rec = VerifyingKeyRecord::new_with_owner(
+                1,
+                "vk_bad_len",
+                None,
+                "test",
+                BackendTag::Halo2IpaPasta,
+                "pallas",
+                [0x62; 32],
+                hash_vk(&vk_box),
+            );
+            rec.vk_len = 4;
+            rec.status = ConfidentialStatus::Active;
+            rec.key = Some(vk_box);
+            rec.gas_schedule_id = Some("halo2_default".into());
+            let instr: InstructionBox =
+                verifying_keys::RegisterVerifyingKey { id, record: rec }.into();
+            let err = exec
+                .execute_instruction(&mut stx, &ALICE_ID.clone(), instr)
+                .expect_err("inline verifying key length mismatch must fail");
+            let msg = smart_contract_error_message(err);
+            assert!(msg.contains("vk_len"), "unexpected msg: {msg}");
+        }
+
+        #[test]
         fn register_vk_rejects_non_ipa_backend() {
             let kura = Kura::blank_kura_for_testing();
             let query_handle = LiveQueryStore::start_test();
@@ -19326,6 +20335,225 @@ pub mod isi {
                 msg.contains("backend must be Halo2IpaPasta"),
                 "unexpected msg: {msg}"
             );
+        }
+
+        #[test]
+        fn register_vk_rejects_trusted_setup_halo2_backend_labels() {
+            let kura = Kura::blank_kura_for_testing();
+            let query_handle = LiveQueryStore::start_test();
+            let state = State::new(World::default(), kura, query_handle);
+
+            let block = new_dummy_block();
+            let mut state_block = state.block(block.as_ref().header());
+            let mut stx = state_block.transaction();
+            bootstrap_alice_account(&mut stx);
+            let perm = Permission::new(
+                "CanManageVerifyingKeys".parse().unwrap(),
+                iroha_primitives::json::Json::new(()),
+            );
+            Grant::account_permission(perm, ALICE_ID.clone())
+                .execute(&ALICE_ID, &mut stx)
+                .expect("grant manage vk");
+            stx.apply();
+
+            let exec = Executor::default();
+            for backend in [
+                "halo2/kzg",
+                "halo2/kzg/tiny-add",
+                "halo2/ipa:kzg",
+                "halo2/ipa:KZG",
+                "halo2/ipa: KZG",
+                "halo2/pasta/ipa:kzg",
+                "halo2/ipa:bn254",
+                "halo2/pasta/kzg/tiny-add",
+                "halo2/bls12_381/tiny-add",
+            ] {
+                let mut stx = state_block.transaction();
+                let id = VerifyingKeyId::new(backend, "vk_trusted_setup_label");
+                let vk_box = VerifyingKeyBox::new(backend.into(), vec![1, 2, 3]);
+                let mut rec = VerifyingKeyRecord::new_with_owner(
+                    1,
+                    "vk_trusted_setup_label",
+                    None,
+                    "test",
+                    BackendTag::Halo2IpaPasta,
+                    "pallas",
+                    [0x71; 32],
+                    hash_vk(&vk_box),
+                );
+                rec.vk_len = 3;
+                rec.status = ConfidentialStatus::Active;
+                rec.key = Some(vk_box);
+                rec.gas_schedule_id = Some("halo2_default".into());
+                let instr: InstructionBox =
+                    verifying_keys::RegisterVerifyingKey { id, record: rec }.into();
+                let err = exec
+                    .execute_instruction(&mut stx, &ALICE_ID.clone(), instr)
+                    .expect_err("trusted-setup Halo2 label must be rejected");
+                let msg = smart_contract_error_message(err);
+                assert!(
+                    msg.contains("trusted-setup verifying key backends"),
+                    "unexpected msg for {backend}: {msg}"
+                );
+            }
+        }
+
+        #[test]
+        fn register_vk_rejects_developer_only_backend_labels() {
+            let kura = Kura::blank_kura_for_testing();
+            let query_handle = LiveQueryStore::start_test();
+            let state = State::new(World::default(), kura, query_handle);
+
+            let block = new_dummy_block();
+            let mut state_block = state.block(block.as_ref().header());
+            let mut stx = state_block.transaction();
+            bootstrap_alice_account(&mut stx);
+            let perm = Permission::new(
+                "CanManageVerifyingKeys".parse().unwrap(),
+                iroha_primitives::json::Json::new(()),
+            );
+            Grant::account_permission(perm, ALICE_ID.clone())
+                .execute(&ALICE_ID, &mut stx)
+                .expect("grant manage vk");
+            stx.apply();
+
+            let exec = Executor::default();
+            for (idx, (backend, tag, curve, schedule)) in [
+                (
+                    "debug/halo2/ipa",
+                    BackendTag::Halo2IpaPasta,
+                    "pallas",
+                    "halo2_default",
+                ),
+                (
+                    "halo2/mock",
+                    BackendTag::Halo2IpaPasta,
+                    "pallas",
+                    "halo2_default",
+                ),
+                (
+                    "halo2/debug",
+                    BackendTag::Halo2IpaPasta,
+                    "pallas",
+                    "halo2_default",
+                ),
+                (
+                    "halo2/ipa:mock-proof",
+                    BackendTag::Halo2IpaPasta,
+                    "pallas",
+                    "halo2_default",
+                ),
+                (
+                    "halo2/ipa:Mock-Proof",
+                    BackendTag::Halo2IpaPasta,
+                    "pallas",
+                    "halo2_default",
+                ),
+                (
+                    "stark/fri/debug",
+                    BackendTag::Stark,
+                    "goldilocks",
+                    "stark_default",
+                ),
+                (
+                    "stark/fri/Debug",
+                    BackendTag::Stark,
+                    "goldilocks",
+                    "stark_default",
+                ),
+                (
+                    "stark/fri/mock",
+                    BackendTag::Stark,
+                    "goldilocks",
+                    "stark_default",
+                ),
+            ]
+            .into_iter()
+            .enumerate()
+            {
+                let mut stx = state_block.transaction();
+                let id = VerifyingKeyId::new(backend, format!("vk_developer_only_{idx}"));
+                let vk_box = VerifyingKeyBox::new(backend.into(), vec![1, 2, 3]);
+                let mut rec = VerifyingKeyRecord::new_with_owner(
+                    1,
+                    format!("{backend}:developer-only-circuit"),
+                    None,
+                    "test",
+                    tag,
+                    curve,
+                    [0x72; 32],
+                    hash_vk(&vk_box),
+                );
+                rec.vk_len = 3;
+                rec.status = ConfidentialStatus::Active;
+                rec.key = Some(vk_box);
+                rec.gas_schedule_id = Some(schedule.into());
+                let instr: InstructionBox =
+                    verifying_keys::RegisterVerifyingKey { id, record: rec }.into();
+                let err = exec
+                    .execute_instruction(&mut stx, &ALICE_ID.clone(), instr)
+                    .expect_err("developer-only verifier label must be rejected");
+                let msg = smart_contract_error_message(err);
+                assert!(
+                    msg.contains("developer-only verifying key backends"),
+                    "unexpected msg for {backend}: {msg}"
+                );
+            }
+        }
+
+        #[test]
+        fn register_vk_rejects_trusted_setup_stark_backend_labels() {
+            let kura = Kura::blank_kura_for_testing();
+            let query_handle = LiveQueryStore::start_test();
+            let state = State::new(World::default(), kura, query_handle);
+
+            let block = new_dummy_block();
+            let mut state_block = state.block(block.as_ref().header());
+            let mut stx = state_block.transaction();
+            bootstrap_alice_account(&mut stx);
+            let perm = Permission::new(
+                "CanManageVerifyingKeys".parse().unwrap(),
+                iroha_primitives::json::Json::new(()),
+            );
+            Grant::account_permission(perm, ALICE_ID.clone())
+                .execute(&ALICE_ID, &mut stx)
+                .expect("grant manage vk");
+            stx.apply();
+
+            let exec = Executor::default();
+            for backend in [
+                "stark/fri/kzg",
+                "stark/fri/KZG",
+                "stark/fri/ KZG",
+                "stark/fri/bn254",
+                "stark/fri/BN254",
+                "stark/fri/bls12_381",
+            ] {
+                let mut stx = state_block.transaction();
+                let id = VerifyingKeyId::new(backend, "vk_trusted_setup_stark_label");
+                let mut rec = VerifyingKeyRecord::new_with_owner(
+                    1,
+                    format!("{backend}:trusted-setup-circuit"),
+                    None,
+                    "test",
+                    BackendTag::Stark,
+                    "goldilocks",
+                    [0x73; 32],
+                    [0x74; 32],
+                );
+                rec.status = ConfidentialStatus::Active;
+                rec.gas_schedule_id = Some("stark_default".into());
+                let instr: InstructionBox =
+                    verifying_keys::RegisterVerifyingKey { id, record: rec }.into();
+                let err = exec
+                    .execute_instruction(&mut stx, &ALICE_ID.clone(), instr)
+                    .expect_err("trusted-setup STARK label must be rejected before storage");
+                let msg = smart_contract_error_message(err);
+                assert!(
+                    msg.contains("trusted-setup verifying key backends"),
+                    "unexpected msg for {backend}: {msg}"
+                );
+            }
         }
 
         #[test]
@@ -19668,6 +20896,8 @@ pub mod isi {
                     iroha_config::parameters::defaults::sumeragi::DA_ENABLED,
                     false,
                 ),
+                da_quorum_timeout_multiplier:
+                    iroha_config::parameters::defaults::sumeragi::DA_QUORUM_TIMEOUT_MULTIPLIER,
                 key_activation_lead_blocks:
                     iroha_config::parameters::defaults::sumeragi::KEY_ACTIVATION_LEAD_BLOCKS,
                 key_overlap_grace_blocks:
@@ -19910,6 +21140,8 @@ pub mod isi {
                     iroha_config::parameters::defaults::sumeragi::DA_ENABLED,
                     false,
                 ),
+                da_quorum_timeout_multiplier:
+                    iroha_config::parameters::defaults::sumeragi::DA_QUORUM_TIMEOUT_MULTIPLIER,
                 key_activation_lead_blocks:
                     iroha_config::parameters::defaults::sumeragi::KEY_ACTIVATION_LEAD_BLOCKS,
                 key_overlap_grace_blocks:
@@ -20026,6 +21258,8 @@ pub mod isi {
                     iroha_config::parameters::defaults::sumeragi::DA_ENABLED,
                     true,
                 ),
+                da_quorum_timeout_multiplier:
+                    iroha_config::parameters::defaults::sumeragi::DA_QUORUM_TIMEOUT_MULTIPLIER,
                 key_activation_lead_blocks:
                     iroha_config::parameters::defaults::sumeragi::KEY_ACTIVATION_LEAD_BLOCKS,
                 key_overlap_grace_blocks:
@@ -20795,6 +22029,191 @@ pub mod isi {
             );
         }
 
+        #[test]
+        fn update_vk_rejects_non_production_existing_backend_labels() {
+            let kura = Kura::blank_kura_for_testing();
+            let query_handle = LiveQueryStore::start_test();
+            let state = State::new(World::default(), kura, query_handle);
+
+            let block = new_dummy_block();
+            let mut state_block = state.block(block.as_ref().header());
+            let mut stx = state_block.transaction();
+            bootstrap_alice_account(&mut stx);
+            let perm = Permission::new(
+                "CanManageVerifyingKeys".parse().unwrap(),
+                iroha_primitives::json::Json::new(()),
+            );
+            Grant::account_permission(perm, ALICE_ID.clone())
+                .execute(&ALICE_ID, &mut stx)
+                .expect("grant manage vk");
+            stx.apply();
+
+            let exec = Executor::default();
+            for (idx, (backend, tag, curve, schedule, expected_msg)) in [
+                (
+                    "halo2/mock",
+                    BackendTag::Halo2IpaPasta,
+                    "pallas",
+                    "halo2_default",
+                    "developer-only verifying key backends",
+                ),
+                (
+                    "stark/fri/mock",
+                    BackendTag::Stark,
+                    "goldilocks",
+                    "stark_default",
+                    "developer-only verifying key backends",
+                ),
+                (
+                    "stark/fri/debug",
+                    BackendTag::Stark,
+                    "goldilocks",
+                    "stark_default",
+                    "developer-only verifying key backends",
+                ),
+                (
+                    "halo2/kzg",
+                    BackendTag::Halo2IpaPasta,
+                    "pallas",
+                    "halo2_default",
+                    "trusted-setup verifying key backends",
+                ),
+                (
+                    "stark/fri/kzg",
+                    BackendTag::Stark,
+                    "goldilocks",
+                    "stark_default",
+                    "trusted-setup verifying key backends",
+                ),
+            ]
+            .into_iter()
+            .enumerate()
+            {
+                let name = format!("vk_update_non_production_{idx}");
+                let id = VerifyingKeyId::new(backend, name.clone());
+                let mut old_rec = VerifyingKeyRecord::new_with_owner(
+                    1,
+                    format!("{backend}:old-circuit"),
+                    None,
+                    "test",
+                    tag,
+                    curve,
+                    [0x75; 32],
+                    [0x76; 32],
+                );
+                old_rec.status = ConfidentialStatus::Active;
+                old_rec.gas_schedule_id = Some(schedule.into());
+
+                let mut stx = state_block.transaction();
+                stx.world.verifying_keys.insert(id.clone(), old_rec.clone());
+                stx.world
+                    .verifying_keys_by_circuit
+                    .insert((old_rec.circuit_id.clone(), old_rec.version), id.clone());
+                stx.apply();
+
+                let mut new_rec = VerifyingKeyRecord::new_with_owner(
+                    2,
+                    format!("{backend}:new-circuit"),
+                    None,
+                    "test",
+                    tag,
+                    curve,
+                    [0x75; 32],
+                    [0x77; 32],
+                );
+                new_rec.status = ConfidentialStatus::Active;
+                new_rec.gas_schedule_id = Some(schedule.into());
+                let upd: InstructionBox = verifying_keys::UpdateVerifyingKey {
+                    id: id.clone(),
+                    record: new_rec,
+                }
+                .into();
+
+                let mut stx = state_block.transaction();
+                let err = exec
+                    .execute_instruction(&mut stx, &ALICE_ID.clone(), upd)
+                    .expect_err("non-production verifier label must be rejected on update");
+                let msg = smart_contract_error_message(err);
+                assert!(
+                    msg.contains(expected_msg),
+                    "unexpected msg for {backend}: {msg}"
+                );
+            }
+        }
+
+        #[test]
+        fn update_vk_rejects_inline_key_length_mismatch() {
+            let kura = Kura::blank_kura_for_testing();
+            let query_handle = LiveQueryStore::start_test();
+            let state = State::new(World::default(), kura, query_handle);
+
+            let block = new_dummy_block();
+            let mut state_block = state.block(block.as_ref().header());
+            let mut stx = state_block.transaction();
+            bootstrap_alice_account(&mut stx);
+            let perm = Permission::new(
+                "CanManageVerifyingKeys".parse().unwrap(),
+                iroha_primitives::json::Json::new(()),
+            );
+            Grant::account_permission(perm, ALICE_ID.clone())
+                .execute(&ALICE_ID, &mut stx)
+                .expect("grant manage vk");
+            stx.apply();
+
+            let mut stx = state_block.transaction();
+            let exec = Executor::default();
+            let id = VerifyingKeyId::new("halo2/ipa", "vk_update_bad_len");
+            let vk_box = VerifyingKeyBox::new("halo2/ipa".into(), vec![1, 2, 3]);
+            let mut rec = VerifyingKeyRecord::new_with_owner(
+                1,
+                "vk_update_bad_len",
+                None,
+                "test",
+                BackendTag::Halo2IpaPasta,
+                "pallas",
+                [0x53; 32],
+                hash_vk(&vk_box),
+            );
+            rec.vk_len = 3;
+            rec.status = ConfidentialStatus::Active;
+            rec.key = Some(vk_box.clone());
+            rec.gas_schedule_id = Some("halo2_default".into());
+            let register_vk_instruction: InstructionBox = verifying_keys::RegisterVerifyingKey {
+                id: id.clone(),
+                record: rec,
+            }
+            .into();
+            exec.execute_instruction(&mut stx, &ALICE_ID.clone(), register_vk_instruction)
+                .expect("register vk");
+            stx.apply();
+
+            let mut stx = state_block.transaction();
+            let mut new_rec = VerifyingKeyRecord::new_with_owner(
+                2,
+                "vk_update_bad_len",
+                None,
+                "test",
+                BackendTag::Halo2IpaPasta,
+                "pallas",
+                [0x54; 32],
+                hash_vk(&vk_box),
+            );
+            new_rec.vk_len = 4;
+            new_rec.status = ConfidentialStatus::Active;
+            new_rec.key = Some(vk_box);
+            new_rec.gas_schedule_id = Some("halo2_default".into());
+            let update_instruction: InstructionBox = verifying_keys::UpdateVerifyingKey {
+                id,
+                record: new_rec,
+            }
+            .into();
+            let err = exec
+                .execute_instruction(&mut stx, &ALICE_ID.clone(), update_instruction)
+                .expect_err("inline verifying key length mismatch must fail on update");
+            let msg = smart_contract_error_message(err);
+            assert!(msg.contains("vk_len"), "unexpected msg: {msg}");
+        }
+
         #[cfg(feature = "zk-stark")]
         #[test]
         fn update_vk_rejects_mixed_case_stark_curve() {
@@ -21424,16 +22843,28 @@ pub mod isi {
         fn verify_proof_preverified_cache_does_not_bypass_envelope_metadata_mismatches() {
             #[derive(Clone, Copy)]
             enum Tamper {
+                AuxiliaryBytes,
                 PublicInputs,
+                ZeroVerifyingKeyHash,
                 VerifyingKeyHash,
                 InactiveKey,
             }
 
             for (suffix, tamper, expected_msg) in [
                 (
+                    "auxiliary",
+                    Tamper::AuxiliaryBytes,
+                    "envelope auxiliary bytes must be empty",
+                ),
+                (
                     "schema",
                     Tamper::PublicInputs,
                     "public inputs schema hash mismatch",
+                ),
+                (
+                    "zero_vk_hash",
+                    Tamper::ZeroVerifyingKeyHash,
+                    "verifying key commitment mismatch",
                 ),
                 (
                     "vk_hash",
@@ -21511,8 +22942,11 @@ pub mod isi {
 
                 let mut envelope_public_inputs = expected_public_inputs;
                 let mut envelope_vk_hash = vk_commitment;
+                let mut envelope_aux = Vec::new();
                 match tamper {
+                    Tamper::AuxiliaryBytes => envelope_aux = b"ignored-hint".to_vec(),
                     Tamper::PublicInputs => envelope_public_inputs = vec![9, 9, 9],
+                    Tamper::ZeroVerifyingKeyHash => envelope_vk_hash = [0u8; 32],
                     Tamper::VerifyingKeyHash => envelope_vk_hash[0] ^= 0x80,
                     Tamper::InactiveKey => {}
                 }
@@ -21522,7 +22956,7 @@ pub mod isi {
                     vk_hash: envelope_vk_hash,
                     public_inputs: envelope_public_inputs,
                     proof_bytes: vec![4, 5, 6],
-                    aux: Vec::new(),
+                    aux: envelope_aux,
                 };
                 let proof_box = ProofBox::new(
                     "halo2/ipa".into(),

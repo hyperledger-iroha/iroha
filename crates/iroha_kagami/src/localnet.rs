@@ -546,10 +546,10 @@ fn localnet_fee_asset_literal() -> String {
 const LOCALNET_FEE_ZK_VK_BACKEND: &str = "halo2/ipa";
 const LOCALNET_FEE_ZK_VK_TRANSFER_NAME: &str = "vk_transfer";
 const LOCALNET_FEE_ZK_VK_UNSHIELD_NAME: &str = "vk_unshield";
-const LOCALNET_OFFLINE_NOTE_V2_VK_BACKEND: &str = "halo2/ipa";
-const LOCALNET_OFFLINE_NOTE_V2_VK_NAME: &str = "offline-note-v2-recursive-v1";
+const LOCALNET_OFFLINE_NOTE_VK_BACKEND: &str = "halo2/ipa";
+const LOCALNET_OFFLINE_NOTE_VK_NAME: &str = "offline-note-recursive";
 const LOCALNET_FEE_ASSET_SCALE: u32 = 9;
-const LOCALNET_OFFLINE_NOTE_V2_VK_NAMESPACE: &str = "offline_note_v2";
+const LOCALNET_OFFLINE_NOTE_VK_NAMESPACE: &str = "offline_note";
 
 fn localnet_fee_vk_transfer_id() -> VerifyingKeyId {
     VerifyingKeyId::new(LOCALNET_FEE_ZK_VK_BACKEND, LOCALNET_FEE_ZK_VK_TRANSFER_NAME)
@@ -559,10 +559,10 @@ fn localnet_fee_vk_unshield_id() -> VerifyingKeyId {
     VerifyingKeyId::new(LOCALNET_FEE_ZK_VK_BACKEND, LOCALNET_FEE_ZK_VK_UNSHIELD_NAME)
 }
 
-fn localnet_offline_note_v2_vk_id() -> VerifyingKeyId {
+fn localnet_offline_note_vk_id() -> VerifyingKeyId {
     VerifyingKeyId::new(
-        LOCALNET_OFFLINE_NOTE_V2_VK_BACKEND,
-        LOCALNET_OFFLINE_NOTE_V2_VK_NAME,
+        LOCALNET_OFFLINE_NOTE_VK_BACKEND,
+        LOCALNET_OFFLINE_NOTE_VK_NAME,
     )
 }
 
@@ -594,10 +594,10 @@ fn localnet_confidential_fee_vk_registrations() -> Result<[(VerifyingKeyId, Veri
     ])
 }
 
-fn localnet_offline_note_v2_vk_registration() -> Result<(VerifyingKeyId, VerifyingKeyRecord)> {
+fn localnet_offline_note_vk_registration() -> Result<(VerifyingKeyId, VerifyingKeyRecord)> {
     Ok((
-        localnet_offline_note_v2_vk_id(),
-        zk::offline_note_v2_recursive_vk_record(LOCALNET_OFFLINE_NOTE_V2_VK_NAMESPACE, 1)
+        localnet_offline_note_vk_id(),
+        zk::offline_note_recursive_vk_record(LOCALNET_OFFLINE_NOTE_VK_NAMESPACE, 1)
             .map_err(|error| eyre!(error))?,
     ))
 }
@@ -1453,7 +1453,7 @@ fn localnet_dataspace_catalog(
             "paynet",
             i64::try_from(LOCALNET_PAYNET_ALIAS_DATASPACE_ID)
                 .expect("PAYNET dataspace id fits i64"),
-            "Bank of Papua New Guinea private Digital Kina dataspace",
+            "Private central-bank digital-currency dataspace",
         )],
         None => Vec::new(),
     };
@@ -1545,7 +1545,7 @@ fn localnet_lane_catalog(sora_profile: Option<SoraProfile>) -> Option<(i64, Vec<
             lane_specs.push((
                 i64::from(LOCALNET_PAYNET_ALIAS_LANE_INDEX),
                 "paynet",
-                "Bank of Papua New Guinea private Digital Kina dataspace lane",
+                "Private central-bank digital-currency dataspace lane",
                 "paynet",
                 "restricted",
                 Some("parliament"),
@@ -2908,15 +2908,14 @@ fn append_localnet_npos_bootstrap(
                 builder.append_instruction(verifying_keys::RegisterVerifyingKey { id, record });
         }
     }
-    let (offline_note_v2_vk_id, offline_note_v2_vk_record) =
-        localnet_offline_note_v2_vk_registration()?;
+    let (offline_note_vk_id, offline_note_vk_record) = localnet_offline_note_vk_registration()?;
     if registrations
         .verifying_keys
-        .insert(offline_note_v2_vk_id.clone())
+        .insert(offline_note_vk_id.clone())
     {
         builder = builder.append_instruction(verifying_keys::RegisterVerifyingKey {
-            id: offline_note_v2_vk_id,
-            record: offline_note_v2_vk_record,
+            id: offline_note_vk_id,
+            record: offline_note_vk_record,
         });
     }
     if !registrations.zk_assets.contains(&fee_asset_id) {
@@ -3532,7 +3531,7 @@ fn write_localnet_readme(
             "- Offline-note alias: `{offline_note_alias}`\n",
             "- Localnet app authority: `{client_account_id}`\n",
             "- Offline escrow account: deterministic account derived from the chain id and asset definition\n",
-            "- Generated peer configs enable `torii.onboarding` and Offline V2 escrow routing\n\n",
+            "- Generated peer configs enable `torii.onboarding` and Offline escrow routing\n\n",
             "- Start script: `{start_script}`\n",
             "- Stop script: `{stop_script}`\n\n",
             "## Next steps\n\n",
@@ -6306,7 +6305,7 @@ mod tests {
 
         let transfer_vk_id = localnet_fee_vk_transfer_id();
         let unshield_vk_id = localnet_fee_vk_unshield_id();
-        let offline_note_v2_vk_id = localnet_offline_note_v2_vk_id();
+        let offline_note_vk_id = localnet_offline_note_vk_id();
         let zk_registration = raw_genesis
             .instructions()
             .find_map(|instruction| {
@@ -6363,17 +6362,17 @@ mod tests {
         );
         assert!(
             vk_registrations.iter().any(|register| {
-                register.id == offline_note_v2_vk_id
+                register.id == offline_note_vk_id
                     && register.record.is_active()
                     && register.record.key.as_ref().map(|key| key.backend.as_str())
-                        == Some(LOCALNET_OFFLINE_NOTE_V2_VK_BACKEND)
-                    && register.record.max_proof_bytes == zk::OFFLINE_NOTE_V2_MAX_PROOF_BYTES
-                    && register.record.namespace == LOCALNET_OFFLINE_NOTE_V2_VK_NAMESPACE
-                    && register.record.circuit_id == zk::OFFLINE_NOTE_V2_RECURSIVE_V1_CIRCUIT_ID
+                        == Some(LOCALNET_OFFLINE_NOTE_VK_BACKEND)
+                    && register.record.max_proof_bytes == zk::OFFLINE_NOTE_MAX_PROOF_BYTES
+                    && register.record.namespace == LOCALNET_OFFLINE_NOTE_VK_NAMESPACE
+                    && register.record.circuit_id == zk::OFFLINE_NOTE_RECURSIVE_CIRCUIT_ID
                     && register.record.public_inputs_schema_hash
-                        == iroha_data_model::offline::offline_note_v2_recursive_public_inputs_schema_hash()
+                        == iroha_data_model::offline::offline_note_recursive_public_inputs_schema_hash()
             }),
-            "generated localnet genesis must register the real Offline V2 recursive verifier"
+            "generated localnet genesis must register the real Offline recursive verifier"
         );
     }
 

@@ -1072,6 +1072,17 @@ verify what binary is actually serving traffic. The object includes:
 - `cargo_features` — enabled Cargo feature set used for the build.
 - `target_triple` — compilation target triple for the running binary.
 
+Queue-aware liveness checks should use the raw `/status` facts together with
+`GET /v1/pipeline/preflight`. The status payload exposes `observed_at_ms`,
+`queue_size`, `queue_queued`, `queue_inflight`,
+`last_block_committed_at_ms`, `last_non_empty_block_committed_at_ms`,
+`time_since_last_block_ms`, and `time_since_last_non_empty_block_ms`.
+Treat `queue_size` as the primary gate: a peer is stalled only when queued work
+exists and elapsed block time exceeds
+`/v1/pipeline/preflight.sumeragi.stall_threshold_ms`. The preflight response
+also reports current admission, block, pipeline, queue, and fee limits so SDKs
+can explain rejected or delayed submissions before posting a transaction.
+
 - `peak_layer_width`, `layer_count` — outer bounds of the scheduler layering
   that executed for the lane in the latest block.
 - `avg_layer_width`, `median_layer_width`,

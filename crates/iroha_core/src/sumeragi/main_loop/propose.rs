@@ -9,7 +9,7 @@ use iroha_data_model::block::BlockExecutionContextBundle;
 use iroha_data_model::consensus::{
     CommitStakeSnapshot as ModelCommitStakeSnapshot,
     CommitStakeSnapshotEntry as ModelCommitStakeSnapshotEntry, PreviousRosterEvidence,
-    ValidatorSetCheckpoint,
+    VALIDATOR_SET_HASH_VERSION_V1, ValidatorSetCheckpoint, default_chain_order_hash,
 };
 use iroha_data_model::events::EventFilter;
 use iroha_data_model::prelude::Repeats;
@@ -128,6 +128,45 @@ fn previous_roster_evidence_for_parent(
         block_hash: parent_hash,
         validator_checkpoint: checkpoint,
         stake_snapshot: metadata.stake_snapshot.map(model_stake_snapshot),
+    })
+}
+
+fn previous_roster_evidence_for_hash_only_parent(
+    state: &State,
+    consensus_mode: ConsensusMode,
+    parent_height: u64,
+    parent_hash: HashOf<BlockHeader>,
+    roster: &[PeerId],
+) -> Option<PreviousRosterEvidence> {
+    if roster.is_empty() {
+        return None;
+    }
+    let checkpoint = ValidatorSetCheckpoint::new_with_chain_order(
+        parent_height,
+        0,
+        parent_hash,
+        default_chain_order_hash(),
+        0,
+        Hash::prehashed([0; Hash::LENGTH]),
+        Hash::prehashed([0; Hash::LENGTH]),
+        roster.to_vec(),
+        Vec::new(),
+        Vec::new(),
+        VALIDATOR_SET_HASH_VERSION_V1,
+        None,
+    );
+    let stake_snapshot = match consensus_mode {
+        ConsensusMode::Permissioned => None,
+        ConsensusMode::Npos => {
+            let world = state.world_view();
+            CommitStakeSnapshot::from_roster(&world, roster).map(model_stake_snapshot)
+        }
+    };
+    Some(PreviousRosterEvidence {
+        height: parent_height,
+        block_hash: parent_hash,
+        validator_checkpoint: checkpoint,
+        stake_snapshot,
     })
 }
 
@@ -505,24 +544,24 @@ impl Actor {
                 block_height,
             );
 
-            let prepare_votes = self
-                .native_amx_sessions
-                .sorted_votes_for_body(key, &prepare_body);
-            let commit_votes = self
-                .native_amx_sessions
-                .sorted_votes_for_body(key, &commit_body);
+            let prepare_votes = self.native_amx_sessions.sorted_votes_for_body_from(
+                key,
+                &prepare_body,
+                &validator_set,
+            );
+            let commit_votes = self.native_amx_sessions.sorted_votes_for_body_from(
+                key,
+                &commit_body,
+                &validator_set,
+            );
             if prepare_votes.len() < min_signers {
                 pending = true;
-                self.schedule_background(BackgroundRequest::BroadcastNativeAmx {
-                    message: NativeAmxMessage::PrepareRequest(prepare_body),
-                });
+                self.request_native_amx_attestation_votes(&validator_set, prepare_body);
                 continue;
             }
             if commit_votes.len() < min_signers {
                 pending = true;
-                self.schedule_background(BackgroundRequest::BroadcastNativeAmx {
-                    message: NativeAmxMessage::CommitRequest(commit_body),
-                });
+                self.request_native_amx_attestation_votes(&validator_set, commit_body);
                 continue;
             }
 
@@ -2374,7 +2413,25 @@ impl Actor {
             && self.defer_highest_qc_update_for_lock_catchup(
                 height, view, highest_qc, now, "proposal",
             );
-        if proposal_height > 1 && !self.block_known_locally(highest_qc.subject_block_hash) {
+        let parent_height = proposal_height.saturating_sub(1);
+        let hash_only_parent_hash =
+            if proposal_height > 1 && highest_qc.height.saturating_add(1) == proposal_height {
+                usize::try_from(parent_height)
+                    .ok()
+                    .and_then(NonZeroUsize::new)
+                    .and_then(|height| {
+                        self.kura
+                            .block_hash_at_height(height)
+                            .or_else(|| self.kura.get_durable_block_hash(height))
+                    })
+                    .filter(|hash| *hash == highest_qc.subject_block_hash)
+            } else {
+                None
+            };
+        if proposal_height > 1
+            && !self.block_known_locally(highest_qc.subject_block_hash)
+            && hash_only_parent_hash.is_none()
+        {
             if self.mark_highest_qc_missing_defer_for_round(proposal_height, view, highest_qc) {
                 self.observe_new_view_highest_qc_exact_repair(highest_qc);
             }
@@ -2403,7 +2460,7 @@ impl Actor {
             &self.kura,
             &self.pending.pending_blocks,
         );
-        if prev_block.is_none() && proposal_height > 1 {
+        if prev_block.is_none() && proposal_height > 1 && hash_only_parent_hash.is_none() {
             if !self.block_known_locally(highest_qc.subject_block_hash) {
                 if self.mark_highest_qc_missing_defer_for_round(proposal_height, view, highest_qc) {
                     self.observe_new_view_highest_qc_exact_repair(highest_qc);
@@ -2420,7 +2477,7 @@ impl Actor {
                 warn!(
                     height = proposal_height,
                     view,
-                    parent_height = proposal_height.saturating_sub(1),
+                    parent_height,
                     highest_height = highest_qc.height,
                     highest_hash = %highest_qc.subject_block_hash,
                     suppressed_since_last,
@@ -2840,15 +2897,29 @@ impl Actor {
                 .zip(routing_plan_batch.iter().cloned())
                 .collect();
         let previous_roster_started_at = Instant::now();
-        let previous_roster_evidence = prev_block.as_deref().and_then(|parent| {
-            previous_roster_evidence_for_parent(
-                self.state.as_ref(),
-                self.kura.as_ref(),
-                self.consensus_context_for_height(parent.header().height().get())
-                    .0,
-                parent,
-            )
-        });
+        let previous_roster_evidence = prev_block
+            .as_deref()
+            .and_then(|parent| {
+                previous_roster_evidence_for_parent(
+                    self.state.as_ref(),
+                    self.kura.as_ref(),
+                    self.consensus_context_for_height(parent.header().height().get())
+                        .0,
+                    parent,
+                )
+            })
+            .or_else(|| {
+                let parent_hash = hash_only_parent_hash?;
+                let (consensus_mode, _, _) = self.consensus_context_for_height(parent_height);
+                let roster = self.roster_for_live_vote_with_mode(parent_height, consensus_mode);
+                previous_roster_evidence_for_hash_only_parent(
+                    self.state.as_ref(),
+                    consensus_mode,
+                    parent_height,
+                    parent_hash,
+                    &roster,
+                )
+            });
         let previous_roster_ms = previous_roster_started_at.elapsed().as_millis();
         let mut removed_for_chunk_cap: Vec<(
             AcceptedTransaction<'static>,
@@ -2891,8 +2962,17 @@ impl Actor {
                 let nexus = self.state.nexus_snapshot();
                 let nexus_enabled = nexus.enabled;
                 let lane_config = nexus.lane_config.clone();
-                let mut builder =
-                    BlockBuilder::new(tx_batch.clone()).chain(view, prev_block.as_deref());
+                let mut builder = if let Some(parent) = prev_block.as_deref() {
+                    BlockBuilder::new(tx_batch.clone()).chain(view, Some(parent))
+                } else if let Some(parent_hash) = hash_only_parent_hash {
+                    BlockBuilder::new(tx_batch.clone()).chain_with_parent_hash(
+                        view,
+                        parent_height,
+                        parent_hash,
+                    )
+                } else {
+                    BlockBuilder::new(tx_batch.clone()).chain(view, None)
+                };
                 if proposal_height > 2 && previous_roster_evidence.is_none() {
                     return Err(eyre!(
                         "missing previous-roster evidence for parent block at height {}",
@@ -4853,7 +4933,8 @@ impl Actor {
                 || cached_current_slot
                 || missing_qc_recovery_active
                 || committed_qc_frontier_recovery_candidate
-                || forced_recovery_view;
+                || forced_recovery_view
+                || new_view_quorum_free_frontier_proposal_allowed;
             if required > 1
                 && tracked_height == committed_height.saturating_add(1)
                 && self.subsystems.propose.last_successful_proposal.is_none()

@@ -54,7 +54,7 @@ public interface TransportWebSocket {
   private CompletableFuture<Void> unsupported(final String operation) {
     final CompletableFuture<Void> failed = new CompletableFuture<>();
     failed.completeExceptionally(
-        new UnsupportedOperationException(operation + " is not supported by this transport"));
+        new IllegalStateException(operation + " is not supported by this transport"));
     return failed;
   }
 

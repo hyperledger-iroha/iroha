@@ -64,7 +64,7 @@ mod app_api;
 #[cfg(feature = "app_api")]
 mod identifier_resolution;
 #[cfg(feature = "app_api")]
-mod offline_v2_issuer;
+mod offline_issuer;
 mod operator_auth;
 mod operator_signatures;
 #[doc(hidden)]
@@ -288,6 +288,7 @@ use iroha_data_model::{
     events::{
         EventBox,
         pipeline::{BlockStatus, PipelineEventBox, TransactionStatus},
+        trigger_completed::{TriggerCompletedEvent, TriggerCompletedOutcome},
     },
     musubi::{MusubiNamespace, MusubiPackageId, MusubiPackageRef},
     name::Name,
@@ -310,7 +311,8 @@ use iroha_primitives::addr::SocketAddr;
 use iroha_primitives::soradns::hosts::taira_mon_pretty_gateway_suffix;
 use iroha_torii_shared::{
     AccountReadResponse, AxtErrorDetails, ErrorDetails, ErrorEnvelope, PipelineTransactionStatus,
-    PipelineTransactionStatusResponse, QueueErrorSnapshot, uri,
+    PipelineTransactionStatusResponse, QueueErrorSnapshot, TriggerCompletionListResponse,
+    TriggerCompletionRecord, TriggerCompletionSummary, uri,
 };
 use ivm::iso20022::{MsgError, parse_message};
 #[cfg(feature = "app_api")]
@@ -900,18 +902,19 @@ fn resolve_contract_alias_on_chain(
         )));
     }
 
-    let nexus = app.state.nexus_snapshot();
     let contract_alias = iroha_data_model::smart_contract::ContractAlias::from_str(trimmed)
         .map_err(|err| {
             Error::Query(iroha_data_model::ValidationFail::QueryFailed(
                 iroha_data_model::query::error::QueryExecutionFail::Conversion(err.to_string()),
             ))
         })?;
-    contract_alias
-        .resolve_components(&nexus.dataspace_catalog)
-        .map_err(|err| {
+    let alias_dataspace_id = contract_alias_dataspace_id(app.as_ref(), &contract_alias)
+        .ok_or_else(|| {
             Error::Query(iroha_data_model::ValidationFail::QueryFailed(
-                iroha_data_model::query::error::QueryExecutionFail::Conversion(err.to_string()),
+                iroha_data_model::query::error::QueryExecutionFail::Conversion(format!(
+                    "unknown or inactive dataspace alias `{}` in contract alias",
+                    contract_alias.dataspace_segment()
+                )),
             ))
         })?;
 
@@ -927,16 +930,19 @@ fn resolve_contract_alias_on_chain(
         .contract_alias_bindings()
         .get(&contract_address)
         .cloned();
-    let dataspace_alias = contract_address
-        .dataspace_id()
-        .ok()
-        .and_then(|dataspace_id| nexus.dataspace_catalog.by_id(dataspace_id))
+    if contract_address.dataspace_id().ok() != Some(alias_dataspace_id) {
+        return Err(Error::Query(iroha_data_model::ValidationFail::QueryFailed(
+            iroha_data_model::query::error::QueryExecutionFail::Conversion(
+                "contract alias dataspace does not match bound contract address".to_string(),
+            ),
+        )));
+    }
+    let nexus = app.state.nexus_snapshot();
+    let dataspace_alias = nexus
+        .dataspace_catalog
+        .by_id(alias_dataspace_id)
         .map(|entry| entry.alias.clone())
-        .ok_or_else(|| {
-            Error::Query(iroha_data_model::ValidationFail::QueryFailed(
-                iroha_data_model::query::error::QueryExecutionFail::NotFound,
-            ))
-        })?;
+        .unwrap_or_else(|| contract_alias.dataspace_segment().to_owned());
 
     Ok(Some((
         contract_alias,
@@ -1433,6 +1439,18 @@ fn load_public_dataspace_upstreams(state: &CoreState) -> BTreeMap<DataSpaceId, S
     upstreams
 }
 
+#[cfg(feature = "app_api")]
+fn local_read_fanout_coordinator_enabled() -> bool {
+    std::env::var("IROHA_TORII_LOCAL_READ_FANOUT_COORDINATOR")
+        .ok()
+        .is_some_and(|value| {
+            matches!(
+                value.trim().to_ascii_lowercase().as_str(),
+                "1" | "true" | "yes" | "on"
+            )
+        })
+}
+
 #[allow(clippy::struct_excessive_bools)]
 struct AppState {
     events: EventsSender,
@@ -1581,7 +1599,7 @@ struct AppState {
     #[cfg(feature = "app_api")]
     account_faucet: Option<iroha_config::parameters::actual::ToriiFaucet>,
     #[cfg(feature = "app_api")]
-    offline_v2_issuer: Option<Arc<offline_v2_issuer::OfflineV2IssuerRuntime>>,
+    offline_issuer: Option<Arc<offline_issuer::OfflineIssuerRuntime>>,
     #[cfg(feature = "app_api")]
     uaid_onboarding: Option<AccountOnboardingSigner>,
     vpn_helper_ticket_secret: Option<[u8; 32]>,
@@ -4077,10 +4095,12 @@ async fn handler_account_get(
     let trusted_internal = limits::is_allowed_by_cidr(&headers, Some(remote_ip), &app.allow_nets);
     let key_hint = account_id.clone();
     let telemetry = app.telemetry_handle();
-    let format = match crate::utils::negotiate_response_format(accept.as_ref().map(|v| &v.0)) {
-        Ok(format) => format,
-        Err(response) => return Ok(response),
-    };
+    let format =
+        match crate::utils::negotiate_json_preferred_response_format(accept.as_ref().map(|v| &v.0))
+        {
+            Ok(format) => format,
+            Err(response) => return Ok(response),
+        };
     if !trusted_internal {
         let enforce =
             app.fee_policy.is_enabled() || app.queue.active_len() >= app.high_load_tx_threshold;
@@ -4212,6 +4232,115 @@ async fn handler_account_transactions_query(
         body,
     )
     .await)
+}
+
+#[cfg(feature = "app_api")]
+async fn handler_transactions_query(
+    State(app): State<SharedAppState>,
+    headers: axum::http::HeaderMap,
+    axum::extract::ConnectInfo(remote): axum::extract::ConnectInfo<std::net::SocketAddr>,
+    crate::utils::extractors::NoritoJson(env): crate::utils::extractors::NoritoJson<
+        crate::filter::QueryEnvelope,
+    >,
+) -> Result<impl IntoResponse, Error> {
+    let remote_ip = remote.ip();
+    let trusted_internal = limits::is_allowed_by_cidr(&headers, Some(remote_ip), &app.allow_nets);
+    let limits = crate::routing::app_query_limits();
+    let mut env = env;
+    let page_limit = limits.clamp_page_limit(env.pagination.limit)?;
+    env.pagination.limit = Some(page_limit);
+    env.fetch_size = limits.clamp_fetch_size(env.fetch_size)?;
+    if !trusted_internal {
+        let enforce =
+            app.fee_policy.is_enabled() || app.queue.active_len() >= app.high_load_tx_threshold;
+        let cost = limits.rate_limit_cost(page_limit);
+        check_access_enforced_with_cost(
+            &app,
+            &headers,
+            Some(remote_ip),
+            "v1/transactions/query",
+            enforce,
+            cost,
+        )
+        .await?;
+    }
+    let _query_permit = acquire_query_admission(app.as_ref(), true).await?;
+    resolve_tx_history_allowed_asset_definition_id(&app)?;
+    let body = norito::json::to_vec(&env).map_err(|error| {
+        Error::Query(iroha_data_model::ValidationFail::InternalError(format!(
+            "failed to encode routed transactions query: {error}"
+        )))
+    })?;
+    Ok(execute_torii_fanout_list_read(
+        &app,
+        ToriiReadEndpointV1::TransactionsQuery,
+        Vec::new(),
+        None,
+        body,
+    )
+    .await)
+}
+
+#[cfg(feature = "app_api")]
+async fn handler_transactions_visible_query(
+    State(app): State<SharedAppState>,
+    headers: axum::http::HeaderMap,
+    axum::extract::ConnectInfo(remote): axum::extract::ConnectInfo<std::net::SocketAddr>,
+    crate::utils::extractors::NoritoJson(env): crate::utils::extractors::NoritoJson<
+        crate::filter::QueryEnvelope,
+    >,
+) -> Result<Response, Error> {
+    let remote_ip = remote.ip();
+    let limits = crate::routing::app_query_limits();
+    let mut env = env;
+    let page_limit = limits.clamp_page_limit(env.pagination.limit)?;
+    env.pagination.limit = Some(page_limit);
+    env.fetch_size = limits.clamp_fetch_size(env.fetch_size)?;
+    let viewer = match tx_history_viewer_from_headers(&app, &headers) {
+        Ok(viewer) => viewer,
+        Err(response) => return Ok(response),
+    };
+    let allowed_asset_definition_id = match resolve_tx_history_allowed_asset_definition_id(&app) {
+        Ok(value) => value,
+        Err(err) => return Ok(tx_history_alias_resolution_reject(err)),
+    };
+    let enforce =
+        app.fee_policy.is_enabled() || app.queue.active_len() >= app.high_load_tx_threshold;
+    let cost = limits.rate_limit_cost(page_limit);
+    let rate_key = format!("tx-history-query:{}", viewer.subject);
+    if !limits::allow_cost_conditionally(&app.rate_limiter, &rate_key, cost.max(1), enforce).await {
+        return Err(Error::Query(iroha_data_model::ValidationFail::QueryFailed(
+            iroha_data_model::query::error::QueryExecutionFail::CapacityLimit,
+        )));
+    }
+    let trusted_internal = limits::is_allowed_by_cidr(&headers, Some(remote_ip), &app.allow_nets);
+    if !trusted_internal {
+        check_access_enforced_with_cost(
+            &app,
+            &headers,
+            Some(remote_ip),
+            "v1/transactions/visible/query",
+            enforce,
+            cost,
+        )
+        .await?;
+    }
+    let _query_permit = acquire_query_admission(app.as_ref(), true).await?;
+    let visibility = crate::routing::TxHistoryVisibilityScope {
+        viewer_account_ids: viewer.account_ids,
+        viewer_dataspace_id: viewer.dataspace_id,
+        allow_dataspace_wide: viewer.is_mandatory_alias,
+    };
+
+    routing::handle_v1_transactions_visible_query_with_policy(
+        app.state.clone(),
+        crate::utils::extractors::NoritoJson(env),
+        app.telemetry.clone(),
+        visibility,
+        allowed_asset_definition_id,
+    )
+    .await
+    .map(IntoResponse::into_response)
 }
 
 #[cfg(feature = "app_api")]
@@ -4951,10 +5080,12 @@ async fn handler_proofs_query(
 ) -> Result<Response, Error> {
     let remote_ip = remote.ip();
     let tel = app.telemetry.clone();
-    let format = match crate::utils::negotiate_response_format(accept.as_ref().map(|v| &v.0)) {
-        Ok(fmt) => fmt,
-        Err(resp) => return Ok(resp),
-    };
+    let format =
+        match crate::utils::negotiate_json_preferred_response_format(accept.as_ref().map(|v| &v.0))
+        {
+            Ok(fmt) => fmt,
+            Err(resp) => return Ok(resp),
+        };
 
     ensure_proof_api_version(&app, negotiated, "v1/proofs/query")?;
     if limits::is_allowed_by_cidr(&headers, Some(remote_ip), &app.allow_nets) {
@@ -5896,19 +6027,18 @@ async fn handler_repo_agreements_query(
 
 #[cfg(feature = "app_api")]
 #[axum::debug_handler]
-async fn handler_offline_note_v2_readiness() -> Result<impl IntoResponse, Error> {
+async fn handler_offline_note_readiness(
+    State(app): State<SharedAppState>,
+) -> Result<impl IntoResponse, Error> {
+    let offline = &app.state.settlement.offline;
     let verifier_key_id = json_object([
         json_entry("backend", iroha_core::zk::ZK_BACKEND_HALO2_IPA),
-        json_entry(
-            "name",
-            iroha_core::zk::OFFLINE_NOTE_V2_RECURSIVE_V1_CIRCUIT_ID,
-        ),
+        json_entry("name", iroha_core::zk::OFFLINE_NOTE_RECURSIVE_CIRCUIT_ID),
     ]);
-    let schema_hash = hex::encode(
-        iroha_data_model::offline::offline_note_v2_recursive_public_inputs_schema_hash(),
-    );
+    let schema_hash =
+        hex::encode(iroha_data_model::offline::offline_note_recursive_public_inputs_schema_hash());
     json_ok(json_object([
-        json_entry("offline_note_v2", true),
+        json_entry("offline_note", true),
         json_entry("offline_one_use_keys", true),
         json_entry("offline_recursive_note_proof", true),
         json_entry(
@@ -5917,7 +6047,7 @@ async fn handler_offline_note_v2_readiness() -> Result<impl IntoResponse, Error>
         ),
         json_entry(
             "offline_recursive_note_proof_circuit_id",
-            iroha_core::zk::OFFLINE_NOTE_V2_RECURSIVE_V1_CIRCUIT_ID,
+            iroha_core::zk::OFFLINE_NOTE_RECURSIVE_CIRCUIT_ID,
         ),
         json_entry(
             "offline_recursive_note_proof_public_inputs_schema_hash",
@@ -5925,90 +6055,130 @@ async fn handler_offline_note_v2_readiness() -> Result<impl IntoResponse, Error>
         ),
         json_entry(
             "offline_recursive_note_proof_public_instance_columns",
-            iroha_core::zk::OFFLINE_NOTE_V2_INSTANCE_COLUMNS as u64,
+            iroha_core::zk::OFFLINE_NOTE_INSTANCE_COLUMNS as u64,
         ),
         json_entry(
             "offline_recursive_note_proof_verifier_key_id",
             verifier_key_id,
         ),
-        json_entry("offline_fountain_qr_v1", true),
+        json_entry("offline_fountain_qr", true),
         json_entry("offline_sync_optional", true),
         json_entry("offline_telemetry", true),
+        json_entry("offline_bearer_cash_v1", true),
+        json_entry("offline_kagemusha_enabled", offline.kagemusha_enabled),
+        json_entry(
+            "offline_kagemusha_force_legacy",
+            offline.kagemusha_force_legacy,
+        ),
     ]))
 }
 
 #[cfg(feature = "app_api")]
 #[axum::debug_handler]
-async fn handler_offline_note_v2_keys_refill(
+async fn handler_offline_note_keys_refill(
     State(app): State<SharedAppState>,
     method: axum::http::Method,
     uri: axum::http::Uri,
     headers: axum::http::HeaderMap,
     axum::extract::ConnectInfo(remote): axum::extract::ConnectInfo<std::net::SocketAddr>,
     body: axum::body::Bytes,
+) -> Result<AxResponse, Error> {
+    check_access(&app, &headers, Some(remote.ip()), "v1/offline/keys/refill").await?;
+    offline_issuer::handle_key_refill(app, &method, &uri, &headers, body).await
+}
+
+#[cfg(feature = "app_api")]
+#[axum::debug_handler]
+async fn handler_offline_note_notes_issue(
+    State(app): State<SharedAppState>,
+    method: axum::http::Method,
+    uri: axum::http::Uri,
+    headers: axum::http::HeaderMap,
+    axum::extract::ConnectInfo(remote): axum::extract::ConnectInfo<std::net::SocketAddr>,
+    body: axum::body::Bytes,
+) -> Result<AxResponse, Error> {
+    check_access(&app, &headers, Some(remote.ip()), "v1/offline/notes/issue").await?;
+    offline_issuer::handle_notes_issue(app, &method, &uri, &headers, body).await
+}
+
+#[cfg(feature = "app_api")]
+#[axum::debug_handler]
+async fn handler_offline_note_notes_redeem(
+    State(app): State<SharedAppState>,
+    method: axum::http::Method,
+    uri: axum::http::Uri,
+    headers: axum::http::HeaderMap,
+    axum::extract::ConnectInfo(remote): axum::extract::ConnectInfo<std::net::SocketAddr>,
+    body: axum::body::Bytes,
+) -> Result<AxResponse, Error> {
+    check_access(&app, &headers, Some(remote.ip()), "v1/offline/notes/redeem").await?;
+    offline_issuer::handle_notes_redeem(app, &method, &uri, &headers, body).await
+}
+
+#[cfg(feature = "app_api")]
+#[axum::debug_handler]
+async fn handler_offline_note_audit(
+    State(app): State<SharedAppState>,
+    method: axum::http::Method,
+    uri: axum::http::Uri,
+    headers: axum::http::HeaderMap,
+    axum::extract::ConnectInfo(remote): axum::extract::ConnectInfo<std::net::SocketAddr>,
+    body: axum::body::Bytes,
+) -> Result<AxResponse, Error> {
+    check_access(&app, &headers, Some(remote.ip()), "v1/offline/audit").await?;
+    offline_issuer::handle_audit(app, &method, &uri, &headers, body).await
+}
+
+#[cfg(feature = "app_api")]
+#[axum::debug_handler]
+async fn handler_offline_policy_update(
+    State(app): State<SharedAppState>,
+    headers: axum::http::HeaderMap,
+    axum::extract::ConnectInfo(remote): axum::extract::ConnectInfo<std::net::SocketAddr>,
+    body: axum::body::Bytes,
+) -> Result<AxResponse, Error> {
+    check_access(&app, &headers, Some(remote.ip()), "v1/offline/policy").await?;
+    offline_issuer::handle_policy_update(app, body).await
+}
+
+#[cfg(feature = "app_api")]
+#[axum::debug_handler]
+async fn handler_offline_revocations_list(
+    State(app): State<SharedAppState>,
+    headers: axum::http::HeaderMap,
+    axum::extract::ConnectInfo(remote): axum::extract::ConnectInfo<std::net::SocketAddr>,
+) -> Result<AxResponse, Error> {
+    check_access(&app, &headers, Some(remote.ip()), "v1/offline/revocations").await?;
+    offline_issuer::handle_revocations_list(app).await
+}
+
+#[cfg(feature = "app_api")]
+#[axum::debug_handler]
+async fn handler_offline_revocation_register(
+    State(app): State<SharedAppState>,
+    headers: axum::http::HeaderMap,
+    axum::extract::ConnectInfo(remote): axum::extract::ConnectInfo<std::net::SocketAddr>,
+    body: axum::body::Bytes,
+) -> Result<AxResponse, Error> {
+    check_access(&app, &headers, Some(remote.ip()), "v1/offline/revocations").await?;
+    offline_issuer::handle_revocation_register(app, body).await
+}
+
+#[cfg(feature = "app_api")]
+#[axum::debug_handler]
+async fn handler_offline_revocation_bundle(
+    State(app): State<SharedAppState>,
+    headers: axum::http::HeaderMap,
+    axum::extract::ConnectInfo(remote): axum::extract::ConnectInfo<std::net::SocketAddr>,
 ) -> Result<AxResponse, Error> {
     check_access(
         &app,
         &headers,
         Some(remote.ip()),
-        "v1/offline/v2/keys/refill",
+        "v1/offline/revocations/bundle",
     )
     .await?;
-    offline_v2_issuer::handle_key_refill(app, &method, &uri, &headers, body).await
-}
-
-#[cfg(feature = "app_api")]
-#[axum::debug_handler]
-async fn handler_offline_note_v2_notes_issue(
-    State(app): State<SharedAppState>,
-    method: axum::http::Method,
-    uri: axum::http::Uri,
-    headers: axum::http::HeaderMap,
-    axum::extract::ConnectInfo(remote): axum::extract::ConnectInfo<std::net::SocketAddr>,
-    body: axum::body::Bytes,
-) -> Result<AxResponse, Error> {
-    check_access(
-        &app,
-        &headers,
-        Some(remote.ip()),
-        "v1/offline/v2/notes/issue",
-    )
-    .await?;
-    offline_v2_issuer::handle_notes_issue(app, &method, &uri, &headers, body).await
-}
-
-#[cfg(feature = "app_api")]
-#[axum::debug_handler]
-async fn handler_offline_note_v2_notes_redeem(
-    State(app): State<SharedAppState>,
-    method: axum::http::Method,
-    uri: axum::http::Uri,
-    headers: axum::http::HeaderMap,
-    axum::extract::ConnectInfo(remote): axum::extract::ConnectInfo<std::net::SocketAddr>,
-    body: axum::body::Bytes,
-) -> Result<AxResponse, Error> {
-    check_access(
-        &app,
-        &headers,
-        Some(remote.ip()),
-        "v1/offline/v2/notes/redeem",
-    )
-    .await?;
-    offline_v2_issuer::handle_notes_redeem(app, &method, &uri, &headers, body).await
-}
-
-#[cfg(feature = "app_api")]
-#[axum::debug_handler]
-async fn handler_offline_note_v2_audit(
-    State(app): State<SharedAppState>,
-    method: axum::http::Method,
-    uri: axum::http::Uri,
-    headers: axum::http::HeaderMap,
-    axum::extract::ConnectInfo(remote): axum::extract::ConnectInfo<std::net::SocketAddr>,
-    body: axum::body::Bytes,
-) -> Result<AxResponse, Error> {
-    check_access(&app, &headers, Some(remote.ip()), "v1/offline/v2/audit").await?;
-    offline_v2_issuer::handle_audit(app, &method, &uri, &headers, body).await
+    offline_issuer::handle_revocation_bundle(app).await
 }
 
 #[cfg(feature = "app_api")]
@@ -8872,10 +9042,12 @@ async fn handler_runtime_abi_active(
 ) -> Result<Response, Error> {
     let remote_ip = remote.ip();
     check_access(&app, &headers, Some(remote_ip), "v1/runtime/abi/active").await?;
-    let format = match crate::utils::negotiate_response_format(accept.as_ref().map(|v| &v.0)) {
-        Ok(fmt) => fmt,
-        Err(resp) => return Ok(resp),
-    };
+    let format =
+        match crate::utils::negotiate_json_preferred_response_format(accept.as_ref().map(|v| &v.0))
+        {
+            Ok(fmt) => fmt,
+            Err(resp) => return Ok(resp),
+        };
     let payload = crate::runtime::handle_runtime_abi_active(app.state.clone()).await?;
     Ok(crate::utils::respond_with_format(payload, format))
 }
@@ -8889,10 +9061,12 @@ async fn handler_runtime_abi_hash(
 ) -> Result<Response, Error> {
     let remote_ip = remote.ip();
     check_access(&app, &headers, Some(remote_ip), "v1/runtime/abi/hash").await?;
-    let format = match crate::utils::negotiate_response_format(accept.as_ref().map(|v| &v.0)) {
-        Ok(fmt) => fmt,
-        Err(resp) => return Ok(resp),
-    };
+    let format =
+        match crate::utils::negotiate_json_preferred_response_format(accept.as_ref().map(|v| &v.0))
+        {
+            Ok(fmt) => fmt,
+            Err(resp) => return Ok(resp),
+        };
     let payload = crate::runtime::handle_runtime_abi_hash(app.state.clone()).await?;
     Ok(crate::utils::respond_with_format(payload, format))
 }
@@ -9169,10 +9343,12 @@ async fn handler_runtime_metrics(
 ) -> Result<Response, Error> {
     let remote_ip = remote.ip();
     check_access(&app, &headers, Some(remote_ip), "v1/runtime/metrics").await?;
-    let format = match crate::utils::negotiate_response_format(accept.as_ref().map(|v| &v.0)) {
-        Ok(fmt) => fmt,
-        Err(resp) => return Ok(resp),
-    };
+    let format =
+        match crate::utils::negotiate_json_preferred_response_format(accept.as_ref().map(|v| &v.0))
+        {
+            Ok(fmt) => fmt,
+            Err(resp) => return Ok(resp),
+        };
     let payload = crate::runtime::handle_runtime_metrics(app.state.clone()).await?;
     Ok(crate::utils::respond_with_format(payload, format))
 }
@@ -9186,10 +9362,12 @@ async fn handler_node_capabilities(
 ) -> Result<Response, Error> {
     let remote_ip = remote.ip();
     check_access(&app, &headers, Some(remote_ip), "v1/node/capabilities").await?;
-    let format = match crate::utils::negotiate_response_format(accept.as_ref().map(|v| &v.0)) {
-        Ok(fmt) => fmt,
-        Err(resp) => return Ok(resp),
-    };
+    let format =
+        match crate::utils::negotiate_json_preferred_response_format(accept.as_ref().map(|v| &v.0))
+        {
+            Ok(fmt) => fmt,
+            Err(resp) => return Ok(resp),
+        };
     let payload = crate::runtime::handle_node_capabilities(app.state.clone()).await?;
     Ok(crate::utils::respond_with_format(payload, format))
 }
@@ -9209,10 +9387,12 @@ async fn handler_node_query_projection_checkpoint(
         "v1/node/query/projection/checkpoint",
     )
     .await?;
-    let format = match crate::utils::negotiate_response_format(accept.as_ref().map(|v| &v.0)) {
-        Ok(fmt) => fmt,
-        Err(resp) => return Ok(resp),
-    };
+    let format =
+        match crate::utils::negotiate_json_preferred_response_format(accept.as_ref().map(|v| &v.0))
+        {
+            Ok(fmt) => fmt,
+            Err(resp) => return Ok(resp),
+        };
     let Some(payload) =
         crate::runtime::handle_node_query_projection_checkpoint(app.state.clone()).await
     else {
@@ -9241,10 +9421,12 @@ async fn handler_node_query_projection_checkpoint_plan(
         true,
     )
     .await?;
-    let format = match crate::utils::negotiate_response_format(accept.as_ref().map(|v| &v.0)) {
-        Ok(fmt) => fmt,
-        Err(resp) => return Ok(resp),
-    };
+    let format =
+        match crate::utils::negotiate_json_preferred_response_format(accept.as_ref().map(|v| &v.0))
+        {
+            Ok(fmt) => fmt,
+            Err(resp) => return Ok(resp),
+        };
     let payload =
         crate::runtime::handle_node_query_projection_checkpoint_plan(app.state.clone(), body.0)
             .await?;
@@ -9271,10 +9453,12 @@ async fn handler_node_query_projection_checkpoint_publish(
         true,
     )
     .await?;
-    let format = match crate::utils::negotiate_response_format(accept.as_ref().map(|v| &v.0)) {
-        Ok(fmt) => fmt,
-        Err(resp) => return Ok(resp),
-    };
+    let format =
+        match crate::utils::negotiate_json_preferred_response_format(accept.as_ref().map(|v| &v.0))
+        {
+            Ok(fmt) => fmt,
+            Err(resp) => return Ok(resp),
+        };
     let payload = crate::runtime::handle_node_query_projection_checkpoint_publish_with_app(
         Some(app.clone()),
         app.state.clone(),
@@ -9302,10 +9486,12 @@ async fn handler_node_query_projection_shard_catalog(
         "v1/node/query/projection/catalog",
     )
     .await?;
-    let format = match crate::utils::negotiate_response_format(accept.as_ref().map(|v| &v.0)) {
-        Ok(fmt) => fmt,
-        Err(resp) => return Ok(resp),
-    };
+    let format =
+        match crate::utils::negotiate_json_preferred_response_format(accept.as_ref().map(|v| &v.0))
+        {
+            Ok(fmt) => fmt,
+            Err(resp) => return Ok(resp),
+        };
     let payload = crate::runtime::handle_node_query_projection_shard_catalog(
         app.state.clone(),
         resource,
@@ -9362,10 +9548,12 @@ async fn handler_runtime_upgrades_list(
 ) -> Result<Response, Error> {
     let remote_ip = remote.ip();
     check_access_enforced(&app, &headers, Some(remote_ip), "v1/runtime/upgrades", true).await?;
-    let format = match crate::utils::negotiate_response_format(accept.as_ref().map(|v| &v.0)) {
-        Ok(fmt) => fmt,
-        Err(resp) => return Ok(resp),
-    };
+    let format =
+        match crate::utils::negotiate_json_preferred_response_format(accept.as_ref().map(|v| &v.0))
+        {
+            Ok(fmt) => fmt,
+            Err(resp) => return Ok(resp),
+        };
     let payload = crate::runtime::handle_runtime_upgrades_list(app.state.clone()).await?;
     Ok(crate::utils::respond_with_format(payload, format))
 }
@@ -9386,10 +9574,12 @@ async fn handler_runtime_propose_upgrade(
         true,
     )
     .await?;
-    let format = match crate::utils::negotiate_response_format(accept.as_ref().map(|v| &v.0)) {
-        Ok(fmt) => fmt,
-        Err(resp) => return Ok(resp),
-    };
+    let format =
+        match crate::utils::negotiate_json_preferred_response_format(accept.as_ref().map(|v| &v.0))
+        {
+            Ok(fmt) => fmt,
+            Err(resp) => return Ok(resp),
+        };
     let payload = crate::runtime::handle_runtime_propose_upgrade(body).await?;
     Ok(crate::utils::respond_with_format(payload, format))
 }
@@ -9826,7 +10016,15 @@ fn normalize_stark_fri_circuit_id(backend: &str, raw: &str) -> Option<String> {
 }
 
 fn is_stark_fri_v1_backend(backend: &str) -> bool {
-    backend == iroha_core::zk::ZK_BACKEND_STARK_FRI_V1 || backend.starts_with("stark/fri/")
+    if iroha_core::zk::is_trusted_setup_backend_label(backend)
+        || iroha_core::zk::is_developer_only_backend_label(backend)
+    {
+        return false;
+    }
+    backend == iroha_core::zk::ZK_BACKEND_STARK_FRI_V1
+        || backend
+            .strip_prefix("stark/fri/")
+            .is_some_and(|profile| !profile.is_empty())
 }
 
 fn circuit_id_matches(backend: &str, record_id: &str, env_id: &str) -> bool {
@@ -10197,6 +10395,7 @@ async fn handler_zk_ivm_prove(
     let max_proof_bytes = vk_record.max_proof_bytes;
     let backend = req.vk_ref.backend.clone();
     let vk_ref = req.vk_ref;
+    let vk_commitment = computed_commitment;
     let chain_id = app.chain_id.as_ref().clone();
     let state = Arc::clone(&app.state);
     let job_id_for_task = job_id.clone();
@@ -10336,8 +10535,9 @@ async fn handler_zk_ivm_prove(
                 if max_proof_bytes > 0 && proof_box.bytes.len() > max_proof_bytes as usize {
                     return Err("generated proof exceeds verifying key max_proof_bytes".to_owned());
                 }
-                let attachment =
+                let mut attachment =
                     iroha_data_model::proof::ProofAttachment::new_ref(backend.clone(), proof_box, vk_ref);
+                attachment.vk_commitment = Some(vk_commitment);
                 Ok((derived_proved, attachment))
             })()
         });
@@ -12077,6 +12277,18 @@ fn resolve_torii_route_for_dataspace_id(
         .filter(|lane| lane.dataspace_id == dataspace_id)
         .map(|lane| lane.id)
         .min()
+        .or_else(|| {
+            (dataspace_id != DataSpaceId::UNIVERSAL).then(|| {
+                nexus
+                    .lane_catalog
+                    .lanes()
+                    .iter()
+                    .find(|lane| {
+                        lane.id == LaneId::SINGLE && lane.dataspace_id == DataSpaceId::UNIVERSAL
+                    })
+                    .map(|lane| lane.id)
+            })?
+        })
         .ok_or(queue::RoutingResolveError::NoLaneForDataspace { dataspace_id })?;
 
     iroha_core::queue::resolve_routing_decision(
@@ -14992,15 +15204,30 @@ where
 
 #[cfg(feature = "app_api")]
 fn dataspace_id_for_alias_segment(app: &AppState, dataspace_alias: &str) -> Option<DataSpaceId> {
-    if dataspace_alias.eq_ignore_ascii_case("universal") {
-        return Some(DataSpaceId::UNIVERSAL);
-    }
-    app.state
-        .view()
-        .nexus()
-        .dataspace_catalog
-        .by_alias(dataspace_alias)
-        .map(|entry| entry.id)
+    let state_view = app.state.view();
+    let catalog = &state_view.nexus().dataspace_catalog;
+    iroha_core::sns::active_dataspace_id_by_alias(
+        state_view.world(),
+        catalog,
+        dataspace_alias,
+        torii_state_view_ledger_time_ms(&state_view),
+    )
+    .or_else(|| {
+        if dataspace_alias.eq_ignore_ascii_case("universal") {
+            Some(DataSpaceId::UNIVERSAL)
+        } else {
+            catalog.by_alias(dataspace_alias).map(|entry| entry.id)
+        }
+    })
+}
+
+#[cfg(feature = "app_api")]
+fn torii_state_view_ledger_time_ms(state_view: &iroha_core::state::StateView<'_>) -> u64 {
+    state_view
+        .latest_block()
+        .as_ref()
+        .map(|block| u64::try_from(block.header().creation_time().as_millis()).unwrap_or(u64::MAX))
+        .unwrap_or(0)
 }
 
 #[cfg(feature = "app_api")]
@@ -19013,6 +19240,7 @@ fn torii_read_http_method(endpoint: ToriiReadEndpointV1) -> reqwest::Method {
     match endpoint {
         ToriiReadEndpointV1::AccountAssetsQuery
         | ToriiReadEndpointV1::AccountTransactionsQuery
+        | ToriiReadEndpointV1::TransactionsQuery
         | ToriiReadEndpointV1::AccountsQuery
         | ToriiReadEndpointV1::AssetDefinitionsQuery
         | ToriiReadEndpointV1::AssetHoldersQuery
@@ -19070,6 +19298,7 @@ fn torii_external_read_path(request: &ToriiReadProxyRequestV1) -> Result<String,
             "/v1/accounts/{}/transactions/query",
             torii_read_path_arg_encoded(request, 0, "account_id")?
         ),
+        ToriiReadEndpointV1::TransactionsQuery => "/v1/transactions/query".to_owned(),
         ToriiReadEndpointV1::PipelineTransactionStatusGet => {
             "/v1/pipeline/transactions/status".to_owned()
         }
@@ -19428,6 +19657,31 @@ async fn execute_torii_read_request_locally(
                 routing::handle_v1_account_transactions_with_policy(
                     app.state.clone(),
                     AxPath(account_id),
+                    crate::utils::extractors::NoritoJson(env),
+                    app.telemetry.clone(),
+                    allowed_asset_definition_id,
+                )
+                .await,
+                routing_decision,
+                routed_by,
+            )
+        }
+        ToriiReadEndpointV1::TransactionsQuery => {
+            let env = match decode_torii_proxy_json_body::<crate::filter::QueryEnvelope>(
+                &request.body,
+                "transactions query body",
+            ) {
+                Ok(env) => env,
+                Err(response) => return response,
+            };
+            let allowed_asset_definition_id =
+                match resolve_tx_history_allowed_asset_definition_id(app) {
+                    Ok(value) => value,
+                    Err(error) => return error.into_response(),
+                };
+            finish_torii_read_result(
+                routing::handle_v1_transactions_query_with_policy(
+                    app.state.clone(),
                     crate::utils::extractors::NoritoJson(env),
                     app.telemetry.clone(),
                     allowed_asset_definition_id,
@@ -20777,7 +21031,9 @@ async fn execute_torii_read_fanout_via_nexus(
         Ok(route) => route,
         Err(response) => return response,
     };
-    if should_execute_route_locally(app.as_ref(), nexus_route) {
+    if local_read_fanout_coordinator_enabled()
+        || should_execute_route_locally(app.as_ref(), nexus_route)
+    {
         return execute_torii_read_fanout_proxy_request(app, request).await;
     }
 
@@ -23205,10 +23461,12 @@ async fn handler_kaigi_relays(
             iroha_data_model::query::error::QueryExecutionFail::CapacityLimit,
         )));
     }
-    let format = match crate::utils::negotiate_response_format(accept.as_ref().map(|v| &v.0)) {
-        Ok(fmt) => fmt,
-        Err(resp) => return Ok(resp),
-    };
+    let format =
+        match crate::utils::negotiate_json_preferred_response_format(accept.as_ref().map(|v| &v.0))
+        {
+            Ok(fmt) => fmt,
+            Err(resp) => return Ok(resp),
+        };
     routing::handle_v1_kaigi_relays(
         app.state.clone(),
         app.telemetry.clone(),
@@ -23331,10 +23589,12 @@ async fn handler_kaigi_relay_detail(
             iroha_data_model::query::error::QueryExecutionFail::CapacityLimit,
         )));
     }
-    let format = match crate::utils::negotiate_response_format(accept.as_ref().map(|v| &v.0)) {
-        Ok(fmt) => fmt,
-        Err(resp) => return Ok(resp),
-    };
+    let format =
+        match crate::utils::negotiate_json_preferred_response_format(accept.as_ref().map(|v| &v.0))
+        {
+            Ok(fmt) => fmt,
+            Err(resp) => return Ok(resp),
+        };
     match routing::handle_v1_kaigi_relay_detail_with_policy(
         app.state.clone(),
         app.telemetry.clone(),
@@ -23345,7 +23605,10 @@ async fn handler_kaigi_relay_detail(
     .await
     {
         Ok(response) => Ok(response.into_response()),
-        Err(error) => Ok(error_response_with_format(error, format)),
+        Err(error) => Ok(error_response_with_format(
+            error,
+            crate::utils::ResponseFormat::Norito,
+        )),
     }
 }
 
@@ -23368,10 +23631,12 @@ async fn handler_kaigi_relays_health(
             iroha_data_model::query::error::QueryExecutionFail::CapacityLimit,
         )));
     }
-    let format = match crate::utils::negotiate_response_format(accept.as_ref().map(|v| &v.0)) {
-        Ok(fmt) => fmt,
-        Err(resp) => return Ok(resp),
-    };
+    let format =
+        match crate::utils::negotiate_json_preferred_response_format(accept.as_ref().map(|v| &v.0))
+        {
+            Ok(fmt) => fmt,
+            Err(resp) => return Ok(resp),
+        };
     routing::handle_v1_kaigi_relays_health(app.state.clone(), app.telemetry.clone(), format)
         .await
         .map(axum::response::IntoResponse::into_response)
@@ -30590,10 +30855,12 @@ async fn handler_proof_retention_status(
     accept: Option<crate::utils::extractors::ExtractAccept>,
 ) -> Result<Response, Error> {
     let remote_ip = remote.ip();
-    let format = match crate::utils::negotiate_response_format(accept.as_ref().map(|v| &v.0)) {
-        Ok(fmt) => fmt,
-        Err(resp) => return Ok(resp),
-    };
+    let format =
+        match crate::utils::negotiate_json_preferred_response_format(accept.as_ref().map(|v| &v.0))
+        {
+            Ok(fmt) => fmt,
+            Err(resp) => return Ok(resp),
+        };
     ensure_proof_api_version(
         &app,
         negotiated,
@@ -30670,6 +30937,32 @@ async fn handler_pipeline_recovery(
             }),
         },
     )
+}
+
+async fn handler_pipeline_preflight(
+    State(app): State<SharedAppState>,
+    headers: axum::http::HeaderMap,
+    axum::extract::ConnectInfo(remote): axum::extract::ConnectInfo<std::net::SocketAddr>,
+    accept: Option<crate::utils::extractors::ExtractAccept>,
+) -> Result<Response, Error> {
+    let format =
+        match crate::utils::negotiate_json_preferred_response_format(accept.as_ref().map(|v| &v.0))
+        {
+            Ok(format) => format,
+            Err(resp) => return Ok(resp),
+        };
+    check_access_with_rate_limiter(
+        &app,
+        &headers,
+        Some(remote.ip()),
+        "v1/pipeline/preflight",
+        &app.rate_limiter,
+    )
+    .await?;
+    Ok(crate::utils::respond_with_format(
+        routing::build_pipeline_preflight_response(app.state.as_ref(), app.queue.as_ref()),
+        format,
+    ))
 }
 
 async fn handler_pipeline_recovery_fastpq_proofs(
@@ -30833,6 +31126,358 @@ struct PipelineStatusQuery {
     scope: Option<String>,
 }
 
+#[derive(JsonDeserialize, crate::json_macros::JsonSerialize, Clone, Debug)]
+struct TriggerCompletionQuery {
+    #[norito(default)]
+    id: Option<String>,
+    #[norito(default)]
+    entrypoint_hash: Option<String>,
+    #[norito(default)]
+    outcome: Option<String>,
+    #[norito(default)]
+    from_height: Option<u64>,
+    #[norito(default)]
+    to_height: Option<u64>,
+    #[norito(default)]
+    limit: Option<u64>,
+    #[norito(default)]
+    scan_limit_blocks: Option<u64>,
+    #[norito(default)]
+    include_reconstructed: Option<bool>,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum TriggerCompletionOutcomeFilter {
+    All,
+    Success,
+    Failure,
+}
+
+impl TriggerCompletionOutcomeFilter {
+    fn parse(raw: Option<&str>) -> Result<Self, Error> {
+        let normalized = raw
+            .map(str::trim)
+            .filter(|value| !value.is_empty())
+            .unwrap_or("all")
+            .to_ascii_lowercase();
+        match normalized.as_str() {
+            "all" | "*" => Ok(Self::All),
+            "success" | "ok" => Ok(Self::Success),
+            "failure" | "failed" | "error" => Ok(Self::Failure),
+            _ => Err(conversion_error(format!(
+                "invalid outcome query parameter \"{normalized}\" (expected all|success|failure)"
+            ))),
+        }
+    }
+
+    fn matches(self, outcome: &str) -> bool {
+        match self {
+            Self::All => true,
+            Self::Success => matches!(outcome, "Success"),
+            Self::Failure => matches!(outcome, "Failure"),
+        }
+    }
+}
+
+const TRIGGER_COMPLETION_DEFAULT_LIMIT: u64 = 100;
+const TRIGGER_COMPLETION_MAX_LIMIT: u64 = 1_000;
+const TRIGGER_COMPLETION_DEFAULT_SCAN_BLOCKS: u64 = 1_000;
+const TRIGGER_COMPLETION_MAX_SCAN_BLOCKS: u64 = 10_000;
+
+fn trigger_completion_outcome(outcome: &TriggerCompletedOutcome) -> (&'static str, Option<String>) {
+    match outcome {
+        TriggerCompletedOutcome::Success => ("Success", None),
+        TriggerCompletedOutcome::Failure(message) => ("Failure", Some(message.clone())),
+    }
+}
+
+fn trigger_completion_summary_from_event(
+    event: &TriggerCompletedEvent,
+) -> TriggerCompletionSummary {
+    let (outcome, message) = trigger_completion_outcome(event.outcome());
+    TriggerCompletionSummary {
+        trigger_id: event.trigger_id().to_string(),
+        trigger_execution_hash: event.trigger_execution_hash().to_string(),
+        step_index: *event.step_index(),
+        outcome: outcome.to_owned(),
+        message,
+    }
+}
+
+fn trigger_completion_record_from_event(
+    block: &iroha_data_model::block::SignedBlock,
+    block_height: u64,
+    event: &TriggerCompletedEvent,
+    source: &str,
+) -> TriggerCompletionRecord {
+    let entrypoint_index = block
+        .entrypoint_hashes()
+        .position(|hash| hash == *event.trigger_execution_hash())
+        .and_then(|index| u64::try_from(index).ok());
+    TriggerCompletionRecord {
+        block_height,
+        entrypoint_index,
+        completion: trigger_completion_summary_from_event(event),
+        source: source.to_owned(),
+    }
+}
+
+fn trigger_completion_record_from_parts(
+    block_height: u64,
+    entrypoint_index: usize,
+    trigger_id: String,
+    trigger_execution_hash: String,
+    step_index: u32,
+    outcome: &str,
+    message: Option<String>,
+    source: &str,
+) -> TriggerCompletionRecord {
+    TriggerCompletionRecord {
+        block_height,
+        entrypoint_index: u64::try_from(entrypoint_index).ok(),
+        completion: TriggerCompletionSummary {
+            trigger_id,
+            trigger_execution_hash,
+            step_index,
+            outcome: outcome.to_owned(),
+            message,
+        },
+        source: source.to_owned(),
+    }
+}
+
+fn reconstruct_trigger_completion_records(
+    block: &iroha_data_model::block::SignedBlock,
+    block_height: u64,
+) -> Vec<TriggerCompletionRecord> {
+    let mut records = Vec::new();
+    for (entrypoint_index, entrypoint, result) in block.entrypoint_results() {
+        let execution_hash = entrypoint.hash().to_string();
+        if let TransactionEntrypoint::Time(time_entrypoint) = &entrypoint {
+            match &result.0 {
+                Ok(_) => records.push(trigger_completion_record_from_parts(
+                    block_height,
+                    entrypoint_index,
+                    time_entrypoint.id.to_string(),
+                    execution_hash.clone(),
+                    0,
+                    "Success",
+                    None,
+                    "reconstructed_result",
+                )),
+                Err(reason) => records.push(trigger_completion_record_from_parts(
+                    block_height,
+                    entrypoint_index,
+                    time_entrypoint.id.to_string(),
+                    execution_hash.clone(),
+                    0,
+                    "Failure",
+                    Some(reason.to_string()),
+                    "reconstructed_result",
+                )),
+            }
+        }
+
+        let Ok(sequence) = &result.0 else {
+            continue;
+        };
+        let first_data_step = if matches!(entrypoint, TransactionEntrypoint::Time(_)) {
+            1_u32
+        } else {
+            0_u32
+        };
+        for (offset, step) in sequence.iter().enumerate() {
+            let step_index =
+                first_data_step.saturating_add(u32::try_from(offset).unwrap_or(u32::MAX));
+            records.push(trigger_completion_record_from_parts(
+                block_height,
+                entrypoint_index,
+                step.id.to_string(),
+                execution_hash.clone(),
+                step_index,
+                "Success",
+                None,
+                "reconstructed_result",
+            ));
+        }
+    }
+    records
+}
+
+fn trigger_completion_record_matches(
+    record: &TriggerCompletionRecord,
+    trigger_id: Option<&str>,
+    entrypoint_hash: Option<&str>,
+    outcome: TriggerCompletionOutcomeFilter,
+) -> bool {
+    if let Some(trigger_id) = trigger_id
+        && record.completion.trigger_id != trigger_id
+    {
+        return false;
+    }
+    if let Some(entrypoint_hash) = entrypoint_hash
+        && record.completion.trigger_execution_hash != entrypoint_hash
+    {
+        return false;
+    }
+    outcome.matches(&record.completion.outcome)
+}
+
+fn trigger_completion_records_for_block(
+    block: &iroha_data_model::block::SignedBlock,
+    block_height: u64,
+    include_reconstructed: bool,
+    entrypoint_hash: Option<&str>,
+) -> Vec<TriggerCompletionRecord> {
+    let persisted = block
+        .trigger_completions()
+        .unwrap_or_default()
+        .iter()
+        .map(|event| {
+            trigger_completion_record_from_event(block, block_height, event, "block_result")
+        })
+        .collect::<Vec<_>>();
+    if !include_reconstructed {
+        return persisted;
+    }
+    if persisted.is_empty() {
+        return reconstruct_trigger_completion_records(block, block_height);
+    }
+    if let Some(entrypoint_hash) = entrypoint_hash
+        && !persisted
+            .iter()
+            .any(|record| record.completion.trigger_execution_hash == entrypoint_hash)
+    {
+        return reconstruct_trigger_completion_records(block, block_height);
+    }
+    persisted
+}
+
+fn trigger_completion_from_height(query: &TriggerCompletionQuery, requested_to: u64) -> u64 {
+    query.from_height.map_or_else(
+        || {
+            let scan_limit = query
+                .scan_limit_blocks
+                .unwrap_or(TRIGGER_COMPLETION_DEFAULT_SCAN_BLOCKS)
+                .clamp(1, TRIGGER_COMPLETION_MAX_SCAN_BLOCKS);
+            requested_to
+                .saturating_sub(scan_limit.saturating_sub(1))
+                .max(1)
+        },
+        |from_height| from_height.max(1),
+    )
+}
+
+fn trigger_completion_query_response(
+    app: &SharedAppState,
+    query: &TriggerCompletionQuery,
+) -> Result<TriggerCompletionListResponse, Error> {
+    let latest_height = u64::try_from(app.state.committed_height()).unwrap_or(u64::MAX);
+    let limit = query
+        .limit
+        .unwrap_or(TRIGGER_COMPLETION_DEFAULT_LIMIT)
+        .clamp(1, TRIGGER_COMPLETION_MAX_LIMIT);
+    let include_reconstructed = query.include_reconstructed.unwrap_or(true);
+    let outcome = TriggerCompletionOutcomeFilter::parse(query.outcome.as_deref())?;
+    let requested_to = query.to_height.unwrap_or(latest_height).min(latest_height);
+
+    if latest_height == 0 || requested_to == 0 {
+        return Ok(TriggerCompletionListResponse {
+            latest_height,
+            from_height: 0,
+            to_height: requested_to,
+            scanned_blocks: 0,
+            limit,
+            completions: Vec::new(),
+        });
+    }
+
+    let from_height = trigger_completion_from_height(query, requested_to);
+    if from_height > requested_to {
+        return Ok(TriggerCompletionListResponse {
+            latest_height,
+            from_height,
+            to_height: requested_to,
+            scanned_blocks: 0,
+            limit,
+            completions: Vec::new(),
+        });
+    }
+
+    let mut completions = Vec::new();
+    let mut scanned_blocks = 0_u64;
+    for height in (from_height..=requested_to).rev() {
+        scanned_blocks = scanned_blocks.saturating_add(1);
+        let Some(height_usize) = usize::try_from(height).ok().and_then(NonZeroUsize::new) else {
+            continue;
+        };
+        let Some(block) = app.kura.get_block(height_usize) else {
+            continue;
+        };
+        for record in trigger_completion_records_for_block(
+            block.as_ref(),
+            height,
+            include_reconstructed,
+            query.entrypoint_hash.as_deref(),
+        ) {
+            if !trigger_completion_record_matches(
+                &record,
+                query.id.as_deref(),
+                query.entrypoint_hash.as_deref(),
+                outcome,
+            ) {
+                continue;
+            }
+            completions.push(record);
+            if u64::try_from(completions.len()).unwrap_or(u64::MAX) >= limit {
+                return Ok(TriggerCompletionListResponse {
+                    latest_height,
+                    from_height,
+                    to_height: requested_to,
+                    scanned_blocks,
+                    limit,
+                    completions,
+                });
+            }
+        }
+    }
+
+    Ok(TriggerCompletionListResponse {
+        latest_height,
+        from_height,
+        to_height: requested_to,
+        scanned_blocks,
+        limit,
+        completions,
+    })
+}
+
+fn trigger_completion_summaries_for_entrypoint_hash(
+    app: &SharedAppState,
+    block_height: u64,
+    entrypoint_hash: &str,
+) -> Vec<TriggerCompletionSummary> {
+    let query = TriggerCompletionQuery {
+        id: None,
+        entrypoint_hash: Some(entrypoint_hash.to_owned()),
+        outcome: None,
+        from_height: Some(block_height),
+        to_height: Some(block_height),
+        limit: Some(TRIGGER_COMPLETION_MAX_LIMIT),
+        scan_limit_blocks: Some(1),
+        include_reconstructed: Some(true),
+    };
+    trigger_completion_query_response(app, &query)
+        .map(|response| {
+            response
+                .completions
+                .into_iter()
+                .map(|record| record.completion)
+                .collect()
+        })
+        .unwrap_or_default()
+}
+
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 enum PipelineStatusReadScope {
     Local,
@@ -30852,13 +31497,13 @@ fn parse_pipeline_status_scope(raw: Option<&str>) -> Result<PipelineStatusReadSc
     let normalized = raw
         .map(str::trim)
         .filter(|value| !value.is_empty())
-        .unwrap_or("local")
+        .unwrap_or("global")
         .to_ascii_lowercase();
     match normalized.as_str() {
         "local" => Ok(PipelineStatusReadScope::Local),
-        "global" => Ok(PipelineStatusReadScope::Global),
+        "global" | "auto" => Ok(PipelineStatusReadScope::Global),
         _ => Err(conversion_error(format!(
-            "invalid scope query parameter \"{normalized}\" (expected local|global)"
+            "invalid scope query parameter \"{normalized}\" (expected local|global|auto)"
         ))),
     }
 }
@@ -30870,21 +31515,27 @@ fn parse_signed_transaction_hash(raw: &str) -> Result<HashOf<SignedTransaction>,
 }
 
 fn pipeline_status_response(
+    app: &SharedAppState,
     hash: &HashOf<SignedTransaction>,
     entry: &PipelineStatusEntry,
     scope: PipelineStatusReadScope,
     resolved_from: &'static str,
 ) -> PipelineTransactionStatusResponse {
-    PipelineTransactionStatusResponse {
-        hash: hash.to_string(),
-        status: PipelineTransactionStatus {
+    let mut response = PipelineTransactionStatusResponse::new(
+        hash.to_string(),
+        PipelineTransactionStatus {
             kind: entry.kind.as_str().to_owned(),
             block_height: entry.block_height.map(NonZeroU64::get),
             rejection_reason: entry.rejection.clone(),
         },
-        scope: scope.as_str().to_owned(),
-        resolved_from: resolved_from.to_owned(),
+        scope.as_str().to_owned(),
+        resolved_from.to_owned(),
+    );
+    if let Some(block_height) = entry.block_height.map(NonZeroU64::get) {
+        response.trigger_completions =
+            trigger_completion_summaries_for_entrypoint_hash(app, block_height, &hash.to_string());
     }
+    response
 }
 
 fn pipeline_status_from_state(
@@ -30958,6 +31609,7 @@ fn pipeline_status_local_entry(
 }
 
 fn pipeline_status_response_with_route(
+    app: &SharedAppState,
     hash: &HashOf<SignedTransaction>,
     entry: &PipelineStatusEntry,
     scope: PipelineStatusReadScope,
@@ -30966,7 +31618,7 @@ fn pipeline_status_response_with_route(
     route: Option<(RoutingDecision, &'static str)>,
 ) -> Response {
     let mut response = crate::utils::respond_with_format(
-        pipeline_status_response(hash, entry, scope, resolved_from),
+        pipeline_status_response(app, hash, entry, scope, resolved_from),
         format,
     );
     if let Some((routing_decision, routed_by)) = route {
@@ -31014,6 +31666,7 @@ fn execute_pipeline_status_local_read(
 
     if let Some((entry, resolved_from)) = local_entry {
         return Ok(pipeline_status_response_with_route(
+            app,
             &hash,
             &entry,
             read_scope,
@@ -31090,6 +31743,23 @@ async fn handler_pipeline_transaction_status(
         Vec::new(),
     )
     .await)
+}
+
+async fn handler_trigger_completions(
+    State(app): State<SharedAppState>,
+    accept: Option<crate::utils::extractors::ExtractAccept>,
+    AxQuery(query): AxQuery<TriggerCompletionQuery>,
+) -> Result<Response, Error> {
+    let format =
+        match crate::utils::negotiate_json_preferred_response_format(accept.as_ref().map(|v| &v.0))
+        {
+            Ok(format) => format,
+            Err(resp) => return Ok(resp),
+        };
+    Ok(crate::utils::respond_with_format(
+        trigger_completion_query_response(&app, &query)?,
+        format,
+    ))
 }
 
 async fn handler_policy(
@@ -31960,7 +32630,9 @@ async fn handler_alias_voprf_evaluate(
 
     let evaluated = iroha_core::alias::evaluate_alias_voprf(&blinded_bytes).map_err(|err| {
         Error::Query(iroha_data_model::ValidationFail::QueryFailed(
-            iroha_data_model::query::error::QueryExecutionFail::Conversion(err.to_string()),
+            iroha_data_model::query::error::QueryExecutionFail::Conversion(format!(
+                "Conversion: {err}"
+            )),
         ))
     })?;
     let evaluated_element_hex = hex::encode(evaluated.evaluated_element);
@@ -33123,7 +33795,7 @@ async fn handler_ledger_headers(
     headers: axum::http::HeaderMap,
 ) -> Result<Response, Error> {
     let accept = headers.get(axum::http::header::ACCEPT);
-    let format = match crate::utils::negotiate_response_format(accept) {
+    let format = match crate::utils::negotiate_json_preferred_response_format(accept) {
         Ok(fmt) => fmt,
         Err(resp) => return Ok(resp),
     };
@@ -33193,7 +33865,7 @@ async fn handler_ledger_state_root(
     headers: axum::http::HeaderMap,
 ) -> Result<Response, Error> {
     let accept = headers.get(axum::http::header::ACCEPT);
-    let format = match crate::utils::negotiate_response_format(accept) {
+    let format = match crate::utils::negotiate_json_preferred_response_format(accept) {
         Ok(fmt) => fmt,
         Err(resp) => return Ok(resp),
     };
@@ -33262,7 +33934,7 @@ async fn handler_ledger_state_proof(
     headers: axum::http::HeaderMap,
 ) -> Result<Response, Error> {
     let accept = headers.get(axum::http::header::ACCEPT);
-    let format = match crate::utils::negotiate_response_format(accept) {
+    let format = match crate::utils::negotiate_json_preferred_response_format(accept) {
         Ok(fmt) => fmt,
         Err(resp) => return Ok(resp),
     };
@@ -33454,7 +34126,11 @@ pub mod zk_attachments;
 pub mod zk_prover;
 
 const DEFAULT_ROUTE_TIMEOUT: Duration = Duration::from_mins(1);
-const CONTRACT_DEPLOY_ROUTE_TIMEOUT: Duration = Duration::from_mins(10);
+// Large trigger-native bundles can legitimately spend many localnet blocks in
+// deploy/activation while pre-commit triggers are evaluated. Keep this route
+// above the CLI deploy-bundle wait budget so clients do not have to resume
+// otherwise healthy deployments every ten minutes.
+const CONTRACT_DEPLOY_ROUTE_TIMEOUT: Duration = Duration::from_mins(60);
 const SORAFS_STORAGE_PIN_ROUTE_TIMEOUT: Duration = Duration::from_mins(10);
 const HEADER_NORITO_RPC_ERROR: &str = "x-iroha-error-code";
 const NORITO_RPC_RETRY_AFTER_SECONDS: &str = "300";
@@ -33662,7 +34338,7 @@ pub struct Torii {
     #[cfg(feature = "app_api")]
     account_faucet: Option<iroha_config::parameters::actual::ToriiFaucet>,
     #[cfg(feature = "app_api")]
-    offline_v2_issuer: Option<Arc<offline_v2_issuer::OfflineV2IssuerRuntime>>,
+    offline_issuer: Option<Arc<offline_issuer::OfflineIssuerRuntime>>,
     #[cfg(feature = "app_api")]
     uaid_onboarding: Option<AccountOnboardingSigner>,
     vpn_helper_ticket_secret: Option<[u8; 32]>,
@@ -34643,6 +35319,8 @@ impl Torii {
                     "/v1/pipeline/transactions/status",
                     get(handler_pipeline_transaction_status),
                 )
+                .route("/v1/pipeline/preflight", get(handler_pipeline_preflight))
+                .route(uri::TRIGGER_COMPLETIONS, get(handler_trigger_completions))
                 .route(
                     "/v1/pipeline/recovery/{height}",
                     get(handler_pipeline_recovery),
@@ -34841,6 +35519,11 @@ impl Torii {
                 // Accounts listing
                 .route("/v1/accounts", get(handler_accounts_list))
                 .route("/v1/accounts/query", post(handler_accounts_query))
+                .route("/v1/transactions/query", post(handler_transactions_query))
+                .route(
+                    "/v1/transactions/visible/query",
+                    post(handler_transactions_visible_query),
+                )
                 .route("/v1/accounts/onboard", post(handler_accounts_onboard))
                 .route(
                     "/v1/accounts/faucet/puzzle",
@@ -34928,22 +35611,31 @@ impl Torii {
                     post(handler_repo_agreements_query),
                 )
                 .route(
-                    "/v1/offline/v2/readiness",
-                    get(handler_offline_note_v2_readiness),
+                    "/v1/offline/readiness",
+                    get(handler_offline_note_readiness),
                 )
                 .route(
-                    "/v1/offline/v2/keys/refill",
-                    post(handler_offline_note_v2_keys_refill),
+                    "/v1/offline/keys/refill",
+                    post(handler_offline_note_keys_refill),
                 )
                 .route(
-                    "/v1/offline/v2/notes/issue",
-                    post(handler_offline_note_v2_notes_issue),
+                    "/v1/offline/notes/issue",
+                    post(handler_offline_note_notes_issue),
                 )
                 .route(
-                    "/v1/offline/v2/notes/redeem",
-                    post(handler_offline_note_v2_notes_redeem),
+                    "/v1/offline/notes/redeem",
+                    post(handler_offline_note_notes_redeem),
                 )
-                .route("/v1/offline/v2/audit", post(handler_offline_note_v2_audit));
+                .route("/v1/offline/audit", post(handler_offline_note_audit))
+                .route("/v1/offline/policy", post(handler_offline_policy_update))
+                .route(
+                    "/v1/offline/revocations",
+                    get(handler_offline_revocations_list).post(handler_offline_revocation_register),
+                )
+                .route(
+                    "/v1/offline/revocations/bundle",
+                    get(handler_offline_revocation_bundle),
+                );
             #[cfg(feature = "push")]
             let router = router.route(
                 "/v1/notify/devices",
@@ -36396,10 +37088,10 @@ impl Torii {
         #[cfg(feature = "app_api")]
         let account_faucet = config.faucet.clone();
         #[cfg(feature = "app_api")]
-        let offline_v2_issuer = config
+        let offline_issuer = config
             .offline_issuer
             .clone()
-            .map(offline_v2_issuer::OfflineV2IssuerRuntime::from_config)
+            .map(offline_issuer::OfflineIssuerRuntime::from_config)
             .map(Arc::new);
         #[cfg(feature = "app_api")]
         let identifier_resolver = config.ram_lfe.as_ref().and_then(|cfg| {
@@ -36580,7 +37272,7 @@ impl Torii {
             #[cfg(feature = "app_api")]
             account_faucet,
             #[cfg(feature = "app_api")]
-            offline_v2_issuer,
+            offline_issuer,
             #[cfg(feature = "app_api")]
             uaid_onboarding,
             vpn_helper_ticket_secret,
@@ -37024,7 +37716,7 @@ impl Torii {
             #[cfg(feature = "app_api")]
             account_faucet: self.account_faucet.clone(),
             #[cfg(feature = "app_api")]
-            offline_v2_issuer: self.offline_v2_issuer.clone(),
+            offline_issuer: self.offline_issuer.clone(),
             #[cfg(feature = "app_api")]
             uaid_onboarding: self.uaid_onboarding.clone(),
             vpn_helper_ticket_secret: self.vpn_helper_ticket_secret,
@@ -39230,7 +39922,10 @@ pub(crate) mod tests_runtime_handlers {
             QcAggregate, VALIDATOR_SET_HASH_VERSION_V1,
         },
         domain::{Domain, DomainId},
-        events::pipeline::{BlockEvent, BlockStatus, TransactionEvent, TransactionStatus},
+        events::{
+            pipeline::{BlockEvent, BlockStatus, TransactionEvent, TransactionStatus},
+            trigger_completed::{TriggerCompletedEvent, TriggerCompletedOutcome},
+        },
         isi::{Grant, Log, Register, RegisterPeerWithPop, consensus_keys::RegisterConsensusKey},
         level::Level,
         name::Name,
@@ -39243,7 +39938,7 @@ pub(crate) mod tests_runtime_handlers {
             SoranetPrivacyEventV1, SoranetPrivacyModeV1, SoranetPrivacyPrioShareV1,
         },
         transaction::{
-            Executable, IvmBytecode, IvmProved,
+            Executable, ExecutionStep, IvmBytecode, IvmProved,
             error::TransactionRejectionReason,
             signed::{
                 SealedTransactionReveal, SignedTransaction, TransactionBuilder,
@@ -39251,12 +39946,12 @@ pub(crate) mod tests_runtime_handlers {
                 compute_sealed_transaction_commitment,
             },
         },
-        trigger::DataTriggerSequence,
+        trigger::{DataTriggerSequence, DataTriggerStep, TimeTriggerEntrypoint, TriggerId},
     };
     use iroha_executor_data_model::permission::account::{
         AccountAliasPermissionScope, CanResolveAccountAlias,
     };
-    use iroha_primitives::{json::Json, numeric::Numeric};
+    use iroha_primitives::{const_vec::ConstVec, json::Json, numeric::Numeric};
     use iroha_test_samples::ALICE_ID;
     use norito::codec::Encode;
 
@@ -40838,7 +41533,7 @@ pub(crate) mod tests_runtime_handlers {
             #[cfg(feature = "app_api")]
             account_faucet: None,
             #[cfg(feature = "app_api")]
-            offline_v2_issuer: None,
+            offline_issuer: None,
             #[cfg(feature = "app_api")]
             uaid_onboarding: None,
             vpn_helper_ticket_secret: None,
@@ -41173,6 +41868,15 @@ pub(crate) mod tests_runtime_handlers {
         ) -> Result<RoutingDecision, RoutingResolveError> {
             self.route_calls.fetch_add(1, Ordering::Relaxed);
             Ok(self.route(tx))
+        }
+
+        fn try_route_plan_with_state(
+            &self,
+            tx: &AcceptedTransaction<'_>,
+            state: &IrohaState,
+        ) -> Result<RoutingPlan, RoutingResolveError> {
+            self.try_route_with_state(tx, state)
+                .map(RoutingPlan::single)
         }
     }
 
@@ -43066,6 +43770,53 @@ pub(crate) mod tests_runtime_handlers {
                 .get("x-iroha-route-dataspace-id")
                 .is_none(),
             "visible dataspace fanout should not expose a singular dataspace",
+        );
+    }
+
+    #[tokio::test]
+    async fn handler_transactions_query_fan_outs_across_dataspaces() {
+        let mut app = mk_app_state_for_tests();
+        configure_multiple_dataspace_routes_for_test(&mut app);
+        assert!(
+            super::torii_all_dataspace_routes(app.as_ref()).len() > 1,
+            "test requires multiple dataspace routes"
+        );
+
+        let env = crate::filter::QueryEnvelope {
+            query: None,
+            filter: None,
+            select: None,
+            aggregate: None,
+            sort: Vec::new(),
+            pagination: crate::filter::Pagination {
+                limit: Some(10),
+                offset: 0,
+            },
+            fetch_size: None,
+            count_mode: Some("exact".to_owned()),
+        };
+        let response = super::handler_transactions_query(
+            State(app),
+            HeaderMap::new(),
+            crate::loopback_connect_info(),
+            NoritoJson(env),
+        )
+        .await
+        .expect("transactions query should execute")
+        .into_response();
+
+        assert_eq!(response.status(), StatusCode::OK);
+        assert_eq!(
+            response
+                .headers()
+                .get("x-iroha-fanout-routes-attempted")
+                .and_then(|value| value.to_str().ok()),
+            Some("2"),
+            "global transaction queries must enter the read-fanout path",
+        );
+        assert!(
+            response.headers().get("x-iroha-route-lane-id").is_none(),
+            "transaction query fanout should not expose a singular route lane",
         );
     }
 
@@ -45496,6 +46247,73 @@ pub(crate) mod tests_runtime_handlers {
         (block, entry_hash)
     }
 
+    struct PersistedDataTriggerCompletionBlock {
+        block: SignedBlock,
+        tx_hash: HashOf<SignedTransaction>,
+        entrypoint_hash: HashOf<TransactionEntrypoint>,
+        trigger_execution_hash: HashOf<TransactionEntrypoint>,
+        trigger_id: TriggerId,
+    }
+
+    fn make_persisted_data_trigger_completion_block(
+        height: u64,
+        prev_hash: Option<HashOf<BlockHeader>>,
+    ) -> PersistedDataTriggerCompletionBlock {
+        let keypair = KeyPair::random();
+        let chain: ChainId = "trigger-completion-tests".parse().expect("chain id");
+        let authority = AccountId::new(keypair.public_key().clone());
+        let tx = TransactionBuilder::new(chain, authority.clone()).sign(keypair.private_key());
+        let tx_hash = tx.hash();
+        let entrypoint_hash = tx.hash_as_entrypoint();
+        let trigger_id: TriggerId = "persisted_data_trigger".parse().expect("trigger id");
+        let step = DataTriggerStep {
+            id: trigger_id.clone(),
+            instructions: ExecutionStep(ConstVec::new_empty()),
+        };
+        let trigger_execution_hash = TimeTriggerEntrypoint {
+            id: trigger_id.clone(),
+            instructions: step.instructions.clone(),
+            authority,
+        }
+        .hash_as_entrypoint();
+        assert_ne!(trigger_execution_hash, entrypoint_hash);
+
+        let header = BlockHeader::new(
+            NonZeroU64::new(height).expect("nonzero height"),
+            prev_hash,
+            None,
+            None,
+            0,
+            0,
+        );
+        let signature = BlockSignature::new(
+            0,
+            SignatureOf::from_hash(keypair.private_key(), header.hash()),
+        );
+        let mut block = SignedBlock::presigned(signature, header, vec![tx]);
+        block
+            .set_transaction_results(
+                Vec::new(),
+                &[entrypoint_hash],
+                vec![TransactionResultInner::Ok(vec![step])],
+            )
+            .expect("test block entrypoint hash should match payload");
+        block.set_trigger_completions(vec![TriggerCompletedEvent::new(
+            trigger_id.clone(),
+            trigger_execution_hash,
+            0,
+            TriggerCompletedOutcome::Success,
+        )]);
+
+        PersistedDataTriggerCompletionBlock {
+            block,
+            tx_hash,
+            entrypoint_hash,
+            trigger_execution_hash,
+            trigger_id,
+        }
+    }
+
     fn make_sealed_reveal_block(
         height: u64,
         prev_hash: Option<HashOf<BlockHeader>>,
@@ -45538,6 +46356,17 @@ pub(crate) mod tests_runtime_handlers {
         let hash = block.hash();
         app.kura.store_block(Arc::new(block)).expect("store block");
         hash
+    }
+
+    fn record_committed_block_hash_for_test(
+        app: &SharedAppState,
+        header: BlockHeader,
+        block_hash: HashOf<BlockHeader>,
+    ) {
+        let mut block_hashes = app.state.block_hashes.block();
+        block_hashes.push_for_tests(block_hash);
+        block_hashes.commit_for_tests();
+        app.state.update_latest_block_header_cache_for_tests(header);
     }
 
     fn make_empty_signed_block(
@@ -46056,6 +46885,85 @@ pub(crate) mod tests_runtime_handlers {
         assert_eq!(payload.resolved_from, "queue");
     }
 
+    #[tokio::test]
+    async fn pipeline_preflight_handler_returns_json_snapshot() {
+        let app = mk_app_state_for_tests();
+        let expected_stall_threshold_ms =
+            u64::try_from(app.state.sumeragi_commit_quorum_timeout().as_millis())
+                .unwrap_or(u64::MAX);
+
+        let resp = super::handler_pipeline_preflight(
+            State(app),
+            HeaderMap::new(),
+            crate::loopback_connect_info(),
+            None,
+        )
+        .await
+        .expect("ok");
+        assert_eq!(resp.status(), StatusCode::OK);
+        let bytes = axum::body::to_bytes(resp.into_body(), usize::MAX)
+            .await
+            .expect("body");
+        let payload: norito::json::Value = norito::json::from_slice(&bytes).expect("json");
+        assert_eq!(
+            payload.get("schema_version"),
+            Some(&norito::json::Value::from(1_u64))
+        );
+        assert_eq!(
+            payload
+                .get("sumeragi")
+                .and_then(|value| value.get("stall_threshold_ms")),
+            Some(&norito::json::Value::from(expected_stall_threshold_ms))
+        );
+        assert_eq!(
+            payload.get("queue").and_then(|value| value.get("size")),
+            Some(&norito::json::Value::from(0_u64))
+        );
+        assert!(
+            payload
+                .get("fees")
+                .and_then(norito::json::Value::as_object)
+                .is_some(),
+            "preflight payload should expose Nexus fee settings"
+        );
+    }
+
+    #[tokio::test]
+    async fn pipeline_preflight_handler_returns_typed_norito_when_requested() {
+        let app = mk_app_state_for_tests();
+        let expected_stall_threshold_ms =
+            u64::try_from(app.state.sumeragi_commit_quorum_timeout().as_millis())
+                .unwrap_or(u64::MAX);
+        let resp = super::handler_pipeline_preflight(
+            State(app),
+            HeaderMap::new(),
+            crate::loopback_connect_info(),
+            Some(crate::utils::extractors::ExtractAccept(
+                HeaderValue::from_static(crate::utils::NORITO_MIME_TYPE),
+            )),
+        )
+        .await
+        .expect("ok");
+        assert_eq!(resp.status(), StatusCode::OK);
+        assert_eq!(
+            resp.headers()
+                .get(axum::http::header::CONTENT_TYPE)
+                .and_then(|value| value.to_str().ok()),
+            Some(crate::utils::NORITO_MIME_TYPE)
+        );
+        let bytes = axum::body::to_bytes(resp.into_body(), usize::MAX)
+            .await
+            .expect("body");
+        let payload: routing::PipelinePreflightResponse =
+            norito::decode_from_bytes(&bytes).expect("typed norito response");
+        assert_eq!(payload.schema_version, 1);
+        assert_eq!(payload.queue.size, 0);
+        assert_eq!(
+            payload.sumeragi.stall_threshold_ms,
+            expected_stall_threshold_ms
+        );
+    }
+
     #[test]
     fn pipeline_status_global_read_skips_non_terminal_local_cache() {
         let app = mk_app_state_for_tests();
@@ -46410,6 +47318,141 @@ pub(crate) mod tests_runtime_handlers {
         );
     }
 
+    #[test]
+    fn trigger_completion_query_falls_back_to_reconstructed_entrypoint_hash() {
+        let app = mk_app_state_for_tests();
+        let sample = make_persisted_data_trigger_completion_block(1, None);
+        let header = sample.block.header();
+        let block_hash = store_block(&app, sample.block);
+        record_committed_block_hash_for_test(&app, header, block_hash);
+
+        let response = super::trigger_completion_query_response(
+            &app,
+            &TriggerCompletionQuery {
+                id: None,
+                entrypoint_hash: Some(sample.entrypoint_hash.to_string()),
+                outcome: None,
+                from_height: Some(1),
+                to_height: Some(1),
+                limit: Some(10),
+                scan_limit_blocks: Some(1),
+                include_reconstructed: Some(true),
+            },
+        )
+        .expect("query response");
+
+        assert_eq!(response.completions.len(), 1);
+        let record = response.completions.first().expect("completion");
+        assert_eq!(record.source, "reconstructed_result");
+        assert_eq!(record.block_height, 1);
+        assert_eq!(record.entrypoint_index, Some(0));
+        assert_eq!(record.completion.trigger_id, sample.trigger_id.to_string());
+        assert_eq!(
+            record.completion.trigger_execution_hash,
+            sample.entrypoint_hash.to_string()
+        );
+
+        let without_reconstruction = super::trigger_completion_query_response(
+            &app,
+            &TriggerCompletionQuery {
+                id: None,
+                entrypoint_hash: Some(sample.entrypoint_hash.to_string()),
+                outcome: None,
+                from_height: Some(1),
+                to_height: Some(1),
+                limit: Some(10),
+                scan_limit_blocks: Some(1),
+                include_reconstructed: Some(false),
+            },
+        )
+        .expect("query response");
+        assert!(without_reconstruction.completions.is_empty());
+
+        let persisted_response = super::trigger_completion_query_response(
+            &app,
+            &TriggerCompletionQuery {
+                id: None,
+                entrypoint_hash: Some(sample.trigger_execution_hash.to_string()),
+                outcome: None,
+                from_height: Some(1),
+                to_height: Some(1),
+                limit: Some(10),
+                scan_limit_blocks: Some(1),
+                include_reconstructed: Some(true),
+            },
+        )
+        .expect("query response");
+
+        assert_eq!(persisted_response.completions.len(), 1);
+        let persisted = persisted_response.completions.first().expect("completion");
+        assert_eq!(persisted.source, "block_result");
+        assert_eq!(
+            persisted.completion.trigger_execution_hash,
+            sample.trigger_execution_hash.to_string()
+        );
+    }
+
+    #[test]
+    fn trigger_completion_query_honors_explicit_from_height() {
+        let app = mk_app_state_for_tests();
+        let sample = make_persisted_data_trigger_completion_block(1, None);
+        let header = sample.block.header();
+        let block_hash = store_block(&app, sample.block);
+        record_committed_block_hash_for_test(&app, header, block_hash);
+
+        let mut prev_hash = Some(block_hash);
+        for height in 2..=4 {
+            let mut block = make_empty_signed_block(height, prev_hash, 0);
+            block
+                .set_transaction_results(Vec::new(), &[], Vec::new())
+                .expect("empty test block should accept empty results");
+            let header = block.header();
+            let hash = store_block(&app, block);
+            record_committed_block_hash_for_test(&app, header, hash);
+            prev_hash = Some(hash);
+        }
+
+        let bounded_window = super::trigger_completion_query_response(
+            &app,
+            &TriggerCompletionQuery {
+                id: Some(sample.trigger_id.to_string()),
+                entrypoint_hash: None,
+                outcome: None,
+                from_height: None,
+                to_height: Some(4),
+                limit: Some(10),
+                scan_limit_blocks: Some(2),
+                include_reconstructed: Some(true),
+            },
+        )
+        .expect("query response");
+        assert_eq!(bounded_window.from_height, 3);
+        assert_eq!(bounded_window.scanned_blocks, 2);
+        assert!(bounded_window.completions.is_empty());
+
+        let explicit_history = super::trigger_completion_query_response(
+            &app,
+            &TriggerCompletionQuery {
+                id: Some(sample.trigger_id.to_string()),
+                entrypoint_hash: None,
+                outcome: None,
+                from_height: Some(1),
+                to_height: Some(4),
+                limit: Some(10),
+                scan_limit_blocks: Some(2),
+                include_reconstructed: Some(true),
+            },
+        )
+        .expect("query response");
+        assert_eq!(explicit_history.from_height, 1);
+        assert_eq!(explicit_history.scanned_blocks, 4);
+        assert_eq!(explicit_history.completions.len(), 1);
+        assert_eq!(
+            explicit_history.completions[0].completion.trigger_id,
+            sample.trigger_id.to_string()
+        );
+    }
+
     #[tokio::test]
     async fn pipeline_status_handler_returns_applied_from_state() {
         let app = mk_app_state_for_tests();
@@ -46474,6 +47517,51 @@ pub(crate) mod tests_runtime_handlers {
             .and_then(|status| status.get("kind"))
             .and_then(norito::json::Value::as_str);
         assert_eq!(status_kind_entry, Some("Applied"));
+    }
+
+    #[tokio::test]
+    async fn pipeline_status_hydrates_reconstructed_trigger_completion_for_entrypoint_hash() {
+        let app = mk_app_state_for_tests();
+        let sample = make_persisted_data_trigger_completion_block(1, None);
+        let header = sample.block.header();
+        let height = header.height();
+        let height_usize = usize::try_from(height.get()).expect("height usize");
+        let height_nz = NonZeroUsize::new(height_usize).expect("height");
+        let block_hash = store_block(&app, sample.block);
+        record_committed_block_hash_for_test(&app, header.clone(), block_hash);
+
+        let mut state_block = app.state.block(header);
+        let tx_hashes: HashSet<_> = [sample.tx_hash].into_iter().collect();
+        state_block.transactions.insert_block(tx_hashes, height_nz);
+        state_block.commit().expect("commit");
+
+        let resp = super::handler_pipeline_transaction_status(
+            State(app.clone()),
+            HeaderMap::new(),
+            crate::loopback_connect_info(),
+            None,
+            crate::NoritoQuery(PipelineStatusQuery {
+                hash: Some(sample.tx_hash.to_string()),
+                scope: None,
+            }),
+        )
+        .await
+        .expect("ok");
+        assert_eq!(resp.status(), StatusCode::OK);
+        let bytes = axum::body::to_bytes(resp.into_body(), usize::MAX)
+            .await
+            .expect("body");
+        let payload: PipelineTransactionStatusResponse =
+            norito::json::from_slice(&bytes).expect("json");
+
+        assert_eq!(payload.status.kind, "Applied");
+        assert_eq!(payload.trigger_completions.len(), 1);
+        let completion = payload.trigger_completions.first().expect("completion");
+        assert_eq!(completion.trigger_id, sample.trigger_id.to_string());
+        assert_eq!(
+            completion.trigger_execution_hash,
+            sample.entrypoint_hash.to_string()
+        );
     }
 
     #[tokio::test]
@@ -56848,6 +57936,61 @@ mod tests {
     };
     use iroha_core::smartcontracts::Execute;
 
+    #[test]
+    fn stark_fri_backend_labels_require_non_empty_profile() {
+        assert!(is_stark_fri_v1_backend("stark/fri"));
+        assert!(is_stark_fri_v1_backend("stark/fri/sha256-goldilocks"));
+        assert!(!is_stark_fri_v1_backend("stark/fri/"));
+        assert!(!is_stark_fri_v1_backend("stark/fri/kzg"));
+        assert!(!is_stark_fri_v1_backend("stark/fri/bn254"));
+        assert!(!is_stark_fri_v1_backend("stark/fri/debug"));
+        assert!(!is_stark_fri_v1_backend("stark/fri/debug-proof"));
+        assert!(!is_stark_fri_v1_backend("stark/fri/mock"));
+        assert!(!is_stark_fri_v1_backend("stark/fri/mock-proof"));
+        assert!(!is_stark_fri_v1_backend("stark/fri-v2"));
+    }
+
+    #[test]
+    fn parse_pipeline_status_scope_defaults_to_global_and_trims_case() {
+        assert_eq!(
+            parse_pipeline_status_scope(None).expect("default scope"),
+            PipelineStatusReadScope::Global
+        );
+        assert_eq!(
+            parse_pipeline_status_scope(Some("")).expect("blank scope"),
+            PipelineStatusReadScope::Global
+        );
+        assert_eq!(
+            parse_pipeline_status_scope(Some(" GLOBAL ")).expect("case-insensitive global"),
+            PipelineStatusReadScope::Global
+        );
+        assert_eq!(
+            parse_pipeline_status_scope(Some(" local ")).expect("case-insensitive local"),
+            PipelineStatusReadScope::Local
+        );
+        assert_eq!(
+            parse_pipeline_status_scope(Some(" AUTO ")).expect("auto scope compatibility"),
+            PipelineStatusReadScope::Global
+        );
+    }
+
+    #[test]
+    fn parse_pipeline_status_scope_rejects_injected_values() {
+        for raw in [
+            "auto&scope=local",
+            "global&scope=local",
+            "local,global",
+            "../global",
+            "global\nscope=local",
+        ] {
+            let err = parse_pipeline_status_scope(Some(raw)).expect_err("invalid scope");
+            assert!(
+                format!("{err:?}").contains("expected local|global|auto"),
+                "unexpected error for {raw:?}: {err:?}"
+            );
+        }
+    }
+
     fn bind_asset_alias_for_test(
         app: &SharedAppState,
         authority: &AccountId,
@@ -61277,10 +62420,11 @@ mod tests {
             }
         }
         let dto = final_dto.expect("prove job should complete");
-        assert!(
-            dto.attachment.is_some(),
-            "expected proof attachment in done response"
-        );
+        let attachment = dto
+            .attachment
+            .as_ref()
+            .expect("expected proof attachment in done response");
+        assert_eq!(attachment.vk_commitment, Some(vk_commitment));
 
         let response = handler_zk_ivm_prove_delete(
             State(app.clone()),
@@ -61422,6 +62566,7 @@ mod tests {
             .attachment
             .expect("expected proof attachment in done response");
         assert_eq!(attachment.backend.as_str(), backend);
+        assert_eq!(attachment.vk_commitment, Some(vk_commitment));
         assert!(
             iroha_core::zk::verify_backend(backend, &attachment.proof, Some(&vk_box),),
             "generated STARK attachment should verify"
@@ -61560,9 +62705,139 @@ mod tests {
             }
         }
         let dto = final_dto.expect("prove job should complete");
+        let attachment = dto
+            .attachment
+            .as_ref()
+            .expect("expected proof attachment in done response");
+        assert_eq!(attachment.vk_commitment, Some(vk_commitment));
+    }
+
+    #[tokio::test]
+    async fn zk_ivm_prove_job_rejects_non_archive_proving_key_bytes() {
+        let temp = tempfile::tempdir().expect("tempdir");
+        let mut app = mk_app_state_for_tests();
+        {
+            let state = Arc::get_mut(&mut app).expect("unique app");
+            state.zk_prover_keys_dir = temp.path().to_path_buf();
+            let core = Arc::get_mut(&mut state.state).expect("unique core state");
+            core.zk.halo2.enabled = true;
+        }
+
+        let vk_id = VerifyingKeyId::new("halo2/ipa", "ivm-exec-v1-raw-pk");
+        let fixture = iroha_core::zk::test_utils::halo2_ivm_execution_envelope(
+            Hash::new(b"code"),
+            Hash::new(b"overlay"),
+            Hash::new(b"events"),
+            Hash::new(b"gas"),
+        );
+        let vk_box = fixture
+            .vk_box("halo2/ipa")
+            .expect("fixture should include verifying key bytes");
+        let vk_commitment = fixture
+            .vk_hash("halo2/ipa")
+            .expect("fixture should include verifying key commitment");
+        let mut vk_record = VerifyingKeyRecord::new(
+            1,
+            "halo2/ipa:ivm-execution-v1",
+            iroha_data_model::zk::BackendTag::Halo2IpaPasta,
+            "pasta",
+            fixture.schema_hash,
+            vk_commitment,
+        );
+        vk_record.vk_len = vk_box.bytes.len() as u32;
+        vk_record.max_proof_bytes = 8 * 1024 * 1024;
+        vk_record.key = Some(vk_box);
+        vk_record.status = iroha_data_model::confidential::ConfidentialStatus::Active;
+        vk_record.gas_schedule_id = Some("sched_0".to_owned());
+
+        let pk_path = zk_pk_store_path(temp.path(), &vk_id);
+        std::fs::write(&pk_path, b"raw-halo2-proving-key").expect("write raw proving key bytes");
+
+        {
+            let height = next_block_height(&app);
+            let header = BlockHeader::new(
+                NonZeroU64::new(height).expect("height>0"),
+                None,
+                None,
+                None,
+                0,
+                0,
+            );
+            let mut block = app.state.block(header);
+            let mut stx = block.transaction();
+            stx.world
+                .verifying_keys_mut_for_testing()
+                .insert(vk_id.clone(), vk_record);
+            stx.apply();
+            block.transactions.insert_block(
+                HashSet::new(),
+                NonZeroUsize::new(height as usize).expect("block count should be non-zero"),
+            );
+            block.commit().expect("commit should persist vk record");
+        }
+
+        let meta = ivm::ProgramMetadata {
+            mode: ivm::ivm_mode::ZK,
+            ..Default::default()
+        };
+        let mut program = meta.encode();
+        program.extend_from_slice(&ivm::encoding::wide::encode_halt().to_le_bytes());
+        let bytecode = IvmBytecode::from_compiled(program);
+        let req = make_ivm_prove_request(vk_id, bytecode, None);
+        let body = norito::json::to_vec(&req).expect("json encode request");
+        let response = handler_zk_ivm_prove(
+            State(app.clone()),
+            negotiated(&app),
+            HeaderMap::new(),
+            crate::loopback_connect_info(),
+            axum::body::Bytes::from(body),
+        )
+        .await
+        .expect("prove submit ok")
+        .into_response();
+        assert_eq!(response.status(), StatusCode::OK);
+        let body = http_body_util::BodyExt::collect(response.into_body())
+            .await
+            .unwrap()
+            .to_bytes();
+        let created: ZkIvmProveJobCreatedDto =
+            norito::json::from_slice(&body).expect("json decode created dto");
+
+        let job_id = created.job_id;
+        let mut final_dto: Option<ZkIvmProveJobDto> = None;
+        for _ in 0..4000 {
+            let response = handler_zk_ivm_prove_get(
+                State(app.clone()),
+                negotiated(&app),
+                HeaderMap::new(),
+                crate::loopback_connect_info(),
+                axum::extract::Path(job_id.clone()),
+            )
+            .await
+            .expect("prove get ok")
+            .into_response();
+            assert_eq!(response.status(), StatusCode::OK);
+            let body = http_body_util::BodyExt::collect(response.into_body())
+                .await
+                .unwrap()
+                .to_bytes();
+            let dto: ZkIvmProveJobDto = norito::json::from_slice(&body).expect("decode job dto");
+            match dto.status.as_str() {
+                "pending" | "running" => tokio::time::sleep(Duration::from_millis(25)).await,
+                "error" => {
+                    final_dto = Some(dto);
+                    break;
+                }
+                "done" => panic!("prove job should fail for non-archive proving key bytes"),
+                other => panic!("unexpected prove job status: {other}"),
+            }
+        }
+
+        let dto = final_dto.expect("prove job should fail");
+        let error = dto.error.unwrap_or_default();
         assert!(
-            dto.attachment.is_some(),
-            "expected proof attachment in done response"
+            error.contains("failed to decode proving key archive"),
+            "unexpected error: {error}"
         );
     }
 

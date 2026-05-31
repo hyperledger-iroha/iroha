@@ -59,6 +59,74 @@ public final class SetPrimaryAccountAliasWirePayloadEncoder {
     return InstructionBox.fromWirePayload(WIRE_NAME, wirePayload);
   }
 
+  /** Decodes a Norito-framed {@code SetPrimaryAccountAlias} payload. */
+  static DecodedSetPrimaryAccountAliasPayload decodePayload(final byte[] wirePayload) {
+    Objects.requireNonNull(wirePayload, "wirePayload");
+    final SetPrimaryAccountAliasPayload payload =
+        NoritoCodec.decode(wirePayload, new SetPrimaryAccountAliasPayloadAdapter(), SCHEMA_PATH);
+    return new DecodedSetPrimaryAccountAliasPayload(
+        TransferWirePayloadEncoder.decodeAccountIdPayload(payload.accountPayload),
+        payload.alias.map(
+            alias ->
+                new DecodedAccountAlias(
+                    alias.alias, alias.aliasDomain.map(domain -> domain.value), alias.dataspace)),
+        payload.leaseExpiryMs);
+  }
+
+  /** Decoded set-primary-account-alias instruction payload. */
+  static final class DecodedSetPrimaryAccountAliasPayload {
+    private final String accountId;
+    private final Optional<DecodedAccountAlias> alias;
+    private final Optional<Long> leaseExpiryMs;
+
+    private DecodedSetPrimaryAccountAliasPayload(
+        final String accountId,
+        final Optional<DecodedAccountAlias> alias,
+        final Optional<Long> leaseExpiryMs) {
+      this.accountId = accountId;
+      this.alias = Objects.requireNonNull(alias, "alias");
+      this.leaseExpiryMs = Objects.requireNonNull(leaseExpiryMs, "leaseExpiryMs");
+    }
+
+    String accountId() {
+      return accountId;
+    }
+
+    Optional<DecodedAccountAlias> alias() {
+      return alias;
+    }
+
+    Optional<Long> leaseExpiryMs() {
+      return leaseExpiryMs;
+    }
+  }
+
+  /** Decoded account alias value. */
+  static final class DecodedAccountAlias {
+    private final String alias;
+    private final Optional<String> aliasDomain;
+    private final long dataspace;
+
+    private DecodedAccountAlias(
+        final String alias, final Optional<String> aliasDomain, final long dataspace) {
+      this.alias = alias;
+      this.aliasDomain = Objects.requireNonNull(aliasDomain, "aliasDomain");
+      this.dataspace = dataspace;
+    }
+
+    String alias() {
+      return alias;
+    }
+
+    Optional<String> aliasDomain() {
+      return aliasDomain;
+    }
+
+    long dataspace() {
+      return dataspace;
+    }
+  }
+
   private static final class SetPrimaryAccountAliasPayload {
     private final byte[] accountPayload;
     private final Optional<AccountAliasPayload> alias;
@@ -87,7 +155,14 @@ public final class SetPrimaryAccountAliasWirePayloadEncoder {
 
     @Override
     public SetPrimaryAccountAliasPayload decode(final NoritoDecoder decoder) {
-      throw new UnsupportedOperationException("Decoding SetPrimaryAccountAlias is not supported");
+      final byte[] accountPayload =
+          decodeSizedField(decoder, PASSTHROUGH_ADAPTER, "SetPrimaryAccountAlias.account_id");
+      final Optional<AccountAliasPayload> alias =
+          decodeSizedField(decoder, OPTIONAL_ALIAS_ADAPTER, "SetPrimaryAccountAlias.alias");
+      final Optional<Long> leaseExpiryMs =
+          decodeSizedField(
+              decoder, OPTIONAL_U64_ADAPTER, "SetPrimaryAccountAlias.lease_expiry_ms");
+      return new SetPrimaryAccountAliasPayload(accountPayload, alias, leaseExpiryMs);
     }
   }
 
@@ -97,7 +172,12 @@ public final class SetPrimaryAccountAliasWirePayloadEncoder {
     private final long dataspace;
 
     private AccountAliasPayload(
-        final String alias, final Optional<AccountAliasDomainPayload> aliasDomain, final long dataspace) {
+        final String alias,
+        final Optional<AccountAliasDomainPayload> aliasDomain,
+        final long dataspace) {
+      if (dataspace < 0L) {
+        throw new IllegalArgumentException("dataspace must be non-negative");
+      }
       this.alias = alias;
       this.aliasDomain = Objects.requireNonNull(aliasDomain, "aliasDomain");
       this.dataspace = dataspace;
@@ -119,7 +199,15 @@ public final class SetPrimaryAccountAliasWirePayloadEncoder {
 
     @Override
     public AccountAliasPayload decode(final NoritoDecoder decoder) {
-      throw new UnsupportedOperationException("Decoding AccountAlias is not supported");
+      final String alias = decodeSizedField(decoder, STRING_ADAPTER, "alias.label");
+      final Optional<AccountAliasDomainPayload> aliasDomain =
+          decodeSizedField(decoder, OPTIONAL_ALIAS_DOMAIN_ADAPTER, "alias.domain");
+      final long dataspace = decodeSizedField(decoder, U64_ADAPTER, "alias.dataspace");
+      return new AccountAliasPayload(
+          requireUsername(alias, "alias"),
+          aliasDomain.map(
+              domain -> new AccountAliasDomainPayload(requireUsername(domain.value, "aliasDomain"))),
+          dataspace);
     }
   }
 
@@ -142,7 +230,11 @@ public final class SetPrimaryAccountAliasWirePayloadEncoder {
 
     @Override
     public byte[] decode(final NoritoDecoder decoder) {
-      throw new UnsupportedOperationException("Decoding passthrough payloads is not supported");
+      final byte[] payload = decoder.readBytes(decoder.remaining());
+      if (payload.length == 0) {
+        throw new IllegalArgumentException("payload bytes must not be empty");
+      }
+      return payload;
     }
   }
 
@@ -154,6 +246,21 @@ public final class SetPrimaryAccountAliasWirePayloadEncoder {
     final boolean compact = (encoder.flags() & NoritoHeader.COMPACT_LEN) != 0;
     encoder.writeLength(payload.length, compact);
     encoder.writeBytes(payload);
+  }
+
+  private static <T> T decodeSizedField(
+      final NoritoDecoder decoder, final TypeAdapter<T> adapter, final String fieldName) {
+    final long length = decoder.readLength((decoder.flags() & NoritoHeader.COMPACT_LEN) != 0);
+    if (length > Integer.MAX_VALUE) {
+      throw new IllegalArgumentException(fieldName + " payload too large");
+    }
+    final byte[] payload = decoder.readBytes((int) length);
+    final NoritoDecoder child = new NoritoDecoder(payload, decoder.flags(), decoder.flagsHint());
+    final T value = adapter.decode(child);
+    if (child.remaining() != 0) {
+      throw new IllegalArgumentException("Trailing bytes after " + fieldName + " payload");
+    }
+    return value;
   }
 
   private static String requireNonBlank(final String value, final String field) {

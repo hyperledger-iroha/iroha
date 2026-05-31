@@ -476,6 +476,42 @@ public final class TransactionFixtureManifestTests {
         name + ": versioned payload mismatch",
         signedBytes,
         Arrays.copyOfRange(versioned, 1, versioned.length));
+    final SignedTransaction decodedSigned;
+    try {
+      decodedSigned = SignedTransactionEncoder.decode(signedBytes);
+    } catch (final Exception ex) {
+      throw new IllegalStateException(name + ": failed to decode signed transaction", ex);
+    }
+    assertArrayEquals(
+        name + ": decoded signed payload mismatch",
+        payloadBytes,
+        decodedSigned.encodedPayload());
+    assertArrayEquals(
+        name + ": decoded signature mismatch",
+        signedParts.signature(),
+        decodedSigned.signature());
+    try {
+      assertArrayEquals(
+          name + ": decoded signed transaction re-encoding drift",
+          signedBytes,
+          SignedTransactionEncoder.encode(decodedSigned));
+    } catch (final Exception ex) {
+      throw new IllegalStateException(name + ": failed to re-encode decoded signed transaction", ex);
+    }
+    final SignedTransaction decodedVersioned;
+    try {
+      decodedVersioned = SignedTransactionEncoder.decodeVersioned(versioned);
+    } catch (final Exception ex) {
+      throw new IllegalStateException(name + ": failed to decode versioned signed transaction", ex);
+    }
+    assertArrayEquals(
+        name + ": decoded versioned payload mismatch",
+        payloadBytes,
+        decodedVersioned.encodedPayload());
+    assertArrayEquals(
+        name + ": decoded versioned signature mismatch",
+        signedParts.signature(),
+        decodedVersioned.signature());
 
     canonicalChecked++;
   }

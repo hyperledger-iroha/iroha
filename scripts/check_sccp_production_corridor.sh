@@ -143,6 +143,46 @@ run_in_dir() {
   (cd "$dir" && "$@")
 }
 
+ensure_swift_bridge_artifact() {
+  local bridge_dir="$ROOT/dist/NoritoBridge.xcframework"
+  local bridge_zip="$ROOT/dist/NoritoBridge.xcframework.zip"
+  local rust_targets=(
+    aarch64-apple-ios
+    aarch64-apple-ios-sim
+    x86_64-apple-ios
+    aarch64-apple-darwin
+  )
+
+  if [[ "$DRY_RUN" -eq 1 ]]; then
+    if [[ -f "$bridge_zip" ]]; then
+      run_cmd rm -rf "$bridge_dir"
+      run_cmd unzip -q -o "$bridge_zip" -d "$ROOT/dist"
+    else
+      run_cmd rustup target add "${rust_targets[@]}"
+      run_cmd bash "$ROOT/scripts/build_norito_xcframework.sh"
+    fi
+    return 0
+  fi
+
+  if [[ -f "$bridge_dir/Info.plist" ]]; then
+    return 0
+  fi
+
+  if [[ -f "$bridge_zip" ]]; then
+    run_cmd rm -rf "$bridge_dir"
+    run_cmd unzip -q -o "$bridge_zip" -d "$ROOT/dist"
+  else
+    run_cmd rustup target add "${rust_targets[@]}"
+    run_cmd bash "$ROOT/scripts/build_norito_xcframework.sh"
+  fi
+
+  if [[ ! -f "$bridge_dir/Info.plist" ]]; then
+    echo "NoritoBridge.xcframework was not materialized at $bridge_dir." >&2
+    echo "Provide $bridge_zip or ensure scripts/build_norito_xcframework.sh can build it." >&2
+    return 1
+  fi
+}
+
 resolve_java_home() {
   if [[ "$DRY_RUN" -eq 1 ]]; then
     if [[ -n "${JAVA_HOME:-}" ]]; then
@@ -242,6 +282,7 @@ phase_python_sdk() {
 }
 
 phase_swift_sdk() {
+  ensure_swift_bridge_artifact
   run_in_dir "$ROOT/IrohaSwift" \
     swift test --filter SccpSolanaProverTests --disable-swift-testing
   run_in_dir "$ROOT/IrohaSwift" \

@@ -1,6 +1,7 @@
 package org.hyperledger.iroha.sdk.core.model.instructions
 
 import org.hyperledger.iroha.sdk.client.IdentifierReceiptAttestation
+import org.hyperledger.iroha.sdk.client.IdentifierReceiptCanonicalEncoder
 import org.hyperledger.iroha.sdk.client.IdentifierResolutionExecutionPayload
 import org.hyperledger.iroha.sdk.client.IdentifierResolutionPayload
 import org.hyperledger.iroha.sdk.client.IdentifierResolutionReceipt
@@ -10,6 +11,7 @@ import org.hyperledger.iroha.sdk.core.model.WirePayload
 import kotlin.test.Test
 import kotlin.test.assertContentEquals
 import kotlin.test.assertEquals
+import kotlin.test.assertFailsWith
 import kotlin.test.assertIs
 
 /**
@@ -81,6 +83,31 @@ class ClaimIdentifierWirePayloadEncoderParityTest {
         assertEquals("identity::ClaimIdentifier", instruction.name)
         val wirePayload = assertIs<WirePayload>(instruction.payload)
         val kotlinHex = FixtureGeneratorRunner.bytesToHex(wirePayload.payloadBytes)
+        val decodedClaim = ClaimIdentifierWirePayloadEncoder.decodePayload(wirePayload.payloadBytes)
+        val expectedReceiptPayload = IdentifierReceiptCanonicalEncoder.encodePayload(payload)
+        val expectedAttestationPayload = IdentifierReceiptCanonicalEncoder.encodeAttestation(receipt.attestation)
+
+        assertEquals(accountId, decodedClaim.accountId)
+        assertContentEquals(expectedReceiptPayload, decodedClaim.receiptPayloadBytes)
+        assertContentEquals(expectedAttestationPayload, decodedClaim.attestationPayloadBytes)
+
+        val decodedReceiptPayload = IdentifierReceiptCanonicalEncoder.decodePayload(
+            decodedClaim.receiptPayloadBytes,
+        )
+        assertEquals(payload.policyId, decodedReceiptPayload.policyId)
+        assertEquals(payload.execution.programId, decodedReceiptPayload.execution.programId)
+        assertEquals(payload.execution.backend, decodedReceiptPayload.execution.backend)
+        assertEquals(payload.execution.verificationMode, decodedReceiptPayload.execution.verificationMode)
+        assertEquals(payload.execution.expiresAtMs, decodedReceiptPayload.execution.expiresAtMs)
+        assertEquals(payload.opaqueId, decodedReceiptPayload.opaqueId)
+        assertEquals(payload.uaid, decodedReceiptPayload.uaid)
+        assertEquals(payload.accountId, decodedReceiptPayload.accountId)
+
+        val decodedAttestation = IdentifierReceiptCanonicalEncoder.decodeAttestation(
+            decodedClaim.attestationPayloadBytes,
+        )
+        assertEquals(receipt.attestation.kind, decodedAttestation.kind)
+        assertEquals(requireNotNull(receipt.attestation.signature).lowercase(), decodedAttestation.signature)
 
         assertContentEquals(
             FixtureGeneratorRunner.hexToBytes(rustHex),
@@ -90,5 +117,35 @@ class ClaimIdentifierWirePayloadEncoderParityTest {
                 "  Rust:   $rustHex\n" +
                 "  Kotlin: $kotlinHex",
         )
+
+        assertFailsWith<IllegalArgumentException> {
+            ClaimIdentifierWirePayloadEncoder.decodePayload(wirePayload.payloadBytes.copyOf(12))
+        }
+        val mutated = wirePayload.payloadBytes.copyOf()
+        mutated[mutated.lastIndex] = (mutated.last().toInt() xor 0x01).toByte()
+        assertFailsWith<IllegalArgumentException> {
+            ClaimIdentifierWirePayloadEncoder.decodePayload(mutated)
+        }
+    }
+
+    @Test
+    fun `identifier attestation decoding covers proof payloads and rejects bad tags`() {
+        val attestation = IdentifierReceiptAttestation(
+            kind = "proof",
+            signature = null,
+            proofBackend = "halo2/ipa",
+            proofB64 = "AQID",
+        )
+        val encoded = IdentifierReceiptCanonicalEncoder.encodeAttestation(attestation)
+
+        val decoded = IdentifierReceiptCanonicalEncoder.decodeAttestation(encoded)
+
+        assertEquals("proof", decoded.kind)
+        assertEquals("halo2/ipa", decoded.proofBackend)
+        assertEquals("AQID", decoded.proofB64)
+
+        assertFailsWith<IllegalArgumentException> {
+            IdentifierReceiptCanonicalEncoder.decodeAttestation(byteArrayOf(2, 0, 0, 0))
+        }
     }
 }

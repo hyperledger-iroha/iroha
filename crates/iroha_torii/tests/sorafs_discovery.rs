@@ -46,12 +46,13 @@ use iroha_data_model::{
     ChainId, IntoKeyValue, Registrable,
     block::BlockHeader,
     isi::sorafs::RegisterPinManifest,
+    metadata::Metadata,
     name::Name,
     prelude as dm,
     sorafs::pin_registry::{
         ChunkerProfileHandle, ManifestAliasBinding, ManifestAliasId, ManifestAliasRecord,
-        ManifestDigest as RegistryManifestDigest, PinPolicy as RegistryPinPolicy,
-        StorageClass as RegistryStorageClass,
+        ManifestDigest as RegistryManifestDigest, PinFeePayment, PinManifestRecord,
+        PinPolicy as RegistryPinPolicy, StorageClass as RegistryStorageClass,
     },
     transaction::{SignedTransaction, TransactionBuilder},
 };
@@ -72,14 +73,16 @@ use iroha_torii::{
 };
 use mv::storage::StorageReadOnly;
 use norito::{decode_from_bytes, json, to_bytes};
-use sorafs_car::{ChunkStore, por_json::proof_from_value};
+use sorafs_car::{
+    CarBuildPlan, ChunkStore, compute_chunk_plan_digest_sha3, por_json::proof_from_value,
+};
 use sorafs_manifest::provider_advert::ProviderCapabilitySoranetPqV1;
 use sorafs_manifest::{
     AdvertEndpoint, AdvertValidationError, AvailabilityTier, BLAKE3_256_MULTIHASH_CODE,
     CapabilityTlv, CapabilityType, CouncilSignature, DagCodecId, ENDPOINT_ATTESTATION_VERSION_V1,
     EndpointAdmissionV1, EndpointAttestationKind, EndpointAttestationV1, EndpointKind,
     EndpointMetadata, EndpointMetadataKey, GovernanceProofs, MANIFEST_DAG_CODEC, ManifestBuilder,
-    PROVIDER_ADVERT_VERSION_V1, PathDiversityPolicy, PinPolicy, ProfileId,
+    ManifestV1, PROVIDER_ADVERT_VERSION_V1, PathDiversityPolicy, PinPolicy, ProfileId,
     ProviderAdmissionEnvelopeV1, ProviderAdmissionProposalV1, ProviderAdvertBodyV1,
     ProviderAdvertV1, ProviderCapabilityRangeV1, QosHints, RendezvousTopic, SignatureAlgorithm,
     StakePointer, StorageClass as ManifestStorageClass, StreamBudgetV1, TransportHintV1,
@@ -1456,6 +1459,100 @@ fn create_successor_manifest(
     )
 }
 
+fn registry_storage_class_from_manifest(class: ManifestStorageClass) -> RegistryStorageClass {
+    match class {
+        ManifestStorageClass::Hot => RegistryStorageClass::Hot,
+        ManifestStorageClass::Warm => RegistryStorageClass::Warm,
+        ManifestStorageClass::Cold => RegistryStorageClass::Cold,
+    }
+}
+
+fn chunker_handle_for_manifest(manifest: &ManifestV1) -> ChunkerProfileHandle {
+    ChunkerProfileHandle {
+        profile_id: manifest.chunking.profile_id.0,
+        namespace: manifest.chunking.namespace.clone(),
+        name: manifest.chunking.name.clone(),
+        semver: manifest.chunking.semver.clone(),
+        multihash_code: manifest.chunking.multihash_code,
+    }
+}
+
+fn seed_paid_pin_record_for_storage_manifest(
+    harness: &ToriiHarness,
+    manifest: &ManifestV1,
+    payload: &[u8],
+    next_height: &mut u64,
+) {
+    let authority = random_authority();
+    ensure_authority_registered(harness, &authority, next_height);
+
+    let plan =
+        CarBuildPlan::single_file_with_profile(payload, sorafs_chunker::ChunkProfile::DEFAULT)
+            .expect("derive storage pin chunk plan");
+    let manifest_digest_value = manifest
+        .digest()
+        .expect("compute manifest digest for paid pin seed");
+    let manifest_digest = RegistryManifestDigest::new(*manifest_digest_value.as_bytes());
+    let policy = RegistryPinPolicy {
+        min_replicas: manifest.pin_policy.min_replicas,
+        storage_class: registry_storage_class_from_manifest(manifest.pin_policy.storage_class),
+        retention_epoch: manifest.pin_policy.retention_epoch,
+    };
+    let amount_nano = harness
+        .state
+        .view()
+        .world()
+        .sorafs_pricing()
+        .public_pin_fee_nano(
+            policy.storage_class,
+            plan.content_length,
+            policy.min_replicas,
+            5,
+            policy.retention_epoch,
+        );
+    let mut record = PinManifestRecord::new(
+        manifest_digest,
+        chunker_handle_for_manifest(manifest),
+        compute_chunk_plan_digest_sha3(&plan.chunks),
+        policy,
+        authority.account.clone(),
+        5,
+        None,
+        None,
+        Metadata::default(),
+    )
+    .with_content_length(plan.content_length);
+    record.record_pin_fee_payment(PinFeePayment {
+        paid_by: authority.account.clone(),
+        fee_asset_id: harness.state.gov.sorafs_pin_fee_asset_id.clone(),
+        treasury_account_id: harness.state.gov.sorafs_pin_fee_treasury_account.clone(),
+        amount_nano,
+    });
+    record.approve(5, None);
+
+    let prev_hash = harness
+        .state
+        .view()
+        .latest_block()
+        .map(|block| block.hash());
+    let header = BlockHeader::new(
+        NonZeroU64::new(*next_height).expect("block height fits into NonZeroU64"),
+        prev_hash,
+        None,
+        None,
+        *next_height,
+        0,
+    );
+    let mut block = harness.state.block(header);
+    let mut tx = block.transaction();
+    tx.world_mut_for_testing()
+        .pin_manifests_mut_for_testing()
+        .insert(manifest_digest, record);
+    tx.apply();
+    block.commit().expect("commit paid pin registry seed block");
+    *next_height += 1;
+}
+
 fn ensure_authority_registered(
     harness: &ToriiHarness,
     authority: &AuthorityCreds,
@@ -1463,6 +1560,16 @@ fn ensure_authority_registered(
 ) {
     let view = harness.state.view();
     let account_exists = view.world().accounts().get(&authority.account).is_some();
+    let fee_asset_id = harness.state.gov.sorafs_pin_fee_asset_id.clone();
+    let treasury = harness.state.gov.sorafs_pin_fee_treasury_account.clone();
+    let treasury_exists = view.world().accounts().get(&treasury).is_some();
+    let fee_asset_exists = view
+        .world()
+        .asset_definitions()
+        .get(&fee_asset_id)
+        .is_some();
+    let authority_fee_asset = dm::AssetId::new(fee_asset_id.clone(), authority.account.clone());
+    let fee_balance_exists = view.world().assets().get(&authority_fee_asset).is_some();
     let permissions = view.world().account_permissions().get(&authority.account);
     let has_register = permissions.as_ref().is_some_and(|perms| {
         perms
@@ -1474,7 +1581,13 @@ fn ensure_authority_registered(
             .iter()
             .any(|perm| perm.name() == "CanApproveSorafsPin")
     });
-    if account_exists && has_register && has_approve {
+    if account_exists
+        && has_register
+        && has_approve
+        && treasury_exists
+        && fee_asset_exists
+        && fee_balance_exists
+    {
         return;
     }
     drop(view);
@@ -1500,6 +1613,42 @@ fn ensure_authority_registered(
         let (account_id, account_value) = account.into_key_value();
         tx.world_mut_for_testing()
             .insert_account_for_testing(account_id, account_value);
+    }
+
+    if !treasury_exists {
+        let account = dm::Account::new(treasury.clone()).build(&authority.account);
+        let (account_id, account_value) = account.into_key_value();
+        tx.world_mut_for_testing()
+            .insert_account_for_testing(account_id, account_value);
+    }
+
+    if let Some(domain_id) = fee_asset_id.try_domain().cloned()
+        && tx.world().domains().get(&domain_id).is_none()
+    {
+        dm::Register::domain(dm::Domain::new(domain_id))
+            .execute(&authority.account, &mut tx)
+            .expect("register SoraFS fee asset domain");
+    }
+
+    if !fee_asset_exists {
+        let definition = dm::AssetDefinition::numeric(fee_asset_id.clone()).with_name(
+            fee_asset_id
+                .try_name()
+                .map(ToString::to_string)
+                .unwrap_or_else(|| "xor".to_owned()),
+        );
+        dm::Register::asset_definition(definition)
+            .execute(&authority.account, &mut tx)
+            .expect("register SoraFS fee asset definition");
+    }
+
+    if !fee_balance_exists {
+        dm::Mint::asset_numeric(
+            dm::Numeric::new(10_000_000_000_000_u128, 0),
+            dm::AssetId::new(fee_asset_id, authority.account.clone()),
+        )
+        .execute(&authority.account, &mut tx)
+        .expect("mint SoraFS fee balance for test authority");
     }
 
     if !has_register {
@@ -1872,6 +2021,8 @@ async fn sorafs_storage_endpoints_round_trip() {
         .expect("manifest");
     let manifest_digest = manifest.digest().expect("manifest digest");
     let manifest_digest_hex = hex::encode(manifest_digest.as_bytes());
+    let mut next_height = 1;
+    seed_paid_pin_record_for_storage_manifest(&harness, &manifest, payload, &mut next_height);
 
     let manifest_b64 = base64::engine::general_purpose::STANDARD
         .encode(to_bytes(&manifest).expect("encode manifest"));
@@ -2180,6 +2331,8 @@ async fn sorafs_storage_pin_uses_configured_torii_body_limit() {
         .pin_policy(PinPolicy::default())
         .build()
         .expect("manifest");
+    let mut next_height = 1;
+    seed_paid_pin_record_for_storage_manifest(&harness, &manifest, &payload, &mut next_height);
 
     let pin_body = {
         let mut map = json::Map::new();
@@ -3066,6 +3219,7 @@ async fn sorafs_pin_manifest_returns_service_unavailable_for_stale_alias() {
     let list_request = Request::builder()
         .method("GET")
         .uri("/v1/sorafs/pin")
+        .header("accept", "application/json")
         .body(Body::empty())
         .expect("build list request");
     let list_response = harness
@@ -3413,6 +3567,7 @@ async fn sorafs_alias_listing_reports_successor_refusal() {
     let list_request = Request::builder()
         .method("GET")
         .uri("/v1/sorafs/pin")
+        .header("accept", "application/json")
         .body(Body::empty())
         .expect("build alias list request");
     let list_response = harness
@@ -3506,6 +3661,7 @@ async fn fetch_alias_entry(harness: &ToriiHarness, alias_label: &str) -> json::V
     let list_request = Request::builder()
         .method("GET")
         .uri("/v1/sorafs/pin")
+        .header("accept", "application/json")
         .body(Body::empty())
         .expect("build alias list request");
     let list_response = harness

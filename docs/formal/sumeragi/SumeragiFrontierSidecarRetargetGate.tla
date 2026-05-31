@@ -148,11 +148,14 @@ Init ==
   checked = 0
 
 Next ==
-  UNCHANGED vars
+  \/ /\ checked < 27
+     /\ checked' = checked + 1
+  \/ /\ checked = 27
+     /\ UNCHANGED vars
 
 TypeInvariant ==
   /\ Bug \in Bugs
-  /\ checked \in 0..1
+  /\ checked \in 0..27
 
 OverrideReasonSafety ==
   /\ OverrideVoteRosterAccepted
@@ -200,5 +203,60 @@ SafetyFast ==
   /\ TrackedRetargetSafety
   /\ UntrackedSeedSafety
   /\ ReacquireSafety
+
+OverrideReasonAnchors ==
+  /\ OverrideReasonSafety
+  /\ OverrideVoteRosterAccepted
+  /\ OverrideDeferredVoteRosterAccepted
+  /\ OverrideIdleReacquireAccepted
+  /\ OverrideCommitPipelineAccepted
+  /\ GenericReasonRejected
+
+RetargetGateAnchors ==
+  /\ RetargetGateSafety
+  /\ GateAllowsCertifiedSidecar
+  /\ GateAllowsProgressChanged
+  /\ GateRejectsQuarantined
+  /\ GateRejectsStallWithoutOverride
+  /\ GateRejectsNoProgressChange
+
+ConfirmationAnchors ==
+  /\ ConfirmationSafety
+  /\ ConfirmLocalPayloadAccepted
+  /\ ConfirmCommitQcAccepted
+  /\ ConfirmOverrideAccepted
+  /\ UnconfirmedSidecarRejected
+
+TrackedRetargetAnchors ==
+  /\ TrackedRetargetSafety
+  /\ TrackedConfirmedRetargetAccepted
+  /\ TrackedNonFrontierRejected
+  /\ TrackedUnconfirmedRejected
+  /\ TrackedNoGateRejected
+
+UntrackedSeedAnchors ==
+  /\ UntrackedSeedSafety
+  /\ UntrackedConfirmedSeedAccepted
+  /\ UntrackedNonFrontierRejected
+  /\ UntrackedUnconfirmedRejected
+  /\ UntrackedNoGateRejected
+
+ReacquireAnchors ==
+  /\ ReacquireSafety
+  /\ ReacquireCommitCertifiedWithLocalEvidenceAccepted
+  /\ ReacquireRejectsLocalEvidenceWithoutCommitQc
+  /\ ReacquireRejectsMissingExpectedHash
+  /\ ReacquireRejectsSidecarSameHash
+  /\ ReacquireRejectsAuthoritativePayload
+
+FrontierSidecarRetargetSafetyAnchors ==
+  /\ OverrideReasonAnchors
+  /\ RetargetGateAnchors
+  /\ ConfirmationAnchors
+  /\ TrackedRetargetAnchors
+  /\ UntrackedSeedAnchors
+  /\ ReacquireAnchors
+
+Safety == FrontierSidecarRetargetSafetyAnchors
 
 ====

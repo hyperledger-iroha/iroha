@@ -7,10 +7,8 @@ import org.hyperledger.iroha.sdk.crypto.KeyProviderMetadata
 /**
  * Facade over the Android Keystore (and StrongBox) primitives.
  *
- * This abstraction allows the desktop JVM build to compile without depending on the Android SDK
- * while enabling platform-specific backends in instrumentation builds. The default implementation
- * will land alongside the Android integration and will delegate to `android.security.keystore`
- * APIs.
+ * This abstraction keeps key-provider logic testable while `SystemAndroidKeystoreBackend`
+ * delegates to `android.security.keystore` APIs on Android runtimes.
  */
 interface KeystoreBackend {
 

@@ -4,6 +4,9 @@
 package org.hyperledger.iroha.norito;
 
 import java.io.ByteArrayOutputStream;
+import java.nio.ByteBuffer;
+import java.nio.charset.CharacterCodingException;
+import java.nio.charset.CodingErrorAction;
 import java.nio.charset.StandardCharsets;
 import java.util.ArrayList;
 import java.util.List;
@@ -149,6 +152,183 @@ final class NoritoAoS {
     return rows;
   }
 
+  static byte[] encodeU64OptionalStringBool(List<NoritoColumnar.OptionalStringBoolRow> rows) {
+    ByteArrayOutputStream out = new ByteArrayOutputStream();
+    writeVarint(out, rows.size());
+    out.write(VERSION);
+    for (NoritoColumnar.OptionalStringBoolRow row : rows) {
+      writeLong(out, row.id());
+      String value = row.value();
+      if (value == null) {
+        out.write(0);
+      } else {
+        out.write(1);
+        byte[] data = value.getBytes(StandardCharsets.UTF_8);
+        writeVarint(out, data.length);
+        out.writeBytes(data);
+      }
+      out.write(row.flag() ? 1 : 0);
+    }
+    return out.toByteArray();
+  }
+
+  static List<NoritoColumnar.OptionalStringBoolRow> decodeU64OptionalStringBool(byte[] body) {
+    Varint.DecodeResult lenRes = Varint.decode(body, 0);
+    int length = (int) lenRes.value();
+    int offset = lenRes.nextOffset();
+    int version = body[offset++] & 0xFF;
+    if (version != VERSION) {
+      throw new IllegalArgumentException("Unsupported AoS version byte: " + version);
+    }
+    List<NoritoColumnar.OptionalStringBoolRow> rows = new ArrayList<>(length);
+    for (int i = 0; i < length; i++) {
+      if (offset + 8 > body.length) {
+        throw new IllegalArgumentException("AoS optional string payload truncated (id)");
+      }
+      long id = readLong(body, offset);
+      offset += 8;
+      if (offset >= body.length) {
+        throw new IllegalArgumentException("AoS optional string payload truncated (presence)");
+      }
+      int present = body[offset++] & 0xFF;
+      String value;
+      if (present == 0) {
+        value = null;
+      } else if (present == 1) {
+        Varint.DecodeResult lenVal = Varint.decode(body, offset);
+        int dataLen = (int) lenVal.value();
+        offset = lenVal.nextOffset();
+        if (offset + dataLen > body.length) {
+          throw new IllegalArgumentException("AoS optional string row exceeds payload bounds");
+        }
+        value = decodeUtf8Strict(body, offset, offset + dataLen);
+        offset += dataLen;
+      } else {
+        throw new IllegalArgumentException("Invalid presence flag in AoS optional string payload");
+      }
+      if (offset >= body.length) {
+        throw new IllegalArgumentException("AoS optional string payload truncated (flag)");
+      }
+      boolean flag = (body[offset++] & 0xFF) != 0;
+      rows.add(new NoritoColumnar.OptionalStringBoolRow(id, value, flag));
+    }
+    if (offset != body.length) {
+      throw new IllegalArgumentException("Trailing bytes after AoS optional string decode");
+    }
+    return rows;
+  }
+
+  static byte[] encodeU64OptionalU32Bool(List<NoritoColumnar.OptionalU32BoolRow> rows) {
+    ByteArrayOutputStream out = new ByteArrayOutputStream();
+    writeVarint(out, rows.size());
+    out.write(VERSION);
+    for (NoritoColumnar.OptionalU32BoolRow row : rows) {
+      writeLong(out, row.id());
+      Long value = row.value();
+      if (value == null) {
+        out.write(0);
+      } else {
+        out.write(1);
+        writeU32(out, value);
+      }
+      out.write(row.flag() ? 1 : 0);
+    }
+    return out.toByteArray();
+  }
+
+  static List<NoritoColumnar.OptionalU32BoolRow> decodeU64OptionalU32Bool(byte[] body) {
+    Varint.DecodeResult lenRes = Varint.decode(body, 0);
+    int length = (int) lenRes.value();
+    int offset = lenRes.nextOffset();
+    int version = body[offset++] & 0xFF;
+    if (version != VERSION) {
+      throw new IllegalArgumentException("Unsupported AoS version byte: " + version);
+    }
+    List<NoritoColumnar.OptionalU32BoolRow> rows = new ArrayList<>(length);
+    for (int i = 0; i < length; i++) {
+      if (offset + 8 > body.length) {
+        throw new IllegalArgumentException("AoS optional u32 payload truncated (id)");
+      }
+      long id = readLong(body, offset);
+      offset += 8;
+      if (offset >= body.length) {
+        throw new IllegalArgumentException("AoS optional u32 payload truncated (presence)");
+      }
+      int present = body[offset++] & 0xFF;
+      Long value;
+      if (present == 0) {
+        value = null;
+      } else if (present == 1) {
+        if (offset + 4 > body.length) {
+          throw new IllegalArgumentException("AoS optional u32 payload truncated (value)");
+        }
+        value = Integer.toUnsignedLong(readU32(body, offset));
+        offset += 4;
+      } else {
+        throw new IllegalArgumentException("Invalid presence flag in AoS optional u32 payload");
+      }
+      if (offset >= body.length) {
+        throw new IllegalArgumentException("AoS optional u32 payload truncated (flag)");
+      }
+      boolean flag = (body[offset++] & 0xFF) != 0;
+      rows.add(new NoritoColumnar.OptionalU32BoolRow(id, value, flag));
+    }
+    if (offset != body.length) {
+      throw new IllegalArgumentException("Trailing bytes after AoS optional u32 decode");
+    }
+    return rows;
+  }
+
+  static byte[] encodeU64BytesBool(List<NoritoColumnar.BytesBoolRow> rows) {
+    ByteArrayOutputStream out = new ByteArrayOutputStream();
+    writeVarint(out, rows.size());
+    out.write(VERSION);
+    for (NoritoColumnar.BytesBoolRow row : rows) {
+      writeLong(out, row.id());
+      byte[] data = row.data();
+      writeVarint(out, data.length);
+      out.writeBytes(data);
+      out.write(row.flag() ? 1 : 0);
+    }
+    return out.toByteArray();
+  }
+
+  static List<NoritoColumnar.BytesBoolRow> decodeU64BytesBool(byte[] body) {
+    Varint.DecodeResult lenRes = Varint.decode(body, 0);
+    int length = (int) lenRes.value();
+    int offset = lenRes.nextOffset();
+    int version = body[offset++] & 0xFF;
+    if (version != VERSION) {
+      throw new IllegalArgumentException("Unsupported AoS version byte: " + version);
+    }
+    List<NoritoColumnar.BytesBoolRow> rows = new ArrayList<>(length);
+    for (int i = 0; i < length; i++) {
+      if (offset + 8 > body.length) {
+        throw new IllegalArgumentException("AoS bytes bool payload truncated (id)");
+      }
+      long id = readLong(body, offset);
+      offset += 8;
+      Varint.DecodeResult lenVal = Varint.decode(body, offset);
+      int dataLen = (int) lenVal.value();
+      offset = lenVal.nextOffset();
+      if (offset + dataLen > body.length) {
+        throw new IllegalArgumentException("AoS bytes bool row exceeds payload bounds");
+      }
+      byte[] data = new byte[dataLen];
+      System.arraycopy(body, offset, data, 0, dataLen);
+      offset += dataLen;
+      if (offset >= body.length) {
+        throw new IllegalArgumentException("AoS bytes bool payload truncated (flag)");
+      }
+      boolean flag = (body[offset++] & 0xFF) != 0;
+      rows.add(new NoritoColumnar.BytesBoolRow(id, data, flag));
+    }
+    if (offset != body.length) {
+      throw new IllegalArgumentException("Trailing bytes after AoS bytes bool decode");
+    }
+    return rows;
+  }
+
   static byte[] encodeU64EnumBool(List<NoritoColumnar.EnumBoolRow> rows) {
     ByteArrayOutputStream out = new ByteArrayOutputStream();
     // Historical enum AoS layout omits the version byte to preserve golden payloads.
@@ -240,6 +420,19 @@ final class NoritoAoS {
     out.write((int) ((value >>> 8) & 0xFF));
     out.write((int) ((value >>> 16) & 0xFF));
     out.write((int) ((value >>> 24) & 0xFF));
+  }
+
+  private static String decodeUtf8Strict(byte[] bytes, int start, int end) {
+    try {
+      return StandardCharsets.UTF_8
+          .newDecoder()
+          .onMalformedInput(CodingErrorAction.REPORT)
+          .onUnmappableCharacter(CodingErrorAction.REPORT)
+          .decode(ByteBuffer.wrap(bytes, start, end - start))
+          .toString();
+    } catch (CharacterCodingException ex) {
+      throw new IllegalArgumentException("Invalid UTF-8 in AoS string payload", ex);
+    }
   }
 
   private static long readLong(byte[] data, int offset) {

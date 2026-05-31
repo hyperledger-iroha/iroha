@@ -257,6 +257,9 @@ enum Command {
     /// Ledger data and transaction helpers
     #[command(subcommand)]
     Ledger(ledger::Command),
+    /// Read, write, and execute triggers
+    #[command(subcommand)]
+    Trigger(crate::trigger::Command),
     /// Node and operator helpers
     #[command(subcommand)]
     Ops(ops::Command),
@@ -536,6 +539,7 @@ impl Run for Command {
             Account(variant) => Run::run(variant, context),
             Tx(variant) => Run::run(variant, context),
             Ledger(variant) => Run::run(variant, context),
+            Trigger(variant) => Run::run(variant, context),
             Ops(variant) => Run::run(variant, context),
             App(variant) => Run::run(variant, context),
             Contract(variant) => Run::run(variant, context),
@@ -554,6 +558,7 @@ impl Command {
             Self::Account(_)
             | Self::Tx(_)
             | Self::Ledger(_)
+            | Self::Trigger(_)
             | Self::Ops(_)
             | Self::Contract(_)
             | Self::Taira(_) => false,
@@ -5201,6 +5206,17 @@ mod trigger {
         Mint(IdInt),
         /// Decrease the number of trigger executions
         Burn(IdInt),
+        /// Enable a trigger by setting metadata key `__enabled=true`
+        Enable(TriggerIdArg),
+        /// Disable a trigger by setting metadata key `__enabled=false`
+        Disable(TriggerIdArg),
+        /// Execute a by-call trigger with optional JSON arguments
+        Execute(Execute),
+        /// Inspect trigger declaration and optional live completion evidence
+        Inspect(Inspect),
+        /// Collect or watch trigger completion events
+        #[command(subcommand)]
+        Completed(Completed),
         /// Read and write metadata
         #[command(subcommand)]
         Meta(metadata::trigger::Command),
@@ -5245,6 +5261,11 @@ mod trigger {
                         .finish([instruction])
                         .wrap_err("Failed to burn trigger repetitions")
                 }
+                Enable(args) => set_trigger_enabled(context, args.id, true),
+                Disable(args) => set_trigger_enabled(context, args.id, false),
+                Execute(args) => args.run(context),
+                Inspect(args) => args.run(context),
+                Completed(cmd) => cmd.run(context),
                 Meta(cmd) => cmd.run(context),
             }
         }
@@ -5252,8 +5273,11 @@ mod trigger {
 
     #[derive(clap::Subcommand, Debug)]
     pub enum List {
-        /// List all trigger IDs
+        /// List registered trigger IDs
         All {
+            /// Only list active trigger IDs
+            #[arg(long)]
+            active: bool,
             /// Maximum number of items to return (server-side limit)
             #[arg(long)]
             limit: Option<u64>,
@@ -5271,24 +5295,46 @@ mod trigger {
             let client = context.client_from_config();
             match self {
                 List::All {
+                    active,
                     limit,
                     offset,
                     fetch_size,
                 } => {
-                    let mut builder = client.query(FindActiveTriggerIds);
-                    if limit.is_some() || offset > 0 {
-                        let pagination = iroha::data_model::query::parameters::Pagination::new(
-                            limit.and_then(NonZeroU64::new),
-                            offset,
-                        );
-                        builder = builder.with_pagination(pagination);
+                    if active {
+                        let mut builder = client.query(FindActiveTriggerIds);
+                        if limit.is_some() || offset > 0 {
+                            let pagination = iroha::data_model::query::parameters::Pagination::new(
+                                limit.and_then(NonZeroU64::new),
+                                offset,
+                            );
+                            builder = builder.with_pagination(pagination);
+                        }
+                        if let Some(n) = fetch_size.and_then(NonZeroU64::new) {
+                            let fs = iroha::data_model::query::parameters::FetchSize::new(Some(n));
+                            builder = builder.with_fetch_size(fs);
+                        }
+                        let ids = builder.execute_all()?;
+                        context.print_data(&ids)
+                    } else {
+                        let mut builder = client.query(FindTriggers);
+                        if limit.is_some() || offset > 0 {
+                            let pagination = iroha::data_model::query::parameters::Pagination::new(
+                                limit.and_then(NonZeroU64::new),
+                                offset,
+                            );
+                            builder = builder.with_pagination(pagination);
+                        }
+                        if let Some(n) = fetch_size.and_then(NonZeroU64::new) {
+                            let fs = iroha::data_model::query::parameters::FetchSize::new(Some(n));
+                            builder = builder.with_fetch_size(fs);
+                        }
+                        let triggers = builder.execute_all()?;
+                        let ids: Vec<_> = triggers
+                            .into_iter()
+                            .map(|trigger| trigger.id().clone())
+                            .collect();
+                        context.print_data(&ids)
                     }
-                    if let Some(n) = fetch_size.and_then(NonZeroU64::new) {
-                        let fs = iroha::data_model::query::parameters::FetchSize::new(Some(n));
-                        builder = builder.with_fetch_size(fs);
-                    }
-                    let ids = builder.execute_all()?;
-                    context.print_data(&ids)
                 }
             }
         }
@@ -5309,6 +5355,360 @@ mod trigger {
         /// Amount of change (integer)
         #[arg(short, long)]
         pub repetitions: u32,
+    }
+
+    #[derive(clap::Args, Debug)]
+    pub struct TriggerIdArg {
+        /// Trigger name
+        pub id: TriggerId,
+    }
+
+    fn set_trigger_enabled<C: RunContext>(
+        context: &mut C,
+        id: TriggerId,
+        enabled: bool,
+    ) -> Result<()> {
+        let key: Name = "__enabled"
+            .parse()
+            .wrap_err("failed to construct trigger enabled metadata key")?;
+        let instruction = iroha::data_model::isi::SetKeyValue::trigger(id, key, Json::from(enabled));
+        context
+            .finish([instruction])
+            .wrap_err("Failed to set trigger enabled metadata")
+    }
+
+    #[derive(clap::Args, Debug)]
+    pub struct Execute {
+        /// Trigger name
+        pub id: TriggerId,
+        /// JSON object passed as trigger execution arguments
+        #[arg(long, default_value = "{}")]
+        pub args_json: String,
+        /// Include runtime completion and pipeline diagnostics from Torii after finality.
+        #[arg(long)]
+        pub trace: bool,
+        #[command(flatten)]
+        pub wait: TransactionWaitArgs,
+    }
+
+    impl Execute {
+        fn run<C: RunContext>(self, context: &mut C) -> Result<()> {
+            let args: norito::json::Value = crate::parse_json(&self.args_json)
+                .wrap_err("Failed to parse --args-json as JSON")?;
+            let instruction =
+                iroha::data_model::isi::ExecuteTrigger::new(self.id.clone()).with_args(args);
+            let executable = Executable::Instructions(vec![InstructionBox::from(instruction)].into());
+            let metadata = context.transaction_metadata().cloned().unwrap_or_default();
+            validate_executable_metadata(&executable, &metadata)?;
+            let client = context.client_from_config();
+            let transaction = client.build_transaction(executable, metadata);
+            let hash = transaction.hash();
+            client
+                .submit_transaction(&transaction)
+                .wrap_err("Failed to submit trigger execution transaction")?;
+
+            let mut pairs = vec![
+                ("hash", json_utils::json_value(&hash)?),
+                ("trigger_id", json_utils::json_value(&self.id)?),
+                ("transaction", json_utils::json_value(&transaction)?),
+                ("trace_requested", json_utils::json_value(&self.trace)?),
+            ];
+            if self.wait.is_enabled() {
+                let status = wait_for_transaction_status(&client, hash, &self.wait)?;
+                pairs.push(("finalized", json_utils::json_value(&true)?));
+                pairs.push(("terminal_kind", json_utils::json_value(&status.terminal_kind)?));
+                pairs.push(("attempts", json_utils::json_value(&status.attempts)?));
+                pairs.push(("elapsed_ms", json_utils::json_value(&status.elapsed_ms)?));
+                pairs.push(("block_height", json_utils::json_value(&status.block_height)?));
+                pairs.push((
+                    "rejection_reason",
+                    json_utils::json_value(&status.rejection_reason)?,
+                ));
+                pairs.push(("scope", json_utils::json_value(&status.scope)?));
+                pairs.push(("resolved_from", json_utils::json_value(&status.resolved_from)?));
+                pairs.push(("summary", json_utils::json_value(&status.summary)?));
+                pairs.push(("diagnostics", json_utils::json_value(&status.diagnostics)?));
+                pairs.push((
+                    "trigger_completions",
+                    json_utils::json_value(&status.trigger_completions)?,
+                ));
+                if self.trace {
+                    let trace = if let Some(height) = status.block_height {
+                        let completions = client.get_trigger_completions(
+                            Some(&self.id.to_string()),
+                            None,
+                            Some("all"),
+                            Some(height),
+                            Some(height),
+                            Some(100),
+                            Some(1),
+                        )?;
+                        norito::json!({
+                            "mode": "committed_trigger_completion",
+                            "pipeline": (status.r#final.clone()),
+                            "completion_query": (completions),
+                        })
+                    } else {
+                        norito::json!({
+                            "mode": "pipeline_status",
+                            "pipeline": (status.r#final.clone()),
+                            "completion_query": null,
+                        })
+                    };
+                    pairs.push(("trace", trace));
+                }
+                pairs.push(("final", json_utils::json_value(&status.r#final)?));
+            } else {
+                pairs.push(("finalized", json_utils::json_value(&false)?));
+                if self.trace {
+                    pairs.push((
+                        "trace",
+                        norito::json!({
+                            "mode": "submit_only",
+                            "message": "trace hydration requires waiting for finality",
+                        }),
+                    ));
+                }
+            }
+            let response = json_utils::json_object(pairs)?;
+            context.print_data(&response)
+        }
+    }
+
+    #[derive(clap::Subcommand, Debug)]
+    pub enum Completed {
+        /// List matching trigger completions from committed block history.
+        List(CompletedList),
+        /// Stream matching trigger completion events until interrupted, timed out, or limited.
+        Watch(CompletedWatch),
+    }
+
+    impl Completed {
+        fn run<C: RunContext>(self, context: &mut C) -> Result<()> {
+            match self {
+                Self::List(args) => args.run(context),
+                Self::Watch(args) => args.run(context),
+            }
+        }
+    }
+
+    #[derive(ValueEnum, Debug, Clone, Copy, PartialEq, Eq)]
+    pub enum CompletedOutcomeArg {
+        All,
+        Success,
+        Failure,
+    }
+
+    impl CompletedOutcomeArg {
+        fn as_str(self) -> &'static str {
+            match self {
+                Self::All => "all",
+                Self::Success => "success",
+                Self::Failure => "failure",
+            }
+        }
+
+        fn apply(
+            self,
+            filter: iroha::data_model::events::trigger_completed::TriggerCompletedEventFilter,
+        ) -> iroha::data_model::events::trigger_completed::TriggerCompletedEventFilter {
+            use iroha::data_model::events::trigger_completed::TriggerCompletedOutcomeType;
+            match self {
+                Self::All => filter,
+                Self::Success => filter.for_outcome(TriggerCompletedOutcomeType::Success),
+                Self::Failure => filter.for_outcome(TriggerCompletedOutcomeType::Failure),
+            }
+        }
+    }
+
+    #[derive(clap::Args, Debug)]
+    pub struct CompletedList {
+        /// Optional trigger ID filter.
+        #[arg(long)]
+        pub id: Option<TriggerId>,
+        /// Optional completion outcome filter.
+        #[arg(long, value_enum, default_value_t = CompletedOutcomeArg::All)]
+        pub outcome: CompletedOutcomeArg,
+        /// Maximum completion records to return.
+        #[arg(long, default_value_t = 10)]
+        pub limit: u64,
+        /// First block height to scan. Defaults to the recent bounded window.
+        #[arg(long)]
+        pub from_height: Option<u64>,
+        /// Last block height to scan. Defaults to the current committed height.
+        #[arg(long)]
+        pub to_height: Option<u64>,
+        /// Maximum number of recent blocks to scan when --from-height is omitted.
+        #[arg(long, default_value_t = 1_000)]
+        pub scan_limit_blocks: u64,
+        /// Deprecated compatibility flag; `list` is historical and does not wait.
+        #[arg(long, hide = true)]
+        pub timeout_ms: Option<u64>,
+    }
+
+    #[derive(clap::Args, Debug)]
+    pub struct CompletedWatch {
+        /// Optional trigger ID filter.
+        #[arg(long)]
+        pub id: Option<TriggerId>,
+        /// Optional completion outcome filter.
+        #[arg(long, value_enum, default_value_t = CompletedOutcomeArg::All)]
+        pub outcome: CompletedOutcomeArg,
+        /// Optional maximum events to emit before returning.
+        #[arg(long)]
+        pub limit: Option<u64>,
+        /// Optional maximum live-stream watch time.
+        #[arg(long)]
+        pub timeout_ms: Option<u64>,
+    }
+
+    impl CompletedList {
+        fn run<C: RunContext>(self, context: &mut C) -> Result<()> {
+            let client = context.client_from_config();
+            let trigger_id = self.id.as_ref().map(ToString::to_string);
+            let response = client.get_trigger_completions(
+                trigger_id.as_deref(),
+                None,
+                Some(self.outcome.as_str()),
+                self.from_height,
+                self.to_height,
+                Some(self.limit),
+                Some(self.scan_limit_blocks),
+            )?;
+            context.print_data(&response)
+        }
+    }
+
+    impl CompletedWatch {
+        fn run<C: RunContext>(self, context: &mut C) -> Result<()> {
+            let filter = completed_filter(self.id, self.outcome);
+            let timeout = self.timeout_ms.map(Duration::from_millis);
+            if timeout.is_none() && self.limit.is_none() {
+                let client = context.client_from_config();
+                client
+                    .listen_for_events([filter])
+                    .wrap_err("Failed to listen for trigger completion events")?
+                    .try_for_each(|event| {
+                        if let iroha::data_model::events::EventBox::TriggerCompleted(event) =
+                            event?
+                        {
+                            context.print_data(&event)?;
+                        }
+                        Ok::<(), eyre::Report>(())
+                    })?;
+                return Ok(());
+            }
+            let events = collect_completed_events(context, filter, timeout, self.limit)?;
+            for event in events {
+                context.print_data(&event)?;
+            }
+            Ok(())
+        }
+    }
+
+    #[derive(clap::Args, Debug)]
+    pub struct Inspect {
+        /// Trigger name.
+        pub id: TriggerId,
+        /// Also collect recent live completion evidence for this duration.
+        #[arg(long, default_value_t = 0)]
+        pub completion_timeout_ms: u64,
+        /// Maximum live completion events to include when completion collection is enabled.
+        #[arg(long, default_value_t = 5)]
+        pub completion_limit: u64,
+    }
+
+    impl Inspect {
+        fn run<C: RunContext>(self, context: &mut C) -> Result<()> {
+            let client = context.client_from_config();
+            let entry: Trigger = client
+                .query_single(FindTriggerById::new(self.id.clone()))
+                .wrap_err("Failed to get trigger")?;
+            let trigger = trigger_pretty_json(&entry)
+                .wrap_err("Failed to serialise trigger for display")?;
+            let completions = if self.completion_timeout_ms > 0 {
+                collect_completed_events(
+                    context,
+                    completed_filter(Some(self.id.clone()), CompletedOutcomeArg::All),
+                    Some(Duration::from_millis(self.completion_timeout_ms)),
+                    Some(self.completion_limit),
+                )?
+            } else {
+                Vec::new()
+            };
+            let response = json_utils::json_object(vec![
+                ("trigger", trigger),
+                (
+                    "completion_collection",
+                    json_utils::json_object(vec![
+                        (
+                            "enabled",
+                            json_utils::json_value(&(self.completion_timeout_ms > 0))?,
+                        ),
+                        (
+                            "timeout_ms",
+                            json_utils::json_value(&self.completion_timeout_ms)?,
+                        ),
+                        ("limit", json_utils::json_value(&self.completion_limit)?),
+                    ])?,
+                ),
+                ("recent_completions", json_utils::json_value(&completions)?),
+            ])?;
+            context.print_data(&response)
+        }
+    }
+
+    fn completed_filter(
+        id: Option<TriggerId>,
+        outcome: CompletedOutcomeArg,
+    ) -> iroha::data_model::events::EventFilterBox {
+        use iroha::data_model::events::trigger_completed::TriggerCompletedEventFilter;
+        let mut filter = TriggerCompletedEventFilter::new();
+        if let Some(id) = id {
+            filter = filter.for_trigger(id);
+        }
+        iroha::data_model::events::EventFilterBox::TriggerCompleted(outcome.apply(filter))
+    }
+
+    fn collect_completed_events<C: RunContext>(
+        context: &mut C,
+        filter: iroha::data_model::events::EventFilterBox,
+        timeout: Option<Duration>,
+        limit: Option<u64>,
+    ) -> Result<Vec<iroha::data_model::events::trigger_completed::TriggerCompletedEvent>> {
+        let client = context.client_from_config();
+        let rt = Runtime::new().wrap_err("Failed to create runtime")?;
+        rt.block_on(async move {
+            let mut stream = client
+                .listen_for_events_async([filter])
+                .await
+                .wrap_err("Failed to listen for trigger completion events")?;
+            let deadline = timeout.map(|duration| tokio::time::Instant::now() + duration);
+            let mut events = Vec::new();
+            loop {
+                if limit.is_some_and(|limit| events.len() as u64 >= limit) {
+                    break;
+                }
+                let next = if let Some(deadline) = deadline {
+                    if tokio::time::Instant::now() >= deadline {
+                        break;
+                    }
+                    match tokio::time::timeout_at(deadline, stream.try_next()).await {
+                        Ok(result) => result?,
+                        Err(_) => break,
+                    }
+                } else {
+                    stream.try_next().await?
+                };
+                let Some(event) = next else {
+                    break;
+                };
+                if let iroha::data_model::events::EventBox::TriggerCompleted(event) = event {
+                    events.push(event);
+                }
+            }
+            Ok::<_, eyre::Report>(events)
+        })
     }
 
     #[derive(clap::Args, Debug)]
@@ -7864,6 +8264,44 @@ mod tests {
 
         assert!(!status.wait.wait);
         assert!(status.wait.is_enabled());
+    }
+
+    #[test]
+    fn trigger_enable_disable_parse_positional_id() {
+        let args = Args::try_parse_from(["iroha", "trigger", "enable", "soraswap_tick"])
+            .expect("parse trigger enable");
+        let Command::Trigger(trigger::Command::Enable(enable)) = args.command else {
+            panic!("expected trigger enable command");
+        };
+        assert_eq!(enable.id.to_string(), "soraswap_tick");
+
+        let args = Args::try_parse_from(["iroha", "trigger", "disable", "soraswap_tick"])
+            .expect("parse trigger disable");
+        let Command::Trigger(trigger::Command::Disable(disable)) = args.command else {
+            panic!("expected trigger disable command");
+        };
+        assert_eq!(disable.id.to_string(), "soraswap_tick");
+    }
+
+    #[test]
+    fn trigger_list_all_active_parse() {
+        let args =
+            Args::try_parse_from(["iroha", "trigger", "list", "all"]).expect("parse trigger list");
+        let Command::Trigger(trigger::Command::List(trigger::List::All { active, .. })) =
+            args.command
+        else {
+            panic!("expected trigger list all command");
+        };
+        assert!(!active);
+
+        let args = Args::try_parse_from(["iroha", "trigger", "list", "all", "--active"])
+            .expect("parse active trigger list");
+        let Command::Trigger(trigger::Command::List(trigger::List::All { active, .. })) =
+            args.command
+        else {
+            panic!("expected trigger list all --active command");
+        };
+        assert!(active);
     }
 
     #[test]

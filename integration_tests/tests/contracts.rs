@@ -275,7 +275,7 @@ async fn deploy_and_get_contract_manifest_via_torii() -> Result<()> {
 
     // POST /v1/contracts/deploy
     let post_url = client.torii_url.join("/v1/contracts/deploy").unwrap();
-    let http = reqwest::Client::new();
+    let http = integration_tests::http::client();
     let resp = http
         .post(post_url)
         .header("Content-Type", "application/json")
@@ -437,7 +437,7 @@ async fn contract_state_survives_across_calls_in_sora_profile_network() -> Resul
     };
 
     let client = network.client();
-    let http = reqwest::Client::new();
+    let http = integration_tests::http::client();
     network.ensure_blocks(1).await?;
 
     let code_bytes = contract_state_probe_artifact();

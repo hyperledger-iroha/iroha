@@ -5,7 +5,14 @@
 #[tokio::test]
 #[allow(clippy::too_many_lines)]
 async fn sumeragi_phases_endpoint_shape() {
-    use axum::{Router, routing::get};
+    use axum::{
+        Router,
+        http::{
+            HeaderMap,
+            header::{ACCEPT, CONTENT_TYPE},
+        },
+        routing::get,
+    };
     use tower::ServiceExt;
 
     // Seed snapshot values
@@ -30,19 +37,26 @@ async fn sumeragi_phases_endpoint_shape() {
     // Build a tiny router with the phases endpoint handler
     let app = Router::new().route(
         "/v1/sumeragi/phases",
-        get(|| async move { iroha_torii::handle_v1_sumeragi_phases(None).await }),
+        get(|headers: HeaderMap| async move {
+            iroha_torii::handle_v1_sumeragi_phases(headers.get(ACCEPT).cloned()).await
+        }),
     );
 
     let resp = app
         .oneshot(
             axum::http::Request::builder()
                 .uri("/v1/sumeragi/phases")
+                .header(ACCEPT, "application/json")
                 .body(axum::body::Body::empty())
                 .unwrap(),
         )
         .await
         .unwrap();
     assert_eq!(resp.status(), axum::http::StatusCode::OK);
+    assert_eq!(
+        resp.headers().get(CONTENT_TYPE),
+        Some(&axum::http::HeaderValue::from_static("application/json"))
+    );
 
     let body = http_body_util::BodyExt::collect(resp.into_body())
         .await

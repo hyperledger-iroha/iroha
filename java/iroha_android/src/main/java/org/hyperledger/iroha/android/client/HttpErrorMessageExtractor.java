@@ -23,7 +23,7 @@ final class HttpErrorMessageExtractor {
       new TypeAdapter<ErrorDetailsSummary>() {
         @Override
         public void encode(final NoritoEncoder encoder, final ErrorDetailsSummary value) {
-          throw new UnsupportedOperationException("error detail encoding is not supported");
+          NoritoAdapters.option(STRING_ADAPTER).encode(encoder, Optional.ofNullable(value.rejectCode));
         }
 
         @Override

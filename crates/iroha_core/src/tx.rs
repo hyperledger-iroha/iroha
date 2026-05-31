@@ -68,7 +68,7 @@ use crate::{
         extract_authority_domains as extract_directory_authority_domains,
         extract_lane_identity_metadata as extract_directory_lane_identity_metadata,
     },
-    queue::evaluate_policy_with_catalog_and_world,
+    queue::evaluate_policy_with_catalog_and_world_at,
     smartcontracts::{Execute, code, ivm::cache::IvmCache},
     state::{StateBlock, StateReadOnlyWithTransactions, StateTransaction, WorldReadOnly},
 };
@@ -627,6 +627,23 @@ fn decode_private_kaigi_fee_binding(
     })
 }
 
+fn canonical_private_kaigi_fee_transfer_proof(
+    proof_bytes: &[u8],
+) -> Result<Vec<u8>, TransactionRejectionReason> {
+    let mut envelope: OpenVerifyEnvelope =
+        norito::decode_from_bytes(proof_bytes).map_err(|_| {
+            TransactionRejectionReason::Validation(ValidationFail::NotPermitted(
+                "private Kaigi fee spend proof must use OpenVerifyEnvelope payload".into(),
+            ))
+        })?;
+    envelope.aux.clear();
+    norito::to_bytes(&envelope).map_err(|err| {
+        TransactionRejectionReason::Validation(ValidationFail::InternalError(format!(
+            "failed to canonicalize private Kaigi fee spend proof: {err}"
+        )))
+    })
+}
+
 /// Verification failed of some signature due to following reason
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct SignatureVerificationFail {
@@ -941,9 +958,10 @@ fn is_time_sensitive_instruction(instruction: &InstructionBox) -> bool {
         let trigger = &register.object;
         return is_time_sensitive_executable(trigger.action().executable());
     }
-    any.is::<iroha_data_model::isi::offline::IssueOfflineNoteV2>()
-        || any.is::<iroha_data_model::isi::offline::RedeemOfflineNoteV2>()
-        || any.is::<iroha_data_model::isi::offline::AuditOfflineNoteV2>()
+    any.is::<iroha_data_model::isi::offline::IssueOfflineNote>()
+        || any.is::<iroha_data_model::isi::offline::RedeemOfflineNote>()
+        || any.is::<iroha_data_model::isi::offline::AuditOfflineNote>()
+        || any.is::<iroha_data_model::isi::offline::KagemushaTransfer>()
         || any.is::<iroha_data_model::isi::oracle::RecordTwitterBinding>()
         || any.is::<iroha_data_model::isi::social::ClaimTwitterFollowReward>()
         || any.is::<iroha_data_model::isi::social::SendToTwitter>()
@@ -1161,6 +1179,15 @@ pub(crate) fn validate_confidential_policy_admission_for_world(
             validate_confidential_policy_for_action(
                 world,
                 transfer.asset(),
+                block_height,
+                ConfidentialPolicyAdmissionAction::Transfer,
+            )?;
+        } else if let Some(transfer) =
+            any.downcast_ref::<iroha_data_model::isi::offline::KagemushaTransfer>()
+        {
+            validate_confidential_policy_for_action(
+                world,
+                &transfer.asset,
                 block_height,
                 ConfidentialPolicyAdmissionAction::Transfer,
             )?;
@@ -2120,6 +2147,7 @@ impl<'tx> AcceptedTransaction<'tx> {
                 )),
             ));
         }
+        let canonical_fee_proof = canonical_private_kaigi_fee_transfer_proof(&tx.fee_spend.proof)?;
 
         let zk_asset = state_transaction
             .world
@@ -2145,7 +2173,7 @@ impl<'tx> AcceptedTransaction<'tx> {
         })?;
         let mut attachment = ProofAttachment::new_ref(
             backend_ident.clone(),
-            ProofBox::new(backend_ident, tx.fee_spend.proof.clone()),
+            ProofBox::new(backend_ident, canonical_fee_proof),
             vk_binding.id,
         );
         attachment.vk_commitment = Some(vk_binding.commitment);
@@ -3574,12 +3602,13 @@ impl StateBlock<'_> {
             Some(decision) => decision,
             None => {
                 let accepted = AcceptedTransaction::new_unchecked(Cow::Borrowed(tx));
-                evaluate_policy_with_catalog_and_world(
+                evaluate_policy_with_catalog_and_world_at(
                     &state_transaction.nexus.routing_policy,
                     &state_transaction.nexus.lane_catalog,
                     &state_transaction.nexus.dataspace_catalog,
                     &accepted,
                     &state_transaction.world,
+                    state_transaction.block_unix_timestamp_ms(),
                 )
                 .map_err(|err| {
                     TransactionRejectionReason::Validation(ValidationFail::NotPermitted(format!(
@@ -5981,6 +6010,24 @@ pub mod tests {
         (world, authority_id, asset_def_id)
     }
 
+    fn sample_kagemusha_transfer(
+        asset_def_id: AssetDefinitionId,
+    ) -> iroha_data_model::isi::offline::KagemushaTransfer {
+        use iroha_data_model::proof::{ProofAttachment, ProofBox, VerifyingKeyId};
+
+        iroha_data_model::isi::offline::KagemushaTransfer::new(
+            asset_def_id,
+            vec![[0x11; 32]],
+            vec![[0x22; 32]],
+            ProofAttachment::new_ref(
+                "halo2/ipa".into(),
+                ProofBox::new("halo2/ipa".into(), vec![0xCA, 0xFE]),
+                VerifyingKeyId::new("halo2/ipa", "offline-kagemusha-transfer"),
+            ),
+            Some([0x33; 32]),
+        )
+    }
+
     #[test]
     fn confidential_policy_admission_rejects_disabled_shield() {
         let (world, authority_id, asset_def_id) = world_with_convertible_zk_asset(false, true);
@@ -6018,6 +6065,45 @@ pub mod tests {
 
         validate_confidential_policy_admission_for_world(&executable, &world.view(), 1)
             .expect("enabled shield should pass confidential policy admission");
+    }
+
+    #[test]
+    fn confidential_policy_admission_rejects_kagemusha_transfer_for_transparent_only_asset() {
+        let (mut world, authority_id, _key_pair) = world_with_authority("wonderland");
+        let asset_def_id = AssetDefinitionId::new(
+            DomainId::try_new("wonderland", "universal").expect("domain id"),
+            "transparent".parse().expect("asset name"),
+        );
+        let asset_definition = AssetDefinition::numeric(asset_def_id.clone())
+            .with_name(asset_def_id.name().to_string())
+            .build(&authority_id);
+        world
+            .asset_definitions
+            .insert(asset_def_id.clone(), asset_definition);
+        let executable = Executable::Instructions(ConstVec::from(vec![InstructionBox::from(
+            sample_kagemusha_transfer(asset_def_id),
+        )]));
+
+        let err = validate_confidential_policy_admission_for_world(&executable, &world.view(), 1)
+            .expect_err("transparent-only assets must reject Kagemusha shielded transfer");
+
+        match err {
+            TransactionRejectionReason::Validation(ValidationFail::NotPermitted(reason)) => {
+                assert_eq!(reason, "transfer not permitted by policy");
+            }
+            other => panic!("expected policy NotPermitted rejection, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn confidential_policy_admission_allows_kagemusha_transfer_for_convertible_asset() {
+        let (world, _authority_id, asset_def_id) = world_with_convertible_zk_asset(false, false);
+        let executable = Executable::Instructions(ConstVec::from(vec![InstructionBox::from(
+            sample_kagemusha_transfer(asset_def_id),
+        )]));
+
+        validate_confidential_policy_admission_for_world(&executable, &world.view(), 1)
+            .expect("Kagemusha transfer should be admitted as a shielded transfer");
     }
 
     fn world_with_uaid_account(
@@ -7701,6 +7787,53 @@ pub mod tests {
     }
 
     #[test]
+    fn private_kaigi_fee_transfer_proof_canonicalization_strips_only_aux() {
+        let aux = br#"{"schema":"iroha.private_kaigi.fee.v1","action_hash_hex":"abcd","chain_id":"private-kaigi-chain","asset_definition_id":"xor#wonderland","fee_amount":"5"}"#;
+        let envelope = OpenVerifyEnvelope {
+            backend: iroha_data_model::zk::BackendTag::Halo2IpaPasta,
+            circuit_id: crate::zk::confidential_v2::CONFIDENTIAL_TRANSFER_V2_CIRCUIT_ID.to_owned(),
+            vk_hash: [0x42; 32],
+            public_inputs:
+                crate::zk::confidential_v2::CONFIDENTIAL_TRANSFER_V2_PUBLIC_INPUTS_SCHEMA_V1
+                    .to_vec(),
+            proof_bytes: vec![0xCA, 0xFE, 0xBA, 0xBE],
+            aux: aux.to_vec(),
+        };
+        let proof_bytes = norito::to_bytes(&envelope).expect("encode fee envelope");
+
+        let binding =
+            super::decode_private_kaigi_fee_binding(&proof_bytes).expect("binding decodes");
+        assert_eq!(binding.action_hash_hex, "abcd");
+        assert_eq!(binding.chain_id, "private-kaigi-chain");
+        assert_eq!(binding.asset_definition_id, "xor#wonderland");
+        assert_eq!(binding.fee_amount, Numeric::from(5_u32));
+
+        let canonical = super::canonical_private_kaigi_fee_transfer_proof(&proof_bytes)
+            .expect("canonicalize fee proof");
+        let decoded: OpenVerifyEnvelope =
+            norito::decode_from_bytes(&canonical).expect("decode canonical envelope");
+        assert_eq!(decoded.backend, envelope.backend);
+        assert_eq!(decoded.circuit_id, envelope.circuit_id);
+        assert_eq!(decoded.vk_hash, envelope.vk_hash);
+        assert_eq!(decoded.public_inputs, envelope.public_inputs);
+        assert_eq!(decoded.proof_bytes, envelope.proof_bytes);
+        assert!(
+            decoded.aux.is_empty(),
+            "internal ZkTransfer proof must not carry fee-binding aux"
+        );
+
+        let err = super::decode_private_kaigi_fee_binding(&canonical)
+            .expect_err("canonical internal transfer proof should no longer carry fee binding");
+        match err {
+            TransactionRejectionReason::Validation(ValidationFail::NotPermitted(msg)) => assert!(
+                msg.contains("missing binding metadata"),
+                "unexpected message: {msg}"
+            ),
+            other => panic!("unexpected error: {other:?}"),
+        }
+    }
+
+    #[test]
     fn fraud_policy_allows_when_disabled() {
         let cfg = iroha_config::parameters::actual::FraudMonitoring::default();
         let metadata = Metadata::default();
@@ -7926,6 +8059,14 @@ pub mod tests {
         let execute_trigger = iroha_data_model::isi::ExecuteTrigger::new(trigger_id);
         assert!(super::is_time_sensitive_instruction(&InstructionBox::from(
             execute_trigger
+        )));
+
+        let kagemusha_asset = AssetDefinitionId::new(
+            DomainId::try_new("wonderland", "universal").expect("domain id"),
+            "private".parse().expect("asset name"),
+        );
+        assert!(super::is_time_sensitive_instruction(&InstructionBox::from(
+            sample_kagemusha_transfer(kagemusha_asset)
         )));
 
         let log_box = InstructionBox::from(Log::new(Level::INFO, "ok".into()));

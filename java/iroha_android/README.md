@@ -9,7 +9,7 @@ with Iroha nodes.
 This snapshot covers the offline key management façade, Norito encoding backed
 by the shared `norito-java` implementation, the Android Keystore/StrongBox
 backend (with cached attestations + explicit deterministic software providers), and
-scaffolding for network clients. The generated instruction helpers now include
+network client abstractions. The generated instruction helpers now include
 the first dedicated RWA lot builder slice alongside NFT helpers:
 `RegisterRwaInstruction`, `TransferRwaInstruction`,
 `MergeRwasInstruction`, `RedeemRwaInstruction`,
@@ -200,7 +200,7 @@ java/iroha_android
 │   │       │   ├── OfflineToriiClient.java
 │   │       │   ├── OfflineQrStream.java
 │   │       │   ├── OfflineJsonParser.java
-│   │       │   └── OfflineV2Readiness.java
+│   │       │   └── OfflineReadiness.java
 │   │       ├── subscriptions
 │   │       │   ├── SubscriptionPlanCreateRequest.java
 │   │       │   ├── SubscriptionCreateRequest.java
@@ -282,8 +282,8 @@ in sync. Lint and JVM publishing are covered by the default CI task list above, 
 Set `NORITO_JAVA_VERSION=<version>` to exercise a different Norito drop; the manifest guard fails if
 it diverges from `schemas/norito_schema_manifest.json`.
 
-`PlatformHttpTransportExecutor` now prefers the Android OkHttp factory when present (stubbed in core
-tests), falling back to the JDK client elsewhere. The Android module exposes
+`PlatformHttpTransportExecutor` now prefers the Android OkHttp factory when present (substituted in
+core tests), falling back to the JDK client elsewhere. The Android module exposes
 `OkHttpTransportExecutorFactory` for callers that want to reuse a shared `OkHttpClient`.
 
 To keep JVM-only transports out of the Android artefacts, run the guard after producing an AAR:
@@ -460,10 +460,10 @@ and release gates; set `ANDROID_PARITY_SUMMARY=<path>` to override the target
 location or `ANDROID_PARITY_PIPELINE_METADATA=<file>` to embed pipeline/test
 metadata in the summary when running under CI.
 
-The test harness currently executes the key manager, keystore scaffolding (with
-the Android Keystore stub backend), Norito codec round-trips that verify typed
+The test harness currently executes the key manager, keystore flows (with the
+Android Keystore fallback backend), Norito codec round-trips that verify typed
 instruction decoding, transaction builder signing, and HTTP client serialization
-stubs to keep the Java pathways aligned.
+paths to keep the Java pathways aligned.
 
 ### Publishing snapshots (AND9)
 
@@ -730,14 +730,14 @@ Map<String, String> headers =
 Signatures cover the canonical method/path/query/body layout plus freshness
 metadata, matching the Rust verifier Torii uses on app-facing endpoints.
 
-Offline V2 issuer POST endpoints (`/v1/offline/v2/keys/refill`,
-`/v1/offline/v2/notes/issue`, `/v1/offline/v2/notes/redeem`, and
-`/v1/offline/v2/audit`) carry auth in the JSON body instead of `X-Iroha-*`
+Offline issuer POST endpoints (`/v1/offline/keys/refill`,
+`/v1/offline/notes/issue`, `/v1/offline/notes/redeem`, and
+`/v1/offline/audit`) carry auth in the JSON body instead of `X-Iroha-*`
 headers. Use `CanonicalRequestSigner.withBodySignature(...)` to add
 `account_id`, `timestamp_ms`, `nonce`, and `signature_base64` to a request
 body. Multisig callers should build the canonical request witness separately
 and pass it as `witness_base64` with `withBodyWitness(...)`.
-`ToriiOfflineNoteV2IssuerClient` requires `ToriiCanonicalRequestAuth` for
+`ToriiOfflineNoteIssuerClient` requires `ToriiCanonicalRequestAuth` for
 issuer requests, including flows that also attach device-proof payloads.
 
 ### Sora VPN native lease flow
@@ -1046,7 +1046,7 @@ requests without reimplementing header/observer plumbing. Call
 `client.fetch(request)` when you only need the raw JSON/string output, or
 `client.fetchSummary(request)` to receive a typed `GatewayFetchSummary` that exposes
 provider receipts, anonymity ratios, and chunk metadata. The client reuses
-`HttpTransportExecutor`, which means tests can provide deterministic stubs and production
+`HttpTransportExecutor`, which means tests can provide deterministic fakes and production
 code can share the same connection pool as the Torii pipeline transport.
 `HttpClientTransport.newSorafsGatewayClient(...)` is a convenience helper that spawns the
 gateway client using the same executor, timeout, headers, and observers as the primary Torii
@@ -1094,16 +1094,16 @@ manifest together.
 
 Licensed under the Apache License, Version 2.0. See `LICENSE` for details.
 
-## Offline V2 readiness and auditing
+## Offline readiness and auditing
 
-The SDK exposes a lightweight `OfflineToriiClient` for the maintained Offline V2
+The SDK exposes a lightweight `OfflineToriiClient` for the maintained Offline
 readiness surface. Torii also keeps issuer POST endpoints for key refill and
-note issuance: wallets derive the Offline Note V2 commitment locally and pass
-the bare 64-character `note_commitment` hex to `/v1/offline/v2/notes/issue`.
+note issuance: wallets derive the Offline Note commitment locally and pass
+the bare 64-character `note_commitment` hex to `/v1/offline/notes/issue`.
 Torii issues that exact commitment and returns settlement lineage metadata;
 `settlement.entry_hash` is no longer used as the note commitment. Redemption
 and audit payloads are submitted as direct transaction instructions.
-`OfflineNoteV2Wallet` provides the Java Android one-call app flow for load,
+`OfflineNoteWallet` provides the Java Android one-call app flow for load,
 receive request preparation, P2P pay, accept, optional audit publication,
 redeem submission, and sync. Offline-to-offline pay/accept is local-final and
 irrevocable: the sender immediately records spent inputs and spendable change,
@@ -1116,21 +1116,30 @@ interfaces so Android apps can bind them to Torii, Android Keystore, and
 app-specific persistence; `sync()` additionally accepts a transaction-outcome
 resolver for finalizing redeem-pending note records after Torii observes the
 redeem transaction outcome.
-`OfflineNoteV2TransferHandoff` provides the app-facing payment-token transfer
+`OfflineBearerCashWallet` is the Java Android app-facing cash surface. It wraps
+the Offline Note wallet so value is carried by note commitments, note secrets,
+nullifiers, audit lineage, and issuer-signed hardware key certificates instead
+of a separate mutable purse protocol.
+`KagemushaCompactPaymentTokenProver` exposes the native record-backed compact
+token prover for shielded offline-offline payments. Pass a Norito-encoded
+`KagemushaVerifiedFoldRecordBundle`; the JNI bridge verifies each private hop
+proof against its verifier record and returns a Norito-encoded
+`KagemushaCompactPaymentToken` when `connect_norito_bridge` is available.
+`OfflineNoteTransferHandoff` provides the app-facing payment-token transfer
 surface: `qrStreamingFrameBytes(token)` for animated/binary QR,
 `nfcFrameBytes(token)` for APDU-sized NFC frame exchange, and
 `nearbyPayload(token)` / `nearbyFrameBytes(token)` for Nearby Connections,
 Bluetooth, Wi-Fi Direct, or any app-owned byte channel. The nested
-`OfflineNoteV2TransferStreamReceiver` reconstructs streamed frames and returns a
+`OfflineNoteTransferStreamReceiver` reconstructs streamed frames and returns a
 decoded payment token when complete. Android apps can use
-`AndroidOfflineNoteV2TransferCapabilities.current(context)` from the Android AAR
+`AndroidOfflineNoteTransferCapabilities.current(context)` from the Android AAR
 to include NFC only on devices that advertise HCE support. For png2-style NFC,
-bind `OfflineNoteV2NfcApduProtocol` to `HostApduService`/`IsoDep`: select the
+bind `OfflineNoteNfcApduProtocol` to `HostApduService`/`IsoDep`: select the
 Iroha AID, exchange metadata, transfer bounded chunks, commit, then poll/read a
 local receipt ACK. The default `nfcPaymentTokenWriteApdus(token)` uses
 240-byte chunks because Android APDU limits vary across devices; extended
 iOS-to-iOS chunks are available only through explicit opt-in helpers.
-`OfflineNoteV2NearbyEnvelope` provides the matching sorted-key Nearby JSON
+`OfflineNoteNearbyEnvelope` provides the matching sorted-key Nearby JSON
 envelope with unpadded base64url payloads and a pairing-image challenge for
 Google Nearby Connections, Bluetooth, Wi-Fi Direct, or another reliable byte
 channel.
@@ -1146,14 +1155,14 @@ lengths; no-offset APDUs also reject smuggled nonzero P1/P2 bytes. Nearby
 decoding rejects fractional versions, unknown fields inside legacy
 pairing-challenge objects, and challenge/receipt ACK content-type downgrades
 instead of ignoring smuggled JSON.
-`AndroidOfflineNoteV2SecureStore` rotates a non-exportable Android Keystore key
+`AndroidOfflineNoteSecureStore` rotates a non-exportable Android Keystore key
 on every committed wallet-state revision and rejects app-data rollback or
 cloned preference snapshots after the old revision key has been deleted. Legacy
 `SPEND_PENDING` records decode as `SPENT`, and legacy `CHANGE_PENDING` records
 decode as `SPENDABLE`.
 the core module includes an in-memory store,
-`IrohaOfflineNoteV2TransactionSubmitter`, and
-`ToriiOfflineNoteV2IssuerClient` for body-signed key-refill plus note-issue
+`IrohaOfflineNoteTransactionSubmitter`, and
+`ToriiOfflineNoteIssuerClient` for body-signed key-refill plus note-issue
 loads in tests and JVM tooling.
 
 The client reuses the existing `ClientConfig` headers/observers and can be
@@ -1162,14 +1171,14 @@ created from any `HttpClientTransport`:
 ```java
 transport
     .offlineToriiClient()
-    .getOfflineV2Readiness()
-    .thenAccept(readiness -> System.out.println(readiness.offlineNoteV2()));
+    .getOfflineReadiness()
+    .thenAccept(readiness -> System.out.println(readiness.offlineNote()));
 ```
 
-Non-V2 offline HTTP routes were removed from the public offline client surface
+Legacy offline HTTP routes were removed from the public offline client surface
 so callers cannot accidentally target Torii routes that now return 404.
 
-Use `OfflineToriiClient#getOfflineV2Readiness()` to check whether Torii exposes the V2 note
+Use `OfflineToriiClient#getOfflineReadiness()` to check whether Torii exposes the offline note
 capabilities before showing offline receive or payment-token UI.
 ```
 

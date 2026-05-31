@@ -3048,6 +3048,7 @@ def _source_event_transaction_summary(
     logs = response.get("log")
     if not isinstance(logs, list):
         raise RuntimeError("source-event transaction info returned no log list")
+    matching_summary: dict[str, Any] | None = None
     for index, log in enumerate(logs):
         if not isinstance(log, dict):
             continue
@@ -3098,25 +3099,32 @@ def _source_event_transaction_summary(
                 "event_data": _hex(event_data),
                 "event_matches": True,
             }
-            block_number = response.get("blockNumber")
-            if block_number is not None:
-                if type(block_number) is not int or block_number <= 0:
-                    raise RuntimeError(
-                        "source-event transaction info blockNumber must be a positive integer"
-                    )
-                summary["block_number"] = block_number
-            block_timestamp = response.get("blockTimeStamp")
-            if block_timestamp is not None:
-                if type(block_timestamp) is not int or block_timestamp < 0:
-                    raise RuntimeError(
-                        "source-event transaction info blockTimeStamp must be a non-negative integer"
-                    )
-                summary["block_timestamp"] = block_timestamp
-            return summary
-    raise RuntimeError(
-        "source-event transaction log did not contain the expected "
-        "SccpSourceEvent(bytes32) event"
-    )
+            if matching_summary is not None:
+                raise RuntimeError(
+                    "source-event transaction log must contain exactly one "
+                    "matching SccpSourceEvent(bytes32) event"
+                )
+            matching_summary = summary
+    if matching_summary is None:
+        raise RuntimeError(
+            "source-event transaction log did not contain the expected "
+            "SccpSourceEvent(bytes32) event"
+        )
+    block_number = response.get("blockNumber")
+    if block_number is not None:
+        if type(block_number) is not int or block_number <= 0:
+            raise RuntimeError(
+                "source-event transaction info blockNumber must be a positive integer"
+            )
+        matching_summary["block_number"] = block_number
+    block_timestamp = response.get("blockTimeStamp")
+    if block_timestamp is not None:
+        if type(block_timestamp) is not int or block_timestamp < 0:
+            raise RuntimeError(
+                "source-event transaction info blockTimeStamp must be a non-negative integer"
+            )
+        matching_summary["block_timestamp"] = block_timestamp
+    return matching_summary
 
 
 def _parse_abi_data_words(value: Any, *, label: str, word_count: int) -> tuple[bytes, ...]:
@@ -4085,6 +4093,7 @@ def _route_canary_transaction_summary(
     logs = response.get("log")
     if not isinstance(logs, list):
         raise RuntimeError("route-canary transaction info returned no log list")
+    matching_summary: dict[str, Any] | None = None
     for index, log in enumerate(logs):
         if not isinstance(log, dict):
             continue
@@ -4104,25 +4113,32 @@ def _route_canary_transaction_summary(
             continue
         summary["transaction_id"] = parsed_id
         summary["receipt_status"] = receipt_status
-        block_number = response.get("blockNumber")
-        if block_number is not None:
-            if type(block_number) is not int or block_number <= 0:
-                raise RuntimeError(
-                    "route-canary transaction info blockNumber must be a positive integer"
-                )
-            summary["block_number"] = block_number
-        block_timestamp = response.get("blockTimeStamp")
-        if block_timestamp is not None:
-            if type(block_timestamp) is not int or block_timestamp < 0:
-                raise RuntimeError(
-                    "route-canary transaction info blockTimeStamp must be a non-negative integer"
-                )
-            summary["block_timestamp"] = block_timestamp
-        return summary
-    raise RuntimeError(
-        "route-canary transaction log did not contain the expected "
-        "MessageProofAccepted event"
-    )
+        if matching_summary is not None:
+            raise RuntimeError(
+                "route-canary transaction log must contain exactly one "
+                "matching MessageProofAccepted event"
+            )
+        matching_summary = summary
+    if matching_summary is None:
+        raise RuntimeError(
+            "route-canary transaction log did not contain the expected "
+            "MessageProofAccepted event"
+        )
+    block_number = response.get("blockNumber")
+    if block_number is not None:
+        if type(block_number) is not int or block_number <= 0:
+            raise RuntimeError(
+                "route-canary transaction info blockNumber must be a positive integer"
+            )
+        matching_summary["block_number"] = block_number
+    block_timestamp = response.get("blockTimeStamp")
+    if block_timestamp is not None:
+        if type(block_timestamp) is not int or block_timestamp < 0:
+            raise RuntimeError(
+                "route-canary transaction info blockTimeStamp must be a non-negative integer"
+            )
+        matching_summary["block_timestamp"] = block_timestamp
+    return matching_summary
 
 
 def _route_canary_used_message_proof_summary(

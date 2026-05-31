@@ -561,7 +561,7 @@ async fn threshold_escrow_releases_when_fully_funded() -> Result<()> {
 
     network.ensure_blocks(1).await?;
     let client = network.client();
-    let http = reqwest::Client::new();
+    let http = integration_tests::http::client();
     let asset_definition_id = sample_asset_definition_id();
     setup_ledger_for_sample(&client, &asset_definition_id, 20).await?;
 
@@ -860,7 +860,7 @@ async fn threshold_escrow_refunds_when_unresolved() -> Result<()> {
 
     network.ensure_blocks(1).await?;
     let client = network.client();
-    let http = reqwest::Client::new();
+    let http = integration_tests::http::client();
     let asset_definition_id = sample_asset_definition_id();
     setup_ledger_for_sample(&client, &asset_definition_id, 20).await?;
 

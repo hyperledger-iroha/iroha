@@ -6,9 +6,11 @@
 use std::{
     borrow::Cow,
     fs::{self, File},
-    io::Read,
+    io::{self, Read},
     path::Path,
-    process::Command,
+    process::{Command, ExitStatus, Stdio},
+    thread,
+    time::{Duration, Instant},
 };
 
 use blake3::Hasher;
@@ -18,6 +20,30 @@ use tempfile::tempdir;
 
 fn cli_binary() -> &'static str {
     env!("CARGO_BIN_EXE_iroha")
+}
+
+const CLI_COMMAND_TIMEOUT: Duration = Duration::from_secs(30);
+const CLI_COMMAND_POLL_INTERVAL: Duration = Duration::from_millis(10);
+
+fn status_with_timeout(mut command: Command) -> io::Result<ExitStatus> {
+    command.stdin(Stdio::null());
+    let mut child = command.spawn()?;
+    let started = Instant::now();
+    loop {
+        if let Some(status) = child.try_wait()? {
+            return Ok(status);
+        }
+        let elapsed = started.elapsed();
+        if elapsed >= CLI_COMMAND_TIMEOUT {
+            let _ = child.kill();
+            let _ = child.wait();
+            return Err(io::Error::new(
+                io::ErrorKind::TimedOut,
+                format!("command {command:?} timed out after {CLI_COMMAND_TIMEOUT:?}"),
+            ));
+        }
+        thread::sleep(CLI_COMMAND_POLL_INTERVAL.min(CLI_COMMAND_TIMEOUT - elapsed));
+    }
 }
 
 #[test]
@@ -32,36 +58,35 @@ fn taikai_cli_emits_cek_receipt_and_rpt() {
     let receipt_path = dir.path().join("cek_receipt.to");
     let receipt_json = dir.path().join("cek_receipt.json");
     let hkdf_salt_hex = "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa";
-    let receipt_status = Command::new(cli_binary())
-        .args([
-            "app",
-            "taikai",
-            "cek-rotate",
-            "--event-id",
-            "demo-event",
-            "--stream-id",
-            "stream-1",
-            "--kms-profile",
-            "kms-demo",
-            "--new-wrap-key-label",
-            "wrap-v2",
-            "--previous-wrap-key-label",
-            "wrap-v1",
-            "--effective-segment",
-            "42",
-            "--hkdf-salt",
-            hkdf_salt_hex,
-            "--issued-at-unix",
-            "1700000001",
-            "--notes",
-            "rotation-plan",
-            "--out",
-            receipt_path.to_str().expect("utf8 path"),
-            "--json-out",
-            receipt_json.to_str().expect("utf8 path"),
-        ])
-        .status()
-        .expect("spawn cek-rotate");
+    let mut receipt_command = Command::new(cli_binary());
+    receipt_command.args([
+        "app",
+        "taikai",
+        "cek-rotate",
+        "--event-id",
+        "demo-event",
+        "--stream-id",
+        "stream-1",
+        "--kms-profile",
+        "kms-demo",
+        "--new-wrap-key-label",
+        "wrap-v2",
+        "--previous-wrap-key-label",
+        "wrap-v1",
+        "--effective-segment",
+        "42",
+        "--hkdf-salt",
+        hkdf_salt_hex,
+        "--issued-at-unix",
+        "1700000001",
+        "--notes",
+        "rotation-plan",
+        "--out",
+        receipt_path.to_str().expect("utf8 path"),
+        "--json-out",
+        receipt_json.to_str().expect("utf8 path"),
+    ]);
+    let receipt_status = status_with_timeout(receipt_command).expect("spawn cek-rotate");
     assert!(receipt_status.success(), "cek-rotate command failed");
 
     let receipt_bytes = fs::read(&receipt_path).expect("read receipt");
@@ -89,40 +114,39 @@ fn taikai_cli_emits_cek_receipt_and_rpt() {
 
     let rpt_path = dir.path().join("rpt.to");
     let rpt_json = dir.path().join("rpt.json");
-    let rpt_status = Command::new(cli_binary())
-        .args([
-            "app",
-            "taikai",
-            "rpt-attest",
-            "--event-id",
-            "demo-event",
-            "--stream-id",
-            "stream-1",
-            "--rendition-id",
-            "1080p-main",
-            "--gar",
-            gar_path.to_str().expect("utf8 gar"),
-            "--cek-receipt",
-            receipt_path.to_str().expect("utf8 receipt"),
-            "--bundle",
-            bundle_path.to_str().expect("utf8 bundle"),
-            "--valid-from-unix",
-            "1700000100",
-            "--valid-until-unix",
-            "1700000200",
-            "--policy-label",
-            "pilot",
-            "--policy-label",
-            "taikai",
-            "--notes",
-            "rollout-check",
-            "--out",
-            rpt_path.to_str().expect("utf8 rpt"),
-            "--json-out",
-            rpt_json.to_str().expect("utf8 rpt json"),
-        ])
-        .status()
-        .expect("spawn rpt-attest");
+    let mut rpt_command = Command::new(cli_binary());
+    rpt_command.args([
+        "app",
+        "taikai",
+        "rpt-attest",
+        "--event-id",
+        "demo-event",
+        "--stream-id",
+        "stream-1",
+        "--rendition-id",
+        "1080p-main",
+        "--gar",
+        gar_path.to_str().expect("utf8 gar"),
+        "--cek-receipt",
+        receipt_path.to_str().expect("utf8 receipt"),
+        "--bundle",
+        bundle_path.to_str().expect("utf8 bundle"),
+        "--valid-from-unix",
+        "1700000100",
+        "--valid-until-unix",
+        "1700000200",
+        "--policy-label",
+        "pilot",
+        "--policy-label",
+        "taikai",
+        "--notes",
+        "rollout-check",
+        "--out",
+        rpt_path.to_str().expect("utf8 rpt"),
+        "--json-out",
+        rpt_json.to_str().expect("utf8 rpt json"),
+    ]);
+    let rpt_status = status_with_timeout(rpt_command).expect("spawn rpt-attest");
     assert!(rpt_status.success(), "rpt-attest command failed");
 
     let rpt_bytes = fs::read(&rpt_path).expect("read rpt");

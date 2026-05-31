@@ -725,6 +725,7 @@ def fake_opener_for(
     source_event_transaction_topic0_override=None,
     source_event_transaction_topics_extra=(),
     source_event_transaction_data="",
+    source_event_transaction_duplicate_matching_log=False,
     source_event_transaction_owner_override=None,
     source_event_transaction_contract_override=None,
     source_event_transaction_call_data_override=None,
@@ -762,6 +763,7 @@ def fake_opener_for(
     route_canary_transaction_backend_hash_override=None,
     route_canary_transaction_proof_family_hash_override=None,
     route_canary_transaction_network_id_override=None,
+    route_canary_transaction_duplicate_matching_log=False,
     route_canary_used_message_proof=True,
     route_canary_used_message_proof_word_override=None,
     route_canary_transaction_owner_override=None,
@@ -938,22 +940,24 @@ def fake_opener_for(
             or module.TRON_MESSAGE_PROOF_ACCEPTED_TOPIC.hex()
         )
         event_address = route_canary_transaction_address_override or destination20.hex()
+        event_log = {
+            "address": event_address,
+            "topics": [
+                event_topic0,
+                message_id.hex(),
+                abi_word_u32(route_canary_transaction_source_domain).hex(),
+            ],
+            "data": data,
+        }
+        logs = [event_log]
+        if route_canary_transaction_duplicate_matching_log:
+            logs.append(dict(event_log))
         return {
             "id": route_canary_transaction_id,
             "blockNumber": route_canary_block_number,
             "blockTimeStamp": route_canary_block_timestamp,
             "receipt": {"result": route_canary_transaction_status},
-            "log": [
-                {
-                    "address": event_address,
-                    "topics": [
-                        event_topic0,
-                        message_id.hex(),
-                        abi_word_u32(route_canary_transaction_source_domain).hex(),
-                    ],
-                    "data": data,
-                }
-            ],
+            "log": logs,
         }
 
     def route_canary_transaction_object():
@@ -1076,23 +1080,25 @@ def fake_opener_for(
                 or module.TRON_SOURCE_EVENT_TOPIC.hex()
             )
             event_address = source_event_transaction_address_override or bridge20.hex()
+            event_log = {
+                "address": event_address,
+                "topics": [
+                    event_topic0,
+                    event_digest,
+                    *source_event_transaction_topics_extra,
+                ],
+                "data": source_event_transaction_data,
+            }
+            logs = [event_log]
+            if source_event_transaction_duplicate_matching_log:
+                logs.append(dict(event_log))
             return FakeResponse(
                 {
                     "id": source_event_transaction_id,
                     "blockNumber": source_event_block_number,
                     "blockTimeStamp": source_event_block_timestamp,
                     "receipt": {"result": source_event_transaction_status},
-                    "log": [
-                        {
-                            "address": event_address,
-                            "topics": [
-                                event_topic0,
-                                event_digest,
-                                *source_event_transaction_topics_extra,
-                            ],
-                            "data": source_event_transaction_data,
-                        }
-                    ],
+                    "log": logs,
                 }
             )
         if request.full_url.endswith(expected_transaction_by_id_endpoint):
@@ -4440,6 +4446,38 @@ def test_live_evidence_rejects_source_event_transaction_without_matching_log():
         raise AssertionError("source-event transaction with wrong log was accepted")
 
 
+def test_live_evidence_rejects_duplicate_source_event_transaction_logs():
+    module = load_live_module()
+    fake = fake_opener_for(
+        module,
+        submitted_source_event_digests=[TRON_SOURCE_EVENT_DIGEST_VECTOR],
+        source_event_transaction_id=TRON_SOURCE_EVENT_TRANSACTION_ID_VECTOR,
+        source_event_transaction_duplicate_matching_log=True,
+    )
+
+    try:
+        module.collect_live_evidence(
+            SimpleNamespace(
+                tron_node_url="https://tron.example",
+                source_bridge_address=fake.bridge,
+                destination_verifier_address=None,
+                caller_address=None,
+                no_getcontract=False,
+                source_event_digest=bytes.fromhex(TRON_SOURCE_EVENT_DIGEST_VECTOR),
+                source_event_transaction_id=bytes.fromhex(
+                    TRON_SOURCE_EVENT_TRANSACTION_ID_VECTOR
+                ),
+                full_toml=False,
+                timeout=1.0,
+            ),
+            opener=fake.opener,
+        )
+    except RuntimeError as exc:
+        assert "exactly one matching SccpSourceEvent" in str(exc)
+    else:
+        raise AssertionError("source-event transaction with duplicate logs was accepted")
+
+
 def test_live_evidence_rejects_padded_source_event_log_address():
     module = load_live_module()
     fake = fake_opener_for(
@@ -6439,6 +6477,32 @@ def test_live_evidence_rejects_route_canary_destination_binding_mismatch():
         assert "destinationBindingHash does not match live" in str(exc)
     else:
         raise AssertionError("route canary with wrong destination binding was accepted")
+
+
+def test_live_evidence_rejects_duplicate_route_canary_transaction_logs():
+    module = load_live_module()
+    setup = route_canary_full_rollout_setup(
+        module,
+        route_canary_transaction_id=TRON_ROUTE_CANARY_TRANSACTION_ID_VECTOR,
+        route_canary_transaction_duplicate_matching_log=True,
+    )
+
+    try:
+        module.collect_live_evidence(
+            live_full_rollout_args(
+                setup.fake,
+                setup.expected,
+                source_code_hash=setup.source_code_hash,
+                route_canary_transaction_id=bytes.fromhex(
+                    TRON_ROUTE_CANARY_TRANSACTION_ID_VECTOR
+                ),
+            ),
+            opener=setup.fake.opener,
+        )
+    except RuntimeError as exc:
+        assert "exactly one matching MessageProofAccepted" in str(exc)
+    else:
+        raise AssertionError("route canary with duplicate logs was accepted")
 
 
 def test_live_evidence_rejects_route_canary_missing_used_message_state():

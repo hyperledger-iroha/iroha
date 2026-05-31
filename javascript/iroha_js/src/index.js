@@ -4,6 +4,8 @@
  * Native bindings (Norito + crypto) are provided via the required `iroha_js_host`
  * module.
  */
+export { compileKotodamaProgram, compileKotodamaStudioProgram } from "./kotodamaCompiler/index.js";
+export * from "./kotodamaCompiler/parity.js";
 export {
   AccountAddress,
   AccountAddressError,
@@ -34,6 +36,7 @@ export {
   openConnectWebSocket,
   verifyIdentifierResolutionReceipt,
 } from "./toriiClient.js";
+export { ToriiBrowserClient, ToriiBrowserHttpError } from "./toriiBrowserClient.js";
 export { NoritoRpcClient, NoritoRpcError } from "./noritoRpcClient.js";
 export {
   CRYPTO_ALGORITHMS,
@@ -116,6 +119,12 @@ export {
   decodeLaneRelayEnvelope,
   laneSettlementHash,
 } from "./nexus.js";
+export {
+  NexusAppClient,
+  NexusAppError,
+  NexusSignatureAlgorithmEd25519,
+  nexusPayloadHashHex,
+} from "./nexusApp.js";
 export {
   hashSignedTransaction,
   resignSignedTransaction,

@@ -46,7 +46,7 @@ use iroha_data_model::{
     name::Name,
     prelude::*,
     proof::{VerifyingKeyBox, VerifyingKeyId, VerifyingKeyRecord},
-    zk::BackendTag,
+    zk::{BackendTag, OpenVerifyEnvelope},
 };
 use iroha_primitives::json::Json;
 use iroha_test_samples::{ALICE_ID, gen_account_in};
@@ -355,6 +355,16 @@ fn build_usage_envelope(
     norito::to_bytes(&envelope).expect("serialize usage envelope")
 }
 
+fn mutate_open_verify_envelope(
+    proof: &[u8],
+    mutate: impl FnOnce(&mut OpenVerifyEnvelope),
+) -> Vec<u8> {
+    let mut envelope: OpenVerifyEnvelope =
+        norito::decode_from_bytes(proof).expect("decode OpenVerifyEnvelope fixture");
+    mutate(&mut envelope);
+    norito::to_bytes(&envelope).expect("serialize mutated OpenVerifyEnvelope")
+}
+
 fn zk1_envelope_start() -> Vec<u8> {
     b"ZK1\0".to_vec()
 }
@@ -398,7 +408,7 @@ fn zk1_append_instances_cols(buf: &mut Vec<u8>, columns: &[&[Scalar]]) {
 }
 
 #[test]
-fn kaigi_privacy_join_and_leave_flow_updates_record() {
+fn kaigi_privacy_join_updates_record_and_private_leave_is_rejected() {
     let roster = build_roster_artifacts();
     let kura = Kura::blank_kura_for_testing();
     let query_handle = LiveQueryStore::start_test();
@@ -520,13 +530,10 @@ fn kaigi_privacy_join_and_leave_flow_updates_record() {
         proof: Some(roster.leave_proof.clone()),
     }
     .execute(&participant, &mut tx2)
-    .expect("privacy leave succeeds");
+    .expect_err("private Kaigi leave is intentionally off-chain only");
 
-    tx2.apply();
-    block2.commit().expect("commit block2");
-
-    let view_after_leave = state.view();
-    let domain = view_after_leave
+    let view_after_rejected_leave = state.view();
+    let domain = view_after_rejected_leave
         .world
         .domain(&domain_id)
         .expect("domain exists");
@@ -537,21 +544,125 @@ fn kaigi_privacy_join_and_leave_flow_updates_record() {
         .cloned()
         .expect("kaigi record stored");
     let record: KaigiRecord = stored.try_into_any_norito().expect("decode record");
-    assert!(record.roster_commitments.is_empty());
-    assert_eq!(record.nullifier_log.len(), 2);
+    assert_eq!(record.roster_commitments.len(), 1);
+    assert_eq!(record.nullifier_log.len(), 1);
     assert!(record.participants.is_empty());
+    assert_eq!(
+        record.roster_commitments[0].commitment,
+        roster.join_commitment.commitment
+    );
     assert!(
         record
             .nullifier_log
             .iter()
             .any(|entry| entry.digest == roster.join_nullifier.digest)
     );
-    assert!(
-        record
-            .nullifier_log
-            .iter()
-            .any(|entry| entry.digest == roster.leave_nullifier.digest)
-    );
+}
+
+#[test]
+fn kaigi_privacy_join_rejects_noncanonical_proof_envelope_metadata() {
+    enum Tamper {
+        AuxiliaryBytes,
+        ZeroVerifierKeyHash,
+    }
+
+    for (tamper, expected_msg) in [
+        (
+            Tamper::AuxiliaryBytes,
+            "privacy proof envelope auxiliary bytes must be empty",
+        ),
+        (
+            Tamper::ZeroVerifierKeyHash,
+            "privacy proof verifier commitment mismatch",
+        ),
+    ] {
+        let roster = build_roster_artifacts();
+        let kura = Kura::blank_kura_for_testing();
+        let query_handle = LiveQueryStore::start_test();
+        #[cfg(feature = "telemetry")]
+        let telemetry = StateTelemetry::default();
+        let mut state = State::new(
+            test_world::world_with_test_accounts(),
+            kura,
+            query_handle,
+            #[cfg(feature = "telemetry")]
+            telemetry,
+        );
+        state.zk.halo2.enabled = true;
+        state.zk.verify_timeout = Duration::ZERO;
+        state.zk.kaigi_roster_join_vk = Some(roster.vk_ref.clone());
+
+        let domain_id = DomainId::try_new("kaigi", "universal").expect("domain id");
+        let (host, _) = gen_account_in("kaigi");
+        let (participant, _) = gen_account_in("kaigi");
+        let call_id = KaigiId::new(domain_id.clone(), Name::from_str("privacy").unwrap());
+
+        let header = BlockHeader::new(NonZeroU64::new(1).unwrap(), None, None, None, 0, 0);
+        let mut block = state.block(header);
+        let mut tx = block.transaction();
+
+        use iroha_data_model::permission::Permission;
+        let manage_vk = Permission::new("CanManageVerifyingKeys".parse().unwrap(), Json::new(()));
+        Grant::account_permission(manage_vk, ALICE_ID.clone())
+            .execute(&ALICE_ID, &mut tx)
+            .expect("grant vk manage permission");
+        iroha_data_model::isi::verifying_keys::RegisterVerifyingKey {
+            id: roster.vk_id.clone(),
+            record: roster.vk_record.clone(),
+        }
+        .execute(&ALICE_ID, &mut tx)
+        .expect("register roster vk");
+
+        Register::domain(Domain::new(domain_id.clone()))
+            .execute(&ALICE_ID, &mut tx)
+            .expect("register domain");
+        Register::account(Account::new(host.clone()))
+            .execute(&ALICE_ID, &mut tx)
+            .expect("register host");
+        Register::account(Account::new(participant.clone()))
+            .execute(&ALICE_ID, &mut tx)
+            .expect("register participant");
+
+        let mut template = NewKaigi::with_defaults(call_id.clone(), host.clone());
+        template.privacy_mode = KaigiPrivacyMode::ZkRosterV1;
+        template.metadata = Metadata::default();
+        CreateKaigi {
+            call: template,
+            commitment: None,
+            nullifier: None,
+            roster_root: None,
+            proof: None,
+        }
+        .execute(&host, &mut tx)
+        .expect("create kaigi");
+
+        let proof = match tamper {
+            Tamper::AuxiliaryBytes => mutate_open_verify_envelope(&roster.join_proof, |envelope| {
+                envelope.aux = b"ignored-hint".to_vec();
+            }),
+            Tamper::ZeroVerifierKeyHash => {
+                mutate_open_verify_envelope(&roster.join_proof, |envelope| {
+                    envelope.vk_hash = [0u8; 32];
+                })
+            }
+        };
+
+        let err = JoinKaigi {
+            call_id: call_id.clone(),
+            participant: participant.clone(),
+            commitment: Some(roster.join_commitment.clone()),
+            nullifier: Some(roster.join_nullifier.clone()),
+            roster_root: Some(roster.join_roster_root),
+            proof: Some(proof),
+        }
+        .execute(&participant, &mut tx)
+        .expect_err("noncanonical privacy proof envelope must be rejected");
+        let msg = format!("{err:?}");
+        assert!(
+            msg.contains(expected_msg),
+            "expected {expected_msg:?}, got {msg:?}"
+        );
+    }
 }
 
 #[test]

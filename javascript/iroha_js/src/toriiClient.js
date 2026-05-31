@@ -88,6 +88,7 @@ const DA_FETCH_ARTIFACT_PREFIX = "artifacts/da/fetch_";
 const DA_PROVE_ARTIFACT_PREFIX = "artifacts/da/prove_availability_";
 const TX_STATUS_POLL_OPTION_KEYS = new Set([
   "signal",
+  "scope",
   "intervalMs",
   "timeoutMs",
   "maxAttempts",
@@ -369,6 +370,10 @@ const ITERABLE_OPTION_KEYS = new Set([
   "receiverId",
   "depositAccountId",
   "assetId",
+  "authority",
+  "resultOk",
+  "sinceTimestampMs",
+  "untilTimestampMs",
   "certificateExpiresBeforeMs",
   "certificateExpiresAfterMs",
   "policyExpiresBeforeMs",
@@ -421,6 +426,13 @@ const ITERABLE_QUERY_OPTION_KEYS = new Set([
   "signal",
   "canonicalAuth",
 ]);
+const TRANSACTION_QUERY_OPTION_KEYS = [
+  "assetId",
+  "authority",
+  "resultOk",
+  "sinceTimestampMs",
+  "untilTimestampMs",
+];
 const EXPLORER_NFT_LIST_OPTION_KEYS = new Set([
   "page",
   "perPage",
@@ -464,7 +476,7 @@ export class TransactionStatusError extends Error {
   constructor(hashHex, status, payload) {
     const statusLabel = status == null ? "unknown" : String(status);
     const rejectionReason = extractPipelineRejectionReason(payload);
-    const reasonSuffix = rejectionReason ? ` (reason=${rejectionReason})` : "";
+    const reasonSuffix = rejectionReason ? ` (rejection_reason=${rejectionReason})` : "";
     super(`Transaction ${hashHex} reported failure status ${statusLabel}${reasonSuffix}`);
     this.name = "TransactionStatusError";
     this.hashHex = hashHex;
@@ -867,8 +879,11 @@ function sortJsonForErrorMessage(value) {
 
 /**
  * @typedef {Object} BlockListOptions
- * @property {number} [offsetHeight]
+ * @property {number} [page]
+ * @property {number} [perPage]
+ * @property {number} [per_page]
  * @property {number} [limit]
+ * @property {AbortSignal} [signal]
  *
  * @typedef {Object} EventStreamOptions
  * @property {string | Record<string, unknown>} [filter]
@@ -1581,12 +1596,33 @@ export class ToriiClient {
       "listAccountAssets",
     );
     this._assertPermissionRequirement(requirePermissions, "listAccountAssets");
-    return this._listIterable(
-      `/v1/accounts/${encodedId}/assets`,
+    const optionContext = `options for /v1/accounts/${encodedId}/assets`;
+    const normalizedOptions = normalizeIterableListOptions(
       rest,
-      normalizeAccountAssetListResponse,
+      optionContext,
       ASSET_ID_LIST_OPTION_KEYS,
     );
+    const canonicalAuth = ToriiClient._normalizeCanonicalAuth(normalizedOptions.canonicalAuth);
+    const { signal, canonicalAuth: _ignoredCanonical, ...listOptions } = normalizedOptions;
+    const params = ToriiClient._encodeIterableListParams(
+      listOptions,
+      optionContext,
+      ASSET_ID_LIST_OPTION_KEYS,
+    ) ?? {};
+    if (listOptions.assetId !== undefined && listOptions.assetId !== null) {
+      params.asset = ToriiClient._normalizeAssetId(listOptions.assetId, "assetId");
+      delete params.asset_id;
+    }
+    const response = await this._request("GET", `/v1/accounts/${encodedId}/assets`, {
+      params: Object.keys(params).length > 0 ? params : undefined,
+      headers: { Accept: "application/json" },
+      signal,
+      canonicalAuth,
+    });
+    await this._expectStatus(response, [200]);
+    const payload = await this._maybeJson(response);
+    const base = ToriiClient._validateIterablePayload(payload);
+    return normalizeAccountAssetListResponse(base);
   }
 
   /**
@@ -1662,15 +1698,54 @@ export class ToriiClient {
   /**
    * Query transactions involving an account (`POST /v1/accounts/{id}/transactions/query`).
    * @param {string} accountId
-   * @param {IterableQueryOptions} [options]
+   * @param {IterableQueryOptions & {assetId?: string, authority?: string, resultOk?: boolean, sinceTimestampMs?: number, untilTimestampMs?: number}} [options]
    * @returns {Promise<{items: Array<object>, total: number}>}
    */
   async queryAccountTransactions(accountId, options = {}) {
     const normalizedId = normalizeAccountPathLiteral(accountId, "accountId");
     const encodedId = encodeURIComponent(normalizedId);
+    const normalizedOptions = normalizeTransactionQueryOptions(
+      options,
+      `options for /v1/accounts/${encodedId}/transactions/query`,
+    );
     return this._queryIterable(
       `/v1/accounts/${encodedId}/transactions/query`,
+      normalizedOptions,
+      normalizeAccountTransactionListResponse,
+    );
+  }
+
+  /**
+   * Query committed transactions (`POST /v1/transactions/query`).
+   * @param {IterableQueryOptions & {assetId?: string, authority?: string, resultOk?: boolean, sinceTimestampMs?: number, untilTimestampMs?: number}} [options]
+   * @returns {Promise<{items: Array<object>, total: number}>}
+   */
+  async queryTransactions(options = {}) {
+    const normalizedOptions = normalizeTransactionQueryOptions(
       options,
+      "options for /v1/transactions/query",
+    );
+    return this._queryIterable(
+      "/v1/transactions/query",
+      normalizedOptions,
+      normalizeAccountTransactionListResponse,
+    );
+  }
+
+  /**
+   * Query committed transactions visible to the authenticated viewer
+   * (`POST /v1/transactions/visible/query`).
+   * @param {IterableQueryOptions & {assetId?: string, authority?: string, resultOk?: boolean, sinceTimestampMs?: number, untilTimestampMs?: number}} [options]
+   * @returns {Promise<{items: Array<object>, total: number}>}
+   */
+  async queryVisibleTransactions(options = {}) {
+    const normalizedOptions = normalizeTransactionQueryOptions(
+      options,
+      "options for /v1/transactions/visible/query",
+    );
+    return this._queryIterable(
+      "/v1/transactions/visible/query",
+      normalizedOptions,
       normalizeAccountTransactionListResponse,
     );
   }
@@ -1701,6 +1776,24 @@ export class ToriiClient {
       this.queryAccountTransactions.bind(this, normalizedId),
       options,
     );
+  }
+
+  /**
+   * Iterate committed transactions via the structured query endpoint.
+   * @param {PaginationIteratorOptions} [options]
+   * @returns {AsyncGenerator<object, void, unknown>}
+   */
+  iterateTransactionsQuery(options = {}) {
+    return this._iterateIterable(this.queryTransactions.bind(this), options);
+  }
+
+  /**
+   * Iterate committed viewer-visible transactions via the structured query endpoint.
+   * @param {PaginationIteratorOptions} [options]
+   * @returns {AsyncGenerator<object, void, unknown>}
+   */
+  iterateVisibleTransactionsQuery(options = {}) {
+    return this._iterateIterable(this.queryVisibleTransactions.bind(this), options);
   }
 
   /**
@@ -3815,7 +3908,7 @@ export class ToriiClient {
     const scope = normalizeTransactionStatusScope(
       optionRecord.scope,
       "getTransactionStatus options.scope",
-      this._config.transactionStatusScope || "auto",
+      this._config.transactionStatusScope || "global",
     );
     const endpointCandidates = normalizeStatusEndpointCandidates(
       this._baseUrl,
@@ -3922,6 +4015,7 @@ export class ToriiClient {
    *   intervalMs?: number,
    *   timeoutMs?: number | null,
    *   maxAttempts?: number | null,
+   *   scope?: "local" | "auto" | "global",
    *   successStatuses?: Iterable<string>,
    *   failureStatuses?: Iterable<string>,
    *   onStatus?: (status: string | null, payload: any, attempt: number) => (void | Promise<void>)
@@ -3943,6 +4037,7 @@ export class ToriiClient {
       successSet,
       failureSet,
       onStatus,
+      scope,
     } = ToriiClient._normalizeTransactionStatusPollOptions(
       options,
       "waitForTransactionStatus options",
@@ -3958,7 +4053,7 @@ export class ToriiClient {
     while (true) {
       throwIfAborted(signal);
       attempts += 1;
-      lastPayload = await this.getTransactionStatus(normalizedHash, { signal });
+      lastPayload = await this.getTransactionStatus(normalizedHash, { signal, scope });
       const status = extractPipelineStatusKind(lastPayload);
       if (onStatus) {
         await onStatus(status, lastPayload, attempts);
@@ -4087,6 +4182,71 @@ export class ToriiClient {
       return null;
     }
     return normalizePipelineRecoverySidecar(payload);
+  }
+
+  /**
+   * Fetch pipeline preflight diagnostics (`GET /v1/pipeline/preflight`).
+   * @param {{ signal?: AbortSignal }} [options]
+   * @returns {Promise<ToriiPipelinePreflight>}
+   */
+  async getPipelinePreflight(options = {}) {
+    const { signal } = normalizeSignalOnlyOption(options, "getPipelinePreflight");
+    const response = await this._request("GET", "/v1/pipeline/preflight", {
+      headers: { Accept: "application/json" },
+      signal,
+    });
+    await this._expectStatus(response, [200]);
+    const payload = await this._maybeJson(response);
+    if (!payload) {
+      throw new Error("pipeline preflight endpoint returned no payload");
+    }
+    return normalizePipelinePreflight(payload);
+  }
+
+  /**
+   * Fetch committed FASTPQ proof batches for a block height
+   * (`GET /v1/pipeline/recovery/{height}/fastpq-proofs`).
+   * Returns null when the node has no recovery artefacts for the requested height.
+   * @param {number | string | bigint} height
+   * @param {{ signal?: AbortSignal }} [options]
+   * @returns {Promise<any | null>}
+   */
+  async getPipelineRecoveryFastpqProofs(height, options = {}) {
+    const normalizedHeight = ToriiClient._normalizeUnsignedInteger(height, "height", {
+      allowZero: true,
+    });
+    const { signal } = normalizeSignalOnlyOption(
+      options,
+      "getPipelineRecoveryFastpqProofs",
+    );
+    const response = await this._request(
+      "GET",
+      `/v1/pipeline/recovery/${normalizedHeight}/fastpq-proofs`,
+      { headers: { Accept: "application/json" }, signal },
+    );
+    if (response.status === 404) {
+      return null;
+    }
+    await this._expectStatus(response, [200]);
+    const payload = await this._maybeJson(response);
+    if (!payload) {
+      throw new Error("pipeline recovery FASTPQ proofs endpoint returned no payload");
+    }
+    return payload;
+  }
+
+  /**
+   * Fetch committed FASTPQ proof batches and normalise them into typed fields.
+   * @param {number | string | bigint} height
+   * @param {{ signal?: AbortSignal }} [options]
+   * @returns {Promise<ToriiPipelineRecoveryFastpqProofs | null>}
+   */
+  async getPipelineRecoveryFastpqProofsTyped(height, options = {}) {
+    const payload = await this.getPipelineRecoveryFastpqProofs(height, options);
+    if (!payload) {
+      return null;
+    }
+    return normalizePipelineRecoveryFastpqProofs(payload);
   }
 
   /**
@@ -6308,20 +6468,17 @@ export class ToriiClient {
   }
 
   /**
-   * Fetch a block by height (`GET /v1/blocks/{height}`).
-   * @param {number | string | bigint} height
+   * Fetch an Explorer block by height or hash (`GET /v1/explorer/blocks/{identifier}`).
+   * @param {number | string | bigint} identifier
    * @param {{signal?: AbortSignal}} [options]
    * @returns {Promise<any>}
    */
-  async getBlock(height, options = {}) {
-    const normalized = ToriiClient._normalizeUnsignedInteger(
-      height,
-      "getBlock.height",
-      { allowZero: true },
-    );
+  async getBlock(identifier, options = {}) {
+    const normalized = requireNonEmptyString(String(identifier), "getBlock.identifier");
     const { signal } = normalizeSignalOnlyOption(options, "getBlock");
-    const response = await this._request("GET", `/v1/blocks/${normalized}`, {
+    const response = await this._request("GET", `/v1/explorer/blocks/${encodeURIComponent(normalized)}`, {
       signal,
+      headers: { Accept: "application/json" },
     });
     if (response.status === 404) {
       return null;
@@ -6335,21 +6492,23 @@ export class ToriiClient {
   }
 
   /**
-   * List blocks with optional pagination (`GET /v1/blocks`).
+   * List Explorer blocks with optional pagination (`GET /v1/explorer/blocks`).
    * @param {BlockListOptions} [options]
    * @returns {Promise<any>}
    */
   async listBlocks(options) {
     const normalizedOptions = ToriiClient._normalizeBlockListOptions(options);
     const params = {};
-    if (normalizedOptions.offsetHeight !== undefined) {
-      params.offset_height = normalizedOptions.offsetHeight;
+    if (normalizedOptions.page !== undefined) {
+      params.page = normalizedOptions.page;
     }
-    if (normalizedOptions.limit !== undefined) {
-      params.limit = normalizedOptions.limit;
+    if (normalizedOptions.perPage !== undefined) {
+      params.per_page = normalizedOptions.perPage;
     }
-    const response = await this._request("GET", "/v1/blocks", {
+    const response = await this._request("GET", "/v1/explorer/blocks", {
       params: Object.keys(params).length > 0 ? params : undefined,
+      headers: { Accept: "application/json" },
+      signal: normalizedOptions.signal,
     });
     await this._expectStatus(response, [200]);
     const payload = await this._maybeJson(response);
@@ -7831,22 +7990,22 @@ export class ToriiClient {
   }
 
   /**
-   * Fetch Offline V2 feature readiness (`GET /v1/offline/v2/readiness`).
+   * Fetch Offline feature readiness (`GET /v1/offline/readiness`).
    * @param {{signal?: AbortSignal}} [options]
-   * @returns {Promise<ToriiOfflineV2ReadinessResponse>}
+   * @returns {Promise<ToriiOfflineReadinessResponse>}
    */
-  async getOfflineV2Readiness(options = {}) {
-    const { signal } = normalizeSignalOnlyOption(options, "getOfflineV2Readiness");
-    const response = await this._request("GET", "/v1/offline/v2/readiness", {
+  async getOfflineReadiness(options = {}) {
+    const { signal } = normalizeSignalOnlyOption(options, "getOfflineReadiness");
+    const response = await this._request("GET", "/v1/offline/readiness", {
       headers: { Accept: "application/json" },
       signal,
     });
     await this._expectStatus(response, [200]);
     const body = await this._maybeJson(response);
     if (!body) {
-      throw new Error("offline v2 readiness response missing JSON body");
+      throw new Error("offline readiness response missing JSON body");
     }
-    return normalizeOfflineV2ReadinessResponse(body, "offline v2 readiness response");
+    return normalizeOfflineReadinessResponse(body, "offline readiness response");
   }
 
   /**
@@ -9910,21 +10069,27 @@ export class ToriiClient {
 
   static _normalizeBlockListOptions(options) {
     if (options === undefined || options === null) {
-      return {};
+      return { page: 1, perPage: DEFAULT_PAGE_SIZE, signal: undefined };
     }
     const record = requirePlainObjectOption(options, "block list options");
-    assertSupportedOptionKeys(record, new Set(["offsetHeight", "limit"]), "block list options");
+    assertSupportedOptionKeys(
+      record,
+      new Set(["page", "page_number", "perPage", "per_page", "limit", "signal"]),
+      "block list options",
+    );
+    const { signal } = normalizeSignalOption(record, "listBlocks");
     const normalized = {};
-    if (record.offsetHeight !== undefined && record.offsetHeight !== null) {
-      normalized.offsetHeight = ToriiClient._normalizeUnsignedInteger(
-        record.offsetHeight,
-        "offsetHeight",
-        { allowZero: true },
-      );
-    }
-    if (record.limit !== undefined && record.limit !== null) {
-      normalized.limit = ToriiClient._normalizeUnsignedInteger(record.limit, "limit");
-    }
+    normalized.page = ToriiClient._normalizeUnsignedInteger(
+      record.page ?? record.page_number ?? 1,
+      "page",
+      { allowZero: false },
+    );
+    normalized.perPage = ToriiClient._normalizeUnsignedInteger(
+      record.perPage ?? record.per_page ?? record.limit ?? DEFAULT_PAGE_SIZE,
+      "perPage",
+      { allowZero: false },
+    );
+    normalized.signal = signal;
     return normalized;
   }
 
@@ -10082,6 +10247,7 @@ export class ToriiClient {
         successSet: normalizeStatusSet(undefined, DEFAULT_SUCCESS_STATUSES),
         failureSet: normalizeStatusSet(undefined, DEFAULT_FAILURE_STATUSES),
         onStatus: null,
+        scope: undefined,
       };
     }
     const record = requirePlainObjectOption(options, context);
@@ -10091,6 +10257,10 @@ export class ToriiClient {
         ? context.slice(0, -8)
         : context;
     const { signal } = normalizeSignalOption(record, signalContext);
+    const scope =
+      record.scope === undefined || record.scope === null
+        ? undefined
+        : normalizeTransactionStatusScope(record.scope, `${context}.scope`, "global");
     let intervalMs = DEFAULT_TX_STATUS_POLL_INTERVAL_MS;
     if (record.intervalMs !== undefined && record.intervalMs !== null) {
       intervalMs = ToriiClient._normalizeUnsignedInteger(
@@ -10137,6 +10307,7 @@ export class ToriiClient {
       successSet: normalizeStatusSet(record.successStatuses, DEFAULT_SUCCESS_STATUSES),
       failureSet: normalizeStatusSet(record.failureStatuses, DEFAULT_FAILURE_STATUSES),
       onStatus,
+      scope,
     };
   }
 
@@ -11578,8 +11749,27 @@ function normalizeTimeStatusResponse(payload) {
 
 function parseStatusPayload(payload) {
   return {
+    observed_at_ms: coerceStatusInt(payload.observed_at_ms, "status.observed_at_ms"),
     peers: coerceStatusInt(payload.peers, "status.peers"),
     queue_size: coerceStatusInt(payload.queue_size, "status.queue_size"),
+    queue_queued: coerceStatusInt(payload.queue_queued, "status.queue_queued"),
+    queue_inflight: coerceStatusInt(payload.queue_inflight, "status.queue_inflight"),
+    last_block_committed_at_ms: coerceStatusInt(
+      payload.last_block_committed_at_ms,
+      "status.last_block_committed_at_ms",
+    ),
+    last_non_empty_block_committed_at_ms: coerceStatusInt(
+      payload.last_non_empty_block_committed_at_ms,
+      "status.last_non_empty_block_committed_at_ms",
+    ),
+    time_since_last_block_ms: coerceStatusInt(
+      payload.time_since_last_block_ms,
+      "status.time_since_last_block_ms",
+    ),
+    time_since_last_non_empty_block_ms: coerceStatusInt(
+      payload.time_since_last_non_empty_block_ms,
+      "status.time_since_last_non_empty_block_ms",
+    ),
     commit_time_ms: coerceStatusInt(payload.commit_time_ms, "status.commit_time_ms"),
     da_reschedule_total: coerceStatusInt(
       payload.da_reschedule_total,
@@ -11592,6 +11782,7 @@ function parseStatusPayload(payload) {
     lane_commitments: parseLaneCommitments(payload.lane_commitments),
     dataspace_commitments: parseDataspaceCommitments(payload.dataspace_commitments),
     lane_governance: parseLaneGovernance(payload.lane_governance),
+    dataspace_catalog: parseDataspaceCatalog(payload.dataspace_catalog),
     lane_governance_sealed_total: coerceStatusInt(
       payload.lane_governance_sealed_total,
       "status.lane_governance_sealed_total",
@@ -11878,6 +12069,64 @@ function parseDataspaceCommitments(payload) {
         record.block_hash === undefined || record.block_hash === null
           ? ""
           : String(record.block_hash),
+    };
+  });
+}
+
+function parseDataspaceCatalog(payload) {
+  if (payload == null) {
+    return [];
+  }
+  if (!Array.isArray(payload)) {
+    throw new TypeError("status.dataspace_catalog must be an array");
+  }
+  return payload.map((entry, index) => {
+    const record = ensureRecord(entry, `status.dataspace_catalog[${index}]`);
+    const manifestRequired = coerceBoolean(
+      record.manifest_required,
+      `status.dataspace_catalog[${index}].manifest_required`,
+    );
+    const manifestReady = coerceBoolean(
+      record.manifest_ready,
+      `status.dataspace_catalog[${index}].manifest_ready`,
+    );
+    return {
+      lane_id: coerceNestedInt(record, "lane_id", `status.dataspace_catalog[${index}]`),
+      lane_alias:
+        record.lane_alias === undefined || record.lane_alias === null
+          ? ""
+          : String(record.lane_alias),
+      dataspace_id: coerceNestedInt(
+        record,
+        "dataspace_id",
+        `status.dataspace_catalog[${index}]`,
+      ),
+      alias:
+        record.alias === undefined || record.alias === null
+          ? ""
+          : String(record.alias),
+      visibility:
+        record.visibility === undefined || record.visibility === null
+          ? ""
+          : String(record.visibility),
+      storage_profile:
+        record.storage_profile === undefined || record.storage_profile === null
+          ? ""
+          : String(record.storage_profile),
+      manifest_required: manifestRequired,
+      manifest_ready: manifestReady,
+      sealed:
+        record.sealed === undefined || record.sealed === null
+          ? manifestRequired && !manifestReady
+          : coerceBoolean(record.sealed, `status.dataspace_catalog[${index}].sealed`),
+      manifest_path: optionalString(
+        record.manifest_path,
+        `status.dataspace_catalog[${index}].manifest_path`,
+      ),
+      protected_namespaces: parseStringArray(
+        record.protected_namespaces,
+        `status.dataspace_catalog[${index}].protected_namespaces`,
+      ),
     };
   });
 }
@@ -16765,7 +17014,12 @@ function computeStatusMetrics(previous, current) {
   const metrics = {
     commit_latency_ms: current.commit_time_ms,
     queue_size: current.queue_size,
+    queue_queued: current.queue_queued,
+    queue_inflight: current.queue_inflight,
     queue_delta: previous ? current.queue_size - previous.queue_size : 0,
+    time_since_last_block_ms: current.time_since_last_block_ms,
+    time_since_last_non_empty_block_ms:
+      current.time_since_last_non_empty_block_ms,
     da_reschedule_delta: previous
       ? Math.max(0, current.da_reschedule_total - previous.da_reschedule_total)
       : 0,
@@ -16787,6 +17041,31 @@ function computeStatusMetrics(previous, current) {
       metrics.view_change_delta,
   );
   return metrics;
+}
+
+export function statusLivenessElapsedMs(status) {
+  const record = ensureRecord(status, "status");
+  const nonEmptyElapsed = coerceStatusInt(
+    record.time_since_last_non_empty_block_ms,
+    "status.time_since_last_non_empty_block_ms",
+  );
+  if (nonEmptyElapsed > 0) {
+    return nonEmptyElapsed;
+  }
+  return coerceStatusInt(
+    record.time_since_last_block_ms,
+    "status.time_since_last_block_ms",
+  );
+}
+
+export function isStatusQueueStalled(status, stallThresholdMs) {
+  const record = ensureRecord(status, "status");
+  const queueSize = coerceStatusInt(record.queue_size, "status.queue_size");
+  const threshold = coerceIntegerLike(
+    stallThresholdMs,
+    "stallThresholdMs",
+  );
+  return queueSize > 0 && statusLivenessElapsedMs(record) > threshold;
 }
 
 function monotonicTimestamp() {
@@ -19197,7 +19476,15 @@ function normalizeDeployContractResponse(payload) {
     record.tx_hash_hex === undefined || record.tx_hash_hex === null
       ? null
       : normalizeHex32String(record.tx_hash_hex, "deployContract.response.tx_hash_hex");
-  return {
+  const hasPipelineStatus = record.pipeline_status !== undefined;
+  const pipelineStatus =
+    !hasPipelineStatus || record.pipeline_status === null
+      ? null
+      : normalizePipelineTransactionStatus(
+          record.pipeline_status,
+          "deployContract.response.pipeline_status",
+        );
+  const normalized = {
     ok: Boolean(record.ok),
     contract_alias: contractAlias,
     contract_address: contractAddress,
@@ -19215,6 +19502,10 @@ function normalizeDeployContractResponse(payload) {
       "deployContract.response.abi_hash_hex",
     ),
   };
+  if (hasPipelineStatus) {
+    normalized.pipeline_status = pipelineStatus;
+  }
+  return normalized;
 }
 
 function normalizeSetContractAliasRequest(input) {
@@ -20151,6 +20442,15 @@ function normalizeContractCallResponse(payload) {
           record.signing_message_b64,
           "contractCall response.signing_message_b64",
         );
+  if (record.pipeline_status !== undefined) {
+    normalized.pipeline_status =
+      record.pipeline_status === null
+        ? null
+        : normalizePipelineTransactionStatus(
+            record.pipeline_status,
+            "contractCall response.pipeline_status",
+          );
+  }
   return normalized;
 }
 
@@ -22509,6 +22809,146 @@ function normalizePipelineTransactionStatus(
   };
 }
 
+function normalizePipelinePreflight(payload, context = "pipeline preflight response") {
+  const record = ensureRecord(payload ?? {}, context);
+  const sumeragi = ensureRecord(record.sumeragi, `${context}.sumeragi`);
+  const admission = ensureRecord(record.admission, `${context}.admission`);
+  const block = ensureRecord(record.block, `${context}.block`);
+  const pipeline = ensureRecord(record.pipeline, `${context}.pipeline`);
+  const queue = ensureRecord(record.queue, `${context}.queue`);
+  const fees = ensureRecord(record.fees, `${context}.fees`);
+  const normalized = {
+    schema_version: coerceNestedInt(record, "schema_version", context),
+    chain_height: coerceNestedInt(record, "chain_height", context),
+    sumeragi: {
+      block_time_ms: coerceNestedInt(sumeragi, "block_time_ms", `${context}.sumeragi`),
+      commit_time_ms: coerceNestedInt(sumeragi, "commit_time_ms", `${context}.sumeragi`),
+      stall_threshold_ms: coerceNestedInt(
+        sumeragi,
+        "stall_threshold_ms",
+        `${context}.sumeragi`,
+      ),
+    },
+    admission: {
+      max_signatures: coerceNestedInt(admission, "max_signatures", `${context}.admission`),
+      max_instructions: coerceNestedInt(admission, "max_instructions", `${context}.admission`),
+      max_tx_bytes: coerceNestedInt(admission, "max_tx_bytes", `${context}.admission`),
+      max_decompressed_bytes: coerceNestedInt(
+        admission,
+        "max_decompressed_bytes",
+        `${context}.admission`,
+      ),
+      max_metadata_depth: coerceNestedInt(
+        admission,
+        "max_metadata_depth",
+        `${context}.admission`,
+      ),
+    },
+    block: {
+      max_transactions: coerceNestedInt(block, "max_transactions", `${context}.block`),
+    },
+    pipeline: {
+      signature_batch_max: coerceNestedInt(
+        pipeline,
+        "signature_batch_max",
+        `${context}.pipeline`,
+      ),
+      signature_batch_max_ed25519: coerceNestedInt(
+        pipeline,
+        "signature_batch_max_ed25519",
+        `${context}.pipeline`,
+      ),
+      signature_batch_max_secp256k1: coerceNestedInt(
+        pipeline,
+        "signature_batch_max_secp256k1",
+        `${context}.pipeline`,
+      ),
+      signature_batch_max_pqc: coerceNestedInt(
+        pipeline,
+        "signature_batch_max_pqc",
+        `${context}.pipeline`,
+      ),
+      signature_batch_max_bls: coerceNestedInt(
+        pipeline,
+        "signature_batch_max_bls",
+        `${context}.pipeline`,
+      ),
+      overlay_max_instructions: coerceNestedInt(
+        pipeline,
+        "overlay_max_instructions",
+        `${context}.pipeline`,
+      ),
+      ivm_max_decoded_instructions: coerceNestedInt(
+        pipeline,
+        "ivm_max_decoded_instructions",
+        `${context}.pipeline`,
+      ),
+    },
+    queue: {
+      size: coerceNestedInt(queue, "size", `${context}.queue`),
+      queued: coerceNestedInt(queue, "queued", `${context}.queue`),
+      inflight: coerceNestedInt(queue, "inflight", `${context}.queue`),
+    },
+    fees: {
+      fee_asset_id:
+        fees.fee_asset_id === undefined || fees.fee_asset_id === null
+          ? ""
+          : String(fees.fee_asset_id),
+      fee_sink_account_id:
+        fees.fee_sink_account_id === undefined || fees.fee_sink_account_id === null
+          ? ""
+          : String(fees.fee_sink_account_id),
+      base_fee: fees.base_fee,
+      per_byte_fee: fees.per_byte_fee,
+      per_instruction_fee: fees.per_instruction_fee,
+      per_gas_unit_fee: fees.per_gas_unit_fee,
+      sponsorship_enabled: coerceBoolean(
+        fees.sponsorship_enabled,
+        `${context}.fees.sponsorship_enabled`,
+      ),
+      sponsor_max_fee: fees.sponsor_max_fee,
+      sponsor_verified_balance_safety_floor:
+        fees.sponsor_verified_balance_safety_floor,
+      canonical_sponsor_account_id: optionalString(
+        fees.canonical_sponsor_account_id,
+        `${context}.fees.canonical_sponsor_account_id`,
+      ),
+      fee_receipts_activation_height: coerceNestedInt(
+        fees,
+        "fee_receipts_activation_height",
+        `${context}.fees`,
+      ),
+      external_settlement_enabled: coerceBoolean(
+        fees.external_settlement_enabled,
+        `${context}.fees.external_settlement_enabled`,
+      ),
+      burn_from_unix_timestamp_ms: coerceNestedInt(
+        fees,
+        "burn_from_unix_timestamp_ms",
+        `${context}.fees`,
+      ),
+      settlement_mode:
+        fees.settlement_mode === undefined || fees.settlement_mode === null
+          ? ""
+          : String(fees.settlement_mode),
+      successful_claim_fee_exempt_authorities: parseStringArray(
+        fees.successful_claim_fee_exempt_authorities,
+        `${context}.fees.successful_claim_fee_exempt_authorities`,
+      ),
+    },
+    raw: Object.freeze({ ...record }),
+  };
+  return Object.freeze({
+    ...normalized,
+    isStatusStalled(status) {
+      return isStatusQueueStalled(
+        status,
+        normalized.sumeragi.stall_threshold_ms,
+      );
+    },
+  });
+}
+
 function normalizePipelineRecoverySidecar(payload, context = "pipeline recovery response") {
   const record = ensureRecord(payload ?? {}, context);
   const format = requireNonEmptyString(
@@ -22530,6 +22970,67 @@ function normalizePipelineRecoverySidecar(payload, context = "pipeline recovery 
     txs: rawTxs.map((entry, index) =>
       normalizePipelineTxSnapshot(entry, `${context}.txs[${index}]`),
     ),
+  };
+}
+
+function normalizePipelineRecoveryFastpqProofs(
+  payload,
+  context = "pipeline recovery FASTPQ proofs response",
+) {
+  const record = ensureRecord(payload ?? {}, context);
+  const rawProofs = record.proofs ?? [];
+  if (!Array.isArray(rawProofs)) {
+    throw new TypeError(`${context}.proofs must be an array`);
+  }
+  return {
+    height: ToriiClient._normalizeUnsignedInteger(record.height, `${context}.height`, {
+      allowZero: true,
+    }),
+    blockHashHex: normalizeHex32String(record.block_hash ?? "", `${context}.block_hash`),
+    proofs: rawProofs.map((entry, index) =>
+      normalizePipelineRecoveryFastpqProof(
+        entry,
+        `${context}.proofs[${index}]`,
+      ),
+    ),
+  };
+}
+
+function normalizePipelineRecoveryFastpqProof(payload, context) {
+  const record = ensureRecord(payload ?? {}, context);
+  return {
+    entryHash: normalizeHex32String(record.entry_hash ?? "", `${context}.entry_hash`),
+    batchIndex: ToriiClient._normalizeUnsignedInteger(
+      record.batch_index,
+      `${context}.batch_index`,
+      { allowZero: true },
+    ),
+    parameter: requireNonEmptyString(record.parameter ?? "", `${context}.parameter`),
+    transitionCount: ToriiClient._normalizeUnsignedInteger(
+      record.transition_count,
+      `${context}.transition_count`,
+      { allowZero: true },
+    ),
+    traceCommitment: normalizeHex32String(
+      record.trace_commitment ?? "",
+      `${context}.trace_commitment`,
+    ),
+    proofDigest: normalizeHex32String(
+      record.proof_digest ?? "",
+      `${context}.proof_digest`,
+    ),
+    batchBase64: optionalString(record.batch, `${context}.batch`),
+    proofBase64: optionalString(record.proof, `${context}.proof`),
+    batchCompact: optionalBoolean(record.batch_compact, `${context}.batch_compact`),
+    batchReconstructedFromBlock: optionalBoolean(
+      record.batch_reconstructed_from_block,
+      `${context}.batch_reconstructed_from_block`,
+    ),
+    batchReconstructionError: optionalString(
+      record.batch_reconstruction_error,
+      `${context}.batch_reconstruction_error`,
+    ),
+    raw: Object.freeze({ ...record }),
   };
 }
 
@@ -24983,6 +25484,109 @@ function normalizeIterableQueryOptions(options, context, extraAllowedKeys = []) 
   return normalized;
 }
 
+function transactionFilter(op, field, value) {
+  return { op, args: [field, value] };
+}
+
+function normalizeTransactionQuerySort(sort) {
+  if (sort === undefined || sort === null) {
+    return undefined;
+  }
+  if (typeof sort === "string") {
+    const normalized = sort.trim().toLowerCase();
+    if (normalized === "newest") {
+      return [
+        { key: "timestamp_ms", order: "desc" },
+        { key: "entrypoint_hash", order: "desc" },
+      ];
+    }
+    if (normalized === "oldest") {
+      return [
+        { key: "timestamp_ms", order: "asc" },
+        { key: "entrypoint_hash", order: "asc" },
+      ];
+    }
+  }
+  return sort;
+}
+
+function mergeTransactionFilters(rawFilter, convenienceFilters) {
+  if (convenienceFilters.length === 0) {
+    return rawFilter;
+  }
+  const filters = [...convenienceFilters];
+  const existing = ToriiClient._normalizeFilterObject(rawFilter);
+  if (existing !== undefined) {
+    filters.unshift(existing);
+  }
+  return filters.length === 1 ? filters[0] : { op: "and", args: filters };
+}
+
+function normalizeTransactionQueryOptions(options, context) {
+  const normalized = normalizeIterableQueryOptions(
+    options,
+    context,
+    TRANSACTION_QUERY_OPTION_KEYS,
+  );
+  const {
+    assetId,
+    authority,
+    resultOk,
+    sinceTimestampMs,
+    untilTimestampMs,
+    filter,
+    sort,
+    ...rest
+  } = normalized;
+  const convenienceFilters = [];
+  if (assetId !== undefined && assetId !== null) {
+    convenienceFilters.push(
+      transactionFilter("eq", "asset_id", ToriiClient._normalizeAssetId(assetId, "assetId")),
+    );
+  }
+  if (authority !== undefined && authority !== null) {
+    convenienceFilters.push(
+      transactionFilter(
+        "eq",
+        "authority",
+        ToriiClient._normalizeAccountId(authority, "authority"),
+      ),
+    );
+  }
+  if (resultOk !== undefined && resultOk !== null) {
+    convenienceFilters.push(
+      transactionFilter("eq", "result_ok", requireBooleanLike(resultOk, "resultOk")),
+    );
+  }
+  if (sinceTimestampMs !== undefined && sinceTimestampMs !== null) {
+    convenienceFilters.push(
+      transactionFilter(
+        "gte",
+        "timestamp_ms",
+        ToriiClient._normalizeUnsignedInteger(sinceTimestampMs, "sinceTimestampMs", {
+          allowZero: true,
+        }),
+      ),
+    );
+  }
+  if (untilTimestampMs !== undefined && untilTimestampMs !== null) {
+    convenienceFilters.push(
+      transactionFilter(
+        "lte",
+        "timestamp_ms",
+        ToriiClient._normalizeUnsignedInteger(untilTimestampMs, "untilTimestampMs", {
+          allowZero: true,
+        }),
+      ),
+    );
+  }
+  return {
+    ...rest,
+    sort: normalizeTransactionQuerySort(sort),
+    filter: mergeTransactionFilters(filter, convenienceFilters),
+  };
+}
+
 function normalizeEventStreamOptions(options, context, allowedExtraKeys = []) {
   const { signal } = normalizeSignalOption(options, context);
   const normalized = options ?? {};
@@ -25906,8 +26510,8 @@ function normalizeAccountAssetListItem(value, context) {
   const record = ensureRecord(value, context);
   rejectAliasField(record, context, "assetId", "asset_id");
   const assetId = requireNonEmptyString(
-    record.asset_id,
-    `${context}.asset_id`,
+    record.asset_id ?? record.asset,
+    `${context}.asset`,
   );
   if (typeof record.quantity !== "string") {
     throw new TypeError(`${context}.quantity must be a string`);
@@ -25915,6 +26519,7 @@ function normalizeAccountAssetListItem(value, context) {
   const quantity = requireNonEmptyString(record.quantity, `${context}.quantity`);
   const normalized = {
     ...record,
+    asset: record.asset ?? assetId,
     asset_id: assetId,
     quantity,
   };
@@ -26601,11 +27206,11 @@ function normalizeSubscriptionGetResponse(payload) {
   return normalizeSubscriptionListItem(record, "subscription get response");
 }
 
-function normalizeOfflineV2ReadinessResponse(payload, context) {
+function normalizeOfflineReadinessResponse(payload, context) {
   const record = ensureRecord(payload ?? {}, context);
   return {
     ...record,
-    offline_note_v2: coerceBoolean(record.offline_note_v2, `${context}.offline_note_v2`),
+    offline_note: coerceBoolean(record.offline_note, `${context}.offline_note`),
     offline_one_use_keys: coerceBoolean(
       record.offline_one_use_keys,
       `${context}.offline_one_use_keys`,
@@ -26614,9 +27219,9 @@ function normalizeOfflineV2ReadinessResponse(payload, context) {
       record.offline_recursive_note_proof,
       `${context}.offline_recursive_note_proof`,
     ),
-    offline_fountain_qr_v1: coerceBoolean(
-      record.offline_fountain_qr_v1,
-      `${context}.offline_fountain_qr_v1`,
+    offline_fountain_qr: coerceBoolean(
+      record.offline_fountain_qr,
+      `${context}.offline_fountain_qr`,
     ),
     offline_sync_optional: coerceBoolean(
       record.offline_sync_optional,

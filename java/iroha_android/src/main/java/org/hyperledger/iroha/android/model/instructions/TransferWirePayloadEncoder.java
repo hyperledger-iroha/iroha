@@ -54,7 +54,7 @@ public final class TransferWirePayloadEncoder {
 
   /** TransferBox enum discriminant for Asset variant. */
   private static final int TRANSFER_BOX_ASSET_DISCRIMINANT = 2;
-  private static final int MULTISIG_POLICY_VERSION_V1 = 1;
+  private static final int MULTISIG_POLICY_VERSION = 1;
 
   private static final TypeAdapter<Long> UINT8_ADAPTER = NoritoAdapters.uint(8);
   private static final TypeAdapter<Long> UINT16_ADAPTER = NoritoAdapters.uint(16);
@@ -94,6 +94,57 @@ public final class TransferWirePayloadEncoder {
     final NoritoEncoder encoder = new NoritoEncoder(NoritoCodec.DEFAULT_FLAGS);
     new AccountIdAdapter().encode(encoder, parsed);
     return encoder.toByteArray();
+  }
+
+  /** Decodes a bare {@code AccountId} payload produced by {@link #encodeAccountIdPayload}. */
+  public static String decodeAccountIdPayload(byte[] payload) {
+    return decodeAccountIdPayload(payload, NoritoCodec.DEFAULT_FLAGS, NoritoHeader.MINOR_VERSION);
+  }
+
+  /** Decodes a bare {@code AccountId} payload with explicit Norito flags. */
+  public static String decodeAccountIdPayload(byte[] payload, int flags, int flagsHint) {
+    Objects.requireNonNull(payload, "payload");
+    final NoritoDecoder decoder = new NoritoDecoder(payload, flags, flagsHint);
+    final AccountId accountId = new AccountIdAdapter().decode(decoder);
+    if (decoder.remaining() != 0) {
+      throw new IllegalArgumentException("Trailing bytes after AccountId payload");
+    }
+    return accountId.renderI105();
+  }
+
+  /** Decodes a Norito-framed {@code TransferBox::Asset} payload. */
+  static DecodedAssetTransfer decodeAssetTransferPayload(byte[] wirePayload) {
+    Objects.requireNonNull(wirePayload, "wirePayload");
+    final TransferAssetPayload payload =
+        NoritoCodec.decode(wirePayload, new TransferAssetPayloadAdapter(), SCHEMA_PATH);
+    return new DecodedAssetTransfer(
+        payload.source().render(), payload.amount().render(), payload.destination().renderI105());
+  }
+
+  /** Decoded asset-transfer payload rendered as canonical SDK strings. */
+  static final class DecodedAssetTransfer {
+    private final String assetId;
+    private final String amount;
+    private final String destinationAccountId;
+
+    private DecodedAssetTransfer(
+        final String assetId, final String amount, final String destinationAccountId) {
+      this.assetId = assetId;
+      this.amount = amount;
+      this.destinationAccountId = destinationAccountId;
+    }
+
+    String assetId() {
+      return assetId;
+    }
+
+    String amount() {
+      return amount;
+    }
+
+    String destinationAccountId() {
+      return destinationAccountId;
+    }
   }
 
   /**
@@ -154,6 +205,10 @@ public final class TransferWirePayloadEncoder {
 
     int scale() {
       return scale;
+    }
+
+    String render() {
+      return new BigDecimal(mantissa, scale).toPlainString();
     }
   }
 
@@ -244,6 +299,33 @@ public final class TransferWirePayloadEncoder {
     AccountAddress.MultisigPolicyPayload multisigPolicy() {
       return multisigPolicy;
     }
+
+    String renderI105() {
+      if (isSingle()) {
+        final PublicKeyCodec.PublicKeyPayload decoded =
+            PublicKeyCodec.decodeCompactPublicKeyPayload(publicKeyPayload());
+        if (decoded == null) {
+          throw new IllegalArgumentException("Invalid single-key AccountController payload");
+        }
+        final String algorithm = PublicKeyCodec.algorithmForCurveId(decoded.curveId());
+        if (algorithm == null) {
+          throw new IllegalArgumentException(
+              "Unsupported curve id in AccountController payload: " + decoded.curveId());
+        }
+        try {
+          return AccountAddress.fromAccount(decoded.keyBytes(), algorithm)
+              .toI105(AccountAddress.DEFAULT_I105_DISCRIMINANT);
+        } catch (AccountAddress.AccountAddressException ex) {
+          throw new IllegalArgumentException("Invalid single-key AccountController payload", ex);
+        }
+      }
+      try {
+        return AccountAddress.fromMultisigPolicy(multisigPolicy())
+            .toI105(AccountAddress.DEFAULT_I105_DISCRIMINANT);
+      } catch (AccountAddress.AccountAddressException ex) {
+        throw new IllegalArgumentException("Invalid multisig AccountController payload", ex);
+      }
+    }
   }
 
   /**
@@ -258,6 +340,10 @@ public final class TransferWirePayloadEncoder {
 
     AccountController controller() {
       return controller;
+    }
+
+    String renderI105() {
+      return controller.renderI105();
     }
 
     static AccountId parse(String accountIdStr) {
@@ -334,6 +420,21 @@ public final class TransferWirePayloadEncoder {
 
     byte[] scopePayload() {
       return scopePayload.clone();
+    }
+
+    String render() {
+      final String accountId =
+          account == null
+              ? decodeAccountIdPayload(
+                  encodedAccountPayload, NoritoCodec.DEFAULT_FLAGS, NoritoHeader.MINOR_VERSION)
+              : account.renderI105();
+      final String definitionAddress =
+          AssetDefinitionIdEncoder.encodeFromBytes(definition.definitionBytes());
+      final AssetBalanceScopePayload scope = decodeAssetBalanceScopePayload(scopePayload);
+      if (scope.isGlobal()) {
+        return definitionAddress + "#" + accountId;
+      }
+      return definitionAddress + "#" + accountId + "#dataspace:" + scope.dataspaceId();
     }
 
     /**
@@ -435,8 +536,29 @@ public final class TransferWirePayloadEncoder {
     }
 
     @Override
-    public TransferAssetPayload decode(org.hyperledger.iroha.norito.NoritoDecoder decoder) {
-      throw new UnsupportedOperationException("Decoding transfer payloads is not supported");
+    public TransferAssetPayload decode(NoritoDecoder decoder) {
+      final long discriminant = UINT32_ADAPTER.decode(decoder);
+      if (discriminant != TRANSFER_BOX_ASSET_DISCRIMINANT) {
+        throw new IllegalArgumentException("Unsupported TransferBox discriminant: " + discriminant);
+      }
+      final int payloadLength =
+          checkedLength(
+              decoder.readLength((decoder.flags() & NoritoHeader.COMPACT_LEN) != 0),
+              "TransferBox::Asset payload");
+      final byte[] payload = decoder.readBytes(payloadLength);
+      final NoritoDecoder child = new NoritoDecoder(payload, decoder.flags(), decoder.flagsHint());
+      final TransferAssetPayload transfer = decodeTransferStruct(child);
+      if (child.remaining() != 0) {
+        throw new IllegalArgumentException("Trailing bytes after TransferBox::Asset payload");
+      }
+      return transfer;
+    }
+
+    private TransferAssetPayload decodeTransferStruct(NoritoDecoder decoder) {
+      final AssetId source = decodeSizedTypedField(decoder, ASSET_ID_ADAPTER, "source");
+      final NumericValue amount = decodeSizedTypedField(decoder, new NumericAdapter(), "amount");
+      final AccountId destination = decodeSizedTypedField(decoder, ACCOUNT_ID_ADAPTER, "destination");
+      return new TransferAssetPayload(source, amount, destination);
     }
   }
 
@@ -453,8 +575,8 @@ public final class TransferWirePayloadEncoder {
     }
 
     @Override
-    public AssetDefinitionId decode(org.hyperledger.iroha.norito.NoritoDecoder decoder) {
-      throw new UnsupportedOperationException("Decoding AssetDefinitionId is not supported");
+    public AssetDefinitionId decode(NoritoDecoder decoder) {
+      return new AssetDefinitionId(decodeFixedByteArray(decoder, 16, "AssetDefinitionId"));
     }
   }
 
@@ -482,8 +604,8 @@ public final class TransferWirePayloadEncoder {
     }
 
     @Override
-    public AccountId decode(org.hyperledger.iroha.norito.NoritoDecoder decoder) {
-      throw new UnsupportedOperationException("Decoding AccountId is not supported");
+    public AccountId decode(NoritoDecoder decoder) {
+      return new AccountId(CONTROLLER_ADAPTER.decode(decoder));
     }
   }
 
@@ -581,8 +703,81 @@ public final class TransferWirePayloadEncoder {
     }
 
     @Override
-    public AccountController decode(org.hyperledger.iroha.norito.NoritoDecoder decoder) {
-      throw new UnsupportedOperationException("Decoding AccountController is not supported");
+    public AccountController decode(NoritoDecoder decoder) {
+      final long tag = UINT32_ADAPTER.decode(decoder);
+      if (tag == SINGLE_DISCRIMINANT) {
+        final byte[] publicKeyPayload =
+            decodeSizedTypedField(decoder, BYTE_VECTOR_ADAPTER, "single-key controller");
+        return AccountController.single(publicKeyPayload);
+      }
+      if (tag == MULTISIG_DISCRIMINANT) {
+        return AccountController.multisig(decodeSizedMultisigPolicy(decoder));
+      }
+      throw new IllegalArgumentException("Unsupported AccountController discriminant: " + tag);
+    }
+
+    private AccountAddress.MultisigPolicyPayload decodeSizedMultisigPolicy(NoritoDecoder decoder) {
+      final int payloadLength =
+          checkedLength(
+              decoder.readLength((decoder.flags() & NoritoHeader.COMPACT_LEN) != 0),
+              "multisig policy payload");
+      final byte[] payload = decoder.readBytes(payloadLength);
+      final NoritoDecoder child = new NoritoDecoder(payload, decoder.flags(), decoder.flagsHint());
+      final int version =
+          Math.toIntExact(decodeSizedTypedField(child, UINT8_ADAPTER, "multisig version"));
+      final int threshold =
+          Math.toIntExact(decodeSizedTypedField(child, UINT16_ADAPTER, "multisig threshold"));
+      final List<AccountAddress.MultisigMemberPayload> members = decodeSizedMultisigMembers(child);
+      if (child.remaining() != 0) {
+        throw new IllegalArgumentException("Trailing bytes after multisig policy payload");
+      }
+      validateMultisigPolicySemantics(version, threshold, members);
+      return AccountAddress.MultisigPolicyPayload.of(version, threshold, members);
+    }
+
+    private List<AccountAddress.MultisigMemberPayload> decodeSizedMultisigMembers(
+        NoritoDecoder decoder) {
+      final int payloadLength =
+          checkedLength(
+              decoder.readLength((decoder.flags() & NoritoHeader.COMPACT_LEN) != 0),
+              "multisig members payload");
+      final byte[] payload = decoder.readBytes(payloadLength);
+      final NoritoDecoder child = new NoritoDecoder(payload, decoder.flags(), decoder.flagsHint());
+      final int count = checkedLength(child.readUInt(64), "multisig member count");
+      final List<AccountAddress.MultisigMemberPayload> members = new ArrayList<>(count);
+      for (int index = 0; index < count; index++) {
+        final int memberLength =
+            checkedLength(
+                child.readLength((child.flags() & NoritoHeader.COMPACT_LEN) != 0),
+                "multisig member " + index + " payload");
+        final byte[] memberPayload = child.readBytes(memberLength);
+        final NoritoDecoder memberDecoder =
+            new NoritoDecoder(memberPayload, child.flags(), child.flagsHint());
+        final byte[] publicKeyPayload =
+            decodeSizedTypedField(
+                memberDecoder, BYTE_VECTOR_ADAPTER, "multisig member " + index + " public key");
+        final int weight =
+            Math.toIntExact(
+                decodeSizedTypedField(
+                    memberDecoder, UINT16_ADAPTER, "multisig member " + index + " weight"));
+        if (memberDecoder.remaining() != 0) {
+          throw new IllegalArgumentException(
+              "Trailing bytes after multisig member " + index + " payload");
+        }
+        final PublicKeyCodec.PublicKeyPayload decodedKey =
+            PublicKeyCodec.decodeCompactPublicKeyPayload(publicKeyPayload);
+        if (decodedKey == null) {
+          throw new IllegalArgumentException(
+              "Invalid multisig member " + index + " public key payload");
+        }
+        members.add(
+            AccountAddress.MultisigMemberPayload.of(
+                decodedKey.curveId(), weight, decodedKey.keyBytes()));
+      }
+      if (child.remaining() != 0) {
+        throw new IllegalArgumentException("Trailing bytes after multisig members payload");
+      }
+      return members;
     }
   }
 
@@ -618,8 +813,12 @@ public final class TransferWirePayloadEncoder {
     }
 
     @Override
-    public AssetId decode(org.hyperledger.iroha.norito.NoritoDecoder decoder) {
-      throw new UnsupportedOperationException("Decoding AssetId is not supported");
+    public AssetId decode(NoritoDecoder decoder) {
+      return new AssetId(
+          decodeSizedTypedField(decoder, ACCOUNT_ID_ADAPTER, "AssetId.account"),
+          decodeSizedTypedField(decoder, ASSET_DEF_ID_ADAPTER, "AssetId.definition"),
+          null,
+          decodeSizedRawField(decoder, "AssetId.scope"));
     }
 
     private <T> void encodeFieldWithLength(NoritoEncoder encoder, TypeAdapter<T> adapter, T value) {
@@ -650,8 +849,13 @@ public final class TransferWirePayloadEncoder {
     }
 
     @Override
-    public NumericValue decode(org.hyperledger.iroha.norito.NoritoDecoder decoder) {
-      throw new UnsupportedOperationException("Decoding numeric values is not supported");
+    public NumericValue decode(NoritoDecoder decoder) {
+      final BigInteger mantissa = decodeFieldBigInt(decoder);
+      final int scale = Math.toIntExact(decodeFieldU32(decoder));
+      if (scale < 0 || scale > 28) {
+        throw new IllegalArgumentException("Numeric scale exceeds Iroha limit of 28: " + scale);
+      }
+      return new NumericValue(mantissa, scale);
     }
 
     /**
@@ -682,6 +886,49 @@ public final class TransferWirePayloadEncoder {
       // u32 length prefix
       encoder.writeUInt(twosCompBytes.length, 32);
       encoder.writeBytes(twosCompBytes);
+    }
+
+    private BigInteger decodeFieldBigInt(NoritoDecoder decoder) {
+      final byte[] payload = decodeSizedRawField(decoder, "numeric mantissa");
+      final NoritoDecoder child = new NoritoDecoder(payload, decoder.flags(), decoder.flagsHint());
+      final int byteLength = checkedLength(child.readUInt(32), "numeric mantissa byte length");
+      final byte[] twosComplement = child.readBytes(byteLength);
+      if (child.remaining() != 0) {
+        throw new IllegalArgumentException("Trailing bytes after numeric mantissa payload");
+      }
+      final BigInteger value = decodeBigInt(twosComplement);
+      if (!Arrays.equals(toTwosComplementLittleEndian(value), twosComplement)) {
+        throw new IllegalArgumentException("Numeric mantissa is not canonical");
+      }
+      if (value.bitLength() >= 512) {
+        throw new IllegalArgumentException(
+            "Numeric mantissa exceeds Iroha limit of 512 bits: " + value.bitLength());
+      }
+      return value;
+    }
+
+    private long decodeFieldU32(NoritoDecoder decoder) {
+      final byte[] payload = decodeSizedRawField(decoder, "numeric scale");
+      if (payload.length != 4) {
+        throw new IllegalArgumentException("numeric scale payload must be 4 bytes");
+      }
+      final NoritoDecoder child = new NoritoDecoder(payload, decoder.flags(), decoder.flagsHint());
+      final long value = UINT32_ADAPTER.decode(child);
+      if (child.remaining() != 0) {
+        throw new IllegalArgumentException("Trailing bytes after numeric scale payload");
+      }
+      return value;
+    }
+
+    private BigInteger decodeBigInt(byte[] payload) {
+      if (payload.length == 0) {
+        return BigInteger.ZERO;
+      }
+      final byte[] bigEndian = new byte[payload.length];
+      for (int index = 0; index < payload.length; index++) {
+        bigEndian[index] = payload[payload.length - 1 - index];
+      }
+      return new BigInteger(bigEndian);
     }
 
     /**
@@ -746,9 +993,44 @@ public final class TransferWirePayloadEncoder {
     return encoder.toByteArray();
   }
 
+  private static AssetBalanceScopePayload decodeAssetBalanceScopePayload(byte[] payload) {
+    final NoritoDecoder decoder =
+        new NoritoDecoder(payload, NoritoCodec.DEFAULT_FLAGS, NoritoHeader.MINOR_VERSION);
+    final long tag = UINT32_ADAPTER.decode(decoder);
+    if (tag == 0L) {
+      if (decoder.remaining() != 0) {
+        throw new IllegalArgumentException("Trailing bytes after global asset scope");
+      }
+      return AssetBalanceScopePayload.global();
+    }
+    if (tag == 1L) {
+      final byte[] field = decodeSizedRawField(decoder, "dataspace asset scope");
+      final NoritoDecoder child = new NoritoDecoder(field, decoder.flags(), decoder.flagsHint());
+      final byte[] idPayload = decodeSizedRawField(child, "dataspace asset scope id");
+      if (idPayload.length != 8) {
+        throw new IllegalArgumentException("dataspace asset scope must contain a u64");
+      }
+      final NoritoDecoder idDecoder =
+          new NoritoDecoder(idPayload, child.flags(), child.flagsHint());
+      final long dataspaceId = idDecoder.readUInt(64);
+      if (idDecoder.remaining() != 0) {
+        throw new IllegalArgumentException(
+            "Trailing bytes after dataspace asset scope id payload");
+      }
+      if (child.remaining() != 0) {
+        throw new IllegalArgumentException("Trailing bytes after dataspace asset scope id");
+      }
+      if (decoder.remaining() != 0) {
+        throw new IllegalArgumentException("Trailing bytes after dataspace asset scope");
+      }
+      return AssetBalanceScopePayload.dataspace(dataspaceId);
+    }
+    throw new IllegalArgumentException("Unsupported AssetBalanceScope discriminant: " + tag);
+  }
+
   private static void validateMultisigPolicySemantics(
       int version, int threshold, List<AccountAddress.MultisigMemberPayload> members) {
-    if (version != MULTISIG_POLICY_VERSION_V1) {
+    if (version != MULTISIG_POLICY_VERSION) {
       throw new IllegalArgumentException(
           "Invalid multisig policy: unsupported version " + version);
     }
@@ -812,8 +1094,12 @@ public final class TransferWirePayloadEncoder {
     }
     final NoritoEncoder encoder = new NoritoEncoder(NoritoCodec.DEFAULT_FLAGS);
     UINT32_ADAPTER.encode(encoder, 1L);
-    writePayloadLength(encoder, 8);
-    encoder.writeUInt(scope.dataspaceId(), 64);
+    final NoritoEncoder child = encoder.childEncoder();
+    writePayloadLength(child, 8);
+    child.writeUInt(scope.dataspaceId(), 64);
+    final byte[] payload = child.toByteArray();
+    writePayloadLength(encoder, payload.length);
+    encoder.writeBytes(payload);
     return encoder.toByteArray();
   }
 
@@ -836,6 +1122,14 @@ public final class TransferWirePayloadEncoder {
     return value;
   }
 
+  private static byte[] decodeSizedRawField(NoritoDecoder decoder, String fieldName) {
+    final int payloadLength =
+        checkedLength(
+            decoder.readLength((decoder.flags() & NoritoHeader.COMPACT_LEN) != 0),
+            fieldName + " payload");
+    return decoder.readBytes(payloadLength);
+  }
+
   private static int checkedLength(long length, String fieldName) {
     if (length < 0L) {
       throw new IllegalArgumentException(fieldName + " must be non-negative");
@@ -844,6 +1138,21 @@ public final class TransferWirePayloadEncoder {
       throw new IllegalArgumentException(fieldName + " too large");
     }
     return (int) length;
+  }
+
+  private static byte[] decodeFixedByteArray(
+      NoritoDecoder decoder, int length, String fieldName) {
+    final byte[] out = new byte[length];
+    final boolean compact = (decoder.flags() & NoritoHeader.COMPACT_LEN) != 0;
+    for (int index = 0; index < length; index++) {
+      final long elementLength = decoder.readLength(compact);
+      if (elementLength != 1L) {
+        throw new IllegalArgumentException(
+            fieldName + " element " + index + " must contain exactly one byte");
+      }
+      out[index] = (byte) decoder.readByte();
+    }
+    return out;
   }
 
   private static final class AssetBalanceScopePayload {

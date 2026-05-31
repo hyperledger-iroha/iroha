@@ -118,11 +118,14 @@ Init ==
   checked = 0
 
 Next ==
-  UNCHANGED vars
+  \/ /\ checked < 21
+     /\ checked' = checked + 1
+  \/ /\ checked = 21
+     /\ UNCHANGED vars
 
 TypeInvariant ==
   /\ Bug \in Bugs
-  /\ checked \in 0..1
+  /\ checked \in 0..21
 
 DuplicateSafety ==
   /\ SameViewDuplicateRejected
@@ -161,5 +164,51 @@ SafetyFast ==
   /\ NoDependencyWindowSafety
   /\ GeneralAdmissionSafety
   /\ EmptyFrontierFallbackSafety
+
+DuplicateAnchors ==
+  /\ DuplicateSafety
+  /\ SameViewDuplicateRejected
+  /\ DifferentViewNotDuplicate
+
+ProposalObservedAnchors ==
+  /\ ProposalObservedSafety
+  /\ ProposalCommitDependencyAllowed
+  /\ ProposalMissingQcDependencyAllowed
+  /\ ProposalFrontierDependencyAllowed
+  /\ ProposalNoDependencyRejected
+  /\ ProposalDependencyNeedsResilience
+  /\ ProposalDependencyNeedsConcreteUnresolved
+
+NoDependencyWindowAnchors ==
+  /\ NoDependencyWindowSafety
+  /\ RecentNoDependencyWindowRejected
+  /\ ElapsedNoDependencyWindowAllowed
+  /\ NoPriorNoDependencyAttemptAllowed
+  /\ FreshThrottleEntryRetained
+  /\ StaleThrottleEntryPruned
+
+GeneralAdmissionAnchors ==
+  /\ GeneralAdmissionSafety
+  /\ DependencySignalsAllowed
+  /\ RepeatedTimeoutStreakAllowed
+  /\ NoAdmissionSourceRejected
+
+EmptyFrontierFallbackAnchors ==
+  /\ EmptyFrontierFallbackSafety
+  /\ EmptyFrontierFirstTimeoutAllowed
+  /\ EmptyFallbackRejectsNonFrontier
+  /\ EmptyFallbackRejectsPendingBlock
+  /\ EmptyFallbackRejectsProposalSeen
+  /\ EmptyFallbackRejectsCurrentTimedOut
+
+MissingQcReacquireAdmissionSafetyAnchors ==
+  /\ DuplicateAnchors
+  /\ ProposalObservedAnchors
+  /\ NoDependencyWindowAnchors
+  /\ GeneralAdmissionAnchors
+  /\ EmptyFrontierFallbackAnchors
+
+Safety ==
+  MissingQcReacquireAdmissionSafetyAnchors
 
 ====

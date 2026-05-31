@@ -992,10 +992,12 @@ deterministic self-consistent test proof, so the EVM wrapper and TRON wrapper
 both cover pairing acceptance plus replay rejection instead of only malformed
 proof failures. The same smoke now rejects zero proof points, off-curve G2
 points, and on-curve G2 points outside the BN254 prime-order subgroup before the
-accepted-proof path. The TRON wrapper smoke also covers its public-input
-preflight guards, cleartext source-domain overflow rejection, wrong-statement
-rejection, and rejection of a valid proof replayed against a different TRON
-deployment binding. The smoke script pins
+accepted-proof path. Accepted-proof negatives also mutate payload,
+finality-height, and finality-block public signals after proof generation. The
+TRON wrapper smoke also covers its public-input preflight guards, cleartext
+source-domain overflow rejection, wrong-statement rejection, and rejection of a
+valid proof replayed against a different TRON deployment binding. The smoke
+script pins
 its temporary `solc`, `ganache`, and `ethers` dependencies so this verifier
 check is reproducible across operator machines without checked-in Node
 artifacts.
@@ -2734,6 +2736,12 @@ reject route canary evidence hashes that reuse the governed
 source-material record hash, source-adapter deployment record hash, route
 allowlist hash, or destination binding hash before JSON summaries or production
 TOML are emitted.
+The all-lanes preflight also rejects EVM/TRON route-canary transaction hash
+roles and TON live-account route-canary hashes when they alias the governed
+source-material, source-deployment, route-allowlist, or destination-binding
+hashes they are supposed to prove. Public release-bundle verification mirrors
+the TON non-zero and lane-hash alias checks for the published live-account
+route-canary fields.
 The all-lanes preflight extends that aliasing guard across lanes: a route
 canary evidence hash for one domain cannot replay another domain's source
 material hash, source-adapter deployment hash, destination binding hash, or
@@ -2815,7 +2823,9 @@ helper, and all-lanes preflight also reject reuse between the distinct
 transaction hash, calldata, message id, payload, statement, commitment, and
 finality block hash roles, so a canary cannot be replayed across
 proof tuple versions, EVM-family lanes, drifted Groth16 public inputs, or
-synthetic transcript-role aliases. A
+synthetic transcript-role aliases. Public release-bundle verification applies
+the same non-zero rule to each EVM route-canary transaction/public-input word
+published in readiness and all-lanes JSON. A
 manually supplied canary hash is only accepted as a pin to that derived value.
 The live TOML
 carries the observed RPC chain id, bridge wrapper runtime code hash, verifier
@@ -3038,7 +3048,10 @@ allowlist or paired source record hashes are supplied, the helper requires
 accepted; `toml_ready` remains false and production TOML is rejected until that
 pin, the route canary evidence hash, audited active account-status metadata,
 account-state metadata, and
-matching code-BoC root evidence are present:
+matching code-BoC root evidence are present. All-lanes preflight also requires
+the TON account-state and last-transaction hashes carried as canary evidence to
+remain distinct from the governed source, deployment, route, destination, and
+verifier-code hash roles before accepting the live-account canary:
 
 ```bash
 python3 scripts/sccp_ton_destination_evidence.py \
@@ -3066,7 +3079,9 @@ hash. The live account-state hash and last-transaction hash must be distinct,
 so a single digest cannot be replayed across the two TON snapshot roles. The
 helper emits the matching `ton_route_canary_*` route allowlist fields and
 metadata comments so the runtime and all-lanes preflight can recompute the same
-transcript.
+transcript. Release-bundle verification rejects all-zero published TON
+live-account route-canary hashes and TON route-canary hashes that reuse governed
+source, route, or destination hash roles.
 
 JavaScript portals, Python relay services, and mobile apps can derive that same
 transcript with `canonicalTonSccpRouteCanaryEvidenceBytes` /
@@ -3167,7 +3182,9 @@ pin and a route canary evidence hash recomputed from the finalized runtime
 metadata are present. The canary hash binds the governed route hash,
 destination binding, source material/deployment record hashes, runtime
 entrypoint, verifier code hash, finalized head, runtime `specName`,
-`specVersion`, `transactionVersion`, and finalized runtime bytes:
+`specVersion`, `transactionVersion`, and finalized runtime bytes. Public
+release-bundle verification rejects a zero published
+`substrate_finalized_head` for every Substrate-family route canary:
 
 ```bash
 python3 scripts/sccp_substrate_destination_evidence.py \
@@ -3377,10 +3394,10 @@ TOML; `full_toml_ready` is true only on that same fully pinned path. The live
 helper reads the TRON transaction receipt, verifies the destination verifier's
 `MessageProofAccepted` log against `destinationBindingHash()`,
 `verifierBackendHash()`, `proofFamilyHash()`, and `networkId()`, binds the
-validated route allowlist hash, then fetches the raw `TriggerSmartContract`
-transaction, verifies that the visible and raw-data owner addresses match,
-requires the canonical transaction signature to recover to that same owner, and
-verifies the
+validated route allowlist hash, requires exactly one matching accepted-proof log,
+then fetches the raw `TriggerSmartContract` transaction, verifies that the
+visible and raw-data owner addresses match, requires the canonical transaction
+signature to recover to that same owner, and verifies the
 `submitSccpMessageProof(bytes,bytes32[6],bytes32)` selector, ABI public inputs,
 statement hash, 384-byte proof tuple, and proof header against the accepted
 event and deployed verifier domains. The visible `TriggerSmartContract.data`
@@ -3411,7 +3428,9 @@ statement, commitment, finality block, and signature hash roles before the
 canary hash can be accepted. This prevents a
 receipt-only canary from satisfying the full-TOML gate when the submitted
 verifier call drifts from the emitted event, owner/signature evidence, or
-`usedMessageProofs` state is not carried. The offline direct TRON renderer
+`usedMessageProofs` state is not carried. Source-event transaction readback uses
+the same single-governed-log policy for `SccpSourceEvent(bytes32)` before it can
+emit replayable offline source-event args. The offline direct TRON renderer
 requires the same `--route-canary-transaction-*` fields plus
 `--route-canary-used-message-proof` for full TOML, rejects reused transcript
 hash roles, derives the canary hash when `--route-canary-evidence-hash` is
@@ -3443,7 +3462,11 @@ canonical low-S recoverable secp256k1 signature recovering to the transaction
 owner.
 Live TOML also carries the route-canary signature hash, recovered address, and
 `sccp_tron_route_canary_signature_recovers_to_owner` audit comments; all-lanes
-preflight requires those comments before accepting TRON route-canary evidence.
+preflight and release-bundle verification require those comments before
+accepting TRON route-canary evidence, and reject zero TRON owner/recovered
+addresses, zero route-canary evidence/route/destination hashes, zero TRON
+route-canary transcript words, reused TRON route-canary hash roles, or a
+recovered TRON address that differs from the transaction owner.
 The canary hash recomputation uses those call-transcript and owner/signature
 fields, so a reused receipt tuple without the matching submitted calldata and
 signer evidence does not satisfy the production gate.
@@ -3750,8 +3773,10 @@ checks that the replayed hash equals both the live runtime code hash and the
 rollout `verifier_code_hash`; offline Substrate destination TOML without that
 finalized runtime evidence remains diagnostic and is rejected for all-lanes
 launch. Substrate-family route allowlists must also carry a canary hash
-recomputed from that same finalized runtime evidence. Missing or drifting
-destination binding metadata fails the preflight before governance staging. The
+recomputed from that same finalized runtime evidence, and public release-bundle
+verification rejects zero finalized-head route-canary fields in the published
+readiness JSON. Missing or drifting destination binding metadata fails the
+preflight before governance staging. The
 route allowlist hash is also recomputed from the canonical source material
 record hash, source-adapter deployment record hash, and destination binding
 hash, so a stale or unrelated route policy hash cannot open a different lane
@@ -3880,10 +3905,16 @@ the input TOML or phase transcript sources, so evidence cannot be deleted before
 it is copied into the bundle. Before publishing or reviewing attached files, run
 `python3 scripts/sccp_verify_release_bundle.py <bundle-dir>` to recompute every
 attachment hash and confirm that the readiness report, all-lanes summary, and
-manifest all agree on `production_ready`. The manifest and readiness-report
-JSON roots reject missing or unknown top-level fields, and manifest/report
-artifact entries reject unknown fields and require artifact `bytes`/`sha256`
-claims to keep canonical JSON
+manifest all agree on `production_ready`; with `--json`, the verifier also emits
+`manifest_sha256` so reviewers can archive the verified manifest root while the
+manifest remains outside its own artifact table. The manifest, readiness-report, and
+all-lanes summary JSON roots must keep the bundle builder's canonical sorted-key
+serialization and reject duplicate JSON object keys before semantic review, so
+duplicate-key smuggling or hand-edited formatting drift cannot be published
+after attachment hashes are refreshed. The manifest and
+readiness-report JSON roots reject missing or unknown top-level fields, and
+manifest/report artifact entries reject unknown fields and require artifact
+`bytes`/`sha256` claims to keep canonical JSON
 integer/string types, so unreviewed operator claims or malformed metadata
 cannot be hidden in attachments that the canonical Markdown ignores. The
 readiness
@@ -3909,10 +3940,11 @@ public release notes cannot rename, omit, or reorder checklist gates while
 keeping the underlying evidence unchanged; checklist roots and gate rows also
 reject unknown fields, malformed gate ids/titles, and malformed blocker lists
 so operator approvals cannot be hidden in ignored JSON members. The manifest
-artifact set must
-exactly match the required reports, copied evidence inputs, and copied corridor
-logs referenced by known passed phases in the readiness report, so a hash-bound
-but unreviewed appendix or unknown phase log cannot be smuggled into an
+artifact set and order must
+exactly match the required reports, copied evidence inputs, copied corridor
+logs referenced by known passed phases in the readiness report, and final
+release-notes attachment, so a hash-bound but unreviewed appendix, unknown
+phase log, or regenerated artifact table cannot be smuggled into an
 otherwise verified bundle. The verifier independently reloads the current
 production-corridor phase list and requires every known phase to be marked
 `passed` with a hash-bound artifact at the canonical
@@ -3925,7 +3957,16 @@ results and the production verifier backend labels
 (`solana-program-v1`, `ton-contract-v1`, `substrate-runtime-v1`,
 `evm-groth16-bn254-v1`, and `tron-groth16-bn254-v1`), so public release notes
 cannot claim a portal or mobile proof path is validated unless its required SDK
-and contract-smoke phases actually passed. Those portal/mobile submission rows
+and contract-smoke phases actually passed. The surface rows also name the
+lane-local user proof-generation helpers: EVM/BSC canonical receipt-proof
+byte/hash helpers, TRON receipt-state and transaction-source proof helpers,
+Solana and TON source-state request builders, full-light-client audit request
+builders and source-state prover facades, and the Substrate runtime-storage
+proof request builder. A release bundle therefore cannot present the final
+EVM/TRON submit payload, Solana instruction, TON BOC packaging, or Substrate
+runtime call envelope as portal/mobile-ready while omitting the user-side native
+proof-generation helpers. Those
+portal/mobile submission rows
 must also keep canonical JSON field shapes: lane/backend/helper/submission
 labels are non-empty strings, required phases and validation blockers are lists
 of non-empty strings, and validation status is either `passed` or `blocked`.
@@ -3933,6 +3974,8 @@ The verifier also
 rejects
 non-canonical or escaping manifest paths, a symlinked `manifest.json`,
 symlinked artifacts, duplicate, unmanifested, or omitted required artifacts,
+non-canonical manifest/readiness-report/summary JSON serialization,
+duplicate keys in public JSON roots,
 unknown corridor phase statuses or evidence keys,
 non-canonical corridor phase-log paths,
 malformed artifact byte/hash JSON types,
@@ -3942,7 +3985,8 @@ release notes that omit the manifest handoff, standalone-summary drift from the
 report's embedded evidence, empty or non-object report/summary JSON roots,
 malformed readiness sections, missing or empty copied input-artifact lists,
 malformed or duplicate input-provenance paths, input-provenance drift from the
-copied evidence artifacts, non-canonical readiness-report artifact paths,
+copied evidence artifacts, copied evidence layout drift from `evidence/NN-*.toml`,
+non-canonical readiness-report artifact paths,
 missing or unknown manifest/readiness-report top-level fields,
 unknown embedded or standalone all-lanes summary root or lane fields,
 malformed all-lanes required-domain or blocker scalar lists,
@@ -3951,9 +3995,15 @@ malformed nested all-lanes lane
 record/hash/source-gate/destination-binding/route/route-canary transcript
 sections,
 malformed lane-specific route-canary transcript sections,
+EVM-family route-canary zero transaction/public-input words or reused
+route-canary hash roles,
+TRON route-canary zero owner/recovered addresses, zero transcript words, or
+zero binding hashes, reused TRON route-canary hash roles, or recovered-signer
+drift from the transaction owner,
 expected destination/route hash drift,
 route-canary route/destination hash drift from sibling lane evidence,
-cryptographic evidence row domain/chain drift from embedded lane rows,
+cryptographic evidence row domain/chain drift or per-field
+source/destination/route/canary drift from embedded lane rows,
 unknown manifest or report artifact fields,
 unknown corridor root fields,
 unknown or malformed release-checklist fields,
@@ -3962,13 +4012,16 @@ manifest readiness-header drift from the report and summary,
 report/summary drift from recomputing the copied evidence TOML, a Markdown
 readiness report that is not the canonical render of the JSON readiness report,
 a release-notes attachment that is not the canonical manifest/report artifact
-table, and missing, malformed, unbound, lane-mismatched, or extra-field
+table, manifest artifact-order drift from the bundle builder's public
+attachment order, and missing, malformed, unbound, lane-mismatched, or extra-field
 per-lane cryptographic evidence rows.
 That final check recomputes the public cryptographic table from the embedded
-all-lanes lane evidence and requires exact JSON domain/chain types plus
-canonical bytes32 hash text, so a release note cannot publish a different or
-malformed governed verifier, destination, route, or canary hash than the one
-that actually passed preflight. For passed phases, the verifier independently re-reads each copied
+all-lanes lane evidence, requires exact JSON domain/chain types plus canonical
+bytes32 hash text, and reports field-specific failures when a public row's
+source-material, source-deployment, destination-binding, route-allowlist,
+route-canary hash/source, or route-canary binding flag differs from the lane
+that actually passed preflight. For passed phases, the verifier independently
+re-reads each copied
 corridor log and requires the same phase marker and completion sentinel as the
 report generator.
 The EVM-family, Solana, TON, and Substrate-family destination renderers and

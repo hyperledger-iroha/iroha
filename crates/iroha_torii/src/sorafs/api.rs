@@ -2339,9 +2339,8 @@ pub(crate) async fn handle_get_sorafs_pin_registry(
         Err(err) => return err.into_response(),
     };
 
-    let format = match crate::utils::negotiate_json_only_response(accept.as_ref().map(|hdr| &hdr.0))
-    {
-        Ok(()) => crate::utils::ResponseFormat::Json,
+    let format = match crate::utils::negotiate_response_format(accept.as_ref().map(|hdr| &hdr.0)) {
+        Ok(format) => format,
         Err(err) => return err.into_response(),
     };
 
@@ -2435,7 +2434,38 @@ pub(crate) async fn handle_get_sorafs_pin_registry(
         json_entry("limit", limit as u64),
         json_entry("manifests", Value::Array(manifests_json)),
     ]);
-    crate::utils::respond_value_with_format(response, format)
+    match format {
+        crate::utils::ResponseFormat::Json => {
+            crate::utils::respond_value_with_format(response, format)
+        }
+        crate::utils::ResponseFormat::Norito => {
+            let json_text = match json::to_string(&response) {
+                Ok(value) => value,
+                Err(err) => {
+                    error!(?err, "failed to serialize pin registry response");
+                    return json_error(
+                        StatusCode::INTERNAL_SERVER_ERROR,
+                        "failed to serialize pin registry response",
+                    );
+                }
+            };
+            let bytes = match norito::to_bytes(&json_text) {
+                Ok(bytes) => bytes,
+                Err(err) => {
+                    error!(?err, "failed to encode pin registry Norito response");
+                    return json_error(
+                        StatusCode::INTERNAL_SERVER_ERROR,
+                        "failed to encode pin registry response",
+                    );
+                }
+            };
+            Response::builder()
+                .status(StatusCode::OK)
+                .header(header::CONTENT_TYPE, crate::utils::NORITO_MIME_TYPE)
+                .body(Body::from(bytes))
+                .expect("build pin registry Norito response")
+        }
+    }
 }
 
 #[cfg(feature = "app_api")]
@@ -4524,10 +4554,22 @@ pub(crate) async fn handle_post_sorafs_storage_pin(
         &manifest,
         &plan,
         &mut reader,
-        stripe_layout,
-        chunk_roles,
+        stripe_layout.clone(),
+        chunk_roles.clone(),
     ) {
-        return node_storage_error_response(err);
+        match err {
+            NodeStorageError::Storage(StorageBackendError::ManifestExists { manifest_id }) => {
+                let Some(storage) = state.sorafs_node.storage() else {
+                    return storage_disabled_response();
+                };
+                if let Err(err) =
+                    storage.attach_plan_metadata(&manifest_id, &plan, stripe_layout, chunk_roles)
+                {
+                    return storage_backend_error(err);
+                }
+            }
+            other => return node_storage_error_response(other),
+        }
     }
 
     let response = StoragePinResponseDto {
@@ -5204,16 +5246,20 @@ fn manifest_envelope_valid(
         .map(str::trim)
         .filter(|value| !value.is_empty())
     {
-        let Some(record) = record else {
-            return false;
-        };
-        let envelope = match BASE64_STANDARD.decode(envelope_b64.as_bytes()) {
-            Ok(bytes) => bytes,
-            Err(_) => return false,
-        };
-        return validate_manifest_envelope_bytes(record, &envelope);
+        if let Some(record) = record {
+            if let Ok(envelope) = BASE64_STANDARD.decode(envelope_b64.as_bytes())
+                && validate_manifest_envelope_bytes(record, &envelope)
+            {
+                return true;
+            }
+        }
+        return alias_manifest_proof_valid(headers, manifest);
     }
 
+    alias_manifest_proof_valid(headers, manifest)
+}
+
+fn alias_manifest_proof_valid(headers: &HeaderMap, manifest: &StoredManifest) -> bool {
     let proof_b64 = headers
         .get(HEADER_SORA_PROOF)
         .and_then(|value| value.to_str().ok())
@@ -5254,8 +5300,6 @@ fn manifest_envelope_valid(
         {
             return false;
         }
-    } else if bundle.binding.manifest_cid.as_slice() != manifest.manifest_digest() {
-        return false;
     }
     true
 }
@@ -6742,6 +6786,26 @@ pub(crate) async fn handle_get_sorafs_storage_car_range(
         }],
     };
 
+    let car_stats = {
+        let mut stats_reader = ChunkFilesReader::new(chunk_slice.chunks.clone());
+        let writer = CarStreamingWriter::new(&sub_plan);
+        match writer.write_from_reader(&mut stats_reader, io::sink()) {
+            Ok(stats) => stats,
+            Err(err) => {
+                error!(
+                    ?err,
+                    manifest_id = manifest_id_hex,
+                    "failed to size CAR range response"
+                );
+                drop(stream_token_guard);
+                return json_error(
+                    StatusCode::INTERNAL_SERVER_ERROR,
+                    "failed to assemble CAR range",
+                );
+            }
+        }
+    };
+
     #[cfg(debug_assertions)]
     debug_assert_eq!(chunk_slice.chunk_count(), expected_chunk_count);
     #[cfg(not(debug_assertions))]
@@ -6758,6 +6822,13 @@ pub(crate) async fn handle_get_sorafs_storage_car_range(
     response_headers.insert(
         header::CONTENT_RANGE,
         header_value(&content_range, "Content-Range"),
+    );
+    response_headers.insert(
+        header::CONTENT_LENGTH,
+        header_value(
+            &car_stats.car_size.to_string(),
+            header::CONTENT_LENGTH.as_str(),
+        ),
     );
     let chunk_range_value = format!(
         "start={};end={};chunks={}",
@@ -6803,7 +6874,7 @@ pub(crate) async fn handle_get_sorafs_storage_car_range(
     let response_status = StatusCode::PARTIAL_CONTENT;
     let latency_ms = request_timer.elapsed().as_secs_f64() * 1_000.0;
     #[cfg(feature = "telemetry")]
-    let payload_bytes = length;
+    let payload_bytes = car_stats.car_size;
     #[cfg(feature = "telemetry")]
     {
         let provider_hex = provider_id.as_ref().map(encode);
@@ -7759,6 +7830,17 @@ fn alias_proof_b64(alias: &str) -> String {
 
     let bytes = norito::to_bytes(&bundle).expect("encode alias proof bundle");
     BASE64_STANDARD.encode(bytes)
+}
+
+#[cfg(test)]
+#[test]
+fn alias_proof_header_fixture_decodes() {
+    let encoded = alias_proof_b64("alias@capability.dataspace");
+    let bytes = BASE64_STANDARD
+        .decode(encoded.as_bytes())
+        .expect("decode alias proof header");
+    let bundle = crate::sorafs::decode_alias_proof(&bytes).expect("verify alias proof header");
+    assert_eq!(bundle.binding.alias, "alias@capability.dataspace");
 }
 
 fn decode_hex_32(value: &str) -> Result<[u8; 32], String> {
@@ -9038,6 +9120,27 @@ fn car_verification_refusal(
 }
 
 pub(crate) fn chunk_profile_for_manifest(manifest: &ManifestV1) -> ApiResult<ChunkProfile> {
+    if manifest.chunking.profile_id.0 == 0 {
+        if manifest.chunking.min_size == 0
+            || manifest.chunking.target_size == 0
+            || manifest.chunking.max_size == 0
+            || manifest.chunking.min_size > manifest.chunking.target_size
+            || manifest.chunking.target_size > manifest.chunking.max_size
+        {
+            return Err(json_error(
+                StatusCode::BAD_REQUEST,
+                "manifest inline chunker profile has invalid chunk size bounds",
+            )
+            .into());
+        }
+        return Ok(ChunkProfile {
+            min_size: manifest.chunking.min_size as usize,
+            target_size: manifest.chunking.target_size as usize,
+            max_size: manifest.chunking.max_size as usize,
+            break_mask: manifest.chunking.break_mask as u64,
+        });
+    }
+
     if let Some(descriptor) = chunker_registry::lookup(manifest.chunking.profile_id) {
         if descriptor.multihash_code != manifest.chunking.multihash_code {
             return Err(json_error(
@@ -9068,6 +9171,32 @@ mod chunk_profile_tests {
 
     use blake3;
     use sorafs_manifest::{BLAKE3_256_MULTIHASH_CODE, DagCodecId, ManifestBuilder, PinPolicy};
+
+    #[test]
+    fn chunk_profile_for_manifest_accepts_inline_profile() {
+        let payload = b"chunk-profile-fixture";
+        let content_length = payload.len() as u64;
+        let profile = sorafs_chunker::ChunkProfile {
+            min_size: 8,
+            target_size: 8,
+            max_size: 8,
+            break_mask: 1,
+        };
+        let manifest = ManifestBuilder::new()
+            .root_cid(vec![0xAA; 16])
+            .dag_codec(DagCodecId(0x71))
+            .chunking_from_profile(profile, BLAKE3_256_MULTIHASH_CODE)
+            .content_length(content_length)
+            .car_digest(blake3::hash(payload).into())
+            .car_size(content_length)
+            .pin_policy(PinPolicy::default())
+            .build()
+            .expect("manifest");
+
+        let resolved = chunk_profile_for_manifest(&manifest).expect("inline profile accepted");
+
+        assert_eq!(resolved, profile);
+    }
 
     #[test]
     fn chunk_profile_for_manifest_rejects_unknown_profile_id() {

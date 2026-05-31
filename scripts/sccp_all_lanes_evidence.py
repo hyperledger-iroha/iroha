@@ -3983,6 +3983,7 @@ def _check_evm_route_canary_transaction_evidence(
     record: dict[str, Any],
     *,
     destination_record: dict[str, Any] | None,
+    source_record_hashes: dict[str, str],
     evidence_hash: bytes | None,
     route_allowlist_hash: bytes | None,
     destination_binding_hash: bytes | None,
@@ -4263,6 +4264,33 @@ def _check_evm_route_canary_transaction_evidence(
         errors.append("EVM route canary transaction evidence requires canary and route hashes")
     if destination_binding_hash is None:
         errors.append("EVM route canary transaction evidence requires destination binding hash")
+    source_material_hash = _hex_bytes(
+        source_record_hashes.get("source_verifier_material_hash"),
+        byte_length=32,
+    )
+    source_deployment_hash = _hex_bytes(
+        source_record_hashes.get("source_adapter_engine_deployment_hash"),
+        byte_length=32,
+    )
+    if source_material_hash is None or source_deployment_hash is None:
+        errors.append("EVM route canary transaction evidence requires source record hashes")
+    _expect_distinct_byte_values(
+        errors,
+        (
+            ("route_allowlist_hash", route_allowlist_hash),
+            ("destination_binding_hash", destination_binding_hash),
+            ("source_verifier_material_hash", source_material_hash),
+            ("source_adapter_engine_deployment_hash", source_deployment_hash),
+            ("evm_route_canary_transaction_hash", transaction_hash),
+            ("evm_route_canary_call_data_sha256", call_data_sha256),
+            ("evm_route_canary_message_id", message_id),
+            ("evm_route_canary_payload_hash", payload_hash),
+            ("evm_route_canary_statement_hash", statement_hash),
+            ("evm_route_canary_commitment_root", commitment_root),
+            ("evm_route_canary_finality_block_hash", finality_block_hash),
+        ),
+        label="EVM route canary hash role",
+    )
 
     module = _load_sibling_module("sccp_evm_destination_evidence.py")
     bridge_address = _exact_hex_bytes(
@@ -4379,6 +4407,7 @@ def _check_tron_route_canary_transaction_evidence(
     record: dict[str, Any],
     *,
     destination_record: dict[str, Any] | None,
+    source_record_hashes: dict[str, str],
     evidence_hash: bytes | None,
     route_allowlist_hash: bytes | None,
     destination_binding_hash: bytes | None,
@@ -4782,6 +4811,34 @@ def _check_tron_route_canary_transaction_evidence(
         errors.append(
             "TRON route canary transaction evidence requires destination binding hash"
         )
+    source_material_hash = _hex_bytes(
+        source_record_hashes.get("source_verifier_material_hash"),
+        byte_length=32,
+    )
+    source_deployment_hash = _hex_bytes(
+        source_record_hashes.get("source_adapter_engine_deployment_hash"),
+        byte_length=32,
+    )
+    if source_material_hash is None or source_deployment_hash is None:
+        errors.append("TRON route canary transaction evidence requires source record hashes")
+    _expect_distinct_byte_values(
+        errors,
+        (
+            ("route_allowlist_hash", route_allowlist_hash),
+            ("destination_binding_hash", destination_binding_hash),
+            ("source_verifier_material_hash", source_material_hash),
+            ("source_adapter_engine_deployment_hash", source_deployment_hash),
+            ("tron_route_canary_transaction_id", transaction_id),
+            ("tron_route_canary_message_id", message_id),
+            ("tron_route_canary_call_data_sha256", call_data_sha256),
+            ("tron_route_canary_payload_hash", payload_hash),
+            ("tron_route_canary_statement_hash", statement_hash),
+            ("tron_route_canary_commitment_root", commitment_root),
+            ("tron_route_canary_finality_block_hash", finality_block_hash),
+            ("tron_route_canary_signature_sha256", signature_sha256),
+        ),
+        label="TRON route canary hash role",
+    )
 
     module = _load_sibling_module("sccp_tron_source_bridge_evidence.py")
     try:
@@ -5080,6 +5137,19 @@ def _check_ton_route_canary_live_account_evidence(
     )
     if source_material_hash is None or source_deployment_hash is None:
         errors.append("TON route canary evidence requires source record hashes")
+    _expect_distinct_byte_values(
+        errors,
+        (
+            ("route_allowlist_hash", route_allowlist_hash),
+            ("destination_binding_hash", destination_binding_hash),
+            ("source_verifier_material_hash", source_material_hash),
+            ("source_adapter_engine_deployment_hash", source_deployment_hash),
+            ("verifier_code_hash", verifier_code_hash),
+            ("ton_route_canary_account_state_hash", account_state_hash),
+            ("ton_route_canary_last_transaction_hash", last_transaction_hash),
+        ),
+        label="TON route canary hash role",
+    )
     if errors:
         return errors
 
@@ -5597,6 +5667,7 @@ def _check_route_canary_evidence(
             _check_evm_route_canary_transaction_evidence(
                 record,
                 destination_record=destination_record,
+                source_record_hashes=source_record_hashes,
                 evidence_hash=evidence_hash,
                 route_allowlist_hash=canary_route_hash,
                 destination_binding_hash=canary_destination_binding_hash,
@@ -5608,6 +5679,7 @@ def _check_route_canary_evidence(
             _check_tron_route_canary_transaction_evidence(
                 record,
                 destination_record=destination_record,
+                source_record_hashes=source_record_hashes,
                 evidence_hash=evidence_hash,
                 route_allowlist_hash=canary_route_hash,
                 destination_binding_hash=canary_destination_binding_hash,

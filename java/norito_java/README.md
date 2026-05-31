@@ -13,7 +13,9 @@ without native dependencies.
   packed structs with hybrid bitset layout
 - Schema hashing (type-name and structural descriptors using Norito's canonical JSON rules)
 - Columnar helpers and adaptive AoS layouts for `(u64, String, boolean)`,
-  `(u64, bytes)` (including optional bytes), and `(u64, enum(Name|Code), boolean)` rows
+  `(u64, Optional<String>, boolean)`, `(u64, Optional<u32>, boolean)`,
+  `(u64, bytes)`, `(u64, bytes, boolean)` (including optional bytes), and
+  `(u64, enum(Name|Code), boolean)` rows
 - Compression profiles (`CompressionConfig.zstdProfile`) that choose Zstandard levels
   automatically for `"fast"`, `"balanced"`, or `"compact"` workloads.
 - CLI inspector `NoritoDump` for quick header introspection
@@ -32,9 +34,6 @@ across Rust, Python, and Java.
 ### Limitations (v0.1.0)
 - Optional Zstandard compression requires `com.github.luben:zstd-jni` on the classpath; when
   absent, compression requests raise a clear `UnsupportedOperationException`.
-- Columnar helpers currently cover the `(u64, String, boolean)`, `(u64, bytes)` (optional bytes),
-  and `(u64, enum(Name|Code), boolean)` shapes; optional string/u32 and bytes+bool combos remain
-  to be implemented in the Java binding.
 
 ## Build & Test
 This module avoids external build tools. Compile with `javac` and run the
@@ -126,11 +125,12 @@ available and can be used for smoke tests or feature gating.
 
 ## Maintenance & Sync
 Changes to the Rust Norito crate require corresponding updates in both
-`python/norito_py` and `java/norito_java`. CI and `cargo build -p norito` run
-`scripts/check_norito_bindings_sync.sh` (which forwards to a cross-platform Python helper) to enforce this by executing schema-hash
-and columnar parity checks across bindings. Trimmed source distributions that
-omit the sync script automatically skip the guard; no manual override is
-available.
+`python/norito_py`, `java/norito_java`, and `kotlin/core-jvm`. CI should run
+`scripts/check_norito_bindings_sync.sh` (which forwards to a cross-platform
+Python helper) to enforce this by executing schema-hash and columnar parity
+checks across bindings. Ordinary Cargo builds do not run the multi-SDK parity
+suite; set `NORITO_CHECK_BINDINGS_SYNC=1` for a local opt-in Cargo build guard
+or run the script directly.
 
 > Streaming manifests, control frames, and telemetry adapters now ship under
 > `NoritoStreaming`, while baseline RLE decoding and resume state helpers live

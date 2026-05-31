@@ -17,7 +17,7 @@ private const val DEFAULT_PATH = "/v1/sorafs/gateway/fetch"
  * Minimal HTTP client that posts orchestrator fetch requests to a SoraFS gateway endpoint.
  *
  * The client mirrors the CLI/SDK JSON schema and routes requests through `HttpTransportExecutor`
- * so tests can provide deterministic stubs. Responses surface the raw HTTP payload allowing
+ * so tests can provide deterministic transport fakes. Responses surface the raw HTTP payload allowing
  * callers to parse orchestrator summaries or binary artefacts as needed.
  */
 class SorafsGatewayClient(

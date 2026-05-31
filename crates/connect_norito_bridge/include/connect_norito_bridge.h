@@ -20,7 +20,8 @@ extern "C" {
 #define CONNECT_NORITO_ERR_OFFLINE_ASSET -301
 #define CONNECT_NORITO_ERR_OFFLINE_NONCE -303
 #define CONNECT_NORITO_ERR_OFFLINE_SERIALIZE -304
-#define CONNECT_NORITO_ERR_OFFLINE_NOTE_V2_PROVE -310
+#define CONNECT_NORITO_ERR_OFFLINE_NOTE_PROVE -310
+#define CONNECT_NORITO_ERR_KAGEMUSHA_PROVE -311
 
 // ---------------- Bridge ABI ----------------
 uint32_t connect_norito_bridge_abi_version(void);
@@ -63,24 +64,42 @@ int32_t connect_norito_decode_ciphertext_frame(
     uint8_t* out_sid, uint8_t* out_dir, uint64_t* out_seq,
     uint8_t** out_aead_ptr, unsigned long* out_aead_len);
 
-// ---------------- Offline Note V2 prover helpers ----------------
-// Generate a recursive Halo2/IPA proof for an Offline V2 redemption.
-// Input: Norito-archive bytes of `OfflineNoteRedeemV2` (recursive_proof field is ignored).
-// Output: Norito-archive bytes of `OfflineNoteRecursiveProofV2` (slot back into the redemption).
-int32_t connect_norito_offline_prove_note_v2_redeem(
+// ---------------- Offline Note prover helpers ----------------
+// Generate a recursive Halo2/IPA proof for an Offline redemption.
+// Input: Norito-archive bytes of `OfflineNoteRedeem` (recursive_proof field is ignored).
+// Output: Norito-archive bytes of `OfflineNoteRecursiveProof` (slot back into the redemption).
+int32_t connect_norito_offline_prove_note_redeem(
     const uint8_t* redeem_norito_ptr,
     unsigned long redeem_norito_len,
     uint8_t** out_recursive_proof_ptr,
     unsigned long* out_recursive_proof_len);
 
-// Generate a recursive Halo2/IPA proof for an Offline V2 audit bundle.
-// Input: Norito-archive bytes of `OfflineNoteAuditBundleV2` (recursive_proof field is ignored).
-// Output: Norito-archive bytes of `OfflineNoteRecursiveProofV2` (slot back into the audit bundle).
-int32_t connect_norito_offline_prove_note_v2_audit(
+// Generate a recursive Halo2/IPA proof for an Offline audit bundle.
+// Input: Norito-archive bytes of `OfflineNoteAuditBundle` (recursive_proof field is ignored).
+// Output: Norito-archive bytes of `OfflineNoteRecursiveProof` (slot back into the audit bundle).
+int32_t connect_norito_offline_prove_note_audit(
     const uint8_t* audit_norito_ptr,
     unsigned long audit_norito_len,
     uint8_t** out_recursive_proof_ptr,
     unsigned long* out_recursive_proof_len);
+
+// Legacy unanchored Kagemusha compact-token prover retained for ABI compatibility only.
+// Production callers must use `connect_norito_kagemusha_prove_verified_compact_payment_token_with_records`.
+// Valid `KagemushaVerifiedFoldBundle` input returns ERR_KAGEMUSHA_PROVE and no output bytes.
+int32_t connect_norito_kagemusha_prove_verified_compact_payment_token(
+    const uint8_t* verified_bundle_norito_ptr,
+    unsigned long verified_bundle_norito_len,
+    uint8_t** out_compact_token_ptr,
+    unsigned long* out_compact_token_len);
+
+// Verify private Kagemusha hop proofs against verifier records and generate a compact folded-token proof.
+// Input: Norito-archive bytes of `KagemushaVerifiedFoldRecordBundle`.
+// Output: Norito-archive bytes of `KagemushaCompactPaymentToken`.
+int32_t connect_norito_kagemusha_prove_verified_compact_payment_token_with_records(
+    const uint8_t* verified_record_bundle_norito_ptr,
+    unsigned long verified_record_bundle_norito_len,
+    uint8_t** out_compact_token_ptr,
+    unsigned long* out_compact_token_len);
 
 void connect_norito_free(uint8_t* ptr);
 

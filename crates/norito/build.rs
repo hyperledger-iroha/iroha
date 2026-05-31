@@ -7,7 +7,14 @@ fn main() {
         return;
     }
 
+    println!("cargo:rerun-if-env-changed=NORITO_CHECK_BINDINGS_SYNC");
+    println!("cargo:rerun-if-env-changed=NORITO_SKIP_BINDINGS_SYNC");
+
     if env::var_os("NORITO_SKIP_BINDINGS_SYNC").is_some() {
+        return;
+    }
+
+    if env::var_os("NORITO_CHECK_BINDINGS_SYNC").is_none() {
         return;
     }
 

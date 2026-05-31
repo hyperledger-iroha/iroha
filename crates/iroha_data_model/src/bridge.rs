@@ -739,8 +739,8 @@ fn consensus_domain(
 }
 
 fn commit_vote_preimage(chain_id: &ChainId, certificate: &crate::consensus::Qc) -> Vec<u8> {
-    let mut out = Vec::with_capacity(32 + 32 * 3 + 8 * 3 + 1);
-    let domain = consensus_domain(chain_id, "Vote", b"v1", &certificate.mode_tag);
+    let mut out = Vec::with_capacity(32 + 32 * 4 + 8 * 6 + 3);
+    let domain = consensus_domain(chain_id, "Vote", b"v2", &certificate.mode_tag);
     out.extend_from_slice(&domain);
     out.extend_from_slice(certificate.subject_block_hash.as_ref().as_ref());
     out.extend_from_slice(certificate.parent_state_root.as_ref());
@@ -748,7 +748,20 @@ fn commit_vote_preimage(chain_id: &ChainId, certificate: &crate::consensus::Qc) 
     out.extend_from_slice(&certificate.height.to_be_bytes());
     out.extend_from_slice(&certificate.view.to_be_bytes());
     out.extend_from_slice(&certificate.epoch.to_be_bytes());
+    out.extend_from_slice(certificate.chain_order_hash.as_ref());
+    out.extend_from_slice(&certificate.rechain_seq.to_be_bytes());
     out.push(certificate.phase as u8);
+    match certificate.highest_qc {
+        Some(highest_qc) => {
+            out.push(1);
+            out.extend_from_slice(&highest_qc.height.to_be_bytes());
+            out.extend_from_slice(&highest_qc.view.to_be_bytes());
+            out.extend_from_slice(&highest_qc.epoch.to_be_bytes());
+            out.extend_from_slice(highest_qc.subject_block_hash.as_ref().as_ref());
+            out.push(highest_qc.phase as u8);
+        }
+        None => out.push(0),
+    }
 
     out
 }
@@ -1236,42 +1249,15 @@ mod tests {
     fn consensus_domain_changes_with_chain_tag_and_mode() {
         let chain_a: ChainId = "chain-a".parse().expect("chain id");
         let chain_b: ChainId = "chain-b".parse().expect("chain id");
-        let vote_v1 = consensus_domain(
+        let vote_v2 = consensus_domain(
             &chain_a,
             "Vote",
-            b"v1",
+            b"v2",
             crate::block::consensus::PERMISSIONED_TAG,
         );
 
         assert_eq!(
-            vote_v1,
-            consensus_domain(
-                &chain_a,
-                "Vote",
-                b"v1",
-                crate::block::consensus::PERMISSIONED_TAG,
-            )
-        );
-        assert_ne!(
-            vote_v1,
-            consensus_domain(
-                &chain_b,
-                "Vote",
-                b"v1",
-                crate::block::consensus::PERMISSIONED_TAG,
-            )
-        );
-        assert_ne!(
-            vote_v1,
-            consensus_domain(
-                &chain_a,
-                "Proposal",
-                b"v1",
-                crate::block::consensus::PERMISSIONED_TAG,
-            )
-        );
-        assert_ne!(
-            vote_v1,
+            vote_v2,
             consensus_domain(
                 &chain_a,
                 "Vote",
@@ -1280,8 +1266,35 @@ mod tests {
             )
         );
         assert_ne!(
-            vote_v1,
-            consensus_domain(&chain_a, "Vote", b"v1", crate::block::consensus::NPOS_TAG)
+            vote_v2,
+            consensus_domain(
+                &chain_b,
+                "Vote",
+                b"v2",
+                crate::block::consensus::PERMISSIONED_TAG,
+            )
+        );
+        assert_ne!(
+            vote_v2,
+            consensus_domain(
+                &chain_a,
+                "Proposal",
+                b"v2",
+                crate::block::consensus::PERMISSIONED_TAG,
+            )
+        );
+        assert_ne!(
+            vote_v2,
+            consensus_domain(
+                &chain_a,
+                "Vote",
+                b"v1",
+                crate::block::consensus::PERMISSIONED_TAG,
+            )
+        );
+        assert_ne!(
+            vote_v2,
+            consensus_domain(&chain_a, "Vote", b"v2", crate::block::consensus::NPOS_TAG)
         );
     }
 
@@ -1290,7 +1303,7 @@ mod tests {
         let keys = vec![KeyPair::random_with_algorithm(Algorithm::BlsNormal)];
         let proof = make_finality_proof("preimage-chain", 7, 3, &keys);
         let preimage = commit_vote_preimage(&proof.chain_id, &proof.commit_qc);
-        let domain = consensus_domain(&proof.chain_id, "Vote", b"v1", &proof.commit_qc.mode_tag);
+        let domain = consensus_domain(&proof.chain_id, "Vote", b"v2", &proof.commit_qc.mode_tag);
 
         let mut offset = 0usize;
         assert_eq!(&preimage[offset..offset + 32], &domain);
@@ -1325,7 +1338,62 @@ mod tests {
             &proof.commit_qc.epoch.to_be_bytes()
         );
         offset += 8;
+        assert_eq!(
+            &preimage[offset..offset + Hash::LENGTH],
+            proof.commit_qc.chain_order_hash.as_ref()
+        );
+        offset += Hash::LENGTH;
+        assert_eq!(
+            &preimage[offset..offset + 8],
+            &proof.commit_qc.rechain_seq.to_be_bytes()
+        );
+        offset += 8;
         assert_eq!(preimage[offset], proof.commit_qc.phase as u8);
+        offset += 1;
+        assert_eq!(preimage[offset], 0);
+        offset += 1;
+        assert_eq!(offset, preimage.len());
+    }
+
+    #[test]
+    fn commit_vote_preimage_serializes_highest_qc_when_present() {
+        let keys = vec![KeyPair::random_with_algorithm(Algorithm::BlsNormal)];
+        let mut proof = make_finality_proof("preimage-highest-qc-chain", 7, 3, &keys);
+        let highest_qc = crate::consensus::QcRef {
+            height: 6,
+            view: 2,
+            epoch: 3,
+            subject_block_hash: proof.block_hash,
+            phase: crate::block::consensus::CertPhase::Prepare,
+        };
+        proof.commit_qc.highest_qc = Some(highest_qc);
+
+        let preimage = commit_vote_preimage(&proof.chain_id, &proof.commit_qc);
+        let mut offset = 32 + Hash::LENGTH * 3 + 8 * 3 + Hash::LENGTH + 8 + 1;
+
+        assert_eq!(preimage[offset], 1);
+        offset += 1;
+        assert_eq!(
+            &preimage[offset..offset + 8],
+            &highest_qc.height.to_be_bytes()
+        );
+        offset += 8;
+        assert_eq!(
+            &preimage[offset..offset + 8],
+            &highest_qc.view.to_be_bytes()
+        );
+        offset += 8;
+        assert_eq!(
+            &preimage[offset..offset + 8],
+            &highest_qc.epoch.to_be_bytes()
+        );
+        offset += 8;
+        assert_eq!(
+            &preimage[offset..offset + Hash::LENGTH],
+            highest_qc.subject_block_hash.as_ref().as_ref()
+        );
+        offset += Hash::LENGTH;
+        assert_eq!(preimage[offset], highest_qc.phase as u8);
         offset += 1;
         assert_eq!(offset, preimage.len());
     }

@@ -24,6 +24,7 @@ use integration_tests::{
         prepare_iroha_cli_test_environment, should_reuse_existing_cli_binary_for_tests_from_value,
         workspace_root,
     },
+    process::{CommandTimeoutExt, TokioCommandTimeoutExt, tokio_output_with_timeout},
     sandbox,
 };
 use iroha::{
@@ -51,6 +52,7 @@ use norito::json::{self, Value};
 use reqwest::Url;
 
 const SORACLOUD_TEST_CONTROL_PLANE_TIMEOUT_SECS: &str = "60";
+const SORACLOUD_TEST_SUBPROCESS_TIMEOUT_HEADROOM: Duration = Duration::from_secs(15);
 const SORACLOUD_TEST_CONTROL_PLANE_POLL_TIMEOUT: Duration = Duration::from_secs(60);
 const SORACLOUD_LIVE_HF_TEST_RESOLVED_REVISION: &str = "main";
 const SORACLOUD_LIVE_HF_TEST_WEIGHT_BYTES: usize = 4_096;
@@ -422,13 +424,14 @@ async fn run_soracloud_command(
     args: &[&str],
 ) -> eyre::Result<std::process::Output> {
     let effective_args = soracloud_command_args(args);
-    Ok(tokio::process::Command::new(program())
+    let timeout = soracloud_subprocess_timeout(args);
+    let mut command = tokio::process::Command::new(program());
+    command
         .current_dir(cwd)
         .arg("soracloud")
         .args(&effective_args)
-        .envs(config.envs())
-        .output()
-        .await?)
+        .envs(config.envs());
+    Ok(tokio_output_with_timeout(&mut command, timeout).await?)
 }
 
 async fn wait_for_soracloud_json_command(
@@ -529,6 +532,23 @@ fn soracloud_command_args(args: &[&str]) -> Vec<String> {
     effective_args
 }
 
+fn soracloud_subprocess_timeout(args: &[&str]) -> Duration {
+    let control_plane_timeout_secs = args
+        .windows(2)
+        .find_map(|window| {
+            (window[0] == "--timeout-secs")
+                .then(|| window[1].parse::<u64>().ok())
+                .flatten()
+        })
+        .unwrap_or_else(|| {
+            SORACLOUD_TEST_CONTROL_PLANE_TIMEOUT_SECS
+                .parse::<u64>()
+                .expect("default Soracloud test timeout is a valid integer")
+        });
+    Duration::from_secs(control_plane_timeout_secs)
+        .saturating_add(SORACLOUD_TEST_SUBPROCESS_TIMEOUT_HEADROOM)
+}
+
 fn namespaced_soracloud_command_args(args: &[&str]) -> Vec<String> {
     let Some((command, tail)) = args.split_first() else {
         return Vec::new();
@@ -612,6 +632,20 @@ fn soracloud_command_args_append_timeout_once() {
             "--timeout-secs".to_owned(),
             "15".to_owned(),
         ]
+    );
+    assert_eq!(
+        soracloud_subprocess_timeout(&["hf-deploy", "--repo-id", "openai/gpt-oss"]),
+        Duration::from_secs(75)
+    );
+    assert_eq!(
+        soracloud_subprocess_timeout(&[
+            "hf-status",
+            "--repo-id",
+            "openai/gpt-oss",
+            "--timeout-secs",
+            "15",
+        ]),
+        Duration::from_secs(30)
     );
 }
 
@@ -783,7 +817,7 @@ fn start_mock_hf_source_server() -> MockHttpServer {
 #[tokio::test]
 async fn mock_hf_source_server_serves_profile_routes() -> eyre::Result<()> {
     let server = start_mock_hf_source_server();
-    let client = reqwest::Client::new();
+    let client = integration_tests::http::client();
 
     let info = client
         .get(format!(
@@ -975,7 +1009,7 @@ async fn can_upgrade_executor() -> eyre::Result<()> {
     )
     .await?;
 
-    let mut child = tokio::process::Command::new(program())
+    let exit_status = tokio::process::Command::new(program())
         .current_dir(dir.path())
         .arg("ops")
         .arg("executor")
@@ -984,8 +1018,8 @@ async fn can_upgrade_executor() -> eyre::Result<()> {
         .arg(sample_path)
         // Also pass envs to exercise the CLI's env handling and avoid dead-code.
         .envs(config.envs())
-        .spawn()?;
-    let exit_status = child.wait().await?;
+        .bounded_status()
+        .await?;
 
     assert!(exit_status.success());
 
@@ -1012,14 +1046,14 @@ async fn reads_client_toml_by_default() -> eyre::Result<()> {
     )
     .await?;
 
-    let mut child = tokio::process::Command::new(program())
+    let exit_status = tokio::process::Command::new(program())
         .current_dir(dir.path())
         .arg("ledger")
         .arg("domain")
         .arg("list")
         .arg("all")
-        .spawn()?;
-    let exit_status = child.wait().await?;
+        .bounded_status()
+        .await?;
 
     assert!(exit_status.success());
 
@@ -1047,7 +1081,7 @@ fn tx_ivm_rejects_missing_gas_limit_without_hanging() -> eyre::Result<()> {
         .arg("ivm")
         .arg("--path")
         .arg(&program_path)
-        .output()?;
+        .bounded_output()?;
     let elapsed = started_at.elapsed();
 
     assert!(
@@ -1096,7 +1130,7 @@ fn tx_ivm_accepts_gas_limit_flag_and_skips_local_missing_metadata_error() -> eyr
         .arg(&program_path)
         .arg("--gas-limit")
         .arg("42")
-        .output()?;
+        .bounded_output()?;
     let elapsed = started_at.elapsed();
 
     assert!(
@@ -1163,7 +1197,7 @@ async fn soracloud_status_uses_live_torii_control_plane() -> eyre::Result<()> {
         .arg("--torii-url")
         .arg(network.client().torii_url.to_string())
         .envs(config.envs())
-        .output()
+        .bounded_output()
         .await?;
     assert!(
         output.status.success(),
@@ -1541,7 +1575,7 @@ async fn soracloud_scr_host_admission_rejects_invalid_manifests_live_torii_contr
         .arg("--torii-url")
         .arg(network.client().torii_url.to_string())
         .envs(config.envs())
-        .output()
+        .bounded_output()
         .await?;
     assert!(
         !over_cap_deploy.status.success(),
@@ -1598,7 +1632,7 @@ async fn soracloud_scr_host_admission_rejects_invalid_manifests_live_torii_contr
         .arg("--torii-url")
         .arg(network.client().torii_url.to_string())
         .envs(config.envs())
-        .output()
+        .bounded_output()
         .await?;
     assert!(
         !no_write_deploy.status.success(),
@@ -1697,7 +1731,7 @@ async fn soracloud_training_and_model_weight_lifecycle_use_live_torii_control_pl
         .arg("--torii-url")
         .arg(network.client().torii_url.to_string())
         .envs(config.envs())
-        .output()
+        .bounded_output()
         .await?;
     assert!(
         deploy.status.success(),
@@ -1738,7 +1772,7 @@ async fn soracloud_training_and_model_weight_lifecycle_use_live_torii_control_pl
         .arg("--torii-url")
         .arg(network.client().torii_url.to_string())
         .envs(config.envs())
-        .output()
+        .bounded_output()
         .await?;
     assert!(
         training_start_1.status.success(),
@@ -1765,7 +1799,7 @@ async fn soracloud_training_and_model_weight_lifecycle_use_live_torii_control_pl
         .arg("--torii-url")
         .arg(network.client().torii_url.to_string())
         .envs(config.envs())
-        .output()
+        .bounded_output()
         .await?;
     assert!(
         checkpoint_1a.status.success(),
@@ -1792,7 +1826,7 @@ async fn soracloud_training_and_model_weight_lifecycle_use_live_torii_control_pl
         .arg("--torii-url")
         .arg(network.client().torii_url.to_string())
         .envs(config.envs())
-        .output()
+        .bounded_output()
         .await?;
     assert!(
         checkpoint_1b.status.success(),
@@ -1813,7 +1847,7 @@ async fn soracloud_training_and_model_weight_lifecycle_use_live_torii_control_pl
         .arg("--torii-url")
         .arg(network.client().torii_url.to_string())
         .envs(config.envs())
-        .output()
+        .bounded_output()
         .await?;
     assert!(
         training_status_1.status.success(),
@@ -1857,7 +1891,7 @@ async fn soracloud_training_and_model_weight_lifecycle_use_live_torii_control_pl
         .arg("--torii-url")
         .arg(network.client().torii_url.to_string())
         .envs(config.envs())
-        .output()
+        .bounded_output()
         .await?;
     assert!(
         artifact_register_1.status.success(),
@@ -1892,7 +1926,7 @@ async fn soracloud_training_and_model_weight_lifecycle_use_live_torii_control_pl
         .arg("--torii-url")
         .arg(network.client().torii_url.to_string())
         .envs(config.envs())
-        .output()
+        .bounded_output()
         .await?;
     assert!(
         weight_register_1.status.success(),
@@ -1929,7 +1963,7 @@ async fn soracloud_training_and_model_weight_lifecycle_use_live_torii_control_pl
         .arg("--torii-url")
         .arg(network.client().torii_url.to_string())
         .envs(config.envs())
-        .output()
+        .bounded_output()
         .await?;
     assert!(
         training_start_2.status.success(),
@@ -1956,7 +1990,7 @@ async fn soracloud_training_and_model_weight_lifecycle_use_live_torii_control_pl
         .arg("--torii-url")
         .arg(network.client().torii_url.to_string())
         .envs(config.envs())
-        .output()
+        .bounded_output()
         .await?;
     assert!(
         checkpoint_2a.status.success(),
@@ -1983,7 +2017,7 @@ async fn soracloud_training_and_model_weight_lifecycle_use_live_torii_control_pl
         .arg("--torii-url")
         .arg(network.client().torii_url.to_string())
         .envs(config.envs())
-        .output()
+        .bounded_output()
         .await?;
     assert!(
         checkpoint_2b.status.success(),
@@ -2016,7 +2050,7 @@ async fn soracloud_training_and_model_weight_lifecycle_use_live_torii_control_pl
         .arg("--torii-url")
         .arg(network.client().torii_url.to_string())
         .envs(config.envs())
-        .output()
+        .bounded_output()
         .await?;
     assert!(
         artifact_register_2.status.success(),
@@ -2053,7 +2087,7 @@ async fn soracloud_training_and_model_weight_lifecycle_use_live_torii_control_pl
         .arg("--torii-url")
         .arg(network.client().torii_url.to_string())
         .envs(config.envs())
-        .output()
+        .bounded_output()
         .await?;
     assert!(
         weight_register_2.status.success(),
@@ -2079,7 +2113,7 @@ async fn soracloud_training_and_model_weight_lifecycle_use_live_torii_control_pl
         .arg("--torii-url")
         .arg(network.client().torii_url.to_string())
         .envs(config.envs())
-        .output()
+        .bounded_output()
         .await?;
     assert!(
         promote_v2.status.success(),
@@ -2100,7 +2134,7 @@ async fn soracloud_training_and_model_weight_lifecycle_use_live_torii_control_pl
         .arg("--torii-url")
         .arg(network.client().torii_url.to_string())
         .envs(config.envs())
-        .output()
+        .bounded_output()
         .await?;
     assert!(
         status_after_promote.status.success(),
@@ -2143,7 +2177,7 @@ async fn soracloud_training_and_model_weight_lifecycle_use_live_torii_control_pl
         .arg("--torii-url")
         .arg(network.client().torii_url.to_string())
         .envs(config.envs())
-        .output()
+        .bounded_output()
         .await?;
     assert!(
         rollback.status.success(),
@@ -2164,7 +2198,7 @@ async fn soracloud_training_and_model_weight_lifecycle_use_live_torii_control_pl
         .arg("--torii-url")
         .arg(network.client().torii_url.to_string())
         .envs(config.envs())
-        .output()
+        .bounded_output()
         .await?;
     assert!(
         status_after_rollback.status.success(),
@@ -2197,7 +2231,7 @@ async fn soracloud_training_and_model_weight_lifecycle_use_live_torii_control_pl
         .arg("--torii-url")
         .arg(network.client().torii_url.to_string())
         .envs(config.envs())
-        .output()
+        .bounded_output()
         .await?;
     assert!(
         artifact_status_2.status.success(),
@@ -3561,7 +3595,7 @@ async fn soracloud_templates_deploy_site_and_webapp_with_rollout_and_rollback() 
         .arg("--output-dir")
         .arg(site_dir.to_string_lossy().into_owned())
         .envs(config.envs())
-        .output()
+        .bounded_output()
         .await?;
     assert!(
         site_init.status.success(),
@@ -3584,7 +3618,7 @@ async fn soracloud_templates_deploy_site_and_webapp_with_rollout_and_rollback() 
         .arg("--output-dir")
         .arg(webapp_dir.to_string_lossy().into_owned())
         .envs(config.envs())
-        .output()
+        .bounded_output()
         .await?;
     assert!(
         webapp_init.status.success(),
@@ -3642,7 +3676,7 @@ async fn soracloud_templates_deploy_site_and_webapp_with_rollout_and_rollback() 
         .arg("--torii-url")
         .arg(network.client().torii_url.to_string())
         .envs(config.envs())
-        .output()
+        .bounded_output()
         .await?;
     assert!(
         site_deploy.status.success(),
@@ -3676,7 +3710,7 @@ async fn soracloud_templates_deploy_site_and_webapp_with_rollout_and_rollback() 
         .arg("--torii-url")
         .arg(network.client().torii_url.to_string())
         .envs(config.envs())
-        .output()
+        .bounded_output()
         .await?;
     assert!(
         webapp_deploy.status.success(),
@@ -3719,7 +3753,7 @@ async fn soracloud_templates_deploy_site_and_webapp_with_rollout_and_rollback() 
         .arg("--torii-url")
         .arg(network.client().torii_url.to_string())
         .envs(config.envs())
-        .output()
+        .bounded_output()
         .await?;
     assert!(
         site_upgrade.status.success(),
@@ -3756,7 +3790,7 @@ async fn soracloud_templates_deploy_site_and_webapp_with_rollout_and_rollback() 
         .arg("--torii-url")
         .arg(network.client().torii_url.to_string())
         .envs(config.envs())
-        .output()
+        .bounded_output()
         .await?;
     assert!(
         site_rollout.status.success(),
@@ -3785,7 +3819,7 @@ async fn soracloud_templates_deploy_site_and_webapp_with_rollout_and_rollback() 
         .arg("--torii-url")
         .arg(network.client().torii_url.to_string())
         .envs(config.envs())
-        .output()
+        .bounded_output()
         .await?;
     assert!(
         site_rollback.status.success(),
@@ -3810,7 +3844,7 @@ async fn soracloud_templates_deploy_site_and_webapp_with_rollout_and_rollback() 
         .arg("--torii-url")
         .arg(network.client().torii_url.to_string())
         .envs(config.envs())
-        .output()
+        .bounded_output()
         .await?;
     assert!(
         status.status.success(),
@@ -3942,7 +3976,7 @@ async fn soracloud_agent_autonomy_runtime_uses_live_torii_control_plane() -> eyr
         .arg("--torii-url")
         .arg(network.client().torii_url.to_string())
         .envs(config.envs())
-        .output()
+        .bounded_output()
         .await?;
     assert!(
         deploy.status.success(),
@@ -3981,7 +4015,7 @@ async fn soracloud_agent_autonomy_runtime_uses_live_torii_control_plane() -> eyr
         .arg("--torii-url")
         .arg(network.client().torii_url.to_string())
         .envs(config.envs())
-        .output()
+        .bounded_output()
         .await?;
     assert!(
         allow.status.success(),
@@ -4019,7 +4053,7 @@ async fn soracloud_agent_autonomy_runtime_uses_live_torii_control_plane() -> eyr
         .arg("--torii-url")
         .arg(network.client().torii_url.to_string())
         .envs(config.envs())
-        .output()
+        .bounded_output()
         .await?;
     assert!(
         run.status.success(),
@@ -4055,7 +4089,7 @@ async fn soracloud_agent_autonomy_runtime_uses_live_torii_control_plane() -> eyr
         .arg("--torii-url")
         .arg(network.client().torii_url.to_string())
         .envs(config.envs())
-        .output()
+        .bounded_output()
         .await?;
     assert!(
         status.status.success(),
@@ -4096,7 +4130,7 @@ async fn soracloud_agent_autonomy_runtime_uses_live_torii_control_plane() -> eyr
         .arg("--torii-url")
         .arg(network.client().torii_url.to_string())
         .envs(config.envs())
-        .output()
+        .bounded_output()
         .await?;
     assert!(
         revoke.status.success(),
@@ -4131,7 +4165,7 @@ async fn soracloud_agent_autonomy_runtime_uses_live_torii_control_plane() -> eyr
         .arg("--torii-url")
         .arg(network.client().torii_url.to_string())
         .envs(config.envs())
-        .output()
+        .bounded_output()
         .await?;
     assert!(
         !revoked_run.status.success(),
@@ -4223,7 +4257,7 @@ async fn soracloud_agent_wallet_mailbox_and_lease_recovery_use_live_torii_contro
         .arg("--torii-url")
         .arg(network.client().torii_url.to_string())
         .envs(config.envs())
-        .output()
+        .bounded_output()
         .await?;
     assert!(
         sender_deploy.status.success(),
@@ -4244,7 +4278,7 @@ async fn soracloud_agent_wallet_mailbox_and_lease_recovery_use_live_torii_contro
         .arg("--torii-url")
         .arg(network.client().torii_url.to_string())
         .envs(config.envs())
-        .output()
+        .bounded_output()
         .await?;
     assert!(
         recipient_deploy.status.success(),
@@ -4267,7 +4301,7 @@ async fn soracloud_agent_wallet_mailbox_and_lease_recovery_use_live_torii_contro
         .arg("--torii-url")
         .arg(network.client().torii_url.to_string())
         .envs(config.envs())
-        .output()
+        .bounded_output()
         .await?;
     assert!(
         !expired_wallet.status.success(),
@@ -4293,7 +4327,7 @@ async fn soracloud_agent_wallet_mailbox_and_lease_recovery_use_live_torii_contro
         .arg("--torii-url")
         .arg(network.client().torii_url.to_string())
         .envs(config.envs())
-        .output()
+        .bounded_output()
         .await?;
     assert!(
         renew.status.success(),
@@ -4314,7 +4348,7 @@ async fn soracloud_agent_wallet_mailbox_and_lease_recovery_use_live_torii_contro
         .arg("--torii-url")
         .arg(network.client().torii_url.to_string())
         .envs(config.envs())
-        .output()
+        .bounded_output()
         .await?;
     assert!(
         restart.status.success(),
@@ -4338,7 +4372,7 @@ async fn soracloud_agent_wallet_mailbox_and_lease_recovery_use_live_torii_contro
         .arg("--torii-url")
         .arg(network.client().torii_url.to_string())
         .envs(config.envs())
-        .output()
+        .bounded_output()
         .await?;
     assert!(
         status.status.success(),
@@ -4381,7 +4415,7 @@ async fn soracloud_agent_wallet_mailbox_and_lease_recovery_use_live_torii_contro
         .arg("--torii-url")
         .arg(network.client().torii_url.to_string())
         .envs(config.envs())
-        .output()
+        .bounded_output()
         .await?;
     assert!(
         wallet_request.status.success(),
@@ -4415,7 +4449,7 @@ async fn soracloud_agent_wallet_mailbox_and_lease_recovery_use_live_torii_contro
         .arg("--torii-url")
         .arg(network.client().torii_url.to_string())
         .envs(config.envs())
-        .output()
+        .bounded_output()
         .await?;
     assert!(
         wallet_approve.status.success(),
@@ -4448,7 +4482,7 @@ async fn soracloud_agent_wallet_mailbox_and_lease_recovery_use_live_torii_contro
         .arg("--torii-url")
         .arg(network.client().torii_url.to_string())
         .envs(config.envs())
-        .output()
+        .bounded_output()
         .await?;
     assert!(
         message_send.status.success(),
@@ -4480,7 +4514,7 @@ async fn soracloud_agent_wallet_mailbox_and_lease_recovery_use_live_torii_contro
         .arg("--torii-url")
         .arg(network.client().torii_url.to_string())
         .envs(config.envs())
-        .output()
+        .bounded_output()
         .await?;
     assert!(
         mailbox_status_queued.status.success(),
@@ -4518,7 +4552,7 @@ async fn soracloud_agent_wallet_mailbox_and_lease_recovery_use_live_torii_contro
         .arg("--torii-url")
         .arg(network.client().torii_url.to_string())
         .envs(config.envs())
-        .output()
+        .bounded_output()
         .await?;
     assert!(
         message_ack.status.success(),
@@ -4545,7 +4579,7 @@ async fn soracloud_agent_wallet_mailbox_and_lease_recovery_use_live_torii_contro
         .arg("--torii-url")
         .arg(network.client().torii_url.to_string())
         .envs(config.envs())
-        .output()
+        .bounded_output()
         .await?;
     assert!(
         mailbox_status_empty.status.success(),
@@ -4655,7 +4689,7 @@ async fn soracloud_agent_runtime_state_recovers_after_peer_restart_live_torii_co
         .arg("--torii-url")
         .arg(&restart_torii_url)
         .envs(config.envs())
-        .output()
+        .bounded_output()
         .await?;
     assert!(
         sender_deploy.status.success(),
@@ -4678,7 +4712,7 @@ async fn soracloud_agent_runtime_state_recovers_after_peer_restart_live_torii_co
         .arg("--torii-url")
         .arg(&restart_torii_url)
         .envs(config.envs())
-        .output()
+        .bounded_output()
         .await?;
     assert!(
         recipient_deploy.status.success(),
@@ -4701,7 +4735,7 @@ async fn soracloud_agent_runtime_state_recovers_after_peer_restart_live_torii_co
         .arg("--torii-url")
         .arg(&restart_torii_url)
         .envs(config.envs())
-        .output()
+        .bounded_output()
         .await?;
     assert!(
         allow.status.success(),
@@ -4728,7 +4762,7 @@ async fn soracloud_agent_runtime_state_recovers_after_peer_restart_live_torii_co
         .arg("--torii-url")
         .arg(&restart_torii_url)
         .envs(config.envs())
-        .output()
+        .bounded_output()
         .await?;
     assert!(
         run_before_restart.status.success(),
@@ -4779,7 +4813,7 @@ async fn soracloud_agent_runtime_state_recovers_after_peer_restart_live_torii_co
         .arg("--torii-url")
         .arg(&restart_torii_url)
         .envs(config.envs())
-        .output()
+        .bounded_output()
         .await?;
     assert!(
         wallet_request.status.success(),
@@ -4817,7 +4851,7 @@ async fn soracloud_agent_runtime_state_recovers_after_peer_restart_live_torii_co
         .arg("--torii-url")
         .arg(&restart_torii_url)
         .envs(config.envs())
-        .output()
+        .bounded_output()
         .await?;
     assert!(
         message_send.status.success(),
@@ -4858,7 +4892,7 @@ async fn soracloud_agent_runtime_state_recovers_after_peer_restart_live_torii_co
         .arg("--torii-url")
         .arg(&restart_torii_url)
         .envs(config.envs())
-        .output()
+        .bounded_output()
         .await?;
     assert!(
         status_after_restart.status.success(),
@@ -4935,7 +4969,7 @@ async fn soracloud_agent_runtime_state_recovers_after_peer_restart_live_torii_co
         .arg("--torii-url")
         .arg(&restart_torii_url)
         .envs(config.envs())
-        .output()
+        .bounded_output()
         .await?;
     assert!(
         manual_restart.status.success(),
@@ -4964,7 +4998,7 @@ async fn soracloud_agent_runtime_state_recovers_after_peer_restart_live_torii_co
         .arg("--torii-url")
         .arg(&restart_torii_url)
         .envs(config.envs())
-        .output()
+        .bounded_output()
         .await?;
     assert!(
         autonomy_status_after_restart.status.success(),
@@ -5021,7 +5055,7 @@ async fn soracloud_agent_runtime_state_recovers_after_peer_restart_live_torii_co
         .arg("--torii-url")
         .arg(&restart_torii_url)
         .envs(config.envs())
-        .output()
+        .bounded_output()
         .await?;
     assert!(
         mailbox_status_after_restart.status.success(),
@@ -5059,7 +5093,7 @@ async fn soracloud_agent_runtime_state_recovers_after_peer_restart_live_torii_co
         .arg("--torii-url")
         .arg(&restart_torii_url)
         .envs(config.envs())
-        .output()
+        .bounded_output()
         .await?;
     assert!(
         wallet_approve_after_restart.status.success(),
@@ -5088,7 +5122,7 @@ async fn soracloud_agent_runtime_state_recovers_after_peer_restart_live_torii_co
         .arg("--torii-url")
         .arg(&restart_torii_url)
         .envs(config.envs())
-        .output()
+        .bounded_output()
         .await?;
     assert!(
         message_ack_after_restart.status.success(),
@@ -5123,7 +5157,7 @@ async fn soracloud_agent_runtime_state_recovers_after_peer_restart_live_torii_co
         .arg("--torii-url")
         .arg(&restart_torii_url)
         .envs(config.envs())
-        .output()
+        .bounded_output()
         .await?;
     assert!(
         run_after_restart.status.success(),
@@ -5180,7 +5214,7 @@ async fn soracloud_agent_runtime_state_recovers_after_peer_restart_live_torii_co
         .arg("--torii-url")
         .arg(&restart_torii_url)
         .envs(config.envs())
-        .output()
+        .bounded_output()
         .await?;
     assert!(
         mailbox_status_empty.status.success(),

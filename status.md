@@ -2,6 +2,543 @@
 
 Last updated: 2026-05-31
 
+## 2026-05-31 Sumeragi missing commit-QC actionable TLC cross-check
+
+- Strengthened `SumeragiMissingCommitQcActionableGate.tla` with a finite TLC
+  stutter path plus direct anchors for exact pending/local payload matching,
+  cached commit-QC and higher NEW_VIEW quorum rejection, non-actionable
+  dependency filtering, NEW_VIEW and Prepare subject-height mapping, and
+  stale-prune preservation for local payloads owned by the authoritative or
+  frontier slot.
+- Extended `scripts/formal/sumeragi_tlc.sh` with
+  `missing-commit-qc-actionable-fast` and
+  `missing-commit-qc-actionable-bug-*` modes so missing commit-QC actionable
+  repair has independent TLC coverage for the same twenty-five expected-failure
+  configs as Apalache.
+- Validation:
+  - `bash -n scripts/formal/sumeragi_tlc.sh`
+  - `python3 scripts/formal/check_sumeragi_formal_coverage.py`
+  - `JAVA_HOME=/opt/homebrew/Cellar/openjdk@21/21.0.11/libexec/openjdk.jdk/Contents/Home PATH="/opt/homebrew/Cellar/openjdk@21/21.0.11/libexec/openjdk.jdk/Contents/Home/bin:$PATH" APALACHE_ALLOW_DOCKER=0 target/apalache/toolchains/v0.52.2/bin/apalache-mc typecheck docs/formal/sumeragi/SumeragiMissingCommitQcActionableGate.tla`
+  - `JAVA_HOME=/opt/homebrew/Cellar/openjdk@21/21.0.11/libexec/openjdk.jdk/Contents/Home PATH="/opt/homebrew/Cellar/openjdk@21/21.0.11/libexec/openjdk.jdk/Contents/Home/bin:$PATH" TLA2TOOLS_JAR=target/tla2tools/tla2tools-1.7.4.jar bash scripts/formal/sumeragi_tlc.sh missing-commit-qc-actionable-fast`
+  - sequential `missing-commit-qc-actionable-bug-*` TLC runs for all 25 mutation
+    configs, all producing the expected invariant failure
+  - `git diff --check -- docs/formal/sumeragi/SumeragiMissingCommitQcActionableGate.tla docs/formal/sumeragi/SumeragiMissingCommitQcActionableGate_fast.cfg scripts/formal/sumeragi_tlc.sh docs/formal/sumeragi/README.md ci/README.md roadmap.md status.md`
+
+## 2026-05-31 Sumeragi missing-QC reacquire action TLC cross-check
+
+- Strengthened `SumeragiMissingQcReacquireActionGate.tla` with direct TLC
+  anchors over prior-attempt classification, exact attempt recording,
+  no-signal throttle marking, dependency-signal throttle bypass, suppression
+  checks and side effects, sidecar request success, observed-head and far-ahead
+  highest-QC fetch gating, lock-lag range-pull retargeting, broad-tier
+  promotion, cooldown clearing, anchor-pull outcomes, success-counter
+  accounting, and final return values.
+- Extended `scripts/formal/sumeragi_tlc.sh` with
+  `missing-qc-reacquire-action-fast` and `missing-qc-reacquire-action-bug-*`
+  modes so missing-QC reacquire action orchestration has independent TLC
+  coverage for the same thirty-one expected-failure configs as Apalache.
+- Validation:
+  - `bash -n scripts/formal/sumeragi_tlc.sh`
+  - `python3 scripts/formal/check_sumeragi_formal_coverage.py`
+  - `JAVA_HOME=/opt/homebrew/Cellar/openjdk@21/21.0.11/libexec/openjdk.jdk/Contents/Home PATH="/opt/homebrew/Cellar/openjdk@21/21.0.11/libexec/openjdk.jdk/Contents/Home/bin:$PATH" APALACHE_ALLOW_DOCKER=0 target/apalache/toolchains/v0.52.2/bin/apalache-mc typecheck docs/formal/sumeragi/SumeragiMissingQcReacquireActionGate.tla`
+  - `JAVA_HOME=/opt/homebrew/Cellar/openjdk@21/21.0.11/libexec/openjdk.jdk/Contents/Home PATH="/opt/homebrew/Cellar/openjdk@21/21.0.11/libexec/openjdk.jdk/Contents/Home/bin:$PATH" TLA2TOOLS_JAR=target/tla2tools/tla2tools-1.7.4.jar bash scripts/formal/sumeragi_tlc.sh missing-qc-reacquire-action-fast`
+  - sequential `missing-qc-reacquire-action-bug-*` TLC runs for all 31 mutation
+    configs, all producing the expected invariant failure
+  - `git diff --check -- docs/formal/sumeragi/SumeragiMissingQcReacquireActionGate.tla docs/formal/sumeragi/SumeragiMissingQcReacquireActionGate_fast.cfg scripts/formal/sumeragi_tlc.sh docs/formal/sumeragi/README.md ci/README.md roadmap.md status.md`
+
+## 2026-05-31 Sumeragi missing-QC reacquire admission TLC cross-check
+
+- Strengthened `SumeragiMissingQcReacquireAdmissionGate.tla` with a finite TLC
+  stutter path plus direct anchors for duplicate-attempt rejection,
+  proposal-observed commit/missing-QC/frontier dependency admission,
+  no-dependency proposal rejection, resilience-backed concrete dependency
+  requirements, no-dependency height-window throttling and cleanup,
+  dependency-signal and repeated-timeout admission, no-source rejection, and
+  empty-frontier fallback gating.
+- Extended `scripts/formal/sumeragi_tlc.sh` with
+  `missing-qc-reacquire-admission-fast` and
+  `missing-qc-reacquire-admission-bug-*` modes so missing-QC reacquire admission
+  has independent TLC coverage for the same twenty-one expected-failure configs
+  as Apalache.
+- Validation:
+  - `bash -n scripts/formal/sumeragi_tlc.sh`
+  - `python3 scripts/formal/check_sumeragi_formal_coverage.py`
+  - `JAVA_HOME=/opt/homebrew/Cellar/openjdk@21/21.0.11/libexec/openjdk.jdk/Contents/Home PATH="/opt/homebrew/Cellar/openjdk@21/21.0.11/libexec/openjdk.jdk/Contents/Home/bin:$PATH" APALACHE_ALLOW_DOCKER=0 target/apalache/toolchains/v0.52.2/bin/apalache-mc typecheck docs/formal/sumeragi/SumeragiMissingQcReacquireAdmissionGate.tla`
+  - `JAVA_HOME=/opt/homebrew/Cellar/openjdk@21/21.0.11/libexec/openjdk.jdk/Contents/Home PATH="/opt/homebrew/Cellar/openjdk@21/21.0.11/libexec/openjdk.jdk/Contents/Home/bin:$PATH" TLA2TOOLS_JAR=target/tla2tools/tla2tools-1.7.4.jar bash scripts/formal/sumeragi_tlc.sh missing-qc-reacquire-admission-fast`
+  - sequential `missing-qc-reacquire-admission-bug-*` TLC runs for all 21
+    mutation configs, all producing the expected invariant failure
+  - `git diff --check -- docs/formal/sumeragi/SumeragiMissingQcReacquireAdmissionGate.tla docs/formal/sumeragi/SumeragiMissingQcReacquireAdmissionGate_fast.cfg scripts/formal/sumeragi_tlc.sh docs/formal/sumeragi/README.md ci/README.md roadmap.md status.md`
+
+## 2026-05-31 Sumeragi live-frontier idle missing-QC TLC cross-check
+
+- Strengthened `SumeragiLiveFrontierIdleMissingQcGate.tla` with a finite TLC
+  stutter path plus direct anchors for slot/pending-block liveness, observed
+  head equality/lower acceptance, resilience/dependency/prior-attempt/height and
+  future-head rejection, explicit commit or missing-QC dependency escape
+  hatches, no-liveness rejection, suppressed-branch attempt recording, broad
+  highest-QC fetch and anchor-pull suppression, and sidecar hint preservation.
+- Extended `scripts/formal/sumeragi_tlc.sh` with
+  `live-frontier-idle-missing-qc-fast` and
+  `live-frontier-idle-missing-qc-bug-*` modes so live-frontier idle missing-QC
+  suppression has independent TLC coverage for the same seventeen
+  expected-failure configs as Apalache.
+- Validation:
+  - `bash -n scripts/formal/sumeragi_tlc.sh`
+  - `python3 scripts/formal/check_sumeragi_formal_coverage.py`
+  - `JAVA_HOME=/opt/homebrew/Cellar/openjdk@21/21.0.11/libexec/openjdk.jdk/Contents/Home PATH="/opt/homebrew/Cellar/openjdk@21/21.0.11/libexec/openjdk.jdk/Contents/Home/bin:$PATH" APALACHE_ALLOW_DOCKER=0 target/apalache/toolchains/v0.52.2/bin/apalache-mc typecheck docs/formal/sumeragi/SumeragiLiveFrontierIdleMissingQcGate.tla`
+  - `JAVA_HOME=/opt/homebrew/Cellar/openjdk@21/21.0.11/libexec/openjdk.jdk/Contents/Home PATH="/opt/homebrew/Cellar/openjdk@21/21.0.11/libexec/openjdk.jdk/Contents/Home/bin:$PATH" TLA2TOOLS_JAR=target/tla2tools/tla2tools-1.7.4.jar bash scripts/formal/sumeragi_tlc.sh live-frontier-idle-missing-qc-fast`
+  - sequential `live-frontier-idle-missing-qc-bug-*` TLC runs for all 17
+    mutation configs, all producing the expected invariant failure
+  - `git diff --check -- docs/formal/sumeragi/SumeragiLiveFrontierIdleMissingQcGate.tla docs/formal/sumeragi/SumeragiLiveFrontierIdleMissingQcGate_fast.cfg scripts/formal/sumeragi_tlc.sh docs/formal/sumeragi/README.md ci/README.md roadmap.md status.md`
+
+## 2026-05-31 SCCP EVM release-bundle route-canary role gate
+
+- Hardened `scripts/sccp_verify_release_bundle.py` so ETH/BSC route-canary
+  transaction hash, calldata hash, message id, payload hash, statement hash,
+  commitment root, finality height, and finality block hash fields in published
+  readiness/all-lanes JSON must be non-zero canonical bytes32 values, matching
+  the runtime EVM route-canary evidence hash policy. The verifier also rejects
+  reused EVM route-canary transcript roles or reuse of governed
+  source/route/destination hash roles.
+- Added a release-bundle regression that zeroes every ETH/BSC route-canary
+  transcript word, reuses an intra-transcript hash role, and reuses a governed
+  source-material hash role in both embedded readiness evidence and the
+  standalone all-lanes summary, proving the public verifier rejects both
+  artifacts.
+- Validation:
+  - `python3 -m py_compile scripts/sccp_verify_release_bundle.py pytests/scripts/sccp_release_bundle_test.py`
+  - `python3 -m pytest -q pytests/scripts/sccp_release_bundle_test.py -k 'evm_route_canary_transcript_hash_reuse or evm_route_canary_governed_hash_reuse or evm_route_canary_zero_transcript_words or tron_route_canary_transcript_hash_reuse or tron_route_canary_governed_hash_reuse or all_lanes_route_canary_field_drift'`
+    (`6 passed, 62 deselected`)
+  - `python3 -m pytest -q pytests/scripts/sccp_release_bundle_test.py`
+    (`68 passed`)
+  - `bash scripts/check_sccp_production_corridor.sh --phase evidence-scripts`
+    (`676 passed`)
+
+## 2026-05-31 SCCP TON release-bundle route-canary hash gate
+
+- Hardened `scripts/sccp_verify_release_bundle.py` so published TON
+  route-canary live-account hashes must be non-zero canonical bytes32 values and
+  cannot reuse the governed source, route, or destination hash roles carried in
+  the release-bundle lane summary.
+- Added release-bundle regressions that tamper both embedded readiness evidence
+  and the standalone all-lanes summary by zeroing TON route-canary live-account
+  hashes and replaying governed route/destination hashes in those fields.
+- Updated the bridge-proof docs and roadmap to state that public release-bundle
+  verification mirrors the TON live-account canary non-zero and hash-role
+  separation checks.
+- Validation:
+  - `python3 -m py_compile scripts/sccp_verify_release_bundle.py pytests/scripts/sccp_release_bundle_test.py`
+  - `python3 -m pytest -q pytests/scripts/sccp_release_bundle_test.py -k 'ton_route_canary_zero_live_hashes or ton_route_canary_hash_role_reuse or evm_route_canary_zero_transcript_words or tron_route_canary_zero_transcript_words'`
+    (`4 passed, 62 deselected`)
+  - `python3 -m py_compile scripts/sccp_verify_release_bundle.py pytests/scripts/sccp_release_bundle_test.py scripts/sccp_release_readiness_report.py pytests/scripts/sccp_release_readiness_report_test.py`
+  - `python3 -m pytest -q pytests/scripts/sccp_release_readiness_report_test.py pytests/scripts/sccp_release_bundle_test.py`
+    (`73 passed`)
+  - `bash scripts/check_sccp_production_corridor.sh --phase evidence-scripts`
+    (`674 passed`)
+
+## 2026-05-31 SCCP Substrate release-bundle route-canary finalized-head gate
+
+- Hardened `scripts/sccp_verify_release_bundle.py` so SORA Kusama, SORA
+  Polkadot, and SORA2 route-canary `substrate_finalized_head` fields in
+  published readiness/all-lanes JSON must be non-zero canonical bytes32 values,
+  matching the finalized-runtime route-canary evidence preflight.
+- Added a release-bundle regression that zeroes the Substrate-family
+  finalized-head route-canary fields in both embedded readiness evidence and the
+  standalone all-lanes summary, proving the public verifier rejects both
+  artifacts.
+- Updated the bridge-proof docs and roadmap to call out the public
+  release-bundle zero-finalized-head rejection for Substrate-family route
+  canaries.
+- Validation:
+  - `python3 -m py_compile scripts/sccp_verify_release_bundle.py pytests/scripts/sccp_release_bundle_test.py`
+  - `python3 -m pytest -q pytests/scripts/sccp_release_bundle_test.py -k 'substrate_route_canary_zero_finalized_head or ton_route_canary_zero_live_hashes or ton_route_canary_hash_role_reuse'`
+    (`3 passed, 66 deselected`)
+  - `python3 -m py_compile scripts/sccp_verify_release_bundle.py pytests/scripts/sccp_release_bundle_test.py scripts/sccp_release_readiness_report.py pytests/scripts/sccp_release_readiness_report_test.py`
+  - `python3 -m pytest -q pytests/scripts/sccp_release_readiness_report_test.py pytests/scripts/sccp_release_bundle_test.py`
+    (`76 passed`)
+  - `bash scripts/check_sccp_production_corridor.sh --phase evidence-scripts`
+    (`677 passed`)
+
+## 2026-05-31 Sumeragi frontier parent-QC hint retarget TLC cross-check
+
+- Strengthened `SumeragiFrontierParentQcHintRetargetGate.tla` with a finite
+  TLC stutter path plus direct anchors for exact-frontier stall bypass,
+  canonical reanchor dependency-progress gating, previous-emission
+  requirements, parent height matching, absent/same-hash hint rejection, and
+  QC-hint target rewrite.
+- Extended `scripts/formal/sumeragi_tlc.sh` with
+  `frontier-parent-qc-hint-retarget-fast` and
+  `frontier-parent-qc-hint-retarget-bug-*` modes so contiguous-frontier
+  missing-parent retargeting has independent TLC coverage for the same twelve
+  expected-failure configs as Apalache.
+- Validation:
+  - `bash -n scripts/formal/sumeragi_tlc.sh`
+  - `python3 scripts/formal/check_sumeragi_formal_coverage.py`
+  - `JAVA_HOME=/opt/homebrew/Cellar/openjdk@21/21.0.11/libexec/openjdk.jdk/Contents/Home PATH="/opt/homebrew/Cellar/openjdk@21/21.0.11/libexec/openjdk.jdk/Contents/Home/bin:$PATH" APALACHE_ALLOW_DOCKER=0 target/apalache/toolchains/v0.52.2/bin/apalache-mc typecheck docs/formal/sumeragi/SumeragiFrontierParentQcHintRetargetGate.tla`
+  - `JAVA_HOME=/opt/homebrew/Cellar/openjdk@21/21.0.11/libexec/openjdk.jdk/Contents/Home PATH="/opt/homebrew/Cellar/openjdk@21/21.0.11/libexec/openjdk.jdk/Contents/Home/bin:$PATH" TLA2TOOLS_JAR=target/tla2tools/tla2tools-1.7.4.jar bash scripts/formal/sumeragi_tlc.sh frontier-parent-qc-hint-retarget-fast`
+  - sequential `frontier-parent-qc-hint-retarget-bug-*` TLC runs for all 12
+    mutation configs, all producing the expected invariant failure
+  - `git diff --check -- docs/formal/sumeragi/SumeragiFrontierParentQcHintRetargetGate.tla docs/formal/sumeragi/SumeragiFrontierParentQcHintRetargetGate_fast.cfg scripts/formal/sumeragi_tlc.sh docs/formal/sumeragi/README.md ci/README.md roadmap.md status.md`
+
+## 2026-05-31 SCCP release verifier manifest root output
+
+- Extended `scripts/sccp_verify_release_bundle.py --json` to include the
+  verified `manifest_sha256` digest. Release reviewers can now archive the
+  public verifier root hash directly while the manifest remains outside its own
+  artifact table.
+- Extended the release-bundle success regression to compare `manifest_sha256`
+  with the actual `manifest.json` digest.
+- Validation:
+  - `python3 -m py_compile scripts/sccp_verify_release_bundle.py pytests/scripts/sccp_release_bundle_test.py`
+  - `python3 -m pytest -q pytests/scripts/sccp_release_bundle_test.py -k 'writes_hash_bound_public_artifacts or duplicate_json_keys'`
+    (`3 passed, 57 deselected`)
+  - `python3 -m pytest -q pytests/scripts/sccp_release_readiness_report_test.py pytests/scripts/sccp_release_bundle_test.py`
+    (`67 passed`)
+  - `bash scripts/check_sccp_production_corridor.sh --phase evidence-scripts`
+    (`668 passed`)
+
+## 2026-05-31 SCCP TRON release-bundle route-canary non-zero gate
+
+- Hardened `scripts/sccp_verify_release_bundle.py` so TRON route-canary
+  evidence, route, destination, transaction id, message id, call-data hash,
+  payload hash, statement hash, commitment root, finality height, finality block
+  hash, and signature hash fields in published readiness/all-lanes JSON must be
+  non-zero canonical bytes32 values, matching the runtime TRON evidence hash
+  policy. The verifier also rejects reused TRON route-canary transcript roles or
+  reuse of governed source/route/destination hash roles.
+- Added release-bundle regressions that zero the TRON route-canary binding
+  hashes, zero every TRON route-canary transcript word, reuse an intra-transcript
+  hash role, and reuse a governed source-deployment hash role in both embedded
+  readiness evidence and the standalone all-lanes summary, proving the public
+  verifier rejects both artifacts.
+- Validation:
+  - `python3 -m py_compile scripts/sccp_verify_release_bundle.py pytests/scripts/sccp_release_bundle_test.py`
+  - `python3 -m pytest -q pytests/scripts/sccp_release_bundle_test.py -k 'tron_route_canary_transcript_hash_reuse or tron_route_canary_governed_hash_reuse or tron_route_canary_zero_binding_hashes or tron_route_canary_zero_transcript_words or tron_route_canary_zero_addresses or tron_route_canary_recovered_owner_drift or all_lanes_route_canary_field_drift or all_lanes_route_canary_hash_drift'`
+    (`8 passed, 56 deselected`)
+  - `python3 -m pytest -q pytests/scripts/sccp_release_bundle_test.py`
+    (`64 passed`)
+  - `bash scripts/check_sccp_production_corridor.sh --phase evidence-scripts`
+    (`672 passed`)
+
+## 2026-05-31 SCCP UI proof-generation release surfaces
+
+- Extended the EVM/BSC, TRON, Solana, TON, and Substrate
+  `user_prover_submission_surfaces` rows in
+  `scripts/sccp_release_readiness_report.py` to advertise their UI-side
+  source-proof, source-state, full-light-client audit, or runtime-storage
+  proof-generation helpers where applicable alongside the final proof request
+  and submission helpers.
+- Added a release-readiness regression assertion so public JSON reports must
+  keep the native UI proof-generation helpers in the canonical portal/mobile
+  surfaces.
+- Validation:
+  - `python3 -m py_compile scripts/sccp_release_readiness_report.py pytests/scripts/sccp_release_readiness_report_test.py scripts/sccp_verify_release_bundle.py pytests/scripts/sccp_release_bundle_test.py`
+  - `python3 -m pytest -q pytests/scripts/sccp_release_readiness_report_test.py -k 'release_readiness_json_tracks_corridor_phase_results'`
+    (`1 passed, 6 deselected`)
+  - `python3 -m pytest -q pytests/scripts/sccp_release_readiness_report_test.py`
+    (`7 passed`)
+  - `python3 -m pytest -q pytests/scripts/sccp_release_bundle_test.py -k 'submission_surface'`
+    (`3 passed, 65 deselected`)
+  - `python3 -m pytest -q pytests/scripts/sccp_release_bundle_test.py`
+    (`69 passed`)
+
+## 2026-05-31 Sumeragi contiguous frontier payload-hint TLC cross-check
+
+- Strengthened `SumeragiContiguousFrontierPayloadHintGate.tla` with a finite
+  TLC stutter path plus direct anchors for Commit/Prepare/NewView phase ranking,
+  deferred-QC priority over proposal markers, exact height and actionable
+  filtering, deferred view/hash tie-breaks, marker fallback view/hash
+  tie-breaks, and empty fallback behavior.
+- Extended `scripts/formal/sumeragi_tlc.sh` with
+  `contiguous-frontier-payload-hint-fast` and
+  `contiguous-frontier-payload-hint-bug-*` modes so contiguous-frontier
+  payload-hint selection has independent TLC coverage for the same thirteen
+  expected-failure configs as Apalache.
+- Validation:
+  - `bash -n scripts/formal/sumeragi_tlc.sh`
+  - `python3 scripts/formal/check_sumeragi_formal_coverage.py`
+  - `JAVA_HOME=/opt/homebrew/Cellar/openjdk@21/21.0.11/libexec/openjdk.jdk/Contents/Home PATH="/opt/homebrew/Cellar/openjdk@21/21.0.11/libexec/openjdk.jdk/Contents/Home/bin:$PATH" APALACHE_ALLOW_DOCKER=0 target/apalache/toolchains/v0.52.2/bin/apalache-mc typecheck docs/formal/sumeragi/SumeragiContiguousFrontierPayloadHintGate.tla`
+  - `JAVA_HOME=/opt/homebrew/Cellar/openjdk@21/21.0.11/libexec/openjdk.jdk/Contents/Home PATH="/opt/homebrew/Cellar/openjdk@21/21.0.11/libexec/openjdk.jdk/Contents/Home/bin:$PATH" TLA2TOOLS_JAR=target/tla2tools/tla2tools-1.7.4.jar bash scripts/formal/sumeragi_tlc.sh contiguous-frontier-payload-hint-fast`
+  - sequential `contiguous-frontier-payload-hint-bug-*` TLC runs for all 13
+    mutation configs, all producing the expected invariant failure
+  - `git diff --check -- docs/formal/sumeragi/SumeragiContiguousFrontierPayloadHintGate.tla docs/formal/sumeragi/SumeragiContiguousFrontierPayloadHintGate_fast.cfg scripts/formal/sumeragi_tlc.sh docs/formal/sumeragi/README.md ci/README.md roadmap.md status.md`
+
+## 2026-05-31 SCCP release duplicate JSON key gate
+
+- Hardened `scripts/sccp_verify_release_bundle.py` so `manifest.json`,
+  `sccp-release-readiness.json`, and `sccp-all-lanes-summary.json` reject
+  duplicate JSON object keys before semantic readiness review. Public release
+  bundles now fail with explicit duplicate-key diagnostics instead of relying
+  only on canonical serialization drift to catch key-smuggling attempts.
+- Added release-bundle regressions for duplicate manifest keys and duplicate
+  readiness-report/all-lanes-summary keys while keeping manifest hashes in sync.
+- Validation:
+  - `python3 -m py_compile scripts/sccp_verify_release_bundle.py pytests/scripts/sccp_release_bundle_test.py scripts/sccp_release_readiness_report.py pytests/scripts/sccp_release_readiness_report_test.py`
+  - `python3 -m pytest -q pytests/scripts/sccp_release_bundle_test.py -k 'duplicate_json_keys or noncanonical_json_serialization or manifest_artifact_order or writes_hash_bound_public_artifacts'`
+    (`5 passed, 54 deselected`)
+  - `python3 -m pytest -q pytests/scripts/sccp_release_readiness_report_test.py pytests/scripts/sccp_release_bundle_test.py`
+    (`67 passed`)
+  - `bash scripts/check_sccp_production_corridor.sh --phase evidence-scripts`
+    (`666 passed`)
+
+## 2026-05-31 Sumeragi frontier sidecar expected-hash TLC cross-check
+
+- Strengthened `SumeragiFrontierSidecarExpectedHashGate.tla` with a finite TLC
+  stutter path plus direct anchors for tracked request precedence,
+  deferred-hint and observed-head source ordering, exact height and
+  authoritative-payload filtering, deterministic phase/view/hash tie-breaks,
+  cached Prepare/Commit QC selection, and sidecar Commit-QC view rejection for
+  absent, Prepare, wrong-height, or wrong-hash QCs.
+- Extended `scripts/formal/sumeragi_tlc.sh` with
+  `frontier-sidecar-expected-hash-fast` and
+  `frontier-sidecar-expected-hash-bug-*` modes so sidecar expected-hash
+  selection has independent TLC coverage for the same twenty-five
+  expected-failure configs as Apalache.
+- Validation:
+  - `bash -n scripts/formal/sumeragi_tlc.sh`
+  - `python3 scripts/formal/check_sumeragi_formal_coverage.py`
+  - `JAVA_HOME=/opt/homebrew/Cellar/openjdk@21/21.0.11/libexec/openjdk.jdk/Contents/Home PATH="/opt/homebrew/Cellar/openjdk@21/21.0.11/libexec/openjdk.jdk/Contents/Home/bin:$PATH" APALACHE_ALLOW_DOCKER=0 target/apalache/toolchains/v0.52.2/bin/apalache-mc typecheck docs/formal/sumeragi/SumeragiFrontierSidecarExpectedHashGate.tla`
+  - `JAVA_HOME=/opt/homebrew/Cellar/openjdk@21/21.0.11/libexec/openjdk.jdk/Contents/Home PATH="/opt/homebrew/Cellar/openjdk@21/21.0.11/libexec/openjdk.jdk/Contents/Home/bin:$PATH" TLA2TOOLS_JAR=target/tla2tools/tla2tools-1.7.4.jar bash scripts/formal/sumeragi_tlc.sh frontier-sidecar-expected-hash-fast`
+  - sequential `frontier-sidecar-expected-hash-bug-*` TLC runs for all 25
+    mutation configs, all producing the expected invariant failure
+  - `git diff --check -- docs/formal/sumeragi/SumeragiFrontierSidecarExpectedHashGate.tla docs/formal/sumeragi/SumeragiFrontierSidecarExpectedHashGate_fast.cfg scripts/formal/sumeragi_tlc.sh docs/formal/sumeragi/README.md ci/README.md roadmap.md status.md`
+
+## 2026-05-31 SCCP release canonical JSON serialization gate
+
+- Hardened `scripts/sccp_verify_release_bundle.py` so `manifest.json`,
+  `sccp-release-readiness.json`, and `sccp-all-lanes-summary.json` must keep
+  the bundle builder's canonical sorted-key JSON byte form. Public release
+  bundles can no longer minify, reformat, or duplicate-key-smuggle JSON roots
+  and refresh attachment hashes while still passing verification.
+- Added a release-bundle regression that minifies the manifest, readiness
+  report, and all-lanes summary JSON roots while keeping semantic payloads and
+  manifest hashes in sync, then verifies the explicit canonical-serialization
+  failures.
+- Validation:
+  - `python3 -m py_compile scripts/sccp_verify_release_bundle.py pytests/scripts/sccp_release_bundle_test.py scripts/sccp_release_readiness_report.py pytests/scripts/sccp_release_readiness_report_test.py`
+  - `python3 -m pytest -q pytests/scripts/sccp_release_bundle_test.py -k 'noncanonical_json_serialization or manifest_artifact_order or release_notes_drift or writes_hash_bound_public_artifacts'`
+    (`4 passed, 52 deselected`)
+  - `python3 -m pytest -q pytests/scripts/sccp_release_readiness_report_test.py pytests/scripts/sccp_release_bundle_test.py`
+    (`64 passed`)
+  - `bash scripts/check_sccp_production_corridor.sh --phase evidence-scripts`
+    (`663 passed`)
+
+## 2026-05-31 SCCP route-canary governed-hash role gate
+
+- Hardened `scripts/sccp_all_lanes_evidence.py` so EVM/TRON
+  `MessageProofAccepted` route-canary transaction fields and TON live-account
+  route-canary fields must remain distinct from the governed
+  source-material, source-adapter deployment, route-allowlist, and
+  destination-binding hash roles they bind.
+- Added all-lanes regressions that mutate EVM and TRON canary message ids to
+  reuse source record hashes, plus a TON regression that reuses the source
+  material hash as the live account-state canary hash.
+- Validation:
+  - `python3 -m py_compile scripts/sccp_all_lanes_evidence.py pytests/scripts/sccp_all_lanes_evidence_test.py`
+  - `python3 -m pytest -q pytests/scripts/sccp_all_lanes_evidence_test.py -k 'route_canary_governed_hash_role_reuse or route_canary_transcript_hash_reuse or route_canary_live_account_hash_role_reuse'`
+    (`6 passed, 115 deselected`)
+  - `python3 -m pytest -q pytests/scripts/sccp_all_lanes_evidence_test.py`
+    (`121 passed`)
+  - `bash scripts/check_sccp_production_corridor.sh --phase evidence-scripts`
+    (`661 passed`)
+
+## 2026-05-31 SCCP TRON release-bundle signer binding gate
+
+- Hardened `scripts/sccp_verify_release_bundle.py` so TRON route-canary
+  evidence in published readiness/all-lanes JSON must keep
+  `signature_recovered_address` equal to `transaction_owner_address` once both
+  are valid non-zero canonical `0x41` TRON addresses, and must reject zero
+  owner/recovered addresses before accepting the transcript shape.
+- Added release-bundle regressions that mutate the TRON recovered signer address
+  and zero both TRON owner fields in the embedded readiness evidence and
+  standalone all-lanes summary, proving the public verifier rejects both
+  artifacts even when the owner-recovery boolean remains true.
+- Validation:
+  - `python3 -m py_compile scripts/sccp_verify_release_bundle.py pytests/scripts/sccp_release_bundle_test.py`
+  - `python3 -m pytest -q pytests/scripts/sccp_release_bundle_test.py -k 'tron_route_canary_zero_addresses or tron_route_canary_recovered_owner_drift or all_lanes_route_canary_field_drift or all_lanes_route_canary_hash_drift'`
+    (`4 passed, 53 deselected`)
+  - `python3 -m pytest -q pytests/scripts/sccp_release_bundle_test.py`
+    (`57 passed`)
+  - `bash scripts/check_sccp_production_corridor.sh --phase evidence-scripts`
+    (`663 passed`)
+
+## 2026-05-31 Sumeragi frontier sidecar retarget TLC cross-check
+
+- Strengthened `SumeragiFrontierSidecarRetargetGate.tla` with a finite TLC
+  stutter path plus direct anchors for narrow override reasons, quarantine and
+  stall/progress gates, confirmation by local payload, commit QC, or override,
+  tracked and untracked sidecar routing, commit-certified reacquire with local
+  evidence, and rejection of missing expected hashes, same-hash sidecars, and
+  authoritative payloads.
+- Extended `scripts/formal/sumeragi_tlc.sh` with
+  `frontier-sidecar-retarget-fast` and `frontier-sidecar-retarget-bug-*` modes
+  so contiguous-frontier sidecar retargeting has independent TLC coverage for
+  the same twenty-seven expected-failure configs as Apalache.
+- Validation:
+  - `bash -n scripts/formal/sumeragi_tlc.sh`
+  - `python3 scripts/formal/check_sumeragi_formal_coverage.py`
+  - `JAVA_HOME=/opt/homebrew/Cellar/openjdk@21/21.0.11/libexec/openjdk.jdk/Contents/Home PATH="/opt/homebrew/Cellar/openjdk@21/21.0.11/libexec/openjdk.jdk/Contents/Home/bin:$PATH" APALACHE_ALLOW_DOCKER=0 target/apalache/toolchains/v0.52.2/bin/apalache-mc typecheck docs/formal/sumeragi/SumeragiFrontierSidecarRetargetGate.tla`
+  - `JAVA_HOME=/opt/homebrew/Cellar/openjdk@21/21.0.11/libexec/openjdk.jdk/Contents/Home PATH="/opt/homebrew/Cellar/openjdk@21/21.0.11/libexec/openjdk.jdk/Contents/Home/bin:$PATH" TLA2TOOLS_JAR=target/tla2tools/tla2tools-1.7.4.jar bash scripts/formal/sumeragi_tlc.sh frontier-sidecar-retarget-fast`
+  - sequential `frontier-sidecar-retarget-bug-*` TLC runs for all 27 mutation
+    configs, all producing the expected invariant failure
+  - `git diff --check -- docs/formal/sumeragi/SumeragiFrontierSidecarRetargetGate.tla docs/formal/sumeragi/SumeragiFrontierSidecarRetargetGate_fast.cfg scripts/formal/sumeragi_tlc.sh docs/formal/sumeragi/README.md ci/README.md roadmap.md status.md`
+
+## 2026-05-31 SCCP release manifest artifact-order gate
+
+- Hardened `scripts/sccp_verify_release_bundle.py` so the public manifest
+  artifact list must preserve the bundle builder's canonical order: readiness
+  Markdown/JSON, all-lanes summary, copied evidence inputs, passed corridor
+  logs in corridor phase order, and the release-notes attachment. A release
+  bundle can no longer reorder the manifest, regenerate the release-notes table
+  to match, and still pass review.
+- Added a release-bundle regression that swaps the first manifest artifacts,
+  regenerates canonical Markdown/release notes/manifest hashes, and verifies
+  the new explicit artifact-order failure.
+- Validation:
+  - `python3 -m py_compile scripts/sccp_verify_release_bundle.py pytests/scripts/sccp_release_bundle_test.py scripts/sccp_release_readiness_report.py pytests/scripts/sccp_release_readiness_report_test.py`
+  - `python3 -m pytest -q pytests/scripts/sccp_release_bundle_test.py -k 'manifest_artifact_order or release_notes_drift or writes_hash_bound_public_artifacts'`
+    (`3 passed, 51 deselected`)
+  - `python3 -m pytest -q pytests/scripts/sccp_release_readiness_report_test.py pytests/scripts/sccp_release_bundle_test.py`
+    (`62 passed`)
+  - `bash scripts/check_sccp_production_corridor.sh --phase evidence-scripts`
+    (`658 passed`)
+
+## 2026-05-31 Sumeragi frontier quorum-owner cleanup TLC cross-check
+
+- Strengthened `SumeragiFrontierQuorumOwnerActionableGate.tla` with a finite
+  TLC stutter path plus direct anchors for owner, vote, dependency backlog, RBC
+  sender, missing-block, missing-commit-QC, and vote-backed recovery sources,
+  stale or wrong-view rejection, passive-work rejection, committed+1 height
+  gating, current-view gating, and no-actionable-source suppression.
+- Extended `scripts/formal/sumeragi_tlc.sh` with
+  `frontier-quorum-owner-actionable-fast` and
+  `frontier-quorum-owner-actionable-bug-*` modes so live contiguous-frontier
+  cleanup preservation has independent TLC coverage for the same twenty
+  expected-failure configs as Apalache.
+- Validation:
+  - `bash -n scripts/formal/sumeragi_tlc.sh`
+  - `python3 scripts/formal/check_sumeragi_formal_coverage.py`
+  - `JAVA_HOME=/opt/homebrew/Cellar/openjdk@21/21.0.11/libexec/openjdk.jdk/Contents/Home PATH="/opt/homebrew/Cellar/openjdk@21/21.0.11/libexec/openjdk.jdk/Contents/Home/bin:$PATH" APALACHE_ALLOW_DOCKER=0 target/apalache/toolchains/v0.52.2/bin/apalache-mc typecheck docs/formal/sumeragi/SumeragiFrontierQuorumOwnerActionableGate.tla`
+  - `JAVA_HOME=/opt/homebrew/Cellar/openjdk@21/21.0.11/libexec/openjdk.jdk/Contents/Home PATH="/opt/homebrew/Cellar/openjdk@21/21.0.11/libexec/openjdk.jdk/Contents/Home/bin:$PATH" TLA2TOOLS_JAR=target/tla2tools/tla2tools-1.7.4.jar bash scripts/formal/sumeragi_tlc.sh frontier-quorum-owner-actionable-fast`
+  - sequential `frontier-quorum-owner-actionable-bug-*` TLC runs for all 20
+    mutation configs, all producing the expected invariant failure
+  - `git diff --check -- docs/formal/sumeragi/SumeragiFrontierQuorumOwnerActionableGate.tla docs/formal/sumeragi/SumeragiFrontierQuorumOwnerActionableGate_fast.cfg scripts/formal/sumeragi_tlc.sh docs/formal/sumeragi/README.md ci/README.md roadmap.md status.md`
+
+## 2026-05-31 SCCP cryptographic evidence field binding gate
+
+- Hardened `scripts/sccp_verify_release_bundle.py` so public
+  `cryptographic_evidence` rows now emit field-specific failures whenever
+  source-material, source-adapter deployment, destination-binding,
+  route-allowlist, route-canary hash/source, or canary binding fields drift from
+  the embedded all-lanes lane evidence.
+- Added a release-bundle regression that mutates every public crypto field on
+  the first lane while keeping embedded lane evidence unchanged, then verifies
+  the public verifier rejects each field before relying on only the broad table
+  mismatch check.
+- Validation:
+  - `python3 -m py_compile scripts/sccp_verify_release_bundle.py pytests/scripts/sccp_release_bundle_test.py`
+  - `python3 -m pytest -q pytests/scripts/sccp_release_bundle_test.py -k 'crypto_evidence_field_binding_drift or crypto_evidence_hash_drift or crypto_evidence_lane_binding_drift'`
+    (`3 passed, 50 deselected`)
+  - `python3 -m pytest -q pytests/scripts/sccp_release_bundle_test.py`
+    (`53 passed`)
+  - `python3 -m py_compile scripts/sccp_release_readiness_report.py scripts/sccp_release_bundle.py scripts/sccp_verify_release_bundle.py pytests/scripts/sccp_release_readiness_report_test.py pytests/scripts/sccp_release_bundle_test.py`
+  - `python3 -m pytest -q pytests/scripts/sccp_release_readiness_report_test.py pytests/scripts/sccp_release_bundle_test.py`
+    (`60 passed`)
+  - `bash scripts/check_sccp_production_corridor.sh --phase evidence-scripts`
+    (`656 passed`)
+
+## 2026-05-31 Sumeragi frontier reassembly activity TLC cross-check
+
+- Strengthened `SumeragiFrontierReassemblyActivityGate.tla` with a finite TLC
+  stutter path plus direct anchors for fresh dependency progress with payload
+  backlog, exact same-slot ingress, same-height RBC sender and deferral work,
+  validation work, deferred block-sync updates, stale and wrong-height/view
+  rejection, and no-source suppression.
+- Extended `scripts/formal/sumeragi_tlc.sh` with
+  `frontier-reassembly-activity-fast` and
+  `frontier-reassembly-activity-bug-*` modes so frontier reassembly activity
+  has independent TLC coverage for the same thirty-two expected-failure configs
+  as Apalache.
+- Validation:
+  - `bash -n scripts/formal/sumeragi_tlc.sh`
+  - `python3 scripts/formal/check_sumeragi_formal_coverage.py`
+  - `JAVA_HOME=/opt/homebrew/Cellar/openjdk@21/21.0.11/libexec/openjdk.jdk/Contents/Home PATH="/opt/homebrew/Cellar/openjdk@21/21.0.11/libexec/openjdk.jdk/Contents/Home/bin:$PATH" APALACHE_ALLOW_DOCKER=0 target/apalache/toolchains/v0.52.2/bin/apalache-mc typecheck docs/formal/sumeragi/SumeragiFrontierReassemblyActivityGate.tla`
+  - `JAVA_HOME=/opt/homebrew/Cellar/openjdk@21/21.0.11/libexec/openjdk.jdk/Contents/Home PATH="/opt/homebrew/Cellar/openjdk@21/21.0.11/libexec/openjdk.jdk/Contents/Home/bin:$PATH" TLA2TOOLS_JAR=target/tla2tools/tla2tools-1.7.4.jar bash scripts/formal/sumeragi_tlc.sh frontier-reassembly-activity-fast`
+  - sequential `frontier-reassembly-activity-bug-*` TLC runs for all 32
+    mutation configs, all producing the expected invariant failure
+  - `git diff --check -- docs/formal/sumeragi/SumeragiFrontierReassemblyActivityGate.tla docs/formal/sumeragi/SumeragiFrontierReassemblyActivityGate_fast.cfg scripts/formal/sumeragi_tlc.sh docs/formal/sumeragi/README.md ci/README.md roadmap.md status.md`
+
+## 2026-05-31 SCCP TRON duplicate-event evidence gate
+
+- Hardened `scripts/sccp_tron_live_evidence.py` so source-event transaction
+  readback and route-canary `MessageProofAccepted` evidence must contain exactly
+  one matching governed event. Ambiguous TRON receipts with duplicate matching
+  `SccpSourceEvent(bytes32)` or `MessageProofAccepted` logs now fail closed
+  instead of selecting the first match.
+- Added focused regressions for duplicate source-event logs and duplicate
+  route-canary logs.
+- Validation:
+  - `python3 -m py_compile scripts/sccp_tron_live_evidence.py pytests/scripts/sccp_tron_live_evidence_test.py`
+  - `python3 -m pytest -q pytests/scripts/sccp_tron_live_evidence_test.py -k 'duplicate_source_event_transaction_logs or duplicate_route_canary_transaction_logs or source_event_transaction_readback or route_canary_from_verifier_transaction'`
+    (`5 passed, 145 deselected`)
+  - `python3 -m pytest -q pytests/scripts/sccp_tron_live_evidence_test.py`
+    (`150 passed`)
+  - `bash scripts/check_sccp_production_corridor.sh --phase evidence-scripts`
+    (`656 passed`)
+
+## 2026-05-31 Sumeragi same-slot frontier activity TLC cross-check
+
+- Strengthened `SumeragiFrontierSameSlotActivityGate.tla` with a finite TLC
+  stutter path plus direct anchors for payload progress evidence, ingress
+  backlog/payload gates, vote-backed activity evidence, missing-block,
+  missing-commit-QC, and missing-payload actionability, old-view and
+  wrong-height suppression, stale-window rejection, and bookkeeping-only refresh
+  exclusion.
+- Extended `scripts/formal/sumeragi_tlc.sh` with
+  `frontier-same-slot-activity-fast` and
+  `frontier-same-slot-activity-bug-*` modes so exact-slot frontier recovery
+  activity has independent TLC coverage for the same thirty-six
+  expected-failure configs as Apalache.
+- Validation:
+  - `bash -n scripts/formal/sumeragi_tlc.sh`
+  - `python3 scripts/formal/check_sumeragi_formal_coverage.py`
+  - `JAVA_HOME=/opt/homebrew/Cellar/openjdk@21/21.0.11/libexec/openjdk.jdk/Contents/Home PATH="/opt/homebrew/Cellar/openjdk@21/21.0.11/libexec/openjdk.jdk/Contents/Home/bin:$PATH" APALACHE_ALLOW_DOCKER=0 target/apalache/toolchains/v0.52.2/bin/apalache-mc typecheck docs/formal/sumeragi/SumeragiFrontierSameSlotActivityGate.tla`
+  - `JAVA_HOME=/opt/homebrew/Cellar/openjdk@21/21.0.11/libexec/openjdk.jdk/Contents/Home PATH="/opt/homebrew/Cellar/openjdk@21/21.0.11/libexec/openjdk.jdk/Contents/Home/bin:$PATH" TLA2TOOLS_JAR=target/tla2tools/tla2tools-1.7.4.jar bash scripts/formal/sumeragi_tlc.sh frontier-same-slot-activity-fast`
+  - sequential `frontier-same-slot-activity-bug-*` TLC runs for all 36
+    mutation configs, all producing the expected invariant failure
+  - `git diff --check -- docs/formal/sumeragi/SumeragiFrontierSameSlotActivityGate.tla docs/formal/sumeragi/SumeragiFrontierSameSlotActivityGate_fast.cfg scripts/formal/sumeragi_tlc.sh docs/formal/sumeragi/README.md ci/README.md roadmap.md status.md`
+
+## 2026-05-31 SCCP copied evidence layout gate
+
+- Hardened `scripts/sccp_verify_release_bundle.py` so readiness report
+  `inputs` and copied `input_artifacts` must preserve the bundle builder's
+  canonical copied evidence layout: `evidence/NN-*.toml` in report order.
+  Public release bundles can no longer rename copied TOML evidence and update
+  the manifest/report consistently while still passing verification.
+- Added a release-bundle regression that renames `evidence/00-complete.toml`
+  to another canonical path, updates the readiness report and manifest to match
+  the renamed file, and verifies the public verifier rejects both provenance
+  rows on the explicit copied-layout gate.
+- Validation:
+  - `python3 -m py_compile scripts/sccp_verify_release_bundle.py pytests/scripts/sccp_release_bundle_test.py scripts/sccp_release_readiness_report.py pytests/scripts/sccp_release_readiness_report_test.py`
+  - `python3 -m pytest -q pytests/scripts/sccp_release_bundle_test.py -k 'copied_input_layout_drift or report_artifact_path_drift or input_provenance_schema_drift or writes_hash_bound_public_artifacts'`
+    (`4 passed, 48 deselected`)
+  - `python3 -m pytest -q pytests/scripts/sccp_release_readiness_report_test.py pytests/scripts/sccp_release_bundle_test.py`
+    (`59 passed`)
+  - `bash scripts/check_sccp_production_corridor.sh --phase evidence-scripts`
+    (`653 passed`)
+
+## 2026-05-31 SCCP TRON Groth16 finality-height signal regression
+
+- Extended the EVM/TRON Groth16 contract smoke so an otherwise accepting proof is
+  rejected when `publicInputs[4]` is replaced after proof generation. This now
+  covers post-generation payload, finality-height, and finality-block public
+  signal drift for both the shared BN254 verifier path and the TRON wrapper.
+- Validation:
+  - `node --check contracts/evm/sccp/test/sccp_message_bridge_smoke.js`
+  - `bash scripts/sccp_evm_contract_smoke.sh`
+    (`sccp_message_bridge_smoke: ok`)
+
 ## 2026-05-31 SCCP cryptographic evidence lane binding gate
 
 - Hardened `scripts/sccp_verify_release_bundle.py` so each public
@@ -33118,7 +33655,1503 @@ Last updated: 2026-05-31
   - `cd kotlin && JAVA_HOME=/opt/homebrew/Cellar/openjdk@21/21.0.11/libexec/openjdk.jdk/Contents/Home PATH="$JAVA_HOME/bin:$PATH" ./gradlew :core-jvm:test --tests 'org.hyperledger.iroha.sdk.sccp.SolanaSccpProverTest' --console=plain`
   - `cd java/iroha_android && JAVA_HOME=/opt/homebrew/Cellar/openjdk@21/21.0.11/libexec/openjdk.jdk/Contents/Home PATH="$JAVA_HOME/bin:$PATH" ./gradlew :core:test --tests 'org.hyperledger.iroha.android.sccp.SolanaSccpProverTests' --console=plain`
   - `git diff --check -- crates/iroha_core/tests/bridge_proofs.rs status.md javascript/iroha_js/src/sccp.js javascript/iroha_js/dist/sccp.js javascript/iroha_js/test/sccpSolanaProver.test.js IrohaSwift/Sources/IrohaSwift/SccpSolanaProver.swift IrohaSwift/Tests/IrohaSwiftTests/SccpSolanaProverTests.swift kotlin/core-jvm/src/main/java/org/hyperledger/iroha/sdk/sccp/SolanaSccpProver.kt kotlin/core-jvm/src/test/kotlin/org/hyperledger/iroha/sdk/sccp/SolanaSccpProverTest.kt java/iroha_android/src/main/java/org/hyperledger/iroha/android/sccp/SolanaSccpProver.java java/iroha_android/src/test/java/org/hyperledger/iroha/android/sccp/SolanaSccpProverTests.java`
+## 2026-05-31 Kotodama sysvar authority access hints
 
+- Rust and JS Kotodama access-hint derivation now treat
+  `sysvar_authority()` as the same `$authority` account placeholder as
+  `authority()` for mutating account helpers. Regression coverage locks
+  `transfer_asset` and `set_account_detail` manifests to precise authority
+  asset/account-detail keys without wildcard fallbacks.
+- Validation:
+  - `cargo test -p kotodama_lang manifest_access_set_hints_include_sysvar_authority_placeholders -- --nocapture`
+  - `cd javascript/iroha_js && node --test --test-name-pattern "sysvar_authority.*access" test/kotodamaCompiler.test.js`
+  - `cd javascript/iroha_js && npm run build:dist`
+  - `cd javascript/iroha_js && node --test test/package_dist.test.js`
+  - `cargo fmt --all --check` currently reports an unrelated existing
+    formatting diff in `crates/ivm/tests/kotodama.rs`.
+
+## 2026-05-30 Taira edge Connect routing pin
+
+- The shared-edge nginx renderer now pins public `/v1/mcp`,
+  `/v1/connect/session`, `/v1/connect/session/*`, `/v1/connect/status`, and
+  `/v1/connect/ws` to the same selected Torii upstream so Connect MCP tools and
+  direct Connect management/websocket requests do not split process-local
+  session state across validators.
+- The checked-in Taira nginx example was regenerated from the example validator
+  roster, and the Taira rollout notes now distinguish shared generic public
+  routes from pinned Connect/MCP routes.
+- Focused validation passed:
+  - direct invocation of `scripts/tests/render_taira_edge_nginx_conf_test.py`
+    test functions with temporary directories
+  - `python3 -m py_compile scripts/render_taira_edge_nginx_conf.py scripts/tests/render_taira_edge_nginx_conf_test.py`
+
+## 2026-05-30 JS Kotodama map and NFT register fixes
+
+- Fixed JS Kotodama durable map foreach lowering so static loop body
+  assignments preserve loop-carried locals, wide numeric map values keep their
+  live `STATE_GET` blob register through the body, and literal
+  `nft_set_metadata` calls allocate scratch registers instead of clobbering
+  live `r27`/`r28` locals. Regenerated `javascript/iroha_js/dist`.
+- Validation:
+  - `cd javascript/iroha_js && node --test --test-name-pattern "static durable map|wide numeric|NFT metadata|static map iteration|NFT syscall|docs/example static map" test/kotodamaCompiler.test.js`
+  - `cd javascript/iroha_js && node --test test/kotodamaCompiler.test.js`
+  - `cd javascript/iroha_js && npm run build:dist`
+
+## 2026-05-30 Torii transaction query routing and visibility
+
+- `/v1/transactions/query` ingress now encodes the clamped query envelope and
+  uses the existing Torii read-fanout list merge for `TransactionsQuery`, so
+  routed/private-dataspace deployments do not return only the ingress node's
+  local transaction page.
+- Mandatory-alias transaction history visibility now compares the viewer's JWT
+  dataspace alias against referenced `DomainId` dataspace segments. Claims such
+  as `banka` therefore cover transactions in any `*.banka` domain even when the
+  alias has no resolved account binding; account-scoped visibility is
+  unchanged.
+- Focused validation passed:
+  - `cargo test -p iroha_torii handler_transactions_query_fan_outs_across_dataspaces -- --nocapture`
+  - `cargo test -p iroha_torii tx_history_visibility_dataspace_wide_matches_dataspace_alias -- --nocapture`
+  - `cargo test -p iroha_torii transactions_query -- --nocapture`
+  - `cargo test -p iroha_torii transactions_visible_query -- --nocapture`
+
+## 2026-05-30 JS Kotodama ABI hash refresh
+
+- Updated the JS Kotodama compiler and regenerated `javascript/iroha_js/dist`
+  so compiled contract outputs now emit the current V1 ABI hash
+  `73cefb1b419f97b9e2864cdc6545d3f80ae2328dc0fbe2fbd034cd51a837ba0d`
+  in both `abiHashHex` and manifest `abi_hash`. Added JS regression coverage
+  against the canonical manifest hash literal.
+- Validation:
+  `node --test --test-name-pattern "Kotodama compiler SDK compiles a minimal contract artifact" javascript/iroha_js/test/kotodamaCompiler.test.js`
+  and
+  `cargo test -p ivm --test abi_hash_versions abi_hash_matches_v1_golden -- --nocapture`.
+
+## 2026-05-30 Kagemusha recursive-verifier MSM foundation
+
+- The Pasta circuit module now includes a bounded native-scalar Vesta MSM
+  composition wrapper for the future in-circuit Halo2 IPA verifier. It keeps
+  canonical Pasta/Fp scalars private, exposes only the base point encodings and
+  final MSM output, reuses the native-scalar Vesta multiplication ladder per
+  term, starts the running accumulator at identity, and chains each private term
+  output into the final public point-or-identity sum. Focused adversarial
+  coverage rejects output mismatch at witness construction, public base/output
+  substitution, scalar high-bit overflow, conditional-bit tampering,
+  noncanonical `value + modulus` scalar aliases, doubled-addend case tampering,
+  and self-consistent but unchained private MSM accumulators.
+- The first IPA-specific final-comparison wrapper now proves
+  `Q = a*G + b*H + (a*b)*U` over Vesta point-or-identity encodings. It reuses
+  the three-term bounded MSM and adds a native Pasta/Fp product link for the
+  third scalar, so a malicious witness cannot use an internally valid MSM with a
+  forged IPA `a*b` term.
+- A per-round IPA accumulator wrapper now proves `Q' = x^2*L + Q + x^{-2}*R`
+  through the fixed-window native-scalar MSM path. It keeps `x` and `x^{-1}`
+  as private canonical Pasta/Fp scalars, enforces `x*x^{-1}=1`, links the
+  first and third MSM scalars to `x^2` and `x^{-2}`, and constrains the middle
+  MSM scalar to one, preventing a valid-looking MSM from drifting away from the
+  transcript challenge.
+- The IPA generator-fold wrapper now proves
+  `G' = x^{-1}*G_L + x*G_R` and `H' = x*H_L + x^{-1}*H_R` with two linked
+  fixed-window two-term MSMs that share the same private canonical challenge
+  and inverse. A forged but internally valid folded-generator MSM is rejected if
+  its scalars do not match the transcript challenge relation.
+- The native-field IPA scalar-fold gadgets now prove
+  `b' = b_L*x^{-1} + b_R*x` for one scalar and for fixed-size public vector
+  segments. They expose the left, right, and folded scalars, keep one shared
+  `x`/`x^{-1}` pair private and canonical per segment, and reject inverse
+  mismatch, output mismatch, public input/output substitution, and noncanonical
+  challenge or folded-output aliases.
+- The multi-round native-field IPA `b`-vector reduction gadget now folds a
+  power-of-two public `b` vector to the proof's final public `b` scalar. It
+  keeps intermediate folded vectors private and canonical, exposes each
+  transcript-derived round challenge and inverse as public circuit inputs linked
+  to the private canonical decompositions, and rejects wrong challenge counts,
+  mismatched inverses, final-scalar mismatches, public initial/final/challenge
+  substitution, intermediate tampering, and noncanonical private or final scalar
+  aliases.
+- The native Pasta/Fp fixed-window decomposition gadget now proves private
+  scalars as deterministic little-endian window digits for future production
+  windowed MSM. Each digit is range-constrained by boolean bits, every digit bit
+  is linked to the canonical private scalar bit at the same global offset, and
+  scalar bits above `WINDOWS * WINDOW_BITS` are forced to zero. Focused
+  adversarial coverage rejects invalid window shapes, high-bit overflow, digit
+  value overflow, non-boolean digit bits, digit-bit substitution, scalar-value
+  substitution, and noncanonical `value + modulus` aliases.
+- The non-native Vesta fixed-window point selector now proves that a private
+  selected point-or-identity comes from a private `2^WINDOW_BITS` table under
+  canonical window bits. It uses a quadratic binary selection network instead
+  of a high-degree selector product, keeping the production windowed-MSM path
+  compatible with low-degree Halo2 gates. Focused coverage rejects invalid
+  widths, table-length and digit-range errors, selected-point mismatches,
+  non-boolean or substituted digit bits, selected/table point tampering, and
+  intermediate selection-level tampering.
+- The non-native Vesta fixed-window table-derivation gadget now proves a
+  private table is exactly `[0, B, 2B, ...]` for a public base point. It links
+  table entry zero to the canonical identity, table entry one to the public
+  base, and every later table entry to a private complete-add chain. Focused
+  coverage rejects invalid widths, wrong table lengths, host-side entry
+  mismatches, public-base substitution, identity-entry tampering, and
+  addition-chain link tampering.
+- The non-native Vesta fixed-window native-scalar multiplication wrapper now
+  composes scalar windows, shifted-base table derivation, point selection,
+  per-window base doublings, and selected-point accumulation into a public
+  `output = scalar * base` statement. Focused coverage rejects high-scalar and
+  output-mismatch witness construction, public-output substitution,
+  self-consistent selection-table splices, shifted-base transition tampering,
+  and running-sum chain tampering.
+- The transparent native IPA verifier now derives the same `b`-vector reduction
+  projection from the transcript challenge sequence and rejects a proof when
+  `proof.b_final` does not equal the folded public statement vector. This gives
+  the recursive circuit witness source and the native verifier the same
+  scalar-side binding rule. The native accumulation projection now also rejects
+  supplied challenge/inverse pairs that are not multiplicative inverses before
+  using them in `Q' = x^2*L + Q + x^{-2}*R`.
+- The native zkp crate now derives and validates a combined IPA verifier witness
+  bundling a public transcript projection, field-friendly transcript binding,
+  full `b`-vector reduction, scalar-multiplication accumulation projection, and
+  final proof scalars. The transcript projection records the `ipa.n` state
+  boundary, each round's `L/R` bytes, domain-separated round-byte digest,
+  transcript states, challenge, inverse, and final transcript state. Validation
+  rejects transcript-state, transcript-binding, round-byte, round-digest,
+  round-order, challenge, reduction, accumulator, and final-scalar substitution
+  before those values can feed the recursive-circuit witness path.
+- The native zkp crate also derives and validates a field-friendly IPA
+  transcript binding from the SHA3-validated projection. The binding maps the
+  transcript header, every full round projection, each challenge/inverse pair,
+  and the final transcript state into Pasta/Fp scalars, then folds them through
+  a transparent Pow5 accumulator. This does not replace native SHA3 transcript
+  validation; it gives recursive verifier circuits a compact public digest that
+  binds their challenge inputs to the host-checked transcript without a trusted
+  setup.
+- Native IPA vector commitments now use backend-level deterministic MSM hooks.
+  Pallas and BN254 dispatch to `halo2curves::msm_best`, with the previous
+  per-base scalar multiplication fold retained as the generic fallback for
+  simple backends. This improves production host-side proving/verifying without
+  introducing a trusted setup or changing deterministic generator derivation.
+- A one-round in-circuit IPA verifier composition slice now links the
+  `b`-vector fold, `Q' = x^2*L + Q + x^{-2}*R` accumulator, generator fold,
+  and final fixed-window `Q = a*G + b*H + (a*b)*U` comparison behind one
+  private canonical challenge/inverse pair. The link gate ties the folded `b`,
+  `Q'`, `G'`, and `H'` advice outputs across otherwise self-consistent
+  subgadgets, preventing splice-style witnesses for the one-round case.
+- A generic power-of-two multi-round in-circuit IPA verifier composition wrapper
+  now extends those links across all rounds. It shares each round's
+  challenge/inverse pair across the `b` reduction, `Q` accumulator, and every
+  generator-fold pair; links each round's `Q`, `G`, and `H` outputs into the
+  next round; and feeds the final folded values into the final fixed-window IPA
+  MSM comparison. Fast adversarial host-link coverage rejects substituted final
+  `b`, wrong round counts, fixed-window width overflow, and self-consistent but
+  spliced challenge, accumulator, or generator-fold witnesses for a two-round
+  statement.
+- The generic multi-round IPA verifier composition now also includes the native
+  Pasta/Fp transcript-binding accumulator. Its link gate ties the binding's
+  challenge and inverse rows back to the decomposed `b`-reduction challenge
+  columns, so a self-consistent Pow5 transcript-binding witness cannot be
+  spliced onto a verifier that uses different IPA challenges.
+- A host-side bridge now translates native Pallas IPA verifier witnesses into
+  the non-native Vesta recursive verifier witness shape. It validates the native
+  transcript projection, transcript-binding projection, `b`-reduction layers,
+  accumulator rounds, transcript round ordering, canonical compressed point
+  encodings, final folded generators, and final term equality, and it recomputes
+  the native Pallas `b`, `Q`, `G`, `H`, and final-term fold relations before
+  converting Pallas scalars and compressed Vesta points through canonical byte
+  encodings. The group relation checks use the deterministic optimized Pallas
+  MSM backend instead of chained scalar multiplication, keeping the preflight on
+  the same production no-trusted-setup IPA backend path as native verification.
+  The bridge also validates ordered batches of native Pallas verifier witnesses
+  and emits a compact streaming Poseidon2 domain-separated aggregate digest
+  that binds the transparent parameter fingerprint, witness order, transcript
+  projections, `b` reductions, accumulator folds, final terms, and proof-final
+  scalars after every witness passes the single-witness preflight.
+  Focused coverage accepts a real Pallas opening through the cheap preflight
+  path, accepts a small-scalar Pallas-native projection through the full
+  recursive witness builder, and rejects real Pallas opening witnesses with
+  length, transcript-challenge, transcript round-index, invalid point encoding,
+  challenge-inverse, `b`-layer, `b`-output, final-`b`, accumulator-square,
+  accumulator-`Q`, generator-fold, final-generator, final-scalar, or accumulator
+  splices before expensive circuit construction. Batch coverage accepts
+  multiple real openings, rejects empty batches, length mismatch, transcript
+  splices, and accumulator splices, and verifies that aggregate digests change
+  when witness order or witness contents change.
+- The data model now exposes reserved-mode recursive aggregation evidence for
+  mode `2` preparation. The evidence Norito/Poseidon-binds the ordered
+  aggregation transcript statement to the native verifier parameter fingerprint
+  and verifier-witness batch digest plus the canonical
+  `pallas-ipa-transparent-v1/vesta-recursive-fixed-window-85x3` verifier-witness
+  profile, validates hop continuity and set canonicalization through the same
+  transcript shape checks as checked pre-folding, requires the witness count to
+  match `hop_count`, and rejects unsupported profiles or all-zero batch fields.
+  Focused wire-format coverage roundtrips evidence through Norito, validates
+  the decoded profile-bound digest, rejects decoded unsupported-profile
+  evidence, rejects truncated recursive-evidence archives, and covers
+  empty-transcript, over-cap, duplicate-nullifier, and duplicate-commitment
+  reserved-evidence attacks.
+  This does not make mode `2` supported for public compact-token admission.
+- Core now exposes record-backed reserved recursive aggregation evidence
+  builders for borrowed and serializable Kagemusha fold bundles. They enforce
+  active WSV-style confidential-transfer-v2 hop verifier records, verify each
+  private hop proof, reject witness-count mismatches and all-zero native batch
+  metadata before proof decoding, and then bind the native batch preflight
+  digest plus parameter fingerprint to the canonical folded-hop transcript.
+- Core now also exposes a public Pallas IPA batch preflight helper and combined
+  record-backed evidence builders that consume native verifier witnesses
+  directly instead of a detached digest tuple. The helper accepts only the
+  current production no-trusted-setup width corridor `2..=128` and the 64-hop
+  compact-token cap, uses the 85-by-3 fixed-window Vesta verifier witness
+  profile for full 255-bit Pasta scalar coverage, and rejects native
+  wrong-width witness/parameter pairings plus transcript/reduction/accumulator
+  and final splices before hop proof decoding can start. Its aggregate digest
+  now uses the repository's streaming Poseidon2 byte sponge, keeping reserved
+  mode-2 evidence on the same field-friendly no-trusted-setup transcript family
+  as the Kagemusha data-model digests. The combined record-backed builders
+  re-derive the stored batch digest with the ordered checked-hop proof hashes,
+  so valid detached native witness batches cannot be replayed against a
+  different folded-hop proof transcript without changing reserved evidence.
+  The preflight summary and reserved evidence both expose that canonical
+  profile so evidence digests cannot silently switch verifier-witness profiles.
+  The remaining mode-2 gap is deriving each native IPA verifier witness from
+  the corresponding hop proof envelope inside the recursive verifier path.
+- A native Pasta/Fp transcript-binding accumulator circuit now enforces the
+  same Pow5 binding over public header/final/round projection scalars and
+  public challenge/inverse scalars. Public-instance gates bind each projected
+  scalar at its circuit row, inverse gates enforce `x*x^{-1}=1`, and chain
+  gates link all compressor rows through the final digest. Focused adversarial
+  coverage rejects builder count/inverse/digest errors, public
+  header/round/challenge/inverse/final/digest substitution, and intermediate
+  accumulator-state tampering.
+- A fixed-window native-scalar MSM wrapper now composes multiple windowed
+  scalar-multiplication terms into one public multi-scalar accumulator while
+  keeping per-term outputs private. It links public term bases, private
+  fixed-window scalar decompositions, shifted-base tables, table selections,
+  selected-point accumulation, and the final public output, with adversarial
+  coverage for public substitution, table splicing, term-output splicing,
+  sum-chain tampering, and noncanonical scalar aliases.
+- The IPA final comparison now also has an optimized fixed-window wrapper for
+  `Q = a*G + b*H + (a*b)*U`. It reuses the fixed-window three-term MSM, keeps
+  `a`, `b`, and `a*b` private and canonical, and adds a product-link gate so a
+  self-consistent MSM cannot substitute the third scalar.
+- This is still a correctness foundation, not the completed recursive verifier:
+  the transcript-binding accumulator is now composed into the multi-round
+  verifier witness/circuit surface and native Pallas verifier witnesses can be
+  translated into that recursive witness shape, with ordered batch preflight
+  binding plus reserved-mode data-model evidence available as the host-side
+  evidence surface for future private-hop recursive aggregation, but
+  production-width composed evidence and private-hop recursive aggregation are
+  not complete. Kagemusha aggregation mode `2` remains reserved and public
+  compact-token prover/verifier entry points continue to accept only checked
+  pre-fold mode `1`.
+- Focused validation passed:
+  - `CARGO_INCREMENTAL=0 RUST_TEST_THREADS=1 CARGO_TARGET_DIR=/tmp/iroha-codex-kagemusha-target cargo test -p iroha_core kagemusha_non_native_vesta_affine_native_scalar_msm --lib` (10 tests, including two-term one-bit and two-bit MSM acceptance plus output-mismatch, high-scalar-bit, public base/output substitution, conditional-bit, sum-chain, noncanonical-scalar, and double-ladder tamper rejection; finished in 3513.80s)
+  - `CARGO_INCREMENTAL=0 RUST_TEST_THREADS=1 CARGO_TARGET_DIR=/tmp/iroha-codex-kagemusha-target cargo test -p iroha_core kagemusha_non_native_vesta_ipa_final_msm --lib` (4 tests, including one-bit IPA final-comparison acceptance plus output-mismatch, product-high-bit, and forged-product-link rejection; finished in 1662.51s)
+  - `CARGO_INCREMENTAL=0 CARGO_TARGET_DIR=/tmp/iroha-codex-kagemusha-target cargo test -p iroha_core kagemusha_non_native_vesta_ipa_round_accumulator --lib` (4 fixed-window tests, including one-bit accumulator acceptance plus inverse-mismatch, output-mismatch, and forged-square-link rejection; finished in 1m 47s compile plus 1358.70s test time)
+  - `CARGO_INCREMENTAL=0 CARGO_TARGET_DIR=/tmp/iroha-codex-kagemusha-target cargo test -p iroha_core kagemusha_non_native_vesta_ipa_round_accumulator_rejects_window_high_bit_builder --lib` (1 fixed-window high-bit builder rejection; finished in 1m 47s compile plus 0.01s test time)
+  - `CARGO_INCREMENTAL=0 CARGO_TARGET_DIR=/tmp/iroha-codex-kagemusha-target cargo test -p iroha_core kagemusha_non_native_vesta_ipa_generator_fold --lib` (5 fixed-window tests, including one-bit generator-fold acceptance plus inverse-mismatch, fixed-window high-bit, output-mismatch, and forged-scalar-link rejection; finished in 2391.90s)
+  - `CARGO_INCREMENTAL=0 RUST_TEST_THREADS=1 CARGO_TARGET_DIR=/tmp/iroha-codex-kagemusha-target cargo test -p iroha_core kagemusha_native_pasta_fp_ipa_scalar_fold --lib` (6 tests, including scalar-fold acceptance plus builder inverse/output mismatch, public-output substitution, challenge-inverse tamper, and noncanonical folded-output alias rejection; finished in 0.13s)
+  - `CARGO_INCREMENTAL=0 RUST_TEST_THREADS=1 CARGO_TARGET_DIR=/tmp/iroha-codex-kagemusha-target cargo test -p iroha_core kagemusha_native_pasta_fp_ipa_scalar_fold_vector --lib` (9 tests, including two-pair vector-fold acceptance plus zero-pair builder rejection, inverse/output mismatch, public left/output substitution, challenge-inverse tamper, and noncanonical challenge/output alias rejection; finished in 1m 41s compile plus 0.30s test time)
+  - `CARGO_INCREMENTAL=0 CARGO_TARGET_DIR=/tmp/iroha-codex-kagemusha-target cargo test -p iroha_core kagemusha_native_pasta_fp_ipa_b_vector_reduction --lib` (13 tests, including four-scalar two-round reduction acceptance plus non-power-of-two, challenge-count, inverse, final-mismatch, public initial/final/challenge/inverse substitution, intermediate-tamper, and noncanonical intermediate/final alias rejection; finished in 1m 47s compile plus 0.09s test time)
+  - `CARGO_INCREMENTAL=0 CARGO_TARGET_DIR=/tmp/iroha-codex-kagemusha-target cargo test -p iroha_core kagemusha_native_pasta_fp_fixed_window_decomposition --lib` (11 tests, including fixed-window acceptance plus empty/oversized window-shape rejection, scalar high-bit rejection, digit-value and digit-overflow tamper rejection, non-boolean digit bits, digit-bit substitution, scalar substitution, and noncanonical scalar alias rejection; finished in 1m 41s compile plus 0.03s test time on the passing rerun)
+  - `CARGO_INCREMENTAL=0 CARGO_TARGET_DIR=/tmp/iroha-codex-kagemusha-target cargo test -p iroha_core kagemusha_non_native_vesta_affine_fixed_window_select --lib` (10 tests, including two-bit point-selection acceptance plus invalid width, table-length, digit-range, selected-mismatch, digit-bit, non-boolean-bit, selected-point, table-point, and selection-level tamper rejection; finished in 1m 41s compile plus 11.09s test time)
+  - `CARGO_INCREMENTAL=0 CARGO_TARGET_DIR=/tmp/iroha-codex-kagemusha-target cargo test -p iroha_core kagemusha_non_native_vesta_affine_fixed_window_table --lib` (7 tests, including two-bit table derivation acceptance plus invalid width, wrong length, entry mismatch, public-base substitution, identity-entry tamper, and complete-add chain-link tamper rejection; finished in 1m 53s compile plus 138.58s test time)
+  - `CARGO_INCREMENTAL=0 CARGO_TARGET_DIR=/tmp/iroha-codex-kagemusha-target cargo test -p iroha_core fixed_window --lib` (28 fixed-window scalar, point-selection, and table-derivation tests; finished in 0.35s compile plus 138.74s test time)
+  - `CARGO_INCREMENTAL=0 CARGO_TARGET_DIR=/tmp/iroha-codex-kagemusha-target cargo test -p iroha_core kagemusha_non_native_vesta_affine_windowed_scalar_mul --lib` (7 tests, including two-window scalar-mul acceptance plus high-scalar and output-mismatch builder rejection, public-output substitution, selection-table splice, shifted-base transition tamper, and sum-chain tamper rejection; finished in 1m 45s compile plus 403.30s test time; the unused-field warning observed in that run was removed before the subsequent `cargo check`)
+  - `CARGO_INCREMENTAL=0 CARGO_TARGET_DIR=/tmp/iroha-codex-kagemusha-target cargo test -p iroha_core kagemusha_non_native_vesta_affine_windowed_native_scalar_msm --lib` (9 tests, including two-term fixed-window MSM acceptance plus output-mismatch and high-scalar builder rejection, public base/output substitution, selection-table splice, term-output splice, sum-chain tamper, and noncanonical scalar alias rejection; finished in 1m 45s compile plus 2384.13s test time)
+  - `CARGO_INCREMENTAL=0 CARGO_TARGET_DIR=/tmp/iroha-codex-kagemusha-target cargo test -p iroha_core kagemusha_non_native_vesta_ipa_final_windowed_msm --lib` (4 tests, including one-bit fixed-window IPA final-comparison acceptance plus output-mismatch, product-high-bit, and forged-product-link rejection; finished in 1m 48s compile plus 1341.55s test time)
+  - `CARGO_INCREMENTAL=0 RUST_TEST_THREADS=1 CARGO_TARGET_DIR=/tmp/iroha-codex-kagemusha-target cargo test -p iroha_core kagemusha_non_native_vesta_ipa_one_round_verifier_rejects_final_mismatch_builder --lib` (1 builder-level negative test for inconsistent final comparison; finished in 1m 41s compile plus 3.75s test time after moving the witness builder onto the large-stack test runner)
+  - `CARGO_INCREMENTAL=0 CARGO_TARGET_DIR=/tmp/iroha-codex-kagemusha-target cargo test -p iroha_core kagemusha_non_native_vesta_ipa_one_round_verifier_rejects_window_high_bit_builder --lib` (1 composed one-round fixed-window high-bit builder rejection; finished in 0.46s compile plus 0.01s test time)
+  - `CARGO_INCREMENTAL=0 CARGO_TARGET_DIR=/tmp/iroha-codex-kagemusha-target cargo test -p iroha_core kagemusha_non_native_vesta_ipa_one_round_verifier_accepts_one_bit_statement --lib` (1 one-round composed fixed-window MockProver acceptance test; finished in 14855.74s, confirming the composed slice but also showing this path is a major validation bottleneck)
+  - `CARGO_INCREMENTAL=0 CARGO_TARGET_DIR=/tmp/iroha-codex-kagemusha-target cargo test -p iroha_core kagemusha_non_native_vesta_ipa_verifier_four_point_builder --lib` (4 fixed-window tests covering a two-round four-point verifier builder plus final-`b`, round-count, and high-bit builder rejection; finished in 0.31s compile plus 9.00s test time)
+  - `CARGO_INCREMENTAL=0 CARGO_TARGET_DIR=/tmp/iroha-codex-kagemusha-target cargo test -p iroha_core kagemusha_non_native_vesta_ipa_verifier_four_point_host_links --lib` (3 host-link splice checks for challenge, accumulator, and generator substitution; finished in 0.31s compile plus 10.86s test time)
+  - `CARGO_INCREMENTAL=0 CARGO_TARGET_DIR=/tmp/iroha-codex-kagemusha-target cargo test -p iroha_zkp_halo2 ipa_transcript_projection --lib` (5 tests covering transcript projection state/round-byte recording plus round-byte, round-digest, state-boundary, and round-order substitution rejection; finished in 6.59s compile plus 0.09s test time)
+  - `CARGO_INCREMENTAL=0 CARGO_TARGET_DIR=/tmp/iroha-codex-kagemusha-target cargo test -p iroha_zkp_halo2 ipa_transcript_binding --lib` (4 tests covering transcript-binding acceptance plus round-projection, challenge, and digest substitution rejection; finished in 9.00s compile plus 0.10s test time)
+  - `CARGO_INCREMENTAL=0 CARGO_TARGET_DIR=/tmp/iroha-codex-kagemusha-target cargo test -p iroha_zkp_halo2 ipa_b_vector_reduction --lib` (5 tests covering native reduction projection, bad shape, round-index substitution, inverse substitution, and challenge rebinding; finished in 6.27s compile plus 0.15s test time)
+  - `CARGO_INCREMENTAL=0 CARGO_TARGET_DIR=/tmp/iroha-codex-kagemusha-target cargo test -p iroha_zkp_halo2 ipa_verifier_rejects_substituted_b_final --lib` (1 test; finished in 0.20s compile plus 0.13s test time)
+  - `CARGO_INCREMENTAL=0 CARGO_TARGET_DIR=/tmp/iroha-codex-kagemusha-target cargo test -p iroha_zkp_halo2 backend_msm --lib` (2 tests comparing optimized Pallas/BN254 MSM with naive accumulation and checking dimension-mismatch rejection; finished in 6.27s compile plus 0.08s test time)
+  - `CARGO_INCREMENTAL=0 CARGO_TARGET_DIR=/tmp/iroha-codex-kagemusha-target cargo test -p iroha_zkp_halo2 ipa_verifier_accumulation_projection_rejects_inverse_substitution --lib` (1 test; finished in 6.26s compile plus 0.11s test time)
+  - `CARGO_INCREMENTAL=0 CARGO_TARGET_DIR=/tmp/iroha-codex-kagemusha-target cargo test -p iroha_zkp_halo2 ipa_verifier_witness --lib` (7 tests covering full verifier-witness projection plus transcript projection, transcript binding, transcript challenge, `b`-reduction, accumulator, and final-scalar substitution rejection; finished in 9.04s compile plus 0.25s test time)
+  - `CARGO_INCREMENTAL=0 CARGO_TARGET_DIR=/tmp/iroha-codex-kagemusha-target cargo test -p iroha_data_model kagemusha_recursive_aggregation_evidence --lib` (2 tests covering reserved-mode recursive aggregation evidence digest binding to the canonical verifier-witness profile and batch preflight fields, Norito roundtrip/profile preservation, decoded unsupported-profile rejection, truncated-archive rejection, empty-transcript and over-cap-hop rejection, duplicate input/output set rejection, mode/count/zero-field/builder/root-discontinuity rejection; finished in 4m 12s compile plus 0.53s test time after expanding adversarial recursive-evidence shape coverage)
+  - `CARGO_INCREMENTAL=0 CARGO_TARGET_DIR=/tmp/iroha-codex-kagemusha-target cargo test -p iroha_config offline_defaults_keep_kagemusha_enabled_without_legacy_fallback --lib` (1 test confirming Kagemusha remains enabled by default and the legacy fallback remains opt-in; finished in 2m 56s)
+  - `CARGO_INCREMENTAL=0 CARGO_TARGET_DIR=/tmp/iroha-codex-kagemusha-target cargo test -p iroha_core kagemusha_transfer_executes_real_confidential_transfer_v2_proof --lib` (1 test confirming the default state executes the real confidential-transfer-v2 Kagemusha path; finished in 3m 55s compile plus 2.86s test time)
+  - `CARGO_INCREMENTAL=0 CARGO_TARGET_DIR=/tmp/iroha-codex-kagemusha-target cargo test -p iroha_core kagemusha_transfer_rejects_disabled_or_legacy_forced_config --lib` (1 test confirming explicitly disabled Kagemusha and explicitly forced legacy fallback reject with stable offline reasons while defaults stay enabled elsewhere; finished in 0.36s compile plus 1.23s test time)
+  - `CARGO_INCREMENTAL=0 CARGO_TARGET_DIR=/tmp/iroha-codex-kagemusha-target cargo test -p iroha_core offline_note_rejects_non_production_backend_labels_before_registry_lookup --lib` (1 test confirming Offline recursive proof labels with trusted-setup or developer-only backends reject before verifier lookup; finished in 4m 03s compile plus 8.81s test time under shared Cargo lock contention)
+  - `CARGO_INCREMENTAL=0 CARGO_TARGET_DIR=/tmp/iroha-codex-kagemusha-target cargo test -p iroha_core kagemusha_transfer_rejects_trusted_setup_backend_labels --lib` (1 test confirming chain-side Kagemusha rejects trusted-setup/developer-only proof labels; finished in 4m 03s compile plus 0.63s test time under shared Cargo lock contention)
+  - `CARGO_INCREMENTAL=0 CARGO_TARGET_DIR=/tmp/iroha-codex-kagemusha-target cargo test -p iroha_data_model kagemusha --lib` (14 tests covering Kagemusha backend classifier rejection for trusted-setup/developer-only labels, folded public-input/transcript binding and malformed witness rejection, reserved recursive evidence shape and Norito roundtrip coverage, record-bundle roundtrip, and max-hop size bounds; finished in 4m 03s compile plus 0.94s test time)
+  - `CARGO_INCREMENTAL=0 CARGO_TARGET_DIR=/tmp/iroha-codex-kagemusha-target cargo test -p iroha_data_model kagemusha_poseidon_aggregation_transcript --lib` (2 tests covering existing checked aggregation transcript binding and noncanonical statement rejection after sharing transcript-shape validation with reserved recursive evidence; finished in 0.35s compile plus 0.46s test time)
+  - `CARGO_INCREMENTAL=0 CARGO_TARGET_DIR=/tmp/iroha-codex-kagemusha-target cargo test -p iroha_core kagemusha_native_pasta_fp_ipa_transcript_binding --lib` (11 tests covering transcript-binding circuit acceptance plus round-count, inverse, digest, public header/round/challenge/inverse/final/digest substitution, and intermediate-state tamper rejection; finished in 0.37s compile plus 0.02s test time on the post-composition rerun)
+  - `CARGO_INCREMENTAL=0 CARGO_TARGET_DIR=/tmp/iroha-codex-kagemusha-target cargo test -p iroha_core kagemusha_non_native_vesta_ipa_verifier_from_pallas --lib` (4 tests covering native Pallas witness translation acceptance plus length-mismatch, transcript-challenge splice, and accumulator-splice rejection; finished in 2m 11s compile plus 10.03s test time on the passing rerun)
+  - `CARGO_INCREMENTAL=0 CARGO_TARGET_DIR=/tmp/iroha-codex-kagemusha-target cargo test -p iroha_core kagemusha_non_native_vesta_ipa_verifier_batch_preflight --lib` (8 tests covering ordered batch acceptance for multiple real Pallas openings, empty-batch and length-mismatch rejection, transcript and accumulator splice rejection, Poseidon2 aggregate digest sensitivity to witness order and witness contents, and feeding real Pallas batch preflight output into reserved recursive aggregation evidence; finished in 0.52s compile plus 0.78s test time after switching the batch aggregate digest to streaming Poseidon2)
+  - `CARGO_INCREMENTAL=0 CARGO_TARGET_DIR=/tmp/iroha-codex-kagemusha-target cargo test -p iroha_core kagemusha_non_native_vesta_ipa_verifier --lib` (33 tests covering the transcript-bound two-round four-point verifier builder, real Pallas opening preflight, ordered Pallas batch preflight, reserved recursive evidence population from Pallas batch output, native Pallas witness translation, final-`b`, transcript-digest, round-count, high-bit, challenge-splice, transcript-challenge-splice, accumulator-splice, generator-splice, Pallas batch empty/length/transcript/accumulator rejection and digest sensitivity, and Pallas length/transcript/round-index/invalid-L/challenge-inverse/`b`-layer/`b`-output/final-`b`/accumulator-square/accumulator-`Q`/generator-fold/final-generator/final-scalar/accumulator splice rejection; finished in 0.63s compile plus 11.86s test time after connecting batch preflight to reserved recursive evidence)
+  - `CARGO_INCREMENTAL=0 CARGO_TARGET_DIR=/tmp/iroha-codex-kagemusha-target cargo test -p iroha_core kagemusha_pallas_ipa_batch_verifier_preflight --lib` (4 tests covering public Pallas batch preflight acceptance at the current production width `n = 128` with canonical verifier-witness profile binding, unsupported `n = 1` rejection, direct empty-batch rejection, and over-64-witness rejection before native witness validation; finished in 1m 56s compile plus 3.21s test time after the Poseidon2 batch-digest change)
+  - `CARGO_INCREMENTAL=0 CARGO_TARGET_DIR=/tmp/iroha-codex-kagemusha-target cargo test -p iroha_core kagemusha_verified_recursive_aggregation_evidence_from_pallas_batch_accepts_active_records --lib` (1 test covering record-backed reserved recursive evidence construction directly from native Pallas batch witnesses, hop-bound Poseidon2 batch digest derivation, digest inequality against the detached native batch digest, and digest sensitivity to ordered hop proof hashes; finished in 1m 58s compile plus 3.13s test time)
+  - `CARGO_INCREMENTAL=0 CARGO_TARGET_DIR=/tmp/iroha-codex-kagemusha-target cargo test -p iroha_core kagemusha_verified_recursive_aggregation_evidence --lib` (5 tests covering record-backed reserved recursive evidence acceptance, serializable record-bundle parity, direct native-Pallas-batch evidence construction with the hop-bound Poseidon2 batch digest, pre-decode witness-count/zero-batch-metadata rejection, pre-decode missing/extraneous/duplicated/inactive/namespace verifier-record rejection, wrong-width Pallas witness/parameter and accumulator-splice rejection before hop proof decoding, and tampered-hop proof rejection; finished in 0.36s compile plus 3.26s test time after adding the hop-proof-hash binding)
+  - `CARGO_INCREMENTAL=0 CARGO_TARGET_DIR=/tmp/iroha-codex-kagemusha-target cargo test -p iroha_zkp_halo2 --lib` (81 tests; finished in 8.08s compile plus 2.83s test time)
+  - `CARGO_INCREMENTAL=0 CARGO_TARGET_DIR=/tmp/iroha-codex-kagemusha-target cargo check -p iroha_data_model` (finished in 1m 47s after adding reserved-mode recursive aggregation evidence)
+  - `CARGO_INCREMENTAL=0 CARGO_TARGET_DIR=/tmp/iroha-codex-kagemusha-target cargo check -p iroha_zkp_halo2` (finished in 1.18s on the post-witness-binding rerun)
+  - `CARGO_INCREMENTAL=0 CARGO_TARGET_DIR=/tmp/iroha-codex-kagemusha-target cargo check -p iroha_core` (finished in 2m 21s after adding ordered Pallas verifier-witness batch preflight binding plus reserved recursive aggregation evidence in the data model)
+  - `CARGO_INCREMENTAL=0 CARGO_TARGET_DIR=/tmp/iroha-codex-kagemusha-target cargo check -p iroha_cli` (finished in 2m 39s after composing the transcript-binding accumulator into the multi-round verifier)
+  - `cargo fmt --all -- --check`
+  - `git diff --check`
+
+## 2026-05-30 Torii ZK vote tally response negotiation
+
+- `/v1/zk/vote/tally` now uses JSON-preferred response negotiation, matching
+  the endpoint documentation and `/v1/zk/roots` convenience API behavior while
+  preserving explicit `Accept: application/x-norito` support for binary
+  callers.
+- Validation:
+  - `cargo fmt --all`
+  - `cargo test -p iroha_torii --test zk_endpoints zk_vote_tally_endpoint_returns_200 --features app_api -- --nocapture`
+  - `cargo test -p iroha_torii --test zk_endpoints --features app_api -- --nocapture`
+
+## 2026-05-29 Torii Sumeragi leader negotiation fix
+
+- `/v1/sumeragi/leader` now uses JSON-preferred response negotiation, matching
+  the router-level endpoint shape test and preserving explicit
+  `Accept: application/x-norito` support for binary callers.
+- Validation:
+  - `cargo fmt --all`
+  - `cargo test -p iroha_torii --features telemetry --test sumeragi_leader_endpoint sumeragi_leader_endpoint_shape -- --nocapture`
+
+## 2026-05-29 Torii proof query fixture
+
+- `routing::query_endpoint_tests::proofs_roundtrip_and_query_via_torii`
+  now uses a supported transparent Halo2 IPA `OpenVerifyEnvelope` fixture and
+  matching `Halo2IpaPasta` verifier record instead of a trusted-setup
+  Groth16/BN254 proof label. This keeps Torii proof-query roundtrip coverage
+  aligned with the production trusted-setup rejection guardrail.
+- Validation:
+  - `cargo fmt --all`
+  - `cargo test -p iroha_torii proofs_roundtrip_and_query_via_torii --lib -- --nocapture`
+
+## 2026-05-29 Kagemusha SDK bridge exposure
+
+- Swift, Kotlin/JVM, and Java Android now expose record-backed Kagemusha
+  compact-token prover wrappers. The SDK APIs accept Norito-encoded
+  `KagemushaVerifiedFoldRecordBundle` bytes and return Norito-encoded
+  `KagemushaCompactPaymentToken` bytes, keeping verifier-record enforcement in
+  the native Rust bridge instead of asking mobile callers to pre-fold public
+  inputs by hand.
+- Swift, Kotlin/JVM, and Java Android Offline Note model validation now rejects
+  recursive proof metadata substitution before accepting a proof binding:
+  `validateProofBinding` requires the canonical `halo2/ipa` proof backend and
+  `halo2/ipa:offline-note-recursive` verifier-key id, so a valid embedded
+  envelope cannot be replayed under a trusted-setup or wrong verifier label in
+  wallet-side validation. Wallet and redeem-planner drafts now use an explicit
+  unsupported `offline-note/draft-placeholder` backend instead of canonical
+  Halo2 IPA metadata, preventing draft placeholders from passing proof-binding
+  validation before a real proof provider replaces them.
+- Offline recursive proof generation and chain-side verifier resolution now
+  require the literal `offline-note-recursive` circuit id. Self-consistent alias
+  spellings such as `halo2/ipa:offline-note-recursive` are rejected before proof
+  generation or backend verification, so the chain trust anchor cannot drift
+  across equivalent-looking circuit labels.
+- `connect_norito_bridge` now exports matching JNI entry points for the Kotlin
+  and Java wrappers, and the Swift bridge loader requires ABI 4 plus the
+  record-backed Kagemusha symbol before marking the compact-token prover
+  available. The older unanchored C compact-token prover symbol is retained
+  only for ABI compatibility and now rejects valid `KagemushaVerifiedFoldBundle`
+  input without returning output bytes, so production bridge callers must carry
+  `KagemushaVerifiedFoldRecordBundle` verifier-record trust anchors. The
+  unanchored Rust compact-token proving entry points now return the same stable
+  verifier-record-required error; only record-backed compact-token proving emits
+  folded proofs.
+- Kagemusha chain transfers and record-backed compact-token proving now require
+  confidential-transfer-v2 Halo2 IPA proof semantics rather than accepting any
+  active transparent verifier: the chain instruction requires an asset-bound
+  confidential transfer verifier and root hint, binds the submitted
+  `OpenVerifyEnvelope` backend tag, literal
+  `halo2/pasta/ipa/anon-transfer-2x2-merkle16-poseidon-diversified` circuit id,
+  schema, and verifier-key hash to that asset verifier, and chain-side transfer
+  admission, record-backed compact-token proving, and final folded-token record
+  verification all require verifier records in the canonical `offline_kagemusha`
+  namespace. Generic active confidential-transfer verifier records and
+  self-consistent confidential-transfer-v2 circuit-id aliases are rejected before
+  proof decoding or compact proof generation, and checked folding rejects generic
+  active verifier circuits before compact proof generation even when verifier
+  records are not supplied.
+  Final folded-token proving, direct compact-token verification, and
+  record-backed compact-token verification now require the literal
+  `kagemusha-folded-v1` circuit id and reject alias spellings before backend
+  verification. The `kagemusha-folded-v1` circuit now also constrains the
+  public-input hash, initial/final roots, aggregate nullifier/output digests,
+  fold digest, and aggregation transcript digest to be non-zero through inverse
+  witnesses, so all-zero wildcard root or digest columns fail inside Halo2
+  verification. It also proves that the final folded root differs from the
+  initial folded root through a selected-limb inverse witness.
+  Chain-side adversarial coverage now also forges the transaction
+  root hint, nullifier, output commitment, asset definition, and chain id while
+  keeping the proof envelope intact, and rejects each mismatch through
+  confidential-transfer-v2 public-input validation. Optional envelope-hash
+  metadata is now checked against the submitted envelope bytes for both
+  chain-side transfers and private-hop fold construction, so Kagemusha audit
+  metadata cannot be forged independently of the proof payload. Raw checked
+  Kagemusha fold construction also enforces the confidential-transfer-v2
+  `max_proof_bytes` cap before parsing hop envelopes, and compact-token
+  verification rejects folded proofs above the published Kagemusha proof cap.
+  The final folded Halo2 IPA envelope is now pinned to canonical empty
+  auxiliary bytes before backend verification, including the record-backed
+  verifier path, so unbound application metadata cannot ride along with an
+  otherwise valid compact token. The same canonical-empty-aux check now applies
+  to confidential-transfer-v2 Kagemusha hop envelopes and chain-side transfer
+  envelopes before they can enter folded transcripts or mutate shielded state.
+  Chain-side transfer admission now also requires the asset-bound active
+  verifier record to be the active circuit/version index entry and to publish
+  inline Halo2 IPA key bytes, a matching key length and commitment, and a
+  non-zero proof-size cap before the proof envelope is decoded, so forged or
+  stale verifier metadata fails before backend proof verification.
+  Private-hop fold verification now also rejects envelope verifier-key hash
+  and envelope-backend mismatches before backend proof verification, avoiding
+  expensive verifier work on proofs that cannot match the registered key
+  binding or claimed transparent proof system. The standalone Kagemusha
+  proof-statement digest helper now applies the same canonical envelope policy
+  and rejects non-empty auxiliary bytes, zero verifier-key hashes, and Halo2 IPA
+  confidential-transfer-v2 circuit-id aliases before deriving folded transcript
+  material. The data-model Poseidon2 digest helper for
+  `KagemushaProofPublicInputsStatement` enforces the same auxiliary-byte and
+  verifier-key hash rule, so SDKs and future recursive circuits cannot derive
+  folded transcripts from non-canonical per-hop proof metadata. The data-model
+  Kagemusha transcript helpers now also
+  reject unsupported, trusted-setup, and developer-only backend labels when
+  hashing per-hop verifier-key material or folding verifier-key ids, keeping
+  the canonical transcript surface limited to transparent Halo2 IPA and
+  production STARK/FRI backends.
+  Proof-statement transcript derivation now also rejects empty circuit ids,
+  public-input schema bytes, missing or empty instance columns, and empty
+  verifier-key bytes. Folded-hop transcript derivation and core hop validation
+  reject empty verifier-key id names for the same reason, so absent metadata
+  cannot be used as wildcard binding material. The shared STARK/FRI backend
+  classifier now rejects a bare `stark/fri/` prefix, trusted-setup profiles
+  such as `stark/fri/kzg`, `stark/fri/bn254`, and `stark/fri/bls12_381`, and
+  any STARK profile containing developer-only `debug` or mock labels, with
+  ASCII-case-insensitive matching, before Offline/Kagemusha verifier admission
+  reaches proof decoding; Torii proof and prover paths now apply the same rule.
+  The shared trusted-setup classifier now also rejects standalone setup labels
+  such as `kzg`, `bn254`, `bn256`, and `bls12_381`, plus colon-delimited
+  profiles such as `halo2/ipa:kzg`, before broad verifier-registry, preverify,
+  guardrail, or prover allowlists can admit them. Mixed-case variants such as
+  `KZG`, `halo2/ipa:KZG`, `stark/fri/Debug`, and `halo2/ipa:Mock-Proof` are
+  covered by the same classifier rather than by per-call-site checks. Setup
+  markers are now recognized as delimiter-separated tokens across `/`, `:`, and
+  ASCII whitespace, so padded forms such as ` kzg `, `halo2/ipa: KZG`, and
+  `stark/fri/ KZG` fail closed before broad allowlists or verifier dispatch.
+  Pre-validation metadata helpers now reuse the same gate: gas public-input
+  metering and generic proof envelope metadata decoding skip non-production
+  Halo2-labeled envelopes before attempting to decode them.
+  Kotlin/JVM and Java Android Offline Note models now trim recursive verifier
+  and proof backend metadata at construction, reject colon separators in
+  recursive verifier-key backend/name fields, and extend proof-binding negative
+  coverage to mixed-case, whitespace-delimited, and developer-only backend
+  substitutions.
+  Chain-side Kagemusha transfers and the compact-token FFI bridge now also
+  require the submitted proof attachment to publish the asset-bound verifier-key
+  commitment and a non-empty verifier-key id name, rejecting missing
+  trust-anchor metadata before envelope decoding. Offline recursive proof
+  resolution, Kagemusha transfer admission, checked fold construction, and
+  compact-token record verification now reject empty inline verifier-key bytes
+  before backend verification.
+  Direct Poseidon2 aggregation transcript hashing now validates the full
+  canonical statement shape before hashing: checked aggregation mode, hop count
+  and hop indices, initial/final roots, root continuity, sorted non-zero
+  nullifier/output sets, duplicate detection, and supported transparent
+  verifier-key backends. Raw folded-hop proof public-input digests,
+  verifier-key commitments, and verifier-key Poseidon2 digests must also be
+  non-zero before entering canonical folded transcripts. Compact folded public
+  inputs now also reject zero or over-64 hop counts, all-zero initial/final
+  roots, unchanged hop/public root transitions, and all-zero aggregation
+  transcript digests during data-model context validation, before proof instance
+  construction or backend verification.
+  The data model now exposes host-side aggregation-statement projection helpers
+  that recompute every chain-visible folded public-input digest column from the
+  full Poseidon2 transcript statement. Projection validation rejects mismatched
+  chain id, asset, roots, hop count, nullifier/output/fold digests,
+  aggregation transcript digest, domain, reserved aggregation mode, and forged
+  underlying hop proof hashes before compact proof generation, and direct
+  compact-token binding now rejects folded public inputs with zero roots,
+  unchanged public roots, or zero aggregation transcript digests.
+  Compact folded-token verification now has explicit adversarial coverage for
+  trusted-setup and developer-only final folded proof labels, including the
+  record-backed verifier path, so those labels cannot be replayed around the
+  canonical `halo2/ipa` folded proof boundary.
+- Offline audit output certificate replay keys are now checked against existing
+  topup/audit lineage before recursive proof verification. A certificate already
+  anchored by the online-to-offline topup cannot be recycled as a fresh bearer
+  output certificate, preserving the one-use trust anchor across audit hops.
+  Offline note commitments are now replay-checked across both topup issue and
+  audit-output domains, so topup commitments cannot be reintroduced as P2P
+  bearer outputs and prior P2P output commitments cannot be loaded again by a
+  later online-to-offline topup.
+  Derived Halo2 IPA proving keys for IVM execution, Offline Note, and Kagemusha
+  folded proofs are now stored as Norito archives that bind the canonical
+  circuit family and verifier-key commitment before raw Halo2 key bytes are
+  decoded. This rejects raw or cross-circuit proving-key material before proof
+  creation while keeping cached key derivation available for production
+  performance without a trusted setup. Torii's IVM prover key-store path now
+  has job-level coverage that rejects a non-archive `.pk` file instead of
+  treating arbitrary bytes as a Halo2 proving key. The IVM Halo2 prover helper
+  also refuses non-`ivm-execution-v1` circuit families before key parsing or
+  proof creation, aligning the emitted envelope with the archived key family and
+  Torii verifier-record admission.
+  Chain-side Kagemusha transfers now reject duplicate input nullifiers or output
+  commitments before proof envelope decoding, matching the folded-token
+  transcript invariant and preventing duplicate commitments from being appended
+  to the shielded tree. Checked fold construction and chain-side transfer
+  admission now also reject explicit all-zero nullifier or commitment entries
+  before proof decoding, preserving zero as padding only in confidential-v2
+  public input columns.
+  Offline recursive audit/redeem verifier resolution now also requires the
+  proof envelope verifier-key hash to exactly match the active record
+  commitment and rejects non-empty auxiliary bytes before proof verification,
+  closing the same unbound-metadata class for legacy bearer audit/redeem flows.
+  The resolver now also enforces inline key presence, key length, namespace,
+  schema hash, canonical `offline-note-recursive` circuit family, active
+  circuit/version index, commitment, non-zero proof cap, and proof-size cap
+  before proof verification. The resolver now uses the shared trusted-setup and
+  developer-only backend classifier before verifier-registry lookup, so
+  Groth16/KZG/BN254/BLS12 and labels containing `debug` or `mock` cannot fall
+  through to a missing-key path.
+  `AuditOfflineNote` now signature-checks each audited output certificate
+  against the output account before issuing its lineage, while input trust
+  remains anchored to the exact prior online-to-offline topup claim. Focused
+  coverage rejects a forged output certificate and a mutated input claim under
+  an otherwise issued topup certificate before recursive proof verification.
+  Verifying-key registry admission now rejects inline verifier-key records whose
+  published `vk_len` does not match the stored key bytes on both register and
+  update, so Kagemusha/Offline verifier-record trust anchors cannot be made
+  internally inconsistent at governance entry points. Registry admission and
+  generic proof attachments now also reject explicit trusted-setup backend
+  labels, including Groth16, Halo2/BN254, Halo2/BLS12, and Halo2/KZG, before a
+  proof can enter the preverify cache or verifier registry; generic proof
+  attachments also reject developer-only proof labels before envelope matching.
+  STARK/FRI registry admission rejects the same trusted-setup substrings even
+  when no inline key bytes are supplied. Verifier-key register/update admission
+  also rejects developer-only labels containing `debug` or `mock`, including
+  directly seeded legacy records that attempt to refresh through update. IVM
+  host verifier snapshots apply the same trusted-setup and
+  developer-only label policy when loading external verifier records, so
+  host-side proof syscalls cannot bypass chain registry admission by injecting
+  a bad key snapshot.
+  Torii's non-consensus proof/prover worker now reuses the same trusted-setup
+  backend classifier before applying broad backend allowlists, so `halo2/`
+  prefixes cannot admit KZG, BN254/BLS12, or Groth16 work items;
+  developer-only labels containing `debug` or `mock` are rejected at the same
+  boundary before registry lookup, and attachment/proof backend mismatches stop
+  at the same fatal pre-registry boundary instead of falling through to key
+  lookup. The core preverify cache and
+  guardrail dispatch wrappers now enforce the same developer-only
+  backend rejection before dedup insertion or verifier dispatch. Torii-generated
+  IVM proof attachments now include the active verifier-key commitment that was
+  checked during proof generation, keeping downstream proof-submission metadata
+  bound to the same trust anchor.
+  The `zk-preverify` trace sidecar now records only verified trace digest
+  artifacts. The background trace lane revalidates queued traces for diagnostics
+  and future transparent prover integration, but it no longer emits
+  `zk-trace/mock-proof` artifacts into block pipeline sidecars.
+  The shared chain-side `OpenVerifyEnvelope` admission policy now also rejects
+  zero/wildcard verifier-key hashes and non-empty auxiliary bytes for generic
+  `VerifyProof`, governance voting proofs, STARK shielded transfer/unshield
+  wrappers, IVM-proved overlays, IVM host registered-key verify syscalls, and
+  Kaigi privacy proofs. RAM-LFE proof receipts used by generic program policies
+  and identifier claims now also reject non-canonical envelope backend tags and
+  non-empty auxiliary bytes before public-instance extraction. Those registered
+  proof paths now require the envelope `vk_hash` to exactly match the active
+  registered verifier-key commitment before backend verification or
+  preverified-cache lookup.
+  Generic confidential-transfer-v2 `ZkTransfer` and unshield admission now also
+  rejects non-canonical Halo2 IPA `OpenVerifyEnvelope` metadata before public
+  input parsing: backend tag, confidential circuit id, public-input schema,
+  auxiliary bytes, verifier-key hash, and active circuit/version index must all
+  match the bound verifier. Private Kaigi fee spends still carry fee-binding
+  metadata at the transaction boundary, but the fee path validates that aux
+  first and then submits a canonical empty-aux proof envelope into the internal
+  `ZkTransfer`. Anonymous escrow close prechecks now apply the same canonical
+  confidential-transfer-v2 envelope guard before trusting parsed input
+  commitments from the proof payload. The shared Halo2 IPA backend verifier
+  itself now also rejects non-empty auxiliary bytes plus zero or mismatched
+  envelope verifier-key hashes before running proof verification, so direct
+  verifier callers fail closed even outside chain-specific wrappers. Low-level
+  backend dispatch now also rejects a `ProofBox.backend` that differs from the
+  requested verifier backend before consulting any verifier registry entry.
+  The lightweight preverify/dedup cache path now decodes known
+  `OpenVerifyEnvelope` wrappers before cache insertion and rejects raw payloads,
+  wrong backend tags, non-empty auxiliary bytes, zero verifier-key hashes, and
+  mismatched verifier-key commitments, while trusted-setup labels such as
+  Groth16, Halo2/BN254, and Halo2/KZG remain unsupported before dedup
+  insertion, so malformed proofs cannot poison a later valid preverified entry.
+  The checked verifier guardrail wrapper now rejects the same trusted-setup
+  labels before backend dispatch even when a caller bypasses chain-specific
+  registry admission.
+  Checked fold bundle paths now reject empty or over-64-hop bundles before
+  constructing verifier work or decoding proof envelopes, and reject malformed
+  hop input/output shapes, root discontinuities, and duplicate
+  nullifiers/commitments before proof metadata is parsed. Record-backed checked
+  folding now also requires the supplied verifier-record set to be exact:
+  referenced records must be present once and unrelated records are rejected
+  before per-hop verifier work.
+- The aggregation-mode surface now reports mode `2` as a reserved value with a
+  stable rejection reason. The current tree has native Halo2 IPA verification,
+  but no in-circuit Halo2 IPA verifier gadget, so public compact-token prover
+  and verifier paths remain constrained to checked pre-fold mode `1`. The
+  non-native recursive-verifier foundation now includes canonical Vesta/Fq limb
+  ranges, a native Pasta/Fp scalar decomposition gadget that binds a public
+  or private scalar to canonical private `u64` limbs below the Fp modulus and
+  rejects `value + modulus` aliases, modular addition with independent
+  unreduced-sum and reduction carry chains, modular multiplication with
+  schoolbook product limbs, private `u128` carry chains, and a private canonical
+  quotient, a Vesta affine on-curve check for public `x/y` coordinates, a
+  distinct affine point-addition gadget, and an affine point-doubling gadget,
+  plus canonical point-or-identity
+  validation and complete point-or-identity addition covering identity
+  passthrough, inverse-pair output identity, doubling, and distinct affine
+  addition under one-hot branch selectors. A conditional-add gadget now binds
+  private selected addends to boolean scalar bits, and a bounded
+  scalar-multiplication wrapper links the public `u64` scalar-limb
+  decomposition, addend doubling ladder, private accumulator chain, and public
+  base/output point encodings. A native-scalar scalar-multiplication wrapper now
+  consumes canonical Pasta/Fp scalar decomposition bits directly, enforces
+  high-bit zeroing for bounded widths, links conditional-add selectors to those
+  scalar bits, and proves the same private addend-doubling ladder from the
+  public base. The native transparent IPA verifier now exposes
+  canonical per-round transcript projections for recursive-verifier witnesses
+  plus scalar-multiplication accumulation projections for `Q`, folded `g/h`
+  vectors, challenge squares, final folded generators, and the final expected
+  term. It also validates IPA parameter wire version, curve, and shape before
+  consulting the cached parameter registry. Native Pasta/Fp scalar
+  decomposition and native-scalar Vesta multiplication composition are in place;
+  production-sized MSM integration and the final IPA verifier gadget remain
+  outstanding.
+- Focused validation passed:
+  - `cargo fmt --all`
+  - `cargo fmt --all -- --check`
+  - `git diff --check`
+  - `git diff --name-only -- Cargo.lock` (no output)
+  - `CARGO_INCREMENTAL=0 CARGO_TARGET_DIR=/tmp/iroha-codex-kagemusha-target cargo check -p iroha_cli`
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-kagemusha-target cargo test -p iroha_core prove_verified_kagemusha_compact_payment_token --lib` (4 tests, including unanchored Rust compact-prover rejection, record-backed real proof emission, tampered-hop rejection, and root-discontinuity rejection)
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-kagemusha-target cargo test -p connect_norito_bridge kagemusha --lib` (17 tests, including record-backed success, JNI-helper record checks, exact verifier-record-set enforcement, verifier namespace binding, confidential-transfer-v2 record/envelope circuit-id alias rejection, legacy unanchored valid-bundle rejection, missing trust-anchor metadata rejection, forged envelope-hash metadata and hop auxiliary-byte rejection, oversized-hop rejection, oversized-bundle early rejection, malformed-hop-shape early rejection, and root-discontinuity early rejection)
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-kagemusha-target cargo test -p iroha_data_model kagemusha_proof_public_inputs_statement_digest --lib` (2 tests, including data-model canonical proof-statement auxiliary-byte and zero verifier-key-hash rejection)
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-kagemusha-target cargo test -p iroha_data_model kagemusha --lib` (12 tests, including data-model trusted-setup, developer-only debug/mock substring, and profile-less STARK backend rejection for proof statements, verifier-key digests, and folded-step verifier ids, standalone KZG/pairing label rejection for verifier-key Poseidon digests, empty proof-statement metadata, verifier-key ids, and verifier-key bytes rejection, direct aggregation-statement canonical-shape rejection, folded public-input projection mismatch rejection, zero root, unchanged root-transition, zero digest/commitment, and zero aggregation transcript digest rejection, and compact folded public-input hop-count rejection)
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-kagemusha-target cargo test -p iroha_data_model kagemusha_verifier_key_poseidon_digest_binds_backend_and_bytes --lib` (1 test, including mixed-case and whitespace-delimited trusted-setup plus developer-only Kagemusha verifier-key digest rejection)
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-kagemusha-target cargo test -p iroha_data_model offline --lib` (16 tests)
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-kagemusha-target cargo test -p iroha_core kagemusha_proof_statement_digest --lib` (4 tests, including standalone Kagemusha proof-statement auxiliary-byte, zero verifier-key-hash, Halo2 circuit-id alias, empty circuit-id, empty schema, and empty instance-column rejection)
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-kagemusha-target cargo test -p iroha_core kagemusha_verified_fold_step --lib` (9 tests, including lower-helper rejection of non-canonical Halo2 circuit/schema metadata before proof verification)
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-kagemusha-target cargo test -p iroha_core kagemusha_verified_folded_public_inputs_from_bundle_with_records_rejects_bad_records --lib` (includes hop verifier-record and envelope circuit-id alias rejection)
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-kagemusha-target cargo test -p iroha_core kagemusha_compact_payment_token_record_verifier_rejects_registry_mismatches --lib` (includes final folded verifier namespace and circuit-id alias rejection)
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-kagemusha-target cargo test -p iroha_core kagemusha_transfer_rejects_verifier_record_mismatches_before_proof_decode --lib` (includes canonical confidential-transfer-v2 verifier circuit-id alias rejection)
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-kagemusha-target cargo test -p iroha_core kagemusha_transfer --lib` (20 tests, including chain-side Kagemusha verifier namespace binding, confidential-transfer-v2 verifier/envelope circuit-id alias rejection, missing verifier-key commitment metadata, and empty verifier-key id rejection)
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-kagemusha-target cargo test -p iroha_core kagemusha_folded_semantic_circuit --lib` (9 tests, including folded proof aggregation-mode, hop-count, bit-decomposition, zero root/digest public-field group, unchanged public-root, bad public-field inverse, and bad root-difference inverse-witness rejection)
+  - `CARGO_INCREMENTAL=0 RUST_TEST_THREADS=1 CARGO_TARGET_DIR=/tmp/iroha-codex-kagemusha-target cargo test -p iroha_core native_pasta_fp_scalar --lib` (11 tests, including public native Pasta/Fp scalar zero, native-scalar, and modulus-minus-one acceptance; private scalar acceptance; modulus, public-value substitution, limb-value substitution, non-boolean limb bit, wrong slack, non-boolean borrow, and `value + modulus` alias rejection)
+  - `CARGO_INCREMENTAL=0 RUST_TEST_THREADS=1 CARGO_TARGET_DIR=/tmp/iroha-codex-kagemusha-target cargo test -p iroha_core kagemusha_non_native_vesta_affine_scalar_mul --lib` (10 tests, including bounded and zero scalar acceptance, builder-side wrong-output and high-bit rejection, public scalar/base/output substitution rejection, and conditional-bit, accumulator-chain, and double-chain tamper rejection)
+  - `CARGO_INCREMENTAL=0 RUST_TEST_THREADS=1 CARGO_TARGET_DIR=/tmp/iroha-codex-kagemusha-target cargo test -p iroha_core kagemusha_non_native_vesta_affine_native_scalar_mul --lib` (7 tests, including native Pasta/Fp one-bit and two-bit scalar multiplication acceptance, high-bit builder rejection, public scalar substitution, noncanonical scalar alias, conditional-bit tamper, and double-chain case tamper rejection)
+  - `CARGO_INCREMENTAL=0 RUST_TEST_THREADS=1 CARGO_TARGET_DIR=/tmp/iroha-codex-kagemusha-target cargo test -p iroha_core kagemusha_non_native --lib` (116 tests, including public/private native Pasta/Fp scalar canonical decomposition, native-scalar Vesta multiplication with scalar-bit/doubling-ladder binding, modulus and `value + modulus` alias rejection, non-native `u64` limb range acceptance/rejection, high-residue rejection, forged accumulator rejection, canonical Vesta/Fq modulus-minus-one acceptance, modulus rejection, public-limb substitution, non-boolean borrow, forged slack, high-residue limb rejection, modular-add no-reduction/reduction/carry acceptance, wrong output, forged reduction bit, forged sum limb, non-boolean/final carry, noncanonical operand, high-residue sum-limb rejection, modular-mul no-reduction/reduction/zero/carry acceptance, wrong output, forged private quotient, forged product limb, forged product/reduction carry, carry-limb mismatch, noncanonical operand, high-residue product-limb rejection, Vesta generator on-curve acceptance, off-curve host rejection, noncanonical coordinate rejection, public-y substitution rejection, square-link tampering, curve-constant tampering, point-or-identity acceptance for canonical identity and generator, nonzero identity host rejection, off-curve non-identity rejection, noncanonical coordinate rejection, non-boolean/public-substituted identity rejection, identity-coordinate substitution, tampered non-identity curve link rejection, complete point-or-identity addition identity/inverse/doubling/distinct acceptance, complete-add wrong-output, public-coordinate, non-boolean selector, case substitution, branch-tamper rejection, conditional-add selector and selected-addend rejection, bounded scalar-mul public scalar/base/output substitution, high scalar bit, conditional-bit, accumulator-chain, and double-chain tamper rejection, distinct affine point-addition acceptance, wrong-output and duplicate-x host rejection, point-add public-coordinate substitution, noncanonical coordinate, x-delta tampering, denominator-inverse tampering, x/y equation tampering, affine point-doubling acceptance, wrong-output host rejection, public-coordinate substitution, noncanonical coordinate, denominator/numerator tampering, denominator-inverse tampering, and doubled x/y equation tampering)
+  - `CARGO_INCREMENTAL=0 RUST_TEST_THREADS=1 CARGO_TARGET_DIR=/tmp/iroha-codex-kagemusha-target cargo test -p iroha_core kagemusha --lib` (192 tests, including record-backed Kagemusha verifier namespace binding, confidential-transfer-v2 hop record/envelope/lower-helper circuit-id alias rejection, final folded verifier namespace binding, empty verifier-key bytes rejection, final prover archive/circuit-family hardening, non-zero folded root/digest and changed-root constraints, checked fold construction, public/private native Pasta/Fp scalar decomposition, native-scalar Vesta multiplication, and the non-native Vesta/Fq range/addition/multiplication/on-curve/identity/complete-add/conditional-add/scalar-mul/point-add/point-double foundations)
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-kagemusha-target cargo test -p iroha_zkp_halo2 ipa_round_challenge --lib` (4 tests, including label, statement-prefix, round-byte/order substitution, and bad-shape rejection for IPA transcript projection)
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-kagemusha-target cargo test -p iroha_zkp_halo2 ipa_verifier_accumulation --lib` (4 tests, including verifier accumulation projection, bad challenge shape, round-index substitution, and challenge-value substitution)
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-kagemusha-target cargo test -p iroha_zkp_halo2 --lib` (56 tests, including IPA transcript projection, verifier accumulation projection, and parameter-registry metadata validation before cached lookup)
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-kagemusha-target cargo test -p iroha_core kagemusha_compact_payment_token_rejects_non_production_folded_backend_labels --lib`
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-kagemusha-target cargo test -p iroha_core kagemusha_compact_payment_token_rejects_ --lib` (14 compact-token adversarial tests, including trusted-setup/developer-only folded proof labels, public-input/context substitution, reserved recursive mode, final circuit-id alias rejection, final prover metadata/key archive rejection, envelope metadata substitution, oversized folded proofs, and tampered hop proofs)
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-kagemusha-target cargo test -p iroha_core prove_kagemusha_compact_payment_token_rejects_ --lib` (3 final prover boundary tests, including folded circuit-id alias rejection)
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-kagemusha-target cargo test -p iroha_core confidential_transfer_v2 --lib` (6 tests, including real Halo2 IPA confidential-transfer-v2 proofs and generic envelope metadata rejection)
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-kagemusha-target cargo test -p iroha_core halo2_ipa_proving_key_archive --lib`
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-kagemusha-target cargo test -p iroha_core ivm_execution_prover_rejects_wrong_circuit_family --lib`
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-kagemusha-target cargo test -p iroha_core halo2_ipa --lib` (9 tests, including IVM circuit-family rejection, circuit/vk-bound proving-key archive rejection, real offline-note/Kagemusha Halo2 IPA proofs, and low-level proof-backend mismatch rejection)
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-kagemusha-target cargo test -p iroha_core confidential_unshield_v2_v3_reject_noncanonical_envelope_metadata_before_proof_decode --lib`
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-kagemusha-target cargo test -p iroha_core private_kaigi --lib`
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-kagemusha-target cargo test -p iroha_core anonymous_escrow --lib` (8 tests, including anonymous escrow close envelope metadata rejection before public-input trust)
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-kagemusha-target cargo test -p iroha_core preverify_rejects_trusted_setup_backends_before_dedup --lib`
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-kagemusha-target cargo test -p iroha_core preverify_rejects_developer_only_backends_before_dedup --lib`
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-kagemusha-target cargo test -p iroha_core preverify --lib` (6 tests, including malformed envelope metadata and trusted-setup backend rejection before dedup insertion)
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-kagemusha-target cargo test -p iroha_core guardrails_reject --lib` (2 tests, including mixed-case and whitespace-delimited trusted-setup plus developer-only rejection before verifier dispatch)
+  - `cargo fmt --all -- --check`
+  - `git diff --check`
+  - `git diff --name-only -- Cargo.lock` (no output)
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-kagemusha-target cargo test -p iroha_core guardrails_reject_trusted_setup_backends_before_dispatch --lib`
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-kagemusha-target cargo test -p iroha_core guardrails --lib` (8 tests, including trusted-setup and developer-only backend rejection before verifier dispatch)
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-kagemusha-target cargo test -p iroha_core set_verifying_keys_rejects_trusted_setup_backend_labels --lib`
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-kagemusha-target cargo test -p iroha_core trusted_setup_classifier_catches_standalone_and_profile_labels --lib`
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-kagemusha-target cargo test -p iroha_core stark_backend_tag_tests --lib` (4 tests, including profile-less, trusted-setup, and developer-only debug/mock STARK/FRI profile rejection plus standalone KZG/pairing, colon-profile, mixed-case, and whitespace-delimited trusted-setup/developer-only classification)
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-kagemusha-target cargo test -p iroha_core state_configured_gas_schedule_updates_metering --lib` (1 test, including gas metadata decode skip for non-production Halo2 labels)
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-kagemusha-target cargo test -p iroha_core decode_open_verify_envelope_skips_non_production_backend_labels --lib`
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-kagemusha-target cargo test -p iroha_torii stark_fri_backend_labels_require_non_empty_profile --lib`
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-kagemusha-target cargo test -p iroha_torii prover_worker_does_not_classify_profileless_stark_prefix_as_stark --lib`
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-kagemusha-target cargo test -p iroha_torii prover_backend_allowlist_rejects --lib` (2 tests, including standalone, colon-profile, mixed-case, and whitespace-delimited trusted-setup/developer-only labels under broad prover allowlists)
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-kagemusha-target cargo test -p iroha_torii prover_backend_allowlist_rejects_trusted_setup_labels --lib` (includes standalone KZG/pairing labels and `halo2/ipa:kzg` under a broad `halo2/` allowlist)
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-kagemusha-target cargo test -p iroha_torii prover_worker_rejects --lib` (3 tests, including mixed-case and whitespace-delimited trusted-setup plus developer-only rejection before registry lookup)
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-kagemusha-target cargo test -p iroha_torii prover_worker_rejects_trusted_setup_backend_before_registry_lookup --lib`
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-kagemusha-target cargo test -p iroha_torii prover_backend_allowlist_rejects_developer_only_labels --lib`
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-kagemusha-target cargo test -p iroha_torii prover_worker_rejects_developer_only_backend_before_registry_lookup --lib`
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-kagemusha-target cargo test -p iroha_torii prover_worker_rejects_attachment_backend_mismatch_before_registry_lookup --lib`
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-kagemusha-target cargo test -p iroha_torii prover_worker_still_reports_missing_registry_for_supported_backend --lib`
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-kagemusha-target cargo test -p iroha_torii zk_prover --lib` (77 tests, including trusted-setup, developer-only, attachment-backend mismatch, and profile-less STARK backend rejection)
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-kagemusha-target cargo test -p iroha_torii zk_ivm_prove_job_completes_and_does_not_expose_gas_used --lib`
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-kagemusha-target cargo test -p iroha_torii zk_ivm_prove_job_loads_vk_bytes_from_disk_when_inline_missing --lib`
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-kagemusha-target cargo test -p iroha_torii zk_ivm_prove_job_rejects_non_archive_proving_key_bytes --lib`
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-kagemusha-target cargo test -p iroha_torii zk_ivm_prove --lib` (9 tests, including generated proof-attachment verifier-key commitment binding, archived IVM proving-key loading from disk, and non-archive `.pk` rejection)
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-kagemusha-target cargo test -p iroha_core --features zk-tests,zk-preverify preverify_rejects_developer_only_backends_before_dedup --lib`
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-kagemusha-target cargo test -p iroha_core --features zk-tests,zk-preverify preverify --lib` (8 tests, including developer-only backend rejection before dedup and canonical-envelope dedup fixture coverage)
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-kagemusha-target cargo test -p iroha_core --features zk-tests,zk-preverify --test zk_dedup`
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-kagemusha-target cargo test -p iroha_core --features zk-tests,zk-preverify --test zk_preverify_budget`
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-kagemusha-target cargo test -p iroha_core offline_note_rejects_non_transparent_proof_backends --lib`
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-kagemusha-target cargo test -p iroha_core offline_note_rejects_non_production_backend_labels_before_registry_lookup --lib`
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-kagemusha-target cargo test -p iroha_core offline_note_rejects_self_consistent_noncanonical_recursive_circuit --lib` (includes recursive circuit-id aliases)
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-kagemusha-target cargo test -p iroha_core prove_offline_note_redeem_rejects_recursive_circuit_aliases --lib`
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-kagemusha-target cargo test -p iroha_core issue_rejects_note_commitment_reused_from_audit_output --lib`
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-kagemusha-target cargo test -p iroha_core audit_rejects_output_commitment_reused_from_topup_before_proof --lib`
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-kagemusha-target cargo test -p iroha_core audit_rejects_reused_output_certificate_from_topup_before_proof --lib`
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-kagemusha-target cargo test -p iroha_core offline_note_rejects_ --lib` (10 tests, including non-production backend-label rejection before registry lookup, empty recursive verifier-key id, empty verifier-key bytes rejection, recursive circuit-id alias rejection, and profile-less `stark/fri/` backend rejection)
+  - `CARGO_INCREMENTAL=0 CARGO_TARGET_DIR=/tmp/iroha-codex-kagemusha-target cargo test -p iroha_core audit_rejects_mutated_input_claim_even_when_certificate_topup_is_anchored --lib` (1 test confirming a real topup anchors the exact issued input claim, not just the certificate replay key; finished in 1m 53s compile plus 0.65s test time)
+  - `CARGO_INCREMENTAL=0 CARGO_TARGET_DIR=/tmp/iroha-codex-kagemusha-target cargo test -p iroha_core audit_ --lib` (28 tests, including exact topup input-claim mutation rejection, real-proof chained audit-output trust-anchor acceptance, topup certificate replay rejection, and cross-domain note-commitment replay rejection before proof verification; finished in 0.36s compile plus 2.38s test time)
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-kagemusha-target cargo test -p iroha_core offline_note --lib` (33 tests, including real Halo2 IPA envelope metadata substitution rejection, recursive circuit-id alias rejection, archived Offline Note proving-key use, empty verifier-key trust-anchor rejection, and forged recursive circuit rejection)
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-kagemusha-target cargo test -p iroha_core register_vk_rejects_trusted_setup_halo2_backend_labels --lib`
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-kagemusha-target cargo test -p iroha_core register_vk_rejects_developer_only_backend_labels --lib`
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-kagemusha-target cargo test -p iroha_core register_vk_rejects_trusted_setup_stark_backend_labels --lib`
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-kagemusha-target cargo test -p iroha_core offline_note_rejects_non_production_backend_labels_before_registry_lookup --lib`
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-kagemusha-target cargo test -p iroha_core kagemusha_transfer_rejects_trusted_setup_backend_labels --lib`
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-kagemusha-target cargo test -p iroha_core update_vk_rejects_non_production_existing_backend_labels --lib`
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-kagemusha-target cargo test -p iroha_core vk_ --lib` (30 tests, including trusted-setup Halo2/STARK and developer-only backend-label rejection at VK admission and update)
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-kagemusha-target cargo test -p iroha_core validate_proof_attachment_rejects_mismatched_attachment_triples --lib`
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-kagemusha-target cargo test -p iroha_core set_verifying_keys_rejects_ --lib` (2 tests, including IVM host trusted-setup and developer-only snapshot rejection)
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-kagemusha-target cargo test -p iroha_core generic_verify_proof_syscall --lib` (2 tests, including syscall-time rejection of an injected developer-only VK snapshot)
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-kagemusha-target cargo test -p iroha_core verify_proof --lib` (14 tests, including zero verifier-key hash, auxiliary-byte preverified-cache bypass rejection, and injected developer-only VK snapshot rejection)
+  - `cd kotlin && ./gradlew :core-jvm:test --tests org.hyperledger.iroha.sdk.offline.OfflineNoteTest.proofBindingRejectsRecursiveMetadataSubstitution --tests org.hyperledger.iroha.sdk.offline.OfflineNoteTest.recursiveProofMetadataNormalizesAndRejectsMalformedVerifierKeys --console=plain`
+  - `cd java/iroha_android && JAVA_HOME=$(/usr/libexec/java_home -v 21) ANDROID_HOME=~/Library/Android/sdk ANDROID_SDK_ROOT=~/Library/Android/sdk ./gradlew test --console=plain`
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-kagemusha-target cargo test -p iroha_core --features zk-tests,zk-preverify --test zk_backend_tags` (2 tests, including Groth16 VK admission rejection and Halo2 curve admission rejection)
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-kagemusha-target cargo test -p iroha_core --features zk-tests --test zk_proof_retention` (2 tests, retention coverage migrated to rejected no-trusted-setup Halo2 IPA proof records)
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-kagemusha-target cargo test -p iroha_core --features zk-preverify trace_proving_queue_tests --lib` (3 tests, including validation-only trace jobs that emit no mock proof artifact and tampered-trace rejection)
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-kagemusha-target cargo test -p iroha_core --features zk-preverify trace_proof_queue_tests --lib`
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-kagemusha-target cargo test -p iroha_core --features zk-preverify process_batch_enqueues_digest_and_trace_jobs --lib`
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-kagemusha-target cargo test -p iroha_core validate_open_verify_envelope_metadata --lib`
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-kagemusha-target cargo test -p iroha_core resolve_vk_commitment --lib`
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-kagemusha-target cargo test -p iroha_core overlay_rejects_ivm_proved_when_commitments_mismatch --lib`
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-kagemusha-target cargo test -p iroha_core enforce_zk_envelope --lib`
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-kagemusha-target cargo test -p iroha_core ram_lfe --lib` (7 tests, including non-canonical proof-envelope metadata rejection)
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-kagemusha-target cargo test -p iroha_core identifier_verify_execution_proof --lib`
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-kagemusha-target cargo test -p iroha_core ballot --lib`
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-kagemusha-target cargo test -p iroha_core tally --lib`
+  - `git diff --check`
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-kagemusha-target cargo test -p iroha_core --features zk-tests,zk-stark --test zk_asset_stark_envelope` (8 STARK wrapper rejection tests)
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-kagemusha-target cargo test -p iroha_core --features zk-tests,halo2-dev-tests --test kaigi_privacy` (3 Kaigi privacy tests)
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-kagemusha-target cargo test -p iroha_config offline_defaults_keep_kagemusha_enabled_without_legacy_fallback --lib`
+  - `git diff --check`
+  - `git diff --name-only -- Cargo.lock`
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-kagemusha-target cargo build -p connect_norito_bridge --release` and refreshed the ignored local `dist/NoritoBridge.xcframework/macos-arm64/libNoritoBridge.a` artifact for Swift testing
+  - `cd IrohaSwift && swift package clean && swift test --filter KagemushaCompactPaymentTokenProverTests` (2 tests; native ABI-4 malformed-archive rejection path exercised)
+  - `cd IrohaSwift && swift test --filter OfflineNoteTests/testOfflineNoteProofBindingRejectsRecursiveMetadataSubstitution`
+  - `cd IrohaSwift && swift test --filter OfflineNoteRedeemPlannerTests/testPartialRedeemDraftSplitsIssuedNoteAndRedeemsIssuedOutput`
+  - `cd IrohaSwift && swift test --filter OfflineNoteTests/testOfflineNoteWalletLifecycleBuildsAuditAcceptAndRedeemTransactions`
+  - `cd kotlin && ./gradlew :core-jvm:test --tests org.hyperledger.iroha.sdk.offline.OfflineNoteTest.proofBindingRejectsRecursiveMetadataSubstitution --console=plain`
+  - `cd kotlin && ./gradlew :core-jvm:test --tests org.hyperledger.iroha.sdk.offline.OfflineNoteTest.walletLifecycleBuildsAuditAcceptAndRedeemTransactions --tests org.hyperledger.iroha.sdk.offline.OfflineNoteTest.proofBindingRejectsRecursiveMetadataSubstitution --console=plain`
+  - `cd kotlin && ./gradlew :core-jvm:test --tests org.hyperledger.iroha.sdk.offline.OfflineNoteTest --rerun-tasks --console=plain`
+  - `cd java/iroha_android && JAVA_HOME=$(/usr/libexec/java_home -v 21) ANDROID_HOME=~/Library/Android/sdk ANDROID_SDK_ROOT=~/Library/Android/sdk ./gradlew :core:test --tests org.hyperledger.iroha.android.GradleHarnessTests -Dandroid.test.mains=org.hyperledger.iroha.android.offline.OfflineNoteTest --console=plain`
+
+## 2026-05-28 Kagemusha chain instruction and transparent proof hardening
+
+- Added `KagemushaTransfer` as the chain-side shielded offline-offline payment
+  instruction. It is default-enabled by settlement config, rejects explicit
+  legacy forcing, charges the same confidential proof gas as `ZkTransfer`, routes
+  by its asset definition, and reuses the existing ZK asset nullifier set,
+  commitment tree/root history, verifier binding, telemetry, and confidential
+  policy admission path. The instruction now also rejects forged
+  `OpenVerifyEnvelope` metadata whose backend tag, confidential-transfer-v2
+  circuit id, public-input schema, or verifier-key hash does not match the
+  active asset-bound verifier. The real execution fixture now relies on the default
+  `kagemusha_enabled = true` and `kagemusha_force_legacy = false` settings, so
+  accidentally disabling Kagemusha by default fails focused config and core
+  coverage.
+- Kagemusha and Offline recursive proofs now reject trusted-setup backend labels
+  before verification. Production accepted labels are transparent `halo2/ipa`
+  and `stark/fri*`, with exact attachment/proof/verifier backend binding.
+- Offline Halo2 IPA recursive proving now caches derived proving keys by
+  verifier-key hash when no serialized proving key is supplied, avoiding repeated
+  derivation while preserving the transparent IPA setup.
+- Offline audit coverage now proves the trust anchor is the online-to-offline
+  topup lineage rather than the submitter: an independent relayer can submit a
+  real-proof audit only after `IssueOfflineNote` anchors the input claim, and a
+  second real-proof audit can use the first audit's output claim as the next
+  offline-offline trust anchor. Certificate-only or missing-certificate anchors
+  fail before proof verification.
+- Kagemusha focused tests now include a real Halo2 IPA fixture execution path
+  that records the spent nullifier, deterministic output commitments, and root
+  history, plus tampered-proof rejection.
+- Added the first compact multi-hop Kagemusha folding artifact:
+  `KagemushaFoldStep` witness hops and `KagemushaFoldedPublicInputs` canonical
+  public inputs. The builder is bounded, canonicalizes per-hop sets, rejects
+  malformed shape, duplicate nullifiers/commitments, and root discontinuities,
+  and binds chain id, asset definition, roots, hop count, aggregate digests, and
+  ordered folded-hop proof hashes. Folded public inputs now also carry an
+  explicit aggregation mode; this release supports checked transparent pre-fold
+  v1 and rejects reserved/future recursive aggregation modes until an in-circuit
+  recursive verifier exists. The same canonical hop sequence now produces a
+  Poseidon2 aggregation transcript digest, giving future recursive verifier
+  circuits a no-trusted-setup hash-friendly public accumulator while preserving
+  the ordinary Iroha `fold_digest` for host-side checks. Each folded hop now
+  also carries a Poseidon2 digest of the proof public-input statement that was
+  actually verified, so public-instance substitution is bound into both
+  transcript digests. Each hop also carries a domain-separated Poseidon2 digest
+  of the verifier-key backend and bytes used for proof verification, giving the
+  future recursive circuit a hash-friendly verifier-key binding alongside the
+  host-side verifier-key commitment. The proof statement and aggregation
+  transcript preimages are now public data-model types,
+  `KagemushaProofPublicInputsStatement` and
+  `KagemushaPoseidonAggregationTranscriptStatement`, with canonical digest
+  helpers and a public aggregation-statement builder so SDKs and future
+  recursive circuits use the same canonicalized Norito/Poseidon2 layout as the
+  chain-visible folded public inputs.
+- Added `KagemushaCompactPaymentToken`, which wraps folded public inputs with a
+  transparent folded proof and rejects proof/public-input hash substitution
+  before backend proof verification.
+- Exposed the verified compact-token prover as the public core helper and added
+  `KagemushaVerifiedFoldBundle`,
+  `KagemushaVerifiedFoldRecordBundle`, and
+  `connect_norito_kagemusha_prove_verified_compact_payment_token` for mobile
+  bridge callers. The bridge accepts Norito-encoded private hop proof bundles,
+  verifies every hop proof and verifier-key commitment before deriving folded
+  public inputs, returns a Norito-encoded `KagemushaCompactPaymentToken`, and
+  rejects malformed archives, tampered hop proofs, verifier-key commitment
+  mismatches, or reserved recursive aggregation modes before proof generation.
+  A second bridge entry point,
+  `connect_norito_kagemusha_prove_verified_compact_payment_token_with_records`,
+  accepts record-backed bundles and enforces hop verifier records before proof
+  generation. The raw preverified folded-input prover is crate-local, the C
+  header declares the verified symbols, and the bridge ABI version is `4`.
+- Added checked Kagemusha fold construction for wallet/prover code. Each
+  private hop proof attachment is backend-bound, verifier-key-commitment-bound,
+  transparent-only, cryptographically verified, and hashed from the actual
+  encoded `ProofBox`, extracted proof public-input statement, and verifier-key
+  id/commitment before it enters the folded transcript; missing verifier-key
+  commitments and envelope verifier-key hash mismatches are rejected before a
+  hop can be folded. Confidential-v2 hop proofs also have public
+  root/nullifier/output/asset/chain tags checked against the hop metadata when
+  those public inputs are present. A record-backed bundle verifier additionally
+  enforces WSV-style hop verifier metadata: active status, backend tag, circuit
+  id, public-input schema hash, verifier-key commitment, key length, proof-size
+  cap, and optional inline-key consistency. A high-level compact-token prover
+  now uses this checked path before emitting the folded `kagemusha-folded-v1`
+  proof, and adversarial tests reject tampered hop proofs, missing or mismatched
+  verifier commitments, missing/duplicate/inactive/bad verifier records,
+  envelope verifier-key hash substitutions, public-statement substitutions,
+  verifier-key Poseidon digest substitutions, and root-discontinuous folded
+  witnesses.
+- Added a folded-public-input size regression for the maximum 64-hop compact
+  corridor. The data model now exposes
+  `KAGEMUSHA_FOLDED_PUBLIC_INPUTS_MAX_ENCODED_BYTES` plus
+  `norito_encoded_len()` helpers for folded public inputs and compact tokens, so
+  wallet/QR/NFC code can budget the chain-visible transcript separately from
+  backend proof bytes. `validate_supported_context()` now rejects oversized
+  folded public inputs before compact-token binding accepts them.
+- Added the transparent Halo2 IPA `kagemusha-folded-v1` semantic proof path.
+  It publishes an active verifier-key record, derives or caches production
+  proving keys from the transparent IPA verifier key, proves the 30-column
+  folded public statement, constrains aggregation mode to checked pre-fold v1,
+  constrains compact-token hop count to `1..=64`, and rejects tampered proofs or
+  substituted folded public inputs. The compact verifier now also rejects wrong
+  verifier-key ids, domain or aggregation-mode substitutions, envelope circuit
+  substitutions, envelope backend-tag substitutions, and verifier-key hash
+  substitutions before backend verification. A record-backed verifier mirrors
+  WSV verifier-key admission and rejects inactive records, schema mismatches,
+  missing inline keys, commitment mismatches, and proof-size cap violations.
+- Added reusable in-circuit foundations for future recursive Kagemusha
+  aggregation: a Pasta/Halo2 non-native `u64` limb range/decomposition gadget,
+  canonical Vesta/Fq range, modular Vesta/Fq addition, modular Vesta/Fq
+  multiplication, a Vesta affine on-curve check, and a distinct affine
+  point-addition gadget plus an affine point-doubling gadget and canonical
+  point-or-identity validation. The limb gadget constrains a scalar to 64 boolean
+  little-endian bits and rejects any high residue above bit 63; the Vesta/Fq
+  range gadget constrains four limbs below the Vesta base-field modulus using a
+  private slack and borrow chain; the arithmetic gadgets prove addition and
+  multiplication with private unreduced/product limbs, reduction witnesses, and
+  bounded carries; the affine gadget links public `x/y` coordinates to private
+  `x*x`, `y*y`, `x^2*x`, and `x^3 + 5` witnesses; the point-addition gadget
+  composes on-curve checks for `P`, `Q`, and `R`, proves a non-zero
+  denominator through a private inverse, and links the slope plus x/y output
+  equations for distinct affine addition; the point-doubling gadget proves
+  `2*y(P)` is invertible, links `lambda * (2*y(P)) = 3*x(P)^2`, and enforces
+  doubled x/y output equations; the point-or-identity gadget enforces boolean
+  identity flags, canonical `(0, 0, 1)` identity encoding, and conditional
+  on-curve checks. These are prerequisites for sound Vesta commitment-coordinate
+  arithmetic before an in-circuit IPA verifier can ship. Aggregation mode `2`
+  remains reserved until that verifier is
+  implemented.
+- Focused validation passed:
+  - `cargo fmt --all`
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-kagemusha-target cargo test -p iroha_config offline_defaults_keep_kagemusha_enabled_without_legacy_fallback --lib`
+  - `cargo test -p iroha_data_model offline_note --lib`
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-kagemusha-target cargo test -p iroha_zkp_halo2 poseidon --lib`
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-kagemusha-target cargo test -p iroha_data_model kagemusha --lib` (8 tests after record-backed bundle serialization)
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-kagemusha-target cargo test -p iroha_core audit_ --lib`
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-kagemusha-target cargo test -p iroha_core kagemusha --lib` (42 tests after record-backed hop-verifier enforcement)
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-kagemusha-target cargo test -p connect_norito_bridge kagemusha --lib` (8 tests after record-backed FFI and JNI helper coverage)
+  - `cargo test -p iroha_core offline_note --lib`
+  - `cargo test -p iroha_core audit_ --lib`
+  - `cargo test -p iroha_core confidential_policy_admission_ --lib`
+  - `cargo test -p iroha_core time_sensitive_instruction_detects_governance_and_non_sensitive --lib`
+  - `cargo test -p iroha_core opaque_offline_note_issue_defers_to_state_for_asset_definition_dataspace --lib`
+  - `cargo test -p iroha_config`
+  - `cargo test -p iroha_torii --test offline_readiness_smoke`
+  - `cargo test -p integration_tests --test network_functional offline_note_issue_audit_redeem_real_proofs_on_four_peers --no-run`
+  - `cd kotlin && ./gradlew :core-jvm:test --tests org.hyperledger.iroha.sdk.offline.OfflineNoteTest --rerun-tasks --console=plain`
+  - `cd java/iroha_android && JAVA_HOME=$(/usr/libexec/java_home -v 21) ANDROID_HOME=~/Library/Android/sdk ANDROID_SDK_ROOT=~/Library/Android/sdk ./gradlew :core:test --tests org.hyperledger.iroha.android.GradleHarnessTests -Dandroid.test.mains=org.hyperledger.iroha.android.offline.OfflineNoteTest --console=plain`
+  - `cd IrohaSwift && swift test --filter Halo2PastaTests/testOfflineNoteInstanceBuilderRejectsCountAndAmountViolations`
+  - `cd IrohaSwift && swift test --filter OfflineNoteTests/testOfflineNoteAuditBundleRejectsInvalidShapes`
+  - `cd IrohaSwift && swift test`
+  - `scripts/check_no_scale.sh`
+  - `git diff --check`
+
+## 2026-05-28 Offline Bearer Cash SDK policy hardening
+
+- Swift, Kotlin/JVM, and Java Android Offline Bearer Cash wallets now derive
+  custody-hop and lineage-step metrics from audit-trail structure and enforce
+  the shared v1 policy before accepting, paying, or redeeming bearer notes.
+  Malformed, duplicated, cyclic, uncommitted, over-depth, and over-length
+  trails are rejected before wallet state changes.
+- Swift, Kotlin/JVM, and Java Android wallets now persist the consumed
+  `paymentRequestId` on spent input notes, so exact-value offline payments
+  leave a durable local replay marker even when no change note is created.
+  Reusing the same receive request after a restart or later refill is rejected
+  before another note can be spent.
+- Swift, Kotlin/JVM, and Java Android receive-request, payment-token, and ACK
+  text decoding now reject padded or non-url-safe base64 payloads.
+- Payment-token Norito envelopes now carry an explicit v2 layout field across
+  the Swift, Kotlin/JVM, Java Android codecs and the Rust offline vector
+  generator.
+- Kotlin/JVM signed transaction Norito envelopes now decode their canonical
+  and version-prefixed wire forms, including multisig signature bundles, and
+  reject empty, truncated, trailing-byte, and wrong-version envelopes.
+  Supporting transfer, register-account, claim-identifier, and identifier
+  receipt payload decoders now render shared fixture assertions.
+- Kotlin/JVM main SDK sources no longer contain `UnsupportedOperationException`
+  placeholders for internal Norito adapter encode/decode paths; default client
+  and WebSocket methods now fail futures with ordinary state errors, and
+  native-backed identifier receipt verification delegates to the JNI bridge
+  when available.
+- Java Android signed transaction Norito envelopes now decode canonical and
+  version-prefixed wire forms, including multisig signature bundles, and
+  reject malformed envelopes in the Norito fixture harness. Java Android also
+  mirrors the transfer, claim-identifier, set-primary-account-alias, and
+  identifier receipt canonical payload reverse decoders, failed-future client
+  defaults, native-backed identifier receipt verification, multisig seed
+  adapter decode, and OpenVerifyEnvelope encode/decode cleanup.
+- Swift, Kotlin/JVM, and Java Android Offline Note wallets now hand proof
+  providers draft audit/redeem bundles whose provisional recursive proofs are
+  already bound to the exact public-input hash. The fixed draft proof marker
+  was removed, and test proof providers validate draft binding before returning
+  replacement proofs.
+- JavaScript's pure Norito fallback now encodes and decodes
+  `Register.AssetDefinition`, including mintability, metadata, aliases, SoraFS
+  logos, balance-scope policy, confidential policy, parameter hashes, and
+  pending transitions. The generated `dist/` entrypoints are synchronized with
+  `src/`, the native decoder accepts frames emitted by the pure fallback, and
+  adversarial JS tests reject invalid policy modes, logos, checksums, and mint
+  limits.
+- Python SDK filter and Connect control base helpers now use explicit abstract
+  base classes instead of `NotImplementedError` stubs, while concrete helpers
+  retain their payload rendering. Kotlin/JVM and Java Android default client
+  and WebSocket capability failures now describe concrete-client or unsupported
+  transport requirements instead of placeholder-style "not implemented" text.
+- Java Norito and Kotlin/JVM Norito columnar helpers now cover optional
+  string/u32 and bytes+bool row shapes with matching NCB/AoS adaptive APIs.
+  Rust golden hex vectors are locked in both SDKs, and malformed trailing
+  bytes, padding bits, invalid UTF-8, truncated flags, invalid AoS presence
+  tags, and out-of-range optional u32 values are rejected.
+- Focused validation passed:
+  - `cd IrohaSwift && swift test --filter OfflineNoteTests/testOfflineNoteWalletRejectsExactAmountReceiveRequestReplayAfterRestart`
+  - `cd IrohaSwift && swift test --filter OfflineNoteTests/testOfflineBearerCashPolicyAndPrefixesUseSingleAppSurface`
+  - `cd IrohaSwift && swift test --filter OfflineNoteTests/testOfflineNoteWalletRejectsBearerCashCustodyPolicyOverflow`
+  - `cd IrohaSwift && swift test --filter OfflineNoteTests/testOfflineNotePaymentTokenCodecRoundTripsNoritoTextAndQrFrames`
+  - `cd IrohaSwift && swift test --filter OfflineNoteTests`
+  - `cd IrohaSwift && swift test --filter Offline`
+  - `cd IrohaSwift && swift test`
+  - `cd kotlin && ./gradlew :core-jvm:test --tests org.hyperledger.iroha.sdk.offline.OfflineNoteTest --rerun-tasks --console=plain`
+  - `cd kotlin && ./gradlew :core-jvm:test --tests org.hyperledger.iroha.sdk.tx.norito.TransactionFixtureParityTest --rerun-tasks --console=plain`
+  - `cd kotlin && ./gradlew :core-jvm:test --tests org.hyperledger.iroha.sdk.core.model.instructions.TransferWirePayloadEncoderParityTest --tests org.hyperledger.iroha.sdk.core.model.instructions.RegisterAccountWirePayloadEncoderParityTest --tests org.hyperledger.iroha.sdk.core.model.instructions.ClaimIdentifierWirePayloadEncoderParityTest --tests org.hyperledger.iroha.sdk.client.TransportSecurityClientTest --tests org.hyperledger.iroha.sdk.client.HttpClientTransportTest --rerun-tasks --console=plain`
+  - `cd kotlin && ANDROID_HOME=~/Library/Android/sdk ANDROID_SDK_ROOT=~/Library/Android/sdk ./gradlew :offline-wallet-android:assembleRelease --console=plain`
+  - `cd java/iroha_android && JAVA_HOME=$(/usr/libexec/java_home -v 21) ANDROID_HOME=~/Library/Android/sdk ANDROID_SDK_ROOT=~/Library/Android/sdk ./gradlew :core:test --tests org.hyperledger.iroha.android.GradleHarnessTests -Dandroid.test.mains=org.hyperledger.iroha.android.offline.OfflineNoteTest --console=plain`
+  - `cd java/iroha_android && JAVA_HOME=$(/usr/libexec/java_home -v 21) ANDROID_HOME=~/Library/Android/sdk ANDROID_SDK_ROOT=~/Library/Android/sdk ./gradlew :core:test --tests org.hyperledger.iroha.android.GradleHarnessTests -Dandroid.test.mains=org.hyperledger.iroha.android.norito.NoritoCodecAdapterTests,org.hyperledger.iroha.android.tx.TransactionFixtureManifestTests,org.hyperledger.iroha.android.client.SubscriptionToriiClientTests,org.hyperledger.iroha.android.client.HttpClientTransportTests --console=plain`
+  - `cd java/iroha_android && JAVA_HOME=$(/usr/libexec/java_home -v 21) ANDROID_HOME=~/Library/Android/sdk ANDROID_SDK_ROOT=~/Library/Android/sdk ./gradlew :core:test --tests org.hyperledger.iroha.android.GradleHarnessTests --tests org.hyperledger.iroha.android.model.instructions.SetPrimaryAccountAliasWirePayloadEncoderTests -Dandroid.test.mains=org.hyperledger.iroha.android.model.instructions.TransferWirePayloadEncoderTests,org.hyperledger.iroha.android.model.instructions.ClaimIdentifierWirePayloadEncoderTests,org.hyperledger.iroha.android.client.IdentifierReceiptCanonicalEncoderTests --console=plain`
+  - `cd java/iroha_android && JAVA_HOME=$(/usr/libexec/java_home -v 21) ANDROID_HOME=~/Library/Android/sdk ANDROID_SDK_ROOT=~/Library/Android/sdk ./gradlew test --console=plain`
+  - `cd java/iroha_android && JAVA_HOME=$(/usr/libexec/java_home -v 21) ANDROID_HOME=~/Library/Android/sdk ANDROID_SDK_ROOT=~/Library/Android/sdk ./gradlew :core:test --rerun-tasks --console=plain --stacktrace`
+  - `cd java/iroha_android && JAVA_HOME=$(/usr/libexec/java_home -v 21) ANDROID_HOME=~/Library/Android/sdk ANDROID_SDK_ROOT=~/Library/Android/sdk ./gradlew test --rerun-tasks --console=plain --stacktrace`
+  - `cd javascript/iroha_js && node --test test/norito.test.js`
+  - `cd javascript/iroha_js && node --test test/instructionBuilders.test.js`
+  - `cd javascript/iroha_js && node --test test/transaction.test.js`
+  - `cd javascript/iroha_js && node --test test/transactionBuilder.test.js`
+  - `cd javascript/iroha_js && node --test`
+  - `cd javascript/iroha_js && npm run test:dist -- --test-name-pattern "asset definition|pure JS Norito asset definition|native Norito decoder accepts pure JS"`
+  - `/tmp/iroha-python-sdk-test-venv/bin/python -m pytest python/iroha_python/tests/test_abstract_sdk_helpers.py`
+  - `cd kotlin && ./gradlew :core-jvm:test --tests org.hyperledger.iroha.sdk.client.TransportSecurityClientTest --tests org.hyperledger.iroha.sdk.client.HttpClientTransportTest --rerun-tasks --console=plain`
+  - `cd kotlin && ./gradlew :core-jvm:test --tests org.hyperledger.iroha.sdk.norito.NoritoColumnarTest --rerun-tasks --console=plain`
+  - `cd java/norito_java && ./run_tests.sh`
+  - `cd java/iroha_android && JAVA_HOME=$(/usr/libexec/java_home -v 21) ANDROID_HOME=~/Library/Android/sdk ANDROID_SDK_ROOT=~/Library/Android/sdk ./gradlew :core:test --tests org.hyperledger.iroha.android.GradleHarnessTests -Dandroid.test.mains=org.hyperledger.iroha.android.client.SubscriptionToriiClientTests,org.hyperledger.iroha.android.client.HttpClientTransportTests --console=plain`
+  - `cargo check -p iroha_data_model --bin offline_vectors --features "test-fixtures transparent_api"`
+  - `git diff --check`
+- Java Android now mirrors the reverse decoders for transfer,
+  claim-identifier, set-primary-account-alias, and identifier receipt canonical
+  payloads. No TODO, placeholder, or draft-proof markers remain in the audited
+  main SDK source trees.
+
+## 2026-05-29 Torii Sumeragi evidence count endpoint test fix
+
+- The router-level `/v1/sumeragi/evidence/count` test now forwards the
+  request `Accept` header into the handler and requests `application/json`
+  before decoding with the Norito JSON codec, matching the endpoint contract
+  while preserving Norito as the default wire format.
+- Focused validation passed:
+  - `cargo fmt --all`
+  - `cargo test -p iroha_torii --test sumeragi_evidence_count_endpoint --features telemetry -- --nocapture`
+
+## 2026-05-28 Torii push bridge test data-dir stabilization
+
+- `push_bridge` endpoint smoke tests now use `TestDataDirGuard` instead of a
+  bare temp directory, so push persistence goes through the serialized Torii
+  test data-dir override and cannot race another test's removed temp path.
+- Focused validation passed:
+  - `cargo fmt --all`
+  - `cargo test -p iroha_torii --features app_api,push --test push_bridge -- --nocapture`
+
+## 2026-05-28 Torii Sumeragi collectors negotiation fix
+
+- `/v1/sumeragi/collectors` now uses the JSON-preferred REST response
+  negotiation path, so omitted or wildcard `Accept` headers return JSON while
+  explicit `application/x-norito` requests still receive Norito.
+- Focused validation passed:
+  - `cargo fmt --all`
+  - `cargo test -p iroha_torii --features telemetry --test sumeragi_collectors_endpoint sumeragi_collectors_endpoint_shape -- --nocapture`
+
+## 2026-05-28 Torii public transaction decode errors
+
+- Public `/v1/pipeline/transactions` Norito decode failures now return the
+  structured `invalid_transaction_payload` error envelope even when the generic
+  versioned extractor rejects the body before the handler runs. Query decode
+  rejection behavior remains unchanged.
+- Focused validation passed:
+  - `cargo fmt --all`
+  - `cargo test -p iroha_torii --lib utils::extractors::tests -- --nocapture`
+  - `cargo test -p iroha_torii --test norito_ingress -- --nocapture`
+
+## 2026-05-28 Torii Nexus lifecycle response negotiation
+
+- `/v1/nexus/lifecycle` now honors the current Torii response negotiation for
+  its dynamic control-plane payload: JSON clients receive JSON, while Norito
+  clients receive a Norito-framed JSON document string instead of plain JSON
+  bytes.
+- Focused validation passed:
+  - `cargo fmt --all`
+  - `cargo test -p iroha_torii --features app_api --test nexus_lifecycle_endpoint -- --nocapture`
+  - `cargo test -p iroha_torii --features app_api --lib response_format_tests::respond_json_document_with_format`
+
+## 2026-05-28 Queue-aware Torii status and pipeline preflight
+
+- `/status` now exposes queue split counts plus last committed block and
+  non-empty block observation timestamps. Operators should treat `queue_size`
+  as the primary liveness gate and only classify stalls when queued work exists
+  and elapsed block time exceeds the advertised threshold.
+- Added `GET /v1/pipeline/preflight` for JSON/Norito clients to discover
+  Sumeragi timing, admission limits, block limits, pipeline decode/batch caps,
+  queue occupancy, and Nexus fee settings before submitting transactions.
+- Python, Swift, and JavaScript SDKs now parse the new status fields, expose
+  typed preflight helpers, and surface optional `pipeline_status` diagnostics on
+  contract deploy/call responses where Torii includes them.
+
+## 2026-05-28 Swift SM2 I105 and Torii deploy status fixes
+
+- Swift account-address canonical encoding now uses the Rust-compatible
+  extended single-key controller tag (`0x02`) with a big-endian `u16` length
+  for SM2 and other single-key payloads above 255 bytes, while rejecting
+  non-canonical extended encodings for short payloads.
+- Torii single-contract deploy compatibility responses now promote
+  `pipeline_status` from the sole contract receipt to the top-level JSON
+  response while preserving the nested `contracts[0].pipeline_status`.
+- Focused validation passed:
+  - `cargo fmt --all`
+  - `cd IrohaSwift && swift test --filter AccountAddressTests`
+  - `cargo test -p iroha_torii contract_bundle_tests --features app_api`
+
+## 2026-05-27 Torii MCP JSON-RPC regression fixes
+
+- Torii MCP JSON-RPC errors now preserve legacy top-level `error_code` and
+  detail fields while retaining the structured `code`/`message`/`details`
+  envelope, restoring oversized-payload and hidden-tool policy responses.
+- The transaction wait MCP alias now surfaces non-retryable pipeline status
+  HTTP responses as structured tool results instead of replacing them with a
+  generic MCP-layer error.
+- The legacy raw `torii.post_transaction` tool name resolves to the generated
+  transaction submission route, and the connect-ticket pagination test now
+  searches for the target tool instead of enumerating the expanded registry
+  two tools at a time.
+- Focused validation passed:
+  - `cargo fmt --all`
+  - `cargo test -p iroha_torii --lib mcp::tests:: -- --nocapture`
+  - `cargo test -p iroha_torii --test mcp_endpoints -- --nocapture`
+
+## 2026-05-27 Bridge finality verifier preimage alignment
+
+- `BridgeFinalityVerifier` now reconstructs the same canonical Sumeragi
+  `Vote` v2 preimage that production commit QCs sign, including chain-order
+  hash, rechain sequence, and highest-QC marker fields. This lets Torii bridge
+  finality endpoint proofs round-trip into the light-client verifier.
+- Bridge finality documentation now describes the full signed vote preimage
+  instead of saying the aggregate signature is checked only against the header
+  hash.
+- Focused validation passed:
+  - `cargo fmt --all`
+  - `cargo test -p iroha_data_model bridge_finality --lib -- --nocapture`
+  - `cargo test -p iroha_data_model commit_vote_preimage --lib -- --nocapture`
+  - `cargo test -p iroha_torii --features telemetry --test bridge_finality_endpoint bridge_finality_endpoint_roundtrips_into_verifier -- --nocapture`
+  - `git diff --check`
+
+## 2026-05-27 P2P cap integration test stabilization
+
+- `iroha_p2p` frame-cap integration tests now serialize assertions against
+  process-global cap violation counters so concurrent tests cannot invalidate
+  start/end snapshots.
+- TCP/TLS/QUIC global frame-cap tests keep the capped listener in accept-only
+  mode, preventing simultaneous outbound sessions from masking the disconnect
+  caused by an oversized inbound frame.
+- Focused validation passed:
+  - `cargo fmt --all`
+  - `cargo test -p iroha_p2p --test mod integration::p2p_caps -- --nocapture`
+  - `for i in $(seq 1 30); do cargo test -p iroha_p2p --test mod integration::p2p_caps::tcp_global_frame_cap_disconnects --quiet || exit 1; done`
+  - `cargo test -p iroha_p2p --test mod --quiet`
+  - `git diff --check`
+
+## 2026-05-28 Offline audit hardening and Kagemusha defaults
+
+- `AuditOfflineNote` lineage now uses the online-to-offline topup/audited-output
+  certificate chain as its trust anchor instead of the transaction submitter.
+  Audit submitters can be independent relayers once the bundle proves valid.
+- Offline audits now reject input claims that are not bound to the sender key
+  certificate, hidden output commitments, cross-asset conservation, and public
+  input/output amount mismatches before proof verification.
+- Kagemusha is exposed as the default offline-offline direction through
+  `settlement.offline.kagemusha_enabled = true`; the explicit migration fallback
+  `settlement.offline.kagemusha_force_legacy` defaults to `false` and is reported
+  by `/v1/offline/readiness`.
+
+## 2026-05-27 Offline Bearer Cash v1 app surface
+
+- The first-release offline app surface is now Offline Bearer Cash v1 over the
+  ZK Offline Note/nullifier engine. Swift, Kotlin/JVM, and Java Android expose
+  `OfflineBearerCash*` wallet, note, receive request, payment token, ACK, text
+  codec, and policy names while retaining `IssueOfflineNote`,
+  `AuditOfflineNote`, and `RedeemOfflineNote` as chain/backend boundary
+  mappings.
+- App text payloads now use only
+  `wallet-offline-bearer-cash-receive:`,
+  `wallet-offline-bearer-cash-payment:`, and
+  `wallet-offline-bearer-cash-ack:`.
+- Bearer Cash v1 policy defaults are shared across SDKs and fixtures:
+  `max_custody_hops = 5`, `max_lineage_steps = 32`,
+  `max_single_qr_payload_bytes = 2048`, `max_stream_payload_bytes = 12288`,
+  and Android StrongBox/KeyMint pool defaults of target `20`, replenish below
+  `8`, cap `40`. NFC APDU/Nearby incoming payload bounds now follow the
+  12 KiB stream limit. Swift, Kotlin/JVM, and Java Android now enforce
+  custody/lineage limits by deriving metrics from the wallet audit-trail DAG.
+- The shared offline fixture now includes `offline_bearer_cash_v1` policy and
+  transport metadata, and `sdk_interop.payment_token_text` uses the Bearer Cash
+  payment prefix.
+- Torii discovery now reports the Offline Note issuer and
+  `offline_bearer_cash_v1` only for app-facing offline cash. Legacy offline
+  transfer/revocation compatibility MCP aliases, the revocation-bundle route,
+  the revocation-bundle capability flag, and the unused revocation policy
+  config fields were removed for the first release.
+- Final app and SDK regression evidence now includes full Swift package tests,
+  Kotlin JVM SDK tests, Java Android SDK tests, PK/BPNG Android unit tests plus
+  debug androidTest compilation, PK iOS simulator build, and clean release
+  marker greps across the main SDK and PK/BPNG app repos.
+- Physical evidence now covers iOS App Attest, iOS HCE/CardSession
+  availability, and Android StrongBox/KeyMint one-use-key validation. The open
+  physical gap is the end-to-end cross-platform NFC/HCE payment
+  exchange; the last Android-to-iOS attempt stopped before exchange because the
+  Android sender was locked at keyguard.
+- Focused validation passed:
+  - `cargo fmt --all`
+  - `cargo run -p iroha_data_model --features test-fixtures,transparent_api --bin offline_vectors`
+  - `cargo run -p iroha_data_model --features test-fixtures,transparent_api --bin offline_vectors -- --check`
+  - `cargo test -p iroha_data_model --features test-fixtures,transparent_api --bin offline_vectors`
+  - `cargo test -p iroha_config torii_offline_issuer -- --nocapture`
+  - `cargo test -p iroha_torii offline_issuer -- --nocapture`
+  - `cargo test -p iroha_torii --test offline_readiness_smoke offline_readiness_is_mounted_and_legacy_routes_are_absent -- --nocapture`
+  - `cargo test -p iroha_torii --test mcp_endpoints mcp_tools_list_exposes_account_and_transaction_interfaces -- --nocapture`
+  - `cd IrohaSwift && swift test --filter OfflineNoteTests --filter OfflineQrStreamTests`
+  - `cd kotlin && ./gradlew :core-jvm:clean :core-jvm:test --tests org.hyperledger.iroha.sdk.offline.OfflineNoteTest --console=plain`
+  - `cd java/iroha_android && JAVA_HOME=$(/usr/libexec/java_home -v 21) ANDROID_HOME=~/Library/Android/sdk ANDROID_SDK_ROOT=~/Library/Android/sdk ./gradlew clean test --console=plain`
+- Full workspace `cargo test` still needs one clean uninterrupted run. A retry
+  reached a transient Torii telemetry status-shape compile failure while local
+  telemetry edits were changing; the current focused
+  `cargo test -p iroha_torii --features telemetry --lib --no-run` compile
+  passes.
+
+## 2026-05-26 Torii routing and SoraFS regression fixes
+
+- Torii app-facing query routes now default omitted `count_mode` to exact
+  totals, and app generic query envelopes normalize that default before using
+  the shared generic executor. This restores `total` fields for account assets,
+  asset holders, repo agreements, transaction history, and aggregate app API
+  responses.
+- REST-style runtime, ledger, proof, Sumeragi, and ZK root handlers now prefer
+  JSON for omitted or wildcard `Accept` headers while preserving explicit
+  Norito negotiation. Explicit JSON/Norito quality ties continue to prefer
+  Norito.
+- SoraFS gateway and storage regressions were fixed for admission policy
+  fallback, manifest alias proof validation, inline chunker profile manifests,
+  idempotent storage plan metadata attachment, CAR range content length/metrics,
+  and pin registry Norito negotiation.
+- Contract deploy endpoints no longer wait for alias activation when a bundle
+  only submits deploy transactions and has no init calls or assertions.
+- Focused validation passed:
+  - `cargo fmt --all`
+  - `cargo fmt --all --check`
+  - `git diff --check`
+  - `cargo test -p iroha_torii --lib -- --nocapture`
+  - `cargo test -p iroha_torii --lib routing::app_api_integration_tests -- --nocapture`
+  - `cargo test -p iroha_torii --lib routing::repo_agreements -- --nocapture`
+  - `cargo test -p iroha_torii --lib routing::zk_roots_selector_tests -- --nocapture`
+  - `cargo test -p iroha_torii --features telemetry --lib sumeragi_status_strips_lane_fields_when_nexus_disabled -- --nocapture`
+  - `cargo test -p iroha_torii --lib tests_runtime_handlers -- --nocapture`
+  - `cargo test -p iroha_torii --lib sorafs::api::advert_tests -- --nocapture`
+  - `cargo test -p iroha_torii --lib sorafs::gateway::tests -- --nocapture`
+  - `cargo test -p sorafs_manifest --lib -- --nocapture`
+
+## 2026-05-26 Offline Bearer SDK ownership and settlement hardening
+
+- Rust, Swift, Kotlin, and Java Android SDK paths now expose canonical
+  Norito-backed Offline Bearer payloads for policy bundles, purse
+  certificates, receive requests, debit receipts, credit receipts, and
+  settlement batches.
+- Swift, Kotlin, and Java Android also expose SDK-owned Bearer text codecs for
+  the production `wallet-offline-bearer-receive:`,
+  `wallet-offline-bearer-payment:`, and `wallet-offline-bearer-ack:` prefixes,
+  and reject the old OfflineNote production prefixes in the new Bearer codec
+  tests.
+- Swift, Kotlin, and Java Android SDKs now verify Offline Bearer policy,
+  issuer certificates, receive requests, debit receipts, and credit receipts
+  with SDK-owned Ed25519 and P-256 signature handling and fail-closed default
+  hardware capability checks.
+- SDK settlement-batch verifiers now reject stale policy or certificates,
+  revoked transfer/request ids, blacklisted users, asset-limit violations,
+  purse/chain mismatches, and invalid debit/credit balance transitions before
+  app or server settlement submission.
+- Torii Offline Bearer settlement validation now checks batch chain/purse
+  consistency, certificate freshness at event time, issuer policy hashes,
+  asset and purse binding, positive and bounded amounts, non-negative balances,
+  exact debit/credit balance transitions, matching debit/credit transfer ids,
+  receiver-batch debit inclusion, and required receipt signatures.
+- Torii now classifies duplicate receiver settlement submissions
+  deterministically from both the running issuer runtime and durable issuer
+  account metadata markers, and rejects tampered variants after the first
+  accepted transfer fingerprint.
+- Torii settlement completion now submits an issuer-authority transaction for
+  accepted receiver-complete Bearer transfers. The transaction moves the
+  configured asset from sender to recipient and records the accepted transfer
+  fingerprint under issuer metadata for restart-surviving replay protection.
+- Torii key-refill and note-issue responses now include issuer-signed
+  `bearer_policy_bundle` and `bearer_purse_certificate` fields alongside the
+  legacy key-certificate fields, giving SDK-owned Bearer wallets canonical
+  policy/certificate material to install during app cutover.
+- The Java Android SDK now has a Bearer-named NFC APDU facade so Android app
+  QR/NFC/Nearby transport code can route through SDK Bearer prefixes/codecs
+  without app-local OfflineNote transport wrappers.
+- Android app QR/NFC/Nearby production flows now route through SDK Bearer
+  codecs and submit receiver-complete settlement batches; the old OfflineNote
+  load/redeem paths fail closed until a hardware-backed rollback-resistant
+  purse is wired into production constructors.
+- PK and BPNG iOS production release paths now reject old OfflineNote text
+  prefixes, decode Bearer receipts through `IrohaSwift` Bearer codecs, and
+  keep unsupported secure-element hardware fail-closed instead of falling back
+  to app-local proof engines.
+- Remaining follow-up: finish the device-to-device NFC/HCE payment evidence,
+  and keep release docs focused on the single first-release Offline Bearer Cash
+  v1 surface.
+- Focused validation passed:
+  - `cargo fmt --all`
+  - `cargo test -p iroha_torii bearer_settlement -- --nocapture`
+  - `cd IrohaSwift && swift test --filter Offline`
+  - `cd kotlin && ./gradlew :core-jvm:test --console=plain`
+  - `cd java/iroha_android && JAVA_HOME=$(/usr/libexec/java_home -v 21) ANDROID_HOME=~/Library/Android/sdk ANDROID_SDK_ROOT=~/Library/Android/sdk ./gradlew test --console=plain`
+  - `cd ../pk-retail-wallet-android && ANDROID_HOME=~/Library/Android/sdk ANDROID_SDK_ROOT=~/Library/Android/sdk ./gradlew test --console=plain`
+  - `cd ../bpng/png2-android && ANDROID_HOME=~/Library/Android/sdk ANDROID_SDK_ROOT=~/Library/Android/sdk ./gradlew test --console=plain`
+  - `cd ../pk-retail-wallet-ios && xcodebuild build -project RetailWalletIOS.xcodeproj -scheme RetailWalletIOS -configuration Release -destination 'id=0C0009F1-A828-40CC-AD7E-639582DDEE24'`
+  - `cd ../bpng/png2-ios && xcodebuild build -project RetailWalletIOS.xcodeproj -scheme RetailWalletIOS -configuration Release -destination 'id=0C0009F1-A828-40CC-AD7E-639582DDEE24'`
+  - `cd ../bpng/png2-ios && xcodebuild test -project RetailWalletIOS.xcodeproj -scheme RetailWalletIOS -destination 'id=0C0009F1-A828-40CC-AD7E-639582DDEE24' -only-testing:RetailWalletIOSTests/OfflineAPIContractTests -only-testing:RetailWalletIOSTests/OfflineViewModelTests -only-testing:RetailWalletIOSTests/OfflineViewFormattingTests -only-testing:RetailWalletIOSTests/OfflineNfcApduProtocolTests`
+  - `cd ../pk-retail-wallet-ios && xcodebuild test -project RetailWalletIOS.xcodeproj -scheme RetailWalletIOS -destination 'id=0C0009F1-A828-40CC-AD7E-639582DDEE24' -only-testing:RetailWalletIOSTests/OfflineAPIContractTests -only-testing:RetailWalletIOSTests/OfflineViewModelTests -only-testing:RetailWalletIOSTests/OfflineViewFormattingTests` was run; it exited with only known expected legacy cutover failures and no unexpected failures.
+  - Production source audits across the PK/BPNG Android and iOS app repos found
+    no remaining production references to retired app-local proof engines.
+  - `git diff --check` passed in the main Iroha repo and the four app repos.
+- Historical validation gap superseded by the 2026-05-27 Offline Bearer Cash
+  v1 regression pass above.
+
+## 2026-05-26 integration-test hang hardening follow-up
+
+- `iroha_test_network::NetworkBuilder::new()` now defaults to a 4-peer local
+  network so DA/RBC-enabled test networks do not accidentally start from the
+  old single-peer default. Tests can still use `with_peers(...)` for explicit
+  topologies.
+- Integration tests now have shared bounded subprocess helpers with default
+  ordinary-command and nested-build timeouts, and bounded ad hoc HTTP client
+  helpers. The integration sandbox permit now fails after a bounded wait by
+  default instead of convoying later network tests forever.
+- Nested Cargo/Kagami/localnet and CLI integration subprocess callsites now use
+  bounded waits; Kagami fallback builds use the isolated test target directory.
+  CLI Torii mock config posts now set socket read/write deadlines.
+- P2P integration tests now advertise concrete loopback test ports instead of
+  `127.0.0.1:0`, so peer reconnect logic no longer dials an impossible port
+  forever. The cap/crypto tests also use bounded readiness waits where fixed
+  sleeps hid races.
+- Focused validation passed:
+  - `cargo fmt --all`
+  - `cargo fmt --all --check`
+  - `cargo test -p iroha_p2p --test mod`
+  - `cargo check -p integration_tests --tests`
+  - `cargo test -p integration_tests process::tests::output_with_timeout_fails_fast -- --exact`
+  - `cargo test -p integration_tests process::tests::tokio_output_with_timeout_fails_fast -- --exact`
+  - `cargo test -p integration_tests timeouts::tests::read_env_duration_accepts_seconds_and_milliseconds -- --exact`
+  - `cargo test -p integration_tests sandbox::tests::serial_guard_panics_after_wait_timeout -- --exact`
+  - `cargo test -p iroha_test_network tests::network_builder_defaults_to_four_peers -- --exact`
+- Static audits found no remaining raw `reqwest::Client::new()` usage or raw
+  unbounded process waits under `integration_tests`.
+- Full `cargo test` was not run because this work specifically avoids invoking
+  the known multi-hour/hang-prone workspace run.
+
+## 2026-05-25 single offline handoff protocol cleanup
+
+- Removed offline handoff wire-version branches from Swift, Kotlin, Java,
+  JavaScript, and Rust QR stream fixtures. Payment tokens, receive requests,
+  receipt ACKs, Nearby envelopes, NFC APDUs, and QR stream frames now use the
+  single first-release format without v2/v3 transport negotiation.
+- Payment tokens now always carry the bearer audit trail; wallets validate the
+  full trail before accepting notes, and P2P defund submission happens before a
+  note is marked redeem-pending.
+- Regenerated shared offline/QR fixtures and updated Swift/Kotlin/Java golden
+  transport assertions for the versionless QR/NFC/Nearby layouts.
+- Standardized the public fountain-QR readiness capability as
+  `offline_fountain_qr` across Torii, MCP, Python, Swift/Kotlin/Java SDK
+  parsers, and the JavaScript client.
+- Focused validation passed:
+  - `cargo test -p iroha_data_model --features test-fixtures qr_stream --lib -- --nocapture`
+  - `cargo run -p iroha_data_model --features test-fixtures --bin qr_stream_fixtures -- --check`
+  - `cargo test -p iroha_torii --test offline_readiness_smoke -- --nocapture`
+  - `swift test --filter Offline`
+  - `./gradlew :core-jvm:test --tests org.hyperledger.iroha.sdk.offline.OfflineNoteTest --tests org.hyperledger.iroha.sdk.client.OfflineToriiClientReadinessTest --console=plain`
+  - `JAVA_HOME=$(/usr/libexec/java_home -v 21) ANDROID_HOME=$HOME/Library/Android/sdk ANDROID_SDK_ROOT=$HOME/Library/Android/sdk ANDROID_HARNESS_MAINS=org.hyperledger.iroha.android.offline.OfflineQrStreamTest,org.hyperledger.iroha.android.offline.OfflineNoteTest,org.hyperledger.iroha.android.client.OfflineToriiClientTests ./gradlew :core:test --tests org.hyperledger.iroha.android.GradleHarnessTests --console=plain --rerun-tasks`
+  - `cd javascript/iroha_js && node --test test/offlineQrStream.test.js`
+  - `/tmp/iroha-pytest-venv/bin/python -m pytest python/iroha_torii_client/tests/test_client.py -k offline_readiness -q`
+  - `cd ../bpng/png2-android && JAVA_HOME=$(/usr/libexec/java_home -v 21) ANDROID_HOME=$HOME/Library/Android/sdk ANDROID_SDK_ROOT=$HOME/Library/Android/sdk ./gradlew :core:testDebugUnitTest --tests pg.bpng.digitalkina.core.offline.OfflineQrStreamCodecTest --console=plain`
+  - `cd ../bpng/png2-android && JAVA_HOME=$(/usr/libexec/java_home -v 21) ANDROID_HOME=$HOME/Library/Android/sdk ANDROID_SDK_ROOT=$HOME/Library/Android/sdk ./gradlew :app:testDebugUnitTest --tests pg.bpng.digitalkina.nfc.OfflineNfcApduProtocolTest --tests pg.bpng.digitalkina.nearby.OfflineNearbyEnvelopeTest --tests pg.bpng.digitalkina.ui.OfflineQrStreamAnalyzerTest --tests pg.bpng.digitalkina.nfc.OfflineNfcDatastreamInteropTest --console=plain`
+  - `cd ../bpng/png2-ios && xcodebuild test -project RetailWalletIOS.xcodeproj -scheme RetailWalletIOS -destination 'platform=iOS Simulator,name=iPhone 17,OS=26.5' -only-testing:RetailWalletIOSTests/OfflineAPIContractTests -only-testing:RetailWalletIOSTests/NFC/OfflineNfcApduProtocolTests -only-testing:RetailWalletIOSTests/FixtureDecodingTests CODE_SIGNING_ALLOWED=NO`
+  - `cd ../bpng/png2-ios && xcodebuild test -project RetailWalletIOS.xcodeproj -scheme RetailWalletIOS -destination 'platform=iOS Simulator,name=iPhone 17,OS=26.5' -only-testing:RetailWalletIOSTests/OfflineNfcApduProtocolTests CODE_SIGNING_ALLOWED=NO`
+  - `cd ../pk-retail-wallet-android && JAVA_HOME=$(/usr/libexec/java_home -v 21) ./gradlew :core:testDebugUnitTest --tests com.pk.retailwallet.core.offline.OfflineQrStreamCodecTest --tests com.pk.retailwallet.core.api.WalletRepositoryOfflineCapabilityGateTest --console=plain`
+  - `cd ../pk-retail-wallet-android && JAVA_HOME=$(/usr/libexec/java_home -v 21) ./gradlew :app:testDebugUnitTest --tests com.pk.retailwallet.ui.OfflineQrStreamAnalyzerTest --tests com.pk.retailwallet.AppRootOfflineCapabilityGateTest --console=plain`
+  - `cd ../pk-retail-wallet-ios && xcodebuild test -project RetailWalletIOS.xcodeproj -scheme RetailWalletIOS -destination 'platform=iOS Simulator,name=iPhone 17,OS=26.5' -only-testing:RetailWalletIOSTests/OfflineAPIContractTests -only-testing:RetailWalletIOSTests/FixtureDecodingTests -only-testing:RetailWalletIOSTests/OfflineViewModelTests CODE_SIGNING_ALLOWED=NO`
+  - `cd ../pk-retail-wallet-ios && xcodebuild test -project RetailWalletIOS.xcodeproj -scheme RetailWalletIOS -destination 'platform=iOS Simulator,name=iPhone 17,OS=26.5' -only-testing:RetailWalletIOSTests/OfflineAPIContractTests CODE_SIGNING_ALLOWED=NO`
+  - `cd ../pk-deploy && /tmp/pkdeploy-pytest-venv/bin/python -m pytest tests/test_pk_cli.py::MobileConfigVerifyTests::test_mobile_verify_config_accepts_expected_cross_repo_shape tests/test_pk_cli.py::MobileConfigVerifyTests::test_mobile_verify_config_runs_live_runtime_checks_by_default tests/test_pk_cli.py::MobileConfigVerifyTests::test_mobile_verify_config_reports_fixed_signer_reserve_shortfall tests/test_pk_cli.py::SurfaceTests::test_canonical_use_case_scripts_normalize_runtime_fi_ids_before_mobile_runs -q`
+  - `cargo fmt --all --check`
+  - `git diff --check`
+- Broad `pk-deploy` pytest was attempted, but local login-shell RVM setup fails
+  before the deploy code in `bash -lc` tests
+  (`rvm_bash_nounset: unbound variable`), and an all-sibling reporter test also
+  requires an unavailable `../pk-fi-wallet-web/public/config.json`.
+
+## 2026-05-25 FASTPQ recovery inspection and JS Torii helpers
+
+- `fastpq_json` now exposes `inspect-transfers`, which decodes a committed
+  FASTPQ batch and returns transfer transcript rows with account ids, asset
+  definition ids, amounts, normalized scales, and before/after balances.
+- The JavaScript Torii client now exposes
+  `getPipelineRecoveryFastpqProofs()` and
+  `getPipelineRecoveryFastpqProofsTyped()` for
+  `/v1/pipeline/recovery/{height}/fastpq-proofs`, including typed normalization
+  for committed proof snapshots and reconstructed batch metadata.
+- Focused validation passed:
+  - `cargo fmt --all`
+  - `cargo fmt --all --check`
+  - `npm run build:dist`
+  - `cd javascript/iroha_js && npm run lint`
+  - `cd javascript/iroha_js && node --test test/toriiClient.test.js`
+  - `cargo test -p fastpq_prover --bin fastpq_json inspect_transfers -- --nocapture`
+  - `cargo test -p fastpq_prover --bin fastpq_json trimmed_filter -- --nocapture`
+  - `git diff --check -- crates/fastpq_prover/src/bin/fastpq_json.rs javascript/iroha_js/src/toriiClient.js javascript/iroha_js/dist/toriiClient.js javascript/iroha_js/index.d.ts javascript/iroha_js/test/toriiClient.test.js`
+
+## 2026-05-25 cargo test hang audit and timeout guards
+
+- `norito` no longer runs the Python/Java/Kotlin binding sync guard during
+  ordinary Rust builds. The guard is now opt-in via
+  `NORITO_CHECK_BINDINGS_SYNC=1`, while `NORITO_SKIP_BINDINGS_SYNC` still
+  bypasses it explicitly.
+- CLI smoke and Taikai policy tests now run spawned CLI processes with null
+  stdin and bounded waits, and the CLI Torii mock startup path times out instead
+  of blocking forever while reading the mock base URL.
+- ISO 20022 HTTP tests now use bounded accept/read/write waits and fail on EOF
+  while reading request headers instead of looping indefinitely.
+- MCP `tools/list` test helpers now reject repeated pagination cursors and cap
+  pagination depth, preventing infinite loops on server-side cursor regressions.
+- Updated Norito binding regeneration docs to describe the new opt-in sync
+  guard behavior.
+- Focused validation passed:
+  - `cargo fmt --all`
+  - `cargo fmt --all --check`
+  - `cargo test -p iroha_cli --test cli_smoke -- --list`
+  - `cargo check -p norito`
+  - `cargo test -p iroha_cli --test taikai_policy -- --list`
+  - `cargo test -p ivm --lib iso20022::tests::msg_send_http_without_override_sends_payload -- --exact --nocapture`
+  - `cargo test -p ivm --test iso20022_http msg_send_http_posts_payload_integration -- --exact --nocapture`
+  - `cargo test -p iroha_torii --test mcp_endpoints -- --list`
+- Full `cargo test` was not run because this audit specifically targeted the
+  hang sources without invoking the multi-hour workspace run.
+
+## 2026-05-25 transaction status scope and dynamic SNS routing fixes
+
+- JavaScript transaction status polling now preserves the client-configured
+  `transactionStatusScope` unless a helper call explicitly overrides it.
+- Rust transaction wait polling now uses local status scope when callers wait
+  for non-terminal cache statuses such as queued, approved, or committed.
+- `SetContractAlias::clear` can remove stale dynamic-dataspace alias bindings
+  after the contract is no longer deployed.
+- Dynamic SNS dataspace routing through world-aware policy evaluation now uses
+  the block or transaction ledger time, and no longer treats dynamic leases as
+  active when no ledger time is available.
+- Added negative and adversarial coverage for null and explicit status-scope
+  overrides, mixed terminal wait targets, stale or unknown dynamic alias clears,
+  and dynamic SNS routing with and without ledger time.
+- Focused and broader validation passed:
+  - `cargo fmt --all`
+  - `cargo fmt --all --check`
+  - `npm run build:dist`
+  - `npm run lint`
+  - `cd javascript/iroha_js && node --test test/toriiClient.test.js test/transaction.test.js test/privateKaigiTransaction.test.js`
+  - `cargo check -p iroha_core --lib`
+  - `cargo check -p iroha --lib`
+  - `cargo test -p iroha wait_for_transaction_terminal_status --lib`
+  - `cargo test -p iroha --lib`
+  - `cargo test -p iroha_core set_contract_alias --lib`
+  - `cargo test -p iroha_core dataspace_alias_target --lib`
+  - `cargo test -p iroha_core evaluate_policy_with_catalog_and_world --lib`
+  - `cargo test -p iroha_core evaluate_policy_with_catalog_and_world_at_respects_dynamic_sns_ledger_time --lib`
+  - `cargo test -p iroha_core evaluate_policy_plan_with_catalog_and_world_at_respects_dynamic_sns_ledger_time --lib`
+  - `cargo test -p iroha_core queue::router --lib`
+  - `cargo test -p iroha_core --lib`
+  - `git diff --check`
+- Broader JavaScript dist validation attempted with `npm run test:dist`; it
+  still fails in unrelated `test/sorafsReplicationOrder.test.js` lane fixture
+  precondition (`16 !== 1`) before exercising the decoder.
+
+## 2026-05-24 hard-fork bootstrap validation follow-up
+
+- Kura hard-fork snapshot bootstrap now trusts only the configured legacy
+  prefix and validates post-fork block bodies during init, preserving tail
+  pruning for corrupt post-fork storage.
+- SoraFS bootstrap compatibility now uses presence-based flag semantics and
+  reports enabled status from actual backend availability.
+- The Minamoto history extractor now reads evicted block payloads from Kura DA
+  sidecars and omits non-universal dataspace transaction rows from public JSONL
+  output.
+- Public fixture labels were neutralized where they exposed private
+  institution or currency context.
+- Focused validation passed:
+  - `cargo fmt --all`
+  - `cargo test -p iroha_core hard_fork_init_ --lib -- --nocapture`
+  - `cargo test -p iroha_core --example minamoto_tx_history_extract -- --nocapture`
+  - `cargo test -p iroha_core opaque_offline_note_issue_defers_to_state_for_asset_definition_dataspace --lib -- --nocapture`
+  - `cargo test -p iroha_core set_asset_definition_balance_policy_migrates_global_balances_to_dataspace --lib -- --nocapture`
+  - `cargo test -p sorafs_node hard_fork_bootstrap_flag_is_presence_based --lib -- --nocapture`
+  - `cargo test -p sorafs_node node_handle_is_disabled_when_backend_is_unavailable --lib -- --nocapture`
+  - `cargo test -p sorafs_node node_handle_reflects_config --lib -- --nocapture`
+  - `git diff --check`
 ## 2026-05-24 peer frame recovery and availability fairness
 
 - Preserved already decoded inner peer messages when a later inner frame in
@@ -37095,16 +39128,16 @@ Last updated: 2026-05-31
   - `cargo test -p iroha_cli --bin iroha soracloud -- --nocapture`
   - `node --test javascript/iroha_js/test/soracloud.test.js javascript/iroha_js/test/toriiClient.test.js`
 
-## 2026-05-21 Swift Offline V2 transport validation hardening
+## 2026-05-21 Swift Offline transport validation hardening
 
-- Swift Offline Note V2 compact certificate conversion now rejects missing,
+- Swift Offline Note compact certificate conversion now rejects missing,
   malformed, and non-64-byte `issuer_signature_base64` values instead of
   fabricating a zero signature.
 - Text Nearby envelopes now validate decoded receive-request, payment-token,
   and receipt-ACK contents through the existing native and compatibility
   decoders before accepting the envelope.
 - Focused validation passed:
-  - `swift test --filter OfflineNoteV2Tests` from `IrohaSwift`
+  - `swift test --filter OfflineNoteTests` from `IrohaSwift`
   - `swift test --filter OfflineQrStreamTests` from `IrohaSwift`
 - Broader `swift test` from `IrohaSwift` was attempted and remains blocked by
   unrelated existing fixture/native-bridge parity failures in
@@ -39170,9 +41203,9 @@ Last updated: 2026-05-31
 - CAR range responses now stream chunk files through `CarStreamingWriter`
   instead of buffering the full range response in memory.
 
-## 2026-05-17 Offline Note V2 local-final SDK semantics
+## 2026-05-17 Offline Note local-final SDK semantics
 
-- Swift, Kotlin/JVM, and Java Android Offline Note V2 wallets now treat
+- Swift, Kotlin/JVM, and Java Android Offline Note wallets now treat
   offline-to-offline `pay`/`accept` as the immediate, irrevocable value
   transfer. Sender inputs become `SPENT`, sender change is immediately
   `SPENDABLE`, and the recipient's matched receive-pending note becomes
@@ -39222,7 +41255,7 @@ Last updated: 2026-05-31
   token-id substitution, and stale recursive-proof public-input bindings.
   Receive-request tampering coverage now includes asset-owner substitution and
   amount substitution before the payer creates an otherwise coherent token.
-  The shared Offline V2 fixture now also carries a canonical SDK interop payment
+  The shared Offline fixture now also carries a canonical SDK interop payment
   token handoff, and Swift, Kotlin/JVM, and Java Android assert identical Norito
   bytes, text payloads, QR frames, and local recipient acceptance from that
   artifact. Swift asset-definition address decoding now has a bridge-free
@@ -39230,8 +41263,8 @@ Last updated: 2026-05-31
   address semantics when the native bridge is unavailable on SwiftPM or iOS
   simulator test hosts.
 - Swift, Kotlin/JVM, and Java Android now expose an app-facing
-  `OfflineNoteV2TransferHandoff` layer for QR streaming, NFC, and nearby
-  payment-token transfer modalities. QR uses the canonical `iroha:qr1:`
+  `OfflineNoteTransferHandoff` layer for QR streaming, NFC, and nearby
+  payment-token transfer modalities. QR uses the canonical `iroha:qr:`
   streaming frames, NFC includes a png2-style APDU datastream
   (`select`/`get_info`/`read_chunk`/`write_meta`/`write_chunk`/`commit`) with a
   64 KiB advertised-payload cap, SHA-256 metadata, Android-safe 240-byte default
@@ -39265,38 +41298,38 @@ Last updated: 2026-05-31
   - `cargo fmt --all`
   - `swift test --filter OfflineQrStreamTests` from `IrohaSwift` (`8` tests)
   - `swift test --filter OfflineQrStreamTests/testQrStreamRejectsAdversarialEnvelopeAndChunkShapes` from `IrohaSwift`
-  - `swift test --filter OfflineNoteV2Tests` from `IrohaSwift` (`53` tests)
-  - `swift test --filter OfflineNoteV2Tests/testOfflineNoteV2TransferHandoffRejectsAdversarialStreamsAndMetadata` from `IrohaSwift`
-  - `swift test --filter OfflineNoteV2Tests/testOfflineNoteV2NfcApduProtocolSupportsAndroidSafeAndIOSFastChunks --filter OfflineNoteV2Tests/testOfflineNoteV2NearbyEnvelopeRoundTripsPairingPaymentAndAck` from `IrohaSwift`
-  - `swift test --filter OfflineNoteV2Tests/testOfflineNoteV2TransportWireFormatMatchesSharedFixture --filter OfflineNoteV2Tests/testOfflineNoteV2NearbyEnvelopeRejectsAdversarialMessages` from `IrohaSwift`
-  - `swift test --filter OfflineNoteV2Tests/testOfflineNoteV2NfcApduProtocolRejectsMalformedCommandsAndBounds --filter OfflineNoteV2Tests/testOfflineNoteV2NearbyEnvelopeRejectsAdversarialMessages` from `IrohaSwift`
-  - `swift test --filter OfflineNoteV2Tests/testOfflineNoteV2TransferHandoffSupportsQrNfcAndNearbyPayloads` from `IrohaSwift`
+  - `swift test --filter OfflineNoteTests` from `IrohaSwift` (`53` tests)
+  - `swift test --filter OfflineNoteTests/testOfflineNoteTransferHandoffRejectsAdversarialStreamsAndMetadata` from `IrohaSwift`
+  - `swift test --filter OfflineNoteTests/testOfflineNoteNfcApduProtocolSupportsAndroidSafeAndIOSFastChunks --filter OfflineNoteTests/testOfflineNoteNearbyEnvelopeRoundTripsPairingPaymentAndAck` from `IrohaSwift`
+  - `swift test --filter OfflineNoteTests/testOfflineNoteTransportWireFormatMatchesSharedFixture --filter OfflineNoteTests/testOfflineNoteNearbyEnvelopeRejectsAdversarialMessages` from `IrohaSwift`
+  - `swift test --filter OfflineNoteTests/testOfflineNoteNfcApduProtocolRejectsMalformedCommandsAndBounds --filter OfflineNoteTests/testOfflineNoteNearbyEnvelopeRejectsAdversarialMessages` from `IrohaSwift`
+  - `swift test --filter OfflineNoteTests/testOfflineNoteTransferHandoffSupportsQrNfcAndNearbyPayloads` from `IrohaSwift`
   - `swift test --filter ToriiClientTests/testCanonical` from `IrohaSwift`
-  - `xcodebuild test -scheme IrohaSwift -destination 'id=7A8B8CC0-617D-49EA-BA33-3976C3E15517' -only-testing:IrohaSwiftTests/OfflineQrStreamTests -only-testing:IrohaSwiftTests/OfflineNoteV2Tests` from `IrohaSwift` on the iPhone 17 iOS 26.4 simulator (`61` tests)
-  - `xcodebuild test -scheme IrohaSwift -destination 'id=7A8B8CC0-617D-49EA-BA33-3976C3E15517' -only-testing:IrohaSwiftTests/OfflineNoteV2Tests` from `IrohaSwift` on the booted iPhone 17 iOS 26.5 simulator (`53` tests)
-  - `JAVA_HOME=/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home PATH=/opt/homebrew/opt/openjdk@21/bin:$PATH ./gradlew :core-jvm:test --tests org.hyperledger.iroha.sdk.offline.OfflineNoteV2Test --console=plain --rerun-tasks` from `kotlin`
-  - `JAVA_HOME=/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home PATH=/opt/homebrew/opt/openjdk@21/bin:$PATH ./gradlew :core-jvm:test --tests org.hyperledger.iroha.sdk.offline.OfflineNoteV2Test.qrStreamRejectsAdversarialEnvelopesAndChunkShapes --console=plain --rerun-tasks` from `kotlin`
-  - `JAVA_HOME=/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home PATH=/opt/homebrew/opt/openjdk@21/bin:$PATH ./gradlew :core-jvm:test --tests org.hyperledger.iroha.sdk.offline.OfflineNoteV2Test.transferHandoffRejectsAdversarialStreamsAndMetadata --console=plain --rerun-tasks` from `kotlin`
-  - `JAVA_HOME=/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home PATH=/opt/homebrew/opt/openjdk@21/bin:$PATH ./gradlew :core-jvm:test --tests org.hyperledger.iroha.sdk.offline.OfflineNoteV2Test.nfcApduProtocolRejectsMalformedCommandsAndBounds --tests org.hyperledger.iroha.sdk.offline.OfflineNoteV2Test.nearbyEnvelopeRejectsAdversarialMessages --console=plain --rerun-tasks` from `kotlin`
+  - `xcodebuild test -scheme IrohaSwift -destination 'id=7A8B8CC0-617D-49EA-BA33-3976C3E15517' -only-testing:IrohaSwiftTests/OfflineQrStreamTests -only-testing:IrohaSwiftTests/OfflineNoteTests` from `IrohaSwift` on the iPhone 17 iOS 26.4 simulator (`61` tests)
+  - `xcodebuild test -scheme IrohaSwift -destination 'id=7A8B8CC0-617D-49EA-BA33-3976C3E15517' -only-testing:IrohaSwiftTests/OfflineNoteTests` from `IrohaSwift` on the booted iPhone 17 iOS 26.5 simulator (`53` tests)
+  - `JAVA_HOME=/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home PATH=/opt/homebrew/opt/openjdk@21/bin:$PATH ./gradlew :core-jvm:test --tests org.hyperledger.iroha.sdk.offline.OfflineNoteTest --console=plain --rerun-tasks` from `kotlin`
+  - `JAVA_HOME=/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home PATH=/opt/homebrew/opt/openjdk@21/bin:$PATH ./gradlew :core-jvm:test --tests org.hyperledger.iroha.sdk.offline.OfflineNoteTest.qrStreamRejectsAdversarialEnvelopesAndChunkShapes --console=plain --rerun-tasks` from `kotlin`
+  - `JAVA_HOME=/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home PATH=/opt/homebrew/opt/openjdk@21/bin:$PATH ./gradlew :core-jvm:test --tests org.hyperledger.iroha.sdk.offline.OfflineNoteTest.transferHandoffRejectsAdversarialStreamsAndMetadata --console=plain --rerun-tasks` from `kotlin`
+  - `JAVA_HOME=/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home PATH=/opt/homebrew/opt/openjdk@21/bin:$PATH ./gradlew :core-jvm:test --tests org.hyperledger.iroha.sdk.offline.OfflineNoteTest.nfcApduProtocolRejectsMalformedCommandsAndBounds --tests org.hyperledger.iroha.sdk.offline.OfflineNoteTest.nearbyEnvelopeRejectsAdversarialMessages --console=plain --rerun-tasks` from `kotlin`
   - `JAVA_HOME=/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home PATH=/opt/homebrew/opt/openjdk@21/bin:$PATH ANDROID_HOME=$HOME/Library/Android/sdk ANDROID_SDK_ROOT=$HOME/Library/Android/sdk ./gradlew :offline-wallet-android:compileDebugAndroidTestJavaWithJavac :offline-wallet-android:compileReleaseKotlin --console=plain` from `kotlin`
   - `JAVA_HOME=/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home PATH=/opt/homebrew/opt/openjdk@21/bin:$PATH ANDROID_HOME=$HOME/Library/Android/sdk ANDROID_SDK_ROOT=$HOME/Library/Android/sdk ./gradlew :client-android:assembleRelease :offline-wallet-android:assembleRelease --quiet` from `kotlin`
   - Installed Android emulator tooling and an API 35 Google APIs ARM64 system
     image with `sdkmanager`, created the `iroha_offline_api35` AVD, and booted
     it headless for connected tests.
   - `JAVA_HOME=/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home ANDROID_SERIAL=emulator-5554 ANDROID_HOME=/opt/homebrew/share/android-commandlinetools ANDROID_SDK_ROOT=/opt/homebrew/share/android-commandlinetools PATH=/opt/homebrew/opt/openjdk@21/bin:/opt/homebrew/share/android-commandlinetools/platform-tools:/opt/homebrew/share/android-commandlinetools/emulator:$PATH ./gradlew :offline-wallet-android:connectedDebugAndroidTest --console=plain` from `kotlin`
-  - `JAVA_HOME=/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home PATH=/opt/homebrew/opt/openjdk@21/bin:$PATH ANDROID_HOME=$HOME/Library/Android/sdk ANDROID_SDK_ROOT=$HOME/Library/Android/sdk ANDROID_HARNESS_MAINS=org.hyperledger.iroha.android.offline.OfflineNoteV2Test ./gradlew :core:test --tests org.hyperledger.iroha.android.GradleHarnessTests --console=plain --rerun-tasks` from `java/iroha_android`
+  - `JAVA_HOME=/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home PATH=/opt/homebrew/opt/openjdk@21/bin:$PATH ANDROID_HOME=$HOME/Library/Android/sdk ANDROID_SDK_ROOT=$HOME/Library/Android/sdk ANDROID_HARNESS_MAINS=org.hyperledger.iroha.android.offline.OfflineNoteTest ./gradlew :core:test --tests org.hyperledger.iroha.android.GradleHarnessTests --console=plain --rerun-tasks` from `java/iroha_android`
   - `JAVA_HOME=/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home PATH=/opt/homebrew/opt/openjdk@21/bin:$PATH ANDROID_HOME=$HOME/Library/Android/sdk ANDROID_SDK_ROOT=$HOME/Library/Android/sdk ./gradlew :android:compileDebugAndroidTestJavaWithJavac :android:compileDebugJavaWithJavac --console=plain` from `java/iroha_android`
   - `JAVA_HOME=/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home PATH=/opt/homebrew/opt/openjdk@21/bin:$PATH ANDROID_HOME=$HOME/Library/Android/sdk ANDROID_SDK_ROOT=$HOME/Library/Android/sdk ./gradlew :android:compileDebugJavaWithJavac --console=plain --rerun-tasks` from `java/iroha_android`
   - `JAVA_HOME=/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home PATH=/opt/homebrew/opt/openjdk@21/bin:$PATH ANDROID_HOME=$HOME/Library/Android/sdk ANDROID_SDK_ROOT=$HOME/Library/Android/sdk ./gradlew :android:assembleDebug --console=plain --quiet` from `java/iroha_android`
   - `JAVA_HOME=/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home ANDROID_SERIAL=emulator-5554 ANDROID_HOME=/opt/homebrew/share/android-commandlinetools ANDROID_SDK_ROOT=/opt/homebrew/share/android-commandlinetools PATH=/opt/homebrew/opt/openjdk@21/bin:/opt/homebrew/share/android-commandlinetools/platform-tools:/opt/homebrew/share/android-commandlinetools/emulator:$PATH ./gradlew :android:connectedDebugAndroidTest --console=plain` from `java/iroha_android`
-  - `cargo test -p iroha_data_model --features test-fixtures,transparent_api --bin offline_v2_vectors -- --nocapture`
-  - `cargo run -p iroha_data_model --features test-fixtures,transparent_api --bin offline_v2_vectors -- --check`
-  - `CARGO_TARGET_DIR=/tmp/iroha-codex-offline-v2-fixtures cargo run -p iroha_data_model --features test-fixtures,transparent_api --bin offline_v2_vectors -- --check`
-  - `CARGO_TARGET_DIR=/tmp/iroha-codex-offline-v2-fixtures cargo run -p iroha_data_model --features test-fixtures --bin qr_stream_fixtures -- --check`
-  - `CARGO_TARGET_DIR=/tmp/iroha-codex-offline-v2-fixtures cargo test -p iroha_data_model --features test-fixtures,transparent_api offline_note_v2_wallet_derivations -- --nocapture`
+  - `cargo test -p iroha_data_model --features test-fixtures,transparent_api --bin offline_vectors -- --nocapture`
+  - `cargo run -p iroha_data_model --features test-fixtures,transparent_api --bin offline_vectors -- --check`
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-offline-fixtures cargo run -p iroha_data_model --features test-fixtures,transparent_api --bin offline_vectors -- --check`
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-offline-fixtures cargo run -p iroha_data_model --features test-fixtures --bin qr_stream_fixtures -- --check`
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-offline-fixtures cargo test -p iroha_data_model --features test-fixtures,transparent_api offline_note_wallet_derivations -- --nocapture`
   - `git diff --check`
   - `git diff --check`
-- Device validation now includes Swift Offline Note V2 tests on an iOS
+- Device validation now includes Swift Offline Note tests on an iOS
   simulator plus Kotlin and Java Android Keystore rollback drills on a real
   booted emulator. The Android tests restore a stale preferences snapshot after
   a committed revision and verify that the deleted revision key makes the old
@@ -40785,37 +42818,37 @@ Last updated: 2026-05-31
   - `cargo fmt --all --check`
   - `git diff --check`
 
-## 2026-05-09 Offline Note V2 explorer outcome sync adapters
+## 2026-05-09 Offline Note explorer outcome sync adapters
 
-- Kotlin/JVM, Java Android, and Swift now decode Offline Note V2 explorer
+- Kotlin/JVM, Java Android, and Swift now decode Offline Note explorer
   instruction envelopes for issue, audit, and redeem payloads. The public SDK
   decoders accept both framed instruction payloads and the raw instruction
   pair shape returned by explorer rows.
-- The SDKs now expose an `OfflineNoteV2OutcomeIndex` plus resolver/provider
+- The SDKs now expose an `OfflineNoteOutcomeIndex` plus resolver/provider
   adapters that turn committed or rejected audit/redeem explorer outcomes into
   wallet sync resolutions. Committed audits spend input nullifiers and release
   outputs, rejected audits restore inputs and cancel outputs, committed
   redeems mark notes redeemed, and rejected redeems return notes to spendable.
-- Production Torii providers fetch `AuditOfflineNoteV2` and
-  `RedeemOfflineNoteV2` rows from `/v1/explorer/instructions`, extract
+- Production Torii providers fetch `AuditOfflineNote` and
+  `RedeemOfflineNote` rows from `/v1/explorer/instructions`, extract
   `r#box.encoded` instruction bytes, and feed the resolver-backed
-  `OfflineNoteV2Wallet.sync()` path.
+  `OfflineNoteWallet.sync()` path.
 - Cross-SDK fixture tests cover explorer instruction decoding and committed /
   rejected outcome reconciliation for pending spend, change, receive, and
   redeem wallet notes.
 - Validation:
-  - `JAVA_HOME=/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home PATH=/opt/homebrew/opt/openjdk@21/bin:$PATH ./gradlew :core-jvm:test --tests org.hyperledger.iroha.sdk.offline.OfflineNoteV2Test --console=plain --rerun-tasks` from `kotlin`
+  - `JAVA_HOME=/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home PATH=/opt/homebrew/opt/openjdk@21/bin:$PATH ./gradlew :core-jvm:test --tests org.hyperledger.iroha.sdk.offline.OfflineNoteTest --console=plain --rerun-tasks` from `kotlin`
   - `JAVA_HOME=/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home PATH=/opt/homebrew/opt/openjdk@21/bin:$PATH ANDROID_HOME=$HOME/Library/Android/sdk ANDROID_SDK_ROOT=$HOME/Library/Android/sdk ./gradlew :core:test --tests org.hyperledger.iroha.android.GradleHarnessTests --console=plain --rerun-tasks` from `java/iroha_android`
   - `JAVA_HOME=/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home PATH=/opt/homebrew/opt/openjdk@21/bin:$PATH ANDROID_HOME=$HOME/Library/Android/sdk ANDROID_SDK_ROOT=$HOME/Library/Android/sdk ./gradlew :android:compileDebugJavaWithJavac --console=plain --rerun-tasks` from `java/iroha_android`
-  - `swift test --filter OfflineNoteV2Tests` from `IrohaSwift`
+  - `swift test --filter OfflineNoteTests` from `IrohaSwift`
   - `swift test` from `IrohaSwift`
 
-## 2026-05-09 Offline Note V2 Swift Keychain wallet-note store
+## 2026-05-09 Offline Note Swift Keychain wallet-note store
 
-- Swift now has a public `OfflineNoteV2WalletNoteJsonCodec` matching the
+- Swift now has a public `OfflineNoteWalletNoteJsonCodec` matching the
   Android persisted wallet-note shape, including Norito key certificates,
   commitment origins, canonical amounts, state, and timestamps.
-- `OfflineNoteV2KeychainStore` implements `OfflineNoteV2Store` with a
+- `OfflineNoteKeychainStore` implements `OfflineNoteStore` with a
   Keychain-backed encrypted collection. The store supports app groups,
   optional user-presence access control, sorted note listing, upsert, delete,
   and clear operations.
@@ -40823,17 +42856,17 @@ Last updated: 2026-05-31
   failures propagate through wallet load/pay/accept/redeem/sync flows instead
   of being hidden behind a non-throwing store API.
 - Validation:
-  - `swift test --filter OfflineNoteV2Tests` from `IrohaSwift`
+  - `swift test --filter OfflineNoteTests` from `IrohaSwift`
   - `swift test` from `IrohaSwift`
 
-## 2026-05-09 Offline Note V2 Android secure wallet-note store
+## 2026-05-09 Offline Note Android secure wallet-note store
 
-- Java Android now has a structured `OfflineNoteV2WalletNoteJsonCodec` for
+- Java Android now has a structured `OfflineNoteWalletNoteJsonCodec` for
   persisted wallet notes. The codec preserves the note chain/account/asset,
   canonical amount, Norito key certificate, commitment, note secret, origin,
   state, and timestamps so platform stores do not invent an ad hoc shape.
-- The Android platform module now exposes `AndroidOfflineNoteV2SecureStore`,
-  an `OfflineNoteV2Store` implementation that encrypts wallet-note JSON with
+- The Android platform module now exposes `AndroidOfflineNoteSecureStore`,
+  an `OfflineNoteStore` implementation that encrypts wallet-note JSON with
   Android Keystore AES-GCM and stores the encrypted envelopes plus commitment
   index in private `SharedPreferences`.
 - Validation:
@@ -40878,26 +42911,26 @@ Last updated: 2026-05-31
   - `cargo fmt --all --check`
   - `git diff --check`
 
-## 2026-05-09 Offline Note V2 payment-token QR/JSON codec
+## 2026-05-09 Offline Note payment-token QR/JSON codec
 
 - Kotlin/JVM, Java Android, and Swift now expose payment-token handoff codecs
-  for Offline Note V2 wallet QR flows. The compact JSON payload carries the
+  for Offline Note wallet QR flows. The compact JSON payload carries the
   v2 type/version, invoice/payment-request id, token id, creation timestamp,
   and the canonical Norito audit bundle as `audit_norito_base64`.
 - The codecs roundtrip through the public Norito audit decoder, reject token
   ids that do not match the embedded audit bundle, support the
-  `wallet-offline-payment-v2:` text prefix, and produce Fountain QR frames
-  tagged as `OFFLINE_PAYMENT_TOKEN_V2`.
+  `wallet-offline-bearer-cash-payment:` text prefix, and produce Fountain QR frames
+  tagged as `offline_payment_token`.
 - Cross-SDK tests now cover JSON bytes, prefixed text, and QR frame
-  encode/decode roundtrips for the shared Offline Note V2 fixture token.
+  encode/decode roundtrips for the shared Offline Note fixture token.
 - Validation:
-  - `JAVA_HOME=/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home PATH=/opt/homebrew/opt/openjdk@21/bin:$PATH ./gradlew :core-jvm:test --tests org.hyperledger.iroha.sdk.offline.OfflineNoteV2Test --console=plain --rerun-tasks` from `kotlin`
+  - `JAVA_HOME=/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home PATH=/opt/homebrew/opt/openjdk@21/bin:$PATH ./gradlew :core-jvm:test --tests org.hyperledger.iroha.sdk.offline.OfflineNoteTest --console=plain --rerun-tasks` from `kotlin`
   - `JAVA_HOME=/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home PATH=/opt/homebrew/opt/openjdk@21/bin:$PATH ANDROID_HOME=$HOME/Library/Android/sdk ANDROID_SDK_ROOT=$HOME/Library/Android/sdk ./gradlew :core:test --tests org.hyperledger.iroha.android.GradleHarnessTests --console=plain --rerun-tasks` from `java/iroha_android`
   - `swift test` from `IrohaSwift`
 
-## 2026-05-09 Offline Note V2 public SDK Norito decoders
+## 2026-05-09 Offline Note public SDK Norito decoders
 
-- Kotlin/JVM, Java Android, and Swift now expose public Offline Note V2 Norito
+- Kotlin/JVM, Java Android, and Swift now expose public Offline Note Norito
   decoders for key certificate payloads/certificates, issue payloads, issued
   claims, redeem payloads/public inputs, audit bundles/public inputs, and the
   wallet-derived commitment/nullifier/payment-token-id preimages.
@@ -40906,10 +42939,10 @@ Last updated: 2026-05-31
   proof boxes, commitment origins, numeric amounts, hash vectors, and optional
   certificate usage limits. Swift also handles bridge-unavailable asset address
   roundtrips in tests with a checked fallback literal.
-- Cross-SDK fixture tests roundtrip the shared Offline Note V2 vectors through
+- Cross-SDK fixture tests roundtrip the shared Offline Note vectors through
   the new public decoders and re-encode them back to the canonical bytes.
 - Validation:
-  - `JAVA_HOME=/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home PATH=/opt/homebrew/opt/openjdk@21/bin:$PATH ./gradlew :core-jvm:test --tests org.hyperledger.iroha.sdk.offline.OfflineNoteV2Test --console=plain --rerun-tasks` from `kotlin`
+  - `JAVA_HOME=/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home PATH=/opt/homebrew/opt/openjdk@21/bin:$PATH ./gradlew :core-jvm:test --tests org.hyperledger.iroha.sdk.offline.OfflineNoteTest --console=plain --rerun-tasks` from `kotlin`
   - `JAVA_HOME=/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home PATH=/opt/homebrew/opt/openjdk@21/bin:$PATH ANDROID_HOME=$HOME/Library/Android/sdk ANDROID_SDK_ROOT=$HOME/Library/Android/sdk ./gradlew :core:test --tests org.hyperledger.iroha.android.GradleHarnessTests --console=plain --rerun-tasks` from `java/iroha_android`
   - `swift test` from `IrohaSwift`
 
@@ -40989,12 +43022,12 @@ Last updated: 2026-05-31
   - `CARGO_TARGET_DIR=/tmp/iroha-codex-client-confirmation cargo test -p iroha_torii --test norito_ingress norito_transaction_rejects_invalid_signature_without_decode_panic -- --nocapture`
   - `CARGO_TARGET_DIR=/tmp/iroha-codex-client-confirmation cargo test -p iroha_torii --test norito_ingress -- --nocapture`
 
-## 2026-05-09 Offline V2 issuer OpenAPI body auth
+## 2026-05-09 Offline issuer OpenAPI body auth
 
-- Torii OpenAPI now documents all Offline V2 issuer POST endpoints:
-  `/v1/offline/v2/keys/refill`, `/v1/offline/v2/notes/issue`,
-  `/v1/offline/v2/notes/redeem`, and `/v1/offline/v2/audit`.
-- The shared `OfflineV2IssuerBodyAuthRequest` schema records the required
+- Torii OpenAPI now documents all Offline issuer POST endpoints:
+  `/v1/offline/keys/refill`, `/v1/offline/notes/issue`,
+  `/v1/offline/notes/redeem`, and `/v1/offline/audit`.
+- The shared `OfflineIssuerBodyAuthRequest` schema records the required
   top-level `account_id`, `timestamp_ms`, and `nonce` fields plus exactly one
   proof field, `signature_base64` or `witness_base64`, and calls out that
   nested fields with those names remain signed business data. The OpenAPI info
@@ -41002,16 +43035,16 @@ Last updated: 2026-05-31
   `X-Iroha-*` app-auth headers.
 - Focused cleanup also removed current strict-clippy blockers in the Sumeragi
   vNext validation diff and FASTPQ Poseidon helper visibility without changing
-  the public Offline V2 behavior.
+  the public Offline behavior.
 - Validation:
   - `CARGO_TARGET_DIR=/tmp/iroha-codex-torii-openapi cargo test -p iroha_torii --lib generated_spec_includes_documented_paths -- --nocapture`
-  - `CARGO_TARGET_DIR=/tmp/iroha-codex-torii-openapi cargo test -p iroha_torii --lib generated_spec_documents_offline_v2_body_auth_schema -- --nocapture`
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-torii-openapi cargo test -p iroha_torii --lib generated_spec_documents_offline_body_auth_schema -- --nocapture`
   - `cargo fmt --all --check`
   - `git diff --check`
 
-## 2026-05-09 Offline Note V2 wallet regression hardening
+## 2026-05-09 Offline Note wallet regression hardening
 
-- Kotlin/JVM, Java Android, and Swift Offline Note V2 wallet tests now cover
+- Kotlin/JVM, Java Android, and Swift Offline Note wallet tests now cover
   duplicate P2P payment-token acceptance, already-pending input rejection, and
   failed audit/redeem submission reconciliation through the resolver-backed
   `sync()` path.
@@ -41024,9 +43057,9 @@ Last updated: 2026-05-31
   the later 2026-05-09 explorer outcome sync adapters close that gap by
   deriving wallet note resolutions from explorer instruction payloads.
 - Validation:
-  - `JAVA_HOME=/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home PATH=/opt/homebrew/opt/openjdk@21/bin:$PATH ./gradlew :core-jvm:test --tests org.hyperledger.iroha.sdk.offline.OfflineNoteV2Test --console=plain --rerun-tasks` from `kotlin`
+  - `JAVA_HOME=/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home PATH=/opt/homebrew/opt/openjdk@21/bin:$PATH ./gradlew :core-jvm:test --tests org.hyperledger.iroha.sdk.offline.OfflineNoteTest --console=plain --rerun-tasks` from `kotlin`
   - `JAVA_HOME=/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home PATH=/opt/homebrew/opt/openjdk@21/bin:$PATH ANDROID_HOME=$HOME/Library/Android/sdk ANDROID_SDK_ROOT=$HOME/Library/Android/sdk ./gradlew :core:test --tests org.hyperledger.iroha.android.GradleHarnessTests --console=plain --rerun-tasks` from `java/iroha_android`
-  - `swift test --filter OfflineNoteV2Tests` from `IrohaSwift`
+  - `swift test --filter OfflineNoteTests` from `IrohaSwift`
 
 ## 2026-05-09 Iroha config minimal snapshot refresh
 
@@ -41460,9 +43493,9 @@ Last updated: 2026-05-31
   - `CARGO_TARGET_DIR=/tmp/iroha-codex-fastpq-poseidon-fix cargo check -p irohad --features fastpq-gpu`
   - `git diff --check`
 
-## 2026-05-08 Offline Note V2 wallet sync resolver
+## 2026-05-08 Offline Note wallet sync resolver
 
-- Kotlin/JVM, Java Android, and Swift `OfflineNoteV2Wallet.sync()` now reconcile
+- Kotlin/JVM, Java Android, and Swift `OfflineNoteWallet.sync()` now reconcile
   pending wallet notes through an injected transaction-outcome resolver instead
   of returning the store snapshot unchanged. The resolver can finalize
   `SPEND_PENDING` notes as `SPENT`, promote accepted `CHANGE_PENDING` outputs
@@ -41473,9 +43506,9 @@ Last updated: 2026-05-31
   regressions that drive P2P pay, sync spent/change state, redeem the synced
   change note, and sync redemption finality.
 - Validation:
-  - `JAVA_HOME=/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home PATH=/opt/homebrew/opt/openjdk@21/bin:$PATH ./gradlew :core-jvm:test --tests org.hyperledger.iroha.sdk.offline.OfflineNoteV2Test --console=plain --rerun-tasks` from `kotlin`
+  - `JAVA_HOME=/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home PATH=/opt/homebrew/opt/openjdk@21/bin:$PATH ./gradlew :core-jvm:test --tests org.hyperledger.iroha.sdk.offline.OfflineNoteTest --console=plain --rerun-tasks` from `kotlin`
   - `JAVA_HOME=/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home PATH=/opt/homebrew/opt/openjdk@21/bin:$PATH ANDROID_HOME=$HOME/Library/Android/sdk ANDROID_SDK_ROOT=$HOME/Library/Android/sdk ./gradlew :core:test --tests org.hyperledger.iroha.android.GradleHarnessTests --console=plain --rerun-tasks` from `java/iroha_android`
-  - `swift test --filter OfflineNoteV2Tests` from `IrohaSwift`
+  - `swift test --filter OfflineNoteTests` from `IrohaSwift`
   - `git diff --check`
 
 ## 2026-05-08 Sumeragi idle RBC tick throttling
@@ -42180,7 +44213,7 @@ Last updated: 2026-05-31
 - Domain-endorsement committee/policy/submission instructions now use narrow
   ordinary-AoS slice decoders while preserving the `nexus::...` registry lookup
   strings.
-- Verifying-key register/update instructions and Offline V2 issue/redeem/audit
+- Verifying-key register/update instructions and Offline issue/redeem/audit
   instructions now use narrow ordinary-AoS slice decoders on their type-name
   wire IDs.
 - Verified Nexus lane-relay and public fee-budget registration instructions now
@@ -42255,7 +44288,7 @@ Last updated: 2026-05-31
   alias binding/lease dispatch, contract-alias dispatch, and account-recovery
   dispatch, plus RAM-LFE, identifier, consensus-key, domain-endorsement,
   verified Nexus relay/budget/emergency-validator override, RWA/repo/
-  settlement stable boxes, asset escrow, verifying-key, Offline V2, Musubi, and
+  settlement stable boxes, asset escrow, verifying-key, Offline, Musubi, and
   smart-contract-code, Space Directory, SoraFS, oracle, bridge/SCCP, ministry,
   social, registered public-lane staking, invalid-instruction, SoraNet VPN
   lease, ZK, Kaigi, governance, and Soracloud dispatch. No default registry
@@ -42309,7 +44342,7 @@ Last updated: 2026-05-31
   - `CARGO_TARGET_DIR=/tmp/iroha-codex-asset-control-slice cargo test -p iroha_data_model consensus_key -- --nocapture`
   - `CARGO_TARGET_DIR=/tmp/iroha-codex-asset-control-slice cargo test -p iroha_data_model endorsement -- --nocapture`
   - `CARGO_TARGET_DIR=/tmp/iroha-codex-asset-control-slice cargo test -p iroha_data_model verifying_key -- --nocapture`
-  - `CARGO_TARGET_DIR=/tmp/iroha-codex-asset-control-slice cargo test -p iroha_data_model offline_note_v2 -- --nocapture`
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-asset-control-slice cargo test -p iroha_data_model offline_note -- --nocapture`
   - `CARGO_TARGET_DIR=/tmp/iroha-codex-asset-control-slice cargo test -p iroha_data_model register -- --nocapture`
   - `CARGO_TARGET_DIR=/tmp/iroha-codex-asset-control-slice cargo test -p iroha_data_model nexus_verified -- --nocapture`
   - `CARGO_TARGET_DIR=/tmp/iroha-codex-asset-control-slice cargo test -p iroha_data_model nexus -- --nocapture`
@@ -42747,7 +44780,7 @@ Last updated: 2026-05-31
   direct `CanUseFeeSponsor` grant. Existing explicit grants remain supported,
   and configured dataspace sponsors still require `nexus.fees.sponsorship_enabled`.
 
-## 2026-05-06 BPNG fee-sponsor routing drift fix
+## 2026-05-06 Private-dataspace fee-sponsor routing drift fix
 
 - Queue proposal selection and outbound gossip now refresh cached
   lane/dataspace routing from the committed state immediately before exposing a
@@ -42755,9 +44788,10 @@ Last updated: 2026-05-31
   refreshed route, and explicitly reject queued transactions that can no longer
   be routed.
 - State-backed account-permission query routing now uses the same account-scope
-  fallback as block validation, so `CanUseFeeSponsor` grants for BPNG-scoped
-  holders derive the BPNG lane/dataspace consistently while no-state routing
-  still defers when committed state is required.
+  fallback as block validation, so `CanUseFeeSponsor` grants for
+  private-dataspace-scoped holders derive the private lane/dataspace
+  consistently while no-state routing still defers when committed state is
+  required.
 - Focused validation passed with `cargo test -p iroha_core queue::router`,
   `cargo test -p iroha_core queue::`, and
   `cargo test -p iroha_core validate_static_state_dependent`.
@@ -42804,39 +44838,39 @@ Last updated: 2026-05-31
   integration as the final VRF persistence gate. Formatting and whitespace were
   rerun after these edits.
 
-## 2026-05-05 Offline Note V2 wallet-derived commitments
+## 2026-05-05 Offline Note wallet-derived commitments
 
-- Offline Note V2 commitment derivation now starts in the wallet instead of
+- Offline Note commitment derivation now starts in the wallet instead of
   Torii settlement metadata. `iroha_data_model::offline` exposes canonical
   Norito preimages and domain tags for note commitments, input nullifiers, and
   payment token ids, with 32-byte `note_secret` and `token_nonce` material
   enforced by the derivation helpers.
-- Torii `/v1/offline/v2/notes/issue` now requires a wallet-supplied bare
+- Torii `/v1/offline/notes/issue` now requires a wallet-supplied bare
   64-character hex `note_commitment`, issues that exact commitment, and keeps
   `settlement.entry_hash` as lineage/settlement metadata rather than deriving
   the note commitment from it.
-- Kotlin/JVM, Java Android, and Swift Offline Note V2 model helpers now match
+- Kotlin/JVM, Java Android, and Swift Offline Note model helpers now match
   the Rust derivation vectors for source notes, P2P output notes, input
-  nullifiers, payment token ids, and redeem nullifiers. The shared Offline V2
+  nullifiers, payment token ids, and redeem nullifiers. The shared Offline
   fixture was regenerated with the derivation preimages, and transaction
   fixtures were refreshed after aligning SDK account-controller encoding on
   compact public-key payload bytes.
-- Kotlin/JVM, Java Android, and Swift now expose `OfflineNoteV2Wallet` facades
+- Kotlin/JVM, Java Android, and Swift now expose `OfflineNoteWallet` facades
   for `load`, `prepareReceive`, `pay`, `accept`, `redeem`, and `sync`, with
   structured in-memory stores, injectable attestation/random/proof/issuer
   boundaries, direct audit/redeem transaction submitters, and mock lifecycle
   tests covering load, P2P pay, accept/audit, redeem, and spent/change-pending
   state transitions.
 - Kotlin/JVM, Java Android, and Swift now include Torii-backed
-  `OfflineNoteV2IssuerClient` adapters for `/v1/offline/v2/keys/refill` and
-  `/v1/offline/v2/notes/issue`. The adapters body-sign issuer JSON with the
+  `OfflineNoteIssuerClient` adapters for `/v1/offline/keys/refill` and
+  `/v1/offline/notes/issue`. The adapters body-sign issuer JSON with the
   canonical request signer, cache signed lineage state between refill and
   issue, derive wallet commitments against the post-issue revision, and submit
   the wallet-supplied `note_commitment` unchanged.
-- Validation passed with the focused Rust Offline V2 data-model, Torii issuer,
+- Validation passed with the focused Rust Offline data-model, Torii issuer,
   and core tests; full Kotlin `:core-jvm:test`; Java Android core harness; and
-  Swift `OfflineNoteV2Tests`. The 2026-05-06 rerun of
-  `cd IrohaSwift && swift test --filter OfflineNoteV2Tests` is green
+  Swift `OfflineNoteTests`. The 2026-05-06 rerun of
+  `cd IrohaSwift && swift test --filter OfflineNoteTests` is green
   (`19` tests, `0` failures). Earlier derivation work in this slice also had
   focused Java fixture/Norito parity coverage and full `swift test` in
   `IrohaSwift` green. Formatting and whitespace checks are green with
@@ -42898,9 +44932,9 @@ Last updated: 2026-05-31
   `trigger_candidate_ids_are_intersected`, and
   `role_candidate_ids_are_intersected` in the default target.
 
-## 2026-05-05 Offline V2 issuer body auth
+## 2026-05-05 Offline issuer body auth
 
-- Offline V2 issuer POSTs now reject legacy `X-Iroha-*` app-auth headers and
+- Offline issuer POSTs now reject legacy `X-Iroha-*` app-auth headers and
   verify `account_id`, `timestamp_ms`, `nonce`, plus exactly one of
   `signature_base64` or `witness_base64` from the JSON body. The signed body
   hash uses Norito JSON canonical bytes with only top-level proof fields
@@ -42910,11 +44944,11 @@ Last updated: 2026-05-31
   prebuilt `witness_base64`.
 - Focused Torii validation passed with
   `CARGO_TARGET_DIR=target/codex-offline-body-auth cargo test -p iroha_torii body_auth --lib`.
-  The broader Offline V2 issuer filter also passed with
-  `CARGO_TARGET_DIR=target/codex-offline-body-auth cargo test -p iroha_torii offline_v2`
+  The broader Offline issuer filter also passed with
+  `CARGO_TARGET_DIR=target/codex-offline-body-auth cargo test -p iroha_torii offline`
   (the lib slice reported `13` passed and `1749` filtered out, plus the package
-  filter covered `offline_v2_readiness_is_mounted_and_legacy_routes_are_absent`).
-  `rustfmt --edition 2024 --check crates/iroha_torii/src/app_auth.rs crates/iroha_torii/src/offline_v2_issuer.rs`
+  filter covered `offline_readiness_is_mounted_and_legacy_routes_are_absent`).
+  `rustfmt --edition 2024 --check crates/iroha_torii/src/app_auth.rs crates/iroha_torii/src/offline_issuer.rs`
   and full `cargo fmt --all -- --check` are green.
 - The focused strict lint gate
   `CARGO_TARGET_DIR=target/codex-offline-body-auth cargo clippy -p iroha_torii --lib -- -D warnings`
@@ -44771,7 +46805,7 @@ Last updated: 2026-05-31
   `norito_codegen_exporter` now renders `Metadata::Float`, the Python receipt
   test fixture uses the current `TransactionSubmissionReceiptPayload` fields,
   and Mochi's chaos/event/state helpers match the current Izanami fault,
-  Offline V2 note-event, and query-batch surfaces.
+  Offline note-event, and query-batch surfaces.
 - Cleaned up the remaining Rust warning sources surfaced by the workspace
   check: removed the unused `ivm_corehost_axt` model-proof helper and the
   unused proof imports from `queries_and_proofs`.
@@ -44826,7 +46860,7 @@ Last updated: 2026-05-31
   payload form; current signed-receipt positives are still covered by generated
   verifier fixtures.
 - Additional validation passed on 2026-05-02:
-  `cargo run -p iroha_data_model --features test-fixtures,transparent_api --bin offline_v2_vectors -- --check`,
+  `cargo run -p iroha_data_model --features test-fixtures,transparent_api --bin offline_vectors -- --check`,
   `node --test javascript/iroha_js/test/toriiClient.identifier.test.js`,
   `cd IrohaSwift && swift test` (774 tests, 101 skipped, 0 failures), the
   focused Swift regression filter for Ed25519 seed, bridge pinning, BFV vectors,
@@ -46463,9 +48497,9 @@ Last updated: 2026-05-31
 - Focused validation for this slice:
   - `jq -e . configs/soranexus/taira/genesis.json`
 
-## 2026-05-01 Offline V2 native SDK prover speedups
+## 2026-05-01 Offline native SDK prover speedups
 
-- Swift Offline Note V2 pure Halo2 proving now reuses a cached IPA/domain
+- Swift Offline Note pure Halo2 proving now reuses a cached IPA/domain
   context, verifier-key transcript scalar, and fixed selector polynomial instead
   of regenerating them on every proof. The hot commitment path now uses sparse
   Lagrange commitments for single-row instance/advice columns, a 4-bit
@@ -46475,11 +48509,11 @@ Last updated: 2026-05-31
   intermediate instead of squaring it twice, and the Swift group formulas
   replace fixed `2x`/`8x` field multiplications with additions.
 - Added Swift convenience APIs for direct native proof generation from
-  `OfflineNoteRedeemV2` / `OfflineNoteAuditBundleV2`, plus proof replacement
-  helpers and a `Halo2OfflineNoteV2Prover.prewarm()` hook so callers can keep
+  `OfflineNoteRedeem` / `OfflineNoteAuditBundle`, plus proof replacement
+  helpers and a `Halo2OfflineNoteProver.prewarm()` hook so callers can keep
   the native model, initialize the proof cache before the button path, and swap
   in the newly generated recursive proof before binding validation.
-- Added Kotlin/JVM and Java Android Offline V2 instance-value builders,
+- Added Kotlin/JVM and Java Android Offline instance-value builders,
   scalar-column encoders, proof replacement helpers, and pure Java Halo2/IPA
   provers. The Java-family path now builds the same `OpenVerifyEnvelope`
   recursive proof payloads without routing production calls through Rust JNI,
@@ -46500,24 +48534,24 @@ Last updated: 2026-05-31
   Java Android harness redeem `0.823s`, p95 `0.825s`, max `0.825s`.
 - Focused validation for this slice:
   - `swift test -c release --filter Halo2PastaTests/testPastaUniformBytesAndVestaGroupArithmetic`
-  - `swift test -c release --filter Halo2PastaTests/testOfflineNoteV2NativeHalo2ProofEnvelopeFitsQrBudget`
-  - `IROHA_SWIFT_OFFLINE_V2_BENCH=1 IROHA_SWIFT_OFFLINE_V2_BENCH_ITERATIONS=20 swift test -c release --filter Halo2PastaTests/testOfflineNoteV2NativeHalo2ProofPerformanceWhenRequested`
-  - `./gradlew :core-jvm:test --tests org.hyperledger.iroha.sdk.offline.OfflineNoteV2Test --console=plain` from `kotlin`
-  - `IROHA_JVM_OFFLINE_V2_PROVER_TEST=1 ./gradlew :core-jvm:test --tests org.hyperledger.iroha.sdk.offline.OfflineNoteV2Test.nativeHalo2ProverProducesVerifyingPayloadWhenRequested --console=plain` from `kotlin`
-  - `IROHA_JVM_OFFLINE_V2_BENCH=1 IROHA_JVM_OFFLINE_V2_BENCH_ITERATIONS=5 ./gradlew :core-jvm:test --tests org.hyperledger.iroha.sdk.offline.OfflineNoteV2Test.nativeHalo2ProverPerformanceWhenRequested --console=plain --info --rerun-tasks` from `kotlin`
-  - `IROHA_SWIFT_OFFLINE_V2_VERIFY_PAYLOAD_IN=/tmp/iroha-jvm-offline-v2-audit.zk1 swift test -c release --filter Halo2PastaTests/testOfflineNoteV2NativeHalo2ProofEnvelopeFitsQrBudget`
-  - `JAVA_HOME=$(/usr/libexec/java_home -v 21) ANDROID_HARNESS_MAINS=org.hyperledger.iroha.android.offline.OfflineNoteV2Test ./gradlew :core:test --tests org.hyperledger.iroha.android.GradleHarnessTests --console=plain` from `java/iroha_android`
-  - `JAVA_HOME=$(/usr/libexec/java_home -v 21) IROHA_JAVA_OFFLINE_V2_PROVER_TEST=1 ANDROID_HARNESS_MAINS=org.hyperledger.iroha.android.offline.OfflineNoteV2Test ./gradlew :core:test --tests org.hyperledger.iroha.android.GradleHarnessTests --console=plain` from `java/iroha_android`
-  - `JAVA_HOME=$(/usr/libexec/java_home -v 21) IROHA_JAVA_OFFLINE_V2_BENCH=1 IROHA_JAVA_OFFLINE_V2_BENCH_ITERATIONS=5 ANDROID_HARNESS_MAINS=org.hyperledger.iroha.android.offline.OfflineNoteV2Test ./gradlew :core:test --tests org.hyperledger.iroha.android.GradleHarnessTests --console=plain --info --rerun-tasks` from `java/iroha_android`
+  - `swift test -c release --filter Halo2PastaTests/testOfflineNoteNativeHalo2ProofEnvelopeFitsQrBudget`
+  - `IROHA_SWIFT_OFFLINE_BENCH=1 IROHA_SWIFT_OFFLINE_BENCH_ITERATIONS=20 swift test -c release --filter Halo2PastaTests/testOfflineNoteNativeHalo2ProofPerformanceWhenRequested`
+  - `./gradlew :core-jvm:test --tests org.hyperledger.iroha.sdk.offline.OfflineNoteTest --console=plain` from `kotlin`
+  - `IROHA_JVM_OFFLINE_PROVER_TEST=1 ./gradlew :core-jvm:test --tests org.hyperledger.iroha.sdk.offline.OfflineNoteTest.nativeHalo2ProverProducesVerifyingPayloadWhenRequested --console=plain` from `kotlin`
+  - `IROHA_JVM_OFFLINE_BENCH=1 IROHA_JVM_OFFLINE_BENCH_ITERATIONS=5 ./gradlew :core-jvm:test --tests org.hyperledger.iroha.sdk.offline.OfflineNoteTest.nativeHalo2ProverPerformanceWhenRequested --console=plain --info --rerun-tasks` from `kotlin`
+  - `IROHA_SWIFT_OFFLINE_VERIFY_PAYLOAD_IN=/tmp/iroha-jvm-offline-audit.zk1 swift test -c release --filter Halo2PastaTests/testOfflineNoteNativeHalo2ProofEnvelopeFitsQrBudget`
+  - `JAVA_HOME=$(/usr/libexec/java_home -v 21) ANDROID_HARNESS_MAINS=org.hyperledger.iroha.android.offline.OfflineNoteTest ./gradlew :core:test --tests org.hyperledger.iroha.android.GradleHarnessTests --console=plain` from `java/iroha_android`
+  - `JAVA_HOME=$(/usr/libexec/java_home -v 21) IROHA_JAVA_OFFLINE_PROVER_TEST=1 ANDROID_HARNESS_MAINS=org.hyperledger.iroha.android.offline.OfflineNoteTest ./gradlew :core:test --tests org.hyperledger.iroha.android.GradleHarnessTests --console=plain` from `java/iroha_android`
+  - `JAVA_HOME=$(/usr/libexec/java_home -v 21) IROHA_JAVA_OFFLINE_BENCH=1 IROHA_JAVA_OFFLINE_BENCH_ITERATIONS=5 ANDROID_HARNESS_MAINS=org.hyperledger.iroha.android.offline.OfflineNoteTest ./gradlew :core:test --tests org.hyperledger.iroha.android.GradleHarnessTests --console=plain --info --rerun-tasks` from `java/iroha_android`
   - `git diff --check`
 
-## 2026-05-01 Torii Offline V2 issuer hardening
+## 2026-05-01 Torii Offline issuer hardening
 
-- Torii Offline V2 issuer certificate minting now requires a signed middleware
+- Torii Offline issuer certificate minting now requires a signed middleware
   attestation receipt before certifying hardware one-use keys. Certificate JSON
   echoes canonical base64 key bytes from the verified receipt instead of
   client-supplied hex/base64 spellings.
-- Offline V2 note issuance now derives balances from Torii-signed lineage
+- Offline note issuance now derives balances from Torii-signed lineage
   state, treats client `local_balance` / `local_revision` as consistency
   checks, preserves trusted balance during existing-lineage key refills, and
   returns the same chain note commitment that is submitted on-chain.
@@ -46529,7 +48563,7 @@ Last updated: 2026-05-31
 - Focused validation for this slice:
   - `cargo fmt --all`
   - `cargo check -p iroha_config -p iroha_torii --features app_api`
-  - `cargo test -p iroha_torii offline_v2_issuer`
+  - `cargo test -p iroha_torii offline_issuer`
   - `cargo test -p iroha_config torii_offline_issuer`
   - `cargo test -p iroha_config --test fixtures`
 
@@ -47774,26 +49808,26 @@ Last updated: 2026-05-31
   - `cargo build -p izanami --bin izanami -p irohad --bin iroha3d`
   - Real 20k NPoS packet-loss row with diagnostics enabled, then report-only rebuild for the new overload-admission evidence label.
 
-## 2026-04-30 Offline V2 native bridge prover FFI
+## 2026-04-30 Offline native bridge prover FFI
 
 - Rebased PR #5578 onto the current `i23-features` branch and narrowed it to
   the shared `connect_norito_bridge` C-FFI prover surface. Swift keeps using
-  its native `Halo2OfflineNoteV2Prover` path, while the bridge now exposes
+  its native `Halo2OfflineNoteProver` path, while the bridge now exposes
   Rust-backed redeem/audit proof generation for other native consumers.
-- Added `connect_norito_offline_prove_note_v2_redeem` and
-  `connect_norito_offline_prove_note_v2_audit`, returning Norito-archive
-  `OfflineNoteRecursiveProofV2` payloads with canonical verifier-key id,
+- Added `connect_norito_offline_prove_note_redeem` and
+  `connect_norito_offline_prove_note_audit`, returning Norito-archive
+  `OfflineNoteRecursiveProof` payloads with canonical verifier-key id,
   public-input hash, and Halo2/IPA proof bytes.
 - Added bridge tests that decode the FFI output, check the proof binding, and
-  verify the returned proof against the canonical Offline V2 verifier. Invalid
-  archives now fail through `CONNECT_NORITO_ERR_OFFLINE_NOTE_V2_PROVE`.
+  verify the returned proof against the canonical Offline verifier. Invalid
+  archives now fail through `CONNECT_NORITO_ERR_OFFLINE_NOTE_PROVE`.
 - Fixed three current `iroha_data_model` clippy findings surfaced by the
   bridge clippy pass: two `NPoS` doc-markdown warnings and one collapsible
   schema-map branch.
 - Focused validation for this slice:
   - `cargo fmt --all`
   - `cargo fmt --all --check`
-  - `cargo test -p connect_norito_bridge offline_note_v2_ -- --nocapture`
+  - `cargo test -p connect_norito_bridge offline_note_ -- --nocapture`
   - `cargo test -p connect_norito_bridge`
   - `cargo clippy -p connect_norito_bridge --all-targets -- -D warnings`
 
@@ -48080,36 +50114,36 @@ Last updated: 2026-05-31
 
 ## 2026-04-28 Retired sample identifier cleanup
 
-- Replaced retired bank/sample identifiers in localnet alias catalog defaults, Offline V2 vector generation, SDK tests, and status command examples with neutral PayNet/demo placeholders.
-- Regenerated `fixtures/offline/interop_contract_v2.json` from the updated vector generator.
+- Replaced retired bank/sample identifiers in localnet alias catalog defaults, Offline vector generation, SDK tests, and status command examples with neutral PayNet/demo placeholders.
+- Regenerated `fixtures/offline/interop_contract.json` from the updated vector generator.
 - Focused validation for this slice:
   - `cargo fmt --all`
-  - `cargo run -p iroha_data_model --features test-fixtures,transparent_api --bin offline_v2_vectors`
-  - `cargo run -p iroha_data_model --features test-fixtures,transparent_api --bin offline_v2_vectors -- --check`
+  - `cargo run -p iroha_data_model --features test-fixtures,transparent_api --bin offline_vectors`
+  - `cargo run -p iroha_data_model --features test-fixtures,transparent_api --bin offline_vectors -- --check`
   - `cargo test -p iroha_core selector_matches_authority_domain --lib -- --nocapture`
   - `git diff --check`
   - `cargo fmt --all --check`
   - Boundary-aware tracked and hidden-file scans for the retired identifiers now return no matches.
 - `cargo test -p iroha_kagami nexus_localnet_alias_lanes_bind_dataspaces_and_seed_validators -- --nocapture` is blocked by the existing `crates/iroha_kagami/src/genesis/generate.rs` `manifest.parse()` private-method compile error.
 
-## 2026-04-28 Offline Note V2 focused validation gap closure
+## 2026-04-28 Offline Note focused validation gap closure
 
-- Added focused core rejection coverage for Offline Note V2 redeem/audit proof validation: non-`OpenVerifyEnvelope` proof bytes, wrong verifier key id/backend, inactive verifier keys, and public-input hash mismatches now have explicit tests.
-- Tightened Torii Offline V2 readiness smoke coverage so the exposed verifier id and public-input schema hash match the canonical fixture contract.
-- Test-network genesis generation now computes and injects the confidential verifier-registry root from appended verifier-key registration instructions, so Offline V2 real-verifier localnets no longer start with a stale `vk_set_hash`.
-- Added four-peer `network_functional` coverage that registers the real Offline V2 Halo2 IPA verifier, issues a note, audits it into a new note, redeems it, validates balances, and rejects replay/nullifier reuse under consensus.
-- Added native app validation coverage for the shared `interop_contract_v2.json`, synthetic Android counter rejection, transcript-like recursive proof rejection, and old QR prefix rejection. Android PK and the companion app now also have physical-only KeyMint runner scripts that require a selected API 31+ non-emulator device and capture public attestation artifacts under untracked `artifacts/offline/keymint/`.
+- Added focused core rejection coverage for Offline Note redeem/audit proof validation: non-`OpenVerifyEnvelope` proof bytes, wrong verifier key id/backend, inactive verifier keys, and public-input hash mismatches now have explicit tests.
+- Tightened Torii Offline readiness smoke coverage so the exposed verifier id and public-input schema hash match the canonical fixture contract.
+- Test-network genesis generation now computes and injects the confidential verifier-registry root from appended verifier-key registration instructions, so Offline real-verifier localnets no longer start with a stale `vk_set_hash`.
+- Added four-peer `network_functional` coverage that registers the real Offline Halo2 IPA verifier, issues a note, audits it into a new note, redeems it, validates balances, and rejects replay/nullifier reuse under consensus.
+- Added native app validation coverage for the shared `interop_contract.json`, synthetic Android counter rejection, transcript-like recursive proof rejection, and old QR prefix rejection. Android PK and the companion app now also have physical-only KeyMint runner scripts that require a selected API 31+ non-emulator device and capture public attestation artifacts under untracked `artifacts/offline/keymint/`.
 - Focused validation for this slice:
   - `cargo fmt --all`
-  - `cargo test -p iroha_data_model offline_note_v2 --lib -- --nocapture`
-  - `cargo test -p iroha_data_model --features test-fixtures,transparent_api --bin offline_v2_vectors -- --nocapture`
-  - `cargo test -p iroha_core offline_note_v2 --lib -- --nocapture`
+  - `cargo test -p iroha_data_model offline_note --lib -- --nocapture`
+  - `cargo test -p iroha_data_model --features test-fixtures,transparent_api --bin offline_vectors -- --nocapture`
+  - `cargo test -p iroha_core offline_note --lib -- --nocapture`
   - `cargo test -p iroha_test_network config::tests::genesis_confidential_digest_tracks_registered_verifying_keys -- --nocapture`
-  - `cargo test -p integration_tests --test network_functional offline_note_v2_issue_audit_redeem_real_proofs_on_four_peers -- --nocapture`
-  - `cargo test -p iroha_torii --test offline_v2_readiness_smoke -- --nocapture`
-  - `cd IrohaSwift && swift test --filter OfflineNoteV2`
-  - `cd kotlin && ./gradlew :core-jvm:test --tests 'org.hyperledger.iroha.sdk.offline.OfflineNoteV2Test' --console=plain`
-  - `cd java/iroha_android && ANDROID_HARNESS_MAINS=org.hyperledger.iroha.android.offline.OfflineNoteV2Test ./gradlew :core:test --console=plain`
+  - `cargo test -p integration_tests --test network_functional offline_note_issue_audit_redeem_real_proofs_on_four_peers -- --nocapture`
+  - `cargo test -p iroha_torii --test offline_readiness_smoke -- --nocapture`
+  - `cd IrohaSwift && swift test --filter OfflineNote`
+  - `cd kotlin && ./gradlew :core-jvm:test --tests 'org.hyperledger.iroha.sdk.offline.OfflineNoteTest' --console=plain`
+  - `cd java/iroha_android && ANDROID_HARNESS_MAINS=org.hyperledger.iroha.android.offline.OfflineNoteTest ./gradlew :core:test --console=plain`
   - `cd /Users/takemiyamakoto/dev/pk-retail-wallet-android && ./gradlew --no-daemon :core:test --console=plain`
   - `cd /Users/takemiyamakoto/dev/partner-retail-wallet-android && ./gradlew --no-daemon :core:test --console=plain`
   - `cd /Users/takemiyamakoto/dev/pk-retail-wallet-android && ANDROID_SERIAL=19181FDF600918 E2E_DEVICE_SERIAL=19181FDF600918 scripts/run_offline_keymint_physical.sh`
@@ -48119,7 +50153,7 @@ Last updated: 2026-05-31
   - `cd /Users/takemiyamakoto/dev/pk-retail-wallet-ios && xcodebuild build -project RetailWalletIOS.xcodeproj -scheme RetailWalletIOS -configuration Debug -destination 'generic/platform=iOS Simulator'`
   - `cd /Users/takemiyamakoto/dev/partner-retail-wallet-ios && xcodebuild build -project RetailWalletIOS.xcodeproj -scheme RetailWalletIOS -configuration Debug -destination 'generic/platform=iOS Simulator'`
   - `git diff --check` in the Iroha root and all four touched app repositories.
-  - `shasum -a 256` confirmed every copied `fixtures/offline/interop_contract_v2.json` has hash `2660dd41e3b8c1f4b8337d14febbc88e3febe45428c08e4d083197ef01d4e0f6`.
+  - `shasum -a 256` confirmed every copied `fixtures/offline/interop_contract.json` has hash `2660dd41e3b8c1f4b8337d14febbc88e3febe45428c08e4d083197ef01d4e0f6`.
   - Targeted changed-file scans found no temporary-work markers, exact retired proof-domain identifiers, or retired fountain QR v1 identifiers.
 - The physical KeyMint gate ran on Pixel 6 serial `19181FDF600918`. PK artifacts were captured under `/Users/takemiyamakoto/dev/pk-retail-wallet-android/artifacts/offline/keymint/20260428T081251Z-19181FDF600918`; companion app artifacts were captured under `/Users/takemiyamakoto/dev/partner-retail-wallet-android/artifacts/offline/keymint/20260428T081331Z-19181FDF600918`.
 
@@ -48165,29 +50199,29 @@ Last updated: 2026-05-31
   - `cargo test -p iroha_core smartcontracts::ivm::host::tests::subscription_bill_account_alias_auto_renew_queues_renewal_and_reschedules -- --nocapture`
   - `git diff --check`
 
-## 2026-04-27 Native Offline Note V2 SDK/mobile alignment
+## 2026-04-27 Native Offline Note SDK/mobile alignment
 
-- Standardized the first-release mobile offline contract on the Iroha Offline Note V2 fixture (`fixtures/offline/interop_contract_v2.json`) with canonical Norito-backed public-input hashes, opaque recursive proof bytes, `iroha:qr1:` QR stream frames, and `parity_group=3`.
-- Added native Kotlin/JVM and Java Android Offline Note V2 model/codec surfaces that mirror the Swift SDK without Rust FFI/JNI. The parity tests validate key-certificate signing bytes, issue/redeem/audit Norito payloads, public-input hashes, proof binding rejection, and the shared fixture.
-- Updated the PK and companion iOS/Android app offline flows to call the native SDK-backed Offline Note V2 helpers for certificate payloads, issued/output claims, payment-token public inputs, QR framing, and validation instead of app-local text transcripts.
+- Standardized the first-release mobile offline contract on the Iroha Offline Note fixture (`fixtures/offline/interop_contract.json`) with canonical Norito-backed public-input hashes, opaque recursive proof bytes, `iroha:qr:` QR stream frames, and `parity_group=3`.
+- Added native Kotlin/JVM and Java Android Offline Note model/codec surfaces that mirror the Swift SDK without Rust FFI/JNI. The parity tests validate key-certificate signing bytes, issue/redeem/audit Norito payloads, public-input hashes, proof binding rejection, and the shared fixture.
+- Updated the PK and companion iOS/Android app offline flows to call the native SDK-backed Offline Note helpers for certificate payloads, issued/output claims, payment-token public inputs, QR framing, and validation instead of app-local text transcripts.
 - Focused validation for this slice:
-  - `cargo test -p iroha_data_model --features test-fixtures,transparent_api --bin offline_v2_vectors`
-  - `cargo run -p iroha_data_model --features test-fixtures,transparent_api --bin offline_v2_vectors`
-  - `cd IrohaSwift && swift test --filter OfflineNoteV2`
-  - `cd kotlin && ./gradlew :core-jvm:test --tests 'org.hyperledger.iroha.sdk.offline.OfflineNoteV2Test' --rerun-tasks --console=plain`
-  - `cd java/iroha_android && ANDROID_HARNESS_MAINS=org.hyperledger.iroha.android.offline.OfflineNoteV2Test ./gradlew :core:test --rerun-tasks --console=plain`
+  - `cargo test -p iroha_data_model --features test-fixtures,transparent_api --bin offline_vectors`
+  - `cargo run -p iroha_data_model --features test-fixtures,transparent_api --bin offline_vectors`
+  - `cd IrohaSwift && swift test --filter OfflineNote`
+  - `cd kotlin && ./gradlew :core-jvm:test --tests 'org.hyperledger.iroha.sdk.offline.OfflineNoteTest' --rerun-tasks --console=plain`
+  - `cd java/iroha_android && ANDROID_HARNESS_MAINS=org.hyperledger.iroha.android.offline.OfflineNoteTest ./gradlew :core:test --rerun-tasks --console=plain`
   - `cd /Users/takemiyamakoto/dev/pk-retail-wallet-android && ./gradlew --no-daemon :core:test --console=plain`
   - `cd /Users/takemiyamakoto/dev/partner-retail-wallet-android && ./gradlew --no-daemon :core:test --console=plain`
   - `cd /Users/takemiyamakoto/dev/pk-retail-wallet-ios && xcodebuild test -project RetailWalletIOS.xcodeproj -scheme RetailWalletIOS -configuration Debug -destination 'platform=iOS Simulator,id=A7E7B24D-46DE-4D6D-B23B-622C5AD9A464' -only-testing:RetailWalletIOSTests/OfflineAPIContractTests`
   - `cd /Users/takemiyamakoto/dev/partner-retail-wallet-ios && xcodebuild -project RetailWalletIOS.xcodeproj -scheme RetailWalletIOS -configuration Debug -destination 'platform=iOS Simulator,id=A7E7B24D-46DE-4D6D-B23B-622C5AD9A464' build`
 
-## 2026-04-27 Swift Offline V2 transaction builders
+## 2026-04-27 Swift Offline transaction builders
 
-- Added Swift Offline V2 note models for key certificates, issued claims, redeem public inputs, audit public inputs, recursive proofs, and issue/redeem/audit instruction payloads.
-- Added `IrohaSDK` builders and submit helpers for `IssueOfflineNoteV2`, `RedeemOfflineNoteV2`, and `AuditOfflineNoteV2` transactions. Redeem and audit builders validate the recursive proof's public-input hash against the canonical Swift/Rust Norito payload before signing.
-- Added fixture parity coverage against `fixtures/offline/interop_contract_v2.json` for key-certificate signing bytes, issue/redeem/audit Norito payloads, public-input hashes, proof binding rejection, and signed envelope construction.
+- Added Swift Offline note models for key certificates, issued claims, redeem public inputs, audit public inputs, recursive proofs, and issue/redeem/audit instruction payloads.
+- Added `IrohaSDK` builders and submit helpers for `IssueOfflineNote`, `RedeemOfflineNote`, and `AuditOfflineNote` transactions. Redeem and audit builders validate the recursive proof's public-input hash against the canonical Swift/Rust Norito payload before signing.
+- Added fixture parity coverage against `fixtures/offline/interop_contract.json` for key-certificate signing bytes, issue/redeem/audit Norito payloads, public-input hashes, proof binding rejection, and signed envelope construction.
 - Focused validation for this slice:
-  - `swift test --filter OfflineNoteV2Tests`
+  - `swift test --filter OfflineNoteTests`
   - `swift test`
 
 ## 2026-04-27 Iroha config minimal snapshot refresh
@@ -48205,31 +50239,31 @@ Last updated: 2026-05-31
   - `sha256sum -c docs/examples/sns/suffix_catalog_v1.sha256`
   - `cargo test -p iroha_cli catalog_detects_price_mismatch -- --nocapture`
 
-## 2026-04-27 Offline V2 real Halo2 IPA prover slice
+## 2026-04-27 Offline real Halo2 IPA prover slice
 
-- Added the real `offline-note-v2-recursive-v1` Halo2 IPA semantic circuit. The circuit binds the Offline V2 public-instance schema, constrains redeem/audit mode, bounded input/output counts, unused amount slots, and normalized input/output amount conservation.
-- Added `prove_offline_note_v2_redeem`, `prove_offline_note_v2_audit`, and `derive_halo2_ipa_offline_note_v2_proving_key_bytes`. These paths generate real Halo2 IPA proofs against registered verifier-key material; no debug or mock prover backend is used.
-- Offline V2 ISI verification now compares proof-exposed public instances against the same semantic instance layout used by the prover instead of the old hash-only reserved-sentinel layout.
-- Added active WSV verifier-key registration for `offline-note-v2-recursive-v1` to Kagami-generated localnet genesis using the real inline Halo2 IPA verifier key and Offline V2 schema hash.
-- Torii Offline V2 readiness now advertises the canonical recursive-proof backend, circuit id, schema hash, instance-column count, and verifier key id. The Swift SDK has a typed `getOfflineV2Readiness` accessor for that metadata.
+- Added the real `offline-note-recursive` Halo2 IPA semantic circuit. The circuit binds the Offline public-instance schema, constrains redeem/audit mode, bounded input/output counts, unused amount slots, and normalized input/output amount conservation.
+- Added `prove_offline_note_redeem`, `prove_offline_note_audit`, and `derive_halo2_ipa_offline_note_proving_key_bytes`. These paths generate real Halo2 IPA proofs against registered verifier-key material; no debug or mock prover backend is used.
+- Offline ISI verification now compares proof-exposed public instances against the same semantic instance layout used by the prover instead of the old hash-only reserved-sentinel layout.
+- Added active WSV verifier-key registration for `offline-note-recursive` to Kagami-generated localnet genesis using the real inline Halo2 IPA verifier key and Offline schema hash.
+- Torii Offline readiness now advertises the canonical recursive-proof backend, circuit id, schema hash, instance-column count, and verifier key id. The Swift SDK has a typed `getOfflineReadiness` accessor for that metadata.
 - Focused validation for this slice:
   - `cargo fmt --all`
-  - `cargo test -p iroha_core offline_note_v2_real --lib -- --nocapture`
+  - `cargo test -p iroha_core offline_note_real --lib -- --nocapture`
   - `cargo test -p iroha_kagami generated_nexus_localnet_keeps_fee_asset_convertible_for_taira_wallets -- --nocapture`
-  - `cargo test -p iroha_torii --test offline_v2_readiness_smoke -- --nocapture`
-  - `swift test --filter ToriiClientTests/testGetOfflineV2ReadinessParsesRecursiveVerifierMetadata`
+  - `cargo test -p iroha_torii --test offline_readiness_smoke -- --nocapture`
+  - `swift test --filter ToriiClientTests/testGetOfflineReadinessParsesRecursiveVerifierMetadata`
   - `cargo test -p iroha_core expected_public_instances_encode_semantic_columns --lib -- --nocapture`
-  - `cargo test -p iroha_data_model offline_note_v2 --lib -- --nocapture`
+  - `cargo test -p iroha_data_model offline_note --lib -- --nocapture`
 
 ## 2026-04-27 Offline audit replay and router ambiguity fix
 
-- Offline V2 audit bundles now carry issued input claims in their canonical public inputs. Core verifies those source claims were issued and unspent, consumes their normal spent-claim keys, and consumes normal redemption nullifier keys before publishing audited output claims as redeemable.
+- Offline audit bundles now carry issued input claims in their canonical public inputs. Core verifies those source claims were issued and unspent, consumes their normal spent-claim keys, and consumes normal redemption nullifier keys before publishing audited output claims as redeemable.
 - Nexus account-scoped routing no longer trusts the legacy single-binding `dataspace_for_account` shortcut. Account targets route to a non-universal dataspace only when the full account-scope hierarchy has exactly one dataspace; universal-plus-private and multi-private scopes fall back to the default route.
 - Focused validation for this slice:
   - `cargo fmt --all`
-  - `cargo run -p iroha_data_model --features test-fixtures,transparent_api --bin offline_v2_vectors`
-  - `cargo test -p iroha_data_model offline_note_v2 --lib -- --nocapture`
-  - `cargo test -p iroha_data_model --features test-fixtures,transparent_api --bin offline_v2_vectors -- --nocapture`
+  - `cargo run -p iroha_data_model --features test-fixtures,transparent_api --bin offline_vectors`
+  - `cargo test -p iroha_data_model offline_note --lib -- --nocapture`
+  - `cargo test -p iroha_data_model --features test-fixtures,transparent_api --bin offline_vectors -- --nocapture`
   - `cargo test -p iroha_core audit_replay_keys_cover_input_spend_and_output_issue_domains --lib -- --nocapture`
   - `cargo test -p iroha_core opaque_asset_transfer --lib -- --nocapture`
   - `cargo test -p iroha_core untargeted_universal_authority_transaction_uses_default_lane_with_state --lib -- --nocapture`
@@ -48268,7 +50302,7 @@ Last updated: 2026-05-31
 
 ## 2026-04-26 Offline escrow self-account guard and localnet note seed fix
 
-- `crates/iroha_core/src/smartcontracts/isi/offline.rs` now rejects non-zero Offline V2 note escrow movements when the resolved escrow account is the same account being debited or credited. The new `escrow_self_reference` invariant is checked before balance mutation on issue/reserve and redeem/credit paths.
+- `crates/iroha_core/src/smartcontracts/isi/offline.rs` now rejects non-zero Offline note escrow movements when the resolved escrow account is the same account being debited or credited. The new `escrow_self_reference` invariant is checked before balance mutation on issue/reserve and redeem/credit paths.
 - `crates/iroha_kagami/src/localnet.rs` no longer writes the built-in offline-note asset escrow account as the localnet app authority. Generated peer configs record the deterministic escrow account for the built-in offline-note asset, and core also derives metadata-enabled escrows at enforcement points so stale or missing config bindings cannot bypass the vault protections.
 - Focused validation for this fix:
   - `cargo fmt --all`
@@ -48352,26 +50386,26 @@ Last updated: 2026-05-31
   - `cargo fmt --all`
   - `git diff --check`
 
-## 2026-04-26 Offline V2 first-release replacement
+## 2026-04-26 Offline first-release replacement
 
-- Hardened Offline V2 note issuance so only `CanManageOfflineEscrow` operators can issue notes, and key certificates must verify against the issuing operator over the canonical certificate payload before escrow is reserved.
-- Hardened Offline V2 note redemption so the recursive proof public-input hash must bind the source note commitment, consumed nullifiers, certified key payload, recipient, asset, and amount, and escrow is released only for a ledger-recorded issued-note claim that has not already been redeemed.
-- Hardened Offline V2 optional audit so the proof public-input hash binds the token id, observed nullifiers, output commitments, and certified key payload; audit now requires a previously issued key certificate and detects token/public-input conflicts plus duplicate output commitments.
+- Hardened Offline note issuance so only `CanManageOfflineEscrow` operators can issue notes, and key certificates must verify against the issuing operator over the canonical certificate payload before escrow is reserved.
+- Hardened Offline note redemption so the recursive proof public-input hash must bind the source note commitment, consumed nullifiers, certified key payload, recipient, asset, and amount, and escrow is released only for a ledger-recorded issued-note claim that has not already been redeemed.
+- Hardened Offline optional audit so the proof public-input hash binds the token id, observed nullifiers, output commitments, and certified key payload; audit now requires a previously issued key certificate and detects token/public-input conflicts plus duplicate output commitments.
 - Ordered cheap issued-claim, token, and nullifier replay checks before expensive recursive proof verification while still verifying proofs before escrow release or new audit state.
-- Replaced the local transcript-style recursive proof placeholder with verifier-key-backed validation: the proof must name an active `offline_note_v2` WSV verifier, decode as an `OpenVerifyEnvelope`, match the Offline V2 public-input schema hash, expose the expected public instance columns, and pass the configured ZK backend verifier.
+- Replaced the local transcript-style recursive proof placeholder with verifier-key-backed validation: the proof must name an active `offline_note` WSV verifier, decode as an `OpenVerifyEnvelope`, match the Offline public-input schema hash, expose the expected public instance columns, and pass the configured ZK backend verifier.
 - Added data-model helper payloads for canonical key-certificate signing bytes, issued-note claims, redemption public inputs, and audit public inputs.
 - Removed legacy allowance, lineage, transfer, revocation, balance-proof, petal-stream, and settlement helper surfaces across Rust, Torii, mobile SDKs, examples, fixtures, and stale docs.
-- Torii now exposes only `/v1/offline/v2/readiness` for offline discovery; issuance, redemption, and audit use V2 transaction instructions.
-- Torii MCP keeps structured compatibility aliases for legacy offline transfer/revocation tool names so agent clients get Offline V2 guidance instead of JSON-RPC tool-not-found errors; this does not re-publish the removed HTTP routes.
-- Localnet, telemetry, QR payload kinds, and mobile parser surfaces now use Offline V2 note naming instead of legacy cash/transfer terminology.
+- Torii now exposes only `/v1/offline/readiness` for offline discovery; issuance, redemption, and audit use V2 transaction instructions.
+- Torii MCP keeps structured compatibility aliases for legacy offline transfer/revocation tool names so agent clients get Offline guidance instead of JSON-RPC tool-not-found errors; this does not re-publish the removed HTTP routes.
+- Localnet, telemetry, QR payload kinds, and mobile parser surfaces now use Offline note naming instead of legacy cash/transfer terminology.
 - Focused validation for this slice:
   - `cargo fmt --all`
   - `cargo test -p iroha_torii --test mcp_endpoints`
   - `CARGO_TARGET_DIR=target/codex-workspace-test cargo check -p iroha_data_model -p iroha_core -p iroha_torii -p iroha_config -p iroha_kagami -p iroha_telemetry -p connect_norito_bridge -p fastpq_prover -p fastpq_isi --lib`
-  - `CARGO_TARGET_DIR=target/codex-workspace-test cargo test -p iroha_data_model offline_note_v2 --lib -- --nocapture`
-  - `CARGO_TARGET_DIR=target/codex-workspace-test cargo test -p iroha_torii --test offline_v2_readiness_smoke -- --nocapture`
+  - `CARGO_TARGET_DIR=target/codex-workspace-test cargo test -p iroha_data_model offline_note --lib -- --nocapture`
+  - `CARGO_TARGET_DIR=target/codex-workspace-test cargo test -p iroha_torii --test offline_readiness_smoke -- --nocapture`
   - `CARGO_TARGET_DIR=target/codex-workspace-test cargo test -p connect_norito_bridge --lib -- --nocapture`
-  - `CARGO_TARGET_DIR=target/codex-workspace-test cargo test -p iroha_core offline_note_v2 --lib -- --nocapture` (ok; no Core-local tests matched after the model tests moved to `iroha_data_model`)
+  - `CARGO_TARGET_DIR=target/codex-workspace-test cargo test -p iroha_core offline_note --lib -- --nocapture` (ok; no Core-local tests matched after the model tests moved to `iroha_data_model`)
   - `swift test`
   - `./gradlew :core-jvm:test --console=plain`
   - `./gradlew :offline-wallet-android:assembleRelease --console=plain`
@@ -49278,8 +51312,8 @@ Last updated: 2026-05-31
 ## 2026-04-21 Follow-up: Kotlin SDK typed offline-cash redeem support
 - Added typed cash models and a redeem-proof builder under
   `kotlin/core-jvm/src/main/java/org/hyperledger/iroha/sdk/offline/`.
-  After rebasing onto the Offline V2 Torii surface, `OfflineToriiClient`
-  remains scoped to `/v1/offline/v2/readiness`; the older cash-route client
+  After rebasing onto the Offline Torii surface, `OfflineToriiClient`
+  remains scoped to `/v1/offline/readiness`; the older cash-route client
   overloads and route tests are not retained because Torii no longer exposes
   those HTTP endpoints.
 - `OfflineStarkEnvelopeProver.kt` +

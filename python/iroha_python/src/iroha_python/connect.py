@@ -5,6 +5,7 @@ from __future__ import annotations
 import base64
 import hashlib
 import os
+from abc import ABC, abstractmethod
 from dataclasses import dataclass
 from datetime import datetime, timedelta
 from enum import Enum
@@ -415,11 +416,12 @@ class ConnectCiphertext:
 
 
 @dataclass
-class _ConnectControlBase:
+class _ConnectControlBase(ABC):
     variant: str
 
+    @abstractmethod
     def to_dict(self) -> Dict[str, Any]:
-        raise NotImplementedError
+        """Return the Connect control payload fields for this variant."""
 
     @property
     def endpoint_kind(self) -> str:
