@@ -3,7 +3,7 @@ import { ed25519 } from '@noble/curves/ed25519.js';
 import { sha256 } from '@noble/hashes/sha256.js';
 import { blake2b256 } from '../blake2b.js';
 import { normalizeAssetDefinitionIdLiteral, parseAssetIdLiteral } from './assetDefinitionLiteral.js';
-import { renderCanonicalAccountIdLiteralFromPublicKeyLiteral, renderCanonicalPublicKeyLiteralFromAccountIdLiteral, } from './accountLiteral.js';
+import { normalizeAccountIdLiteral, renderCanonicalAccountIdLiteralFromPublicKeyLiteral, renderCanonicalPublicKeyLiteralFromAccountIdLiteral, } from './accountLiteral.js';
 const IVM_MAGIC = Uint8Array.from([0x49, 0x56, 0x4d, 0x00]);
 const NORITO_MAGIC = Uint8Array.from([0x4e, 0x52, 0x54, 0x30]);
 const NORITO_HEADER_FLAG_COMPACT_LEN = 0x02;
@@ -32,6 +32,55 @@ const I64_MIN_ABS = 9_223_372_036_854_775_808n;
 const LITERAL_DATA_START = 16;
 const TRIGGER_EVENT_PUBLIC_INPUT_KEY = 'trigger_event_json';
 const TEST_TRIGGER_EVENT_OVERRIDE_KEY = '__koto_test_trigger_event_json';
+const FIRST_RELEASE_PRELUDE = `
+fn require_authority(expected: AccountId) {
+  assert(authority() == expected, "authority mismatch");
+}
+
+fn require_owner(owner: AccountId) {
+  require_authority(owner);
+}
+
+fn bps_fee(amount: int, bps: int) -> int {
+  assert(amount >= 0, "amount negative");
+  assert(bps >= 0, "bps negative");
+  return amount * bps / 10000;
+}
+
+fn checked_add_amount(left: int, right: int) -> int {
+  assert(left >= 0, "left amount negative");
+  assert(right >= 0, "right amount negative");
+  let result = left + right;
+  assert(result >= left, "amount overflow");
+  return result;
+}
+
+fn checked_sub_amount(left: int, right: int) -> int {
+  assert(left >= 0, "left amount negative");
+  assert(right >= 0, "right amount negative");
+  assert(left >= right, "amount underflow");
+  return left - right;
+}
+
+fn verify_signed_json(payload: bytes, signature: bytes, public_key: bytes, scheme: int) -> Json {
+  assert(verify_signature(payload, signature, public_key, scheme), "signature");
+  return decode_json(payload);
+}
+
+fn require_json_int(payload: Json, key: Name) -> int {
+  return payload.get_int(key);
+}
+`;
+const FIRST_RELEASE_PRELUDE_HELPERS = [
+    'require_authority',
+    'require_owner',
+    'bps_fee',
+    'checked_add_amount',
+    'checked_sub_amount',
+    'verify_signed_json',
+    'require_json_int',
+];
+let firstReleasePreludeProgramCache = null;
 const RUST_JSON_MACRO_RESERVED_KEYS = new Set([
     'fn',
     'let',
@@ -449,7 +498,7 @@ function jsonGetterSpec(name) {
             return { syscall: SYSCALL_JSON_GET_NFT_ID, args, valueType: 'NftId', kind: 'pointer', message, publicPayloadHelper: true };
         case 'json_get_blob_hex':
         case 'get_blob_hex':
-            return { syscall: SYSCALL_JSON_GET_BLOB_HEX, args, valueType: 'Blob', kind: 'pointer', message, publicPayloadHelper: true };
+            return { syscall: SYSCALL_JSON_GET_BLOB_HEX, args, valueType: 'NoritoBytes', kind: 'pointer', message, publicPayloadHelper: true };
         case 'json_get_asset_definition_id':
         case 'get_asset_definition_id':
             return { syscall: SYSCALL_JSON_GET_ASSET_DEFINITION_ID, args, valueType: 'AssetDefinitionId', kind: 'pointer', message, publicPayloadHelper: true };
@@ -513,7 +562,7 @@ function directHelperSpec(name) {
         case 'json_get_nft_id_direct':
             return { syscall: SYSCALL_JSON_GET_NFT_ID_DIRECT, args: ['Json', 'Name'], valueType: 'NftId', kind: 'pointer', message: 'json_get_nft_id_direct expects (Json, Name)', publicPayloadHelper: true };
         case 'json_get_blob_hex_direct':
-            return { syscall: SYSCALL_JSON_GET_BLOB_HEX_DIRECT, args: ['Json', 'Name'], valueType: 'Blob', kind: 'pointer', message: 'json_get_blob_hex_direct expects (Json, Name)', publicPayloadHelper: true };
+            return { syscall: SYSCALL_JSON_GET_BLOB_HEX_DIRECT, args: ['Json', 'Name'], valueType: 'NoritoBytes', kind: 'pointer', message: 'json_get_blob_hex_direct expects (Json, Name)', publicPayloadHelper: true };
         case 'json_set_int_direct':
             return { syscall: SYSCALL_JSON_SET_I64_DIRECT, args: ['Json', 'Name', 'int'], valueType: 'Json', kind: 'pointer', message: 'json_set_int_direct expects (Json, Name, int)' };
         case 'json_set_account_id_direct':
@@ -1324,7 +1373,7 @@ function vendorBridgeBuiltinSpec(name) {
                 canonicalName: 'execute_query',
                 syscall: SYSCALL_SMARTCONTRACT_EXECUTE_QUERY,
                 accessKind: 'query',
-                valueType: 'Blob',
+                valueType: 'NoritoBytes',
                 args: ['BlobLike'],
                 message: 'execute_query expects (Blob|bytes) where the argument is a pointer to NoritoBytes TLV in INPUT',
             };
@@ -1427,7 +1476,7 @@ const STATE_HOST_BUILTINS = Object.freeze({
     state_get: {
         kind: 'get',
         args: ['Name'],
-        valueType: 'Blob',
+        valueType: 'NoritoBytes',
         yieldsPointer: true,
         mutatesDurableState: false,
         message: 'state_get expects (Name)',
@@ -2596,6 +2645,10 @@ function staticBuiltinValueType(name) {
     }
     return NO_BUILTIN_VALUE_TYPE;
 }
+function semanticStaticBuiltinValueType(name) {
+    const valueType = staticBuiltinValueType(name);
+    return name === 'blob' && valueType === 'Blob' ? 'NoritoBytes' : valueType;
+}
 function staticBuiltinYieldsPointer(name) {
     const valueType = staticBuiltinValueType(name);
     if (valueType === NO_BUILTIN_VALUE_TYPE)
@@ -3101,13 +3154,16 @@ function normalizeTriggerNameLikeLiteral(value, context, line, column) {
     }
     return trimmed;
 }
-function domainIdLiteralError(value) {
-    return `invalid DomainId literal \`${value}\`: domain id must use \`domain.dataspace\` format`;
+function domainIdLiteralError(value, reason = 'domain id must use `domain.dataspace` format') {
+    return `invalid DomainId literal \`${value}\`: ${reason}`;
 }
 function normalizeDomainIdLiteralString(value) {
     const trimmed = value.trim().toLowerCase();
+    if (trimmed !== value) {
+        throw new Error(domainIdLiteralError(value, 'domain id must not contain leading or trailing whitespace'));
+    }
     const parts = trimmed.split('.');
-    if (trimmed !== value || parts.length !== 2 || parts.some((part) => part.length === 0 || /\s/u.test(part) || /[@#$]/u.test(part))) {
+    if (parts.length !== 2 || parts.some((part) => part.length === 0 || /\s/u.test(part) || /[@#$]/u.test(part))) {
         throw new Error(domainIdLiteralError(value));
     }
     return trimmed;
@@ -3116,8 +3172,11 @@ function normalizeDomainIdLiteral(value, line, column) {
     try {
         return normalizeDomainIdLiteralString(value);
     }
-    catch {
-        throw new StudioCompileError(`semantic error: ${domainIdLiteralError(value)}`, line, column);
+    catch (error) {
+        const message = error instanceof Error && error.message.startsWith('invalid DomainId literal')
+            ? error.message
+            : domainIdLiteralError(value);
+        throw new StudioCompileError(`semantic error: ${message}`, line, column);
     }
 }
 function normalizePublicKeyLiteral(value, context, line, column) {
@@ -3159,34 +3218,42 @@ function normalizePeerIdLiteral(value, line, column) {
 }
 function normalizeAccountIdOrPublicKeyLiteral(value, context, line, column) {
     const trimmed = value.trim();
-    const accountPublicKey = renderCanonicalPublicKeyLiteralFromAccountIdLiteral(trimmed);
+    const accountPublicKey = renderRustAccountPublicKeyLiteralFromAccountIdLiteral(trimmed);
     if (accountPublicKey !== null) {
         return accountPublicKey.toLowerCase();
     }
-    if (isCanonicalPublicKeyLiteral(trimmed)) {
-        return trimmed;
-    }
-    throw new StudioCompileError(`${context} must use a canonical encoded account id or domainless public-key account literal in the browser compiler.`, line, column);
+    throw new StudioCompileError(`${context} must use a canonical I105 account id literal in the browser compiler.`, line, column);
 }
 function normalizeEncodedAccountIdLiteral(value, context, line, column) {
     const trimmed = value.trim();
-    const accountPublicKey = trimmed === value
-        ? renderCanonicalPublicKeyLiteralFromAccountIdLiteral(trimmed)
-        : null;
+    const accountPublicKey = renderRustAccountPublicKeyLiteralFromAccountIdLiteral(trimmed);
     if (accountPublicKey !== null) {
         return accountPublicKey.toLowerCase();
     }
-    throw new StudioCompileError(`semantic error: invalid ${context} literal \`${value}\`: AccountId must use a canonical I105 literal`, line, column);
+    throw new StudioCompileError(`semantic error: invalid ${context} literal \`${value}\`: ${invalidAccountIdLiteralCause(value)}`, line, column);
 }
 function normalizeTriggerAuthorityLiteral(value, line, column) {
     const trimmed = value.trim();
-    const accountPublicKey = trimmed === value
-        ? renderCanonicalPublicKeyLiteralFromAccountIdLiteral(trimmed)
-        : null;
+    const accountPublicKey = renderRustAccountPublicKeyLiteralFromAccountIdLiteral(trimmed);
     if (accountPublicKey !== null) {
         return accountPublicKey.toLowerCase();
     }
-    throw new StudioCompileError(`semantic error: invalid trigger authority \`${value}\`: AccountId must use a canonical I105 literal`, line, column);
+    throw new StudioCompileError(`semantic error: invalid trigger authority \`${value}\`: ${invalidAccountIdLiteralCause(value)}`, line, column);
+}
+function isDefaultNetworkAccountIdLiteral(value) {
+    const accountId = normalizeAccountIdLiteral(value);
+    return accountId !== null && accountId.startsWith('sora');
+}
+function renderRustAccountPublicKeyLiteralFromAccountIdLiteral(value) {
+    return isDefaultNetworkAccountIdLiteral(value)
+        ? renderCanonicalPublicKeyLiteralFromAccountIdLiteral(value)
+        : null;
+}
+function invalidAccountIdLiteralCause(value) {
+    const accountId = normalizeAccountIdLiteral(value);
+    return accountId !== null && !accountId.startsWith('sora')
+        ? 'ERR_UNEXPECTED_NETWORK_PREFIX'
+        : 'AccountId must use a canonical I105 literal';
 }
 function readPublicKeyVarUint(bytes, offset) {
     let value = 0;
@@ -3254,15 +3321,37 @@ function parseJsonLiteralValue(jsonText, line, column) {
         throw new StudioCompileError(`semantic error: invalid JSON literal \`${jsonText}\`: JSON error: ${detail}`, line, column);
     }
 }
-function validateNameLiteral(value, line, column) {
+function rustJsonParseErrorDetail(raw, error) {
+    const message = error instanceof Error ? error.message : String(error);
+    const trimmed = raw.trimEnd();
+    if (trimmed.endsWith('{') || trimmed.endsWith('[') || /unexpected end/iu.test(message)) {
+        const byteLength = new TextEncoder().encode(raw).length;
+        return `unexpected end of input at byte ${byteLength} (line 1, col ${[...raw].length + 1})`;
+    }
+    return message.replace(/^SyntaxError:\s*/u, '');
+}
+function invalidNameLiteralReason(value) {
     if (value.length === 0) {
-        throw new StudioCompileError('semantic error: invalid Name literal ``: Empty `Name`', line, column);
+        return 'Empty `Name`';
     }
     if (/\s/u.test(value)) {
-        throw new StudioCompileError(`semantic error: invalid Name literal \`${value}\`: White space not allowed in \`Name\` constructs`, line, column);
+        return 'White space not allowed in `Name` constructs';
     }
     if (/[@#$]/u.test(value)) {
-        throw new StudioCompileError(`semantic error: invalid Name literal \`${value}\`: The \`@\` character is reserved for scoped alias/public-key constructs, \`#\` for alias separators (for example \`name#domain.dataspace\`), and \`$\` — for \`nft$domain\`.`, line, column);
+        return 'The `@` character is reserved for scoped alias/public-key constructs, `#` for alias separators (for example `name#domain.dataspace`), and `$` — for `nft$domain`.';
+    }
+    return null;
+}
+function validateNameLiteral(value, line, column) {
+    const reason = invalidNameLiteralReason(value);
+    if (reason !== null) {
+        throw new StudioCompileError(`semantic error: invalid Name literal \`${value}\`: ${reason}`, line, column);
+    }
+}
+function validateExecuteTriggerIdLiteral(value, line, column) {
+    const reason = invalidNameLiteralReason(value);
+    if (reason !== null) {
+        throw new StudioCompileError(`semantic error: invalid execute trigger id \`${value}\`: ${reason}`, line, column);
     }
 }
 function encodeNamePointerPayload(value) {
@@ -3310,21 +3399,30 @@ function hasValidAssetDefinitionChecksum(decoded) {
 }
 function parseAssetDefinitionIdBytes(value, line, column) {
     const trimmed = value.trim();
+    if (!trimmed) {
+        throw new StudioCompileError(`semantic error: invalid AssetDefinitionId literal \`${value}\`: Asset Definition ID must not be empty`, line, column);
+    }
+    if (trimmed.includes(':')) {
+        throw new StudioCompileError(`semantic error: invalid AssetDefinitionId literal \`${value}\`: Asset Definition ID must use unprefixed Base58 format`, line, column);
+    }
     const decoded = decodeBase58(trimmed);
-    if (!decoded || decoded.length !== ASSET_DEFINITION_ADDRESS_LEN) {
+    if (!decoded) {
         throw new StudioCompileError(`semantic error: invalid AssetDefinitionId literal \`${value}\`: Asset Definition ID must be valid Base58`, line, column);
+    }
+    if (decoded.length !== ASSET_DEFINITION_ADDRESS_LEN) {
+        throw new StudioCompileError(`semantic error: invalid AssetDefinitionId literal \`${value}\`: Asset Definition ID must contain exactly 21 decoded bytes`, line, column);
     }
     if (decoded[0] !== ASSET_DEFINITION_ADDRESS_VERSION) {
-        throw new StudioCompileError(`semantic error: invalid AssetDefinitionId literal \`${value}\`: Asset Definition ID must be valid Base58`, line, column);
-    }
-    if ((decoded[ASSET_DEFINITION_UUID_VERSION_INDEX] >> 4) !== 0b0100) {
-        throw new StudioCompileError(`semantic error: invalid AssetDefinitionId literal \`${value}\`: Asset Definition ID must be valid Base58`, line, column);
-    }
-    if ((decoded[ASSET_DEFINITION_UUID_VARIANT_INDEX] & 0b1100_0000) !== 0b1000_0000) {
-        throw new StudioCompileError(`semantic error: invalid AssetDefinitionId literal \`${value}\`: Asset Definition ID must be valid Base58`, line, column);
+        throw new StudioCompileError(`semantic error: invalid AssetDefinitionId literal \`${value}\`: Asset Definition ID version is not supported`, line, column);
     }
     if (!hasValidAssetDefinitionChecksum(decoded)) {
         throw new StudioCompileError(`semantic error: invalid AssetDefinitionId literal \`${value}\`: Asset Definition ID checksum is invalid`, line, column);
+    }
+    if ((decoded[ASSET_DEFINITION_UUID_VERSION_INDEX] >> 4) !== 0b0100) {
+        throw new StudioCompileError(`semantic error: invalid AssetDefinitionId literal \`${value}\`: Asset Definition ID must encode UUIDv4 bytes`, line, column);
+    }
+    if ((decoded[ASSET_DEFINITION_UUID_VARIANT_INDEX] & 0b1100_0000) !== 0b1000_0000) {
+        throw new StudioCompileError(`semantic error: invalid AssetDefinitionId literal \`${value}\`: Asset Definition ID must encode UUIDv4 bytes`, line, column);
     }
     return decoded.slice(1, 17);
 }
@@ -3336,11 +3434,19 @@ function parseNftLiteral(value, line, column) {
     const trimmed = value.trim();
     const separator = trimmed.indexOf('$');
     if (separator <= 0 || separator !== trimmed.lastIndexOf('$') || separator === trimmed.length - 1) {
-        throw new StudioCompileError(`Invalid nft literal \`${value}\` in the browser compiler.`, line, column);
+        throw new StudioCompileError('Non Fungible Asset ID should have format `name$domain` or `name$domain.dataspace`', line, column);
+    }
+    const name = trimmed.slice(0, separator);
+    const domain = trimmed.slice(separator + 1);
+    if (invalidNameLiteralReason(name) !== null) {
+        throw new StudioCompileError('Failed to parse `name` part in `name$domain`', line, column);
+    }
+    if (invalidNameLiteralReason(domain) !== null) {
+        throw new StudioCompileError('Failed to parse `domain` part in `name$domain` or `name$domain.dataspace`', line, column);
     }
     return {
-        name: normalizeTriggerNameLikeLiteral(trimmed.slice(0, separator), 'nft name', line, column),
-        domain: normalizeTriggerNameLikeLiteral(trimmed.slice(separator + 1), 'domain', line, column),
+        name,
+        domain,
     };
 }
 function renderNftLiteral(value) {
@@ -3350,56 +3456,77 @@ function parseRwaIdLiteral(value, line, column) {
     const trimmed = value.trim();
     const separator = trimmed.indexOf('$');
     if (separator <= 0 || separator !== trimmed.lastIndexOf('$') || separator === trimmed.length - 1) {
-        throw new StudioCompileError(`Invalid rwa literal \`${value}\` in the browser compiler.`, line, column);
+        throw new StudioCompileError('RWA ID should have format `hash$domain`', line, column);
     }
     const hashHex = trimmed.slice(0, separator).toLowerCase();
     if (!/^[0-9a-f]{64}$/u.test(hashHex)) {
-        throw new StudioCompileError(`Invalid rwa literal \`${value}\` in the browser compiler.`, line, column);
+        throw new StudioCompileError('Failed to parse `hash` part in `hash$domain`', line, column);
     }
     const hashBytes = hexToBytes(hashHex);
     if ((hashBytes[hashBytes.length - 1] & 1) !== 1) {
-        throw new StudioCompileError(`Invalid rwa literal \`${value}\` in the browser compiler.`, line, column);
+        throw new StudioCompileError('Failed to parse `hash` part in `hash$domain`', line, column);
+    }
+    const domain = trimmed.slice(separator + 1);
+    if (invalidNameLiteralReason(domain) !== null) {
+        throw new StudioCompileError('Failed to parse `domain` part in `hash$domain`', line, column);
     }
     return {
         hashBytes,
-        domain: normalizeTriggerNameLikeLiteral(trimmed.slice(separator + 1), 'rwa domain', line, column),
+        domain,
+    };
+}
+function parseAssetIdBucketLiteral(value, line, column) {
+    const trimmed = value.trim();
+    if (!trimmed) {
+        throw new StudioCompileError('Asset balance bucket literal must not be empty', line, column);
+    }
+    const parts = trimmed.split('#');
+    if (parts.length < 2) {
+        throw new StudioCompileError('Asset balance bucket literal must include an account id', line, column);
+    }
+    if (parts.length > 3) {
+        throw new StudioCompileError('Asset balance bucket literal must use `<base58-asset-definition-id>#<i105-account-id>` with optional `#dataspace:<id>` suffix; canonical asset-definition ids are Base58', line, column);
+    }
+    let definitionBytes;
+    try {
+        definitionBytes = parseAssetDefinitionIdBytes(parts[0] ?? '', line, column);
+    }
+    catch (error) {
+        throw new StudioCompileError(normalizeTriggerMatcherLiteralCause(error, parts[0] ?? ''), line, column);
+    }
+    const accountPublicKey = renderRustAccountPublicKeyLiteralFromAccountIdLiteral(parts[1] ?? '');
+    if (accountPublicKey === null) {
+        throw new StudioCompileError('Asset ID account is invalid', line, column);
+    }
+    let scope = null;
+    if (parts.length === 3) {
+        const rawScope = parts[2] ?? '';
+        const dataspace = rawScope.startsWith('dataspace:') ? rawScope.slice('dataspace:'.length) : null;
+        if (dataspace === null) {
+            throw new StudioCompileError('Asset ID scope must use `dataspace:<id>` when present', line, column);
+        }
+        scope = parseU64PointerLiteral(dataspace);
+        if (scope === null) {
+            throw new StudioCompileError('Asset ID dataspace scope must be a u64', line, column);
+        }
+    }
+    return {
+        definitionBytes,
+        accountPublicKey: accountPublicKey.toLowerCase(),
+        scope,
     };
 }
 function parseAssetMatcherLiteral(value, line, column) {
-    const trimmed = value.trim();
-    const parts = trimmed.split('#');
-    if (parts.length !== 2) {
-        throw new StudioCompileError(`Invalid asset literal \`${value}\` in the browser compiler.`, line, column);
-    }
-    return {
-        definitionBytes: parseAssetDefinitionIdBytes(parts[0] ?? '', line, column),
-        accountPublicKey: normalizeAccountIdOrPublicKeyLiteral(parts[1] ?? '', 'Asset matcher', line, column),
-    };
-}
-function parseAssetBalanceScopeLiteral(scope, value, line, column) {
-    if (scope === null)
-        return null;
-    const raw = scope.startsWith('dataspace:') ? scope.slice('dataspace:'.length) : '';
-    const id = parseU64PointerLiteral(raw);
-    if (id === null) {
-        throw new StudioCompileError(`Invalid asset_id literal \`${value}\` in the browser compiler.`, line, column);
-    }
-    return id;
+    return parseAssetIdBucketLiteral(value, line, column);
 }
 function parseAssetIdPointerLiteral(value, line, column) {
-    const parsed = parseAssetIdLiteral(value);
-    if (parsed === null) {
-        throw new StudioCompileError(`Invalid asset_id literal \`${value}\` in the browser compiler.`, line, column);
+    try {
+        return parseAssetIdBucketLiteral(value, line, column);
     }
-    const accountPublicKey = renderCanonicalPublicKeyLiteralFromAccountIdLiteral(parsed.accountId);
-    if (accountPublicKey === null) {
-        throw new StudioCompileError(`Invalid asset_id literal \`${value}\` in the browser compiler.`, line, column);
+    catch (error) {
+        const reason = normalizeTriggerMatcherLiteralCause(error, value);
+        throw new StudioCompileError(`semantic error: invalid AssetId literal \`${value}\`: ${reason}`, line, column);
     }
-    return {
-        definitionBytes: parseAssetDefinitionIdBytes(parsed.definitionId, line, column),
-        accountPublicKey: accountPublicKey.toLowerCase(),
-        scope: parseAssetBalanceScopeLiteral(parsed.scope, value, line, column),
-    };
 }
 function encodeTriggerRepeatsBare(repeats) {
     if (repeats.kind === 'indefinitely') {
@@ -3421,7 +3548,7 @@ function parseTriggerDataMatcherValue(trigger, family, matcher, parser) {
     }
     catch (error) {
         const reason = normalizeTriggerMatcherLiteralCause(error, matcher.value);
-        throw new StudioCompileError(`trigger \`${trigger.id}\` has invalid \`${matcher.key}\` matcher literal \`${matcher.value}\` in \`${family}\` data filter: ${reason}`, line, column);
+        throw new StudioCompileError(`semantic error: trigger \`${trigger.id}\` has invalid \`${matcher.key}\` matcher literal \`${matcher.value}\` in \`${family}\` data filter: ${reason}`, line, column);
     }
 }
 function triggerDataMatcherValues(trigger, specs) {
@@ -3438,10 +3565,10 @@ function triggerDataMatcherValues(trigger, specs) {
         const column = matcher.column ?? trigger.column;
         const parser = parsers.get(matcher.key);
         if (parser === undefined) {
-            throw new StudioCompileError(`trigger \`${trigger.id}\` does not support \`${matcher.key}\` matcher in \`${family}\` data filter`, line, column);
+            throw new StudioCompileError(`semantic error: trigger \`${trigger.id}\` does not support \`${matcher.key}\` matcher in \`${family}\` data filter`, line, column);
         }
         if (seen.has(matcher.key)) {
-            throw new StudioCompileError(`trigger \`${trigger.id}\` has duplicate \`${matcher.key}\` matcher in \`${family}\` data filter`, line, column);
+            throw new StudioCompileError(`semantic error: trigger \`${trigger.id}\` has duplicate \`${matcher.key}\` matcher in \`${family}\` data filter`, line, column);
         }
         seen.set(matcher.key, parseTriggerDataMatcherValue(trigger, family, matcher, parser));
     }
@@ -3462,7 +3589,7 @@ function parseNameIdMatcherLiteral(value, line, column) {
     return value;
 }
 function triggerDataEventMask(triggerId, family, event, line, column) {
-    const normalized = event?.toLowerCase() ?? null;
+    const normalized = event ?? null;
     switch (family) {
         case 'peer':
             switch (normalized) {
@@ -3606,7 +3733,7 @@ function triggerDataEventMask(triggerId, family, event, line, column) {
             }
             break;
     }
-    throw new StudioCompileError(`trigger \`${triggerId}\` does not support \`${event ?? 'any'}\` event kind for \`${family}\` data filter`, line, column);
+    throw new StudioCompileError(`semantic error: trigger \`${triggerId}\` does not support \`${event ?? 'any'}\` event kind for \`${family}\` data filter`, line, column);
 }
 function encodeDataEventFilterBare(trigger) {
     if (trigger.filter.kind !== 'data') {
@@ -3710,14 +3837,28 @@ function buildTriggerMetadataValue(expression) {
             return JSON.parse(rawArg.value);
         }
         catch (error) {
-            throw new StudioCompileError(`Invalid trigger metadata JSON literal: ${String(error)}.`, expression.line, expression.column);
+            throw new StudioCompileError(`semantic error: invalid json metadata literal: JSON error: ${rustJsonParseErrorDetail(rawArg.value, error)}`, expression.line, expression.column);
         }
     }
-    const value = buildJsonValue(expression);
-    if (value === null) {
-        throw new StudioCompileError('semantic error: trigger metadata values must be JSON literals', expression.line, expression.column);
+    if (expression.kind === 'decimal') {
+        const value = Number.parseFloat(expression.value.replaceAll('_', ''));
+        if (!Number.isFinite(value)) {
+            throw new StudioCompileError(`semantic error: invalid decimal metadata literal \`${expression.value}\`: not finite`, expression.line, expression.column);
+        }
+        return value;
     }
-    return value;
+    switch (expression.kind) {
+        case 'string':
+            return expression.value;
+        case 'number':
+            return expression.value;
+        case 'boolean':
+            return expression.value;
+        case 'jsonLiteral':
+            return JSON.parse(expression.text);
+        default:
+            throw new StudioCompileError('semantic error: trigger metadata values must be JSON literals', expression.line, expression.column);
+    }
 }
 function normalizeTriggerMetadataKey(key, line, column) {
     if (key.length === 0) {
@@ -4457,13 +4598,12 @@ function decodeNoritoStringBare(bytes) {
         return null;
     }
 }
-function decodeNoritoBytesBare(bytes) {
+function decodeNoritoBytesBare(bytes, flags = 0) {
     try {
-        const reader = new NoritoAccessReader(bytes);
-        const value = reader.readLenPrefixedBytesU64();
-        if (reader.remaining() !== 0)
+        const field = readNoritoLenPrefixedBytesAt(bytes, 0, flags);
+        if (!field || field.offset !== bytes.length)
             return null;
-        return value;
+        return field.field;
     }
     catch {
         return null;
@@ -4571,29 +4711,28 @@ function decodeNoritoEnumVariantBareWithFlags(bytes, flags) {
 function decodeNoritoEnumVariantBare(bytes) {
     return decodeNoritoEnumVariantBareWithFlags(bytes, 0);
 }
-function decodeNameBare(bytes) {
-    return decodeNoritoStringBare(bytes);
+function decodeNameBare(bytes, flags = 0) {
+    return decodeNoritoStringBareWithFlags(bytes, flags);
 }
-function decodeSingleFieldNameWrapper(bytes) {
+function decodeSingleFieldNameWrapper(bytes, flags = 0) {
     try {
-        const reader = new NoritoAccessReader(bytes);
-        const field = reader.readLenPrefixedBytesU64();
-        if (reader.remaining() !== 0)
+        const field = readNoritoLenPrefixedBytesAt(bytes, 0, flags);
+        if (field === null || field.offset !== bytes.length)
             return null;
-        return decodeNameBare(field);
+        return decodeNameBare(field.field, flags);
     }
     catch {
         return null;
     }
 }
-function decodeDomainIdBare(bytes) {
-    return decodeSingleFieldNameWrapper(bytes);
+function decodeDomainIdBare(bytes, flags = 0) {
+    return decodeSingleFieldNameWrapper(bytes, flags);
 }
-function decodeRoleIdBare(bytes) {
-    return decodeSingleFieldNameWrapper(bytes);
+function decodeRoleIdBare(bytes, flags = 0) {
+    return decodeSingleFieldNameWrapper(bytes, flags);
 }
-function decodeTriggerIdBare(bytes) {
-    return decodeSingleFieldNameWrapper(bytes);
+function decodeTriggerIdBare(bytes, flags = 0) {
+    return decodeSingleFieldNameWrapper(bytes, flags);
 }
 function decodeTriggerIdBareWithFlags(bytes, flags) {
     const fields = readNoritoStructFieldsWithFlags(bytes, flags, 1);
@@ -4601,15 +4740,18 @@ function decodeTriggerIdBareWithFlags(bytes, flags) {
         return null;
     return decodeNoritoStringBareWithFlags(fields[0], flags);
 }
-function decodeNftIdBare(bytes) {
+function decodeNftIdBare(bytes, flags = 0) {
     try {
-        const reader = new NoritoAccessReader(bytes);
-        const domainField = reader.readLenPrefixedBytesU64();
-        const nameField = reader.readLenPrefixedBytesU64();
-        if (reader.remaining() !== 0)
+        const domainField = readNoritoLenPrefixedBytesAt(bytes, 0, flags);
+        const nameField = domainField === null
+            ? null
+            : readNoritoLenPrefixedBytesAt(bytes, domainField.offset, flags);
+        if (domainField === null
+            || nameField === null
+            || nameField.offset !== bytes.length)
             return null;
-        const domain = decodeDomainIdBare(domainField);
-        const name = decodeNameBare(nameField);
+        const domain = decodeDomainIdBare(domainField.field, flags);
+        const name = decodeNameBare(nameField.field, flags);
         if (!domain || !name)
             return null;
         return `${name}$${domain}`;
@@ -4663,14 +4805,22 @@ function decodeAssetDefinitionLiteral(bytes) {
         return null;
     return {
         literal,
-        domain: 'aid',
+        domain: null,
     };
 }
-function decodePermissionNameBare(bytes) {
+function decodePermissionNameBare(bytes, flags = 0) {
     try {
-        const reader = new NoritoAccessReader(bytes);
-        const nameField = reader.readLenPrefixedBytesU64();
-        return decodeNoritoStringBare(nameField);
+        const nameField = readNoritoLenPrefixedBytesAt(bytes, 0, flags);
+        const payloadField = nameField === null
+            ? null
+            : readNoritoLenPrefixedBytesAt(bytes, nameField.offset, flags);
+        if (nameField === null
+            || payloadField === null
+            || payloadField.offset !== bytes.length
+            || decodeNoritoStringBareWithFlags(payloadField.field, flags) === null) {
+            return null;
+        }
+        return decodeNoritoStringBareWithFlags(nameField.field, flags);
     }
     catch {
         return null;
@@ -4835,8 +4985,8 @@ function decodeAccountIdBare(bytes, flags = 0) {
         return null;
     return renderCanonicalAccountIdLiteralFromPublicKeyLiteral(publicKey);
 }
-function decodeAssetBalanceScopeBare(bytes) {
-    const scope = decodeNoritoEnumVariantBare(bytes);
+function decodeAssetBalanceScopeBare(bytes, flags = 0) {
+    const scope = decodeNoritoEnumVariantBareWithFlags(bytes, flags);
     if (!scope)
         return undefined;
     if (scope.tag === 0 && scope.payload === null)
@@ -4845,19 +4995,26 @@ function decodeAssetBalanceScopeBare(bytes) {
         return undefined;
     return decodeDataSpaceIdBare(scope.payload);
 }
-function decodeAssetIdLiteral(bytes) {
+function decodeAssetIdLiteral(bytes, flags = 0) {
+    const accountField = readNoritoLenPrefixedBytesAt(bytes, 0, flags);
+    const definitionField = accountField === null
+        ? null
+        : readNoritoLenPrefixedBytesAt(bytes, accountField.offset, flags);
+    const scopeField = definitionField === null
+        ? null
+        : readNoritoLenPrefixedBytesAt(bytes, definitionField.offset, flags);
+    if (accountField === null
+        || definitionField === null
+        || scopeField === null
+        || scopeField.offset !== bytes.length) {
+        return null;
+    }
     try {
-        const reader = new NoritoAccessReader(bytes);
-        const accountField = reader.readLenPrefixedBytesU64();
-        const definitionField = reader.readLenPrefixedBytesU64();
-        const scopeField = reader.readLenPrefixedBytesU64();
-        if (reader.remaining() !== 0)
-            return null;
-        const account = decodeAccountIdBare(accountField);
-        const definition = decodeAssetDefinitionLiteral(definitionField);
+        const account = decodeAccountIdBare(accountField.field, flags);
+        const definition = decodeAssetDefinitionLiteral(definitionField.field);
         if (!account || !definition)
             return null;
-        const dataspace = decodeAssetBalanceScopeBare(scopeField);
+        const dataspace = decodeAssetBalanceScopeBare(scopeField.field, flags);
         if (dataspace === undefined)
             return null;
         if (dataspace === null) {
@@ -4960,12 +5117,15 @@ function readWriteDetailAccess(reads, detailKey) {
     };
 }
 function readAssetAccess(asset) {
-    return [
+    const reads = [
         keyAsset(asset.literal),
         keyAccount(asset.account),
         keyAssetDef(asset.definition.literal),
-        keyDomain(asset.definition.domain),
     ];
+    if (asset.definition.domain !== null) {
+        reads.push(keyDomain(asset.definition.domain));
+    }
+    return reads;
 }
 function buildAssetLiteral(definition, account, dataspace = null) {
     return {
@@ -4995,8 +5155,12 @@ function readWriteTriggerAccess(id) {
     };
 }
 function readWriteAssetDefinitionRegistrationAccess(definition) {
+    const reads = [keyAssetDef(definition.literal)];
+    if (definition.domain !== null) {
+        reads.push(keyDomain(definition.domain));
+    }
     return {
-        reads: [keyAssetDef(definition.literal), keyDomain(definition.domain)],
+        reads,
         writes: [keyAssetDef(definition.literal)],
     };
 }
@@ -5009,16 +5173,37 @@ function mergeLiteralAccessSets(...sets) {
         writes: available.flatMap((set) => set.writes),
     };
 }
-function firstStructField(bytes) {
-    const reader = new NoritoAccessReader(bytes);
-    return reader.readLenPrefixedBytesU64();
+function firstStructField(bytes, flags = 0) {
+    const field = readNoritoLenPrefixedBytesAt(bytes, 0, flags);
+    return field === null ? null : field.field;
 }
-function singleFieldStruct(bytes) {
-    const reader = new NoritoAccessReader(bytes);
-    const field = reader.readLenPrefixedBytesU64();
-    if (reader.remaining() !== 0)
+function singleFieldStruct(bytes, flags = 0) {
+    const field = readNoritoLenPrefixedBytesAt(bytes, 0, flags);
+    if (field === null || field.offset !== bytes.length)
         return null;
-    return field;
+    return field.field;
+}
+function readStructFieldsBare(bytes, count, flags = 0) {
+    return readNoritoStructFieldsWithFlags(bytes, flags, count);
+}
+function decodeRegisterDomainIdBare(bytes, flags = 0) {
+    const fields = readStructFieldsBare(bytes, 3, flags);
+    return fields === null ? null : decodeDomainIdBare(fields[0], flags);
+}
+function decodeRegisterAccountIdBare(bytes, flags = 0) {
+    const fields = readStructFieldsBare(bytes, 5, flags);
+    return fields === null ? null : decodeAccountIdBare(fields[0], flags);
+}
+function decodeRegisterNftIdBare(bytes, flags = 0) {
+    const fields = readStructFieldsBare(bytes, 3, flags);
+    return fields === null ? null : decodeNftIdBare(fields[0], flags);
+}
+function decodeRegisterRoleIdBare(bytes, flags = 0) {
+    const fields = readStructFieldsBare(bytes, 2, flags);
+    if (fields === null)
+        return null;
+    const roleFields = readStructFieldsBare(fields[0], 3, flags);
+    return roleFields === null ? null : decodeRoleIdBare(roleFields[0], flags);
 }
 function readNoritoStructFieldsWithFlags(bytes, flags, count) {
     const fields = [];
@@ -5137,7 +5322,7 @@ function decodeProofBoxBareWithFlags(bytes, flags) {
     const fields = readNoritoStructFieldsWithFlags(bytes, flags, 2);
     return fields !== null
         && decodeNoritoStringBareWithFlags(fields[0], flags) !== null
-        && decodeNoritoBytesBare(fields[1]) !== null;
+        && decodeNoritoBytesBare(fields[1], flags) !== null;
 }
 function decodeProofAttachmentBareWithFlags(bytes, flags) {
     const fields = readNoritoStructFieldsWithFlags(bytes, flags, 3);
@@ -5169,7 +5354,7 @@ function decodeZkSubmitBallotLiteralAccess(payload, flags) {
         return null;
     const electionId = decodeNoritoStringBareWithFlags(fields[0], flags);
     if (electionId === null
-        || decodeNoritoBytesBare(fields[1]) === null
+        || decodeNoritoBytesBare(fields[1], flags) === null
         || !decodeProofAttachmentBareWithFlags(fields[2], flags)
         || !decodeFixedBytesBareWithFlags(fields[3], flags, 32)) {
         return null;
@@ -5234,39 +5419,41 @@ function decodeLogLiteralAccess(payload, flags) {
         ? null
         : { reads: [], writes: [] };
 }
-function decodeRegisterLiteralAccess(payload) {
-    const variant = decodeNoritoEnumVariantBare(payload);
+function decodeRegisterLiteralAccess(payload, flags = 0) {
+    const variant = decodeNoritoEnumVariantBareWithFlags(payload, flags);
     if (!variant || variant.payload === null)
         return null;
     try {
-        const objectField = singleFieldStruct(variant.payload);
+        const objectField = singleFieldStruct(variant.payload, flags);
         if (!objectField)
             return null;
         switch (variant.tag) {
             case 0:
                 return null;
             case 1: {
-                const id = decodeDomainIdBare(firstStructField(objectField));
+                const id = decodeRegisterDomainIdBare(objectField, flags);
                 return id ? readWriteKeyAccess(keyDomain(id)) : null;
             }
             case 2: {
-                const id = decodeAccountIdBare(firstStructField(objectField));
+                const id = decodeRegisterAccountIdBare(objectField, flags);
                 return id ? readWriteKeyAccess(keyAccount(id)) : null;
             }
             case 3: {
-                const definition = decodeAssetDefinitionLiteral(firstStructField(objectField));
+                const definitionField = firstStructField(objectField, flags);
+                const definition = definitionField === null ? null : decodeAssetDefinitionLiteral(definitionField);
                 return definition ? readWriteAssetDefinitionRegistrationAccess(definition) : null;
             }
             case 4: {
-                const id = decodeNftIdBare(firstStructField(objectField));
+                const id = decodeRegisterNftIdBare(objectField, flags);
                 return id ? readWriteKeyAccess(keyNft(id)) : null;
             }
             case 5: {
-                const role = decodeRoleIdBare(firstStructField(firstStructField(objectField)));
+                const role = decodeRegisterRoleIdBare(objectField, flags);
                 return role ? readWriteKeyAccess(keyRole(role)) : null;
             }
             case 6: {
-                const id = decodeTriggerIdBare(firstStructField(objectField));
+                const triggerField = firstStructField(objectField, flags);
+                const id = triggerField === null ? null : decodeTriggerIdBare(triggerField, flags);
                 return id ? readWriteTriggerAccess(id) : null;
             }
             default:
@@ -5277,23 +5464,23 @@ function decodeRegisterLiteralAccess(payload) {
         return null;
     }
 }
-function decodeUnregisterLiteralAccess(payload) {
-    const variant = decodeNoritoEnumVariantBare(payload);
+function decodeUnregisterLiteralAccess(payload, flags = 0) {
+    const variant = decodeNoritoEnumVariantBareWithFlags(payload, flags);
     if (!variant || variant.payload === null)
         return null;
     try {
-        const objectField = singleFieldStruct(variant.payload);
+        const objectField = singleFieldStruct(variant.payload, flags);
         if (!objectField)
             return null;
         switch (variant.tag) {
             case 0:
                 return null;
             case 1: {
-                const id = decodeDomainIdBare(objectField);
+                const id = decodeDomainIdBare(objectField, flags);
                 return id ? readWriteKeyAccess(keyDomain(id)) : null;
             }
             case 2: {
-                const id = decodeAccountIdBare(objectField);
+                const id = decodeAccountIdBare(objectField, flags);
                 return id ? readWriteKeyAccess(keyAccount(id)) : null;
             }
             case 3: {
@@ -5301,15 +5488,15 @@ function decodeUnregisterLiteralAccess(payload) {
                 return id ? readWriteKeyAccess(keyAssetDef(id)) : null;
             }
             case 4: {
-                const id = decodeNftIdBare(objectField);
+                const id = decodeNftIdBare(objectField, flags);
                 return id ? readWriteKeyAccess(keyNft(id)) : null;
             }
             case 5: {
-                const id = decodeRoleIdBare(objectField);
+                const id = decodeRoleIdBare(objectField, flags);
                 return id ? readWriteKeyAccess(keyRole(id)) : null;
             }
             case 6: {
-                const id = decodeTriggerIdBare(objectField);
+                const id = decodeTriggerIdBare(objectField, flags);
                 return id ? readWriteTriggerAccess(id) : null;
             }
             default:
@@ -5320,41 +5507,58 @@ function decodeUnregisterLiteralAccess(payload) {
         return null;
     }
 }
-function decodeSetOrRemoveKeyValueLiteralAccess(tag, payload) {
+function decodeSetOrRemoveKeyValueLiteralAccess(tag, payload, includesValue, flags = 0) {
     try {
-        const reader = new NoritoAccessReader(payload);
-        const objectField = reader.readLenPrefixedBytesU64();
-        const keyField = reader.readLenPrefixedBytesU64();
-        const key = decodeNameBare(keyField);
+        const objectField = readNoritoLenPrefixedBytesAt(payload, 0, flags);
+        const keyField = objectField === null
+            ? null
+            : readNoritoLenPrefixedBytesAt(payload, objectField.offset, flags);
+        const valueField = includesValue && keyField !== null
+            ? readNoritoLenPrefixedBytesAt(payload, keyField.offset, flags)
+            : null;
+        const endOffset = includesValue
+            ? valueField?.offset
+            : keyField?.offset;
+        if (objectField === null
+            || keyField === null
+            || endOffset !== payload.length) {
+            return null;
+        }
+        if (includesValue) {
+            const value = valueField?.field;
+            if (value === undefined || decodeNoritoStringBareWithFlags(value, flags) === null)
+                return null;
+        }
+        const key = decodeNameBare(keyField.field, flags);
         if (!key)
             return null;
         switch (tag) {
             case 0: {
-                const id = decodeDomainIdBare(objectField);
+                const id = decodeDomainIdBare(objectField.field, flags);
                 if (!id)
                     return null;
                 return readWriteDetailAccess([keyDomain(id)], keyDomainDetail(id, key));
             }
             case 1: {
-                const id = decodeAccountIdBare(objectField);
+                const id = decodeAccountIdBare(objectField.field, flags);
                 if (!id)
                     return null;
                 return readWriteDetailAccess([keyAccount(id)], keyAccountDetail(id, key));
             }
             case 2: {
-                const id = decodeAssetDefinitionIdBare(objectField);
+                const id = decodeAssetDefinitionIdBare(objectField.field);
                 if (!id)
                     return null;
                 return readWriteDetailAccess([keyAssetDef(id)], keyAssetDefDetail(id, key));
             }
             case 3: {
-                const id = decodeNftIdBare(objectField);
+                const id = decodeNftIdBare(objectField.field, flags);
                 if (!id)
                     return null;
                 return readWriteDetailAccess([keyNft(id)], keyNftDetail(id, key));
             }
             case 4: {
-                const id = decodeTriggerIdBare(objectField);
+                const id = decodeTriggerIdBare(objectField.field, flags);
                 if (!id)
                     return null;
                 return { reads: [keyTrigger(id)], writes: [keyTriggerDetail(id, key)] };
@@ -5367,18 +5571,24 @@ function decodeSetOrRemoveKeyValueLiteralAccess(tag, payload) {
         return null;
     }
 }
-function decodeSetOrRemoveAssetKeyValueLiteralAccess(payload, includesValue) {
+function decodeSetOrRemoveAssetKeyValueLiteralAccess(payload, includesValue, flags = 0) {
     try {
-        const reader = new NoritoAccessReader(payload);
-        const assetField = reader.readLenPrefixedBytesU64();
-        const keyField = reader.readLenPrefixedBytesU64();
-        if (includesValue) {
-            reader.readLenPrefixedBytesU64();
-        }
-        if (reader.remaining() !== 0)
+        const assetField = readNoritoLenPrefixedBytesAt(payload, 0, flags);
+        const keyField = assetField === null
+            ? null
+            : readNoritoLenPrefixedBytesAt(payload, assetField.offset, flags);
+        const valueField = includesValue && keyField !== null
+            ? readNoritoLenPrefixedBytesAt(payload, keyField.offset, flags)
+            : null;
+        const endOffset = includesValue
+            ? valueField?.offset
+            : keyField?.offset;
+        if (assetField === null
+            || keyField === null
+            || endOffset !== payload.length)
             return null;
-        const asset = decodeAssetIdLiteral(assetField);
-        const key = decodeNameBare(keyField);
+        const asset = decodeAssetIdLiteral(assetField.field, flags);
+        const key = decodeNameBare(keyField.field, flags);
         if (!asset || !key)
             return null;
         return readWriteDetailAccess(readAssetAccess(asset), keyAssetDetail(asset.literal, key));
@@ -5387,22 +5597,19 @@ function decodeSetOrRemoveAssetKeyValueLiteralAccess(payload, includesValue) {
         return null;
     }
 }
-function decodeTransferLiteralAccess(payload) {
-    const variant = decodeNoritoEnumVariantBare(payload);
+function decodeTransferLiteralAccess(payload, flags = 0) {
+    const variant = decodeNoritoEnumVariantBareWithFlags(payload, flags);
     if (!variant || variant.payload === null)
         return null;
     try {
-        const reader = new NoritoAccessReader(variant.payload);
         switch (variant.tag) {
             case 0: {
-                const sourceField = reader.readLenPrefixedBytesU64();
-                const objectField = reader.readLenPrefixedBytesU64();
-                const destinationField = reader.readLenPrefixedBytesU64();
-                if (reader.remaining() !== 0)
+                const fields = readNoritoStructFieldsWithFlags(variant.payload, flags, 3);
+                if (fields === null)
                     return null;
-                const source = decodeAccountIdBare(sourceField);
-                const domain = decodeDomainIdBare(objectField);
-                const destination = decodeAccountIdBare(destinationField);
+                const source = decodeAccountIdBare(fields[0], flags);
+                const domain = decodeDomainIdBare(fields[1], flags);
+                const destination = decodeAccountIdBare(fields[2], flags);
                 if (!source || !domain || !destination)
                     return null;
                 return {
@@ -5411,14 +5618,12 @@ function decodeTransferLiteralAccess(payload) {
                 };
             }
             case 1: {
-                const sourceField = reader.readLenPrefixedBytesU64();
-                const objectField = reader.readLenPrefixedBytesU64();
-                const destinationField = reader.readLenPrefixedBytesU64();
-                if (reader.remaining() !== 0)
+                const fields = readNoritoStructFieldsWithFlags(variant.payload, flags, 3);
+                if (fields === null)
                     return null;
-                const source = decodeAccountIdBare(sourceField);
-                const definition = decodeAssetDefinitionIdBare(objectField);
-                const destination = decodeAccountIdBare(destinationField);
+                const source = decodeAccountIdBare(fields[0], flags);
+                const definition = decodeAssetDefinitionIdBare(fields[1]);
+                const destination = decodeAccountIdBare(fields[2], flags);
                 if (!source || !definition || !destination)
                     return null;
                 return {
@@ -5427,27 +5632,23 @@ function decodeTransferLiteralAccess(payload) {
                 };
             }
             case 2: {
-                const sourceField = reader.readLenPrefixedBytesU64();
-                reader.readLenPrefixedBytesU64();
-                const destinationField = reader.readLenPrefixedBytesU64();
-                if (reader.remaining() !== 0)
+                const fields = readNoritoStructFieldsWithFlags(variant.payload, flags, 3);
+                if (fields === null)
                     return null;
-                const source = decodeAssetIdLiteral(sourceField);
-                const destinationAccount = decodeAccountIdBare(destinationField);
+                const source = decodeAssetIdLiteral(fields[0], flags);
+                const destinationAccount = decodeAccountIdBare(fields[2], flags);
                 if (!source || !destinationAccount)
                     return null;
                 const destination = buildAssetLiteral(source.definition, destinationAccount);
                 return mergeLiteralAccessSets(readWriteAssetAccess(source), readWriteAssetAccess(destination));
             }
             case 3: {
-                const sourceField = reader.readLenPrefixedBytesU64();
-                const objectField = reader.readLenPrefixedBytesU64();
-                const destinationField = reader.readLenPrefixedBytesU64();
-                if (reader.remaining() !== 0)
+                const fields = readNoritoStructFieldsWithFlags(variant.payload, flags, 3);
+                if (fields === null)
                     return null;
-                const source = decodeAccountIdBare(sourceField);
-                const nft = decodeNftIdBare(objectField);
-                const destination = decodeAccountIdBare(destinationField);
+                const source = decodeAccountIdBare(fields[0], flags);
+                const nft = decodeNftIdBare(fields[1], flags);
+                const destination = decodeAccountIdBare(fields[2], flags);
                 if (!source || !nft || !destination)
                     return null;
                 return {
@@ -5463,29 +5664,26 @@ function decodeTransferLiteralAccess(payload) {
         return null;
     }
 }
-function decodeMintOrBurnLiteralAccess(payload) {
-    const variant = decodeNoritoEnumVariantBare(payload);
+function decodeMintOrBurnLiteralAccess(payload, flags = 0) {
+    const variant = decodeNoritoEnumVariantBareWithFlags(payload, flags);
     if (!variant || variant.payload === null)
         return null;
     try {
-        const reader = new NoritoAccessReader(variant.payload);
         switch (variant.tag) {
             case 0: {
-                reader.readLenPrefixedBytesU64();
-                const destinationField = reader.readLenPrefixedBytesU64();
-                if (reader.remaining() !== 0)
+                const fields = readNoritoStructFieldsWithFlags(variant.payload, flags, 2);
+                if (fields === null)
                     return null;
-                const destination = decodeAssetIdLiteral(destinationField);
+                const destination = decodeAssetIdLiteral(fields[1], flags);
                 if (!destination)
                     return null;
                 return readWriteAssetAccess(destination, [keyAssetDef(destination.definition.literal)]);
             }
             case 1: {
-                reader.readLenPrefixedBytesU64();
-                const destinationField = reader.readLenPrefixedBytesU64();
-                if (reader.remaining() !== 0)
+                const fields = readNoritoStructFieldsWithFlags(variant.payload, flags, 2);
+                if (fields === null)
                     return null;
-                const trigger = decodeTriggerIdBare(destinationField);
+                const trigger = decodeTriggerIdBare(fields[1], flags);
                 if (!trigger)
                     return null;
                 return {
@@ -5501,18 +5699,21 @@ function decodeMintOrBurnLiteralAccess(payload) {
         return null;
     }
 }
-function decodeGrantLiteralAccess(payload) {
-    const variant = decodeNoritoEnumVariantBare(payload);
+function readRequiredStructFieldsBare(payload, flags, count) {
+    return readNoritoStructFieldsWithFlags(payload, flags, count);
+}
+function decodeGrantLiteralAccess(payload, flags = 0) {
+    const variant = decodeNoritoEnumVariantBareWithFlags(payload, flags);
     if (!variant || variant.payload === null)
         return null;
     try {
-        const reader = new NoritoAccessReader(variant.payload);
         switch (variant.tag) {
             case 0: {
-                const permissionField = reader.readLenPrefixedBytesU64();
-                const accountField = reader.readLenPrefixedBytesU64();
-                const permissionName = decodePermissionNameBare(permissionField);
-                const account = decodeAccountIdBare(accountField);
+                const fields = readRequiredStructFieldsBare(variant.payload, flags, 2);
+                if (fields === null)
+                    return null;
+                const permissionName = decodePermissionNameBare(fields[0], flags);
+                const account = decodeAccountIdBare(fields[1], flags);
                 if (!permissionName || !account)
                     return null;
                 return {
@@ -5521,10 +5722,11 @@ function decodeGrantLiteralAccess(payload) {
                 };
             }
             case 1: {
-                const roleField = reader.readLenPrefixedBytesU64();
-                const accountField = reader.readLenPrefixedBytesU64();
-                const role = decodeRoleIdBare(roleField);
-                const account = decodeAccountIdBare(accountField);
+                const fields = readRequiredStructFieldsBare(variant.payload, flags, 2);
+                if (fields === null)
+                    return null;
+                const role = decodeRoleIdBare(fields[0], flags);
+                const account = decodeAccountIdBare(fields[1], flags);
                 if (!role || !account)
                     return null;
                 return {
@@ -5533,10 +5735,11 @@ function decodeGrantLiteralAccess(payload) {
                 };
             }
             case 2: {
-                const permissionField = reader.readLenPrefixedBytesU64();
-                const roleField = reader.readLenPrefixedBytesU64();
-                const permissionName = decodePermissionNameBare(permissionField);
-                const role = decodeRoleIdBare(roleField);
+                const fields = readRequiredStructFieldsBare(variant.payload, flags, 2);
+                if (fields === null)
+                    return null;
+                const permissionName = decodePermissionNameBare(fields[0], flags);
+                const role = decodeRoleIdBare(fields[1], flags);
                 if (!permissionName || !role)
                     return null;
                 return {
@@ -5552,11 +5755,12 @@ function decodeGrantLiteralAccess(payload) {
         return null;
     }
 }
-function decodeExecuteTriggerLiteralAccess(payload) {
+function decodeExecuteTriggerLiteralAccess(payload, flags = 0) {
     try {
-        const reader = new NoritoAccessReader(payload);
-        const triggerField = reader.readLenPrefixedBytesU64();
-        const id = decodeTriggerIdBare(triggerField);
+        const fields = readRequiredStructFieldsBare(payload, flags, 2);
+        if (fields === null || decodeNoritoStringBareWithFlags(fields[1], flags) === null)
+            return null;
+        const id = decodeTriggerIdBare(fields[0], flags);
         if (!id)
             return null;
         return {
@@ -5568,17 +5772,16 @@ function decodeExecuteTriggerLiteralAccess(payload) {
         return null;
     }
 }
-function decodeFindAssetDefinitionQueryAccess(payload) {
+function decodeFindAssetDefinitionQueryAccess(payload, flags = 0) {
     const directId = decodeAssetDefinitionIdBare(payload);
     if (directId) {
         return { reads: [keyAssetDef(directId)], writes: [] };
     }
     try {
-        const reader = new NoritoAccessReader(payload);
-        const idField = reader.readLenPrefixedBytesU64();
-        if (reader.remaining() !== 0)
+        const idField = readNoritoLenPrefixedBytesAt(payload, 0, flags);
+        if (idField === null || idField.offset !== payload.length)
             return null;
-        const id = decodeAssetDefinitionIdBare(idField);
+        const id = decodeAssetDefinitionIdBare(idField.field);
         if (!id)
             return null;
         return { reads: [keyAssetDef(id)], writes: [] };
@@ -5587,17 +5790,16 @@ function decodeFindAssetDefinitionQueryAccess(payload) {
         return null;
     }
 }
-function decodeFindAssetQueryAccess(payload) {
-    const directId = decodeAssetIdLiteral(payload);
+function decodeFindAssetQueryAccess(payload, flags = 0) {
+    const directId = decodeAssetIdLiteral(payload, flags);
     if (directId) {
         return { reads: readAssetAccess(directId), writes: [] };
     }
     try {
-        const reader = new NoritoAccessReader(payload);
-        const idField = reader.readLenPrefixedBytesU64();
-        if (reader.remaining() !== 0)
+        const idField = readNoritoLenPrefixedBytesAt(payload, 0, flags);
+        if (idField === null || idField.offset !== payload.length)
             return null;
-        const id = decodeAssetIdLiteral(idField);
+        const id = decodeAssetIdLiteral(idField.field, flags);
         if (!id)
             return null;
         return { reads: readAssetAccess(id), writes: [] };
@@ -5623,7 +5825,7 @@ function decodeInstructionBoxLiteralAccess(raw) {
             || framedPayloadField.offset !== outer.payload.length)
             return null;
         const wireId = decodeNoritoStringBareWithFlags(wireIdField.field, outer.flags);
-        const framedPayload = decodeNoritoBytesBare(framedPayloadField.field);
+        const framedPayload = decodeNoritoBytesBare(framedPayloadField.field, outer.flags);
         if (!wireId || !framedPayload)
             return null;
         const inner = decodeNoritoArchivePayload(framedPayload);
@@ -5633,37 +5835,37 @@ function decodeInstructionBoxLiteralAccess(raw) {
             case 'iroha.log':
                 return decodeLogLiteralAccess(inner.payload, inner.flags);
             case 'iroha.set_key_value': {
-                const variant = decodeNoritoEnumVariantBare(inner.payload);
+                const variant = decodeNoritoEnumVariantBareWithFlags(inner.payload, inner.flags);
                 if (!variant || variant.payload === null)
                     return null;
-                return decodeSetOrRemoveKeyValueLiteralAccess(variant.tag, variant.payload);
+                return decodeSetOrRemoveKeyValueLiteralAccess(variant.tag, variant.payload, true, inner.flags);
             }
             case 'iroha.remove_key_value': {
-                const variant = decodeNoritoEnumVariantBare(inner.payload);
+                const variant = decodeNoritoEnumVariantBareWithFlags(inner.payload, inner.flags);
                 if (!variant || variant.payload === null)
                     return null;
-                return decodeSetOrRemoveKeyValueLiteralAccess(variant.tag, variant.payload);
+                return decodeSetOrRemoveKeyValueLiteralAccess(variant.tag, variant.payload, false, inner.flags);
             }
             case 'iroha.grant':
-                return decodeGrantLiteralAccess(inner.payload);
+                return decodeGrantLiteralAccess(inner.payload, inner.flags);
             case 'iroha.revoke':
-                return decodeGrantLiteralAccess(inner.payload);
+                return decodeGrantLiteralAccess(inner.payload, inner.flags);
             case 'iroha.execute_trigger':
-                return decodeExecuteTriggerLiteralAccess(inner.payload);
+                return decodeExecuteTriggerLiteralAccess(inner.payload, inner.flags);
             case 'iroha.register':
-                return decodeRegisterLiteralAccess(inner.payload);
+                return decodeRegisterLiteralAccess(inner.payload, inner.flags);
             case 'iroha.unregister':
-                return decodeUnregisterLiteralAccess(inner.payload);
+                return decodeUnregisterLiteralAccess(inner.payload, inner.flags);
             case 'iroha.transfer':
-                return decodeTransferLiteralAccess(inner.payload);
+                return decodeTransferLiteralAccess(inner.payload, inner.flags);
             case 'iroha.mint':
-                return decodeMintOrBurnLiteralAccess(inner.payload);
+                return decodeMintOrBurnLiteralAccess(inner.payload, inner.flags);
             case 'iroha.burn':
-                return decodeMintOrBurnLiteralAccess(inner.payload);
+                return decodeMintOrBurnLiteralAccess(inner.payload, inner.flags);
             case 'iroha_data_model::isi::transparent::SetAssetKeyValue':
-                return decodeSetOrRemoveAssetKeyValueLiteralAccess(inner.payload, true);
+                return decodeSetOrRemoveAssetKeyValueLiteralAccess(inner.payload, true, inner.flags);
             case 'iroha_data_model::isi::transparent::RemoveAssetKeyValue':
-                return decodeSetOrRemoveAssetKeyValueLiteralAccess(inner.payload, false);
+                return decodeSetOrRemoveAssetKeyValueLiteralAccess(inner.payload, false, inner.flags);
             case CREATE_ELECTION_TYPE_NAME:
                 return decodeZkCreateElectionLiteralAccess(inner.payload, inner.flags);
             case SUBMIT_BALLOT_TYPE_NAME:
@@ -5687,17 +5889,17 @@ function decodeQueryRequestLiteralAccess(raw) {
     const archive = decodeNoritoArchivePayload(bytes);
     if (!archive)
         return null;
-    const request = decodeNoritoEnumVariantBare(archive.payload);
+    const request = decodeNoritoEnumVariantBareWithFlags(archive.payload, archive.flags);
     if (!request || request.tag !== 0 || request.payload === null)
         return null;
-    const query = decodeNoritoEnumVariantBare(request.payload);
+    const query = decodeNoritoEnumVariantBareWithFlags(request.payload, archive.flags);
     if (!query || query.payload === null)
         return null;
     switch (query.tag) {
         case 6:
-            return decodeFindAssetQueryAccess(query.payload);
+            return decodeFindAssetQueryAccess(query.payload, archive.flags);
         case 7:
-            return decodeFindAssetDefinitionQueryAccess(query.payload);
+            return decodeFindAssetDefinitionQueryAccess(query.payload, archive.flags);
         default:
             return null;
     }
@@ -6028,6 +6230,20 @@ class Tokenizer {
         }
         throw new StudioCompileError(`parser error: unterminated raw string literal at ${line}:${column}: missing closing delimiter`, line, column);
     }
+    skipBlockComment() {
+        const line = this.line;
+        const column = this.column;
+        this.advance();
+        this.advance();
+        while (!this.eof()) {
+            const char = this.advance();
+            if (char === '*' && this.peek() === '/') {
+                this.advance();
+                return;
+            }
+        }
+        throw new StudioCompileError(`parser error: unterminated block comment starting at ${line}:${column}`, line, column);
+    }
     nextToken() {
         const char = this.peek();
         if (!char)
@@ -6035,6 +6251,10 @@ class Tokenizer {
         if (char === '/' && this.peek(1) === '/') {
             while (!this.eof() && this.peek() !== '\n')
                 this.advance();
+            return null;
+        }
+        if (char === '/' && this.peek(1) === '*') {
+            this.skipBlockComment();
             return null;
         }
         if (/\s/u.test(char)) {
@@ -6125,6 +6345,7 @@ class Parser {
     tokens;
     sourceLines;
     index = 0;
+    allowMetadataDecimalExpressions = false;
     constructor(tokens, source = '') {
         this.tokens = tokens;
         this.sourceLines = source.split(/\r?\n/u);
@@ -6412,15 +6633,18 @@ class Parser {
     parseStateType() {
         if (this.peekIdentifier('Map')) {
             this.expectIdentifier('Map');
-            this.expectSymbol('<');
-            const key = this.parseValueType();
-            this.expectSymbol(',');
-            const value = this.parseValueType();
-            this.expectSymbol('>');
+            const args = this.parseGenericTypeArguments();
+            if (args.length !== 2) {
+                return {
+                    kind: 'generic',
+                    base: 'Map',
+                    args,
+                };
+            }
             return {
                 kind: 'map',
-                key,
-                value,
+                key: args[0],
+                value: args[1],
             };
         }
         if (this.peekSymbol('(')) {
@@ -6428,6 +6652,14 @@ class Parser {
         }
         const token = this.expectIdentifierToken();
         const type = token.value;
+        if (this.peekSymbol('<')) {
+            this.parseGenericTypeArguments();
+            return {
+                kind: 'struct',
+                name: type,
+                fields: null,
+            };
+        }
         if (![
             'int',
             'bool',
@@ -6603,15 +6835,18 @@ class Parser {
     parseMetadataStringArray() {
         this.expectSymbol('[');
         const values = [];
-        while (!this.peekSymbol(']')) {
-            const item = this.peek();
-            if (item.kind !== 'string' && item.kind !== 'identifier') {
-                throw new StudioCompileError(`parser error: {error}: expected string literal or identifier but found ${this.triggerFieldFoundToken(item)}`, item.line, item.column);
-            }
-            values.push(item.value);
-            this.next();
-            if (this.peekSymbol(','))
+        if (!this.peekSymbol(']')) {
+            while (true) {
+                const item = this.peek();
+                if (item.kind !== 'string' && item.kind !== 'identifier') {
+                    throw new StudioCompileError(`parser error: {error}: expected string literal or identifier but found ${this.triggerFieldFoundToken(item)}`, item.line, item.column);
+                }
+                values.push(item.value);
+                this.next();
+                if (!this.peekSymbol(','))
+                    break;
                 this.expectSymbol(',');
+            }
         }
         this.expectSymbol(']');
         return values;
@@ -6622,9 +6857,9 @@ class Parser {
         if (token.kind === 'symbol' && token.value === '-') {
             this.next();
             sign = -1;
-            const numberToken = this.peek();
-            if (numberToken.kind !== 'number') {
-                throw new StudioCompileError(`parser error: {error}: expected number but found ${this.triggerFieldFoundToken(numberToken)}`, numberToken.line, numberToken.column);
+            const item = this.peek();
+            if (item.kind !== 'number') {
+                throw new StudioCompileError(`parser error: {error}: expected number but found ${this.triggerFieldFoundToken(item)}`, item.line, item.column);
             }
         }
         const numberToken = this.peek();
@@ -6729,9 +6964,6 @@ class Parser {
             if (this.peekIdentifier('unit')) {
                 explicitUnitReturnStyle = 'word';
             }
-            else if (this.peekSymbol('(') && this.peekN(1).kind === 'symbol' && this.peekN(1).value === ')') {
-                explicitUnitReturnStyle = 'tuple';
-            }
             const parsedReturnType = this.parseReturnType();
             if (parsedReturnType === 'unit') {
                 explicitUnitReturn = true;
@@ -6790,9 +7022,6 @@ class Parser {
             this.expectSymbol('->');
             if (this.peekIdentifier('unit')) {
                 explicitUnitReturnStyle = 'word';
-            }
-            else if (this.peekSymbol('(') && this.peekN(1).kind === 'symbol' && this.peekN(1).value === ')') {
-                explicitUnitReturnStyle = 'tuple';
             }
             const parsedReturnType = this.parseReturnType();
             if (parsedReturnType === 'unit') {
@@ -6915,16 +7144,29 @@ class Parser {
             this.next();
             return 'unit';
         }
-        if (this.peekSymbol('(') && this.peekN(1).kind === 'symbol' && this.peekN(1).value === ')') {
-            this.expectSymbol('(');
-            this.expectSymbol(')');
-            return 'unit';
-        }
         return this.parseValueType();
+    }
+    parseGenericTypeArguments() {
+        this.expectSymbol('<');
+        const args = [];
+        if (!this.peekSymbol('>')) {
+            while (true) {
+                args.push(this.parseValueType());
+                if (!this.peekSymbol(','))
+                    break;
+                this.expectSymbol(',');
+            }
+        }
+        this.expectSymbol('>');
+        return args;
     }
     parseValueType() {
         if (this.peekSymbol('(')) {
             this.expectSymbol('(');
+            if (this.peekSymbol(')')) {
+                this.expectSymbol(')');
+                return { kind: 'tuple', elements: [] };
+            }
             const elements = [this.parseValueType()];
             if (!this.peekSymbol(',')) {
                 this.expectSymbol(')');
@@ -6945,6 +7187,14 @@ class Parser {
             return this.parseStateType();
         }
         const name = this.expectIdentifierToken().value;
+        if (this.peekSymbol('<')) {
+            this.parseGenericTypeArguments();
+            return {
+                kind: 'struct',
+                name,
+                fields: null,
+            };
+        }
         switch (name) {
             case 'int':
             case 'bool':
@@ -6963,6 +7213,8 @@ class Parser {
             case 'Json':
             case 'Blob':
                 return name;
+            case 'unit':
+                return 'unit';
             case 'bytes':
             case 'Bytes':
                 return 'NoritoBytes';
@@ -7462,7 +7714,7 @@ class Parser {
                 throw this.triggerExpectedError(keyToken, 'metadata key (identifier or string literal)');
             }
             this.expectTriggerSymbol(':');
-            const value = this.parseExpression();
+            const value = this.parseTriggerMetadataValueExpression();
             this.expectTriggerSymbol(';');
             entries.push({
                 key: keyToken.value,
@@ -7474,6 +7726,16 @@ class Parser {
         this.expectTriggerSymbol('}');
         return entries;
     }
+    parseTriggerMetadataValueExpression() {
+        const previous = this.allowMetadataDecimalExpressions;
+        this.allowMetadataDecimalExpressions = true;
+        try {
+            return this.parseExpression();
+        }
+        finally {
+            this.allowMetadataDecimalExpressions = previous;
+        }
+    }
     parseBlockStatements() {
         this.expectSymbol('{');
         const statements = [];
@@ -7483,72 +7745,62 @@ class Parser {
         this.expectSymbol('}');
         return statements;
     }
+    parseLegacyHostStatementOrCall(token, name, expectedArity, buildStatement) {
+        this.expectIdentifier(name);
+        const args = this.parseCallArguments();
+        this.expectSymbol(';');
+        if (args.length !== expectedArity) {
+            return {
+                kind: 'expression',
+                expression: {
+                    kind: 'call',
+                    name,
+                    args,
+                    line: token.line,
+                    column: token.column,
+                },
+                line: token.line,
+            };
+        }
+        return buildStatement(args);
+    }
     parseStatement() {
         const token = this.peek();
         if (token.kind === 'eof') {
             throw this.parserExpectedError(token, 'expression');
         }
         if (this.peekIdentifier('info')) {
-            this.next();
-            this.expectSymbol('(');
-            const expression = this.parseExpression();
-            this.expectSymbol(')');
-            this.expectSymbol(';');
-            return { kind: 'info', expression, line: token.line };
+            return this.parseLegacyHostStatementOrCall(token, 'info', 1, ([expression]) => ({ kind: 'info', expression, line: token.line }));
         }
         if (this.peekIdentifier('transfer_asset')) {
-            this.next();
-            this.expectSymbol('(');
-            const from = this.parseExpression();
-            this.expectSymbol(',');
-            const to = this.parseExpression();
-            this.expectSymbol(',');
-            const asset = this.parseExpression();
-            this.expectSymbol(',');
-            const amount = this.parseExpression();
-            this.expectSymbol(')');
-            this.expectSymbol(';');
-            return { kind: 'transferAsset', from, to, asset, amount, line: token.line };
+            return this.parseLegacyHostStatementOrCall(token, 'transfer_asset', 4, ([from, to, asset, amount]) => ({ kind: 'transferAsset', from, to, asset, amount, line: token.line }));
         }
         if (this.peekIdentifier('mint_asset')) {
-            this.next();
-            this.expectSymbol('(');
-            const account = this.parseExpression();
-            this.expectSymbol(',');
-            const asset = this.parseExpression();
-            this.expectSymbol(',');
-            const amount = this.parseExpression();
-            this.expectSymbol(')');
-            this.expectSymbol(';');
-            return { kind: 'mintAsset', account, asset, amount, line: token.line };
+            return this.parseLegacyHostStatementOrCall(token, 'mint_asset', 3, ([account, asset, amount]) => ({ kind: 'mintAsset', account, asset, amount, line: token.line }));
         }
         if (this.peekIdentifier('burn_asset')) {
-            this.next();
-            this.expectSymbol('(');
-            const account = this.parseExpression();
-            this.expectSymbol(',');
-            const asset = this.parseExpression();
-            this.expectSymbol(',');
-            const amount = this.parseExpression();
-            this.expectSymbol(')');
-            this.expectSymbol(';');
-            return { kind: 'burnAsset', account, asset, amount, line: token.line };
+            return this.parseLegacyHostStatementOrCall(token, 'burn_asset', 3, ([account, asset, amount]) => ({ kind: 'burnAsset', account, asset, amount, line: token.line }));
         }
         if (this.peekIdentifier('set_account_detail')) {
-            this.next();
-            this.expectSymbol('(');
-            const account = this.parseExpression();
-            this.expectSymbol(',');
-            const key = this.parseExpression();
-            this.expectSymbol(',');
-            const value = this.parseExpression();
-            this.expectSymbol(')');
-            this.expectSymbol(';');
-            return { kind: 'setAccountDetail', account, key, value, line: token.line };
+            return this.parseLegacyHostStatementOrCall(token, 'set_account_detail', 3, ([account, key, value]) => ({ kind: 'setAccountDetail', account, key, value, line: token.line }));
         }
         if (this.peekIdentifier('let')) {
             this.next();
-            const name = this.expectIdentifierValue();
+            let pattern = null;
+            let name = null;
+            if (this.peekSymbol('(')) {
+                this.expectSymbol('(');
+                const names = [this.expectIdentifierValue()];
+                while (this.peekSymbol(',')) {
+                    this.expectSymbol(',');
+                    names.push(this.expectIdentifierValue());
+                }
+                this.expectSymbol(')');
+                pattern = names;
+            }
+            else {
+                name = this.expectIdentifierValue();
+            }
             const declaredType = this.peekSymbol(':')
                 ? (() => {
                     this.expectSymbol(':');
@@ -7556,16 +7808,35 @@ class Parser {
                 })()
                 : null;
             this.expectSymbol('=');
-            if (this.peekIdentifier('execute_query')) {
-                this.expectIdentifier('execute_query');
-                this.expectSymbol('(');
-                this.expectIdentifier('norito_bytes');
-                this.expectSymbol('(');
-                const payload = this.parseExpression();
-                this.expectSymbol(')');
-                this.expectSymbol(')');
+            if (pattern !== null) {
+                const value = this.parseExpression();
                 this.expectSymbol(';');
-                return { kind: 'executeQuery', alias: name, payload, line: token.line };
+                return { kind: 'letPattern', names: pattern, declaredType, value, line: token.line };
+            }
+            if (this.peekIdentifier('execute_query') && this.peekN(1).kind === 'symbol' && this.peekN(1).value === '(') {
+                const callToken = this.expectIdentifierToken();
+                const args = this.parseCallArguments();
+                this.expectSymbol(';');
+                const [onlyArg] = args;
+                if (args.length === 1
+                    && onlyArg?.kind === 'call'
+                    && onlyArg.name === 'norito_bytes'
+                    && onlyArg.args.length === 1) {
+                    return { kind: 'executeQuery', alias: name, declaredType, payload: onlyArg.args[0], line: token.line };
+                }
+                return {
+                    kind: 'letLocal',
+                    name,
+                    declaredType,
+                    value: {
+                        kind: 'call',
+                        name: 'execute_query',
+                        args,
+                        line: callToken.line,
+                        column: callToken.column,
+                    },
+                    line: token.line,
+                };
             }
             const value = this.parseExpression();
             this.expectSymbol(';');
@@ -7716,6 +7987,18 @@ class Parser {
             if (!this.peekSymbol('=') && !this.peekSymbol('+=') && !this.peekSymbol('-=') && !this.peekSymbol('*=') && !this.peekSymbol('/=') && !this.peekSymbol('%=')) {
                 this.index = save;
                 const expression = this.parseExpression();
+                if (this.peekSymbol('=') || this.peekSymbol('+=') || this.peekSymbol('-=') || this.peekSymbol('*=') || this.peekSymbol('/=') || this.peekSymbol('%=')) {
+                    const assignment = this.expectSymbolValue(['=', '+=', '-=', '*=', '/=', '%=']);
+                    const value = this.parseExpression();
+                    this.expectSymbol(';');
+                    return {
+                        kind: 'invalidAssignmentTarget',
+                        target: expression,
+                        operator: assignment === '=' ? '=' : assignment[0],
+                        value,
+                        line: token.line,
+                    };
+                }
                 this.expectSymbol(';');
                 return { kind: 'expression', expression, line: token.line };
             }
@@ -8341,6 +8624,14 @@ class Parser {
         }
         if (token.kind === 'decimal') {
             this.next();
+            if (this.allowMetadataDecimalExpressions) {
+                return {
+                    kind: 'decimal',
+                    value: token.value,
+                    line: token.line,
+                    column: token.column,
+                };
+            }
             throw new StudioCompileError(`numeric literal \`${token.value}\` must be an unsigned integer (scale=0)`, token.line, token.column);
         }
         if (token.kind === 'identifier') {
@@ -8461,6 +8752,15 @@ class Parser {
         }
         if (token.kind === 'symbol' && token.value === '(') {
             this.expectSymbol('(');
+            if (this.peekSymbol(')')) {
+                this.expectSymbol(')');
+                return {
+                    kind: 'tupleLiteral',
+                    elements: [],
+                    line: token.line,
+                    column: token.column,
+                };
+            }
             const expression = this.parseExpression();
             if (!this.peekSymbol(',')) {
                 this.expectSymbol(')');
@@ -9130,6 +9430,161 @@ function parseStudioProgram(source) {
     const tokens = new Tokenizer(source).tokenize();
     return resolveProgramTypes(new Parser(tokens, source).parseProgram());
 }
+function collectFunctionCallsInExpression(expression, calls) {
+    switch (expression.kind) {
+        case 'tupleLiteral':
+            expression.elements.forEach((element) => collectFunctionCallsInExpression(element, calls));
+            return;
+        case 'negate':
+        case 'not':
+            collectFunctionCallsInExpression(expression.expression, calls);
+            return;
+        case 'binaryInt':
+        case 'compare':
+        case 'logical':
+            collectFunctionCallsInExpression(expression.left, calls);
+            collectFunctionCallsInExpression(expression.right, calls);
+            return;
+        case 'conditional':
+            collectFunctionCallsInExpression(expression.condition, calls);
+            collectFunctionCallsInExpression(expression.whenTrue, calls);
+            collectFunctionCallsInExpression(expression.whenFalse, calls);
+            return;
+        case 'member':
+            collectFunctionCallsInExpression(expression.object, calls);
+            return;
+        case 'index':
+            collectFunctionCallsInExpression(expression.object, calls);
+            collectFunctionCallsInExpression(expression.index, calls);
+            return;
+        case 'call':
+            calls.add(expression.name);
+            expression.args.forEach((arg) => collectFunctionCallsInExpression(arg, calls));
+            return;
+        default:
+            return;
+    }
+}
+function collectFunctionCallsInStatement(statement, calls) {
+    switch (statement.kind) {
+        case 'letLocal':
+        case 'letPattern':
+            collectFunctionCallsInExpression(statement.value, calls);
+            return;
+        case 'setState':
+        case 'updateValue':
+            collectFunctionCallsInExpression(statement.value, calls);
+            return;
+        case 'setIndexedState':
+        case 'updateIndexedState':
+            collectFunctionCallsInExpression(statement.key, calls);
+            collectFunctionCallsInExpression(statement.value, calls);
+            return;
+        case 'invalidAssignmentTarget':
+            collectFunctionCallsInExpression(statement.target, calls);
+            collectFunctionCallsInExpression(statement.value, calls);
+            return;
+        case 'transferAsset':
+            collectFunctionCallsInExpression(statement.from, calls);
+            collectFunctionCallsInExpression(statement.to, calls);
+            collectFunctionCallsInExpression(statement.asset, calls);
+            collectFunctionCallsInExpression(statement.amount, calls);
+            return;
+        case 'mintAsset':
+        case 'burnAsset':
+            collectFunctionCallsInExpression(statement.account, calls);
+            collectFunctionCallsInExpression(statement.asset, calls);
+            collectFunctionCallsInExpression(statement.amount, calls);
+            return;
+        case 'setAccountDetail':
+            collectFunctionCallsInExpression(statement.account, calls);
+            collectFunctionCallsInExpression(statement.key, calls);
+            collectFunctionCallsInExpression(statement.value, calls);
+            return;
+        case 'info':
+            collectFunctionCallsInExpression(statement.expression, calls);
+            return;
+        case 'executeQuery':
+            collectFunctionCallsInExpression(statement.payload, calls);
+            return;
+        case 'expression':
+            collectFunctionCallsInExpression(statement.expression, calls);
+            return;
+        case 'return':
+            if (statement.expression !== null)
+                collectFunctionCallsInExpression(statement.expression, calls);
+            return;
+        case 'if':
+            collectFunctionCallsInExpression(statement.condition, calls);
+            collectFunctionCallsInBlock(statement.thenBranch, calls);
+            collectFunctionCallsInBlock(statement.elseBranch, calls);
+            return;
+        case 'while':
+            collectFunctionCallsInExpression(statement.condition, calls);
+            collectFunctionCallsInBlock(statement.body, calls);
+            return;
+        case 'forRange':
+            collectFunctionCallsInExpression(statement.count, calls);
+            collectFunctionCallsInBlock(statement.body, calls);
+            return;
+        case 'forLoop':
+            if (statement.init !== null)
+                collectFunctionCallsInStatement(statement.init, calls);
+            if (statement.condition !== null)
+                collectFunctionCallsInExpression(statement.condition, calls);
+            if (statement.step !== null)
+                collectFunctionCallsInStatement(statement.step, calls);
+            collectFunctionCallsInBlock(statement.body, calls);
+            return;
+        case 'forMap':
+            collectFunctionCallsInExpression(statement.map, calls);
+            collectFunctionCallsInExpression(statement.start, calls);
+            collectFunctionCallsInExpression(statement.count, calls);
+            collectFunctionCallsInBlock(statement.body, calls);
+            return;
+        case 'repeat':
+            collectFunctionCallsInExpression(statement.count, calls);
+            collectFunctionCallsInBlock(statement.body, calls);
+            return;
+        case 'break':
+        case 'continue':
+            return;
+    }
+}
+function collectFunctionCallsInBlock(statements, calls) {
+    statements.forEach((statement) => collectFunctionCallsInStatement(statement, calls));
+}
+function firstReleasePreludeProgram() {
+    if (firstReleasePreludeProgramCache === null) {
+        firstReleasePreludeProgramCache = parseStudioProgram(FIRST_RELEASE_PRELUDE);
+    }
+    return firstReleasePreludeProgramCache;
+}
+function programWithFirstReleasePrelude(program) {
+    const defined = new Set(program.functions.map((fn) => fn.name));
+    const called = new Set();
+    program.functions.forEach((fn) => collectFunctionCallsInBlock(fn.body, called));
+    const needed = new Set();
+    for (const name of FIRST_RELEASE_PRELUDE_HELPERS) {
+        if (called.has(name) && !defined.has(name)) {
+            needed.add(name);
+        }
+    }
+    if (needed.has('require_owner') && !defined.has('require_authority')) {
+        needed.add('require_authority');
+    }
+    if (needed.size === 0) {
+        return program;
+    }
+    const preludeFunctions = firstReleasePreludeProgram().functions.filter((fn) => needed.has(fn.name));
+    return {
+        ...program,
+        functions: [
+            ...preludeFunctions,
+            ...program.functions,
+        ],
+    };
+}
 function resolveProgramTypes(program) {
     const rawStructs = new Map(program.structs.map((decl) => [decl.name, decl]));
     for (const fn of program.functions) {
@@ -9181,6 +9636,23 @@ function resolveProgramTypes(program) {
     const resolveValueType = (type, line) => {
         if (typeof type === 'string')
             return type;
+        if (isGenericType(type)) {
+            if (type.base === 'Map') {
+                if (type.args.length !== 2) {
+                    throwMapTypeParameterCountError(line);
+                }
+                return {
+                    kind: 'map',
+                    key: resolveValueType(type.args[0], line),
+                    value: resolveValueType(type.args[1], line),
+                };
+            }
+            return {
+                kind: 'struct',
+                name: type.base,
+                fields: null,
+            };
+        }
         if (isMapStateType(type)) {
             return {
                 kind: 'map',
@@ -9193,6 +9665,9 @@ function resolveProgramTypes(program) {
                 kind: 'tuple',
                 elements: type.elements.map((element) => resolveValueType(element, line)),
             };
+        }
+        if (type.fields === null && !rawStructs.has(type.name)) {
+            return type;
         }
         return resolveStructByName(type.name, line);
     };
@@ -9365,8 +9840,7 @@ function literalStringFromExpression(expression) {
     }
 }
 function isDirectAccountPointerLiteral(value) {
-    return renderCanonicalPublicKeyLiteralFromAccountIdLiteral(value) !== null
-        || isCanonicalPublicKeyLiteral(value.trim());
+    return renderRustAccountPublicKeyLiteralFromAccountIdLiteral(value) !== null;
 }
 function accountIdLiteralUsesAliasResolution(value) {
     return !isDirectAccountPointerLiteral(value) && value.includes('@');
@@ -9450,7 +9924,16 @@ function rematerializableBuilderArgLiteralFromExpression(expression, locals = ne
         return pointerLiteral;
     }
     if (expression.kind === 'call' && isZkInlineBuilderCallName(expression.name)) {
-        return zkInlineBuilderNoritoBytesLiteralFromExpression(expression, locals);
+        try {
+            return zkInlineBuilderNoritoBytesLiteralFromExpression(expression, locals);
+        }
+        catch (error) {
+            const message = error instanceof Error ? error.message : String(error);
+            if (message.includes('build_unshield_inline amount requires a compile-time integer literal')) {
+                return null;
+            }
+            throw error;
+        }
     }
     return null;
 }
@@ -9482,6 +9965,28 @@ function inlineBuilderAssetDefinitionBytes(expression, locals, label) {
     }
     return parseAssetDefinitionIdBytes(literal, expression.line, expression.column);
 }
+function inlineBuilderIntegerLiteralValue(expression) {
+    switch (expression.kind) {
+        case 'number':
+            return expression.value;
+        case 'negate': {
+            const value = inlineBuilderIntegerLiteralValue(expression.expression);
+            return value === null ? null : -value;
+        }
+        default:
+            return null;
+    }
+}
+function inlineBuilderUnshieldAmountValue(expression, resolveIntegerLiteral) {
+    const amount = resolveIntegerLiteral(expression);
+    if (amount === null) {
+        throw new StudioCompileError('build_unshield_inline amount requires a compile-time integer literal in the browser compiler.', expression.line, expression.column);
+    }
+    if (amount < 0) {
+        throw new StudioCompileError('semantic error: build_unshield_inline requires non-negative amount', expression.line, expression.column);
+    }
+    return amount;
+}
 function inlineBuilderAccountPublicKey(expression, locals, label) {
     const literal = rematerializableAccountLiteralFromExpression(expression)
         ?? (expression.kind === 'stateReference' && locals.get(expression.name)?.valueType === 'AccountId'
@@ -9490,8 +9995,11 @@ function inlineBuilderAccountPublicKey(expression, locals, label) {
     if (literal === null || literal === undefined) {
         throw new StudioCompileError(`${label} requires a compile-time AccountId literal in the browser compiler.`, expression.line, expression.column);
     }
-    return (renderCanonicalPublicKeyLiteralFromAccountIdLiteral(literal)
-        ?? normalizePublicKeyLiteral(literal, label, expression.line, expression.column)).toLowerCase();
+    const publicKey = renderRustAccountPublicKeyLiteralFromAccountIdLiteral(literal);
+    if (publicKey === null) {
+        throw new StudioCompileError(`semantic error: invalid AccountId literal \`${literal}\`: ${invalidAccountIdLiteralCause(literal)}`, expression.line, expression.column);
+    }
+    return publicKey.toLowerCase();
 }
 function inlineBuilderSemanticTypeFromExpression(expression, locals) {
     switch (expression.kind) {
@@ -9570,7 +10078,7 @@ function validateZkInlineBuilderStaticSemanticShape(expression, locals) {
         throw new StudioCompileError(`semantic error: ${spec.message}`, expression.line, expression.column);
     }
 }
-function zkInlineBuilderInstructionBytesFromExpression(expression, locals = new Map()) {
+function zkInlineBuilderInstructionBytesFromExpression(expression, locals = new Map(), resolveIntegerLiteral = inlineBuilderIntegerLiteralValue) {
     try {
         const spec = zkInlineBuilderBuiltinSpec(expression.name);
         if (spec === null) {
@@ -9594,14 +10102,11 @@ function zkInlineBuilderInstructionBytesFromExpression(expression, locals = new 
             if (expression.args.length !== spec.args.length) {
                 throw new StudioCompileError(`${spec.compileMessage} in the browser compiler.`, expression.line, expression.column);
             }
-            const amount = expression.args[2];
-            if (amount?.kind !== 'number') {
-                throw new StudioCompileError('build_unshield_inline amount requires a compile-time integer literal in the browser compiler.', expression.line, expression.column);
-            }
+            const amount = inlineBuilderUnshieldAmountValue(expression.args[2], resolveIntegerLiteral);
             return encodeUnshieldInstructionBoxBytes({
                 assetBytes: inlineBuilderAssetDefinitionBytes(expression.args[0], locals, 'build_unshield_inline asset'),
                 accountPublicKey: inlineBuilderAccountPublicKey(expression.args[1], locals, 'build_unshield_inline to'),
-                amount: amount.value,
+                amount,
                 inputs: inlineBuilderRawBytes(expression.args[3], locals, 'build_unshield_inline inputs'),
                 backend: inlineBuilderStaticLiteralString(expression.args[4], locals, 'build_unshield_inline backend'),
                 proof: inlineBuilderRawBytes(expression.args[5], locals, 'build_unshield_inline proof'),
@@ -9628,7 +10133,16 @@ function rematerializablePointerParamLiteralFromExpression(expression, locals = 
     if (literal !== null && (literal.valueType === 'String' || literal.valueType === 'Blob' || literal.valueType === 'NoritoBytes'))
         return literal;
     if (expression.kind === 'call' && zkInlineBuilderBuiltinSpec(expression.name) !== null) {
-        return zkInlineBuilderNoritoBytesLiteralFromExpression(expression, locals);
+        try {
+            return zkInlineBuilderNoritoBytesLiteralFromExpression(expression, locals);
+        }
+        catch (error) {
+            const message = error instanceof Error ? error.message : String(error);
+            if (message.includes('build_unshield_inline amount requires a compile-time integer literal')) {
+                return null;
+            }
+            throw error;
+        }
     }
     return null;
 }
@@ -11434,8 +11948,20 @@ function isTupleValueType(type) {
 function isStructValueType(type) {
     return type !== null && typeof type !== 'string' && type.kind === 'struct';
 }
+function isGenericType(type) {
+    return type !== null && typeof type !== 'string' && type.kind === 'generic';
+}
+function isMalformedMapGenericType(type) {
+    return isGenericType(type) && type.base === 'Map';
+}
+function throwMapTypeParameterCountError(line, column = 1) {
+    throw new StudioCompileError('semantic error: Map expects two type parameters', line, column);
+}
 function semanticReturnTypeForFunction(fn) {
     return fn.explicitUnitReturn === true ? 'unit' : fn.returnType;
+}
+function semanticCallReturnTypeForFunction(fn) {
+    return fn.returnType === null || fn.explicitUnitReturn === true ? 'unit' : fn.returnType;
 }
 function semanticUnitReturnStyleForFunction(fn) {
     return fn.explicitUnitReturn === true ? fn.explicitUnitReturnStyle ?? 'word' : null;
@@ -11497,6 +12023,16 @@ function isDurableStateValueType(type) {
             || type === 'DomainId'
             || isAxtPointerValueType(type)
             || isSoracloudPointerValueType(type));
+}
+function isSupportedStateParamType(type) {
+    if (isMapStateType(type))
+        return true;
+    return typeof type === 'string'
+        && (type === 'int'
+            || type === 'bool'
+            || type === 'String'
+            || isSemanticWideNumericType(type)
+            || isSemanticPointerAbiType(type));
 }
 function isInMemoryMapWordType(type) {
     if (typeof type !== 'string')
@@ -11566,6 +12102,11 @@ function localBindingTypesEqual(left, right) {
     if (left.kind === 'map') {
         return localBindingTypesEqual(left.key, right.key)
             && localBindingTypesEqual(left.value, right.value);
+    }
+    if (left.kind === 'generic') {
+        return left.base === right.base
+            && left.args.length === right.args.length
+            && left.args.every((element, index) => localBindingTypesEqual(element, right.args[index]));
     }
     return left.name === right.name;
 }
@@ -11738,8 +12279,12 @@ function semanticAssignabilityError(expected, actual) {
         }
         return null;
     }
-    if (isStructValueType(expected) && isStructValueType(actual) && expected.name === actual.name)
-        return null;
+    if (isStructValueType(expected) && isStructValueType(actual)) {
+        if (expected.fields === null && actual.fields === null)
+            return null;
+        if (expected.name === actual.name)
+            return null;
+    }
     return `type annotation mismatch: expected ${renderLocalBindingType(expected)}, got ${renderLocalBindingType(actual)}`;
 }
 
@@ -11758,6 +12303,9 @@ function renderRustDebugSemanticType(type, rawStructs = null, resolving = new Se
             default:
                 return type;
         }
+    }
+    if (isGenericType(type)) {
+        return `${type.base}<${type.args.map((arg) => renderRustDebugSemanticType(arg, rawStructs, resolving)).join(', ')}>`;
     }
     if (isMapStateType(type)) {
         return `Map(${renderRustDebugSemanticType(type.key, rawStructs, resolving)}, ${renderRustDebugSemanticType(type.value, rawStructs, resolving)})`;
@@ -11789,6 +12337,9 @@ function unsupportedPublicEntrypointParamMessage(param, rawStructs = null) {
 function containsUnresolvedStructType(type, rawStructs) {
     if (typeof type === 'string')
         return false;
+    if (isGenericType(type)) {
+        return type.args.some((arg) => containsUnresolvedStructType(arg, rawStructs));
+    }
     if (isMapStateType(type)) {
         return containsUnresolvedStructType(type.key, rawStructs) || containsUnresolvedStructType(type.value, rawStructs);
     }
@@ -11801,6 +12352,8 @@ function containsUnresolvedStructType(type, rawStructs) {
 function renderUnsupportedStateTypeName(type) {
     if (typeof type === 'string')
         return type === 'NoritoBytes' ? 'bytes' : renderValueType(type);
+    if (isGenericType(type))
+        return renderValueType(type);
     if (isMapStateType(type))
         return renderStudioStateType(type);
     if (isTupleValueType(type))
@@ -11889,6 +12442,9 @@ function renderValueType(type) {
         return 'bytes';
     if (typeof type === 'string')
         return type;
+    if (isGenericType(type)) {
+        return `${type.base}<${type.args.map(renderValueType).join(', ')}>`;
+    }
     if (isMapStateType(type)) {
         return `Map<${renderValueType(type.key)}, ${renderValueType(type.value)}>`;
     }
@@ -11916,6 +12472,9 @@ function renderManifestValueType(type) {
         return 'bytes';
     if (typeof type === 'string')
         return type;
+    if (isGenericType(type)) {
+        return `${type.base}<${type.args.map(renderManifestValueType).join(', ')}>`;
+    }
     if (isMapStateType(type)) {
         return `Map<${renderManifestValueType(type.key)}, ${renderManifestValueType(type.value)}>`;
     }
@@ -11944,6 +12503,8 @@ function renderManifestStateType(type) {
 function valueKindForType(type) {
     if (isLocalMapType(type))
         return 'map';
+    if (type === 'unit')
+        return 'unit';
     if (typeof type !== 'string')
         return type.kind === 'tuple' ? 'tuple' : 'struct';
     if (isSemanticWideNumericType(type))
@@ -12213,6 +12774,7 @@ class StudioCodeGenerator {
     scalarStateIntCacheableNames = new Set();
     scalarStateIntAssignmentCacheableNames = new Set();
     callFixups = [];
+    letPatternTempCounter = 0;
     assembler = new BytecodeAssembler();
     constructor(program, options = {}) {
         this.program = program;
@@ -12224,8 +12786,206 @@ class StudioCodeGenerator {
             .filter((decl) => decl.type !== null)
             .map((decl) => [decl.name, decl.type]));
         this.functions = new Map(program.functions.map((fn) => [fn.name, fn]));
-        this.entrypoints = new Map(program.functions.filter((fn) => fn.entrypointKind !== null).map((fn) => [fn.name, fn]));
-        this.paramLiteralHints = buildFunctionParamLiteralHints(program.functions, new Set(program.states.map((state) => state.name)));
+        this.program = this.expandLetPatternsInProgram(program);
+        this.functions = new Map(this.program.functions.map((fn) => [fn.name, fn]));
+        this.entrypoints = new Map(this.program.functions.filter((fn) => fn.entrypointKind !== null).map((fn) => [fn.name, fn]));
+        this.paramLiteralHints = buildFunctionParamLiteralHints(this.program.functions, new Set(program.states.map((state) => state.name)));
+    }
+    nextLetPatternTempName() {
+        const name = `\u0000tuple_pattern_${this.letPatternTempCounter}`;
+        this.letPatternTempCounter += 1;
+        return name;
+    }
+    createLetPatternMemberExpression(tempName, field, line) {
+        return {
+            kind: 'member',
+            object: {
+                kind: 'stateReference',
+                name: tempName,
+                line,
+                column: 1,
+            },
+            field,
+            line,
+            column: 1,
+        };
+    }
+    expandLetPatternStatement(statement, scopeTypes, stateHandles) {
+        const actualType = this.semanticLetLocalValueType(statement, scopeTypes, stateHandles);
+        let destructureType = statement.declaredType !== null
+            ? this.resolveLocalBindingType(statement.declaredType, statement.line, 1)
+            : actualType;
+        if (destructureType !== null && isMapStateType(destructureType)) {
+            destructureType = null;
+        }
+        let fields = null;
+        if (isTupleValueType(destructureType)) {
+            if (statement.names.length !== destructureType.elements.length) {
+                throw new StudioCompileError(`semantic error: tuple destructuring expects ${destructureType.elements.length} bindings, got ${statement.names.length}`, statement.line, 1);
+            }
+            fields = destructureType.elements.map((type, index) => ({
+                name: index.toString(),
+                type,
+            }));
+        }
+        else if (isStructValueType(destructureType)) {
+            const structFields = destructureType.fields ?? [];
+            if (statement.names.length !== structFields.length) {
+                throw new StudioCompileError(`semantic error: struct destructuring expects ${structFields.length} bindings, got ${statement.names.length}`, statement.line, 1);
+            }
+            fields = structFields.map((field) => ({
+                name: field.name,
+                type: field.type,
+            }));
+        }
+        else if (destructureType !== null) {
+            throw new StudioCompileError('semantic error: tuple destructuring expects a tuple or struct', statement.line, 1);
+        }
+        const tempName = this.nextLetPatternTempName();
+        const expanded = [{
+                kind: 'letLocal',
+                name: tempName,
+                declaredType: statement.declaredType,
+                value: statement.value,
+                line: statement.line,
+            }];
+        if (destructureType !== null) {
+            scopeTypes.set(tempName, destructureType);
+        }
+        statement.names.forEach((name, index) => {
+            const field = fields?.[index] ?? {
+                name: index.toString(),
+                type: null,
+            };
+            expanded.push({
+                kind: 'letLocal',
+                name,
+                declaredType: null,
+                value: this.createLetPatternMemberExpression(tempName, field.name, statement.line),
+                line: statement.line,
+            });
+            if (field.type !== null) {
+                scopeTypes.set(name, field.type);
+            }
+        });
+        return expanded;
+    }
+    expandLetPatternsInStatements(statements, scopeTypes, stateHandles) {
+        const expanded = [];
+        for (const statement of statements) {
+            switch (statement.kind) {
+                case 'letPattern':
+                    expanded.push(...this.expandLetPatternStatement(statement, scopeTypes, stateHandles));
+                    break;
+                case 'letLocal': {
+                    expanded.push(statement);
+                    const actualType = this.semanticLetLocalValueType(statement, scopeTypes, stateHandles);
+                    const scopedType = this.semanticLetLocalScopeType(statement, actualType);
+                    if (scopedType !== null) {
+                        scopeTypes.set(statement.name, scopedType);
+                    }
+                    break;
+                }
+                case 'executeQuery':
+                    expanded.push(statement);
+                    scopeTypes.set(statement.alias, statement.declaredType ?? 'NoritoBytes');
+                    break;
+                case 'if':
+                    expanded.push({
+                        ...statement,
+                        thenBranch: this.expandLetPatternsInStatements(statement.thenBranch, new Map(scopeTypes), new Map(stateHandles)),
+                        elseBranch: this.expandLetPatternsInStatements(statement.elseBranch, new Map(scopeTypes), new Map(stateHandles)),
+                    });
+                    break;
+                case 'while':
+                    expanded.push({
+                        ...statement,
+                        body: this.expandLetPatternsInStatements(statement.body, new Map(scopeTypes), new Map(stateHandles)),
+                    });
+                    break;
+                case 'forLoop': {
+                    const loopScope = new Map(scopeTypes);
+                    let init = statement.init;
+                    if (init !== null) {
+                        const initExpanded = this.expandLetPatternsInStatements([init], loopScope, new Map(stateHandles));
+                        init = initExpanded[0] ?? init;
+                    }
+                    let step = statement.step;
+                    if (step !== null) {
+                        const stepExpanded = this.expandLetPatternsInStatements([step], new Map(loopScope), new Map(stateHandles));
+                        step = stepExpanded[0] ?? step;
+                    }
+                    expanded.push({
+                        ...statement,
+                        init,
+                        step,
+                        body: this.expandLetPatternsInStatements(statement.body, loopScope, new Map(stateHandles)),
+                    });
+                    break;
+                }
+                case 'forRange': {
+                    const nestedScope = new Map(scopeTypes);
+                    nestedScope.set(statement.name, 'int');
+                    expanded.push({
+                        ...statement,
+                        body: this.expandLetPatternsInStatements(statement.body, nestedScope, new Map(stateHandles)),
+                    });
+                    break;
+                }
+                case 'forMap': {
+                    const nestedScope = new Map(scopeTypes);
+                    const mapType = this.inferSemanticExpressionType(statement.map, scopeTypes, stateHandles);
+                    nestedScope.set(statement.key, isMapStateType(mapType) ? mapType.key : 'int');
+                    if (statement.value !== null) {
+                        nestedScope.set(statement.value, isMapStateType(mapType) ? mapType.value : 'int');
+                    }
+                    expanded.push({
+                        ...statement,
+                        body: this.expandLetPatternsInStatements(statement.body, nestedScope, new Map(stateHandles)),
+                    });
+                    break;
+                }
+                case 'repeat':
+                    expanded.push({
+                        ...statement,
+                        body: this.expandLetPatternsInStatements(statement.body, new Map(scopeTypes), new Map(stateHandles)),
+                    });
+                    break;
+                default:
+                    expanded.push(statement);
+                    break;
+            }
+        }
+        return expanded;
+    }
+    expandLetPatternsInProgram(program) {
+        this.letPatternTempCounter = 0;
+        return {
+            ...program,
+            functions: program.functions.map((fn) => {
+                const scopeTypes = new Map();
+                const stateHandles = new Map();
+                for (const param of fn.params) {
+                    if (param.isState) {
+                        stateHandles.set(param.name, param.type);
+                    }
+                    else {
+                        scopeTypes.set(param.name, param.type);
+                    }
+                }
+                const previousAllowsTestHelpers = this.activeSemanticFunctionAllowsTestHelpers;
+                this.activeSemanticFunctionAllowsTestHelpers = this.compilerMode === 'test' && fn.isTest === true;
+                try {
+                    return {
+                        ...fn,
+                        body: this.expandLetPatternsInStatements(fn.body, scopeTypes, stateHandles),
+                    };
+                }
+                finally {
+                    this.activeSemanticFunctionAllowsTestHelpers = previousAllowsTestHelpers;
+                }
+            }),
+        };
     }
     accessKeysForState(name, type) {
         if (isMapStateType(type)) {
@@ -12485,9 +13245,9 @@ class StudioCodeGenerator {
     normalizeStaticAccountLiteral(value) {
         if (value === AUTHORITY_ACCOUNT_PLACEHOLDER)
             return value;
-        if (renderCanonicalPublicKeyLiteralFromAccountIdLiteral(value) !== null)
+        if (renderRustAccountPublicKeyLiteralFromAccountIdLiteral(value) !== null)
             return value;
-        return renderCanonicalAccountIdLiteralFromPublicKeyLiteral(value);
+        return null;
     }
     resolveAccessLiteral(callback) {
         try {
@@ -12841,7 +13601,7 @@ class StudioCodeGenerator {
                     account: parsedAsset.accountId,
                     definition: {
                         literal: parsedAsset.definitionId,
-                        domain: 'aid',
+                        domain: null,
                     },
                 };
                 return asset === null ? null : { reads: readAssetAccess(asset), writes: [] };
@@ -12874,7 +13634,7 @@ class StudioCodeGenerator {
             account,
             definition: {
                 literal: assetDefinition,
-                domain: 'aid',
+                domain: null,
             },
         };
         return { reads: readAssetAccess(asset), writes: [] };
@@ -14650,6 +15410,15 @@ class StudioCodeGenerator {
             throw new StudioCompileError(`semantic error: state parameter \`${stateParam.name}\` is only supported on internal helper functions`, stateParam.line, 1);
         }
     }
+    validateStateParamTypes() {
+        for (const fn of this.program.functions) {
+            for (const param of fn.params) {
+                if (param.isState !== true || isSupportedStateParamType(param.type))
+                    continue;
+                throw new StudioCompileError(`semantic error: state parameter \`${param.name}\` currently supports durable scalar roots and Map<K, V> handles; aggregate state handles are not supported yet`, param.line, 1);
+            }
+        }
+    }
     validatePublicEntrypointParamTypes(entrypoints) {
         for (const entrypoint of entrypoints) {
             if (entrypoint.entrypointKind !== 'kotoage' && entrypoint.entrypointKind !== 'view')
@@ -14680,6 +15449,9 @@ class StudioCodeGenerator {
             if (target.entrypointKind !== 'kotoage') {
                 throw new StudioCompileError(`semantic error: trigger \`${trigger.id}\` must call public entrypoint \`${trigger.call.entrypoint}\``, trigger.line, trigger.column);
             }
+            if (trigger.filter.kind === 'execute') {
+                validateExecuteTriggerIdLiteral(trigger.filter.triggerId, trigger.line, trigger.column);
+            }
             if (trigger.filter.kind === 'time'
                 && trigger.filter.value.kind === 'schedule'
                 && trigger.filter.value.periodMs === 0n) {
@@ -14688,6 +15460,9 @@ class StudioCodeGenerator {
         }
     }
     validateStateType(type, line) {
+        if (isMalformedMapGenericType(type)) {
+            throwMapTypeParameterCountError(line);
+        }
         if (isMapStateType(type)) {
             if (!isDurableStateMapKeyType(type.key)) {
                 throw new StudioCompileError(`semantic error: state Map key type \`${renderValueType(type.key)}\` is not supported for durable storage; use int or pointer types`, line, 1);
@@ -14715,6 +15490,9 @@ class StudioCodeGenerator {
         }
     }
     validateInMemoryMapType(type, line) {
+        if (isMalformedMapGenericType(type)) {
+            throwMapTypeParameterCountError(line);
+        }
         if (!isMapStateType(type))
             return;
         if (!isInMemoryMapWordType(type.key)) {
@@ -14788,18 +15566,54 @@ class StudioCodeGenerator {
             this.validateStateShadowingInStatements(fn.body, stateNames);
         }
     }
+    resolveDurableStateLiteralPathExpression(expression, isShadowedName) {
+        if (expression.kind === 'stateReference') {
+            if (isShadowedName(expression.name))
+                return null;
+            const stateType = this.stateTypes.get(expression.name);
+            if (stateType === undefined || isMapStateType(stateType))
+                return null;
+            return { path: expression.name, type: stateTypeToValueType(stateType) };
+        }
+        if (expression.kind !== 'member')
+            return null;
+        const base = this.resolveDurableStateLiteralPathExpression(expression.object, isShadowedName);
+        if (base === null)
+            return null;
+        if (isTupleValueType(base.type)) {
+            const index = Number.parseInt(expression.field, 10);
+            if (Number.isNaN(index))
+                return null;
+            const memberType = base.type.elements[index];
+            if (memberType === undefined)
+                return null;
+            return { path: `${base.path}_${index}`, type: memberType };
+        }
+        if (isStructValueType(base.type)) {
+            const field = (base.type.fields ?? []).find((candidate) => candidate.name === expression.field);
+            if (field === undefined)
+                return null;
+            return { path: `${base.path}_${field.name}`, type: field.type };
+        }
+        return null;
+    }
     isDurableStateHandleExpression(expression, param, scope, stateHandles) {
-        if (expression.kind !== 'stateReference')
-            return false;
-        const stateParamType = stateHandles.get(expression.name);
-        if (stateParamType !== undefined) {
-            return localBindingTypesEqual(stateParamType, param.type);
+        if (expression.kind === 'stateReference') {
+            const stateParamType = stateHandles.get(expression.name);
+            if (stateParamType !== undefined) {
+                return localBindingTypesEqual(stateParamType, param.type);
+            }
+            if (scope.has(expression.name)) {
+                return false;
+            }
+            const stateType = this.stateTypes.get(expression.name);
+            return stateType !== undefined && localBindingTypesEqual(stateType, param.type);
         }
-        if (scope.has(expression.name)) {
+        const durablePath = this.resolveDurableStateLiteralPathExpression(expression, (name) => scope.has(name));
+        if (durablePath === null) {
             return false;
         }
-        const stateType = this.stateTypes.get(expression.name);
-        return stateType !== undefined && localBindingTypesEqual(stateType, param.type);
+        return localBindingTypesEqual(durablePath.type, param.type);
     }
     isDurableStateMapArgumentExpression(expression, scopeTypes, stateHandles) {
         if (expression.kind === 'member') {
@@ -15054,7 +15868,7 @@ class StudioCodeGenerator {
             const valueType = this.inferConstSemanticExpressionType(decl.value, resolvedConstTypes);
             if (decl.type !== null) {
                 this.validateSemanticAssignable(decl.type, valueType, decl.value);
-                resolvedConstTypes.set(decl.name, decl.type);
+                resolvedConstTypes.set(decl.name, this.semanticAnnotatedBindingType(decl.type, valueType));
             }
             else {
                 resolvedConstTypes.set(decl.name, valueType);
@@ -15063,6 +15877,9 @@ class StudioCodeGenerator {
         this.constTypes = resolvedConstTypes;
     }
     validateSemanticAssignable(expected, actual, expression, prefix = '') {
+        if (isMalformedMapGenericType(expected) || isMalformedMapGenericType(actual)) {
+            throwMapTypeParameterCountError(expression.line, expression.column);
+        }
         if (actual === null)
             return;
         if (isSemanticWideNumericType(expected)
@@ -15357,7 +16174,7 @@ class StudioCodeGenerator {
             case 'nameLiteral':
                 return 'Name';
             case 'blobLiteral':
-                return 'Blob';
+                return 'NoritoBytes';
             case 'stateReference':
                 return scopeTypes.get(expression.name)
                     ?? stateHandles.get(expression.name)
@@ -15387,7 +16204,7 @@ class StudioCodeGenerator {
                     const argTypes = expression.args.map((arg) => this.inferSemanticExpressionType(arg, scopeTypes, stateHandles, constStack));
                     return dynamicValueTypeSpec.valueTypeForArgs(argTypes);
                 }
-                const staticValueType = staticBuiltinValueType(expression.name);
+                const staticValueType = semanticStaticBuiltinValueType(expression.name);
                 if (staticValueType !== NO_BUILTIN_VALUE_TYPE)
                     return staticValueType;
                 const mapAccessSpec = mapAccessBuiltinSpec(expression.name);
@@ -15430,7 +16247,10 @@ class StudioCodeGenerator {
                         fields: structDecl.fields,
                     };
                 }
-                return this.functions.get(expression.name)?.returnType ?? null;
+                {
+                    const callee = this.functions.get(expression.name);
+                    return callee ? semanticCallReturnTypeForFunction(callee) : null;
+                }
             }
             default:
                 return null;
@@ -15443,6 +16263,16 @@ class StudioCodeGenerator {
         }
         if (target.entrypointKind === null) {
             throw new StudioCompileError(`semantic error: runtime test helpers may only target public/view/hajimari/kaizen entrypoints, got \`${targetName}\``, expression.line, expression.column);
+        }
+        return target.returnType;
+    }
+    invokeEntrypointReturnType(targetName, expression) {
+        const target = this.functions.get(targetName);
+        if (!target) {
+            throw new StudioCompileError(`semantic error: invoke_entrypoint targets unknown function \`${targetName}\``, expression.line, expression.column);
+        }
+        if (target.entrypointKind === null) {
+            throw new StudioCompileError(`semantic error: invoke_entrypoint may only target public/view/hajimari/kaizen entrypoints, got \`${targetName}\``, expression.line, expression.column);
         }
         return target.returnType;
     }
@@ -15459,7 +16289,7 @@ class StudioCodeGenerator {
         switch (expression.name) {
             case 'invoke_entrypoint': {
                 const targetName = testHostLiteralStringFromExpression(expression.args[0]);
-                this.runtimeEntrypointReturnType(targetName, expression.args[0]);
+                this.invokeEntrypointReturnType(targetName, expression.args[0]);
                 const target = this.functions.get(targetName);
                 if (target.params.length > 0 && !needsEntrypointWrapper(target)) {
                     throw new StudioCompileError(`semantic error: invoke_entrypoint target \`${targetName}\` uses parameter types that are not yet supported by the reusable SDK test wrapper`, expression.line, expression.column);
@@ -15797,6 +16627,8 @@ class StudioCodeGenerator {
                     }
                     break;
                 }
+                case 'invalidAssignmentTarget':
+                    throw new StudioCompileError('semantic error: assignment target must be a variable or map index', statement.line, 1);
                 case 'executeQuery':
                     this.validateSemanticExpressionUsage(statement.payload, scopeTypes, stateHandles);
                     {
@@ -15804,8 +16636,11 @@ class StudioCodeGenerator {
                         if (!isSemanticPointerConstructorArgAssignable(pointerConstructorBuiltinSpec('norito_bytes'), payloadType)) {
                             throw new StudioCompileError('semantic error: execute_query expects norito_bytes(string or Blob|bytes)', statement.line, 1);
                         }
+                        if (statement.declaredType) {
+                            this.validateSemanticAssignable(statement.declaredType, 'NoritoBytes', statement.payload);
+                        }
                     }
-                    scopeTypes.set(statement.alias, 'Blob');
+                    scopeTypes.set(statement.alias, 'NoritoBytes');
                     break;
                 case 'expression':
                     this.validateSemanticExpressionUsage(statement.expression, scopeTypes, stateHandles);
@@ -16143,9 +16978,15 @@ class StudioCodeGenerator {
         }
         return this.inferSemanticExpressionType(statement.value, scopeTypes, stateHandles);
     }
+    semanticAnnotatedBindingType(declaredType, actualType) {
+        if (declaredType === 'int' && actualType === 'bool') {
+            return actualType;
+        }
+        return declaredType;
+    }
     semanticLetLocalScopeType(statement, actualType) {
         if (statement.declaredType !== null) {
-            return statement.declaredType;
+            return this.semanticAnnotatedBindingType(statement.declaredType, actualType);
         }
         if (actualType !== null) {
             return actualType;
@@ -16308,6 +17149,7 @@ class StudioCodeGenerator {
         this.validateReturnStatementShapes();
         this.validateReturnCoverage();
         this.validateStateEntrypointParams(declaredEntrypoints);
+        this.validateStateParamTypes();
         this.validatePublicEntrypointParamTypes(declaredEntrypoints);
         this.validateStateParamCallArguments();
         if (this.compilerMode === 'production') {
@@ -17331,6 +18173,23 @@ class StudioCodeGenerator {
     resolveValueType(type, line, column) {
         if (typeof type === 'string')
             return type;
+        if (isGenericType(type)) {
+            if (type.base === 'Map') {
+                if (type.args.length !== 2) {
+                    throwMapTypeParameterCountError(line, column);
+                }
+                return {
+                    kind: 'map',
+                    key: this.resolveValueType(type.args[0], line, column),
+                    value: this.resolveValueType(type.args[1], line, column),
+                };
+            }
+            return {
+                kind: 'struct',
+                name: type.base,
+                fields: null,
+            };
+        }
         if (type.kind === 'tuple') {
             return {
                 kind: 'tuple',
@@ -17341,7 +18200,7 @@ class StudioCodeGenerator {
             return type;
         const structDecl = this.structs.get(type.name);
         if (!structDecl) {
-            throw new StudioCompileError(`Unknown browser-compiler struct type \`${type.name}\`.`, line, column);
+            return type;
         }
         return {
             kind: 'struct',
@@ -17368,7 +18227,28 @@ class StudioCodeGenerator {
             throw new StudioCompileError(`Function \`${fn.name}\` must return a \`${renderValueType(returnContext.valueType)}\` value in the browser compiler.`, fn.line, 1);
         }
     }
+    createUnitBinding() {
+        return {
+            kind: 'unit',
+            register: null,
+            items: null,
+            fieldNames: null,
+            valueType: 'unit',
+            rematerializableAssetDefinitionLiteral: null,
+            rematerializableAccountLiteral: null,
+            rematerializableDomainLiteral: null,
+            rematerializableNameLiteral: null,
+            rematerializableNftLiteral: null,
+            rematerializableBlobLiteral: null,
+            rematerializableNoritoBytesLiteral: null,
+            rematerializableTypedPointerLiteral: null,
+            publishedTlvRegister: null,
+        };
+    }
     createBindingForType(type) {
+        if (type === 'unit') {
+            return this.createUnitBinding();
+        }
         if (isLocalMapType(type)) {
             return this.createMapBinding(type);
         }
@@ -17386,6 +18266,9 @@ class StudioCodeGenerator {
             };
         }
         if (isStructValueType(type)) {
+            if (type.fields === null) {
+                return this.createOpaqueAggregateParamBinding(type, this.assembler.allocRegister());
+            }
             return {
                 kind: 'struct',
                 register: null,
@@ -17427,6 +18310,9 @@ class StudioCodeGenerator {
         };
     }
     createFixedBindingForType(type, startRegister) {
+        if (type === 'unit') {
+            return [this.createUnitBinding(), startRegister];
+        }
         if (isLocalMapType(type)) {
             return [this.createMapBinding(type, startRegister), startRegister + 1];
         }
@@ -17451,6 +18337,9 @@ class StudioCodeGenerator {
                 }, nextRegister];
         }
         if (isStructValueType(type)) {
+            if (type.fields === null) {
+                return [this.createOpaqueAggregateParamBinding(type, startRegister), startRegister + 1];
+            }
             const items = [];
             let nextRegister = startRegister;
             for (const field of type.fields ?? []) {
@@ -17719,6 +18608,9 @@ class StudioCodeGenerator {
         return [binding, frameOffset + 8];
     }
     storeBindingInSpillFrame(binding, frameOffset) {
+        if (binding.kind === 'unit') {
+            return;
+        }
         if (binding.kind === 'tuple' || binding.kind === 'struct') {
             let nextOffset = frameOffset;
             for (const item of binding.items ?? []) {
@@ -17771,7 +18663,22 @@ class StudioCodeGenerator {
         };
     }
     moveBinding(target, source, line, column) {
+        if (target.kind === 'unit' || source.kind === 'unit') {
+            if (target.kind === 'unit' && source.kind === 'unit') {
+                return;
+            }
+            throw new StudioCompileError('Studio value kinds are not assignable in the browser compiler.', line, column);
+        }
         if (target.kind === 'tuple' || target.kind === 'struct') {
+            if (target.items === null || source.items === null) {
+                if (source.kind === target.kind && target.register !== null && source.register !== null) {
+                    if (target.register !== source.register) {
+                        this.assembler.emitMove(target.register, source.register);
+                    }
+                    return;
+                }
+                throw new StudioCompileError('Aggregate values are not shape-compatible in the browser compiler.', line, column);
+            }
             if (source.kind !== target.kind || target.items === null || source.items === null || target.items.length !== source.items.length) {
                 throw new StudioCompileError('Aggregate values are not shape-compatible in the browser compiler.', line, column);
             }
@@ -17939,9 +18846,11 @@ class StudioCodeGenerator {
         };
     }
     deferAccountLiteralDataRef(literal, line, column) {
-        const publicKey = (renderCanonicalPublicKeyLiteralFromAccountIdLiteral(literal)
-            ?? normalizePublicKeyLiteral(literal, 'Account literal', line, column)).toLowerCase();
-        this.assembler.deferLiteralDataRef(POINTER_TYPE_ACCOUNT_ID, encodeAccountIdPointerPayload(publicKey));
+        const publicKey = renderRustAccountPublicKeyLiteralFromAccountIdLiteral(literal);
+        if (publicKey === null) {
+            throw new StudioCompileError(`semantic error: invalid AccountId literal \`${literal}\`: ${invalidAccountIdLiteralCause(literal)}`, line, column);
+        }
+        this.assembler.deferLiteralDataRef(POINTER_TYPE_ACCOUNT_ID, encodeAccountIdPointerPayload(publicKey.toLowerCase()));
     }
     deferAssetDefinitionLiteralDataRef(literal, line, column) {
         this.assembler.deferLiteralDataRef(POINTER_TYPE_ASSET_DEFINITION_ID, encodeAssetDefinitionIdPointerPayload(parseAssetDefinitionIdBytes(literal, line, column)));
@@ -18679,7 +19588,7 @@ class StudioCodeGenerator {
                 const binding = this.compileLocalBinding(statement.name, statement.value, statement.declaredType ?? null, callStack, locals, prepublishedPointerLocalNames, liveAfterStatement);
                 this.annotateRematerializableIntLiteral(binding, statement.value);
                 const spillFrameOffset = this.activeImplLocalSpillOffsets.get(statement.name);
-                if (spillFrameOffset !== undefined && binding.kind !== 'map' && binding.kind !== 'tuple' && binding.kind !== 'struct') {
+                if (spillFrameOffset !== undefined && binding.kind !== 'unit' && binding.kind !== 'map' && binding.kind !== 'tuple' && binding.kind !== 'struct') {
                     if (this.tryPatchFrame144WithdrawTotalLpSpill(statement, binding, spillFrameOffset, locals)) {
                         return;
                     }
@@ -19185,7 +20094,7 @@ class StudioCodeGenerator {
                     register: resultRegister,
                     items: null,
                     fieldNames: null,
-                    valueType: 'Blob',
+                    valueType: 'NoritoBytes',
                 });
                 return;
             }
@@ -23153,6 +24062,9 @@ class StudioCodeGenerator {
         return branch;
     }
     compileExpressionAsBindingForType(expression, type, callStack, locals) {
+        if (type === 'unit') {
+            return this.compileExpressionAsUnitBinding(expression, callStack, locals);
+        }
         if (isLocalMapType(type)) {
             if (expression.kind === 'call' && isMapNewCallName(expression.name)) {
                 if (expression.args.length !== 0) {
@@ -23247,6 +24159,16 @@ class StudioCodeGenerator {
             binding.rematerializableAssetDefinitionLiteral = this.resolveRematerializableAssetDefinitionLiteral(expression, locals);
         }
         return binding;
+    }
+    compileExpressionAsUnitBinding(expression, callStack, locals) {
+        if (expression.kind === 'call') {
+            const callee = this.functions.get(expression.name);
+            if (callee !== undefined && semanticCallReturnTypeForFunction(callee) === 'unit') {
+                this.compileCallExpression(expression, callStack, locals, true);
+                return this.createUnitBinding();
+            }
+        }
+        throw new StudioCompileError('Expected unit value in the browser compiler.', expression.line, expression.column);
     }
     compileExpressionByValueType(expression, type, callStack, locals) {
         if (isTupleValueType(type) || isStructValueType(type)) {
@@ -25165,10 +26087,8 @@ class StudioCodeGenerator {
         }
         if (spec.kind === 'unshield') {
             const amount = expression.args[2];
-            if (amount?.kind !== 'number') {
-                throw new StudioCompileError('build_unshield_inline amount requires a compile-time integer literal in the browser compiler.', expression.line, expression.column);
-            }
-            const instructionBytes = zkInlineBuilderInstructionBytesFromExpression(expression, this.rematerializableLiteralMapForLocals(locals));
+            const amountValue = inlineBuilderUnshieldAmountValue(amount, (arg) => this.resolveCompileTimeIntegerLiteral(arg));
+            const instructionBytes = zkInlineBuilderInstructionBytesFromExpression(expression, this.rematerializableLiteralMapForLocals(locals), (arg) => this.resolveCompileTimeIntegerLiteral(arg));
             const instructionHex = bytesToHex(instructionBytes);
             this.deferBuilderAssetDefinitionDataRef(expression.args[0], locals, 'build_unshield_inline asset');
             this.deferBuilderAccountDataRef(expression.args[1], locals, 'build_unshield_inline to');
@@ -25180,7 +26100,7 @@ class StudioCodeGenerator {
             this.claimRegisterIfAvailable(5);
             this.claimRegisterIfAvailable(6);
             this.assembler.emitAddi(3, 0, 0);
-            this.emitRustLikeIntLiteral(4, amount.value);
+            this.emitRustLikeIntLiteral(4, amountValue);
             this.emitBlobLiteralPointerIntoRegister(this.inlineBuilderLiteralWithLocals(expression.args[4], locals, 'build_unshield_inline backend'), 5);
             this.emitNoritoBytesLiteralPointerIntoRegister(instructionHex, 6);
             return {
@@ -25952,6 +26872,9 @@ class StudioCodeGenerator {
         return shiftedCallStart;
     }
     createScalarBindingForRegister(type, register) {
+        if (type === 'unit') {
+            return this.createUnitBinding();
+        }
         return {
             kind: valueKindForType(type),
             register,
@@ -26030,17 +26953,15 @@ class StudioCodeGenerator {
             binding.rematerializableNameLiteral = literal;
             return { binding, temporary: moved };
         }
-        if (expression.kind === 'stateReference') {
-            const stateType = this.stateTypes.get(expression.name) ?? null;
-            if (stateType !== null && localBindingTypesEqual(stateType, param.type)) {
-                const register = targetRegister !== null && targetRegister !== undefined
-                    ? targetRegister
-                    : this.assembler.allocRegister();
-                this.emitDirectNameLiteralPointerIntoRegister(expression.name, register);
-                const binding = this.createScalarStateHandleBinding(param.type, register);
-                binding.rematerializableNameLiteral = expression.name;
-                return { binding, temporary: true };
-            }
+        const durablePath = this.resolveDurableStateLiteralPathExpression(expression, (name) => locals.has(name));
+        if (durablePath !== null && localBindingTypesEqual(durablePath.type, param.type)) {
+            const register = targetRegister !== null && targetRegister !== undefined
+                ? targetRegister
+                : this.assembler.allocRegister();
+            this.emitDirectNameLiteralPointerIntoRegister(durablePath.path, register);
+            const binding = this.createScalarStateHandleBinding(param.type, register);
+            binding.rematerializableNameLiteral = durablePath.path;
+            return { binding, temporary: true };
         }
         throw new StudioCompileError(`State parameter \`${param.name}\` requires a durable state handle argument in the browser compiler.`, line, column);
     }
@@ -27966,7 +28887,7 @@ class StudioCodeGenerator {
         if (accountIdLiteralUsesAliasResolution(literal)) {
             return this.emitResolveAccountAliasLiteralPointer(literal);
         }
-        throw new StudioCompileError(`semantic error: invalid AccountId literal \`${literal}\``, line, column);
+        throw new StudioCompileError(`semantic error: invalid AccountId literal \`${literal}\`: ${invalidAccountIdLiteralCause(literal)}`, line, column);
     }
     resolveRematerializableAssetDefinitionLiteral(expression, locals) {
         if (expression.kind === 'stateReference') {
@@ -28439,9 +29360,11 @@ class StudioCodeGenerator {
             if (literalBytes !== null) {
                 const literal = this.resolveStaticAccountLiteral(expression, new Set(locals.keys()), new Map());
                 if (literal !== null && literal !== AUTHORITY_ACCOUNT_PLACEHOLDER) {
-                    const publicKey = (renderCanonicalPublicKeyLiteralFromAccountIdLiteral(literal)
-                        ?? normalizePublicKeyLiteral(literal, 'Account literal', expression.line, expression.column)).toLowerCase();
-                    return this.emitPointerLiteralToNorito(POINTER_TYPE_ACCOUNT_ID, encodeAccountIdPointerPayload(publicKey), preferredResultRegister);
+                    const publicKey = renderRustAccountPublicKeyLiteralFromAccountIdLiteral(literal);
+                    if (publicKey === null) {
+                        throw new StudioCompileError(`semantic error: invalid AccountId literal \`${literal}\`: ${invalidAccountIdLiteralCause(literal)}`, expression.line, expression.column);
+                    }
+                    return this.emitPointerLiteralToNorito(POINTER_TYPE_ACCOUNT_ID, encodeAccountIdPointerPayload(publicKey.toLowerCase()), preferredResultRegister);
                 }
             }
             return this.emitPointerToNorito(this.compileExpressionAsAccountPointer(expression, callStack, locals), preferredResultRegister);
@@ -28483,9 +29406,11 @@ class StudioCodeGenerator {
             const literal = this.resolveStaticAccountLiteral(expression, scope, new Map());
             if (literal === null || literal === AUTHORITY_ACCOUNT_PLACEHOLDER)
                 return null;
-            const publicKey = (renderCanonicalPublicKeyLiteralFromAccountIdLiteral(literal)
-                ?? normalizePublicKeyLiteral(literal, 'Account literal', expression.line, expression.column)).toLowerCase();
-            return buildPointerTlv(POINTER_TYPE_ACCOUNT_ID, encodeAccountIdPointerPayload(publicKey));
+            const publicKey = renderRustAccountPublicKeyLiteralFromAccountIdLiteral(literal);
+            if (publicKey === null) {
+                throw new StudioCompileError(`semantic error: invalid AccountId literal \`${literal}\`: ${invalidAccountIdLiteralCause(literal)}`, expression.line, expression.column);
+            }
+            return buildPointerTlv(POINTER_TYPE_ACCOUNT_ID, encodeAccountIdPointerPayload(publicKey.toLowerCase()));
         }
         if (stateType === 'AssetDefinitionId') {
             const literal = this.resolveStaticAssetDefinitionLiteral(expression, scope, new Map());
@@ -28928,6 +29853,9 @@ class StudioCodeGenerator {
     compileLocalBinding(name, expression, declaredType, callStack, locals, prepublishedPointerLocalNames, liveAfterStatement = null) {
         if (declaredType !== null) {
             const resolvedDeclaredType = this.resolveLocalBindingType(declaredType, expression.line, expression.column);
+            if (resolvedDeclaredType === 'unit') {
+                return this.maybePrepublishLocalBinding(name, this.compileExpressionAsUnitBinding(expression, callStack, locals), prepublishedPointerLocalNames);
+            }
             if (isLocalMapType(resolvedDeclaredType)) {
                 if (expression.kind === 'call' && isMapNewCallName(expression.name)) {
                     if (expression.args.length !== 0) {
@@ -29155,7 +30083,7 @@ class StudioCodeGenerator {
                     && pointerConstructorValueType(expression.name) === resolvedDeclaredType)
                 || (this.directVoidReturnHalts
                     && expression.kind === 'call'
-                    && ((resolvedDeclaredType === 'Blob' && stateHostBuiltinSpec(expression.name)?.kind === 'get')
+                    && ((isSemanticBlobLikeType(resolvedDeclaredType) && stateHostBuiltinSpec(expression.name)?.kind === 'get')
                         || mapEnumerationBuiltinName(expression.name) !== null))) {
                 return this.maybePrepublishLocalBinding(name, sourceBinding, prepublishedPointerLocalNames);
             }
@@ -29169,6 +30097,12 @@ class StudioCodeGenerator {
             }
             return this.maybePrepublishLocalBinding(name, this.emitLocalMapNewBinding(defaultMapNewType(), expression.line, expression.column), prepublishedPointerLocalNames);
         }
+        if (expression.kind === 'call') {
+            const callee = this.functions.get(expression.name);
+            if (callee !== undefined && semanticCallReturnTypeForFunction(callee) === 'unit') {
+                return this.maybePrepublishLocalBinding(name, this.compileExpressionAsUnitBinding(expression, callStack, locals), prepublishedPointerLocalNames);
+            }
+        }
         const valueType = this.inferExpressionValueType(expression, locals);
         if (valueType === null) {
             if (expression.kind === 'call') {
@@ -29181,6 +30115,14 @@ class StudioCodeGenerator {
             throw new StudioCompileError(`Unable to infer type for local \`${name}\` in the browser compiler.`, expression.line, expression.column);
         }
         if (isLocalMapType(valueType)) {
+            if (expression.kind === 'stateReference') {
+                const sourceLocal = locals.get(expression.name);
+                if (sourceLocal?.kind === 'map' && sourceLocal.register !== null && sourceLocal.mapType) {
+                    const localBinding = this.createMapBinding(valueType);
+                    this.assembler.emitMove(localBinding.register, sourceLocal.register);
+                    return this.maybePrepublishLocalBinding(name, localBinding, prepublishedPointerLocalNames);
+                }
+            }
             return this.maybePrepublishLocalBinding(name, this.compileExpressionAsBindingForType(expression, valueType, callStack, locals), prepublishedPointerLocalNames);
         }
         if (valueType === 'AssetDefinitionId') {
@@ -29401,7 +30343,7 @@ class StudioCodeGenerator {
                 && pointerConstructorValueType(expression.name) === valueType)
             || (this.directVoidReturnHalts
                 && expression.kind === 'call'
-                && ((valueType === 'Blob' && stateHostBuiltinSpec(expression.name)?.kind === 'get')
+                && ((isSemanticBlobLikeType(valueType) && stateHostBuiltinSpec(expression.name)?.kind === 'get')
                     || mapEnumerationBuiltinName(expression.name) !== null))) {
             return this.maybePrepublishLocalBinding(name, sourceBinding, prepublishedPointerLocalNames);
         }
@@ -29466,9 +30408,11 @@ class StudioCodeGenerator {
         this.assembler.reservePointerLiteralStub(register, pointer);
     }
     emitAccountLiteralPointerIntoRegister(value, line, column, register) {
-        const publicKey = (renderCanonicalPublicKeyLiteralFromAccountIdLiteral(value)
-            ?? normalizePublicKeyLiteral(value, 'Account literal', line, column)).toLowerCase();
-        const pointer = this.assembler.literalPointer(POINTER_TYPE_ACCOUNT_ID, encodeAccountIdPointerPayload(publicKey));
+        const publicKey = renderRustAccountPublicKeyLiteralFromAccountIdLiteral(value);
+        if (publicKey === null) {
+            throw new StudioCompileError(`semantic error: invalid AccountId literal \`${value}\`: ${invalidAccountIdLiteralCause(value)}`, line, column);
+        }
+        const pointer = this.assembler.literalPointer(POINTER_TYPE_ACCOUNT_ID, encodeAccountIdPointerPayload(publicKey.toLowerCase()));
         this.assembler.reservePointerLiteralStub(register, pointer);
     }
     emitAccountLiteralPointer(value, line, column) {
@@ -30189,7 +31133,7 @@ class StudioCodeGenerator {
             const localBinding = locals.get(expression.name);
             if (localBinding) {
                 if (localBinding.kind === 'map' || localBinding.mapType) {
-                    throw new StudioCompileError(`Map local \`${expression.name}\` must be indexed before use in the browser compiler.`, expression.line, expression.column);
+                    return localBinding.mapType ?? null;
                 }
                 if (localBinding.valueType)
                     return localBinding.valueType;
@@ -30411,16 +31355,36 @@ function validateProductionAccessHints(entrypoints) {
         return;
     throwProductionAccessHintError(incompleteEntrypoint.name, incompleteEntrypoint.accessHintsSkipped);
 }
+function validateTestFunctionDeclarations(functions) {
+    for (const fn of functions) {
+        if (!fn.isTest)
+            continue;
+        if (fn.params.length > 0) {
+            throw new StudioCompileError(`semantic error: test function \`${fn.name}\` must not declare parameters`, fn.line, fn.column);
+        }
+        if (fn.returnType !== null || fn.explicitUnitReturn) {
+            throw new StudioCompileError(`semantic error: test function \`${fn.name}\` must not declare a return type`, fn.line, fn.column);
+        }
+        if (fn.entrypointKind !== null) {
+            throw new StudioCompileError(`semantic error: test function \`${fn.name}\` must be declared as a local \`fn\``, fn.line, fn.column);
+        }
+        if (fn.permission !== null) {
+            throw new StudioCompileError(`semantic error: test function \`${fn.name}\` cannot declare a permission modifier`, fn.line, fn.column);
+        }
+    }
+}
 export function compileKotodamaStudioProgram(source, options = {}) {
     try {
         const compilerMode = normalizeKotodamaCompilerModeOption(options.mode);
         const program = parseStudioProgram(source);
+        const preludeProgram = programWithFirstReleasePrelude(program);
+        validateTestFunctionDeclarations(preludeProgram.functions);
         const compileProgram = {
-            ...program,
+            ...preludeProgram,
             functions: compilerMode === 'test'
-                ? program.functions
-                : program.functions.filter((fn) => !fn.isTest),
-            kotoba: normalizeKotobaEntries(program.kotoba),
+                ? preludeProgram.functions
+                : preludeProgram.functions.filter((fn) => !fn.isTest),
+            kotoba: normalizeKotobaEntries(preludeProgram.kotoba),
         };
         if (compileProgram.functions.length === 0) {
             throw new StudioCompileError('no functions to compile', 1, 1);

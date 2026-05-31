@@ -6338,7 +6338,7 @@ fn main() {{
         use iroha_data_model::{
             account::AccountId,
             asset::id::{AssetDefinitionId, AssetId},
-            query::asset::FindAssetById,
+            query::asset::{FindAssetById, FindAssetDefinitionById},
             query::{QueryRequest, SingularQueryBox},
         };
 
@@ -6400,6 +6400,33 @@ fn main() {{
             .expect("main entrypoint");
         assert_eq!(main.access_hints_complete, Some(true));
         assert!(main.access_hints_skipped.is_empty());
+
+        let definition_request = QueryRequest::Singular(SingularQueryBox::FindAssetDefinitionById(
+            FindAssetDefinitionById::new(asset_def.clone()),
+        ));
+        let definition_bytes = norito::to_bytes(&definition_request).expect("encode QueryRequest");
+        let definition_hex_payload = format!("0x{}", hex::encode(definition_bytes));
+        let definition_src =
+            format!("fn main() {{ execute_query(norito_bytes(\"{definition_hex_payload}\")); }}");
+
+        let (_bytes, definition_manifest) = compiler
+            .compile_source_with_manifest(&definition_src)
+            .expect("compile asset definition query manifest");
+        let definition_hints = definition_manifest
+            .access_set_hints
+            .expect("expected asset definition access_set_hints");
+        assert_eq!(
+            definition_hints.read_keys,
+            vec![format!("asset_def:{asset_def}")]
+        );
+        assert!(definition_hints.write_keys.is_empty());
+        assert!(
+            !definition_hints
+                .read_keys
+                .iter()
+                .any(|key| key.starts_with("domain:")),
+            "opaque canonical asset definition query should not synthesize a domain access hint",
+        );
     }
 
     #[test]
@@ -16305,6 +16332,10 @@ fn record_singular_query_access(
     match query {
         SingularQueryBox::FindAssetById(q) => {
             add_asset_r(access_set, q.asset_id());
+            Some(())
+        }
+        SingularQueryBox::FindAssetDefinitionById(q) => {
+            add_asset_def_r(access_set, q.asset_definition_id());
             Some(())
         }
         _ => None,

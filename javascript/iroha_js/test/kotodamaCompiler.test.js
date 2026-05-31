@@ -220,8 +220,8 @@ function encodeNoritoStringBare(value, flags = 0) {
   return Buffer.concat([encodeLength(bytes.length, flags), bytes]);
 }
 
-function encodeNoritoBytesBare(value) {
-  return Buffer.concat([littleEndianU64(value.length), Buffer.from(value)]);
+function encodeNoritoBytesBare(value, flags = 0) {
+  return Buffer.concat([encodeLength(value.length, flags), Buffer.from(value)]);
 }
 
 function encodeNoritoU8Vec(value, flags = 0) {
@@ -279,20 +279,27 @@ function toHexLiteral(bytes) {
   return `0x${Buffer.from(bytes).toString("hex")}`;
 }
 
-function encodeNameBare(value) {
-  return encodeNoritoStringBare(value);
+function encodeNameBare(value, flags = 0) {
+  return encodeNoritoStringBare(value, flags);
 }
 
-function encodeDomainIdBare(value) {
-  return encodeStructField(encodeNameBare(value));
+function encodeDomainIdBare(value, flags = 0) {
+  return encodeStructField(encodeNameBare(value, flags), flags);
 }
 
-function encodeRoleIdBare(value) {
-  return encodeStructField(encodeNameBare(value));
+function encodeRoleIdBare(value, flags = 0) {
+  return encodeStructField(encodeNameBare(value, flags), flags);
 }
 
-function encodeTriggerIdBare(value) {
-  return encodeStructField(encodeNameBare(value));
+function encodeTriggerIdBare(value, flags = 0) {
+  return encodeStructField(encodeNameBare(value, flags), flags);
+}
+
+function encodeNftIdBare(name, domain, flags = 0) {
+  return Buffer.concat([
+    encodeStructField(encodeDomainIdBare(domain, flags), flags),
+    encodeStructField(encodeNameBare(name, flags), flags),
+  ]);
 }
 
 function encodeAssetDefinitionIdBare(bytes) {
@@ -301,6 +308,29 @@ function encodeAssetDefinitionIdBare(bytes) {
 
 function encodeAccountIdBare(publicKey) {
   return encodeNoritoEnumVariantBare(0, encodeNoritoStringBare(publicKey));
+}
+
+function encodeAccountIdBareWithFlags(publicKey, flags = 0) {
+  return (flags & NORITO_HEADER_FLAG_COMPACT_LEN) === 0
+    ? encodeAccountIdBare(publicKey)
+    : encodeAccountIdCompact(publicKey);
+}
+
+function encodePermissionBare(name, {
+  includePayload = true,
+  extraFields = [],
+  flags = 0,
+} = {}) {
+  const fields = [
+    encodeStructField(encodeNoritoStringBare(name, flags), flags),
+  ];
+  if (includePayload) {
+    fields.push(encodeStructField(encodeNoritoStringBare("{}", flags), flags));
+  }
+  for (const extraField of extraFields) {
+    fields.push(encodeStructField(extraField, flags));
+  }
+  return Buffer.concat(fields);
 }
 
 function encodeAccountIdCompact(publicKey) {
@@ -324,43 +354,51 @@ function encodeEmptyVecBare() {
   return littleEndianU64(0);
 }
 
-function encodeNewDomainBare(domain) {
+function encodeNewDomainBare(domain, flags = 0) {
   return Buffer.concat([
-    encodeStructField(encodeDomainIdBare(domain)),
-    encodeStructField(encodeOptionNoneBare()),
-    encodeStructField(encodeEmptyMetadataBare()),
+    encodeStructField(encodeDomainIdBare(domain, flags), flags),
+    encodeStructField(encodeOptionNoneBare(), flags),
+    encodeStructField(encodeEmptyMetadataBare(), flags),
   ]);
 }
 
-function encodeNewAccountBare(publicKey) {
+function encodeNewAccountBare(publicKey, flags = 0) {
   return Buffer.concat([
-    encodeStructField(encodeAccountIdBare(publicKey)),
-    encodeStructField(encodeEmptyMetadataBare()),
-    encodeStructField(encodeOptionNoneBare()),
-    encodeStructField(encodeOptionNoneBare()),
-    encodeStructField(encodeEmptyVecBare()),
+    encodeStructField(encodeAccountIdBareWithFlags(publicKey, flags), flags),
+    encodeStructField(encodeEmptyMetadataBare(), flags),
+    encodeStructField(encodeOptionNoneBare(), flags),
+    encodeStructField(encodeOptionNoneBare(), flags),
+    encodeStructField(encodeEmptyVecBare(), flags),
   ]);
 }
 
-function encodeRoleBare(role) {
+function encodeNftBare(name, domain, publicKey, flags = 0) {
   return Buffer.concat([
-    encodeStructField(encodeRoleIdBare(role)),
-    encodeStructField(encodeEmptyVecBare()),
-    encodeStructField(encodeEmptyMetadataBare()),
+    encodeStructField(encodeNftIdBare(name, domain, flags), flags),
+    encodeStructField(encodeEmptyMetadataBare(), flags),
+    encodeStructField(encodeAccountIdBareWithFlags(publicKey, flags), flags),
   ]);
 }
 
-function encodeNewRoleBare(role, publicKey) {
+function encodeRoleBare(role, flags = 0) {
   return Buffer.concat([
-    encodeStructField(encodeRoleBare(role)),
-    encodeStructField(encodeAccountIdBare(publicKey)),
+    encodeStructField(encodeRoleIdBare(role, flags), flags),
+    encodeStructField(encodeEmptyVecBare(), flags),
+    encodeStructField(encodeEmptyMetadataBare(), flags),
+  ]);
+}
+
+function encodeNewRoleBare(role, publicKey, flags = 0) {
+  return Buffer.concat([
+    encodeStructField(encodeRoleBare(role, flags), flags),
+    encodeStructField(encodeAccountIdBareWithFlags(publicKey, flags), flags),
   ]);
 }
 
 function encodeProofBoxBare(backend, proof, flags = 0) {
   return Buffer.concat([
     encodeStructField(encodeNoritoStringBare(backend, flags), flags),
-    encodeStructField(encodeNoritoBytesBare(proof), flags),
+    encodeStructField(encodeNoritoBytesBare(proof, flags), flags),
   ]);
 }
 
@@ -387,7 +425,7 @@ function encodeInstructionLiteralWithOptions(wireId, payload, {
   const framedPayload = encodeNoritoTopLevelWithPadding(payload, innerFlags, innerAlign);
   const pair = Buffer.concat([
     encodeStructField(encodeNoritoStringBare(wireId, outerFlags), outerFlags),
-    encodeStructField(encodeNoritoBytesBare(framedPayload), outerFlags),
+    encodeStructField(encodeNoritoBytesBare(framedPayload, outerFlags), outerFlags),
   ]);
   return toHexLiteral(encodeNoritoTopLevel(pair, outerFlags));
 }
@@ -396,12 +434,24 @@ function encodeInstructionLiteral(wireId, payload) {
   return encodeInstructionLiteralWithOptions(wireId, payload);
 }
 
-function encodeRegisterInstructionLiteral(tag, object) {
-  return encodeInstructionLiteral("iroha.register", encodeNoritoEnumVariantBare(tag, encodeStructField(object)));
+function encodeRegisterInstructionLiteral(tag, object, {
+  flags = 0,
+  outerFlags = 0,
+} = {}) {
+  return encodeInstructionLiteralWithOptions("iroha.register", encodeNoritoEnumVariant(tag, encodeStructField(object, flags), flags), {
+    innerFlags: flags,
+    outerFlags,
+  });
 }
 
-function encodeUnregisterInstructionLiteral(tag, object) {
-  return encodeInstructionLiteral("iroha.unregister", encodeNoritoEnumVariantBare(tag, encodeStructField(object)));
+function encodeUnregisterInstructionLiteral(tag, object, {
+  flags = 0,
+  outerFlags = 0,
+} = {}) {
+  return encodeInstructionLiteralWithOptions("iroha.unregister", encodeNoritoEnumVariant(tag, encodeStructField(object, flags), flags), {
+    innerFlags: flags,
+    outerFlags,
+  });
 }
 
 function encodeLogInstructionLiteral(level, message) {
@@ -411,44 +461,137 @@ function encodeLogInstructionLiteral(level, message) {
   ]));
 }
 
-function encodeCreateElectionInstructionLiteral(electionId) {
-  const payload = Buffer.concat([
-    encodeStructField(encodeNoritoStringBare(electionId)),
-    encodeStructField(littleEndianU32(3)),
-    encodeStructField(Buffer.alloc(32, 1)),
-    encodeStructField(littleEndianU64(10)),
-    encodeStructField(littleEndianU64(20)),
-    encodeStructField(encodeVerifyingKeyIdBare("halo2", "ballot-vk")),
-    encodeStructField(encodeVerifyingKeyIdBare("halo2", "tally-vk")),
-    encodeStructField(encodeNoritoStringBare("vote-domain")),
-  ]);
-  return encodeInstructionLiteral(CREATE_ELECTION_TYPE_NAME, payload);
+function encodeSetKeyValueInstructionLiteral(tag, object, key, {
+  includeValue = true,
+  extraFields = [],
+  flags = 0,
+  outerFlags = 0,
+} = {}) {
+  const fields = [
+    encodeStructField(object, flags),
+    encodeStructField(encodeNameBare(key, flags), flags),
+  ];
+  if (includeValue) {
+    fields.push(encodeStructField(encodeNoritoStringBare('{"ok":true}', flags), flags));
+  }
+  for (const extraField of extraFields) {
+    fields.push(encodeStructField(extraField, flags));
+  }
+  return encodeInstructionLiteralWithOptions("iroha.set_key_value", encodeNoritoEnumVariant(tag, Buffer.concat(fields), flags), {
+    innerFlags: flags,
+    outerFlags,
+  });
 }
 
-function encodeSubmitBallotInstructionLiteral(electionId) {
-  const payload = Buffer.concat([
-    encodeStructField(encodeNoritoStringBare(electionId)),
-    encodeStructField(encodeNoritoBytesBare(Buffer.from([4, 5, 6]))),
-    encodeStructField(encodeProofAttachmentBare()),
-    encodeStructField(Buffer.alloc(32, 2)),
-  ]);
-  return encodeInstructionLiteral(SUBMIT_BALLOT_TYPE_NAME, payload);
+function encodeRemoveKeyValueInstructionLiteral(tag, object, key, {
+  extraFields = [],
+  flags = 0,
+  outerFlags = 0,
+} = {}) {
+  const fields = [
+    encodeStructField(object, flags),
+    encodeStructField(encodeNameBare(key, flags), flags),
+  ];
+  for (const extraField of extraFields) {
+    fields.push(encodeStructField(extraField, flags));
+  }
+  return encodeInstructionLiteralWithOptions("iroha.remove_key_value", encodeNoritoEnumVariant(tag, Buffer.concat(fields), flags), {
+    innerFlags: flags,
+    outerFlags,
+  });
 }
 
-function encodeFinalizeElectionInstructionLiteral(electionId) {
-  const payload = Buffer.concat([
-    encodeStructField(encodeNoritoStringBare(electionId)),
-    encodeStructField(encodeNoritoVec([littleEndianU64(7), littleEndianU64(8)])),
-    encodeStructField(encodeProofAttachmentBare()),
-  ]);
-  return encodeInstructionLiteral(FINALIZE_ELECTION_TYPE_NAME, payload);
+function encodeGrantOrRevokeInstructionLiteral(wireId, tag, object, destination, {
+  extraFields = [],
+  flags = 0,
+  outerFlags = 0,
+} = {}) {
+  const fields = [
+    encodeStructField(object, flags),
+    encodeStructField(destination, flags),
+  ];
+  for (const extraField of extraFields) {
+    fields.push(encodeStructField(extraField, flags));
+  }
+  return encodeInstructionLiteralWithOptions(wireId, encodeNoritoEnumVariant(tag, Buffer.concat(fields), flags), {
+    innerFlags: flags,
+    outerFlags,
+  });
 }
 
-function encodeUnshieldInstructionLiteral({ assetDefinitionBytes, publicKey, amount }) {
-  const flags = NORITO_HEADER_FLAG_COMPACT_LEN;
+function encodeExecuteTriggerInstructionLiteral(triggerId, {
+  includeArgs = true,
+  extraFields = [],
+  flags = 0,
+  outerFlags = 0,
+} = {}) {
+  const fields = [
+    encodeStructField(encodeTriggerIdBare(triggerId, flags), flags),
+  ];
+  if (includeArgs) {
+    fields.push(encodeStructField(encodeNoritoStringBare("{}", flags), flags));
+  }
+  for (const extraField of extraFields) {
+    fields.push(encodeStructField(extraField, flags));
+  }
+  return encodeInstructionLiteralWithOptions("iroha.execute_trigger", Buffer.concat(fields), {
+    innerFlags: flags,
+    outerFlags,
+  });
+}
+
+function encodeCreateElectionInstructionLiteral(electionId, { flags = 0, outerFlags = 0 } = {}) {
+  const payload = Buffer.concat([
+    encodeStructField(encodeNoritoStringBare(electionId, flags), flags),
+    encodeStructField(littleEndianU32(3), flags),
+    encodeStructField(Buffer.alloc(32, 1), flags),
+    encodeStructField(littleEndianU64(10), flags),
+    encodeStructField(littleEndianU64(20), flags),
+    encodeStructField(encodeVerifyingKeyIdBare("halo2", "ballot-vk", flags), flags),
+    encodeStructField(encodeVerifyingKeyIdBare("halo2", "tally-vk", flags), flags),
+    encodeStructField(encodeNoritoStringBare("vote-domain", flags), flags),
+  ]);
+  return encodeInstructionLiteralWithOptions(CREATE_ELECTION_TYPE_NAME, payload, {
+    innerFlags: flags,
+    outerFlags,
+  });
+}
+
+function encodeSubmitBallotInstructionLiteral(electionId, { flags = 0, outerFlags = 0 } = {}) {
+  const payload = Buffer.concat([
+    encodeStructField(encodeNoritoStringBare(electionId, flags), flags),
+    encodeStructField(encodeNoritoBytesBare(Buffer.from([4, 5, 6]), flags), flags),
+    encodeStructField(encodeProofAttachmentBare("halo2", Buffer.from([1, 2, 3]), "vk", flags), flags),
+    encodeStructField(Buffer.alloc(32, 2), flags),
+  ]);
+  return encodeInstructionLiteralWithOptions(SUBMIT_BALLOT_TYPE_NAME, payload, {
+    innerFlags: flags,
+    outerFlags,
+  });
+}
+
+function encodeFinalizeElectionInstructionLiteral(electionId, { flags = 0, outerFlags = 0 } = {}) {
+  const payload = Buffer.concat([
+    encodeStructField(encodeNoritoStringBare(electionId, flags), flags),
+    encodeStructField(encodeNoritoVec([littleEndianU64(7), littleEndianU64(8)], flags), flags),
+    encodeStructField(encodeProofAttachmentBare("halo2", Buffer.from([1, 2, 3]), "vk", flags), flags),
+  ]);
+  return encodeInstructionLiteralWithOptions(FINALIZE_ELECTION_TYPE_NAME, payload, {
+    innerFlags: flags,
+    outerFlags,
+  });
+}
+
+function encodeUnshieldInstructionLiteral({
+  assetDefinitionBytes,
+  publicKey,
+  amount,
+  flags = NORITO_HEADER_FLAG_COMPACT_LEN,
+  outerFlags = flags,
+}) {
   const payload = Buffer.concat([
     encodeStructField(assetDefinitionBytes, flags),
-    encodeStructField(encodeAccountIdCompact(publicKey), flags),
+    encodeStructField(encodeAccountIdBareWithFlags(publicKey, flags), flags),
     encodeStructField(littleEndianU128(amount), flags),
     encodeStructField(encodeNoritoVec([Buffer.alloc(32, 3)], flags), flags),
     encodeStructField(encodeNoritoVec([], flags), flags),
@@ -458,7 +601,7 @@ function encodeUnshieldInstructionLiteral({ assetDefinitionBytes, publicKey, amo
   return encodeInstructionLiteralWithOptions(UNSHIELD_TYPE_NAME, payload, {
     innerFlags: flags,
     innerAlign: 16,
-    outerFlags: flags,
+    outerFlags,
   });
 }
 
@@ -475,6 +618,152 @@ function encodeZkVoteGetTallyRequestLiteral(electionId) {
   return toHexLiteral(encodeNoritoTopLevel(Buffer.concat([
     encodeStructField(encodeNoritoStringBare(electionId, flags), flags),
   ]), flags));
+}
+
+function encodeAssetBalanceScopeBare(scope = null, flags = 0) {
+  return scope === null
+    ? encodeNoritoEnumVariant(0, undefined, flags)
+    : encodeNoritoEnumVariant(1, littleEndianU64(scope), flags);
+}
+
+function encodeAssetIdBareWithFlags(assetDefinitionBytes, publicKey, scope = null, flags = 0) {
+  return Buffer.concat([
+    encodeStructField(encodeAccountIdBareWithFlags(publicKey, flags), flags),
+    encodeStructField(encodeAssetDefinitionIdBare(assetDefinitionBytes), flags),
+    encodeStructField(encodeAssetBalanceScopeBare(scope, flags), flags),
+  ]);
+}
+
+function encodeQueryLiteral(singularTag, singularPayload, flags = 0) {
+  const query = encodeNoritoEnumVariant(singularTag, singularPayload, flags);
+  const request = encodeNoritoEnumVariant(0, query, flags);
+  return toHexLiteral(encodeNoritoTopLevel(request, flags));
+}
+
+function encodeSetAssetKeyValueInstructionLiteral({
+  definitionBytes,
+  accountPublicKey,
+  key,
+  scope = null,
+  flags = 0,
+  outerFlags = 0,
+}) {
+  const payload = Buffer.concat([
+    encodeStructField(encodeAssetIdBareWithFlags(definitionBytes, accountPublicKey, scope, flags), flags),
+    encodeStructField(encodeNameBare(key, flags), flags),
+    encodeStructField(encodeNoritoStringBare('{"ok":true}', flags), flags),
+  ]);
+  return encodeInstructionLiteralWithOptions("iroha_data_model::isi::transparent::SetAssetKeyValue", payload, {
+    innerFlags: flags,
+    outerFlags,
+  });
+}
+
+function encodeRemoveAssetKeyValueInstructionLiteral({
+  definitionBytes,
+  accountPublicKey,
+  key,
+  scope = null,
+  flags = 0,
+  outerFlags = 0,
+}) {
+  const payload = Buffer.concat([
+    encodeStructField(encodeAssetIdBareWithFlags(definitionBytes, accountPublicKey, scope, flags), flags),
+    encodeStructField(encodeNameBare(key, flags), flags),
+  ]);
+  return encodeInstructionLiteralWithOptions("iroha_data_model::isi::transparent::RemoveAssetKeyValue", payload, {
+    innerFlags: flags,
+    outerFlags,
+  });
+}
+
+function encodeTransferInstructionLiteral(tag, payload, {
+  flags = 0,
+  outerFlags = 0,
+} = {}) {
+  return encodeInstructionLiteralWithOptions("iroha.transfer", encodeNoritoEnumVariant(tag, payload, flags), {
+    innerFlags: flags,
+    outerFlags,
+  });
+}
+
+function encodeMintInstructionLiteral(tag, payload, {
+  flags = 0,
+  outerFlags = 0,
+} = {}) {
+  return encodeInstructionLiteralWithOptions("iroha.mint", encodeNoritoEnumVariant(tag, payload, flags), {
+    innerFlags: flags,
+    outerFlags,
+  });
+}
+
+function encodeBurnInstructionLiteral(tag, payload, {
+  flags = 0,
+  outerFlags = 0,
+} = {}) {
+  return encodeInstructionLiteralWithOptions("iroha.burn", encodeNoritoEnumVariant(tag, payload, flags), {
+    innerFlags: flags,
+    outerFlags,
+  });
+}
+
+function encodeTransferDomainInstructionLiteral({ sourcePublicKey, destinationPublicKey, domain, flags = 0, outerFlags = 0 }) {
+  return encodeTransferInstructionLiteral(0, Buffer.concat([
+    encodeStructField(encodeAccountIdBareWithFlags(sourcePublicKey, flags), flags),
+    encodeStructField(encodeDomainIdBare(domain, flags), flags),
+    encodeStructField(encodeAccountIdBareWithFlags(destinationPublicKey, flags), flags),
+  ]), { flags, outerFlags });
+}
+
+function encodeTransferAssetInstructionLiteral({
+  sourcePublicKey,
+  destinationPublicKey,
+  definitionBytes,
+  scope = null,
+  flags = 0,
+  outerFlags = 0,
+}) {
+  return encodeTransferInstructionLiteral(2, Buffer.concat([
+    encodeStructField(encodeAssetIdBareWithFlags(definitionBytes, sourcePublicKey, scope, flags), flags),
+    encodeStructField(littleEndianU32(1), flags),
+    encodeStructField(encodeAccountIdBareWithFlags(destinationPublicKey, flags), flags),
+  ]), { flags, outerFlags });
+}
+
+function encodeTransferNftInstructionLiteral({ sourcePublicKey, destinationPublicKey, name, domain, flags = 0, outerFlags = 0 }) {
+  return encodeTransferInstructionLiteral(3, Buffer.concat([
+    encodeStructField(encodeAccountIdBareWithFlags(sourcePublicKey, flags), flags),
+    encodeStructField(encodeNftIdBare(name, domain, flags), flags),
+    encodeStructField(encodeAccountIdBareWithFlags(destinationPublicKey, flags), flags),
+  ]), { flags, outerFlags });
+}
+
+function encodeMintAssetInstructionLiteral({ accountPublicKey, definitionBytes, scope = null, flags = 0, outerFlags = 0 }) {
+  return encodeMintInstructionLiteral(0, Buffer.concat([
+    encodeStructField(littleEndianU32(1), flags),
+    encodeStructField(encodeAssetIdBareWithFlags(definitionBytes, accountPublicKey, scope, flags), flags),
+  ]), { flags, outerFlags });
+}
+
+function encodeBurnAssetInstructionLiteral({ accountPublicKey, definitionBytes, scope = null, flags = 0, outerFlags = 0 }) {
+  return encodeBurnInstructionLiteral(0, Buffer.concat([
+    encodeStructField(littleEndianU32(1), flags),
+    encodeStructField(encodeAssetIdBareWithFlags(definitionBytes, accountPublicKey, scope, flags), flags),
+  ]), { flags, outerFlags });
+}
+
+function encodeMintTriggerRepetitionsInstructionLiteral(triggerId, { flags = 0, outerFlags = 0 } = {}) {
+  return encodeMintInstructionLiteral(1, Buffer.concat([
+    encodeStructField(littleEndianU32(1), flags),
+    encodeStructField(encodeTriggerIdBare(triggerId, flags), flags),
+  ]), { flags, outerFlags });
+}
+
+function encodeBurnTriggerRepetitionsInstructionLiteral(triggerId, { flags = 0, outerFlags = 0 } = {}) {
+  return encodeBurnInstructionLiteral(1, Buffer.concat([
+    encodeStructField(littleEndianU32(1), flags),
+    encodeStructField(encodeTriggerIdBare(triggerId, flags), flags),
+  ]), { flags, outerFlags });
 }
 
 function instructionWritesRegister(word, register) {
@@ -1949,6 +2238,38 @@ seiyaku PublicStateParam {
   );
 });
 
+test("Kotodama compiler SDK rejects aggregate state helper parameters", () => {
+  const structParam = compileKotodamaProgram(`
+seiyaku StateStructParam {
+  struct Ledger { counter: int }
+
+  fn read(state Ledger ledger) -> int {
+    return ledger.counter;
+  }
+
+  kotoage fn run() permission(Admin) {}
+}
+`);
+  const tupleParam = compileKotodamaProgram(`
+seiyaku StateTupleParam {
+  fn read(state (int, int) value) -> int {
+    return value.0;
+  }
+
+  kotoage fn run() permission(Admin) {}
+}
+`);
+
+  for (const compiled of [structParam, tupleParam]) {
+    assert.equal(compiled.artifactBytes.length, 0);
+    assert.equal(compiled.diagnostics.length, 1);
+    assert.match(
+      compiled.diagnostics[0].message,
+      /state parameter `(?:ledger|value)` currently supports durable scalar roots and Map<K, V> handles; aggregate state handles are not supported yet/,
+    );
+  }
+});
+
 test("Kotodama compiler SDK rejects locals that shadow state declarations", () => {
   const compiled = compileKotodamaProgram(`
 seiyaku StateShadowLet {
@@ -1981,6 +2302,54 @@ seiyaku StateShadowParam {
   assert.equal(compiled.artifactBytes.length, 0);
   assert.equal(compiled.diagnostics.length, 1);
   assert.match(compiled.diagnostics[0].message, /E_STATE_SHADOWED/);
+});
+
+test("Kotodama compiler SDK rejects loop bindings that shadow state declarations", () => {
+  const cases = [
+    `
+seiyaku StateShadowMapKey {
+  state int counter;
+  state Values: Map<int, int>;
+
+  kotoage fn run() permission(Admin) {
+    for (counter, value) in Values.take(1) {
+      let x = value;
+    }
+  }
+}
+`,
+    `
+seiyaku StateShadowMapValue {
+  state int counter;
+  state Values: Map<int, int>;
+
+  kotoage fn run() permission(Admin) {
+    for (key, counter) in Values.take(1) {
+      let x = key;
+    }
+  }
+}
+`,
+    `
+seiyaku StateShadowRangeVar {
+  state int counter;
+
+  kotoage fn run() permission(Admin) {
+    for counter in range(2) {
+      let x = counter;
+    }
+  }
+}
+`,
+  ];
+
+  for (const source of cases) {
+    const compiled = compileKotodamaProgram(source);
+
+    assert.equal(compiled.artifactBytes.length, 0);
+    assert.equal(compiled.diagnostics.length, 1);
+    assert.match(compiled.diagnostics[0].message, /E_STATE_SHADOWED/);
+  }
 });
 
 test("Kotodama compiler SDK requires durable handles for state parameters", () => {
@@ -2030,6 +2399,59 @@ seiyaku StateParamPassThrough {
   assert.ok(compiled.artifactBytes.length > 0);
 });
 
+test("Kotodama compiler SDK rejects first-class state map values", () => {
+  const cases = [
+    {
+      source: `
+seiyaku StateMapAlias {
+  state Values: Map<int, int>;
+
+  kotoage fn run() permission(Admin) {
+    let values = Values;
+  }
+}
+`,
+      message: /E_STATE_MAP_ALIAS: state maps are not first-class/,
+    },
+    {
+      source: `
+seiyaku StateMapReassign {
+  state Values: Map<int, int>;
+
+  kotoage fn run() permission(Admin) {
+    Values = Map::new();
+  }
+}
+`,
+      message: /E_STATE_MAP_ALIAS: state maps cannot be reassigned/,
+    },
+    {
+      source: `
+seiyaku StateMapUserArg {
+  state Values: Map<int, int>;
+
+  fn read(values: Map<int, int>) -> int {
+    return values[0];
+  }
+
+  kotoage fn run() -> int permission(Admin) {
+    return read(Values);
+  }
+}
+`,
+      message: /E_STATE_MAP_ALIAS: state maps cannot be passed to user-defined functions/,
+    },
+  ];
+
+  for (const { source, message } of cases) {
+    const compiled = compileKotodamaProgram(source);
+
+    assert.equal(compiled.artifactBytes.length, 0);
+    assert.equal(compiled.diagnostics.length, 1);
+    assert.match(compiled.diagnostics[0].message, message);
+  }
+});
+
 test("Kotodama compiler SDK lowers scalar state parameters as durable handles", () => {
   const compiled = compileKotodamaProgram(`
 seiyaku ScalarStateParam {
@@ -2071,6 +2493,67 @@ seiyaku ScalarStateParam {
         frame_bytes: 32,
       },
     ],
+  );
+});
+
+test("Kotodama compiler SDK accepts nested durable scalar fields for state parameters", () => {
+  const compiled = compileKotodamaProgram(`
+seiyaku NestedScalarStateParam {
+  state int Counter;
+  state pair: (int, bool);
+
+  struct Ledger {
+    counter: int,
+    enabled: bool,
+  }
+
+  state ledger: Ledger;
+
+  fn read(state int value) -> int {
+    return value;
+  }
+
+  fn check(state bool value) -> bool {
+    return value;
+  }
+
+  kotoage fn run() -> int permission(Admin) {
+    Counter = 3;
+    pair = (5, true);
+    ledger = Ledger(7, true);
+    assert(check(pair.1));
+    assert(check(ledger.enabled));
+    return read(Counter) + read(pair.0) + read(ledger.counter);
+  }
+}
+`);
+  const localSnapshot = compileKotodamaProgram(`
+seiyaku LocalScalarStateParamSnapshot {
+  struct Ledger {
+    counter: int,
+  }
+
+  state ledger: Ledger;
+
+  fn read(state int value) -> int {
+    return value;
+  }
+
+  kotoage fn run() -> int permission(Admin) {
+    ledger = Ledger(7);
+    let snapshot = ledger;
+    return read(snapshot.counter);
+  }
+}
+`);
+
+  assert.deepEqual(compiled.diagnostics, []);
+  assert.ok(compiled.artifactBytes.length > 0);
+  assert.equal(localSnapshot.artifactBytes.length, 0);
+  assert.equal(localSnapshot.diagnostics.length, 1);
+  assert.match(
+    localSnapshot.diagnostics[0].message,
+    /state parameter `value` requires a durable state handle argument/,
   );
 });
 
@@ -2173,6 +2656,85 @@ seiyaku HostStateHelpers {
   });
 }
 
+test("Kotodama compiler SDK reports state_get as bytes like Rust", () => {
+  const validBytesAnnotation = compileKotodamaProgram(`
+seiyaku StateGetBytesAnnotation {
+  kotoage fn run() permission(Admin) {
+    let path = name("session");
+    let stored: bytes = state_get(path);
+    state_set(path, stored);
+  }
+}
+`);
+  const invalidAccountAnnotation = compileKotodamaProgram(`
+seiyaku StateGetTypeDiagnostic {
+  kotoage fn run() permission(Admin) {
+    let bad: AccountId = state_get(name("session"));
+  }
+}
+`);
+
+  assert.deepEqual(validBytesAnnotation.diagnostics, []);
+  assert.equal(invalidAccountAnnotation.artifactBytes.length, 0);
+  assert.equal(invalidAccountAnnotation.diagnostics.length, 1);
+  assert.match(
+    invalidAccountAnnotation.diagnostics[0].message,
+    /type annotation mismatch: expected AccountId, got bytes/,
+  );
+});
+
+test("Kotodama compiler SDK reports JSON blob getters as bytes like Rust", () => {
+  const validBytesAnnotations = compileKotodamaProgram(`
+seiyaku JsonBlobGetterBytesAnnotation {
+  fn helper() {
+    let payload = json!{ proof: "0102" };
+    let proof: bytes = payload.get_blob_hex(name("proof"));
+    let direct: bytes = json_get_blob_hex_direct(payload, name("proof"));
+    info(tlv_len(proof));
+    info(tlv_len(direct));
+  }
+
+  kotoage fn run() permission(Admin) {
+    helper();
+  }
+}
+`);
+  const invalidMethodAnnotation = compileKotodamaProgram(`
+seiyaku JsonBlobGetterMethodTypeDiagnostic {
+  fn helper() {
+    let payload = json!{ proof: "0102" };
+    let bad: AccountId = payload.get_blob_hex(name("proof"));
+  }
+
+  kotoage fn run() permission(Admin) {
+    helper();
+  }
+}
+`);
+  const invalidDirectAnnotation = compileKotodamaProgram(`
+seiyaku JsonBlobGetterDirectTypeDiagnostic {
+  fn helper() {
+    let payload = json!{ proof: "0102" };
+    let bad: AccountId = json_get_blob_hex_direct(payload, name("proof"));
+  }
+
+  kotoage fn run() permission(Admin) {
+    helper();
+  }
+}
+`);
+
+  assert.deepEqual(validBytesAnnotations.diagnostics, []);
+  for (const compiled of [invalidMethodAnnotation, invalidDirectAnnotation]) {
+    assert.equal(compiled.artifactBytes.length, 0);
+    assert.equal(compiled.diagnostics.length, 1);
+    assert.match(
+      compiled.diagnostics[0].message,
+      /type annotation mismatch: expected AccountId, got bytes/,
+    );
+  }
+});
+
 test("Kotodama compiler SDK keeps scalar state handles distinct from same-block value caches", () => {
   const compiled = compileKotodamaProgram(`
 seiyaku ScalarStateParamCachedAssign {
@@ -2236,6 +2798,25 @@ seiyaku DefaultMapKeyMismatch {
   }
 }
 `);
+  const inferredAlias = compileKotodamaProgram(`
+seiyaku InferredMapAlias {
+  kotoage fn run() -> int permission(Admin) {
+    let values: Map<int, int> = Map::new();
+    values[1] = 41;
+    let alias = values;
+    alias[1] += 1;
+    return alias[1];
+  }
+}
+`);
+  const unusedAlias = compileKotodamaProgram(`
+seiyaku UnusedMapAlias {
+  kotoage fn run() {
+    let values: Map<Name, int> = Map::new();
+    let _copy = values;
+  }
+}
+`);
 
   assert.deepEqual(compiled.diagnostics, []);
   assert.equal(compiled.codeHashHex.length, 64);
@@ -2247,6 +2828,10 @@ seiyaku DefaultMapKeyMismatch {
     defaultMapKeyMismatch.diagnostics[0].message,
     "semantic error: type annotation mismatch: expected int, got Name",
   );
+  assert.deepEqual(inferredAlias.diagnostics, []);
+  assert.ok(inferredAlias.artifactBytes.length > 64);
+  assert.deepEqual(unusedAlias.diagnostics, []);
+  assert.ok(unusedAlias.artifactBytes.length > 64);
   const code = readArtifactCode(compiled.artifactBytes);
   assert.equal(code.indexOf(syscallNeedle(0x50)), -1, "helper-returned local maps must not emit STATE_GET");
   assert.equal(code.indexOf(syscallNeedle(0x56)), -1, "helper-returned local maps must not build durable state paths");
@@ -2702,6 +3287,205 @@ seiyaku TupleEquality {
   assert.equal(compiled.artifactBytes.length, 0);
   assert.equal(compiled.diagnostics.length, 1);
   assert.match(compiled.diagnostics[0].message, /equality is not supported for type \(int, int\)/);
+});
+
+test("Kotodama compiler SDK supports Rust tuple-pattern let destructuring", () => {
+  const tuplePattern = compileKotodamaProgram(`
+seiyaku TuplePattern {
+  fn pair() -> (int, int) {
+    return (2, 3);
+  }
+
+  kotoage fn run() -> int permission(Admin) {
+    let (a, b) = pair();
+    return a + b;
+  }
+}
+`);
+  const structPattern = compileKotodamaProgram(`
+seiyaku StructPattern {
+  struct Pair {
+    left: int,
+    right: int,
+  }
+
+  fn make_pair() -> Pair {
+    return Pair(5, 7);
+  }
+
+  kotoage fn run() -> int permission(Admin) {
+    let (left, right) = make_pair();
+    return left + right;
+  }
+}
+`);
+
+  assert.deepEqual(tuplePattern.diagnostics, []);
+  assert.ok(tuplePattern.artifactBytes.length > 0);
+  assert.deepEqual(structPattern.diagnostics, []);
+  assert.ok(structPattern.artifactBytes.length > 0);
+});
+
+test("Kotodama compiler SDK mirrors Rust tuple-pattern let diagnostics", () => {
+  const nonAggregate = compileKotodamaProgram(`
+seiyaku TuplePatternNonAggregate {
+  kotoage fn run() permission(Admin) {
+    let (a, b) = 1;
+  }
+}
+`);
+  const tupleArity = compileKotodamaProgram(`
+seiyaku TuplePatternArity {
+  kotoage fn run() permission(Admin) {
+    let (a, b, c) = (1, 2);
+  }
+}
+`);
+  const structArity = compileKotodamaProgram(`
+seiyaku StructPatternArity {
+  struct Pair { left: int, right: int }
+
+  kotoage fn run() permission(Admin) {
+    let (left) = Pair(1, 2);
+  }
+}
+`);
+  const emptyPattern = compileKotodamaProgram(`
+seiyaku EmptyTuplePattern {
+  kotoage fn run() permission(Admin) {
+    let () = ();
+  }
+}
+`);
+  const trailingCommaPattern = compileKotodamaProgram(`
+seiyaku TrailingCommaTuplePattern {
+  kotoage fn run() permission(Admin) {
+    let (value,) = (1);
+  }
+}
+`);
+
+  assert.equal(nonAggregate.artifactBytes.length, 0);
+  assert.equal(nonAggregate.diagnostics.length, 1);
+  assert.match(nonAggregate.diagnostics[0].message, /tuple destructuring expects a tuple or struct/);
+  assert.equal(tupleArity.artifactBytes.length, 0);
+  assert.equal(tupleArity.diagnostics.length, 1);
+  assert.match(tupleArity.diagnostics[0].message, /tuple destructuring expects 2 bindings, got 3/);
+  assert.equal(structArity.artifactBytes.length, 0);
+  assert.equal(structArity.diagnostics.length, 1);
+  assert.match(structArity.diagnostics[0].message, /struct destructuring expects 2 bindings, got 1/);
+  assert.equal(emptyPattern.artifactBytes.length, 0);
+  assert.equal(emptyPattern.diagnostics.length, 1);
+  assert.match(emptyPattern.diagnostics[0].message, /parser error: .*expected identifier.*RParen/);
+  assert.equal(trailingCommaPattern.artifactBytes.length, 0);
+  assert.equal(trailingCommaPattern.diagnostics.length, 1);
+  assert.match(trailingCommaPattern.diagnostics[0].message, /parser error: .*expected identifier.*RParen/);
+});
+
+test("Kotodama compiler SDK mirrors Rust opaque generic type semantics", () => {
+  const helperParam = compileKotodamaProgram(`
+fn helper(x: Foo<int>) {}
+fn main() {}
+`);
+  const localMismatch = compileKotodamaProgram(`
+fn main() {
+  let x: Foo<int> = 1;
+}
+`);
+  const returnMismatch = compileKotodamaProgram(`
+fn helper() -> Foo<int> {
+  return 1;
+}
+fn main() {}
+`);
+  const stateGeneric = compileKotodamaProgram(`
+state value: Foo<int>;
+fn main() {}
+`);
+  const mapGenericValue = compileKotodamaProgram(`
+fn main() {
+  let m: Map<int, Foo<int>> = Map::new();
+  let x = m[1];
+}
+`);
+  const mapWrongArity = compileKotodamaProgram(`
+fn main() {
+  let m: Map<int> = Map::new();
+}
+`);
+  const nonMapGenericNoArgs = compileKotodamaProgram(`
+fn main() {
+  let x: Foo<> = 1;
+}
+`);
+
+  assert.deepEqual(helperParam.diagnostics, []);
+  assert.ok(helperParam.artifactBytes.length > 64);
+  assert.equal(localMismatch.artifactBytes.length, 0);
+  assert.equal(
+    localMismatch.diagnostics[0].message,
+    "semantic error: type annotation mismatch: expected Foo, got int",
+  );
+  assert.equal(returnMismatch.artifactBytes.length, 0);
+  assert.equal(
+    returnMismatch.diagnostics[0].message,
+    "semantic error: return type mismatch: type annotation mismatch: expected Foo, got int",
+  );
+  assert.equal(stateGeneric.artifactBytes.length, 0);
+  assert.equal(
+    stateGeneric.diagnostics[0].message,
+    "semantic error: state type `Foo` is not supported for durable storage; use int, bool, Json, Blob, or pointer types",
+  );
+  assert.equal(mapGenericValue.artifactBytes.length, 0);
+  assert.equal(
+    mapGenericValue.diagnostics[0].message,
+    "semantic error: in-memory Map value type `Foo` is not supported; use int, bool, string, Blob, bytes, Json, or pointer types",
+  );
+  assert.equal(mapWrongArity.artifactBytes.length, 0);
+  assert.equal(mapWrongArity.diagnostics[0].message, "semantic error: Map expects two type parameters");
+  assert.equal(nonMapGenericNoArgs.artifactBytes.length, 0);
+  assert.equal(
+    nonMapGenericNoArgs.diagnostics[0].message,
+    "semantic error: type annotation mismatch: expected Foo, got int",
+  );
+});
+
+test("Kotodama compiler SDK mirrors Rust unresolved opaque assignability", () => {
+  const opaqueReturn = compileKotodamaProgram(`
+fn id(x: Foo) -> Bar {
+  return x;
+}
+fn main() {}
+`);
+  const genericOpaqueReturn = compileKotodamaProgram(`
+fn id(x: Foo<int>) -> Bar<string> {
+  return x;
+}
+fn main() {}
+`);
+  const opaqueLocal = compileKotodamaProgram(`
+fn helper(x: Foo) {
+  let y: Bar = x;
+}
+fn main() {}
+`);
+  const declaredStructMismatch = compileKotodamaProgram(`
+struct Bar { value: int }
+fn helper(x: Foo) -> Bar {
+  return x;
+}
+fn main() {}
+`);
+
+  for (const compiled of [opaqueReturn, genericOpaqueReturn, opaqueLocal]) {
+    assert.deepEqual(compiled.diagnostics, []);
+    assert.ok(compiled.artifactBytes.length > 64);
+  }
+  assert.equal(declaredStructMismatch.artifactBytes.length, 0);
+  assert.equal(
+    declaredStructMismatch.diagnostics[0].message,
+    "semantic error: return type mismatch: type annotation mismatch: expected struct Bar, got Foo",
+  );
 });
 
 test("Kotodama compiler SDK rejects unsupported in-memory map word types", () => {
@@ -3215,6 +3999,107 @@ seiyaku BoolAssignment {
   assert.deepEqual(boolAssignment.diagnostics, []);
 });
 
+test("Kotodama compiler SDK preserves actual bool semantics behind int annotations", () => {
+  const localInfo = compileKotodamaProgram(`
+seiyaku LocalBoolInfo {
+  fn helper() {
+    let value: int = true;
+    info(value);
+  }
+
+  kotoage fn run() permission(Admin) {}
+}
+`);
+  const localAssert = compileKotodamaProgram(`
+seiyaku LocalBoolAssert {
+  fn helper() {
+    let value: int = true;
+    assert(value);
+  }
+
+  kotoage fn run() permission(Admin) {}
+}
+`);
+  const localReturn = compileKotodamaProgram(`
+seiyaku LocalBoolReturn {
+  fn helper() -> bool {
+    let value: int = true;
+    return value;
+  }
+
+  kotoage fn run() permission(Admin) {}
+}
+`);
+  const paramInfo = compileKotodamaProgram(`
+seiyaku ParamBoolInfo {
+  fn helper(flag: bool) {
+    let value: int = flag;
+    info(value);
+  }
+
+  kotoage fn run() permission(Admin) {}
+}
+`);
+  const paramAssert = compileKotodamaProgram(`
+seiyaku ParamBoolAssert {
+  fn helper(flag: bool) {
+    let value: int = flag;
+    assert(value);
+  }
+
+  kotoage fn run() permission(Admin) {}
+}
+`);
+  const constInfo = compileKotodamaProgram(`
+seiyaku ConstBoolInfo {
+  const FLAG: int = true;
+
+  fn helper() {
+    info(FLAG);
+  }
+
+  kotoage fn run() permission(Admin) {}
+}
+`);
+  const constAssert = compileKotodamaProgram(`
+seiyaku ConstBoolAssert {
+  const FLAG: int = true;
+
+  fn helper() {
+    assert(FLAG);
+  }
+
+  kotoage fn run() permission(Admin) {}
+}
+`);
+  const constReturn = compileKotodamaProgram(`
+seiyaku ConstBoolReturn {
+  const FLAG: int = true;
+
+  fn helper() -> bool {
+    return FLAG;
+  }
+
+  kotoage fn run() permission(Admin) {}
+}
+`);
+
+  assert.equal(localInfo.artifactBytes.length, 0);
+  assert.equal(localInfo.diagnostics.length, 1);
+  assert.match(localInfo.diagnostics[0].message, /info expects \(string\|int\)/);
+  assert.deepEqual(localAssert.diagnostics, []);
+  assert.deepEqual(localReturn.diagnostics, []);
+  assert.equal(paramInfo.artifactBytes.length, 0);
+  assert.equal(paramInfo.diagnostics.length, 1);
+  assert.match(paramInfo.diagnostics[0].message, /info expects \(string\|int\)/);
+  assert.deepEqual(paramAssert.diagnostics, []);
+  assert.equal(constInfo.artifactBytes.length, 0);
+  assert.equal(constInfo.diagnostics.length, 1);
+  assert.match(constInfo.diagnostics[0].message, /info expects \(string\|int\)/);
+  assert.deepEqual(constAssert.diagnostics, []);
+  assert.deepEqual(constReturn.diagnostics, []);
+});
+
 test("Kotodama compiler SDK rejects invalid return types semantically", () => {
   const returnMismatch = compileKotodamaProgram(`
 seiyaku ReturnMismatch {
@@ -3253,7 +4138,7 @@ seiyaku BoolReturn {
   assert.deepEqual(boolReturn.diagnostics, []);
 });
 
-test("Kotodama compiler SDK accepts upstream unit return type spellings", () => {
+test("Kotodama compiler SDK mirrors Rust unit and zero-tuple return semantics", () => {
   const namedUnit = compileKotodamaProgram(`
 seiyaku NamedUnitReturn {
   fn helper() -> unit {
@@ -3268,7 +4153,7 @@ seiyaku NamedUnitReturn {
   const tupleUnit = compileKotodamaProgram(`
 seiyaku TupleUnitReturn {
   fn helper() -> () {
-    return;
+    return ();
   }
 
   kotoage fn run() permission(Admin) {
@@ -3280,6 +4165,46 @@ seiyaku TupleUnitReturn {
 seiyaku NamedUnitReturnValue {
   fn helper() -> unit {
     return 1;
+  }
+
+  kotoage fn run() permission(Admin) {}
+}
+`);
+  const zeroTupleLocal = compileKotodamaProgram(`
+seiyaku ZeroTupleLocal {
+  fn helper() {
+    let value: () = ();
+  }
+
+  kotoage fn run() permission(Admin) {
+    helper();
+  }
+}
+`);
+  const invalidTupleLocalFromUnitCall = compileKotodamaProgram(`
+seiyaku TupleLocalFromUnitCall {
+  fn helper() -> unit {
+    return;
+  }
+
+  kotoage fn run() permission(Admin) {
+    let value: () = helper();
+  }
+}
+`);
+  const invalidNamedTupleValue = compileKotodamaProgram(`
+seiyaku NamedUnitReturnTupleValue {
+  fn helper() -> unit {
+    return ();
+  }
+
+  kotoage fn run() permission(Admin) {}
+}
+`);
+  const invalidTupleMissingValue = compileKotodamaProgram(`
+seiyaku TupleUnitMissingValue {
+  fn helper() -> () {
+    return;
   }
 
   kotoage fn run() permission(Admin) {}
@@ -3297,17 +4222,106 @@ seiyaku TupleUnitReturnValue {
 
   assert.deepEqual(namedUnit.diagnostics, []);
   assert.deepEqual(tupleUnit.diagnostics, []);
+  assert.deepEqual(zeroTupleLocal.diagnostics, []);
+  assert.equal(invalidTupleLocalFromUnitCall.artifactBytes.length, 0);
+  assert.equal(invalidTupleLocalFromUnitCall.diagnostics.length, 1);
+  assert.match(
+    invalidTupleLocalFromUnitCall.diagnostics[0].message,
+    /type annotation mismatch: expected \(\), got \(\)/,
+  );
   assert.equal(invalidNamedValue.artifactBytes.length, 0);
   assert.equal(invalidNamedValue.diagnostics.length, 1);
   assert.match(
     invalidNamedValue.diagnostics[0].message,
     /return type mismatch: unexpected value/,
   );
+  assert.equal(invalidNamedTupleValue.artifactBytes.length, 0);
+  assert.equal(invalidNamedTupleValue.diagnostics.length, 1);
+  assert.match(
+    invalidNamedTupleValue.diagnostics[0].message,
+    /return type mismatch: unexpected value/,
+  );
+  assert.equal(invalidTupleMissingValue.artifactBytes.length, 0);
+  assert.equal(invalidTupleMissingValue.diagnostics.length, 1);
+  assert.match(
+    invalidTupleMissingValue.diagnostics[0].message,
+    /return type mismatch: expected value/,
+  );
   assert.equal(invalidTupleValue.artifactBytes.length, 0);
   assert.equal(invalidTupleValue.diagnostics.length, 1);
   assert.match(
     invalidTupleValue.diagnostics[0].message,
     /return type mismatch: type annotation mismatch: expected \(\), got int/,
+  );
+});
+
+test("Kotodama compiler SDK treats no-return helper calls as semantic unit expressions", () => {
+  const inferredVoidLocal = compileKotodamaProgram(`
+seiyaku InferredVoidLocal {
+  fn helper() {
+    return;
+  }
+
+  kotoage fn run() permission(Admin) {
+    let value = helper();
+    info(1);
+  }
+}
+`);
+  const invalidVoidLocalUse = compileKotodamaProgram(`
+seiyaku InvalidVoidLocalUse {
+  fn helper() {
+    return;
+  }
+
+  kotoage fn run() permission(Admin) {
+    let value = helper();
+    info(value);
+  }
+}
+`);
+  const invalidTupleLocalFromVoidCall = compileKotodamaProgram(`
+seiyaku TupleLocalFromVoidCall {
+  fn helper() {
+    return;
+  }
+
+  kotoage fn run() permission(Admin) {
+    let value: () = helper();
+  }
+}
+`);
+  const invalidReturnVoidHelper = compileKotodamaProgram(`
+seiyaku ReturnVoidHelper {
+  fn helper() {
+    return;
+  }
+
+  fn wrapper() {
+    return helper();
+  }
+
+  kotoage fn run() permission(Admin) {
+    wrapper();
+  }
+}
+`);
+
+  assert.deepEqual(inferredVoidLocal.diagnostics, []);
+  assert.equal(invalidVoidLocalUse.artifactBytes.length, 0);
+  assert.equal(invalidVoidLocalUse.diagnostics.length, 1);
+  assert.match(invalidVoidLocalUse.diagnostics[0].message, /info expects \(string\|int\)/);
+  assert.equal(invalidTupleLocalFromVoidCall.artifactBytes.length, 0);
+  assert.equal(invalidTupleLocalFromVoidCall.diagnostics.length, 1);
+  assert.match(
+    invalidTupleLocalFromVoidCall.diagnostics[0].message,
+    /type annotation mismatch: expected \(\), got \(\)/,
+  );
+  assert.equal(invalidReturnVoidHelper.artifactBytes.length, 0);
+  assert.equal(invalidReturnVoidHelper.diagnostics.length, 1);
+  assert.match(
+    invalidReturnVoidHelper.diagnostics[0].message,
+    /returning a value requires a declared return type/,
   );
 });
 
@@ -3511,6 +4525,21 @@ seiyaku MapKeyMismatch {
   assert.equal(mapKeyMismatch.artifactBytes.length, 0);
   assert.equal(mapKeyMismatch.diagnostics.length, 1);
   assert.match(mapKeyMismatch.diagnostics[0].message, /type annotation mismatch: expected Name, got int/);
+});
+
+test("Kotodama compiler SDK mirrors Rust invalid field assignment target diagnostics", () => {
+  const compiled = compileKotodamaProgram(`
+seiyaku FieldAssignment {
+  kotoage fn run() permission(Admin) {
+    let pair = (1, 2);
+    pair.0 = 3;
+  }
+}
+`);
+
+  assert.equal(compiled.artifactBytes.length, 0);
+  assert.equal(compiled.diagnostics.length, 1);
+  assert.match(compiled.diagnostics[0].message, /assignment target must be a variable or map index/);
 });
 
 test("Kotodama compiler SDK rejects invalid builtin call arguments semantically", () => {
@@ -4980,6 +6009,68 @@ seiyaku ExactArgInvalidRawMemoryMerkle {
   }
 });
 
+test("Kotodama compiler SDK reports semantic arity errors for legacy host-call statements", () => {
+  for (const [source, expected] of [
+    [
+      `
+seiyaku LegacyInfoNoArgs {
+  kotoage fn main() permission(Admin) {
+    info();
+  }
+}
+`,
+      /info expects \(string\|int\)/,
+    ],
+    [
+      `
+seiyaku LegacyTransferNoArgs {
+  kotoage fn main() permission(Admin) {
+    transfer_asset();
+  }
+}
+`,
+      /transfer_asset expects \(AccountId, AccountId, AssetDefinitionId, numeric\)/,
+    ],
+    [
+      `
+seiyaku LegacyMintNoArgs {
+  kotoage fn main() permission(Admin) {
+    mint_asset();
+  }
+}
+`,
+      /mint_asset expects \(AccountId, AssetDefinitionId, numeric\)/,
+    ],
+    [
+      `
+seiyaku LegacyBurnNoArgs {
+  kotoage fn main() permission(Admin) {
+    burn_asset();
+  }
+}
+`,
+      /burn_asset expects \(AccountId, AssetDefinitionId, numeric\)/,
+    ],
+    [
+      `
+seiyaku LegacySetDetailNoArgs {
+  kotoage fn main() permission(Admin) {
+    set_account_detail();
+  }
+}
+`,
+      /set_account_detail expects \(AccountId, Name, Json\)/,
+    ],
+  ]) {
+    const compiled = compileKotodamaProgram(source);
+
+    assert.equal(compiled.artifactBytes.length, 0);
+    assert.equal(compiled.diagnostics.length, 1);
+    assert.match(compiled.diagnostics[0].message, expected);
+    assert.equal(compiled.diagnostics[0].line, 4);
+  }
+});
+
 test("Kotodama compiler SDK infers pointer-yielding static builtins through the shared registry", () => {
   const compiled = compileKotodamaProgram(`
 seiyaku StaticBuiltinPointerYields {
@@ -5109,6 +6200,140 @@ seiyaku ZkReadAccess {
   assert.equal(read?.read_keys.includes("*"), false);
 });
 
+test("Kotodama compiler SDK derives exact access hints for compact static QueryRequest payloads", () => {
+  const publicKey = "ed01200102030405060708090a0b0c0d0e0f101112131415161718191a1b1c1d1e1f20";
+  const account = renderCanonicalAccountIdLiteralFromPublicKeyLiteral(publicKey);
+  assert.notEqual(account, null);
+  const flags = NORITO_HEADER_FLAG_COMPACT_LEN;
+  const assetDefinitionBytes = Buffer.from("1020304050604a7088aabbccddee0102", "hex");
+  const assetDefinition = "4ntVYZphKx9VaHoYBgtfzAviwCW7";
+  const asset = `${assetDefinition}#${account}#dataspace:7`;
+  assert.equal(normalizeAssetDefinitionIdLiteral(assetDefinition), assetDefinition);
+  const assetQuery = encodeQueryLiteral(
+    6,
+    encodeStructField(encodeAssetIdBareWithFlags(assetDefinitionBytes, publicKey, 7, flags), flags),
+    flags,
+  );
+  const assetDefinitionQuery = encodeQueryLiteral(
+    7,
+    encodeStructField(encodeAssetDefinitionIdBare(assetDefinitionBytes), flags),
+    flags,
+  );
+  const compiled = compileKotodamaProgram(`
+seiyaku CompactQueryRequestAccess {
+  view fn fetch_asset() -> int {
+    let result = execute_query(norito_bytes("${assetQuery}"));
+    return 1;
+  }
+
+  view fn fetch_asset_definition() -> int {
+    let result = execute_query(norito_bytes("${assetDefinitionQuery}"));
+    return 2;
+  }
+}
+`);
+
+  assert.deepEqual(compiled.diagnostics, []);
+  assert.deepEqual(compiled.manifest?.entrypoints.map((entrypoint) => ({
+    name: entrypoint.name,
+    read_keys: entrypoint.read_keys,
+    write_keys: entrypoint.write_keys,
+    access_hints_complete: entrypoint.access_hints_complete,
+    access_hints_skipped: entrypoint.access_hints_skipped,
+  })), [
+    {
+      name: "fetch_asset",
+      read_keys: [
+        `asset:${asset}`,
+        `account:${account}`,
+        `asset_def:${assetDefinition}`,
+      ],
+      write_keys: [],
+      access_hints_complete: true,
+      access_hints_skipped: [],
+    },
+    {
+      name: "fetch_asset_definition",
+      read_keys: [`asset_def:${assetDefinition}`],
+      write_keys: [],
+      access_hints_complete: true,
+      access_hints_skipped: [],
+    },
+  ]);
+});
+
+test("Kotodama compiler SDK derives asset metadata access from compact transparent instruction payloads", () => {
+  const flags = NORITO_HEADER_FLAG_COMPACT_LEN;
+  const publicKey = "ed01200102030405060708090a0b0c0d0e0f101112131415161718191a1b1c1d1e1f20";
+  const account = renderCanonicalAccountIdLiteralFromPublicKeyLiteral(publicKey);
+  assert.notEqual(account, null);
+  const assetDefinitionBytes = Buffer.from("1020304050604a7088aabbccddee0102", "hex");
+  const assetDefinition = "4ntVYZphKx9VaHoYBgtfzAviwCW7";
+  const asset = `${assetDefinition}#${account}#dataspace:7`;
+  assert.equal(normalizeAssetDefinitionIdLiteral(assetDefinition), assetDefinition);
+  const setDetail = encodeSetAssetKeyValueInstructionLiteral({
+    definitionBytes: assetDefinitionBytes,
+    accountPublicKey: publicKey,
+    key: "quota",
+    scope: 7,
+    flags,
+    outerFlags: flags,
+  });
+  const removeDetail = encodeRemoveAssetKeyValueInstructionLiteral({
+    definitionBytes: assetDefinitionBytes,
+    accountPublicKey: publicKey,
+    key: "quota",
+    scope: 7,
+    flags,
+    outerFlags: flags,
+  });
+  const compiled = compileKotodamaProgram(`
+seiyaku CompactTransparentAssetMetadataInstructionAccess {
+  kotoage fn set_quota() permission(Admin) {
+    execute_instruction(norito_bytes("${setDetail}"));
+  }
+
+  kotoage fn remove_quota() permission(Admin) {
+    execute_instruction(norito_bytes("${removeDetail}"));
+  }
+}
+`);
+
+  assert.deepEqual(compiled.diagnostics, []);
+  assert.deepEqual(compiled.manifest?.entrypoints.map((entrypoint) => ({
+    name: entrypoint.name,
+    read_keys: entrypoint.read_keys,
+    write_keys: entrypoint.write_keys,
+    access_hints_complete: entrypoint.access_hints_complete,
+    access_hints_skipped: entrypoint.access_hints_skipped,
+  })), [
+    {
+      name: "set_quota",
+      read_keys: [
+        `asset:${asset}`,
+        `account:${account}`,
+        `asset_def:${assetDefinition}`,
+        `asset.detail:${asset}:quota`,
+      ],
+      write_keys: [`asset.detail:${asset}:quota`],
+      access_hints_complete: true,
+      access_hints_skipped: [],
+    },
+    {
+      name: "remove_quota",
+      read_keys: [
+        `asset:${asset}`,
+        `account:${account}`,
+        `asset_def:${assetDefinition}`,
+        `asset.detail:${asset}:quota`,
+      ],
+      write_keys: [`asset.detail:${asset}:quota`],
+      access_hints_complete: true,
+      access_hints_skipped: [],
+    },
+  ]);
+});
+
 test("Kotodama compiler SDK derives exact access hints for static direct ZK instruction payloads", () => {
   const publicKey = "ed01200102030405060708090a0b0c0d0e0f101112131415161718191a1b1c1d1e1f20";
   const account = renderCanonicalAccountIdLiteralFromPublicKeyLiteral(publicKey);
@@ -5184,7 +6409,98 @@ seiyaku ZkInstructionAccess {
         `asset:${asset}`,
         `account:${account}`,
         `asset_def:${assetDefinition}`,
-        "domain:aid",
+        `asset_def.detail:${assetDefinition}:zk.unshield.last`,
+        `zk_asset:${assetDefinition}`,
+      ],
+      write_keys: [
+        `asset:${asset}`,
+        `asset_def.detail:${assetDefinition}:zk.unshield.last`,
+        `zk_asset:${assetDefinition}`,
+      ],
+      access_hints_complete: true,
+      access_hints_skipped: [],
+    },
+  ]);
+});
+
+test("Kotodama compiler SDK derives ZK access from compact static direct instruction payloads", () => {
+  const flags = NORITO_HEADER_FLAG_COMPACT_LEN;
+  const publicKey = "ed01200102030405060708090a0b0c0d0e0f101112131415161718191a1b1c1d1e1f20";
+  const account = renderCanonicalAccountIdLiteralFromPublicKeyLiteral(publicKey);
+  const assetDefinitionBytes = Buffer.from("1020304050604a7088aabbccddee0102", "hex");
+  const assetDefinition = "4ntVYZphKx9VaHoYBgtfzAviwCW7";
+  const asset = `${assetDefinition}#${account}`;
+  assert.notEqual(account, null);
+  assert.equal(normalizeAssetDefinitionIdLiteral(assetDefinition), assetDefinition);
+
+  const createElection = encodeCreateElectionInstructionLiteral("election-compact", { flags, outerFlags: flags });
+  const submitBallot = encodeSubmitBallotInstructionLiteral("election-compact", { flags, outerFlags: flags });
+  const finalizeElection = encodeFinalizeElectionInstructionLiteral("election-compact", { flags, outerFlags: flags });
+  const unshield = encodeUnshieldInstructionLiteral({
+    assetDefinitionBytes,
+    publicKey,
+    amount: 42,
+    flags,
+    outerFlags: flags,
+  });
+  const compiled = compileKotodamaProgram(`
+seiyaku CompactZkInstructionAccess {
+  kotoage fn create_election_run() permission(Admin) {
+    execute_instruction(norito_bytes("${createElection}"));
+  }
+
+  kotoage fn submit_ballot_run() permission(Admin) {
+    execute_instruction(norito_bytes("${submitBallot}"));
+  }
+
+  kotoage fn finalize_election_run() permission(Admin) {
+    execute_instruction(norito_bytes("${finalizeElection}"));
+  }
+
+  kotoage fn unshield_run() permission(Admin) {
+    execute_instruction(norito_bytes("${unshield}"));
+  }
+}
+`);
+
+  assert.deepEqual(compiled.diagnostics, []);
+  assert.deepEqual(compiled.manifest?.entrypoints.map((entrypoint) => ({
+    name: entrypoint.name,
+    read_keys: entrypoint.read_keys,
+    write_keys: entrypoint.write_keys,
+    access_hints_complete: entrypoint.access_hints_complete,
+    access_hints_skipped: entrypoint.access_hints_skipped,
+  })), [
+    {
+      name: "create_election_run",
+      read_keys: [],
+      write_keys: ["zk:election:election-compact"],
+      access_hints_complete: true,
+      access_hints_skipped: [],
+    },
+    {
+      name: "submit_ballot_run",
+      read_keys: [],
+      write_keys: [
+        "zk:election:election-compact:ciphertexts",
+        "zk:election:election-compact:nullifiers",
+      ],
+      access_hints_complete: true,
+      access_hints_skipped: [],
+    },
+    {
+      name: "finalize_election_run",
+      read_keys: [],
+      write_keys: ["zk:election:election-compact:tally"],
+      access_hints_complete: true,
+      access_hints_skipped: [],
+    },
+    {
+      name: "unshield_run",
+      read_keys: [
+        `asset:${asset}`,
+        `account:${account}`,
+        `asset_def:${assetDefinition}`,
         `asset_def.detail:${assetDefinition}:zk.unshield.last`,
         `zk_asset:${assetDefinition}`,
       ],
@@ -5214,6 +6530,317 @@ seiyaku LogInstructionAccess {
   assert.deepEqual(compiled.manifest?.entrypoints[0]?.write_keys, []);
   assert.equal(compiled.manifest?.entrypoints[0]?.access_hints_complete, null);
   assert.deepEqual(compiled.manifest?.entrypoints[0]?.access_hints_skipped, []);
+});
+
+test("Kotodama compiler SDK validates static metadata instruction payload shape before deriving detail access", () => {
+  const validSet = encodeSetKeyValueInstructionLiteral(0, encodeDomainIdBare("wonderland.universal"), "status");
+  const missingSetValue = encodeSetKeyValueInstructionLiteral(0, encodeDomainIdBare("wonderland.universal"), "status", {
+    includeValue: false,
+  });
+  const extraRemoveValue = encodeRemoveKeyValueInstructionLiteral(0, encodeDomainIdBare("wonderland.universal"), "status", {
+    extraFields: [encodeNoritoStringBare('{"ok":true}')],
+  });
+  const compiled = compileKotodamaProgram(`
+seiyaku MetadataInstructionAccess {
+  kotoage fn valid_set() permission(Admin) {
+    execute_instruction(norito_bytes("${validSet}"));
+  }
+
+  kotoage fn missing_set_value() permission(Admin) {
+    execute_instruction(norito_bytes("${missingSetValue}"));
+  }
+
+  kotoage fn extra_remove_value() permission(Admin) {
+    execute_instruction(norito_bytes("${extraRemoveValue}"));
+  }
+}
+`);
+
+  assert.deepEqual(compiled.diagnostics, []);
+  const accessByName = new Map(compiled.manifest?.entrypoints.map((entrypoint) => [entrypoint.name, entrypoint]));
+  assert.deepEqual(accessByName.get("valid_set")?.read_keys, [
+    "domain:wonderland.universal",
+    "domain.detail:wonderland.universal:status",
+  ]);
+  assert.deepEqual(accessByName.get("valid_set")?.write_keys, [
+    "domain.detail:wonderland.universal:status",
+  ]);
+  assert.equal(accessByName.get("valid_set")?.access_hints_complete, true);
+  for (const name of ["missing_set_value", "extra_remove_value"]) {
+    assert.deepEqual(accessByName.get(name)?.read_keys, []);
+    assert.deepEqual(accessByName.get(name)?.write_keys, []);
+    assert.equal(accessByName.get(name)?.access_hints_complete, true);
+    assert.deepEqual(accessByName.get(name)?.access_hints_skipped, []);
+  }
+});
+
+test("Kotodama compiler SDK derives metadata access from compact static instruction payloads", () => {
+  const flags = NORITO_HEADER_FLAG_COMPACT_LEN;
+  const compactSet = encodeSetKeyValueInstructionLiteral(
+    0,
+    encodeDomainIdBare("wonderland.universal", flags),
+    "status",
+    { flags, outerFlags: flags },
+  );
+  const compactRemove = encodeRemoveKeyValueInstructionLiteral(
+    0,
+    encodeDomainIdBare("wonderland.universal", flags),
+    "status",
+    { flags, outerFlags: flags },
+  );
+  const compiled = compileKotodamaProgram(`
+seiyaku CompactMetadataInstructionAccess {
+  kotoage fn compact_set() permission(Admin) {
+    execute_instruction(norito_bytes("${compactSet}"));
+  }
+
+  kotoage fn compact_remove() permission(Admin) {
+    execute_instruction(norito_bytes("${compactRemove}"));
+  }
+}
+`);
+
+  assert.deepEqual(compiled.diagnostics, []);
+  assert.deepEqual(compiled.manifest?.entrypoints.map((entrypoint) => ({
+    name: entrypoint.name,
+    read_keys: entrypoint.read_keys,
+    write_keys: entrypoint.write_keys,
+    access_hints_complete: entrypoint.access_hints_complete,
+    access_hints_skipped: entrypoint.access_hints_skipped,
+  })), [
+    {
+      name: "compact_set",
+      read_keys: [
+        "domain:wonderland.universal",
+        "domain.detail:wonderland.universal:status",
+      ],
+      write_keys: ["domain.detail:wonderland.universal:status"],
+      access_hints_complete: true,
+      access_hints_skipped: [],
+    },
+    {
+      name: "compact_remove",
+      read_keys: [
+        "domain:wonderland.universal",
+        "domain.detail:wonderland.universal:status",
+      ],
+      write_keys: ["domain.detail:wonderland.universal:status"],
+      access_hints_complete: true,
+      access_hints_skipped: [],
+    },
+  ]);
+});
+
+test("Kotodama compiler SDK validates static permission and trigger instruction payload shapes before deriving access", () => {
+  const publicKey = "ed01200102030405060708090a0b0c0d0e0f101112131415161718191a1b1c1d1e1f20";
+  const account = renderCanonicalAccountIdLiteralFromPublicKeyLiteral(publicKey);
+  assert.notEqual(account, null);
+  const validGrant = encodeGrantOrRevokeInstructionLiteral(
+    "iroha.grant",
+    0,
+    encodePermissionBare("CanTransferAssets"),
+    encodeAccountIdBare(publicKey),
+  );
+  const missingPermissionPayload = encodeGrantOrRevokeInstructionLiteral(
+    "iroha.grant",
+    0,
+    encodePermissionBare("CanTransferAssets", { includePayload: false }),
+    encodeAccountIdBare(publicKey),
+  );
+  const extraGrantField = encodeGrantOrRevokeInstructionLiteral(
+    "iroha.revoke",
+    0,
+    encodePermissionBare("CanTransferAssets"),
+    encodeAccountIdBare(publicKey),
+    { extraFields: [encodeNoritoStringBare("tail")] },
+  );
+  const validExecuteTrigger = encodeExecuteTriggerInstructionLiteral("wake");
+  const missingTriggerArgs = encodeExecuteTriggerInstructionLiteral("wake", { includeArgs: false });
+  const extraTriggerArgs = encodeExecuteTriggerInstructionLiteral("wake", {
+    extraFields: [encodeNoritoStringBare("{}")],
+  });
+  const compiled = compileKotodamaProgram(`
+seiyaku PermissionTriggerInstructionAccess {
+  kotoage fn valid_grant() permission(Admin) {
+    execute_instruction(norito_bytes("${validGrant}"));
+  }
+
+  kotoage fn missing_permission_payload() permission(Admin) {
+    execute_instruction(norito_bytes("${missingPermissionPayload}"));
+  }
+
+  kotoage fn extra_grant_field() permission(Admin) {
+    execute_instruction(norito_bytes("${extraGrantField}"));
+  }
+
+  kotoage fn valid_execute_trigger() permission(Admin) {
+    execute_instruction(norito_bytes("${validExecuteTrigger}"));
+  }
+
+  kotoage fn missing_trigger_args() permission(Admin) {
+    execute_instruction(norito_bytes("${missingTriggerArgs}"));
+  }
+
+  kotoage fn extra_trigger_args() permission(Admin) {
+    execute_instruction(norito_bytes("${extraTriggerArgs}"));
+  }
+}
+`);
+
+  assert.deepEqual(compiled.diagnostics, []);
+  const accessByName = new Map(compiled.manifest?.entrypoints.map((entrypoint) => [entrypoint.name, entrypoint]));
+  assert.deepEqual(accessByName.get("valid_grant")?.read_keys, [`account:${account}`]);
+  assert.deepEqual(accessByName.get("valid_grant")?.write_keys, [
+    `account:${account}`,
+    `perm.account:${account}:CanTransferAssets`,
+  ]);
+  assert.equal(accessByName.get("valid_grant")?.access_hints_complete, true);
+  assert.deepEqual(accessByName.get("valid_execute_trigger")?.read_keys, ["trigger:wake"]);
+  assert.deepEqual(accessByName.get("valid_execute_trigger")?.write_keys, ["trigger.repetitions:wake"]);
+  assert.equal(accessByName.get("valid_execute_trigger")?.access_hints_complete, true);
+  for (const name of [
+    "missing_permission_payload",
+    "extra_grant_field",
+    "missing_trigger_args",
+    "extra_trigger_args",
+  ]) {
+    assert.deepEqual(accessByName.get(name)?.read_keys, []);
+    assert.deepEqual(accessByName.get(name)?.write_keys, []);
+    assert.equal(accessByName.get(name)?.access_hints_complete, true);
+    assert.deepEqual(accessByName.get(name)?.access_hints_skipped, []);
+  }
+});
+
+test("Kotodama compiler SDK derives permission and trigger access from compact static instruction payloads", () => {
+  const flags = NORITO_HEADER_FLAG_COMPACT_LEN;
+  const publicKey = "ed01200102030405060708090a0b0c0d0e0f101112131415161718191a1b1c1d1e1f20";
+  const account = renderCanonicalAccountIdLiteralFromPublicKeyLiteral(publicKey);
+  assert.notEqual(account, null);
+  const compactGrant = encodeGrantOrRevokeInstructionLiteral(
+    "iroha.grant",
+    0,
+    encodePermissionBare("CanTransferAssets", { flags }),
+    encodeAccountIdBareWithFlags(publicKey, flags),
+    { flags, outerFlags: flags },
+  );
+  const compactRolePermission = encodeGrantOrRevokeInstructionLiteral(
+    "iroha.grant",
+    2,
+    encodePermissionBare("CanManageDomains", { flags }),
+    encodeRoleIdBare("auditor", flags),
+    { flags, outerFlags: flags },
+  );
+  const compactExecuteTrigger = encodeExecuteTriggerInstructionLiteral("wake", { flags, outerFlags: flags });
+  const compiled = compileKotodamaProgram(`
+seiyaku CompactPermissionTriggerInstructionAccess {
+  kotoage fn compact_grant() permission(Admin) {
+    execute_instruction(norito_bytes("${compactGrant}"));
+  }
+
+  kotoage fn compact_role_permission() permission(Admin) {
+    execute_instruction(norito_bytes("${compactRolePermission}"));
+  }
+
+  kotoage fn compact_execute_trigger() permission(Admin) {
+    execute_instruction(norito_bytes("${compactExecuteTrigger}"));
+  }
+}
+`);
+
+  assert.deepEqual(compiled.diagnostics, []);
+  assert.deepEqual(compiled.manifest?.entrypoints.map((entrypoint) => ({
+    name: entrypoint.name,
+    read_keys: entrypoint.read_keys,
+    write_keys: entrypoint.write_keys,
+    access_hints_complete: entrypoint.access_hints_complete,
+    access_hints_skipped: entrypoint.access_hints_skipped,
+  })), [
+    {
+      name: "compact_grant",
+      read_keys: [`account:${account}`],
+      write_keys: [
+        `account:${account}`,
+        `perm.account:${account}:CanTransferAssets`,
+      ],
+      access_hints_complete: true,
+      access_hints_skipped: [],
+    },
+    {
+      name: "compact_role_permission",
+      read_keys: ["role:auditor"],
+      write_keys: ["role:auditor", "perm.role:auditor:CanManageDomains"],
+      access_hints_complete: true,
+      access_hints_skipped: [],
+    },
+    {
+      name: "compact_execute_trigger",
+      read_keys: ["trigger:wake"],
+      write_keys: ["trigger.repetitions:wake"],
+      access_hints_complete: true,
+      access_hints_skipped: [],
+    },
+  ]);
+});
+
+test("Kotodama compiler SDK validates static register object payload shapes before deriving access", () => {
+  const publicKey = "ed01200102030405060708090a0b0c0d0e0f101112131415161718191a1b1c1d1e1f20";
+  const account = renderCanonicalAccountIdLiteralFromPublicKeyLiteral(publicKey);
+  assert.notEqual(account, null);
+  const validNft = encodeRegisterInstructionLiteral(4, encodeNftBare("n0", "wonderland", publicKey));
+  const missingDomainFields = encodeRegisterInstructionLiteral(1, Buffer.concat([
+    encodeStructField(encodeDomainIdBare("wonderland")),
+  ]));
+  const extraAccountField = encodeRegisterInstructionLiteral(2, Buffer.concat([
+    encodeNewAccountBare(publicKey),
+    encodeStructField(encodeNoritoStringBare("tail")),
+  ]));
+  const missingNftOwner = encodeRegisterInstructionLiteral(4, Buffer.concat([
+    encodeStructField(encodeNftIdBare("n0", "wonderland")),
+    encodeStructField(encodeEmptyMetadataBare()),
+  ]));
+  const missingRoleOwner = encodeRegisterInstructionLiteral(5, Buffer.concat([
+    encodeStructField(encodeRoleBare("auditor")),
+  ]));
+  const compiled = compileKotodamaProgram(`
+seiyaku RegisterObjectShapeAccess {
+  kotoage fn valid_nft() permission(Admin) {
+    execute_instruction(norito_bytes("${validNft}"));
+  }
+
+  kotoage fn missing_domain_fields() permission(Admin) {
+    execute_instruction(norito_bytes("${missingDomainFields}"));
+  }
+
+  kotoage fn extra_account_field() permission(Admin) {
+    execute_instruction(norito_bytes("${extraAccountField}"));
+  }
+
+  kotoage fn missing_nft_owner() permission(Admin) {
+    execute_instruction(norito_bytes("${missingNftOwner}"));
+  }
+
+  kotoage fn missing_role_owner() permission(Admin) {
+    execute_instruction(norito_bytes("${missingRoleOwner}"));
+  }
+}
+`);
+
+  assert.deepEqual(compiled.diagnostics, []);
+  const accessByName = new Map(compiled.manifest?.entrypoints.map((entrypoint) => [entrypoint.name, entrypoint]));
+  assert.deepEqual(accessByName.get("valid_nft")?.read_keys, ["nft:n0$wonderland"]);
+  assert.deepEqual(accessByName.get("valid_nft")?.write_keys, ["nft:n0$wonderland"]);
+  assert.equal(accessByName.get("valid_nft")?.access_hints_complete, true);
+  for (const name of [
+    "missing_domain_fields",
+    "extra_account_field",
+    "missing_nft_owner",
+    "missing_role_owner",
+  ]) {
+    assert.deepEqual(accessByName.get(name)?.read_keys, []);
+    assert.deepEqual(accessByName.get(name)?.write_keys, []);
+    assert.equal(accessByName.get(name)?.access_hints_complete, true);
+    assert.deepEqual(accessByName.get(name)?.access_hints_skipped, []);
+  }
 });
 
 test("Kotodama compiler SDK derives exact access hints for static register and unregister payloads", () => {
@@ -5277,7 +6904,7 @@ seiyaku RegisterInstructionAccess {
     },
     {
       name: "register_definition_run",
-      read_keys: [`asset_def:${assetDefinition}`, "domain:aid"],
+      read_keys: [`asset_def:${assetDefinition}`],
       write_keys: [`asset_def:${assetDefinition}`],
       access_hints_complete: true,
       access_hints_skipped: [],
@@ -5291,6 +6918,256 @@ seiyaku RegisterInstructionAccess {
     },
     {
       name: "unregister_trigger_run",
+      read_keys: ["trigger:wake"],
+      write_keys: ["trigger:wake", "trigger.repetitions:wake"],
+      access_hints_complete: true,
+      access_hints_skipped: [],
+    },
+  ]);
+});
+
+test("Kotodama compiler SDK derives register and unregister access from compact static instruction payloads", () => {
+  const flags = NORITO_HEADER_FLAG_COMPACT_LEN;
+  const publicKey = "ed01200102030405060708090a0b0c0d0e0f101112131415161718191a1b1c1d1e1f20";
+  const account = renderCanonicalAccountIdLiteralFromPublicKeyLiteral(publicKey);
+  assert.notEqual(account, null);
+  const registerDomain = encodeRegisterInstructionLiteral(
+    1,
+    encodeNewDomainBare("wonderland.universal", flags),
+    { flags, outerFlags: flags },
+  );
+  const registerAccount = encodeRegisterInstructionLiteral(
+    2,
+    encodeNewAccountBare(publicKey, flags),
+    { flags, outerFlags: flags },
+  );
+  const registerNft = encodeRegisterInstructionLiteral(
+    4,
+    encodeNftBare("n0", "wonderland.universal", publicKey, flags),
+    { flags, outerFlags: flags },
+  );
+  const registerRole = encodeRegisterInstructionLiteral(
+    5,
+    encodeNewRoleBare("auditor", publicKey, flags),
+    { flags, outerFlags: flags },
+  );
+  const unregisterTrigger = encodeUnregisterInstructionLiteral(
+    6,
+    encodeTriggerIdBare("wake", flags),
+    { flags, outerFlags: flags },
+  );
+  const compiled = compileKotodamaProgram(`
+seiyaku CompactRegisterInstructionAccess {
+  kotoage fn register_domain_run() permission(Admin) {
+    execute_instruction(norito_bytes("${registerDomain}"));
+  }
+
+  kotoage fn register_account_run() permission(Admin) {
+    execute_instruction(norito_bytes("${registerAccount}"));
+  }
+
+  kotoage fn register_nft_run() permission(Admin) {
+    execute_instruction(norito_bytes("${registerNft}"));
+  }
+
+  kotoage fn register_role_run() permission(Admin) {
+    execute_instruction(norito_bytes("${registerRole}"));
+  }
+
+  kotoage fn unregister_trigger_run() permission(Admin) {
+    execute_instruction(norito_bytes("${unregisterTrigger}"));
+  }
+}
+`);
+
+  assert.deepEqual(compiled.diagnostics, []);
+  assert.deepEqual(compiled.manifest?.entrypoints.map((entrypoint) => ({
+    name: entrypoint.name,
+    read_keys: entrypoint.read_keys,
+    write_keys: entrypoint.write_keys,
+    access_hints_complete: entrypoint.access_hints_complete,
+    access_hints_skipped: entrypoint.access_hints_skipped,
+  })), [
+    {
+      name: "register_domain_run",
+      read_keys: ["domain:wonderland.universal"],
+      write_keys: ["domain:wonderland.universal"],
+      access_hints_complete: true,
+      access_hints_skipped: [],
+    },
+    {
+      name: "register_account_run",
+      read_keys: [`account:${account}`],
+      write_keys: [`account:${account}`],
+      access_hints_complete: true,
+      access_hints_skipped: [],
+    },
+    {
+      name: "register_nft_run",
+      read_keys: ["nft:n0$wonderland.universal"],
+      write_keys: ["nft:n0$wonderland.universal"],
+      access_hints_complete: true,
+      access_hints_skipped: [],
+    },
+    {
+      name: "register_role_run",
+      read_keys: ["role:auditor"],
+      write_keys: ["role:auditor"],
+      access_hints_complete: true,
+      access_hints_skipped: [],
+    },
+    {
+      name: "unregister_trigger_run",
+      read_keys: ["trigger:wake"],
+      write_keys: ["trigger:wake", "trigger.repetitions:wake"],
+      access_hints_complete: true,
+      access_hints_skipped: [],
+    },
+  ]);
+});
+
+test("Kotodama compiler SDK derives transfer, mint, and burn access from compact static instruction payloads", () => {
+  const flags = NORITO_HEADER_FLAG_COMPACT_LEN;
+  const sourcePublicKey = "ed01200102030405060708090a0b0c0d0e0f101112131415161718191a1b1c1d1e1f20";
+  const destinationPublicKey = "ed01202122232425262728292a2b2c2d2e2f303132333435363738393a3b3c3d3e3f40";
+  const sourceAccount = renderCanonicalAccountIdLiteralFromPublicKeyLiteral(sourcePublicKey);
+  const destinationAccount = renderCanonicalAccountIdLiteralFromPublicKeyLiteral(destinationPublicKey);
+  assert.notEqual(sourceAccount, null);
+  assert.notEqual(destinationAccount, null);
+  const assetDefinitionBytes = Buffer.from("1020304050604a7088aabbccddee0102", "hex");
+  const assetDefinition = "4ntVYZphKx9VaHoYBgtfzAviwCW7";
+  const sourceAsset = `${assetDefinition}#${sourceAccount}#dataspace:7`;
+  const destinationAsset = `${assetDefinition}#${destinationAccount}`;
+  assert.equal(normalizeAssetDefinitionIdLiteral(assetDefinition), assetDefinition);
+  const transferDomain = encodeTransferDomainInstructionLiteral({
+    sourcePublicKey,
+    destinationPublicKey,
+    domain: "wonderland.universal",
+    flags,
+    outerFlags: flags,
+  });
+  const transferAsset = encodeTransferAssetInstructionLiteral({
+    sourcePublicKey,
+    destinationPublicKey,
+    definitionBytes: assetDefinitionBytes,
+    scope: 7,
+    flags,
+    outerFlags: flags,
+  });
+  const transferNft = encodeTransferNftInstructionLiteral({
+    sourcePublicKey,
+    destinationPublicKey,
+    name: "n0",
+    domain: "wonderland.universal",
+    flags,
+    outerFlags: flags,
+  });
+  const mintAsset = encodeMintAssetInstructionLiteral({
+    accountPublicKey: sourcePublicKey,
+    definitionBytes: assetDefinitionBytes,
+    scope: 7,
+    flags,
+    outerFlags: flags,
+  });
+  const burnAsset = encodeBurnAssetInstructionLiteral({
+    accountPublicKey: sourcePublicKey,
+    definitionBytes: assetDefinitionBytes,
+    scope: 7,
+    flags,
+    outerFlags: flags,
+  });
+  const mintTrigger = encodeMintTriggerRepetitionsInstructionLiteral("wake", { flags, outerFlags: flags });
+  const burnTrigger = encodeBurnTriggerRepetitionsInstructionLiteral("wake", { flags, outerFlags: flags });
+  const compiled = compileKotodamaProgram(`
+seiyaku CompactAssetOperationInstructionAccess {
+  kotoage fn move_domain() permission(Admin) {
+    execute_instruction(norito_bytes("${transferDomain}"));
+  }
+
+  kotoage fn move_asset() permission(Admin) {
+    execute_instruction(norito_bytes("${transferAsset}"));
+  }
+
+  kotoage fn move_nft() permission(Admin) {
+    execute_instruction(norito_bytes("${transferNft}"));
+  }
+
+  kotoage fn mint_asset_run() permission(Admin) {
+    execute_instruction(norito_bytes("${mintAsset}"));
+  }
+
+  kotoage fn burn_asset_run() permission(Admin) {
+    execute_instruction(norito_bytes("${burnAsset}"));
+  }
+
+  kotoage fn mint_trigger_run() permission(Admin) {
+    execute_instruction(norito_bytes("${mintTrigger}"));
+  }
+
+  kotoage fn burn_trigger_run() permission(Admin) {
+    execute_instruction(norito_bytes("${burnTrigger}"));
+  }
+}
+`);
+
+  assert.deepEqual(compiled.diagnostics, []);
+  assert.deepEqual(compiled.manifest?.entrypoints.map((entrypoint) => ({
+    name: entrypoint.name,
+    read_keys: entrypoint.read_keys,
+    write_keys: entrypoint.write_keys,
+    access_hints_complete: entrypoint.access_hints_complete,
+    access_hints_skipped: entrypoint.access_hints_skipped,
+  })), [
+    {
+      name: "move_domain",
+      read_keys: ["domain:wonderland.universal", `account:${sourceAccount}`, `account:${destinationAccount}`],
+      write_keys: ["domain:wonderland.universal"],
+      access_hints_complete: true,
+      access_hints_skipped: [],
+    },
+    {
+      name: "move_asset",
+      read_keys: [
+        `asset:${sourceAsset}`,
+        `account:${sourceAccount}`,
+        `asset_def:${assetDefinition}`,
+        `asset:${destinationAsset}`,
+        `account:${destinationAccount}`,
+      ],
+      write_keys: [`asset:${sourceAsset}`, `asset:${destinationAsset}`],
+      access_hints_complete: true,
+      access_hints_skipped: [],
+    },
+    {
+      name: "move_nft",
+      read_keys: ["nft:n0$wonderland.universal", `account:${sourceAccount}`, `account:${destinationAccount}`],
+      write_keys: ["nft:n0$wonderland.universal"],
+      access_hints_complete: true,
+      access_hints_skipped: [],
+    },
+    {
+      name: "mint_asset_run",
+      read_keys: [`asset:${sourceAsset}`, `account:${sourceAccount}`, `asset_def:${assetDefinition}`],
+      write_keys: [`asset:${sourceAsset}`, `asset_def:${assetDefinition}`],
+      access_hints_complete: true,
+      access_hints_skipped: [],
+    },
+    {
+      name: "burn_asset_run",
+      read_keys: [`asset:${sourceAsset}`, `account:${sourceAccount}`, `asset_def:${assetDefinition}`],
+      write_keys: [`asset:${sourceAsset}`, `asset_def:${assetDefinition}`],
+      access_hints_complete: true,
+      access_hints_skipped: [],
+    },
+    {
+      name: "mint_trigger_run",
+      read_keys: ["trigger:wake"],
+      write_keys: ["trigger:wake", "trigger.repetitions:wake"],
+      access_hints_complete: true,
+      access_hints_skipped: [],
+    },
+    {
+      name: "burn_trigger_run",
       read_keys: ["trigger:wake"],
       write_keys: ["trigger:wake", "trigger.repetitions:wake"],
       access_hints_complete: true,
@@ -5360,7 +7237,6 @@ seiyaku TypedQueryAccess {
     `asset:${asset}`,
     `account:${account}`,
     `asset_def:${assetDefinition}`,
-    "domain:aid",
     "domain:wonderland.universal",
     "nft",
     "nft:n0$wonderland.universal",
@@ -5393,7 +7269,6 @@ seiyaku AccountBalanceQuery {
     `asset:${assetDefinition}#${account}`,
     `account:${account}`,
     `asset_def:${assetDefinition}`,
-    "domain:aid",
   ]);
   assert.deepEqual(compiled.manifest?.entrypoints[0]?.write_keys, []);
   assert.equal(compiled.manifest?.entrypoints[0]?.access_hints_complete, true);
@@ -8515,6 +10390,48 @@ seiyaku ValidExecuteQueryPayloads {
   assert.deepEqual(validPayloads.diagnostics, []);
 });
 
+test("Kotodama compiler SDK reports semantic arity errors for execute_query let bindings", () => {
+  for (const source of [
+    `
+seiyaku ExecuteQueryNoArgs {
+  fn helper() {
+    let result = execute_query();
+  }
+
+  kotoage fn run() permission(Admin) {}
+}
+`,
+    `
+seiyaku ExecuteQueryWrongType {
+  fn helper() {
+    let result = execute_query(1);
+  }
+
+  kotoage fn run() permission(Admin) {}
+}
+`,
+    `
+seiyaku ExecuteQueryTooManyArgs {
+  fn helper() {
+    let result = execute_query(norito_bytes("00"), norito_bytes("00"));
+  }
+
+  kotoage fn run() permission(Admin) {}
+}
+`,
+  ]) {
+    const compiled = compileKotodamaProgram(source);
+
+    assert.equal(compiled.artifactBytes.length, 0);
+    assert.equal(compiled.diagnostics.length, 1);
+    assert.match(
+      compiled.diagnostics[0].message,
+      /execute_query expects \(Blob\|bytes\) where the argument is a pointer to NoritoBytes TLV in INPUT/,
+    );
+    assert.equal(compiled.diagnostics[0].line, 4);
+  }
+});
+
 test("Kotodama compiler SDK types execute_query results as bytes", () => {
   const compiled = compileKotodamaProgram(`
 seiyaku ExecuteQueryResultBytes {
@@ -8526,10 +10443,36 @@ seiyaku ExecuteQueryResultBytes {
   kotoage fn run() permission(Admin) {}
 }
 `);
+  const validBytesAnnotation = compileKotodamaProgram(`
+seiyaku ExecuteQueryBytesAnnotation {
+  fn helper() {
+    let result: bytes = execute_query(norito_bytes("0x00"));
+    info(tlv_len(result));
+  }
+
+  kotoage fn run() permission(Admin) {}
+}
+`);
+  const invalidAccountAnnotation = compileKotodamaProgram(`
+seiyaku ExecuteQueryTypeDiagnostic {
+  fn helper() {
+    let bad: AccountId = execute_query(norito_bytes("0x00"));
+  }
+
+  kotoage fn run() permission(Admin) {}
+}
+`);
 
   assert.equal(compiled.artifactBytes.length, 0);
   assert.equal(compiled.diagnostics.length, 1);
   assert.match(compiled.diagnostics[0].message, /get_int expects \(Json, Name\)/);
+  assert.deepEqual(validBytesAnnotation.diagnostics, []);
+  assert.equal(invalidAccountAnnotation.artifactBytes.length, 0);
+  assert.equal(invalidAccountAnnotation.diagnostics.length, 1);
+  assert.match(
+    invalidAccountAnnotation.diagnostics[0].message,
+    /type annotation mismatch: expected AccountId, got bytes/,
+  );
 });
 
 test("Kotodama compiler SDK compiles expression-form execute_query", () => {
@@ -8740,6 +10683,83 @@ seiyaku InvalidTestAttribute {
   assert.match(invalidOption.diagnostics[0].message, /unknown test attribute option `seed`/);
 });
 
+test("Kotodama compiler SDK rejects malformed Rust test function declarations before mode filtering", () => {
+  const cases = [
+    {
+      name: "params",
+      source: `
+seiyaku TestWithParams {
+  #[test]
+  fn smoke(count: int) {}
+
+  kotoage fn run() permission(Admin) {}
+}
+`,
+      expected: "semantic error: test function `smoke` must not declare parameters",
+    },
+    {
+      name: "return type",
+      source: `
+seiyaku TestWithReturn {
+  #[test]
+  fn smoke() -> int {
+    return 1;
+  }
+
+  kotoage fn run() permission(Admin) {}
+}
+`,
+      expected: "semantic error: test function `smoke` must not declare a return type",
+    },
+    {
+      name: "explicit unit return",
+      source: `
+seiyaku TestWithUnitReturn {
+  #[test]
+  fn smoke() -> () {}
+
+  kotoage fn run() permission(Admin) {}
+}
+`,
+      expected: "semantic error: test function `smoke` must not declare a return type",
+    },
+    {
+      name: "entrypoint visibility",
+      source: `
+seiyaku TestWithEntrypointVisibility {
+  #[test]
+  kotoage fn smoke() permission(Admin) {}
+
+  kotoage fn run() permission(Admin) {}
+}
+`,
+      expected: "semantic error: test function `smoke` must be declared as a local `fn`",
+    },
+    {
+      name: "permission modifier",
+      source: `
+seiyaku TestWithPermission {
+  #[test]
+  fn smoke() permission(Admin) {}
+
+  kotoage fn run() permission(Admin) {}
+}
+`,
+      expected: "semantic error: test function `smoke` cannot declare a permission modifier",
+    },
+  ];
+
+  for (const { name, source, expected } of cases) {
+    for (const mode of [undefined, "test"]) {
+      const compiled = compileKotodamaProgram(source, mode === undefined ? undefined : { mode });
+
+      assert.equal(compiled.artifactBytes.length, 0, `${name}:${mode ?? "production"}`);
+      assert.equal(compiled.diagnostics.length, 1, `${name}:${mode ?? "production"}`);
+      assert.equal(compiled.diagnostics[0].message, expected, `${name}:${mode ?? "production"}`);
+    }
+  }
+});
+
 test("Kotodama compiler SDK emits private test helper syscalls in test mode", () => {
   const compiled = compileKotodamaProgram(`
 seiyaku TestModeHelpers {
@@ -8874,6 +10894,93 @@ seiyaku DynamicDirectInvoke {
   );
   assert.equal(dynamicTarget.artifactBytes.length, 0);
   assert.match(dynamicTarget.diagnostics[0]?.message ?? "", /invoke_entrypoint requires a literal entrypoint name/);
+});
+
+test("Kotodama compiler SDK mirrors Rust test runtime target diagnostics", () => {
+  const unknownDirect = compileKotodamaProgram(`
+seiyaku UnknownDirectInvoke {
+  kotoage fn run() permission(Admin) {}
+
+  #[test]
+  fn smoke() {
+    invoke_entrypoint("missing", json("{}"));
+  }
+}
+`, { mode: "test" });
+  const privateDirect = compileKotodamaProgram(`
+seiyaku PrivateDirectInvoke {
+  fn helper() {}
+
+  kotoage fn run() permission(Admin) {}
+
+  #[test]
+  fn smoke() {
+    invoke_entrypoint("helper", json("{}"));
+  }
+}
+`, { mode: "test" });
+  const unknownInvokeAs = compileKotodamaProgram(`
+seiyaku UnknownInvokeAs {
+  kotoage fn run() permission(Admin) {}
+
+  #[test]
+  fn smoke() {
+    let value = invoke_entrypoint_as("issuer", "missing", json("{}"));
+  }
+}
+`, { mode: "test" });
+  const privateRejectAs = compileKotodamaProgram(`
+seiyaku PrivateRejectAs {
+  fn helper() {}
+
+  kotoage fn run() permission(Admin) {}
+
+  #[test]
+  fn smoke() {
+    expect_reject_as("issuer", "helper", json("{}"));
+  }
+}
+`, { mode: "test" });
+  const tupleInvokeAs = compileKotodamaProgram(`
+seiyaku TupleInvokeAs {
+  kotoage fn run() -> (int, int) {
+    return (1, 2);
+  }
+
+  #[test]
+  fn smoke() {
+    let pair = invoke_entrypoint_as("issuer", "run", json("{}"));
+  }
+}
+`, { mode: "test" });
+
+  assert.equal(unknownDirect.artifactBytes.length, 0);
+  assert.equal(unknownDirect.diagnostics.length, 1);
+  assert.match(
+    unknownDirect.diagnostics[0].message,
+    /semantic error: invoke_entrypoint targets unknown function `missing`/,
+  );
+  assert.equal(privateDirect.artifactBytes.length, 0);
+  assert.equal(privateDirect.diagnostics.length, 1);
+  assert.match(
+    privateDirect.diagnostics[0].message,
+    /semantic error: invoke_entrypoint may only target public\/view\/hajimari\/kaizen entrypoints, got `helper`/,
+  );
+  assert.equal(unknownInvokeAs.artifactBytes.length, 0);
+  assert.equal(unknownInvokeAs.diagnostics.length, 1);
+  assert.match(unknownInvokeAs.diagnostics[0].message, /semantic error: unknown runtime entrypoint `missing`/);
+  assert.equal(privateRejectAs.artifactBytes.length, 0);
+  assert.equal(privateRejectAs.diagnostics.length, 1);
+  assert.match(
+    privateRejectAs.diagnostics[0].message,
+    /semantic error: runtime test helpers may only target public\/view\/hajimari\/kaizen entrypoints, got `helper`/,
+  );
+  assert.equal(tupleInvokeAs.artifactBytes.length, 0);
+  assert.equal(tupleInvokeAs.diagnostics.length, 1);
+  assert.match(
+    tupleInvokeAs.diagnostics[0].message,
+    /semantic error: invoke_entrypoint_as does not yet support tuple-returning entrypoints \(`run`\)/,
+  );
 });
 
 test("Kotodama compiler SDK lowers direct invoke_entrypoint through test payload override", () => {
@@ -9158,6 +11265,31 @@ test("Kotodama compiler SDK mirrors Rust lexer diagnostics for string and byte e
     assert.equal(compiled.diagnostics.length, 1, name);
     assert.equal(compiled.diagnostics[0].message, message, name);
   }
+});
+
+test("Kotodama compiler SDK skips Rust block comments", () => {
+  const compiled = compileKotodamaProgram(`
+/* top-level comment */
+seiyaku BlockComments {
+  /* before entrypoint */
+  kotoage fn run() -> int {
+    let value = 1; /* trailing comment */
+    /*
+      multiline comment
+    */
+    return value;
+  }
+}
+`);
+  const unterminated = compileKotodamaProgram('fn main() { /* missing terminator ');
+
+  assert.deepEqual(compiled.diagnostics, []);
+  assert.equal(compiled.manifest?.entrypoints.find((entry) => entry.name === "run")?.return_type, "int");
+  assert.equal(unterminated.artifactBytes.length, 0);
+  assert.equal(unterminated.diagnostics.length, 1);
+  assert.equal(unterminated.diagnostics[0].message, "parser error: unterminated block comment starting at 1:13");
+  assert.equal(unterminated.diagnostics[0].line, 1);
+  assert.equal(unterminated.diagnostics[0].column, 13);
 });
 
 test("Kotodama compiler SDK parses Rust raw string literals", () => {
@@ -9952,6 +12084,14 @@ seiyaku InvalidDomainTransferName {
   }
 }
 `, { mode: "test" });
+  const invalidPaddedConstructor = compileKotodamaProgram(`
+seiyaku InvalidPaddedDomainConstructor {
+  kotoage fn run() permission(Admin) {
+    let domain_id = domain_id(" wonderland.public ");
+    info(1);
+  }
+}
+`);
   const invalidTriggerMatcher = compileKotodamaProgram(`
 seiyaku InvalidDomainTriggerMatcher {
   kotoage fn run() {}
@@ -9960,6 +12100,18 @@ seiyaku InvalidDomainTriggerMatcher {
     call run;
     on data domain created {
       domain "wonderland";
+    }
+  }
+}
+`);
+  const invalidPaddedTriggerMatcher = compileKotodamaProgram(`
+seiyaku InvalidPaddedDomainTriggerMatcher {
+  kotoage fn run() {}
+
+  register_trigger wake {
+    call run;
+    on data domain created {
+      domain " wonderland.public ";
     }
   }
 }
@@ -9978,6 +12130,12 @@ seiyaku ValidRuntimeDomainName {
   assert.equal(invalidTransferName.artifactBytes.length, 0);
   assert.equal(invalidTransferName.diagnostics.length, 1);
   assert.match(invalidTransferName.diagnostics[0].message, /invalid DomainId literal `wonderland`/);
+  assert.equal(invalidPaddedConstructor.artifactBytes.length, 0);
+  assert.equal(invalidPaddedConstructor.diagnostics.length, 1);
+  assert.match(
+    invalidPaddedConstructor.diagnostics[0].message,
+    /invalid DomainId literal ` wonderland\.public `: domain id must not contain leading or trailing whitespace/,
+  );
   assert.equal(invalidTriggerMatcher.artifactBytes.length, 0);
   assert.equal(invalidTriggerMatcher.diagnostics.length, 1);
   assert.match(
@@ -9985,6 +12143,12 @@ seiyaku ValidRuntimeDomainName {
     /trigger `wake` has invalid `domain` matcher literal `wonderland` in `domain` data filter: domain id must use `domain\.dataspace` format/,
   );
   assert.equal(invalidTriggerMatcher.diagnostics[0].line, 8);
+  assert.equal(invalidPaddedTriggerMatcher.artifactBytes.length, 0);
+  assert.equal(invalidPaddedTriggerMatcher.diagnostics.length, 1);
+  assert.match(
+    invalidPaddedTriggerMatcher.diagnostics[0].message,
+    /trigger `wake` has invalid `domain` matcher literal ` wonderland\.public ` in `domain` data filter: domain id must not contain leading or trailing whitespace/,
+  );
   assert.deepEqual(validRuntimeName.diagnostics, []);
   assert.notEqual(readArtifactCode(validRuntimeName.artifactBytes).indexOf(syscallNeedle(0x12)), -1);
 });
@@ -10237,6 +12401,57 @@ seiyaku ValidPreludeMacro {
   assert.deepEqual(valid.diagnostics, []);
 });
 
+test("Kotodama compiler SDK injects first-release prelude helpers like Rust", () => {
+  const amountHelpers = compileKotodamaProgram(`
+seiyaku PreludeAmountHelpers {
+  kotoage fn fee_quote() -> int {
+    return checked_sub_amount(checked_add_amount(bps_fee(10000, 25), 10), 5);
+  }
+}
+`);
+  const ownerHelper = compileKotodamaProgram(`
+seiyaku PreludeOwnerHelper {
+  kotoage fn run(owner: AccountId) permission(Admin) {
+    require_owner(owner);
+  }
+}
+`);
+  const signedJsonHelpers = compileKotodamaProgram(`
+seiyaku PreludeSignedJsonHelpers {
+  kotoage fn amount(payload: bytes) -> int {
+    let decoded = verify_signed_json(payload, payload, payload, 0);
+    return require_json_int(decoded, name("amount"));
+  }
+}
+`);
+
+  assert.deepEqual(amountHelpers.diagnostics, []);
+  assert.ok(amountHelpers.artifactBytes.length > 0);
+  assert.equal(amountHelpers.manifest?.entrypoints.find((entry) => entry.name === "fee_quote")?.return_type, "int");
+  assert.deepEqual(ownerHelper.diagnostics, []);
+  assert.ok(ownerHelper.artifactBytes.length > 0);
+  assert.deepEqual(signedJsonHelpers.diagnostics, []);
+  assert.equal(signedJsonHelpers.manifest?.entrypoints.find((entry) => entry.name === "amount")?.return_type, "int");
+});
+
+test("Kotodama compiler SDK does not inject prelude helpers over user definitions", () => {
+  const compiled = compileKotodamaProgram(`
+seiyaku PreludeUserOverride {
+  fn checked_sub_amount(left: int, right: int) -> int {
+    return 7;
+  }
+
+  kotoage fn fee_quote() -> int {
+    return checked_sub_amount(1, 2);
+  }
+}
+`);
+
+  assert.deepEqual(compiled.diagnostics, []);
+  assert.ok(compiled.artifactBytes.length > 0);
+  assert.equal(compiled.manifest?.entrypoints.find((entry) => entry.name === "fee_quote")?.return_type, "int");
+});
+
 test("Kotodama compiler SDK treats json constructor strings as raw JSON like Rust", () => {
   const valid = compileKotodamaProgram(`
 fn main() {
@@ -10292,6 +12507,56 @@ seiyaku BlobFromNoritoBytes {
 `);
 
   assert.deepEqual(compiled.diagnostics, []);
+});
+
+test("Kotodama compiler SDK reports blob constructors and byte literals as bytes like Rust", () => {
+  const validBytesAnnotations = compileKotodamaProgram(`
+seiyaku BlobConstructorBytesAnnotation {
+  fn helper() {
+    let ctor: bytes = blob("0x00");
+    let macro_bytes: bytes = blob!("0x01");
+    let literal: bytes = b"ab";
+    let alias: Blob = blob("0x02");
+    info(tlv_len(ctor) + tlv_len(macro_bytes) + tlv_len(literal) + tlv_len(alias));
+  }
+
+  kotoage fn run() permission(Admin) {
+    helper();
+  }
+}
+`);
+  const invalidConstructorAnnotation = compileKotodamaProgram(`
+seiyaku BlobConstructorTypeDiagnostic {
+  fn helper() {
+    let bad: AccountId = blob("0x00");
+  }
+
+  kotoage fn run() permission(Admin) {
+    helper();
+  }
+}
+`);
+  const invalidLiteralAnnotation = compileKotodamaProgram(`
+seiyaku ByteLiteralTypeDiagnostic {
+  fn helper() {
+    let bad: AccountId = b"ab";
+  }
+
+  kotoage fn run() permission(Admin) {
+    helper();
+  }
+}
+`);
+
+  assert.deepEqual(validBytesAnnotations.diagnostics, []);
+  for (const compiled of [invalidConstructorAnnotation, invalidLiteralAnnotation]) {
+    assert.equal(compiled.artifactBytes.length, 0);
+    assert.equal(compiled.diagnostics.length, 1);
+    assert.match(
+      compiled.diagnostics[0].message,
+      /type annotation mismatch: expected AccountId, got bytes/,
+    );
+  }
 });
 
 test("Kotodama compiler SDK accepts inline NoritoBytes in DomainId and NftId constructors like Rust", () => {
@@ -10836,6 +13101,10 @@ seiyaku ValidAnonymousEscrowSemantic {
 });
 
 test("Kotodama compiler SDK rejects invalid inline ZK builder arguments semantically", () => {
+  const account = renderCanonicalAccountIdLiteralFromPublicKeyLiteral(
+    "ed0120AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA",
+  );
+  const inputs32 = `0x${"00".repeat(32)}`;
   const invalidSubmit = compileKotodamaProgram(`
 seiyaku InvalidSubmitBuilder {
   kotoage fn run() permission(Admin) {
@@ -10870,6 +13139,24 @@ seiyaku DynamicUnshieldAmount {
   }
 }
 `);
+  const validConstUnshieldAmount = compileKotodamaProgram(`
+const AMOUNT = 1;
+
+seiyaku ConstUnshieldAmount {
+  kotoage fn run() permission(Admin) {
+    let bytes = build_unshield_inline(asset_definition("62Fk4FPcMuLvW5QjDGNF2a4jAmjM"), account_id("${account}"), AMOUNT, blob("${inputs32}"), "halo2", blob("proof"), blob("vk"));
+    execute_instruction(bytes);
+  }
+}
+`);
+  const invalidNegativeUnshieldAmount = compileKotodamaProgram(`
+seiyaku NegativeUnshieldAmount {
+  kotoage fn run() permission(Admin) {
+    let bytes = build_unshield_inline(asset_definition("62Fk4FPcMuLvW5QjDGNF2a4jAmjM"), account_id("${account}"), -1, blob("${inputs32}"), "halo2", blob("proof"), blob("vk"));
+    execute_instruction(bytes);
+  }
+}
+`);
 
   assert.equal(invalidSubmit.artifactBytes.length, 0);
   assert.equal(invalidSubmit.diagnostics.length, 1);
@@ -10894,6 +13181,14 @@ seiyaku DynamicUnshieldAmount {
   assert.match(
     dynamicUnshieldAmount.diagnostics[0].message,
     /build_unshield_inline amount requires a compile-time integer literal/,
+  );
+  assert.deepEqual(validConstUnshieldAmount.diagnostics, []);
+  assert.ok(validConstUnshieldAmount.artifactBytes.length > 0);
+  assert.equal(invalidNegativeUnshieldAmount.artifactBytes.length, 0);
+  assert.equal(invalidNegativeUnshieldAmount.diagnostics.length, 1);
+  assert.match(
+    invalidNegativeUnshieldAmount.diagnostics[0].message,
+    /semantic error: build_unshield_inline requires non-negative amount/,
   );
 });
 
@@ -10939,7 +13234,7 @@ seiyaku UnexpectedNestedReturnValue {
   assert.match(nested.diagnostics[0].message, /returning a value requires a declared return type/);
 });
 
-test("Kotodama compiler SDK preserves explicit unit return semantics", () => {
+test("Kotodama compiler SDK preserves explicit unit and zero-tuple package semantics", () => {
   const namedUnit = compileKotodamaProgram(`
 seiyaku NamedUnitReturn {
   fn helper() -> unit {
@@ -10954,7 +13249,7 @@ seiyaku NamedUnitReturn {
   const tupleUnit = compileKotodamaProgram(`
 seiyaku TupleUnitReturn {
   fn helper() -> () {
-    return;
+    return ();
   }
 
   kotoage fn run() permission(Admin) {
@@ -10962,10 +13257,19 @@ seiyaku TupleUnitReturn {
   }
 }
 `);
+  const invalidTupleMissingValue = compileKotodamaProgram(`
+seiyaku TupleUnitMissingValue {
+  fn helper() -> () {
+    return;
+  }
+
+  kotoage fn run() permission(Admin) {}
+}
+`);
   const invalidNamedValue = compileKotodamaProgram(`
 seiyaku NamedUnitReturnValue {
   fn helper() -> unit {
-    return 1;
+    return ();
   }
 
   kotoage fn run() permission(Admin) {}
@@ -10986,6 +13290,9 @@ seiyaku TupleUnitReturnValue {
   assert.equal(invalidNamedValue.artifactBytes.length, 0);
   assert.equal(invalidNamedValue.diagnostics.length, 1);
   assert.match(invalidNamedValue.diagnostics[0].message, /return type mismatch: unexpected value/);
+  assert.equal(invalidTupleMissingValue.artifactBytes.length, 0);
+  assert.equal(invalidTupleMissingValue.diagnostics.length, 1);
+  assert.match(invalidTupleMissingValue.diagnostics[0].message, /return type mismatch: expected value/);
   assert.equal(invalidTupleValue.artifactBytes.length, 0);
   assert.equal(invalidTupleValue.diagnostics.length, 1);
   assert.match(
@@ -11062,6 +13369,25 @@ seiyaku InvalidTriggerRwa {
   assert.equal(invalid.diagnostics[0].line, 8);
 });
 
+test("Kotodama compiler SDK encodes scoped asset data trigger filters like Rust", () => {
+  const account = "sorauﾛ1Npﾃﾕヱﾇq11pｳﾘ2ｱ5ﾇｦiCJKjRﾔzｷNMNﾆｹﾕPCｳﾙFvｵE9LBLB";
+  const valid = compileKotodamaProgram(`
+seiyaku TriggerScopedAsset {
+  kotoage fn run() {}
+
+  register_trigger wake {
+    call run;
+    on data asset added {
+      asset "62Fk4FPcMuLvW5QjDGNF2a4jAmjM#${account}#dataspace:3";
+    }
+  }
+}
+`);
+
+  assert.deepEqual(valid.diagnostics, []);
+  assert.equal(valid.manifest?.entrypoints[0]?.triggers.length, 1);
+});
+
 test("Kotodama compiler SDK mirrors upstream pipeline trigger filters", () => {
   const block = compileKotodamaProgram(`
 seiyaku TriggerBlock {
@@ -11122,18 +13448,20 @@ seiyaku TriggerMerge {
 test("Kotodama compiler SDK accepts encoded account trigger authority and matchers", () => {
   const publicKey = "ed0120aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa";
   const account = renderCanonicalAccountIdLiteralFromPublicKeyLiteral(publicKey);
+  const testnetAccount = renderCanonicalAccountIdLiteralFromPublicKeyLiteral(publicKey, 0x0171);
   assert.ok(account);
+  assert.ok(testnetAccount);
 
   const compiled = compileKotodamaProgram(`
-seiyaku EncodedAccountTrigger {
+seiyaku PaddedEncodedAccountTrigger {
   kotoage fn run() {}
 
   register_trigger wake {
     call run;
     on data account metadata_inserted {
-      account "${account}";
+      account " \\n${account}\\t ";
     }
-    authority "${account}";
+    authority " \\n${account}\\t ";
   }
 }
 `);
@@ -11173,6 +13501,29 @@ seiyaku InvalidPublicKeyTriggerAuthority {
   }
 }
 `);
+  const invalidNetworkMatcher = compileKotodamaProgram(`
+seiyaku InvalidNetworkAccountMatcher {
+  kotoage fn run() {}
+
+  register_trigger wake {
+    call run;
+    on data account metadata_inserted {
+      account "${testnetAccount}";
+    }
+  }
+}
+`);
+  const invalidNetworkAuthority = compileKotodamaProgram(`
+seiyaku InvalidNetworkTriggerAuthority {
+  kotoage fn run() {}
+
+  register_trigger wake {
+    call run;
+    on data any;
+    authority "${testnetAccount}";
+  }
+}
+`);
   const cntrBody = noritoPayloadBody(readArtifactSection(compiled.artifactBytes, 17).payload);
   const compactPublicKeyNeedle = Buffer.from([
     0x21, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
@@ -11204,6 +13555,20 @@ seiyaku InvalidPublicKeyTriggerAuthority {
     /semantic error: invalid trigger authority `ed0120aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa`: AccountId must use a canonical I105 literal/,
   );
   assert.equal(invalidPublicKeyAuthority.diagnostics[0].line, 8);
+  assert.equal(invalidNetworkMatcher.artifactBytes.length, 0);
+  assert.equal(invalidNetworkMatcher.diagnostics.length, 1);
+  assert.match(
+    invalidNetworkMatcher.diagnostics[0].message,
+    /trigger `wake` has invalid `account` matcher literal `test.*` in `account` data filter: ERR_UNEXPECTED_NETWORK_PREFIX/,
+  );
+  assert.equal(invalidNetworkMatcher.diagnostics[0].line, 8);
+  assert.equal(invalidNetworkAuthority.artifactBytes.length, 0);
+  assert.equal(invalidNetworkAuthority.diagnostics.length, 1);
+  assert.match(
+    invalidNetworkAuthority.diagnostics[0].message,
+    /semantic error: invalid trigger authority `test.*`: ERR_UNEXPECTED_NETWORK_PREFIX/,
+  );
+  assert.equal(invalidNetworkAuthority.diagnostics[0].line, 8);
 });
 
 test("Kotodama compiler SDK rejects duplicate trigger control fields like Rust", () => {
@@ -11608,6 +13973,24 @@ test("Kotodama compiler SDK reports invalid trigger identifier operands like Rus
   }
 }
 `);
+  const executeIdWhitespace = compileKotodamaProgram(`seiyaku ExecuteIdWhitespace {
+  kotoage fn run() {}
+
+  register_trigger wake {
+    call run;
+    on execute trigger "bad trigger";
+  }
+}
+`);
+  const executeIdEmpty = compileKotodamaProgram(`seiyaku ExecuteIdEmpty {
+  kotoage fn run() {}
+
+  register_trigger wake {
+    call run;
+    on execute trigger "";
+  }
+}
+`);
   const authorityNumber = compileKotodamaProgram(`seiyaku AuthorityNumber {
   kotoage fn run() {}
 
@@ -11661,6 +14044,22 @@ test("Kotodama compiler SDK reports invalid trigger identifier operands like Rus
   );
   assert.equal(executeIdNumber.diagnostics[0].line, 6);
   assert.equal(executeIdNumber.diagnostics[0].column, 24);
+  assert.equal(executeIdWhitespace.artifactBytes.length, 0);
+  assert.equal(executeIdWhitespace.diagnostics.length, 1);
+  assert.match(
+    executeIdWhitespace.diagnostics[0].message,
+    /semantic error: invalid execute trigger id `bad trigger`: White space not allowed in `Name` constructs/,
+  );
+  assert.equal(executeIdWhitespace.diagnostics[0].line, 4);
+  assert.equal(executeIdWhitespace.diagnostics[0].column, 3);
+  assert.equal(executeIdEmpty.artifactBytes.length, 0);
+  assert.equal(executeIdEmpty.diagnostics.length, 1);
+  assert.match(
+    executeIdEmpty.diagnostics[0].message,
+    /semantic error: invalid execute trigger id ``: Empty `Name`/,
+  );
+  assert.equal(executeIdEmpty.diagnostics[0].line, 4);
+  assert.equal(executeIdEmpty.diagnostics[0].column, 3);
   assert.equal(authorityNumber.artifactBytes.length, 0);
   assert.equal(authorityNumber.diagnostics.length, 1);
   assert.match(
@@ -11895,6 +14294,15 @@ seiyaku InvalidTriggerMetadata {
   const reservedKey = compileMetadata('"bad$key": 1;');
   const duplicateKey = compileMetadata('tag: "a"; tag: "b";');
   const jsonCallNumber = compileMetadata('tag: json(1);');
+  const jsonCallDecimal = compileMetadata('tag: json(1.5);');
+  const invalidJsonLiteral = compileMetadata('tag: json("{");');
+  const decimalMetadata = compileMetadata('ratio: 1.5;');
+  const jsonMacroMetadata = compileMetadata('tag: json![1, 2];');
+  const computedMetadata = compileMetadata('tag: 1 + 2;');
+  const negativeMetadata = compileMetadata('tag: -1;');
+  const negativeDecimalMetadata = compileMetadata('tag: -1.5;');
+  const decimalComputedMetadata = compileMetadata('tag: 1.5 + 2;');
+  const tupleMetadata = compileMetadata('tag: (1, 2);');
   const nameCallValue = compileMetadata('tag: name("x");');
 
   assert.equal(emptyKey.artifactBytes.length, 0);
@@ -11907,6 +14315,24 @@ seiyaku InvalidTriggerMetadata {
   assert.equal(duplicateKey.diagnostics[0].message, "semantic error: duplicate trigger metadata key `tag`");
   assert.equal(jsonCallNumber.artifactBytes.length, 0);
   assert.equal(jsonCallNumber.diagnostics[0].message, "semantic error: json(...) metadata values must be a string literal");
+  assert.equal(jsonCallDecimal.artifactBytes.length, 0);
+  assert.equal(jsonCallDecimal.diagnostics[0].message, "semantic error: json(...) metadata values must be a string literal");
+  assert.equal(invalidJsonLiteral.artifactBytes.length, 0);
+  assert.equal(invalidJsonLiteral.diagnostics[0].message, "semantic error: invalid json metadata literal: JSON error: unexpected end of input at byte 1 (line 1, col 2)");
+  assert.deepEqual(decimalMetadata.diagnostics, []);
+  assert.notEqual(decimalMetadata.artifactBytes.length, 0);
+  assert.deepEqual(jsonMacroMetadata.diagnostics, []);
+  assert.notEqual(jsonMacroMetadata.artifactBytes.length, 0);
+  assert.equal(computedMetadata.artifactBytes.length, 0);
+  assert.equal(computedMetadata.diagnostics[0].message, "semantic error: trigger metadata values must be JSON literals");
+  assert.equal(negativeMetadata.artifactBytes.length, 0);
+  assert.equal(negativeMetadata.diagnostics[0].message, "semantic error: trigger metadata values must be JSON literals");
+  assert.equal(negativeDecimalMetadata.artifactBytes.length, 0);
+  assert.equal(negativeDecimalMetadata.diagnostics[0].message, "semantic error: trigger metadata values must be JSON literals");
+  assert.equal(decimalComputedMetadata.artifactBytes.length, 0);
+  assert.equal(decimalComputedMetadata.diagnostics[0].message, "semantic error: trigger metadata values must be JSON literals");
+  assert.equal(tupleMetadata.artifactBytes.length, 0);
+  assert.equal(tupleMetadata.diagnostics[0].message, "semantic error: trigger metadata values must be JSON literals");
   assert.equal(nameCallValue.artifactBytes.length, 0);
   assert.equal(nameCallValue.diagnostics[0].message, "semantic error: trigger metadata values must be JSON literals");
 });
@@ -11925,17 +14351,42 @@ seiyaku DuplicateMatcher {
   }
 }
 `);
+  const unsupportedMatcher = compileKotodamaProgram(`
+seiyaku UnsupportedMatcher {
+  kotoage fn run() {}
+
+  register_trigger wake {
+    call run;
+    on data account created {
+      asset_definition "62Fk4FPcMuLvW5QjDGNF2a4jAmjM";
+    }
+  }
+}
+`);
 
   assert.equal(compiled.artifactBytes.length, 0);
   assert.equal(compiled.diagnostics.length, 1);
   assert.match(
     compiled.diagnostics[0].message,
-    /trigger `wake` has duplicate `asset_definition` matcher in `asset` data filter/,
+    /semantic error: trigger `wake` has duplicate `asset_definition` matcher in `asset` data filter/,
   );
   assert.equal(compiled.diagnostics[0].line, 9);
+  assert.equal(unsupportedMatcher.artifactBytes.length, 0);
+  assert.equal(unsupportedMatcher.diagnostics.length, 1);
+  assert.match(
+    unsupportedMatcher.diagnostics[0].message,
+    /semantic error: trigger `wake` does not support `asset_definition` matcher in `account` data filter/,
+  );
+  assert.equal(unsupportedMatcher.diagnostics[0].line, 8);
 });
 
 test("Kotodama compiler SDK reports invalid data trigger matcher literals like Rust", () => {
+  const account = "sorauﾛ1Npﾃﾕヱﾇq11pｳﾘ2ｱ5ﾇｦiCJKjRﾔzｷNMNﾆｹﾕPCｳﾙFvｵE9LBLB";
+  const testnetAccount = renderCanonicalAccountIdLiteralFromPublicKeyLiteral(
+    "ed01200102030405060708090a0b0c0d0e0f101112131415161718191a1b1c1d1e1f20",
+    0x0171,
+  );
+  assert.equal(typeof testnetAccount, "string");
   const compiled = compileKotodamaProgram(`
 seiyaku InvalidMatcherLiteral {
   kotoage fn run() {}
@@ -11944,6 +14395,78 @@ seiyaku InvalidMatcherLiteral {
     call run;
     on data asset added {
       asset_definition "not-an-asset-def";
+    }
+  }
+}
+`);
+  const invalidAssetMissingAccount = compileKotodamaProgram(`
+seiyaku InvalidAssetMatcherMissingAccount {
+  kotoage fn run() {}
+
+  register_trigger wake {
+    call run;
+    on data asset added {
+      asset "not-asset";
+    }
+  }
+}
+`);
+  const invalidAssetDefinitionInAsset = compileKotodamaProgram(`
+seiyaku InvalidAssetDefinitionInAssetMatcher {
+  kotoage fn run() {}
+
+  register_trigger wake {
+    call run;
+    on data asset added {
+      asset "bad#${account}";
+    }
+  }
+}
+`);
+  const invalidAssetAccount = compileKotodamaProgram(`
+seiyaku InvalidAssetAccountMatcher {
+  kotoage fn run() {}
+
+  register_trigger wake {
+    call run;
+    on data asset added {
+      asset "62Fk4FPcMuLvW5QjDGNF2a4jAmjM#ed0120aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa";
+    }
+  }
+}
+`);
+  const invalidAssetNetworkAccount = compileKotodamaProgram(`
+seiyaku InvalidAssetNetworkAccountMatcher {
+  kotoage fn run() {}
+
+  register_trigger wake {
+    call run;
+    on data asset added {
+      asset "62Fk4FPcMuLvW5QjDGNF2a4jAmjM#${testnetAccount}";
+    }
+  }
+}
+`);
+  const invalidAssetScope = compileKotodamaProgram(`
+seiyaku InvalidAssetScopeMatcher {
+  kotoage fn run() {}
+
+  register_trigger wake {
+    call run;
+    on data asset added {
+      asset "62Fk4FPcMuLvW5QjDGNF2a4jAmjM#${account}#bad";
+    }
+  }
+}
+`);
+  const invalidAssetScopeValue = compileKotodamaProgram(`
+seiyaku InvalidAssetScopeValueMatcher {
+  kotoage fn run() {}
+
+  register_trigger wake {
+    call run;
+    on data asset added {
+      asset "62Fk4FPcMuLvW5QjDGNF2a4jAmjM#${account}#dataspace:x";
     }
   }
 }
@@ -11985,35 +14508,229 @@ seiyaku InvalidRoleMatcherLiteral {
   }
 }
 `);
+  const invalidNftFormat = compileKotodamaProgram(`
+seiyaku InvalidNftMatcherFormat {
+  kotoage fn run() {}
+
+  register_trigger wake {
+    call run;
+    on data nft created {
+      nft "not-an-nft";
+    }
+  }
+}
+`);
+  const invalidNftName = compileKotodamaProgram(`
+seiyaku InvalidNftMatcherName {
+  kotoage fn run() {}
+
+  register_trigger wake {
+    call run;
+    on data nft created {
+      nft "bad nft$wonderland";
+    }
+  }
+}
+`);
+  const invalidNftDomain = compileKotodamaProgram(`
+seiyaku InvalidNftMatcherDomain {
+  kotoage fn run() {}
+
+  register_trigger wake {
+    call run;
+    on data nft created {
+      nft "token$bad domain";
+    }
+  }
+}
+`);
+  const invalidRwaFormat = compileKotodamaProgram(`
+seiyaku InvalidRwaMatcherFormat {
+  kotoage fn run() {}
+
+  register_trigger wake {
+    call run;
+    on data rwa created {
+      rwa "not-rwa";
+    }
+  }
+}
+`);
+  const invalidRwaHash = compileKotodamaProgram(`
+seiyaku InvalidRwaMatcherHash {
+  kotoage fn run() {}
+
+  register_trigger wake {
+    call run;
+    on data rwa created {
+      rwa "0000$wonderland";
+    }
+  }
+}
+`);
+  const invalidRwaDomain = compileKotodamaProgram(`
+seiyaku InvalidRwaMatcherDomain {
+  kotoage fn run() {}
+
+  register_trigger wake {
+    call run;
+    on data rwa created {
+      rwa "ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff$bad domain";
+    }
+  }
+}
+`);
 
   assert.equal(compiled.artifactBytes.length, 0);
   assert.equal(compiled.diagnostics.length, 1);
   assert.match(
     compiled.diagnostics[0].message,
-    /trigger `wake` has invalid `asset_definition` matcher literal `not-an-asset-def` in `asset` data filter: Asset Definition ID must be valid Base58/,
+    /semantic error: trigger `wake` has invalid `asset_definition` matcher literal `not-an-asset-def` in `asset` data filter: Asset Definition ID must be valid Base58/,
   );
   assert.equal(compiled.diagnostics[0].line, 8);
+  assert.equal(invalidAssetMissingAccount.artifactBytes.length, 0);
+  assert.equal(invalidAssetMissingAccount.diagnostics.length, 1);
+  assert.match(
+    invalidAssetMissingAccount.diagnostics[0].message,
+    /semantic error: trigger `wake` has invalid `asset` matcher literal `not-asset` in `asset` data filter: Asset balance bucket literal must include an account id/,
+  );
+  assert.equal(invalidAssetMissingAccount.diagnostics[0].line, 8);
+  assert.equal(invalidAssetDefinitionInAsset.artifactBytes.length, 0);
+  assert.equal(invalidAssetDefinitionInAsset.diagnostics.length, 1);
+  assert.match(
+    invalidAssetDefinitionInAsset.diagnostics[0].message,
+    /semantic error: trigger `wake` has invalid `asset` matcher literal `bad#.*` in `asset` data filter: Asset Definition ID must contain exactly 21 decoded bytes/,
+  );
+  assert.equal(invalidAssetDefinitionInAsset.diagnostics[0].line, 8);
+  assert.equal(invalidAssetAccount.artifactBytes.length, 0);
+  assert.equal(invalidAssetAccount.diagnostics.length, 1);
+  assert.match(
+    invalidAssetAccount.diagnostics[0].message,
+    /semantic error: trigger `wake` has invalid `asset` matcher literal `62Fk4FPcMuLvW5QjDGNF2a4jAmjM#ed0120aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa` in `asset` data filter: Asset ID account is invalid/,
+  );
+  assert.equal(invalidAssetAccount.diagnostics[0].line, 8);
+  assert.equal(invalidAssetNetworkAccount.artifactBytes.length, 0);
+  assert.equal(invalidAssetNetworkAccount.diagnostics.length, 1);
+  assert.match(
+    invalidAssetNetworkAccount.diagnostics[0].message,
+    /semantic error: trigger `wake` has invalid `asset` matcher literal `62Fk4FPcMuLvW5QjDGNF2a4jAmjM#test.*` in `asset` data filter: Asset ID account is invalid/,
+  );
+  assert.equal(invalidAssetNetworkAccount.diagnostics[0].line, 8);
+  assert.equal(invalidAssetScope.artifactBytes.length, 0);
+  assert.equal(invalidAssetScope.diagnostics.length, 1);
+  assert.match(
+    invalidAssetScope.diagnostics[0].message,
+    /semantic error: trigger `wake` has invalid `asset` matcher literal `62Fk4FPcMuLvW5QjDGNF2a4jAmjM#.*#bad` in `asset` data filter: Asset ID scope must use `dataspace:<id>` when present/,
+  );
+  assert.equal(invalidAssetScope.diagnostics[0].line, 8);
+  assert.equal(invalidAssetScopeValue.artifactBytes.length, 0);
+  assert.equal(invalidAssetScopeValue.diagnostics.length, 1);
+  assert.match(
+    invalidAssetScopeValue.diagnostics[0].message,
+    /semantic error: trigger `wake` has invalid `asset` matcher literal `62Fk4FPcMuLvW5QjDGNF2a4jAmjM#.*#dataspace:x` in `asset` data filter: Asset ID dataspace scope must be a u64/,
+  );
+  assert.equal(invalidAssetScopeValue.diagnostics[0].line, 8);
   assert.equal(invalidPeerBeforeDuplicate.artifactBytes.length, 0);
   assert.equal(invalidPeerBeforeDuplicate.diagnostics.length, 1);
   assert.match(
     invalidPeerBeforeDuplicate.diagnostics[0].message,
-    /trigger `wake` has invalid `peer` matcher literal `ed0120aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa` in `peer` data filter: Non-canonical multihash hex/,
+    /semantic error: trigger `wake` has invalid `peer` matcher literal `ed0120aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa` in `peer` data filter: Non-canonical multihash hex/,
   );
   assert.equal(invalidPeerBeforeDuplicate.diagnostics[0].line, 8);
   assert.equal(invalidTriggerName.artifactBytes.length, 0);
   assert.equal(invalidTriggerName.diagnostics.length, 1);
   assert.match(
     invalidTriggerName.diagnostics[0].message,
-    /trigger `wake` has invalid `trigger` matcher literal `not a trigger` in `trigger` data filter: White space not allowed in `Name` constructs/,
+    /semantic error: trigger `wake` has invalid `trigger` matcher literal `not a trigger` in `trigger` data filter: White space not allowed in `Name` constructs/,
   );
   assert.equal(invalidTriggerName.diagnostics[0].line, 8);
   assert.equal(invalidRoleName.artifactBytes.length, 0);
   assert.equal(invalidRoleName.diagnostics.length, 1);
   assert.match(
     invalidRoleName.diagnostics[0].message,
-    /trigger `wake` has invalid `role` matcher literal `not a role` in `role` data filter: White space not allowed in `Name` constructs/,
+    /semantic error: trigger `wake` has invalid `role` matcher literal `not a role` in `role` data filter: White space not allowed in `Name` constructs/,
   );
   assert.equal(invalidRoleName.diagnostics[0].line, 8);
+  assert.equal(invalidNftFormat.artifactBytes.length, 0);
+  assert.equal(invalidNftFormat.diagnostics.length, 1);
+  assert.match(
+    invalidNftFormat.diagnostics[0].message,
+    /semantic error: trigger `wake` has invalid `nft` matcher literal `not-an-nft` in `nft` data filter: Non Fungible Asset ID should have format `name\$domain` or `name\$domain\.dataspace`/,
+  );
+  assert.equal(invalidNftFormat.diagnostics[0].line, 8);
+  assert.equal(invalidNftName.artifactBytes.length, 0);
+  assert.equal(invalidNftName.diagnostics.length, 1);
+  assert.match(
+    invalidNftName.diagnostics[0].message,
+    /semantic error: trigger `wake` has invalid `nft` matcher literal `bad nft\$wonderland` in `nft` data filter: Failed to parse `name` part in `name\$domain`/,
+  );
+  assert.equal(invalidNftName.diagnostics[0].line, 8);
+  assert.equal(invalidNftDomain.artifactBytes.length, 0);
+  assert.equal(invalidNftDomain.diagnostics.length, 1);
+  assert.match(
+    invalidNftDomain.diagnostics[0].message,
+    /semantic error: trigger `wake` has invalid `nft` matcher literal `token\$bad domain` in `nft` data filter: Failed to parse `domain` part in `name\$domain` or `name\$domain\.dataspace`/,
+  );
+  assert.equal(invalidNftDomain.diagnostics[0].line, 8);
+  assert.equal(invalidRwaFormat.artifactBytes.length, 0);
+  assert.equal(invalidRwaFormat.diagnostics.length, 1);
+  assert.match(
+    invalidRwaFormat.diagnostics[0].message,
+    /semantic error: trigger `wake` has invalid `rwa` matcher literal `not-rwa` in `rwa` data filter: RWA ID should have format `hash\$domain`/,
+  );
+  assert.equal(invalidRwaFormat.diagnostics[0].line, 8);
+  assert.equal(invalidRwaHash.artifactBytes.length, 0);
+  assert.equal(invalidRwaHash.diagnostics.length, 1);
+  assert.match(
+    invalidRwaHash.diagnostics[0].message,
+    /semantic error: trigger `wake` has invalid `rwa` matcher literal `0000\$wonderland` in `rwa` data filter: Failed to parse `hash` part in `hash\$domain`/,
+  );
+  assert.equal(invalidRwaHash.diagnostics[0].line, 8);
+  assert.equal(invalidRwaDomain.artifactBytes.length, 0);
+  assert.equal(invalidRwaDomain.diagnostics.length, 1);
+  assert.match(
+    invalidRwaDomain.diagnostics[0].message,
+    /semantic error: trigger `wake` has invalid `rwa` matcher literal `ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff\$bad domain` in `rwa` data filter: Failed to parse `domain` part in `hash\$domain`/,
+  );
+  assert.equal(invalidRwaDomain.diagnostics[0].line, 8);
+});
+
+test("Kotodama compiler SDK rejects non-canonical data trigger event casing like Rust", () => {
+  const account = compileKotodamaProgram(`
+seiyaku MixedCaseAccountTriggerEvent {
+  kotoage fn run() {}
+
+  register_trigger wake {
+    call run;
+    on data account Metadata_Inserted {}
+  }
+}
+`);
+  const domain = compileKotodamaProgram(`
+seiyaku MixedCaseDomainTriggerEvent {
+  kotoage fn run() {}
+
+  register_trigger wake {
+    call run;
+    on data domain Created {}
+  }
+}
+`);
+
+  assert.equal(account.artifactBytes.length, 0);
+  assert.equal(account.diagnostics.length, 1);
+  assert.match(
+    account.diagnostics[0].message,
+    /semantic error: trigger `wake` does not support `Metadata_Inserted` event kind for `account` data filter/,
+  );
+  assert.equal(account.diagnostics[0].line, 7);
+  assert.equal(domain.artifactBytes.length, 0);
+  assert.equal(domain.diagnostics.length, 1);
+  assert.match(
+    domain.diagnostics[0].message,
+    /semantic error: trigger `wake` does not support `Created` event kind for `domain` data filter/,
+  );
+  assert.equal(domain.diagnostics[0].line, 7);
 });
 
 test("Kotodama compiler SDK encodes upstream account trigger event-set bits", () => {
@@ -12080,7 +14797,7 @@ seiyaku AccountRecoveryTrigger {
   assert.notEqual(anyCntr.indexOf(compactBitmapU32Needle(0x0000_0fff)), -1);
   assert.equal(invalid.artifactBytes.length, 0);
   assert.equal(invalid.diagnostics.length, 1);
-  assert.match(invalid.diagnostics[0].message, /trigger `wake` does not support `recovery` event kind for `account` data filter/);
+  assert.match(invalid.diagnostics[0].message, /semantic error: trigger `wake` does not support `recovery` event kind for `account` data filter/);
   assert.equal(invalid.diagnostics[0].line, 7);
 });
 
@@ -12159,7 +14876,7 @@ seiyaku DomainRwaTrigger {
   assert.notEqual(anyCntr.indexOf(compactBitmapU32Needle(0x0003_ffff)), -1);
   assert.equal(invalid.artifactBytes.length, 0);
   assert.equal(invalid.diagnostics.length, 1);
-  assert.match(invalid.diagnostics[0].message, /trigger `wake` does not support `rwa` event kind for `domain` data filter/);
+  assert.match(invalid.diagnostics[0].message, /semantic error: trigger `wake` does not support `rwa` event kind for `domain` data filter/);
   assert.equal(invalid.diagnostics[0].line, 7);
 });
 
@@ -12218,6 +14935,187 @@ seiyaku AssetDefinitionAnyTrigger {
   assert.notEqual(totalCntr.indexOf(compactBitmapU32Needle(0x0000_0040)), -1);
   assert.notEqual(ownerCntr.indexOf(compactBitmapU32Needle(0x0000_0080)), -1);
   assert.notEqual(anyCntr.indexOf(compactBitmapU32Needle(0x0000_00ff)), -1);
+});
+
+test("Kotodama compiler SDK encodes remaining upstream data trigger event-set bits", () => {
+  const nftOwner = compileKotodamaProgram(`
+seiyaku NftOwnerTrigger {
+  kotoage fn run() {}
+
+  register_trigger wake {
+    call run;
+    on data nft owner_changed {
+      nft "badge$wonderland.universal";
+    }
+  }
+}
+`);
+  const nftAny = compileKotodamaProgram(`
+seiyaku NftAnyTrigger {
+  kotoage fn run() {}
+
+  register_trigger wake {
+    call run;
+    on data nft any {}
+  }
+}
+`);
+  const rwaForce = compileKotodamaProgram(`
+seiyaku RwaForceTransferTrigger {
+  kotoage fn run() {}
+
+  register_trigger wake {
+    call run;
+    on data rwa force_transferred {
+      rwa "0707070707070707070707070707070707070707070707070707070707070707$wonderland.universal";
+    }
+  }
+}
+`);
+  const rwaAny = compileKotodamaProgram(`
+seiyaku RwaAnyTrigger {
+  kotoage fn run() {}
+
+  register_trigger wake {
+    call run;
+    on data rwa any {}
+  }
+}
+`);
+  const triggerExtended = compileKotodamaProgram(`
+seiyaku TriggerExtendedTrigger {
+  kotoage fn run() {}
+
+  register_trigger wake {
+    call run;
+    on data trigger extended {
+      trigger "wake";
+    }
+  }
+}
+`);
+  const triggerAny = compileKotodamaProgram(`
+seiyaku TriggerAnyTrigger {
+  kotoage fn run() {}
+
+  register_trigger wake {
+    call run;
+    on data trigger any {}
+  }
+}
+`);
+  const rolePermission = compileKotodamaProgram(`
+seiyaku RolePermissionTrigger {
+  kotoage fn run() {}
+
+  register_trigger wake {
+    call run;
+    on data role permission_removed {
+      role "auditor";
+    }
+  }
+}
+`);
+  const roleAny = compileKotodamaProgram(`
+seiyaku RoleAnyTrigger {
+  kotoage fn run() {}
+
+  register_trigger wake {
+    call run;
+    on data role any {}
+  }
+}
+`);
+  const configurationChanged = compileKotodamaProgram(`
+seiyaku ConfigurationChangedTrigger {
+  kotoage fn run() {}
+
+  register_trigger wake {
+    call run;
+    on data configuration changed {}
+  }
+}
+`);
+  const configurationInvalidMatcher = compileKotodamaProgram(`
+seiyaku ConfigurationInvalidMatcherTrigger {
+  kotoage fn run() {}
+
+  register_trigger wake {
+    call run;
+    on data configuration changed {
+      role "auditor";
+    }
+  }
+}
+`);
+  const executorUpgraded = compileKotodamaProgram(`
+seiyaku ExecutorUpgradedTrigger {
+  kotoage fn run() {}
+
+  register_trigger wake {
+    call run;
+    on data executor upgraded {}
+  }
+}
+`);
+  const executorInvalidMatcher = compileKotodamaProgram(`
+seiyaku ExecutorInvalidMatcherTrigger {
+  kotoage fn run() {}
+
+  register_trigger wake {
+    call run;
+    on data executor upgraded {
+      trigger "wake";
+    }
+  }
+}
+`);
+
+  const nftOwnerCntr = noritoPayloadBody(readArtifactSection(nftOwner.artifactBytes, 17).payload);
+  const nftAnyCntr = noritoPayloadBody(readArtifactSection(nftAny.artifactBytes, 17).payload);
+  const rwaForceCntr = noritoPayloadBody(readArtifactSection(rwaForce.artifactBytes, 17).payload);
+  const rwaAnyCntr = noritoPayloadBody(readArtifactSection(rwaAny.artifactBytes, 17).payload);
+  const triggerExtendedCntr = noritoPayloadBody(readArtifactSection(triggerExtended.artifactBytes, 17).payload);
+  const triggerAnyCntr = noritoPayloadBody(readArtifactSection(triggerAny.artifactBytes, 17).payload);
+  const rolePermissionCntr = noritoPayloadBody(readArtifactSection(rolePermission.artifactBytes, 17).payload);
+  const roleAnyCntr = noritoPayloadBody(readArtifactSection(roleAny.artifactBytes, 17).payload);
+  const configurationChangedCntr = noritoPayloadBody(readArtifactSection(configurationChanged.artifactBytes, 17).payload);
+  const executorUpgradedCntr = noritoPayloadBody(readArtifactSection(executorUpgraded.artifactBytes, 17).payload);
+
+  assert.deepEqual(nftOwner.diagnostics, []);
+  assert.deepEqual(nftAny.diagnostics, []);
+  assert.deepEqual(rwaForce.diagnostics, []);
+  assert.deepEqual(rwaAny.diagnostics, []);
+  assert.deepEqual(triggerExtended.diagnostics, []);
+  assert.deepEqual(triggerAny.diagnostics, []);
+  assert.deepEqual(rolePermission.diagnostics, []);
+  assert.deepEqual(roleAny.diagnostics, []);
+  assert.deepEqual(configurationChanged.diagnostics, []);
+  assert.deepEqual(executorUpgraded.diagnostics, []);
+  assert.notEqual(nftOwnerCntr.indexOf(compactBitmapU32Needle(0x0000_0010)), -1);
+  assert.notEqual(nftAnyCntr.indexOf(compactBitmapU32Needle(0x0000_001f)), -1);
+  assert.notEqual(rwaForceCntr.indexOf(compactBitmapU32Needle(0x0000_0800)), -1);
+  assert.notEqual(rwaAnyCntr.indexOf(compactBitmapU32Needle(0x0000_1fff)), -1);
+  assert.notEqual(triggerExtendedCntr.indexOf(compactBitmapU32Needle(0x0000_0004)), -1);
+  assert.notEqual(triggerAnyCntr.indexOf(compactBitmapU32Needle(0x0000_003f)), -1);
+  assert.notEqual(rolePermissionCntr.indexOf(compactBitmapU32Needle(0x0000_0008)), -1);
+  assert.notEqual(roleAnyCntr.indexOf(compactBitmapU32Needle(0x0000_000f)), -1);
+  assert.notEqual(configurationChangedCntr.indexOf(compactBitmapU32Needle(0x0000_0001)), -1);
+  assert.notEqual(executorUpgradedCntr.indexOf(compactBitmapU32Needle(0x0000_0001)), -1);
+  assert.equal(configurationInvalidMatcher.artifactBytes.length, 0);
+  assert.equal(configurationInvalidMatcher.diagnostics.length, 1);
+  assert.match(
+    configurationInvalidMatcher.diagnostics[0].message,
+    /semantic error: trigger `wake` does not support `role` matcher in `configuration` data filter/,
+  );
+  assert.equal(configurationInvalidMatcher.diagnostics[0].line, 8);
+  assert.equal(executorInvalidMatcher.artifactBytes.length, 0);
+  assert.equal(executorInvalidMatcher.diagnostics.length, 1);
+  assert.match(
+    executorInvalidMatcher.diagnostics[0].message,
+    /semantic error: trigger `wake` does not support `trigger` matcher in `executor` data filter/,
+  );
+  assert.equal(executorInvalidMatcher.diagnostics[0].line, 8);
 });
 
 test("Kotodama compiler SDK rejects invalid trigger declarations semantically", () => {
@@ -12640,6 +15538,12 @@ seiyaku MetaBadFeatureItem {
   kotoage fn run() permission(Admin) {}
 }
 `);
+  const trailingFeatureComma = compileKotodamaProgram(`
+seiyaku MetaTrailingFeatureComma {
+  meta { features: [vector,]; }
+  kotoage fn run() permission(Admin) {}
+}
+`);
   const unknownFeature = compileKotodamaProgram(`
 seiyaku MetaUnknownFeature {
   meta { features: [vector, bad]; }
@@ -12682,6 +15586,10 @@ seiyaku MetaNegativeCycles {
   assert.equal(
     badFeatureItem.diagnostics[0].message,
     "parser error: {error}: expected string literal or identifier but found Number(1)",
+  );
+  assert.equal(
+    trailingFeatureComma.diagnostics[0].message,
+    "parser error: {error}: expected string literal or identifier but found RBracket",
   );
   assert.equal(
     unknownFeature.diagnostics[0].message,
@@ -12837,6 +15745,10 @@ seiyaku CompactMetadata {
 });
 
 test("Kotodama compiler SDK emits compact literal payloads and raw state paths", () => {
+  const account = renderCanonicalAccountIdLiteralFromPublicKeyLiteral(
+    "ed01200102030405060708090a0b0c0d0e0f101112131415161718191a1b1c1d1e1f20",
+  );
+  assert.equal(typeof account, "string");
   const compiled = compileKotodamaProgram(`
 seiyaku LiteralPayloads {
   state int balance;
@@ -12845,7 +15757,7 @@ seiyaku LiteralPayloads {
   state DomainId domain_id;
 
   kotoage fn main() permission(Admin) {
-    let account = account_id("ed01200102030405060708090a0b0c0d0e0f101112131415161718191a1b1c1d1e1f20");
+    let account = account_id("${account}");
     let asset = asset_definition("61CtjvNd9T3THAR65GsMVHr82Bjc");
     let domain_ref = domain("wonder.universal");
     let key = name("cursor");
@@ -12928,6 +15840,10 @@ test("Kotodama compiler SDK retains Rust unused pointer literal locals", () => {
 
 test("Kotodama compiler SDK mirrors account_id alias literal resolution", () => {
   const canonicalPublicKey = "ed01200102030405060708090a0b0c0d0e0f101112131415161718191a1b1c1d1e1f20";
+  const canonicalAccount = renderCanonicalAccountIdLiteralFromPublicKeyLiteral(canonicalPublicKey);
+  const testnetAccount = renderCanonicalAccountIdLiteralFromPublicKeyLiteral(canonicalPublicKey, 0x0171);
+  assert.equal(typeof canonicalAccount, "string");
+  assert.equal(typeof testnetAccount, "string");
   const alias = compileKotodamaProgram(`
 seiyaku AccountAliasPointers {
   kotoage fn run() permission(Admin) {
@@ -12943,8 +15859,22 @@ seiyaku AccountAliasPointers {
   const canonical = compileKotodamaProgram(`
 seiyaku CanonicalAccountPointer {
   kotoage fn run() permission(Admin) {
-    let account = account_id("${canonicalPublicKey}");
+    let account = account_id("${canonicalAccount}");
     set_account_detail(account, name("status"), json!{ ok: true });
+  }
+}
+`);
+  const invalidPublicKey = compileKotodamaProgram(`
+seiyaku InvalidPublicKeyAccountPointer {
+  kotoage fn run() permission(Admin) {
+    let account = account_id("${canonicalPublicKey}");
+  }
+}
+`);
+  const invalidNetwork = compileKotodamaProgram(`
+seiyaku InvalidNetworkAccountPointer {
+  kotoage fn run() permission(Admin) {
+    let account = account_id("${testnetAccount}");
   }
 }
 `);
@@ -12966,7 +15896,16 @@ seiyaku InvalidAccountPointer {
   assert.equal(canonicalCode.indexOf(syscallNeedle(0xa7)), -1, "canonical account literals must stay static");
   assert.equal(invalid.artifactBytes.length, 0);
   assert.equal(invalid.diagnostics.length, 1);
-  assert.match(invalid.diagnostics[0].message, /invalid AccountId literal `merchant`/);
+  assert.match(invalid.diagnostics[0].message, /invalid AccountId literal `merchant`: AccountId must use a canonical I105 literal/);
+  assert.equal(invalidPublicKey.artifactBytes.length, 0);
+  assert.equal(invalidPublicKey.diagnostics.length, 1);
+  assert.match(
+    invalidPublicKey.diagnostics[0].message,
+    /invalid AccountId literal `ed01200102030405060708090a0b0c0d0e0f101112131415161718191a1b1c1d1e1f20`: AccountId must use a canonical I105 literal/,
+  );
+  assert.equal(invalidNetwork.artifactBytes.length, 0);
+  assert.equal(invalidNetwork.diagnostics.length, 1);
+  assert.match(invalidNetwork.diagnostics[0].message, /invalid AccountId literal `test.*`: ERR_UNEXPECTED_NETWORK_PREFIX/);
 });
 
 test("Kotodama compiler SDK emits AssetId pointer constructors and state metadata", () => {
@@ -13024,6 +15963,58 @@ seiyaku InvalidAssetIdPointer {
     compiled.diagnostics[0].message,
     /asset_id expects string, matching pointer type, or Blob\|bytes \(NoritoBytes\)/,
   );
+
+  const assetDefinition = "61CtjvNd9T3THAR65GsMVHr82Bjc";
+  const account = renderCanonicalAccountIdLiteralFromPublicKeyLiteral(
+    "ed01200102030405060708090a0b0c0d0e0f101112131415161718191a1b1c1d1e1f20",
+  );
+  const testnetAccount = renderCanonicalAccountIdLiteralFromPublicKeyLiteral(
+    "ed01200102030405060708090a0b0c0d0e0f101112131415161718191a1b1c1d1e1f20",
+    0x0171,
+  );
+  assert.equal(typeof account, "string");
+  assert.equal(typeof testnetAccount, "string");
+
+  const invalidCases = [
+    [
+      "not-asset",
+      /semantic error: invalid AssetId literal `not-asset`: Asset balance bucket literal must include an account id/,
+    ],
+    [
+      `bad#${account}`,
+      /semantic error: invalid AssetId literal `bad#.*`: Asset Definition ID must contain exactly 21 decoded bytes/,
+    ],
+    [
+      `${assetDefinition}#ed0120aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa`,
+      /semantic error: invalid AssetId literal `61CtjvNd9T3THAR65GsMVHr82Bjc#ed0120aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa`: Asset ID account is invalid/,
+    ],
+    [
+      `${assetDefinition}#${testnetAccount}`,
+      /semantic error: invalid AssetId literal `61CtjvNd9T3THAR65GsMVHr82Bjc#test.*`: Asset ID account is invalid/,
+    ],
+    [
+      `${assetDefinition}#${account}#bad`,
+      /semantic error: invalid AssetId literal `61CtjvNd9T3THAR65GsMVHr82Bjc#.*#bad`: Asset ID scope must use `dataspace:<id>` when present/,
+    ],
+    [
+      `${assetDefinition}#${account}#dataspace:x`,
+      /semantic error: invalid AssetId literal `61CtjvNd9T3THAR65GsMVHr82Bjc#.*#dataspace:x`: Asset ID dataspace scope must be a u64/,
+    ],
+  ];
+
+  for (const [literal, expectedMessage] of invalidCases) {
+    const invalidLiteral = compileKotodamaProgram(`
+seiyaku InvalidAssetIdPointerLiteral {
+  kotoage fn run() permission(Admin) {
+    let asset = asset_id(${JSON.stringify(literal)});
+  }
+}
+`);
+
+    assert.equal(invalidLiteral.artifactBytes.length, 0);
+    assert.equal(invalidLiteral.diagnostics.length, 1);
+    assert.match(invalidLiteral.diagnostics[0].message, expectedMessage);
+  }
 });
 
 test("Kotodama compiler SDK rejects Json arguments for non-Json pointer constructors semantically", () => {
@@ -13092,11 +16083,15 @@ seiyaku NftIdPointers {
 });
 
 test("Kotodama compiler SDK lowers mixed direct and literal transfer operands", () => {
+  const pool = renderCanonicalAccountIdLiteralFromPublicKeyLiteral(
+    "ed01200102030405060708090a0b0c0d0e0f101112131415161718191a1b1c1d1e1f20",
+  );
+  assert.equal(typeof pool, "string");
   const compiled = compileKotodamaProgram(`
 seiyaku MixedLiteralTransfer {
   kotoage fn main() permission(MarketUser) {
     let caller = authority();
-    let pool = account_id("ed01200102030405060708090a0b0c0d0e0f101112131415161718191a1b1c1d1e1f20");
+    let pool = account_id("${pool}");
     let asset = asset_definition("61CtjvNd9T3THAR65GsMVHr82Bjc");
     transfer_asset(caller, pool, asset, 10);
   }
@@ -13143,8 +16138,8 @@ test("Kotodama compiler SDK derives exact asset access from static pointer local
 seiyaku StaticPointerLocalAccess {
   kotoage fn main() permission(Admin) {
     let asset = asset_definition("${assetDefinition}");
-    let source = account_id("${sourcePublicKey}");
-    let destination = account_id("${destinationPublicKey}");
+    let source = account_id("${sourceAccount}");
+    let destination = account_id("${destinationAccount}");
     transfer_asset(source, destination, asset, 10);
     mint_asset(destination, asset, 5);
   }
@@ -13181,7 +16176,7 @@ test("Kotodama compiler SDK keeps static asset access hints for runtime-resolved
 seiyaku RuntimeAccountStaticAssetAccess {
   kotoage fn transfer() permission(Admin) {
     transfer_asset(
-      account_id("${sourcePublicKey}"),
+      account_id("${sourceAccount}"),
       account_id("merchant@paynet"),
       asset_definition("${assetDefinition}"),
       1
@@ -13242,8 +16237,8 @@ seiyaku OrderedAccess {
 
   kotoage fn main() permission(Admin) {
     let asset = asset_definition("${assetDefinition}");
-    let source = account_id("${sourcePublicKey}");
-    let destination = account_id("${destinationPublicKey}");
+    let source = account_id("${sourceAccount}");
+    let destination = account_id("${destinationAccount}");
     transfer_asset(source, destination, asset, 10);
     done = true;
     transfer_asset(authority(), destination, asset, 1);
