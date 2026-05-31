@@ -17,6 +17,21 @@ Last updated: 2026-05-31
   - `cargo fmt --all --check` currently reports an unrelated existing
     formatting diff in `crates/ivm/tests/kotodama.rs`.
 
+## 2026-05-30 Taira edge Connect routing pin
+
+- The shared-edge nginx renderer now pins public `/v1/mcp`,
+  `/v1/connect/session`, `/v1/connect/session/*`, `/v1/connect/status`, and
+  `/v1/connect/ws` to the same selected Torii upstream so Connect MCP tools and
+  direct Connect management/websocket requests do not split process-local
+  session state across validators.
+- The checked-in Taira nginx example was regenerated from the example validator
+  roster, and the Taira rollout notes now distinguish shared generic public
+  routes from pinned Connect/MCP routes.
+- Focused validation passed:
+  - direct invocation of `scripts/tests/render_taira_edge_nginx_conf_test.py`
+    test functions with temporary directories
+  - `python3 -m py_compile scripts/render_taira_edge_nginx_conf.py scripts/tests/render_taira_edge_nginx_conf_test.py`
+
 ## 2026-05-30 JS Kotodama map and NFT register fixes
 
 - Fixed JS Kotodama durable map foreach lowering so static loop body
