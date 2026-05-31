@@ -379,6 +379,7 @@ fn visit_instr_uses<F: FnMut(Temp)>(instr: &Instr, mut f: F) {
         | TransferBatchBegin
         | TransferBatchEnd
         | CommitOutput => {}
+        TransferBatchApply { payload } => f(*payload),
         Binary { left, right, .. } => {
             f(*left);
             f(*right);
@@ -739,7 +740,6 @@ fn visit_instr_uses<F: FnMut(Temp)>(instr: &Instr, mut f: F) {
         | Instr::VendorExecuteQuery { payload, .. }
         | Instr::QueryExecuteNorito { payload, .. }
         | Instr::QueryGet { key: payload, .. }
-        | Instr::TransferBatchApply { payload }
         | Instr::SmartContractLifecycle { payload, .. }
         | Instr::ZkRootsGet { payload, .. }
         | Instr::ZkVoteGetTally { payload, .. }
