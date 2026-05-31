@@ -101,6 +101,19 @@ int32_t connect_norito_kagemusha_prove_verified_compact_payment_token_with_recor
     uint8_t** out_compact_token_ptr,
     unsigned long* out_compact_token_len);
 
+// Verify private Kagemusha hop proofs plus proof-derived Pallas opening envelopes and
+// generate an admission-neutral recursive aggregation proof bundle.
+// Input 1: Norito-archive bytes of `KagemushaVerifiedFoldRecordBundle`.
+// Input 2: Norito-archive bytes of `Vec<iroha_zkp_halo2::OpenVerifyEnvelope>`.
+// Output: Norito-archive bytes of `KagemushaRecursiveAggregationProofBundle`.
+int32_t connect_norito_kagemusha_prove_verified_recursive_aggregation_proof_bundle_with_records_and_pallas_open_envelopes(
+    const uint8_t* verified_record_bundle_norito_ptr,
+    unsigned long verified_record_bundle_norito_len,
+    const uint8_t* pallas_open_envelopes_norito_ptr,
+    unsigned long pallas_open_envelopes_norito_len,
+    uint8_t** out_proof_bundle_ptr,
+    unsigned long* out_proof_bundle_len);
+
 void connect_norito_free(uint8_t* ptr);
 
 // ---------------- Envelope helpers ----------------

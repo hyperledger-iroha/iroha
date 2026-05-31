@@ -274,11 +274,13 @@ export {
   buildClaimTwitterFollowRewardInstruction,
   buildSendToTwitterInstruction,
   buildCancelTwitterEscrowInstruction,
+  buildRegisterAssetHiddenZkPoolInstruction,
   buildRegisterZkAssetInstruction,
   buildScheduleConfidentialPolicyTransitionInstruction,
   buildCancelConfidentialPolicyTransitionInstruction,
   buildShieldInstruction,
   buildZkTransferInstruction,
+  buildAssetHiddenZkTransferInstruction,
   buildUnshieldInstruction,
   buildCreateElectionInstruction,
   buildSubmitBallotInstruction,
@@ -289,6 +291,11 @@ export {
   normalizeAssetHoldingId,
   normalizeRwaId,
 } from "./instructionBuilders.js";
+export {
+  getPrivacyAlgorithmDescriptor,
+  getPrivacyAlgorithmDescriptors,
+  getPrivacyCriteria,
+} from "./privacyAlgorithms.js";
 export {
   resolveToriiClientConfig,
   extractToriiFeatureConfig,

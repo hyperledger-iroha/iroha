@@ -1,6 +1,105 @@
 # Status
 
-Last updated: 2026-05-30
+Last updated: 2026-05-31
+
+## 2026-05-31 Kagemusha final MSM and verifier-key coverage
+
+- Resolved stale recursive-verifier TODO wording on the low-level non-native
+  Vesta affine add/double wrappers. The active MSM and IPA verifier
+  compositions already route group operations through point-or-identity
+  encodings and complete-add constraints.
+- Added explicit final IPA MSM identity-output coverage for the bounded,
+  fixed-window, and shared-table fixed-window `Q = a*G + b*H + (a*b)*U`
+  wrappers. Zero final scalars now exercise the final comparison outputting the
+  canonical point at infinity while preserving the existing adversarial
+  product-link and public base/output substitution tests.
+- Recursive aggregation preverification now requires the supplied verifier key
+  to be the canonical semantic-circuit key before accepting an otherwise
+  self-consistent proof envelope. A forged verifier record whose inline key,
+  commitment, length, and envelope `vk_hash` all agree with the folded-token
+  key is rejected before backend verification. Recursive aggregation
+  verifier-key envelopes carry `CID1` circuit-id bindings too, and backend
+  verification rejects a matching raw `H2VK` payload replayed under a wrong
+  recursive aggregation circuit-family id.
+- Compact folded-token proving, proving-key derivation, and direct or
+  record-backed verification now enforce the canonical `kagemusha-folded-v1`
+  semantic verifier key before backend verification. A forged folded-token
+  verifier record using the recursive aggregation key is rejected even when the
+  record commitment and envelope `vk_hash` are made self-consistent.
+- Offline recursive proving, proving-key derivation, and chain-side verifier
+  resolution now enforce the canonical `offline-note-recursive` semantic
+  verifier key before proof creation or backend verification. A self-consistent
+  forged verifier record with a matching mutated commitment and envelope
+  `vk_hash` is rejected by the chain resolver. Offline recursive verifier-key
+  envelopes now carry a `CID1` circuit-id TLV, and backend verification rejects
+  replay where the raw `H2VK` payload matches but the verifier-key envelope
+  names another circuit family.
+- Kagemusha transfer admission and checked private-hop folding now enforce the
+  canonical confidential-transfer-v2 semantic verifier key before accepting
+  otherwise self-consistent asset bindings, verifier records, hop attachments,
+  or envelopes.
+- Confidential-transfer-v2 and unshield verifier-key generation now uses
+  process-local caches, and canonical verifier-key envelopes include a `CID1`
+  circuit-id TLV so unshield v2/v3 commitments remain semantically distinct
+  even when raw Halo2 verifier-key payloads can deserialize across related
+  circuits. Backend verification rejects supplied verifier-key envelopes whose
+  `CID1` value normalizes to a different circuit than the proof envelope, so a
+  cryptographically valid raw `H2VK` payload cannot be replayed under a
+  mismatched semantic circuit id. Canonical confidential v2 prover builders now
+  reuse cached derived Halo2 IPA proving keys while preserving the arbitrary-key
+  fallback for noncanonical test/custom keys, and backend verification now
+  dispatches the unshield v3 semantic circuit. Direct guard coverage accepts
+  cached canonical keys and rejects mutated bytes, wrong backends, empty keys,
+  cross-circuit unshield key substitution, and wrong-`CID1` proof verification.
+- Kagemusha folded verifier-key envelopes now also carry `CID1` circuit-id
+  bindings. Direct and record-backed folded-token guards still require the
+  canonical semantic verifier key, and backend verification rejects matching
+  raw `H2VK` payload replay under a wrong folded-token circuit-family id.
+- Kagemusha proof-derived Pallas opening preflight now rejects detached
+  polynomial-opening envelopes before witness derivation: transcript labels must
+  be non-empty and at most 128 bytes, and verifier-key commitment, public-input
+  schema, and hop-domain metadata must be present and non-zero.
+- Added heavyweight composed-circuit MockProver coverage for the LEN=4
+  multi-round shared-table IPA verifier slice. The ignored tests cover an honest
+  synthetic statement, a real Pallas opening translated into the Vesta verifier
+  circuit, public-instance substitution, `Q` splice, generator-fold splice,
+  challenge splice, and final-MSM splice. A direct normal-path run of the first
+  case was terminated after more than 20 minutes at full CPU, so routine
+  validation keeps these cases ignored and relies on the active builder,
+  native-Pallas-preflight, batch-preflight, and host-link adversarial tests.
+- Validation:
+  - `CARGO_INCREMENTAL=0 CARGO_TARGET_DIR=/tmp/iroha-codex-kagemusha-target cargo test -p iroha_core kagemusha_non_native_vesta_ipa_final --lib`
+  - `CARGO_INCREMENTAL=0 CARGO_TARGET_DIR=/tmp/iroha-codex-kagemusha-target cargo test -p iroha_core kagemusha_recursive_aggregation_proof_preverify --lib`
+  - `CARGO_INCREMENTAL=0 CARGO_TARGET_DIR=/tmp/iroha-codex-kagemusha-target cargo test -p iroha_core kagemusha_recursive_aggregation --lib -- --test-threads=1` (35 passed, 4 ignored heavyweight composed-circuit tests)
+  - `CARGO_INCREMENTAL=0 CARGO_TARGET_DIR=/tmp/iroha-codex-kagemusha-target cargo test -p iroha_core kagemusha_compact_payment_token --lib`
+  - `CARGO_INCREMENTAL=0 CARGO_TARGET_DIR=/tmp/iroha-codex-kagemusha-target cargo test -p iroha_core prove_offline_note_redeem_rejects_noncanonical_verifier_key --lib`
+  - `CARGO_INCREMENTAL=0 CARGO_TARGET_DIR=/tmp/iroha-codex-kagemusha-target cargo test -p iroha_core offline_note_rejects_recursive_verifier_record_mismatches --lib`
+  - `CARGO_INCREMENTAL=0 CARGO_TARGET_DIR=/tmp/iroha-codex-kagemusha-target cargo test -p iroha_core offline_note_rejects --lib`
+  - `CARGO_INCREMENTAL=0 CARGO_TARGET_DIR=/tmp/iroha-codex-kagemusha-target cargo test -p iroha_core kagemusha_verified_folded_public_inputs_from_bundle_with_records_rejects_bad_records --lib`
+  - `CARGO_INCREMENTAL=0 CARGO_TARGET_DIR=/tmp/iroha-codex-kagemusha-target cargo test -p iroha_core kagemusha_transfer_rejects_verifier_record_mismatches_before_proof_decode --lib`
+  - `CARGO_INCREMENTAL=0 CARGO_TARGET_DIR=/tmp/iroha-codex-kagemusha-target cargo test -p iroha_core kagemusha_verified_folded_public_inputs --lib`
+  - `CARGO_INCREMENTAL=0 CARGO_TARGET_DIR=/tmp/iroha-codex-kagemusha-target cargo test -p iroha_core kagemusha_transfer --lib`
+  - `CARGO_INCREMENTAL=0 CARGO_TARGET_DIR=/tmp/iroha-codex-kagemusha-target cargo test -p iroha_core confidential_transfer_v2_canonical_vk_guard_rejects_self_consistent_key_substitution --lib`
+  - `CARGO_INCREMENTAL=0 CARGO_TARGET_DIR=/tmp/iroha-codex-kagemusha-target cargo test -p iroha_core confidential_unshield_v2_v3_canonical_caches_reject_key_substitution --lib`
+  - `CARGO_INCREMENTAL=0 CARGO_TARGET_DIR=/tmp/iroha-codex-kagemusha-target cargo test -p iroha_core generated_confidential_v2_vk_records_parse_as_matching_circuits --lib`
+  - `CARGO_INCREMENTAL=0 CARGO_TARGET_DIR=/tmp/iroha-codex-kagemusha-target cargo test -p iroha_core generated_confidential_transfer_v2_one_input_one_output_verifies_against_generated_vk --lib`
+  - `CARGO_INCREMENTAL=0 CARGO_TARGET_DIR=/tmp/iroha-codex-kagemusha-target cargo test -p iroha_core generated_confidential_transfer_v2 --lib`
+  - `CARGO_INCREMENTAL=0 CARGO_TARGET_DIR=/tmp/iroha-codex-kagemusha-target cargo test -p iroha_core generated_confidential_unshield_v2_proof_verifies_against_cached_canonical_vk --lib`
+  - `CARGO_INCREMENTAL=0 CARGO_TARGET_DIR=/tmp/iroha-codex-kagemusha-target cargo test -p iroha_core generated_confidential_unshield_v3_proof_verifies_and_rejects_bad_change --lib`
+  - `CARGO_INCREMENTAL=0 CARGO_TARGET_DIR=/tmp/iroha-codex-kagemusha-target cargo test -p iroha_core offline_note_real_proof_rejects_wrong_cid_verifier_key_replay --lib`
+  - `CARGO_INCREMENTAL=0 CARGO_TARGET_DIR=/tmp/iroha-codex-kagemusha-target cargo test -p iroha_core kagemusha_compact_payment_token_rejects_cross_circuit_verifier_key --lib`
+  - `CARGO_INCREMENTAL=0 CARGO_TARGET_DIR=/tmp/iroha-codex-kagemusha-target cargo test -p iroha_core prove_offline_note_redeem_emits_real_halo2_ipa_proof --lib`
+  - `CARGO_INCREMENTAL=0 CARGO_TARGET_DIR=/tmp/iroha-codex-kagemusha-target cargo test -p iroha_core prove_kagemusha_compact_payment_token_emits_real_halo2_ipa_proof --lib`
+  - `CARGO_INCREMENTAL=0 CARGO_TARGET_DIR=/tmp/iroha-codex-kagemusha-target cargo test -p iroha_core kagemusha_pallas_ipa_batch_verifier_preflight_from_open_envelopes --lib`
+  - `CARGO_INCREMENTAL=0 CARGO_TARGET_DIR=/tmp/iroha-codex-kagemusha-target cargo test -p iroha_core kagemusha_verified_recursive_aggregation_evidence_from_pallas_open_envelopes --lib`
+  - `CARGO_INCREMENTAL=0 CARGO_TARGET_DIR=/tmp/iroha-codex-kagemusha-target cargo test -p iroha_core prove_verified_kagemusha_recursive_aggregation_proof_bundle_from_pallas_open_envelopes --lib`
+  - `CARGO_INCREMENTAL=0 CARGO_TARGET_DIR=/tmp/iroha-codex-kagemusha-target cargo test -p connect_norito_bridge kagemusha_verified_record_recursive_aggregation_proof_bundle --lib`
+  - `CARGO_INCREMENTAL=0 CARGO_TARGET_DIR=/tmp/iroha-codex-kagemusha-target cargo test -p iroha_core kagemusha_recursive_aggregation_real_proof_rejects_wrong_cid_verifier_key_replay --lib`
+  - `CARGO_INCREMENTAL=0 CARGO_TARGET_DIR=/tmp/iroha-codex-kagemusha-target cargo test -p iroha_core kagemusha_non_native_vesta_ipa_verifier_shared_table_circuit --lib -- --test-threads=1` (7 ignored heavyweight composed-circuit tests)
+  - `CARGO_INCREMENTAL=0 CARGO_TARGET_DIR=/tmp/iroha-codex-kagemusha-target cargo test -p iroha_core kagemusha_non_native_vesta_ipa_verifier_shared_table --lib -- --test-threads=1` (14 passed, 7 ignored heavyweight composed-circuit tests)
+  - `CARGO_INCREMENTAL=0 CARGO_TARGET_DIR=/tmp/iroha-codex-kagemusha-target cargo test -p iroha_data_model kagemusha_aggregation_mode_helpers_mark_recursive_mode_reserved --lib`
+  - `CARGO_INCREMENTAL=0 CARGO_TARGET_DIR=/tmp/iroha-codex-kagemusha-target cargo test -p iroha_core prove_kagemusha_compact_payment_token_rejects_reserved_recursive_mode --lib`
+  - `CARGO_INCREMENTAL=0 CARGO_TARGET_DIR=/tmp/iroha-codex-kagemusha-target cargo test -p iroha_core kagemusha_recursive_aggregation_one_hop_verifier_slice --lib -- --test-threads=1` (8 passed, 4 ignored heavyweight production/materialized-circuit tests)
 
 ## 2026-05-30 JS Kotodama map and NFT register fixes
 
@@ -166,27 +265,29 @@ Last updated: 2026-05-30
   spliced onto a verifier that uses different IPA challenges.
 - A host-side bridge now translates native Pallas IPA verifier witnesses into
   the non-native Vesta recursive verifier witness shape. It validates the native
-  transcript projection, transcript-binding projection, `b`-reduction layers,
-  accumulator rounds, transcript round ordering, canonical compressed point
-  encodings, final folded generators, and final term equality, and it recomputes
-  the native Pallas `b`, `Q`, `G`, `H`, and final-term fold relations before
-  converting Pallas scalars and compressed Vesta points through canonical byte
-  encodings. The group relation checks use the deterministic optimized Pallas
-  MSM backend instead of chained scalar multiplication, keeping the preflight on
-  the same production no-trusted-setup IPA backend path as native verification.
+  transcript projection, re-derived transcript-binding projection,
+  `b`-reduction layers, accumulator rounds, transcript round ordering,
+  canonical compressed point encodings, final folded generators, and final term
+  equality, and it recomputes the native Pallas `b`, `Q`, `G`, `H`, and
+  final-term fold relations before converting Pallas scalars and compressed
+  Vesta points through canonical byte encodings. The group relation checks use
+  the deterministic optimized Pallas MSM backend instead of chained scalar
+  multiplication, keeping the preflight on the same production no-trusted-setup
+  IPA backend path as native verification.
   The bridge also validates ordered batches of native Pallas verifier witnesses
   and emits a compact streaming Poseidon2 domain-separated aggregate digest
   that binds the transparent parameter fingerprint, witness order, transcript
   projections, `b` reductions, accumulator folds, final terms, and proof-final
   scalars after every witness passes the single-witness preflight.
   Focused coverage accepts a real Pallas opening through the cheap preflight
-  path, accepts a small-scalar Pallas-native projection through the full
-  recursive witness builder, and rejects real Pallas opening witnesses with
-  length, transcript-challenge, transcript round-index, invalid point encoding,
-  challenge-inverse, `b`-layer, `b`-output, final-`b`, accumulator-square,
-  accumulator-`Q`, generator-fold, final-generator, final-scalar, or accumulator
-  splices before expensive circuit construction. Batch coverage accepts
-  multiple real openings, rejects empty batches, length mismatch, transcript
+  path, accepts a deterministic transcript-bound Pallas-native projection
+  through the full recursive witness builder, and rejects real Pallas opening
+  witnesses with length, transcript-challenge, transcript round-index, invalid
+  point encoding, challenge-inverse, transcript-binding digest, `b`-layer,
+  `b`-output, final-`b`, accumulator-square, accumulator-`Q`, generator-fold,
+  final-generator, final-scalar, or accumulator splices before expensive circuit
+  construction. Batch coverage accepts multiple real openings, rejects empty
+  batches, length mismatch, transcript splices, transcript-binding projection
   splices, and accumulator splices, and verifies that aggregate digests change
   when witness order or witness contents change.
 - The data model now exposes reserved-mode recursive aggregation evidence for
@@ -196,7 +297,9 @@ Last updated: 2026-05-30
   `pallas-ipa-transparent-v1/vesta-recursive-fixed-window-85x3` verifier-witness
   profile, validates hop continuity and set canonicalization through the same
   transcript shape checks as checked pre-folding, requires the witness count to
-  match `hop_count`, and rejects unsupported profiles or all-zero batch fields.
+  match `hop_count`, records the Pallas verifier opening length, and rejects
+  unsupported profiles, unsupported or non-power-of-two opening lengths, or
+  all-zero schedule, table-base, or batch fields.
   Focused wire-format coverage roundtrips evidence through Norito, validates
   the decoded profile-bound digest, rejects decoded unsupported-profile
   evidence, rejects truncated recursive-evidence archives, and covers
@@ -207,8 +310,11 @@ Last updated: 2026-05-30
   builders for borrowed and serializable Kagemusha fold bundles. They enforce
   active WSV-style confidential-transfer-v2 hop verifier records, verify each
   private hop proof, reject witness-count mismatches and all-zero native batch
-  metadata before proof decoding, and then bind the native batch preflight
-  digest plus parameter fingerprint to the canonical folded-hop transcript.
+  metadata before proof decoding, validate the declared Pallas verifier opening
+  length, reject fixed-window schedule digests that do not match that opening
+  length when the Halo2 IPA path is compiled in, and then bind the native batch
+  preflight digest plus parameter fingerprint to the canonical folded-hop
+  transcript.
 - Core now also exposes a public Pallas IPA batch preflight helper and combined
   record-backed evidence builders that consume native verifier witnesses
   directly instead of a detached digest tuple. The helper accepts only the
@@ -219,14 +325,124 @@ Last updated: 2026-05-30
   and final splices before hop proof decoding can start. Its aggregate digest
   now uses the repository's streaming Poseidon2 byte sponge, keeping reserved
   mode-2 evidence on the same field-friendly no-trusted-setup transcript family
-  as the Kagemusha data-model digests. The combined record-backed builders
-  re-derive the stored batch digest with the ordered checked-hop proof hashes,
-  so valid detached native witness batches cannot be replayed against a
-  different folded-hop proof transcript without changing reserved evidence.
+  as the Kagemusha data-model digests. Native batch preflight binds the
+  recursive fixed-window table profile and Poseidon2 shared-table schedule
+  digest into that digest, so valid witness batches cannot silently switch
+  table accounting or table-family order while keeping the same
+  verifier-witness profile string. The combined record-backed builders rederive
+  the stored batch digest with the schedule commitment and ordered checked-hop
+  proof hashes, so valid detached native witness batches cannot be replayed
+  against a different folded-hop proof transcript without changing reserved
+  evidence. Native batch preflight also derives a Poseidon2 digest of the
+  ordered fixed-window table bases used by each validated witness and binds it
+  into the aggregate digest, giving the future shared-table circuit evidence an
+  actual base-encoding commitment target in addition to the schedule/count
+  commitment. Reserved recursive evidence now carries the verifier opening
+  length and schedule/base digests explicitly, binds them into the canonical
+  evidence digest, preserves them across Norito roundtrip, and rejects
+  unsupported opening lengths, non-power-of-two opening lengths, all-zero
+  schedule/base commitments, and schedule/opening-length mismatches before hop
+  proof decoding.
+  A proof-derived Pallas opening-envelope variant now reconstructs the native
+  verifier witnesses from transparent no-trusted-setup polynomial-opening
+  envelopes before applying the same preflight and hop-proof-hash binding, so
+  reserved evidence no longer has to trust a detached native-opening witness for
+  that envelope class. This proof-derived path now applies the Kagemusha
+  `2..=128` power-of-two opening corridor and the `k = 7` transparent-envelope
+  resource limit before witness derivation, rejecting unsupported or oversized
+  envelopes, mismatched wire versions, generator vectors, or proof-round
+  vectors before parameter/proof reconstruction. Hop-proof hash count
+  mismatches now reject before native witness preflight or proof-derived
+  envelope witness derivation, so malformed detached batches do not force
+  unnecessary recursive-verifier preflight work. Record-backed proof-derived
+  evidence also requires each
+  Pallas opening envelope to carry hop-derived transcript metadata: verifier-key
+  commitment, the confidential-transfer-v2 schema hash, and a Poseidon2
+  hop-domain tag over chain, asset, hop index, roots, nullifiers, outputs, proof
+  hash, public-input digest, and verifier-key binding.
   The preflight summary and reserved evidence both expose that canonical
   profile so evidence digests cannot silently switch verifier-witness profiles.
-  The remaining mode-2 gap is deriving each native IPA verifier witness from
-  the corresponding hop proof envelope inside the recursive verifier path.
+  Core now also exposes a cheap production-layout guard for the recursive Vesta
+  IPA verifier profile. It pins the `n = 128` shape to seven rounds, generator
+  fold layers `[64, 32, 16, 8, 4, 2, 1]`, 85-by-3 fixed-window scalar coverage
+  (255 bits), and 262 represented windowed MSM gadgets, and it rejects
+  unsupported or non-power-of-two widths without materializing the full witness.
+  The companion fixed-window table plan pins 532 scalar-mul terms, 45,220 naive
+  window-table witnesses plus 45,220 duplicated selection-table witnesses,
+  723,520 naive point rows, and the transparent shared-table target of 532 table
+  families with 361,760 point rows and `trusted_setup_required = false`.
+  Core now also exposes a deterministic shared-table schedule and Poseidon2
+  schedule digest for that target. The schedule enumerates the 532 table
+  families in accumulator, generator-fold, and final-comparison order and
+  assigns ownership of all 45,220 shifted-window tables. A concrete
+  shared-table manifest now maps those families to contiguous shared-row ranges,
+  confirms the 361,760-row compressed layout, binds the row layout with
+  Poseidon2, and keeps `trusted_setup_required = false`, giving compressed
+  recursive verifier evidence a no-trusted-setup commitment target. Reserved
+  recursive evidence and native Pallas preflight now carry and validate that
+  manifest digest alongside the schedule and table-base digests before hop proof
+  decoding, and the hop-bound native batch digest includes the manifest digest
+  with the schedule digest and checked-hop proof hashes. Core now also has the
+  first shared-table circuit compression primitive: fixed-window selection can
+  reference an already-derived Vesta table directly instead of assigning a
+  duplicate private selection-table copy, with MockProver coverage for honest
+  selection plus selected-point, selection-level, table-chain, and public-base
+  substitution rejection. The shared-table native-scalar multiplication wrapper
+  now composes that selector with scalar decomposition, shifted-base table
+  derivation, window-base doubling, and selected-point accumulation, with
+  MockProver coverage for honest multiplication plus output substitution,
+  selection-bit splice, selection-level tamper, and window-base transition
+  rejection. The shared-table multi-term MSM wrapper now chains those
+  scalar-multiplication terms into one public MSM output while keeping term
+  outputs private, with adversarial coverage for public-base/output
+  substitutions, selection-bit splicing, term-output splicing, and running-sum
+  chain tampering. The shared-table final IPA MSM wrapper now composes that MSM
+  with the native-field `a * b` product link for the `U` term, with coverage for
+  honest final comparison, builder output mismatch, public-base/output
+  substitution, and forged-product rejection. The per-round shared-table IPA
+  accumulator and generator-fold wrappers now bind shared-table MSM scalars back
+  to the transcript challenge and inverse, with honest-path and forged-link
+  rejection coverage for `x^2` accumulator terms and generator-fold scalar
+  routing. The shared-table one-round IPA verifier slice now composes
+  `b`-vector reduction, shared-table accumulator, shared-table generator fold,
+  and shared-table final IPA MSM, with cross-link rejection for substituted
+  final MSM and generator-fold outputs. The shared-table multi-round IPA
+  verifier builder now mirrors the full transcript-binding, `b`-reduction,
+  accumulator-chain, folded-generator-chain, and final-MSM host-link structure
+  without duplicated selection-table copies; the focused coverage exercises the
+  LEN=4 two-round builder and adversarial host-link splices without invoking the
+  multi-hour full-circuit MockProver path. The shared-table verifier can now be
+  constructed directly from proof-derived Pallas verifier witnesses after the
+  existing native Pallas preflight validates transcript, `b`-reduction,
+  accumulator, and generator-fold consistency, and it now exposes the same
+  ordered native Pallas batch preflight metadata used by reserved recursive
+  aggregation evidence.
+  A one-hop recursive verifier-slice circuit now composes the recursive
+  aggregation semantic metadata proof with the shared-table `LEN = 2` IPA
+  verifier, including transcript-binding accumulator checks, and links public
+  opening length, witness count, and hop count to the single-hop profile. Active
+  coverage accepts the one-hop profile, binds native Pallas preflight
+  fingerprint/digest metadata into the recursive public fields, rejects
+  opening-length, witness-count, hop-count, selector, schedule, manifest,
+  table-base, and witness-batch substitutions, rejects valid preflight metadata
+  paired with an invalid verifier witness, and rejects pairing a production
+  Pallas preflight with a non-production fixed-window profile before proving.
+  The composed circuit now also exposes a public verifier transcript-binding
+  digest instance and links it to the embedded verifier's transcript-binding
+  accumulator; digest-splice, full production fixed-window Pallas verifier
+  materialization, composed MockProver acceptance, and public-count-splice tests
+  are present but ignored as heavyweight coverage. Direct active runs of
+  production materialization paths reached multi-minute full-CPU execution and
+  roughly 11-16 GiB RSS before termination, so routine validation keeps those
+  tests ignored.
+  A direct full `n = 128` recursive witness construction attempt was terminated
+  after roughly ten minutes and more than 21 GiB RSS, confirming that production
+  mode-2 circuit evidence needs shared/compressed fixed-window tables before
+  full-width construction can be part of regular tests.
+  The remaining mode-2 gap is deriving the recursive witness from the
+  corresponding compact-hop Halo2 proof envelope inside the recursive verifier
+  circuit; the current proof-derived path covers native Pallas
+  polynomial-opening envelopes only.
 - A native Pasta/Fp transcript-binding accumulator circuit now enforces the
   same Pow5 binding over public header/final/round projection scalars and
   public challenge/inverse scalars. Public-instance gates bind each projected
@@ -250,13 +466,44 @@ Last updated: 2026-05-30
   the transcript-binding accumulator is now composed into the multi-round
   verifier witness/circuit surface and native Pallas verifier witnesses can be
   translated into that recursive witness shape, with ordered batch preflight
-  binding plus reserved-mode data-model evidence available as the host-side
-  evidence surface for future private-hop recursive aggregation, but
-  production-width composed evidence and private-hop recursive aggregation are
-  not complete. Kagemusha aggregation mode `2` remains reserved and public
-  compact-token prover/verifier entry points continue to accept only checked
-  pre-fold mode `1`.
+  binding plus reserved-mode data-model evidence and proof-public-input binding
+  available as the host-side evidence surface for future private-hop recursive
+  aggregation. Core also has admission-neutral recursive proof-bundle
+  preverification and transparent Halo2 IPA semantic proof/prover/verifier
+  support for the recursive aggregation evidence layout. The semantic circuit
+  binds the envelope's public instances, opening-length corridor, fixed-window
+  schedule digest, shared-table manifest digest, hop-count corridor,
+  witness-count equality, and eight non-zero digest groups without trusted
+  setup; preverification rejects schedule/manifest substitutions even when the
+  submitted envelope's 35 public instance columns are self-consistent.
+  Recursive verifier-key containers include a circuit-id TLV for
+  circuit-family-separated registry commitments. Recursive aggregation proof
+  public inputs now expose those preflight commitments directly as 35 public
+  instance columns: public-input hash, evidence digest, aggregation transcript
+  digest, verifier-parameter fingerprint, fixed-window schedule digest,
+  shared-table manifest digest, table-base digest, witness-batch digest,
+  opening length, witness count, and hop count. The bounded ZK1 instance parser
+  now allows this 35-column envelope while still rejecting envelopes above the
+  parser cap. Core now also has
+  record-backed combined recursive proof-bundle builders that derive evidence
+  from active hop verifier records plus native Pallas witnesses or proof-derived
+  Pallas opening envelopes and immediately prove it, avoiding detached evidence
+  replay at the API boundary. The low-level detached-evidence prover and raw
+  metadata evidence builder are crate-private now, so external callers must use
+  the record-backed Pallas preflight proof-bundle entry points. Private-hop
+  Pallas IPA witness verification inside the recursive circuit and compact-token
+  admission are not complete. Kagemusha aggregation mode `2` remains reserved
+  and public compact-token prover/verifier entry points continue to accept only
+  checked pre-fold mode `1`.
 - Focused validation passed:
+  - `CARGO_INCREMENTAL=0 CARGO_TARGET_DIR=/tmp/iroha-codex-kagemusha-target cargo test -p iroha_core kagemusha_recursive_aggregation_semantic_circuit --lib` (10 tests, including fixed-window schedule/manifest digest substitution rejection)
+  - `CARGO_INCREMENTAL=0 CARGO_TARGET_DIR=/tmp/iroha-codex-kagemusha-target cargo test -p iroha_core kagemusha_recursive_aggregation_proof_preverify --lib` (5 tests, including self-consistent forged schedule/manifest preverify rejection)
+  - `CARGO_INCREMENTAL=0 CARGO_TARGET_DIR=/tmp/iroha-codex-kagemusha-target cargo test -p iroha_core kagemusha_recursive_aggregation_real_halo2_ipa_proof --lib` (2 real recursive aggregation proof tests)
+  - `CARGO_INCREMENTAL=0 CARGO_TARGET_DIR=/tmp/iroha-codex-kagemusha-target cargo test -p iroha_core prove_verified_kagemusha_recursive_aggregation_proof_bundle_from_pallas --lib` (4 record-backed Pallas batch/open-envelope proof-bundle tests)
+  - `CARGO_INCREMENTAL=0 CARGO_TARGET_DIR=/tmp/iroha-codex-kagemusha-target cargo test -p iroha_core kagemusha_verified_recursive_aggregation_evidence_rejects_bad_batch_metadata_before_decode --lib` (1 metadata ordering test)
+  - `CARGO_INCREMENTAL=0 CARGO_TARGET_DIR=/tmp/iroha-codex-kagemusha-target cargo test -p iroha_core kagemusha_verified_recursive_aggregation_evidence_from_records_accepts_active_records --lib` (1 crate-private raw record-bundle evidence helper regression)
+  - `CARGO_INCREMENTAL=0 CARGO_TARGET_DIR=/tmp/iroha-codex-kagemusha-target cargo test -p iroha_core prove_kagemusha_compact_payment_token_rejects_reserved_recursive_mode --lib` (1 compact-token mode-2 rejection regression)
+  - `CARGO_INCREMENTAL=0 CARGO_TARGET_DIR=/tmp/iroha-codex-kagemusha-target cargo test -p connect_norito_bridge kagemusha_verified_record_recursive_aggregation_proof_bundle --lib` (3 FFI/JNI recursive proof-bundle bridge tests)
   - `CARGO_INCREMENTAL=0 RUST_TEST_THREADS=1 CARGO_TARGET_DIR=/tmp/iroha-codex-kagemusha-target cargo test -p iroha_core kagemusha_non_native_vesta_affine_native_scalar_msm --lib` (10 tests, including two-term one-bit and two-bit MSM acceptance plus output-mismatch, high-scalar-bit, public base/output substitution, conditional-bit, sum-chain, noncanonical-scalar, and double-ladder tamper rejection; finished in 3513.80s)
   - `CARGO_INCREMENTAL=0 RUST_TEST_THREADS=1 CARGO_TARGET_DIR=/tmp/iroha-codex-kagemusha-target cargo test -p iroha_core kagemusha_non_native_vesta_ipa_final_msm --lib` (4 tests, including one-bit IPA final-comparison acceptance plus output-mismatch, product-high-bit, and forged-product-link rejection; finished in 1662.51s)
   - `CARGO_INCREMENTAL=0 CARGO_TARGET_DIR=/tmp/iroha-codex-kagemusha-target cargo test -p iroha_core kagemusha_non_native_vesta_ipa_round_accumulator --lib` (4 fixed-window tests, including one-bit accumulator acceptance plus inverse-mismatch, output-mismatch, and forged-square-link rejection; finished in 1m 47s compile plus 1358.70s test time)
@@ -283,23 +530,49 @@ Last updated: 2026-05-30
   - `CARGO_INCREMENTAL=0 CARGO_TARGET_DIR=/tmp/iroha-codex-kagemusha-target cargo test -p iroha_zkp_halo2 ipa_verifier_rejects_substituted_b_final --lib` (1 test; finished in 0.20s compile plus 0.13s test time)
   - `CARGO_INCREMENTAL=0 CARGO_TARGET_DIR=/tmp/iroha-codex-kagemusha-target cargo test -p iroha_zkp_halo2 backend_msm --lib` (2 tests comparing optimized Pallas/BN254 MSM with naive accumulation and checking dimension-mismatch rejection; finished in 6.27s compile plus 0.08s test time)
   - `CARGO_INCREMENTAL=0 CARGO_TARGET_DIR=/tmp/iroha-codex-kagemusha-target cargo test -p iroha_zkp_halo2 ipa_verifier_accumulation_projection_rejects_inverse_substitution --lib` (1 test; finished in 6.26s compile plus 0.11s test time)
-  - `CARGO_INCREMENTAL=0 CARGO_TARGET_DIR=/tmp/iroha-codex-kagemusha-target cargo test -p iroha_zkp_halo2 ipa_verifier_witness --lib` (7 tests covering full verifier-witness projection plus transcript projection, transcript binding, transcript challenge, `b`-reduction, accumulator, and final-scalar substitution rejection; finished in 9.04s compile plus 0.25s test time)
-  - `CARGO_INCREMENTAL=0 CARGO_TARGET_DIR=/tmp/iroha-codex-kagemusha-target cargo test -p iroha_data_model kagemusha_recursive_aggregation_evidence --lib` (2 tests covering reserved-mode recursive aggregation evidence digest binding to the canonical verifier-witness profile and batch preflight fields, Norito roundtrip/profile preservation, decoded unsupported-profile rejection, truncated-archive rejection, empty-transcript and over-cap-hop rejection, duplicate input/output set rejection, mode/count/zero-field/builder/root-discontinuity rejection; finished in 4m 12s compile plus 0.53s test time after expanding adversarial recursive-evidence shape coverage)
+  - `CARGO_INCREMENTAL=0 CARGO_TARGET_DIR=/tmp/iroha-codex-kagemusha-target cargo test -p iroha_zkp_halo2 ipa_verifier_witness --lib` (7 tests covering full verifier-witness projection plus transcript projection, transcript binding, transcript challenge, `b`-reduction, accumulator, and final-scalar substitution rejection; rerun after recursive proof-bundle preverification in 0.26s compile plus 0.26s test time)
+  - `CARGO_INCREMENTAL=0 CARGO_TARGET_DIR=/tmp/iroha-codex-kagemusha-target cargo test -p iroha_zkp_halo2 decode_envelope_limits --lib` (1 test covering explicit max-`k` rejection of oversized parameter generator and proof-round vectors before backend dispatch; finished in 7.79s compile plus 0.20s test time)
+  - `CARGO_INCREMENTAL=0 CARGO_TARGET_DIR=/tmp/iroha-codex-kagemusha-target cargo test -p iroha_zkp_halo2 pallas_open_envelope --lib` (3 tests covering proof-derived native verifier-witness reconstruction from transparent Pallas opening envelopes, explicit envelope resource-limit rejection, and transcript-label, public-claim, and proof-body tamper rejection; rerun after recursive proof-bundle preverification in 0.31s compile plus 0.22s test time)
+  - `CARGO_INCREMENTAL=0 CARGO_TARGET_DIR=/tmp/iroha-codex-kagemusha-target cargo test -p iroha_data_model kagemusha_recursive_aggregation_evidence --lib` (2 tests covering reserved-mode recursive aggregation evidence digest binding to the canonical verifier-witness profile, Pallas verifier opening length, fixed-window table schedule, shared-table manifest, table-base digests, and batch preflight fields, Norito roundtrip/profile/opening-length/schedule/manifest/base preservation, decoded unsupported-profile rejection, truncated-archive rejection, empty-transcript and over-cap-hop rejection, unsupported and non-power-of-two opening-length rejection, duplicate input/output set rejection, mode/count/zero-field/builder/root-discontinuity rejection, and zero shared-table manifest rejection; finished in 3m 52s compile plus 0.60s test time after adding the explicit fixed-window shared-table manifest evidence field)
+  - `CARGO_INCREMENTAL=0 CARGO_TARGET_DIR=/tmp/iroha-codex-kagemusha-target cargo test -p iroha_data_model kagemusha_recursive_aggregation_proof --lib` (3 tests covering proof-carrying recursive aggregation public-input/evidence binding, Norito roundtrip, expanded preflight-commitment public-input substitution rejection, and backend/circuit-id substitution rejection; rerun after the 35-column public-input expansion in 4m 39s total plus 0.60s test time)
+  - `CARGO_INCREMENTAL=0 CARGO_TARGET_DIR=/tmp/iroha-codex-kagemusha-target cargo test -p iroha_core kagemusha_recursive_aggregation_proof_instance_values_bind_public_inputs --lib` (1 test covering the 35-column recursive aggregation public-input-to-instance mapping and hop-count substitution precheck; finished in 4m 22s total plus 0.54s test time)
+  - `CARGO_INCREMENTAL=0 CARGO_TARGET_DIR=/tmp/iroha-codex-kagemusha-target cargo test -p iroha_core kagemusha_recursive_aggregation_semantic_circuit --lib` (9 tests covering the recursive semantic circuit corridor, witness-count equality, moved opening/count/hop columns, and eight non-zero digest groups; finished in 4m 27s total plus 0.04s test time)
+  - `CARGO_INCREMENTAL=0 CARGO_TARGET_DIR=/tmp/iroha-codex-kagemusha-target cargo test -p iroha_core prove_verified_kagemusha_recursive_aggregation_proof_bundle_from_pallas_open_envelopes_accepts_active_records --lib` (1 test covering record-backed proof-derived Pallas open-envelope evidence through the 35-column recursive aggregation proof envelope and backend verifier; rerun after raising the bounded ZK1 instance-column cap in 2m 10s compile plus 5.86s test time)
+  - `CARGO_INCREMENTAL=0 CARGO_TARGET_DIR=/tmp/iroha-codex-kagemusha-target cargo test -p connect_norito_bridge kagemusha_verified_record_recursive_aggregation_proof_bundle --lib` (3 bridge tests covering FFI/JNI recursive proof-bundle generation, canonical verifier acceptance, and adversarial record/envelope rejection with the 35-column envelope; finished in 1m 35s compile plus 3.55s test time)
   - `CARGO_INCREMENTAL=0 CARGO_TARGET_DIR=/tmp/iroha-codex-kagemusha-target cargo test -p iroha_config offline_defaults_keep_kagemusha_enabled_without_legacy_fallback --lib` (1 test confirming Kagemusha remains enabled by default and the legacy fallback remains opt-in; finished in 2m 56s)
   - `CARGO_INCREMENTAL=0 CARGO_TARGET_DIR=/tmp/iroha-codex-kagemusha-target cargo test -p iroha_core kagemusha_transfer_executes_real_confidential_transfer_v2_proof --lib` (1 test confirming the default state executes the real confidential-transfer-v2 Kagemusha path; finished in 3m 55s compile plus 2.86s test time)
   - `CARGO_INCREMENTAL=0 CARGO_TARGET_DIR=/tmp/iroha-codex-kagemusha-target cargo test -p iroha_core kagemusha_transfer_rejects_disabled_or_legacy_forced_config --lib` (1 test confirming explicitly disabled Kagemusha and explicitly forced legacy fallback reject with stable offline reasons while defaults stay enabled elsewhere; finished in 0.36s compile plus 1.23s test time)
   - `CARGO_INCREMENTAL=0 CARGO_TARGET_DIR=/tmp/iroha-codex-kagemusha-target cargo test -p iroha_core offline_note_rejects_non_production_backend_labels_before_registry_lookup --lib` (1 test confirming Offline recursive proof labels with trusted-setup or developer-only backends reject before verifier lookup; finished in 4m 03s compile plus 8.81s test time under shared Cargo lock contention)
   - `CARGO_INCREMENTAL=0 CARGO_TARGET_DIR=/tmp/iroha-codex-kagemusha-target cargo test -p iroha_core kagemusha_transfer_rejects_trusted_setup_backend_labels --lib` (1 test confirming chain-side Kagemusha rejects trusted-setup/developer-only proof labels; finished in 4m 03s compile plus 0.63s test time under shared Cargo lock contention)
-  - `CARGO_INCREMENTAL=0 CARGO_TARGET_DIR=/tmp/iroha-codex-kagemusha-target cargo test -p iroha_data_model kagemusha --lib` (14 tests covering Kagemusha backend classifier rejection for trusted-setup/developer-only labels, folded public-input/transcript binding and malformed witness rejection, reserved recursive evidence shape and Norito roundtrip coverage, record-bundle roundtrip, and max-hop size bounds; finished in 4m 03s compile plus 0.94s test time)
+  - `CARGO_INCREMENTAL=0 CARGO_TARGET_DIR=/tmp/iroha-codex-kagemusha-target cargo test -p iroha_data_model kagemusha --lib` (17 tests covering Kagemusha backend classifier rejection for trusted-setup/developer-only labels, folded public-input/transcript binding and malformed witness rejection, reserved recursive evidence shape plus explicit opening-length, schedule-digest, shared-table-manifest-digest, and table-base-digest Norito roundtrip coverage, proof-carrying recursive aggregation public-input/evidence binding and substitution rejection, record-bundle roundtrip, and max-hop size bounds; finished in 0.46s compile plus 0.96s test time after adding proof-bundle binding)
   - `CARGO_INCREMENTAL=0 CARGO_TARGET_DIR=/tmp/iroha-codex-kagemusha-target cargo test -p iroha_data_model kagemusha_poseidon_aggregation_transcript --lib` (2 tests covering existing checked aggregation transcript binding and noncanonical statement rejection after sharing transcript-shape validation with reserved recursive evidence; finished in 0.35s compile plus 0.46s test time)
   - `CARGO_INCREMENTAL=0 CARGO_TARGET_DIR=/tmp/iroha-codex-kagemusha-target cargo test -p iroha_core kagemusha_native_pasta_fp_ipa_transcript_binding --lib` (11 tests covering transcript-binding circuit acceptance plus round-count, inverse, digest, public header/round/challenge/inverse/final/digest substitution, and intermediate-state tamper rejection; finished in 0.37s compile plus 0.02s test time on the post-composition rerun)
-  - `CARGO_INCREMENTAL=0 CARGO_TARGET_DIR=/tmp/iroha-codex-kagemusha-target cargo test -p iroha_core kagemusha_non_native_vesta_ipa_verifier_from_pallas --lib` (4 tests covering native Pallas witness translation acceptance plus length-mismatch, transcript-challenge splice, and accumulator-splice rejection; finished in 2m 11s compile plus 10.03s test time on the passing rerun)
-  - `CARGO_INCREMENTAL=0 CARGO_TARGET_DIR=/tmp/iroha-codex-kagemusha-target cargo test -p iroha_core kagemusha_non_native_vesta_ipa_verifier_batch_preflight --lib` (8 tests covering ordered batch acceptance for multiple real Pallas openings, empty-batch and length-mismatch rejection, transcript and accumulator splice rejection, Poseidon2 aggregate digest sensitivity to witness order and witness contents, and feeding real Pallas batch preflight output into reserved recursive aggregation evidence; finished in 0.52s compile plus 0.78s test time after switching the batch aggregate digest to streaming Poseidon2)
+  - `CARGO_INCREMENTAL=0 CARGO_TARGET_DIR=/tmp/iroha-codex-kagemusha-target cargo test -p iroha_core kagemusha_non_native_vesta_ipa_verifier_from_pallas_witness --lib` (16 tests covering deterministic transcript-bound Pallas witness translation plus length, transcript-challenge, transcript-binding digest, round-index, invalid-L, challenge-inverse, `b`-layer, `b`-output, final-`b`, accumulator-square, accumulator-`Q`, generator-fold, final-generator, final-scalar, and accumulator splice rejection; finished in 1m 53s compile plus 9.49s test time after adding deterministic binding validation)
+  - `CARGO_INCREMENTAL=0 CARGO_TARGET_DIR=/tmp/iroha-codex-kagemusha-target cargo test -p iroha_core kagemusha_non_native_vesta_ipa_verifier_batch_preflight --lib` (11 tests covering ordered batch acceptance for multiple real Pallas openings, empty-batch and length-mismatch rejection, transcript, transcript-binding projection, accumulator splice, zero-window and zero-bit table-profile rejection, Poseidon2 aggregate digest sensitivity to witness order, witness contents, verifier opening length, fixed-window table profile, shared-table schedule digest, shared-table manifest digest, and fixed-window table-base digest, and feeding real Pallas batch preflight output into reserved recursive aggregation evidence with the explicit opening-length, schedule, manifest, and base fields; finished in 3.21s compile plus 1.00s test time after exposing the manifest digest from native preflight)
   - `CARGO_INCREMENTAL=0 CARGO_TARGET_DIR=/tmp/iroha-codex-kagemusha-target cargo test -p iroha_core kagemusha_non_native_vesta_ipa_verifier --lib` (33 tests covering the transcript-bound two-round four-point verifier builder, real Pallas opening preflight, ordered Pallas batch preflight, reserved recursive evidence population from Pallas batch output, native Pallas witness translation, final-`b`, transcript-digest, round-count, high-bit, challenge-splice, transcript-challenge-splice, accumulator-splice, generator-splice, Pallas batch empty/length/transcript/accumulator rejection and digest sensitivity, and Pallas length/transcript/round-index/invalid-L/challenge-inverse/`b`-layer/`b`-output/final-`b`/accumulator-square/accumulator-`Q`/generator-fold/final-generator/final-scalar/accumulator splice rejection; finished in 0.63s compile plus 11.86s test time after connecting batch preflight to reserved recursive evidence)
-  - `CARGO_INCREMENTAL=0 CARGO_TARGET_DIR=/tmp/iroha-codex-kagemusha-target cargo test -p iroha_core kagemusha_pallas_ipa_batch_verifier_preflight --lib` (4 tests covering public Pallas batch preflight acceptance at the current production width `n = 128` with canonical verifier-witness profile binding, unsupported `n = 1` rejection, direct empty-batch rejection, and over-64-witness rejection before native witness validation; finished in 1m 56s compile plus 3.21s test time after the Poseidon2 batch-digest change)
+  - `CARGO_INCREMENTAL=0 CARGO_TARGET_DIR=/tmp/iroha-codex-kagemusha-target cargo test -p iroha_core open_envelopes --lib` (7 tests covering proof-derived Pallas open-envelope batch acceptance, tampered-envelope rejection, unsupported opening-envelope width plus parameter/public length, G/H generator count, and L/R round-shape rejection before witness derivation, mixed-parameter rejection, hop-proof-hash binding, record-backed reserved recursive evidence construction from Pallas open envelopes, and unbound/substituted Pallas opening-envelope metadata rejection with the preflight opening length, schedule digest, and table-base digest populated from proof-derived witnesses; finished in 4m 04s compile plus 2.94s test time after expanding bounded vector preflight coverage)
+  - `CARGO_INCREMENTAL=0 CARGO_TARGET_DIR=/tmp/iroha-codex-kagemusha-target cargo test -p iroha_core kagemusha_pallas_ipa_batch_verifier_preflight --lib` (10 tests covering public Pallas batch preflight acceptance at the current production width `n = 128`, canonical verifier-witness profile, explicit verifier opening length, shared-table schedule-digest binding, shared-table manifest digest exposure, ordered fixed-window table-base digest binding, unsupported `n = 1`, direct empty-batch, over-64-witness, proof-derived open-envelope acceptance, unsupported/malformed opening-envelope rejection before witness derivation, mixed-parameter rejection, tampered-envelope rejection, and hop-proof-hash binding that includes the shared-table manifest digest; finished in 0.39s compile plus 5.66s test time after routing public preflight through the shared-table profile)
+  - `CARGO_INCREMENTAL=0 CARGO_TARGET_DIR=/tmp/iroha-codex-kagemusha-target cargo test -p iroha_core kagemusha_recursive_vesta_ipa_verifier_layout --lib` (2 tests covering the cheap production recursive verifier layout guard for `n = 128`, seven IPA rounds, `[64, 32, 16, 8, 4, 2, 1]` generator-fold layers, 85-by-3 fixed-window scalar coverage, 262 represented windowed MSM gadgets, and rejection of zero, one, non-power-of-two, and over-corridor widths; finished in 0.39s compile plus 0.00s test time)
+  - `CARGO_INCREMENTAL=0 CARGO_TARGET_DIR=/tmp/iroha-codex-kagemusha-target cargo test -p iroha_core kagemusha_recursive_fixed_window_table --lib` (5 tests covering the production `n = 128` fixed-window table plan and deterministic shared-table schedule: 532 scalar-mul table families, 45,220 shifted-window tables, 90,440 naive point-table copies, 723,520 naive point rows, the transparent shared-table target of 361,760 point rows, `trusted_setup_required = false`, stable non-zero Poseidon2 schedule digest, digest separation across verifier widths and alternate window profiles, and unsupported-width rejection for schedule, digest, manifest, and manifest digest; finished in 1m 51s compile plus 1.25s test time after adding concrete shared-row manifest rejection coverage to the schedule rejection test)
+  - `CARGO_INCREMENTAL=0 CARGO_TARGET_DIR=/tmp/iroha-codex-kagemusha-target cargo test -p iroha_core kagemusha_recursive_fixed_window_shared_table --lib` (2 tests covering the production `n = 128` shared-row manifest, contiguous row ranges for 532 table families, 45,220 shifted-window tables, 361,760 compressed point rows, non-zero Poseidon2 manifest digest, `trusted_setup_required = false`, deterministic manifest digest exposure, direct helper/manifest digest parity, and width-bound schedule/manifest digest separation; finished in 1m 57s compile plus 2.52s test time after adding the profile-aware manifest digest helper)
+  - `CARGO_INCREMENTAL=0 CARGO_TARGET_DIR=/tmp/iroha-codex-kagemusha-target cargo test -p iroha_core kagemusha_non_native_vesta_affine_fixed_window_table_select --lib` (6 tests covering the new shared-table fixed-window selector primitive: honest table derivation plus direct table-column selection, builder selected-point mismatch rejection, selected-point tamper rejection, selection-level tamper rejection, table-chain tamper rejection, and public-base substitution rejection; finished in 1m 53s compile plus 163.30s test time)
+  - `CARGO_INCREMENTAL=0 CARGO_TARGET_DIR=/tmp/iroha-codex-kagemusha-target cargo test -p iroha_core kagemusha_non_native_vesta_affine_windowed_shared_table_scalar_mul --lib` (5 tests covering the shared-table windowed native-scalar multiplication wrapper: honest scalar multiplication through direct table-column selection plus output substitution, selection-bit splice, selection-level tamper, and window-base transition rejection; finished in 0.43s compile plus 328.07s test time)
+  - `CARGO_INCREMENTAL=0 CARGO_TARGET_DIR=/tmp/iroha-codex-kagemusha-target cargo test -p iroha_core kagemusha_non_native_vesta_affine_windowed_shared_table_native_scalar_msm --lib` (6 tests covering the shared-table multi-term native-scalar MSM wrapper: honest two-term MSM through private term outputs plus public-base substitution, public-output substitution, selection-bit splice, term-output splice, and running-sum chain tamper rejection; finished in 1m 57s compile plus 521.33s test time)
+  - `CARGO_INCREMENTAL=0 CARGO_TARGET_DIR=/tmp/iroha-codex-kagemusha-target cargo test -p iroha_core kagemusha_non_native_vesta_ipa_final_windowed_shared_table_msm --lib` (5 tests covering the shared-table final IPA MSM wrapper: honest `a*G + b*H + (a*b)*U` comparison, builder output mismatch, public-output substitution, public-base substitution, and forged-product-link rejection; finished in 1m 59s compile plus 1142.94s test time)
+  - `CARGO_INCREMENTAL=0 CARGO_TARGET_DIR=/tmp/iroha-codex-kagemusha-target cargo test -p iroha_core kagemusha_non_native_vesta_ipa_round_accumulator_shared_table --lib` (3 tests covering the shared-table IPA round-accumulator wrapper: honest `x^2*L + Q + x^-2*R` accumulation, builder inverse mismatch rejection, and forged challenge-square scalar rejection; finished in 1m 59s compile plus 1143.66s test time)
+  - `CARGO_INCREMENTAL=0 CARGO_TARGET_DIR=/tmp/iroha-codex-kagemusha-target cargo test -p iroha_core kagemusha_non_native_vesta_ipa_generator_fold_shared_table --lib` (3 tests covering the shared-table IPA generator-fold wrapper: honest `G'`/`H'` folding, builder inverse mismatch rejection, and forged generator-fold scalar-link rejection; finished in 0.57s compile plus 2029.51s test time)
+  - `CARGO_INCREMENTAL=0 CARGO_TARGET_DIR=/tmp/iroha-codex-kagemusha-target cargo test -p iroha_core kagemusha_non_native_vesta_ipa_one_round_shared_table --lib` (3 tests covering the shared-table one-round IPA verifier composition: honest one-round statement plus substituted final-MSM and substituted generator-fold cross-link rejection; finished in 1m 57s compile plus 12682.51s test time)
+  - `CARGO_INCREMENTAL=0 CARGO_TARGET_DIR=/tmp/iroha-codex-kagemusha-target cargo test -p iroha_core kagemusha_non_native_vesta_ipa_verifier_shared_table --lib` (8 tests covering the shared-table multi-round IPA verifier builder and host-link structure: LEN=4 two-round acceptance plus transcript-digest mismatch, final-b mismatch, round-count mismatch, fixed-window high-bit, Q-chain splice, folded-generator splice, and challenge-splice rejection; finished in 2m 11s compile plus 10.51s test time)
+  - `CARGO_INCREMENTAL=0 CARGO_TARGET_DIR=/tmp/iroha-codex-kagemusha-target cargo test -p iroha_core kagemusha_non_native_vesta_ipa_verifier_shared_table_from_pallas_witness --lib` (3 tests covering shared-table recursive verifier construction from proof-derived native Pallas verifier witnesses: deterministic-binding acceptance plus length-mismatch and transcript-splice rejection through the native Pallas preflight; rerun after replacing the production-width materialization test in 0.41s compile plus 8.70s test time)
+  - `CARGO_INCREMENTAL=0 CARGO_TARGET_DIR=/tmp/iroha-codex-kagemusha-target cargo test -p iroha_core kagemusha_non_native_vesta_ipa_verifier_shared_table_batch_preflight --lib` (2 tests covering the shared-table recursive verifier batch-preflight delegate: multiple real Pallas openings accepted with non-zero aggregate/shared-table-manifest digests and empty-batch rejection; finished in 1m 57s compile plus 0.81s test time)
+  - `CARGO_INCREMENTAL=0 CARGO_TARGET_DIR=/tmp/iroha-codex-kagemusha-target cargo test -p iroha_core kagemusha_pallas_ipa_batch_verifier_preflight_accepts_production_width --lib` (1 test confirming the optimized public Pallas preflight still accepts a real `n = 128` verifier witness under the canonical recursive verifier-witness profile; finished in 0.40s compile plus 3.27s test time after malformed table-profile rejection was added)
+  - `CARGO_INCREMENTAL=0 CARGO_TARGET_DIR=/tmp/iroha-codex-kagemusha-target cargo test -p iroha_core kagemusha_pallas_ipa_batch_verifier_preflight_matches_shared_table_profile --lib` (1 test covering the public Kagemusha Pallas batch preflight dispatch against the shared-table verifier profile, manifest digest parity, and `trusted_setup_required = false`; finished in 2m 00s compile plus 0.83s test time)
+  - `CARGO_INCREMENTAL=0 CARGO_TARGET_DIR=/tmp/iroha-codex-kagemusha-target cargo test -p iroha_core kagemusha_non_native_vesta_ipa_verifier_shared_table_profile_covers_production_width_without_materializing_witness --lib` (1 structural test covering the production `n = 128` shared-table verifier profile, seven IPA rounds, `[64, 32, 16, 8, 4, 2, 1]` generator-fold layers, 532 shared table families, manifest digest parity, and `trusted_setup_required = false` without materializing the oversized witness; finished in 0.97s compile plus 2.06s test time)
+  - `CARGO_INCREMENTAL=0 CARGO_TARGET_DIR=/tmp/iroha-codex-kagemusha-target cargo test -p iroha_core kagemusha_recursive_aggregation_semantic_circuit --lib` (9 tests covering the transparent recursive aggregation semantic circuit's valid corridor plus invalid opening length, malformed opening selector witness, zero/oversized hop count, witness-count mismatch, non-boolean hop-bit witness, zero public digest groups, and malformed public-field inverse witness; finished in 2m 07s compile plus 0.02s test time)
+  - `CARGO_INCREMENTAL=0 CARGO_TARGET_DIR=/tmp/iroha-codex-kagemusha-target cargo test -p iroha_core kagemusha_recursive_aggregation --lib` (26 tests covering recursive aggregation semantic-circuit corridor and adversarial witness rejection, proof public-instance mapping, canonical verifier-record construction from the circuit-family-separated transparent Halo2 IPA key with folded-key rejection, real recursive semantic proof generation/verification, record-backed combined recursive proof-bundle proving from native Pallas witness batches and proof-derived Pallas opening envelopes, archive-backed Pallas open-envelope decoding for bridge callers, folded recursive-vk rejection, tampered native-witness rejection, substituted open-envelope metadata rejection, malformed open-envelope archive rejection, proof-body tamper rejection by the backend, public-instance tamper rejection by preverification, circuit-alias and cross-circuit verifier/proving-key rejection, transparent Halo2 IPA envelope preverification, record-backed verifier preverification, cross-circuit verifier-key preverification rejection, envelope metadata substitution, public-instance substitution, non-production backend labels, and inactive/namespace/backend/schema/key/commitment/proof-size registry mismatches; rerun after moving the canonical verifier-key check into preverification in 0.40s compile plus 29.57s test time)
   - `CARGO_INCREMENTAL=0 CARGO_TARGET_DIR=/tmp/iroha-codex-kagemusha-target cargo test -p iroha_core kagemusha_verified_recursive_aggregation_evidence_from_pallas_batch_accepts_active_records --lib` (1 test covering record-backed reserved recursive evidence construction directly from native Pallas batch witnesses, hop-bound Poseidon2 batch digest derivation, digest inequality against the detached native batch digest, and digest sensitivity to ordered hop proof hashes; finished in 1m 58s compile plus 3.13s test time)
-  - `CARGO_INCREMENTAL=0 CARGO_TARGET_DIR=/tmp/iroha-codex-kagemusha-target cargo test -p iroha_core kagemusha_verified_recursive_aggregation_evidence --lib` (5 tests covering record-backed reserved recursive evidence acceptance, serializable record-bundle parity, direct native-Pallas-batch evidence construction with the hop-bound Poseidon2 batch digest, pre-decode witness-count/zero-batch-metadata rejection, pre-decode missing/extraneous/duplicated/inactive/namespace verifier-record rejection, wrong-width Pallas witness/parameter and accumulator-splice rejection before hop proof decoding, and tampered-hop proof rejection; finished in 0.36s compile plus 3.26s test time after adding the hop-proof-hash binding)
-  - `CARGO_INCREMENTAL=0 CARGO_TARGET_DIR=/tmp/iroha-codex-kagemusha-target cargo test -p iroha_zkp_halo2 --lib` (81 tests; finished in 8.08s compile plus 2.83s test time)
+  - `CARGO_INCREMENTAL=0 CARGO_TARGET_DIR=/tmp/iroha-codex-kagemusha-target cargo test -p iroha_core kagemusha_verified_recursive_aggregation_evidence --lib` (7 tests covering record-backed reserved recursive evidence acceptance, serializable record-bundle parity, direct native-Pallas-batch evidence construction with the hop-bound Poseidon2 batch digest and explicit opening-length/schedule/shared-table-manifest/base commitment, proof-derived Pallas open-envelope evidence construction with hop-derived metadata, missing/substituted opening-envelope metadata rejection, pre-decode witness-count/unsupported-opening/non-power-of-two-opening/zero-schedule/zero-manifest/zero-base/schedule-mismatch/manifest-mismatch/zero-batch-metadata rejection, pre-decode missing/extraneous/duplicated/inactive/namespace verifier-record rejection, wrong-width Pallas witness/parameter and accumulator-splice rejection before hop proof decoding, and tampered-hop proof rejection; rerun after recursive proof-bundle preverification in 0.37s compile plus 4.74s test time)
+  - `CARGO_INCREMENTAL=0 CARGO_TARGET_DIR=/tmp/iroha-codex-kagemusha-target cargo test -p iroha_zkp_halo2 --lib` (85 tests, including bounded Pallas open-envelope verifier-witness derivation and oversized vector-limit rejection before backend dispatch; finished in 0.44s compile plus 2.96s test time)
   - `CARGO_INCREMENTAL=0 CARGO_TARGET_DIR=/tmp/iroha-codex-kagemusha-target cargo check -p iroha_data_model` (finished in 1m 47s after adding reserved-mode recursive aggregation evidence)
   - `CARGO_INCREMENTAL=0 CARGO_TARGET_DIR=/tmp/iroha-codex-kagemusha-target cargo check -p iroha_zkp_halo2` (finished in 1.18s on the post-witness-binding rerun)
   - `CARGO_INCREMENTAL=0 CARGO_TARGET_DIR=/tmp/iroha-codex-kagemusha-target cargo check -p iroha_core` (finished in 2m 21s after adding ordered Pallas verifier-witness batch preflight binding plus reserved recursive aggregation evidence in the data model)
@@ -361,11 +634,12 @@ Last updated: 2026-05-30
   generation or backend verification, so the chain trust anchor cannot drift
   across equivalent-looking circuit labels.
 - `connect_norito_bridge` now exports matching JNI entry points for the Kotlin
-  and Java wrappers, and the Swift bridge loader requires ABI 4 plus the
-  record-backed Kagemusha symbol before marking the compact-token prover
-  available. The older unanchored C compact-token prover symbol is retained
-  only for ABI compatibility and now rejects valid `KagemushaVerifiedFoldBundle`
-  input without returning output bytes, so production bridge callers must carry
+  and Java compact-token wrappers plus the recursive aggregation proof-bundle
+  wrapper, and the Swift bridge loader requires ABI 5 plus the record-backed
+  Kagemusha symbols before marking the native Kagemusha provers available. The
+  older unanchored C compact-token prover symbol is retained only for ABI
+  compatibility and now rejects valid `KagemushaVerifiedFoldBundle` input
+  without returning output bytes, so production bridge callers must carry
   `KagemushaVerifiedFoldRecordBundle` verifier-record trust anchors. The
   unanchored Rust compact-token proving entry points now return the same stable
   verifier-record-required error; only record-backed compact-token proving emits
@@ -712,7 +986,10 @@ Last updated: 2026-05-30
   - `CARGO_TARGET_DIR=/tmp/iroha-codex-kagemusha-target cargo test -p iroha_core audit_rejects_output_commitment_reused_from_topup_before_proof --lib`
   - `CARGO_TARGET_DIR=/tmp/iroha-codex-kagemusha-target cargo test -p iroha_core audit_rejects_reused_output_certificate_from_topup_before_proof --lib`
   - `CARGO_TARGET_DIR=/tmp/iroha-codex-kagemusha-target cargo test -p iroha_core offline_note_rejects_ --lib` (10 tests, including non-production backend-label rejection before registry lookup, empty recursive verifier-key id, empty verifier-key bytes rejection, recursive circuit-id alias rejection, and profile-less `stark/fri/` backend rejection)
-  - `CARGO_INCREMENTAL=0 CARGO_TARGET_DIR=/tmp/iroha-codex-kagemusha-target cargo test -p iroha_core audit_rejects_mutated_input_claim_even_when_certificate_topup_is_anchored --lib` (1 test confirming a real topup anchors the exact issued input claim, not just the certificate replay key; finished in 1m 53s compile plus 0.65s test time)
+  - `CARGO_INCREMENTAL=0 CARGO_TARGET_DIR=/tmp/iroha-codex-kagemusha-target cargo test -p iroha_core audit_rejects_certificate_anchor_without_topup_issued_claim --lib` (1 test confirming a certificate replay key alone cannot anchor Offline audit input lineage; finished in 0.44s compile plus 0.64s test time)
+  - `CARGO_INCREMENTAL=0 CARGO_TARGET_DIR=/tmp/iroha-codex-kagemusha-target cargo test -p iroha_core audit_rejects_input_claim_without_sender_certificate_topup_anchor --lib` (1 test confirming an input claim cannot be spent unless its sender certificate was anchored by the online-to-offline topup lineage; finished in 0.43s compile plus 0.64s test time)
+  - `CARGO_INCREMENTAL=0 CARGO_TARGET_DIR=/tmp/iroha-codex-kagemusha-target cargo test -p iroha_core audit_rejects_mutated_input_claim_even_when_certificate_topup_is_anchored --lib` (1 test confirming a real topup anchors the exact issued input claim, not just the certificate replay key; finished in 4.43s compile plus 0.63s test time)
+  - `CARGO_INCREMENTAL=0 CARGO_TARGET_DIR=/tmp/iroha-codex-kagemusha-target cargo test -p iroha_core audit_accepts_independent_relayer_when_topup_claim_is_anchored --lib` (1 test confirming an independent relayer can submit a bearer audit only when the input claim is anchored by the online-to-offline topup and later audit-output lineage; finished in 0.37s compile plus 2.50s test time)
   - `CARGO_INCREMENTAL=0 CARGO_TARGET_DIR=/tmp/iroha-codex-kagemusha-target cargo test -p iroha_core audit_ --lib` (28 tests, including exact topup input-claim mutation rejection, real-proof chained audit-output trust-anchor acceptance, topup certificate replay rejection, and cross-domain note-commitment replay rejection before proof verification; finished in 0.36s compile plus 2.38s test time)
   - `CARGO_TARGET_DIR=/tmp/iroha-codex-kagemusha-target cargo test -p iroha_core offline_note --lib` (33 tests, including real Halo2 IPA envelope metadata substitution rejection, recursive circuit-id alias rejection, archived Offline Note proving-key use, empty verifier-key trust-anchor rejection, and forged recursive circuit rejection)
   - `CARGO_TARGET_DIR=/tmp/iroha-codex-kagemusha-target cargo test -p iroha_core register_vk_rejects_trusted_setup_halo2_backend_labels --lib`
@@ -747,8 +1024,14 @@ Last updated: 2026-05-30
   - `CARGO_TARGET_DIR=/tmp/iroha-codex-kagemusha-target cargo test -p iroha_config offline_defaults_keep_kagemusha_enabled_without_legacy_fallback --lib`
   - `git diff --check`
   - `git diff --name-only -- Cargo.lock`
-  - `CARGO_TARGET_DIR=/tmp/iroha-codex-kagemusha-target cargo build -p connect_norito_bridge --release` and refreshed the ignored local `dist/NoritoBridge.xcframework/macos-arm64/libNoritoBridge.a` artifact for Swift testing
-  - `cd IrohaSwift && swift package clean && swift test --filter KagemushaCompactPaymentTokenProverTests` (2 tests; native ABI-4 malformed-archive rejection path exercised)
+  - `CARGO_INCREMENTAL=0 CARGO_TARGET_DIR=/tmp/iroha-codex-kagemusha-target cargo test -p iroha_core prove_verified_kagemusha_recursive_aggregation_proof_bundle_from_pallas_open_envelopes --lib` (2 tests covering archive-backed proof-bundle construction from Pallas open-envelope bytes plus malformed archive and metadata-substitution rejection; finished in 4m 46s compile plus 6.12s test time)
+  - `CARGO_INCREMENTAL=0 CARGO_TARGET_DIR=/tmp/iroha-codex-kagemusha-target cargo test -p connect_norito_bridge kagemusha_verified_record_recursive_aggregation_proof_bundle --lib` (3 bridge tests covering ABI-5 FFI/JNI recursive proof-bundle generation from record-backed bundles and Pallas open-envelope archives, inactive-record rejection, malformed envelope archive rejection, missing-record rejection, and schema metadata substitution rejection; finished in 6m 45s compile plus 4.12s test time)
+  - `CARGO_INCREMENTAL=0 CARGO_TARGET_DIR=/tmp/iroha-codex-kagemusha-target cargo test -p connect_norito_bridge kagemusha --lib` (20 bridge tests covering legacy unanchored compact-token rejection, record-backed compact-token proving, ABI version 5, JNI helpers, compact-token adversarial cases, and recursive proof-bundle FFI/JNI cases; finished in 0.42s compile plus 3.72s test time)
+  - `CARGO_INCREMENTAL=0 CARGO_TARGET_DIR=/tmp/iroha-codex-kagemusha-target cargo build -p connect_norito_bridge --release` (rebuilt ABI-5 bridge artifact in 10m 02s, then refreshed ignored local `dist/NoritoBridge.xcframework/macos-arm64/libNoritoBridge.a` and its macOS hash for Swift native testing)
+  - `cd IrohaSwift && swift test --filter KagemushaRecursiveAggregationProofBundleProverTests` (3 tests; native ABI-5 malformed-archive rejection path exercised after refreshing the local bridge artifact)
+  - `cd IrohaSwift && swift test --filter KagemushaCompactPaymentTokenProverTests` (2 tests; native ABI-5 malformed-archive rejection path exercised)
+  - `cd kotlin && ./gradlew :core-jvm:test --tests org.hyperledger.iroha.sdk.offline.OfflineNoteTest.kagemushaRecursiveAggregationNativeProverValidatesInput --tests org.hyperledger.iroha.sdk.offline.OfflineNoteTest.kagemushaRecursiveAggregationNativeAvailabilityRequiresJniEntrypoint --console=plain` (2 Kotlin wrapper tests; build successful in 34s)
+  - `cd java/iroha_android && JAVA_HOME=$(/usr/libexec/java_home -v 21) ANDROID_HOME=$HOME/Library/Android/sdk ANDROID_SDK_ROOT=$HOME/Library/Android/sdk ANDROID_HARNESS_MAINS=org.hyperledger.iroha.android.offline.OfflineNoteTest ./gradlew :core:test --tests org.hyperledger.iroha.android.GradleHarnessTests --console=plain` (Java Android mirrored wrapper compiled and OfflineNote harness passed in 6s)
   - `cd IrohaSwift && swift test --filter OfflineNoteTests/testOfflineNoteProofBindingRejectsRecursiveMetadataSubstitution`
   - `cd IrohaSwift && swift test --filter OfflineNoteRedeemPlannerTests/testPartialRedeemDraftSplitsIssuedNoteAndRedeemsIssuedOutput`
   - `cd IrohaSwift && swift test --filter OfflineNoteTests/testOfflineNoteWalletLifecycleBuildsAuditAcceptAndRedeemTransactions`
@@ -825,8 +1108,14 @@ Last updated: 2026-05-30
   A second bridge entry point,
   `connect_norito_kagemusha_prove_verified_compact_payment_token_with_records`,
   accepts record-backed bundles and enforces hop verifier records before proof
-  generation. The raw preverified folded-input prover is crate-local, the C
-  header declares the verified symbols, and the bridge ABI version is `4`.
+  generation. Bridge ABI 5 also declares
+  `connect_norito_kagemusha_prove_verified_recursive_aggregation_proof_bundle_with_records_and_pallas_open_envelopes`,
+  which accepts the same record-backed bundle plus a Norito archive of
+  proof-derived Pallas opening envelopes, returns a
+  `KagemushaRecursiveAggregationProofBundle`, and remains admission-neutral for
+  reserved aggregation mode `2`. The raw preverified folded-input prover is
+  crate-local, the C header declares the verified symbols, and the bridge ABI
+  version is `5`.
 - Added checked Kagemusha fold construction for wallet/prover code. Each
   private hop proof attachment is backend-bound, verifier-key-commitment-bound,
   transparent-only, cryptographically verified, and hashed from the actual

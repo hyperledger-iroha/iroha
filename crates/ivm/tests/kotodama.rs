@@ -730,7 +730,10 @@ fn compile_emits_extended_query_and_authority_sysvar_helpers() {
     let (_, off) = parse_meta_offset(&code).unwrap();
     let code_region = &code[off..];
     for (name, syscall) in [
-        ("QUERY_EXECUTE_NORITO", syscalls::SYSCALL_QUERY_EXECUTE_NORITO),
+        (
+            "QUERY_EXECUTE_NORITO",
+            syscalls::SYSCALL_QUERY_EXECUTE_NORITO,
+        ),
         ("SYSVAR_AUTHORITY", syscalls::SYSCALL_SYSVAR_AUTHORITY),
     ] {
         let want = encoding::wide::encode_syscallx(syscall).to_le_bytes();
@@ -756,7 +759,8 @@ fn semantic_rejects_extended_query_and_authority_sysvar_helper_args() {
     let prog = parse(r#"fn f() { let _caller = sysvar_authority(1); }"#).unwrap();
     let err = analyze(&prog).expect_err("expected sysvar arity error");
     assert!(
-        err.message.contains("sysvar_authority expects no arguments"),
+        err.message
+            .contains("sysvar_authority expects no arguments"),
         "unexpected error: {}",
         err.message
     );

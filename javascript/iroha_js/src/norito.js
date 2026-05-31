@@ -164,6 +164,10 @@ const INNER_SCHEMA_HASH_BY_WIRE_ID = Object.freeze({
     "5d14a5ea7a6d1c255d14a5ea7a6d1c25",
     "hex",
   ),
+  "iroha_data_model::isi::zk::RegisterAssetHiddenZkPool": Buffer.from(
+    "3b18eae8897ad15fabaafa03b589e243",
+    "hex",
+  ),
   "zk::ScheduleConfidentialPolicyTransition": Buffer.from(
     "836fd710eab04142836fd710eab04142",
     "hex",
@@ -178,6 +182,10 @@ const INNER_SCHEMA_HASH_BY_WIRE_ID = Object.freeze({
   ),
   "iroha_data_model::isi::zk::ZkTransfer": Buffer.from(
     "a54e2391aea3a8b6a54e2391aea3a8b6",
+    "hex",
+  ),
+  "iroha_data_model::isi::zk::AssetHiddenZkTransfer": Buffer.from(
+    "db10e28def5ce4715a0a20eff60259fc",
     "hex",
   ),
   "iroha_data_model::isi::zk::Unshield": Buffer.from(
@@ -227,6 +235,7 @@ const instructionCache =
   globalThis[INSTRUCTION_CACHE_SYMBOL] ??
   (globalThis[INSTRUCTION_CACHE_SYMBOL] = new Map());
 let noritoLengthFlags = 0;
+let forcePureJsInstructionCodec = false;
 
 class BufferReader {
   constructor(buffer, context, lengthFlags = 0) {
@@ -367,17 +376,43 @@ function isNativeBindingUnavailable(error) {
   );
 }
 
+function isNativeBindingUnsupportedInstruction(error) {
+  const message =
+    error && typeof error.message === "string" ? error.message : String(error ?? "");
+  return (
+    message.includes("unsupported zk instruction variant") ||
+    message.includes("unsupported instruction variant") ||
+    message.includes("unknown instruction wire id") ||
+    message.includes("unknown instruction schema") ||
+    message.includes("unknown instruction `") ||
+    message.includes("(not registered)") ||
+    message.includes("instruction payload must use canonical Norito framing")
+  );
+}
+
+function shouldUsePureJsInstructionFallback(error) {
+  return isNativeBindingUnavailable(error) || isNativeBindingUnsupportedInstruction(error);
+}
+
 function encodeNormalizedInstruction(normalized) {
   let encoded;
+  if (forcePureJsInstructionCodec) {
+    encoded = encodePureJsInstruction(normalized);
+    cacheInstructionRoundTrip(encoded, normalized);
+    return encoded;
+  }
   try {
     const native = resolveNative("noritoEncodeInstruction");
     encoded = native.noritoEncodeInstruction(JSON.stringify(normalized));
   } catch (error) {
-    if (!isNativeBindingUnavailable(error)) {
+    if (!shouldUsePureJsInstructionFallback(error)) {
       throw error;
     }
     try {
       encoded = encodePureJsInstruction(normalized);
+      if (isNativeBindingUnsupportedInstruction(error)) {
+        forcePureJsInstructionCodec = true;
+      }
     } catch (fallbackError) {
       if (!isPureJsUnsupportedInstructionError(fallbackError)) {
         throw fallbackError;
@@ -811,6 +846,15 @@ function encodeEmbeddedInstructionBox(instruction, context) {
  */
 export function noritoDecodeInstruction(bytes, options = {}) {
   const buffer = toBuffer(bytes);
+  if (forcePureJsInstructionCodec) {
+    try {
+      const decoded = decodePureJsInstruction(buffer);
+      return options.parseJson === false ? JSON.stringify(decoded) : decoded;
+    } catch {
+      // Some callers may still pass bytes produced by the native binding before
+      // the stale-binding fallback was enabled.
+    }
+  }
   let json;
   try {
     const native = resolveNative("noritoDecodeInstruction");
@@ -829,7 +873,7 @@ export function noritoDecodeInstruction(bytes, options = {}) {
       json = decoded;
     }
   } catch (error) {
-    if (!isNativeBindingUnavailable(error)) {
+    if (!shouldUsePureJsInstructionFallback(error)) {
       throw error;
     }
     try {
@@ -1112,10 +1156,12 @@ function decodePureJsInstruction(buffer) {
     case "iroha_data_model::isi::kaigi::RegisterKaigiRelay":
       return decodeKaigiInstructionPayload(wireId, payload);
     case "iroha_data_model::isi::zk::RegisterZkAsset":
+    case "iroha_data_model::isi::zk::RegisterAssetHiddenZkPool":
     case "zk::ScheduleConfidentialPolicyTransition":
     case "zk::CancelConfidentialPolicyTransition":
     case "iroha_data_model::isi::zk::Shield":
     case "iroha_data_model::isi::zk::ZkTransfer":
+    case "iroha_data_model::isi::zk::AssetHiddenZkTransfer":
     case "iroha_data_model::isi::zk::Unshield":
     case "iroha_data_model::isi::zk::CreateElection":
     case "iroha_data_model::isi::zk::SubmitBallot":
@@ -1827,6 +1873,39 @@ function decodeZkInstructionPayload(wireId, payload) {
         },
       };
     }
+    case "iroha_data_model::isi::zk::RegisterAssetHiddenZkPool": {
+      const fields = decodeStructFields(payload, "zk.RegisterAssetHiddenZkPool", [
+        "pool_id",
+        "storage_asset",
+        "asset_set_root",
+        "vk_transfer",
+      ]);
+      return {
+        zk: {
+          RegisterAssetHiddenZkPool: {
+            pool_id: decodeStringValue(
+              fields.pool_id,
+              "zk.RegisterAssetHiddenZkPool.pool_id",
+            ),
+            storage_asset: decodeAssetDefinitionIdValue(
+              fields.storage_asset,
+              "zk.RegisterAssetHiddenZkPool.storage_asset",
+            ),
+            asset_set_root: Array.from(
+              decodeFixedByteArrayArchiveValue(
+                fields.asset_set_root,
+                32,
+                "zk.RegisterAssetHiddenZkPool.asset_set_root",
+              ),
+            ),
+            vk_transfer: decodeVerifyingKeyIdValue(
+              fields.vk_transfer,
+              "zk.RegisterAssetHiddenZkPool.vk_transfer",
+            ),
+          },
+        },
+      };
+    }
     case "zk::ScheduleConfidentialPolicyTransition": {
       const fields = decodeStructFields(payload, "zk.ScheduleConfidentialPolicyTransition", [
         "asset",
@@ -1950,6 +2029,59 @@ function decodeZkInstructionPayload(wireId, payload) {
               (entry, context) =>
                 Array.from(decodeFixedByteArrayArchiveValue(entry, 32, context)),
               "zk.ZkTransfer.root_hint",
+            ),
+          },
+        },
+      };
+    }
+    case "iroha_data_model::isi::zk::AssetHiddenZkTransfer": {
+      const fields = decodeStructFields(payload, "zk.AssetHiddenZkTransfer", [
+        "pool_id",
+        "inputs",
+        "outputs",
+        "proof",
+        "root_hint",
+      ]);
+      return {
+        zk: {
+          AssetHiddenZkTransfer: {
+            pool_id: decodeStringValue(
+              fields.pool_id,
+              "zk.AssetHiddenZkTransfer.pool_id",
+            ),
+            inputs: decodeNoritoVec(
+              fields.inputs,
+              (entry, index) =>
+                Array.from(
+                  decodeFixedByteArrayArchiveValue(
+                    entry,
+                    32,
+                    `zk.AssetHiddenZkTransfer.inputs[${index}]`,
+                  ),
+                ),
+              "zk.AssetHiddenZkTransfer.inputs",
+            ),
+            outputs: decodeNoritoVec(
+              fields.outputs,
+              (entry, index) =>
+                Array.from(
+                  decodeFixedByteArrayArchiveValue(
+                    entry,
+                    32,
+                    `zk.AssetHiddenZkTransfer.outputs[${index}]`,
+                  ),
+                ),
+              "zk.AssetHiddenZkTransfer.outputs",
+            ),
+            proof: decodeProofAttachmentValue(
+              fields.proof,
+              "zk.AssetHiddenZkTransfer.proof",
+            ),
+            root_hint: decodeOptionValue(
+              fields.root_hint,
+              (entry, context) =>
+                Array.from(decodeFixedByteArrayArchiveValue(entry, 32, context)),
+              "zk.AssetHiddenZkTransfer.root_hint",
             ),
           },
         },
@@ -3067,10 +3199,12 @@ function encodeRegisterKaigiRelayPayload(value) {
 function encodeZkInstruction(instruction) {
   const entries = [
     ["RegisterZkAsset", "iroha_data_model::isi::zk::RegisterZkAsset", encodeRegisterZkAssetPayload],
+    ["RegisterAssetHiddenZkPool", "iroha_data_model::isi::zk::RegisterAssetHiddenZkPool", encodeRegisterAssetHiddenZkPoolPayload],
     ["ScheduleConfidentialPolicyTransition", "zk::ScheduleConfidentialPolicyTransition", encodeScheduleConfidentialPolicyTransitionPayload],
     ["CancelConfidentialPolicyTransition", "zk::CancelConfidentialPolicyTransition", encodeCancelConfidentialPolicyTransitionPayload],
     ["Shield", "iroha_data_model::isi::zk::Shield", encodeShieldPayload],
     ["ZkTransfer", "iroha_data_model::isi::zk::ZkTransfer", encodeZkTransferPayload],
+    ["AssetHiddenZkTransfer", "iroha_data_model::isi::zk::AssetHiddenZkTransfer", encodeAssetHiddenZkTransferPayload],
     ["Unshield", "iroha_data_model::isi::zk::Unshield", encodeUnshieldPayload],
     ["CreateElection", "iroha_data_model::isi::zk::CreateElection", encodeCreateElectionPayload],
     ["SubmitBallot", "iroha_data_model::isi::zk::SubmitBallot", encodeSubmitBallotPayload],
@@ -3095,6 +3229,15 @@ function encodeRegisterZkAssetPayload(value) {
     [encodeOptionValue(value.vk_transfer, encodeVerifyingKeyIdValue, "zk.RegisterZkAsset.vk_transfer")],
     [encodeOptionValue(value.vk_unshield, encodeVerifyingKeyIdValue, "zk.RegisterZkAsset.vk_unshield")],
     [encodeOptionValue(value.vk_shield, encodeVerifyingKeyIdValue, "zk.RegisterZkAsset.vk_shield")],
+  ]);
+}
+
+function encodeRegisterAssetHiddenZkPoolPayload(value) {
+  return encodeStructValue([
+    [encodeNoritoStringValue(assertNonEmptyString(value.pool_id, "zk.RegisterAssetHiddenZkPool.pool_id"))],
+    [encodeAssetDefinitionIdValue(value.storage_asset, "zk.RegisterAssetHiddenZkPool.storage_asset")],
+    [encodeFixedByteArrayArchiveValue(value.asset_set_root, 32, "zk.RegisterAssetHiddenZkPool.asset_set_root")],
+    [encodeVerifyingKeyIdValue(value.vk_transfer, "zk.RegisterAssetHiddenZkPool.vk_transfer")],
   ]);
 }
 
@@ -3140,6 +3283,26 @@ function encodeZkTransferPayload(value) {
         value.root_hint,
         (entry, context) => encodeFixedByteArrayArchiveValue(entry, 32, context),
         "zk.ZkTransfer.root_hint",
+      ),
+    ],
+  ]);
+}
+
+function encodeAssetHiddenZkTransferPayload(value) {
+  return encodeStructValue([
+    [encodeNoritoStringValue(assertNonEmptyString(value.pool_id, "zk.AssetHiddenZkTransfer.pool_id"))],
+    [encodeNoritoVec(value.inputs ?? [], (entry, index) =>
+      encodeFixedByteArrayArchiveValue(entry, 32, `zk.AssetHiddenZkTransfer.inputs[${index}]`),
+    )],
+    [encodeNoritoVec(value.outputs ?? [], (entry, index) =>
+      encodeFixedByteArrayArchiveValue(entry, 32, `zk.AssetHiddenZkTransfer.outputs[${index}]`),
+    )],
+    [encodeProofAttachmentValue(value.proof, "zk.AssetHiddenZkTransfer.proof")],
+    [
+      encodeOptionValue(
+        value.root_hint,
+        (entry, context) => encodeFixedByteArrayArchiveValue(entry, 32, context),
+        "zk.AssetHiddenZkTransfer.root_hint",
       ),
     ],
   ]);

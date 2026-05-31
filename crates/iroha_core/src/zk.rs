@@ -233,9 +233,10 @@ const MAX_PROOF_LEN: usize = 8 * 1024 * 1024; // 8 MiB
 
 #[cfg(any(feature = "zk-halo2", feature = "zk-halo2-ipa"))]
 /// Upper bound for parsed public instance columns. This covers current IVM
-/// proofs, Offline recursive proofs, and the 30-column Kagemusha folded token
+/// proofs, Offline recursive proofs, the 30-column Kagemusha folded token
+/// statement, and the 35-column Kagemusha recursive aggregation proof
 /// statement while keeping malformed envelopes bounded.
-const MAX_INST_COLS: usize = 32;
+const MAX_INST_COLS: usize = 64;
 
 #[cfg(any(feature = "zk-halo2", feature = "zk-halo2-ipa"))]
 const MAX_INST_ROWS: usize = 8192;
@@ -368,12 +369,21 @@ pub const OFFLINE_NOTE_RECURSIVE_IPA_K: u32 = 7;
 pub const OFFLINE_NOTE_MAX_PROOF_BYTES: u32 = 8 * 1024 * 1024;
 /// Canonical circuit identifier for compact Kagemusha folded proofs.
 pub const KAGEMUSHA_FOLDED_CIRCUIT_ID: &str = "kagemusha-folded-v1";
+/// Canonical circuit identifier for proof-carrying Kagemusha recursive aggregation evidence.
+pub const KAGEMUSHA_RECURSIVE_AGGREGATION_CIRCUIT_ID: &str =
+    iroha_data_model::offline::KAGEMUSHA_RECURSIVE_AGGREGATION_PROOF_CIRCUIT_ID_V1;
 /// Canonical verifier-record namespace for Kagemusha Offline hop and folded proofs.
 pub const KAGEMUSHA_VERIFIER_NAMESPACE: &str = "offline_kagemusha";
 /// Halo2 IPA parameter degree used by the canonical Kagemusha folded circuit.
 pub const KAGEMUSHA_FOLDED_IPA_K: u32 = 7;
+/// Halo2 IPA parameter degree used by the Kagemusha recursive aggregation semantic circuit.
+pub const KAGEMUSHA_RECURSIVE_AGGREGATION_IPA_K: u32 = 7;
 /// Maximum encoded proof payload accepted for Kagemusha folded proofs.
 pub const KAGEMUSHA_FOLDED_MAX_PROOF_BYTES: u32 = 8 * 1024 * 1024;
+/// Maximum encoded proof payload accepted for Kagemusha recursive aggregation proofs.
+pub const KAGEMUSHA_RECURSIVE_AGGREGATION_MAX_PROOF_BYTES: u32 = 8 * 1024 * 1024;
+/// Maximum transcript label length accepted for Kagemusha Pallas opening envelopes.
+pub const KAGEMUSHA_PALLAS_OPEN_ENVELOPE_MAX_TRANSCRIPT_LABEL_BYTES: usize = 128;
 /// Maximum encoded proof payload accepted for each checked Kagemusha private hop.
 pub const KAGEMUSHA_HOP_MAX_PROOF_BYTES: u32 = confidential_v2::CONFIDENTIAL_V2_MAX_PROOF_BYTES;
 /// Maximum Pallas IPA opening vector length accepted by Kagemusha recursive batch preflight.
@@ -395,6 +405,1043 @@ pub const KAGEMUSHA_RECURSIVE_VESTA_IPA_WINDOW_BITS: usize = 3;
 pub const KAGEMUSHA_RECURSIVE_VERIFIER_WITNESS_PROFILE_V1: &str =
     iroha_data_model::offline::KAGEMUSHA_RECURSIVE_VERIFIER_WITNESS_PROFILE_V1;
 
+/// Lightweight production layout summary for the recursive Vesta IPA verifier.
+///
+/// This is intentionally separate from the full witness object: production
+/// widths such as `n = 128` must be covered by cheap structural guards and the
+/// optimized native Pallas preflight until the recursive circuit stores shared
+/// fixed-window tables instead of materializing every per-term table in unit
+/// tests.
+#[cfg(feature = "zk-halo2-ipa")]
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct KagemushaRecursiveVestaIpaVerifierLayout {
+    /// Pallas IPA opening vector length.
+    pub opening_len: usize,
+    /// Number of IPA reduction rounds.
+    pub rounds: usize,
+    /// Per-round generator-fold pair counts.
+    pub generator_fold_counts: Vec<usize>,
+    /// Fixed windows used for each scalar in the Vesta recursive verifier profile.
+    pub fixed_windows: usize,
+    /// Bits represented by each fixed window.
+    pub fixed_window_bits: usize,
+    /// Scalar-bit coverage from `fixed_windows * fixed_window_bits`.
+    pub scalar_bits_covered: usize,
+    /// Number of windowed MSM gadgets represented by this verifier layout.
+    pub windowed_msm_count: usize,
+}
+
+/// Fixed-window table accounting for the recursive Vesta IPA verifier profile.
+///
+/// The current circuit witness type materializes one derived point table and
+/// one selection-table copy for every scalar-mul term and every scalar window.
+/// This plan is the production target for replacing those duplicated witness
+/// objects with one shared shifted-window table family per scalar-mul base.
+#[cfg(feature = "zk-halo2-ipa")]
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct KagemushaRecursiveFixedWindowTablePlan {
+    /// Pallas IPA opening vector length.
+    pub opening_len: usize,
+    /// Fixed windows used for each scalar in the Vesta recursive verifier profile.
+    pub fixed_windows: usize,
+    /// Bits represented by each fixed window.
+    pub fixed_window_bits: usize,
+    /// Point-table rows in each fixed window.
+    pub table_rows_per_window: usize,
+    /// Scalar-mul terms from per-round accumulator MSMs.
+    pub round_accumulator_terms: usize,
+    /// Scalar-mul terms from all per-round generator-fold MSMs.
+    pub generator_fold_terms: usize,
+    /// Scalar-mul terms from the final IPA MSM comparison.
+    pub final_msm_terms: usize,
+    /// Total scalar-mul terms represented by this recursive verifier layout.
+    pub scalar_mul_terms: usize,
+    /// Fixed-window derivation table witnesses materialized by the naive layout.
+    pub naive_window_table_witnesses: usize,
+    /// Selection-table witnesses duplicated by the naive layout.
+    pub naive_selection_table_witnesses: usize,
+    /// Total point-table copies materialized by the naive layout.
+    pub naive_point_table_copies: usize,
+    /// Total point rows materialized by the naive layout.
+    pub naive_point_table_rows: usize,
+    /// Shared shifted-window table families required by the compressed layout.
+    pub shared_table_families: usize,
+    /// Shifted-window point tables inside all shared table families.
+    pub shared_shifted_window_tables: usize,
+    /// Point rows required by the compressed shared-table layout.
+    pub shared_point_table_rows: usize,
+    /// Naive duplicated selection rows eliminated by the shared-table layout.
+    pub duplicated_selection_rows_eliminated: usize,
+    /// Whether this profile requires a trusted setup.
+    pub trusted_setup_required: bool,
+}
+
+/// Role played by one shared fixed-window table family in the recursive verifier.
+#[cfg(feature = "zk-halo2-ipa")]
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum KagemushaRecursiveFixedWindowTableRole {
+    /// Scalar term multiplying an IPA `L` round commitment.
+    RoundAccumulatorL,
+    /// Scalar term multiplying the previous IPA accumulator `Q`.
+    RoundAccumulatorQ,
+    /// Scalar term multiplying an IPA `R` round commitment.
+    RoundAccumulatorR,
+    /// Scalar term multiplying the left `G` generator in a fold pair.
+    GeneratorFoldGLeft,
+    /// Scalar term multiplying the right `G` generator in a fold pair.
+    GeneratorFoldGRight,
+    /// Scalar term multiplying the left `H` generator in a fold pair.
+    GeneratorFoldHLeft,
+    /// Scalar term multiplying the right `H` generator in a fold pair.
+    GeneratorFoldHRight,
+    /// Final comparison scalar term multiplying the folded `G` generator.
+    FinalG,
+    /// Final comparison scalar term multiplying the folded `H` generator.
+    FinalH,
+    /// Final comparison scalar term multiplying the IPA blinding generator `U`.
+    FinalU,
+}
+
+#[cfg(feature = "zk-halo2-ipa")]
+impl KagemushaRecursiveFixedWindowTableRole {
+    const fn code(self) -> u64 {
+        match self {
+            Self::RoundAccumulatorL => 1,
+            Self::RoundAccumulatorQ => 2,
+            Self::RoundAccumulatorR => 3,
+            Self::GeneratorFoldGLeft => 4,
+            Self::GeneratorFoldGRight => 5,
+            Self::GeneratorFoldHLeft => 6,
+            Self::GeneratorFoldHRight => 7,
+            Self::FinalG => 8,
+            Self::FinalH => 9,
+            Self::FinalU => 10,
+        }
+    }
+}
+
+/// Deterministic shared-table use-site for the recursive Vesta IPA verifier.
+///
+/// Each use-site represents one scalar-multiplication base. Production
+/// recursive evidence should materialize one shifted fixed-window table family
+/// per use-site and reuse it for both table derivation and selection, rather
+/// than duplicating selection-table witnesses per scalar window.
+#[cfg(feature = "zk-halo2-ipa")]
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct KagemushaRecursiveFixedWindowTableUse {
+    /// Stable zero-based table-family index.
+    pub family_index: usize,
+    /// IPA round containing this table family, or `None` for final comparison terms.
+    pub round_index: Option<usize>,
+    /// Generator-fold pair index within the round, or `None` for accumulator/final terms.
+    pub pair_index: Option<usize>,
+    /// Semantic role of the scalar-multiplication base.
+    pub role: KagemushaRecursiveFixedWindowTableRole,
+    /// First shifted-window table index owned by this table family.
+    pub first_shifted_window_table: usize,
+    /// Number of shifted-window tables owned by this family.
+    pub shifted_window_table_count: usize,
+    /// Fixed-window count used by this family.
+    pub fixed_windows: usize,
+    /// Bits represented by each fixed window.
+    pub fixed_window_bits: usize,
+    /// Point-table rows in each fixed window.
+    pub table_rows_per_window: usize,
+}
+
+/// One fixed-window table family in the compressed recursive verifier manifest.
+///
+/// The `use_site` identifies the verifier scalar-multiplication base, while
+/// the row range identifies the contiguous segment in the shared fixed-window
+/// table that stores all shifted windows for that base.
+#[cfg(feature = "zk-halo2-ipa")]
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct KagemushaRecursiveFixedWindowSharedTableFamily {
+    /// Deterministic verifier table use-site represented by this family.
+    pub use_site: KagemushaRecursiveFixedWindowTableUse,
+    /// First row in the compressed shared fixed-window point table.
+    pub first_shared_point_row: usize,
+    /// Number of rows occupied by this family across all shifted windows.
+    pub shared_point_row_count: usize,
+}
+
+/// Deterministic compressed fixed-window table manifest for recursive aggregation.
+///
+/// This is the production row-layout target for mode-2 recursive verification:
+/// one shared shifted-window table family per scalar-multiplication base, with
+/// selection constraints referencing row ranges instead of materializing a
+/// duplicate selection table for every window.
+#[cfg(feature = "zk-halo2-ipa")]
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct KagemushaRecursiveFixedWindowSharedTableManifest {
+    /// Pallas IPA opening vector length.
+    pub opening_len: usize,
+    /// Fixed windows used for each scalar in the Vesta recursive verifier profile.
+    pub fixed_windows: usize,
+    /// Bits represented by each fixed window.
+    pub fixed_window_bits: usize,
+    /// Point-table rows in each fixed window.
+    pub table_rows_per_window: usize,
+    /// Shared table family count.
+    pub table_families: usize,
+    /// Shifted-window point tables across all shared families.
+    pub shared_shifted_window_tables: usize,
+    /// Point rows required by the compressed shared-table layout.
+    pub shared_point_table_rows: usize,
+    /// Naive duplicated selection rows eliminated by the shared-table layout.
+    pub duplicated_selection_rows_eliminated: usize,
+    /// Poseidon2 digest of the semantic table-family schedule.
+    pub schedule_digest: [u8; 32],
+    /// Poseidon2 digest of this concrete shared-row manifest.
+    pub manifest_digest: [u8; 32],
+    /// Whether this manifest requires a trusted setup.
+    pub trusted_setup_required: bool,
+    /// Deterministic table families and their row ranges.
+    pub families: Vec<KagemushaRecursiveFixedWindowSharedTableFamily>,
+}
+
+/// Return the bounded recursive verifier layout for a supported Pallas IPA opening length.
+///
+/// # Errors
+///
+/// Returns an error when `opening_len` is outside the current production
+/// corridor, is not a power of two, or if the configured fixed-window profile
+/// cannot cover 255-bit Pasta scalars.
+#[cfg(feature = "zk-halo2-ipa")]
+pub fn kagemusha_recursive_vesta_ipa_verifier_layout(
+    opening_len: usize,
+) -> Result<KagemushaRecursiveVestaIpaVerifierLayout, String> {
+    if !(2..=KAGEMUSHA_RECURSIVE_PALLAS_IPA_BATCH_MAX_LEN).contains(&opening_len) {
+        return Err(format!(
+            "Kagemusha recursive verifier layout supports opening lengths 2..={} (found {opening_len})",
+            KAGEMUSHA_RECURSIVE_PALLAS_IPA_BATCH_MAX_LEN
+        ));
+    }
+    if !opening_len.is_power_of_two() {
+        return Err(format!(
+            "Kagemusha recursive verifier layout requires a power-of-two opening length (found {opening_len})"
+        ));
+    }
+
+    let scalar_bits_covered =
+        KAGEMUSHA_RECURSIVE_VESTA_IPA_WINDOWS * KAGEMUSHA_RECURSIVE_VESTA_IPA_WINDOW_BITS;
+    if scalar_bits_covered < 255 {
+        return Err(format!(
+            "Kagemusha recursive verifier fixed-window profile covers only {scalar_bits_covered} scalar bits"
+        ));
+    }
+
+    let rounds = opening_len.trailing_zeros() as usize;
+    let mut layer_len = opening_len;
+    let mut generator_fold_counts = Vec::with_capacity(rounds);
+    for _ in 0..rounds {
+        let half = layer_len / 2;
+        generator_fold_counts.push(half);
+        layer_len = half;
+    }
+    let generator_fold_total = generator_fold_counts.iter().sum::<usize>();
+    let windowed_msm_count = rounds + generator_fold_total * 2 + 1;
+
+    Ok(KagemushaRecursiveVestaIpaVerifierLayout {
+        opening_len,
+        rounds,
+        generator_fold_counts,
+        fixed_windows: KAGEMUSHA_RECURSIVE_VESTA_IPA_WINDOWS,
+        fixed_window_bits: KAGEMUSHA_RECURSIVE_VESTA_IPA_WINDOW_BITS,
+        scalar_bits_covered,
+        windowed_msm_count,
+    })
+}
+
+/// Return fixed-window table accounting for a supported recursive verifier layout.
+///
+/// # Errors
+///
+/// Returns an error when the recursive verifier layout is unsupported or if
+/// any fixed-window table count overflows `usize`.
+#[cfg(feature = "zk-halo2-ipa")]
+pub fn kagemusha_recursive_fixed_window_table_plan(
+    opening_len: usize,
+) -> Result<KagemushaRecursiveFixedWindowTablePlan, String> {
+    let layout = kagemusha_recursive_vesta_ipa_verifier_layout(opening_len)?;
+    let table_rows_per_window = 1usize
+        .checked_shl(u32::try_from(layout.fixed_window_bits).map_err(|_| {
+            "Kagemusha recursive verifier fixed-window bit width does not fit u32".to_owned()
+        })?)
+        .ok_or_else(|| {
+            "Kagemusha recursive verifier fixed-window table row count overflow".to_owned()
+        })?;
+    let generator_fold_total = layout.generator_fold_counts.iter().sum::<usize>();
+    let round_accumulator_terms =
+        checked_kagemusha_recursive_table_count(layout.rounds, 3, "round accumulator terms")?;
+    let generator_fold_terms =
+        checked_kagemusha_recursive_table_count(generator_fold_total, 4, "generator fold terms")?;
+    let final_msm_terms = 3;
+    let scalar_mul_terms = round_accumulator_terms
+        .checked_add(generator_fold_terms)
+        .and_then(|value| value.checked_add(final_msm_terms))
+        .ok_or_else(|| "Kagemusha recursive verifier scalar-mul term count overflow".to_owned())?;
+    let naive_window_table_witnesses = checked_kagemusha_recursive_table_count(
+        scalar_mul_terms,
+        layout.fixed_windows,
+        "naive window-table witnesses",
+    )?;
+    let naive_selection_table_witnesses = naive_window_table_witnesses;
+    let naive_point_table_copies = naive_window_table_witnesses
+        .checked_add(naive_selection_table_witnesses)
+        .ok_or_else(|| {
+            "Kagemusha recursive verifier naive point-table copy count overflow".to_owned()
+        })?;
+    let naive_point_table_rows = checked_kagemusha_recursive_table_count(
+        naive_point_table_copies,
+        table_rows_per_window,
+        "naive point-table rows",
+    )?;
+    let shared_table_families = scalar_mul_terms;
+    let shared_shifted_window_tables = naive_window_table_witnesses;
+    let shared_point_table_rows = checked_kagemusha_recursive_table_count(
+        shared_shifted_window_tables,
+        table_rows_per_window,
+        "shared point-table rows",
+    )?;
+    let duplicated_selection_rows_eliminated = naive_point_table_rows
+        .checked_sub(shared_point_table_rows)
+        .ok_or_else(|| {
+            "Kagemusha recursive verifier duplicated selection-row count underflow".to_owned()
+        })?;
+
+    Ok(KagemushaRecursiveFixedWindowTablePlan {
+        opening_len,
+        fixed_windows: layout.fixed_windows,
+        fixed_window_bits: layout.fixed_window_bits,
+        table_rows_per_window,
+        round_accumulator_terms,
+        generator_fold_terms,
+        final_msm_terms,
+        scalar_mul_terms,
+        naive_window_table_witnesses,
+        naive_selection_table_witnesses,
+        naive_point_table_copies,
+        naive_point_table_rows,
+        shared_table_families,
+        shared_shifted_window_tables,
+        shared_point_table_rows,
+        duplicated_selection_rows_eliminated,
+        trusted_setup_required: false,
+    })
+}
+
+/// Return the deterministic shared fixed-window table schedule for a recursive verifier width.
+///
+/// The schedule enumerates each scalar-multiplication base used by the
+/// recursive Vesta IPA verifier in the same order that the verifier composes
+/// accumulator folds, generator folds, and the final comparison. It is the
+/// concrete production target for replacing duplicated per-window selection
+/// witnesses with one shared table family per base.
+///
+/// # Errors
+///
+/// Returns an error when the requested opening length is outside the supported
+/// recursive verifier corridor or if table-index arithmetic overflows.
+#[cfg(feature = "zk-halo2-ipa")]
+pub fn kagemusha_recursive_fixed_window_table_schedule(
+    opening_len: usize,
+) -> Result<Vec<KagemushaRecursiveFixedWindowTableUse>, String> {
+    let plan = kagemusha_recursive_fixed_window_table_plan(opening_len)?;
+    let mut schedule = Vec::with_capacity(plan.scalar_mul_terms);
+    let mut family_index = 0usize;
+    let mut push_use = |schedule: &mut Vec<KagemushaRecursiveFixedWindowTableUse>,
+                        round_index,
+                        pair_index,
+                        role|
+     -> Result<(), String> {
+        let first_shifted_window_table =
+            family_index
+                .checked_mul(plan.fixed_windows)
+                .ok_or_else(|| {
+                    "Kagemusha recursive fixed-window shared-table index overflow".to_owned()
+                })?;
+        schedule.push(KagemushaRecursiveFixedWindowTableUse {
+            family_index,
+            round_index,
+            pair_index,
+            role,
+            first_shifted_window_table,
+            shifted_window_table_count: plan.fixed_windows,
+            fixed_windows: plan.fixed_windows,
+            fixed_window_bits: plan.fixed_window_bits,
+            table_rows_per_window: plan.table_rows_per_window,
+        });
+        family_index = family_index.checked_add(1).ok_or_else(|| {
+            "Kagemusha recursive fixed-window table-family count overflow".to_owned()
+        })?;
+        Ok(())
+    };
+
+    let mut layer_len = opening_len;
+    for round_index in 0..plan.round_accumulator_terms / 3 {
+        push_use(
+            &mut schedule,
+            Some(round_index),
+            None,
+            KagemushaRecursiveFixedWindowTableRole::RoundAccumulatorL,
+        )?;
+        push_use(
+            &mut schedule,
+            Some(round_index),
+            None,
+            KagemushaRecursiveFixedWindowTableRole::RoundAccumulatorQ,
+        )?;
+        push_use(
+            &mut schedule,
+            Some(round_index),
+            None,
+            KagemushaRecursiveFixedWindowTableRole::RoundAccumulatorR,
+        )?;
+
+        let half = layer_len / 2;
+        for pair_index in 0..half {
+            for role in [
+                KagemushaRecursiveFixedWindowTableRole::GeneratorFoldGLeft,
+                KagemushaRecursiveFixedWindowTableRole::GeneratorFoldGRight,
+                KagemushaRecursiveFixedWindowTableRole::GeneratorFoldHLeft,
+                KagemushaRecursiveFixedWindowTableRole::GeneratorFoldHRight,
+            ] {
+                push_use(&mut schedule, Some(round_index), Some(pair_index), role)?;
+            }
+        }
+        layer_len = half;
+    }
+
+    for role in [
+        KagemushaRecursiveFixedWindowTableRole::FinalG,
+        KagemushaRecursiveFixedWindowTableRole::FinalH,
+        KagemushaRecursiveFixedWindowTableRole::FinalU,
+    ] {
+        push_use(&mut schedule, None, None, role)?;
+    }
+
+    if schedule.len() != plan.scalar_mul_terms {
+        return Err(format!(
+            "Kagemusha recursive fixed-window schedule length mismatch: expected {}, found {}",
+            plan.scalar_mul_terms,
+            schedule.len()
+        ));
+    }
+    Ok(schedule)
+}
+
+/// Return a Poseidon2 digest of the recursive verifier shared-table schedule.
+///
+/// This digest is deterministic for the verifier width and fixed-window profile
+/// and uses no trusted setup. It is intended as the compact public commitment
+/// for future compressed recursive verifier evidence that reuses shifted
+/// fixed-window table families.
+///
+/// # Errors
+///
+/// Returns an error when the schedule cannot be built or an index cannot be
+/// encoded into the digest transcript.
+#[cfg(feature = "zk-halo2-ipa")]
+pub fn kagemusha_recursive_fixed_window_table_schedule_digest(
+    opening_len: usize,
+) -> Result<[u8; 32], String> {
+    kagemusha_recursive_fixed_window_table_schedule_digest_with_profile(
+        opening_len,
+        KAGEMUSHA_RECURSIVE_VESTA_IPA_WINDOWS,
+        KAGEMUSHA_RECURSIVE_VESTA_IPA_WINDOW_BITS,
+    )
+}
+
+#[cfg(feature = "zk-halo2-ipa")]
+fn kagemusha_recursive_fixed_window_table_schedule_digest_with_profile(
+    opening_len: usize,
+    fixed_windows: usize,
+    fixed_window_bits: usize,
+) -> Result<[u8; 32], String> {
+    let layout = kagemusha_recursive_vesta_ipa_verifier_layout(opening_len)?;
+    if fixed_windows == 0 {
+        return Err(
+            "Kagemusha recursive fixed-window table schedule must have at least one window"
+                .to_owned(),
+        );
+    }
+    if fixed_window_bits == 0 {
+        return Err(
+            "Kagemusha recursive fixed-window table schedule must have at least one bit per window"
+                .to_owned(),
+        );
+    }
+    let table_rows_per_window = 1usize
+        .checked_shl(u32::try_from(fixed_window_bits).map_err(|_| {
+            "Kagemusha recursive fixed-window table schedule bit width does not fit u32".to_owned()
+        })?)
+        .ok_or_else(|| {
+            "Kagemusha recursive fixed-window table schedule row count overflow".to_owned()
+        })?;
+    let generator_fold_total =
+        layout
+            .generator_fold_counts
+            .iter()
+            .try_fold(0usize, |accumulator, count| {
+                accumulator.checked_add(*count).ok_or_else(|| {
+                    "Kagemusha recursive fixed-window table schedule generator-fold count overflow"
+                        .to_owned()
+                })
+            })?;
+    let round_accumulator_terms =
+        checked_kagemusha_recursive_table_count(layout.rounds, 3, "round accumulator terms")?;
+    let generator_fold_terms =
+        checked_kagemusha_recursive_table_count(generator_fold_total, 4, "generator fold terms")?;
+    let table_family_count = round_accumulator_terms
+        .checked_add(generator_fold_terms)
+        .and_then(|value| value.checked_add(3))
+        .ok_or_else(|| {
+            "Kagemusha recursive fixed-window table schedule family count overflow".to_owned()
+        })?;
+    let shifted_window_table_count = checked_kagemusha_recursive_table_count(
+        table_family_count,
+        fixed_windows,
+        "shifted window tables",
+    )?;
+    let mut hasher = iroha_zkp_halo2::poseidon::PoseidonByteHasher::new();
+    kagemusha_recursive_poseidon_update_tagged_bytes(
+        &mut hasher,
+        b"domain",
+        b"iroha:kagemusha:recursive-fixed-window-table-schedule:v1",
+    )?;
+    kagemusha_recursive_poseidon_update_len(&mut hasher, "opening length", opening_len)?;
+    kagemusha_recursive_poseidon_update_len(&mut hasher, "fixed windows", fixed_windows)?;
+    kagemusha_recursive_poseidon_update_len(&mut hasher, "fixed window bits", fixed_window_bits)?;
+    kagemusha_recursive_poseidon_update_len(
+        &mut hasher,
+        "table rows per window",
+        table_rows_per_window,
+    )?;
+    kagemusha_recursive_poseidon_update_len(&mut hasher, "table family count", table_family_count)?;
+    kagemusha_recursive_poseidon_update_len(
+        &mut hasher,
+        "shifted window table count",
+        shifted_window_table_count,
+    )?;
+
+    let mut family_index = 0usize;
+    let mut update_table_use = |round_index,
+                                pair_index,
+                                role: KagemushaRecursiveFixedWindowTableRole|
+     -> Result<(), String> {
+        let first_shifted_window_table =
+            family_index.checked_mul(fixed_windows).ok_or_else(|| {
+                "Kagemusha recursive fixed-window table schedule shared-table index overflow"
+                    .to_owned()
+            })?;
+        kagemusha_recursive_poseidon_update_len(&mut hasher, "family index", family_index)?;
+        kagemusha_recursive_poseidon_update_u64(&mut hasher, role.code());
+        kagemusha_recursive_poseidon_update_optional_len(&mut hasher, "round index", round_index)?;
+        kagemusha_recursive_poseidon_update_optional_len(&mut hasher, "pair index", pair_index)?;
+        kagemusha_recursive_poseidon_update_len(
+            &mut hasher,
+            "first shifted window table",
+            first_shifted_window_table,
+        )?;
+        kagemusha_recursive_poseidon_update_len(
+            &mut hasher,
+            "shifted window table count",
+            fixed_windows,
+        )?;
+        family_index = family_index.checked_add(1).ok_or_else(|| {
+            "Kagemusha recursive fixed-window table schedule family count overflow".to_owned()
+        })?;
+        Ok(())
+    };
+
+    let mut layer_len = opening_len;
+    for round_index in 0..layout.rounds {
+        update_table_use(
+            Some(round_index),
+            None,
+            KagemushaRecursiveFixedWindowTableRole::RoundAccumulatorL,
+        )?;
+        update_table_use(
+            Some(round_index),
+            None,
+            KagemushaRecursiveFixedWindowTableRole::RoundAccumulatorQ,
+        )?;
+        update_table_use(
+            Some(round_index),
+            None,
+            KagemushaRecursiveFixedWindowTableRole::RoundAccumulatorR,
+        )?;
+
+        let half = layer_len / 2;
+        for pair_index in 0..half {
+            for role in [
+                KagemushaRecursiveFixedWindowTableRole::GeneratorFoldGLeft,
+                KagemushaRecursiveFixedWindowTableRole::GeneratorFoldGRight,
+                KagemushaRecursiveFixedWindowTableRole::GeneratorFoldHLeft,
+                KagemushaRecursiveFixedWindowTableRole::GeneratorFoldHRight,
+            ] {
+                update_table_use(Some(round_index), Some(pair_index), role)?;
+            }
+        }
+        layer_len = half;
+    }
+
+    for role in [
+        KagemushaRecursiveFixedWindowTableRole::FinalG,
+        KagemushaRecursiveFixedWindowTableRole::FinalH,
+        KagemushaRecursiveFixedWindowTableRole::FinalU,
+    ] {
+        update_table_use(None, None, role)?;
+    }
+
+    if family_index != table_family_count {
+        return Err(format!(
+            "Kagemusha recursive fixed-window table schedule digest length mismatch: expected {table_family_count}, found {family_index}"
+        ));
+    }
+    Ok(hasher.finalize())
+}
+
+/// Return a deterministic compressed shared-table manifest for a recursive verifier width.
+///
+/// # Errors
+///
+/// Returns an error when the fixed-window schedule cannot be built, when row
+/// arithmetic overflows, or when the schedule and table plan disagree.
+#[cfg(feature = "zk-halo2-ipa")]
+pub fn kagemusha_recursive_fixed_window_shared_table_manifest(
+    opening_len: usize,
+) -> Result<KagemushaRecursiveFixedWindowSharedTableManifest, String> {
+    let plan = kagemusha_recursive_fixed_window_table_plan(opening_len)?;
+    let schedule = kagemusha_recursive_fixed_window_table_schedule(opening_len)?;
+    let schedule_digest = kagemusha_recursive_fixed_window_table_schedule_digest(opening_len)?;
+    if schedule.len() != plan.shared_table_families {
+        return Err(format!(
+            "Kagemusha recursive shared fixed-window table manifest family count mismatch: expected {}, found {}",
+            plan.shared_table_families,
+            schedule.len()
+        ));
+    }
+
+    let mut families = Vec::with_capacity(schedule.len());
+    let mut next_shared_point_row = 0usize;
+    for use_site in schedule {
+        let expected_first_shifted_window = use_site
+            .family_index
+            .checked_mul(plan.fixed_windows)
+            .ok_or_else(|| {
+            "Kagemusha recursive shared fixed-window table shifted-window index overflow".to_owned()
+        })?;
+        if use_site.first_shifted_window_table != expected_first_shifted_window {
+            return Err(format!(
+                "Kagemusha recursive shared fixed-window table manifest shifted-window mismatch at family {}",
+                use_site.family_index
+            ));
+        }
+        let shared_point_row_count = use_site
+            .shifted_window_table_count
+            .checked_mul(use_site.table_rows_per_window)
+            .ok_or_else(|| {
+                "Kagemusha recursive shared fixed-window table row count overflow".to_owned()
+            })?;
+        let expected_first_shared_point_row = use_site
+            .first_shifted_window_table
+            .checked_mul(use_site.table_rows_per_window)
+            .ok_or_else(|| {
+                "Kagemusha recursive shared fixed-window table row index overflow".to_owned()
+            })?;
+        if expected_first_shared_point_row != next_shared_point_row {
+            return Err(format!(
+                "Kagemusha recursive shared fixed-window table manifest row continuity mismatch at family {}",
+                use_site.family_index
+            ));
+        }
+        families.push(KagemushaRecursiveFixedWindowSharedTableFamily {
+            use_site,
+            first_shared_point_row: next_shared_point_row,
+            shared_point_row_count,
+        });
+        next_shared_point_row = next_shared_point_row
+            .checked_add(shared_point_row_count)
+            .ok_or_else(|| {
+                "Kagemusha recursive shared fixed-window table row cursor overflow".to_owned()
+            })?;
+    }
+    if next_shared_point_row != plan.shared_point_table_rows {
+        return Err(format!(
+            "Kagemusha recursive shared fixed-window table manifest row count mismatch: expected {}, found {next_shared_point_row}",
+            plan.shared_point_table_rows
+        ));
+    }
+
+    let manifest_digest = kagemusha_recursive_fixed_window_shared_table_manifest_digest_from_parts(
+        &plan,
+        schedule_digest,
+        &families,
+    )?;
+    Ok(KagemushaRecursiveFixedWindowSharedTableManifest {
+        opening_len: plan.opening_len,
+        fixed_windows: plan.fixed_windows,
+        fixed_window_bits: plan.fixed_window_bits,
+        table_rows_per_window: plan.table_rows_per_window,
+        table_families: plan.shared_table_families,
+        shared_shifted_window_tables: plan.shared_shifted_window_tables,
+        shared_point_table_rows: plan.shared_point_table_rows,
+        duplicated_selection_rows_eliminated: plan.duplicated_selection_rows_eliminated,
+        schedule_digest,
+        manifest_digest,
+        trusted_setup_required: plan.trusted_setup_required,
+        families,
+    })
+}
+
+/// Return a Poseidon2 digest of the compressed fixed-window shared-table manifest.
+///
+/// # Errors
+///
+/// Returns an error when the manifest cannot be built for the requested
+/// recursive verifier width.
+#[cfg(feature = "zk-halo2-ipa")]
+pub fn kagemusha_recursive_fixed_window_shared_table_manifest_digest(
+    opening_len: usize,
+) -> Result<[u8; 32], String> {
+    kagemusha_recursive_fixed_window_shared_table_manifest_digest_with_profile(
+        opening_len,
+        KAGEMUSHA_RECURSIVE_VESTA_IPA_WINDOWS,
+        KAGEMUSHA_RECURSIVE_VESTA_IPA_WINDOW_BITS,
+    )
+}
+
+#[cfg(feature = "zk-halo2-ipa")]
+fn kagemusha_recursive_fixed_window_shared_table_manifest_digest_with_profile(
+    opening_len: usize,
+    fixed_windows: usize,
+    fixed_window_bits: usize,
+) -> Result<[u8; 32], String> {
+    if fixed_windows == 0 {
+        return Err(
+            "Kagemusha recursive fixed-window shared-table manifest must have at least one window"
+                .to_owned(),
+        );
+    }
+    if fixed_window_bits == 0 {
+        return Err(
+            "Kagemusha recursive fixed-window shared-table manifest must have at least one bit per window"
+                .to_owned(),
+        );
+    }
+    let layout = kagemusha_recursive_vesta_ipa_verifier_layout(opening_len)?;
+    let table_rows_per_window = 1usize
+        .checked_shl(u32::try_from(fixed_window_bits).map_err(|_| {
+            "Kagemusha recursive fixed-window shared-table manifest bit width does not fit u32"
+                .to_owned()
+        })?)
+        .ok_or_else(|| {
+            "Kagemusha recursive fixed-window shared-table manifest row count overflow".to_owned()
+        })?;
+    let generator_fold_total =
+        layout
+            .generator_fold_counts
+            .iter()
+            .try_fold(0usize, |accumulator, count| {
+                accumulator.checked_add(*count).ok_or_else(|| {
+                    "Kagemusha recursive fixed-window shared-table manifest generator-fold count overflow"
+                        .to_owned()
+                })
+            })?;
+    let round_accumulator_terms =
+        checked_kagemusha_recursive_table_count(layout.rounds, 3, "round accumulator terms")?;
+    let generator_fold_terms =
+        checked_kagemusha_recursive_table_count(generator_fold_total, 4, "generator fold terms")?;
+    let table_family_count = round_accumulator_terms
+        .checked_add(generator_fold_terms)
+        .and_then(|value| value.checked_add(3))
+        .ok_or_else(|| {
+            "Kagemusha recursive fixed-window shared-table manifest family count overflow"
+                .to_owned()
+        })?;
+    let shifted_window_table_count = checked_kagemusha_recursive_table_count(
+        table_family_count,
+        fixed_windows,
+        "shared shifted-window table count",
+    )?;
+    let shared_point_table_rows = checked_kagemusha_recursive_table_count(
+        shifted_window_table_count,
+        table_rows_per_window,
+        "shared point-table rows",
+    )?;
+    let schedule_digest = kagemusha_recursive_fixed_window_table_schedule_digest_with_profile(
+        opening_len,
+        fixed_windows,
+        fixed_window_bits,
+    )?;
+
+    let mut hasher = iroha_zkp_halo2::poseidon::PoseidonByteHasher::new();
+    kagemusha_recursive_poseidon_update_tagged_bytes(
+        &mut hasher,
+        b"domain",
+        b"iroha:kagemusha:recursive-fixed-window-shared-table-manifest:v1",
+    )?;
+    kagemusha_recursive_poseidon_update_len(&mut hasher, "opening length", opening_len)?;
+    kagemusha_recursive_poseidon_update_len(&mut hasher, "fixed windows", fixed_windows)?;
+    kagemusha_recursive_poseidon_update_len(&mut hasher, "fixed window bits", fixed_window_bits)?;
+    kagemusha_recursive_poseidon_update_len(
+        &mut hasher,
+        "table rows per window",
+        table_rows_per_window,
+    )?;
+    kagemusha_recursive_poseidon_update_len(&mut hasher, "table family count", table_family_count)?;
+    kagemusha_recursive_poseidon_update_len(
+        &mut hasher,
+        "shifted window table count",
+        shifted_window_table_count,
+    )?;
+    kagemusha_recursive_poseidon_update_len(
+        &mut hasher,
+        "shared point table rows",
+        shared_point_table_rows,
+    )?;
+    kagemusha_recursive_poseidon_update_len(
+        &mut hasher,
+        "duplicated selection rows eliminated",
+        shared_point_table_rows,
+    )?;
+    kagemusha_recursive_poseidon_update_u64(&mut hasher, 0);
+    kagemusha_recursive_poseidon_update_tagged_bytes(
+        &mut hasher,
+        b"schedule-digest",
+        &schedule_digest,
+    )?;
+    kagemusha_recursive_poseidon_update_len(&mut hasher, "manifest families", table_family_count)?;
+
+    let rows_per_family = fixed_windows
+        .checked_mul(table_rows_per_window)
+        .ok_or_else(|| {
+            "Kagemusha recursive fixed-window shared-table manifest family row count overflow"
+                .to_owned()
+        })?;
+    let mut family_index = 0usize;
+    let mut update_family = |hasher: &mut iroha_zkp_halo2::poseidon::PoseidonByteHasher,
+                             round_index,
+                             pair_index,
+                             role: KagemushaRecursiveFixedWindowTableRole|
+     -> Result<(), String> {
+        let first_shifted_window_table =
+            family_index.checked_mul(fixed_windows).ok_or_else(|| {
+                "Kagemusha recursive fixed-window shared-table manifest shifted-window index overflow"
+                    .to_owned()
+            })?;
+        let first_shared_point_row = first_shifted_window_table
+            .checked_mul(table_rows_per_window)
+            .ok_or_else(|| {
+                "Kagemusha recursive fixed-window shared-table manifest row index overflow"
+                    .to_owned()
+            })?;
+        kagemusha_recursive_poseidon_update_len(hasher, "family index", family_index)?;
+        kagemusha_recursive_poseidon_update_optional_len(hasher, "round index", round_index)?;
+        kagemusha_recursive_poseidon_update_optional_len(hasher, "pair index", pair_index)?;
+        kagemusha_recursive_poseidon_update_u64(hasher, role.code());
+        kagemusha_recursive_poseidon_update_len(
+            hasher,
+            "first shifted window table",
+            first_shifted_window_table,
+        )?;
+        kagemusha_recursive_poseidon_update_len(
+            hasher,
+            "shifted window table count",
+            fixed_windows,
+        )?;
+        kagemusha_recursive_poseidon_update_len(hasher, "fixed windows", fixed_windows)?;
+        kagemusha_recursive_poseidon_update_len(hasher, "fixed window bits", fixed_window_bits)?;
+        kagemusha_recursive_poseidon_update_len(
+            hasher,
+            "table rows per window",
+            table_rows_per_window,
+        )?;
+        kagemusha_recursive_poseidon_update_len(
+            hasher,
+            "first shared point row",
+            first_shared_point_row,
+        )?;
+        kagemusha_recursive_poseidon_update_len(hasher, "shared point row count", rows_per_family)?;
+        family_index = family_index.checked_add(1).ok_or_else(|| {
+            "Kagemusha recursive fixed-window shared-table manifest family count overflow"
+                .to_owned()
+        })?;
+        Ok(())
+    };
+
+    let mut layer_len = opening_len;
+    for round_index in 0..layout.rounds {
+        update_family(
+            &mut hasher,
+            Some(round_index),
+            None,
+            KagemushaRecursiveFixedWindowTableRole::RoundAccumulatorL,
+        )?;
+        update_family(
+            &mut hasher,
+            Some(round_index),
+            None,
+            KagemushaRecursiveFixedWindowTableRole::RoundAccumulatorQ,
+        )?;
+        update_family(
+            &mut hasher,
+            Some(round_index),
+            None,
+            KagemushaRecursiveFixedWindowTableRole::RoundAccumulatorR,
+        )?;
+
+        let half = layer_len / 2;
+        for pair_index in 0..half {
+            for role in [
+                KagemushaRecursiveFixedWindowTableRole::GeneratorFoldGLeft,
+                KagemushaRecursiveFixedWindowTableRole::GeneratorFoldGRight,
+                KagemushaRecursiveFixedWindowTableRole::GeneratorFoldHLeft,
+                KagemushaRecursiveFixedWindowTableRole::GeneratorFoldHRight,
+            ] {
+                update_family(&mut hasher, Some(round_index), Some(pair_index), role)?;
+            }
+        }
+        layer_len = half;
+    }
+
+    for role in [
+        KagemushaRecursiveFixedWindowTableRole::FinalG,
+        KagemushaRecursiveFixedWindowTableRole::FinalH,
+        KagemushaRecursiveFixedWindowTableRole::FinalU,
+    ] {
+        update_family(&mut hasher, None, None, role)?;
+    }
+
+    if family_index != table_family_count {
+        return Err(format!(
+            "Kagemusha recursive fixed-window shared-table manifest length mismatch: expected {table_family_count}, found {family_index}"
+        ));
+    }
+    Ok(hasher.finalize())
+}
+
+#[cfg(feature = "zk-halo2-ipa")]
+fn kagemusha_recursive_fixed_window_shared_table_manifest_digest_from_parts(
+    plan: &KagemushaRecursiveFixedWindowTablePlan,
+    schedule_digest: [u8; 32],
+    families: &[KagemushaRecursiveFixedWindowSharedTableFamily],
+) -> Result<[u8; 32], String> {
+    let mut hasher = iroha_zkp_halo2::poseidon::PoseidonByteHasher::new();
+    kagemusha_recursive_poseidon_update_tagged_bytes(
+        &mut hasher,
+        b"domain",
+        b"iroha:kagemusha:recursive-fixed-window-shared-table-manifest:v1",
+    )?;
+    kagemusha_recursive_poseidon_update_len(&mut hasher, "opening length", plan.opening_len)?;
+    kagemusha_recursive_poseidon_update_len(&mut hasher, "fixed windows", plan.fixed_windows)?;
+    kagemusha_recursive_poseidon_update_len(
+        &mut hasher,
+        "fixed window bits",
+        plan.fixed_window_bits,
+    )?;
+    kagemusha_recursive_poseidon_update_len(
+        &mut hasher,
+        "table rows per window",
+        plan.table_rows_per_window,
+    )?;
+    kagemusha_recursive_poseidon_update_len(
+        &mut hasher,
+        "table family count",
+        plan.shared_table_families,
+    )?;
+    kagemusha_recursive_poseidon_update_len(
+        &mut hasher,
+        "shifted window table count",
+        plan.shared_shifted_window_tables,
+    )?;
+    kagemusha_recursive_poseidon_update_len(
+        &mut hasher,
+        "shared point table rows",
+        plan.shared_point_table_rows,
+    )?;
+    kagemusha_recursive_poseidon_update_len(
+        &mut hasher,
+        "duplicated selection rows eliminated",
+        plan.duplicated_selection_rows_eliminated,
+    )?;
+    kagemusha_recursive_poseidon_update_u64(&mut hasher, u64::from(plan.trusted_setup_required));
+    kagemusha_recursive_poseidon_update_tagged_bytes(
+        &mut hasher,
+        b"schedule-digest",
+        &schedule_digest,
+    )?;
+    kagemusha_recursive_poseidon_update_len(&mut hasher, "manifest families", families.len())?;
+    for family in families {
+        let use_site = &family.use_site;
+        kagemusha_recursive_poseidon_update_len(
+            &mut hasher,
+            "family index",
+            use_site.family_index,
+        )?;
+        kagemusha_recursive_poseidon_update_optional_len(
+            &mut hasher,
+            "round index",
+            use_site.round_index,
+        )?;
+        kagemusha_recursive_poseidon_update_optional_len(
+            &mut hasher,
+            "pair index",
+            use_site.pair_index,
+        )?;
+        kagemusha_recursive_poseidon_update_u64(&mut hasher, use_site.role.code());
+        kagemusha_recursive_poseidon_update_len(
+            &mut hasher,
+            "first shifted window table",
+            use_site.first_shifted_window_table,
+        )?;
+        kagemusha_recursive_poseidon_update_len(
+            &mut hasher,
+            "shifted window table count",
+            use_site.shifted_window_table_count,
+        )?;
+        kagemusha_recursive_poseidon_update_len(
+            &mut hasher,
+            "fixed windows",
+            use_site.fixed_windows,
+        )?;
+        kagemusha_recursive_poseidon_update_len(
+            &mut hasher,
+            "fixed window bits",
+            use_site.fixed_window_bits,
+        )?;
+        kagemusha_recursive_poseidon_update_len(
+            &mut hasher,
+            "table rows per window",
+            use_site.table_rows_per_window,
+        )?;
+        kagemusha_recursive_poseidon_update_len(
+            &mut hasher,
+            "first shared point row",
+            family.first_shared_point_row,
+        )?;
+        kagemusha_recursive_poseidon_update_len(
+            &mut hasher,
+            "shared point row count",
+            family.shared_point_row_count,
+        )?;
+    }
+    Ok(hasher.finalize())
+}
+
+#[cfg(feature = "zk-halo2-ipa")]
+fn checked_kagemusha_recursive_table_count(
+    lhs: usize,
+    rhs: usize,
+    label: &str,
+) -> Result<usize, String> {
+    lhs.checked_mul(rhs).ok_or_else(|| {
+        format!("Kagemusha recursive verifier fixed-window table count overflow: {label}")
+    })
+}
+
 const OFFLINE_NOTE_MODE_REDEEM: u64 = 1;
 const OFFLINE_NOTE_MODE_AUDIT: u64 = 2;
 /// Number of public instance columns exposed by Offline recursive note proofs.
@@ -405,8 +1452,23 @@ pub const OFFLINE_NOTE_MAX_INPUT_AMOUNTS: usize = 4;
 pub const OFFLINE_NOTE_MAX_OUTPUT_AMOUNTS: usize = 2;
 /// Number of public instance columns exposed by Kagemusha folded proofs.
 pub const KAGEMUSHA_FOLDED_INSTANCE_COLUMNS: usize = 30;
+/// Number of public instance columns exposed by Kagemusha recursive aggregation proofs.
+pub const KAGEMUSHA_RECURSIVE_AGGREGATION_PROOF_INSTANCE_COLUMNS: usize = 35;
 /// Number of private boolean witness bits for `hop_count - 1` (0..=63).
 pub const KAGEMUSHA_FOLDED_HOP_COUNT_BITS: usize = 6;
+/// Number of private boolean witness bits for recursive aggregation `hop_count - 1` (0..=63).
+pub const KAGEMUSHA_RECURSIVE_AGGREGATION_HOP_COUNT_BITS: usize = 6;
+const KAGEMUSHA_RECURSIVE_AGGREGATION_OPENING_LEN_CHOICES: [u64; 7] = [2, 4, 8, 16, 32, 64, 128];
+const KAGEMUSHA_RECURSIVE_AGGREGATION_OPENING_LEN_CHOICE_COUNT: usize =
+    KAGEMUSHA_RECURSIVE_AGGREGATION_OPENING_LEN_CHOICES.len();
+const KAGEMUSHA_RECURSIVE_AGGREGATION_VERIFIER_PARAMS_START_INDEX: usize = 12;
+const KAGEMUSHA_RECURSIVE_AGGREGATION_FIXED_WINDOW_TABLE_SCHEDULE_START_INDEX: usize = 16;
+const KAGEMUSHA_RECURSIVE_AGGREGATION_FIXED_WINDOW_SHARED_TABLE_MANIFEST_START_INDEX: usize = 20;
+const KAGEMUSHA_RECURSIVE_AGGREGATION_FIXED_WINDOW_TABLE_BASE_START_INDEX: usize = 24;
+const KAGEMUSHA_RECURSIVE_AGGREGATION_VERIFIER_WITNESS_BATCH_START_INDEX: usize = 28;
+const KAGEMUSHA_RECURSIVE_AGGREGATION_OPENING_LEN_INDEX: usize = 32;
+const KAGEMUSHA_RECURSIVE_AGGREGATION_WITNESS_COUNT_INDEX: usize = 33;
+const KAGEMUSHA_RECURSIVE_AGGREGATION_HOP_COUNT_INDEX: usize = 34;
 const KAGEMUSHA_FOLDED_ROOT_LIMBS: usize = 4;
 const KAGEMUSHA_FOLDED_AGGREGATION_MODE_INDEX: usize = 4;
 const KAGEMUSHA_FOLDED_HOP_COUNT_INDEX: usize = 5;
@@ -423,6 +1485,18 @@ const KAGEMUSHA_FOLDED_NON_ZERO_PUBLIC_FIELD_GROUPS: [[usize; 4]; 7] = [
 ];
 const KAGEMUSHA_FOLDED_NON_ZERO_PUBLIC_FIELD_GROUP_COUNT: usize =
     KAGEMUSHA_FOLDED_NON_ZERO_PUBLIC_FIELD_GROUPS.len();
+const KAGEMUSHA_RECURSIVE_AGGREGATION_NON_ZERO_PUBLIC_FIELD_GROUPS: [[usize; 4]; 8] = [
+    [0, 1, 2, 3],
+    [4, 5, 6, 7],
+    [8, 9, 10, 11],
+    [12, 13, 14, 15],
+    [16, 17, 18, 19],
+    [20, 21, 22, 23],
+    [24, 25, 26, 27],
+    [28, 29, 30, 31],
+];
+const KAGEMUSHA_RECURSIVE_AGGREGATION_NON_ZERO_PUBLIC_FIELD_GROUP_COUNT: usize =
+    KAGEMUSHA_RECURSIVE_AGGREGATION_NON_ZERO_PUBLIC_FIELD_GROUPS.len();
 
 /// Public and private witness values for the canonical Offline semantic circuit.
 ///
@@ -588,6 +1662,121 @@ impl KagemushaFoldedInstanceValues {
     }
 }
 
+/// Public witness values for Kagemusha recursive aggregation proof envelopes.
+///
+/// The first four limbs bind the canonical recursive-proof public-input hash.
+/// The remaining columns expose the recursive evidence digest, aggregation
+/// transcript digest, Pallas parameter fingerprint, fixed-window schedule and
+/// shared-table commitments, native verifier-witness batch digest, verifier
+/// opening length, witness count, and hop count that the proof envelope must
+/// match.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct KagemushaRecursiveAggregationProofInstanceValues {
+    /// Public instance values encoded as single-row Pasta field columns.
+    pub public_values: [u64; KAGEMUSHA_RECURSIVE_AGGREGATION_PROOF_INSTANCE_COLUMNS],
+}
+
+impl KagemushaRecursiveAggregationProofInstanceValues {
+    /// Return public instances in the byte layout carried by Halo2 proof envelopes.
+    #[must_use]
+    pub fn public_instance_columns(&self) -> Vec<Vec<[u8; 32]>> {
+        self.public_values
+            .iter()
+            .copied()
+            .map(limb_as_instance_bytes)
+            .map(|value| vec![value])
+            .collect()
+    }
+
+    #[cfg(feature = "zk-halo2-ipa")]
+    fn public_scalars(
+        &self,
+    ) -> [halo2_proofs::halo2curves::pasta::Fp;
+        KAGEMUSHA_RECURSIVE_AGGREGATION_PROOF_INSTANCE_COLUMNS] {
+        self.public_values
+            .map(halo2_proofs::halo2curves::pasta::Fp::from)
+    }
+
+    #[cfg(feature = "zk-halo2-ipa")]
+    fn opening_len_selectors(
+        &self,
+    ) -> Result<
+        [halo2_proofs::halo2curves::pasta::Fp;
+            KAGEMUSHA_RECURSIVE_AGGREGATION_OPENING_LEN_CHOICE_COUNT],
+        String,
+    > {
+        let opening_len = self.public_values[KAGEMUSHA_RECURSIVE_AGGREGATION_OPENING_LEN_INDEX];
+        let mut selectors = [halo2_proofs::halo2curves::pasta::Fp::from(0);
+            KAGEMUSHA_RECURSIVE_AGGREGATION_OPENING_LEN_CHOICE_COUNT];
+        let Some(index) = KAGEMUSHA_RECURSIVE_AGGREGATION_OPENING_LEN_CHOICES
+            .iter()
+            .position(|choice| *choice == opening_len)
+        else {
+            return Err(format!(
+                "Kagemusha recursive aggregation opening length must be one of {:?} (found {opening_len})",
+                KAGEMUSHA_RECURSIVE_AGGREGATION_OPENING_LEN_CHOICES
+            ));
+        };
+        selectors[index] = halo2_proofs::halo2curves::pasta::Fp::from(1);
+        Ok(selectors)
+    }
+
+    #[cfg(feature = "zk-halo2-ipa")]
+    fn hop_count_minus_one_bits(
+        &self,
+    ) -> Result<
+        [halo2_proofs::halo2curves::pasta::Fp; KAGEMUSHA_RECURSIVE_AGGREGATION_HOP_COUNT_BITS],
+        String,
+    > {
+        let hop_count = self.public_values[KAGEMUSHA_RECURSIVE_AGGREGATION_HOP_COUNT_INDEX];
+        if hop_count == 0
+            || hop_count > iroha_data_model::offline::KAGEMUSHA_COMPACT_TOKEN_MAX_HOPS as u64
+        {
+            return Err(format!(
+                "Kagemusha recursive aggregation hop_count must be in 1..={}",
+                iroha_data_model::offline::KAGEMUSHA_COMPACT_TOKEN_MAX_HOPS
+            ));
+        }
+        let mut adjusted = hop_count - 1;
+        Ok(std::array::from_fn(|_| {
+            let bit = adjusted & 1;
+            adjusted >>= 1;
+            halo2_proofs::halo2curves::pasta::Fp::from(bit)
+        }))
+    }
+
+    #[cfg(feature = "zk-halo2-ipa")]
+    fn non_zero_public_field_inverses(
+        &self,
+    ) -> Result<
+        [halo2_proofs::halo2curves::pasta::Fp;
+            KAGEMUSHA_RECURSIVE_AGGREGATION_NON_ZERO_PUBLIC_FIELD_GROUP_COUNT],
+        String,
+    > {
+        use ff::Field as _;
+
+        let mut inverses = [halo2_proofs::halo2curves::pasta::Fp::from(0);
+            KAGEMUSHA_RECURSIVE_AGGREGATION_NON_ZERO_PUBLIC_FIELD_GROUP_COUNT];
+        for (group_index, group) in KAGEMUSHA_RECURSIVE_AGGREGATION_NON_ZERO_PUBLIC_FIELD_GROUPS
+            .iter()
+            .enumerate()
+        {
+            let sum = group.iter().fold(
+                halo2_proofs::halo2curves::pasta::Fp::from(0),
+                |acc, index| {
+                    acc + halo2_proofs::halo2curves::pasta::Fp::from(self.public_values[*index])
+                },
+            );
+            inverses[group_index] = Option::from(sum.invert()).ok_or_else(|| {
+                format!(
+                    "Kagemusha recursive aggregation public field group {group_index} must be non-zero"
+                )
+            })?;
+        }
+        Ok(inverses)
+    }
+}
+
 /// Build the canonical inline verifier key for Offline recursive note proofs.
 ///
 /// The returned key is a real Halo2 IPA verifier key envelope (`IPAK` + `H2VK`)
@@ -609,6 +1798,31 @@ pub fn offline_note_recursive_vk_box() -> Result<VerifyingKeyBox, String> {
         .clone()
 }
 
+pub(crate) fn ensure_offline_note_recursive_canonical_vk_box(
+    vk_box: &VerifyingKeyBox,
+) -> Result<(), String> {
+    if vk_box.backend.as_str() != ZK_BACKEND_HALO2_IPA {
+        return Err(format!(
+            "Offline recursive verifier key backend `{}` is not `{ZK_BACKEND_HALO2_IPA}`",
+            vk_box.backend
+        ));
+    }
+    if vk_box.bytes.is_empty() {
+        return Err("Offline recursive verifier key must be non-empty".to_owned());
+    }
+    #[cfg(any(feature = "zk-halo2", feature = "zk-halo2-ipa"))]
+    {
+        let canonical = offline_note_recursive_vk_box()?;
+        if hash_vk(vk_box) != hash_vk(&canonical) || vk_box.bytes != canonical.bytes {
+            return Err(
+                "Offline recursive verifier key must match the canonical semantic circuit key"
+                    .to_owned(),
+            );
+        }
+    }
+    Ok(())
+}
+
 #[cfg(any(feature = "zk-halo2", feature = "zk-halo2-ipa"))]
 fn build_offline_note_recursive_vk_box() -> Result<VerifyingKeyBox, halo2_proofs::plonk::Error> {
     use halo2_proofs::plonk::keygen_vk;
@@ -618,6 +1832,7 @@ fn build_offline_note_recursive_vk_box() -> Result<VerifyingKeyBox, halo2_proofs
     let vk = keygen_vk(&params, &circuit)?;
     let mut bytes = zk1::wrap_start();
     zk1::wrap_append_ipa_k(&mut bytes, OFFLINE_NOTE_RECURSIVE_IPA_K);
+    zk1::wrap_append_circuit_id(&mut bytes, OFFLINE_NOTE_RECURSIVE_CIRCUIT_ID);
     zk1::wrap_append_vk_pasta(&mut bytes, &vk);
     Ok(VerifyingKeyBox::new(ZK_BACKEND_HALO2_IPA.to_owned(), bytes))
 }
@@ -680,6 +1895,29 @@ pub fn kagemusha_folded_vk_box() -> Result<VerifyingKeyBox, String> {
         .clone()
 }
 
+fn ensure_kagemusha_folded_canonical_vk_box(vk_box: &VerifyingKeyBox) -> Result<(), String> {
+    if vk_box.backend != ZK_BACKEND_HALO2_IPA {
+        return Err(format!(
+            "Kagemusha folded verifier key backend `{}` is not `{ZK_BACKEND_HALO2_IPA}`",
+            vk_box.backend
+        ));
+    }
+    if vk_box.bytes.is_empty() {
+        return Err("Kagemusha folded verifier key must be non-empty".to_owned());
+    }
+    #[cfg(any(feature = "zk-halo2", feature = "zk-halo2-ipa"))]
+    {
+        let canonical = kagemusha_folded_vk_box()?;
+        if hash_vk(vk_box) != hash_vk(&canonical) || vk_box.bytes != canonical.bytes {
+            return Err(
+                "Kagemusha folded verifier key must match the canonical semantic circuit key"
+                    .to_owned(),
+            );
+        }
+    }
+    Ok(())
+}
+
 #[cfg(any(feature = "zk-halo2", feature = "zk-halo2-ipa"))]
 fn build_kagemusha_folded_vk_box() -> Result<VerifyingKeyBox, halo2_proofs::plonk::Error> {
     use halo2_proofs::plonk::keygen_vk;
@@ -689,6 +1927,46 @@ fn build_kagemusha_folded_vk_box() -> Result<VerifyingKeyBox, halo2_proofs::plon
     let vk = keygen_vk(&params, &circuit)?;
     let mut bytes = zk1::wrap_start();
     zk1::wrap_append_ipa_k(&mut bytes, KAGEMUSHA_FOLDED_IPA_K);
+    zk1::wrap_append_circuit_id(&mut bytes, KAGEMUSHA_FOLDED_CIRCUIT_ID);
+    zk1::wrap_append_vk_pasta(&mut bytes, &vk);
+    Ok(VerifyingKeyBox::new(ZK_BACKEND_HALO2_IPA.to_owned(), bytes))
+}
+
+/// Build the canonical inline verifier key for Kagemusha recursive aggregation proofs.
+///
+/// This key verifies the transparent semantic proof that binds recursive
+/// aggregation proof envelopes to their chain-visible evidence/public-input
+/// layout. It does not enable compact-token mode `2` admission by itself.
+///
+/// # Errors
+///
+/// Returns an error if Halo2 verifier-key generation fails.
+#[cfg(feature = "zk-halo2-ipa")]
+pub fn kagemusha_recursive_aggregation_proof_vk_box() -> Result<VerifyingKeyBox, String> {
+    static CACHE: std::sync::OnceLock<Result<VerifyingKeyBox, String>> = std::sync::OnceLock::new();
+
+    CACHE
+        .get_or_init(|| {
+            build_kagemusha_recursive_aggregation_proof_vk_box().map_err(|err| {
+                format!(
+                    "failed to generate kagemusha-recursive-aggregation-v1 verifying key: {err}"
+                )
+            })
+        })
+        .clone()
+}
+
+#[cfg(feature = "zk-halo2-ipa")]
+fn build_kagemusha_recursive_aggregation_proof_vk_box()
+-> Result<VerifyingKeyBox, halo2_proofs::plonk::Error> {
+    use halo2_proofs::plonk::keygen_vk;
+
+    let params = pasta_params_new(KAGEMUSHA_RECURSIVE_AGGREGATION_IPA_K);
+    let circuit = pasta_tiny::KagemushaRecursiveAggregationSemantic::default();
+    let vk = keygen_vk(&params, &circuit)?;
+    let mut bytes = zk1::wrap_start();
+    zk1::wrap_append_ipa_k(&mut bytes, KAGEMUSHA_RECURSIVE_AGGREGATION_IPA_K);
+    zk1::wrap_append_circuit_id(&mut bytes, KAGEMUSHA_RECURSIVE_AGGREGATION_CIRCUIT_ID);
     zk1::wrap_append_vk_pasta(&mut bytes, &vk);
     Ok(VerifyingKeyBox::new(ZK_BACKEND_HALO2_IPA.to_owned(), bytes))
 }
@@ -728,6 +2006,99 @@ pub fn kagemusha_folded_vk_record(
     record.status = ConfidentialStatus::Active;
     record.namespace = namespace.into();
     Ok(record)
+}
+
+/// Build a verifier-key record for Kagemusha recursive aggregation proofs from supplied key bytes.
+///
+/// This helper is intentionally key-material agnostic: the production recursive
+/// verifier key is still generated by the proving pipeline that owns the final
+/// circuit. The record shape is canonical, active, transparent Halo2 IPA only,
+/// namespace-bound, and tied to the recursive aggregation public-input schema.
+///
+/// # Errors
+///
+/// Returns an error if the key uses a non-production backend, is empty, or has a
+/// length that cannot be represented in the verifier registry.
+pub fn kagemusha_recursive_aggregation_proof_vk_record_from_box(
+    namespace: impl Into<String>,
+    version: u32,
+    vk_box: VerifyingKeyBox,
+) -> Result<iroha_data_model::proof::VerifyingKeyRecord, String> {
+    use iroha_data_model::{
+        confidential::ConfidentialStatus,
+        offline::{
+            KAGEMUSHA_RECURSIVE_AGGREGATION_PROOF_CIRCUIT_ID_V1,
+            kagemusha_recursive_aggregation_proof_public_inputs_schema_hash,
+        },
+        zk::BackendTag,
+    };
+
+    ensure_kagemusha_recursive_aggregation_canonical_vk_box(&vk_box)?;
+    if vk_box.bytes.is_empty() {
+        return Err("Kagemusha recursive aggregation verifier key must be non-empty".to_owned());
+    }
+    let vk_len = u32::try_from(vk_box.bytes.len()).map_err(|_| {
+        "Kagemusha recursive aggregation verifying key length overflowed u32".to_owned()
+    })?;
+    let mut record = iroha_data_model::proof::VerifyingKeyRecord::new(
+        version,
+        KAGEMUSHA_RECURSIVE_AGGREGATION_PROOF_CIRCUIT_ID_V1,
+        BackendTag::Halo2IpaPasta,
+        "pallas",
+        kagemusha_recursive_aggregation_proof_public_inputs_schema_hash(),
+        hash_vk(&vk_box),
+    );
+    record.vk_len = vk_len;
+    record.max_proof_bytes = KAGEMUSHA_RECURSIVE_AGGREGATION_MAX_PROOF_BYTES;
+    record.gas_schedule_id = Some("halo2_default".to_owned());
+    record.key = Some(vk_box);
+    record.status = ConfidentialStatus::Active;
+    record.namespace = namespace.into();
+    Ok(record)
+}
+
+fn ensure_kagemusha_recursive_aggregation_canonical_vk_box(
+    vk_box: &VerifyingKeyBox,
+) -> Result<(), String> {
+    if vk_box.backend != ZK_BACKEND_HALO2_IPA {
+        return Err(format!(
+            "Kagemusha recursive aggregation verifier key backend `{}` is not `{ZK_BACKEND_HALO2_IPA}`",
+            vk_box.backend
+        ));
+    }
+    if vk_box.bytes.is_empty() {
+        return Err("Kagemusha recursive aggregation verifier key must be non-empty".to_owned());
+    }
+    #[cfg(feature = "zk-halo2-ipa")]
+    {
+        let canonical = kagemusha_recursive_aggregation_proof_vk_box()?;
+        if hash_vk(vk_box) != hash_vk(&canonical) || vk_box.bytes != canonical.bytes {
+            return Err(
+                "Kagemusha recursive aggregation verifier key must match the canonical semantic circuit key"
+                    .to_owned(),
+            );
+        }
+    }
+    Ok(())
+}
+
+/// Build a governance/WSV verifier-key record for Kagemusha recursive aggregation proofs.
+///
+/// The record is active, embeds the canonical transparent Halo2 IPA verifier key
+/// inline, and binds to the recursive aggregation public-input schema. Compact
+/// token mode `2` remains reserved until the recursive private-hop verifier is
+/// complete.
+///
+/// # Errors
+///
+/// Returns an error if verifier-key generation fails or the key length cannot be encoded.
+#[cfg(feature = "zk-halo2-ipa")]
+pub fn kagemusha_recursive_aggregation_proof_vk_record(
+    namespace: impl Into<String>,
+    version: u32,
+) -> Result<iroha_data_model::proof::VerifyingKeyRecord, String> {
+    let vk_box = kagemusha_recursive_aggregation_proof_vk_box()?;
+    kagemusha_recursive_aggregation_proof_vk_record_from_box(namespace, version, vk_box)
 }
 
 fn hash_limb0(hash: &iroha_crypto::Hash) -> u64 {
@@ -1084,6 +2455,89 @@ pub fn kagemusha_folded_public_input_instance_values(
             aggregation_limbs[3],
         ],
     })
+}
+
+/// Build the public instance values expected for a recursive Kagemusha aggregation proof.
+///
+/// # Errors
+///
+/// Returns an error if the recursive proof public-input context is unsupported
+/// or if the payload cannot be hashed.
+pub fn kagemusha_recursive_aggregation_proof_public_input_instance_values(
+    public_inputs: &iroha_data_model::offline::KagemushaRecursiveAggregationProofPublicInputs,
+) -> Result<KagemushaRecursiveAggregationProofInstanceValues, String> {
+    public_inputs
+        .validate_context()
+        .map_err(|err| err.to_string())?;
+    let public_inputs_hash = public_inputs
+        .public_inputs_hash()
+        .map_err(|err| format!("failed to hash Kagemusha recursive proof public inputs: {err}"))?;
+    let public_hash_limbs = hash_to_u64_limbs_le(&public_inputs_hash);
+    let evidence_limbs = bytes_to_u64_limbs_le(&public_inputs.evidence_digest);
+    let aggregation_limbs = bytes_to_u64_limbs_le(&public_inputs.aggregation_transcript_digest);
+    let params_limbs = bytes_to_u64_limbs_le(&public_inputs.verifier_params_fingerprint);
+    let schedule_limbs = bytes_to_u64_limbs_le(&public_inputs.fixed_window_table_schedule_digest);
+    let manifest_limbs =
+        bytes_to_u64_limbs_le(&public_inputs.fixed_window_shared_table_manifest_digest);
+    let table_base_limbs = bytes_to_u64_limbs_le(&public_inputs.fixed_window_table_base_digest);
+    let batch_limbs = bytes_to_u64_limbs_le(&public_inputs.verifier_witness_batch_digest);
+
+    Ok(KagemushaRecursiveAggregationProofInstanceValues {
+        public_values: [
+            public_hash_limbs[0],
+            public_hash_limbs[1],
+            public_hash_limbs[2],
+            public_hash_limbs[3],
+            evidence_limbs[0],
+            evidence_limbs[1],
+            evidence_limbs[2],
+            evidence_limbs[3],
+            aggregation_limbs[0],
+            aggregation_limbs[1],
+            aggregation_limbs[2],
+            aggregation_limbs[3],
+            params_limbs[0],
+            params_limbs[1],
+            params_limbs[2],
+            params_limbs[3],
+            schedule_limbs[0],
+            schedule_limbs[1],
+            schedule_limbs[2],
+            schedule_limbs[3],
+            manifest_limbs[0],
+            manifest_limbs[1],
+            manifest_limbs[2],
+            manifest_limbs[3],
+            table_base_limbs[0],
+            table_base_limbs[1],
+            table_base_limbs[2],
+            table_base_limbs[3],
+            batch_limbs[0],
+            batch_limbs[1],
+            batch_limbs[2],
+            batch_limbs[3],
+            u64::from(public_inputs.verifier_opening_len),
+            u64::from(public_inputs.verifier_witness_count),
+            u64::from(public_inputs.hop_count),
+        ],
+    })
+}
+
+/// Build the public instance values expected for a proof-carrying recursive aggregation bundle.
+///
+/// # Errors
+///
+/// Returns an error when the bundle is not canonically bound to its evidence or
+/// when the instance layout cannot be built.
+pub fn kagemusha_recursive_aggregation_proof_bundle_instance_values(
+    bundle: &iroha_data_model::offline::KagemushaRecursiveAggregationProofBundle,
+) -> Result<KagemushaRecursiveAggregationProofInstanceValues, String> {
+    bundle
+        .validate_evidence_binding()
+        .map_err(|err| err.to_string())?;
+    kagemusha_recursive_aggregation_proof_public_input_instance_values(
+        &bundle.recursive_proof.public_inputs,
+    )
 }
 
 /// Build the public instance values expected for a compact Kagemusha token proof.
@@ -1525,9 +2979,7 @@ fn prove_halo2_ipa_offline_note_envelope(
             "Offline recursive proving requires canonical circuit id `{OFFLINE_NOTE_RECURSIVE_CIRCUIT_ID}` (found `{circuit_id}`)"
         ));
     }
-    if vk_box.backend.as_str() != ZK_BACKEND_HALO2_IPA {
-        return Err("offline proving requires halo2/ipa verifying key backend".to_owned());
-    }
+    ensure_offline_note_recursive_canonical_vk_box(vk_box)?;
 
     let params = zkparse::params_any(vk_box.bytes.as_slice())
         .ok_or_else(|| "missing/invalid IPAK parameters in verifying key envelope".to_owned())?;
@@ -1621,11 +3073,7 @@ pub fn derive_halo2_ipa_offline_note_proving_key_bytes(
         plonk::{VerifyingKey, keygen_pk},
     };
 
-    if vk_box.backend.as_str() != ZK_BACKEND_HALO2_IPA {
-        return Err(
-            "offline proving key derivation requires halo2/ipa verifying key backend".to_owned(),
-        );
-    }
+    ensure_offline_note_recursive_canonical_vk_box(vk_box)?;
 
     let params = zkparse::params_any(vk_box.bytes.as_slice())
         .ok_or_else(|| "missing/invalid IPAK parameters in verifying key envelope".to_owned())?;
@@ -1751,9 +3199,7 @@ fn prove_halo2_ipa_kagemusha_folded_envelope(
             "Kagemusha folded proving requires canonical circuit id `{KAGEMUSHA_FOLDED_CIRCUIT_ID}` (found `{circuit_id}`)"
         ));
     }
-    if vk_box.backend.as_str() != ZK_BACKEND_HALO2_IPA {
-        return Err("Kagemusha folded proving requires halo2/ipa verifying key backend".to_owned());
-    }
+    ensure_kagemusha_folded_canonical_vk_box(vk_box)?;
 
     let params = zkparse::params_any(vk_box.bytes.as_slice())
         .ok_or_else(|| "missing/invalid IPAK parameters in verifying key envelope".to_owned())?;
@@ -1858,12 +3304,7 @@ pub fn derive_halo2_ipa_kagemusha_folded_proving_key_bytes(
         plonk::{VerifyingKey, keygen_pk},
     };
 
-    if vk_box.backend.as_str() != ZK_BACKEND_HALO2_IPA {
-        return Err(
-            "Kagemusha folded proving key derivation requires halo2/ipa verifying key backend"
-                .to_owned(),
-        );
-    }
+    ensure_kagemusha_folded_canonical_vk_box(vk_box)?;
 
     let params = zkparse::params_any(vk_box.bytes.as_slice())
         .ok_or_else(|| "missing/invalid IPAK parameters in verifying key envelope".to_owned())?;
@@ -1885,6 +3326,266 @@ pub fn derive_halo2_ipa_kagemusha_folded_proving_key_bytes(
         hash_vk(vk_box),
         pk.to_bytes(SerdeFormat::Processed),
     )
+}
+
+#[cfg(feature = "zk-halo2-ipa")]
+fn cached_kagemusha_recursive_aggregation_proving_key(
+    params: &PastaParams,
+    parsed_vk: &halo2_proofs::plonk::VerifyingKey<halo2_proofs::halo2curves::pasta::EqAffine>,
+    vk_commitment: [u8; 32],
+) -> Result<Arc<halo2_proofs::plonk::ProvingKey<halo2_proofs::halo2curves::pasta::EqAffine>>, String>
+{
+    static CACHE: OnceLock<
+        Mutex<
+            BTreeMap<
+                [u8; 32],
+                Arc<halo2_proofs::plonk::ProvingKey<halo2_proofs::halo2curves::pasta::EqAffine>>,
+            >,
+        >,
+    > = OnceLock::new();
+
+    let cache = CACHE.get_or_init(|| Mutex::new(BTreeMap::new()));
+    if let Some(proving_key) = cache
+        .lock()
+        .expect("Kagemusha recursive aggregation proving key cache mutex poisoned")
+        .get(&vk_commitment)
+        .cloned()
+    {
+        return Ok(proving_key);
+    }
+
+    let proving_key = halo2_proofs::plonk::keygen_pk(
+        params,
+        parsed_vk.clone(),
+        &pasta_tiny::KagemushaRecursiveAggregationSemantic::default(),
+    )
+    .map_err(|err| {
+        format!("failed to derive Kagemusha recursive aggregation proving key: {err}")
+    })?;
+    let proving_key = Arc::new(proving_key);
+    let mut cache = cache
+        .lock()
+        .expect("Kagemusha recursive aggregation proving key cache mutex poisoned");
+    match cache.entry(vk_commitment) {
+        Entry::Occupied(entry) => Ok(Arc::clone(entry.get())),
+        Entry::Vacant(entry) => Ok(Arc::clone(entry.insert(proving_key))),
+    }
+}
+
+#[cfg(feature = "zk-halo2-ipa")]
+fn prove_halo2_ipa_kagemusha_recursive_aggregation_envelope(
+    circuit_id: &str,
+    vk_box: &VerifyingKeyBox,
+    instance_values: KagemushaRecursiveAggregationProofInstanceValues,
+    proving_key_bytes: Option<&[u8]>,
+) -> Result<ProofBox, String> {
+    use std::io::Cursor;
+
+    use halo2_proofs::{
+        SerdeFormat,
+        halo2curves::pasta::{EqAffine as Curve, Fp as Scalar},
+        plonk::{ProvingKey, VerifyingKey, create_proof},
+        poly::ipa::{commitment::IPACommitmentScheme, multiopen::ProverIPA},
+        transcript::{Blake2bWrite, Challenge255, TranscriptWriterBuffer as _},
+    };
+    use iroha_data_model::{
+        offline::KAGEMUSHA_RECURSIVE_AGGREGATION_PROOF_PUBLIC_INPUTS_SCHEMA,
+        zk::{BackendTag, OpenVerifyEnvelope},
+    };
+    use rand_core_06::OsRng;
+
+    if circuit_id != KAGEMUSHA_RECURSIVE_AGGREGATION_CIRCUIT_ID {
+        return Err(format!(
+            "Kagemusha recursive aggregation proving requires canonical circuit id `{KAGEMUSHA_RECURSIVE_AGGREGATION_CIRCUIT_ID}` (found `{circuit_id}`)"
+        ));
+    }
+    ensure_kagemusha_recursive_aggregation_canonical_vk_box(vk_box)?;
+
+    let params = zkparse::params_any(vk_box.bytes.as_slice())
+        .ok_or_else(|| "missing/invalid IPAK parameters in verifying key envelope".to_owned())?;
+    let parsed_vk: VerifyingKey<Curve> = zkparse::vk_from_bytes::<
+        pasta_tiny::KagemushaRecursiveAggregationSemantic,
+    >(vk_box.bytes.as_slice(), &params)
+    .ok_or_else(|| {
+        "missing/invalid H2VK payload for kagemusha-recursive-aggregation-v1 verifying key"
+            .to_owned()
+    })?;
+
+    let public_values = instance_values.public_scalars();
+    let opening_len_selectors = instance_values.opening_len_selectors()?;
+    let hop_count_minus_one_bits = instance_values.hop_count_minus_one_bits()?;
+    let non_zero_public_field_inverses = instance_values.non_zero_public_field_inverses()?;
+    let instance_columns_owned: Vec<Vec<Scalar>> =
+        public_values.iter().map(|value| vec![*value]).collect();
+    let instance_columns: Vec<&[Scalar]> =
+        instance_columns_owned.iter().map(Vec::as_slice).collect();
+    let instance_refs: Vec<&[&[Scalar]]> = vec![instance_columns.as_slice()];
+
+    let vk_commitment = hash_vk(vk_box);
+    let proving_key: Arc<ProvingKey<Curve>> = if let Some(bytes) = proving_key_bytes {
+        let proving_key_raw = decode_halo2_ipa_proving_key_archive(
+            bytes,
+            KAGEMUSHA_RECURSIVE_AGGREGATION_CIRCUIT_ID,
+            vk_commitment,
+        )?;
+        let mut cursor = Cursor::new(proving_key_raw.as_slice());
+        let pk =
+            read_proving_key::<pasta_tiny::KagemushaRecursiveAggregationSemantic, _>(&mut cursor)
+                .map_err(|err| {
+                format!("failed to decode Kagemusha recursive aggregation proving key: {err}")
+            })?;
+        let consumed = usize::try_from(cursor.position()).unwrap_or(usize::MAX);
+        if consumed != proving_key_raw.len() {
+            return Err(
+                "failed to decode Kagemusha recursive aggregation proving key: trailing bytes"
+                    .to_owned(),
+            );
+        }
+        if pk.get_vk().get_domain().k() != params.k() {
+            return Err(
+                "Kagemusha recursive aggregation proving key domain does not match IPAK parameters"
+                    .to_owned(),
+            );
+        }
+        if pk.get_vk().to_bytes(SerdeFormat::Processed)
+            != parsed_vk.to_bytes(SerdeFormat::Processed)
+        {
+            return Err(
+                "Kagemusha recursive aggregation proving key verifying key does not match vk_ref bytes"
+                    .to_owned(),
+            );
+        }
+        Arc::new(pk)
+    } else {
+        cached_kagemusha_recursive_aggregation_proving_key(&params, &parsed_vk, vk_commitment)?
+    };
+
+    let circuit = pasta_tiny::KagemushaRecursiveAggregationSemantic {
+        public_values,
+        opening_len_selectors,
+        hop_count_minus_one_bits,
+        non_zero_public_field_inverses,
+    };
+    let mut transcript = Blake2bWrite::<_, Curve, Challenge255<Curve>>::init(vec![]);
+    create_proof::<IPACommitmentScheme<Curve>, ProverIPA<'_, Curve>, Challenge255<Curve>, _, _, _>(
+        &params,
+        proving_key.as_ref(),
+        &[circuit],
+        &instance_refs,
+        OsRng,
+        &mut transcript,
+    )
+    .map_err(|err| format!("failed to create Kagemusha recursive aggregation proof: {err}"))?;
+    let proof_raw = transcript.finalize();
+
+    let mut proof_payload = zk1::wrap_start();
+    zk1::wrap_append_proof(&mut proof_payload, &proof_raw);
+    zk1::wrap_append_instances_pasta_fp_cols(instance_columns.as_slice(), &mut proof_payload);
+
+    let envelope = OpenVerifyEnvelope {
+        backend: BackendTag::Halo2IpaPasta,
+        circuit_id: circuit_id.to_owned(),
+        vk_hash: vk_commitment,
+        public_inputs: KAGEMUSHA_RECURSIVE_AGGREGATION_PROOF_PUBLIC_INPUTS_SCHEMA.to_vec(),
+        proof_bytes: proof_payload,
+        aux: Vec::new(),
+    };
+    let encoded = norito::to_bytes(&envelope)
+        .map_err(|err| format!("failed to encode OpenVerifyEnvelope: {err}"))?;
+    Ok(ProofBox::new(ZK_BACKEND_HALO2_IPA.to_owned(), encoded))
+}
+
+/// Derive Halo2 IPA proving-key bytes for the Kagemusha recursive aggregation semantic circuit.
+///
+/// The returned archive binds the proving key to the canonical circuit family
+/// and verifier-key commitment. It is transparent Halo2 IPA key material; no
+/// KZG/Groth16-style trusted setup is used.
+#[cfg(feature = "zk-halo2-ipa")]
+pub fn derive_halo2_ipa_kagemusha_recursive_aggregation_proving_key_bytes(
+    vk_box: &VerifyingKeyBox,
+) -> Result<Vec<u8>, String> {
+    use halo2_proofs::{
+        SerdeFormat,
+        halo2curves::pasta::EqAffine as Curve,
+        plonk::{VerifyingKey, keygen_pk},
+    };
+
+    ensure_kagemusha_recursive_aggregation_canonical_vk_box(vk_box)?;
+
+    let params = zkparse::params_any(vk_box.bytes.as_slice())
+        .ok_or_else(|| "missing/invalid IPAK parameters in verifying key envelope".to_owned())?;
+    let parsed_vk: VerifyingKey<Curve> = zkparse::vk_from_bytes::<
+        pasta_tiny::KagemushaRecursiveAggregationSemantic,
+    >(vk_box.bytes.as_slice(), &params)
+    .ok_or_else(|| {
+        "missing/invalid H2VK payload for kagemusha-recursive-aggregation-v1 verifying key"
+            .to_owned()
+    })?;
+
+    let pk = keygen_pk(
+        &params,
+        parsed_vk,
+        &pasta_tiny::KagemushaRecursiveAggregationSemantic::default(),
+    )
+    .map_err(|err| {
+        format!("failed to derive Kagemusha recursive aggregation proving key: {err}")
+    })?;
+    encode_halo2_ipa_proving_key_archive(
+        KAGEMUSHA_RECURSIVE_AGGREGATION_CIRCUIT_ID,
+        hash_vk(vk_box),
+        pk.to_bytes(SerdeFormat::Processed),
+    )
+}
+
+/// Prove a Kagemusha recursive aggregation evidence binding with transparent Halo2 IPA.
+///
+/// This proves the chain-visible recursive aggregation public-input layout,
+/// opening-width corridor, hop-count corridor, witness-count equality, and
+/// non-zero digest groups. It remains a reserved proof surface and does not
+/// make compact-token aggregation mode `2` admissible.
+///
+/// # Errors
+///
+/// Returns an error if the evidence is non-canonical, the verifier/proving key
+/// is incompatible, or proof generation fails.
+#[cfg(feature = "zk-halo2-ipa")]
+pub(crate) fn prove_kagemusha_recursive_aggregation_evidence(
+    circuit_id: &str,
+    vk_box: &VerifyingKeyBox,
+    evidence: iroha_data_model::offline::KagemushaRecursiveAggregationEvidence,
+    proving_key_bytes: Option<&[u8]>,
+) -> Result<iroha_data_model::offline::KagemushaRecursiveAggregationProofBundle, String> {
+    let public_inputs =
+        iroha_data_model::offline::kagemusha_recursive_aggregation_proof_public_inputs_from_evidence(
+            &evidence,
+        )
+        .map_err(|err| err.to_string())?;
+    ensure_kagemusha_recursive_aggregation_public_fixed_window_digests(&public_inputs)?;
+    let instance_values =
+        kagemusha_recursive_aggregation_proof_public_input_instance_values(&public_inputs)?;
+    let proof = prove_halo2_ipa_kagemusha_recursive_aggregation_envelope(
+        circuit_id,
+        vk_box,
+        instance_values,
+        proving_key_bytes,
+    )?;
+    let public_inputs_hash = public_inputs
+        .public_inputs_hash()
+        .map_err(|err| format!("failed to hash Kagemusha recursive proof public inputs: {err}"))?;
+    let recursive_proof = iroha_data_model::offline::KagemushaRecursiveAggregationProof {
+        verifier_key_id: VerifyingKeyId::new(ZK_BACKEND_HALO2_IPA, circuit_id),
+        public_inputs,
+        public_inputs_hash,
+        proof,
+    };
+    let bundle = iroha_data_model::offline::KagemushaRecursiveAggregationProofBundle {
+        evidence,
+        recursive_proof,
+    };
+    bundle
+        .validate_evidence_binding()
+        .map_err(|err| err.to_string())?;
+    Ok(bundle)
 }
 
 /// Prove compact Kagemusha folded public inputs with the real Halo2 IPA circuit.
@@ -2218,6 +3919,9 @@ fn validate_kagemusha_fold_attachment(step: &KagemushaFoldProofStep<'_>) -> Resu
     if step.vk_box.bytes.is_empty() {
         return Err("Kagemusha fold verifier key bytes must be non-empty".to_owned());
     }
+    if backend == ZK_BACKEND_HALO2_IPA {
+        confidential_v2::ensure_confidential_transfer_v2_canonical_vk_box(step.vk_box)?;
+    }
     if step.attachment.vk_ref.name.trim().is_empty() {
         return Err("Kagemusha fold verifier key id name must be non-empty".to_owned());
     }
@@ -2392,6 +4096,9 @@ fn validate_kagemusha_fold_verifier_record(
     }
     if step.vk_box.bytes.is_empty() {
         return Err("Kagemusha fold verifier key bytes must be non-empty".to_owned());
+    }
+    if step.attachment.backend.as_str() == ZK_BACKEND_HALO2_IPA {
+        confidential_v2::ensure_confidential_transfer_v2_canonical_vk_box(step.vk_box)?;
     }
     let commitment = hash_vk(step.vk_box);
     if record.commitment != commitment {
@@ -2656,7 +4363,7 @@ pub fn kagemusha_pallas_ipa_batch_verifier_preflight(
 
     macro_rules! dispatch {
         ($len:literal) => {
-            pasta_tiny::NonNativeVestaIpaVerifierNativeScalar::<
+            pasta_tiny::NonNativeVestaIpaVerifierSharedTableNativeScalar::<
                 $len,
                 KAGEMUSHA_RECURSIVE_VESTA_IPA_WINDOWS,
                 KAGEMUSHA_RECURSIVE_VESTA_IPA_WINDOW_BITS,
@@ -2679,6 +4386,435 @@ pub fn kagemusha_pallas_ipa_batch_verifier_preflight(
 }
 
 #[cfg(feature = "zk-halo2-ipa")]
+fn kagemusha_derive_pallas_ipa_witnesses_from_open_envelopes(
+    envelopes: &[iroha_zkp_halo2::OpenVerifyEnvelope],
+) -> Result<
+    (
+        Arc<iroha_zkp_halo2::pallas::Params>,
+        Vec<iroha_zkp_halo2::IpaVerifierWitness<iroha_zkp_halo2::pallas::PallasBackend>>,
+    ),
+    String,
+> {
+    if envelopes.is_empty() {
+        return Err(
+            "Kagemusha Pallas IPA open-envelope preflight requires at least one envelope"
+                .to_owned(),
+        );
+    }
+    if envelopes.len() > iroha_data_model::offline::KAGEMUSHA_COMPACT_TOKEN_MAX_HOPS {
+        return Err(format!(
+            "Kagemusha Pallas IPA open-envelope preflight accepts at most {} envelopes (found {})",
+            iroha_data_model::offline::KAGEMUSHA_COMPACT_TOKEN_MAX_HOPS,
+            envelopes.len()
+        ));
+    }
+    let envelope_limits = iroha_zkp_halo2::OpenVerifyLimits {
+        max_k: Some(KAGEMUSHA_RECURSIVE_PALLAS_IPA_BATCH_MAX_LEN.trailing_zeros()),
+        max_transcript_label_len: None,
+    };
+
+    let mut params = None::<Arc<iroha_zkp_halo2::pallas::Params>>;
+    let mut params_fingerprint = None::<[u8; 32]>;
+    let mut witnesses = Vec::with_capacity(envelopes.len());
+    for (envelope_index, envelope) in envelopes.iter().enumerate() {
+        validate_kagemusha_pallas_open_envelope_preflight_shape(envelope_index, envelope)?;
+        let (envelope_params, witness) =
+            iroha_zkp_halo2::norito_helpers::derive_pallas_ipa_verifier_witness_from_envelope_with_limits(
+                envelope,
+                envelope_limits,
+            )
+            .map_err(|err| {
+                format!(
+                    "Kagemusha Pallas IPA open-envelope {envelope_index} witness derivation failed: {err}"
+                )
+            })?;
+        let fingerprint = envelope_params.fingerprint();
+        if let Some(expected) = params_fingerprint {
+            if fingerprint != expected {
+                return Err(format!(
+                    "Kagemusha Pallas IPA open-envelope {envelope_index} parameter fingerprint mismatch"
+                ));
+            }
+        } else {
+            params_fingerprint = Some(fingerprint);
+            params = Some(envelope_params.clone());
+        }
+        witnesses.push(witness);
+    }
+
+    Ok((
+        params.expect("non-empty envelope batch has parameters"),
+        witnesses,
+    ))
+}
+
+#[cfg(feature = "zk-halo2-ipa")]
+fn validate_kagemusha_pallas_open_envelope_preflight_shape(
+    envelope_index: usize,
+    envelope: &iroha_zkp_halo2::OpenVerifyEnvelope,
+) -> Result<(), String> {
+    if envelope.transcript_label.is_empty() {
+        return Err(format!(
+            "Kagemusha Pallas IPA open-envelope {envelope_index} transcript label must be non-empty"
+        ));
+    }
+    if envelope.transcript_label.len() > KAGEMUSHA_PALLAS_OPEN_ENVELOPE_MAX_TRANSCRIPT_LABEL_BYTES {
+        return Err(format!(
+            "Kagemusha Pallas IPA open-envelope {envelope_index} transcript label exceeds {} bytes",
+            KAGEMUSHA_PALLAS_OPEN_ENVELOPE_MAX_TRANSCRIPT_LABEL_BYTES
+        ));
+    }
+    ensure_kagemusha_pallas_open_envelope_metadata_field(
+        envelope_index,
+        "verifier-key commitment",
+        envelope.vk_commitment,
+    )?;
+    ensure_kagemusha_pallas_open_envelope_metadata_field(
+        envelope_index,
+        "public-input schema hash",
+        envelope.public_inputs_schema_hash,
+    )?;
+    ensure_kagemusha_pallas_open_envelope_metadata_field(
+        envelope_index,
+        "hop domain tag",
+        envelope.domain_tag,
+    )?;
+    if envelope.params.version != 1 {
+        return Err(format!(
+            "Kagemusha Pallas IPA open-envelope {envelope_index} parameter version must be 1"
+        ));
+    }
+    if envelope.public.version != 1 {
+        return Err(format!(
+            "Kagemusha Pallas IPA open-envelope {envelope_index} public opening version must be 1"
+        ));
+    }
+    if envelope.proof.version != 1 {
+        return Err(format!(
+            "Kagemusha Pallas IPA open-envelope {envelope_index} proof version must be 1"
+        ));
+    }
+    let pallas_curve_id = iroha_zkp_halo2::ZkCurveId::Pallas.as_u16();
+    if envelope.params.curve_id != pallas_curve_id || envelope.public.curve_id != pallas_curve_id {
+        return Err(format!(
+            "Kagemusha Pallas IPA open-envelope {envelope_index} must use the Pallas backend"
+        ));
+    }
+    if envelope.params.n != envelope.public.n {
+        return Err(format!(
+            "Kagemusha Pallas IPA open-envelope {envelope_index} parameter/public opening length mismatch"
+        ));
+    }
+    iroha_data_model::offline::validate_kagemusha_recursive_verifier_opening_len(envelope.params.n)
+        .map_err(|err| format!("Kagemusha Pallas IPA open-envelope {envelope_index} {err}"))?;
+
+    let opening_len = usize::try_from(envelope.params.n).map_err(|_| {
+        format!(
+            "Kagemusha Pallas IPA open-envelope {envelope_index} opening length does not fit usize"
+        )
+    })?;
+    if envelope.params.g.len() != opening_len {
+        return Err(format!(
+            "Kagemusha Pallas IPA open-envelope {envelope_index} G generator count mismatch: expected {opening_len}, found {}",
+            envelope.params.g.len()
+        ));
+    }
+    if envelope.params.h.len() != opening_len {
+        return Err(format!(
+            "Kagemusha Pallas IPA open-envelope {envelope_index} H generator count mismatch: expected {opening_len}, found {}",
+            envelope.params.h.len()
+        ));
+    }
+    let expected_rounds = opening_len.trailing_zeros() as usize;
+    if envelope.proof.l.len() != envelope.proof.r.len() {
+        return Err(format!(
+            "Kagemusha Pallas IPA open-envelope {envelope_index} L/R round count mismatch"
+        ));
+    }
+    if envelope.proof.l.len() != expected_rounds {
+        return Err(format!(
+            "Kagemusha Pallas IPA open-envelope {envelope_index} round count mismatch: expected {expected_rounds}, found {}",
+            envelope.proof.l.len()
+        ));
+    }
+    Ok(())
+}
+
+#[cfg(feature = "zk-halo2-ipa")]
+fn ensure_kagemusha_pallas_open_envelope_metadata_field(
+    envelope_index: usize,
+    label: &str,
+    value: Option<[u8; 32]>,
+) -> Result<[u8; 32], String> {
+    let value = value.ok_or_else(|| {
+        format!("Kagemusha Pallas IPA open-envelope {envelope_index} missing {label} metadata")
+    })?;
+    if value == [0u8; 32] {
+        return Err(format!(
+            "Kagemusha Pallas IPA open-envelope {envelope_index} {label} metadata must be non-zero"
+        ));
+    }
+    Ok(value)
+}
+
+/// Derive and preflight an ordered Pallas IPA verifier-witness batch from opening envelopes.
+///
+/// This is the proof-derived form of
+/// [`kagemusha_pallas_ipa_batch_verifier_preflight`]. It reconstructs each
+/// native verifier witness from a transparent Pallas polynomial-opening
+/// envelope before applying the Kagemusha recursive verifier width, hop-count,
+/// table-profile, and Poseidon2 digest binding checks. Kagemusha envelopes
+/// must carry non-zero verifier-key commitment, public-input schema, and hop
+/// domain metadata so detached polynomial-opening proofs cannot enter recursive
+/// evidence preflight.
+///
+/// # Errors
+///
+/// Returns an error when the envelope batch is empty or over the compact-token
+/// hop cap, any envelope is detached from Kagemusha metadata or is not a valid
+/// verifying Pallas opening, the batch mixes parameter sets, or the derived
+/// witness batch fails recursive preflight.
+#[cfg(feature = "zk-halo2-ipa")]
+pub fn kagemusha_pallas_ipa_batch_verifier_preflight_from_open_envelopes(
+    envelopes: &[iroha_zkp_halo2::OpenVerifyEnvelope],
+) -> Result<PallasIpaBatchVerifierPreflight, String> {
+    let (params, witnesses) = kagemusha_derive_pallas_ipa_witnesses_from_open_envelopes(envelopes)?;
+    kagemusha_pallas_ipa_batch_verifier_preflight(params.as_ref(), &witnesses)
+}
+
+/// Derive, preflight, and bind Pallas IPA opening envelopes to ordered hop proof hashes.
+///
+/// # Errors
+///
+/// Returns an error when proof-derived native witness preflight fails or when
+/// the hop-proof hash count does not match the derived witness count.
+#[cfg(feature = "zk-halo2-ipa")]
+pub fn kagemusha_pallas_ipa_batch_verifier_preflight_from_open_envelopes_bound_to_hop_proofs(
+    envelopes: &[iroha_zkp_halo2::OpenVerifyEnvelope],
+    hop_proof_hashes: &[iroha_crypto::Hash],
+) -> Result<PallasIpaBatchVerifierPreflight, String> {
+    if envelopes.len() != hop_proof_hashes.len() {
+        return Err(format!(
+            "Kagemusha Pallas IPA hop-bound open-envelope witness/hash count mismatch: expected {}, found {}",
+            envelopes.len(),
+            hop_proof_hashes.len()
+        ));
+    }
+    let (params, witnesses) = kagemusha_derive_pallas_ipa_witnesses_from_open_envelopes(envelopes)?;
+    kagemusha_pallas_ipa_batch_verifier_preflight_bound_to_hop_proofs(
+        params.as_ref(),
+        &witnesses,
+        hop_proof_hashes,
+    )
+}
+
+#[cfg(feature = "zk-halo2-ipa")]
+fn kagemusha_confidential_v2_public_inputs_schema_hash() -> [u8; 32] {
+    iroha_crypto::Hash::new(confidential_v2::CONFIDENTIAL_TRANSFER_V2_PUBLIC_INPUTS_SCHEMA_V1)
+        .into()
+}
+
+/// Return the Pallas opening-envelope transcript metadata expected for one checked hop.
+///
+/// Wallet/prover code can use this metadata when producing the transparent
+/// Pallas polynomial-opening envelopes that feed reserved recursive aggregation
+/// evidence. The metadata binds the native opening transcript to the same
+/// chain, asset, hop, proof, public-input, and verifier-key context used by
+/// checked Kagemusha folding.
+///
+/// # Errors
+///
+/// Returns an error when the hop shape or confidential-transfer-v2 public-input
+/// binding is invalid, the verifier-key commitment is missing or mismatched, or
+/// the proof/verifier-key material cannot be hashed into the hop domain tag.
+#[cfg(feature = "zk-halo2-ipa")]
+pub fn kagemusha_pallas_open_envelope_metadata_for_verified_hop(
+    chain_id: &iroha_data_model::ChainId,
+    asset: &iroha_data_model::asset::AssetDefinitionId,
+    hop_index: usize,
+    step: &iroha_data_model::offline::KagemushaVerifiedFoldStep,
+) -> Result<iroha_zkp_halo2::PolyOpenTranscriptMetadata, String> {
+    let proof_step = KagemushaFoldProofStep {
+        root_before: step.root_before,
+        input_nullifiers: &step.input_nullifiers,
+        output_commitments: &step.output_commitments,
+        root_after: step.root_after,
+        attachment: &step.attachment,
+        vk_box: &step.verifier_key,
+    };
+    kagemusha_pallas_open_envelope_metadata_for_step(chain_id, asset, hop_index, &proof_step)
+}
+
+#[cfg(feature = "zk-halo2-ipa")]
+fn kagemusha_pallas_open_envelope_metadata_for_step(
+    chain_id: &iroha_data_model::ChainId,
+    asset: &iroha_data_model::asset::AssetDefinitionId,
+    hop_index: usize,
+    step: &KagemushaFoldProofStep<'_>,
+) -> Result<iroha_zkp_halo2::PolyOpenTranscriptMetadata, String> {
+    validate_kagemusha_fold_step_shape(step)?;
+    if step.attachment.backend.as_str() != ZK_BACKEND_HALO2_IPA
+        || step.attachment.proof.backend != step.attachment.backend
+        || step.attachment.vk_ref.backend != step.attachment.backend
+        || step.vk_box.backend != step.attachment.backend
+    {
+        return Err(
+            "Kagemusha Pallas open-envelope metadata requires a consistent halo2/ipa hop"
+                .to_owned(),
+        );
+    }
+    ensure_kagemusha_hop_proof_size(&step.attachment.proof)?;
+    let actual_vk_commitment = hash_vk(step.vk_box);
+    let Some(expected_vk_commitment) = step.attachment.vk_commitment else {
+        return Err(
+            "Kagemusha Pallas open-envelope metadata requires hop verifier-key commitment"
+                .to_owned(),
+        );
+    };
+    if expected_vk_commitment != actual_vk_commitment {
+        return Err(
+            "Kagemusha Pallas open-envelope metadata verifier-key commitment mismatch".to_owned(),
+        );
+    }
+    validate_required_kagemusha_confidential_v2_step_public_inputs(chain_id, asset, step)?;
+    let proof_hash = kagemusha_fold_step_proof_hash(&step.attachment.proof)?;
+    let proof_public_inputs_digest = kagemusha_fold_step_public_inputs_digest_checked(step)?;
+    let verifier_key_poseidon_digest =
+        iroha_data_model::offline::kagemusha_verifier_key_poseidon_digest(
+            step.vk_box.backend.as_str(),
+            &step.vk_box.bytes,
+        )
+        .map_err(|err| err.to_string())?;
+    let domain_tag = kagemusha_pallas_open_envelope_hop_domain_tag(
+        chain_id,
+        asset,
+        hop_index,
+        step,
+        &proof_hash,
+        proof_public_inputs_digest,
+        verifier_key_poseidon_digest,
+    )?;
+
+    Ok(iroha_zkp_halo2::PolyOpenTranscriptMetadata {
+        vk_commitment: Some(actual_vk_commitment),
+        public_inputs_schema_hash: Some(kagemusha_confidential_v2_public_inputs_schema_hash()),
+        domain_tag: Some(domain_tag),
+    })
+}
+
+#[cfg(feature = "zk-halo2-ipa")]
+fn kagemusha_pallas_open_envelope_hop_domain_tag(
+    chain_id: &iroha_data_model::ChainId,
+    asset: &iroha_data_model::asset::AssetDefinitionId,
+    hop_index: usize,
+    step: &KagemushaFoldProofStep<'_>,
+    proof_hash: &iroha_crypto::Hash,
+    proof_public_inputs_digest: [u8; 32],
+    verifier_key_poseidon_digest: [u8; 32],
+) -> Result<[u8; 32], String> {
+    let mut hasher = iroha_zkp_halo2::poseidon::PoseidonByteHasher::new();
+    kagemusha_recursive_poseidon_update_tagged_bytes(
+        &mut hasher,
+        b"domain",
+        b"iroha:kagemusha:pallas-open-envelope-hop:v1",
+    )?;
+    kagemusha_recursive_poseidon_update_tagged_bytes(
+        &mut hasher,
+        b"chain-id",
+        chain_id.as_str().as_bytes(),
+    )?;
+    let asset = asset.to_string();
+    kagemusha_recursive_poseidon_update_tagged_bytes(&mut hasher, b"asset", asset.as_bytes())?;
+    kagemusha_recursive_poseidon_update_len(&mut hasher, "hop index", hop_index)?;
+    kagemusha_recursive_poseidon_update_tagged_bytes(
+        &mut hasher,
+        b"root-before",
+        &step.root_before,
+    )?;
+    kagemusha_recursive_poseidon_update_len(
+        &mut hasher,
+        "input nullifier count",
+        step.input_nullifiers.len(),
+    )?;
+    for (input_index, input) in step.input_nullifiers.iter().enumerate() {
+        kagemusha_recursive_poseidon_update_len(&mut hasher, "input index", input_index)?;
+        kagemusha_recursive_poseidon_update_tagged_bytes(&mut hasher, b"input-nullifier", input)?;
+    }
+    kagemusha_recursive_poseidon_update_len(
+        &mut hasher,
+        "output commitment count",
+        step.output_commitments.len(),
+    )?;
+    for (output_index, output) in step.output_commitments.iter().enumerate() {
+        kagemusha_recursive_poseidon_update_len(&mut hasher, "output index", output_index)?;
+        kagemusha_recursive_poseidon_update_tagged_bytes(
+            &mut hasher,
+            b"output-commitment",
+            output,
+        )?;
+    }
+    kagemusha_recursive_poseidon_update_tagged_bytes(&mut hasher, b"root-after", &step.root_after)?;
+    kagemusha_recursive_poseidon_update_tagged_bytes(
+        &mut hasher,
+        b"proof-hash",
+        proof_hash.as_ref(),
+    )?;
+    kagemusha_recursive_poseidon_update_tagged_bytes(
+        &mut hasher,
+        b"proof-public-inputs-digest",
+        &proof_public_inputs_digest,
+    )?;
+    kagemusha_recursive_poseidon_update_tagged_bytes(
+        &mut hasher,
+        b"vk-ref-backend",
+        step.attachment.vk_ref.backend.as_str().as_bytes(),
+    )?;
+    kagemusha_recursive_poseidon_update_tagged_bytes(
+        &mut hasher,
+        b"vk-ref-name",
+        step.attachment.vk_ref.name.as_bytes(),
+    )?;
+    kagemusha_recursive_poseidon_update_tagged_bytes(
+        &mut hasher,
+        b"vk-commitment",
+        &step
+            .attachment
+            .vk_commitment
+            .expect("validated metadata has verifier-key commitment"),
+    )?;
+    kagemusha_recursive_poseidon_update_tagged_bytes(
+        &mut hasher,
+        b"vk-poseidon-digest",
+        &verifier_key_poseidon_digest,
+    )?;
+    Ok(hasher.finalize())
+}
+
+#[cfg(feature = "zk-halo2-ipa")]
+fn validate_kagemusha_pallas_open_envelope_metadata(
+    hop_index: usize,
+    envelope: &iroha_zkp_halo2::OpenVerifyEnvelope,
+    expected: iroha_zkp_halo2::PolyOpenTranscriptMetadata,
+) -> Result<(), String> {
+    if envelope.vk_commitment != expected.vk_commitment {
+        return Err(format!(
+            "Kagemusha Pallas IPA open-envelope {hop_index} verifier-key commitment metadata mismatch"
+        ));
+    }
+    if envelope.public_inputs_schema_hash != expected.public_inputs_schema_hash {
+        return Err(format!(
+            "Kagemusha Pallas IPA open-envelope {hop_index} public-input schema metadata mismatch"
+        ));
+    }
+    if envelope.domain_tag != expected.domain_tag {
+        return Err(format!(
+            "Kagemusha Pallas IPA open-envelope {hop_index} hop domain metadata mismatch"
+        ));
+    }
+    Ok(())
+}
+
+#[cfg(feature = "zk-halo2-ipa")]
 fn kagemusha_recursive_poseidon_update_u64(
     hasher: &mut iroha_zkp_halo2::poseidon::PoseidonByteHasher,
     value: u64,
@@ -2695,6 +4831,22 @@ fn kagemusha_recursive_poseidon_update_len(
     let value = u64::try_from(value)
         .map_err(|_| format!("Kagemusha recursive {label} length does not fit in u64"))?;
     kagemusha_recursive_poseidon_update_u64(hasher, value);
+    Ok(())
+}
+
+#[cfg(feature = "zk-halo2-ipa")]
+fn kagemusha_recursive_poseidon_update_optional_len(
+    hasher: &mut iroha_zkp_halo2::poseidon::PoseidonByteHasher,
+    label: &str,
+    value: Option<usize>,
+) -> Result<(), String> {
+    match value {
+        Some(value) => {
+            kagemusha_recursive_poseidon_update_u64(hasher, 1);
+            kagemusha_recursive_poseidon_update_len(hasher, label, value)?;
+        }
+        None => kagemusha_recursive_poseidon_update_u64(hasher, 0),
+    }
     Ok(())
 }
 
@@ -2731,14 +4883,14 @@ pub fn kagemusha_pallas_ipa_batch_verifier_preflight_bound_to_hop_proofs(
     witnesses: &[iroha_zkp_halo2::IpaVerifierWitness<iroha_zkp_halo2::pallas::PallasBackend>],
     hop_proof_hashes: &[iroha_crypto::Hash],
 ) -> Result<PallasIpaBatchVerifierPreflight, String> {
-    let mut preflight = kagemusha_pallas_ipa_batch_verifier_preflight(params, witnesses)?;
-    if preflight.proof_count != hop_proof_hashes.len() {
+    if witnesses.len() != hop_proof_hashes.len() {
         return Err(format!(
             "Kagemusha Pallas IPA hop-bound batch preflight witness/hash count mismatch: expected {}, found {}",
-            preflight.proof_count,
+            witnesses.len(),
             hop_proof_hashes.len()
         ));
     }
+    let mut preflight = kagemusha_pallas_ipa_batch_verifier_preflight(params, witnesses)?;
 
     let mut hasher = iroha_zkp_halo2::poseidon::PoseidonByteHasher::new();
     kagemusha_recursive_poseidon_update_tagged_bytes(
@@ -2755,6 +4907,16 @@ pub fn kagemusha_pallas_ipa_batch_verifier_preflight_bound_to_hop_proofs(
         &mut hasher,
         b"params",
         &preflight.params_fingerprint,
+    )?;
+    kagemusha_recursive_poseidon_update_tagged_bytes(
+        &mut hasher,
+        b"fixed-window-schedule",
+        &preflight.fixed_window_table_schedule_digest,
+    )?;
+    kagemusha_recursive_poseidon_update_tagged_bytes(
+        &mut hasher,
+        b"fixed-window-shared-table-manifest",
+        &preflight.fixed_window_shared_table_manifest_digest,
     )?;
     kagemusha_recursive_poseidon_update_tagged_bytes(
         &mut hasher,
@@ -2785,19 +4947,25 @@ pub fn kagemusha_pallas_ipa_batch_verifier_preflight_bound_to_hop_proofs(
 /// the WSV-ready evidence-building path for mode `2` work: all private hop proofs
 /// are still checked against active verifier records before the supplied native
 /// verifier-witness batch preflight fields are bound to the canonical hop
-/// transcript.
+/// transcript. When `zk-halo2-ipa` is enabled, the fixed-window table schedule
+/// digest must match the declared verifier opening length.
 ///
 /// # Errors
 ///
 /// Returns an error when the native verifier-witness count does not match the
-/// hop count, the batch preflight fields are all-zero, verifier-record
-/// enforcement fails, any hop proof fails verification, or the resulting
-/// recursive aggregation evidence is non-canonical.
-pub fn kagemusha_verified_recursive_aggregation_evidence_from_bundle_with_records(
+/// hop count, the verifier opening length is unsupported, the batch preflight
+/// fields are all-zero or schedule-mismatched, verifier-record enforcement
+/// fails, any hop proof fails verification, or the resulting recursive
+/// aggregation evidence is non-canonical.
+pub(crate) fn kagemusha_verified_recursive_aggregation_evidence_from_bundle_with_records(
     bundle: &iroha_data_model::offline::KagemushaVerifiedFoldBundle,
     records: &[KagemushaHopVerifierRecord<'_>],
     verifier_witness_count: u32,
+    verifier_opening_len: u32,
     verifier_params_fingerprint: [u8; 32],
+    fixed_window_table_schedule_digest: [u8; 32],
+    fixed_window_shared_table_manifest_digest: [u8; 32],
+    fixed_window_table_base_digest: [u8; 32],
     verifier_witness_batch_digest: [u8; 32],
 ) -> Result<iroha_data_model::offline::KagemushaRecursiveAggregationEvidence, String> {
     ensure_kagemusha_verified_step_count(bundle.steps.len())?;
@@ -2812,9 +4980,31 @@ pub fn kagemusha_verified_recursive_aggregation_evidence_from_bundle_with_record
             .to_string(),
         );
     }
+    iroha_data_model::offline::validate_kagemusha_recursive_verifier_opening_len(
+        verifier_opening_len,
+    )
+    .map_err(|err| err.to_string())?;
     if verifier_params_fingerprint == [0u8; 32] {
         return Err(
             iroha_data_model::offline::KagemushaFoldError::ZeroRecursiveVerifierParamsFingerprint
+                .to_string(),
+        );
+    }
+    if fixed_window_table_schedule_digest == [0u8; 32] {
+        return Err(
+            iroha_data_model::offline::KagemushaFoldError::ZeroRecursiveFixedWindowTableScheduleDigest
+                .to_string(),
+        );
+    }
+    if fixed_window_shared_table_manifest_digest == [0u8; 32] {
+        return Err(
+            iroha_data_model::offline::KagemushaFoldError::ZeroRecursiveFixedWindowSharedTableManifestDigest
+                .to_string(),
+        );
+    }
+    if fixed_window_table_base_digest == [0u8; 32] {
+        return Err(
+            iroha_data_model::offline::KagemushaFoldError::ZeroRecursiveFixedWindowTableBaseDigest
                 .to_string(),
         );
     }
@@ -2823,6 +5013,28 @@ pub fn kagemusha_verified_recursive_aggregation_evidence_from_bundle_with_record
             iroha_data_model::offline::KagemushaFoldError::ZeroRecursiveVerifierWitnessBatchDigest
                 .to_string(),
         );
+    }
+    #[cfg(feature = "zk-halo2-ipa")]
+    {
+        let expected_schedule_digest = kagemusha_recursive_fixed_window_table_schedule_digest(
+            usize::try_from(verifier_opening_len)
+                .expect("validated recursive opening length fits usize"),
+        )?;
+        if fixed_window_table_schedule_digest != expected_schedule_digest {
+            return Err(format!(
+                "Kagemusha recursive aggregation fixed-window table schedule digest must match verifier opening length {verifier_opening_len}"
+            ));
+        }
+        let expected_manifest_digest =
+            kagemusha_recursive_fixed_window_shared_table_manifest_digest(
+                usize::try_from(verifier_opening_len)
+                    .expect("validated recursive opening length fits usize"),
+            )?;
+        if fixed_window_shared_table_manifest_digest != expected_manifest_digest {
+            return Err(format!(
+                "Kagemusha recursive aggregation fixed-window shared-table manifest digest must match verifier opening length {verifier_opening_len}"
+            ));
+        }
     }
 
     let steps = bundle
@@ -2854,7 +5066,11 @@ pub fn kagemusha_verified_recursive_aggregation_evidence_from_bundle_with_record
         &bundle.chain_id,
         &bundle.asset,
         &verified_steps,
+        verifier_opening_len,
         verifier_params_fingerprint,
+        fixed_window_table_schedule_digest,
+        fixed_window_shared_table_manifest_digest,
+        fixed_window_table_base_digest,
         verifier_witness_batch_digest,
     )
     .map_err(|err| err.to_string())
@@ -2867,10 +5083,15 @@ pub fn kagemusha_verified_recursive_aggregation_evidence_from_bundle_with_record
 ///
 /// Returns an error when verifier-record enforcement, hop proof verification,
 /// batch preflight binding, or recursive evidence construction fails.
-pub fn kagemusha_verified_recursive_aggregation_evidence_from_record_bundle(
+#[cfg(test)]
+pub(crate) fn kagemusha_verified_recursive_aggregation_evidence_from_record_bundle(
     record_bundle: &iroha_data_model::offline::KagemushaVerifiedFoldRecordBundle,
     verifier_witness_count: u32,
+    verifier_opening_len: u32,
     verifier_params_fingerprint: [u8; 32],
+    fixed_window_table_schedule_digest: [u8; 32],
+    fixed_window_shared_table_manifest_digest: [u8; 32],
+    fixed_window_table_base_digest: [u8; 32],
     verifier_witness_batch_digest: [u8; 32],
 ) -> Result<iroha_data_model::offline::KagemushaRecursiveAggregationEvidence, String> {
     let records = record_bundle
@@ -2885,9 +5106,39 @@ pub fn kagemusha_verified_recursive_aggregation_evidence_from_record_bundle(
         &record_bundle.bundle,
         &records,
         verifier_witness_count,
+        verifier_opening_len,
         verifier_params_fingerprint,
+        fixed_window_table_schedule_digest,
+        fixed_window_shared_table_manifest_digest,
+        fixed_window_table_base_digest,
         verifier_witness_batch_digest,
     )
+}
+
+#[cfg(feature = "zk-halo2-ipa")]
+fn ensure_kagemusha_recursive_aggregation_public_fixed_window_digests(
+    public_inputs: &iroha_data_model::offline::KagemushaRecursiveAggregationProofPublicInputs,
+) -> Result<(), String> {
+    let opening_len = usize::try_from(public_inputs.verifier_opening_len).map_err(|_| {
+        "Kagemusha recursive aggregation verifier opening length does not fit usize".to_owned()
+    })?;
+    let expected_schedule_digest =
+        kagemusha_recursive_fixed_window_table_schedule_digest(opening_len)?;
+    if public_inputs.fixed_window_table_schedule_digest != expected_schedule_digest {
+        return Err(format!(
+            "Kagemusha recursive aggregation fixed-window table schedule digest must match verifier opening length {}",
+            public_inputs.verifier_opening_len
+        ));
+    }
+    let expected_manifest_digest =
+        kagemusha_recursive_fixed_window_shared_table_manifest_digest(opening_len)?;
+    if public_inputs.fixed_window_shared_table_manifest_digest != expected_manifest_digest {
+        return Err(format!(
+            "Kagemusha recursive aggregation fixed-window shared-table manifest digest must match verifier opening length {}",
+            public_inputs.verifier_opening_len
+        ));
+    }
+    Ok(())
 }
 
 /// Verify a record-backed Kagemusha fold bundle and native Pallas IPA witness batch.
@@ -2937,7 +5188,11 @@ pub fn kagemusha_verified_recursive_aggregation_evidence_from_bundle_with_record
         bundle,
         records,
         expected_witness_count,
+        preflight.opening_len,
         preflight.params_fingerprint,
+        preflight.fixed_window_table_schedule_digest,
+        preflight.fixed_window_shared_table_manifest_digest,
+        preflight.fixed_window_table_base_digest,
         preflight.aggregate_digest,
     )
 }
@@ -2967,6 +5222,272 @@ pub fn kagemusha_verified_recursive_aggregation_evidence_from_record_bundle_and_
         &records,
         params,
         witnesses,
+    )
+}
+
+/// Verify a record-backed Kagemusha fold bundle and proof-derived Pallas opening envelopes.
+///
+/// This is the proof-derived reserved-mode bridge: native verifier witnesses
+/// are reconstructed from transparent Pallas IPA opening envelopes before the
+/// batch digest is bound to the checked hop-proof hashes.
+///
+/// # Errors
+///
+/// Returns an error when the envelope count does not match the hop count,
+/// proof-derived native batch preflight fails, verifier-record enforcement
+/// fails, any hop proof fails verification, or recursive evidence construction
+/// fails.
+#[cfg(feature = "zk-halo2-ipa")]
+pub fn kagemusha_verified_recursive_aggregation_evidence_from_bundle_with_records_and_pallas_open_envelopes(
+    bundle: &iroha_data_model::offline::KagemushaVerifiedFoldBundle,
+    records: &[KagemushaHopVerifierRecord<'_>],
+    envelopes: &[iroha_zkp_halo2::OpenVerifyEnvelope],
+) -> Result<iroha_data_model::offline::KagemushaRecursiveAggregationEvidence, String> {
+    ensure_kagemusha_verified_step_count(bundle.steps.len())?;
+    let expected_witness_count =
+        u32::try_from(bundle.steps.len()).expect("Kagemusha hop count is bounded to u32");
+    let actual_witness_count = u32::try_from(envelopes.len()).unwrap_or(u32::MAX);
+    if actual_witness_count != expected_witness_count {
+        return Err(
+            iroha_data_model::offline::KagemushaFoldError::RecursiveAggregationWitnessCountMismatch {
+                expected: expected_witness_count,
+                actual: actual_witness_count,
+            }
+            .to_string(),
+        );
+    }
+    let steps = bundle
+        .steps
+        .iter()
+        .map(|step| KagemushaFoldProofStep {
+            root_before: step.root_before,
+            input_nullifiers: &step.input_nullifiers,
+            output_commitments: &step.output_commitments,
+            root_after: step.root_after,
+            attachment: &step.attachment,
+            vk_box: &step.verifier_key,
+        })
+        .collect::<Vec<_>>();
+    validate_kagemusha_fold_metadata(&steps)?;
+    for (hop_index, (step, envelope)) in steps.iter().zip(envelopes.iter()).enumerate() {
+        let expected = kagemusha_pallas_open_envelope_metadata_for_step(
+            &bundle.chain_id,
+            &bundle.asset,
+            hop_index,
+            step,
+        )?;
+        validate_kagemusha_pallas_open_envelope_metadata(hop_index, envelope, expected)?;
+    }
+    let hop_proof_hashes = bundle
+        .steps
+        .iter()
+        .map(|step| kagemusha_fold_step_proof_hash(&step.attachment.proof))
+        .collect::<Result<Vec<_>, _>>()?;
+    let preflight =
+        kagemusha_pallas_ipa_batch_verifier_preflight_from_open_envelopes_bound_to_hop_proofs(
+            envelopes,
+            &hop_proof_hashes,
+        )?;
+    kagemusha_verified_recursive_aggregation_evidence_from_bundle_with_records(
+        bundle,
+        records,
+        expected_witness_count,
+        preflight.opening_len,
+        preflight.params_fingerprint,
+        preflight.fixed_window_table_schedule_digest,
+        preflight.fixed_window_shared_table_manifest_digest,
+        preflight.fixed_window_table_base_digest,
+        preflight.aggregate_digest,
+    )
+}
+
+/// Verify a serializable record-backed Kagemusha fold bundle and proof-derived Pallas openings.
+///
+/// # Errors
+///
+/// Returns an error when proof-derived native batch preflight,
+/// verifier-record enforcement, hop proof verification, or recursive evidence
+/// construction fails.
+#[cfg(feature = "zk-halo2-ipa")]
+pub fn kagemusha_verified_recursive_aggregation_evidence_from_record_bundle_and_pallas_open_envelopes(
+    record_bundle: &iroha_data_model::offline::KagemushaVerifiedFoldRecordBundle,
+    envelopes: &[iroha_zkp_halo2::OpenVerifyEnvelope],
+) -> Result<iroha_data_model::offline::KagemushaRecursiveAggregationEvidence, String> {
+    let records = record_bundle
+        .verifier_records
+        .iter()
+        .map(|entry| KagemushaHopVerifierRecord {
+            id: &entry.id,
+            record: &entry.record,
+        })
+        .collect::<Vec<_>>();
+    kagemusha_verified_recursive_aggregation_evidence_from_bundle_with_records_and_pallas_open_envelopes(
+        &record_bundle.bundle,
+        &records,
+        envelopes,
+    )
+}
+
+/// Verify a record-backed Kagemusha fold bundle, derive native Pallas batch evidence, and prove it.
+///
+/// This is the WSV-ready recursive proof-bundle builder for callers that have
+/// already derived native Pallas IPA verifier witnesses. It keeps verifier
+/// records, hop proof verification, native batch preflight, evidence binding,
+/// and transparent recursive proof generation in one path so callers cannot
+/// accidentally prove detached recursive evidence.
+///
+/// The returned proof bundle is still admission-neutral for compact tokens:
+/// aggregation mode `2` remains reserved until private-hop verifier evidence is
+/// checked by the recursive circuit used for public admission.
+///
+/// # Errors
+///
+/// Returns an error when native batch preflight, verifier-record enforcement,
+/// hop proof verification, recursive evidence construction, or transparent
+/// recursive proof generation fails.
+#[cfg(feature = "zk-halo2-ipa")]
+pub fn prove_verified_kagemusha_recursive_aggregation_proof_bundle_from_bundle_with_records_and_pallas_batch(
+    bundle: &iroha_data_model::offline::KagemushaVerifiedFoldBundle,
+    records: &[KagemushaHopVerifierRecord<'_>],
+    params: &iroha_zkp_halo2::pallas::Params,
+    witnesses: &[iroha_zkp_halo2::IpaVerifierWitness<iroha_zkp_halo2::pallas::PallasBackend>],
+    circuit_id: &str,
+    vk_box: &VerifyingKeyBox,
+    proving_key_bytes: Option<&[u8]>,
+) -> Result<iroha_data_model::offline::KagemushaRecursiveAggregationProofBundle, String> {
+    let evidence =
+        kagemusha_verified_recursive_aggregation_evidence_from_bundle_with_records_and_pallas_batch(
+            bundle, records, params, witnesses,
+        )?;
+    prove_kagemusha_recursive_aggregation_evidence(circuit_id, vk_box, evidence, proving_key_bytes)
+}
+
+/// Verify a serializable record-backed Kagemusha fold bundle, derive Pallas batch evidence, and prove it.
+///
+/// # Errors
+///
+/// Returns an error when native batch preflight, verifier-record enforcement,
+/// hop proof verification, recursive evidence construction, or transparent
+/// recursive proof generation fails.
+#[cfg(feature = "zk-halo2-ipa")]
+pub fn prove_verified_kagemusha_recursive_aggregation_proof_bundle_from_record_bundle_and_pallas_batch(
+    record_bundle: &iroha_data_model::offline::KagemushaVerifiedFoldRecordBundle,
+    params: &iroha_zkp_halo2::pallas::Params,
+    witnesses: &[iroha_zkp_halo2::IpaVerifierWitness<iroha_zkp_halo2::pallas::PallasBackend>],
+    circuit_id: &str,
+    vk_box: &VerifyingKeyBox,
+    proving_key_bytes: Option<&[u8]>,
+) -> Result<iroha_data_model::offline::KagemushaRecursiveAggregationProofBundle, String> {
+    let records = record_bundle
+        .verifier_records
+        .iter()
+        .map(|entry| KagemushaHopVerifierRecord {
+            id: &entry.id,
+            record: &entry.record,
+        })
+        .collect::<Vec<_>>();
+    prove_verified_kagemusha_recursive_aggregation_proof_bundle_from_bundle_with_records_and_pallas_batch(
+        &record_bundle.bundle,
+        &records,
+        params,
+        witnesses,
+        circuit_id,
+        vk_box,
+        proving_key_bytes,
+    )
+}
+
+/// Verify a record-backed Kagemusha fold bundle, derive proof-backed Pallas evidence, and prove it.
+///
+/// This variant reconstructs native Pallas verifier witnesses from transparent
+/// Pallas opening envelopes before deriving and proving the recursive evidence
+/// bundle. It enforces the same hop metadata and active verifier-record checks
+/// as the evidence-only path.
+///
+/// # Errors
+///
+/// Returns an error when opening-envelope metadata/preflight, verifier-record
+/// enforcement, hop proof verification, recursive evidence construction, or
+/// transparent recursive proof generation fails.
+#[cfg(feature = "zk-halo2-ipa")]
+pub fn prove_verified_kagemusha_recursive_aggregation_proof_bundle_from_bundle_with_records_and_pallas_open_envelopes(
+    bundle: &iroha_data_model::offline::KagemushaVerifiedFoldBundle,
+    records: &[KagemushaHopVerifierRecord<'_>],
+    envelopes: &[iroha_zkp_halo2::OpenVerifyEnvelope],
+    circuit_id: &str,
+    vk_box: &VerifyingKeyBox,
+    proving_key_bytes: Option<&[u8]>,
+) -> Result<iroha_data_model::offline::KagemushaRecursiveAggregationProofBundle, String> {
+    let evidence =
+        kagemusha_verified_recursive_aggregation_evidence_from_bundle_with_records_and_pallas_open_envelopes(
+            bundle, records, envelopes,
+        )?;
+    prove_kagemusha_recursive_aggregation_evidence(circuit_id, vk_box, evidence, proving_key_bytes)
+}
+
+/// Verify a serializable record-backed Kagemusha fold bundle, derive Pallas envelope evidence, and prove it.
+///
+/// # Errors
+///
+/// Returns an error when opening-envelope metadata/preflight, verifier-record
+/// enforcement, hop proof verification, recursive evidence construction, or
+/// transparent recursive proof generation fails.
+#[cfg(feature = "zk-halo2-ipa")]
+pub fn prove_verified_kagemusha_recursive_aggregation_proof_bundle_from_record_bundle_and_pallas_open_envelopes(
+    record_bundle: &iroha_data_model::offline::KagemushaVerifiedFoldRecordBundle,
+    envelopes: &[iroha_zkp_halo2::OpenVerifyEnvelope],
+    circuit_id: &str,
+    vk_box: &VerifyingKeyBox,
+    proving_key_bytes: Option<&[u8]>,
+) -> Result<iroha_data_model::offline::KagemushaRecursiveAggregationProofBundle, String> {
+    let records = record_bundle
+        .verifier_records
+        .iter()
+        .map(|entry| KagemushaHopVerifierRecord {
+            id: &entry.id,
+            record: &entry.record,
+        })
+        .collect::<Vec<_>>();
+    prove_verified_kagemusha_recursive_aggregation_proof_bundle_from_bundle_with_records_and_pallas_open_envelopes(
+        &record_bundle.bundle,
+        &records,
+        envelopes,
+        circuit_id,
+        vk_box,
+        proving_key_bytes,
+    )
+}
+
+/// Verify a serializable record-backed Kagemusha fold bundle and archived Pallas openings, then prove it.
+///
+/// This FFI-friendly wrapper keeps Pallas opening envelope decoding inside the
+/// core prover so bridge/mobile callers can pass stable Norito archive bytes
+/// instead of linking against internal verifier-witness types.
+///
+/// # Errors
+///
+/// Returns an error when the envelope archive cannot be decoded, opening
+/// envelope metadata/preflight fails, verifier-record enforcement fails, hop
+/// proof verification fails, recursive evidence construction fails, or
+/// transparent recursive proof generation fails.
+#[cfg(feature = "zk-halo2-ipa")]
+pub fn prove_verified_kagemusha_recursive_aggregation_proof_bundle_from_record_bundle_and_pallas_open_envelope_archive(
+    record_bundle: &iroha_data_model::offline::KagemushaVerifiedFoldRecordBundle,
+    pallas_open_envelopes_archive: &[u8],
+    circuit_id: &str,
+    vk_box: &VerifyingKeyBox,
+    proving_key_bytes: Option<&[u8]>,
+) -> Result<iroha_data_model::offline::KagemushaRecursiveAggregationProofBundle, String> {
+    let envelopes: Vec<iroha_zkp_halo2::OpenVerifyEnvelope> =
+        norito::decode_from_bytes(pallas_open_envelopes_archive).map_err(|err| {
+            format!("failed to decode Kagemusha Pallas open-envelope archive: {err}")
+        })?;
+    prove_verified_kagemusha_recursive_aggregation_proof_bundle_from_record_bundle_and_pallas_open_envelopes(
+        record_bundle,
+        &envelopes,
+        circuit_id,
+        vk_box,
+        proving_key_bytes,
     )
 }
 
@@ -3060,6 +5581,9 @@ pub fn verify_kagemusha_compact_payment_token(
     token: &iroha_data_model::offline::KagemushaCompactPaymentToken,
     vk_box: &VerifyingKeyBox,
 ) -> bool {
+    if ensure_kagemusha_folded_canonical_vk_box(vk_box).is_err() {
+        return false;
+    }
     if token.validate_public_input_binding().is_err() {
         return false;
     }
@@ -3149,6 +5673,270 @@ pub fn verify_kagemusha_compact_payment_token_with_record(
         return false;
     }
     verify_kagemusha_compact_payment_token(token, vk_box)
+}
+
+/// Preverify a proof-carrying Kagemusha recursive aggregation bundle.
+///
+/// This validates every chain-visible binding needed before a future recursive
+/// verifier executes: canonical evidence, proof public-input hash, transparent
+/// Halo2 IPA backend, canonical circuit id, verifier-key hash, public-input
+/// schema, empty auxiliary metadata, encoded instance columns, and proof size.
+/// It intentionally does not call the backend verifier yet and does not make
+/// recursive aggregation mode accepted for compact-token admission.
+///
+/// # Errors
+///
+/// Returns an error describing the first failed binding.
+pub fn preverify_kagemusha_recursive_aggregation_proof_bundle(
+    bundle: &iroha_data_model::offline::KagemushaRecursiveAggregationProofBundle,
+    vk_box: &VerifyingKeyBox,
+) -> Result<(), String> {
+    bundle
+        .validate_evidence_binding()
+        .map_err(|err| err.to_string())?;
+    #[cfg(feature = "zk-halo2-ipa")]
+    ensure_kagemusha_recursive_aggregation_public_fixed_window_digests(
+        &bundle.recursive_proof.public_inputs,
+    )?;
+    ensure_kagemusha_recursive_aggregation_canonical_vk_box(vk_box)?;
+    if bundle.recursive_proof.proof.bytes.len()
+        > KAGEMUSHA_RECURSIVE_AGGREGATION_MAX_PROOF_BYTES as usize
+    {
+        return Err(format!(
+            "Kagemusha recursive aggregation proof exceeds {} bytes",
+            KAGEMUSHA_RECURSIVE_AGGREGATION_MAX_PROOF_BYTES
+        ));
+    }
+    if bundle.recursive_proof.proof.backend != ZK_BACKEND_HALO2_IPA {
+        return Err(format!(
+            "Kagemusha recursive aggregation proof backend `{}` is not `{ZK_BACKEND_HALO2_IPA}`",
+            bundle.recursive_proof.proof.backend
+        ));
+    }
+    if bundle.recursive_proof.verifier_key_id.backend != ZK_BACKEND_HALO2_IPA {
+        return Err(format!(
+            "Kagemusha recursive aggregation verifier-key backend `{}` is not `{ZK_BACKEND_HALO2_IPA}`",
+            bundle.recursive_proof.verifier_key_id.backend
+        ));
+    }
+    if vk_box.backend != ZK_BACKEND_HALO2_IPA {
+        return Err(format!(
+            "Kagemusha recursive aggregation verifier key backend `{}` is not `{ZK_BACKEND_HALO2_IPA}`",
+            vk_box.backend
+        ));
+    }
+    if bundle.recursive_proof.proof.backend != bundle.recursive_proof.verifier_key_id.backend {
+        return Err(format!(
+            "Kagemusha recursive aggregation proof backend `{}` does not match verifier-key backend `{}`",
+            bundle.recursive_proof.proof.backend, bundle.recursive_proof.verifier_key_id.backend
+        ));
+    }
+    if bundle.recursive_proof.verifier_key_id.name
+        != iroha_data_model::offline::KAGEMUSHA_RECURSIVE_AGGREGATION_PROOF_CIRCUIT_ID_V1
+    {
+        return Err(format!(
+            "Kagemusha recursive aggregation circuit id `{}` is not `{}`",
+            bundle.recursive_proof.verifier_key_id.name,
+            iroha_data_model::offline::KAGEMUSHA_RECURSIVE_AGGREGATION_PROOF_CIRCUIT_ID_V1
+        ));
+    }
+
+    let envelope: iroha_data_model::zk::OpenVerifyEnvelope =
+        norito::decode_from_bytes(&bundle.recursive_proof.proof.bytes).map_err(|err| {
+            format!("failed to decode recursive aggregation proof envelope: {err}")
+        })?;
+    if envelope.backend != iroha_data_model::zk::BackendTag::Halo2IpaPasta {
+        return Err(format!(
+            "Kagemusha recursive aggregation envelope backend `{:?}` is not Halo2IpaPasta",
+            envelope.backend
+        ));
+    }
+    if envelope.circuit_id
+        != iroha_data_model::offline::KAGEMUSHA_RECURSIVE_AGGREGATION_PROOF_CIRCUIT_ID_V1
+    {
+        return Err(format!(
+            "Kagemusha recursive aggregation envelope circuit id `{}` is not `{}`",
+            envelope.circuit_id,
+            iroha_data_model::offline::KAGEMUSHA_RECURSIVE_AGGREGATION_PROOF_CIRCUIT_ID_V1
+        ));
+    }
+    if envelope.circuit_id != bundle.recursive_proof.verifier_key_id.name {
+        return Err(format!(
+            "Kagemusha recursive aggregation envelope circuit id `{}` does not match verifier-key id `{}`",
+            envelope.circuit_id, bundle.recursive_proof.verifier_key_id.name
+        ));
+    }
+    let expected_vk_hash = hash_vk(vk_box);
+    if envelope.vk_hash != expected_vk_hash {
+        return Err(
+            "Kagemusha recursive aggregation envelope verifier-key hash mismatch".to_owned(),
+        );
+    }
+    if envelope.public_inputs.as_slice()
+        != iroha_data_model::offline::KAGEMUSHA_RECURSIVE_AGGREGATION_PROOF_PUBLIC_INPUTS_SCHEMA
+    {
+        return Err(
+            "Kagemusha recursive aggregation envelope public-input schema mismatch".to_owned(),
+        );
+    }
+    if !envelope.aux.is_empty() {
+        return Err(
+            "Kagemusha recursive aggregation envelope auxiliary metadata must be empty".to_owned(),
+        );
+    }
+
+    let expected_instances = kagemusha_recursive_aggregation_proof_bundle_instance_values(bundle)?
+        .public_instance_columns();
+    let actual_instances =
+        extract_pasta_instance_columns_bytes(&envelope.proof_bytes).ok_or_else(|| {
+            "Kagemusha recursive aggregation proof did not expose Pasta instance columns".to_owned()
+        })?;
+    if actual_instances != expected_instances {
+        return Err(
+            "Kagemusha recursive aggregation envelope public instance columns mismatch".to_owned(),
+        );
+    }
+    Ok(())
+}
+
+/// Preverify a proof-carrying Kagemusha recursive aggregation bundle against a verifier record.
+///
+/// This mirrors the WSV verifier-key checks used by proof admission while
+/// preserving the current policy that recursive aggregation remains a reserved
+/// evidence/proof surface until the production recursive verifier is complete.
+///
+/// # Errors
+///
+/// Returns an error describing the first registry or proof-binding mismatch.
+pub fn preverify_kagemusha_recursive_aggregation_proof_bundle_with_record(
+    bundle: &iroha_data_model::offline::KagemushaRecursiveAggregationProofBundle,
+    record: &iroha_data_model::proof::VerifyingKeyRecord,
+) -> Result<(), String> {
+    if !record.is_active() {
+        return Err("Kagemusha recursive aggregation verifier record is not active".to_owned());
+    }
+    if record.namespace != KAGEMUSHA_VERIFIER_NAMESPACE {
+        return Err(format!(
+            "Kagemusha recursive aggregation verifier namespace `{}` is not `{KAGEMUSHA_VERIFIER_NAMESPACE}`",
+            record.namespace
+        ));
+    }
+    if record.backend != iroha_data_model::zk::BackendTag::Halo2IpaPasta {
+        return Err(format!(
+            "Kagemusha recursive aggregation verifier backend `{:?}` is not Halo2IpaPasta",
+            record.backend
+        ));
+    }
+    if record.circuit_id
+        != iroha_data_model::offline::KAGEMUSHA_RECURSIVE_AGGREGATION_PROOF_CIRCUIT_ID_V1
+    {
+        return Err(format!(
+            "Kagemusha recursive aggregation verifier circuit id `{}` is not `{}`",
+            record.circuit_id,
+            iroha_data_model::offline::KAGEMUSHA_RECURSIVE_AGGREGATION_PROOF_CIRCUIT_ID_V1
+        ));
+    }
+    if record.public_inputs_schema_hash
+        != iroha_data_model::offline::kagemusha_recursive_aggregation_proof_public_inputs_schema_hash()
+    {
+        return Err(
+            "Kagemusha recursive aggregation verifier public-input schema hash mismatch"
+                .to_owned(),
+        );
+    }
+    if record.max_proof_bytes == 0 {
+        return Err(
+            "Kagemusha recursive aggregation verifier max proof bytes must be non-zero".to_owned(),
+        );
+    }
+    if bundle.recursive_proof.proof.bytes.len() > record.max_proof_bytes as usize {
+        return Err(format!(
+            "Kagemusha recursive aggregation proof exceeds verifier record limit of {} bytes",
+            record.max_proof_bytes
+        ));
+    }
+    if bundle.recursive_proof.verifier_key_id.backend != ZK_BACKEND_HALO2_IPA {
+        return Err(format!(
+            "Kagemusha recursive aggregation verifier-key id backend `{}` is not `{ZK_BACKEND_HALO2_IPA}`",
+            bundle.recursive_proof.verifier_key_id.backend
+        ));
+    }
+    if bundle.recursive_proof.verifier_key_id.name != record.circuit_id {
+        return Err(format!(
+            "Kagemusha recursive aggregation verifier-key id `{}` does not match record circuit `{}`",
+            bundle.recursive_proof.verifier_key_id.name, record.circuit_id
+        ));
+    }
+
+    let Some(vk_box) = record.key.as_ref() else {
+        return Err("Kagemusha recursive aggregation verifier record has no inline key".to_owned());
+    };
+    if vk_box.backend != ZK_BACKEND_HALO2_IPA {
+        return Err(format!(
+            "Kagemusha recursive aggregation inline key backend `{}` is not `{ZK_BACKEND_HALO2_IPA}`",
+            vk_box.backend
+        ));
+    }
+    if vk_box.bytes.is_empty() {
+        return Err("Kagemusha recursive aggregation inline key is empty".to_owned());
+    }
+    if u32::try_from(vk_box.bytes.len()).ok() != Some(record.vk_len) {
+        return Err("Kagemusha recursive aggregation inline key length mismatch".to_owned());
+    }
+    if hash_vk(vk_box) != record.commitment {
+        return Err("Kagemusha recursive aggregation inline key commitment mismatch".to_owned());
+    }
+
+    preverify_kagemusha_recursive_aggregation_proof_bundle(bundle, vk_box)
+}
+
+/// Verify a proof-carrying Kagemusha recursive aggregation bundle against a transparent key.
+///
+/// This runs the strict public metadata preverification and then verifies the
+/// transparent Halo2 IPA proof. It is still not used to accept compact-token
+/// aggregation mode `2`.
+#[must_use]
+pub fn verify_kagemusha_recursive_aggregation_proof_bundle(
+    bundle: &iroha_data_model::offline::KagemushaRecursiveAggregationProofBundle,
+    vk_box: &VerifyingKeyBox,
+) -> bool {
+    if ensure_kagemusha_recursive_aggregation_canonical_vk_box(vk_box).is_err() {
+        return false;
+    }
+    if preverify_kagemusha_recursive_aggregation_proof_bundle(bundle, vk_box).is_err() {
+        return false;
+    }
+    verify_backend(
+        bundle.recursive_proof.proof.backend.as_str(),
+        &bundle.recursive_proof.proof,
+        Some(vk_box),
+    )
+}
+
+/// Verify a proof-carrying Kagemusha recursive aggregation bundle against a verifier record.
+///
+/// This mirrors the WSV verifier-record prechecks and then performs transparent
+/// Halo2 IPA backend verification. It remains admission-neutral for compact
+/// Kagemusha tokens while mode `2` is reserved.
+#[must_use]
+pub fn verify_kagemusha_recursive_aggregation_proof_bundle_with_record(
+    bundle: &iroha_data_model::offline::KagemushaRecursiveAggregationProofBundle,
+    record: &iroha_data_model::proof::VerifyingKeyRecord,
+) -> bool {
+    if preverify_kagemusha_recursive_aggregation_proof_bundle_with_record(bundle, record).is_err() {
+        return false;
+    }
+    let Some(vk_box) = record.key.as_ref() else {
+        return false;
+    };
+    if ensure_kagemusha_recursive_aggregation_canonical_vk_box(vk_box).is_err() {
+        return false;
+    }
+    verify_backend(
+        bundle.recursive_proof.proof.backend.as_str(),
+        &bundle.recursive_proof.proof,
+        Some(vk_box),
+    )
 }
 
 #[cfg(feature = "zk-stark")]
@@ -4471,6 +7259,7 @@ fn verify_with_registry(
 /// Recognized tags:
 ///  - `b"PROF"`: raw proof transcript bytes (opaque to this module).
 ///  - `b"IPAK"`: Halo2 IPA params, payload is `u32 k` (little-endian).
+///  - `b"CID1"`: circuit-family identifier bytes for commitment domain separation.
 ///  - `b"I10P"`: Instance columns over Pasta Fp (cols[u32], rows[u32], rows*cols scalars).
 ///
 /// Notes:
@@ -4540,6 +7329,12 @@ mod zk1 {
         let mut tmp = Vec::with_capacity(4);
         tmp.extend_from_slice(&k.to_le_bytes());
         write_tlv(buf, *b"IPAK", &tmp);
+    }
+
+    /// Append a circuit identifier (`CID1`) for verifier-key commitment domain separation.
+    #[allow(dead_code)]
+    pub fn wrap_append_circuit_id(buf: &mut Vec<u8>, circuit_id: &str) {
+        write_tlv(buf, *b"CID1", circuit_id.as_bytes());
     }
 
     /// Append a Halo2 verifying key (`H2VK`) for Pasta/IPA circuits.
@@ -4641,6 +7436,12 @@ pub mod zk1_test_helpers {
     #[inline]
     pub fn wrap_append_ipa_k(buf: &mut Vec<u8>, k: u32) {
         super::zk1::wrap_append_ipa_k(buf, k)
+    }
+
+    /// Append the circuit identifier TLV used for verifier-key commitment domain separation.
+    #[inline]
+    pub fn wrap_append_circuit_id(buf: &mut Vec<u8>, circuit_id: &str) {
+        super::zk1::wrap_append_circuit_id(buf, circuit_id)
     }
 
     /// Append a verifying key payload encoded for Pasta curves.
@@ -8830,6 +11631,253 @@ mod kagemusha_folded_semantic_circuit_tests {
     }
 }
 
+#[cfg(all(test, feature = "zk-halo2-ipa"))]
+mod kagemusha_recursive_aggregation_semantic_circuit_tests {
+    use halo2_proofs::{dev::MockProver, halo2curves::pasta::Fp as Scalar};
+
+    use super::*;
+
+    fn base_values() -> KagemushaRecursiveAggregationProofInstanceValues {
+        let mut public_values = [0u64; KAGEMUSHA_RECURSIVE_AGGREGATION_PROOF_INSTANCE_COLUMNS];
+        for (index, value) in public_values[..KAGEMUSHA_RECURSIVE_AGGREGATION_OPENING_LEN_INDEX]
+            .iter_mut()
+            .enumerate()
+        {
+            *value = 11 + u64::try_from(index).expect("test index fits u64");
+        }
+        public_values[KAGEMUSHA_RECURSIVE_AGGREGATION_OPENING_LEN_INDEX] = 4;
+        public_values[KAGEMUSHA_RECURSIVE_AGGREGATION_WITNESS_COUNT_INDEX] = 2;
+        public_values[KAGEMUSHA_RECURSIVE_AGGREGATION_HOP_COUNT_INDEX] = 2;
+        let schedule_digest = kagemusha_recursive_fixed_window_table_schedule_digest(4)
+            .expect("canonical recursive fixed-window schedule digest");
+        for (offset, limb) in bytes_to_u64_limbs_le(&schedule_digest)
+            .into_iter()
+            .enumerate()
+        {
+            public_values[KAGEMUSHA_RECURSIVE_AGGREGATION_FIXED_WINDOW_TABLE_SCHEDULE_START_INDEX
+                + offset] = limb;
+        }
+        let manifest_digest = kagemusha_recursive_fixed_window_shared_table_manifest_digest(4)
+            .expect("canonical recursive fixed-window shared-table manifest digest");
+        for (offset, limb) in bytes_to_u64_limbs_le(&manifest_digest)
+            .into_iter()
+            .enumerate()
+        {
+            public_values
+                [KAGEMUSHA_RECURSIVE_AGGREGATION_FIXED_WINDOW_SHARED_TABLE_MANIFEST_START_INDEX
+                    + offset] = limb;
+        }
+        KagemushaRecursiveAggregationProofInstanceValues { public_values }
+    }
+
+    fn opening_len_selectors(
+        values: KagemushaRecursiveAggregationProofInstanceValues,
+    ) -> [Scalar; KAGEMUSHA_RECURSIVE_AGGREGATION_OPENING_LEN_CHOICE_COUNT] {
+        values
+            .opening_len_selectors()
+            .expect("valid recursive opening length selectors")
+    }
+
+    fn hop_count_minus_one_bits(
+        values: KagemushaRecursiveAggregationProofInstanceValues,
+    ) -> [Scalar; KAGEMUSHA_RECURSIVE_AGGREGATION_HOP_COUNT_BITS] {
+        values
+            .hop_count_minus_one_bits()
+            .expect("valid recursive hop-count bits")
+    }
+
+    fn public_field_inverses(
+        values: KagemushaRecursiveAggregationProofInstanceValues,
+    ) -> [Scalar; KAGEMUSHA_RECURSIVE_AGGREGATION_NON_ZERO_PUBLIC_FIELD_GROUP_COUNT] {
+        values
+            .non_zero_public_field_inverses()
+            .expect("valid recursive public field inverses")
+    }
+
+    fn verify(
+        values: KagemushaRecursiveAggregationProofInstanceValues,
+        opening_len_selectors: [Scalar; KAGEMUSHA_RECURSIVE_AGGREGATION_OPENING_LEN_CHOICE_COUNT],
+        hop_count_minus_one_bits: [Scalar; KAGEMUSHA_RECURSIVE_AGGREGATION_HOP_COUNT_BITS],
+        non_zero_public_field_inverses: [Scalar;
+            KAGEMUSHA_RECURSIVE_AGGREGATION_NON_ZERO_PUBLIC_FIELD_GROUP_COUNT],
+    ) -> bool {
+        let public_values = values.public_scalars();
+        let instances = public_values
+            .iter()
+            .copied()
+            .map(|value| vec![value])
+            .collect::<Vec<_>>();
+        let circuit = pasta_tiny::KagemushaRecursiveAggregationSemantic {
+            public_values,
+            opening_len_selectors,
+            hop_count_minus_one_bits,
+            non_zero_public_field_inverses,
+        };
+        MockProver::run(KAGEMUSHA_RECURSIVE_AGGREGATION_IPA_K, &circuit, instances)
+            .expect("Kagemusha recursive aggregation mock prover")
+            .verify()
+            .is_ok()
+    }
+
+    fn verify_with_valid_witness(values: KagemushaRecursiveAggregationProofInstanceValues) -> bool {
+        verify(
+            values,
+            opening_len_selectors(values),
+            hop_count_minus_one_bits(values),
+            public_field_inverses(values),
+        )
+    }
+
+    #[test]
+    fn kagemusha_recursive_aggregation_semantic_circuit_accepts_valid_corridor() {
+        assert!(verify_with_valid_witness(base_values()));
+    }
+
+    #[test]
+    fn kagemusha_recursive_aggregation_semantic_circuit_rejects_fixed_window_digest_substitution() {
+        let mut wrong_schedule = base_values();
+        wrong_schedule.public_values
+            [KAGEMUSHA_RECURSIVE_AGGREGATION_FIXED_WINDOW_TABLE_SCHEDULE_START_INDEX] ^= 1;
+        assert!(!verify_with_valid_witness(wrong_schedule));
+
+        let mut wrong_manifest = base_values();
+        wrong_manifest.public_values
+            [KAGEMUSHA_RECURSIVE_AGGREGATION_FIXED_WINDOW_SHARED_TABLE_MANIFEST_START_INDEX] ^= 1;
+        assert!(!verify_with_valid_witness(wrong_manifest));
+    }
+
+    #[test]
+    fn kagemusha_recursive_aggregation_semantic_circuit_rejects_bad_opening_length() {
+        let mut values = base_values();
+        values.public_values[KAGEMUSHA_RECURSIVE_AGGREGATION_OPENING_LEN_INDEX] = 3;
+        assert!(!verify(
+            values,
+            [Scalar::from(0); KAGEMUSHA_RECURSIVE_AGGREGATION_OPENING_LEN_CHOICE_COUNT],
+            hop_count_minus_one_bits(values),
+            public_field_inverses(values),
+        ));
+        assert!(
+            values.opening_len_selectors().is_err(),
+            "host witness builder must reject unsupported recursive opening lengths"
+        );
+    }
+
+    #[test]
+    fn kagemusha_recursive_aggregation_semantic_circuit_rejects_bad_opening_selector_witness() {
+        let values = base_values();
+        let mut selectors = opening_len_selectors(values);
+        selectors[0] = Scalar::from(1);
+        assert!(!verify(
+            values,
+            selectors,
+            hop_count_minus_one_bits(values),
+            public_field_inverses(values),
+        ));
+
+        let mut selectors = opening_len_selectors(values);
+        selectors[1] = Scalar::from(2);
+        assert!(!verify(
+            values,
+            selectors,
+            hop_count_minus_one_bits(values),
+            public_field_inverses(values),
+        ));
+    }
+
+    #[test]
+    fn kagemusha_recursive_aggregation_semantic_circuit_rejects_zero_hop_count() {
+        let mut values = base_values();
+        values.public_values[KAGEMUSHA_RECURSIVE_AGGREGATION_WITNESS_COUNT_INDEX] = 0;
+        values.public_values[KAGEMUSHA_RECURSIVE_AGGREGATION_HOP_COUNT_INDEX] = 0;
+        assert!(!verify(
+            values,
+            opening_len_selectors(values),
+            [Scalar::from(0); KAGEMUSHA_RECURSIVE_AGGREGATION_HOP_COUNT_BITS],
+            public_field_inverses(values),
+        ));
+        assert!(
+            values.hop_count_minus_one_bits().is_err(),
+            "host witness builder must reject zero recursive hop counts"
+        );
+    }
+
+    #[test]
+    fn kagemusha_recursive_aggregation_semantic_circuit_rejects_oversized_hop_count() {
+        let mut values = base_values();
+        values.public_values[KAGEMUSHA_RECURSIVE_AGGREGATION_WITNESS_COUNT_INDEX] = 65;
+        values.public_values[KAGEMUSHA_RECURSIVE_AGGREGATION_HOP_COUNT_INDEX] = 65;
+        assert!(!verify(
+            values,
+            opening_len_selectors(values),
+            [Scalar::from(1); KAGEMUSHA_RECURSIVE_AGGREGATION_HOP_COUNT_BITS],
+            public_field_inverses(values),
+        ));
+        assert!(
+            values.hop_count_minus_one_bits().is_err(),
+            "host witness builder must reject oversized recursive hop counts"
+        );
+    }
+
+    #[test]
+    fn kagemusha_recursive_aggregation_semantic_circuit_rejects_witness_count_mismatch() {
+        let mut values = base_values();
+        values.public_values[KAGEMUSHA_RECURSIVE_AGGREGATION_WITNESS_COUNT_INDEX] = 3;
+        assert!(!verify(
+            values,
+            opening_len_selectors(values),
+            hop_count_minus_one_bits(values),
+            public_field_inverses(values),
+        ));
+    }
+
+    #[test]
+    fn kagemusha_recursive_aggregation_semantic_circuit_rejects_non_boolean_hop_bit() {
+        let values = base_values();
+        let mut bits = hop_count_minus_one_bits(values);
+        bits[0] = Scalar::from(2);
+        assert!(!verify(
+            values,
+            opening_len_selectors(values),
+            bits,
+            public_field_inverses(values),
+        ));
+    }
+
+    #[test]
+    fn kagemusha_recursive_aggregation_semantic_circuit_rejects_zero_public_field_groups() {
+        for group in KAGEMUSHA_RECURSIVE_AGGREGATION_NON_ZERO_PUBLIC_FIELD_GROUPS {
+            let mut values = base_values();
+            for index in group {
+                values.public_values[index] = 0;
+            }
+            assert!(!verify(
+                values,
+                opening_len_selectors(values),
+                hop_count_minus_one_bits(values),
+                [Scalar::from(0);
+                    KAGEMUSHA_RECURSIVE_AGGREGATION_NON_ZERO_PUBLIC_FIELD_GROUP_COUNT],
+            ));
+            assert!(
+                values.non_zero_public_field_inverses().is_err(),
+                "host witness builder must reject zero recursive digest groups"
+            );
+        }
+    }
+
+    #[test]
+    fn kagemusha_recursive_aggregation_semantic_circuit_rejects_bad_public_field_inverse_witness() {
+        let values = base_values();
+        let mut inverses = public_field_inverses(values);
+        inverses[0] = Scalar::from(1);
+        assert!(!verify(
+            values,
+            opening_len_selectors(values),
+            hop_count_minus_one_bits(values),
+            inverses,
+        ));
+    }
+}
+
 #[cfg(all(test, any(feature = "zk-halo2", feature = "zk-halo2-ipa")))]
 mod kagemusha_non_native_limb_circuit_tests {
     use halo2_proofs::{
@@ -9034,35 +12082,51 @@ mod kagemusha_non_native_limb_circuit_tests {
     fn native_pasta_fp_ipa_transcript_binding_instances<const ROUNDS: usize>(
         circuit: &pasta_tiny::NativePastaFpIpaTranscriptBinding<ROUNDS>,
     ) -> Vec<Vec<Scalar>> {
+        native_pasta_fp_ipa_transcript_binding_instances_from_values(
+            circuit.header_projection,
+            &circuit.round_projections,
+            &circuit.challenges,
+            &circuit.challenge_inverses,
+            circuit.final_projection,
+            circuit.binding_digest,
+        )
+    }
+
+    fn native_pasta_fp_ipa_transcript_binding_instances_from_values(
+        header_projection: Scalar,
+        round_projections: &[Scalar],
+        challenges: &[Scalar],
+        challenge_inverses: &[Scalar],
+        final_projection: Scalar,
+        binding_digest: Scalar,
+    ) -> Vec<Vec<Scalar>> {
         fn instance_at(row: usize, value: Scalar) -> Vec<Scalar> {
             let mut values = vec![Scalar::from(0); row + 1];
             values[row] = value;
             values
         }
 
-        let final_row = ROUNDS * 3;
+        let rounds = round_projections.len();
+        let final_row = rounds * 3;
         let mut instances = vec![
-            instance_at(0, circuit.header_projection),
-            instance_at(final_row, circuit.final_projection),
-            instance_at(final_row, circuit.binding_digest),
+            instance_at(0, header_projection),
+            instance_at(final_row, final_projection),
+            instance_at(final_row, binding_digest),
         ];
         instances.extend(
-            circuit
-                .round_projections
+            round_projections
                 .iter()
                 .enumerate()
                 .map(|(round_index, value)| instance_at(round_index * 3, *value)),
         );
         instances.extend(
-            circuit
-                .challenges
+            challenges
                 .iter()
                 .enumerate()
                 .map(|(round_index, value)| instance_at(round_index * 3 + 1, *value)),
         );
         instances.extend(
-            circuit
-                .challenge_inverses
+            challenge_inverses
                 .iter()
                 .enumerate()
                 .map(|(round_index, value)| instance_at(round_index * 3 + 2, *value)),
@@ -9433,6 +12497,29 @@ mod kagemusha_non_native_limb_circuit_tests {
             .expect("Vesta affine fixed-window table verifier panicked")
     }
 
+    fn verify_vesta_affine_fixed_window_table_select<const WINDOW_BITS: usize>(
+        base: (
+            [u64; pasta_tiny::NON_NATIVE_PASTA_FIELD_LIMBS],
+            [u64; pasta_tiny::NON_NATIVE_PASTA_FIELD_LIMBS],
+            bool,
+        ),
+        circuit: pasta_tiny::NonNativeVestaAffineFixedWindowTableSelect<WINDOW_BITS>,
+    ) -> bool {
+        let instances = vesta_point_instances(base);
+        std::thread::Builder::new()
+            .name("non-native-vesta-affine-fixed-window-table-select".to_owned())
+            .stack_size(512 * 1024 * 1024)
+            .spawn(move || {
+                MockProver::run(8, &circuit, instances)
+                    .expect("non-native Vesta affine fixed-window table-select mock prover")
+                    .verify()
+                    .is_ok()
+            })
+            .expect("spawn Vesta affine fixed-window table-select verifier")
+            .join()
+            .expect("Vesta affine fixed-window table-select verifier panicked")
+    }
+
     fn run_vesta_affine_fixed_window_table_test(test: impl FnOnce() + Send + 'static) {
         std::thread::Builder::new()
             .name("non-native-vesta-affine-fixed-window-table-test".to_owned())
@@ -9508,6 +12595,76 @@ mod kagemusha_non_native_limb_circuit_tests {
             .expect("spawn Vesta affine windowed scalar-mul verifier")
             .join()
             .expect("Vesta affine windowed scalar-mul verifier panicked")
+    }
+
+    fn vesta_affine_windowed_scalar_mul_shared_table_native_scalar_instances<
+        const WINDOWS: usize,
+        const WINDOW_BITS: usize,
+    >(
+        circuit: &pasta_tiny::NonNativeVestaAffineWindowedScalarMulSharedTableNativeScalar<
+            WINDOWS,
+            WINDOW_BITS,
+        >,
+    ) -> Vec<Vec<Scalar>> {
+        let mut instances = Vec::with_capacity(18);
+        append_complete_add_point_instances(
+            &mut instances,
+            &circuit
+                .tables
+                .first()
+                .expect("shared-table windowed scalar mul has a first table")
+                .table[1],
+        );
+        append_complete_add_point_instances(
+            &mut instances,
+            circuit
+                .sum_adds
+                .last()
+                .expect("shared-table windowed scalar mul has a final sum")
+                .r
+                .as_ref(),
+        );
+        instances
+    }
+
+    fn verify_vesta_affine_windowed_scalar_mul_shared_table_native_scalar<
+        const WINDOWS: usize,
+        const WINDOW_BITS: usize,
+    >(
+        circuit: pasta_tiny::NonNativeVestaAffineWindowedScalarMulSharedTableNativeScalar<
+            WINDOWS,
+            WINDOW_BITS,
+        >,
+    ) -> bool {
+        let instances =
+            vesta_affine_windowed_scalar_mul_shared_table_native_scalar_instances(&circuit);
+        verify_vesta_affine_windowed_scalar_mul_shared_table_native_scalar_with_instances(
+            circuit, instances,
+        )
+    }
+
+    fn verify_vesta_affine_windowed_scalar_mul_shared_table_native_scalar_with_instances<
+        const WINDOWS: usize,
+        const WINDOW_BITS: usize,
+    >(
+        circuit: pasta_tiny::NonNativeVestaAffineWindowedScalarMulSharedTableNativeScalar<
+            WINDOWS,
+            WINDOW_BITS,
+        >,
+        instances: Vec<Vec<Scalar>>,
+    ) -> bool {
+        std::thread::Builder::new()
+            .name("non-native-vesta-affine-windowed-shared-table-scalar-mul-test".to_owned())
+            .stack_size(1024 * 1024 * 1024)
+            .spawn(move || {
+                MockProver::run(8, &circuit, instances)
+                    .expect("non-native Vesta affine windowed shared-table scalar-mul mock prover")
+                    .verify()
+                    .is_ok()
+            })
+            .expect("spawn Vesta affine windowed shared-table scalar-mul verifier")
+            .join()
+            .expect("Vesta affine windowed shared-table scalar-mul verifier panicked")
     }
 
     fn run_vesta_affine_windowed_scalar_mul_native_scalar_test(
@@ -9595,6 +12752,132 @@ mod kagemusha_non_native_limb_circuit_tests {
             .expect("spawn Vesta affine windowed MSM verifier")
             .join()
             .expect("Vesta affine windowed MSM verifier panicked")
+    }
+
+    fn vesta_affine_windowed_msm_shared_table_native_scalar_instances<
+        const TERMS: usize,
+        const WINDOWS: usize,
+        const WINDOW_BITS: usize,
+    >(
+        circuit: &pasta_tiny::NonNativeVestaAffineWindowedMsmSharedTableNativeScalar<
+            TERMS,
+            WINDOWS,
+            WINDOW_BITS,
+        >,
+    ) -> Vec<Vec<Scalar>> {
+        let mut instances = Vec::with_capacity((TERMS + 1) * 9);
+        for term in &circuit.term_muls {
+            append_complete_add_point_instances(
+                &mut instances,
+                &term
+                    .tables
+                    .first()
+                    .expect("shared-table windowed MSM term has a first table")
+                    .table[1],
+            );
+        }
+        append_complete_add_point_instances(
+            &mut instances,
+            circuit
+                .sum_adds
+                .last()
+                .expect("shared-table windowed MSM has a final sum")
+                .r
+                .as_ref(),
+        );
+        instances
+    }
+
+    fn verify_vesta_affine_windowed_msm_shared_table_native_scalar<
+        const TERMS: usize,
+        const WINDOWS: usize,
+        const WINDOW_BITS: usize,
+    >(
+        circuit: pasta_tiny::NonNativeVestaAffineWindowedMsmSharedTableNativeScalar<
+            TERMS,
+            WINDOWS,
+            WINDOW_BITS,
+        >,
+    ) -> bool {
+        let instances = vesta_affine_windowed_msm_shared_table_native_scalar_instances(&circuit);
+        verify_vesta_affine_windowed_msm_shared_table_native_scalar_with_instances(
+            circuit, instances,
+        )
+    }
+
+    fn verify_vesta_affine_windowed_msm_shared_table_native_scalar_with_instances<
+        const TERMS: usize,
+        const WINDOWS: usize,
+        const WINDOW_BITS: usize,
+    >(
+        circuit: pasta_tiny::NonNativeVestaAffineWindowedMsmSharedTableNativeScalar<
+            TERMS,
+            WINDOWS,
+            WINDOW_BITS,
+        >,
+        instances: Vec<Vec<Scalar>>,
+    ) -> bool {
+        std::thread::Builder::new()
+            .name("non-native-vesta-affine-windowed-shared-table-msm-test".to_owned())
+            .stack_size(1536 * 1024 * 1024)
+            .spawn(move || {
+                MockProver::run(8, &circuit, instances)
+                    .expect("non-native Vesta affine windowed shared-table MSM mock prover")
+                    .verify()
+                    .is_ok()
+            })
+            .expect("spawn Vesta affine windowed shared-table MSM verifier")
+            .join()
+            .expect("Vesta affine windowed shared-table MSM verifier panicked")
+    }
+
+    fn vesta_affine_ipa_final_windowed_msm_shared_table_instances<
+        const WINDOWS: usize,
+        const WINDOW_BITS: usize,
+    >(
+        circuit: &pasta_tiny::NonNativeVestaIpaFinalWindowedMsmSharedTableNativeScalar<
+            WINDOWS,
+            WINDOW_BITS,
+        >,
+    ) -> Vec<Vec<Scalar>> {
+        vesta_affine_windowed_msm_shared_table_native_scalar_instances(circuit.msm.as_ref())
+    }
+
+    fn verify_vesta_affine_ipa_final_windowed_msm_shared_table<
+        const WINDOWS: usize,
+        const WINDOW_BITS: usize,
+    >(
+        circuit: pasta_tiny::NonNativeVestaIpaFinalWindowedMsmSharedTableNativeScalar<
+            WINDOWS,
+            WINDOW_BITS,
+        >,
+    ) -> bool {
+        let instances = vesta_affine_ipa_final_windowed_msm_shared_table_instances(&circuit);
+        verify_vesta_affine_ipa_final_windowed_msm_shared_table_with_instances(circuit, instances)
+    }
+
+    fn verify_vesta_affine_ipa_final_windowed_msm_shared_table_with_instances<
+        const WINDOWS: usize,
+        const WINDOW_BITS: usize,
+    >(
+        circuit: pasta_tiny::NonNativeVestaIpaFinalWindowedMsmSharedTableNativeScalar<
+            WINDOWS,
+            WINDOW_BITS,
+        >,
+        instances: Vec<Vec<Scalar>>,
+    ) -> bool {
+        std::thread::Builder::new()
+            .name("non-native-vesta-affine-ipa-final-windowed-shared-table-msm-test".to_owned())
+            .stack_size(1536 * 1024 * 1024)
+            .spawn(move || {
+                MockProver::run(8, &circuit, instances)
+                    .expect("non-native Vesta affine IPA final windowed shared-table MSM prover")
+                    .verify()
+                    .is_ok()
+            })
+            .expect("spawn Vesta affine IPA final windowed shared-table MSM verifier")
+            .join()
+            .expect("Vesta affine IPA final windowed shared-table MSM verifier panicked")
     }
 
     fn run_vesta_affine_windowed_msm_native_scalar_test(test: impl FnOnce() + Send + 'static) {
@@ -10242,6 +13525,47 @@ mod kagemusha_non_native_limb_circuit_tests {
             .is_ok()
     }
 
+    fn vesta_affine_ipa_round_accumulator_shared_table_instances<
+        const WINDOWS: usize,
+        const WINDOW_BITS: usize,
+    >(
+        circuit: &pasta_tiny::NonNativeVestaIpaRoundAccumulatorSharedTableNativeScalar<
+            WINDOWS,
+            WINDOW_BITS,
+        >,
+    ) -> Vec<Vec<Scalar>> {
+        vesta_affine_windowed_msm_shared_table_native_scalar_instances(circuit.msm.as_ref())
+    }
+
+    fn verify_vesta_affine_ipa_round_accumulator_shared_table<
+        const WINDOWS: usize,
+        const WINDOW_BITS: usize,
+    >(
+        circuit: pasta_tiny::NonNativeVestaIpaRoundAccumulatorSharedTableNativeScalar<
+            WINDOWS,
+            WINDOW_BITS,
+        >,
+    ) -> bool {
+        let instances = vesta_affine_ipa_round_accumulator_shared_table_instances(&circuit);
+        verify_vesta_affine_ipa_round_accumulator_shared_table_with_instances(circuit, instances)
+    }
+
+    fn verify_vesta_affine_ipa_round_accumulator_shared_table_with_instances<
+        const WINDOWS: usize,
+        const WINDOW_BITS: usize,
+    >(
+        circuit: pasta_tiny::NonNativeVestaIpaRoundAccumulatorSharedTableNativeScalar<
+            WINDOWS,
+            WINDOW_BITS,
+        >,
+        instances: Vec<Vec<Scalar>>,
+    ) -> bool {
+        MockProver::run(8, &circuit, instances)
+            .expect("non-native Vesta IPA shared-table round accumulator mock prover")
+            .verify()
+            .is_ok()
+    }
+
     fn run_vesta_affine_ipa_round_accumulator_test(test: impl FnOnce() + Send + 'static) {
         std::thread::Builder::new()
             .name("non-native-vesta-affine-ipa-round-accumulator-test".to_owned())
@@ -10303,6 +13627,52 @@ mod kagemusha_non_native_limb_circuit_tests {
             .is_ok()
     }
 
+    fn vesta_affine_ipa_generator_fold_shared_table_instances<
+        const WINDOWS: usize,
+        const WINDOW_BITS: usize,
+    >(
+        circuit: &pasta_tiny::NonNativeVestaIpaGeneratorFoldSharedTableNativeScalar<
+            WINDOWS,
+            WINDOW_BITS,
+        >,
+    ) -> Vec<Vec<Scalar>> {
+        let mut instances =
+            vesta_affine_windowed_msm_shared_table_native_scalar_instances(circuit.g_msm.as_ref());
+        instances.extend(
+            vesta_affine_windowed_msm_shared_table_native_scalar_instances(circuit.h_msm.as_ref()),
+        );
+        instances
+    }
+
+    fn verify_vesta_affine_ipa_generator_fold_shared_table<
+        const WINDOWS: usize,
+        const WINDOW_BITS: usize,
+    >(
+        circuit: pasta_tiny::NonNativeVestaIpaGeneratorFoldSharedTableNativeScalar<
+            WINDOWS,
+            WINDOW_BITS,
+        >,
+    ) -> bool {
+        let instances = vesta_affine_ipa_generator_fold_shared_table_instances(&circuit);
+        verify_vesta_affine_ipa_generator_fold_shared_table_with_instances(circuit, instances)
+    }
+
+    fn verify_vesta_affine_ipa_generator_fold_shared_table_with_instances<
+        const WINDOWS: usize,
+        const WINDOW_BITS: usize,
+    >(
+        circuit: pasta_tiny::NonNativeVestaIpaGeneratorFoldSharedTableNativeScalar<
+            WINDOWS,
+            WINDOW_BITS,
+        >,
+        instances: Vec<Vec<Scalar>>,
+    ) -> bool {
+        MockProver::run(8, &circuit, instances)
+            .expect("non-native Vesta IPA shared-table generator fold mock prover")
+            .verify()
+            .is_ok()
+    }
+
     fn run_vesta_affine_ipa_generator_fold_test(test: impl FnOnce() + Send + 'static) {
         std::thread::Builder::new()
             .name("non-native-vesta-affine-ipa-generator-fold-test".to_owned())
@@ -10353,12 +13723,287 @@ mod kagemusha_non_native_limb_circuit_tests {
         instances
     }
 
+    fn vesta_affine_ipa_one_round_shared_table_valid_circuit()
+    -> pasta_tiny::NonNativeVestaIpaOneRoundVerifierSharedTableNativeScalar<1, 1> {
+        pasta_tiny::NonNativeVestaIpaOneRoundVerifierSharedTableNativeScalar::<1, 1>::try_from_statement(
+            [Scalar::from(1), Scalar::from(0)],
+            Scalar::from(1),
+            Scalar::from(1),
+            Scalar::from(1),
+            vesta_non_identity_limbs(vesta_generator_multiple(1)),
+            vesta_non_identity_limbs(vesta_generator_multiple(8)),
+            vesta_non_identity_limbs(vesta_generator_multiple(2)),
+            vesta_non_identity_limbs(vesta_generator_multiple(1)),
+            vesta_non_identity_limbs(vesta_generator_multiple(2)),
+            vesta_non_identity_limbs(vesta_generator_multiple(3)),
+            vesta_non_identity_limbs(vesta_generator_multiple(4)),
+            vesta_non_identity_limbs(vesta_generator_multiple(1)),
+        )
+        .expect("valid shared-table one-round IPA verifier composition")
+    }
+
+    fn vesta_affine_ipa_one_round_shared_table_instances<
+        const WINDOWS: usize,
+        const WINDOW_BITS: usize,
+    >(
+        circuit: &pasta_tiny::NonNativeVestaIpaOneRoundVerifierSharedTableNativeScalar<
+            WINDOWS,
+            WINDOW_BITS,
+        >,
+    ) -> Vec<Vec<Scalar>> {
+        let mut instances =
+            native_pasta_fp_ipa_b_vector_reduction_instances(circuit.b_reduction.as_ref());
+        instances.extend(vesta_affine_ipa_round_accumulator_shared_table_instances(
+            circuit.round_accumulator.as_ref(),
+        ));
+        instances.extend(vesta_affine_ipa_generator_fold_shared_table_instances(
+            circuit.generator_fold.as_ref(),
+        ));
+        instances.extend(vesta_affine_ipa_final_windowed_msm_shared_table_instances(
+            circuit.final_msm.as_ref(),
+        ));
+        instances
+    }
+
+    fn vesta_affine_ipa_verifier_shared_table_instances<
+        const LEN: usize,
+        const WINDOWS: usize,
+        const WINDOW_BITS: usize,
+    >(
+        circuit: &pasta_tiny::NonNativeVestaIpaVerifierSharedTableNativeScalar<
+            LEN,
+            WINDOWS,
+            WINDOW_BITS,
+        >,
+    ) -> Vec<Vec<Scalar>> {
+        let mut instances = native_pasta_fp_ipa_transcript_binding_instances_from_values(
+            circuit.transcript_header_projection,
+            &circuit.transcript_round_projections,
+            &circuit.transcript_challenges,
+            &circuit.transcript_challenge_inverses,
+            circuit.transcript_final_projection,
+            circuit.transcript_binding_digest,
+        );
+        instances.extend(native_pasta_fp_ipa_b_vector_reduction_instances(
+            circuit.b_reduction.as_ref(),
+        ));
+        for round_accumulator in &circuit.round_accumulators {
+            instances.extend(vesta_affine_ipa_round_accumulator_shared_table_instances(
+                round_accumulator,
+            ));
+        }
+        for generator_fold_round in &circuit.generator_folds {
+            for generator_fold in generator_fold_round {
+                instances.extend(vesta_affine_ipa_generator_fold_shared_table_instances(
+                    generator_fold,
+                ));
+            }
+        }
+        instances.extend(vesta_affine_ipa_final_windowed_msm_shared_table_instances(
+            circuit.final_msm.as_ref(),
+        ));
+        instances
+    }
+
+    fn verify_vesta_affine_ipa_verifier_shared_table<
+        const LEN: usize,
+        const WINDOWS: usize,
+        const WINDOW_BITS: usize,
+    >(
+        circuit: pasta_tiny::NonNativeVestaIpaVerifierSharedTableNativeScalar<
+            LEN,
+            WINDOWS,
+            WINDOW_BITS,
+        >,
+    ) -> bool {
+        let instances = vesta_affine_ipa_verifier_shared_table_instances(&circuit);
+        verify_vesta_affine_ipa_verifier_shared_table_with_instances(circuit, instances)
+    }
+
+    fn verify_vesta_affine_ipa_verifier_shared_table_with_instances<
+        const LEN: usize,
+        const WINDOWS: usize,
+        const WINDOW_BITS: usize,
+    >(
+        circuit: pasta_tiny::NonNativeVestaIpaVerifierSharedTableNativeScalar<
+            LEN,
+            WINDOWS,
+            WINDOW_BITS,
+        >,
+        instances: Vec<Vec<Scalar>>,
+    ) -> bool {
+        MockProver::run(8, &circuit, instances)
+            .expect("non-native Vesta shared-table multi-round IPA verifier mock prover")
+            .verify()
+            .is_ok()
+    }
+
     fn verify_vesta_affine_ipa_one_round<const WINDOWS: usize, const WINDOW_BITS: usize>(
         circuit: pasta_tiny::NonNativeVestaIpaOneRoundVerifierNativeScalar<WINDOWS, WINDOW_BITS>,
     ) -> bool {
         let instances = vesta_affine_ipa_one_round_instances(&circuit);
         MockProver::run(8, &circuit, instances)
             .expect("non-native Vesta one-round IPA verifier mock prover")
+            .verify()
+            .is_ok()
+    }
+
+    fn verify_vesta_affine_ipa_one_round_shared_table<
+        const WINDOWS: usize,
+        const WINDOW_BITS: usize,
+    >(
+        circuit: pasta_tiny::NonNativeVestaIpaOneRoundVerifierSharedTableNativeScalar<
+            WINDOWS,
+            WINDOW_BITS,
+        >,
+    ) -> bool {
+        let instances = vesta_affine_ipa_one_round_shared_table_instances(&circuit);
+        MockProver::run(8, &circuit, instances)
+            .expect("non-native Vesta shared-table one-round IPA verifier mock prover")
+            .verify()
+            .is_ok()
+    }
+
+    fn recursive_one_hop_instance_values() -> KagemushaRecursiveAggregationProofInstanceValues {
+        let mut public_values = [0u64; KAGEMUSHA_RECURSIVE_AGGREGATION_PROOF_INSTANCE_COLUMNS];
+        for (index, value) in public_values[..KAGEMUSHA_RECURSIVE_AGGREGATION_OPENING_LEN_INDEX]
+            .iter_mut()
+            .enumerate()
+        {
+            *value = 101 + u64::try_from(index).expect("test index fits u64");
+        }
+        public_values[KAGEMUSHA_RECURSIVE_AGGREGATION_OPENING_LEN_INDEX] = 2;
+        public_values[KAGEMUSHA_RECURSIVE_AGGREGATION_WITNESS_COUNT_INDEX] = 1;
+        public_values[KAGEMUSHA_RECURSIVE_AGGREGATION_HOP_COUNT_INDEX] = 1;
+        let schedule_digest = kagemusha_recursive_fixed_window_table_schedule_digest(2)
+            .expect("canonical one-hop recursive fixed-window schedule digest");
+        for (offset, limb) in bytes_to_u64_limbs_le(&schedule_digest)
+            .into_iter()
+            .enumerate()
+        {
+            public_values[KAGEMUSHA_RECURSIVE_AGGREGATION_FIXED_WINDOW_TABLE_SCHEDULE_START_INDEX
+                + offset] = limb;
+        }
+        let manifest_digest = kagemusha_recursive_fixed_window_shared_table_manifest_digest(2)
+            .expect("canonical one-hop recursive shared-table manifest digest");
+        for (offset, limb) in bytes_to_u64_limbs_le(&manifest_digest)
+            .into_iter()
+            .enumerate()
+        {
+            public_values
+                [KAGEMUSHA_RECURSIVE_AGGREGATION_FIXED_WINDOW_SHARED_TABLE_MANIFEST_START_INDEX
+                    + offset] = limb;
+        }
+        KagemushaRecursiveAggregationProofInstanceValues { public_values }
+    }
+
+    fn set_recursive_one_hop_digest_limbs(
+        values: &mut KagemushaRecursiveAggregationProofInstanceValues,
+        start_index: usize,
+        digest: &[u8; 32],
+    ) {
+        for (offset, limb) in bytes_to_u64_limbs_le(digest).into_iter().enumerate() {
+            values.public_values[start_index + offset] = limb;
+        }
+    }
+
+    fn recursive_one_hop_instance_values_with_preflight(
+        preflight: &pasta_tiny::PallasIpaBatchVerifierPreflight,
+    ) -> KagemushaRecursiveAggregationProofInstanceValues {
+        let mut values = recursive_one_hop_instance_values();
+        set_recursive_one_hop_digest_limbs(
+            &mut values,
+            KAGEMUSHA_RECURSIVE_AGGREGATION_VERIFIER_PARAMS_START_INDEX,
+            &preflight.params_fingerprint,
+        );
+        set_recursive_one_hop_digest_limbs(
+            &mut values,
+            KAGEMUSHA_RECURSIVE_AGGREGATION_FIXED_WINDOW_TABLE_SCHEDULE_START_INDEX,
+            &preflight.fixed_window_table_schedule_digest,
+        );
+        set_recursive_one_hop_digest_limbs(
+            &mut values,
+            KAGEMUSHA_RECURSIVE_AGGREGATION_FIXED_WINDOW_SHARED_TABLE_MANIFEST_START_INDEX,
+            &preflight.fixed_window_shared_table_manifest_digest,
+        );
+        set_recursive_one_hop_digest_limbs(
+            &mut values,
+            KAGEMUSHA_RECURSIVE_AGGREGATION_FIXED_WINDOW_TABLE_BASE_START_INDEX,
+            &preflight.fixed_window_table_base_digest,
+        );
+        set_recursive_one_hop_digest_limbs(
+            &mut values,
+            KAGEMUSHA_RECURSIVE_AGGREGATION_VERIFIER_WITNESS_BATCH_START_INDEX,
+            &preflight.aggregate_digest,
+        );
+        values
+    }
+
+    fn recursive_one_hop_semantic(
+        values: KagemushaRecursiveAggregationProofInstanceValues,
+    ) -> pasta_tiny::KagemushaRecursiveAggregationSemantic {
+        pasta_tiny::KagemushaRecursiveAggregationSemantic {
+            public_values: values.public_scalars(),
+            opening_len_selectors: values
+                .opening_len_selectors()
+                .expect("one-hop opening length selector"),
+            hop_count_minus_one_bits: values
+                .hop_count_minus_one_bits()
+                .expect("one-hop hop-count bits"),
+            non_zero_public_field_inverses: values
+                .non_zero_public_field_inverses()
+                .expect("one-hop recursive public field inverses"),
+        }
+    }
+
+    fn recursive_one_hop_verifier_slice_valid_circuit()
+    -> pasta_tiny::KagemushaRecursiveAggregationOneHopVerifierSlice<1, 1> {
+        pasta_tiny::KagemushaRecursiveAggregationOneHopVerifierSlice::<1, 1>::try_from_parts(
+            recursive_one_hop_semantic(recursive_one_hop_instance_values()),
+            vesta_affine_ipa_verifier_two_point_shared_table_valid_circuit(),
+        )
+        .expect("valid one-hop recursive verifier slice")
+    }
+
+    fn recursive_one_hop_verifier_slice_instances<
+        const WINDOWS: usize,
+        const WINDOW_BITS: usize,
+    >(
+        circuit: &pasta_tiny::KagemushaRecursiveAggregationOneHopVerifierSlice<
+            WINDOWS,
+            WINDOW_BITS,
+        >,
+    ) -> Vec<Vec<Scalar>> {
+        let mut instances = circuit
+            .semantic
+            .public_values
+            .iter()
+            .copied()
+            .map(|value| vec![value])
+            .collect::<Vec<_>>();
+        instances.extend(vesta_affine_ipa_verifier_shared_table_instances(
+            circuit.verifier.as_ref(),
+        ));
+        instances.push(vec![circuit.verifier.transcript_binding_digest]);
+        instances.push(vec![
+            pasta_tiny::kagemusha_one_hop_verifier_scalar_projection_digest([
+                circuit.verifier.transcript_binding_digest,
+                circuit.verifier.b_reduction.vectors[0][0].value,
+                circuit.verifier.b_reduction.vectors[0][1].value,
+                circuit.verifier.b_reduction.challenges[0].value,
+                circuit.verifier.b_reduction.challenge_inverses[0].value,
+                circuit.verifier.b_reduction.vectors[1][0].value,
+            ]),
+        ]);
+        instances
+    }
+
+    fn verify_recursive_one_hop_verifier_slice<const WINDOWS: usize, const WINDOW_BITS: usize>(
+        circuit: pasta_tiny::KagemushaRecursiveAggregationOneHopVerifierSlice<WINDOWS, WINDOW_BITS>,
+        instances: Vec<Vec<Scalar>>,
+    ) -> bool {
+        MockProver::run(8, &circuit, instances)
+            .expect("one-hop recursive verifier slice mock prover")
             .verify()
             .is_ok()
     }
@@ -10411,6 +14056,41 @@ mod kagemusha_non_native_limb_circuit_tests {
             msm.sum_adds
                 .last()
                 .expect("windowed MSM has a final output")
+                .r
+                .as_ref(),
+        )
+    }
+
+    fn vesta_windowed_msm_shared_table_term_base_scalars<
+        const TERMS: usize,
+        const WINDOWS: usize,
+        const WINDOW_BITS: usize,
+    >(
+        msm: &pasta_tiny::NonNativeVestaAffineWindowedMsmSharedTableNativeScalar<
+            TERMS,
+            WINDOWS,
+            WINDOW_BITS,
+        >,
+        term_index: usize,
+    ) -> TestVestaPointScalars {
+        vesta_maybe_identity_witness_scalars(&msm.term_muls[term_index].tables[0].table[1])
+    }
+
+    fn vesta_windowed_msm_shared_table_output_scalars<
+        const TERMS: usize,
+        const WINDOWS: usize,
+        const WINDOW_BITS: usize,
+    >(
+        msm: &pasta_tiny::NonNativeVestaAffineWindowedMsmSharedTableNativeScalar<
+            TERMS,
+            WINDOWS,
+            WINDOW_BITS,
+        >,
+    ) -> TestVestaPointScalars {
+        vesta_maybe_identity_witness_scalars(
+            msm.sum_adds
+                .last()
+                .expect("shared-table windowed MSM has a final output")
                 .r
                 .as_ref(),
         )
@@ -10536,6 +14216,103 @@ mod kagemusha_non_native_limb_circuit_tests {
             vesta_non_identity_limbs(u),
         )
         .expect("valid two-round IPA verifier composition")
+    }
+
+    fn vesta_affine_ipa_verifier_four_point_shared_table_valid_circuit()
+    -> pasta_tiny::NonNativeVestaIpaVerifierSharedTableNativeScalar<4, 1, 1> {
+        let g_points = [
+            vesta_generator_multiple(1),
+            vesta_generator_multiple(2),
+            vesta_generator_multiple(3),
+            vesta_generator_multiple(4),
+        ];
+        let h_points = [
+            vesta_generator_multiple(5),
+            vesta_generator_multiple(6),
+            vesta_generator_multiple(7),
+            vesta_generator_multiple(8),
+        ];
+        let u = vesta_generator_multiple(1);
+        let expected_q =
+            vesta_affine_sum(&[vesta_affine_sum(&g_points), vesta_affine_sum(&h_points), u]);
+        let challenges = vec![Scalar::from(1), Scalar::from(1)];
+        let inverses = vec![Scalar::from(1), Scalar::from(1)];
+        let (
+            transcript_header_projection,
+            transcript_round_projections,
+            transcript_final_projection,
+            transcript_binding_digest,
+        ) = vesta_affine_ipa_verifier_transcript_binding_args(&challenges, &inverses);
+        pasta_tiny::NonNativeVestaIpaVerifierSharedTableNativeScalar::<4, 1, 1>::try_from_statement(
+            [
+                Scalar::from(1),
+                Scalar::from(0),
+                Scalar::from(0),
+                Scalar::from(0),
+            ],
+            challenges,
+            inverses,
+            transcript_header_projection,
+            transcript_round_projections,
+            transcript_final_projection,
+            transcript_binding_digest,
+            Scalar::from(1),
+            Scalar::from(1),
+            vec![vesta_identity_limbs(), vesta_identity_limbs()],
+            vesta_non_identity_limbs(expected_q),
+            vec![vesta_identity_limbs(), vesta_identity_limbs()],
+            g_points.map(vesta_non_identity_limbs),
+            h_points.map(vesta_non_identity_limbs),
+            vesta_non_identity_limbs(u),
+        )
+        .expect("valid two-round shared-table IPA verifier composition")
+    }
+
+    fn vesta_affine_ipa_verifier_two_point_shared_table_valid_circuit_with_profile<
+        const WINDOWS: usize,
+        const WINDOW_BITS: usize,
+    >() -> pasta_tiny::NonNativeVestaIpaVerifierSharedTableNativeScalar<2, WINDOWS, WINDOW_BITS>
+    {
+        let g_points = [vesta_generator_multiple(1), vesta_generator_multiple(2)];
+        let h_points = [vesta_generator_multiple(3), vesta_generator_multiple(4)];
+        let u = vesta_generator_multiple(1);
+        let expected_q =
+            vesta_affine_sum(&[vesta_affine_sum(&g_points), vesta_affine_sum(&h_points), u]);
+        let challenges = vec![Scalar::from(1)];
+        let inverses = vec![Scalar::from(1)];
+        let (
+            transcript_header_projection,
+            transcript_round_projections,
+            transcript_final_projection,
+            transcript_binding_digest,
+        ) = vesta_affine_ipa_verifier_transcript_binding_args(&challenges, &inverses);
+        pasta_tiny::NonNativeVestaIpaVerifierSharedTableNativeScalar::<
+            2,
+            WINDOWS,
+            WINDOW_BITS,
+        >::try_from_statement(
+            [Scalar::from(1), Scalar::from(0)],
+            challenges,
+            inverses,
+            transcript_header_projection,
+            transcript_round_projections,
+            transcript_final_projection,
+            transcript_binding_digest,
+            Scalar::from(1),
+            Scalar::from(1),
+            vec![vesta_identity_limbs()],
+            vesta_non_identity_limbs(expected_q),
+            vec![vesta_identity_limbs()],
+            g_points.map(vesta_non_identity_limbs),
+            h_points.map(vesta_non_identity_limbs),
+            vesta_non_identity_limbs(u),
+        )
+        .expect("valid one-round shared-table IPA verifier composition")
+    }
+
+    fn vesta_affine_ipa_verifier_two_point_shared_table_valid_circuit()
+    -> pasta_tiny::NonNativeVestaIpaVerifierSharedTableNativeScalar<2, 1, 1> {
+        vesta_affine_ipa_verifier_two_point_shared_table_valid_circuit_with_profile::<1, 1>()
     }
 
     fn vesta_affine_ipa_verifier_host_links_hold<
@@ -10680,6 +14457,158 @@ mod kagemusha_non_native_limb_circuit_tests {
         true
     }
 
+    fn vesta_affine_ipa_verifier_shared_table_host_links_hold<
+        const LEN: usize,
+        const WINDOWS: usize,
+        const WINDOW_BITS: usize,
+    >(
+        circuit: &pasta_tiny::NonNativeVestaIpaVerifierSharedTableNativeScalar<
+            LEN,
+            WINDOWS,
+            WINDOW_BITS,
+        >,
+    ) -> bool {
+        let rounds = circuit.round_accumulators.len();
+        if rounds == 0
+            || circuit.b_reduction.challenges.len() != rounds
+            || circuit.b_reduction.challenge_inverses.len() != rounds
+            || circuit.transcript_round_projections.len() != rounds
+            || circuit.transcript_challenges.len() != rounds
+            || circuit.transcript_challenge_inverses.len() != rounds
+            || circuit.transcript_round_states.len() != rounds + 1
+            || circuit.generator_folds.len() != rounds
+        {
+            return false;
+        }
+        if circuit.transcript_round_states[0] != circuit.transcript_header_projection {
+            return false;
+        }
+
+        let Some(final_b_layer) = circuit.b_reduction.vectors.last() else {
+            return false;
+        };
+        if final_b_layer.len() != 1
+            || final_b_layer[0].value != circuit.final_msm.msm.term_muls[1].scalar.scalar.value
+        {
+            return false;
+        }
+
+        for round_index in 0..rounds {
+            let b_challenge = circuit.b_reduction.challenges[round_index].value;
+            let b_challenge_inverse = circuit.b_reduction.challenge_inverses[round_index].value;
+            if circuit.transcript_challenges[round_index] != b_challenge
+                || circuit.transcript_challenge_inverses[round_index] != b_challenge_inverse
+            {
+                return false;
+            }
+            if circuit.transcript_round_states[round_index + 1]
+                != pasta_tiny::native_pasta_fp_ipa_transcript_binding_round(
+                    circuit.transcript_round_states[round_index],
+                    circuit.transcript_round_projections[round_index],
+                    circuit.transcript_challenges[round_index],
+                    circuit.transcript_challenge_inverses[round_index],
+                )
+            {
+                return false;
+            }
+            let round = &circuit.round_accumulators[round_index];
+            if b_challenge != round.challenge.value
+                || b_challenge_inverse != round.challenge_inverse.value
+            {
+                return false;
+            }
+            for generator_fold in &circuit.generator_folds[round_index] {
+                if b_challenge != generator_fold.challenge.value
+                    || b_challenge_inverse != generator_fold.challenge_inverse.value
+                {
+                    return false;
+                }
+            }
+        }
+        let Some(&last_transcript_state) = circuit.transcript_round_states.last() else {
+            return false;
+        };
+        if circuit.transcript_binding_digest
+            != pasta_tiny::native_pasta_fp_ipa_transcript_binding_compress(
+                last_transcript_state,
+                circuit.transcript_final_projection,
+            )
+        {
+            return false;
+        }
+
+        for round_index in 0..rounds {
+            let q_after = vesta_windowed_msm_shared_table_output_scalars(
+                circuit.round_accumulators[round_index].msm.as_ref(),
+            );
+            let expected_next = if round_index + 1 < rounds {
+                vesta_windowed_msm_shared_table_term_base_scalars(
+                    circuit.round_accumulators[round_index + 1].msm.as_ref(),
+                    1,
+                )
+            } else {
+                vesta_windowed_msm_shared_table_output_scalars(circuit.final_msm.msm.as_ref())
+            };
+            if q_after != expected_next {
+                return false;
+            }
+        }
+
+        for round_index in 0..rounds {
+            let current_width = circuit.generator_folds[round_index].len();
+            for pair_index in 0..current_width {
+                let folded_g = vesta_windowed_msm_shared_table_output_scalars(
+                    circuit.generator_folds[round_index][pair_index]
+                        .g_msm
+                        .as_ref(),
+                );
+                let folded_h = vesta_windowed_msm_shared_table_output_scalars(
+                    circuit.generator_folds[round_index][pair_index]
+                        .h_msm
+                        .as_ref(),
+                );
+                let (expected_g, expected_h) = if round_index + 1 < rounds {
+                    let next_half = current_width / 2;
+                    let (next_pair, next_term) = if pair_index < next_half {
+                        (pair_index, 0)
+                    } else {
+                        (pair_index - next_half, 1)
+                    };
+                    (
+                        vesta_windowed_msm_shared_table_term_base_scalars(
+                            circuit.generator_folds[round_index + 1][next_pair]
+                                .g_msm
+                                .as_ref(),
+                            next_term,
+                        ),
+                        vesta_windowed_msm_shared_table_term_base_scalars(
+                            circuit.generator_folds[round_index + 1][next_pair]
+                                .h_msm
+                                .as_ref(),
+                            next_term,
+                        ),
+                    )
+                } else {
+                    (
+                        vesta_windowed_msm_shared_table_term_base_scalars(
+                            circuit.final_msm.msm.as_ref(),
+                            0,
+                        ),
+                        vesta_windowed_msm_shared_table_term_base_scalars(
+                            circuit.final_msm.msm.as_ref(),
+                            1,
+                        ),
+                    )
+                };
+                if folded_g != expected_g || folded_h != expected_h {
+                    return false;
+                }
+            }
+        }
+
+        true
+    }
+
     fn run_vesta_affine_ipa_verifier_test(test: impl FnOnce() + Send + 'static) {
         std::thread::Builder::new()
             .name("non-native-vesta-affine-ipa-verifier-test".to_owned())
@@ -10783,6 +14712,69 @@ mod kagemusha_non_native_limb_circuit_tests {
         (params, witness)
     }
 
+    pub(super) fn sample_pallas_open_envelope(
+        n: usize,
+        label: &str,
+    ) -> iroha_zkp_halo2::OpenVerifyEnvelope {
+        sample_pallas_open_envelope_with_metadata(
+            n,
+            label,
+            iroha_zkp_halo2::PolyOpenTranscriptMetadata::default(),
+        )
+    }
+
+    fn sample_pallas_open_metadata(label: &str) -> iroha_zkp_halo2::PolyOpenTranscriptMetadata {
+        fn metadata_hash(domain: &[u8], label: &str) -> [u8; 32] {
+            let mut bytes = Vec::with_capacity(domain.len() + 1 + label.len());
+            bytes.extend_from_slice(domain);
+            bytes.push(b':');
+            bytes.extend_from_slice(label.as_bytes());
+            iroha_crypto::Hash::new(&bytes).into()
+        }
+
+        iroha_zkp_halo2::PolyOpenTranscriptMetadata {
+            vk_commitment: Some(metadata_hash(b"kagemusha-pallas-open-vk", label)),
+            public_inputs_schema_hash: Some(metadata_hash(
+                b"kagemusha-pallas-open-public-inputs",
+                label,
+            )),
+            domain_tag: Some(metadata_hash(b"kagemusha-pallas-open-domain", label)),
+        }
+    }
+
+    fn sample_bound_pallas_open_envelope(
+        n: usize,
+        label: &str,
+    ) -> iroha_zkp_halo2::OpenVerifyEnvelope {
+        sample_pallas_open_envelope_with_metadata(n, label, sample_pallas_open_metadata(label))
+    }
+
+    pub(super) fn sample_pallas_open_envelope_with_metadata(
+        n: usize,
+        label: &str,
+        metadata: iroha_zkp_halo2::PolyOpenTranscriptMetadata,
+    ) -> iroha_zkp_halo2::OpenVerifyEnvelope {
+        let params = iroha_zkp_halo2::pallas::Params::new(n).expect("Pallas params");
+        let poly = iroha_zkp_halo2::pallas::Polynomial::from_coeffs(sample_pallas_coeffs(n));
+        let commitment = poly.commit(&params).expect("Pallas commitment");
+        let z = iroha_zkp_halo2::pallas::Scalar::from(5u64);
+        let mut transcript = iroha_zkp_halo2::Transcript::new(label);
+        let (proof, t) = poly
+            .open_with_metadata(&params, &mut transcript, z, commitment, metadata)
+            .expect("Pallas opening proof");
+        iroha_zkp_halo2::OpenVerifyEnvelope {
+            params: iroha_zkp_halo2::norito_helpers::params_to_wire(&params),
+            public: iroha_zkp_halo2::norito_helpers::poly_open_public::<
+                iroha_zkp_halo2::pallas::PallasBackend,
+            >(params.n(), z, t, commitment),
+            proof: iroha_zkp_halo2::norito_helpers::proof_to_wire(&proof),
+            transcript_label: label.to_owned(),
+            vk_commitment: metadata.vk_commitment,
+            public_inputs_schema_hash: metadata.public_inputs_schema_hash,
+            domain_tag: metadata.domain_tag,
+        }
+    }
+
     fn pallas_group_sum(
         points: impl IntoIterator<Item = iroha_zkp_halo2::pallas::Group>,
     ) -> iroha_zkp_halo2::pallas::Group {
@@ -10791,35 +14783,6 @@ mod kagemusha_non_native_limb_circuit_tests {
             .fold(iroha_zkp_halo2::pallas::Group::identity(), |acc, point| {
                 acc.mul(point)
             })
-    }
-
-    fn small_scalar_pallas_transcript_binding(
-        rounds: usize,
-    ) -> (
-        iroha_zkp_halo2::pallas::Scalar,
-        Vec<iroha_zkp_halo2::pallas::Scalar>,
-        iroha_zkp_halo2::pallas::Scalar,
-        iroha_zkp_halo2::pallas::Scalar,
-    ) {
-        let one = iroha_zkp_halo2::pallas::Scalar::from(1u64);
-        let header_projection = iroha_zkp_halo2::pallas::Scalar::from(17u64);
-        let round_projections = (0..rounds)
-            .map(|index| iroha_zkp_halo2::pallas::Scalar::from(19 + index as u64 * 4))
-            .collect::<Vec<_>>();
-        let final_projection = iroha_zkp_halo2::pallas::Scalar::from(31u64);
-        let mut state = header_projection;
-        for round_projection in &round_projections {
-            state =
-                iroha_zkp_halo2::ipa_transcript_binding_round(state, *round_projection, one, one);
-        }
-        let binding_digest =
-            iroha_zkp_halo2::ipa_transcript_binding_compress(state, final_projection);
-        (
-            header_projection,
-            round_projections,
-            final_projection,
-            binding_digest,
-        )
     }
 
     fn sample_small_scalar_pallas_verifier_witness() -> (
@@ -10844,8 +14807,6 @@ mod kagemusha_non_native_limb_circuit_tests {
                 challenge_inverse: one,
             })
             .collect::<Vec<_>>();
-        let (header_projection, round_projections, final_projection, binding_digest) =
-            small_scalar_pallas_transcript_binding(round_challenges.len());
         let transcript_projection = iroha_zkp_halo2::IpaVerifierTranscriptProjection {
             n: 4,
             state_before_ipa_n: [7; 32],
@@ -10853,15 +14814,9 @@ mod kagemusha_non_native_limb_circuit_tests {
             rounds: round_challenges.clone(),
             final_state: [13; 32],
         };
-        let transcript_binding = iroha_zkp_halo2::IpaVerifierTranscriptBinding {
-            n: 4,
-            header_projection,
-            round_projections,
-            challenges: vec![one, one],
-            challenge_inverses: vec![one, one],
-            final_projection,
-            binding_digest,
-        };
+        let transcript_binding =
+            iroha_zkp_halo2::derive_ipa_verifier_transcript_binding(&transcript_projection)
+                .expect("synthetic Pallas transcript binding derives");
         let b0 = vec![one, zero, zero, zero];
         let b1 = vec![one, zero];
         let b2 = vec![one];
@@ -12738,6 +16693,135 @@ mod kagemusha_non_native_limb_circuit_tests {
     }
 
     #[test]
+    fn kagemusha_non_native_vesta_affine_fixed_window_table_select_accepts_shared_table() {
+        run_vesta_affine_fixed_window_table_test(|| {
+            let table = vesta_fixed_window_select_table();
+            let base = table[1];
+            let circuit =
+                pasta_tiny::NonNativeVestaAffineFixedWindowTableSelect::<2>::try_from_base_and_digit(
+                    base,
+                    2,
+                    table.clone(),
+                    table[2],
+                )
+                .expect("valid shared-table fixed-window selection");
+
+            assert!(verify_vesta_affine_fixed_window_table_select(base, circuit));
+        });
+    }
+
+    #[test]
+    fn kagemusha_non_native_vesta_affine_fixed_window_table_select_rejects_builder_mismatch() {
+        run_vesta_affine_fixed_window_table_test(|| {
+            let table = vesta_fixed_window_select_table();
+            let err =
+                pasta_tiny::NonNativeVestaAffineFixedWindowTableSelect::<2>::try_from_base_and_digit(
+                    table[1],
+                    2,
+                    table.clone(),
+                    table[1],
+                )
+                .err()
+                .expect("shared-table builder must reject selected-point mismatch");
+            assert!(err.contains("selected point mismatch"));
+        });
+    }
+
+    #[test]
+    fn kagemusha_non_native_vesta_affine_fixed_window_table_select_rejects_selected_tamper() {
+        run_vesta_affine_fixed_window_table_test(|| {
+            let table = vesta_fixed_window_select_table();
+            let base = table[1];
+            let mut circuit =
+                pasta_tiny::NonNativeVestaAffineFixedWindowTableSelect::<2>::try_from_base_and_digit(
+                    base,
+                    2,
+                    table.clone(),
+                    table[2],
+                )
+                .expect("valid shared-table fixed-window selection");
+            circuit.selection.selected = Box::new(
+                pasta_tiny::NonNativeVestaAffineMaybeIdentity::try_from_limbs(
+                    table[1].0, table[1].1, table[1].2,
+                )
+                .expect("valid forged selected point"),
+            );
+
+            assert!(!verify_vesta_affine_fixed_window_table_select(
+                base, circuit
+            ));
+        });
+    }
+
+    #[test]
+    fn kagemusha_non_native_vesta_affine_fixed_window_table_select_rejects_level_tamper() {
+        run_vesta_affine_fixed_window_table_test(|| {
+            let table = vesta_fixed_window_select_table();
+            let base = table[1];
+            let mut circuit =
+                pasta_tiny::NonNativeVestaAffineFixedWindowTableSelect::<2>::try_from_base_and_digit(
+                    base,
+                    2,
+                    table.clone(),
+                    table[2],
+                )
+                .expect("valid shared-table fixed-window selection");
+            circuit.selection.selection_levels[0][1].0[0] += Scalar::from(1);
+
+            assert!(!verify_vesta_affine_fixed_window_table_select(
+                base, circuit
+            ));
+        });
+    }
+
+    #[test]
+    fn kagemusha_non_native_vesta_affine_fixed_window_table_select_rejects_table_tamper() {
+        run_vesta_affine_fixed_window_table_test(|| {
+            let table = vesta_fixed_window_select_table();
+            let base = table[1];
+            let mut circuit =
+                pasta_tiny::NonNativeVestaAffineFixedWindowTableSelect::<2>::try_from_base_and_digit(
+                    base,
+                    2,
+                    table.clone(),
+                    table[2],
+                )
+                .expect("valid shared-table fixed-window selection");
+            circuit.table.adds[0].q = Box::new(
+                pasta_tiny::NonNativeVestaAffineMaybeIdentity::try_from_limbs(
+                    table[2].0, table[2].1, table[2].2,
+                )
+                .expect("valid forged table add input"),
+            );
+
+            assert!(!verify_vesta_affine_fixed_window_table_select(
+                base, circuit
+            ));
+        });
+    }
+
+    #[test]
+    fn kagemusha_non_native_vesta_affine_fixed_window_table_select_rejects_public_base_substitution()
+     {
+        run_vesta_affine_fixed_window_table_test(|| {
+            let table = vesta_fixed_window_select_table();
+            let base = table[1];
+            let circuit =
+                pasta_tiny::NonNativeVestaAffineFixedWindowTableSelect::<2>::try_from_base_and_digit(
+                    base,
+                    2,
+                    table.clone(),
+                    table[2],
+                )
+                .expect("valid shared-table fixed-window selection");
+
+            assert!(!verify_vesta_affine_fixed_window_table_select(
+                table[2], circuit
+            ));
+        });
+    }
+
+    #[test]
     fn kagemusha_non_native_vesta_affine_windowed_scalar_mul_accepts_two_one_bit_windows() {
         run_vesta_affine_windowed_scalar_mul_native_scalar_test(|| {
             let base = vesta_non_identity_limbs(VestaAffine::generator());
@@ -12872,6 +16956,451 @@ mod kagemusha_non_native_limb_circuit_tests {
             circuit.sum_adds[1].p = circuit.sum_adds[0].p.clone();
 
             assert!(!verify_vesta_affine_windowed_scalar_mul_native_scalar(
+                circuit
+            ));
+        });
+    }
+
+    #[test]
+    fn kagemusha_non_native_vesta_affine_windowed_shared_table_scalar_mul_accepts_two_one_bit_windows()
+     {
+        run_vesta_affine_windowed_scalar_mul_native_scalar_test(|| {
+            let base = vesta_non_identity_limbs(VestaAffine::generator());
+            let output = vesta_native_scalar_mul_output_limbs(Scalar::from(3));
+            let circuit =
+                pasta_tiny::NonNativeVestaAffineWindowedScalarMulSharedTableNativeScalar::<2, 1>::try_from_scalar(
+                    Scalar::from(3),
+                    base,
+                    output,
+                )
+                .expect("valid shared-table two-window scalar multiplication");
+
+            assert!(verify_vesta_affine_windowed_scalar_mul_shared_table_native_scalar(circuit));
+        });
+    }
+
+    #[test]
+    fn kagemusha_non_native_vesta_affine_windowed_shared_table_scalar_mul_rejects_output_substitution()
+     {
+        run_vesta_affine_windowed_scalar_mul_native_scalar_test(|| {
+            let base = vesta_non_identity_limbs(VestaAffine::generator());
+            let output = vesta_native_scalar_mul_output_limbs(Scalar::from(3));
+            let circuit =
+                pasta_tiny::NonNativeVestaAffineWindowedScalarMulSharedTableNativeScalar::<2, 1>::try_from_scalar(
+                    Scalar::from(3),
+                    base,
+                    output,
+                )
+                .expect("valid shared-table two-window scalar multiplication");
+            let mut instances =
+                vesta_affine_windowed_scalar_mul_shared_table_native_scalar_instances(&circuit);
+            let forged = vesta_native_scalar_mul_output_limbs(Scalar::from(2));
+            for (index, column) in vesta_point_instances(forged).into_iter().enumerate() {
+                instances[9 + index] = column;
+            }
+
+            assert!(
+                !verify_vesta_affine_windowed_scalar_mul_shared_table_native_scalar_with_instances(
+                    circuit, instances,
+                )
+            );
+        });
+    }
+
+    #[test]
+    fn kagemusha_non_native_vesta_affine_windowed_shared_table_scalar_mul_rejects_selection_bit_splice()
+     {
+        run_vesta_affine_windowed_scalar_mul_native_scalar_test(|| {
+            let base = vesta_non_identity_limbs(VestaAffine::generator());
+            let output = vesta_native_scalar_mul_output_limbs(Scalar::from(3));
+            let mut circuit =
+                pasta_tiny::NonNativeVestaAffineWindowedScalarMulSharedTableNativeScalar::<2, 1>::try_from_scalar(
+                    Scalar::from(3),
+                    base,
+                    output,
+                )
+                .expect("valid shared-table two-window scalar multiplication");
+            circuit.selections[0].digit_bits[0] = Scalar::from(0);
+
+            assert!(!verify_vesta_affine_windowed_scalar_mul_shared_table_native_scalar(circuit));
+        });
+    }
+
+    #[test]
+    fn kagemusha_non_native_vesta_affine_windowed_shared_table_scalar_mul_rejects_selection_level_tamper()
+     {
+        run_vesta_affine_windowed_scalar_mul_native_scalar_test(|| {
+            let base = vesta_non_identity_limbs(VestaAffine::generator());
+            let output = vesta_native_scalar_mul_output_limbs(Scalar::from(3));
+            let mut circuit =
+                pasta_tiny::NonNativeVestaAffineWindowedScalarMulSharedTableNativeScalar::<2, 1>::try_from_scalar(
+                    Scalar::from(3),
+                    base,
+                    output,
+                )
+                .expect("valid shared-table two-window scalar multiplication");
+            circuit.selections[1].selection_levels[0][0].0[0] += Scalar::from(1);
+
+            assert!(!verify_vesta_affine_windowed_scalar_mul_shared_table_native_scalar(circuit));
+        });
+    }
+
+    #[test]
+    fn kagemusha_non_native_vesta_affine_windowed_shared_table_scalar_mul_rejects_window_base_transition_tamper()
+     {
+        run_vesta_affine_windowed_scalar_mul_native_scalar_test(|| {
+            let base = vesta_non_identity_limbs(VestaAffine::generator());
+            let output = vesta_native_scalar_mul_output_limbs(Scalar::from(3));
+            let mut circuit =
+                pasta_tiny::NonNativeVestaAffineWindowedScalarMulSharedTableNativeScalar::<2, 1>::try_from_scalar(
+                    Scalar::from(3),
+                    base,
+                    output,
+                )
+                .expect("valid shared-table two-window scalar multiplication");
+            circuit.window_base_doubles[0][0].r = Box::new(circuit.tables[0].table[1].clone());
+
+            assert!(!verify_vesta_affine_windowed_scalar_mul_shared_table_native_scalar(circuit));
+        });
+    }
+
+    #[test]
+    fn kagemusha_non_native_vesta_affine_windowed_shared_table_native_scalar_msm_accepts_two_terms()
+    {
+        run_vesta_affine_windowed_msm_native_scalar_test(|| {
+            let generator = VestaAffine::generator();
+            let double = vesta_generator_multiple(2);
+            let terms = [(Scalar::from(1), generator), (Scalar::from(1), double)];
+            let output = vesta_affine_msm_output_limbs(&terms);
+            let circuit = pasta_tiny::NonNativeVestaAffineWindowedMsmSharedTableNativeScalar::<
+                2,
+                1,
+                1,
+            >::try_from_terms(vesta_msm_encoded_terms(terms), output)
+            .expect("two-term one-window shared-table native-scalar MSM witness");
+
+            assert!(verify_vesta_affine_windowed_msm_shared_table_native_scalar(
+                circuit
+            ));
+        });
+    }
+
+    #[test]
+    fn kagemusha_non_native_vesta_affine_windowed_shared_table_native_scalar_msm_rejects_public_base_substitution()
+     {
+        run_vesta_affine_windowed_msm_native_scalar_test(|| {
+            let generator = VestaAffine::generator();
+            let double = vesta_generator_multiple(2);
+            let terms = [(Scalar::from(1), generator), (Scalar::from(1), double)];
+            let output = vesta_affine_msm_output_limbs(&terms);
+            let circuit = pasta_tiny::NonNativeVestaAffineWindowedMsmSharedTableNativeScalar::<
+                2,
+                1,
+                1,
+            >::try_from_terms(vesta_msm_encoded_terms(terms), output)
+            .expect("two-term one-window shared-table native-scalar MSM witness");
+            let mut instances =
+                vesta_affine_windowed_msm_shared_table_native_scalar_instances(&circuit);
+            instances[0][0] += Scalar::from(1);
+
+            assert!(
+                !verify_vesta_affine_windowed_msm_shared_table_native_scalar_with_instances(
+                    circuit, instances,
+                )
+            );
+        });
+    }
+
+    #[test]
+    fn kagemusha_non_native_vesta_affine_windowed_shared_table_native_scalar_msm_rejects_output_substitution()
+     {
+        run_vesta_affine_windowed_msm_native_scalar_test(|| {
+            let generator = VestaAffine::generator();
+            let double = vesta_generator_multiple(2);
+            let terms = [(Scalar::from(1), generator), (Scalar::from(1), double)];
+            let output = vesta_affine_msm_output_limbs(&terms);
+            let circuit = pasta_tiny::NonNativeVestaAffineWindowedMsmSharedTableNativeScalar::<
+                2,
+                1,
+                1,
+            >::try_from_terms(vesta_msm_encoded_terms(terms), output)
+            .expect("two-term one-window shared-table native-scalar MSM witness");
+            let mut instances =
+                vesta_affine_windowed_msm_shared_table_native_scalar_instances(&circuit);
+            let forged = vesta_non_identity_limbs(double);
+            for (index, column) in vesta_point_instances(forged).into_iter().enumerate() {
+                instances[18 + index] = column;
+            }
+
+            assert!(
+                !verify_vesta_affine_windowed_msm_shared_table_native_scalar_with_instances(
+                    circuit, instances,
+                )
+            );
+        });
+    }
+
+    #[test]
+    fn kagemusha_non_native_vesta_affine_windowed_shared_table_native_scalar_msm_rejects_selection_bit_splice()
+     {
+        run_vesta_affine_windowed_msm_native_scalar_test(|| {
+            let generator = VestaAffine::generator();
+            let double = vesta_generator_multiple(2);
+            let terms = [(Scalar::from(1), generator), (Scalar::from(1), double)];
+            let output = vesta_affine_msm_output_limbs(&terms);
+            let mut circuit = pasta_tiny::NonNativeVestaAffineWindowedMsmSharedTableNativeScalar::<
+                2,
+                1,
+                1,
+            >::try_from_terms(vesta_msm_encoded_terms(terms), output)
+            .expect("two-term one-window shared-table native-scalar MSM witness");
+            circuit.term_muls[1].selections[0].digit_bits[0] = Scalar::from(0);
+
+            assert!(!verify_vesta_affine_windowed_msm_shared_table_native_scalar(circuit));
+        });
+    }
+
+    #[test]
+    fn kagemusha_non_native_vesta_affine_windowed_shared_table_native_scalar_msm_rejects_term_output_splice()
+     {
+        run_vesta_affine_windowed_msm_native_scalar_test(|| {
+            let generator = VestaAffine::generator();
+            let double = vesta_generator_multiple(2);
+            let terms = [(Scalar::from(1), generator), (Scalar::from(1), double)];
+            let output = vesta_affine_msm_output_limbs(&terms);
+            let mut circuit = pasta_tiny::NonNativeVestaAffineWindowedMsmSharedTableNativeScalar::<
+                2,
+                1,
+                1,
+            >::try_from_terms(vesta_msm_encoded_terms(terms), output)
+            .expect("two-term one-window shared-table native-scalar MSM witness");
+            circuit.sum_adds[0] = pasta_tiny::NonNativeVestaAffineCompleteAdd::try_from_limbs(
+                vesta_identity_limbs(),
+                vesta_non_identity_limbs(double),
+                vesta_non_identity_limbs(double),
+            )
+            .expect("self-consistent forged first shared-table MSM sum");
+
+            assert!(!verify_vesta_affine_windowed_msm_shared_table_native_scalar(circuit));
+        });
+    }
+
+    #[test]
+    fn kagemusha_non_native_vesta_affine_windowed_shared_table_native_scalar_msm_rejects_sum_chain_tamper()
+     {
+        run_vesta_affine_windowed_msm_native_scalar_test(|| {
+            let generator = VestaAffine::generator();
+            let double = vesta_generator_multiple(2);
+            let terms = [(Scalar::from(1), generator), (Scalar::from(1), double)];
+            let output = vesta_affine_msm_output_limbs(&terms);
+            let mut circuit = pasta_tiny::NonNativeVestaAffineWindowedMsmSharedTableNativeScalar::<
+                2,
+                1,
+                1,
+            >::try_from_terms(vesta_msm_encoded_terms(terms), output)
+            .expect("two-term one-window shared-table native-scalar MSM witness");
+            circuit.sum_adds[1] = pasta_tiny::NonNativeVestaAffineCompleteAdd::try_from_limbs(
+                vesta_identity_limbs(),
+                vesta_non_identity_limbs(double),
+                vesta_non_identity_limbs(double),
+            )
+            .expect("self-consistent but unchained second shared-table MSM sum");
+
+            assert!(!verify_vesta_affine_windowed_msm_shared_table_native_scalar(circuit));
+        });
+    }
+
+    #[test]
+    fn kagemusha_non_native_vesta_ipa_final_windowed_shared_table_msm_accepts_one_bit_product() {
+        run_vesta_affine_ipa_final_windowed_msm_test(|| {
+            let generator = VestaAffine::generator();
+            let double = vesta_generator_multiple(2);
+            let triple = vesta_generator_multiple(3);
+            let output = vesta_affine_ipa_final_msm_output_limbs(
+                Scalar::from(1),
+                Scalar::from(1),
+                generator,
+                double,
+                triple,
+            );
+            let circuit = pasta_tiny::NonNativeVestaIpaFinalWindowedMsmSharedTableNativeScalar::<
+                1,
+                1,
+            >::try_from_scalars(
+                Scalar::from(1),
+                Scalar::from(1),
+                vesta_non_identity_limbs(generator),
+                vesta_non_identity_limbs(double),
+                vesta_non_identity_limbs(triple),
+                output,
+            )
+            .expect("one-bit IPA final shared-table windowed MSM witness");
+
+            assert!(verify_vesta_affine_ipa_final_windowed_msm_shared_table(
+                circuit
+            ));
+        });
+    }
+
+    #[test]
+    fn kagemusha_non_native_vesta_ipa_final_windowed_shared_table_msm_accepts_identity_output() {
+        run_vesta_affine_ipa_final_windowed_msm_test(|| {
+            let generator = VestaAffine::generator();
+            let double = vesta_generator_multiple(2);
+            let triple = vesta_generator_multiple(3);
+            let output = vesta_affine_ipa_final_msm_output_limbs(
+                Scalar::from(0),
+                Scalar::from(0),
+                generator,
+                double,
+                triple,
+            );
+            let circuit = pasta_tiny::NonNativeVestaIpaFinalWindowedMsmSharedTableNativeScalar::<
+                1,
+                1,
+            >::try_from_scalars(
+                Scalar::from(0),
+                Scalar::from(0),
+                vesta_non_identity_limbs(generator),
+                vesta_non_identity_limbs(double),
+                vesta_non_identity_limbs(triple),
+                output,
+            )
+            .expect("zero-scalar IPA final shared-table MSM should output identity");
+
+            assert_eq!(output, vesta_identity_limbs());
+            assert!(verify_vesta_affine_ipa_final_windowed_msm_shared_table(
+                circuit
+            ));
+        });
+    }
+
+    #[test]
+    fn kagemusha_non_native_vesta_ipa_final_windowed_shared_table_msm_rejects_output_mismatch_builder()
+     {
+        run_vesta_affine_ipa_final_windowed_msm_test(|| {
+            let generator = VestaAffine::generator();
+            let double = vesta_generator_multiple(2);
+            let triple = vesta_generator_multiple(3);
+            let err =
+                pasta_tiny::NonNativeVestaIpaFinalWindowedMsmSharedTableNativeScalar::<1, 1>::try_from_scalars(
+                    Scalar::from(1),
+                    Scalar::from(1),
+                    vesta_non_identity_limbs(generator),
+                    vesta_non_identity_limbs(double),
+                    vesta_non_identity_limbs(triple),
+                    vesta_identity_limbs(),
+                )
+                .err()
+                .expect("builder must reject wrong IPA final shared-table MSM output");
+            assert!(err.contains("output mismatch"));
+        });
+    }
+
+    #[test]
+    fn kagemusha_non_native_vesta_ipa_final_windowed_shared_table_msm_rejects_public_output_substitution()
+     {
+        run_vesta_affine_ipa_final_windowed_msm_test(|| {
+            let generator = VestaAffine::generator();
+            let double = vesta_generator_multiple(2);
+            let triple = vesta_generator_multiple(3);
+            let output = vesta_affine_ipa_final_msm_output_limbs(
+                Scalar::from(1),
+                Scalar::from(1),
+                generator,
+                double,
+                triple,
+            );
+            let circuit = pasta_tiny::NonNativeVestaIpaFinalWindowedMsmSharedTableNativeScalar::<
+                1,
+                1,
+            >::try_from_scalars(
+                Scalar::from(1),
+                Scalar::from(1),
+                vesta_non_identity_limbs(generator),
+                vesta_non_identity_limbs(double),
+                vesta_non_identity_limbs(triple),
+                output,
+            )
+            .expect("one-bit IPA final shared-table windowed MSM witness");
+            let mut instances =
+                vesta_affine_ipa_final_windowed_msm_shared_table_instances(&circuit);
+            let forged = vesta_non_identity_limbs(double);
+            for (index, column) in vesta_point_instances(forged).into_iter().enumerate() {
+                instances[27 + index] = column;
+            }
+
+            assert!(
+                !verify_vesta_affine_ipa_final_windowed_msm_shared_table_with_instances(
+                    circuit, instances,
+                )
+            );
+        });
+    }
+
+    #[test]
+    fn kagemusha_non_native_vesta_ipa_final_windowed_shared_table_msm_rejects_public_base_substitution()
+     {
+        run_vesta_affine_ipa_final_windowed_msm_test(|| {
+            let generator = VestaAffine::generator();
+            let double = vesta_generator_multiple(2);
+            let triple = vesta_generator_multiple(3);
+            let output = vesta_affine_ipa_final_msm_output_limbs(
+                Scalar::from(1),
+                Scalar::from(1),
+                generator,
+                double,
+                triple,
+            );
+            let circuit = pasta_tiny::NonNativeVestaIpaFinalWindowedMsmSharedTableNativeScalar::<
+                1,
+                1,
+            >::try_from_scalars(
+                Scalar::from(1),
+                Scalar::from(1),
+                vesta_non_identity_limbs(generator),
+                vesta_non_identity_limbs(double),
+                vesta_non_identity_limbs(triple),
+                output,
+            )
+            .expect("one-bit IPA final shared-table windowed MSM witness");
+            let mut instances =
+                vesta_affine_ipa_final_windowed_msm_shared_table_instances(&circuit);
+            instances[0][0] += Scalar::from(1);
+
+            assert!(
+                !verify_vesta_affine_ipa_final_windowed_msm_shared_table_with_instances(
+                    circuit, instances,
+                )
+            );
+        });
+    }
+
+    #[test]
+    fn kagemusha_non_native_vesta_ipa_final_windowed_shared_table_msm_rejects_product_link_tamper()
+    {
+        run_vesta_affine_ipa_final_windowed_msm_test(|| {
+            let generator = VestaAffine::generator();
+            let double = vesta_generator_multiple(2);
+            let triple = vesta_generator_multiple(3);
+            let forged_terms = [
+                (Scalar::from(1), generator),
+                (Scalar::from(1), double),
+                (Scalar::from(0), triple),
+            ];
+            let forged_output = vesta_affine_msm_output_limbs(&forged_terms);
+            let msm =
+                pasta_tiny::NonNativeVestaAffineWindowedMsmSharedTableNativeScalar::<3, 1, 1>::try_from_terms(
+                    vesta_msm_encoded_terms(forged_terms),
+                    forged_output,
+                )
+                .expect("self-consistent shared-table windowed MSM with forged product scalar");
+            let circuit =
+                pasta_tiny::NonNativeVestaIpaFinalWindowedMsmSharedTableNativeScalar::<1, 1> {
+                    msm: Box::new(msm),
+                };
+
+            assert!(!verify_vesta_affine_ipa_final_windowed_msm_shared_table(
                 circuit
             ));
         });
@@ -13094,6 +17623,35 @@ mod kagemusha_non_native_limb_circuit_tests {
                 )
                 .expect("one-bit IPA final windowed MSM witness");
 
+            assert!(verify_vesta_affine_ipa_final_windowed_msm(circuit));
+        });
+    }
+
+    #[test]
+    fn kagemusha_non_native_vesta_ipa_final_windowed_msm_accepts_identity_output() {
+        run_vesta_affine_ipa_final_windowed_msm_test(|| {
+            let generator = VestaAffine::generator();
+            let double = vesta_generator_multiple(2);
+            let triple = vesta_generator_multiple(3);
+            let output = vesta_affine_ipa_final_msm_output_limbs(
+                Scalar::from(0),
+                Scalar::from(0),
+                generator,
+                double,
+                triple,
+            );
+            let circuit =
+                pasta_tiny::NonNativeVestaIpaFinalWindowedMsmNativeScalar::<1, 1>::try_from_scalars(
+                    Scalar::from(0),
+                    Scalar::from(0),
+                    vesta_non_identity_limbs(generator),
+                    vesta_non_identity_limbs(double),
+                    vesta_non_identity_limbs(triple),
+                    output,
+                )
+                .expect("zero-scalar IPA final windowed MSM should output identity");
+
+            assert_eq!(output, vesta_identity_limbs());
             assert!(verify_vesta_affine_ipa_final_windowed_msm(circuit));
         });
     }
@@ -13952,6 +18510,34 @@ mod kagemusha_non_native_limb_circuit_tests {
     }
 
     #[test]
+    fn kagemusha_non_native_vesta_ipa_final_msm_accepts_identity_output() {
+        run_vesta_affine_ipa_final_msm_test(|| {
+            let generator = VestaAffine::generator();
+            let double = (generator.to_curve() + generator.to_curve()).to_affine();
+            let triple = (double.to_curve() + generator.to_curve()).to_affine();
+            let output = vesta_affine_ipa_final_msm_output_limbs(
+                Scalar::from(0),
+                Scalar::from(0),
+                generator,
+                double,
+                triple,
+            );
+            let circuit = pasta_tiny::NonNativeVestaIpaFinalMsmNativeScalar::<1>::try_from_scalars(
+                Scalar::from(0),
+                Scalar::from(0),
+                vesta_non_identity_limbs(generator),
+                vesta_non_identity_limbs(double),
+                vesta_non_identity_limbs(triple),
+                output,
+            )
+            .expect("zero-scalar IPA final MSM should output identity");
+
+            assert_eq!(output, vesta_identity_limbs());
+            assert!(verify_vesta_affine_ipa_final_msm(circuit));
+        });
+    }
+
+    #[test]
     fn kagemusha_non_native_vesta_ipa_final_msm_rejects_output_mismatch_builder() {
         run_vesta_affine_ipa_final_msm_test(|| {
             let generator = VestaAffine::generator();
@@ -14145,6 +18731,98 @@ mod kagemusha_non_native_limb_circuit_tests {
     }
 
     #[test]
+    fn kagemusha_non_native_vesta_ipa_round_accumulator_shared_table_accepts_one_bit_challenge() {
+        run_vesta_affine_ipa_round_accumulator_test(|| {
+            let generator = VestaAffine::generator();
+            let double = (generator.to_curve() + generator.to_curve()).to_affine();
+            let triple = (double.to_curve() + generator.to_curve()).to_affine();
+            let output = vesta_affine_ipa_round_accumulator_output_limbs(
+                Scalar::from(1),
+                Scalar::from(1),
+                generator,
+                double,
+                triple,
+            );
+            let circuit = pasta_tiny::NonNativeVestaIpaRoundAccumulatorSharedTableNativeScalar::<
+                1,
+                1,
+            >::try_from_challenge(
+                Scalar::from(1),
+                Scalar::from(1),
+                vesta_non_identity_limbs(generator),
+                vesta_non_identity_limbs(double),
+                vesta_non_identity_limbs(triple),
+                output,
+            )
+            .expect("one-bit shared-table IPA round accumulator witness");
+            assert!(verify_vesta_affine_ipa_round_accumulator_shared_table(
+                circuit
+            ));
+        });
+    }
+
+    #[test]
+    fn kagemusha_non_native_vesta_ipa_round_accumulator_shared_table_rejects_inverse_mismatch_builder()
+     {
+        run_vesta_affine_ipa_round_accumulator_test(|| {
+            let generator = VestaAffine::generator();
+            let double = (generator.to_curve() + generator.to_curve()).to_affine();
+            let triple = (double.to_curve() + generator.to_curve()).to_affine();
+            let output = vesta_affine_ipa_round_accumulator_output_limbs(
+                Scalar::from(1),
+                Scalar::from(1),
+                generator,
+                double,
+                triple,
+            );
+            let err =
+                pasta_tiny::NonNativeVestaIpaRoundAccumulatorSharedTableNativeScalar::<1, 1>::try_from_challenge(
+                    Scalar::from(1),
+                    Scalar::from(0),
+                    vesta_non_identity_limbs(generator),
+                    vesta_non_identity_limbs(double),
+                    vesta_non_identity_limbs(triple),
+                    output,
+                )
+                .err()
+                .expect("builder must reject bad shared-table IPA round inverse");
+            assert!(err.contains("inverse mismatch"));
+        });
+    }
+
+    #[test]
+    fn kagemusha_non_native_vesta_ipa_round_accumulator_shared_table_rejects_square_link_tamper() {
+        run_vesta_affine_ipa_round_accumulator_test(|| {
+            let generator = VestaAffine::generator();
+            let double = (generator.to_curve() + generator.to_curve()).to_affine();
+            let triple = (double.to_curve() + generator.to_curve()).to_affine();
+            let forged_terms = [
+                (Scalar::from(0), generator),
+                (Scalar::from(1), double),
+                (Scalar::from(1), triple),
+            ];
+            let forged_output = vesta_affine_msm_output_limbs(&forged_terms);
+            let msm =
+                pasta_tiny::NonNativeVestaAffineWindowedMsmSharedTableNativeScalar::<3, 1, 1>::try_from_terms(
+                    vesta_msm_encoded_terms(forged_terms),
+                    forged_output,
+                )
+                .expect("self-consistent shared-table MSM with forged IPA challenge square");
+            let circuit = pasta_tiny::NonNativeVestaIpaRoundAccumulatorSharedTableNativeScalar::<
+                1,
+                1,
+            > {
+                challenge: pasta_tiny::NativePastaFpScalar::from_scalar(Scalar::from(1)),
+                challenge_inverse: pasta_tiny::NativePastaFpScalar::from_scalar(Scalar::from(1)),
+                msm: Box::new(msm),
+            };
+            assert!(!verify_vesta_affine_ipa_round_accumulator_shared_table(
+                circuit
+            ));
+        });
+    }
+
+    #[test]
     fn kagemusha_non_native_vesta_ipa_generator_fold_accepts_one_bit_challenge() {
         run_vesta_affine_ipa_generator_fold_test(|| {
             let generator = VestaAffine::generator();
@@ -14295,6 +18973,105 @@ mod kagemusha_non_native_limb_circuit_tests {
     }
 
     #[test]
+    fn kagemusha_non_native_vesta_ipa_generator_fold_shared_table_accepts_one_bit_challenge() {
+        run_vesta_affine_ipa_generator_fold_test(|| {
+            let generator = VestaAffine::generator();
+            let double = (generator.to_curve() + generator.to_curve()).to_affine();
+            let triple = (double.to_curve() + generator.to_curve()).to_affine();
+            let quadruple = (double.to_curve() + double.to_curve()).to_affine();
+            let (g_after, h_after) = vesta_affine_ipa_generator_fold_outputs(
+                Scalar::from(1),
+                Scalar::from(1),
+                generator,
+                double,
+                triple,
+                quadruple,
+            );
+            let circuit =
+                pasta_tiny::NonNativeVestaIpaGeneratorFoldSharedTableNativeScalar::<1, 1>::try_from_challenge(
+                    Scalar::from(1),
+                    Scalar::from(1),
+                    vesta_non_identity_limbs(generator),
+                    vesta_non_identity_limbs(double),
+                    vesta_non_identity_limbs(triple),
+                    vesta_non_identity_limbs(quadruple),
+                    g_after,
+                    h_after,
+                )
+                .expect("one-bit shared-table IPA generator-fold witness");
+            assert!(verify_vesta_affine_ipa_generator_fold_shared_table(circuit));
+        });
+    }
+
+    #[test]
+    fn kagemusha_non_native_vesta_ipa_generator_fold_shared_table_rejects_inverse_mismatch_builder()
+    {
+        run_vesta_affine_ipa_generator_fold_test(|| {
+            let generator = VestaAffine::generator();
+            let double = (generator.to_curve() + generator.to_curve()).to_affine();
+            let triple = (double.to_curve() + generator.to_curve()).to_affine();
+            let quadruple = (double.to_curve() + double.to_curve()).to_affine();
+            let (g_after, h_after) = vesta_affine_ipa_generator_fold_outputs(
+                Scalar::from(1),
+                Scalar::from(1),
+                generator,
+                double,
+                triple,
+                quadruple,
+            );
+            let err =
+                pasta_tiny::NonNativeVestaIpaGeneratorFoldSharedTableNativeScalar::<1, 1>::try_from_challenge(
+                    Scalar::from(1),
+                    Scalar::from(0),
+                    vesta_non_identity_limbs(generator),
+                    vesta_non_identity_limbs(double),
+                    vesta_non_identity_limbs(triple),
+                    vesta_non_identity_limbs(quadruple),
+                    g_after,
+                    h_after,
+                )
+                .err()
+                .expect("builder must reject bad shared-table IPA generator-fold inverse");
+            assert!(err.contains("inverse mismatch"));
+        });
+    }
+
+    #[test]
+    fn kagemusha_non_native_vesta_ipa_generator_fold_shared_table_rejects_scalar_link_tamper() {
+        run_vesta_affine_ipa_generator_fold_test(|| {
+            let generator = VestaAffine::generator();
+            let double = (generator.to_curve() + generator.to_curve()).to_affine();
+            let triple = (double.to_curve() + generator.to_curve()).to_affine();
+            let quadruple = (double.to_curve() + double.to_curve()).to_affine();
+            let forged_g_terms = [(Scalar::from(0), generator), (Scalar::from(1), double)];
+            let honest_h_terms = [(Scalar::from(1), triple), (Scalar::from(1), quadruple)];
+            let g_after = vesta_affine_msm_output_limbs(&forged_g_terms);
+            let h_after = vesta_affine_msm_output_limbs(&honest_h_terms);
+            let g_msm =
+                pasta_tiny::NonNativeVestaAffineWindowedMsmSharedTableNativeScalar::<2, 1, 1>::try_from_terms(
+                    vesta_msm_encoded_terms(forged_g_terms),
+                    g_after,
+                )
+                .expect("self-consistent shared-table G fold with forged inverse scalar");
+            let h_msm =
+                pasta_tiny::NonNativeVestaAffineWindowedMsmSharedTableNativeScalar::<2, 1, 1>::try_from_terms(
+                    vesta_msm_encoded_terms(honest_h_terms),
+                    h_after,
+                )
+                .expect("honest shared-table H fold MSM");
+            let circuit = pasta_tiny::NonNativeVestaIpaGeneratorFoldSharedTableNativeScalar::<1, 1> {
+                challenge: pasta_tiny::NativePastaFpScalar::from_scalar(Scalar::from(1)),
+                challenge_inverse: pasta_tiny::NativePastaFpScalar::from_scalar(Scalar::from(1)),
+                g_msm: Box::new(g_msm),
+                h_msm: Box::new(h_msm),
+            };
+            assert!(!verify_vesta_affine_ipa_generator_fold_shared_table(
+                circuit
+            ));
+        });
+    }
+
+    #[test]
     fn kagemusha_non_native_vesta_ipa_one_round_verifier_accepts_one_bit_statement() {
         run_vesta_affine_ipa_one_round_test(|| {
             assert!(verify_vesta_affine_ipa_one_round(
@@ -14393,6 +19170,443 @@ mod kagemusha_non_native_limb_circuit_tests {
     }
 
     #[test]
+    fn kagemusha_non_native_vesta_ipa_one_round_shared_table_accepts_one_bit_statement() {
+        run_vesta_affine_ipa_one_round_test(|| {
+            assert!(verify_vesta_affine_ipa_one_round_shared_table(
+                vesta_affine_ipa_one_round_shared_table_valid_circuit(),
+            ));
+        });
+    }
+
+    #[test]
+    fn kagemusha_non_native_vesta_ipa_one_round_shared_table_rejects_final_msm_substitution() {
+        run_vesta_affine_ipa_one_round_test(|| {
+            let mut circuit = vesta_affine_ipa_one_round_shared_table_valid_circuit();
+            let tampered_final =
+                pasta_tiny::NonNativeVestaIpaFinalWindowedMsmSharedTableNativeScalar::<
+                    1,
+                    1,
+                >::try_from_scalars(
+                    Scalar::from(1),
+                    Scalar::from(0),
+                    vesta_non_identity_limbs(vesta_generator_multiple(3)),
+                    vesta_non_identity_limbs(vesta_generator_multiple(7)),
+                    vesta_non_identity_limbs(vesta_generator_multiple(1)),
+                    vesta_non_identity_limbs(vesta_generator_multiple(3)),
+                )
+                .expect("self-consistent shared-table final MSM with substituted b scalar");
+            circuit.final_msm = Box::new(tampered_final);
+            assert!(!verify_vesta_affine_ipa_one_round_shared_table(circuit));
+        });
+    }
+
+    #[test]
+    fn kagemusha_non_native_vesta_ipa_one_round_shared_table_rejects_generator_fold_substitution() {
+        run_vesta_affine_ipa_one_round_test(|| {
+            let mut circuit = vesta_affine_ipa_one_round_shared_table_valid_circuit();
+            let tampered_generator =
+                pasta_tiny::NonNativeVestaIpaGeneratorFoldSharedTableNativeScalar::<
+                    1,
+                    1,
+                >::try_from_challenge(
+                    Scalar::from(1),
+                    Scalar::from(1),
+                    vesta_non_identity_limbs(vesta_generator_multiple(1)),
+                    vesta_non_identity_limbs(vesta_generator_multiple(3)),
+                    vesta_non_identity_limbs(vesta_generator_multiple(3)),
+                    vesta_non_identity_limbs(vesta_generator_multiple(4)),
+                    vesta_non_identity_limbs(vesta_generator_multiple(4)),
+                    vesta_non_identity_limbs(vesta_generator_multiple(7)),
+                )
+                .expect("self-consistent shared-table generator fold with substituted G output");
+            circuit.generator_fold = Box::new(tampered_generator);
+            assert!(!verify_vesta_affine_ipa_one_round_shared_table(circuit));
+        });
+    }
+
+    #[test]
+    fn kagemusha_recursive_aggregation_one_hop_verifier_slice_builder_accepts_one_round_profile() {
+        run_vesta_affine_ipa_one_round_test(|| {
+            let circuit = recursive_one_hop_verifier_slice_valid_circuit();
+            assert_eq!(
+                circuit.semantic.public_values[KAGEMUSHA_RECURSIVE_AGGREGATION_OPENING_LEN_INDEX],
+                Scalar::from(2)
+            );
+            assert_eq!(
+                circuit.semantic.public_values[KAGEMUSHA_RECURSIVE_AGGREGATION_WITNESS_COUNT_INDEX],
+                Scalar::from(1)
+            );
+            assert_eq!(
+                circuit.semantic.public_values[KAGEMUSHA_RECURSIVE_AGGREGATION_HOP_COUNT_INDEX],
+                Scalar::from(1)
+            );
+        });
+    }
+
+    #[test]
+    fn kagemusha_recursive_aggregation_one_hop_verifier_slice_builder_rejects_profile_mismatch() {
+        run_vesta_affine_ipa_one_round_test(|| {
+            for (index, value, expected) in [
+                (
+                    KAGEMUSHA_RECURSIVE_AGGREGATION_OPENING_LEN_INDEX,
+                    Scalar::from(4),
+                    "opening length 2",
+                ),
+                (
+                    KAGEMUSHA_RECURSIVE_AGGREGATION_WITNESS_COUNT_INDEX,
+                    Scalar::from(2),
+                    "witness count 1",
+                ),
+                (
+                    KAGEMUSHA_RECURSIVE_AGGREGATION_HOP_COUNT_INDEX,
+                    Scalar::from(2),
+                    "hop count 1",
+                ),
+            ] {
+                let mut semantic = recursive_one_hop_semantic(recursive_one_hop_instance_values());
+                semantic.public_values[index] = value;
+                let err =
+                    pasta_tiny::KagemushaRecursiveAggregationOneHopVerifierSlice::<1, 1>::try_from_parts(
+                        semantic,
+                        vesta_affine_ipa_verifier_two_point_shared_table_valid_circuit(),
+                    )
+                    .err()
+                    .expect("one-hop recursive verifier slice profile mismatch must reject");
+                assert!(
+                    err.contains(expected),
+                    "expected error containing {expected:?}, found {err:?}"
+                );
+            }
+        });
+    }
+
+    #[test]
+    fn kagemusha_recursive_aggregation_one_hop_verifier_slice_builder_rejects_metadata_witness_mismatch()
+     {
+        run_vesta_affine_ipa_one_round_test(|| {
+            let cases: [(
+                &str,
+                fn(&mut pasta_tiny::KagemushaRecursiveAggregationSemantic),
+            ); 4] = [
+                ("opening-length selector witness mismatch", |semantic| {
+                    semantic.opening_len_selectors[0] = Scalar::from(0);
+                }),
+                ("hop-count bit witness mismatch", |semantic| {
+                    semantic.hop_count_minus_one_bits[0] = Scalar::from(1);
+                }),
+                ("fixed-window schedule digest mismatch", |semantic| {
+                    semantic.public_values
+                        [KAGEMUSHA_RECURSIVE_AGGREGATION_FIXED_WINDOW_TABLE_SCHEDULE_START_INDEX] +=
+                        Scalar::from(1);
+                }),
+                ("shared-table manifest digest mismatch", |semantic| {
+                    semantic.public_values
+                        [KAGEMUSHA_RECURSIVE_AGGREGATION_FIXED_WINDOW_SHARED_TABLE_MANIFEST_START_INDEX] +=
+                        Scalar::from(1);
+                }),
+            ];
+            for (expected, mutate) in cases {
+                let mut semantic = recursive_one_hop_semantic(recursive_one_hop_instance_values());
+                mutate(&mut semantic);
+                let err =
+                    pasta_tiny::KagemushaRecursiveAggregationOneHopVerifierSlice::<1, 1>::try_from_parts(
+                        semantic,
+                        vesta_affine_ipa_verifier_two_point_shared_table_valid_circuit(),
+                    )
+                    .err()
+                    .expect("one-hop recursive verifier slice metadata mismatch must reject");
+                assert!(
+                    err.contains(expected),
+                    "expected error containing {expected:?}, found {err:?}"
+                );
+            }
+        });
+    }
+
+    #[test]
+    fn kagemusha_recursive_aggregation_one_hop_verifier_slice_builder_rejects_verifier_host_link_mismatch()
+     {
+        run_vesta_affine_ipa_one_round_test(|| {
+            let mut verifier = vesta_affine_ipa_verifier_two_point_shared_table_valid_circuit();
+            verifier.transcript_challenges[0] += Scalar::from(1);
+            let err =
+                pasta_tiny::KagemushaRecursiveAggregationOneHopVerifierSlice::<1, 1>::try_from_parts(
+                    recursive_one_hop_semantic(recursive_one_hop_instance_values()),
+                    verifier,
+                )
+                .err()
+                .expect("one-hop recursive verifier slice host-link mismatch must reject");
+            assert!(
+                err.contains("verifier host-link mismatch"),
+                "expected host-link mismatch, found {err:?}"
+            );
+        });
+    }
+
+    #[test]
+    fn kagemusha_recursive_aggregation_one_hop_verifier_slice_scalar_projection_digest_is_order_sensitive()
+     {
+        run_vesta_affine_ipa_one_round_test(|| {
+            let verifier = vesta_affine_ipa_verifier_two_point_shared_table_valid_circuit();
+            let digest = pasta_tiny::kagemusha_one_hop_verifier_scalar_projection_digest([
+                verifier.transcript_binding_digest,
+                verifier.b_reduction.vectors[0][0].value,
+                verifier.b_reduction.vectors[0][1].value,
+                verifier.b_reduction.challenges[0].value,
+                verifier.b_reduction.challenge_inverses[0].value,
+                verifier.b_reduction.vectors[1][0].value,
+            ]);
+            let challenge_splice =
+                pasta_tiny::kagemusha_one_hop_verifier_scalar_projection_digest([
+                    verifier.transcript_binding_digest,
+                    verifier.b_reduction.vectors[0][0].value,
+                    verifier.b_reduction.vectors[0][1].value,
+                    verifier.b_reduction.challenges[0].value + Scalar::from(1),
+                    verifier.b_reduction.challenge_inverses[0].value,
+                    verifier.b_reduction.vectors[1][0].value,
+                ]);
+            let order_splice = pasta_tiny::kagemusha_one_hop_verifier_scalar_projection_digest([
+                verifier.transcript_binding_digest,
+                verifier.b_reduction.vectors[0][1].value,
+                verifier.b_reduction.vectors[0][0].value,
+                verifier.b_reduction.challenges[0].value,
+                verifier.b_reduction.challenge_inverses[0].value,
+                verifier.b_reduction.vectors[1][0].value,
+            ]);
+            assert_ne!(digest, challenge_splice);
+            assert_ne!(digest, order_splice);
+        });
+    }
+
+    #[test]
+    fn kagemusha_recursive_aggregation_one_hop_verifier_slice_builder_accepts_pallas_preflight_binding()
+     {
+        run_vesta_affine_ipa_verifier_test(|| {
+            let (params, witness) =
+                sample_pallas_verifier_witness(2, "one-hop-recursive-pallas-binding");
+            let preflight = kagemusha_pallas_ipa_batch_verifier_preflight(
+                &params,
+                std::slice::from_ref(&witness),
+            )
+            .expect("one-hop Pallas verifier witness batch preflight");
+            let semantic = recursive_one_hop_semantic(
+                recursive_one_hop_instance_values_with_preflight(&preflight),
+            );
+            pasta_tiny::KagemushaRecursiveAggregationOneHopVerifierSlice::<
+                KAGEMUSHA_RECURSIVE_VESTA_IPA_WINDOWS,
+                KAGEMUSHA_RECURSIVE_VESTA_IPA_WINDOW_BITS,
+            >::validate_one_hop_preflight_metadata_binding(&semantic, &preflight)
+            .expect("one-hop recursive verifier slice binds Pallas preflight metadata");
+            assert_eq!(preflight.proof_count, 1);
+            assert_eq!(preflight.opening_len, 2);
+        });
+    }
+
+    #[test]
+    fn kagemusha_recursive_aggregation_one_hop_verifier_slice_builder_rejects_bad_verifier_after_pallas_preflight_binding()
+     {
+        run_vesta_affine_ipa_verifier_test(|| {
+            let (params, witness) =
+                sample_pallas_verifier_witness(2, "one-hop-recursive-pallas-bad-verifier");
+            let preflight = kagemusha_pallas_ipa_batch_verifier_preflight(
+                &params,
+                std::slice::from_ref(&witness),
+            )
+            .expect("one-hop Pallas verifier witness batch preflight");
+            let semantic = recursive_one_hop_semantic(
+                recursive_one_hop_instance_values_with_preflight(&preflight),
+            );
+            let err = pasta_tiny::KagemushaRecursiveAggregationOneHopVerifierSlice::<
+                KAGEMUSHA_RECURSIVE_VESTA_IPA_WINDOWS,
+                KAGEMUSHA_RECURSIVE_VESTA_IPA_WINDOW_BITS,
+            >::try_from_parts_with_preflight(
+                semantic,
+                pasta_tiny::NonNativeVestaIpaVerifierSharedTableNativeScalar::<
+                    2,
+                    KAGEMUSHA_RECURSIVE_VESTA_IPA_WINDOWS,
+                    KAGEMUSHA_RECURSIVE_VESTA_IPA_WINDOW_BITS,
+                >::default(),
+                &preflight,
+            )
+            .err()
+            .expect("valid preflight metadata with an invalid verifier witness must reject");
+            assert!(
+                err.contains("verifier host-link mismatch"),
+                "expected host-link mismatch, found {err:?}"
+            );
+        });
+    }
+
+    #[test]
+    #[ignore = "heavy production fixed-window Pallas verifier materialization"]
+    fn kagemusha_recursive_aggregation_one_hop_verifier_slice_builder_materializes_pallas_verifier()
+    {
+        run_vesta_affine_ipa_verifier_test(|| {
+            let (params, witness) =
+                sample_pallas_verifier_witness(2, "one-hop-recursive-pallas-materialize");
+            let preflight = kagemusha_pallas_ipa_batch_verifier_preflight(
+                &params,
+                std::slice::from_ref(&witness),
+            )
+            .expect("one-hop Pallas verifier witness batch preflight");
+            let verifier = pasta_tiny::NonNativeVestaIpaVerifierSharedTableNativeScalar::<
+                2,
+                KAGEMUSHA_RECURSIVE_VESTA_IPA_WINDOWS,
+                KAGEMUSHA_RECURSIVE_VESTA_IPA_WINDOW_BITS,
+            >::try_from_pallas_verifier_witness(&params, &witness)
+            .expect("one-hop Pallas verifier witness translates to recursive Vesta verifier");
+            let semantic = recursive_one_hop_semantic(
+                recursive_one_hop_instance_values_with_preflight(&preflight),
+            );
+            let circuit =
+                pasta_tiny::KagemushaRecursiveAggregationOneHopVerifierSlice::<
+                    KAGEMUSHA_RECURSIVE_VESTA_IPA_WINDOWS,
+                    KAGEMUSHA_RECURSIVE_VESTA_IPA_WINDOW_BITS,
+                >::try_from_parts_with_preflight(semantic, verifier, &preflight)
+                .expect("one-hop recursive verifier slice binds materialized Pallas verifier");
+            assert_eq!(circuit.verifier.transcript_round_projections.len(), 1);
+        });
+    }
+
+    #[test]
+    fn kagemusha_recursive_aggregation_one_hop_verifier_slice_builder_rejects_pallas_preflight_mismatch()
+     {
+        run_vesta_affine_ipa_verifier_test(|| {
+            let (params, witness) =
+                sample_pallas_verifier_witness(2, "one-hop-recursive-pallas-mismatch");
+            let preflight = kagemusha_pallas_ipa_batch_verifier_preflight(
+                &params,
+                std::slice::from_ref(&witness),
+            )
+            .expect("one-hop Pallas verifier witness batch preflight");
+            let cases: [(&str, fn(&mut pasta_tiny::PallasIpaBatchVerifierPreflight)); 5] = [
+                ("one preflight witness", |preflight| {
+                    preflight.proof_count = 2;
+                }),
+                ("preflight opening length 2", |preflight| {
+                    preflight.opening_len = 4;
+                }),
+                ("verifier parameter fingerprint mismatch", |preflight| {
+                    preflight.params_fingerprint[0] ^= 1;
+                }),
+                ("fixed-window table-base digest mismatch", |preflight| {
+                    preflight.fixed_window_table_base_digest[0] ^= 1;
+                }),
+                ("verifier-witness batch digest mismatch", |preflight| {
+                    preflight.aggregate_digest[0] ^= 1;
+                }),
+            ];
+            for (expected, mutate) in cases {
+                let mut bad_preflight = preflight;
+                mutate(&mut bad_preflight);
+                let semantic = recursive_one_hop_semantic(
+                    recursive_one_hop_instance_values_with_preflight(&preflight),
+                );
+                let err = pasta_tiny::KagemushaRecursiveAggregationOneHopVerifierSlice::<
+                    KAGEMUSHA_RECURSIVE_VESTA_IPA_WINDOWS,
+                    KAGEMUSHA_RECURSIVE_VESTA_IPA_WINDOW_BITS,
+                >::try_from_parts_with_preflight(
+                    semantic,
+                    pasta_tiny::NonNativeVestaIpaVerifierSharedTableNativeScalar::<
+                        2,
+                        KAGEMUSHA_RECURSIVE_VESTA_IPA_WINDOWS,
+                        KAGEMUSHA_RECURSIVE_VESTA_IPA_WINDOW_BITS,
+                    >::default(),
+                    &bad_preflight,
+                )
+                .err()
+                .expect("one-hop recursive verifier slice preflight mismatch must reject");
+                assert!(
+                    err.contains(expected),
+                    "expected error containing {expected:?}, found {err:?}"
+                );
+            }
+        });
+    }
+
+    #[test]
+    fn kagemusha_recursive_aggregation_one_hop_verifier_slice_builder_rejects_preflight_on_tiny_window_profile()
+     {
+        run_vesta_affine_ipa_verifier_test(|| {
+            let (params, witness) =
+                sample_pallas_verifier_witness(2, "one-hop-recursive-pallas-profile");
+            let preflight = kagemusha_pallas_ipa_batch_verifier_preflight(
+                &params,
+                std::slice::from_ref(&witness),
+            )
+            .expect("one-hop Pallas verifier witness batch preflight");
+            let semantic = recursive_one_hop_semantic(
+                recursive_one_hop_instance_values_with_preflight(&preflight),
+            );
+            let err =
+                pasta_tiny::KagemushaRecursiveAggregationOneHopVerifierSlice::<1, 1>::try_from_parts_with_preflight(
+                    semantic,
+                    vesta_affine_ipa_verifier_two_point_shared_table_valid_circuit(),
+                    &preflight,
+                )
+                .err()
+                .expect("one-hop preflight binding must reject non-production window profile");
+            assert!(
+                err.contains("production fixed-window profile"),
+                "expected production profile error, found {err:?}"
+            );
+        });
+    }
+
+    #[test]
+    #[ignore = "heavy one-hop recursive verifier-slice MockProver coverage"]
+    fn kagemusha_recursive_aggregation_one_hop_verifier_slice_circuit_accepts_one_round_profile() {
+        run_vesta_affine_ipa_one_round_test(|| {
+            let circuit = recursive_one_hop_verifier_slice_valid_circuit();
+            let instances = recursive_one_hop_verifier_slice_instances(&circuit);
+            assert!(verify_recursive_one_hop_verifier_slice(circuit, instances));
+        });
+    }
+
+    #[test]
+    #[ignore = "heavy one-hop recursive verifier-slice MockProver coverage"]
+    fn kagemusha_recursive_aggregation_one_hop_verifier_slice_circuit_rejects_public_count_splice()
+    {
+        run_vesta_affine_ipa_one_round_test(|| {
+            let circuit = recursive_one_hop_verifier_slice_valid_circuit();
+            let mut instances = recursive_one_hop_verifier_slice_instances(&circuit);
+            instances[KAGEMUSHA_RECURSIVE_AGGREGATION_WITNESS_COUNT_INDEX][0] = Scalar::from(2);
+            assert!(!verify_recursive_one_hop_verifier_slice(circuit, instances));
+        });
+    }
+
+    #[test]
+    #[ignore = "heavy one-hop recursive verifier-slice MockProver coverage"]
+    fn kagemusha_recursive_aggregation_one_hop_verifier_slice_circuit_rejects_transcript_digest_splice()
+     {
+        run_vesta_affine_ipa_one_round_test(|| {
+            let circuit = recursive_one_hop_verifier_slice_valid_circuit();
+            let mut instances = recursive_one_hop_verifier_slice_instances(&circuit);
+            let digest_index = instances
+                .len()
+                .checked_sub(2)
+                .expect("one-hop verifier transcript digest public instance");
+            instances[digest_index][0] += Scalar::from(1);
+            assert!(!verify_recursive_one_hop_verifier_slice(circuit, instances));
+        });
+    }
+
+    #[test]
+    #[ignore = "heavy one-hop recursive verifier-slice MockProver coverage"]
+    fn kagemusha_recursive_aggregation_one_hop_verifier_slice_circuit_rejects_scalar_projection_digest_splice()
+     {
+        run_vesta_affine_ipa_one_round_test(|| {
+            let circuit = recursive_one_hop_verifier_slice_valid_circuit();
+            let mut instances = recursive_one_hop_verifier_slice_instances(&circuit);
+            let digest_column = instances
+                .last_mut()
+                .expect("one-hop verifier scalar projection digest public instance");
+            digest_column[0] += Scalar::from(1);
+            assert!(!verify_recursive_one_hop_verifier_slice(circuit, instances));
+        });
+    }
+
+    #[test]
     fn kagemusha_non_native_vesta_ipa_verifier_four_point_builder_accepts_two_round_statement() {
         run_vesta_affine_ipa_verifier_test(|| {
             let circuit = vesta_affine_ipa_verifier_four_point_valid_circuit();
@@ -14429,11 +19643,18 @@ mod kagemusha_non_native_limb_circuit_tests {
             )
             .expect("real Pallas verifier witness batch passes preflight validation");
             assert_eq!(preflight.proof_count, 2);
+            assert_eq!(preflight.opening_len, 4);
             assert_eq!(
                 preflight.verifier_witness_profile,
                 KAGEMUSHA_RECURSIVE_VERIFIER_WITNESS_PROFILE_V1
             );
             assert_eq!(preflight.params_fingerprint, params.fingerprint());
+            assert_ne!(preflight.fixed_window_table_schedule_digest, [0u8; 32]);
+            assert_ne!(
+                preflight.fixed_window_shared_table_manifest_digest,
+                [0u8; 32]
+            );
+            assert_ne!(preflight.fixed_window_table_base_digest, [0u8; 32]);
             assert_ne!(preflight.aggregate_digest, [0u8; 32]);
         });
     }
@@ -14449,47 +19670,368 @@ mod kagemusha_non_native_limb_circuit_tests {
                 .expect("production-width Pallas verifier witness passes public preflight");
             assert_eq!(preflight.proof_count, 1);
             assert_eq!(
+                preflight.opening_len,
+                KAGEMUSHA_RECURSIVE_PALLAS_IPA_BATCH_MAX_LEN as u32
+            );
+            assert_eq!(
                 preflight.verifier_witness_profile,
                 KAGEMUSHA_RECURSIVE_VERIFIER_WITNESS_PROFILE_V1
             );
             assert_eq!(preflight.params_fingerprint, params.fingerprint());
+            assert_eq!(
+                preflight.fixed_window_table_schedule_digest,
+                kagemusha_recursive_fixed_window_table_schedule_digest(
+                    KAGEMUSHA_RECURSIVE_PALLAS_IPA_BATCH_MAX_LEN
+                )
+                .expect("production fixed-window table schedule digest")
+            );
+            assert_eq!(
+                preflight.fixed_window_shared_table_manifest_digest,
+                kagemusha_recursive_fixed_window_shared_table_manifest_digest(
+                    KAGEMUSHA_RECURSIVE_PALLAS_IPA_BATCH_MAX_LEN
+                )
+                .expect("production fixed-window shared-table manifest digest")
+            );
+            assert_ne!(preflight.fixed_window_table_schedule_digest, [0u8; 32]);
+            assert_ne!(
+                preflight.fixed_window_shared_table_manifest_digest,
+                [0u8; 32]
+            );
+            assert_ne!(preflight.fixed_window_table_base_digest, [0u8; 32]);
             assert_ne!(preflight.aggregate_digest, [0u8; 32]);
         });
     }
 
     #[test]
-    fn kagemusha_non_native_vesta_ipa_verifier_from_pallas_witness_accepts_production_width_profile()
+    fn kagemusha_pallas_ipa_batch_verifier_preflight_bound_to_hop_proofs_rejects_count_mismatch_before_native_preflight()
      {
         run_vesta_affine_ipa_verifier_test(|| {
-            let (params, witness) = sample_pallas_verifier_witness(
-                KAGEMUSHA_RECURSIVE_PALLAS_IPA_BATCH_MAX_LEN,
-                "core-pallas-production-width-recursive-witness",
+            let (params, mut witness) =
+                sample_pallas_verifier_witness(4, "core-pallas-hop-bound-count-mismatch");
+            witness.transcript_binding.challenges[0] = witness.transcript_binding.challenges[0]
+                .add(iroha_zkp_halo2::pallas::Scalar::from(1u64));
+
+            let err = kagemusha_pallas_ipa_batch_verifier_preflight_bound_to_hop_proofs(
+                &params,
+                &[witness],
+                &[],
+            )
+            .expect_err("hop-bound Pallas batch must reject hash-count mismatch first");
+            assert!(
+                err.contains("witness/hash count mismatch"),
+                "unexpected hop-bound count-mismatch error: {err}"
             );
-            let circuit = pasta_tiny::NonNativeVestaIpaVerifierNativeScalar::<
-                { KAGEMUSHA_RECURSIVE_PALLAS_IPA_BATCH_MAX_LEN },
+            assert!(
+                !err.contains("batch witness 0 failed preflight"),
+                "hash-count mismatch should reject before native witness validation: {err}"
+            );
+        });
+    }
+
+    #[test]
+    fn kagemusha_pallas_ipa_batch_verifier_preflight_matches_shared_table_profile() {
+        run_vesta_affine_ipa_verifier_test(|| {
+            let (params, witness) =
+                sample_pallas_verifier_witness(4, "core-pallas-public-shared-profile");
+            let public = kagemusha_pallas_ipa_batch_verifier_preflight(
+                &params,
+                std::slice::from_ref(&witness),
+            )
+            .expect("public Kagemusha preflight must accept a real Pallas opening");
+            let shared = pasta_tiny::NonNativeVestaIpaVerifierSharedTableNativeScalar::<
+                4,
                 { KAGEMUSHA_RECURSIVE_VESTA_IPA_WINDOWS },
                 { KAGEMUSHA_RECURSIVE_VESTA_IPA_WINDOW_BITS },
-            >::try_from_pallas_verifier_witness(&params, &witness)
-            .expect(
-                "production-width Pallas verifier witness translates into recursive Vesta witness",
-            );
+            >::validate_pallas_verifier_witness_batch(&params, &[witness])
+            .expect("shared-table Kagemusha preflight must accept the same opening");
 
-            assert_eq!(circuit.round_accumulators.len(), 7);
-            assert_eq!(circuit.generator_folds.len(), 7);
+            assert_eq!(public, shared);
+            let manifest = kagemusha_recursive_fixed_window_shared_table_manifest(4)
+                .expect("shared-table manifest for four-point opening");
             assert_eq!(
-                circuit
-                    .generator_folds
-                    .iter()
-                    .map(Vec::len)
-                    .collect::<Vec<_>>(),
-                vec![64, 32, 16, 8, 4, 2, 1]
+                public.fixed_window_shared_table_manifest_digest,
+                manifest.manifest_digest
             );
-            assert_eq!(
-                circuit.transcript_challenges.len(),
-                circuit.round_accumulators.len()
-            );
-            assert!(vesta_affine_ipa_verifier_host_links_hold(&circuit));
+            assert!(!manifest.trusted_setup_required);
         });
+    }
+
+    #[test]
+    fn kagemusha_recursive_vesta_ipa_verifier_layout_covers_production_width() {
+        let layout = kagemusha_recursive_vesta_ipa_verifier_layout(
+            KAGEMUSHA_RECURSIVE_PALLAS_IPA_BATCH_MAX_LEN,
+        )
+        .expect("production-width recursive verifier layout");
+
+        assert_eq!(layout.opening_len, 128);
+        assert_eq!(layout.rounds, 7);
+        assert_eq!(layout.generator_fold_counts, vec![64, 32, 16, 8, 4, 2, 1]);
+        assert_eq!(layout.fixed_windows, 85);
+        assert_eq!(layout.fixed_window_bits, 3);
+        assert_eq!(layout.scalar_bits_covered, 255);
+        assert_eq!(layout.windowed_msm_count, 262);
+    }
+
+    #[test]
+    fn kagemusha_recursive_fixed_window_table_plan_covers_production_width() {
+        let plan = kagemusha_recursive_fixed_window_table_plan(
+            KAGEMUSHA_RECURSIVE_PALLAS_IPA_BATCH_MAX_LEN,
+        )
+        .expect("production-width fixed-window table plan");
+
+        assert_eq!(plan.opening_len, 128);
+        assert_eq!(plan.fixed_windows, 85);
+        assert_eq!(plan.fixed_window_bits, 3);
+        assert_eq!(plan.table_rows_per_window, 8);
+        assert_eq!(plan.round_accumulator_terms, 21);
+        assert_eq!(plan.generator_fold_terms, 508);
+        assert_eq!(plan.final_msm_terms, 3);
+        assert_eq!(plan.scalar_mul_terms, 532);
+        assert_eq!(plan.naive_window_table_witnesses, 45_220);
+        assert_eq!(plan.naive_selection_table_witnesses, 45_220);
+        assert_eq!(plan.naive_point_table_copies, 90_440);
+        assert_eq!(plan.naive_point_table_rows, 723_520);
+        assert_eq!(plan.shared_table_families, 532);
+        assert_eq!(plan.shared_shifted_window_tables, 45_220);
+        assert_eq!(plan.shared_point_table_rows, 361_760);
+        assert_eq!(plan.duplicated_selection_rows_eliminated, 361_760);
+        assert_eq!(
+            plan.naive_point_table_copies / plan.shared_table_families,
+            plan.fixed_windows * 2
+        );
+        assert!(!plan.trusted_setup_required);
+    }
+
+    #[test]
+    fn kagemusha_recursive_fixed_window_table_schedule_covers_production_width() {
+        let schedule = kagemusha_recursive_fixed_window_table_schedule(
+            KAGEMUSHA_RECURSIVE_PALLAS_IPA_BATCH_MAX_LEN,
+        )
+        .expect("production-width shared fixed-window schedule");
+        let plan = kagemusha_recursive_fixed_window_table_plan(
+            KAGEMUSHA_RECURSIVE_PALLAS_IPA_BATCH_MAX_LEN,
+        )
+        .expect("production-width fixed-window table plan");
+
+        assert_eq!(schedule.len(), plan.shared_table_families);
+        assert_eq!(schedule.len(), 532);
+        assert_eq!(
+            schedule.first().map(|table| table.role),
+            Some(KagemushaRecursiveFixedWindowTableRole::RoundAccumulatorL)
+        );
+        assert_eq!(schedule[0].family_index, 0);
+        assert_eq!(schedule[0].round_index, Some(0));
+        assert_eq!(schedule[0].pair_index, None);
+        assert_eq!(schedule[0].first_shifted_window_table, 0);
+        assert_eq!(schedule[0].shifted_window_table_count, 85);
+        assert_eq!(schedule[0].table_rows_per_window, 8);
+
+        let first_generator = &schedule[3];
+        assert_eq!(
+            first_generator.role,
+            KagemushaRecursiveFixedWindowTableRole::GeneratorFoldGLeft
+        );
+        assert_eq!(first_generator.round_index, Some(0));
+        assert_eq!(first_generator.pair_index, Some(0));
+        assert_eq!(first_generator.first_shifted_window_table, 255);
+
+        let last = schedule.last().expect("schedule has final term");
+        assert_eq!(last.family_index, 531);
+        assert_eq!(last.role, KagemushaRecursiveFixedWindowTableRole::FinalU);
+        assert_eq!(last.round_index, None);
+        assert_eq!(last.pair_index, None);
+        assert_eq!(
+            last.first_shifted_window_table + last.shifted_window_table_count,
+            plan.shared_shifted_window_tables
+        );
+
+        let mut family_indexes = std::collections::BTreeSet::new();
+        let mut shifted_indexes = std::collections::BTreeSet::new();
+        for table in &schedule {
+            assert!(family_indexes.insert(table.family_index));
+            assert!(shifted_indexes.insert(table.first_shifted_window_table));
+            assert_eq!(
+                table.first_shifted_window_table,
+                table.family_index * plan.fixed_windows
+            );
+            assert_eq!(table.shifted_window_table_count, plan.fixed_windows);
+            assert_eq!(table.fixed_windows, plan.fixed_windows);
+            assert_eq!(table.fixed_window_bits, plan.fixed_window_bits);
+            assert_eq!(table.table_rows_per_window, plan.table_rows_per_window);
+        }
+    }
+
+    #[test]
+    fn kagemusha_recursive_fixed_window_table_schedule_digest_is_profile_bound() {
+        let digest_128 = kagemusha_recursive_fixed_window_table_schedule_digest(
+            KAGEMUSHA_RECURSIVE_PALLAS_IPA_BATCH_MAX_LEN,
+        )
+        .expect("production-width shared fixed-window schedule digest");
+        assert_ne!(digest_128, [0u8; 32]);
+        assert_eq!(
+            digest_128,
+            kagemusha_recursive_fixed_window_table_schedule_digest(
+                KAGEMUSHA_RECURSIVE_PALLAS_IPA_BATCH_MAX_LEN
+            )
+            .expect("deterministic production-width schedule digest")
+        );
+        let digest_64 =
+            kagemusha_recursive_fixed_window_table_schedule_digest(64).expect("width-64 digest");
+        assert_ne!(digest_128, digest_64);
+
+        let one_window =
+            kagemusha_recursive_fixed_window_table_schedule_digest_with_profile(4, 1, 1)
+                .expect("one-window schedule digest");
+        let two_windows =
+            kagemusha_recursive_fixed_window_table_schedule_digest_with_profile(4, 2, 1)
+                .expect("two-window schedule digest");
+        assert_ne!(one_window, two_windows);
+    }
+
+    #[test]
+    fn kagemusha_recursive_fixed_window_shared_table_manifest_covers_production_width() {
+        let manifest = kagemusha_recursive_fixed_window_shared_table_manifest(
+            KAGEMUSHA_RECURSIVE_PALLAS_IPA_BATCH_MAX_LEN,
+        )
+        .expect("production-width shared fixed-window manifest");
+        let plan = kagemusha_recursive_fixed_window_table_plan(
+            KAGEMUSHA_RECURSIVE_PALLAS_IPA_BATCH_MAX_LEN,
+        )
+        .expect("production-width fixed-window table plan");
+
+        assert_eq!(manifest.opening_len, 128);
+        assert_eq!(manifest.fixed_windows, 85);
+        assert_eq!(manifest.fixed_window_bits, 3);
+        assert_eq!(manifest.table_rows_per_window, 8);
+        assert_eq!(manifest.table_families, 532);
+        assert_eq!(manifest.shared_shifted_window_tables, 45_220);
+        assert_eq!(manifest.shared_point_table_rows, 361_760);
+        assert_eq!(manifest.duplicated_selection_rows_eliminated, 361_760);
+        assert_eq!(manifest.table_families, plan.shared_table_families);
+        assert_eq!(
+            manifest.schedule_digest,
+            kagemusha_recursive_fixed_window_table_schedule_digest(128).expect("schedule digest")
+        );
+        assert_eq!(
+            manifest.manifest_digest,
+            kagemusha_recursive_fixed_window_shared_table_manifest_digest(128)
+                .expect("shared-table manifest digest")
+        );
+        assert_ne!(manifest.schedule_digest, [0u8; 32]);
+        assert_ne!(manifest.manifest_digest, [0u8; 32]);
+        assert!(!manifest.trusted_setup_required);
+        assert_eq!(manifest.families.len(), manifest.table_families);
+
+        let rows_per_family = manifest.fixed_windows * manifest.table_rows_per_window;
+        let mut next_row = 0usize;
+        for family in &manifest.families {
+            assert_eq!(family.first_shared_point_row, next_row);
+            assert_eq!(family.shared_point_row_count, rows_per_family);
+            assert_eq!(
+                family.use_site.first_shifted_window_table,
+                family.use_site.family_index * manifest.fixed_windows
+            );
+            next_row += family.shared_point_row_count;
+        }
+        assert_eq!(next_row, manifest.shared_point_table_rows);
+
+        let first = manifest.families.first().expect("first table family");
+        assert_eq!(first.first_shared_point_row, 0);
+        assert_eq!(
+            first.use_site.role,
+            KagemushaRecursiveFixedWindowTableRole::RoundAccumulatorL
+        );
+        let last = manifest.families.last().expect("last table family");
+        assert_eq!(last.use_site.family_index, 531);
+        assert_eq!(
+            last.use_site.role,
+            KagemushaRecursiveFixedWindowTableRole::FinalU
+        );
+        assert_eq!(
+            last.first_shared_point_row + last.shared_point_row_count,
+            manifest.shared_point_table_rows
+        );
+    }
+
+    #[test]
+    fn kagemusha_recursive_fixed_window_shared_table_manifest_digest_is_width_bound() {
+        let manifest_128 = kagemusha_recursive_fixed_window_shared_table_manifest(
+            KAGEMUSHA_RECURSIVE_PALLAS_IPA_BATCH_MAX_LEN,
+        )
+        .expect("production-width shared fixed-window manifest");
+        assert_eq!(
+            manifest_128.manifest_digest,
+            kagemusha_recursive_fixed_window_shared_table_manifest_digest(
+                KAGEMUSHA_RECURSIVE_PALLAS_IPA_BATCH_MAX_LEN
+            )
+            .expect("production-width manifest digest")
+        );
+        let manifest_64 =
+            kagemusha_recursive_fixed_window_shared_table_manifest(64).expect("width-64 manifest");
+        assert_ne!(manifest_128.schedule_digest, manifest_64.schedule_digest);
+        assert_ne!(manifest_128.manifest_digest, manifest_64.manifest_digest);
+        assert_eq!(
+            manifest_128.shared_point_table_rows,
+            manifest_128.shared_shifted_window_tables * manifest_128.table_rows_per_window
+        );
+        assert_eq!(
+            manifest_64.shared_point_table_rows,
+            manifest_64.shared_shifted_window_tables * manifest_64.table_rows_per_window
+        );
+    }
+
+    #[test]
+    fn kagemusha_recursive_fixed_window_table_schedule_rejects_unsupported_widths() {
+        for unsupported in [0, 1, 3, 130] {
+            let err = kagemusha_recursive_fixed_window_table_schedule(unsupported)
+                .expect_err("unsupported recursive verifier table schedule width must reject");
+            assert!(
+                err.contains("opening lengths 2..=") || err.contains("power-of-two"),
+                "unexpected fixed-window schedule error for {unsupported}: {err}"
+            );
+            let err = kagemusha_recursive_fixed_window_table_schedule_digest(unsupported)
+                .expect_err("unsupported recursive verifier schedule digest width must reject");
+            assert!(
+                err.contains("opening lengths 2..=") || err.contains("power-of-two"),
+                "unexpected fixed-window schedule digest error for {unsupported}: {err}"
+            );
+            let err = kagemusha_recursive_fixed_window_shared_table_manifest(unsupported)
+                .expect_err("unsupported recursive verifier manifest width must reject");
+            assert!(
+                err.contains("opening lengths 2..=") || err.contains("power-of-two"),
+                "unexpected fixed-window manifest error for {unsupported}: {err}"
+            );
+            let err = kagemusha_recursive_fixed_window_shared_table_manifest_digest(unsupported)
+                .expect_err("unsupported recursive verifier manifest digest width must reject");
+            assert!(
+                err.contains("opening lengths 2..=") || err.contains("power-of-two"),
+                "unexpected fixed-window manifest digest error for {unsupported}: {err}"
+            );
+        }
+    }
+
+    #[test]
+    fn kagemusha_recursive_fixed_window_table_plan_rejects_unsupported_widths() {
+        for unsupported in [0, 1, 6, 130] {
+            let err = kagemusha_recursive_fixed_window_table_plan(unsupported)
+                .expect_err("unsupported recursive verifier table-plan width must reject");
+            assert!(
+                err.contains("opening lengths 2..=") || err.contains("power-of-two"),
+                "unexpected fixed-window table-plan error for {unsupported}: {err}"
+            );
+        }
+    }
+
+    #[test]
+    fn kagemusha_recursive_vesta_ipa_verifier_layout_rejects_unsupported_widths() {
+        for unsupported in [0, 1, 3, 129, 256] {
+            let err = kagemusha_recursive_vesta_ipa_verifier_layout(unsupported)
+                .expect_err("unsupported recursive verifier layout width must reject");
+            assert!(
+                err.contains("opening lengths 2..=") || err.contains("power-of-two"),
+                "unexpected layout error for {unsupported}: {err}"
+            );
+        }
     }
 
     #[test]
@@ -14539,6 +20081,344 @@ mod kagemusha_non_native_limb_circuit_tests {
             assert!(
                 !err.contains("batch witness 0 failed preflight"),
                 "over-cap error should reject before native witness validation: {err}"
+            );
+        });
+    }
+
+    #[test]
+    fn kagemusha_pallas_ipa_batch_verifier_preflight_from_open_envelopes_accepts_proof_derived_batch()
+     {
+        run_vesta_affine_ipa_verifier_test(|| {
+            let envelope_a = sample_bound_pallas_open_envelope(4, "core-pallas-open-envelope-a");
+            let envelope_b = sample_bound_pallas_open_envelope(4, "core-pallas-open-envelope-b");
+            let envelopes = vec![envelope_a, envelope_b];
+            let proof_derived =
+                kagemusha_pallas_ipa_batch_verifier_preflight_from_open_envelopes(&envelopes)
+                    .expect("proof-derived open-envelope batch passes Kagemusha preflight");
+
+            let (params, witnesses) =
+                kagemusha_derive_pallas_ipa_witnesses_from_open_envelopes(&envelopes)
+                    .expect("open envelopes derive native verifier witnesses");
+            let direct = kagemusha_pallas_ipa_batch_verifier_preflight(params.as_ref(), &witnesses)
+                .expect("direct derived witness batch passes Kagemusha preflight");
+
+            assert_eq!(proof_derived, direct);
+            assert_eq!(proof_derived.proof_count, 2);
+            assert_eq!(proof_derived.opening_len, 4);
+            assert_eq!(
+                proof_derived.verifier_witness_profile,
+                KAGEMUSHA_RECURSIVE_VERIFIER_WITNESS_PROFILE_V1
+            );
+            assert_eq!(
+                proof_derived.fixed_window_table_schedule_digest,
+                kagemusha_recursive_fixed_window_table_schedule_digest(4)
+                    .expect("open-envelope fixed-window table schedule digest")
+            );
+            assert_eq!(
+                proof_derived.fixed_window_shared_table_manifest_digest,
+                kagemusha_recursive_fixed_window_shared_table_manifest_digest(4)
+                    .expect("open-envelope fixed-window shared-table manifest digest")
+            );
+            assert_ne!(proof_derived.fixed_window_table_schedule_digest, [0u8; 32]);
+            assert_ne!(
+                proof_derived.fixed_window_shared_table_manifest_digest,
+                [0u8; 32]
+            );
+            assert_ne!(proof_derived.fixed_window_table_base_digest, [0u8; 32]);
+            assert_ne!(proof_derived.aggregate_digest, [0u8; 32]);
+        });
+    }
+
+    #[test]
+    fn kagemusha_pallas_ipa_batch_verifier_preflight_from_open_envelopes_rejects_unbound_metadata_before_derivation()
+     {
+        run_vesta_affine_ipa_verifier_test(|| {
+            fn expect_shape_error(envelope: iroha_zkp_halo2::OpenVerifyEnvelope, expected: &str) {
+                let err =
+                    kagemusha_pallas_ipa_batch_verifier_preflight_from_open_envelopes(&[envelope])
+                        .expect_err("malformed open-envelope metadata must reject");
+                assert!(
+                    err.contains(expected),
+                    "expected {expected:?} in open-envelope shape error: {err}"
+                );
+                assert!(
+                    !err.contains("witness derivation failed"),
+                    "open-envelope shape errors should reject before witness derivation: {err}"
+                );
+            }
+
+            expect_shape_error(
+                sample_pallas_open_envelope(4, "core-pallas-open-envelope-unbound"),
+                "missing verifier-key commitment metadata",
+            );
+
+            let mut zero_vk =
+                sample_bound_pallas_open_envelope(4, "core-pallas-open-envelope-zero-vk");
+            zero_vk.vk_commitment = Some([0u8; 32]);
+            expect_shape_error(zero_vk, "verifier-key commitment metadata must be non-zero");
+
+            let mut missing_schema =
+                sample_bound_pallas_open_envelope(4, "core-pallas-open-envelope-missing-schema");
+            missing_schema.public_inputs_schema_hash = None;
+            expect_shape_error(missing_schema, "missing public-input schema hash metadata");
+
+            let mut zero_domain =
+                sample_bound_pallas_open_envelope(4, "core-pallas-open-envelope-zero-domain");
+            zero_domain.domain_tag = Some([0u8; 32]);
+            expect_shape_error(zero_domain, "hop domain tag metadata must be non-zero");
+
+            let mut empty_label =
+                sample_bound_pallas_open_envelope(4, "core-pallas-open-envelope-empty-label");
+            empty_label.transcript_label.clear();
+            expect_shape_error(empty_label, "transcript label must be non-empty");
+
+            let mut long_label =
+                sample_bound_pallas_open_envelope(4, "core-pallas-open-envelope-long-label");
+            long_label.transcript_label =
+                "x".repeat(KAGEMUSHA_PALLAS_OPEN_ENVELOPE_MAX_TRANSCRIPT_LABEL_BYTES + 1);
+            expect_shape_error(long_label, "transcript label exceeds");
+        });
+    }
+
+    #[test]
+    fn kagemusha_pallas_ipa_batch_verifier_preflight_from_open_envelopes_rejects_tampering() {
+        run_vesta_affine_ipa_verifier_test(|| {
+            let mut envelope =
+                sample_bound_pallas_open_envelope(4, "core-pallas-open-envelope-tamper");
+            envelope.transcript_label.push_str("-forged");
+            let err =
+                kagemusha_pallas_ipa_batch_verifier_preflight_from_open_envelopes(&[envelope])
+                    .expect_err("tampered open envelope must reject");
+            assert!(
+                err.contains("witness derivation failed"),
+                "unexpected tampered-envelope error: {err}"
+            );
+        });
+    }
+
+    #[test]
+    fn kagemusha_pallas_ipa_batch_verifier_preflight_from_open_envelopes_rejects_unsupported_width_before_derivation()
+     {
+        run_vesta_affine_ipa_verifier_test(|| {
+            for unsupported in [1, 3, 256] {
+                let mut envelope = sample_bound_pallas_open_envelope(
+                    4,
+                    &format!("core-pallas-open-envelope-unsupported-{unsupported}"),
+                );
+                envelope.params.n = unsupported;
+                envelope.public.n = unsupported;
+                let err =
+                    kagemusha_pallas_ipa_batch_verifier_preflight_from_open_envelopes(&[envelope])
+                        .expect_err(
+                            "unsupported open-envelope width must reject before derivation",
+                        );
+                assert!(
+                    err.contains("Kagemusha recursive aggregation verifier opening length"),
+                    "unexpected unsupported open-envelope width error for {unsupported}: {err}"
+                );
+                assert!(
+                    !err.contains("witness derivation failed"),
+                    "unsupported width should reject before witness derivation for {unsupported}: {err}"
+                );
+            }
+
+            let version_cases: [(&str, fn(&mut iroha_zkp_halo2::OpenVerifyEnvelope), &str); 3] = [
+                (
+                    "params-version",
+                    |envelope| envelope.params.version = 2,
+                    "parameter version must be 1",
+                ),
+                (
+                    "public-version",
+                    |envelope| envelope.public.version = 2,
+                    "public opening version must be 1",
+                ),
+                (
+                    "proof-version",
+                    |envelope| envelope.proof.version = 2,
+                    "proof version must be 1",
+                ),
+            ];
+            for (label, mutate, expected) in version_cases {
+                let mut envelope = sample_bound_pallas_open_envelope(
+                    4,
+                    &format!("core-pallas-open-envelope-{label}"),
+                );
+                mutate(&mut envelope);
+                let err =
+                    kagemusha_pallas_ipa_batch_verifier_preflight_from_open_envelopes(&[envelope])
+                        .expect_err("wire version mismatch must reject before derivation");
+                assert!(
+                    err.contains(expected),
+                    "unexpected {label} mismatch error: {err}"
+                );
+                assert!(
+                    !err.contains("witness derivation failed"),
+                    "{label} mismatch should reject before witness derivation: {err}"
+                );
+            }
+
+            let mut length_mismatch =
+                sample_bound_pallas_open_envelope(4, "core-pallas-open-envelope-length-mismatch");
+            length_mismatch.public.n = 8;
+            let err = kagemusha_pallas_ipa_batch_verifier_preflight_from_open_envelopes(&[
+                length_mismatch,
+            ])
+            .expect_err("parameter/public length mismatch must reject before derivation");
+            assert!(
+                err.contains("parameter/public opening length mismatch"),
+                "unexpected parameter/public length mismatch error: {err}"
+            );
+            assert!(
+                !err.contains("witness derivation failed"),
+                "parameter/public length mismatch should reject before witness derivation: {err}"
+            );
+
+            let mut g_mismatch =
+                sample_bound_pallas_open_envelope(4, "core-pallas-open-envelope-g-mismatch");
+            g_mismatch.params.g.push(g_mismatch.params.g[0]);
+            let err =
+                kagemusha_pallas_ipa_batch_verifier_preflight_from_open_envelopes(&[g_mismatch])
+                    .expect_err("G generator count mismatch must reject before derivation");
+            assert!(
+                err.contains("G generator count mismatch"),
+                "unexpected G generator count mismatch error: {err}"
+            );
+            assert!(
+                !err.contains("witness derivation failed"),
+                "G generator count mismatch should reject before witness derivation: {err}"
+            );
+
+            let mut h_mismatch =
+                sample_bound_pallas_open_envelope(4, "core-pallas-open-envelope-h-mismatch");
+            h_mismatch.params.h.push(h_mismatch.params.h[0]);
+            let err =
+                kagemusha_pallas_ipa_batch_verifier_preflight_from_open_envelopes(&[h_mismatch])
+                    .expect_err("H generator count mismatch must reject before derivation");
+            assert!(
+                err.contains("H generator count mismatch"),
+                "unexpected H generator count mismatch error: {err}"
+            );
+            assert!(
+                !err.contains("witness derivation failed"),
+                "H generator count mismatch should reject before witness derivation: {err}"
+            );
+
+            let mut round_mismatch =
+                sample_bound_pallas_open_envelope(4, "core-pallas-open-envelope-round-mismatch");
+            round_mismatch.proof.r.pop();
+            let err = kagemusha_pallas_ipa_batch_verifier_preflight_from_open_envelopes(&[
+                round_mismatch,
+            ])
+            .expect_err("L/R round mismatch must reject before derivation");
+            assert!(
+                err.contains("L/R round count mismatch"),
+                "unexpected L/R round mismatch error: {err}"
+            );
+            assert!(
+                !err.contains("witness derivation failed"),
+                "L/R round mismatch should reject before witness derivation: {err}"
+            );
+        });
+    }
+
+    #[test]
+    fn kagemusha_pallas_ipa_batch_verifier_preflight_from_open_envelopes_rejects_mixed_params() {
+        run_vesta_affine_ipa_verifier_test(|| {
+            let envelope_a =
+                sample_bound_pallas_open_envelope(4, "core-pallas-open-envelope-mixed-a");
+            let envelope_b =
+                sample_bound_pallas_open_envelope(8, "core-pallas-open-envelope-mixed-b");
+            let err = kagemusha_pallas_ipa_batch_verifier_preflight_from_open_envelopes(&[
+                envelope_a, envelope_b,
+            ])
+            .expect_err("mixed Pallas opening parameter sets must reject");
+            assert!(
+                err.contains("parameter fingerprint mismatch"),
+                "unexpected mixed-params error: {err}"
+            );
+        });
+    }
+
+    #[test]
+    fn kagemusha_pallas_ipa_batch_verifier_preflight_from_open_envelopes_binds_hop_hashes() {
+        run_vesta_affine_ipa_verifier_test(|| {
+            let envelope =
+                sample_bound_pallas_open_envelope(4, "core-pallas-open-envelope-hop-bound");
+            let hop_hash = iroha_crypto::Hash::new(b"open-envelope-hop-proof");
+            let preflight =
+                kagemusha_pallas_ipa_batch_verifier_preflight_from_open_envelopes_bound_to_hop_proofs(
+                    std::slice::from_ref(&envelope),
+                    std::slice::from_ref(&hop_hash),
+                )
+                .expect("proof-derived open envelope binds to hop proof hash");
+            let forged_hash = iroha_crypto::Hash::new(b"open-envelope-hop-proof-forged");
+            let forged =
+                kagemusha_pallas_ipa_batch_verifier_preflight_from_open_envelopes_bound_to_hop_proofs(
+                    &[envelope],
+                    std::slice::from_ref(&forged_hash),
+                )
+                .expect("proof-derived open envelope binds to forged hop proof hash");
+            assert_ne!(preflight.aggregate_digest, forged.aggregate_digest);
+            assert_eq!(
+                preflight.fixed_window_table_schedule_digest,
+                forged.fixed_window_table_schedule_digest
+            );
+            assert_eq!(
+                preflight.fixed_window_shared_table_manifest_digest,
+                forged.fixed_window_shared_table_manifest_digest
+            );
+            assert_eq!(
+                preflight.fixed_window_table_base_digest,
+                forged.fixed_window_table_base_digest
+            );
+
+            let mismatch_envelope =
+                sample_bound_pallas_open_envelope(4, "core-pallas-open-envelope-hop-mismatch");
+            let mismatch =
+                kagemusha_pallas_ipa_batch_verifier_preflight_from_open_envelopes_bound_to_hop_proofs(
+                    &[mismatch_envelope],
+                    &[],
+                )
+                .expect_err("proof-derived open envelope requires matching hop hash count");
+            assert!(
+                mismatch.contains("witness/hash count mismatch"),
+                "unexpected hop hash mismatch error: {mismatch}"
+            );
+            assert!(
+                !mismatch.contains("witness derivation failed"),
+                "hop hash mismatch should reject before witness derivation: {mismatch}"
+            );
+
+            let mut malformed_envelope = sample_bound_pallas_open_envelope(
+                4,
+                "core-pallas-open-envelope-hop-mismatch-malformed",
+            );
+            malformed_envelope.transcript_label.push_str("-forged");
+            let malformed_mismatch =
+                kagemusha_pallas_ipa_batch_verifier_preflight_from_open_envelopes_bound_to_hop_proofs(
+                    &[malformed_envelope],
+                    &[],
+                )
+                .expect_err("open-envelope/hash count mismatch must reject before derivation");
+            assert!(
+                malformed_mismatch.contains("witness/hash count mismatch"),
+                "unexpected malformed count-mismatch error: {malformed_mismatch}"
+            );
+            assert!(
+                !malformed_mismatch.contains("witness derivation failed"),
+                "open-envelope/hash mismatch should reject before witness derivation: {malformed_mismatch}"
+            );
+
+            let err =
+                kagemusha_pallas_ipa_batch_verifier_preflight_from_open_envelopes_bound_to_hop_proofs(
+                    &[],
+                    &[],
+                )
+                .expect_err("empty open-envelope batch must reject before hop binding");
+            assert!(
+                err.contains("requires at least one envelope"),
+                "unexpected empty open-envelope batch error: {err}"
             );
         });
     }
@@ -14600,6 +20480,28 @@ mod kagemusha_non_native_limb_circuit_tests {
     }
 
     #[test]
+    fn kagemusha_non_native_vesta_ipa_verifier_batch_preflight_rejects_binding_projection_splice() {
+        run_vesta_affine_ipa_verifier_test(|| {
+            let (params, witness_a) =
+                sample_pallas_verifier_witness(4, "core-pallas-batch-binding-projection-a");
+            let (_, mut witness_b) =
+                sample_pallas_verifier_witness(4, "core-pallas-batch-binding-projection-b");
+            witness_b.transcript_binding.round_projections[0] =
+                witness_b.transcript_binding.round_projections[0]
+                    .add(iroha_zkp_halo2::pallas::Scalar::from(1u64));
+            let err =
+                pasta_tiny::NonNativeVestaIpaVerifierNativeScalar::<4, 1, 1>::validate_pallas_verifier_witness_batch(
+                    &params,
+                    &[witness_a, witness_b],
+                )
+                .err()
+                .expect("projection-spliced Pallas verifier witness batch must be rejected");
+            assert!(err.contains("batch witness 1 failed preflight"));
+            assert!(err.contains("transcript binding mismatch transcript projection"));
+        });
+    }
+
+    #[test]
     fn kagemusha_non_native_vesta_ipa_verifier_batch_preflight_rejects_accumulator_splice() {
         run_vesta_affine_ipa_verifier_test(|| {
             let (params, witness_a) =
@@ -14638,6 +20540,10 @@ mod kagemusha_non_native_limb_circuit_tests {
                 )
                 .expect("reordered batch passes preflight");
             assert_ne!(ab.aggregate_digest, ba.aggregate_digest);
+            assert_ne!(
+                ab.fixed_window_table_base_digest,
+                ba.fixed_window_table_base_digest
+            );
         });
     }
 
@@ -14661,6 +20567,83 @@ mod kagemusha_non_native_limb_circuit_tests {
                 )
                 .expect("replacement batch passes preflight");
             assert_ne!(ab.aggregate_digest, ac.aggregate_digest);
+            assert_ne!(
+                ab.fixed_window_table_base_digest,
+                ac.fixed_window_table_base_digest
+            );
+        });
+    }
+
+    #[test]
+    fn kagemusha_non_native_vesta_ipa_verifier_batch_preflight_digest_binds_table_profile() {
+        run_vesta_affine_ipa_verifier_test(|| {
+            let (params, witness) =
+                sample_pallas_verifier_witness(4, "core-pallas-batch-table-profile");
+            let one_window =
+                pasta_tiny::NonNativeVestaIpaVerifierNativeScalar::<4, 1, 1>::validate_pallas_verifier_witness_batch(
+                    &params,
+                    std::slice::from_ref(&witness),
+                )
+                .expect("baseline table profile passes preflight");
+            let two_windows =
+                pasta_tiny::NonNativeVestaIpaVerifierNativeScalar::<4, 2, 1>::validate_pallas_verifier_witness_batch(
+                    &params,
+                    &[witness],
+                )
+                .expect("alternate table profile passes native preflight");
+
+            assert_ne!(one_window.aggregate_digest, two_windows.aggregate_digest);
+            assert_ne!(
+                one_window.fixed_window_table_schedule_digest,
+                two_windows.fixed_window_table_schedule_digest
+            );
+            assert_ne!(
+                one_window.fixed_window_shared_table_manifest_digest,
+                two_windows.fixed_window_shared_table_manifest_digest
+            );
+            assert_ne!(
+                one_window.fixed_window_table_base_digest,
+                two_windows.fixed_window_table_base_digest
+            );
+            assert_eq!(one_window.opening_len, two_windows.opening_len);
+            assert_eq!(one_window.proof_count, two_windows.proof_count);
+            assert_eq!(
+                one_window.verifier_witness_profile,
+                two_windows.verifier_witness_profile
+            );
+            assert_eq!(
+                one_window.params_fingerprint,
+                two_windows.params_fingerprint
+            );
+        });
+    }
+
+    #[test]
+    fn kagemusha_non_native_vesta_ipa_verifier_batch_preflight_rejects_malformed_table_profile() {
+        run_vesta_affine_ipa_verifier_test(|| {
+            let (params, witness) =
+                sample_pallas_verifier_witness(4, "core-pallas-batch-malformed-table-profile");
+            let zero_windows =
+                pasta_tiny::NonNativeVestaIpaVerifierNativeScalar::<4, 0, 1>::validate_pallas_verifier_witness_batch(
+                    &params,
+                    std::slice::from_ref(&witness),
+                )
+                .expect_err("zero-window table profile must reject before witness hashing");
+            assert!(
+                zero_windows.contains("at least one window"),
+                "unexpected zero-window error: {zero_windows}"
+            );
+
+            let zero_bits =
+                pasta_tiny::NonNativeVestaIpaVerifierNativeScalar::<4, 1, 0>::validate_pallas_verifier_witness_batch(
+                    &params,
+                    &[witness],
+                )
+                .expect_err("zero-bit table profile must reject before witness hashing");
+            assert!(
+                zero_bits.contains("at least one bit per window"),
+                "unexpected zero-bit error: {zero_bits}"
+            );
         });
     }
 
@@ -14671,11 +20654,8 @@ mod kagemusha_non_native_limb_circuit_tests {
                 sample_pallas_verifier_witness(4, "core-pallas-batch-evidence-a");
             let (_, witness_b) = sample_pallas_verifier_witness(4, "core-pallas-batch-evidence-b");
             let preflight =
-                pasta_tiny::NonNativeVestaIpaVerifierNativeScalar::<4, 1, 1>::validate_pallas_verifier_witness_batch(
-                    &params,
-                    &[witness_a, witness_b],
-                )
-                .expect("real Pallas verifier witness batch passes preflight validation");
+                kagemusha_pallas_ipa_batch_verifier_preflight(&params, &[witness_a, witness_b])
+                    .expect("real Pallas verifier witness batch passes preflight validation");
 
             let chain_id: iroha_data_model::ChainId =
                 "kagemusha-core-recursive".parse().expect("chain id");
@@ -14721,7 +20701,11 @@ mod kagemusha_non_native_limb_circuit_tests {
                         step(root0, root1, 0x31, 0x41, b"core-recursive-hop-0"),
                         step(root1, root2, 0x32, 0x42, b"core-recursive-hop-1"),
                     ],
+                    preflight.opening_len,
                     preflight.params_fingerprint,
+                    preflight.fixed_window_table_schedule_digest,
+                    preflight.fixed_window_shared_table_manifest_digest,
+                    preflight.fixed_window_table_base_digest,
                     preflight.aggregate_digest,
                 )
                 .expect("Pallas preflight output populates recursive aggregation evidence");
@@ -14733,9 +20717,22 @@ mod kagemusha_non_native_limb_circuit_tests {
                 evidence.verifier_witness_profile,
                 preflight.verifier_witness_profile
             );
+            assert_eq!(evidence.verifier_opening_len, preflight.opening_len);
             assert_eq!(
                 evidence.verifier_params_fingerprint,
                 preflight.params_fingerprint
+            );
+            assert_eq!(
+                evidence.fixed_window_table_schedule_digest,
+                preflight.fixed_window_table_schedule_digest
+            );
+            assert_eq!(
+                evidence.fixed_window_shared_table_manifest_digest,
+                preflight.fixed_window_shared_table_manifest_digest
+            );
+            assert_eq!(
+                evidence.fixed_window_table_base_digest,
+                preflight.fixed_window_table_base_digest
             );
             assert_eq!(
                 evidence.verifier_witness_batch_digest,
@@ -14751,8 +20748,7 @@ mod kagemusha_non_native_limb_circuit_tests {
     }
 
     #[test]
-    fn kagemusha_non_native_vesta_ipa_verifier_from_pallas_witness_accepts_small_scalar_projection()
-    {
+    fn kagemusha_non_native_vesta_ipa_verifier_from_pallas_witness_accepts_deterministic_binding() {
         run_vesta_affine_ipa_verifier_test(|| {
             let (params, witness) = sample_small_scalar_pallas_verifier_witness();
             let circuit =
@@ -14766,6 +20762,147 @@ mod kagemusha_non_native_limb_circuit_tests {
             assert_eq!(circuit.generator_folds[0].len(), 2);
             assert_eq!(circuit.generator_folds[1].len(), 1);
             assert!(vesta_affine_ipa_verifier_host_links_hold(&circuit));
+        });
+    }
+
+    #[test]
+    fn kagemusha_non_native_vesta_ipa_verifier_shared_table_from_pallas_witness_accepts_deterministic_binding()
+     {
+        run_vesta_affine_ipa_verifier_test(|| {
+            let (params, witness) = sample_small_scalar_pallas_verifier_witness();
+            let circuit =
+                pasta_tiny::NonNativeVestaIpaVerifierSharedTableNativeScalar::<4, 1, 1>::try_from_pallas_verifier_witness(
+                    &params,
+                    &witness,
+                )
+                .expect("Pallas verifier witness translates into shared-table recursive Vesta witness");
+            assert_eq!(circuit.round_accumulators.len(), 2);
+            assert_eq!(circuit.generator_folds.len(), 2);
+            assert_eq!(circuit.generator_folds[0].len(), 2);
+            assert_eq!(circuit.generator_folds[1].len(), 1);
+            assert!(vesta_affine_ipa_verifier_shared_table_host_links_hold(
+                &circuit
+            ));
+        });
+    }
+
+    #[test]
+    fn kagemusha_non_native_vesta_ipa_verifier_shared_table_from_pallas_witness_rejects_length_mismatch()
+     {
+        run_vesta_affine_ipa_verifier_test(|| {
+            let (params, witness) =
+                sample_pallas_verifier_witness(4, "core-pallas-shared-length-mismatch");
+            let err =
+                pasta_tiny::NonNativeVestaIpaVerifierSharedTableNativeScalar::<8, 85, 3>::try_from_pallas_verifier_witness(
+                    &params,
+                    &witness,
+                )
+                .err()
+                .expect("shared-table Pallas witness length mismatch must be rejected");
+            assert!(err.contains("params length mismatch"));
+        });
+    }
+
+    #[test]
+    fn kagemusha_non_native_vesta_ipa_verifier_shared_table_from_pallas_witness_rejects_transcript_splice()
+     {
+        run_vesta_affine_ipa_verifier_test(|| {
+            let (params, mut witness) =
+                sample_pallas_verifier_witness(4, "core-pallas-shared-transcript-splice");
+            witness.transcript_binding.challenges[0] = witness.transcript_binding.challenges[0]
+                .add(iroha_zkp_halo2::pallas::Scalar::from(1u64));
+            let err =
+                pasta_tiny::NonNativeVestaIpaVerifierSharedTableNativeScalar::<4, 85, 3>::try_from_pallas_verifier_witness(
+                    &params,
+                    &witness,
+                )
+                .err()
+                .expect("shared-table Pallas transcript challenge splice must be rejected");
+            assert!(err.contains("transcript binding challenges mismatch"));
+        });
+    }
+
+    #[test]
+    fn kagemusha_non_native_vesta_ipa_verifier_shared_table_profile_covers_production_width_without_materializing_witness()
+     {
+        let layout = kagemusha_recursive_vesta_ipa_verifier_layout(
+            KAGEMUSHA_RECURSIVE_PALLAS_IPA_BATCH_MAX_LEN,
+        )
+        .expect("production-width recursive verifier layout");
+        let plan = kagemusha_recursive_fixed_window_table_plan(
+            KAGEMUSHA_RECURSIVE_PALLAS_IPA_BATCH_MAX_LEN,
+        )
+        .expect("production-width fixed-window table plan");
+        let manifest = kagemusha_recursive_fixed_window_shared_table_manifest(
+            KAGEMUSHA_RECURSIVE_PALLAS_IPA_BATCH_MAX_LEN,
+        )
+        .expect("production-width shared-table manifest");
+        let represented_scalar_mul_terms = layout.rounds * 3
+            + layout
+                .generator_fold_counts
+                .iter()
+                .map(|fold_count| fold_count * 4)
+                .sum::<usize>()
+            + 3;
+
+        assert_eq!(
+            layout.opening_len,
+            KAGEMUSHA_RECURSIVE_PALLAS_IPA_BATCH_MAX_LEN
+        );
+        assert_eq!(layout.rounds, 7);
+        assert_eq!(layout.generator_fold_counts, vec![64, 32, 16, 8, 4, 2, 1]);
+        assert_eq!(represented_scalar_mul_terms, plan.shared_table_families);
+        assert_eq!(represented_scalar_mul_terms, manifest.table_families);
+        assert_eq!(represented_scalar_mul_terms, 532);
+        assert_eq!(
+            manifest.manifest_digest,
+            kagemusha_recursive_fixed_window_shared_table_manifest_digest(
+                KAGEMUSHA_RECURSIVE_PALLAS_IPA_BATCH_MAX_LEN
+            )
+            .expect("production-width shared-table manifest digest")
+        );
+        assert!(!plan.trusted_setup_required);
+        assert!(!manifest.trusted_setup_required);
+    }
+
+    #[test]
+    fn kagemusha_non_native_vesta_ipa_verifier_shared_table_batch_preflight_accepts_multiple_real_openings()
+     {
+        run_vesta_affine_ipa_verifier_test(|| {
+            let (params, witness_a) =
+                sample_pallas_verifier_witness(4, "core-pallas-shared-batch-a");
+            let (_, witness_b) = sample_pallas_verifier_witness(4, "core-pallas-shared-batch-b");
+            let preflight =
+                pasta_tiny::NonNativeVestaIpaVerifierSharedTableNativeScalar::<4, 1, 1>::validate_pallas_verifier_witness_batch(
+                    &params,
+                    &[witness_a, witness_b],
+                )
+                .expect("shared-table ordered batch passes native Pallas preflight");
+            assert_eq!(preflight.proof_count, 2);
+            assert_eq!(preflight.opening_len, 4);
+            assert_ne!(preflight.aggregate_digest, [0u8; 32]);
+            assert_ne!(
+                preflight.fixed_window_shared_table_manifest_digest,
+                [0u8; 32]
+            );
+        });
+    }
+
+    #[test]
+    fn kagemusha_non_native_vesta_ipa_verifier_shared_table_batch_preflight_rejects_empty_batch() {
+        run_vesta_affine_ipa_verifier_test(|| {
+            let params = iroha_zkp_halo2::pallas::Params::new(4).expect("Pallas params");
+            let witnesses = Vec::<
+                iroha_zkp_halo2::IpaVerifierWitness<iroha_zkp_halo2::pallas::PallasBackend>,
+            >::new();
+            let err =
+                pasta_tiny::NonNativeVestaIpaVerifierSharedTableNativeScalar::<4, 1, 1>::validate_pallas_verifier_witness_batch(
+                    &params,
+                    &witnesses,
+                )
+                .err()
+                .expect("empty shared-table Pallas verifier witness batch must be rejected");
+            assert!(err.contains("requires at least one witness"));
         });
     }
 
@@ -14800,6 +20937,26 @@ mod kagemusha_non_native_limb_circuit_tests {
                 .err()
                 .expect("Pallas transcript challenge splice must be rejected");
             assert!(err.contains("transcript binding challenges mismatch"));
+        });
+    }
+
+    #[test]
+    fn kagemusha_non_native_vesta_ipa_verifier_from_pallas_witness_rejects_binding_digest_splice() {
+        run_vesta_affine_ipa_verifier_test(|| {
+            let (params, mut witness) =
+                sample_pallas_verifier_witness(4, "core-pallas-binding-digest-splice");
+            witness.transcript_binding.binding_digest = witness
+                .transcript_binding
+                .binding_digest
+                .add(iroha_zkp_halo2::pallas::Scalar::from(1u64));
+            let err =
+                pasta_tiny::NonNativeVestaIpaVerifierNativeScalar::<4, 1, 1>::validate_pallas_verifier_witness(
+                    &params,
+                    &witness,
+                )
+                .err()
+                .expect("Pallas transcript binding digest splice must be rejected");
+            assert!(err.contains("transcript binding mismatch transcript projection"));
         });
     }
 
@@ -15262,6 +21419,380 @@ mod kagemusha_non_native_limb_circuit_tests {
     }
 
     #[test]
+    fn kagemusha_non_native_vesta_ipa_verifier_shared_table_four_point_builder_accepts_two_round_statement()
+     {
+        run_vesta_affine_ipa_verifier_test(|| {
+            let circuit = vesta_affine_ipa_verifier_four_point_shared_table_valid_circuit();
+            assert_eq!(circuit.round_accumulators.len(), 2);
+            assert_eq!(circuit.generator_folds.len(), 2);
+            assert_eq!(circuit.generator_folds[0].len(), 2);
+            assert_eq!(circuit.generator_folds[1].len(), 1);
+            assert!(vesta_affine_ipa_verifier_shared_table_host_links_hold(
+                &circuit
+            ));
+        });
+    }
+
+    #[test]
+    #[ignore = "heavy multi-round non-native shared-table verifier MockProver coverage"]
+    fn kagemusha_non_native_vesta_ipa_verifier_shared_table_circuit_accepts_two_round_statement() {
+        run_vesta_affine_ipa_verifier_test(|| {
+            let circuit = vesta_affine_ipa_verifier_four_point_shared_table_valid_circuit();
+            assert!(verify_vesta_affine_ipa_verifier_shared_table(circuit));
+        });
+    }
+
+    #[test]
+    #[ignore = "heavy multi-round non-native shared-table verifier MockProver coverage"]
+    fn kagemusha_non_native_vesta_ipa_verifier_shared_table_circuit_accepts_real_pallas_opening() {
+        run_vesta_affine_ipa_verifier_test(|| {
+            let (params, witness) = sample_small_scalar_pallas_verifier_witness();
+            let circuit =
+                pasta_tiny::NonNativeVestaIpaVerifierSharedTableNativeScalar::<4, 1, 1>::try_from_pallas_verifier_witness(
+                    &params,
+                    &witness,
+                )
+                .expect("Pallas verifier witness translates into shared-table recursive Vesta witness");
+            assert!(verify_vesta_affine_ipa_verifier_shared_table(circuit));
+        });
+    }
+
+    #[test]
+    #[ignore = "heavy multi-round non-native shared-table verifier MockProver coverage"]
+    fn kagemusha_non_native_vesta_ipa_verifier_shared_table_circuit_rejects_public_instance_substitution()
+     {
+        run_vesta_affine_ipa_verifier_test(|| {
+            let circuit = vesta_affine_ipa_verifier_four_point_shared_table_valid_circuit();
+            let mut instances = vesta_affine_ipa_verifier_shared_table_instances(&circuit);
+            instances[0][0] += Scalar::from(1);
+            assert!(
+                !verify_vesta_affine_ipa_verifier_shared_table_with_instances(circuit, instances,)
+            );
+        });
+    }
+
+    #[test]
+    #[ignore = "heavy multi-round non-native shared-table verifier MockProver coverage"]
+    fn kagemusha_non_native_vesta_ipa_verifier_shared_table_circuit_rejects_q_splice() {
+        run_vesta_affine_ipa_verifier_test(|| {
+            let mut circuit = vesta_affine_ipa_verifier_four_point_shared_table_valid_circuit();
+            circuit.round_accumulators[1] =
+                pasta_tiny::NonNativeVestaIpaRoundAccumulatorSharedTableNativeScalar::<
+                    1,
+                    1,
+                >::try_from_challenge(
+                    Scalar::from(1),
+                    Scalar::from(1),
+                    vesta_identity_limbs(),
+                    vesta_identity_limbs(),
+                    vesta_identity_limbs(),
+                    vesta_identity_limbs(),
+                )
+                .expect("self-consistent but spliced shared-table accumulator round");
+            assert!(!verify_vesta_affine_ipa_verifier_shared_table(circuit));
+        });
+    }
+
+    #[test]
+    #[ignore = "heavy multi-round non-native shared-table verifier MockProver coverage"]
+    fn kagemusha_non_native_vesta_ipa_verifier_shared_table_circuit_rejects_generator_splice() {
+        run_vesta_affine_ipa_verifier_test(|| {
+            let mut circuit = vesta_affine_ipa_verifier_four_point_shared_table_valid_circuit();
+            let generator = VestaAffine::generator();
+            let (g_after, h_after) = vesta_affine_ipa_generator_fold_outputs(
+                Scalar::from(1),
+                Scalar::from(1),
+                generator,
+                generator,
+                generator,
+                generator,
+            );
+            circuit.generator_folds[0][1] =
+                pasta_tiny::NonNativeVestaIpaGeneratorFoldSharedTableNativeScalar::<
+                    1,
+                    1,
+                >::try_from_challenge(
+                    Scalar::from(1),
+                    Scalar::from(1),
+                    vesta_non_identity_limbs(generator),
+                    vesta_non_identity_limbs(generator),
+                    vesta_non_identity_limbs(generator),
+                    vesta_non_identity_limbs(generator),
+                    g_after,
+                    h_after,
+                )
+                .expect("self-consistent but spliced shared-table generator fold");
+            assert!(!verify_vesta_affine_ipa_verifier_shared_table(circuit));
+        });
+    }
+
+    #[test]
+    #[ignore = "heavy multi-round non-native shared-table verifier MockProver coverage"]
+    fn kagemusha_non_native_vesta_ipa_verifier_shared_table_circuit_rejects_challenge_splice() {
+        run_vesta_affine_ipa_verifier_test(|| {
+            let mut circuit = vesta_affine_ipa_verifier_four_point_shared_table_valid_circuit();
+            circuit.b_reduction.challenges[1] =
+                pasta_tiny::NativePastaFpScalar::from_scalar(Scalar::from(0));
+            assert!(!verify_vesta_affine_ipa_verifier_shared_table(circuit));
+        });
+    }
+
+    #[test]
+    #[ignore = "heavy multi-round non-native shared-table verifier MockProver coverage"]
+    fn kagemusha_non_native_vesta_ipa_verifier_shared_table_circuit_rejects_final_msm_splice() {
+        run_vesta_affine_ipa_verifier_test(|| {
+            let mut circuit = vesta_affine_ipa_verifier_four_point_shared_table_valid_circuit();
+            let tampered_final =
+                pasta_tiny::NonNativeVestaIpaFinalWindowedMsmSharedTableNativeScalar::<
+                    1,
+                    1,
+                >::try_from_scalars(
+                    Scalar::from(1),
+                    Scalar::from(0),
+                    vesta_non_identity_limbs(vesta_generator_multiple(3)),
+                    vesta_non_identity_limbs(vesta_generator_multiple(7)),
+                    vesta_non_identity_limbs(vesta_generator_multiple(1)),
+                    vesta_non_identity_limbs(vesta_generator_multiple(3)),
+                )
+                .expect("self-consistent shared-table final MSM with substituted b scalar");
+            circuit.final_msm = Box::new(tampered_final);
+            assert!(!verify_vesta_affine_ipa_verifier_shared_table(circuit));
+        });
+    }
+
+    #[test]
+    fn kagemusha_non_native_vesta_ipa_verifier_shared_table_builder_rejects_transcript_digest_mismatch()
+     {
+        run_vesta_affine_ipa_verifier_test(|| {
+            let challenges = vec![Scalar::from(1), Scalar::from(1)];
+            let inverses = vec![Scalar::from(1), Scalar::from(1)];
+            let (
+                transcript_header_projection,
+                transcript_round_projections,
+                transcript_final_projection,
+                transcript_binding_digest,
+            ) = vesta_affine_ipa_verifier_transcript_binding_args(&challenges, &inverses);
+            let err =
+                pasta_tiny::NonNativeVestaIpaVerifierSharedTableNativeScalar::<4, 1, 1>::try_from_statement(
+                    [
+                        Scalar::from(1),
+                        Scalar::from(0),
+                        Scalar::from(0),
+                        Scalar::from(0),
+                    ],
+                    challenges,
+                    inverses,
+                    transcript_header_projection,
+                    transcript_round_projections,
+                    transcript_final_projection,
+                    transcript_binding_digest + Scalar::from(1),
+                    Scalar::from(1),
+                    Scalar::from(1),
+                    vec![vesta_identity_limbs(), vesta_identity_limbs()],
+                    vesta_identity_limbs(),
+                    vec![vesta_identity_limbs(), vesta_identity_limbs()],
+                    [vesta_identity_limbs(); 4],
+                    [vesta_identity_limbs(); 4],
+                    vesta_identity_limbs(),
+                )
+                .err()
+                .expect("builder must reject mismatched shared-table transcript binding digest");
+            assert!(err.contains("binding digest mismatch"));
+        });
+    }
+
+    #[test]
+    fn kagemusha_non_native_vesta_ipa_verifier_shared_table_builder_rejects_final_b_mismatch() {
+        run_vesta_affine_ipa_verifier_test(|| {
+            let challenges = vec![Scalar::from(1), Scalar::from(1)];
+            let inverses = vec![Scalar::from(1), Scalar::from(1)];
+            let (
+                transcript_header_projection,
+                transcript_round_projections,
+                transcript_final_projection,
+                transcript_binding_digest,
+            ) = vesta_affine_ipa_verifier_transcript_binding_args(&challenges, &inverses);
+            let err =
+                pasta_tiny::NonNativeVestaIpaVerifierSharedTableNativeScalar::<4, 1, 1>::try_from_statement(
+                    [
+                        Scalar::from(1),
+                        Scalar::from(0),
+                        Scalar::from(0),
+                        Scalar::from(0),
+                    ],
+                    challenges,
+                    inverses,
+                    transcript_header_projection,
+                    transcript_round_projections,
+                    transcript_final_projection,
+                    transcript_binding_digest,
+                    Scalar::from(1),
+                    Scalar::from(0),
+                    vec![vesta_identity_limbs(), vesta_identity_limbs()],
+                    vesta_identity_limbs(),
+                    vec![vesta_identity_limbs(), vesta_identity_limbs()],
+                    [vesta_identity_limbs(); 4],
+                    [vesta_identity_limbs(); 4],
+                    vesta_identity_limbs(),
+                )
+                .err()
+                .expect("builder must reject substituted shared-table final b scalar");
+            assert!(err.contains("final scalar mismatch"));
+        });
+    }
+
+    #[test]
+    fn kagemusha_non_native_vesta_ipa_verifier_shared_table_builder_rejects_round_count_mismatch() {
+        run_vesta_affine_ipa_verifier_test(|| {
+            let challenges = vec![Scalar::from(1), Scalar::from(1)];
+            let inverses = vec![Scalar::from(1), Scalar::from(1)];
+            let (
+                transcript_header_projection,
+                transcript_round_projections,
+                transcript_final_projection,
+                transcript_binding_digest,
+            ) = vesta_affine_ipa_verifier_transcript_binding_args(&challenges, &inverses);
+            let err =
+                pasta_tiny::NonNativeVestaIpaVerifierSharedTableNativeScalar::<4, 1, 1>::try_from_statement(
+                    [
+                        Scalar::from(1),
+                        Scalar::from(0),
+                        Scalar::from(0),
+                        Scalar::from(0),
+                    ],
+                    challenges,
+                    inverses,
+                    transcript_header_projection,
+                    transcript_round_projections,
+                    transcript_final_projection,
+                    transcript_binding_digest,
+                    Scalar::from(1),
+                    Scalar::from(1),
+                    vec![vesta_identity_limbs()],
+                    vesta_identity_limbs(),
+                    vec![vesta_identity_limbs(), vesta_identity_limbs()],
+                    [vesta_identity_limbs(); 4],
+                    [vesta_identity_limbs(); 4],
+                    vesta_identity_limbs(),
+                )
+                .err()
+                .expect("builder must reject missing shared-table L round");
+            assert!(err.contains("L round count mismatch"));
+        });
+    }
+
+    #[test]
+    fn kagemusha_non_native_vesta_ipa_verifier_shared_table_builder_rejects_window_high_bit() {
+        run_vesta_affine_ipa_verifier_test(|| {
+            let challenge = Scalar::from(2);
+            let inverse = scalar_inverse(challenge);
+            let challenges = vec![challenge, Scalar::from(1)];
+            let inverses = vec![inverse, Scalar::from(1)];
+            let (
+                transcript_header_projection,
+                transcript_round_projections,
+                transcript_final_projection,
+                transcript_binding_digest,
+            ) = vesta_affine_ipa_verifier_transcript_binding_args(&challenges, &inverses);
+            let err =
+                pasta_tiny::NonNativeVestaIpaVerifierSharedTableNativeScalar::<4, 1, 1>::try_from_statement(
+                    [
+                        Scalar::from(1),
+                        Scalar::from(0),
+                        Scalar::from(0),
+                        Scalar::from(0),
+                    ],
+                    challenges,
+                    inverses,
+                    transcript_header_projection,
+                    transcript_round_projections,
+                    transcript_final_projection,
+                    transcript_binding_digest,
+                    Scalar::from(1),
+                    inverse,
+                    vec![vesta_identity_limbs(), vesta_identity_limbs()],
+                    vesta_identity_limbs(),
+                    vec![vesta_identity_limbs(), vesta_identity_limbs()],
+                    [vesta_identity_limbs(); 4],
+                    [vesta_identity_limbs(); 4],
+                    vesta_identity_limbs(),
+                )
+                .err()
+                .expect("builder must reject shared-table multi-round scalar above width");
+            assert!(err.contains("fixed-window scalar exceeds configured bit width"));
+        });
+    }
+
+    #[test]
+    fn kagemusha_non_native_vesta_ipa_verifier_shared_table_host_links_reject_q_splice() {
+        run_vesta_affine_ipa_verifier_test(|| {
+            let mut circuit = vesta_affine_ipa_verifier_four_point_shared_table_valid_circuit();
+            circuit.round_accumulators[1] =
+                pasta_tiny::NonNativeVestaIpaRoundAccumulatorSharedTableNativeScalar::<
+                    1,
+                    1,
+                >::try_from_challenge(
+                    Scalar::from(1),
+                    Scalar::from(1),
+                    vesta_identity_limbs(),
+                    vesta_identity_limbs(),
+                    vesta_identity_limbs(),
+                    vesta_identity_limbs(),
+                )
+                .expect("self-consistent but spliced shared-table accumulator round");
+            assert!(!vesta_affine_ipa_verifier_shared_table_host_links_hold(
+                &circuit
+            ));
+        });
+    }
+
+    #[test]
+    fn kagemusha_non_native_vesta_ipa_verifier_shared_table_host_links_reject_generator_splice() {
+        run_vesta_affine_ipa_verifier_test(|| {
+            let mut circuit = vesta_affine_ipa_verifier_four_point_shared_table_valid_circuit();
+            let generator = VestaAffine::generator();
+            let (g_after, h_after) = vesta_affine_ipa_generator_fold_outputs(
+                Scalar::from(1),
+                Scalar::from(1),
+                generator,
+                generator,
+                generator,
+                generator,
+            );
+            circuit.generator_folds[0][1] =
+                pasta_tiny::NonNativeVestaIpaGeneratorFoldSharedTableNativeScalar::<
+                    1,
+                    1,
+                >::try_from_challenge(
+                    Scalar::from(1),
+                    Scalar::from(1),
+                    vesta_non_identity_limbs(generator),
+                    vesta_non_identity_limbs(generator),
+                    vesta_non_identity_limbs(generator),
+                    vesta_non_identity_limbs(generator),
+                    g_after,
+                    h_after,
+                )
+                .expect("self-consistent but spliced shared-table generator fold");
+            assert!(!vesta_affine_ipa_verifier_shared_table_host_links_hold(
+                &circuit
+            ));
+        });
+    }
+
+    #[test]
+    fn kagemusha_non_native_vesta_ipa_verifier_shared_table_host_links_reject_challenge_splice() {
+        run_vesta_affine_ipa_verifier_test(|| {
+            let mut circuit = vesta_affine_ipa_verifier_four_point_shared_table_valid_circuit();
+            circuit.b_reduction.challenges[1] =
+                pasta_tiny::NativePastaFpScalar::from_scalar(Scalar::from(0));
+            assert!(!vesta_affine_ipa_verifier_shared_table_host_links_hold(
+                &circuit
+            ));
+        });
+    }
+
+    #[test]
     fn kagemusha_non_native_vesta_affine_point_add_accepts_generator_plus_double() {
         run_vesta_affine_point_add_test(|| {
             let (p, q, r) = vesta_addition_test_points();
@@ -15660,6 +22191,28 @@ mod offline_note_real_prover_tests {
         offline_note_recursive_vk_box().expect("offline note verifying key")
     }
 
+    fn noncanonical_offline_note_vk_box() -> VerifyingKeyBox {
+        let mut vk_box = offline_note_vk_box();
+        let last = vk_box
+            .bytes
+            .last_mut()
+            .expect("offline note verifier key bytes");
+        *last ^= 0x01;
+        vk_box
+    }
+
+    fn offline_note_vk_box_with_cid(circuit_id: &str) -> VerifyingKeyBox {
+        let params = pasta_params_new(OFFLINE_NOTE_RECURSIVE_IPA_K);
+        let circuit = pasta_tiny::OfflineNoteSemantic::default();
+        let vk =
+            halo2_proofs::plonk::keygen_vk(&params, &circuit).expect("offline note verifier key");
+        let mut bytes = zk1::wrap_start();
+        zk1::wrap_append_ipa_k(&mut bytes, OFFLINE_NOTE_RECURSIVE_IPA_K);
+        zk1::wrap_append_circuit_id(&mut bytes, circuit_id);
+        zk1::wrap_append_vk_pasta(&mut bytes, &vk);
+        VerifyingKeyBox::new(ZK_BACKEND_HALO2_IPA.to_owned(), bytes)
+    }
+
     fn sample_signature(seed: u8) -> Signature {
         let mut bytes = [0u8; 64];
         for (index, byte) in bytes.iter_mut().enumerate() {
@@ -15822,6 +22375,58 @@ mod offline_note_real_prover_tests {
     }
 
     #[test]
+    fn prove_offline_note_redeem_rejects_noncanonical_verifier_key() {
+        let noncanonical_vk = noncanonical_offline_note_vk_box();
+        let key_err = derive_halo2_ipa_offline_note_proving_key_bytes(&noncanonical_vk)
+            .expect_err("Offline proving-key derivation must reject noncanonical key");
+        assert!(
+            key_err.contains("canonical semantic circuit key"),
+            "unexpected noncanonical proving-key error: {key_err}"
+        );
+
+        let redemption = sample_redemption();
+        let proof_err = prove_offline_note_redeem(
+            OFFLINE_NOTE_RECURSIVE_CIRCUIT_ID,
+            &noncanonical_vk,
+            &redemption,
+            None,
+        )
+        .expect_err("Offline proving must reject noncanonical verifier key");
+        assert!(
+            proof_err.contains("canonical semantic circuit key"),
+            "unexpected noncanonical proving error: {proof_err}"
+        );
+    }
+
+    #[test]
+    fn offline_note_real_proof_rejects_wrong_cid_verifier_key_replay() {
+        let vk_box = offline_note_vk_box();
+        let wrong_cid_vk = offline_note_vk_box_with_cid(KAGEMUSHA_FOLDED_CIRCUIT_ID);
+        assert_ne!(hash_vk(&vk_box), hash_vk(&wrong_cid_vk));
+
+        let guard_err = ensure_offline_note_recursive_canonical_vk_box(&wrong_cid_vk)
+            .expect_err("wrong-CID offline verifier key must reject canonical guard");
+        assert!(guard_err.contains("canonical semantic circuit key"));
+
+        let redemption = sample_redemption();
+        let mut proof = prove_offline_note_redeem(
+            OFFLINE_NOTE_RECURSIVE_CIRCUIT_ID,
+            &vk_box,
+            &redemption,
+            None,
+        )
+        .expect("real offline note redemption proof");
+        mutate_open_verify_envelope(&mut proof, |envelope| {
+            envelope.vk_hash = hash_vk(&wrong_cid_vk);
+        });
+
+        assert!(
+            !verify_backend(ZK_BACKEND_HALO2_IPA, &proof, Some(&wrong_cid_vk)),
+            "backend verifier must reject a matching raw H2VK payload with a wrong CID1 circuit id"
+        );
+    }
+
+    #[test]
     fn prove_offline_note_audit_emits_real_halo2_ipa_proof() {
         let vk_box = offline_note_vk_box();
         let audit = sample_audit();
@@ -15934,6 +22539,18 @@ mod kagemusha_folded_real_prover_tests {
         kagemusha_folded_vk_box().expect("Kagemusha folded verifying key")
     }
 
+    fn kagemusha_folded_vk_box_with_cid(circuit_id: &str) -> VerifyingKeyBox {
+        let params = pasta_params_new(KAGEMUSHA_FOLDED_IPA_K);
+        let circuit = pasta_tiny::KagemushaFoldedSemantic::default();
+        let vk = halo2_proofs::plonk::keygen_vk(&params, &circuit)
+            .expect("Kagemusha folded verifier key");
+        let mut bytes = zk1::wrap_start();
+        zk1::wrap_append_ipa_k(&mut bytes, KAGEMUSHA_FOLDED_IPA_K);
+        zk1::wrap_append_circuit_id(&mut bytes, circuit_id);
+        zk1::wrap_append_vk_pasta(&mut bytes, &vk);
+        VerifyingKeyBox::new(ZK_BACKEND_HALO2_IPA.to_owned(), bytes)
+    }
+
     fn fixed_bytes(label: &[u8]) -> [u8; 32] {
         Hash::new(label).into()
     }
@@ -15982,6 +22599,703 @@ mod kagemusha_folded_real_prover_tests {
             },
         ];
         kagemusha_folded_public_inputs(&chain_id, &asset, &steps).expect("folded public inputs")
+    }
+
+    fn sample_recursive_aggregation_proof_bundle()
+    -> iroha_data_model::offline::KagemushaRecursiveAggregationProofBundle {
+        let chain_id: ChainId = "kagemusha-recursive-chain".parse().expect("chain id");
+        let asset = AssetDefinitionId::new(
+            DomainId::try_new("offline", "universal").expect("domain id"),
+            "kgm-recursive".parse().expect("asset definition name"),
+        );
+        let root0 = fixed_bytes(b"kagemusha-recursive-root-0");
+        let root1 = fixed_bytes(b"kagemusha-recursive-root-1");
+        let root2 = fixed_bytes(b"kagemusha-recursive-root-2");
+        let steps = vec![
+            KagemushaFoldStep {
+                root_before: root0,
+                input_nullifiers: vec![[0x21; 32]],
+                output_commitments: vec![[0x41; 32]],
+                root_after: root1,
+                proof_hash: Hash::new(b"kagemusha-recursive-hop-proof-0"),
+                proof_public_inputs_digest: fixed_bytes(b"kagemusha-recursive-hop-public-0"),
+                verifier_key_id: VerifyingKeyId::new(ZK_BACKEND_HALO2_IPA, "kagemusha-hop-fixture"),
+                verifier_key_commitment: fixed_bytes(b"kagemusha-recursive-hop-vk-0"),
+                verifier_key_poseidon_digest:
+                    iroha_data_model::offline::kagemusha_verifier_key_poseidon_digest(
+                        ZK_BACKEND_HALO2_IPA,
+                        b"kagemusha-recursive-hop-vk-0",
+                    )
+                    .expect("recursive hop verifier-key digest"),
+            },
+            KagemushaFoldStep {
+                root_before: root1,
+                input_nullifiers: vec![[0x61; 32]],
+                output_commitments: vec![[0x81; 32]],
+                root_after: root2,
+                proof_hash: Hash::new(b"kagemusha-recursive-hop-proof-1"),
+                proof_public_inputs_digest: fixed_bytes(b"kagemusha-recursive-hop-public-1"),
+                verifier_key_id: VerifyingKeyId::new(ZK_BACKEND_HALO2_IPA, "kagemusha-hop-fixture"),
+                verifier_key_commitment: fixed_bytes(b"kagemusha-recursive-hop-vk-1"),
+                verifier_key_poseidon_digest:
+                    iroha_data_model::offline::kagemusha_verifier_key_poseidon_digest(
+                        ZK_BACKEND_HALO2_IPA,
+                        b"kagemusha-recursive-hop-vk-1",
+                    )
+                    .expect("recursive hop verifier-key digest"),
+            },
+        ];
+        let evidence =
+            iroha_data_model::offline::kagemusha_recursive_aggregation_evidence_from_steps(
+                &chain_id,
+                &asset,
+                &steps,
+                4,
+                fixed_bytes(b"kagemusha-recursive-pallas-params"),
+                kagemusha_recursive_fixed_window_table_schedule_digest(4)
+                    .expect("canonical recursive fixed-window schedule digest"),
+                kagemusha_recursive_fixed_window_shared_table_manifest_digest(4)
+                    .expect("canonical recursive fixed-window shared-table manifest digest"),
+                fixed_bytes(b"kagemusha-recursive-table-bases"),
+                fixed_bytes(b"kagemusha-recursive-batch"),
+            )
+            .expect("recursive aggregation evidence");
+        let public_inputs =
+            iroha_data_model::offline::kagemusha_recursive_aggregation_proof_public_inputs_from_evidence(
+                &evidence,
+            )
+            .expect("recursive aggregation proof public inputs");
+        let public_inputs_hash = public_inputs
+            .public_inputs_hash()
+            .expect("recursive aggregation proof public-input hash");
+        let recursive_proof = iroha_data_model::offline::KagemushaRecursiveAggregationProof {
+            verifier_key_id: VerifyingKeyId::new(
+                ZK_BACKEND_HALO2_IPA,
+                iroha_data_model::offline::KAGEMUSHA_RECURSIVE_AGGREGATION_PROOF_CIRCUIT_ID_V1,
+            ),
+            public_inputs,
+            public_inputs_hash,
+            proof: ProofBox::new(ZK_BACKEND_HALO2_IPA.into(), vec![0xC7; 96]),
+        };
+        iroha_data_model::offline::KagemushaRecursiveAggregationProofBundle {
+            evidence,
+            recursive_proof,
+        }
+    }
+
+    #[test]
+    fn kagemusha_recursive_aggregation_proof_instance_values_bind_public_inputs() {
+        let bundle = sample_recursive_aggregation_proof_bundle();
+        bundle
+            .validate_evidence_binding()
+            .expect("recursive aggregation proof bundle binds evidence");
+
+        let values = kagemusha_recursive_aggregation_proof_bundle_instance_values(&bundle)
+            .expect("recursive aggregation proof instance values");
+        let public_inputs = &bundle.recursive_proof.public_inputs;
+        let public_hash = public_inputs
+            .public_inputs_hash()
+            .expect("recursive public-input hash");
+        let public_hash_limbs = hash_to_u64_limbs_le(&public_hash);
+        let evidence_limbs = bytes_to_u64_limbs_le(&public_inputs.evidence_digest);
+        let aggregation_limbs = bytes_to_u64_limbs_le(&public_inputs.aggregation_transcript_digest);
+        let params_limbs = bytes_to_u64_limbs_le(&public_inputs.verifier_params_fingerprint);
+        let schedule_limbs =
+            bytes_to_u64_limbs_le(&public_inputs.fixed_window_table_schedule_digest);
+        let manifest_limbs =
+            bytes_to_u64_limbs_le(&public_inputs.fixed_window_shared_table_manifest_digest);
+        let table_base_limbs = bytes_to_u64_limbs_le(&public_inputs.fixed_window_table_base_digest);
+        let batch_limbs = bytes_to_u64_limbs_le(&public_inputs.verifier_witness_batch_digest);
+
+        assert_eq!(&values.public_values[0..4], public_hash_limbs.as_slice());
+        assert_eq!(&values.public_values[4..8], evidence_limbs.as_slice());
+        assert_eq!(&values.public_values[8..12], aggregation_limbs.as_slice());
+        assert_eq!(&values.public_values[12..16], params_limbs.as_slice());
+        assert_eq!(&values.public_values[16..20], schedule_limbs.as_slice());
+        assert_eq!(&values.public_values[20..24], manifest_limbs.as_slice());
+        assert_eq!(&values.public_values[24..28], table_base_limbs.as_slice());
+        assert_eq!(&values.public_values[28..32], batch_limbs.as_slice());
+        assert_eq!(
+            values.public_values[KAGEMUSHA_RECURSIVE_AGGREGATION_OPENING_LEN_INDEX],
+            u64::from(public_inputs.verifier_opening_len)
+        );
+        assert_eq!(
+            values.public_values[KAGEMUSHA_RECURSIVE_AGGREGATION_WITNESS_COUNT_INDEX],
+            u64::from(public_inputs.verifier_witness_count)
+        );
+        assert_eq!(
+            values.public_values[KAGEMUSHA_RECURSIVE_AGGREGATION_HOP_COUNT_INDEX],
+            u64::from(public_inputs.hop_count)
+        );
+        assert_eq!(
+            values.public_instance_columns().len(),
+            KAGEMUSHA_RECURSIVE_AGGREGATION_PROOF_INSTANCE_COLUMNS
+        );
+
+        let mut forged = bundle;
+        forged.recursive_proof.public_inputs.hop_count = 1;
+        forged.recursive_proof.public_inputs_hash = forged
+            .recursive_proof
+            .public_inputs
+            .public_inputs_hash()
+            .expect("forged public-input hash");
+        let err = kagemusha_recursive_aggregation_proof_bundle_instance_values(&forged)
+            .expect_err("hop-count substitution must reject before instance extraction");
+        assert!(err.contains("witness count"), "{err}");
+    }
+
+    fn recursive_aggregation_vk_box() -> VerifyingKeyBox {
+        kagemusha_recursive_aggregation_proof_vk_box().expect("recursive aggregation vk")
+    }
+
+    fn recursive_aggregation_vk_box_with_cid(circuit_id: &str) -> VerifyingKeyBox {
+        let params = pasta_params_new(KAGEMUSHA_RECURSIVE_AGGREGATION_IPA_K);
+        let circuit = pasta_tiny::KagemushaRecursiveAggregationSemantic::default();
+        let vk = halo2_proofs::plonk::keygen_vk(&params, &circuit)
+            .expect("recursive aggregation verifier key");
+        let mut bytes = zk1::wrap_start();
+        zk1::wrap_append_ipa_k(&mut bytes, KAGEMUSHA_RECURSIVE_AGGREGATION_IPA_K);
+        zk1::wrap_append_circuit_id(&mut bytes, circuit_id);
+        zk1::wrap_append_vk_pasta(&mut bytes, &vk);
+        VerifyingKeyBox::new(ZK_BACKEND_HALO2_IPA.to_owned(), bytes)
+    }
+
+    fn recursive_aggregation_record(vk_box: &VerifyingKeyBox) -> VerifyingKeyRecord {
+        kagemusha_recursive_aggregation_proof_vk_record_from_box(
+            KAGEMUSHA_VERIFIER_NAMESPACE,
+            1,
+            vk_box.clone(),
+        )
+        .expect("recursive aggregation verifier record")
+    }
+
+    fn recursive_aggregation_public_inputs(
+        bundle: &iroha_data_model::offline::KagemushaRecursiveAggregationProofBundle,
+    ) -> Vec<[u8; 32]> {
+        kagemusha_recursive_aggregation_proof_bundle_instance_values(bundle)
+            .expect("recursive aggregation instance values")
+            .public_instance_columns()
+            .into_iter()
+            .map(|column| {
+                let [value]: [[u8; 32]; 1] = column.try_into().expect("single-row public instance");
+                value
+            })
+            .collect()
+    }
+
+    fn attach_recursive_aggregation_envelope(
+        bundle: &mut iroha_data_model::offline::KagemushaRecursiveAggregationProofBundle,
+        vk_box: &VerifyingKeyBox,
+    ) {
+        let proof_bytes = iroha_zkp_halo2::Halo2ProofEnvelope::new(
+            18,
+            16,
+            16,
+            iroha_zkp_halo2::FLAG_LOOKUPS,
+            recursive_aggregation_public_inputs(bundle),
+            vec![0xAB; 64],
+        )
+        .expect("recursive aggregation Halo2 envelope")
+        .to_bytes();
+        let envelope = OpenVerifyEnvelope {
+            backend: BackendTag::Halo2IpaPasta,
+            circuit_id:
+                iroha_data_model::offline::KAGEMUSHA_RECURSIVE_AGGREGATION_PROOF_CIRCUIT_ID_V1
+                    .to_owned(),
+            vk_hash: hash_vk(vk_box),
+            public_inputs:
+                iroha_data_model::offline::KAGEMUSHA_RECURSIVE_AGGREGATION_PROOF_PUBLIC_INPUTS_SCHEMA
+                    .to_vec(),
+            proof_bytes,
+            aux: Vec::new(),
+        };
+        bundle.recursive_proof.proof = ProofBox::new(
+            ZK_BACKEND_HALO2_IPA.into(),
+            norito::to_bytes(&envelope).expect("OpenVerifyEnvelope encode"),
+        );
+    }
+
+    #[test]
+    fn kagemusha_recursive_aggregation_proof_preverify_accepts_bound_envelope_and_record() {
+        let vk_box = recursive_aggregation_vk_box();
+        let mut bundle = sample_recursive_aggregation_proof_bundle();
+        attach_recursive_aggregation_envelope(&mut bundle, &vk_box);
+        let record = recursive_aggregation_record(&vk_box);
+
+        preverify_kagemusha_recursive_aggregation_proof_bundle(&bundle, &vk_box)
+            .expect("recursive aggregation proof preverification");
+        preverify_kagemusha_recursive_aggregation_proof_bundle_with_record(&bundle, &record)
+            .expect("record-backed recursive aggregation proof preverification");
+    }
+
+    #[test]
+    fn kagemusha_recursive_aggregation_proof_preverify_rejects_cross_circuit_verifier_key() {
+        let folded_vk_box = kagemusha_vk_box();
+        let mut bundle = sample_recursive_aggregation_proof_bundle();
+        attach_recursive_aggregation_envelope(&mut bundle, &folded_vk_box);
+
+        let err = preverify_kagemusha_recursive_aggregation_proof_bundle(&bundle, &folded_vk_box)
+            .expect_err("cross-circuit verifier key must reject preverification");
+        assert!(err.contains("canonical semantic circuit key"), "{err}");
+
+        let mut forged_record = recursive_aggregation_record(&recursive_aggregation_vk_box());
+        forged_record.key = Some(folded_vk_box.clone());
+        forged_record.commitment = hash_vk(&folded_vk_box);
+        forged_record.vk_len =
+            u32::try_from(folded_vk_box.bytes.len()).expect("folded verifier-key length fits u32");
+
+        let err = preverify_kagemusha_recursive_aggregation_proof_bundle_with_record(
+            &bundle,
+            &forged_record,
+        )
+        .expect_err("cross-circuit verifier record must reject preverification");
+        assert!(err.contains("canonical semantic circuit key"), "{err}");
+    }
+
+    #[test]
+    fn kagemusha_recursive_aggregation_proof_preverify_rejects_fixed_window_digest_substitution() {
+        let vk_box = recursive_aggregation_vk_box();
+        let bundle = sample_recursive_aggregation_proof_bundle();
+
+        let mut wrong_schedule = bundle.clone();
+        wrong_schedule.evidence.fixed_window_table_schedule_digest =
+            fixed_bytes(b"kagemusha-recursive-forged-schedule");
+        wrong_schedule.recursive_proof.public_inputs =
+            iroha_data_model::offline::kagemusha_recursive_aggregation_proof_public_inputs_from_evidence(
+                &wrong_schedule.evidence,
+            )
+            .expect("forged schedule public inputs");
+        wrong_schedule.recursive_proof.public_inputs_hash = wrong_schedule
+            .recursive_proof
+            .public_inputs
+            .public_inputs_hash()
+            .expect("forged schedule public-input hash");
+        attach_recursive_aggregation_envelope(&mut wrong_schedule, &vk_box);
+        let err = preverify_kagemusha_recursive_aggregation_proof_bundle(&wrong_schedule, &vk_box)
+            .expect_err("forged fixed-window schedule digest must reject preverification");
+        assert!(err.contains("schedule digest"), "{err}");
+
+        let mut wrong_manifest = bundle;
+        wrong_manifest
+            .evidence
+            .fixed_window_shared_table_manifest_digest =
+            fixed_bytes(b"kagemusha-recursive-forged-manifest");
+        wrong_manifest.recursive_proof.public_inputs =
+            iroha_data_model::offline::kagemusha_recursive_aggregation_proof_public_inputs_from_evidence(
+                &wrong_manifest.evidence,
+            )
+            .expect("forged manifest public inputs");
+        wrong_manifest.recursive_proof.public_inputs_hash = wrong_manifest
+            .recursive_proof
+            .public_inputs
+            .public_inputs_hash()
+            .expect("forged manifest public-input hash");
+        attach_recursive_aggregation_envelope(&mut wrong_manifest, &vk_box);
+        let err = preverify_kagemusha_recursive_aggregation_proof_bundle(&wrong_manifest, &vk_box)
+            .expect_err("forged fixed-window manifest digest must reject preverification");
+        assert!(err.contains("shared-table manifest digest"), "{err}");
+    }
+
+    #[test]
+    fn kagemusha_recursive_aggregation_proof_vk_record_from_box_canonicalizes_record() {
+        let vk_box = recursive_aggregation_vk_box();
+        let record = recursive_aggregation_record(&vk_box);
+
+        assert_eq!(record.version, 1);
+        assert_eq!(
+            record.circuit_id,
+            iroha_data_model::offline::KAGEMUSHA_RECURSIVE_AGGREGATION_PROOF_CIRCUIT_ID_V1
+        );
+        assert_eq!(record.namespace, KAGEMUSHA_VERIFIER_NAMESPACE);
+        assert_eq!(record.backend, BackendTag::Halo2IpaPasta);
+        assert_eq!(
+            record.public_inputs_schema_hash,
+            iroha_data_model::offline::kagemusha_recursive_aggregation_proof_public_inputs_schema_hash()
+        );
+        assert_eq!(record.commitment, hash_vk(&vk_box));
+        assert_eq!(record.vk_len as usize, vk_box.bytes.len());
+        assert_eq!(
+            record.max_proof_bytes,
+            KAGEMUSHA_RECURSIVE_AGGREGATION_MAX_PROOF_BYTES
+        );
+        assert!(record.is_active());
+        assert_eq!(record.key.as_ref(), Some(&vk_box));
+
+        let folded_vk = kagemusha_vk_box();
+        assert_ne!(hash_vk(&folded_vk), hash_vk(&vk_box));
+        let err = kagemusha_recursive_aggregation_proof_vk_record_from_box(
+            KAGEMUSHA_VERIFIER_NAMESPACE,
+            1,
+            folded_vk,
+        )
+        .expect_err("folded verifier key material must not register as recursive aggregation");
+        assert!(err.contains("canonical semantic circuit key"), "{err}");
+
+        let err = kagemusha_recursive_aggregation_proof_vk_record_from_box(
+            KAGEMUSHA_VERIFIER_NAMESPACE,
+            1,
+            VerifyingKeyBox::new("halo2/kzg".into(), vec![0x42; 48]),
+        )
+        .expect_err("trusted-setup recursive aggregation vk backend must reject");
+        assert!(err.contains("backend"), "{err}");
+
+        let err = kagemusha_recursive_aggregation_proof_vk_record_from_box(
+            KAGEMUSHA_VERIFIER_NAMESPACE,
+            1,
+            VerifyingKeyBox::new(ZK_BACKEND_HALO2_IPA.into(), Vec::new()),
+        )
+        .expect_err("empty recursive aggregation vk must reject");
+        assert!(err.contains("non-empty"), "{err}");
+    }
+
+    #[test]
+    fn kagemusha_recursive_aggregation_real_halo2_ipa_proof_verifies() {
+        let vk_box =
+            kagemusha_recursive_aggregation_proof_vk_box().expect("recursive aggregation vk");
+        let record =
+            kagemusha_recursive_aggregation_proof_vk_record(KAGEMUSHA_VERIFIER_NAMESPACE, 7)
+                .expect("recursive aggregation verifier record");
+        assert_eq!(record.version, 7);
+        assert_eq!(record.namespace, KAGEMUSHA_VERIFIER_NAMESPACE);
+        assert_eq!(
+            record.circuit_id,
+            KAGEMUSHA_RECURSIVE_AGGREGATION_CIRCUIT_ID
+        );
+        assert_eq!(record.commitment, hash_vk(&vk_box));
+        assert_eq!(record.key.as_ref(), Some(&vk_box));
+
+        let evidence = sample_recursive_aggregation_proof_bundle().evidence;
+        let bundle = prove_kagemusha_recursive_aggregation_evidence(
+            KAGEMUSHA_RECURSIVE_AGGREGATION_CIRCUIT_ID,
+            &vk_box,
+            evidence,
+            None,
+        )
+        .expect("real recursive aggregation semantic proof");
+
+        preverify_kagemusha_recursive_aggregation_proof_bundle(&bundle, &vk_box)
+            .expect("real recursive aggregation proof preverification");
+        assert!(verify_kagemusha_recursive_aggregation_proof_bundle(
+            &bundle, &vk_box
+        ));
+        assert!(verify_kagemusha_recursive_aggregation_proof_bundle_with_record(&bundle, &record));
+        assert_eq!(
+            envelope_instances(&bundle.recursive_proof.proof),
+            kagemusha_recursive_aggregation_proof_bundle_instance_values(&bundle)
+                .expect("recursive aggregation instance values")
+                .public_instance_columns()
+        );
+    }
+
+    #[test]
+    fn kagemusha_recursive_aggregation_real_proof_rejects_wrong_cid_verifier_key_replay() {
+        let vk_box =
+            kagemusha_recursive_aggregation_proof_vk_box().expect("recursive aggregation vk");
+        let wrong_cid_vk = recursive_aggregation_vk_box_with_cid(OFFLINE_NOTE_RECURSIVE_CIRCUIT_ID);
+        let guard_err = ensure_kagemusha_recursive_aggregation_canonical_vk_box(&wrong_cid_vk)
+            .expect_err("wrong-CID recursive aggregation verifier key must reject canonical guard");
+        assert!(
+            guard_err.contains("canonical semantic circuit key"),
+            "unexpected wrong-CID guard error: {guard_err}"
+        );
+
+        let evidence = sample_recursive_aggregation_proof_bundle().evidence;
+        let mut bundle = prove_kagemusha_recursive_aggregation_evidence(
+            KAGEMUSHA_RECURSIVE_AGGREGATION_CIRCUIT_ID,
+            &vk_box,
+            evidence,
+            None,
+        )
+        .expect("real recursive aggregation semantic proof");
+        mutate_open_verify_envelope(&mut bundle.recursive_proof.proof, |envelope| {
+            envelope.vk_hash = hash_vk(&wrong_cid_vk);
+        });
+        assert!(
+            !verify_backend(
+                ZK_BACKEND_HALO2_IPA,
+                &bundle.recursive_proof.proof,
+                Some(&wrong_cid_vk),
+            ),
+            "backend verifier must reject a matching recursive aggregation raw H2VK payload with a wrong CID1 circuit id"
+        );
+    }
+
+    #[test]
+    fn kagemusha_recursive_aggregation_real_halo2_ipa_proof_rejects_tampering() {
+        let vk_box =
+            kagemusha_recursive_aggregation_proof_vk_box().expect("recursive aggregation vk");
+        let evidence = sample_recursive_aggregation_proof_bundle().evidence;
+        let bundle = prove_kagemusha_recursive_aggregation_evidence(
+            KAGEMUSHA_RECURSIVE_AGGREGATION_CIRCUIT_ID,
+            &vk_box,
+            evidence,
+            None,
+        )
+        .expect("real recursive aggregation semantic proof");
+
+        let mut tampered_proof = bundle.clone();
+        mutate_open_verify_envelope(&mut tampered_proof.recursive_proof.proof, |envelope| {
+            let proof_payload_start = 12;
+            envelope.proof_bytes[proof_payload_start] ^= 0x01;
+        });
+        preverify_kagemusha_recursive_aggregation_proof_bundle(&tampered_proof, &vk_box)
+            .expect("proof-body tamper keeps public metadata preverification valid");
+        assert!(
+            !verify_kagemusha_recursive_aggregation_proof_bundle(&tampered_proof, &vk_box),
+            "backend verifier must reject recursive proof body tampering"
+        );
+
+        let mut tampered_instance = bundle.clone();
+        mutate_open_verify_envelope(&mut tampered_instance.recursive_proof.proof, |envelope| {
+            let instance_trailer_byte = envelope
+                .proof_bytes
+                .last_mut()
+                .expect("recursive aggregation proof bytes");
+            *instance_trailer_byte ^= 0x01;
+        });
+        assert!(
+            preverify_kagemusha_recursive_aggregation_proof_bundle(&tampered_instance, &vk_box)
+                .is_err(),
+            "public instance tampering must reject before backend verification"
+        );
+    }
+
+    #[test]
+    fn kagemusha_recursive_aggregation_prover_rejects_aliases_and_cross_circuit_keys() {
+        let vk_box =
+            kagemusha_recursive_aggregation_proof_vk_box().expect("recursive aggregation vk");
+        let evidence = sample_recursive_aggregation_proof_bundle().evidence;
+        let err = prove_kagemusha_recursive_aggregation_evidence(
+            "halo2/ipa:kagemusha-recursive-aggregation-v1",
+            &vk_box,
+            evidence.clone(),
+            None,
+        )
+        .expect_err("recursive aggregation circuit aliases must reject");
+        assert!(err.contains("canonical circuit id"), "{err}");
+
+        let folded_vk = kagemusha_vk_box();
+        assert_ne!(hash_vk(&folded_vk), hash_vk(&vk_box));
+        let err = prove_kagemusha_recursive_aggregation_evidence(
+            KAGEMUSHA_RECURSIVE_AGGREGATION_CIRCUIT_ID,
+            &folded_vk,
+            evidence.clone(),
+            None,
+        )
+        .expect_err("wrong verifier key family must reject");
+        assert!(err.contains("canonical semantic circuit key"), "{err}");
+
+        let folded_key = derive_halo2_ipa_kagemusha_folded_proving_key_bytes(&folded_vk)
+            .expect("folded proving key archive");
+        let err = prove_kagemusha_recursive_aggregation_evidence(
+            KAGEMUSHA_RECURSIVE_AGGREGATION_CIRCUIT_ID,
+            &vk_box,
+            evidence,
+            Some(&folded_key),
+        )
+        .expect_err("cross-circuit proving key archive must reject");
+        assert!(err.contains("circuit family"), "{err}");
+    }
+
+    #[test]
+    fn kagemusha_recursive_aggregation_proof_preverify_rejects_envelope_metadata_substitution() {
+        let vk_box = recursive_aggregation_vk_box();
+        let mut bundle = sample_recursive_aggregation_proof_bundle();
+        attach_recursive_aggregation_envelope(&mut bundle, &vk_box);
+
+        let cases: [(&str, fn(&mut OpenVerifyEnvelope)); 5] = [
+            ("backend", |envelope| {
+                envelope.backend = BackendTag::Stark;
+            }),
+            ("circuit_id", |envelope| {
+                envelope.circuit_id = "halo2/ipa:kagemusha-recursive-aggregation-v1".to_owned();
+            }),
+            ("vk_hash", |envelope| {
+                envelope.vk_hash = [0xA5; 32];
+            }),
+            ("public_inputs_schema", |envelope| {
+                envelope.public_inputs = b"kagemusha-recursive-aggregation-forged-schema".to_vec();
+            }),
+            ("aux", |envelope| {
+                envelope.aux = b"forged recursive aggregation aux".to_vec();
+            }),
+        ];
+        for (case, mutate) in cases {
+            let mut forged = bundle.clone();
+            mutate_open_verify_envelope(&mut forged.recursive_proof.proof, mutate);
+            let err = preverify_kagemusha_recursive_aggregation_proof_bundle(&forged, &vk_box)
+                .expect_err("recursive aggregation metadata substitution must reject");
+            assert!(
+                !err.is_empty(),
+                "case {case} should return a concrete preverify error"
+            );
+        }
+    }
+
+    #[test]
+    fn kagemusha_recursive_aggregation_proof_preverify_rejects_public_instance_substitution() {
+        let vk_box = recursive_aggregation_vk_box();
+        let mut bundle = sample_recursive_aggregation_proof_bundle();
+        attach_recursive_aggregation_envelope(&mut bundle, &vk_box);
+
+        let mut forged = bundle.clone();
+        mutate_open_verify_envelope(&mut forged.recursive_proof.proof, |envelope| {
+            let mut public_inputs = recursive_aggregation_public_inputs(&bundle);
+            public_inputs[18][0] ^= 0x01;
+            envelope.proof_bytes = iroha_zkp_halo2::Halo2ProofEnvelope::new(
+                18,
+                16,
+                16,
+                iroha_zkp_halo2::FLAG_LOOKUPS,
+                public_inputs,
+                vec![0xCD; 64],
+            )
+            .expect("forged recursive aggregation Halo2 envelope")
+            .to_bytes();
+        });
+
+        let err = preverify_kagemusha_recursive_aggregation_proof_bundle(&forged, &vk_box)
+            .expect_err("recursive aggregation public instance substitution must reject");
+        assert!(err.contains("public instance"), "{err}");
+    }
+
+    #[test]
+    fn kagemusha_recursive_aggregation_proof_preverify_rejects_non_production_backend_labels() {
+        let vk_box = recursive_aggregation_vk_box();
+        let mut bundle = sample_recursive_aggregation_proof_bundle();
+        attach_recursive_aggregation_envelope(&mut bundle, &vk_box);
+
+        for backend in [
+            "groth16/bn254",
+            "halo2/kzg",
+            "halo2/bn254",
+            "debug-proof",
+            "mock-proof",
+            "halo2/ipa:mock-proof",
+        ] {
+            let mut forged = bundle.clone();
+            forged.recursive_proof.proof.backend = backend.to_owned();
+            forged.recursive_proof.verifier_key_id = VerifyingKeyId::new(
+                backend,
+                iroha_data_model::offline::KAGEMUSHA_RECURSIVE_AGGREGATION_PROOF_CIRCUIT_ID_V1,
+            );
+
+            let err = preverify_kagemusha_recursive_aggregation_proof_bundle(&forged, &vk_box)
+                .expect_err("non-production recursive aggregation backend must reject");
+            assert!(
+                err.contains("backend") || err.contains("Unsupported"),
+                "backend {backend:?} produced unexpected error: {err}"
+            );
+        }
+    }
+
+    #[test]
+    fn kagemusha_recursive_aggregation_proof_record_preverify_rejects_registry_mismatches() {
+        let vk_box = recursive_aggregation_vk_box();
+        let mut bundle = sample_recursive_aggregation_proof_bundle();
+        attach_recursive_aggregation_envelope(&mut bundle, &vk_box);
+        let record = recursive_aggregation_record(&vk_box);
+
+        let mut inactive = record.clone();
+        inactive.status = ConfidentialStatus::Withdrawn;
+        assert!(
+            preverify_kagemusha_recursive_aggregation_proof_bundle_with_record(&bundle, &inactive)
+                .is_err()
+        );
+
+        let mut wrong_namespace = record.clone();
+        wrong_namespace.namespace = "generic_confidential_transfer".to_owned();
+        assert!(
+            preverify_kagemusha_recursive_aggregation_proof_bundle_with_record(
+                &bundle,
+                &wrong_namespace
+            )
+            .is_err()
+        );
+
+        let mut wrong_backend = record.clone();
+        wrong_backend.backend = BackendTag::Stark;
+        assert!(
+            preverify_kagemusha_recursive_aggregation_proof_bundle_with_record(
+                &bundle,
+                &wrong_backend
+            )
+            .is_err()
+        );
+
+        let mut wrong_circuit_alias = record.clone();
+        wrong_circuit_alias.circuit_id = "halo2/ipa:kagemusha-recursive-aggregation-v1".to_owned();
+        assert!(
+            preverify_kagemusha_recursive_aggregation_proof_bundle_with_record(
+                &bundle,
+                &wrong_circuit_alias
+            )
+            .is_err()
+        );
+
+        let mut wrong_schema = record.clone();
+        wrong_schema.public_inputs_schema_hash = [0x11; 32];
+        assert!(
+            preverify_kagemusha_recursive_aggregation_proof_bundle_with_record(
+                &bundle,
+                &wrong_schema
+            )
+            .is_err()
+        );
+
+        let mut zero_cap = record.clone();
+        zero_cap.max_proof_bytes = 0;
+        assert!(
+            preverify_kagemusha_recursive_aggregation_proof_bundle_with_record(&bundle, &zero_cap)
+                .is_err()
+        );
+
+        let mut missing_key = record.clone();
+        missing_key.key = None;
+        assert!(
+            preverify_kagemusha_recursive_aggregation_proof_bundle_with_record(
+                &bundle,
+                &missing_key
+            )
+            .is_err()
+        );
+
+        let mut empty_key = record.clone();
+        empty_key.key = Some(VerifyingKeyBox::new(
+            ZK_BACKEND_HALO2_IPA.into(),
+            Vec::new(),
+        ));
+        empty_key.vk_len = 0;
+        empty_key.commitment = hash_vk(empty_key.key.as_ref().expect("empty key"));
+        assert!(
+            preverify_kagemusha_recursive_aggregation_proof_bundle_with_record(&bundle, &empty_key)
+                .is_err()
+        );
+
+        let mut wrong_len = record.clone();
+        wrong_len.vk_len += 1;
+        assert!(
+            preverify_kagemusha_recursive_aggregation_proof_bundle_with_record(&bundle, &wrong_len)
+                .is_err()
+        );
+
+        let mut wrong_commitment = record.clone();
+        wrong_commitment.commitment = [0x22; 32];
+        assert!(
+            preverify_kagemusha_recursive_aggregation_proof_bundle_with_record(
+                &bundle,
+                &wrong_commitment
+            )
+            .is_err()
+        );
+
+        let mut too_small = record;
+        too_small.max_proof_bytes = u32::try_from(bundle.recursive_proof.proof.bytes.len() - 1)
+            .expect("proof length fits u32");
+        assert!(
+            preverify_kagemusha_recursive_aggregation_proof_bundle_with_record(&bundle, &too_small)
+                .is_err()
+        );
     }
 
     #[derive(Clone)]
@@ -16270,7 +23584,7 @@ mod kagemusha_folded_real_prover_tests {
         )
         .expect_err("trusted-setup final verifier backend must reject before proving");
         assert!(
-            err.contains("requires halo2/ipa verifying key backend"),
+            err.contains("verifier key backend") && err.contains(ZK_BACKEND_HALO2_IPA),
             "unexpected backend error: {err}"
         );
 
@@ -16279,7 +23593,7 @@ mod kagemusha_folded_real_prover_tests {
         let err = derive_halo2_ipa_kagemusha_folded_proving_key_bytes(&wrong_backend_vk)
             .expect_err("developer-only final verifier backend must reject key derivation");
         assert!(
-            err.contains("requires halo2/ipa verifying key backend"),
+            err.contains("verifier key backend") && err.contains(ZK_BACKEND_HALO2_IPA),
             "unexpected key-derivation backend error: {err}"
         );
     }
@@ -16486,6 +23800,63 @@ mod kagemusha_folded_real_prover_tests {
         assert!(
             !verify_kagemusha_compact_payment_token(&alias_token, &vk_box),
             "final folded-token verification must reject non-canonical circuit-id aliases"
+        );
+    }
+
+    #[test]
+    fn kagemusha_compact_payment_token_rejects_cross_circuit_verifier_key() {
+        let vk_box = kagemusha_vk_box();
+        let recursive_vk_box = recursive_aggregation_vk_box();
+        let wrong_cid_vk = kagemusha_folded_vk_box_with_cid(OFFLINE_NOTE_RECURSIVE_CIRCUIT_ID);
+        let mut token = prove_kagemusha_compact_payment_token(
+            KAGEMUSHA_FOLDED_CIRCUIT_ID,
+            &vk_box,
+            sample_public_inputs(),
+            None,
+        )
+        .expect("real Kagemusha folded proof");
+        mutate_open_verify_envelope(&mut token.folded_proof.proof, |envelope| {
+            envelope.vk_hash = hash_vk(&recursive_vk_box);
+        });
+
+        assert!(
+            !verify_kagemusha_compact_payment_token(&token, &recursive_vk_box),
+            "direct folded-token verification must reject cross-circuit verifier keys"
+        );
+
+        let mut forged_record =
+            kagemusha_folded_vk_record(KAGEMUSHA_VERIFIER_NAMESPACE, 1).expect("folded record");
+        forged_record.key = Some(recursive_vk_box.clone());
+        forged_record.commitment = hash_vk(&recursive_vk_box);
+        forged_record.vk_len = u32::try_from(recursive_vk_box.bytes.len())
+            .expect("recursive verifier-key length fits u32");
+
+        assert!(
+            !verify_kagemusha_compact_payment_token_with_record(&token, &forged_record),
+            "record-backed folded-token verification must reject cross-circuit verifier keys"
+        );
+
+        let guard_err = ensure_kagemusha_folded_canonical_vk_box(&wrong_cid_vk)
+            .expect_err("wrong-CID folded verifier key must reject canonical guard");
+        assert!(guard_err.contains("canonical semantic circuit key"));
+
+        let mut wrong_cid_token = prove_kagemusha_compact_payment_token(
+            KAGEMUSHA_FOLDED_CIRCUIT_ID,
+            &vk_box,
+            sample_public_inputs(),
+            None,
+        )
+        .expect("real Kagemusha folded proof");
+        mutate_open_verify_envelope(&mut wrong_cid_token.folded_proof.proof, |envelope| {
+            envelope.vk_hash = hash_vk(&wrong_cid_vk);
+        });
+        assert!(
+            !verify_backend(
+                ZK_BACKEND_HALO2_IPA,
+                &wrong_cid_token.folded_proof.proof,
+                Some(&wrong_cid_vk),
+            ),
+            "backend verifier must reject a matching folded raw H2VK payload with a wrong CID1 circuit id"
         );
     }
 
@@ -17110,14 +24481,26 @@ mod kagemusha_folded_real_prover_tests {
             id: &id,
             record: &record,
         }];
+        let opening_len = 4;
         let params_fingerprint = fixed_bytes(b"kagemusha-recursive-core-params");
+        let schedule_digest =
+            kagemusha_recursive_fixed_window_table_schedule_digest(opening_len as usize)
+                .expect("canonical recursive schedule digest");
+        let manifest_digest =
+            kagemusha_recursive_fixed_window_shared_table_manifest_digest(opening_len as usize)
+                .expect("canonical recursive shared-table manifest digest");
+        let base_digest = fixed_bytes(b"kagemusha-recursive-core-bases");
         let batch_digest = fixed_bytes(b"kagemusha-recursive-core-batch");
 
         let evidence = kagemusha_verified_recursive_aggregation_evidence_from_bundle_with_records(
             &bundle,
             &records,
             1,
+            opening_len,
             params_fingerprint,
+            schedule_digest,
+            manifest_digest,
+            base_digest,
             batch_digest,
         )
         .expect("record-backed recursive aggregation evidence");
@@ -17130,7 +24513,14 @@ mod kagemusha_folded_real_prover_tests {
             evidence.verifier_witness_profile,
             KAGEMUSHA_RECURSIVE_VERIFIER_WITNESS_PROFILE_V1
         );
+        assert_eq!(evidence.verifier_opening_len, opening_len);
         assert_eq!(evidence.verifier_params_fingerprint, params_fingerprint);
+        assert_eq!(evidence.fixed_window_table_schedule_digest, schedule_digest);
+        assert_eq!(
+            evidence.fixed_window_shared_table_manifest_digest,
+            manifest_digest
+        );
+        assert_eq!(evidence.fixed_window_table_base_digest, base_digest);
         assert_eq!(evidence.verifier_witness_batch_digest, batch_digest);
         assert_eq!(evidence.aggregation_statement.initial_root, hop.root_before);
         assert_eq!(evidence.aggregation_statement.final_root, hop.root_after);
@@ -17160,7 +24550,11 @@ mod kagemusha_folded_real_prover_tests {
             kagemusha_verified_recursive_aggregation_evidence_from_record_bundle(
                 &record_bundle,
                 1,
+                opening_len,
                 params_fingerprint,
+                schedule_digest,
+                manifest_digest,
+                base_digest,
                 batch_digest,
             )
             .expect("serializable record-backed recursive aggregation evidence")
@@ -17202,6 +24596,21 @@ mod kagemusha_folded_real_prover_tests {
             preflight.aggregate_digest, hop_bound_preflight.aggregate_digest,
             "hop-bound preflight digest must not equal the detached native batch digest"
         );
+        assert_eq!(
+            preflight.fixed_window_table_schedule_digest,
+            hop_bound_preflight.fixed_window_table_schedule_digest,
+            "hop proof binding must not rewrite the deterministic table schedule"
+        );
+        assert_eq!(
+            preflight.fixed_window_shared_table_manifest_digest,
+            hop_bound_preflight.fixed_window_shared_table_manifest_digest,
+            "hop proof binding must not rewrite the deterministic shared-table manifest"
+        );
+        assert_eq!(
+            preflight.fixed_window_table_base_digest,
+            hop_bound_preflight.fixed_window_table_base_digest,
+            "hop proof binding must not rewrite the actual verifier table bases"
+        );
         let forged_hop_bound = kagemusha_pallas_ipa_batch_verifier_preflight_bound_to_hop_proofs(
             &params,
             &witnesses,
@@ -17211,6 +24620,21 @@ mod kagemusha_folded_real_prover_tests {
         assert_ne!(
             hop_bound_preflight.aggregate_digest, forged_hop_bound.aggregate_digest,
             "hop-bound preflight digest must change when the ordered hop proof hash changes"
+        );
+        assert_eq!(
+            hop_bound_preflight.fixed_window_table_schedule_digest,
+            forged_hop_bound.fixed_window_table_schedule_digest,
+            "forged hop hash must not change the deterministic table schedule"
+        );
+        assert_eq!(
+            hop_bound_preflight.fixed_window_shared_table_manifest_digest,
+            forged_hop_bound.fixed_window_shared_table_manifest_digest,
+            "forged hop hash must not change the shared-table manifest"
+        );
+        assert_eq!(
+            hop_bound_preflight.fixed_window_table_base_digest,
+            forged_hop_bound.fixed_window_table_base_digest,
+            "forged hop hash must not change the verifier table bases"
         );
 
         let evidence =
@@ -17229,9 +24653,22 @@ mod kagemusha_folded_real_prover_tests {
             evidence.verifier_witness_profile,
             preflight.verifier_witness_profile
         );
+        assert_eq!(evidence.verifier_opening_len, preflight.opening_len);
         assert_eq!(
             evidence.verifier_params_fingerprint,
             preflight.params_fingerprint
+        );
+        assert_eq!(
+            evidence.fixed_window_table_schedule_digest,
+            preflight.fixed_window_table_schedule_digest
+        );
+        assert_eq!(
+            evidence.fixed_window_shared_table_manifest_digest,
+            preflight.fixed_window_shared_table_manifest_digest
+        );
+        assert_eq!(
+            evidence.fixed_window_table_base_digest,
+            preflight.fixed_window_table_base_digest
         );
         assert_eq!(
             evidence.verifier_witness_batch_digest,
@@ -17259,6 +24696,506 @@ mod kagemusha_folded_real_prover_tests {
     }
 
     #[test]
+    fn kagemusha_verified_recursive_aggregation_evidence_from_pallas_open_envelopes_accepts_active_records()
+     {
+        let (chain_id, asset, hop, record) = sample_confidential_v2_verified_hop();
+        let bundle = KagemushaVerifiedFoldBundle {
+            chain_id,
+            asset,
+            steps: vec![hop.as_bundle_step()],
+        };
+        let id = hop.attachment.vk_ref.clone();
+        let records = [KagemushaHopVerifierRecord {
+            id: &id,
+            record: &record,
+        }];
+        let metadata = kagemusha_pallas_open_envelope_metadata_for_verified_hop(
+            &bundle.chain_id,
+            &bundle.asset,
+            0,
+            &bundle.steps[0],
+        )
+        .expect("Pallas open-envelope hop metadata");
+        assert_eq!(metadata.vk_commitment, Some(hash_vk(&hop.vk_box)));
+        assert_eq!(
+            metadata.public_inputs_schema_hash,
+            Some(kagemusha_confidential_v2_public_inputs_schema_hash())
+        );
+        assert_ne!(metadata.domain_tag, Some([0u8; 32]));
+        let envelope =
+            super::kagemusha_non_native_limb_circuit_tests::sample_pallas_open_envelope_with_metadata(
+                4,
+                "core-recursive-record-backed-pallas-open-envelope",
+                metadata,
+            );
+        let hop_proof_hash =
+            kagemusha_fold_step_proof_hash(&hop.attachment.proof).expect("hop proof hash");
+        let preflight =
+            kagemusha_pallas_ipa_batch_verifier_preflight_from_open_envelopes_bound_to_hop_proofs(
+                std::slice::from_ref(&envelope),
+                &[hop_proof_hash],
+            )
+            .expect("proof-derived open-envelope preflight binds to hop proof hash");
+
+        let evidence =
+            kagemusha_verified_recursive_aggregation_evidence_from_bundle_with_records_and_pallas_open_envelopes(
+                &bundle,
+                &records,
+                std::slice::from_ref(&envelope),
+            )
+            .expect("record-backed recursive aggregation evidence from Pallas open envelope");
+        assert_eq!(evidence.verifier_witness_count, 1);
+        assert_eq!(evidence.verifier_opening_len, preflight.opening_len);
+        assert_eq!(
+            evidence.verifier_params_fingerprint,
+            preflight.params_fingerprint
+        );
+        assert_eq!(
+            evidence.fixed_window_table_schedule_digest,
+            preflight.fixed_window_table_schedule_digest
+        );
+        assert_eq!(
+            evidence.fixed_window_shared_table_manifest_digest,
+            preflight.fixed_window_shared_table_manifest_digest
+        );
+        assert_eq!(
+            evidence.fixed_window_table_base_digest,
+            preflight.fixed_window_table_base_digest
+        );
+        assert_eq!(
+            evidence.verifier_witness_batch_digest,
+            preflight.aggregate_digest
+        );
+
+        let record_bundle = KagemushaVerifiedFoldRecordBundle {
+            bundle: bundle.clone(),
+            verifier_records: vec![KagemushaVerifiedFoldVerifierRecord {
+                id: id.clone(),
+                record: record.clone(),
+            }],
+        };
+        assert_eq!(
+            evidence,
+            kagemusha_verified_recursive_aggregation_evidence_from_record_bundle_and_pallas_open_envelopes(
+                &record_bundle,
+                &[envelope],
+            )
+            .expect("serializable record-backed recursive evidence from Pallas open envelope")
+        );
+    }
+
+    #[test]
+    fn prove_verified_kagemusha_recursive_aggregation_proof_bundle_from_pallas_batch_accepts_active_records()
+     {
+        let (chain_id, asset, hop, record) = sample_confidential_v2_verified_hop();
+        let bundle = KagemushaVerifiedFoldBundle {
+            chain_id,
+            asset,
+            steps: vec![hop.as_bundle_step()],
+        };
+        let id = hop.attachment.vk_ref.clone();
+        let records = [KagemushaHopVerifierRecord {
+            id: &id,
+            record: &record,
+        }];
+        let (params, witness) =
+            super::kagemusha_non_native_limb_circuit_tests::sample_pallas_verifier_witness(
+                4,
+                "core-recursive-proof-bundle-pallas-batch",
+            );
+        let witnesses = vec![witness];
+        let recursive_vk = recursive_aggregation_vk_box();
+        let recursive_record = recursive_aggregation_record(&recursive_vk);
+        let proof_bundle =
+            prove_verified_kagemusha_recursive_aggregation_proof_bundle_from_bundle_with_records_and_pallas_batch(
+                &bundle,
+                &records,
+                &params,
+                &witnesses,
+                KAGEMUSHA_RECURSIVE_AGGREGATION_CIRCUIT_ID,
+                &recursive_vk,
+                None,
+            )
+            .expect("record-backed recursive aggregation proof bundle from Pallas batch");
+        let evidence =
+            kagemusha_verified_recursive_aggregation_evidence_from_bundle_with_records_and_pallas_batch(
+                &bundle,
+                &records,
+                &params,
+                &witnesses,
+            )
+            .expect("record-backed recursive aggregation evidence from Pallas batch");
+        assert_eq!(proof_bundle.evidence, evidence);
+        proof_bundle
+            .validate_evidence_binding()
+            .expect("recursive proof bundle binds derived evidence");
+        preverify_kagemusha_recursive_aggregation_proof_bundle(&proof_bundle, &recursive_vk)
+            .expect("recursive proof bundle preverification");
+        assert!(verify_kagemusha_recursive_aggregation_proof_bundle(
+            &proof_bundle,
+            &recursive_vk
+        ));
+        assert!(
+            verify_kagemusha_recursive_aggregation_proof_bundle_with_record(
+                &proof_bundle,
+                &recursive_record
+            )
+        );
+
+        let record_bundle = KagemushaVerifiedFoldRecordBundle {
+            bundle: bundle.clone(),
+            verifier_records: vec![KagemushaVerifiedFoldVerifierRecord {
+                id: id.clone(),
+                record: record.clone(),
+            }],
+        };
+        let record_proof_bundle =
+            prove_verified_kagemusha_recursive_aggregation_proof_bundle_from_record_bundle_and_pallas_batch(
+                &record_bundle,
+                &params,
+                &witnesses,
+                KAGEMUSHA_RECURSIVE_AGGREGATION_CIRCUIT_ID,
+                &recursive_vk,
+                None,
+            )
+            .expect("serializable record-backed recursive proof bundle from Pallas batch");
+        assert_eq!(record_proof_bundle.evidence, proof_bundle.evidence);
+        assert_eq!(
+            record_proof_bundle.recursive_proof.public_inputs,
+            proof_bundle.recursive_proof.public_inputs
+        );
+        assert!(verify_kagemusha_recursive_aggregation_proof_bundle(
+            &record_proof_bundle,
+            &recursive_vk
+        ));
+    }
+
+    #[test]
+    fn prove_verified_kagemusha_recursive_aggregation_proof_bundle_from_pallas_batch_rejects_adversarial_inputs()
+     {
+        let (chain_id, asset, mut hop, record) = sample_confidential_v2_verified_hop();
+        let bundle = KagemushaVerifiedFoldBundle {
+            chain_id: chain_id.clone(),
+            asset: asset.clone(),
+            steps: vec![hop.as_bundle_step()],
+        };
+        let id = hop.attachment.vk_ref.clone();
+        let records = [KagemushaHopVerifierRecord {
+            id: &id,
+            record: &record,
+        }];
+        let (params, witness) =
+            super::kagemusha_non_native_limb_circuit_tests::sample_pallas_verifier_witness(
+                4,
+                "core-recursive-proof-bundle-pallas-reject",
+            );
+        let recursive_vk = recursive_aggregation_vk_box();
+        let folded_vk = kagemusha_vk_box();
+
+        let err =
+            prove_verified_kagemusha_recursive_aggregation_proof_bundle_from_bundle_with_records_and_pallas_batch(
+                &bundle,
+                &records,
+                &params,
+                std::slice::from_ref(&witness),
+                KAGEMUSHA_RECURSIVE_AGGREGATION_CIRCUIT_ID,
+                &folded_vk,
+                None,
+            )
+            .expect_err("folded verifier key must not prove recursive aggregation bundle");
+        assert!(
+            err.contains("canonical semantic circuit key"),
+            "unexpected folded-vk error: {err}"
+        );
+
+        let mut spliced = witness.clone();
+        spliced.accumulation.final_q = spliced.accumulation.initial_q;
+        let err =
+            prove_verified_kagemusha_recursive_aggregation_proof_bundle_from_bundle_with_records_and_pallas_batch(
+                &bundle,
+                &records,
+                &params,
+                &[spliced],
+                KAGEMUSHA_RECURSIVE_AGGREGATION_CIRCUIT_ID,
+                &recursive_vk,
+                None,
+            )
+            .expect_err("tampered Pallas witness must reject before recursive proof generation");
+        assert!(
+            err.contains("batch witness 0 failed preflight"),
+            "unexpected Pallas preflight error: {err}"
+        );
+        assert!(
+            err.contains("accumulator final Q mismatch"),
+            "unexpected Pallas accumulator error: {err}"
+        );
+
+        hop.attachment.proof.bytes = vec![0xA7];
+        let tampered_bundle = KagemushaVerifiedFoldBundle {
+            chain_id,
+            asset,
+            steps: vec![hop.as_bundle_step()],
+        };
+        let err =
+            prove_verified_kagemusha_recursive_aggregation_proof_bundle_from_bundle_with_records_and_pallas_batch(
+                &tampered_bundle,
+                &records,
+                &params,
+                &[witness],
+                KAGEMUSHA_RECURSIVE_AGGREGATION_CIRCUIT_ID,
+                &recursive_vk,
+                None,
+            )
+            .expect_err("tampered hop proof must reject before recursive proof generation");
+        assert!(
+            err.contains("not a valid OpenVerifyEnvelope") || err.contains("verification failed"),
+            "unexpected tampered-hop error: {err}"
+        );
+    }
+
+    #[test]
+    fn prove_verified_kagemusha_recursive_aggregation_proof_bundle_from_pallas_open_envelopes_accepts_active_records()
+     {
+        let (chain_id, asset, hop, record) = sample_confidential_v2_verified_hop();
+        let bundle = KagemushaVerifiedFoldBundle {
+            chain_id,
+            asset,
+            steps: vec![hop.as_bundle_step()],
+        };
+        let id = hop.attachment.vk_ref.clone();
+        let records = [KagemushaHopVerifierRecord {
+            id: &id,
+            record: &record,
+        }];
+        let metadata = kagemusha_pallas_open_envelope_metadata_for_verified_hop(
+            &bundle.chain_id,
+            &bundle.asset,
+            0,
+            &bundle.steps[0],
+        )
+        .expect("Pallas open-envelope hop metadata");
+        let envelope =
+            super::kagemusha_non_native_limb_circuit_tests::sample_pallas_open_envelope_with_metadata(
+                4,
+                "core-recursive-proof-bundle-pallas-open-envelope",
+                metadata,
+            );
+        let recursive_vk = recursive_aggregation_vk_box();
+        let proof_bundle =
+            prove_verified_kagemusha_recursive_aggregation_proof_bundle_from_bundle_with_records_and_pallas_open_envelopes(
+                &bundle,
+                &records,
+                std::slice::from_ref(&envelope),
+                KAGEMUSHA_RECURSIVE_AGGREGATION_CIRCUIT_ID,
+                &recursive_vk,
+                None,
+            )
+            .expect("record-backed recursive aggregation proof bundle from Pallas open envelope");
+        let evidence =
+            kagemusha_verified_recursive_aggregation_evidence_from_bundle_with_records_and_pallas_open_envelopes(
+                &bundle,
+                &records,
+                std::slice::from_ref(&envelope),
+            )
+            .expect("record-backed recursive aggregation evidence from Pallas open envelope");
+        assert_eq!(proof_bundle.evidence, evidence);
+        assert!(verify_kagemusha_recursive_aggregation_proof_bundle(
+            &proof_bundle,
+            &recursive_vk
+        ));
+
+        let record_bundle = KagemushaVerifiedFoldRecordBundle {
+            bundle: bundle.clone(),
+            verifier_records: vec![KagemushaVerifiedFoldVerifierRecord {
+                id: id.clone(),
+                record: record.clone(),
+            }],
+        };
+        let record_proof_bundle =
+            prove_verified_kagemusha_recursive_aggregation_proof_bundle_from_record_bundle_and_pallas_open_envelopes(
+                &record_bundle,
+                std::slice::from_ref(&envelope),
+                KAGEMUSHA_RECURSIVE_AGGREGATION_CIRCUIT_ID,
+                &recursive_vk,
+                None,
+            )
+            .expect("serializable record-backed recursive proof bundle from Pallas open envelope");
+        assert_eq!(record_proof_bundle.evidence, proof_bundle.evidence);
+        assert_eq!(
+            record_proof_bundle.recursive_proof.public_inputs,
+            proof_bundle.recursive_proof.public_inputs
+        );
+        assert!(verify_kagemusha_recursive_aggregation_proof_bundle(
+            &record_proof_bundle,
+            &recursive_vk
+        ));
+
+        let envelope_archive =
+            norito::to_bytes(&vec![envelope]).expect("encode Pallas open-envelope archive");
+        let archive_proof_bundle =
+            prove_verified_kagemusha_recursive_aggregation_proof_bundle_from_record_bundle_and_pallas_open_envelope_archive(
+                &record_bundle,
+                &envelope_archive,
+                KAGEMUSHA_RECURSIVE_AGGREGATION_CIRCUIT_ID,
+                &recursive_vk,
+                None,
+            )
+            .expect("archive-backed recursive proof bundle from Pallas open envelope");
+        assert_eq!(archive_proof_bundle.evidence, proof_bundle.evidence);
+        assert_eq!(
+            archive_proof_bundle.recursive_proof.public_inputs,
+            proof_bundle.recursive_proof.public_inputs
+        );
+        assert!(verify_kagemusha_recursive_aggregation_proof_bundle(
+            &archive_proof_bundle,
+            &recursive_vk
+        ));
+    }
+
+    #[test]
+    fn prove_verified_kagemusha_recursive_aggregation_proof_bundle_from_pallas_open_envelopes_rejects_metadata_substitution()
+     {
+        let (chain_id, asset, hop, record) = sample_confidential_v2_verified_hop();
+        let bundle = KagemushaVerifiedFoldBundle {
+            chain_id,
+            asset,
+            steps: vec![hop.as_bundle_step()],
+        };
+        let id = hop.attachment.vk_ref.clone();
+        let records = [KagemushaHopVerifierRecord {
+            id: &id,
+            record: &record,
+        }];
+        let metadata = kagemusha_pallas_open_envelope_metadata_for_verified_hop(
+            &bundle.chain_id,
+            &bundle.asset,
+            0,
+            &bundle.steps[0],
+        )
+        .expect("Pallas open-envelope hop metadata");
+        let mut wrong_schema =
+            super::kagemusha_non_native_limb_circuit_tests::sample_pallas_open_envelope_with_metadata(
+                4,
+                "core-recursive-proof-bundle-pallas-open-envelope-wrong-schema",
+                metadata,
+            );
+        wrong_schema.public_inputs_schema_hash = Some([0x11; 32]);
+        let recursive_vk = recursive_aggregation_vk_box();
+        let err =
+            prove_verified_kagemusha_recursive_aggregation_proof_bundle_from_bundle_with_records_and_pallas_open_envelopes(
+                &bundle,
+                &records,
+                &[wrong_schema],
+                KAGEMUSHA_RECURSIVE_AGGREGATION_CIRCUIT_ID,
+                &recursive_vk,
+                None,
+            )
+            .expect_err("Pallas open envelope schema metadata substitution must reject");
+        assert!(
+            err.contains("public-input schema metadata mismatch"),
+            "unexpected schema metadata error: {err}"
+        );
+
+        let record_bundle = KagemushaVerifiedFoldRecordBundle {
+            bundle,
+            verifier_records: vec![KagemushaVerifiedFoldVerifierRecord {
+                id,
+                record: record.clone(),
+            }],
+        };
+        let err =
+            prove_verified_kagemusha_recursive_aggregation_proof_bundle_from_record_bundle_and_pallas_open_envelope_archive(
+                &record_bundle,
+                b"not a norito archive",
+                KAGEMUSHA_RECURSIVE_AGGREGATION_CIRCUIT_ID,
+                &recursive_vk,
+                None,
+            )
+            .expect_err("malformed Pallas open-envelope archive must reject");
+        assert!(
+            err.contains("failed to decode Kagemusha Pallas open-envelope archive"),
+            "unexpected malformed archive error: {err}"
+        );
+    }
+
+    #[test]
+    fn kagemusha_verified_recursive_aggregation_evidence_from_pallas_open_envelopes_rejects_metadata_substitution()
+     {
+        let (chain_id, asset, hop, record) = sample_confidential_v2_verified_hop();
+        let bundle = KagemushaVerifiedFoldBundle {
+            chain_id,
+            asset,
+            steps: vec![hop.as_bundle_step()],
+        };
+        let id = hop.attachment.vk_ref.clone();
+        let records = [KagemushaHopVerifierRecord {
+            id: &id,
+            record: &record,
+        }];
+        let metadata = kagemusha_pallas_open_envelope_metadata_for_verified_hop(
+            &bundle.chain_id,
+            &bundle.asset,
+            0,
+            &bundle.steps[0],
+        )
+        .expect("Pallas open-envelope hop metadata");
+
+        let unbound = super::kagemusha_non_native_limb_circuit_tests::sample_pallas_open_envelope(
+            4,
+            "core-recursive-record-backed-pallas-open-envelope-unbound",
+        );
+        let err =
+            kagemusha_verified_recursive_aggregation_evidence_from_bundle_with_records_and_pallas_open_envelopes(
+                &bundle,
+                &records,
+                &[unbound],
+            )
+            .expect_err("unbound Pallas open envelope metadata must reject");
+        assert!(
+            err.contains("verifier-key commitment metadata mismatch"),
+            "unexpected unbound metadata error: {err}"
+        );
+
+        let mut wrong_schema =
+            super::kagemusha_non_native_limb_circuit_tests::sample_pallas_open_envelope_with_metadata(
+                4,
+                "core-recursive-record-backed-pallas-open-envelope-wrong-schema",
+                metadata,
+            );
+        wrong_schema.public_inputs_schema_hash = Some([0x11; 32]);
+        let err =
+            kagemusha_verified_recursive_aggregation_evidence_from_bundle_with_records_and_pallas_open_envelopes(
+                &bundle,
+                &records,
+                &[wrong_schema],
+            )
+            .expect_err("Pallas open envelope schema metadata substitution must reject");
+        assert!(
+            err.contains("public-input schema metadata mismatch"),
+            "unexpected schema metadata error: {err}"
+        );
+
+        let mut wrong_domain =
+            super::kagemusha_non_native_limb_circuit_tests::sample_pallas_open_envelope_with_metadata(
+                4,
+                "core-recursive-record-backed-pallas-open-envelope-wrong-domain",
+                metadata,
+            );
+        wrong_domain.domain_tag = Some([0x22; 32]);
+        let err =
+            kagemusha_verified_recursive_aggregation_evidence_from_bundle_with_records_and_pallas_open_envelopes(
+                &bundle,
+                &records,
+                &[wrong_domain],
+            )
+            .expect_err("Pallas open envelope hop-domain metadata substitution must reject");
+        assert!(
+            err.contains("hop domain metadata mismatch"),
+            "unexpected hop-domain metadata error: {err}"
+        );
+    }
+
+    #[test]
     fn kagemusha_verified_recursive_aggregation_evidence_rejects_bad_batch_metadata_before_decode()
     {
         let (chain_id, asset, mut hop, record) = sample_confidential_v2_verified_hop();
@@ -17273,12 +25210,24 @@ mod kagemusha_folded_real_prover_tests {
             id: &id,
             record: &record,
         }];
+        let opening_len = 4;
+        let schedule_digest =
+            kagemusha_recursive_fixed_window_table_schedule_digest(opening_len as usize)
+                .expect("canonical recursive schedule digest");
+        let manifest_digest =
+            kagemusha_recursive_fixed_window_shared_table_manifest_digest(opening_len as usize)
+                .expect("canonical recursive shared-table manifest digest");
+        let base_digest = fixed_bytes(b"kagemusha-recursive-core-bases");
 
         let err = kagemusha_verified_recursive_aggregation_evidence_from_bundle_with_records(
             &bundle,
             &records,
             2,
+            opening_len,
             fixed_bytes(b"kagemusha-recursive-core-params"),
+            schedule_digest,
+            manifest_digest,
+            base_digest,
             fixed_bytes(b"kagemusha-recursive-core-batch"),
         )
         .expect_err("recursive evidence witness-count mismatch must reject before proof decode");
@@ -17295,7 +25244,11 @@ mod kagemusha_folded_real_prover_tests {
             &bundle,
             &records,
             1,
+            opening_len,
             [0u8; 32],
+            schedule_digest,
+            manifest_digest,
+            base_digest,
             fixed_bytes(b"kagemusha-recursive-core-batch"),
         )
         .expect_err("zero verifier params fingerprint must reject before proof decode");
@@ -17312,7 +25265,141 @@ mod kagemusha_folded_real_prover_tests {
             &bundle,
             &records,
             1,
+            3,
             fixed_bytes(b"kagemusha-recursive-core-params"),
+            schedule_digest,
+            manifest_digest,
+            base_digest,
+            fixed_bytes(b"kagemusha-recursive-core-batch"),
+        )
+        .expect_err("non-power-of-two verifier opening length must reject before proof decode");
+        assert!(
+            err.contains("power of two"),
+            "unexpected non-power opening-length error: {err}"
+        );
+        assert!(
+            !err.contains("OpenVerifyEnvelope"),
+            "opening-length error should come before proof decoding: {err}"
+        );
+
+        let err = kagemusha_verified_recursive_aggregation_evidence_from_bundle_with_records(
+            &bundle,
+            &records,
+            1,
+            opening_len,
+            fixed_bytes(b"kagemusha-recursive-core-params"),
+            [0u8; 32],
+            manifest_digest,
+            base_digest,
+            fixed_bytes(b"kagemusha-recursive-core-batch"),
+        )
+        .expect_err("zero fixed-window table schedule digest must reject before proof decode");
+        assert!(
+            err.contains("schedule digest"),
+            "unexpected zero-schedule error: {err}"
+        );
+        assert!(
+            !err.contains("OpenVerifyEnvelope"),
+            "zero-schedule error should come before proof decoding: {err}"
+        );
+
+        let err = kagemusha_verified_recursive_aggregation_evidence_from_bundle_with_records(
+            &bundle,
+            &records,
+            1,
+            opening_len,
+            fixed_bytes(b"kagemusha-recursive-core-params"),
+            fixed_bytes(b"kagemusha-recursive-core-forged-schedule"),
+            manifest_digest,
+            base_digest,
+            fixed_bytes(b"kagemusha-recursive-core-batch"),
+        )
+        .expect_err("forged fixed-window table schedule digest must reject before proof decode");
+        assert!(
+            err.contains("schedule digest"),
+            "unexpected forged-schedule error: {err}"
+        );
+        assert!(
+            !err.contains("OpenVerifyEnvelope"),
+            "forged-schedule error should come before proof decoding: {err}"
+        );
+
+        let err = kagemusha_verified_recursive_aggregation_evidence_from_bundle_with_records(
+            &bundle,
+            &records,
+            1,
+            opening_len,
+            fixed_bytes(b"kagemusha-recursive-core-params"),
+            schedule_digest,
+            [0u8; 32],
+            base_digest,
+            fixed_bytes(b"kagemusha-recursive-core-batch"),
+        )
+        .expect_err(
+            "zero fixed-window shared-table manifest digest must reject before proof decode",
+        );
+        assert!(
+            err.contains("shared-table manifest digest"),
+            "unexpected zero-manifest error: {err}"
+        );
+        assert!(
+            !err.contains("OpenVerifyEnvelope"),
+            "zero-manifest error should come before proof decoding: {err}"
+        );
+
+        let err = kagemusha_verified_recursive_aggregation_evidence_from_bundle_with_records(
+            &bundle,
+            &records,
+            1,
+            opening_len,
+            fixed_bytes(b"kagemusha-recursive-core-params"),
+            schedule_digest,
+            fixed_bytes(b"kagemusha-recursive-core-forged-manifest"),
+            base_digest,
+            fixed_bytes(b"kagemusha-recursive-core-batch"),
+        )
+        .expect_err(
+            "forged fixed-window shared-table manifest digest must reject before proof decode",
+        );
+        assert!(
+            err.contains("shared-table manifest digest"),
+            "unexpected forged-manifest error: {err}"
+        );
+        assert!(
+            !err.contains("OpenVerifyEnvelope"),
+            "forged-manifest error should come before proof decoding: {err}"
+        );
+
+        let err = kagemusha_verified_recursive_aggregation_evidence_from_bundle_with_records(
+            &bundle,
+            &records,
+            1,
+            opening_len,
+            fixed_bytes(b"kagemusha-recursive-core-params"),
+            schedule_digest,
+            manifest_digest,
+            [0u8; 32],
+            fixed_bytes(b"kagemusha-recursive-core-batch"),
+        )
+        .expect_err("zero fixed-window table base digest must reject before proof decode");
+        assert!(
+            err.contains("table base digest"),
+            "unexpected zero-base error: {err}"
+        );
+        assert!(
+            !err.contains("OpenVerifyEnvelope"),
+            "zero-base error should come before proof decoding: {err}"
+        );
+
+        let err = kagemusha_verified_recursive_aggregation_evidence_from_bundle_with_records(
+            &bundle,
+            &records,
+            1,
+            opening_len,
+            fixed_bytes(b"kagemusha-recursive-core-params"),
+            schedule_digest,
+            manifest_digest,
+            base_digest,
             [0u8; 32],
         )
         .expect_err("zero verifier batch digest must reject before proof decode");
@@ -17427,12 +25514,24 @@ mod kagemusha_folded_real_prover_tests {
             asset: asset.clone(),
             steps: vec![hop.as_bundle_step()],
         };
+        let opening_len = 4;
+        let schedule_digest =
+            kagemusha_recursive_fixed_window_table_schedule_digest(opening_len as usize)
+                .expect("canonical recursive schedule digest");
+        let manifest_digest =
+            kagemusha_recursive_fixed_window_shared_table_manifest_digest(opening_len as usize)
+                .expect("canonical recursive shared-table manifest digest");
+        let base_digest = fixed_bytes(b"kagemusha-recursive-core-bases");
         let missing: [KagemushaHopVerifierRecord<'_>; 0] = [];
         let err = kagemusha_verified_recursive_aggregation_evidence_from_bundle_with_records(
             &bundle,
             &missing,
             1,
+            opening_len,
             fixed_bytes(b"kagemusha-recursive-core-params"),
+            schedule_digest,
+            manifest_digest,
+            base_digest,
             fixed_bytes(b"kagemusha-recursive-core-batch"),
         )
         .expect_err("missing verifier record must reject recursive evidence");
@@ -17458,7 +25557,11 @@ mod kagemusha_folded_real_prover_tests {
             &undecodable_bundle,
             &records,
             1,
+            opening_len,
             fixed_bytes(b"kagemusha-recursive-core-params"),
+            schedule_digest,
+            manifest_digest,
+            base_digest,
             fixed_bytes(b"kagemusha-recursive-core-batch"),
         )
         .expect_err("extraneous verifier record must reject recursive evidence");
@@ -17485,7 +25588,11 @@ mod kagemusha_folded_real_prover_tests {
             &undecodable_bundle,
             &records,
             1,
+            opening_len,
             fixed_bytes(b"kagemusha-recursive-core-params"),
+            schedule_digest,
+            manifest_digest,
+            base_digest,
             fixed_bytes(b"kagemusha-recursive-core-batch"),
         )
         .expect_err("duplicated verifier record must reject recursive evidence");
@@ -17508,7 +25615,11 @@ mod kagemusha_folded_real_prover_tests {
             &undecodable_bundle,
             &records,
             1,
+            opening_len,
             fixed_bytes(b"kagemusha-recursive-core-params"),
+            schedule_digest,
+            manifest_digest,
+            base_digest,
             fixed_bytes(b"kagemusha-recursive-core-batch"),
         )
         .expect_err("inactive verifier record must reject recursive evidence");
@@ -17531,7 +25642,11 @@ mod kagemusha_folded_real_prover_tests {
             &undecodable_bundle,
             &records,
             1,
+            opening_len,
             fixed_bytes(b"kagemusha-recursive-core-params"),
+            schedule_digest,
+            manifest_digest,
+            base_digest,
             fixed_bytes(b"kagemusha-recursive-core-batch"),
         )
         .expect_err("wrong verifier namespace must reject recursive evidence");
@@ -17559,7 +25674,11 @@ mod kagemusha_folded_real_prover_tests {
             &tampered_bundle,
             &records,
             1,
+            opening_len,
             fixed_bytes(b"kagemusha-recursive-core-params"),
+            schedule_digest,
+            manifest_digest,
+            base_digest,
             fixed_bytes(b"kagemusha-recursive-core-batch"),
         )
         .expect_err("tampered hop proof must reject recursive evidence");
@@ -17598,7 +25717,8 @@ mod kagemusha_folded_real_prover_tests {
             kagemusha_verified_folded_public_inputs_from_bundle_with_records(&bundle, &records)
                 .expect_err("generic active verifier records must fail");
         assert!(
-            err.contains("confidential-transfer-v2"),
+            err.contains("confidential-transfer-v2")
+                || err.contains("canonical semantic circuit key"),
             "unexpected error: {err}"
         );
     }
@@ -17747,6 +25867,45 @@ mod kagemusha_folded_real_prover_tests {
             kagemusha_verified_folded_public_inputs_from_bundle_with_records(&bundle, &records)
                 .expect_err("commitment mismatch must fail");
         assert!(err.contains("commitment"), "unexpected error: {err}");
+
+        let mut noncanonical_hop = hop.clone();
+        let last = noncanonical_hop
+            .vk_box
+            .bytes
+            .last_mut()
+            .expect("hop verifier key bytes");
+        *last ^= 0x01;
+        let noncanonical_commitment = hash_vk(&noncanonical_hop.vk_box);
+        noncanonical_hop.attachment.vk_commitment = Some(noncanonical_commitment);
+        mutate_open_verify_envelope(&mut noncanonical_hop.attachment.proof, |envelope| {
+            envelope.vk_hash = noncanonical_commitment;
+        });
+        let mut noncanonical_bundle = bundle.clone();
+        noncanonical_bundle.steps[0] = noncanonical_hop.as_bundle_step();
+        let mut noncanonical_record = valid.clone();
+        noncanonical_record.commitment = noncanonical_commitment;
+        noncanonical_record.vk_len = u32::try_from(noncanonical_hop.vk_box.bytes.len())
+            .expect("hop verifier key length fits u32");
+        noncanonical_record.key = Some(noncanonical_hop.vk_box.clone());
+        let records = [KagemushaHopVerifierRecord {
+            id: &id,
+            record: &noncanonical_record,
+        }];
+        let err = kagemusha_verified_folded_public_inputs_from_bundle(&noncanonical_bundle)
+            .expect_err("inline noncanonical hop verifier key must fail");
+        assert!(
+            err.contains("canonical semantic circuit key"),
+            "unexpected noncanonical inline-key error: {err}"
+        );
+        let err = kagemusha_verified_folded_public_inputs_from_bundle_with_records(
+            &noncanonical_bundle,
+            &records,
+        )
+        .expect_err("record-backed noncanonical hop verifier key must fail");
+        assert!(
+            err.contains("canonical semantic circuit key"),
+            "unexpected noncanonical record-key error: {err}"
+        );
 
         let mut wrong_len = valid.clone();
         wrong_len.vk_len = wrong_len.vk_len.saturating_sub(1);
@@ -18343,6 +26502,22 @@ mod zkparse {
             }
         }
         ipa_k.map(pasta_params_new)
+    }
+
+    /// Parse an optional circuit identifier from a verifier-key container.
+    pub fn circuit_id_any(vk_bytes: &[u8]) -> Result<Option<String>, ()> {
+        let mut cursor = envelope_cursor(vk_bytes).ok_or(())?;
+        let mut circuit_id = None;
+        while let Some((tag, payload)) = read_tlv(&mut cursor) {
+            if &tag == b"CID1" {
+                let value = std::str::from_utf8(payload).map_err(|_| ())?.trim();
+                if value.is_empty() {
+                    return Err(());
+                }
+                circuit_id = Some(value.to_owned());
+            }
+        }
+        Ok(circuit_id)
     }
 
     /// Parse proof payload and optional `I10P` instances from a ZK1 envelope.
@@ -19695,6 +27870,915 @@ mod pasta_tiny {
         }
     }
 
+    /// Semantic circuit for proof-carrying Kagemusha recursive aggregation evidence.
+    ///
+    /// This is the transparent proof layer around reserved recursive aggregation
+    /// evidence. It binds all public instance columns, constrains the opening
+    /// width to the production `2..=128` power-of-two corridor, binds the
+    /// fixed-window schedule and shared-table manifest digests to that selected
+    /// width, constrains `hop_count` to `1..=64`, enforces
+    /// `verifier_witness_count == hop_count`, and rejects all-zero digest or
+    /// verifier-preflight commitment groups. It does not yet verify each
+    /// folded private-hop proof in-circuit, so
+    /// compact-token aggregation mode `2` remains reserved.
+    #[derive(Clone)]
+    pub struct KagemushaRecursiveAggregationSemantic {
+        /// Public instance values constrained to equal the proof envelope.
+        pub public_values: [Scalar; super::KAGEMUSHA_RECURSIVE_AGGREGATION_PROOF_INSTANCE_COLUMNS],
+        /// Private one-hot selector for the accepted verifier opening length.
+        pub opening_len_selectors:
+            [Scalar; super::KAGEMUSHA_RECURSIVE_AGGREGATION_OPENING_LEN_CHOICE_COUNT],
+        /// Private boolean bits for `hop_count - 1`.
+        pub hop_count_minus_one_bits:
+            [Scalar; super::KAGEMUSHA_RECURSIVE_AGGREGATION_HOP_COUNT_BITS],
+        /// Private inverses proving recursive public hash/digest groups are non-zero.
+        pub non_zero_public_field_inverses:
+            [Scalar; super::KAGEMUSHA_RECURSIVE_AGGREGATION_NON_ZERO_PUBLIC_FIELD_GROUP_COUNT],
+    }
+
+    impl Default for KagemushaRecursiveAggregationSemantic {
+        fn default() -> Self {
+            Self {
+                public_values: [Scalar::from(0);
+                    super::KAGEMUSHA_RECURSIVE_AGGREGATION_PROOF_INSTANCE_COLUMNS],
+                opening_len_selectors: [Scalar::from(0);
+                    super::KAGEMUSHA_RECURSIVE_AGGREGATION_OPENING_LEN_CHOICE_COUNT],
+                hop_count_minus_one_bits: [Scalar::from(0);
+                    super::KAGEMUSHA_RECURSIVE_AGGREGATION_HOP_COUNT_BITS],
+                non_zero_public_field_inverses: [Scalar::from(0);
+                    super::KAGEMUSHA_RECURSIVE_AGGREGATION_NON_ZERO_PUBLIC_FIELD_GROUP_COUNT],
+            }
+        }
+    }
+
+    impl Circuit<Scalar> for KagemushaRecursiveAggregationSemantic {
+        type Config = (
+            [halo2_proofs::plonk::Column<halo2_proofs::plonk::Advice>;
+                super::KAGEMUSHA_RECURSIVE_AGGREGATION_PROOF_INSTANCE_COLUMNS],
+            [halo2_proofs::plonk::Column<halo2_proofs::plonk::Advice>;
+                super::KAGEMUSHA_RECURSIVE_AGGREGATION_OPENING_LEN_CHOICE_COUNT],
+            [halo2_proofs::plonk::Column<halo2_proofs::plonk::Advice>;
+                super::KAGEMUSHA_RECURSIVE_AGGREGATION_HOP_COUNT_BITS],
+            [halo2_proofs::plonk::Column<halo2_proofs::plonk::Advice>;
+                super::KAGEMUSHA_RECURSIVE_AGGREGATION_NON_ZERO_PUBLIC_FIELD_GROUP_COUNT],
+            [halo2_proofs::plonk::Column<halo2_proofs::plonk::Instance>;
+                super::KAGEMUSHA_RECURSIVE_AGGREGATION_PROOF_INSTANCE_COLUMNS],
+            Selector,
+        );
+        type FloorPlanner = SimpleFloorPlanner;
+
+        type Params = ();
+        fn without_witnesses(&self) -> Self {
+            Self::default()
+        }
+        fn configure(meta: &mut ConstraintSystem<Scalar>) -> Self::Config {
+            meta.set_minimum_degree(3);
+            let public_adv = std::array::from_fn(|_| meta.advice_column());
+            let opening_selector_adv = std::array::from_fn(|_| meta.advice_column());
+            let hop_bit_adv = std::array::from_fn(|_| meta.advice_column());
+            let public_field_inverse_adv = std::array::from_fn(|_| meta.advice_column());
+            let inst = std::array::from_fn(|_| meta.instance_column());
+            let s = meta.selector();
+            let expected_schedule_limb_constants: [[Scalar; 4];
+                super::KAGEMUSHA_RECURSIVE_AGGREGATION_OPENING_LEN_CHOICE_COUNT] =
+                std::array::from_fn(|choice_index| {
+                    let opening_len = usize::try_from(
+                        super::KAGEMUSHA_RECURSIVE_AGGREGATION_OPENING_LEN_CHOICES[choice_index],
+                    )
+                    .expect("recursive opening length fits usize");
+                    let digest =
+                        super::kagemusha_recursive_fixed_window_table_schedule_digest(opening_len)
+                            .expect("canonical recursive fixed-window schedule digest");
+                    super::bytes_to_u64_limbs_le(&digest).map(Scalar::from)
+                });
+            let expected_manifest_limb_constants: [[Scalar; 4];
+                super::KAGEMUSHA_RECURSIVE_AGGREGATION_OPENING_LEN_CHOICE_COUNT] =
+                std::array::from_fn(|choice_index| {
+                    let opening_len = usize::try_from(
+                        super::KAGEMUSHA_RECURSIVE_AGGREGATION_OPENING_LEN_CHOICES[choice_index],
+                    )
+                    .expect("recursive opening length fits usize");
+                    let digest =
+                        super::kagemusha_recursive_fixed_window_shared_table_manifest_digest(
+                            opening_len,
+                        )
+                        .expect("canonical recursive fixed-window shared-table manifest digest");
+                    super::bytes_to_u64_limbs_le(&digest).map(Scalar::from)
+                });
+            meta.create_gate("kagemusha_recursive_aggregation_semantic", |meta| {
+                let s = meta.query_selector(s);
+                let mut public = Vec::with_capacity(
+                    super::KAGEMUSHA_RECURSIVE_AGGREGATION_PROOF_INSTANCE_COLUMNS,
+                );
+                for column in &public_adv {
+                    public.push(meta.query_advice(*column, Rotation::cur()));
+                }
+                let mut opening_selectors = Vec::with_capacity(
+                    super::KAGEMUSHA_RECURSIVE_AGGREGATION_OPENING_LEN_CHOICE_COUNT,
+                );
+                for column in &opening_selector_adv {
+                    opening_selectors.push(meta.query_advice(*column, Rotation::cur()));
+                }
+                let mut hop_bits =
+                    Vec::with_capacity(super::KAGEMUSHA_RECURSIVE_AGGREGATION_HOP_COUNT_BITS);
+                for column in &hop_bit_adv {
+                    hop_bits.push(meta.query_advice(*column, Rotation::cur()));
+                }
+                let mut public_field_inverses = Vec::with_capacity(
+                    super::KAGEMUSHA_RECURSIVE_AGGREGATION_NON_ZERO_PUBLIC_FIELD_GROUP_COUNT,
+                );
+                for column in &public_field_inverse_adv {
+                    public_field_inverses.push(meta.query_advice(*column, Rotation::cur()));
+                }
+
+                let mut cons = Vec::with_capacity(
+                    super::KAGEMUSHA_RECURSIVE_AGGREGATION_PROOF_INSTANCE_COLUMNS
+                        + super::KAGEMUSHA_RECURSIVE_AGGREGATION_OPENING_LEN_CHOICE_COUNT
+                        + super::KAGEMUSHA_RECURSIVE_AGGREGATION_HOP_COUNT_BITS
+                        + super::KAGEMUSHA_RECURSIVE_AGGREGATION_NON_ZERO_PUBLIC_FIELD_GROUP_COUNT
+                        + 12,
+                );
+                for i in 0..super::KAGEMUSHA_RECURSIVE_AGGREGATION_PROOF_INSTANCE_COLUMNS {
+                    let instance = meta.query_instance(inst[i], Rotation::cur());
+                    cons.push(s.clone() * (public[i].clone() - instance));
+                }
+
+                let mut opening_selector_sum = Expression::Constant(Scalar::from(0));
+                let mut opening_len_sum = Expression::Constant(Scalar::from(0));
+                for (index, selector) in opening_selectors.iter().enumerate() {
+                    opening_selector_sum = opening_selector_sum + selector.clone();
+                    opening_len_sum = opening_len_sum
+                        + selector.clone()
+                            * Expression::Constant(Scalar::from(
+                                super::KAGEMUSHA_RECURSIVE_AGGREGATION_OPENING_LEN_CHOICES[index],
+                            ));
+                    cons.push(
+                        s.clone()
+                            * selector.clone()
+                            * (selector.clone() - Expression::Constant(Scalar::from(1))),
+                    );
+                }
+                cons.push(
+                    s.clone() * (opening_selector_sum - Expression::Constant(Scalar::from(1))),
+                );
+                cons.push(
+                    s.clone()
+                        * (public[super::KAGEMUSHA_RECURSIVE_AGGREGATION_OPENING_LEN_INDEX]
+                            .clone()
+                            - opening_len_sum),
+                );
+                for limb_index in 0..4 {
+                    let mut expected_schedule_limb = Expression::Constant(Scalar::from(0));
+                    let mut expected_manifest_limb = Expression::Constant(Scalar::from(0));
+                    for (choice_index, selector) in opening_selectors.iter().enumerate() {
+                        expected_schedule_limb = expected_schedule_limb
+                            + selector.clone()
+                                * Expression::Constant(
+                                    expected_schedule_limb_constants[choice_index][limb_index],
+                                );
+                        expected_manifest_limb = expected_manifest_limb
+                            + selector.clone()
+                                * Expression::Constant(
+                                    expected_manifest_limb_constants[choice_index][limb_index],
+                                );
+                    }
+                    cons.push(
+                        s.clone()
+                            * (public[super::KAGEMUSHA_RECURSIVE_AGGREGATION_FIXED_WINDOW_TABLE_SCHEDULE_START_INDEX + limb_index]
+                                .clone()
+                                - expected_schedule_limb),
+                    );
+                    cons.push(
+                        s.clone()
+                            * (public[super::KAGEMUSHA_RECURSIVE_AGGREGATION_FIXED_WINDOW_SHARED_TABLE_MANIFEST_START_INDEX + limb_index]
+                                .clone()
+                                - expected_manifest_limb),
+                    );
+                }
+
+                let mut hop_bit_sum = Expression::Constant(Scalar::from(0));
+                for (index, bit) in hop_bits.iter().enumerate() {
+                    hop_bit_sum = hop_bit_sum
+                        + bit.clone()
+                            * Expression::Constant(Scalar::from(
+                                1u64 << u32::try_from(index).expect("bit index fits"),
+                            ));
+                    cons.push(
+                        s.clone()
+                            * bit.clone()
+                            * (bit.clone() - Expression::Constant(Scalar::from(1))),
+                    );
+                }
+                let hop_count =
+                    public[super::KAGEMUSHA_RECURSIVE_AGGREGATION_HOP_COUNT_INDEX].clone();
+                cons.push(
+                    s.clone()
+                        * (hop_count.clone() - Expression::Constant(Scalar::from(1)) - hop_bit_sum),
+                );
+                cons.push(
+                    s.clone()
+                        * (public[super::KAGEMUSHA_RECURSIVE_AGGREGATION_WITNESS_COUNT_INDEX]
+                            .clone()
+                            - hop_count),
+                );
+
+                for (group_index, group) in
+                    super::KAGEMUSHA_RECURSIVE_AGGREGATION_NON_ZERO_PUBLIC_FIELD_GROUPS
+                        .iter()
+                        .enumerate()
+                {
+                    let mut field_sum = Expression::Constant(Scalar::from(0));
+                    for index in group {
+                        field_sum = field_sum + public[*index].clone();
+                    }
+                    cons.push(
+                        s.clone()
+                            * (field_sum * public_field_inverses[group_index].clone()
+                                - Expression::Constant(Scalar::from(1))),
+                    );
+                }
+                cons
+            });
+            (
+                public_adv,
+                opening_selector_adv,
+                hop_bit_adv,
+                public_field_inverse_adv,
+                inst,
+                s,
+            )
+        }
+        fn synthesize(
+            &self,
+            (
+                public_adv,
+                opening_selector_adv,
+                hop_bit_adv,
+                public_field_inverse_adv,
+                _inst,
+                s,
+            ): Self::Config,
+            mut layouter: impl Layouter<Scalar>,
+        ) -> Result<(), PlonkError> {
+            let public_values = self.public_values;
+            let opening_len_selectors = self.opening_len_selectors;
+            let hop_count_minus_one_bits = self.hop_count_minus_one_bits;
+            let non_zero_public_field_inverses = self.non_zero_public_field_inverses;
+            layouter.assign_region(
+                || "kagemusha_recursive_aggregation_semantic",
+                |mut region| {
+                    s.enable(&mut region, 0)?;
+                    for (i, column) in public_adv.iter().enumerate() {
+                        crate::zk::assign_advice_compat(
+                            &mut region,
+                            move || format!("public{i}"),
+                            *column,
+                            0,
+                            || Value::known(public_values[i]),
+                        )?;
+                    }
+                    for (i, column) in opening_selector_adv.iter().enumerate() {
+                        crate::zk::assign_advice_compat(
+                            &mut region,
+                            move || format!("opening_len_selector{i}"),
+                            *column,
+                            0,
+                            || Value::known(opening_len_selectors[i]),
+                        )?;
+                    }
+                    for (i, column) in hop_bit_adv.iter().enumerate() {
+                        crate::zk::assign_advice_compat(
+                            &mut region,
+                            move || format!("hop_count_minus_one_bit{i}"),
+                            *column,
+                            0,
+                            || Value::known(hop_count_minus_one_bits[i]),
+                        )?;
+                    }
+                    for (i, column) in public_field_inverse_adv.iter().enumerate() {
+                        crate::zk::assign_advice_compat(
+                            &mut region,
+                            move || format!("non_zero_public_field_inverse{i}"),
+                            *column,
+                            0,
+                            || Value::known(non_zero_public_field_inverses[i]),
+                        )?;
+                    }
+                    Ok(())
+                },
+            )
+        }
+    }
+
+    /// Config for a one-hop recursive aggregation verifier-slice composition.
+    #[derive(Clone)]
+    pub struct KagemushaRecursiveAggregationOneHopVerifierSliceConfig {
+        semantic: <KagemushaRecursiveAggregationSemantic as Circuit<Scalar>>::Config,
+        verifier: NonNativeVestaIpaVerifierSharedTableNativeScalarConfig,
+        scalar_projection: KagemushaOneHopVerifierScalarProjectionConfig,
+        link: Selector,
+    }
+
+    const KAGEMUSHA_ONE_HOP_VERIFIER_SCALAR_PROJECTION_INPUTS: usize = 6;
+    const KAGEMUSHA_ONE_HOP_VERIFIER_SCALAR_PROJECTION_STEPS: usize =
+        KAGEMUSHA_ONE_HOP_VERIFIER_SCALAR_PROJECTION_INPUTS - 1;
+
+    /// Config for the one-hop verifier scalar-projection digest.
+    #[derive(Clone)]
+    struct KagemushaOneHopVerifierScalarProjectionConfig {
+        inputs: [halo2_proofs::plonk::Column<halo2_proofs::plonk::Advice>;
+            KAGEMUSHA_ONE_HOP_VERIFIER_SCALAR_PROJECTION_INPUTS],
+        left: halo2_proofs::plonk::Column<halo2_proofs::plonk::Advice>,
+        right: halo2_proofs::plonk::Column<halo2_proofs::plonk::Advice>,
+        out: halo2_proofs::plonk::Column<halo2_proofs::plonk::Advice>,
+        left_square: halo2_proofs::plonk::Column<halo2_proofs::plonk::Advice>,
+        left_quad: halo2_proofs::plonk::Column<halo2_proofs::plonk::Advice>,
+        right_square: halo2_proofs::plonk::Column<halo2_proofs::plonk::Advice>,
+        right_quad: halo2_proofs::plonk::Column<halo2_proofs::plonk::Advice>,
+        step: [Selector; KAGEMUSHA_ONE_HOP_VERIFIER_SCALAR_PROJECTION_STEPS],
+        input_link: Selector,
+        digest_public: Selector,
+    }
+
+    pub(super) fn kagemusha_one_hop_verifier_scalar_projection_digest(
+        inputs: [Scalar; 6],
+    ) -> Scalar {
+        let mut state = inputs[0];
+        for input in inputs.into_iter().skip(1) {
+            state = native_pasta_fp_ipa_transcript_binding_compress(state, input);
+        }
+        state
+    }
+
+    fn configure_kagemusha_one_hop_verifier_scalar_projection(
+        meta: &mut ConstraintSystem<Scalar>,
+        verifier: &NonNativeVestaIpaVerifierSharedTableNativeScalarConfig,
+    ) -> KagemushaOneHopVerifierScalarProjectionConfig {
+        let inputs = std::array::from_fn(|_| meta.advice_column());
+        let left = meta.advice_column();
+        let right = meta.advice_column();
+        let out = meta.advice_column();
+        let left_square = meta.advice_column();
+        let left_quad = meta.advice_column();
+        let right_square = meta.advice_column();
+        let right_quad = meta.advice_column();
+        let digest_instance = meta.instance_column();
+        let step = std::array::from_fn(|_| meta.selector());
+        let input_link = meta.selector();
+        let digest_public = meta.selector();
+
+        meta.create_gate(
+            "kagemusha_one_hop_verifier_scalar_projection_steps",
+            |meta| {
+                let mut constraints =
+                    Vec::with_capacity(KAGEMUSHA_ONE_HOP_VERIFIER_SCALAR_PROJECTION_STEPS * 7);
+                for (step_index, selector) in step.iter().copied().enumerate() {
+                    let s = meta.query_selector(selector);
+                    let left_value = meta.query_advice(left, Rotation::cur());
+                    let right_value = meta.query_advice(right, Rotation::cur());
+                    let out_value = meta.query_advice(out, Rotation::cur());
+                    let left_square_value = meta.query_advice(left_square, Rotation::cur());
+                    let left_quad_value = meta.query_advice(left_quad, Rotation::cur());
+                    let right_square_value = meta.query_advice(right_square, Rotation::cur());
+                    let right_quad_value = meta.query_advice(right_quad, Rotation::cur());
+                    let expected_right =
+                        meta.query_advice(inputs[step_index + 1], Rotation(-(step_index as i32)));
+                    let expected_left = if step_index == 0 {
+                        meta.query_advice(inputs[0], Rotation::cur())
+                    } else {
+                        meta.query_advice(out, Rotation::prev())
+                    };
+                    let shifted_left = left_value.clone() + Expression::Constant(Scalar::from(7));
+                    let shifted_right =
+                        right_value.clone() + Expression::Constant(Scalar::from(13));
+                    constraints.extend([
+                        s.clone() * (left_value.clone() - expected_left),
+                        s.clone() * (right_value.clone() - expected_right),
+                        s.clone()
+                            * (left_square_value.clone()
+                                - shifted_left.clone() * shifted_left.clone()),
+                        s.clone()
+                            * (left_quad_value.clone()
+                                - left_square_value.clone() * left_square_value),
+                        s.clone()
+                            * (right_square_value.clone()
+                                - shifted_right.clone() * shifted_right.clone()),
+                        s.clone()
+                            * (right_quad_value.clone()
+                                - right_square_value.clone() * right_square_value),
+                        s * (out_value
+                            - Expression::Constant(Scalar::from(2))
+                                * left_quad_value
+                                * shifted_left
+                            - Expression::Constant(Scalar::from(3))
+                                * right_quad_value
+                                * shifted_right),
+                    ]);
+                }
+                constraints
+            },
+        );
+
+        let transcript_binding_digest_instance =
+            verifier.transcript_binding.binding_digest_instance;
+        let b0_instance = verifier.b_reduction.vectors[0][0]
+            .public
+            .as_ref()
+            .expect("initial b scalar is public")
+            .instance;
+        let b1_instance = verifier.b_reduction.vectors[0][1]
+            .public
+            .as_ref()
+            .expect("initial b scalar is public")
+            .instance;
+        let final_b_instance = verifier.b_reduction.vectors[1][0]
+            .public
+            .as_ref()
+            .expect("final b scalar is public")
+            .instance;
+        let challenge_instance = verifier.b_reduction.challenges[0]
+            .public
+            .as_ref()
+            .expect("challenge scalar is public")
+            .instance;
+        let challenge_inverse_instance = verifier.b_reduction.challenge_inverses[0]
+            .public
+            .as_ref()
+            .expect("challenge inverse scalar is public")
+            .instance;
+
+        meta.create_gate(
+            "kagemusha_one_hop_verifier_scalar_projection_inputs",
+            |meta| {
+                let s = meta.query_selector(input_link);
+                vec![
+                    s.clone()
+                        * (meta.query_advice(inputs[0], Rotation::cur())
+                            - meta.query_instance(transcript_binding_digest_instance, Rotation(3))),
+                    s.clone()
+                        * (meta.query_advice(inputs[1], Rotation::cur())
+                            - meta.query_instance(b0_instance, Rotation::cur())),
+                    s.clone()
+                        * (meta.query_advice(inputs[2], Rotation::cur())
+                            - meta.query_instance(b1_instance, Rotation::cur())),
+                    s.clone()
+                        * (meta.query_advice(inputs[3], Rotation::cur())
+                            - meta.query_instance(challenge_instance, Rotation::cur())),
+                    s.clone()
+                        * (meta.query_advice(inputs[4], Rotation::cur())
+                            - meta.query_instance(challenge_inverse_instance, Rotation::cur())),
+                    s * (meta.query_advice(inputs[5], Rotation::cur())
+                        - meta.query_instance(final_b_instance, Rotation::cur())),
+                ]
+            },
+        );
+
+        meta.create_gate(
+            "kagemusha_one_hop_verifier_scalar_projection_digest",
+            |meta| {
+                let s = meta.query_selector(digest_public);
+                let digest = meta.query_advice(
+                    out,
+                    Rotation(
+                        (KAGEMUSHA_ONE_HOP_VERIFIER_SCALAR_PROJECTION_STEPS - 1)
+                            .try_into()
+                            .expect("projection row fits i32"),
+                    ),
+                );
+                let public = meta.query_instance(digest_instance, Rotation::cur());
+                vec![s * (digest - public)]
+            },
+        );
+
+        KagemushaOneHopVerifierScalarProjectionConfig {
+            inputs,
+            left,
+            right,
+            out,
+            left_square,
+            left_quad,
+            right_square,
+            right_quad,
+            step,
+            input_link,
+            digest_public,
+        }
+    }
+
+    fn assign_kagemusha_one_hop_verifier_scalar_projection_region(
+        region: &mut halo2_proofs::circuit::Region<'_, Scalar>,
+        config: &KagemushaOneHopVerifierScalarProjectionConfig,
+        inputs: [Scalar; KAGEMUSHA_ONE_HOP_VERIFIER_SCALAR_PROJECTION_INPUTS],
+    ) -> Result<(), PlonkError> {
+        config.input_link.enable(region, 0)?;
+        config.digest_public.enable(region, 0)?;
+        for (index, input) in inputs.iter().copied().enumerate() {
+            crate::zk::assign_advice_compat(
+                region,
+                move || format!("projection_input{index}"),
+                config.inputs[index],
+                0,
+                || Value::known(input),
+            )?;
+        }
+
+        let mut state = inputs[0];
+        for step_index in 0..KAGEMUSHA_ONE_HOP_VERIFIER_SCALAR_PROJECTION_STEPS {
+            config.step[step_index].enable(region, step_index)?;
+            let right = inputs[step_index + 1];
+            let out = native_pasta_fp_ipa_transcript_binding_compress(state, right);
+            let shifted_left = state + Scalar::from(7);
+            let shifted_right = right + Scalar::from(13);
+            let left_square = shifted_left * shifted_left;
+            let left_quad = left_square * left_square;
+            let right_square = shifted_right * shifted_right;
+            let right_quad = right_square * right_square;
+            crate::zk::assign_advice_compat(
+                region,
+                move || format!("projection_left{step_index}"),
+                config.left,
+                step_index,
+                || Value::known(state),
+            )?;
+            crate::zk::assign_advice_compat(
+                region,
+                move || format!("projection_right{step_index}"),
+                config.right,
+                step_index,
+                || Value::known(right),
+            )?;
+            crate::zk::assign_advice_compat(
+                region,
+                move || format!("projection_out{step_index}"),
+                config.out,
+                step_index,
+                || Value::known(out),
+            )?;
+            crate::zk::assign_advice_compat(
+                region,
+                move || format!("projection_left_square{step_index}"),
+                config.left_square,
+                step_index,
+                || Value::known(left_square),
+            )?;
+            crate::zk::assign_advice_compat(
+                region,
+                move || format!("projection_left_quad{step_index}"),
+                config.left_quad,
+                step_index,
+                || Value::known(left_quad),
+            )?;
+            crate::zk::assign_advice_compat(
+                region,
+                move || format!("projection_right_square{step_index}"),
+                config.right_square,
+                step_index,
+                || Value::known(right_square),
+            )?;
+            crate::zk::assign_advice_compat(
+                region,
+                move || format!("projection_right_quad{step_index}"),
+                config.right_quad,
+                step_index,
+                || Value::known(right_quad),
+            )?;
+            state = out;
+        }
+        Ok(())
+    }
+
+    /// Experimental one-hop slice composing recursive aggregation metadata with one IPA verifier.
+    ///
+    /// This is not compact-token mode-2 admission. It is a bounded circuit
+    /// composition target for the first private-hop recursive verifier slice:
+    /// the recursive aggregation public inputs must declare opening length `2`,
+    /// witness count `1`, and hop count `1`, while the embedded shared-table
+    /// `LEN = 2` verifier proves the corresponding IPA verifier and transcript
+    /// binding relations.
+    #[derive(Clone)]
+    pub struct KagemushaRecursiveAggregationOneHopVerifierSlice<
+        const WINDOWS: usize,
+        const WINDOW_BITS: usize,
+    > {
+        /// Recursive aggregation public metadata constraints.
+        pub semantic: Box<KagemushaRecursiveAggregationSemantic>,
+        /// One private-hop IPA verifier slice with transcript binding.
+        pub verifier:
+            Box<NonNativeVestaIpaVerifierSharedTableNativeScalar<2, WINDOWS, WINDOW_BITS>>,
+    }
+
+    impl<const WINDOWS: usize, const WINDOW_BITS: usize> Default
+        for KagemushaRecursiveAggregationOneHopVerifierSlice<WINDOWS, WINDOW_BITS>
+    {
+        fn default() -> Self {
+            Self {
+                semantic: Box::new(KagemushaRecursiveAggregationSemantic::default()),
+                verifier: Box::new(NonNativeVestaIpaVerifierSharedTableNativeScalar::default()),
+            }
+        }
+    }
+
+    impl<const WINDOWS: usize, const WINDOW_BITS: usize>
+        KagemushaRecursiveAggregationOneHopVerifierSlice<WINDOWS, WINDOW_BITS>
+    {
+        /// Build a one-hop recursive verifier-slice circuit from checked witnesses.
+        ///
+        /// # Errors
+        ///
+        /// Returns an error if the recursive aggregation public metadata is not
+        /// the single-hop, length-two profile matched by this verifier slice.
+        pub fn try_from_parts(
+            semantic: KagemushaRecursiveAggregationSemantic,
+            verifier: NonNativeVestaIpaVerifierSharedTableNativeScalar<2, WINDOWS, WINDOW_BITS>,
+        ) -> Result<Self, String> {
+            Self::validate_one_hop_semantic_profile(&semantic)?;
+            if !verifier.host_links_hold() {
+                return Err(
+                    "one-hop recursive verifier slice verifier host-link mismatch".to_owned(),
+                );
+            }
+            Ok(Self {
+                semantic: Box::new(semantic),
+                verifier: Box::new(verifier),
+            })
+        }
+
+        /// Build a one-hop recursive verifier-slice circuit with native-batch preflight binding.
+        ///
+        /// # Errors
+        ///
+        /// Returns an error if the recursive metadata is not the one-hop
+        /// profile, if the preflight is not a single `LEN = 2` Pallas verifier
+        /// witness, or if any preflight digest/fingerprint limb differs from
+        /// the recursive aggregation public metadata.
+        pub fn try_from_parts_with_preflight(
+            semantic: KagemushaRecursiveAggregationSemantic,
+            verifier: NonNativeVestaIpaVerifierSharedTableNativeScalar<2, WINDOWS, WINDOW_BITS>,
+            preflight: &PallasIpaBatchVerifierPreflight,
+        ) -> Result<Self, String> {
+            Self::validate_one_hop_preflight_metadata_binding(&semantic, preflight)?;
+            if !verifier.host_links_hold() {
+                return Err(
+                    "one-hop recursive verifier slice verifier host-link mismatch".to_owned(),
+                );
+            }
+            Ok(Self {
+                semantic: Box::new(semantic),
+                verifier: Box::new(verifier),
+            })
+        }
+
+        /// Validate one-hop recursive public metadata against native Pallas preflight output.
+        ///
+        /// This is the cheap host-side guard shared by tests and constructors.
+        /// It does not validate the materialized recursive verifier witness;
+        /// [`Self::try_from_parts_with_preflight`] performs that additional
+        /// host-link check before accepting a composed circuit witness.
+        ///
+        /// # Errors
+        ///
+        /// Returns an error if the recursive metadata is not the one-hop
+        /// profile, if the fixed-window profile is not the production profile,
+        /// or if any preflight count/fingerprint/digest field does not match the
+        /// recursive public metadata.
+        pub fn validate_one_hop_preflight_metadata_binding(
+            semantic: &KagemushaRecursiveAggregationSemantic,
+            preflight: &PallasIpaBatchVerifierPreflight,
+        ) -> Result<(), String> {
+            Self::validate_one_hop_semantic_profile(semantic)?;
+            Self::validate_one_hop_preflight_binding(semantic, preflight)
+        }
+
+        fn validate_one_hop_semantic_profile(
+            semantic: &KagemushaRecursiveAggregationSemantic,
+        ) -> Result<(), String> {
+            if semantic.public_values[super::KAGEMUSHA_RECURSIVE_AGGREGATION_OPENING_LEN_INDEX]
+                != Scalar::from(2)
+            {
+                return Err(
+                    "one-hop recursive verifier slice requires verifier opening length 2"
+                        .to_owned(),
+                );
+            }
+            if semantic.public_values[super::KAGEMUSHA_RECURSIVE_AGGREGATION_WITNESS_COUNT_INDEX]
+                != Scalar::from(1)
+            {
+                return Err(
+                    "one-hop recursive verifier slice requires verifier witness count 1".to_owned(),
+                );
+            }
+            if semantic.public_values[super::KAGEMUSHA_RECURSIVE_AGGREGATION_HOP_COUNT_INDEX]
+                != Scalar::from(1)
+            {
+                return Err("one-hop recursive verifier slice requires hop count 1".to_owned());
+            }
+            let mut expected_opening_selectors =
+                [Scalar::from(0); super::KAGEMUSHA_RECURSIVE_AGGREGATION_OPENING_LEN_CHOICE_COUNT];
+            expected_opening_selectors[0] = Scalar::from(1);
+            if semantic.opening_len_selectors != expected_opening_selectors {
+                return Err(
+                    "one-hop recursive verifier slice opening-length selector witness mismatch"
+                        .to_owned(),
+                );
+            }
+            if semantic.hop_count_minus_one_bits
+                != [Scalar::from(0); super::KAGEMUSHA_RECURSIVE_AGGREGATION_HOP_COUNT_BITS]
+            {
+                return Err(
+                    "one-hop recursive verifier slice hop-count bit witness mismatch".to_owned(),
+                );
+            }
+            Self::validate_digest_limbs(
+                semantic,
+                super::KAGEMUSHA_RECURSIVE_AGGREGATION_FIXED_WINDOW_TABLE_SCHEDULE_START_INDEX,
+                &super::kagemusha_recursive_fixed_window_table_schedule_digest(2)?,
+                "fixed-window schedule digest",
+            )?;
+            Self::validate_digest_limbs(
+                semantic,
+                super::KAGEMUSHA_RECURSIVE_AGGREGATION_FIXED_WINDOW_SHARED_TABLE_MANIFEST_START_INDEX,
+                &super::kagemusha_recursive_fixed_window_shared_table_manifest_digest(2)?,
+                "shared-table manifest digest",
+            )
+        }
+
+        fn validate_one_hop_preflight_binding(
+            semantic: &KagemushaRecursiveAggregationSemantic,
+            preflight: &PallasIpaBatchVerifierPreflight,
+        ) -> Result<(), String> {
+            if WINDOWS != super::KAGEMUSHA_RECURSIVE_VESTA_IPA_WINDOWS
+                || WINDOW_BITS != super::KAGEMUSHA_RECURSIVE_VESTA_IPA_WINDOW_BITS
+            {
+                return Err(format!(
+                    "one-hop recursive verifier slice requires production fixed-window profile {}x{} for Pallas preflight binding (found {WINDOWS}x{WINDOW_BITS})",
+                    super::KAGEMUSHA_RECURSIVE_VESTA_IPA_WINDOWS,
+                    super::KAGEMUSHA_RECURSIVE_VESTA_IPA_WINDOW_BITS
+                ));
+            }
+            if preflight.proof_count != 1 {
+                return Err(format!(
+                    "one-hop recursive verifier slice requires one preflight witness (found {})",
+                    preflight.proof_count
+                ));
+            }
+            if preflight.opening_len != 2 {
+                return Err(format!(
+                    "one-hop recursive verifier slice requires preflight opening length 2 (found {})",
+                    preflight.opening_len
+                ));
+            }
+            if preflight.verifier_witness_profile
+                != iroha_data_model::offline::KAGEMUSHA_RECURSIVE_VERIFIER_WITNESS_PROFILE_V1
+            {
+                return Err(format!(
+                    "one-hop recursive verifier slice verifier-witness profile mismatch: expected {}, found {}",
+                    iroha_data_model::offline::KAGEMUSHA_RECURSIVE_VERIFIER_WITNESS_PROFILE_V1,
+                    preflight.verifier_witness_profile
+                ));
+            }
+            Self::validate_digest_limbs(
+                semantic,
+                super::KAGEMUSHA_RECURSIVE_AGGREGATION_VERIFIER_PARAMS_START_INDEX,
+                &preflight.params_fingerprint,
+                "verifier parameter fingerprint",
+            )?;
+            Self::validate_digest_limbs(
+                semantic,
+                super::KAGEMUSHA_RECURSIVE_AGGREGATION_FIXED_WINDOW_TABLE_SCHEDULE_START_INDEX,
+                &preflight.fixed_window_table_schedule_digest,
+                "fixed-window schedule digest",
+            )?;
+            Self::validate_digest_limbs(
+                semantic,
+                super::KAGEMUSHA_RECURSIVE_AGGREGATION_FIXED_WINDOW_SHARED_TABLE_MANIFEST_START_INDEX,
+                &preflight.fixed_window_shared_table_manifest_digest,
+                "shared-table manifest digest",
+            )?;
+            Self::validate_digest_limbs(
+                semantic,
+                super::KAGEMUSHA_RECURSIVE_AGGREGATION_FIXED_WINDOW_TABLE_BASE_START_INDEX,
+                &preflight.fixed_window_table_base_digest,
+                "fixed-window table-base digest",
+            )?;
+            Self::validate_digest_limbs(
+                semantic,
+                super::KAGEMUSHA_RECURSIVE_AGGREGATION_VERIFIER_WITNESS_BATCH_START_INDEX,
+                &preflight.aggregate_digest,
+                "verifier-witness batch digest",
+            )
+        }
+
+        fn validate_digest_limbs(
+            semantic: &KagemushaRecursiveAggregationSemantic,
+            start_index: usize,
+            digest: &[u8; 32],
+            label: &str,
+        ) -> Result<(), String> {
+            let expected = super::bytes_to_u64_limbs_le(digest).map(Scalar::from);
+            for (offset, expected) in expected.into_iter().enumerate() {
+                if semantic.public_values[start_index + offset] != expected {
+                    return Err(format!("one-hop recursive verifier slice {label} mismatch"));
+                }
+            }
+            Ok(())
+        }
+    }
+
+    impl<const WINDOWS: usize, const WINDOW_BITS: usize> Circuit<Scalar>
+        for KagemushaRecursiveAggregationOneHopVerifierSlice<WINDOWS, WINDOW_BITS>
+    {
+        type Config = KagemushaRecursiveAggregationOneHopVerifierSliceConfig;
+        type FloorPlanner = SimpleFloorPlanner;
+
+        type Params = ();
+        fn without_witnesses(&self) -> Self {
+            Self::default()
+        }
+        fn configure(meta: &mut ConstraintSystem<Scalar>) -> Self::Config {
+            let semantic = KagemushaRecursiveAggregationSemantic::configure(meta);
+            let verifier = configure_non_native_vesta_ipa_verifier_shared_table_native_scalar::<
+                2,
+                WINDOWS,
+                WINDOW_BITS,
+            >(meta);
+            let scalar_projection =
+                configure_kagemusha_one_hop_verifier_scalar_projection(meta, &verifier);
+            let verifier_binding_digest = meta.instance_column();
+            let link = meta.selector();
+            let semantic_inst = semantic.4;
+
+            meta.create_gate(
+                "kagemusha_recursive_aggregation_one_hop_verifier_slice_link",
+                |meta| {
+                    let s = meta.query_selector(link);
+                    let opening_len = meta.query_instance(
+                        semantic_inst[super::KAGEMUSHA_RECURSIVE_AGGREGATION_OPENING_LEN_INDEX],
+                        Rotation::cur(),
+                    );
+                    let witness_count = meta.query_instance(
+                        semantic_inst[super::KAGEMUSHA_RECURSIVE_AGGREGATION_WITNESS_COUNT_INDEX],
+                        Rotation::cur(),
+                    );
+                    let hop_count = meta.query_instance(
+                        semantic_inst[super::KAGEMUSHA_RECURSIVE_AGGREGATION_HOP_COUNT_INDEX],
+                        Rotation::cur(),
+                    );
+                    let verifier_binding_digest_public =
+                        meta.query_instance(verifier_binding_digest, Rotation::cur());
+                    let verifier_binding_digest_actual = meta.query_instance(
+                        verifier.transcript_binding.binding_digest_instance,
+                        Rotation(3),
+                    );
+                    vec![
+                        s.clone() * (opening_len - Expression::Constant(Scalar::from(2))),
+                        s.clone() * (witness_count - Expression::Constant(Scalar::from(1))),
+                        s.clone() * (hop_count - Expression::Constant(Scalar::from(1))),
+                        s * (verifier_binding_digest_public - verifier_binding_digest_actual),
+                    ]
+                },
+            );
+
+            KagemushaRecursiveAggregationOneHopVerifierSliceConfig {
+                semantic,
+                verifier,
+                scalar_projection,
+                link,
+            }
+        }
+        fn synthesize(
+            &self,
+            config: Self::Config,
+            mut layouter: impl Layouter<Scalar>,
+        ) -> Result<(), PlonkError> {
+            self.semantic
+                .synthesize(config.semantic, layouter.namespace(|| "recursive_semantic"))?;
+            self.verifier
+                .synthesize(config.verifier, layouter.namespace(|| "one_hop_verifier"))?;
+            let projection_inputs = [
+                self.verifier.transcript_binding_digest,
+                self.verifier.b_reduction.vectors[0][0].value,
+                self.verifier.b_reduction.vectors[0][1].value,
+                self.verifier.b_reduction.challenges[0].value,
+                self.verifier.b_reduction.challenge_inverses[0].value,
+                self.verifier.b_reduction.vectors[1][0].value,
+            ];
+            layouter.assign_region(
+                || "one_hop_verifier_scalar_projection",
+                |mut region| {
+                    assign_kagemusha_one_hop_verifier_scalar_projection_region(
+                        &mut region,
+                        &config.scalar_projection,
+                        projection_inputs,
+                    )
+                },
+            )?;
+            layouter.assign_region(
+                || "one_hop_recursive_verifier_slice_link",
+                |mut region| config.link.enable(&mut region, 0),
+            )
+        }
+    }
+
     /// Reusable config for a non-native `u64` limb range/decomposition check.
     ///
     /// Future in-circuit IPA verification needs Vesta base-field elements split
@@ -19911,6 +28995,7 @@ mod pasta_tiny {
 
     #[derive(Clone)]
     struct NativePastaFpScalarPublicConfig {
+        instance: halo2_proofs::plonk::Column<halo2_proofs::plonk::Instance>,
         expose: Selector,
     }
 
@@ -20046,7 +29131,7 @@ mod pasta_tiny {
                 let instance = meta.query_instance(instance, Rotation::cur());
                 vec![s * (value - instance)]
             });
-            Some(NativePastaFpScalarPublicConfig { expose })
+            Some(NativePastaFpScalarPublicConfig { instance, expose })
         } else {
             None
         };
@@ -21101,6 +30186,7 @@ mod pasta_tiny {
         compress: Selector,
         inverse: Selector,
         chain: Selector,
+        binding_digest_instance: halo2_proofs::plonk::Column<halo2_proofs::plonk::Instance>,
         header_public: Selector,
         final_projection_public: Selector,
         binding_digest_public: Selector,
@@ -21387,6 +30473,7 @@ mod pasta_tiny {
             compress,
             inverse,
             chain,
+            binding_digest_instance,
             header_public,
             final_projection_public,
             binding_digest_public,
@@ -22008,6 +31095,110 @@ mod pasta_tiny {
         Ok(())
     }
 
+    fn pallas_batch_digest_update_fixed_window_table_profile<
+        const LEN: usize,
+        const WINDOWS: usize,
+        const WINDOW_BITS: usize,
+    >(
+        hasher: &mut PallasBatchDigest,
+    ) -> Result<([u8; 32], [u8; 32]), String> {
+        let rounds = ipa_power_of_two_rounds(LEN).ok_or_else(|| {
+            "Pallas IPA fixed-window table profile requires a power-of-two length greater than one"
+                .to_owned()
+        })?;
+        if WINDOWS == 0 {
+            return Err(
+                "Pallas IPA fixed-window table profile must have at least one window".to_owned(),
+            );
+        }
+        if WINDOW_BITS == 0 {
+            return Err(
+                "Pallas IPA fixed-window table profile must have at least one bit per window"
+                    .to_owned(),
+            );
+        }
+        let table_rows_per_window = 1usize
+            .checked_shl(u32::try_from(WINDOW_BITS).map_err(|_| {
+                "Pallas IPA fixed-window table profile bit width does not fit u32".to_owned()
+            })?)
+            .ok_or_else(|| "Pallas IPA fixed-window table profile row count overflow".to_owned())?;
+        let generator_fold_total = LEN
+            .checked_sub(1)
+            .ok_or_else(|| "Pallas IPA fixed-window generator-fold count underflow".to_owned())?;
+        let round_accumulator_terms = rounds
+            .checked_mul(3)
+            .ok_or_else(|| "Pallas IPA round accumulator term count overflow".to_owned())?;
+        let generator_fold_terms = generator_fold_total
+            .checked_mul(4)
+            .ok_or_else(|| "Pallas IPA generator-fold term count overflow".to_owned())?;
+        let scalar_mul_terms = round_accumulator_terms
+            .checked_add(generator_fold_terms)
+            .and_then(|value| value.checked_add(3))
+            .ok_or_else(|| "Pallas IPA scalar-mul term count overflow".to_owned())?;
+        let naive_window_table_witnesses = scalar_mul_terms
+            .checked_mul(WINDOWS)
+            .ok_or_else(|| "Pallas IPA naive window-table witness count overflow".to_owned())?;
+        let naive_point_table_copies = naive_window_table_witnesses
+            .checked_mul(2)
+            .ok_or_else(|| "Pallas IPA naive point-table copy count overflow".to_owned())?;
+        let naive_point_table_rows = naive_point_table_copies
+            .checked_mul(table_rows_per_window)
+            .ok_or_else(|| "Pallas IPA naive point-table row count overflow".to_owned())?;
+        let shared_point_table_rows = naive_window_table_witnesses
+            .checked_mul(table_rows_per_window)
+            .ok_or_else(|| "Pallas IPA shared point-table row count overflow".to_owned())?;
+        let schedule_digest =
+            super::kagemusha_recursive_fixed_window_table_schedule_digest_with_profile(
+                LEN,
+                WINDOWS,
+                WINDOW_BITS,
+            )?;
+        let shared_table_manifest_digest =
+            super::kagemusha_recursive_fixed_window_shared_table_manifest_digest_with_profile(
+                LEN,
+                WINDOWS,
+                WINDOW_BITS,
+            )?;
+
+        pallas_batch_digest_update_bytes(hasher, b"fixed-window-table-profile-v1");
+        pallas_batch_digest_update_len(hasher, "fixed-window opening length", LEN)?;
+        pallas_batch_digest_update_len(hasher, "fixed-window windows", WINDOWS)?;
+        pallas_batch_digest_update_len(hasher, "fixed-window bits", WINDOW_BITS)?;
+        pallas_batch_digest_update_len(
+            hasher,
+            "fixed-window table rows per window",
+            table_rows_per_window,
+        )?;
+        pallas_batch_digest_update_len(hasher, "fixed-window rounds", rounds)?;
+        pallas_batch_digest_update_len(hasher, "fixed-window scalar-mul terms", scalar_mul_terms)?;
+        pallas_batch_digest_update_len(
+            hasher,
+            "fixed-window naive table copies",
+            naive_point_table_copies,
+        )?;
+        pallas_batch_digest_update_len(
+            hasher,
+            "fixed-window naive point rows",
+            naive_point_table_rows,
+        )?;
+        pallas_batch_digest_update_len(
+            hasher,
+            "fixed-window shared table families",
+            scalar_mul_terms,
+        )?;
+        pallas_batch_digest_update_len(
+            hasher,
+            "fixed-window shared point rows",
+            shared_point_table_rows,
+        )?;
+        pallas_batch_digest_update_bytes(hasher, b"fixed-window-schedule-digest-v1");
+        pallas_batch_digest_update_bytes(hasher, &schedule_digest);
+        pallas_batch_digest_update_bytes(hasher, b"fixed-window-shared-table-manifest-digest-v1");
+        pallas_batch_digest_update_bytes(hasher, &shared_table_manifest_digest);
+        pallas_batch_digest_update_u64(hasher, 0);
+        Ok((schedule_digest, shared_table_manifest_digest))
+    }
+
     fn pallas_batch_digest_update_scalar(
         hasher: &mut PallasBatchDigest,
         scalar: iroha_zkp_halo2::pallas::Scalar,
@@ -22020,6 +31211,218 @@ mod pasta_tiny {
         group: iroha_zkp_halo2::pallas::Group,
     ) {
         pallas_batch_digest_update_bytes(hasher, &group.to_bytes());
+    }
+
+    fn pallas_batch_fixed_window_role_code(
+        role: super::KagemushaRecursiveFixedWindowTableRole,
+    ) -> u64 {
+        match role {
+            super::KagemushaRecursiveFixedWindowTableRole::RoundAccumulatorL => 1,
+            super::KagemushaRecursiveFixedWindowTableRole::RoundAccumulatorQ => 2,
+            super::KagemushaRecursiveFixedWindowTableRole::RoundAccumulatorR => 3,
+            super::KagemushaRecursiveFixedWindowTableRole::GeneratorFoldGLeft => 4,
+            super::KagemushaRecursiveFixedWindowTableRole::GeneratorFoldGRight => 5,
+            super::KagemushaRecursiveFixedWindowTableRole::GeneratorFoldHLeft => 6,
+            super::KagemushaRecursiveFixedWindowTableRole::GeneratorFoldHRight => 7,
+            super::KagemushaRecursiveFixedWindowTableRole::FinalG => 8,
+            super::KagemushaRecursiveFixedWindowTableRole::FinalH => 9,
+            super::KagemushaRecursiveFixedWindowTableRole::FinalU => 10,
+        }
+    }
+
+    fn pallas_batch_digest_update_table_base(
+        hasher: &mut PallasBatchDigest,
+        use_site: &super::KagemushaRecursiveFixedWindowTableUse,
+        expected_round_index: Option<usize>,
+        expected_pair_index: Option<usize>,
+        expected_role: super::KagemushaRecursiveFixedWindowTableRole,
+        base_bytes: &[u8; 32],
+    ) -> Result<(), String> {
+        if use_site.round_index != expected_round_index
+            || use_site.pair_index != expected_pair_index
+            || use_site.role != expected_role
+        {
+            return Err(format!(
+                "Pallas IPA fixed-window table-base schedule mismatch at family {}",
+                use_site.family_index
+            ));
+        }
+        pallas_batch_digest_update_len(hasher, "fixed-window table family", use_site.family_index)?;
+        pallas_batch_digest_update_u64(hasher, pallas_batch_fixed_window_role_code(use_site.role));
+        pallas_batch_digest_update_len(
+            hasher,
+            "fixed-window first shifted table",
+            use_site.first_shifted_window_table,
+        )?;
+        pallas_batch_digest_update_len(
+            hasher,
+            "fixed-window shifted table count",
+            use_site.shifted_window_table_count,
+        )?;
+        pallas_batch_digest_update_len(
+            hasher,
+            "fixed-window table rows per window",
+            use_site.table_rows_per_window,
+        )?;
+        pallas_batch_digest_update_bytes(hasher, base_bytes);
+        Ok(())
+    }
+
+    fn pallas_batch_digest_update_fixed_window_table_bases<
+        const LEN: usize,
+        const WINDOWS: usize,
+        const WINDOW_BITS: usize,
+    >(
+        hasher: &mut PallasBatchDigest,
+        params: &iroha_zkp_halo2::pallas::Params,
+        witnesses: &[iroha_zkp_halo2::IpaVerifierWitness<iroha_zkp_halo2::pallas::PallasBackend>],
+    ) -> Result<[u8; 32], String> {
+        let schedule = super::kagemusha_recursive_fixed_window_table_schedule(LEN)?;
+        let schedule_digest =
+            super::kagemusha_recursive_fixed_window_table_schedule_digest_with_profile(
+                LEN,
+                WINDOWS,
+                WINDOW_BITS,
+            )?;
+        let rounds = ipa_power_of_two_rounds(LEN).ok_or_else(|| {
+            "Pallas IPA fixed-window table bases require a power-of-two length greater than one"
+                .to_owned()
+        })?;
+        let mut base_hasher = PallasBatchDigest::new();
+        pallas_batch_digest_update_bytes(
+            &mut base_hasher,
+            b"iroha:kagemusha:pallas-ipa-fixed-window-table-bases:v1",
+        );
+        pallas_batch_digest_update_len(&mut base_hasher, "LEN", LEN)?;
+        pallas_batch_digest_update_len(&mut base_hasher, "fixed-window windows", WINDOWS)?;
+        pallas_batch_digest_update_len(&mut base_hasher, "fixed-window bits", WINDOW_BITS)?;
+        pallas_batch_digest_update_len(
+            &mut base_hasher,
+            "fixed-window proof count",
+            witnesses.len(),
+        )?;
+        pallas_batch_digest_update_bytes(&mut base_hasher, &params.fingerprint());
+        pallas_batch_digest_update_bytes(&mut base_hasher, &schedule_digest);
+
+        for (witness_index, witness) in witnesses.iter().enumerate() {
+            pallas_batch_digest_update_len(
+                &mut base_hasher,
+                "fixed-window witness index",
+                witness_index,
+            )?;
+            let mut schedule_iter = schedule.iter();
+            let mut g_current = params.g().to_vec();
+            let mut h_current = params.h().to_vec();
+            let mut layer_len = LEN;
+
+            for round_index in 0..rounds {
+                let challenge = &witness.round_challenges[round_index];
+                let accumulator = &witness.accumulation.rounds[round_index];
+                pallas_batch_digest_update_table_base(
+                    &mut base_hasher,
+                    schedule_iter.next().ok_or_else(|| {
+                        "Pallas IPA fixed-window table-base schedule ended early".to_owned()
+                    })?,
+                    Some(round_index),
+                    None,
+                    super::KagemushaRecursiveFixedWindowTableRole::RoundAccumulatorL,
+                    &challenge.l_bytes,
+                )?;
+                let q_before = accumulator.q_before.to_bytes();
+                pallas_batch_digest_update_table_base(
+                    &mut base_hasher,
+                    schedule_iter.next().ok_or_else(|| {
+                        "Pallas IPA fixed-window table-base schedule ended early".to_owned()
+                    })?,
+                    Some(round_index),
+                    None,
+                    super::KagemushaRecursiveFixedWindowTableRole::RoundAccumulatorQ,
+                    &q_before,
+                )?;
+                pallas_batch_digest_update_table_base(
+                    &mut base_hasher,
+                    schedule_iter.next().ok_or_else(|| {
+                        "Pallas IPA fixed-window table-base schedule ended early".to_owned()
+                    })?,
+                    Some(round_index),
+                    None,
+                    super::KagemushaRecursiveFixedWindowTableRole::RoundAccumulatorR,
+                    &challenge.r_bytes,
+                )?;
+
+                let half = layer_len / 2;
+                for pair_index in 0..half {
+                    for (role, base_bytes) in [
+                        (
+                            super::KagemushaRecursiveFixedWindowTableRole::GeneratorFoldGLeft,
+                            g_current[pair_index].to_bytes(),
+                        ),
+                        (
+                            super::KagemushaRecursiveFixedWindowTableRole::GeneratorFoldGRight,
+                            g_current[half + pair_index].to_bytes(),
+                        ),
+                        (
+                            super::KagemushaRecursiveFixedWindowTableRole::GeneratorFoldHLeft,
+                            h_current[pair_index].to_bytes(),
+                        ),
+                        (
+                            super::KagemushaRecursiveFixedWindowTableRole::GeneratorFoldHRight,
+                            h_current[half + pair_index].to_bytes(),
+                        ),
+                    ] {
+                        pallas_batch_digest_update_table_base(
+                            &mut base_hasher,
+                            schedule_iter.next().ok_or_else(|| {
+                                "Pallas IPA fixed-window table-base schedule ended early".to_owned()
+                            })?,
+                            Some(round_index),
+                            Some(pair_index),
+                            role,
+                            &base_bytes,
+                        )?;
+                    }
+                }
+                g_current = accumulator.g_after.clone();
+                h_current = accumulator.h_after.clone();
+                layer_len = half;
+            }
+
+            for (role, base_bytes) in [
+                (
+                    super::KagemushaRecursiveFixedWindowTableRole::FinalG,
+                    witness.accumulation.final_g.to_bytes(),
+                ),
+                (
+                    super::KagemushaRecursiveFixedWindowTableRole::FinalH,
+                    witness.accumulation.final_h.to_bytes(),
+                ),
+                (
+                    super::KagemushaRecursiveFixedWindowTableRole::FinalU,
+                    params.u().to_bytes(),
+                ),
+            ] {
+                pallas_batch_digest_update_table_base(
+                    &mut base_hasher,
+                    schedule_iter.next().ok_or_else(|| {
+                        "Pallas IPA fixed-window table-base schedule ended early".to_owned()
+                    })?,
+                    None,
+                    None,
+                    role,
+                    &base_bytes,
+                )?;
+            }
+            if schedule_iter.next().is_some() {
+                return Err(
+                    "Pallas IPA fixed-window table-base schedule was not exhausted".to_owned(),
+                );
+            }
+        }
+
+        let base_digest = base_hasher.finalize();
+        pallas_batch_digest_update_bytes(hasher, b"fixed-window-table-base-digest-v1");
+        pallas_batch_digest_update_bytes(hasher, &base_digest);
+        Ok(base_digest)
     }
 
     fn pallas_batch_digest_update_scalar_vec(
@@ -23674,9 +33077,9 @@ mod pasta_tiny {
     /// Circuit wrapper proving public distinct affine Vesta points satisfy `P + Q = R`.
     ///
     /// This gadget covers the non-doubling, non-infinity affine formula where
-    /// `x(P) != x(Q)`.
-    /// TODO: Add complete addition and point-at-infinity handling in the final
-    /// IPA verifier composition.
+    /// `x(P) != x(Q)`. Complete addition and point-at-infinity cases are
+    /// handled by `NonNativeVestaAffineCompleteAdd`, which is the addition
+    /// layer used by the MSM and IPA verifier compositions.
     #[derive(Clone)]
     pub struct NonNativeVestaAffinePointAdd {
         /// On-curve witness for the public left input point `P`.
@@ -24132,9 +33535,9 @@ mod pasta_tiny {
     /// Circuit wrapper proving public affine Vesta points satisfy `P + P = R`.
     ///
     /// This gadget covers the affine doubling formula for non-infinity points
-    /// with `y(P) != 0`.
-    /// TODO: Add point-at-infinity handling in the final IPA verifier
-    /// composition.
+    /// with `y(P) != 0`. Complete addition and point-at-infinity cases are
+    /// handled by `NonNativeVestaAffineCompleteAdd`, which is the addition
+    /// layer used by the MSM and IPA verifier compositions.
     #[derive(Clone)]
     pub struct NonNativeVestaAffinePointDouble {
         /// On-curve witness for the public input point `P`.
@@ -26206,6 +35609,290 @@ mod pasta_tiny {
         }
     }
 
+    /// Config for fixed-window selection from an already-derived Vesta table.
+    #[derive(Clone)]
+    pub struct NonNativeVestaAffineFixedWindowSelectFromTableConfig {
+        digit_bits: Vec<halo2_proofs::plonk::Column<halo2_proofs::plonk::Advice>>,
+        selection_levels: Vec<Vec<NonNativeVestaPointAdviceConfig>>,
+        selected: NonNativeVestaAffineMaybeIdentityConfig,
+        link: Selector,
+    }
+
+    /// Circuit witness selecting from a shared fixed-window Vesta table.
+    ///
+    /// Unlike [`NonNativeVestaAffineFixedWindowSelect`], this witness does not
+    /// carry or assign its own table copy. The selection constraints reference a
+    /// table assigned by a sibling table-derivation gadget, which is the
+    /// compression primitive needed by the production recursive verifier's
+    /// shared-table layout.
+    #[derive(Clone)]
+    pub struct NonNativeVestaAffineFixedWindowSelectFromTable<const WINDOW_BITS: usize> {
+        /// Little-endian window bits.
+        pub digit_bits: Vec<Scalar>,
+        /// Intermediate selected points for each binary selection level.
+        pub selection_levels: Vec<
+            Vec<(
+                [Scalar; NON_NATIVE_PASTA_FIELD_LIMBS],
+                [Scalar; NON_NATIVE_PASTA_FIELD_LIMBS],
+                Scalar,
+            )>,
+        >,
+        /// Final selected point.
+        pub selected: Box<NonNativeVestaAffineMaybeIdentity>,
+    }
+
+    impl<const WINDOW_BITS: usize> Default
+        for NonNativeVestaAffineFixedWindowSelectFromTable<WINDOW_BITS>
+    {
+        fn default() -> Self {
+            let table_len = if (1..=4).contains(&WINDOW_BITS) {
+                1usize << WINDOW_BITS
+            } else {
+                0
+            };
+            let selection_levels = (0..WINDOW_BITS)
+                .map(|level| {
+                    let width = table_len >> (level + 1);
+                    vec![
+                        (
+                            [Scalar::from(0); NON_NATIVE_PASTA_FIELD_LIMBS],
+                            [Scalar::from(0); NON_NATIVE_PASTA_FIELD_LIMBS],
+                            Scalar::from(1)
+                        );
+                        width
+                    ]
+                })
+                .collect();
+            Self {
+                digit_bits: vec![Scalar::from(0); WINDOW_BITS],
+                selection_levels,
+                selected: Box::new(NonNativeVestaAffineMaybeIdentity::default()),
+            }
+        }
+    }
+
+    impl<const WINDOW_BITS: usize> NonNativeVestaAffineFixedWindowSelectFromTable<WINDOW_BITS> {
+        /// Build an honest shared-table fixed-window selection witness.
+        ///
+        /// # Errors
+        ///
+        /// Returns an error when the window width is unsupported, table length
+        /// is not `2^WINDOW_BITS`, the digit is out of range, any point encoding
+        /// is invalid, or `selected` is not the table entry selected by `digit`.
+        pub fn try_from_table(
+            digit: u64,
+            table: Vec<VestaPointEncoding>,
+            selected: VestaPointEncoding,
+        ) -> Result<Self, String> {
+            validate_vesta_fixed_window_select_shape::<WINDOW_BITS>()?;
+            let table_len = 1usize << WINDOW_BITS;
+            if table.len() != table_len {
+                return Err(format!(
+                    "Vesta shared-table fixed-window selection table length mismatch: expected {table_len}, found {}",
+                    table.len()
+                ));
+            }
+            let digit_index = usize::try_from(digit).map_err(|_| {
+                "Vesta shared-table fixed-window selection digit does not fit usize".to_owned()
+            })?;
+            if digit_index >= table_len {
+                return Err(
+                    "Vesta shared-table fixed-window selection digit is out of range".to_owned(),
+                );
+            }
+            if table[digit_index] != selected {
+                return Err("Vesta shared-table fixed-window selected point mismatch".to_owned());
+            }
+
+            let mut current = table
+                .iter()
+                .copied()
+                .map(vesta_point_encoding_to_scalars)
+                .collect::<Vec<_>>();
+            let mut selection_levels = Vec::with_capacity(WINDOW_BITS);
+            let mut digit_bits = Vec::with_capacity(WINDOW_BITS);
+            for local_bit in 0..WINDOW_BITS {
+                let bit = ((digit >> local_bit) & 1) != 0;
+                digit_bits.push(Scalar::from(u64::from(bit)));
+                let mut next = Vec::with_capacity(current.len() / 2);
+                for pair in current.chunks_exact(2) {
+                    next.push(if bit { pair[1] } else { pair[0] });
+                }
+                selection_levels.push(next.clone());
+                current = next;
+            }
+
+            Ok(Self {
+                digit_bits,
+                selection_levels,
+                selected: Box::new(NonNativeVestaAffineMaybeIdentity::try_from_limbs(
+                    selected.0, selected.1, selected.2,
+                )?),
+            })
+        }
+    }
+
+    fn configure_non_native_vesta_affine_fixed_window_select_from_table<
+        const WINDOW_BITS: usize,
+    >(
+        meta: &mut ConstraintSystem<Scalar>,
+        table: Vec<NonNativeVestaAffineMaybeIdentityConfig>,
+    ) -> NonNativeVestaAffineFixedWindowSelectFromTableConfig {
+        validate_vesta_fixed_window_select_shape::<WINDOW_BITS>()
+            .expect("invalid Vesta fixed-window shared-table selection shape");
+        let table_len = 1usize << WINDOW_BITS;
+        assert_eq!(
+            table.len(),
+            table_len,
+            "invalid shared Vesta fixed-window table config shape"
+        );
+        let digit_bits = (0..WINDOW_BITS)
+            .map(|_| meta.advice_column())
+            .collect::<Vec<_>>();
+        let selection_levels = (0..WINDOW_BITS)
+            .map(|level| {
+                let width = table_len >> (level + 1);
+                (0..width)
+                    .map(|_| configure_non_native_vesta_point_advice(meta))
+                    .collect::<Vec<_>>()
+            })
+            .collect::<Vec<_>>();
+        let selected =
+            configure_non_native_vesta_affine_maybe_identity_with_exposure(meta, false, false);
+        let link = meta.selector();
+
+        meta.create_gate(
+            "non_native_vesta_affine_fixed_window_select_from_table_link",
+            |meta| {
+                let s = meta.query_selector(link);
+                let bits = digit_bits
+                    .iter()
+                    .map(|column| meta.query_advice(*column, Rotation::cur()))
+                    .collect::<Vec<_>>();
+                let mut constraints = Vec::with_capacity(
+                    WINDOW_BITS + table_len * (2 * NON_NATIVE_PASTA_FIELD_LIMBS + 1),
+                );
+                for bit in &bits {
+                    constraints.push(
+                        s.clone()
+                            * bit.clone()
+                            * (bit.clone() - Expression::Constant(Scalar::from(1))),
+                    );
+                }
+                for level in 0..WINDOW_BITS {
+                    let bit = &bits[level];
+                    let width = table_len >> (level + 1);
+                    for index in 0..width {
+                        let out = query_non_native_vesta_point_advice(
+                            meta,
+                            &selection_levels[level][index],
+                            Rotation::cur(),
+                        );
+                        let left;
+                        let right;
+                        if level == 0 {
+                            left = query_non_native_vesta_affine_maybe_identity_point(
+                                meta,
+                                &table[2 * index],
+                                Rotation::cur(),
+                            );
+                            right = query_non_native_vesta_affine_maybe_identity_point(
+                                meta,
+                                &table[2 * index + 1],
+                                Rotation::cur(),
+                            );
+                        } else {
+                            left = query_non_native_vesta_point_advice(
+                                meta,
+                                &selection_levels[level - 1][2 * index],
+                                Rotation::cur(),
+                            );
+                            right = query_non_native_vesta_point_advice(
+                                meta,
+                                &selection_levels[level - 1][2 * index + 1],
+                                Rotation::cur(),
+                            );
+                        }
+                        push_non_native_vesta_point_select_constraints(
+                            &mut constraints,
+                            &s,
+                            bit,
+                            &left,
+                            &right,
+                            &out,
+                        );
+                    }
+                }
+                let final_level = selection_levels
+                    .last()
+                    .expect("fixed-window shared-table selection has at least one level");
+                let final_selection =
+                    query_non_native_vesta_point_advice(meta, &final_level[0], Rotation::cur());
+                let selected_point = query_non_native_vesta_affine_maybe_identity_point(
+                    meta,
+                    &selected,
+                    Rotation::cur(),
+                );
+                push_non_native_vesta_point_equality_constraints(
+                    &mut constraints,
+                    &s,
+                    &final_selection,
+                    &selected_point,
+                );
+                constraints
+            },
+        );
+
+        NonNativeVestaAffineFixedWindowSelectFromTableConfig {
+            digit_bits,
+            selection_levels,
+            selected,
+            link,
+        }
+    }
+
+    fn assign_non_native_vesta_affine_fixed_window_select_from_table_region<
+        const WINDOW_BITS: usize,
+    >(
+        region: &mut halo2_proofs::circuit::Region<'_, Scalar>,
+        config: &NonNativeVestaAffineFixedWindowSelectFromTableConfig,
+        witness: &NonNativeVestaAffineFixedWindowSelectFromTable<WINDOW_BITS>,
+    ) -> Result<(), PlonkError> {
+        config.link.enable(region, 0)?;
+        for (index, bit) in witness.digit_bits.iter().copied().enumerate() {
+            crate::zk::assign_advice_compat(
+                region,
+                move || format!("fixed_window_shared_table_select_bit{index}"),
+                config.digit_bits[index],
+                0,
+                || Value::known(bit),
+            )?;
+        }
+        for (level_index, (level_configs, level_points)) in config
+            .selection_levels
+            .iter()
+            .zip(witness.selection_levels.iter())
+            .enumerate()
+        {
+            for (point_index, (point_config, point)) in
+                level_configs.iter().zip(level_points.iter()).enumerate()
+            {
+                assign_non_native_vesta_point_advice(
+                    region,
+                    point_config,
+                    &format!("fixed_window_shared_table_level{level_index}_point{point_index}"),
+                    point,
+                )?;
+            }
+        }
+        assign_non_native_vesta_affine_maybe_identity_region(
+            region,
+            &config.selected,
+            witness.selected.as_ref(),
+        )?;
+        Ok(())
+    }
+
     /// Config for deriving a fixed-window Vesta point table from a public base.
     #[derive(Clone)]
     pub struct NonNativeVestaAffineFixedWindowTableConfig {
@@ -26445,6 +36132,123 @@ mod pasta_tiny {
                 || "non_native_vesta_affine_fixed_window_table",
                 |mut region| {
                     assign_non_native_vesta_affine_fixed_window_table_region(
+                        &mut region,
+                        &config,
+                        self,
+                    )
+                },
+            )
+        }
+    }
+
+    /// Config for deriving one fixed-window table and selecting from it without a table copy.
+    #[derive(Clone)]
+    pub struct NonNativeVestaAffineFixedWindowTableSelectConfig {
+        table: NonNativeVestaAffineFixedWindowTableConfig,
+        selection: NonNativeVestaAffineFixedWindowSelectFromTableConfig,
+    }
+
+    /// Circuit wrapper proving table derivation and table-reused selection together.
+    ///
+    /// This is the smallest compressed-table composition used by the future
+    /// recursive verifier: the selector reads the table columns produced by the
+    /// table-derivation gadget directly, so no duplicate selection-table copy is
+    /// assigned or equality-linked.
+    #[derive(Clone)]
+    pub struct NonNativeVestaAffineFixedWindowTableSelect<const WINDOW_BITS: usize> {
+        /// Private derived fixed-window table.
+        pub table: NonNativeVestaAffineFixedWindowTable<WINDOW_BITS>,
+        /// Private selection witness referencing [`Self::table`].
+        pub selection: NonNativeVestaAffineFixedWindowSelectFromTable<WINDOW_BITS>,
+    }
+
+    impl<const WINDOW_BITS: usize> Default for NonNativeVestaAffineFixedWindowTableSelect<WINDOW_BITS> {
+        fn default() -> Self {
+            Self {
+                table: NonNativeVestaAffineFixedWindowTable::default(),
+                selection: NonNativeVestaAffineFixedWindowSelectFromTable::default(),
+            }
+        }
+    }
+
+    impl<const WINDOW_BITS: usize> NonNativeVestaAffineFixedWindowTableSelect<WINDOW_BITS> {
+        /// Build an honest table-derivation plus shared-table selection witness.
+        ///
+        /// # Errors
+        ///
+        /// Returns an error if table derivation or selected-entry validation
+        /// fails.
+        pub fn try_from_base_and_digit(
+            base: VestaPointEncoding,
+            digit: u64,
+            table: Vec<VestaPointEncoding>,
+            selected: VestaPointEncoding,
+        ) -> Result<Self, String> {
+            Ok(Self {
+                table: NonNativeVestaAffineFixedWindowTable::<WINDOW_BITS>::try_from_base(
+                    base,
+                    table.clone(),
+                )?,
+                selection:
+                    NonNativeVestaAffineFixedWindowSelectFromTable::<WINDOW_BITS>::try_from_table(
+                        digit, table, selected,
+                    )?,
+            })
+        }
+    }
+
+    fn configure_non_native_vesta_affine_fixed_window_table_select<const WINDOW_BITS: usize>(
+        meta: &mut ConstraintSystem<Scalar>,
+    ) -> NonNativeVestaAffineFixedWindowTableSelectConfig {
+        let table = configure_non_native_vesta_affine_fixed_window_table_with_public_base::<
+            WINDOW_BITS,
+        >(meta, true);
+        let selection = configure_non_native_vesta_affine_fixed_window_select_from_table::<
+            WINDOW_BITS,
+        >(meta, table.table.clone());
+        NonNativeVestaAffineFixedWindowTableSelectConfig { table, selection }
+    }
+
+    fn assign_non_native_vesta_affine_fixed_window_table_select_region<const WINDOW_BITS: usize>(
+        region: &mut halo2_proofs::circuit::Region<'_, Scalar>,
+        config: &NonNativeVestaAffineFixedWindowTableSelectConfig,
+        witness: &NonNativeVestaAffineFixedWindowTableSelect<WINDOW_BITS>,
+    ) -> Result<(), PlonkError> {
+        assign_non_native_vesta_affine_fixed_window_table_region(
+            region,
+            &config.table,
+            &witness.table,
+        )?;
+        assign_non_native_vesta_affine_fixed_window_select_from_table_region(
+            region,
+            &config.selection,
+            &witness.selection,
+        )?;
+        Ok(())
+    }
+
+    impl<const WINDOW_BITS: usize> Circuit<Scalar>
+        for NonNativeVestaAffineFixedWindowTableSelect<WINDOW_BITS>
+    {
+        type Config = NonNativeVestaAffineFixedWindowTableSelectConfig;
+        type FloorPlanner = SimpleFloorPlanner;
+
+        type Params = ();
+        fn without_witnesses(&self) -> Self {
+            Self::default()
+        }
+        fn configure(meta: &mut ConstraintSystem<Scalar>) -> Self::Config {
+            configure_non_native_vesta_affine_fixed_window_table_select::<WINDOW_BITS>(meta)
+        }
+        fn synthesize(
+            &self,
+            config: Self::Config,
+            mut layouter: impl Layouter<Scalar>,
+        ) -> Result<(), PlonkError> {
+            layouter.assign_region(
+                || "non_native_vesta_affine_fixed_window_table_select",
+                |mut region| {
+                    assign_non_native_vesta_affine_fixed_window_table_select_region(
                         &mut region,
                         &config,
                         self,
@@ -26940,6 +36744,900 @@ mod pasta_tiny {
                         &mut region,
                         &config,
                         self,
+                    )
+                },
+            )
+        }
+    }
+
+    /// Config for fixed-window native-scalar Vesta multiplication with shared table selection.
+    #[derive(Clone)]
+    pub struct NonNativeVestaAffineWindowedScalarMulSharedTableNativeScalarConfig {
+        scalar: NativePastaFpFixedWindowDecompositionConfig,
+        tables: Vec<NonNativeVestaAffineFixedWindowTableConfig>,
+        selections: Vec<NonNativeVestaAffineFixedWindowSelectFromTableConfig>,
+        window_base_doubles: Vec<Vec<NonNativeVestaAffineCompleteAddConfig>>,
+        sum_adds: Vec<NonNativeVestaAffineCompleteAddConfig>,
+        link: Selector,
+    }
+
+    /// Circuit wrapper proving `output = scalar * base` without duplicated selection tables.
+    ///
+    /// Each scalar window derives one shifted-base table and then selects from
+    /// those exact table columns. This is the windowed scalar-multiplication
+    /// composition targeted by the recursive verifier shared-table manifest.
+    #[derive(Clone)]
+    pub struct NonNativeVestaAffineWindowedScalarMulSharedTableNativeScalar<
+        const WINDOWS: usize,
+        const WINDOW_BITS: usize,
+    > {
+        /// Private scalar fixed-window decomposition.
+        pub scalar: Box<NativePastaFpFixedWindowDecomposition<WINDOWS, WINDOW_BITS>>,
+        /// Private shifted-base tables for each window.
+        pub tables: Vec<NonNativeVestaAffineFixedWindowTable<WINDOW_BITS>>,
+        /// Private table selections that reference the corresponding table columns.
+        pub selections: Vec<NonNativeVestaAffineFixedWindowSelectFromTable<WINDOW_BITS>>,
+        /// Private doubling chains deriving each next window base.
+        pub window_base_doubles: Vec<Vec<NonNativeVestaAffineCompleteAdd>>,
+        /// Private selected-point accumulation chain.
+        pub sum_adds: Vec<NonNativeVestaAffineCompleteAdd>,
+    }
+
+    impl<const WINDOWS: usize, const WINDOW_BITS: usize> Default
+        for NonNativeVestaAffineWindowedScalarMulSharedTableNativeScalar<WINDOWS, WINDOW_BITS>
+    {
+        fn default() -> Self {
+            Self {
+                scalar: Box::new(NativePastaFpFixedWindowDecomposition::default()),
+                tables: vec![NonNativeVestaAffineFixedWindowTable::default(); WINDOWS],
+                selections: vec![
+                    NonNativeVestaAffineFixedWindowSelectFromTable::default();
+                    WINDOWS
+                ],
+                window_base_doubles: vec![
+                    vec![
+                        NonNativeVestaAffineCompleteAdd::default();
+                        WINDOW_BITS
+                    ];
+                    WINDOWS.saturating_sub(1)
+                ],
+                sum_adds: vec![NonNativeVestaAffineCompleteAdd::default(); WINDOWS],
+            }
+        }
+    }
+
+    impl<const WINDOWS: usize, const WINDOW_BITS: usize>
+        NonNativeVestaAffineWindowedScalarMulSharedTableNativeScalar<WINDOWS, WINDOW_BITS>
+    {
+        /// Build an honest shared-table fixed-window native-scalar multiplication witness.
+        ///
+        /// # Errors
+        ///
+        /// Returns an error if the window shape is unsupported, the scalar
+        /// exceeds the configured width, any point encoding is invalid, or the
+        /// supplied output is not equal to `scalar * base`.
+        pub fn try_from_scalar(
+            scalar: Scalar,
+            base: VestaPointEncoding,
+            output: VestaPointEncoding,
+        ) -> Result<Self, String> {
+            validate_windowed_vesta_scalar_mul_shape::<WINDOWS, WINDOW_BITS>()?;
+            let scalar_witness =
+                NativePastaFpFixedWindowDecomposition::<WINDOWS, WINDOW_BITS>::try_from_scalar(
+                    scalar,
+                )?;
+            let scalar_limbs = pasta_fp_to_limbs(scalar);
+            let base_affine = vesta_affine_from_limbs(base)?;
+            let expected_output = vesta_affine_from_limbs(output)?;
+            let table_len = 1usize << WINDOW_BITS;
+
+            let mut window_base = base_affine.to_curve();
+            let mut accumulator = VestaAffine::identity().to_curve();
+            let mut tables = Vec::with_capacity(WINDOWS);
+            let mut selections = Vec::with_capacity(WINDOWS);
+            let mut window_base_doubles = Vec::with_capacity(WINDOWS.saturating_sub(1));
+            let mut sum_adds = Vec::with_capacity(WINDOWS);
+
+            for window_index in 0..WINDOWS {
+                let window_base_limbs = vesta_affine_to_limbs(window_base.to_affine());
+                let table = (0..table_len)
+                    .map(|index| {
+                        vesta_affine_to_limbs(
+                            (window_base * Scalar::from(index as u64)).to_affine(),
+                        )
+                    })
+                    .collect::<Vec<_>>();
+                let mut digit = 0u64;
+                for local_bit in 0..WINDOW_BITS {
+                    let global_bit = window_index * WINDOW_BITS + local_bit;
+                    if scalar_limb_bit(scalar_limbs, global_bit) {
+                        digit |= 1u64 << local_bit;
+                    }
+                }
+                let selected = table[usize::try_from(digit).expect("digit fits usize")];
+                tables.push(
+                    NonNativeVestaAffineFixedWindowTable::<WINDOW_BITS>::try_from_base(
+                        window_base_limbs,
+                        table.clone(),
+                    )?,
+                );
+                selections.push(
+                    NonNativeVestaAffineFixedWindowSelectFromTable::<WINDOW_BITS>::try_from_table(
+                        digit, table, selected,
+                    )?,
+                );
+
+                let accumulator_before = vesta_affine_to_limbs(accumulator.to_affine());
+                accumulator += vesta_affine_from_limbs(selected)?.to_curve();
+                let accumulator_after = vesta_affine_to_limbs(accumulator.to_affine());
+                sum_adds.push(NonNativeVestaAffineCompleteAdd::try_from_limbs(
+                    accumulator_before,
+                    selected,
+                    accumulator_after,
+                )?);
+
+                if window_index + 1 < WINDOWS {
+                    let mut doubles = Vec::with_capacity(WINDOW_BITS);
+                    let mut current = window_base;
+                    for _ in 0..WINDOW_BITS {
+                        let before = vesta_affine_to_limbs(current.to_affine());
+                        let next = current + current;
+                        let after = vesta_affine_to_limbs(next.to_affine());
+                        doubles.push(NonNativeVestaAffineCompleteAdd::try_from_limbs(
+                            before, before, after,
+                        )?);
+                        current = next;
+                    }
+                    window_base = current;
+                    window_base_doubles.push(doubles);
+                }
+            }
+
+            if accumulator.to_affine() != expected_output {
+                return Err(
+                    "Vesta shared-table windowed native-scalar mul output mismatch".to_owned(),
+                );
+            }
+
+            Ok(Self {
+                scalar: Box::new(scalar_witness),
+                tables,
+                selections,
+                window_base_doubles,
+                sum_adds,
+            })
+        }
+    }
+
+    fn configure_non_native_vesta_affine_windowed_scalar_mul_shared_table_native_scalar<
+        const WINDOWS: usize,
+        const WINDOW_BITS: usize,
+    >(
+        meta: &mut ConstraintSystem<Scalar>,
+    ) -> NonNativeVestaAffineWindowedScalarMulSharedTableNativeScalarConfig {
+        configure_non_native_vesta_affine_windowed_scalar_mul_shared_table_native_scalar_with_public_io::<
+            WINDOWS,
+            WINDOW_BITS,
+        >(meta, true, true)
+    }
+
+    fn configure_non_native_vesta_affine_windowed_scalar_mul_shared_table_native_scalar_with_public_io<
+        const WINDOWS: usize,
+        const WINDOW_BITS: usize,
+    >(
+        meta: &mut ConstraintSystem<Scalar>,
+        public_base: bool,
+        public_output: bool,
+    ) -> NonNativeVestaAffineWindowedScalarMulSharedTableNativeScalarConfig {
+        validate_windowed_vesta_scalar_mul_shape::<WINDOWS, WINDOW_BITS>()
+            .expect("invalid Vesta shared-table windowed native-scalar mul shape");
+        let scalar =
+            configure_native_pasta_fp_fixed_window_decomposition::<WINDOWS, WINDOW_BITS>(meta);
+        let tables =
+            (0..WINDOWS)
+                .map(|_| {
+                    configure_non_native_vesta_affine_fixed_window_table_with_public_base::<
+                        WINDOW_BITS,
+                    >(meta, false)
+                })
+                .collect::<Vec<_>>();
+        let selections = tables
+            .iter()
+            .map(|table| {
+                configure_non_native_vesta_affine_fixed_window_select_from_table::<WINDOW_BITS>(
+                    meta,
+                    table.table.clone(),
+                )
+            })
+            .collect::<Vec<_>>();
+        let window_base_doubles = (0..WINDOWS.saturating_sub(1))
+            .map(|_| {
+                (0..WINDOW_BITS)
+                    .map(|_| {
+                        configure_non_native_vesta_affine_complete_add_with_exposure(
+                            meta, false, false, false,
+                        )
+                    })
+                    .collect::<Vec<_>>()
+            })
+            .collect::<Vec<_>>();
+        let sum_adds = (0..WINDOWS)
+            .map(|_| {
+                configure_non_native_vesta_affine_complete_add_with_exposure(
+                    meta, false, false, false,
+                )
+            })
+            .collect::<Vec<_>>();
+        let base_instances = public_base.then(|| std::array::from_fn(|_| meta.instance_column()));
+        let output_instances =
+            public_output.then(|| std::array::from_fn(|_| meta.instance_column()));
+        let link = meta.selector();
+
+        meta.create_gate(
+            "non_native_vesta_affine_windowed_scalar_mul_shared_table_native_scalar_link",
+            |meta| {
+                let s = meta.query_selector(link);
+                let mut constraints = Vec::with_capacity(
+                    WINDOWS
+                        * (WINDOW_BITS
+                            + 2 * WINDOW_BITS * (2 * NON_NATIVE_PASTA_FIELD_LIMBS + 1)
+                            + 3 * (2 * NON_NATIVE_PASTA_FIELD_LIMBS + 1)),
+                );
+
+                if let Some(base_instances) = &base_instances {
+                    let base_public = query_non_native_vesta_affine_point_instances(
+                        meta,
+                        base_instances,
+                        Rotation::cur(),
+                    );
+                    let first_base = query_non_native_vesta_affine_maybe_identity_point(
+                        meta,
+                        &tables[0].table[1],
+                        Rotation::cur(),
+                    );
+                    push_non_native_vesta_point_equality_constraints(
+                        &mut constraints,
+                        &s,
+                        &first_base,
+                        &base_public,
+                    );
+                }
+
+                for window_index in 0..WINDOWS {
+                    for local_bit in 0..WINDOW_BITS {
+                        let selection_bit = meta.query_advice(
+                            selections[window_index].digit_bits[local_bit],
+                            Rotation::cur(),
+                        );
+                        let scalar_bit = meta.query_advice(
+                            scalar.digit_bits[window_index][local_bit],
+                            Rotation::cur(),
+                        );
+                        constraints.push(s.clone() * (selection_bit - scalar_bit));
+                    }
+
+                    let selected = query_non_native_vesta_affine_maybe_identity_point(
+                        meta,
+                        &selections[window_index].selected,
+                        Rotation::cur(),
+                    );
+                    let sum_q = query_non_native_vesta_affine_maybe_identity_point(
+                        meta,
+                        &sum_adds[window_index].q,
+                        Rotation::cur(),
+                    );
+                    push_non_native_vesta_point_equality_constraints(
+                        &mut constraints,
+                        &s,
+                        &selected,
+                        &sum_q,
+                    );
+                    if window_index == 0 {
+                        let first_acc = query_non_native_vesta_affine_maybe_identity_point(
+                            meta,
+                            &sum_adds[0].p,
+                            Rotation::cur(),
+                        );
+                        push_non_native_vesta_identity_constraints(
+                            &mut constraints,
+                            &s,
+                            &first_acc,
+                        );
+                    } else {
+                        let previous = query_non_native_vesta_affine_maybe_identity_point(
+                            meta,
+                            &sum_adds[window_index - 1].r,
+                            Rotation::cur(),
+                        );
+                        let current = query_non_native_vesta_affine_maybe_identity_point(
+                            meta,
+                            &sum_adds[window_index].p,
+                            Rotation::cur(),
+                        );
+                        push_non_native_vesta_point_equality_constraints(
+                            &mut constraints,
+                            &s,
+                            &previous,
+                            &current,
+                        );
+                    }
+                }
+
+                for window_index in 0..WINDOWS.saturating_sub(1) {
+                    for double_index in 0..WINDOW_BITS {
+                        let double = &window_base_doubles[window_index][double_index];
+                        let source = if double_index == 0 {
+                            query_non_native_vesta_affine_maybe_identity_point(
+                                meta,
+                                &tables[window_index].table[1],
+                                Rotation::cur(),
+                            )
+                        } else {
+                            query_non_native_vesta_affine_maybe_identity_point(
+                                meta,
+                                &window_base_doubles[window_index][double_index - 1].r,
+                                Rotation::cur(),
+                            )
+                        };
+                        let double_p = query_non_native_vesta_affine_maybe_identity_point(
+                            meta,
+                            &double.p,
+                            Rotation::cur(),
+                        );
+                        let double_q = query_non_native_vesta_affine_maybe_identity_point(
+                            meta,
+                            &double.q,
+                            Rotation::cur(),
+                        );
+                        push_non_native_vesta_point_equality_constraints(
+                            &mut constraints,
+                            &s,
+                            &source,
+                            &double_p,
+                        );
+                        push_non_native_vesta_point_equality_constraints(
+                            &mut constraints,
+                            &s,
+                            &source,
+                            &double_q,
+                        );
+                    }
+                    let transition_output = query_non_native_vesta_affine_maybe_identity_point(
+                        meta,
+                        &window_base_doubles[window_index][WINDOW_BITS - 1].r,
+                        Rotation::cur(),
+                    );
+                    let next_base = query_non_native_vesta_affine_maybe_identity_point(
+                        meta,
+                        &tables[window_index + 1].table[1],
+                        Rotation::cur(),
+                    );
+                    push_non_native_vesta_point_equality_constraints(
+                        &mut constraints,
+                        &s,
+                        &transition_output,
+                        &next_base,
+                    );
+                }
+
+                if let Some(output_instances) = &output_instances {
+                    let output_public = query_non_native_vesta_affine_point_instances(
+                        meta,
+                        output_instances,
+                        Rotation::cur(),
+                    );
+                    let final_sum = query_non_native_vesta_affine_maybe_identity_point(
+                        meta,
+                        &sum_adds[WINDOWS - 1].r,
+                        Rotation::cur(),
+                    );
+                    push_non_native_vesta_point_equality_constraints(
+                        &mut constraints,
+                        &s,
+                        &final_sum,
+                        &output_public,
+                    );
+                }
+                constraints
+            },
+        );
+
+        NonNativeVestaAffineWindowedScalarMulSharedTableNativeScalarConfig {
+            scalar,
+            tables,
+            selections,
+            window_base_doubles,
+            sum_adds,
+            link,
+        }
+    }
+
+    fn assign_non_native_vesta_affine_windowed_scalar_mul_shared_table_native_scalar_region<
+        const WINDOWS: usize,
+        const WINDOW_BITS: usize,
+    >(
+        region: &mut halo2_proofs::circuit::Region<'_, Scalar>,
+        config: &NonNativeVestaAffineWindowedScalarMulSharedTableNativeScalarConfig,
+        witness: &NonNativeVestaAffineWindowedScalarMulSharedTableNativeScalar<
+            WINDOWS,
+            WINDOW_BITS,
+        >,
+    ) -> Result<(), PlonkError> {
+        config.link.enable(region, 0)?;
+        assign_native_pasta_fp_fixed_window_decomposition_region(
+            region,
+            &config.scalar,
+            witness.scalar.as_ref(),
+        )?;
+        for (table_config, table) in config.tables.iter().zip(witness.tables.iter()) {
+            assign_non_native_vesta_affine_fixed_window_table_region(region, table_config, table)?;
+        }
+        for (selection_config, selection) in config.selections.iter().zip(witness.selections.iter())
+        {
+            assign_non_native_vesta_affine_fixed_window_select_from_table_region(
+                region,
+                selection_config,
+                selection,
+            )?;
+        }
+        for (transition_configs, transition_witnesses) in config
+            .window_base_doubles
+            .iter()
+            .zip(witness.window_base_doubles.iter())
+        {
+            for (double_config, double) in transition_configs.iter().zip(transition_witnesses) {
+                assign_non_native_vesta_affine_complete_add_region(region, double_config, double)?;
+            }
+        }
+        for (sum_config, sum) in config.sum_adds.iter().zip(witness.sum_adds.iter()) {
+            assign_non_native_vesta_affine_complete_add_region(region, sum_config, sum)?;
+        }
+        Ok(())
+    }
+
+    impl<const WINDOWS: usize, const WINDOW_BITS: usize> Circuit<Scalar>
+        for NonNativeVestaAffineWindowedScalarMulSharedTableNativeScalar<WINDOWS, WINDOW_BITS>
+    {
+        type Config = NonNativeVestaAffineWindowedScalarMulSharedTableNativeScalarConfig;
+        type FloorPlanner = SimpleFloorPlanner;
+
+        type Params = ();
+        fn without_witnesses(&self) -> Self {
+            Self::default()
+        }
+        fn configure(meta: &mut ConstraintSystem<Scalar>) -> Self::Config {
+            configure_non_native_vesta_affine_windowed_scalar_mul_shared_table_native_scalar::<
+                WINDOWS,
+                WINDOW_BITS,
+            >(meta)
+        }
+        fn synthesize(
+            &self,
+            config: Self::Config,
+            mut layouter: impl Layouter<Scalar>,
+        ) -> Result<(), PlonkError> {
+            layouter.assign_region(
+                || "non_native_vesta_affine_windowed_scalar_mul_shared_table_native_scalar",
+                |mut region| {
+                    assign_non_native_vesta_affine_windowed_scalar_mul_shared_table_native_scalar_region(
+                        &mut region,
+                        &config,
+                        self,
+                    )
+                },
+            )
+        }
+    }
+
+    /// Config for fixed-window native-scalar Vesta MSM with shared table selection.
+    #[derive(Clone)]
+    pub struct NonNativeVestaAffineWindowedMsmSharedTableNativeScalarConfig {
+        term_muls: Vec<NonNativeVestaAffineWindowedScalarMulSharedTableNativeScalarConfig>,
+        sum_adds: Vec<NonNativeVestaAffineCompleteAddConfig>,
+        link: Selector,
+    }
+
+    /// Circuit wrapper proving `output = sum_i scalar_i * base_i` without duplicated tables.
+    ///
+    /// Each term uses the shared-table scalar-multiplication wrapper, so window
+    /// selections reference the derived table columns directly. Term outputs
+    /// remain private and are chained into the public MSM output by complete-add
+    /// constraints.
+    #[derive(Clone)]
+    pub struct NonNativeVestaAffineWindowedMsmSharedTableNativeScalar<
+        const TERMS: usize,
+        const WINDOWS: usize,
+        const WINDOW_BITS: usize,
+    > {
+        /// Per-term shared-table fixed-window scalar multiplications.
+        pub term_muls:
+            Vec<NonNativeVestaAffineWindowedScalarMulSharedTableNativeScalar<WINDOWS, WINDOW_BITS>>,
+        /// Private running MSM accumulation chain.
+        pub sum_adds: Vec<NonNativeVestaAffineCompleteAdd>,
+    }
+
+    impl<const TERMS: usize, const WINDOWS: usize, const WINDOW_BITS: usize> Default
+        for NonNativeVestaAffineWindowedMsmSharedTableNativeScalar<TERMS, WINDOWS, WINDOW_BITS>
+    {
+        fn default() -> Self {
+            Self {
+                term_muls: vec![
+                    NonNativeVestaAffineWindowedScalarMulSharedTableNativeScalar::default();
+                    TERMS
+                ],
+                sum_adds: vec![NonNativeVestaAffineCompleteAdd::default(); TERMS],
+            }
+        }
+    }
+
+    impl<const TERMS: usize, const WINDOWS: usize, const WINDOW_BITS: usize>
+        NonNativeVestaAffineWindowedMsmSharedTableNativeScalar<TERMS, WINDOWS, WINDOW_BITS>
+    {
+        /// Build an honest shared-table fixed-window MSM witness.
+        ///
+        /// # Errors
+        ///
+        /// Returns an error if the MSM/window shape is unsupported, any scalar
+        /// exceeds the configured fixed-window width, any point encoding is
+        /// invalid, or the supplied output is not the MSM result.
+        pub fn try_from_terms(
+            terms: [(Scalar, VestaPointEncoding); TERMS],
+            output: VestaPointEncoding,
+        ) -> Result<Self, String> {
+            validate_windowed_vesta_msm_shape::<TERMS, WINDOWS, WINDOW_BITS>()?;
+            let expected_output = vesta_affine_from_limbs(output)?;
+
+            let mut term_muls = Vec::with_capacity(TERMS);
+            let mut sum_adds = Vec::with_capacity(TERMS);
+            let mut msm_accumulator = VestaAffine::identity().to_curve();
+            for (scalar, base) in terms {
+                let base_affine = vesta_affine_from_limbs(base)?;
+                let term_output = base_affine.to_curve() * scalar;
+                let term_output_limbs = vesta_affine_to_limbs(term_output.to_affine());
+                term_muls.push(
+                    NonNativeVestaAffineWindowedScalarMulSharedTableNativeScalar::<
+                        WINDOWS,
+                        WINDOW_BITS,
+                    >::try_from_scalar(scalar, base, term_output_limbs)?,
+                );
+
+                let accumulator_before = vesta_affine_to_limbs(msm_accumulator.to_affine());
+                msm_accumulator += term_output;
+                let accumulator_after = vesta_affine_to_limbs(msm_accumulator.to_affine());
+                sum_adds.push(NonNativeVestaAffineCompleteAdd::try_from_limbs(
+                    accumulator_before,
+                    term_output_limbs,
+                    accumulator_after,
+                )?);
+            }
+
+            if msm_accumulator.to_affine() != expected_output {
+                return Err(
+                    "Vesta shared-table windowed native-scalar MSM output mismatch".to_owned(),
+                );
+            }
+
+            Ok(Self {
+                term_muls,
+                sum_adds,
+            })
+        }
+    }
+
+    fn configure_non_native_vesta_affine_windowed_msm_shared_table_native_scalar<
+        const TERMS: usize,
+        const WINDOWS: usize,
+        const WINDOW_BITS: usize,
+    >(
+        meta: &mut ConstraintSystem<Scalar>,
+    ) -> NonNativeVestaAffineWindowedMsmSharedTableNativeScalarConfig {
+        validate_windowed_vesta_msm_shape::<TERMS, WINDOWS, WINDOW_BITS>()
+            .expect("invalid Vesta shared-table windowed native-scalar MSM shape");
+        let term_muls = (0..TERMS)
+            .map(|_| {
+                configure_non_native_vesta_affine_windowed_scalar_mul_shared_table_native_scalar_with_public_io::<
+                    WINDOWS,
+                    WINDOW_BITS,
+                >(meta, false, false)
+            })
+            .collect::<Vec<_>>();
+        let sum_adds = (0..TERMS)
+            .map(|_| {
+                configure_non_native_vesta_affine_complete_add_with_exposure(
+                    meta, false, false, false,
+                )
+            })
+            .collect::<Vec<_>>();
+        let base_instances = (0..TERMS)
+            .map(|_| std::array::from_fn(|_| meta.instance_column()))
+            .collect::<Vec<_>>();
+        let output_instances = std::array::from_fn(|_| meta.instance_column());
+        let link = meta.selector();
+
+        meta.create_gate(
+            "non_native_vesta_affine_windowed_msm_shared_table_native_scalar_link",
+            |meta| {
+                let s = meta.query_selector(link);
+                let mut constraints =
+                    Vec::with_capacity((TERMS + 1) * (2 * NON_NATIVE_PASTA_FIELD_LIMBS + 1));
+
+                for term_index in 0..TERMS {
+                    let base_public = query_non_native_vesta_affine_point_instances(
+                        meta,
+                        &base_instances[term_index],
+                        Rotation::cur(),
+                    );
+                    let first_window_base = query_non_native_vesta_affine_maybe_identity_point(
+                        meta,
+                        &term_muls[term_index].tables[0].table[1],
+                        Rotation::cur(),
+                    );
+                    push_non_native_vesta_point_equality_constraints(
+                        &mut constraints,
+                        &s,
+                        &first_window_base,
+                        &base_public,
+                    );
+
+                    let term_output = query_non_native_vesta_affine_maybe_identity_point(
+                        meta,
+                        &term_muls[term_index].sum_adds[WINDOWS - 1].r,
+                        Rotation::cur(),
+                    );
+                    let sum_term = query_non_native_vesta_affine_maybe_identity_point(
+                        meta,
+                        &sum_adds[term_index].q,
+                        Rotation::cur(),
+                    );
+                    push_non_native_vesta_point_equality_constraints(
+                        &mut constraints,
+                        &s,
+                        &term_output,
+                        &sum_term,
+                    );
+
+                    if term_index == 0 {
+                        let first_sum_accumulator =
+                            query_non_native_vesta_affine_maybe_identity_point(
+                                meta,
+                                &sum_adds[0].p,
+                                Rotation::cur(),
+                            );
+                        push_non_native_vesta_identity_constraints(
+                            &mut constraints,
+                            &s,
+                            &first_sum_accumulator,
+                        );
+                    } else {
+                        let previous_sum = query_non_native_vesta_affine_maybe_identity_point(
+                            meta,
+                            &sum_adds[term_index - 1].r,
+                            Rotation::cur(),
+                        );
+                        let current_sum_input = query_non_native_vesta_affine_maybe_identity_point(
+                            meta,
+                            &sum_adds[term_index].p,
+                            Rotation::cur(),
+                        );
+                        push_non_native_vesta_point_equality_constraints(
+                            &mut constraints,
+                            &s,
+                            &previous_sum,
+                            &current_sum_input,
+                        );
+                    }
+                }
+
+                let output_public = query_non_native_vesta_affine_point_instances(
+                    meta,
+                    &output_instances,
+                    Rotation::cur(),
+                );
+                let final_sum = query_non_native_vesta_affine_maybe_identity_point(
+                    meta,
+                    &sum_adds[TERMS - 1].r,
+                    Rotation::cur(),
+                );
+                push_non_native_vesta_point_equality_constraints(
+                    &mut constraints,
+                    &s,
+                    &final_sum,
+                    &output_public,
+                );
+                constraints
+            },
+        );
+
+        NonNativeVestaAffineWindowedMsmSharedTableNativeScalarConfig {
+            term_muls,
+            sum_adds,
+            link,
+        }
+    }
+
+    fn assign_non_native_vesta_affine_windowed_msm_shared_table_native_scalar_region<
+        const TERMS: usize,
+        const WINDOWS: usize,
+        const WINDOW_BITS: usize,
+    >(
+        region: &mut halo2_proofs::circuit::Region<'_, Scalar>,
+        config: &NonNativeVestaAffineWindowedMsmSharedTableNativeScalarConfig,
+        witness: &NonNativeVestaAffineWindowedMsmSharedTableNativeScalar<
+            TERMS,
+            WINDOWS,
+            WINDOW_BITS,
+        >,
+    ) -> Result<(), PlonkError> {
+        config.link.enable(region, 0)?;
+        for (term_config, term_witness) in config.term_muls.iter().zip(witness.term_muls.iter()) {
+            assign_non_native_vesta_affine_windowed_scalar_mul_shared_table_native_scalar_region(
+                region,
+                term_config,
+                term_witness,
+            )?;
+        }
+        for (sum_config, sum) in config.sum_adds.iter().zip(witness.sum_adds.iter()) {
+            assign_non_native_vesta_affine_complete_add_region(region, sum_config, sum)?;
+        }
+        Ok(())
+    }
+
+    impl<const TERMS: usize, const WINDOWS: usize, const WINDOW_BITS: usize> Circuit<Scalar>
+        for NonNativeVestaAffineWindowedMsmSharedTableNativeScalar<TERMS, WINDOWS, WINDOW_BITS>
+    {
+        type Config = NonNativeVestaAffineWindowedMsmSharedTableNativeScalarConfig;
+        type FloorPlanner = SimpleFloorPlanner;
+
+        type Params = ();
+        fn without_witnesses(&self) -> Self {
+            Self::default()
+        }
+        fn configure(meta: &mut ConstraintSystem<Scalar>) -> Self::Config {
+            configure_non_native_vesta_affine_windowed_msm_shared_table_native_scalar::<
+                TERMS,
+                WINDOWS,
+                WINDOW_BITS,
+            >(meta)
+        }
+        fn synthesize(
+            &self,
+            config: Self::Config,
+            mut layouter: impl Layouter<Scalar>,
+        ) -> Result<(), PlonkError> {
+            layouter.assign_region(
+                || "non_native_vesta_affine_windowed_msm_shared_table_native_scalar",
+                |mut region| {
+                    assign_non_native_vesta_affine_windowed_msm_shared_table_native_scalar_region(
+                        &mut region,
+                        &config,
+                        self,
+                    )
+                },
+            )
+        }
+    }
+
+    /// Config for the shared-table fixed-window final IPA verifier MSM comparison.
+    #[derive(Clone)]
+    pub struct NonNativeVestaIpaFinalWindowedMsmSharedTableNativeScalarConfig {
+        msm: NonNativeVestaAffineWindowedMsmSharedTableNativeScalarConfig,
+        product_link: Selector,
+    }
+
+    /// Circuit wrapper proving `Q = a*G + b*H + (a*b)*U` through shared-table MSM.
+    ///
+    /// This is the shared-table counterpart to the final IPA comparison gadget:
+    /// the three scalar multiplications avoid duplicated selection-table copies,
+    /// and the third scalar is constrained to the native-field product of the
+    /// first two scalars.
+    #[derive(Clone)]
+    pub struct NonNativeVestaIpaFinalWindowedMsmSharedTableNativeScalar<
+        const WINDOWS: usize,
+        const WINDOW_BITS: usize,
+    > {
+        /// Underlying three-term shared-table fixed-window MSM witness.
+        pub msm:
+            Box<NonNativeVestaAffineWindowedMsmSharedTableNativeScalar<3, WINDOWS, WINDOW_BITS>>,
+    }
+
+    impl<const WINDOWS: usize, const WINDOW_BITS: usize> Default
+        for NonNativeVestaIpaFinalWindowedMsmSharedTableNativeScalar<WINDOWS, WINDOW_BITS>
+    {
+        fn default() -> Self {
+            Self {
+                msm: Box::new(NonNativeVestaAffineWindowedMsmSharedTableNativeScalar::default()),
+            }
+        }
+    }
+
+    impl<const WINDOWS: usize, const WINDOW_BITS: usize>
+        NonNativeVestaIpaFinalWindowedMsmSharedTableNativeScalar<WINDOWS, WINDOW_BITS>
+    {
+        /// Build an honest shared-table IPA final-comparison witness.
+        ///
+        /// # Errors
+        ///
+        /// Returns an error if any scalar exceeds the configured fixed-window
+        /// width, any point encoding is invalid, or
+        /// `output != a*final_g + b*final_h + (a*b)*u`.
+        pub fn try_from_scalars(
+            a_final: Scalar,
+            b_final: Scalar,
+            final_g: VestaPointEncoding,
+            final_h: VestaPointEncoding,
+            u: VestaPointEncoding,
+            output: VestaPointEncoding,
+        ) -> Result<Self, String> {
+            let product = a_final * b_final;
+            let msm = NonNativeVestaAffineWindowedMsmSharedTableNativeScalar::<
+                3,
+                WINDOWS,
+                WINDOW_BITS,
+            >::try_from_terms(
+                [(a_final, final_g), (b_final, final_h), (product, u)],
+                output,
+            )?;
+            Ok(Self { msm: Box::new(msm) })
+        }
+    }
+
+    fn configure_non_native_vesta_ipa_final_windowed_msm_shared_table_native_scalar<
+        const WINDOWS: usize,
+        const WINDOW_BITS: usize,
+    >(
+        meta: &mut ConstraintSystem<Scalar>,
+    ) -> NonNativeVestaIpaFinalWindowedMsmSharedTableNativeScalarConfig {
+        let msm = configure_non_native_vesta_affine_windowed_msm_shared_table_native_scalar::<
+            3,
+            WINDOWS,
+            WINDOW_BITS,
+        >(meta);
+        let product_link = meta.selector();
+
+        meta.create_gate(
+            "non_native_vesta_ipa_final_windowed_msm_shared_table_product_link",
+            |meta| {
+                let s = meta.query_selector(product_link);
+                let a = meta.query_advice(msm.term_muls[0].scalar.scalar.value, Rotation::cur());
+                let b = meta.query_advice(msm.term_muls[1].scalar.scalar.value, Rotation::cur());
+                let product =
+                    meta.query_advice(msm.term_muls[2].scalar.scalar.value, Rotation::cur());
+                vec![s * (a * b - product)]
+            },
+        );
+
+        NonNativeVestaIpaFinalWindowedMsmSharedTableNativeScalarConfig { msm, product_link }
+    }
+
+    impl<const WINDOWS: usize, const WINDOW_BITS: usize> Circuit<Scalar>
+        for NonNativeVestaIpaFinalWindowedMsmSharedTableNativeScalar<WINDOWS, WINDOW_BITS>
+    {
+        type Config = NonNativeVestaIpaFinalWindowedMsmSharedTableNativeScalarConfig;
+        type FloorPlanner = SimpleFloorPlanner;
+
+        type Params = ();
+        fn without_witnesses(&self) -> Self {
+            Self::default()
+        }
+        fn configure(meta: &mut ConstraintSystem<Scalar>) -> Self::Config {
+            configure_non_native_vesta_ipa_final_windowed_msm_shared_table_native_scalar::<
+                WINDOWS,
+                WINDOW_BITS,
+            >(meta)
+        }
+        fn synthesize(
+            &self,
+            config: Self::Config,
+            mut layouter: impl Layouter<Scalar>,
+        ) -> Result<(), PlonkError> {
+            layouter.assign_region(
+                || "non_native_vesta_ipa_final_windowed_msm_shared_table_native_scalar",
+                |mut region| {
+                    config.product_link.enable(&mut region, 0)?;
+                    assign_non_native_vesta_affine_windowed_msm_shared_table_native_scalar_region(
+                        &mut region,
+                        &config.msm,
+                        self.msm.as_ref(),
                     )
                 },
             )
@@ -29274,6 +39972,372 @@ mod pasta_tiny {
         }
     }
 
+    /// Config for one IPA accumulator update round with shared-table MSMs.
+    #[derive(Clone)]
+    pub struct NonNativeVestaIpaRoundAccumulatorSharedTableNativeScalarConfig {
+        challenge: NativePastaFpScalarConfig,
+        challenge_inverse: NativePastaFpScalarConfig,
+        msm: NonNativeVestaAffineWindowedMsmSharedTableNativeScalarConfig,
+        link: Selector,
+    }
+
+    /// Circuit wrapper proving `Q' = x^2*L + Q + x^{-2}*R` through shared-table MSM.
+    #[derive(Clone)]
+    pub struct NonNativeVestaIpaRoundAccumulatorSharedTableNativeScalar<
+        const WINDOWS: usize,
+        const WINDOW_BITS: usize,
+    > {
+        /// Private canonical challenge `x`.
+        pub challenge: NativePastaFpScalar,
+        /// Private canonical inverse challenge `x^{-1}`.
+        pub challenge_inverse: NativePastaFpScalar,
+        /// Underlying three-term shared-table fixed-window MSM witness.
+        pub msm:
+            Box<NonNativeVestaAffineWindowedMsmSharedTableNativeScalar<3, WINDOWS, WINDOW_BITS>>,
+    }
+
+    impl<const WINDOWS: usize, const WINDOW_BITS: usize> Default
+        for NonNativeVestaIpaRoundAccumulatorSharedTableNativeScalar<WINDOWS, WINDOW_BITS>
+    {
+        fn default() -> Self {
+            Self {
+                challenge: NativePastaFpScalar::default(),
+                challenge_inverse: NativePastaFpScalar::default(),
+                msm: Box::new(NonNativeVestaAffineWindowedMsmSharedTableNativeScalar::default()),
+            }
+        }
+    }
+
+    impl<const WINDOWS: usize, const WINDOW_BITS: usize>
+        NonNativeVestaIpaRoundAccumulatorSharedTableNativeScalar<WINDOWS, WINDOW_BITS>
+    {
+        /// Build an honest shared-table IPA round accumulator witness.
+        ///
+        /// # Errors
+        ///
+        /// Returns an error if `challenge_inverse` is not the inverse of
+        /// `challenge`, any MSM scalar exceeds the configured fixed-window
+        /// width, any point encoding is invalid, or the supplied output is not
+        /// the IPA accumulator update.
+        pub fn try_from_challenge(
+            challenge: Scalar,
+            challenge_inverse: Scalar,
+            l: VestaPointEncoding,
+            q_before: VestaPointEncoding,
+            r: VestaPointEncoding,
+            q_after: VestaPointEncoding,
+        ) -> Result<Self, String> {
+            if challenge * challenge_inverse != Scalar::from(1) {
+                return Err("IPA round challenge inverse mismatch".to_owned());
+            }
+            let challenge_square = challenge * challenge;
+            let challenge_inverse_square = challenge_inverse * challenge_inverse;
+            let msm = NonNativeVestaAffineWindowedMsmSharedTableNativeScalar::<
+                3,
+                WINDOWS,
+                WINDOW_BITS,
+            >::try_from_terms(
+                [
+                    (challenge_square, l),
+                    (Scalar::from(1), q_before),
+                    (challenge_inverse_square, r),
+                ],
+                q_after,
+            )?;
+            Ok(Self {
+                challenge: NativePastaFpScalar::from_scalar(challenge),
+                challenge_inverse: NativePastaFpScalar::from_scalar(challenge_inverse),
+                msm: Box::new(msm),
+            })
+        }
+    }
+
+    fn configure_non_native_vesta_ipa_round_accumulator_shared_table_native_scalar<
+        const WINDOWS: usize,
+        const WINDOW_BITS: usize,
+    >(
+        meta: &mut ConstraintSystem<Scalar>,
+    ) -> NonNativeVestaIpaRoundAccumulatorSharedTableNativeScalarConfig {
+        let challenge = configure_private_native_pasta_fp_scalar(meta);
+        let challenge_inverse = configure_private_native_pasta_fp_scalar(meta);
+        let msm = configure_non_native_vesta_affine_windowed_msm_shared_table_native_scalar::<
+            3,
+            WINDOWS,
+            WINDOW_BITS,
+        >(meta);
+        let link = meta.selector();
+
+        meta.create_gate(
+            "non_native_vesta_ipa_round_accumulator_shared_table_link",
+            |meta| {
+                let s = meta.query_selector(link);
+                let x = meta.query_advice(challenge.value, Rotation::cur());
+                let x_inverse = meta.query_advice(challenge_inverse.value, Rotation::cur());
+                let x_square =
+                    meta.query_advice(msm.term_muls[0].scalar.scalar.value, Rotation::cur());
+                let one_scalar =
+                    meta.query_advice(msm.term_muls[1].scalar.scalar.value, Rotation::cur());
+                let x_inverse_square =
+                    meta.query_advice(msm.term_muls[2].scalar.scalar.value, Rotation::cur());
+                let one = Expression::Constant(Scalar::from(1));
+                vec![
+                    s.clone() * (x.clone() * x_inverse.clone() - one.clone()),
+                    s.clone() * (x.clone() * x - x_square),
+                    s.clone() * (x_inverse.clone() * x_inverse - x_inverse_square),
+                    s * (one_scalar - one),
+                ]
+            },
+        );
+
+        NonNativeVestaIpaRoundAccumulatorSharedTableNativeScalarConfig {
+            challenge,
+            challenge_inverse,
+            msm,
+            link,
+        }
+    }
+
+    impl<const WINDOWS: usize, const WINDOW_BITS: usize> Circuit<Scalar>
+        for NonNativeVestaIpaRoundAccumulatorSharedTableNativeScalar<WINDOWS, WINDOW_BITS>
+    {
+        type Config = NonNativeVestaIpaRoundAccumulatorSharedTableNativeScalarConfig;
+        type FloorPlanner = SimpleFloorPlanner;
+
+        type Params = ();
+        fn without_witnesses(&self) -> Self {
+            Self::default()
+        }
+        fn configure(meta: &mut ConstraintSystem<Scalar>) -> Self::Config {
+            configure_non_native_vesta_ipa_round_accumulator_shared_table_native_scalar::<
+                WINDOWS,
+                WINDOW_BITS,
+            >(meta)
+        }
+        fn synthesize(
+            &self,
+            config: Self::Config,
+            mut layouter: impl Layouter<Scalar>,
+        ) -> Result<(), PlonkError> {
+            layouter.assign_region(
+                || "non_native_vesta_ipa_round_accumulator_shared_table_native_scalar",
+                |mut region| {
+                    config.link.enable(&mut region, 0)?;
+                    assign_native_pasta_fp_scalar_region(
+                        &mut region,
+                        &config.challenge,
+                        &self.challenge,
+                        false,
+                    )?;
+                    assign_native_pasta_fp_scalar_region(
+                        &mut region,
+                        &config.challenge_inverse,
+                        &self.challenge_inverse,
+                        false,
+                    )?;
+                    assign_non_native_vesta_affine_windowed_msm_shared_table_native_scalar_region(
+                        &mut region,
+                        &config.msm,
+                        self.msm.as_ref(),
+                    )
+                },
+            )
+        }
+    }
+
+    /// Config for one IPA generator-folding step with shared-table MSMs.
+    #[derive(Clone)]
+    pub struct NonNativeVestaIpaGeneratorFoldSharedTableNativeScalarConfig {
+        challenge: NativePastaFpScalarConfig,
+        challenge_inverse: NativePastaFpScalarConfig,
+        g_msm: NonNativeVestaAffineWindowedMsmSharedTableNativeScalarConfig,
+        h_msm: NonNativeVestaAffineWindowedMsmSharedTableNativeScalarConfig,
+        link: Selector,
+    }
+
+    /// Circuit wrapper proving IPA folded generators for one round through shared-table MSMs.
+    #[derive(Clone)]
+    pub struct NonNativeVestaIpaGeneratorFoldSharedTableNativeScalar<
+        const WINDOWS: usize,
+        const WINDOW_BITS: usize,
+    > {
+        /// Private canonical challenge `x`.
+        pub challenge: NativePastaFpScalar,
+        /// Private canonical inverse challenge `x^{-1}`.
+        pub challenge_inverse: NativePastaFpScalar,
+        /// Shared-table fixed-window MSM witness for `G'`.
+        pub g_msm:
+            Box<NonNativeVestaAffineWindowedMsmSharedTableNativeScalar<2, WINDOWS, WINDOW_BITS>>,
+        /// Shared-table fixed-window MSM witness for `H'`.
+        pub h_msm:
+            Box<NonNativeVestaAffineWindowedMsmSharedTableNativeScalar<2, WINDOWS, WINDOW_BITS>>,
+    }
+
+    impl<const WINDOWS: usize, const WINDOW_BITS: usize> Default
+        for NonNativeVestaIpaGeneratorFoldSharedTableNativeScalar<WINDOWS, WINDOW_BITS>
+    {
+        fn default() -> Self {
+            Self {
+                challenge: NativePastaFpScalar::default(),
+                challenge_inverse: NativePastaFpScalar::default(),
+                g_msm: Box::new(NonNativeVestaAffineWindowedMsmSharedTableNativeScalar::default()),
+                h_msm: Box::new(NonNativeVestaAffineWindowedMsmSharedTableNativeScalar::default()),
+            }
+        }
+    }
+
+    impl<const WINDOWS: usize, const WINDOW_BITS: usize>
+        NonNativeVestaIpaGeneratorFoldSharedTableNativeScalar<WINDOWS, WINDOW_BITS>
+    {
+        /// Build an honest shared-table IPA generator-folding witness.
+        ///
+        /// # Errors
+        ///
+        /// Returns an error if `challenge_inverse` is not the inverse of
+        /// `challenge`, any MSM scalar exceeds the configured fixed-window
+        /// width, any point encoding is invalid, or either supplied folded
+        /// generator output is wrong.
+        pub fn try_from_challenge(
+            challenge: Scalar,
+            challenge_inverse: Scalar,
+            g_left: VestaPointEncoding,
+            g_right: VestaPointEncoding,
+            h_left: VestaPointEncoding,
+            h_right: VestaPointEncoding,
+            g_after: VestaPointEncoding,
+            h_after: VestaPointEncoding,
+        ) -> Result<Self, String> {
+            if challenge * challenge_inverse != Scalar::from(1) {
+                return Err("IPA generator-fold challenge inverse mismatch".to_owned());
+            }
+            let g_msm = NonNativeVestaAffineWindowedMsmSharedTableNativeScalar::<
+                2,
+                WINDOWS,
+                WINDOW_BITS,
+            >::try_from_terms(
+                [(challenge_inverse, g_left), (challenge, g_right)], g_after
+            )?;
+            let h_msm = NonNativeVestaAffineWindowedMsmSharedTableNativeScalar::<
+                2,
+                WINDOWS,
+                WINDOW_BITS,
+            >::try_from_terms(
+                [(challenge, h_left), (challenge_inverse, h_right)], h_after
+            )?;
+            Ok(Self {
+                challenge: NativePastaFpScalar::from_scalar(challenge),
+                challenge_inverse: NativePastaFpScalar::from_scalar(challenge_inverse),
+                g_msm: Box::new(g_msm),
+                h_msm: Box::new(h_msm),
+            })
+        }
+    }
+
+    fn configure_non_native_vesta_ipa_generator_fold_shared_table_native_scalar<
+        const WINDOWS: usize,
+        const WINDOW_BITS: usize,
+    >(
+        meta: &mut ConstraintSystem<Scalar>,
+    ) -> NonNativeVestaIpaGeneratorFoldSharedTableNativeScalarConfig {
+        let challenge = configure_private_native_pasta_fp_scalar(meta);
+        let challenge_inverse = configure_private_native_pasta_fp_scalar(meta);
+        let g_msm = configure_non_native_vesta_affine_windowed_msm_shared_table_native_scalar::<
+            2,
+            WINDOWS,
+            WINDOW_BITS,
+        >(meta);
+        let h_msm = configure_non_native_vesta_affine_windowed_msm_shared_table_native_scalar::<
+            2,
+            WINDOWS,
+            WINDOW_BITS,
+        >(meta);
+        let link = meta.selector();
+
+        meta.create_gate(
+            "non_native_vesta_ipa_generator_fold_shared_table_link",
+            |meta| {
+                let s = meta.query_selector(link);
+                let x = meta.query_advice(challenge.value, Rotation::cur());
+                let x_inverse = meta.query_advice(challenge_inverse.value, Rotation::cur());
+                let g_left_scalar =
+                    meta.query_advice(g_msm.term_muls[0].scalar.scalar.value, Rotation::cur());
+                let g_right_scalar =
+                    meta.query_advice(g_msm.term_muls[1].scalar.scalar.value, Rotation::cur());
+                let h_left_scalar =
+                    meta.query_advice(h_msm.term_muls[0].scalar.scalar.value, Rotation::cur());
+                let h_right_scalar =
+                    meta.query_advice(h_msm.term_muls[1].scalar.scalar.value, Rotation::cur());
+                let one = Expression::Constant(Scalar::from(1));
+                vec![
+                    s.clone() * (x.clone() * x_inverse.clone() - one),
+                    s.clone() * (g_left_scalar - x_inverse.clone()),
+                    s.clone() * (g_right_scalar - x.clone()),
+                    s.clone() * (h_left_scalar - x),
+                    s * (h_right_scalar - x_inverse),
+                ]
+            },
+        );
+
+        NonNativeVestaIpaGeneratorFoldSharedTableNativeScalarConfig {
+            challenge,
+            challenge_inverse,
+            g_msm,
+            h_msm,
+            link,
+        }
+    }
+
+    impl<const WINDOWS: usize, const WINDOW_BITS: usize> Circuit<Scalar>
+        for NonNativeVestaIpaGeneratorFoldSharedTableNativeScalar<WINDOWS, WINDOW_BITS>
+    {
+        type Config = NonNativeVestaIpaGeneratorFoldSharedTableNativeScalarConfig;
+        type FloorPlanner = SimpleFloorPlanner;
+
+        type Params = ();
+        fn without_witnesses(&self) -> Self {
+            Self::default()
+        }
+        fn configure(meta: &mut ConstraintSystem<Scalar>) -> Self::Config {
+            configure_non_native_vesta_ipa_generator_fold_shared_table_native_scalar::<
+                WINDOWS,
+                WINDOW_BITS,
+            >(meta)
+        }
+        fn synthesize(
+            &self,
+            config: Self::Config,
+            mut layouter: impl Layouter<Scalar>,
+        ) -> Result<(), PlonkError> {
+            layouter.assign_region(
+                || "non_native_vesta_ipa_generator_fold_shared_table_native_scalar",
+                |mut region| {
+                    config.link.enable(&mut region, 0)?;
+                    assign_native_pasta_fp_scalar_region(
+                        &mut region,
+                        &config.challenge,
+                        &self.challenge,
+                        false,
+                    )?;
+                    assign_native_pasta_fp_scalar_region(
+                        &mut region,
+                        &config.challenge_inverse,
+                        &self.challenge_inverse,
+                        false,
+                    )?;
+                    assign_non_native_vesta_affine_windowed_msm_shared_table_native_scalar_region(
+                        &mut region,
+                        &config.g_msm,
+                        self.g_msm.as_ref(),
+                    )?;
+                    assign_non_native_vesta_affine_windowed_msm_shared_table_native_scalar_region(
+                        &mut region,
+                        &config.h_msm,
+                        self.h_msm.as_ref(),
+                    )
+                },
+            )
+        }
+    }
+
     /// Config for a one-round composed IPA verifier slice.
     #[derive(Clone)]
     pub struct NonNativeVestaIpaOneRoundVerifierNativeScalarConfig {
@@ -29636,22 +40700,409 @@ mod pasta_tiny {
         }
     }
 
+    /// Config for a one-round shared-table IPA verifier slice.
+    #[derive(Clone)]
+    pub struct NonNativeVestaIpaOneRoundVerifierSharedTableNativeScalarConfig {
+        b_reduction: NativePastaFpIpaBVectorReductionConfig,
+        round_accumulator: NonNativeVestaIpaRoundAccumulatorSharedTableNativeScalarConfig,
+        generator_fold: NonNativeVestaIpaGeneratorFoldSharedTableNativeScalarConfig,
+        final_msm: NonNativeVestaIpaFinalWindowedMsmSharedTableNativeScalarConfig,
+        link: Selector,
+    }
+
+    /// Circuit wrapper composing one IPA verifier round with shared-table MSMs.
+    #[derive(Clone)]
+    pub struct NonNativeVestaIpaOneRoundVerifierSharedTableNativeScalar<
+        const WINDOWS: usize,
+        const WINDOW_BITS: usize,
+    > {
+        /// Public `b`-vector reduction from two inputs to one final scalar.
+        pub b_reduction: Box<NativePastaFpIpaBVectorReduction<2>>,
+        /// Shared-table round accumulator update witness.
+        pub round_accumulator:
+            Box<NonNativeVestaIpaRoundAccumulatorSharedTableNativeScalar<WINDOWS, WINDOW_BITS>>,
+        /// Shared-table generator-fold witness.
+        pub generator_fold:
+            Box<NonNativeVestaIpaGeneratorFoldSharedTableNativeScalar<WINDOWS, WINDOW_BITS>>,
+        /// Shared-table final IPA comparison witness.
+        pub final_msm:
+            Box<NonNativeVestaIpaFinalWindowedMsmSharedTableNativeScalar<WINDOWS, WINDOW_BITS>>,
+    }
+
+    impl<const WINDOWS: usize, const WINDOW_BITS: usize> Default
+        for NonNativeVestaIpaOneRoundVerifierSharedTableNativeScalar<WINDOWS, WINDOW_BITS>
+    {
+        fn default() -> Self {
+            Self {
+                b_reduction: Box::new(NativePastaFpIpaBVectorReduction::default()),
+                round_accumulator: Box::new(
+                    NonNativeVestaIpaRoundAccumulatorSharedTableNativeScalar::default(),
+                ),
+                generator_fold: Box::new(
+                    NonNativeVestaIpaGeneratorFoldSharedTableNativeScalar::default(),
+                ),
+                final_msm: Box::new(
+                    NonNativeVestaIpaFinalWindowedMsmSharedTableNativeScalar::default(),
+                ),
+            }
+        }
+    }
+
+    impl<const WINDOWS: usize, const WINDOW_BITS: usize>
+        NonNativeVestaIpaOneRoundVerifierSharedTableNativeScalar<WINDOWS, WINDOW_BITS>
+    {
+        /// Build an honest shared-table one-round IPA verifier composition witness.
+        ///
+        /// # Errors
+        ///
+        /// Returns an error if any sub-witness is invalid or if the final
+        /// comparison does not equal the round-updated accumulator.
+        #[allow(clippy::too_many_arguments)]
+        pub fn try_from_statement(
+            b_initial: [Scalar; 2],
+            challenge: Scalar,
+            challenge_inverse: Scalar,
+            a_final: Scalar,
+            l: VestaPointEncoding,
+            q_before: VestaPointEncoding,
+            r: VestaPointEncoding,
+            g_left: VestaPointEncoding,
+            g_right: VestaPointEncoding,
+            h_left: VestaPointEncoding,
+            h_right: VestaPointEncoding,
+            u: VestaPointEncoding,
+        ) -> Result<Self, String> {
+            let b_final = b_initial[0] * challenge_inverse + b_initial[1] * challenge;
+            let b_reduction = NativePastaFpIpaBVectorReduction::<2>::try_from_scalars(
+                b_initial,
+                vec![challenge],
+                vec![challenge_inverse],
+                b_final,
+            )?;
+
+            let q_after = vesta_msm_output_from_encoded_terms([
+                (challenge * challenge, l),
+                (Scalar::from(1), q_before),
+                (challenge_inverse * challenge_inverse, r),
+            ])?;
+            let round_accumulator = NonNativeVestaIpaRoundAccumulatorSharedTableNativeScalar::<
+                WINDOWS,
+                WINDOW_BITS,
+            >::try_from_challenge(
+                challenge, challenge_inverse, l, q_before, r, q_after
+            )?;
+
+            let g_after = vesta_msm_output_from_encoded_terms([
+                (challenge_inverse, g_left),
+                (challenge, g_right),
+            ])?;
+            let h_after = vesta_msm_output_from_encoded_terms([
+                (challenge, h_left),
+                (challenge_inverse, h_right),
+            ])?;
+            let generator_fold = NonNativeVestaIpaGeneratorFoldSharedTableNativeScalar::<
+                WINDOWS,
+                WINDOW_BITS,
+            >::try_from_challenge(
+                challenge,
+                challenge_inverse,
+                g_left,
+                g_right,
+                h_left,
+                h_right,
+                g_after,
+                h_after,
+            )?;
+
+            let final_msm = NonNativeVestaIpaFinalWindowedMsmSharedTableNativeScalar::<
+                WINDOWS,
+                WINDOW_BITS,
+            >::try_from_scalars(
+                a_final, b_final, g_after, h_after, u, q_after
+            )?;
+
+            Ok(Self {
+                b_reduction: Box::new(b_reduction),
+                round_accumulator: Box::new(round_accumulator),
+                generator_fold: Box::new(generator_fold),
+                final_msm: Box::new(final_msm),
+            })
+        }
+    }
+
+    fn configure_non_native_vesta_ipa_one_round_verifier_shared_table_native_scalar<
+        const WINDOWS: usize,
+        const WINDOW_BITS: usize,
+    >(
+        meta: &mut ConstraintSystem<Scalar>,
+    ) -> NonNativeVestaIpaOneRoundVerifierSharedTableNativeScalarConfig {
+        let b_reduction = configure_native_pasta_fp_ipa_b_vector_reduction::<2>(meta);
+        let round_accumulator =
+            configure_non_native_vesta_ipa_round_accumulator_shared_table_native_scalar::<
+                WINDOWS,
+                WINDOW_BITS,
+            >(meta);
+        let generator_fold =
+            configure_non_native_vesta_ipa_generator_fold_shared_table_native_scalar::<
+                WINDOWS,
+                WINDOW_BITS,
+            >(meta);
+        let final_msm =
+            configure_non_native_vesta_ipa_final_windowed_msm_shared_table_native_scalar::<
+                WINDOWS,
+                WINDOW_BITS,
+            >(meta);
+        let link = meta.selector();
+
+        meta.create_gate(
+            "non_native_vesta_ipa_one_round_verifier_shared_table_link",
+            |meta| {
+                let s = meta.query_selector(link);
+                let mut constraints =
+                    Vec::with_capacity(2 + 3 * (2 * NON_NATIVE_PASTA_FIELD_LIMBS + 1));
+
+                let b_challenge =
+                    meta.query_advice(b_reduction.challenges[0].value, Rotation::cur());
+                let b_challenge_inverse =
+                    meta.query_advice(b_reduction.challenge_inverses[0].value, Rotation::cur());
+                let round_challenge =
+                    meta.query_advice(round_accumulator.challenge.value, Rotation::cur());
+                let round_challenge_inverse =
+                    meta.query_advice(round_accumulator.challenge_inverse.value, Rotation::cur());
+                let generator_challenge =
+                    meta.query_advice(generator_fold.challenge.value, Rotation::cur());
+                let generator_challenge_inverse =
+                    meta.query_advice(generator_fold.challenge_inverse.value, Rotation::cur());
+                constraints.push(s.clone() * (b_challenge.clone() - round_challenge.clone()));
+                constraints.push(s.clone() * (b_challenge - generator_challenge));
+                constraints.push(
+                    s.clone() * (b_challenge_inverse.clone() - round_challenge_inverse.clone()),
+                );
+                constraints.push(s.clone() * (b_challenge_inverse - generator_challenge_inverse));
+
+                let b_final = meta.query_advice(b_reduction.vectors[1][0].value, Rotation::cur());
+                let final_msm_b = meta.query_advice(
+                    final_msm.msm.term_muls[1].scalar.scalar.value,
+                    Rotation::cur(),
+                );
+                constraints.push(s.clone() * (b_final - final_msm_b));
+
+                let round_q_after = query_non_native_vesta_affine_maybe_identity_point(
+                    meta,
+                    &round_accumulator.msm.sum_adds[2].r,
+                    Rotation::cur(),
+                );
+                let final_output = query_non_native_vesta_affine_maybe_identity_point(
+                    meta,
+                    &final_msm.msm.sum_adds[2].r,
+                    Rotation::cur(),
+                );
+                push_non_native_vesta_point_equality_constraints(
+                    &mut constraints,
+                    &s,
+                    &round_q_after,
+                    &final_output,
+                );
+
+                let folded_g = query_non_native_vesta_affine_maybe_identity_point(
+                    meta,
+                    &generator_fold.g_msm.sum_adds[1].r,
+                    Rotation::cur(),
+                );
+                let final_g_base = query_non_native_vesta_affine_maybe_identity_point(
+                    meta,
+                    &final_msm.msm.term_muls[0].tables[0].table[1],
+                    Rotation::cur(),
+                );
+                push_non_native_vesta_point_equality_constraints(
+                    &mut constraints,
+                    &s,
+                    &folded_g,
+                    &final_g_base,
+                );
+
+                let folded_h = query_non_native_vesta_affine_maybe_identity_point(
+                    meta,
+                    &generator_fold.h_msm.sum_adds[1].r,
+                    Rotation::cur(),
+                );
+                let final_h_base = query_non_native_vesta_affine_maybe_identity_point(
+                    meta,
+                    &final_msm.msm.term_muls[1].tables[0].table[1],
+                    Rotation::cur(),
+                );
+                push_non_native_vesta_point_equality_constraints(
+                    &mut constraints,
+                    &s,
+                    &folded_h,
+                    &final_h_base,
+                );
+
+                constraints
+            },
+        );
+
+        NonNativeVestaIpaOneRoundVerifierSharedTableNativeScalarConfig {
+            b_reduction,
+            round_accumulator,
+            generator_fold,
+            final_msm,
+            link,
+        }
+    }
+
+    impl<const WINDOWS: usize, const WINDOW_BITS: usize> Circuit<Scalar>
+        for NonNativeVestaIpaOneRoundVerifierSharedTableNativeScalar<WINDOWS, WINDOW_BITS>
+    {
+        type Config = NonNativeVestaIpaOneRoundVerifierSharedTableNativeScalarConfig;
+        type FloorPlanner = SimpleFloorPlanner;
+
+        type Params = ();
+        fn without_witnesses(&self) -> Self {
+            Self::default()
+        }
+        fn configure(meta: &mut ConstraintSystem<Scalar>) -> Self::Config {
+            configure_non_native_vesta_ipa_one_round_verifier_shared_table_native_scalar::<
+                WINDOWS,
+                WINDOW_BITS,
+            >(meta)
+        }
+        fn synthesize(
+            &self,
+            config: Self::Config,
+            mut layouter: impl Layouter<Scalar>,
+        ) -> Result<(), PlonkError> {
+            layouter.assign_region(
+                || "non_native_vesta_ipa_one_round_verifier_shared_table_native_scalar",
+                |mut region| {
+                    config.link.enable(&mut region, 0)?;
+                    let final_b_layer = config.b_reduction.vectors.len().saturating_sub(1);
+                    for (layer_index, (witness_layer, config_layer)) in self
+                        .b_reduction
+                        .vectors
+                        .iter()
+                        .zip(config.b_reduction.vectors.iter())
+                        .enumerate()
+                    {
+                        let expose_public = layer_index == 0 || layer_index == final_b_layer;
+                        for (witness, scalar_config) in
+                            witness_layer.iter().zip(config_layer.iter())
+                        {
+                            assign_native_pasta_fp_scalar_region(
+                                &mut region,
+                                scalar_config,
+                                witness,
+                                expose_public,
+                            )?;
+                        }
+                    }
+                    for (witness, scalar_config) in self
+                        .b_reduction
+                        .challenges
+                        .iter()
+                        .zip(config.b_reduction.challenges.iter())
+                    {
+                        assign_native_pasta_fp_scalar_region(
+                            &mut region,
+                            scalar_config,
+                            witness,
+                            true,
+                        )?;
+                    }
+                    for (witness, scalar_config) in self
+                        .b_reduction
+                        .challenge_inverses
+                        .iter()
+                        .zip(config.b_reduction.challenge_inverses.iter())
+                    {
+                        assign_native_pasta_fp_scalar_region(
+                            &mut region,
+                            scalar_config,
+                            witness,
+                            true,
+                        )?;
+                    }
+
+                    config.b_reduction.link.enable(&mut region, 0)?;
+                    config.round_accumulator.link.enable(&mut region, 0)?;
+                    assign_native_pasta_fp_scalar_region(
+                        &mut region,
+                        &config.round_accumulator.challenge,
+                        &self.round_accumulator.challenge,
+                        false,
+                    )?;
+                    assign_native_pasta_fp_scalar_region(
+                        &mut region,
+                        &config.round_accumulator.challenge_inverse,
+                        &self.round_accumulator.challenge_inverse,
+                        false,
+                    )?;
+                    assign_non_native_vesta_affine_windowed_msm_shared_table_native_scalar_region(
+                        &mut region,
+                        &config.round_accumulator.msm,
+                        self.round_accumulator.msm.as_ref(),
+                    )?;
+
+                    config.generator_fold.link.enable(&mut region, 0)?;
+                    assign_native_pasta_fp_scalar_region(
+                        &mut region,
+                        &config.generator_fold.challenge,
+                        &self.generator_fold.challenge,
+                        false,
+                    )?;
+                    assign_native_pasta_fp_scalar_region(
+                        &mut region,
+                        &config.generator_fold.challenge_inverse,
+                        &self.generator_fold.challenge_inverse,
+                        false,
+                    )?;
+                    assign_non_native_vesta_affine_windowed_msm_shared_table_native_scalar_region(
+                        &mut region,
+                        &config.generator_fold.g_msm,
+                        self.generator_fold.g_msm.as_ref(),
+                    )?;
+                    assign_non_native_vesta_affine_windowed_msm_shared_table_native_scalar_region(
+                        &mut region,
+                        &config.generator_fold.h_msm,
+                        self.generator_fold.h_msm.as_ref(),
+                    )?;
+
+                    config.final_msm.product_link.enable(&mut region, 0)?;
+                    assign_non_native_vesta_affine_windowed_msm_shared_table_native_scalar_region(
+                        &mut region,
+                        &config.final_msm.msm,
+                        self.final_msm.msm.as_ref(),
+                    )
+                },
+            )
+        }
+    }
+
     /// Deterministic host-side summary of a validated batch of Pallas IPA verifier witnesses.
     ///
     /// The digest uses the repository's streaming Poseidon2 byte sponge with
     /// domain separation and binds the parameter fingerprint, witness order,
-    /// transcript projections, `b` reductions, accumulator folds, final terms,
-    /// and proof-final scalars after each witness has passed native verifier
-    /// preflight. It is intended as the compact host bridge surface for the
-    /// future recursive-in-circuit aggregation mode.
+    /// fixed-window table profile and schedule digest, transcript projections,
+    /// `b` reductions, accumulator folds, final terms, and proof-final scalars
+    /// after each witness has passed native verifier preflight. It is intended
+    /// as the compact host bridge surface for the future recursive-in-circuit
+    /// aggregation mode.
     #[derive(Clone, Copy, Debug, Eq, PartialEq)]
     pub struct PallasIpaBatchVerifierPreflight {
         /// Number of verifier witnesses validated into this batch.
         pub proof_count: usize,
         /// Canonical recursive verifier-witness profile used by this batch preflight.
         pub verifier_witness_profile: &'static str,
+        /// Pallas IPA opening vector length used by this batch.
+        pub opening_len: u32,
         /// Fingerprint of the transparent Pallas IPA parameters used by the batch.
         pub params_fingerprint: [u8; 32],
+        /// Poseidon2 digest of the deterministic shared fixed-window table schedule.
+        pub fixed_window_table_schedule_digest: [u8; 32],
+        /// Poseidon2 digest of the compressed shared fixed-window table row manifest.
+        pub fixed_window_shared_table_manifest_digest: [u8; 32],
+        /// Poseidon2 digest of the ordered fixed-window table bases validated by native preflight.
+        pub fixed_window_table_base_digest: [u8; 32],
         /// Domain-separated digest binding all validated witness projections in order.
         pub aggregate_digest: [u8; 32],
     }
@@ -29911,8 +41362,9 @@ mod pasta_tiny {
         /// # Errors
         ///
         /// Returns an error if the native witness shape does not match `LEN`, if
-        /// its transcript, `b`-reduction, or accumulator projections are not
-        /// internally consistent.
+        /// its transcript binding is not the deterministic binding of the
+        /// transcript projection, or if its `b`-reduction or accumulator
+        /// projections are not internally consistent.
         pub fn validate_pallas_verifier_witness(
             params: &iroha_zkp_halo2::pallas::Params,
             witness: &iroha_zkp_halo2::IpaVerifierWitness<iroha_zkp_halo2::pallas::PallasBackend>,
@@ -29964,6 +41416,13 @@ mod pasta_tiny {
                 }
                 vesta_encoding_from_pallas_compressed(&round.l_bytes)?;
                 vesta_encoding_from_pallas_compressed(&round.r_bytes)?;
+                if round.challenge.mul(round.challenge_inverse)
+                    != iroha_zkp_halo2::pallas::Scalar::one()
+                {
+                    return Err(format!(
+                        "Pallas IPA transcript challenge inverse mismatch at round {round_index}"
+                    ));
+                }
             }
             let round_challenges = witness
                 .round_challenges
@@ -29985,6 +41444,13 @@ mod pasta_tiny {
                     "Pallas IPA transcript binding inverses mismatch verified rounds".to_owned(),
                 );
             }
+            iroha_zkp_halo2::validate_ipa_verifier_transcript_binding(
+                &witness.transcript_projection,
+                &witness.transcript_binding,
+            )
+            .map_err(|err| {
+                format!("Pallas IPA transcript binding mismatch transcript projection: {err}")
+            })?;
             if witness.b_reduction.initial_b.len() != LEN {
                 return Err(format!(
                     "Pallas IPA b vector length mismatch: expected {LEN}, found {}",
@@ -30194,6 +41660,8 @@ mod pasta_tiny {
             }
 
             let params_fingerprint = params.fingerprint();
+            let opening_len = u32::try_from(LEN)
+                .map_err(|_| "Pallas IPA opening length does not fit u32".to_owned())?;
             let mut hasher = PallasBatchDigest::new();
             pallas_batch_digest_update_bytes(
                 &mut hasher,
@@ -30202,6 +41670,10 @@ mod pasta_tiny {
             pallas_batch_digest_update_len(&mut hasher, "LEN", LEN)?;
             pallas_batch_digest_update_len(&mut hasher, "proof count", witnesses.len())?;
             pallas_batch_digest_update_bytes(&mut hasher, &params_fingerprint);
+            let (fixed_window_table_schedule_digest, fixed_window_shared_table_manifest_digest) =
+                pallas_batch_digest_update_fixed_window_table_profile::<LEN, WINDOWS, WINDOW_BITS>(
+                    &mut hasher,
+                )?;
 
             for (witness_index, witness) in witnesses.iter().enumerate() {
                 Self::validate_pallas_verifier_witness(params, witness).map_err(|err| {
@@ -30209,13 +41681,23 @@ mod pasta_tiny {
                 })?;
                 pallas_batch_digest_update_witness(&mut hasher, witness_index, witness)?;
             }
+            let fixed_window_table_base_digest =
+                pallas_batch_digest_update_fixed_window_table_bases::<LEN, WINDOWS, WINDOW_BITS>(
+                    &mut hasher,
+                    params,
+                    witnesses,
+                )?;
 
             let aggregate_digest = hasher.finalize();
             Ok(PallasIpaBatchVerifierPreflight {
                 proof_count: witnesses.len(),
                 verifier_witness_profile:
                     iroha_data_model::offline::KAGEMUSHA_RECURSIVE_VERIFIER_WITNESS_PROFILE_V1,
+                opening_len,
                 params_fingerprint,
+                fixed_window_table_schedule_digest,
+                fixed_window_shared_table_manifest_digest,
+                fixed_window_table_base_digest,
                 aggregate_digest,
             })
         }
@@ -30692,6 +42174,946 @@ mod pasta_tiny {
 
                     config.final_msm.product_link.enable(&mut region, 0)?;
                     assign_non_native_vesta_affine_windowed_msm_native_scalar_region(
+                        &mut region,
+                        &config.final_msm.msm,
+                        self.final_msm.msm.as_ref(),
+                    )
+                },
+            )
+        }
+    }
+
+    /// Config for a multi-round shared-table IPA verifier slice.
+    #[derive(Clone)]
+    pub struct NonNativeVestaIpaVerifierSharedTableNativeScalarConfig {
+        transcript_binding: NativePastaFpIpaTranscriptBindingConfig,
+        b_reduction: NativePastaFpIpaBVectorReductionConfig,
+        round_accumulators: Vec<NonNativeVestaIpaRoundAccumulatorSharedTableNativeScalarConfig>,
+        generator_folds: Vec<Vec<NonNativeVestaIpaGeneratorFoldSharedTableNativeScalarConfig>>,
+        final_msm: NonNativeVestaIpaFinalWindowedMsmSharedTableNativeScalarConfig,
+        link: Selector,
+    }
+
+    /// Circuit wrapper composing all IPA verifier rounds with shared-table MSMs.
+    #[derive(Clone)]
+    pub struct NonNativeVestaIpaVerifierSharedTableNativeScalar<
+        const LEN: usize,
+        const WINDOWS: usize,
+        const WINDOW_BITS: usize,
+    > {
+        /// Scalar projection of the verified IPA transcript header.
+        pub transcript_header_projection: Scalar,
+        /// Scalar projections of each verified IPA transcript round.
+        pub transcript_round_projections: Vec<Scalar>,
+        /// Transcript challenge scalars consumed by the binding accumulator.
+        pub transcript_challenges: Vec<Scalar>,
+        /// Transcript challenge inverse scalars consumed by the binding accumulator.
+        pub transcript_challenge_inverses: Vec<Scalar>,
+        /// Scalar projection of the verified final transcript state.
+        pub transcript_final_projection: Scalar,
+        /// Public digest of the transcript-binding accumulator.
+        pub transcript_binding_digest: Scalar,
+        /// Private transcript-binding accumulator states.
+        pub transcript_round_states: Vec<Scalar>,
+        /// Public `b`-vector reduction from `LEN` inputs to one final scalar.
+        pub b_reduction: Box<NativePastaFpIpaBVectorReduction<LEN>>,
+        /// Per-round shared-table accumulator update witnesses.
+        pub round_accumulators:
+            Vec<NonNativeVestaIpaRoundAccumulatorSharedTableNativeScalar<WINDOWS, WINDOW_BITS>>,
+        /// Per-round, per-pair shared-table generator-fold witnesses.
+        pub generator_folds:
+            Vec<Vec<NonNativeVestaIpaGeneratorFoldSharedTableNativeScalar<WINDOWS, WINDOW_BITS>>>,
+        /// Shared-table final IPA comparison witness.
+        pub final_msm:
+            Box<NonNativeVestaIpaFinalWindowedMsmSharedTableNativeScalar<WINDOWS, WINDOW_BITS>>,
+    }
+
+    impl<const LEN: usize, const WINDOWS: usize, const WINDOW_BITS: usize> Default
+        for NonNativeVestaIpaVerifierSharedTableNativeScalar<LEN, WINDOWS, WINDOW_BITS>
+    {
+        fn default() -> Self {
+            let rounds = ipa_power_of_two_rounds(LEN).unwrap_or(0);
+            let mut layer_len = LEN;
+            let mut generator_folds = Vec::with_capacity(rounds);
+            for _ in 0..rounds {
+                let half = layer_len / 2;
+                generator_folds.push(vec![
+                    NonNativeVestaIpaGeneratorFoldSharedTableNativeScalar::default();
+                    half
+                ]);
+                layer_len = half;
+            }
+            Self {
+                transcript_header_projection: Scalar::from(0),
+                transcript_round_projections: vec![Scalar::from(0); rounds],
+                transcript_challenges: vec![Scalar::from(0); rounds],
+                transcript_challenge_inverses: vec![Scalar::from(0); rounds],
+                transcript_final_projection: Scalar::from(0),
+                transcript_binding_digest: Scalar::from(0),
+                transcript_round_states: vec![Scalar::from(0); rounds + 1],
+                b_reduction: Box::new(NativePastaFpIpaBVectorReduction::default()),
+                round_accumulators: vec![
+                    NonNativeVestaIpaRoundAccumulatorSharedTableNativeScalar::default();
+                    rounds
+                ],
+                generator_folds,
+                final_msm: Box::new(
+                    NonNativeVestaIpaFinalWindowedMsmSharedTableNativeScalar::default(),
+                ),
+            }
+        }
+    }
+
+    impl<const LEN: usize, const WINDOWS: usize, const WINDOW_BITS: usize>
+        NonNativeVestaIpaVerifierSharedTableNativeScalar<LEN, WINDOWS, WINDOW_BITS>
+    {
+        /// Build an honest multi-round shared-table IPA verifier composition witness.
+        ///
+        /// # Errors
+        ///
+        /// Returns an error if `LEN` is not a power of two greater than one, if
+        /// the round vectors have the wrong shape, if any challenge inverse or
+        /// sub-witness is invalid, or if the final IPA comparison does not equal
+        /// the fully accumulated verifier `Q`.
+        #[allow(clippy::too_many_arguments)]
+        pub fn try_from_statement(
+            b_initial: [Scalar; LEN],
+            challenges: Vec<Scalar>,
+            challenge_inverses: Vec<Scalar>,
+            transcript_header_projection: Scalar,
+            transcript_round_projections: Vec<Scalar>,
+            transcript_final_projection: Scalar,
+            transcript_binding_digest: Scalar,
+            a_final: Scalar,
+            b_final: Scalar,
+            l_vec: Vec<VestaPointEncoding>,
+            q_initial: VestaPointEncoding,
+            r_vec: Vec<VestaPointEncoding>,
+            g_initial: [VestaPointEncoding; LEN],
+            h_initial: [VestaPointEncoding; LEN],
+            u: VestaPointEncoding,
+        ) -> Result<Self, String> {
+            let rounds = ipa_power_of_two_rounds(LEN).ok_or_else(|| {
+                "IPA verifier length must be a power of two greater than one".to_owned()
+            })?;
+            if challenges.len() != rounds {
+                return Err(format!(
+                    "IPA verifier challenge count mismatch: expected {rounds}, found {}",
+                    challenges.len()
+                ));
+            }
+            if challenge_inverses.len() != rounds {
+                return Err(format!(
+                    "IPA verifier inverse count mismatch: expected {rounds}, found {}",
+                    challenge_inverses.len()
+                ));
+            }
+            let transcript_challenges = challenges.clone();
+            let transcript_challenge_inverses = challenge_inverses.clone();
+            let transcript_round_states = native_pasta_fp_ipa_transcript_binding_round_states(
+                rounds,
+                transcript_header_projection,
+                &transcript_round_projections,
+                &transcript_challenges,
+                &transcript_challenge_inverses,
+                transcript_final_projection,
+                transcript_binding_digest,
+            )?;
+            if l_vec.len() != rounds {
+                return Err(format!(
+                    "IPA verifier L round count mismatch: expected {rounds}, found {}",
+                    l_vec.len()
+                ));
+            }
+            if r_vec.len() != rounds {
+                return Err(format!(
+                    "IPA verifier R round count mismatch: expected {rounds}, found {}",
+                    r_vec.len()
+                ));
+            }
+
+            let b_reduction = NativePastaFpIpaBVectorReduction::<LEN>::try_from_scalars(
+                b_initial,
+                challenges.clone(),
+                challenge_inverses.clone(),
+                b_final,
+            )?;
+
+            let mut q_current = q_initial;
+            let mut g_current = g_initial.to_vec();
+            let mut h_current = h_initial.to_vec();
+            let mut round_accumulators = Vec::with_capacity(rounds);
+            let mut generator_folds = Vec::with_capacity(rounds);
+
+            for round_index in 0..rounds {
+                let challenge = challenges[round_index];
+                let challenge_inverse = challenge_inverses[round_index];
+                let q_after = vesta_msm_output_from_encoded_terms([
+                    (challenge * challenge, l_vec[round_index]),
+                    (Scalar::from(1), q_current),
+                    (challenge_inverse * challenge_inverse, r_vec[round_index]),
+                ])?;
+                round_accumulators
+                    .push(NonNativeVestaIpaRoundAccumulatorSharedTableNativeScalar::<
+                    WINDOWS,
+                    WINDOW_BITS,
+                >::try_from_challenge(
+                    challenge,
+                    challenge_inverse,
+                    l_vec[round_index],
+                    q_current,
+                    r_vec[round_index],
+                    q_after,
+                )?);
+                q_current = q_after;
+
+                let half = g_current.len() / 2;
+                let mut round_folds = Vec::with_capacity(half);
+                let mut g_next = Vec::with_capacity(half);
+                let mut h_next = Vec::with_capacity(half);
+                for index in 0..half {
+                    let g_after = vesta_msm_output_from_encoded_terms([
+                        (challenge_inverse, g_current[index]),
+                        (challenge, g_current[half + index]),
+                    ])?;
+                    let h_after = vesta_msm_output_from_encoded_terms([
+                        (challenge, h_current[index]),
+                        (challenge_inverse, h_current[half + index]),
+                    ])?;
+                    round_folds.push(NonNativeVestaIpaGeneratorFoldSharedTableNativeScalar::<
+                        WINDOWS,
+                        WINDOW_BITS,
+                    >::try_from_challenge(
+                        challenge,
+                        challenge_inverse,
+                        g_current[index],
+                        g_current[half + index],
+                        h_current[index],
+                        h_current[half + index],
+                        g_after,
+                        h_after,
+                    )?);
+                    g_next.push(g_after);
+                    h_next.push(h_after);
+                }
+                generator_folds.push(round_folds);
+                g_current = g_next;
+                h_current = h_next;
+            }
+
+            let final_g = *g_current
+                .first()
+                .ok_or_else(|| "IPA verifier has no final folded G generator".to_owned())?;
+            let final_h = *h_current
+                .first()
+                .ok_or_else(|| "IPA verifier has no final folded H generator".to_owned())?;
+            let final_msm = NonNativeVestaIpaFinalWindowedMsmSharedTableNativeScalar::<
+                WINDOWS,
+                WINDOW_BITS,
+            >::try_from_scalars(
+                a_final, b_final, final_g, final_h, u, q_current
+            )?;
+
+            Ok(Self {
+                transcript_header_projection,
+                transcript_round_projections,
+                transcript_challenges,
+                transcript_challenge_inverses,
+                transcript_final_projection,
+                transcript_binding_digest,
+                transcript_round_states,
+                b_reduction: Box::new(b_reduction),
+                round_accumulators,
+                generator_folds,
+                final_msm: Box::new(final_msm),
+            })
+        }
+
+        /// Build this shared-table recursive verifier witness from a native Pallas IPA verifier witness.
+        ///
+        /// # Errors
+        ///
+        /// Returns an error if the native witness shape does not match `LEN`, if
+        /// its transcript, `b`-reduction, or accumulator projections are not
+        /// internally consistent, if any point encoding is invalid, or if the
+        /// translated shared-table statement fails the recursive verifier
+        /// witness checks.
+        pub fn try_from_pallas_verifier_witness(
+            params: &iroha_zkp_halo2::pallas::Params,
+            witness: &iroha_zkp_halo2::IpaVerifierWitness<iroha_zkp_halo2::pallas::PallasBackend>,
+        ) -> Result<Self, String> {
+            NonNativeVestaIpaVerifierNativeScalar::<LEN, WINDOWS, WINDOW_BITS>::validate_pallas_verifier_witness(
+                params,
+                witness,
+            )?;
+
+            let b_initial_vec = witness
+                .b_reduction
+                .initial_b
+                .iter()
+                .copied()
+                .map(pasta_scalar_from_pallas_scalar)
+                .collect::<Result<Vec<_>, _>>()?;
+            let b_initial = b_initial_vec.try_into().map_err(|values: Vec<Scalar>| {
+                format!(
+                    "Pallas IPA b vector length mismatch: expected {LEN}, found {}",
+                    values.len()
+                )
+            })?;
+            let challenges = witness
+                .transcript_binding
+                .challenges
+                .iter()
+                .copied()
+                .map(pasta_scalar_from_pallas_scalar)
+                .collect::<Result<Vec<_>, _>>()?;
+            let challenge_inverses = witness
+                .transcript_binding
+                .challenge_inverses
+                .iter()
+                .copied()
+                .map(pasta_scalar_from_pallas_scalar)
+                .collect::<Result<Vec<_>, _>>()?;
+            let transcript_round_projections = witness
+                .transcript_binding
+                .round_projections
+                .iter()
+                .copied()
+                .map(pasta_scalar_from_pallas_scalar)
+                .collect::<Result<Vec<_>, _>>()?;
+            let l_vec = witness
+                .round_challenges
+                .iter()
+                .map(|round| vesta_encoding_from_pallas_compressed(&round.l_bytes))
+                .collect::<Result<Vec<_>, _>>()?;
+            let r_vec = witness
+                .round_challenges
+                .iter()
+                .map(|round| vesta_encoding_from_pallas_compressed(&round.r_bytes))
+                .collect::<Result<Vec<_>, _>>()?;
+            let g_initial_vec = params
+                .g()
+                .iter()
+                .copied()
+                .map(vesta_encoding_from_pallas_group)
+                .collect::<Result<Vec<_>, _>>()?;
+            let g_initial =
+                g_initial_vec
+                    .try_into()
+                    .map_err(|values: Vec<VestaPointEncoding>| {
+                        format!(
+                            "Pallas IPA G generator length mismatch: expected {LEN}, found {}",
+                            values.len()
+                        )
+                    })?;
+            let h_initial_vec = params
+                .h()
+                .iter()
+                .copied()
+                .map(vesta_encoding_from_pallas_group)
+                .collect::<Result<Vec<_>, _>>()?;
+            let h_initial =
+                h_initial_vec
+                    .try_into()
+                    .map_err(|values: Vec<VestaPointEncoding>| {
+                        format!(
+                            "Pallas IPA H generator length mismatch: expected {LEN}, found {}",
+                            values.len()
+                        )
+                    })?;
+
+            Self::try_from_statement(
+                b_initial,
+                challenges,
+                challenge_inverses,
+                pasta_scalar_from_pallas_scalar(witness.transcript_binding.header_projection)?,
+                transcript_round_projections,
+                pasta_scalar_from_pallas_scalar(witness.transcript_binding.final_projection)?,
+                pasta_scalar_from_pallas_scalar(witness.transcript_binding.binding_digest)?,
+                pasta_scalar_from_pallas_scalar(witness.proof_a_final)?,
+                pasta_scalar_from_pallas_scalar(witness.proof_b_final)?,
+                l_vec,
+                vesta_encoding_from_pallas_group(witness.accumulation.initial_q)?,
+                r_vec,
+                g_initial,
+                h_initial,
+                vesta_encoding_from_pallas_group(params.u())?,
+            )
+        }
+
+        /// Validate an ordered batch of native Pallas verifier witnesses for shared-table recursion.
+        ///
+        /// # Errors
+        ///
+        /// Returns an error if the batch is empty, exceeds the configured
+        /// corridor, mixes parameter sets, or any witness fails native Pallas
+        /// verifier preflight.
+        pub fn validate_pallas_verifier_witness_batch(
+            params: &iroha_zkp_halo2::pallas::Params,
+            witnesses: &[iroha_zkp_halo2::IpaVerifierWitness<
+                iroha_zkp_halo2::pallas::PallasBackend,
+            >],
+        ) -> Result<PallasIpaBatchVerifierPreflight, String> {
+            NonNativeVestaIpaVerifierNativeScalar::<LEN, WINDOWS, WINDOW_BITS>::validate_pallas_verifier_witness_batch(
+                params,
+                witnesses,
+            )
+        }
+
+        /// Return whether this composed verifier witness satisfies its cross-gadget host links.
+        ///
+        /// This mirrors the public constraints that connect transcript
+        /// challenges, `b` reduction, accumulator folds, generator folds, and the
+        /// final IPA MSM. It is a cheap constructor guard for callers that build
+        /// a larger composed circuit from already-materialized sub-witnesses.
+        #[must_use]
+        pub fn host_links_hold(&self) -> bool {
+            let rounds = self.round_accumulators.len();
+            if rounds == 0
+                || self.b_reduction.challenges.len() != rounds
+                || self.b_reduction.challenge_inverses.len() != rounds
+                || self.transcript_round_projections.len() != rounds
+                || self.transcript_challenges.len() != rounds
+                || self.transcript_challenge_inverses.len() != rounds
+                || self.transcript_round_states.len() != rounds + 1
+                || self.generator_folds.len() != rounds
+            {
+                return false;
+            }
+            if self.transcript_round_states[0] != self.transcript_header_projection {
+                return false;
+            }
+            let Some(final_b_layer) = self.b_reduction.vectors.last() else {
+                return false;
+            };
+            if final_b_layer.len() != 1
+                || final_b_layer[0].value != self.final_msm.msm.term_muls[1].scalar.scalar.value
+            {
+                return false;
+            }
+
+            for round_index in 0..rounds {
+                let b_challenge = self.b_reduction.challenges[round_index].value;
+                let b_challenge_inverse = self.b_reduction.challenge_inverses[round_index].value;
+                if self.transcript_challenges[round_index] != b_challenge
+                    || self.transcript_challenge_inverses[round_index] != b_challenge_inverse
+                {
+                    return false;
+                }
+                if self.transcript_round_states[round_index + 1]
+                    != native_pasta_fp_ipa_transcript_binding_round(
+                        self.transcript_round_states[round_index],
+                        self.transcript_round_projections[round_index],
+                        self.transcript_challenges[round_index],
+                        self.transcript_challenge_inverses[round_index],
+                    )
+                {
+                    return false;
+                }
+                let round = &self.round_accumulators[round_index];
+                if b_challenge != round.challenge.value
+                    || b_challenge_inverse != round.challenge_inverse.value
+                {
+                    return false;
+                }
+                for generator_fold in &self.generator_folds[round_index] {
+                    if b_challenge != generator_fold.challenge.value
+                        || b_challenge_inverse != generator_fold.challenge_inverse.value
+                    {
+                        return false;
+                    }
+                }
+            }
+            let Some(&last_transcript_state) = self.transcript_round_states.last() else {
+                return false;
+            };
+            if self.transcript_binding_digest
+                != native_pasta_fp_ipa_transcript_binding_compress(
+                    last_transcript_state,
+                    self.transcript_final_projection,
+                )
+            {
+                return false;
+            }
+
+            for round_index in 0..rounds {
+                let q_after = non_native_vesta_shared_table_msm_output_scalars(
+                    self.round_accumulators[round_index].msm.as_ref(),
+                );
+                let expected_next = if round_index + 1 < rounds {
+                    non_native_vesta_shared_table_msm_term_base_scalars(
+                        self.round_accumulators[round_index + 1].msm.as_ref(),
+                        1,
+                    )
+                } else {
+                    non_native_vesta_shared_table_msm_output_scalars(self.final_msm.msm.as_ref())
+                };
+                if q_after != expected_next {
+                    return false;
+                }
+            }
+
+            for round_index in 0..rounds {
+                let current_width = self.generator_folds[round_index].len();
+                for pair_index in 0..current_width {
+                    let folded_g = non_native_vesta_shared_table_msm_output_scalars(
+                        self.generator_folds[round_index][pair_index].g_msm.as_ref(),
+                    );
+                    let folded_h = non_native_vesta_shared_table_msm_output_scalars(
+                        self.generator_folds[round_index][pair_index].h_msm.as_ref(),
+                    );
+                    let (expected_g, expected_h) = if round_index + 1 < rounds {
+                        let next_half = current_width / 2;
+                        let (next_pair, next_term) = if pair_index < next_half {
+                            (pair_index, 0)
+                        } else {
+                            (pair_index - next_half, 1)
+                        };
+                        (
+                            non_native_vesta_shared_table_msm_term_base_scalars(
+                                self.generator_folds[round_index + 1][next_pair]
+                                    .g_msm
+                                    .as_ref(),
+                                next_term,
+                            ),
+                            non_native_vesta_shared_table_msm_term_base_scalars(
+                                self.generator_folds[round_index + 1][next_pair]
+                                    .h_msm
+                                    .as_ref(),
+                                next_term,
+                            ),
+                        )
+                    } else {
+                        (
+                            non_native_vesta_shared_table_msm_term_base_scalars(
+                                self.final_msm.msm.as_ref(),
+                                0,
+                            ),
+                            non_native_vesta_shared_table_msm_term_base_scalars(
+                                self.final_msm.msm.as_ref(),
+                                1,
+                            ),
+                        )
+                    };
+                    if folded_g != expected_g || folded_h != expected_h {
+                        return false;
+                    }
+                }
+            }
+
+            true
+        }
+    }
+
+    type NonNativeVestaPointScalars = (
+        [Scalar; NON_NATIVE_PASTA_FIELD_LIMBS],
+        [Scalar; NON_NATIVE_PASTA_FIELD_LIMBS],
+        Scalar,
+    );
+
+    fn non_native_vesta_maybe_identity_scalars(
+        point: &NonNativeVestaAffineMaybeIdentity,
+    ) -> NonNativeVestaPointScalars {
+        (
+            point.x_squared.lhs.limbs,
+            point.y_squared.lhs.limbs,
+            point.identity,
+        )
+    }
+
+    fn non_native_vesta_shared_table_msm_output_scalars<
+        const TERMS: usize,
+        const WINDOWS: usize,
+        const WINDOW_BITS: usize,
+    >(
+        msm: &NonNativeVestaAffineWindowedMsmSharedTableNativeScalar<TERMS, WINDOWS, WINDOW_BITS>,
+    ) -> NonNativeVestaPointScalars {
+        non_native_vesta_maybe_identity_scalars(
+            msm.sum_adds
+                .last()
+                .expect("shared-table MSM has a final running sum")
+                .r
+                .as_ref(),
+        )
+    }
+
+    fn non_native_vesta_shared_table_msm_term_base_scalars<
+        const TERMS: usize,
+        const WINDOWS: usize,
+        const WINDOW_BITS: usize,
+    >(
+        msm: &NonNativeVestaAffineWindowedMsmSharedTableNativeScalar<TERMS, WINDOWS, WINDOW_BITS>,
+        term_index: usize,
+    ) -> NonNativeVestaPointScalars {
+        non_native_vesta_maybe_identity_scalars(&msm.term_muls[term_index].tables[0].table[1])
+    }
+
+    fn configure_non_native_vesta_ipa_verifier_shared_table_native_scalar<
+        const LEN: usize,
+        const WINDOWS: usize,
+        const WINDOW_BITS: usize,
+    >(
+        meta: &mut ConstraintSystem<Scalar>,
+    ) -> NonNativeVestaIpaVerifierSharedTableNativeScalarConfig {
+        let rounds = ipa_power_of_two_rounds(LEN)
+            .expect("IPA verifier length must be a power of two greater than one");
+        let transcript_binding =
+            configure_native_pasta_fp_ipa_transcript_binding_with_rounds(meta, rounds);
+        let b_reduction = configure_native_pasta_fp_ipa_b_vector_reduction::<LEN>(meta);
+        let round_accumulators = (0..rounds)
+            .map(|_| {
+                configure_non_native_vesta_ipa_round_accumulator_shared_table_native_scalar::<
+                    WINDOWS,
+                    WINDOW_BITS,
+                >(meta)
+            })
+            .collect::<Vec<_>>();
+        let mut layer_len = LEN;
+        let mut generator_folds = Vec::with_capacity(rounds);
+        for _ in 0..rounds {
+            let half = layer_len / 2;
+            generator_folds.push(
+                (0..half)
+                    .map(|_| {
+                        configure_non_native_vesta_ipa_generator_fold_shared_table_native_scalar::<
+                            WINDOWS,
+                            WINDOW_BITS,
+                        >(meta)
+                    })
+                    .collect::<Vec<_>>(),
+            );
+            layer_len = half;
+        }
+        let final_msm =
+            configure_non_native_vesta_ipa_final_windowed_msm_shared_table_native_scalar::<
+                WINDOWS,
+                WINDOW_BITS,
+            >(meta);
+        let link = meta.selector();
+
+        meta.create_gate("non_native_vesta_ipa_verifier_shared_table_link", |meta| {
+            let s = meta.query_selector(link);
+            let mut constraints = Vec::with_capacity(
+                rounds * 8
+                    + LEN * 4 * (2 * NON_NATIVE_PASTA_FIELD_LIMBS + 1)
+                    + 4 * (2 * NON_NATIVE_PASTA_FIELD_LIMBS + 1),
+            );
+
+            for round_index in 0..rounds {
+                let b_challenge =
+                    meta.query_advice(b_reduction.challenges[round_index].value, Rotation::cur());
+                let b_challenge_inverse = meta.query_advice(
+                    b_reduction.challenge_inverses[round_index].value,
+                    Rotation::cur(),
+                );
+                let transcript_challenge = meta.query_advice(
+                    transcript_binding.right,
+                    Rotation((round_index * 3 + 1) as i32),
+                );
+                let transcript_challenge_inverse = meta.query_advice(
+                    transcript_binding.right,
+                    Rotation((round_index * 3 + 2) as i32),
+                );
+                constraints.push(s.clone() * (b_challenge.clone() - transcript_challenge));
+                constraints
+                    .push(s.clone() * (b_challenge_inverse.clone() - transcript_challenge_inverse));
+                let round_challenge = meta.query_advice(
+                    round_accumulators[round_index].challenge.value,
+                    Rotation::cur(),
+                );
+                let round_challenge_inverse = meta.query_advice(
+                    round_accumulators[round_index].challenge_inverse.value,
+                    Rotation::cur(),
+                );
+                constraints.push(s.clone() * (b_challenge.clone() - round_challenge));
+                constraints
+                    .push(s.clone() * (b_challenge_inverse.clone() - round_challenge_inverse));
+
+                for generator_fold in &generator_folds[round_index] {
+                    let generator_challenge =
+                        meta.query_advice(generator_fold.challenge.value, Rotation::cur());
+                    let generator_challenge_inverse =
+                        meta.query_advice(generator_fold.challenge_inverse.value, Rotation::cur());
+                    constraints.push(s.clone() * (b_challenge.clone() - generator_challenge));
+                    constraints.push(
+                        s.clone() * (b_challenge_inverse.clone() - generator_challenge_inverse),
+                    );
+                }
+            }
+
+            let b_final = meta.query_advice(b_reduction.vectors[rounds][0].value, Rotation::cur());
+            let final_msm_b = meta.query_advice(
+                final_msm.msm.term_muls[1].scalar.scalar.value,
+                Rotation::cur(),
+            );
+            constraints.push(s.clone() * (b_final - final_msm_b));
+
+            for round_index in 0..rounds {
+                let q_after = query_non_native_vesta_affine_maybe_identity_point(
+                    meta,
+                    &round_accumulators[round_index].msm.sum_adds[2].r,
+                    Rotation::cur(),
+                );
+                if round_index + 1 < rounds {
+                    let next_q_before = query_non_native_vesta_affine_maybe_identity_point(
+                        meta,
+                        &round_accumulators[round_index + 1].msm.term_muls[1].tables[0].table[1],
+                        Rotation::cur(),
+                    );
+                    push_non_native_vesta_point_equality_constraints(
+                        &mut constraints,
+                        &s,
+                        &q_after,
+                        &next_q_before,
+                    );
+                } else {
+                    let final_output = query_non_native_vesta_affine_maybe_identity_point(
+                        meta,
+                        &final_msm.msm.sum_adds[2].r,
+                        Rotation::cur(),
+                    );
+                    push_non_native_vesta_point_equality_constraints(
+                        &mut constraints,
+                        &s,
+                        &q_after,
+                        &final_output,
+                    );
+                }
+            }
+
+            for round_index in 0..rounds {
+                for pair_index in 0..generator_folds[round_index].len() {
+                    let folded_g = query_non_native_vesta_affine_maybe_identity_point(
+                        meta,
+                        &generator_folds[round_index][pair_index].g_msm.sum_adds[1].r,
+                        Rotation::cur(),
+                    );
+                    let folded_h = query_non_native_vesta_affine_maybe_identity_point(
+                        meta,
+                        &generator_folds[round_index][pair_index].h_msm.sum_adds[1].r,
+                        Rotation::cur(),
+                    );
+                    if round_index + 1 < rounds {
+                        let next_half = generator_folds[round_index].len() / 2;
+                        let (next_pair, next_term) = if pair_index < next_half {
+                            (pair_index, 0)
+                        } else {
+                            (pair_index - next_half, 1)
+                        };
+                        let next_g_base = query_non_native_vesta_affine_maybe_identity_point(
+                            meta,
+                            &generator_folds[round_index + 1][next_pair].g_msm.term_muls[next_term]
+                                .tables[0]
+                                .table[1],
+                            Rotation::cur(),
+                        );
+                        let next_h_base = query_non_native_vesta_affine_maybe_identity_point(
+                            meta,
+                            &generator_folds[round_index + 1][next_pair].h_msm.term_muls[next_term]
+                                .tables[0]
+                                .table[1],
+                            Rotation::cur(),
+                        );
+                        push_non_native_vesta_point_equality_constraints(
+                            &mut constraints,
+                            &s,
+                            &folded_g,
+                            &next_g_base,
+                        );
+                        push_non_native_vesta_point_equality_constraints(
+                            &mut constraints,
+                            &s,
+                            &folded_h,
+                            &next_h_base,
+                        );
+                    } else {
+                        let final_g_base = query_non_native_vesta_affine_maybe_identity_point(
+                            meta,
+                            &final_msm.msm.term_muls[0].tables[0].table[1],
+                            Rotation::cur(),
+                        );
+                        let final_h_base = query_non_native_vesta_affine_maybe_identity_point(
+                            meta,
+                            &final_msm.msm.term_muls[1].tables[0].table[1],
+                            Rotation::cur(),
+                        );
+                        push_non_native_vesta_point_equality_constraints(
+                            &mut constraints,
+                            &s,
+                            &folded_g,
+                            &final_g_base,
+                        );
+                        push_non_native_vesta_point_equality_constraints(
+                            &mut constraints,
+                            &s,
+                            &folded_h,
+                            &final_h_base,
+                        );
+                    }
+                }
+            }
+
+            constraints
+        });
+
+        NonNativeVestaIpaVerifierSharedTableNativeScalarConfig {
+            transcript_binding,
+            b_reduction,
+            round_accumulators,
+            generator_folds,
+            final_msm,
+            link,
+        }
+    }
+
+    impl<const LEN: usize, const WINDOWS: usize, const WINDOW_BITS: usize> Circuit<Scalar>
+        for NonNativeVestaIpaVerifierSharedTableNativeScalar<LEN, WINDOWS, WINDOW_BITS>
+    {
+        type Config = NonNativeVestaIpaVerifierSharedTableNativeScalarConfig;
+        type FloorPlanner = SimpleFloorPlanner;
+
+        type Params = ();
+        fn without_witnesses(&self) -> Self {
+            Self::default()
+        }
+        fn configure(meta: &mut ConstraintSystem<Scalar>) -> Self::Config {
+            configure_non_native_vesta_ipa_verifier_shared_table_native_scalar::<
+                LEN,
+                WINDOWS,
+                WINDOW_BITS,
+            >(meta)
+        }
+        fn synthesize(
+            &self,
+            config: Self::Config,
+            mut layouter: impl Layouter<Scalar>,
+        ) -> Result<(), PlonkError> {
+            layouter.assign_region(
+                || "non_native_vesta_ipa_verifier_shared_table_native_scalar",
+                |mut region| {
+                    config.link.enable(&mut region, 0)?;
+
+                    assign_native_pasta_fp_ipa_transcript_binding_region(
+                        &mut region,
+                        &config.transcript_binding,
+                        self.transcript_header_projection,
+                        &self.transcript_round_projections,
+                        &self.transcript_challenges,
+                        &self.transcript_challenge_inverses,
+                        self.transcript_final_projection,
+                        self.transcript_binding_digest,
+                        &self.transcript_round_states,
+                    )?;
+
+                    let final_b_layer = config.b_reduction.vectors.len().saturating_sub(1);
+                    for (layer_index, (witness_layer, config_layer)) in self
+                        .b_reduction
+                        .vectors
+                        .iter()
+                        .zip(config.b_reduction.vectors.iter())
+                        .enumerate()
+                    {
+                        let expose_public = layer_index == 0 || layer_index == final_b_layer;
+                        for (witness, scalar_config) in
+                            witness_layer.iter().zip(config_layer.iter())
+                        {
+                            assign_native_pasta_fp_scalar_region(
+                                &mut region,
+                                scalar_config,
+                                witness,
+                                expose_public,
+                            )?;
+                        }
+                    }
+                    for (witness, scalar_config) in self
+                        .b_reduction
+                        .challenges
+                        .iter()
+                        .zip(config.b_reduction.challenges.iter())
+                    {
+                        assign_native_pasta_fp_scalar_region(
+                            &mut region,
+                            scalar_config,
+                            witness,
+                            true,
+                        )?;
+                    }
+                    for (witness, scalar_config) in self
+                        .b_reduction
+                        .challenge_inverses
+                        .iter()
+                        .zip(config.b_reduction.challenge_inverses.iter())
+                    {
+                        assign_native_pasta_fp_scalar_region(
+                            &mut region,
+                            scalar_config,
+                            witness,
+                            true,
+                        )?;
+                    }
+                    config.b_reduction.link.enable(&mut region, 0)?;
+
+                    for (witness, round_config) in self
+                        .round_accumulators
+                        .iter()
+                        .zip(config.round_accumulators.iter())
+                    {
+                        round_config.link.enable(&mut region, 0)?;
+                        assign_native_pasta_fp_scalar_region(
+                            &mut region,
+                            &round_config.challenge,
+                            &witness.challenge,
+                            false,
+                        )?;
+                        assign_native_pasta_fp_scalar_region(
+                            &mut region,
+                            &round_config.challenge_inverse,
+                            &witness.challenge_inverse,
+                            false,
+                        )?;
+                        assign_non_native_vesta_affine_windowed_msm_shared_table_native_scalar_region(
+                            &mut region,
+                            &round_config.msm,
+                            witness.msm.as_ref(),
+                        )?;
+                    }
+
+                    for (witness_round, config_round) in self
+                        .generator_folds
+                        .iter()
+                        .zip(config.generator_folds.iter())
+                    {
+                        for (witness, generator_config) in
+                            witness_round.iter().zip(config_round.iter())
+                        {
+                            generator_config.link.enable(&mut region, 0)?;
+                            assign_native_pasta_fp_scalar_region(
+                                &mut region,
+                                &generator_config.challenge,
+                                &witness.challenge,
+                                false,
+                            )?;
+                            assign_native_pasta_fp_scalar_region(
+                                &mut region,
+                                &generator_config.challenge_inverse,
+                                &witness.challenge_inverse,
+                                false,
+                            )?;
+                            assign_non_native_vesta_affine_windowed_msm_shared_table_native_scalar_region(
+                                &mut region,
+                                &generator_config.g_msm,
+                                witness.g_msm.as_ref(),
+                            )?;
+                            assign_non_native_vesta_affine_windowed_msm_shared_table_native_scalar_region(
+                                &mut region,
+                                &generator_config.h_msm,
+                                witness.h_msm.as_ref(),
+                            )?;
+                        }
+                    }
+
+                    config.final_msm.product_link.enable(&mut region, 0)?;
+                    assign_non_native_vesta_affine_windowed_msm_shared_table_native_scalar_region(
                         &mut region,
                         &config.final_msm.msm,
                         self.final_msm.msm.as_ref(),
@@ -33555,6 +45977,23 @@ fn verify_halo2_ipa(backend: &str, proof: &ProofBox, vk: Option<&VerifyingKeyBox
         Some(p) => p,
         None => return reject("missing/invalid IPAK parameters in verifying key envelope"),
     };
+    let expected_vk_circuit = match halo2_ipa_backend_from_circuit_id(backend) {
+        Some(circuit_id) => circuit_id,
+        None => return reject("invalid backend circuit id"),
+    };
+    match zkparse::circuit_id_any(vk_box.bytes.as_slice()) {
+        Ok(Some(vk_circuit_id)) => {
+            let Some(normalized_vk_circuit) = halo2_ipa_backend_from_circuit_id(&vk_circuit_id)
+            else {
+                return reject("invalid verifying key CID1 circuit id");
+            };
+            if normalized_vk_circuit != expected_vk_circuit {
+                return reject("verifying key CID1 circuit id mismatch");
+            }
+        }
+        Ok(None) => {}
+        Err(()) => return reject("invalid verifying key CID1 payload"),
+    }
 
     // Parse proof payload + instances via shared helper
     let parsed_envelope = Halo2ProofEnvelope::from_bytes(proof.bytes.as_slice())
@@ -33870,6 +46309,29 @@ fn verify_halo2_ipa(backend: &str, proof: &ProofBox, vk: Option<&VerifyingKeyBox
                 }
             )
         }
+        "halo2/pasta/kagemusha-recursive-aggregation-v1" => {
+            if ensure_kagemusha_recursive_aggregation_canonical_vk_box(vk_box).is_err() {
+                return false;
+            }
+            if col_refs.len() != KAGEMUSHA_RECURSIVE_AGGREGATION_PROOF_INSTANCE_COLUMNS
+                || col_refs.iter().any(|col| col.len() != 1)
+            {
+                return false;
+            }
+            cached_vk_for!(
+                &params,
+                normalized.as_str(),
+                vk_box,
+                pasta_tiny::KagemushaRecursiveAggregationSemantic::default(),
+                |vk| {
+                    let mut transcript =
+                        Blake2bRead::<_, Curve, _>::init(Cursor::new(proof_payload.as_slice()));
+                    let strategy = SingleVerifier::new(&params);
+                    let proofs_instances = [&col_refs[..]];
+                    verify_proof(&params, vk, strategy, &proofs_instances, &mut transcript).is_ok()
+                }
+            )
+        }
         "halo2/pasta/tiny-anon-transfer-2x2" => {
             let circuit = pasta_tiny::AnonTransfer2x2;
             let vk_h2 = match keygen_vk_cached(normalized.as_str(), &params, &circuit) {
@@ -33918,6 +46380,26 @@ fn verify_halo2_ipa(backend: &str, proof: &ProofBox, vk: Option<&VerifyingKeyBox
                 normalized.as_str(),
                 vk_box,
                 confidential_v2::ConfidentialUnshieldCircuitV2::<
+                    { confidential_v2::CONFIDENTIAL_TREE_DEPTH_V2 },
+                >::default(),
+                |vk| {
+                    let mut transcript =
+                        Blake2bRead::<_, Curve, _>::init(Cursor::new(proof_payload.as_slice()));
+                    let strategy = SingleVerifier::new(&params);
+                    let proofs_instances = [&col_refs[..]];
+                    verify_proof(&params, vk, strategy, &proofs_instances, &mut transcript).is_ok()
+                }
+            )
+        }
+        circuit_id if confidential_v2::is_confidential_unshield_v3_circuit_id(circuit_id) => {
+            if col_refs.len() != 9 || col_refs.iter().any(|col| col.len() != 1) {
+                return false;
+            }
+            cached_vk_for!(
+                &params,
+                normalized.as_str(),
+                vk_box,
+                confidential_v2::ConfidentialUnshieldCircuitV3::<
                     { confidential_v2::CONFIDENTIAL_TREE_DEPTH_V2 },
                 >::default(),
                 |vk| {

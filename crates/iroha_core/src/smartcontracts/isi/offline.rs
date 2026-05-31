@@ -465,6 +465,8 @@ pub mod isi {
             )
             .into());
         }
+        crate::zk::confidential_v2::ensure_confidential_transfer_v2_canonical_vk_box(vk_box)
+            .map_err(|err| labeled_invariant("verifier_key_invalid", err))?;
         let envelope: OpenVerifyEnvelope =
             norito::decode_from_bytes(&proof.proof.bytes).map_err(|_| {
                 labeled_invariant(
@@ -720,6 +722,8 @@ pub mod isi {
             )
             .into());
         }
+        crate::zk::ensure_offline_note_recursive_canonical_vk_box(&vk_box)
+            .map_err(|err| labeled_invariant("verifier_key_invalid", err))?;
 
         let envelope: OpenVerifyEnvelope =
             norito::decode_from_bytes(&proof.proof.bytes).map_err(|_| {
@@ -2045,25 +2049,34 @@ pub mod isi {
                 crate::zk::ZK_BACKEND_HALO2_IPA,
                 crate::zk::OFFLINE_NOTE_RECURSIVE_CIRCUIT_ID,
             );
-            let vk_box = VerifyingKeyBox::new(
-                crate::zk::ZK_BACKEND_HALO2_IPA.to_owned(),
-                b"offline-note-test-verifying-key".to_vec(),
-            );
-            let commitment = crate::zk::hash_vk(&vk_box);
-            let mut record = VerifyingKeyRecord::new_with_owner(
-                1,
-                crate::zk::OFFLINE_NOTE_RECURSIVE_CIRCUIT_ID,
-                None,
-                OFFLINE_NOTE_VERIFIER_NAMESPACE,
-                BackendTag::Halo2IpaPasta,
-                "pasta",
-                offline_note_recursive_public_inputs_schema_hash(),
-                commitment,
-            );
-            record.key = Some(vk_box);
+            #[cfg(any(feature = "zk-halo2", feature = "zk-halo2-ipa"))]
+            let mut record =
+                crate::zk::offline_note_recursive_vk_record(OFFLINE_NOTE_VERIFIER_NAMESPACE, 1)
+                    .expect("offline recursive verifier record");
+            #[cfg(not(any(feature = "zk-halo2", feature = "zk-halo2-ipa")))]
+            let mut record = {
+                let vk_box = VerifyingKeyBox::new(
+                    crate::zk::ZK_BACKEND_HALO2_IPA.to_owned(),
+                    b"offline-note-test-verifying-key".to_vec(),
+                );
+                let commitment = crate::zk::hash_vk(&vk_box);
+                let mut record = VerifyingKeyRecord::new_with_owner(
+                    1,
+                    crate::zk::OFFLINE_NOTE_RECURSIVE_CIRCUIT_ID,
+                    None,
+                    OFFLINE_NOTE_VERIFIER_NAMESPACE,
+                    BackendTag::Halo2IpaPasta,
+                    "pasta",
+                    offline_note_recursive_public_inputs_schema_hash(),
+                    commitment,
+                );
+                record.key = Some(vk_box);
+                record.max_proof_bytes = 4096;
+                record.vk_len = b"offline-note-test-verifying-key".len() as u32;
+                record
+            };
             record.status = status;
-            record.max_proof_bytes = 4096;
-            record.vk_len = b"offline-note-test-verifying-key".len() as u32;
+            let commitment = record.commitment;
 
             let envelope = OpenVerifyEnvelope::new(
                 BackendTag::Halo2IpaPasta,
@@ -3449,6 +3462,26 @@ pub mod isi {
                 "verifier_key_invalid",
                 "commitment",
             );
+            #[cfg(any(feature = "zk-halo2", feature = "zk-halo2-ipa"))]
+            assert_offline_note_record_mutation_rejects(
+                |state, verifier_id, _proof| {
+                    mutate_verifier_record(state, verifier_id, |record| {
+                        let mut noncanonical_key = crate::zk::offline_note_recursive_vk_box()
+                            .expect("Offline recursive key");
+                        let last = noncanonical_key
+                            .bytes
+                            .last_mut()
+                            .expect("Offline recursive key bytes");
+                        *last ^= 0x01;
+                        record.commitment = crate::zk::hash_vk(&noncanonical_key);
+                        record.vk_len = u32::try_from(noncanonical_key.bytes.len())
+                            .expect("Offline recursive verifier key length fits u32");
+                        record.key = Some(noncanonical_key);
+                    });
+                },
+                "verifier_key_invalid",
+                "canonical semantic circuit key",
+            );
         }
 
         #[test]
@@ -3737,6 +3770,58 @@ pub mod isi {
                 },
                 "verifier_key_invalid",
                 "inline verifier-key commitment",
+            );
+
+            let (state, authority, definition_id, mut transfer, _commitments, _roots) =
+                real_kagemusha_test_state();
+            let verifier_id = transfer.proof.vk_ref.clone();
+            let header = BlockHeader::new(nonzero!(1_u64), None, None, None, 0, 0);
+            let mut block = state.block(header);
+            {
+                let mut mutation_transaction = block.transaction();
+                let mut noncanonical_key = {
+                    let record = mutation_transaction
+                        .world
+                        .verifying_keys
+                        .get(&verifier_id)
+                        .expect("verifier record");
+                    record.key.clone().expect("inline verifier key")
+                };
+                let last = noncanonical_key
+                    .bytes
+                    .last_mut()
+                    .expect("non-empty verifier key");
+                *last ^= 0x01;
+                let noncanonical_commitment = crate::zk::hash_vk(&noncanonical_key);
+                transfer.proof.vk_commitment = Some(noncanonical_commitment);
+                transfer.proof.proof.bytes = b"not-an-open-verify-envelope".to_vec();
+                mutate_verifier_record(&mut mutation_transaction, &verifier_id, |record| {
+                    record.commitment = noncanonical_commitment;
+                    record.vk_len = u32::try_from(noncanonical_key.bytes.len())
+                        .expect("verifier key length fits u32");
+                    record.key = Some(noncanonical_key);
+                });
+                let zk_state = mutation_transaction
+                    .world
+                    .zk_assets
+                    .get_mut(&definition_id)
+                    .expect("Kagemusha zk asset state");
+                let binding = zk_state
+                    .vk_transfer
+                    .as_mut()
+                    .expect("Kagemusha transfer verifier binding");
+                binding.commitment = noncanonical_commitment;
+                mutation_transaction.apply();
+            }
+            let mut transaction = block.transaction();
+
+            let err = transfer
+                .execute(&authority, &mut transaction)
+                .expect_err("self-consistent noncanonical transfer verifier must reject");
+            assert_offline_rejection(
+                err,
+                "verifier_key_invalid",
+                "canonical semantic circuit key",
             );
         }
 

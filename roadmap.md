@@ -1,6 +1,6 @@
 # Roadmap
 
-Last updated: 2026-05-30
+Last updated: 2026-05-31
 
 This roadmap is the public, high-level view of current Hyperledger Iroha work.
 The detailed engineering backlog lives in
@@ -100,9 +100,24 @@ and completed history lives in [`status.md`](./status.md).
   schema, and verifier-key hash against the active asset binding, rejects
   normalized confidential-transfer-v2 circuit aliases before proof decoding,
   requires inline verifier-key bytes with matching length, commitment, non-zero
-  proof-size cap, and active circuit/version index before proof envelope
-  decoding, and leaves legacy bearer-audit forcing available only as an explicit
+  proof-size cap, active circuit/version index, and the canonical
+  confidential-transfer-v2 semantic circuit key before proof envelope decoding,
+  and caches canonical confidential-transfer-v2/unshield verifier and proving
+  keys so production guard/prover paths do not repeatedly regenerate
+  no-trusted-setup Halo2 IPA keys. Canonical confidential verifier-key
+  envelopes also carry a `CID1` circuit-id TLV, keeping unshield v2/v3
+  commitments separate even when the raw Halo2 payloads are structurally
+  parseable across related circuits, and the Halo2 IPA verifier rejects a
+  verifier-key envelope whose `CID1` names a different circuit than the proof
+  envelope. It leaves legacy bearer-audit forcing available only as an explicit
   migration fallback.
+  Offline recursive prover entry points, proving-key derivation, and chain-side
+  verifier resolution now also pin inline verifier keys to the canonical
+  `offline-note-recursive` semantic circuit key, rejecting self-consistent
+  forged records or local keys before proof creation or backend verification.
+  Offline recursive verifier-key envelopes also carry a `CID1` circuit-id TLV,
+  and the backend verifier rejects a raw Halo2 verifier-key replay whose `CID1`
+  names a different circuit family.
   Compact multi-hop Kagemusha tokens now have a deterministic folded
   public-input transcript in the Rust data model; the transcript canonicalizes
   bounded private hops, rejects duplicate nullifiers/commitments and root
@@ -121,8 +136,9 @@ and completed history lives in [`status.md`](./status.md).
   literal circuit id with alias spellings rejected alongside the proof-size cap,
   per-hop shape bounds, root continuity, duplicate-set checks,
   non-zero set entries, mandatory verifier-key commitment and verifier-key-id
-  metadata, non-empty verifier-key bytes, canonical empty envelope auxiliary
-  bytes, and the 64-hop compact-token corridor before parsing private-hop envelopes. Chain-side
+  metadata, non-empty verifier-key bytes, canonical confidential-transfer-v2
+  verifier-key bytes, canonical empty envelope auxiliary bytes, and the 64-hop
+  compact-token corridor before parsing private-hop envelopes. Chain-side
   Kagemusha transfers now apply the same duplicate/non-zero set invariants
   before proof envelope decoding.
   The proof-statement
@@ -186,9 +202,16 @@ and completed history lives in [`status.md`](./status.md).
   non-zero inside Halo2 via inverse witnesses, proves the final folded root
   differs from the initial root with a selected-limb inverse witness, and pins
   the final folded proof envelope to canonical empty auxiliary bytes and the
-  literal `kagemusha-folded-v1` circuit id. The Pasta circuit module now also
-  contains reusable non-native foundations for the future in-circuit Vesta/Fq
-  IPA verifier: a `u64` limb decomposition gadget that proves 64 boolean
+  literal `kagemusha-folded-v1` circuit id. Folded-token proving, proving-key
+  derivation, and direct or record-backed token verification now also require
+  the canonical `kagemusha-folded-v1` semantic verifier key before backend
+  verification, so a self-consistent forged verifier record cannot substitute a
+  recursive aggregation or other cross-circuit key. Folded verifier-key
+  envelopes carry a `CID1` circuit-id TLV too, and backend verification rejects
+  a structurally compatible raw Halo2 key replayed under another circuit id. The
+  Pasta circuit module now also contains reusable non-native foundations for the
+  future in-circuit Vesta/Fq IPA verifier: a `u64` limb decomposition gadget
+  that proves 64 boolean
   little-endian bits and rejects high residue above bit 63, a native Pasta/Fp
   scalar decomposition gadget that supports public or private scalar exposure,
   binds the scalar to four private `u64` limbs, proves the canonical 255-bit
@@ -260,9 +283,13 @@ and completed history lives in [`status.md`](./status.md).
   the final public multi-scalar accumulator, with adversarial coverage for
   substitution and splice attacks. The IPA final comparison now also has a
   fixed-window `Q = a*G + b*H + (a*b)*U` wrapper with the same third-scalar
-  product-link invariant, and the composed one-round/generic verifier wrappers
-  now feed the round accumulator, generator folds, and final comparison through
-  the fixed-window MSM path. The native accumulation projection also rejects
+  product-link invariant. The bounded, fixed-window, and shared-table
+  fixed-window final MSM wrappers now also have explicit identity-output
+  coverage, proving that the verifier comparison can end at the canonical point
+  at infinity without leaving the complete-add/point-or-identity path. The
+  composed one-round/generic verifier wrappers now feed the round accumulator,
+  generator folds, and final comparison through the fixed-window MSM path. The
+  native accumulation projection also rejects
   mismatched challenge inverse witnesses.
   A one-round in-circuit verifier composition slice now shares one canonical
   challenge/inverse pair across `b` folding, the `Q` accumulator update,
@@ -285,28 +312,32 @@ and completed history lives in [`status.md`](./status.md).
   links its challenge rows back to the verifier's decomposed `b`-reduction
   challenge columns, so self-consistent transcript witnesses cannot be spliced
   onto a verifier using different challenges. The host bridge now accepts native
-  Pallas IPA verifier witnesses, validates their transcript, `b`-reduction, and
-  accumulator projections, round ordering, and canonical compressed point
-  encodings through a cheap preflight path, recomputes the native Pallas `b`,
-  `Q`, `G`, `H`, and final-term fold relations with the deterministic optimized
-  Pallas MSM backend, and translates their scalars and compressed Vesta points
-  through canonical byte encodings before building the recursive Vesta verifier
-  witness. The same bridge now validates ordered batches of native Pallas
+  Pallas IPA verifier witnesses, validates their transcript projection,
+  re-derived transcript binding, `b`-reduction and accumulator projections,
+  round ordering, and canonical compressed point encodings through a cheap
+  preflight path, recomputes the native Pallas `b`, `Q`, `G`, `H`, and
+  final-term fold relations with the deterministic optimized Pallas MSM backend,
+  and translates their scalars and compressed Vesta points through canonical
+  byte encodings before building the recursive Vesta verifier witness. The same
+  bridge now validates ordered batches of native Pallas
   verifier witnesses and emits a compact streaming Poseidon2
   domain-separated aggregate digest that binds the transparent parameter
-  fingerprint, witness order, transcript projections, `b` reductions,
-  accumulator folds, final terms, and proof-final scalars after each witness
-  passes preflight. The data model now exposes a
+  fingerprint, verifier opening length, witness order, transcript projections,
+  `b` reductions, accumulator folds, final terms, and proof-final scalars after
+  each witness passes preflight. The data model now exposes a
   reserved-mode recursive aggregation evidence statement that
   Norito/Poseidon-binds that batch digest, parameter fingerprint, and canonical
   `pallas-ipa-transparent-v1/vesta-recursive-fixed-window-85x3` verifier-witness
-  profile to the same ordered hop transcript while keeping mode `2` rejected
-  for compact-token admission, with Norito roundtrip, decoded-profile, and
-  truncated-archive negative coverage plus empty-transcript, over-cap,
+  profile plus the declared verifier opening length to the same ordered hop
+  transcript while keeping mode `2` rejected for compact-token admission, with
+  Norito roundtrip, decoded-profile/opening-length/schedule/base, and
+  truncated-archive negative coverage plus unsupported or non-power-of-two
+  opening length, zero table commitments, empty-transcript, over-cap,
   duplicate-nullifier, and duplicate-commitment rejection. Core record-backed
   evidence builders now enforce active WSV-style confidential-transfer-v2
   verifier records, verify every private hop proof, reject mismatched witness
-  counts or all-zero native batch metadata before hop proof decoding, and then
+  counts, unsupported opening lengths, all-zero native batch metadata, or
+  opening-length/schedule-digest mismatches before hop proof decoding, and then
   bind the batch preflight digest to the canonical hop transcript for both
   borrowed and serializable record bundles. A public Pallas
   IPA batch preflight helper now accepts only the current production
@@ -315,10 +346,134 @@ and completed history lives in [`status.md`](./status.md).
   family as reserved recursive evidence, and the combined record-backed
   builders can take native verifier witnesses directly, re-derive the stored
   batch digest with the ordered checked-hop proof hashes, and reject detached,
-  wrong-width, or spliced batch evidence before hop proof decoding. This closes
-  cross-hop-transcript replay for reserved evidence, but deriving each IPA
-  verifier witness from the corresponding hop proof envelope remains part of
-  the mode-2 recursive circuit work. Alias
+  wrong-width, or spliced batch evidence before hop proof decoding. The native
+  batch digest now also binds the recursive fixed-window table profile and the
+  Poseidon2 digest of the deterministic shared-table schedule plus a Poseidon2
+  digest of the ordered fixed-window table bases used by the validated native
+  witnesses, and a proof-derived Pallas opening-envelope path reconstructs
+  native verifier witnesses from the transparent IPA proof envelope before
+  applying the same preflight and hop-proof-hash binding. That path now applies
+  the Kagemusha `2..=128` power-of-two opening corridor and `k = 7`
+  transparent-envelope resource limit before verifier-witness derivation, so
+  unsupported or oversized opening envelopes, mismatched wire versions,
+  generator vectors, and proof-round vectors reject before parameter/proof
+  reconstruction. Hop-proof hash count mismatches now reject before native
+  witness preflight or proof-derived envelope witness derivation, keeping
+  detached reserved-evidence batches from forcing unnecessary verifier work.
+  Kagemusha proof-derived preflight also rejects empty or over-128 byte
+  transcript labels and requires non-zero verifier-key commitment,
+  public-input schema, and hop-domain metadata before verifier-witness
+  derivation, so detached generic polynomial-opening envelopes cannot enter
+  reserved recursive evidence.
+  The record-backed
+  proof-derived path
+  now also requires each Pallas opening envelope to carry hop-derived transcript
+  metadata: verifier-key commitment, confidential-transfer-v2 schema hash, and a
+  Poseidon2 domain tag over chain, asset, hop index, roots, nullifiers, outputs,
+  proof hash, public-input digest, and verifier-key binding. This closes
+  profile-string/table-accounting substitution, detached native-opening witness
+  replay, and unbound opening-envelope replay at the reserved-evidence layer.
+  Deriving each IPA verifier witness inside the recursive circuit from the
+  corresponding compact-hop Halo2 proof envelope remains part of the mode-2
+  recursive circuit work. A cheap
+  production-layout guard now pins
+  the `n = 128` recursive verifier shape (seven rounds, `[64, 32, 16, 8, 4, 2,
+  1]` generator-fold layers, 85-by-3 scalar coverage, and 262 represented
+  windowed MSM gadgets), and a fixed-window table plan pins the shared-table
+  target at 532 table families versus 90,440 naive point-table copies
+  (723,520 duplicated point rows) with `trusted_setup_required = false`. Both
+  guards reject unsupported widths; full production-width witness
+  materialization remains too large for regular tests until the circuit uses
+  shared/compressed fixed-window table evidence. A deterministic shared-table
+  schedule and Poseidon2 schedule digest now enumerate those 532 table families
+  and 45,220 shifted-window tables explicitly, giving the compressed recursive
+  verifier work a no-trusted-setup commitment target instead of only a row-count
+  estimate. A concrete shared-table manifest now assigns those families to
+  contiguous shared-row ranges, binds that row layout with Poseidon2, and keeps
+  `trusted_setup_required = false`; reserved recursive evidence now carries the
+  opening length plus schedule, shared-table manifest, and table-base digests
+  explicitly with unsupported-opening, non-power-of-two-opening,
+  zero-schedule/manifest/base, and schedule/manifest-mismatch rejection before
+  hop proof decoding. Native batch preflight also exposes that manifest digest,
+  and hop-bound batch preflight binds it with the schedule digest and ordered
+  checked-hop proof hashes. The data model now also has a proof-carrying
+  recursive aggregation public-input bundle whose 35 public instance columns
+  bind transparent no-trusted-setup proof metadata to the recursive evidence
+  digest, aggregation transcript digest, verifier-parameter fingerprint,
+  fixed-window schedule digest, shared-table manifest digest, table-base digest,
+  native witness-batch digest, opening length, witness count, and hop count
+  while rejecting backend, circuit-id, public-input-hash, and evidence-field
+  substitution. Core now also pins the schedule and shared-table manifest
+  digests to the declared opening width during recursive proof generation,
+  preverification, and the transparent semantic circuit, so a self-consistent
+  forged envelope cannot swap those verifier-layout commitments. Recursive
+  aggregation preverification also rejects cross-circuit verifier keys even when
+  the supplied inline key, verifier-key commitment, and proof-envelope `vk_hash`
+  are internally consistent. Recursive verifier-key envelopes carry `CID1`
+  circuit-id TLVs, and backend verification rejects structurally matching raw
+  verifier-key payloads whose `CID1` names another circuit family. Core now
+  prevalidates that bundle against active Kagemusha verifier records by checking
+  the transparent Halo2 IPA envelope, canonical circuit id, verifier-key hash,
+  public-input schema,
+  empty auxiliary bytes, Pasta instance columns, proof-size cap, inline key
+  length, and verifier-key commitment, and it exposes a canonical verifier-record
+  helper for supplied transparent Halo2 IPA recursive aggregation key bytes.
+  The detached-evidence prover and raw metadata evidence builder are
+  crate-private implementation helpers, leaving the public proof-bundle API on
+  the record-backed native Pallas preflight/open-envelope paths. The
+  ZK1 public-instance parser remains bounded but now admits this 35-column
+  recursive aggregation envelope through core and the native bridge. This
+  remains a reserved evidence surface until the recursive verifier proof
+  itself is complete. The first shared-table
+  circuit primitive is now in
+  place as well: fixed-window selection can reference an already-derived Vesta
+  table directly instead of assigning a duplicate private selection-table copy,
+  and shared-table native-scalar multiplication now composes that selector with
+  scalar decomposition, shifted-base table derivation, window-base doubling, and
+  selected-point accumulation. Shared-table multi-term MSM composition now
+  chains those scalar-multiplication terms into one public MSM output while
+  keeping term outputs private, and shared-table final IPA MSM composition adds
+  the native-field `a * b` product link for the `U` term. Shared-table
+  round-accumulator and generator-fold composition now binds those MSM scalars
+  back to the transcript challenge and inverse for per-round IPA verification,
+  and the one-round shared-table verifier slice now preserves the `b`-reduction,
+  final-output, and folded-generator cross-links across those shared-table
+  components. The multi-round shared-table verifier builder now mirrors the full
+  transcript-binding, `b`-reduction, accumulator-chain, folded-generator-chain,
+  and final-MSM host-link structure without duplicated selection-table copies;
+  full LEN=4 MockProver coverage is present for an honest synthetic statement,
+  real Pallas opening translation, public-instance substitution, `Q` splice,
+  generator-fold splice, challenge splice, and final-MSM splice, but those tests
+  are ignored by default because the composed non-native layout is too expensive
+  for routine validation. The normal suite keeps builder-level, native Pallas
+  preflight, batch-preflight, and host-link adversarial coverage active.
+  The first recursive-aggregation verifier-slice composition is also in place:
+  a one-hop circuit composes the recursive aggregation semantic metadata proof
+  with the shared-table `LEN = 2` IPA verifier, including transcript-binding
+  accumulator checks, and links the public opening length, witness count, and
+  hop count to the single-hop profile. Its active coverage checks builder
+  acceptance, profile and metadata-witness mismatch rejection, native Pallas
+  preflight metadata binding, preflight digest/fingerprint substitution
+  rejection, rejection when a valid Pallas preflight is paired with an invalid
+  verifier witness, and rejection when a production Pallas preflight is paired
+  with a non-production fixed-window profile. The composed circuit now also
+  exposes a public verifier transcript-binding digest instance and links it to
+  the embedded verifier's transcript-binding accumulator; digest-splice,
+  production fixed-window Pallas verifier materialization, and composed
+  MockProver acceptance/public-count-splice tests remain ignored heavyweight
+  coverage. This is still not mode-2 admission because the private-hop verifier
+  batch and complete Poseidon2 witness-batch digest relation are not yet proved
+  inside the compact-token circuit.
+  The same shared-table verifier can now be constructed from proof-derived
+  native Pallas verifier witnesses after the existing native Pallas preflight
+  validates transcript, `b`-reduction, accumulator, and generator-fold
+  consistency, and the public Kagemusha Pallas batch-preflight path now
+  dispatches through the shared-table verifier entry point while exposing the
+  same ordered schedule, shared-table manifest, table-base, and aggregate digest
+  metadata used by reserved recursive aggregation evidence. Production-width
+  coverage now binds the shared-table verifier shape to the `n = 128` manifest
+  without materializing every recursive witness object in routine tests.
+  Alias
   spellings are rejected at compact-token proving
   and verification boundaries. Derived Halo2 IPA proving keys for IVM,
   Offline Note, and Kagemusha now use Norito archives
@@ -341,7 +496,11 @@ and completed history lives in [`status.md`](./status.md).
   Swift, Kotlin/JVM, and Java Android now expose record-backed compact-token
   prover wrappers over that ABI, so mobile wallets can pass
   `KagemushaVerifiedFoldRecordBundle` Norito bytes through the native bridge
-  instead of constructing preverified folded public inputs themselves.
+  instead of constructing preverified folded public inputs themselves. The same
+  SDK surfaces now expose the ABI-5 recursive aggregation proof-bundle prover,
+  which accepts record-backed bundle bytes plus proof-derived Pallas
+  open-envelope archive bytes and returns an admission-neutral
+  `KagemushaRecursiveAggregationProofBundle` for future mode-2 work.
   Swift, Kotlin/JVM, and Java Android Offline Note proof binding now also
   rejects substituted recursive verifier ids or proof backend labels before
   accepting wallet-side validation, keeping mobile checks aligned with the
@@ -361,11 +520,15 @@ and completed history lives in [`status.md`](./status.md).
   final-comparison MSM, IPA scalar/vector-fold, full `b`-vector reduction,
   generator-fold, round-accumulator, final-comparison composition, and one-round
   and generic multi-round verifier composition with transcript binding plus
-  native Pallas verifier-witness translation, batch preflight binding, and
-  reserved-mode recursive aggregation evidence binding are present, but
-  production-width composed circuit evidence and private-hop recursive
-  aggregation are still not complete, so aggregation mode `2` stays a reserved,
-  explicitly rejected wire value until that verifier evidence exists.
+  native Pallas verifier-witness translation, batch preflight binding,
+  reserved-mode recursive aggregation evidence/proof-public-input binding, and a
+  transparent Halo2 IPA semantic proof for the recursive evidence layout are
+  present. Record-backed combined proof-bundle builders now derive evidence from
+  active hop verifier records and Pallas witness/open-envelope material before
+  proving it, but private-hop Pallas IPA witness verification inside the
+  recursive circuit and compact-token admission are still not complete, so
+  aggregation mode `2` stays a reserved, explicitly rejected wire value until
+  that verifier evidence exists.
 - Continue dependency, documentation, and release hygiene work required by LF
   Decentralized Trust project expectations.
 

@@ -2,27 +2,37 @@
 #![allow(clippy::all, clippy::pedantic, clippy::nursery, clippy::restriction)]
 #![cfg(all(feature = "zk-tests", feature = "halo2-dev-tests"))]
 
-use std::{num::NonZeroU64, str::FromStr, sync::LazyLock};
+use std::{num::NonZeroU64, str::FromStr};
 
 use iroha_config::parameters::defaults;
 use iroha_core::{
     kura::Kura,
     query::store::LiveQueryStore,
+    smartcontracts::Execute,
     state::{State, World, WorldReadOnly},
+    zk::test_utils::halo2_fixture_envelope,
 };
 use iroha_crypto::Hash;
 use iroha_data_model::{
     account::NewAccount,
     asset::definition::ConfidentialPolicyMode,
-    confidential::ConfidentialEncryptedPayload,
+    confidential::{ConfidentialEncryptedPayload, ConfidentialStatus},
     isi::error::{InstructionExecutionError, InvalidParameterError},
     name::Name,
+    permission::Permission,
     prelude::*,
+    proof::{VerifyingKeyId, VerifyingKeyRecord},
+    zk::BackendTag,
 };
+use iroha_primitives::json::Json;
 use iroha_test_samples::gen_account_in;
 use iroha_zkp_halo2::confidential;
 use mv::storage::StorageReadOnly;
 use nonzero_ext::nonzero;
+
+const ASSET_HIDDEN_POOL_ID: &str = "boi-private-is-pool";
+const ASSET_HIDDEN_BACKEND: &str = "halo2/ipa";
+const ASSET_HIDDEN_TEST_CIRCUIT: &str = "halo2/ipa:tiny-add";
 
 fn derive_test_nullifier(
     nk: &[u8; 32],
@@ -33,42 +43,542 @@ fn derive_test_nullifier(
     confidential::derive_nullifier(nk, rho, asset_id.as_bytes(), chain_id.as_bytes())
 }
 
-fn native_ipa_envelope_bytes() -> Vec<u8> {
-    static BYTES: LazyLock<Vec<u8>> = LazyLock::new(|| {
-        use iroha_zkp_halo2::{
-            OpenVerifyEnvelope, Params, Polynomial, PrimeField64, Transcript,
-            backend::pallas::PallasBackend, norito_helpers as nh,
-        };
-
-        let params = Params::new(4).expect("params");
-        let n = params.n();
-        let coeffs = (0..n)
-            .map(|i| PrimeField64::from((i as u64) + 1))
-            .collect::<Vec<_>>();
-        let poly = Polynomial::from_coeffs(coeffs);
-        let p_g = poly.commit(&params).expect("commit");
-        let z = PrimeField64::from(3u64);
-        let mut tr = Transcript::new("IROHA-ZK-LEDGER");
-        let (proof, t) = poly.open(&params, &mut tr, z, p_g).expect("open");
-        let env = OpenVerifyEnvelope {
-            params: nh::params_to_wire(&params),
-            public: nh::poly_open_public::<PallasBackend>(n, z, t, p_g),
-            proof: nh::proof_to_wire(&proof),
-            transcript_label: "IROHA-ZK-LEDGER".to_string(),
-            vk_commitment: None,
-            public_inputs_schema_hash: None,
-            domain_tag: None,
-        };
-        norito::to_bytes(&env).expect("encode IPA envelope")
-    });
-    BYTES.clone()
+fn asset_hidden_test_fixture() -> iroha_core::zk::test_utils::FixtureEnvelope {
+    let seed = halo2_fixture_envelope(ASSET_HIDDEN_TEST_CIRCUIT, [0u8; 32]);
+    let vk_hash = seed
+        .vk_hash(ASSET_HIDDEN_BACKEND)
+        .expect("test fixture verifying key hash");
+    halo2_fixture_envelope(ASSET_HIDDEN_TEST_CIRCUIT, vk_hash)
 }
 
 fn native_ipa_attachment() -> iroha_data_model::proof::ProofAttachment {
-    let backend = "halo2/ipa/poly-open";
-    let proof = iroha_data_model::proof::ProofBox::new(backend.into(), native_ipa_envelope_bytes());
-    let vk_ref = iroha_data_model::proof::VerifyingKeyId::new(backend, "native_ipa_vk");
-    iroha_data_model::proof::ProofAttachment::new_ref(backend.into(), proof, vk_ref)
+    let fixture = asset_hidden_test_fixture();
+    let proof = fixture.proof_box(ASSET_HIDDEN_BACKEND);
+    let vk_ref = VerifyingKeyId::new(ASSET_HIDDEN_BACKEND, "native_ipa_vk");
+    iroha_data_model::proof::ProofAttachment::new_ref(ASSET_HIDDEN_BACKEND.into(), proof, vk_ref)
+}
+
+fn native_ipa_verifying_key_record() -> (VerifyingKeyId, VerifyingKeyRecord) {
+    let id = VerifyingKeyId::new(ASSET_HIDDEN_BACKEND, "native_ipa_vk");
+    let fixture = asset_hidden_test_fixture();
+    let vk_box = fixture
+        .vk_box(ASSET_HIDDEN_BACKEND)
+        .expect("test fixture verifying key");
+    let commitment = iroha_core::zk::hash_vk(&vk_box);
+    let mut record = VerifyingKeyRecord::new(
+        1,
+        ASSET_HIDDEN_TEST_CIRCUIT,
+        BackendTag::Halo2IpaPasta,
+        "pallas",
+        fixture.schema_hash,
+        commitment,
+    );
+    record.vk_len = vk_box.bytes.len() as u32;
+    record.max_proof_bytes = 1_000_000;
+    record.gas_schedule_id = Some("halo2_default".into());
+    record.key = Some(vk_box);
+    record.status = ConfidentialStatus::Active;
+    (id, record)
+}
+
+fn state_with_account(domain_name: &str) -> (State, AccountId) {
+    let (owner, _owner_key) = gen_account_in(domain_name);
+    let domain_id = DomainId::try_new(domain_name, "universal").unwrap();
+    let domain = Domain::new(domain_id).build(&owner);
+    let account = iroha_data_model::account::Account::new(owner.clone()).build(&owner);
+    let world = World::with_assets([domain], [account], [], [], []);
+    let mut state = State::new_for_testing(
+        world,
+        Kura::blank_kura_for_testing(),
+        LiveQueryStore::start_test(),
+    );
+    let mut zk = iroha_core::state::default_zk_config();
+    zk.halo2.enabled = true;
+    zk.halo2.curve = iroha_config::parameters::actual::ZkCurve::Pallas;
+    zk.halo2.backend = iroha_config::parameters::actual::Halo2Backend::Ipa;
+    state.set_zk(zk);
+    (state, owner)
+}
+
+fn asset_hidden_storage_state(domain_name: &str) -> (State, AccountId, AssetDefinitionId) {
+    let (state, owner) = state_with_account(domain_name);
+    let domain_id = DomainId::try_new(domain_name, "universal").unwrap();
+    let asset_def_id = AssetDefinitionId::new(domain_id, "asset_hidden_pool".parse().unwrap());
+    let header = iroha_data_model::block::BlockHeader::new(nonzero!(1_u64), None, None, None, 0, 0);
+    let mut block = state.block(header);
+    let mut stx = block.transaction();
+    stx.world
+        .executor()
+        .clone()
+        .execute_instruction(
+            &mut stx,
+            &owner,
+            Register::asset_definition(
+                AssetDefinition::numeric(asset_def_id.clone())
+                    .with_name(asset_def_id.name().to_string()),
+            )
+            .into(),
+        )
+        .expect("register asset-hidden pool storage asset");
+    stx.apply();
+    block.commit().expect("commit asset-hidden storage setup");
+    (state, owner, asset_def_id)
+}
+
+fn grant_vk_management(stx: &mut iroha_core::state::StateTransaction<'_, '_>, owner: &AccountId) {
+    let permission = Permission::new("CanManageVerifyingKeys".parse().unwrap(), Json::new(()));
+    Grant::account_permission(permission, owner.clone())
+        .execute(owner, stx)
+        .expect("grant verifying-key management");
+}
+
+fn registered_asset_hidden_pool() -> (State, AccountId, AssetDefinitionId, [u8; 32]) {
+    let (state, owner, asset_def_id) = asset_hidden_storage_state("ahpool");
+    let header = iroha_data_model::block::BlockHeader::new(nonzero!(2_u64), None, None, None, 0, 0);
+    let mut block = state.block(header);
+    let mut stx = block.transaction();
+    grant_vk_management(&mut stx, &owner);
+    let (vk_id, vk_record) = native_ipa_verifying_key_record();
+    stx.world
+        .executor()
+        .clone()
+        .execute_instruction(
+            &mut stx,
+            &owner,
+            iroha_data_model::isi::verifying_keys::RegisterVerifyingKey {
+                id: vk_id.clone(),
+                record: vk_record,
+            }
+            .into(),
+        )
+        .expect("register native IPA verifier");
+    stx.world
+        .executor()
+        .clone()
+        .execute_instruction(
+            &mut stx,
+            &owner,
+            iroha_data_model::isi::zk::RegisterAssetHiddenZkPool::new(
+                ASSET_HIDDEN_POOL_ID.to_owned(),
+                asset_def_id.clone(),
+                [0xA0; 32],
+                vk_id,
+            )
+            .into(),
+        )
+        .expect("register asset-hidden pool");
+    stx.apply();
+    block.commit().expect("commit asset-hidden pool setup");
+    (state, owner, asset_def_id, [0u8; 32])
+}
+
+fn execute_asset_hidden_on_state(
+    state: &State,
+    owner: &AccountId,
+    instruction: iroha_data_model::isi::zk::AssetHiddenZkTransfer,
+    height: u64,
+) -> Result<(), iroha_data_model::ValidationFail> {
+    let header = iroha_data_model::block::BlockHeader::new(
+        NonZeroU64::new(height).expect("nonzero height"),
+        None,
+        None,
+        None,
+        0,
+        0,
+    );
+    let mut block = state.block(header);
+    let mut stx = block.transaction();
+    let result = stx.world.executor().clone().execute_instruction(
+        &mut stx,
+        owner,
+        InstructionBox::from(instruction),
+    );
+    if result.is_ok() {
+        stx.apply();
+        block.commit().expect("commit asset-hidden transfer");
+    }
+    result
+}
+
+fn execute_asset_hidden_for_test(
+    instruction: iroha_data_model::isi::zk::AssetHiddenZkTransfer,
+) -> Result<(), iroha_data_model::ValidationFail> {
+    let (state, owner) = state_with_account("ahzk");
+    let header = iroha_data_model::block::BlockHeader::new(nonzero!(1_u64), None, None, None, 0, 0);
+    let mut block = state.block(header);
+    let mut stx = block.transaction();
+    stx.world.executor().clone().execute_instruction(
+        &mut stx,
+        &owner,
+        InstructionBox::from(instruction),
+    )
+}
+
+fn asset_hidden_transfer(
+    pool_id: impl Into<String>,
+    proof: iroha_data_model::proof::ProofAttachment,
+    root_hint: Option<[u8; 32]>,
+) -> iroha_data_model::isi::zk::AssetHiddenZkTransfer {
+    iroha_data_model::isi::zk::AssetHiddenZkTransfer::new(
+        pool_id.into(),
+        vec![[0xA1; 32]],
+        vec![[0xB2; 32]],
+        proof,
+        root_hint,
+    )
+}
+
+fn assert_instruction_error_contains(err: iroha_data_model::ValidationFail, expected: &str) {
+    match err {
+        iroha_data_model::ValidationFail::InstructionFailed(
+            InstructionExecutionError::InvariantViolation(msg),
+        ) => assert!(msg.contains(expected), "unexpected error message: {msg}"),
+        iroha_data_model::ValidationFail::InstructionFailed(
+            InstructionExecutionError::InvalidParameter(InvalidParameterError::SmartContract(msg)),
+        ) => assert!(msg.contains(expected), "unexpected error message: {msg}"),
+        other => {
+            let msg = format!("{other:?}");
+            assert!(
+                msg.contains(expected),
+                "unexpected error message: {msg}; expected substring {expected:?}"
+            );
+        }
+    }
+}
+
+#[test]
+fn asset_hidden_transfer_is_fail_closed_until_pool_verifier_registered() {
+    let err = execute_asset_hidden_for_test(asset_hidden_transfer(
+        "boi-private-is-pool",
+        native_ipa_attachment(),
+        Some([0xC3; 32]),
+    ))
+    .expect_err("asset-hidden transfer must fail until pool verifier state exists");
+    assert_instruction_error_contains(err, "pool is not registered");
+}
+
+#[test]
+fn asset_hidden_transfer_rejects_blank_pool_id_before_proof_work() {
+    let err = execute_asset_hidden_for_test(asset_hidden_transfer(
+        "   ",
+        native_ipa_attachment(),
+        Some([0xC3; 32]),
+    ))
+    .expect_err("blank pool id must be rejected");
+    assert_instruction_error_contains(err, "pool_id must be non-empty");
+}
+
+#[test]
+fn asset_hidden_transfer_requires_root_hint() {
+    let err = execute_asset_hidden_for_test(asset_hidden_transfer(
+        "boi-private-is-pool",
+        native_ipa_attachment(),
+        None,
+    ))
+    .expect_err("asset-hidden transfer must bind to a pool root");
+    assert_instruction_error_contains(err, "requires root_hint");
+}
+
+#[test]
+fn asset_hidden_transfer_requires_input_nullifiers() {
+    let err = execute_asset_hidden_for_test(iroha_data_model::isi::zk::AssetHiddenZkTransfer::new(
+        "boi-private-is-pool".to_owned(),
+        Vec::new(),
+        vec![[0xB2; 32]],
+        native_ipa_attachment(),
+        Some([0xC3; 32]),
+    ))
+    .expect_err("asset-hidden transfer without input nullifiers must fail");
+    assert_instruction_error_contains(err, "requires at least one input nullifier");
+}
+
+#[test]
+fn asset_hidden_transfer_requires_output_commitments() {
+    let err = execute_asset_hidden_for_test(iroha_data_model::isi::zk::AssetHiddenZkTransfer::new(
+        "boi-private-is-pool".to_owned(),
+        vec![[0xA1; 32]],
+        Vec::new(),
+        native_ipa_attachment(),
+        Some([0xC3; 32]),
+    ))
+    .expect_err("asset-hidden transfer without output commitments must fail");
+    assert_instruction_error_contains(err, "requires at least one output commitment");
+}
+
+#[test]
+fn asset_hidden_transfer_rejects_proof_backend_mismatch() {
+    let mut attachment = native_ipa_attachment();
+    attachment.proof.backend = "stark/fri/open-v1".into();
+    let err = execute_asset_hidden_for_test(asset_hidden_transfer(
+        "boi-private-is-pool",
+        attachment,
+        Some([0xC3; 32]),
+    ))
+    .expect_err("proof backend mismatch must fail before verifier lookup");
+    assert_instruction_error_contains(err, "proof backend mismatch");
+}
+
+#[test]
+fn register_asset_hidden_pool_rejects_blank_pool_id() {
+    let (state, owner, asset_def_id) = asset_hidden_storage_state("ahblank");
+    let header = iroha_data_model::block::BlockHeader::new(nonzero!(2_u64), None, None, None, 0, 0);
+    let mut block = state.block(header);
+    let mut stx = block.transaction();
+    let (_, vk_record) = native_ipa_verifying_key_record();
+    let vk_id = VerifyingKeyId::new(ASSET_HIDDEN_BACKEND, "unused_blank_pool_vk");
+    grant_vk_management(&mut stx, &owner);
+    stx.world
+        .executor()
+        .clone()
+        .execute_instruction(
+            &mut stx,
+            &owner,
+            iroha_data_model::isi::verifying_keys::RegisterVerifyingKey {
+                id: vk_id.clone(),
+                record: vk_record,
+            }
+            .into(),
+        )
+        .expect("register verifier");
+    let err = stx
+        .world
+        .executor()
+        .clone()
+        .execute_instruction(
+            &mut stx,
+            &owner,
+            iroha_data_model::isi::zk::RegisterAssetHiddenZkPool::new(
+                "   ".to_owned(),
+                asset_def_id,
+                [0xA0; 32],
+                vk_id,
+            )
+            .into(),
+        )
+        .expect_err("blank pool ids must be rejected");
+    assert_instruction_error_contains(err, "pool_id must be non-empty");
+}
+
+#[test]
+fn register_asset_hidden_pool_rejects_zero_asset_set_root() {
+    let (state, owner, asset_def_id) = asset_hidden_storage_state("ahzero");
+    let header = iroha_data_model::block::BlockHeader::new(nonzero!(2_u64), None, None, None, 0, 0);
+    let mut block = state.block(header);
+    let mut stx = block.transaction();
+    let err = stx
+        .world
+        .executor()
+        .clone()
+        .execute_instruction(
+            &mut stx,
+            &owner,
+            iroha_data_model::isi::zk::RegisterAssetHiddenZkPool::new(
+                ASSET_HIDDEN_POOL_ID.to_owned(),
+                asset_def_id,
+                [0u8; 32],
+                VerifyingKeyId::new(ASSET_HIDDEN_BACKEND, "missing"),
+            )
+            .into(),
+        )
+        .expect_err("zero asset-set roots must be rejected before verifier lookup");
+    assert_instruction_error_contains(err, "asset_set_root must be nonzero");
+}
+
+#[test]
+fn register_asset_hidden_pool_rejects_missing_verifier() {
+    let (state, owner, asset_def_id) = asset_hidden_storage_state("ahmissingvk");
+    let header = iroha_data_model::block::BlockHeader::new(nonzero!(2_u64), None, None, None, 0, 0);
+    let mut block = state.block(header);
+    let mut stx = block.transaction();
+    let err = stx
+        .world
+        .executor()
+        .clone()
+        .execute_instruction(
+            &mut stx,
+            &owner,
+            iroha_data_model::isi::zk::RegisterAssetHiddenZkPool::new(
+                ASSET_HIDDEN_POOL_ID.to_owned(),
+                asset_def_id,
+                [0xA0; 32],
+                VerifyingKeyId::new(ASSET_HIDDEN_BACKEND, "does-not-exist"),
+            )
+            .into(),
+        )
+        .expect_err("missing pool verifier must fail");
+    assert_instruction_error_contains(err, "VerifyingKeyMissing");
+}
+
+#[test]
+fn asset_hidden_transfer_executes_against_registered_pool_and_updates_state() {
+    let (state, owner, asset_def_id, root_hint) = registered_asset_hidden_pool();
+    execute_asset_hidden_on_state(
+        &state,
+        &owner,
+        asset_hidden_transfer(
+            ASSET_HIDDEN_POOL_ID,
+            native_ipa_attachment(),
+            Some(root_hint),
+        ),
+        3,
+    )
+    .expect("registered asset-hidden transfer must execute");
+    let view = state.view();
+    let zk_state = view.world.zk_assets().get(&asset_def_id).expect("zk state");
+    assert_eq!(
+        zk_state.asset_hidden_pool_id.as_deref(),
+        Some(ASSET_HIDDEN_POOL_ID)
+    );
+    assert!(zk_state.nullifiers.contains(&[0xA1; 32]));
+    assert_eq!(zk_state.commitments, vec![[0xB2; 32]]);
+    assert_ne!(
+        zk_state.root_history.last().copied().unwrap_or([0u8; 32]),
+        [0u8; 32]
+    );
+}
+
+#[test]
+fn asset_hidden_transfer_rejects_stale_pool_root() {
+    let (state, owner, _asset_def_id, _root_hint) = registered_asset_hidden_pool();
+    let err = execute_asset_hidden_on_state(
+        &state,
+        &owner,
+        asset_hidden_transfer(
+            ASSET_HIDDEN_POOL_ID,
+            native_ipa_attachment(),
+            Some([0xE5; 32]),
+        ),
+        3,
+    )
+    .expect_err("unknown roots must fail");
+    assert_instruction_error_contains(err, "root_hint is not in pool root history");
+}
+
+#[test]
+fn asset_hidden_transfer_rejects_duplicate_nullifier_within_tx() {
+    let (state, owner, _asset_def_id, root_hint) = registered_asset_hidden_pool();
+    let err = execute_asset_hidden_on_state(
+        &state,
+        &owner,
+        iroha_data_model::isi::zk::AssetHiddenZkTransfer::new(
+            ASSET_HIDDEN_POOL_ID.to_owned(),
+            vec![[0xA1; 32], [0xA1; 32]],
+            vec![[0xB2; 32]],
+            native_ipa_attachment(),
+            Some(root_hint),
+        ),
+        3,
+    )
+    .expect_err("duplicate nullifiers in one transfer must fail");
+    assert_instruction_error_contains(err, "duplicate input nullifier");
+}
+
+#[test]
+fn asset_hidden_transfer_rejects_zero_output_commitment() {
+    let (state, owner, _asset_def_id, root_hint) = registered_asset_hidden_pool();
+    let err = execute_asset_hidden_on_state(
+        &state,
+        &owner,
+        iroha_data_model::isi::zk::AssetHiddenZkTransfer::new(
+            ASSET_HIDDEN_POOL_ID.to_owned(),
+            vec![[0xA1; 32]],
+            vec![[0u8; 32]],
+            native_ipa_attachment(),
+            Some(root_hint),
+        ),
+        3,
+    )
+    .expect_err("zero output commitments must fail");
+    assert_instruction_error_contains(err, "output commitment must be nonzero");
+}
+
+#[test]
+fn asset_hidden_transfer_rejects_duplicate_nullifier_replay() {
+    let (state, owner, _asset_def_id, root_hint) = registered_asset_hidden_pool();
+    execute_asset_hidden_on_state(
+        &state,
+        &owner,
+        asset_hidden_transfer(
+            ASSET_HIDDEN_POOL_ID,
+            native_ipa_attachment(),
+            Some(root_hint),
+        ),
+        3,
+    )
+    .expect("first transfer must execute");
+    let next_root = state
+        .view()
+        .world
+        .zk_assets()
+        .iter()
+        .find_map(|(_, st)| {
+            st.asset_hidden_pool_id
+                .as_deref()
+                .map(|_| st.root_history.last().copied())
+        })
+        .flatten()
+        .expect("pool root");
+    let err = execute_asset_hidden_on_state(
+        &state,
+        &owner,
+        asset_hidden_transfer(
+            ASSET_HIDDEN_POOL_ID,
+            native_ipa_attachment(),
+            Some(next_root),
+        ),
+        4,
+    )
+    .expect_err("replayed nullifier must fail");
+    assert_instruction_error_contains(err, "nullifier already spent");
+}
+
+#[test]
+fn asset_hidden_transfer_rejects_verifier_reference_mismatch() {
+    let (state, owner, _asset_def_id, root_hint) = registered_asset_hidden_pool();
+    let mut attachment = native_ipa_attachment();
+    attachment.vk_ref = VerifyingKeyId::new(ASSET_HIDDEN_BACKEND, "wrong_vk");
+    let err = execute_asset_hidden_on_state(
+        &state,
+        &owner,
+        asset_hidden_transfer(ASSET_HIDDEN_POOL_ID, attachment, Some(root_hint)),
+        3,
+    )
+    .expect_err("wrong verifier reference must fail");
+    assert_instruction_error_contains(err, "verifying key reference mismatch");
+}
+
+#[test]
+fn asset_hidden_transfer_rejects_invalid_proof_without_state_update() {
+    let (state, owner, asset_def_id, root_hint) = registered_asset_hidden_pool();
+    let before_commitments = {
+        let view = state.view();
+        view.world
+            .zk_assets()
+            .get(&asset_def_id)
+            .expect("zk state")
+            .commitments
+            .len()
+    };
+    let mut attachment = native_ipa_attachment();
+    attachment.proof.bytes[0] ^= 0xFF;
+    let err = execute_asset_hidden_on_state(
+        &state,
+        &owner,
+        asset_hidden_transfer(ASSET_HIDDEN_POOL_ID, attachment, Some(root_hint)),
+        3,
+    )
+    .expect_err("invalid proofs must fail");
+    assert_instruction_error_contains(err, "invalid asset-hidden transfer proof");
+    let after_commitments = {
+        let view = state.view();
+        view.world
+            .zk_assets()
+            .get(&asset_def_id)
+            .expect("zk state")
+            .commitments
+            .len()
+    };
+    assert_eq!(before_commitments, after_commitments);
 }
 
 #[test]

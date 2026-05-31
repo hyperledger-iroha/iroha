@@ -8211,6 +8211,53 @@ pub mod isi {
         Ok((vk_box, record))
     }
 
+    fn resolve_active_zk_binding(
+        state_transaction: &StateTransaction<'_, '_>,
+        id: &VerifyingKeyId,
+    ) -> Result<crate::state::ZkAssetVerifierBinding, Error> {
+        let Some(record) = state_transaction.world.verifying_keys.get(id) else {
+            return Err(FindError::Permission(Box::new(Permission::new(
+                "VerifyingKeyMissing".into(),
+                iroha_primitives::json::Json::from(format!("{}::{}", id.backend, id.name).as_str()),
+            )))
+            .into());
+        };
+        if record.status != ConfidentialStatus::Active {
+            return Err(InstructionExecutionError::InvariantViolation(
+                "verifying key is not active".into(),
+            ));
+        }
+        Ok(crate::state::ZkAssetVerifierBinding {
+            id: id.clone(),
+            commitment: record.commitment,
+        })
+    }
+
+    fn find_asset_hidden_pool_state(
+        state_transaction: &StateTransaction<'_, '_>,
+        pool_id: &str,
+    ) -> Result<(AssetDefinitionId, crate::state::ZkAssetState), Error> {
+        let trimmed = pool_id.trim();
+        let mut matched = None;
+        for (asset_def_id, st) in state_transaction.world.zk_assets.iter() {
+            if st.asset_hidden_pool_id.as_deref() != Some(trimmed) {
+                continue;
+            }
+            if matched.is_some() {
+                return Err(InstructionExecutionError::InvariantViolation(
+                    "asset-hidden pool id is ambiguous".into(),
+                ));
+            }
+            matched = Some((asset_def_id.clone(), st.clone()));
+        }
+        matched.ok_or_else(|| {
+            InstructionExecutionError::InvariantViolation(
+                "asset-hidden transfer pool is not registered".into(),
+            )
+            .into()
+        })
+    }
+
     #[derive(Clone)]
     struct PolicyMetadataContext {
         allow_shield: bool,
@@ -8665,6 +8712,165 @@ pub mod isi {
                 .world
                 .zk_assets
                 .insert(asset_def_id.clone(), st);
+            Ok(())
+        }
+    }
+
+    impl Execute for zk::RegisterAssetHiddenZkPool {
+        #[allow(clippy::too_many_lines)]
+        fn execute(
+            self,
+            _authority: &AccountId,
+            state_transaction: &mut StateTransaction<'_, '_>,
+        ) -> Result<(), Error> {
+            let pool_id = self.pool_id().trim();
+            if pool_id.is_empty() {
+                return Err(InstructionExecutionError::InvalidParameter(
+                    InvalidParameterError::SmartContract(
+                        "asset-hidden pool_id must be non-empty".into(),
+                    ),
+                ));
+            }
+            if *self.asset_set_root() == [0u8; 32] {
+                return Err(InstructionExecutionError::InvalidParameter(
+                    InvalidParameterError::SmartContract(
+                        "asset-hidden asset_set_root must be nonzero".into(),
+                    ),
+                ));
+            }
+
+            let asset_def_id = self.storage_asset().clone();
+            state_transaction
+                .world
+                .asset_definition_mut(&asset_def_id)
+                .map_err(Error::from)?;
+
+            let vk_binding = resolve_active_zk_binding(state_transaction, self.vk_transfer())?;
+            let vk_fingerprint = format!(
+                "{}::{}",
+                self.vk_transfer().backend,
+                self.vk_transfer().name
+            );
+            let policy_struct = AssetConfidentialPolicy {
+                mode: ConfidentialPolicyMode::ShieldedOnly,
+                vk_set_hash: Some(iroha_crypto::Hash::new(vk_fingerprint.as_bytes())),
+                poseidon_params_id: state_transaction.zk.poseidon_params_id,
+                pedersen_params_id: state_transaction.zk.pedersen_params_id,
+                pending_transition: None,
+            };
+
+            for (existing_asset, existing_state) in state_transaction.world.zk_assets.iter() {
+                if existing_asset == &asset_def_id {
+                    continue;
+                }
+                if existing_state.asset_hidden_pool_id.as_deref() == Some(pool_id) {
+                    return Err(InstructionExecutionError::InvariantViolation(
+                        "asset-hidden pool_id is already registered".into(),
+                    ));
+                }
+            }
+
+            let mut st = state_transaction
+                .world
+                .zk_assets
+                .get(&asset_def_id)
+                .cloned()
+                .unwrap_or_default();
+            let existing_pool_id = st.asset_hidden_pool_id.as_deref();
+            let existing_state_nonempty = !st.commitments.is_empty() || !st.nullifiers.is_empty();
+            if let Some(existing) = existing_pool_id {
+                if existing != pool_id && existing_state_nonempty {
+                    return Err(InstructionExecutionError::InvariantViolation(
+                        "cannot rebind non-empty asset-hidden pool storage".into(),
+                    ));
+                }
+            } else if existing_state_nonempty {
+                return Err(InstructionExecutionError::InvariantViolation(
+                    "cannot bind asset-hidden pool to storage asset with existing zk ledger state"
+                        .into(),
+                ));
+            }
+            if st
+                .asset_hidden_asset_set_root
+                .is_some_and(|root| root != *self.asset_set_root() && existing_state_nonempty)
+            {
+                return Err(InstructionExecutionError::InvariantViolation(
+                    "cannot change asset-hidden asset_set_root after pool state exists".into(),
+                ));
+            }
+            if st.vk_transfer.as_ref().is_some_and(|binding| {
+                binding.id != self.vk_transfer().clone() && existing_state_nonempty
+            }) {
+                return Err(InstructionExecutionError::InvariantViolation(
+                    "cannot change asset-hidden transfer verifier after pool state exists".into(),
+                ));
+            }
+
+            st.mode = iroha_data_model::isi::zk::ZkAssetMode::ZkNative;
+            st.allow_shield = false;
+            st.allow_unshield = false;
+            st.vk_transfer = Some(vk_binding);
+            st.asset_hidden_pool_id = Some(pool_id.to_owned());
+            st.asset_hidden_asset_set_root = Some(*self.asset_set_root());
+            if st.root_history.is_empty() {
+                st.root_history.push([0u8; 32]);
+            }
+
+            {
+                let asset_definition = state_transaction
+                    .world
+                    .asset_definition_mut(&asset_def_id)
+                    .map_err(Error::from)?;
+                asset_definition.set_confidential_policy(policy_struct.clone());
+
+                let mut pool_map = norito::json::native::Map::new();
+                pool_map.insert(
+                    "pool_id".into(),
+                    norito::json::native::Value::from(pool_id.to_owned()),
+                );
+                pool_map.insert(
+                    "asset_set_root".into(),
+                    norito::json::native::Value::from(hex::encode(self.asset_set_root())),
+                );
+                pool_map.insert(
+                    "vk_transfer".into(),
+                    norito::json::native::Value::from(vk_fingerprint),
+                );
+                let pool_json = Json::from(norito::json::native::Value::Object(pool_map));
+                let key: Name = "zk.asset_hidden_pool".parse().unwrap();
+                asset_definition
+                    .metadata_mut()
+                    .insert(key.clone(), pool_json.clone());
+                state_transaction.world.emit_events(Some(
+                    iroha_data_model::prelude::AssetDefinitionEvent::MetadataInserted(
+                        iroha_data_model::prelude::MetadataChanged {
+                            target: asset_def_id.clone(),
+                            key,
+                            value: pool_json,
+                        },
+                    ),
+                ));
+            }
+
+            let metadata_context = PolicyMetadataContext {
+                allow_shield: false,
+                allow_unshield: false,
+                vk_transfer: Some(self.vk_transfer().clone()),
+                vk_unshield: None,
+                vk_shield: None,
+            };
+            persist_policy_metadata(
+                state_transaction,
+                &asset_def_id,
+                &policy_struct,
+                &metadata_context,
+            )?;
+
+            state_transaction
+                .world
+                .zk_assets
+                .remove(asset_def_id.clone());
+            state_transaction.world.zk_assets.insert(asset_def_id, st);
             Ok(())
         }
     }
@@ -9191,6 +9397,281 @@ pub mod isi {
                         root_after,
                         proof_hash,
                         envelope_hash: self.proof().envelope_hash,
+                        call_hash,
+                    }),
+                ),
+            ));
+            Ok(())
+        }
+    }
+
+    impl Execute for zk::AssetHiddenZkTransfer {
+        #[allow(clippy::too_many_lines)]
+        fn execute(
+            self,
+            _authority: &AccountId,
+            state_transaction: &mut StateTransaction<'_, '_>,
+        ) -> Result<(), Error> {
+            if self.pool_id().trim().is_empty() {
+                return Err(InstructionExecutionError::InvalidParameter(
+                    InvalidParameterError::SmartContract(
+                        "asset-hidden transfer pool_id must be non-empty".into(),
+                    ),
+                ));
+            }
+            if self.inputs().is_empty() {
+                return Err(InstructionExecutionError::InvalidParameter(
+                    InvalidParameterError::SmartContract(
+                        "asset-hidden transfer requires at least one input nullifier".into(),
+                    ),
+                ));
+            }
+            if self.outputs().is_empty() {
+                return Err(InstructionExecutionError::InvalidParameter(
+                    InvalidParameterError::SmartContract(
+                        "asset-hidden transfer requires at least one output commitment".into(),
+                    ),
+                ));
+            }
+            if self.root_hint().is_none() {
+                return Err(InstructionExecutionError::InvariantViolation(
+                    "asset-hidden transfer requires root_hint".into(),
+                ));
+            }
+            let attachment = self.proof();
+            if attachment.backend != attachment.proof.backend {
+                return Err(InstructionExecutionError::InvariantViolation(
+                    "proof backend mismatch".into(),
+                ));
+            }
+            if attachment.backend != attachment.vk_ref.backend {
+                return Err(InstructionExecutionError::InvariantViolation(
+                    "verifying key backend mismatch".into(),
+                ));
+            }
+
+            let mut seen_inputs = BTreeSet::new();
+            for &nullifier in self.inputs() {
+                if nullifier == [0u8; 32] {
+                    return Err(InstructionExecutionError::InvalidParameter(
+                        InvalidParameterError::SmartContract(
+                            "asset-hidden transfer input nullifier must be nonzero".into(),
+                        ),
+                    ));
+                }
+                if !seen_inputs.insert(nullifier) {
+                    return Err(InstructionExecutionError::InvalidParameter(
+                        InvalidParameterError::SmartContract(
+                            "asset-hidden transfer duplicate input nullifier".into(),
+                        ),
+                    ));
+                }
+            }
+
+            let mut seen_outputs = BTreeSet::new();
+            for &commitment in self.outputs() {
+                if commitment == [0u8; 32] {
+                    return Err(InstructionExecutionError::InvalidParameter(
+                        InvalidParameterError::SmartContract(
+                            "asset-hidden transfer output commitment must be nonzero".into(),
+                        ),
+                    ));
+                }
+                if !seen_outputs.insert(commitment) {
+                    return Err(InstructionExecutionError::InvalidParameter(
+                        InvalidParameterError::SmartContract(
+                            "asset-hidden transfer duplicate output commitment".into(),
+                        ),
+                    ));
+                }
+            }
+
+            let root_hint = (*self.root_hint()).expect("root_hint checked above");
+            let (asset_def_id, mut st) =
+                find_asset_hidden_pool_state(state_transaction, self.pool_id())?;
+            if !st.root_history.iter().any(|root| root == &root_hint) {
+                return Err(InstructionExecutionError::InvariantViolation(
+                    "asset-hidden transfer root_hint is not in pool root history".into(),
+                ));
+            }
+            let binding = st.vk_transfer.as_ref().ok_or_else(|| {
+                InstructionExecutionError::InvariantViolation(
+                    "asset-hidden transfer pool verifier is not registered".into(),
+                )
+            })?;
+            enforce_vk_binding(binding, attachment)?;
+            let (vk_box, vk_record) =
+                resolve_asset_vk(state_transaction, Some(binding), attachment)?;
+            if let Some(record) = vk_record.as_ref() {
+                enforce_vk_max_proof_bytes(
+                    "asset-hidden transfer",
+                    record,
+                    attachment.proof.bytes.len(),
+                )?;
+            }
+
+            for &nullifier in self.inputs() {
+                if st.nullifiers.contains(&nullifier) {
+                    return Err(InstructionExecutionError::InvariantViolation(
+                        "asset-hidden transfer nullifier already spent".into(),
+                    ));
+                }
+            }
+
+            state_transaction.register_confidential_proof(attachment.proof.bytes.len())?;
+            let report = crate::zk::verify_backend_with_timing_checked(
+                attachment.backend.as_str(),
+                &attachment.proof,
+                Some(&vk_box),
+                &state_transaction.zk,
+            );
+            if !report.ok {
+                if state_transaction.trust_committed_execution_results {
+                    iroha_logger::warn!(
+                        backend = attachment.backend.as_str(),
+                        proof_len = attachment.proof.bytes.len(),
+                        "replay accepted committed asset-hidden transfer result after local proof verifier rejection"
+                    );
+                } else {
+                    return Err(InstructionExecutionError::InvariantViolation(
+                        "invalid asset-hidden transfer proof".into(),
+                    ));
+                }
+            }
+
+            for &nullifier in self.inputs() {
+                st.nullifiers.insert(nullifier);
+            }
+
+            let mut outputs_sorted = self.outputs().clone();
+            outputs_sorted.sort_unstable();
+            #[cfg(feature = "telemetry")]
+            let root_history_before = st.root_history.len();
+            #[cfg(feature = "telemetry")]
+            let appended_outputs = outputs_sorted.len();
+            for &commitment in &outputs_sorted {
+                st.push_commitment(commitment, state_transaction.zk.root_history_cap);
+            }
+            let frontier_update = st.record_frontier_checkpoint(
+                state_transaction.block_height(),
+                state_transaction.zk.tree_frontier_checkpoint_interval,
+                state_transaction.zk.reorg_depth_bound,
+            );
+            #[cfg(feature = "telemetry")]
+            let frontier_evictions = frontier_update.evicted;
+            #[cfg(not(feature = "telemetry"))]
+            let _ = frontier_update;
+            let root_after = st.root_history.last().copied().unwrap_or([0u8; 32]);
+            #[cfg(feature = "telemetry")]
+            let telemetry_stats = {
+                let root_evictions = root_evictions_since(
+                    root_history_before,
+                    appended_outputs,
+                    st.root_history.len(),
+                );
+                st.telemetry_stats(root_evictions, frontier_evictions)
+            };
+
+            let proof_hash = crate::zk::hash_proof(&attachment.proof);
+            let call_hash_hex = state_transaction
+                .tx_call_hash
+                .as_ref()
+                .map(|h| hex::encode(h.as_ref()))
+                .unwrap_or_default();
+            let env_hash_hex = attachment
+                .envelope_hash
+                .as_ref()
+                .map(hex::encode)
+                .unwrap_or_default();
+            let mut summary_map = norito::json::native::Map::new();
+            summary_map.insert(
+                "pool_id".into(),
+                norito::json::native::Value::from(self.pool_id().trim().to_owned()),
+            );
+            summary_map.insert(
+                "inputs".into(),
+                norito::json::native::Value::from(self.inputs().len() as u64),
+            );
+            summary_map.insert(
+                "outputs".into(),
+                norito::json::native::Value::from(outputs_sorted.len() as u64),
+            );
+            summary_map.insert(
+                "proof_hash".into(),
+                norito::json::native::Value::from(hex::encode(proof_hash)),
+            );
+            summary_map.insert(
+                "envelope_hash".into(),
+                norito::json::native::Value::from(env_hash_hex),
+            );
+            summary_map.insert(
+                "call_hash".into(),
+                norito::json::native::Value::from(call_hash_hex),
+            );
+            summary_map.insert(
+                "root_before".into(),
+                norito::json::native::Value::from(hex::encode(root_hint)),
+            );
+            summary_map.insert(
+                "root_after".into(),
+                norito::json::native::Value::from(hex::encode(root_after)),
+            );
+            summary_map.insert(
+                "outputs_commitments".into(),
+                norito::json::native::Value::Array(
+                    outputs_sorted
+                        .iter()
+                        .map(|commitment| {
+                            norito::json::native::Value::from(hex::encode(commitment))
+                        })
+                        .collect(),
+                ),
+            );
+            let summary = Json::from(norito::json::native::Value::Object(summary_map));
+            let key: Name = "zk.asset_hidden_transfer.last".parse().unwrap();
+            state_transaction
+                .world
+                .asset_definition_mut(&asset_def_id)
+                .map_err(Error::from)
+                .map(|def| def.metadata_mut().insert(key.clone(), summary.clone()))?;
+            state_transaction.world.emit_events(Some(
+                iroha_data_model::prelude::AssetDefinitionEvent::MetadataInserted(
+                    iroha_data_model::prelude::MetadataChanged {
+                        target: asset_def_id.clone(),
+                        key,
+                        value: summary,
+                    },
+                ),
+            ));
+
+            state_transaction
+                .world
+                .zk_assets
+                .remove(asset_def_id.clone());
+            state_transaction
+                .world
+                .zk_assets
+                .insert(asset_def_id.clone(), st);
+            #[cfg(feature = "telemetry")]
+            state_transaction
+                .telemetry
+                .record_confidential_tree_stats(&asset_def_id, telemetry_stats);
+
+            let call_hash = state_transaction.tx_call_hash.as_ref().map(|h| {
+                let mut bytes = [0u8; 32];
+                bytes.copy_from_slice(h.as_ref());
+                bytes
+            });
+            state_transaction.world.emit_events(Some(
+                iroha_data_model::events::data::DataEvent::Confidential(
+                    ConfidentialEvent::Transferred(ConfidentialTransferred {
+                        asset_definition: asset_def_id,
+                        nullifiers: self.inputs().clone(),
+                        outputs: outputs_sorted,
+                        root_before: Some(root_hint),
+                        root_after,
+                        proof_hash,
+                        envelope_hash: attachment.envelope_hash,
                         call_hash,
                     }),
                 ),

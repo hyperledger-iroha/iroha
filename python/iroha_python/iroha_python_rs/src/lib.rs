@@ -32,7 +32,8 @@ use iroha_crypto::{
 use iroha_data_model::{
     account::Account,
     asset::{
-        definition::AssetConfidentialPolicy,
+        alias::AssetDefinitionAlias,
+        definition::{AssetBalancePolicy, AssetConfidentialPolicy},
         prelude::{AssetDefinition, AssetDefinitionId, AssetId, Mintable},
     },
     block::{
@@ -45,8 +46,8 @@ use iroha_data_model::{
     domain::prelude::{Domain, DomainId},
     events::time::{ExecutionTime, Schedule as TimeSchedule, TimeEventFilter},
     isi::{
-        Burn, ExecuteTrigger, InstructionBox, Mint, Register, RemoveKeyValue, SetKeyValue,
-        Transfer, Unregister,
+        Burn, ExecuteTrigger, Grant, InstructionBox, Mint, Register, RemoveKeyValue, Revoke,
+        SetKeyValue, Transfer, Unregister,
         repo::{RepoIsi, RepoMarginCallIsi, ReverseRepoIsi},
         settlement::{
             DvpIsi, PvpIsi, SettlementAtomicity, SettlementExecutionOrder, SettlementId,
@@ -58,6 +59,7 @@ use iroha_data_model::{
     nexus::{DataSpaceId, LaneId, LanePrivacyProof, LaneRelayEnvelope, compute_settlement_hash},
     nft::NftId,
     peer::PeerId,
+    permission::Permission,
     prelude::{AccountId, ChainId},
     proof::{ProofAttachment, ProofAttachmentList, ProofBox, VerifyingKeyId},
     repo::prelude::{RepoAgreementId, RepoCashLeg, RepoCollateralLeg, RepoGovernance},
@@ -5862,6 +5864,22 @@ fn parse_confidential_policy(mode: Option<&str>) -> PyResult<Option<AssetConfide
     Ok(Some(policy))
 }
 
+fn parse_balance_scope_policy(mode: Option<&str>) -> PyResult<Option<AssetBalancePolicy>> {
+    let Some(mode) = mode else {
+        return Ok(None);
+    };
+    let policy = match mode {
+        "Global" => AssetBalancePolicy::Global,
+        "DataspaceRestricted" => AssetBalancePolicy::DataspaceRestricted,
+        other => {
+            return Err(PyValueError::new_err(format!(
+                "invalid balance scope policy `{other}`; expected Global/DataspaceRestricted"
+            )));
+        }
+    };
+    Ok(Some(policy))
+}
+
 fn domain_id_to_py(py: Python<'_>, id: &DomainId) -> PyResult<Py<PyDomainId>> {
     Py::new(py, PyDomainId { inner: id.clone() })
 }
@@ -6129,15 +6147,19 @@ impl Instruction {
     }
 
     #[classmethod]
-    #[pyo3(signature = (definition_id, owner, *, scale=None, mintable=None, confidential_policy=None, metadata=None))]
+    #[pyo3(signature = (definition_id, owner, *, name=None, description=None, alias=None, scale=None, mintable=None, balance_scope_policy=None, confidential_policy=None, metadata=None))]
     #[allow(clippy::too_many_arguments)] // PyO3 signature mirrors the Python surface and requires explicit keyword params
     fn register_asset_definition_numeric<'py>(
         _cls: &Bound<'py, PyType>,
         py: Python<'py>,
         definition_id: &str,
         owner: &str,
+        name: Option<&str>,
+        description: Option<&str>,
+        alias: Option<&str>,
         scale: Option<u32>,
         mintable: Option<&str>,
+        balance_scope_policy: Option<&str>,
         confidential_policy: Option<&str>,
         metadata: Option<&Bound<'py, PyAny>>,
     ) -> PyResult<Self> {
@@ -6157,6 +6179,21 @@ impl Instruction {
         };
         let mut new_asset = AssetDefinition::new(definition_id, spec);
 
+        if let Some(name) = name {
+            new_asset = new_asset.with_name(name.to_owned());
+        }
+
+        if let Some(description) = description {
+            new_asset = new_asset.with_description(Some(description.to_owned()));
+        }
+
+        if let Some(alias) = alias {
+            let alias = alias.parse::<AssetDefinitionAlias>().map_err(|err| {
+                PyValueError::new_err(format!("invalid asset definition alias `{alias}`: {err}"))
+            })?;
+            new_asset = new_asset.with_alias(Some(alias));
+        }
+
         if let Some(meta) = metadata {
             let metadata = py_to_metadata(py, Some(meta))?;
             new_asset = new_asset.with_metadata(metadata);
@@ -6172,6 +6209,10 @@ impl Instruction {
 
         if let Some(policy) = parse_confidential_policy(confidential_policy)? {
             new_asset = new_asset.confidential_policy(policy);
+        }
+
+        if let Some(policy) = parse_balance_scope_policy(balance_scope_policy)? {
+            new_asset = new_asset.with_balance_scope_policy(policy);
         }
 
         let instruction = Register::<AssetDefinition>::asset_definition(new_asset);
@@ -6220,6 +6261,44 @@ impl Instruction {
         ensure_ed25519_account(&destination)?;
         let quantity = parse_numeric(quantity)?;
         let instruction = Transfer::asset_numeric(asset_id, quantity, destination);
+        Ok(Instruction::new(instruction.into()))
+    }
+
+    #[classmethod]
+    #[pyo3(signature = (destination, name, *, payload=None))]
+    fn grant_account_permission<'py>(
+        cls: &Bound<'py, PyType>,
+        destination: &str,
+        name: &str,
+        payload: Option<&Bound<'py, PyAny>>,
+    ) -> PyResult<Self> {
+        let destination: AccountId = parse_account_id(destination)?;
+        ensure_ed25519_account(&destination)?;
+        let permission_name: Ident = name
+            .parse()
+            .map_err(|err| PyValueError::new_err(format!("invalid permission name `{name}`: {err}")))?;
+        let payload = py_to_json_value(cls.py(), payload)?;
+        let permission = Permission::new(permission_name, payload);
+        let instruction = Grant::account_permission(permission, destination);
+        Ok(Instruction::new(instruction.into()))
+    }
+
+    #[classmethod]
+    #[pyo3(signature = (destination, name, *, payload=None))]
+    fn revoke_account_permission<'py>(
+        cls: &Bound<'py, PyType>,
+        destination: &str,
+        name: &str,
+        payload: Option<&Bound<'py, PyAny>>,
+    ) -> PyResult<Self> {
+        let destination: AccountId = parse_account_id(destination)?;
+        ensure_ed25519_account(&destination)?;
+        let permission_name: Ident = name
+            .parse()
+            .map_err(|err| PyValueError::new_err(format!("invalid permission name `{name}`: {err}")))?;
+        let payload = py_to_json_value(cls.py(), payload)?;
+        let permission = Permission::new(permission_name, payload);
+        let instruction = Revoke::account_permission(permission, destination);
         Ok(Instruction::new(instruction.into()))
     }
 

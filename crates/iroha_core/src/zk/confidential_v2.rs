@@ -1,6 +1,7 @@
 #![allow(missing_docs, missing_copy_implementations)]
 
 use blake3::Hasher as Blake3Hasher;
+use iroha_data_model::proof::VerifyingKeyBox;
 
 #[cfg(any(feature = "zk-halo2", feature = "zk-halo2-ipa"))]
 use halo2_proofs::{
@@ -10,8 +11,8 @@ use halo2_proofs::{
         pasta::{EqAffine as Curve, Fp as Scalar},
     },
     plonk::{
-        Circuit, ConstraintSystem, Error as PlonkError, Selector, create_proof, keygen_pk,
-        keygen_vk, verify_proof,
+        Circuit, ConstraintSystem, Error as PlonkError, ProvingKey, Selector, VerifyingKey,
+        create_proof, keygen_pk, keygen_vk, verify_proof,
     },
     poly::{
         Rotation, VerificationStrategy as _,
@@ -31,7 +32,7 @@ use iroha_crypto::Hash as CryptoHash;
 use iroha_data_model::{
     ChainId,
     confidential::ConfidentialStatus,
-    proof::{ProofBox, VerifyingKeyBox, VerifyingKeyRecord},
+    proof::{ProofBox, VerifyingKeyRecord},
     zk::{BackendTag, OpenVerifyEnvelope, StarkFriOpenProofV1},
 };
 #[cfg(any(feature = "zk-halo2", feature = "zk-halo2-ipa"))]
@@ -45,6 +46,7 @@ pub const CONFIDENTIAL_UNSHIELD_V3_CIRCUIT_ID: &str =
     "halo2/pasta/ipa/anon-unshield-2in-1change-merkle16-poseidon-diversified";
 pub const CONFIDENTIAL_TRANSFER_V2_IPA_K: u32 = 7;
 pub const CONFIDENTIAL_UNSHIELD_V2_IPA_K: u32 = 7;
+pub const CONFIDENTIAL_UNSHIELD_V3_IPA_K: u32 = 7;
 pub const CONFIDENTIAL_TREE_DEPTH_V2: usize = 16;
 pub const CONFIDENTIAL_TREE_CAPACITY_V2: usize = 1 << CONFIDENTIAL_TREE_DEPTH_V2;
 pub const CONFIDENTIAL_TRANSFER_V2_PUBLIC_INPUTS_SCHEMA_V1: &[u8] = br#"{"schema":"confidential_transfer_v2","public_inputs":["input_commitment_0","input_commitment_1","nullifier_0","nullifier_1","output_commitment_0","output_commitment_1","root","asset_tag","chain_tag"]}"#;
@@ -142,7 +144,17 @@ pub fn is_confidential_unshield_v2_circuit_id(raw: &str) -> bool {
 }
 
 #[cfg(any(feature = "zk-halo2", feature = "zk-halo2-ipa"))]
-fn build_confidential_v2_vk_box<C>(k: u32, circuit: &C) -> Result<VerifyingKeyBox, String>
+type ConfidentialV2ProvingKey = ProvingKey<Curve>;
+
+#[cfg(any(feature = "zk-halo2", feature = "zk-halo2-ipa"))]
+type ConfidentialV2VerifyingKey = VerifyingKey<Curve>;
+
+#[cfg(any(feature = "zk-halo2", feature = "zk-halo2-ipa"))]
+fn build_confidential_v2_vk_box<C>(
+    k: u32,
+    circuit_id: &str,
+    circuit: &C,
+) -> Result<VerifyingKeyBox, String>
 where
     C: Circuit<Scalar>,
 {
@@ -151,6 +163,7 @@ where
         .map_err(|err| format!("failed to generate confidential v2 verifying key: {err}"))?;
     let mut bytes = super::zk1::wrap_start();
     super::zk1::wrap_append_ipa_k(&mut bytes, k);
+    super::zk1::wrap_append_circuit_id(&mut bytes, circuit_id);
     super::zk1::wrap_append_vk_pasta(&mut bytes, &vk);
     Ok(VerifyingKeyBox::new(
         super::ZK_BACKEND_HALO2_IPA.to_owned(),
@@ -160,18 +173,125 @@ where
 
 #[cfg(any(feature = "zk-halo2", feature = "zk-halo2-ipa"))]
 pub fn confidential_transfer_v2_vk_box() -> Result<VerifyingKeyBox, String> {
-    build_confidential_v2_vk_box(
-        CONFIDENTIAL_TRANSFER_V2_IPA_K,
-        &ConfidentialTransferCircuitV2::<CONFIDENTIAL_TREE_DEPTH_V2>::default(),
-    )
+    static CACHE: std::sync::OnceLock<Result<VerifyingKeyBox, String>> = std::sync::OnceLock::new();
+
+    CACHE
+        .get_or_init(|| {
+            build_confidential_v2_vk_box(
+                CONFIDENTIAL_TRANSFER_V2_IPA_K,
+                CONFIDENTIAL_TRANSFER_V2_CIRCUIT_ID,
+                &ConfidentialTransferCircuitV2::<CONFIDENTIAL_TREE_DEPTH_V2>::default(),
+            )
+        })
+        .clone()
+}
+
+pub fn ensure_confidential_transfer_v2_canonical_vk_box(
+    vk_box: &VerifyingKeyBox,
+) -> Result<(), String> {
+    if vk_box.backend.as_str() != super::ZK_BACKEND_HALO2_IPA {
+        return Err(format!(
+            "Confidential transfer v2 verifier key backend `{}` is not `{}`",
+            vk_box.backend,
+            super::ZK_BACKEND_HALO2_IPA
+        ));
+    }
+    if vk_box.bytes.is_empty() {
+        return Err("Confidential transfer v2 verifier key must be non-empty".to_owned());
+    }
+    #[cfg(any(feature = "zk-halo2", feature = "zk-halo2-ipa"))]
+    {
+        let canonical = confidential_transfer_v2_vk_box()?;
+        if super::hash_vk(vk_box) != super::hash_vk(&canonical) || vk_box.bytes != canonical.bytes {
+            return Err(
+                "Confidential transfer v2 verifier key must match the canonical semantic circuit key"
+                    .to_owned(),
+            );
+        }
+    }
+    Ok(())
 }
 
 #[cfg(any(feature = "zk-halo2", feature = "zk-halo2-ipa"))]
 pub fn confidential_unshield_v2_vk_box() -> Result<VerifyingKeyBox, String> {
-    build_confidential_v2_vk_box(
-        CONFIDENTIAL_UNSHIELD_V2_IPA_K,
-        &ConfidentialUnshieldCircuitV2::<CONFIDENTIAL_TREE_DEPTH_V2>::default(),
-    )
+    static CACHE: std::sync::OnceLock<Result<VerifyingKeyBox, String>> = std::sync::OnceLock::new();
+
+    CACHE
+        .get_or_init(|| {
+            build_confidential_v2_vk_box(
+                CONFIDENTIAL_UNSHIELD_V2_IPA_K,
+                CONFIDENTIAL_UNSHIELD_V2_CIRCUIT_ID,
+                &ConfidentialUnshieldCircuitV2::<CONFIDENTIAL_TREE_DEPTH_V2>::default(),
+            )
+        })
+        .clone()
+}
+
+pub fn ensure_confidential_unshield_v2_canonical_vk_box(
+    vk_box: &VerifyingKeyBox,
+) -> Result<(), String> {
+    if vk_box.backend.as_str() != super::ZK_BACKEND_HALO2_IPA {
+        return Err(format!(
+            "Confidential unshield v2 verifier key backend `{}` is not `{}`",
+            vk_box.backend,
+            super::ZK_BACKEND_HALO2_IPA
+        ));
+    }
+    if vk_box.bytes.is_empty() {
+        return Err("Confidential unshield v2 verifier key must be non-empty".to_owned());
+    }
+    #[cfg(any(feature = "zk-halo2", feature = "zk-halo2-ipa"))]
+    {
+        let canonical = confidential_unshield_v2_vk_box()?;
+        if super::hash_vk(vk_box) != super::hash_vk(&canonical) || vk_box.bytes != canonical.bytes {
+            return Err(
+                "Confidential unshield v2 verifier key must match the canonical semantic circuit key"
+                    .to_owned(),
+            );
+        }
+    }
+    Ok(())
+}
+
+#[cfg(any(feature = "zk-halo2", feature = "zk-halo2-ipa"))]
+pub fn confidential_unshield_v3_vk_box() -> Result<VerifyingKeyBox, String> {
+    static CACHE: std::sync::OnceLock<Result<VerifyingKeyBox, String>> = std::sync::OnceLock::new();
+
+    CACHE
+        .get_or_init(|| {
+            build_confidential_v2_vk_box(
+                CONFIDENTIAL_UNSHIELD_V3_IPA_K,
+                CONFIDENTIAL_UNSHIELD_V3_CIRCUIT_ID,
+                &ConfidentialUnshieldCircuitV3::<CONFIDENTIAL_TREE_DEPTH_V2>::default(),
+            )
+        })
+        .clone()
+}
+
+pub fn ensure_confidential_unshield_v3_canonical_vk_box(
+    vk_box: &VerifyingKeyBox,
+) -> Result<(), String> {
+    if vk_box.backend.as_str() != super::ZK_BACKEND_HALO2_IPA {
+        return Err(format!(
+            "Confidential unshield v3 verifier key backend `{}` is not `{}`",
+            vk_box.backend,
+            super::ZK_BACKEND_HALO2_IPA
+        ));
+    }
+    if vk_box.bytes.is_empty() {
+        return Err("Confidential unshield v3 verifier key must be non-empty".to_owned());
+    }
+    #[cfg(any(feature = "zk-halo2", feature = "zk-halo2-ipa"))]
+    {
+        let canonical = confidential_unshield_v3_vk_box()?;
+        if super::hash_vk(vk_box) != super::hash_vk(&canonical) || vk_box.bytes != canonical.bytes {
+            return Err(
+                "Confidential unshield v3 verifier key must match the canonical semantic circuit key"
+                    .to_owned(),
+            );
+        }
+    }
+    Ok(())
 }
 
 #[cfg(any(feature = "zk-halo2", feature = "zk-halo2-ipa"))]
@@ -225,6 +345,20 @@ pub fn confidential_unshield_v2_vk_record(
         CONFIDENTIAL_UNSHIELD_V2_CIRCUIT_ID,
         CONFIDENTIAL_UNSHIELD_V2_PUBLIC_INPUTS_SCHEMA_V1,
         confidential_unshield_v2_vk_box()?,
+    )
+}
+
+#[cfg(any(feature = "zk-halo2", feature = "zk-halo2-ipa"))]
+pub fn confidential_unshield_v3_vk_record(
+    name: &str,
+    version: u32,
+) -> Result<VerifyingKeyRecord, String> {
+    confidential_v2_vk_record(
+        name,
+        version,
+        CONFIDENTIAL_UNSHIELD_V3_CIRCUIT_ID,
+        CONFIDENTIAL_UNSHIELD_V3_PUBLIC_INPUTS_SCHEMA_V1,
+        confidential_unshield_v3_vk_box()?,
     )
 }
 
@@ -1711,7 +1845,7 @@ struct ConfidentialUnshieldWitnessV3 {
 
 #[cfg(any(feature = "zk-halo2", feature = "zk-halo2-ipa"))]
 #[derive(Clone, Default)]
-struct ConfidentialUnshieldCircuitV3<const DEPTH: usize> {
+pub(super) struct ConfidentialUnshieldCircuitV3<const DEPTH: usize> {
     witness: Option<ConfidentialUnshieldWitnessV3>,
 }
 
@@ -2198,7 +2332,7 @@ fn parse_vk_for_unshield_v2(
 fn parse_vk_for_unshield_v3(
     circuit_id: &str,
     vk_box: &VerifyingKeyBox,
-) -> Result<(super::PastaParams, halo2_proofs::plonk::VerifyingKey<Curve>), String> {
+) -> Result<(super::PastaParams, ConfidentialV2VerifyingKey), String> {
     if vk_box.backend.as_str() != super::ZK_BACKEND_HALO2_IPA {
         return Err("confidential v3 proving requires a halo2/ipa verifying key".to_owned());
     }
@@ -2216,6 +2350,110 @@ fn parse_vk_for_unshield_v3(
         "missing/invalid H2VK payload for confidential unshield verifying key".to_owned()
     })?;
     Ok((params, parsed))
+}
+
+#[cfg(any(feature = "zk-halo2", feature = "zk-halo2-ipa"))]
+fn derive_confidential_v2_proving_key<C>(
+    params: &super::PastaParams,
+    parsed_vk: ConfidentialV2VerifyingKey,
+    empty_circuit: &C,
+    context: &str,
+) -> Result<ConfidentialV2ProvingKey, String>
+where
+    C: Circuit<Scalar>,
+{
+    keygen_pk(params, parsed_vk, empty_circuit)
+        .map_err(|err| format!("failed to derive confidential {context} proving key: {err}"))
+}
+
+#[cfg(any(feature = "zk-halo2", feature = "zk-halo2-ipa"))]
+fn cached_confidential_transfer_v2_proving_key() -> Result<&'static ConfidentialV2ProvingKey, String>
+{
+    static CACHE: std::sync::OnceLock<Result<ConfidentialV2ProvingKey, String>> =
+        std::sync::OnceLock::new();
+
+    match CACHE.get_or_init(|| {
+        let vk_box = confidential_transfer_v2_vk_box()?;
+        let (params, parsed_vk) =
+            parse_vk_for_transfer(CONFIDENTIAL_TRANSFER_V2_CIRCUIT_ID, &vk_box)?;
+        derive_confidential_v2_proving_key(
+            &params,
+            parsed_vk,
+            &ConfidentialTransferCircuitV2::<CONFIDENTIAL_TREE_DEPTH_V2>::default(),
+            "transfer",
+        )
+    }) {
+        Ok(proving_key) => Ok(proving_key),
+        Err(err) => Err(err.clone()),
+    }
+}
+
+#[cfg(any(feature = "zk-halo2", feature = "zk-halo2-ipa"))]
+fn cached_confidential_unshield_v2_proving_key() -> Result<&'static ConfidentialV2ProvingKey, String>
+{
+    static CACHE: std::sync::OnceLock<Result<ConfidentialV2ProvingKey, String>> =
+        std::sync::OnceLock::new();
+
+    match CACHE.get_or_init(|| {
+        let vk_box = confidential_unshield_v2_vk_box()?;
+        let (params, parsed_vk) =
+            parse_vk_for_unshield_v2(CONFIDENTIAL_UNSHIELD_V2_CIRCUIT_ID, &vk_box)?;
+        derive_confidential_v2_proving_key(
+            &params,
+            parsed_vk,
+            &ConfidentialUnshieldCircuitV2::<CONFIDENTIAL_TREE_DEPTH_V2>::default(),
+            "unshield",
+        )
+    }) {
+        Ok(proving_key) => Ok(proving_key),
+        Err(err) => Err(err.clone()),
+    }
+}
+
+#[cfg(any(feature = "zk-halo2", feature = "zk-halo2-ipa"))]
+fn cached_confidential_unshield_v3_proving_key() -> Result<&'static ConfidentialV2ProvingKey, String>
+{
+    static CACHE: std::sync::OnceLock<Result<ConfidentialV2ProvingKey, String>> =
+        std::sync::OnceLock::new();
+
+    match CACHE.get_or_init(|| {
+        let vk_box = confidential_unshield_v3_vk_box()?;
+        let (params, parsed_vk) =
+            parse_vk_for_unshield_v3(CONFIDENTIAL_UNSHIELD_V3_CIRCUIT_ID, &vk_box)?;
+        derive_confidential_v2_proving_key(
+            &params,
+            parsed_vk,
+            &ConfidentialUnshieldCircuitV3::<CONFIDENTIAL_TREE_DEPTH_V2>::default(),
+            "unshield",
+        )
+    }) {
+        Ok(proving_key) => Ok(proving_key),
+        Err(err) => Err(err.clone()),
+    }
+}
+
+#[cfg(any(feature = "zk-halo2", feature = "zk-halo2-ipa"))]
+fn create_confidential_v2_proof<C>(
+    params: &super::PastaParams,
+    proving_key: &ConfidentialV2ProvingKey,
+    circuit: C,
+    instance_wrapper: &[&[&[Scalar]]],
+    context: &str,
+) -> Result<Vec<u8>, String>
+where
+    C: Circuit<Scalar>,
+{
+    let mut transcript = Blake2bWrite::<_, Curve, Challenge255<Curve>>::init(vec![]);
+    create_proof::<IPACommitmentScheme<Curve>, ProverIPA<'_, Curve>, Challenge255<Curve>, _, _, _>(
+        params,
+        proving_key,
+        &[circuit],
+        instance_wrapper,
+        OsRng,
+        &mut transcript,
+    )
+    .map_err(|err| format!("failed to create confidential {context} proof: {err}"))?;
+    Ok(transcript.finalize())
 }
 
 #[cfg(any(feature = "zk-halo2", feature = "zk-halo2-ipa"))]
@@ -2392,23 +2630,29 @@ pub fn build_confidential_transfer_proof_v2(
     ];
     let instance_refs: Vec<&[Scalar]> = instance_columns.iter().map(Vec::as_slice).collect();
     let instance_wrapper = vec![instance_refs.as_slice()];
-    let proving_key = keygen_pk(
-        &params,
-        parsed_vk.clone(),
-        &ConfidentialTransferCircuitV2::<CONFIDENTIAL_TREE_DEPTH_V2>::default(),
-    )
-    .map_err(|err| format!("failed to derive confidential transfer proving key: {err}"))?;
-    let mut transcript = Blake2bWrite::<_, Curve, Challenge255<Curve>>::init(vec![]);
-    create_proof::<IPACommitmentScheme<Curve>, ProverIPA<'_, Curve>, Challenge255<Curve>, _, _, _>(
-        &params,
-        &proving_key,
-        &[circuit],
-        &instance_wrapper,
-        OsRng,
-        &mut transcript,
-    )
-    .map_err(|err| format!("failed to create confidential transfer proof: {err}"))?;
-    let proof_raw = transcript.finalize();
+    let proof_raw = if ensure_confidential_transfer_v2_canonical_vk_box(vk_box).is_ok() {
+        create_confidential_v2_proof(
+            &params,
+            cached_confidential_transfer_v2_proving_key()?,
+            circuit,
+            &instance_wrapper,
+            "transfer",
+        )?
+    } else {
+        let proving_key = derive_confidential_v2_proving_key(
+            &params,
+            parsed_vk.clone(),
+            &ConfidentialTransferCircuitV2::<CONFIDENTIAL_TREE_DEPTH_V2>::default(),
+            "transfer",
+        )?;
+        create_confidential_v2_proof(
+            &params,
+            &proving_key,
+            circuit,
+            &instance_wrapper,
+            "transfer",
+        )?
+    };
     {
         let mut verify_transcript = Blake2bRead::<_, Curve, Challenge255<Curve>>::init(
             std::io::Cursor::new(proof_raw.as_slice()),
@@ -2566,28 +2810,35 @@ pub fn build_confidential_unshield_proof_v2(
     ];
     let instance_refs: Vec<&[Scalar]> = instance_columns.iter().map(Vec::as_slice).collect();
     let instance_wrapper = vec![instance_refs.as_slice()];
-    let proving_key = keygen_pk(
-        &params,
-        parsed_vk.clone(),
-        &ConfidentialUnshieldCircuitV2::<CONFIDENTIAL_TREE_DEPTH_V2>::default(),
-    )
-    .map_err(|err| format!("failed to derive confidential unshield proving key: {err}"))?;
-    let mut transcript = Blake2bWrite::<_, Curve, Challenge255<Curve>>::init(vec![]);
-    create_proof::<IPACommitmentScheme<Curve>, ProverIPA<'_, Curve>, Challenge255<Curve>, _, _, _>(
-        &params,
-        &proving_key,
-        &[circuit],
-        &instance_wrapper,
-        OsRng,
-        &mut transcript,
-    )
-    .map_err(|err| format!("failed to create confidential unshield proof: {err}"))?;
+    let proof_raw = if ensure_confidential_unshield_v2_canonical_vk_box(vk_box).is_ok() {
+        create_confidential_v2_proof(
+            &params,
+            cached_confidential_unshield_v2_proving_key()?,
+            circuit,
+            &instance_wrapper,
+            "unshield",
+        )?
+    } else {
+        let proving_key = derive_confidential_v2_proving_key(
+            &params,
+            parsed_vk.clone(),
+            &ConfidentialUnshieldCircuitV2::<CONFIDENTIAL_TREE_DEPTH_V2>::default(),
+            "unshield",
+        )?;
+        create_confidential_v2_proof(
+            &params,
+            &proving_key,
+            circuit,
+            &instance_wrapper,
+            "unshield",
+        )?
+    };
     let proof = encode_halo2_envelope(
         CONFIDENTIAL_UNSHIELD_V2_CIRCUIT_ID,
         vk_box,
         CONFIDENTIAL_UNSHIELD_V2_PUBLIC_INPUTS_SCHEMA_V1.to_vec(),
         &instance_columns,
-        transcript.finalize(),
+        proof_raw,
     )?;
     Ok(ConfidentialUnshieldProofV2 {
         nullifiers: if input_1.is_some() {
@@ -2743,28 +2994,35 @@ pub fn build_confidential_unshield_proof_v3(
     ];
     let instance_refs: Vec<&[Scalar]> = instance_columns.iter().map(Vec::as_slice).collect();
     let instance_wrapper = vec![instance_refs.as_slice()];
-    let proving_key = keygen_pk(
-        &params,
-        parsed_vk.clone(),
-        &ConfidentialUnshieldCircuitV3::<CONFIDENTIAL_TREE_DEPTH_V2>::default(),
-    )
-    .map_err(|err| format!("failed to derive confidential unshield proving key: {err}"))?;
-    let mut transcript = Blake2bWrite::<_, Curve, Challenge255<Curve>>::init(vec![]);
-    create_proof::<IPACommitmentScheme<Curve>, ProverIPA<'_, Curve>, Challenge255<Curve>, _, _, _>(
-        &params,
-        &proving_key,
-        &[circuit],
-        &instance_wrapper,
-        OsRng,
-        &mut transcript,
-    )
-    .map_err(|err| format!("failed to create confidential unshield proof: {err}"))?;
+    let proof_raw = if ensure_confidential_unshield_v3_canonical_vk_box(vk_box).is_ok() {
+        create_confidential_v2_proof(
+            &params,
+            cached_confidential_unshield_v3_proving_key()?,
+            circuit,
+            &instance_wrapper,
+            "unshield",
+        )?
+    } else {
+        let proving_key = derive_confidential_v2_proving_key(
+            &params,
+            parsed_vk.clone(),
+            &ConfidentialUnshieldCircuitV3::<CONFIDENTIAL_TREE_DEPTH_V2>::default(),
+            "unshield",
+        )?;
+        create_confidential_v2_proof(
+            &params,
+            &proving_key,
+            circuit,
+            &instance_wrapper,
+            "unshield",
+        )?
+    };
     let proof = encode_halo2_envelope(
         CONFIDENTIAL_UNSHIELD_V3_CIRCUIT_ID,
         vk_box,
         CONFIDENTIAL_UNSHIELD_V3_PUBLIC_INPUTS_SCHEMA_V1.to_vec(),
         &instance_columns,
-        transcript.finalize(),
+        proof_raw,
     )?;
     Ok(ConfidentialUnshieldProofV3 {
         nullifiers: if input_1.is_some() {
@@ -2791,6 +3049,8 @@ mod tests {
             .expect("transfer vk record");
         let unshield = super::confidential_unshield_v2_vk_record("vk_unshield", 4)
             .expect("unshield vk record");
+        let unshield_v3 = super::confidential_unshield_v3_vk_record("vk_unshield_v3", 5)
+            .expect("unshield v3 vk record");
 
         assert_eq!(
             transfer.circuit_id,
@@ -2800,17 +3060,166 @@ mod tests {
             unshield.circuit_id,
             super::CONFIDENTIAL_UNSHIELD_V2_CIRCUIT_ID
         );
+        assert_eq!(
+            unshield_v3.circuit_id,
+            super::CONFIDENTIAL_UNSHIELD_V3_CIRCUIT_ID
+        );
         assert!(transfer.is_active());
         assert!(unshield.is_active());
+        assert!(unshield_v3.is_active());
         assert!(transfer.max_proof_bytes > 0);
         assert!(unshield.max_proof_bytes > 0);
+        assert!(unshield_v3.max_proof_bytes > 0);
 
         let transfer_key = transfer.key.as_ref().expect("transfer key");
         let unshield_key = unshield.key.as_ref().expect("unshield key");
+        let unshield_v3_key = unshield_v3.key.as_ref().expect("unshield v3 key");
         super::parse_vk_for_transfer(&transfer.circuit_id, transfer_key)
             .expect("transfer key must parse as confidential transfer v2");
         super::parse_vk_for_unshield_v2(&unshield.circuit_id, unshield_key)
             .expect("unshield key must parse as confidential unshield v2");
+        super::parse_vk_for_unshield_v3(&unshield_v3.circuit_id, unshield_v3_key)
+            .expect("unshield v3 key must parse as confidential unshield v3");
+    }
+
+    #[cfg(any(feature = "zk-halo2", feature = "zk-halo2-ipa"))]
+    #[test]
+    fn confidential_transfer_v2_canonical_vk_guard_rejects_self_consistent_key_substitution() {
+        use iroha_data_model::proof::VerifyingKeyBox;
+
+        let canonical = super::confidential_transfer_v2_vk_box().expect("canonical transfer vk");
+        let cached = super::confidential_transfer_v2_vk_box().expect("cached transfer vk");
+        assert_eq!(
+            canonical, cached,
+            "confidential transfer v2 verifier key generation should be cached and deterministic"
+        );
+        super::ensure_confidential_transfer_v2_canonical_vk_box(&canonical)
+            .expect("canonical transfer verifier key should pass");
+        let proving_key = super::cached_confidential_transfer_v2_proving_key()
+            .expect("canonical transfer proving key");
+        let cached_proving_key = super::cached_confidential_transfer_v2_proving_key()
+            .expect("cached transfer proving key");
+        assert!(
+            std::ptr::eq(proving_key, cached_proving_key),
+            "confidential transfer v2 proving key generation should be cached"
+        );
+
+        let mut mutated = canonical.clone();
+        let last = mutated
+            .bytes
+            .last_mut()
+            .expect("canonical transfer verifier key bytes");
+        *last ^= 0x01;
+        let err = super::ensure_confidential_transfer_v2_canonical_vk_box(&mutated)
+            .expect_err("mutated self-consistent verifier key must reject");
+        assert!(
+            err.contains("canonical semantic circuit key"),
+            "unexpected mutated-key error: {err}"
+        );
+
+        let wrong_backend =
+            VerifyingKeyBox::new("halo2/ipa:kzg".to_owned(), canonical.bytes.clone());
+        let err = super::ensure_confidential_transfer_v2_canonical_vk_box(&wrong_backend)
+            .expect_err("wrong backend must reject before canonical bytes are considered");
+        assert!(err.contains("backend"), "unexpected backend error: {err}");
+
+        let empty = VerifyingKeyBox::new(crate::zk::ZK_BACKEND_HALO2_IPA.to_owned(), Vec::new());
+        let err = super::ensure_confidential_transfer_v2_canonical_vk_box(&empty)
+            .expect_err("empty verifier key must reject");
+        assert!(
+            err.contains("non-empty"),
+            "unexpected empty-key error: {err}"
+        );
+    }
+
+    #[cfg(any(feature = "zk-halo2", feature = "zk-halo2-ipa"))]
+    #[test]
+    fn confidential_unshield_v2_v3_canonical_caches_reject_key_substitution() {
+        use iroha_data_model::proof::VerifyingKeyBox;
+
+        let v2 = super::confidential_unshield_v2_vk_box().expect("canonical unshield v2 vk");
+        let v2_cached = super::confidential_unshield_v2_vk_box().expect("cached unshield v2 vk");
+        assert_eq!(v2, v2_cached);
+        super::ensure_confidential_unshield_v2_canonical_vk_box(&v2)
+            .expect("canonical unshield v2 verifier key should pass");
+
+        let v3 = super::confidential_unshield_v3_vk_box().expect("canonical unshield v3 vk");
+        let v3_cached = super::confidential_unshield_v3_vk_box().expect("cached unshield v3 vk");
+        assert_eq!(v3, v3_cached);
+        super::ensure_confidential_unshield_v3_canonical_vk_box(&v3)
+            .expect("canonical unshield v3 verifier key should pass");
+
+        let v2_pk = super::cached_confidential_unshield_v2_proving_key()
+            .expect("canonical unshield v2 proving key");
+        let v2_pk_cached = super::cached_confidential_unshield_v2_proving_key()
+            .expect("cached unshield v2 proving key");
+        assert!(
+            std::ptr::eq(v2_pk, v2_pk_cached),
+            "unshield v2 proving key should come from a process-local cache"
+        );
+
+        let v3_pk = super::cached_confidential_unshield_v3_proving_key()
+            .expect("canonical unshield v3 proving key");
+        let v3_pk_cached = super::cached_confidential_unshield_v3_proving_key()
+            .expect("cached unshield v3 proving key");
+        assert!(
+            std::ptr::eq(v3_pk, v3_pk_cached),
+            "unshield v3 proving key should come from a process-local cache"
+        );
+
+        fn assert_rejects_key_substitution(
+            label: &str,
+            canonical: &VerifyingKeyBox,
+            ensure: fn(&VerifyingKeyBox) -> Result<(), String>,
+        ) {
+            let mut mutated = canonical.clone();
+            *mutated
+                .bytes
+                .last_mut()
+                .expect("canonical unshield verifier key bytes") ^= 0x01;
+            let err = match ensure(&mutated) {
+                Ok(()) => panic!("{label} mutated verifier key must reject"),
+                Err(err) => err,
+            };
+            assert!(
+                err.contains("canonical semantic circuit key"),
+                "unexpected {label} mutated-key error: {err}"
+            );
+
+            let wrong_backend =
+                VerifyingKeyBox::new("halo2/ipa:kzg".to_owned(), canonical.bytes.clone());
+            let err = match ensure(&wrong_backend) {
+                Ok(()) => panic!("{label} wrong backend must reject"),
+                Err(err) => err,
+            };
+            assert!(
+                err.contains("backend"),
+                "unexpected {label} backend error: {err}"
+            );
+        }
+        assert_rejects_key_substitution(
+            "unshield v2",
+            &v2,
+            super::ensure_confidential_unshield_v2_canonical_vk_box,
+        );
+        assert_rejects_key_substitution(
+            "unshield v3",
+            &v3,
+            super::ensure_confidential_unshield_v3_canonical_vk_box,
+        );
+
+        let err = super::ensure_confidential_unshield_v3_canonical_vk_box(&v2)
+            .expect_err("unshield v2 key must not satisfy unshield v3 canonical guard");
+        assert!(
+            err.contains("canonical semantic circuit key"),
+            "unexpected v2-as-v3 canonical-guard error: {err}"
+        );
+        let err = super::ensure_confidential_unshield_v2_canonical_vk_box(&v3)
+            .expect_err("unshield v3 key must not satisfy unshield v2 canonical guard");
+        assert!(
+            err.contains("canonical semantic circuit key"),
+            "unexpected v3-as-v2 canonical-guard error: {err}"
+        );
     }
 
     #[cfg(any(feature = "zk-halo2", feature = "zk-halo2-ipa"))]
@@ -2941,6 +3350,47 @@ mod tests {
                 Some(transfer_key),
             ),
             "generated one-input one-output confidential transfer v2 proof should verify against the generated VK"
+        );
+
+        let wrong_cid_key = super::build_confidential_v2_vk_box(
+            super::CONFIDENTIAL_TRANSFER_V2_IPA_K,
+            super::CONFIDENTIAL_UNSHIELD_V2_CIRCUIT_ID,
+            &super::ConfidentialTransferCircuitV2::<{ super::CONFIDENTIAL_TREE_DEPTH_V2 }>::default(
+            ),
+        )
+        .expect("transfer-shaped verifier key with wrong CID1");
+        assert_ne!(
+            crate::zk::hash_vk(transfer_key),
+            crate::zk::hash_vk(&wrong_cid_key)
+        );
+        let wrong_cid_proof = super::build_confidential_transfer_proof_v2(
+            &chain_id,
+            asset_definition_id,
+            &spend_key,
+            &tree_commitments,
+            &[super::ConfidentialTransferInputV2 {
+                amount: 7,
+                rho: input_rho,
+                diversifier: input_diversifier,
+                leaf_index: 0,
+            }],
+            &[super::ConfidentialTransferOutputV2 {
+                amount: 7,
+                rho: output_rho,
+                owner_tag: output_owner_tag,
+            }],
+            root,
+            &transfer_vk.circuit_id,
+            &wrong_cid_key,
+        )
+        .expect("transfer proof with wrong-CID verifier key");
+        assert!(
+            !crate::zk::verify_backend(
+                crate::zk::ZK_BACKEND_HALO2_IPA,
+                &wrong_cid_proof.proof,
+                Some(&wrong_cid_key),
+            ),
+            "verifier must reject a cryptographically valid proof whose VK CID1 names another circuit"
         );
     }
 
@@ -3101,6 +3551,173 @@ mod tests {
         assert!(
             crate::zk::verify_backend(crate::zk::ZK_BACKEND_HALO2_IPA, &proof.proof, Some(&vk_box)),
             "generated one-input confidential transfer v2 proof should verify against the generated VK"
+        );
+    }
+
+    #[cfg(any(feature = "zk-halo2", feature = "zk-halo2-ipa"))]
+    #[test]
+    fn generated_confidential_unshield_v2_proof_verifies_against_cached_canonical_vk() {
+        let chain_id = iroha_data_model::ChainId::from("confidential-unshield-v2-test");
+        let asset_definition_id = "zcoin#wonderland";
+        let spend_key = [0x91_u8; 32];
+        let input_rho = [0x92_u8; 32];
+        let input_diversifier = super::derive_confidential_diversifier_v2(b"unshield-v2-input");
+        let input_owner_tag =
+            super::derive_confidential_owner_tag_v2_with_diversifier(&spend_key, input_diversifier)
+                .expect("input owner tag");
+        let input_commitment =
+            super::derive_confidential_note_v2(asset_definition_id, 9, input_rho, input_owner_tag)
+                .expect("input commitment");
+        let tree_commitments = vec![input_commitment];
+        let root_hint =
+            super::compute_confidential_root_v2(&tree_commitments).expect("confidential root");
+        let vk_record =
+            super::confidential_unshield_v2_vk_record("vk_unshield", 4).expect("unshield vk");
+        let vk_box = vk_record.key.clone().expect("inline unshield vk");
+
+        let proof = super::build_confidential_unshield_proof_v2(
+            &chain_id,
+            asset_definition_id,
+            &spend_key,
+            &tree_commitments,
+            &[super::ConfidentialUnshieldInputV2 {
+                amount: 9,
+                rho: input_rho,
+                diversifier: input_diversifier,
+                leaf_index: 0,
+            }],
+            9,
+            root_hint,
+            &vk_record.circuit_id,
+            &vk_box,
+        )
+        .expect("build unshield v2 proof");
+
+        assert_eq!(proof.nullifiers.len(), 1);
+        assert_eq!(proof.root, root_hint);
+        assert!(
+            crate::zk::verify_backend(crate::zk::ZK_BACKEND_HALO2_IPA, &proof.proof, Some(&vk_box)),
+            "generated confidential unshield v2 proof should verify against the cached canonical VK"
+        );
+
+        let mut tampered = proof.proof.clone();
+        let mut envelope: iroha_data_model::zk::OpenVerifyEnvelope =
+            norito::decode_from_bytes(&tampered.bytes).expect("OpenVerifyEnvelope");
+        envelope.vk_hash[0] ^= 0x80;
+        tampered.bytes = norito::to_bytes(&envelope).expect("OpenVerifyEnvelope encode");
+        assert!(
+            !crate::zk::verify_backend(crate::zk::ZK_BACKEND_HALO2_IPA, &tampered, Some(&vk_box)),
+            "unshield v2 proof must reject verifier-key hash substitution"
+        );
+    }
+
+    #[cfg(any(feature = "zk-halo2", feature = "zk-halo2-ipa"))]
+    #[test]
+    fn generated_confidential_unshield_v3_proof_verifies_and_rejects_bad_change() {
+        let chain_id = iroha_data_model::ChainId::from("confidential-unshield-v3-test");
+        let asset_definition_id = "zcoin#wonderland";
+        let spend_key = [0xA1_u8; 32];
+        let input_rho = [0xA2_u8; 32];
+        let change_rho = [0xA3_u8; 32];
+        let input_diversifier = super::derive_confidential_diversifier_v2(b"unshield-v3-input");
+        let input_owner_tag =
+            super::derive_confidential_owner_tag_v2_with_diversifier(&spend_key, input_diversifier)
+                .expect("input owner tag");
+        let input_commitment =
+            super::derive_confidential_note_v2(asset_definition_id, 9, input_rho, input_owner_tag)
+                .expect("input commitment");
+        let tree_commitments = vec![input_commitment];
+        let root_hint =
+            super::compute_confidential_root_v2(&tree_commitments).expect("confidential root");
+        let vk_record =
+            super::confidential_unshield_v3_vk_record("vk_unshield_v3", 5).expect("unshield v3 vk");
+        let vk_box = vk_record.key.clone().expect("inline unshield v3 vk");
+
+        let missing_change = super::build_confidential_unshield_proof_v3(
+            &chain_id,
+            asset_definition_id,
+            &spend_key,
+            &tree_commitments,
+            &[super::ConfidentialUnshieldInputV2 {
+                amount: 9,
+                rho: input_rho,
+                diversifier: input_diversifier,
+                leaf_index: 0,
+            }],
+            &[],
+            5,
+            root_hint,
+            &vk_record.circuit_id,
+            &vk_box,
+        )
+        .expect_err("nonzero change must require a private change note");
+        assert!(
+            missing_change.contains("requires a private change output"),
+            "unexpected missing-change error: {missing_change}"
+        );
+
+        let bad_change = super::build_confidential_unshield_proof_v3(
+            &chain_id,
+            asset_definition_id,
+            &spend_key,
+            &tree_commitments,
+            &[super::ConfidentialUnshieldInputV2 {
+                amount: 9,
+                rho: input_rho,
+                diversifier: input_diversifier,
+                leaf_index: 0,
+            }],
+            &[super::ConfidentialUnshieldOutputV3 {
+                amount: 3,
+                rho: change_rho,
+            }],
+            5,
+            root_hint,
+            &vk_record.circuit_id,
+            &vk_box,
+        )
+        .expect_err("incorrect private change amount must reject");
+        assert!(
+            bad_change.contains("change note amount mismatch"),
+            "unexpected bad-change error: {bad_change}"
+        );
+
+        let proof = super::build_confidential_unshield_proof_v3(
+            &chain_id,
+            asset_definition_id,
+            &spend_key,
+            &tree_commitments,
+            &[super::ConfidentialUnshieldInputV2 {
+                amount: 9,
+                rho: input_rho,
+                diversifier: input_diversifier,
+                leaf_index: 0,
+            }],
+            &[super::ConfidentialUnshieldOutputV3 {
+                amount: 4,
+                rho: change_rho,
+            }],
+            5,
+            root_hint,
+            &vk_record.circuit_id,
+            &vk_box,
+        )
+        .expect("build unshield v3 proof");
+
+        let expected_change_owner_tag = super::derive_confidential_owner_tag_v2(&spend_key);
+        let expected_change_commitment = super::derive_confidential_note_v2(
+            asset_definition_id,
+            4,
+            change_rho,
+            expected_change_owner_tag,
+        )
+        .expect("expected change commitment");
+        assert_eq!(proof.output_commitments, vec![expected_change_commitment]);
+        assert_eq!(proof.nullifiers.len(), 1);
+        assert_eq!(proof.root, root_hint);
+        assert!(
+            crate::zk::verify_backend(crate::zk::ZK_BACKEND_HALO2_IPA, &proof.proof, Some(&vk_box)),
+            "generated confidential unshield v3 proof should verify against the cached canonical VK"
         );
     }
 }

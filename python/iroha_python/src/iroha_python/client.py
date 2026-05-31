@@ -4,14 +4,17 @@ from __future__ import annotations
 
 import base64
 import binascii
+import hashlib
 import json
 import logging
 import math
 import os
 import re
 import time
-from dataclasses import asdict, dataclass, field
+from dataclasses import asdict, dataclass, field, is_dataclass
+from decimal import Decimal
 from enum import Enum
+from pathlib import Path
 from types import ModuleType
 from typing import (
     TYPE_CHECKING,
@@ -71,6 +74,13 @@ from iroha_torii_client.client import (
 from .address import AccountAddress, AccountAddressError
 from .connect import ConnectSessionInfo
 from .event_filter import DataEventFilter, ensure_event_filter
+from .dataspaces import (
+    DataspacePlan,
+    DataspaceSpec,
+    DataspaceStatus,
+    plan_dataspace as _plan_dataspace,
+    write_dataspace_plan as _write_dataspace_plan,
+)
 from .query import (
     account_query_envelope,
     asset_definitions_query_envelope,
@@ -132,6 +142,7 @@ def _encode_sort_arg(sort_value: Optional[Any]) -> Optional[str]:
 DEFAULT_I105_DISCRIMINANT = 0x02F1
 # Must match `iroha_data_model::DATA_MODEL_VERSION` on the node.
 DATA_MODEL_VERSION = 1
+ACCOUNT_FAUCET_POW_DOMAIN_SEPARATOR = b"iroha:accounts:faucet:pow:v2"
 
 
 def _reject_alias_keys(source: Mapping[str, Any],
@@ -176,6 +187,80 @@ def _normalize_optional_string(value: Any, context: str) -> Optional[str]:
     if value is None:
         return None
     return _require_non_empty_string(value, context)
+
+
+def _dedupe_strings(values: Iterable[str]) -> List[str]:
+    deduped: List[str] = []
+    for value in values:
+        if value not in deduped:
+            deduped.append(value)
+    return deduped
+
+
+def _response_text(response: requests.Response) -> str:
+    return response.text.strip() if response.text else ""
+
+
+def _response_has_network_prefix_error(response: requests.Response) -> bool:
+    return (
+        response.status_code == 400
+        and "ERR_UNEXPECTED_NETWORK_PREFIX" in _response_text(response)
+    )
+
+
+def _extract_page_items(payload: Any) -> List[Mapping[str, Any]]:
+    raw_items = payload.get("items") if isinstance(payload, Mapping) else payload
+    if raw_items is None:
+        return []
+    if not isinstance(raw_items, list):
+        raise RuntimeError("Torii list response `items` must be a list")
+    return [item for item in raw_items if isinstance(item, Mapping)]
+
+
+def _page_total(payload: Any) -> Optional[int]:
+    if not isinstance(payload, Mapping):
+        return None
+    total = payload.get("total")
+    if isinstance(total, int):
+        return total
+    try:
+        return int(total) if total is not None else None
+    except (TypeError, ValueError):
+        return None
+
+
+def _asset_entry_matches_definition(
+    item: Mapping[str, Any],
+    asset_definition_id: str,
+    account_id: str,
+) -> bool:
+    asset_id = str(item.get("asset_id") or item.get("asset") or "").strip()
+    asset_alias = str(item.get("asset_alias") or "").strip()
+    candidates = {
+        asset_definition_id,
+        f"{asset_definition_id}#{account_id}",
+        f"{asset_definition_id}##{account_id}",
+    }
+    return (
+        asset_alias == asset_definition_id
+        or asset_id in candidates
+        or asset_id.startswith(f"{asset_definition_id}#")
+    )
+
+
+def _quantity_decimal(value: Any) -> Decimal:
+    return Decimal(str(value if value is not None else "0"))
+
+
+def _leading_zero_bits(payload: bytes) -> int:
+    count = 0
+    for byte in payload:
+        if byte == 0:
+            count += 8
+            continue
+        count += 8 - byte.bit_length()
+        break
+    return count
 
 
 def _normalize_canonical_account_id(value: Any, context: str) -> str:
@@ -8167,6 +8252,283 @@ class ToriiClient(_BaseToriiClient):
 
         return self.request_json("GET", "/v1/status", expected_status=(200,))
 
+    @staticmethod
+    def _status_mapping(status: Optional[Any]) -> Mapping[str, Any]:
+        if status is None:
+            return {}
+        raw = getattr(status, "raw", None)
+        if isinstance(raw, Mapping):
+            return raw
+        nested_status = getattr(status, "status", None)
+        nested_raw = getattr(nested_status, "raw", None)
+        if isinstance(nested_raw, Mapping):
+            return nested_raw
+        if isinstance(status, Mapping):
+            return status
+        if is_dataclass(status):
+            return asdict(status)
+        raise TypeError("status must be a mapping or typed Torii status object")
+
+    @staticmethod
+    def _dataspace_entry_from_lane(entry: Mapping[str, Any]) -> Dict[str, Any]:
+        alias = str(
+            entry.get("dataspace_alias") or entry.get("dataspace") or entry.get("alias") or ""
+        ).strip()
+        dataspace_id = entry.get("dataspace_id", entry.get("id"))
+        result: Dict[str, Any] = dict(entry)
+        if alias:
+            result.setdefault("alias", alias)
+            result.setdefault("dataspace_alias", alias)
+        if dataspace_id is not None:
+            try:
+                result["id"] = int(dataspace_id)
+                result["dataspace_id"] = int(dataspace_id)
+            except (TypeError, ValueError):
+                pass
+        return result
+
+    def list_dataspaces(self, status: Optional[Any] = None) -> List[Mapping[str, Any]]:
+        """Return dataspace catalog entries from Torii status.
+
+        Nodes expose dataspace information through slightly different status
+        shapes across releases. This helper accepts all supported shapes and
+        normalizes entries enough for readiness checks.
+        """
+
+        payload = self._status_mapping(self.get_status() if status is None else status)
+        indexed: Dict[Tuple[Optional[str], Optional[int]], Dict[str, Any]] = {}
+        for key in ("dataspace_catalog", "dataspaces", "teu_dataspace_backlog"):
+            entries = payload.get(key)
+            if not isinstance(entries, list):
+                continue
+            for item in entries:
+                if not isinstance(item, Mapping):
+                    continue
+                entry = self._dataspace_entry_from_lane(item)
+                alias = str(entry.get("alias") or entry.get("dataspace_alias") or "").strip()
+                dataspace_id = entry.get("id", entry.get("dataspace_id"))
+                try:
+                    normalized_id: Optional[int] = int(dataspace_id) if dataspace_id is not None else None
+                except (TypeError, ValueError):
+                    normalized_id = None
+                indexed[(alias or None, normalized_id)] = entry
+
+        lane_entries = payload.get("lane_governance")
+        if isinstance(lane_entries, list):
+            sealed_aliases = {
+                str(alias)
+                for alias in payload.get("lane_governance_sealed_aliases", [])
+                if isinstance(alias, str)
+            }
+            for item in lane_entries:
+                if not isinstance(item, Mapping):
+                    continue
+                entry = self._dataspace_entry_from_lane(item)
+                alias = str(entry.get("alias") or entry.get("dataspace_alias") or "").strip()
+                if alias:
+                    entry["sealed"] = bool(entry.get("sealed", alias in sealed_aliases))
+                dataspace_id = entry.get("id", entry.get("dataspace_id"))
+                try:
+                    normalized_id = int(dataspace_id) if dataspace_id is not None else None
+                except (TypeError, ValueError):
+                    normalized_id = None
+                key = (alias or None, normalized_id)
+                existing = indexed.get(key, {})
+                indexed[key] = {**existing, **entry}
+
+        return list(indexed.values())
+
+    def get_dataspace(
+        self,
+        alias_or_id: Union[str, int],
+        status: Optional[Any] = None,
+    ) -> Optional[Mapping[str, Any]]:
+        """Return a dataspace by alias or numeric id, if present in Torii status."""
+
+        needle = str(alias_or_id).strip()
+        if not needle:
+            raise ValueError("alias_or_id must be non-empty")
+        numeric_needle: Optional[int]
+        try:
+            numeric_needle = int(needle)
+        except ValueError:
+            numeric_needle = None
+        for entry in self.list_dataspaces(status=status):
+            aliases = {
+                str(entry.get("alias") or "").strip(),
+                str(entry.get("dataspace_alias") or "").strip(),
+                str(entry.get("dataspace") or "").strip(),
+            }
+            if needle in aliases:
+                return entry
+            if numeric_needle is not None:
+                raw_id = entry.get("id", entry.get("dataspace_id"))
+                try:
+                    if int(raw_id) == numeric_needle:
+                        return entry
+                except (TypeError, ValueError):
+                    pass
+        return None
+
+    def require_dataspace(
+        self,
+        alias_or_id: Union[str, int],
+        status: Optional[Any] = None,
+    ) -> Mapping[str, Any]:
+        """Return a dataspace or raise ``KeyError`` with an actionable message."""
+
+        entry = self.get_dataspace(alias_or_id, status=status)
+        if entry is None:
+            raise KeyError(f"dataspace {alias_or_id!r} is not present in Torii status")
+        return entry
+
+    def dataspace_status(
+        self,
+        alias_or_id: Union[str, int],
+        status: Optional[Any] = None,
+    ) -> DataspaceStatus:
+        """Return a compact readiness status for a dataspace."""
+
+        entry = self.get_dataspace(alias_or_id, status=status)
+        if entry is None:
+            return DataspaceStatus(
+                alias=str(alias_or_id),
+                dataspace_id=0,
+                lane_id=0,
+                found=False,
+                ready=False,
+                manifest_required=False,
+                manifest_ready=False,
+                sealed=False,
+            )
+        alias = str(
+            entry.get("dataspace_alias") or entry.get("dataspace") or entry.get("alias") or alias_or_id
+        )
+        try:
+            dataspace_id = int(entry.get("dataspace_id", entry.get("id", 0)))
+        except (TypeError, ValueError):
+            dataspace_id = 0
+        try:
+            lane_id = int(entry.get("lane_id", entry.get("index", 0)))
+        except (TypeError, ValueError):
+            lane_id = 0
+        manifest_required = bool(entry.get("manifest_required", False))
+        manifest_ready = bool(entry.get("manifest_ready", not manifest_required))
+        sealed = bool(entry.get("sealed", False))
+        return DataspaceStatus(
+            alias=alias,
+            dataspace_id=dataspace_id,
+            lane_id=lane_id,
+            found=True,
+            ready=(not sealed and (not manifest_required or manifest_ready)),
+            manifest_required=manifest_required,
+            manifest_ready=manifest_ready,
+            sealed=sealed,
+            lane=dict(entry),
+        )
+
+    def dataspace_ready(
+        self,
+        alias_or_id: Union[str, int],
+        status: Optional[Any] = None,
+    ) -> bool:
+        """Return ``True`` when a dataspace exists and is ready for routing."""
+
+        return self.dataspace_status(alias_or_id, status=status).ready
+
+    def smoke_dataspace(
+        self,
+        alias_or_id: Union[str, int],
+        *,
+        expected_lane_count: Optional[int] = None,
+        status: Optional[Any] = None,
+    ) -> DataspaceStatus:
+        """Validate dataspace readiness and optionally the configured lane count."""
+
+        payload = self._status_mapping(self.get_status() if status is None else status)
+        if expected_lane_count is not None:
+            lane_count = payload.get("lane_count")
+            if lane_count is None:
+                lane_count = len(payload.get("lane_governance", []) or [])
+            if int(lane_count) < int(expected_lane_count):
+                raise AssertionError(
+                    f"Torii reports lane_count={lane_count}, expected at least {expected_lane_count}"
+                )
+        result = self.dataspace_status(alias_or_id, status=payload)
+        if not result.found:
+            raise AssertionError(f"dataspace {alias_or_id!r} is not present in Torii status")
+        if not result.ready:
+            raise AssertionError(
+                f"dataspace {alias_or_id!r} is not ready "
+                f"(sealed={result.sealed}, manifest_required={result.manifest_required}, "
+                f"manifest_ready={result.manifest_ready})"
+            )
+        return result
+
+    def plan_dataspace(self, spec: DataspaceSpec) -> DataspacePlan:
+        """Build manifest/config artifacts for a dataspace without writing files."""
+
+        return _plan_dataspace(spec)
+
+    def write_dataspace_plan(
+        self,
+        plan: DataspacePlan,
+        output_dir: Union[str, Path],
+        *,
+        force: bool = False,
+    ) -> Dict[str, Path]:
+        """Write a dataspace plan to ``output_dir``."""
+
+        return _write_dataspace_plan(plan, output_dir, force=force)
+
+    def publish_dataspace_manifest(
+        self,
+        *,
+        authority: str,
+        private_key: str,
+        uaid: str,
+        dataspace: int,
+        manifest: Mapping[str, Any],
+        reason: Optional[str] = None,
+    ) -> Optional[Any]:
+        """Publish a Space Directory manifest using dataspace-oriented keywords."""
+
+        request: Dict[str, Any] = {
+            "authority": authority,
+            "private_key": private_key,
+            "manifest": {
+                "uaid": uaid,
+                "dataspace": dataspace,
+                **dict(manifest),
+            }
+        }
+        if reason:
+            request["reason"] = reason
+        return self.publish_space_directory_manifest(request)
+
+    def revoke_dataspace_manifest(
+        self,
+        *,
+        authority: str,
+        private_key: str,
+        uaid: str,
+        dataspace: int,
+        revoked_epoch: int,
+        reason: Optional[str] = None,
+    ) -> Optional[Any]:
+        """Revoke a Space Directory manifest using dataspace-oriented keywords."""
+
+        request: Dict[str, Any] = {
+            "authority": authority,
+            "private_key": private_key,
+            "uaid": uaid,
+            "dataspace": dataspace,
+            "revoked_epoch": revoked_epoch,
+        }
+        if reason:
+            request["reason"] = reason
+        return self.revoke_space_directory_manifest(request)
+
     def get_status_snapshot_typed(self) -> ToriiStatusSnapshot:
         """Return a typed status snapshot together with derived metrics."""
 
@@ -9347,6 +9709,1158 @@ class ToriiClient(_BaseToriiClient):
                 time.sleep(interval)
 
     # ------------------------------------------------------------------
+    # Transaction construction convenience helpers
+    # ------------------------------------------------------------------
+
+    @staticmethod
+    def compose_asset_id(
+        asset_definition_id: str,
+        account_id: str,
+        *,
+        scope: Optional[str] = None,
+    ) -> str:
+        """Build a canonical asset balance bucket literal."""
+
+        definition = _require_non_empty_string(
+            asset_definition_id,
+            "compose_asset_id.asset_definition_id",
+        )
+        account = _require_non_empty_string(account_id, "compose_asset_id.account_id")
+        literal = f"{definition}#{account}"
+        if scope:
+            scope_text = _require_non_empty_string(scope, "compose_asset_id.scope")
+            if scope_text.isdigit():
+                scope_text = f"dataspace:{scope_text}"
+            literal = f"{literal}#{scope_text}"
+        return literal
+
+    @staticmethod
+    def _envelope_hash_hex(envelope: "SignedTransactionEnvelope") -> str:
+        hash_field = getattr(envelope, "hash", None)
+        if hash_field is None:
+            raise ValueError("SignedTransactionEnvelope.hash is required to poll status")
+        if isinstance(hash_field, memoryview):
+            hash_field = hash_field.tobytes()
+        if isinstance(hash_field, (bytes, bytearray)):
+            return bytes(hash_field).hex()
+        if isinstance(hash_field, str):
+            return hash_field
+        raise TypeError(
+            "SignedTransactionEnvelope.hash must be bytes or hex string, "
+            f"got {type(hash_field)!r}"
+        )
+
+    @staticmethod
+    def _transaction_draft(
+        *,
+        chain_id: str,
+        authority: str,
+        ttl_ms: Optional[int] = 900_000,
+        nonce: Optional[int] = None,
+        metadata: Optional[Mapping[str, Any]] = None,
+    ) -> "TransactionDraft":
+        from .tx import TransactionConfig, TransactionDraft
+
+        effective_chain_id = _require_non_empty_string(chain_id, "chain_id")
+        effective_authority = _require_non_empty_string(authority, "authority")
+        return TransactionDraft(
+            TransactionConfig(
+                chain_id=effective_chain_id,
+                authority=effective_authority,
+                ttl_ms=ttl_ms,
+                nonce=nonce,
+                metadata=metadata,
+            )
+        )
+
+    def _submit_transaction_draft_result(
+        self,
+        draft: "TransactionDraft",
+        *,
+        private_key: Optional[bytes] = None,
+        private_key_hex: Optional[str] = None,
+        wait: bool = True,
+        interval: float = 1.0,
+        timeout: Optional[float] = 30.0,
+        max_attempts: Optional[int] = None,
+        scope: str = "global",
+        success_statuses: Optional[Iterable[str]] = None,
+        failure_statuses: Optional[Iterable[str]] = None,
+        on_status: Optional[Callable[[Optional[str], Any, int], None]] = None,
+        **sign_overrides: Any,
+    ) -> Mapping[str, Any]:
+        envelope = self._sign_transaction_draft(
+            draft,
+            private_key=private_key,
+            private_key_hex=private_key_hex,
+            instructions=None,
+            **sign_overrides,
+        )
+        status = self.submit_transaction_envelope(envelope)
+        hash_hex = self._envelope_hash_hex(envelope)
+        result: Dict[str, Any] = {
+            "envelope": envelope,
+            "hash": hash_hex,
+            "submission": status,
+        }
+        if wait:
+            result["terminal"] = self.wait_for_transaction_status(
+                hash_hex,
+                interval=interval,
+                timeout=timeout,
+                max_attempts=max_attempts,
+                scope=scope,
+                success_statuses=success_statuses,
+                failure_statuses=failure_statuses,
+                on_status=on_status,
+            )
+        return result
+
+    def submit_instructions_and_wait(
+        self,
+        *,
+        chain_id: str,
+        authority: str,
+        private_key: Optional[bytes] = None,
+        private_key_hex: Optional[str] = None,
+        instructions: Iterable["Instruction"],
+        wait: bool = True,
+        ttl_ms: Optional[int] = 900_000,
+        nonce: Optional[int] = None,
+        metadata: Optional[Mapping[str, Any]] = None,
+        interval: float = 1.0,
+        timeout: Optional[float] = 30.0,
+        max_attempts: Optional[int] = None,
+        scope: str = "global",
+    ) -> Mapping[str, Any]:
+        """Submit arbitrary instructions in one signed transaction."""
+
+        draft = self._transaction_draft(
+            chain_id=chain_id,
+            authority=authority,
+            ttl_ms=ttl_ms,
+            nonce=nonce,
+            metadata=metadata,
+        )
+        draft.extend_instructions(instructions)
+        return self._submit_transaction_draft_result(
+            draft,
+            private_key=private_key,
+            private_key_hex=private_key_hex,
+            wait=wait,
+            interval=interval,
+            timeout=timeout,
+            max_attempts=max_attempts,
+            scope=scope,
+        )
+
+    def register_domain_and_wait(
+        self,
+        *,
+        chain_id: str,
+        authority: str,
+        private_key: Optional[bytes] = None,
+        private_key_hex: Optional[str] = None,
+        domain_id: str,
+        domain_metadata: Optional[Mapping[str, Any]] = None,
+        transaction_metadata: Optional[Mapping[str, Any]] = None,
+        wait: bool = True,
+        timeout: Optional[float] = 30.0,
+        interval: float = 1.0,
+    ) -> Mapping[str, Any]:
+        """Register a domain and optionally wait for commit."""
+
+        draft = self._transaction_draft(
+            chain_id=chain_id,
+            authority=authority,
+            metadata=transaction_metadata,
+        )
+        draft.register_domain(domain_id, metadata=domain_metadata)
+        return self._submit_transaction_draft_result(
+            draft,
+            private_key=private_key,
+            private_key_hex=private_key_hex,
+            wait=wait,
+            timeout=timeout,
+            interval=interval,
+        )
+
+    def register_account_and_wait(
+        self,
+        *,
+        chain_id: str,
+        authority: str,
+        private_key: Optional[bytes] = None,
+        private_key_hex: Optional[str] = None,
+        account_id: str,
+        account_metadata: Optional[Mapping[str, Any]] = None,
+        transaction_metadata: Optional[Mapping[str, Any]] = None,
+        wait: bool = True,
+        timeout: Optional[float] = 30.0,
+        interval: float = 1.0,
+    ) -> Mapping[str, Any]:
+        """Register an account and optionally wait for commit."""
+
+        return self.register_accounts_and_wait(
+            chain_id=chain_id,
+            authority=authority,
+            private_key=private_key,
+            private_key_hex=private_key_hex,
+            accounts=[account_id],
+            account_metadata={account_id: account_metadata or {}},
+            transaction_metadata=transaction_metadata,
+            wait=wait,
+            timeout=timeout,
+            interval=interval,
+        )
+
+    def register_accounts_and_wait(
+        self,
+        *,
+        chain_id: str,
+        authority: str,
+        private_key: Optional[bytes] = None,
+        private_key_hex: Optional[str] = None,
+        accounts: Iterable[str],
+        account_metadata: Optional[Mapping[str, Mapping[str, Any]]] = None,
+        transaction_metadata: Optional[Mapping[str, Any]] = None,
+        wait: bool = True,
+        timeout: Optional[float] = 30.0,
+        interval: float = 1.0,
+    ) -> Mapping[str, Any]:
+        """Register multiple accounts in one transaction."""
+
+        draft = self._transaction_draft(
+            chain_id=chain_id,
+            authority=authority,
+            metadata=transaction_metadata,
+        )
+        metadata_by_account = dict(account_metadata or {})
+        registered = 0
+        for account_id in accounts:
+            draft.register_account(
+                account_id,
+                metadata=metadata_by_account.get(account_id),
+            )
+            registered += 1
+        if registered == 0:
+            raise ValueError("accounts must contain at least one account id")
+        return self._submit_transaction_draft_result(
+            draft,
+            private_key=private_key,
+            private_key_hex=private_key_hex,
+            wait=wait,
+            timeout=timeout,
+            interval=interval,
+        )
+
+    def grant_account_permission_and_wait(
+        self,
+        *,
+        chain_id: str,
+        authority: str,
+        private_key: Optional[bytes] = None,
+        private_key_hex: Optional[str] = None,
+        account_id: str,
+        permission_name: str,
+        permission_payload: Any = None,
+        transaction_metadata: Optional[Mapping[str, Any]] = None,
+        wait: bool = True,
+        timeout: Optional[float] = 30.0,
+        interval: float = 1.0,
+    ) -> Mapping[str, Any]:
+        """Grant one account permission and optionally wait for commit."""
+
+        draft = self._transaction_draft(
+            chain_id=chain_id,
+            authority=authority,
+            metadata=transaction_metadata,
+        )
+        draft.grant_account_permission(
+            account_id,
+            permission_name,
+            payload=permission_payload,
+        )
+        return self._submit_transaction_draft_result(
+            draft,
+            private_key=private_key,
+            private_key_hex=private_key_hex,
+            wait=wait,
+            timeout=timeout,
+            interval=interval,
+        )
+
+    def revoke_account_permission_and_wait(
+        self,
+        *,
+        chain_id: str,
+        authority: str,
+        private_key: Optional[bytes] = None,
+        private_key_hex: Optional[str] = None,
+        account_id: str,
+        permission_name: str,
+        permission_payload: Any = None,
+        transaction_metadata: Optional[Mapping[str, Any]] = None,
+        wait: bool = True,
+        timeout: Optional[float] = 30.0,
+        interval: float = 1.0,
+    ) -> Mapping[str, Any]:
+        """Revoke one account permission and optionally wait for commit."""
+
+        draft = self._transaction_draft(
+            chain_id=chain_id,
+            authority=authority,
+            metadata=transaction_metadata,
+        )
+        draft.revoke_account_permission(
+            account_id,
+            permission_name,
+            payload=permission_payload,
+        )
+        return self._submit_transaction_draft_result(
+            draft,
+            private_key=private_key,
+            private_key_hex=private_key_hex,
+            wait=wait,
+            timeout=timeout,
+            interval=interval,
+        )
+
+    def register_asset_definition_and_wait(
+        self,
+        *,
+        chain_id: str,
+        authority: str,
+        private_key: Optional[bytes] = None,
+        private_key_hex: Optional[str] = None,
+        definition_id: str,
+        owner: str,
+        name: Optional[str] = None,
+        description: Optional[str] = None,
+        alias: Optional[str] = None,
+        scale: Optional[Union[int, str]] = None,
+        mintable: Optional[str] = "Infinitely",
+        balance_scope_policy: Optional[str] = None,
+        confidential_policy: Optional[str] = None,
+        asset_metadata: Optional[Mapping[str, Any]] = None,
+        transaction_metadata: Optional[Mapping[str, Any]] = None,
+        wait: bool = True,
+        timeout: Optional[float] = 30.0,
+        interval: float = 1.0,
+    ) -> Mapping[str, Any]:
+        """Register a numeric asset definition and optionally wait for commit."""
+
+        draft = self._transaction_draft(
+            chain_id=chain_id,
+            authority=authority,
+            metadata=transaction_metadata,
+        )
+        draft.register_asset_definition_numeric(
+            definition_id,
+            owner,
+            name=name,
+            description=description,
+            alias=alias,
+            scale=scale,
+            mintable=mintable,
+            balance_scope_policy=balance_scope_policy,
+            confidential_policy=confidential_policy,
+            metadata=asset_metadata,
+        )
+        return self._submit_transaction_draft_result(
+            draft,
+            private_key=private_key,
+            private_key_hex=private_key_hex,
+            wait=wait,
+            timeout=timeout,
+            interval=interval,
+        )
+
+    def register_asset_definition_numeric_and_wait(
+        self,
+        **kwargs: Any,
+    ) -> Mapping[str, Any]:
+        """Alias for :meth:`register_asset_definition_and_wait`."""
+
+        return self.register_asset_definition_and_wait(**kwargs)
+
+    def mint_asset_numeric_and_wait(
+        self,
+        *,
+        chain_id: str,
+        authority: str,
+        private_key: Optional[bytes] = None,
+        private_key_hex: Optional[str] = None,
+        asset_id: str,
+        quantity: Union[str, int, float, Decimal],
+        transaction_metadata: Optional[Mapping[str, Any]] = None,
+        wait: bool = True,
+        timeout: Optional[float] = 30.0,
+        interval: float = 1.0,
+    ) -> Mapping[str, Any]:
+        """Mint a numeric asset balance and optionally wait for commit."""
+
+        draft = self._transaction_draft(
+            chain_id=chain_id,
+            authority=authority,
+            metadata=transaction_metadata,
+        )
+        draft.mint_asset_numeric(asset_id, quantity)
+        return self._submit_transaction_draft_result(
+            draft,
+            private_key=private_key,
+            private_key_hex=private_key_hex,
+            wait=wait,
+            timeout=timeout,
+            interval=interval,
+        )
+
+    def mint_asset_and_wait(self, **kwargs: Any) -> Mapping[str, Any]:
+        """Alias for :meth:`mint_asset_numeric_and_wait`."""
+
+        return self.mint_asset_numeric_and_wait(**kwargs)
+
+    def mint_assets_numeric_and_wait(
+        self,
+        *,
+        chain_id: str,
+        authority: str,
+        private_key: Optional[bytes] = None,
+        private_key_hex: Optional[str] = None,
+        mints: Iterable[Mapping[str, Any]],
+        transaction_metadata: Optional[Mapping[str, Any]] = None,
+        wait: bool = True,
+        timeout: Optional[float] = 30.0,
+        interval: float = 1.0,
+    ) -> Mapping[str, Any]:
+        """Mint multiple numeric asset balances in one transaction."""
+
+        draft = self._transaction_draft(
+            chain_id=chain_id,
+            authority=authority,
+            metadata=transaction_metadata,
+        )
+        count = 0
+        for index, record in enumerate(mints):
+            if not isinstance(record, Mapping):
+                raise TypeError(f"mints[{index}] must be a mapping")
+            asset_id = _require_non_empty_string(
+                record.get("asset_id"),
+                f"mints[{index}].asset_id",
+            )
+            if "quantity" not in record:
+                raise TypeError(f"mints[{index}].quantity is required")
+            draft.mint_asset_numeric(asset_id, record["quantity"])
+            count += 1
+        if count == 0:
+            raise ValueError("mints must contain at least one mint record")
+        return self._submit_transaction_draft_result(
+            draft,
+            private_key=private_key,
+            private_key_hex=private_key_hex,
+            wait=wait,
+            timeout=timeout,
+            interval=interval,
+        )
+
+    def mint_assets_and_wait(self, **kwargs: Any) -> Mapping[str, Any]:
+        """Alias for :meth:`mint_assets_numeric_and_wait`."""
+
+        return self.mint_assets_numeric_and_wait(**kwargs)
+
+    def burn_asset_numeric_and_wait(
+        self,
+        *,
+        chain_id: str,
+        authority: str,
+        private_key: Optional[bytes] = None,
+        private_key_hex: Optional[str] = None,
+        asset_id: str,
+        quantity: Union[str, int, float, Decimal],
+        transaction_metadata: Optional[Mapping[str, Any]] = None,
+        wait: bool = True,
+        timeout: Optional[float] = 30.0,
+        interval: float = 1.0,
+    ) -> Mapping[str, Any]:
+        """Burn a numeric asset balance and optionally wait for commit."""
+
+        draft = self._transaction_draft(
+            chain_id=chain_id,
+            authority=authority,
+            metadata=transaction_metadata,
+        )
+        draft.burn_asset_numeric(asset_id, quantity)
+        return self._submit_transaction_draft_result(
+            draft,
+            private_key=private_key,
+            private_key_hex=private_key_hex,
+            wait=wait,
+            timeout=timeout,
+            interval=interval,
+        )
+
+    def burn_asset_and_wait(self, **kwargs: Any) -> Mapping[str, Any]:
+        """Alias for :meth:`burn_asset_numeric_and_wait`."""
+
+        return self.burn_asset_numeric_and_wait(**kwargs)
+
+    def transfer_asset_numeric_and_wait(
+        self,
+        *,
+        chain_id: str,
+        authority: str,
+        private_key: Optional[bytes] = None,
+        private_key_hex: Optional[str] = None,
+        asset_id: str,
+        quantity: Union[str, int, float, Decimal],
+        destination: str,
+        transaction_metadata: Optional[Mapping[str, Any]] = None,
+        wait: bool = True,
+        timeout: Optional[float] = 30.0,
+        interval: float = 1.0,
+    ) -> Mapping[str, Any]:
+        """Transfer a numeric asset balance and optionally wait for commit."""
+
+        draft = self._transaction_draft(
+            chain_id=chain_id,
+            authority=authority,
+            metadata=transaction_metadata,
+        )
+        draft.transfer_asset_numeric(asset_id, quantity, destination)
+        return self._submit_transaction_draft_result(
+            draft,
+            private_key=private_key,
+            private_key_hex=private_key_hex,
+            wait=wait,
+            timeout=timeout,
+            interval=interval,
+        )
+
+    def transfer_asset_and_wait(self, **kwargs: Any) -> Mapping[str, Any]:
+        """Alias for :meth:`transfer_asset_numeric_and_wait`."""
+
+        return self.transfer_asset_numeric_and_wait(**kwargs)
+
+    def transfer_assets_numeric_and_wait(
+        self,
+        *,
+        chain_id: str,
+        authority: str,
+        private_key: Optional[bytes] = None,
+        private_key_hex: Optional[str] = None,
+        transfers: Iterable[Mapping[str, Any]],
+        transaction_metadata: Optional[Mapping[str, Any]] = None,
+        wait: bool = True,
+        timeout: Optional[float] = 30.0,
+        interval: float = 1.0,
+    ) -> Mapping[str, Any]:
+        """Transfer multiple numeric asset balances in one transaction."""
+
+        draft = self._transaction_draft(
+            chain_id=chain_id,
+            authority=authority,
+            metadata=transaction_metadata,
+        )
+        count = 0
+        for index, record in enumerate(transfers):
+            if not isinstance(record, Mapping):
+                raise TypeError(f"transfers[{index}] must be a mapping")
+            asset_id = _require_non_empty_string(
+                record.get("asset_id"),
+                f"transfers[{index}].asset_id",
+            )
+            destination = _require_non_empty_string(
+                record.get("destination"),
+                f"transfers[{index}].destination",
+            )
+            if "quantity" not in record:
+                raise TypeError(f"transfers[{index}].quantity is required")
+            draft.transfer_asset_numeric(asset_id, record["quantity"], destination)
+            count += 1
+        if count == 0:
+            raise ValueError("transfers must contain at least one transfer record")
+        return self._submit_transaction_draft_result(
+            draft,
+            private_key=private_key,
+            private_key_hex=private_key_hex,
+            wait=wait,
+            timeout=timeout,
+            interval=interval,
+        )
+
+    def transfer_assets_and_wait(self, **kwargs: Any) -> Mapping[str, Any]:
+        """Alias for :meth:`transfer_assets_numeric_and_wait`."""
+
+        return self.transfer_assets_numeric_and_wait(**kwargs)
+
+    # ------------------------------------------------------------------
+    # Ledger account and asset convenience helpers
+    # ------------------------------------------------------------------
+
+    @staticmethod
+    def account_id_variants(
+        account_id: str,
+        *,
+        include_taira_prefix_variant: bool = False,
+    ) -> List[str]:
+        """Return account-id literals to try for REST reads.
+
+        Taira public ingress has historically exposed both ``testu`` and
+        ``sorau`` I105 sentinels during rollout windows. SDK callers can opt in
+        to trying the alternate sentinel without copying that compatibility
+        rule into application code.
+        """
+
+        literal = _require_non_empty_string(account_id, "account_id")
+        variants = [literal]
+        if include_taira_prefix_variant:
+            if literal.startswith("testu"):
+                variants.append(f"sorau{literal[5:]}")
+            elif literal.startswith("sorau"):
+                variants.append(f"testu{literal[5:]}")
+        return _dedupe_strings(variants)
+
+    @staticmethod
+    def _normalize_account_id_variants(
+        account_id: str,
+        account_id_variants: Optional[Iterable[str]],
+        *,
+        include_taira_prefix_variant: bool,
+    ) -> List[str]:
+        if account_id_variants is None:
+            return ToriiClient.account_id_variants(
+                account_id,
+                include_taira_prefix_variant=include_taira_prefix_variant,
+            )
+        variants = [
+            _require_non_empty_string(item, "account_id_variants[]")
+            for item in account_id_variants
+        ]
+        if account_id not in variants:
+            variants.insert(0, account_id)
+        return _dedupe_strings(variants)
+
+    def _account_record_from_listing(
+        self,
+        account_id: str,
+        *,
+        account_id_variants: Optional[Iterable[str]] = None,
+        include_taira_prefix_variant: bool = False,
+        limit: int = 200,
+    ) -> Optional[Mapping[str, Any]]:
+        candidates = set(
+            self._normalize_account_id_variants(
+                account_id,
+                account_id_variants,
+                include_taira_prefix_variant=include_taira_prefix_variant,
+            )
+        )
+        offset = 0
+        while True:
+            payload = self.list_accounts(limit=limit, offset=offset)
+            items = _extract_page_items(payload)
+            for item in items:
+                candidate = str(item.get("id") or item.get("account_id") or "")
+                if candidate in candidates:
+                    return item
+            batch_size = len(items)
+            total = _page_total(payload)
+            if batch_size == 0:
+                return None
+            offset += batch_size
+            if total is not None and offset >= total:
+                return None
+
+    def find_account(
+        self,
+        account_id: str,
+        *,
+        account_id_variants: Optional[Iterable[str]] = None,
+        include_taira_prefix_variant: bool = False,
+    ) -> Optional[Mapping[str, Any]]:
+        """Fetch an account by id, returning ``None`` when it is absent.
+
+        The helper retries supplied account-id variants and falls back to the
+        paginated account list when Torii reports route or network-prefix
+        compatibility errors.
+        """
+
+        variants = self._normalize_account_id_variants(
+            account_id,
+            account_id_variants,
+            include_taira_prefix_variant=include_taira_prefix_variant,
+        )
+        saw_network_prefix_error = False
+        for candidate in variants:
+            response = self._request(
+                "GET",
+                f"/v1/accounts/{quote(candidate, safe='')}",
+            )
+            if response.status_code == 404:
+                continue
+            if response.status_code == 200:
+                payload = self._maybe_json(response)
+                if not isinstance(payload, Mapping):
+                    raise RuntimeError("account endpoint returned non-object payload")
+                return payload
+            if (
+                response.status_code == 503
+                and response.headers.get("x-iroha-reject-code") == "route_unavailable"
+            ):
+                return self._account_record_from_listing(
+                    account_id,
+                    account_id_variants=variants,
+                )
+            if _response_has_network_prefix_error(response):
+                saw_network_prefix_error = True
+                continue
+            self._expect_status(response, {200, 404})
+        if saw_network_prefix_error:
+            return self._account_record_from_listing(
+                account_id,
+                account_id_variants=variants,
+            )
+        return None
+
+    def account_exists(
+        self,
+        account_id: str,
+        *,
+        account_id_variants: Optional[Iterable[str]] = None,
+        include_taira_prefix_variant: bool = False,
+    ) -> bool:
+        """Return whether Torii can see the account."""
+
+        return self.find_account(
+            account_id,
+            account_id_variants=account_id_variants,
+            include_taira_prefix_variant=include_taira_prefix_variant,
+        ) is not None
+
+    def find_account_assets(
+        self,
+        account_id: str,
+        *,
+        account_id_variants: Optional[Iterable[str]] = None,
+        include_taira_prefix_variant: bool = False,
+        asset_id: Optional[str] = None,
+    ) -> Optional[List[Mapping[str, Any]]]:
+        """Return raw account asset entries, or ``None`` when the account is absent."""
+
+        result = self._find_account_assets_for_variants(
+            account_id,
+            account_id_variants=account_id_variants,
+            include_taira_prefix_variant=include_taira_prefix_variant,
+            asset_id=asset_id,
+        )
+        if result is None:
+            return None
+        _resolved_account_id, items = result
+        return items
+
+    def _find_account_assets_for_variants(
+        self,
+        account_id: str,
+        *,
+        account_id_variants: Optional[Iterable[str]] = None,
+        include_taira_prefix_variant: bool = False,
+        asset_id: Optional[str] = None,
+    ) -> Optional[Tuple[str, List[Mapping[str, Any]]]]:
+        variants = self._normalize_account_id_variants(
+            account_id,
+            account_id_variants,
+            include_taira_prefix_variant=include_taira_prefix_variant,
+        )
+        params: Dict[str, Any] = {}
+        asset_id_value = _normalize_optional_string(asset_id, "find_account_assets.asset_id")
+        if asset_id_value is not None:
+            params["asset_id"] = asset_id_value
+        last_network_prefix_error: Optional[requests.Response] = None
+        for candidate in variants:
+            response = self._request(
+                "GET",
+                f"/v1/accounts/{quote(candidate, safe='')}/assets",
+                params=params or None,
+            )
+            if response.status_code == 404:
+                continue
+            if response.status_code == 200:
+                return candidate, _extract_page_items(self._maybe_json(response))
+            if _response_has_network_prefix_error(response):
+                last_network_prefix_error = response
+                continue
+            self._expect_status(response, {200, 404})
+        if last_network_prefix_error is not None:
+            self._expect_status(last_network_prefix_error, {200, 404})
+        return None
+
+    def find_account_asset_items(
+        self,
+        account_id: str,
+        asset_definition_id: str,
+        *,
+        account_id_variants: Optional[Iterable[str]] = None,
+        include_taira_prefix_variant: bool = False,
+    ) -> List[Mapping[str, Any]]:
+        """Return raw asset entries matching an asset definition for an account."""
+
+        definition = _require_non_empty_string(
+            asset_definition_id,
+            "asset_definition_id",
+        )
+        result = self._find_account_assets_for_variants(
+            account_id,
+            account_id_variants=account_id_variants,
+            include_taira_prefix_variant=include_taira_prefix_variant,
+        )
+        if result is None:
+            return []
+        resolved_account_id, items = result
+        return [
+            item
+            for item in items
+            if _asset_entry_matches_definition(item, definition, resolved_account_id)
+        ]
+
+    def asset_balance(
+        self,
+        account_id: str,
+        asset_definition_id: str,
+        *,
+        account_id_variants: Optional[Iterable[str]] = None,
+        include_taira_prefix_variant: bool = False,
+    ) -> Decimal:
+        """Return a numeric asset balance parsed from account asset listings."""
+
+        definition = _require_non_empty_string(
+            asset_definition_id,
+            "asset_definition_id",
+        )
+        result = self._find_account_assets_for_variants(
+            account_id,
+            account_id_variants=account_id_variants,
+            include_taira_prefix_variant=include_taira_prefix_variant,
+        )
+        if result is None:
+            raise RuntimeError(f"account {account_id} not found via Torii REST")
+        resolved_account_id, items = result
+        for item in items:
+            if _asset_entry_matches_definition(item, definition, resolved_account_id):
+                return _quantity_decimal(item.get("quantity", "0"))
+        return Decimal("0")
+
+    def get_asset_definition(
+        self,
+        asset_definition_id: str,
+    ) -> Optional[Mapping[str, Any]]:
+        """Fetch an asset definition by id, returning ``None`` for 404."""
+
+        definition = _require_non_empty_string(
+            asset_definition_id,
+            "asset_definition_id",
+        )
+        response = self._request(
+            "GET",
+            f"/v1/assets/definitions/{quote(definition, safe='')}",
+        )
+        if response.status_code == 404:
+            return None
+        self._expect_status(response, {200})
+        payload = self._maybe_json(response)
+        if not isinstance(payload, Mapping):
+            raise RuntimeError("asset definition endpoint returned non-object payload")
+        return payload
+
+    def asset_definition_exists(self, asset_definition_id: str) -> bool:
+        """Return whether Torii can resolve the asset definition."""
+
+        return self.get_asset_definition(asset_definition_id) is not None
+
+    def get_account_faucet_puzzle(self) -> Mapping[str, Any]:
+        """Return the account-faucet proof-of-work puzzle."""
+
+        payload = self.request_json(
+            "GET",
+            "/v1/accounts/faucet/puzzle",
+            expected_status=(200,),
+        )
+        if not isinstance(payload, Mapping):
+            raise RuntimeError("account faucet puzzle endpoint returned non-object payload")
+        return payload
+
+    @staticmethod
+    def solve_account_faucet_pow(
+        account_id: str,
+        puzzle: Mapping[str, Any],
+        *,
+        max_nonce: int = 1_000_000,
+    ) -> Tuple[int, str]:
+        """Solve a Torii account-faucet proof-of-work puzzle."""
+
+        account = _require_non_empty_string(account_id, "account_id")
+        difficulty_bits = int(puzzle["difficulty_bits"])
+        anchor_height = int(puzzle["anchor_height"])
+        anchor_hash = bytes.fromhex(str(puzzle["anchor_block_hash_hex"]))
+        challenge_salt_hex = puzzle.get("challenge_salt_hex")
+        challenge_salt = bytes.fromhex(str(challenge_salt_hex)) if challenge_salt_hex else None
+        scrypt_n = 1 << int(puzzle["scrypt_log_n"])
+        scrypt_r = int(puzzle["scrypt_r"])
+        scrypt_p = int(puzzle["scrypt_p"])
+        challenge = hashlib.sha256(
+            b"".join(
+                (
+                    ACCOUNT_FAUCET_POW_DOMAIN_SEPARATOR,
+                    account.encode("utf-8"),
+                    anchor_height.to_bytes(8, "big"),
+                    anchor_hash,
+                    challenge_salt or b"",
+                )
+            )
+        ).digest()
+        for nonce in range(max_nonce):
+            nonce_bytes = nonce.to_bytes(8, "big")
+            digest = hashlib.scrypt(
+                nonce_bytes,
+                salt=challenge,
+                n=scrypt_n,
+                r=scrypt_r,
+                p=scrypt_p,
+                dklen=32,
+            )
+            if _leading_zero_bits(digest) >= difficulty_bits:
+                return anchor_height, nonce_bytes.hex()
+        raise RuntimeError(
+            f"could not solve account faucet proof-of-work after {max_nonce} attempts"
+        )
+
+    def submit_account_faucet_registration(
+        self,
+        account_id: str,
+        *,
+        puzzle: Optional[Mapping[str, Any]] = None,
+        max_nonce: int = 1_000_000,
+    ) -> requests.Response:
+        """Submit an account-faucet registration and return the raw response."""
+
+        puzzle_payload = puzzle or self.get_account_faucet_puzzle()
+        anchor_height, nonce_hex = self.solve_account_faucet_pow(
+            account_id,
+            puzzle_payload,
+            max_nonce=max_nonce,
+        )
+        return self.submit_account_faucet_claim(
+            account_id,
+            pow_anchor_height=anchor_height,
+            pow_nonce_hex=nonce_hex,
+        )
+
+    def submit_account_faucet_claim(
+        self,
+        account_id: str,
+        *,
+        pow_anchor_height: int,
+        pow_nonce_hex: str,
+    ) -> requests.Response:
+        """Submit a pre-solved account-faucet proof-of-work claim."""
+
+        return self._request(
+            "POST",
+            "/v1/accounts/faucet",
+            json_body={
+                "account_id": _require_non_empty_string(account_id, "account_id"),
+                "pow_anchor_height": int(pow_anchor_height),
+                "pow_nonce_hex": _require_non_empty_string(
+                    pow_nonce_hex,
+                    "pow_nonce_hex",
+                ),
+            },
+        )
+
+    def onboard_account(
+        self,
+        *,
+        alias: str,
+        public_key_hex: str,
+        gas_asset_id: Optional[str] = None,
+        identity: Optional[Mapping[str, Any]] = None,
+    ) -> requests.Response:
+        """Submit an account onboarding request and return the raw response."""
+
+        payload: Dict[str, Any] = {
+            "alias": _require_non_empty_string(alias, "onboard_account.alias"),
+            "public_key_hex": _require_non_empty_string(
+                public_key_hex,
+                "onboard_account.public_key_hex",
+            ),
+        }
+        if gas_asset_id is not None:
+            payload["gas_asset_id"] = _require_non_empty_string(
+                gas_asset_id,
+                "onboard_account.gas_asset_id",
+            )
+        if identity is not None:
+            payload["identity"] = _json_safe_value(identity)
+        return self._request("POST", "/v1/accounts/onboard", json_body=payload)
+
+    def find_domain(self, domain_id: str, *, limit: int = 200) -> Optional[Mapping[str, Any]]:
+        """Fetch a domain by id, falling back to paginated listing on route gaps."""
+
+        resolved_domain_id = _require_non_empty_string(domain_id, "domain_id")
+        response = self._request(
+            "GET",
+            f"/v1/domains/{quote(resolved_domain_id, safe='')}",
+        )
+        if response.status_code == 200:
+            payload = self._maybe_json(response)
+            if not isinstance(payload, Mapping):
+                raise RuntimeError("domain endpoint returned non-object payload")
+            return payload
+        if response.status_code not in {404, 502, 503, 504}:
+            self._expect_status(response, {200, 404})
+
+        offset = 0
+        while True:
+            payload = self.list_domains(limit=limit, offset=offset)
+            items = _extract_page_items(payload)
+            for item in items:
+                candidate = str(item.get("id") or item.get("domain_id") or "")
+                if candidate == resolved_domain_id:
+                    return item
+            batch_size = len(items)
+            total = _page_total(payload)
+            if batch_size == 0:
+                return None
+            offset += batch_size
+            if total is not None and offset >= total:
+                return None
+
+    def domain_exists(self, domain_id: str) -> bool:
+        """Return whether Torii can resolve a domain."""
+
+        return self.find_domain(domain_id) is not None
+
+    def request_sns_name(self, namespace: str, literal: str) -> requests.Response:
+        """Fetch an SNS name registration and return the raw response."""
+
+        return self._request(
+            "GET",
+            "/v1/sns/names/"
+            f"{quote(_require_non_empty_string(namespace, 'namespace'), safe='')}/"
+            f"{quote(_require_non_empty_string(literal, 'literal'), safe='')}",
+        )
+
+    def get_sns_name(self, namespace: str, literal: str) -> Optional[Mapping[str, Any]]:
+        """Fetch an SNS name registration, returning ``None`` on 404."""
+
+        response = self.request_sns_name(namespace, literal)
+        if response.status_code == 404:
+            return None
+        self._expect_status(response, {200})
+        payload = self._maybe_json(response)
+        if not isinstance(payload, Mapping):
+            raise RuntimeError("SNS name endpoint returned non-object payload")
+        return payload
+
+    def get_sns_policy(self, suffix_id: int) -> Mapping[str, Any]:
+        """Fetch the SNS suffix policy."""
+
+        payload = self.request_json(
+            "GET",
+            f"/v1/sns/policies/{int(suffix_id)}",
+            expected_status=(200,),
+        )
+        if not isinstance(payload, Mapping):
+            raise RuntimeError("SNS policy endpoint returned non-object payload")
+        return payload
+
+    def submit_sns_name_registration(self, request: Mapping[str, Any]) -> requests.Response:
+        """Submit an SNS registration request and return the raw response."""
+
+        return self._request(
+            "POST",
+            "/v1/sns/names",
+            json_body=dict(_json_safe_value(dict(request))),
+        )
+
+    def register_sns_name(self, request: Mapping[str, Any]) -> Optional[Any]:
+        """Submit an SNS registration request and decode a successful response."""
+
+        response = self.submit_sns_name_registration(request)
+        self._expect_status(response, {200, 201, 202})
+        return self._maybe_json(response)
+
+    def request_zk_verifying_key(self, backend: str, name: str) -> requests.Response:
+        """Fetch a ZK verifying-key registry entry and return the raw response."""
+
+        return self._request(
+            "GET",
+            "/v1/zk/vk/"
+            f"{quote(_require_non_empty_string(backend, 'backend'), safe='')}/"
+            f"{quote(_require_non_empty_string(name, 'name'), safe='')}",
+        )
+
+    def get_zk_verifying_key(self, backend: str, name: str) -> Optional[Mapping[str, Any]]:
+        """Fetch a ZK verifying-key registry entry, returning ``None`` on 404."""
+
+        response = self.request_zk_verifying_key(backend, name)
+        if response.status_code == 404:
+            return None
+        self._expect_status(response, {200})
+        payload = self._maybe_json(response)
+        if not isinstance(payload, Mapping):
+            raise RuntimeError("ZK verifying-key endpoint returned non-object payload")
+        return payload
+
+    def zk_verifying_key_active(self, backend: str, name: str) -> bool:
+        """Return whether a ZK verifying key exists and is active."""
+
+        payload = self.get_zk_verifying_key(backend, name)
+        if payload is None:
+            return False
+        record = payload.get("record") if isinstance(payload, Mapping) else None
+        return isinstance(record, Mapping) and record.get("status") == "Active"
+
+    def submit_zk_verifying_key_registration(
+        self,
+        payload: Mapping[str, Any],
+    ) -> requests.Response:
+        """Submit a ZK verifying-key registration request and return the raw response."""
+
+        return self._request(
+            "POST",
+            "/v1/zk/vk/register",
+            json_body=dict(_json_safe_value(dict(payload))),
+            timeout=60.0,
+        )
+
+    def register_zk_verifying_key(self, payload: Mapping[str, Any]) -> Optional[Any]:
+        """Submit a ZK verifying-key registration request and decode the response."""
+
+        response = self.submit_zk_verifying_key_registration(payload)
+        self._expect_status(response, {200, 201, 202, 409})
+        return self._maybe_json(response)
+
+    def account_has_permission(
+        self,
+        account_id: str,
+        permission_name: str,
+        *,
+        expected_payload: Optional[Mapping[str, Any]] = None,
+    ) -> bool:
+        """Return whether an account has a direct permission token."""
+
+        expected_payload_value = (
+            _json_safe_value(dict(expected_payload)) if expected_payload is not None else None
+        )
+        permissions = self.list_account_permissions_typed(account_id)
+        for permission in permissions.items:
+            if permission.name != permission_name:
+                continue
+            if expected_payload is None or permission.payload == expected_payload_value:
+                return True
+        return False
+
+    # ------------------------------------------------------------------
     # RWA queries
     # ------------------------------------------------------------------
 
@@ -9915,6 +11429,70 @@ class ToriiClient(_BaseToriiClient):
     # ------------------------------------------------------------------
     # Contracts API
     # ------------------------------------------------------------------
+    @staticmethod
+    def _contract_response_payload(response: Any) -> Any:
+        if is_dataclass(response):
+            return asdict(response)
+        return _json_safe_value(response)
+
+    @staticmethod
+    def _contract_response_tx_hashes(response: Any) -> List[str]:
+        payload = ToriiClient._contract_response_payload(response)
+        hashes: List[str] = []
+
+        def visit(value: Any) -> None:
+            if isinstance(value, Mapping):
+                for key in ("tx_hash_hex", "hash", "tx_hash", "transaction_hash"):
+                    candidate = value.get(key)
+                    if isinstance(candidate, str) and candidate.strip():
+                        hashes.append(candidate.strip())
+                for child in value.values():
+                    visit(child)
+            elif isinstance(value, list):
+                for child in value:
+                    visit(child)
+
+        visit(payload)
+        return _dedupe_strings(hashes)
+
+    def _wait_for_contract_response(
+        self,
+        response: Any,
+        *,
+        timeout_ms: Optional[int],
+        interval: float,
+        scope: str,
+        success_statuses: Optional[Iterable[str]],
+        failure_statuses: Optional[Iterable[str]],
+    ) -> Dict[str, Any]:
+        submit_payload = self._contract_response_payload(response)
+        tx_hashes = self._contract_response_tx_hashes(response)
+        final_payloads: List[Any] = []
+        for tx_hash in tx_hashes:
+            final_payloads.append(
+                self.wait_for_transaction_status(
+                    tx_hash,
+                    interval=interval,
+                    timeout=None if timeout_ms is None else timeout_ms / 1000.0,
+                    scope=scope,
+                    success_statuses=success_statuses,
+                    failure_statuses=failure_statuses,
+                )
+            )
+        final_payload: Any
+        if not final_payloads:
+            final_payload = None
+        elif len(final_payloads) == 1:
+            final_payload = final_payloads[0]
+        else:
+            final_payload = {"items": final_payloads}
+        return {
+            "submit": submit_payload,
+            "tx_hashes": tx_hashes,
+            "terminal_kind": _extract_pipeline_status_kind(final_payload),
+            "r#final": final_payload,
+        }
+
     def register_contract_code(self, manifest: Mapping[str, Any]) -> Optional[Any]:
         response = self._request(
             "POST",
@@ -9926,6 +11504,12 @@ class ToriiClient(_BaseToriiClient):
         return self._maybe_json(response)
 
     def deploy_contract(self, request: Mapping[str, Any]) -> Optional[Any]:
+        """Backward-compatible raw deploy wrapper.
+
+        For the typed convenience path that accepts a code file or base64 payload,
+        use :meth:`deploy_contract_bundle`.
+        """
+
         response = self._request(
             "POST",
             "/v1/contracts/deploy",
@@ -9934,6 +11518,96 @@ class ToriiClient(_BaseToriiClient):
         )
         self._expect_status(response, {200, 202})
         return self._maybe_json(response)
+
+    def deploy_contract_bundle(
+        self,
+        *,
+        authority: str,
+        private_key: str,
+        contract_alias: str,
+        code_b64: Optional[str] = None,
+        code_file: Optional[Union[str, os.PathLike[str]]] = None,
+        lease_expiry_ms: Optional[int] = None,
+        wait: bool = False,
+        timeout_ms: Optional[int] = 120_000,
+        interval: float = 1.0,
+        scope: str = "global",
+        success_statuses: Optional[Iterable[str]] = None,
+        failure_statuses: Optional[Iterable[str]] = None,
+    ) -> Any:
+        """Deploy a compiled contract through the typed Torii endpoint wrapper.
+
+        This helper deliberately leaves the older ``deploy_contract(request)``
+        method unchanged for callers that still need raw payload control.
+        """
+
+        if (code_b64 is None) == (code_file is None):
+            raise ValueError("provide exactly one of `code_b64` or `code_file`")
+        resolved_code_b64 = code_b64
+        if code_file is not None:
+            with open(os.fspath(code_file), "rb") as handle:
+                resolved_code_b64 = base64.b64encode(handle.read()).decode("ascii")
+        typed_response = _BaseToriiClient.deploy_contract(
+            self,
+            authority=authority,
+            private_key=private_key,
+            code_b64=str(resolved_code_b64),
+            contract_alias=contract_alias,
+            lease_expiry_ms=lease_expiry_ms,
+        )
+        if not wait:
+            return self._contract_response_payload(typed_response)
+        return self._wait_for_contract_response(
+            typed_response,
+            timeout_ms=timeout_ms,
+            interval=interval,
+            scope=scope,
+            success_statuses=success_statuses,
+            failure_statuses=failure_statuses,
+        )
+
+    def call_contract_and_wait(
+        self,
+        *,
+        authority: str,
+        private_key: str,
+        gas_limit: Any,
+        contract_address: Optional[str] = None,
+        contract_alias: Optional[str] = None,
+        entrypoint: Optional[str] = None,
+        payload: Any = None,
+        gas_asset_id: Optional[str] = None,
+        fee_sponsor: Optional[str] = None,
+        wait: bool = True,
+        timeout_ms: Optional[int] = 120_000,
+        interval: float = 1.0,
+        scope: str = "global",
+        success_statuses: Optional[Iterable[str]] = None,
+        failure_statuses: Optional[Iterable[str]] = None,
+    ) -> Any:
+        """Call a contract and optionally wait for its submitted transaction."""
+
+        typed_response = self.call_contract(
+            authority=authority,
+            private_key=private_key,
+            contract_address=contract_address,
+            contract_alias=contract_alias,
+            entrypoint=entrypoint,
+            payload=payload,
+            gas_asset_id=gas_asset_id,
+            fee_sponsor=fee_sponsor,
+            gas_limit=gas_limit,
+        )
+        if not wait:
+            return self._contract_response_payload(typed_response)
+        return self._wait_for_contract_response(
+            typed_response,
+            timeout_ms=timeout_ms,
+            interval=interval,
+            scope=scope,
+            success_statuses=success_statuses,
+            failure_statuses=failure_statuses,
+        )
 
     def get_contract_manifest(self, code_hash_hex: str) -> Optional[Any]:
         response = self._request(
@@ -11466,6 +13140,11 @@ class ToriiClient(_BaseToriiClient):
 
     @staticmethod
     def _maybe_json(response: requests.Response) -> Optional[Any]:
+        if not hasattr(response, "content"):
+            try:
+                return response.json()
+            except ValueError:
+                return getattr(response, "text", "") or None
         if not response.content:
             return None
         try:

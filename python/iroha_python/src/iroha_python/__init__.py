@@ -286,6 +286,20 @@ from .privacy import (
     fetch_privacy_events,
     stream_privacy_events,
 )
+from .dataspaces import (
+    RuntimeUpgradeHook,
+    DataspaceSpec,
+    DataspacePlan,
+    DataspaceStatus,
+    default_quorum,
+    normalize_dataspace_hash,
+    compute_dataspace_id,
+    compute_dataspace_manifest_hash,
+    normalize_protected_namespaces,
+    slugify_alias,
+    plan_dataspace,
+    write_dataspace_plan,
+)
 
 _BASE_EXPORTS = [
     "AccountAddress",
@@ -525,6 +539,18 @@ _BASE_EXPORTS = [
     "load_privacy_events_from_ndjson",
     "fetch_privacy_events",
     "stream_privacy_events",
+    "RuntimeUpgradeHook",
+    "DataspaceSpec",
+    "DataspacePlan",
+    "DataspaceStatus",
+    "default_quorum",
+    "normalize_dataspace_hash",
+    "compute_dataspace_id",
+    "compute_dataspace_manifest_hash",
+    "normalize_protected_namespaces",
+    "slugify_alias",
+    "plan_dataspace",
+    "write_dataspace_plan",
 ]
 
 _CRYPTO_EXPORTS: List[str] = [

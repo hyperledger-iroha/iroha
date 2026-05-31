@@ -3888,6 +3888,78 @@ export function buildRegisterZkAssetInstruction(options) {
 }
 
 /**
+ * Build a `zk::RegisterAssetHiddenZkPool` instruction payload.
+ * @param {object} options
+ * @returns {{zk: {RegisterAssetHiddenZkPool: object}}}
+ */
+export function buildRegisterAssetHiddenZkPoolInstruction(options) {
+  const source = assertPlainObject(options, "registerAssetHiddenZkPool");
+  const poolId = readSingleAlias(
+    source,
+    ["poolId", "pool_id", "assetPoolId", "asset_pool_id"],
+    "registerAssetHiddenZkPool.poolId",
+    "pool id",
+  );
+  const storageAsset = readSingleAlias(
+    source,
+    ["storageAsset", "storage_asset", "storageAssetDefinitionId", "storage_asset_definition_id"],
+    "registerAssetHiddenZkPool.storageAsset",
+    "storage asset",
+  );
+  const assetSetRoot = readSingleAlias(
+    source,
+    ["assetSetRoot", "asset_set_root"],
+    "registerAssetHiddenZkPool.assetSetRoot",
+    "asset-set root",
+  );
+  const vkTransfer = readSingleAlias(
+    source,
+    ["transferVerifyingKey", "vkTransfer", "vk_transfer", "verifyingKeyRef", "verifying_key_ref"],
+    "registerAssetHiddenZkPool.vkTransfer",
+    "transfer verifier",
+  );
+  const normalizedRoot = normalizeFixedBytes(
+    assetSetRoot.value,
+    "registerAssetHiddenZkPool.assetSetRoot",
+    32,
+  );
+  if (normalizedRoot.every((byte) => byte === 0)) {
+    fail(
+      ValidationErrorCode.INVALID_OBJECT,
+      "registerAssetHiddenZkPool.assetSetRoot must be nonzero",
+      "registerAssetHiddenZkPool.assetSetRoot",
+    );
+  }
+  const payload = {
+    pool_id: assertNonBlankString(
+      poolId.value,
+      "registerAssetHiddenZkPool.poolId",
+    ),
+    storage_asset: assertString(
+      storageAsset.value,
+      "registerAssetHiddenZkPool.storageAsset",
+    ),
+    asset_set_root: normalizedRoot,
+    vk_transfer: normalizeVerifyingKeyId(
+      vkTransfer.value,
+      "registerAssetHiddenZkPool.vkTransfer",
+    ),
+  };
+  if (payload.vk_transfer === null) {
+    fail(
+      ValidationErrorCode.INVALID_OBJECT,
+      "registerAssetHiddenZkPool.vkTransfer is required",
+      "registerAssetHiddenZkPool.vkTransfer",
+    );
+  }
+  return {
+    zk: {
+      RegisterAssetHiddenZkPool: payload,
+    },
+  };
+}
+
+/**
  * Build a `zk::ScheduleConfidentialPolicyTransition` instruction payload.
  * @param {object} options
  * @returns {{zk: {ScheduleConfidentialPolicyTransition: object}}}
@@ -4020,6 +4092,72 @@ export function buildZkTransferInstruction(options) {
   return {
     zk: {
       ZkTransfer: payload,
+    },
+  };
+}
+
+/**
+ * Build an experimental `zk::AssetHiddenZkTransfer` instruction payload.
+ *
+ * This helper exposes the SDK request shape for asset-hidden private transfers.
+ * The Rust data model and Norito wire encoder accept the instruction, while the
+ * validator execution path remains fail-closed until pool verifier state exists.
+ *
+ * @param {object} options
+ * @returns {{zk: {AssetHiddenZkTransfer: object}}}
+ */
+export function buildAssetHiddenZkTransferInstruction(options) {
+  const source = assertPlainObject(options, "assetHiddenZkTransfer");
+  const poolId = readSingleAlias(
+    source,
+    ["poolId", "pool_id", "assetPoolId", "asset_pool_id"],
+    "assetHiddenZkTransfer.poolId",
+    "pool id",
+  );
+  const rootHint = readSingleAlias(
+    source,
+    ["rootHint", "root_hint"],
+    "assetHiddenZkTransfer.rootHint",
+    "root hint",
+  );
+  const inputs = Array.isArray(source.inputs)
+    ? source.inputs.map((entry, index) =>
+        normalizeFixedBytes(entry, `assetHiddenZkTransfer.inputs[${index}]`, 32),
+      )
+    : [];
+  const outputs = Array.isArray(source.outputs)
+    ? source.outputs.map((entry, index) =>
+        normalizeFixedBytes(entry, `assetHiddenZkTransfer.outputs[${index}]`, 32),
+      )
+    : [];
+  if (inputs.length === 0) {
+    fail(
+      ValidationErrorCode.INVALID_OBJECT,
+      "assetHiddenZkTransfer.inputs must contain at least one nullifier",
+    );
+  }
+  if (outputs.length === 0) {
+    fail(
+      ValidationErrorCode.INVALID_OBJECT,
+      "assetHiddenZkTransfer.outputs must contain at least one commitment",
+    );
+  }
+  const payload = {
+    pool_id: assertNonBlankString(
+      poolId.value,
+      "assetHiddenZkTransfer.poolId",
+    ),
+    inputs,
+    outputs,
+    proof: normalizeProofAttachment(source.proof, "assetHiddenZkTransfer.proof"),
+    root_hint: normalizeOptionalFixedBytes(
+      rootHint.value,
+      "assetHiddenZkTransfer.rootHint",
+    ),
+  };
+  return {
+    zk: {
+      AssetHiddenZkTransfer: payload,
     },
   };
 }

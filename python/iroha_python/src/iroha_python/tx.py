@@ -32,6 +32,15 @@ NumericLike = Union[str, int, float, Decimal]
 MetadataLike = Optional[Mapping[str, Any]]
 
 
+def _require_non_empty_string(value: Any, context: str) -> str:
+    if not isinstance(value, str):
+        raise TypeError(f"{context} must be a string")
+    text = value.strip()
+    if not text:
+        raise ValueError(f"{context} must be non-empty")
+    return text
+
+
 @dataclass(frozen=True)
 class TransactionConfig:
     """Configuration shared across transactions signed by :class:`TransactionDraft`."""
@@ -225,8 +234,12 @@ class TransactionDraft:
         definition_id: str,
         owner: str,
         *,
+        name: Optional[str] = None,
+        description: Optional[str] = None,
+        alias: Optional[str] = None,
         scale: Optional[Union[int, str]] = None,
         mintable: Optional[str] = None,
+        balance_scope_policy: Optional[str] = None,
         confidential_policy: Optional[str] = None,
         metadata: MetadataLike = None,
     ) -> TransactionDraft:
@@ -251,8 +264,12 @@ class TransactionDraft:
             Instruction.register_asset_definition_numeric(
                 definition_id,
                 owner,
+                name=name,
+                description=description,
+                alias=alias,
                 scale=normalized_scale,
                 mintable=mintable,
+                balance_scope_policy=balance_scope_policy,
                 confidential_policy=confidential_policy,
                 metadata=metadata_payload,
             )
@@ -288,6 +305,38 @@ class TransactionDraft:
                 normalized_quantity,
                 destination,
             )
+        )
+        return self
+
+    def grant_account_permission(
+        self,
+        destination: str,
+        name: str,
+        *,
+        payload: Any = None,
+    ) -> TransactionDraft:
+        """Append a `Grant::Permission` instruction for an account."""
+
+        destination = _require_non_empty_string(destination, "destination")
+        name = _require_non_empty_string(name, "permission name")
+        self.add_instruction(
+            Instruction.grant_account_permission(destination, name, payload=payload)
+        )
+        return self
+
+    def revoke_account_permission(
+        self,
+        destination: str,
+        name: str,
+        *,
+        payload: Any = None,
+    ) -> TransactionDraft:
+        """Append a `Revoke::Permission` instruction for an account."""
+
+        destination = _require_non_empty_string(destination, "destination")
+        name = _require_non_empty_string(name, "permission name")
+        self.add_instruction(
+            Instruction.revoke_account_permission(destination, name, payload=payload)
         )
         return self
 

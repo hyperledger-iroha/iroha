@@ -257,6 +257,11 @@ impl From<crate::isi::zk::RegisterZkAsset> for InstructionBox {
         InstructionBox(Box::new(i))
     }
 }
+impl From<crate::isi::zk::RegisterAssetHiddenZkPool> for InstructionBox {
+    fn from(i: crate::isi::zk::RegisterAssetHiddenZkPool) -> Self {
+        InstructionBox(Box::new(i))
+    }
+}
 impl From<crate::isi::zk::ScheduleConfidentialPolicyTransition> for InstructionBox {
     fn from(i: crate::isi::zk::ScheduleConfidentialPolicyTransition) -> Self {
         InstructionBox(Box::new(i))
@@ -274,6 +279,11 @@ impl From<crate::isi::zk::Shield> for InstructionBox {
 }
 impl From<crate::isi::zk::ZkTransfer> for InstructionBox {
     fn from(i: crate::isi::zk::ZkTransfer) -> Self {
+        InstructionBox(Box::new(i))
+    }
+}
+impl From<crate::isi::zk::AssetHiddenZkTransfer> for InstructionBox {
+    fn from(i: crate::isi::zk::AssetHiddenZkTransfer) -> Self {
         InstructionBox(Box::new(i))
     }
 }

@@ -273,6 +273,35 @@ pub mod norito_helpers {
                     actual,
                 });
             }
+            for (limit, actual) in [
+                ("params_g_len", env.params.g.len()),
+                ("params_h_len", env.params.h.len()),
+            ] {
+                if actual > max_n {
+                    return Err(Error::EnvelopeLimitExceeded {
+                        limit,
+                        max: max_n,
+                        actual,
+                    });
+                }
+            }
+            let max_rounds = if max_k >= usize::BITS {
+                usize::MAX
+            } else {
+                max_k as usize
+            };
+            for (limit, actual) in [
+                ("proof_l_rounds", env.proof.l.len()),
+                ("proof_r_rounds", env.proof.r.len()),
+            ] {
+                if actual > max_rounds {
+                    return Err(Error::EnvelopeLimitExceeded {
+                        limit,
+                        max: max_rounds,
+                        actual,
+                    });
+                }
+            }
         }
         Ok(())
     }
@@ -389,6 +418,81 @@ pub mod norito_helpers {
     /// Convenience wrapper for decoding group bytes under the Pallas backend.
     pub fn group_from_bytes(bytes: &[u8; 32]) -> Result<GroupElem, Error> {
         <PallasBackend as IpaBackend>::Group::from_bytes(bytes)
+    }
+
+    /// Derive a Pallas verifier witness directly from a transparent opening envelope.
+    ///
+    /// The witness is reconstructed from the envelope's parameters, public
+    /// opening statement, transcript label/metadata, and proof body. It is
+    /// returned only for Pallas envelopes whose final verifier equality holds.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error when the envelope is malformed, is not a Pallas opening,
+    /// or does not verify under the transparent IPA verifier.
+    pub fn derive_pallas_ipa_verifier_witness_from_envelope(
+        env: &OpenVerifyEnvelope,
+    ) -> Result<
+        (
+            Arc<crate::params::Params<PallasBackend>>,
+            crate::ipa::IpaVerifierWitness<PallasBackend>,
+        ),
+        Error,
+    > {
+        derive_pallas_ipa_verifier_witness_from_envelope_with_limits(
+            env,
+            OpenVerifyLimits::unbounded(),
+        )
+    }
+
+    /// Derive a Pallas verifier witness with explicit envelope resource limits.
+    ///
+    /// This is the bounded form of
+    /// [`derive_pallas_ipa_verifier_witness_from_envelope`]. It applies the
+    /// same decoding and final verifier-equality checks, but rejects envelopes
+    /// exceeding the supplied limits before backend-specific parameter/proof
+    /// reconstruction.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error when the envelope exceeds the supplied limits, is
+    /// malformed, is not a Pallas opening, or does not verify under the
+    /// transparent IPA verifier.
+    pub fn derive_pallas_ipa_verifier_witness_from_envelope_with_limits(
+        env: &OpenVerifyEnvelope,
+        limits: OpenVerifyLimits,
+    ) -> Result<
+        (
+            Arc<crate::params::Params<PallasBackend>>,
+            crate::ipa::IpaVerifierWitness<PallasBackend>,
+        ),
+        Error,
+    > {
+        let decoded = decode_envelope_with_limits(env, limits)?;
+        let DecodedEnvelope::Pallas {
+            params,
+            proof,
+            z,
+            t,
+            p_g,
+        } = decoded
+        else {
+            return Err(Error::UnsupportedBackend {
+                backend: ZkCurveId::from_u16(env.params.curve_id),
+            });
+        };
+        let mut transcript = Transcript::new(&env.transcript_label);
+        let witness =
+            crate::backend::pallas::Polynomial::derive_open_verifier_witness_with_metadata(
+                params.as_ref(),
+                &mut transcript,
+                z,
+                p_g,
+                t,
+                proof.as_ref(),
+                env.transcript_metadata(),
+            )?;
+        Ok((params, witness))
     }
 
     /// Envelope decoded into backend-specific components.

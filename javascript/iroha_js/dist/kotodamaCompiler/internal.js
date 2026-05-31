@@ -358,6 +358,7 @@ const SYSCALL_SET_SMARTCONTRACT_EXECUTION_DEPTH = 0xa3;
 const SYSCALL_RESOLVE_ACCOUNT_ALIAS = 0xa7;
 const SYSCALL_CURRENT_TIME_MS = 0xa8;
 const SYSCALL_CALL_CONTRACT = 0xa9;
+const SYSCALL_QUERY_EXECUTE_NORITO = 0x01_0000;
 const SYSCALL_AXT_BEGIN = 0xb0;
 const SYSCALL_AXT_TOUCH = 0xb1;
 const SYSCALL_AXT_COMMIT = 0xb2;
@@ -366,6 +367,7 @@ const SYSCALL_USE_ASSET_HANDLE = 0xb4;
 const SYSCALL_SYSVAR_CHAIN_ID = 0x01_0020;
 const SYSCALL_SYSVAR_BLOCK_HEIGHT = 0x01_0021;
 const SYSCALL_SYSVAR_BLOCK_TIME_MS = 0x01_0022;
+const SYSCALL_SYSVAR_AUTHORITY = 0x01_0023;
 const SYSCALL_SYSVAR_CONTRACT_ADDRESS = 0x01_0024;
 const SYSCALL_SYSVAR_ENTRYPOINT = 0x01_0025;
 const SYSCALL_SMARTCONTRACT_EXECUTE_QUERY = 0xa1;
@@ -640,6 +642,12 @@ function sysvarBuiltinSpec(name) {
                 valueType: 'NoritoBytes',
                 syscall: SYSCALL_SYSVAR_CHAIN_ID,
                 message: 'chain_id expects no arguments',
+            };
+        case 'sysvar_authority':
+            return {
+                valueType: 'AccountId',
+                syscall: SYSCALL_SYSVAR_AUTHORITY,
+                message: 'sysvar_authority expects no arguments',
             };
         case 'contract_address':
             return {
@@ -10462,7 +10470,7 @@ class StudioCodeGenerator {
                         this.addGlobalWildcardAccess(summary);
                     }
                 }
-                if (expression.name === 'execute_query') {
+                if (expression.name === 'execute_query' || expression.name === 'query_execute_norito') {
                     const payload = expression.args[0] ? this.resolveStaticNoritoLiteralAccess(expression.args[0], scope, 'query') : null;
                     if (payload) {
                         this.applyLiteralAccess(summary, payload);
@@ -13035,6 +13043,7 @@ class StudioCodeGenerator {
                     case 'state_count':
                         return 'int';
                     case 'execute_query':
+                    case 'query_execute_norito':
                         return 'Blob';
                     case 'pointer_to_norito':
                         return 'NoritoBytes';
@@ -13482,6 +13491,9 @@ class StudioCodeGenerator {
                         return;
                     case 'execute_query':
                         this.validateSemanticBlobLikeCall(expression, 1, 'execute_query expects (Blob|bytes) where the argument is a pointer to NoritoBytes TLV in INPUT', scopeTypes, stateHandles);
+                        return;
+                    case 'query_execute_norito':
+                        this.validateSemanticBlobLikeCall(expression, 1, 'query_execute_norito expects (Blob|bytes) pointer to NoritoBytes QueryRequest', scopeTypes, stateHandles);
                         return;
                     case 'set_execution_depth':
                         this.validateSemanticIntBuiltinCall(expression, 1, 'set_execution_depth expects one int arg', scopeTypes, stateHandles);
@@ -22276,7 +22288,7 @@ class StudioCodeGenerator {
             if (sysvarSpec.valueType === 'int') {
                 return { kind: 'int', register, items: null, fieldNames: null, valueType: 'int' };
             }
-            return { kind: 'pointer', register, items: null, fieldNames: null, valueType: 'NoritoBytes' };
+            return { kind: 'pointer', register, items: null, fieldNames: null, valueType: sysvarSpec.valueType };
         }
         if (isMapNewCallName(expression.name)) {
             throw new StudioCompileError('Map::new is only supported when initializing a typed local map binding in the browser compiler.', expression.line, expression.column);
@@ -22632,6 +22644,20 @@ class StudioCodeGenerator {
                 const register = this.assembler.allocRegister();
                 this.assembler.emitMove(register, 10);
                 return { kind: 'pointer', register, items: null, fieldNames: null, valueType: 'Blob' };
+            }
+            case 'query_execute_norito': {
+                if (expression.args.length !== 1) {
+                    throw new StudioCompileError('query_execute_norito expects exactly one NoritoBytes argument in the browser compiler.', expression.line, expression.column);
+                }
+                if (!this.tryEmitNoritoBytesPointerIntoRegister(expression.args[0], locals, 10)) {
+                    const payloadReg = this.compileExpressionAsNoritoBytesPointer(expression.args[0], callStack, locals);
+                    this.assembler.emitMove(10, payloadReg);
+                }
+                this.assembler.emitSyscall(SYSCALL_INPUT_PUBLISH_TLV);
+                this.assembler.emitSyscall(SYSCALL_QUERY_EXECUTE_NORITO);
+                const register = this.assembler.allocRegister();
+                this.assembler.emitMove(register, 10);
+                return { kind: 'pointer', register, items: null, fieldNames: null, valueType: 'NoritoBytes' };
             }
             case 'call_contract': {
                 if (expression.args.length !== 3) {
@@ -28154,7 +28180,7 @@ class StudioCodeGenerator {
                 return 'bool';
             if (expression.name === 'state_len' || expression.name === 'state_count')
                 return 'int';
-            if (expression.name === 'execute_query')
+            if (expression.name === 'execute_query' || expression.name === 'query_execute_norito')
                 return 'Blob';
             if (expression.name === 'build_submit_ballot_inline' || expression.name === 'build_unshield_inline')
                 return 'NoritoBytes';
