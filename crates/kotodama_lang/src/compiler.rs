@@ -2790,6 +2790,8 @@ fn main() {
 kotoage fn batch() permission(Admin) {
   transfer_v1_batch_begin();
   transfer_v1_batch_end();
+  call transfer_v1_batch_begin();
+  call transfer_v1_batch_end();
 }
 "#;
         let compiler = test_mode_compiler();
@@ -2814,9 +2816,13 @@ kotoage fn batch() permission(Admin) {
                 u8::try_from(syscall).expect("FASTPQ batch boundary syscall id fits in u8"),
             )
             .to_le_bytes();
+            let count = code
+                .windows(needle.len())
+                .filter(|window| *window == needle)
+                .count();
             assert!(
-                code.windows(needle.len()).any(|window| window == needle),
-                "expected {label} syscall in compiled code"
+                count == 2,
+                "expected direct and call-sugar {label} syscalls in compiled code, got {count}"
             );
         }
 
@@ -2858,6 +2864,22 @@ fn main() {
                 r#"
 fn main() {
   transfer_v1_batch_end(1);
+}
+"#,
+                "transfer_v1_batch_end expects ()",
+            ),
+            (
+                r#"
+fn main() {
+  call transfer_v1_batch_begin(1);
+}
+"#,
+                "transfer_v1_batch_begin expects ()",
+            ),
+            (
+                r#"
+fn main() {
+  call transfer_v1_batch_end(1);
 }
 "#,
                 "transfer_v1_batch_end expects ()",
