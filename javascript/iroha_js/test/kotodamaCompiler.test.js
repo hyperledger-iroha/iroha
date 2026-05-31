@@ -871,6 +871,40 @@ register_trigger wake {
   assert.equal(triggerCallback.manifest?.entrypoints[0]?.name, "run");
 });
 
+test("Kotodama compiler SDK distinguishes fn hajimari from lifecycle hajimari", () => {
+  const ordinaryFunctionName = compileKotodamaProgram(`
+seiyaku OrdinaryHajimariName {
+  fn hajimari() {
+    let value = 1;
+  }
+
+  kotoage fn run() permission(Admin) {}
+}
+`);
+  const lifecycleEntrypoint = compileKotodamaProgram(`
+seiyaku LifecycleHajimari {
+  hajimari() {
+    let value = 1;
+  }
+}
+`);
+
+  assert.deepEqual(ordinaryFunctionName.diagnostics, []);
+  assert.deepEqual(
+    ordinaryFunctionName.manifest?.entrypoints.map((entrypoint) => [
+      entrypoint.name,
+      entrypoint.kind,
+    ]),
+    [["run", { kind: "Public", value: null }]],
+  );
+  assert.deepEqual(lifecycleEntrypoint.diagnostics, []);
+  assert.deepEqual(lifecycleEntrypoint.manifest?.entrypoints[0]?.name, "hajimari");
+  assert.deepEqual(lifecycleEntrypoint.manifest?.entrypoints[0]?.kind, {
+    kind: "Hajimari",
+    value: null,
+  });
+});
+
 test("Kotodama compiler SDK accepts kaizen upgrade hooks", () => {
   const compiled = compileKotodamaProgram(`
 seiyaku UpgradeHook {
@@ -1067,7 +1101,8 @@ seiyaku ViewGetOrDefault {
 });
 
 test("Kotodama compiler SDK rejects direct durable state mutation in view entrypoints", () => {
-  const compiled = compileKotodamaProgram(`
+  const cases = [
+    `
 seiyaku ViewStateMutation {
   state int Balance;
 
@@ -1076,14 +1111,29 @@ seiyaku ViewStateMutation {
     return Balance;
   }
 }
-`);
+`,
+    `
+seiyaku ViewStateMapMutation {
+  state Balances: Map<int, int>;
 
-  assert.equal(compiled.artifactBytes.length, 0);
-  assert.equal(compiled.diagnostics.length, 1);
-  assert.match(
-    compiled.diagnostics[0].message,
-    /view function `amount` cannot perform durable state mutation/,
-  );
+  view fn amount() -> int {
+    Balances[7] = 9;
+    return 1;
+  }
+}
+`,
+  ];
+
+  for (const source of cases) {
+    const compiled = compileKotodamaProgram(source);
+
+    assert.equal(compiled.artifactBytes.length, 0);
+    assert.equal(compiled.diagnostics.length, 1);
+    assert.match(
+      compiled.diagnostics[0].message,
+      /view function `amount` cannot perform durable state mutation/,
+    );
+  }
 });
 
 test("Kotodama compiler SDK rejects direct host side effects in view entrypoints", () => {
@@ -1690,6 +1740,30 @@ seiyaku ViewInstructionEffect {
   assert.match(
     compiled.diagnostics[0].message,
     /view function `inspect` cannot call `helper` because `helper` performs instruction emission/,
+  );
+});
+
+test("Kotodama compiler SDK rejects transitive durable state mutation in view entrypoints", () => {
+  const compiled = compileKotodamaProgram(`
+seiyaku ViewTransitiveStateMutation {
+  state int Balance;
+
+  fn helper() {
+    Balance = Balance + 1;
+  }
+
+  view fn amount() -> int {
+    helper();
+    return Balance;
+  }
+}
+`);
+
+  assert.equal(compiled.artifactBytes.length, 0);
+  assert.equal(compiled.diagnostics.length, 1);
+  assert.match(
+    compiled.diagnostics[0].message,
+    /view function `amount` cannot call `helper` because `helper` performs durable state mutation/,
   );
 });
 
@@ -2399,6 +2473,30 @@ seiyaku StateParamPassThrough {
   assert.ok(compiled.artifactBytes.length > 0);
 });
 
+test("Kotodama compiler SDK accepts mixed Rust state parameter annotations", () => {
+  const compiled = compileKotodamaProgram(`
+seiyaku StateParamAnnotations {
+  state Balances: Map<Name, int>;
+  state Owners: Map<int, AccountId>;
+
+  fn read(state Map<Name, int> balances, key: Name, owners: state Map<int, AccountId>) -> int {
+    return balances.get_or(key, 0);
+  }
+
+  kotoage fn run(key: Name) -> int permission(Admin) {
+    return read(Balances, key, Owners);
+  }
+}
+`);
+
+  assert.deepEqual(compiled.diagnostics, []);
+  assert.deepEqual(compiled.budgetReport.map((entry) => entry.function_name), [
+    "run",
+    "read",
+    "__entrypoint_impl__run",
+  ]);
+});
+
 test("Kotodama compiler SDK rejects first-class state map values", () => {
   const cases = [
     {
@@ -3051,6 +3149,70 @@ seiyaku TupleKey {
   assert.match(tupleKey.diagnostics[0].message, /state Map key type `\(int, int\)` is not supported/);
 });
 
+test("Kotodama compiler SDK rejects unsupported durable scalar and struct field types", () => {
+  const scalarState = compileKotodamaProgram(`
+seiyaku StateString {
+  state string label;
+
+  kotoage fn run() permission(Admin) {}
+}
+`);
+  const structFieldState = compileKotodamaProgram(`
+seiyaku StateStructString {
+  struct Label { value: string }
+
+  state Label label;
+
+  kotoage fn run() permission(Admin) {}
+}
+`);
+
+  for (const compiled of [scalarState, structFieldState]) {
+    assert.equal(compiled.artifactBytes.length, 0);
+    assert.equal(compiled.diagnostics.length, 1);
+    assert.equal(
+      compiled.diagnostics[0].message,
+      "semantic error: state type `string` is not supported for durable storage; use int, bool, Json, Blob, or pointer types",
+    );
+  }
+});
+
+test("Kotodama compiler SDK accepts struct-valued durable state maps", () => {
+  const compiled = compileKotodamaProgram(`
+seiyaku StructDurableMapValues {
+  struct Request {
+    status: int,
+    alias_blob: Blob,
+    requested_by_actor_id: Blob,
+    requested_by_actor: Json
+  }
+
+  state Requests: Map<Name, Request>;
+
+  kotoage fn create_request(proposal_id: Name,
+                            alias_literal: Blob,
+                            requested_by_actor_id: Blob,
+                            requested_by_actor: Json) permission(Admin) {
+    Requests[proposal_id] = Request(
+      1,
+      alias_literal,
+      requested_by_actor_id,
+      requested_by_actor
+    );
+  }
+}
+`);
+
+  assert.deepEqual(compiled.diagnostics, []);
+  assert.ok(compiled.artifactBytes.length > 64);
+  assert.deepEqual(compiled.manifest?.states, [
+    {
+      name: "Requests",
+      type_name: "map<Name, Request{status: int, alias_blob: Blob, requested_by_actor_id: Blob, requested_by_actor: Json}>",
+    },
+  ]);
+});
+
 test("Kotodama compiler SDK rejects invalid assert argument shapes", () => {
   const nonBoolCondition = compileKotodamaProgram(`
 seiyaku AssertCondition {
@@ -3271,6 +3433,42 @@ seiyaku InvalidCallStatementTransfer {
   assert.equal(invalidTransfer.artifactBytes.length, 0);
   assert.equal(invalidTransfer.diagnostics.length, 1);
   assert.match(invalidTransfer.diagnostics[0].message, /transfer_asset expects \(AccountId, AccountId, AssetDefinitionId, numeric\)/);
+});
+
+test("Kotodama compiler SDK accepts Rust string and Blob bytes equality", () => {
+  const stringEquality = compileKotodamaProgram(`
+seiyaku StringEquality {
+  kotoage fn run() permission(Admin) {
+    let same = "hi" == "hi";
+    assert(same);
+  }
+}
+`);
+  const bytesBlobEquality = compileKotodamaProgram(`
+seiyaku BytesBlobEquality {
+  kotoage fn run() permission(Admin) {
+    let b: bytes = blob("hi");
+    let c: Blob = blob("hi");
+    let same = b == c;
+    assert(same);
+  }
+}
+`);
+  const blobBytesEquality = compileKotodamaProgram(`
+seiyaku BlobBytesEquality {
+  kotoage fn run() permission(Admin) {
+    let c: Blob = blob("hi");
+    let b: bytes = blob("hi");
+    let same = c == b;
+    assert(same);
+  }
+}
+`);
+
+  for (const compiled of [stringEquality, bytesBlobEquality, blobBytesEquality]) {
+    assert.deepEqual(compiled.diagnostics, []);
+    assert.ok(compiled.artifactBytes.length > 64);
+  }
 });
 
 test("Kotodama compiler SDK rejects tuple equality semantically", () => {
@@ -4528,7 +4726,7 @@ seiyaku MapKeyMismatch {
 });
 
 test("Kotodama compiler SDK mirrors Rust invalid field assignment target diagnostics", () => {
-  const compiled = compileKotodamaProgram(`
+  const fieldAssignment = compileKotodamaProgram(`
 seiyaku FieldAssignment {
   kotoage fn run() permission(Admin) {
     let pair = (1, 2);
@@ -4536,10 +4734,21 @@ seiyaku FieldAssignment {
   }
 }
 `);
+  const nonMapAssignment = compileKotodamaProgram(`
+seiyaku NonMapAssignment {
+  kotoage fn run() permission(Admin) {
+    let value = 1;
+    value[0] = 2;
+  }
+}
+`);
 
-  assert.equal(compiled.artifactBytes.length, 0);
-  assert.equal(compiled.diagnostics.length, 1);
-  assert.match(compiled.diagnostics[0].message, /assignment target must be a variable or map index/);
+  assert.equal(fieldAssignment.artifactBytes.length, 0);
+  assert.equal(fieldAssignment.diagnostics.length, 1);
+  assert.match(fieldAssignment.diagnostics[0].message, /assignment target must be a variable or map index/);
+  assert.equal(nonMapAssignment.artifactBytes.length, 0);
+  assert.equal(nonMapAssignment.diagnostics.length, 1);
+  assert.match(nonMapAssignment.diagnostics[0].message, /map assignment expects Map<K,V> target, got int/);
 });
 
 test("Kotodama compiler SDK rejects invalid builtin call arguments semantically", () => {
@@ -5235,6 +5444,31 @@ seiyaku DynamicBuiltinValueTypes {
 
   assert.deepEqual(compiled.diagnostics, []);
   assert.ok(compiled.artifactBytes.length > 0);
+});
+
+test("Kotodama compiler SDK matches Rust account alias payload semantics", () => {
+  const blobAlias = compileKotodamaProgram(`
+fn resolve_from_blob() {
+  let alias = blob("banking@centralbank");
+  let account = resolve_account_alias(alias);
+  let encoded = pointer_to_norito(account);
+  info(tlv_len(encoded));
+}
+`);
+  const triggerEventEquality = compileKotodamaProgram(`
+fn compare_trigger_account() {
+  let ev = trigger_event();
+  let account = ev.get_account_id(name("account_id"));
+  let resolved = resolve_account_alias("banking@centralbank");
+  let same = account == resolved;
+  assert(same, "account match");
+}
+`);
+
+  for (const compiled of [blobAlias, triggerEventEquality]) {
+    assert.deepEqual(compiled.diagnostics, []);
+    assert.ok(compiled.artifactBytes.length > 0);
+  }
 });
 
 test("Kotodama compiler SDK rejects void static builtins used as values through the shared registry", () => {
@@ -10683,6 +10917,41 @@ seiyaku InvalidTestAttribute {
   assert.match(invalidOption.diagnostics[0].message, /unknown test attribute option `seed`/);
 });
 
+test("Kotodama compiler SDK ignores stripped tests when injecting first-release prelude helpers", () => {
+  const testOnlyCall = compileKotodamaProgram(`
+seiyaku TestOnlyPreludeCall {
+  kotoage fn run() permission(Admin) {
+    info("run");
+  }
+
+  #[test]
+  fn smoke() {
+    let expected: AccountId = authority();
+    require_authority(expected);
+  }
+}
+`);
+  const testShadow = compileKotodamaProgram(`
+seiyaku TestShadowPreludeHelper {
+  kotoage fn run(owner: AccountId) permission(Admin) {
+    require_owner(owner);
+  }
+
+  #[test]
+  fn require_authority() {}
+}
+`);
+
+  assert.deepEqual(testOnlyCall.diagnostics, []);
+  assert.equal(testOnlyCall.manifest?.entrypoints.length, 1);
+  assert.equal(testOnlyCall.manifest?.entrypoints[0]?.name, "run");
+  assert.equal(testOnlyCall.sourceMap.some((entry) => entry.function_name === "require_authority"), false);
+  assert.deepEqual(testShadow.diagnostics, []);
+  assert.ok(testShadow.artifactBytes.length > 0);
+  assert.ok(testShadow.sourceMap.some((entry) => entry.function_name === "require_authority"));
+  assert.ok(testShadow.sourceMap.some((entry) => entry.function_name === "require_owner"));
+});
+
 test("Kotodama compiler SDK rejects malformed Rust test function declarations before mode filtering", () => {
   const cases = [
     {
@@ -13389,6 +13658,16 @@ seiyaku TriggerScopedAsset {
 });
 
 test("Kotodama compiler SDK mirrors upstream pipeline trigger filters", () => {
+  const blockShorthand = compileKotodamaProgram(`
+seiyaku TriggerBlockShorthand {
+  kotoage fn run() {}
+
+  register_trigger wake {
+    call run;
+    on pipeline block;
+  }
+}
+`);
   const block = compileKotodamaProgram(`
 seiyaku TriggerBlock {
   kotoage fn run() {}
@@ -13396,6 +13675,16 @@ seiyaku TriggerBlock {
   register_trigger wake {
     call run;
     on pipeline block approved;
+  }
+}
+`);
+  const transactionShorthand = compileKotodamaProgram(`
+seiyaku TriggerTransactionShorthand {
+  kotoage fn run() {}
+
+  register_trigger wake {
+    call run;
+    on pipeline transaction;
   }
 }
 `);
@@ -13423,8 +13712,12 @@ seiyaku TriggerMerge {
   const blockCntr = noritoPayloadBody(readArtifactSection(block.artifactBytes, 17).payload);
   const transactionCntr = noritoPayloadBody(readArtifactSection(transaction.artifactBytes, 17).payload);
 
+  assert.deepEqual(blockShorthand.diagnostics, []);
   assert.deepEqual(block.diagnostics, []);
+  assert.deepEqual(transactionShorthand.diagnostics, []);
   assert.deepEqual(transaction.diagnostics, []);
+  assert.equal(blockShorthand.manifest?.entrypoints[0]?.triggers.length, 1);
+  assert.equal(transactionShorthand.manifest?.entrypoints[0]?.triggers.length, 1);
   assert.notEqual(blockCntr.indexOf(Buffer.from([
     0x01, 0x00, 0x00, 0x00,
     0x09,
@@ -15426,6 +15719,28 @@ seiyaku MetaAliases {
   assert.equal(headerCycles, 200000n);
   assert.equal(compiled.manifest?.features_bitmap, 2);
   assert.equal(compiled.artifactBytes[6], 2);
+  assert.equal(compiled.artifactBytes[7], 8);
+});
+
+test("Kotodama compiler SDK accepts string contract meta feature lists", () => {
+  const compiled = compileKotodamaProgram(`
+seiyaku MetaStringFeatures {
+  meta {
+    features: ["zk", "simd"],
+    vl: 8,
+  }
+
+  kotoage fn main() permission(Admin) {
+    setvl(8);
+    let h = poseidon2(1, 2);
+    info(h);
+  }
+}
+`);
+
+  assert.deepEqual(compiled.diagnostics, []);
+  assert.equal(compiled.manifest?.features_bitmap, 3);
+  assert.equal(compiled.artifactBytes[6], 3);
   assert.equal(compiled.artifactBytes[7], 8);
 });
 

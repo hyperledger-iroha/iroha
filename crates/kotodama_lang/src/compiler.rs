@@ -8158,6 +8158,60 @@ mod test_mode_tests {
     }
 
     #[test]
+    fn production_prelude_scan_ignores_stripped_tests() {
+        let test_only_call_src = r#"
+        seiyaku Demo {
+            kotoage fn run() permission(Admin) {
+                info("run");
+            }
+
+            #[test]
+            fn smoke() {
+                let expected: AccountId = authority();
+                require_authority(expected);
+            }
+        }
+        "#;
+        let shadowed_helper_src = r#"
+        seiyaku Demo {
+            kotoage fn run(owner: AccountId) permission(Admin) {
+                require_owner(owner);
+            }
+
+            #[test]
+            fn require_authority() {}
+        }
+        "#;
+
+        let production = Compiler::new_with_options(CompilerOptions::default());
+        let (_code, _manifest, report) = production
+            .compile_source_with_manifest_and_report(test_only_call_src)
+            .expect("compile production with test-only prelude call");
+        assert!(
+            report
+                .source_map
+                .iter()
+                .all(|entry| entry.function_name != "require_authority")
+        );
+
+        let (_code, _manifest, report) = production
+            .compile_source_with_manifest_and_report(shadowed_helper_src)
+            .expect("compile production with test shadowing prelude helper");
+        assert!(
+            report
+                .source_map
+                .iter()
+                .any(|entry| entry.function_name == "require_authority")
+        );
+        assert!(
+            report
+                .source_map
+                .iter()
+                .any(|entry| entry.function_name == "require_owner")
+        );
+    }
+
+    #[test]
     fn test_mode_helpers_emit_private_scallx_syscalls() {
         let src = r#"
         seiyaku Demo {
@@ -8307,11 +8361,11 @@ impl Compiler {
     }
 
     fn compile_program(&self, program: &Program) -> Result<CompilationArtifacts, String> {
-        let prelude_program = program_with_first_release_prelude(program)?;
-        let compiled_program = match self.opts.mode {
-            CompilerMode::Production => prelude_program.stripped_for_production(),
-            CompilerMode::Test => prelude_program,
+        let mode_program = match self.opts.mode {
+            CompilerMode::Production => program.stripped_for_production(),
+            CompilerMode::Test => program.clone(),
         };
+        let compiled_program = program_with_first_release_prelude(&mode_program)?;
         let typed = semantic::analyze(&compiled_program)
             .map_err(|e| i18n::translate(self.lang, Message::SemanticError(&e.message)))?;
         if self.opts.enforce_on_chain_profile

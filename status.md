@@ -2,6 +2,22 @@
 
 Last updated: 2026-05-31
 
+## 2026-05-31 Kotodama production prelude helper scan
+
+- Fixed Rust and JavaScript Kotodama production compilation so first-release
+  prelude helper injection scans the production-visible program after
+  `#[test]` functions are stripped. Test-only calls no longer add helpers to
+  production artifacts, and stripped test definitions no longer shadow helpers
+  needed by real code.
+- Added matching Rust and JavaScript regressions for test-only
+  `require_authority` calls and stripped `require_authority` test definitions
+  alongside production `require_owner` usage.
+- Validation:
+  - `cargo test -p kotodama_lang production_prelude_scan_ignores_stripped_tests -- --nocapture`
+  - `node --test test/kotodamaCompiler.test.js --test-name-pattern "ignores stripped tests when injecting first-release prelude helpers"`
+  - `npm run build:dist`
+  - `git diff --check`
+
 ## 2026-05-31 SCCP release-bundle artifact digest canonicalization
 
 - Hardened `scripts/sccp_verify_release_bundle.py` so manifest artifacts and
