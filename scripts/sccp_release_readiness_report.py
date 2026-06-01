@@ -589,6 +589,18 @@ def _phase_transcript_block(phase: str, transcript: str) -> str | None:
     return transcript[start:next_start]
 
 
+def _phase_command_lines(phase_block: str) -> list[str]:
+    return [
+        line.strip()
+        for line in phase_block.splitlines()
+        if line.lstrip().startswith("+ ")
+    ]
+
+
+def _phase_block_has_command_fragment(phase_block: str, fragment: str) -> bool:
+    return any(fragment in command for command in _phase_command_lines(phase_block))
+
+
 def _phase_transcript_errors(phase: str, artifact: dict[str, Any]) -> list[str]:
     path = Path(str(artifact["path"]))
     try:
@@ -608,7 +620,7 @@ def _phase_transcript_errors(phase: str, artifact: dict[str, Any]) -> list[str]:
         errors.append("evidence artifact has no expected command fragment configured")
     elif phase_block is not None:
         for fragment in required_fragments:
-            if fragment not in phase_block:
+            if not _phase_block_has_command_fragment(phase_block, fragment):
                 errors.append(
                     "evidence artifact is missing expected phase-block command: "
                     f"{fragment}"

@@ -57,6 +57,8 @@ VARIABLES
 \* @type: <<Set(Str)>>;
 vars == <<tried>>
 
+TlcSingletonOrEmpty == Cardinality(tried) \in {0, 1}
+
 Candidates == {
   "nonNativePlan",
   "emptyRoster",

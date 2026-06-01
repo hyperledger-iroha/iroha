@@ -2,6 +2,670 @@
 
 Last updated: 2026-06-01
 
+## 2026-06-01 SCCP Python UI witness snapshot hardening
+
+- Hardened the Python SCCP SDK witness-provider snapshot path so app-owned
+  mutable sequence inputs accepted by byte normalizers are cloned before a
+  UI/mobile witness provider can inspect or mutate them.
+- Added a regression that passes mutable `deque` byte inputs through an
+  EVM-family witness provider and verifies provider-side mutations cannot
+  affect the original app-owned request before the SDK builds the canonical
+  prover request.
+- Validation:
+  - `python3 -m py_compile python/iroha_torii_client/sccp.py python/iroha_torii_client/tests/sccp_test.py`
+  - `python3 -m pytest -q python/iroha_torii_client/tests/sccp_test.py -k 'witness_provider_snapshots_mutable_sequence_inputs or provers_accept_callable_and_camel_case_witness_providers or provers_resolve_ui_witnesses_before_linked_provers'`
+    (`3 passed, 76 deselected`)
+  - `bash scripts/check_sccp_production_corridor.sh --phase python-sdk`
+    (`79 passed`)
+
+## 2026-06-01 SCCP manifest-root and directory guards
+
+- Tightened `scripts/sccp_verify_release_bundle.py` so `manifest.json` remains
+  the verifier root and cannot be listed inside its own artifact table. The
+  verifier now treats `manifest.json` as a reserved root path while still
+  requiring the extracted bundle to contain it as an ordinary file.
+- Tightened bundle entry enumeration so strict verification compares both files
+  and directories. Expected directories are derived from the manifest artifact
+  paths, so an empty operator-side directory can no longer be added to the
+  published bundle without being reported.
+- Added a release-bundle regression that appends a self-listed
+  `manifest.json` artifact row and verifies the public verifier rejects the
+  bundle, plus a regression for an unmanifested empty directory.
+- Updated the bridge-proof documentation and roadmap to describe the stricter
+  manifest-root handoff and directory guard.
+- Validation:
+  - `python3 -m py_compile scripts/sccp_verify_release_bundle.py pytests/scripts/sccp_release_bundle_test.py`
+  - `python3 -m pytest -q pytests/scripts/sccp_release_bundle_test.py -k "manifest_root_self_listing or manifest_path_escape or symlinked_manifest or writes_hash_bound_public_artifacts"`
+    (`4 passed, 128 deselected`)
+  - `python3 -m pytest -q pytests/scripts/sccp_release_readiness_report_test.py pytests/scripts/sccp_release_bundle_test.py`
+    (`151 passed`)
+  - `bash scripts/check_sccp_production_corridor.sh --phase evidence-scripts`
+    (`785 passed`)
+
+## 2026-06-01 Sumeragi singleton TLC candidate sweep
+
+- Added `TlcSingletonOrEmpty` predicates to fifteen pure
+  candidate-enumeration Sumeragi models and taught the TLC runner to append
+  that constraint only to its temporary run configs. Apalache continues to run
+  the existing full fast and expected-failure configs without the singleton
+  constraint.
+- Wired TLC runner aliases for certified fetch, pure-engine certificate
+  dispatch, pure-engine certificate prefilter state, frontier-gap realignment,
+  Kura commit retry, missing-block fetch, missing-block hard-cap cleanup,
+  missing-block hard-cap, missing-block view-change, native AMX attestation,
+  native AMX receipt validation, native AMX routing-plan, NPoS VRF epoch seal,
+  post-commit cleanup, and restart replay.
+- Updated the formal README command list, CI inventory, and roadmap to mark
+  those case-enumeration slices as TLC-cross-checked. The documented TLC
+  fast-mode gap is now 1 missing mode out of 499 documented fast rows, with
+  498 fast modes wired into the TLC runner.
+- The only remaining documented unwired fast mode is `frontier-fast`.
+  Unconstrained raw TLC probes at 75 seconds still timed out for
+  `frontier-fast` and the other candidate-enumeration families except
+  `native-amx-attestation-fast`; the singleton runner branches now cover those
+  candidate-enumeration families, while frontier recovery still needs a
+  dedicated liveness/state-space reduction beyond the existing
+  `frontier-small` TLC check.
+- Validation:
+  - `bash -n scripts/formal/sumeragi_tlc.sh`
+  - `python3 scripts/formal/check_sumeragi_formal_coverage.py`
+  - documented TLC gap script (`1` missing, `498` TLC-wired fast modes)
+  - `JAVA_HOME=/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home PATH="/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home/bin:$PATH" APALACHE_ALLOW_DOCKER=0 target/apalache/toolchains/v0.52.2/bin/apalache-mc typecheck ...`
+    for all fifteen singleton-enabled modules
+  - `JAVA_HOME=/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home PATH="/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home/bin:$PATH" APALACHE_ALLOW_DOCKER=0 bash scripts/formal/sumeragi_apalache.sh <mode>-fast`
+    for all fifteen newly TLC-wired modes
+  - `JAVA_HOME=/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home PATH="/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home/bin:$PATH" bash scripts/formal/sumeragi_tlc.sh <mode>-fast`
+    for all fifteen newly TLC-wired modes
+  - sequential TLC mutation sweep for the fifteen families (`396` expected
+    invariant failures)
+
+## 2026-06-01 SCCP phase transcript block hardening
+
+- Tightened `scripts/sccp_verify_release_bundle.py` so copied corridor phase
+  logs must use an exact claimed phase-marker line, keep the completion
+  sentinel inside that same phase block, and show phase-specific success
+  markers on non-command output lines rather than only on traced `+ ...`
+  command lines.
+- Added release-bundle regressions for prefix-alias phase markers, completion
+  sentinels copied from another phase block, and command-line-only success
+  markers.
+- Updated the bridge-proof documentation and roadmap to describe the stricter
+  public phase transcript evidence boundary.
+- Validation:
+  - `python3 -m py_compile scripts/sccp_verify_release_bundle.py pytests/scripts/sccp_release_bundle_test.py`
+  - `python3 -m pytest -q pytests/scripts/sccp_release_bundle_test.py -k "phase_log or phase_transcript or prefix_alias or completion_outside or command_line_only_success_marker"`
+    (`9 passed, 122 deselected`)
+  - `python3 -m pytest -q pytests/scripts/sccp_release_bundle_test.py`
+    (`131 passed`)
+  - `bash scripts/check_sccp_production_corridor.sh --phase evidence-scripts`
+    (`784 passed`)
+
+## 2026-06-01 SCCP bundle builder manifest-root handoff
+
+- Updated `scripts/sccp_release_bundle.py` so production-ready bundle
+  generation preserves the strict verifier summary and prints the verified
+  `manifest_sha256` root after self-verification succeeds.
+- Extended the release-bundle success regression to compare the printed root
+  against the actual `manifest.json` SHA-256 digest.
+- Updated bridge-proof documentation and roadmap text so operators can archive
+  the manifest root directly from a successful production bundle generation
+  before rerunning verifier checks after upload.
+- Validation:
+  - `python3 -m py_compile scripts/sccp_release_bundle.py scripts/sccp_verify_release_bundle.py pytests/scripts/sccp_release_bundle_test.py`
+  - `python3 -m pytest -q pytests/scripts/sccp_release_bundle_test.py -k "writes_hash_bound_public_artifacts or generated_bundle_self_verifier_reports_strict_errors or manifest_sha256"`
+    (`2 passed, 129 deselected`)
+  - `python3 -m pytest -q pytests/scripts/sccp_release_readiness_report_test.py pytests/scripts/sccp_release_bundle_test.py`
+    (`150 passed`)
+  - `bash scripts/check_sccp_production_corridor.sh --phase evidence-scripts`
+    (`784 passed`)
+
+## 2026-06-01 SCCP release-bundle root guard
+
+- Tightened `scripts/sccp_verify_release_bundle.py` so public release-bundle
+  verification rejects a symlinked bundle root or a non-directory verifier
+  input before reading `manifest.json`. This closes the remaining mutable-alias
+  path around the already guarded manifest and artifact files.
+- Added release-bundle regressions for symlinked bundle roots and file inputs,
+  alongside the existing symlinked manifest/artifact coverage.
+- Updated the bridge-proof documentation and roadmap to describe the bundle-root
+  guard.
+- Validation:
+  - `python3 -m py_compile scripts/sccp_verify_release_bundle.py pytests/scripts/sccp_release_bundle_test.py`
+  - `python3 -m pytest -q pytests/scripts/sccp_release_bundle_test.py -k "symlinked_bundle_root or non_directory_bundle_root or symlinked_manifest or symlinked_artifact"`
+    (`4 passed, 124 deselected`)
+  - `python3 -m pytest -q pytests/scripts/sccp_release_readiness_report_test.py pytests/scripts/sccp_release_bundle_test.py`
+    (`147 passed`)
+  - `bash scripts/check_sccp_production_corridor.sh --phase evidence-scripts`
+    (`781 passed`)
+
+## 2026-06-01 SCCP release verifier generator hooks removed
+
+- Removed the dead `_report_module()` and `_bundle_module()` hooks from
+  `scripts/sccp_verify_release_bundle.py` after moving canonical Markdown,
+  release-note attachment rendering, copied-evidence summary recomputation,
+  corridor inventories, phase transcripts, cryptographic rows, and user-prover
+  surfaces into verifier-owned code paths.
+- Updated independence regressions so they assert those report/bundle generator
+  backdoors are absent while still proving weak release-note attachments,
+  reduced corridor inventories, shortened Markdown rendering, weakened SDK
+  inventories, weakened submission-surface construction, weakened phase
+  transcript expectations, and copied-evidence recomputation cannot influence
+  public bundle verification.
+- Updated the bridge-proof documentation and roadmap to describe the removed
+  generator hooks for verifier-owned release artifacts.
+- Validation:
+  - `python3 -m py_compile scripts/sccp_verify_release_bundle.py pytests/scripts/sccp_release_bundle_test.py`
+  - `python3 -m pytest -q pytests/scripts/sccp_release_bundle_test.py -k "renderer_is_independent or recompute_is_independent or inventory_is_independent or expected_submission_surfaces_are_independent"`
+    (`8 passed, 118 deselected`)
+  - `python3 -m pytest -q pytests/scripts/sccp_release_readiness_report_test.py pytests/scripts/sccp_release_bundle_test.py`
+    (`145 passed`)
+  - `bash scripts/check_sccp_production_corridor.sh --phase evidence-scripts`
+    (`779 passed`)
+
+## 2026-06-01 SCCP copied evidence direct verifier recompute
+
+- Tightened `scripts/sccp_verify_release_bundle.py` so public release-bundle
+  verification recomputes the all-lanes summary by loading
+  `scripts/sccp_all_lanes_evidence.py` directly against the copied TOML
+  evidence inputs instead of delegating that recomputation to
+  `scripts/sccp_release_bundle.py`.
+- Added a release-bundle regression proving the verifier no longer exposes the
+  bundle-builder module hook during copied-evidence recomputation and still
+  verifies a ready bundle through the direct all-lanes validator path.
+- Updated the bridge-proof documentation and roadmap to describe the
+  verifier-owned direct recomputation path for copied evidence inputs.
+- Validation:
+  - `python3 -m py_compile scripts/sccp_verify_release_bundle.py pytests/scripts/sccp_release_bundle_test.py`
+  - `python3 -m pytest -q pytests/scripts/sccp_release_bundle_test.py -k "copied_evidence_recompute_is_independent or recomputes_summary_from_copied_evidence or requires_copied_evidence_inputs"`
+    (`3 passed, 123 deselected`)
+  - `python3 -m pytest -q pytests/scripts/sccp_release_bundle_test.py`
+    (`126 passed`)
+  - `bash scripts/check_sccp_production_corridor.sh --phase evidence-scripts`
+    (`779 passed`)
+
+## 2026-06-01 SCCP verifier-owned readiness Markdown renderer
+
+- Tightened `scripts/sccp_verify_release_bundle.py` so the canonical
+  `sccp-release-readiness.md` renderer used during public release-bundle
+  verification is verifier-owned instead of delegated to the readiness-report
+  generator.
+- The verifier keeps the canonical corridor phase ordering while rendering the
+  public Markdown from canonical JSON, and then applies the existing structural
+  Markdown invariants for copied evidence hashes, corridor artifacts,
+  cryptographic evidence rows, portal/mobile helper symbols, lane readiness,
+  blockers, and release-evidence handoff text.
+- Added release-bundle regressions proving the verifier-owned renderer matches
+  the generated artifact today while staying independent if the report module's
+  renderer is weakened or unavailable.
+- Updated the bridge-proof documentation and roadmap to describe the
+  verifier-owned readiness Markdown renderer.
+- Validation:
+  - `python3 -m py_compile scripts/sccp_verify_release_bundle.py pytests/scripts/sccp_release_bundle_test.py`
+  - `python3 -m pytest -q pytests/scripts/sccp_release_bundle_test.py -k "readiness_markdown_renderer or markdown_report_drift or markdown_invariants or markdown_crypto_evidence_omission"`
+    (`5 passed, 120 deselected`)
+  - `python3 -m pytest -q pytests/scripts/sccp_release_readiness_report_test.py pytests/scripts/sccp_release_bundle_test.py`
+    (`144 passed`)
+  - `bash scripts/check_sccp_production_corridor.sh --phase evidence-scripts`
+    (`778 passed`)
+
+## 2026-06-01 Sumeragi selector/validation TLC cross-checks
+
+- Wired TLC runner aliases for seventeen additional fast-passing Sumeragi
+  families: certificate admission, highest-QC selection, optional highest-QC
+  selection, proposal assembly, QC-round compatibility, validator-set
+  transition, certified recovery, stake snapshot, validation evidence QC,
+  validation, validation priority, validator election, view-change safety,
+  vote-backed evidence, vote-payload actionability, vote-roster cache, and
+  vote-roster selection.
+- Added explicit `CHECK_DEADLOCK FALSE` coverage to the validator-set
+  transition fast config and its three expected-failure configs so TLC accepts
+  terminal reconfiguration states while still checking the safety invariant.
+- Updated the formal README command list, CI inventory, and roadmap to mark
+  those slices as TLC-cross-checked. The documented TLC fast-mode gap is now
+  16 missing modes out of 499 documented fast rows, with 483 fast modes wired
+  into the TLC runner.
+- The remaining unwired fast modes are `certified-fetch`,
+  `engine-certificate-dispatch`, `engine-certificate-prefilter-state`,
+  `frontier`, `frontier-gap-realign`, `kura-commit`, `missing-block-fetch`,
+  `missing-block-hard-cap-cleanup`, `missing-block-hard-cap`,
+  `missing-block-view-change`, `native-amx-attestation`,
+  `native-amx-receipt`, `native-amx-routing-plan`, `npos-vrf`,
+  `post-commit-cleanup`, and `restart-replay`; each timed out in the raw
+  20-second TLC probe and needs reduction or a dedicated longer run before
+  runner wiring.
+- Validation:
+  - `bash -n scripts/formal/sumeragi_tlc.sh`
+  - `python3 scripts/formal/check_sumeragi_formal_coverage.py`
+  - documented TLC gap script (`16` missing, `483` TLC-wired fast modes)
+  - validator-set transition `CHECK_DEADLOCK FALSE` sweep across the fast and
+    three expected-failure configs
+  - `JAVA_HOME=/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home PATH="/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home/bin:$PATH" APALACHE_ALLOW_DOCKER=0 target/apalache/toolchains/v0.52.2/bin/apalache-mc typecheck ...`
+    for all seventeen newly TLC-wired modules
+  - `JAVA_HOME=/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home PATH="/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home/bin:$PATH" APALACHE_ALLOW_DOCKER=0 bash scripts/formal/sumeragi_apalache.sh <mode>-fast`
+    for all seventeen newly TLC-wired modes
+  - `JAVA_HOME=/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home PATH="/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home/bin:$PATH" bash scripts/formal/sumeragi_tlc.sh <mode>-fast`
+    for all seventeen newly TLC-wired modes
+  - sequential TLC mutation sweep for the seventeen families (`213` expected
+    invariant failures)
+
+## 2026-06-01 SCCP verifier-owned user-prover surface rows
+
+- Tightened `scripts/sccp_verify_release_bundle.py` so public release-bundle
+  verification constructs the exact expected `user_prover_submission_surfaces`
+  rows from verifier-owned lane/backend, helper, phase, and on-chain submission
+  inventories instead of delegating canonical row construction to the
+  readiness-report generator.
+- Promoted the verifier helper inventory from a minimum subset to the full
+  per-lane/per-SDK portal and mobile proof-generation surface, including
+  EVM/BSC and TRON proof hash/submission helpers, Solana and TON per-role
+  full-light-client audit request builders, Java Android prover class symbols,
+  and native on-chain submission helpers.
+- Added release-bundle regressions proving verifier-owned rows remain exactly
+  aligned with the generated report today while staying independent if the
+  report module's row builder is weakened or unavailable.
+- Updated the bridge-proof documentation and roadmap to describe the
+  verifier-owned exact user-prover row construction.
+- Validation:
+  - `python3 -m py_compile scripts/sccp_verify_release_bundle.py pytests/scripts/sccp_release_bundle_test.py`
+  - `python3 -m pytest -q pytests/scripts/sccp_release_bundle_test.py -k "required_helper_inventory or expected_submission_surfaces_are_independent or helper_inventory_is_independent or submission_surface_drift or missing_required_submission_surface_helper"`
+    (`5 passed, 118 deselected`)
+  - `python3 -m pytest -q pytests/scripts/sccp_release_readiness_report_test.py pytests/scripts/sccp_release_bundle_test.py`
+    (`142 passed`)
+  - `bash scripts/check_sccp_production_corridor.sh --phase evidence-scripts`
+    (`776 passed`)
+
+## 2026-06-01 SCCP release-notes attachment verifier guard
+
+- Tightened `scripts/sccp_verify_release_bundle.py` so the public
+  `sccp-release-notes-attachment.md` canonical renderer is verifier-owned
+  instead of delegated to the bundle builder. A weakened builder can no longer
+  define a shorter attachment as canonical during public bundle review.
+- Added a release-bundle regression that writes a weak attachment containing
+  the manifest handoff plus every artifact hash, monkeypatches the bundle
+  builder to accept that weak shape, and proves the verifier still rejects it
+  as non-canonical.
+- Updated the bridge-proof documentation and roadmap to describe the
+  verifier-owned release-notes attachment table.
+- Validation:
+  - `python3 -m py_compile scripts/sccp_verify_release_bundle.py pytests/scripts/sccp_release_bundle_test.py`
+  - `python3 -m pytest -q pytests/scripts/sccp_release_bundle_test.py -k "release_notes_renderer_is_independent or release_notes_drift or manifest_handoff_note"`
+    (`3 passed, 119 deselected`)
+  - `python3 -m pytest -q pytests/scripts/sccp_release_bundle_test.py`
+    (`123 passed`)
+  - `bash scripts/check_sccp_production_corridor.sh --phase evidence-scripts`
+    (`776 passed`)
+
+## 2026-06-01 SCCP readiness Markdown verifier guard
+
+- Tightened `scripts/sccp_verify_release_bundle.py` so the public
+  `sccp-release-readiness.md` attachment is parsed independently of the
+  readiness-report renderer. The verifier now requires the canonical title,
+  status line, public evidence sections, copied evidence hashes, corridor
+  artifact hashes, release-checklist gate statuses, cryptographic evidence
+  rows, portal/mobile helper symbols and required phases, lane readiness rows,
+  blocker summary, and required release-evidence handoff text.
+- Added release-bundle regressions proving the verifier-owned Markdown
+  invariants require public sections and reject a reviewer-facing report that
+  omits a cryptographic evidence hash even after manifest hashes are refreshed.
+- Updated the bridge-proof documentation and roadmap to describe the
+  reviewer-facing Markdown completeness guard.
+- Validation:
+  - `python3 -m py_compile scripts/sccp_verify_release_bundle.py pytests/scripts/sccp_release_bundle_test.py`
+  - `python3 -m pytest -q pytests/scripts/sccp_release_bundle_test.py -k "markdown_invariants or markdown_crypto_evidence_omission or markdown_report_drift"`
+    (`3 passed, 118 deselected`)
+  - `python3 -m pytest -q pytests/scripts/sccp_release_bundle_test.py -k "malformed_report_sections or markdown_invariants or markdown_crypto_evidence_omission"`
+    (`3 passed, 119 deselected`)
+  - `python3 -m pytest -q pytests/scripts/sccp_release_readiness_report_test.py pytests/scripts/sccp_release_bundle_test.py`
+    (`141 passed`)
+  - `bash scripts/check_sccp_production_corridor.sh --phase evidence-scripts`
+    (`775 passed`)
+
+## 2026-06-01 Sumeragi pure-engine transition TLC cross-checks
+
+- Wired TLC runner aliases for thirty-six additional fast-passing pure-engine
+  families covering certificate-prefilter state preservation, NewView-QC,
+  proposal ingress, Prepare-QC, Commit-QC, committed-block notifications,
+  payload availability, validation-result handling, and their state-preservation
+  companion slices.
+- Updated the formal README command list, CI inventory, and roadmap to mark
+  those engine transition slices as TLC-cross-checked. The documented TLC
+  fast-mode gap is now 33 missing modes out of 499 documented fast rows, with
+  466 fast modes wired into the TLC runner.
+- The two heavier pure-engine certificate dispatch/prefilter-state candidates
+  remain in the gap after timing out during the prior 15-second raw TLC probe;
+  they need reduction or a longer dedicated run before runner wiring.
+- Validation:
+  - `bash -n scripts/formal/sumeragi_tlc.sh`
+  - `python3 scripts/formal/check_sumeragi_formal_coverage.py`
+  - documented TLC gap script (`33` missing, `466` TLC-wired fast modes)
+  - `JAVA_HOME=/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home PATH="/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home/bin:$PATH" APALACHE_ALLOW_DOCKER=0 target/apalache/toolchains/v0.52.2/bin/apalache-mc typecheck ...`
+    for all thirty-six newly TLC-wired modules
+  - `JAVA_HOME=/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home PATH="/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home/bin:$PATH" APALACHE_ALLOW_DOCKER=0 bash scripts/formal/sumeragi_apalache.sh <mode>-fast`
+    for all thirty-six newly TLC-wired modes
+  - `JAVA_HOME=/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home PATH="/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home/bin:$PATH" bash scripts/formal/sumeragi_tlc.sh <mode>-fast`
+    for all thirty-six newly TLC-wired modes
+  - sequential TLC mutation sweep for the thirty-six families (`395` expected
+    invariant failures)
+
+## 2026-06-01 SCCP release-bundle verifier-owned phase inventory
+
+- Tightened `scripts/sccp_verify_release_bundle.py` so public release-bundle
+  verification owns the required SCCP production-corridor phase list instead of
+  loading it from the readiness report generator. Missing SDK, Rust verifier,
+  evidence-script, contract-smoke, or core-admission phase statuses now remain
+  verifier errors even if a weakened report module omits them.
+- Added parity and weakened-report regressions proving the verifier phase list
+  matches the runner/report today while staying independent during public
+  bundle review.
+- Updated the bridge-proof documentation and roadmap to describe the
+  verifier-owned phase inventory.
+- Validation:
+  - `python3 -m py_compile scripts/sccp_verify_release_bundle.py pytests/scripts/sccp_release_bundle_test.py`
+  - `python3 -m pytest -q pytests/scripts/sccp_release_bundle_test.py -k "corridor_phase_inventory or recomputes_required_corridor_phases or phase_transcript_inventory"`
+    (`5 passed, 114 deselected`)
+  - `python3 -m pytest -q pytests/scripts/sccp_release_bundle_test.py`
+    (`119 passed`)
+  - `bash scripts/check_sccp_production_corridor.sh --phase evidence-scripts`
+    (`772 passed`)
+
+## 2026-06-01 SCCP cryptographic evidence row domain policy guard
+
+- Tightened `scripts/sccp_verify_release_bundle.py` so public
+  `cryptographic_evidence` rows independently enforce the route-canary source
+  expected for their production SCCP domain.
+- The same row-level guard now enforces source-adapter gate policy by domain:
+  open EVM/BSC rows cannot require source gates, while Solana, TON, TRON, and
+  Substrate-family rows must require them and carry the exact named audit-hash
+  set for the domain.
+- Added a release-bundle regression that mutates only the public crypto rows,
+  proving the verifier rejects incorrect canary sources, impossible gate
+  requirements, missing named audit hashes, and unexpected audit-hash fields
+  before relying on embedded lane binding.
+- Updated the bridge-proof documentation and roadmap to describe the
+  domain-specific public crypto row policy.
+- Validation:
+  - `python3 -m py_compile scripts/sccp_verify_release_bundle.py pytests/scripts/sccp_release_bundle_test.py`
+  - `python3 -m pytest -q pytests/scripts/sccp_release_bundle_test.py -k "crypto_evidence_domain_policy_drift or crypto_evidence_inventory_drift or crypto_evidence_field_binding_drift or crypto_evidence_field_type_drift"`
+    (`4 passed, 113 deselected`)
+  - `python3 -m pytest -q pytests/scripts/sccp_release_readiness_report_test.py pytests/scripts/sccp_release_bundle_test.py`
+    (`136 passed`)
+  - `bash scripts/check_sccp_production_corridor.sh --phase evidence-scripts`
+    (`770 passed`)
+
+## 2026-06-01 SCCP user-prover helper inventory guard
+
+- Tightened `scripts/sccp_verify_release_bundle.py` so public
+  `user_prover_submission_surfaces` rows must retain verifier-owned
+  lane/SDK helper requirements for the portal and mobile proof-generation
+  entrypoints. A weakened report generator can no longer remove Solana/TON
+  full-light-client proof builders, source-state provers, EVM/TRON
+  receipt/source-proof helpers, Substrate runtime-storage proof builders, or
+  on-chain submission helpers from copied release rows.
+- Added release-bundle regressions proving the verifier-owned helper inventory
+  stays aligned with the generated readiness report and remains independent
+  when the report module is weakened.
+- Updated the bridge-proof documentation and roadmap to describe the public
+  verifier-owned helper inventory.
+- Validation:
+  - `python3 -m py_compile scripts/sccp_verify_release_bundle.py pytests/scripts/sccp_release_bundle_test.py`
+  - `python3 -m pytest -q pytests/scripts/sccp_release_bundle_test.py -k "required_helper_inventory or helper_inventory_is_independent or missing_required_submission_surface_helper or submission_surface"`
+    (`14 passed, 102 deselected`)
+  - `python3 -m pytest -q pytests/scripts/sccp_release_bundle_test.py`
+    (`116 passed`)
+  - `bash scripts/check_sccp_production_corridor.sh --phase evidence-scripts`
+    (`770 passed`)
+
+## 2026-06-01 SCCP release-bundle verifier-owned SDK inventory
+
+- Moved the public SCCP SDK phase inventory used for
+  `sdk_helper_symbols_by_sdk` checks into
+  `scripts/sccp_verify_release_bundle.py`, so copied release-bundle user-prover
+  rows are no longer checked against SDK keys loaded from the report generator.
+- Added release-bundle regressions proving the verifier-owned SDK inventory
+  remains aligned with `scripts/sccp_release_readiness_report.py` while a
+  deliberately weakened report module cannot relax per-SDK helper-map coverage.
+- Updated bridge-proof documentation and the roadmap to describe the
+  verifier-owned public SDK inventory.
+- Validation:
+  - `python3 -m py_compile scripts/sccp_verify_release_bundle.py pytests/scripts/sccp_release_bundle_test.py`
+  - `python3 -m pytest -q pytests/scripts/sccp_release_bundle_test.py -k "sdk_phase_inventory or per_sdk_helper_symbol_drift or requires_submission_surface_ui_hooks"`
+    (`4 passed, 109 deselected`)
+  - `python3 -m pytest -q pytests/scripts/sccp_release_readiness_report_test.py pytests/scripts/sccp_release_bundle_test.py`
+    (`132 passed`)
+  - `bash scripts/check_sccp_production_corridor.sh --phase evidence-scripts`
+    (`766 passed`)
+
+## 2026-06-01 SCCP release-bundle cryptographic evidence inventory guard
+
+- Tightened `scripts/sccp_verify_release_bundle.py` with an independent
+  production domain/chain inventory for public `cryptographic_evidence` rows.
+  The verifier now rejects duplicate domains, unknown domains, missing required
+  domains, and chain-label drift before comparing the rows to embedded
+  all-lanes evidence.
+- Added release-bundle regressions for unknown domain rows, missing required
+  domains, duplicate domain rows, and mismatched chain labels.
+- Updated bridge-proof documentation and the roadmap to describe the fixed
+  public cryptographic evidence inventory.
+- Validation:
+  - `python3 -m py_compile scripts/sccp_verify_release_bundle.py pytests/scripts/sccp_release_bundle_test.py`
+  - `python3 -m pytest -q pytests/scripts/sccp_release_bundle_test.py -k "crypto_evidence_inventory_drift or crypto_evidence_lane_binding_drift or crypto_evidence_hash_drift or unbound_crypto_evidence"`
+    (`4 passed, 107 deselected`)
+  - `python3 -m pytest -q pytests/scripts/sccp_release_readiness_report_test.py pytests/scripts/sccp_release_bundle_test.py`
+    (`130 passed`)
+  - `bash scripts/check_sccp_production_corridor.sh --phase evidence-scripts`
+    (`764 passed`)
+
+## 2026-06-01 Sumeragi pure-engine core TLC cross-checks
+
+- Wired TLC runner aliases for fourteen pure-engine families: constructor
+  initial state, read-only accessors, pacemaker tick, tick state preservation,
+  NewView subject projection, top-level dispatch, top-level argument
+  forwarding, top-level output relay, QC-reference projection, QC-reference
+  comparator, highest-QC record, reconfiguration staging, reconfiguration
+  deduplication, and view-advance saturation.
+- Updated the formal README command list, CI inventory, and roadmap to mark
+  those pure-engine slices as TLC-cross-checked. The documented TLC fast-mode
+  gap is now 69 missing modes out of 499 documented fast rows, with 430 fast
+  modes wired into the TLC runner.
+- The broader pure-engine probe found 50 fast-passing modes; the certificate
+  dispatch and certificate prefilter state models timed out under the
+  15-second raw TLC probe and remain outside this tranche.
+- Validation:
+  - `bash -n scripts/formal/sumeragi_tlc.sh`
+  - `python3 scripts/formal/check_sumeragi_formal_coverage.py`
+  - documented TLC gap script (`69` missing, `430` TLC-wired fast modes)
+  - `JAVA_HOME=/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home PATH="/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home/bin:$PATH" APALACHE_ALLOW_DOCKER=0 target/apalache/toolchains/v0.52.2/bin/apalache-mc typecheck ...`
+    for all fourteen newly TLC-wired modules
+  - `JAVA_HOME=/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home PATH="/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home/bin:$PATH" APALACHE_ALLOW_DOCKER=0 bash scripts/formal/sumeragi_apalache.sh <mode>-fast`
+    for all fourteen newly TLC-wired modes
+  - `JAVA_HOME=/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home PATH="/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home/bin:$PATH" bash scripts/formal/sumeragi_tlc.sh <mode>-fast`
+    for all fourteen newly TLC-wired modes
+  - sequential TLC mutation sweep for the fourteen families (`159` expected
+    invariant failures)
+
+## 2026-06-01 SCCP cryptographic evidence inventory guard
+
+- Tightened the public release-bundle verifier so
+  `cryptographic_evidence` rows must cover every required production SCCP
+  domain exactly once. Duplicate domains, unknown domains, and missing
+  required domains now fail bundle verification before per-field lane binding
+  comparisons run.
+- Updated the bridge-proof documentation and roadmap so public release notes
+  describe the domain inventory requirement alongside the existing per-field
+  cryptographic evidence binding checks.
+- Validation:
+  - `python3 -m py_compile scripts/sccp_verify_release_bundle.py pytests/scripts/sccp_release_bundle_test.py`
+  - `python3 -m pytest -q pytests/scripts/sccp_release_bundle_test.py -k "crypto_evidence_inventory or cryptographic_evidence"`
+    (`1 passed, 110 deselected`)
+  - `bash scripts/check_sccp_production_corridor.sh --phase evidence-scripts`
+    (`763 passed`)
+
+## 2026-06-01 SCCP release-bundle verifier-owned transcript inventory
+
+- Moved the public SCCP phase transcript command and success-marker inventory
+  into `scripts/sccp_verify_release_bundle.py`, so copied release-bundle logs
+  are no longer checked against requirements loaded from the report generator.
+- Added bundle regressions proving the verifier-owned inventory remains aligned
+  with `scripts/sccp_release_readiness_report.py` while a deliberately weakened
+  report module cannot relax the verifier's `js-sdk` package-root export
+  transcript requirement.
+- Updated bridge-proof documentation and the roadmap to describe the
+  verifier-owned public transcript inventory.
+- Validation:
+  - `python3 -m py_compile scripts/sccp_verify_release_bundle.py pytests/scripts/sccp_release_bundle_test.py`
+  - `python3 -m pytest -q pytests/scripts/sccp_release_bundle_test.py -k "phase_transcript_inventory or js_package_export_transcript or output_only_phase_command_fragment or phase_log_without_expected_command"`
+    (`5 passed, 105 deselected`)
+  - `python3 -m pytest -q pytests/scripts/sccp_release_readiness_report_test.py pytests/scripts/sccp_release_bundle_test.py`
+    (`129 passed`)
+  - `bash scripts/check_sccp_production_corridor.sh --phase evidence-scripts`
+    (`763 passed`)
+
+## 2026-06-01 SCCP production corridor phase refresh
+
+- Reran the focused SCCP production corridor across the verifier, on-chain
+  smoke, core admission, and UI/mobile SDK proof-generation phases after the
+  release-bundle transcript hardening. No additional cryptographic verifier or
+  SDK prover gap surfaced in this pass.
+- Validation:
+  - `bash scripts/check_sccp_production_corridor.sh --phase evidence-scripts`
+    (`763 passed`)
+  - `bash scripts/check_sccp_production_corridor.sh --phase js-sdk`
+    (`131` Node tests passed)
+  - `bash scripts/check_sccp_production_corridor.sh --phase python-sdk`
+    (`78 passed`)
+  - `bash scripts/check_sccp_production_corridor.sh --phase contract-smoke`
+    (`sccp_message_bridge_smoke: ok`)
+  - `bash scripts/check_sccp_production_corridor.sh --phase core-admission`
+    (`32 passed`)
+  - `bash scripts/check_sccp_production_corridor.sh --phase rust-sccp`
+    (`238 passed`)
+  - `bash scripts/check_sccp_production_corridor.sh --phase swift-sdk`
+    (`73` SCCP prover/source-state tests plus `1` Torii submit payload test
+    passed)
+  - `bash scripts/check_sccp_production_corridor.sh --phase kotlin-sdk`
+    (`BUILD SUCCESSFUL`)
+  - `bash scripts/check_sccp_production_corridor.sh --phase java-android`
+    (both SCCP Gradle test invocations `BUILD SUCCESSFUL`)
+
+## 2026-06-01 SCCP release-bundle lane/backend inventory guard
+
+- Tightened `scripts/sccp_verify_release_bundle.py` with an independent
+  production inventory for public SCCP user-prover rows. The verifier now
+  rejects duplicate, unknown, or missing `user_prover_submission_surfaces`
+  lanes before it compares the report to generated readiness surfaces.
+- The same inventory pins each lane group to its production proof backend:
+  `eth,bsc` to EVM Groth16, `tron` to TRON Groth16, `sol` to the Solana
+  recursive backend, `ton` to the TON contract backend, and `substrate` to the
+  Substrate runtime backend.
+- Added release-bundle regressions for duplicate lanes, unknown lanes, missing
+  required lanes, and lane/backend id mismatch.
+- Updated bridge-proof documentation and the roadmap to describe the fixed
+  public lane/backend inventory.
+- Validation:
+  - `python3 -m py_compile scripts/sccp_verify_release_bundle.py pytests/scripts/sccp_release_bundle_test.py`
+  - `python3 -m pytest -q pytests/scripts/sccp_release_bundle_test.py -k "submission_surface_duplicate_lanes or submission_surface_unknown_lanes or submission_surface_backend_mismatch or required_phase or contract_smoke_for_contract_backends or submission_surface"`
+    (`12 passed, 96 deselected`)
+  - `python3 -m pytest -q pytests/scripts/sccp_release_readiness_report_test.py pytests/scripts/sccp_release_bundle_test.py`
+    (`127 passed`)
+  - `bash scripts/check_sccp_production_corridor.sh --phase evidence-scripts`
+    (`761 passed`)
+
+## 2026-06-01 Sumeragi worker/control TLC cross-checks
+
+- Wired TLC runner aliases for the worker drain scheduler, actor-gate priority,
+  worker budget, worker ingress, Kura store status, same-height vote-lock,
+  same-height vote recovery-gap, tip-extension helpers, DA manifest guard,
+  handshake, mode flip, NEW_VIEW stats, NEW_VIEW tracker, timing monitor,
+  pacing backpressure, and pacemaker backpressure tracker families.
+- Added `CHECK_DEADLOCK FALSE` to `SumeragiKuraStoreStatusGate_fast.cfg` and
+  its thirty-one mutation configs so TLC treats the bounded status-accounting
+  terminal state as intentional and checks the safety invariants.
+- Updated the formal README, CI inventory, and roadmap to mark those sixteen
+  families as TLC-cross-checked. The documented TLC fast-mode gap is now 83
+  missing modes out of 499 documented fast rows, with 416 fast modes wired into
+  the TLC runner. The larger `npos-vrf`, `kura-commit`, `restart-replay`,
+  `post-commit-cleanup`, and `frontier-gap-realign` candidates remain in the
+  gap after timing out during this bounded triage pass.
+- Validation:
+  - `bash -n scripts/formal/sumeragi_tlc.sh`
+  - `python3 scripts/formal/check_sumeragi_formal_coverage.py`
+  - documented TLC gap script (`83` missing, `416` TLC-wired fast modes)
+  - `SumeragiKuraStoreStatusGate` `CHECK_DEADLOCK FALSE` coverage check
+    (`32` configs)
+  - `JAVA_HOME=/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home PATH="/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home/bin:$PATH" APALACHE_ALLOW_DOCKER=0 target/apalache/toolchains/v0.52.2/bin/apalache-mc typecheck ...`
+    for all sixteen newly TLC-wired modules
+  - `JAVA_HOME=/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home PATH="/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home/bin:$PATH" APALACHE_ALLOW_DOCKER=0 bash scripts/formal/sumeragi_apalache.sh <mode>-fast`
+    for all sixteen newly TLC-wired modes
+  - `JAVA_HOME=/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home PATH="/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home/bin:$PATH" bash scripts/formal/sumeragi_tlc.sh <mode>-fast`
+    for all sixteen newly TLC-wired modes
+  - sequential TLC mutation sweep for the sixteen families (`386` expected
+    invariant failures)
+
+## 2026-06-01 SCCP release-bundle required-phase invariant guard
+
+- Tightened `scripts/sccp_verify_release_bundle.py` so every public
+  `user_prover_submission_surfaces` row must retain the actual production
+  release gates: JavaScript/web, Python, Swift, Kotlin, Java Android, and
+  `core-admission`. The verifier now also rejects duplicate or unknown required
+  phases before comparing the row with generated readiness surfaces.
+- EVM-family and TRON proof backends are independently required to keep
+  `contract-smoke` in their required phase list, so a self-consistent release
+  bundle cannot detach contract-backed proof submission rows from contract
+  smoke evidence.
+- Added release-bundle regressions for missing SDK/core phases, duplicate and
+  unknown phase names, and missing `contract-smoke` on an EVM proof backend.
+- Updated bridge-proof documentation and the roadmap to describe the stricter
+  public user-prover phase gate.
+- Validation:
+  - `python3 -m py_compile scripts/sccp_verify_release_bundle.py pytests/scripts/sccp_release_bundle_test.py`
+  - `python3 -m pytest -q pytests/scripts/sccp_release_bundle_test.py -k "required_phase or contract_smoke_for_contract_backends or duplicate_submission_surface_helpers or requires_submission_surface_ui_hooks or submission_surface"`
+    (`9 passed, 96 deselected`)
+  - `python3 -m pytest -q pytests/scripts/sccp_release_readiness_report_test.py pytests/scripts/sccp_release_bundle_test.py`
+    (`124 passed`)
+  - `bash scripts/check_sccp_production_corridor.sh --phase evidence-scripts`
+    (`758 passed`)
+
+## 2026-06-01 SCCP phase transcript command-line guard
+
+- Tightened the release-readiness report and public release-bundle verifier so
+  required SCCP phase command fragments must appear on traced production
+  corridor command lines (`+ ...`) within the claimed phase block. A copied log
+  can no longer satisfy the command gate by printing the expected command text
+  as ordinary test output.
+- Updated the readiness and bundle fixtures to match the real corridor log
+  format, then added report- and verifier-level regressions for output-only
+  command fragments.
+- Updated the bridge-proof documentation and roadmap to describe the stricter
+  public transcript evidence gate.
+- Validation:
+  - `python3 -m py_compile scripts/sccp_release_readiness_report.py scripts/sccp_verify_release_bundle.py pytests/scripts/sccp_release_readiness_report_test.py pytests/scripts/sccp_release_bundle_test.py`
+  - `python3 -m pytest -q pytests/scripts/sccp_release_readiness_report_test.py pytests/scripts/sccp_release_bundle_test.py -k "phase_log or phase_command or phase_transcript or js_package_export_transcript or js_package_dist_transcript"`
+    (`14 passed, 108 deselected`)
+  - `python3 -m pytest -q pytests/scripts/sccp_release_readiness_report_test.py pytests/scripts/sccp_release_bundle_test.py`
+    (`122 passed`)
+  - `bash scripts/check_sccp_production_corridor.sh --phase evidence-scripts`
+    (`756 passed`)
+
+## 2026-06-01 Sumeragi vNext stake-weight TLC cross-check
+
+- Added `CHECK_DEADLOCK FALSE` to
+  `SumeragiVNextStakeWeightGate_fast.cfg` and its twelve mutation configs so
+  TLC treats the bounded one-shot terminal state as intentional and checks the
+  safety invariants instead of reporting a deadlock after the final transition.
+- Wired `vnext-stake-weight-fast` and `vnext-stake-weight-bug-*` through
+  `scripts/formal/sumeragi_tlc.sh` and updated the formal docs, CI inventory,
+  and roadmap to mark the stake-weight/quorum helper as TLC-cross-checked.
+- The documented TLC fast-mode gap is now 99 missing modes out of 499
+  documented fast rows, with 400 fast modes wired into the TLC runner.
+- Validation:
+  - `bash -n scripts/formal/sumeragi_tlc.sh`
+  - `python3 scripts/formal/check_sumeragi_formal_coverage.py`
+  - documented TLC gap script (`99` missing, `400` TLC-wired fast modes)
+  - `JAVA_HOME=/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home PATH="/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home/bin:$PATH" APALACHE_ALLOW_DOCKER=0 bash scripts/formal/sumeragi_apalache.sh vnext-stake-weight-fast`
+  - `JAVA_HOME=/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home PATH="/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home/bin:$PATH" bash scripts/formal/sumeragi_tlc.sh vnext-stake-weight-fast`
+  - sequential TLC mutation sweep for `vnext-stake-weight` (`12`), all
+    producing the expected invariant failure
+
 ## 2026-06-01 SCCP release-bundle JS export transcript guard
 
 - Added a strict release-bundle verifier regression that rewrites the copied
@@ -12,7 +676,16 @@ Last updated: 2026-06-01
   test is enforced at bundle-review time, not only during report generation.
 - Updated bridge-proof documentation and the roadmap to describe the public
   release-bundle transcript guard.
-- Validation: pending.
+- Validation:
+  - `python3 -m py_compile scripts/sccp_release_readiness_report.py scripts/sccp_verify_release_bundle.py pytests/scripts/sccp_release_readiness_report_test.py pytests/scripts/sccp_release_bundle_test.py`
+  - `python3 -m pytest -q pytests/scripts/sccp_release_readiness_report_test.py pytests/scripts/sccp_release_bundle_test.py -k "js_package_export_transcript or js_package_dist_transcript or js_helper_symbols_exist_in_portal_artifacts or release_bundle_verifier_requires_js_package_export_transcript"`
+    (`4 passed, 116 deselected`)
+  - `python3 -m pytest -q pytests/scripts/sccp_release_bundle_test.py`
+    (`102 passed`)
+  - `bash scripts/check_sccp_production_corridor.sh --phase js-sdk`
+    (`131 passed`)
+  - `bash scripts/check_sccp_production_corridor.sh --phase evidence-scripts`
+    (`754 passed`)
 
 ## 2026-06-01 SCCP release-bundle UI-prover invariant guard
 

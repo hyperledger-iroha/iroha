@@ -28,6 +28,12 @@ PHASES = (
 )
 
 
+def phase_command_lines(fragments) -> list[str]:
+    """Render required fragments as production-corridor traced commands."""
+
+    return [f"+ {fragment}" for fragment in fragments]
+
+
 def load_all_lanes_helpers():
     """Load all-lanes fixture helpers without importing pytest collection state."""
 
@@ -105,7 +111,9 @@ def write_phase_artifacts(tmp_path: Path) -> dict[str, str]:
         payload = "\n".join(
             (
                 f"==> SCCP production corridor: {phase}",
-                *report.PHASE_TRANSCRIPT_REQUIRED_FRAGMENTS[phase],
+                *phase_command_lines(
+                    report.PHASE_TRANSCRIPT_REQUIRED_FRAGMENTS[phase]
+                ),
                 *report.PHASE_TRANSCRIPT_SUCCESS_FRAGMENTS[phase],
                 "SCCP production corridor completed.",
                 "",
@@ -385,6 +393,11 @@ def test_release_bundle_writes_hash_bound_public_artifacts(tmp_path: Path) -> No
     manifest_json = output_dir / "manifest.json"
     for path in (report_md, report_json, summary_json, notes_md, manifest_json):
         assert path.is_file()
+    manifest_sha256 = hashlib.sha256(manifest_json.read_bytes()).hexdigest()
+    assert (
+        f"SCCP release bundle manifest_sha256: {manifest_sha256}"
+        in completed.stdout
+    )
 
     manifest = json.loads(manifest_json.read_text(encoding="utf-8"))
     assert manifest["schema"] == "sccp-release-bundle-v1"
@@ -529,6 +542,29 @@ def test_release_bundle_verifier_rejects_manifest_path_escape(tmp_path: Path) ->
     assert "manifest artifact path escapes bundle: ../outside.md" in verified.stdout
 
 
+def test_release_bundle_verifier_rejects_manifest_root_self_listing(
+    tmp_path: Path,
+) -> None:
+    """The verifier root must stay outside the manifest artifact table."""
+
+    output_dir = build_ready_bundle(tmp_path)
+    append_manifest_artifact(output_dir, "manifest.json")
+
+    verified = subprocess.run(
+        ["python3", str(VERIFY_SCRIPT), str(output_dir)],
+        check=False,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+        text=True,
+    )
+
+    assert verified.returncode == 1
+    assert (
+        "manifest must not list verifier root as an artifact: manifest.json"
+        in verified.stdout
+    )
+
+
 def test_release_bundle_verifier_rejects_symlinked_manifest(
     tmp_path: Path,
 ) -> None:
@@ -553,6 +589,47 @@ def test_release_bundle_verifier_rejects_symlinked_manifest(
     assert "manifest is a symlink: manifest.json" in verified.stdout
 
 
+def test_release_bundle_verifier_rejects_symlinked_bundle_root(
+    tmp_path: Path,
+) -> None:
+    """The reviewed bundle root itself must be an ordinary directory."""
+
+    output_dir = build_ready_bundle(tmp_path)
+    bundle_link = tmp_path / "bundle-link"
+    bundle_link.symlink_to(output_dir, target_is_directory=True)
+
+    verified = subprocess.run(
+        ["python3", str(VERIFY_SCRIPT), str(bundle_link)],
+        check=False,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+        text=True,
+    )
+
+    assert verified.returncode == 1
+    assert f"bundle root is a symlink: {bundle_link}" in verified.stdout
+
+
+def test_release_bundle_verifier_rejects_non_directory_bundle_root(
+    tmp_path: Path,
+) -> None:
+    """The verifier input must be the extracted release bundle directory."""
+
+    bundle_file = tmp_path / "bundle.tar"
+    bundle_file.write_text("not a directory\n", encoding="utf-8")
+
+    verified = subprocess.run(
+        ["python3", str(VERIFY_SCRIPT), str(bundle_file)],
+        check=False,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+        text=True,
+    )
+
+    assert verified.returncode == 1
+    assert f"bundle root is not a directory: {bundle_file}" in verified.stdout
+
+
 def test_release_bundle_verifier_rejects_unmanifested_artifact(
     tmp_path: Path,
 ) -> None:
@@ -575,6 +652,26 @@ def test_release_bundle_verifier_rejects_unmanifested_artifact(
         "bundle contains unmanifested artifact: evidence/operator-side-note.txt"
         in verified.stdout
     )
+
+
+def test_release_bundle_verifier_rejects_unmanifested_directory(
+    tmp_path: Path,
+) -> None:
+    """A verified release bundle must not carry empty operator-side folders."""
+
+    output_dir = build_ready_bundle(tmp_path)
+    (output_dir / "operator-notes").mkdir()
+
+    verified = subprocess.run(
+        ["python3", str(VERIFY_SCRIPT), str(output_dir)],
+        check=False,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+        text=True,
+    )
+
+    assert verified.returncode == 1
+    assert "bundle contains unmanifested directory: operator-notes" in verified.stdout
 
 
 def test_release_bundle_verifier_rejects_extra_manifested_artifact(
@@ -728,6 +825,38 @@ def test_release_bundle_verifier_rejects_release_notes_drift(
     assert verified.returncode == 1
     assert "release notes attachment does not match manifest and report" in (
         verified.stdout
+    )
+
+
+def test_release_bundle_verifier_release_notes_renderer_is_independent(
+    tmp_path: Path,
+) -> None:
+    """A weakened bundle builder must not relax public attachment rendering."""
+
+    output_dir = build_ready_bundle(tmp_path)
+    verifier = load_verify_helpers()
+    manifest = json.loads((output_dir / "manifest.json").read_text(encoding="utf-8"))
+
+    def weak_attachment(_report, artifacts):
+        lines = ["# Weak SCCP Notes", "", "manifest.json"]
+        for artifact in artifacts:
+            if artifact["path"] == "sccp-release-notes-attachment.md":
+                continue
+            lines.append(f"{artifact['path']} {artifact['sha256']}")
+        return "\n".join(lines) + "\n"
+
+    assert not hasattr(verifier, "_bundle_module")
+    (output_dir / "sccp-release-notes-attachment.md").write_text(
+        weak_attachment({}, manifest["artifacts"]),
+        encoding="utf-8",
+    )
+    rewrite_manifest_artifact(output_dir, "sccp-release-notes-attachment.md")
+
+    summary = verifier.verify_bundle(output_dir)
+
+    assert summary["verified"] is False
+    assert "release notes attachment does not match manifest and report" in (
+        summary["errors"]
     )
 
 
@@ -925,6 +1054,44 @@ def test_release_bundle_verifier_rejects_omitted_phase_artifact(
         "readiness report phase contract-smoke artifact is missing from manifest: "
         "corridor/contract-smoke.log"
     ) in verified.stdout
+
+
+def test_release_bundle_verifier_corridor_phase_inventory_matches_runner() -> None:
+    """Verifier-owned corridor phases must stay aligned with the runner plan."""
+
+    verifier = load_verify_helpers()
+    report = load_report_module()
+
+    assert verifier.CORRIDOR_PHASES == tuple(report._corridor_phases())
+    assert set(verifier.CORRIDOR_PHASES) == set(
+        verifier.PHASE_TRANSCRIPT_REQUIRED_FRAGMENTS
+    )
+    assert set(verifier.CORRIDOR_PHASES) == set(
+        verifier.PHASE_TRANSCRIPT_SUCCESS_FRAGMENTS
+    )
+
+
+def test_release_bundle_verifier_corridor_phase_inventory_is_independent(
+) -> None:
+    """A weakened report module must not shrink required corridor phases."""
+
+    verifier = load_verify_helpers()
+    assert not hasattr(verifier, "_report_module")
+    omitted_phase = "swift-sdk"
+    weak_phases = [
+        phase for phase in verifier.CORRIDOR_PHASES if phase != omitted_phase
+    ]
+    corridor = {
+        "phases": {phase: "passed" for phase in weak_phases},
+        "evidence_artifacts": {
+            phase: {"path": f"corridor/{phase}.log", "bytes": 1, "sha256": "0" * 64}
+            for phase in weak_phases
+        },
+    }
+
+    errors = verifier._corridor_phase_errors(corridor)
+
+    assert f"readiness report corridor missing phase status: {omitted_phase}" in errors
 
 
 def test_release_bundle_verifier_recomputes_required_corridor_phases(
@@ -4631,6 +4798,20 @@ def test_release_bundle_verifier_recomputes_summary_from_copied_evidence(
     )
 
 
+def test_release_bundle_verifier_copied_evidence_recompute_is_independent(
+    tmp_path: Path,
+) -> None:
+    """A weakened bundle builder must not recompute copied TOML evidence."""
+
+    output_dir = build_ready_bundle(tmp_path)
+    verifier = load_verify_helpers()
+    assert not hasattr(verifier, "_bundle_module")
+
+    summary = verifier.verify_bundle(output_dir)
+
+    assert summary["verified"] is True
+
+
 def test_release_bundle_verifier_requires_copied_evidence_inputs(
     tmp_path: Path,
 ) -> None:
@@ -4700,6 +4881,108 @@ def test_release_bundle_verifier_rejects_markdown_report_drift(
     assert "readiness report Markdown does not match readiness report JSON" in (
         verified.stdout
     )
+
+
+def test_release_bundle_verifier_readiness_markdown_renderer_matches_report(
+    tmp_path: Path,
+) -> None:
+    """Verifier-owned readiness Markdown rendering must match the report renderer."""
+
+    output_dir = build_ready_bundle(tmp_path)
+    verifier = load_verify_helpers()
+    report = json.loads(
+        (output_dir / "sccp-release-readiness.json").read_text(encoding="utf-8")
+    )
+
+    assert verifier._expected_readiness_markdown(report) == (
+        output_dir / "sccp-release-readiness.md"
+    ).read_text(encoding="utf-8")
+
+
+def test_release_bundle_verifier_readiness_markdown_renderer_is_independent(
+    tmp_path: Path,
+) -> None:
+    """A weakened report renderer must not define canonical public Markdown."""
+
+    output_dir = build_ready_bundle(tmp_path)
+    verifier = load_verify_helpers()
+    assert not hasattr(verifier, "_report_module")
+
+    summary = verifier.verify_bundle(output_dir)
+
+    assert summary["verified"] is True
+
+
+def test_release_bundle_verifier_markdown_invariants_require_public_sections(
+    tmp_path: Path,
+) -> None:
+    """Verifier-owned Markdown checks must require the public evidence sections."""
+
+    output_dir = build_ready_bundle(tmp_path)
+    verifier = load_verify_helpers()
+    report = json.loads(
+        (output_dir / "sccp-release-readiness.json").read_text(encoding="utf-8")
+    )
+    markdown = (output_dir / "sccp-release-readiness.md").read_text(
+        encoding="utf-8"
+    )
+
+    assert verifier._readiness_markdown_invariant_errors(report, markdown) == []
+
+    errors = verifier._readiness_markdown_invariant_errors(
+        report,
+        markdown.replace("## Cryptographic Evidence", "## Crypto Summary", 1),
+    )
+
+    assert (
+        "readiness report Markdown missing section: ## Cryptographic Evidence"
+        in errors
+    )
+
+
+def test_release_bundle_verifier_rejects_markdown_crypto_evidence_omission(
+    tmp_path: Path,
+) -> None:
+    """Public Markdown must independently carry cryptographic evidence hashes."""
+
+    output_dir = build_ready_bundle(tmp_path)
+    report = json.loads(
+        (output_dir / "sccp-release-readiness.json").read_text(encoding="utf-8")
+    )
+    crypto_hash = report["cryptographic_evidence"][0][
+        "source_verifier_material_hash"
+    ]
+    report_md = output_dir / "sccp-release-readiness.md"
+    notes_md = output_dir / "sccp-release-notes-attachment.md"
+    old_report_hash = manifest_artifact_hash(output_dir, "sccp-release-readiness.md")
+    report_md.write_text(
+        report_md.read_text(encoding="utf-8").replace(crypto_hash, "0" * 64, 1),
+        encoding="utf-8",
+    )
+    rewrite_manifest_artifact(output_dir, "sccp-release-readiness.md")
+    new_report_hash = manifest_artifact_hash(output_dir, "sccp-release-readiness.md")
+    notes_md.write_text(
+        notes_md.read_text(encoding="utf-8").replace(
+            old_report_hash,
+            new_report_hash,
+        ),
+        encoding="utf-8",
+    )
+    rewrite_manifest_artifact(output_dir, "sccp-release-notes-attachment.md")
+
+    verified = subprocess.run(
+        ["python3", str(VERIFY_SCRIPT), str(output_dir)],
+        check=False,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+        text=True,
+    )
+
+    assert verified.returncode == 1
+    assert (
+        "readiness report Markdown Cryptographic Evidence section missing "
+        "source_verifier_material_hash for domain 1"
+    ) in verified.stdout
 
 
 def test_release_bundle_verifier_rejects_unbound_crypto_evidence(
@@ -4977,10 +5260,129 @@ def test_release_bundle_verifier_rejects_crypto_evidence_lane_binding_drift(
         "readiness report cryptographic evidence row 0 domain must match "
         "lane domain"
     ) in verified.stdout
+    assert "readiness report cryptographic_evidence contains unknown domain: 999" in (
+        verified.stdout
+    )
+    assert "readiness report cryptographic_evidence missing required domain: 1" in (
+        verified.stdout
+    )
     assert (
         "readiness report cryptographic evidence row 0 chain must match lane chain"
         in verified.stdout
     )
+    assert (
+        "readiness report cryptographic_evidence does not match embedded lane evidence"
+        in verified.stdout
+    )
+
+
+def test_release_bundle_verifier_rejects_crypto_evidence_inventory_drift(
+    tmp_path: Path,
+) -> None:
+    """The public crypto table must cover each production domain exactly once."""
+
+    output_dir = build_ready_bundle(tmp_path)
+    report_path = output_dir / "sccp-release-readiness.json"
+    report = json.loads(report_path.read_text(encoding="utf-8"))
+    eth_row = report["cryptographic_evidence"][0]
+    assert eth_row["domain"] == 1
+    eth_row["domain"] = 2
+    eth_row["chain"] = "eth"
+    report_path.write_text(
+        json.dumps(report, indent=2, sort_keys=True) + "\n",
+        encoding="utf-8",
+    )
+    rewrite_manifest_artifact(output_dir, "sccp-release-readiness.json")
+    rewrite_canonical_report_and_notes(output_dir)
+
+    verified = subprocess.run(
+        ["python3", str(VERIFY_SCRIPT), str(output_dir)],
+        check=False,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+        text=True,
+    )
+
+    assert verified.returncode == 1
+    assert "readiness report cryptographic_evidence contains duplicate domain: 2" in (
+        verified.stdout
+    )
+    assert (
+        "readiness report cryptographic_evidence chain mismatch for domain 2: "
+        "expected bsc, got 'eth'"
+    ) in verified.stdout
+    assert "readiness report cryptographic_evidence missing required domain: 1" in (
+        verified.stdout
+    )
+    assert (
+        "readiness report cryptographic_evidence does not match embedded lane evidence"
+        in verified.stdout
+    )
+
+
+def test_release_bundle_verifier_rejects_crypto_evidence_domain_policy_drift(
+    tmp_path: Path,
+) -> None:
+    """Public crypto rows must obey route-canary and source-gate domain policy."""
+
+    forged_hash = "0x" + "12" * 32
+
+    output_dir = build_ready_bundle(tmp_path)
+    report_path = output_dir / "sccp-release-readiness.json"
+    report = json.loads(report_path.read_text(encoding="utf-8"))
+    eth_row = report["cryptographic_evidence"][0]
+    assert eth_row["domain"] == 1
+    eth_row["route_canary_evidence_source"] = "operator_review_note"
+    eth_row["source_adapter_gate_required"] = True
+    eth_row["source_adapter_gate_hash"] = forged_hash
+    eth_row["source_adapter_gate_audit_hashes"] = {"operator_override": forged_hash}
+    sol_row = next(row for row in report["cryptographic_evidence"] if row["domain"] == 3)
+    sol_row["source_adapter_gate_required"] = False
+    sol_row["source_adapter_gate_hash"] = ""
+    sol_row["source_adapter_gate_audit_hashes"] = {}
+    ton_row = next(row for row in report["cryptographic_evidence"] if row["domain"] == 4)
+    full_gate_hash = ton_row["source_adapter_gate_audit_hashes"].pop(
+        "ton_full_light_client_gate_hash"
+    )
+    ton_row["source_adapter_gate_audit_hashes"]["operator_override"] = full_gate_hash
+    report_path.write_text(
+        json.dumps(report, indent=2, sort_keys=True) + "\n",
+        encoding="utf-8",
+    )
+    rewrite_manifest_artifact(output_dir, "sccp-release-readiness.json")
+    rewrite_canonical_report_and_notes(output_dir)
+
+    verified = subprocess.run(
+        ["python3", str(VERIFY_SCRIPT), str(output_dir)],
+        check=False,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+        text=True,
+    )
+
+    assert verified.returncode == 1
+    assert (
+        "readiness report cryptographic evidence row "
+        "route_canary_evidence_source must be evm_message_proof_accepted_transaction"
+    ) in verified.stdout
+    assert (
+        "readiness report cryptographic evidence row "
+        "source_adapter_gate_required must be false for this domain"
+    ) in verified.stdout
+    assert (
+        "readiness report cryptographic evidence row "
+        "source_adapter_gate_required must be true for this domain"
+    ) in verified.stdout
+    assert (
+        "readiness report cryptographic evidence row "
+        "source_adapter_gate_audit_hashes contains unexpected field: "
+        "operator_override"
+    ) in verified.stdout
+    assert (
+        "readiness report cryptographic evidence row "
+        "source_adapter_gate_audit_hashes missing field: "
+        "ton_full_light_client_gate_hash"
+    ) in verified.stdout
     assert (
         "readiness report cryptographic_evidence does not match embedded lane evidence"
         in verified.stdout
@@ -5356,6 +5758,60 @@ def test_release_bundle_verifier_rejects_per_sdk_helper_symbol_drift(
     ) in verified.stdout
 
 
+def test_release_bundle_verifier_sdk_phase_inventory_matches_report() -> None:
+    """Verifier-owned SDK inventory must mirror release-readiness rows."""
+
+    verifier = load_verify_helpers()
+    report = load_report_module()
+
+    assert verifier.USER_PROVER_SDK_PHASES == report.USER_PROVER_SDK_PHASES
+
+
+def test_release_bundle_verifier_sdk_phase_inventory_is_independent(
+) -> None:
+    """A weakened report module must not relax per-SDK helper-map checks."""
+
+    verifier = load_verify_helpers()
+    assert not hasattr(verifier, "_report_module")
+    row = {
+        "lanes": "eth,bsc",
+        "proof_backend": "evm-groth16-bn254-v1",
+        "sdk_helper_symbols": [
+            "buildEvmSccpProofRequest",
+            "witnessProvider",
+            "proveFn",
+        ],
+        "sdk_helper_symbols_by_sdk": {
+            "js-sdk": [
+                "buildEvmSccpProofRequest",
+                "witnessProvider",
+                "proveFn",
+            ],
+        },
+        "sdk_helpers": "buildEvmSccpProofRequest, witnessProvider, proveFn",
+        "on_chain_submission": "Torii bridge-proof submit payload",
+        "required_phases": [
+            "js-sdk",
+            "python-sdk",
+            "swift-sdk",
+            "kotlin-sdk",
+            "java-android",
+            "contract-smoke",
+            "core-admission",
+        ],
+        "validation_status": "passed",
+        "validation_blockers": [],
+    }
+
+    errors = verifier._submission_surface_row_schema_errors(row)
+
+    for sdk in ("python-sdk", "swift-sdk", "kotlin-sdk", "java-android"):
+        assert (
+            "readiness report user prover submission surface row "
+            f"sdk_helper_symbols_by_sdk[{sdk}] must be a list of non-empty strings"
+        ) in errors
+
+
 def test_release_bundle_verifier_rejects_duplicate_submission_surface_helpers(
     tmp_path: Path,
 ) -> None:
@@ -5402,6 +5858,349 @@ def test_release_bundle_verifier_rejects_duplicate_submission_surface_helpers(
     assert (
         "readiness report user prover submission surface row "
         "sdk_helper_symbols_by_sdk[python-sdk] contains duplicate symbols"
+    ) in verified.stdout
+
+
+def test_release_bundle_verifier_requires_submission_surface_sdk_core_phases(
+    tmp_path: Path,
+) -> None:
+    """Verified user-prover rows must remain gated by every SDK and core phase."""
+
+    output_dir = build_ready_bundle(tmp_path)
+    report_path = output_dir / "sccp-release-readiness.json"
+    report = json.loads(report_path.read_text(encoding="utf-8"))
+    row = report["user_prover_submission_surfaces"][0]
+    row["required_phases"] = [
+        phase
+        for phase in row["required_phases"]
+        if phase not in {"python-sdk", "core-admission"}
+    ]
+    row["required_phases"].extend(["js-sdk", "portal-review"])
+    report_path.write_text(
+        json.dumps(report, indent=2, sort_keys=True) + "\n",
+        encoding="utf-8",
+    )
+    rewrite_manifest_artifact(output_dir, "sccp-release-readiness.json")
+    rewrite_canonical_report_and_notes(output_dir)
+
+    verified = subprocess.run(
+        ["python3", str(VERIFY_SCRIPT), str(output_dir)],
+        check=False,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+        text=True,
+    )
+
+    assert verified.returncode == 1
+    assert (
+        "readiness report user prover submission surface row "
+        "required_phases contains duplicate phases"
+    ) in verified.stdout
+    assert (
+        "readiness report user prover submission surface row "
+        "required_phases contains unknown phase: portal-review"
+    ) in verified.stdout
+    assert (
+        "readiness report user prover submission surface row "
+        "required_phases missing required phase: python-sdk"
+    ) in verified.stdout
+    assert (
+        "readiness report user prover submission surface row "
+        "required_phases missing required phase: core-admission"
+    ) in verified.stdout
+    assert (
+        "readiness report user_prover_submission_surfaces does not match "
+        "corridor phases"
+    ) in verified.stdout
+
+
+def test_release_bundle_verifier_requires_contract_smoke_for_contract_backends(
+    tmp_path: Path,
+) -> None:
+    """EVM/TRON submission rows must stay gated by contract smoke evidence."""
+
+    output_dir = build_ready_bundle(tmp_path)
+    report_path = output_dir / "sccp-release-readiness.json"
+    report = json.loads(report_path.read_text(encoding="utf-8"))
+    row = report["user_prover_submission_surfaces"][0]
+    assert row["proof_backend"] == "evm-groth16-bn254-v1"
+    row["required_phases"] = [
+        phase for phase in row["required_phases"] if phase != "contract-smoke"
+    ]
+    report_path.write_text(
+        json.dumps(report, indent=2, sort_keys=True) + "\n",
+        encoding="utf-8",
+    )
+    rewrite_manifest_artifact(output_dir, "sccp-release-readiness.json")
+    rewrite_canonical_report_and_notes(output_dir)
+
+    verified = subprocess.run(
+        ["python3", str(VERIFY_SCRIPT), str(output_dir)],
+        check=False,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+        text=True,
+    )
+
+    assert verified.returncode == 1
+    assert (
+        "readiness report user prover submission surface row "
+        "required_phases missing required phase: contract-smoke"
+    ) in verified.stdout
+    assert (
+        "readiness report user_prover_submission_surfaces does not match "
+        "corridor phases"
+    ) in verified.stdout
+
+
+def test_release_bundle_verifier_rejects_submission_surface_duplicate_lanes(
+    tmp_path: Path,
+) -> None:
+    """Published user-prover rows must cover each production lane once."""
+
+    output_dir = build_ready_bundle(tmp_path)
+    report_path = output_dir / "sccp-release-readiness.json"
+    report = json.loads(report_path.read_text(encoding="utf-8"))
+    row = report["user_prover_submission_surfaces"][0]
+    row["lanes"] = "sol"
+    row["proof_backend"] = "sccp-solana-recursive-mainnet-v1"
+    report_path.write_text(
+        json.dumps(report, indent=2, sort_keys=True) + "\n",
+        encoding="utf-8",
+    )
+    rewrite_manifest_artifact(output_dir, "sccp-release-readiness.json")
+    rewrite_canonical_report_and_notes(output_dir)
+
+    verified = subprocess.run(
+        ["python3", str(VERIFY_SCRIPT), str(output_dir)],
+        check=False,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+        text=True,
+    )
+
+    assert verified.returncode == 1
+    assert (
+        "readiness report user_prover_submission_surfaces contains duplicate "
+        "lanes row: sol"
+    ) in verified.stdout
+    assert (
+        "readiness report user_prover_submission_surfaces missing required "
+        "lanes row: eth,bsc"
+    ) in verified.stdout
+    assert (
+        "readiness report user_prover_submission_surfaces does not match "
+        "corridor phases"
+    ) in verified.stdout
+
+
+def test_release_bundle_verifier_rejects_submission_surface_unknown_lanes(
+    tmp_path: Path,
+) -> None:
+    """Published user-prover rows must not advertise unknown production lanes."""
+
+    output_dir = build_ready_bundle(tmp_path)
+    report_path = output_dir / "sccp-release-readiness.json"
+    report = json.loads(report_path.read_text(encoding="utf-8"))
+    row = report["user_prover_submission_surfaces"][0]
+    row["lanes"] = "unknown-mainnet"
+    report_path.write_text(
+        json.dumps(report, indent=2, sort_keys=True) + "\n",
+        encoding="utf-8",
+    )
+    rewrite_manifest_artifact(output_dir, "sccp-release-readiness.json")
+    rewrite_canonical_report_and_notes(output_dir)
+
+    verified = subprocess.run(
+        ["python3", str(VERIFY_SCRIPT), str(output_dir)],
+        check=False,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+        text=True,
+    )
+
+    assert verified.returncode == 1
+    assert (
+        "readiness report user_prover_submission_surfaces contains unknown "
+        "lanes row: unknown-mainnet"
+    ) in verified.stdout
+    assert (
+        "readiness report user_prover_submission_surfaces missing required "
+        "lanes row: eth,bsc"
+    ) in verified.stdout
+
+
+def test_release_bundle_verifier_rejects_submission_surface_backend_mismatch(
+    tmp_path: Path,
+) -> None:
+    """Published user-prover lane rows must keep their production backend ids."""
+
+    output_dir = build_ready_bundle(tmp_path)
+    report_path = output_dir / "sccp-release-readiness.json"
+    report = json.loads(report_path.read_text(encoding="utf-8"))
+    row = next(
+        row
+        for row in report["user_prover_submission_surfaces"]
+        if row["lanes"] == "ton"
+    )
+    row["proof_backend"] = "sccp-solana-recursive-mainnet-v1"
+    report_path.write_text(
+        json.dumps(report, indent=2, sort_keys=True) + "\n",
+        encoding="utf-8",
+    )
+    rewrite_manifest_artifact(output_dir, "sccp-release-readiness.json")
+    rewrite_canonical_report_and_notes(output_dir)
+
+    verified = subprocess.run(
+        ["python3", str(VERIFY_SCRIPT), str(output_dir)],
+        check=False,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+        text=True,
+    )
+
+    assert verified.returncode == 1
+    assert (
+        "readiness report user_prover_submission_surfaces proof_backend "
+        "mismatch for lanes ton: expected ton-contract-v1, got "
+        "'sccp-solana-recursive-mainnet-v1'"
+    ) in verified.stdout
+    assert (
+        "readiness report user_prover_submission_surfaces does not match "
+        "corridor phases"
+    ) in verified.stdout
+
+
+def test_release_bundle_verifier_required_helper_inventory_matches_report() -> None:
+    """Verifier-owned user-prover rows must match the generated rows exactly."""
+
+    verifier = load_verify_helpers()
+    report = load_report_module()
+    phase_status = {phase: "passed" for phase in PHASES}
+
+    assert verifier._expected_submission_surfaces(
+        {"corridor": {"phases": phase_status}}
+    ) == report._submission_surfaces(phase_status)
+
+
+def test_release_bundle_verifier_expected_submission_surfaces_are_independent(
+) -> None:
+    """A weakened report module must not define expected user-prover rows."""
+
+    verifier = load_verify_helpers()
+    phase_status = {phase: "passed" for phase in PHASES}
+    assert not hasattr(verifier, "_report_module")
+
+    surfaces = verifier._expected_submission_surfaces(
+        {"corridor": {"phases": phase_status}}
+    )
+    ton_surface = next(surface for surface in surfaces if surface["lanes"] == "ton")
+
+    assert ton_surface["validation_status"] == "passed"
+    assert ton_surface["validation_blockers"] == []
+    assert (
+        "buildTonSccpValidatorSetTransitionProofRequest"
+        in ton_surface["sdk_helper_symbols_by_sdk"]["js-sdk"]
+    )
+
+
+def test_release_bundle_verifier_helper_inventory_is_independent() -> None:
+    """Verifier-owned helper inventory must reject weakened copied rows."""
+
+    verifier = load_verify_helpers()
+    report = load_report_module()
+    phase_status = {phase: "passed" for phase in PHASES}
+    surfaces = report._submission_surfaces(phase_status)
+    sol_surface = next(surface for surface in surfaces if surface["lanes"] == "sol")
+    missing_js_helper = "buildSolanaSccpFullLightClientAuditProofRequests"
+    missing_java_helper = "SolanaSccpProver.FullLightClientAuditProofEngine"
+    sol_surface["sdk_helper_symbols"] = [
+        helper
+        for helper in sol_surface["sdk_helper_symbols"]
+        if helper != missing_js_helper
+    ]
+    sol_surface["sdk_helpers"] = ", ".join(sol_surface["sdk_helper_symbols"])
+    sol_surface["sdk_helper_symbols_by_sdk"]["js-sdk"] = [
+        helper
+        for helper in sol_surface["sdk_helper_symbols_by_sdk"]["js-sdk"]
+        if helper != missing_js_helper
+    ]
+    sol_surface["sdk_helper_symbols_by_sdk"]["java-android"] = [
+        helper
+        for helper in sol_surface["sdk_helper_symbols_by_sdk"]["java-android"]
+        if helper != missing_java_helper
+    ]
+    errors = verifier._submission_surface_inventory_errors(surfaces)
+
+    assert (
+        "readiness report user_prover_submission_surfaces lanes sol "
+        "sdk_helper_symbols missing required helper: "
+        f"{missing_js_helper}"
+    ) in errors
+    assert (
+        "readiness report user_prover_submission_surfaces lanes sol "
+        "sdk_helper_symbols_by_sdk[js-sdk] missing required helper: "
+        f"{missing_js_helper}"
+    ) in errors
+    assert (
+        "readiness report user_prover_submission_surfaces lanes sol "
+        "sdk_helper_symbols_by_sdk[java-android] missing required helper: "
+        f"{missing_java_helper}"
+    ) in errors
+
+
+def test_release_bundle_verifier_rejects_missing_required_submission_surface_helper(
+    tmp_path: Path,
+) -> None:
+    """Public bundles must retain lane-critical portal/mobile prover helpers."""
+
+    output_dir = build_ready_bundle(tmp_path)
+    report_path = output_dir / "sccp-release-readiness.json"
+    report = json.loads(report_path.read_text(encoding="utf-8"))
+    row = next(
+        row
+        for row in report["user_prover_submission_surfaces"]
+        if row["lanes"] == "ton"
+    )
+    missing_helper = "buildTonSccpFullLightClientAuditProofRequests"
+    row["sdk_helper_symbols"] = [
+        helper for helper in row["sdk_helper_symbols"] if helper != missing_helper
+    ]
+    row["sdk_helpers"] = ", ".join(row["sdk_helper_symbols"])
+    row["sdk_helper_symbols_by_sdk"]["js-sdk"] = [
+        helper
+        for helper in row["sdk_helper_symbols_by_sdk"]["js-sdk"]
+        if helper != missing_helper
+    ]
+    report_path.write_text(
+        json.dumps(report, indent=2, sort_keys=True) + "\n",
+        encoding="utf-8",
+    )
+    rewrite_manifest_artifact(output_dir, "sccp-release-readiness.json")
+    rewrite_canonical_report_and_notes(output_dir)
+
+    verified = subprocess.run(
+        ["python3", str(VERIFY_SCRIPT), str(output_dir)],
+        check=False,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+        text=True,
+    )
+
+    assert verified.returncode == 1
+    assert (
+        "readiness report user_prover_submission_surfaces lanes ton "
+        "sdk_helper_symbols missing required helper: "
+        f"{missing_helper}"
+    ) in verified.stdout
+    assert (
+        "readiness report user_prover_submission_surfaces lanes ton "
+        "sdk_helper_symbols_by_sdk[js-sdk] missing required helper: "
+        f"{missing_helper}"
+    ) in verified.stdout
+    assert (
+        "readiness report user_prover_submission_surfaces does not match "
+        "corridor phases"
     ) in verified.stdout
 
 
@@ -5569,6 +6368,97 @@ def test_release_bundle_verifier_rejects_phase_log_without_expected_command(
     ) in verified.stdout
 
 
+def test_release_bundle_verifier_rejects_output_only_phase_command_fragment(
+    tmp_path: Path,
+) -> None:
+    """Published phase command fragments must come from traced command lines."""
+
+    output_dir = build_ready_bundle(tmp_path)
+    report = load_report_module()
+    phase_log = output_dir / "corridor" / "contract-smoke.log"
+    phase_log.write_text(
+        "\n".join(
+            (
+                "==> SCCP production corridor: contract-smoke",
+                *report.PHASE_TRANSCRIPT_REQUIRED_FRAGMENTS["contract-smoke"],
+                *report.PHASE_TRANSCRIPT_SUCCESS_FRAGMENTS["contract-smoke"],
+                "SCCP production corridor completed.",
+                "",
+            )
+        ),
+        encoding="utf-8",
+    )
+    rewrite_report_phase_artifact(output_dir, "contract-smoke")
+
+    verified = subprocess.run(
+        ["python3", str(VERIFY_SCRIPT), str(output_dir)],
+        check=False,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+        text=True,
+    )
+
+    assert verified.returncode == 1
+    assert (
+        "readiness report phase contract-smoke evidence artifact is missing "
+        "expected phase-block command: node --check "
+        "contracts/evm/sccp/test/sccp_message_bridge_smoke.js"
+    ) in verified.stdout
+
+
+def test_release_bundle_verifier_phase_transcript_inventory_matches_report() -> None:
+    """Verifier-owned public phase transcript inventory must mirror the report."""
+
+    verifier = load_verify_helpers()
+    report = load_report_module()
+
+    assert verifier.PHASE_TRANSCRIPT_REQUIRED_FRAGMENTS == (
+        report.PHASE_TRANSCRIPT_REQUIRED_FRAGMENTS
+    )
+    assert verifier.PHASE_TRANSCRIPT_SUCCESS_FRAGMENTS == (
+        report.PHASE_TRANSCRIPT_SUCCESS_FRAGMENTS
+    )
+
+
+def test_release_bundle_verifier_phase_transcript_inventory_is_independent(
+    tmp_path: Path,
+) -> None:
+    """A weakened report module must not relax release-bundle log checks."""
+
+    verifier = load_verify_helpers()
+    assert not hasattr(verifier, "_report_module")
+    required_export_test = "javascript/iroha_js/test/sccpPackageExports.test.js"
+    weak_required_fragments = tuple(
+        fragment
+        for fragment in verifier.PHASE_TRANSCRIPT_REQUIRED_FRAGMENTS["js-sdk"]
+        if fragment != required_export_test
+    )
+    phase_log = tmp_path / "js-sdk.log"
+    phase_log.write_text(
+        "\n".join(
+            (
+                "==> SCCP production corridor: js-sdk",
+                *phase_command_lines(weak_required_fragments),
+                *verifier.PHASE_TRANSCRIPT_SUCCESS_FRAGMENTS["js-sdk"],
+                "SCCP production corridor completed.",
+                "",
+            )
+        ),
+        encoding="utf-8",
+    )
+
+    errors = verifier._phase_transcript_errors(
+        tmp_path,
+        "js-sdk",
+        {"path": "js-sdk.log"},
+    )
+
+    assert (
+        "readiness report phase js-sdk evidence artifact is missing "
+        f"expected phase-block command: {required_export_test}"
+    ) in errors
+
+
 def test_release_bundle_verifier_requires_js_package_export_transcript(
     tmp_path: Path,
 ) -> None:
@@ -5588,7 +6478,7 @@ def test_release_bundle_verifier_requires_js_package_export_transcript(
         "\n".join(
             (
                 "==> SCCP production corridor: js-sdk",
-                *required_fragments,
+                *phase_command_lines(required_fragments),
                 *report.PHASE_TRANSCRIPT_SUCCESS_FRAGMENTS["js-sdk"],
                 "SCCP production corridor completed.",
                 "",
@@ -5624,8 +6514,8 @@ def test_release_bundle_verifier_rejects_phase_command_outside_claimed_block(
         "==> SCCP production corridor: contract-smoke\n"
         "phase contract-smoke passed\n"
         "==> SCCP production corridor: core-admission\n"
-        "node --check contracts/evm/sccp/test/sccp_message_bridge_smoke.js\n"
-        "bash scripts/sccp_evm_contract_smoke.sh\n"
+        "+ node --check contracts/evm/sccp/test/sccp_message_bridge_smoke.js\n"
+        "+ bash scripts/sccp_evm_contract_smoke.sh\n"
         "SCCP production corridor completed.\n",
         encoding="utf-8",
     )
@@ -5659,7 +6549,127 @@ def test_release_bundle_verifier_rejects_phase_log_without_success_marker(
         "\n".join(
             (
                 "==> SCCP production corridor: contract-smoke",
-                *report.PHASE_TRANSCRIPT_REQUIRED_FRAGMENTS["contract-smoke"],
+                *phase_command_lines(
+                    report.PHASE_TRANSCRIPT_REQUIRED_FRAGMENTS["contract-smoke"]
+                ),
+                "SCCP production corridor completed.",
+                "",
+            )
+        ),
+        encoding="utf-8",
+    )
+    rewrite_report_phase_artifact(output_dir, "contract-smoke")
+
+    verified = subprocess.run(
+        ["python3", str(VERIFY_SCRIPT), str(output_dir)],
+        check=False,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+        text=True,
+    )
+
+    assert verified.returncode == 1
+    assert (
+        "readiness report phase contract-smoke evidence artifact is missing "
+        "expected phase-block success marker: sccp_message_bridge_smoke: ok"
+    ) in verified.stdout
+
+
+def test_release_bundle_verifier_rejects_prefix_alias_phase_marker(
+    tmp_path: Path,
+) -> None:
+    """Published phase evidence must use the exact claimed phase marker."""
+
+    output_dir = build_ready_bundle(tmp_path)
+    report = load_report_module()
+    phase_log = output_dir / "corridor" / "contract-smoke.log"
+    phase_log.write_text(
+        "\n".join(
+            (
+                "==> SCCP production corridor: contract-smoke-forged",
+                *phase_command_lines(
+                    report.PHASE_TRANSCRIPT_REQUIRED_FRAGMENTS["contract-smoke"]
+                ),
+                *report.PHASE_TRANSCRIPT_SUCCESS_FRAGMENTS["contract-smoke"],
+                "SCCP production corridor completed.",
+                "",
+            )
+        ),
+        encoding="utf-8",
+    )
+    rewrite_report_phase_artifact(output_dir, "contract-smoke")
+
+    verified = subprocess.run(
+        ["python3", str(VERIFY_SCRIPT), str(output_dir)],
+        check=False,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+        text=True,
+    )
+
+    assert verified.returncode == 1
+    assert (
+        "readiness report phase contract-smoke evidence artifact is missing "
+        "the phase marker"
+    ) in verified.stdout
+
+
+def test_release_bundle_verifier_rejects_completion_outside_claimed_phase_block(
+    tmp_path: Path,
+) -> None:
+    """Published phase evidence must show completion in the claimed phase block."""
+
+    output_dir = build_ready_bundle(tmp_path)
+    report = load_report_module()
+    phase_log = output_dir / "corridor" / "contract-smoke.log"
+    phase_log.write_text(
+        "\n".join(
+            (
+                "==> SCCP production corridor: contract-smoke",
+                *phase_command_lines(
+                    report.PHASE_TRANSCRIPT_REQUIRED_FRAGMENTS["contract-smoke"]
+                ),
+                *report.PHASE_TRANSCRIPT_SUCCESS_FRAGMENTS["contract-smoke"],
+                "==> SCCP production corridor: core-admission",
+                "SCCP production corridor completed.",
+                "",
+            )
+        ),
+        encoding="utf-8",
+    )
+    rewrite_report_phase_artifact(output_dir, "contract-smoke")
+
+    verified = subprocess.run(
+        ["python3", str(VERIFY_SCRIPT), str(output_dir)],
+        check=False,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+        text=True,
+    )
+
+    assert verified.returncode == 1
+    assert (
+        "readiness report phase contract-smoke evidence artifact is missing "
+        "the phase-block completion sentinel"
+    ) in verified.stdout
+
+
+def test_release_bundle_verifier_rejects_command_line_only_success_marker(
+    tmp_path: Path,
+) -> None:
+    """Published phase evidence must show success outside traced commands."""
+
+    output_dir = build_ready_bundle(tmp_path)
+    report = load_report_module()
+    phase_log = output_dir / "corridor" / "contract-smoke.log"
+    phase_log.write_text(
+        "\n".join(
+            (
+                "==> SCCP production corridor: contract-smoke",
+                *phase_command_lines(
+                    report.PHASE_TRANSCRIPT_REQUIRED_FRAGMENTS["contract-smoke"]
+                ),
+                "+ echo sccp_message_bridge_smoke: ok",
                 "SCCP production corridor completed.",
                 "",
             )

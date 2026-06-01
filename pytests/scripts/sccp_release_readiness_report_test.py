@@ -28,6 +28,12 @@ JS_CALLBACK_HOOK_SYMBOLS = ("witnessProvider", "proveFn")
 PYTHON_CALLBACK_HOOK_SYMBOLS = ("witness_provider", "prove")
 
 
+def phase_command_lines(fragments) -> list[str]:
+    """Render required fragments as production-corridor traced commands."""
+
+    return [f"+ {fragment}" for fragment in fragments]
+
+
 def complete_corridor_log(phases: tuple[str, ...] = PHASES) -> str:
     """Return a synthetic successful SCCP production-corridor transcript."""
 
@@ -35,7 +41,9 @@ def complete_corridor_log(phases: tuple[str, ...] = PHASES) -> str:
     lines: list[str] = []
     for phase in phases:
         lines.append(f"==> SCCP production corridor: {phase}")
-        lines.extend(report.PHASE_TRANSCRIPT_REQUIRED_FRAGMENTS[phase])
+        lines.extend(
+            phase_command_lines(report.PHASE_TRANSCRIPT_REQUIRED_FRAGMENTS[phase])
+        )
         lines.extend(report.PHASE_TRANSCRIPT_SUCCESS_FRAGMENTS[phase])
     return "\n".join(
         [*lines, ""]
@@ -842,6 +850,54 @@ def test_release_readiness_report_rejects_phase_log_without_expected_command(
     ) in completed.stdout
 
 
+def test_release_readiness_report_rejects_output_only_phase_command_fragment(
+    tmp_path: Path,
+) -> None:
+    """Required command fragments must come from traced corridor command lines."""
+
+    evidence, _ = write_complete_evidence(tmp_path)
+    report = load_report_module()
+    corridor_log = tmp_path / "forged-rust-sccp-output-only.log"
+    corridor_log.write_text(
+        "\n".join(
+            (
+                "==> SCCP production corridor: rust-sccp",
+                *report.PHASE_TRANSCRIPT_REQUIRED_FRAGMENTS["rust-sccp"],
+                *report.PHASE_TRANSCRIPT_SUCCESS_FRAGMENTS["rust-sccp"],
+                "SCCP production corridor completed.",
+                "",
+            )
+        ),
+        encoding="utf-8",
+    )
+
+    completed = subprocess.run(
+        [
+            "python3",
+            str(SCRIPT),
+            "--require-phase-evidence",
+            "--phase-result",
+            "all=missing",
+            "--phase-result",
+            "rust-sccp=passed",
+            "--phase-evidence",
+            f"rust-sccp={corridor_log}",
+            str(evidence),
+        ],
+        check=False,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+        text=True,
+    )
+
+    assert completed.returncode == 1
+    assert "Status: NOT READY" in completed.stdout
+    assert (
+        "production corridor phase rust-sccp evidence artifact is missing "
+        "expected phase-block command: cargo test -p iroha_sccp -- --nocapture"
+    ) in completed.stdout
+
+
 def test_release_readiness_report_requires_js_package_dist_transcript(
     tmp_path: Path,
 ) -> None:
@@ -859,7 +915,7 @@ def test_release_readiness_report_requires_js_package_dist_transcript(
         "\n".join(
             (
                 "==> SCCP production corridor: js-sdk",
-                *required_fragments,
+                *phase_command_lines(required_fragments),
                 *report.PHASE_TRANSCRIPT_SUCCESS_FRAGMENTS["js-sdk"],
                 "SCCP production corridor completed.",
                 "",
@@ -914,7 +970,7 @@ def test_release_readiness_report_requires_js_package_export_transcript(
         "\n".join(
             (
                 "==> SCCP production corridor: js-sdk",
-                *required_fragments,
+                *phase_command_lines(required_fragments),
                 *report.PHASE_TRANSCRIPT_SUCCESS_FRAGMENTS["js-sdk"],
                 "SCCP production corridor completed.",
                 "",
@@ -961,7 +1017,7 @@ def test_release_readiness_report_rejects_phase_command_outside_claimed_block(
         "==> SCCP production corridor: rust-sccp\n"
         "phase rust-sccp passed\n"
         "==> SCCP production corridor: js-sdk\n"
-        "cargo test -p iroha_sccp -- --nocapture\n"
+        "+ cargo test -p iroha_sccp -- --nocapture\n"
         "SCCP production corridor completed.\n",
         encoding="utf-8",
     )
@@ -1005,7 +1061,9 @@ def test_release_readiness_report_rejects_phase_log_without_success_marker(
         "\n".join(
             (
                 "==> SCCP production corridor: rust-sccp",
-                *report.PHASE_TRANSCRIPT_REQUIRED_FRAGMENTS["rust-sccp"],
+                *phase_command_lines(
+                    report.PHASE_TRANSCRIPT_REQUIRED_FRAGMENTS["rust-sccp"]
+                ),
                 "SCCP production corridor completed.",
                 "",
             )

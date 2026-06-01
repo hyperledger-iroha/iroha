@@ -362,6 +362,114 @@ Init ==
   /\ promotionFresh = FALSE
   /\ gst = FALSE
 
+TlcNoFutureInit ==
+  futurePresent = FALSE
+
+TlcFutureInit(fCommitVotes, fQueuedVotes, fPayloadState, fRecoveryOwner) ==
+  /\ futurePresent = TRUE
+  /\ futureCommitVotes = fCommitVotes
+  /\ futureQueuedVotes = fQueuedVotes
+  /\ futurePayloadState = fPayloadState
+  /\ futureRecoveryOwner = fRecoveryOwner
+
+TlcFastCommonInit ==
+  /\ progressAge = 0
+  /\ recoveryLastRotationView = view
+
+TlcFastCanonicalInit ==
+  /\ TlcFastCommonInit
+  /\ \/
+        \* Terminal zero-evidence branch after GST.
+        /\ commitVotes = 0
+        /\ queuedVotes = 0
+        /\ payloadState = "Missing"
+        /\ recoveryOwner = "None"
+        /\ quorumRescheduleArmed = FALSE
+        /\ quorumWindowAge = 0
+        /\ view = 0
+        /\ validationState = "Pending"
+        /\ localVoteEmitted = FALSE
+        /\ commitQcObserved = FALSE
+        /\ TlcNoFutureInit
+     \/
+        \* Direct quorum/payload/validation commit branch.
+        /\ commitVotes = CommitQuorum
+        /\ queuedVotes = 0
+        /\ payloadState = "Local"
+        /\ recoveryOwner = "None"
+        /\ quorumRescheduleArmed = FALSE
+        /\ quorumWindowAge = 0
+        /\ view = 0
+        /\ validationState = "Valid"
+        /\ localVoteEmitted = TRUE
+        /\ commitQcObserved = TRUE
+        /\ TlcNoFutureInit
+     \/
+        \* Queued-vote, validation, payload-recovery, and commit branch.
+        /\ commitVotes = CommitQuorum - 1
+        /\ queuedVotes = 1
+        /\ payloadState = "Missing"
+        /\ recoveryOwner = "None"
+        /\ quorumRescheduleArmed = FALSE
+        /\ quorumWindowAge = 0
+        /\ view = 0
+        /\ validationState = "Pending"
+        /\ localVoteEmitted = FALSE
+        /\ commitQcObserved = FALSE
+        /\ TlcNoFutureInit
+     \/
+        \* Stale recovery-owner unlock branch.
+        /\ commitVotes = 1
+        /\ queuedVotes = 0
+        /\ payloadState = "Local"
+        /\ recoveryOwner = "Stale"
+        /\ quorumRescheduleArmed = FALSE
+        /\ quorumWindowAge = 0
+        /\ view = 1
+        /\ validationState = "Valid"
+        /\ localVoteEmitted = TRUE
+        /\ commitQcObserved = FALSE
+        /\ TlcNoFutureInit
+     \/
+        \* Retransmit then lower-view rotation branch.
+        /\ commitVotes = 1
+        /\ queuedVotes = 0
+        /\ payloadState = "Local"
+        /\ recoveryOwner = "None"
+        /\ quorumRescheduleArmed = TRUE
+        /\ quorumWindowAge = RescheduleWindow
+        /\ view = 0
+        /\ validationState = "Valid"
+        /\ localVoteEmitted = TRUE
+        /\ commitQcObserved = FALSE
+        /\ TlcNoFutureInit
+     \/
+        \* Retransmit then view-bound drop branch.
+        /\ commitVotes = 1
+        /\ queuedVotes = 0
+        /\ payloadState = "Local"
+        /\ recoveryOwner = "None"
+        /\ quorumRescheduleArmed = TRUE
+        /\ quorumWindowAge = RescheduleWindow
+        /\ view = MaxView
+        /\ validationState = "Valid"
+        /\ localVoteEmitted = TRUE
+        /\ commitQcObserved = FALSE
+        /\ TlcNoFutureInit
+     \/
+        \* Future frontier reanchor and promotion branch.
+        /\ commitVotes = 1
+        /\ queuedVotes = 0
+        /\ payloadState = "Local"
+        /\ recoveryOwner = "None"
+        /\ quorumRescheduleArmed = FALSE
+        /\ quorumWindowAge = 0
+        /\ view = 0
+        /\ validationState = "Valid"
+        /\ localVoteEmitted = TRUE
+        /\ commitQcObserved = FALSE
+        /\ TlcFutureInit(1, 0, "Missing", "None")
+
 ClearStaleRecoveryEnabled ==
   /\ ~BugDisableStaleRecovery
   /\ ~(BugFutureStaleOwnerBlocksReanchor /\ FutureFrontierEvidence)
@@ -1228,6 +1336,12 @@ Fairness ==
 
 Spec ==
   /\ Init
+  /\ [][Next]_vars
+  /\ Fairness
+
+SpecTlcFast ==
+  /\ Init
+  /\ TlcFastCanonicalInit
   /\ [][Next]_vars
   /\ Fairness
 

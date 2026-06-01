@@ -6,6 +6,7 @@ import hashlib
 import inspect
 import re
 import sys
+from collections import deque
 from pathlib import Path
 from typing import Any, Dict, Mapping
 
@@ -11325,6 +11326,39 @@ def test_sccp_provers_accept_callable_and_camel_case_witness_providers() -> None
                 prove=lambda request, options: {"proof_bytes": b"\x01\x02\x03\x04"},
             ).build_request(sample_production_witness())
         )
+
+
+def test_sccp_witness_provider_snapshots_mutable_sequence_inputs() -> None:
+    bundle_bytes = deque([5, 6, 7])
+    source_proof_bytes = deque([9, 10])
+    input_value = sample_evm_production_request_input(
+        bundle_bytes=bundle_bytes,
+        source_proof_bytes=source_proof_bytes,
+    )
+
+    async def evm_witness_provider(
+        input_snapshot: Mapping[str, Any],
+        _options: Mapping[str, Any],
+    ) -> Mapping[str, Any]:
+        assert input_snapshot is not input_value
+        assert input_snapshot["bundle_bytes"] is not bundle_bytes
+        assert input_snapshot["source_proof_bytes"] is not source_proof_bytes
+        input_snapshot["bundle_bytes"][0] = 0xFF  # type: ignore[index]
+        input_snapshot["source_proof_bytes"].append(0xFF)  # type: ignore[attr-defined]
+        return {
+            **input_snapshot,
+            "bundle_bytes": [5, 6, 7],
+            "source_proof_bytes": [9, 10],
+        }
+
+    request = asyncio.run(
+        EvmSccpProver(witness_provider=evm_witness_provider).build_request(input_value)
+    )
+
+    assert list(bundle_bytes) == [5, 6, 7]
+    assert list(source_proof_bytes) == [9, 10]
+    assert request["bundle_bytes"] == bytes([5, 6, 7])
+    assert request["source_proof_bytes"] == bytes([9, 10])
 
 
 def test_sccp_provers_resolve_ui_witnesses_before_linked_provers() -> None:

@@ -24,6 +24,8 @@ VARIABLES
 \* @type: <<Set(Int)>>;
 vars == <<tried>>
 
+TlcSingletonOrEmpty == Cardinality(tried) \in {0, 1}
+
 NoHardCapNoTrigger == 1
 HardCapTriggers == 2
 RecentDependencyProgressDefers == 3

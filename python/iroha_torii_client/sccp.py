@@ -25063,6 +25063,8 @@ def _clone_prover_callback_value(value: Any) -> Any:
         return tuple(_clone_prover_callback_value(child) for child in value)
     if isinstance(value, (bytes, bytearray, memoryview)):
         return bytes(value)
+    if isinstance(value, Sequence) and not isinstance(value, str):
+        return [_clone_prover_callback_value(child) for child in value]
     return value
 
 

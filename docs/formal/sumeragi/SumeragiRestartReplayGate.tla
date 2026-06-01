@@ -29,6 +29,8 @@ VARIABLES
 \* @type: <<Set(Int)>>;
 vars == <<tried>>
 
+TlcSingletonOrEmpty == Cardinality(tried) \in {0, 1}
+
 RestoreDigestMismatch == 1
 RestoreSignatureMismatch == 2
 RestoreMerkleMismatch == 3

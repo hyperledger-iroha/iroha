@@ -31,6 +31,8 @@ VARIABLES
 \* @type: <<Set(Int)>>;
 vars == <<tried>>
 
+TlcSingletonOrEmpty == Cardinality(tried) \in {0, 1}
+
 NoFutureEvidenceNoRequest == 1
 FutureEvidenceAtFrontierNoRequest == 2
 FutureEvidenceBeyondMissingPayloadRequests == 3

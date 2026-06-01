@@ -14,12 +14,65 @@ from typing import Any
 
 
 ROOT = Path(__file__).resolve().parents[1]
-BUNDLE_SCRIPT = ROOT / "scripts" / "sccp_release_bundle.py"
-REPORT_SCRIPT = ROOT / "scripts" / "sccp_release_readiness_report.py"
+ALL_LANES_SCRIPT = ROOT / "scripts" / "sccp_all_lanes_evidence.py"
 SCHEMA = "sccp-release-bundle-v1"
 CORRIDOR_COMPLETION_SENTINEL = "SCCP production corridor completed."
 CORRIDOR_DRY_RUN_SENTINEL = "SCCP production corridor dry run completed."
 CORRIDOR_PHASE_MARKER_PREFIX = "==> SCCP production corridor: "
+CORRIDOR_PHASES = (
+    "rust-sccp",
+    "evidence-scripts",
+    "js-sdk",
+    "python-sdk",
+    "swift-sdk",
+    "kotlin-sdk",
+    "java-android",
+    "contract-smoke",
+    "core-admission",
+)
+PHASE_TRANSCRIPT_REQUIRED_FRAGMENTS: dict[str, tuple[str, ...]] = {
+    "rust-sccp": ("cargo test -p iroha_sccp -- --nocapture",),
+    "evidence-scripts": (
+        "python3 -m pytest -q pytests/scripts/check_sccp_production_corridor_test.py",
+    ),
+    "js-sdk": (
+        "node --test",
+        "javascript/iroha_js/test/sccpSolanaProver.test.js",
+        "javascript/iroha_js/test/package_dist.test.js",
+        "javascript/iroha_js/test/sccpPackageExports.test.js",
+    ),
+    "python-sdk": (
+        "python3 -m pytest -q python/iroha_torii_client/tests/sccp_test.py",
+    ),
+    "swift-sdk": (
+        "swift test --filter SccpSolanaProverTests --disable-swift-testing",
+        "ToriiClientTests/testBridgeProofSubmitRequestBuildsSccpPayloadsFromSubmissions",
+    ),
+    "kotlin-sdk": (
+        "./gradlew :core-jvm:test --console=plain --tests org.hyperledger.iroha.sdk.sccp.",
+    ),
+    "java-android": (
+        "ANDROID_HARNESS_MAINS=org.hyperledger.iroha.android.sccp.EvmSccpProverTests",
+        "./gradlew :core:test --console=plain --tests org.hyperledger.iroha.android.GradleHarnessTests",
+        "./gradlew :core:test --console=plain --tests org.hyperledger.iroha.android.sccp.SolanaSccpProverTests",
+    ),
+    "contract-smoke": (
+        "node --check contracts/evm/sccp/test/sccp_message_bridge_smoke.js",
+        "bash scripts/sccp_evm_contract_smoke.sh",
+    ),
+    "core-admission": ("cargo test -p iroha_core --test bridge_proofs -- --nocapture",),
+}
+PHASE_TRANSCRIPT_SUCCESS_FRAGMENTS: dict[str, tuple[str, ...]] = {
+    "rust-sccp": ("test result: ok",),
+    "evidence-scripts": (" passed in ",),
+    "js-sdk": ("fail 0", "pass "),
+    "python-sdk": (" passed in ",),
+    "swift-sdk": ("0 failures",),
+    "kotlin-sdk": ("BUILD SUCCESSFUL",),
+    "java-android": ("BUILD SUCCESSFUL",),
+    "contract-smoke": ("sccp_message_bridge_smoke: ok",),
+    "core-admission": ("test result: ok",),
+}
 SCCP_DOMAIN_SORA = 0
 SCCP_DOMAIN_ETH = 1
 SCCP_DOMAIN_BSC = 2
@@ -69,6 +122,7 @@ REQUIRED_ARTIFACT_PATHS = (
     "sccp-all-lanes-summary.json",
     "sccp-release-notes-attachment.md",
 )
+MANIFEST_ROOT_PATH = "manifest.json"
 ARTIFACT_KEYS = {"path", "bytes", "sha256"}
 MANIFEST_KEYS = {
     "schema",
@@ -89,6 +143,25 @@ READINESS_REPORT_KEYS = {
     "cryptographic_evidence",
     "user_prover_submission_surfaces",
 }
+READINESS_MARKDOWN_REQUIRED_HEADINGS = (
+    "## Evidence Inputs",
+    "## Production Corridor",
+    "## Release Checklist",
+    "## Cryptographic Evidence",
+    "## User Prover Submission Surfaces",
+    "## Lane Readiness",
+    "## Blocking Items",
+    "## Required Release Evidence",
+)
+READINESS_MARKDOWN_REQUIRED_RELEASE_EVIDENCE_MARKERS = (
+    "scripts/check_sccp_production_corridor.sh",
+    "--require-phase-evidence",
+    "user-prover helper surface",
+    "JavaScript/web source",
+    "complete all-lanes evidence bundle",
+    "Governed live deployment evidence",
+    "Public release notes",
+)
 CRYPTOGRAPHIC_EVIDENCE_KEYS = {
     "domain",
     "chain",
@@ -122,6 +195,360 @@ USER_PROVER_SDK_HOOK_MARKERS = {
     "swift-sdk": ("WitnessProvider", "ProveFunction"),
     "kotlin-sdk": ("WitnessProvider", "ProofEngine"),
     "java-android": ("WitnessProvider", "ProofEngine"),
+}
+USER_PROVER_SDK_PHASES = (
+    "js-sdk",
+    "python-sdk",
+    "swift-sdk",
+    "kotlin-sdk",
+    "java-android",
+)
+USER_PROVER_REQUIRED_PHASES = (
+    *USER_PROVER_SDK_PHASES,
+    "core-admission",
+)
+USER_PROVER_KNOWN_REQUIRED_PHASES = (
+    *USER_PROVER_SDK_PHASES,
+    "contract-smoke",
+    "core-admission",
+)
+USER_PROVER_CONTRACT_SMOKE_BACKENDS = {
+    "evm-groth16-bn254-v1",
+    "tron-groth16-bn254-v1",
+}
+USER_PROVER_REQUIRED_LANE_BACKENDS = {
+    "eth,bsc": "evm-groth16-bn254-v1",
+    "tron": "tron-groth16-bn254-v1",
+    "sol": "sccp-solana-recursive-mainnet-v1",
+    "ton": "ton-contract-v1",
+    "substrate": "substrate-runtime-v1",
+}
+USER_PROVER_ON_CHAIN_SUBMISSION_BY_LANE = {
+    "eth,bsc": (
+        "Torii bridge-proof submit payload with BN254 Groth16 "
+        "proof_bytes_hex for the EVM verifier contract"
+    ),
+    "tron": (
+        "Torii bridge-proof submit payload with BN254 Groth16 "
+        "proof_bytes_hex for the TRON verifier contract"
+    ),
+    "sol": "Solana verifier-program instruction envelope",
+    "ton": "TON internal message body BOC",
+    "substrate": "Substrate runtime call envelope",
+}
+USER_PROVER_REQUIRED_HELPERS_BY_LANE_SDK = {
+    "eth,bsc": {
+        "js-sdk": (
+            "buildEvmSccpProofRequest",
+            "canonicalEvmSccpReceiptProofBytes",
+            "evmSccpReceiptProofHash",
+            "canonicalBscSccpReceiptProofBytes",
+            "bscSccpReceiptProofHash",
+            "EvmSccpProver",
+            "witnessProvider",
+            "proveFn",
+            "buildEvmSccpSubmission",
+            "buildEvmSccpBridgeProofSubmitPayload",
+        ),
+        "python-sdk": (
+            "build_evm_sccp_proof_request",
+            "canonical_evm_sccp_receipt_proof_bytes",
+            "evm_sccp_receipt_proof_hash",
+            "canonical_bsc_sccp_receipt_proof_bytes",
+            "bsc_sccp_receipt_proof_hash",
+            "EvmSccpProver",
+            "witness_provider",
+            "prove",
+            "build_evm_sccp_submission",
+            "build_evm_sccp_bridge_proof_submit_payload",
+        ),
+        "swift-sdk": (
+            "buildEvmSccpProofRequest",
+            "canonicalEvmSccpReceiptProofBytes",
+            "evmSccpReceiptProofHash",
+            "canonicalBscSccpReceiptProofBytes",
+            "bscSccpReceiptProofHash",
+            "EvmSccpProver",
+            "EvmSccpWitnessProvider",
+            "EvmSccpProver.ProveFunction",
+            "buildEvmSccpSubmission",
+            "ToriiBridgeProofSubmitRequest.init(evmSccpSubmission:)",
+        ),
+        "kotlin-sdk": (
+            "SccpEvm.buildProofRequest",
+            "SccpSourceProofs.canonicalEvmReceiptProofBytes",
+            "SccpSourceProofs.evmReceiptProofHash",
+            "SccpSourceProofs.canonicalBscReceiptProofBytes",
+            "SccpSourceProofs.bscReceiptProofHash",
+            "EvmSccpProver",
+            "EvmSccpWitnessProvider",
+            "EvmSccpProofEngine",
+            "SccpEvm.buildSubmission",
+            "BridgeProofSubmitRequest.fromEvmSccpSubmission",
+        ),
+        "java-android": (
+            "EvmSccpProver.buildProofRequest",
+            "SourceSccpProofs.canonicalEvmReceiptProofBytes",
+            "SourceSccpProofs.evmReceiptProofHash",
+            "SourceSccpProofs.canonicalBscReceiptProofBytes",
+            "SourceSccpProofs.bscReceiptProofHash",
+            "EvmSccpProver",
+            "EvmSccpProver.WitnessProvider",
+            "EvmSccpProver.ProofEngine",
+            "EvmSccpProver.buildSubmission",
+            "BridgeProofSubmitRequest.fromEvmSccpSubmission",
+        ),
+    },
+    "tron": {
+        "js-sdk": (
+            "buildTronSccpProofRequest",
+            "canonicalTronSccpReceiptProofBytes",
+            "canonicalTronSccpReceiptStateProofBytes",
+            "canonicalTronSccpTransactionSourceProofBytes",
+            "tronSccpTransactionSourceProofHash",
+            "TronSccpProver",
+            "witnessProvider",
+            "proveFn",
+            "buildTronSccpSubmission",
+            "buildTronSccpBridgeProofSubmitPayload",
+        ),
+        "python-sdk": (
+            "build_tron_sccp_proof_request",
+            "canonical_tron_sccp_receipt_proof_bytes",
+            "canonical_tron_sccp_receipt_state_proof_bytes",
+            "canonical_tron_sccp_transaction_source_proof_bytes",
+            "tron_sccp_transaction_source_proof_hash",
+            "TronSccpProver",
+            "witness_provider",
+            "prove",
+            "build_tron_sccp_submission",
+            "build_tron_sccp_bridge_proof_submit_payload",
+        ),
+        "swift-sdk": (
+            "buildTronSccpProofRequest",
+            "canonicalTronSccpReceiptProofBytes",
+            "canonicalTronSccpReceiptStateProofBytes",
+            "canonicalTronSccpTransactionSourceProofBytes",
+            "tronSccpTransactionSourceProofHash",
+            "TronSccpProver",
+            "TronSccpWitnessProvider",
+            "TronSccpProver.ProveFunction",
+            "buildTronSccpSubmission",
+            "ToriiBridgeProofSubmitRequest.init(tronSccpSubmission:)",
+        ),
+        "kotlin-sdk": (
+            "SccpTron.buildProofRequest",
+            "SccpSourceProofs.canonicalTronReceiptProofBytes",
+            "SccpSourceProofs.canonicalTronReceiptStateProofBytes",
+            "SccpSourceProofs.canonicalTronTransactionSourceProofBytes",
+            "SccpSourceProofs.tronTransactionSourceProofHash",
+            "TronSccpProver",
+            "TronSccpWitnessProvider",
+            "TronSccpProofEngine",
+            "SccpTron.buildSubmission",
+            "BridgeProofSubmitRequest.fromTronSccpSubmission",
+        ),
+        "java-android": (
+            "TronSccpProver.buildProofRequest",
+            "SourceSccpProofs.canonicalTronReceiptProofBytes",
+            "SourceSccpProofs.canonicalTronReceiptStateProofBytes",
+            "SourceSccpProofs.canonicalTronTransactionSourceProofBytes",
+            "SourceSccpProofs.tronTransactionSourceProofHash",
+            "TronSccpProver",
+            "TronSccpProver.WitnessProvider",
+            "TronSccpProver.ProofEngine",
+            "TronSccpProver.buildSubmission",
+            "BridgeProofSubmitRequest.fromTronSccpSubmission",
+        ),
+    },
+    "sol": {
+        "js-sdk": (
+            "buildSolanaSccpProofRequest",
+            "buildSolanaSccpAccountsLtHashProofRequest",
+            "buildSolanaSccpTowerReplayProofRequest",
+            "buildSolanaSccpFullAccountsdbLatticeProofRequest",
+            "buildSolanaSccpBankForkChoiceProofRequest",
+            "buildSolanaSccpFullLightClientAuditProofRequests",
+            "SolanaSccpSourceStateProver",
+            "SolanaSccpProver",
+            "witnessProvider",
+            "proveFn",
+            "buildSolanaSccpSubmission",
+        ),
+        "python-sdk": (
+            "build_solana_sccp_proof_request",
+            "build_solana_sccp_accounts_lt_hash_proof_request",
+            "build_solana_sccp_tower_replay_proof_request",
+            "build_solana_sccp_full_accountsdb_lattice_proof_request",
+            "build_solana_sccp_bank_fork_choice_proof_request",
+            "build_solana_sccp_full_light_client_audit_proof_requests",
+            "SolanaSccpSourceStateProver",
+            "SolanaSccpProver",
+            "witness_provider",
+            "prove",
+            "build_solana_sccp_submission",
+        ),
+        "swift-sdk": (
+            "buildSolanaSccpProofRequest",
+            "buildSolanaSccpAccountsLtHashProofRequest",
+            "buildSolanaSccpTowerReplayProofRequest",
+            "buildSolanaSccpFullAccountsdbLatticeProofRequest",
+            "buildSolanaSccpBankForkChoiceProofRequest",
+            "buildSolanaSccpFullLightClientAuditProofRequests",
+            "SolanaSccpSourceStateProver",
+            "SolanaSccpProver",
+            "SolanaSccpWitnessProvider",
+            "SolanaSccpProver.ProveFunction",
+            "SolanaSccpSourceStateProver.AccountsLtHashProveFunction",
+            "SolanaSccpSourceStateProver.FullLightClientAuditProveFunction",
+            "buildSolanaSccpSubmission",
+        ),
+        "kotlin-sdk": (
+            "SccpSolana.buildProofRequest",
+            "SccpSolana.buildAccountsLtHashProofRequest",
+            "SccpSolana.buildTowerReplayProofRequest",
+            "SccpSolana.buildFullAccountsdbLatticeProofRequest",
+            "SccpSolana.buildBankForkChoiceProofRequest",
+            "SccpSolana.buildFullLightClientAuditProofRequests",
+            "SolanaSccpSourceStateProver",
+            "SolanaSccpProver",
+            "SolanaSccpWitnessProvider",
+            "SolanaSccpProofEngine",
+            "SolanaSccpAccountsLtHashProofEngine",
+            "SolanaSccpFullLightClientAuditProofEngine",
+            "SccpSolana.buildSubmission",
+        ),
+        "java-android": (
+            "SolanaSccpProver.buildProofRequest",
+            "SolanaSccpProver.buildAccountsLtHashProofRequest",
+            "SolanaSccpProver.buildTowerReplayProofRequest",
+            "SolanaSccpProver.buildFullAccountsdbLatticeProofRequest",
+            "SolanaSccpProver.buildBankForkChoiceProofRequest",
+            "SolanaSccpProver.buildFullLightClientAuditProofRequests",
+            "SolanaSccpProver.SourceStateProver",
+            "SolanaSccpProver",
+            "SolanaSccpProver.WitnessProvider",
+            "SolanaSccpProver.ProofEngine",
+            "SolanaSccpProver.AccountsLtHashProofEngine",
+            "SolanaSccpProver.FullLightClientAuditProofEngine",
+            "SolanaSccpProver.buildSubmission",
+        ),
+    },
+    "ton": {
+        "js-sdk": (
+            "buildTonSccpProofRequest",
+            "buildTonShardStateProofRequest",
+            "buildTonSccpMasterchainConfigProofRequest",
+            "buildTonSccpValidatorSetTransitionProofRequest",
+            "buildTonSccpShardAccountsDictionaryProofRequest",
+            "buildTonSccpFullLightClientAuditProofRequests",
+            "TonSccpSourceStateProver",
+            "TonSccpProver",
+            "witnessProvider",
+            "proveFn",
+            "buildTonSccpSubmission",
+        ),
+        "python-sdk": (
+            "build_ton_sccp_proof_request",
+            "build_ton_shard_state_proof_request",
+            "build_ton_sccp_masterchain_config_proof_request",
+            "build_ton_sccp_validator_set_transition_proof_request",
+            "build_ton_sccp_shard_accounts_dictionary_proof_request",
+            "build_ton_sccp_full_light_client_audit_proof_requests",
+            "TonSccpSourceStateProver",
+            "TonSccpProver",
+            "witness_provider",
+            "prove",
+            "build_ton_sccp_submission",
+        ),
+        "swift-sdk": (
+            "buildTonSccpProofRequest",
+            "buildTonShardStateProofRequest",
+            "buildTonSccpMasterchainConfigProofRequest",
+            "buildTonSccpValidatorSetTransitionProofRequest",
+            "buildTonSccpShardAccountsDictionaryProofRequest",
+            "buildTonSccpFullLightClientAuditProofRequests",
+            "TonSccpSourceStateProver",
+            "TonSccpProver",
+            "TonSccpWitnessProvider",
+            "TonSccpProver.ProveFunction",
+            "TonSccpSourceStateProver.ShardStateProveFunction",
+            "TonSccpSourceStateProver.FullLightClientAuditProveFunction",
+            "buildTonSccpSubmission",
+        ),
+        "kotlin-sdk": (
+            "SccpTon.buildProofRequest",
+            "SccpTon.buildShardStateProofRequest",
+            "SccpTon.buildMasterchainConfigProofRequest",
+            "SccpTon.buildValidatorSetTransitionProofRequest",
+            "SccpTon.buildShardAccountsDictionaryProofRequest",
+            "SccpTon.buildFullLightClientAuditProofRequests",
+            "TonSccpSourceStateProver",
+            "TonSccpProver",
+            "TonSccpWitnessProvider",
+            "TonSccpProofEngine",
+            "TonSccpShardStateProofEngine",
+            "TonSccpFullLightClientAuditProofEngine",
+            "SccpTon.buildSubmission",
+        ),
+        "java-android": (
+            "TonSccpProver.buildProofRequest",
+            "TonSccpProver.buildShardStateProofRequest",
+            "TonSccpProver.buildMasterchainConfigProofRequest",
+            "TonSccpProver.buildValidatorSetTransitionProofRequest",
+            "TonSccpProver.buildShardAccountsDictionaryProofRequest",
+            "TonSccpProver.buildFullLightClientAuditProofRequests",
+            "TonSccpProver.SourceStateProver",
+            "TonSccpProver",
+            "TonSccpProver.WitnessProvider",
+            "TonSccpProver.ProofEngine",
+            "TonSccpProver.ShardStateProofEngine",
+            "TonSccpProver.FullLightClientAuditProofEngine",
+            "TonSccpProver.buildSubmission",
+        ),
+    },
+    "substrate": {
+        "js-sdk": (
+            "buildSubstrateSccpProofRequest",
+            "buildSubstrateSccpRuntimeStorageProofRequest",
+            "SubstrateSccpProver",
+            "witnessProvider",
+            "proveFn",
+            "buildSubstrateSccpSubmission",
+        ),
+        "python-sdk": (
+            "build_substrate_sccp_proof_request",
+            "build_substrate_sccp_runtime_storage_proof_request",
+            "SubstrateSccpProver",
+            "witness_provider",
+            "prove",
+            "build_substrate_sccp_submission",
+        ),
+        "swift-sdk": (
+            "buildSubstrateSccpProofRequest",
+            "buildSubstrateSccpRuntimeStorageProofRequest",
+            "SubstrateSccpProver",
+            "SubstrateSccpWitnessProvider",
+            "SubstrateSccpProver.ProveFunction",
+            "buildSubstrateSccpSubmission",
+        ),
+        "kotlin-sdk": (
+            "SccpSubstrate.buildProofRequest",
+            "SccpSourceProofs.buildSubstrateRuntimeStorageProofRequest",
+            "SubstrateSccpProver",
+            "SubstrateSccpWitnessProvider",
+            "SubstrateSccpProofEngine",
+            "SccpSubstrate.buildSubmission",
+        ),
+        "java-android": (
+            "SubstrateSccpProver.buildProofRequest",
+            "SourceSccpProofs.buildSubstrateRuntimeStorageProofRequest",
+            "SubstrateSccpProver",
+            "SubstrateSccpProver.WitnessProvider",
+            "SubstrateSccpProver.ProofEngine",
+            "SubstrateSccpProver.buildSubmission",
+        ),
+    },
 }
 RELEASE_CHECKLIST_KEYS = {"ready", "items"}
 RELEASE_CHECKLIST_ITEM_KEYS = {"id", "title", "ready", "blockers"}
@@ -364,12 +791,8 @@ def _load_module(name: str, path: Path) -> Any:
     return module
 
 
-def _report_module() -> Any:
-    return _load_module("_sccp_release_readiness_report", REPORT_SCRIPT)
-
-
-def _bundle_module() -> Any:
-    return _load_module("_sccp_release_bundle", BUNDLE_SCRIPT)
+def _all_lanes_module() -> Any:
+    return _load_module("_sccp_all_lanes_evidence", ALL_LANES_SCRIPT)
 
 
 def _canonical_artifact_path(artifact: dict[str, Any]) -> tuple[str | None, list[str]]:
@@ -446,6 +869,11 @@ def _artifact_errors(bundle_dir: Path, artifact: dict[str, Any]) -> list[str]:
     if path_errors:
         return [*errors, *path_errors]
     assert artifact_path is not None
+    if artifact_path == MANIFEST_ROOT_PATH:
+        return [
+            *errors,
+            f"manifest must not list verifier root as an artifact: {artifact_path}",
+        ]
     path = bundle_dir.joinpath(*PurePosixPath(artifact_path).parts)
     current = bundle_dir
     for part in PurePosixPath(artifact_path).parts:
@@ -484,6 +912,8 @@ def _manifest_artifacts_by_path(
         artifact_path, path_errors = _canonical_artifact_path(artifact)
         if path_errors or artifact_path is None:
             continue
+        if artifact_path == MANIFEST_ROOT_PATH:
+            continue
         if artifact_path in by_path:
             errors.append(f"duplicate manifest artifact path: {artifact_path}")
             continue
@@ -491,13 +921,14 @@ def _manifest_artifacts_by_path(
     return by_path
 
 
-def _bundle_file_paths(bundle_dir: Path, errors: list[str]) -> set[str]:
-    paths: set[str] = set()
+def _bundle_entry_paths(bundle_dir: Path, errors: list[str]) -> tuple[set[str], set[str]]:
+    files: set[str] = set()
+    directories: set[str] = set()
     try:
         candidates = sorted(bundle_dir.rglob("*"))
     except OSError as exc:
         errors.append(f"cannot enumerate bundle files: {exc}")
-        return paths
+        return files, directories
     for candidate in candidates:
         try:
             relative = candidate.relative_to(bundle_dir).as_posix()
@@ -507,18 +938,32 @@ def _bundle_file_paths(bundle_dir: Path, errors: list[str]) -> set[str]:
         if candidate.is_symlink():
             errors.append(f"bundle contains symlink: {relative}")
             continue
-        if not candidate.is_file():
-            continue
         relative_path = PurePosixPath(relative)
         if (
             "\\" in relative
             or relative_path.is_absolute()
             or ".." in relative_path.parts
         ):
-            errors.append(f"bundle contains non-canonical file path: {relative}")
+            errors.append(f"bundle contains non-canonical entry path: {relative}")
             continue
-        paths.add(relative)
-    return paths
+        if candidate.is_file():
+            files.add(relative)
+        elif candidate.is_dir():
+            directories.add(relative)
+        else:
+            errors.append(f"bundle contains unsupported filesystem entry: {relative}")
+    return files, directories
+
+
+def _expected_bundle_directories(expected_paths: set[str]) -> set[str]:
+    directories: set[str] = set()
+    for expected_path in expected_paths:
+        path = PurePosixPath(expected_path)
+        parent = path.parent
+        while parent != PurePosixPath("."):
+            directories.add(parent.as_posix())
+            parent = parent.parent
+    return directories
 
 
 def _check_report_artifact(
@@ -599,12 +1044,12 @@ def _phase_transcript_errors(
         errors.append(
             f"readiness report phase {phase} evidence artifact is missing the phase marker"
         )
-    if CORRIDOR_COMPLETION_SENTINEL not in transcript:
+    elif CORRIDOR_COMPLETION_SENTINEL not in phase_block:
         errors.append(
             "readiness report phase "
-            f"{phase} evidence artifact is missing the completion sentinel"
+            f"{phase} evidence artifact is missing the phase-block completion sentinel"
         )
-    required_fragments = _report_module().PHASE_TRANSCRIPT_REQUIRED_FRAGMENTS.get(phase)
+    required_fragments = PHASE_TRANSCRIPT_REQUIRED_FRAGMENTS.get(phase)
     if required_fragments is None:
         errors.append(
             "readiness report phase "
@@ -612,13 +1057,13 @@ def _phase_transcript_errors(
         )
     elif phase_block is not None:
         for fragment in required_fragments:
-            if fragment not in phase_block:
+            if not _phase_block_has_command_fragment(phase_block, fragment):
                 errors.append(
                     "readiness report phase "
                     f"{phase} evidence artifact is missing expected "
                     f"phase-block command: {fragment}"
                 )
-    success_fragments = _report_module().PHASE_TRANSCRIPT_SUCCESS_FRAGMENTS.get(phase)
+    success_fragments = PHASE_TRANSCRIPT_SUCCESS_FRAGMENTS.get(phase)
     if success_fragments is None:
         errors.append(
             "readiness report phase "
@@ -626,7 +1071,7 @@ def _phase_transcript_errors(
         )
     elif phase_block is not None:
         for fragment in success_fragments:
-            if fragment not in phase_block:
+            if not _phase_block_has_output_fragment(phase_block, fragment):
                 errors.append(
                     "readiness report phase "
                     f"{phase} evidence artifact is missing expected "
@@ -637,13 +1082,40 @@ def _phase_transcript_errors(
 
 def _phase_transcript_block(phase: str, transcript: str) -> str | None:
     marker = f"{CORRIDOR_PHASE_MARKER_PREFIX}{phase}"
-    start = transcript.find(marker)
-    if start < 0:
+    lines = transcript.splitlines()
+    start: int | None = None
+    for index, line in enumerate(lines):
+        if line == marker:
+            start = index
+            break
+    if start is None:
         return None
-    next_start = transcript.find(CORRIDOR_PHASE_MARKER_PREFIX, start + len(marker))
-    if next_start < 0:
-        next_start = len(transcript)
-    return transcript[start:next_start]
+    end = len(lines)
+    for index in range(start + 1, len(lines)):
+        if lines[index].startswith(CORRIDOR_PHASE_MARKER_PREFIX):
+            end = index
+            break
+    return "\n".join(lines[start:end])
+
+
+def _phase_command_lines(phase_block: str) -> list[str]:
+    return [
+        line.strip()
+        for line in phase_block.splitlines()
+        if line.lstrip().startswith("+ ")
+    ]
+
+
+def _phase_block_has_command_fragment(phase_block: str, fragment: str) -> bool:
+    return any(fragment in command for command in _phase_command_lines(phase_block))
+
+
+def _phase_block_has_output_fragment(phase_block: str, fragment: str) -> bool:
+    return any(
+        fragment in line
+        for line in phase_block.splitlines()
+        if not line.lstrip().startswith("+ ")
+    )
 
 
 def _expected_cryptographic_evidence(evidence: dict[str, Any]) -> list[dict[str, Any]]:
@@ -698,25 +1170,234 @@ def _expected_cryptographic_evidence(evidence: dict[str, Any]) -> list[dict[str,
     return rows
 
 
+def _readiness_markdown_record_flags(records: dict[str, bool]) -> str:
+    labels = {
+        "source_verifier_material": "source",
+        "source_adapter_deployment": "deploy",
+        "destination_rollout": "dest",
+        "route_allowlist": "route",
+    }
+    return ", ".join(
+        f"{label}={'yes' if records.get(field) else 'no'}"
+        for field, label in labels.items()
+    )
+
+
+def _readiness_markdown_hash_cell(value: Any) -> str:
+    if isinstance(value, str) and value:
+        return f"`{value}`"
+    return "-"
+
+
+def _readiness_markdown_audit_hashes_cell(value: Any) -> str:
+    if not isinstance(value, dict) or not value:
+        return "-"
+    return "<br>".join(
+        f"`{key}`: `{audit_hash}`"
+        for key, audit_hash in sorted(value.items())
+        if isinstance(key, str) and isinstance(audit_hash, str)
+    ) or "-"
+
+
+def _readiness_markdown_integer_cell(value: Any) -> str:
+    if type(value) is int:
+        return f"`{value}`"
+    return "-"
+
+
+def _readiness_markdown_sdk_helper_sets_cell(surface: dict[str, Any]) -> str:
+    helper_sets = surface.get("sdk_helper_symbols_by_sdk")
+    if not isinstance(helper_sets, dict):
+        return surface["sdk_helpers"]
+    rows: list[str] = []
+    for sdk in USER_PROVER_SDK_PHASES:
+        helpers = helper_sets.get(sdk)
+        if not isinstance(helpers, list):
+            continue
+        helper_text = ", ".join(f"`{helper}`" for helper in helpers)
+        rows.append(f"`{sdk}`: {helper_text}")
+    return "<br>".join(rows) if rows else surface["sdk_helpers"]
+
+
+def _render_readiness_markdown(
+    report: dict[str, Any],
+    *,
+    max_blockers_per_lane: int,
+) -> str:
+    status = "READY" if report["production_ready"] else "NOT READY"
+    lines = [
+        "# SCCP Release Readiness Report",
+        "",
+        f"Status: {status}",
+        "",
+        "## Evidence Inputs",
+        "",
+    ]
+    lines.append("| Path | Bytes | SHA-256 |")
+    lines.append("| --- | ---: | --- |")
+    for artifact in report["input_artifacts"]:
+        lines.append(
+            "| `{path}` | {bytes} | `{sha256}` |".format(
+                path=artifact["path"],
+                bytes=artifact["bytes"],
+                sha256=artifact["sha256"],
+            )
+        )
+    lines.extend(["", "## Production Corridor", ""])
+    lines.append("| Phase | Status | Evidence Artifact | Evidence SHA-256 |")
+    lines.append("| --- | --- | --- | --- |")
+    for phase, phase_status in report["corridor"]["phases"].items():
+        artifact = report["corridor"]["evidence_artifacts"].get(phase)
+        artifact_path = f"`{artifact['path']}`" if artifact else "-"
+        artifact_hash = f"`{artifact['sha256']}`" if artifact else "-"
+        lines.append(
+            f"| `{phase}` | {phase_status} | {artifact_path} | {artifact_hash} |"
+        )
+
+    lines.extend(["", "## Release Checklist", ""])
+    lines.append("| Gate | Status | Blockers |")
+    lines.append("| --- | --- | --- |")
+    for item in report["release_checklist"]["items"]:
+        item_status = "ready" if item["ready"] else "blocked"
+        blockers = item["blockers"][:max_blockers_per_lane]
+        blocker_text = "<br>".join(blockers) if blockers else "-"
+        if len(item["blockers"]) > max_blockers_per_lane:
+            remaining = len(item["blockers"]) - max_blockers_per_lane
+            blocker_text += f"<br>... {remaining} more"
+        lines.append(f"| `{item['id']}` | {item_status} | {blocker_text} |")
+
+    lines.extend(["", "## Cryptographic Evidence", ""])
+    lines.append(
+        "| Domain | Chain | Source Material | Source Deployment | "
+        "Destination Binding | Source Gate | Source Gate Audits | "
+        "Route Allowlist | Route Canary | Canary Source | Canary Block | "
+        "Canary Timestamp |"
+    )
+    lines.append(
+        "| --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- |"
+    )
+    for row in report["cryptographic_evidence"]:
+        canary_source = row["route_canary_evidence_source"] or "-"
+        if not row["route_canary_evidence_bound"]:
+            canary_source = f"{canary_source} (unbound)"
+        source_gate = _readiness_markdown_hash_cell(row["source_adapter_gate_hash"])
+        if not row["source_adapter_gate_required"] and source_gate == "-":
+            source_gate = "not required"
+        lines.append(
+            "| {domain} | `{chain}` | {source} | {deploy} | {dest} | "
+            "{source_gate} | {source_gate_audits} | {route} | {canary} | "
+            "`{canary_source}` | {canary_block} | {canary_timestamp} |".format(
+                domain=row["domain"],
+                chain=row["chain"],
+                source=_readiness_markdown_hash_cell(
+                    row["source_verifier_material_hash"]
+                ),
+                deploy=_readiness_markdown_hash_cell(
+                    row["source_adapter_engine_deployment_hash"]
+                ),
+                dest=_readiness_markdown_hash_cell(row["destination_binding_hash"]),
+                source_gate=source_gate,
+                source_gate_audits=_readiness_markdown_audit_hashes_cell(
+                    row["source_adapter_gate_audit_hashes"]
+                ),
+                route=_readiness_markdown_hash_cell(row["route_allowlist_hash"]),
+                canary=_readiness_markdown_hash_cell(
+                    row["route_canary_evidence_hash"]
+                ),
+                canary_source=canary_source,
+                canary_block=_readiness_markdown_integer_cell(
+                    row["route_canary_block_number"]
+                ),
+                canary_timestamp=_readiness_markdown_integer_cell(
+                    row["route_canary_block_timestamp"]
+                ),
+            )
+        )
+
+    lines.extend(["", "## User Prover Submission Surfaces", ""])
+    lines.append(
+        "| Lanes | Proof Backend | SDK Helpers | On-chain Submission | "
+        "Required Phases | Validation |"
+    )
+    lines.append("| --- | --- | --- | --- | --- | --- |")
+    for surface in report["user_prover_submission_surfaces"]:
+        required_phases = ", ".join(
+            f"`{phase}`" for phase in surface["required_phases"]
+        )
+        validation = surface["validation_status"]
+        if surface["validation_blockers"]:
+            validation += ": " + "<br>".join(surface["validation_blockers"])
+        lines.append(
+            "| `{lanes}` | `{proof_backend}` | {sdk_helpers} | {submission} | "
+            "{required_phases} | {validation} |".format(
+                lanes=surface["lanes"],
+                proof_backend=surface["proof_backend"],
+                sdk_helpers=_readiness_markdown_sdk_helper_sets_cell(surface),
+                submission=surface["on_chain_submission"],
+                required_phases=required_phases,
+                validation=validation,
+            )
+        )
+
+    lines.extend(["", "## Lane Readiness", ""])
+    lines.append("| Domain | Chain | Status | Records | Blockers |")
+    lines.append("| --- | --- | --- | --- | --- |")
+    for lane in report["evidence"]["lanes"]:
+        lane_status = "ready" if lane["production_ready"] else "blocked"
+        blockers = lane["blockers"][:max_blockers_per_lane]
+        blocker_text = "<br>".join(blockers) if blockers else "-"
+        if len(lane["blockers"]) > max_blockers_per_lane:
+            remaining = len(lane["blockers"]) - max_blockers_per_lane
+            blocker_text += f"<br>... {remaining} more"
+        lines.append(
+            "| {domain} | `{chain}` | {status} | {records} | {blockers} |".format(
+                domain=lane["domain"],
+                chain=lane["chain"],
+                status=lane_status,
+                records=_readiness_markdown_record_flags(lane["records"]),
+                blockers=blocker_text,
+            )
+        )
+
+    lines.extend(["", "## Blocking Items", ""])
+    if report["blockers"]:
+        for blocker in report["blockers"]:
+            lines.append(f"- {blocker}")
+    else:
+        lines.append("- None")
+
+    lines.extend(
+        [
+            "",
+            "## Required Release Evidence",
+            "",
+            "- A passing `bash scripts/check_sccp_production_corridor.sh` run, recorded with `--require-phase-evidence` and one hashed `--phase-evidence` artifact for every passed phase.",
+            "- Passing web/mobile SDK artifacts for the user-prover helper surface, including the JavaScript/web source, packaged `dist`, and TypeScript declaration exports used by portal builds.",
+            "- A complete all-lanes evidence bundle containing source verifier material, source-adapter deployment, destination rollout, route allowlist, and route canary records for every advertised SCCP remote domain.",
+            "- Governed live deployment evidence for immutable destination verifiers and source-chain verifier engines; offline placeholder or template-derived hashes keep the report blocked.",
+            "- Public release notes must attach this report and the all-lanes JSON summary before production activation.",
+        ]
+    )
+    return "\n".join(lines) + "\n"
+
+
 def _expected_readiness_markdown(report: dict[str, Any]) -> str:
-    module = _report_module()
     ordered_report = copy.deepcopy(report)
     corridor = ordered_report.get("corridor")
     if isinstance(corridor, dict):
-        phase_order = module._corridor_phases()
         for field in ("phases", "evidence_artifacts"):
             values = corridor.get(field)
             if not isinstance(values, dict):
                 continue
             ordered = {
                 phase: values[phase]
-                for phase in phase_order
+                for phase in CORRIDOR_PHASES
                 if phase in values
             }
             for phase in sorted(set(values) - set(ordered)):
                 ordered[phase] = values[phase]
             corridor[field] = ordered
-    return module._render_markdown(ordered_report, max_blockers_per_lane=4)
+    return _render_readiness_markdown(ordered_report, max_blockers_per_lane=4)
 
 
 def _expected_release_notes_attachment(
@@ -731,8 +1412,396 @@ def _expected_release_notes_attachment(
             and artifact.get("path") != "sccp-release-notes-attachment.md"
         )
     ]
-    module = _bundle_module()
-    return module._release_notes_attachment(report, attachment_artifacts)
+    status = "READY" if report["production_ready"] else "NOT READY"
+    lines = [
+        "# SCCP Public Release Notes Attachment",
+        "",
+        f"Status: {status}",
+        "",
+        (
+            "Attach `manifest.json` plus every artifact below to the public release "
+            "notes before production activation."
+        ),
+        "",
+        (
+            "`manifest.json` is the verifier root and is intentionally not listed "
+            "in its own artifact table."
+        ),
+        "",
+        "| Artifact | Bytes | SHA-256 |",
+        "| --- | ---: | --- |",
+    ]
+    for artifact in attachment_artifacts:
+        lines.append(
+            "| `{path}` | {bytes} | `{sha256}` |".format(
+                path=artifact["path"],
+                bytes=artifact["bytes"],
+                sha256=artifact["sha256"],
+            )
+        )
+    if report["blockers"]:
+        lines.extend(["", "## Blocking Items", ""])
+        lines.extend(f"- {blocker}" for blocker in report["blockers"])
+    return "\n".join(lines) + "\n"
+
+
+def _markdown_sections(
+    markdown: str,
+    required_headings: tuple[str, ...],
+) -> tuple[dict[str, str], list[str]]:
+    errors: list[str] = []
+    lines = markdown.splitlines()
+    heading_positions: dict[str, int] = {}
+    previous_position = -1
+    for heading in required_headings:
+        matches = [
+            index for index, line in enumerate(lines) if line.strip() == heading
+        ]
+        if not matches:
+            errors.append(f"readiness report Markdown missing section: {heading}")
+            continue
+        if len(matches) > 1:
+            errors.append(f"readiness report Markdown repeats section: {heading}")
+            continue
+        position = matches[0]
+        if position <= previous_position:
+            errors.append(
+                "readiness report Markdown section order is not canonical: "
+                f"{heading}"
+            )
+        previous_position = position
+        heading_positions[heading] = position
+
+    sections: dict[str, str] = {}
+    for heading, position in heading_positions.items():
+        end = len(lines)
+        for index in range(position + 1, len(lines)):
+            if lines[index].startswith("## "):
+                end = index
+                break
+        sections[heading] = "\n".join(lines[position + 1 : end])
+    return sections, errors
+
+
+def _markdown_missing_value_errors(
+    section_name: str,
+    section_text: str,
+    value: Any,
+    label: str,
+) -> list[str]:
+    if value is None or value == "":
+        return []
+    text = str(value)
+    if text not in section_text:
+        return [
+            f"readiness report Markdown {section_name} section missing {label}: {text}"
+        ]
+    return []
+
+
+def _readiness_markdown_invariant_errors(
+    report: dict[str, Any],
+    markdown: str,
+) -> list[str]:
+    errors: list[str] = []
+    lines = markdown.splitlines()
+    if not lines or lines[0] != "# SCCP Release Readiness Report":
+        errors.append("readiness report Markdown missing canonical title")
+    if not markdown.endswith("\n"):
+        errors.append("readiness report Markdown must end with a newline")
+    status = "READY" if report.get("production_ready") is True else "NOT READY"
+    if f"Status: {status}" not in lines:
+        errors.append(f"readiness report Markdown missing status line: {status}")
+
+    sections, section_errors = _markdown_sections(
+        markdown,
+        READINESS_MARKDOWN_REQUIRED_HEADINGS,
+    )
+    errors.extend(section_errors)
+
+    evidence_section = sections.get("## Evidence Inputs", "")
+    input_artifacts = report.get("input_artifacts")
+    if isinstance(input_artifacts, list):
+        for artifact in input_artifacts:
+            if not isinstance(artifact, dict):
+                continue
+            artifact_path = artifact.get("path")
+            errors.extend(
+                _markdown_missing_value_errors(
+                    "Evidence Inputs",
+                    evidence_section,
+                    artifact_path,
+                    "input artifact path",
+                )
+            )
+            errors.extend(
+                _markdown_missing_value_errors(
+                    "Evidence Inputs",
+                    evidence_section,
+                    artifact.get("sha256"),
+                    f"input artifact hash for {artifact_path}",
+                )
+            )
+
+    corridor_section = sections.get("## Production Corridor", "")
+    corridor = report.get("corridor")
+    if isinstance(corridor, dict):
+        phases = corridor.get("phases")
+        if isinstance(phases, dict):
+            for phase, phase_status in phases.items():
+                errors.extend(
+                    _markdown_missing_value_errors(
+                        "Production Corridor",
+                        corridor_section,
+                        phase,
+                        "phase",
+                    )
+                )
+                errors.extend(
+                    _markdown_missing_value_errors(
+                        "Production Corridor",
+                        corridor_section,
+                        phase_status,
+                        f"status for phase {phase}",
+                    )
+                )
+        phase_artifacts = corridor.get("evidence_artifacts")
+        if isinstance(phase_artifacts, dict):
+            for phase, artifact in phase_artifacts.items():
+                if not isinstance(artifact, dict):
+                    continue
+                errors.extend(
+                    _markdown_missing_value_errors(
+                        "Production Corridor",
+                        corridor_section,
+                        artifact.get("path"),
+                        f"evidence artifact path for phase {phase}",
+                    )
+                )
+                errors.extend(
+                    _markdown_missing_value_errors(
+                        "Production Corridor",
+                        corridor_section,
+                        artifact.get("sha256"),
+                        f"evidence artifact hash for phase {phase}",
+                    )
+                )
+
+    checklist_section = sections.get("## Release Checklist", "")
+    release_checklist = report.get("release_checklist")
+    if isinstance(release_checklist, dict):
+        items = release_checklist.get("items")
+        if isinstance(items, list):
+            for item in items:
+                if not isinstance(item, dict):
+                    continue
+                item_id = item.get("id")
+                errors.extend(
+                    _markdown_missing_value_errors(
+                        "Release Checklist",
+                        checklist_section,
+                        item_id,
+                        "gate",
+                    )
+                )
+                item_status = "ready" if item.get("ready") is True else "blocked"
+                errors.extend(
+                    _markdown_missing_value_errors(
+                        "Release Checklist",
+                        checklist_section,
+                        item_status,
+                        f"status for gate {item_id}",
+                    )
+                )
+
+    crypto_section = sections.get("## Cryptographic Evidence", "")
+    crypto_rows = report.get("cryptographic_evidence")
+    if isinstance(crypto_rows, list):
+        for row in crypto_rows:
+            if not isinstance(row, dict):
+                continue
+            domain = row.get("domain")
+            chain = row.get("chain")
+            errors.extend(
+                _markdown_missing_value_errors(
+                    "Cryptographic Evidence",
+                    crypto_section,
+                    domain,
+                    "domain",
+                )
+            )
+            errors.extend(
+                _markdown_missing_value_errors(
+                    "Cryptographic Evidence",
+                    crypto_section,
+                    chain,
+                    f"chain for domain {domain}",
+                )
+            )
+            for field in (
+                "source_verifier_material_hash",
+                "source_adapter_engine_deployment_hash",
+                "destination_binding_hash",
+                "route_allowlist_hash",
+                "route_canary_evidence_hash",
+                "route_canary_evidence_source",
+                "source_adapter_gate_hash",
+            ):
+                errors.extend(
+                    _markdown_missing_value_errors(
+                        "Cryptographic Evidence",
+                        crypto_section,
+                        row.get(field),
+                        f"{field} for domain {domain}",
+                    )
+                )
+            gate_audits = row.get("source_adapter_gate_audit_hashes")
+            if isinstance(gate_audits, dict):
+                for audit_key, audit_hash in gate_audits.items():
+                    errors.extend(
+                        _markdown_missing_value_errors(
+                            "Cryptographic Evidence",
+                            crypto_section,
+                            audit_key,
+                            f"source_adapter_gate_audit_hashes key for domain {domain}",
+                        )
+                    )
+                    errors.extend(
+                        _markdown_missing_value_errors(
+                            "Cryptographic Evidence",
+                            crypto_section,
+                            audit_hash,
+                            f"source_adapter_gate_audit_hashes value for domain {domain}",
+                        )
+                    )
+            for field in (
+                "route_canary_block_number",
+                "route_canary_block_timestamp",
+            ):
+                errors.extend(
+                    _markdown_missing_value_errors(
+                        "Cryptographic Evidence",
+                        crypto_section,
+                        row.get(field),
+                        f"{field} for domain {domain}",
+                    )
+                )
+
+    surfaces_section = sections.get("## User Prover Submission Surfaces", "")
+    surfaces = report.get("user_prover_submission_surfaces")
+    if isinstance(surfaces, list):
+        for surface in surfaces:
+            if not isinstance(surface, dict):
+                continue
+            lanes = surface.get("lanes")
+            for field in ("lanes", "proof_backend", "on_chain_submission"):
+                errors.extend(
+                    _markdown_missing_value_errors(
+                        "User Prover Submission Surfaces",
+                        surfaces_section,
+                        surface.get(field),
+                        f"{field} for lanes {lanes}",
+                    )
+                )
+            helper_sets = surface.get("sdk_helper_symbols_by_sdk")
+            if isinstance(helper_sets, dict):
+                for sdk, helpers in helper_sets.items():
+                    errors.extend(
+                        _markdown_missing_value_errors(
+                            "User Prover Submission Surfaces",
+                            surfaces_section,
+                            sdk,
+                            f"SDK row for lanes {lanes}",
+                        )
+                    )
+                    if not isinstance(helpers, list):
+                        continue
+                    for helper in helpers:
+                        errors.extend(
+                            _markdown_missing_value_errors(
+                                "User Prover Submission Surfaces",
+                                surfaces_section,
+                                helper,
+                                f"helper for lanes {lanes}",
+                            )
+                        )
+            required_phases = surface.get("required_phases")
+            if isinstance(required_phases, list):
+                for phase in required_phases:
+                    errors.extend(
+                        _markdown_missing_value_errors(
+                            "User Prover Submission Surfaces",
+                            surfaces_section,
+                            phase,
+                            f"required phase for lanes {lanes}",
+                        )
+                    )
+
+    lane_section = sections.get("## Lane Readiness", "")
+    evidence = report.get("evidence")
+    if isinstance(evidence, dict):
+        lanes = evidence.get("lanes")
+        if isinstance(lanes, list):
+            for lane in lanes:
+                if not isinstance(lane, dict):
+                    continue
+                domain = lane.get("domain")
+                errors.extend(
+                    _markdown_missing_value_errors(
+                        "Lane Readiness",
+                        lane_section,
+                        domain,
+                        "domain",
+                    )
+                )
+                errors.extend(
+                    _markdown_missing_value_errors(
+                        "Lane Readiness",
+                        lane_section,
+                        lane.get("chain"),
+                        f"chain for domain {domain}",
+                    )
+                )
+                lane_status = (
+                    "ready" if lane.get("production_ready") is True else "blocked"
+                )
+                errors.extend(
+                    _markdown_missing_value_errors(
+                        "Lane Readiness",
+                        lane_section,
+                        lane_status,
+                        f"status for domain {domain}",
+                    )
+                )
+
+    blockers_section = sections.get("## Blocking Items", "")
+    blockers = report.get("blockers")
+    if isinstance(blockers, list):
+        if blockers:
+            for blocker in blockers:
+                errors.extend(
+                    _markdown_missing_value_errors(
+                        "Blocking Items",
+                        blockers_section,
+                        blocker,
+                        "blocker",
+                    )
+                )
+        elif "- None" not in blockers_section:
+            errors.append("readiness report Markdown Blocking Items section missing - None")
+
+    required_evidence_section = sections.get("## Required Release Evidence", "")
+    for marker in READINESS_MARKDOWN_REQUIRED_RELEASE_EVIDENCE_MARKERS:
+        errors.extend(
+            _markdown_missing_value_errors(
+                "Required Release Evidence",
+                required_evidence_section,
+                marker,
+                "release evidence marker",
+            )
+        )
+
+    return errors
 
 
 def _manifest_artifact_paths_in_order(artifacts: list[Any]) -> list[str]:
@@ -759,7 +1828,7 @@ def _expected_manifest_artifact_order(report: dict[str, Any]) -> list[str]:
         phases = corridor.get("phases")
         phase_artifacts = corridor.get("evidence_artifacts")
         if isinstance(phases, dict) and isinstance(phase_artifacts, dict):
-            for phase in _report_module()._corridor_phases():
+            for phase in CORRIDOR_PHASES:
                 if phases.get(phase) != "passed":
                     continue
                 artifact = phase_artifacts.get(phase)
@@ -778,16 +1847,42 @@ def _expected_submission_surfaces(report: dict[str, Any]) -> list[dict[str, Any]
     phase_status = {}
     if isinstance(corridor, dict) and isinstance(corridor.get("phases"), dict):
         phase_status = corridor["phases"]
-    module = _report_module()
-    return module._submission_surfaces(phase_status)
+
+    surfaces: list[dict[str, Any]] = []
+    for lanes, proof_backend in USER_PROVER_REQUIRED_LANE_BACKENDS.items():
+        helper_sets = USER_PROVER_REQUIRED_HELPERS_BY_LANE_SDK[lanes]
+        js_helpers = list(helper_sets["js-sdk"])
+        required_phases = list(USER_PROVER_SDK_PHASES)
+        if proof_backend in USER_PROVER_CONTRACT_SMOKE_BACKENDS:
+            required_phases.append("contract-smoke")
+        required_phases.append("core-admission")
+        blockers = [
+            f"{phase} is {phase_status.get(phase, 'missing')}"
+            for phase in required_phases
+            if phase_status.get(phase) != "passed"
+        ]
+        surfaces.append(
+            {
+                "lanes": lanes,
+                "proof_backend": proof_backend,
+                "sdk_helper_symbols": js_helpers,
+                "sdk_helper_symbols_by_sdk": {
+                    sdk: list(helper_sets[sdk]) for sdk in USER_PROVER_SDK_PHASES
+                },
+                "sdk_helpers": ", ".join(js_helpers),
+                "on_chain_submission": USER_PROVER_ON_CHAIN_SUBMISSION_BY_LANE[
+                    lanes
+                ],
+                "required_phases": required_phases,
+                "validation_status": "passed" if not blockers else "blocked",
+                "validation_blockers": blockers,
+            }
+        )
+    return surfaces
 
 
 def _corridor_phase_errors(corridor: dict[str, Any]) -> list[str]:
     errors: list[str] = []
-    try:
-        expected_phases = _report_module()._corridor_phases()
-    except Exception as exc:
-        return [f"cannot load expected production corridor phases: {exc}"]
     phases = corridor.get("phases")
     if not isinstance(phases, dict):
         return ["readiness report corridor phases is not an object"]
@@ -795,10 +1890,10 @@ def _corridor_phase_errors(corridor: dict[str, Any]) -> list[str]:
     if not isinstance(phase_artifacts, dict):
         phase_artifacts = {}
 
-    expected_set = set(expected_phases)
+    expected_set = set(CORRIDOR_PHASES)
     for phase in sorted(set(phases) - expected_set):
         errors.append(f"readiness report corridor has unknown phase status: {phase}")
-    for phase in expected_phases:
+    for phase in CORRIDOR_PHASES:
         if phase not in phases:
             errors.append(f"readiness report corridor missing phase status: {phase}")
             continue
@@ -1045,6 +2140,18 @@ def _cryptographic_evidence_row_schema_errors(row: dict[str, Any]) -> list[str]:
             "readiness report cryptographic evidence row "
             "route_canary_evidence_source must be a non-empty string"
         )
+    expected_canary_source = ALL_LANES_ROUTE_CANARY_SOURCE_BY_DOMAIN.get(
+        row.get("domain")
+    )
+    if (
+        expected_canary_source is not None
+        and isinstance(row.get("route_canary_evidence_source"), str)
+        and row.get("route_canary_evidence_source") != expected_canary_source
+    ):
+        errors.append(
+            "readiness report cryptographic evidence row "
+            f"route_canary_evidence_source must be {expected_canary_source}"
+        )
     if "route_canary_evidence_bound" in row and (
         type(row.get("route_canary_evidence_bound")) is not bool
     ):
@@ -1119,6 +2226,26 @@ def _cryptographic_evidence_row_schema_errors(row: dict[str, Any]) -> list[str]:
             )
     if row.get("source_adapter_gate_required") is True:
         gate_hash = row.get("source_adapter_gate_hash")
+        expected_audit_keys = ALL_LANES_SOURCE_ADAPTER_GATE_AUDIT_KEYS_BY_DOMAIN.get(
+            row.get("domain")
+        )
+        if expected_audit_keys is None:
+            errors.append(
+                "readiness report cryptographic evidence row "
+                "source_adapter_gate_required must be false for this domain"
+            )
+        elif isinstance(audit_hashes, dict):
+            for key in sorted(set(audit_hashes) - expected_audit_keys):
+                errors.append(
+                    "readiness report cryptographic evidence row "
+                    "source_adapter_gate_audit_hashes contains unexpected "
+                    f"field: {key}"
+                )
+            for key in sorted(expected_audit_keys - set(audit_hashes)):
+                errors.append(
+                    "readiness report cryptographic evidence row "
+                    f"source_adapter_gate_audit_hashes missing field: {key}"
+                )
         if not gate_hash:
             errors.append(
                 "readiness report cryptographic evidence row "
@@ -1160,6 +2287,11 @@ def _cryptographic_evidence_row_schema_errors(row: dict[str, Any]) -> list[str]:
                 f"source_adapter_gate_audit_hashes.{expected_gate_key}"
             )
     elif row.get("source_adapter_gate_required") is False:
+        if row.get("domain") in ALL_LANES_SOURCE_ADAPTER_GATE_AUDIT_KEYS_BY_DOMAIN:
+            errors.append(
+                "readiness report cryptographic evidence row "
+                "source_adapter_gate_required must be true for this domain"
+            )
         if row.get("source_adapter_gate_hash") not in (None, ""):
             errors.append(
                 "readiness report cryptographic evidence row "
@@ -1270,6 +2402,36 @@ def _cryptographic_evidence_lane_binding_errors(
     return errors
 
 
+def _cryptographic_evidence_inventory_errors(crypto: list[Any]) -> list[str]:
+    label = "readiness report cryptographic_evidence"
+    errors: list[str] = []
+    seen_domains: set[int] = set()
+    for row in crypto:
+        if not isinstance(row, dict):
+            continue
+        domain = row.get("domain")
+        if type(domain) is not int:
+            continue
+        if domain in seen_domains:
+            errors.append(f"{label} contains duplicate domain: {domain}")
+        else:
+            seen_domains.add(domain)
+        expected_chain = ALL_LANES_CHAIN_BY_DOMAIN.get(domain)
+        if expected_chain is None:
+            errors.append(f"{label} contains unknown domain: {domain}")
+            continue
+        chain = row.get("chain")
+        if isinstance(chain, str) and chain and chain != expected_chain:
+            errors.append(
+                f"{label} chain mismatch for domain {domain}: "
+                f"expected {expected_chain}, got {chain!r}"
+            )
+    for domain in ALL_LANES_REQUIRED_DOMAINS:
+        if domain not in seen_domains:
+            errors.append(f"{label} missing required domain: {domain}")
+    return errors
+
+
 def _non_empty_string_field_errors(
     label: str,
     payload: dict[str, Any],
@@ -1346,13 +2508,13 @@ def _submission_surface_row_schema_errors(row: dict[str, Any]) -> list[str]:
             "sdk_helper_symbols_by_sdk must be an object"
         )
     else:
-        expected_sdks = set(_report_module().USER_PROVER_SDK_PHASES)
+        expected_sdks = set(USER_PROVER_SDK_PHASES)
         for sdk in sorted(set(helper_sets) - expected_sdks):
             errors.append(
                 "readiness report user prover submission surface row "
                 f"sdk_helper_symbols_by_sdk contains unknown SDK: {sdk}"
             )
-        for sdk in _report_module().USER_PROVER_SDK_PHASES:
+        for sdk in USER_PROVER_SDK_PHASES:
             helpers = helper_sets.get(sdk)
             if (
                 not isinstance(helpers, list)
@@ -1390,6 +2552,37 @@ def _submission_surface_row_schema_errors(row: dict[str, Any]) -> list[str]:
     errors.extend(
         _string_list_field_errors(label, row, "required_phases", allow_empty=False)
     )
+    required_phases = row.get("required_phases")
+    if isinstance(required_phases, list) and all(
+        isinstance(item, str) and item for item in required_phases
+    ):
+        if len(required_phases) != len(set(required_phases)):
+            errors.append(
+                "readiness report user prover submission surface row "
+                "required_phases contains duplicate phases"
+            )
+        for phase in sorted(
+            set(required_phases) - set(USER_PROVER_KNOWN_REQUIRED_PHASES)
+        ):
+            errors.append(
+                "readiness report user prover submission surface row "
+                f"required_phases contains unknown phase: {phase}"
+            )
+        for phase in USER_PROVER_REQUIRED_PHASES:
+            if phase not in required_phases:
+                errors.append(
+                    "readiness report user prover submission surface row "
+                    f"required_phases missing required phase: {phase}"
+                )
+        proof_backend = row.get("proof_backend")
+        if (
+            proof_backend in USER_PROVER_CONTRACT_SMOKE_BACKENDS
+            and "contract-smoke" not in required_phases
+        ):
+            errors.append(
+                "readiness report user prover submission surface row "
+                "required_phases missing required phase: contract-smoke"
+            )
     if "validation_status" in row and row.get("validation_status") not in {
         "passed",
         "blocked",
@@ -1412,6 +2605,58 @@ def _submission_surface_row_schema_errors(row: dict[str, Any]) -> list[str]:
             "readiness report user prover submission surface row "
             "validation_blockers must be empty"
         )
+    return errors
+
+
+def _submission_surface_inventory_errors(surfaces: list[Any]) -> list[str]:
+    label = "readiness report user_prover_submission_surfaces"
+    errors: list[str] = []
+    seen_lanes: set[str] = set()
+    for row in surfaces:
+        if not isinstance(row, dict):
+            continue
+        lanes = row.get("lanes")
+        proof_backend = row.get("proof_backend")
+        if not isinstance(lanes, str) or not lanes:
+            continue
+        if lanes in seen_lanes:
+            errors.append(f"{label} contains duplicate lanes row: {lanes}")
+        else:
+            seen_lanes.add(lanes)
+        expected_backend = USER_PROVER_REQUIRED_LANE_BACKENDS.get(lanes)
+        if expected_backend is None:
+            errors.append(f"{label} contains unknown lanes row: {lanes}")
+        elif proof_backend != expected_backend:
+            errors.append(
+                f"{label} proof_backend mismatch for lanes {lanes}: "
+                f"expected {expected_backend}, got {proof_backend!r}"
+            )
+        expected_helpers_by_sdk = USER_PROVER_REQUIRED_HELPERS_BY_LANE_SDK.get(lanes)
+        helper_sets = row.get("sdk_helper_symbols_by_sdk")
+        if isinstance(expected_helpers_by_sdk, dict) and isinstance(helper_sets, dict):
+            for sdk, expected_helpers in expected_helpers_by_sdk.items():
+                helpers = helper_sets.get(sdk)
+                if not isinstance(helpers, list):
+                    continue
+                for helper in expected_helpers:
+                    if helper not in helpers:
+                        errors.append(
+                            f"{label} lanes {lanes} "
+                            f"sdk_helper_symbols_by_sdk[{sdk}] missing "
+                            f"required helper: {helper}"
+                        )
+            helper_symbols = row.get("sdk_helper_symbols")
+            expected_js_helpers = expected_helpers_by_sdk.get("js-sdk", ())
+            if isinstance(helper_symbols, list):
+                for helper in expected_js_helpers:
+                    if helper not in helper_symbols:
+                        errors.append(
+                            f"{label} lanes {lanes} sdk_helper_symbols "
+                            f"missing required helper: {helper}"
+                        )
+    for lanes in USER_PROVER_REQUIRED_LANE_BACKENDS:
+        if lanes not in seen_lanes:
+            errors.append(f"{label} missing required lanes row: {lanes}")
     return errors
 
 
@@ -2956,8 +4201,9 @@ def _copied_input_summary(
     if not input_paths:
         errors.append("readiness report has no usable copied evidence inputs")
         return None
-    module = _bundle_module()
-    return module._all_lanes_summary(input_paths)
+    module = _all_lanes_module()
+    records = module.load_evidence_bundle(input_paths)
+    return module.validate_evidence_bundle(records)
 
 
 def _referenced_report_artifact_paths(report: dict[str, Any]) -> set[str]:
@@ -2996,6 +4242,20 @@ def verify_bundle(bundle_dir: Path) -> dict[str, Any]:
     """Return a verification summary for an SCCP release bundle."""
 
     errors: list[str] = []
+    if bundle_dir.is_symlink():
+        return {
+            "verified": False,
+            "errors": [f"bundle root is a symlink: {bundle_dir}"],
+            "artifacts": [],
+            "manifest_sha256": None,
+        }
+    if not bundle_dir.is_dir():
+        return {
+            "verified": False,
+            "errors": [f"bundle root is not a directory: {bundle_dir}"],
+            "artifacts": [],
+            "manifest_sha256": None,
+        }
     manifest_path = bundle_dir / "manifest.json"
     manifest_sha256: str | None = None
     if manifest_path.is_symlink():
@@ -3063,12 +4323,15 @@ def verify_bundle(bundle_dir: Path) -> dict[str, Any]:
             errors.append("manifest artifact entry is not an object")
             continue
         errors.extend(_artifact_errors(bundle_dir, artifact))
-    bundle_paths = _bundle_file_paths(bundle_dir, errors)
-    expected_paths = set(manifest_artifacts) | {"manifest.json"}
+    expected_paths = set(manifest_artifacts) | {MANIFEST_ROOT_PATH}
+    bundle_paths, bundle_directories = _bundle_entry_paths(bundle_dir, errors)
     for unexpected in sorted(bundle_paths - expected_paths):
         errors.append(f"bundle contains unmanifested artifact: {unexpected}")
     for missing in sorted(expected_paths - bundle_paths):
         errors.append(f"bundle is missing expected artifact file: {missing}")
+    expected_directories = _expected_bundle_directories(expected_paths)
+    for unexpected in sorted(bundle_directories - expected_directories):
+        errors.append(f"bundle contains unmanifested directory: {unexpected}")
 
     for required_path in REQUIRED_ARTIFACT_PATHS:
         if required_path not in manifest_artifacts:
@@ -3202,6 +4465,9 @@ def verify_bundle(bundle_dir: Path) -> dict[str, Any]:
         except OSError as exc:
             errors.append(f"cannot load readiness report Markdown: {exc}")
         else:
+            errors.extend(
+                _readiness_markdown_invariant_errors(report, report_markdown)
+            )
             try:
                 expected_markdown = _expected_readiness_markdown(report)
             except Exception as exc:
@@ -3308,6 +4574,7 @@ def verify_bundle(bundle_dir: Path) -> dict[str, Any]:
         elif isinstance(lanes, list) and len(crypto) != len(lanes):
             errors.append("readiness report cryptographic_evidence does not cover every lane")
         if isinstance(crypto, list):
+            errors.extend(_cryptographic_evidence_inventory_errors(crypto))
             errors.extend(_cryptographic_evidence_lane_binding_errors(crypto, lanes))
             expected_crypto = _expected_cryptographic_evidence(report_evidence)
             if crypto != expected_crypto:
@@ -3336,6 +4603,7 @@ def verify_bundle(bundle_dir: Path) -> dict[str, Any]:
                         f"missing field: {key}"
                     )
                 errors.extend(_submission_surface_row_schema_errors(row))
+            errors.extend(_submission_surface_inventory_errors(surfaces))
             try:
                 expected_surfaces = _expected_submission_surfaces(report)
             except Exception as exc:

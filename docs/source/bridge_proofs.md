@@ -57,6 +57,10 @@ GRANDPA lanes. The wrappers do not fabricate cryptographic proofs: they
 normalize the canonical transparent public inputs, SCCP bundle bytes, source
 proof bytes, statement hash, destination binding hash, and any verifier
 deployment binding material before calling the prover supplied by the app.
+The dynamic Python witness-provider path snapshots app-owned request data before
+calling the UI resolver, including accepted non-string sequence byte inputs, so
+provider-side normalization or mutation cannot alter the proof request that the
+portal or mobile app is displaying to the user.
 Core admission tests pin the same production gate ordering: lane-specific
 source-adapter evidence is checked before destination or route activation, and
 the all-lanes launch policy still blocks incomplete corridors before accepting
@@ -671,8 +675,29 @@ same `js-sdk`, `python-sdk`, `swift-sdk`, `kotlin-sdk`, and `java-android`
 phases that gate release evidence. The legacy `sdk_helper_symbols` field remains
 the JavaScript/web symbol list, and release-bundle verification rejects drift
 between that list, the per-SDK helper map, the rendered helper string, and the
-current corridor phase results before release notes can be accepted. Those maps
-also require the user-owned prover hooks, including JavaScript/web
+current corridor phase results before release notes can be accepted. The public
+release-bundle verifier owns the same SDK phase inventory, so a weakened report
+generator cannot shrink the per-SDK helper-map coverage expected in published
+attachments. It also owns the lane/SDK helper inventory for the cryptographic
+proof-generation entrypoints that must be visible to portal and mobile apps, so
+a weakened report generator cannot drop Solana/TON full-light-client proof
+builders, source-state provers, EVM/TRON receipt/source-proof helpers,
+Substrate runtime-storage proof builders, or on-chain submission helpers from
+copied release rows. It also requires every user-prover row to stay gated by the web,
+Python, Swift, Kotlin, Java Android, and core-admission phases, with
+contract-smoke evidence still mandatory for EVM-family and TRON contract-backed
+proof backends. It independently pins the public row inventory to the production
+lane/backend pairs (`eth,bsc`/EVM Groth16, `tron`/TRON Groth16, `sol`/Solana
+recursive, `ton`/TON contract, and `substrate`/Substrate runtime), rejecting
+duplicates, unknown lanes, missing rows, or backend id drift before release
+attachments can pass verification. The same public bundle verifier pins the
+cryptographic evidence table to the production SCCP domain/chain inventory,
+rejecting duplicate domains, unknown domains, missing domains, and chain-label
+drift before comparing each row to embedded all-lanes evidence. Each public
+cryptographic evidence row must also use the route-canary source and
+source-adapter gate policy for its production domain, including exact named
+audit hashes for source-gated Solana, TON, TRON, and Substrate-family lanes.
+Those maps also require the user-owned prover hooks, including JavaScript/web
 `witnessProvider` and `proveFn`, Python `witness_provider` and `prove`,
 Swift witness-provider protocols and `ProveFunction` typealiases, Kotlin proof
 engine interfaces, Java Android nested `ProofEngine` interfaces, and the
@@ -684,17 +709,29 @@ applies the same fail-closed checks to attached release artifacts: duplicate
 helper symbols and rows missing the required UI-owned witness/prover hook
 markers are rejected even before the row is compared with the current generated
 surface.
-The same public release evidence now binds hashed corridor phase logs to the
-expected phase commands and phase-specific success markers inside the claimed
-phase block. A phase artifact with only the phase marker and the completion
-sentinel is rejected unless the same block also contains the Rust, script, SDK,
-contract-smoke, or core-admission command fragments and success output that
-prove the claimed phase actually ran and passed. The JS SDK phase is also
-checked specifically for the packaged `dist` and package-root SCCP export tests,
-so release notes cannot claim web-portal proof-generation readiness without
+The same public release evidence now binds hashed corridor phase logs to an
+exact claimed phase-marker line, the expected traced phase commands, a
+phase-local completion sentinel, and phase-specific success output inside the
+claimed phase block. The public bundle verifier owns the required corridor
+phase inventory as well as the transcript inventory, so a weakened report
+generator cannot shrink the production corridor by omitting a required SDK,
+contract-smoke, Rust verifier, evidence-script, or core-admission phase. A
+phase artifact with only the phase marker and the completion sentinel is
+rejected unless the same block also contains the Rust, script, SDK,
+contract-smoke, or core-admission command fragments on the
+corridor script's `+ ...` command lines and non-command success output that
+proves the claimed phase actually ran and passed. Prefix-alias phase markers,
+completion sentinels copied from another phase block, and success text echoed
+only on a traced command line are rejected. The JS SDK phase is also checked
+specifically for the packaged `dist` and package-root SCCP export tests, so
+release notes cannot claim web-portal proof-generation readiness without
 evidence that app-facing imports were tested. The public release-bundle verifier
-applies the same package-root export transcript check to copied `js-sdk` corridor
-logs before accepting a published attachment bundle.
+owns the same phase command and success-marker inventory instead of trusting the
+report generator for those transcript requirements; parity tests keep the
+report and verifier inventories aligned, while a weakened report module cannot
+relax copied bundle-log checks. The verifier applies those traced command-line
+and package-root export transcript checks to copied corridor logs before
+accepting a published attachment bundle.
 Swift, Kotlin, and Java Android request builders also bind the mobile witness
 view to the opened full-bank `AccountsLtHash`: if a caller supplies an explicit
 `witness.accountsLtHash`, it must match the opened contribution hash, and absent
@@ -4102,17 +4139,25 @@ a ready release. If `--force` is used to replace an output directory, the
 builder refuses dangerous targets and refuses any output directory that contains
 the input TOML or phase transcript sources, so evidence cannot be deleted before
 it is copied into the bundle. For production-ready bundles, the builder now runs
-the strict verifier against its own output before reporting success; run
+the strict verifier against its own output and prints the verified
+`manifest_sha256` root before reporting success; run
 `python3 scripts/sccp_verify_release_bundle.py <bundle-dir>` again after upload
 or when reviewing downloaded attachments to recompute every attachment hash and
 confirm that the readiness report, all-lanes summary, and manifest all agree on
 `production_ready`. With `--json`, the verifier also emits `manifest_sha256` so
 reviewers can archive the verified manifest root while the manifest remains
-outside its own artifact table. The manifest, readiness-report, and
+outside its own artifact table. Strict verification rejects any artifact row
+that tries to list `manifest.json` as a hash-bound attachment. The manifest,
+readiness-report, and
 all-lanes summary JSON roots must keep the bundle builder's canonical sorted-key
 serialization and reject duplicate JSON object keys before semantic review, so
 duplicate-key smuggling or hand-edited formatting drift cannot be published
-after attachment hashes are refreshed. The manifest and
+after attachment hashes are refreshed. The public verifier no longer exposes
+release-report or release-bundle module hooks for the artifact shapes it owns;
+the copied-evidence summary is recomputed through the all-lanes evidence
+validator directly, while readiness Markdown, release-note attachments,
+corridor phases, phase transcripts, cryptographic evidence rows, and
+user-prover submission surfaces are verifier-owned. The manifest and
 readiness-report JSON roots reject missing or unknown top-level fields, and
 manifest/report artifact entries reject unknown fields and require artifact
 `bytes`/`sha256` claims to keep canonical JSON
@@ -4126,9 +4171,11 @@ booleans; and nested readiness sections such as report `evidence`,
 `release_checklist`, `corridor`, and summary `release_checklist` must also keep
 their object shape while top-level `input_artifacts` must remain a list. The
 verifier recomputes the all-lanes
-summary from the copied TOML evidence files before comparing it with the
-standalone summary and embedded report evidence, so a published bundle cannot
-hide stale or tampered evidence inputs behind unchanged JSON reports. The
+summary by loading the all-lanes evidence validator directly against the copied
+TOML evidence files before comparing it with the standalone summary and
+embedded report evidence, so a published bundle cannot hide stale or tampered
+evidence inputs behind unchanged JSON reports or a weakened release-bundle
+builder. The
 report `inputs` provenance list must also match the copied evidence artifact
 paths used for recomputation, so JSON release notes cannot claim a different
 operator-side evidence source after the bundle is built. The
@@ -4146,21 +4193,24 @@ exactly match the required reports, copied evidence inputs, copied corridor
 logs referenced by known passed phases in the readiness report, and final
 release-notes attachment, so a hash-bound but unreviewed appendix, unknown
 phase log, or regenerated artifact table cannot be smuggled into an
-otherwise verified bundle. The verifier independently reloads the current
-production-corridor phase list and requires every known phase to be marked
-`passed` with a hash-bound artifact at the canonical
+otherwise verified bundle. The verifier owns the production-corridor phase
+inventory and requires every known phase to be marked `passed` with a
+hash-bound artifact at the canonical
 `corridor/<phase>.log` path, so a tampered readiness JSON cannot skip, move, or
 remove one phase while leaving top-level ready flags true. The corridor section
 also rejects unknown root fields and non-empty blockers, so operator
 attestations or unresolved phase blockers cannot be hidden beside the phase
-status and evidence maps. The verifier also recomputes the
+status and evidence maps. The verifier also owns and recomputes the exact
 user-prover SDK submission surface table from the corridor phase
-results and the user-side proof backend labels
+results, the user-side proof backend labels,
+the full per-lane/per-SDK helper inventory,
+and the expected on-chain submission text
 (`sccp-solana-recursive-mainnet-v1`, `ton-contract-v1`,
 `substrate-runtime-v1`, `evm-groth16-bn254-v1`, and
 `tron-groth16-bn254-v1`), so public release notes cannot claim a portal or
 mobile proof path is validated unless its required SDK and contract-smoke phases
-actually passed. The Solana destination manifest still uses `solana-program-v1`
+actually passed, and a weakened report generator cannot define a shorter
+helper table as canonical. The Solana destination manifest still uses `solana-program-v1`
 as the target verifier backend; the release-readiness surface uses the recursive
 backend id that browser and mobile provers must put in the proof request. The
 surface rows also name the lane-local user proof-generation helpers: EVM/BSC
@@ -4181,8 +4231,10 @@ For a production release bundle, the row-level validation status must be
 proof path cannot hide behind top-level ready flags.
 The verifier also
 rejects
-non-canonical or escaping manifest paths, a symlinked `manifest.json`,
-symlinked artifacts, duplicate, unmanifested, or omitted required artifacts,
+non-directory or symlinked bundle roots, non-canonical or escaping manifest
+paths, a symlinked `manifest.json`, self-listed `manifest.json` artifact rows,
+symlinked artifacts, unmanifested directories, duplicate, unmanifested, or
+omitted required artifacts,
 non-canonical manifest/readiness-report/summary JSON serialization,
 duplicate keys in public JSON roots,
 unknown corridor phase statuses or evidence keys,
@@ -4226,29 +4278,44 @@ Substrate route-canary zero finalized-head/runtime-code hashes or reused
 Substrate route-canary hash roles,
 expected destination/route hash drift,
 route-canary route/destination hash drift from sibling lane evidence,
-cryptographic evidence row domain/chain drift or per-field
+duplicate, unknown, or missing required cryptographic evidence domains,
+cryptographic evidence row domain/chain drift, or per-field
 source/destination/source-gate/route/canary drift from embedded lane rows,
 unknown manifest or report artifact fields,
 unknown corridor root fields,
 unknown or malformed release-checklist fields,
 unknown or malformed portal/mobile submission-surface fields,
 manifest readiness-header drift from the report and summary,
-report/summary drift from recomputing the copied evidence TOML, a Markdown
-readiness report that is not the canonical render of the JSON readiness report,
-a release-notes attachment that is not the canonical manifest/report artifact
-table, manifest artifact-order drift from the bundle builder's public
+report/summary drift from verifier-owned direct recomputation of the copied
+evidence TOML, a Markdown
+readiness report that is missing its canonical title, status line, public
+evidence sections, input/corridor/checklist/crypto/user-prover/lane/blocker
+values, required release-evidence markers, or verifier-owned canonical render
+of the JSON readiness report,
+a release-notes attachment that is not the verifier-owned canonical
+manifest/report artifact table, manifest artifact-order drift from the bundle builder's public
 attachment order, and missing, malformed, unbound, lane-mismatched, or extra-field
 per-lane cryptographic evidence rows.
 That final check recomputes the public cryptographic table from the embedded
-all-lanes lane evidence, requires exact JSON domain/chain types plus canonical
-non-zero bytes32 hash text, and reports field-specific failures when a public
-row's source-material, source-deployment, destination-binding, route-allowlist,
-source-gate required flag/hash/audit hashes, route-canary hash/source, or
-route-canary binding flag differs from the lane
+all-lanes lane evidence, requires one row for every required production domain
+with no duplicate or unknown domains, requires exact JSON domain/chain types
+plus canonical non-zero bytes32 hash text, and reports field-specific failures
+when a public row's source-material, source-deployment, destination-binding,
+route-allowlist, source-gate required flag/hash/audit hashes, route-canary
+hash/source, or route-canary binding flag differs from the lane
 that actually passed preflight. For passed phases, the verifier independently
-re-reads each copied corridor log and requires the same phase marker,
-completion sentinel, phase-block command fragments, and phase-specific success
-markers as the report generator.
+re-reads each copied corridor log and requires an exact phase-marker line,
+phase-local completion sentinel, phase-block traced command fragments, and
+non-command phase-specific success output as the report generator. The verifier
+also owns the canonical public
+Markdown renderer and parses the rendered readiness report independently of the
+report generator, requiring the published sections to carry the copied evidence
+paths and hashes, corridor artifact hashes, release-checklist gate statuses,
+per-domain cryptographic hashes and canary metadata, every lane's portal/mobile
+helper symbols and required phases, lane readiness rows, blocker summary, and
+release-evidence handoff text. A weakened report renderer therefore cannot
+publish a shorter or structurally incomplete reviewer-facing report even when
+the JSON report still hashes correctly.
 The EVM-family, Solana, TON, and Substrate-family destination renderers and
 their live evidence wrappers, plus the TRON full-lane direct and live
 renderers, now require this comment block for production TOML when route

@@ -4001,6 +4001,8 @@ semantics:
 - duplicate stake entries keep first-match lookup semantics, and
 - `stake_quorum_satisfied(...)` fails closed for zero total stake, missing
   weights, checked arithmetic failures, and exact two-thirds stake boundaries.
+Its TLC cross-check independently exhausts the same twelve expected-failure
+configs as Apalache.
 
 `SumeragiVNextRechainGate.tla` captures the quarantined vNext re-chain helper:
 - suspicion evidence must match the current slot, chain-order hash, and
@@ -4250,6 +4252,16 @@ worker configuration:
 - zero result queue caps derive from the effective thread count times eight
   with a floor of eight, while explicit result caps are preserved.
 
+`SumeragiActorGatePriorityGate.tla` captures actor-gate priority and fairness:
+- `ActorGate::can_enter(...)` serializes access while any priority is already
+  in flight,
+- `ActorGate::enter(...)` decrements the entering waiter and updates
+  availability/body/urgent streaks according to the entered priority,
+- priority admission remains deterministic across waiters, wakeups, and
+  availability/body/urgent fairness windows.
+Its TLC cross-check independently exhausts the same twenty-six expected-failure
+configs as Apalache.
+
 `SumeragiWorkerDrainSchedulerGate.tla` captures worker-loop drain scheduling:
 - vote queues stay ahead of payload tiers while the bounded vote burst remains
   available, and payload tiers regain service once the burst is exhausted,
@@ -4266,6 +4278,8 @@ worker configuration:
 - result polling and external-hint sync run before tick decisions, busy ticks
   use the busy gap, explicit wakeups bypass the tick gap, and budget-exhausted
   pre-tick drains suppress post-tick work.
+Its TLC cross-check independently exhausts the same thirty-four
+expected-failure configs as Apalache.
 
 `SumeragiWorkerBudgetAdaptiveGate.tla` captures worker-loop budget and
 adaptive-cap helpers:
@@ -4279,6 +4293,8 @@ adaptive-cap helpers:
 - vote backlog throttles block-payload work without reducing RBC ingress, and
   block backlog throttles blocks plus payload/RBC repair caps with a minimum
   payload/RBC floor.
+Its TLC cross-check independently exhausts the same thirty-two expected-failure
+configs as Apalache.
 
 `SumeragiWorkerIngressRoutingGate.tla` captures worker ingress routing and
 parallel worker execution envelopes:
@@ -4294,6 +4310,8 @@ parallel worker execution envelopes:
   handling, poll worker results after each handled message, record the drain,
   stop on empty queues, and restore idle only when the last active worker
   leaves.
+Its TLC cross-check independently exhausts the same thirty-four
+expected-failure configs as Apalache.
 
 `SumeragiWorkerLoopStageGate.tla` captures worker-loop stage helper exports:
 - each `WorkerLoopStage` variant keeps its stable numeric id,
@@ -4361,6 +4379,17 @@ handling:
 - missing commit QCs, non-extending tips, and uncertified aborted or retired
   blocks defer finalization, while QC-certified aborted/retired blocks can
   proceed.
+
+`SumeragiKuraStoreStatusGate.tla` captures Kura persistence status accounting:
+- store failures, retry metadata, post-commit sidecar failures, staging,
+  rollback, lock resets, and aborts update only their matching counters and
+  latest fields,
+- repeated records accumulate counters while overwriting the latest recorded
+  slot/hash/reason metadata,
+- snapshots and the top-level Sumeragi status projection expose the same
+  counter/latest-field state, and reset clears every field.
+Its TLC cross-check independently exhausts the same thirty-one expected-failure
+configs as Apalache.
 
 `SumeragiRestartReplayGate.tla` captures restarted-peer replay and
 snapshot/Kura consistency:
@@ -4470,6 +4499,8 @@ construction and frontier competing-quorum lock composition:
 - frontier competing-quorum checks require a newer requested view, a direct or
   aggregate lock, and an observed vote before aggregate lock evidence can
   block the slot.
+Its TLC cross-check independently exhausts the same twenty-four
+expected-failure configs as Apalache.
 
 `SumeragiProposalStaleVoteGate.tla` captures proposal-side stale same-height
 vote gates:
@@ -4495,6 +4526,8 @@ recovery view-gap thresholds:
 - exact threshold boundaries are inclusive, below-boundary views do not
   exhaust, and standard exhaustion implies escalation exhaustion for the same
   validator count.
+Its TLC cross-check independently exhausts the same nineteen expected-failure
+configs as Apalache.
 
 `SumeragiTipExtensionHelpersGate.tla` captures pure tip-extension helpers:
 - pending blocks are stale for the committed tip only when the committed hash is
@@ -4505,6 +4538,8 @@ recovery view-gap thresholds:
 - chain extension checks return `Some(false)` below the tip or for divergent
   branches, `Some(true)` for matching same-height heads or complete ancestry to
   the tip, and `None` when a required parent lookup is missing.
+Its TLC cross-check independently exhausts the same nineteen expected-failure
+configs as Apalache.
 
 `SumeragiDaGateHelperGate.tla` captures pure data-availability gate helpers:
 - `da::evaluate(...)` is fail-open when DA is disabled, reports missing local
@@ -4536,6 +4571,8 @@ expected-failure configs as Apalache.
   record and accept blocks without DA commitments,
 - DA bundle caps reject too many commitments/openings, missing proof digests,
   and zero-like proof digests while accepting valid nonzero digests.
+Its TLC cross-check independently exhausts the same twenty-eight
+expected-failure configs as Apalache.
 
 `SumeragiConsensusCapsStatusGate.tla` captures consensus capability status
 projection:
@@ -4570,6 +4607,8 @@ expected-failure configs as Apalache.
   four fields,
 - mismatch rejection is fail-closed and ordered chain id, mode tag, protocol
   version, then consensus fingerprint.
+Its TLC cross-check independently exhausts the same thirteen expected-failure
+configs as Apalache.
 
 `SumeragiModeFlipGate.tla` captures runtime consensus-mode flip helpers:
 - `update_pending_mode_flip(...)` clears pending state when the effective mode
@@ -4584,6 +4623,8 @@ expected-failure configs as Apalache.
 - idle flips reset volatile consensus state, rebuild Permissioned or NPoS
   epoch/collector state, clear highest/locked QC status, update network
   consensus capabilities, clear the pending target, and record success.
+Its TLC cross-check independently exhausts the same twenty-five
+expected-failure configs as Apalache.
 
 `SumeragiEffectiveModeGate.tla` captures effective consensus-mode selection:
 - missing `next_mode` or `mode_activation_height` keeps the fallback consensus
@@ -4625,6 +4666,8 @@ expected-failure configs as Apalache.
   immediately and returns zero, matching the post-prune lookup contract,
 - snapshots expose sorted flat `(height, view, count)` entries with per-key
   unique-sender counts.
+Its TLC cross-check independently exhausts the same fifteen expected-failure
+configs as Apalache.
 
 `SumeragiNewViewTrackerGate.tla` captures main-loop `NewViewTracker`
 aggregation semantics:
@@ -4641,6 +4684,8 @@ aggregation semantics:
   minimum-height filters,
 - pruning, exact removal, and per-height view pruning keep the same inclusive
   and exclusive boundaries as the Rust tracker.
+Its TLC cross-check independently exhausts the same thirty expected-failure
+configs as Apalache.
 
 `SumeragiTimingMonitorGate.tla` captures timing/log cooldown monitors:
 - tick elapsed time is computed with saturating subtraction and each observed
@@ -4653,6 +4698,8 @@ aggregation semantics:
 - proposal-attempt logging fires immediately on the first attempt, suppresses
   attempts before the cooldown boundary, resumes at the boundary, and does not
   extend cooldowns for suppressed attempts or backward time samples.
+Its TLC cross-check independently exhausts the same seventeen expected-failure
+configs as Apalache.
 
 `SumeragiHotspotLogSummaryGate.tla` captures the periodic hotspot-summary
 accumulator:
@@ -4697,6 +4744,8 @@ expected-failure configs as Apalache.
 - `PacemakerBackpressure::update(...)` reports `First` only when entering
   deferral, `Subsequent` while deferral is already active, and `None` while
   clearing or remaining idle, with the internal deferring flag updated exactly.
+Its TLC cross-check independently exhausts the same fifteen expected-failure
+configs as Apalache.
 
 `SumeragiCounterBackpressureCooldownGate.tla` captures counter-driven
 backpressure cooldown helpers:
@@ -4724,6 +4773,8 @@ backpressure telemetry tracking:
 - clearing an active reason observes the elapsed duration, marks the gauge
   inactive, resets age to zero, and drops the start timestamp,
 - idle reasons and impossible active-without-start clears emit no telemetry.
+Its TLC cross-check independently exhausts the same twenty-four
+expected-failure configs as Apalache.
 
 `SumeragiLockedQcHelperGate.tla` captures shared locked-QC helpers:
 - missing locks allow progress in `ensure_locked_qc_allows(...)` and the
@@ -5418,6 +5469,14 @@ committed-block reconfiguration deduplication:
 - boundary reconfiguration for a different activation height replaces stale
   pending material and emits the new change.
 
+The TLC cross-checks for the pure-engine constructor, read-accessor, tick,
+tick-state-preservation, NewView subject, handle dispatch, handle forwarding,
+handle output relay, view-advance saturation, QC-reference projection,
+QC-reference comparator, highest-QC record, reconfiguration staging, and
+reconfiguration deduplication slices independently exhaust the same 13, 13, 10,
+7, 10, 13, 14, 13, 8, 9, 9, 13, 14, and 13 expected-failure configs as
+Apalache.
+
 `SumeragiEngineCommittedBlockCleanupGate.tla` captures committed-block cleanup
 side effects:
 - fresh current-height finality clears in-flight validation ownership,
@@ -5440,6 +5499,34 @@ state preservation for committed-block notifications:
   fields exactly as no-ops,
 - expected-failure configs distinguish fresh-notification side effects from
   duplicate/conflict no-op side effects for each protected field.
+
+The TLC cross-checks for the remaining fast-passing pure-engine
+prefilter-preservation, Commit, committed-block, NewView, payload, Prepare,
+proposal, and validation slices independently exhaust the same 10, 14, 11, 9,
+15, 9, 14, 10, 8, 11, 9, 11, 10, 15, 13, 11, 12, 7, 6, 9, 15, 9, 14, 8, 10,
+13, 12, 8, 9, 11, 10, 7, 12, 9, 18, and 16 expected-failure configs as
+Apalache.
+
+The TLC cross-checks for certificate admission, highest-QC selection,
+optional highest-QC selection, proposal assembly, QC-round compatibility,
+validator-set transition, certified recovery, stake snapshot, validation
+evidence QC, validation, validation priority, validator election, view-change
+safety, vote-backed evidence, vote-payload actionability, vote-roster cache,
+and vote-roster selection independently exhaust the same 4, 4, 10, 10, 8, 3,
+3, 19, 13, 4, 13, 36, 4, 19, 10, 26, and 27 expected-failure configs as
+Apalache.
+
+For pure candidate-enumeration models, the TLC runner applies the local
+`TlcSingletonOrEmpty` constraint so TLC checks one independent case at a time
+instead of exploring every accumulated `tried` subset; the Apalache configs
+remain unconstrained. With that TLC-only constraint, certified fetch,
+pure-engine certificate dispatch, pure-engine certificate prefilter state,
+frontier-gap realignment, Kura commit retry, missing-block fetch,
+missing-block hard-cap cleanup, missing-block hard-cap, missing-block
+view-change, native AMX attestation, native AMX receipt validation, native AMX
+routing-plan, NPoS VRF epoch seal, post-commit cleanup, and restart replay
+independently exhaust the same 36, 13, 14, 31, 30, 26, 25, 28, 30, 17, 31,
+26, 30, 31, and 28 expected-failure configs as Apalache.
 
 `SumeragiValidatorSetTransition.tla` captures the validator-set activation
 gate for one scheduled reconfiguration:
@@ -11041,6 +11128,7 @@ bash scripts/formal/sumeragi_tlc.sh lock-rejected-sink-fast
 bash scripts/formal/sumeragi_tlc.sh native-amx-journal-fast
 bash scripts/formal/sumeragi_tlc.sh native-amx-ingress-fast
 bash scripts/formal/sumeragi_tlc.sh vnext-chain-order-fast
+bash scripts/formal/sumeragi_tlc.sh vnext-stake-weight-fast
 bash scripts/formal/sumeragi_tlc.sh vnext-rechain-fast
 bash scripts/formal/sumeragi_tlc.sh vnext-rechain-error-label-fast
 bash scripts/formal/sumeragi_tlc.sh vnext-signature-fast
@@ -11053,6 +11141,104 @@ bash scripts/formal/sumeragi_tlc.sh validation-stall-redrive-fast
 bash scripts/formal/sumeragi_tlc.sh verify-cache-key-fast
 bash scripts/formal/sumeragi_tlc.sh vote-verify-async-fast
 bash scripts/formal/sumeragi_tlc.sh qc-verify-async-fast
+bash scripts/formal/sumeragi_tlc.sh worker-drain-fast
+bash scripts/formal/sumeragi_tlc.sh actor-gate-fast
+bash scripts/formal/sumeragi_tlc.sh worker-budget-fast
+bash scripts/formal/sumeragi_tlc.sh worker-ingress-fast
+bash scripts/formal/sumeragi_tlc.sh kura-store-status-fast
+bash scripts/formal/sumeragi_tlc.sh same-height-vote-lock-fast
+bash scripts/formal/sumeragi_tlc.sh same-height-vote-recovery-gap-fast
+bash scripts/formal/sumeragi_tlc.sh tip-extension-helpers-fast
+bash scripts/formal/sumeragi_tlc.sh manifest-guard-fast
+bash scripts/formal/sumeragi_tlc.sh handshake-fast
+bash scripts/formal/sumeragi_tlc.sh mode-flip-fast
+bash scripts/formal/sumeragi_tlc.sh new-view-stats-fast
+bash scripts/formal/sumeragi_tlc.sh new-view-tracker-fast
+bash scripts/formal/sumeragi_tlc.sh timing-monitor-fast
+bash scripts/formal/sumeragi_tlc.sh pacing-backpressure-fast
+bash scripts/formal/sumeragi_tlc.sh pacemaker-backpressure-tracker-fast
+bash scripts/formal/sumeragi_tlc.sh engine-initial-state-fast
+bash scripts/formal/sumeragi_tlc.sh engine-read-accessors-fast
+bash scripts/formal/sumeragi_tlc.sh engine-tick-fast
+bash scripts/formal/sumeragi_tlc.sh engine-tick-state-preservation-fast
+bash scripts/formal/sumeragi_tlc.sh engine-new-view-subject-fast
+bash scripts/formal/sumeragi_tlc.sh engine-handle-dispatch-fast
+bash scripts/formal/sumeragi_tlc.sh engine-handle-forwarding-fast
+bash scripts/formal/sumeragi_tlc.sh engine-handle-output-relay-fast
+bash scripts/formal/sumeragi_tlc.sh engine-qc-ref-projection-fast
+bash scripts/formal/sumeragi_tlc.sh engine-qc-ref-comparator-fast
+bash scripts/formal/sumeragi_tlc.sh engine-highest-qc-record-fast
+bash scripts/formal/sumeragi_tlc.sh engine-reconfiguration-staging-fast
+bash scripts/formal/sumeragi_tlc.sh engine-reconfiguration-dedup-fast
+bash scripts/formal/sumeragi_tlc.sh engine-view-advance-saturation-fast
+bash scripts/formal/sumeragi_tlc.sh engine-certificate-prefilter-state-preservation-fast
+bash scripts/formal/sumeragi_tlc.sh engine-commit-available-commit-fast
+bash scripts/formal/sumeragi_tlc.sh engine-commit-fast
+bash scripts/formal/sumeragi_tlc.sh engine-commit-highest-qc-fast
+bash scripts/formal/sumeragi_tlc.sh engine-commit-pending-fetch-fast
+bash scripts/formal/sumeragi_tlc.sh engine-commit-phase-fast
+bash scripts/formal/sumeragi_tlc.sh engine-commit-state-preservation-fast
+bash scripts/formal/sumeragi_tlc.sh engine-commit-subject-fast
+bash scripts/formal/sumeragi_tlc.sh engine-commit-validation-cleanup-fast
+bash scripts/formal/sumeragi_tlc.sh engine-committed-block-cleanup-fast
+bash scripts/formal/sumeragi_tlc.sh engine-committed-block-fast
+bash scripts/formal/sumeragi_tlc.sh engine-committed-block-record-fast
+bash scripts/formal/sumeragi_tlc.sh engine-committed-block-state-preservation-fast
+bash scripts/formal/sumeragi_tlc.sh engine-new-view-advance-fast
+bash scripts/formal/sumeragi_tlc.sh engine-new-view-fast
+bash scripts/formal/sumeragi_tlc.sh engine-new-view-highest-qc-fast
+bash scripts/formal/sumeragi_tlc.sh engine-new-view-state-preservation-fast
+bash scripts/formal/sumeragi_tlc.sh engine-payload-fast
+bash scripts/formal/sumeragi_tlc.sh engine-payload-lookup-fast
+bash scripts/formal/sumeragi_tlc.sh engine-payload-record-fast
+bash scripts/formal/sumeragi_tlc.sh engine-payload-state-preservation-fast
+bash scripts/formal/sumeragi_tlc.sh engine-prepare-fast
+bash scripts/formal/sumeragi_tlc.sh engine-prepare-lock-highest-fast
+bash scripts/formal/sumeragi_tlc.sh engine-prepare-phase-fast
+bash scripts/formal/sumeragi_tlc.sh engine-prepare-state-preservation-fast
+bash scripts/formal/sumeragi_tlc.sh engine-prepare-vote-cache-fast
+bash scripts/formal/sumeragi_tlc.sh engine-proposal-fast
+bash scripts/formal/sumeragi_tlc.sh engine-proposal-lock-fast
+bash scripts/formal/sumeragi_tlc.sh engine-proposal-output-fast
+bash scripts/formal/sumeragi_tlc.sh engine-proposal-state-fast
+bash scripts/formal/sumeragi_tlc.sh engine-proposal-state-preservation-fast
+bash scripts/formal/sumeragi_tlc.sh engine-proposal-validation-owner-fast
+bash scripts/formal/sumeragi_tlc.sh engine-validation-invalid-advance-fast
+bash scripts/formal/sumeragi_tlc.sh engine-validation-ownership-fast
+bash scripts/formal/sumeragi_tlc.sh engine-validation-result-fast
+bash scripts/formal/sumeragi_tlc.sh engine-validation-state-preservation-fast
+bash scripts/formal/sumeragi_tlc.sh admission-fast
+bash scripts/formal/sumeragi_tlc.sh highest-fast
+bash scripts/formal/sumeragi_tlc.sh highest-optional-fast
+bash scripts/formal/sumeragi_tlc.sh proposal-fast
+bash scripts/formal/sumeragi_tlc.sh qc-round-compatibility-fast
+bash scripts/formal/sumeragi_tlc.sh reconfig-fast
+bash scripts/formal/sumeragi_tlc.sh recovery-fast
+bash scripts/formal/sumeragi_tlc.sh stake-snapshot-fast
+bash scripts/formal/sumeragi_tlc.sh validation-evidence-qc-fast
+bash scripts/formal/sumeragi_tlc.sh validation-fast
+bash scripts/formal/sumeragi_tlc.sh validation-priority-fast
+bash scripts/formal/sumeragi_tlc.sh validator-election-fast
+bash scripts/formal/sumeragi_tlc.sh view-change-fast
+bash scripts/formal/sumeragi_tlc.sh vote-backed-evidence-fast
+bash scripts/formal/sumeragi_tlc.sh vote-payload-actionable-fast
+bash scripts/formal/sumeragi_tlc.sh vote-roster-cache-fast
+bash scripts/formal/sumeragi_tlc.sh vote-roster-selection-fast
+bash scripts/formal/sumeragi_tlc.sh certified-fetch-fast
+bash scripts/formal/sumeragi_tlc.sh engine-certificate-dispatch-fast
+bash scripts/formal/sumeragi_tlc.sh engine-certificate-prefilter-state-fast
+bash scripts/formal/sumeragi_tlc.sh frontier-gap-realign-fast
+bash scripts/formal/sumeragi_tlc.sh kura-commit-fast
+bash scripts/formal/sumeragi_tlc.sh missing-block-fetch-fast
+bash scripts/formal/sumeragi_tlc.sh missing-block-hard-cap-cleanup-fast
+bash scripts/formal/sumeragi_tlc.sh missing-block-hard-cap-fast
+bash scripts/formal/sumeragi_tlc.sh missing-block-view-change-fast
+bash scripts/formal/sumeragi_tlc.sh native-amx-attestation-fast
+bash scripts/formal/sumeragi_tlc.sh native-amx-receipt-fast
+bash scripts/formal/sumeragi_tlc.sh native-amx-routing-plan-fast
+bash scripts/formal/sumeragi_tlc.sh npos-vrf-fast
+bash scripts/formal/sumeragi_tlc.sh post-commit-cleanup-fast
+bash scripts/formal/sumeragi_tlc.sh restart-replay-fast
 bash scripts/formal/sumeragi_tlc.sh missing-qc-timing-fast
 bash scripts/formal/sumeragi_tlc.sh idle-backlog-signals-fast
 bash scripts/formal/sumeragi_tlc.sh proposal-liveness-fast

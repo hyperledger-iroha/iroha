@@ -31,6 +31,8 @@ VARIABLES
 \* @type: <<Set(Int)>>;
 vars == <<tried>>
 
+TlcSingletonOrEmpty == Cardinality(tried) \in {0, 1}
+
 NonCommitQcNoRequest == 1
 SignerTargetsPreferred == 2
 OutOfRangeSignersFallbackTopology == 3

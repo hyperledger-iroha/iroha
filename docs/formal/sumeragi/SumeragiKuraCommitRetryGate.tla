@@ -29,6 +29,8 @@ VARIABLES
 \* @type: <<Set(Int)>>;
 vars == <<tried>>
 
+TlcSingletonOrEmpty == Cardinality(tried) \in {0, 1}
+
 AlignNoKura == 1
 AlignMissingStateTip == 2
 AlignLowerStateHeight == 3
