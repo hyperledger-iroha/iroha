@@ -31377,13 +31377,16 @@ export function compileKotodamaStudioProgram(source, options = {}) {
     try {
         const compilerMode = normalizeKotodamaCompilerModeOption(options.mode);
         const program = parseStudioProgram(source);
-        const preludeProgram = programWithFirstReleasePrelude(program);
-        validateTestFunctionDeclarations(preludeProgram.functions);
+        validateTestFunctionDeclarations(program.functions);
+        const modeProgram = {
+            ...program,
+            functions: compilerMode === 'test'
+                ? program.functions
+                : program.functions.filter((fn) => !fn.isTest),
+        };
+        const preludeProgram = programWithFirstReleasePrelude(modeProgram);
         const compileProgram = {
             ...preludeProgram,
-            functions: compilerMode === 'test'
-                ? preludeProgram.functions
-                : preludeProgram.functions.filter((fn) => !fn.isTest),
             kotoba: normalizeKotobaEntries(preludeProgram.kotoba),
         };
         if (compileProgram.functions.length === 0) {

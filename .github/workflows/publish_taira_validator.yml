@@ -85,6 +85,7 @@ jobs:
           load: true
           tags: local/taira-validator:smoke
           build-args: |
+            "PROFILE=release"
             "CONFIG_PROFILE=taira"
             "FEATURES=embedded-soracloud-runtime"
             "CARGO_BUILD_JOBS=1"
@@ -132,6 +133,7 @@ jobs:
           tags: ${{ steps.tags.outputs.tags }}
           labels: commit=${{ github.sha }}
           build-args: |
+            "PROFILE=release"
             "CONFIG_PROFILE=taira"
             "FEATURES=embedded-soracloud-runtime"
             "CARGO_BUILD_JOBS=1"
