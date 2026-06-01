@@ -21,6 +21,7 @@ EXPECTED_PHASES = {
     "swift-sdk",
     "kotlin-sdk",
     "java-android",
+    "dotnet-sdk",
     "contract-smoke",
     "core-admission",
 }
@@ -275,6 +276,37 @@ def test_sccp_production_corridor_dry_run_skips_mobile_toolchain_resolution() ->
     assert "./gradlew :core-jvm:test --console=plain --tests" in completed.stdout
     assert "./gradlew :core:test --console=plain --tests" in completed.stdout
     assert "ANDROID_HOME=" in completed.stdout
+    assert "SCCP production corridor dry run completed." in completed.stdout
+
+
+def test_sccp_production_corridor_dotnet_phase_covers_native_bsc_facades() -> None:
+    """The native .NET phase must compile and run the ETH/BSC SCCP facade tests."""
+
+    completed = subprocess.run(
+        [
+            "bash",
+            str(SCRIPT),
+            "--dry-run",
+            "--phase",
+            "dotnet-sdk",
+        ],
+        check=True,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+        text=True,
+    )
+
+    assert "==> SCCP production corridor: dotnet-sdk" in completed.stdout
+    assert "DOTNET_CLI_TELEMETRY_OPTOUT=1" in completed.stdout
+    assert "DOTNET_CLI_UI_LANGUAGE=en" in completed.stdout
+    assert (
+        "dotnet test tests/Hyperledger.Iroha.Sdk.Tests/"
+        "Hyperledger.Iroha.Sdk.Tests.csproj"
+    ) in completed.stdout
+    assert (
+        "FullyQualifiedName~SccpEthereumMainnetTests\\|"
+        "FullyQualifiedName~SccpBscMainnetTests"
+    ) in completed.stdout
     assert "SCCP production corridor dry run completed." in completed.stdout
 
 

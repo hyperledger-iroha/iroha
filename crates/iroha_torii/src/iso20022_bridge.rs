@@ -788,6 +788,14 @@ fn convert_config_profile(
         .transpose()?
         .or(global_policy)
         .unwrap_or(EmbeddedSignaturePolicy::RecordOnly);
+    let trusted_public_key_sha256 = normalise_sha256_pins(
+        &config.trusted_public_key_sha256,
+        &format!("iso_bridge profile `{id}` trusted_public_key_sha256"),
+    )?;
+    let trusted_certificate_sha256 = normalise_sha256_pins(
+        &config.trusted_certificate_sha256,
+        &format!("iso_bridge profile `{id}` trusted_certificate_sha256"),
+    )?;
     let required_reference_datasets = config
         .required_reference_datasets
         .iter()
@@ -809,9 +817,31 @@ fn convert_config_profile(
         id: id.to_owned(),
         rail,
         embedded_signature_policy,
+        trusted_public_key_sha256,
+        trusted_certificate_sha256,
         required_reference_datasets,
         message_profiles,
     })
+}
+
+fn normalise_sha256_pins(values: &[String], field: &str) -> eyre::Result<Vec<String>> {
+    values
+        .iter()
+        .map(|value| {
+            let trimmed = value.trim();
+            if trimmed.len() != 64 || !trimmed.chars().all(|ch| ch.is_ascii_hexdigit()) {
+                eyre::bail!("{field} entry `{value}` must be a SHA-256 hex string");
+            }
+            let canonical = trimmed.to_ascii_lowercase();
+            if trimmed != canonical {
+                eyre::bail!("{field} entry `{value}` must use lowercase canonical hex");
+            }
+            if canonical.chars().all(|ch| ch == '0') {
+                eyre::bail!("{field} entries must not be all zero");
+            }
+            Ok(canonical)
+        })
+        .collect()
 }
 
 fn convert_config_message_profile(
@@ -1054,7 +1084,8 @@ impl Iso20022BridgeRuntime {
             }
             EmbeddedSignaturePolicy::RejectUnsupported => {}
             EmbeddedSignaturePolicy::RequireVerified => {
-                if !embedded_signature_detected || !verify_embedded_xml_signature(payload)? {
+                if !embedded_signature_detected || !verify_embedded_xml_signature(payload, profile)?
+                {
                     return Err(MsgError::ValidationFailed);
                 }
             }
@@ -2774,7 +2805,10 @@ fn payload_has_embedded_signature(payload: &[u8]) -> bool {
     })
 }
 
-fn verify_embedded_xml_signature(payload: &[u8]) -> Result<bool, MsgError> {
+fn verify_embedded_xml_signature(
+    payload: &[u8],
+    profile: &TradfiRailProfile,
+) -> Result<bool, MsgError> {
     let text = std::str::from_utf8(payload).map_err(|_| MsgError::InvalidFormat)?;
     let Some(signature_span) =
         find_first_xml_element(text, "Signature").or_else(|| find_first_xml_element(text, "Sgntr"))
@@ -2804,9 +2838,17 @@ fn verify_embedded_xml_signature(payload: &[u8]) -> Result<bool, MsgError> {
     verify_xml_signature_references(text, signature_span, signed_info_xml)?;
 
     let signature_value = decode_required_child_base64(signature_xml, "SignatureValue")?;
-    let public_key = xml_signature_public_key(signature_xml)?;
-    let verifying_key =
-        P256VerifyingKey::from_sec1_bytes(&public_key).map_err(|_| MsgError::ValidationFailed)?;
+    let key_material = xml_signature_key_material(signature_xml)?;
+    if !profile.has_xml_signature_trust_anchors()
+        || !profile.accepts_xml_signature_key(
+            &sha256_hex(&key_material.public_key),
+            key_material.certificate_sha256.as_deref(),
+        )
+    {
+        return Err(MsgError::ValidationFailed);
+    }
+    let verifying_key = P256VerifyingKey::from_sec1_bytes(&key_material.public_key)
+        .map_err(|_| MsgError::ValidationFailed)?;
     let signature =
         P256Signature::from_der(&signature_value).map_err(|_| MsgError::ValidationFailed)?;
     verifying_key
@@ -2854,16 +2896,29 @@ fn verify_xml_signature_references(
     Ok(())
 }
 
-fn xml_signature_public_key(signature_xml: &str) -> Result<Vec<u8>, MsgError> {
+struct XmlSignatureKeyMaterial {
+    public_key: Vec<u8>,
+    certificate_sha256: Option<String>,
+}
+
+fn xml_signature_key_material(signature_xml: &str) -> Result<XmlSignatureKeyMaterial, MsgError> {
     if let Some(public_key) = child_text_compact(signature_xml, "PublicKey") {
-        return BASE64_STANDARD
+        let public_key = BASE64_STANDARD
             .decode(public_key)
-            .map_err(|_| MsgError::ValidationFailed);
+            .map_err(|_| MsgError::ValidationFailed)?;
+        return Ok(XmlSignatureKeyMaterial {
+            public_key,
+            certificate_sha256: None,
+        });
     }
     let certificate = decode_required_child_base64(signature_xml, "X509Certificate")?;
     let (_, cert) =
         X509Certificate::from_der(&certificate).map_err(|_| MsgError::ValidationFailed)?;
-    Ok(cert.public_key().subject_public_key.data.to_vec())
+    let public_key = cert.public_key().subject_public_key.data.to_vec();
+    Ok(XmlSignatureKeyMaterial {
+        public_key,
+        certificate_sha256: Some(sha256_hex(&certificate)),
+    })
 }
 
 fn decode_required_child_base64(container: &str, child: &str) -> Result<Vec<u8>, MsgError> {
@@ -3246,6 +3301,8 @@ mod tests {
             id: format!("{message_type}-live-test"),
             rail: "generic-iso20022".to_owned(),
             embedded_signature_policy: None,
+            trusted_public_key_sha256: Vec::new(),
+            trusted_certificate_sha256: Vec::new(),
             required_reference_datasets: Vec::new(),
             message_profiles: vec![actual::IsoMessageProfile {
                 message_type: message_type.to_owned(),
@@ -3267,6 +3324,8 @@ mod tests {
             id: "signed-pacs008-test".to_owned(),
             rail: "generic-iso20022".to_owned(),
             embedded_signature_policy: Some(policy.to_owned()),
+            trusted_public_key_sha256: vec![signed_profile_public_key_sha256()],
+            trusted_certificate_sha256: Vec::new(),
             required_reference_datasets: Vec::new(),
             message_profiles: vec![actual::IsoMessageProfile {
                 message_type: "pacs.008".to_owned(),
@@ -3281,6 +3340,20 @@ mod tests {
                 amount_minor_units: Vec::new(),
             }],
         }
+    }
+
+    fn xml_signature_test_signing_key() -> P256SigningKey {
+        P256SigningKey::from_bytes(&[0x31; 32].into()).expect("deterministic P-256 key")
+    }
+
+    fn signed_profile_public_key_sha256() -> String {
+        let signing_key = xml_signature_test_signing_key();
+        sha256_hex(
+            signing_key
+                .verifying_key()
+                .to_encoded_point(false)
+                .as_bytes(),
+        )
     }
 
     fn unsigned_pacs008_xml() -> String {
@@ -3299,16 +3372,19 @@ mod tests {
     }
 
     fn signed_pacs008_xml() -> String {
+        signed_pacs008_xml_with_c14n_algorithm(XML_C14N_1_0)
+    }
+
+    fn signed_pacs008_xml_with_c14n_algorithm(c14n_algorithm: &str) -> String {
         let unsigned = unsigned_pacs008_xml();
         let insertion = unsigned
             .find("</FIToFICstmrCdtTrf>")
             .expect("signature insertion point");
         let digest = BASE64_STANDARD.encode(Sha256::digest(unsigned.as_bytes()));
         let signed_info = format!(
-            r#"<SignedInfo><CanonicalizationMethod Algorithm="{XML_C14N_1_0}"/><SignatureMethod Algorithm="{XMLDSIG_ECDSA_SHA256}"/><Reference URI=""><Transforms><Transform Algorithm="{XMLDSIG_ENVELOPED_SIGNATURE}"/></Transforms><DigestMethod Algorithm="{XMLDSIG_SHA256}"/><DigestValue>{digest}</DigestValue></Reference></SignedInfo>"#
+            r#"<SignedInfo><CanonicalizationMethod Algorithm="{c14n_algorithm}"/><SignatureMethod Algorithm="{XMLDSIG_ECDSA_SHA256}"/><Reference URI=""><Transforms><Transform Algorithm="{XMLDSIG_ENVELOPED_SIGNATURE}"/></Transforms><DigestMethod Algorithm="{XMLDSIG_SHA256}"/><DigestValue>{digest}</DigestValue></Reference></SignedInfo>"#
         );
-        let signing_key =
-            P256SigningKey::from_bytes(&[0x31; 32].into()).expect("deterministic P-256 key");
+        let signing_key = xml_signature_test_signing_key();
         let signature: P256Signature = signing_key.sign(signed_info.as_bytes());
         let signature_value = BASE64_STANDARD.encode(signature.to_der().as_bytes());
         let public_key = BASE64_STANDARD.encode(
@@ -3460,6 +3536,24 @@ mod tests {
     }
 
     #[test]
+    fn runtime_from_config_rejects_noncanonical_xml_signature_pin() {
+        let mut config = sample_config();
+        let mut profile = signed_message_profile("require-verified");
+        profile.trusted_public_key_sha256 = vec!["AB".repeat(32)];
+        config.profiles.push(profile);
+
+        let err = match Iso20022BridgeRuntime::from_config(&config) {
+            Ok(_) => panic!("uppercase SHA-256 pins must fail configuration"),
+            Err(err) => err,
+        };
+
+        assert!(
+            err.to_string().contains("trusted_public_key_sha256"),
+            "unexpected error: {err:?}"
+        );
+    }
+
+    #[test]
     fn profile_validation_records_metadata_for_generic_messages() {
         let runtime = Iso20022BridgeRuntime::from_config(&sample_config())
             .expect("cfg")
@@ -3555,6 +3649,50 @@ mod tests {
     }
 
     #[test]
+    fn require_verified_profile_accepts_supported_canonicalization_algorithms() {
+        for c14n_algorithm in [XML_C14N_1_1, XML_EXCLUSIVE_C14N_1_0] {
+            let mut config = sample_config();
+            config
+                .profiles
+                .push(signed_message_profile("require-verified"));
+            let runtime = Iso20022BridgeRuntime::from_config(&config)
+                .expect("cfg")
+                .expect("enabled");
+            let payload = signed_pacs008_xml_with_c14n_algorithm(c14n_algorithm);
+            let parsed = parse_message("pacs.008", payload.as_bytes()).expect("parse signed XML");
+            let profile = runtime
+                .resolve_profile(Some("signed-pacs008-test"))
+                .expect("signed profile");
+
+            runtime
+                .validate_profile_submission(profile, "pacs.008", &parsed, payload.as_bytes())
+                .expect("supported canonicalization URI should pass");
+        }
+    }
+
+    #[test]
+    fn require_verified_profile_rejects_unpinned_public_key() {
+        let mut config = sample_config();
+        let mut profile = signed_message_profile("require-verified");
+        profile.trusted_public_key_sha256 = vec!["11".repeat(32)];
+        config.profiles.push(profile);
+        let runtime = Iso20022BridgeRuntime::from_config(&config)
+            .expect("cfg")
+            .expect("enabled");
+        let payload = signed_pacs008_xml();
+        let parsed = parse_message("pacs.008", payload.as_bytes()).expect("parse signed XML");
+        let profile = runtime
+            .resolve_profile(Some("signed-pacs008-test"))
+            .expect("signed profile");
+
+        let err = runtime
+            .validate_profile_submission(profile, "pacs.008", &parsed, payload.as_bytes())
+            .expect_err("require-verified must fail closed for unpinned XMLDSig keys");
+
+        assert!(matches!(err, MsgError::ValidationFailed));
+    }
+
+    #[test]
     fn require_verified_profile_rejects_missing_signature() {
         let mut config = sample_config();
         config
@@ -3572,6 +3710,28 @@ mod tests {
         let err = runtime
             .validate_profile_submission(profile, "pacs.008", &parsed, payload.as_bytes())
             .expect_err("require-verified must fail closed when the signature is absent");
+
+        assert!(matches!(err, MsgError::ValidationFailed));
+    }
+
+    #[test]
+    fn require_verified_profile_rejects_unsupported_canonicalization_method() {
+        let mut config = sample_config();
+        config
+            .profiles
+            .push(signed_message_profile("require-verified"));
+        let runtime = Iso20022BridgeRuntime::from_config(&config)
+            .expect("cfg")
+            .expect("enabled");
+        let payload = signed_pacs008_xml().replace(XML_C14N_1_0, "urn:unsupported:c14n");
+        let parsed = parse_message("pacs.008", payload.as_bytes()).expect("parse signed XML");
+        let profile = runtime
+            .resolve_profile(Some("signed-pacs008-test"))
+            .expect("signed profile");
+
+        let err = runtime
+            .validate_profile_submission(profile, "pacs.008", &parsed, payload.as_bytes())
+            .expect_err("unsupported canonicalization methods must fail closed");
 
         assert!(matches!(err, MsgError::ValidationFailed));
     }

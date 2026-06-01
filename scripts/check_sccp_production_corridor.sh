@@ -17,6 +17,7 @@ ALL_PHASES=(
   swift-sdk
   kotlin-sdk
   java-android
+  dotnet-sdk
   contract-smoke
   core-admission
 )
@@ -48,6 +49,9 @@ Environment:
   ANDROID_HOME                 Android SDK for the Java Android phase.
                                Defaults to ~/Library/Android/sdk when present.
   ANDROID_SDK_ROOT             Defaults to ANDROID_HOME when unset.
+  DOTNET_ROOT                  .NET SDK root for the native C# SCCP phase.
+                               Falls back to /tmp/iroha-dotnet/sdk, then dotnet
+                               on PATH.
 EOF
 }
 
@@ -61,7 +65,7 @@ list_phases() {
 
 is_known_phase() {
   case "$1" in
-    rust-sccp|evidence-scripts|js-sdk|python-sdk|swift-sdk|kotlin-sdk|java-android|contract-smoke|core-admission)
+    rust-sccp|evidence-scripts|js-sdk|python-sdk|swift-sdk|kotlin-sdk|java-android|dotnet-sdk|contract-smoke|core-admission)
       return 0
       ;;
     *)
@@ -257,6 +261,36 @@ resolve_android_home() {
   return 1
 }
 
+resolve_dotnet() {
+  if [[ "$DRY_RUN" -eq 1 ]]; then
+    if [[ -n "${DOTNET_ROOT:-}" ]]; then
+      printf '%s\n' "$DOTNET_ROOT/dotnet"
+    else
+      printf '%s\n' "$ROOT/target/dotnet/dotnet"
+    fi
+    return 0
+  fi
+
+  if [[ -n "${DOTNET_ROOT:-}" && -x "$DOTNET_ROOT/dotnet" ]]; then
+    printf '%s\n' "$DOTNET_ROOT/dotnet"
+    return 0
+  fi
+
+  local local_dotnet="/tmp/iroha-dotnet/sdk/dotnet"
+  if [[ -x "$local_dotnet" ]]; then
+    printf '%s\n' "$local_dotnet"
+    return 0
+  fi
+
+  if command -v dotnet >/dev/null 2>&1; then
+    command -v dotnet
+    return 0
+  fi
+
+  echo "dotnet not found. Set DOTNET_ROOT, install /tmp/iroha-dotnet/sdk, or install dotnet on PATH." >&2
+  return 1
+}
+
 phase_rust_sccp() {
   run_cmd \
     env "CARGO_TARGET_DIR=$CARGO_TARGET_DIR" "NORITO_SKIP_BINDINGS_SYNC=$NORITO_SKIP_BINDINGS_SYNC" \
@@ -292,6 +326,8 @@ phase_evidence_scripts() {
 phase_js_sdk() {
   run_cmd node --test \
     javascript/iroha_js/test/sccpSolanaProver.test.js \
+    javascript/iroha_js/test/sccpEthereumMainnet.test.js \
+    javascript/iroha_js/test/sccpBscMainnet.test.js \
     javascript/iroha_js/test/package_dist.test.js \
     javascript/iroha_js/test/sccpPackageExports.test.js
 }
@@ -334,6 +370,22 @@ phase_java_android() {
   run_in_dir "$ROOT/java/iroha_android" \
     env "JAVA_HOME=$java_home" "ANDROID_HOME=$android_home" "ANDROID_SDK_ROOT=$android_sdk_root" "PATH=$java_home/bin:$PATH" \
     ./gradlew :core:test --console=plain --tests org.hyperledger.iroha.android.sccp.SolanaSccpProverTests
+}
+
+phase_dotnet_sdk() {
+  local dotnet_cli
+  local dotnet_root
+  dotnet_cli="$(resolve_dotnet)"
+  if [[ "$DRY_RUN" -eq 1 ]]; then
+    dotnet_root="$(dirname "$dotnet_cli")"
+  else
+    dotnet_root="$(cd "$(dirname "$dotnet_cli")" && pwd)"
+  fi
+  run_in_dir "$ROOT/csharp" \
+    env "DOTNET_ROOT=$dotnet_root" "DOTNET_CLI_TELEMETRY_OPTOUT=1" "DOTNET_CLI_UI_LANGUAGE=en" \
+    "$dotnet_cli" test tests/Hyperledger.Iroha.Sdk.Tests/Hyperledger.Iroha.Sdk.Tests.csproj \
+    --filter "FullyQualifiedName~SccpEthereumMainnetTests|FullyQualifiedName~SccpBscMainnetTests" \
+    --nologo
 }
 
 phase_contract_smoke() {
@@ -446,6 +498,9 @@ main() {
         ;;
       java-android)
         phase_java_android
+        ;;
+      dotnet-sdk)
+        phase_dotnet_sdk
         ;;
       contract-smoke)
         phase_contract_smoke

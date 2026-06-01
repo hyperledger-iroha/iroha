@@ -613,6 +613,27 @@ public final class TonSccpProverTests {
         : "TON shard proof hash must match Rust";
     assert !hash.equals(changed) : "TON shard proof hash must bind inclusion branch";
     assert !hash.equals(changedShardState) : "TON shard proof hash must bind shard-state branch";
+    boolean zeroSourceEventDigestThrew = false;
+    try {
+      TonSccpProver.canonicalShardProofBytes(
+          repeat("00", 32),
+          "19",
+          repeat("aa", 32),
+          0,
+          "9223372036854775808",
+          "7",
+          repeat("bb", 32),
+          repeat("bc", 32),
+          repeat("cc", 32),
+          repeat("dd", 32),
+          "7",
+          "0",
+          Collections.singletonList(shardStateBranch),
+          Collections.singletonList(branch));
+    } catch (final IllegalArgumentException ex) {
+      zeroSourceEventDigestThrew = ex.getMessage().contains("sourceEventDigest must not be zero");
+    }
+    assert zeroSourceEventDigestThrew : "zero TON source event digest must be rejected";
 
     final byte[] shardAccountsBoc =
         hexBytes(

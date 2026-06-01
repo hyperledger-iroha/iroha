@@ -1566,6 +1566,7 @@ def test_full_toml_rendering_rejects_route_canary_transcript_hash_reuse():
         ("route_canary_message_id", "route_canary_transaction_id"),
         ("route_canary_payload_hash", "route_canary_call_data_sha256"),
         ("route_canary_commitment_root", "route_canary_statement_hash"),
+        ("route_canary_finality_height", "route_canary_transaction_id"),
         ("route_canary_signature_sha256", "route_canary_finality_block_hash"),
     ):
         args = sample_full_toml_args()

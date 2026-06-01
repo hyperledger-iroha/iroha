@@ -2,6 +2,1772 @@
 
 Last updated: 2026-06-01
 
+## 2026-06-01 SCCP .NET BSC outbound facade and verifier closure
+
+- Added .NET BSC outbound proof-request/prove/calldata/submit parity through
+  `BscMainnetSccp`, including typed public-input, proof-request, proof-result,
+  submission, prover, and submitter records/interfaces for SORA -> BSC.
+- Hardened .NET BSC proof wrapping and calldata construction with the same
+  native BN254 proof tuple, public-input, destination-binding, chain-id, and
+  route checks used by the Ethereum facade before app-owned submitters receive
+  calldata.
+- Tightened release-readiness and strict release-bundle inventories so the
+  `dotnet-sdk` `eth,bsc` row now names the BSC outbound calldata/submit facade
+  symbols, and made the active launch-lane fixture/verifier tests follow the
+  configured active BSC lane instead of hard-coding row positions.
+- Validation:
+  - `/tmp/iroha-dotnet/sdk/dotnet test csharp/tests/Hyperledger.Iroha.Sdk.Tests/Hyperledger.Iroha.Sdk.Tests.csproj --filter SccpBscMainnetTests --nologo`
+    (`4 passed`)
+  - `PYTHONPATH=python python3 -m pytest -q pytests/scripts/sccp_release_bundle_test.py pytests/scripts/sccp_release_readiness_report_test.py`
+    (`170 passed`)
+  - `bash scripts/check_sccp_production_corridor.sh --phase evidence-scripts`
+    (`815 passed`)
+
+## 2026-06-01 SCCP BSC launch policy evidence alignment
+
+- Re-audited the current SCCP launch policy against the release scripts and
+  core admission path: `sccp_production_policy_v1()` is `BscMainnetLane`, and
+  the public release-readiness scripts now use the same active BSC domain.
+- Verified the BSC -> SORA positive `SubmitBridgeProof` path uses the local
+  admission package with configured BSC source verifier material,
+  deployment-bound source-adapter evidence, BSC destination rollout, and BSC
+  route allowlist material.
+- Updated the public docs/roadmap wording that still described the older
+  Ethereum-active policy, so operator-facing release evidence matches the
+  runtime gate that is actually compiled.
+- Validation:
+  - `cargo test -p iroha_core --test bridge_proofs submit_sccp_inbound_message_with_configured_bsc_source_adapter_is_accepted_for_bsc_launch -- --nocapture`
+    (`1 passed`)
+  - `bash scripts/check_sccp_production_corridor.sh --phase core-admission`
+    (`35 passed`)
+  - `cargo test -p iroha_sccp production_policy_uses_bsc_mainnet_lane_launch --lib -- --nocapture`
+    (`1 passed`)
+  - `PYTHONPATH=python python3 -m pytest -q pytests/scripts/sccp_release_readiness_report_test.py::test_release_readiness_report_passes_with_only_active_launch_lane pytests/scripts/sccp_release_bundle_test.py::test_release_bundle_accepts_active_launch_lane_without_future_lanes pytests/scripts/sccp_release_bundle_test.py::test_release_bundle_verifier_rejects_all_lanes_root_blockers`
+    (`3 passed`)
+  - `python3 -m py_compile scripts/sccp_release_readiness_report.py scripts/sccp_verify_release_bundle.py pytests/scripts/sccp_release_bundle_test.py pytests/scripts/sccp_release_readiness_report_test.py`
+  - `git diff --check -- docs/source/bridge_proofs.md roadmap.md status.md scripts/sccp_release_readiness_report.py scripts/sccp_verify_release_bundle.py pytests/scripts/sccp_release_bundle_test.py pytests/scripts/sccp_release_readiness_report_test.py crates/iroha_core/tests/bridge_proofs.rs crates/iroha_sccp/src/lib.rs`
+
+## 2026-06-01 SCCP BSC source proof deployment binding
+
+- Added a BSC mainnet Parlia source-proof fixture in core bridge-proof tests,
+  including validator-set seals, receipt-MPT event inclusion, configured source
+  verifier material, and governed source-adapter deployment evidence.
+- The new coverage verifies that BSC -> SORA source-chain proofs expose local
+  transparent public inputs only when the proof is bound to the configured BSC
+  source adapter deployment, and that replayed deployment-receipt material is
+  rejected even when the replayed deployment descriptor is internally ready.
+- The BSC -> SORA positive `SubmitBridgeProof` path now uses that explicit
+  local-admission proof/package path; the outbound EVM Groth16 destination
+  package still intentionally rejects local SORA target-domain public inputs
+  and was not weakened.
+- Validation:
+  - `cargo test -p iroha_core --test bridge_proofs bsc_mainnet_source_chain_proof -- --nocapture`
+    (`2 passed`)
+  - `cargo test -p iroha_sccp bsc_mainnet --lib -- --nocapture`
+    (`2 passed`)
+  - `cargo fmt --all --check`
+  - `git diff --check -- crates/iroha_core/tests/bridge_proofs.rs crates/iroha_sccp/src/lib.rs crates/iroha_torii/src/routing.rs`
+
+## 2026-06-01 SCCP BSC outbound submit facade parity
+
+- Added app-owned BSC outbound submit hooks to Swift, Kotlin/JVM, Java Android,
+  and Python `BscMainnetSccp` facades, and required the already-exported
+  JavaScript `BscMainnetSccp.submitOutboundToBsc` path in release inventories.
+- The new submit paths build BSC mainnet verifier calldata through the
+  governed SORA -> BSC destination-binding checks before handing the package to
+  the app-supplied wallet/RPC submitter.
+- Tightened SCCP release-readiness and strict release-bundle helper
+  inventories so the `eth,bsc` JavaScript, Python, Swift, Kotlin/JVM, and Java
+  Android rows require BSC calldata and outbound submit symbols by name.
+- Validation:
+  - `python3 -m py_compile python/iroha_torii_client/sccp.py python/iroha_torii_client/tests/sccp_test.py scripts/sccp_release_readiness_report.py scripts/sccp_verify_release_bundle.py pytests/scripts/sccp_release_readiness_report_test.py pytests/scripts/sccp_release_bundle_test.py`
+  - `python3 -m pytest -q python/iroha_torii_client/tests/sccp_test.py::test_bsc_mainnet_sccp_facade_requires_chain_id_56_and_bsc_target`
+    (`1 passed`)
+  - `PYTHONPATH=python python3 -m pytest -q pytests/scripts/sccp_release_readiness_report_test.py -k 'sdk_helper_symbols or user_prover_surfaces or json_tracks_corridor_phase_results'`
+    (`5 passed, 20 deselected`)
+  - `PYTHONPATH=python python3 -m pytest -q pytests/scripts/sccp_release_bundle_test.py -k 'submission_surface or helper_inventory_is_independent'`
+    (`14 passed, 129 deselected`)
+  - `cd IrohaSwift && swift test --filter SccpSolanaProverTests/testBscMainnetSccpFacadeRequiresChainId56AndBscTarget --disable-swift-testing`
+    (`1 passed`)
+  - `cd kotlin && JAVA_HOME=/opt/homebrew/opt/openjdk@21 ./gradlew :core-jvm:test --tests org.hyperledger.iroha.sdk.sccp.EvmSccpProverTest.bscMainnetFacadeRequiresChainId56AndBscTarget --console=plain`
+    (`BUILD SUCCESSFUL`)
+  - `cd java/iroha_android && JAVA_HOME=/opt/homebrew/opt/openjdk@21 ANDROID_HOME=~/Library/Android/sdk ANDROID_SDK_ROOT=~/Library/Android/sdk ./gradlew test --console=plain`
+    (`BUILD SUCCESSFUL`)
+  - `bash scripts/check_sccp_production_corridor.sh --phase evidence-scripts`
+    (`813 passed`)
+
+## 2026-06-01 SCCP Ethereum SDK native/no-WASM source guard
+
+- Added an Ethereum-mainnet release-readiness regression that scans the
+  JavaScript, Python, Swift, Kotlin/JVM, Java Android, and .NET Ethereum SCCP
+  facade source files for forbidden `WebAssembly`, `wasm`, `snarkjs`, remote
+  prover, prover URL, and prover endpoint dependency markers.
+- This covers the Java Android and .NET Ethereum facade files directly, keeping
+  the new native outbound submission surfaces tied to local or app-owned proof
+  paths instead of a WASM or remote-prover fallback.
+- Validation:
+  - `python3 -m py_compile pytests/scripts/sccp_release_readiness_report_test.py`
+  - `python3 -m pytest -q pytests/scripts/sccp_release_readiness_report_test.py -k 'ethereum_sdk_sources_are_native_local_prover_only or bsc_sdk_sources_are_native_local_prover_only or sdk_helper_symbols or user_prover_surfaces'`
+    (`6 passed, 19 deselected`)
+
+## 2026-06-01 SCCP Python/JS Ethereum outbound API inventory
+
+- Added Python `EthereumMainnetSccp.submit_outbound_to_ethereum`, which builds
+  Ethereum mainnet verifier calldata and submits the resulting package through
+  an app-owned transaction hook.
+- Tightened SCCP release-readiness and strict release-bundle inventories so the
+  `eth,bsc` JavaScript row requires the explicit Ethereum outbound
+  build/prove/calldata/submit methods, and the Python row requires
+  `submit_outbound_to_ethereum` alongside the existing build/prove/calldata
+  methods.
+- Validation:
+  - `python3 -m py_compile python/iroha_torii_client/sccp.py python/iroha_torii_client/tests/sccp_test.py scripts/sccp_release_readiness_report.py scripts/sccp_verify_release_bundle.py pytests/scripts/sccp_release_readiness_report_test.py pytests/scripts/sccp_release_bundle_test.py`
+  - `python3 -m pytest -q python/iroha_torii_client/tests/sccp_test.py::test_ethereum_mainnet_sccp_facade_requires_chain_id_1_and_eth_target`
+    (`1 passed`)
+  - `python3 -m pytest -q pytests/scripts/sccp_release_readiness_report_test.py -k 'sdk_helper_symbols or user_prover_surfaces or json_tracks_corridor_phase_results'`
+    (`5 passed, 19 deselected`)
+  - `python3 -m pytest -q pytests/scripts/sccp_release_bundle_test.py -k 'submission_surface or helper_inventory_is_independent'`
+    (`14 passed, 129 deselected`)
+
+## 2026-06-01 SCCP native Ethereum outbound submit hooks
+
+- Added app-owned Ethereum outbound submit callbacks to Swift, Kotlin/JVM, and
+  Java Android `EthereumMainnetSccp` facades, completing the native
+  SORA -> Ethereum easy path after proof-request construction, local proving,
+  and verifier calldata generation.
+- Kotlin exposes `EthereumMainnetOutboundSubmitter`, Java Android exposes
+  `EthereumMainnetSccp.OutboundSubmitter`, and Swift exposes
+  `EthereumMainnetSccp.OutboundSubmitFunction`; each submit method builds and
+  validates Ethereum mainnet calldata before handing it to the app-supplied
+  submitter.
+- Updated SCCP release-readiness and strict release-bundle verifier inventories
+  so the `eth,bsc` Swift/Kotlin/Java Android rows require the Ethereum outbound
+  submit methods and callback hooks.
+- Validation:
+  - `cd IrohaSwift && swift test --filter SccpSolanaProverTests/testEthereumMainnetSccpFacadeRequiresChainId1AndEthTarget --disable-swift-testing`
+    (`1 passed`)
+  - `cd kotlin && JAVA_HOME=/opt/homebrew/opt/openjdk@21 ./gradlew :core-jvm:test --tests org.hyperledger.iroha.sdk.sccp.EvmSccpProverTest.ethereumMainnetFacadeRequiresChainId1AndEthTarget --console=plain`
+    (`BUILD SUCCESSFUL`)
+  - `cd java/iroha_android && JAVA_HOME=/opt/homebrew/opt/openjdk@21 ANDROID_HOME=~/Library/Android/sdk ANDROID_SDK_ROOT=~/Library/Android/sdk ./gradlew test --console=plain`
+    (`BUILD SUCCESSFUL`)
+  - `python3 -m py_compile scripts/sccp_release_readiness_report.py scripts/sccp_verify_release_bundle.py pytests/scripts/sccp_release_readiness_report_test.py pytests/scripts/sccp_release_bundle_test.py`
+  - `python3 -m pytest -q pytests/scripts/sccp_release_readiness_report_test.py -k 'sdk_helper_symbols or user_prover_surfaces or json_tracks_corridor_phase_results'`
+    (`5 passed, 19 deselected`)
+  - `python3 -m pytest -q pytests/scripts/sccp_release_bundle_test.py -k 'submission_surface or helper_inventory_is_independent'`
+    (`14 passed, 129 deselected`)
+
+## 2026-06-01 SCCP BSC Parlia declaration release gate
+
+- Tightened SCCP release-readiness and strict release-bundle JS phase
+  transcript checks so published browser SDK evidence must include the package
+  declaration test for BSC mainnet Parlia finality evidence hooks, not only the
+  BSC no-WASM guard.
+- Added report and bundle-verifier negative regressions that remove that
+  declaration marker from an otherwise valid JS phase log and require the
+  readiness checks to fail closed.
+- Validation:
+  - `python3 -m py_compile scripts/sccp_release_readiness_report.py scripts/sccp_verify_release_bundle.py pytests/scripts/sccp_release_readiness_report_test.py pytests/scripts/sccp_release_bundle_test.py`
+  - `PYTHONPATH=python python3 -m pytest -q pytests/scripts/sccp_release_readiness_report_test.py::test_release_readiness_report_requires_bsc_parlia_declaration_marker pytests/scripts/sccp_release_readiness_report_test.py::test_release_readiness_report_requires_bsc_browser_no_wasm_marker`
+    (`2 passed`)
+  - `PYTHONPATH=python python3 -m pytest -q pytests/scripts/sccp_release_bundle_test.py::test_release_bundle_verifier_requires_bsc_parlia_declaration_marker pytests/scripts/sccp_release_bundle_test.py::test_release_bundle_verifier_requires_bsc_browser_no_wasm_marker pytests/scripts/sccp_release_bundle_test.py::test_release_bundle_verifier_phase_transcript_inventory_matches_report`
+    (`3 passed`)
+  - `node --test --test-name-pattern "package declarations expose BSC mainnet Parlia finality evidence hooks" javascript/iroha_js/test/package_dist.test.js`
+    (`1 passed`)
+  - `bash scripts/check_sccp_production_corridor.sh --phase evidence-scripts`
+    (`812 passed`)
+
+## 2026-06-01 SCCP BSC SDK native/no-WASM source guard
+
+- Added a release-readiness regression that scans the BSC SDK facade source
+  files across JavaScript, Python, Swift, Kotlin/JVM, Java Android, and .NET.
+  The guard fails if a BSC facade file is missing or if any facade source
+  introduces `WebAssembly`, `wasm`, `snarkjs`, remote prover, prover URL, or
+  prover endpoint dependency markers.
+- This keeps BSC mainnet SDK readiness tied to native or app-owned local-prover
+  code paths instead of a WASM or endpoint-owned proving fallback.
+- Validation:
+  - `python3 -m py_compile pytests/scripts/sccp_release_readiness_report_test.py`
+  - `PYTHONPATH=python python3 -m pytest -q pytests/scripts/sccp_release_readiness_report_test.py::test_release_readiness_bsc_sdk_sources_are_native_local_prover_only pytests/scripts/sccp_release_readiness_report_test.py::test_release_readiness_sdk_helper_symbols_exist_in_sdk_sources`
+    (`2 passed`)
+  - `PYTHONPATH=python python3 -m pytest -q pytests/scripts/sccp_release_readiness_report_test.py -k 'bsc_sdk_sources_are_native_local_prover_only or sdk_helper_symbols or user_prover_surfaces or bsc_browser_no_wasm_marker'`
+    (`6 passed, 17 deselected`)
+  - `python3 -m pytest -q pytests/scripts/sccp_release_bundle_test.py pytests/scripts/sccp_release_readiness_report_test.py`
+    (`167 passed`)
+  - `bash scripts/check_sccp_production_corridor.sh --phase evidence-scripts`
+    (`812 passed`)
+
+## 2026-06-01 Sumeragi TLA declaration and runner-input coverage guard
+
+- Hardened `scripts/formal/check_sumeragi_formal_coverage.py` so referenced
+  Sumeragi TLA modules now reject duplicate or non-leading `MODULE` headers,
+  missing or duplicate terminating `====` markers, trailing content after the
+  terminator,
+  duplicate constant declarations, duplicate top-level operator definitions, and
+  repeated top-level `RECURSIVE` declarations before either Apalache or TLC is
+  invoked. The guard now also requires duplicate-free TLA variable declarations
+  to match exactly one static top-level `vars` tuple, and requires every
+  selected CFG filename to belong to the selected TLA module by exact stem or
+  module-stem prefix. Runner proof inputs now also have single-assignment
+  checks, so duplicate `spec_file` or `cfg_file` assignments cannot be hidden by
+  Python dictionary conversion before static resolution, and resolved
+  `spec_file`/`cfg_file` inputs must remain flat direct children of the Sumeragi
+  formal directory with the expected `.tla`/`.cfg` suffixes. TLC `module`
+  assignments must now be TLA identifiers before the runner maps them to module
+  files.
+- The TLA operator parser now distinguishes top-level module operators from
+  scoped `LET` helpers, so CFG behavior/check references and TLC constraints
+  cannot be satisfied by a helper that is not available as a module-level
+  proof target. The new `vars` parser handles both inline tuples and multiline
+  tuples with unindented closing delimiters.
+- Added missing terminating `====` markers to the 127 Sumeragi TLA modules that
+  previously had a module header but no explicit terminator, bringing the
+  full 500-module formal corpus under the same terminator rule.
+- Added focused pytest coverage for duplicate TLA constant/operator rejection
+  and top-level-only operator parsing, duplicate or content-prefixed TLA module
+  headers, missing/duplicate/trailing TLA terminators, plus variable
+  declaration/`vars` tuple parity, duplicate tuple entries, undeclared tuple
+  variables, and dynamic tuple rejection. The tests also pin CFG/module filename
+  ownership for exact and module-prefixed CFG names while rejecting cross-module
+  CFG names, and verify duplicate or missing runner proof-input assignments fail
+  closed, including path-escape, nested-directory, and wrong-suffix proof
+  inputs. The TLC module-file tests now also reject non-identifier module names.
+  The current 500-module formal corpus passes with single leading headers,
+  exactly one terminal `====` per module, no duplicate TLA declarations,
+  variable/`vars` drift, CFG/module ownership drift, duplicate runner
+  proof-input assignments, flat-name drift, suffix drift, non-identifier TLC
+  module names, or formal-path containment violations.
+- Validation:
+  - `python3 -m py_compile scripts/formal/check_sumeragi_formal_coverage.py pytests/scripts/sumeragi_formal_coverage_test.py`
+  - `python3 scripts/formal/check_sumeragi_formal_coverage.py`
+    (`504 PR modes, 9788 expected-failure modes, 1 scheduled/manual modes, 10293 documented modes, 499 TLC fast modes, 9788 TLC mutation modes`)
+  - `python3 -m pytest -q pytests/scripts/sumeragi_formal_coverage_test.py`
+    (`67 passed`)
+  - TLA terminator audit across `docs/formal/sumeragi/*.tla`
+    (`missing 0`, `multi 0`, `trailing_after_end 0`)
+  - `bash -n scripts/formal/sumeragi_tlc.sh scripts/formal/sumeragi_apalache.sh scripts/formal/install_apalache.sh ci/check_sumeragi_formal.sh ci/check_sumeragi_formal_expected_failures.sh`
+  - `git diff --check -- scripts/formal/check_sumeragi_formal_coverage.py scripts/formal/sumeragi_tlc.sh scripts/formal/install_apalache.sh pytests/scripts/sumeragi_formal_coverage_test.py docs/formal/sumeragi/README.md ci/README.md roadmap.md status.md`
+  - trailing-whitespace and conflict-marker scans across the same touched
+    formal guard, runner, test, docs, roadmap, and status files
+
+## 2026-06-01 SCCP .NET Ethereum outbound facade parity
+
+- Added the .NET `EthereumMainnetSccp` outbound easy path for SORA -> Ethereum:
+  `BuildOutboundProofRequest`, `ProveOutboundToEthereumAsync`,
+  `BuildEthereumCalldata`, and `SubmitOutboundToEthereumAsync`, with typed
+  public-input, proof-request, proof-result, submission, prover, and submitter
+  records/interfaces.
+- Hardened .NET Ethereum proof wrapping and calldata construction so native
+  callers reject non-384-byte Groth16 blobs, all-zero proofs, malformed BN254
+  proof tuples, proof/message-id drift, proof/commitment-root drift,
+  source-domain drift, public-input drift, destination-binding drift, and
+  Ethereum mainnet chain-id binding drift before emitting verifier calldata.
+- Updated the SCCP release-readiness report and strict release-bundle verifier
+  inventories so the `dotnet-sdk` `eth,bsc` row requires the Ethereum outbound
+  facade, typed request/result/submission records, and app-owned outbound
+  prover/submitter hooks.
+- Validation:
+  - `DOTNET_ROOT=/tmp/iroha-dotnet/sdk DOTNET_CLI_TELEMETRY_OPTOUT=1 /tmp/iroha-dotnet/sdk/dotnet test csharp/tests/Hyperledger.Iroha.Sdk.Tests/Hyperledger.Iroha.Sdk.Tests.csproj --filter SccpEthereumMainnetTests --nologo`
+    (`4 passed`)
+  - `python3 -m py_compile scripts/sccp_release_readiness_report.py scripts/sccp_verify_release_bundle.py pytests/scripts/sccp_release_readiness_report_test.py pytests/scripts/sccp_release_bundle_test.py`
+  - `python3 -m pytest -q pytests/scripts/sccp_release_readiness_report_test.py -k 'sdk_helper_symbols or user_prover_surfaces or json_tracks_corridor_phase_results'`
+    (`5 passed, 18 deselected`)
+  - `python3 -m pytest -q pytests/scripts/sccp_release_bundle_test.py -k 'submission_surface or helper_inventory_is_independent'`
+    (`14 passed, 128 deselected`)
+
+## 2026-06-01 SCCP native typed BSC Parlia finality evidence
+
+- Added typed BSC Parlia finality evidence helpers to Swift, Kotlin/JVM, Java
+  Android, and .NET. Native apps can now build the canonical
+  `executionBlockNumber`, `executionBlockHash`, and `executionReceiptsRoot`
+  evidence map/dictionary without hand-assembling raw provider payloads.
+- Added native typed inbound-evidence construction helpers so BSC -> SORA
+  source proving can receive that Parlia finality evidence through the same
+  ergonomic pattern already used by Ethereum beacon finality.
+- Tightened the SCCP release-readiness report and strict release-bundle
+  verifier inventories so native `eth,bsc` SDK rows require the typed BSC
+  Parlia helper symbols alongside the consensus-provider hooks.
+- Validation:
+  - `python3 -m py_compile scripts/sccp_release_readiness_report.py scripts/sccp_verify_release_bundle.py pytests/scripts/sccp_release_readiness_report_test.py pytests/scripts/sccp_release_bundle_test.py`
+  - `PYTHONPATH=python python3 -m pytest -q pytests/scripts/sccp_release_readiness_report_test.py -k 'sdk_helper_symbols or user_prover_surfaces'`
+    (`4 passed, 18 deselected`)
+  - `PYTHONPATH=python python3 -m pytest -q pytests/scripts/sccp_release_bundle_test.py -k 'submission_surface or per_sdk_helper_symbol_drift'`
+    (`14 passed, 128 deselected`)
+  - `swift test --filter SccpSolanaProverTests/testBscMainnetInboundEvidenceUsesMainnetRpcAndRejectsDrift`
+    (`1 passed`)
+  - `JAVA_HOME=/opt/homebrew/opt/openjdk@21 ./gradlew :core-jvm:test --tests org.hyperledger.iroha.sdk.sccp.EvmSccpProverTest.bscMainnetFacadeRequiresChainId56AndBscTarget --console=plain`
+    (`BUILD SUCCESSFUL`)
+  - `JAVA_HOME=/opt/homebrew/opt/openjdk@21 ANDROID_HOME=~/Library/Android/sdk ANDROID_SDK_ROOT=~/Library/Android/sdk ./gradlew test --console=plain`
+    (`BUILD SUCCESSFUL`)
+  - `DOTNET_ROOT=/tmp/iroha-dotnet/sdk DOTNET_CLI_TELEMETRY_OPTOUT=1 /tmp/iroha-dotnet/sdk/dotnet test csharp/tests/Hyperledger.Iroha.Sdk.Tests/Hyperledger.Iroha.Sdk.Tests.csproj --filter SccpBscMainnetTests --nologo`
+    (`2 passed`)
+  - `bash scripts/check_sccp_production_corridor.sh --phase evidence-scripts`
+    (`810 passed`)
+
+## 2026-06-01 SCCP EVM runtime bytecode canonicalization
+
+- Tightened `scripts/sccp_all_lanes_evidence.py` so staged ETH/BSC source and
+  destination runtime-bytecode metadata must use canonical lowercase hex with a
+  lowercase `0x` prefix when present; imported evidence using `0X` or uppercase
+  hex now fails before readiness can be reported.
+- Applied the same canonical lowercase-hex policy to the direct ETH source,
+  BSC source, and EVM-family destination evidence renderers, so operator CLI
+  inputs cannot be normalized into production TOML after review.
+- Tightened the EVM-family source live collector's operator-supplied hash pins
+  to require lowercase `0x` hex as well, keeping live source TOML generation
+  aligned with the exact remote JSON-RPC and summary evidence checks.
+- Restored the release-bundle verifier's active BSC launch-lane boundary:
+  complete cryptographic-evidence row checks apply to the active lane, while
+  future-lane rows remain diagnostic until their launch policies open.
+- Added all-lanes regressions for non-canonical EVM source bridge and
+  destination verifier/bridge runtime-bytecode comments, plus direct parser
+  and source-live parser regressions for `0X` prefixes and uppercase
+  runtime-bytecode/address/hash input.
+- Validation:
+  - `python3 -m py_compile scripts/sccp_eth_source_bridge_evidence.py scripts/sccp_bsc_source_bridge_evidence.py scripts/sccp_evm_destination_evidence.py scripts/sccp_evm_source_live_evidence.py scripts/sccp_release_readiness_report.py scripts/sccp_verify_release_bundle.py pytests/scripts/sccp_eth_source_bridge_evidence_test.py pytests/scripts/sccp_bsc_source_bridge_evidence_test.py pytests/scripts/sccp_evm_destination_evidence_test.py pytests/scripts/sccp_evm_source_live_evidence_test.py pytests/scripts/sccp_release_readiness_report_test.py pytests/scripts/sccp_release_bundle_test.py scripts/sccp_all_lanes_evidence.py pytests/scripts/sccp_all_lanes_evidence_test.py`
+  - `PYTHONPATH=python python3 -m pytest -q pytests/scripts/sccp_eth_source_bridge_evidence_test.py::test_eth_address_parser_rejects_zero_and_wrong_width pytests/scripts/sccp_bsc_source_bridge_evidence_test.py::test_bsc_address_parser_rejects_zero_and_wrong_width pytests/scripts/sccp_evm_destination_evidence_test.py::test_evm_address_and_hash_parsers_reject_zero_and_wrong_width`
+    (`3 passed`)
+  - `PYTHONPATH=python python3 -m pytest -q pytests/scripts/sccp_evm_source_live_evidence_test.py`
+    (`20 passed`)
+  - `PYTHONPATH=python python3 -m pytest -q pytests/scripts/sccp_release_readiness_report_test.py::test_release_readiness_report_passes_with_only_active_launch_lane pytests/scripts/sccp_release_bundle_test.py::test_release_bundle_accepts_active_launch_lane_without_future_lanes pytests/scripts/sccp_release_bundle_test.py::test_release_bundle_verifier_rejects_source_gate_hash_named_role_drift pytests/scripts/sccp_release_bundle_test.py::test_release_bundle_verifier_rejects_crypto_evidence_zero_hashes pytests/scripts/sccp_release_bundle_test.py::test_release_bundle_verifier_rejects_crypto_evidence_domain_policy_drift pytests/scripts/sccp_release_bundle_test.py::test_release_bundle_verifier_rejects_crypto_evidence_field_type_drift`
+    (`6 passed`)
+  - `PYTHONPATH=python python3 -m pytest -q pytests/scripts/sccp_all_lanes_evidence_test.py::test_all_lanes_rejects_evm_destination_noncanonical_runtime_bytecode_metadata pytests/scripts/sccp_all_lanes_evidence_test.py::test_all_lanes_rejects_evm_source_noncanonical_runtime_bytecode_metadata pytests/scripts/sccp_all_lanes_evidence_test.py::test_all_lanes_accepts_verified_evm_source_live_toml`
+    (`3 passed`)
+  - `bash scripts/check_sccp_production_corridor.sh --phase evidence-scripts`
+    (`815 passed`)
+
+## 2026-06-01 SCCP BSC browser no-WASM release gate
+
+- Added an explicit packaged JavaScript BSC mainnet no-WASM regression beside
+  the Ethereum browser guard, keeping the BSC package source, dist bundle, and
+  declarations free of `WebAssembly`, `wasm`, `snarkjs`, remote prover, prover
+  URL, and prover endpoint dependency markers.
+- Tightened SCCP release-readiness and strict release-bundle transcript checks
+  so a JS phase must include the BSC no-WASM test name before BSC browser SDK
+  readiness can be accepted.
+- Validation:
+  - `python3 -m py_compile scripts/sccp_release_readiness_report.py scripts/sccp_verify_release_bundle.py pytests/scripts/sccp_release_readiness_report_test.py pytests/scripts/sccp_release_bundle_test.py`
+  - `node --test javascript/iroha_js/test/package_dist.test.js`
+    (`46 passed`)
+  - `PYTHONPATH=python python3 -m pytest -q pytests/scripts/sccp_release_readiness_report_test.py::test_release_readiness_report_requires_bsc_browser_no_wasm_marker pytests/scripts/sccp_release_bundle_test.py::test_release_bundle_verifier_requires_bsc_browser_no_wasm_marker pytests/scripts/sccp_release_bundle_test.py::test_release_bundle_verifier_phase_transcript_inventory_matches_report`
+    (`3 passed`)
+  - `PYTHONPATH=python python3 -m pytest -q pytests/scripts/sccp_release_readiness_report_test.py pytests/scripts/sccp_release_bundle_test.py -k 'bsc_browser_no_wasm_marker or js_package_dist_transcript or js_package_export_transcript or js_mainnet_facade_transcripts or phase_transcript_inventory'`
+    (`9 passed, 155 deselected`)
+  - `bash scripts/check_sccp_production_corridor.sh --phase evidence-scripts`
+    (`807 passed`)
+
+## 2026-06-01 SCCP BSC consensus-provider release evidence
+
+- Tightened SCCP release-readiness and strict release-bundle helper inventories
+  so native `eth,bsc` SDK rows require the BSC consensus-provider hooks used to
+  collect Parlia finality: Swift `BscMainnetConsensusProvider`, Kotlin
+  `BscMainnetConsensusProvider`, Java Android
+  `BscMainnetSccp.ConsensusProvider`, and .NET
+  `IBscMainnetConsensusProvider`.
+- Kept the JavaScript/web row tied to its runtime `consensusProvider` hook while
+  leaving the typed `BscMainnetConsensusProvider` declaration covered by the
+  package declaration tests, since TypeScript-only types are not runtime
+  source/dist exports.
+- Validation:
+  - `python3 -m py_compile scripts/sccp_release_readiness_report.py scripts/sccp_verify_release_bundle.py pytests/scripts/sccp_release_readiness_report_test.py pytests/scripts/sccp_release_bundle_test.py`
+  - `PYTHONPATH=python python3 -m pytest -q pytests/scripts/sccp_release_readiness_report_test.py -k 'sdk_helper_symbols or user_prover_surfaces'`
+    (`4 passed, 17 deselected`)
+  - `PYTHONPATH=python python3 -m pytest -q pytests/scripts/sccp_release_bundle_test.py -k 'submission_surface or per_sdk_helper_symbol_drift'`
+    (`14 passed, 127 deselected`)
+  - `bash scripts/check_sccp_production_corridor.sh --phase evidence-scripts`
+    (`805 passed`)
+
+## 2026-06-01 SCCP Python ETH inbound finality facade
+
+- Added Python `EthereumMainnetSccp` inbound collection/proving/submission
+  hooks to match the web/native Ethereum mainnet facade shape. Python apps can
+  now inject execution and consensus providers, collect receipt and block
+  evidence, bind beacon finality to the execution block number/hash and
+  receipts root, and reject missing beacon finality before app-owned prover
+  callbacks run.
+- Updated Python regressions for mainnet `eth_chainId`, receipt/block drift,
+  finality drift, proof-byte copying, and the no-finality prove-time guard.
+- Updated SCCP release-readiness and strict release-bundle helper inventories
+  so the `eth,bsc` Python SDK row requires the Ethereum inbound
+  collect/prove/submit facade methods and the `consensus_provider` hook.
+- Validation:
+  - `python3 -m py_compile python/iroha_torii_client/sccp.py python/iroha_torii_client/tests/sccp_test.py scripts/sccp_release_readiness_report.py scripts/sccp_verify_release_bundle.py pytests/scripts/sccp_release_readiness_report_test.py`
+  - `python3 -m pytest -q python/iroha_torii_client/tests/sccp_test.py::test_ethereum_mainnet_sccp_facade_requires_chain_id_1_and_eth_target python/iroha_torii_client/tests/sccp_test.py::test_ethereum_mainnet_sccp_facade_collects_inbound_receipts_and_copies_proofs python/iroha_torii_client/tests/sccp_test.py::test_ethereum_mainnet_sccp_facade_rejects_adversarial_inbound_evidence python/iroha_torii_client/tests/sccp_test.py::test_bsc_mainnet_sccp_facade_collects_inbound_receipts_and_copies_proofs python/iroha_torii_client/tests/sccp_test.py::test_bsc_mainnet_sccp_facade_rejects_adversarial_inbound_evidence`
+    (`5 passed`)
+  - `PYTHONPATH=python python3 -m pytest -q pytests/scripts/sccp_release_readiness_report_test.py::test_release_readiness_json_tracks_corridor_phase_results pytests/scripts/sccp_release_readiness_report_test.py::test_release_readiness_python_helper_symbols_are_package_root_exports pytests/scripts/sccp_release_readiness_report_test.py::test_release_readiness_sdk_helper_symbols_exist_in_sdk_sources pytests/scripts/sccp_release_readiness_report_test.py::test_release_readiness_user_prover_surfaces_name_ui_hook_symbols`
+    (`4 passed`)
+  - `PYTHONPATH=python python3 -m pytest -q pytests/scripts/sccp_release_bundle_test.py::test_release_bundle_writes_hash_bound_public_artifacts pytests/scripts/sccp_release_bundle_test.py::test_release_bundle_verifier_rejects_per_sdk_helper_symbol_drift pytests/scripts/sccp_release_bundle_test.py::test_release_bundle_verifier_sdk_phase_inventory_matches_report pytests/scripts/sccp_release_bundle_test.py::test_release_bundle_verifier_sdk_phase_inventory_is_independent pytests/scripts/sccp_release_bundle_test.py::test_release_bundle_verifier_rejects_duplicate_submission_surface_helpers pytests/scripts/sccp_release_bundle_test.py::test_release_bundle_verifier_requires_submission_surface_ui_hooks`
+    (`6 passed`)
+  - `bash scripts/check_sccp_production_corridor.sh --phase python-sdk,evidence-scripts`
+    (`evidence-scripts`: `805 passed`; `python-sdk`: `85 passed`)
+
+## 2026-06-01 SCCP native typed ETH finality evidence
+
+- Added typed Ethereum mainnet beacon-finality evidence helpers to Swift,
+  Kotlin/JVM, Java Android, and .NET. Native apps can now construct the
+  canonical evidence map/dictionary for `executionBlockNumber`,
+  `executionBlockHash`, and `executionReceiptsRoot` without hand-assembling
+  unstructured provider payloads.
+- Added native typed inbound-evidence construction helpers so Swift,
+  Kotlin/JVM, Java Android, and .NET callers can feed the finality helper into
+  ETH -> SORA source proving without manually copying the finality map.
+- Updated native Ethereum inbound regressions to use those helpers while still
+  proving that finality evidence is bound to the collected receipt/block before
+  app-owned source prover callbacks run.
+- Updated the SCCP release-readiness report and strict release-bundle verifier
+  inventories so the `eth,bsc` native SDK rows require those typed
+  beacon-finality and inbound-evidence helper symbols alongside the
+  consensus-provider hooks.
+- Added a packaged JavaScript regression that keeps the browser Ethereum
+  mainnet SCCP artifacts free of `WebAssembly`, `wasm`, `snarkjs`, remote
+  prover, prover URL, and prover endpoint dependency markers.
+- Tightened the SCCP release report and strict bundle verifier so the JS phase
+  transcript must include that no-WASM browser guard's test name before a
+  readiness bundle can be accepted.
+- Validation:
+  - `cd IrohaSwift && swift test --filter SccpSolanaProverTests/testEthereumMainnetInboundEvidenceUsesMainnetRpcAndRejectsDrift`
+    (`1 passed`)
+  - `cd kotlin && JAVA_HOME=/opt/homebrew/opt/openjdk@21 ./gradlew :core-jvm:test --tests org.hyperledger.iroha.sdk.sccp.EvmSccpProverTest.ethereumMainnetInboundEvidenceUsesMainnetRpcAndRejectsDrift --console=plain`
+    (`BUILD SUCCESSFUL`)
+  - `cd java/iroha_android && JAVA_HOME=/opt/homebrew/opt/openjdk@21 ANDROID_HOME=~/Library/Android/sdk ANDROID_SDK_ROOT=~/Library/Android/sdk ./gradlew test --console=plain`
+    (`BUILD SUCCESSFUL`)
+  - `DOTNET_ROOT=/tmp/iroha-dotnet/sdk DOTNET_CLI_TELEMETRY_OPTOUT=1 /tmp/iroha-dotnet/sdk/dotnet test csharp/tests/Hyperledger.Iroha.Sdk.Tests/Hyperledger.Iroha.Sdk.Tests.csproj --filter SccpEthereumMainnetTests --nologo`
+    (`2 passed`)
+  - `python3 -m py_compile scripts/sccp_release_readiness_report.py scripts/sccp_verify_release_bundle.py pytests/scripts/sccp_release_readiness_report_test.py`
+  - `python3 -m pytest -q pytests/scripts/sccp_release_readiness_report_test.py -k 'sdk_helper_symbols or user_prover_surfaces or json_tracks_corridor_phase_results'`
+    (`5 passed, 16 deselected`)
+  - `python3 -m pytest -q pytests/scripts/sccp_release_bundle_test.py -k 'submission_surface'`
+    (`13 passed, 128 deselected`)
+  - `python3 -m pytest -q pytests/scripts/sccp_release_readiness_report_test.py -k 'phase or json_tracks_corridor_phase_results or sdk_helper_symbols or user_prover_surfaces'`
+    (`13 passed, 8 deselected`)
+  - `python3 -m pytest -q pytests/scripts/sccp_release_bundle_test.py -k 'js_phase or phase or submission_surface'`
+    (`31 passed, 110 deselected`)
+  - `node --test javascript/iroha_js/test/package_dist.test.js`
+    (`45 passed`)
+
+## 2026-06-01 SCCP BSC prove-time Parlia finality guard
+
+- Tightened the JavaScript/web, Python, Swift, Kotlin/JVM, Java Android, and
+  .NET `BscMainnetSccp` inbound easy paths so they collect/normalize BSC
+  receipt evidence before app-owned source prover callbacks run, and reject
+  missing Parlia finality evidence before calling those callbacks.
+- Aligned the JavaScript BSC inbound collector with the Ethereum mainnet
+  collector for fully supplied evidence: a default `null` execution provider no
+  longer forces JSON-RPC validation when the caller already supplied receipt and
+  block evidence.
+- Promoted the JavaScript BSC Parlia finality shape from `unknown` to explicit
+  TypeScript declarations and exposed per-call execution/consensus providers on
+  `BscMainnetSccp.proveInboundToSora`, matching the runtime collection path.
+- Hardened the Swift BSC inbound facade to collect Parlia finality through an
+  app-supplied consensus provider, normalize supplied or collected finality
+  against the collected receipt block number, block hash, and receipts root, and
+  reject missing Parlia finality before the native app-owned prover callback
+  runs.
+- Added the same Parlia finality binding to Kotlin/JVM, Java Android, and .NET:
+  app-supplied consensus providers can populate finality evidence, supplied or
+  collected finality must match the collected execution block number/hash and
+  receipts root, and proof outputs are rejected if empty or all-zero.
+- Validation:
+  - `cd javascript/iroha_js && npm run build:dist`
+  - `python3 -m py_compile python/iroha_torii_client/sccp.py python/iroha_torii_client/tests/sccp_test.py`
+  - `PYTHONPATH=python python3 -m pytest -q python/iroha_torii_client/tests/sccp_test.py -k 'bsc_mainnet_sccp_facade'`
+    (`3 passed, 82 deselected`)
+  - `node --check javascript/iroha_js/src/sccp.js`
+  - `node --check javascript/iroha_js/dist/sccp.js`
+  - `node --test javascript/iroha_js/test/sccpBscMainnet.test.js`
+    (`11 passed`)
+  - `node --check javascript/iroha_js/test/package_dist.test.js`
+  - `node --test javascript/iroha_js/test/package_dist.test.js`
+    (`45 passed`)
+  - `cd IrohaSwift && swift test --filter SccpSolanaProverTests/testBscMainnetInboundEvidenceUsesMainnetRpcAndRejectsDrift`
+    (`1 passed`)
+  - `bash scripts/check_sccp_production_corridor.sh --phase js-sdk`
+    (`155 passed`)
+  - `bash scripts/check_sccp_production_corridor.sh --phase python-sdk`
+    (`85 passed`)
+  - `bash scripts/check_sccp_production_corridor.sh --phase swift-sdk`
+    (`77` SCCP tests and `1` Torii test passed)
+  - `bash scripts/check_sccp_production_corridor.sh --phase kotlin-sdk`
+    (`BUILD SUCCESSFUL`)
+  - `bash scripts/check_sccp_production_corridor.sh --phase java-android`
+    (`BUILD SUCCESSFUL`)
+  - `bash scripts/check_sccp_production_corridor.sh --phase dotnet-sdk`
+    (`4 passed`)
+
+## 2026-06-01 SCCP native ETH prove provider overrides
+
+- Added per-call execution and consensus provider overrides to the Swift,
+  Kotlin/JVM, and Java Android `EthereumMainnetSccp.proveInboundToSora`
+  methods. Native apps can now collect, finality-bind, and prove an Ethereum
+  mainnet inbound receipt in one call without constructing a new facade around
+  each app-owned RPC/finality provider pair.
+- Added regressions proving those per-call providers are used for mainnet
+  `eth_chainId`, receipt, block, and beacon-finality collection, while the
+  missing-finality guard still prevents app-owned prover callbacks from
+  running.
+- Validation:
+  - `cd IrohaSwift && swift test --filter SccpSolanaProverTests/testEthereumMainnetInboundEvidenceUsesMainnetRpcAndRejectsDrift`
+    (`1 passed`)
+  - `cd kotlin && JAVA_HOME=/opt/homebrew/opt/openjdk@21 ./gradlew :core-jvm:test --tests org.hyperledger.iroha.sdk.sccp.EvmSccpProverTest.ethereumMainnetInboundEvidenceUsesMainnetRpcAndRejectsDrift --console=plain`
+    (`BUILD SUCCESSFUL`)
+  - `cd java/iroha_android && JAVA_HOME=/opt/homebrew/opt/openjdk@21 ANDROID_HOME=~/Library/Android/sdk ANDROID_SDK_ROOT=~/Library/Android/sdk ./gradlew test --console=plain`
+    (`BUILD SUCCESSFUL`)
+
+## 2026-06-01 SCCP JavaScript ETH finality declarations
+
+- Promoted the JavaScript Ethereum mainnet beacon-finality evidence shape from
+  `unknown` to explicit TypeScript declarations. Browser callers now see
+  `EthereumMainnetBeaconFinalityEvidenceInput`,
+  `EthereumMainnetBeaconFinalityEvidence`, and
+  `EthereumMainnetConsensusProviderInput` with the execution block number,
+  execution block hash, and execution receipts root fields required by the
+  runtime validator.
+- Updated the `EthereumMainnetSccp.proveInboundToSora` options declaration to
+  include execution and consensus providers, matching the runtime path that
+  collects and validates evidence before the app-owned prover callback.
+- Validation:
+  - `node --test javascript/iroha_js/test/package_dist.test.js javascript/iroha_js/test/sccpEthereumMainnet.test.js`
+    (`52 passed`)
+
+## 2026-06-01 SCCP Ethereum prove-time finality guard
+
+- Added prove-time beacon-finality guards to the JavaScript, Swift, Kotlin/JVM,
+  Java Android, and .NET `EthereumMainnetSccp` inbound facades. The app-owned
+  local source prover is no longer called unless collection produced or
+  preserved Ethereum beacon finality evidence for the mainnet receipt.
+- Added negative regressions proving missing finality is rejected before prover
+  callbacks run, while the positive app-supplied consensus-provider path still
+  reaches the callback with finality-bound evidence.
+- Validation:
+  - `cd javascript/iroha_js && npm run build:dist && node --check src/sccp.js && node --check dist/sccp.js && node --test test/sccpEthereumMainnet.test.js test/package_dist.test.js`
+    (`51 passed`)
+  - `cd IrohaSwift && swift test --filter SccpSolanaProverTests/testEthereumMainnetInboundEvidenceUsesMainnetRpcAndRejectsDrift`
+    (`1 passed`)
+  - `cd kotlin && JAVA_HOME=/opt/homebrew/opt/openjdk@21 ./gradlew :core-jvm:test --tests org.hyperledger.iroha.sdk.sccp.EvmSccpProverTest.ethereumMainnetInboundEvidenceUsesMainnetRpcAndRejectsDrift --console=plain`
+    (`BUILD SUCCESSFUL`)
+  - `cd java/iroha_android && JAVA_HOME=/opt/homebrew/opt/openjdk@21 ANDROID_HOME=~/Library/Android/sdk ANDROID_SDK_ROOT=~/Library/Android/sdk ./gradlew test --console=plain`
+    (`BUILD SUCCESSFUL`)
+  - `DOTNET_ROOT=/tmp/iroha-dotnet/sdk DOTNET_CLI_TELEMETRY_OPTOUT=1 /tmp/iroha-dotnet/sdk/dotnet test csharp/tests/Hyperledger.Iroha.Sdk.Tests/Hyperledger.Iroha.Sdk.Tests.csproj --filter SccpEthereumMainnetTests --nologo`
+    (`2 passed`)
+
+## 2026-06-01 SCCP JavaScript ETH prove-time collection
+
+- Tightened the browser `EthereumMainnetSccp.proveInboundToSora` path so it now
+  runs `collectInboundEvidenceFromReceipt` before invoking the app-owned local
+  prover. The prover callback therefore receives the same mainnet chain-id
+  checked, receipt/block validated, and beacon-finality-bound evidence as the
+  explicit collection API.
+- Accepted precomputed `receiptProofHash` as already-collected Ethereum receipt
+  proof material in the JavaScript inbound collector, while still rejecting
+  incomplete prove inputs before the app callback can run.
+- Validation:
+  - `cd javascript/iroha_js && npm run build:dist && node --check src/sccp.js && node --check dist/sccp.js && node --test test/sccpEthereumMainnet.test.js test/package_dist.test.js`
+    (`51 passed`)
+
+## 2026-06-01 SCCP Ethereum finality block binding
+
+- Hardened the JavaScript, Swift, Kotlin/JVM, Java Android, and .NET
+  `EthereumMainnetSccp` inbound collectors so supplied or app-collected beacon
+  finality evidence must bind back to the validated execution block before any
+  local source-prover callback sees it.
+- The collectors now require finality execution block number, execution block
+  hash, and execution receipts root fields, normalize their canonical forms,
+  and reject mismatches against the receipt/block number, block hash, or
+  `receiptsRoot` gathered from the app-owned Ethereum mainnet RPC provider.
+- Validation:
+  - `cd javascript/iroha_js && npm run build:dist && node --check src/sccp.js && node --check dist/sccp.js && node --test test/sccpEthereumMainnet.test.js`
+    (`8 passed`)
+  - `node --test javascript/iroha_js/test/package_dist.test.js`
+    (`42 passed`)
+  - `cd IrohaSwift && swift test --filter SccpSolanaProverTests/testEthereumMainnetInboundEvidenceUsesMainnetRpcAndRejectsDrift`
+    (`1 passed`)
+  - `cd kotlin && JAVA_HOME=/opt/homebrew/opt/openjdk@21 ./gradlew :core-jvm:test --tests org.hyperledger.iroha.sdk.sccp.EvmSccpProverTest.ethereumMainnetInboundEvidenceUsesMainnetRpcAndRejectsDrift --console=plain`
+    (`BUILD SUCCESSFUL`)
+  - `cd java/iroha_android && JAVA_HOME=/opt/homebrew/opt/openjdk@21 ANDROID_HOME=~/Library/Android/sdk ANDROID_SDK_ROOT=~/Library/Android/sdk ./gradlew test --console=plain`
+    (`BUILD SUCCESSFUL`)
+  - `DOTNET_ROOT=/tmp/iroha-dotnet/sdk DOTNET_CLI_TELEMETRY_OPTOUT=1 /tmp/iroha-dotnet/sdk/dotnet test csharp/tests/Hyperledger.Iroha.Sdk.Tests/Hyperledger.Iroha.Sdk.Tests.csproj --filter SccpEthereumMainnetTests --nologo`
+    (`2 passed`)
+
+## 2026-06-01 SCCP production corridor rerun with native .NET phase
+
+- Re-ran the SCCP production-readiness corridor on the current BSC-mainnet
+  SDK/release-gate tree, including the newly added `dotnet-sdk` phase.
+- The first full logged run proved the Rust SCCP phase (`240` tests plus doc
+  tests); the evidence helper inventory changed during the long run, so the
+  remaining phases were rerun individually after the current release-readiness
+  files settled.
+- Validation:
+  - `bash scripts/check_sccp_production_corridor.sh --log-dir /tmp/sccp-full-corridor.pYpcxW`
+    rust-sccp phase: `240 passed`, `0` doc tests
+  - `bash scripts/check_sccp_production_corridor.sh --phase evidence-scripts`
+    (`805 passed`)
+  - `bash scripts/check_sccp_production_corridor.sh --phase js-sdk`
+    (`149 passed`)
+  - `bash scripts/check_sccp_production_corridor.sh --phase python-sdk`
+    (`83 passed`)
+  - `bash scripts/check_sccp_production_corridor.sh --phase swift-sdk`
+    (`77` SCCP tests plus `1` Torii bridge-proof submit test)
+  - `bash scripts/check_sccp_production_corridor.sh --phase kotlin-sdk`
+    (`BUILD SUCCESSFUL`)
+  - `bash scripts/check_sccp_production_corridor.sh --phase java-android`
+    (both Gradle invocations `BUILD SUCCESSFUL`)
+  - `bash scripts/check_sccp_production_corridor.sh --phase dotnet-sdk`
+    (`4 passed`)
+  - `bash scripts/check_sccp_production_corridor.sh --phase contract-smoke`
+    (`sccp_message_bridge_smoke: ok`)
+  - `bash scripts/check_sccp_production_corridor.sh --phase core-admission`
+    (`32 passed`)
+
+## 2026-06-01 SCCP native Ethereum finality hooks
+
+- Added app-supplied Ethereum mainnet consensus/finality provider hooks to the
+  Swift, Kotlin/JVM, Java Android, and .NET `EthereumMainnetSccp` facades. When
+  inbound evidence collection starts from an execution receipt without
+  pre-supplied `beaconFinality`, the native facade can now collect beacon
+  finality evidence from the app-owned provider and attach it before the local
+  source prover or submitter path runs.
+- Extended the public SCCP release-helper inventory and independent
+  release-bundle verifier so the Ethereum/BSC helper row names the native
+  consensus-provider hook symbols alongside the existing execution-provider,
+  prover, submitter, and facade method symbols.
+- Validation:
+  - `python3 -m py_compile scripts/sccp_release_readiness_report.py scripts/sccp_verify_release_bundle.py pytests/scripts/sccp_release_readiness_report_test.py pytests/scripts/sccp_release_bundle_test.py`
+  - `PYTHONPATH=python python3 -m pytest -q pytests/scripts/sccp_release_readiness_report_test.py -k 'helper_symbols or user_prover_surfaces_name_ui_hook_symbols or dotnet'`
+    (`5 passed, 16 deselected`)
+  - `PYTHONPATH=python python3 -m pytest -q pytests/scripts/sccp_release_bundle_test.py -k 'helper_inventory_is_independent or submission_surface_helper or submission_surface_ui_hooks or per_sdk_helper_symbol_drift or field_type_drift'`
+    (`10 passed, 131 deselected`)
+  - `cd IrohaSwift && swift test --filter SccpSolanaProverTests/testEthereumMainnetInboundEvidenceUsesMainnetRpcAndRejectsDrift`
+    (`1 passed`)
+  - `cd kotlin && JAVA_HOME=/opt/homebrew/opt/openjdk@21 ./gradlew :core-jvm:test --tests org.hyperledger.iroha.sdk.sccp.EvmSccpProverTest.ethereumMainnetInboundEvidenceUsesMainnetRpcAndRejectsDrift --console=plain`
+    (`BUILD SUCCESSFUL`)
+  - `cd java/iroha_android && JAVA_HOME=/opt/homebrew/opt/openjdk@21 ANDROID_HOME=~/Library/Android/sdk ANDROID_SDK_ROOT=~/Library/Android/sdk ./gradlew test --console=plain`
+    (`BUILD SUCCESSFUL`)
+  - `DOTNET_ROOT=/tmp/iroha-dotnet/sdk DOTNET_CLI_TELEMETRY_OPTOUT=1 /tmp/iroha-dotnet/sdk/dotnet test csharp/tests/Hyperledger.Iroha.Sdk.Tests/Hyperledger.Iroha.Sdk.Tests.csproj --filter SccpEthereumMainnetTests --nologo`
+    (`2 passed`)
+
+## 2026-06-01 SCCP JS/.NET corridor evidence hardening
+
+- Strengthened the SCCP production corridor so `js-sdk` now runs the
+  JavaScript Ethereum and BSC mainnet facade regressions alongside the Solana,
+  package `dist`, and package-root export tests.
+- Kept strict release-readiness and release-bundle verification in sync with
+  the corridor by requiring the JS ETH/BSC facade test transcripts and the
+  native `.NET` ETH/BSC facade phase evidence before public release artifacts
+  can be marked complete.
+- Validation:
+  - `python3 -m py_compile scripts/sccp_release_readiness_report.py scripts/sccp_verify_release_bundle.py scripts/sccp_release_bundle.py pytests/scripts/check_sccp_production_corridor_test.py pytests/scripts/sccp_release_readiness_report_test.py pytests/scripts/sccp_release_bundle_test.py`
+  - `PYTHONPATH=python python3 -m pytest -q pytests/scripts/check_sccp_production_corridor_test.py pytests/scripts/sccp_release_readiness_report_test.py::test_release_readiness_json_tracks_corridor_phase_results pytests/scripts/sccp_release_readiness_report_test.py::test_release_readiness_report_requires_js_mainnet_facade_transcripts pytests/scripts/sccp_release_bundle_test.py::test_release_bundle_writes_hash_bound_public_artifacts pytests/scripts/sccp_release_bundle_test.py::test_release_bundle_verifier_requires_js_mainnet_facade_transcripts`
+    (`16 passed`)
+  - `bash scripts/check_sccp_production_corridor.sh --phase evidence-scripts,js-sdk,dotnet-sdk`
+  - `evidence-scripts`: `805` tests
+  - `js-sdk`: `149` tests
+  - `dotnet-sdk`: `4` tests
+
+## 2026-06-01 SCCP BSC facade-method release evidence
+
+- Tightened the public `eth,bsc` SCCP user-prover helper rows so BSC mainnet
+  readiness now requires the concrete inbound facade methods, not only the
+  `BscMainnetSccp` class names. JavaScript, Python, Swift, Kotlin/JVM, and
+  Java Android rows now pin the collect/prove/submit inbound method symbols in
+  both the report generator and the independent release-bundle verifier.
+- Kept Python UI-owned prover hook validation exact so
+  `BscMainnetSccp.prove_inbound_to_sora` cannot stand in for the app-owned
+  `prove` callback marker, and fixed the verifier's canonical Markdown
+  renderer so the `eth,bsc` `.NET` helper set is rendered and checked alongside
+  the other SDK rows.
+- Hardened verifier diagnostics for malformed submission-surface rows so
+  non-string `lanes` values report schema errors instead of crashing during
+  canonical Markdown regeneration.
+- Validation:
+  - `python3 -m py_compile scripts/sccp_release_readiness_report.py scripts/sccp_verify_release_bundle.py pytests/scripts/sccp_release_readiness_report_test.py pytests/scripts/sccp_release_bundle_test.py`
+  - `PYTHONPATH=python python3 -m pytest -q pytests/scripts/sccp_release_readiness_report_test.py -k 'helper_symbols or user_prover_surfaces_name_ui_hook_symbols or json_tracks_corridor_phase_results'`
+    (`6 passed, 15 deselected`)
+  - `PYTHONPATH=python python3 -m pytest -q pytests/scripts/sccp_release_bundle_test.py -k 'helper_symbol or submission_surface or crypto_evidence_inventory_drift'`
+    (`15 passed, 126 deselected`)
+  - `bash scripts/check_sccp_production_corridor.sh --phase evidence-scripts`
+    (`805 passed`)
+
+## 2026-06-01 SCCP .NET release-helper inventory
+
+- Added the .NET ETH/BSC SCCP facade methods and app-owned execution,
+  inbound-prover, and inbound-submitter interfaces to the structured
+  release-readiness helper inventory. The `eth,bsc` user-prover row now has a
+  `dotnet-sdk` helper-symbol set instead of treating the .NET corridor phase as
+  unstructured evidence.
+- Tightened the strict release-bundle verifier so the ETH/BSC row must retain
+  the .NET helper symbols and the `.NET` inbound prover/submitter hooks, while
+  non-EVM rows continue to reject unexpected SDK helper maps.
+- Validation:
+  - `python3 -m py_compile scripts/sccp_release_readiness_report.py scripts/sccp_verify_release_bundle.py pytests/scripts/sccp_release_readiness_report_test.py pytests/scripts/sccp_release_bundle_test.py`
+  - `PYTHONPATH=python python3 -m pytest -q pytests/scripts/sccp_release_readiness_report_test.py -k 'helper_symbols or user_prover_surfaces_name_ui_hook_symbols or dotnet'`
+    (`5 passed, 16 deselected`)
+  - `PYTHONPATH=python python3 -m pytest -q pytests/scripts/sccp_release_bundle_test.py -k 'helper_inventory_is_independent or submission_surface_helper or submission_surface_ui_hooks or per_sdk_helper_symbol_drift or field_type_drift'`
+    (`10 passed, 131 deselected`)
+
+## 2026-06-01 SCCP native .NET corridor phase
+
+- Added a `dotnet-sdk` phase to the focused SCCP production corridor and the
+  GitHub Actions attachment, so native .NET/C# Ethereum and BSC mainnet facade
+  tests are first-class release evidence instead of ad-hoc local validation.
+- Mirrored the new phase in the release-readiness report and independent
+  release-bundle verifier, and made the `eth,bsc` public release row require
+  the .NET phase alongside the web, Python, Swift, Kotlin/JVM, Java Android,
+  contract-smoke, and core-admission phases.
+- Strengthened the C# BSC inbound facade regression with copied prover output,
+  copied submitter input, and zero `receiptsRoot` rejection.
+- Validation:
+  - `python3 -m py_compile scripts/sccp_release_readiness_report.py scripts/sccp_verify_release_bundle.py pytests/scripts/check_sccp_production_corridor_test.py pytests/scripts/sccp_release_readiness_report_test.py pytests/scripts/sccp_release_bundle_test.py`
+  - `bash -n scripts/check_sccp_production_corridor.sh`
+  - `python3 -m pytest -q pytests/scripts/check_sccp_production_corridor_test.py`
+    (`12 passed`)
+  - `bash scripts/check_sccp_production_corridor.sh --phase dotnet-sdk`
+    (`4 passed`)
+  - `python3 -m pytest -q pytests/scripts/sccp_release_readiness_report_test.py pytests/scripts/sccp_release_bundle_test.py -k 'phase or corridor or submission_surface or sdk_phase_inventory'`
+    (`44 passed, 118 deselected`)
+  - `python3 -m pytest -q pytests/scripts/sccp_release_readiness_report_test.py pytests/scripts/sccp_release_bundle_test.py`
+    (`162 passed`)
+
+## 2026-06-01 SCCP SDK inbound block-number hardening
+
+- Tightened the easy ETH/BSC inbound evidence collectors across JavaScript,
+  Python, Swift, Kotlin/JVM, Java Android, and .NET so any collected receipt
+  must carry a positive canonical `receipt.blockNumber`, and any collected or
+  fetched block must carry a positive canonical `block.number` before the local
+  source prover can run.
+- Added focused adversarial coverage for missing and zero receipt/block numbers
+  alongside the existing failed-receipt, transaction drift, block-hash drift,
+  block-number drift, uppercase hash, and missing `receiptsRoot` checks.
+- Validation:
+  - `cd javascript/iroha_js && npm run build:dist`
+  - `node --check javascript/iroha_js/src/sccp.js && node --check javascript/iroha_js/dist/sccp.js`
+  - `node --test javascript/iroha_js/test/sccpEthereumMainnet.test.js javascript/iroha_js/test/sccpBscMainnet.test.js`
+    (`17 passed`)
+  - `node --test javascript/iroha_js/test/package_dist.test.js`
+    (`42 passed`)
+  - `python3 -m py_compile python/iroha_torii_client/sccp.py python/iroha_torii_client/tests/sccp_test.py`
+  - `PYTHONPATH=python python3 -m pytest -q python/iroha_torii_client/tests/sccp_test.py -k 'bsc_mainnet_sccp_facade_rejects_adversarial_inbound_evidence'`
+    (`1 passed, 82 deselected`)
+  - `cd IrohaSwift && swift test --filter 'SccpSolanaProverTests/testEthereumMainnetInboundEvidenceUsesMainnetRpcAndRejectsDrift|SccpSolanaProverTests/testBscMainnetSccpFacadeRequiresChainId56AndBscTarget'`
+    (`2 passed`)
+  - `cd kotlin && JAVA_HOME=/opt/homebrew/opt/openjdk@21 ./gradlew :core-jvm:test --tests org.hyperledger.iroha.sdk.sccp.EvmSccpProverTest.ethereumMainnetInboundEvidenceUsesMainnetRpcAndRejectsDrift --tests org.hyperledger.iroha.sdk.sccp.EvmSccpProverTest.bscMainnetInboundEvidenceUsesMainnetRpcAndRejectsDrift --console=plain`
+    (`BUILD SUCCESSFUL`)
+  - `cd java/iroha_android && JAVA_HOME=/opt/homebrew/opt/openjdk@21 ANDROID_HOME=~/Library/Android/sdk ANDROID_SDK_ROOT=~/Library/Android/sdk ./gradlew test --console=plain`
+    (`BUILD SUCCESSFUL`)
+  - `DOTNET_ROOT=/tmp/iroha-dotnet/sdk DOTNET_CLI_TELEMETRY_OPTOUT=1 /tmp/iroha-dotnet/sdk/dotnet test csharp/tests/Hyperledger.Iroha.Sdk.Tests/Hyperledger.Iroha.Sdk.Tests.csproj --filter 'SccpEthereumMainnetTests|SccpBscMainnetTests' --nologo`
+    (`4 passed`)
+  - `git diff --check`
+
+## 2026-06-01 SCCP BSC mainnet public helper inventory
+
+- Expanded the public SCCP release-readiness helper inventory and the
+  independent release-bundle verifier inventory so the `eth,bsc` row now
+  requires BSC-mainnet facade/prover/submission helpers across JavaScript,
+  Python, Swift, Kotlin/JVM, and Java Android instead of allowing generic EVM
+  helpers alone to stand in for BSC UI readiness.
+- The Python row now names `BscMainnetSccp`,
+  `BscMainnetSccpProver`, `build_bsc_mainnet_sccp_destination_proof_request`,
+  `wrap_bsc_mainnet_sccp_destination_proof_result`, and
+  `build_bsc_mainnet_sccp_destination_submission`; the verifier owns the same
+  per-SDK helper list independently from the report generator.
+- Validation:
+  - `python3 -m py_compile scripts/sccp_release_readiness_report.py scripts/sccp_verify_release_bundle.py pytests/scripts/sccp_release_readiness_report_test.py pytests/scripts/sccp_release_bundle_test.py`
+  - `PYTHONPATH=python python3 -m pytest -q pytests/scripts/sccp_release_readiness_report_test.py -k 'json_tracks_corridor_phase_results or helper_symbols'`
+    (`5 passed, 15 deselected`)
+  - `PYTHONPATH=python python3 -m pytest -q pytests/scripts/sccp_release_bundle_test.py -k 'helper_symbol or submission_surface'`
+    (`14 passed, 126 deselected`)
+  - `bash scripts/check_sccp_production_corridor.sh --phase evidence-scripts`
+    (`802 passed`)
+
+## 2026-06-01 SCCP full production corridor rerun after receipt-root schema closure
+
+- Re-ran the full SCCP production-readiness corridor on the current tree after
+  the EVM source and route-canary receipt-block schema closure.
+- Validation:
+  - `bash scripts/check_sccp_production_corridor.sh`
+  - `rust-sccp`: `240` tests plus `0` doc tests
+  - `evidence-scripts`: `802` tests
+  - `js-sdk`: `132` tests
+  - `python-sdk`: `81` tests
+  - `swift-sdk`: `77` SCCP prover tests plus `1` Torii bridge-proof submit test
+  - `kotlin-sdk`: `BUILD SUCCESSFUL`
+  - `java-android`: both SCCP harness invocations `BUILD SUCCESSFUL`
+  - `contract-smoke`: `sccp_message_bridge_smoke: ok`
+  - `core-admission`: `32` tests
+
+## 2026-06-01 SCCP JavaScript BSC inbound submit hardening
+
+- Hardened the JavaScript `BscMainnetSccp` and `EthereumMainnetSccp` inbound
+  prove/submit helpers so empty or all-zero local prover output is rejected
+  before being returned, and app-linked Iroha submitters only receive copied
+  proof bytes after the same proof-byte checks pass. This aligns the
+  browser/web SDK facade with the native Swift, Kotlin/JVM, Java Android, and
+  .NET submit guards.
+- Added BSC facade regressions covering copied accepted proof bytes plus empty
+  and all-zero prove/submit proof rejection, and reran the package `dist`
+  export suite after mirroring the source change into the checked-in
+  distribution file.
+- Validation:
+  - `node --test javascript/iroha_js/test/sccpBscMainnet.test.js`
+    (`9 passed`)
+  - `node --test javascript/iroha_js/test/package_dist.test.js`
+    (`42 passed`)
+
+## 2026-06-01 SCCP TRON route-canary finality-height role parity
+
+- Aligned the Python TRON source bridge evidence helper with the Rust
+  route-canary v3 runtime transcript policy by rejecting `finality_height`
+  reuse across TRON route-canary transcript hash roles before full rollout TOML
+  can be rendered.
+- Extended the TRON full-TOML regression so `route_canary_finality_height`
+  replay fails with the same distinct-hash-role error as transaction, calldata,
+  message, payload, statement, commitment, finality block, and signature hash
+  replay.
+- Validation:
+  - `python3 -m py_compile scripts/sccp_tron_source_bridge_evidence.py pytests/scripts/sccp_tron_source_bridge_evidence_test.py`
+  - `PYTHONPATH=python python3 -m pytest -q pytests/scripts/sccp_tron_source_bridge_evidence_test.py -k 'route_canary_transcript_hash_reuse or route_canary'`
+    (`19 passed, 61 deselected`)
+  - `PYTHONPATH=python python3 -m pytest -q pytests/scripts/sccp_tron_source_bridge_evidence_test.py`
+    (`80 passed`)
+  - `bash scripts/check_sccp_production_corridor.sh --phase evidence-scripts`
+    (`802 passed`)
+
+## 2026-06-01 SCCP Python BSC mainnet facade
+
+- Added a first-class Python `BscMainnetSccp` facade so Python callers get the
+  same easy BSC-mainnet shape as the other SDKs: a chain-id-56 guard, governed
+  destination binding/hash helpers, outbound request construction,
+  linked-prover execution, BSC calldata construction from wrapped proof
+  results, inbound receipt/block collection, Parlia finality preservation,
+  native source-proof generation, and copied non-zero proof submission.
+- Kept `BscMainnetSccpProver` as a compatibility wrapper over the new facade
+  and exported both `BscMainnetSccp` and `require_bsc_mainnet_chain_id` from the
+  package root.
+- Added adversarial inbound coverage for Ethereum/padded BSC chain ids, failed
+  receipts, transaction-hash drift, uppercase hashes, block hash/number drift,
+  zero receipt roots, duplicate domain aliases, and empty/all-zero proof bytes.
+- Validation:
+  - `python3 -m py_compile python/iroha_torii_client/sccp.py python/iroha_torii_client/__init__.py python/iroha_torii_client/tests/sccp_test.py`
+  - `PYTHONPATH=python python3 -m pytest -q python/iroha_torii_client/tests/sccp_test.py -k 'bsc_mainnet_sccp_facade'`
+    (`3 passed, 80 deselected`)
+  - `PYTHONPATH=python python3 -m pytest -q python/iroha_torii_client/tests/sccp_test.py`
+    (`83 passed`)
+
+## 2026-06-01 SCCP EVM route-canary finality-height role parity
+
+- Aligned the Python EVM destination evidence helper with the Rust route-canary
+  v3 runtime transcript policy by rejecting `finality_height` reuse across the
+  EVM route-canary transcript hash roles before direct TOML can be rendered.
+- Extended the destination evidence regression so a reused finality-height word
+  fails with the same distinct-hash-role error as transaction, calldata,
+  message, payload, statement, commitment, and finality block hash replay.
+- Validation:
+  - `python3 -m py_compile scripts/sccp_evm_destination_evidence.py pytests/scripts/sccp_evm_destination_evidence_test.py`
+  - `PYTHONPATH=python python3 -m pytest -q pytests/scripts/sccp_evm_destination_evidence_test.py -k 'route_canary_transaction_hash_binds_target_domain or route_canary'`
+    (`2 passed, 11 deselected`)
+  - `PYTHONPATH=python python3 -m pytest -q pytests/scripts/sccp_evm_destination_evidence_test.py`
+    (`13 passed`)
+  - `bash scripts/check_sccp_production_corridor.sh --phase evidence-scripts`
+    (`802 passed`)
+
+## 2026-06-01 SCCP EVM live JSON-RPC envelope hardening
+
+- Hardened the ETH/BSC live source and destination evidence collectors so
+  successful JSON-RPC responses must carry the exact `jsonrpc = "2.0"` envelope
+  and the request id `1` before any `result` is trusted. Missing, padded, typed
+  as a string, or mismatched ids now fail closed alongside the existing
+  duplicate-key, size-bound, and canonical hex/quantity checks.
+- Added adversarial coverage for BSC-facing source and destination collectors so
+  forged success envelopes cannot feed BSC source material, destination rollout,
+  or route-canary TOML rendering.
+- Validation:
+  - `python3 -m py_compile scripts/sccp_evm_source_live_evidence.py scripts/sccp_evm_live_evidence.py pytests/scripts/sccp_evm_source_live_evidence_test.py pytests/scripts/sccp_evm_live_evidence_test.py`
+  - `PYTHONPATH=python python3 -m pytest -q pytests/scripts/sccp_evm_source_live_evidence_test.py pytests/scripts/sccp_evm_live_evidence_test.py`
+    (`42 passed`)
+
+## 2026-06-01 SCCP EVM route-canary v3 runtime binding
+
+- Promoted the ETH/BSC route-canary receipt block tuple into first-class
+  route allowlist readiness/config fields:
+  `evm_route_canary_receipt_block_number`,
+  `evm_route_canary_receipt_block_hash`, and
+  `evm_route_canary_block_receipts_root`.
+- Bumped the canonical EVM route-canary evidence label/layout to `v3`; the
+  runtime hash now binds receipt block number/hash/`receiptsRoot` before
+  calldata and rejects stale or role-reused receipt block hashes in the same
+  way as the transaction, message, public-input, and finality hash roles.
+- Validation:
+  - `python3 -m py_compile scripts/sccp_evm_destination_evidence.py scripts/sccp_evm_live_evidence.py scripts/sccp_all_lanes_evidence.py pytests/scripts/sccp_evm_destination_evidence_test.py pytests/scripts/sccp_evm_live_evidence_test.py pytests/scripts/sccp_all_lanes_evidence_test.py`
+  - `PYTHONPATH=python python3 -m pytest -q pytests/scripts/sccp_evm_destination_evidence_test.py -k 'route_canary or full_toml or live or destination_binding'`
+    (`4 passed, 9 deselected`)
+  - `PYTHONPATH=python python3 -m pytest -q pytests/scripts/sccp_evm_live_evidence_test.py -k 'route_canary or full_toml_revalidates_imported_summary_metadata or collects_destination'`
+    (`4 passed, 17 deselected`)
+  - `PYTHONPATH=python python3 -m pytest -q pytests/scripts/sccp_all_lanes_evidence_test.py -k 'config_route_canary_fields or evm_route_canary or route_canary_metadata or verified_evm_live_toml or direct_evm_destination'`
+    (`11 passed, 118 deselected`)
+  - `cargo fmt --all`
+  - `cargo test -p iroha_sccp route_allowlist_lane_canary_builder_rejects_source_record_hash_replay --lib -- --nocapture`
+    (`1 passed`)
+  - `cargo test -p iroha_core configured_sccp_all_lanes_launch -- --nocapture`
+    (`13 passed` matching tests)
+  - `cargo test -p iroha_core zk_policy_hash_tracks_sccp_destination_rollouts_and_route_allowlists --lib -- --nocapture`
+    (`1 passed`)
+  - `bash scripts/check_sccp_production_corridor.sh --phase evidence-scripts`
+    (`802 passed`)
+  - `bash scripts/check_sccp_production_corridor.sh --phase rust-sccp`
+    (`240 passed`, `0` doc tests)
+  - `git diff --check`
+
+## 2026-06-01 SCCP release-bundle route-canary receipt metadata regressions
+
+- Pinned the public release-bundle verifier tests for the EVM route-canary
+  receipt-block schema: receipt block numbers must remain positive, receipt
+  block hashes and block `receiptsRoot` values must be non-zero bytes32 values,
+  and the new receipt-block hash roles cannot reuse existing transaction or
+  transcript hashes.
+- Validation:
+  - `python3 -m py_compile pytests/scripts/sccp_release_bundle_test.py scripts/sccp_verify_release_bundle.py`
+  - `PYTHONPATH=python python3 -m pytest -q pytests/scripts/sccp_release_bundle_test.py -k 'evm_route_canary'`
+    (`3 passed, 137 deselected`)
+  - `PYTHONPATH=python python3 -m pytest -q pytests/scripts/sccp_release_bundle_test.py -k 'route_canary'`
+    (`18 passed, 122 deselected`)
+  - `bash scripts/check_sccp_production_corridor.sh --phase evidence-scripts`
+    (`800 passed`)
+
+## 2026-06-01 SCCP EVM source deployment receiptsRoot binding
+
+- Hardened ETH/BSC source deployment evidence so direct source TOML and live
+  source collection now require the deployment receipt block `receiptsRoot` as
+  non-zero bytes32 evidence alongside the receipt transaction hash, contract
+  address, block hash, and block number.
+- `scripts/sccp_evm_source_live_evidence.py` now fetches the receipt block root
+  with `eth_getBlockByNumber`, carries it into rendered TOML, and refuses
+  imported summaries that lack the verified receipts-root marker. The all-lanes
+  preflight now requires the same metadata comment before accepting ETH/BSC
+  source material.
+- Completed the adjacent EVM route-canary receipt-block integration exposed by
+  the full corridor: the live destination helper now accepts optional expected
+  canary receipt block number/hash/root values and verifies them against the
+  fetched transaction, while the public release-bundle verifier schema accepts
+  and validates those all-lanes route-canary fields.
+- Validation:
+  - `python3 -m py_compile scripts/sccp_evm_source_live_evidence.py scripts/sccp_eth_source_bridge_evidence.py scripts/sccp_bsc_source_bridge_evidence.py scripts/sccp_all_lanes_evidence.py pytests/scripts/sccp_evm_source_live_evidence_test.py pytests/scripts/sccp_eth_source_bridge_evidence_test.py pytests/scripts/sccp_bsc_source_bridge_evidence_test.py pytests/scripts/sccp_all_lanes_evidence_test.py`
+  - `PYTHONPATH=python python3 -m pytest -q pytests/scripts/sccp_evm_source_live_evidence_test.py pytests/scripts/sccp_eth_source_bridge_evidence_test.py pytests/scripts/sccp_bsc_source_bridge_evidence_test.py pytests/scripts/sccp_all_lanes_evidence_test.py`
+    (`193 passed`)
+  - `bash scripts/check_sccp_production_corridor.sh --phase evidence-scripts`
+    (`800 passed`)
+
+## 2026-06-01 SCCP Ethereum mainnet launch policy switch
+
+- Switched the first-lane SCCP production policy back to
+  `EthereumMainnetLane`, so configured ETH mainnet source material,
+  source-adapter deployment evidence, destination rollout material, route
+  allowlist evidence, and route-canary evidence can open the Ethereum lane
+  without waiting for every advertised SCCP remote lane.
+- Kept `BscMainnetLane` and `AllLanesAtOnce` as explicit policy modes, but core
+  admission now rejects non-ETH source proofs under the default
+  Ethereum-mainnet launch policy before evaluating route-canary,
+  route-allowlist, or destination-rollout drift for those future lanes.
+- Torii deployment-bound destination packaging now applies the same configured
+  launch policy per lane, so ETH can proceed with complete ETH evidence while
+  BSC/TRON/Solana/TON/Substrate remain closed until their lane policies open.
+- Re-ran the stale BSC transition-chain verifier regression that previously had
+  only an incomplete local validation note.
+- Validation:
+  - `cargo fmt --all`
+  - `CARGO_TARGET_DIR=target/codex-sccp-bsc-transition-rerun cargo test -p iroha_sccp bsc_validator_set_transition_chain_requires_increasing_transition_blocks -- --nocapture`
+    (`1 passed`)
+  - Pending rerun in this working session:
+    `CARGO_TARGET_DIR=target/codex-sccp-eth-policy cargo test -p iroha_sccp production_policy_uses_ethereum_mainnet_lane_launch --lib -- --nocapture`
+  - Pending rerun in this working session:
+    `CARGO_TARGET_DIR=target/codex-sccp-eth-policy cargo test -p iroha_core configured_sccp_ethereum_mainnet_lane_launch --lib -- --nocapture`
+  - Pending rerun in this working session:
+    `NORITO_SKIP_BINDINGS_SYNC=1 CARGO_TARGET_DIR=target/codex-sccp-eth-policy cargo test -p iroha_torii 'configured_ethereum_mainnet_lane_launch|destination_binding_query_respects_ethereum_lane_launch_policy' --features app_api --lib -- --nocapture`
+  - Pending rerun in this working session:
+    `CARGO_TARGET_DIR=target/codex-sccp-eth-policy cargo test -p iroha_core --test bridge_proofs submit_sccp_inbound_message_with_audited_sol_source_adapter_waits_for_lane_launch -- --nocapture`
+
+## 2026-06-01 SCCP .NET full unit rerun after BSC receipt facade
+
+- Re-ran the full C# unit project with the temporary .NET 8 SDK after the BSC
+  receipt facade and async inbound helper updates.
+- Validation:
+  - `DOTNET_ROOT=/tmp/iroha-dotnet/sdk DOTNET_CLI_TELEMETRY_OPTOUT=1 /tmp/iroha-dotnet/sdk/dotnet test csharp/tests/Hyperledger.Iroha.Sdk.Tests/Hyperledger.Iroha.Sdk.Tests.csproj --no-restore --nologo`
+    (`153` tests)
+
+## 2026-06-01 SCCP EVM route-canary duplicate event hardening
+
+- Hardened `scripts/sccp_evm_live_evidence.py` so transaction-derived EVM
+  route-canary evidence now requires the supplied receipt/log-index tuple to
+  identify exactly one matching `MessageProofAccepted` event. Duplicate
+  matching events at the same supplied log index now fail closed before
+  calldata, used-message, or evidence-hash checks run.
+- Added a focused fake-RPC regression covering duplicated accepted-event logs
+  in the route-canary receipt path.
+- Validation:
+  - `python3 -m py_compile scripts/sccp_evm_live_evidence.py pytests/scripts/sccp_evm_live_evidence_test.py`
+  - `PYTHONPATH=python python3 -m pytest -q pytests/scripts/sccp_evm_live_evidence_test.py -k 'route_canary_rejects_unverified_transaction_metadata'`
+    (`1 passed, 20 deselected`)
+  - `PYTHONPATH=python python3 -m pytest -q pytests/scripts/sccp_evm_live_evidence_test.py -k 'route_canary'`
+    (`2 passed, 19 deselected`)
+
+## 2026-06-01 SCCP evidence-scripts corridor after route-canary block binding
+
+- Re-ran the full SCCP evidence-script production-corridor phase after the EVM
+  route-canary receipt block-binding hardening.
+- Validation:
+  - `bash scripts/check_sccp_production_corridor.sh --phase evidence-scripts`
+    (`797` tests)
+
+## 2026-06-01 SCCP Rust/Python corridor rerun after Substrate digest hardening
+
+- Re-ran the Rust and Python SCCP production-corridor phases after the
+  Substrate-family storage-proof digest hardening, complementing the SDK
+  corridor rerun below.
+- Validation:
+  - `bash scripts/check_sccp_production_corridor.sh --phase rust-sccp,python-sdk`
+  - `rust-sccp`: `240` tests (`0` doc tests; Rust test suite finished in
+    `540.02s`)
+  - `python-sdk`: `81` tests
+
+## 2026-06-01 SCCP EVM route-canary receipt block binding
+
+- Hardened `scripts/sccp_evm_live_evidence.py` so transaction-derived
+  ETH/BSC route-canary evidence now fetches the receipt block with
+  `eth_getBlockByNumber`, requires the block number and block hash to match the
+  receipt, and rejects zero `receiptsRoot` values before full rollout TOML can
+  be rendered.
+- The saved-summary replay path now treats forged receipt-block verification
+  metadata as missing verified route-canary transaction evidence, preventing a
+  stale imported JSON summary from bypassing live block binding.
+- Validation:
+  - `python3 -m py_compile scripts/sccp_evm_live_evidence.py pytests/scripts/sccp_evm_live_evidence_test.py pytests/scripts/sccp_all_lanes_evidence_test.py`
+  - `PYTHONPATH=python python3 -m pytest -q pytests/scripts/sccp_evm_live_evidence_test.py -k 'route_canary or full_toml_revalidates_imported_summary_metadata or collects_destination'`
+    (`4 passed, 17 deselected`)
+  - `PYTHONPATH=python python3 -m pytest -q pytests/scripts/sccp_all_lanes_evidence_test.py -k 'config_route_canary_fields or evm_route_canary or route_canary_metadata'`
+    (`9 passed, 120 deselected`)
+
+## 2026-06-01 SCCP TON shard digest zero-value hardening
+
+- Hardened Rust plus JavaScript, Python, Swift, Kotlin/JVM, and Java Android
+  TON shard-proof transcript builders so all-zero `sourceEventDigest` values
+  are rejected before deriving the shard-proof source witness hash.
+- Added focused regressions beside the existing TON shard-proof hash vectors
+  and regenerated the JavaScript dist bundle from the hardened source.
+- Validation:
+  - `cargo fmt --package iroha_sccp`
+  - `cargo test -p iroha_sccp ton_shard_state_proof_transcript_matches_sdk_fixture`
+    (`1 passed`)
+  - `python3 -m py_compile python/iroha_torii_client/sccp.py python/iroha_torii_client/tests/sccp_test.py`
+  - `python3 -m pytest -q python/iroha_torii_client/tests/sccp_test.py -k 'ton_and_substrate_source_proof_transcripts'`
+    (`1 passed, 80 deselected`)
+  - `node --check javascript/iroha_js/src/sccp.js`
+  - `node --check javascript/iroha_js/test/sccpSolanaProver.test.js`
+  - `node --test --test-name-pattern 'derives TON SCCP shard proof hashes from branch witness material' test/sccpSolanaProver.test.js`
+    in `javascript/iroha_js` (`1 passed`)
+  - `npm run build:dist` in `javascript/iroha_js`
+  - `node --check dist/sccp.js` in `javascript/iroha_js`
+  - `node --test test/package_dist.test.js` in `javascript/iroha_js`
+    (`42 passed`)
+  - `swift test --filter SccpSolanaProverTests.testTonShardProofHashBindsWitnessMaterial`
+    in `IrohaSwift` (`1 passed`)
+  - `JAVA_HOME=/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home PATH="/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home/bin:$PATH" ./gradlew :core-jvm:test --tests org.hyperledger.iroha.sdk.sccp.TonSccpProverTest.derivesTonShardProofHashFromWitnessMaterial --console=plain`
+    in `kotlin` (`BUILD SUCCESSFUL`)
+  - `JAVA_HOME=/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home ANDROID_HOME=$HOME/Library/Android/sdk ANDROID_SDK_ROOT=$HOME/Library/Android/sdk ANDROID_HARNESS_MAINS=org.hyperledger.iroha.android.sccp.TonSccpProverTests PATH="/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home/bin:$PATH" ./gradlew :core:test --tests org.hyperledger.iroha.android.GradleHarnessTests --console=plain`
+    in `java/iroha_android` (`BUILD SUCCESSFUL`)
+
+## 2026-06-01 SCCP BSC native Swift and .NET receipt facades
+
+- Added/validated native BSC-mainnet receipt facades for Swift and .NET,
+  completing parity with the JavaScript, Kotlin/JVM, and Java Android BSC
+  inbound SDK path. The facades validate canonical BSC mainnet chain id `56`
+  (`eth_chainId == 0x38` at the RPC boundary), collect receipts and receipt
+  blocks through app-supplied JSON-RPC providers, preserve Parlia finality
+  evidence, and reject foreign routes, failed receipts, transaction-hash drift,
+  block hash/number drift, uppercase hashes, missing receipt roots,
+  zero receipt-proof hashes, and zero inbound proof bytes before native proving
+  or submission.
+- The .NET BSC facade now exposes `CollectInboundEvidenceFromReceiptAsync`,
+  `ProveInboundToSoraAsync`, and `SubmitInboundToIrohaAsync` beside its
+  existing BSC-mainnet route, chain-id, network-id, and destination-binding hash
+  guards.
+- Validation:
+  - `swift test --filter SccpSolanaProverTests/testBscMainnetInboundEvidenceUsesMainnetRpcAndRejectsDrift`
+    in `IrohaSwift` (`1 passed`)
+  - `DOTNET_ROOT=/tmp/iroha-dotnet/sdk DOTNET_CLI_TELEMETRY_OPTOUT=1 /tmp/iroha-dotnet/sdk/dotnet test csharp/tests/Hyperledger.Iroha.Sdk.Tests/Hyperledger.Iroha.Sdk.Tests.csproj --filter SccpBscMainnetTests --nologo`
+    (`2 passed`)
+  - `DOTNET_ROOT=/tmp/iroha-dotnet/sdk DOTNET_CLI_TELEMETRY_OPTOUT=1 /tmp/iroha-dotnet/sdk/dotnet test csharp/tests/Hyperledger.Iroha.Sdk.Tests/Hyperledger.Iroha.Sdk.Tests.csproj --filter "FullyQualifiedName~SccpEthereumMainnetTests|FullyQualifiedName~SccpBscMainnetTests" --nologo`
+    (`4 passed`)
+  - `DOTNET_ROOT=/tmp/iroha-dotnet/sdk DOTNET_CLI_TELEMETRY_OPTOUT=1 /tmp/iroha-dotnet/sdk/dotnet test csharp/tests/Hyperledger.Iroha.Sdk.Tests/Hyperledger.Iroha.Sdk.Tests.csproj --no-restore --nologo`
+    (`153 passed`)
+
+## 2026-06-01 SCCP Ethereum sync-committee transition hardening
+
+- Hardened the Ethereum mainnet source adapter verifier so sync-committee
+  transition chains must advance exactly one mainnet sync-committee period per
+  transition. A transition proof can no longer skip from period `N` directly to
+  `N + k` while carrying an otherwise self-consistent next-committee payload
+  and BLS signature.
+- Added Ethereum mainnet period constants from the consensus mainnet presets
+  (`SLOTS_PER_EPOCH = 32`, `EPOCHS_PER_SYNC_COMMITTEE_PERIOD = 256`) and a
+  focused negative regression for skipped-period transition evidence.
+- Validation:
+  - `cargo fmt --package iroha_sccp`
+  - `cargo test -p iroha_sccp eth_source_adapter_verifies_sync_committee_transition_chain --lib -- --nocapture`
+    (`1 passed`)
+
+## 2026-06-01 SCCP SDK corridor rerun after native receipt updates
+
+- Re-ran the impacted SCCP production-corridor SDK phases after the JavaScript
+  BSC facade, native Ethereum inbound facade, receipt-digest zero-value, and
+  .NET facade validation updates.
+- Validation:
+  - `JAVA_HOME=/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home ANDROID_HOME=$HOME/Library/Android/sdk ANDROID_SDK_ROOT=$HOME/Library/Android/sdk PATH="/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home/bin:$PATH" bash scripts/check_sccp_production_corridor.sh --phase js-sdk,swift-sdk,kotlin-sdk,java-android`
+  - `js-sdk`: `132` tests
+  - `swift-sdk`: `SccpSolanaProverTests` (`76` tests) plus the Torii bridge
+    submit request test (`1` test)
+  - `kotlin-sdk`: `:core-jvm:test --tests org.hyperledger.iroha.sdk.sccp.*`
+    (`BUILD SUCCESSFUL`)
+  - `java-android`: EVM, source-proof, Substrate, TON, TRON harness tests plus
+    `SolanaSccpProverTests` (`BUILD SUCCESSFUL`)
+
+## 2026-06-01 SCCP Substrate storage digest zero-value hardening
+
+- Hardened Rust plus JavaScript, Python, Swift, Kotlin/JVM, and Java Android
+  Substrate-family storage-proof transcript builders so all-zero
+  `sourceEventDigest` values are rejected before deriving the storage-proof
+  witness hash or runtime-storage verification statement.
+- Added focused regressions beside the existing Substrate source-proof hash
+  vectors and regenerated the JavaScript dist bundle from the hardened source.
+- Validation:
+  - `cargo fmt --package iroha_sccp`
+  - `cargo test -p iroha_sccp evm_bsc_and_substrate_source_adapters_bind_proof_hashes_to_inclusion_witnesses --lib -- --nocapture`
+    (`1 passed`)
+  - `python3 -m py_compile python/iroha_torii_client/sccp.py python/iroha_torii_client/tests/sccp_test.py`
+  - `python3 -m pytest -q python/iroha_torii_client/tests/sccp_test.py -k 'derives_all_source_proof_hashes_from_canonical_witness_material'`
+    (`1 passed, 80 deselected`)
+  - `node --check javascript/iroha_js/src/sccp.js`
+  - `node --check javascript/iroha_js/test/sccpSolanaProver.test.js`
+  - `node --test --test-name-pattern "derives EVM, BSC, TRON, and Substrate source proof hashes" test/sccpSolanaProver.test.js`
+    (`1 passed`)
+  - `npm run build:dist` in `javascript/iroha_js`
+  - `node --check javascript/iroha_js/dist/sccp.js`
+  - `node --test test/package_dist.test.js` in `javascript/iroha_js`
+    (`42 passed`)
+  - `swift test --filter SccpSolanaProverTests/testSourceProofHashesBindUiWitnessMaterial`
+    in `IrohaSwift` (`1 passed`)
+  - `JAVA_HOME=/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home PATH="/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home/bin:$PATH" ./gradlew :core-jvm:test --tests org.hyperledger.iroha.sdk.sccp.SourceSccpProofHashesTest.derivesSourceProofHashesFromWitnessMaterial --console=plain`
+    in `kotlin` (`BUILD SUCCESSFUL`)
+  - `JAVA_HOME=/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home ANDROID_HOME=$HOME/Library/Android/sdk ANDROID_SDK_ROOT=$HOME/Library/Android/sdk ANDROID_HARNESS_MAINS=org.hyperledger.iroha.android.sccp.SourceSccpProofsTests PATH="/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home/bin:$PATH" ./gradlew :core:test --tests org.hyperledger.iroha.android.GradleHarnessTests --console=plain`
+    in `java/iroha_android` (`BUILD SUCCESSFUL`)
+
+## 2026-06-01 SCCP BSC native mobile receipt facades
+
+- Added Kotlin/JVM and Java Android `BscMainnetSccp` native facades mirroring
+  the Ethereum mobile receipt path. They validate BSC mainnet chain id `56`
+  (`eth_chainId == 0x38` at the RPC boundary), collect receipts and receipt
+  blocks through app-supplied JSON-RPC providers, retain Parlia finality
+  evidence, and reject foreign source domains, failed receipts, transaction-hash
+  drift, block hash/number drift, uppercase hashes, and zero inbound proof
+  bytes before app-linked proving or submission.
+- The same Kotlin and Java Android facades keep the outbound path BSC-only and
+  build verifier calldata only through the governed SORA -> BSC destination
+  binding wrappers.
+- Validation:
+  - `JAVA_HOME=/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home PATH="/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home/bin:$PATH" ./gradlew :core-jvm:test --console=plain --tests 'org.hyperledger.iroha.sdk.sccp.EvmSccpProverTest'`
+    in `kotlin` (`BUILD SUCCESSFUL`)
+  - `JAVA_HOME=/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home PATH="/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home/bin:$PATH" ANDROID_HOME=$HOME/Library/Android/sdk ANDROID_SDK_ROOT=$HOME/Library/Android/sdk ANDROID_HARNESS_MAINS=org.hyperledger.iroha.android.sccp.EvmSccpProverTests ./gradlew :core:test --console=plain --tests org.hyperledger.iroha.android.GradleHarnessTests`
+    in `java/iroha_android` (`BUILD SUCCESSFUL`)
+
+## 2026-06-01 SCCP native receipt digest zero-value parity
+
+- Hardened Swift, Kotlin/JVM, and Java Android ETH/BSC receipt-proof transcript
+  builders so all-zero `sourceEventDigest` values are rejected before deriving
+  source witness hashes, matching the Rust, JavaScript, and Python behavior.
+- Added native SDK regressions beside the existing EVM/BSC source-proof hash
+  vectors for both ETH and BSC receipt transcripts.
+- Validation:
+  - `swift test --filter SccpSolanaProverTests/testSourceProofHashesBindUiWitnessMaterial`
+    in `IrohaSwift` (`1 passed`)
+  - `JAVA_HOME=/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home PATH="/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home/bin:$PATH" ./gradlew :core-jvm:test --tests org.hyperledger.iroha.sdk.sccp.SourceSccpProofHashesTest.derivesSourceProofHashesFromWitnessMaterial --console=plain`
+    in `kotlin` (`BUILD SUCCESSFUL`)
+  - `JAVA_HOME=/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home ANDROID_HOME=$HOME/Library/Android/sdk ANDROID_SDK_ROOT=$HOME/Library/Android/sdk ANDROID_HARNESS_MAINS=org.hyperledger.iroha.android.sccp.SourceSccpProofsTests PATH="/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home/bin:$PATH" ./gradlew :core:test --tests org.hyperledger.iroha.android.GradleHarnessTests --console=plain`
+    in `java/iroha_android` (`BUILD SUCCESSFUL`)
+
+## 2026-06-01 SCCP native Ethereum inbound SDK parity
+
+- Added native Ethereum-mainnet inbound SDK surfaces for Swift, Kotlin/JVM,
+  Java Android, and .NET: `collectInboundEvidenceFromReceipt` /
+  `CollectInboundEvidenceFromReceiptAsync`, `proveInboundToSora` /
+  `ProveInboundToSoraAsync`, and `submitInboundToIroha` /
+  `SubmitInboundToIrohaAsync`.
+- Each native facade now uses an app-supplied Ethereum JSON-RPC execution
+  provider, validates canonical mainnet `eth_chainId == 0x1`, rejects failed
+  receipts, non-canonical transaction/block hashes, receipt transaction-hash
+  drift, block hash/number drift, missing canonical `receiptsRoot`, and all-zero
+  inbound proof bytes before invoking app-linked native prover/submitter code.
+- Validation:
+  - `swift test --filter SccpSolanaProverTests/testEthereumMainnetInboundEvidenceUsesMainnetRpcAndRejectsDrift`
+    in `IrohaSwift` (`1 passed`)
+  - `DOTNET_ROOT=/tmp/iroha-dotnet/sdk DOTNET_CLI_TELEMETRY_OPTOUT=1 /tmp/iroha-dotnet/sdk/dotnet test csharp/tests/Hyperledger.Iroha.Sdk.Tests/Hyperledger.Iroha.Sdk.Tests.csproj --filter SccpEthereumMainnetTests --nologo`
+    (`2 passed`)
+  - `git diff --check -- IrohaSwift/Sources/IrohaSwift/SccpEvmProver.swift IrohaSwift/Tests/IrohaSwiftTests/SccpSolanaProverTests.swift kotlin/core-jvm/src/main/java/org/hyperledger/iroha/sdk/sccp/EvmSccpProver.kt kotlin/core-jvm/src/test/kotlin/org/hyperledger/iroha/sdk/sccp/EvmSccpProverTest.kt java/iroha_android/src/main/java/org/hyperledger/iroha/android/sccp/EthereumMainnetSccp.java java/iroha_android/src/test/java/org/hyperledger/iroha/android/sccp/EvmSccpProverTests.java csharp/src/Hyperledger.Iroha.Sdk/Sccp/EthereumMainnetSccp.cs csharp/tests/Hyperledger.Iroha.Sdk.Tests/SccpEthereumMainnetTests.cs`
+  - `JAVA_HOME=/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home PATH="/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home/bin:$PATH" ./gradlew :core-jvm:test --console=plain --tests 'org.hyperledger.iroha.sdk.sccp.EvmSccpProverTest.ethereumMainnetInboundEvidenceUsesMainnetRpcAndRejectsDrift'`
+    in `kotlin` (`BUILD SUCCESSFUL`)
+  - `JAVA_HOME=/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home ANDROID_HOME=$HOME/Library/Android/sdk ANDROID_SDK_ROOT=$HOME/Library/Android/sdk PATH="/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home/bin:$PATH" ANDROID_HARNESS_MAINS=org.hyperledger.iroha.android.sccp.EvmSccpProverTests ./gradlew :core:test --console=plain --tests 'org.hyperledger.iroha.android.GradleHarnessTests'`
+    in `java/iroha_android` (`BUILD SUCCESSFUL`)
+
+## 2026-06-01 SCCP .NET facade validation closure
+
+- Installed a temporary .NET 8 SDK under `/tmp/iroha-dotnet/sdk` to close the
+  previously blocked C# validation gap without changing the repository or
+  relying on a machine-global SDK.
+- Focused SCCP facade validation exposed that `Convert.TryFromHexString` is not
+  available on the SDK target used here. The Ethereum and BSC mainnet facades
+  now keep their existing canonical length checks and decode with
+  `Convert.FromHexString`, wrapping invalid hex as parameterized
+  `ArgumentException`s.
+- Validation:
+  - `DOTNET_ROOT=/tmp/iroha-dotnet/sdk /tmp/iroha-dotnet/sdk/dotnet --info`
+    (`8.0.421`)
+  - `DOTNET_ROOT=/tmp/iroha-dotnet/sdk DOTNET_CLI_TELEMETRY_OPTOUT=1 /tmp/iroha-dotnet/sdk/dotnet test csharp/tests/Hyperledger.Iroha.Sdk.Tests/Hyperledger.Iroha.Sdk.Tests.csproj --filter "FullyQualifiedName~SccpEthereumMainnetTests|FullyQualifiedName~SccpBscMainnetTests" --nologo`
+    (`2` tests)
+  - `DOTNET_ROOT=/tmp/iroha-dotnet/sdk DOTNET_CLI_TELEMETRY_OPTOUT=1 /tmp/iroha-dotnet/sdk/dotnet test csharp/tests/Hyperledger.Iroha.Sdk.Tests/Hyperledger.Iroha.Sdk.Tests.csproj --no-restore --nologo`
+    (`151` tests)
+
+## 2026-06-01 SCCP BSC JS inbound receipt facade
+
+- Added the JavaScript package-root `BscMainnetSccp` facade so browser/mobile
+  apps can use an easy native BSC-mainnet SDK path without WASM. The facade
+  validates canonical `eth_chainId == 0x38`, collects BSC transaction receipts
+  and receipt blocks from EIP-1193-style providers, preserves app-linked Parlia
+  finality evidence, and rejects failed receipts, transaction-hash drift, block
+  hash/number drift, uppercase hashes, and missing `receiptsRoot` before
+  invoking the local prover.
+- The same facade keeps the outbound path BSC-only and builds verifier calldata
+  only from wrapped proof results carrying the governed SORA -> BSC destination
+  binding. TypeScript declarations, root exports, and generated `dist` now
+  expose the new helper.
+- Validation:
+  - `node --check javascript/iroha_js/src/sccp.js`
+  - `node --check javascript/iroha_js/src/index.js`
+  - `node --check javascript/iroha_js/test/sccpBscMainnet.test.js && node --check javascript/iroha_js/test/package_dist.test.js`
+  - `node --test javascript/iroha_js/test/sccpBscMainnet.test.js` (`7 passed`)
+  - `npm run build:dist` in `javascript/iroha_js`
+  - `node --check javascript/iroha_js/dist/sccp.js && node --check javascript/iroha_js/dist/index.js`
+  - `node --test javascript/iroha_js/test/package_dist.test.js --test-name-pattern "package dist entrypoint exports SCCP EVM-family Groth16 helpers"` (`42 passed`)
+
+## 2026-06-01 SCCP production corridor core-admission policy precedence
+
+- Ran the remaining SCCP production-corridor phases after SDK callback parity:
+  Rust SCCP, release evidence scripts, EVM contract smoke, and core admission.
+- Core admission initially exposed four stale Solana/TRON test expectations:
+  they expected route-canary, route-allowlist, or destination-rollout drift
+  diagnostics even though the current first-release policy is
+  `EthereumMainnetLane`.
+- Updated those tests to assert the production gate order that ships now:
+  configured non-Ethereum source-adapter evidence is recognized, then the lane
+  launch policy stops the source proof before route or destination drift
+  validation. Lower-level all-lanes readiness tests continue to cover the
+  non-Ethereum route-drift diagnostics for the future all-lanes launch mode.
+- Validation:
+  - `bash scripts/check_sccp_production_corridor.sh --phase rust-sccp,evidence-scripts,contract-smoke,core-admission`
+    completed `rust-sccp` (`240` tests), `evidence-scripts` (`794` tests), and
+    `contract-smoke` (`sccp_message_bridge_smoke: ok`) before surfacing the
+    stale core-admission expectations.
+  - `cargo fmt --all`
+  - `env CARGO_TARGET_DIR=target/sccp-production-corridor NORITO_SKIP_BINDINGS_SYNC=1 cargo test -p iroha_core --test bridge_proofs waits_for -- --nocapture`
+    (`7` tests)
+  - `bash scripts/check_sccp_production_corridor.sh --phase core-admission`
+    (`32` tests)
+
+## 2026-06-01 SCCP EVM/BSC receipt digest zero-value hardening
+
+- Hardened Rust, JavaScript, and Python ETH/BSC receipt-proof transcript
+  builders so all-zero `sourceEventDigest` values are rejected before deriving
+  source witness hashes. This keeps UI-side witness hashing aligned with the
+  production source-proof requirement that every proof commits to a concrete
+  emitted SCCP event.
+- Added focused Rust, Python, and JavaScript regressions beside the existing
+  EVM/BSC source-proof hash coverage, and regenerated the JavaScript dist
+  bundle from the hardened source.
+- Validation:
+  - `cargo fmt --package iroha_sccp`
+  - `cargo test -p iroha_sccp evm_source_adapter_binds_receipt_trie_proof_hash_to_inclusion_witness --lib -- --nocapture`
+    (`1 passed`)
+  - `cargo test -p iroha_sccp bsc_source_adapter_binds_receipt_trie_proof_hash_to_inclusion_witness --lib -- --nocapture`
+    (`1 passed`)
+  - `python3 -m py_compile python/iroha_torii_client/sccp.py python/iroha_torii_client/tests/sccp_test.py`
+  - `python3 -m pytest -q python/iroha_torii_client/tests/sccp_test.py -k 'derives_all_source_proof_hashes_from_canonical_witness_material'`
+    (`1 passed, 80 deselected`)
+  - `node --check javascript/iroha_js/src/sccp.js`
+  - `node --check javascript/iroha_js/test/sccpSolanaProver.test.js`
+  - `node --check javascript/iroha_js/dist/sccp.js`
+  - `node --test --test-name-pattern "derives EVM, BSC, TRON, and Substrate source proof hashes" test/sccpSolanaProver.test.js`
+    (`1 passed`)
+  - `npm run build:dist` in `javascript/iroha_js`
+  - `node --test test/package_dist.test.js` in `javascript/iroha_js`
+    (`42 passed`)
+
+## 2026-06-01 SCCP .NET Ethereum mainnet destination-binding parity
+
+- Extended the .NET `EthereumMainnetSccp` facade from route guards only to a
+  native SORA -> ETH destination-binding and binding-hash builder, including
+  Keccak-based EVM binding hashing, canonical chain-id-1 network-id checks,
+  verifier/bridge address separation, and expected key/hash pins.
+- Expanded the .NET Ethereum mainnet tests to cover the canonical binding key
+  and hash, uppercase input normalization, wrong-network replay, zero address,
+  wrong target-domain, expected-binding-hash drift, and expected-key drift.
+- Validation:
+  - `git diff --check -- csharp/src/Hyperledger.Iroha.Sdk/Sccp/EthereumMainnetSccp.cs csharp/tests/Hyperledger.Iroha.Sdk.Tests/SccpEthereumMainnetTests.cs`
+  - `dotnet test csharp/tests/Hyperledger.Iroha.Sdk.Tests/Hyperledger.Iroha.Sdk.Tests.csproj --filter SccpEthereumMainnetTests --nologo`
+    was attempted but `dotnet` is not installed in this environment.
+
+## 2026-06-01 SCCP BSC live source deployment block binding
+
+- Hardened the EVM-family live source evidence collector used by the BSC source
+  lane so deployment receipt metadata is no longer trusted by itself. When a
+  deployment transaction is supplied, the helper now fetches
+  `eth_getBlockByNumber` for the receipt block, requires the returned block
+  number and hash to match the receipt, and only then rechecks source bridge
+  bytecode at that exact block.
+- The production TOML path now requires both receipt-block hash verification
+  and receipt-block code-hash verification, preventing forged BSC deployment
+  receipt metadata from carrying a wrong block hash into governed source
+  material.
+- Added focused negative tests for BSC receipt block-hash drift, receipt block
+  number drift, receipt-block bytecode drift, imported-summary metadata
+  forgery, and the positive BSC canonical-profile live evidence path.
+- Validation:
+  - `python3 -m py_compile scripts/sccp_evm_source_live_evidence.py pytests/scripts/sccp_evm_source_live_evidence_test.py`
+  - `PYTHONPATH=python python3 -m pytest -q pytests/scripts/sccp_evm_source_live_evidence_test.py`
+    (`18 passed`)
+  - `python3 -m py_compile pytests/scripts/sccp_all_lanes_evidence_test.py scripts/sccp_evm_source_live_evidence.py pytests/scripts/sccp_evm_source_live_evidence_test.py`
+  - `PYTHONPATH=python python3 -m pytest -q pytests/scripts/sccp_all_lanes_evidence_test.py::test_all_lanes_accepts_verified_evm_source_live_toml pytests/scripts/sccp_evm_source_live_evidence_test.py`
+    (`19 passed`)
+  - `bash scripts/check_sccp_production_corridor.sh --phase evidence-scripts`
+    (`797 passed`)
+
+## 2026-06-01 SCCP Ethereum JS inbound receipt guard hardening
+
+- Hardened the JavaScript `EthereumMainnetSccp.collectInboundEvidenceFromReceipt`
+  path so browser/mobile apps reject failed Ethereum receipts, non-canonical
+  JSON-RPC transaction or block hashes, transaction-hash drift, block hash or
+  block-number drift, and block objects without a canonical `receiptsRoot`
+  before invoking the app-linked local prover.
+- Regenerated the JavaScript dist bundle and added browser-style negative
+  tests for failed receipts, mismatched receipt transaction hashes, mismatched
+  fetched blocks, and uppercase/non-canonical JSON-RPC hashes.
+- Validation:
+  - `node --test test/sccpEthereumMainnet.test.js` in `javascript/iroha_js`
+    (`8 passed`)
+  - `npm run build:dist` in `javascript/iroha_js`
+  - `node --test test/sccpEthereumMainnet.test.js test/package_dist.test.js`
+    in `javascript/iroha_js` (`50 passed`)
+
+## 2026-06-01 SCCP Python Ethereum mainnet facade parity
+
+- Added Python `EthereumMainnetSccp` helpers for the Ethereum-mainnet SCCP
+  lane, including chain-id `1` validation, chain-id-1 destination
+  binding/hash derivation, proof-request and proof-result wrappers, and a
+  calldata helper that requires a wrapped proof result carrying the governed
+  Ethereum destination binding.
+- Exported the new Ethereum-mainnet constants, facade, binding helpers, request
+  wrappers, submission helper, and proof-result wrapper through
+  `iroha_torii_client.__all__` so package-root parity checks cover the public
+  Python SDK surface.
+- Validation:
+  - `python3 -m py_compile python/iroha_torii_client/sccp.py python/iroha_torii_client/__init__.py python/iroha_torii_client/tests/sccp_test.py`
+  - `python3 -m pytest -q python/iroha_torii_client/tests/sccp_test.py -k 'ethereum_mainnet_sccp_facade or bsc_mainnet_sccp_facade or package_all_exports_public_sccp_symbols'`
+    (`3 passed, 78 deselected`)
+
+## 2026-06-01 SCCP EVM receipt duplicate source-log hardening
+
+- Hardened the EVM-family receipt source-event verifier so a production ETH/BSC
+  receipt must contain exactly one matching `SccpSourceEvent(bytes32)` log.
+  Receipts with duplicate matching SCCP logs are now rejected instead of being
+  accepted on the first match.
+- Extended the focused Rust receipt/MPT test to cover duplicate matching logs
+  through both direct receipt decoding and MPT-backed event verification.
+- Validation:
+  - `cargo fmt --package iroha_sccp`
+  - `cargo test -p iroha_sccp evm_receipt_mpt_value_extracts_typed_rlp_receipt_root --lib -- --nocapture`
+    (`1 passed`)
+
+## 2026-06-01 SCCP EVM source live-evidence receipt-block hardening
+
+- Hardened `scripts/sccp_evm_source_live_evidence.py` so ETH/BSC production
+  source TOML now requires the source bridge bytecode collected at the selected
+  block tag to match the bytecode re-read at the deployment receipt block
+  number. This prevents a latest-block code hash from satisfying source
+  evidence unless it is also bound to the verified deployment receipt block.
+- Added adversarial pytest coverage for drifted deployment-receipt-block
+  bytecode and forged imported summaries that try to clear the receipt evidence
+  without the new code-hash verification marker.
+- Validation:
+  - `python3 -m py_compile scripts/sccp_evm_source_live_evidence.py pytests/scripts/sccp_evm_source_live_evidence_test.py`
+  - `python3 -m pytest -q pytests/scripts/sccp_evm_source_live_evidence_test.py -k "evm_source_live"`
+    (`16 passed`)
+
+## 2026-06-01 SCCP Ethereum mainnet lane admission and native SDK facades
+
+- Switched the default SCCP production launch policy from global all-lanes
+  readiness to an Ethereum-mainnet lane policy. Ethereum source proofs can now
+  be admitted when ETH source, destination, route allowlist, and route-canary
+  evidence are complete, while non-ETH source domains continue to fail closed
+  until their lanes are explicitly enabled.
+- Added configured-lane admission checks in `iroha_core` so inbound SCCP proofs
+  validate the Ethereum mainnet deployment material, bridge/verifier bindings,
+  and route-canary evidence without waiting on BSC, Solana, TON, TRON, or
+  Substrate readiness.
+- Added first-class Ethereum-mainnet SCCP SDK facades and chain-id/domain
+  guards for JavaScript, Swift, Kotlin/JVM, Java Android, and .NET, including
+  browser-style provider validation for `eth_chainId == 1` without WASM or a
+  remote prover fallback.
+- Updated bridge-proof documentation and roadmap notes to describe the
+  lane-local ETH launch path and the native SDK facade coverage.
+- Validation:
+  - `cargo fmt --package iroha_sccp --package iroha_core`
+  - `cargo test -p iroha_sccp production_policy_uses_ethereum_mainnet_lane_launch --lib -- --nocapture`
+  - `cargo test -p iroha_sccp production_readiness_lists_source_destination_and_route_blockers --lib -- --nocapture`
+  - `cargo test -p iroha_sccp lane_readiness_with_exact_deployment_materials_rejects_replayed_profiles --lib -- --nocapture`
+  - `cargo test -p iroha_core configured_sccp_ethereum_mainnet_lane --lib -- --nocapture`
+  - `cargo test -p iroha_core --test bridge_proofs waits_for_lane_launch -- --nocapture`
+  - `cargo test -p iroha_core --test bridge_proofs before_lane_launch -- --nocapture`
+  - `npm run build:dist` in `javascript/iroha_js`
+  - `node --test test/sccpEthereumMainnet.test.js test/package_dist.test.js`
+    in `javascript/iroha_js`
+  - `swift test --filter SccpSolanaProverTests/testEthereumMainnetSccpFacadeRequiresChainId1AndEthTarget`
+    in `IrohaSwift`
+  - Kotlin/JVM and Java Android focused facade suites are covered in the
+    subsequent facade-hardening status entry.
+  - .NET facade tests were added; `dotnet test` was attempted but `dotnet` is
+    not installed in this environment.
+
+## 2026-06-01 SCCP Ethereum mainnet facade submission hardening
+
+- Hardened the Swift, Kotlin/JVM, Java Android, and JavaScript
+  `EthereumMainnetSccp` facades so the easy calldata path requires a wrapped
+  EVM-family proof result carrying an Ethereum mainnet destination binding.
+  The facades now reject raw manual ETH-targeted submissions before calldata is
+  emitted, and verify that the wrapped proof result's binding hash matches the
+  embedded chain-id-1 destination binding.
+- Added the JavaScript Ethereum-mainnet bytes32 network-id constant and
+  destination-binding/hash helpers to the source, package root, declarations,
+  and regenerated `dist` bundle so web consumers can build the same governed
+  binding explicitly.
+- Validation:
+  - `node --check javascript/iroha_js/src/sccp.js && node --check javascript/iroha_js/src/index.js && node --check javascript/iroha_js/test/sccpEthereumMainnet.test.js && node --check javascript/iroha_js/test/package_dist.test.js`
+  - `npm run build:dist` in `javascript/iroha_js`
+  - `node --test test/sccpEthereumMainnet.test.js` in `javascript/iroha_js`
+    (`7 passed`)
+  - `node --test --test-name-pattern "(package SCCP entrypoint and declarations cover public source exports|package dist entrypoint exports SCCP EVM-family Groth16 helpers)" test/package_dist.test.js`
+    in `javascript/iroha_js` (`2 passed`)
+  - `swift test --filter 'SccpSolanaProverTests/testEthereumMainnetSccpFacadeRequiresChainId1AndEthTarget|SccpSolanaProverTests/testBscMainnetSccpFacadeRequiresChainId56AndBscTarget'`
+    in `IrohaSwift` (`2 passed`)
+  - `JAVA_HOME=/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home PATH="/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home/bin:$PATH" ./gradlew :core-jvm:test --console=plain --tests org.hyperledger.iroha.sdk.sccp.EvmSccpProverTest`
+    in `kotlin` (`BUILD SUCCESSFUL`)
+  - `JAVA_HOME=/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home PATH="/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home/bin:$PATH" ANDROID_HOME=$HOME/Library/Android/sdk ANDROID_SDK_ROOT=$HOME/Library/Android/sdk ANDROID_HARNESS_MAINS=org.hyperledger.iroha.android.sccp.EvmSccpProverTests ./gradlew :core:test --console=plain --tests org.hyperledger.iroha.android.GradleHarnessTests`
+    in `java/iroha_android` (`BUILD SUCCESSFUL`)
+
+## 2026-06-01 SCCP BSC mainnet SDK facade parity
+
+- Extended the BSC mainnet SCCP SDK facade across Rust, JavaScript, Python,
+  Swift, Kotlin/JVM, and Java Android so SORA -> BSC proof requests, wrapped
+  proof results, proof-job helpers, and submission packaging pin chain id `56`
+  and require the governed destination binding before calldata or relay
+  envelopes are emitted. Added matching native .NET BSC-mainnet chain-id,
+  network-id, route, and destination-binding hash guards for C# callers.
+- Added negative/adversarial coverage for ETH/BSC domain replay, non-mainnet
+  destination bindings, mutated wrapped proof results, raw unwrapped
+  submissions, destination-binding hash/key mismatches, duplicate verifier and
+  bridge addresses, and zero deployment addresses across the focused SDK
+  suites.
+- Validation:
+  - `cargo fmt --all`
+  - `cargo test -p iroha_sccp bsc_mainnet --lib -- --nocapture`
+    (`2 passed, 238 filtered out`)
+  - `python3 -m py_compile python/iroha_torii_client/sccp.py python/iroha_torii_client/__init__.py python/iroha_torii_client/tests/sccp_test.py`
+  - `python3 -m pytest -q python/iroha_torii_client/tests/sccp_test.py -k bsc_mainnet`
+    (`1 passed, 79 deselected`)
+  - `node --check javascript/iroha_js/src/sccp.js`
+  - `node --check javascript/iroha_js/test/sccpSolanaProver.test.js`
+  - `node --check javascript/iroha_js/test/package_dist.test.js`
+  - `npm run build:dist` in `javascript/iroha_js`
+  - `node --test javascript/iroha_js/test/sccpSolanaProver.test.js --test-name-pattern "BSC mainnet SDK facade"`
+    (`84 passed`)
+  - `node --test --test-name-pattern "package.*SCCP|SCCP.*exports|BSC" test/package_dist.test.js`
+    in `javascript/iroha_js` (`12 passed`)
+  - `swift test --filter SccpSolanaProverTests/testBscMainnetSccpFacadeRequiresChainId56AndBscTarget`
+    in `IrohaSwift` (`1 passed`)
+  - `JAVA_HOME=/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home PATH="/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home/bin:$PATH" ./gradlew :core-jvm:test --console=plain --tests 'org.hyperledger.iroha.sdk.sccp.EvmSccpProverTest'`
+    in `kotlin` (`BUILD SUCCESSFUL`)
+  - `JAVA_HOME=/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home PATH="/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home/bin:$PATH" ANDROID_HOME=$HOME/Library/Android/sdk ANDROID_SDK_ROOT=$HOME/Library/Android/sdk ANDROID_HARNESS_MAINS=org.hyperledger.iroha.android.sccp.EvmSccpProverTests ./gradlew :core:test --console=plain --tests org.hyperledger.iroha.android.GradleHarnessTests`
+    in `java/iroha_android` (`BUILD SUCCESSFUL`)
+  - `git diff --check --no-index /dev/null csharp/src/Hyperledger.Iroha.Sdk/Sccp/BscMainnetSccp.cs`
+    and `git diff --check --no-index /dev/null csharp/tests/Hyperledger.Iroha.Sdk.Tests/SccpBscMainnetTests.cs`
+    produced no whitespace diagnostics; `--no-index` exits non-zero because
+    each new file differs from `/dev/null`.
+  - `dotnet test csharp/tests/Hyperledger.Iroha.Sdk.Tests/Hyperledger.Iroha.Sdk.Tests.csproj --filter SccpBscMainnetTests`
+    was attempted but `dotnet` is not installed in this environment.
+
+## 2026-06-01 SCCP Python BSC mainnet facade validation
+
+- Validated the Python BSC mainnet SCCP facade that pins destination bindings
+  to chain id `56`, rejects ETH-targeted EVM requests, wraps external Groth16
+  proof bytes, and builds BSC verifier calldata only from wrapped proof results
+  that carry the same deployment binding.
+- Rechecked the EVM-family callback snapshot regression alongside the BSC facade
+  so `bundle_bytes` and `source_proof_bytes` remain immutable bytes inside
+  linked-prover callbacks.
+- Validation:
+  - `python3 -m py_compile python/iroha_torii_client/sccp.py python/iroha_torii_client/tests/sccp_test.py`
+  - `python3 -m pytest -q python/iroha_torii_client/tests/sccp_test.py -k 'bsc_mainnet_sccp_facade or evm_family_sccp_prover_wraps_externally_generated_proof_bytes'`
+    (`2 passed, 78 deselected`)
+
+## 2026-06-01 SCCP .NET Ethereum mainnet route guard
+
+- Added a native .NET `EthereumMainnetSccp` route guard surface for C# callers,
+  covering Ethereum mainnet chain id, ETH -> SORA inbound routing, SORA -> ETH
+  outbound routing, and the canonical 32-byte network-id string.
+- Tightened the network-id guard to exact ordinal matching so uppercase or
+  padded variants cannot alias the canonical Ethereum mainnet destination
+  binding id.
+- Added focused xUnit coverage for accepted Ethereum mainnet routes plus BSC,
+  uppercase, and padded network-id rejection.
+- Validation:
+  - `dotnet test csharp/tests/Hyperledger.Iroha.Sdk.Tests/Hyperledger.Iroha.Sdk.Tests.csproj --filter SccpEthereumMainnetTests`
+    was attempted but `dotnet` is not installed in this environment.
+
+## 2026-06-01 SCCP Android mainnet facade snapshot hardening
+
+- Fixed the new Java Android `EthereumMainnetSccp` and `BscSccpProver`
+  facades so witness-provider inputs copy `bundleBytes` and `sourceProofBytes`
+  before user callbacks run, matching the generic EVM-family prover snapshot
+  contract.
+- Added focused Java Android regressions for Ethereum/BSC mainnet facade
+  witness-provider byte isolation, chain-id-specific destination bindings, and
+  ETH/BSC target-domain rejection.
+- Validation:
+  - `JAVA_HOME=/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home PATH="/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home/bin:$PATH" ANDROID_HOME=$HOME/Library/Android/sdk ANDROID_SDK_ROOT=$HOME/Library/Android/sdk ANDROID_HARNESS_MAINS=org.hyperledger.iroha.android.sccp.EvmSccpProverTests ./gradlew :core:test --console=plain --tests org.hyperledger.iroha.android.GradleHarnessTests`
+    in `java/iroha_android` (`BUILD SUCCESSFUL`)
+
+## 2026-06-01 SCCP Ethereum mainnet JS facade export hardening
+
+- Tightened the JavaScript `EthereumMainnetSccp` facade so provider
+  `eth_chainId` values must be canonical JSON-RPC quantities; padded values
+  such as `0x01` now fail closed instead of aliasing Ethereum mainnet.
+- Exported the Ethereum-mainnet facade and chain-id constant through the
+  package root and regenerated `dist`, so published package consumers get the
+  same source and declaration surface.
+- Added focused source and dist regressions for mainnet chain-id validation,
+  padded-chain-id rejection, package-root exports, declarations, and
+  Ethereum-only outbound request construction.
+- Validation:
+  - `npm run build:dist` in `javascript/iroha_js`
+  - `node --test javascript/iroha_js/test/sccpEthereumMainnet.test.js`
+    (`6 passed`)
+  - `node --test --test-name-pattern "(package SCCP entrypoint and declarations cover public source exports|package dist entrypoint exports SCCP EVM-family Groth16 helpers)" test/package_dist.test.js`
+    in `javascript/iroha_js` (`2 passed`)
+  - `node --check javascript/iroha_js/src/sccp.js && node --check javascript/iroha_js/src/index.js && node --check javascript/iroha_js/test/sccpEthereumMainnet.test.js && node --check javascript/iroha_js/test/package_dist.test.js`
+
+## 2026-06-01 SCCP BSC mainnet SDK facade hardening
+
+- Added BSC mainnet-specific Rust SCCP helpers for SORA -> BSC Groth16 proof
+  requests, proof-result wrapping, counterparty proof-job/submission packaging,
+  and BSC -> SORA source-proof verification.
+- The helpers pin the BSC EVM chain id to `56`, require the canonical
+  deployment-bound destination binding before UI/mobile prover requests or
+  relay packages are built, and require BSC source proofs to bind governed
+  source-adapter deployment evidence before the production gate opens.
+- Extended focused SCCP regressions for BSC mainnet request/result mutation
+  rejection, non-mainnet destination bindings, ETH manifest/bundle replay, and
+  wrong-source/wrong-target source-proof bundles.
+- Validation:
+  - `cargo fmt --all`
+  - `cargo test -p iroha_sccp bsc_mainnet --lib -- --nocapture`
+    (`2 passed, 238 filtered out`)
+
+## 2026-06-01 SCCP SDK callback source-proof snapshot coverage
+
+- Extended Python, Swift, Kotlin/JVM, and Java Android SCCP callback-snapshot
+  regressions so callback-exposed `sourceProofBytes` are mutation-tested like
+  `bundleBytes` across EVM-family, TRON, TON, and Substrate-family proof
+  engines.
+- This keeps portal and mobile final-proof callback tests aligned with the web
+  prover callback snapshot contract and the existing TON final-proof byte-copy
+  tests.
+- The Swift static bridge installer now resolves newer Kagemusha symbols with
+  `dlsym`, matching the dynamic-loader path so stale prebuilt bridge artifacts
+  no longer break package compilation; Kagemusha features remain unavailable
+  until those symbols are present in the loaded bridge.
+- Validation:
+  - `swift test --filter 'SccpSolanaProverTests/test(Ton|Tron|Evm|Substrate)ProverWrapsExternalProofBytes'`
+    from `IrohaSwift` (`4` tests)
+  - `bash scripts/check_sccp_production_corridor.sh --phase swift-sdk`
+    (`73` SCCP tests plus `1` Torii bridge-proof submit test)
+  - `python3 -m pytest -q python/iroha_torii_client/tests/sccp_test.py -k 'ton_sccp_prover_wraps_externally_generated_proof_bytes or evm_family_sccp_prover_wraps_externally_generated_proof_bytes or substrate_sccp_prover_wraps_externally_generated_proof_bytes or tron_sccp_prover_wraps_externally_generated_proof_bytes'`
+    (`4 passed, 75 deselected`)
+  - `bash scripts/check_sccp_production_corridor.sh --phase python-sdk`
+    (`79 passed`)
+  - `JAVA_HOME=/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home PATH="/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home/bin:$PATH" ./gradlew :core-jvm:test --console=plain --tests 'org.hyperledger.iroha.sdk.sccp.EvmSccpProverTest' --tests 'org.hyperledger.iroha.sdk.sccp.TronSccpProverTest' --tests 'org.hyperledger.iroha.sdk.sccp.SubstrateSccpProverTest'`
+    (`BUILD SUCCESSFUL`)
+  - `JAVA_HOME=/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home PATH="/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home/bin:$PATH" ANDROID_HOME=~/Library/Android/sdk ANDROID_SDK_ROOT=~/Library/Android/sdk ANDROID_HARNESS_MAINS=org.hyperledger.iroha.android.sccp.EvmSccpProverTests,org.hyperledger.iroha.android.sccp.TronSccpProverTests,org.hyperledger.iroha.android.sccp.SubstrateSccpProverTests ./gradlew :core:test --console=plain --tests 'org.hyperledger.iroha.android.GradleHarnessTests'`
+    (`BUILD SUCCESSFUL`)
+  - `JAVA_HOME=/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home PATH="/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home/bin:$PATH" ANDROID_HOME=~/Library/Android/sdk ANDROID_SDK_ROOT=~/Library/Android/sdk bash scripts/check_sccp_production_corridor.sh --phase kotlin-sdk`
+    (`BUILD SUCCESSFUL`)
+  - `JAVA_HOME=/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home PATH="/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home/bin:$PATH" ANDROID_HOME=~/Library/Android/sdk ANDROID_SDK_ROOT=~/Library/Android/sdk bash scripts/check_sccp_production_corridor.sh --phase java-android`
+    (`BUILD SUCCESSFUL`)
+
+## 2026-06-01 Sumeragi TLC coverage guard hardening
+
+- Extended `scripts/formal/check_sumeragi_formal_coverage.py` so the formal
+  coverage guard now parses `scripts/formal/sumeragi_tlc.sh` alongside the
+  Apalache runner.
+- The guard now proves every documented fast-mode table row has both a
+  documented TLC command and a TLC runner branch, proves every exact TLC
+  `*-fast` branch is represented in the fast-mode table, and checks the
+  referenced TLC config file exists. It also now checks that the PR workflow
+  invokes `ci/check_sumeragi_formal.sh` only after the pinned Apalache install
+  command, the nightly workflow invokes the pinned install, formal baseline, and
+  `frontier-nightly` in that order, and the baseline script runs the coverage
+  guard before its first Apalache invocation. Apalache version pins
+  across the Apalache runner, TLC runner, local installer, PR/nightly workflows,
+  formal README, and CI README must agree on the same checker version. Every
+  referenced config must be non-empty, define either `SPECIFICATION` or both
+  `INIT` and `NEXT`, and include at least one invariant/property directive.
+  Top-level CFG directives must be from the supported TLA+/TLC set, and
+  malformed or duplicated `CHECK_DEADLOCK` values are rejected before model
+  checking.
+  Malformed `CONSTANTS` block lines are also rejected before model checking, so
+  bounds and mutation flags cannot silently disappear from a checked model.
+  Every referenced `.tla` file must declare the module name matching its
+  filename, and every `EXTENDS` or `INSTANCE` dependency must name either a
+  known TLA standard module or an existing local `.tla` file. Every Apalache
+  branch must set a non-negative integer `apalache_length`, the README length
+  table must match the runner's effective lengths for all 505 documented rows
+  and cover all 502 PR baseline modes, and each TLC runner `module="..."`
+  assignment must resolve to an existing `.tla` file with a matching module
+  declaration. CFG
+  `SPECIFICATION`, `INIT`, `NEXT`, `CONSTRAINT`, `INVARIANT(S)`, and
+  `PROPERTY/PROPERTIES` references must use static TLA operator-name syntax and
+  are now checked against the selected TLA module's operator definitions.
+  Multi-line `INVARIANTS`/`PROPERTIES` blocks must list exactly one operator per
+  continuation line. CFG constant bindings are checked against the selected TLA
+  module's constant declarations in both directions, and duplicated constant or
+  behavior/check targets are rejected. Every referenced CFG must also include at
+  least one
+  non-`TypeInvariant` invariant/property target, so no baseline, scheduled, or
+  expected-failure run can degrade into a type-only check. Every `.tla` and
+  `.cfg` file in the Sumeragi formal directory must also be reached by at least
+  one checked or documented formal mode, so orphan proof artifacts cannot drift
+  outside the guard. This turns the
+  previous manual `0`-missing TLC runner gap check into CI-enforced coverage.
+  The current audit covers 39,135 CFG constant bindings across 20,581
+  Apalache/TLC module-config pairings with zero undeclared constants, zero
+  missing bindings for declared TLA constants, and zero duplicate constant
+  bindings across 10,301 referenced CFGs. It also covers the full current
+  inventory of 500 TLA modules and 10,301 CFGs with zero unreferenced formal
+  files. The guard now caches file reads and parsed CFG/TLA helper results
+  within a single run so the expanded static checks do not repeatedly reload or
+  reparse the same TLA+/CFG corpus.
+- The guard also rejects duplicated fast-mode table rows or duplicated README
+  TLC commands so one repeated documented mode cannot hide a missing one.
+  Apalache and TLC runner case labels are also checked for duplicates and
+  shell-case wildcard shadowing so an exact override cannot be made unreachable
+  by a broader earlier wildcard branch.
+  PR CI, expected-failure CI, scheduled/manual workflow commands, and README
+  Apalache command lists are checked for duplicates too, and modes cannot
+  appear in both PR and expected-failure CI. Every exact Apalache runner mode
+  must now appear in PR, expected-failure, or scheduled/manual formal CI, and
+  Apalache/TLC runner branches with no CI or README mode are rejected.
+  The guard also compares each TLC-routed mode with an Apalache counterpart and
+  requires both runners to target the same TLA module, while preserving
+  intentionally TLC-only modes such as `frontier-small`.
+  Every README-documented Apalache `-bug-` mutation is now required to appear in
+  expected-failure CI, while mutation modes are rejected from PR CI and
+  non-mutation modes are rejected from expected-failure CI. The same documented
+  mutation corpus must now resolve through the TLC runner, including wildcard
+  mappings and exact cfg-name overrides, and the matching TLC branch must set
+  `expect_failure=1`. The Apalache and TLC expected-failure runner paths are
+  now also checked for fail-closed semantics: clean passes are rejected, Apalache
+  mutations must fail with the invariant-rejection exit code, and TLC mutations
+  must report invariant/property counterexamples rather than arbitrary tool
+  errors. PR, scheduled/manual, and README non-mutation TLC modes are rejected
+  if they set `expect_failure=1`, so baseline corridors cannot accept
+  counterexamples as success. Runner invocation shape is now checked too:
+  Apalache local and Docker paths must pass the selected length, config, run
+  directory, and spec, while TLC must pass the selected worker count, metadata
+  directory, config, and module. Static CFG constraints and TLC runner-generated
+  constraints must resolve to selected-module operators, so constrained TLC runs
+  cannot silently target stale or missing predicates. The guard also compares
+  the resolved Apalache and TLC mutation CFG targets, allowing only the explicit
+  commit-root `_tlc_bug_` configs to diverge from the Apalache CFG names.
+- Added TLC runner coverage for the eleven original frontier recovery mutation
+  configs via `frontier-bug-*`, plus exact TLC mapping overrides for
+  `rbc-bug-duplicate-ready` and `engine-proposal-bug-skip-validation`.
+- Added focused pytest coverage for the documented-fast-row parser, TLC command
+  regex path, exact-fast runner branch projection, duplicate-mode detector,
+  command duplicate projection, workflow entrypoint presence, pinned-install
+  ordering, and guard-before-Apalache order checks, Apalache version pin
+  extraction and drift rejection, expected-failure counterexample semantics
+  checks, baseline expected-failure marker rejection, malformed proof-input and
+  scalar runner assignment rejection, runner command-shape validation, runner
+  invocation proof-input binding checks, Apalache length-table parsing and
+  runner drift
+  rejection, CFG directive validation including duplicate `CHECK_DEADLOCK`
+  rejection, mutation-mode filter, runner case-label parser, wildcard TLC
+  mutation dispatch, exact mutation override dispatch, and expected-failure
+  marker enforcement. The helper tests now also
+  cover unused
+  runner-branch detection, TLC module-file reference validation, Apalache
+  length validation, length-table-derived fast-mode extraction, malformed,
+  wrong-width, empty-purpose, and duplicate README Apalache length-row
+  detection, TLA module-header validation, and CFG behavior/check validation.
+  The runner-order tests now cover wildcard shadowing and exact
+  overrides that intentionally precede broad wildcard branches, and the
+  cross-runner mutation CFG tests now pin both exact CFG equivalence and the
+  explicit commit-root TLC-specific allowance. The module-identity tests pin
+  same-module Apalache/TLC routing, TLC-only mode allowance, and cross-runner
+  module drift rejection. The TLA dependency tests now pin parsing for
+  `EXTENDS`, `LOCAL INSTANCE`, and named `INSTANCE` dependencies, plus
+  fail-closed rejection of missing local modules. The CFG operator-reference
+  tests now pin single-line and multi-line behavior/check/constraint directive
+  parsing, static TLA operator-name syntax, TLA operator definition parsing, and
+  fail-closed rejection when a CFG names an operator missing from the selected
+  module. TLC constraint tests now pin static CFG
+  `CONSTRAINT` parsing and fail-closed runner constraint validation. The CFG
+  constant-binding tests now pin inline/block CFG bindings, annotated TLA
+  constant blocks, fail-closed rejection of malformed `CONSTANTS` block lines,
+  fail-closed rejection when a CFG binds a constant missing from the selected
+  module, and fail-closed rejection when a declared TLA constant is not bound by
+  the CFG. The duplicate constant binding
+  tests now pin acceptance for unique constant bindings and rejection for
+  repeated constant bindings. The CFG semantic-check tests now pin
+  acceptance for `TypeInvariant` plus a semantic check and rejection for
+  type-only CFGs. The duplicate CFG target tests now pin acceptance for unique
+  behavior/check targets and rejection for repeated behavior directives or
+  repeated invariant/property operators. The formal inventory tests now pin
+  fail-closed rejection of unreferenced `.tla` or `.cfg` files.
+- Validation:
+  - `python3 -m py_compile scripts/formal/check_sumeragi_formal_coverage.py pytests/scripts/sumeragi_formal_coverage_test.py`
+  - `python3 scripts/formal/check_sumeragi_formal_coverage.py`
+    (`504 PR modes, 9788 expected-failure modes, 1 scheduled/manual modes, 10293 documented modes, 499 TLC fast modes, 9788 TLC mutation modes`)
+  - `python3 -m pytest -q pytests/scripts/sumeragi_formal_coverage_test.py`
+    (`74 passed`)
+  - `bash scripts/formal/install_apalache.sh 0.52.2`
+    (checksum verified and installed `target/apalache/toolchains/v0.52.2`)
+  - `JAVA_HOME=/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home PATH="/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home/bin:$PATH" APALACHE_ALLOW_DOCKER=0 bash scripts/formal/sumeragi_tlc.sh frontier-bug-stale-owner`
+    (expected TLC failure: `StaleRecoveryOwnerHasClearProgress`)
+  - `JAVA_HOME=/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home PATH="/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home/bin:$PATH" APALACHE_ALLOW_DOCKER=0 bash scripts/formal/sumeragi_tlc.sh rbc-bug-duplicate-ready`
+    (expected TLC failure: `ReadyCountUsesDistinctSenders`)
+  - `JAVA_HOME=/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home PATH="/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home/bin:$PATH" APALACHE_ALLOW_DOCKER=0 bash scripts/formal/sumeragi_tlc.sh engine-proposal-bug-skip-validation`
+    (expected TLC failure: `SafeProposalsValidate`)
+  - `JAVA_HOME=/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home PATH="/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home/bin:$PATH" APALACHE_ALLOW_DOCKER=0 bash scripts/formal/sumeragi_tlc.sh commit-roots-bug-under-quorum-accept`
+    (expected TLC failure: `AcceptedMatchesSpec`)
+  - `bash -n ci/check_sumeragi_formal.sh ci/check_sumeragi_formal_expected_failures.sh scripts/formal/sumeragi_tlc.sh scripts/formal/sumeragi_apalache.sh`
+  - `git diff --check -- scripts/formal/check_sumeragi_formal_coverage.py scripts/formal/sumeragi_tlc.sh pytests/scripts/sumeragi_formal_coverage_test.py docs/formal/sumeragi/README.md ci/README.md roadmap.md status.md`
+  - trailing-whitespace scan across the same touched files, including the new
+    pytest file
+  - conflict-marker scan across the touched formal coverage script, TLC runner,
+    pytest, formal README, CI README, roadmap, and status files
+
 ## 2026-06-01 SCCP release artifact path control-character guard
 
 - Hardened SCCP release evidence tooling so public artifact paths containing
@@ -37,7 +1803,14 @@ Last updated: 2026-06-01
   asserted the CLI reports verifier errors without a Python traceback.
 - Updated the bridge-proof documentation and roadmap to describe the UTF-8
   fail-closed release evidence rule.
-- Validation: pending.
+- Validation:
+  - `python3 -m py_compile scripts/sccp_verify_release_bundle.py pytests/scripts/sccp_release_bundle_test.py`
+  - `python3 -m pytest -q pytests/scripts/sccp_release_bundle_test.py -k non_utf8`
+    (`3 passed, 137 deselected`)
+  - `python3 -m pytest -q pytests/scripts/sccp_release_readiness_report_test.py pytests/scripts/sccp_release_bundle_test.py`
+    (`160 passed`)
+  - `bash scripts/check_sccp_production_corridor.sh --phase evidence-scripts`
+    (`794 passed`)
 
 ## 2026-06-01 SCCP web prover callback immutability coverage
 

@@ -703,6 +703,10 @@ pub struct TradfiRailProfile {
     pub rail: TradfiRail,
     /// Policy for embedded XMLDSig/XAdES blocks.
     pub embedded_signature_policy: EmbeddedSignaturePolicy,
+    /// Accepted SHA-256 pins of raw XMLDSig P-256 public keys.
+    pub trusted_public_key_sha256: Vec<String>,
+    /// Accepted SHA-256 pins of DER-encoded XMLDSig X.509 certificates.
+    pub trusted_certificate_sha256: Vec<String>,
     /// Datasets that must be loaded before accepting live-profile messages.
     pub required_reference_datasets: Vec<ReferenceDatasetRequirement>,
     /// Message profiles supported by this rail profile.
@@ -727,6 +731,29 @@ impl TradfiRailProfile {
     #[must_use]
     pub fn requires_dataset(&self, dataset: ReferenceDatasetRequirement) -> bool {
         self.required_reference_datasets.contains(&dataset)
+    }
+
+    /// Returns `true` when this profile has at least one configured XMLDSig trust pin.
+    #[must_use]
+    pub fn has_xml_signature_trust_anchors(&self) -> bool {
+        !self.trusted_public_key_sha256.is_empty() || !self.trusted_certificate_sha256.is_empty()
+    }
+
+    /// Returns `true` when the verified XMLDSig key material matches this profile's pins.
+    #[must_use]
+    pub fn accepts_xml_signature_key(
+        &self,
+        public_key_sha256: &str,
+        certificate_sha256: Option<&str>,
+    ) -> bool {
+        self.trusted_public_key_sha256
+            .iter()
+            .any(|pin| pin == public_key_sha256)
+            || certificate_sha256.is_some_and(|digest| {
+                self.trusted_certificate_sha256
+                    .iter()
+                    .any(|pin| pin == digest)
+            })
     }
 }
 
@@ -778,6 +805,10 @@ fn profile_from_value(value: &Value) -> Result<TradfiRailProfile, String> {
     let embedded_signature_policy =
         EmbeddedSignaturePolicy::parse(required_string(obj, "embedded_signature_policy")?)
             .ok_or_else(|| format!("profile `{id}` has unknown embedded signature policy"))?;
+    let trusted_public_key_sha256 =
+        canonical_sha256_pins(optional_string_array(obj, "trusted_public_key_sha256")?)?;
+    let trusted_certificate_sha256 =
+        canonical_sha256_pins(optional_string_array(obj, "trusted_certificate_sha256")?)?;
     let required_reference_datasets = optional_string_array(obj, "required_reference_datasets")?
         .into_iter()
         .map(|raw| {
@@ -797,9 +828,35 @@ fn profile_from_value(value: &Value) -> Result<TradfiRailProfile, String> {
         id: id.to_owned(),
         rail,
         embedded_signature_policy,
+        trusted_public_key_sha256,
+        trusted_certificate_sha256,
         required_reference_datasets,
         message_profiles,
     })
+}
+
+fn canonical_sha256_pins(values: Vec<String>) -> Result<Vec<String>, String> {
+    values
+        .into_iter()
+        .map(|value| {
+            let trimmed = value.trim();
+            if trimmed.len() != 64 || !trimmed.chars().all(|ch| ch.is_ascii_hexdigit()) {
+                return Err(format!(
+                    "XMLDSig trust pin `{value}` must be a SHA-256 hex string"
+                ));
+            }
+            let canonical = trimmed.to_ascii_lowercase();
+            if trimmed != canonical {
+                return Err(format!(
+                    "XMLDSig trust pin `{value}` must use lowercase canonical hex"
+                ));
+            }
+            if canonical.chars().all(|ch| ch == '0') {
+                return Err("XMLDSig trust pin must not be all zero".to_owned());
+            }
+            Ok(canonical)
+        })
+        .collect()
 }
 
 fn message_profile_from_value(value: &Value) -> Result<MessageProfile, String> {
@@ -940,6 +997,10 @@ mod tests {
         assert_eq!(
             catalog["fedwire-funds"].embedded_signature_policy,
             EmbeddedSignaturePolicy::RejectUnsupported
+        );
+        assert!(
+            !catalog["swift-cbpr-plus"].has_xml_signature_trust_anchors(),
+            "default live profiles must not silently trust XMLDSig keys"
         );
     }
 

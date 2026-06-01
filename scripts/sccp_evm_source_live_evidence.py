@@ -33,8 +33,15 @@ EXPECTED_RPC_CHAIN_IDS = {
 }
 
 
-def _strip_0x(value: str) -> str:
-    return value[2:] if value.lower().startswith("0x") else value
+def _strip_lower_0x_hex(value: str, *, label: str) -> str:
+    if value.startswith("0X"):
+        raise argparse.ArgumentTypeError(f"{label} must use lowercase 0x prefix")
+    if not value.startswith("0x"):
+        raise argparse.ArgumentTypeError(f"{label} must be canonical lowercase 0x hex")
+    text = value[2:]
+    if text != text.lower():
+        raise argparse.ArgumentTypeError(f"{label} must use lowercase hex")
+    return text
 
 
 def _hex(raw: bytes) -> str:
@@ -85,7 +92,7 @@ def parse_domain(value: str) -> int:
 def _parse_hex_bytes(value: str, *, label: str, byte_length: int) -> bytes:
     if value != value.strip():
         raise argparse.ArgumentTypeError(f"{label} must not contain whitespace")
-    text = _strip_0x(value)
+    text = _strip_lower_0x_hex(value, label=label)
     if len(text) != byte_length * 2:
         raise argparse.ArgumentTypeError(f"{label} must be {byte_length} bytes")
     try:
@@ -287,6 +294,10 @@ def _json_rpc(
         raise RuntimeError(str(exc)) from exc
     if not isinstance(decoded, dict):
         raise RuntimeError(f"JSON-RPC {method} returned a non-object response")
+    if decoded.get("jsonrpc") != "2.0":
+        raise RuntimeError(f"JSON-RPC {method} returned an invalid protocol version")
+    if decoded.get("id") != 1:
+        raise RuntimeError(f"JSON-RPC {method} returned a mismatched response id")
     error = decoded.get("error")
     if error is not None:
         raise RuntimeError(f"JSON-RPC {method} error: {error}")
@@ -442,6 +453,48 @@ def _receipt_summary(
     }
 
 
+def _verify_receipt_block_header(
+    rpc_url: str,
+    *,
+    block_number: int,
+    expected_block_hash: bytes,
+    opener: Urlopen,
+    timeout: float,
+) -> bytes:
+    result = _json_rpc(
+        rpc_url,
+        "eth_getBlockByNumber",
+        [hex(block_number), False],
+        opener=opener,
+        timeout=timeout,
+    )
+    if not isinstance(result, dict):
+        raise RuntimeError("eth_getBlockByNumber returned a non-object block")
+    header_number = _rpc_quantity(
+        result.get("number"),
+        method="eth_getBlockByNumber number",
+    )
+    if header_number != block_number:
+        raise RuntimeError(
+            "deployment receipt block number does not match eth_getBlockByNumber"
+        )
+    header_hash = _rpc_fixed_hex_data(
+        result.get("hash"),
+        method="eth_getBlockByNumber hash",
+        byte_length=32,
+    )
+    if header_hash != expected_block_hash:
+        raise RuntimeError(
+            "deployment receipt blockHash does not match eth_getBlockByNumber"
+        )
+    receipts_root = _rpc_fixed_hex_data(
+        result.get("receiptsRoot"),
+        method="eth_getBlockByNumber receiptsRoot",
+        byte_length=32,
+    )
+    return receipts_root
+
+
 def collect_source_bridge_evidence(
     rpc_url: str,
     *,
@@ -474,6 +527,50 @@ def collect_source_bridge_evidence(
         opener=opener,
         timeout=timeout,
     )
+    receipt_summary = _receipt_summary(
+        rpc_url,
+        deployment_transaction_hash=deployment_transaction_hash,
+        bridge_address=bridge,
+        opener=opener,
+        timeout=timeout,
+    )
+    if receipt_summary:
+        receipt_block_tag = hex(receipt_summary["deployment_receipt_block_number"])
+        receipt_block_hash = _parse_hex32(
+            receipt_summary["deployment_receipt_block_hash"],
+            label="deployment receipt block hash",
+        )
+        receipt_block_receipts_root = _verify_receipt_block_header(
+            rpc_url,
+            block_number=receipt_summary["deployment_receipt_block_number"],
+            expected_block_hash=receipt_block_hash,
+            opener=opener,
+            timeout=timeout,
+        )
+        receipt_summary["deployment_receipt_block_hash_matches"] = True
+        receipt_summary["deployment_receipt_block_receipts_root"] = _hex(
+            receipt_block_receipts_root
+        )
+        receipt_summary["deployment_receipt_block_receipts_root_verified"] = True
+        receipt_block_code_hash, receipt_block_runtime_bytecode_hex = _runtime_code_hash(
+            evidence,
+            rpc_url,
+            address=bridge,
+            block_tag=receipt_block_tag,
+            opener=opener,
+            timeout=timeout,
+        )
+        if receipt_block_code_hash != bridge_code_hash:
+            raise RuntimeError(
+                "source bridge code hash at deployment receipt block does not "
+                "match selected block tag"
+            )
+        if receipt_block_runtime_bytecode_hex != bridge_runtime_bytecode_hex:
+            raise RuntimeError(
+                "source bridge runtime bytecode at deployment receipt block does "
+                "not match selected block tag"
+            )
+        receipt_summary["deployment_receipt_block_code_hash_matches"] = True
     summary: dict[str, Any] = {
         "domain": domain,
         "chain": "eth" if domain == SCCP_DOMAIN_ETH else "bsc",
@@ -482,15 +579,7 @@ def collect_source_bridge_evidence(
         "bridge_code_hash": _hex(bridge_code_hash),
         "bridge_runtime_bytecode_hex": bridge_runtime_bytecode_hex,
     }
-    summary.update(
-        _receipt_summary(
-            rpc_url,
-            deployment_transaction_hash=deployment_transaction_hash,
-            bridge_address=bridge,
-            opener=opener,
-            timeout=timeout,
-        )
-    )
+    summary.update(receipt_summary)
     return summary
 
 
@@ -578,6 +667,14 @@ def _source_args(
             if source_bridge.get("deployment_receipt_block_number") is not None
             else None
         ),
+        deployment_receipt_block_receipts_root=(
+            _parse_hex32(
+                source_bridge["deployment_receipt_block_receipts_root"],
+                label="deployment receipt block receiptsRoot",
+            )
+            if source_bridge.get("deployment_receipt_block_receipts_root") is not None
+            else None
+        ),
         expected_source_verifier_material_hash=args.expected_source_verifier_material_hash,
         expected_source_adapter_engine_deployment_hash=(
             args.expected_source_adapter_engine_deployment_hash
@@ -660,6 +757,13 @@ def _offline_args(args: argparse.Namespace, source_bridge: dict[str, Any]) -> li
                 str(source_args.deployment_receipt_block_number),
             ]
         )
+    if source_args.deployment_receipt_block_receipts_root is not None:
+        rendered.extend(
+            [
+                "--deployment-receipt-block-receipts-root",
+                _hex(source_args.deployment_receipt_block_receipts_root),
+            ]
+        )
     if source_args.expected_source_verifier_material_hash is not None:
         rendered.extend(
             [
@@ -680,6 +784,12 @@ def _offline_args(args: argparse.Namespace, source_bridge: dict[str, Any]) -> li
 def _source_bridge_deployment_receipt_is_verified(source_bridge: dict[str, Any]) -> bool:
     if source_bridge.get("deployment_receipt_status") != "0x1":
         return False
+    if source_bridge.get("deployment_receipt_block_hash_matches") is not True:
+        return False
+    if source_bridge.get("deployment_receipt_block_code_hash_matches") is not True:
+        return False
+    if source_bridge.get("deployment_receipt_block_receipts_root_verified") is not True:
+        return False
     try:
         _parse_hex32(
             source_bridge.get("deployment_transaction_hash"),
@@ -692,6 +802,10 @@ def _source_bridge_deployment_receipt_is_verified(source_bridge: dict[str, Any])
         _require_exact_positive_u64(
             source_bridge.get("deployment_receipt_block_number"),
             label="deployment receipt block number",
+        )
+        _parse_hex32(
+            source_bridge.get("deployment_receipt_block_receipts_root"),
+            label="deployment receipt block receiptsRoot",
         )
         chain = source_bridge.get("chain")
         if chain not in ("eth", "bsc"):
@@ -784,6 +898,16 @@ def _validate_source_summary(summary: dict[str, Any]) -> None:
         raise ValueError(
             "deployment receipt contract address metadata must match source bridge"
         )
+    if source_bridge.get("deployment_receipt_block_code_hash_matches") is not True:
+        raise ValueError(
+            "deployment receipt block code hash metadata must be verified"
+        )
+    if source_bridge.get("deployment_receipt_block_hash_matches") is not True:
+        raise ValueError("deployment receipt block hash metadata must be verified")
+    if source_bridge.get("deployment_receipt_block_receipts_root_verified") is not True:
+        raise ValueError(
+            "deployment receipt block receiptsRoot metadata must be verified"
+        )
     deployment_receipt_block_hash = _summary_hex32(
         source_bridge,
         "deployment_receipt_block_hash",
@@ -792,6 +916,11 @@ def _validate_source_summary(summary: dict[str, Any]) -> None:
     deployment_receipt_block_number = _require_exact_positive_u64(
         source_bridge.get("deployment_receipt_block_number"),
         label="deployment receipt block number",
+    )
+    deployment_receipt_block_receipts_root = _summary_hex32(
+        source_bridge,
+        "deployment_receipt_block_receipts_root",
+        label="deployment receipt block receiptsRoot",
     )
 
     source_args = summary.get("_source_args")
@@ -875,6 +1004,18 @@ def _validate_source_summary(summary: dict[str, Any]) -> None:
         raise ValueError(
             "source TOML deployment receipt block number must match source bridge"
         )
+    if (
+        _source_arg_bytes(
+            source_args,
+            "deployment_receipt_block_receipts_root",
+            label="source TOML deployment receipt block receiptsRoot",
+            byte_length=32,
+        )
+        != deployment_receipt_block_receipts_root
+    ):
+        raise ValueError(
+            "source TOML deployment receipt block receiptsRoot must match source bridge"
+        )
 
     source_records = summary.get("source_records")
     if not isinstance(source_records, dict):
@@ -957,7 +1098,22 @@ def _toml_prerequisites(summary: dict[str, Any]) -> list[str]:
         missing.append("--expected-rpc-chain-id")
     if source_bridge.get("expected_source_bridge_code_hash_matches") is not True:
         missing.append("--expected-source-bridge-code-hash")
-    if not _source_bridge_deployment_receipt_is_verified(source_bridge):
+    if source_bridge.get("deployment_receipt_status") == "0x1":
+        if source_bridge.get("deployment_receipt_block_hash_matches") is not True:
+            missing.append("deployment receipt block hash verification")
+        if source_bridge.get("deployment_receipt_block_receipts_root_verified") is not True:
+            missing.append("deployment receipt block receiptsRoot verification")
+        if source_bridge.get("deployment_receipt_block_code_hash_matches") is not True:
+            missing.append("deployment receipt block code hash verification")
+        if (
+            source_bridge.get("deployment_receipt_block_hash_matches") is True
+            and source_bridge.get("deployment_receipt_block_receipts_root_verified")
+            is True
+            and source_bridge.get("deployment_receipt_block_code_hash_matches") is True
+            and not _source_bridge_deployment_receipt_is_verified(source_bridge)
+        ):
+            missing.append("--deployment-transaction-hash")
+    elif not _source_bridge_deployment_receipt_is_verified(source_bridge):
         missing.append("--deployment-transaction-hash")
     source_records = summary.get("source_records")
     if not isinstance(source_records, dict):
@@ -1005,6 +1161,8 @@ def render_offline_toml(summary: dict[str, Any]) -> str:
             + json.dumps(str(source_bridge["deployment_receipt_block_hash"])),
             "# sccp_evm_source_deployment_block_number = "
             + json.dumps(str(source_bridge["deployment_receipt_block_number"])),
+            "# sccp_evm_source_deployment_block_receipts_root = "
+            + json.dumps(str(source_bridge["deployment_receipt_block_receipts_root"])),
         ]
     )
     existing_keys = set()

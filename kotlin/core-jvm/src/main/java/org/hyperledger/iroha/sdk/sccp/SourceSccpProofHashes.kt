@@ -19,6 +19,12 @@ object SccpSourceProofs {
     const val DOMAIN_SORA_KUSAMA: Int = 6
     const val DOMAIN_SORA_POLKADOT: Int = 7
     const val DOMAIN_SORA2: Int = 8
+    const val ETH_MAINNET_CHAIN_ID: Long = 1L
+    const val ETH_MAINNET_NETWORK_ID: String =
+        "0x0000000000000000000000000000000000000000000000000000000000000001"
+    const val BSC_MAINNET_CHAIN_ID: Long = 56L
+    const val BSC_MAINNET_NETWORK_ID: String =
+        "0x0000000000000000000000000000000000000000000000000000000000000038"
 
     private val MAX_U64: BigInteger = BigInteger.ONE.shiftLeft(64).subtract(BigInteger.ONE)
     private const val BSC_PARLIA_EXTRA_VANITY_BYTES: Int = 32
@@ -595,6 +601,90 @@ object SccpSourceProofs {
         verifierKeyHash = verifierKeyHash,
         verifierBackend = verifierBackend,
         proofFamily = proofFamily,
+    ).hash
+
+    /** Governed Ethereum mainnet destination binding for UI-side SCCP proof generation. */
+    @JvmStatic
+    @JvmOverloads
+    fun ethereumMainnetDestinationBinding(
+        verifierAddress: String,
+        bridgeAddress: String,
+        verifierCodeHash: String,
+        verifierKeyHash: String,
+        networkId: String = ETH_MAINNET_NETWORK_ID,
+    ): EvmDestinationBinding {
+        val binding = evmDestinationBinding(
+            sourceDomain = DOMAIN_SORA,
+            targetDomain = DOMAIN_ETH,
+            networkId = networkId,
+            verifierAddress = verifierAddress,
+            bridgeAddress = bridgeAddress,
+            verifierCodeHash = verifierCodeHash,
+            verifierKeyHash = verifierKeyHash,
+        )
+        require(binding.networkId == ETH_MAINNET_NETWORK_ID) {
+            "Ethereum mainnet destinationBinding.networkId must be chain id 1"
+        }
+        return binding
+    }
+
+    /** Canonical governed Ethereum mainnet destination binding hash. */
+    @JvmStatic
+    @JvmOverloads
+    fun ethereumMainnetDestinationBindingHash(
+        verifierAddress: String,
+        bridgeAddress: String,
+        verifierCodeHash: String,
+        verifierKeyHash: String,
+        networkId: String = ETH_MAINNET_NETWORK_ID,
+    ): String = ethereumMainnetDestinationBinding(
+        verifierAddress = verifierAddress,
+        bridgeAddress = bridgeAddress,
+        verifierCodeHash = verifierCodeHash,
+        verifierKeyHash = verifierKeyHash,
+        networkId = networkId,
+    ).hash
+
+    /** Governed BSC mainnet destination binding for UI-side SCCP proof generation. */
+    @JvmStatic
+    @JvmOverloads
+    fun bscMainnetDestinationBinding(
+        verifierAddress: String,
+        bridgeAddress: String,
+        verifierCodeHash: String,
+        verifierKeyHash: String,
+        networkId: String = BSC_MAINNET_NETWORK_ID,
+    ): EvmDestinationBinding {
+        val binding = evmDestinationBinding(
+            sourceDomain = DOMAIN_SORA,
+            targetDomain = DOMAIN_BSC,
+            networkId = networkId,
+            verifierAddress = verifierAddress,
+            bridgeAddress = bridgeAddress,
+            verifierCodeHash = verifierCodeHash,
+            verifierKeyHash = verifierKeyHash,
+        )
+        require(binding.networkId == BSC_MAINNET_NETWORK_ID) {
+            "BSC mainnet networkId must be chain id 56"
+        }
+        return binding
+    }
+
+    /** Canonical governed BSC mainnet destination binding hash. */
+    @JvmStatic
+    @JvmOverloads
+    fun bscMainnetDestinationBindingHash(
+        verifierAddress: String,
+        bridgeAddress: String,
+        verifierCodeHash: String,
+        verifierKeyHash: String,
+        networkId: String = BSC_MAINNET_NETWORK_ID,
+    ): String = bscMainnetDestinationBinding(
+        verifierAddress = verifierAddress,
+        bridgeAddress = bridgeAddress,
+        verifierCodeHash = verifierCodeHash,
+        verifierKeyHash = verifierKeyHash,
+        networkId = networkId,
     ).hash
 
     /** Governed TRON destination binding for UI-side SCCP proof generation. */
@@ -1191,7 +1281,7 @@ object SccpSourceProofs {
         val out = ByteArrayOutputStream()
         out.write(1)
         writeU32Le(out, normalizeDomain(sourceDomain, "sourceDomain"))
-        out.write(hex32Bytes(sourceEventDigest, "sourceEventDigest"))
+        out.write(nonZeroHex32Bytes(sourceEventDigest, "sourceEventDigest"))
         writeU64Le(out, normalizeU64(beaconSlot, "beaconSlot"))
         writeU64Le(out, normalizeU64(executionBlockNumber, "executionBlockNumber"))
         out.write(hex32Bytes(executionBlockHash, "executionBlockHash"))
@@ -1568,7 +1658,7 @@ object SccpSourceProofs {
         val out = ByteArrayOutputStream()
         out.write(1)
         writeU32Le(out, normalizeDomain(sourceDomain, "sourceDomain"))
-        out.write(hex32Bytes(sourceEventDigest, "sourceEventDigest"))
+        out.write(nonZeroHex32Bytes(sourceEventDigest, "sourceEventDigest"))
         writeU64Le(out, normalizeU64(validatorEpoch, "validatorEpoch"))
         writeU64Le(out, normalizeU64(blockNumber, "blockNumber"))
         out.write(hex32Bytes(blockHash, "blockHash"))
@@ -2622,7 +2712,7 @@ object SccpSourceProofs {
         val out = ByteArrayOutputStream()
         out.write(1)
         writeU32Le(out, normalizeDomain(sourceDomain, "sourceDomain"))
-        out.write(hex32Bytes(sourceEventDigest, "sourceEventDigest"))
+        out.write(nonZeroHex32Bytes(sourceEventDigest, "sourceEventDigest"))
         out.write(SUBSTRATE_SYSTEM_EVENTS_STORAGE_KEY)
         writeU64Le(out, normalizeU64(sourceEventLeafIndex, "sourceEventLeafIndex"))
         writeU64Le(out, normalizeU64(finalizedBlockNumber, "finalizedBlockNumber"))

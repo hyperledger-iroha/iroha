@@ -3,9 +3,19 @@ import Foundation
 
 /// SCCP domain id for Ethereum.
 public let sccpDomainEthereum: UInt32 = 1
+/// Ethereum mainnet EVM chain id.
+public let sccpEthereumMainnetChainId: UInt64 = 1
+/// Ethereum mainnet EVM chain id encoded as a 32-byte ABI word.
+public let sccpEthereumMainnetNetworkId =
+    "0x0000000000000000000000000000000000000000000000000000000000000001"
 
 /// SCCP domain id for BNB Smart Chain.
 public let sccpDomainBsc: UInt32 = 2
+/// BNB Smart Chain mainnet EVM chain id.
+public let sccpBscMainnetChainId: UInt64 = 56
+/// BNB Smart Chain mainnet EVM chain id encoded as a 32-byte ABI word.
+public let sccpBscMainnetNetworkId =
+    "0x0000000000000000000000000000000000000000000000000000000000000038"
 
 /// SCCP domain id for TRON.
 public let sccpDomainTron: UInt32 = 5
@@ -488,6 +498,86 @@ public func sccpEvmDestinationBindingHash(
         verifierKeyHash: verifierKeyHash,
         verifierBackend: verifierBackend,
         proofFamily: proofFamily
+    ).hash
+}
+
+/// Governed Ethereum mainnet destination binding for UI-side SCCP proof generation.
+public func sccpEthereumMainnetDestinationBinding(
+    verifierAddress: String,
+    bridgeAddress: String,
+    verifierCodeHash: String,
+    verifierKeyHash: String,
+    networkId: String = sccpEthereumMainnetNetworkId
+) throws -> EvmSccpDestinationBinding {
+    let binding = try sccpEvmDestinationBinding(
+        sourceDomain: sccpDomainSora,
+        targetDomain: sccpDomainEthereum,
+        networkId: networkId,
+        verifierAddress: verifierAddress,
+        bridgeAddress: bridgeAddress,
+        verifierCodeHash: verifierCodeHash,
+        verifierKeyHash: verifierKeyHash
+    )
+    guard binding.networkId == sccpEthereumMainnetNetworkId else {
+        throw SccpSourceProofHashError.invalidSourceMaterial("networkId")
+    }
+    return binding
+}
+
+/// Canonical governed Ethereum mainnet destination binding hash.
+public func sccpEthereumMainnetDestinationBindingHash(
+    verifierAddress: String,
+    bridgeAddress: String,
+    verifierCodeHash: String,
+    verifierKeyHash: String,
+    networkId: String = sccpEthereumMainnetNetworkId
+) throws -> String {
+    try sccpEthereumMainnetDestinationBinding(
+        verifierAddress: verifierAddress,
+        bridgeAddress: bridgeAddress,
+        verifierCodeHash: verifierCodeHash,
+        verifierKeyHash: verifierKeyHash,
+        networkId: networkId
+    ).hash
+}
+
+/// Governed BSC mainnet destination binding for UI-side SCCP proof generation.
+public func sccpBscMainnetDestinationBinding(
+    verifierAddress: String,
+    bridgeAddress: String,
+    verifierCodeHash: String,
+    verifierKeyHash: String,
+    networkId: String = sccpBscMainnetNetworkId
+) throws -> EvmSccpDestinationBinding {
+    let binding = try sccpEvmDestinationBinding(
+        sourceDomain: sccpDomainSora,
+        targetDomain: sccpDomainBsc,
+        networkId: networkId,
+        verifierAddress: verifierAddress,
+        bridgeAddress: bridgeAddress,
+        verifierCodeHash: verifierCodeHash,
+        verifierKeyHash: verifierKeyHash
+    )
+    guard binding.networkId == sccpBscMainnetNetworkId else {
+        throw SccpSourceProofHashError.invalidSourceMaterial("networkId")
+    }
+    return binding
+}
+
+/// Canonical governed BSC mainnet destination binding hash.
+public func sccpBscMainnetDestinationBindingHash(
+    verifierAddress: String,
+    bridgeAddress: String,
+    verifierCodeHash: String,
+    verifierKeyHash: String,
+    networkId: String = sccpBscMainnetNetworkId
+) throws -> String {
+    try sccpBscMainnetDestinationBinding(
+        verifierAddress: verifierAddress,
+        bridgeAddress: bridgeAddress,
+        verifierCodeHash: verifierCodeHash,
+        verifierKeyHash: verifierKeyHash,
+        networkId: networkId
     ).hash
 }
 
@@ -1131,7 +1221,7 @@ public func canonicalEvmSccpReceiptProofBytes(sourceDomain: UInt32 = sccpDomainE
     var out = Data()
     out.append(1)
     sourceProofAppendU32Le(sourceDomain, to: &out)
-    try out.append(sourceProofBytesFromHex32(sourceEventDigest, field: "sourceEventDigest"))
+    try out.append(sourceProofNonZeroBytesFromHex32(sourceEventDigest, field: "sourceEventDigest"))
     sourceProofAppendU64Le(beaconSlot, to: &out)
     sourceProofAppendU64Le(executionBlockNumber, to: &out)
     try out.append(sourceProofBytesFromHex32(executionBlockHash, field: "executionBlockHash"))
@@ -1531,7 +1621,7 @@ public func canonicalBscSccpReceiptProofBytes(sourceDomain: UInt32 = sccpDomainB
     var out = Data()
     out.append(1)
     sourceProofAppendU32Le(sourceDomain, to: &out)
-    try out.append(sourceProofBytesFromHex32(sourceEventDigest, field: "sourceEventDigest"))
+    try out.append(sourceProofNonZeroBytesFromHex32(sourceEventDigest, field: "sourceEventDigest"))
     sourceProofAppendU64Le(validatorEpoch, to: &out)
     sourceProofAppendU64Le(blockNumber, to: &out)
     try out.append(sourceProofBytesFromHex32(blockHash, field: "blockHash"))
@@ -4213,7 +4303,7 @@ public func canonicalSubstrateSccpStorageProofBytes(sourceDomain: UInt32,
     var out = Data()
     out.append(1)
     sourceProofAppendU32Le(sourceDomain, to: &out)
-    try out.append(sourceProofBytesFromHex32(sourceEventDigest, field: "sourceEventDigest"))
+    try out.append(sourceProofNonZeroBytesFromHex32(sourceEventDigest, field: "sourceEventDigest"))
     out.append(sccpSubstrateSystemEventsStorageKey)
     sourceProofAppendU64Le(sourceEventLeafIndex, to: &out)
     sourceProofAppendU64Le(finalizedBlockNumber, to: &out)

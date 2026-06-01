@@ -4213,6 +4213,12 @@ pub struct SccpRouteAllowlist {
     pub evm_route_canary_transaction_hash: Option<String>,
     /// EVM MessageProofAccepted log index bound by route canary evidence.
     pub evm_route_canary_log_index: Option<u32>,
+    /// Positive EVM block number containing the route canary receipt.
+    pub evm_route_canary_receipt_block_number: Option<u64>,
+    /// Hex-encoded EVM block hash for the route canary receipt block.
+    pub evm_route_canary_receipt_block_hash: Option<String>,
+    /// Hex-encoded EVM receiptsRoot for the route canary receipt block.
+    pub evm_route_canary_block_receipts_root: Option<String>,
     /// Hex-encoded SHA-256 digest of the EVM submitSccpMessageProof calldata.
     pub evm_route_canary_call_data_sha256: Option<String>,
     /// Hex-encoded EVM MessageProofAccepted message id bound by route canary evidence.
@@ -4304,6 +4310,9 @@ impl SccpRouteAllowlist {
             route_canary_destination_binding_hash: self.route_canary_destination_binding_hash,
             evm_route_canary_transaction_hash: self.evm_route_canary_transaction_hash,
             evm_route_canary_log_index: self.evm_route_canary_log_index,
+            evm_route_canary_receipt_block_number: self.evm_route_canary_receipt_block_number,
+            evm_route_canary_receipt_block_hash: self.evm_route_canary_receipt_block_hash,
+            evm_route_canary_block_receipts_root: self.evm_route_canary_block_receipts_root,
             evm_route_canary_call_data_sha256: self.evm_route_canary_call_data_sha256,
             evm_route_canary_message_id: self.evm_route_canary_message_id,
             evm_route_canary_payload_hash: self.evm_route_canary_payload_hash,
@@ -18454,6 +18463,12 @@ pub struct IsoBridgeProfile {
     /// Optional profile-level embedded XML signature policy.
     pub embedded_signature_policy: Option<String>,
     #[config(default = "Vec::new()")]
+    /// SHA-256 pins of raw XMLDSig public keys accepted by this profile.
+    pub trusted_public_key_sha256: Vec<String>,
+    #[config(default = "Vec::new()")]
+    /// SHA-256 pins of DER XMLDSig X.509 certificates accepted by this profile.
+    pub trusted_certificate_sha256: Vec<String>,
+    #[config(default = "Vec::new()")]
     /// Required reference datasets for this profile.
     pub required_reference_datasets: Vec<String>,
     #[config(default = "Vec::new()")]
@@ -20183,6 +20198,8 @@ impl IsoBridgeProfile {
             id: self.id,
             rail: self.rail,
             embedded_signature_policy: self.embedded_signature_policy,
+            trusted_public_key_sha256: self.trusted_public_key_sha256,
+            trusted_certificate_sha256: self.trusted_certificate_sha256,
             required_reference_datasets: self.required_reference_datasets,
             message_profiles: self
                 .message_profiles
@@ -20560,6 +20577,12 @@ mod offline_cfg_tests {
                     "id": "swift-cbpr-plus",
                     "rail": "swift-cbpr-plus",
                     "embedded_signature_policy": "reject-unsupported",
+                    "trusted_public_key_sha256": [
+                        "1111111111111111111111111111111111111111111111111111111111111111"
+                    ],
+                    "trusted_certificate_sha256": [
+                        "2222222222222222222222222222222222222222222222222222222222222222"
+                    ],
                     "required_reference_datasets": ["bic-lei"],
                     "message_profiles": [
                         {

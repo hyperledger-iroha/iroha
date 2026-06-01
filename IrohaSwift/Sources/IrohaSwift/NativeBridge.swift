@@ -1936,14 +1936,66 @@ public final class NoritoNativeBridge: @unchecked Sendable {
         if let defundNoteSymbol = staticHandle.flatMap({ dlsym($0, "connect_norito_encode_defund_offline_note_signed_transaction") }) {
             self.encodeDefundOfflineNoteFn = unsafeBitCast(defundNoteSymbol, to: EncodeDefundOfflineNoteTxFn.self)
         }
-        self.kagemushaProveVerifiedCompactPaymentTokenWithRecordsFn =
-            connect_norito_kagemusha_prove_verified_compact_payment_token_with_records
-        self.kagemushaProveVerifiedRecursiveAggregationProofBundleWithRecordsAndPallasOpenEnvelopesFn =
-            connect_norito_kagemusha_prove_verified_recursive_aggregation_proof_bundle_with_records_and_pallas_open_envelopes
-        self.kagemushaRecursiveSpendInitFn = connect_norito_kagemusha_recursive_spend_init
-        self.kagemushaRecursiveSpendAppendFn = connect_norito_kagemusha_recursive_spend_append
-        self.kagemushaRecursiveSpendVerifyFn = connect_norito_kagemusha_recursive_spend_verify
-        self.kagemushaRecursiveSpendRedeemFn = connect_norito_kagemusha_recursive_spend_redeem
+        if let kagemushaSymbol = staticHandle.flatMap({
+            dlsym($0, "connect_norito_kagemusha_prove_verified_compact_payment_token_with_records")
+        }) {
+            self.kagemushaProveVerifiedCompactPaymentTokenWithRecordsFn = unsafeBitCast(
+                kagemushaSymbol,
+                to: KagemushaProveVerifiedCompactPaymentTokenWithRecordsFn.self
+            )
+        } else {
+            self.kagemushaProveVerifiedCompactPaymentTokenWithRecordsFn = nil
+        }
+        if let kagemushaRecursiveSymbol = staticHandle.flatMap({
+            dlsym($0, "connect_norito_kagemusha_prove_verified_recursive_aggregation_proof_bundle_with_records_and_pallas_open_envelopes")
+        }) {
+            self.kagemushaProveVerifiedRecursiveAggregationProofBundleWithRecordsAndPallasOpenEnvelopesFn = unsafeBitCast(
+                kagemushaRecursiveSymbol,
+                to: KagemushaProveVerifiedRecursiveAggregationProofBundleWithRecordsAndPallasOpenEnvelopesFn.self
+            )
+        } else {
+            self.kagemushaProveVerifiedRecursiveAggregationProofBundleWithRecordsAndPallasOpenEnvelopesFn = nil
+        }
+        if let kagemushaRecursiveSpendInitSymbol = staticHandle.flatMap({
+            dlsym($0, "connect_norito_kagemusha_recursive_spend_init")
+        }) {
+            self.kagemushaRecursiveSpendInitFn = unsafeBitCast(
+                kagemushaRecursiveSpendInitSymbol,
+                to: KagemushaRecursiveSpendArchiveFn.self
+            )
+        } else {
+            self.kagemushaRecursiveSpendInitFn = nil
+        }
+        if let kagemushaRecursiveSpendAppendSymbol = staticHandle.flatMap({
+            dlsym($0, "connect_norito_kagemusha_recursive_spend_append")
+        }) {
+            self.kagemushaRecursiveSpendAppendFn = unsafeBitCast(
+                kagemushaRecursiveSpendAppendSymbol,
+                to: KagemushaRecursiveSpendArchiveFn.self
+            )
+        } else {
+            self.kagemushaRecursiveSpendAppendFn = nil
+        }
+        if let kagemushaRecursiveSpendVerifySymbol = staticHandle.flatMap({
+            dlsym($0, "connect_norito_kagemusha_recursive_spend_verify")
+        }) {
+            self.kagemushaRecursiveSpendVerifyFn = unsafeBitCast(
+                kagemushaRecursiveSpendVerifySymbol,
+                to: KagemushaRecursiveSpendArchiveFn.self
+            )
+        } else {
+            self.kagemushaRecursiveSpendVerifyFn = nil
+        }
+        if let kagemushaRecursiveSpendRedeemSymbol = staticHandle.flatMap({
+            dlsym($0, "connect_norito_kagemusha_recursive_spend_redeem")
+        }) {
+            self.kagemushaRecursiveSpendRedeemFn = unsafeBitCast(
+                kagemushaRecursiveSpendRedeemSymbol,
+                to: KagemushaRecursiveSpendArchiveFn.self
+            )
+        } else {
+            self.kagemushaRecursiveSpendRedeemFn = nil
+        }
         self.freeFn = connect_norito_free
         self.setChainDiscriminantFn = connect_norito_set_chain_discriminant
         self.bridgeStatus = .valid(path: "static", identifier: NoritoBridgeLoader.currentIdentifier())

@@ -389,6 +389,25 @@ class TonSccpProverTest {
         assertEquals("0x09c63ca1185b537f0a37b7b248600a0992e5b7ed64ace9d1d437db7caae00686", hash)
         assertTrue(hash != changed)
         assertTrue(hash != changedShardState)
+        val zeroSourceEventDigest = assertFailsWith<IllegalArgumentException> {
+            SccpTon.canonicalShardProofBytes(
+                sourceEventDigest = "00".repeat(32),
+                masterchainSeqno = "19",
+                masterchainBlockHash = "aa".repeat(32),
+                shardWorkchainId = 0,
+                shardShard = "9223372036854775808",
+                shardSeqno = "7",
+                shardBlockHash = "bb".repeat(32),
+                shardFileHash = "bc".repeat(32),
+                shardStateRoot = "cc".repeat(32),
+                transactionRoot = "dd".repeat(32),
+                transactionLt = "7",
+                shardStateLeafIndex = "0",
+                shardStateInclusionBranch = shardStateBranch,
+                inclusionBranch = branch,
+            )
+        }
+        assertTrue(zeroSourceEventDigest.message.orEmpty().contains("sourceEventDigest must not be zero"))
 
         val hashmapBoc = hexBytes(
             "b5ee9c72010103010073000101c00101d37fffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff84400000000000000000000000000000000000000000000000000000000000000005a75fc0633903343b684ec73076c5a48cf6b453fc73aa316c2a6de900669e41900000000000000078020000",

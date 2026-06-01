@@ -1593,9 +1593,34 @@ frontier/fork/quorum/RBC/rbc-causality/rbc-deliver-acceptance/rbc-commit-process
   twenty-four expected-failure configs as Apalache.
   It first runs
   `scripts/formal/check_sumeragi_formal_coverage.py` so runner modes, CI
-  commands, README commands, and referenced TLA+/CFG files stay in sync before
-  Apalache starts. For reproducible local setup without Docker, install the pinned
-  toolchain with `bash scripts/formal/install_apalache.sh 0.52.2`.
+  commands, workflow entrypoints, Apalache version pins, README commands,
+  length-table-derived bidirectional TLC fast-mode runner coverage,
+  duplicate-free and shadow-free runner case labels,
+  duplicate-free Apalache command lists including scheduled/manual workflow
+  commands, exact Apalache runner-mode CI reachability, unused runner-branch
+  rejection, documented mutation-mode expected-failure coverage, TLC
+  mutation-mode expected-failure runner routing, Apalache/TLC mutation CFG
+  equivalence, expected-failure counterexample semantics, baseline
+  expected-failure marker rejection, well-formed single-assignment runner proof
+  inputs and scalar runner assignments, flat direct-child formal path and suffix
+  containment, runner command shape, runner invocation proof-input binding, TLC
+  constraint operator binding,
+  non-type-only CFG
+  checks, Apalache/TLC TLA module identity, TLC module identifier and
+  module-file reachability, TLA dependency resolution, Apalache length
+  declarations, well-formed purpose-bearing duplicate-free README length rows,
+  and README length table agreement, single top-of-file TLA module-header
+  consistency, single terminating TLA `====` markers, duplicate-free TLA constant and top-level
+  operator declarations, TLA variable/`vars` tuple consistency, CFG/module
+  filename ownership,
+  supported CFG directive validation, CFG behavior/check declarations, static
+  CFG operator-name syntax, top-level operator definitions, complete constant
+  bindings, fail-closed CFG constant block binding shape,
+  duplicate-free `CHECK_DEADLOCK` directives, duplicate-free constant/check
+  targets, complete TLA+/CFG inventory reachability, and referenced TLA+/CFG
+  files stay in sync before Apalache starts.
+  For reproducible local setup without Docker, install the pinned toolchain with
+  `bash scripts/formal/install_apalache.sh 0.52.2`.
   The `block-sync-roster-status` family covers block-sync roster source/drop
   counters, snapshot projection, and reset accounting. Its TLC cross-check
   independently exhausts the same twenty-four expected-failure configs as

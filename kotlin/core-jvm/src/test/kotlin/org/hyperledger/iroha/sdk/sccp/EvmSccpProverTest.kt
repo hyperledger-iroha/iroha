@@ -201,8 +201,11 @@ class EvmSccpProverTest {
         assertFalse(callbackSnapshot === request)
         assertEquals(request, callbackSnapshot)
         val snapshotBundle = callbackSnapshot.bundleBytes
+        val snapshotSourceProof = callbackSnapshot.sourceProofBytes
         snapshotBundle[0] = 77
+        snapshotSourceProof[0] = 77
         assertContentEquals(byteArrayOf(5, 6, 7), callbackSnapshot.bundleBytes)
+        assertContentEquals(byteArrayOf(9, 10), callbackSnapshot.sourceProofBytes)
     }
 
     @Test
@@ -533,6 +536,596 @@ class EvmSccpProverTest {
             )
         }
         assertTrue(wrongTargetError.message?.contains("ETH or BSC") == true)
+    }
+
+    @Test
+    fun bscMainnetFacadeRequiresChainId56AndBscTarget() {
+        val proofBytes = sampleGroth16ProofBytes()
+        val binding = SccpBsc.destinationBinding(
+            verifierAddress = "0x" + "11".repeat(20),
+            bridgeAddress = "0x" + "22".repeat(20),
+            verifierCodeHash = "0x" + "bb".repeat(32),
+            verifierKeyHash = "0x" + "cc".repeat(32),
+        )
+        assertEquals(SccpSourceProofs.BSC_MAINNET_NETWORK_ID, binding.networkId)
+        assertEquals(SccpEvm.DOMAIN_BSC, binding.targetDomain)
+        assertEquals(binding.hash, SccpBsc.destinationBindingHash(
+            verifierAddress = "0x" + "11".repeat(20),
+            bridgeAddress = "0x" + "22".repeat(20),
+            verifierCodeHash = "0x" + "bb".repeat(32),
+            verifierKeyHash = "0x" + "cc".repeat(32),
+        ))
+
+        val request = SccpBsc.buildProofRequest(
+            EvmSccpProofRequestInput(
+                publicInputs = samplePublicInputs(targetDomain = SccpEvm.DOMAIN_BSC),
+                bundleBytes = byteArrayOf(5, 6, 7),
+                sourceProofBytes = byteArrayOf(9, 10),
+                statementHash = "56".repeat(32),
+                destinationBinding = binding,
+            ),
+        )
+        assertEquals(SccpEvm.DOMAIN_BSC, request.targetDomain)
+        assertEquals(binding.hash, request.destinationBindingHash)
+
+        val result = SccpBsc.wrapProofResult(proofBytes, request)
+        val submission = SccpBsc.buildSubmission(EvmSccpSubmissionInput(result))
+        assertEquals(SccpEvm.DOMAIN_BSC, submission.targetDomain)
+        assertEquals("evm_groth16_contract_call", submission.platformPayload)
+        assertContentEquals(proofBytes, submission.proofBytes)
+        val submitted = BscMainnetSccp(
+            outboundSubmitter = BscMainnetOutboundSubmitter { outboundSubmission ->
+                assertEquals(SccpEvm.DOMAIN_BSC, outboundSubmission.targetDomain)
+                assertContentEquals(proofBytes, outboundSubmission.proofBytes)
+                assertEquals(binding.hash, outboundSubmission.destinationBindingHash)
+                "bsc-submitted"
+            },
+        ).submitOutboundToBsc(EvmSccpSubmissionInput(result))
+        assertEquals("bsc-submitted", submitted)
+        assertFailsWith<IllegalStateException> {
+            BscMainnetSccp().submitOutboundToBsc(EvmSccpSubmissionInput(result))
+        }
+
+        val wrongChainBinding = SccpSourceProofs.evmDestinationBinding(
+            targetDomain = SccpEvm.DOMAIN_BSC,
+            networkId = "0x" + "33".repeat(32),
+            verifierAddress = "0x" + "11".repeat(20),
+            bridgeAddress = "0x" + "22".repeat(20),
+            verifierCodeHash = "0x" + "bb".repeat(32),
+            verifierKeyHash = "0x" + "cc".repeat(32),
+        )
+        assertFailsWith<IllegalArgumentException> {
+            SccpBsc.destinationBinding(
+                verifierAddress = "0x" + "11".repeat(20),
+                bridgeAddress = "0x" + "22".repeat(20),
+                verifierCodeHash = "0x" + "bb".repeat(32),
+                verifierKeyHash = "0x" + "cc".repeat(32),
+                networkId = "0x" + "33".repeat(32),
+            )
+        }
+        assertFailsWith<IllegalArgumentException> {
+            SccpBsc.buildProofRequest(
+                EvmSccpProofRequestInput(
+                    publicInputs = samplePublicInputs(targetDomain = SccpEvm.DOMAIN_BSC),
+                    bundleBytes = byteArrayOf(5, 6, 7),
+                    statementHash = "56".repeat(32),
+                    destinationBinding = wrongChainBinding,
+                ),
+            )
+        }
+        assertFailsWith<IllegalArgumentException> {
+            SccpBsc.buildProofRequest(sampleProductionProofRequestInput())
+        }
+        assertFailsWith<IllegalArgumentException> {
+            SccpBsc.buildSubmission(
+                EvmSccpSubmissionInput(
+                    publicInputs = samplePublicInputs(),
+                    proofBytes = proofBytes,
+                    statementHash = "56".repeat(32),
+                    destinationBindingHash = binding.hash,
+                ),
+            )
+        }
+    }
+
+    @Test
+    fun ethereumMainnetFacadeRequiresChainId1AndEthTarget() {
+        val proofBytes = sampleGroth16ProofBytes()
+        SccpEthereumMainnet.requireMainnetChainId(1L)
+        assertFailsWith<IllegalArgumentException> {
+            SccpEthereumMainnet.requireMainnetChainId(56L)
+        }
+        val binding = SccpEthereumMainnet.destinationBinding(
+            verifierAddress = "0x" + "11".repeat(20),
+            bridgeAddress = "0x" + "22".repeat(20),
+            verifierCodeHash = "0x" + "bb".repeat(32),
+            verifierKeyHash = "0x" + "cc".repeat(32),
+        )
+        assertEquals(SccpSourceProofs.ETH_MAINNET_NETWORK_ID, binding.networkId)
+        assertEquals(SccpEvm.DOMAIN_ETH, binding.targetDomain)
+        assertEquals(binding.hash, SccpEthereumMainnet.destinationBindingHash(
+            verifierAddress = "0x" + "11".repeat(20),
+            bridgeAddress = "0x" + "22".repeat(20),
+            verifierCodeHash = "0x" + "bb".repeat(32),
+            verifierKeyHash = "0x" + "cc".repeat(32),
+        ))
+
+        val input = EvmSccpProofRequestInput(
+            publicInputs = samplePublicInputs(targetDomain = SccpEvm.DOMAIN_ETH),
+            bundleBytes = byteArrayOf(5, 6, 7),
+            sourceProofBytes = byteArrayOf(9, 10),
+            statementHash = "56".repeat(32),
+            destinationBinding = binding,
+        )
+        val request = SccpEthereumMainnet.buildProofRequest(input)
+        assertEquals(SccpEvm.DOMAIN_ETH, request.targetDomain)
+        assertEquals(binding.hash, request.destinationBindingHash)
+        assertEquals(request, EthereumMainnetSccp().buildOutboundProofRequest(input))
+
+        val result = SccpEthereumMainnet.wrapProofResult(proofBytes, request)
+        val submission = EthereumMainnetSccp().buildEthereumCalldata(EvmSccpSubmissionInput(result))
+        assertEquals(SccpEvm.DOMAIN_ETH, submission.targetDomain)
+        assertContentEquals(proofBytes, submission.proofBytes)
+        val submitted = EthereumMainnetSccp(
+            outboundSubmitter = EthereumMainnetOutboundSubmitter { outboundSubmission ->
+                assertEquals(SccpEvm.DOMAIN_ETH, outboundSubmission.targetDomain)
+                assertContentEquals(proofBytes, outboundSubmission.proofBytes)
+                "eth-submitted"
+            },
+        ).submitOutboundToEthereum(EvmSccpSubmissionInput(result))
+        assertEquals("eth-submitted", submitted)
+        assertFailsWith<IllegalStateException> {
+            EthereumMainnetSccp().submitOutboundToEthereum(EvmSccpSubmissionInput(result))
+        }
+        assertFailsWith<IllegalArgumentException> {
+            EthereumMainnetSccp().buildEthereumCalldata(
+                EvmSccpSubmissionInput(
+                    publicInputs = samplePublicInputs(targetDomain = SccpEvm.DOMAIN_ETH),
+                    proofBytes = proofBytes,
+                    statementHash = "56".repeat(32),
+                    destinationBindingHash = binding.hash,
+                ),
+            )
+        }
+
+        assertFailsWith<IllegalArgumentException> {
+            SccpEthereumMainnet.destinationBinding(
+                verifierAddress = "0x" + "11".repeat(20),
+                bridgeAddress = "0x" + "22".repeat(20),
+                verifierCodeHash = "0x" + "bb".repeat(32),
+                verifierKeyHash = "0x" + "cc".repeat(32),
+                networkId = "0x" + "33".repeat(32),
+            )
+        }
+        assertFailsWith<IllegalArgumentException> {
+            SccpEthereumMainnet.buildProofRequest(
+                EvmSccpProofRequestInput(
+                    publicInputs = samplePublicInputs(targetDomain = SccpEvm.DOMAIN_BSC),
+                    bundleBytes = byteArrayOf(5, 6, 7),
+                    statementHash = "56".repeat(32),
+                    destinationBinding = binding,
+                ),
+            )
+        }
+    }
+
+    @Test
+    fun ethereumMainnetInboundEvidenceUsesMainnetRpcAndRejectsDrift() {
+        val txHash = "0x" + "aa".repeat(32)
+        val blockHash = "0x" + "bb".repeat(32)
+        val receipt = mapOf<String, Any?>(
+            "transactionHash" to txHash,
+            "blockHash" to blockHash,
+            "blockNumber" to "0x1234",
+            "status" to "0x1",
+        )
+        val block = mapOf<String, Any?>(
+            "hash" to blockHash,
+            "number" to "0x1234",
+            "receiptsRoot" to "0x" + "cc".repeat(32),
+        )
+        val beaconFinalityEvidence = EthereumMainnetBeaconFinalityEvidence(
+            executionBlockNumber = "0x1234",
+            executionBlockHash = blockHash,
+            executionReceiptsRoot = "0x" + "cc".repeat(32),
+            additionalFields = mapOf("finalizedHeaderRoot" to ("0x" + "dd".repeat(32))),
+        )
+        val beaconFinality = beaconFinalityEvidence.toMap()
+        val calls = mutableListOf<String>()
+        var consensusCalls = 0
+        val sdk = EthereumMainnetSccp(
+            executionProvider = EthereumMainnetExecutionProvider { method, params ->
+                calls.add(method)
+                when (method) {
+                    "eth_chainId" -> "0x1"
+                    "eth_getTransactionReceipt" -> {
+                        assertEquals(listOf(txHash), params)
+                        receipt
+                    }
+                    "eth_getBlockByHash" -> {
+                        assertEquals(listOf(blockHash, false), params)
+                        block
+                    }
+                    else -> throw IllegalArgumentException("unexpected method $method")
+                }
+            },
+            consensusProvider = EthereumMainnetConsensusProvider { collectedReceipt, collectedBlock, collectedTransactionHash ->
+                consensusCalls += 1
+                assertEquals(receipt["blockHash"], collectedBlock?.get("hash"))
+                assertEquals(receipt["transactionHash"], collectedTransactionHash)
+                assertEquals(receipt, collectedReceipt)
+                beaconFinality
+            },
+            inboundProver = EthereumMainnetInboundProver { evidence ->
+                assertEquals(SccpEvm.DOMAIN_ETH, evidence.sourceDomain)
+                assertEquals(SccpEvm.DOMAIN_SORA, evidence.targetDomain)
+                assertEquals(txHash, evidence.transactionHash)
+                assertEquals("4660", evidence.beaconFinality?.get("executionBlockNumber"))
+                assertEquals(blockHash, evidence.beaconFinality?.get("executionBlockHash"))
+                byteArrayOf(1, 2, 3)
+            },
+            inboundSubmitter = EthereumMainnetInboundSubmitter { proofBytes ->
+                assertContentEquals(byteArrayOf(1, 2, 3), proofBytes)
+                "submitted"
+            },
+        )
+
+        val evidence = sdk.collectInboundEvidenceFromReceipt(
+            EthereumMainnetInboundEvidence(transactionHash = txHash),
+        )
+        assertEquals(txHash, evidence.transactionHash)
+        assertEquals(receipt, evidence.receipt)
+        assertEquals(block, evidence.block)
+        assertEquals("4660", evidence.beaconFinality?.get("executionBlockNumber"))
+        assertEquals("0x" + "cc".repeat(32), evidence.beaconFinality?.get("executionReceiptsRoot"))
+        assertEquals(1, consensusCalls)
+        assertEquals(listOf("eth_chainId", "eth_getTransactionReceipt", "eth_getBlockByHash"), calls)
+        assertContentEquals(byteArrayOf(1, 2, 3), sdk.proveInboundToSora(evidence))
+        assertEquals("submitted", sdk.submitInboundToIroha(byteArrayOf(1, 2, 3)))
+
+        assertContentEquals(
+            byteArrayOf(7, 8, 9),
+            EthereumMainnetSccp(
+                inboundProver = EthereumMainnetInboundProver { typedEvidence ->
+                    assertEquals(txHash, typedEvidence.transactionHash)
+                    assertEquals(blockHash, typedEvidence.beaconFinality?.get("executionBlockHash"))
+                    byteArrayOf(7, 8, 9)
+                },
+            ).proveInboundToSora(
+                EthereumMainnetInboundEvidence.withBeaconFinalityEvidence(
+                    receipt = receipt,
+                    block = block,
+                    beaconFinalityEvidence = beaconFinalityEvidence,
+                ),
+            ),
+        )
+
+        val perCallProviderCalls = mutableListOf<String>()
+        var perCallConsensusCalls = 0
+        val perCallSdk = EthereumMainnetSccp(
+            inboundProver = EthereumMainnetInboundProver { evidence ->
+                assertEquals(txHash, evidence.transactionHash)
+                assertEquals(blockHash, evidence.beaconFinality?.get("executionBlockHash"))
+                byteArrayOf(4, 5, 6)
+            },
+        )
+        assertContentEquals(
+            byteArrayOf(4, 5, 6),
+            perCallSdk.proveInboundToSora(
+                EthereumMainnetInboundEvidence(transactionHash = txHash),
+                provider = EthereumMainnetExecutionProvider { method, _ ->
+                    perCallProviderCalls.add(method)
+                    when (method) {
+                        "eth_chainId" -> "0x1"
+                        "eth_getTransactionReceipt" -> receipt
+                        "eth_getBlockByHash" -> block
+                        else -> throw IllegalArgumentException("unexpected method $method")
+                    }
+                },
+                consensusProvider = EthereumMainnetConsensusProvider { _, _, _ ->
+                    perCallConsensusCalls += 1
+                    beaconFinality
+                },
+            ),
+        )
+        assertEquals(listOf("eth_chainId", "eth_getTransactionReceipt", "eth_getBlockByHash"), perCallProviderCalls)
+        assertEquals(1, perCallConsensusCalls)
+
+        var proverCalls = 0
+        assertFailsWith<IllegalArgumentException> {
+            EthereumMainnetSccp(
+                inboundProver = EthereumMainnetInboundProver {
+                    proverCalls += 1
+                    byteArrayOf(1, 2, 3)
+                },
+            ).proveInboundToSora(EthereumMainnetInboundEvidence(receipt = receipt, block = block))
+        }
+        assertEquals(0, proverCalls)
+
+        assertFailsWith<IllegalArgumentException> {
+            EthereumMainnetSccp(
+                executionProvider = EthereumMainnetExecutionProvider { _, _ -> "0x38" },
+            ).collectInboundEvidenceFromReceipt(EthereumMainnetInboundEvidence(receipt = receipt))
+        }
+        assertFailsWith<IllegalArgumentException> {
+            sdk.collectInboundEvidenceFromReceipt(
+                EthereumMainnetInboundEvidence(receipt = receipt + ("status" to "0x0")),
+            )
+        }
+        assertFailsWith<IllegalArgumentException> {
+            sdk.collectInboundEvidenceFromReceipt(
+                EthereumMainnetInboundEvidence(receipt = receipt - "blockNumber", block = block),
+            )
+        }
+        assertFailsWith<IllegalArgumentException> {
+            sdk.collectInboundEvidenceFromReceipt(
+                EthereumMainnetInboundEvidence(receipt = receipt + ("blockNumber" to "0x0"), block = block),
+            )
+        }
+        assertFailsWith<IllegalArgumentException> {
+            sdk.collectInboundEvidenceFromReceipt(
+                EthereumMainnetInboundEvidence(
+                    transactionHash = txHash,
+                    receipt = receipt + ("transactionHash" to ("0x" + "ab".repeat(32))),
+                ),
+            )
+        }
+        assertFailsWith<IllegalArgumentException> {
+            sdk.collectInboundEvidenceFromReceipt(
+                EthereumMainnetInboundEvidence(
+                    receipt = receipt,
+                    block = block + ("hash" to ("0x" + "bc".repeat(32))),
+                ),
+            )
+        }
+        assertFailsWith<IllegalArgumentException> {
+            sdk.collectInboundEvidenceFromReceipt(
+                EthereumMainnetInboundEvidence(
+                    receipt = receipt,
+                    block = block - "number",
+                ),
+            )
+        }
+        assertFailsWith<IllegalArgumentException> {
+            sdk.collectInboundEvidenceFromReceipt(
+                EthereumMainnetInboundEvidence(
+                    receipt = receipt,
+                    block = block + ("number" to "0x0"),
+                ),
+            )
+        }
+        assertFailsWith<IllegalArgumentException> {
+            sdk.collectInboundEvidenceFromReceipt(
+                EthereumMainnetInboundEvidence(
+                    receipt = receipt + ("transactionHash" to txHash.uppercase()),
+                    block = block,
+                ),
+            )
+        }
+        assertFailsWith<IllegalArgumentException> {
+            sdk.collectInboundEvidenceFromReceipt(
+                EthereumMainnetInboundEvidence(
+                    receipt = receipt,
+                    block = block,
+                    beaconFinality = beaconFinality + ("executionBlockHash" to ("0x" + "bc".repeat(32))),
+                ),
+            )
+        }
+        assertFailsWith<IllegalArgumentException> {
+            sdk.collectInboundEvidenceFromReceipt(
+                EthereumMainnetInboundEvidence(
+                    receipt = receipt,
+                    block = block,
+                    beaconFinality = beaconFinality + ("executionBlockNumber" to "0x1235"),
+                ),
+            )
+        }
+        assertFailsWith<IllegalArgumentException> {
+            sdk.collectInboundEvidenceFromReceipt(
+                EthereumMainnetInboundEvidence(
+                    receipt = receipt,
+                    block = block,
+                    beaconFinality = beaconFinality + ("executionReceiptsRoot" to ("0x" + "cd".repeat(32))),
+                ),
+            )
+        }
+        assertFailsWith<IllegalArgumentException> {
+            sdk.submitInboundToIroha(byteArrayOf(0, 0))
+        }
+    }
+
+    @Test
+    fun bscMainnetInboundEvidenceUsesMainnetRpcAndRejectsDrift() {
+        val txHash = "0x" + "aa".repeat(32)
+        val blockHash = "0x" + "bb".repeat(32)
+        val receipt = mapOf<String, Any?>(
+            "transactionHash" to txHash,
+            "blockHash" to blockHash,
+            "blockNumber" to "0x1234",
+            "status" to "0x1",
+        )
+        val block = mapOf<String, Any?>(
+            "hash" to blockHash,
+            "number" to "0x1234",
+            "receiptsRoot" to "0x" + "cc".repeat(32),
+        )
+        val parliaFinalityEvidence = BscMainnetParliaFinalityEvidence(
+            executionBlockNumber = "0x1234",
+            executionBlockHash = blockHash,
+            executionReceiptsRoot = "0x" + "cc".repeat(32),
+            additionalFields = mapOf(
+                "validatorEpoch" to "0x24",
+                "commitSealHash" to ("0x" + "dd".repeat(32)),
+            ),
+        )
+        val parliaFinality = parliaFinalityEvidence.toMap()
+        val calls = mutableListOf<String>()
+        val sdk = BscMainnetSccp(
+            executionProvider = BscMainnetExecutionProvider { method, params ->
+                calls.add(method)
+                when (method) {
+                    "eth_chainId" -> "0x38"
+                    "eth_getTransactionReceipt" -> {
+                        assertEquals(listOf(txHash), params)
+                        receipt
+                    }
+                    "eth_getBlockByHash" -> {
+                        assertEquals(listOf(blockHash, false), params)
+                        block
+                    }
+                    else -> throw IllegalArgumentException("unexpected method $method")
+                }
+            },
+            inboundProver = BscMainnetInboundProver { evidence ->
+                assertEquals(SccpEvm.DOMAIN_BSC, evidence.sourceDomain)
+                assertEquals(SccpEvm.DOMAIN_SORA, evidence.targetDomain)
+                assertEquals(txHash, evidence.transactionHash)
+                assertEquals(blockHash, evidence.parliaFinality?.get("executionBlockHash"))
+                byteArrayOf(1, 2, 3)
+            },
+            inboundSubmitter = BscMainnetInboundSubmitter { proofBytes ->
+                assertContentEquals(byteArrayOf(1, 2, 3), proofBytes)
+                "submitted"
+            },
+        )
+
+        val evidence = sdk.collectInboundEvidenceFromReceipt(
+            BscMainnetInboundEvidence.withParliaFinalityEvidence(
+                transactionHash = txHash,
+                parliaFinalityEvidence = parliaFinalityEvidence,
+            ),
+        )
+        assertEquals(txHash, evidence.transactionHash)
+        assertEquals(receipt, evidence.receipt)
+        assertEquals(block, evidence.block)
+        assertEquals("4660", evidence.parliaFinality?.get("executionBlockNumber"))
+        assertEquals(blockHash, evidence.parliaFinality?.get("executionBlockHash"))
+        assertEquals(listOf("eth_chainId", "eth_getTransactionReceipt", "eth_getBlockByHash"), calls)
+        val providerFinality = BscMainnetSccp(
+            executionProvider = BscMainnetExecutionProvider { method, params ->
+                when (method) {
+                    "eth_chainId" -> "0x38"
+                    "eth_getTransactionReceipt" -> receipt
+                    "eth_getBlockByHash" -> block
+                    else -> throw IllegalArgumentException("unexpected method $method $params")
+                }
+            },
+            consensusProvider = BscMainnetConsensusProvider { _, _, _ -> parliaFinality },
+        ).collectInboundEvidenceFromReceipt(BscMainnetInboundEvidence(transactionHash = txHash))
+        assertEquals(blockHash, providerFinality.parliaFinality?.get("executionBlockHash"))
+        assertContentEquals(byteArrayOf(1, 2, 3), sdk.proveInboundToSora(evidence))
+        assertEquals("submitted", sdk.submitInboundToIroha(byteArrayOf(1, 2, 3)))
+
+        assertFailsWith<IllegalArgumentException> {
+            BscMainnetSccp(
+                executionProvider = BscMainnetExecutionProvider { _, _ -> "0x1" },
+            ).collectInboundEvidenceFromReceipt(BscMainnetInboundEvidence(receipt = receipt))
+        }
+        assertFailsWith<IllegalArgumentException> {
+            BscMainnetSccp().collectInboundEvidenceFromReceipt(
+                BscMainnetInboundEvidence(sourceDomain = SccpEvm.DOMAIN_ETH, receipt = receipt),
+            )
+        }
+        assertFailsWith<IllegalArgumentException> {
+            sdk.collectInboundEvidenceFromReceipt(
+                BscMainnetInboundEvidence(receipt = receipt + ("status" to "0x0")),
+            )
+        }
+        assertFailsWith<IllegalArgumentException> {
+            sdk.collectInboundEvidenceFromReceipt(
+                BscMainnetInboundEvidence(receipt = receipt - "blockNumber", block = block),
+            )
+        }
+        assertFailsWith<IllegalArgumentException> {
+            sdk.collectInboundEvidenceFromReceipt(
+                BscMainnetInboundEvidence(receipt = receipt + ("blockNumber" to "0x0"), block = block),
+            )
+        }
+        assertFailsWith<IllegalArgumentException> {
+            sdk.collectInboundEvidenceFromReceipt(
+                BscMainnetInboundEvidence(
+                    transactionHash = txHash,
+                    receipt = receipt + ("transactionHash" to ("0x" + "ab".repeat(32))),
+                ),
+            )
+        }
+        assertFailsWith<IllegalArgumentException> {
+            sdk.collectInboundEvidenceFromReceipt(
+                BscMainnetInboundEvidence(
+                    receipt = receipt,
+                    block = block + ("hash" to ("0x" + "bc".repeat(32))),
+                ),
+            )
+        }
+        assertFailsWith<IllegalArgumentException> {
+            sdk.collectInboundEvidenceFromReceipt(
+                BscMainnetInboundEvidence(
+                    receipt = receipt,
+                    block = block - "number",
+                ),
+            )
+        }
+        assertFailsWith<IllegalArgumentException> {
+            sdk.collectInboundEvidenceFromReceipt(
+                BscMainnetInboundEvidence(
+                    receipt = receipt,
+                    block = block + ("number" to "0x0"),
+                ),
+            )
+        }
+        assertFailsWith<IllegalArgumentException> {
+            sdk.collectInboundEvidenceFromReceipt(
+                BscMainnetInboundEvidence(
+                    receipt = receipt,
+                    block = block + ("number" to "0x1235"),
+                ),
+            )
+        }
+        assertFailsWith<IllegalArgumentException> {
+            sdk.collectInboundEvidenceFromReceipt(
+                BscMainnetInboundEvidence(
+                    receipt = receipt + ("transactionHash" to txHash.uppercase()),
+                    block = block,
+                ),
+            )
+        }
+        assertFailsWith<IllegalArgumentException> {
+            BscMainnetSccp(
+                inboundProver = BscMainnetInboundProver {
+                    throw AssertionError("prover callback must not run without Parlia finality")
+                },
+            ).proveInboundToSora(BscMainnetInboundEvidence(receiptProofHash = "0x" + "ee".repeat(32)))
+        }
+        assertFailsWith<IllegalArgumentException> {
+            sdk.collectInboundEvidenceFromReceipt(
+                BscMainnetInboundEvidence(
+                    receipt = receipt,
+                    block = block,
+                    parliaFinality = parliaFinality + ("executionBlockHash" to ("0x" + "bc".repeat(32))),
+                ),
+            )
+        }
+        assertFailsWith<IllegalArgumentException> {
+            sdk.collectInboundEvidenceFromReceipt(
+                BscMainnetInboundEvidence(
+                    receipt = receipt,
+                    block = block,
+                    parliaFinality = parliaFinality + ("executionBlockNumber" to "0x1235"),
+                ),
+            )
+        }
+        assertFailsWith<IllegalArgumentException> {
+            sdk.collectInboundEvidenceFromReceipt(
+                BscMainnetInboundEvidence(
+                    receipt = receipt,
+                    block = block,
+                    parliaFinality = parliaFinality + ("executionReceiptsRoot" to ("0x" + "cd".repeat(32))),
+                ),
+            )
+        }
+        assertFailsWith<IllegalArgumentException> {
+            sdk.submitInboundToIroha(byteArrayOf(0, 0))
+        }
     }
 
     private fun sampleGroth16ProofBytes(overrides: Map<Int, ByteArray> = emptyMap()): ByteArray {

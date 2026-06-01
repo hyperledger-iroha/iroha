@@ -228,3 +228,4 @@ BugGcZeroCooldownUsesZero ==
     SpecActions(GcZeroCooldownUsesOneSecond)
 
 =============================================================================
+====

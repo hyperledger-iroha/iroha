@@ -828,6 +828,220 @@ object SccpEvm {
     }
 }
 
+/** Ethereum mainnet SCCP Groth16 helpers with chain-id and domain checks baked in. */
+object SccpEthereumMainnet {
+    const val DOMAIN_SORA: Int = SccpEvm.DOMAIN_SORA
+    const val DOMAIN_ETH: Int = SccpEvm.DOMAIN_ETH
+    const val MAINNET_CHAIN_ID: Long = SccpSourceProofs.ETH_MAINNET_CHAIN_ID
+    const val MAINNET_NETWORK_ID: String = SccpSourceProofs.ETH_MAINNET_NETWORK_ID
+
+    @JvmStatic
+    fun requireMainnetChainId(chainId: Long) {
+        require(chainId == MAINNET_CHAIN_ID) {
+            "Ethereum mainnet SCCP requires eth_chainId == 1"
+        }
+    }
+
+    @JvmStatic
+    @JvmOverloads
+    fun destinationBinding(
+        verifierAddress: String,
+        bridgeAddress: String,
+        verifierCodeHash: String,
+        verifierKeyHash: String,
+        networkId: String = MAINNET_NETWORK_ID,
+    ): SccpSourceProofs.EvmDestinationBinding =
+        SccpSourceProofs.ethereumMainnetDestinationBinding(
+            verifierAddress = verifierAddress,
+            bridgeAddress = bridgeAddress,
+            verifierCodeHash = verifierCodeHash,
+            verifierKeyHash = verifierKeyHash,
+            networkId = networkId,
+        )
+
+    @JvmStatic
+    @JvmOverloads
+    fun destinationBindingHash(
+        verifierAddress: String,
+        bridgeAddress: String,
+        verifierCodeHash: String,
+        verifierKeyHash: String,
+        networkId: String = MAINNET_NETWORK_ID,
+    ): String = destinationBinding(
+        verifierAddress = verifierAddress,
+        bridgeAddress = bridgeAddress,
+        verifierCodeHash = verifierCodeHash,
+        verifierKeyHash = verifierKeyHash,
+        networkId = networkId,
+    ).hash
+
+    @JvmStatic
+    fun buildProofRequest(input: EvmSccpProofRequestInput): EvmSccpProofRequest {
+        require(input.publicInputs.targetDomain == DOMAIN_ETH) {
+            "Ethereum mainnet proof requests must target ETH"
+        }
+        val destinationBinding = input.destinationBinding
+            ?: throw IllegalArgumentException("Ethereum mainnet proof requests require destinationBinding")
+        require(destinationBinding.targetDomain == DOMAIN_ETH) {
+            "Ethereum mainnet destinationBinding must target ETH"
+        }
+        require(destinationBinding.networkId == MAINNET_NETWORK_ID) {
+            "Ethereum mainnet destinationBinding.networkId must be chain id 1"
+        }
+        val destinationBindingHash = SccpEvm.requireDestinationBindingHashForProofRequest(
+            publicInputs = input.publicInputs,
+            destinationBinding = destinationBinding,
+            backend = input.backend,
+            sourceDomain = input.sourceDomain,
+        )
+        require(input.destinationBindingHash == destinationBindingHash) {
+            "destinationBindingHash must match Ethereum mainnet destinationBinding"
+        }
+        return SccpEvm.buildProofRequest(input)
+    }
+
+    @JvmStatic
+    fun wrapProofResult(proofBytes: ByteArray, request: EvmSccpProofRequest): EvmSccpProofResult {
+        require(request.targetDomain == DOMAIN_ETH && request.publicInputs.targetDomain == DOMAIN_ETH) {
+            "Ethereum mainnet proof results must target ETH"
+        }
+        require(request.destinationBinding?.networkId == MAINNET_NETWORK_ID) {
+            "Ethereum mainnet proof results require chain id 1 destinationBinding"
+        }
+        return SccpEvm.wrapProofResult(proofBytes, request)
+    }
+
+    @JvmStatic
+    fun buildSubmission(input: EvmSccpSubmissionInput): EvmSccpSubmission {
+        require(input.publicInputs.targetDomain == DOMAIN_ETH) {
+            "Ethereum mainnet submissions must target ETH"
+        }
+        val proofResult = input.proofResult
+            ?: throw IllegalArgumentException(
+                "Ethereum mainnet submissions require a wrapped proofResult with destinationBinding",
+            )
+        require(proofResult.publicInputs.targetDomain == DOMAIN_ETH) {
+            "Ethereum mainnet proofResult must target ETH"
+        }
+        val destinationBinding = proofResult.destinationBinding
+            ?: throw IllegalArgumentException("Ethereum mainnet proofResult requires destinationBinding")
+        require(destinationBinding.networkId == MAINNET_NETWORK_ID) {
+            "Ethereum mainnet proofResult requires chain id 1 destinationBinding"
+        }
+        require(destinationBinding.hash == proofResult.destinationBindingHash) {
+            "Ethereum mainnet proofResult destinationBindingHash must match destinationBinding"
+        }
+        return SccpEvm.buildSubmission(input)
+    }
+}
+
+/** BSC mainnet SCCP Groth16 helpers with chain-id and domain checks baked in. */
+object SccpBsc {
+    const val DOMAIN_SORA: Int = SccpEvm.DOMAIN_SORA
+    const val DOMAIN_BSC: Int = SccpEvm.DOMAIN_BSC
+    const val MAINNET_CHAIN_ID: Long = SccpSourceProofs.BSC_MAINNET_CHAIN_ID
+    const val MAINNET_NETWORK_ID: String = SccpSourceProofs.BSC_MAINNET_NETWORK_ID
+
+    @JvmStatic
+    fun requireMainnetChainId(chainId: Long) {
+        require(chainId == MAINNET_CHAIN_ID) {
+            "BSC mainnet SCCP requires eth_chainId == 56"
+        }
+    }
+
+    @JvmStatic
+    @JvmOverloads
+    fun destinationBinding(
+        verifierAddress: String,
+        bridgeAddress: String,
+        verifierCodeHash: String,
+        verifierKeyHash: String,
+        networkId: String = MAINNET_NETWORK_ID,
+    ): SccpSourceProofs.EvmDestinationBinding =
+        SccpSourceProofs.bscMainnetDestinationBinding(
+            verifierAddress = verifierAddress,
+            bridgeAddress = bridgeAddress,
+            verifierCodeHash = verifierCodeHash,
+            verifierKeyHash = verifierKeyHash,
+            networkId = networkId,
+        )
+
+    @JvmStatic
+    @JvmOverloads
+    fun destinationBindingHash(
+        verifierAddress: String,
+        bridgeAddress: String,
+        verifierCodeHash: String,
+        verifierKeyHash: String,
+        networkId: String = MAINNET_NETWORK_ID,
+    ): String = destinationBinding(
+        verifierAddress = verifierAddress,
+        bridgeAddress = bridgeAddress,
+        verifierCodeHash = verifierCodeHash,
+        verifierKeyHash = verifierKeyHash,
+        networkId = networkId,
+    ).hash
+
+    @JvmStatic
+    fun buildProofRequest(input: EvmSccpProofRequestInput): EvmSccpProofRequest {
+        require(input.publicInputs.targetDomain == DOMAIN_BSC) {
+            "BSC mainnet proof requests must target BSC"
+        }
+        val destinationBinding = input.destinationBinding
+            ?: throw IllegalArgumentException("BSC mainnet proof requests require destinationBinding")
+        require(destinationBinding.targetDomain == DOMAIN_BSC) {
+            "BSC mainnet destinationBinding must target BSC"
+        }
+        require(destinationBinding.networkId == MAINNET_NETWORK_ID) {
+            "BSC mainnet destinationBinding.networkId must be chain id 56"
+        }
+        val destinationBindingHash = SccpEvm.requireDestinationBindingHashForProofRequest(
+            publicInputs = input.publicInputs,
+            destinationBinding = destinationBinding,
+            backend = input.backend,
+            sourceDomain = input.sourceDomain,
+        )
+        require(input.destinationBindingHash == destinationBindingHash) {
+            "destinationBindingHash must match BSC mainnet destinationBinding"
+        }
+        return SccpEvm.buildProofRequest(input)
+    }
+
+    @JvmStatic
+    fun wrapProofResult(proofBytes: ByteArray, request: EvmSccpProofRequest): EvmSccpProofResult {
+        require(request.targetDomain == DOMAIN_BSC && request.publicInputs.targetDomain == DOMAIN_BSC) {
+            "BSC mainnet proof results must target BSC"
+        }
+        require(request.destinationBinding?.networkId == MAINNET_NETWORK_ID) {
+            "BSC mainnet proof results require chain id 56 destinationBinding"
+        }
+        return SccpEvm.wrapProofResult(proofBytes, request)
+    }
+
+    @JvmStatic
+    fun buildSubmission(input: EvmSccpSubmissionInput): EvmSccpSubmission {
+        require(input.publicInputs.targetDomain == DOMAIN_BSC) {
+            "BSC mainnet submissions must target BSC"
+        }
+        val proofResult = input.proofResult
+            ?: throw IllegalArgumentException(
+                "BSC mainnet submissions require a wrapped proofResult with destinationBinding",
+            )
+        require(proofResult.publicInputs.targetDomain == DOMAIN_BSC) {
+            "BSC mainnet proofResult must target BSC"
+        }
+        val destinationBinding = proofResult.destinationBinding
+            ?: throw IllegalArgumentException("BSC mainnet proofResult requires destinationBinding")
+        require(destinationBinding.networkId == MAINNET_NETWORK_ID) {
+            "BSC mainnet proofResult requires chain id 56 destinationBinding"
+        }
+        require(destinationBinding.hash == proofResult.destinationBindingHash) {
+            "BSC mainnet proofResult destinationBindingHash must match destinationBinding"
+        }
+        return SccpEvm.buildSubmission(input)
+    }
+}
+
 /** SCCP public inputs shared by EVM-family Groth16 proof requests. */
 data class EvmSccpPublicInputsInput(
     val version: Int = 1,
@@ -1264,6 +1478,158 @@ fun interface EvmSccpProofEngine {
     fun prove(request: EvmSccpProofRequest): ByteArray
 }
 
+/** App-supplied Ethereum JSON-RPC execution provider for native SCCP evidence collection. */
+fun interface EthereumMainnetExecutionProvider {
+    fun request(method: String, params: List<Any?>): Any?
+}
+
+/** App-supplied Ethereum Beacon REST finality collector for native SCCP evidence collection. */
+fun interface EthereumMainnetConsensusProvider {
+    fun collectFinalityEvidence(
+        receipt: Map<String, Any?>?,
+        block: Map<String, Any?>?,
+        transactionHash: String?,
+    ): Map<String, Any?>
+}
+
+/** Typed Ethereum beacon finality evidence required before inbound source proving. */
+data class EthereumMainnetBeaconFinalityEvidence(
+    val executionBlockNumber: String,
+    val executionBlockHash: String,
+    val executionReceiptsRoot: String,
+    val additionalFields: Map<String, Any?> = emptyMap(),
+) {
+    fun toMap(): Map<String, Any?> =
+        additionalFields + mapOf(
+            "executionBlockNumber" to executionBlockNumber,
+            "executionBlockHash" to executionBlockHash,
+            "executionReceiptsRoot" to executionReceiptsRoot,
+        )
+}
+
+/** Local Ethereum mainnet inbound source prover linked by the application bundle. */
+fun interface EthereumMainnetInboundProver {
+    fun prove(evidence: EthereumMainnetInboundEvidence): ByteArray
+}
+
+/** App-supplied Torii submitter for locally generated Ethereum inbound proofs. */
+fun interface EthereumMainnetInboundSubmitter {
+    fun submit(proofBytes: ByteArray): Any?
+}
+
+/** App-supplied Ethereum transaction submitter for locally generated outbound proof calldata. */
+fun interface EthereumMainnetOutboundSubmitter {
+    fun submit(submission: EvmSccpSubmission): Any?
+}
+
+/** Locally collected Ethereum mainnet inbound evidence before source-proof generation. */
+data class EthereumMainnetInboundEvidence(
+    val sourceDomain: Int = SccpEvm.DOMAIN_ETH,
+    val targetDomain: Int = SccpEvm.DOMAIN_SORA,
+    val transactionHash: String? = null,
+    val receipt: Map<String, Any?>? = null,
+    val block: Map<String, Any?>? = null,
+    val beaconFinality: Map<String, Any?>? = null,
+    val receiptProofHash: String? = null,
+) {
+    companion object {
+        fun withBeaconFinalityEvidence(
+            sourceDomain: Int = SccpEvm.DOMAIN_ETH,
+            targetDomain: Int = SccpEvm.DOMAIN_SORA,
+            transactionHash: String? = null,
+            receipt: Map<String, Any?>? = null,
+            block: Map<String, Any?>? = null,
+            beaconFinalityEvidence: EthereumMainnetBeaconFinalityEvidence? = null,
+            receiptProofHash: String? = null,
+        ): EthereumMainnetInboundEvidence =
+            EthereumMainnetInboundEvidence(
+                sourceDomain = sourceDomain,
+                targetDomain = targetDomain,
+                transactionHash = transactionHash,
+                receipt = receipt,
+                block = block,
+                beaconFinality = beaconFinalityEvidence?.toMap(),
+                receiptProofHash = receiptProofHash,
+            )
+    }
+}
+
+/** App-supplied BSC JSON-RPC execution provider for native SCCP evidence collection. */
+fun interface BscMainnetExecutionProvider {
+    fun request(method: String, params: List<Any?>): Any?
+}
+
+/** App-supplied BSC Parlia finality collector for native SCCP evidence collection. */
+fun interface BscMainnetConsensusProvider {
+    fun collectFinalityEvidence(
+        receipt: Map<String, Any?>?,
+        block: Map<String, Any?>?,
+        transactionHash: String?,
+    ): Map<String, Any?>
+}
+
+/** Typed BSC Parlia finality evidence required before inbound source proving. */
+data class BscMainnetParliaFinalityEvidence(
+    val executionBlockNumber: String,
+    val executionBlockHash: String,
+    val executionReceiptsRoot: String,
+    val additionalFields: Map<String, Any?> = emptyMap(),
+) {
+    fun toMap(): Map<String, Any?> =
+        additionalFields + mapOf(
+            "executionBlockNumber" to executionBlockNumber,
+            "executionBlockHash" to executionBlockHash,
+            "executionReceiptsRoot" to executionReceiptsRoot,
+        )
+}
+
+/** Local BSC mainnet inbound source prover linked by the application bundle. */
+fun interface BscMainnetInboundProver {
+    fun prove(evidence: BscMainnetInboundEvidence): ByteArray
+}
+
+/** App-supplied Torii submitter for locally generated BSC inbound proofs. */
+fun interface BscMainnetInboundSubmitter {
+    fun submit(proofBytes: ByteArray): Any?
+}
+
+/** App-supplied BSC transaction submitter for locally generated outbound proof calldata. */
+fun interface BscMainnetOutboundSubmitter {
+    fun submit(submission: EvmSccpSubmission): Any?
+}
+
+/** Locally collected BSC mainnet inbound evidence before source-proof generation. */
+data class BscMainnetInboundEvidence(
+    val sourceDomain: Int = SccpEvm.DOMAIN_BSC,
+    val targetDomain: Int = SccpEvm.DOMAIN_SORA,
+    val transactionHash: String? = null,
+    val receipt: Map<String, Any?>? = null,
+    val block: Map<String, Any?>? = null,
+    val parliaFinality: Map<String, Any?>? = null,
+    val receiptProofHash: String? = null,
+) {
+    companion object {
+        fun withParliaFinalityEvidence(
+            sourceDomain: Int = SccpEvm.DOMAIN_BSC,
+            targetDomain: Int = SccpEvm.DOMAIN_SORA,
+            transactionHash: String? = null,
+            receipt: Map<String, Any?>? = null,
+            block: Map<String, Any?>? = null,
+            parliaFinalityEvidence: BscMainnetParliaFinalityEvidence? = null,
+            receiptProofHash: String? = null,
+        ): BscMainnetInboundEvidence =
+            BscMainnetInboundEvidence(
+                sourceDomain = sourceDomain,
+                targetDomain = targetDomain,
+                transactionHash = transactionHash,
+                receipt = receipt,
+                block = block,
+                parliaFinality = parliaFinalityEvidence?.toMap(),
+                receiptProofHash = receiptProofHash,
+            )
+    }
+}
+
 /** Local-first EVM-family SCCP Groth16 proof wrapper for UI SDKs. */
 class EvmSccpProver(
     private val witnessProvider: EvmSccpWitnessProvider? = null,
@@ -1277,6 +1643,688 @@ class EvmSccpProver(
         val engine = proofEngine ?: throw IllegalStateException("EVM-family SCCP Groth16 prover is not linked")
         SccpEvm.requireProductionProofRequest(request)
         return SccpEvm.wrapProofResult(engine.prove(SccpEvm.callbackRequestSnapshot(request)), request)
+    }
+
+    private fun witnessProviderInputSnapshot(input: EvmSccpProofRequestInput): EvmSccpProofRequestInput =
+        input.copy(
+            bundleBytes = input.bundleBytes.copyOf(),
+            sourceProofBytes = input.sourceProofBytes.copyOf(),
+        )
+}
+
+/** Local-first Ethereum mainnet SCCP Groth16 proof wrapper for UI SDKs. */
+class EthereumMainnetSccp(
+    private val witnessProvider: EvmSccpWitnessProvider? = null,
+    private val proofEngine: EvmSccpProofEngine? = null,
+    private val executionProvider: EthereumMainnetExecutionProvider? = null,
+    private val consensusProvider: EthereumMainnetConsensusProvider? = null,
+    private val inboundProver: EthereumMainnetInboundProver? = null,
+    private val inboundSubmitter: EthereumMainnetInboundSubmitter? = null,
+    private val outboundSubmitter: EthereumMainnetOutboundSubmitter? = null,
+) {
+    fun validateExecutionProviderMainnet(provider: EthereumMainnetExecutionProvider? = executionProvider): Any? {
+        val selectedProvider = provider
+            ?: throw IllegalStateException("Ethereum mainnet execution provider is not linked")
+        val chainId = selectedProvider.request("eth_chainId", emptyList())
+        SccpEthereumMainnet.requireMainnetChainId(normalizeMainnetChainId(chainId))
+        return chainId
+    }
+
+    fun collectInboundEvidenceFromReceipt(
+        input: EthereumMainnetInboundEvidence,
+        provider: EthereumMainnetExecutionProvider? = executionProvider,
+        consensusProvider: EthereumMainnetConsensusProvider? = this.consensusProvider,
+    ): EthereumMainnetInboundEvidence {
+        require(input.sourceDomain == SccpEvm.DOMAIN_ETH) {
+            "Ethereum mainnet inbound evidence sourceDomain must be ETH"
+        }
+        require(input.targetDomain == SccpEvm.DOMAIN_SORA) {
+            "Ethereum mainnet inbound evidence targetDomain must be SORA"
+        }
+        provider?.let { validateExecutionProviderMainnet(it) }
+
+        var transactionHash = input.transactionHash?.let {
+            normalizeRpcHex(it, "transactionHash", 32)
+        }
+        var receipt = input.receipt
+        if (receipt == null && transactionHash != null && provider != null) {
+            receipt = requireMap(
+                provider.request("eth_getTransactionReceipt", listOf(transactionHash)),
+                "eth_getTransactionReceipt",
+            )
+        }
+        if (receipt == null && input.receiptProofHash == null) {
+            throw IllegalArgumentException(
+                "Ethereum mainnet inbound evidence requires receipt, receiptProofHash, or transactionHash",
+            )
+        }
+
+        var blockHash: String? = null
+        var receiptBlockNumber: String? = null
+        var blockReceiptsRoot: String? = null
+        if (receipt != null) {
+            require(receipt["status"] == "0x1") {
+                "Ethereum mainnet inbound receipt status must be 0x1"
+            }
+            val receiptTransactionHash = normalizeRpcHex(
+                receipt["transactionHash"] ?: receipt["transaction_hash"],
+                "receipt.transactionHash",
+                32,
+            )
+            if (transactionHash != null) {
+                require(receiptTransactionHash == transactionHash) {
+                    "receipt.transactionHash must match transactionHash"
+                }
+            }
+            transactionHash = receiptTransactionHash
+            blockHash = normalizeRpcHex(receipt["blockHash"] ?: receipt["block_hash"], "receipt.blockHash", 32)
+            receiptBlockNumber = normalizePositiveRpcQuantity(
+                receipt["blockNumber"] ?: receipt["block_number"],
+                "receipt.blockNumber",
+            )
+        }
+
+        var block = input.block
+        if (block == null && blockHash != null && provider != null) {
+            block = requireMap(
+                provider.request("eth_getBlockByHash", listOf(blockHash, false)),
+                "eth_getBlockByHash",
+            )
+        }
+        if (block != null) {
+            val normalizedBlockHash = normalizeRpcHex(block["hash"], "block.hash", 32)
+            if (blockHash != null) {
+                require(normalizedBlockHash == blockHash) {
+                    "block.hash must match receipt.blockHash"
+                }
+            }
+            val blockNumber = normalizePositiveRpcQuantity(
+                block["number"] ?: block["blockNumber"] ?: block["block_number"],
+                "block.number",
+            )
+            if (receiptBlockNumber != null) {
+                require(blockNumber == receiptBlockNumber) {
+                    "block.number must match receipt.blockNumber"
+                }
+            }
+            receiptBlockNumber = blockNumber
+            blockReceiptsRoot = normalizeRpcHex(block["receiptsRoot"] ?: block["receipts_root"], "block.receiptsRoot", 32)
+        }
+
+        val beaconFinality = input.beaconFinality
+            ?: consensusProvider?.collectFinalityEvidence(receipt, block, transactionHash)
+        val normalizedBeaconFinality = beaconFinality?.let {
+            normalizeBeaconFinality(
+                it,
+                expectedBlockHash = blockHash,
+                expectedBlockNumber = receiptBlockNumber,
+                expectedReceiptsRoot = blockReceiptsRoot,
+            )
+        }
+
+        return input.copy(
+            sourceDomain = SccpEvm.DOMAIN_ETH,
+            targetDomain = SccpEvm.DOMAIN_SORA,
+            transactionHash = transactionHash,
+            receipt = receipt,
+            block = block,
+            beaconFinality = normalizedBeaconFinality,
+            receiptProofHash = input.receiptProofHash?.let {
+                normalizeRpcHex(it, "receiptProofHash", 32)
+            },
+        )
+    }
+
+    fun proveInboundToSora(
+        input: EthereumMainnetInboundEvidence,
+        provider: EthereumMainnetExecutionProvider? = executionProvider,
+        consensusProvider: EthereumMainnetConsensusProvider? = this.consensusProvider,
+    ): ByteArray {
+        val prover = inboundProver
+            ?: throw IllegalStateException("Ethereum mainnet SCCP inbound prover is not linked")
+        val evidence = collectInboundEvidenceFromReceipt(input, provider, consensusProvider)
+        require(evidence.beaconFinality != null) {
+            "Ethereum mainnet SCCP inbound proof requires beaconFinality"
+        }
+        return prover.prove(evidence)
+    }
+
+    fun submitInboundToIroha(proofBytes: ByteArray): Any? {
+        require(proofBytes.isNotEmpty()) { "proofBytes must not be empty" }
+        require(proofBytes.any { it.toInt() != 0 }) { "proofBytes must not be all zero" }
+        val submitter = inboundSubmitter
+            ?: throw IllegalStateException("Ethereum mainnet SCCP inbound submitter is not linked")
+        return submitter.submit(proofBytes.copyOf())
+    }
+
+    fun buildOutboundProofRequest(input: EvmSccpProofRequestInput): EvmSccpProofRequest =
+        SccpEthereumMainnet.buildProofRequest(
+            witnessProvider?.resolveWitness(witnessProviderInputSnapshot(input)) ?: input,
+        )
+
+    fun proveOutboundToEthereum(input: EvmSccpProofRequestInput): EvmSccpProofResult {
+        val request = buildOutboundProofRequest(input)
+        val engine = proofEngine
+            ?: throw IllegalStateException("Ethereum mainnet SCCP Groth16 prover is not linked")
+        return SccpEthereumMainnet.wrapProofResult(
+            engine.prove(SccpEvm.callbackRequestSnapshot(request)),
+            request,
+        )
+    }
+
+    fun buildEthereumCalldata(input: EvmSccpSubmissionInput): EvmSccpSubmission =
+        SccpEthereumMainnet.buildSubmission(input)
+
+    fun submitOutboundToEthereum(input: EvmSccpSubmissionInput): Any? {
+        val submitter = outboundSubmitter
+            ?: throw IllegalStateException("Ethereum mainnet SCCP outbound submitter is not linked")
+        return submitter.submit(buildEthereumCalldata(input))
+    }
+
+    fun requireExecutionMainnet(chainId: Long) =
+        SccpEthereumMainnet.requireMainnetChainId(chainId)
+
+    private fun witnessProviderInputSnapshot(input: EvmSccpProofRequestInput): EvmSccpProofRequestInput =
+        input.copy(
+            bundleBytes = input.bundleBytes.copyOf(),
+            sourceProofBytes = input.sourceProofBytes.copyOf(),
+        )
+
+    private fun normalizeMainnetChainId(value: Any?): Long =
+        normalizeUnsignedInteger(value, "eth_chainId")
+
+    private fun normalizeUnsignedInteger(value: Any?, label: String): Long =
+        when (value) {
+            is Long -> {
+                require(value >= 0) { "$label must be non-negative" }
+                value
+            }
+            is Int -> {
+                require(value >= 0) { "$label must be non-negative" }
+                value.toLong()
+            }
+            is Short -> {
+                require(value >= 0) { "$label must be non-negative" }
+                value.toLong()
+            }
+            is Byte -> {
+                require(value >= 0) { "$label must be non-negative" }
+                value.toLong()
+            }
+            is BigInteger -> {
+                require(value.signum() >= 0 && value.bitLength() <= 63) {
+                    "$label must fit positive i64"
+                }
+                value.toLong()
+            }
+            is String -> {
+                require(value.trim() == value) { "$label must be canonical" }
+                val parsed = if (value.startsWith("0x")) {
+                    val text = value.substring(2)
+                    require(text.isNotEmpty() && text.matches(Regex("0|[1-9a-f][0-9a-f]*"))) {
+                        "$label must be a canonical JSON-RPC quantity"
+                    }
+                    BigInteger(text, 16)
+                } else {
+                    require(value.matches(Regex("0|[1-9][0-9]*"))) {
+                        "$label must be a canonical decimal integer"
+                    }
+                    BigInteger(value, 10)
+                }
+                require(parsed.bitLength() <= 63) { "$label must fit positive i64" }
+                parsed.toLong()
+            }
+            else -> throw IllegalArgumentException("$label must be a JSON-RPC quantity or integer")
+        }
+
+    private fun requireMap(value: Any?, label: String): Map<String, Any?> {
+        @Suppress("UNCHECKED_CAST")
+        return value as? Map<String, Any?>
+            ?: throw IllegalArgumentException("$label must return an object")
+    }
+
+    private fun normalizeRpcHex(value: Any?, label: String, byteLength: Int): String {
+        require(value is String) { "$label must be canonical lowercase 0x hex" }
+        require(value.trim() == value && value.startsWith("0x")) {
+            "$label must be canonical lowercase 0x hex"
+        }
+        val text = value.substring(2)
+        require(text.length == byteLength * 2 && text.matches(Regex("[0-9a-f]+"))) {
+            "$label must be $byteLength bytes canonical lowercase 0x hex"
+        }
+        require(text.any { it != '0' }) { "$label must not be zero" }
+        return value
+    }
+
+    private fun normalizeRpcQuantity(value: Any?, label: String): String {
+        require(value is String && value.trim() == value && value.startsWith("0x")) {
+            "$label must be a canonical JSON-RPC quantity"
+        }
+        val text = value.substring(2)
+        require(text.isNotEmpty() && text.matches(Regex("0|[1-9a-f][0-9a-f]*"))) {
+            "$label must be a canonical JSON-RPC quantity"
+        }
+        return "0x" + BigInteger(text, 16).toString(16)
+    }
+
+    private fun normalizePositiveRpcQuantity(value: Any?, label: String): String {
+        val quantity = normalizeRpcQuantity(value, label)
+        require(quantity != "0x0") { "$label must be positive" }
+        return quantity
+    }
+
+    private fun normalizeBeaconFinality(
+        finality: Map<String, Any?>,
+        expectedBlockHash: String?,
+        expectedBlockNumber: String?,
+        expectedReceiptsRoot: String?,
+    ): Map<String, Any?> {
+        val executionBlockNumber = normalizeUnsignedInteger(
+            finality["executionBlockNumber"]
+                ?: finality["execution_block_number"]
+                ?: finality["finalityHeight"]
+                ?: finality["finality_height"],
+            "beaconFinality.executionBlockNumber",
+        )
+        require(executionBlockNumber > 0) { "beaconFinality.executionBlockNumber must be positive" }
+        if (expectedBlockNumber != null) {
+            require(executionBlockNumber == normalizeUnsignedInteger(expectedBlockNumber, "block.number")) {
+                "beaconFinality.executionBlockNumber must match block.number"
+            }
+        }
+        val executionBlockHash = normalizeRpcHex(
+            finality["executionBlockHash"]
+                ?: finality["execution_block_hash"]
+                ?: finality["finalityBlockHash"]
+                ?: finality["finality_block_hash"],
+            "beaconFinality.executionBlockHash",
+            32,
+        )
+        if (expectedBlockHash != null) {
+            require(executionBlockHash == expectedBlockHash) {
+                "beaconFinality.executionBlockHash must match block.hash"
+            }
+        }
+        val executionReceiptsRoot = normalizeRpcHex(
+            finality["executionReceiptsRoot"]
+                ?: finality["execution_receipts_root"]
+                ?: finality["receiptsRoot"]
+                ?: finality["receipts_root"],
+            "beaconFinality.executionReceiptsRoot",
+            32,
+        )
+        if (expectedReceiptsRoot != null) {
+            require(executionReceiptsRoot == expectedReceiptsRoot) {
+                "beaconFinality.executionReceiptsRoot must match block.receiptsRoot"
+            }
+        }
+        return finality + mapOf(
+            "executionBlockNumber" to executionBlockNumber.toString(),
+            "executionBlockHash" to executionBlockHash,
+            "executionReceiptsRoot" to executionReceiptsRoot,
+        )
+    }
+}
+
+/** Local-first BSC mainnet SCCP facade for native UI SDKs. */
+class BscMainnetSccp(
+    private val witnessProvider: EvmSccpWitnessProvider? = null,
+    private val proofEngine: EvmSccpProofEngine? = null,
+    private val executionProvider: BscMainnetExecutionProvider? = null,
+    private val consensusProvider: BscMainnetConsensusProvider? = null,
+    private val inboundProver: BscMainnetInboundProver? = null,
+    private val inboundSubmitter: BscMainnetInboundSubmitter? = null,
+    private val outboundSubmitter: BscMainnetOutboundSubmitter? = null,
+) {
+    fun validateExecutionProviderMainnet(provider: BscMainnetExecutionProvider? = executionProvider): Any? {
+        val selectedProvider = provider
+            ?: throw IllegalStateException("BSC mainnet execution provider is not linked")
+        val chainId = selectedProvider.request("eth_chainId", emptyList())
+        SccpBsc.requireMainnetChainId(normalizeMainnetChainId(chainId))
+        return chainId
+    }
+
+    fun collectInboundEvidenceFromReceipt(
+        input: BscMainnetInboundEvidence,
+        provider: BscMainnetExecutionProvider? = executionProvider,
+        consensusProvider: BscMainnetConsensusProvider? = this.consensusProvider,
+    ): BscMainnetInboundEvidence {
+        require(input.sourceDomain == SccpEvm.DOMAIN_BSC) {
+            "BSC mainnet inbound evidence sourceDomain must be BSC"
+        }
+        require(input.targetDomain == SccpEvm.DOMAIN_SORA) {
+            "BSC mainnet inbound evidence targetDomain must be SORA"
+        }
+        provider?.let { validateExecutionProviderMainnet(it) }
+
+        var transactionHash = input.transactionHash?.let {
+            normalizeRpcHex(it, "transactionHash", 32)
+        }
+        var receipt = input.receipt
+        if (receipt == null && transactionHash != null && provider != null) {
+            receipt = requireMap(
+                provider.request("eth_getTransactionReceipt", listOf(transactionHash)),
+                "eth_getTransactionReceipt",
+            )
+        }
+        if (receipt == null && input.receiptProofHash == null) {
+            throw IllegalArgumentException(
+                "BSC mainnet inbound evidence requires receipt, receiptProofHash, or transactionHash",
+            )
+        }
+
+        var blockHash: String? = null
+        var receiptBlockNumber: String? = null
+        var blockReceiptsRoot: String? = null
+        if (receipt != null) {
+            require(receipt["status"] == "0x1") {
+                "BSC mainnet inbound receipt status must be 0x1"
+            }
+            val receiptTransactionHash = normalizeRpcHex(
+                receipt["transactionHash"] ?: receipt["transaction_hash"],
+                "receipt.transactionHash",
+                32,
+            )
+            if (transactionHash != null) {
+                require(receiptTransactionHash == transactionHash) {
+                    "receipt.transactionHash must match transactionHash"
+                }
+            }
+            transactionHash = receiptTransactionHash
+            blockHash = normalizeRpcHex(receipt["blockHash"] ?: receipt["block_hash"], "receipt.blockHash", 32)
+            receiptBlockNumber = normalizePositiveRpcQuantity(
+                receipt["blockNumber"] ?: receipt["block_number"],
+                "receipt.blockNumber",
+            )
+        }
+
+        var block = input.block
+        if (block == null && blockHash != null && provider != null) {
+            block = requireMap(
+                provider.request("eth_getBlockByHash", listOf(blockHash, false)),
+                "eth_getBlockByHash",
+            )
+        }
+        if (block != null) {
+            val normalizedBlockHash = normalizeRpcHex(block["hash"], "block.hash", 32)
+            if (blockHash != null) {
+                require(normalizedBlockHash == blockHash) {
+                    "block.hash must match receipt.blockHash"
+                }
+            }
+            blockHash = normalizedBlockHash
+            val blockNumber = normalizePositiveRpcQuantity(
+                block["number"] ?: block["blockNumber"] ?: block["block_number"],
+                "block.number",
+            )
+            if (receiptBlockNumber != null) {
+                require(blockNumber == receiptBlockNumber) {
+                    "block.number must match receipt.blockNumber"
+                }
+            }
+            receiptBlockNumber = blockNumber
+            blockReceiptsRoot = normalizeRpcHex(block["receiptsRoot"] ?: block["receipts_root"], "block.receiptsRoot", 32)
+        }
+
+        val parliaFinality = input.parliaFinality
+            ?: consensusProvider?.collectFinalityEvidence(receipt, block, transactionHash)
+        val normalizedParliaFinality = parliaFinality?.let {
+            normalizeParliaFinality(
+                it,
+                expectedBlockHash = blockHash,
+                expectedBlockNumber = receiptBlockNumber,
+                expectedReceiptsRoot = blockReceiptsRoot,
+            )
+        }
+
+        return input.copy(
+            sourceDomain = SccpEvm.DOMAIN_BSC,
+            targetDomain = SccpEvm.DOMAIN_SORA,
+            transactionHash = transactionHash,
+            receipt = receipt,
+            block = block,
+            parliaFinality = normalizedParliaFinality,
+            receiptProofHash = input.receiptProofHash?.let {
+                normalizeRpcHex(it, "receiptProofHash", 32)
+            },
+        )
+    }
+
+    fun proveInboundToSora(
+        input: BscMainnetInboundEvidence,
+        provider: BscMainnetExecutionProvider? = executionProvider,
+        consensusProvider: BscMainnetConsensusProvider? = this.consensusProvider,
+    ): ByteArray {
+        val prover = inboundProver
+            ?: throw IllegalStateException("BSC mainnet SCCP inbound prover is not linked")
+        val evidence = collectInboundEvidenceFromReceipt(input, provider, consensusProvider)
+        require(evidence.parliaFinality != null) {
+            "BSC mainnet SCCP inbound proof requires parliaFinality"
+        }
+        val proofBytes = prover.prove(evidence)
+        require(proofBytes.isNotEmpty()) { "proofBytes must not be empty" }
+        require(proofBytes.any { it.toInt() != 0 }) { "proofBytes must not be all zero" }
+        return proofBytes.copyOf()
+    }
+
+    fun submitInboundToIroha(proofBytes: ByteArray): Any? {
+        require(proofBytes.isNotEmpty()) { "proofBytes must not be empty" }
+        require(proofBytes.any { it.toInt() != 0 }) { "proofBytes must not be all zero" }
+        val submitter = inboundSubmitter
+            ?: throw IllegalStateException("BSC mainnet SCCP inbound submitter is not linked")
+        return submitter.submit(proofBytes.copyOf())
+    }
+
+    fun buildOutboundProofRequest(input: EvmSccpProofRequestInput): EvmSccpProofRequest =
+        SccpBsc.buildProofRequest(
+            witnessProvider?.resolveWitness(witnessProviderInputSnapshot(input)) ?: input,
+        )
+
+    fun proveOutboundToBsc(input: EvmSccpProofRequestInput): EvmSccpProofResult {
+        val request = buildOutboundProofRequest(input)
+        val engine = proofEngine
+            ?: throw IllegalStateException("BSC mainnet SCCP Groth16 prover is not linked")
+        return SccpBsc.wrapProofResult(
+            engine.prove(SccpEvm.callbackRequestSnapshot(request)),
+            request,
+        )
+    }
+
+    fun buildBscCalldata(input: EvmSccpSubmissionInput): EvmSccpSubmission =
+        SccpBsc.buildSubmission(input)
+
+    fun submitOutboundToBsc(input: EvmSccpSubmissionInput): Any? {
+        val submitter = outboundSubmitter
+            ?: throw IllegalStateException("BSC mainnet SCCP outbound submitter is not linked")
+        return submitter.submit(buildBscCalldata(input))
+    }
+
+    fun requireExecutionMainnet(chainId: Long) =
+        SccpBsc.requireMainnetChainId(chainId)
+
+    private fun witnessProviderInputSnapshot(input: EvmSccpProofRequestInput): EvmSccpProofRequestInput =
+        input.copy(
+            bundleBytes = input.bundleBytes.copyOf(),
+            sourceProofBytes = input.sourceProofBytes.copyOf(),
+        )
+
+    private fun normalizeMainnetChainId(value: Any?): Long =
+        when (value) {
+            is Long -> value
+            is Int -> value.toLong()
+            is Short -> value.toLong()
+            is Byte -> value.toLong()
+            is BigInteger -> {
+                require(value.signum() >= 0 && value.bitLength() <= 63) {
+                    "eth_chainId must fit positive i64"
+                }
+                value.toLong()
+            }
+            is String -> {
+                require(value.trim() == value) { "eth_chainId must be canonical" }
+                val parsed = if (value.startsWith("0x")) {
+                    val text = value.substring(2)
+                    require(text.isNotEmpty() && text.matches(Regex("0|[1-9a-f][0-9a-f]*"))) {
+                        "eth_chainId must be a canonical JSON-RPC quantity"
+                    }
+                    BigInteger(text, 16)
+                } else {
+                    require(value.matches(Regex("0|[1-9][0-9]*"))) {
+                        "eth_chainId must be a canonical decimal integer"
+                    }
+                    BigInteger(value, 10)
+                }
+                require(parsed.bitLength() <= 63) { "eth_chainId must fit positive i64" }
+                parsed.toLong()
+            }
+            else -> throw IllegalArgumentException("eth_chainId must be a JSON-RPC quantity or integer")
+        }
+
+    private fun requireMap(value: Any?, label: String): Map<String, Any?> {
+        @Suppress("UNCHECKED_CAST")
+        return value as? Map<String, Any?>
+            ?: throw IllegalArgumentException("$label must return an object")
+    }
+
+    private fun normalizeRpcHex(value: Any?, label: String, byteLength: Int): String {
+        require(value is String) { "$label must be canonical lowercase 0x hex" }
+        require(value.trim() == value && value.startsWith("0x")) {
+            "$label must be canonical lowercase 0x hex"
+        }
+        val text = value.substring(2)
+        require(text.length == byteLength * 2 && text.matches(Regex("[0-9a-f]+"))) {
+            "$label must be $byteLength bytes canonical lowercase 0x hex"
+        }
+        require(text.any { it != '0' }) { "$label must not be zero" }
+        return value
+    }
+
+    private fun normalizeRpcQuantity(value: Any?, label: String): String {
+        require(value is String && value.trim() == value && value.startsWith("0x")) {
+            "$label must be a canonical JSON-RPC quantity"
+        }
+        val text = value.substring(2)
+        require(text.isNotEmpty() && text.matches(Regex("0|[1-9a-f][0-9a-f]*"))) {
+            "$label must be a canonical JSON-RPC quantity"
+        }
+        return "0x" + BigInteger(text, 16).toString(16)
+    }
+
+    private fun normalizePositiveRpcQuantity(value: Any?, label: String): String {
+        val quantity = normalizeRpcQuantity(value, label)
+        require(quantity != "0x0") { "$label must be positive" }
+        return quantity
+    }
+
+    private fun normalizeUnsignedInteger(value: Any?, label: String): Long =
+        when (value) {
+            is Long -> {
+                require(value >= 0) { "$label must be non-negative" }
+                value
+            }
+            is Int -> {
+                require(value >= 0) { "$label must be non-negative" }
+                value.toLong()
+            }
+            is Short -> {
+                require(value >= 0) { "$label must be non-negative" }
+                value.toLong()
+            }
+            is Byte -> {
+                require(value >= 0) { "$label must be non-negative" }
+                value.toLong()
+            }
+            is BigInteger -> {
+                require(value.signum() >= 0 && value.bitLength() <= 63) {
+                    "$label must fit positive i64"
+                }
+                value.toLong()
+            }
+            is String -> {
+                require(value.trim() == value) { "$label must be canonical" }
+                val parsed = if (value.startsWith("0x")) {
+                    val text = value.substring(2)
+                    require(text.isNotEmpty() && text.matches(Regex("0|[1-9a-f][0-9a-f]*"))) {
+                        "$label must be a canonical JSON-RPC quantity"
+                    }
+                    BigInteger(text, 16)
+                } else {
+                    require(value.matches(Regex("0|[1-9][0-9]*"))) {
+                        "$label must be a canonical decimal integer"
+                    }
+                    BigInteger(value, 10)
+                }
+                require(parsed.bitLength() <= 63) { "$label must fit positive i64" }
+                parsed.toLong()
+            }
+            else -> throw IllegalArgumentException("$label must be a JSON-RPC quantity or integer")
+        }
+
+    private fun normalizeParliaFinality(
+        finality: Map<String, Any?>,
+        expectedBlockHash: String?,
+        expectedBlockNumber: String?,
+        expectedReceiptsRoot: String?,
+    ): Map<String, Any?> {
+        val executionBlockNumber = normalizeUnsignedInteger(
+            finality["executionBlockNumber"]
+                ?: finality["execution_block_number"]
+                ?: finality["finalityHeight"]
+                ?: finality["finality_height"],
+            "parliaFinality.executionBlockNumber",
+        )
+        require(executionBlockNumber > 0) { "parliaFinality.executionBlockNumber must be positive" }
+        if (expectedBlockNumber != null) {
+            require(executionBlockNumber == normalizeUnsignedInteger(expectedBlockNumber, "block.number")) {
+                "parliaFinality.executionBlockNumber must match block.number"
+            }
+        }
+        val executionBlockHash = normalizeRpcHex(
+            finality["executionBlockHash"]
+                ?: finality["execution_block_hash"]
+                ?: finality["finalityBlockHash"]
+                ?: finality["finality_block_hash"],
+            "parliaFinality.executionBlockHash",
+            32,
+        )
+        if (expectedBlockHash != null) {
+            require(executionBlockHash == expectedBlockHash) {
+                "parliaFinality.executionBlockHash must match block.hash"
+            }
+        }
+        val executionReceiptsRoot = normalizeRpcHex(
+            finality["executionReceiptsRoot"]
+                ?: finality["execution_receipts_root"]
+                ?: finality["receiptsRoot"]
+                ?: finality["receipts_root"],
+            "parliaFinality.executionReceiptsRoot",
+            32,
+        )
+        if (expectedReceiptsRoot != null) {
+            require(executionReceiptsRoot == expectedReceiptsRoot) {
+                "parliaFinality.executionReceiptsRoot must match block.receiptsRoot"
+            }
+        }
+        return finality + mapOf(
+            "executionBlockNumber" to executionBlockNumber.toString(),
+            "executionBlockHash" to executionBlockHash,
+            "executionReceiptsRoot" to executionReceiptsRoot,
+        )
+    }
+}
+
+/** Local-first BSC mainnet SCCP Groth16 proof wrapper for UI SDKs. */
+class BscSccpProver(
+    private val witnessProvider: EvmSccpWitnessProvider? = null,
+    private val proofEngine: EvmSccpProofEngine? = null,
+) {
+    fun buildRequest(input: EvmSccpProofRequestInput): EvmSccpProofRequest =
+        SccpBsc.buildProofRequest(witnessProvider?.resolveWitness(witnessProviderInputSnapshot(input)) ?: input)
+
+    fun prove(input: EvmSccpProofRequestInput): EvmSccpProofResult {
+        val request = buildRequest(input)
+        val engine = proofEngine ?: throw IllegalStateException("BSC mainnet SCCP Groth16 prover is not linked")
+        return SccpBsc.wrapProofResult(engine.prove(SccpEvm.callbackRequestSnapshot(request)), request)
     }
 
     private fun witnessProviderInputSnapshot(input: EvmSccpProofRequestInput): EvmSccpProofRequestInput =

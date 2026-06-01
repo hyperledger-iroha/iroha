@@ -40,14 +40,115 @@ and completed history lives in [`status.md`](./status.md).
 - Keep the web portal SCCP proof-generation surface aligned with package
   artifacts; release-readiness tests now require every JavaScript/web helper
   named in the public user-prover rows to exist in source, packaged `dist`,
-  package entrypoints, and TypeScript declarations, and strict release evidence
-  plus published release-bundle verification must include the package-root SCCP
-  export test transcript.
-- Keep web SCCP linked-prover callback snapshots immutable across production
-  destinations; JavaScript callback regressions now assert frozen request
-  metadata where exposed and copy-backed bundle/source-proof bytes across TON,
-  EVM-family, TRON, and Substrate-family proof engines before app-linked
-  callbacks return proof bytes.
+  package entrypoints, and TypeScript declarations. The JavaScript
+  Ethereum-mainnet facade is now exported from the package root, rejects
+  non-mainnet `eth_chainId` values before treating a provider as ready, and
+  keeps the easy outbound path ETH-only. Swift, Kotlin/JVM, Java Android, and
+  .NET now expose the same easy Ethereum-mainnet inbound method shape with
+  app-supplied execution providers and fail-closed receipt/block drift checks
+  before native prover or submitter callbacks run; those native Ethereum
+  facades also accept app-supplied consensus/finality providers so collected
+  mainnet receipts can attach beacon-finality evidence before local source
+  proving, and browser/native collectors now reject beacon-finality evidence
+  whose execution block number, execution block hash, or execution receipts root
+  does not match the validated execution receipt/block. The JavaScript
+  Ethereum `proveInboundToSora` path now runs that collection and binding step
+  before invoking app-owned prover callbacks, including inputs that already
+  carry a precomputed `receiptProofHash`, and JavaScript/native Ethereum
+  inbound proving rejects missing beacon finality before app-owned prover
+  callbacks can run. Python now matches that Ethereum-mainnet inbound shape
+  with execution/consensus provider injection, receipt/block collection,
+  beacon-finality binding, non-zero proof-byte copying, and a prove-time
+  missing-finality guard. Swift, Kotlin/JVM, and Java Android now accept per-call
+  execution/consensus providers on `proveInboundToSora`, matching the
+  JavaScript/.NET prove-time collection path. The JavaScript package declarations now expose typed
+  Ethereum beacon-finality evidence and consensus-provider input shapes so
+  browser apps see the required execution block number/hash and receipts-root
+  fields before runtime, and Swift, Kotlin/JVM, Java Android, and .NET now
+  expose typed beacon-finality helper records/builders that produce the same
+  canonical native map/dictionary shape for provider-collected evidence, plus
+  typed inbound-evidence construction helpers for feeding that finality object
+  into ETH -> SORA source proving without manual map copying. The
+  release-readiness report and strict bundle verifier now require those native
+  helper symbols in the `eth,bsc` SDK rows. The JavaScript package-dist tests
+  now also guard the browser Ethereum and BSC mainnet SCCP artifacts against
+  `WebAssembly`, `wasm`, `snarkjs`, remote prover, prover URL, and prover
+  endpoint dependency markers, and release-bundle verification requires both
+  no-WASM guard test names plus the BSC Parlia declaration test name in the JS
+  phase transcript. Release-readiness tests
+  also scan the Ethereum and BSC JavaScript, Python, Swift, Kotlin/JVM, Java
+  Android, and .NET facade sources for missing files or forbidden
+  WASM/snarkjs/remote-prover dependency markers, keeping those mainnet SDK
+  paths native or local-prover owned. The Python, Swift,
+  Kotlin/JVM, Java Android, and JavaScript Ethereum-mainnet calldata helpers
+  now also require wrapped proof results carrying the chain-id-1 destination
+  binding before verifier calldata is emitted. Python, Swift, Kotlin/JVM, Java Android, and
+  .NET now expose matching Ethereum-mainnet guards/facades over their native
+  EVM proof surfaces; the .NET guard rejects uppercase or padded network-id
+  strings before treating destination material as canonical, the C# Ethereum
+  facade now exposes native outbound proof-request/prove/calldata/submit hooks
+  with BN254 tuple and public-input binding checks before calldata emission,
+  Swift/Kotlin/JVM/Java Android Ethereum facades now expose app-owned outbound
+  submit hooks after calldata validation, Python now exposes the same
+  app-owned Ethereum outbound submit hook, and the release inventories require
+  the JavaScript/Python Ethereum outbound methods by name. The JavaScript,
+  Python, Swift, Kotlin/JVM, Java Android, and .NET BSC facades now also expose or
+  require app-owned BSC outbound submit hooks after BSC calldata validation, and
+  the release inventories require those BSC calldata/submit symbols by SDK. The
+  C# facade unit suite now validates the ETH/BSC bindings on .NET 8 without
+  relying on newer try-style hex conversion APIs, while Rust, JavaScript,
+  Python, Swift, Kotlin/JVM, and Java Android ETH/BSC receipt-proof transcript
+  builders now reject zero source-event digests before deriving source witness
+  hashes. The
+  same zero-digest guard now applies to TON shard-proof and Substrate-family
+  storage-proof transcripts across Rust and the web/Python/native SDK surfaces.
+  Strict release evidence plus published release-bundle verification must
+  include the package-root SCCP export test transcript, the JavaScript
+  Ethereum/BSC mainnet facade transcripts, and the BSC-mainnet
+  facade/prover/submission helpers plus the concrete BSC inbound
+  collect/prove/submit facade methods across JavaScript, Python, Swift,
+  Kotlin/JVM, Java Android, and .NET, plus BSC outbound calldata/submit facade
+  methods in the `eth,bsc` row for JavaScript, Python, Swift, Kotlin/JVM, Java
+  Android, and .NET, plus the concrete Python
+  Ethereum inbound collect/prove/submit facade methods, including the Ethereum
+  beacon-finality consensus-provider hook symbols, native BSC Parlia
+  consensus-provider hook symbols, and typed native BSC Parlia finality
+  helper records/builders on the SDKs that collect finality evidence,
+  and the JavaScript/Python/Swift BSC prove-time guards that require Parlia
+  finality before app-owned source prover callbacks run. Swift now also
+  supports a BSC consensus-provider collection hook and binds supplied or
+  collected Parlia finality to the collected receipt block number, block hash,
+  and receipts root, while the JavaScript declarations expose the BSC Parlia
+  finality evidence and consensus-provider input shapes used by that runtime
+  path.
+  The strict bundle
+  verifier's canonical Markdown renderer now emits the `.NET` helper set for
+  that row, and Python hook validation requires the exact app-owned `prove`
+  callback rather than accepting method names that merely contain the word.
+- Keep Ethereum mainnet source-adapter transition chains period-contiguous:
+  sync-committee updates now advance exactly one mainnet period at a time, using
+  the consensus `32 * 256` slot period geometry, so skipped-period transition
+  evidence cannot satisfy the ETH source proof verifier.
+- Keep EVM route-canary live evidence bound to the receipt block: the live
+  helper now checks receipt block number/hash against `eth_getBlockByNumber`,
+  requires a non-zero block `receiptsRoot`, rejects duplicate matching
+  `MessageProofAccepted` events at the supplied log index, and refuses imported
+  full-TOML summaries whose route-canary block verification metadata was
+  forged. Strict release-bundle verification now also owns regressions for
+  positive receipt block numbers, non-zero receipt block hashes, non-zero block
+  `receiptsRoot` values, receipt-block hash-role separation, and direct helper
+  parity with the runtime's finality-height hash-role rejection.
+- Keep TRON route-canary helper and runtime transcript policy aligned: the
+  source bridge evidence helper, all-lanes preflight, release-bundle verifier,
+  and Rust runtime now all reject finality-height replay across TRON v3
+  route-canary hash roles before full rollout TOML or launch readiness can pass.
+- Keep SCCP linked-prover callback snapshots immutable across production
+  destinations; JavaScript, Python, Swift, Kotlin/JVM, and Java Android
+  callback regressions now assert frozen request metadata where exposed and
+  copy-backed bundle and source-proof bytes across EVM-family, TRON, TON, and
+  Substrate-family proof engines, including the Java Android Ethereum/BSC
+  mainnet facade witness-provider path, before app-linked callbacks return
+  proof bytes.
 - Keep public SCCP phase evidence bound to executed production-corridor
   commands; release-readiness and release-bundle checks now require expected
   phase command fragments to appear on traced `+ ...` command lines inside the
@@ -57,6 +158,16 @@ and completed history lives in [`status.md`](./status.md).
   command lines instead of phase output. The verifier owns its required phase
   and phase transcript inventories independently of the report generator, with
   parity tests preventing drift.
+- Keep core-admission SCCP tests aligned with the first-release BSC-mainnet
+  lane launch policy; non-BSC source proofs may recognize configured
+  source-adapter evidence but must stop at lane launch before route-canary,
+  route-allowlist, or destination-rollout drift checks.
+- Keep BSC mainnet inbound admission on an explicit local-admission proof path:
+  core now has a Parlia receipt/validator fixture proving configured source
+  verifier material plus source-adapter deployment binding, including replayed
+  deployment-receipt rejection before public-input extraction, and the positive
+  BSC -> SORA `SubmitBridgeProof` path now uses the local-admission package
+  instead of outbound EVM Groth16 destination packaging.
 - Keep Python SCCP package-root exports aligned with the public user-prover
   rows; release-readiness tests now import `iroha_torii_client` and require
   every non-callback Python helper/class to be exposed through `__all__`.
@@ -79,7 +190,11 @@ and completed history lives in [`status.md`](./status.md).
   entrypoints, plus the exact expected row construction and submission text, so
   weakening the report generator cannot remove cryptographic prover helpers or
   define a shorter portal/mobile table as canonical for published rows.
-- Keep public SCCP user-prover rows gated by the real release phases; strict
+- Keep public SCCP user-prover rows gated by the real release phases; BSC
+  mainnet source proofs now use lane-local configured readiness instead of the
+  global all-lanes gate, so BSC can open with complete mainnet source,
+  destination, route allowlist, and canary evidence while other advertised
+  lanes remain fail-closed until their own launch policy opens. Strict
   bundle verification now rejects duplicate, unknown, or missing required
   phases, requires every SDK plus core-admission on each row, and keeps
   EVM/TRON proof backends tied to contract-smoke evidence.
@@ -278,11 +393,12 @@ and completed history lives in [`status.md`](./status.md).
   `--source-bridge-runtime-bytecode-hex` or
   `--source-bridge-runtime-bytecode-file` so the Keccak-256 runtime code hash is
   replayable from operator evidence.
-- EVM route-canary evidence now uses a v2 transcript aligned with the TRON
-  hardening model: ETH/BSC canary hashes bind submitted calldata SHA-256,
-  decoded payload/finality public inputs, proof version/source domain, target
-  domain, and consumed-message state before all-lanes preflight or Rust
-  `iroha_sccp` route admission can mark route evidence launch-ready. TRON live
+- EVM route-canary evidence now uses a v3 transcript aligned with the TRON
+  hardening model: ETH/BSC canary hashes bind the receipt block
+  number/hash/`receiptsRoot`, submitted calldata SHA-256, decoded
+  payload/finality public inputs, proof version/source domain, target domain,
+  and consumed-message state before all-lanes preflight or Rust `iroha_sccp`
+  route admission can mark route evidence launch-ready. TRON live
   evidence also requires source-event and
   route-canary transaction readback to contain exactly one matching governed log
   and rejects explicit `logIndex`/`log_index` metadata that disagrees with the
@@ -308,14 +424,14 @@ and completed history lives in [`status.md`](./status.md).
   non-TRON lanes must keep those fields null, so release notes cannot publish a
   forged or lane-shifted canary height after refreshing attachment hashes.
   Source-event block transactions apply the same alias binding before deriving
-  java-tron transaction Merkle leaves for source proofs. The EVM/BSC v2
-  route-canary fields are also first-class config and ZK policy-hash material,
-  keeping Core/Torii
+  java-tron transaction Merkle leaves for source proofs. The EVM/BSC v3
+  route-canary fields, including the receipt block number/hash/`receiptsRoot`,
+  are also first-class config and ZK policy-hash material, keeping Core/Torii
   configured admission bound to the same calldata, payload, finality, and proof
   transcript that `iroha_sccp` validates. The full SCCP production corridor
   passes end to end with Rust SCCP verification, operator evidence scripts,
-  JS/Python/Swift/Kotlin/Java Android SDK prover surfaces, EVM/TRON contract
-  smoke, and core bridge-proof admission.
+  JS/Python/Swift/Kotlin/Java Android/.NET SDK prover surfaces, EVM/TRON
+  contract smoke, and core bridge-proof admission.
 - Substrate route-canary evidence now publishes the finalized runtime code hash
   alongside the finalized head and runtime versions in public readiness JSON;
   release-bundle verification rejects zero or governed-hash-reused
@@ -323,8 +439,9 @@ and completed history lives in [`status.md`](./status.md).
 - The focused SCCP production corridor is now captured by
   `scripts/check_sccp_production_corridor.sh`, with phase selection for the
   Rust verifier crate, operator evidence scripts, web/Python/Swift/Kotlin/Java
-  Android SDK proof generators, the EVM/TRON Groth16 contract smoke, and core
-  bridge-proof admission target. The Java Android phase now matches the current
+  Android SDK proof generators, native .NET/C# ETH/BSC facade tests, the
+  EVM/TRON Groth16 contract smoke, and core bridge-proof admission target. The
+  Java Android phase now matches the current
   test surface by running the
   main-method SCCP classes through `GradleHarnessTests` and the Solana prover
   through its direct JUnit selector, with the evidence-scripts phase also
@@ -1135,8 +1252,8 @@ and completed history lives in [`status.md`](./status.md).
 - Continue dependency, documentation, and release hygiene work required by LF
   Decentralized Trust project expectations.
 
-**Next checkpoints:** governed deployment evidence, live canary evidence, and
-attaching the generated SCCP release-readiness report to public release notes.
+**Next checkpoints:** governed deployment evidence and live canary evidence for
+operator-provided rollout bundles.
 
 ## SORA Nexus and Taira
 
@@ -1585,11 +1702,20 @@ attaching the generated SCCP release-readiness report to public release notes.
   keys must be exact non-empty ASCII tokens without whitespace or control
   characters; file-backed keys may only carry terminal newlines.
   The all-lanes activation preflight now also rejects padded fixed-width
-  structured hashes, hash comments, route allowlist hashes, and route canary
-  hashes plus duplicate known metadata comments before final production
-  readiness can be reported; chain-specific metadata comment aliases that map
-  to the same internal field also fail instead of overwriting earlier reviewed
-  values. When both real
+  structured hashes, hash comments, route allowlist hashes, route canary
+  hashes, and non-canonical uppercase EVM runtime-bytecode preimages plus
+  duplicate known metadata comments before final production readiness can be
+  reported. The direct ETH/BSC source and EVM destination offline renderers
+  now apply the same lowercase `0x`/lowercase-hex policy before emitting
+  production TOML, and the EVM-family source live collector applies that rule
+  to operator-supplied hash pins before rendering source TOML, so CLI input
+  cannot be normalized after review; chain-specific metadata comment aliases
+  that map to the same internal field also fail instead of overwriting earlier
+  reviewed values. Strict release-bundle verification also keeps complete
+  cryptographic-evidence row checks scoped to the active BSC launch lane
+  while retaining future-lane rows as diagnostic evidence until their launch
+  policies open. When
+  both real
   `route_canary_*` config fields and imported canary metadata comments are
   present, the all-lanes gate now requires exact agreement so a direct
   `passed` value cannot override contradictory imported evidence.
@@ -1834,14 +1960,16 @@ attaching the generated SCCP release-readiness report to public release notes.
   destination hash roles. The
   EVM-family operator helpers and all-lanes preflight now require route canary
   evidence to be derived from a successful `MessageProofAccepted` transaction:
-  the receipt log, submitted `submitSccpMessageProof` calldata, 384-byte proof
-  tuple header, deployed binding/backend/family/network tuple, and
-  `usedMessageProofs(messageId)` state must all agree before the ETH/BSC route
-  canary hash is accepted. The canonical EVM canary transcript also commits
-  proof ABI version `1`, the SORA proof source-domain word, and the ETH/BSC
-  target-domain word before the commitment root, preventing proof-version or
-  EVM-family lane replay. The direct renderer, public hash helper, and
-  all-lanes preflight now also reject reuse across distinct EVM canary
+  the receipt log, receipt block number/hash/`receiptsRoot`, submitted
+  `submitSccpMessageProof` calldata, 384-byte proof tuple header, deployed
+  binding/backend/family/network tuple, and `usedMessageProofs(messageId)`
+  state must all agree before the ETH/BSC route canary hash is accepted. The
+  canonical EVM canary transcript now uses the `v3` evidence label and commits
+  proof ABI version `1`, the SORA proof source-domain word, the ETH/BSC
+  target-domain word, and the receipt block tuple, preventing proof-version,
+  stale-receipt-block, or EVM-family lane replay. The direct renderer, public
+  hash helper, runtime config gate, and all-lanes preflight now also reject
+  reuse across distinct EVM canary
   transcript hash roles, including transaction hash, calldata, message id,
   payload, statement, commitment, and finality block fields.
   Rust/Core/Torii configured readiness now carries the
@@ -1998,15 +2126,12 @@ attaching the generated SCCP release-readiness report to public release notes.
   default
   production path remains closed on the placeholder catalog when no complete
   configured lane material is present, and configured bridge-proof admission
-  now enforces the all-lanes-at-once launch policy across every advertised
-  remote SCCP domain. The same all-lanes gate now also runs when Torii receives
-  an explicit EVM/TRON deployment destination binding, so a single configured
-  outgoing destination rollout cannot expose production artifact/job/submission
-  packaging while any advertised remote lane is still missing governed evidence.
-  A complete source material, source-adapter deployment, destination rollout,
-  and route allowlist for one lane cannot open inbound production admission
-  while any other advertised lane is still missing production-ready governed
-  evidence. TRON source material and deployment
+  now uses BSC mainnet as the first production lane. BSC can open with complete
+  source material, source-adapter deployment, destination rollout, route
+  allowlist, and route-canary evidence while other advertised remote SCCP
+  domains remain behind their future lane policies. The all-lanes gate remains
+  available as the diagnostic release check when operators need to prove every
+  advertised lane at once. TRON source material and deployment
   records must additionally carry the same non-zero source bridge network id,
   governed owner address, and config hash derived from the deployed bridge
   address, network id, source/target domains, and owner, so a reused emitter
@@ -3251,7 +3376,35 @@ attaching the generated SCCP release-readiness report to public release notes.
   contract identities to the exact mainnet anchor id. The EVM destination
   evidence helper now renders exact ETH/BSC destination rollout and route
   allowlist records while recomputing the wrapper-bound destination binding
-  hash, closing the hand-assembled EVM destination rollout tooling gap. Route
+  hash, closing the hand-assembled EVM destination rollout tooling gap. The
+  BSC mainnet SDK facades across Rust, JavaScript, Python, Swift, Kotlin/JVM,
+  Java Android, and .NET now also pin chain id `56` and the governed deployment
+  binding before request, result, proof-job, or submission packaging. Python
+  now exposes the easy `BscMainnetSccp` outbound and inbound facade directly,
+  including BSC receipt/block collection, Parlia finality preservation,
+  native-prover execution, copied proof-byte submission, and
+  `BscMainnetSccpProver` as a compatibility wrapper for older prover-only
+  callers. The
+  JavaScript package-root `BscMainnetSccp` facade now additionally validates
+  canonical `eth_chainId == 0x38`, rejects failed or drifted BSC receipt/block
+  evidence before app-linked proving, and builds BSC verifier calldata only
+  from wrapped proof results carrying the governed destination binding. Its
+  inbound prove/submit helpers now reject empty/all-zero proof bytes and copy
+  the accepted bytes before calling the app-linked Iroha submitter. Swift,
+  Kotlin/JVM, Java Android, and .NET native `BscMainnetSccp` facades now mirror
+  that receipt hardening, collect or validate app-supplied Parlia finality, bind
+  it to the collected execution block number/hash and receipts root, and reject
+  missing finality before source proving. The browser and native ETH/BSC
+  inbound facades also require
+  positive canonical `receipt.blockNumber` and `block.number` values whenever
+  receipt/block evidence is collected, closing the last optional block-number
+  ambiguity in the easy SDK path. The `eth,bsc` public release row now also
+  requires the `dotnet-sdk` corridor phase, which runs the native C# Ethereum
+  and BSC facade tests before release evidence can pass. The .NET SDK also
+  exposes matching BSC-mainnet chain-id, network-id, route, native inbound
+  prove/submit, and destination-binding hash guards;
+  the remaining BSC destination work is live deployment evidence rather than
+  hand-rolled SDK chain-id guards. Route
   allowlist readiness is now profile-bound as well: every advertised counterparty requires the exact
   governed route allowlist id plus a non-zero policy hash, while missing,
   generic, malformed, or cross-domain allowlist material remains rejected.
@@ -3645,8 +3798,12 @@ and render all-lanes-ready rollout TOML, then finish
 recursive verifier deployment
 evidence for the current Parlia-header plus ValidatorSet-storage transition
 chain. The EVM live/source-live helpers now reject padded CLI chain ids,
-component hashes, and JSON-RPC quantity/hex results before rendering receipt,
-runtime-bytecode, source, or destination metadata. The EVM live helper's
+component hashes, JSON-RPC quantity/hex results, deployment receipt block
+hash/number drift, missing or zero deployment block `receiptsRoot`, and
+receipt-block source bytecode drift before rendering receipt, runtime-bytecode,
+source, or destination metadata; the source-live collector also rejects
+JSON-RPC success envelopes with a missing/padded protocol version or mismatched
+response id. The EVM live helper's
 rendered TOML now preserves the observed RPC chain
 id and bridge wrapper runtime code hash as metadata comments, and the all-lanes
 preflight rejects ETH/BSC source material and destination rollout records that
@@ -4693,8 +4850,32 @@ validation.
 - Keep permissioned and NPoS execution on one state machine; validator-set
   source and strict quorum math are the only mode differences.
 - Keep the Sumeragi formal coverage guard in CI so runner modes, CI commands,
-  README commands, and referenced TLA+/CFG files stay synchronized as new gates
-  land.
+  workflow entrypoints, Apalache version pins, README commands,
+  length-table-derived bidirectional documented TLC fast-mode coverage,
+  duplicate-free and shadow-free
+  runner case labels, duplicate-free Apalache command lists including
+  scheduled/manual workflow commands, exact Apalache runner-mode CI reachability,
+  unused runner-branch rejection, documented mutation-mode expected-failure
+  coverage, TLC mutation-mode expected-failure runner routing, Apalache/TLC
+  mutation CFG equivalence, expected-failure counterexample semantics,
+  baseline expected-failure marker rejection, well-formed single-assignment
+  runner proof inputs and scalar runner assignments, flat direct-child formal
+  path and suffix containment, runner command shape, runner invocation
+  proof-input binding, TLC constraint operator binding,
+  non-type-only CFG checks, TLC module identifier and module-file reachability,
+  Apalache/TLC TLA module identity, TLA dependency resolution, Apalache length
+  declarations, well-formed purpose-bearing duplicate-free README length rows,
+  and README length table agreement, single top-of-file TLA module-header
+  consistency, single terminating TLA `====` markers,
+  duplicate-free TLA constant and top-level operator declarations, TLA
+  variable/`vars` tuple consistency, CFG/module
+  filename ownership, supported CFG directive validation, CFG behavior/check
+  declarations, static CFG operator-name syntax, CFG-referenced top-level
+  behavior/check operator definitions, complete CFG constant bindings,
+  fail-closed CFG constant block binding shape, duplicate-free CFG
+  `CHECK_DEADLOCK` directives, duplicate-free CFG constant/check targets,
+  complete TLA+/CFG inventory reachability, and referenced TLA+/CFG files stay
+  synchronized as new gates land.
 - Use measured matrix runs, not speculative settings, before accepting higher
   throughput targets.
 - Keep hardware acceleration paths feature-gated with deterministic scalar

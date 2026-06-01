@@ -10,6 +10,8 @@ import {
   SCCP_DOMAIN_SORA_KUSAMA,
   SCCP_DOMAIN_SORA_POLKADOT,
   SCCP_DOMAIN_SORA2,
+  SCCP_BSC_MAINNET_EVM_CHAIN_ID,
+  SCCP_BSC_MAINNET_NETWORK_ID,
   SCCP_STARK_FRI_PROOF_FAMILY_V1,
   SCCP_SOURCE_STATE_MAX_PROOF_BYTES,
   SCCP_SOURCE_STATE_MAX_PROOF_LABEL_BYTES,
@@ -50,6 +52,7 @@ import {
   SCCP_SUBSTRATE_SUBMIT_MESSAGE_PROOF_ENTRYPOINT_V1,
   SCCP_SUBSTRATE_RUNTIME_STORAGE_OPEN_VERIFY_CIRCUIT_ID_V1,
   SCCP_ZERO_HASH_V1,
+  BscMainnetSccpProver,
   EvmSccpProver,
   SolanaSccpSourceStateProver,
   SolanaSccpProver,
@@ -81,7 +84,10 @@ import {
   buildEvmSccpProofRequest,
   buildEvmSccpBridgeProofSubmitPayload,
   buildEvmSccpSubmission,
+  buildBscMainnetSccpDestinationProofRequest,
+  buildBscMainnetSccpDestinationSubmission,
   wrapEvmSccpProofResult,
+  wrapBscMainnetSccpDestinationProofResult,
   buildSolanaSccpSubmission,
   buildSolanaSccpProofRequest,
   buildSolanaSccpAccountsLtHashProofRequest,
@@ -185,6 +191,8 @@ import {
   ethExecutionPayloadHeaderRootFromRlp,
   ethSyncCommitteeTransitionMessageHash,
   ethSyncCommitteeTransitionSignatureHash,
+  bscMainnetSccpDestinationBinding,
+  bscMainnetSccpDestinationBindingHash,
   evmSccpDestinationBinding,
   evmSccpDestinationBindingHash,
   evmSccpReceiptProofHash,
@@ -5397,6 +5405,83 @@ test("binds EVM-family Groth16 proof requests to public signals and relay contex
   );
 });
 
+test("BSC mainnet SDK facade pins EVM-family proofs to chain id 56", async () => {
+  const binding = bscMainnetSccpDestinationBinding(
+    sampleEvmDestinationBindingInput({
+      targetDomain: SCCP_DOMAIN_BSC,
+      networkId: SCCP_BSC_MAINNET_NETWORK_ID,
+    }),
+  );
+  assert.equal(SCCP_BSC_MAINNET_EVM_CHAIN_ID, 56);
+  assert.equal(binding.targetDomain, SCCP_DOMAIN_BSC);
+  assert.equal(binding.networkId, SCCP_BSC_MAINNET_NETWORK_ID);
+  assert.equal(
+    bscMainnetSccpDestinationBindingHash({
+      ...sampleEvmDestinationBindingInput({
+        targetDomain: SCCP_DOMAIN_BSC,
+        networkId: SCCP_BSC_MAINNET_NETWORK_ID,
+      }),
+      bindingHash: binding.bindingHash,
+    }),
+    binding.bindingHash,
+  );
+
+  const input = {
+    publicInputs: { ...sampleEvmPublicInputs, targetDomain: SCCP_DOMAIN_BSC },
+    bundleBytes: [5, 6, 7],
+    sourceProofBytes: [9, 10],
+    sourceDomain: SCCP_DOMAIN_SORA,
+    statementHash: HEX32_G,
+    destinationBinding: binding,
+  };
+  const request = buildBscMainnetSccpDestinationProofRequest(input);
+  const proofResult = wrapBscMainnetSccpDestinationProofResult(GROTH16_PROOF_BYTES, request);
+  const submission = buildBscMainnetSccpDestinationSubmission({ proofResult });
+
+  assert.equal(request.targetDomain, SCCP_DOMAIN_BSC);
+  assert.equal(request.destinationBinding.networkId, SCCP_BSC_MAINNET_NETWORK_ID);
+  assert.equal(proofResult.destinationBindingHash, binding.bindingHash);
+  assert.equal(submission.targetDomain, SCCP_DOMAIN_BSC);
+  assert.equal(submission.destinationBindingHash, binding.bindingHash);
+
+  const prover = new BscMainnetSccpProver({
+    async prove(callbackRequest) {
+      assert.equal(callbackRequest.targetDomain, SCCP_DOMAIN_BSC);
+      assert.equal(callbackRequest.destinationBinding.networkId, SCCP_BSC_MAINNET_NETWORK_ID);
+      return { proofBytes: GROTH16_PROOF_BYTES };
+    },
+  });
+  const asyncProofResult = await prover.prove(input);
+  assert.equal(asyncProofResult.destinationBindingHash, binding.bindingHash);
+
+  assert.throws(
+    () =>
+      bscMainnetSccpDestinationBinding(
+        sampleEvmDestinationBindingInput({
+          targetDomain: SCCP_DOMAIN_BSC,
+          networkId: HEX32_A,
+        }),
+      ),
+    /chain id 56/u,
+  );
+  assert.throws(
+    () =>
+      buildBscMainnetSccpDestinationProofRequest({
+        ...input,
+        publicInputs: sampleEvmPublicInputs,
+        destinationBinding: sampleEvmDestinationBinding(),
+      }),
+    /target BSC|BSC mainnet/u,
+  );
+  assert.throws(
+    () =>
+      buildBscMainnetSccpDestinationSubmission({
+        proofResult: { ...proofResult, destinationBinding: sampleEvmDestinationBinding() },
+      }),
+    /chain id 56|targetDomain must be BSC/u,
+  );
+});
+
 test("builds EVM-family and TRON Groth16 contract-call submissions", () => {
   const evmBinding = sampleEvmDestinationBinding();
   const request = buildEvmSccpProofRequest({
@@ -9277,6 +9362,10 @@ test("derives TON SCCP shard proof hashes from branch witness material", () => {
   assert.notEqual(hash, tonSccpShardProofHash({ ...input, shardStateInclusionBranch: [HEX32_E] }));
   assert.notEqual(hash, tonSccpShardProofHash({ ...input, inclusionBranch: [HEX32_F] }));
   assert.throws(
+    () => canonicalTonSccpShardProofBytes({ ...input, sourceEventDigest: SCCP_ZERO_HASH_V1 }),
+    /sourceEventDigest must not be zero/u,
+  );
+  assert.throws(
     () => canonicalTonSccpShardProofBytes({ ...input, masterchain_seqno: input.masterchainSeqno }),
     /masterchainSeqno must not use multiple aliases/,
   );
@@ -10641,6 +10730,10 @@ test("derives EVM, BSC, TRON, and Substrate source proof hashes from UI witness 
     () => canonicalEvmSccpReceiptProofBytes({ ...evmInput, sourceDomain: SCCP_DOMAIN_BSC }),
     /sourceDomain/,
   );
+  assert.throws(
+    () => canonicalEvmSccpReceiptProofBytes({ ...evmInput, sourceEventDigest: SCCP_ZERO_HASH_V1 }),
+    /sourceEventDigest must not be zero/u,
+  );
   for (const [patch, pattern] of [
     [{ sourceDomain: SCCP_DOMAIN_ETH, source_domain: SCCP_DOMAIN_ETH }, /sourceDomain must not use multiple aliases/u],
     [{ source_event_digest: sourceEventDigest }, /sourceEventDigest must not use multiple aliases/u],
@@ -10660,6 +10753,10 @@ test("derives EVM, BSC, TRON, and Substrate source proof hashes from UI witness 
   assert.throws(
     () => canonicalBscSccpReceiptProofBytes({ ...bscInput, sourceDomain: SCCP_DOMAIN_ETH }),
     /sourceDomain/,
+  );
+  assert.throws(
+    () => canonicalBscSccpReceiptProofBytes({ ...bscInput, sourceEventDigest: SCCP_ZERO_HASH_V1 }),
+    /sourceEventDigest must not be zero/u,
   );
   for (const [patch, pattern] of [
     [{ sourceDomain: SCCP_DOMAIN_BSC, source_domain: SCCP_DOMAIN_BSC }, /sourceDomain must not use multiple aliases/u],
@@ -10873,6 +10970,10 @@ test("derives EVM, BSC, TRON, and Substrate source proof hashes from UI witness 
     /truncated protobuf bytes field/,
   );
   assert.equal(canonicalSubstrateSccpStorageProofBytes(substrateInput).length, 225);
+  assert.throws(
+    () => canonicalSubstrateSccpStorageProofBytes({ ...substrateInput, sourceEventDigest: SCCP_ZERO_HASH_V1 }),
+    /sourceEventDigest must not be zero/u,
+  );
   for (const [patch, pattern] of [
     [{ source_domain: SCCP_DOMAIN_SORA_KUSAMA }, /sourceDomain must not use multiple aliases/u],
     [{ source_event_digest: sourceEventDigest }, /sourceEventDigest must not use multiple aliases/u],

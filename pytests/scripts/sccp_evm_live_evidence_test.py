@@ -139,6 +139,10 @@ def fake_opener_for(
     route_canary_used=True,
     route_canary_destination_binding_override=None,
     route_canary_wrong_selector=False,
+    route_canary_block_response_hash=None,
+    route_canary_block_response_number=None,
+    route_canary_block_receipts_root=None,
+    duplicate_route_canary_log=False,
 ):
     bridge = "0x" + "11" * 20
     verifier_address_bytes = (
@@ -188,6 +192,17 @@ def fake_opener_for(
     route_canary_payload_hash = bytes.fromhex("88" * 32)
     route_canary_finality_height = abi_word_u32(123)
     route_canary_finality_block_hash = bytes.fromhex("99" * 32)
+    route_canary_receipt_block_hash = "0x" + "aa" * 32
+    route_canary_receipt_block_number = "0x1234"
+    route_canary_block_response_hash = (
+        route_canary_block_response_hash or route_canary_receipt_block_hash
+    )
+    route_canary_block_response_number = (
+        route_canary_block_response_number or route_canary_receipt_block_number
+    )
+    route_canary_block_receipts_root = route_canary_block_receipts_root or (
+        "0x" + "bb" * 32
+    )
     route_canary_call_data = evm_route_canary_submit_call_data(
         module,
         message_id=route_canary_message_id,
@@ -205,6 +220,31 @@ def fake_opener_for(
         if route_canary_destination_binding_override is not None
         else destination_binding
     )
+    route_canary_log = {
+        "address": bridge,
+        "logIndex": "0x0",
+        "topics": [
+            "0x" + module.EVM_MESSAGE_PROOF_ACCEPTED_TOPIC.hex(),
+            "0x" + route_canary_message_id.hex(),
+            "0x" + abi_word_u32(0).hex(),
+        ],
+        "data": (
+            "0x"
+            + b"".join(
+                (
+                    route_canary_commitment_root,
+                    route_canary_statement_hash,
+                    route_canary_log_destination_binding,
+                    backend_hash,
+                    family_hash,
+                    network_id,
+                )
+            ).hex()
+        ),
+    }
+    route_canary_logs = [route_canary_log]
+    if duplicate_route_canary_log:
+        route_canary_logs.append(dict(route_canary_log))
     call_words = {
         (bridge, "verifier()"): abi_word_address(verifier_address_bytes),
         (bridge, "verifierCodeHash()"): verifier_code_hash,
@@ -280,32 +320,22 @@ def fake_opener_for(
                     "result": {
                         "transactionHash": "0x" + route_canary_transaction_hash.hex(),
                         "status": "0x1",
-                        "blockHash": "0x" + "aa" * 32,
-                        "blockNumber": "0x1234",
-                        "logs": [
-                            {
-                                "address": bridge,
-                                "logIndex": "0x0",
-                                "topics": [
-                                    "0x" + module.EVM_MESSAGE_PROOF_ACCEPTED_TOPIC.hex(),
-                                    "0x" + route_canary_message_id.hex(),
-                                    "0x" + abi_word_u32(0).hex(),
-                                ],
-                                "data": (
-                                    "0x"
-                                    + b"".join(
-                                        (
-                                            route_canary_commitment_root,
-                                            route_canary_statement_hash,
-                                            route_canary_log_destination_binding,
-                                            backend_hash,
-                                            family_hash,
-                                            network_id,
-                                        )
-                                    ).hex()
-                                ),
-                            }
-                        ],
+                        "blockHash": route_canary_receipt_block_hash,
+                        "blockNumber": route_canary_receipt_block_number,
+                        "logs": route_canary_logs,
+                    },
+                }
+            )
+        if method == "eth_getBlockByNumber":
+            assert params == [route_canary_receipt_block_number, False]
+            return FakeResponse(
+                {
+                    "jsonrpc": "2.0",
+                    "id": 1,
+                    "result": {
+                        "hash": route_canary_block_response_hash,
+                        "number": route_canary_block_response_number,
+                        "receiptsRoot": route_canary_block_receipts_root,
                     },
                 }
             )
@@ -336,6 +366,13 @@ def fake_opener_for(
         destination_binding=destination_binding,
         route_canary_transaction_hash=route_canary_transaction_hash,
         route_canary_log_index=0,
+        route_canary_receipt_block_number=int(route_canary_receipt_block_number, 16),
+        route_canary_receipt_block_hash=bytes.fromhex(
+            route_canary_receipt_block_hash.removeprefix("0x")
+        ),
+        route_canary_block_receipts_root=bytes.fromhex(
+            route_canary_block_receipts_root.removeprefix("0x")
+        ),
         route_canary_call_data_sha256=hashlib.sha256(route_canary_call_data).digest(),
         route_canary_message_id=route_canary_message_id,
         route_canary_payload_hash=route_canary_payload_hash,
@@ -355,6 +392,9 @@ def route_canary_hash_for(module, fake, route_allowlist_hash):
         bridge_address=bytes.fromhex(fake.bridge.removeprefix("0x")),
         transaction_hash=fake.route_canary_transaction_hash,
         log_index=fake.route_canary_log_index,
+        receipt_block_number=fake.route_canary_receipt_block_number,
+        receipt_block_hash=fake.route_canary_receipt_block_hash,
+        block_receipts_root=fake.route_canary_block_receipts_root,
         call_data_sha256=fake.route_canary_call_data_sha256,
         message_id=fake.route_canary_message_id,
         payload_hash=fake.route_canary_payload_hash,
@@ -445,6 +485,51 @@ def test_evm_json_rpc_rejects_duplicate_json_keys():
         assert "duplicate JSON key" in str(exc)
     else:
         raise AssertionError("duplicate-key EVM JSON-RPC response was accepted")
+
+
+def test_evm_json_rpc_rejects_envelope_drift():
+    module = load_live_module()
+
+    cases = (
+        (
+            {"jsonrpc": "2.0", "id": 2, "result": "0x38"},
+            "response id",
+            "mismatched JSON-RPC id was accepted",
+        ),
+        (
+            {"jsonrpc": "2.0", "id": "1", "result": "0x38"},
+            "response id",
+            "string JSON-RPC id was accepted",
+        ),
+        (
+            {"id": 1, "result": "0x38"},
+            "protocol version",
+            "missing JSON-RPC protocol version was accepted",
+        ),
+        (
+            {"jsonrpc": "2.0 ", "id": 1, "result": "0x38"},
+            "protocol version",
+            "padded JSON-RPC protocol version was accepted",
+        ),
+    )
+
+    for payload, expected_message, failure in cases:
+        def opener(_request, timeout, payload=payload):
+            del timeout
+            return FakeResponse(payload)
+
+        try:
+            module._json_rpc(
+                "https://bsc.example",
+                "eth_chainId",
+                [],
+                opener=opener,
+                timeout=3.0,
+            )
+        except RuntimeError as exc:
+            assert expected_message in str(exc)
+        else:
+            raise AssertionError(failure)
 
 
 def test_live_evm_evidence_collects_destination_and_offline_toml():
@@ -543,6 +628,8 @@ def test_live_evm_evidence_collects_destination_and_offline_toml():
     assert summary["route_canary_transaction"]["public_inputs_finality_block_hash"] == (
         "0x" + fake.route_canary_finality_block_hash.hex()
     )
+    assert summary["route_canary_transaction"]["receipt_block_matches"] is True
+    assert summary["route_canary_transaction"]["block_receipts_root"] == "0x" + "bb" * 32
     assert summary["source_record_hashes"] == {
         "source_verifier_material_hash": "0x" + EVM_SOURCE_VERIFIER_MATERIAL_HASH,
         "source_adapter_engine_deployment_hash": (
@@ -711,7 +798,12 @@ def test_live_evm_route_canary_rejects_unverified_transaction_metadata():
     def collect_with(fake, *, evidence_hash=None):
         route_allowlist_hash = bytes.fromhex(EVM_LIVE_ROUTE_ALLOWLIST_HASH_VECTOR)
         if evidence_hash is None:
-            evidence_hash = route_canary_hash_for(module, fake, route_allowlist_hash)
+            try:
+                evidence_hash = route_canary_hash_for(module, fake, route_allowlist_hash)
+            except ValueError as exc:
+                if "block_receipts_root" not in str(exc):
+                    raise
+                evidence_hash = bytes.fromhex("e1" * 32)
         return module.collect_live_evidence(
             SimpleNamespace(
                 rpc_url="https://ethereum.example",
@@ -736,14 +828,17 @@ def test_live_evm_route_canary_rejects_unverified_transaction_metadata():
             opener=fake.opener,
         )
 
-    for fake, expected_message in (
+    placeholder_hash = bytes.fromhex("e1" * 32)
+    for fake, expected_message, evidence_hash in (
         (
             fake_opener_for(module, route_canary_used=False),
             "usedMessageProofs(bytes32) is false",
+            None,
         ),
         (
             fake_opener_for(module, route_canary_wrong_selector=True),
             "submitSccpMessageProof",
+            None,
         ),
         (
             fake_opener_for(
@@ -751,10 +846,32 @@ def test_live_evm_route_canary_rejects_unverified_transaction_metadata():
                 route_canary_destination_binding_override=bytes.fromhex("ab" * 32),
             ),
             "destinationBindingHash",
+            None,
+        ),
+        (
+            fake_opener_for(
+                module,
+                route_canary_block_response_hash="0x" + "ab" * 32,
+            ),
+            "block hash does not match receipt blockHash",
+            None,
+        ),
+        (
+            fake_opener_for(
+                module,
+                route_canary_block_receipts_root="0x" + "00" * 32,
+            ),
+            "block receiptsRoot must not be zero",
+            placeholder_hash,
+        ),
+        (
+            fake_opener_for(module, duplicate_route_canary_log=True),
+            "more than one matching MessageProofAccepted",
+            None,
         ),
     ):
         try:
-            collect_with(fake)
+            collect_with(fake, evidence_hash=evidence_hash)
         except RuntimeError as exc:
             assert expected_message in str(exc)
         else:
@@ -814,6 +931,15 @@ def test_live_evm_full_toml_revalidates_imported_summary_metadata():
             raise AssertionError(
                 f"EVM full TOML accepted forged {field} summary metadata"
             )
+
+    forged = copy.deepcopy(summary)
+    forged["route_canary_transaction"]["receipt_block_matches"] = False
+    try:
+        module.render_offline_toml(forged)
+    except ValueError as exc:
+        assert "route-canary-transaction-hash" in str(exc)
+    else:
+        raise AssertionError("EVM full TOML accepted unverified route-canary block")
 
 
 def test_live_evm_diagnostic_offline_args_withhold_route_until_binding_pin():
@@ -1252,6 +1378,12 @@ def test_live_evm_cli_json_and_toml_outputs(capsys):
         "0x" + fake.route_canary_transaction_hash.hex(),
         "--route-canary-log-index",
         str(fake.route_canary_log_index),
+        "--route-canary-receipt-block-number",
+        str(fake.route_canary_receipt_block_number),
+        "--route-canary-receipt-block-hash",
+        "0x" + fake.route_canary_receipt_block_hash.hex(),
+        "--route-canary-block-receipts-root",
+        "0x" + fake.route_canary_block_receipts_root.hex(),
     ]
     try:
         assert module.main(args) == 0

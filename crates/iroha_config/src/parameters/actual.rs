@@ -7611,6 +7611,10 @@ pub struct IsoBridgeProfile {
     pub rail: String,
     /// Optional profile-level embedded XML signature policy.
     pub embedded_signature_policy: Option<String>,
+    /// SHA-256 pins of raw XMLDSig public keys accepted by this profile.
+    pub trusted_public_key_sha256: Vec<String>,
+    /// SHA-256 pins of DER XMLDSig X.509 certificates accepted by this profile.
+    pub trusted_certificate_sha256: Vec<String>,
     /// Required reference datasets for this profile.
     pub required_reference_datasets: Vec<String>,
     /// Message profile entries owned by this rail profile.
@@ -8040,6 +8044,12 @@ pub struct SccpRouteAllowlist {
     pub evm_route_canary_transaction_hash: Option<String>,
     /// EVM MessageProofAccepted log index bound by route canary evidence.
     pub evm_route_canary_log_index: Option<u32>,
+    /// Positive EVM block number containing the route canary receipt.
+    pub evm_route_canary_receipt_block_number: Option<u64>,
+    /// Hex-encoded EVM block hash for the route canary receipt block.
+    pub evm_route_canary_receipt_block_hash: Option<String>,
+    /// Hex-encoded EVM receiptsRoot for the route canary receipt block.
+    pub evm_route_canary_block_receipts_root: Option<String>,
     /// Hex-encoded SHA-256 digest of the EVM submitSccpMessageProof calldata.
     pub evm_route_canary_call_data_sha256: Option<String>,
     /// Hex-encoded EVM MessageProofAccepted message id bound by route canary evidence.

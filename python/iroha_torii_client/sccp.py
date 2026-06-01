@@ -21,6 +21,14 @@ SCCP_DOMAIN_TRON = 5
 SCCP_DOMAIN_SORA_KUSAMA = 6
 SCCP_DOMAIN_SORA_POLKADOT = 7
 SCCP_DOMAIN_SORA2 = 8
+SCCP_ETH_MAINNET_EVM_CHAIN_ID = 1
+SCCP_ETH_MAINNET_NETWORK_ID = (
+    "0x0000000000000000000000000000000000000000000000000000000000000001"
+)
+SCCP_BSC_MAINNET_EVM_CHAIN_ID = 56
+SCCP_BSC_MAINNET_NETWORK_ID = (
+    "0x0000000000000000000000000000000000000000000000000000000000000038"
+)
 SCCP_SOLANA_RECURSIVE_PROOF_BACKEND_V1 = "sccp-solana-recursive-mainnet-v1"
 SCCP_SOLANA_ACCOUNTS_LT_HASH_OPEN_VERIFY_CIRCUIT_ID_V1 = (
     "sccp-solana-accounts-lt-hash-v1"
@@ -7763,10 +7771,9 @@ def canonical_evm_sccp_receipt_proof_bytes(input_value: Any) -> bytes:
     )
     if source_domain != SCCP_DOMAIN_ETH:
         raise ValueError("sourceDomain must be ETH")
-    source_event_digest = _hex_to_bytes(
+    source_event_digest = _nonzero_hex32_to_bytes(
         _mapping_value_without_aliases(value, "sourceEventDigest", "sourceEventDigest", "source_event_digest"),
         "sourceEventDigest",
-        32,
     )
     beacon_slot = _normalize_u64(
         _mapping_value_without_aliases(value, "beaconSlot", "beaconSlot", "beacon_slot"),
@@ -8447,10 +8454,9 @@ def canonical_bsc_sccp_receipt_proof_bytes(input_value: Any) -> bytes:
     )
     if source_domain != SCCP_DOMAIN_BSC:
         raise ValueError("sourceDomain must be BSC")
-    source_event_digest = _hex_to_bytes(
+    source_event_digest = _nonzero_hex32_to_bytes(
         _mapping_value_without_aliases(value, "sourceEventDigest", "sourceEventDigest", "source_event_digest"),
         "sourceEventDigest",
-        32,
     )
     validator_epoch = _normalize_u64(
         _mapping_value_without_aliases(value, "validatorEpoch", "validatorEpoch", "validator_epoch"),
@@ -9665,10 +9671,9 @@ def canonical_ton_sccp_shard_proof_bytes(input_value: Any) -> bytes:
     reject_aliases("shardStateInclusionBranch", "shardStateInclusionBranch", "shard_state_inclusion_branch")
     reject_aliases("inclusionBranch", "inclusionBranch", "inclusion_branch")
 
-    source_event_digest = _hex_to_bytes(
+    source_event_digest = _nonzero_hex32_to_bytes(
         _mapping_value(value, "sourceEventDigest", "source_event_digest"),
         "sourceEventDigest",
-        32,
     )
     masterchain_seqno = _normalize_u64(
         _mapping_value(
@@ -15927,7 +15932,7 @@ def _normalize_substrate_sccp_storage_proof_input(input_value: Any) -> Dict[str,
         _mapping_value_without_aliases(value, "sourceDomain", "sourceDomain", "source_domain"),
         "sourceDomain",
     )
-    source_event_digest = _hex_to_bytes(
+    source_event_digest = _nonzero_hex32_to_bytes(
         _mapping_value_without_aliases(
             value,
             "sourceEventDigest",
@@ -15935,7 +15940,6 @@ def _normalize_substrate_sccp_storage_proof_input(input_value: Any) -> Dict[str,
             "source_event_digest",
         ),
         "sourceEventDigest",
-        32,
     )
     source_event_leaf_index = _normalize_u64(
         _mapping_value_without_aliases(
@@ -18633,6 +18637,444 @@ def evm_sccp_destination_binding_hash(input_value: Any) -> str:
     """Return the canonical EVM/BSC destination binding hash for deployment material."""
 
     return evm_sccp_destination_binding(input_value)["binding_hash"]
+
+
+def require_ethereum_mainnet_chain_id(chain_id: Any) -> int:
+    """Require an Ethereum execution chain id equal to mainnet chain id 1."""
+
+    normalized = _normalize_evm_mainnet_chain_id(chain_id, "eth_chainId")
+    if normalized != SCCP_ETH_MAINNET_EVM_CHAIN_ID:
+        raise ValueError("Ethereum mainnet SCCP requires eth_chainId == 1")
+    return normalized
+
+
+def require_bsc_mainnet_chain_id(chain_id: Any) -> int:
+    """Require a BSC execution chain id equal to mainnet chain id 56."""
+
+    normalized = _normalize_evm_mainnet_chain_id(chain_id, "eth_chainId")
+    if normalized != SCCP_BSC_MAINNET_EVM_CHAIN_ID:
+        raise ValueError("BSC mainnet SCCP requires chain id 56 (eth_chainId == 56)")
+    return normalized
+
+
+def _normalize_evm_mainnet_chain_id(value: Any, label: str) -> int:
+    if isinstance(value, str) and value.lower().startswith("0x"):
+        return int(_normalize_evm_rpc_quantity(value, label), 16)
+    return _normalize_u64(value, label)
+
+
+def _normalize_evm_rpc_quantity(value: Any, label: str) -> str:
+    if not isinstance(value, str) or value.strip() != value or not value.startswith("0x"):
+        raise TypeError(f"{label} must be a canonical JSON-RPC quantity")
+    text = value[2:]
+    if (
+        not text
+        or any(symbol not in "0123456789abcdef" for symbol in text)
+        or (len(text) > 1 and text.startswith("0"))
+    ):
+        raise TypeError(f"{label} must be a canonical JSON-RPC quantity")
+    return "0x" + text
+
+
+def _normalize_evm_rpc_hex(
+    value: Any,
+    label: str,
+    byte_length: int,
+    *,
+    nonzero: bool = True,
+) -> str:
+    if not isinstance(value, str) or value.strip() != value or not value.startswith("0x"):
+        raise TypeError(f"{label} must be canonical lowercase 0x hex")
+    text = value[2:]
+    if len(text) != byte_length * 2 or any(symbol not in "0123456789abcdef" for symbol in text):
+        raise TypeError(f"{label} must be {byte_length} bytes of canonical lowercase 0x hex")
+    raw = bytes.fromhex(text)
+    if nonzero and not any(raw):
+        raise TypeError(f"{label} must not be zero")
+    return "0x" + text
+
+
+def _require_mapping_input(value: Any, label: str) -> Mapping[str, Any]:
+    if not isinstance(value, Mapping):
+        raise TypeError(f"{label} must be an object")
+    return value
+
+
+def _strict_optional_mapping_value(
+    value: Mapping[str, Any],
+    label: str,
+    *keys: str,
+) -> Any:
+    selected = _mapping_optional_value_without_aliases(value, label, *keys)
+    return None if selected is _MISSING else selected
+
+
+async def _evm_facade_provider_request(
+    provider: Any,
+    method: str,
+    params: Sequence[Any],
+    label: str,
+) -> Any:
+    if provider is None:
+        raise TypeError(f"{label} execution provider is required")
+    if hasattr(provider, "request"):
+        request = getattr(provider, "request")
+        return await _maybe_await(request(method, list(params)))
+    if callable(provider):
+        return await _maybe_await(provider(method, list(params)))
+    raise TypeError(f"{label} execution provider must expose request(method, params)")
+
+
+async def _evm_facade_collect_finality(
+    consensus_provider: Any,
+    evidence: Mapping[str, Any],
+    options: Mapping[str, Any],
+    label: str = "EVM mainnet consensus provider",
+) -> Any:
+    if consensus_provider is None:
+        return _MISSING
+    for method_name in ("collect_finality_evidence", "collectFinalityEvidence"):
+        if hasattr(consensus_provider, method_name):
+            collector = getattr(consensus_provider, method_name)
+            return await _maybe_await(collector(dict(evidence), options))
+    if callable(consensus_provider):
+        return await _maybe_await(consensus_provider(dict(evidence), options))
+    raise TypeError(f"{label} must collect finality evidence")
+
+
+def _normalize_ethereum_mainnet_beacon_finality(
+    input_value: Any,
+    *,
+    expected_block_hash: Optional[str] = None,
+    expected_block_number: Optional[str] = None,
+    expected_receipts_root: Optional[str] = None,
+) -> Dict[str, Any]:
+    finality = _require_mapping_input(
+        input_value, "Ethereum mainnet beaconFinality"
+    )
+    execution_block_number_input = _mapping_value_without_aliases(
+        finality,
+        "beaconFinality.executionBlockNumber",
+        "executionBlockNumber",
+        "execution_block_number",
+        "finalityHeight",
+        "finality_height",
+    )
+    execution_block_number = _normalize_evm_mainnet_chain_id(
+        execution_block_number_input,
+        "beaconFinality.executionBlockNumber",
+    )
+    if execution_block_number == 0:
+        raise ValueError("beaconFinality.executionBlockNumber must be positive")
+    if expected_block_number is not None:
+        expected_number = int(
+            _normalize_evm_rpc_quantity(expected_block_number, "block.number"),
+            16,
+        )
+        if execution_block_number != expected_number:
+            raise ValueError(
+                "beaconFinality.executionBlockNumber must match block.number"
+            )
+
+    execution_block_hash = _normalize_evm_rpc_hex(
+        _mapping_value_without_aliases(
+            finality,
+            "beaconFinality.executionBlockHash",
+            "executionBlockHash",
+            "execution_block_hash",
+            "finalityBlockHash",
+            "finality_block_hash",
+        ),
+        "beaconFinality.executionBlockHash",
+        32,
+    )
+    if expected_block_hash is not None and execution_block_hash != expected_block_hash:
+        raise ValueError("beaconFinality.executionBlockHash must match block.hash")
+
+    execution_receipts_root = _normalize_evm_rpc_hex(
+        _mapping_value_without_aliases(
+            finality,
+            "beaconFinality.executionReceiptsRoot",
+            "executionReceiptsRoot",
+            "execution_receipts_root",
+            "receiptsRoot",
+            "receipts_root",
+        ),
+        "beaconFinality.executionReceiptsRoot",
+        32,
+    )
+    if (
+        expected_receipts_root is not None
+        and execution_receipts_root != expected_receipts_root
+    ):
+        raise ValueError(
+            "beaconFinality.executionReceiptsRoot must match block.receiptsRoot"
+        )
+
+    normalized = {
+        key: item
+        for key, item in finality.items()
+        if key
+        not in {
+            "executionBlockNumber",
+            "execution_block_number",
+            "finalityHeight",
+            "finality_height",
+            "executionBlockHash",
+            "execution_block_hash",
+            "finalityBlockHash",
+            "finality_block_hash",
+            "executionReceiptsRoot",
+            "execution_receipts_root",
+            "receiptsRoot",
+            "receipts_root",
+        }
+    }
+    normalized.update(
+        {
+            "execution_block_number": str(execution_block_number),
+            "execution_block_hash": execution_block_hash,
+            "execution_receipts_root": execution_receipts_root,
+        }
+    )
+    return normalized
+
+
+def _normalize_bsc_mainnet_parlia_finality(
+    input_value: Any,
+    *,
+    expected_block_hash: Optional[str] = None,
+    expected_block_number: Optional[str] = None,
+    expected_receipts_root: Optional[str] = None,
+) -> Dict[str, Any]:
+    finality = _require_mapping_input(input_value, "BSC mainnet parliaFinality")
+    execution_block_number = _normalize_evm_mainnet_chain_id(
+        _mapping_value_without_aliases(
+            finality,
+            "parliaFinality.executionBlockNumber",
+            "executionBlockNumber",
+            "execution_block_number",
+            "finalityHeight",
+            "finality_height",
+        ),
+        "parliaFinality.executionBlockNumber",
+    )
+    if execution_block_number == 0:
+        raise ValueError("parliaFinality.executionBlockNumber must be positive")
+    if expected_block_number is not None:
+        expected_number = int(
+            _normalize_evm_rpc_quantity(expected_block_number, "block.number"),
+            16,
+        )
+        if execution_block_number != expected_number:
+            raise ValueError(
+                "parliaFinality.executionBlockNumber must match block.number"
+            )
+
+    execution_block_hash = _normalize_evm_rpc_hex(
+        _mapping_value_without_aliases(
+            finality,
+            "parliaFinality.executionBlockHash",
+            "executionBlockHash",
+            "execution_block_hash",
+            "finalityBlockHash",
+            "finality_block_hash",
+        ),
+        "parliaFinality.executionBlockHash",
+        32,
+    )
+    if expected_block_hash is not None and execution_block_hash != expected_block_hash:
+        raise ValueError("parliaFinality.executionBlockHash must match block.hash")
+
+    execution_receipts_root = _normalize_evm_rpc_hex(
+        _mapping_value_without_aliases(
+            finality,
+            "parliaFinality.executionReceiptsRoot",
+            "executionReceiptsRoot",
+            "execution_receipts_root",
+            "receiptsRoot",
+            "receipts_root",
+        ),
+        "parliaFinality.executionReceiptsRoot",
+        32,
+    )
+    if (
+        expected_receipts_root is not None
+        and execution_receipts_root != expected_receipts_root
+    ):
+        raise ValueError(
+            "parliaFinality.executionReceiptsRoot must match block.receiptsRoot"
+        )
+
+    normalized = {
+        key: item
+        for key, item in finality.items()
+        if key
+        not in {
+            "executionBlockNumber",
+            "execution_block_number",
+            "finalityHeight",
+            "finality_height",
+            "executionBlockHash",
+            "execution_block_hash",
+            "finalityBlockHash",
+            "finality_block_hash",
+            "executionReceiptsRoot",
+            "execution_receipts_root",
+            "receiptsRoot",
+            "receipts_root",
+        }
+    }
+    normalized.update(
+        {
+            "execution_block_number": str(execution_block_number),
+            "execution_block_hash": execution_block_hash,
+            "execution_receipts_root": execution_receipts_root,
+        }
+    )
+    return normalized
+
+
+def ethereum_mainnet_sccp_destination_binding(input_value: Any) -> Dict[str, Any]:
+    """Derive an Ethereum mainnet destination binding pinned to chain id 1."""
+
+    value = _require_mapping(input_value, "Ethereum mainnet SCCP destination binding")
+    source_domain_value = _mapping_optional_value_without_aliases(
+        value,
+        "destinationBinding.sourceDomain",
+        "sourceDomain",
+        "source_domain",
+    )
+    if (
+        source_domain_value is not _MISSING
+        and _normalize_u32(source_domain_value, "destinationBinding.sourceDomain")
+        != SCCP_DOMAIN_SORA
+    ):
+        raise ValueError("Ethereum mainnet destinationBinding.sourceDomain must be SORA")
+    target_domain_value = _mapping_optional_value_without_aliases(
+        value,
+        "destinationBinding.targetDomain",
+        "targetDomain",
+        "target_domain",
+    )
+    if (
+        target_domain_value is not _MISSING
+        and _normalize_u32(target_domain_value, "destinationBinding.targetDomain")
+        != SCCP_DOMAIN_ETH
+    ):
+        raise ValueError("Ethereum mainnet destinationBinding.targetDomain must be ETH")
+    network_id_value = _mapping_optional_value_without_aliases(
+        value,
+        "destinationBinding.networkId",
+        "networkId",
+        "network_id",
+        "networkIdHex",
+        "network_id_hex",
+    )
+    normalized_input = dict(value)
+    for key in (
+        "sourceDomain",
+        "source_domain",
+        "targetDomain",
+        "target_domain",
+        "networkId",
+        "network_id",
+        "networkIdHex",
+        "network_id_hex",
+    ):
+        normalized_input.pop(key, None)
+    binding = evm_sccp_destination_binding(
+        {
+            **normalized_input,
+            "sourceDomain": SCCP_DOMAIN_SORA,
+            "targetDomain": SCCP_DOMAIN_ETH,
+            "networkId": (
+                SCCP_ETH_MAINNET_NETWORK_ID
+                if network_id_value is _MISSING
+                else network_id_value
+            ),
+        }
+    )
+    if binding["network_id"] != SCCP_ETH_MAINNET_NETWORK_ID:
+        raise ValueError("Ethereum mainnet destinationBinding.networkId must be chain id 1")
+    return binding
+
+
+def ethereum_mainnet_sccp_destination_binding_hash(input_value: Any) -> str:
+    """Return the Ethereum mainnet destination binding hash pinned to chain id 1."""
+
+    return ethereum_mainnet_sccp_destination_binding(input_value)["binding_hash"]
+
+
+def bsc_mainnet_sccp_destination_binding(input_value: Any) -> Dict[str, Any]:
+    """Derive a BSC mainnet destination binding pinned to chain id 56."""
+
+    value = _require_mapping(input_value, "BSC mainnet SCCP destination binding")
+    source_domain_value = _mapping_optional_value_without_aliases(
+        value,
+        "destinationBinding.sourceDomain",
+        "sourceDomain",
+        "source_domain",
+    )
+    if (
+        source_domain_value is not _MISSING
+        and _normalize_u32(source_domain_value, "destinationBinding.sourceDomain")
+        != SCCP_DOMAIN_SORA
+    ):
+        raise ValueError("BSC mainnet destinationBinding.sourceDomain must be SORA")
+    target_domain_value = _mapping_optional_value_without_aliases(
+        value,
+        "destinationBinding.targetDomain",
+        "targetDomain",
+        "target_domain",
+    )
+    if (
+        target_domain_value is not _MISSING
+        and _normalize_u32(target_domain_value, "destinationBinding.targetDomain")
+        != SCCP_DOMAIN_BSC
+    ):
+        raise ValueError("BSC mainnet destinationBinding.targetDomain must be BSC")
+    network_id_value = _mapping_optional_value_without_aliases(
+        value,
+        "destinationBinding.networkId",
+        "networkId",
+        "network_id",
+        "networkIdHex",
+        "network_id_hex",
+    )
+    normalized_input = dict(value)
+    for key in (
+        "sourceDomain",
+        "source_domain",
+        "targetDomain",
+        "target_domain",
+        "networkId",
+        "network_id",
+        "networkIdHex",
+        "network_id_hex",
+    ):
+        normalized_input.pop(key, None)
+    binding = evm_sccp_destination_binding(
+        {
+            **normalized_input,
+            "sourceDomain": SCCP_DOMAIN_SORA,
+            "targetDomain": SCCP_DOMAIN_BSC,
+            "networkId": (
+                SCCP_BSC_MAINNET_NETWORK_ID
+                if network_id_value is _MISSING
+                else network_id_value
+            ),
+        }
+    )
+    if binding["network_id"] != SCCP_BSC_MAINNET_NETWORK_ID:
+        raise ValueError("BSC mainnet destinationBinding.networkId must be chain id 56")
+    return binding
+
+
+def bsc_mainnet_sccp_destination_binding_hash(input_value: Any) -> str:
+    """Return the BSC mainnet destination binding hash pinned to chain id 56."""
+
+    return bsc_mainnet_sccp_destination_binding(input_value)["binding_hash"]
 
 
 def tron_sccp_destination_binding(input_value: Any) -> Dict[str, Any]:
@@ -24076,6 +24518,74 @@ def wrap_evm_sccp_proof_result(
     return _normalize_evm_proof_result({"proof_bytes": proof_bytes}, request)
 
 
+def _require_ethereum_mainnet_sccp_proof_request(
+    request: Mapping[str, Any],
+) -> Mapping[str, Any]:
+    _require_production_evm_proof_request(request)
+    if (
+        request["target_domain"] != SCCP_DOMAIN_ETH
+        or request["public_inputs"]["target_domain"] != SCCP_DOMAIN_ETH
+    ):
+        raise ValueError("Ethereum mainnet SCCP proofs must target ETH")
+    binding = ethereum_mainnet_sccp_destination_binding(request.get("destination_binding"))
+    if binding["binding_hash"] != request["destination_binding_hash"]:
+        raise TypeError(
+            "destinationBindingHash must match Ethereum mainnet destinationBinding"
+        )
+    return request
+
+
+def build_ethereum_mainnet_sccp_destination_proof_request(
+    input_value: Any,
+) -> Mapping[str, Any]:
+    """Build an Ethereum mainnet-only SCCP Groth16 proof request."""
+
+    return _require_ethereum_mainnet_sccp_proof_request(
+        build_evm_sccp_proof_request(input_value)
+    )
+
+
+def wrap_ethereum_mainnet_sccp_destination_proof_result(
+    proof_bytes: BytesLike, request: Mapping[str, Any]
+) -> Mapping[str, Any]:
+    """Wrap externally generated Ethereum mainnet SCCP Groth16 proof bytes."""
+
+    _require_ethereum_mainnet_sccp_proof_request(request)
+    return wrap_evm_sccp_proof_result(proof_bytes, request)
+
+
+def _require_bsc_mainnet_sccp_proof_request(
+    request: Mapping[str, Any],
+) -> Mapping[str, Any]:
+    _require_production_evm_proof_request(request)
+    if (
+        request["target_domain"] != SCCP_DOMAIN_BSC
+        or request["public_inputs"]["target_domain"] != SCCP_DOMAIN_BSC
+    ):
+        raise ValueError("BSC mainnet SCCP proofs must target BSC")
+    binding = bsc_mainnet_sccp_destination_binding(request.get("destination_binding"))
+    if binding["binding_hash"] != request["destination_binding_hash"]:
+        raise TypeError("destinationBindingHash must match BSC mainnet destinationBinding")
+    return request
+
+
+def build_bsc_mainnet_sccp_destination_proof_request(input_value: Any) -> Mapping[str, Any]:
+    """Build a BSC mainnet-only SCCP Groth16 proof request."""
+
+    return _require_bsc_mainnet_sccp_proof_request(
+        build_evm_sccp_proof_request(input_value)
+    )
+
+
+def wrap_bsc_mainnet_sccp_destination_proof_result(
+    proof_bytes: BytesLike, request: Mapping[str, Any]
+) -> Mapping[str, Any]:
+    """Wrap externally generated BSC mainnet SCCP Groth16 proof bytes."""
+
+    _require_bsc_mainnet_sccp_proof_request(request)
+    return wrap_evm_sccp_proof_result(proof_bytes, request)
+
+
 def _normalize_tron_proof_result(result: Any, request: Mapping[str, Any]) -> Mapping[str, Any]:
     value = _require_mapping(result, "TRON SCCP proof result")
     proof_bytes = _to_bytes(
@@ -24617,6 +25127,70 @@ def build_evm_sccp_submission(input_value: Any) -> Mapping[str, Any]:
         accepted_target_domains=(SCCP_DOMAIN_ETH, SCCP_DOMAIN_BSC),
         proof_request_builder=build_evm_sccp_proof_request,
     )
+
+
+def build_ethereum_mainnet_sccp_destination_submission(
+    input_value: Any,
+) -> Mapping[str, Any]:
+    """Build Ethereum mainnet verifier-contract calldata from a wrapped proof result."""
+
+    submission = build_evm_sccp_submission(input_value)
+    if submission["target_domain"] != SCCP_DOMAIN_ETH:
+        raise ValueError("Ethereum mainnet SCCP submissions must target ETH")
+    value = _require_mapping(input_value, "Ethereum mainnet SCCP submission input")
+    proof_result = _require_mapping(
+        _mapping_value_without_aliases(
+            value,
+            "proofResult",
+            "proofResult",
+            "proof_result",
+        ),
+        "Ethereum mainnet SCCP proof result",
+    )
+    destination_binding = ethereum_mainnet_sccp_destination_binding(
+        _mapping_value_without_aliases(
+            proof_result,
+            "proofResult.destinationBinding",
+            "destinationBinding",
+            "destination_binding",
+        )
+    )
+    if submission["destination_binding_hash"] != destination_binding["binding_hash"]:
+        raise TypeError(
+            "submission destinationBindingHash must match Ethereum mainnet destinationBinding"
+        )
+    return submission
+
+
+def build_bsc_mainnet_sccp_destination_submission(input_value: Any) -> Mapping[str, Any]:
+    """Build BSC mainnet verifier-contract calldata from a wrapped proof result."""
+
+    submission = build_evm_sccp_submission(input_value)
+    if submission["target_domain"] != SCCP_DOMAIN_BSC:
+        raise ValueError("BSC mainnet SCCP submissions must target BSC")
+    value = _require_mapping(input_value, "BSC mainnet SCCP submission input")
+    proof_result = _require_mapping(
+        _mapping_value_without_aliases(
+            value,
+            "proofResult",
+            "proofResult",
+            "proof_result",
+        ),
+        "BSC mainnet SCCP proof result",
+    )
+    destination_binding = bsc_mainnet_sccp_destination_binding(
+        _mapping_value_without_aliases(
+            proof_result,
+            "proofResult.destinationBinding",
+            "destinationBinding",
+            "destination_binding",
+        )
+    )
+    if submission["destination_binding_hash"] != destination_binding["binding_hash"]:
+        raise TypeError(
+            "submission destinationBindingHash must match BSC mainnet destinationBinding"
+        )
+    return submission
 
 
 def build_tron_sccp_submission(input_value: Any) -> Mapping[str, Any]:
@@ -25245,6 +25819,895 @@ class EvmSccpProver:
             self.prove_fn(_clone_prover_callback_request(request), options)
         )
         return _normalize_evm_proof_result(result, request)
+
+
+class EthereumMainnetSccp:
+    """Injectable Ethereum mainnet SCCP Groth16 facade for Python proof tooling."""
+
+    def __init__(
+        self,
+        *,
+        witness_provider: Optional[Any] = None,
+        prove: Optional[ProofFn] = None,
+        execution_provider: Optional[Any] = None,
+        consensus_provider: Optional[Any] = None,
+        prove_inbound: Optional[
+            Callable[
+                [Mapping[str, Any], Mapping[str, Any]],
+                Union[BytesLike, Awaitable[BytesLike]],
+            ]
+        ] = None,
+        submit_inbound_to_iroha: Optional[
+            Callable[[bytes, Mapping[str, Any]], Union[Any, Awaitable[Any]]]
+        ] = None,
+        submit_outbound_to_ethereum: Optional[
+            Callable[[Mapping[str, Any], Mapping[str, Any]], Union[Any, Awaitable[Any]]]
+        ] = None,
+    ) -> None:
+        self.witness_provider = witness_provider
+        self.prove_fn = prove
+        self.execution_provider = execution_provider
+        self.consensus_provider = consensus_provider
+        self.inbound_prove_fn = prove_inbound
+        self.inbound_submit_fn = submit_inbound_to_iroha
+        self.outbound_submit_fn = submit_outbound_to_ethereum
+
+    @staticmethod
+    def require_mainnet_chain_id(chain_id: Any) -> int:
+        """Require an Ethereum execution chain id equal to mainnet chain id 1."""
+
+        return require_ethereum_mainnet_chain_id(chain_id)
+
+    @staticmethod
+    def destination_binding(input_value: Any) -> Dict[str, Any]:
+        """Derive an Ethereum mainnet destination binding."""
+
+        return ethereum_mainnet_sccp_destination_binding(input_value)
+
+    @staticmethod
+    def destination_binding_hash(input_value: Any) -> str:
+        """Derive an Ethereum mainnet destination binding hash."""
+
+        return ethereum_mainnet_sccp_destination_binding_hash(input_value)
+
+    async def build_outbound_proof_request(
+        self,
+        input_value: Any,
+        **options: Any,
+    ) -> Mapping[str, Any]:
+        """Resolve witness input and build an Ethereum mainnet proof request."""
+
+        witness = await _resolve_sccp_witness(
+            self.witness_provider, input_value, options
+        )
+        return build_ethereum_mainnet_sccp_destination_proof_request(witness)
+
+    async def prove_outbound_to_ethereum(
+        self,
+        input_value: Any,
+        **options: Any,
+    ) -> Mapping[str, Any]:
+        """Generate and normalize an Ethereum mainnet SCCP Groth16 proof."""
+
+        request = await self.build_outbound_proof_request(input_value, **options)
+        if self.prove_fn is None:
+            raise EvmSccpProverUnavailableError(
+                "Ethereum mainnet SCCP Groth16 prover is not linked; provide a pure "
+                "Python prove function before generating production proofs"
+            )
+        _require_ethereum_mainnet_sccp_proof_request(request)
+        result = await _maybe_await(
+            self.prove_fn(_clone_prover_callback_request(request), options)
+        )
+        return _normalize_evm_proof_result(result, request)
+
+    def build_ethereum_calldata(self, input_value: Any) -> Mapping[str, Any]:
+        """Build Ethereum mainnet verifier calldata from a wrapped proof result."""
+
+        return build_ethereum_mainnet_sccp_destination_submission(input_value)
+
+    async def submit_outbound_to_ethereum(
+        self,
+        input_value: Any,
+        **options: Any,
+    ) -> Any:
+        """Submit Ethereum verifier calldata through an app-owned transaction hook."""
+
+        submission = self.build_ethereum_calldata(input_value)
+        submitter = options.get("submit_outbound_to_ethereum") or self.outbound_submit_fn
+        if submitter is None:
+            raise EvmSccpProverUnavailableError(
+                "Ethereum mainnet SCCP outbound submitter is not linked"
+            )
+        return await _maybe_await(submitter(dict(submission), options))
+
+    async def validate_execution_provider_mainnet(
+        self,
+        execution_provider: Optional[Any] = None,
+    ) -> Any:
+        """Require the selected execution provider to report Ethereum mainnet."""
+
+        provider = (
+            execution_provider
+            if execution_provider is not None
+            else self.execution_provider
+        )
+        chain_id = await _evm_facade_provider_request(
+            provider,
+            "eth_chainId",
+            [],
+            "Ethereum mainnet SCCP",
+        )
+        require_ethereum_mainnet_chain_id(chain_id)
+        return chain_id
+
+    async def collect_inbound_evidence_from_receipt(
+        self,
+        input_value: Any,
+        *,
+        execution_provider: Optional[Any] = None,
+        consensus_provider: Optional[Any] = None,
+        **options: Any,
+    ) -> Mapping[str, Any]:
+        """Collect and validate Ethereum mainnet -> SORA inbound receipt evidence."""
+
+        value = _require_mapping_input(
+            input_value, "Ethereum mainnet inbound evidence"
+        )
+        source_domain_input = _strict_optional_mapping_value(
+            value,
+            "sourceDomain",
+            "sourceDomain",
+            "source_domain",
+        )
+        target_domain_input = _strict_optional_mapping_value(
+            value,
+            "targetDomain",
+            "targetDomain",
+            "target_domain",
+        )
+        source_domain = (
+            SCCP_DOMAIN_ETH
+            if source_domain_input is None
+            else _normalize_u32(source_domain_input, "sourceDomain")
+        )
+        target_domain = (
+            SCCP_DOMAIN_SORA
+            if target_domain_input is None
+            else _normalize_u32(target_domain_input, "targetDomain")
+        )
+        if source_domain != SCCP_DOMAIN_ETH:
+            raise ValueError(
+                "Ethereum mainnet inbound SCCP evidence sourceDomain must be ETH"
+            )
+        if target_domain != SCCP_DOMAIN_SORA:
+            raise ValueError(
+                "Ethereum mainnet inbound SCCP evidence targetDomain must be SORA"
+            )
+
+        provider = (
+            execution_provider
+            if execution_provider is not None
+            else self.execution_provider
+        )
+        if provider is not None:
+            await self.validate_execution_provider_mainnet(provider)
+
+        transaction_hash_input = _strict_optional_mapping_value(
+            value,
+            "transactionHash",
+            "transactionHash",
+            "transaction_hash",
+        )
+        transaction_hash = (
+            None
+            if transaction_hash_input is None
+            else _normalize_evm_rpc_hex(transaction_hash_input, "transactionHash", 32)
+        )
+        receipt = _strict_optional_mapping_value(value, "receipt", "receipt")
+        if receipt is None and transaction_hash is not None and provider is not None:
+            receipt = await _evm_facade_provider_request(
+                provider,
+                "eth_getTransactionReceipt",
+                [transaction_hash],
+                "Ethereum mainnet SCCP",
+            )
+
+        receipt_proof = _strict_optional_mapping_value(
+            value,
+            "receiptProof",
+            "receiptProof",
+            "receipt_proof",
+        )
+        receipt_proof_hash_input = _strict_optional_mapping_value(
+            value,
+            "receiptProofHash",
+            "receiptProofHash",
+            "receipt_proof_hash",
+        )
+        receipt_proof_hash = (
+            None
+            if receipt_proof_hash_input is None
+            else _normalize_evm_rpc_hex(receipt_proof_hash_input, "receiptProofHash", 32)
+        )
+        if receipt_proof is not None:
+            computed_receipt_proof_hash = evm_sccp_receipt_proof_hash(receipt_proof)
+            if (
+                receipt_proof_hash is not None
+                and receipt_proof_hash != computed_receipt_proof_hash
+            ):
+                raise ValueError("receiptProofHash must match receiptProof")
+            receipt_proof_hash = computed_receipt_proof_hash
+        if receipt is None and receipt_proof is None and receipt_proof_hash is None:
+            raise TypeError(
+                "Ethereum mainnet inbound evidence requires a receipt, receiptProof, "
+                "receiptProofHash, or transactionHash"
+            )
+
+        block_hash_input = _strict_optional_mapping_value(
+            value,
+            "blockHash",
+            "blockHash",
+            "block_hash",
+        )
+        block_hash = (
+            None
+            if block_hash_input is None
+            else _normalize_evm_rpc_hex(block_hash_input, "blockHash", 32)
+        )
+        receipt_block_number = None
+        normalized_receipt = None
+        if receipt is not None:
+            receipt_mapping = _require_mapping_input(receipt, "receipt")
+            if receipt_mapping.get("status") != "0x1":
+                raise ValueError(
+                    "Ethereum mainnet inbound receipt status must be 0x1"
+                )
+            receipt_transaction_hash = _normalize_evm_rpc_hex(
+                _mapping_value_without_aliases(
+                    receipt_mapping,
+                    "receipt.transactionHash",
+                    "transactionHash",
+                    "transaction_hash",
+                ),
+                "receipt.transactionHash",
+                32,
+            )
+            if (
+                transaction_hash is not None
+                and transaction_hash != receipt_transaction_hash
+            ):
+                raise ValueError("receipt.transactionHash must match transactionHash")
+            transaction_hash = receipt_transaction_hash
+            receipt_block_hash = _normalize_evm_rpc_hex(
+                _mapping_value_without_aliases(
+                    receipt_mapping,
+                    "receipt.blockHash",
+                    "blockHash",
+                    "block_hash",
+                ),
+                "receipt.blockHash",
+                32,
+            )
+            if block_hash is not None and block_hash != receipt_block_hash:
+                raise ValueError("blockHash must match receipt.blockHash")
+            block_hash = receipt_block_hash
+            receipt_block_number_input = _mapping_value_without_aliases(
+                receipt_mapping,
+                "receipt.blockNumber",
+                "blockNumber",
+                "block_number",
+            )
+            if receipt_block_number_input is None:
+                raise ValueError("receipt.blockNumber is required")
+            receipt_block_number = _normalize_evm_rpc_quantity(
+                receipt_block_number_input,
+                "receipt.blockNumber",
+            )
+            if receipt_block_number == "0x0":
+                raise ValueError("receipt.blockNumber must be positive")
+            normalized_receipt = dict(receipt_mapping)
+
+        block = _strict_optional_mapping_value(value, "block", "block")
+        if block is None and block_hash is not None and provider is not None:
+            block = await _evm_facade_provider_request(
+                provider,
+                "eth_getBlockByHash",
+                [block_hash, False],
+                "Ethereum mainnet SCCP",
+            )
+        normalized_block = None
+        block_receipts_root = None
+        if block is not None:
+            block_mapping = _require_mapping_input(block, "block")
+            normalized_block_hash = _normalize_evm_rpc_hex(
+                _mapping_value(block_mapping, "hash"),
+                "block.hash",
+                32,
+            )
+            if block_hash is not None and block_hash != normalized_block_hash:
+                raise ValueError("block.hash must match receipt.blockHash")
+            block_hash = normalized_block_hash
+            block_number_input = _mapping_value_without_aliases(
+                block_mapping,
+                "block.number",
+                "number",
+                "blockNumber",
+                "block_number",
+            )
+            if block_number_input is None:
+                raise ValueError("block.number is required")
+            block_number = _normalize_evm_rpc_quantity(
+                block_number_input, "block.number"
+            )
+            if block_number == "0x0":
+                raise ValueError("block.number must be positive")
+            if (
+                receipt_block_number is not None
+                and receipt_block_number != block_number
+            ):
+                raise ValueError("block.number must match receipt.blockNumber")
+            receipt_block_number = block_number
+            block_receipts_root = _normalize_evm_rpc_hex(
+                _mapping_value_without_aliases(
+                    block_mapping,
+                    "block.receiptsRoot",
+                    "receiptsRoot",
+                    "receipts_root",
+                ),
+                "block.receiptsRoot",
+                32,
+            )
+            normalized_block = dict(block_mapping)
+
+        supplied_finality = _strict_optional_mapping_value(
+            value,
+            "beaconFinality",
+            "beaconFinality",
+            "beacon_finality",
+            "finalityEvidence",
+            "finality_evidence",
+        )
+        evidence: Dict[str, Any] = {
+            key: item
+            for key, item in value.items()
+            if key
+            not in {
+                "sourceDomain",
+                "source_domain",
+                "targetDomain",
+                "target_domain",
+                "transactionHash",
+                "transaction_hash",
+                "receipt",
+                "receiptProof",
+                "receipt_proof",
+                "receiptProofHash",
+                "receipt_proof_hash",
+                "blockHash",
+                "block_hash",
+                "block",
+                "beaconFinality",
+                "beacon_finality",
+                "finalityEvidence",
+                "finality_evidence",
+            }
+        }
+        evidence.update(
+            {
+                "source_domain": SCCP_DOMAIN_ETH,
+                "target_domain": SCCP_DOMAIN_SORA,
+            }
+        )
+        if transaction_hash is not None:
+            evidence["transaction_hash"] = transaction_hash
+        if normalized_receipt is not None:
+            evidence["receipt"] = normalized_receipt
+        if normalized_block is not None:
+            evidence["block"] = normalized_block
+        if receipt_proof_hash is not None:
+            evidence["receipt_proof_hash"] = receipt_proof_hash
+
+        if supplied_finality is not None:
+            if isinstance(supplied_finality, Mapping) and not supplied_finality:
+                return evidence
+            evidence["beacon_finality"] = _normalize_ethereum_mainnet_beacon_finality(
+                supplied_finality,
+                expected_block_hash=block_hash,
+                expected_block_number=receipt_block_number,
+                expected_receipts_root=block_receipts_root,
+            )
+        else:
+            selected_consensus = (
+                consensus_provider
+                if consensus_provider is not None
+                else self.consensus_provider
+            )
+            collected_finality = await _evm_facade_collect_finality(
+                selected_consensus,
+                evidence,
+                options,
+                "Ethereum mainnet consensus provider",
+            )
+            if collected_finality is not _MISSING:
+                evidence["beacon_finality"] = (
+                    _normalize_ethereum_mainnet_beacon_finality(
+                        collected_finality,
+                        expected_block_hash=block_hash,
+                        expected_block_number=receipt_block_number,
+                        expected_receipts_root=block_receipts_root,
+                    )
+                )
+        return evidence
+
+    async def prove_inbound_to_sora(
+        self,
+        input_value: Any,
+        **options: Any,
+    ) -> bytes:
+        """Generate an Ethereum mainnet -> SORA source proof with a native prover."""
+
+        if self.inbound_prove_fn is None:
+            raise EvmSccpProverUnavailableError(
+                "Ethereum mainnet SCCP inbound prover is not linked; provide a native "
+                "prove_inbound function"
+            )
+        evidence = await self.collect_inbound_evidence_from_receipt(
+            input_value, **options
+        )
+        if evidence.get("beacon_finality") is None:
+            raise TypeError(
+                "Ethereum mainnet SCCP inbound proof requires beaconFinality"
+            )
+        proof_bytes = await _maybe_await(self.inbound_prove_fn(dict(evidence), options))
+        return bytes(_require_non_empty_nonzero_bytes(proof_bytes, "proofBytes"))
+
+    async def submit_inbound_to_iroha(
+        self,
+        proof_bytes: Any,
+        **options: Any,
+    ) -> Any:
+        """Submit copied non-zero Ethereum mainnet -> SORA proof bytes."""
+
+        submitter = options.get("submit_inbound_to_iroha") or self.inbound_submit_fn
+        if submitter is None:
+            raise EvmSccpProverUnavailableError(
+                "Ethereum mainnet SCCP inbound submitter is not linked"
+            )
+        proof_copy = bytes(_require_non_empty_nonzero_bytes(proof_bytes, "proofBytes"))
+        return await _maybe_await(submitter(proof_copy, options))
+
+
+class BscMainnetSccp:
+    """Injectable BSC mainnet SCCP Groth16 facade for Python proof tooling."""
+
+    def __init__(
+        self,
+        *,
+        witness_provider: Optional[Any] = None,
+        prove: Optional[ProofFn] = None,
+        execution_provider: Optional[Any] = None,
+        consensus_provider: Optional[Any] = None,
+        prove_inbound: Optional[Callable[[Mapping[str, Any], Mapping[str, Any]], Union[BytesLike, Awaitable[BytesLike]]]] = None,
+        submit_inbound_to_iroha: Optional[Callable[[bytes, Mapping[str, Any]], Union[Any, Awaitable[Any]]]] = None,
+        submit_outbound_to_bsc: Optional[
+            Callable[[Mapping[str, Any], Mapping[str, Any]], Union[Any, Awaitable[Any]]]
+        ] = None,
+    ) -> None:
+        self.witness_provider = witness_provider
+        self.prove_fn = prove
+        self.execution_provider = execution_provider
+        self.consensus_provider = consensus_provider
+        self.inbound_prove_fn = prove_inbound
+        self.inbound_submit_fn = submit_inbound_to_iroha
+        self.outbound_submit_fn = submit_outbound_to_bsc
+
+    @staticmethod
+    def require_mainnet_chain_id(chain_id: Any) -> int:
+        """Require a BSC execution chain id equal to mainnet chain id 56."""
+
+        return require_bsc_mainnet_chain_id(chain_id)
+
+    @staticmethod
+    def destination_binding(input_value: Any) -> Dict[str, Any]:
+        """Derive a BSC mainnet destination binding."""
+
+        return bsc_mainnet_sccp_destination_binding(input_value)
+
+    @staticmethod
+    def destination_binding_hash(input_value: Any) -> str:
+        """Derive a BSC mainnet destination binding hash."""
+
+        return bsc_mainnet_sccp_destination_binding_hash(input_value)
+
+    async def build_outbound_proof_request(
+        self,
+        input_value: Any,
+        **options: Any,
+    ) -> Mapping[str, Any]:
+        """Resolve witness input and build a BSC mainnet proof request."""
+
+        witness = await _resolve_sccp_witness(
+            self.witness_provider, input_value, options
+        )
+        return build_bsc_mainnet_sccp_destination_proof_request(witness)
+
+    async def prove_outbound_to_bsc(
+        self,
+        input_value: Any,
+        **options: Any,
+    ) -> Mapping[str, Any]:
+        """Generate and normalize a BSC mainnet SCCP Groth16 proof."""
+
+        request = await self.build_outbound_proof_request(input_value, **options)
+        if self.prove_fn is None:
+            raise EvmSccpProverUnavailableError(
+                "BSC mainnet SCCP Groth16 prover is not linked; provide a pure Python "
+                "prove function before generating production proofs"
+            )
+        _require_bsc_mainnet_sccp_proof_request(request)
+        result = await _maybe_await(
+            self.prove_fn(_clone_prover_callback_request(request), options)
+        )
+        return _normalize_evm_proof_result(result, request)
+
+    def build_bsc_calldata(self, input_value: Any) -> Mapping[str, Any]:
+        """Build BSC mainnet verifier calldata from a wrapped proof result."""
+
+        return build_bsc_mainnet_sccp_destination_submission(input_value)
+
+    async def submit_outbound_to_bsc(
+        self,
+        input_value: Any,
+        **options: Any,
+    ) -> Any:
+        """Submit BSC verifier calldata through an app-owned transaction hook."""
+
+        submission = self.build_bsc_calldata(input_value)
+        submitter = options.get("submit_outbound_to_bsc") or self.outbound_submit_fn
+        if submitter is None:
+            raise EvmSccpProverUnavailableError(
+                "BSC mainnet SCCP outbound submitter is not linked"
+            )
+        return await _maybe_await(submitter(dict(submission), options))
+
+    async def validate_execution_provider_mainnet(
+        self,
+        execution_provider: Optional[Any] = None,
+    ) -> Any:
+        """Require the selected execution provider to report BSC mainnet."""
+
+        provider = execution_provider if execution_provider is not None else self.execution_provider
+        chain_id = await _evm_facade_provider_request(
+            provider,
+            "eth_chainId",
+            [],
+            "BSC mainnet SCCP",
+        )
+        require_bsc_mainnet_chain_id(chain_id)
+        return chain_id
+
+    async def collect_inbound_evidence_from_receipt(
+        self,
+        input_value: Any,
+        *,
+        execution_provider: Optional[Any] = None,
+        consensus_provider: Optional[Any] = None,
+        **options: Any,
+    ) -> Mapping[str, Any]:
+        """Collect and validate BSC -> SORA inbound receipt evidence."""
+
+        value = _require_mapping_input(input_value, "BSC mainnet inbound evidence")
+        source_domain_input = _strict_optional_mapping_value(
+            value,
+            "sourceDomain",
+            "sourceDomain",
+            "source_domain",
+        )
+        target_domain_input = _strict_optional_mapping_value(
+            value,
+            "targetDomain",
+            "targetDomain",
+            "target_domain",
+        )
+        source_domain = (
+            SCCP_DOMAIN_BSC
+            if source_domain_input is None
+            else _normalize_u32(source_domain_input, "sourceDomain")
+        )
+        target_domain = (
+            SCCP_DOMAIN_SORA
+            if target_domain_input is None
+            else _normalize_u32(target_domain_input, "targetDomain")
+        )
+        if source_domain != SCCP_DOMAIN_BSC:
+            raise ValueError("BSC mainnet inbound SCCP evidence sourceDomain must be BSC")
+        if target_domain != SCCP_DOMAIN_SORA:
+            raise ValueError("BSC mainnet inbound SCCP evidence targetDomain must be SORA")
+
+        provider = execution_provider if execution_provider is not None else self.execution_provider
+        if provider is not None:
+            await self.validate_execution_provider_mainnet(provider)
+
+        transaction_hash_input = _strict_optional_mapping_value(
+            value,
+            "transactionHash",
+            "transactionHash",
+            "transaction_hash",
+        )
+        transaction_hash = (
+            None
+            if transaction_hash_input is None
+            else _normalize_evm_rpc_hex(transaction_hash_input, "transactionHash", 32)
+        )
+        receipt = _strict_optional_mapping_value(value, "receipt", "receipt")
+        if receipt is None and transaction_hash is not None and provider is not None:
+            receipt = await _evm_facade_provider_request(
+                provider,
+                "eth_getTransactionReceipt",
+                [transaction_hash],
+                "BSC mainnet SCCP",
+            )
+
+        receipt_proof = _strict_optional_mapping_value(
+            value,
+            "receiptProof",
+            "receiptProof",
+            "receipt_proof",
+        )
+        receipt_proof_hash_input = _strict_optional_mapping_value(
+            value,
+            "receiptProofHash",
+            "receiptProofHash",
+            "receipt_proof_hash",
+        )
+        receipt_proof_hash = (
+            None
+            if receipt_proof_hash_input is None
+            else _normalize_evm_rpc_hex(receipt_proof_hash_input, "receiptProofHash", 32)
+        )
+        if receipt_proof is not None:
+            computed_receipt_proof_hash = bsc_sccp_receipt_proof_hash(receipt_proof)
+            if (
+                receipt_proof_hash is not None
+                and receipt_proof_hash != computed_receipt_proof_hash
+            ):
+                raise ValueError("receiptProofHash must match receiptProof")
+            receipt_proof_hash = computed_receipt_proof_hash
+        if receipt is None and receipt_proof is None and receipt_proof_hash is None:
+            raise TypeError(
+                "BSC mainnet inbound evidence requires a receipt, receiptProof, "
+                "receiptProofHash, or transactionHash"
+            )
+
+        block_hash_input = _strict_optional_mapping_value(
+            value,
+            "blockHash",
+            "blockHash",
+            "block_hash",
+        )
+        block_hash = (
+            None
+            if block_hash_input is None
+            else _normalize_evm_rpc_hex(block_hash_input, "blockHash", 32)
+        )
+        receipt_block_number = None
+        normalized_receipt = None
+        if receipt is not None:
+            receipt_mapping = _require_mapping_input(receipt, "receipt")
+            if receipt_mapping.get("status") != "0x1":
+                raise ValueError("BSC mainnet inbound receipt status must be 0x1")
+            receipt_transaction_hash = _normalize_evm_rpc_hex(
+                _mapping_value_without_aliases(
+                    receipt_mapping,
+                    "receipt.transactionHash",
+                    "transactionHash",
+                    "transaction_hash",
+                ),
+                "receipt.transactionHash",
+                32,
+            )
+            if transaction_hash is not None and transaction_hash != receipt_transaction_hash:
+                raise ValueError("receipt.transactionHash must match transactionHash")
+            transaction_hash = receipt_transaction_hash
+            receipt_block_hash = _normalize_evm_rpc_hex(
+                _mapping_value_without_aliases(
+                    receipt_mapping,
+                    "receipt.blockHash",
+                    "blockHash",
+                    "block_hash",
+                ),
+                "receipt.blockHash",
+                32,
+            )
+            if block_hash is not None and block_hash != receipt_block_hash:
+                raise ValueError("blockHash must match receipt.blockHash")
+            block_hash = receipt_block_hash
+            receipt_block_number_input = _mapping_value_without_aliases(
+                receipt_mapping,
+                "receipt.blockNumber",
+                "blockNumber",
+                "block_number",
+            )
+            if receipt_block_number_input is None:
+                raise ValueError("receipt.blockNumber is required")
+            receipt_block_number = _normalize_evm_rpc_quantity(
+                receipt_block_number_input,
+                "receipt.blockNumber",
+            )
+            if receipt_block_number == "0x0":
+                raise ValueError("receipt.blockNumber must be positive")
+            normalized_receipt = dict(receipt_mapping)
+
+        block = _strict_optional_mapping_value(value, "block", "block")
+        if block is None and block_hash is not None and provider is not None:
+            block = await _evm_facade_provider_request(
+                provider,
+                "eth_getBlockByHash",
+                [block_hash, False],
+                "BSC mainnet SCCP",
+            )
+        normalized_block = None
+        execution_receipts_root = None
+        if block is not None:
+            block_mapping = _require_mapping_input(block, "block")
+            normalized_block_hash = _normalize_evm_rpc_hex(
+                _mapping_value(block_mapping, "hash"),
+                "block.hash",
+                32,
+            )
+            if block_hash is not None and block_hash != normalized_block_hash:
+                raise ValueError("block.hash must match receipt.blockHash")
+            block_hash = normalized_block_hash
+            block_number_input = _mapping_value_without_aliases(
+                block_mapping,
+                "block.number",
+                "number",
+                "blockNumber",
+                "block_number",
+            )
+            if block_number_input is None:
+                raise ValueError("block.number is required")
+            block_number = _normalize_evm_rpc_quantity(block_number_input, "block.number")
+            if block_number == "0x0":
+                raise ValueError("block.number must be positive")
+            if receipt_block_number is not None and receipt_block_number != block_number:
+                raise ValueError("block.number must match receipt.blockNumber")
+            receipt_block_number = block_number
+            execution_receipts_root = _normalize_evm_rpc_hex(
+                _mapping_value_without_aliases(
+                    block_mapping,
+                    "block.receiptsRoot",
+                    "receiptsRoot",
+                    "receipts_root",
+                ),
+                "block.receiptsRoot",
+                32,
+            )
+            normalized_block = dict(block_mapping)
+
+        supplied_finality = _strict_optional_mapping_value(
+            value,
+            "parliaFinality",
+            "parliaFinality",
+            "parlia_finality",
+            "finalityEvidence",
+            "finality_evidence",
+        )
+        evidence: Dict[str, Any] = {
+            key: item
+            for key, item in value.items()
+            if key
+            not in {
+                "sourceDomain",
+                "source_domain",
+                "targetDomain",
+                "target_domain",
+                "transactionHash",
+                "transaction_hash",
+                "receipt",
+                "receiptProof",
+                "receipt_proof",
+                "receiptProofHash",
+                "receipt_proof_hash",
+                "blockHash",
+                "block_hash",
+                "block",
+                "parliaFinality",
+                "parlia_finality",
+                "finalityEvidence",
+                "finality_evidence",
+            }
+        }
+        evidence.update(
+            {
+                "source_domain": SCCP_DOMAIN_BSC,
+                "target_domain": SCCP_DOMAIN_SORA,
+            }
+        )
+        if transaction_hash is not None:
+            evidence["transaction_hash"] = transaction_hash
+        if normalized_receipt is not None:
+            evidence["receipt"] = normalized_receipt
+        if normalized_block is not None:
+            evidence["block"] = normalized_block
+        if receipt_proof_hash is not None:
+            evidence["receipt_proof_hash"] = receipt_proof_hash
+        if supplied_finality is not None:
+            if isinstance(supplied_finality, Mapping) and not supplied_finality:
+                return evidence
+            evidence["parlia_finality"] = _normalize_bsc_mainnet_parlia_finality(
+                supplied_finality,
+                expected_block_hash=block_hash,
+                expected_block_number=receipt_block_number,
+                expected_receipts_root=execution_receipts_root,
+            )
+        else:
+            selected_consensus = (
+                consensus_provider if consensus_provider is not None else self.consensus_provider
+            )
+            collected_finality = await _evm_facade_collect_finality(
+                selected_consensus,
+                evidence,
+                options,
+                "BSC mainnet consensus provider",
+            )
+            if collected_finality is not _MISSING:
+                evidence["parlia_finality"] = _normalize_bsc_mainnet_parlia_finality(
+                    collected_finality,
+                    expected_block_hash=block_hash,
+                    expected_block_number=receipt_block_number,
+                    expected_receipts_root=execution_receipts_root,
+                )
+        return evidence
+
+    async def prove_inbound_to_sora(
+        self,
+        input_value: Any,
+        **options: Any,
+    ) -> bytes:
+        """Generate a BSC -> SORA source proof with the linked native prover."""
+
+        if self.inbound_prove_fn is None:
+            raise EvmSccpProverUnavailableError(
+                "BSC mainnet SCCP inbound prover is not linked; provide a native "
+                "prove_inbound function"
+            )
+        evidence = await self.collect_inbound_evidence_from_receipt(input_value, **options)
+        parlia_finality = evidence.get("parlia_finality")
+        if not isinstance(parlia_finality, Mapping) or not parlia_finality:
+            raise TypeError("BSC mainnet SCCP inbound proof requires parliaFinality")
+        proof_bytes = await _maybe_await(self.inbound_prove_fn(dict(evidence), options))
+        return bytes(_require_non_empty_nonzero_bytes(proof_bytes, "proofBytes"))
+
+    async def submit_inbound_to_iroha(
+        self,
+        proof_bytes: Any,
+        **options: Any,
+    ) -> Any:
+        """Submit copied non-zero BSC -> SORA proof bytes through the linked submitter."""
+
+        submitter = options.get("submit_inbound_to_iroha") or self.inbound_submit_fn
+        if submitter is None:
+            raise EvmSccpProverUnavailableError(
+                "BSC mainnet SCCP inbound submitter is not linked"
+            )
+        proof_copy = bytes(_require_non_empty_nonzero_bytes(proof_bytes, "proofBytes"))
+        return await _maybe_await(submitter(proof_copy, options))
+
+
+class BscMainnetSccpProver(BscMainnetSccp):
+    """Backward-compatible BSC mainnet local-prover facade."""
+
+    async def build_request(self, input_value: Any, **options: Any) -> Mapping[str, Any]:
+        """Resolve witness input and build a BSC mainnet local-prover request."""
+
+        return await self.build_outbound_proof_request(input_value, **options)
+
+    async def prove(self, input_value: Any, **options: Any) -> Mapping[str, Any]:
+        """Generate and normalize a BSC mainnet SCCP Groth16 proof."""
+
+        return await self.prove_outbound_to_bsc(input_value, **options)
 
 
 class TronSccpProver:

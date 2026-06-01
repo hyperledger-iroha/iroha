@@ -13,6 +13,10 @@ import {
   SCCP_DOMAIN_SORA_KUSAMA,
   SCCP_DOMAIN_TON,
   SCCP_DOMAIN_TRON,
+  SCCP_ETH_MAINNET_EVM_CHAIN_ID,
+  SCCP_ETH_MAINNET_NETWORK_ID,
+  SCCP_BSC_MAINNET_EVM_CHAIN_ID,
+  SCCP_BSC_MAINNET_NETWORK_ID,
   SCCP_STARK_FRI_PROOF_FAMILY_V1,
   SCCP_SOURCE_STATE_MAX_PROOF_BYTES,
   SCCP_SOURCE_STATE_MAX_PROOF_LABEL_BYTES,
@@ -57,7 +61,15 @@ import {
   bscValidatorSetTransitionMessageHash,
   buildEvmSccpProofRequest,
   buildEvmSccpSubmission,
+  EthereumMainnetSccp,
+  ethereumMainnetSccpDestinationBinding,
+  BscMainnetSccp,
+  BscMainnetSccpProver,
+  bscMainnetSccpDestinationBinding,
+  buildBscMainnetSccpDestinationProofRequest,
+  buildBscMainnetSccpDestinationSubmission,
   evmSccpDestinationBinding,
+  wrapBscMainnetSccpDestinationProofResult,
   wrapEvmSccpProofResult,
   buildSolanaSccpAccountsLtHashProofRequest,
   buildSolanaSccpFullLightClientAuditProofRequest,
@@ -237,7 +249,9 @@ const HALFWIDTH_KANA = /[ｲﾛﾊﾆﾎﾍﾄﾁﾘﾇﾙｦﾜｶﾖﾀﾚｿ�
 const DECLARATIONS_TEXT = readFileSync(new URL("../index.d.ts", import.meta.url), "utf8");
 const SCCP_SOURCE_TEXT = readFileSync(new URL("../src/sccp.js", import.meta.url), "utf8");
 const INDEX_SOURCE_TEXT = readFileSync(new URL("../src/index.js", import.meta.url), "utf8");
+const DIST_SCCP_TEXT = readFileSync(new URL("../dist/sccp.js", import.meta.url), "utf8");
 const DIST_INDEX_TEXT = readFileSync(new URL("../dist/index.js", import.meta.url), "utf8");
+const PACKAGE_JSON_TEXT = readFileSync(new URL("../package.json", import.meta.url), "utf8");
 
 function publicSccpSourceExports() {
   return [...SCCP_SOURCE_TEXT.matchAll(/export\s+(?:const|function|class)\s+([A-Za-z0-9_]+)/gu)]
@@ -779,6 +793,93 @@ test("package declarations expose SCCP witness-provider hooks for portal provers
       `${lane} prover options must reject duplicate witness/prove aliases`,
     );
   }
+});
+
+test("package declarations expose Ethereum mainnet finality evidence hooks", () => {
+  assert.match(
+    DECLARATIONS_TEXT,
+    /export interface EthereumMainnetBeaconFinalityEvidenceInput[\s\S]*executionBlockNumber\?: string \| number \| bigint;[\s\S]*executionBlockHash\?: string;[\s\S]*executionReceiptsRoot\?: string;/,
+  );
+  assert.match(
+    DECLARATIONS_TEXT,
+    /export interface EthereumMainnetBeaconFinalityEvidence[\s\S]*readonly executionBlockNumber: string;[\s\S]*readonly executionBlockHash: string;[\s\S]*readonly executionReceiptsRoot: string;/,
+  );
+  assert.match(
+    DECLARATIONS_TEXT,
+    /export interface EthereumMainnetConsensusProviderInput[\s\S]*readonly receipt\?: Record<string, unknown>;[\s\S]*readonly block\?: Record<string, unknown>;[\s\S]*readonly transactionHash\?: string;/,
+  );
+  assert.match(
+    DECLARATIONS_TEXT,
+    /export type EthereumMainnetConsensusProvider = \{[\s\S]*collectFinalityEvidence\([\s\S]*input: EthereumMainnetConsensusProviderInput,[\s\S]*\): EthereumMainnetBeaconFinalityEvidenceInput \| Promise<EthereumMainnetBeaconFinalityEvidenceInput>;/,
+  );
+  assert.match(
+    DECLARATIONS_TEXT,
+    /export interface EthereumMainnetInboundEvidenceInput[\s\S]*beaconFinality\?: EthereumMainnetBeaconFinalityEvidenceInput;[\s\S]*finalityEvidence\?: EthereumMainnetBeaconFinalityEvidenceInput;[\s\S]*receiptProofHash\?: string;/,
+  );
+  assert.match(
+    DECLARATIONS_TEXT,
+    /proveInboundToSora\([\s\S]*executionProvider\?: EthereumMainnetExecutionProvider;[\s\S]*consensusProvider\?: EthereumMainnetConsensusProvider;[\s\S]*proveInbound\?: EthereumMainnetInboundProveFn;/,
+  );
+});
+
+function assertBrowserMainnetSccpArtifactsStayJsOnlyAndLocalProverOwned() {
+  const artifacts = {
+    "package.json": PACKAGE_JSON_TEXT,
+    "src/sccp.js": SCCP_SOURCE_TEXT,
+    "src/index.js": INDEX_SOURCE_TEXT,
+    "dist/sccp.js": DIST_SCCP_TEXT,
+    "dist/index.js": DIST_INDEX_TEXT,
+    "index.d.ts": DECLARATIONS_TEXT,
+  };
+  const forbidden = [
+    /\bWebAssembly\b/u,
+    /\bwasm\b/iu,
+    /\bsnarkjs\b/iu,
+    /\bremoteProver\b/u,
+    /\bremote prover\b/iu,
+    /\bproverUrl\b/u,
+    /\bproverEndpoint\b/u,
+  ];
+  for (const [artifact, source] of Object.entries(artifacts)) {
+    for (const pattern of forbidden) {
+      assert.doesNotMatch(source, pattern, `${artifact} must not depend on ${pattern}`);
+    }
+  }
+}
+
+test("browser Ethereum mainnet SCCP artifacts stay JS-only and local-prover owned", () => {
+  assertBrowserMainnetSccpArtifactsStayJsOnlyAndLocalProverOwned();
+});
+
+test("browser BSC mainnet SCCP artifacts stay JS-only and local-prover owned", () => {
+  assertBrowserMainnetSccpArtifactsStayJsOnlyAndLocalProverOwned();
+});
+
+test("package declarations expose BSC mainnet Parlia finality evidence hooks", () => {
+  assert.match(
+    DECLARATIONS_TEXT,
+    /export interface BscMainnetParliaFinalityEvidenceInput[\s\S]*executionBlockNumber\?: string \| number \| bigint;[\s\S]*executionBlockHash\?: string;[\s\S]*executionReceiptsRoot\?: string;[\s\S]*validatorEpoch\?: string \| number \| bigint;[\s\S]*commitSealHash\?: string;/,
+  );
+  assert.match(
+    DECLARATIONS_TEXT,
+    /export interface BscMainnetParliaFinalityEvidence[\s\S]*readonly executionBlockNumber: string;[\s\S]*readonly executionBlockHash: string;[\s\S]*readonly executionReceiptsRoot: string;/,
+  );
+  assert.match(
+    DECLARATIONS_TEXT,
+    /export interface BscMainnetConsensusProviderInput[\s\S]*readonly receipt\?: Record<string, unknown>;[\s\S]*readonly block\?: Record<string, unknown>;[\s\S]*readonly transactionHash\?: string;/,
+  );
+  assert.match(
+    DECLARATIONS_TEXT,
+    /export type BscMainnetConsensusProvider = \{[\s\S]*collectFinalityEvidence\([\s\S]*input: BscMainnetConsensusProviderInput,[\s\S]*\): BscMainnetParliaFinalityEvidenceInput \| Promise<BscMainnetParliaFinalityEvidenceInput>;/,
+  );
+  assert.match(
+    DECLARATIONS_TEXT,
+    /export interface BscMainnetInboundEvidenceInput[\s\S]*parliaFinality\?: BscMainnetParliaFinalityEvidenceInput;[\s\S]*finalityEvidence\?: BscMainnetParliaFinalityEvidenceInput;[\s\S]*receiptProof\?: BscSccpReceiptProofInput;/,
+  );
+  assert.match(
+    DECLARATIONS_TEXT,
+    /proveInboundToSora\([\s\S]*executionProvider\?: BscMainnetExecutionProvider;[\s\S]*consensusProvider\?: BscMainnetConsensusProvider;[\s\S]*proveInbound\?: BscMainnetInboundProveFn;/,
+  );
 });
 
 test("package declarations separate TON proof-request and submission inputs", () => {
@@ -1668,9 +1769,15 @@ test("package dist entrypoint exports SCCP TRON Groth16 helpers", () => {
   );
 });
 
-test("package dist entrypoint exports SCCP EVM-family Groth16 helpers", () => {
+test("package dist entrypoint exports SCCP EVM-family Groth16 helpers", async () => {
   const proofBytes = sampleGroth16ProofBytes();
   const destinationBinding = sampleEvmDestinationBinding();
+  const ethereumMainnetBinding = ethereumMainnetSccpDestinationBinding({
+    verifierAddress: `0x${"11".repeat(20)}`,
+    bridgeAddress: `0x${"22".repeat(20)}`,
+    verifierCodeHash: `0x${"bb".repeat(32)}`,
+    verifierKeyHash: `0x${"cc".repeat(32)}`,
+  });
   const publicInputs = {
     version: 1,
     message_id: `0x${"11".repeat(32)}`,
@@ -1680,6 +1787,59 @@ test("package dist entrypoint exports SCCP EVM-family Groth16 helpers", () => {
     finality_height: "19",
     finality_block_hash: `0x${"44".repeat(32)}`,
   };
+  assert.equal(SCCP_ETH_MAINNET_EVM_CHAIN_ID, 1);
+  assert.equal(SCCP_ETH_MAINNET_NETWORK_ID, ethereumMainnetBinding.networkId);
+  assert.equal(new EthereumMainnetSccp().buildOutboundProofRequest({
+    public_inputs: publicInputs,
+    bundle_bytes: new Uint8Array([5, 6, 7]),
+    source_domain: SCCP_DOMAIN_SORA,
+    statement_hash: `0x${"55".repeat(32)}`,
+    destination_binding: ethereumMainnetBinding,
+  }).targetDomain, SCCP_DOMAIN_ETH);
+  assert.throws(
+    () =>
+      new EthereumMainnetSccp().buildOutboundProofRequest({
+        public_inputs: { ...publicInputs, target_domain: SCCP_DOMAIN_BSC },
+        bundle_bytes: new Uint8Array([5, 6, 7]),
+        source_domain: SCCP_DOMAIN_SORA,
+        statement_hash: `0x${"55".repeat(32)}`,
+        destination_binding: ethereumMainnetBinding,
+      }),
+    /destinationBinding|targetDomain|Ethereum mainnet/u,
+  );
+  assert.match(DECLARATIONS_TEXT, /export class EthereumMainnetSccp/u);
+  const bscMainnetBinding = bscMainnetSccpDestinationBinding({
+    verifierAddress: `0x${"11".repeat(20)}`,
+    bridgeAddress: `0x${"22".repeat(20)}`,
+    verifierCodeHash: `0x${"bb".repeat(32)}`,
+    verifierKeyHash: `0x${"cc".repeat(32)}`,
+  });
+  const bscPublicInputs = { ...publicInputs, target_domain: SCCP_DOMAIN_BSC };
+  assert.equal(SCCP_BSC_MAINNET_EVM_CHAIN_ID, 56);
+  assert.equal(SCCP_BSC_MAINNET_NETWORK_ID, bscMainnetBinding.networkId);
+  const bscRequest = buildBscMainnetSccpDestinationProofRequest({
+    public_inputs: bscPublicInputs,
+    bundle_bytes: new Uint8Array([5, 6, 7]),
+    source_proof_bytes: new Uint8Array([9, 10]),
+    source_domain: SCCP_DOMAIN_SORA,
+    statement_hash: `0x${"55".repeat(32)}`,
+    destination_binding: bscMainnetBinding,
+  });
+  const bscProofResult = wrapBscMainnetSccpDestinationProofResult(proofBytes, bscRequest);
+  assert.equal(
+    buildBscMainnetSccpDestinationSubmission({ proofResult: bscProofResult }).targetDomain,
+    SCCP_DOMAIN_BSC,
+  );
+  assert.equal(new BscMainnetSccp().buildBscCalldata({ proofResult: bscProofResult }).targetDomain, SCCP_DOMAIN_BSC);
+  assert.equal((await new BscMainnetSccpProver().buildRequest({
+    public_inputs: bscPublicInputs,
+    bundle_bytes: new Uint8Array([5, 6, 7]),
+    source_domain: SCCP_DOMAIN_SORA,
+    statement_hash: `0x${"55".repeat(32)}`,
+    destination_binding: bscMainnetBinding,
+  })).targetDomain, SCCP_DOMAIN_BSC);
+  assert.match(DECLARATIONS_TEXT, /export class BscMainnetSccp/u);
+  assert.match(DECLARATIONS_TEXT, /export class BscMainnetSccpProver/u);
   const request = buildEvmSccpProofRequest({
     public_inputs: publicInputs,
     bundle_bytes: new Uint8Array([5, 6, 7]),

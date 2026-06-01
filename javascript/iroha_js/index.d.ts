@@ -564,6 +564,10 @@ export const SCCP_DOMAIN_TRON: number;
 export const SCCP_DOMAIN_SORA_KUSAMA: number;
 export const SCCP_DOMAIN_SORA_POLKADOT: number;
 export const SCCP_DOMAIN_SORA2: number;
+export const SCCP_ETH_MAINNET_EVM_CHAIN_ID: 1;
+export const SCCP_ETH_MAINNET_NETWORK_ID: string;
+export const SCCP_BSC_MAINNET_EVM_CHAIN_ID: 56;
+export const SCCP_BSC_MAINNET_NETWORK_ID: string;
 export const SCCP_STARK_FRI_PROOF_FAMILY_V1: string;
 export const SCCP_SOURCE_STATE_MAX_PROOF_BYTES: number;
 export const SCCP_SOURCE_STATE_MAX_PROOF_LABEL_BYTES: number;
@@ -3476,6 +3480,12 @@ export interface EvmSccpSubmission {
   readonly envelopeHex: string;
 }
 
+export type EthereumMainnetSccpSubmissionInput = EvmSccpSubmissionInput &
+  (
+    | { proofResult: EvmSccpProofResult }
+    | { proof_result: EvmSccpProofResult }
+  );
+
 export interface TronSccpProofRequestInput {
   publicInputs?: SccpMessageTransparentPublicInputsInput;
   public_inputs?: SccpMessageTransparentPublicInputsInput;
@@ -3865,6 +3875,382 @@ export class EvmSccpProver {
   ): Promise<EvmSccpProofResult>;
 }
 
+export type BscMainnetSccpProofRequestInput = EvmSccpProofRequestInput;
+export type BscMainnetSccpProofRequest = EvmSccpProofRequest;
+export type BscMainnetSccpProofResult = EvmSccpProofResult;
+export type BscMainnetSccpSubmissionInput = EvmSccpSubmissionInput &
+  (
+    | { proofResult: EvmSccpProofResult }
+    | { proof_result: EvmSccpProofResult }
+  );
+export type BscMainnetSccpSubmission = EvmSccpSubmission;
+export type BscMainnetSccpProverOptions = EvmSccpProverOptions;
+
+export class BscMainnetSccpProver {
+  constructor(options?: BscMainnetSccpProverOptions);
+  buildRequest(
+    input: BscMainnetSccpProofRequestInput,
+    options?: Record<string, unknown>,
+  ): Promise<BscMainnetSccpProofRequest>;
+  prove(
+    input: BscMainnetSccpProofRequestInput,
+    options?: Record<string, unknown>,
+  ): Promise<BscMainnetSccpProofResult>;
+}
+
+export type EthereumMainnetExecutionProvider =
+  | {
+      request(args: { method: string; params?: readonly unknown[] }): unknown | Promise<unknown>;
+    }
+  | {
+      send(method: string, params?: readonly unknown[]): unknown | Promise<unknown>;
+    }
+  | ((args: { method: string; params?: readonly unknown[] }) => unknown | Promise<unknown>);
+
+export interface EthereumMainnetBeaconFinalityEvidenceInput {
+  executionBlockNumber?: string | number | bigint;
+  execution_block_number?: string | number | bigint;
+  finalityHeight?: string | number | bigint;
+  finality_height?: string | number | bigint;
+  executionBlockHash?: string;
+  execution_block_hash?: string;
+  finalityBlockHash?: string;
+  finality_block_hash?: string;
+  executionReceiptsRoot?: string;
+  execution_receipts_root?: string;
+  receiptsRoot?: string;
+  receipts_root?: string;
+  [key: string]: unknown;
+}
+
+export interface EthereumMainnetBeaconFinalityEvidence
+  extends EthereumMainnetBeaconFinalityEvidenceInput {
+  readonly executionBlockNumber: string;
+  readonly executionBlockHash: string;
+  readonly executionReceiptsRoot: string;
+}
+
+export interface EthereumMainnetConsensusProviderInput {
+  readonly receipt?: Record<string, unknown>;
+  readonly block?: Record<string, unknown>;
+  readonly transactionHash?: string;
+}
+
+export type EthereumMainnetConsensusProvider = {
+  collectFinalityEvidence(
+    input: EthereumMainnetConsensusProviderInput,
+    options?: Record<string, unknown>,
+  ): EthereumMainnetBeaconFinalityEvidenceInput | Promise<EthereumMainnetBeaconFinalityEvidenceInput>;
+};
+
+export interface EthereumMainnetInboundEvidenceInput {
+  sourceDomain?: SccpDomainIdInput;
+  source_domain?: SccpDomainIdInput;
+  targetDomain?: SccpDomainIdInput;
+  target_domain?: SccpDomainIdInput;
+  transactionHash?: string;
+  transaction_hash?: string;
+  receipt?: Record<string, unknown>;
+  block?: Record<string, unknown>;
+  blockHash?: string;
+  block_hash?: string;
+  beaconFinality?: EthereumMainnetBeaconFinalityEvidenceInput;
+  beacon_finality?: EthereumMainnetBeaconFinalityEvidenceInput;
+  finalityEvidence?: EthereumMainnetBeaconFinalityEvidenceInput;
+  finality_evidence?: EthereumMainnetBeaconFinalityEvidenceInput;
+  receiptProof?: EvmSccpReceiptProofInput;
+  receipt_proof?: EvmSccpReceiptProofInput;
+  receiptProofHash?: string;
+  receipt_proof_hash?: string;
+  [key: string]: unknown;
+}
+
+export interface EthereumMainnetInboundEvidence
+  extends EthereumMainnetInboundEvidenceInput {
+  readonly sourceDomain: number;
+  readonly targetDomain: number;
+  readonly beaconFinality?: EthereumMainnetBeaconFinalityEvidence;
+  readonly receiptProofHash?: string;
+}
+
+export type EthereumMainnetInboundProveFn = (
+  evidence: EthereumMainnetInboundEvidence,
+  options?: Record<string, unknown>,
+) => unknown | Promise<unknown>;
+
+export type EthereumMainnetSubmitInboundFn = (
+  proofOrPayload: unknown,
+  options?: Record<string, unknown>,
+) => unknown | Promise<unknown>;
+
+export type EthereumMainnetSubmitOutboundFn = (
+  submission: EvmSccpSubmission,
+  options?: Record<string, unknown>,
+) => unknown | Promise<unknown>;
+
+export type EthereumMainnetSccpOptions = EvmSccpProverOptions & {
+  executionProvider?: EthereumMainnetExecutionProvider;
+  execution_provider?: EthereumMainnetExecutionProvider;
+  consensusProvider?: EthereumMainnetConsensusProvider;
+  consensus_provider?: EthereumMainnetConsensusProvider;
+  proveInbound?: EthereumMainnetInboundProveFn;
+  proveInboundToSora?: EthereumMainnetInboundProveFn;
+  prove_inbound?: EthereumMainnetInboundProveFn;
+  submitInboundToIroha?: EthereumMainnetSubmitInboundFn;
+  submit_inbound_to_iroha?: EthereumMainnetSubmitInboundFn;
+  submitToIroha?: EthereumMainnetSubmitInboundFn;
+  submitOutboundToEthereum?: EthereumMainnetSubmitOutboundFn;
+  submit_outbound_to_ethereum?: EthereumMainnetSubmitOutboundFn;
+  submitToEthereum?: EthereumMainnetSubmitOutboundFn;
+  destinationBinding?: EvmSccpDestinationBindingInput;
+  destination_binding?: EvmSccpDestinationBindingInput;
+  outboundProver?: EvmSccpProver;
+  outbound_prover?: EvmSccpProver;
+  prover?: EvmSccpProver;
+  from?: string;
+  account?: string;
+};
+
+export class EthereumMainnetSccp {
+  constructor(options?: EthereumMainnetSccpOptions);
+  validateExecutionProviderMainnet(options?: {
+    executionProvider?: EthereumMainnetExecutionProvider;
+    execution_provider?: EthereumMainnetExecutionProvider;
+  }): Promise<unknown>;
+  collectInboundEvidenceFromReceipt(
+    input?: EthereumMainnetInboundEvidenceInput,
+    options?: {
+      executionProvider?: EthereumMainnetExecutionProvider;
+      execution_provider?: EthereumMainnetExecutionProvider;
+      consensusProvider?: EthereumMainnetConsensusProvider;
+      consensus_provider?: EthereumMainnetConsensusProvider;
+    } & Record<string, unknown>,
+  ): Promise<EthereumMainnetInboundEvidence>;
+  proveInboundToSora(
+    input: EthereumMainnetInboundEvidenceInput,
+    options?: {
+      executionProvider?: EthereumMainnetExecutionProvider;
+      execution_provider?: EthereumMainnetExecutionProvider;
+      consensusProvider?: EthereumMainnetConsensusProvider;
+      consensus_provider?: EthereumMainnetConsensusProvider;
+      proveInbound?: EthereumMainnetInboundProveFn;
+      proveInboundToSora?: EthereumMainnetInboundProveFn;
+      prove_inbound?: EthereumMainnetInboundProveFn;
+    } & Record<string, unknown>,
+  ): Promise<unknown>;
+  submitInboundToIroha(
+    input: unknown,
+    options?: {
+      submitInboundToIroha?: EthereumMainnetSubmitInboundFn;
+      submit_inbound_to_iroha?: EthereumMainnetSubmitInboundFn;
+      submitToIroha?: EthereumMainnetSubmitInboundFn;
+    } & Record<string, unknown>,
+  ): Promise<unknown>;
+  buildOutboundProofRequest(input: EvmSccpProofRequestInput): EvmSccpProofRequest;
+  proveOutboundToEthereum(
+    input: EvmSccpProofRequestInput,
+    options?: Record<string, unknown>,
+  ): Promise<EvmSccpProofResult>;
+  buildEthereumCalldata(input: EthereumMainnetSccpSubmissionInput): EvmSccpSubmission;
+  submitOutboundToEthereum(
+    input: EthereumMainnetSccpSubmissionInput & {
+      to?: string;
+      bridgeAddress?: string;
+      bridge_address?: string;
+      from?: string;
+      destinationBinding?: EvmSccpDestinationBindingInput;
+      destination_binding?: EvmSccpDestinationBindingInput;
+    },
+    options?: {
+      executionProvider?: EthereumMainnetExecutionProvider;
+      execution_provider?: EthereumMainnetExecutionProvider;
+      submitOutboundToEthereum?: EthereumMainnetSubmitOutboundFn;
+      submit_outbound_to_ethereum?: EthereumMainnetSubmitOutboundFn;
+      submitToEthereum?: EthereumMainnetSubmitOutboundFn;
+      destinationBinding?: EvmSccpDestinationBindingInput;
+      destination_binding?: EvmSccpDestinationBindingInput;
+      to?: string;
+      bridgeAddress?: string;
+      bridge_address?: string;
+      from?: string;
+    } & Record<string, unknown>,
+  ): Promise<unknown>;
+}
+
+export type BscMainnetExecutionProvider = EthereumMainnetExecutionProvider;
+
+export interface BscMainnetParliaFinalityEvidenceInput {
+  executionBlockNumber?: string | number | bigint;
+  execution_block_number?: string | number | bigint;
+  finalityHeight?: string | number | bigint;
+  finality_height?: string | number | bigint;
+  executionBlockHash?: string;
+  execution_block_hash?: string;
+  finalityBlockHash?: string;
+  finality_block_hash?: string;
+  executionReceiptsRoot?: string;
+  execution_receipts_root?: string;
+  receiptsRoot?: string;
+  receipts_root?: string;
+  validatorEpoch?: string | number | bigint;
+  validator_epoch?: string | number | bigint;
+  commitSealHash?: string;
+  commit_seal_hash?: string;
+  [key: string]: unknown;
+}
+
+export interface BscMainnetParliaFinalityEvidence
+  extends BscMainnetParliaFinalityEvidenceInput {
+  readonly executionBlockNumber: string;
+  readonly executionBlockHash: string;
+  readonly executionReceiptsRoot: string;
+}
+
+export interface BscMainnetConsensusProviderInput {
+  readonly receipt?: Record<string, unknown>;
+  readonly block?: Record<string, unknown>;
+  readonly transactionHash?: string;
+}
+
+export type BscMainnetConsensusProvider = {
+  collectFinalityEvidence(
+    input: BscMainnetConsensusProviderInput,
+    options?: Record<string, unknown>,
+  ): BscMainnetParliaFinalityEvidenceInput | Promise<BscMainnetParliaFinalityEvidenceInput>;
+};
+
+export interface BscMainnetInboundEvidenceInput {
+  sourceDomain?: SccpDomainIdInput;
+  source_domain?: SccpDomainIdInput;
+  targetDomain?: SccpDomainIdInput;
+  target_domain?: SccpDomainIdInput;
+  transactionHash?: string;
+  transaction_hash?: string;
+  receipt?: Record<string, unknown>;
+  block?: Record<string, unknown>;
+  blockHash?: string;
+  block_hash?: string;
+  parliaFinality?: BscMainnetParliaFinalityEvidenceInput;
+  parlia_finality?: BscMainnetParliaFinalityEvidenceInput;
+  finalityEvidence?: BscMainnetParliaFinalityEvidenceInput;
+  finality_evidence?: BscMainnetParliaFinalityEvidenceInput;
+  receiptProof?: BscSccpReceiptProofInput;
+  receipt_proof?: BscSccpReceiptProofInput;
+  [key: string]: unknown;
+}
+
+export interface BscMainnetInboundEvidence
+  extends BscMainnetInboundEvidenceInput {
+  readonly sourceDomain: number;
+  readonly targetDomain: number;
+  readonly parliaFinality?: BscMainnetParliaFinalityEvidence;
+  readonly receiptProofHash?: string;
+}
+
+export type BscMainnetInboundProveFn = (
+  evidence: BscMainnetInboundEvidence,
+  options?: Record<string, unknown>,
+) => unknown | Promise<unknown>;
+
+export type BscMainnetSubmitInboundFn = (
+  proofOrPayload: unknown,
+  options?: Record<string, unknown>,
+) => unknown | Promise<unknown>;
+
+export type BscMainnetSubmitOutboundFn = (
+  submission: EvmSccpSubmission,
+  options?: Record<string, unknown>,
+) => unknown | Promise<unknown>;
+
+export type BscMainnetSccpOptions = BscMainnetSccpProverOptions & {
+  executionProvider?: BscMainnetExecutionProvider;
+  execution_provider?: BscMainnetExecutionProvider;
+  consensusProvider?: BscMainnetConsensusProvider;
+  consensus_provider?: BscMainnetConsensusProvider;
+  proveInbound?: BscMainnetInboundProveFn;
+  proveInboundToSora?: BscMainnetInboundProveFn;
+  prove_inbound?: BscMainnetInboundProveFn;
+  submitInboundToIroha?: BscMainnetSubmitInboundFn;
+  submit_inbound_to_iroha?: BscMainnetSubmitInboundFn;
+  submitToIroha?: BscMainnetSubmitInboundFn;
+  submitOutboundToBsc?: BscMainnetSubmitOutboundFn;
+  submit_outbound_to_bsc?: BscMainnetSubmitOutboundFn;
+  submitToBsc?: BscMainnetSubmitOutboundFn;
+  destinationBinding?: EvmSccpDestinationBindingInput;
+  destination_binding?: EvmSccpDestinationBindingInput;
+  outboundProver?: BscMainnetSccpProver;
+  outbound_prover?: BscMainnetSccpProver;
+  prover?: BscMainnetSccpProver;
+  from?: string;
+  account?: string;
+};
+
+export class BscMainnetSccp {
+  constructor(options?: BscMainnetSccpOptions);
+  validateExecutionProviderMainnet(options?: {
+    executionProvider?: BscMainnetExecutionProvider;
+    execution_provider?: BscMainnetExecutionProvider;
+  }): Promise<unknown>;
+  collectInboundEvidenceFromReceipt(
+    input?: BscMainnetInboundEvidenceInput,
+    options?: {
+      executionProvider?: BscMainnetExecutionProvider;
+      execution_provider?: BscMainnetExecutionProvider;
+      consensusProvider?: BscMainnetConsensusProvider;
+      consensus_provider?: BscMainnetConsensusProvider;
+    } & Record<string, unknown>,
+  ): Promise<BscMainnetInboundEvidence>;
+  proveInboundToSora(
+    input: BscMainnetInboundEvidenceInput,
+    options?: {
+      executionProvider?: BscMainnetExecutionProvider;
+      execution_provider?: BscMainnetExecutionProvider;
+      consensusProvider?: BscMainnetConsensusProvider;
+      consensus_provider?: BscMainnetConsensusProvider;
+      proveInbound?: BscMainnetInboundProveFn;
+      proveInboundToSora?: BscMainnetInboundProveFn;
+      prove_inbound?: BscMainnetInboundProveFn;
+    } & Record<string, unknown>,
+  ): Promise<unknown>;
+  submitInboundToIroha(
+    input: unknown,
+    options?: {
+      submitInboundToIroha?: BscMainnetSubmitInboundFn;
+      submit_inbound_to_iroha?: BscMainnetSubmitInboundFn;
+      submitToIroha?: BscMainnetSubmitInboundFn;
+    } & Record<string, unknown>,
+  ): Promise<unknown>;
+  buildOutboundProofRequest(input: BscMainnetSccpProofRequestInput): BscMainnetSccpProofRequest;
+  proveOutboundToBsc(
+    input: BscMainnetSccpProofRequestInput,
+    options?: Record<string, unknown>,
+  ): Promise<BscMainnetSccpProofResult>;
+  buildBscCalldata(input: BscMainnetSccpSubmissionInput): BscMainnetSccpSubmission;
+  submitOutboundToBsc(
+    input: BscMainnetSccpSubmissionInput & {
+      to?: string;
+      bridgeAddress?: string;
+      bridge_address?: string;
+      from?: string;
+      destinationBinding?: EvmSccpDestinationBindingInput;
+      destination_binding?: EvmSccpDestinationBindingInput;
+    },
+    options?: {
+      executionProvider?: BscMainnetExecutionProvider;
+      execution_provider?: BscMainnetExecutionProvider;
+      submitOutboundToBsc?: BscMainnetSubmitOutboundFn;
+      submit_outbound_to_bsc?: BscMainnetSubmitOutboundFn;
+      submitToBsc?: BscMainnetSubmitOutboundFn;
+      destinationBinding?: EvmSccpDestinationBindingInput;
+      destination_binding?: EvmSccpDestinationBindingInput;
+      to?: string;
+      bridgeAddress?: string;
+      bridge_address?: string;
+      from?: string;
+    } & Record<string, unknown>,
+  ): Promise<unknown>;
+}
+
 export type TronSccpWitnessProvider =
   SccpWitnessProviderResolverOption<TronSccpProofRequestInput>;
 
@@ -4068,6 +4454,16 @@ export function buildEvmSccpSubmission(input: EvmSccpSubmissionInput): EvmSccpSu
 export function buildEvmSccpBridgeProofSubmitPayload(
   input: EvmSccpBridgeProofSubmitPayloadInput,
 ): ToriiBridgeProofSubmitPayload;
+export function buildBscMainnetSccpDestinationProofRequest(
+  input: BscMainnetSccpProofRequestInput,
+): BscMainnetSccpProofRequest;
+export function wrapBscMainnetSccpDestinationProofResult(
+  proofBytes: BinaryLike,
+  request: BscMainnetSccpProofRequest,
+): BscMainnetSccpProofResult;
+export function buildBscMainnetSccpDestinationSubmission(
+  input: BscMainnetSccpSubmissionInput,
+): BscMainnetSccpSubmission;
 export function buildTronSccpProofRequest(input: TronSccpProofRequestInput): TronSccpProofRequest;
 export function wrapTronSccpProofResult(
   proofBytes: BinaryLike,
@@ -4547,6 +4943,14 @@ export function tronSccpRouteCanaryEvidenceHash(
 ): string;
 export function evmSccpDestinationBinding(input: EvmSccpDestinationBindingInput): EvmSccpDestinationBinding;
 export function evmSccpDestinationBindingHash(input: EvmSccpDestinationBindingInput): string;
+export function ethereumMainnetSccpDestinationBinding(
+  input: EvmSccpDestinationBindingInput,
+): EvmSccpDestinationBinding;
+export function ethereumMainnetSccpDestinationBindingHash(input: EvmSccpDestinationBindingInput): string;
+export function bscMainnetSccpDestinationBinding(
+  input: EvmSccpDestinationBindingInput,
+): EvmSccpDestinationBinding;
+export function bscMainnetSccpDestinationBindingHash(input: EvmSccpDestinationBindingInput): string;
 export function tronSccpDestinationBinding(input: TronSccpDestinationBindingInput): TronSccpDestinationBinding;
 export function tronSccpDestinationBindingHash(input: TronSccpDestinationBindingInput): string;
 export function normalizeSccpSourceVerifierMaterial(

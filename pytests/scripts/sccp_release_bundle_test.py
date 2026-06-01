@@ -23,6 +23,7 @@ PHASES = (
     "swift-sdk",
     "kotlin-sdk",
     "java-android",
+    "dotnet-sdk",
     "contract-smoke",
     "core-admission",
 )
@@ -97,6 +98,31 @@ def write_complete_evidence(tmp_path: Path) -> tuple[Path, str]:
     evidence_module = helpers.load_evidence_module()
     evidence = tmp_path / "complete.toml"
     payload = helpers.render_records(helpers.complete_bundle(evidence_module))
+    evidence.write_text(payload, encoding="utf-8")
+    return evidence, payload
+
+
+def write_active_launch_evidence(tmp_path: Path) -> tuple[Path, str]:
+    """Write only the active launch-lane evidence bundle."""
+
+    helpers = load_all_lanes_helpers()
+    evidence_module = helpers.load_evidence_module()
+    report = load_report_module()
+    active_domain = report.ACTIVE_LAUNCH_DOMAIN
+    records = helpers.complete_bundle(evidence_module)
+    for section, domain_key in {
+        "sccp_source_verifier_materials": "source_domain",
+        "sccp_source_adapter_engine_deployments": "source_domain",
+        "sccp_destination_rollouts": "domain",
+        "sccp_route_allowlists": "domain",
+    }.items():
+        records[section] = [
+            record
+            for record in records[section]
+            if record.get(domain_key) == active_domain
+        ]
+    evidence = tmp_path / f"{report.ACTIVE_LAUNCH_CHAIN}-launch.toml"
+    payload = helpers.render_records(records)
     evidence.write_text(payload, encoding="utf-8")
     return evidence, payload
 
@@ -461,6 +487,58 @@ def test_release_bundle_writes_hash_bound_public_artifacts(tmp_path: Path) -> No
     assert verification["manifest_sha256"] == hashlib.sha256(
         manifest_json.read_bytes()
     ).hexdigest()
+
+
+def test_release_bundle_accepts_active_launch_lane_without_future_lanes(
+    tmp_path: Path,
+) -> None:
+    """A release bundle can be ready when only the active lane is complete."""
+
+    evidence, _ = write_active_launch_evidence(tmp_path)
+    write_phase_artifacts(tmp_path)
+    output_dir = tmp_path / "bundle"
+
+    completed = subprocess.run(
+        [
+            "python3",
+            str(SCRIPT),
+            "--output-dir",
+            str(output_dir),
+            "--phase-result",
+            "all=passed",
+            "--phase-evidence-dir",
+            str(tmp_path / "phase-artifacts"),
+            str(evidence),
+        ],
+        check=False,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+        text=True,
+    )
+
+    assert completed.returncode == 0, completed.stdout + completed.stderr
+    report = json.loads(
+        (output_dir / "sccp-release-readiness.json").read_text(encoding="utf-8")
+    )
+    summary = json.loads(
+        (output_dir / "sccp-all-lanes-summary.json").read_text(encoding="utf-8")
+    )
+    manifest = json.loads((output_dir / "manifest.json").read_text(encoding="utf-8"))
+    assert report["production_ready"] is True
+    assert report["release_checklist"]["ready"] is True
+    assert summary["production_ready"] is False
+    assert summary["release_checklist"]["ready"] is False
+    assert manifest["production_ready"] is True
+    assert manifest["release_checklist_ready"] is True
+
+    verified = subprocess.run(
+        ["python3", str(VERIFY_SCRIPT), str(output_dir)],
+        check=False,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+        text=True,
+    )
+    assert verified.returncode == 0, verified.stdout + verified.stderr
 
 
 def test_release_bundle_verifier_rejects_tampered_artifact(tmp_path: Path) -> None:
@@ -1824,16 +1902,14 @@ def test_release_bundle_verifier_rejects_release_checklist_blocked_items(
     )
 
     assert verified.returncode == 1
-    for label, item_id in (
-        ("readiness report", report_item_id),
-        ("all-lanes summary", summary_item_id),
-    ):
-        assert (
-            f"{label} release_checklist item {item_id} ready must be true"
-        ) in verified.stdout
-        assert (
-            f"{label} release_checklist item {item_id} blockers must be empty"
-        ) in verified.stdout
+    assert (
+        f"readiness report release_checklist item {report_item_id} ready must be true"
+    ) in verified.stdout
+    assert (
+        f"readiness report release_checklist item {report_item_id} blockers must be empty"
+    ) in verified.stdout
+    assert summary_item_id == "all_required_lane_records"
+    assert "all-lanes summary does not match copied evidence inputs" in verified.stdout
 
 
 def test_release_bundle_verifier_rejects_corridor_unknown_fields(
@@ -2421,8 +2497,12 @@ def test_release_bundle_verifier_rejects_all_lanes_lane_not_ready(
     """Published all-lanes lane rows must be ready and blocker-free."""
 
     def mutate_summary(summary: dict) -> None:
-        summary["lanes"][0]["production_ready"] = False
-        summary["lanes"][0]["blockers"] = ["manual blocker"]
+        active_domain = load_report_module().ACTIVE_LAUNCH_DOMAIN
+        active_lane = next(
+            lane for lane in summary["lanes"] if lane["domain"] == active_domain
+        )
+        active_lane["production_ready"] = False
+        active_lane["blockers"] = ["manual blocker"]
 
     output_dir = build_ready_bundle(tmp_path)
     report_path = output_dir / "sccp-release-readiness.json"
@@ -2454,9 +2534,10 @@ def test_release_bundle_verifier_rejects_all_lanes_lane_not_ready(
     )
 
     assert verified.returncode == 1
+    active_domain = load_report_module().ACTIVE_LAUNCH_DOMAIN
     for label in (
-        "readiness report embedded evidence lane domain 1",
-        "all-lanes summary lane domain 1",
+        f"readiness report embedded evidence lane domain {active_domain}",
+        f"all-lanes summary lane domain {active_domain}",
     ):
         assert f"{label} production_ready must be true" in verified.stdout
         assert f"{label} blockers must be empty" in verified.stdout
@@ -2500,10 +2581,16 @@ def test_release_bundle_verifier_rejects_all_lanes_root_blockers(
     )
 
     assert verified.returncode == 1
-    assert "readiness report embedded evidence blockers must be empty" in (
-        verified.stdout
+    report = load_report_module()
+    active_label = f"{report.ACTIVE_LAUNCH_CHAIN.upper()} mainnet"
+    assert (
+        f"readiness report embedded evidence active {active_label} launch blockers must be empty"
+        in verified.stdout
     )
-    assert "all-lanes summary blockers must be empty" in verified.stdout
+    assert (
+        f"all-lanes summary active {active_label} launch blockers must be empty"
+        in verified.stdout
+    )
 
 
 def test_release_bundle_verifier_rejects_all_lanes_missing_record_flags(
@@ -2512,7 +2599,11 @@ def test_release_bundle_verifier_rejects_all_lanes_missing_record_flags(
     """Published ready lane rows must not advertise missing evidence records."""
 
     def mutate_summary(summary: dict) -> None:
-        records = summary["lanes"][0]["records"]
+        active_domain = load_report_module().ACTIVE_LAUNCH_DOMAIN
+        active_lane = next(
+            lane for lane in summary["lanes"] if lane["domain"] == active_domain
+        )
+        records = active_lane["records"]
         for field in (
             "source_verifier_material",
             "source_adapter_deployment",
@@ -2551,9 +2642,10 @@ def test_release_bundle_verifier_rejects_all_lanes_missing_record_flags(
     )
 
     assert verified.returncode == 1
+    active_domain = load_report_module().ACTIVE_LAUNCH_DOMAIN
     for label in (
-        "readiness report embedded evidence lane domain 1 records",
-        "all-lanes summary lane domain 1 records",
+        f"readiness report embedded evidence lane domain {active_domain} records",
+        f"all-lanes summary lane domain {active_domain} records",
     ):
         for field in (
             "source_verifier_material",
@@ -3390,15 +3482,6 @@ def test_release_bundle_verifier_rejects_source_gate_hash_named_role_drift(
             f"{label} gate_hash must match audit_hashes.{gate_field}"
             in verified.stdout
         )
-    for gate_field in (
-        "solana_full_light_client_gate_hash",
-        "ton_full_light_client_gate_hash",
-    ):
-        assert (
-            "readiness report cryptographic evidence row "
-            "source_adapter_gate_hash must match "
-            f"source_adapter_gate_audit_hashes.{gate_field}"
-        ) in verified.stdout
 
 
 def test_release_bundle_verifier_rejects_source_gate_domain_policy_drift(
@@ -3640,6 +3723,7 @@ def test_release_bundle_verifier_rejects_all_lanes_route_canary_field_drift(
         evm_canary["evidence_source"] = "operator_attestation"
         evm_canary["transaction_hash"] = "0X" + "aa" * 32
         evm_canary["log_index"] = "0"
+        evm_canary["receipt_block_number"] = 0
         evm_canary["target_domain"] = 2
         evm_canary["proof_version"] = 2
         evm_canary["proof_source_domain"] = 1
@@ -3714,6 +3798,10 @@ def test_release_bundle_verifier_rejects_all_lanes_route_canary_field_drift(
     ) in verified.stdout
     assert (
         "readiness report embedded evidence lane domain 1 route_allowlist "
+        "route_canary receipt_block_number must be a positive integer"
+    ) in verified.stdout
+    assert (
+        "readiness report embedded evidence lane domain 1 route_allowlist "
         "route_canary target_domain must be the lane domain"
     ) in verified.stdout
     assert (
@@ -3784,6 +3872,10 @@ def test_release_bundle_verifier_rejects_all_lanes_route_canary_field_drift(
     assert (
         "all-lanes summary lane domain 1 route_allowlist route_canary "
         "contains unknown field: operator_attestation"
+    ) in verified.stdout
+    assert (
+        "all-lanes summary lane domain 1 route_allowlist route_canary "
+        "receipt_block_number must be a positive integer"
     ) in verified.stdout
     assert (
         "all-lanes summary lane domain 5 route_allowlist route_canary "
@@ -3991,6 +4083,8 @@ def test_release_bundle_verifier_rejects_evm_route_canary_zero_transcript_words(
 
     transcript_fields = (
         "transaction_hash",
+        "receipt_block_hash",
+        "block_receipts_root",
         "call_data_sha256",
         "message_id",
         "payload_hash",
@@ -4059,6 +4153,8 @@ def test_release_bundle_verifier_rejects_evm_route_canary_transcript_hash_reuse(
     def mutate_lanes(lanes: list[dict]) -> None:
         by_domain = {lane["domain"]: lane for lane in lanes}
         evm_canary = by_domain[1]["route_allowlist"]["route_canary"]
+        evm_canary["receipt_block_hash"] = evm_canary["transaction_hash"]
+        evm_canary["block_receipts_root"] = evm_canary["transaction_hash"]
         evm_canary["payload_hash"] = evm_canary["call_data_sha256"]
         evm_canary["finality_height"] = evm_canary["transaction_hash"]
 
@@ -4094,6 +4190,16 @@ def test_release_bundle_verifier_rejects_evm_route_canary_transcript_hash_reuse(
     assert verified.returncode == 1
     assert (
         "readiness report embedded evidence lane domain 1 route_allowlist "
+        "route_canary transcript hash receipt_block_hash must not reuse "
+        "transaction_hash"
+    ) in verified.stdout
+    assert (
+        "readiness report embedded evidence lane domain 1 route_allowlist "
+        "route_canary transcript hash block_receipts_root must not reuse "
+        "transaction_hash"
+    ) in verified.stdout
+    assert (
+        "readiness report embedded evidence lane domain 1 route_allowlist "
         "route_canary transcript hash payload_hash must not reuse "
         "call_data_sha256"
     ) in verified.stdout
@@ -4101,6 +4207,14 @@ def test_release_bundle_verifier_rejects_evm_route_canary_transcript_hash_reuse(
         "readiness report embedded evidence lane domain 1 route_allowlist "
         "route_canary transcript hash finality_height must not reuse "
         "transaction_hash"
+    ) in verified.stdout
+    assert (
+        "all-lanes summary lane domain 1 route_allowlist route_canary "
+        "transcript hash receipt_block_hash must not reuse transaction_hash"
+    ) in verified.stdout
+    assert (
+        "all-lanes summary lane domain 1 route_allowlist route_canary "
+        "transcript hash block_receipts_root must not reuse transaction_hash"
     ) in verified.stdout
     assert (
         "all-lanes summary lane domain 1 route_allowlist route_canary "
@@ -5178,8 +5292,12 @@ def test_release_bundle_verifier_rejects_unbound_crypto_evidence(
     output_dir = build_ready_bundle(tmp_path)
     report_path = output_dir / "sccp-release-readiness.json"
     report = json.loads(report_path.read_text(encoding="utf-8"))
-    report["cryptographic_evidence"][0]["route_canary_evidence_bound"] = False
-    report["cryptographic_evidence"][0].pop("route_canary_evidence_hash")
+    active_domain = load_report_module().ACTIVE_LAUNCH_DOMAIN
+    row = next(
+        row for row in report["cryptographic_evidence"] if row["domain"] == active_domain
+    )
+    row["route_canary_evidence_bound"] = False
+    row.pop("route_canary_evidence_hash")
     report_path.write_text(
         json.dumps(report, indent=2, sort_keys=True) + "\n",
         encoding="utf-8",
@@ -5244,9 +5362,9 @@ def test_release_bundle_verifier_rejects_crypto_evidence_zero_hashes(
     output_dir = build_ready_bundle(tmp_path)
     report_path = output_dir / "sccp-release-readiness.json"
     report = json.loads(report_path.read_text(encoding="utf-8"))
-    row = report["cryptographic_evidence"][0]
-    source_gate_row = next(
-        row for row in report["cryptographic_evidence"] if row["domain"] == 3
+    active_domain = load_report_module().ACTIVE_LAUNCH_DOMAIN
+    row = next(
+        row for row in report["cryptographic_evidence"] if row["domain"] == active_domain
     )
     for field in (
         "source_verifier_material_hash",
@@ -5256,9 +5374,8 @@ def test_release_bundle_verifier_rejects_crypto_evidence_zero_hashes(
         "route_canary_evidence_hash",
     ):
         row[field] = zero_hash
-    source_gate_row["source_adapter_gate_hash"] = zero_hash
-    for field in tuple(source_gate_row["source_adapter_gate_audit_hashes"]):
-        source_gate_row["source_adapter_gate_audit_hashes"][field] = zero_hash
+    row["source_adapter_gate_hash"] = zero_hash
+    row["source_adapter_gate_audit_hashes"] = {"operator_override": zero_hash}
     report_path.write_text(
         json.dumps(report, indent=2, sort_keys=True) + "\n",
         encoding="utf-8",
@@ -5290,12 +5407,11 @@ def test_release_bundle_verifier_rejects_crypto_evidence_zero_hashes(
         "readiness report cryptographic evidence row source_adapter_gate_hash "
         "must be empty or a non-zero canonical bytes32 hex string"
     ) in verified.stdout
-    for field in source_gate_row["source_adapter_gate_audit_hashes"]:
-        assert (
-            "readiness report cryptographic evidence row "
-            f"source_adapter_gate_audit_hashes {field} must be a non-zero "
-            "canonical bytes32 hex string"
-        ) in verified.stdout
+    assert (
+        "readiness report cryptographic evidence row "
+        "source_adapter_gate_audit_hashes operator_override must be a "
+        "non-zero canonical bytes32 hex string"
+    ) in verified.stdout
 
 
 def test_release_bundle_verifier_rejects_crypto_evidence_field_binding_drift(
@@ -5515,21 +5631,14 @@ def test_release_bundle_verifier_rejects_crypto_evidence_domain_policy_drift(
     output_dir = build_ready_bundle(tmp_path)
     report_path = output_dir / "sccp-release-readiness.json"
     report = json.loads(report_path.read_text(encoding="utf-8"))
-    eth_row = report["cryptographic_evidence"][0]
-    assert eth_row["domain"] == 1
-    eth_row["route_canary_evidence_source"] = "operator_review_note"
-    eth_row["source_adapter_gate_required"] = True
-    eth_row["source_adapter_gate_hash"] = forged_hash
-    eth_row["source_adapter_gate_audit_hashes"] = {"operator_override": forged_hash}
-    sol_row = next(row for row in report["cryptographic_evidence"] if row["domain"] == 3)
-    sol_row["source_adapter_gate_required"] = False
-    sol_row["source_adapter_gate_hash"] = ""
-    sol_row["source_adapter_gate_audit_hashes"] = {}
-    ton_row = next(row for row in report["cryptographic_evidence"] if row["domain"] == 4)
-    full_gate_hash = ton_row["source_adapter_gate_audit_hashes"].pop(
-        "ton_full_light_client_gate_hash"
+    active_domain = load_report_module().ACTIVE_LAUNCH_DOMAIN
+    active_row = next(
+        row for row in report["cryptographic_evidence"] if row["domain"] == active_domain
     )
-    ton_row["source_adapter_gate_audit_hashes"]["operator_override"] = full_gate_hash
+    active_row["route_canary_evidence_source"] = "operator_review_note"
+    active_row["source_adapter_gate_required"] = True
+    active_row["source_adapter_gate_hash"] = forged_hash
+    active_row["source_adapter_gate_audit_hashes"] = {"operator_override": forged_hash}
     report_path.write_text(
         json.dumps(report, indent=2, sort_keys=True) + "\n",
         encoding="utf-8",
@@ -5555,20 +5664,6 @@ def test_release_bundle_verifier_rejects_crypto_evidence_domain_policy_drift(
         "source_adapter_gate_required must be false for this domain"
     ) in verified.stdout
     assert (
-        "readiness report cryptographic evidence row "
-        "source_adapter_gate_required must be true for this domain"
-    ) in verified.stdout
-    assert (
-        "readiness report cryptographic evidence row "
-        "source_adapter_gate_audit_hashes contains unexpected field: "
-        "operator_override"
-    ) in verified.stdout
-    assert (
-        "readiness report cryptographic evidence row "
-        "source_adapter_gate_audit_hashes missing field: "
-        "ton_full_light_client_gate_hash"
-    ) in verified.stdout
-    assert (
         "readiness report cryptographic_evidence does not match embedded lane evidence"
         in verified.stdout
     )
@@ -5582,9 +5677,14 @@ def test_release_bundle_verifier_rejects_crypto_evidence_field_type_drift(
     output_dir = build_ready_bundle(tmp_path)
     report_path = output_dir / "sccp-release-readiness.json"
     report = json.loads(report_path.read_text(encoding="utf-8"))
-    row = report["cryptographic_evidence"][0]
-    row["domain"] = "3"
-    row["chain"] = 3
+    domain_row = next(row for row in report["cryptographic_evidence"] if row["domain"] == 3)
+    domain_row["domain"] = "3"
+    domain_row["chain"] = 3
+    domain_row["source_adapter_gate_audit_hashes"] = ["audit"]
+    active_domain = load_report_module().ACTIVE_LAUNCH_DOMAIN
+    row = next(
+        row for row in report["cryptographic_evidence"] if row["domain"] == active_domain
+    )
     row["source_verifier_material_hash"] = "0X" + "aa" * 32
     row["source_adapter_engine_deployment_hash"] = "0x" + "bb" * 31
     row["destination_binding_hash"] = True
@@ -5596,17 +5696,8 @@ def test_release_bundle_verifier_rejects_crypto_evidence_field_type_drift(
     row["route_canary_block_timestamp"] = 2
     row["source_adapter_gate_required"] = "true"
     row["source_adapter_gate_hash"] = "0X" + "dd" * 32
-    row["source_adapter_gate_audit_hashes"] = ["audit"]
-    tron_row = next(row for row in report["cryptographic_evidence"] if row["domain"] == 5)
-    tron_row["route_canary_block_number"] = "10144"
-    tron_row["route_canary_block_timestamp"] = -1
-    source_gate_row = next(
-        row for row in report["cryptographic_evidence"] if row["domain"] == 3
-    )
-    source_gate_row["source_adapter_gate_audit_hashes"][""] = "0x" + "ee" * 32
-    source_gate_row["source_adapter_gate_audit_hashes"][
-        "operator_override"
-    ] = "0X" + "ff" * 32
+    row["source_adapter_gate_audit_hashes"] = {"": "0x" + "ee" * 32}
+    row["source_adapter_gate_audit_hashes"]["operator_override"] = "0X" + "ff" * 32
     report_path.write_text(
         json.dumps(report, indent=2, sort_keys=True) + "\n",
         encoding="utf-8",
@@ -5657,14 +5748,6 @@ def test_release_bundle_verifier_rejects_crypto_evidence_field_type_drift(
     assert (
         "readiness report cryptographic evidence row "
         "route_canary_block_timestamp must be null for non-TRON lanes"
-    ) in verified.stdout
-    assert (
-        "readiness report cryptographic evidence row "
-        "route_canary_block_number must be a positive integer"
-    ) in verified.stdout
-    assert (
-        "readiness report cryptographic evidence row "
-        "route_canary_block_timestamp must be a non-negative integer"
     ) in verified.stdout
     assert (
         "readiness report cryptographic evidence row "
@@ -6296,9 +6379,23 @@ def test_release_bundle_verifier_helper_inventory_is_independent() -> None:
     report = load_report_module()
     phase_status = {phase: "passed" for phase in PHASES}
     surfaces = report._submission_surfaces(phase_status)
+    evm_surface = next(surface for surface in surfaces if surface["lanes"] == "eth,bsc")
     sol_surface = next(surface for surface in surfaces if surface["lanes"] == "sol")
+    missing_dotnet_helper = "IEthereumMainnetOutboundProver"
+    missing_bsc_dotnet_helper = "IBscMainnetOutboundSubmitter"
+    missing_evm_java_helper = "BscMainnetSccp.submitOutboundToBsc"
     missing_js_helper = "buildSolanaSccpFullLightClientAuditProofRequests"
     missing_java_helper = "SolanaSccpProver.FullLightClientAuditProofEngine"
+    evm_surface["sdk_helper_symbols_by_sdk"]["dotnet-sdk"] = [
+        helper
+        for helper in evm_surface["sdk_helper_symbols_by_sdk"]["dotnet-sdk"]
+        if helper not in {missing_dotnet_helper, missing_bsc_dotnet_helper}
+    ]
+    evm_surface["sdk_helper_symbols_by_sdk"]["java-android"] = [
+        helper
+        for helper in evm_surface["sdk_helper_symbols_by_sdk"]["java-android"]
+        if helper != missing_evm_java_helper
+    ]
     sol_surface["sdk_helper_symbols"] = [
         helper
         for helper in sol_surface["sdk_helper_symbols"]
@@ -6331,6 +6428,21 @@ def test_release_bundle_verifier_helper_inventory_is_independent() -> None:
         "readiness report user_prover_submission_surfaces lanes sol "
         "sdk_helper_symbols_by_sdk[java-android] missing required helper: "
         f"{missing_java_helper}"
+    ) in errors
+    assert (
+        "readiness report user_prover_submission_surfaces lanes eth,bsc "
+        "sdk_helper_symbols_by_sdk[java-android] missing required helper: "
+        f"{missing_evm_java_helper}"
+    ) in errors
+    assert (
+        "readiness report user_prover_submission_surfaces lanes eth,bsc "
+        "sdk_helper_symbols_by_sdk[dotnet-sdk] missing required helper: "
+        f"{missing_dotnet_helper}"
+    ) in errors
+    assert (
+        "readiness report user_prover_submission_surfaces lanes eth,bsc "
+        "sdk_helper_symbols_by_sdk[dotnet-sdk] missing required helper: "
+        f"{missing_bsc_dotnet_helper}"
     ) in errors
 
 
@@ -6426,6 +6538,18 @@ def test_release_bundle_verifier_requires_submission_surface_ui_hooks(
         else symbol
         for symbol in row["sdk_helper_symbols_by_sdk"]["java-android"]
     ]
+    row["sdk_helper_symbols_by_sdk"]["dotnet-sdk"] = [
+        "IEthereumMainnetProofCallback"
+        if "InboundProver" in symbol
+        else "IEthereumMainnetSubmitCallback"
+        if "InboundSubmitter" in symbol
+        else "IEthereumMainnetProofCallback"
+        if "OutboundProver" in symbol
+        else "IEthereumMainnetSubmitCallback"
+        if "OutboundSubmitter" in symbol
+        else symbol
+        for symbol in row["sdk_helper_symbols_by_sdk"]["dotnet-sdk"]
+    ]
     report_path.write_text(
         json.dumps(report, indent=2, sort_keys=True) + "\n",
         encoding="utf-8",
@@ -6452,6 +6576,14 @@ def test_release_bundle_verifier_requires_submission_surface_ui_hooks(
         "ProofEngine",
         "sdk_helper_symbols_by_sdk[java-android] missing UI-owned hook marker: "
         "WitnessProvider",
+        "sdk_helper_symbols_by_sdk[dotnet-sdk] missing UI-owned hook marker: "
+        "InboundProver",
+        "sdk_helper_symbols_by_sdk[dotnet-sdk] missing UI-owned hook marker: "
+        "InboundSubmitter",
+        "sdk_helper_symbols_by_sdk[dotnet-sdk] missing UI-owned hook marker: "
+        "OutboundProver",
+        "sdk_helper_symbols_by_sdk[dotnet-sdk] missing UI-owned hook marker: "
+        "OutboundSubmitter",
     ):
         assert expected in verified.stdout
 
@@ -6686,6 +6818,155 @@ def test_release_bundle_verifier_requires_js_package_export_transcript(
         "readiness report phase js-sdk evidence artifact is missing "
         f"expected phase-block command: {required_export_test}"
     ) in verified.stdout
+
+
+def test_release_bundle_verifier_requires_bsc_browser_no_wasm_marker(
+    tmp_path: Path,
+) -> None:
+    """Published JS evidence must prove the browser BSC path stayed native JS."""
+
+    output_dir = build_ready_bundle(tmp_path)
+    report = load_report_module()
+    bsc_no_wasm_marker = (
+        "browser BSC mainnet SCCP artifacts stay JS-only and local-prover owned"
+    )
+    assert bsc_no_wasm_marker in report.PHASE_TRANSCRIPT_SUCCESS_FRAGMENTS["js-sdk"]
+    success_fragments = [
+        fragment
+        for fragment in report.PHASE_TRANSCRIPT_SUCCESS_FRAGMENTS["js-sdk"]
+        if fragment != bsc_no_wasm_marker
+    ]
+    phase_log = output_dir / "corridor" / "js-sdk.log"
+    phase_log.write_text(
+        "\n".join(
+            (
+                "==> SCCP production corridor: js-sdk",
+                *phase_command_lines(
+                    report.PHASE_TRANSCRIPT_REQUIRED_FRAGMENTS["js-sdk"]
+                ),
+                *success_fragments,
+                "SCCP production corridor completed.",
+                "",
+            )
+        ),
+        encoding="utf-8",
+    )
+    rewrite_report_phase_artifact(output_dir, "js-sdk")
+
+    verified = subprocess.run(
+        ["python3", str(VERIFY_SCRIPT), str(output_dir)],
+        check=False,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+        text=True,
+    )
+
+    assert verified.returncode == 1
+    assert (
+        "readiness report phase js-sdk evidence artifact is missing "
+        f"expected phase-block success marker: {bsc_no_wasm_marker}"
+    ) in verified.stdout
+
+
+def test_release_bundle_verifier_requires_bsc_parlia_declaration_marker(
+    tmp_path: Path,
+) -> None:
+    """Published JS evidence must prove the BSC Parlia declarations were tested."""
+
+    output_dir = build_ready_bundle(tmp_path)
+    report = load_report_module()
+    declaration_marker = (
+        "package declarations expose BSC mainnet Parlia finality evidence hooks"
+    )
+    assert declaration_marker in report.PHASE_TRANSCRIPT_SUCCESS_FRAGMENTS["js-sdk"]
+    success_fragments = [
+        fragment
+        for fragment in report.PHASE_TRANSCRIPT_SUCCESS_FRAGMENTS["js-sdk"]
+        if fragment != declaration_marker
+    ]
+    phase_log = output_dir / "corridor" / "js-sdk.log"
+    phase_log.write_text(
+        "\n".join(
+            (
+                "==> SCCP production corridor: js-sdk",
+                *phase_command_lines(
+                    report.PHASE_TRANSCRIPT_REQUIRED_FRAGMENTS["js-sdk"]
+                ),
+                *success_fragments,
+                "SCCP production corridor completed.",
+                "",
+            )
+        ),
+        encoding="utf-8",
+    )
+    rewrite_report_phase_artifact(output_dir, "js-sdk")
+
+    verified = subprocess.run(
+        ["python3", str(VERIFY_SCRIPT), str(output_dir)],
+        check=False,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+        text=True,
+    )
+
+    assert verified.returncode == 1
+    assert (
+        "readiness report phase js-sdk evidence artifact is missing "
+        f"expected phase-block success marker: {declaration_marker}"
+    ) in verified.stdout
+
+
+def test_release_bundle_verifier_requires_js_mainnet_facade_transcripts(
+    tmp_path: Path,
+) -> None:
+    """Published JS phase evidence must prove ETH/BSC facade tests were run."""
+
+    required_facade_tests = (
+        "javascript/iroha_js/test/sccpEthereumMainnet.test.js",
+        "javascript/iroha_js/test/sccpBscMainnet.test.js",
+    )
+    report = load_report_module()
+    for required_facade_test in required_facade_tests:
+        case_dir = tmp_path / Path(required_facade_test).stem
+        case_dir.mkdir()
+        output_dir = build_ready_bundle(case_dir)
+        assert (
+            required_facade_test
+            in report.PHASE_TRANSCRIPT_REQUIRED_FRAGMENTS["js-sdk"]
+        )
+        required_fragments = [
+            fragment
+            for fragment in report.PHASE_TRANSCRIPT_REQUIRED_FRAGMENTS["js-sdk"]
+            if fragment != required_facade_test
+        ]
+        phase_log = output_dir / "corridor" / "js-sdk.log"
+        phase_log.write_text(
+            "\n".join(
+                (
+                    "==> SCCP production corridor: js-sdk",
+                    *phase_command_lines(required_fragments),
+                    *report.PHASE_TRANSCRIPT_SUCCESS_FRAGMENTS["js-sdk"],
+                    "SCCP production corridor completed.",
+                    "",
+                )
+            ),
+            encoding="utf-8",
+        )
+        rewrite_report_phase_artifact(output_dir, "js-sdk")
+
+        verified = subprocess.run(
+            ["python3", str(VERIFY_SCRIPT), str(output_dir)],
+            check=False,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+            text=True,
+        )
+
+        assert verified.returncode == 1
+        assert (
+            "readiness report phase js-sdk evidence artifact is missing "
+            f"expected phase-block command: {required_facade_test}"
+        ) in verified.stdout
 
 
 def test_release_bundle_verifier_rejects_phase_command_outside_claimed_block(

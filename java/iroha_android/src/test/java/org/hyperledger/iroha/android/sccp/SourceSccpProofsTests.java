@@ -701,6 +701,7 @@ public final class SourceSccpProofsTests {
 
   private static void derivesSourceProofHashesFromWitnessMaterial() {
     final String sourceEventDigest = repeat("34", 32);
+    final String zeroSourceEventDigest = repeat("00", 32);
     final java.util.List<byte[]> branch = Collections.singletonList(bytes(0xee));
     final java.util.List<byte[]> changedBranch = Collections.singletonList(bytes(0x12));
     final String evmReceiptRootMptValueHex =
@@ -769,6 +770,20 @@ public final class SourceSccpProofsTests {
     assert !evmHash.equals(changedEvmHash) : "EVM receipt proof hash must bind branch";
     assert !evmHash.equals(changedEvmReceiptTrieHash)
         : "EVM receipt proof hash must bind receipt trie proof nodes";
+    expectThrowsMessage(
+        () ->
+            SourceSccpProofs.canonicalEvmReceiptProofBytes(
+                zeroSourceEventDigest,
+                "11",
+                "12",
+                repeat("aa", 32),
+                evmReceiptsRoot,
+                repeat("cc", 32),
+                repeat("dd", 32),
+                "0",
+                evmReceiptTrieProofNodes,
+                branch),
+        "sourceEventDigest must not be zero");
 
     assert SourceSccpProofs.canonicalBscReceiptProofBytes(
                 sourceEventDigest,
@@ -783,6 +798,20 @@ public final class SourceSccpProofsTests {
                 branch)
             .length
         == 306 : "BSC receipt proof transcript must have expected length";
+    expectThrowsMessage(
+        () ->
+            SourceSccpProofs.canonicalBscReceiptProofBytes(
+                zeroSourceEventDigest,
+                "21",
+                "22",
+                repeat("aa", 32),
+                evmReceiptsRoot,
+                repeat("cc", 32),
+                repeat("dd", 32),
+                "0",
+                evmReceiptTrieProofNodes,
+                branch),
+        "sourceEventDigest must not be zero");
     assert !SourceSccpProofs.bscReceiptProofHash(
             sourceEventDigest,
             "21",
@@ -2721,6 +2750,19 @@ public final class SourceSccpProofsTests {
                 branch)
             .length
         == 225 : "Substrate storage proof transcript must have expected length";
+    expectThrowsMessage(
+        () ->
+            SourceSccpProofs.canonicalSubstrateStorageProofBytes(
+                SourceSccpProofs.DOMAIN_SORA_KUSAMA,
+                zeroHash,
+                "0",
+                "31",
+                "32",
+                repeat("aa", 32),
+                repeat("cc", 32),
+                repeat("bb", 32),
+                branch),
+        "sourceEventDigest must not be zero");
     final byte[] substrateRuntimeStatement =
         SourceSccpProofs.canonicalSubstrateRuntimeStorageVerificationStatementBytes(
             SourceSccpProofs.DOMAIN_SORA_KUSAMA,

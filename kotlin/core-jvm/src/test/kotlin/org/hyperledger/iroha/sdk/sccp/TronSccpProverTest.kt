@@ -268,8 +268,11 @@ class TronSccpProverTest {
         assertFalse(callbackSnapshot === request)
         assertEquals(request, callbackSnapshot)
         val snapshotBundle = callbackSnapshot.bundleBytes
+        val snapshotSourceProof = callbackSnapshot.sourceProofBytes
         snapshotBundle[0] = 77
+        snapshotSourceProof[0] = 77
         assertContentEquals(byteArrayOf(5, 6, 7), callbackSnapshot.bundleBytes)
+        assertContentEquals(byteArrayOf(9, 10), callbackSnapshot.sourceProofBytes)
     }
 
     @Test

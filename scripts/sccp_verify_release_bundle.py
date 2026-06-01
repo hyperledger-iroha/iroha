@@ -27,6 +27,7 @@ CORRIDOR_PHASES = (
     "swift-sdk",
     "kotlin-sdk",
     "java-android",
+    "dotnet-sdk",
     "contract-smoke",
     "core-admission",
 )
@@ -38,6 +39,8 @@ PHASE_TRANSCRIPT_REQUIRED_FRAGMENTS: dict[str, tuple[str, ...]] = {
     "js-sdk": (
         "node --test",
         "javascript/iroha_js/test/sccpSolanaProver.test.js",
+        "javascript/iroha_js/test/sccpEthereumMainnet.test.js",
+        "javascript/iroha_js/test/sccpBscMainnet.test.js",
         "javascript/iroha_js/test/package_dist.test.js",
         "javascript/iroha_js/test/sccpPackageExports.test.js",
     ),
@@ -56,6 +59,10 @@ PHASE_TRANSCRIPT_REQUIRED_FRAGMENTS: dict[str, tuple[str, ...]] = {
         "./gradlew :core:test --console=plain --tests org.hyperledger.iroha.android.GradleHarnessTests",
         "./gradlew :core:test --console=plain --tests org.hyperledger.iroha.android.sccp.SolanaSccpProverTests",
     ),
+    "dotnet-sdk": (
+        "dotnet test tests/Hyperledger.Iroha.Sdk.Tests/Hyperledger.Iroha.Sdk.Tests.csproj",
+        "FullyQualifiedName~SccpEthereumMainnetTests\\|FullyQualifiedName~SccpBscMainnetTests",
+    ),
     "contract-smoke": (
         "node --check contracts/evm/sccp/test/sccp_message_bridge_smoke.js",
         "bash scripts/sccp_evm_contract_smoke.sh",
@@ -65,11 +72,18 @@ PHASE_TRANSCRIPT_REQUIRED_FRAGMENTS: dict[str, tuple[str, ...]] = {
 PHASE_TRANSCRIPT_SUCCESS_FRAGMENTS: dict[str, tuple[str, ...]] = {
     "rust-sccp": ("test result: ok",),
     "evidence-scripts": (" passed in ",),
-    "js-sdk": ("fail 0", "pass "),
+    "js-sdk": (
+        "fail 0",
+        "pass ",
+        "browser Ethereum mainnet SCCP artifacts stay JS-only and local-prover owned",
+        "browser BSC mainnet SCCP artifacts stay JS-only and local-prover owned",
+        "package declarations expose BSC mainnet Parlia finality evidence hooks",
+    ),
     "python-sdk": (" passed in ",),
     "swift-sdk": ("0 failures",),
     "kotlin-sdk": ("BUILD SUCCESSFUL",),
     "java-android": ("BUILD SUCCESSFUL",),
+    "dotnet-sdk": ("Passed!",),
     "contract-smoke": ("sccp_message_bridge_smoke: ok",),
     "core-admission": ("test result: ok",),
 }
@@ -82,6 +96,10 @@ SCCP_DOMAIN_TRON = 5
 SCCP_DOMAIN_SORA_KUSAMA = 6
 SCCP_DOMAIN_SORA_POLKADOT = 7
 SCCP_DOMAIN_SORA2 = 8
+ACTIVE_LAUNCH_DOMAIN = SCCP_DOMAIN_BSC
+ACTIVE_LAUNCH_CHAIN = "bsc"
+ACTIVE_LAUNCH_POLICY = "BscMainnetLane"
+ACTIVE_LAUNCH_DISPLAY = f"{ACTIVE_LAUNCH_CHAIN.upper()} mainnet"
 ALL_LANES_REQUIRED_DOMAINS = (
     SCCP_DOMAIN_ETH,
     SCCP_DOMAIN_BSC,
@@ -158,7 +176,7 @@ READINESS_MARKDOWN_REQUIRED_RELEASE_EVIDENCE_MARKERS = (
     "--require-phase-evidence",
     "user-prover helper surface",
     "JavaScript/web source",
-    "complete all-lanes evidence bundle",
+    f"{ACTIVE_LAUNCH_DISPLAY} launch-lane evidence",
     "Governed live deployment evidence",
     "Public release notes",
 )
@@ -195,6 +213,12 @@ USER_PROVER_SDK_HOOK_MARKERS = {
     "swift-sdk": ("WitnessProvider", "ProveFunction"),
     "kotlin-sdk": ("WitnessProvider", "ProofEngine"),
     "java-android": ("WitnessProvider", "ProofEngine"),
+    "dotnet-sdk": (
+        "InboundProver",
+        "InboundSubmitter",
+        "OutboundProver",
+        "OutboundSubmitter",
+    ),
 }
 USER_PROVER_SDK_PHASES = (
     "js-sdk",
@@ -203,12 +227,19 @@ USER_PROVER_SDK_PHASES = (
     "kotlin-sdk",
     "java-android",
 )
+
+
+def _helper_matches_hook_marker(sdk: str, helper: str, marker: str) -> bool:
+    if sdk == "python-sdk":
+        return helper == marker
+    return marker in helper
 USER_PROVER_REQUIRED_PHASES = (
     *USER_PROVER_SDK_PHASES,
     "core-admission",
 )
 USER_PROVER_KNOWN_REQUIRED_PHASES = (
     *USER_PROVER_SDK_PHASES,
+    "dotnet-sdk",
     "contract-smoke",
     "core-admission",
 )
@@ -244,6 +275,25 @@ USER_PROVER_REQUIRED_HELPERS_BY_LANE_SDK = {
             "evmSccpReceiptProofHash",
             "canonicalBscSccpReceiptProofBytes",
             "bscSccpReceiptProofHash",
+            "buildBscMainnetSccpDestinationProofRequest",
+            "wrapBscMainnetSccpDestinationProofResult",
+            "EthereumMainnetSccp",
+            "EthereumMainnetSccp.buildOutboundProofRequest",
+            "EthereumMainnetSccp.proveOutboundToEthereum",
+            "EthereumMainnetSccp.buildEthereumCalldata",
+            "EthereumMainnetSccp.submitOutboundToEthereum",
+            "EthereumMainnetSccp.collectInboundEvidenceFromReceipt",
+            "EthereumMainnetSccp.proveInboundToSora",
+            "EthereumMainnetSccp.submitInboundToIroha",
+            "consensusProvider",
+            "BscMainnetSccpProver",
+            "BscMainnetSccp",
+            "BscMainnetSccp.collectInboundEvidenceFromReceipt",
+            "BscMainnetSccp.proveInboundToSora",
+            "BscMainnetSccp.submitInboundToIroha",
+            "BscMainnetSccp.buildBscCalldata",
+            "BscMainnetSccp.submitOutboundToBsc",
+            "buildBscMainnetSccpDestinationSubmission",
             "EvmSccpProver",
             "witnessProvider",
             "proveFn",
@@ -256,6 +306,25 @@ USER_PROVER_REQUIRED_HELPERS_BY_LANE_SDK = {
             "evm_sccp_receipt_proof_hash",
             "canonical_bsc_sccp_receipt_proof_bytes",
             "bsc_sccp_receipt_proof_hash",
+            "build_bsc_mainnet_sccp_destination_proof_request",
+            "wrap_bsc_mainnet_sccp_destination_proof_result",
+            "EthereumMainnetSccp",
+            "EthereumMainnetSccp.build_outbound_proof_request",
+            "EthereumMainnetSccp.prove_outbound_to_ethereum",
+            "EthereumMainnetSccp.build_ethereum_calldata",
+            "EthereumMainnetSccp.submit_outbound_to_ethereum",
+            "EthereumMainnetSccp.collect_inbound_evidence_from_receipt",
+            "EthereumMainnetSccp.prove_inbound_to_sora",
+            "EthereumMainnetSccp.submit_inbound_to_iroha",
+            "consensus_provider",
+            "BscMainnetSccpProver",
+            "BscMainnetSccp",
+            "BscMainnetSccp.collect_inbound_evidence_from_receipt",
+            "BscMainnetSccp.prove_inbound_to_sora",
+            "BscMainnetSccp.submit_inbound_to_iroha",
+            "BscMainnetSccp.build_bsc_calldata",
+            "BscMainnetSccp.submit_outbound_to_bsc",
+            "build_bsc_mainnet_sccp_destination_submission",
             "EvmSccpProver",
             "witness_provider",
             "prove",
@@ -268,6 +337,29 @@ USER_PROVER_REQUIRED_HELPERS_BY_LANE_SDK = {
             "evmSccpReceiptProofHash",
             "canonicalBscSccpReceiptProofBytes",
             "bscSccpReceiptProofHash",
+            "buildBscMainnetSccpDestinationProofRequest",
+            "wrapBscMainnetSccpDestinationProofResult",
+            "EthereumMainnetSccp",
+            "EthereumMainnetSccp.collectInboundEvidenceFromReceipt",
+            "EthereumMainnetSccp.proveInboundToSora",
+            "EthereumMainnetSccp.submitInboundToIroha",
+            "EthereumMainnetSccp.submitOutboundToEthereum",
+            "EthereumMainnetSccp.OutboundSubmitFunction",
+            "EthereumMainnetConsensusProvider",
+            "EthereumMainnetBeaconFinalityEvidence",
+            "EthereumMainnetInboundEvidence.init(beaconFinalityEvidence:)",
+            "BscMainnetSccpProver",
+            "BscMainnetSccp",
+            "BscMainnetSccp.collectInboundEvidenceFromReceipt",
+            "BscMainnetSccp.proveInboundToSora",
+            "BscMainnetSccp.submitInboundToIroha",
+            "BscMainnetSccp.buildBscCalldata",
+            "BscMainnetSccp.submitOutboundToBsc",
+            "BscMainnetSccp.OutboundSubmitFunction",
+            "BscMainnetConsensusProvider",
+            "BscMainnetParliaFinalityEvidence",
+            "BscMainnetInboundEvidence.init(parliaFinalityEvidence:)",
+            "buildBscMainnetSccpDestinationSubmission",
             "EvmSccpProver",
             "EvmSccpWitnessProvider",
             "EvmSccpProver.ProveFunction",
@@ -280,6 +372,28 @@ USER_PROVER_REQUIRED_HELPERS_BY_LANE_SDK = {
             "SccpSourceProofs.evmReceiptProofHash",
             "SccpSourceProofs.canonicalBscReceiptProofBytes",
             "SccpSourceProofs.bscReceiptProofHash",
+            "SccpBsc.buildProofRequest",
+            "EthereumMainnetSccp",
+            "EthereumMainnetSccp.collectInboundEvidenceFromReceipt",
+            "EthereumMainnetSccp.proveInboundToSora",
+            "EthereumMainnetSccp.submitInboundToIroha",
+            "EthereumMainnetSccp.submitOutboundToEthereum",
+            "EthereumMainnetConsensusProvider",
+            "EthereumMainnetBeaconFinalityEvidence",
+            "EthereumMainnetInboundEvidence.withBeaconFinalityEvidence",
+            "EthereumMainnetOutboundSubmitter",
+            "BscSccpProver",
+            "BscMainnetSccp",
+            "BscMainnetSccp.collectInboundEvidenceFromReceipt",
+            "BscMainnetSccp.proveInboundToSora",
+            "BscMainnetSccp.submitInboundToIroha",
+            "BscMainnetSccp.buildBscCalldata",
+            "BscMainnetSccp.submitOutboundToBsc",
+            "BscMainnetConsensusProvider",
+            "BscMainnetParliaFinalityEvidence",
+            "BscMainnetInboundEvidence.withParliaFinalityEvidence",
+            "BscMainnetOutboundSubmitter",
+            "SccpBsc.buildSubmission",
             "EvmSccpProver",
             "EvmSccpWitnessProvider",
             "EvmSccpProofEngine",
@@ -292,11 +406,81 @@ USER_PROVER_REQUIRED_HELPERS_BY_LANE_SDK = {
             "SourceSccpProofs.evmReceiptProofHash",
             "SourceSccpProofs.canonicalBscReceiptProofBytes",
             "SourceSccpProofs.bscReceiptProofHash",
+            "BscSccpProver.buildProofRequest",
+            "EthereumMainnetSccp",
+            "EthereumMainnetSccp.collectInboundEvidenceFromReceipt",
+            "EthereumMainnetSccp.proveInboundToSora",
+            "EthereumMainnetSccp.submitInboundToIroha",
+            "EthereumMainnetSccp.submitOutboundToEthereum",
+            "EthereumMainnetSccp.ConsensusProvider",
+            "EthereumMainnetSccp.BeaconFinalityEvidence",
+            "InboundEvidence.withBeaconFinalityEvidence",
+            "EthereumMainnetSccp.OutboundSubmitter",
+            "BscSccpProver",
+            "BscMainnetSccp",
+            "BscMainnetSccp.collectInboundEvidenceFromReceipt",
+            "BscMainnetSccp.proveInboundToSora",
+            "BscMainnetSccp.submitInboundToIroha",
+            "BscMainnetSccp.buildBscCalldata",
+            "BscMainnetSccp.submitOutboundToBsc",
+            "BscMainnetSccp.ConsensusProvider",
+            "BscMainnetSccp.ParliaFinalityEvidence",
+            "InboundEvidence.withParliaFinalityEvidence",
+            "BscMainnetSccp.OutboundSubmitter",
+            "BscSccpProver.buildSubmission",
             "EvmSccpProver",
             "EvmSccpProver.WitnessProvider",
             "EvmSccpProver.ProofEngine",
             "EvmSccpProver.buildSubmission",
             "BridgeProofSubmitRequest.fromEvmSccpSubmission",
+        ),
+        "dotnet-sdk": (
+            "EthereumMainnetSccp",
+            "EthereumMainnetSccp.CollectInboundEvidenceFromReceiptAsync",
+            "EthereumMainnetSccp.ProveInboundToSoraAsync",
+            "EthereumMainnetSccp.SubmitInboundToIrohaAsync",
+            "EthereumMainnetSccp.BuildOutboundProofRequest",
+            "EthereumMainnetSccp.ProveOutboundToEthereumAsync",
+            "EthereumMainnetSccp.BuildEthereumCalldata",
+            "EthereumMainnetSccp.SubmitOutboundToEthereumAsync",
+            "EthereumMainnetSccp.DestinationBinding",
+            "EthereumMainnetSccp.DestinationBindingHash",
+            "IEthereumMainnetExecutionProvider",
+            "IEthereumMainnetConsensusProvider",
+            "EthereumMainnetBeaconFinalityEvidence",
+            "EthereumMainnetTransparentPublicInputs",
+            "EthereumMainnetOutboundProofRequestInput",
+            "EthereumMainnetOutboundProofRequest",
+            "EthereumMainnetOutboundProofResult",
+            "EthereumMainnetSccpSubmission",
+            "EthereumMainnetInboundEvidence.WithBeaconFinalityEvidence",
+            "IEthereumMainnetInboundProver",
+            "IEthereumMainnetInboundSubmitter",
+            "IEthereumMainnetOutboundProver",
+            "IEthereumMainnetOutboundSubmitter",
+            "BscMainnetSccp",
+            "BscMainnetSccp.CollectInboundEvidenceFromReceiptAsync",
+            "BscMainnetSccp.ProveInboundToSoraAsync",
+            "BscMainnetSccp.SubmitInboundToIrohaAsync",
+            "BscMainnetSccp.BuildOutboundProofRequest",
+            "BscMainnetSccp.ProveOutboundToBscAsync",
+            "BscMainnetSccp.BuildBscCalldata",
+            "BscMainnetSccp.SubmitOutboundToBscAsync",
+            "BscMainnetSccp.DestinationBinding",
+            "BscMainnetSccp.DestinationBindingHash",
+            "IBscMainnetExecutionProvider",
+            "IBscMainnetConsensusProvider",
+            "BscMainnetParliaFinalityEvidence",
+            "BscMainnetTransparentPublicInputs",
+            "BscMainnetOutboundProofRequestInput",
+            "BscMainnetOutboundProofRequest",
+            "BscMainnetOutboundProofResult",
+            "BscMainnetSccpSubmission",
+            "BscMainnetInboundEvidence.WithParliaFinalityEvidence",
+            "IBscMainnetInboundProver",
+            "IBscMainnetInboundSubmitter",
+            "IBscMainnetOutboundProver",
+            "IBscMainnetOutboundSubmitter",
         ),
     },
     "tron": {
@@ -660,6 +844,9 @@ ALL_LANES_ROUTE_CANARY_COMMON_KEYS = {
 ALL_LANES_EVM_ROUTE_CANARY_KEYS = ALL_LANES_ROUTE_CANARY_COMMON_KEYS | {
     "transaction_hash",
     "log_index",
+    "receipt_block_number",
+    "receipt_block_hash",
+    "block_receipts_root",
     "call_data_sha256",
     "message_id",
     "payload_hash",
@@ -1202,6 +1389,133 @@ def _expected_cryptographic_evidence(evidence: dict[str, Any]) -> list[dict[str,
     return rows
 
 
+def _active_launch_lane(evidence: dict[str, Any]) -> dict[str, Any] | None:
+    for lane in evidence.get("lanes", []):
+        if isinstance(lane, dict) and lane.get("domain") == ACTIVE_LAUNCH_DOMAIN:
+            return lane
+    return None
+
+
+def _active_launch_blockers(evidence: dict[str, Any]) -> list[str]:
+    prefix = f"domain {ACTIVE_LAUNCH_DOMAIN} ({ACTIVE_LAUNCH_CHAIN}): "
+    blockers: list[str] = []
+    for blocker in evidence.get("blockers", []):
+        if not isinstance(blocker, str):
+            continue
+        if blocker.startswith(prefix):
+            blockers.append(blocker)
+        elif not blocker.startswith("domain "):
+            blockers.append(blocker)
+    if _active_launch_lane(evidence) is None:
+        blockers.append(
+            f"domain {ACTIVE_LAUNCH_DOMAIN} ({ACTIVE_LAUNCH_CHAIN}): missing launch lane evidence"
+        )
+    return blockers
+
+
+def _active_launch_release_checklist(evidence: dict[str, Any]) -> dict[str, Any]:
+    lane = _active_launch_lane(evidence) or {}
+    lane_label = f"domain {ACTIVE_LAUNCH_DOMAIN} ({ACTIVE_LAUNCH_CHAIN})"
+    lane_blockers = [
+        blocker
+        for blocker in lane.get("blockers", [])
+        if isinstance(blocker, str)
+    ]
+    records = lane.get("records")
+    if not isinstance(records, dict):
+        records = {}
+    record_labels = {
+        "source_verifier_material": "source verifier material",
+        "source_adapter_deployment": "source adapter deployment",
+        "destination_rollout": "destination rollout",
+        "route_allowlist": "route allowlist",
+    }
+    records_blockers = [
+        f"{lane_label}: missing {label}"
+        for key, label in record_labels.items()
+        if not records.get(key)
+    ]
+    deployment_blockers = [
+        f"{lane_label}: {blocker}"
+        for blocker in lane_blockers
+        if any(
+            token in blocker
+            for token in (
+                "source adapter",
+                "deployment",
+                "destination",
+                "binding",
+                "verifier",
+                "rollout",
+            )
+        )
+    ]
+    route_blockers = [
+        f"{lane_label}: {blocker}"
+        for blocker in lane_blockers
+        if "route allowlist" in blocker
+    ]
+    canary_blockers = [
+        f"{lane_label}: {blocker}"
+        for blocker in lane_blockers
+        if "route canary" in blocker
+    ]
+    route_summary = lane.get("route_allowlist")
+    if not isinstance(route_summary, dict):
+        route_summary = {}
+    canary = route_summary.get("route_canary")
+    if not isinstance(canary, dict):
+        canary = {}
+    if canary.get("status") != "passed":
+        canary_blockers.append(f"{lane_label}: route canary status is not passed")
+    if not canary.get("evidence_hash"):
+        canary_blockers.append(f"{lane_label}: route canary evidence hash is missing")
+    if not canary.get("evidence_source"):
+        canary_blockers.append(
+            f"{lane_label}: live route canary evidence source is missing"
+        )
+    if canary.get("evidence_bound") is not True:
+        canary_blockers.append(f"{lane_label}: route canary evidence is not bound")
+
+    launch_blockers = _active_launch_blockers(evidence)
+    items = [
+        {
+            "id": "all_required_lane_records",
+            "title": f"Active {ACTIVE_LAUNCH_DISPLAY} SCCP lane has the required source, deployment, destination, and route records",
+            "ready": not records_blockers,
+            "blockers": records_blockers,
+        },
+        {
+            "id": "governed_deployment_evidence",
+            "title": f"{ACTIVE_LAUNCH_DISPLAY} source-adapter deployment and destination rollout are governed and hash-bound",
+            "ready": not deployment_blockers,
+            "blockers": deployment_blockers,
+        },
+        {
+            "id": "route_allowlist_binding",
+            "title": f"{ACTIVE_LAUNCH_DISPLAY} route allowlist binds the governed source and destination evidence",
+            "ready": not route_blockers,
+            "blockers": route_blockers,
+        },
+        {
+            "id": "live_route_canary_evidence",
+            "title": f"{ACTIVE_LAUNCH_DISPLAY} post-deploy route canary evidence is live, passed, and bound to the route",
+            "ready": not canary_blockers,
+            "blockers": canary_blockers,
+        },
+        {
+            "id": "no_unresolved_blockers",
+            "title": f"No active {ACTIVE_LAUNCH_DISPLAY} launch blockers remain",
+            "ready": not launch_blockers,
+            "blockers": launch_blockers,
+        },
+    ]
+    return {
+        "ready": all(item["ready"] for item in items),
+        "items": items,
+    }
+
+
 def _readiness_markdown_record_flags(records: dict[str, bool]) -> str:
     labels = {
         "source_verifier_material": "source",
@@ -1242,7 +1556,18 @@ def _readiness_markdown_sdk_helper_sets_cell(surface: dict[str, Any]) -> str:
     if not isinstance(helper_sets, dict):
         return surface["sdk_helpers"]
     rows: list[str] = []
-    for sdk in USER_PROVER_SDK_PHASES:
+    lanes = surface.get("lanes")
+    expected_helpers_by_sdk = (
+        USER_PROVER_REQUIRED_HELPERS_BY_LANE_SDK.get(lanes, {})
+        if isinstance(lanes, str)
+        else {}
+    )
+    sdk_order = tuple(
+        sdk
+        for sdk in (*USER_PROVER_SDK_PHASES, "dotnet-sdk")
+        if sdk in expected_helpers_by_sdk
+    ) or USER_PROVER_SDK_PHASES
+    for sdk in sdk_order:
         helpers = helper_sets.get(sdk)
         if not isinstance(helpers, list):
             continue
@@ -1405,7 +1730,7 @@ def _render_readiness_markdown(
             "",
             "- A passing `bash scripts/check_sccp_production_corridor.sh` run, recorded with `--require-phase-evidence` and one hashed `--phase-evidence` artifact for every passed phase.",
             "- Passing web/mobile SDK artifacts for the user-prover helper surface, including the JavaScript/web source, packaged `dist`, and TypeScript declaration exports used by portal builds.",
-            "- A complete all-lanes evidence bundle containing source verifier material, source-adapter deployment, destination rollout, route allowlist, and route canary records for every advertised SCCP remote domain.",
+            f"- Complete {ACTIVE_LAUNCH_DISPLAY} launch-lane evidence containing source verifier material, source-adapter deployment, destination rollout, route allowlist, and route canary records; the all-lanes summary remains attached as diagnostic evidence for future lanes.",
             "- Governed live deployment evidence for immutable destination verifiers and source-chain verifier engines; offline placeholder or template-derived hashes keep the report blocked.",
             "- Public release notes must attach this report and the all-lanes JSON summary before production activation.",
         ]
@@ -1884,7 +2209,12 @@ def _expected_submission_surfaces(report: dict[str, Any]) -> list[dict[str, Any]
     for lanes, proof_backend in USER_PROVER_REQUIRED_LANE_BACKENDS.items():
         helper_sets = USER_PROVER_REQUIRED_HELPERS_BY_LANE_SDK[lanes]
         js_helpers = list(helper_sets["js-sdk"])
+        sdk_order = tuple(
+            sdk for sdk in (*USER_PROVER_SDK_PHASES, "dotnet-sdk") if sdk in helper_sets
+        )
         required_phases = list(USER_PROVER_SDK_PHASES)
+        if lanes == "eth,bsc":
+            required_phases.append("dotnet-sdk")
         if proof_backend in USER_PROVER_CONTRACT_SMOKE_BACKENDS:
             required_phases.append("contract-smoke")
         required_phases.append("core-admission")
@@ -1899,7 +2229,7 @@ def _expected_submission_surfaces(report: dict[str, Any]) -> list[dict[str, Any]
                 "proof_backend": proof_backend,
                 "sdk_helper_symbols": js_helpers,
                 "sdk_helper_symbols_by_sdk": {
-                    sdk: list(helper_sets[sdk]) for sdk in USER_PROVER_SDK_PHASES
+                    sdk: list(helper_sets[sdk]) for sdk in sdk_order
                 },
                 "sdk_helpers": ", ".join(js_helpers),
                 "on_chain_submission": USER_PROVER_ON_CHAIN_SUBMISSION_BY_LANE[
@@ -1956,13 +2286,7 @@ def _expected_release_checklist(report: dict[str, Any]) -> dict[str, Any]:
     evidence = report.get("evidence")
     if not isinstance(evidence, dict):
         return {"ready": False, "items": []}
-    checklist = evidence.get("release_checklist")
-    if isinstance(checklist, dict):
-        return checklist
-    return {
-        "ready": bool(evidence.get("production_ready")),
-        "items": [],
-    }
+    return _active_launch_release_checklist(evidence)
 
 
 def _boolean_field_errors(
@@ -2148,6 +2472,29 @@ def _cryptographic_evidence_row_schema_errors(row: dict[str, Any]) -> list[str]:
         errors.append(
             "readiness report cryptographic evidence row chain must be a non-empty string"
         )
+    if "route_canary_evidence_bound" in row and (
+        type(row.get("route_canary_evidence_bound")) is not bool
+    ):
+        errors.append(
+            "readiness report cryptographic evidence row "
+            "route_canary_evidence_bound must be a boolean"
+        )
+    if "source_adapter_gate_required" in row and (
+        type(row.get("source_adapter_gate_required")) is not bool
+    ):
+        errors.append(
+            "readiness report cryptographic evidence row "
+            "source_adapter_gate_required must be a boolean"
+        )
+    audit_hashes = row.get("source_adapter_gate_audit_hashes")
+    if "source_adapter_gate_audit_hashes" in row and not isinstance(audit_hashes, dict):
+        errors.append(
+            "readiness report cryptographic evidence row "
+            "source_adapter_gate_audit_hashes must be an object"
+        )
+        audit_hashes = {}
+    if row.get("domain") != ACTIVE_LAUNCH_DOMAIN:
+        return errors
     for field in (
         "source_verifier_material_hash",
         "source_adapter_engine_deployment_hash",
@@ -2184,13 +2531,6 @@ def _cryptographic_evidence_row_schema_errors(row: dict[str, Any]) -> list[str]:
             "readiness report cryptographic evidence row "
             f"route_canary_evidence_source must be {expected_canary_source}"
         )
-    if "route_canary_evidence_bound" in row and (
-        type(row.get("route_canary_evidence_bound")) is not bool
-    ):
-        errors.append(
-            "readiness report cryptographic evidence row "
-            "route_canary_evidence_bound must be a boolean"
-        )
     if row.get("domain") == SCCP_DOMAIN_TRON:
         errors.extend(
             _integer_field_errors(
@@ -2215,13 +2555,6 @@ def _cryptographic_evidence_row_schema_errors(row: dict[str, Any]) -> list[str]:
                     "readiness report cryptographic evidence row "
                     f"{field} must be null for non-TRON lanes"
                 )
-    if "source_adapter_gate_required" in row and (
-        type(row.get("source_adapter_gate_required")) is not bool
-    ):
-        errors.append(
-            "readiness report cryptographic evidence row "
-            "source_adapter_gate_required must be a boolean"
-        )
     errors.extend(
         _empty_or_nonzero_fixed_hex_field_errors(
             "readiness report cryptographic evidence row",
@@ -2231,13 +2564,6 @@ def _cryptographic_evidence_row_schema_errors(row: dict[str, Any]) -> list[str]:
             type_label="bytes32",
         )
     )
-    audit_hashes = row.get("source_adapter_gate_audit_hashes")
-    if "source_adapter_gate_audit_hashes" in row and not isinstance(audit_hashes, dict):
-        errors.append(
-            "readiness report cryptographic evidence row "
-            "source_adapter_gate_audit_hashes must be an object"
-        )
-        audit_hashes = {}
     if isinstance(audit_hashes, dict):
         for field, value in sorted(audit_hashes.items()):
             if not isinstance(field, str) or not field:
@@ -2540,13 +2866,24 @@ def _submission_surface_row_schema_errors(row: dict[str, Any]) -> list[str]:
             "sdk_helper_symbols_by_sdk must be an object"
         )
     else:
-        expected_sdks = set(USER_PROVER_SDK_PHASES)
+        lanes = row.get("lanes")
+        expected_helpers_by_sdk = (
+            USER_PROVER_REQUIRED_HELPERS_BY_LANE_SDK.get(lanes, {})
+            if isinstance(lanes, str)
+            else {}
+        )
+        expected_sdk_order = tuple(
+            sdk
+            for sdk in (*USER_PROVER_SDK_PHASES, "dotnet-sdk")
+            if sdk in expected_helpers_by_sdk
+        ) or USER_PROVER_SDK_PHASES
+        expected_sdks = set(expected_sdk_order)
         for sdk in sorted(set(helper_sets) - expected_sdks):
             errors.append(
                 "readiness report user prover submission surface row "
                 f"sdk_helper_symbols_by_sdk contains unknown SDK: {sdk}"
             )
-        for sdk in USER_PROVER_SDK_PHASES:
+        for sdk in expected_sdk_order:
             helpers = helper_sets.get(sdk)
             if (
                 not isinstance(helpers, list)
@@ -2565,7 +2902,10 @@ def _submission_surface_row_schema_errors(row: dict[str, Any]) -> list[str]:
                     f"sdk_helper_symbols_by_sdk[{sdk}] contains duplicate symbols"
                 )
             for marker in USER_PROVER_SDK_HOOK_MARKERS.get(sdk, ()):
-                if not any(marker in helper for helper in helpers):
+                if not any(
+                    _helper_matches_hook_marker(sdk, helper, marker)
+                    for helper in helpers
+                ):
                     errors.append(
                         "readiness report user prover submission surface row "
                         f"sdk_helper_symbols_by_sdk[{sdk}] missing UI-owned "
@@ -2655,7 +2995,11 @@ def _submission_surface_inventory_errors(surfaces: list[Any]) -> list[str]:
             errors.append(f"{label} contains duplicate lanes row: {lanes}")
         else:
             seen_lanes.add(lanes)
-        expected_backend = USER_PROVER_REQUIRED_LANE_BACKENDS.get(lanes)
+        expected_backend = (
+            USER_PROVER_REQUIRED_LANE_BACKENDS.get(lanes)
+            if isinstance(lanes, str)
+            else None
+        )
         if expected_backend is None:
             errors.append(f"{label} contains unknown lanes row: {lanes}")
         elif proof_backend != expected_backend:
@@ -2663,7 +3007,11 @@ def _submission_surface_inventory_errors(surfaces: list[Any]) -> list[str]:
                 f"{label} proof_backend mismatch for lanes {lanes}: "
                 f"expected {expected_backend}, got {proof_backend!r}"
             )
-        expected_helpers_by_sdk = USER_PROVER_REQUIRED_HELPERS_BY_LANE_SDK.get(lanes)
+        expected_helpers_by_sdk = (
+            USER_PROVER_REQUIRED_HELPERS_BY_LANE_SDK.get(lanes)
+            if isinstance(lanes, str)
+            else None
+        )
         helper_sets = row.get("sdk_helper_symbols_by_sdk")
         if isinstance(expected_helpers_by_sdk, dict) and isinstance(helper_sets, dict):
             for sdk, expected_helpers in expected_helpers_by_sdk.items():
@@ -3285,6 +3633,8 @@ def _all_lanes_route_canary_schema_errors(
     if domain in (SCCP_DOMAIN_ETH, SCCP_DOMAIN_BSC):
         for field in (
             "transaction_hash",
+            "receipt_block_hash",
+            "block_receipts_root",
             "call_data_sha256",
             "message_id",
             "payload_hash",
@@ -3304,6 +3654,8 @@ def _all_lanes_route_canary_schema_errors(
             )
         evm_transcript_hash_fields = (
             "transaction_hash",
+            "receipt_block_hash",
+            "block_receipts_root",
             "call_data_sha256",
             "message_id",
             "payload_hash",
@@ -3357,6 +3709,14 @@ def _all_lanes_route_canary_schema_errors(
             )
         )
         errors.extend(_u32_field_errors(label, route_canary, "log_index"))
+        errors.extend(
+            _integer_field_errors(
+                label,
+                route_canary,
+                "receipt_block_number",
+                positive=True,
+            )
+        )
         errors.extend(
             _expected_u32_field_errors(
                 label,
@@ -3694,7 +4054,10 @@ def _all_lanes_lane_schema_errors(label: str, lanes: Any) -> list[str]:
             errors.append(f"{lane_label} chain must be a non-empty string")
         elif expected_chain is not None and lane.get("chain") != expected_chain:
             errors.append(f"{lane_label} chain must be {expected_chain}")
-        errors.extend(_true_field_errors(lane_label, lane, "production_ready"))
+        if domain == ACTIVE_LAUNCH_DOMAIN:
+            errors.extend(_true_field_errors(lane_label, lane, "production_ready"))
+        else:
+            errors.extend(_boolean_field_errors(lane_label, lane, "production_ready"))
         for field in (
             "records",
             "source_record_hashes",
@@ -3708,7 +4071,7 @@ def _all_lanes_lane_schema_errors(label: str, lanes: Any) -> list[str]:
             _string_list_field_errors(lane_label, lane, "blockers", allow_empty=True)
         )
         blockers = lane.get("blockers")
-        if isinstance(blockers, list) and blockers:
+        if domain == ACTIVE_LAUNCH_DOMAIN and isinstance(blockers, list) and blockers:
             errors.append(f"{lane_label} blockers must be empty")
         records = lane.get("records")
         if isinstance(records, dict):
@@ -3722,7 +4085,12 @@ def _all_lanes_lane_schema_errors(label: str, lanes: Any) -> list[str]:
             )
             for field in ALL_LANES_RECORD_KEYS:
                 if field in records:
-                    errors.extend(_true_field_errors(records_label, records, field))
+                    if domain == ACTIVE_LAUNCH_DOMAIN or lane.get("production_ready") is True:
+                        errors.extend(_true_field_errors(records_label, records, field))
+                    else:
+                        errors.extend(_boolean_field_errors(records_label, records, field))
+        if domain != ACTIVE_LAUNCH_DOMAIN and lane.get("production_ready") is False:
+            continue
         source_hashes = lane.get("source_record_hashes")
         if isinstance(source_hashes, dict):
             source_hashes_label = f"{lane_label} source_record_hashes"
@@ -4032,8 +4400,10 @@ def _all_lanes_summary_schema_errors(
     errors.extend(_list_field_errors(label, summary, "lanes"))
     errors.extend(_string_list_field_errors(label, summary, "blockers", allow_empty=True))
     blockers = summary.get("blockers")
-    if isinstance(blockers, list) and blockers:
-        errors.append(f"{label} blockers must be empty")
+    if isinstance(blockers, list):
+        launch_blockers = _active_launch_blockers(summary)
+        if launch_blockers:
+            errors.append(f"{label} active {ACTIVE_LAUNCH_DISPLAY} launch blockers must be empty")
     errors.extend(_all_lanes_lane_schema_errors(label, summary.get("lanes")))
     errors.extend(_all_lanes_route_canary_cross_lane_errors(label, summary.get("lanes")))
     required_domains = summary.get("required_domains")
@@ -4072,13 +4442,18 @@ def _all_lanes_summary_schema_errors(
 def _release_checklist_schema_errors(
     label: str,
     checklist: dict[str, Any],
+    *,
+    require_ready: bool = True,
 ) -> list[str]:
     errors: list[str] = []
     for key in sorted(set(checklist) - RELEASE_CHECKLIST_KEYS):
         errors.append(f"{label} release_checklist contains unknown field: {key}")
     for key in sorted(RELEASE_CHECKLIST_KEYS - set(checklist)):
         errors.append(f"{label} release_checklist missing field: {key}")
-    errors.extend(_true_field_errors(f"{label} release_checklist", checklist, "ready"))
+    if require_ready:
+        errors.extend(_true_field_errors(f"{label} release_checklist", checklist, "ready"))
+    else:
+        errors.extend(_boolean_field_errors(f"{label} release_checklist", checklist, "ready"))
     items = checklist.get("items")
     if not isinstance(items, list):
         errors.append(f"{label} release_checklist items is not a list")
@@ -4099,12 +4474,15 @@ def _release_checklist_schema_errors(
             errors.append(f"{item_label} missing field: {key}")
         errors.extend(_non_empty_string_field_errors(item_label, item, "id"))
         errors.extend(_non_empty_string_field_errors(item_label, item, "title"))
-        errors.extend(_true_field_errors(item_label, item, "ready"))
+        if require_ready:
+            errors.extend(_true_field_errors(item_label, item, "ready"))
+        else:
+            errors.extend(_boolean_field_errors(item_label, item, "ready"))
         errors.extend(
             _string_list_field_errors(item_label, item, "blockers", allow_empty=True)
         )
         blockers = item.get("blockers")
-        if isinstance(blockers, list) and blockers:
+        if require_ready and isinstance(blockers, list) and blockers:
             errors.append(f"{item_label} blockers must be empty")
     return errors
 
@@ -4480,6 +4858,7 @@ def verify_bundle(bundle_dir: Path) -> dict[str, Any]:
                 _release_checklist_schema_errors(
                     "all-lanes summary",
                     summary_release_checklist,
+                    require_ready=False,
                 )
             )
     if report:
@@ -4536,8 +4915,10 @@ def verify_bundle(bundle_dir: Path) -> dict[str, Any]:
             errors.append(
                 "readiness report inputs do not match copied input artifacts"
             )
-    if report and not report_evidence.get("production_ready"):
-        errors.append("readiness report embedded evidence is not production_ready")
+    if report and _active_launch_blockers(report_evidence):
+        errors.append(
+            f"readiness report embedded evidence has active {ACTIVE_LAUNCH_DISPLAY} launch blockers"
+        )
     if report and not report_release_checklist.get("ready"):
         errors.append("readiness report release_checklist is not ready")
     if report and report_release_checklist != _expected_release_checklist(report):
@@ -4550,10 +4931,12 @@ def verify_bundle(bundle_dir: Path) -> dict[str, Any]:
         errors.append("readiness report does not require hashed phase evidence")
     if report:
         errors.extend(_corridor_phase_errors(report_corridor))
-    if summary and not summary.get("production_ready"):
-        errors.append("all-lanes summary is not production_ready")
-    if summary and not summary_release_checklist.get("ready"):
-        errors.append("all-lanes summary release_checklist is not ready")
+    if summary and _active_launch_blockers(summary):
+        errors.append(f"all-lanes summary has active {ACTIVE_LAUNCH_DISPLAY} launch blockers")
+    if summary and not _active_launch_release_checklist(summary).get("ready"):
+        errors.append(
+            f"all-lanes summary active {ACTIVE_LAUNCH_DISPLAY} release checklist is not ready"
+        )
     if report and summary and report_evidence != summary:
         errors.append("all-lanes summary does not match readiness report evidence")
     if report:
@@ -4674,6 +5057,8 @@ def verify_bundle(bundle_dir: Path) -> dict[str, Any]:
                         f"unknown field: {key}"
                     )
                 errors.extend(_cryptographic_evidence_row_schema_errors(row))
+                if row.get("domain") != ACTIVE_LAUNCH_DOMAIN:
+                    continue
                 if row.get("route_canary_evidence_bound") is not True:
                     errors.append(
                         "readiness report cryptographic evidence row has unbound route canary"
@@ -4722,15 +5107,17 @@ def verify_bundle(bundle_dir: Path) -> dict[str, Any]:
                     "manifest corridor_ready does not match readiness report corridor"
                 )
     if summary:
-        if manifest.get("production_ready") != summary.get("production_ready"):
-            errors.append("manifest production_ready does not match all-lanes summary")
+        summary_launch_ready = not _active_launch_blockers(summary)
+        if manifest.get("production_ready") != summary_launch_ready:
+            errors.append(
+                f"manifest production_ready does not match all-lanes summary active {ACTIVE_LAUNCH_DISPLAY} launch readiness"
+            )
+        summary_launch_checklist = _active_launch_release_checklist(summary)
         if summary_release_checklist:
-            if manifest.get("release_checklist_ready") != summary_release_checklist.get(
-                "ready"
-            ):
+            if manifest.get("release_checklist_ready") != summary_launch_checklist.get("ready"):
                 errors.append(
                     "manifest release_checklist_ready does not match "
-                    "all-lanes summary release_checklist"
+                    f"all-lanes summary active {ACTIVE_LAUNCH_DISPLAY} release checklist"
                 )
 
     try:

@@ -1219,7 +1219,7 @@ public func canonicalTonSccpShardProofBytes(sourceEventDigest: String,
     }
     var out = Data()
     out.append(1)
-    try out.append(tonBytesFromHex32(sourceEventDigest, field: "sourceEventDigest"))
+    try out.append(tonNonZeroBytesFromHex32(sourceEventDigest, field: "sourceEventDigest"))
     tonAppendU64Le(masterchainSeqno, to: &out)
     try out.append(tonBytesFromHex32(masterchainBlockHash, field: "masterchainBlockHash"))
     tonAppendI32Le(shardWorkchainId, to: &out)

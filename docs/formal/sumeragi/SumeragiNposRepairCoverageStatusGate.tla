@@ -236,3 +236,4 @@ BugModeSwitchNposLosesRecord ==
     SpecActions(ModeSwitchNposRestoresRecorded)
 
 =============================================================================
+====
