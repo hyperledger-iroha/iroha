@@ -699,6 +699,11 @@ impl Actor {
         commit_topology: &[PeerId],
         dispatch: ValidationDispatch,
     ) -> ValidationGateOutcome {
+        #[cfg(test)]
+        if dispatch.inline() {
+            self.clear_validation_ownership_for_block(hash);
+        }
+
         if let Some((height, view, payload_hash)) = self
             .pending
             .pending_blocks
@@ -722,11 +727,6 @@ impl Actor {
                 "deferring legacy validation while vNext owns validation"
             );
             return ValidationGateOutcome::Deferred;
-        }
-
-        #[cfg(test)]
-        if dispatch.inline() {
-            let _ = self.supersede_validation_inflight(hash);
         }
 
         let pending = match self.pending.pending_blocks.remove(&hash) {

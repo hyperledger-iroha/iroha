@@ -509,9 +509,10 @@ impl TransactionGossiper {
             return (targets, 0, false);
         }
         let original_targets = targets.clone();
+        let original_target_count = original_targets.len();
         let (targets, suppressed) =
             self.filter_targets_by_peer_recent_suppression(targets, tx_hashes);
-        if targets.is_empty() && suppressed > 0 {
+        if suppressed == original_target_count {
             (original_targets, suppressed, true)
         } else {
             (targets, suppressed, false)

@@ -2928,10 +2928,12 @@ fn xml_signature_key_material(signature_xml: &str) -> Result<XmlSignatureKeyMate
         .subject_public_key
         .data
         .to_vec();
+    ensure_xml_signature_leaf_certificate_policy(&parsed_certificates[0])?;
     let mut certificate_sha256 = vec![sha256_hex(&certificates[0])];
     for (certificates_der, chain_pair) in
         certificates[1..].iter().zip(parsed_certificates.windows(2))
     {
+        ensure_xml_signature_issuer_certificate_policy(&chain_pair[1])?;
         chain_pair[0]
             .verify_signature(Some(chain_pair[1].public_key()))
             .map_err(|_| MsgError::ValidationFailed)?;
@@ -2976,6 +2978,37 @@ fn decode_child_base64_values(container: &str, child: &str) -> Result<Vec<Vec<u8
         cursor = absolute.end;
     }
     Ok(values)
+}
+
+fn ensure_xml_signature_leaf_certificate_policy(
+    certificate: &X509Certificate<'_>,
+) -> Result<(), MsgError> {
+    match certificate
+        .key_usage()
+        .map_err(|_| MsgError::ValidationFailed)?
+    {
+        Some(key_usage) if key_usage.value.digital_signature() => Ok(()),
+        _ => Err(MsgError::ValidationFailed),
+    }
+}
+
+fn ensure_xml_signature_issuer_certificate_policy(
+    certificate: &X509Certificate<'_>,
+) -> Result<(), MsgError> {
+    match certificate
+        .basic_constraints()
+        .map_err(|_| MsgError::ValidationFailed)?
+    {
+        Some(basic_constraints) if basic_constraints.value.ca => {}
+        _ => return Err(MsgError::ValidationFailed),
+    }
+    match certificate
+        .key_usage()
+        .map_err(|_| MsgError::ValidationFailed)?
+    {
+        Some(key_usage) if key_usage.value.key_cert_sign() => Ok(()),
+        _ => Err(MsgError::ValidationFailed),
+    }
 }
 
 fn child_attr(container: &str, child: &str, attr: &str) -> Option<String> {
@@ -3475,6 +3508,14 @@ mod tests {
     }
 
     fn signed_pacs008_xml_with_certificate_chain() -> CertificateChainSignedPayload {
+        signed_pacs008_xml_with_certificate_chain_policy(true, true, true)
+    }
+
+    fn signed_pacs008_xml_with_certificate_chain_policy(
+        issuer_is_ca: bool,
+        issuer_key_cert_sign: bool,
+        leaf_digital_signature: bool,
+    ) -> CertificateChainSignedPayload {
         let unsigned = unsigned_pacs008_xml();
         let insertion = unsigned
             .find("</FIToFICstmrCdtTrf>")
@@ -3490,11 +3531,19 @@ mod tests {
         issuer_params
             .distinguished_name
             .push(DnType::CommonName, "ISO Bridge Test Issuer");
-        issuer_params.is_ca = IsCa::Ca(BasicConstraints::Unconstrained);
-        issuer_params.key_usages = vec![
-            KeyUsagePurpose::DigitalSignature,
-            KeyUsagePurpose::KeyCertSign,
-        ];
+        issuer_params.is_ca = if issuer_is_ca {
+            IsCa::Ca(BasicConstraints::Unconstrained)
+        } else {
+            IsCa::NoCa
+        };
+        issuer_params.key_usages = if issuer_key_cert_sign {
+            vec![
+                KeyUsagePurpose::DigitalSignature,
+                KeyUsagePurpose::KeyCertSign,
+            ]
+        } else {
+            vec![KeyUsagePurpose::DigitalSignature]
+        };
         let issuer_cert = issuer_params
             .self_signed(&issuer_key)
             .expect("issuer certificate");
@@ -3507,7 +3556,11 @@ mod tests {
         leaf_params
             .distinguished_name
             .push(DnType::CommonName, "ISO Bridge Test Leaf");
-        leaf_params.key_usages = vec![KeyUsagePurpose::DigitalSignature];
+        leaf_params.key_usages = if leaf_digital_signature {
+            vec![KeyUsagePurpose::DigitalSignature]
+        } else {
+            vec![KeyUsagePurpose::KeyEncipherment]
+        };
         let leaf_cert = leaf_params
             .signed_by(&leaf_key, &issuer)
             .expect("leaf certificate");
@@ -3543,6 +3596,31 @@ mod tests {
             ),
             issuer_sha256,
         }
+    }
+
+    fn assert_pinned_certificate_chain_rejected(
+        fixture: CertificateChainSignedPayload,
+        expected: &str,
+    ) {
+        let mut config = sample_config();
+        let mut profile = signed_message_profile("require-verified");
+        profile.trusted_public_key_sha256.clear();
+        profile.trusted_certificate_sha256 = vec![fixture.issuer_sha256];
+        config.profiles.push(profile);
+        let runtime = Iso20022BridgeRuntime::from_config(&config)
+            .expect("cfg")
+            .expect("enabled");
+        let parsed =
+            parse_message("pacs.008", fixture.payload.as_bytes()).expect("parse signed XML");
+        let profile = runtime
+            .resolve_profile(Some("signed-pacs008-test"))
+            .expect("signed profile");
+
+        let err = runtime
+            .validate_profile_submission(profile, "pacs.008", &parsed, fixture.payload.as_bytes())
+            .expect_err(expected);
+
+        assert!(matches!(err, MsgError::ValidationFailed));
     }
 
     fn sample_world(asset_alias: Option<&str>) -> World {
@@ -3870,6 +3948,30 @@ mod tests {
             .expect_err("certificate chains must still require a configured trust pin");
 
         assert!(matches!(err, MsgError::ValidationFailed));
+    }
+
+    #[test]
+    fn require_verified_profile_rejects_certificate_chain_with_non_ca_issuer() {
+        assert_pinned_certificate_chain_rejected(
+            signed_pacs008_xml_with_certificate_chain_policy(false, true, true),
+            "certificate-chain issuers must be CA certificates",
+        );
+    }
+
+    #[test]
+    fn require_verified_profile_rejects_certificate_chain_without_issuer_key_cert_sign() {
+        assert_pinned_certificate_chain_rejected(
+            signed_pacs008_xml_with_certificate_chain_policy(true, false, true),
+            "certificate-chain issuers must carry keyCertSign usage",
+        );
+    }
+
+    #[test]
+    fn require_verified_profile_rejects_certificate_chain_without_leaf_digital_signature() {
+        assert_pinned_certificate_chain_rejected(
+            signed_pacs008_xml_with_certificate_chain_policy(true, true, false),
+            "XMLDSig leaf certificates must carry digitalSignature usage",
+        );
     }
 
     #[test]

@@ -26,10 +26,12 @@ and completed history lives in [`status.md`](./status.md).
 - Keep hardening the ISO 20022 bridge after the new inbound lifecycle endpoints
   and durable outbox helpers for `pacs.002`, `pacs.004`, `camt.029`, `camt.056`,
   `sese.023`, `sese.024`, and `sese.025`; remaining TradFi work is tracked in
-  the engineering backlog for XMLDSig/XAdES certificate-chain trust-anchor
-  packages and official MDR/XSD fixtures. `require-verified` profiles now
-  require profile-specific public-key or DER-certificate SHA-256 pins before a
-  P-256/SHA-256 enveloped signature can pass.
+  the engineering backlog for official XMLDSig/XAdES trust-anchor packages,
+  revocation/expiry policy fixtures, and official MDR/XSD fixtures.
+  `require-verified` profiles now require profile-specific public-key,
+  leaf-certificate, or linked certificate-chain DER SHA-256 pins before a
+  P-256/SHA-256 enveloped signature can pass, with deterministic leaf/issuer
+  extension checks for X.509 chains.
 - Keep UI-side SCCP proof-generation SDK inputs fail-closed for ambiguous
   aliases; the current TON shard-state source-state path rejects duplicate
   camelCase/snake_case names inside nested validator-set transition proofs,
@@ -175,9 +177,10 @@ and completed history lives in [`status.md`](./status.md).
   verifier material plus source-adapter deployment binding, including replayed
   deployment-receipt rejection before public-input extraction, and the positive
   BSC -> SORA `SubmitBridgeProof` path now uses the local-admission package
-  instead of outbound EVM Groth16 destination packaging. The remaining release
-  work is broader corridor evidence after stale Ethereum-lane validation jobs
-  are no longer racing the active BSC policy files.
+  instead of outbound EVM Groth16 destination packaging. The full
+  `core-admission` corridor now passes against the active BSC policy; remaining
+  release work is broader non-core corridor evidence and live deployment
+  artifacts.
 - Keep Python SCCP package-root exports aligned with the public user-prover
   rows; release-readiness tests now import `iroha_torii_client` and require
   every non-callback Python helper/class to be exposed through `__all__`.

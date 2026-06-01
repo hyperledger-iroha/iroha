@@ -112,8 +112,10 @@ obligations that the Norito ↔ ISO 20022 bridge must enforce before emitting m
   `MsgDefIdr`, `CreDt`, and BIC/ClrSysMmbId agents are preserved deterministically; XMLDSig/XAdES
   blocks remain skipped during IVM field materialisation. Torii profile validation verifies the
   supported P-256/SHA-256 enveloped XMLDSig/XAdES subset for `require-verified` profiles only
-  when the verified public key or DER certificate SHA-256 digest matches that rail profile's
-  configured `trusted_public_key_sha256` or `trusted_certificate_sha256` pins, and continues to
+  when the verified public key, leaf DER certificate, or cryptographically linked certificate-chain
+  issuer/root DER digest matches that rail profile's configured `trusted_public_key_sha256` or
+  `trusted_certificate_sha256` pins. Leaf certificates must be usable for digital signatures, chain
+  issuers must be CA certificates with `keyCertSign`, and the bridge continues to
   reject embedded signatures for live `reject-unsupported` profiles. Regression tests
   consume the samples and the new header envelope fixture to guard the mappings.【crates/ivm/src/iso20022.rs:265】【crates/ivm/src/iso20022.rs:3301】【crates/ivm/src/iso20022.rs:3703】
 - Torii accepts lifecycle submissions at `/v1/iso20022/pacs002`, `pacs004`, `camt056`,
@@ -385,7 +387,8 @@ iroha app settlement dvp \
   preserve only the ignored-signature marker, and `require-verified` profiles
   accept only the supported P-256/SHA-256 enveloped XMLDSig/XAdES subset after
   digest, signature, canonicalization-method, and profile trust-pin
-  verification.
+  verification, including verified certificate-chain issuer/root pins and
+  certificate-extension policy checks.
 
 ### Operational checklist for the bridge
 - Enforce the choreography above (collateral: `colr.010/011/012 → sese.023/024/025`; FX breach: `pacs.009 (+pacs.002) → sese.023 held → release/cancel`).  

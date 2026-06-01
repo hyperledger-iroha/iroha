@@ -194,9 +194,16 @@ track detailed unfinished engineering work.
   matches the selected rail profile, rejects non-canonical/all-zero configured
   pins at startup, and covers the supported C14N 1.0, C14N 1.1, and exclusive
   C14N algorithm identifiers with deterministic fixtures.
-- Broaden XMLDSig/XAdES fixture coverage beyond pinned P-256 key/certificate
-  material, including full certificate-chain fixtures and official
-  rail/profile-specific trust-anchor packages.
+- Completed 2026-06-01: added XMLDSig/XAdES certificate-chain verification for
+  `KeyInfo/X509Data`. Torii now derives the signing key from the leaf
+  certificate, verifies each supplied leaf-to-issuer chain link before exposing
+  issuer/root DER SHA-256 digests to the selected profile, requires leaf
+  `digitalSignature` and issuer CA/`keyCertSign` extensions, and covers the
+  pinned-issuer accept/reject corridor with generated P-256 fixtures.
+- Broaden XMLDSig/XAdES fixture coverage beyond internal P-256 key and
+  generated certificate-chain material, including official rail/profile-specific
+  trust-anchor packages, revocation/expiry-policy fixtures, and operational
+  anchor rotation examples.
 - Add official MDR/XSD fixture coverage per profile and broaden Torii tests for
   profile mismatch, cancellation/return transitions, reference snapshot
   checksum expectations, and replay by business message id/UETR.

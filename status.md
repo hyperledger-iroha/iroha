@@ -2,6 +2,65 @@
 
 Last updated: 2026-06-01
 
+## 2026-06-01 SCCP BSC launch-policy core-admission rerun
+
+- Re-applied the BSC-mainnet first-lane SCCP policy after the merge cleanup:
+  `sccp_production_policy_v1()` now defaults to `BscMainnetLane`, Core admits
+  configured BSC source proofs through the local `SubmitBridgeProof` path, and
+  Core/Torii configured launch-policy tests reject ETH/non-BSC lanes behind the
+  BSC gate.
+- Re-ran the full core-admission corridor after the focused policy tests. The
+  full `bridge_proofs` integration target passed all 35 tests, including the
+  positive configured BSC source-adapter admission test and the non-BSC
+  wait-for-lane-launch regressions.
+- Validation:
+  - `cargo fmt --all`
+  - `NORITO_SKIP_BINDINGS_SYNC=1 CARGO_TARGET_DIR=/tmp/iroha-codex-sccp-bsc-verify cargo test -p iroha_sccp production_policy_uses_bsc_mainnet_lane_launch --lib -- --nocapture`
+    (`1 passed`)
+  - `NORITO_SKIP_BINDINGS_SYNC=1 CARGO_TARGET_DIR=/tmp/iroha-codex-sccp-bsc-verify cargo test -p iroha_core configured_sccp_bsc_mainnet_lane_launch --lib -- --nocapture`
+    (`2 passed`)
+  - `NORITO_SKIP_BINDINGS_SYNC=1 CARGO_TARGET_DIR=/tmp/iroha-codex-sccp-bsc-verify cargo test -p iroha_core --test bridge_proofs submit_sccp_inbound_message_with_configured_bsc_source_adapter_is_accepted_for_bsc_launch -- --nocapture`
+    (`1 passed`)
+  - `NORITO_SKIP_BINDINGS_SYNC=1 CARGO_TARGET_DIR=/tmp/iroha-codex-sccp-bsc-verify cargo test -p iroha_torii configured_bsc_mainnet_lane_launch --features app_api --lib -- --nocapture`
+    (`2 passed`)
+  - `NORITO_SKIP_BINDINGS_SYNC=1 CARGO_TARGET_DIR=/tmp/iroha-codex-sccp-bsc-verify cargo test -p iroha_torii destination_binding_query_respects_bsc_lane_launch_policy --features app_api --lib -- --nocapture`
+    (`1 passed`)
+  - `NORITO_SKIP_BINDINGS_SYNC=1 CARGO_TARGET_DIR=/tmp/iroha-codex-sccp-bsc-verify bash scripts/check_sccp_production_corridor.sh --phase core-admission`
+    (`35 passed`)
+  - `cargo fmt --all --check`
+  - `git diff --check -- crates/iroha_sccp/src/lib.rs crates/iroha_core/tests/bridge_proofs.rs crates/iroha_core/src/smartcontracts/isi/world.rs crates/iroha_torii/src/routing.rs scripts/sccp_release_readiness_report.py scripts/sccp_verify_release_bundle.py docs/source/bridge_proofs.md roadmap.md status.md`
+  - `bash -lc 'if rg -n "^(<<<<<<<|=======|>>>>>>>)" crates/iroha_sccp/src/lib.rs crates/iroha_core/tests/bridge_proofs.rs crates/iroha_core/src/smartcontracts/isi/world.rs crates/iroha_torii/src/routing.rs scripts/sccp_release_readiness_report.py scripts/sccp_verify_release_bundle.py docs/source/bridge_proofs.md roadmap.md status.md; then exit 1; else exit 0; fi'`
+
+## 2026-06-01 TradFi XMLDSig certificate-chain pins
+
+- Extended ISO bridge XMLDSig trust matching from a single leaf certificate pin
+  to verified `KeyInfo/X509Data` chains. Torii now derives the signing key from
+  the leaf certificate, verifies each supplied leaf-to-issuer link, and exposes
+  only verified certificate DER SHA-256 digests to the selected profile's
+  `trusted_certificate_sha256` pins.
+- Hardened the chain policy deterministically: XML signing leaves must carry
+  `digitalSignature`, and every supplied issuer must be a CA certificate with
+  `keyCertSign` before its digest can satisfy a profile pin.
+- Added generated P-256 X.509 fixtures covering a signed ISO payload accepted
+  by a pinned issuer digest and rejected when the same chain lacks any matching
+  profile trust pin, plus adversarial fixtures for non-CA issuers, issuers
+  without `keyCertSign`, and leaves without `digitalSignature`. The production
+  dependency now enables x509-parser's signature-verification support; `rcgen`
+  is used only as a Torii test fixture generator.
+- Remaining TradFi trust work is official rail/profile trust-anchor packages,
+  revocation/expiry policy fixtures, anchor rotation examples, and official
+  MDR/XSD fixture coverage.
+- Validation:
+  - `cargo fmt --all`
+  - `cargo test -p iroha_core xml_signature_key_pins_accept_any_verified_certificate_digest --lib -- --nocapture`
+    (`1 passed`)
+  - `cargo test -p iroha_torii certificate_chain --lib -- --nocapture`
+    (`5 passed`)
+  - `cargo test -p iroha_torii require_verified_profile --lib -- --nocapture`
+    (`13 passed`)
+  - `git diff --check -- crates/iroha_core/src/iso_bridge/profiles.rs crates/iroha_torii/Cargo.toml crates/iroha_torii/src/iso20022_bridge.rs docs/source/engineering_backlog.md docs/source/finance/settlement_iso_mapping.md docs/source/finance/tradfi_interop_audit.md roadmap.md status.md`
+  - `bash -lc 'if rg -n "^(<<<<<<<|=======$|>>>>>>>)"; then exit 1; else exit 0; fi'`
+
 ## 2026-06-01 SCCP BSC local-admission finalization
 
 - Restored BSC mainnet as the active SCCP production launch policy across the
