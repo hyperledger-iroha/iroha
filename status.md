@@ -2,6 +2,32 @@
 
 Last updated: 2026-06-01
 
+## 2026-06-01 Kagemusha WSL-safe default test boundary
+
+- Moved heavyweight Kagemusha Halo2 IPA proof-generation tests behind
+  `#[ignore]` so routine `cargo test` does not run folded-token, recursive
+  aggregation, recursive-spend, or bridge proof-success generators in parallel
+  on resource-constrained WSL hosts.
+- Kept default Kagemusha coverage for semantic circuit checks, metadata and
+  record preflight, shape rejection, and cheap FFI rejection paths. Cached the
+  confidential-transfer-v2 sample hop used by those default tests so the same
+  real hop fixture is not regenerated repeatedly inside one test binary.
+- Updated the Offline Kagemusha docs to describe the default/ignored coverage
+  split and the explicit `--ignored --test-threads=1` path for heavyweight
+  proof-generator validation.
+- Validation:
+  - `cargo fmt --all`
+  - `cargo fmt --check --all`
+  - `cargo test -p iroha_core kagemusha_recursive_aggregation_real_halo2_ipa_proof_verifies --lib -- --test-threads=1`
+    (0 passed, 1 ignored)
+  - `cargo test -p iroha_core kagemusha_verified_folded_public_inputs_rejects_bad_shape_before_proof_decode --lib -- --test-threads=1`
+    (1 passed)
+  - `cargo test -p connect_norito_bridge kagemusha_verified_compact_token_ffi_rejects_invalid_archive --lib -- --test-threads=1`
+    (1 passed)
+  - `cargo test -p connect_norito_bridge kagemusha_verified_record_compact_token_ffi_returns_verifying_token --lib -- --test-threads=1`
+    (0 passed, 1 ignored)
+  - `git diff --check`
+
 ## 2026-06-01 ISO XMLDSig/XAdES require-verified gate
 
 - Added a fail-closed embedded-signature verifier for Torii ISO 20022 rail

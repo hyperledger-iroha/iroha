@@ -954,6 +954,13 @@ recursive aggregation circuit surface without accepting compact-token
 aggregation mode `2`; full mode-2 admission still requires composing the
 private-hop verifier batch and proving the complete Poseidon2 witness-batch
 digest relation in-circuit.
+The routine Rust test suite also skips real Kagemusha folded-token, recursive
+aggregation, recursive-spend, and bridge success proof generators by default;
+those cases remain available as opt-in `--ignored --test-threads=1` runs so
+resource-constrained WSL hosts do not run multiple Halo2 IPA proof generators at
+the same time. Default coverage keeps the deterministic semantic circuits,
+metadata preflight, record checks, shape rejection, and hop-proof validation
+active.
 Native Pasta/Fp scalar decomposition, fixed-window scalar decomposition,
 fixed-window Vesta point selection, table derivation, and scalar-multiplication
 composition, shared-table fixed-window selection, shared-table native-scalar

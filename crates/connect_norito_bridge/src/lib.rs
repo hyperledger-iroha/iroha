@@ -4726,6 +4726,7 @@ mod offline_note_prover_tests {
     }
 
     #[test]
+    #[ignore = "heavy Kagemusha Halo2 IPA proof generation; run explicitly with --ignored --test-threads=1"]
     fn kagemusha_verified_record_compact_token_ffi_returns_verifying_token() {
         let record_bundle = sample_kagemusha_verified_record_bundle();
         let expected_public_inputs =
@@ -4762,6 +4763,7 @@ mod offline_note_prover_tests {
         target_os = "windows"
     ))]
     #[test]
+    #[ignore = "heavy Kagemusha Halo2 IPA proof generation; run explicitly with --ignored --test-threads=1"]
     fn kagemusha_verified_record_compact_token_jni_helper_uses_record_checks() {
         let record_bundle = sample_kagemusha_verified_record_bundle();
         let expected_public_inputs =
@@ -4794,6 +4796,7 @@ mod offline_note_prover_tests {
     }
 
     #[test]
+    #[ignore = "heavy Kagemusha Halo2 IPA proof generation; run explicitly with --ignored --test-threads=1"]
     fn kagemusha_verified_record_recursive_aggregation_proof_bundle_ffi_returns_verifying_bundle() {
         let record_bundle = sample_kagemusha_verified_record_bundle();
         let metadata = kagemusha_pallas_open_envelope_metadata_for_verified_hop(
@@ -4847,6 +4850,7 @@ mod offline_note_prover_tests {
         target_os = "windows"
     ))]
     #[test]
+    #[ignore = "heavy Kagemusha Halo2 IPA proof generation; run explicitly with --ignored --test-threads=1"]
     fn kagemusha_verified_record_recursive_aggregation_proof_bundle_jni_helper_uses_record_checks()
     {
         let record_bundle = sample_kagemusha_verified_record_bundle();

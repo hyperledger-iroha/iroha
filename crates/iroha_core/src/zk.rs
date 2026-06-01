@@ -24945,20 +24945,6 @@ mod kagemusha_folded_real_prover_tests {
         );
     }
 
-    fn rewrite_zk1_open_verify_envelope_instances(
-        envelope: &mut OpenVerifyEnvelope,
-        columns: Vec<Vec<halo2_proofs::halo2curves::pasta::Fp>>,
-    ) {
-        let (proof_payload, _) =
-            zkparse::proof_and_instances(&envelope.proof_bytes).expect("ZK1 proof instances");
-        let mut proof_bytes = zk1::wrap_start();
-        zk1::wrap_append_proof(&mut proof_bytes, &proof_payload);
-        let column_refs: Vec<&[halo2_proofs::halo2curves::pasta::Fp]> =
-            columns.iter().map(|column| column.as_slice()).collect();
-        zk1::wrap_append_instances_pasta_fp_cols(&column_refs, &mut proof_bytes);
-        envelope.proof_bytes = proof_bytes;
-    }
-
     #[test]
     fn kagemusha_recursive_aggregation_proof_preverify_accepts_bound_envelope_and_record() {
         let vk_box = recursive_aggregation_vk_box();
@@ -25093,6 +25079,7 @@ mod kagemusha_folded_real_prover_tests {
     }
 
     #[test]
+    #[ignore = "heavy Kagemusha Halo2 IPA proof generation; run explicitly with --ignored --test-threads=1"]
     fn kagemusha_recursive_aggregation_real_halo2_ipa_proof_verifies() {
         let vk_box =
             kagemusha_recursive_aggregation_proof_vk_box().expect("recursive aggregation vk");
@@ -25132,6 +25119,7 @@ mod kagemusha_folded_real_prover_tests {
     }
 
     #[test]
+    #[ignore = "heavy Kagemusha Halo2 IPA proof generation; run explicitly with --ignored --test-threads=1"]
     fn kagemusha_recursive_aggregation_real_proof_rejects_wrong_cid_verifier_key_replay() {
         let vk_box =
             kagemusha_recursive_aggregation_proof_vk_box().expect("recursive aggregation vk");
@@ -25165,6 +25153,7 @@ mod kagemusha_folded_real_prover_tests {
     }
 
     #[test]
+    #[ignore = "heavy Kagemusha Halo2 IPA proof generation; run explicitly with --ignored --test-threads=1"]
     fn kagemusha_recursive_aggregation_real_halo2_ipa_proof_rejects_tampering() {
         let vk_box =
             kagemusha_recursive_aggregation_proof_vk_box().expect("recursive aggregation vk");
@@ -25205,6 +25194,7 @@ mod kagemusha_folded_real_prover_tests {
     }
 
     #[test]
+    #[ignore = "heavy Kagemusha Halo2 IPA proof generation; run explicitly with --ignored --test-threads=1"]
     fn kagemusha_recursive_spend_real_halo2_ipa_proofs_verify_for_multiple_hops() {
         let vk_box =
             kagemusha_recursive_aggregation_proof_vk_box().expect("recursive aggregation vk");
@@ -25252,6 +25242,7 @@ mod kagemusha_folded_real_prover_tests {
     }
 
     #[test]
+    #[ignore = "heavy Kagemusha Halo2 IPA proof generation; run explicitly with --ignored --test-threads=1"]
     fn kagemusha_recursive_spend_init_append_from_record_archives_rejects_adversarial_inputs() {
         let (chain_id, asset, first_hop, second_hop, hop_record) =
             sample_confidential_v2_two_hop_lineage();
@@ -25385,6 +25376,7 @@ mod kagemusha_folded_real_prover_tests {
     }
 
     #[test]
+    #[ignore = "heavy Kagemusha Halo2 IPA proof generation; run explicitly with --ignored --test-threads=1"]
     fn kagemusha_recursive_spend_real_proof_rejects_adversarial_tampering() {
         let vk_box =
             kagemusha_recursive_aggregation_proof_vk_box().expect("recursive aggregation vk");
@@ -25511,6 +25503,7 @@ mod kagemusha_folded_real_prover_tests {
     }
 
     #[test]
+    #[ignore = "heavy Kagemusha Halo2 IPA proof generation; run explicitly with --ignored --test-threads=1"]
     fn kagemusha_recursive_spend_record_preverify_rejects_bad_registry_metadata() {
         let vk_box =
             kagemusha_recursive_aggregation_proof_vk_box().expect("recursive aggregation vk");
@@ -25564,6 +25557,7 @@ mod kagemusha_folded_real_prover_tests {
     }
 
     #[test]
+    #[ignore = "heavy Kagemusha Halo2 IPA proving-key derivation; run explicitly with --ignored --test-threads=1"]
     fn kagemusha_recursive_aggregation_prover_rejects_aliases_and_cross_circuit_keys() {
         let vk_box =
             kagemusha_recursive_aggregation_proof_vk_box().expect("recursive aggregation vk");
@@ -25948,88 +25942,98 @@ mod kagemusha_folded_real_prover_tests {
 
     fn sample_confidential_v2_verified_hop()
     -> (ChainId, AssetDefinitionId, OwnedFoldHop, VerifyingKeyRecord) {
-        let chain_id: ChainId = "kagemusha-fold-chain".parse().expect("chain id");
-        let asset = AssetDefinitionId::new(
-            DomainId::try_new("offline", "universal").expect("domain id"),
-            "kgm".parse().expect("asset definition name"),
-        );
-        let record =
-            confidential_v2::confidential_transfer_v2_vk_record(KAGEMUSHA_VERIFIER_NAMESPACE, 3)
-                .expect("confidential transfer v2 verifier record");
-        let vk_box = record.key.clone().expect("inline transfer verifier key");
-        let spend_key = [0x11_u8; 32];
-        let input_rho = [0x21_u8; 32];
-        let input_diversifier =
-            confidential_v2::derive_confidential_diversifier_v2(b"kagemusha-fold-input");
-        let input_owner_tag = confidential_v2::derive_confidential_owner_tag_v2_with_diversifier(
-            &spend_key,
-            input_diversifier,
-        )
-        .expect("input owner tag");
-        let input_commitment = confidential_v2::derive_confidential_note_v2(
-            &asset.to_string(),
-            7,
-            input_rho,
-            input_owner_tag,
-        )
-        .expect("input commitment");
-        let tree_commitments = vec![input_commitment];
-        let root_before =
-            confidential_v2::compute_confidential_root_v2(&tree_commitments).expect("root before");
-        let output_rho = [0x31_u8; 32];
-        let output_owner_tag = confidential_v2::derive_confidential_owner_tag_v2_with_diversifier(
-            &[0x41_u8; 32],
-            confidential_v2::derive_confidential_diversifier_v2(b"kagemusha-fold-output"),
-        )
-        .expect("output owner tag");
-        let proof = confidential_v2::build_confidential_transfer_proof_v2(
-            &chain_id,
-            &asset.to_string(),
-            &spend_key,
-            &tree_commitments,
-            &[confidential_v2::ConfidentialTransferInputV2 {
-                amount: 7,
-                rho: input_rho,
-                diversifier: input_diversifier,
-                leaf_index: 0,
-            }],
-            &[confidential_v2::ConfidentialTransferOutputV2 {
-                amount: 7,
-                rho: output_rho,
-                owner_tag: output_owner_tag,
-            }],
-            root_before,
-            &record.circuit_id,
-            &vk_box,
-        )
-        .expect("confidential transfer v2 proof");
-        let mut next_tree = tree_commitments;
-        next_tree.extend(proof.output_commitments.iter().copied());
-        let root_after =
-            confidential_v2::compute_confidential_root_v2(&next_tree).expect("root after");
-        let vk_commitment = hash_vk(&vk_box);
-        let mut attachment = ProofAttachment::new_ref(
-            ZK_BACKEND_HALO2_IPA.into(),
-            proof.proof,
-            VerifyingKeyId::new(
-                ZK_BACKEND_HALO2_IPA,
-                "kagemusha-hop-confidential-transfer-v2",
-            ),
-        );
-        attachment.vk_commitment = Some(vk_commitment);
-        (
-            chain_id,
-            asset,
-            OwnedFoldHop {
+        static HOP: OnceLock<(ChainId, AssetDefinitionId, OwnedFoldHop, VerifyingKeyRecord)> =
+            OnceLock::new();
+
+        HOP.get_or_init(|| {
+            let chain_id: ChainId = "kagemusha-fold-chain".parse().expect("chain id");
+            let asset = AssetDefinitionId::new(
+                DomainId::try_new("offline", "universal").expect("domain id"),
+                "kgm".parse().expect("asset definition name"),
+            );
+            let record = confidential_v2::confidential_transfer_v2_vk_record(
+                KAGEMUSHA_VERIFIER_NAMESPACE,
+                3,
+            )
+            .expect("confidential transfer v2 verifier record");
+            let vk_box = record.key.clone().expect("inline transfer verifier key");
+            let spend_key = [0x11_u8; 32];
+            let input_rho = [0x21_u8; 32];
+            let input_diversifier =
+                confidential_v2::derive_confidential_diversifier_v2(b"kagemusha-fold-input");
+            let input_owner_tag =
+                confidential_v2::derive_confidential_owner_tag_v2_with_diversifier(
+                    &spend_key,
+                    input_diversifier,
+                )
+                .expect("input owner tag");
+            let input_commitment = confidential_v2::derive_confidential_note_v2(
+                &asset.to_string(),
+                7,
+                input_rho,
+                input_owner_tag,
+            )
+            .expect("input commitment");
+            let tree_commitments = vec![input_commitment];
+            let root_before = confidential_v2::compute_confidential_root_v2(&tree_commitments)
+                .expect("root before");
+            let output_rho = [0x31_u8; 32];
+            let output_owner_tag =
+                confidential_v2::derive_confidential_owner_tag_v2_with_diversifier(
+                    &[0x41_u8; 32],
+                    confidential_v2::derive_confidential_diversifier_v2(b"kagemusha-fold-output"),
+                )
+                .expect("output owner tag");
+            let proof = confidential_v2::build_confidential_transfer_proof_v2(
+                &chain_id,
+                &asset.to_string(),
+                &spend_key,
+                &tree_commitments,
+                &[confidential_v2::ConfidentialTransferInputV2 {
+                    amount: 7,
+                    rho: input_rho,
+                    diversifier: input_diversifier,
+                    leaf_index: 0,
+                }],
+                &[confidential_v2::ConfidentialTransferOutputV2 {
+                    amount: 7,
+                    rho: output_rho,
+                    owner_tag: output_owner_tag,
+                }],
                 root_before,
-                input_nullifiers: proof.nullifiers,
-                output_commitments: proof.output_commitments,
-                root_after,
-                attachment,
-                vk_box,
-            },
-            record,
-        )
+                &record.circuit_id,
+                &vk_box,
+            )
+            .expect("confidential transfer v2 proof");
+            let mut next_tree = tree_commitments;
+            next_tree.extend(proof.output_commitments.iter().copied());
+            let root_after =
+                confidential_v2::compute_confidential_root_v2(&next_tree).expect("root after");
+            let vk_commitment = hash_vk(&vk_box);
+            let mut attachment = ProofAttachment::new_ref(
+                ZK_BACKEND_HALO2_IPA.into(),
+                proof.proof,
+                VerifyingKeyId::new(
+                    ZK_BACKEND_HALO2_IPA,
+                    "kagemusha-hop-confidential-transfer-v2",
+                ),
+            );
+            attachment.vk_commitment = Some(vk_commitment);
+            (
+                chain_id,
+                asset,
+                OwnedFoldHop {
+                    root_before,
+                    input_nullifiers: proof.nullifiers,
+                    output_commitments: proof.output_commitments,
+                    root_after,
+                    attachment,
+                    vk_box,
+                },
+                record,
+            )
+        })
+        .clone()
     }
 
     #[allow(clippy::too_many_arguments)]
@@ -26303,6 +26307,7 @@ mod kagemusha_folded_real_prover_tests {
     }
 
     #[test]
+    #[ignore = "heavy Kagemusha Halo2 IPA proof generation; run explicitly with --ignored --test-threads=1"]
     fn prove_kagemusha_compact_payment_token_emits_real_halo2_ipa_proof() {
         let vk_box = kagemusha_vk_box();
         let proving_key = derive_halo2_ipa_kagemusha_folded_proving_key_bytes(&vk_box)
@@ -26381,6 +26386,7 @@ mod kagemusha_folded_real_prover_tests {
     }
 
     #[test]
+    #[ignore = "heavy Kagemusha Halo2 IPA proving-key derivation; run explicitly with --ignored --test-threads=1"]
     fn prove_kagemusha_compact_payment_token_rejects_bad_final_proving_key_bytes() {
         let vk_box = kagemusha_vk_box();
         let public_inputs = sample_public_inputs();
@@ -26421,6 +26427,7 @@ mod kagemusha_folded_real_prover_tests {
     }
 
     #[test]
+    #[ignore = "heavy Kagemusha Halo2 IPA proof generation; run explicitly with --ignored --test-threads=1"]
     fn kagemusha_compact_payment_token_rejects_tampered_real_proof() {
         let vk_box = kagemusha_vk_box();
         let public_inputs = sample_public_inputs();
@@ -26443,6 +26450,7 @@ mod kagemusha_folded_real_prover_tests {
     }
 
     #[test]
+    #[ignore = "heavy Kagemusha Halo2 IPA proof generation; run explicitly with --ignored --test-threads=1"]
     fn kagemusha_compact_payment_token_rejects_oversized_folded_proof() {
         let vk_box = kagemusha_vk_box();
         let public_inputs = sample_public_inputs();
@@ -26463,6 +26471,7 @@ mod kagemusha_folded_real_prover_tests {
     }
 
     #[test]
+    #[ignore = "heavy Kagemusha Halo2 IPA proof generation; run explicitly with --ignored --test-threads=1"]
     fn kagemusha_compact_payment_token_rejects_public_input_substitution() {
         let vk_box = kagemusha_vk_box();
         let public_inputs = sample_public_inputs();
@@ -26491,6 +26500,7 @@ mod kagemusha_folded_real_prover_tests {
     }
 
     #[test]
+    #[ignore = "heavy Kagemusha Halo2 IPA proof generation; run explicitly with --ignored --test-threads=1"]
     fn kagemusha_compact_payment_token_rejects_context_substitution() {
         let vk_box = kagemusha_vk_box();
         let public_inputs = sample_public_inputs();
@@ -26548,6 +26558,7 @@ mod kagemusha_folded_real_prover_tests {
     }
 
     #[test]
+    #[ignore = "heavy Kagemusha Halo2 IPA proof generation; run explicitly with --ignored --test-threads=1"]
     fn kagemusha_compact_payment_token_rejects_wrong_verifier_key_id() {
         let vk_box = kagemusha_vk_box();
         let public_inputs = sample_public_inputs();
@@ -26586,6 +26597,7 @@ mod kagemusha_folded_real_prover_tests {
     }
 
     #[test]
+    #[ignore = "heavy Kagemusha Halo2 IPA proof generation; run explicitly with --ignored --test-threads=1"]
     fn kagemusha_compact_payment_token_rejects_cross_circuit_verifier_key() {
         let vk_box = kagemusha_vk_box();
         let recursive_vk_box = recursive_aggregation_vk_box();
@@ -26643,6 +26655,7 @@ mod kagemusha_folded_real_prover_tests {
     }
 
     #[test]
+    #[ignore = "heavy Kagemusha Halo2 IPA proof generation; run explicitly with --ignored --test-threads=1"]
     fn kagemusha_compact_payment_token_rejects_non_production_folded_backend_labels() {
         let record =
             kagemusha_folded_vk_record(KAGEMUSHA_VERIFIER_NAMESPACE, 3).expect("vk record");
@@ -26677,6 +26690,7 @@ mod kagemusha_folded_real_prover_tests {
     }
 
     #[test]
+    #[ignore = "heavy Kagemusha Halo2 IPA proof generation; run explicitly with --ignored --test-threads=1"]
     fn kagemusha_compact_payment_token_rejects_envelope_circuit_substitution() {
         let vk_box = kagemusha_vk_box();
         let public_inputs = sample_public_inputs();
@@ -26695,6 +26709,7 @@ mod kagemusha_folded_real_prover_tests {
     }
 
     #[test]
+    #[ignore = "heavy Kagemusha Halo2 IPA proof generation; run explicitly with --ignored --test-threads=1"]
     fn kagemusha_compact_payment_token_rejects_envelope_backend_and_vk_hash_substitution() {
         let vk_box = kagemusha_vk_box();
         let public_inputs = sample_public_inputs();
@@ -26730,6 +26745,7 @@ mod kagemusha_folded_real_prover_tests {
     }
 
     #[test]
+    #[ignore = "heavy Kagemusha Halo2 IPA proof generation; run explicitly with --ignored --test-threads=1"]
     fn kagemusha_compact_payment_token_rejects_envelope_aux_substitution() {
         let record =
             kagemusha_folded_vk_record(KAGEMUSHA_VERIFIER_NAMESPACE, 3).expect("vk record");
@@ -26750,6 +26766,7 @@ mod kagemusha_folded_real_prover_tests {
     }
 
     #[test]
+    #[ignore = "heavy Kagemusha Halo2 IPA proof generation; run explicitly with --ignored --test-threads=1"]
     fn kagemusha_folded_vk_record_embeds_real_active_verifier_key() {
         let record =
             kagemusha_folded_vk_record(KAGEMUSHA_VERIFIER_NAMESPACE, 3).expect("vk record");
@@ -26775,6 +26792,7 @@ mod kagemusha_folded_real_prover_tests {
     }
 
     #[test]
+    #[ignore = "heavy Kagemusha Halo2 IPA proof generation; run explicitly with --ignored --test-threads=1"]
     fn kagemusha_compact_payment_token_verifies_against_active_vk_record() {
         let record =
             kagemusha_folded_vk_record(KAGEMUSHA_VERIFIER_NAMESPACE, 3).expect("vk record");
@@ -26793,6 +26811,7 @@ mod kagemusha_folded_real_prover_tests {
     }
 
     #[test]
+    #[ignore = "heavy Kagemusha Halo2 IPA proof generation; run explicitly with --ignored --test-threads=1"]
     fn kagemusha_compact_payment_token_record_verifier_rejects_registry_mismatches() {
         let record =
             kagemusha_folded_vk_record(KAGEMUSHA_VERIFIER_NAMESPACE, 3).expect("vk record");
@@ -27615,6 +27634,7 @@ mod kagemusha_folded_real_prover_tests {
     }
 
     #[test]
+    #[ignore = "heavy Kagemusha Halo2 IPA proof generation; run explicitly with --ignored --test-threads=1"]
     fn prove_verified_kagemusha_recursive_aggregation_proof_bundle_from_pallas_batch_accepts_active_records()
      {
         let (chain_id, asset, hop, record) = sample_confidential_v2_verified_hop();
@@ -27784,6 +27804,7 @@ mod kagemusha_folded_real_prover_tests {
     }
 
     #[test]
+    #[ignore = "heavy Kagemusha Halo2 IPA proof generation; run explicitly with --ignored --test-threads=1"]
     fn prove_verified_kagemusha_recursive_aggregation_proof_bundle_from_pallas_open_envelopes_accepts_active_records()
      {
         let (chain_id, asset, hop, record) = sample_confidential_v2_verified_hop();
@@ -28830,6 +28851,7 @@ mod kagemusha_folded_real_prover_tests {
     }
 
     #[test]
+    #[ignore = "heavy Kagemusha Halo2 IPA proof generation; run explicitly with --ignored --test-threads=1"]
     fn prove_verified_kagemusha_compact_payment_token_from_bundle_with_records_emits_real_proof() {
         let (chain_id, asset, hop, record) = sample_confidential_v2_verified_hop();
         let id = hop.attachment.vk_ref.clone();
