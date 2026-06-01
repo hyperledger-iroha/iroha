@@ -11,6 +11,9 @@ import {
   buildSubstrateSccpSubmission,
   buildTonSccpFullLightClientAuditProofRequests,
   buildTronSccpBridgeProofSubmitPayload,
+  canonicalSccpMessageProofBundleBytes,
+  canonicalSccpMerkleProofBytes,
+  canonicalSccpPayloadEnvelopeBytes,
   evmSccpDestinationBindingHash,
   tronSccpDestinationBindingHash,
 } from "../dist/index.js";
@@ -268,4 +271,7 @@ test("published package root exports SCCP destination binding helpers", () => {
   assert.equal(typeof buildTonSccpFullLightClientAuditProofRequests, "function");
   assert.equal(typeof buildEvmSccpBridgeProofSubmitPayload, "function");
   assert.equal(typeof buildTronSccpBridgeProofSubmitPayload, "function");
+  assert.equal(typeof canonicalSccpPayloadEnvelopeBytes, "function");
+  assert.equal(typeof canonicalSccpMerkleProofBytes, "function");
+  assert.equal(typeof canonicalSccpMessageProofBundleBytes, "function");
 });

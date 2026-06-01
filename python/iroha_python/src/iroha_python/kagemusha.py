@@ -100,7 +100,9 @@ def _recursive_spend_abi_version(module: object) -> int | None:
         return None
     try:
         version = int(method())
-    except (TypeError, ValueError, RuntimeError):
+    except (TypeError, ValueError, RuntimeError, OSError):
+        return None
+    except Exception:
         return None
     return version
 
@@ -111,6 +113,30 @@ def _has_recursive_spend_abi(module: object) -> bool:
         version is not None
         and version >= KAGEMUSHA_RECURSIVE_SPEND_REQUIRED_BRIDGE_ABI_VERSION
     )
+
+
+def _missing_recursive_spend_methods(module: object) -> tuple[str, ...]:
+    return tuple(
+        name
+        for name in _NATIVE_METHODS
+        if not callable(getattr(module, name, None))
+    )
+
+
+def _require_complete_recursive_spend_surface(module: object) -> None:
+    if not _has_recursive_spend_abi(module):
+        raise RuntimeError(
+            "recursive Kagemusha support requires native bridge ABI "
+            f"{KAGEMUSHA_RECURSIVE_SPEND_REQUIRED_BRIDGE_ABI_VERSION}"
+        )
+    missing = _missing_recursive_spend_methods(module)
+    if missing:
+        missing_list = ", ".join(missing)
+        raise RuntimeError(
+            "recursive Kagemusha support requires the complete native bridge ABI "
+            f"{KAGEMUSHA_RECURSIVE_SPEND_REQUIRED_BRIDGE_ABI_VERSION} surface; "
+            f"missing: {missing_list}"
+        )
 
 
 def is_kagemusha_compact_payment_token_prover_available() -> bool:
@@ -126,8 +152,8 @@ def is_kagemusha_recursive_spend_available() -> bool:
         module = load_crypto_extension()
     except RuntimeError:
         return False
-    return _has_recursive_spend_abi(module) and all(
-        callable(getattr(module, name, None)) for name in _NATIVE_METHODS
+    return _has_recursive_spend_abi(module) and not _missing_recursive_spend_methods(
+        module
     )
 
 
@@ -220,11 +246,7 @@ def kagemusha_recursive_spend_redeem(request_archive: BytesLike) -> bytes:
 def _call_recursive_spend_method(name: str, request_archive: BytesLike) -> bytes:
     request = _archive_bytes(request_archive)
     module = load_crypto_extension()
-    if not _has_recursive_spend_abi(module):
-        raise RuntimeError(
-            "recursive Kagemusha support requires native bridge ABI "
-            f"{KAGEMUSHA_RECURSIVE_SPEND_REQUIRED_BRIDGE_ABI_VERSION}"
-        )
+    _require_complete_recursive_spend_surface(module)
     method = getattr(module, name, None)
     if method is None:
         raise RuntimeError(
@@ -242,11 +264,7 @@ def _call_recursive_spend_method(name: str, request_archive: BytesLike) -> bytes
 
 def _call_recursive_spend_multi_archive_method(name: str, *archives: bytes) -> bytes:
     module = load_crypto_extension()
-    if not _has_recursive_spend_abi(module):
-        raise RuntimeError(
-            "recursive Kagemusha support requires native bridge ABI "
-            f"{KAGEMUSHA_RECURSIVE_SPEND_REQUIRED_BRIDGE_ABI_VERSION}"
-        )
+    _require_complete_recursive_spend_surface(module)
     method = getattr(module, name, None)
     if method is None:
         raise RuntimeError(

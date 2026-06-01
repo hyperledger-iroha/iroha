@@ -6,6 +6,7 @@ import hashlib
 import inspect
 import re
 import sys
+from collections import deque
 from pathlib import Path
 from typing import Any, Dict, Mapping
 
@@ -28,6 +29,10 @@ from iroha_torii_client import (  # noqa: E402
     SCCP_DOMAIN_SORA_POLKADOT,
     SCCP_DOMAIN_TON,
     SCCP_DOMAIN_TRON,
+    SCCP_ETH_MAINNET_EVM_CHAIN_ID,
+    SCCP_ETH_MAINNET_NETWORK_ID,
+    SCCP_BSC_MAINNET_EVM_CHAIN_ID,
+    SCCP_BSC_MAINNET_NETWORK_ID,
     SCCP_EVM_CONTRACT_CALL_ABI_TUPLE_V1,
     SCCP_EVM_GROTH16_BN254_PROOF_BACKEND_V1,
     SCCP_SUBMIT_MESSAGE_PROOF_ABI_V1,
@@ -70,6 +75,9 @@ from iroha_torii_client import (  # noqa: E402
     SCCP_SUBSTRATE_SUBMIT_MESSAGE_PROOF_ENTRYPOINT_V1,
     SCCP_SUBSTRATE_RUNTIME_STORAGE_OPEN_VERIFY_CIRCUIT_ID_V1,
     SCCP_ZERO_HASH_V1,
+    BscMainnetSccp,
+    BscMainnetSccpProver,
+    EthereumMainnetSccp,
     EvmSccpProver,
     EvmSccpProverUnavailableError,
     SolanaSccpSourceStateProver,
@@ -92,11 +100,23 @@ from iroha_torii_client import (  # noqa: E402
     bsc_validator_set_payload_from_parlia_extra,
     bsc_validator_set_payload_hash,
     bsc_validator_set_storage_value_hash,
+    ethereum_mainnet_sccp_destination_binding,
+    ethereum_mainnet_sccp_destination_binding_hash,
+    bsc_mainnet_sccp_destination_binding,
+    bsc_mainnet_sccp_destination_binding_hash,
+    build_ethereum_mainnet_sccp_destination_proof_request,
+    build_ethereum_mainnet_sccp_destination_submission,
+    build_bsc_mainnet_sccp_destination_proof_request,
+    build_bsc_mainnet_sccp_destination_submission,
     bsc_validator_set_transition_message_hash,
     bsc_sccp_receipt_proof_hash,
     build_evm_sccp_bridge_proof_submit_payload,
     build_evm_sccp_proof_request,
     build_evm_sccp_submission,
+    require_bsc_mainnet_chain_id,
+    require_ethereum_mainnet_chain_id,
+    wrap_ethereum_mainnet_sccp_destination_proof_result,
+    wrap_bsc_mainnet_sccp_destination_proof_result,
     wrap_evm_sccp_proof_result,
     build_solana_sccp_accounts_lt_hash_proof_request,
     build_solana_sccp_full_light_client_audit_proof_requests,
@@ -4724,6 +4744,10 @@ def test_derives_all_source_proof_hashes_from_canonical_witness_material() -> No
     )
     with pytest.raises(ValueError, match="sourceDomain"):
         canonical_evm_sccp_receipt_proof_bytes({**evm_input, "source_domain": SCCP_DOMAIN_BSC})
+    with pytest.raises(TypeError, match="sourceEventDigest must not be zero"):
+        canonical_evm_sccp_receipt_proof_bytes(
+            {**evm_input, "source_event_digest": SCCP_ZERO_HASH_V1}
+        )
     evm_receipt_alias_cases = [
         ({"sourceDomain": SCCP_DOMAIN_ETH}, "sourceDomain"),
         ({"sourceEventDigest": source_event_digest}, "sourceEventDigest"),
@@ -4764,6 +4788,10 @@ def test_derives_all_source_proof_hashes_from_canonical_witness_material() -> No
     )
     with pytest.raises(ValueError, match="sourceDomain"):
         canonical_bsc_sccp_receipt_proof_bytes({**bsc_input, "source_domain": SCCP_DOMAIN_ETH})
+    with pytest.raises(TypeError, match="sourceEventDigest must not be zero"):
+        canonical_bsc_sccp_receipt_proof_bytes(
+            {**bsc_input, "source_event_digest": SCCP_ZERO_HASH_V1}
+        )
     bsc_receipt_alias_cases = [
         ({"sourceDomain": SCCP_DOMAIN_BSC, "source_domain": SCCP_DOMAIN_BSC}, "sourceDomain"),
         ({"sourceEventDigest": source_event_digest}, "sourceEventDigest"),
@@ -5697,6 +5725,10 @@ def test_derives_ton_and_substrate_source_proof_transcripts_from_witness_materia
         ton_sccp_shard_proof_hash(ton_input)
         == "0x09c63ca1185b537f0a37b7b248600a0992e5b7ed64ace9d1d437db7caae00686"
     )
+    with pytest.raises(TypeError, match="sourceEventDigest must not be zero"):
+        canonical_ton_sccp_shard_proof_bytes(
+            {**ton_input, "source_event_digest": SCCP_ZERO_HASH_V1}
+        )
     with pytest.raises(TypeError, match="masterchainSeqno must not use multiple aliases"):
         canonical_ton_sccp_shard_proof_bytes(
             {**ton_input, "masterchainSeqno": ton_input["masterchain_seqno"]}
@@ -6975,6 +7007,10 @@ def test_derives_ton_and_substrate_source_proof_transcripts_from_witness_materia
         "inclusion_branch": inclusion_branch,
     }
     assert len(canonical_substrate_sccp_storage_proof_bytes(substrate_input)) == 225
+    with pytest.raises(TypeError, match="sourceEventDigest must not be zero"):
+        canonical_substrate_sccp_storage_proof_bytes(
+            {**substrate_input, "source_event_digest": SCCP_ZERO_HASH_V1}
+        )
     for patch, pattern in [
         ({"sourceDomain": SCCP_DOMAIN_SORA_KUSAMA}, "sourceDomain must not use multiple aliases"),
         ({"sourceEventDigest": source_event_digest}, "sourceEventDigest must not use multiple aliases"),
@@ -11327,6 +11363,39 @@ def test_sccp_provers_accept_callable_and_camel_case_witness_providers() -> None
         )
 
 
+def test_sccp_witness_provider_snapshots_mutable_sequence_inputs() -> None:
+    bundle_bytes = deque([5, 6, 7])
+    source_proof_bytes = deque([9, 10])
+    input_value = sample_evm_production_request_input(
+        bundle_bytes=bundle_bytes,
+        source_proof_bytes=source_proof_bytes,
+    )
+
+    async def evm_witness_provider(
+        input_snapshot: Mapping[str, Any],
+        _options: Mapping[str, Any],
+    ) -> Mapping[str, Any]:
+        assert input_snapshot is not input_value
+        assert input_snapshot["bundle_bytes"] is not bundle_bytes
+        assert input_snapshot["source_proof_bytes"] is not source_proof_bytes
+        input_snapshot["bundle_bytes"][0] = 0xFF  # type: ignore[index]
+        input_snapshot["source_proof_bytes"].append(0xFF)  # type: ignore[attr-defined]
+        return {
+            **input_snapshot,
+            "bundle_bytes": [5, 6, 7],
+            "source_proof_bytes": [9, 10],
+        }
+
+    request = asyncio.run(
+        EvmSccpProver(witness_provider=evm_witness_provider).build_request(input_value)
+    )
+
+    assert list(bundle_bytes) == [5, 6, 7]
+    assert list(source_proof_bytes) == [9, 10]
+    assert request["bundle_bytes"] == bytes([5, 6, 7])
+    assert request["source_proof_bytes"] == bytes([9, 10])
+
+
 def test_sccp_provers_resolve_ui_witnesses_before_linked_provers() -> None:
     resolved_destination_binding_hash = sccp_destination_binding_hash(SCCP_DOMAIN_SOL)
     expected_solana_request = build_solana_sccp_proof_request(
@@ -11481,11 +11550,23 @@ def test_ton_sccp_prover_wraps_externally_generated_proof_bytes() -> None:
         nonlocal callback_request
         callback_request = request
         assert request["backend"] == SCCP_TON_CONTRACT_PROOF_BACKEND_V1
+        assert isinstance(request["bundle_bytes"], bytes)
+        assert isinstance(request["source_proof_bytes"], bytes)
+        assert request["bundle_bytes"] == bytes([5, 6, 7])
+        assert request["source_proof_bytes"] == bytes([9, 10])
         assert request["proof_context"]["statement_hash"] == HEX32_G
         assert request["source_adapter_deployment_binding"]["source_domain"] == SCCP_DOMAIN_TON
+        with pytest.raises(TypeError, match="immutable"):
+            request["bundle_bytes"] = b"\x00"
+        with pytest.raises(TypeError, match="immutable"):
+            request["source_proof_bytes"] = b"\x00"
         return {"proof_bytes": GROTH16_PROOF_BYTES}
 
+    bundle_bytes = bytearray([5, 6, 7])
+    source_proof_bytes = bytearray([9, 10])
     input_value = sample_ton_request_input(
+        bundle_bytes=bundle_bytes,
+        source_proof_bytes=source_proof_bytes,
         source_adapter_deployment_hash=HEX32_A,
         source_adapter_deployment_receipt_hash=HEX32_B,
     )
@@ -11558,12 +11639,25 @@ def test_evm_family_sccp_prover_wraps_externally_generated_proof_bytes() -> None
         nonlocal callback_request
         callback_request = request
         assert request["backend"] == SCCP_EVM_GROTH16_BN254_PROOF_BACKEND_V1
+        assert isinstance(request["bundle_bytes"], bytes)
+        assert isinstance(request["source_proof_bytes"], bytes)
+        assert request["bundle_bytes"] == bytes([5, 6, 7])
+        assert request["source_proof_bytes"] == bytes([9, 10])
         assert request["proof_context"]["statement_hash"] == "0x" + "55" * 32
         assert request["target_domain"] == SCCP_DOMAIN_ETH
         assert len(request["public_signal_words"]) == 9
+        with pytest.raises(TypeError, match="immutable"):
+            request["bundle_bytes"] = b"\x00"
+        with pytest.raises(TypeError, match="immutable"):
+            request["source_proof_bytes"] = b"\x00"
         return {"proof_bytes": GROTH16_PROOF_BYTES}
 
-    input_value = sample_evm_production_request_input()
+    bundle_bytes = bytearray([5, 6, 7])
+    source_proof_bytes = bytearray([9, 10])
+    input_value = sample_evm_production_request_input(
+        bundle_bytes=bundle_bytes,
+        source_proof_bytes=source_proof_bytes,
+    )
     result = asyncio.run(EvmSccpProver(prove=prove).prove(input_value))
     request = build_evm_sccp_proof_request(input_value)
     direct_result = wrap_evm_sccp_proof_result(GROTH16_PROOF_BYTES, request)
@@ -11614,6 +11708,780 @@ def test_evm_family_sccp_prover_wraps_externally_generated_proof_bytes() -> None
         )
 
 
+def test_ethereum_mainnet_sccp_facade_requires_chain_id_1_and_eth_target() -> None:
+    raw_binding = {
+        "verifier_address": "0x" + "11" * 20,
+        "bridge_address": "0x" + "22" * 20,
+        "verifier_code_hash": "0x" + "bb" * 32,
+        "verifier_key_hash": "0x" + "cc" * 32,
+    }
+    binding = ethereum_mainnet_sccp_destination_binding(raw_binding)
+
+    assert SCCP_ETH_MAINNET_EVM_CHAIN_ID == 1
+    assert require_ethereum_mainnet_chain_id("1") == 1
+    assert require_ethereum_mainnet_chain_id("0x1") == 1
+    assert EthereumMainnetSccp.require_mainnet_chain_id(1) == 1
+    with pytest.raises(ValueError, match="eth_chainId == 1"):
+        require_ethereum_mainnet_chain_id(56)
+    assert binding["target_domain"] == SCCP_DOMAIN_ETH
+    assert binding["network_id"] == SCCP_ETH_MAINNET_NETWORK_ID
+    assert (
+        ethereum_mainnet_sccp_destination_binding_hash(
+            {**raw_binding, "binding_hash": binding["binding_hash"]}
+        )
+        == binding["binding_hash"]
+    )
+    assert EthereumMainnetSccp.destination_binding(raw_binding) == binding
+    assert (
+        EthereumMainnetSccp.destination_binding_hash(raw_binding)
+        == binding["binding_hash"]
+    )
+
+    input_value = sample_evm_request_input(
+        public_inputs=sample_evm_public_inputs(target_domain=SCCP_DOMAIN_ETH),
+        destination_binding=binding,
+        destination_binding_hash=None,
+    )
+    request = build_ethereum_mainnet_sccp_destination_proof_request(input_value)
+    facade_request = asyncio.run(
+        EthereumMainnetSccp().build_outbound_proof_request(input_value)
+    )
+    proof_result = wrap_ethereum_mainnet_sccp_destination_proof_result(
+        GROTH16_PROOF_BYTES,
+        request,
+    )
+    submission = build_ethereum_mainnet_sccp_destination_submission(
+        {"proof_result": proof_result}
+    )
+    facade_submission = EthereumMainnetSccp().build_ethereum_calldata(
+        {"proofResult": proof_result}
+    )
+
+    assert request["target_domain"] == SCCP_DOMAIN_ETH
+    assert request["request_hash"] == facade_request["request_hash"]
+    assert proof_result["destination_binding_hash"] == binding["binding_hash"]
+    assert submission["target_domain"] == SCCP_DOMAIN_ETH
+    assert facade_submission["destination_binding_hash"] == binding["binding_hash"]
+
+    async def submit_outbound(
+        callback_submission: Mapping[str, Any],
+        _options: Mapping[str, Any],
+    ) -> str:
+        assert callback_submission["target_domain"] == SCCP_DOMAIN_ETH
+        assert callback_submission["call_data_hex"] == submission["call_data_hex"]
+        return "eth-submitted"
+
+    submitted = asyncio.run(
+        EthereumMainnetSccp(
+            submit_outbound_to_ethereum=submit_outbound
+        ).submit_outbound_to_ethereum({"proof_result": proof_result})
+    )
+    assert submitted == "eth-submitted"
+    with pytest.raises(EvmSccpProverUnavailableError, match="outbound submitter"):
+        asyncio.run(
+            EthereumMainnetSccp().submit_outbound_to_ethereum(
+                {"proof_result": proof_result}
+            )
+        )
+
+    async def prove(
+        callback_request: Mapping[str, Any],
+        _options: Mapping[str, Any],
+    ) -> Dict[str, Any]:
+        assert callback_request["target_domain"] == SCCP_DOMAIN_ETH
+        assert (
+            callback_request["destination_binding"]["network_id"]
+            == SCCP_ETH_MAINNET_NETWORK_ID
+        )
+        return {"proof_bytes": GROTH16_PROOF_BYTES}
+
+    async_result = asyncio.run(
+        EthereumMainnetSccp(prove=prove).prove_outbound_to_ethereum(input_value)
+    )
+    assert async_result["destination_binding_hash"] == binding["binding_hash"]
+
+    with pytest.raises(ValueError, match="chain id 1"):
+        ethereum_mainnet_sccp_destination_binding(
+            {**raw_binding, "network_id": "0x" + "aa" * 32}
+        )
+
+    with pytest.raises(
+        (TypeError, ValueError),
+        match="request route|target ETH|Ethereum mainnet",
+    ):
+        build_ethereum_mainnet_sccp_destination_proof_request(
+            sample_evm_request_input(
+                public_inputs=sample_evm_public_inputs(target_domain=SCCP_DOMAIN_BSC),
+                destination_binding=binding,
+                destination_binding_hash=None,
+            )
+        )
+
+    with pytest.raises((TypeError, ValueError), match="proof result"):
+        build_ethereum_mainnet_sccp_destination_submission(
+            {
+                "public_inputs": sample_evm_public_inputs(target_domain=SCCP_DOMAIN_ETH),
+                "proof_bytes": GROTH16_PROOF_BYTES,
+                "statement_hash": HEX32_G,
+                "destination_binding_hash": binding["binding_hash"],
+            }
+        )
+
+    with pytest.raises((TypeError, ValueError), match="chain id 1|targetDomain"):
+        build_ethereum_mainnet_sccp_destination_submission(
+            {
+                "proof_result": {
+                    **proof_result,
+                    "destination_binding": sample_evm_destination_binding(),
+                }
+            }
+        )
+
+
+def test_ethereum_mainnet_sccp_facade_collects_inbound_receipts_and_copies_proofs() -> None:
+    class ExecutionProvider:
+        def __init__(self) -> None:
+            self.calls: list[tuple[str, list[Any]]] = []
+
+        async def request(self, method: str, params: list[Any]) -> Any:
+            self.calls.append((method, params))
+            if method == "eth_chainId":
+                return "0x1"
+            if method == "eth_getTransactionReceipt":
+                assert params == [HEX32_A]
+                return {
+                    "transactionHash": HEX32_A,
+                    "blockHash": HEX32_B,
+                    "blockNumber": "0x1234",
+                    "status": "0x1",
+                }
+            if method == "eth_getBlockByHash":
+                assert params == [HEX32_B, False]
+                return {
+                    "hash": HEX32_B,
+                    "number": "0x1234",
+                    "receiptsRoot": HEX32_C,
+                }
+            raise AssertionError(f"unexpected method {method}")
+
+    class ConsensusProvider:
+        async def collect_finality_evidence(
+            self,
+            evidence: Mapping[str, Any],
+            _options: Mapping[str, Any],
+        ) -> Mapping[str, Any]:
+            assert evidence["transaction_hash"] == HEX32_A
+            assert evidence["receipt"]["blockHash"] == HEX32_B
+            assert evidence["block"]["receiptsRoot"] == HEX32_C
+            return {
+                "executionBlockNumber": "0x1234",
+                "executionBlockHash": HEX32_B,
+                "executionReceiptsRoot": HEX32_C,
+                "finalizedHeaderRoot": HEX32_D,
+            }
+
+    async def prove_inbound(
+        evidence: Mapping[str, Any],
+        _options: Mapping[str, Any],
+    ) -> bytes:
+        assert evidence["source_domain"] == SCCP_DOMAIN_ETH
+        assert evidence["target_domain"] == SCCP_DOMAIN_SORA
+        assert evidence["beacon_finality"]["execution_block_number"] == "4660"
+        assert evidence["beacon_finality"]["execution_block_hash"] == HEX32_B
+        assert evidence["beacon_finality"]["execution_receipts_root"] == HEX32_C
+        return b"\x07\x08\x09"
+
+    submitted: list[bytes] = []
+
+    async def submit_inbound(proof_bytes: bytes, _options: Mapping[str, Any]) -> str:
+        submitted.append(proof_bytes)
+        return "submitted"
+
+    provider = ExecutionProvider()
+    sdk = EthereumMainnetSccp(
+        execution_provider=provider,
+        consensus_provider=ConsensusProvider(),
+        prove_inbound=prove_inbound,
+        submit_inbound_to_iroha=submit_inbound,
+    )
+
+    evidence = asyncio.run(
+        sdk.collect_inbound_evidence_from_receipt({"transaction_hash": HEX32_A})
+    )
+    assert evidence["source_domain"] == SCCP_DOMAIN_ETH
+    assert evidence["target_domain"] == SCCP_DOMAIN_SORA
+    assert evidence["transaction_hash"] == HEX32_A
+    assert evidence["beacon_finality"]["finalizedHeaderRoot"] == HEX32_D
+    assert evidence["beacon_finality"]["execution_block_number"] == "4660"
+
+    proof = asyncio.run(sdk.prove_inbound_to_sora({"transaction_hash": HEX32_A}))
+    assert proof == b"\x07\x08\x09"
+
+    mutable_proof = bytearray(b"\x0a\x0b\x0c")
+    assert asyncio.run(sdk.submit_inbound_to_iroha(mutable_proof)) == "submitted"
+    mutable_proof[0] = 0x99
+    assert submitted == [b"\x0a\x0b\x0c"]
+
+    with pytest.raises(TypeError, match="proofBytes must not be empty"):
+        asyncio.run(sdk.submit_inbound_to_iroha(b""))
+    with pytest.raises(TypeError, match="proofBytes must not be all zero"):
+        asyncio.run(sdk.submit_inbound_to_iroha(b"\x00\x00"))
+
+
+def test_ethereum_mainnet_sccp_facade_rejects_adversarial_inbound_evidence() -> None:
+    class Provider:
+        def __init__(
+            self,
+            receipt: Mapping[str, Any],
+            block: Mapping[str, Any],
+            *,
+            chain_id: str = "0x1",
+        ) -> None:
+            self.receipt = receipt
+            self.block = block
+            self.chain_id = chain_id
+
+        def request(self, method: str, _params: list[Any]) -> Any:
+            if method == "eth_chainId":
+                return self.chain_id
+            if method == "eth_getTransactionReceipt":
+                return self.receipt
+            if method == "eth_getBlockByHash":
+                return self.block
+            raise AssertionError(f"unexpected method {method}")
+
+    good_receipt = {
+        "transactionHash": HEX32_A,
+        "blockHash": HEX32_B,
+        "blockNumber": "0x1234",
+        "status": "0x1",
+    }
+    good_block = {"hash": HEX32_B, "number": "0x1234", "receiptsRoot": HEX32_C}
+    good_finality = {
+        "executionBlockNumber": "0x1234",
+        "executionBlockHash": HEX32_B,
+        "executionReceiptsRoot": HEX32_C,
+        "finalizedHeaderRoot": HEX32_D,
+    }
+    receipt_without_block_number = dict(good_receipt)
+    del receipt_without_block_number["blockNumber"]
+    block_without_number = dict(good_block)
+    del block_without_number["number"]
+
+    for chain_id in ("0x38", "0x01", "0X1"):
+        with pytest.raises((TypeError, ValueError), match="eth_chainId|quantity"):
+            asyncio.run(
+                EthereumMainnetSccp(
+                    execution_provider=Provider(
+                        good_receipt, good_block, chain_id=chain_id
+                    )
+                ).collect_inbound_evidence_from_receipt({"transaction_hash": HEX32_A})
+            )
+
+    with pytest.raises((TypeError, ValueError), match="transactionHash"):
+        asyncio.run(
+            EthereumMainnetSccp().collect_inbound_evidence_from_receipt(
+                {
+                    "transaction_hash": HEX32_A,
+                    "receipt": {**good_receipt, "transactionHash": HEX32_D},
+                    "block": good_block,
+                    "beacon_finality": good_finality,
+                }
+            )
+        )
+
+    cases = (
+        (
+            {**good_receipt, "status": "0x0"},
+            good_block,
+            good_finality,
+            "receipt status",
+        ),
+        (
+            {**good_receipt, "transactionHash": HEX32_A.upper()},
+            good_block,
+            good_finality,
+            "canonical lowercase",
+        ),
+        (receipt_without_block_number, good_block, good_finality, "receipt.blockNumber"),
+        (
+            {**good_receipt, "blockNumber": "0x0"},
+            good_block,
+            good_finality,
+            "receipt.blockNumber",
+        ),
+        (
+            good_receipt,
+            {**good_block, "hash": HEX32_D},
+            good_finality,
+            "block.hash",
+        ),
+        (good_receipt, block_without_number, good_finality, "block.number"),
+        (
+            good_receipt,
+            {**good_block, "number": "0x0"},
+            good_finality,
+            "block.number",
+        ),
+        (
+            good_receipt,
+            {**good_block, "number": "0x1235"},
+            good_finality,
+            "block.number",
+        ),
+        (
+            good_receipt,
+            {**good_block, "receiptsRoot": "0x" + "00" * 32},
+            good_finality,
+            "receiptsRoot",
+        ),
+        (
+            good_receipt,
+            good_block,
+            {**good_finality, "executionBlockHash": HEX32_D},
+            "beaconFinality.executionBlockHash",
+        ),
+        (
+            good_receipt,
+            good_block,
+            {**good_finality, "executionBlockNumber": "0x1235"},
+            "beaconFinality.executionBlockNumber",
+        ),
+        (
+            good_receipt,
+            good_block,
+            {**good_finality, "executionReceiptsRoot": HEX32_D},
+            "beaconFinality.executionReceiptsRoot",
+        ),
+    )
+
+    for receipt, block, finality, expected_message in cases:
+        with pytest.raises((TypeError, ValueError), match=expected_message):
+            asyncio.run(
+                EthereumMainnetSccp().collect_inbound_evidence_from_receipt(
+                    {
+                        "receipt": receipt,
+                        "block": block,
+                        "beacon_finality": finality,
+                    }
+                )
+            )
+
+    called = False
+
+    async def prove_inbound(
+        _evidence: Mapping[str, Any],
+        _options: Mapping[str, Any],
+    ) -> bytes:
+        nonlocal called
+        called = True
+        return b"\x01\x02"
+
+    with pytest.raises(TypeError, match="beaconFinality"):
+        asyncio.run(
+            EthereumMainnetSccp(prove_inbound=prove_inbound).prove_inbound_to_sora(
+                {"receipt": good_receipt, "block": good_block}
+            )
+        )
+    assert not called
+
+    with pytest.raises(TypeError, match="sourceDomain must not use multiple aliases"):
+        asyncio.run(
+            EthereumMainnetSccp().collect_inbound_evidence_from_receipt(
+                {
+                    "sourceDomain": SCCP_DOMAIN_ETH,
+                    "source_domain": SCCP_DOMAIN_ETH,
+                    "receipt_proof_hash": HEX32_A,
+                }
+            )
+        )
+
+
+def test_bsc_mainnet_sccp_facade_requires_chain_id_56_and_bsc_target() -> None:
+    raw_binding = {
+        "verifier_address": "0x" + "11" * 20,
+        "bridge_address": "0x" + "22" * 20,
+        "verifier_code_hash": "0x" + "bb" * 32,
+        "verifier_key_hash": "0x" + "cc" * 32,
+    }
+    assert require_bsc_mainnet_chain_id(56) == 56
+    binding = bsc_mainnet_sccp_destination_binding(raw_binding)
+
+    assert SCCP_BSC_MAINNET_EVM_CHAIN_ID == 56
+    assert binding["target_domain"] == SCCP_DOMAIN_BSC
+    assert binding["network_id"] == SCCP_BSC_MAINNET_NETWORK_ID
+    assert (
+        bsc_mainnet_sccp_destination_binding_hash(
+            {**raw_binding, "binding_hash": binding["binding_hash"]}
+        )
+        == binding["binding_hash"]
+    )
+
+    input_value = sample_evm_request_input(
+        public_inputs=sample_evm_public_inputs(target_domain=SCCP_DOMAIN_BSC),
+        destination_binding=binding,
+        destination_binding_hash=None,
+    )
+    request = build_bsc_mainnet_sccp_destination_proof_request(input_value)
+    proof_result = wrap_bsc_mainnet_sccp_destination_proof_result(
+        GROTH16_PROOF_BYTES,
+        request,
+    )
+    submission = build_bsc_mainnet_sccp_destination_submission(
+        {"proof_result": proof_result}
+    )
+
+    assert request["target_domain"] == SCCP_DOMAIN_BSC
+    assert request["destination_binding"]["network_id"] == SCCP_BSC_MAINNET_NETWORK_ID
+    assert proof_result["destination_binding_hash"] == binding["binding_hash"]
+    assert submission["target_domain"] == SCCP_DOMAIN_BSC
+
+    async def prove(
+        callback_request: Mapping[str, Any],
+        _options: Mapping[str, Any],
+    ) -> Dict[str, Any]:
+        assert callback_request["target_domain"] == SCCP_DOMAIN_BSC
+        assert (
+            callback_request["destination_binding"]["network_id"]
+            == SCCP_BSC_MAINNET_NETWORK_ID
+        )
+        return {"proof_bytes": GROTH16_PROOF_BYTES}
+
+    async_result = asyncio.run(BscMainnetSccpProver(prove=prove).prove(input_value))
+    assert async_result["destination_binding_hash"] == binding["binding_hash"]
+
+    facade = BscMainnetSccp(prove=prove)
+    facade_request = asyncio.run(facade.build_outbound_proof_request(input_value))
+    facade_result = asyncio.run(facade.prove_outbound_to_bsc(input_value))
+    facade_submission = facade.build_bsc_calldata({"proof_result": facade_result})
+    assert facade.require_mainnet_chain_id(56) == 56
+    assert facade.destination_binding(raw_binding)["binding_hash"] == binding["binding_hash"]
+    assert facade.destination_binding_hash(raw_binding) == binding["binding_hash"]
+    assert facade_request["target_domain"] == SCCP_DOMAIN_BSC
+    assert facade_result["destination_binding_hash"] == binding["binding_hash"]
+    assert facade_submission["target_domain"] == SCCP_DOMAIN_BSC
+
+    async def submit_outbound(
+        callback_submission: Mapping[str, Any],
+        _options: Mapping[str, Any],
+    ) -> str:
+        assert callback_submission["target_domain"] == SCCP_DOMAIN_BSC
+        assert callback_submission["call_data_hex"] == submission["call_data_hex"]
+        assert callback_submission["destination_binding_hash"] == binding["binding_hash"]
+        return "bsc-submitted"
+
+    submitted = asyncio.run(
+        BscMainnetSccp(
+            submit_outbound_to_bsc=submit_outbound
+        ).submit_outbound_to_bsc({"proof_result": proof_result})
+    )
+    assert submitted == "bsc-submitted"
+    with pytest.raises(EvmSccpProverUnavailableError, match="outbound submitter"):
+        asyncio.run(
+            BscMainnetSccp().submit_outbound_to_bsc(
+                {"proof_result": proof_result}
+            )
+        )
+
+    with pytest.raises(ValueError, match="chain id 56"):
+        require_bsc_mainnet_chain_id(1)
+
+    with pytest.raises(ValueError, match="chain id 56"):
+        bsc_mainnet_sccp_destination_binding(
+            {**raw_binding, "network_id": "0x" + "aa" * 32}
+        )
+
+    with pytest.raises((TypeError, ValueError), match="target BSC|BSC mainnet"):
+        build_bsc_mainnet_sccp_destination_proof_request(
+            sample_evm_production_request_input()
+        )
+
+    with pytest.raises((TypeError, ValueError), match="chain id 56|targetDomain"):
+        build_bsc_mainnet_sccp_destination_submission(
+            {
+                "proof_result": {
+                    **proof_result,
+                    "destination_binding": sample_evm_destination_binding(),
+                }
+            }
+        )
+
+
+def test_bsc_mainnet_sccp_facade_collects_inbound_receipts_and_copies_proofs() -> None:
+    class ExecutionProvider:
+        def __init__(self) -> None:
+            self.calls: list[tuple[str, list[Any]]] = []
+
+        async def request(self, method: str, params: list[Any]) -> Any:
+            self.calls.append((method, params))
+            if method == "eth_chainId":
+                return "0x38"
+            if method == "eth_getTransactionReceipt":
+                assert params == [HEX32_A]
+                return {
+                    "transactionHash": HEX32_A,
+                    "blockHash": HEX32_B,
+                    "blockNumber": "0x1234",
+                    "status": "0x1",
+                }
+            if method == "eth_getBlockByHash":
+                assert params == [HEX32_B, False]
+                return {
+                    "hash": HEX32_B,
+                    "number": "0x1234",
+                    "receiptsRoot": HEX32_C,
+                }
+            raise AssertionError(f"unexpected method {method}")
+
+    class ConsensusProvider:
+        async def collect_finality_evidence(
+            self,
+            evidence: Mapping[str, Any],
+            _options: Mapping[str, Any],
+        ) -> Mapping[str, Any]:
+            assert evidence["transaction_hash"] == HEX32_A
+            assert evidence["receipt"]["blockHash"] == HEX32_B
+            assert evidence["block"]["receiptsRoot"] == HEX32_C
+            return {
+                "execution_block_number": "0x1234",
+                "execution_block_hash": HEX32_B,
+                "execution_receipts_root": HEX32_C,
+                "validator_epoch": "0x24",
+                "commit_seal_hash": HEX32_D,
+            }
+
+    async def prove_inbound(
+        evidence: Mapping[str, Any],
+        _options: Mapping[str, Any],
+    ) -> bytes:
+        assert evidence["source_domain"] == SCCP_DOMAIN_BSC
+        assert evidence["target_domain"] == SCCP_DOMAIN_SORA
+        assert evidence["parlia_finality"]["commit_seal_hash"] == HEX32_D
+        return b"\x01\x02\x03"
+
+    submitted: list[bytes] = []
+
+    async def submit_inbound(proof_bytes: bytes, _options: Mapping[str, Any]) -> str:
+        submitted.append(proof_bytes)
+        return "submitted"
+
+    provider = ExecutionProvider()
+    sdk = BscMainnetSccp(
+        execution_provider=provider,
+        consensus_provider=ConsensusProvider(),
+        prove_inbound=prove_inbound,
+        submit_inbound_to_iroha=submit_inbound,
+    )
+
+    evidence = asyncio.run(
+        sdk.collect_inbound_evidence_from_receipt({"transaction_hash": HEX32_A})
+    )
+    assert evidence["source_domain"] == SCCP_DOMAIN_BSC
+    assert evidence["target_domain"] == SCCP_DOMAIN_SORA
+    assert evidence["transaction_hash"] == HEX32_A
+    assert evidence["parlia_finality"]["execution_block_number"] == "4660"
+    assert evidence["parlia_finality"]["execution_block_hash"] == HEX32_B
+    assert evidence["parlia_finality"]["execution_receipts_root"] == HEX32_C
+    assert evidence["parlia_finality"]["validator_epoch"] == "0x24"
+
+    proof = asyncio.run(sdk.prove_inbound_to_sora({"transaction_hash": HEX32_A}))
+    assert proof == b"\x01\x02\x03"
+
+    called_without_finality = False
+
+    async def prove_without_finality(
+        _evidence: Mapping[str, Any],
+        _options: Mapping[str, Any],
+    ) -> bytes:
+        nonlocal called_without_finality
+        called_without_finality = True
+        return b"\x01"
+
+    sdk_without_finality = BscMainnetSccp(prove_inbound=prove_without_finality)
+    with pytest.raises(TypeError, match="requires parliaFinality"):
+        asyncio.run(
+            sdk_without_finality.prove_inbound_to_sora({"receipt_proof_hash": HEX32_A})
+        )
+    with pytest.raises(TypeError, match="requires parliaFinality"):
+        asyncio.run(
+            sdk_without_finality.prove_inbound_to_sora(
+                {"receipt_proof_hash": HEX32_A, "parlia_finality": {}}
+            )
+        )
+    assert called_without_finality is False
+
+    mutable_proof = bytearray(b"\x04\x05\x06")
+    assert asyncio.run(sdk.submit_inbound_to_iroha(mutable_proof)) == "submitted"
+    mutable_proof[0] = 0x99
+    assert submitted == [b"\x04\x05\x06"]
+
+    with pytest.raises(TypeError, match="proofBytes must not be empty"):
+        asyncio.run(sdk.submit_inbound_to_iroha(b""))
+    with pytest.raises(TypeError, match="proofBytes must not be all zero"):
+        asyncio.run(sdk.submit_inbound_to_iroha(b"\x00\x00"))
+
+
+def test_bsc_mainnet_sccp_facade_rejects_adversarial_inbound_evidence() -> None:
+    class Provider:
+        def __init__(
+            self,
+            receipt: Mapping[str, Any],
+            block: Mapping[str, Any],
+            *,
+            chain_id: str = "0x38",
+        ) -> None:
+            self.receipt = receipt
+            self.block = block
+            self.chain_id = chain_id
+
+        def request(self, method: str, _params: list[Any]) -> Any:
+            if method == "eth_chainId":
+                return self.chain_id
+            if method == "eth_getTransactionReceipt":
+                return self.receipt
+            if method == "eth_getBlockByHash":
+                return self.block
+            raise AssertionError(f"unexpected method {method}")
+
+    good_receipt = {
+        "transactionHash": HEX32_A,
+        "blockHash": HEX32_B,
+        "blockNumber": "0x1234",
+        "status": "0x1",
+    }
+    good_block = {"hash": HEX32_B, "number": "0x1234", "receiptsRoot": HEX32_C}
+    receipt_without_block_number = dict(good_receipt)
+    del receipt_without_block_number["blockNumber"]
+    block_without_number = dict(good_block)
+    del block_without_number["number"]
+
+    for chain_id in ("0x1", "0x038", "0X38"):
+        with pytest.raises((TypeError, ValueError), match="chain id 56|quantity"):
+            asyncio.run(
+                BscMainnetSccp(
+                    execution_provider=Provider(good_receipt, good_block, chain_id=chain_id)
+                ).collect_inbound_evidence_from_receipt({"transaction_hash": HEX32_A})
+            )
+
+    cases = (
+        (
+            {**good_receipt, "status": "0x0"},
+            good_block,
+            "receipt status",
+        ),
+        (
+            {**good_receipt, "transactionHash": HEX32_D},
+            good_block,
+            "transactionHash",
+        ),
+        (
+            {**good_receipt, "transactionHash": HEX32_A.upper()},
+            good_block,
+            "canonical lowercase",
+        ),
+        (
+            receipt_without_block_number,
+            good_block,
+            "receipt.blockNumber",
+        ),
+        (
+            {**good_receipt, "blockNumber": "0x0"},
+            good_block,
+            "receipt.blockNumber",
+        ),
+        (
+            good_receipt,
+            {**good_block, "hash": HEX32_D},
+            "block.hash",
+        ),
+        (
+            good_receipt,
+            block_without_number,
+            "block.number",
+        ),
+        (
+            good_receipt,
+            {**good_block, "number": "0x0"},
+            "block.number",
+        ),
+        (
+            good_receipt,
+            {**good_block, "number": "0x1235"},
+            "block.number",
+        ),
+        (
+            good_receipt,
+            {**good_block, "receiptsRoot": "0x" + "00" * 32},
+            "receiptsRoot",
+        ),
+    )
+
+    for receipt, block, expected_message in cases:
+        with pytest.raises((TypeError, ValueError), match=expected_message):
+            asyncio.run(
+                BscMainnetSccp(
+                    execution_provider=Provider(receipt, block)
+                ).collect_inbound_evidence_from_receipt({"transaction_hash": HEX32_A})
+            )
+
+    with pytest.raises(TypeError, match="sourceDomain must not use multiple aliases"):
+        asyncio.run(
+            BscMainnetSccp().collect_inbound_evidence_from_receipt(
+                {
+                    "sourceDomain": SCCP_DOMAIN_BSC,
+                    "source_domain": SCCP_DOMAIN_BSC,
+                    "receipt_proof_hash": HEX32_A,
+                }
+            )
+        )
+
+    async def prove_inbound(
+        _evidence: Mapping[str, Any],
+        _options: Mapping[str, Any],
+    ) -> bytes:
+        raise AssertionError("prover callback must not run without Parlia finality")
+
+    with pytest.raises(TypeError, match="requires parliaFinality"):
+        asyncio.run(
+            BscMainnetSccp(prove_inbound=prove_inbound).prove_inbound_to_sora(
+                {"source_domain": SCCP_DOMAIN_BSC, "target_domain": SCCP_DOMAIN_SORA, "receipt_proof_hash": HEX32_A}
+            )
+        )
+
+    good_finality = {
+        "execution_block_number": "0x1234",
+        "execution_block_hash": HEX32_B,
+        "execution_receipts_root": HEX32_C,
+        "validator_epoch": "0x24",
+        "commit_seal_hash": HEX32_D,
+    }
+    finality_drift_cases = (
+        (
+            {**good_finality, "execution_block_hash": HEX32_D},
+            "parliaFinality.executionBlockHash",
+        ),
+        (
+            {**good_finality, "execution_block_number": "0x1235"},
+            "parliaFinality.executionBlockNumber",
+        ),
+        (
+            {**good_finality, "execution_receipts_root": HEX32_D},
+            "parliaFinality.executionReceiptsRoot",
+        ),
+    )
+    for finality, expected_message in finality_drift_cases:
+        with pytest.raises((TypeError, ValueError), match=expected_message):
+            asyncio.run(
+                BscMainnetSccp().collect_inbound_evidence_from_receipt(
+                    {
+                        "receipt": good_receipt,
+                        "block": good_block,
+                        "parlia_finality": finality,
+                    }
+                )
+            )
+
+
 def test_substrate_sccp_prover_requires_linked_engine() -> None:
     prover = SubstrateSccpProver()
 
@@ -11630,11 +12498,24 @@ def test_substrate_sccp_prover_wraps_externally_generated_proof_bytes() -> None:
         nonlocal callback_request
         callback_request = request
         assert request["backend"] == SCCP_SUBSTRATE_RUNTIME_PROOF_BACKEND_V1
+        assert isinstance(request["bundle_bytes"], bytes)
+        assert isinstance(request["source_proof_bytes"], bytes)
+        assert request["bundle_bytes"] == bytes([5, 6, 7])
+        assert request["source_proof_bytes"] == bytes([9, 10])
         assert request["proof_context"]["statement_hash"] == "0x" + "55" * 32
         assert request["target_domain"] == SCCP_DOMAIN_SORA2
+        with pytest.raises(TypeError, match="immutable"):
+            request["bundle_bytes"] = b"\x00"
+        with pytest.raises(TypeError, match="immutable"):
+            request["source_proof_bytes"] = b"\x00"
         return {"proof_bytes": [1, 2, 3, 4]}
 
-    input_value = sample_substrate_request_input()
+    bundle_bytes = bytearray([5, 6, 7])
+    source_proof_bytes = bytearray([9, 10])
+    input_value = sample_substrate_request_input(
+        bundle_bytes=bundle_bytes,
+        source_proof_bytes=source_proof_bytes,
+    )
     result = asyncio.run(SubstrateSccpProver(prove=prove).prove(input_value))
     request = build_substrate_sccp_proof_request(input_value)
     direct_result = wrap_substrate_sccp_proof_result([1, 2, 3, 4], request)
@@ -11699,17 +12580,28 @@ def test_tron_sccp_prover_wraps_externally_generated_proof_bytes() -> None:
         nonlocal callback_request
         callback_request = request
         assert request["backend"] == SCCP_TRON_GROTH16_BN254_PROOF_BACKEND_V1
+        assert isinstance(request["bundle_bytes"], bytes)
+        assert isinstance(request["source_proof_bytes"], bytes)
+        assert request["bundle_bytes"] == bytes([5, 6, 7])
+        assert request["source_proof_bytes"] == bytes([9, 10])
         assert request["proof_context"]["statement_hash"] == "0x" + "55" * 32
         assert len(request["public_signal_words"]) == 9
         with pytest.raises(TypeError, match="immutable"):
             request["request_hash"] = HEX32_A
+        with pytest.raises(TypeError, match="immutable"):
+            request["source_proof_bytes"] = b"\x00"
         with pytest.raises(TypeError, match="immutable"):
             request["public_signal_words"].append(HEX32_B)
         with pytest.raises(TypeError, match="immutable"):
             request["proof_context"]["statement_hash"] = HEX32_A
         return {"proof_bytes": GROTH16_PROOF_BYTES}
 
-    input_value = sample_tron_production_request_input()
+    bundle_bytes = bytearray([5, 6, 7])
+    source_proof_bytes = bytearray([9, 10])
+    input_value = sample_tron_production_request_input(
+        bundle_bytes=bundle_bytes,
+        source_proof_bytes=source_proof_bytes,
+    )
     result = asyncio.run(TronSccpProver(prove=prove).prove(input_value))
     request = build_tron_sccp_proof_request(input_value)
     direct_result = wrap_tron_sccp_proof_result(GROTH16_PROOF_BYTES, request)

@@ -759,21 +759,52 @@ public final class OfflineNoteTest {
         KagemushaRecursiveSpendProver.detectNativeAvailability(
             () -> {},
             () -> 6,
-            () -> {
-              throw new IllegalArgumentException("empty archive probe");
-            }),
+            () ->
+                KagemushaRecursiveSpendProver.expectIllegalArgumentProbe(
+                    () -> {
+                      throw new IllegalArgumentException("empty archive probe");
+                    })),
         "recursive Kagemusha spend accepts ABI 6 with expected empty-probe rejection");
     assertTrue(
-        !KagemushaRecursiveSpendProver.detectNativeAvailability(() -> {}, () -> 5, () -> {}),
+        !KagemushaRecursiveSpendProver.detectNativeAvailability(() -> {}, () -> 6, () -> false),
+        "recursive Kagemusha spend availability rejects probes that accept empty archives");
+    assertTrue(
+        !KagemushaRecursiveSpendProver.detectNativeAvailability(() -> {}, () -> 5, () -> true),
         "recursive Kagemusha spend must reject native bridges older than ABI 6");
+    assertTrue(
+        !KagemushaRecursiveSpendProver.detectNativeAvailability(
+            () -> {},
+            () -> {
+              throw new IllegalArgumentException("broken ABI probe");
+            },
+            () -> {
+              throw new AssertionError("probe must not run");
+            }),
+        "recursive Kagemusha spend availability must fail closed when ABI probing is malformed");
     assertTrue(
         !KagemushaRecursiveSpendProver.detectNativeAvailability(
             () -> {
               throw new UnsatisfiedLinkError("missing library");
             },
             () -> 6,
-            () -> {}),
+            () -> true),
         "recursive Kagemusha spend availability must fail closed when JNI is missing");
+    assertTrue(
+        !KagemushaRecursiveSpendProver.detectNativeAvailability(
+            () -> {},
+            () -> 6,
+            () -> {
+              throw new UnsatisfiedLinkError("missing recursive spend symbol");
+            }),
+        "recursive Kagemusha spend availability must fail closed when a required JNI symbol is missing");
+    assertTrue(
+        !KagemushaRecursiveSpendProver.detectNativeAvailability(
+            () -> {},
+            () -> 6,
+            () -> {
+              throw new SecurityException("native bridge denied");
+            }),
+        "recursive Kagemusha spend availability must fail closed when symbol probing is denied");
 
     assertThrows(
         () -> KagemushaRecursiveSpendProver.initSpend(new byte[0]),
@@ -869,12 +900,15 @@ public final class OfflineNoteTest {
         KagemushaCompactPaymentTokenProver.detectNativeAvailability(
             () -> {},
             () -> {
-              throw new IllegalArgumentException("invalid archive");
+              return KagemushaCompactPaymentTokenProver.expectIllegalArgumentProbe(
+                  () -> {
+                    throw new IllegalArgumentException("invalid archive");
+                  });
             }),
         "native availability accepts the malformed-input error from a present JNI symbol");
     assertTrue(
-        KagemushaCompactPaymentTokenProver.detectNativeAvailability(() -> {}, () -> {}),
-        "native availability accepts a probe that returns normally");
+        !KagemushaCompactPaymentTokenProver.detectNativeAvailability(() -> {}, () -> false),
+        "native availability rejects probes that accept empty archives");
     assertTrue(
         !KagemushaCompactPaymentTokenProver.detectNativeAvailability(
             () -> {},
@@ -894,9 +928,18 @@ public final class OfflineNoteTest {
     assertTrue(
         !KagemushaCompactPaymentTokenProver.detectNativeAvailability(
             () -> {
+              throw new IllegalArgumentException("bad library name");
+            },
+            () -> {
+              throw new AssertionError("probe must not run");
+            }),
+        "native availability rejects malformed library loading before probing symbols");
+    assertTrue(
+        !KagemushaCompactPaymentTokenProver.detectNativeAvailability(
+            () -> {
               throw new SecurityException("denied");
             },
-            () -> {}),
+            () -> true),
         "native availability rejects a library blocked by the security manager");
   }
 
@@ -905,12 +948,16 @@ public final class OfflineNoteTest {
         KagemushaRecursiveAggregationProofBundleProver.detectNativeAvailability(
             () -> {},
             () -> {
-              throw new IllegalArgumentException("invalid archive");
+              return KagemushaRecursiveAggregationProofBundleProver.expectIllegalArgumentProbe(
+                  () -> {
+                    throw new IllegalArgumentException("invalid archive");
+                  });
             }),
         "recursive aggregation availability accepts the malformed-input error from a present JNI symbol");
     assertTrue(
-        KagemushaRecursiveAggregationProofBundleProver.detectNativeAvailability(() -> {}, () -> {}),
-        "recursive aggregation availability accepts a probe that returns normally");
+        !KagemushaRecursiveAggregationProofBundleProver.detectNativeAvailability(
+            () -> {}, () -> false),
+        "recursive aggregation availability rejects probes that accept empty archives");
     assertTrue(
         !KagemushaRecursiveAggregationProofBundleProver.detectNativeAvailability(
             () -> {},
@@ -930,9 +977,18 @@ public final class OfflineNoteTest {
     assertTrue(
         !KagemushaRecursiveAggregationProofBundleProver.detectNativeAvailability(
             () -> {
+              throw new IllegalArgumentException("bad library name");
+            },
+            () -> {
+              throw new AssertionError("probe must not run");
+            }),
+        "recursive aggregation availability rejects malformed library loading before probing symbols");
+    assertTrue(
+        !KagemushaRecursiveAggregationProofBundleProver.detectNativeAvailability(
+            () -> {
               throw new SecurityException("denied");
             },
-            () -> {}),
+            () -> true),
         "recursive aggregation availability rejects a library blocked by the security manager");
   }
 

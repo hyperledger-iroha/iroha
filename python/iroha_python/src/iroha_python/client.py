@@ -7802,7 +7802,9 @@ class ToriiClient(_BaseToriiClient):
             raise TypeError("operator key pair must expose a non-empty public_key_multihash")
         effective_timestamp = int(timestamp_ms if timestamp_ms is not None else time.time() * 1000)
         effective_nonce = nonce if nonce is not None else secrets.token_urlsafe(12)
-        if not isinstance(effective_nonce, str) or not effective_nonce:
+        if effective_timestamp < 0:
+            raise ValueError("timestamp_ms must be non-negative")
+        if not isinstance(effective_nonce, str) or not effective_nonce.strip():
             raise ValueError("nonce must be a non-empty string")
         message = canonical_request_signature_message(
             method,
@@ -8705,9 +8707,23 @@ class ToriiClient(_BaseToriiClient):
                 raise TypeError(f"additions[{index}] must be a mapping")
             normalized_additions.append(dict(addition))
 
+        if retire is None:
+            retire_items: Sequence[int] = ()
+        elif isinstance(retire, (str, bytes, bytearray, memoryview)) or not isinstance(
+            retire, Sequence
+        ):
+            raise TypeError("retire must be a sequence of lane ids")
+        else:
+            retire_items = retire
+
         normalized_retire: List[int] = []
-        for index, lane_id in enumerate(retire or []):
-            parsed = int(lane_id)
+        for index, lane_id in enumerate(retire_items):
+            if isinstance(lane_id, bool):
+                raise ValueError(f"retire[{index}] must be an integer lane id")
+            try:
+                parsed = int(lane_id)
+            except (TypeError, ValueError) as exc:
+                raise ValueError(f"retire[{index}] must be an integer lane id") from exc
             if parsed < 0:
                 raise ValueError(f"retire[{index}] must be non-negative")
             normalized_retire.append(parsed)

@@ -29,6 +29,8 @@ VARIABLES
 \* @type: <<Set(Int)>>;
 vars == <<tried>>
 
+TlcSingletonOrEmpty == Cardinality(tried) \in {0, 1}
+
 ConsensusCanTrigger == 1
 BackgroundCannotTrigger == 2
 MissingWindowNotDue == 3

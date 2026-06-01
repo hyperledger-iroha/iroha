@@ -17,6 +17,7 @@ on:
           - swift-sdk
           - kotlin-sdk
           - java-android
+          - dotnet-sdk
           - contract-smoke
           - core-admission
   pull_request:
@@ -28,6 +29,7 @@ on:
       - "crates/iroha_sccp/**"
       - "crates/iroha_core/src/bridge.rs"
       - "crates/iroha_core/tests/bridge_proofs.rs"
+      - "csharp/**"
       - "docs/source/bridge_proofs.md"
       - "IrohaSwift/**"
       - "java/iroha_android/**"
@@ -234,6 +236,28 @@ jobs:
         with:
           name: sccp-production-corridor-java-android
           path: dist/sccp-production-corridor/java-android.log
+          if-no-files-found: error
+
+  dotnet-sdk:
+    if: ${{ github.event_name != 'workflow_dispatch' || github.event.inputs.phase == 'all' || github.event.inputs.phase == 'dotnet-sdk' }}
+    needs: runner-self-check
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: "8.0.x"
+      - name: .NET SCCP native facade corridor
+        run: |
+          set -o pipefail
+          mkdir -p dist/sccp-production-corridor
+          bash scripts/check_sccp_production_corridor.sh --phase dotnet-sdk 2>&1 | tee dist/sccp-production-corridor/dotnet-sdk.log
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: sccp-production-corridor-dotnet-sdk
+          path: dist/sccp-production-corridor/dotnet-sdk.log
           if-no-files-found: error
 
   contract-smoke:

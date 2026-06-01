@@ -114,42 +114,62 @@ class KagemushaRecursiveSpendProver private constructor() {
                 probeSymbol = { probeRequiredNativeSymbols() },
             )
 
-        private fun probeRequiredNativeSymbols() {
-            expectIllegalArgumentProbe { nativeVerifySpend(ByteArray(0)) }
-            expectIllegalArgumentProbe {
+        private fun probeRequiredNativeSymbols(): Boolean {
+            var available = true
+            available = expectIllegalArgumentProbe { nativeInitSpend(ByteArray(0)) } && available
+            available = expectIllegalArgumentProbe { nativeAppendSpend(ByteArray(0)) } && available
+            available = expectIllegalArgumentProbe { nativeVerifySpend(ByteArray(0)) } && available
+            available = expectIllegalArgumentProbe {
                 nativeLineageWitnessFromInitResult(ByteArray(0), byteArrayOf(0x01))
-            }
-            expectIllegalArgumentProbe {
+            } && available
+            available = expectIllegalArgumentProbe {
                 nativeLineageWitnessAppendResult(ByteArray(0), byteArrayOf(0x01), byteArrayOf(0x02))
-            }
+            } && available
+            available = expectIllegalArgumentProbe { nativeRedeemSpend(ByteArray(0)) } && available
+            return available
         }
 
-        private fun expectIllegalArgumentProbe(probe: () -> Unit) {
+        internal fun expectIllegalArgumentProbe(probe: () -> Unit): Boolean =
             try {
                 probe()
+                false
             } catch (_: IllegalArgumentException) {
-                return
+                true
             }
-        }
 
         internal fun detectNativeAvailability(
             loadLibrary: () -> Unit,
             bridgeAbiVersion: () -> Int,
-            probeSymbol: () -> Unit,
+            probeSymbol: () -> Boolean,
         ): Boolean {
-            return try {
+            try {
                 loadLibrary()
-                if (bridgeAbiVersion() < REQUIRED_BRIDGE_ABI_VERSION) {
-                    false
-                } else {
-                    probeSymbol()
-                    true
-                }
             } catch (_: IllegalArgumentException) {
-                true
+                return false
+            } catch (_: UnsatisfiedLinkError) {
+                return false
+            } catch (_: SecurityException) {
+                return false
+            }
+            val abiVersion = try {
+                bridgeAbiVersion()
+            } catch (_: IllegalArgumentException) {
+                return false
+            } catch (_: UnsatisfiedLinkError) {
+                return false
+            } catch (_: SecurityException) {
+                return false
+            }
+            if (abiVersion < REQUIRED_BRIDGE_ABI_VERSION) {
+                return false
+            }
+            return try {
+                probeSymbol()
             } catch (_: UnsatisfiedLinkError) {
                 false
             } catch (_: SecurityException) {
+                false
+            } catch (_: IllegalArgumentException) {
                 false
             }
         }

@@ -30,6 +30,8 @@ VARIABLES
 \* @type: <<Set(Int)>>;
 vars == <<tried>>
 
+TlcSingletonOrEmpty == Cardinality(tried) \in {0, 1}
+
 CommittedRbcUndeliveredDaRetained == 1
 CommittedRbcSettledDrained == 2
 CommittedRbcInvalidDrained == 3

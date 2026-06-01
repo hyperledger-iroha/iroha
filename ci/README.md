@@ -225,7 +225,7 @@ as part of a coordinated migration.
   highest-QC dependency deferral gate, TLC-cross-checked precommit-QC
   view-change selector gate,
   TLC-cross-checked block-sync recovery gate,
-  direct certified-block fetch gate,
+  TLC-cross-checked direct certified-block fetch gate,
   TLC-cross-checked missing-block ingress fetch gate,
   TLC-cross-checked payload progress availability gate,
   highest-QC fetch body-known gate, local payload availability gate,
@@ -237,13 +237,15 @@ as part of a coordinated migration.
   quorum recovery vote-drain urgency gate,
   frontier body-gap payload-drain urgency gate,
   RBC authoritative payload progress gate, slot authoritative payload gate,
-  missing-block fetch planner,
+  TLC-cross-checked missing-block fetch planner,
   TLC-cross-checked committed-edge conflict suppression gate,
   TLC-cross-checked lock-rejected branch sink gate,
-  missing-block hard-cap recovery gate,
-  missing-block hard-cap cleanup gate, missing-block view-change escalation gate, native AMX
-  attestation gate, native AMX queue-journal replay gate, native AMX
-  routing-plan projection gate, native AMX receipt validation gate, native AMX
+  TLC-cross-checked missing-block hard-cap recovery gate,
+  TLC-cross-checked missing-block hard-cap cleanup gate, TLC-cross-checked
+  missing-block view-change escalation gate, TLC-cross-checked native AMX
+  attestation gate, TLC-cross-checked native AMX queue-journal replay gate,
+  TLC-cross-checked native AMX routing-plan projection gate,
+  TLC-cross-checked native AMX receipt validation gate, TLC-cross-checked native AMX
   control-plane ingress gate, vNext chain-order helper gate, vNext re-chain
   helper gate, vNext aggregate certificate verification gate, vNext
   signing-preimage gate, vNext control-certificate ingress gate, vNext
@@ -254,56 +256,62 @@ as part of a coordinated migration.
   aggregate-verification ownership gate, TLC-cross-checked QC
   aggregate-verification worker config helper, TLC-cross-checked commit-worker
   channel capacity helper,
-  worker-loop drain scheduler gate, actor-gate priority/fairness gate,
-  worker-loop budget/adaptive-cap gate, worker ingress routing gate,
+  TLC-cross-checked worker-loop drain scheduler gate,
+  TLC-cross-checked actor-gate priority/fairness gate,
+  TLC-cross-checked worker-loop budget/adaptive-cap gate,
+  TLC-cross-checked worker ingress routing gate,
   TLC-cross-checked worker-loop stage helper gate, TLC-cross-checked
   worker-queue status accounting gate,
-  NPoS VRF epoch-seal staging gate,
+  TLC-cross-checked NPoS VRF epoch-seal staging gate,
   commit-anchor QC promotion helper, committed-height QC admission helper,
-  Kura durability commit retry gate, Kura persistence status helper,
-  restarted-peer
-  replay gate, TLC-cross-checked precommit vote-emission gate, proposal
-  assembly gate, pure
-  engine tick gate, pure engine tick unrelated-state preservation gate, pure
-  engine NewView subject projection helper, pure engine top-level
-  argument-forwarding gate, pure engine certificate prefilter dispatch gate,
-  pure engine certificate prefilter
-  state-handoff gate, pure engine certificate prefilter unrelated-state
-  preservation gate, pure engine NewView-QC gate, pure
-  engine exact NewView-QC highest-QC record gate, pure engine NewView-QC
-  unrelated-state preservation gate, pure engine exact NewView-QC advance
-  gate, pure engine proposal-ingress gate,
-  pure engine exact proposal output-field gate,
-  pure engine exact proposal state-mutation gate,
-  pure engine proposal unrelated-state preservation gate,
-  pure engine exact proposal validation-owner gate,
-  pure engine prepare-QC gate, pure engine exact Prepare-QC lock/highest-QC
-  record gate, pure engine exact Prepare-QC phase-transition gate, pure engine
-  Prepare-QC unrelated-state preservation gate, pure engine commit-QC gate,
-  pure engine exact Commit-QC highest-QC record gate,
-  pure engine exact Commit-QC phase-transition gate,
-  pure engine Commit-QC unrelated-state preservation gate,
-  pure engine payload-available Commit-QC exact finality gate,
-  pure engine missing-payload Commit-QC pending/fetch gate,
-  pure engine Commit-QC validation cleanup gate, pure engine committed-block
-  gate, pure engine reconfiguration staging gate, pure engine reconfiguration
-  activation-height dedup gate, pure engine committed-block cleanup gate, pure
-  engine exact payload-availability record gate, pure
-  engine committed-block unrelated-state preservation gate, pure engine
-  payload-availability gate, pure engine payload-availability unrelated-state
-  preservation gate, pure engine
-  validation-result gate, pure engine validation-result unrelated-state
-  preservation gate, pure engine exact validation-owner cleanup gate,
-  pure engine exact invalid-validation round/output advance gate,
-  pure engine constructor initial-state gate, pure engine read-only accessor
-  gate, pure engine top-level output relay gate,
-  view-advance saturation, QC-round
-  compatibility helper, proposal-lock helper, QC reference projection helper,
-  QC reference comparator helper, highest-QC record helper, commit-subject helper,
-  payload-lookup helper,
-  prepare-vote cache/output helper, validator-set transition, certified-recovery,
-  view-change/lock-safety, validation-callback, validation-priority helper,
-  vote-backed evidence helper, vote payload actionable helper,
+  TLC-cross-checked Kura durability commit retry gate, TLC-cross-checked Kura persistence status helper,
+  TLC-cross-checked restarted-peer
+  replay gate, TLC-cross-checked precommit vote-emission gate, TLC-cross-checked proposal
+  assembly gate, TLC-cross-checked pure
+  engine tick gate, TLC-cross-checked pure engine tick unrelated-state preservation gate, TLC-cross-checked pure
+  engine NewView subject projection helper, TLC-cross-checked pure engine handle-dispatch gate,
+  TLC-cross-checked pure engine top-level
+  argument-forwarding gate, TLC-cross-checked pure engine certificate prefilter dispatch gate,
+  TLC-cross-checked pure engine certificate prefilter
+  state-handoff gate, TLC-cross-checked pure engine certificate prefilter unrelated-state
+  preservation gate, TLC-cross-checked pure engine NewView-QC gate,
+  TLC-cross-checked pure
+  engine exact NewView-QC highest-QC record gate, TLC-cross-checked pure engine NewView-QC
+  unrelated-state preservation gate, TLC-cross-checked pure engine exact NewView-QC advance
+  gate, TLC-cross-checked pure engine proposal-ingress gate,
+  TLC-cross-checked pure engine exact proposal output-field gate,
+  TLC-cross-checked pure engine exact proposal state-mutation gate,
+  TLC-cross-checked pure engine proposal unrelated-state preservation gate,
+  TLC-cross-checked pure engine exact proposal validation-owner gate,
+  TLC-cross-checked pure engine prepare-QC gate, TLC-cross-checked pure engine exact Prepare-QC lock/highest-QC
+  record gate, TLC-cross-checked pure engine exact Prepare-QC phase-transition gate, TLC-cross-checked pure engine
+  Prepare-QC unrelated-state preservation gate, TLC-cross-checked pure engine commit-QC gate,
+  TLC-cross-checked pure engine exact Commit-QC highest-QC record gate,
+  TLC-cross-checked pure engine exact Commit-QC phase-transition gate,
+  TLC-cross-checked pure engine Commit-QC unrelated-state preservation gate,
+  TLC-cross-checked pure engine payload-available Commit-QC exact finality gate,
+  TLC-cross-checked pure engine missing-payload Commit-QC pending/fetch gate,
+  TLC-cross-checked pure engine Commit-QC validation cleanup gate, TLC-cross-checked pure engine committed-block
+  gate, TLC-cross-checked pure engine reconfiguration staging gate,
+  TLC-cross-checked pure engine reconfiguration
+  activation-height dedup gate, TLC-cross-checked pure engine committed-block cleanup gate, TLC-cross-checked pure
+  engine exact payload-availability record gate, TLC-cross-checked pure
+  engine committed-block unrelated-state preservation gate, TLC-cross-checked pure engine
+  payload-availability gate, TLC-cross-checked pure engine payload-availability unrelated-state
+  preservation gate, TLC-cross-checked pure engine
+  validation-result gate, TLC-cross-checked pure engine validation-result unrelated-state
+  preservation gate, TLC-cross-checked pure engine exact validation-owner cleanup gate,
+  TLC-cross-checked pure engine exact invalid-validation round/output advance gate,
+  TLC-cross-checked pure engine constructor initial-state gate,
+  TLC-cross-checked pure engine read-only accessor
+  gate, TLC-cross-checked pure engine top-level output relay gate,
+  TLC-cross-checked view-advance saturation, TLC-cross-checked QC-round
+  compatibility helper, proposal-lock helper, TLC-cross-checked QC reference projection helper,
+  TLC-cross-checked QC reference comparator helper, TLC-cross-checked highest-QC record helper, TLC-cross-checked commit-subject helper,
+  TLC-cross-checked payload-lookup helper,
+  prepare-vote cache/output helper, TLC-cross-checked validator-set transition, TLC-cross-checked certified-recovery,
+  TLC-cross-checked view-change/lock-safety, TLC-cross-checked validation-callback, TLC-cross-checked validation-priority helper,
+  TLC-cross-checked vote-backed evidence helper, TLC-cross-checked vote payload actionable helper,
   actionable vote-backed proposal evidence helper, slot proposal evidence
   helper, round-liveness helper, roster recovery FSM helper,
   consensus recovery prune helper,
@@ -316,11 +324,12 @@ as part of a coordinated migration.
   observer signature-mismatch recovery
   helper, validation failure finalization helper, validation-reject reason
   label helper, validation-reject status counter helper,
-  view-change proof/index status counter helper, validation
-  evidence QC selector helper, certificate-admission,
+  view-change proof/index status counter helper, TLC-cross-checked validation
+  evidence QC selector helper, TLC-cross-checked certificate-admission,
   TLC-cross-checked same-height vote conflict helper, aggregate same-height
   vote-lock helper, TLC-cross-checked proposal stale same-height vote helper,
-  same-height vote recovery view-gap helper, tip-extension helper,
+  TLC-cross-checked same-height vote recovery view-gap helper,
+  TLC-cross-checked tip-extension helper,
   TLC-cross-checked DA gate helper, TLC-cross-checked DA gate status helper,
   TLC-cross-checked local payload availability helper,
   TLC-cross-checked highest-QC body-known fetch helper,
@@ -335,17 +344,18 @@ as part of a coordinated migration.
   TLC-cross-checked RBC authoritative payload progress helper,
   TLC-cross-checked slot authoritative payload helper,
   TLC-cross-checked consensus handshake capability construction helper,
-  consensus handshake helper, runtime mode flip helper, TLC-cross-checked
+  TLC-cross-checked consensus handshake helper,
+  TLC-cross-checked runtime mode flip helper, TLC-cross-checked
   effective mode selection helper, TLC-cross-checked effective timing
-  aggregation helper, NEW_VIEW stats helper,
-  NEW_VIEW tracker helper,
-  timing monitor helper, TLC-cross-checked hotspot summary accumulator helper,
-  TLC-cross-checked adaptive observability timing/fanout helper, pacing
-  backpressure helper, TLC-cross-checked counter-driven backpressure cooldown
-  helper, TLC-cross-checked locked-QC helper, stake snapshot quorum helper,
+  aggregation helper, TLC-cross-checked NEW_VIEW stats helper,
+  TLC-cross-checked NEW_VIEW tracker helper,
+  TLC-cross-checked timing monitor helper, TLC-cross-checked hotspot summary accumulator helper,
+  TLC-cross-checked adaptive observability timing/fanout helper,
+  TLC-cross-checked pacing backpressure helper, TLC-cross-checked counter-driven backpressure cooldown
+  helper, TLC-cross-checked locked-QC helper, TLC-cross-checked stake snapshot quorum helper,
   TLC-cross-checked live local-vote roster helper,
   TLC-cross-checked canonical round-roster helper,
-  vote-roster selection helper, vote-roster cache/support helper,
+  TLC-cross-checked vote-roster selection helper, TLC-cross-checked vote-roster cache/support helper,
   TLC-cross-checked commit-topology state/reset helper, TLC-cross-checked roster index projection
   helper, TLC-cross-checked membership-view hash helper, TLC-cross-checked
   membership mismatch status helper, TLC-cross-checked membership advert
@@ -366,11 +376,12 @@ as part of a coordinated migration.
   timing/liveness status counter helper, roster-recovery status helper,
   peer-key policy status helper,
   view-change cause status helper,
-  highest-QC selection, optional
+  TLC-cross-checked highest-QC selection, TLC-cross-checked optional
   highest-QC selection filter, RBC block-body
   repair admission helper, and
-  frontier-recovery TLA+ models, the small TLC
-  frontier/QC signer-count/signer-index normalization/precommit vote-count/
+  frontier-recovery TLA+ models, the fast canonical-witness TLC frontier
+  recovery check, the small exhaustive TLC frontier check, and QC
+  signer-count/signer-index normalization/precommit vote-count/
   commit-quorum signers/commit-QC lookup/precommit signer record/
   TLC-cross-checked voting signer-count/collector-plan/validation ownership
   cleanup/worker-loop stage/
@@ -397,12 +408,12 @@ frontier/fork/quorum/RBC/rbc-causality/rbc-deliver-acceptance/rbc-commit-process
   journal replay, and native AMX ingress families now have TLC cross-checks
   that independently exhaust the same 31, 47, 17, and 19 expected-failure
   configs as Apalache.
-  The vNext chain-order, re-chain, re-chain error-label, aggregate signature,
-  signing-preimage, control-ingress, slot-lifecycle, validation,
+  The vNext chain-order, stake-weight, re-chain, re-chain error-label,
+  aggregate signature, signing-preimage, control-ingress, slot-lifecycle, validation,
   deadline-protection, validation stall/redrive, verify-cache-key,
   vote-verify async, and QC-verify async families now have TLC cross-checks
-  that independently exhaust the same 19, 17, 13, 16, 27, 28, 32, 15, 24,
-  24, 27, 30, and 39 expected-failure configs as Apalache.
+  that independently exhaust the same 19, 12, 17, 13, 16, 27, 28, 32, 15,
+  24, 24, 27, 30, and 39 expected-failure configs as Apalache.
   The slash-form coverage summary also includes
   `quorum-rebroadcast-dispatch` for the pending rebroadcast dispatch helper and
   `isolated-vote-backed-handoff` for the one-vote frontier handoff helper, plus
@@ -1582,9 +1593,37 @@ frontier/fork/quorum/RBC/rbc-causality/rbc-deliver-acceptance/rbc-commit-process
   twenty-four expected-failure configs as Apalache.
   It first runs
   `scripts/formal/check_sumeragi_formal_coverage.py` so runner modes, CI
-  commands, README commands, and referenced TLA+/CFG files stay in sync before
-  Apalache starts. For reproducible local setup without Docker, install the pinned
-  toolchain with `bash scripts/formal/install_apalache.sh 0.52.2`.
+  commands, workflow entrypoints, Apalache version pins, README commands,
+  length-table-derived bidirectional TLC fast-mode runner coverage,
+  conflict-marker-free formal wiring and TLA+/CFG artifact files,
+  well-formed runner case blocks,
+  duplicate-free and shadow-free runner case labels,
+  duplicate-free Apalache command lists including scheduled/manual workflow
+  commands, exact Apalache runner-mode CI reachability, unused runner-branch
+  rejection, documented mutation-mode expected-failure coverage, TLC
+  mutation-mode expected-failure runner routing, Apalache/TLC mutation CFG
+  equivalence, expected-failure counterexample semantics, baseline
+  expected-failure marker rejection, well-formed single-assignment runner proof
+  inputs and scalar runner assignments, flat direct-child formal path and suffix
+  containment, runner command shape, runner invocation proof-input binding, TLC
+  constraint operator binding,
+  non-type-only CFG
+  checks, top-level-only CFG behavior/check detection,
+  Apalache/TLC TLA module identity, TLC module identifier and
+  module-file reachability, TLA dependency resolution, Apalache length
+  declarations, well-formed purpose-bearing duplicate-free README length rows,
+  and README length table agreement, single top-of-file TLA module-header
+  consistency, single terminating TLA `====` markers, duplicate-free TLA constant and top-level
+  operator declarations, TLA variable/`vars` tuple consistency, CFG/module
+  filename ownership,
+  supported CFG directive validation, CFG behavior/check declarations, static
+  CFG operator-name syntax, top-level operator definitions, complete constant
+  bindings, fail-closed CFG constant block binding shape,
+  duplicate-free `CHECK_DEADLOCK` directives, duplicate-free constant/check
+  targets, complete TLA+/CFG inventory reachability, and referenced TLA+/CFG
+  files stay in sync before Apalache starts.
+  For reproducible local setup without Docker, install the pinned toolchain with
+  `bash scripts/formal/install_apalache.sh 0.52.2`.
   The `block-sync-roster-status` family covers block-sync roster source/drop
   counters, snapshot projection, and reset accounting. Its TLC cross-check
   independently exhausts the same twenty-four expected-failure configs as
@@ -1668,6 +1707,44 @@ frontier/fork/quorum/RBC/rbc-causality/rbc-deliver-acceptance/rbc-commit-process
   dropped-count, worker-loop diagnostic, stage, iteration, and commit-inflight
   pause/resume status accounting. Its TLC cross-check independently exhausts
   the same twenty-six expected-failure configs as Apalache.
+  The worker drain, actor-gate, worker-budget, worker-ingress, Kura store
+  status, same-height vote-lock, same-height vote recovery-gap, tip-extension,
+  manifest-guard, handshake, mode-flip, NEW_VIEW stats, NEW_VIEW tracker,
+  timing-monitor, pacing-backpressure, and pacemaker-backpressure tracker
+  families now have TLC cross-checks that independently exhaust the same 34,
+  26, 32, 34, 31, 24, 19, 19, 28, 13, 25, 15, 30, 17, 15, and 24
+  expected-failure configs as Apalache.
+  The pure-engine constructor, read-accessor, tick, tick-state-preservation,
+  NewView subject, handle-dispatch, handle-forwarding, handle-output relay,
+  QC-reference projection, QC-reference comparator, highest-QC record,
+  reconfiguration staging, reconfiguration deduplication, and view-advance
+  saturation families now have TLC cross-checks that independently exhaust the
+  same 13, 13, 10, 7, 10, 13, 14, 13, 9, 9, 13, 14, 13, and 8
+  expected-failure configs as Apalache.
+  The remaining fast-passing pure-engine prefilter-preservation, Commit,
+  committed-block, NewView, payload, Prepare, proposal, and validation families
+  now have TLC cross-checks that independently exhaust the same 10, 14, 11, 9,
+  15, 9, 14, 10, 8, 11, 9, 11, 10, 15, 13, 11, 12, 7, 6, 9, 15, 9, 14, 8,
+  10, 13, 12, 8, 9, 11, 10, 7, 12, 9, 18, and 16 expected-failure configs as
+  Apalache.
+  The certificate admission, highest-QC selection, optional highest-QC
+  selection, proposal assembly, QC-round compatibility, validator-set
+  transition, certified recovery, stake snapshot, validation evidence QC,
+  validation, validation priority, validator election, view-change safety,
+  vote-backed evidence, vote-payload actionability, vote-roster cache, and
+  vote-roster selection families now have TLC cross-checks that independently
+  exhaust the same 4, 4, 10, 10, 8, 3, 3, 19, 13, 4, 13, 36, 4, 19, 10, 26,
+  and 27 expected-failure configs as Apalache.
+  The pure candidate-enumeration certified-fetch, pure-engine certificate
+  dispatch, pure-engine certificate prefilter state, frontier-gap realignment,
+  Kura commit retry, missing-block fetch, missing-block hard-cap cleanup,
+  missing-block hard-cap, missing-block view-change, native AMX attestation,
+  native AMX receipt validation, native AMX routing-plan, NPoS VRF epoch seal,
+  post-commit cleanup, and restart replay families now have TLC cross-checks
+  that apply the local singleton `tried` constraint while leaving Apalache
+  configs unconstrained. They independently exhaust the same 36, 13, 14, 31,
+  30, 26, 25, 28, 30, 17, 31, 26, 30, 31, and 28 expected-failure configs as
+  Apalache.
   The `same-height-vote-conflict` family covers local same-height vote
   selection, conflicting-slot/frontier predicates, certified and NewView
   supersession gates, and pending verification deferral. Its TLC cross-check

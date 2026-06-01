@@ -2703,9 +2703,21 @@ pub fn is_trusted_setup_backend_label(backend: &str) -> bool {
 }
 
 fn has_trusted_setup_backend_segment(backend: &str) -> bool {
+    const TRUSTED_SETUP_SEGMENTS: &[&str] = &[
+        "groth16",
+        "kzg",
+        "bn254",
+        "bn256",
+        "bls12",
+        "srs",
+        "crs",
+        "ptau",
+        "ceremony",
+        "powersoftau",
+    ];
     backend
         .split(|ch: char| !ch.is_ascii_alphanumeric())
-        .any(|segment| matches!(segment, "groth16" | "kzg" | "bn254" | "bn256" | "bls12"))
+        .any(|segment| TRUSTED_SETUP_SEGMENTS.contains(&segment))
 }
 
 fn has_trusted_setup_backend_compact_label(backend: &str) -> bool {
@@ -2713,9 +2725,24 @@ fn has_trusted_setup_backend_compact_label(backend: &str) -> bool {
         .chars()
         .filter(|ch| ch.is_ascii_alphanumeric())
         .collect::<String>();
-    ["groth16", "kzg", "bn254", "bn256", "bls12381", "bls12"]
-        .iter()
-        .any(|token| compact.contains(token))
+    [
+        "groth16",
+        "kzg",
+        "bn254",
+        "bn256",
+        "bls12381",
+        "bls12",
+        "srs",
+        "crs",
+        "ptau",
+        "ceremony",
+        "trustedsetup",
+        "structuredreferencestring",
+        "universalsrs",
+        "powersoftau",
+    ]
+    .iter()
+    .any(|token| compact.contains(token))
 }
 
 /// Returns `true` for developer-only backend labels that must not enter
@@ -6645,9 +6672,67 @@ fn ensure_record_backed_recursive_spend_proof_is_semantic(
     proof: &iroha_data_model::offline::KagemushaRecursiveAggregationProof,
     proof_index: usize,
 ) -> Result<(), String> {
+    if proof.proof.backend != ZK_BACKEND_HALO2_IPA {
+        return Err(format!(
+            "record-backed recursive Kagemusha lineage proof {proof_index} backend `{}` is not `{ZK_BACKEND_HALO2_IPA}`",
+            proof.proof.backend
+        ));
+    }
+    if proof.verifier_key_id.backend != ZK_BACKEND_HALO2_IPA {
+        return Err(format!(
+            "record-backed recursive Kagemusha lineage proof {proof_index} verifier-key backend `{}` is not `{ZK_BACKEND_HALO2_IPA}`",
+            proof.verifier_key_id.backend
+        ));
+    }
+    if proof.proof.backend != proof.verifier_key_id.backend {
+        return Err(format!(
+            "record-backed recursive Kagemusha lineage proof {proof_index} backend `{}` does not match verifier-key backend `{}`",
+            proof.proof.backend, proof.verifier_key_id.backend
+        ));
+    }
     if proof.verifier_key_id.name != KAGEMUSHA_RECURSIVE_AGGREGATION_CIRCUIT_ID {
         return Err(format!(
             "record-backed recursive Kagemusha lineage proof {proof_index} must use semantic recursive aggregation circuit `{KAGEMUSHA_RECURSIVE_AGGREGATION_CIRCUIT_ID}`"
+        ));
+    }
+    if proof.proof.bytes.is_empty() {
+        return Err(format!(
+            "record-backed recursive Kagemusha lineage proof {proof_index} bytes must be non-empty"
+        ));
+    }
+    proof.public_inputs.validate_context().map_err(|err| {
+        format!(
+            "record-backed recursive Kagemusha lineage proof {proof_index} public inputs are invalid: {err}"
+        )
+    })?;
+    let expected_hash = proof.public_inputs.public_inputs_hash().map_err(|err| {
+        format!(
+            "record-backed recursive Kagemusha lineage proof {proof_index} public inputs could not be hashed: {err}"
+        )
+    })?;
+    if proof.public_inputs_hash != expected_hash {
+        return Err(format!(
+            "record-backed recursive Kagemusha lineage proof {proof_index} public-input hash mismatch"
+        ));
+    }
+    if proof
+        .public_inputs
+        .recursive_verifier_scalar_projection_digest
+        != [0u8; 32]
+    {
+        return Err(format!(
+            "record-backed recursive Kagemusha lineage proof {proof_index} semantic previous proof must not bind a lineage scalar projection"
+        ));
+    }
+    let expected_hop_count = u32::try_from(proof_index.saturating_add(1)).map_err(|_| {
+        format!(
+            "record-backed recursive Kagemusha lineage proof {proof_index} hop-count index overflow"
+        )
+    })?;
+    if proof.public_inputs.hop_count != expected_hop_count {
+        return Err(format!(
+            "record-backed recursive Kagemusha lineage proof {proof_index} hop count must be {expected_hop_count} (found {})",
+            proof.public_inputs.hop_count
         ));
     }
     Ok(())
@@ -6684,6 +6769,9 @@ fn recompute_kagemusha_recursive_spend_accumulator_from_lineage_witness(
             hop_count.saturating_sub(1),
             witness.previous_recursive_proofs.len()
         ));
+    }
+    for (proof_index, previous_proof) in witness.previous_recursive_proofs.iter().enumerate() {
+        ensure_record_backed_recursive_spend_proof_is_semantic(previous_proof, proof_index)?;
     }
 
     let envelopes: Vec<iroha_zkp_halo2::OpenVerifyEnvelope> =
@@ -7195,6 +7283,13 @@ pub fn verify_kagemusha_recursive_spend_bundle_with_record(
     let Some(vk_box) = record.key.as_ref() else {
         return false;
     };
+    if record.circuit_id == KAGEMUSHA_RECURSIVE_SPEND_LINEAGE_CIRCUIT_ID {
+        return verify_backend(
+            bundle.recursive_proof.proof.backend.as_str(),
+            &bundle.recursive_proof.proof,
+            Some(vk_box),
+        );
+    }
     if ensure_kagemusha_recursive_aggregation_canonical_vk_box(vk_box).is_err() {
         return false;
     }
@@ -8736,6 +8831,8 @@ mod zk1 {
     use super::*;
 
     const MAGIC: &[u8; 4] = b"ZK1\0";
+    const HALO2_PASTA_PROCESSED_VK_HEADER_LEN: usize = 10;
+    const HALO2_PASTA_PROCESSED_POINT_LEN: usize = 32;
 
     #[allow(dead_code)]
     fn read_u32(r: &mut Cursor<&[u8]>) -> Option<u32> {
@@ -8933,7 +9030,7 @@ mod zk1 {
 
     /// Parse the cheap header carried by Halo2/Axiom processed verifier keys.
     pub fn halo2_pasta_vk_header(payload: &[u8]) -> Result<(u32, bool, u32), String> {
-        if payload.len() < 10 {
+        if payload.len() < HALO2_PASTA_PROCESSED_VK_HEADER_LEN {
             return Err("H2VK payload is too short".to_owned());
         }
         if payload[0] != 0x02 {
@@ -8948,6 +9045,16 @@ mod zk1 {
         let fixed_columns = u32::from_le_bytes([payload[6], payload[7], payload[8], payload[9]]);
         if fixed_columns == 0 {
             return Err("H2VK payload has no fixed-column commitments".to_owned());
+        }
+        let fixed_column_commitments_len = usize::try_from(fixed_columns)
+            .ok()
+            .and_then(|count| count.checked_mul(HALO2_PASTA_PROCESSED_POINT_LEN))
+            .ok_or_else(|| "H2VK payload fixed-column commitment length overflow".to_owned())?;
+        let min_payload_len = HALO2_PASTA_PROCESSED_VK_HEADER_LEN
+            .checked_add(fixed_column_commitments_len)
+            .ok_or_else(|| "H2VK payload fixed-column commitment length overflow".to_owned())?;
+        if payload.len() < min_payload_len {
+            return Err("H2VK payload is truncated before fixed-column commitments".to_owned());
         }
         Ok((k, compress_selectors, fixed_columns))
     }
@@ -9020,6 +9127,149 @@ mod zk1 {
             }
         }
         write_tlv(buf, *b"I10P", &payload);
+    }
+}
+
+#[cfg(test)]
+mod kagemusha_lineage_key_preflight_tests {
+    use super::*;
+
+    fn append_test_tlv(buf: &mut Vec<u8>, tag: &[u8; 4], payload: &[u8]) {
+        buf.extend_from_slice(tag);
+        buf.extend_from_slice(
+            &u32::try_from(payload.len())
+                .expect("test TLV payload length fits u32")
+                .to_le_bytes(),
+        );
+        buf.extend_from_slice(payload);
+    }
+
+    fn h2vk_header(k: u32, selector_compression: u8, fixed_columns: u32) -> Vec<u8> {
+        let mut bytes = Vec::new();
+        bytes.push(0x02);
+        bytes.extend_from_slice(&k.to_le_bytes());
+        bytes.push(selector_compression);
+        bytes.extend_from_slice(&fixed_columns.to_le_bytes());
+        let fixed_commitments_len = usize::try_from(fixed_columns)
+            .expect("test fixed-column count fits usize")
+            .checked_mul(32)
+            .expect("test fixed-column commitment length fits usize");
+        bytes.extend(vec![0x42; fixed_commitments_len]);
+        bytes.extend_from_slice(b"test-h2vk-body");
+        bytes
+    }
+
+    fn lineage_vk_box(ipa_k: u32, h2vk: &[u8]) -> VerifyingKeyBox {
+        let mut bytes = zk1::wrap_start();
+        zk1::wrap_append_circuit_id(&mut bytes, KAGEMUSHA_RECURSIVE_SPEND_LINEAGE_CIRCUIT_ID);
+        zk1::wrap_append_ipa_k(&mut bytes, ipa_k);
+        append_test_tlv(&mut bytes, b"H2VK", h2vk);
+        VerifyingKeyBox::new(ZK_BACKEND_HALO2_IPA.to_owned(), bytes)
+    }
+
+    #[test]
+    fn lineage_vk_preflight_accepts_bounded_h2vk_header_shape() {
+        let vk_box = lineage_vk_box(
+            KAGEMUSHA_RECURSIVE_SPEND_LINEAGE_IPA_MIN_K,
+            &h2vk_header(KAGEMUSHA_RECURSIVE_SPEND_LINEAGE_IPA_MIN_K, 1, 3),
+        );
+
+        ensure_kagemusha_recursive_spend_lineage_verifier_key_cid(&vk_box, 2)
+            .expect("bounded lineage H2VK header should pass cheap preflight");
+    }
+
+    #[test]
+    fn lineage_vk_preflight_rejects_adversarial_h2vk_headers() {
+        let semantic_like = lineage_vk_box(
+            KAGEMUSHA_RECURSIVE_AGGREGATION_IPA_K,
+            &h2vk_header(KAGEMUSHA_RECURSIVE_AGGREGATION_IPA_K, 1, 3),
+        );
+        let err = ensure_kagemusha_recursive_spend_lineage_verifier_key_cid(&semantic_like, 2)
+            .expect_err("semantic recursive key degree must reject under lineage profile");
+        assert!(
+            err.contains("below one-hop verifier-slice minimum"),
+            "unexpected error: {err}"
+        );
+
+        let mismatched_domain = lineage_vk_box(
+            KAGEMUSHA_RECURSIVE_SPEND_LINEAGE_IPA_MIN_K,
+            &h2vk_header(KAGEMUSHA_RECURSIVE_SPEND_LINEAGE_IPA_MIN_K + 1, 1, 3),
+        );
+        let err = ensure_kagemusha_recursive_spend_lineage_verifier_key_cid(&mismatched_domain, 2)
+            .expect_err("H2VK internal domain must match lineage IPAK");
+        assert!(
+            err.contains("does not match H2VK domain"),
+            "unexpected error: {err}"
+        );
+
+        let unsupported_opening = lineage_vk_box(
+            KAGEMUSHA_RECURSIVE_SPEND_LINEAGE_IPA_MIN_K,
+            &h2vk_header(KAGEMUSHA_RECURSIVE_SPEND_LINEAGE_IPA_MIN_K, 1, 3),
+        );
+        let err =
+            ensure_kagemusha_recursive_spend_lineage_verifier_key_cid(&unsupported_opening, 3)
+                .expect_err("unsupported opening lengths must reject");
+        assert!(
+            err.contains("opening length `3` is unsupported"),
+            "unexpected error: {err}"
+        );
+
+        let short_h2vk = lineage_vk_box(KAGEMUSHA_RECURSIVE_SPEND_LINEAGE_IPA_MIN_K, b"short");
+        let err = ensure_kagemusha_recursive_spend_lineage_verifier_key_cid(&short_h2vk, 2)
+            .expect_err("short H2VK header must reject");
+        assert!(err.contains("too short"), "unexpected error: {err}");
+
+        let truncated_fixed_commitments = lineage_vk_box(
+            KAGEMUSHA_RECURSIVE_SPEND_LINEAGE_IPA_MIN_K,
+            &[
+                0x02,
+                KAGEMUSHA_RECURSIVE_SPEND_LINEAGE_IPA_MIN_K as u8,
+                0,
+                0,
+                0,
+                1,
+                3,
+                0,
+                0,
+                0,
+            ],
+        );
+        let err = ensure_kagemusha_recursive_spend_lineage_verifier_key_cid(
+            &truncated_fixed_commitments,
+            2,
+        )
+        .expect_err("truncated fixed-column commitments must reject");
+        assert!(err.contains("truncated"), "unexpected error: {err}");
+
+        let bad_version = lineage_vk_box(
+            KAGEMUSHA_RECURSIVE_SPEND_LINEAGE_IPA_MIN_K,
+            &[0x03, 8, 0, 0, 0, 1, 1, 0, 0, 0],
+        );
+        let err = ensure_kagemusha_recursive_spend_lineage_verifier_key_cid(&bad_version, 2)
+            .expect_err("unexpected H2VK version must reject");
+        assert!(
+            err.contains("unexpected version"),
+            "unexpected error: {err}"
+        );
+
+        let bad_selector_flag = lineage_vk_box(
+            KAGEMUSHA_RECURSIVE_SPEND_LINEAGE_IPA_MIN_K,
+            &h2vk_header(KAGEMUSHA_RECURSIVE_SPEND_LINEAGE_IPA_MIN_K, 2, 3),
+        );
+        let err = ensure_kagemusha_recursive_spend_lineage_verifier_key_cid(&bad_selector_flag, 2)
+            .expect_err("non-boolean selector compression must reject");
+        assert!(err.contains("non-boolean"), "unexpected error: {err}");
+
+        let zero_fixed_columns = lineage_vk_box(
+            KAGEMUSHA_RECURSIVE_SPEND_LINEAGE_IPA_MIN_K,
+            &h2vk_header(KAGEMUSHA_RECURSIVE_SPEND_LINEAGE_IPA_MIN_K, 1, 0),
+        );
+        let err = ensure_kagemusha_recursive_spend_lineage_verifier_key_cid(&zero_fixed_columns, 2)
+            .expect_err("H2VK without fixed columns must reject");
+        assert!(
+            err.contains("no fixed-column commitments"),
+            "unexpected error: {err}"
+        );
     }
 }
 
@@ -12052,6 +12302,15 @@ mod stark_backend_tag_tests {
         assert!(!is_stark_fri_v1_backend("stark/fri/prod-k-z-g"));
         assert!(!is_stark_fri_v1_backend("stark/fri/bls12_381"));
         assert!(!is_stark_fri_v1_backend("stark/fri/prod-b.l.s.12.381"));
+        assert!(!is_stark_fri_v1_backend("stark/fri/prod-srs"));
+        assert!(!is_stark_fri_v1_backend("stark/fri/prod-s-r-s"));
+        assert!(!is_stark_fri_v1_backend("stark/fri/prod.crs"));
+        assert!(!is_stark_fri_v1_backend("stark/fri/prod-ptau"));
+        assert!(!is_stark_fri_v1_backend("stark/fri/prod-powers-of-tau"));
+        assert!(!is_stark_fri_v1_backend("stark/fri/prod-ceremony"));
+        assert!(!is_stark_fri_v1_backend(
+            "stark/fri/structured-reference-string"
+        ));
         assert!(!is_stark_fri_v1_backend("stark/fri/debug"));
         assert!(!is_stark_fri_v1_backend("stark/fri/Debug"));
         assert!(!is_stark_fri_v1_backend("stark/fri/debug-proof"));
@@ -12119,6 +12378,23 @@ mod stark_backend_tag_tests {
             "stark/fri/prod-bls12-381",
             "stark/fri/prod.bls12_381",
             "stark/fri/prod-b.l.s.12.381",
+            "srs",
+            "SRS",
+            "crs",
+            "ptau",
+            "powersoftau",
+            "powers-of-tau",
+            "trusted-setup",
+            "structured-reference-string",
+            "universal-srs",
+            "halo2/ipa:universal-srs",
+            "stark/fri/prod-srs",
+            "stark/fri/prod-s-r-s",
+            "stark/fri/prod.crs",
+            "stark/fri/prod-ptau",
+            "stark/fri/prod-powers-of-tau",
+            "stark/fri/prod-ceremony",
+            "stark/fri/structured-reference-string",
             "halo2/ipa;groth16",
             "halo2/ipa:groth-16",
         ] {
@@ -12616,6 +12892,23 @@ mod guardrails_tests {
             "stark/fri/prod-bn-256",
             "stark/fri/prod-bls12-381",
             "stark/fri/prod-b.l.s.12.381",
+            "srs",
+            "SRS",
+            "crs",
+            "ptau",
+            "powersoftau",
+            "powers-of-tau",
+            "trusted-setup",
+            "structured-reference-string",
+            "universal-srs",
+            "halo2/ipa:universal-srs",
+            "stark/fri/prod-srs",
+            "stark/fri/prod-s-r-s",
+            "stark/fri/prod.crs",
+            "stark/fri/prod-ptau",
+            "stark/fri/prod-powers-of-tau",
+            "stark/fri/prod-ceremony",
+            "stark/fri/structured-reference-string",
             "halo2/ipa;groth16",
             "halo2/ipa:groth-16",
             "halo2/bn254",
@@ -25914,6 +26207,78 @@ mod kagemusha_folded_real_prover_tests {
         assert!(err.contains("accepted lineage-proving circuit"), "{err}");
     }
 
+    #[test]
+    fn kagemusha_recursive_spend_lineage_previous_proof_profile_rejects_adversarial_inputs() {
+        let accumulator = recursive_spend_accumulators(1)
+            .pop()
+            .expect("one-hop recursive spend accumulator");
+        let proof = recursive_spend_proof(&accumulator);
+        ensure_record_backed_recursive_spend_proof_is_semantic(&proof, 0)
+            .expect("valid semantic previous proof profile");
+
+        let mut reserved_lineage_profile = proof.clone();
+        reserved_lineage_profile.verifier_key_id.name =
+            KAGEMUSHA_RECURSIVE_SPEND_LINEAGE_CIRCUIT_ID.to_owned();
+        reserved_lineage_profile
+            .public_inputs
+            .recursive_verifier_scalar_projection_digest =
+            fixed_bytes(b"kagemusha-lineage-previous-proof-scalar");
+        reserved_lineage_profile.public_inputs_hash = reserved_lineage_profile
+            .public_inputs
+            .public_inputs_hash()
+            .expect("reserved lineage previous proof public-input hash");
+        let err =
+            ensure_record_backed_recursive_spend_proof_is_semantic(&reserved_lineage_profile, 0)
+                .expect_err("reserved lineage previous proof profile must reject");
+        assert!(
+            err.contains("semantic recursive aggregation circuit"),
+            "{err}"
+        );
+
+        let mut scalar_projection_splice = proof.clone();
+        scalar_projection_splice
+            .public_inputs
+            .recursive_verifier_scalar_projection_digest =
+            fixed_bytes(b"kagemusha-semantic-previous-proof-scalar");
+        scalar_projection_splice.public_inputs_hash = scalar_projection_splice
+            .public_inputs
+            .public_inputs_hash()
+            .expect("scalar-spliced previous proof public-input hash");
+        let err =
+            ensure_record_backed_recursive_spend_proof_is_semantic(&scalar_projection_splice, 0)
+                .expect_err("semantic previous proof must reject scalar projection");
+        assert!(
+            err.contains("must not bind a lineage scalar projection"),
+            "{err}"
+        );
+
+        let mut public_input_hash_splice = proof.clone();
+        public_input_hash_splice
+            .public_inputs
+            .verifier_witness_batch_digest[0] ^= 0x01;
+        let err =
+            ensure_record_backed_recursive_spend_proof_is_semantic(&public_input_hash_splice, 0)
+                .expect_err("previous proof public-input hash tamper must reject");
+        assert!(err.contains("public-input hash mismatch"), "{err}");
+
+        let mut out_of_order = proof.clone();
+        out_of_order.public_inputs.hop_count = 2;
+        out_of_order.public_inputs.verifier_witness_count = 2;
+        out_of_order.public_inputs_hash = out_of_order
+            .public_inputs
+            .public_inputs_hash()
+            .expect("out-of-order previous proof public-input hash");
+        let err = ensure_record_backed_recursive_spend_proof_is_semantic(&out_of_order, 0)
+            .expect_err("previous proof hop-order mismatch must reject");
+        assert!(err.contains("hop count must be 1"), "{err}");
+
+        let mut empty_proof = proof;
+        empty_proof.proof.bytes.clear();
+        let err = ensure_record_backed_recursive_spend_proof_is_semantic(&empty_proof, 0)
+            .expect_err("empty previous proof bytes must reject");
+        assert!(err.contains("bytes must be non-empty"), "{err}");
+    }
+
     fn recursive_aggregation_vk_box() -> VerifyingKeyBox {
         kagemusha_recursive_aggregation_proof_vk_box().expect("recursive aggregation vk")
     }
@@ -25990,6 +26355,20 @@ mod kagemusha_folded_real_prover_tests {
                 value
             })
             .collect()
+    }
+
+    fn rewrite_zk1_open_verify_envelope_instances(
+        envelope: &mut OpenVerifyEnvelope,
+        columns: Vec<Vec<halo2_proofs::halo2curves::pasta::Fp>>,
+    ) {
+        let (proof_payload, _) =
+            zkparse::proof_and_instances(&envelope.proof_bytes).expect("ZK1 proof instances");
+        let mut proof_bytes = zk1::wrap_start();
+        zk1::wrap_append_proof(&mut proof_bytes, &proof_payload);
+        let column_refs: Vec<&[halo2_proofs::halo2curves::pasta::Fp]> =
+            columns.iter().map(Vec::as_slice).collect();
+        zk1::wrap_append_instances_pasta_fp_cols(&column_refs, &mut proof_bytes);
+        envelope.proof_bytes = proof_bytes;
     }
 
     fn attach_recursive_aggregation_envelope(
@@ -26085,20 +26464,6 @@ mod kagemusha_folded_real_prover_tests {
             ZK_BACKEND_HALO2_IPA.into(),
             norito::to_bytes(&envelope).expect("OpenVerifyEnvelope encode"),
         );
-    }
-
-    fn rewrite_zk1_open_verify_envelope_instances(
-        envelope: &mut OpenVerifyEnvelope,
-        columns: Vec<Vec<halo2_proofs::halo2curves::pasta::Fp>>,
-    ) {
-        let (proof_payload, _) =
-            zkparse::proof_and_instances(&envelope.proof_bytes).expect("ZK1 proof instances");
-        let mut proof_bytes = zk1::wrap_start();
-        zk1::wrap_append_proof(&mut proof_bytes, &proof_payload);
-        let column_refs: Vec<&[halo2_proofs::halo2curves::pasta::Fp]> =
-            columns.iter().map(|column| column.as_slice()).collect();
-        zk1::wrap_append_instances_pasta_fp_cols(&column_refs, &mut proof_bytes);
-        envelope.proof_bytes = proof_bytes;
     }
 
     #[test]
@@ -26235,6 +26600,7 @@ mod kagemusha_folded_real_prover_tests {
     }
 
     #[test]
+    #[ignore = "heavy Kagemusha Halo2 IPA proof generation; run explicitly with --ignored --test-threads=1"]
     fn kagemusha_recursive_aggregation_real_halo2_ipa_proof_verifies() {
         let vk_box =
             kagemusha_recursive_aggregation_proof_vk_box().expect("recursive aggregation vk");
@@ -26274,6 +26640,7 @@ mod kagemusha_folded_real_prover_tests {
     }
 
     #[test]
+    #[ignore = "heavy Kagemusha Halo2 IPA proof generation; run explicitly with --ignored --test-threads=1"]
     fn kagemusha_recursive_aggregation_real_proof_rejects_wrong_cid_verifier_key_replay() {
         let vk_box =
             kagemusha_recursive_aggregation_proof_vk_box().expect("recursive aggregation vk");
@@ -26307,6 +26674,7 @@ mod kagemusha_folded_real_prover_tests {
     }
 
     #[test]
+    #[ignore = "heavy Kagemusha Halo2 IPA proof generation; run explicitly with --ignored --test-threads=1"]
     fn kagemusha_recursive_aggregation_real_halo2_ipa_proof_rejects_tampering() {
         let vk_box =
             kagemusha_recursive_aggregation_proof_vk_box().expect("recursive aggregation vk");
@@ -26347,6 +26715,7 @@ mod kagemusha_folded_real_prover_tests {
     }
 
     #[test]
+    #[ignore = "heavy Kagemusha Halo2 IPA proof generation; run explicitly with --ignored --test-threads=1"]
     fn kagemusha_recursive_spend_real_halo2_ipa_proofs_verify_for_multiple_hops() {
         let vk_box =
             kagemusha_recursive_aggregation_proof_vk_box().expect("recursive aggregation vk");
@@ -26405,6 +26774,7 @@ mod kagemusha_folded_real_prover_tests {
     }
 
     #[test]
+    #[ignore = "heavy Kagemusha Halo2 IPA proof generation; run explicitly with --ignored --test-threads=1"]
     fn kagemusha_recursive_spend_init_append_from_record_archives_rejects_adversarial_inputs() {
         let (chain_id, asset, first_hop, second_hop, hop_record) =
             sample_confidential_v2_two_hop_lineage();
@@ -26669,6 +27039,7 @@ mod kagemusha_folded_real_prover_tests {
     }
 
     #[test]
+    #[ignore = "heavy Kagemusha Halo2 IPA proof generation; run explicitly with --ignored --test-threads=1"]
     fn kagemusha_recursive_spend_real_proof_rejects_adversarial_tampering() {
         let vk_box =
             kagemusha_recursive_aggregation_proof_vk_box().expect("recursive aggregation vk");
@@ -26803,6 +27174,7 @@ mod kagemusha_folded_real_prover_tests {
     }
 
     #[test]
+    #[ignore = "heavy Kagemusha Halo2 IPA proof generation; run explicitly with --ignored --test-threads=1"]
     fn kagemusha_recursive_spend_record_preverify_rejects_bad_registry_metadata() {
         let vk_box =
             kagemusha_recursive_aggregation_proof_vk_box().expect("recursive aggregation vk");
@@ -27091,6 +27463,7 @@ mod kagemusha_folded_real_prover_tests {
     }
 
     #[test]
+    #[ignore = "heavy Kagemusha Halo2 IPA proving-key derivation; run explicitly with --ignored --test-threads=1"]
     fn kagemusha_recursive_aggregation_prover_rejects_aliases_and_cross_circuit_keys() {
         let vk_box =
             kagemusha_recursive_aggregation_proof_vk_box().expect("recursive aggregation vk");
@@ -27544,88 +27917,98 @@ mod kagemusha_folded_real_prover_tests {
 
     fn sample_confidential_v2_verified_hop()
     -> (ChainId, AssetDefinitionId, OwnedFoldHop, VerifyingKeyRecord) {
-        let chain_id: ChainId = "kagemusha-fold-chain".parse().expect("chain id");
-        let asset = AssetDefinitionId::new(
-            DomainId::try_new("offline", "universal").expect("domain id"),
-            "kgm".parse().expect("asset definition name"),
-        );
-        let record =
-            confidential_v2::confidential_transfer_v2_vk_record(KAGEMUSHA_VERIFIER_NAMESPACE, 3)
-                .expect("confidential transfer v2 verifier record");
-        let vk_box = record.key.clone().expect("inline transfer verifier key");
-        let spend_key = [0x11_u8; 32];
-        let input_rho = [0x21_u8; 32];
-        let input_diversifier =
-            confidential_v2::derive_confidential_diversifier_v2(b"kagemusha-fold-input");
-        let input_owner_tag = confidential_v2::derive_confidential_owner_tag_v2_with_diversifier(
-            &spend_key,
-            input_diversifier,
-        )
-        .expect("input owner tag");
-        let input_commitment = confidential_v2::derive_confidential_note_v2(
-            &asset.to_string(),
-            7,
-            input_rho,
-            input_owner_tag,
-        )
-        .expect("input commitment");
-        let tree_commitments = vec![input_commitment];
-        let root_before =
-            confidential_v2::compute_confidential_root_v2(&tree_commitments).expect("root before");
-        let output_rho = [0x31_u8; 32];
-        let output_owner_tag = confidential_v2::derive_confidential_owner_tag_v2_with_diversifier(
-            &[0x41_u8; 32],
-            confidential_v2::derive_confidential_diversifier_v2(b"kagemusha-fold-output"),
-        )
-        .expect("output owner tag");
-        let proof = confidential_v2::build_confidential_transfer_proof_v2(
-            &chain_id,
-            &asset.to_string(),
-            &spend_key,
-            &tree_commitments,
-            &[confidential_v2::ConfidentialTransferInputV2 {
-                amount: 7,
-                rho: input_rho,
-                diversifier: input_diversifier,
-                leaf_index: 0,
-            }],
-            &[confidential_v2::ConfidentialTransferOutputV2 {
-                amount: 7,
-                rho: output_rho,
-                owner_tag: output_owner_tag,
-            }],
-            root_before,
-            &record.circuit_id,
-            &vk_box,
-        )
-        .expect("confidential transfer v2 proof");
-        let mut next_tree = tree_commitments;
-        next_tree.extend(proof.output_commitments.iter().copied());
-        let root_after =
-            confidential_v2::compute_confidential_root_v2(&next_tree).expect("root after");
-        let vk_commitment = hash_vk(&vk_box);
-        let mut attachment = ProofAttachment::new_ref(
-            ZK_BACKEND_HALO2_IPA.into(),
-            proof.proof,
-            VerifyingKeyId::new(
-                ZK_BACKEND_HALO2_IPA,
-                "kagemusha-hop-confidential-transfer-v2",
-            ),
-        );
-        attachment.vk_commitment = Some(vk_commitment);
-        (
-            chain_id,
-            asset,
-            OwnedFoldHop {
+        static HOP: OnceLock<(ChainId, AssetDefinitionId, OwnedFoldHop, VerifyingKeyRecord)> =
+            OnceLock::new();
+
+        HOP.get_or_init(|| {
+            let chain_id: ChainId = "kagemusha-fold-chain".parse().expect("chain id");
+            let asset = AssetDefinitionId::new(
+                DomainId::try_new("offline", "universal").expect("domain id"),
+                "kgm".parse().expect("asset definition name"),
+            );
+            let record = confidential_v2::confidential_transfer_v2_vk_record(
+                KAGEMUSHA_VERIFIER_NAMESPACE,
+                3,
+            )
+            .expect("confidential transfer v2 verifier record");
+            let vk_box = record.key.clone().expect("inline transfer verifier key");
+            let spend_key = [0x11_u8; 32];
+            let input_rho = [0x21_u8; 32];
+            let input_diversifier =
+                confidential_v2::derive_confidential_diversifier_v2(b"kagemusha-fold-input");
+            let input_owner_tag =
+                confidential_v2::derive_confidential_owner_tag_v2_with_diversifier(
+                    &spend_key,
+                    input_diversifier,
+                )
+                .expect("input owner tag");
+            let input_commitment = confidential_v2::derive_confidential_note_v2(
+                &asset.to_string(),
+                7,
+                input_rho,
+                input_owner_tag,
+            )
+            .expect("input commitment");
+            let tree_commitments = vec![input_commitment];
+            let root_before = confidential_v2::compute_confidential_root_v2(&tree_commitments)
+                .expect("root before");
+            let output_rho = [0x31_u8; 32];
+            let output_owner_tag =
+                confidential_v2::derive_confidential_owner_tag_v2_with_diversifier(
+                    &[0x41_u8; 32],
+                    confidential_v2::derive_confidential_diversifier_v2(b"kagemusha-fold-output"),
+                )
+                .expect("output owner tag");
+            let proof = confidential_v2::build_confidential_transfer_proof_v2(
+                &chain_id,
+                &asset.to_string(),
+                &spend_key,
+                &tree_commitments,
+                &[confidential_v2::ConfidentialTransferInputV2 {
+                    amount: 7,
+                    rho: input_rho,
+                    diversifier: input_diversifier,
+                    leaf_index: 0,
+                }],
+                &[confidential_v2::ConfidentialTransferOutputV2 {
+                    amount: 7,
+                    rho: output_rho,
+                    owner_tag: output_owner_tag,
+                }],
                 root_before,
-                input_nullifiers: proof.nullifiers,
-                output_commitments: proof.output_commitments,
-                root_after,
-                attachment,
-                vk_box,
-            },
-            record,
-        )
+                &record.circuit_id,
+                &vk_box,
+            )
+            .expect("confidential transfer v2 proof");
+            let mut next_tree = tree_commitments;
+            next_tree.extend(proof.output_commitments.iter().copied());
+            let root_after =
+                confidential_v2::compute_confidential_root_v2(&next_tree).expect("root after");
+            let vk_commitment = hash_vk(&vk_box);
+            let mut attachment = ProofAttachment::new_ref(
+                ZK_BACKEND_HALO2_IPA.into(),
+                proof.proof,
+                VerifyingKeyId::new(
+                    ZK_BACKEND_HALO2_IPA,
+                    "kagemusha-hop-confidential-transfer-v2",
+                ),
+            );
+            attachment.vk_commitment = Some(vk_commitment);
+            (
+                chain_id,
+                asset,
+                OwnedFoldHop {
+                    root_before,
+                    input_nullifiers: proof.nullifiers,
+                    output_commitments: proof.output_commitments,
+                    root_after,
+                    attachment,
+                    vk_box,
+                },
+                record,
+            )
+        })
+        .clone()
     }
 
     #[allow(clippy::too_many_arguments)]
@@ -27899,6 +28282,7 @@ mod kagemusha_folded_real_prover_tests {
     }
 
     #[test]
+    #[ignore = "heavy Kagemusha Halo2 IPA proof generation; run explicitly with --ignored --test-threads=1"]
     fn prove_kagemusha_compact_payment_token_emits_real_halo2_ipa_proof() {
         let vk_box = kagemusha_vk_box();
         let proving_key = derive_halo2_ipa_kagemusha_folded_proving_key_bytes(&vk_box)
@@ -27977,6 +28361,7 @@ mod kagemusha_folded_real_prover_tests {
     }
 
     #[test]
+    #[ignore = "heavy Kagemusha Halo2 IPA proving-key derivation; run explicitly with --ignored --test-threads=1"]
     fn prove_kagemusha_compact_payment_token_rejects_bad_final_proving_key_bytes() {
         let vk_box = kagemusha_vk_box();
         let public_inputs = sample_public_inputs();
@@ -28017,6 +28402,7 @@ mod kagemusha_folded_real_prover_tests {
     }
 
     #[test]
+    #[ignore = "heavy Kagemusha Halo2 IPA proof generation; run explicitly with --ignored --test-threads=1"]
     fn kagemusha_compact_payment_token_rejects_tampered_real_proof() {
         let vk_box = kagemusha_vk_box();
         let public_inputs = sample_public_inputs();
@@ -28039,6 +28425,7 @@ mod kagemusha_folded_real_prover_tests {
     }
 
     #[test]
+    #[ignore = "heavy Kagemusha Halo2 IPA proof generation; run explicitly with --ignored --test-threads=1"]
     fn kagemusha_compact_payment_token_rejects_oversized_folded_proof() {
         let vk_box = kagemusha_vk_box();
         let public_inputs = sample_public_inputs();
@@ -28059,6 +28446,7 @@ mod kagemusha_folded_real_prover_tests {
     }
 
     #[test]
+    #[ignore = "heavy Kagemusha Halo2 IPA proof generation; run explicitly with --ignored --test-threads=1"]
     fn kagemusha_compact_payment_token_rejects_public_input_substitution() {
         let vk_box = kagemusha_vk_box();
         let public_inputs = sample_public_inputs();
@@ -28087,6 +28475,7 @@ mod kagemusha_folded_real_prover_tests {
     }
 
     #[test]
+    #[ignore = "heavy Kagemusha Halo2 IPA proof generation; run explicitly with --ignored --test-threads=1"]
     fn kagemusha_compact_payment_token_rejects_context_substitution() {
         let vk_box = kagemusha_vk_box();
         let public_inputs = sample_public_inputs();
@@ -28144,6 +28533,7 @@ mod kagemusha_folded_real_prover_tests {
     }
 
     #[test]
+    #[ignore = "heavy Kagemusha Halo2 IPA proof generation; run explicitly with --ignored --test-threads=1"]
     fn kagemusha_compact_payment_token_rejects_wrong_verifier_key_id() {
         let vk_box = kagemusha_vk_box();
         let public_inputs = sample_public_inputs();
@@ -28182,6 +28572,7 @@ mod kagemusha_folded_real_prover_tests {
     }
 
     #[test]
+    #[ignore = "heavy Kagemusha Halo2 IPA proof generation; run explicitly with --ignored --test-threads=1"]
     fn kagemusha_compact_payment_token_rejects_cross_circuit_verifier_key() {
         let vk_box = kagemusha_vk_box();
         let recursive_vk_box = recursive_aggregation_vk_box();
@@ -28239,6 +28630,7 @@ mod kagemusha_folded_real_prover_tests {
     }
 
     #[test]
+    #[ignore = "heavy Kagemusha Halo2 IPA proof generation; run explicitly with --ignored --test-threads=1"]
     fn kagemusha_compact_payment_token_rejects_non_production_folded_backend_labels() {
         let record =
             kagemusha_folded_vk_record(KAGEMUSHA_VERIFIER_NAMESPACE, 3).expect("vk record");
@@ -28273,6 +28665,7 @@ mod kagemusha_folded_real_prover_tests {
     }
 
     #[test]
+    #[ignore = "heavy Kagemusha Halo2 IPA proof generation; run explicitly with --ignored --test-threads=1"]
     fn kagemusha_compact_payment_token_rejects_envelope_circuit_substitution() {
         let vk_box = kagemusha_vk_box();
         let public_inputs = sample_public_inputs();
@@ -28291,6 +28684,7 @@ mod kagemusha_folded_real_prover_tests {
     }
 
     #[test]
+    #[ignore = "heavy Kagemusha Halo2 IPA proof generation; run explicitly with --ignored --test-threads=1"]
     fn kagemusha_compact_payment_token_rejects_envelope_backend_and_vk_hash_substitution() {
         let vk_box = kagemusha_vk_box();
         let public_inputs = sample_public_inputs();
@@ -28341,6 +28735,7 @@ mod kagemusha_folded_real_prover_tests {
     }
 
     #[test]
+    #[ignore = "heavy Kagemusha Halo2 IPA proof generation; run explicitly with --ignored --test-threads=1"]
     fn kagemusha_compact_payment_token_rejects_envelope_aux_substitution() {
         let record =
             kagemusha_folded_vk_record(KAGEMUSHA_VERIFIER_NAMESPACE, 3).expect("vk record");
@@ -28361,6 +28756,7 @@ mod kagemusha_folded_real_prover_tests {
     }
 
     #[test]
+    #[ignore = "heavy Kagemusha Halo2 IPA proof generation; run explicitly with --ignored --test-threads=1"]
     fn kagemusha_folded_vk_record_embeds_real_active_verifier_key() {
         let record =
             kagemusha_folded_vk_record(KAGEMUSHA_VERIFIER_NAMESPACE, 3).expect("vk record");
@@ -28386,6 +28782,7 @@ mod kagemusha_folded_real_prover_tests {
     }
 
     #[test]
+    #[ignore = "heavy Kagemusha Halo2 IPA proof generation; run explicitly with --ignored --test-threads=1"]
     fn kagemusha_compact_payment_token_verifies_against_active_vk_record() {
         let record =
             kagemusha_folded_vk_record(KAGEMUSHA_VERIFIER_NAMESPACE, 3).expect("vk record");
@@ -28404,6 +28801,7 @@ mod kagemusha_folded_real_prover_tests {
     }
 
     #[test]
+    #[ignore = "heavy Kagemusha Halo2 IPA proof generation; run explicitly with --ignored --test-threads=1"]
     fn kagemusha_compact_payment_token_record_verifier_rejects_registry_mismatches() {
         let record =
             kagemusha_folded_vk_record(KAGEMUSHA_VERIFIER_NAMESPACE, 3).expect("vk record");
@@ -29262,6 +29660,7 @@ mod kagemusha_folded_real_prover_tests {
     }
 
     #[test]
+    #[ignore = "heavy Kagemusha Halo2 IPA proof generation; run explicitly with --ignored --test-threads=1"]
     fn prove_verified_kagemusha_recursive_aggregation_proof_bundle_from_pallas_batch_accepts_active_records()
      {
         let (chain_id, asset, hop, record) = sample_confidential_v2_verified_hop();
@@ -29431,6 +29830,7 @@ mod kagemusha_folded_real_prover_tests {
     }
 
     #[test]
+    #[ignore = "heavy Kagemusha Halo2 IPA proof generation; run explicitly with --ignored --test-threads=1"]
     fn prove_verified_kagemusha_recursive_aggregation_proof_bundle_from_pallas_open_envelopes_accepts_active_records()
      {
         let (chain_id, asset, hop, record) = sample_confidential_v2_verified_hop();
@@ -30488,6 +30888,7 @@ mod kagemusha_folded_real_prover_tests {
     }
 
     #[test]
+    #[ignore = "heavy Kagemusha Halo2 IPA proof generation; run explicitly with --ignored --test-threads=1"]
     fn prove_verified_kagemusha_compact_payment_token_from_bundle_with_records_emits_real_proof() {
         let (chain_id, asset, hop, record) = sample_confidential_v2_verified_hop();
         let id = hop.attachment.vk_ref.clone();

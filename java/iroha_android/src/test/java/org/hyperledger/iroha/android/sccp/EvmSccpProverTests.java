@@ -2,6 +2,8 @@ package org.hyperledger.iroha.android.sccp;
 
 import java.util.ArrayList;
 import java.util.Arrays;
+import java.util.LinkedHashMap;
+import java.util.Map;
 
 public final class EvmSccpProverTests {
   private EvmSccpProverTests() {}
@@ -13,6 +15,10 @@ public final class EvmSccpProverTests {
     proverResolvesWitnessProviderBeforeBuildingRequest();
     rejectsMalformedGroth16ProofTuple();
     buildsContractCallSubmission();
+    bscMainnetFacadeRequiresChainId56AndBscTarget();
+    ethereumMainnetFacadeRequiresChainId1AndEthTarget();
+    bscMainnetInboundFacadeUsesMainnetRpcAndRejectsDrift();
+    mainnetFacadesSnapshotWitnessProviderInputs();
     System.out.println("[IrohaAndroid] EVM-family SCCP prover tests passed.");
   }
 
@@ -49,9 +55,13 @@ public final class EvmSccpProverTests {
     assert Arrays.equals(callbackSnapshot.sourceProofBytes(), request.sourceProofBytes())
         : "snapshot source proof bytes must match";
     final byte[] snapshotBundle = callbackSnapshot.bundleBytes();
+    final byte[] snapshotSourceProof = callbackSnapshot.sourceProofBytes();
     snapshotBundle[0] = 77;
+    snapshotSourceProof[0] = 77;
     assert Arrays.equals(new byte[] {5, 6, 7}, callbackSnapshot.bundleBytes())
         : "snapshot bundle bytes must be defensive copies";
+    assert Arrays.equals(new byte[] {9, 10}, callbackSnapshot.sourceProofBytes())
+        : "snapshot source proof bytes must be defensive copies";
 
     final SourceSccpProofs.EvmDestinationBinding destinationBinding =
         sampleDestinationBinding(samplePublicInputs(EvmSccpProver.DOMAIN_ETH));
@@ -763,6 +773,1174 @@ public final class EvmSccpProverTests {
     assert threw : "submission must reject non-EVM-family target domains";
   }
 
+  private static void bscMainnetFacadeRequiresChainId56AndBscTarget() {
+    final byte[] proofBytes = sampleGroth16ProofBytes();
+    final SourceSccpProofs.EvmDestinationBinding binding =
+        BscSccpProver.destinationBinding(
+            "0x" + repeat("11", 20),
+            "0x" + repeat("22", 20),
+            "0x" + repeat("bb", 32),
+            "0x" + repeat("cc", 32));
+    assert SourceSccpProofs.BSC_MAINNET_NETWORK_ID.equals(binding.networkId)
+        : "BSC binding must default to chain id 56";
+    assert binding.targetDomain == EvmSccpProver.DOMAIN_BSC
+        : "BSC binding must target BSC";
+    assert binding.hash.equals(
+            BscSccpProver.destinationBindingHash(
+                "0x" + repeat("11", 20),
+                "0x" + repeat("22", 20),
+                "0x" + repeat("bb", 32),
+                "0x" + repeat("cc", 32)))
+        : "BSC binding hash helper must match binding";
+
+    final EvmSccpProver.ProofRequest request =
+        BscSccpProver.buildProofRequest(
+            new EvmSccpProver.ProofRequestInput(
+                samplePublicInputs(EvmSccpProver.DOMAIN_BSC),
+                new byte[] {5, 6, 7},
+                new byte[] {9, 10},
+                repeat("56", 32),
+                binding));
+    assert request.targetDomain() == EvmSccpProver.DOMAIN_BSC
+        : "BSC request must target BSC";
+    assert binding.hash.equals(request.destinationBindingHash())
+        : "BSC request must bind the BSC destination binding";
+
+    final EvmSccpProver.ProofResult result =
+        BscSccpProver.wrapProofResult(proofBytes, request);
+    final EvmSccpProver.Submission submission =
+        BscSccpProver.buildSubmission(new EvmSccpProver.SubmissionInput(result));
+    assert submission.targetDomain() == EvmSccpProver.DOMAIN_BSC
+        : "BSC submission must target BSC";
+    assert Arrays.equals(proofBytes, submission.proofBytes())
+        : "BSC submission must preserve proof bytes";
+    final Object submitted =
+        new BscMainnetSccp(
+                null,
+                null,
+                null,
+                null,
+                null,
+                null,
+                outboundSubmission -> {
+                  assert outboundSubmission.targetDomain() == EvmSccpProver.DOMAIN_BSC
+                      : "BSC outbound submitter must receive BSC calldata";
+                  assert Arrays.equals(proofBytes, outboundSubmission.proofBytes())
+                      : "BSC outbound submitter must receive proof bytes";
+                  assert binding.hash.equals(outboundSubmission.destinationBindingHash())
+                      : "BSC outbound submitter must receive the bound destination hash";
+                  return "bsc-submitted";
+                })
+            .submitOutboundToBsc(new EvmSccpProver.SubmissionInput(result));
+    assert "bsc-submitted".equals(submitted)
+        : "BSC outbound submitter must return app-owned submission result";
+    boolean threw = false;
+    try {
+      new BscMainnetSccp().submitOutboundToBsc(new EvmSccpProver.SubmissionInput(result));
+    } catch (final IllegalStateException ex) {
+      threw = ex.getMessage().contains("outbound submitter");
+    }
+    assert threw : "BSC outbound submission requires an app-owned submitter";
+
+    threw = false;
+    try {
+      BscSccpProver.destinationBinding(
+          "0x" + repeat("11", 20),
+          "0x" + repeat("22", 20),
+          "0x" + repeat("bb", 32),
+          "0x" + repeat("cc", 32),
+          "0x" + repeat("33", 32));
+    } catch (final IllegalArgumentException ex) {
+      threw = ex.getMessage().contains("chain id 56");
+    }
+    assert threw : "BSC destination helper must reject non-mainnet network ids";
+
+    final SourceSccpProofs.EvmDestinationBinding wrongNetworkBinding =
+        SourceSccpProofs.evmDestinationBinding(
+            EvmSccpProver.DOMAIN_SORA,
+            EvmSccpProver.DOMAIN_BSC,
+            "0x" + repeat("33", 32),
+            "0x" + repeat("11", 20),
+            "0x" + repeat("22", 20),
+            "0x" + repeat("bb", 32),
+            "0x" + repeat("cc", 32));
+    threw = false;
+    try {
+      BscSccpProver.buildProofRequest(
+          new EvmSccpProver.ProofRequestInput(
+              samplePublicInputs(EvmSccpProver.DOMAIN_BSC),
+              new byte[] {5, 6, 7},
+              new byte[0],
+              repeat("56", 32),
+              wrongNetworkBinding));
+    } catch (final IllegalArgumentException ex) {
+      threw = ex.getMessage().contains("chain id 56");
+    }
+    assert threw : "BSC request helper must reject non-mainnet destination bindings";
+
+    threw = false;
+    try {
+      BscSccpProver.buildProofRequest(
+          sampleProductionProofRequestInput(
+              samplePublicInputs(EvmSccpProver.DOMAIN_ETH), new byte[0], repeat("56", 32)));
+    } catch (final IllegalArgumentException ex) {
+      threw = ex.getMessage().contains("target BSC");
+    }
+    assert threw : "BSC request helper must reject ETH public inputs";
+  }
+
+  private static void ethereumMainnetFacadeRequiresChainId1AndEthTarget() {
+    final byte[] proofBytes = sampleGroth16ProofBytes();
+    EthereumMainnetSccp.requireMainnetChainId(1L);
+    boolean threw = false;
+    try {
+      EthereumMainnetSccp.requireMainnetChainId(56L);
+    } catch (final IllegalArgumentException ex) {
+      threw = ex.getMessage().contains("eth_chainId == 1");
+    }
+    assert threw : "Ethereum mainnet chain guard must reject BSC chain id";
+
+    final SourceSccpProofs.EvmDestinationBinding binding =
+        EthereumMainnetSccp.destinationBinding(
+            "0x" + repeat("11", 20),
+            "0x" + repeat("22", 20),
+            "0x" + repeat("bb", 32),
+            "0x" + repeat("cc", 32));
+    assert SourceSccpProofs.ETH_MAINNET_NETWORK_ID.equals(binding.networkId)
+        : "Ethereum binding must default to chain id 1";
+    assert binding.targetDomain == EvmSccpProver.DOMAIN_ETH
+        : "Ethereum binding must target ETH";
+    assert binding.hash.equals(
+            EthereumMainnetSccp.destinationBindingHash(
+                "0x" + repeat("11", 20),
+                "0x" + repeat("22", 20),
+                "0x" + repeat("bb", 32),
+                "0x" + repeat("cc", 32)))
+        : "Ethereum binding hash helper must match binding";
+
+    final EvmSccpProver.ProofRequestInput input =
+        new EvmSccpProver.ProofRequestInput(
+            samplePublicInputs(EvmSccpProver.DOMAIN_ETH),
+            new byte[] {5, 6, 7},
+            new byte[] {9, 10},
+            repeat("56", 32),
+            binding);
+    final EvmSccpProver.ProofRequest request = EthereumMainnetSccp.buildProofRequest(input);
+    assert request.targetDomain() == EvmSccpProver.DOMAIN_ETH
+        : "Ethereum request must target ETH";
+    assert binding.hash.equals(request.destinationBindingHash())
+        : "Ethereum request must bind the Ethereum destination binding";
+    final EvmSccpProver.ProofRequest instanceRequest =
+        new EthereumMainnetSccp().buildOutboundProofRequest(input);
+    assert request.requestHash().equals(instanceRequest.requestHash())
+        : "Ethereum facade request builder must use the static helper request hash";
+    assert Arrays.equals(request.bundleBytes(), instanceRequest.bundleBytes())
+        : "Ethereum facade request builder must preserve bundle bytes";
+    assert Arrays.equals(request.sourceProofBytes(), instanceRequest.sourceProofBytes())
+        : "Ethereum facade request builder must preserve source proof bytes";
+
+    final EvmSccpProver.ProofResult result =
+        EthereumMainnetSccp.wrapProofResult(proofBytes, request);
+    final EvmSccpProver.Submission submission =
+        new EthereumMainnetSccp().buildEthereumCalldata(new EvmSccpProver.SubmissionInput(result));
+    assert submission.targetDomain() == EvmSccpProver.DOMAIN_ETH
+        : "Ethereum submission must target ETH";
+    assert Arrays.equals(proofBytes, submission.proofBytes())
+        : "Ethereum submission must preserve proof bytes";
+    final Object submitted =
+        new EthereumMainnetSccp(
+                null,
+                null,
+                null,
+                null,
+                null,
+                null,
+                outboundSubmission -> {
+                  assert outboundSubmission.targetDomain() == EvmSccpProver.DOMAIN_ETH
+                      : "Ethereum outbound submitter must receive ETH calldata";
+                  assert Arrays.equals(proofBytes, outboundSubmission.proofBytes())
+                      : "Ethereum outbound submitter must receive proof bytes";
+                  return "eth-submitted";
+                })
+            .submitOutboundToEthereum(new EvmSccpProver.SubmissionInput(result));
+    assert "eth-submitted".equals(submitted)
+        : "Ethereum outbound submitter must return app-owned submission result";
+    threw = false;
+    try {
+      new EthereumMainnetSccp().submitOutboundToEthereum(new EvmSccpProver.SubmissionInput(result));
+    } catch (final IllegalStateException ex) {
+      threw = ex.getMessage().contains("outbound submitter");
+    }
+    assert threw : "Ethereum outbound submission requires an app-owned submitter";
+
+    threw = false;
+    try {
+      new EthereumMainnetSccp()
+          .buildEthereumCalldata(
+              new EvmSccpProver.SubmissionInput(
+                  samplePublicInputs(EvmSccpProver.DOMAIN_ETH),
+                  proofBytes,
+                  repeat("56", 32),
+                  binding.hash));
+    } catch (final NullPointerException ex) {
+      threw = ex.getMessage().contains("wrapped proofResult");
+    }
+    assert threw : "Ethereum mainnet calldata helper must require a wrapped proof result";
+
+    threw = false;
+    try {
+      SourceSccpProofs.ethereumMainnetDestinationBinding(
+          "0x" + repeat("11", 20),
+          "0x" + repeat("22", 20),
+          "0x" + repeat("bb", 32),
+          "0x" + repeat("cc", 32),
+          "0x" + repeat("33", 32));
+    } catch (final IllegalArgumentException ex) {
+      threw = ex.getMessage().contains("chain id 1");
+    }
+    assert threw : "Ethereum destination helper must reject non-mainnet network ids";
+
+    threw = false;
+    final SourceSccpProofs.EvmDestinationBinding bscBinding =
+        BscSccpProver.destinationBinding(
+            "0x" + repeat("11", 20),
+            "0x" + repeat("22", 20),
+            "0x" + repeat("bb", 32),
+            "0x" + repeat("cc", 32));
+    try {
+      EthereumMainnetSccp.buildProofRequest(
+          new EvmSccpProver.ProofRequestInput(
+              samplePublicInputs(EvmSccpProver.DOMAIN_BSC),
+              new byte[] {5, 6, 7},
+              new byte[0],
+              repeat("56", 32),
+              bscBinding));
+    } catch (final IllegalArgumentException ex) {
+      threw = ex.getMessage().contains("target ETH");
+    }
+    assert threw : "Ethereum request helper must reject BSC public inputs";
+
+    final String txHash = "0x" + repeat("aa", 32);
+    final String blockHash = "0x" + repeat("bb", 32);
+    final Map<String, Object> receipt = linkedMap(
+        "transactionHash", txHash,
+        "blockHash", blockHash,
+        "blockNumber", "0x1234",
+        "status", "0x1");
+    final Map<String, Object> block = linkedMap(
+        "hash", blockHash,
+        "number", "0x1234",
+        "receiptsRoot", "0x" + repeat("cc", 32));
+    final EthereumMainnetSccp.BeaconFinalityEvidence beaconFinalityEvidence =
+        new EthereumMainnetSccp.BeaconFinalityEvidence(
+            "0x1234",
+            blockHash,
+            "0x" + repeat("cc", 32),
+            linkedMap("finalizedHeaderRoot", "0x" + repeat("dd", 32)));
+    final Map<String, Object> beaconFinality = beaconFinalityEvidence.toMap();
+    final ArrayList<String> calls = new ArrayList<>();
+    final int[] consensusCalls = new int[1];
+    final EthereumMainnetSccp sdk =
+        new EthereumMainnetSccp(
+            null,
+            null,
+            (method, params) -> {
+              calls.add(method);
+              if ("eth_chainId".equals(method)) {
+                return "0x1";
+              }
+              if ("eth_getTransactionReceipt".equals(method)) {
+                assert params.size() == 1 && txHash.equals(params.get(0))
+                    : "receipt request must use the requested tx hash";
+                return receipt;
+              }
+              if ("eth_getBlockByHash".equals(method)) {
+                assert params.size() == 2 && blockHash.equals(params.get(0))
+                    : "block request must use receipt block hash";
+                return block;
+              }
+              throw new IllegalArgumentException("unexpected method " + method);
+            },
+            (collectedReceipt, collectedBlock, collectedTransactionHash) -> {
+              consensusCalls[0]++;
+              assert receipt.equals(collectedReceipt)
+                  : "consensus provider must receive collected receipt";
+              assert block.equals(collectedBlock)
+                  : "consensus provider must receive collected block";
+              assert txHash.equals(collectedTransactionHash)
+                  : "consensus provider must receive collected tx hash";
+              return beaconFinality;
+            },
+            evidence -> {
+              assert evidence.sourceDomain() == EvmSccpProver.DOMAIN_ETH
+                  : "inbound evidence must be ETH sourced";
+              assert evidence.targetDomain() == EvmSccpProver.DOMAIN_SORA
+                  : "inbound evidence must target SORA";
+              assert txHash.equals(evidence.transactionHash())
+                  : "inbound evidence must carry normalized tx hash";
+              assert "4660".equals(evidence.beaconFinality().get("executionBlockNumber"))
+                  : "inbound evidence must carry normalized finality block number";
+              assert blockHash.equals(evidence.beaconFinality().get("executionBlockHash"))
+                  : "inbound evidence must carry finality block hash";
+              return new byte[] {1, 2, 3};
+            },
+            proof -> {
+              assert Arrays.equals(new byte[] {1, 2, 3}, proof)
+                  : "inbound submitter must receive proof bytes";
+              return "submitted";
+            });
+    final EthereumMainnetSccp.InboundEvidence evidence =
+        sdk.collectInboundEvidenceFromReceipt(
+            new EthereumMainnetSccp.InboundEvidence(
+                EvmSccpProver.DOMAIN_ETH,
+                EvmSccpProver.DOMAIN_SORA,
+                txHash,
+                null,
+                null,
+                null,
+                null));
+    assert txHash.equals(evidence.transactionHash()) : "inbound evidence must retain tx hash";
+    assert receipt.equals(evidence.receipt()) : "inbound evidence must carry receipt";
+    assert block.equals(evidence.block()) : "inbound evidence must carry block";
+    assert "4660".equals(evidence.beaconFinality().get("executionBlockNumber"))
+        : "inbound evidence must normalize beacon finality block number";
+    assert ("0x" + repeat("cc", 32)).equals(evidence.beaconFinality().get("executionReceiptsRoot"))
+        : "inbound evidence must carry beacon finality receipt root";
+    assert consensusCalls[0] == 1 : "consensus provider must be called once";
+    assert calls.equals(Arrays.asList("eth_chainId", "eth_getTransactionReceipt", "eth_getBlockByHash"))
+        : "inbound collection must validate mainnet and fetch receipt/block";
+    assert Arrays.equals(new byte[] {1, 2, 3}, sdk.proveInboundToSora(evidence))
+        : "inbound prover must receive validated evidence";
+    assert "submitted".equals(sdk.submitInboundToIroha(new byte[] {1, 2, 3}))
+        : "inbound submitter must return caller result";
+
+    assert Arrays.equals(
+            new byte[] {7, 8, 9},
+            new EthereumMainnetSccp(
+                    null,
+                    null,
+                    null,
+                    null,
+                    typedEvidence -> {
+                      assert txHash.equals(typedEvidence.transactionHash())
+                          : "typed beacon finality evidence must preserve receipt tx hash";
+                      assert blockHash.equals(
+                              typedEvidence.beaconFinality().get("executionBlockHash"))
+                          : "typed beacon finality evidence must preserve block hash";
+                      return new byte[] {7, 8, 9};
+                    },
+                    null)
+                .proveInboundToSora(
+                    EthereumMainnetSccp.InboundEvidence.withBeaconFinalityEvidence(
+                        EvmSccpProver.DOMAIN_ETH,
+                        EvmSccpProver.DOMAIN_SORA,
+                        null,
+                        receipt,
+                        block,
+                        beaconFinalityEvidence,
+                        null)))
+        : "typed beacon finality evidence must feed inbound proof collection";
+
+    final ArrayList<String> perCallProviderCalls = new ArrayList<>();
+    final int[] perCallConsensusCalls = new int[1];
+    final EthereumMainnetSccp perCallSdk =
+        new EthereumMainnetSccp(
+            null,
+            null,
+            null,
+            null,
+            perCallEvidence -> {
+              assert txHash.equals(perCallEvidence.transactionHash())
+                  : "per-call provider must collect receipt evidence";
+              assert blockHash.equals(perCallEvidence.beaconFinality().get("executionBlockHash"))
+                  : "per-call consensus provider must attach finality";
+              return new byte[] {4, 5, 6};
+            },
+            null);
+    assert Arrays.equals(
+            new byte[] {4, 5, 6},
+            perCallSdk.proveInboundToSora(
+                new EthereumMainnetSccp.InboundEvidence(
+                    EvmSccpProver.DOMAIN_ETH,
+                    EvmSccpProver.DOMAIN_SORA,
+                    txHash,
+                    null,
+                    null,
+                    null,
+                    null),
+                (method, params) -> {
+                  perCallProviderCalls.add(method);
+                  if ("eth_chainId".equals(method)) {
+                    return "0x1";
+                  }
+                  if ("eth_getTransactionReceipt".equals(method)) {
+                    return receipt;
+                  }
+                  if ("eth_getBlockByHash".equals(method)) {
+                    return block;
+                  }
+                  throw new IllegalArgumentException("unexpected method " + method);
+                },
+                (collectedReceipt, collectedBlock, collectedTransactionHash) -> {
+                  perCallConsensusCalls[0]++;
+                  return beaconFinality;
+                }))
+        : "per-call providers must be usable for inbound proving";
+    assert perCallProviderCalls.equals(
+            Arrays.asList("eth_chainId", "eth_getTransactionReceipt", "eth_getBlockByHash"))
+        : "per-call execution provider must collect mainnet receipt and block";
+    assert perCallConsensusCalls[0] == 1
+        : "per-call consensus provider must be called once";
+
+    final int[] missingFinalityProverCalls = new int[1];
+    threw = false;
+    try {
+      new EthereumMainnetSccp(
+              null,
+              null,
+              null,
+              null,
+              evidenceWithoutFinality -> {
+                missingFinalityProverCalls[0]++;
+                return new byte[] {1, 2, 3};
+              },
+              null)
+          .proveInboundToSora(
+              new EthereumMainnetSccp.InboundEvidence(
+                  EvmSccpProver.DOMAIN_ETH,
+                  EvmSccpProver.DOMAIN_SORA,
+                  null,
+                  receipt,
+                  block,
+                  null,
+                  null));
+    } catch (final IllegalArgumentException ex) {
+      threw = ex.getMessage().contains("beaconFinality");
+    }
+    assert threw : "Ethereum inbound proving must reject missing beacon finality";
+    assert missingFinalityProverCalls[0] == 0
+        : "Ethereum inbound prover must not run without beacon finality";
+
+    threw = false;
+    try {
+      new EthereumMainnetSccp(null, null, (method, params) -> "0x38", null, null)
+          .collectInboundEvidenceFromReceipt(
+              new EthereumMainnetSccp.InboundEvidence(
+                  EvmSccpProver.DOMAIN_ETH,
+                  EvmSccpProver.DOMAIN_SORA,
+                  null,
+                  receipt,
+                  null,
+                  null,
+                  null));
+    } catch (final IllegalArgumentException ex) {
+      threw = ex.getMessage().contains("eth_chainId == 1");
+    }
+    assert threw : "Ethereum inbound collection must reject non-mainnet RPC";
+
+    threw = false;
+    try {
+      sdk.collectInboundEvidenceFromReceipt(
+          new EthereumMainnetSccp.InboundEvidence(
+              EvmSccpProver.DOMAIN_ETH,
+              EvmSccpProver.DOMAIN_SORA,
+              null,
+              linkedMap(
+                  "transactionHash", txHash,
+                  "blockHash", blockHash,
+                  "blockNumber", "0x1234",
+                  "status", "0x0"),
+              null,
+              null,
+              null));
+    } catch (final IllegalArgumentException ex) {
+      threw = ex.getMessage().contains("status must be 0x1");
+    }
+    assert threw : "Ethereum inbound collection must reject failed receipts";
+
+    threw = false;
+    try {
+      sdk.collectInboundEvidenceFromReceipt(
+          new EthereumMainnetSccp.InboundEvidence(
+              EvmSccpProver.DOMAIN_ETH,
+              EvmSccpProver.DOMAIN_SORA,
+              null,
+              linkedMap(
+                  "transactionHash", txHash,
+                  "blockHash", blockHash,
+                  "status", "0x1"),
+              block,
+              null,
+              null));
+    } catch (final IllegalArgumentException ex) {
+      threw = ex.getMessage().contains("receipt.blockNumber");
+    }
+    assert threw : "Ethereum inbound collection must reject receipts without block numbers";
+
+    threw = false;
+    try {
+      sdk.collectInboundEvidenceFromReceipt(
+          new EthereumMainnetSccp.InboundEvidence(
+              EvmSccpProver.DOMAIN_ETH,
+              EvmSccpProver.DOMAIN_SORA,
+              null,
+              linkedMap(
+                  "transactionHash", txHash,
+                  "blockHash", blockHash,
+                  "blockNumber", "0x0",
+                  "status", "0x1"),
+              block,
+              null,
+              null));
+    } catch (final IllegalArgumentException ex) {
+      threw = ex.getMessage().contains("receipt.blockNumber");
+    }
+    assert threw : "Ethereum inbound collection must reject zero receipt block numbers";
+
+    threw = false;
+    try {
+      sdk.collectInboundEvidenceFromReceipt(
+          new EthereumMainnetSccp.InboundEvidence(
+              EvmSccpProver.DOMAIN_ETH,
+              EvmSccpProver.DOMAIN_SORA,
+              txHash,
+              linkedMap(
+                  "transactionHash", "0x" + repeat("ab", 32),
+                  "blockHash", blockHash,
+                  "blockNumber", "0x1234",
+                  "status", "0x1"),
+              null,
+              null,
+              null));
+    } catch (final IllegalArgumentException ex) {
+      threw = ex.getMessage().contains("transactionHash must match");
+    }
+    assert threw : "Ethereum inbound collection must reject receipt tx drift";
+
+    threw = false;
+    try {
+      sdk.collectInboundEvidenceFromReceipt(
+          new EthereumMainnetSccp.InboundEvidence(
+              EvmSccpProver.DOMAIN_ETH,
+              EvmSccpProver.DOMAIN_SORA,
+              null,
+              receipt,
+              linkedMap(
+                  "hash", "0x" + repeat("bc", 32),
+                  "number", "0x1234",
+                  "receiptsRoot", "0x" + repeat("cc", 32)),
+              null,
+              null));
+    } catch (final IllegalArgumentException ex) {
+      threw = ex.getMessage().contains("block.hash must match");
+    }
+    assert threw : "Ethereum inbound collection must reject block hash drift";
+
+    threw = false;
+    try {
+      sdk.collectInboundEvidenceFromReceipt(
+          new EthereumMainnetSccp.InboundEvidence(
+              EvmSccpProver.DOMAIN_ETH,
+              EvmSccpProver.DOMAIN_SORA,
+              null,
+              receipt,
+              linkedMap(
+                  "hash", blockHash,
+                  "receiptsRoot", "0x" + repeat("cc", 32)),
+              null,
+              null));
+    } catch (final IllegalArgumentException ex) {
+      threw = ex.getMessage().contains("block.number");
+    }
+    assert threw : "Ethereum inbound collection must reject blocks without numbers";
+
+    threw = false;
+    try {
+      sdk.collectInboundEvidenceFromReceipt(
+          new EthereumMainnetSccp.InboundEvidence(
+              EvmSccpProver.DOMAIN_ETH,
+              EvmSccpProver.DOMAIN_SORA,
+              null,
+              receipt,
+              linkedMap(
+                  "hash", blockHash,
+                  "number", "0x0",
+                  "receiptsRoot", "0x" + repeat("cc", 32)),
+              null,
+              null));
+    } catch (final IllegalArgumentException ex) {
+      threw = ex.getMessage().contains("block.number");
+    }
+    assert threw : "Ethereum inbound collection must reject zero block numbers";
+
+    threw = false;
+    try {
+      sdk.collectInboundEvidenceFromReceipt(
+          new EthereumMainnetSccp.InboundEvidence(
+              EvmSccpProver.DOMAIN_ETH,
+              EvmSccpProver.DOMAIN_SORA,
+              null,
+              linkedMap(
+                  "transactionHash", txHash.toUpperCase(),
+                  "blockHash", blockHash,
+                  "blockNumber", "0x1234",
+                  "status", "0x1"),
+              null,
+              null,
+              null));
+    } catch (final IllegalArgumentException ex) {
+      threw = ex.getMessage().contains("canonical lowercase");
+    }
+    assert threw : "Ethereum inbound collection must reject uppercase RPC hashes";
+
+    final Map<String, Object> driftedFinalityHash = new LinkedHashMap<>(beaconFinality);
+    driftedFinalityHash.put("executionBlockHash", "0x" + repeat("bc", 32));
+    threw = false;
+    try {
+      sdk.collectInboundEvidenceFromReceipt(
+          new EthereumMainnetSccp.InboundEvidence(
+              EvmSccpProver.DOMAIN_ETH,
+              EvmSccpProver.DOMAIN_SORA,
+              null,
+              receipt,
+              block,
+              driftedFinalityHash,
+              null));
+    } catch (final IllegalArgumentException ex) {
+      threw = ex.getMessage().contains("beaconFinality.executionBlockHash");
+    }
+    assert threw : "Ethereum inbound collection must reject finality block-hash drift";
+
+    final Map<String, Object> driftedFinalityNumber = new LinkedHashMap<>(beaconFinality);
+    driftedFinalityNumber.put("executionBlockNumber", "0x1235");
+    threw = false;
+    try {
+      sdk.collectInboundEvidenceFromReceipt(
+          new EthereumMainnetSccp.InboundEvidence(
+              EvmSccpProver.DOMAIN_ETH,
+              EvmSccpProver.DOMAIN_SORA,
+              null,
+              receipt,
+              block,
+              driftedFinalityNumber,
+              null));
+    } catch (final IllegalArgumentException ex) {
+      threw = ex.getMessage().contains("beaconFinality.executionBlockNumber");
+    }
+    assert threw : "Ethereum inbound collection must reject finality block-number drift";
+
+    final Map<String, Object> driftedFinalityReceiptsRoot = new LinkedHashMap<>(beaconFinality);
+    driftedFinalityReceiptsRoot.put("executionReceiptsRoot", "0x" + repeat("cd", 32));
+    threw = false;
+    try {
+      sdk.collectInboundEvidenceFromReceipt(
+          new EthereumMainnetSccp.InboundEvidence(
+              EvmSccpProver.DOMAIN_ETH,
+              EvmSccpProver.DOMAIN_SORA,
+              null,
+              receipt,
+              block,
+              driftedFinalityReceiptsRoot,
+              null));
+    } catch (final IllegalArgumentException ex) {
+      threw = ex.getMessage().contains("beaconFinality.executionReceiptsRoot");
+    }
+    assert threw : "Ethereum inbound collection must reject finality receipts-root drift";
+
+    threw = false;
+    try {
+      sdk.submitInboundToIroha(new byte[] {0, 0});
+    } catch (final IllegalArgumentException ex) {
+      threw = ex.getMessage().contains("all zero");
+    }
+    assert threw : "Ethereum inbound submitter must reject zero proof bytes";
+  }
+
+  private static void bscMainnetInboundFacadeUsesMainnetRpcAndRejectsDrift() {
+    final String txHash = "0x" + repeat("aa", 32);
+    final String blockHash = "0x" + repeat("bb", 32);
+    final Map<String, Object> receipt = linkedMap(
+        "transactionHash", txHash,
+        "blockHash", blockHash,
+        "blockNumber", "0x1234",
+        "status", "0x1");
+    final Map<String, Object> block = linkedMap(
+        "hash", blockHash,
+        "number", "0x1234",
+        "receiptsRoot", "0x" + repeat("cc", 32));
+    final BscMainnetSccp.ParliaFinalityEvidence parliaFinalityEvidence =
+        new BscMainnetSccp.ParliaFinalityEvidence(
+            "0x1234",
+            blockHash,
+            "0x" + repeat("cc", 32),
+            linkedMap(
+                "validatorEpoch", "0x24",
+                "commitSealHash", "0x" + repeat("dd", 32)));
+    final Map<String, Object> parliaFinality = parliaFinalityEvidence.toMap();
+    final ArrayList<String> calls = new ArrayList<>();
+    final BscMainnetSccp sdk =
+        new BscMainnetSccp(
+            null,
+            null,
+            (method, params) -> {
+              calls.add(method);
+              if ("eth_chainId".equals(method)) {
+                return "0x38";
+              }
+              if ("eth_getTransactionReceipt".equals(method)) {
+                assert params.size() == 1 && txHash.equals(params.get(0))
+                    : "receipt request must use the requested BSC tx hash";
+                return receipt;
+              }
+              if ("eth_getBlockByHash".equals(method)) {
+                assert params.size() == 2 && blockHash.equals(params.get(0))
+                    : "block request must use BSC receipt block hash";
+                return block;
+              }
+              throw new IllegalArgumentException("unexpected method " + method);
+            },
+            evidence -> {
+              assert evidence.sourceDomain() == EvmSccpProver.DOMAIN_BSC
+                  : "BSC inbound evidence must be BSC sourced";
+              assert evidence.targetDomain() == EvmSccpProver.DOMAIN_SORA
+                  : "BSC inbound evidence must target SORA";
+              assert txHash.equals(evidence.transactionHash())
+                  : "BSC inbound evidence must carry normalized tx hash";
+              assert blockHash.equals(evidence.parliaFinality().get("executionBlockHash"))
+                  : "BSC inbound evidence must carry bound finality block hash";
+              return new byte[] {1, 2, 3};
+            },
+            proof -> {
+              assert Arrays.equals(new byte[] {1, 2, 3}, proof)
+                  : "BSC inbound submitter must receive proof bytes";
+              return "submitted";
+            });
+    final BscMainnetSccp.InboundEvidence evidence =
+        sdk.collectInboundEvidenceFromReceipt(
+            BscMainnetSccp.InboundEvidence.withParliaFinalityEvidence(
+                EvmSccpProver.DOMAIN_BSC,
+                EvmSccpProver.DOMAIN_SORA,
+                txHash,
+                null,
+                null,
+                parliaFinalityEvidence,
+                null));
+    assert txHash.equals(evidence.transactionHash()) : "BSC evidence must retain tx hash";
+    assert receipt.equals(evidence.receipt()) : "BSC evidence must carry receipt";
+    assert block.equals(evidence.block()) : "BSC evidence must carry block";
+    assert "4660".equals(evidence.parliaFinality().get("executionBlockNumber"))
+        : "BSC evidence must normalize Parlia execution block number";
+    assert blockHash.equals(evidence.parliaFinality().get("executionBlockHash"))
+        : "BSC evidence must retain Parlia execution block hash";
+    assert calls.equals(Arrays.asList("eth_chainId", "eth_getTransactionReceipt", "eth_getBlockByHash"))
+        : "BSC inbound collection must validate mainnet and fetch receipt/block";
+    final BscMainnetSccp.InboundEvidence providerFinalityEvidence =
+        new BscMainnetSccp(
+                null,
+                null,
+                (method, params) -> {
+                  if ("eth_chainId".equals(method)) {
+                    return "0x38";
+                  }
+                  if ("eth_getTransactionReceipt".equals(method)) {
+                    return receipt;
+                  }
+                  if ("eth_getBlockByHash".equals(method)) {
+                    return block;
+                  }
+                  throw new IllegalArgumentException("unexpected method " + method);
+                },
+                (receiptInput, blockInput, transactionHashInput) -> parliaFinality,
+                null,
+                null)
+            .collectInboundEvidenceFromReceipt(
+                new BscMainnetSccp.InboundEvidence(
+                    EvmSccpProver.DOMAIN_BSC,
+                    EvmSccpProver.DOMAIN_SORA,
+                    txHash,
+                    null,
+                    null,
+                    null,
+                    null));
+    assert blockHash.equals(providerFinalityEvidence.parliaFinality().get("executionBlockHash"))
+        : "BSC consensus provider finality must be normalized";
+    assert Arrays.equals(new byte[] {1, 2, 3}, sdk.proveInboundToSora(evidence))
+        : "BSC inbound prover must receive validated evidence";
+    assert "submitted".equals(sdk.submitInboundToIroha(new byte[] {1, 2, 3}))
+        : "BSC inbound submitter must return caller result";
+
+    boolean threw = false;
+    try {
+      new BscMainnetSccp(null, null, (method, params) -> "0x1", null, null)
+          .collectInboundEvidenceFromReceipt(
+              new BscMainnetSccp.InboundEvidence(
+                  EvmSccpProver.DOMAIN_BSC,
+                  EvmSccpProver.DOMAIN_SORA,
+                  null,
+                  receipt,
+                  null,
+                  null,
+                  null));
+    } catch (final IllegalArgumentException ex) {
+      threw = ex.getMessage().contains("eth_chainId == 56");
+    }
+    assert threw : "BSC inbound collection must reject non-mainnet RPC";
+
+    threw = false;
+    try {
+      sdk.collectInboundEvidenceFromReceipt(
+          new BscMainnetSccp.InboundEvidence(
+              EvmSccpProver.DOMAIN_ETH,
+              EvmSccpProver.DOMAIN_SORA,
+              null,
+              receipt,
+              null,
+              null,
+              null));
+    } catch (final IllegalArgumentException ex) {
+      threw = ex.getMessage().contains("sourceDomain must be BSC");
+    }
+    assert threw : "BSC inbound collection must reject foreign source domains";
+
+    threw = false;
+    try {
+      sdk.collectInboundEvidenceFromReceipt(
+          new BscMainnetSccp.InboundEvidence(
+              EvmSccpProver.DOMAIN_BSC,
+              EvmSccpProver.DOMAIN_SORA,
+              null,
+              linkedMap(
+                  "transactionHash", txHash,
+                  "blockHash", blockHash,
+                  "blockNumber", "0x1234",
+                  "status", "0x0"),
+              null,
+              null,
+              null));
+    } catch (final IllegalArgumentException ex) {
+      threw = ex.getMessage().contains("status must be 0x1");
+    }
+    assert threw : "BSC inbound collection must reject failed receipts";
+
+    threw = false;
+    try {
+      sdk.collectInboundEvidenceFromReceipt(
+          new BscMainnetSccp.InboundEvidence(
+              EvmSccpProver.DOMAIN_BSC,
+              EvmSccpProver.DOMAIN_SORA,
+              null,
+              linkedMap(
+                  "transactionHash", txHash,
+                  "blockHash", blockHash,
+                  "status", "0x1"),
+              block,
+              null,
+              null));
+    } catch (final IllegalArgumentException ex) {
+      threw = ex.getMessage().contains("receipt.blockNumber");
+    }
+    assert threw : "BSC inbound collection must reject receipts without block numbers";
+
+    threw = false;
+    try {
+      sdk.collectInboundEvidenceFromReceipt(
+          new BscMainnetSccp.InboundEvidence(
+              EvmSccpProver.DOMAIN_BSC,
+              EvmSccpProver.DOMAIN_SORA,
+              null,
+              linkedMap(
+                  "transactionHash", txHash,
+                  "blockHash", blockHash,
+                  "blockNumber", "0x0",
+                  "status", "0x1"),
+              block,
+              null,
+              null));
+    } catch (final IllegalArgumentException ex) {
+      threw = ex.getMessage().contains("receipt.blockNumber");
+    }
+    assert threw : "BSC inbound collection must reject zero receipt block numbers";
+
+    threw = false;
+    try {
+      sdk.collectInboundEvidenceFromReceipt(
+          new BscMainnetSccp.InboundEvidence(
+              EvmSccpProver.DOMAIN_BSC,
+              EvmSccpProver.DOMAIN_SORA,
+              txHash,
+              linkedMap(
+                  "transactionHash", "0x" + repeat("ab", 32),
+                  "blockHash", blockHash,
+                  "blockNumber", "0x1234",
+                  "status", "0x1"),
+              null,
+              null,
+              null));
+    } catch (final IllegalArgumentException ex) {
+      threw = ex.getMessage().contains("transactionHash must match");
+    }
+    assert threw : "BSC inbound collection must reject receipt tx drift";
+
+    threw = false;
+    try {
+      sdk.collectInboundEvidenceFromReceipt(
+          new BscMainnetSccp.InboundEvidence(
+              EvmSccpProver.DOMAIN_BSC,
+              EvmSccpProver.DOMAIN_SORA,
+              null,
+              receipt,
+              linkedMap(
+                  "hash", "0x" + repeat("bc", 32),
+                  "number", "0x1234",
+                  "receiptsRoot", "0x" + repeat("cc", 32)),
+              null,
+              null));
+    } catch (final IllegalArgumentException ex) {
+      threw = ex.getMessage().contains("block.hash must match");
+    }
+    assert threw : "BSC inbound collection must reject block hash drift";
+
+    threw = false;
+    try {
+      sdk.collectInboundEvidenceFromReceipt(
+          new BscMainnetSccp.InboundEvidence(
+              EvmSccpProver.DOMAIN_BSC,
+              EvmSccpProver.DOMAIN_SORA,
+              null,
+              receipt,
+              linkedMap(
+                  "hash", blockHash,
+                  "receiptsRoot", "0x" + repeat("cc", 32)),
+              null,
+              null));
+    } catch (final IllegalArgumentException ex) {
+      threw = ex.getMessage().contains("block.number");
+    }
+    assert threw : "BSC inbound collection must reject blocks without numbers";
+
+    threw = false;
+    try {
+      sdk.collectInboundEvidenceFromReceipt(
+          new BscMainnetSccp.InboundEvidence(
+              EvmSccpProver.DOMAIN_BSC,
+              EvmSccpProver.DOMAIN_SORA,
+              null,
+              receipt,
+              linkedMap(
+                  "hash", blockHash,
+                  "number", "0x0",
+                  "receiptsRoot", "0x" + repeat("cc", 32)),
+              null,
+              null));
+    } catch (final IllegalArgumentException ex) {
+      threw = ex.getMessage().contains("block.number");
+    }
+    assert threw : "BSC inbound collection must reject zero block numbers";
+
+    threw = false;
+    try {
+      sdk.collectInboundEvidenceFromReceipt(
+          new BscMainnetSccp.InboundEvidence(
+              EvmSccpProver.DOMAIN_BSC,
+              EvmSccpProver.DOMAIN_SORA,
+              null,
+              receipt,
+              linkedMap(
+                  "hash", blockHash,
+                  "number", "0x1235",
+                  "receiptsRoot", "0x" + repeat("cc", 32)),
+              null,
+              null));
+    } catch (final IllegalArgumentException ex) {
+      threw = ex.getMessage().contains("block.number must match");
+    }
+    assert threw : "BSC inbound collection must reject block number drift";
+
+    threw = false;
+    try {
+      sdk.collectInboundEvidenceFromReceipt(
+          new BscMainnetSccp.InboundEvidence(
+              EvmSccpProver.DOMAIN_BSC,
+              EvmSccpProver.DOMAIN_SORA,
+              null,
+              linkedMap(
+                  "transactionHash", txHash.toUpperCase(),
+                  "blockHash", blockHash,
+                  "blockNumber", "0x1234",
+                  "status", "0x1"),
+              null,
+              null,
+              null));
+    } catch (final IllegalArgumentException ex) {
+      threw = ex.getMessage().contains("canonical lowercase");
+    }
+    assert threw : "BSC inbound collection must reject uppercase RPC hashes";
+
+    threw = false;
+    try {
+      sdk.proveInboundToSora(
+          new BscMainnetSccp.InboundEvidence(
+              EvmSccpProver.DOMAIN_BSC,
+              EvmSccpProver.DOMAIN_SORA,
+              null,
+              null,
+              null,
+              null,
+              "0x" + repeat("ee", 32)));
+    } catch (final IllegalArgumentException ex) {
+      threw = ex.getMessage().contains("parliaFinality");
+    }
+    assert threw : "BSC inbound proving must reject missing Parlia finality";
+
+    final Map<String, Object> driftedFinalityHash = new LinkedHashMap<>(parliaFinality);
+    driftedFinalityHash.put("executionBlockHash", "0x" + repeat("bc", 32));
+    threw = false;
+    try {
+      sdk.collectInboundEvidenceFromReceipt(
+          new BscMainnetSccp.InboundEvidence(
+              EvmSccpProver.DOMAIN_BSC,
+              EvmSccpProver.DOMAIN_SORA,
+              null,
+              receipt,
+              block,
+              driftedFinalityHash,
+              null));
+    } catch (final IllegalArgumentException ex) {
+      threw = ex.getMessage().contains("parliaFinality.executionBlockHash");
+    }
+    assert threw : "BSC inbound collection must reject Parlia block-hash drift";
+
+    final Map<String, Object> driftedFinalityNumber = new LinkedHashMap<>(parliaFinality);
+    driftedFinalityNumber.put("executionBlockNumber", "0x1235");
+    threw = false;
+    try {
+      sdk.collectInboundEvidenceFromReceipt(
+          new BscMainnetSccp.InboundEvidence(
+              EvmSccpProver.DOMAIN_BSC,
+              EvmSccpProver.DOMAIN_SORA,
+              null,
+              receipt,
+              block,
+              driftedFinalityNumber,
+              null));
+    } catch (final IllegalArgumentException ex) {
+      threw = ex.getMessage().contains("parliaFinality.executionBlockNumber");
+    }
+    assert threw : "BSC inbound collection must reject Parlia block-number drift";
+
+    final Map<String, Object> driftedFinalityReceiptsRoot = new LinkedHashMap<>(parliaFinality);
+    driftedFinalityReceiptsRoot.put("executionReceiptsRoot", "0x" + repeat("cd", 32));
+    threw = false;
+    try {
+      sdk.collectInboundEvidenceFromReceipt(
+          new BscMainnetSccp.InboundEvidence(
+              EvmSccpProver.DOMAIN_BSC,
+              EvmSccpProver.DOMAIN_SORA,
+              null,
+              receipt,
+              block,
+              driftedFinalityReceiptsRoot,
+              null));
+    } catch (final IllegalArgumentException ex) {
+      threw = ex.getMessage().contains("parliaFinality.executionReceiptsRoot");
+    }
+    assert threw : "BSC inbound collection must reject Parlia receipts-root drift";
+
+    threw = false;
+    try {
+      sdk.submitInboundToIroha(new byte[] {0, 0});
+    } catch (final IllegalArgumentException ex) {
+      threw = ex.getMessage().contains("all zero");
+    }
+    assert threw : "BSC inbound submitter must reject zero proof bytes";
+  }
+
+  private static void mainnetFacadesSnapshotWitnessProviderInputs() {
+    final byte[] ethBundleBytes = new byte[] {5, 6, 7};
+    final byte[] ethSourceProofBytes = new byte[] {9, 10};
+    final SourceSccpProofs.EvmDestinationBinding ethBinding =
+        EthereumMainnetSccp.destinationBinding(
+            "0x" + repeat("11", 20),
+            "0x" + repeat("22", 20),
+            "0x" + repeat("bb", 32),
+            "0x" + repeat("cc", 32));
+    final EvmSccpProver.ProofRequestInput ethInput =
+        new EvmSccpProver.ProofRequestInput(
+            samplePublicInputs(EvmSccpProver.DOMAIN_ETH),
+            ethBundleBytes,
+            ethSourceProofBytes,
+            repeat("56", 32),
+            ethBinding);
+    final EvmSccpProver.ProofRequest ethRequest =
+        new EthereumMainnetSccp(
+                input -> {
+                  assert input.bundleBytes() != ethBundleBytes
+                      : "Ethereum witness provider must receive bundle byte snapshot";
+                  assert input.sourceProofBytes() != ethSourceProofBytes
+                      : "Ethereum witness provider must receive source-proof byte snapshot";
+                  input.bundleBytes()[0] = 0x7f;
+                  input.sourceProofBytes()[0] = 0x7e;
+                  return new EvmSccpProver.ProofRequestInput(
+                      input.publicInputs(),
+                      new byte[] {8, 8, 8},
+                      new byte[] {9, 9},
+                      input.statementHash(),
+                      input.destinationBinding());
+                },
+                null)
+            .buildOutboundProofRequest(ethInput);
+    assert Arrays.equals(new byte[] {5, 6, 7}, ethBundleBytes)
+        : "Ethereum facade must not let witness providers mutate app-owned bundle bytes";
+    assert Arrays.equals(new byte[] {9, 10}, ethSourceProofBytes)
+        : "Ethereum facade must not let witness providers mutate app-owned source proof bytes";
+    assert Arrays.equals(new byte[] {8, 8, 8}, ethRequest.bundleBytes())
+        : "Ethereum facade must use witness-resolved bundle bytes";
+    assert Arrays.equals(new byte[] {9, 9}, ethRequest.sourceProofBytes())
+        : "Ethereum facade must use witness-resolved source proof bytes";
+
+    final byte[] bscBundleBytes = new byte[] {3, 4, 5};
+    final byte[] bscSourceProofBytes = new byte[] {6, 7};
+    final SourceSccpProofs.EvmDestinationBinding bscBinding =
+        BscSccpProver.destinationBinding(
+            "0x" + repeat("11", 20),
+            "0x" + repeat("22", 20),
+            "0x" + repeat("bb", 32),
+            "0x" + repeat("cc", 32));
+    final EvmSccpProver.ProofRequestInput bscInput =
+        new EvmSccpProver.ProofRequestInput(
+            samplePublicInputs(EvmSccpProver.DOMAIN_BSC),
+            bscBundleBytes,
+            bscSourceProofBytes,
+            repeat("56", 32),
+            bscBinding);
+    final EvmSccpProver.ProofRequest bscRequest =
+        new BscSccpProver(
+                input -> {
+                  assert input.bundleBytes() != bscBundleBytes
+                      : "BSC witness provider must receive bundle byte snapshot";
+                  assert input.sourceProofBytes() != bscSourceProofBytes
+                      : "BSC witness provider must receive source-proof byte snapshot";
+                  input.bundleBytes()[0] = 0x7f;
+                  input.sourceProofBytes()[0] = 0x7e;
+                  return new EvmSccpProver.ProofRequestInput(
+                      input.publicInputs(),
+                      new byte[] {4, 4, 4},
+                      new byte[] {5, 5},
+                      input.statementHash(),
+                      input.destinationBinding());
+                },
+                null)
+            .buildRequest(bscInput);
+    assert Arrays.equals(new byte[] {3, 4, 5}, bscBundleBytes)
+        : "BSC facade must not let witness providers mutate app-owned bundle bytes";
+    assert Arrays.equals(new byte[] {6, 7}, bscSourceProofBytes)
+        : "BSC facade must not let witness providers mutate app-owned source proof bytes";
+    assert Arrays.equals(new byte[] {4, 4, 4}, bscRequest.bundleBytes())
+        : "BSC facade must use witness-resolved bundle bytes";
+    assert Arrays.equals(new byte[] {5, 5}, bscRequest.sourceProofBytes())
+        : "BSC facade must use witness-resolved source proof bytes";
+  }
+
   private static byte[] sampleGroth16ProofBytes() {
     return flattenGroth16ProofWords(sampleGroth16ProofWords());
   }
@@ -1038,6 +2216,17 @@ public final class EvmSccpProverTests {
         repeat("33", 32),
         finalityHeight,
         repeat("44", 32));
+  }
+
+  private static Map<String, Object> linkedMap(final Object... entries) {
+    if (entries.length % 2 != 0) {
+      throw new IllegalArgumentException("linkedMap requires key/value pairs");
+    }
+    final LinkedHashMap<String, Object> out = new LinkedHashMap<>();
+    for (int index = 0; index < entries.length; index += 2) {
+      out.put((String) entries[index], entries[index + 1]);
+    }
+    return out;
   }
 
   private static String repeat(final String value, final int count) {

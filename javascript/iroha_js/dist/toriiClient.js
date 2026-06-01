@@ -13928,6 +13928,26 @@ function normalizeSccpDestinationRollout(value, context) {
       record.verifier_code_hash ?? null,
       `${context}.verifier_code_hash`,
     ),
+    verifierKeyHash: optionalString(
+      record.verifier_key_hash ?? null,
+      `${context}.verifier_key_hash`,
+    ),
+    destinationNetworkId: optionalString(
+      record.destination_network_id ?? null,
+      `${context}.destination_network_id`,
+    ),
+    destinationBridgeAddress: optionalString(
+      record.destination_bridge_address ?? null,
+      `${context}.destination_bridge_address`,
+    ),
+    destinationBindingKey: optionalString(
+      record.destination_binding_key ?? null,
+      `${context}.destination_binding_key`,
+    ),
+    destinationBindingHash: optionalString(
+      record.destination_binding_hash ?? null,
+      `${context}.destination_binding_hash`,
+    ),
     anchorId: optionalString(record.anchor_id ?? null, `${context}.anchor_id`),
     blockers: parseStringArray(record.blockers ?? [], `${context}.blockers`).map((entry, index) =>
       requireNonEmptyString(entry, `${context}.blockers[${index}]`),
@@ -14152,6 +14172,41 @@ function normalizeSccpDestinationBinding(value, context) {
   };
 }
 
+function normalizeSccpTairaXorBurnRecord(value, context) {
+  const record = ensureRecord(value, context);
+  const vkRef = ensureRecord(record.vk_ref ?? record.vkRef, `${context}.vk_ref`);
+  const material = {
+    settlementAssetDefinitionId: requireNonEmptyString(
+      record.settlement_asset_definition_id ??
+        record.settlementAssetDefinitionId ??
+        record.settlement_asset ??
+        record.settlementAsset,
+      `${context}.settlement_asset_definition_id`,
+    ),
+    contractArtifactB64: normalizeRequiredBase64Payload(
+      record.contract_artifact_b64 ??
+        record.contractArtifactB64 ??
+        record.artifact_b64 ??
+        record.artifactB64 ??
+        record.bytecode,
+      `${context}.contract_artifact_b64`,
+    ),
+    vkRef: {
+      backend: requireNonEmptyString(vkRef.backend, `${context}.vk_ref.backend`),
+      name: requireNonEmptyString(vkRef.name, `${context}.vk_ref.name`),
+    },
+  };
+  const gasLimit = record.gas_limit ?? record.gasLimit;
+  if (gasLimit !== undefined && gasLimit !== null) {
+    material.gasLimit = ToriiClient._normalizeUnsignedInteger(
+      gasLimit,
+      `${context}.gas_limit`,
+      { allowZero: false },
+    );
+  }
+  return material;
+}
+
 function normalizeSccpProofEnvelopeSummary(value, context) {
   const record = ensureRecord(value, context);
   return {
@@ -14331,6 +14386,13 @@ function normalizeSccpProofManifest(value, context) {
       record.submission_template,
       `${context}.submission_template`,
     ),
+    tairaXorBurnRecord:
+      record.taira_xor_burn_record == null && record.tairaXorBurnRecord == null
+        ? null
+        : normalizeSccpTairaXorBurnRecord(
+            record.taira_xor_burn_record ?? record.tairaXorBurnRecord,
+            `${context}.taira_xor_burn_record`,
+          ),
   };
 }
 

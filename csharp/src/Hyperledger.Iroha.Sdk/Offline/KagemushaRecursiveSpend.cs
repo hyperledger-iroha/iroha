@@ -40,12 +40,40 @@ public static class KagemushaRecursiveSpendNative
 
     public const uint RequiredBridgeAbiVersion = 6;
     private const string LibraryName = "connect_norito_bridge";
+    private const int ExpectedEmptyArchiveProbeErrorCode = -311;
 
     public static bool IsAvailable()
     {
-        return TryGetAbiVersion(out var version)
-            && version >= RequiredBridgeAbiVersion
-            && TryProbeLineageWitnessSymbols();
+        return IsAvailable(
+            () => TryGetAbiVersion(out var version) ? version : null,
+            TryProbeRequiredSymbols);
+    }
+
+    internal static bool IsAvailable(Func<uint?> abiVersionProbe, Func<bool> requiredSymbolsProbe)
+    {
+        try
+        {
+            var version = abiVersionProbe();
+            return version is not null
+                && version.Value >= RequiredBridgeAbiVersion
+                && requiredSymbolsProbe();
+        }
+        catch (DllNotFoundException)
+        {
+            return false;
+        }
+        catch (EntryPointNotFoundException)
+        {
+            return false;
+        }
+        catch (BadImageFormatException)
+        {
+            return false;
+        }
+        catch (InvalidOperationException)
+        {
+            return false;
+        }
     }
 
     public static KagemushaOfflineSpendMode PreferredMode()
@@ -241,6 +269,12 @@ public static class KagemushaRecursiveSpendNative
             throw new InvalidOperationException(
                 $"{LibraryName} ABI v{RequiredBridgeAbiVersion} is required for recursive Kagemusha, found v{version}.");
         }
+
+        if (!TryProbeRequiredSymbols())
+        {
+            throw new InvalidOperationException(
+                $"{LibraryName} ABI v{RequiredBridgeAbiVersion} recursive Kagemusha surface is incomplete.");
+        }
     }
 
     private static byte[] ReadBridgeOutput(string symbol, int code, IntPtr outPtr, UIntPtr outLen)
@@ -272,13 +306,19 @@ public static class KagemushaRecursiveSpendNative
         }
     }
 
-    private static bool TryProbeLineageWitnessSymbols()
+    private static bool TryProbeRequiredSymbols()
     {
         try
         {
-            Probe(NativeVerify);
-            Probe((NativeArchivePairCall)NativeLineageWitnessFromInitResult);
-            Probe((NativeArchiveTripleCall)NativeLineageWitnessAppendResult);
+            if (!Probe(NativeInit)
+                || !Probe(NativeAppend)
+                || !Probe(NativeVerify)
+                || !Probe((NativeArchivePairCall)NativeLineageWitnessFromInitResult)
+                || !Probe((NativeArchiveTripleCall)NativeLineageWitnessAppendResult)
+                || !Probe(NativeRedeem))
+            {
+                return false;
+            }
             NativeFree(IntPtr.Zero);
             return true;
         }
@@ -296,18 +336,13 @@ public static class KagemushaRecursiveSpendNative
         }
     }
 
-    private static void Probe(NativeArchiveCall nativeCall)
+    private static bool Probe(NativeArchiveCall nativeCall)
     {
-        var code = nativeCall(Array.Empty<byte>(), UIntPtr.Zero, out var outPtr, out _);
-        if (outPtr != IntPtr.Zero)
-        {
-            NativeFree(outPtr);
-        }
-
-        _ = code;
+        var code = nativeCall(Array.Empty<byte>(), UIntPtr.Zero, out var outPtr, out var outLen);
+        return IsExpectedEmptyArchiveProbeResult(code, outPtr, outLen);
     }
 
-    private static void Probe(NativeArchivePairCall nativeCall)
+    private static bool Probe(NativeArchivePairCall nativeCall)
     {
         var code = nativeCall(
             Array.Empty<byte>(),
@@ -315,16 +350,11 @@ public static class KagemushaRecursiveSpendNative
             Array.Empty<byte>(),
             UIntPtr.Zero,
             out var outPtr,
-            out _);
-        if (outPtr != IntPtr.Zero)
-        {
-            NativeFree(outPtr);
-        }
-
-        _ = code;
+            out var outLen);
+        return IsExpectedEmptyArchiveProbeResult(code, outPtr, outLen);
     }
 
-    private static void Probe(NativeArchiveTripleCall nativeCall)
+    private static bool Probe(NativeArchiveTripleCall nativeCall)
     {
         var code = nativeCall(
             Array.Empty<byte>(),
@@ -334,13 +364,19 @@ public static class KagemushaRecursiveSpendNative
             Array.Empty<byte>(),
             UIntPtr.Zero,
             out var outPtr,
-            out _);
+            out var outLen);
+        return IsExpectedEmptyArchiveProbeResult(code, outPtr, outLen);
+    }
+
+    internal static bool IsExpectedEmptyArchiveProbeResult(int code, IntPtr outPtr, UIntPtr outLen)
+    {
         if (outPtr != IntPtr.Zero)
         {
             NativeFree(outPtr);
+            return false;
         }
 
-        _ = code;
+        return code == ExpectedEmptyArchiveProbeErrorCode && outLen == UIntPtr.Zero;
     }
 
     private static bool TryGetAbiVersion(out uint version)

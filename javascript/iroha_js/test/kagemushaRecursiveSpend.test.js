@@ -31,6 +31,33 @@ function withNativeBinding(binding, fn) {
   }
 }
 
+function completeRecursiveSpendBinding(overrides = {}) {
+  return {
+    connectNoritoBridgeAbiVersion() {
+      return 6;
+    },
+    kagemushaRecursiveSpendInit() {
+      return Uint8Array.from([1]);
+    },
+    kagemushaRecursiveSpendAppend() {
+      return Uint8Array.from([2]);
+    },
+    kagemushaRecursiveSpendLineageWitnessFromInitResult() {
+      return Uint8Array.from([3]);
+    },
+    kagemushaRecursiveSpendLineageWitnessAppendResult() {
+      return Uint8Array.from([4]);
+    },
+    kagemushaRecursiveSpendVerify() {
+      return Uint8Array.from([5]);
+    },
+    kagemushaRecursiveSpendRedeem() {
+      return Uint8Array.from([6]);
+    },
+    ...overrides,
+  };
+}
+
 test("Kagemusha recursive spend helpers reject empty request archives before native calls", () => {
   withNativeBinding({}, () => {
     assert.throws(
@@ -210,6 +237,35 @@ test("Kagemusha recursive spend availability requires bridge ABI 6", () => {
       /Kagemusha recursive spend helper 'kagemushaRecursiveSpendInit' is unavailable/,
     );
   });
+});
+
+test("Kagemusha recursive spend availability rejects every partial ABI-6 surface", () => {
+  const requiredMethods = [
+    "kagemushaRecursiveSpendInit",
+    "kagemushaRecursiveSpendAppend",
+    "kagemushaRecursiveSpendLineageWitnessFromInitResult",
+    "kagemushaRecursiveSpendLineageWitnessAppendResult",
+    "kagemushaRecursiveSpendVerify",
+    "kagemushaRecursiveSpendRedeem",
+  ];
+
+  for (const missingMethod of requiredMethods) {
+    const binding = completeRecursiveSpendBinding();
+    delete binding[missingMethod];
+    withNativeBinding(binding, () => {
+      assert.equal(isKagemushaRecursiveSpendNativeAvailable(), false, missingMethod);
+      assert.equal(
+        preferredKagemushaOfflineSpendMode(),
+        KAGEMUSHA_OFFLINE_SPEND_MODE_CHECKED_PREFOLD_V1,
+        missingMethod,
+      );
+      assert.throws(
+        () => kagemushaRecursiveSpendVerify(Buffer.from([1])),
+        /Kagemusha recursive spend helper 'kagemushaRecursiveSpendVerify' is unavailable/,
+        missingMethod,
+      );
+    });
+  }
 });
 
 test("Kagemusha recursive spend helpers reject empty native outputs", () => {

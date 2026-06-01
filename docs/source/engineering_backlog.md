@@ -255,9 +255,22 @@ track detailed unfinished engineering work.
   mandatory before direct public-key pins can authorize a key. Expired signer
   leaves now fail before direct-pin acceptance as well as on trust-anchor
   chains, with coverage for both paths.
+- Completed 2026-06-01: added X.509 signer Extended Key Usage purpose binding
+  for XMLDSig signer material. Signer leaves without EKU remain acceptable, but
+  EKU-constrained leaves must allow `codeSigning`, `anyExtendedKeyUsage`, or
+  the document-signing OID before either direct public-key pins or trust-anchor
+  chains can authorize the XMLDSig key; incompatible server-auth-only signer
+  leaves fail closed on both paths.
+- Completed 2026-06-01: added X.509 Authority Key Identifier / Subject Key
+  Identifier binding for trust-anchor XMLDSig chains. When a subordinate
+  certificate presents an AKI key identifier and the issuer presents an SKI, the
+  identifiers must match before the trust-anchor path can authorize the leaf
+  key; issuer-name/signature-valid chains with mismatched key identifiers fail
+  closed.
 - Remaining ISO signature work is path-policy processing beyond policy OID
   presence/name constraints/path length/end-entity signer admission/
-  unknown-critical extension handling/signer validity enforcement.
+  unknown-critical extension handling/signer validity enforcement/signer EKU
+  purpose binding/AKI-SKI issuer binding.
 - Completed 2026-06-01: tightened ISO idempotency so replayed Business
   Application Header `BizMsgIdr` values are rejected across different durable
   message identifiers, including after durable-store reload. Live-profile
@@ -286,6 +299,16 @@ track detailed unfinished engineering work.
   whose namespace and `Document` child root are asserted against the checked-in
   XSD, with a root-drift negative case proving mismatched MDR roots fail before
   profile admission.
+- Completed 2026-06-01: kept backward-compatible `trusted_public_key_sha256`
+  and `trusted_certificate_sha256` profile aliases while normalizing them into
+  the stricter `signature_public_key_sha256_pins` and
+  `x509_trust_anchor_sha256_pins` verifier inputs.
+- Broaden XMLDSig/XAdES fixture coverage beyond pinned P-256 key/certificate
+  material, including full certificate-chain fixtures and official
+  rail/profile-specific trust-anchor packages.
+- Add official MDR/XSD fixture coverage per profile and broaden Torii tests for
+  profile mismatch, cancellation/return transitions, reference snapshot
+  checksum expectations, and replay by business message id/UETR.
 
 ## Soracles follow-ups
 

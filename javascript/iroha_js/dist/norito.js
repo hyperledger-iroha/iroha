@@ -52,7 +52,10 @@ const SUPPORTED_JS_CANONICALIZATION_INSTRUCTIONS = [
   "zk.*",
   "VerifyingKey.*",
   "Rwa.*",
+  "RecordSccpMessage",
 ];
+const RECORD_SCCP_MESSAGE_WIRE_ID =
+  "iroha_data_model::isi::bridge::RecordSccpMessage";
 const INSTRUCTION_BOX_SCHEMA_HASH = Buffer.from(
   "862a7d77075d4d23ff6c1261db027811",
   "hex",
@@ -80,6 +83,10 @@ const INNER_SCHEMA_HASH_BY_WIRE_ID = Object.freeze({
     "hex",
   ),
   "iroha.rwa": Buffer.from("4a07cd02fdfb5fe81043a1ba7bf72123", "hex"),
+  [RECORD_SCCP_MESSAGE_WIRE_ID]: Buffer.from(
+    "d89e5307d9c06f39f39086ffff9fc5d0",
+    "hex",
+  ),
   "iroha_data_model::isi::kaigi::CreateKaigi": Buffer.from(
     "24ee2ad1d6a56d3524ee2ad1d6a56d35",
     "hex",
@@ -403,6 +410,7 @@ function isNativeBindingUnsupportedInstruction(error) {
     error && typeof error.message === "string" ? error.message : String(error ?? "");
   return (
     message.includes("unsupported zk instruction variant") ||
+    message.includes("unsupported instruction") ||
     message.includes("unsupported instruction variant") ||
     message.includes("unknown instruction wire id") ||
     message.includes("unknown instruction schema") ||
@@ -1087,6 +1095,9 @@ function encodePureJsInstructionPayload(instruction) {
     const payload = encodeExecuteTriggerPayload(instruction.ExecuteTrigger);
     return encodeInstructionEnvelope("iroha.execute_trigger", payload);
   }
+  if (isPlainObject(instruction.RecordSccpMessage)) {
+    return encodeRecordSccpMessageInstruction(instruction.RecordSccpMessage);
+  }
   if (isPlainObject(instruction.Custom)) {
     return encodeInstructionEnvelope(
       "iroha.custom",
@@ -1189,7 +1200,7 @@ function encodePureJsInstructionPayload(instruction) {
 }
 
 function decodePureJsInstruction(buffer) {
-  const { wireId, payload } = decodeInstructionEnvelope(buffer);
+  const { wireId, payload, innerFlags } = decodeInstructionEnvelope(buffer);
   switch (wireId) {
     case "iroha.mint":
       return { Mint: decodeMintPayload(payload) };
@@ -1205,6 +1216,10 @@ function decodePureJsInstruction(buffer) {
       return { ExecuteTrigger: decodeExecuteTriggerPayload(payload) };
     case "iroha.rwa":
       return decodeRwaInstructionPayload(payload);
+    case RECORD_SCCP_MESSAGE_WIRE_ID:
+      return {
+        RecordSccpMessage: decodeRecordSccpMessagePayload(payload, innerFlags),
+      };
     case "iroha_data_model::isi::governance::ProposeDeployContract":
     case "iroha_data_model::isi::governance::CastZkBallot":
     case "iroha_data_model::isi::governance::CastPlainBallot":
@@ -1328,6 +1343,63 @@ function encodeEnumInstruction(wireId, variantIndex, bodyPayload) {
     encodeNoritoField(bodyPayload),
   ]);
   return encodeInstructionEnvelope(wireId, innerPayload);
+}
+
+function recordSccpPayloadBytes(input) {
+  const selected =
+    input.payload_bytes ??
+    input.payloadBytes ??
+    input.payload_bytes_hex ??
+    input.payloadBytesHex;
+  if (selected === undefined || selected === null) {
+    throw new TypeError("RecordSccpMessage.payload_bytes is required");
+  }
+  return Buffer.from(normalizeBytes(selected));
+}
+
+function encodeRecordSccpMessagePayload(input) {
+  const payloadBytes = recordSccpPayloadBytes(input);
+  const vecPayload = Buffer.concat([
+    u64ToLittleEndianBuffer(BigInt(payloadBytes.length)),
+    payloadBytes,
+  ]);
+  return encodeNoritoField(vecPayload);
+}
+
+function encodeRecordSccpMessageInstruction(input) {
+  const payload = withNoritoCompactLengths(() =>
+    encodeRecordSccpMessagePayload(input),
+  );
+  const outerPayload = encodeInstructionBoxPayload(
+    RECORD_SCCP_MESSAGE_WIRE_ID,
+    payload,
+    COMPACT_LEN_FLAG,
+    "RecordSccpMessage",
+    COMPACT_LEN_FLAG,
+  );
+  return frameNoritoPayload(
+    outerPayload,
+    INSTRUCTION_BOX_SCHEMA_HASH,
+    COMPACT_LEN_FLAG,
+  );
+}
+
+function decodeRecordSccpMessagePayload(payload, innerFlags) {
+  const reader = new BufferReader(payload, "RecordSccpMessage", innerFlags);
+  const field = readNoritoField(reader, "payload_bytes");
+  reader.assertEof();
+  if (field.length < 8) {
+    throw new Error("RecordSccpMessage.payload_bytes is too short");
+  }
+  const count = bigintToSafeNumber(
+    field.readBigUInt64LE(0),
+    "RecordSccpMessage.payload_bytes.length",
+  );
+  const payloadBytes = field.subarray(8);
+  if (payloadBytes.length !== count) {
+    throw new Error("RecordSccpMessage.payload_bytes length mismatch");
+  }
+  return { payload_bytes: Array.from(payloadBytes) };
 }
 
 function decodeMintPayload(payload) {

@@ -26,9 +26,14 @@ and completed history lives in [`status.md`](./status.md).
 - Keep hardening the ISO 20022 bridge after the new inbound lifecycle endpoints
   and durable outbox helpers for `pacs.002`, `pacs.004`, `camt.029`, `camt.056`,
   `sese.023`, `sese.024`, and `sese.025`; remaining TradFi work is tracked in
-  the engineering backlog for deeper XMLDSig/XAdES path-policy processing and
-  broader MDR/XSD validation breadth beyond the checked-in live-profile fixture
-  corridor.
+  the engineering backlog for deeper XMLDSig/XAdES path-policy processing
+  beyond the implemented trust-anchor, signer-admission, key-identifier, and
+  revocation corridor, XMLDSig/XAdES certificate-chain trust-anchor packages,
+  and broader MDR/XSD validation breadth beyond the checked-in live-profile
+  fixture corridor.
+  `require-verified` profiles now require profile-specific public-key or
+  X.509 trust-anchor DER-certificate SHA-256 pins before a P-256/SHA-256
+  enveloped signature can pass.
 - Keep UI-side SCCP proof-generation SDK inputs fail-closed for ambiguous
   aliases; the current TON shard-state source-state path rejects duplicate
   camelCase/snake_case names inside nested validator-set transition proofs,
@@ -41,23 +46,214 @@ and completed history lives in [`status.md`](./status.md).
 - Keep the web portal SCCP proof-generation surface aligned with package
   artifacts; release-readiness tests now require every JavaScript/web helper
   named in the public user-prover rows to exist in source, packaged `dist`,
-  package entrypoints, and TypeScript declarations, and strict release evidence
-  plus published release-bundle verification must include the package-root SCCP
-  export test transcript.
+  package entrypoints, and TypeScript declarations. The JavaScript
+  Ethereum-mainnet facade is now exported from the package root, rejects
+  non-mainnet `eth_chainId` values before treating a provider as ready, and
+  keeps the easy outbound path ETH-only. Swift, Kotlin/JVM, Java Android, and
+  .NET now expose the same easy Ethereum-mainnet inbound method shape with
+  app-supplied execution providers and fail-closed receipt/block drift checks
+  before native prover or submitter callbacks run; those native Ethereum
+  facades also accept app-supplied consensus/finality providers so collected
+  mainnet receipts can attach beacon-finality evidence before local source
+  proving, and browser/native collectors now reject beacon-finality evidence
+  whose execution block number, execution block hash, or execution receipts root
+  does not match the validated execution receipt/block. The JavaScript
+  Ethereum `proveInboundToSora` path now runs that collection and binding step
+  before invoking app-owned prover callbacks, including inputs that already
+  carry a precomputed `receiptProofHash`, and JavaScript/native Ethereum
+  inbound proving rejects missing beacon finality before app-owned prover
+  callbacks can run. Python now matches that Ethereum-mainnet inbound shape
+  with execution/consensus provider injection, receipt/block collection,
+  beacon-finality binding, non-zero proof-byte copying, and a prove-time
+  missing-finality guard. Swift, Kotlin/JVM, and Java Android now accept per-call
+  execution/consensus providers on `proveInboundToSora`, matching the
+  JavaScript/.NET prove-time collection path. The JavaScript package declarations now expose typed
+  Ethereum beacon-finality evidence and consensus-provider input shapes so
+  browser apps see the required execution block number/hash and receipts-root
+  fields before runtime, and Swift, Kotlin/JVM, Java Android, and .NET now
+  expose typed beacon-finality helper records/builders that produce the same
+  canonical native map/dictionary shape for provider-collected evidence, plus
+  typed inbound-evidence construction helpers for feeding that finality object
+  into ETH -> SORA source proving without manual map copying. The
+  release-readiness report and strict bundle verifier now require those native
+  helper symbols in the `eth,bsc` SDK rows. The JavaScript package-dist tests
+  now also guard the browser Ethereum and BSC mainnet SCCP artifacts against
+  `WebAssembly`, `wasm`, `snarkjs`, remote prover, prover URL, and prover
+  endpoint dependency markers, and release-bundle verification requires both
+  no-WASM guard test names plus the BSC Parlia declaration test name in the JS
+  phase transcript. Release-readiness tests
+  also scan the Ethereum and BSC JavaScript, Python, Swift, Kotlin/JVM, Java
+  Android, and .NET facade sources for missing files or forbidden
+  WASM/snarkjs/remote-prover dependency markers, keeping those mainnet SDK
+  paths native or local-prover owned. The Python, Swift,
+  Kotlin/JVM, Java Android, and JavaScript Ethereum-mainnet calldata helpers
+  now also require wrapped proof results carrying the chain-id-1 destination
+  binding before verifier calldata is emitted. Python, Swift, Kotlin/JVM, Java Android, and
+  .NET now expose matching Ethereum-mainnet guards/facades over their native
+  EVM proof surfaces; the .NET guard rejects uppercase or padded network-id
+  strings before treating destination material as canonical, the C# Ethereum
+  facade now exposes native outbound proof-request/prove/calldata/submit hooks
+  with BN254 tuple and public-input binding checks before calldata emission,
+  Swift/Kotlin/JVM/Java Android Ethereum facades now expose app-owned outbound
+  submit hooks after calldata validation, Python now exposes the same
+  app-owned Ethereum outbound submit hook, and the release inventories require
+  the JavaScript/Python Ethereum outbound methods by name. The JavaScript,
+  Python, Swift, Kotlin/JVM, Java Android, and .NET BSC facades now also expose or
+  require app-owned BSC outbound submit hooks after BSC calldata validation, and
+  the release inventories require those BSC calldata/submit symbols by SDK. The
+  C# facade unit suite now validates the ETH/BSC bindings on .NET 8 without
+  relying on newer try-style hex conversion APIs, while Rust, JavaScript,
+  Python, Swift, Kotlin/JVM, and Java Android ETH/BSC receipt-proof transcript
+  builders now reject zero source-event digests before deriving source witness
+  hashes. The
+  same zero-digest guard now applies to TON shard-proof and Substrate-family
+  storage-proof transcripts across Rust and the web/Python/native SDK surfaces.
+  Strict release evidence plus published release-bundle verification must
+  include the package-root SCCP export test transcript, the JavaScript
+  Ethereum/BSC mainnet facade transcripts, and the BSC-mainnet
+  facade/prover/submission helpers plus the concrete BSC inbound
+  collect/prove/submit facade methods across JavaScript, Python, Swift,
+  Kotlin/JVM, Java Android, and .NET, plus BSC outbound calldata/submit facade
+  methods in the `eth,bsc` row for JavaScript, Python, Swift, Kotlin/JVM, Java
+  Android, and .NET, plus the concrete Python
+  Ethereum inbound collect/prove/submit facade methods, including the Ethereum
+  beacon-finality consensus-provider hook symbols, native BSC Parlia
+  consensus-provider hook symbols, and typed native BSC Parlia finality
+  helper records/builders on the SDKs that collect finality evidence,
+  and the JavaScript/Python/Swift BSC prove-time guards that require Parlia
+  finality before app-owned source prover callbacks run. Swift now also
+  supports a BSC consensus-provider collection hook and binds supplied or
+  collected Parlia finality to the collected receipt block number, block hash,
+  and receipts root, while the JavaScript declarations expose the BSC Parlia
+  finality evidence and consensus-provider input shapes used by that runtime
+  path.
+  The strict bundle
+  verifier's canonical Markdown renderer now emits the `.NET` helper set for
+  that row, and Python hook validation requires the exact app-owned `prove`
+  callback rather than accepting method names that merely contain the word.
+- Keep Ethereum mainnet source-adapter transition chains period-contiguous:
+  sync-committee updates now advance exactly one mainnet period at a time, using
+  the consensus `32 * 256` slot period geometry, so skipped-period transition
+  evidence cannot satisfy the ETH source proof verifier.
+- Keep EVM route-canary live evidence bound to the receipt block: the live
+  helper now checks receipt block number/hash against `eth_getBlockByNumber`,
+  requires a non-zero block `receiptsRoot`, rejects duplicate matching
+  `MessageProofAccepted` events at the supplied log index, and refuses imported
+  full-TOML summaries whose route-canary block verification metadata was
+  forged. Strict release-bundle verification now also owns regressions for
+  positive receipt block numbers, non-zero receipt block hashes, non-zero block
+  `receiptsRoot` values, receipt-block hash-role separation, and direct helper
+  parity with the runtime's finality-height hash-role rejection.
+- Keep TRON route-canary helper and runtime transcript policy aligned: the
+  source bridge evidence helper, all-lanes preflight, release-bundle verifier,
+  and Rust runtime now all reject finality-height replay across TRON v3
+  route-canary hash roles before full rollout TOML or launch readiness can pass.
+- Keep SCCP linked-prover callback snapshots immutable across production
+  destinations; JavaScript, Python, Swift, Kotlin/JVM, and Java Android
+  callback regressions now assert frozen request metadata where exposed and
+  copy-backed bundle and source-proof bytes across EVM-family, TRON, TON, and
+  Substrate-family proof engines, including the Java Android Ethereum/BSC
+  mainnet facade witness-provider path, before app-linked callbacks return
+  proof bytes.
+- Keep TAIRA-to-TRON XOR source records economically bound at consensus
+  admission; `taira_tron_xor` record overlays must include same-overlay
+  whole-unit XOR burns by the payload sender, with the TAIRA burn-record
+  contract and deployment evidence flow used for activation. Live route
+  activation still needs the browser-safe TRON prover bundle, deployed TAIRA
+  settlement contract evidence, and bidirectional smoke transfers.
+- Keep public SCCP phase evidence bound to executed production-corridor
+  commands; release-readiness and release-bundle checks now require expected
+  phase command fragments to appear on traced `+ ...` command lines inside the
+  claimed phase block, not merely in incidental test output. The public bundle
+  verifier also rejects prefix-alias phase markers, completion sentinels copied
+  from a different phase block, and success markers that appear only on traced
+  command lines instead of phase output. The verifier owns its required phase
+  and phase transcript inventories independently of the report generator, with
+  parity tests preventing drift.
+- Keep core-admission SCCP tests aligned with the first-release BSC-mainnet
+  lane launch policy; non-BSC source proofs may recognize configured
+  source-adapter evidence but must stop at lane launch before route-canary,
+  route-allowlist, or destination-rollout drift checks.
+- Keep BSC mainnet inbound admission on an explicit local-admission proof path:
+  core now has a Parlia receipt/validator fixture proving configured source
+  verifier material plus source-adapter deployment binding, including replayed
+  deployment-receipt rejection before public-input extraction, and the positive
+  BSC -> SORA `SubmitBridgeProof` path now uses the local-admission package
+  instead of outbound EVM Groth16 destination packaging. The remaining release
+  work is broader corridor evidence after stale Ethereum-lane validation jobs
+  are no longer racing the active BSC policy files.
 - Keep Python SCCP package-root exports aligned with the public user-prover
   rows; release-readiness tests now import `iroha_torii_client` and require
   every non-callback Python helper/class to be exposed through `__all__`.
+- Keep Python UI witness-provider inputs isolated from app-owned mutable
+  objects; the SDK snapshot path now clones accepted non-string sequence inputs
+  before user-provided witness resolvers run, so portal/mobile witness
+  preparation cannot mutate the original proof request that the UI displays.
 - Keep public SCCP user-prover helper rows one-to-one with real UI hooks;
   release-readiness tests and the release-bundle verifier now reject duplicate
   helper symbols in default and per-SDK rows so repeated names cannot stand in
-  for omitted proof-generation entrypoints.
+  for omitted proof-generation entrypoints. The public bundle verifier owns the
+  SDK phase inventory independently of the report generator, with parity tests
+  preventing drift.
 - Keep public SCCP user-prover rows tied to UI-owned proof hooks, not only
   request builders; readiness evidence and strict bundle verification now name
   the web/Python witness and prove callbacks, Swift witness/prove typealiases,
   Kotlin proof engines, Java Android nested proof engines, and Solana/TON
-  source-state audit engines.
+  source-state audit engines. The public bundle verifier now also owns the
+  lane/SDK helper inventory for those proof-generation and on-chain submission
+  entrypoints, plus the exact expected row construction and submission text, so
+  weakening the report generator cannot remove cryptographic prover helpers or
+  define a shorter portal/mobile table as canonical for published rows.
+- Keep public SCCP user-prover rows gated by the real release phases; BSC
+  mainnet source proofs now use lane-local configured readiness instead of the
+  global all-lanes gate, so BSC can open with complete mainnet source,
+  destination, route allowlist, and canary evidence while other advertised
+  lanes remain fail-closed until their own launch policy opens. Strict
+  bundle verification now rejects duplicate, unknown, or missing required
+  phases, requires every SDK plus core-admission on each row, and keeps
+  EVM/TRON proof backends tied to contract-smoke evidence.
+- Keep the public SCCP user-prover lane inventory fixed to production
+  lane/backend pairs; strict bundle verification now rejects duplicate,
+  unknown, or missing rows and backend-id drift for EVM/BSC, TRON, Solana, TON,
+  and Substrate submission surfaces.
+- Keep the public SCCP cryptographic evidence inventory fixed to production
+  domains; strict bundle verification now rejects duplicate, unknown, or
+  missing domain rows plus chain-label drift before comparing rows with
+  embedded all-lanes evidence.
+- Keep public SCCP cryptographic evidence rows tied to domain-specific route
+  canary and source-gate policy; strict bundle verification now rejects
+  incorrect canary sources, impossible source-gate requirements, and missing or
+  unexpected named source-gate audit hashes.
+- Keep public SCCP readiness Markdown verifier-owned and reviewer-complete;
+  strict bundle verification now owns the canonical Markdown renderer, parses
+  the Markdown sections independently, and requires copied evidence hashes,
+  corridor artifacts, checklist statuses, cryptographic evidence rows,
+  portal/mobile helper symbols, lane readiness rows, blockers, and
+  release-evidence handoff text to appear in the public report.
+- Keep public SCCP bundle verification free of generator backdoors for owned
+  release artifacts; the verifier no longer exposes report/bundle module hooks
+  for canonical Markdown, release-note attachments, copied-evidence summary
+  recomputation, corridor inventories, crypto rows, or user-prover surfaces.
+- Keep public SCCP release bundles rooted in immutable extracted directories;
+  strict bundle verification now rejects a symlinked bundle root or a
+  non-directory verifier input before reading the manifest.
+- Keep public SCCP release manifests as verifier roots, not published artifacts;
+  strict bundle verification now rejects any `manifest.json` row inside the
+  manifest artifact table.
+- Keep public SCCP release bundles free of unreviewed filesystem entries; strict
+  bundle verification now rejects empty or otherwise unmanifested directories
+  instead of comparing only files.
+- Keep public SCCP release artifact paths printable and reviewer-safe; the
+  readiness report, bundle builder, and strict verifier now reject ASCII control
+  characters in manifest, report, and extracted bundle entry paths before they
+  can reach Markdown tables or diagnostics.
+- Keep public SCCP release evidence UTF-8 fail-closed; strict verification now
+  reports non-UTF-8 manifest JSON, readiness JSON, all-lanes summary JSON,
+  readiness Markdown, and release-note attachments as structured bundle
+  failures instead of raising out of the verifier.
 - Keep extending the Sumeragi formal corridor with independent TLC
-  cross-checks; the current local TLC slice covers frontier recovery,
+  cross-checks; the current local TLC slice covers fast canonical frontier
+  recovery, small exhaustive frontier recovery,
   validation redrive labels, raw QC signer-bitmap population counting, and
   signer-index normalization, precommit vote-progress counting, commit-QC
   signer quorum gating, commit-QC cache/history lookup, precommit signer record
@@ -211,11 +407,12 @@ and completed history lives in [`status.md`](./status.md).
   `--source-bridge-runtime-bytecode-hex` or
   `--source-bridge-runtime-bytecode-file` so the Keccak-256 runtime code hash is
   replayable from operator evidence.
-- EVM route-canary evidence now uses a v2 transcript aligned with the TRON
-  hardening model: ETH/BSC canary hashes bind submitted calldata SHA-256,
-  decoded payload/finality public inputs, proof version/source domain, target
-  domain, and consumed-message state before all-lanes preflight or Rust
-  `iroha_sccp` route admission can mark route evidence launch-ready. TRON live
+- EVM route-canary evidence now uses a v3 transcript aligned with the TRON
+  hardening model: ETH/BSC canary hashes bind the receipt block
+  number/hash/`receiptsRoot`, submitted calldata SHA-256, decoded
+  payload/finality public inputs, proof version/source domain, target domain,
+  and consumed-message state before all-lanes preflight or Rust `iroha_sccp`
+  route admission can mark route evidence launch-ready. TRON live
   evidence also requires source-event and
   route-canary transaction readback to contain exactly one matching governed log
   and rejects explicit `logIndex`/`log_index` metadata that disagrees with the
@@ -241,14 +438,14 @@ and completed history lives in [`status.md`](./status.md).
   non-TRON lanes must keep those fields null, so release notes cannot publish a
   forged or lane-shifted canary height after refreshing attachment hashes.
   Source-event block transactions apply the same alias binding before deriving
-  java-tron transaction Merkle leaves for source proofs. The EVM/BSC v2
-  route-canary fields are also first-class config and ZK policy-hash material,
-  keeping Core/Torii
+  java-tron transaction Merkle leaves for source proofs. The EVM/BSC v3
+  route-canary fields, including the receipt block number/hash/`receiptsRoot`,
+  are also first-class config and ZK policy-hash material, keeping Core/Torii
   configured admission bound to the same calldata, payload, finality, and proof
   transcript that `iroha_sccp` validates. The full SCCP production corridor
   passes end to end with Rust SCCP verification, operator evidence scripts,
-  JS/Python/Swift/Kotlin/Java Android SDK prover surfaces, EVM/TRON contract
-  smoke, and core bridge-proof admission.
+  JS/Python/Swift/Kotlin/Java Android/.NET SDK prover surfaces, EVM/TRON
+  contract smoke, and core bridge-proof admission.
 - Substrate route-canary evidence now publishes the finalized runtime code hash
   alongside the finalized head and runtime versions in public readiness JSON;
   release-bundle verification rejects zero or governed-hash-reused
@@ -256,8 +453,9 @@ and completed history lives in [`status.md`](./status.md).
 - The focused SCCP production corridor is now captured by
   `scripts/check_sccp_production_corridor.sh`, with phase selection for the
   Rust verifier crate, operator evidence scripts, web/Python/Swift/Kotlin/Java
-  Android SDK proof generators, the EVM/TRON Groth16 contract smoke, and core
-  bridge-proof admission target. The Java Android phase now matches the current
+  Android SDK proof generators, native .NET/C# ETH/BSC facade tests, the
+  EVM/TRON Groth16 contract smoke, and core bridge-proof admission target. The
+  Java Android phase now matches the current
   test surface by running the
   main-method SCCP classes through `GradleHarnessTests` and the Solana prover
   through its direct JUnit selector, with the evidence-scripts phase also
@@ -326,7 +524,8 @@ and completed history lives in [`status.md`](./status.md).
   release packaging instead of only during later review. The builder now refuses
   dangerous `--force` output targets and refuses to replace a directory that
   contains the input TOML or phase transcript sources, preventing evidence loss
-  during release packaging. Reviewers can run
+  during release packaging. Successful production-ready bundle generation now
+  prints the verified `manifest_sha256` root directly, and reviewers can run
   `scripts/sccp_verify_release_bundle.py` against the published bundle to
   recompute every attachment hash, emit the verified `manifest_sha256` root for
   archival release review, and catch extra manifest artifacts that are not
@@ -379,17 +578,19 @@ and completed history lives in [`status.md`](./status.md).
   or report artifact fields, malformed artifact byte/hash JSON types, malformed
   readiness/checklist boolean JSON types, unknown or blocked corridor root fields, unknown
   or malformed release-checklist fields, unknown or malformed portal/mobile
-  submission-surface fields, report/summary drift from recomputing the copied
-  evidence TOML, Markdown readiness-report drift from the JSON report,
+  submission-surface fields, report/summary drift from verifier-owned direct
+  recomputation of the copied evidence TOML, Markdown readiness-report drift
+  from the JSON report,
   release-checklist drift from the embedded all-lanes evidence, release-notes
-  attachment drift from the canonical manifest/report table,
+  attachment drift from the verifier-owned canonical manifest/report table,
   non-canonical public JSON root serialization or duplicate JSON root keys,
   manifest artifact-order drift from the canonical release-bundle order,
   user-prover submission-surface drift from the corridor phase results, and
-  missing, malformed, unbound, or extra-field per-lane
+  missing, duplicate, unknown, malformed, unbound, or extra-field per-lane
   cryptographic evidence metadata. The verifier also requires those public
-  cryptographic rows to keep exact domain/chain types and canonical bytes32
-  hash text before recomputing the public
+  cryptographic rows to cover every required production domain exactly once,
+  keep exact domain/chain types and canonical bytes32 hash text before
+  recomputing the public
   cryptographic evidence table from the embedded lane evidence and emits
   field-specific failures for any source-material, source-deployment,
   destination-binding, source-gate required flag/hash/audit hashes,
@@ -1043,18 +1244,20 @@ and completed history lives in [`status.md`](./status.md).
   no unrelated key TLVs. The guard reads the cheap Halo2/Pasta verifier-key
   header and requires the `H2VK` domain degree to match the bounded `IPAK`, so
   relabelled semantic keys reject before the heavy one-hop verifier-slice
-  circuit is materialized. It also rejects zero verifier-record commitments
-  explicitly and pins the lineage proof envelope verifier-key hash to the
-  verifier-record commitment. That
+  circuit is materialized; it also requires the payload to contain the declared
+  fixed-column commitments so truncated processed verifier keys fail during
+  cheap preflight. It also rejects zero verifier-record commitments explicitly
+  and pins the lineage proof envelope verifier-key hash to the verifier-record
+  commitment. That
   preverification remains admission-neutral: a well-formed reserved lineage
   profile can pass registry and envelope checks, but only the chain-admission
   guard emits the explicit unwired-verifier error after final redeem
   public-input validation and before proof verification, nullifier consumption,
   or minting. Missing `IPAK`, missing `H2VK`, wrong IPA degree, duplicate
   verifier-key `CID1` tags, unexpected verifier-key TLVs, malformed trailing
-  TLV material, and legacy semantic inner proof envelopes now reject as
-  malformed instead of allowing last-tag-wins, prefix-only circuit identity, or
-  cross-profile proof payload replay.
+  TLV material, truncated fixed-column commitments, and legacy semantic inner
+  proof envelopes now reject as malformed instead of allowing last-tag-wins,
+  prefix-only circuit identity, or cross-profile proof payload replay.
   The recursive spend accumulator, append proof-artifact digest, and bridge
   redeem request validation now understand both semantic v1 and reserved
   lineage proof ids, so lineage-profile states can be represented in the
@@ -1078,13 +1281,26 @@ and completed history lives in [`status.md`](./status.md).
   bytes.
   Rust data-model helpers and all SDK wrappers now assemble the separate
   record-backed redeem witness alongside recursive spend `init` and `append`:
-  they validate one-hop fragments, exact verifier-record sets, Pallas envelope
-  archive counts, carry previous recursive proofs forward, merge the archive,
-  and reject verifier record conflicts before the witness is attached to
-  redeem. Recursive spend availability probes now require the lineage-witness
-  helper symbols as part of the ABI-6 surface so old native libraries cannot
-  claim `recursive_spend_v1` support without the witness path needed for safe
-  redemption. Swift exposes the witness helpers as
+  they validate the recursive bundle public-input binding, one-hop fragments,
+  exact verifier-record sets, Pallas envelope archive decoding/counts, carry
+  ordered semantic previous recursive proofs forward, merge the archive, and
+  reject verifier record conflicts before the witness is attached to redeem.
+  Direct redeem-request validation applies the same archive decode/count guard
+  and previous-proof semantic/hop-order guard so malformed, count-mismatched,
+  reserved-lineage, scalar-spliced, or out-of-order lineage witnesses fail at
+  the data-model boundary. Core record-backed replay also preflights previous
+  proof backend/profile/hash/scalar/hop-order invariants before reconstructing
+  Pallas hop evidence. Recursive spend availability
+  probes now require the complete ABI-6 native surface - init, append, both
+  lineage-witness helpers, verify, and redeem - so old native libraries cannot claim
+  `recursive_spend_v1` support without the witness path needed for safe
+  redemption. Python direct helper calls and the optional C# P/Invoke wrapper
+  now apply the same complete-surface guard before producing recursive spend
+  output, and Python/Kotlin/JVM/Java Android availability probes now fail closed
+  on malformed native loading or ABI-version probes before symbol probing.
+  Kotlin/JVM, Java Android, and C# also reject a native probe that accepts empty
+  archives instead of producing the expected Kagemusha empty-archive rejection.
+  Swift exposes the witness helpers as
   `lineageWitnessFromInitResult` and `lineageWitnessAppendResult`; Kotlin/JVM,
   Java Android, JavaScript/Node, Python, and C# expose matching raw-archive
   wrappers on their native recursive-spend surfaces.
@@ -1182,8 +1398,8 @@ and completed history lives in [`status.md`](./status.md).
 - Continue dependency, documentation, and release hygiene work required by LF
   Decentralized Trust project expectations.
 
-**Next checkpoints:** governed deployment evidence, live canary evidence, and
-attaching the generated SCCP release-readiness report to public release notes.
+**Next checkpoints:** governed deployment evidence and live canary evidence for
+operator-provided rollout bundles.
 
 ## SORA Nexus and Taira
 
@@ -1632,11 +1848,20 @@ attaching the generated SCCP release-readiness report to public release notes.
   keys must be exact non-empty ASCII tokens without whitespace or control
   characters; file-backed keys may only carry terminal newlines.
   The all-lanes activation preflight now also rejects padded fixed-width
-  structured hashes, hash comments, route allowlist hashes, and route canary
-  hashes plus duplicate known metadata comments before final production
-  readiness can be reported; chain-specific metadata comment aliases that map
-  to the same internal field also fail instead of overwriting earlier reviewed
-  values. When both real
+  structured hashes, hash comments, route allowlist hashes, route canary
+  hashes, and non-canonical uppercase EVM runtime-bytecode preimages plus
+  duplicate known metadata comments before final production readiness can be
+  reported. The direct ETH/BSC source and EVM destination offline renderers
+  now apply the same lowercase `0x`/lowercase-hex policy before emitting
+  production TOML, and the EVM-family source live collector applies that rule
+  to operator-supplied hash pins before rendering source TOML, so CLI input
+  cannot be normalized after review; chain-specific metadata comment aliases
+  that map to the same internal field also fail instead of overwriting earlier
+  reviewed values. Strict release-bundle verification also keeps complete
+  cryptographic-evidence row checks scoped to the active BSC launch lane
+  while retaining future-lane rows as diagnostic evidence until their launch
+  policies open. When
+  both real
   `route_canary_*` config fields and imported canary metadata comments are
   present, the all-lanes gate now requires exact agreement so a direct
   `passed` value cannot override contradictory imported evidence.
@@ -1881,14 +2106,16 @@ attaching the generated SCCP release-readiness report to public release notes.
   destination hash roles. The
   EVM-family operator helpers and all-lanes preflight now require route canary
   evidence to be derived from a successful `MessageProofAccepted` transaction:
-  the receipt log, submitted `submitSccpMessageProof` calldata, 384-byte proof
-  tuple header, deployed binding/backend/family/network tuple, and
-  `usedMessageProofs(messageId)` state must all agree before the ETH/BSC route
-  canary hash is accepted. The canonical EVM canary transcript also commits
-  proof ABI version `1`, the SORA proof source-domain word, and the ETH/BSC
-  target-domain word before the commitment root, preventing proof-version or
-  EVM-family lane replay. The direct renderer, public hash helper, and
-  all-lanes preflight now also reject reuse across distinct EVM canary
+  the receipt log, receipt block number/hash/`receiptsRoot`, submitted
+  `submitSccpMessageProof` calldata, 384-byte proof tuple header, deployed
+  binding/backend/family/network tuple, and `usedMessageProofs(messageId)`
+  state must all agree before the ETH/BSC route canary hash is accepted. The
+  canonical EVM canary transcript now uses the `v3` evidence label and commits
+  proof ABI version `1`, the SORA proof source-domain word, the ETH/BSC
+  target-domain word, and the receipt block tuple, preventing proof-version,
+  stale-receipt-block, or EVM-family lane replay. The direct renderer, public
+  hash helper, runtime config gate, and all-lanes preflight now also reject
+  reuse across distinct EVM canary
   transcript hash roles, including transaction hash, calldata, message id,
   payload, statement, commitment, and finality block fields.
   Rust/Core/Torii configured readiness now carries the
@@ -2045,15 +2272,12 @@ attaching the generated SCCP release-readiness report to public release notes.
   default
   production path remains closed on the placeholder catalog when no complete
   configured lane material is present, and configured bridge-proof admission
-  now enforces the all-lanes-at-once launch policy across every advertised
-  remote SCCP domain. The same all-lanes gate now also runs when Torii receives
-  an explicit EVM/TRON deployment destination binding, so a single configured
-  outgoing destination rollout cannot expose production artifact/job/submission
-  packaging while any advertised remote lane is still missing governed evidence.
-  A complete source material, source-adapter deployment, destination rollout,
-  and route allowlist for one lane cannot open inbound production admission
-  while any other advertised lane is still missing production-ready governed
-  evidence. TRON source material and deployment
+  now uses BSC mainnet as the first production lane. BSC can open with complete
+  source material, source-adapter deployment, destination rollout, route
+  allowlist, and route-canary evidence while other advertised remote SCCP
+  domains remain behind their future lane policies. The all-lanes gate remains
+  available as the diagnostic release check when operators need to prove every
+  advertised lane at once. TRON source material and deployment
   records must additionally carry the same non-zero source bridge network id,
   governed owner address, and config hash derived from the deployed bridge
   address, network id, source/target domains, and owner, so a reused emitter
@@ -3298,7 +3522,35 @@ attaching the generated SCCP release-readiness report to public release notes.
   contract identities to the exact mainnet anchor id. The EVM destination
   evidence helper now renders exact ETH/BSC destination rollout and route
   allowlist records while recomputing the wrapper-bound destination binding
-  hash, closing the hand-assembled EVM destination rollout tooling gap. Route
+  hash, closing the hand-assembled EVM destination rollout tooling gap. The
+  BSC mainnet SDK facades across Rust, JavaScript, Python, Swift, Kotlin/JVM,
+  Java Android, and .NET now also pin chain id `56` and the governed deployment
+  binding before request, result, proof-job, or submission packaging. Python
+  now exposes the easy `BscMainnetSccp` outbound and inbound facade directly,
+  including BSC receipt/block collection, Parlia finality preservation,
+  native-prover execution, copied proof-byte submission, and
+  `BscMainnetSccpProver` as a compatibility wrapper for older prover-only
+  callers. The
+  JavaScript package-root `BscMainnetSccp` facade now additionally validates
+  canonical `eth_chainId == 0x38`, rejects failed or drifted BSC receipt/block
+  evidence before app-linked proving, and builds BSC verifier calldata only
+  from wrapped proof results carrying the governed destination binding. Its
+  inbound prove/submit helpers now reject empty/all-zero proof bytes and copy
+  the accepted bytes before calling the app-linked Iroha submitter. Swift,
+  Kotlin/JVM, Java Android, and .NET native `BscMainnetSccp` facades now mirror
+  that receipt hardening, collect or validate app-supplied Parlia finality, bind
+  it to the collected execution block number/hash and receipts root, and reject
+  missing finality before source proving. The browser and native ETH/BSC
+  inbound facades also require
+  positive canonical `receipt.blockNumber` and `block.number` values whenever
+  receipt/block evidence is collected, closing the last optional block-number
+  ambiguity in the easy SDK path. The `eth,bsc` public release row now also
+  requires the `dotnet-sdk` corridor phase, which runs the native C# Ethereum
+  and BSC facade tests before release evidence can pass. The .NET SDK also
+  exposes matching BSC-mainnet chain-id, network-id, route, native inbound
+  prove/submit, and destination-binding hash guards;
+  the remaining BSC destination work is live deployment evidence rather than
+  hand-rolled SDK chain-id guards. Route
   allowlist readiness is now profile-bound as well: every advertised counterparty requires the exact
   governed route allowlist id plus a non-zero policy hash, while missing,
   generic, malformed, or cross-domain allowlist material remains rejected.
@@ -3692,8 +3944,12 @@ and render all-lanes-ready rollout TOML, then finish
 recursive verifier deployment
 evidence for the current Parlia-header plus ValidatorSet-storage transition
 chain. The EVM live/source-live helpers now reject padded CLI chain ids,
-component hashes, and JSON-RPC quantity/hex results before rendering receipt,
-runtime-bytecode, source, or destination metadata. The EVM live helper's
+component hashes, JSON-RPC quantity/hex results, deployment receipt block
+hash/number drift, missing or zero deployment block `receiptsRoot`, and
+receipt-block source bytecode drift before rendering receipt, runtime-bytecode,
+source, or destination metadata; the source-live collector also rejects
+JSON-RPC success envelopes with a missing/padded protocol version or mismatched
+response id. The EVM live helper's
 rendered TOML now preserves the observed RPC chain
 id and bridge wrapper runtime code hash as metadata comments, and the all-lanes
 preflight rejects ETH/BSC source material and destination rollout records that
@@ -4740,8 +4996,35 @@ validation.
 - Keep permissioned and NPoS execution on one state machine; validator-set
   source and strict quorum math are the only mode differences.
 - Keep the Sumeragi formal coverage guard in CI so runner modes, CI commands,
-  README commands, and referenced TLA+/CFG files stay synchronized as new gates
-  land.
+  workflow entrypoints, Apalache version pins, README commands,
+  conflict-marker-free formal wiring and TLA+/CFG artifact files,
+  well-formed runner case blocks,
+  length-table-derived bidirectional documented TLC fast-mode coverage,
+  duplicate-free and shadow-free
+  runner case labels, duplicate-free Apalache command lists including
+  scheduled/manual workflow commands, exact Apalache runner-mode CI reachability,
+  unused runner-branch rejection, documented mutation-mode expected-failure
+  coverage, TLC mutation-mode expected-failure runner routing, Apalache/TLC
+  mutation CFG equivalence, expected-failure counterexample semantics,
+  baseline expected-failure marker rejection, well-formed single-assignment
+  runner proof inputs and scalar runner assignments, flat direct-child formal
+  path and suffix containment, runner command shape, runner invocation
+  proof-input binding, TLC constraint operator binding,
+  non-type-only CFG checks, top-level-only CFG behavior/check detection,
+  TLC module identifier and module-file reachability,
+  Apalache/TLC TLA module identity, TLA dependency resolution, Apalache length
+  declarations, well-formed purpose-bearing duplicate-free README length rows,
+  and README length table agreement, single top-of-file TLA module-header
+  consistency, single terminating TLA `====` markers,
+  duplicate-free TLA constant and top-level operator declarations, TLA
+  variable/`vars` tuple consistency, CFG/module
+  filename ownership, supported CFG directive validation, CFG behavior/check
+  declarations, static CFG operator-name syntax, CFG-referenced top-level
+  behavior/check operator definitions, complete CFG constant bindings,
+  fail-closed CFG constant block binding shape, duplicate-free CFG
+  `CHECK_DEADLOCK` directives, duplicate-free CFG constant/check targets,
+  complete TLA+/CFG inventory reachability, and referenced TLA+/CFG files stay
+  synchronized as new gates land.
 - Use measured matrix runs, not speculative settings, before accepting higher
   throughput targets.
 - Keep hardware acceleration paths feature-gated with deterministic scalar
@@ -5160,18 +5443,18 @@ gate (`worker-tick-gap`),
 TLC-cross-checked proposal parent resolution gate,
 TLC-cross-checked highest-QC dependency deferral gate,
 TLC-cross-checked precommit-QC view-change selector gate,
-TLC-cross-checked commit-evidence replay gate, TLC-cross-checked block-sync recovery gate, direct certified-block fetch gate,
-TLC-cross-checked missing-block ingress fetch gate, TLC-cross-checked payload progress availability gate, TLC-cross-checked highest-QC fetch body-known gate, TLC-cross-checked local payload availability gate, TLC-cross-checked local block-known routing gate, TLC-cross-checked lock-safety block-known routing gate, TLC-cross-checked missing locked-QC payload recovery gate (`missing-locked-qc-recovery`), TLC-cross-checked local signed-block materialization gate, TLC-cross-checked authoritative payload progress gate, TLC-cross-checked hash-level authoritative block payload gate, TLC-cross-checked pending-block active-for-tip gate, TLC-cross-checked pending fast-unblock decision gate, TLC-cross-checked blocking pending-block counter gate, TLC-cross-checked quorum recovery vote-drain urgency gate, TLC-cross-checked frontier body-gap payload-drain urgency gate, TLC-cross-checked RBC authoritative payload progress gate, TLC-cross-checked slot authoritative payload gate, missing-block fetch planner, TLC-cross-checked recovery status counter helper gate (`recovery-status-counters`), TLC-cross-checked QC rebuild status counter helper gate (`qc-rebuild-status`), TLC-cross-checked QC rebuild quorum reachability helper gate (`qc-rebuild-quorum`), TLC-cross-checked collector-targeting status counter helper gate (`collector-targeting-status`), TLC-cross-checked deferred recovery status counter helper gate (`deferred-recovery-status`), TLC-cross-checked missing-QC liveness status counter helper gate (`missing-qc-liveness-status`), TLC-cross-checked sidecar/no-proposal status counter helper gate (`sidecar-no-proposal-status`), TLC-cross-checked deterministic committee status helper gate (`deterministic-committee-status`), TLC-cross-checked timing/liveness status counter helper gate (`timing-status-counters`), TLC-cross-checked roster-recovery status counter helper gate (`roster-recovery-status`), TLC-cross-checked range-pull recovery helper gate (`range-pull-recovery`), TLC-cross-checked range-pull status counter helper gate (`range-pull-status`), TLC-cross-checked round-recovery bundle window helper gate (`round-recovery-bundle-window`),
+TLC-cross-checked commit-evidence replay gate, TLC-cross-checked block-sync recovery gate, TLC-cross-checked direct certified-block fetch gate,
+TLC-cross-checked missing-block ingress fetch gate, TLC-cross-checked payload progress availability gate, TLC-cross-checked highest-QC fetch body-known gate, TLC-cross-checked local payload availability gate, TLC-cross-checked local block-known routing gate, TLC-cross-checked lock-safety block-known routing gate, TLC-cross-checked missing locked-QC payload recovery gate (`missing-locked-qc-recovery`), TLC-cross-checked local signed-block materialization gate, TLC-cross-checked authoritative payload progress gate, TLC-cross-checked hash-level authoritative block payload gate, TLC-cross-checked pending-block active-for-tip gate, TLC-cross-checked pending fast-unblock decision gate, TLC-cross-checked blocking pending-block counter gate, TLC-cross-checked quorum recovery vote-drain urgency gate, TLC-cross-checked frontier body-gap payload-drain urgency gate, TLC-cross-checked RBC authoritative payload progress gate, TLC-cross-checked slot authoritative payload gate, TLC-cross-checked missing-block fetch planner, TLC-cross-checked recovery status counter helper gate (`recovery-status-counters`), TLC-cross-checked QC rebuild status counter helper gate (`qc-rebuild-status`), TLC-cross-checked QC rebuild quorum reachability helper gate (`qc-rebuild-quorum`), TLC-cross-checked collector-targeting status counter helper gate (`collector-targeting-status`), TLC-cross-checked deferred recovery status counter helper gate (`deferred-recovery-status`), TLC-cross-checked missing-QC liveness status counter helper gate (`missing-qc-liveness-status`), TLC-cross-checked sidecar/no-proposal status counter helper gate (`sidecar-no-proposal-status`), TLC-cross-checked deterministic committee status helper gate (`deterministic-committee-status`), TLC-cross-checked timing/liveness status counter helper gate (`timing-status-counters`), TLC-cross-checked roster-recovery status counter helper gate (`roster-recovery-status`), TLC-cross-checked range-pull recovery helper gate (`range-pull-recovery`), TLC-cross-checked range-pull status counter helper gate (`range-pull-status`), TLC-cross-checked round-recovery bundle window helper gate (`round-recovery-bundle-window`),
 TLC-cross-checked recovery-FSM reason classifier/rank/sort helper gate (`recovery-fsm-reason`),
 TLC-cross-checked committed-edge conflict suppression gate,
 TLC-cross-checked lock-rejected branch sink gate, TLC-cross-checked active-height lock-reject recovery gate,
-missing-block hard-cap recovery gate,
-missing-block hard-cap cleanup gate,
-missing-block view-change escalation gate, TLC-cross-checked precommit vote-emission gate,
-native AMX attestation gate,
-TLC-cross-checked native AMX queue-journal replay gate, native AMX routing-plan projection gate,
-native AMX receipt validation gate, TLC-cross-checked native AMX control-plane ingress gate,
-TLC-cross-checked vNext chain-order helper gate, vNext stake-weight/quorum helper gate
+TLC-cross-checked missing-block hard-cap recovery gate,
+TLC-cross-checked missing-block hard-cap cleanup gate,
+TLC-cross-checked missing-block view-change escalation gate, TLC-cross-checked precommit vote-emission gate,
+TLC-cross-checked native AMX attestation gate,
+TLC-cross-checked native AMX queue-journal replay gate, TLC-cross-checked native AMX routing-plan projection gate,
+TLC-cross-checked native AMX receipt validation gate, TLC-cross-checked native AMX control-plane ingress gate,
+TLC-cross-checked vNext chain-order helper gate, TLC-cross-checked vNext stake-weight/quorum helper gate
 (`vnext-stake-weight`), TLC-cross-checked vNext re-chain helper gate,
 TLC-cross-checked vNext re-chain error label helper gate, TLC-cross-checked
 vNext aggregate certificate verification gate, TLC-cross-checked vNext
@@ -5188,48 +5471,50 @@ gate (`verify-cache-key`), TLC-cross-checked async vote-verification ownership g
 vote-signature verification worker config helper gate
 (`vote-verify-worker-config`), TLC-cross-checked async QC aggregate-verification ownership gate,
 QC aggregate-verification worker config helper gate (`qc-verify-worker-config`),
-worker-loop drain scheduler gate, actor-gate priority/fairness gate,
-worker-loop budget/adaptive-cap gate, worker ingress routing gate,
+TLC-cross-checked worker-loop drain scheduler gate,
+TLC-cross-checked actor-gate priority/fairness gate,
+TLC-cross-checked worker-loop budget/adaptive-cap gate,
+TLC-cross-checked worker ingress routing gate,
 worker-loop stage helper gate, TLC-cross-checked worker-queue status accounting gate,
-NPoS VRF epoch-seal staging gate,
+TLC-cross-checked NPoS VRF epoch-seal staging gate,
 commit-anchor QC promotion helper gate (`commit-anchor-qc`),
 committed-height QC admission helper gate (`committed-height-qc`),
-proposal assembly gate, Kura durability commit retry
-gate, Kura persistence status counter/snapshot helper gate
-(`kura-store-status`), post-commit cleanup gate, frontier-gap
+TLC-cross-checked proposal assembly gate, TLC-cross-checked Kura durability
+commit retry gate, TLC-cross-checked Kura persistence status counter/snapshot helper gate
+(`kura-store-status`), TLC-cross-checked post-commit cleanup gate, TLC-cross-checked frontier-gap
 realignment gate, frontier block-sync hint/direct-response permit gate,
 TLC-cross-checked same-height vote conflict helper gate, aggregate same-height vote-lock helper gate,
 TLC-cross-checked proposal stale same-height vote helper gate,
-same-height vote recovery view-gap helper gate,
-tip-extension helper gate,
+TLC-cross-checked same-height vote recovery view-gap helper gate,
+TLC-cross-checked tip-extension helper gate,
 TLC-cross-checked DA gate helper gate,
 TLC-cross-checked DA gate status counter/snapshot helper gate
 (`da-gate-status`),
-DA manifest guard helper gate,
+TLC-cross-checked DA manifest guard helper gate,
 TLC-cross-checked consensus handshake capability construction helper gate,
-consensus handshake helper gate,
-runtime mode flip helper gate,
+TLC-cross-checked consensus handshake helper gate,
+TLC-cross-checked runtime mode flip helper gate,
 TLC-cross-checked effective consensus-mode selection helper gate,
 TLC-cross-checked effective consensus timing aggregation helper gate,
-NEW_VIEW stats helper gate,
-NEW_VIEW tracker quorum/selection helper gate (`new-view-tracker`),
-timing monitor helper gate,
+TLC-cross-checked NEW_VIEW stats helper gate,
+TLC-cross-checked NEW_VIEW tracker quorum/selection helper gate (`new-view-tracker`),
+TLC-cross-checked timing monitor helper gate,
 TLC-cross-checked hotspot summary accumulator helper gate (`hotspot-log-summary`),
 TLC-cross-checked adaptive observability timing/fanout helper gate (`adaptive-observability`),
-pacing backpressure helper gate,
+TLC-cross-checked pacing backpressure helper gate,
 TLC-cross-checked counter-driven backpressure cooldown helper gate
 (`counter-backpressure-cooldown`),
-per-reason pacemaker backpressure tracker gate
+TLC-cross-checked per-reason pacemaker backpressure tracker gate
 (`pacemaker-backpressure-tracker`),
 TLC-cross-checked locked-QC helper gate,
-stake snapshot quorum helper gate,
-NPoS validator election helper gate (`validator-election`),
+TLC-cross-checked stake snapshot quorum helper gate,
+TLC-cross-checked NPoS validator election helper gate (`validator-election`),
 TLC-cross-checked topology role/signature filter gate
 (`topology-role-filter`),
 TLC-cross-checked live local-vote roster helper gate (`live-vote-roster`),
 TLC-cross-checked canonical round-roster helper gate (`canonical-round-roster`),
-block-specific vote-roster selection gate (`vote-roster-selection`),
-vote-roster cache/support helper gate (`vote-roster-cache`),
+TLC-cross-checked block-specific vote-roster selection gate (`vote-roster-selection`),
+TLC-cross-checked vote-roster cache/support helper gate (`vote-roster-cache`),
 TLC-cross-checked commit-topology state/reset helper gate (`commit-topology-state`),
 TLC-cross-checked roster index projection helper gate
 (`roster-index-projection`),
@@ -5246,34 +5531,36 @@ TLC-cross-checked prevalidated commit artifact trust helper gate
 (`prevalidated-commit-artifact`),
 TLC-cross-checked commit-job dispatch gate,
 TLC-cross-checked precommit signer-history block-sync fallback gate,
-pure engine constructor initial-state gate, pure engine read-only accessor gate,
-pure engine tick gate,
-pure engine tick unrelated-state preservation gate,
-pure engine NewView subject projection helper gate, pure engine certificate
+TLC-cross-checked pure engine constructor initial-state gate,
+TLC-cross-checked pure engine read-only accessor gate,
+TLC-cross-checked pure engine tick gate,
+TLC-cross-checked pure engine tick unrelated-state preservation gate,
+TLC-cross-checked pure engine NewView subject projection helper gate, pure engine certificate
 prefilter dispatch gate, pure engine certificate prefilter state-handoff gate,
-pure engine certificate prefilter unrelated-state preservation gate,
-pure engine view-advance saturation gate,
-engine NewView-QC gate, pure engine exact NewView-QC highest-QC record gate,
-pure engine NewView-QC unrelated-state preservation gate,
-pure engine exact NewView-QC advance gate,
-pure engine handle-dispatch gate,
-pure engine top-level argument-forwarding gate,
-pure engine top-level output relay gate,
-pure engine proposal-ingress gate,
-pure engine exact proposal output-field gate,
-pure engine exact proposal state-mutation gate,
-pure engine proposal unrelated-state preservation gate,
-pure engine exact proposal validation-owner gate,
-proposal-lock helper gate,
-QC-round compatibility helper gate,
-QC reference projection helper gate,
-QC reference comparator helper gate,
-highest-QC record helper gate,
-commit-subject helper gate,
-payload lookup helper gate,
-validation-priority helper gate,
-vote-backed evidence helper gate,
-vote payload actionable helper gate,
+TLC-cross-checked pure engine certificate prefilter unrelated-state preservation gate,
+TLC-cross-checked pure engine view-advance saturation gate,
+TLC-cross-checked engine NewView-QC gate,
+TLC-cross-checked pure engine exact NewView-QC highest-QC record gate,
+TLC-cross-checked pure engine NewView-QC unrelated-state preservation gate,
+TLC-cross-checked pure engine exact NewView-QC advance gate,
+TLC-cross-checked pure engine handle-dispatch gate,
+TLC-cross-checked pure engine top-level argument-forwarding gate,
+TLC-cross-checked pure engine top-level output relay gate,
+TLC-cross-checked pure engine proposal-ingress gate,
+TLC-cross-checked pure engine exact proposal output-field gate,
+TLC-cross-checked pure engine exact proposal state-mutation gate,
+TLC-cross-checked pure engine proposal unrelated-state preservation gate,
+TLC-cross-checked pure engine exact proposal validation-owner gate,
+TLC-cross-checked proposal-lock helper gate,
+TLC-cross-checked QC-round compatibility helper gate,
+TLC-cross-checked QC reference projection helper gate,
+TLC-cross-checked QC reference comparator helper gate,
+TLC-cross-checked highest-QC record helper gate,
+TLC-cross-checked commit-subject helper gate,
+TLC-cross-checked payload lookup helper gate,
+TLC-cross-checked validation-priority helper gate,
+TLC-cross-checked vote-backed evidence helper gate,
+TLC-cross-checked vote payload actionable helper gate,
 actionable vote-backed proposal evidence helper gate,
 slot proposal evidence helper gate,
 round liveness helper gate,
@@ -5302,34 +5589,43 @@ view-change cause status counter/snapshot helper gate
 view-change proof/index status counter helper gate
 (`view-change-proof-status`),
 leader/highest-QC/locked-QC status projection helper gate (`qc-status`),
-validation evidence QC selector helper gate (`validation-evidence-qc`),
-pure engine prepare-QC gate,
-pure engine exact Prepare-QC lock/highest-QC record gate,
-pure engine exact Prepare-QC phase-transition gate,
-pure engine Prepare-QC unrelated-state preservation gate,
-pure engine prepare-vote cache/output gate,
-pure engine commit-QC gate,
-pure engine exact Commit-QC highest-QC record gate,
-pure engine exact Commit-QC phase-transition gate,
-pure engine Commit-QC unrelated-state preservation gate,
-pure engine payload-available Commit-QC exact finality gate,
-pure engine missing-payload Commit-QC pending/fetch gate,
-pure engine Commit-QC validation cleanup gate,
-pure engine committed-block gate, pure engine exact committed-block record gate,
-pure engine reconfiguration staging gate,
-pure engine reconfiguration activation-height dedup gate,
-pure engine committed-block cleanup gate,
-pure engine committed-block unrelated-state preservation gate,
-pure engine exact payload-availability record gate,
-pure engine payload-availability gate,
-pure engine payload-availability unrelated-state preservation gate,
-pure engine validation-result gate,
-pure engine validation-result unrelated-state preservation gate,
-pure engine exact validation-owner cleanup gate,
-pure engine exact invalid-validation round/output advance gate,
-reconfiguration, certified-recovery, view-change, validation-callback,
-certificate-admission, highest-QC selection, and optional highest-QC selection
-filter bounded models, and updated operator runbooks when defaults change.
+TLC-cross-checked validation evidence QC selector helper gate (`validation-evidence-qc`),
+TLC-cross-checked pure engine prepare-QC gate,
+TLC-cross-checked pure engine exact Prepare-QC lock/highest-QC record gate,
+TLC-cross-checked pure engine exact Prepare-QC phase-transition gate,
+TLC-cross-checked pure engine Prepare-QC unrelated-state preservation gate,
+TLC-cross-checked pure engine prepare-vote cache/output gate,
+TLC-cross-checked pure engine commit-QC gate,
+TLC-cross-checked pure engine exact Commit-QC highest-QC record gate,
+TLC-cross-checked pure engine exact Commit-QC phase-transition gate,
+TLC-cross-checked pure engine Commit-QC unrelated-state preservation gate,
+TLC-cross-checked pure engine payload-available Commit-QC exact finality gate,
+TLC-cross-checked pure engine missing-payload Commit-QC pending/fetch gate,
+TLC-cross-checked pure engine Commit-QC validation cleanup gate,
+TLC-cross-checked pure engine committed-block gate,
+TLC-cross-checked pure engine exact committed-block record gate,
+TLC-cross-checked pure engine reconfiguration staging gate,
+TLC-cross-checked pure engine reconfiguration activation-height dedup gate,
+TLC-cross-checked pure engine committed-block cleanup gate,
+TLC-cross-checked pure engine committed-block unrelated-state preservation gate,
+TLC-cross-checked pure engine exact payload-availability record gate,
+TLC-cross-checked pure engine payload-availability gate,
+TLC-cross-checked pure engine payload-availability unrelated-state preservation gate,
+TLC-cross-checked pure engine validation-result gate,
+TLC-cross-checked pure engine validation-result unrelated-state preservation gate,
+TLC-cross-checked pure engine exact validation-owner cleanup gate,
+TLC-cross-checked pure engine exact invalid-validation round/output advance gate,
+TLC-cross-checked reconfiguration, TLC-cross-checked certified-recovery, TLC-cross-checked view-change, TLC-cross-checked validation-callback,
+TLC-cross-checked certificate-admission, TLC-cross-checked highest-QC selection, TLC-cross-checked optional highest-QC selection-filter bounded models,
+TLC-cross-checked certified-fetch, TLC-cross-checked pure-engine certificate
+dispatch, TLC-cross-checked pure-engine certificate prefilter state,
+TLC-cross-checked frontier-gap realignment, TLC-cross-checked Kura commit retry,
+TLC-cross-checked missing-block fetch, TLC-cross-checked missing-block hard-cap cleanup,
+TLC-cross-checked missing-block hard-cap, TLC-cross-checked missing-block view-change,
+TLC-cross-checked native AMX attestation, TLC-cross-checked native AMX receipt validation,
+TLC-cross-checked native AMX routing-plan, TLC-cross-checked NPoS VRF epoch seal,
+TLC-cross-checked post-commit cleanup, and TLC-cross-checked restart replay candidate-enumeration bounded models,
+and updated operator runbooks when defaults change.
 
 ## Community and Governance
 

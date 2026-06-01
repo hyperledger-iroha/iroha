@@ -135,35 +135,56 @@ public final class KagemushaRecursiveSpendProver {
         KagemushaRecursiveSpendProver::probeRequiredNativeSymbols);
   }
 
-  private static void probeRequiredNativeSymbols() {
-    expectIllegalArgumentProbe(() -> nativeVerifySpend(new byte[0]));
-    expectIllegalArgumentProbe(
+  private static boolean probeRequiredNativeSymbols() {
+    boolean available = true;
+    available &= expectIllegalArgumentProbe(() -> nativeInitSpend(new byte[0]));
+    available &= expectIllegalArgumentProbe(() -> nativeAppendSpend(new byte[0]));
+    available &= expectIllegalArgumentProbe(() -> nativeVerifySpend(new byte[0]));
+    available &=
+        expectIllegalArgumentProbe(
         () -> nativeLineageWitnessFromInitResult(new byte[0], new byte[] {0x01}));
-    expectIllegalArgumentProbe(
+    available &=
+        expectIllegalArgumentProbe(
         () -> nativeLineageWitnessAppendResult(new byte[0], new byte[] {0x01}, new byte[] {0x02}));
+    available &= expectIllegalArgumentProbe(() -> nativeRedeemSpend(new byte[0]));
+    return available;
   }
 
-  private static void expectIllegalArgumentProbe(final NativeProbe probe) {
+  static boolean expectIllegalArgumentProbe(final NativeProbe probe) {
     try {
       probe.run();
+      return false;
     } catch (final IllegalArgumentException expected) {
-      return;
+      return true;
     }
   }
 
   static boolean detectNativeAvailability(
       final NativeProbe loadLibrary,
       final NativeAbiVersionProbe bridgeAbiVersion,
-      final NativeProbe probeSymbol) {
+      final NativeSymbolProbe probeSymbol) {
     try {
       loadLibrary.run();
-      if (bridgeAbiVersion.run() < REQUIRED_BRIDGE_ABI_VERSION) {
-        return false;
-      }
-      probeSymbol.run();
-      return true;
     } catch (final IllegalArgumentException error) {
-      return true;
+      return false;
+    } catch (final UnsatisfiedLinkError | SecurityException error) {
+      return false;
+    }
+    final int abiVersion;
+    try {
+      abiVersion = bridgeAbiVersion.run();
+    } catch (final IllegalArgumentException error) {
+      return false;
+    } catch (final UnsatisfiedLinkError | SecurityException error) {
+      return false;
+    }
+    if (abiVersion < REQUIRED_BRIDGE_ABI_VERSION) {
+      return false;
+    }
+    try {
+      return probeSymbol.run();
+    } catch (final IllegalArgumentException error) {
+      return false;
     } catch (final UnsatisfiedLinkError | SecurityException error) {
       return false;
     }
@@ -183,6 +204,10 @@ public final class KagemushaRecursiveSpendProver {
 
   interface NativeProbe {
     void run();
+  }
+
+  interface NativeSymbolProbe {
+    boolean run();
   }
 
   interface NativeAbiVersionProbe {

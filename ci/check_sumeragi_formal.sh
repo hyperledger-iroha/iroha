@@ -510,6 +510,7 @@ bash scripts/formal/sumeragi_apalache.sh highest-optional-fast
 bash scripts/formal/sumeragi_apalache.sh frontier-fast
 bash scripts/formal/sumeragi_apalache.sh frontier-deep
 bash scripts/formal/sumeragi_apalache.sh frontier-wide
+bash scripts/formal/sumeragi_tlc.sh frontier-fast
 bash scripts/formal/sumeragi_tlc.sh frontier-small
 bash ci/check_sumeragi_formal_expected_failures.sh
 

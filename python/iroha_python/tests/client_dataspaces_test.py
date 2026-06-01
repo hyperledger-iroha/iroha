@@ -338,6 +338,22 @@ def test_operator_signature_headers_rejects_ambiguous_or_bad_signers() -> None:
             nonce="",
         )
 
+    with pytest.raises(ValueError, match="nonce"):
+        ToriiClient.build_operator_signature_headers(
+            method="POST",
+            path="/v1/nexus/lifecycle",
+            key_pair=key_pair,
+            nonce="   ",
+        )
+
+    with pytest.raises(ValueError, match="timestamp_ms"):
+        ToriiClient.build_operator_signature_headers(
+            method="POST",
+            path="/v1/nexus/lifecycle",
+            key_pair=key_pair,
+            timestamp_ms=-1,
+        )
+
     class MissingPublicKey:
         def sign(self, message: bytes) -> bytes:
             return b"signature"
@@ -360,6 +376,43 @@ def test_operator_signature_headers_rejects_ambiguous_or_bad_signers() -> None:
             method="POST",
             path="/v1/nexus/lifecycle",
             key_pair=BadSignature(),
+        )
+
+
+def test_operator_signature_headers_accept_raw_private_key_inputs() -> None:
+    raw_private_key = bytes([13] * 32)
+    key_pair = Ed25519KeyPair.from_private_key(raw_private_key)
+
+    hex_headers = ToriiClient.build_operator_signature_headers(
+        method="POST",
+        path="/v1/nexus/lifecycle",
+        body=b"{}",
+        private_key_hex=raw_private_key.hex(),
+        timestamp_ms=123,
+        nonce="hex-nonce",
+    )
+    bytes_headers = ToriiClient.build_operator_signature_headers(
+        method="POST",
+        path="/v1/nexus/lifecycle",
+        body=b"{}",
+        private_key=raw_private_key,
+        timestamp_ms=123,
+        nonce="bytes-nonce",
+    )
+
+    assert hex_headers["x-iroha-operator-public-key"] == key_pair.public_key_multihash
+    assert bytes_headers["x-iroha-operator-public-key"] == key_pair.public_key_multihash
+    with pytest.raises(ValueError, match="private-key multihash or raw Ed25519 hex"):
+        ToriiClient.build_operator_signature_headers(
+            method="POST",
+            path="/v1/nexus/lifecycle",
+            private_key="not-hex-or-multihash",
+        )
+    with pytest.raises(ValueError, match="32 bytes"):
+        ToriiClient.build_operator_signature_headers(
+            method="POST",
+            path="/v1/nexus/lifecycle",
+            private_key="00" * 31,
         )
 
 
@@ -413,6 +466,18 @@ def test_nexus_lane_lifecycle_rejects_malformed_inputs() -> None:
 
     with pytest.raises(ValueError, match=r"retire\[0\]"):
         client.nexus_lane_lifecycle([], retire=[-1], key_pair=key_pair)
+
+    with pytest.raises(TypeError, match="retire"):
+        client.nexus_lane_lifecycle([], retire="12", key_pair=key_pair)  # type: ignore[arg-type]
+
+    with pytest.raises(TypeError, match="retire"):
+        client.nexus_lane_lifecycle([], retire=object(), key_pair=key_pair)  # type: ignore[arg-type]
+
+    with pytest.raises(ValueError, match=r"retire\[0\]"):
+        client.nexus_lane_lifecycle([], retire=[object()], key_pair=key_pair)  # type: ignore[list-item]
+
+    with pytest.raises(ValueError, match=r"retire\[0\]"):
+        client.nexus_lane_lifecycle([], retire=[True], key_pair=key_pair)  # type: ignore[list-item]
 
 
 def test_nexus_lane_lifecycle_surfaces_operator_auth_failure() -> None:

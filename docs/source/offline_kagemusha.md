@@ -105,10 +105,20 @@ contains the full checked hop record bundle, proof-derived Pallas open-envelope
 archive, the spendable note descriptor created by each hop, and the intermediate
 recursive proofs committed by `recursive_proof_chain_digest`. The witness
 record bundle must name exactly the hop verifier records referenced by the
-lineage: no missing, duplicate, or unreferenced records are accepted, and chain
-execution requires every supplied record snapshot to equal the currently
-registered WSV verifier record. Without that witness, semantic v1 accumulator
-proofs remain admission-neutral until the
+lineage, and the Pallas archive must decode to exactly one envelope per hop:
+no malformed, missing, duplicate, unreferenced, or count-mismatched witness
+material is accepted. Witness assembly first validates the recursive bundle's
+public-input binding, then requires intermediate `previous_recursive_proofs`
+entries to be semantic aggregation proofs in lineage order, with each proof's
+hop count equal to its one-based position and its lineage scalar-projection
+digest still zero; reserved lineage proofs cannot be smuggled into that
+record-backed witness chain. Core chain-side replay preflights those previous
+proofs before reconstructing hop evidence, so backend/profile substitutions,
+empty previous proofs, stale public-input hashes, scalar-projection splices, and
+out-of-order hop counts fail before expensive Pallas replay. Chain execution
+also requires every supplied record snapshot to equal the currently registered
+WSV verifier record. Without that witness, semantic v1 accumulator proofs remain
+admission-neutral until the
 reserved `kagemusha-recursive-spend-lineage-v1` circuit family verifies every
 private hop and accumulator transition in-circuit. Once admitted, redemption
 consumes every top-up anchor nullifier plus the current spendable note nullifier
@@ -198,8 +208,9 @@ strict no-trusted-setup Halo2 IPA ZK1 key container: exactly one
 reserved-lineage `CID1`, exactly one bounded `IPAK` degree, exactly one
 non-empty `H2VK`, and no unrelated key TLVs. Preverification also checks the
 cheap Halo2/Pasta verifier-key header so the `H2VK` domain degree matches the
-bounded `IPAK` and relabelled semantic recursive keys are rejected before the
-heavy one-hop verifier-slice circuit is materialized. The proof envelope
+bounded `IPAK`, and requires the payload to contain the declared fixed-column
+commitments so truncated verifier keys are rejected before the heavy one-hop
+verifier-slice circuit is materialized. The proof envelope
 verifier-key hash must match the verifier-record commitment. That
 preverification is admission-neutral: a well-formed reserved lineage profile
 can pass registry and envelope checks, but chain admission still returns the
@@ -209,9 +220,10 @@ Malformed profile attempts that splice accumulator public inputs, refresh a
 stale hash over forged fields, substitute a trusted-setup backend, omit scalar
 projection, replay a semantic inner envelope or semantic verifier key, smuggle
 duplicate or malformed verifier-key `CID1` TLV material, omit `IPAK` or `H2VK`,
-use the wrong IPA degree, include unexpected verifier-key TLVs, substitute
-envelope schema or public instance columns, publish a zero verifier-record
-commitment, mismatch the envelope verifier hash, or use an unrecognized lineage
+use the wrong IPA degree, truncate declared fixed-column commitments, include
+unexpected verifier-key TLVs, substitute envelope schema or public instance
+columns, publish a zero verifier-record commitment, mismatch the envelope
+verifier hash, or use an unrecognized lineage
 circuit id are rejected before mint admission.
 The spend accumulator and bridge redeem request validation are lineage-aware:
 reserved lineage bundles compare the same accumulator-derived fields as
@@ -556,8 +568,9 @@ Rust and SDK callers can assemble that separate redeem witness with
 `init` proof and `kagemusha_recursive_spend_lineage_witness_append_result`
 after each `append` proof. These helpers validate one-hop record-backed
 fragments, exact verifier-record sets, and Pallas open-envelope archive counts,
-merge the envelope archive, carry forward previous recursive proofs, and reject
-record conflicts before the witness is attached to a redeem request.
+merge the envelope archive, carry forward ordered semantic previous recursive
+proofs, and reject record conflicts before the witness is attached to a redeem
+request.
 Ledger execution repeats that witness verification and additionally rejects
 lineage witnesses whose hop verifier-record snapshots are stale, missing,
 duplicated, unreferenced, or absent from the current WSV registry.
@@ -611,7 +624,23 @@ result. The Swift dynamic loader now requires bridge ABI 6 and the
 record-backed plus complete recursive-spend Kagemusha symbols, including both
 lineage-witness assembly helpers, before reporting the
 native Kagemusha provers as available, and the Swift recursive-spend wrapper
-exports the same ABI-6 requirement for wallet-side capability checks.
+refuses to select `recursive_spend_v1` unless the full ABI 6 surface is loaded.
+JavaScript/Node, Python, Kotlin/JVM, Java Android, and C# apply the same
+fail-closed rule in their native availability probes: init, append, both
+lineage-witness helpers, verify, and redeem must be callable from the loaded
+native bridge before wallet code is told recursive redemption is supported.
+Python, Kotlin/JVM, Java Android, and C# also treat malformed native loading or
+ABI-version probing as unavailable, and the JVM/Android/C# probes now reject a
+native symbol that accepts empty archives. Only the expected empty-archive
+rejection across the required symbol set can prove that a loaded native surface
+exists.
+Python direct helper calls and the optional C# P/Invoke wrapper also require
+that complete ABI-6 surface before producing any recursive spend output; C# also
+requires the expected Kagemusha empty-archive bridge error during symbol probes.
+A partial or permissive native bridge cannot emit an init or append bundle
+without the witness helpers needed for later redemption.
+The Swift wrapper also exports the same ABI-6 requirement for wallet-side
+capability checks.
 JavaScript/Node and Python now require an ABI-6 native version probe before
 reporting recursive spend as available or selecting `recursive_spend_v1`; the
 Node NAPI host exports `connectNoritoBridgeAbiVersion`, while the Python PyO3
@@ -1104,6 +1133,13 @@ recursive aggregation circuit surface without accepting compact-token
 aggregation mode `2`; full mode-2 admission still requires composing the
 private-hop verifier batch and proving the complete Poseidon2 witness-batch
 digest relation in-circuit.
+The routine Rust test suite also skips real Kagemusha folded-token, recursive
+aggregation, recursive-spend, and bridge success proof generators by default;
+those cases remain available as opt-in `--ignored --test-threads=1` runs so
+resource-constrained WSL hosts do not run multiple Halo2 IPA proof generators at
+the same time. Default coverage keeps the deterministic semantic circuits,
+metadata preflight, record checks, shape rejection, and hop-proof validation
+active.
 Native Pasta/Fp scalar decomposition, fixed-window scalar decomposition,
 fixed-window Vesta point selection, table derivation, and scalar-multiplication
 composition, shared-table fixed-window selection, shared-table native-scalar

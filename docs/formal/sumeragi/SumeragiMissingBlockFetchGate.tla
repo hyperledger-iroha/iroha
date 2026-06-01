@@ -27,6 +27,8 @@ VARIABLES
 \* @type: <<Set(Int)>>;
 vars == <<tried>>
 
+TlcSingletonOrEmpty == Cardinality(tried) \in {0, 1}
+
 FirstSeenFetch == 1
 BackoffSuppressesFetch == 2
 RetryAfterWindowFetch == 3

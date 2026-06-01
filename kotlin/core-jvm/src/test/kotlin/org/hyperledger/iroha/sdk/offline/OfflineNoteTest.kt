@@ -194,21 +194,53 @@ class OfflineNoteTest {
             KagemushaRecursiveSpendProver.detectNativeAvailability(
                 loadLibrary = {},
                 bridgeAbiVersion = { 6 },
-                probeSymbol = { throw IllegalArgumentException("empty archive probe") },
+                probeSymbol = {
+                    KagemushaRecursiveSpendProver.expectIllegalArgumentProbe {
+                        throw IllegalArgumentException("empty archive probe")
+                    }
+                },
+            ),
+        )
+        assertFalse(
+            KagemushaRecursiveSpendProver.detectNativeAvailability(
+                loadLibrary = {},
+                bridgeAbiVersion = { 6 },
+                probeSymbol = { false },
             ),
         )
         assertFalse(
             KagemushaRecursiveSpendProver.detectNativeAvailability(
                 loadLibrary = {},
                 bridgeAbiVersion = { 5 },
-                probeSymbol = {},
+                probeSymbol = { true },
+            ),
+        )
+        assertFalse(
+            KagemushaRecursiveSpendProver.detectNativeAvailability(
+                loadLibrary = {},
+                bridgeAbiVersion = { throw IllegalArgumentException("broken ABI probe") },
+                probeSymbol = { error("probe must not run") },
             ),
         )
         assertFalse(
             KagemushaRecursiveSpendProver.detectNativeAvailability(
                 loadLibrary = { throw UnsatisfiedLinkError("missing library") },
                 bridgeAbiVersion = { 6 },
-                probeSymbol = {},
+                probeSymbol = { true },
+            ),
+        )
+        assertFalse(
+            KagemushaRecursiveSpendProver.detectNativeAvailability(
+                loadLibrary = {},
+                bridgeAbiVersion = { 6 },
+                probeSymbol = { throw UnsatisfiedLinkError("missing recursive spend symbol") },
+            ),
+        )
+        assertFalse(
+            KagemushaRecursiveSpendProver.detectNativeAvailability(
+                loadLibrary = {},
+                bridgeAbiVersion = { 6 },
+                probeSymbol = { throw SecurityException("native bridge denied") },
             ),
         )
 
@@ -312,13 +344,17 @@ class OfflineNoteTest {
         assertTrue(
             KagemushaCompactPaymentTokenProver.detectNativeAvailability(
                 loadLibrary = {},
-                probeSymbol = { throw IllegalArgumentException("invalid archive") },
+                probeSymbol = {
+                    KagemushaCompactPaymentTokenProver.expectIllegalArgumentProbe {
+                        throw IllegalArgumentException("invalid archive")
+                    }
+                },
             )
         )
-        assertTrue(
+        assertFalse(
             KagemushaCompactPaymentTokenProver.detectNativeAvailability(
                 loadLibrary = {},
-                probeSymbol = {},
+                probeSymbol = { false },
             )
         )
         assertFalse(
@@ -335,8 +371,14 @@ class OfflineNoteTest {
         )
         assertFalse(
             KagemushaCompactPaymentTokenProver.detectNativeAvailability(
+                loadLibrary = { throw IllegalArgumentException("bad library name") },
+                probeSymbol = { error("probe must not run") },
+            )
+        )
+        assertFalse(
+            KagemushaCompactPaymentTokenProver.detectNativeAvailability(
                 loadLibrary = { throw SecurityException("denied") },
-                probeSymbol = {},
+                probeSymbol = { true },
             )
         )
     }
@@ -346,13 +388,17 @@ class OfflineNoteTest {
         assertTrue(
             KagemushaRecursiveAggregationProofBundleProver.detectNativeAvailability(
                 loadLibrary = {},
-                probeSymbol = { throw IllegalArgumentException("invalid archive") },
+                probeSymbol = {
+                    KagemushaRecursiveAggregationProofBundleProver.expectIllegalArgumentProbe {
+                        throw IllegalArgumentException("invalid archive")
+                    }
+                },
             )
         )
-        assertTrue(
+        assertFalse(
             KagemushaRecursiveAggregationProofBundleProver.detectNativeAvailability(
                 loadLibrary = {},
-                probeSymbol = {},
+                probeSymbol = { false },
             )
         )
         assertFalse(
@@ -369,8 +415,14 @@ class OfflineNoteTest {
         )
         assertFalse(
             KagemushaRecursiveAggregationProofBundleProver.detectNativeAvailability(
+                loadLibrary = { throw IllegalArgumentException("bad library name") },
+                probeSymbol = { error("probe must not run") },
+            )
+        )
+        assertFalse(
+            KagemushaRecursiveAggregationProofBundleProver.detectNativeAvailability(
                 loadLibrary = { throw SecurityException("denied") },
-                probeSymbol = {},
+                probeSymbol = { true },
             )
         )
     }

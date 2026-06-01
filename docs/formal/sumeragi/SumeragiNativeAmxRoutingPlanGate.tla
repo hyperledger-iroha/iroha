@@ -28,6 +28,8 @@ VARIABLES
 \* @type: <<Set(Int)>>;
 vars == <<tried>>
 
+TlcSingletonOrEmpty == Cardinality(tried) \in {0, 1}
+
 SingleTarget == 1
 OneParticipantNoCoordinator == 2
 MultiParticipantNative == 3

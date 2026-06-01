@@ -4213,6 +4213,12 @@ pub struct SccpRouteAllowlist {
     pub evm_route_canary_transaction_hash: Option<String>,
     /// EVM MessageProofAccepted log index bound by route canary evidence.
     pub evm_route_canary_log_index: Option<u32>,
+    /// Positive EVM block number containing the route canary receipt.
+    pub evm_route_canary_receipt_block_number: Option<u64>,
+    /// Hex-encoded EVM block hash for the route canary receipt block.
+    pub evm_route_canary_receipt_block_hash: Option<String>,
+    /// Hex-encoded EVM receiptsRoot for the route canary receipt block.
+    pub evm_route_canary_block_receipts_root: Option<String>,
     /// Hex-encoded SHA-256 digest of the EVM submitSccpMessageProof calldata.
     pub evm_route_canary_call_data_sha256: Option<String>,
     /// Hex-encoded EVM MessageProofAccepted message id bound by route canary evidence.
@@ -4304,6 +4310,9 @@ impl SccpRouteAllowlist {
             route_canary_destination_binding_hash: self.route_canary_destination_binding_hash,
             evm_route_canary_transaction_hash: self.evm_route_canary_transaction_hash,
             evm_route_canary_log_index: self.evm_route_canary_log_index,
+            evm_route_canary_receipt_block_number: self.evm_route_canary_receipt_block_number,
+            evm_route_canary_receipt_block_hash: self.evm_route_canary_receipt_block_hash,
+            evm_route_canary_block_receipts_root: self.evm_route_canary_block_receipts_root,
             evm_route_canary_call_data_sha256: self.evm_route_canary_call_data_sha256,
             evm_route_canary_message_id: self.evm_route_canary_message_id,
             evm_route_canary_payload_hash: self.evm_route_canary_payload_hash,
@@ -18454,26 +18463,41 @@ pub struct IsoBridgeProfile {
     /// Optional profile-level embedded XML signature policy.
     pub embedded_signature_policy: Option<String>,
     #[config(default = "Vec::new()")]
+    #[norito(default)]
     /// SHA-256 pins for accepted XMLDSig signer public-key bytes.
     pub signature_public_key_sha256_pins: Vec<String>,
     #[config(default = "Vec::new()")]
+    #[norito(default)]
     /// SHA-256 pins for accepted X.509 trust-anchor certificate DER bytes.
     pub x509_trust_anchor_sha256_pins: Vec<String>,
     #[config(default = "Vec::new()")]
+    #[norito(default)]
     /// Certificate-policy OIDs required on accepted X.509 signer certificates.
     pub x509_required_certificate_policy_oids: Vec<String>,
     #[config(default = "false")]
+    #[norito(default)]
     /// Whether X.509 signer certificates must be covered by a fresh verified CRL.
     pub x509_require_crl_revocation_check: bool,
     #[config(default = "Vec::new()")]
+    #[norito(default)]
     /// Base64 DER CRLs accepted as rail-profile revocation material.
     pub x509_crl_der_base64: Vec<String>,
     #[config(default = "false")]
+    #[norito(default)]
     /// Whether X.509 signer certificates must be covered by a fresh verified OCSP response.
     pub x509_require_ocsp_revocation_check: bool,
     #[config(default = "Vec::new()")]
+    #[norito(default)]
     /// Base64 DER OCSP responses accepted as rail-profile revocation material.
     pub x509_ocsp_response_der_base64: Vec<String>,
+    #[config(default = "Vec::new()")]
+    #[norito(default)]
+    /// Backward-compatible SHA-256 pins of raw XMLDSig public keys accepted by this profile.
+    pub trusted_public_key_sha256: Vec<String>,
+    #[config(default = "Vec::new()")]
+    #[norito(default)]
+    /// Backward-compatible SHA-256 pins of DER XMLDSig X.509 trust-anchor certificates.
+    pub trusted_certificate_sha256: Vec<String>,
     #[config(default = "Vec::new()")]
     /// Required reference datasets for this profile.
     pub required_reference_datasets: Vec<String>,
@@ -20211,6 +20235,8 @@ impl IsoBridgeProfile {
             x509_crl_der_base64: self.x509_crl_der_base64,
             x509_require_ocsp_revocation_check: self.x509_require_ocsp_revocation_check,
             x509_ocsp_response_der_base64: self.x509_ocsp_response_der_base64,
+            trusted_public_key_sha256: self.trusted_public_key_sha256,
+            trusted_certificate_sha256: self.trusted_certificate_sha256,
             required_reference_datasets: self.required_reference_datasets,
             message_profiles: self
                 .message_profiles
@@ -20588,6 +20614,12 @@ mod offline_cfg_tests {
                     "id": "swift-cbpr-plus",
                     "rail": "swift-cbpr-plus",
                     "embedded_signature_policy": "reject-unsupported",
+                    "trusted_public_key_sha256": [
+                        "1111111111111111111111111111111111111111111111111111111111111111"
+                    ],
+                    "trusted_certificate_sha256": [
+                        "2222222222222222222222222222222222222222222222222222222222222222"
+                    ],
                     "required_reference_datasets": ["bic-lei"],
                     "message_profiles": [
                         {

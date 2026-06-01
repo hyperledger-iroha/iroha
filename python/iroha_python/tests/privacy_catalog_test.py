@@ -125,6 +125,18 @@ def test_privacy_catalog_loader_rejects_duplicate_ids(monkeypatch) -> None:
         privacy_catalog._load_descriptors()
 
 
+@pytest.mark.parametrize("bad_id", ["Shield", "shield/../../admin", "shield.v1"])
+def test_privacy_catalog_loader_rejects_unsafe_ids(monkeypatch, bad_id) -> None:
+    monkeypatch.setattr(
+        privacy_catalog,
+        "_RAW_PRIVACY_ALGORITHM_DESCRIPTORS_JSON",
+        json.dumps([_raw_descriptor(id=bad_id)]),
+    )
+
+    with pytest.raises(RuntimeError, match="lowercase and URL-safe"):
+        privacy_catalog._load_descriptors()
+
+
 @pytest.mark.parametrize(
     ("field", "value", "message"),
     [

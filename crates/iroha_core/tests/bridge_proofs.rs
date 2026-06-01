@@ -679,6 +679,220 @@ fn solana_emitter_program_id() -> Vec<u8> {
     vec![0x42; 32]
 }
 
+fn bsc_validator_keypairs() -> [iroha_crypto::KeyPair; 4] {
+    [
+        iroha_crypto::KeyPair::from_seed(
+            b"iroha:core-test:sccp:bsc-validator:0".to_vec(),
+            iroha_crypto::Algorithm::Secp256k1,
+        ),
+        iroha_crypto::KeyPair::from_seed(
+            b"iroha:core-test:sccp:bsc-validator:1".to_vec(),
+            iroha_crypto::Algorithm::Secp256k1,
+        ),
+        iroha_crypto::KeyPair::from_seed(
+            b"iroha:core-test:sccp:bsc-validator:2".to_vec(),
+            iroha_crypto::Algorithm::Secp256k1,
+        ),
+        iroha_crypto::KeyPair::from_seed(
+            b"iroha:core-test:sccp:bsc-validator:3".to_vec(),
+            iroha_crypto::Algorithm::Secp256k1,
+        ),
+    ]
+}
+
+fn bsc_validator_public_keys(signers: &[iroha_crypto::KeyPair; 4]) -> Vec<Vec<u8>> {
+    signers
+        .iter()
+        .map(|signer| {
+            let (algorithm, bytes) = signer.public_key().to_bytes();
+            assert_eq!(algorithm, iroha_crypto::Algorithm::Secp256k1);
+            bytes.to_vec()
+        })
+        .collect()
+}
+
+fn bsc_validator_set_hash() -> [u8; 32] {
+    let signers = bsc_validator_keypairs();
+    iroha_sccp::sccp_bsc_validator_set_hash(&bsc_validator_public_keys(&signers), &[1, 1, 1, 1])
+        .expect("BSC validator set hash")
+}
+
+fn bsc_sign_digest(signer: &iroha_crypto::KeyPair, digest: &[u8; 32]) -> Vec<u8> {
+    let secret_key_bytes = signer.private_key().to_bytes().1;
+    let secret_key = iroha_crypto::EcdsaSecp256k1Sha256::parse_private_key(&secret_key_bytes)
+        .expect("BSC sample private key");
+    iroha_crypto::EcdsaSecp256k1Sha256::sign_prehash_recoverable(digest, &secret_key)
+        .expect("BSC validator signature")
+        .to_vec()
+}
+
+fn bsc_validator_set_seal_proof(
+    validator_epoch: u64,
+    block_number: u64,
+    block_hash: [u8; 32],
+    receipts_root: [u8; 32],
+    validator_set_hash: [u8; 32],
+) -> iroha_sccp::SccpBscValidatorSetSealProofV1 {
+    let signers = bsc_validator_keypairs();
+    let commit_message_hash = iroha_sccp::sccp_bsc_commit_message_hash(
+        iroha_sccp::SCCP_DOMAIN_BSC,
+        validator_epoch,
+        block_number,
+        block_hash,
+        receipts_root,
+        validator_set_hash,
+    );
+    let signatures = signers[..3]
+        .iter()
+        .map(|signer| bsc_sign_digest(signer, &commit_message_hash))
+        .collect::<Vec<_>>();
+    iroha_sccp::SccpBscValidatorSetSealProofV1 {
+        version: 1,
+        total_power: 4,
+        signed_power: 3,
+        commit_message_hash,
+        validator_public_keys: bsc_validator_public_keys(&signers),
+        validator_powers: vec![1, 1, 1, 1],
+        signers_bitmap: vec![0b0000_0111],
+        signatures,
+    }
+}
+
+fn bsc_keccak256(payload: &[u8]) -> [u8; 32] {
+    use sha3::{Digest as _, Keccak256};
+
+    Keccak256::digest(payload).into()
+}
+
+fn bsc_minimal_be_usize(value: usize) -> Vec<u8> {
+    value
+        .to_be_bytes()
+        .iter()
+        .skip_while(|byte| **byte == 0)
+        .copied()
+        .collect()
+}
+
+fn bsc_rlp_string(value: &[u8]) -> Vec<u8> {
+    if value.len() == 1 && value[0] < 0x80 {
+        return vec![value[0]];
+    }
+    let mut out = Vec::new();
+    if value.len() < 56 {
+        out.push(0x80 + u8::try_from(value.len()).expect("short RLP string length fits u8"));
+    } else {
+        let len_bytes = bsc_minimal_be_usize(value.len());
+        out.push(0xb7 + u8::try_from(len_bytes.len()).expect("RLP length-of-length fits u8"));
+        out.extend_from_slice(&len_bytes);
+    }
+    out.extend_from_slice(value);
+    out
+}
+
+fn bsc_rlp_u64(value: u64) -> Vec<u8> {
+    if value == 0 {
+        return vec![0x80];
+    }
+    let bytes = value.to_be_bytes();
+    let first_nonzero = bytes
+        .iter()
+        .position(|byte| *byte != 0)
+        .expect("non-zero u64 has a non-zero byte");
+    bsc_rlp_string(&bytes[first_nonzero..])
+}
+
+fn bsc_rlp_list(fields: &[Vec<u8>]) -> Vec<u8> {
+    let payload = fields
+        .iter()
+        .flat_map(|field| field.iter().copied())
+        .collect::<Vec<_>>();
+    let mut out = Vec::new();
+    if payload.len() < 56 {
+        out.push(0xc0 + u8::try_from(payload.len()).expect("short RLP list length fits u8"));
+    } else {
+        let len_bytes = bsc_minimal_be_usize(payload.len());
+        out.push(0xf7 + u8::try_from(len_bytes.len()).expect("RLP length-of-length fits u8"));
+        out.extend_from_slice(&len_bytes);
+    }
+    out.extend_from_slice(&payload);
+    out
+}
+
+fn bsc_rlp_encoded_u64_key(value: u64) -> Vec<u8> {
+    if value == 0 {
+        return vec![0x80];
+    }
+    let bytes = value.to_be_bytes();
+    let first_nonzero = bytes
+        .iter()
+        .position(|byte| *byte != 0)
+        .expect("non-zero u64 has a non-zero byte");
+    let minimal = &bytes[first_nonzero..];
+    if minimal.len() == 1 && minimal[0] < 0x80 {
+        return vec![minimal[0]];
+    }
+    let mut out = Vec::with_capacity(1 + minimal.len());
+    out.push(0x80 + u8::try_from(minimal.len()).expect("u64 RLP length fits u8"));
+    out.extend_from_slice(minimal);
+    out
+}
+
+fn bsc_mpt_nibbles_from_bytes(bytes: &[u8]) -> Vec<u8> {
+    bytes
+        .iter()
+        .flat_map(|byte| [byte >> 4, byte & 0x0f])
+        .collect()
+}
+
+fn bsc_mpt_compact_path(nibbles: &[u8], is_leaf: bool) -> Vec<u8> {
+    assert!(nibbles.iter().all(|nibble| *nibble < 16));
+    let mut prefixed = Vec::with_capacity(nibbles.len() + 2);
+    let flag = if is_leaf { 2 } else { 0 };
+    if nibbles.len() % 2 == 1 {
+        prefixed.push(flag + 1);
+        prefixed.extend_from_slice(nibbles);
+    } else {
+        prefixed.push(flag);
+        prefixed.push(0);
+        prefixed.extend_from_slice(nibbles);
+    }
+    prefixed
+        .chunks(2)
+        .map(|chunk| (chunk[0] << 4) | chunk[1])
+        .collect()
+}
+
+fn bsc_receipt_mpt_proof_with_value(
+    receipt_root_index: u64,
+    trie_value: &[u8],
+) -> ([u8; 32], Vec<Vec<u8>>) {
+    let key = bsc_rlp_encoded_u64_key(receipt_root_index);
+    let compact_path = bsc_mpt_compact_path(&bsc_mpt_nibbles_from_bytes(&key), true);
+    let node = bsc_rlp_list(&[bsc_rlp_string(&compact_path), bsc_rlp_string(trie_value)]);
+    let root = bsc_keccak256(&node);
+    (root, vec![node])
+}
+
+fn bsc_receipt_with_sccp_log(
+    message_emitter_address: [u8; 20],
+    source_event_digest: [u8; 32],
+) -> Vec<u8> {
+    let event_topic = bsc_keccak256(b"SccpSourceEvent(bytes32)");
+    bsc_rlp_list(&[
+        bsc_rlp_string(&[1]),
+        bsc_rlp_u64(21_000),
+        bsc_rlp_string(&[0u8; 256]),
+        bsc_rlp_list(&[bsc_rlp_list(&[
+            bsc_rlp_string(&message_emitter_address),
+            bsc_rlp_list(&[
+                bsc_rlp_string(&event_topic),
+                bsc_rlp_string(&source_event_digest),
+            ]),
+            bsc_rlp_string(&[]),
+        ])]),
+    ])
+}
+
 fn configured_sol_source_verifier_material() -> iroha_sccp::SccpSourceVerifierMaterialV1 {
     let material =
         iroha_sccp::sccp_solana_mainnet_source_verifier_material_with_hashes_and_accounts_db_v1(
@@ -716,6 +930,22 @@ fn generic_sol_source_verifier_material() -> iroha_sccp::SccpSourceVerifierMater
     material
 }
 
+fn configured_bsc_source_verifier_material() -> iroha_sccp::SccpSourceVerifierMaterialV1 {
+    let material =
+        iroha_sccp::sccp_evm_family_mainnet_source_verifier_material_with_hashes_and_emitter_v1(
+            iroha_sccp::SCCP_DOMAIN_BSC,
+            bsc_validator_set_hash(),
+            [0xb2; 32],
+            [0xc3; 32],
+            [0xd4; 32],
+            [0x43; 20],
+            [0x53; 32],
+        )
+        .expect("BSC mainnet source verifier material");
+    assert!(iroha_sccp::sccp_source_verifier_material_is_production_ready(&material));
+    material
+}
+
 fn actual_source_verifier_material(
     material: &iroha_sccp::SccpSourceVerifierMaterialV1,
 ) -> iroha_config::parameters::actual::SccpSourceVerifierMaterial {
@@ -744,6 +974,26 @@ fn actual_source_verifier_material(
         finality_policy_hash: hex::encode(material.finality_policy_hash),
         placeholder_material: material.placeholder_material,
     }
+}
+
+fn configured_bsc_source_adapter_engine_deployment(
+    material: &iroha_sccp::SccpSourceVerifierMaterialV1,
+) -> iroha_sccp::SccpSourceAdapterEngineDeploymentV1 {
+    let deployment =
+        iroha_sccp::build_sccp_bsc_mainnet_source_adapter_deployment(material, [0xe6; 32])
+            .expect("BSC source adapter engine deployment");
+    assert!(
+        iroha_sccp::sccp_source_adapter_engine_deployment_matches_material(material, &deployment,)
+    );
+    assert!(
+        iroha_sccp::sccp_source_adapter_ready_with_material_and_deployment_for_domain(
+            iroha_sccp::SCCP_DOMAIN_BSC,
+            material,
+            &deployment,
+        ),
+        "configured BSC source-adapter deployment evidence should open the source-adapter gate"
+    );
+    deployment
 }
 
 fn configured_sol_source_adapter_engine_deployment(
@@ -1010,6 +1260,23 @@ fn configured_tron_destination_rollout(
     rollout
 }
 
+fn configured_bsc_destination_rollout() -> iroha_sccp::SccpDestinationRolloutV1 {
+    let rollout = iroha_sccp::sccp_evm_mainnet_destination_rollout_with_binding_v1(
+        iroha_sccp::SCCP_DOMAIN_BSC,
+        "0x3333333333333333333333333333333333333333".to_owned(),
+        hex::encode([0x44; 32]),
+        hex::encode([0x55; 32]),
+        hex::encode(iroha_sccp::sccp_bsc_mainnet_network_id_word_v1()),
+        "0x2222222222222222222222222222222222222222".to_owned(),
+    )
+    .expect("BSC destination rollout");
+    assert!(iroha_sccp::sccp_destination_rollout_is_production_ready(
+        iroha_sccp::SCCP_DOMAIN_BSC,
+        &rollout,
+    ));
+    rollout
+}
+
 fn actual_destination_rollout(
     rollout: &iroha_sccp::SccpDestinationRolloutV1,
 ) -> iroha_config::parameters::actual::SccpDestinationRollout {
@@ -1121,6 +1388,26 @@ fn configured_tron_route_allowlist(
     let allowlist = with_tron_route_canary(allowlist, material, deployment, destination_rollout);
     assert!(iroha_sccp::sccp_route_allowlist_is_production_ready(
         iroha_sccp::SCCP_DOMAIN_TRON,
+        &allowlist,
+    ));
+    allowlist
+}
+
+fn configured_bsc_route_allowlist(
+    material: &iroha_sccp::SccpSourceVerifierMaterialV1,
+    deployment: &iroha_sccp::SccpSourceAdapterEngineDeploymentV1,
+    destination_rollout: &iroha_sccp::SccpDestinationRolloutV1,
+) -> iroha_sccp::SccpRouteAllowlistReadinessV1 {
+    let allowlist = iroha_sccp::sccp_profiled_route_allowlist_for_lane_evidence_v1(
+        iroha_sccp::SCCP_DOMAIN_BSC,
+        material,
+        deployment,
+        destination_rollout,
+    )
+    .expect("BSC route allowlist");
+    let allowlist = with_bsc_route_canary(allowlist, material, deployment, destination_rollout);
+    assert!(iroha_sccp::sccp_route_allowlist_is_production_ready(
+        iroha_sccp::SCCP_DOMAIN_BSC,
         &allowlist,
     ));
     allowlist
@@ -1244,6 +1531,46 @@ fn with_tron_route_canary(
     .expect("TRON route canary evidence")
 }
 
+fn with_bsc_route_canary(
+    allowlist: iroha_sccp::SccpRouteAllowlistReadinessV1,
+    material: &iroha_sccp::SccpSourceVerifierMaterialV1,
+    deployment: &iroha_sccp::SccpSourceAdapterEngineDeploymentV1,
+    destination_rollout: &iroha_sccp::SccpDestinationRolloutV1,
+) -> iroha_sccp::SccpRouteAllowlistReadinessV1 {
+    let binding_hash_hex = destination_rollout
+        .destination_binding_hash
+        .as_deref()
+        .expect("destination binding hash");
+    let destination_binding_hash: [u8; 32] = hex::decode(binding_hash_hex.trim_start_matches("0x"))
+        .expect("decode destination binding hash")
+        .try_into()
+        .expect("destination binding hash length");
+    iroha_sccp::sccp_evm_route_allowlist_with_lane_canary_evidence_v1(
+        allowlist,
+        destination_rollout,
+        destination_binding_hash,
+        iroha_sccp::sccp_source_verifier_material_hash(material),
+        iroha_sccp::sccp_source_adapter_engine_deployment_hash(deployment),
+        [0xba; 32],
+        2,
+        56_000_001,
+        [0xbb; 32],
+        [0xbc; 32],
+        [0xbd; 32],
+        [0xbe; 32],
+        [0xbf; 32],
+        iroha_sccp::SCCP_DOMAIN_BSC,
+        [0xc0; 32],
+        [0xc1; 32],
+        [0xc2; 32],
+        [0xc3; 32],
+        1,
+        iroha_sccp::SCCP_DOMAIN_SORA,
+        true,
+    )
+    .expect("BSC route canary evidence")
+}
+
 fn actual_route_allowlist(
     allowlist: &iroha_sccp::SccpRouteAllowlistReadinessV1,
 ) -> iroha_config::parameters::actual::SccpRouteAllowlist {
@@ -1262,6 +1589,11 @@ fn actual_route_allowlist(
             .clone(),
         evm_route_canary_transaction_hash: allowlist.evm_route_canary_transaction_hash.clone(),
         evm_route_canary_log_index: allowlist.evm_route_canary_log_index,
+        evm_route_canary_receipt_block_number: allowlist.evm_route_canary_receipt_block_number,
+        evm_route_canary_receipt_block_hash: allowlist.evm_route_canary_receipt_block_hash.clone(),
+        evm_route_canary_block_receipts_root: allowlist
+            .evm_route_canary_block_receipts_root
+            .clone(),
         evm_route_canary_call_data_sha256: allowlist.evm_route_canary_call_data_sha256.clone(),
         evm_route_canary_message_id: allowlist.evm_route_canary_message_id.clone(),
         evm_route_canary_payload_hash: allowlist.evm_route_canary_payload_hash.clone(),
@@ -1790,6 +2122,299 @@ fn make_sccp_sol_to_sora_message_bridge_proof_with_material_and_deployment(
     }
 }
 
+fn make_sccp_bsc_to_sora_message_bundle_with_material_and_deployment(
+    nonce: u64,
+    material: &iroha_sccp::SccpSourceVerifierMaterialV1,
+    deployment: &iroha_sccp::SccpSourceAdapterEngineDeploymentV1,
+) -> iroha_sccp::NexusSccpMessageProofV1 {
+    let source_domain = iroha_sccp::SCCP_DOMAIN_BSC;
+    let target_domain = iroha_sccp::SCCP_DOMAIN_SORA;
+    let payload = iroha_sccp::SccpPayloadV1::Transfer(iroha_sccp::TransferPayloadV1 {
+        version: 1,
+        source_domain,
+        dest_domain: target_domain,
+        nonce,
+        asset_home_domain: source_domain,
+        asset_id_codec: iroha_sccp::SCCP_CODEC_TEXT_UTF8,
+        asset_id: b"bsc:sora:asset".to_vec(),
+        amount: 56,
+        sender_codec: iroha_sccp::SCCP_CODEC_EVM_HEX,
+        sender: b"0x1111111111111111111111111111111111111111".to_vec(),
+        recipient_codec: iroha_sccp::SCCP_CODEC_TEXT_UTF8,
+        recipient: b"alice@universal".to_vec(),
+        route_id_codec: iroha_sccp::SCCP_CODEC_TEXT_UTF8,
+        route_id: b"bsc:sora:asset".to_vec(),
+    });
+    let payload_hash =
+        iroha_sccp::payload_hash(&iroha_sccp::canonical_sccp_payload_bytes(&payload));
+    let commitment = iroha_sccp::SccpHubCommitmentV1 {
+        version: 1,
+        kind: iroha_sccp::sccp_message_kind(&payload),
+        target_domain: iroha_sccp::sccp_message_target_domain(&payload),
+        message_id: iroha_sccp::sccp_message_id(&payload),
+        payload_hash,
+    };
+    let merkle_proof = iroha_sccp::SccpMerkleProofV1 { steps: Vec::new() };
+    let commitment_root = iroha_sccp::merkle_root_from_commitment(&commitment, &merkle_proof);
+
+    let source_chain = iroha_sccp::sccp_chain_key_for_domain(source_domain)
+        .expect("BSC chain key")
+        .to_owned();
+    let source_proof_plan = iroha_sccp::sccp_source_proof_plan_for_domain(source_domain)
+        .expect("BSC source proof plan");
+    let finality_model = iroha_sccp::sccp_proof_finality_model_for_domain(source_domain)
+        .expect("BSC finality model");
+    let finality_height = 10_002_u64;
+    let finality_block_hash = [0x71; 32];
+    let source_event_digest = iroha_sccp::sccp_source_event_digest(
+        source_domain,
+        target_domain,
+        commitment.message_id,
+        commitment.payload_hash,
+    );
+    let source_event_leaf_hash = iroha_sccp::sccp_source_event_leaf_hash(source_event_digest);
+    let inclusion_branch = vec![[0x44; 32].to_vec()];
+    let receipt_or_message_root = iroha_sccp::sccp_source_message_root_from_branch(
+        source_event_leaf_hash,
+        0,
+        &inclusion_branch,
+    )
+    .expect("BSC source message root");
+    let emitter_address: [u8; 20] = material
+        .source_bridge_emitter_address
+        .as_slice()
+        .try_into()
+        .expect("configured BSC source emitter address");
+    let receipt_value = bsc_receipt_with_sccp_log(emitter_address, source_event_digest);
+    let receipt_root_index = 0;
+    let (receipts_root, receipt_trie_proof_nodes) =
+        bsc_receipt_mpt_proof_with_value(receipt_root_index, &receipt_value);
+    let validator_epoch = finality_height / 200;
+    let validator_set_hash = material.source_trust_anchor_hash;
+    assert_eq!(validator_set_hash, bsc_validator_set_hash());
+    let seal_proof = bsc_validator_set_seal_proof(
+        validator_epoch,
+        finality_height,
+        finality_block_hash,
+        receipts_root,
+        validator_set_hash,
+    );
+    let commit_seal_hash =
+        iroha_sccp::sccp_bsc_commit_seal_hash(&seal_proof).expect("BSC commit seal hash");
+    let receipt_trie_proof_hash = iroha_sccp::sccp_bsc_receipt_proof_hash(
+        source_domain,
+        source_event_digest,
+        validator_epoch,
+        finality_height,
+        finality_block_hash,
+        receipts_root,
+        validator_set_hash,
+        commit_seal_hash,
+        receipt_root_index,
+        &receipt_trie_proof_nodes,
+        &inclusion_branch,
+    )
+    .expect("BSC source receipt proof hash");
+    let adapter_proof = iroha_sccp::SccpSourceAdapterProofV1::BscValidatorSetReceipt(
+        iroha_sccp::SccpBscValidatorSetSourceProofV1 {
+            version: 1,
+            source_domain,
+            validator_epoch,
+            block_number: finality_height,
+            block_hash: finality_block_hash,
+            receipts_root,
+            validator_set_hash,
+            commit_seal_hash,
+            receipt_trie_proof_hash,
+            seal_proof,
+            validator_set_transition_proofs: Vec::new(),
+            receipt_root_index,
+            receipt_trie_proof_nodes,
+        },
+    );
+    let finalized_header_hash = iroha_sccp::sccp_source_finalized_header_hash(
+        source_domain,
+        finality_model,
+        finality_height,
+        finality_block_hash,
+        receipt_or_message_root,
+    );
+    let adapter_transcript_hash = iroha_sccp::sccp_source_adapter_transcript_hash(
+        source_domain,
+        target_domain,
+        source_proof_plan,
+        finality_model,
+        finality_height,
+        finality_block_hash,
+        receipt_or_message_root,
+        source_event_digest,
+        &adapter_proof,
+    );
+    let envelope_context = iroha_sccp::SccpSourceChainProofEnvelopeV1 {
+        version: 1,
+        source_domain,
+        target_domain,
+        source_chain: source_chain.clone(),
+        source_proof_plan,
+        finality_model,
+        message_id: commitment.message_id,
+        payload_hash: commitment.payload_hash,
+        source_event_digest,
+        commitment_root,
+        finality_height,
+        finality_block_hash,
+        finalized_header_hash,
+        receipt_or_message_root,
+        consensus_proof: Vec::new(),
+        message_inclusion_proof: Vec::new(),
+        inclusion_branch: inclusion_branch.clone(),
+    };
+    let adapter_verification_proof =
+        iroha_sccp::build_sccp_source_adapter_verification_proof_with_material_and_deployment(
+            &envelope_context,
+            &adapter_proof,
+            adapter_transcript_hash,
+            material,
+            deployment,
+        )
+        .expect("build BSC source adapter verification proof");
+    let verifier_evidence =
+        iroha_sccp::build_sccp_source_verifier_evidence_with_material_and_deployment(
+            &envelope_context,
+            &adapter_proof,
+            adapter_transcript_hash,
+            material,
+            deployment,
+        )
+        .expect("build BSC source verifier evidence");
+    let consensus_proof = norito::to_bytes(&iroha_sccp::SccpSourceConsensusProofV1 {
+        version: 1,
+        source_domain,
+        source_chain: source_chain.clone(),
+        source_proof_plan,
+        finality_model,
+        finality_height,
+        finality_block_hash,
+        receipt_or_message_root,
+        finalized_header_hash,
+        adapter_proof,
+        adapter_transcript_hash,
+        verifier_evidence,
+        adapter_verification_proof,
+    })
+    .expect("encode BSC source consensus proof");
+    let message_inclusion_proof =
+        norito::to_bytes(&iroha_sccp::SccpSourceMessageInclusionProofV1 {
+            version: 1,
+            source_domain,
+            target_domain,
+            message_id: commitment.message_id,
+            payload_hash: commitment.payload_hash,
+            source_event_digest,
+            source_event_leaf_hash,
+            receipt_or_message_root,
+            leaf_index: 0,
+        })
+        .expect("encode BSC source inclusion proof");
+    let finality_proof = norito::to_bytes(&iroha_sccp::SccpSourceChainProofEnvelopeV1 {
+        version: 1,
+        source_domain,
+        target_domain,
+        source_chain,
+        source_proof_plan,
+        finality_model,
+        message_id: commitment.message_id,
+        payload_hash: commitment.payload_hash,
+        source_event_digest,
+        commitment_root,
+        finality_height,
+        finality_block_hash,
+        finalized_header_hash,
+        receipt_or_message_root,
+        consensus_proof,
+        message_inclusion_proof,
+        inclusion_branch,
+    })
+    .expect("encode BSC source-chain proof envelope");
+    let bundle = iroha_sccp::NexusSccpMessageProofV1 {
+        version: 1,
+        commitment_root,
+        commitment,
+        merkle_proof,
+        payload,
+        finality_proof,
+    };
+    let source_proof = iroha_sccp::decode_sccp_source_chain_proof_envelope(&bundle.finality_proof)
+        .expect("decode BSC source proof");
+    assert!(
+        iroha_sccp::verify_message_bundle_structure_with_source_verifier_material_and_deployment(
+            &bundle, material, deployment,
+        )
+    );
+    assert!(
+        iroha_sccp::verify_sccp_bsc_mainnet_source_chain_proof_envelope_production(
+            &source_proof,
+            material,
+            deployment,
+        )
+    );
+    assert!(
+        iroha_sccp::verified_sccp_bsc_mainnet_source_chain_proof_envelope_for_production(
+            &bundle, material, deployment,
+        )
+        .is_some()
+    );
+    bundle
+}
+
+fn make_sccp_bsc_to_sora_message_bridge_proof_with_material_and_deployment(
+    nonce: u64,
+    material: &iroha_sccp::SccpSourceVerifierMaterialV1,
+    deployment: &iroha_sccp::SccpSourceAdapterEngineDeploymentV1,
+) -> BridgeProof {
+    let bundle = make_sccp_bsc_to_sora_message_bundle_with_material_and_deployment(
+        nonce, material, deployment,
+    );
+    let artifact =
+        iroha_sccp::build_nexus_sccp_message_transparent_proof_with_source_verifier_material_and_deployment_allow_unready(
+            &bundle,
+            material,
+            deployment,
+            true,
+        )
+        .expect("build BSC local admission transparent proof");
+    assert_eq!(
+        artifact.public_inputs.target_domain,
+        iroha_sccp::SCCP_DOMAIN_SORA
+    );
+    assert!(matches!(
+        artifact.submission_package.platform_payload,
+        iroha_sccp::SccpPlatformSubmissionPayloadV1::LocalAdmission(_)
+    ));
+    assert!(
+        iroha_sccp::verify_nexus_sccp_message_transparent_proof_structure_with_source_verifier_material_and_deployment_allow_unready_manifest(
+            &artifact,
+            material,
+            deployment,
+        )
+    );
+    let manifest_hash = iroha_sccp::sccp_bridge_manifest_hash_for_seed(&artifact.manifest_seed);
+    let backend = artifact.message_backend.clone();
+    let proof_bytes = norito::to_bytes(&artifact).expect("encode BSC SCCP transparent artifact");
+    BridgeProof {
+        range: BridgeProofRange {
+            start_height: artifact.public_inputs.finality_height,
+            end_height: artifact.public_inputs.finality_height,
+        },
+        manifest_hash,
+        payload: BridgeProofPayload::TransparentZk(BridgeTransparentProof {
+            proof: ProofBox::new(backend, proof_bytes),
+            recursion_depth: None,
+        }),
+        pinned: false,
+    }
+}
+
 fn make_sccp_ton_to_sora_unverified_message_bridge_proof(nonce: u64) -> BridgeProof {
     let mut proof = make_sccp_sol_to_sora_message_bridge_proof(nonce);
     let BridgeProofPayload::TransparentZk(transparent) = &mut proof.payload else {
@@ -2221,7 +2846,139 @@ fn submit_sccp_inbound_message_rejects_unready_lane_even_if_config_allows() {
 }
 
 #[test]
-fn submit_sccp_inbound_message_with_audited_sol_source_adapter_reaches_all_lanes_gate() {
+fn bsc_mainnet_source_chain_proof_binds_configured_source_adapter_deployment() {
+    let material = configured_bsc_source_verifier_material();
+    let deployment = configured_bsc_source_adapter_engine_deployment(&material);
+    let bundle = make_sccp_bsc_to_sora_message_bundle_with_material_and_deployment(
+        5601,
+        &material,
+        &deployment,
+    );
+    let proof = iroha_sccp::decode_sccp_source_chain_proof_envelope(&bundle.finality_proof)
+        .expect("decode BSC source proof");
+    assert_eq!(proof.source_domain, iroha_sccp::SCCP_DOMAIN_BSC);
+    assert_eq!(proof.target_domain, iroha_sccp::SCCP_DOMAIN_SORA);
+    assert!(
+        iroha_sccp::verified_sccp_bsc_mainnet_source_chain_proof_envelope_for_production(
+            &bundle,
+            &material,
+            &deployment,
+        )
+        .is_some(),
+        "BSC source proof must bind governed material and deployment evidence"
+    );
+    assert!(
+        iroha_sccp::sccp_message_transparent_public_inputs_with_source_verifier_material_and_deployment(
+            &bundle,
+            &material,
+            &deployment,
+        )
+        .is_some(),
+        "deployment-bound BSC source bundles must expose local admission public inputs"
+    );
+}
+
+#[test]
+fn bsc_mainnet_source_chain_proof_rejects_replayed_source_adapter_deployment() {
+    let material = configured_bsc_source_verifier_material();
+    let deployment = configured_bsc_source_adapter_engine_deployment(&material);
+    let mut replayed_deployment = deployment.clone();
+    replayed_deployment.deployment_receipt_hash = [0xe7; 32];
+    assert!(
+        iroha_sccp::sccp_source_adapter_ready_with_material_and_deployment_for_domain(
+            iroha_sccp::SCCP_DOMAIN_BSC,
+            &material,
+            &replayed_deployment,
+        ),
+        "the replayed BSC deployment is internally ready but must not match the proof"
+    );
+    let bundle = make_sccp_bsc_to_sora_message_bundle_with_material_and_deployment(
+        5602,
+        &material,
+        &deployment,
+    );
+    let proof = iroha_sccp::decode_sccp_source_chain_proof_envelope(&bundle.finality_proof)
+        .expect("decode BSC source proof");
+    assert!(
+        !iroha_sccp::verify_sccp_bsc_mainnet_source_chain_proof_envelope_production(
+            &proof,
+            &material,
+            &replayed_deployment,
+        ),
+        "BSC source proof must reject replayed deployment material"
+    );
+    assert!(
+        iroha_sccp::verified_sccp_bsc_mainnet_source_chain_proof_envelope_for_production(
+            &bundle,
+            &material,
+            &replayed_deployment,
+        )
+        .is_none(),
+        "BSC bundle helper must reject replayed deployment material"
+    );
+}
+
+#[test]
+fn submit_sccp_inbound_message_with_configured_bsc_source_adapter_is_accepted_for_bsc_launch() {
+    let world = iroha_core::state::World::new();
+    let kura = Kura::blank_kura_for_testing();
+    let query_handle = LiveQueryStore::start_test();
+    let telemetry = StateTelemetry::default();
+    let mut state = State::with_telemetry(world, kura, query_handle, telemetry);
+    state.zk.max_proof_size_bytes = SCCP_AUDITED_SOLANA_PROOF_MAX_BYTES;
+    state.zk.sccp_source_verifier_materials.clear();
+    state.zk.sccp_source_adapter_engine_deployments.clear();
+    state.zk.sccp_destination_rollouts.clear();
+    state.zk.sccp_route_allowlists.clear();
+
+    let material = configured_bsc_source_verifier_material();
+    let deployment = configured_bsc_source_adapter_engine_deployment(&material);
+    let destination_rollout = configured_bsc_destination_rollout();
+    let route_allowlist =
+        configured_bsc_route_allowlist(&material, &deployment, &destination_rollout);
+    state
+        .zk
+        .sccp_source_verifier_materials
+        .push(actual_source_verifier_material(&material));
+    state
+        .zk
+        .sccp_source_adapter_engine_deployments
+        .push(actual_source_adapter_engine_deployment(&deployment));
+    state
+        .zk
+        .sccp_destination_rollouts
+        .push(actual_destination_rollout(&destination_rollout));
+    state
+        .zk
+        .sccp_route_allowlists
+        .push(actual_route_allowlist(&route_allowlist));
+
+    let proof = make_sccp_bsc_to_sora_message_bridge_proof_with_material_and_deployment(
+        5603,
+        &material,
+        &deployment,
+    );
+    let proof_id = bridge_proof_id(&proof);
+    let exec = Executor::default();
+    let header = iroha_data_model::block::BlockHeader::new(nonzero!(3_u64), None, None, None, 0, 0);
+    let mut block = state.block(header);
+    let mut stx = block.transaction();
+    let submit: InstructionBox =
+        iroha_data_model::isi::bridge::SubmitBridgeProof::new(proof.clone()).into();
+    exec.execute_instruction(&mut stx, &ALICE_ID.clone(), submit)
+        .expect("BSC launch policy should admit configured BSC source proofs");
+
+    let rec = stx
+        .world
+        .proofs()
+        .get(&proof_id)
+        .expect("BSC proof should be recorded");
+    assert_eq!(rec.status, ProofStatus::Verified);
+    assert!(rec.bridge.is_some(), "BSC bridge metadata should be stored");
+}
+
+#[test]
+fn submit_sccp_inbound_message_with_audited_sol_source_adapter_waits_for_lane_launch() {
     let world = iroha_core::state::World::new();
     let kura = Kura::blank_kura_for_testing();
     let query_handle = LiveQueryStore::start_test();
@@ -2276,16 +3033,16 @@ fn submit_sccp_inbound_message_with_audited_sol_source_adapter_reaches_all_lanes
         iroha_data_model::isi::bridge::SubmitBridgeProof::new(proof.clone()).into();
     let err = exec
         .execute_instruction(&mut stx, &ALICE_ID.clone(), submit)
-        .expect_err("single-lane Solana material must still wait for all-lanes launch readiness");
+        .expect_err("Solana material must wait until the Solana lane launch policy opens");
     assert!(
-        format!("{err:?}").contains("all-lanes launch policy"),
+        format!("{err:?}").contains("BSC mainnet lane launch policy"),
         "unexpected error: {err:?}"
     );
     assert!(stx.world.proofs().get(&proof_id).is_none());
 }
 
 #[test]
-fn submit_sccp_inbound_message_with_audited_ton_source_adapter_reaches_all_lanes_gate() {
+fn submit_sccp_inbound_message_with_audited_ton_source_adapter_waits_for_lane_launch() {
     let world = iroha_core::state::World::new();
     let kura = Kura::blank_kura_for_testing();
     let query_handle = LiveQueryStore::start_test();
@@ -2336,16 +3093,16 @@ fn submit_sccp_inbound_message_with_audited_ton_source_adapter_reaches_all_lanes
         iroha_data_model::isi::bridge::SubmitBridgeProof::new(proof.clone()).into();
     let err = exec
         .execute_instruction(&mut stx, &ALICE_ID.clone(), submit)
-        .expect_err("single-lane TON material must still wait for all-lanes launch readiness");
+        .expect_err("TON material must wait until the TON lane launch policy opens");
     assert!(
-        format!("{err:?}").contains("all-lanes launch policy"),
+        format!("{err:?}").contains("BSC mainnet lane launch policy"),
         "unexpected error: {err:?}"
     );
     assert!(stx.world.proofs().get(&proof_id).is_none());
 }
 
 #[test]
-fn submit_sccp_inbound_message_with_configured_tron_source_adapter_reaches_all_lanes_gate() {
+fn submit_sccp_inbound_message_with_configured_tron_source_adapter_waits_for_lane_launch() {
     let world = iroha_core::state::World::new();
     let kura = Kura::blank_kura_for_testing();
     let query_handle = LiveQueryStore::start_test();
@@ -2395,9 +3152,9 @@ fn submit_sccp_inbound_message_with_configured_tron_source_adapter_reaches_all_l
         iroha_data_model::isi::bridge::SubmitBridgeProof::new(proof.clone()).into();
     let err = exec
         .execute_instruction(&mut stx, &ALICE_ID.clone(), submit)
-        .expect_err("single-lane TRON material must still wait for all-lanes launch readiness");
+        .expect_err("TRON material must wait until the TRON lane launch policy opens");
     assert!(
-        format!("{err:?}").contains("all-lanes launch policy"),
+        format!("{err:?}").contains("BSC mainnet lane launch policy"),
         "unexpected error: {err:?}"
     );
     assert!(stx.world.proofs().get(&proof_id).is_none());
@@ -2572,8 +3329,8 @@ fn submit_sccp_inbound_message_rejects_partial_ton_full_light_client_audit_hash(
 }
 
 #[test]
-fn submit_sccp_inbound_message_rejects_source_proof_without_deployment_binding_before_all_lanes_ready()
- {
+fn submit_sccp_inbound_message_rejects_source_proof_without_deployment_binding_before_lane_launch()
+{
     let world = iroha_core::state::World::new();
     let kura = Kura::blank_kura_for_testing();
     let query_handle = LiveQueryStore::start_test();
@@ -2616,10 +3373,9 @@ fn submit_sccp_inbound_message_rejects_source_proof_without_deployment_binding_b
         iroha_data_model::isi::bridge::SubmitBridgeProof::new(proof).into();
     let err = exec
         .execute_instruction(&mut stx, &ALICE_ID.clone(), submit)
-        .expect_err("source proof without deployment evidence must not bypass all-lanes launch");
+        .expect_err("source proof without deployment evidence must not bypass lane launch");
     assert!(
-        format!("{err:?}").contains("all-lanes launch policy")
-            && format!("{err:?}").contains("source verifier material"),
+        format!("{err:?}").contains("BSC mainnet lane launch policy"),
         "unexpected error: {err:?}"
     );
     assert!(stx.world.proofs().get(&proof_id).is_none());
@@ -2728,7 +3484,7 @@ fn submit_sccp_inbound_message_rejects_replayed_route_allowlist_material_behind_
 }
 
 #[test]
-fn submit_sccp_inbound_message_rejects_replayed_route_allowlist_after_sol_source_gate() {
+fn submit_sccp_inbound_message_waits_for_sol_lane_launch_before_route_allowlist_check() {
     let world = iroha_core::state::World::new();
     let kura = Kura::blank_kura_for_testing();
     let query_handle = LiveQueryStore::start_test();
@@ -2776,16 +3532,17 @@ fn submit_sccp_inbound_message_rejects_replayed_route_allowlist_after_sol_source
         iroha_data_model::isi::bridge::SubmitBridgeProof::new(proof).into();
     let err = exec
         .execute_instruction(&mut stx, &ALICE_ID.clone(), submit)
-        .expect_err("replayed route allowlist hash must fail after source gate opens");
+        .expect_err("Solana route allowlist drift must wait for lane launch");
     assert!(
-        format!("{err:?}").contains("route allowlist hash does not match the canonical"),
+        format!("{err:?}").contains("BSC mainnet lane launch policy")
+            && format!("{err:?}").contains("domain 3"),
         "unexpected error: {err:?}"
     );
     assert!(stx.world.proofs().get(&proof_id).is_none());
 }
 
 #[test]
-fn submit_sccp_inbound_message_rejects_replayed_route_allowlist_after_tron_source_gate() {
+fn submit_sccp_inbound_message_waits_for_tron_lane_launch_before_route_allowlist_check() {
     let world = iroha_core::state::World::new();
     let kura = Kura::blank_kura_for_testing();
     let query_handle = LiveQueryStore::start_test();
@@ -2828,17 +3585,18 @@ fn submit_sccp_inbound_message_rejects_replayed_route_allowlist_after_tron_sourc
         iroha_data_model::isi::bridge::SubmitBridgeProof::new(proof).into();
     let err = exec
         .execute_instruction(&mut stx, &ALICE_ID.clone(), submit)
-        .expect_err("replayed TRON route allowlist hash must fail after source gate opens");
+        .expect_err("TRON route allowlist drift must wait for lane launch");
     assert!(
-        format!("{err:?}").contains("route allowlist hash does not match the canonical"),
+        format!("{err:?}").contains("BSC mainnet lane launch policy")
+            && format!("{err:?}").contains("domain 5"),
         "unexpected error: {err:?}"
     );
     assert!(stx.world.proofs().get(&proof_id).is_none());
 }
 
 #[test]
-fn submit_sccp_inbound_message_rejects_tron_route_canary_transcript_drift_after_source_gate() {
-    macro_rules! assert_tron_canary_drift_rejected {
+fn submit_sccp_inbound_message_waits_for_tron_lane_launch_before_route_canary_drift_check() {
+    macro_rules! assert_tron_canary_drift_waits_for_lane_launch {
         ($label:literal, $field:ident, $value:expr, $seed:expr) => {{
             let world = iroha_core::state::World::new();
             let kura = Kura::blank_kura_for_testing();
@@ -2888,10 +3646,11 @@ fn submit_sccp_inbound_message_rejects_tron_route_canary_transcript_drift_after_
                 .expect_err(concat!(
                     "TRON route canary ",
                     $label,
-                    " drift must fail after source gate opens"
+                    " drift must wait for lane launch"
                 ));
             assert!(
-                format!("{err:?}").contains("route canary evidence is not bound"),
+                format!("{err:?}").contains("BSC mainnet lane launch policy")
+                    && format!("{err:?}").contains("domain 5"),
                 "unexpected {label} error: {err:?}",
                 label = $label,
             );
@@ -2899,49 +3658,49 @@ fn submit_sccp_inbound_message_rejects_tron_route_canary_transcript_drift_after_
         }};
     }
 
-    assert_tron_canary_drift_rejected!(
+    assert_tron_canary_drift_waits_for_lane_launch!(
         "call-data hash",
         tron_route_canary_call_data_sha256,
         Some(hex::encode([0x01; 32])),
         123
     );
-    assert_tron_canary_drift_rejected!(
+    assert_tron_canary_drift_waits_for_lane_launch!(
         "payload hash",
         tron_route_canary_payload_hash,
         Some(hex::encode([0x02; 32])),
         124
     );
-    assert_tron_canary_drift_rejected!(
+    assert_tron_canary_drift_waits_for_lane_launch!(
         "statement hash",
         tron_route_canary_statement_hash,
         Some(hex::encode([0x03; 32])),
         125
     );
-    assert_tron_canary_drift_rejected!(
+    assert_tron_canary_drift_waits_for_lane_launch!(
         "commitment root",
         tron_route_canary_commitment_root,
         Some(hex::encode([0x04; 32])),
         126
     );
-    assert_tron_canary_drift_rejected!(
+    assert_tron_canary_drift_waits_for_lane_launch!(
         "finality height",
         tron_route_canary_finality_height,
         Some(hex::encode([0x05; 32])),
         127
     );
-    assert_tron_canary_drift_rejected!(
+    assert_tron_canary_drift_waits_for_lane_launch!(
         "finality block hash",
         tron_route_canary_finality_block_hash,
         Some(hex::encode([0x06; 32])),
         128
     );
-    assert_tron_canary_drift_rejected!(
+    assert_tron_canary_drift_waits_for_lane_launch!(
         "proof version",
         tron_route_canary_proof_version,
         Some(2),
         129
     );
-    assert_tron_canary_drift_rejected!(
+    assert_tron_canary_drift_waits_for_lane_launch!(
         "proof source domain",
         tron_route_canary_proof_source_domain,
         Some(iroha_sccp::SCCP_DOMAIN_ETH),
@@ -2950,7 +3709,7 @@ fn submit_sccp_inbound_message_rejects_tron_route_canary_transcript_drift_after_
 }
 
 #[test]
-fn submit_sccp_inbound_message_rejects_tron_destination_network_drift_after_source_gate() {
+fn submit_sccp_inbound_message_waits_for_tron_lane_launch_before_destination_network_drift_check() {
     let world = iroha_core::state::World::new();
     let kura = Kura::blank_kura_for_testing();
     let query_handle = LiveQueryStore::start_test();
@@ -3009,10 +3768,10 @@ fn submit_sccp_inbound_message_rejects_tron_destination_network_drift_after_sour
         iroha_data_model::isi::bridge::SubmitBridgeProof::new(proof).into();
     let err = exec
         .execute_instruction(&mut stx, &ALICE_ID.clone(), submit)
-        .expect_err("TRON destination network drift must fail after source gate opens");
+        .expect_err("TRON destination network drift must wait for lane launch");
     assert!(
-        format!("{err:?}")
-            .contains("destination verifier rollout material is not production-ready"),
+        format!("{err:?}").contains("BSC mainnet lane launch policy")
+            && format!("{err:?}").contains("domain 5"),
         "unexpected error: {err:?}"
     );
     assert!(stx.world.proofs().get(&proof_id).is_none());

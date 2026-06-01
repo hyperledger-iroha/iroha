@@ -6391,7 +6391,7 @@ pub struct SccpCapabilitiesDto {
     #[serde(default)]
     #[norito(default)]
     pub production_policy: iroha_sccp::SccpProductionPolicyV1,
-    /// Whether every advertised SCCP lane currently satisfies the all-lanes launch gate.
+    /// Whether the currently configured SCCP production launch policy is satisfied.
     #[serde(default)]
     #[norito(default)]
     pub launch_ready: bool,
@@ -6557,6 +6557,18 @@ fn sccp_counterparty_capabilities() -> Result<Vec<SccpCounterpartyCapabilityDto>
 }
 
 fn sccp_capabilities_snapshot() -> Result<SccpCapabilitiesDto> {
+    let production_policy = iroha_sccp::sccp_production_policy_v1();
+    let launch_ready = match production_policy.launch_mode {
+        iroha_sccp::SccpLaunchModeV1::AllLanesAtOnce => {
+            iroha_sccp::sccp_all_lanes_launch_ready_v1()
+        }
+        iroha_sccp::SccpLaunchModeV1::EthereumMainnetLane => {
+            iroha_sccp::sccp_lane_production_ready_for_domain(iroha_sccp::SCCP_DOMAIN_ETH)
+        }
+        iroha_sccp::SccpLaunchModeV1::BscMainnetLane => {
+            iroha_sccp::sccp_lane_production_ready_for_domain(iroha_sccp::SCCP_DOMAIN_BSC)
+        }
+    };
     Ok(SccpCapabilitiesDto {
         local_domain: iroha_sccp::SCCP_DOMAIN_SORA,
         local_chain: "sora".to_owned(),
@@ -6581,8 +6593,8 @@ fn sccp_capabilities_snapshot() -> Result<SccpCapabilitiesDto> {
         message_submit_path: Some("/v1/bridge/messages".to_owned()),
         #[cfg(not(feature = "app_api"))]
         message_submit_path: None,
-        production_policy: iroha_sccp::sccp_production_policy_v1(),
-        launch_ready: iroha_sccp::sccp_all_lanes_launch_ready_v1(),
+        production_policy,
+        launch_ready,
         message_payload_kinds: iroha_sccp::sccp_message_payload_kind_keys_v1(),
         codecs: sccp_codec_capabilities()?,
         counterparties: sccp_counterparty_capabilities()?,
@@ -7438,8 +7450,8 @@ fn validate_sccp_destination_binding_matches_configured_launch_policy(
         destination_binding,
         destination_rollout,
     )?;
-    if destination_binding.is_some() {
-        sccp_configured_all_lanes_launch_ready(zk_config)?;
+    if let (Some(_), Some(destination_rollout)) = (destination_binding, destination_rollout) {
+        sccp_configured_launch_ready_for_domain(zk_config, destination_rollout.domain)?;
     }
     Ok(())
 }
@@ -7501,6 +7513,11 @@ fn sccp_configured_route_allowlist_for_domain(
             .clone(),
         evm_route_canary_transaction_hash: configured.evm_route_canary_transaction_hash.clone(),
         evm_route_canary_log_index: configured.evm_route_canary_log_index,
+        evm_route_canary_receipt_block_number: configured.evm_route_canary_receipt_block_number,
+        evm_route_canary_receipt_block_hash: configured.evm_route_canary_receipt_block_hash.clone(),
+        evm_route_canary_block_receipts_root: configured
+            .evm_route_canary_block_receipts_root
+            .clone(),
         evm_route_canary_call_data_sha256: configured.evm_route_canary_call_data_sha256.clone(),
         evm_route_canary_message_id: configured.evm_route_canary_message_id.clone(),
         evm_route_canary_payload_hash: configured.evm_route_canary_payload_hash.clone(),
@@ -7709,6 +7726,75 @@ fn sccp_configured_all_lanes_launch_ready(
 }
 
 #[cfg(feature = "app_api")]
+fn sccp_configured_launch_ready_for_domain(
+    zk_config: &iroha_config::parameters::actual::Zk,
+    domain: u32,
+) -> Result<()> {
+    let (launch_domain, launch_policy_label, launch_source_label) =
+        match iroha_sccp::sccp_production_policy_v1().launch_mode {
+            iroha_sccp::SccpLaunchModeV1::AllLanesAtOnce => {
+                return sccp_configured_all_lanes_launch_ready(zk_config);
+            }
+            iroha_sccp::SccpLaunchModeV1::EthereumMainnetLane => (
+                iroha_sccp::SCCP_DOMAIN_ETH,
+                "SCCP Ethereum mainnet lane launch policy",
+                "Ethereum mainnet",
+            ),
+            iroha_sccp::SccpLaunchModeV1::BscMainnetLane => (
+                iroha_sccp::SCCP_DOMAIN_BSC,
+                "SCCP BSC mainnet lane launch policy",
+                "BSC mainnet",
+            ),
+        };
+    if domain != launch_domain {
+        return Err(sccp_bad_request(format!(
+            "{launch_policy_label} only admits {launch_source_label} source proofs before domain {domain} is enabled"
+        )));
+    }
+
+    let lane = sccp_configured_source_lane_for_domain(zk_config, domain)?.ok_or_else(|| {
+        sccp_bad_request(format!(
+            "{launch_policy_label} requires configured production material for domain {domain}"
+        ))
+    })?;
+    let route_allowlist = sccp_configured_route_allowlist_for_domain(zk_config, domain)?
+        .ok_or_else(|| {
+            sccp_bad_request(format!(
+                "{launch_policy_label} requires route allowlist for domain {domain}"
+            ))
+        })?;
+    let route_canary_hash = sccp_config_route_allowlist_nonzero_h256(
+        route_allowlist
+            .route_canary_evidence_hash
+            .as_deref()
+            .ok_or_else(|| {
+                sccp_bad_request(format!(
+                    "SCCP route allowlist for domain {domain} is missing route canary evidence hash"
+                ))
+            })?,
+        "route_canary_evidence_hash",
+    )?;
+    for (role, source_hash) in [
+        (
+            "source verifier material",
+            iroha_sccp::sccp_source_verifier_material_hash(&lane.material),
+        ),
+        (
+            "source-adapter deployment",
+            iroha_sccp::sccp_source_adapter_engine_deployment_hash(&lane.deployment),
+        ),
+    ] {
+        if route_canary_hash == source_hash {
+            return Err(sccp_bad_request(format!(
+                "{launch_policy_label} requires route canary evidence hash for domain {domain} to be distinct from {role} record hash"
+            )));
+        }
+    }
+
+    Ok(())
+}
+
+#[cfg(feature = "app_api")]
 fn sccp_configured_source_lane_for_bundle(
     state: &CoreState,
     bundle: &NexusSccpMessageProofV1,
@@ -7717,7 +7803,7 @@ fn sccp_configured_source_lane_for_bundle(
     let zk_config = state.zk_snapshot();
     let lane = sccp_configured_source_lane_for_domain(&zk_config, source_domain)?;
     if lane.is_some() {
-        sccp_configured_all_lanes_launch_ready(&zk_config)?;
+        sccp_configured_launch_ready_for_domain(&zk_config, source_domain)?;
     }
     Ok(lane)
 }
@@ -8739,6 +8825,9 @@ mod sccp_message_backend_tests {
                 iroha_sccp::sccp_source_adapter_engine_deployment_hash(deployment),
                 [0xe0 | (domain as u8); 32],
                 0,
+                10_000 + u64::from(domain),
+                [0xd5u8.wrapping_add(domain as u8); 32],
+                [0xd6u8.wrapping_add(domain as u8); 32],
                 [0xd0u8.wrapping_add(domain as u8); 32],
                 [0xd1u8.wrapping_add(domain as u8); 32],
                 [0xd2u8.wrapping_add(domain as u8); 32],
@@ -8988,6 +9077,13 @@ mod sccp_message_backend_tests {
                 .clone(),
             evm_route_canary_transaction_hash: allowlist.evm_route_canary_transaction_hash.clone(),
             evm_route_canary_log_index: allowlist.evm_route_canary_log_index,
+            evm_route_canary_receipt_block_number: allowlist.evm_route_canary_receipt_block_number,
+            evm_route_canary_receipt_block_hash: allowlist
+                .evm_route_canary_receipt_block_hash
+                .clone(),
+            evm_route_canary_block_receipts_root: allowlist
+                .evm_route_canary_block_receipts_root
+                .clone(),
             evm_route_canary_call_data_sha256: allowlist.evm_route_canary_call_data_sha256.clone(),
             evm_route_canary_message_id: allowlist.evm_route_canary_message_id.clone(),
             evm_route_canary_payload_hash: allowlist.evm_route_canary_payload_hash.clone(),
@@ -10311,7 +10407,7 @@ mod sccp_message_backend_tests {
     }
 
     #[test]
-    fn destination_binding_query_requires_all_lanes_launch_policy() {
+    fn destination_binding_query_respects_bsc_lane_launch_policy() {
         let bundle = sample_tron_message_bundle(49);
         let mut fields = SccpEvmDestinationQuery {
             network_id_hex: Some(format!("0x{}", "71".repeat(32))),
@@ -10368,9 +10464,9 @@ mod sccp_message_backend_tests {
             Some(&binding),
             Some(&rollout),
         )
-        .expect_err("configured destination bindings must wait for all lanes");
+        .expect_err("TRON destination bindings must wait for their lane launch");
         assert!(conversion_message(&err).is_some_and(|message| {
-            message.contains("SCCP all-lanes launch policy requires configured production material")
+            message.contains("SCCP BSC mainnet lane launch policy") && message.contains("domain 5")
         }));
 
         let err = validate_sccp_destination_binding_matches_configured_launch_policy(
@@ -10378,9 +10474,57 @@ mod sccp_message_backend_tests {
             strict_material.binding_for_configured_rollout(),
             Some(&rollout),
         )
-        .expect_err("validated strict-disabled destination bindings must still wait for all lanes");
+        .expect_err(
+            "validated strict-disabled destination bindings must still wait for lane launch",
+        );
         assert!(conversion_message(&err).is_some_and(|message| {
-            message.contains("SCCP all-lanes launch policy requires configured production material")
+            message.contains("SCCP BSC mainnet lane launch policy") && message.contains("domain 5")
+        }));
+    }
+
+    #[test]
+    fn configured_bsc_mainnet_lane_launch_accepts_bsc_without_all_lanes() {
+        let mut zk = iroha_core::state::default_zk_config();
+        zk.sccp_source_verifier_materials.clear();
+        zk.sccp_source_adapter_engine_deployments.clear();
+        zk.sccp_destination_rollouts.clear();
+        zk.sccp_route_allowlists.clear();
+
+        let domain = iroha_sccp::SCCP_DOMAIN_BSC;
+        let material = test_sccp_source_verifier_material_for_domain(domain, 0x20);
+        let deployment = test_sccp_source_adapter_deployment_for_domain(domain, &material, 0x20);
+        let rollout = test_sccp_destination_rollout_for_domain(domain, 0x20);
+        let allowlist =
+            test_sccp_route_allowlist_for_domain(domain, &material, &deployment, &rollout);
+        zk.sccp_source_verifier_materials
+            .push(test_actual_sccp_source_verifier_material(&material));
+        zk.sccp_source_adapter_engine_deployments
+            .push(test_actual_sccp_source_adapter_deployment(
+                &material,
+                &deployment,
+            ));
+        zk.sccp_destination_rollouts
+            .push(test_actual_sccp_destination_rollout(&rollout));
+        zk.sccp_route_allowlists
+            .push(test_actual_sccp_route_allowlist(&allowlist));
+
+        sccp_configured_launch_ready_for_domain(&zk, domain)
+            .expect("complete BSC lane should pass without other lanes");
+        let err = sccp_configured_all_lanes_launch_ready(&zk)
+            .expect_err("single BSC lane must not satisfy all-lanes diagnostics");
+        assert!(
+            conversion_message(&err)
+                .is_some_and(|message| { message.contains("SCCP all-lanes launch policy") })
+        );
+    }
+
+    #[test]
+    fn configured_bsc_mainnet_lane_launch_rejects_eth() {
+        let zk = test_configured_sccp_all_lanes_zk_config();
+        let err = sccp_configured_launch_ready_for_domain(&zk, iroha_sccp::SCCP_DOMAIN_ETH)
+            .expect_err("ETH must wait until its lane policy opens");
+        assert!(conversion_message(&err).is_some_and(|message| {
+            message.contains("SCCP BSC mainnet lane launch policy") && message.contains("domain 1")
         }));
     }
 
@@ -19343,6 +19487,61 @@ fn normalize_contract_payload(
 }
 
 #[cfg(feature = "app_api")]
+pub(crate) fn normalize_contract_call_metadata_for_bytecode(
+    metadata: &mut Metadata,
+    bytecode: &[u8],
+) -> Result<()> {
+    let entrypoint = metadata
+        .get("contract_entrypoint")
+        .map(|raw| {
+            raw.try_into_any_norito::<String>().map_err(|err| {
+                conversion_error(format!("invalid contract_entrypoint metadata: {err}"))
+            })
+        })
+        .transpose()?
+        .map(|value| value.trim().to_owned());
+    if entrypoint.as_deref().is_some_and(str::is_empty) {
+        return Err(conversion_error(
+            "contract_entrypoint must not be empty".to_owned(),
+        ));
+    }
+    let Some(entrypoint) = entrypoint else {
+        return Ok(());
+    };
+
+    let parsed = ivm::ProgramMetadata::parse(bytecode)
+        .map_err(|err| conversion_error(format!("invalid contract artifact: {err}")))?;
+    let contract_interface = parsed.contract_interface.as_ref().ok_or_else(|| {
+        conversion_error(
+            "contract entrypoint metadata requires a self-describing contract artifact".to_owned(),
+        )
+    })?;
+    let descriptor = contract_interface
+        .entrypoints
+        .iter()
+        .find(|candidate| candidate.name == entrypoint)
+        .ok_or_else(|| conversion_error(format!("unknown contract entrypoint `{entrypoint}`")))?;
+    if !matches!(descriptor.kind, manifest::EntryPointKind::Public) {
+        return Err(conversion_error(format!(
+            "contract entrypoint `{entrypoint}` is not public"
+        )));
+    }
+
+    let manifest_descriptor = descriptor.to_manifest_descriptor();
+    let payload = metadata.get("contract_payload").cloned();
+    let normalized = normalize_contract_payload(&manifest_descriptor, payload.as_ref())?;
+    if let Some(payload) = normalized {
+        metadata.insert(
+            "contract_payload"
+                .parse()
+                .expect("static metadata key `contract_payload`"),
+            payload,
+        );
+    }
+    Ok(())
+}
+
+#[cfg(feature = "app_api")]
 fn resolve_contract_entrypoint_pc(
     code_bytes: &[u8],
     selector: &str,
@@ -21848,6 +22047,60 @@ mod contract_payload_normalization_tests {
             "alias_literal".into(),
             Value::from(hex::encode("banking@centralbank".as_bytes())),
         );
+        assert_eq!(value, Value::Object(expected));
+    }
+
+    #[test]
+    fn normalize_contract_call_metadata_for_bytecode_canonicalizes_zk_ivm_payload() {
+        let code = ivm::KotodamaCompiler::new()
+            .compile_source(
+                r#"
+seiyaku ZkIvmPayloadNormalizeTest {
+  meta { abi_version: 1; }
+
+  kotoage fn burn_and_record(
+    sender: AccountId,
+    settlement_asset: AssetDefinitionId,
+    amount: int,
+    record_instruction: Blob
+  ) {}
+}
+"#,
+            )
+            .expect("compile payload normalization contract");
+        let sender = AccountId::new(KeyPair::random().public_key().clone()).to_string();
+        let settlement_asset =
+            test_asset_definition_literal_from_hex("550e8400e29b41d4a7164466554400aa");
+        let mut metadata = Metadata::default();
+        metadata.insert(
+            "contract_entrypoint".parse().expect("metadata key"),
+            IrohaJson::new("burn_and_record"),
+        );
+        let mut request_payload = Map::new();
+        request_payload.insert("sender".into(), Value::from(sender.clone()));
+        request_payload.insert(
+            "settlement_asset".into(),
+            Value::from(settlement_asset.clone()),
+        );
+        request_payload.insert("amount".into(), Value::from("25000000000000000"));
+        request_payload.insert("record_instruction".into(), Value::from("0xAABBCC"));
+        metadata.insert(
+            "contract_payload".parse().expect("metadata key"),
+            IrohaJson::new(Value::Object(request_payload)),
+        );
+
+        normalize_contract_call_metadata_for_bytecode(&mut metadata, &code)
+            .expect("metadata payload should normalize");
+
+        let payload = metadata
+            .get("contract_payload")
+            .expect("contract payload metadata");
+        let value = json::parse_value(payload.get()).expect("normalized payload json");
+        let mut expected = Map::new();
+        expected.insert("sender".into(), Value::from(sender));
+        expected.insert("settlement_asset".into(), Value::from(settlement_asset));
+        expected.insert("amount".into(), Value::from(25_000_000_000_000_000_i64));
+        expected.insert("record_instruction".into(), Value::from("aabbcc"));
         assert_eq!(value, Value::Object(expected));
     }
 

@@ -8,6 +8,14 @@ RECURSIVE_AGGREGATION_METHOD = (
     "kagemusha_prove_verified_recursive_aggregation_proof_bundle"
     "_with_records_and_pallas_open_envelopes"
 )
+RECURSIVE_SPEND_METHODS = (
+    "kagemusha_recursive_spend_init",
+    "kagemusha_recursive_spend_append",
+    "kagemusha_recursive_spend_lineage_witness_from_init_result",
+    "kagemusha_recursive_spend_lineage_witness_append_result",
+    "kagemusha_recursive_spend_verify",
+    "kagemusha_recursive_spend_redeem",
+)
 
 
 class _Native:
@@ -201,6 +209,77 @@ def test_recursive_kagemusha_availability_requires_bridge_abi_6(
     )
     with pytest.raises(RuntimeError, match="native bridge ABI 6"):
         kagemusha.kagemusha_recursive_spend_init(b"request")
+
+
+def test_recursive_kagemusha_availability_rejects_broken_abi_probe(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    native = _Native()
+
+    def broken_abi_probe() -> int:
+        raise OSError("bridge denied")
+
+    native.kagemusha_recursive_spend_bridge_abi_version = broken_abi_probe
+    monkeypatch.setattr(kagemusha, "load_crypto_extension", lambda: native)
+
+    assert kagemusha.is_kagemusha_recursive_spend_available() is False
+    assert (
+        kagemusha.preferred_kagemusha_offline_spend_mode()
+        == kagemusha.KAGEMUSHA_OFFLINE_SPEND_MODE_CHECKED_PREFOLD_V1
+    )
+    with pytest.raises(RuntimeError, match="native bridge ABI 6"):
+        kagemusha.kagemusha_recursive_spend_init(b"request")
+
+
+def test_recursive_kagemusha_helpers_require_complete_abi_surface(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    class PartialNative:
+        def kagemusha_recursive_spend_bridge_abi_version(self) -> int:
+            return 6
+
+        def kagemusha_recursive_spend_init(self, request: bytes) -> bytes:
+            return b"init"
+
+        def kagemusha_recursive_spend_append(self, request: bytes) -> bytes:
+            return b"append"
+
+        def kagemusha_recursive_spend_lineage_witness_from_init_result(
+            self,
+            request: bytes,
+            bundle: bytes,
+        ) -> bytes:
+            return b"lineage-init"
+
+        def kagemusha_recursive_spend_verify(self, request: bytes) -> bytes:
+            return b"verify"
+
+        def kagemusha_recursive_spend_redeem(self, request: bytes) -> bytes:
+            return b"redeem"
+
+    monkeypatch.setattr(kagemusha, "load_crypto_extension", lambda: PartialNative())
+
+    assert kagemusha.is_kagemusha_recursive_spend_available() is False
+    assert (
+        kagemusha.preferred_kagemusha_offline_spend_mode()
+        == kagemusha.KAGEMUSHA_OFFLINE_SPEND_MODE_CHECKED_PREFOLD_V1
+    )
+    with pytest.raises(RuntimeError, match="complete native bridge ABI 6 surface"):
+        kagemusha.kagemusha_recursive_spend_init(b"request")
+
+
+@pytest.mark.parametrize("missing_method", RECURSIVE_SPEND_METHODS)
+def test_recursive_kagemusha_helpers_reject_each_missing_abi_method(
+    monkeypatch: pytest.MonkeyPatch,
+    missing_method: str,
+) -> None:
+    native = _Native()
+    setattr(native, missing_method, None)
+    monkeypatch.setattr(kagemusha, "load_crypto_extension", lambda: native)
+
+    assert kagemusha.is_kagemusha_recursive_spend_available() is False
+    with pytest.raises(RuntimeError, match="complete native bridge ABI 6 surface"):
+        kagemusha.kagemusha_recursive_spend_verify(b"request")
 
 
 def test_recursive_kagemusha_helpers_reject_empty_native_outputs(

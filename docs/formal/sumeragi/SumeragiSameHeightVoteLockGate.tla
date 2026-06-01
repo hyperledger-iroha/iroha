@@ -369,3 +369,4 @@ BugFrontierAggregateWithoutObservedVote ==
     SpecActions(FrontierRequiresObservedVote)
 
 =============================================================================
+====

@@ -42,10 +42,24 @@ def _verify_module() -> Any:
     return _load_module("_sccp_verify_release_bundle", VERIFY_SCRIPT)
 
 
+def _path_control_character(path: str) -> str | None:
+    for character in path:
+        if ord(character) < 0x20 or ord(character) == 0x7F:
+            return repr(character)
+    return None
+
+
 def _artifact(path: Path, root: Path) -> dict[str, Any]:
     payload = path.read_bytes()
+    artifact_path = path.relative_to(root).as_posix()
+    control_character = _path_control_character(artifact_path)
+    if control_character is not None:
+        raise ValueError(
+            "release artifact path contains control character "
+            f"{control_character}: {artifact_path!r}"
+        )
     return {
-        "path": path.relative_to(root).as_posix(),
+        "path": artifact_path,
         "bytes": len(payload),
         "sha256": hashlib.sha256(payload).hexdigest(),
     }
@@ -193,10 +207,10 @@ def _bundle_artifacts(output_dir: Path, paths: list[Path]) -> list[dict[str, Any
     return [_artifact(path, output_dir) for path in paths]
 
 
-def _verify_generated_bundle(output_dir: Path) -> None:
+def _verify_generated_bundle(output_dir: Path) -> dict[str, Any]:
     summary = _verify_module().verify_bundle(output_dir)
     if summary["verified"]:
-        return
+        return summary
     errors = "\n".join(f"- {error}" for error in summary["errors"])
     raise RuntimeError(
         "generated SCCP release bundle failed strict verification:\n" + errors
@@ -422,8 +436,9 @@ def main(argv: list[str] | None = None) -> int:
             "artifacts": _bundle_artifacts(args.output_dir, all_artifact_paths),
         }
         _write_json(manifest_json, manifest)
+        verification_summary: dict[str, Any] | None = None
         if report["production_ready"]:
-            _verify_generated_bundle(args.output_dir)
+            verification_summary = _verify_generated_bundle(args.output_dir)
     except (
         OSError,
         RuntimeError,
@@ -435,6 +450,11 @@ def main(argv: list[str] | None = None) -> int:
     print(f"Wrote SCCP release bundle to {args.output_dir}")
     if report["production_ready"]:
         print(f"Verified SCCP release bundle at {args.output_dir}")
+        if verification_summary is not None:
+            print(
+                "SCCP release bundle manifest_sha256: "
+                f"{verification_summary['manifest_sha256']}"
+            )
     return 0
 
 

@@ -451,6 +451,7 @@ class SourceSccpProofHashesTest {
     @Test
     fun derivesSourceProofHashesFromWitnessMaterial() {
         val sourceEventDigest = "34".repeat(32)
+        val zeroSourceEventDigest = "00".repeat(32)
         val branch = listOf(ByteArray(32) { 0xee.toByte() })
         val changedBranch = listOf(ByteArray(32) { 0x12.toByte() })
         val evmReceiptRootMptValueHex =
@@ -497,6 +498,21 @@ class SourceSccpProofHashesTest {
         )
         assertTrue(evmHash.matches(Regex("0x[0-9a-f]{64}")))
         assertTrue(evmHash != changedEvmHash)
+        val zeroEvmDigest = assertFailsWith<IllegalArgumentException> {
+            SccpSourceProofs.canonicalEvmReceiptProofBytes(
+                sourceEventDigest = zeroSourceEventDigest,
+                beaconSlot = "11",
+                executionBlockNumber = "12",
+                executionBlockHash = "aa".repeat(32),
+                executionReceiptsRoot = evmReceiptsRoot,
+                beaconFinalizedRoot = "cc".repeat(32),
+                syncCommitteeRoot = "dd".repeat(32),
+                receiptRootIndex = "0",
+                receiptTrieProofNodes = evmReceiptTrieProofNodes,
+                inclusionBranch = branch,
+            )
+        }
+        assertTrue(zeroEvmDigest.message.orEmpty().contains("sourceEventDigest must not be zero"))
 
         assertEquals(
             306,
@@ -513,6 +529,21 @@ class SourceSccpProofHashesTest {
                 inclusionBranch = branch,
             ).size,
         )
+        val zeroBscDigest = assertFailsWith<IllegalArgumentException> {
+            SccpSourceProofs.canonicalBscReceiptProofBytes(
+                sourceEventDigest = zeroSourceEventDigest,
+                validatorEpoch = "21",
+                blockNumber = "22",
+                blockHash = "aa".repeat(32),
+                receiptsRoot = evmReceiptsRoot,
+                validatorSetHash = "cc".repeat(32),
+                commitSealHash = "dd".repeat(32),
+                receiptRootIndex = "0",
+                receiptTrieProofNodes = evmReceiptTrieProofNodes,
+                inclusionBranch = branch,
+            )
+        }
+        assertTrue(zeroBscDigest.message.orEmpty().contains("sourceEventDigest must not be zero"))
         assertTrue(
             SccpSourceProofs.bscReceiptProofHash(
                 sourceEventDigest = sourceEventDigest,
@@ -2272,6 +2303,20 @@ class SourceSccpProofHashesTest {
                 inclusionBranch = branch,
             ).size,
         )
+        val zeroSubstrateDigest = assertFailsWith<IllegalArgumentException> {
+            SccpSourceProofs.canonicalSubstrateStorageProofBytes(
+                sourceDomain = SccpSourceProofs.DOMAIN_SORA_KUSAMA,
+                sourceEventDigest = zeroHash,
+                sourceEventLeafIndex = "0",
+                finalizedBlockNumber = "31",
+                grandpaSetId = "32",
+                blockHash = "aa".repeat(32),
+                authoritySetHash = "cc".repeat(32),
+                eventsRoot = "bb".repeat(32),
+                inclusionBranch = branch,
+            )
+        }
+        assertTrue(zeroSubstrateDigest.message.orEmpty().contains("sourceEventDigest must not be zero"))
         val substrateStatement = SccpSourceProofs.canonicalSubstrateRuntimeStorageVerificationStatementBytes(
             sourceDomain = SccpSourceProofs.DOMAIN_SORA_KUSAMA,
             sourceEventDigest = sourceEventDigest,

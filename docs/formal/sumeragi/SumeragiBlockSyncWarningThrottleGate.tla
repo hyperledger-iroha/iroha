@@ -301,3 +301,4 @@ BugClearKeepsBurst ==
   ImplementationActions(ClearResetsBurst) = SpecActions(ClearResetsBurst)
 
 =============================================================================
+====

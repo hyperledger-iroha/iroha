@@ -138,4 +138,5 @@ public interface IrohaClient {
             "resolveAccountAlias requires a concrete IrohaClient implementation"));
     return future;
   }
+
 }

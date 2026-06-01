@@ -48,6 +48,8 @@ VARIABLES
 \* @type: <<Set(Str)>>;
 vars == <<tried>>
 
+TlcSingletonOrEmpty == Cardinality(tried) \in {0, 1}
+
 Cases == {
   "current_prepare",
   "current_commit",
@@ -283,3 +285,4 @@ Safety ==
   /\ NoCrossPhaseDispatch
 
 =============================================================================
+====

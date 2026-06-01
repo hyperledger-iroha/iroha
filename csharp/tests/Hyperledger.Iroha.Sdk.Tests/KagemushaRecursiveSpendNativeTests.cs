@@ -11,6 +11,51 @@ public sealed class KagemushaRecursiveSpendNativeTests
     }
 
     [Fact]
+    public void RecursiveSpendNativeAvailabilityRequiresCompleteAbiSurface()
+    {
+        Assert.True(KagemushaRecursiveSpendNative.IsAvailable(() => 6u, () => true));
+        Assert.False(KagemushaRecursiveSpendNative.IsAvailable(() => null, () => true));
+        Assert.False(KagemushaRecursiveSpendNative.IsAvailable(() => 5u, () => true));
+        Assert.False(KagemushaRecursiveSpendNative.IsAvailable(() => 6u, () => false));
+        Assert.False(KagemushaRecursiveSpendNative.IsAvailable(
+            () => throw new DllNotFoundException("missing bridge"),
+            () => true));
+        Assert.False(KagemushaRecursiveSpendNative.IsAvailable(
+            () => throw new EntryPointNotFoundException("missing ABI probe"),
+            () => true));
+        Assert.False(KagemushaRecursiveSpendNative.IsAvailable(
+            () => throw new BadImageFormatException("wrong architecture"),
+            () => true));
+        Assert.False(KagemushaRecursiveSpendNative.IsAvailable(
+            () => 6u,
+            () => throw new EntryPointNotFoundException("missing recursive spend symbol")));
+        Assert.False(KagemushaRecursiveSpendNative.IsAvailable(
+            () => 6u,
+            () => throw new InvalidOperationException("symbol probe failed")));
+    }
+
+    [Fact]
+    public void RecursiveSpendNativeAvailabilityRequiresExpectedEmptyArchiveProbeFailure()
+    {
+        Assert.True(KagemushaRecursiveSpendNative.IsExpectedEmptyArchiveProbeResult(
+            -311,
+            IntPtr.Zero,
+            UIntPtr.Zero));
+        Assert.False(KagemushaRecursiveSpendNative.IsExpectedEmptyArchiveProbeResult(
+            0,
+            IntPtr.Zero,
+            UIntPtr.Zero));
+        Assert.False(KagemushaRecursiveSpendNative.IsExpectedEmptyArchiveProbeResult(
+            -1,
+            IntPtr.Zero,
+            UIntPtr.Zero));
+        Assert.False(KagemushaRecursiveSpendNative.IsExpectedEmptyArchiveProbeResult(
+            -311,
+            IntPtr.Zero,
+            (UIntPtr)1));
+    }
+
+    [Fact]
     public void RecursiveSpendNativePreferredModeDefaultsToRecursiveWhenAvailable()
     {
         Assert.Equal(

@@ -25,6 +25,8 @@ VARIABLES
 \* @type: <<Set(Int)>>;
 vars == <<tried>>
 
+TlcSingletonOrEmpty == Cardinality(tried) \in {0, 1}
+
 ValidNativeReceipt == 1
 ValidSingleNoReceipt == 2
 NativeMissingReceipt == 3

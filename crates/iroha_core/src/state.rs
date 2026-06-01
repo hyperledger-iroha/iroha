@@ -25849,6 +25849,18 @@ fn zk_policy_put_sccp_route_allowlists(
                     .cmp(&right.evm_route_canary_log_index)
             })
             .then_with(|| {
+                left.evm_route_canary_receipt_block_number
+                    .cmp(&right.evm_route_canary_receipt_block_number)
+            })
+            .then_with(|| {
+                left.evm_route_canary_receipt_block_hash
+                    .cmp(&right.evm_route_canary_receipt_block_hash)
+            })
+            .then_with(|| {
+                left.evm_route_canary_block_receipts_root
+                    .cmp(&right.evm_route_canary_block_receipts_root)
+            })
+            .then_with(|| {
                 left.evm_route_canary_call_data_sha256
                     .cmp(&right.evm_route_canary_call_data_sha256)
             })
@@ -26038,6 +26050,21 @@ fn zk_policy_put_sccp_route_allowlists(
             hasher,
             "evm_route_canary_log_index",
             allowlist.evm_route_canary_log_index,
+        );
+        zk_policy_put_option_u64(
+            hasher,
+            "evm_route_canary_receipt_block_number",
+            allowlist.evm_route_canary_receipt_block_number,
+        );
+        zk_policy_put_option_str(
+            hasher,
+            "evm_route_canary_receipt_block_hash",
+            allowlist.evm_route_canary_receipt_block_hash.as_deref(),
+        );
+        zk_policy_put_option_str(
+            hasher,
+            "evm_route_canary_block_receipts_root",
+            allowlist.evm_route_canary_block_receipts_root.as_deref(),
         );
         zk_policy_put_option_str(
             hasher,
@@ -31295,6 +31322,14 @@ mod replay_validation_tests {
 
     #[test]
     fn replay_recovers_rotated_signature_topology_without_roster_metadata() {
+        run_replay_validation_test_on_stack(
+            "replay_recovers_rotated_signature_topology_without_roster_metadata",
+            replay_recovers_rotated_signature_topology_without_roster_metadata_impl,
+        );
+    }
+
+    #[allow(clippy::too_many_lines)]
+    fn replay_recovers_rotated_signature_topology_without_roster_metadata_impl() {
         use std::{borrow::Cow, collections::BTreeSet};
 
         use iroha_crypto::{Algorithm, KeyPair, SignatureOf};
@@ -52387,6 +52422,9 @@ mod tests {
                 route_canary_destination_binding_hash: Some(hex::encode([0x12; 32])),
                 evm_route_canary_transaction_hash: None,
                 evm_route_canary_log_index: None,
+                evm_route_canary_receipt_block_number: None,
+                evm_route_canary_receipt_block_hash: None,
+                evm_route_canary_block_receipts_root: None,
                 evm_route_canary_call_data_sha256: None,
                 evm_route_canary_message_id: None,
                 evm_route_canary_payload_hash: None,
@@ -52442,6 +52480,14 @@ mod tests {
         assert_ne!(
             changed_hash,
             compute_zk_consensus_policy_hash(&evm_route_canary_changed)
+        );
+
+        let mut evm_route_canary_receipt_block_changed = changed.clone();
+        evm_route_canary_receipt_block_changed.sccp_route_allowlists[0]
+            .evm_route_canary_receipt_block_number = Some(18_765_432);
+        assert_ne!(
+            changed_hash,
+            compute_zk_consensus_policy_hash(&evm_route_canary_receipt_block_changed)
         );
 
         let mut evm_route_canary_finality_changed = changed.clone();
@@ -52575,6 +52621,9 @@ mod tests {
                 route_canary_destination_binding_hash: Some(hex::encode([0x37; 32])),
                 evm_route_canary_transaction_hash: None,
                 evm_route_canary_log_index: None,
+                evm_route_canary_receipt_block_number: None,
+                evm_route_canary_receipt_block_hash: None,
+                evm_route_canary_block_receipts_root: None,
                 evm_route_canary_call_data_sha256: None,
                 evm_route_canary_message_id: None,
                 evm_route_canary_payload_hash: None,

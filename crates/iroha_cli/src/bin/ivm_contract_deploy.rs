@@ -57,8 +57,8 @@ use url::Url;
 
 const DEFAULT_CHAIN_DISCRIMINANT_TAIRA: u16 = 369;
 const DEFAULT_IVM_GAS_LIMIT: u64 = 1_000_000;
+const DEFAULT_MAX_DIRECT_REGISTER_BYTES_TX_BYTES: usize = 900_000;
 const DEFAULT_MAX_CYCLES: u64 = 1_000_000;
-const MAX_DIRECT_REGISTER_BYTES_TX_BYTES: usize = 40_000;
 const STAGED_REGISTER_CHUNK_BYTES: usize = 24_000;
 const COPY_WORD_BYTES: usize = 8;
 const LITERAL_DATA_START: i16 = 16;
@@ -79,16 +79,28 @@ struct Args {
     code_file: PathBuf,
     #[arg(long)]
     contract_alias: String,
+    #[arg(long)]
+    previous_contract_address: Option<String>,
     #[arg(long, default_value_t = DEFAULT_CHAIN_DISCRIMINANT_TAIRA)]
     chain_discriminant: u16,
     #[arg(long)]
     gas_asset_id: Option<String>,
     #[arg(long, default_value_t = DEFAULT_IVM_GAS_LIMIT)]
     gas_limit: u64,
+    #[arg(long, default_value_t = 300_000)]
+    status_timeout_ms: u64,
+    #[arg(long)]
+    transaction_ttl_ms: Option<u64>,
+    #[arg(long, default_value_t = 300_000)]
+    torii_request_timeout_ms: u64,
+    #[arg(long, default_value_t = DEFAULT_MAX_DIRECT_REGISTER_BYTES_TX_BYTES)]
+    max_direct_register_bytes_tx_bytes: usize,
     #[arg(long)]
     out_dir: Option<PathBuf>,
     #[arg(long, default_value_t = false)]
     emit_only: bool,
+    #[arg(long, default_value_t = false)]
+    skip_register_bytes: bool,
     #[arg(long, default_value_t = false)]
     force_direct_register: bool,
 }
@@ -120,6 +132,9 @@ fn make_client(
     authority: AccountId,
     chain_discriminant: u16,
     key_pair: KeyPair,
+    status_timeout_ms: u64,
+    transaction_ttl_ms: Option<u64>,
+    torii_request_timeout_ms: u64,
 ) -> Result<Client> {
     let config = Config {
         chain: ChainId::from(chain_id),
@@ -130,9 +145,11 @@ fn make_client(
         torii_api_url: Url::parse(torii_url).wrap_err("invalid --torii-url")?,
         torii_api_version: config::default_torii_api_version(),
         torii_api_min_proof_version: config::DEFAULT_TORII_API_MIN_PROOF_VERSION.to_string(),
-        torii_request_timeout: config::DEFAULT_TORII_REQUEST_TIMEOUT,
-        transaction_ttl: config::DEFAULT_TRANSACTION_TIME_TO_LIVE,
-        transaction_status_timeout: config::DEFAULT_TRANSACTION_STATUS_TIMEOUT,
+        torii_request_timeout: Duration::from_millis(torii_request_timeout_ms),
+        transaction_ttl: transaction_ttl_ms
+            .map(Duration::from_millis)
+            .unwrap_or(config::DEFAULT_TRANSACTION_TIME_TO_LIVE),
+        transaction_status_timeout: Duration::from_millis(status_timeout_ms),
         transaction_add_nonce: false,
         connect_queue_root: config::default_connect_queue_root(),
         soracloud_http_witness_file: None,
@@ -657,10 +674,15 @@ fn sign_ivm_transaction(
     chain_id: &ChainId,
     authority: &AccountId,
     private_key: &PrivateKey,
+    transaction_ttl: Option<Duration>,
     metadata: Metadata,
     program: Vec<u8>,
 ) -> SignedTransaction {
-    TransactionBuilder::new(chain_id.clone(), authority.clone())
+    let mut builder = TransactionBuilder::new(chain_id.clone(), authority.clone());
+    if let Some(transaction_ttl) = transaction_ttl {
+        builder.set_ttl(transaction_ttl);
+    }
+    builder
         .with_metadata(metadata)
         .with_executable(Executable::Ivm(IvmBytecode::from_compiled(program)))
         .sign(private_key)
@@ -670,10 +692,15 @@ fn sign_instruction_transaction(
     chain_id: &ChainId,
     authority: &AccountId,
     private_key: &PrivateKey,
+    transaction_ttl: Option<Duration>,
     metadata: Metadata,
     instructions: impl IntoIterator<Item = InstructionBox>,
 ) -> SignedTransaction {
-    TransactionBuilder::new(chain_id.clone(), authority.clone())
+    let mut builder = TransactionBuilder::new(chain_id.clone(), authority.clone());
+    if let Some(transaction_ttl) = transaction_ttl {
+        builder.set_ttl(transaction_ttl);
+    }
+    builder
         .with_metadata(metadata)
         .with_instructions(instructions)
         .sign(private_key)
@@ -708,6 +735,9 @@ fn main() -> Result<()> {
         authority.clone(),
         args.chain_discriminant,
         key_pair.clone(),
+        args.status_timeout_ms,
+        args.transaction_ttl_ms,
+        args.torii_request_timeout_ms,
     )?;
 
     let contract_alias: ContractAlias = args
@@ -727,6 +757,12 @@ fn main() -> Result<()> {
     )
     .map_err(|err| eyre!(err.to_string()))
     .wrap_err("failed to derive contract address")?;
+    let previous_contract_address: Option<iroha::data_model::smart_contract::ContractAddress> =
+        args.previous_contract_address
+            .as_deref()
+            .map(str::parse)
+            .transpose()
+            .wrap_err("failed to parse --previous-contract-address")?;
 
     let code =
         fs::read(&args.code_file).wrap_err_with(|| format!("read {}", args.code_file.display()))?;
@@ -734,6 +770,7 @@ fn main() -> Result<()> {
         .map_err(|err| eyre!("verify contract artifact: {err}"))?;
     let manifest = verified.manifest.signed(&key_pair);
     let code_hash = verified.code_hash;
+    let transaction_ttl = args.transaction_ttl_ms.map(Duration::from_millis);
     let tx_metadata = ivm_transaction_metadata(args.gas_asset_id.as_deref(), args.gas_limit)?;
     let register_request = RegisterSmartContractBytes {
         code_hash,
@@ -748,12 +785,13 @@ fn main() -> Result<()> {
         &client.chain,
         &authority,
         &private_key,
+        transaction_ttl,
         tx_metadata.clone(),
         register_bytes_program,
     );
     let direct_register_bytes_tx_size = direct_register_bytes_tx.encode_versioned().len();
     let use_staged_register = !args.force_direct_register
-        && direct_register_bytes_tx_size > MAX_DIRECT_REGISTER_BYTES_TX_BYTES;
+        && direct_register_bytes_tx_size > args.max_direct_register_bytes_tx_bytes;
 
     let mut register_stage_tx_hashes = Vec::new();
     let mut register_plans: Vec<(String, String, SignedTransaction)> = Vec::new();
@@ -769,6 +807,7 @@ fn main() -> Result<()> {
                 &client.chain,
                 &authority,
                 &private_key,
+                transaction_ttl,
                 tx_metadata.clone(),
                 chunk_program,
             );
@@ -785,6 +824,7 @@ fn main() -> Result<()> {
             &client.chain,
             &authority,
             &private_key,
+            transaction_ttl,
             tx_metadata.clone(),
             staged_register_program,
         );
@@ -815,38 +855,53 @@ fn main() -> Result<()> {
         &client.chain,
         &authority,
         &private_key,
+        transaction_ttl,
         tx_metadata,
         register_manifest_program,
     );
 
     let nonce_key =
         Name::from_str(CONTRACT_DEPLOY_NONCE_METADATA_KEY).expect("static metadata key is valid");
+    let mut activate_instructions = Vec::new();
+    if let Some(previous_contract_address) = previous_contract_address {
+        if previous_contract_address != contract_address {
+            activate_instructions.push(InstructionBox::from(SetContractAlias::clear(
+                previous_contract_address,
+            )));
+        }
+    }
+    activate_instructions.extend([
+        InstructionBox::from(ActivateContractInstance {
+            contract_address: contract_address.clone(),
+            code_hash,
+        }),
+        InstructionBox::from(SetContractAlias::bind(
+            contract_address.clone(),
+            contract_alias.clone(),
+            None,
+        )),
+        InstructionBox::from(SetKeyValue::account(
+            authority.clone(),
+            nonce_key,
+            Json::new(next_nonce),
+        )),
+    ]);
     let activate_tx = sign_instruction_transaction(
         &client.chain,
         &authority,
         &private_key,
+        transaction_ttl,
         instruction_transaction_metadata(args.gas_asset_id.as_deref(), &contract_address)?,
-        [
-            InstructionBox::from(ActivateContractInstance {
-                contract_address: contract_address.clone(),
-                code_hash,
-            }),
-            InstructionBox::from(SetContractAlias::bind(
-                contract_address.clone(),
-                contract_alias.clone(),
-                None,
-            )),
-            InstructionBox::from(SetKeyValue::account(
-                authority.clone(),
-                nonce_key,
-                Json::new(next_nonce),
-            )),
-        ],
+        activate_instructions,
     );
 
     let register_manifest_tx_hash = register_manifest_tx.hash();
     let activate_tx_hash = activate_tx.hash();
-    let mut planned_txs = register_plans;
+    let mut planned_txs = if args.skip_register_bytes {
+        Vec::new()
+    } else {
+        register_plans
+    };
     planned_txs.push((
         "register_manifest_via_ivm".to_owned(),
         "register-manifest-via-ivm".to_owned(),

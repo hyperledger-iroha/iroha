@@ -28,6 +28,12 @@ public final class SourceSccpProofs {
   public static final int DOMAIN_SORA_KUSAMA = 6;
   public static final int DOMAIN_SORA_POLKADOT = 7;
   public static final int DOMAIN_SORA2 = 8;
+  public static final long ETH_MAINNET_CHAIN_ID = 1L;
+  public static final String ETH_MAINNET_NETWORK_ID =
+      "0x0000000000000000000000000000000000000000000000000000000000000001";
+  public static final long BSC_MAINNET_CHAIN_ID = 56L;
+  public static final String BSC_MAINNET_NETWORK_ID =
+      "0x0000000000000000000000000000000000000000000000000000000000000038";
 
   private static final BigInteger MAX_U64 = BigInteger.ONE.shiftLeft(64).subtract(BigInteger.ONE);
   private static final int BSC_PARLIA_EXTRA_VANITY_BYTES = 32;
@@ -756,7 +762,114 @@ public final class SourceSccpProofs {
             verifierAddress,
             bridgeAddress,
             verifierCodeHash,
-            verifierKeyHash)
+        verifierKeyHash)
+        .hash;
+  }
+
+  /** Governed Ethereum mainnet destination binding for Android SCCP proof generation. */
+  public static EvmDestinationBinding ethereumMainnetDestinationBinding(
+      final String verifierAddress,
+      final String bridgeAddress,
+      final String verifierCodeHash,
+      final String verifierKeyHash) {
+    return ethereumMainnetDestinationBinding(
+        verifierAddress,
+        bridgeAddress,
+        verifierCodeHash,
+        verifierKeyHash,
+        ETH_MAINNET_NETWORK_ID);
+  }
+
+  /** Governed Ethereum mainnet destination binding for Android SCCP proof generation. */
+  public static EvmDestinationBinding ethereumMainnetDestinationBinding(
+      final String verifierAddress,
+      final String bridgeAddress,
+      final String verifierCodeHash,
+      final String verifierKeyHash,
+      final String networkId) {
+    final EvmDestinationBinding binding =
+        evmDestinationBinding(
+            DOMAIN_SORA,
+            DOMAIN_ETH,
+            networkId,
+            verifierAddress,
+            bridgeAddress,
+            verifierCodeHash,
+            verifierKeyHash);
+    if (!ETH_MAINNET_NETWORK_ID.equals(binding.networkId)) {
+      throw new IllegalArgumentException(
+          "Ethereum mainnet destinationBinding.networkId must be chain id 1");
+    }
+    return binding;
+  }
+
+  /** Canonical governed Ethereum mainnet destination binding hash. */
+  public static String ethereumMainnetDestinationBindingHash(
+      final String verifierAddress,
+      final String bridgeAddress,
+      final String verifierCodeHash,
+      final String verifierKeyHash) {
+    return ethereumMainnetDestinationBinding(
+            verifierAddress, bridgeAddress, verifierCodeHash, verifierKeyHash)
+        .hash;
+  }
+
+  /** Governed BSC mainnet destination binding for UI-side SCCP proof generation. */
+  public static EvmDestinationBinding bscMainnetDestinationBinding(
+      final String verifierAddress,
+      final String bridgeAddress,
+      final String verifierCodeHash,
+      final String verifierKeyHash) {
+    return bscMainnetDestinationBinding(
+        verifierAddress,
+        bridgeAddress,
+        verifierCodeHash,
+        verifierKeyHash,
+        BSC_MAINNET_NETWORK_ID);
+  }
+
+  /** Governed BSC mainnet destination binding for UI-side SCCP proof generation. */
+  public static EvmDestinationBinding bscMainnetDestinationBinding(
+      final String verifierAddress,
+      final String bridgeAddress,
+      final String verifierCodeHash,
+      final String verifierKeyHash,
+      final String networkId) {
+    final EvmDestinationBinding binding =
+        evmDestinationBinding(
+            DOMAIN_SORA,
+            DOMAIN_BSC,
+            networkId,
+            verifierAddress,
+            bridgeAddress,
+            verifierCodeHash,
+            verifierKeyHash);
+    if (!BSC_MAINNET_NETWORK_ID.equals(binding.networkId)) {
+      throw new IllegalArgumentException("BSC mainnet networkId must be chain id 56");
+    }
+    return binding;
+  }
+
+  /** Canonical governed BSC mainnet destination binding hash. */
+  public static String bscMainnetDestinationBindingHash(
+      final String verifierAddress,
+      final String bridgeAddress,
+      final String verifierCodeHash,
+      final String verifierKeyHash) {
+    return bscMainnetDestinationBinding(
+            verifierAddress, bridgeAddress, verifierCodeHash, verifierKeyHash)
+        .hash;
+  }
+
+  /** Canonical governed BSC mainnet destination binding hash. */
+  public static String bscMainnetDestinationBindingHash(
+      final String verifierAddress,
+      final String bridgeAddress,
+      final String verifierCodeHash,
+      final String verifierKeyHash,
+      final String networkId) {
+    return bscMainnetDestinationBinding(
+            verifierAddress, bridgeAddress, verifierCodeHash, verifierKeyHash, networkId)
         .hash;
   }
 
@@ -1499,7 +1612,7 @@ public final class SourceSccpProofs {
     final ByteArrayOutputStream out = new ByteArrayOutputStream();
     out.write(1);
     writeU32Le(out, normalizeDomain(sourceDomain, "sourceDomain"));
-    write(out, hex32Bytes(sourceEventDigest, "sourceEventDigest"));
+    write(out, nonZeroHex32Bytes(sourceEventDigest, "sourceEventDigest"));
     writeU64Le(out, normalizeU64(beaconSlot, "beaconSlot"));
     writeU64Le(out, normalizeU64(executionBlockNumber, "executionBlockNumber"));
     write(out, hex32Bytes(executionBlockHash, "executionBlockHash"));
@@ -2037,7 +2150,7 @@ public final class SourceSccpProofs {
     final ByteArrayOutputStream out = new ByteArrayOutputStream();
     out.write(1);
     writeU32Le(out, normalizeDomain(sourceDomain, "sourceDomain"));
-    write(out, hex32Bytes(sourceEventDigest, "sourceEventDigest"));
+    write(out, nonZeroHex32Bytes(sourceEventDigest, "sourceEventDigest"));
     writeU64Le(out, normalizeU64(validatorEpoch, "validatorEpoch"));
     writeU64Le(out, normalizeU64(blockNumber, "blockNumber"));
     write(out, hex32Bytes(blockHash, "blockHash"));
@@ -3225,7 +3338,7 @@ public final class SourceSccpProofs {
     final ByteArrayOutputStream out = new ByteArrayOutputStream();
     out.write(1);
     writeU32Le(out, normalizeDomain(sourceDomain, "sourceDomain"));
-    write(out, hex32Bytes(sourceEventDigest, "sourceEventDigest"));
+    write(out, nonZeroHex32Bytes(sourceEventDigest, "sourceEventDigest"));
     write(out, SUBSTRATE_SYSTEM_EVENTS_STORAGE_KEY);
     writeU64Le(out, normalizeU64(sourceEventLeafIndex, "sourceEventLeafIndex"));
     writeU64Le(out, normalizeU64(finalizedBlockNumber, "finalizedBlockNumber"));

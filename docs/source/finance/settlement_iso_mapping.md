@@ -111,8 +111,10 @@ obligations that the Norito ↔ ISO 20022 bridge must enforce before emitting m
   and validates the Business Application Header via the `head.001` schema so `BizMsgIdr`,
   `MsgDefIdr`, `CreDt`, and BIC/ClrSysMmbId agents are preserved deterministically; XMLDSig/XAdES
   blocks remain skipped during IVM field materialisation. Torii profile validation verifies the
-  supported P-256/SHA-256 enveloped XMLDSig/XAdES subset for `require-verified` profiles and
-  continues to reject embedded signatures for live `reject-unsupported` profiles. Regression tests
+  supported P-256/SHA-256 enveloped XMLDSig/XAdES subset for `require-verified` profiles only
+  when the verified public key or DER certificate SHA-256 digest matches that rail profile's
+  configured `trusted_public_key_sha256` or `trusted_certificate_sha256` pins, and continues to
+  reject embedded signatures for live `reject-unsupported` profiles. Regression tests
   consume the samples and the new header envelope fixture to guard the mappings.【crates/ivm/src/iso20022.rs:265】【crates/ivm/src/iso20022.rs:3301】【crates/ivm/src/iso20022.rs:3703】
 - Torii accepts lifecycle submissions at `/v1/iso20022/pacs002`, `pacs004`, `camt056`,
   `sese023`, `sese024`, and `sese025`. These endpoints validate the selected rail profile,
@@ -382,7 +384,8 @@ iroha app settlement dvp \
   profiles fail closed on any embedded signature block, `record-only` profiles
   preserve only the ignored-signature marker, and `require-verified` profiles
   accept only the supported P-256/SHA-256 enveloped XMLDSig/XAdES subset after
-  digest and signature verification.
+  digest, signature, canonicalization-method, and profile trust-pin
+  verification.
 
 ### Operational checklist for the bridge
 - Enforce the choreography above (collateral: `colr.010/011/012 → sese.023/024/025`; FX breach: `pacs.009 (+pacs.002) → sese.023 held → release/cancel`).  

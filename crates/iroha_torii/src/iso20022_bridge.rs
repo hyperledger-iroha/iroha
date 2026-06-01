@@ -796,6 +796,16 @@ fn convert_config_profile(
         .transpose()?
         .or(global_policy)
         .unwrap_or(EmbeddedSignaturePolicy::RecordOnly);
+    let trusted_public_key_sha256 = normalise_profile_sha256_pins(
+        id,
+        "trusted_public_key_sha256",
+        &config.trusted_public_key_sha256,
+    )?;
+    let trusted_certificate_sha256 = normalise_profile_sha256_pins(
+        id,
+        "trusted_certificate_sha256",
+        &config.trusted_certificate_sha256,
+    )?;
     let required_reference_datasets = config
         .required_reference_datasets
         .iter()
@@ -810,16 +820,24 @@ fn convert_config_profile(
         .iter()
         .map(|message| convert_config_message_profile(id, message))
         .collect::<eyre::Result<Vec<_>>>()?;
-    let signature_public_key_sha256_pins = normalise_profile_sha256_pins(
+    let mut signature_public_key_sha256_pins = normalise_profile_sha256_pins(
         id,
         "signature_public_key_sha256_pins",
         &config.signature_public_key_sha256_pins,
     )?;
-    let x509_trust_anchor_sha256_pins = normalise_profile_sha256_pins(
+    append_unique_sha256_pins(
+        &mut signature_public_key_sha256_pins,
+        &trusted_public_key_sha256,
+    );
+    let mut x509_trust_anchor_sha256_pins = normalise_profile_sha256_pins(
         id,
         "x509_trust_anchor_sha256_pins",
         &config.x509_trust_anchor_sha256_pins,
     )?;
+    append_unique_sha256_pins(
+        &mut x509_trust_anchor_sha256_pins,
+        &trusted_certificate_sha256,
+    );
     let x509_required_certificate_policy_oids = normalise_profile_oid_literals(
         id,
         "x509_required_certificate_policy_oids",
@@ -846,6 +864,8 @@ fn convert_config_profile(
         x509_crl_der_base64,
         x509_require_ocsp_revocation_check: config.x509_require_ocsp_revocation_check,
         x509_ocsp_response_der_base64,
+        trusted_public_key_sha256,
+        trusted_certificate_sha256,
         required_reference_datasets,
         message_profiles,
     })
@@ -929,6 +949,15 @@ fn normalise_profile_sha256_pins(
         }
     }
     Ok(normalized)
+}
+
+fn append_unique_sha256_pins(target: &mut Vec<String>, aliases: &[String]) {
+    let mut seen = target.iter().cloned().collect::<HashSet<_>>();
+    for alias in aliases {
+        if seen.insert(alias.clone()) {
+            target.push(alias.clone());
+        }
+    }
 }
 
 fn normalise_profile_oid_literals(
@@ -3014,6 +3043,7 @@ const XMLDSIG_ENVELOPED_SIGNATURE: &str = "http://www.w3.org/2000/09/xmldsig#env
 const XML_C14N_1_0: &str = "http://www.w3.org/TR/2001/REC-xml-c14n-20010315";
 const XML_C14N_1_1: &str = "http://www.w3.org/2006/12/xml-c14n11";
 const XML_EXCLUSIVE_C14N_1_0: &str = "http://www.w3.org/2001/10/xml-exc-c14n#";
+const X509_EKU_DOCUMENT_SIGNING_OID: &str = "1.3.6.1.5.5.7.3.36";
 const XMLDSIG_MAX_X509_CERTIFICATES: usize = 8;
 const XMLDSIG_MAX_X509_CERTIFICATE_BYTES: usize = 16 * 1024;
 const XMLDSIG_MAX_X509_CRLS: usize = 8;
@@ -3207,6 +3237,9 @@ fn x509_signature_public_key(
     if !x509_certificate_allows_digital_signature(&leaf)? {
         return Err(MsgError::ValidationFailed);
     }
+    if !x509_certificate_allows_xml_signature_purpose(&leaf)? {
+        return Err(MsgError::ValidationFailed);
+    }
     if !x509_certificate_satisfies_policy_oids(&leaf, x509_required_certificate_policy_oids)? {
         return Err(MsgError::ValidationFailed);
     }
@@ -3297,8 +3330,67 @@ fn validate_x509_certificate_chain(
             }
         }
     }
+    validate_x509_authority_key_identifiers(certificate_chain)?;
     validate_x509_path_length_constraints(certificate_chain)?;
     Ok(())
+}
+
+fn validate_x509_authority_key_identifiers(certificate_chain: &[Vec<u8>]) -> Result<(), MsgError> {
+    let parsed_chain = certificate_chain
+        .iter()
+        .map(|certificate| parse_x509_certificate_der(certificate))
+        .collect::<Result<Vec<_>, _>>()?;
+    for chain_pair in parsed_chain.windows(2) {
+        let [certificate, issuer] = chain_pair else {
+            continue;
+        };
+        let Some(authority_key_identifier) =
+            x509_certificate_authority_key_identifier(certificate)?
+        else {
+            continue;
+        };
+        let Some(subject_key_identifier) = x509_certificate_subject_key_identifier(issuer)? else {
+            continue;
+        };
+        if authority_key_identifier != subject_key_identifier {
+            return Err(MsgError::ValidationFailed);
+        }
+    }
+    Ok(())
+}
+
+fn x509_certificate_authority_key_identifier(
+    certificate: &X509Certificate<'_>,
+) -> Result<Option<Vec<u8>>, MsgError> {
+    let mut key_identifier = None;
+    for extension in certificate.extensions() {
+        if let ParsedExtension::AuthorityKeyIdentifier(authority_key) = extension.parsed_extension()
+        {
+            if key_identifier.is_some() {
+                return Err(MsgError::ValidationFailed);
+            }
+            key_identifier = authority_key
+                .key_identifier
+                .as_ref()
+                .map(|identifier| identifier.0.to_vec());
+        }
+    }
+    Ok(key_identifier)
+}
+
+fn x509_certificate_subject_key_identifier(
+    certificate: &X509Certificate<'_>,
+) -> Result<Option<Vec<u8>>, MsgError> {
+    let mut key_identifier = None;
+    for extension in certificate.extensions() {
+        if let ParsedExtension::SubjectKeyIdentifier(subject_key) = extension.parsed_extension() {
+            if key_identifier.is_some() {
+                return Err(MsgError::ValidationFailed);
+            }
+            key_identifier = Some(subject_key.0.to_vec());
+        }
+    }
+    Ok(key_identifier)
 }
 
 fn validate_x509_path_length_constraints(certificate_chain: &[Vec<u8>]) -> Result<(), MsgError> {
@@ -4288,6 +4380,9 @@ fn x509_certificate_is_ca(certificate: &X509Certificate<'_>) -> Result<bool, Msg
     else {
         return Ok(false);
     };
+    if !basic_constraints.critical {
+        return Ok(false);
+    }
     if !basic_constraints.value.ca {
         return Ok(false);
     }
@@ -4332,6 +4427,24 @@ fn x509_certificate_allows_digital_signature(
         return Ok(false);
     };
     Ok(key_usage.value.digital_signature())
+}
+
+fn x509_certificate_allows_xml_signature_purpose(
+    certificate: &X509Certificate<'_>,
+) -> Result<bool, MsgError> {
+    let Some(eku) = certificate
+        .extended_key_usage()
+        .map_err(|_| MsgError::ValidationFailed)?
+    else {
+        return Ok(true);
+    };
+    Ok(eku.value.any
+        || eku.value.code_signing
+        || eku
+            .value
+            .other
+            .iter()
+            .any(|oid| oid.to_string() == X509_EKU_DOCUMENT_SIGNING_OID))
 }
 
 fn x509_certificate_satisfies_policy_oids(
@@ -4771,6 +4884,20 @@ mod tests {
     const TEST_X509_EXPIRED_LEAF_SIGNING_KEY_PKCS8_DER_B64: &str = "MIGHAgEAMBMGByqGSM49AgEGCCqGSM49AwEHBG0wawIBAQQgu7FcG13Y1bLf6M5wsHpylL9IBEbqcbNv7LubaQU1SU2hRANCAATzDPtRqdSbvfazWua4HD9f9eOvZhZbalrQBdeZKuWbrZu7UKwDcOiPKD5bSU2TwbJ617zEhuLBVqA0aXBPnQKF";
     const TEST_X509_EXPIRED_LEAF_CERTIFICATE_DER_B64: &str = "MIIBqDCCAU6gAwIBAgICUwEwCgYIKoZIzj0EAwIwKzEpMCcGA1UEAwwgSXJvaGEgSVNPIEV4cGlyZWQgTGVhZiBUZXN0IFJvb3QwHhcNMjAwMTAxMDAwMDAwWhcNMjAwMTAyMDAwMDAwWjAtMSswKQYDVQQDDCJJcm9oYSBJU08gRXhwaXJlZCBMZWFmIFRlc3QgU2lnbmVyMFkwEwYHKoZIzj0CAQYIKoZIzj0DAQcDQgAE8wz7UanUm732s1rmuBw/X/Xjr2YWW2pa0AXXmSrlm62bu1CsA3Dojyg+W0lNk8Gyete8xIbiwVagNGlwT50ChaNgMF4wDAYDVR0TAQH/BAIwADAOBgNVHQ8BAf8EBAMCB4AwHQYDVR0OBBYEFKx0rYXMy3zJXZogrHDrrTvs6iWUMB8GA1UdIwQYMBaAFJxKYQ0QVEQKSuGb2txaz6IkttNxMAoGCCqGSM49BAMCA0gAMEUCIQD8iTy25LrcubWcZMZFE98B46zvqP+G8UoVIFprf2KohQIgceHQlTJdmI5EdbLgc2E7w8Bgy0YHFSz0MdfyauUmKow=";
     const TEST_X509_EXPIRED_ROOT_CERTIFICATE_DER_B64: &str = "MIIBrjCCAVSgAwIBAgICUwAwCgYIKoZIzj0EAwIwKzEpMCcGA1UEAwwgSXJvaGEgSVNPIEV4cGlyZWQgTGVhZiBUZXN0IFJvb3QwIBcNMjAwMTAxMDAwMDAwWhgPMjEyNjA1MDgwMDAwMDBaMCsxKTAnBgNVBAMMIElyb2hhIElTTyBFeHBpcmVkIExlYWYgVGVzdCBSb290MFkwEwYHKoZIzj0CAQYIKoZIzj0DAQcDQgAE3Ch3zNLwM5sPUEkqV8XKfWk6kJo3WBoj7hvbu2SpfLIQ2NeWwh7p+1kPZgGyTZYU4igN81H9A/qQnPDdka5lJaNmMGQwHwYDVR0jBBgwFoAUnEphDRBURApK4Zva3FrPoiS203EwEgYDVR0TAQH/BAgwBgEB/wIBATAOBgNVHQ8BAf8EBAMCAQYwHQYDVR0OBBYEFJxKYQ0QVEQKSuGb2txaz6IkttNxMAoGCCqGSM49BAMCA0gAMEUCIQCga2/Sf9eBHaZyALOuo3qBaYi85U1aRQ1aSuLkSZQY6QIgD6aiw2YfEImma3f+a7Mi/TCGTJNLcihkIZTRIZxW5EU=";
+    const TEST_X509_EKU_LEAF_SIGNING_KEY_PKCS8_DER_B64: &str = "MIGHAgEAMBMGByqGSM49AgEGCCqGSM49AwEHBG0wawIBAQQgPnkijfxqOJNyBBeNg68ypcZ42i7eeLjWATlL9PxGgQqhRANCAATNujBLH7Xm1fR1KA2ESHdBnXm4lZLoYWJ5OVtf87tL1Az73PXCkTviW9FsOdfpuuzlT6iedzDhdJhgtJ9M+5D3";
+    const TEST_X509_EKU_SERVER_AUTH_LEAF_CERTIFICATE_DER_B64: &str = "MIIBvzCCAWSgAwIBAgICVAEwCgYIKoZIzj0EAwIwKTEnMCUGA1UEAwweSXJvaGEgSVNPIFhNTFNpZyBFS1UgVGVzdCBSb290MCAXDTI2MDYwMTAwMDAwMFoYDzIxMjYwNTA4MDAwMDAwWjArMSkwJwYDVQQDDCBJcm9oYSBJU08gWE1MU2lnIEVLVSBUZXN0IFNpZ25lcjBZMBMGByqGSM49AgEGCCqGSM49AwEHA0IABM26MEsftebV9HUoDYRId0GdebiVkuhhYnk5W1/zu0vUDPvc9cKRO+Jb0Ww51+m67OVPqJ53MOF0mGC0n0z7kPejeDB2MAwGA1UdEwEB/wQCMAAwDgYDVR0PAQH/BAQDAgeAMBYGA1UdJQEB/wQMMAoGCCsGAQUFBwMBMB0GA1UdDgQWBBRdLeN//loyIevVCUwqXAXSXvi5DDAfBgNVHSMEGDAWgBTq3At1R1SiiD7JqTLIuO97oe0rUzAKBggqhkjOPQQDAgNJADBGAiEA80XbzD+kQkvxz0lVKw6hxMshLFrBLljrn/Eie/aOLLECIQDH9cIjJ+0q6GT8hxjy2Zrinp0hEWWFcrDSYqR+16dI8A==";
+    const TEST_X509_EKU_CODE_SIGNING_LEAF_CERTIFICATE_DER_B64: &str = "MIIBvjCCAWSgAwIBAgICVAIwCgYIKoZIzj0EAwIwKTEnMCUGA1UEAwweSXJvaGEgSVNPIFhNTFNpZyBFS1UgVGVzdCBSb290MCAXDTI2MDYwMTAwMDAwMFoYDzIxMjYwNTA4MDAwMDAwWjArMSkwJwYDVQQDDCBJcm9oYSBJU08gWE1MU2lnIEVLVSBUZXN0IFNpZ25lcjBZMBMGByqGSM49AgEGCCqGSM49AwEHA0IABM26MEsftebV9HUoDYRId0GdebiVkuhhYnk5W1/zu0vUDPvc9cKRO+Jb0Ww51+m67OVPqJ53MOF0mGC0n0z7kPejeDB2MAwGA1UdEwEB/wQCMAAwDgYDVR0PAQH/BAQDAgeAMBYGA1UdJQEB/wQMMAoGCCsGAQUFBwMDMB0GA1UdDgQWBBRdLeN//loyIevVCUwqXAXSXvi5DDAfBgNVHSMEGDAWgBTq3At1R1SiiD7JqTLIuO97oe0rUzAKBggqhkjOPQQDAgNIADBFAiEArCveMHtRjAb9O9tQIggTSieFTBjtKfDJwFY/DxUV0isCIFBmhdw3hBukzDnT7UCa4M0T8q+5InkGViRB1hJsWJUf";
+    const TEST_X509_EKU_ROOT_CERTIFICATE_DER_B64: &str = "MIIBqjCCAVCgAwIBAgICVAAwCgYIKoZIzj0EAwIwKTEnMCUGA1UEAwweSXJvaGEgSVNPIFhNTFNpZyBFS1UgVGVzdCBSb290MCAXDTI2MDYwMTAwMDAwMFoYDzIxMjYwNTA4MDAwMDAwWjApMScwJQYDVQQDDB5Jcm9oYSBJU08gWE1MU2lnIEVLVSBUZXN0IFJvb3QwWTATBgcqhkjOPQIBBggqhkjOPQMBBwNCAASbO+iaWs5QpwhZg7deT9kyxeYA0y9fU2CsQbypJ/b094JPiNSXpOBaGQxJ8J2I3bcUppbb1LZKSvLWfD676ViXo2YwZDAfBgNVHSMEGDAWgBTq3At1R1SiiD7JqTLIuO97oe0rUzASBgNVHRMBAf8ECDAGAQH/AgEBMA4GA1UdDwEB/wQEAwIBBjAdBgNVHQ4EFgQU6twLdUdUoog+yakyyLjve6HtK1MwCgYIKoZIzj0EAwIDSAAwRQIgQ4wWk9FJqPGbhxcgqsKj1qrdAPH0I8dcnYpDxWp3dfQCIQDniAMtw8kFXoKfNSwpMzRGrFKQOxQhfhecnQqz5ByaDQ==";
+    const TEST_X509_AKI_LEAF_SIGNING_KEY_PKCS8_DER_B64: &str = "MIGHAgEAMBMGByqGSM49AgEGCCqGSM49AwEHBG0wawIBAQQgIbpvFmbT9cRto3u2cGl0aEN1ILgj53hfqWISj9Z4FrGhRANCAASnJEA0zYlAtBJ/99IdK9PRjgqQr2lzoheFLeIr4GiVDrmOZ7ClB83w0EC6v9qxOLKv8Z4R7F9R73piCmHj4zMO";
+    const TEST_X509_AKI_GOOD_LEAF_CERTIFICATE_DER_B64: &str = "MIIBpjCCAUygAwIBAgICCP0wCgYIKoZIzj0EAwIwKTEnMCUGA1UEAwweSXJvaGEgSVNPIFhNTFNpZyBBS0kgVGVzdCBSb290MCAXDTI2MDYwMTE3NDg0MFoYDzIxMjYwNjAyMTc0ODQwWjArMSkwJwYDVQQDDCBJcm9oYSBJU08gWE1MU2lnIEFLSSBUZXN0IFNpZ25lcjBZMBMGByqGSM49AgEGCCqGSM49AwEHA0IABKckQDTNiUC0En/30h0r09GOCpCvaXOiF4Ut4ivgaJUOuY5nsKUHzfDQQLq/2rE4sq/xnhHsX1HvemIKYePjMw6jYDBeMAwGA1UdEwEB/wQCMAAwDgYDVR0PAQH/BAQDAgeAMB0GA1UdDgQWBBQhgAM/46TZbpLtPqj0Z0dC7SdJcjAfBgNVHSMEGDAWgBSP6E0gWMamRvzD9eCdgBSKIg7EUzAKBggqhkjOPQQDAgNIADBFAiBQawuxq3WkxOm5+BbWUYKBRtQ+2ccg3x5qFYdYfMBfKwIhAOCaEu01UZlm4A0T3nwZ+EhWI2cyY+oJPjDqRJ3Eu0f1";
+    const TEST_X509_AKI_MISMATCH_LEAF_CERTIFICATE_DER_B64: &str = "MIIBpjCCAUygAwIBAgICCP4wCgYIKoZIzj0EAwIwKTEnMCUGA1UEAwweSXJvaGEgSVNPIFhNTFNpZyBBS0kgVGVzdCBSb290MCAXDTI2MDYwMTE3NDg0MFoYDzIxMjYwNjAyMTc0ODQwWjArMSkwJwYDVQQDDCBJcm9oYSBJU08gWE1MU2lnIEFLSSBUZXN0IFNpZ25lcjBZMBMGByqGSM49AgEGCCqGSM49AwEHA0IABKckQDTNiUC0En/30h0r09GOCpCvaXOiF4Ut4ivgaJUOuY5nsKUHzfDQQLq/2rE4sq/xnhHsX1HvemIKYePjMw6jYDBeMAwGA1UdEwEB/wQCMAAwDgYDVR0PAQH/BAQDAgeAMB0GA1UdDgQWBBQhgAM/46TZbpLtPqj0Z0dC7SdJcjAfBgNVHSMEGDAWgBQAAQIDBAUGBwgJCgsMDQ4PEBESEzAKBggqhkjOPQQDAgNIADBFAiAmC8Z1kxOihFzhRVv22y7nOXsP+yQzeMZwygHqNT66pgIhAPg6FMjnmIGR0uRpi2z+LgBC1J2dVRWqV9aAeIZ8ftAB";
+    const TEST_X509_AKI_ROOT_CERTIFICATE_DER_B64: &str = "MIIBqTCCAVCgAwIBAgICCPwwCgYIKoZIzj0EAwIwKTEnMCUGA1UEAwweSXJvaGEgSVNPIFhNTFNpZyBBS0kgVGVzdCBSb290MCAXDTI2MDYwMTE3NDg0MFoYDzIxMjYwNjAyMTc0ODQwWjApMScwJQYDVQQDDB5Jcm9oYSBJU08gWE1MU2lnIEFLSSBUZXN0IFJvb3QwWTATBgcqhkjOPQIBBggqhkjOPQMBBwNCAAQ/Em5Yl6PMhJyD6wpfJCIbiCQDxhHCVgsGNwVrTbohBzwpTEeb0KJ53DXKOaMcYVzYa9Muu8Lx8LwEmr3ekrqzo2YwZDASBgNVHRMBAf8ECDAGAQH/AgEBMA4GA1UdDwEB/wQEAwIBBjAdBgNVHQ4EFgQUj+hNIFjGpkb8w/XgnYAUiiIOxFMwHwYDVR0jBBgwFoAUj+hNIFjGpkb8w/XgnYAUiiIOxFMwCgYIKoZIzj0EAwIDRwAwRAIgMnybkgg5FuPiE8HIN0IoeqVkSfSZHT7hDlC/5T879hkCIHpO6mfD7jpwaax5m16w0nDd8Qvr/nqfpXqVG3pydKSo";
+    const TEST_X509_NONCRITICAL_CA_LEAF_SIGNING_KEY_PKCS8_DER_B64: &str = "MIGHAgEAMBMGByqGSM49AgEGCCqGSM49AwEHBG0wawIBAQQgljE4ysq6tQwL/RKH82ieLq02OCKb6Ltyh7GCeNTtMWuhRANCAAREc/PpLrPUYay18NCpDfFfzGPpDymbLK6BF3e3zwAOdF/8n/HmQLpbrBoZ1Y5GvOjMp0PL+zqFM9VRGXpdZiqA";
+    const TEST_X509_NONCRITICAL_CA_LEAF_BY_ROOT_CERTIFICATE_DER_B64: &str = "MIIBvDCCAWKgAwIBAgICCWMwCgYIKoZIzj0EAwIwNDEyMDAGA1UEAwwpSXJvaGEgSVNPIFhNTFNpZyBCYXNpYyBDcml0aWNhbCBUZXN0IFJvb3QwIBcNMjYwNjAxMTgwOTQ4WhgPMjEyNjA2MDIxODA5NDhaMDYxNDAyBgNVBAMMK0lyb2hhIElTTyBYTUxTaWcgQmFzaWMgQ3JpdGljYWwgVGVzdCBTaWduZXIwWTATBgcqhkjOPQIBBggqhkjOPQMBBwNCAAREc/PpLrPUYay18NCpDfFfzGPpDymbLK6BF3e3zwAOdF/8n/HmQLpbrBoZ1Y5GvOjMp0PL+zqFM9VRGXpdZiqAo2AwXjAMBgNVHRMBAf8EAjAAMA4GA1UdDwEB/wQEAwIHgDAdBgNVHQ4EFgQUFaJ/rKuYGvi+PxRB22ZXDKoO8dAwHwYDVR0jBBgwFoAUpkQahrltTKiydqFXw/uybHsKKvgwCgYIKoZIzj0EAwIDSAAwRQIgSDBYGXhu1fppKim3f8h2Fsz3GKTaGmu9+KzoI/xZUCUCIQDnsqPyZNGf7ry6MQQ/cpJzRhNpMu1DPIUOWEROUGuEWw==";
+    const TEST_X509_NONCRITICAL_CA_ROOT_CERTIFICATE_DER_B64: &str = "MIIBvTCCAWOgAwIBAgICCWEwCgYIKoZIzj0EAwIwNDEyMDAGA1UEAwwpSXJvaGEgSVNPIFhNTFNpZyBCYXNpYyBDcml0aWNhbCBUZXN0IFJvb3QwIBcNMjYwNjAxMTgwOTQ4WhgPMjEyNjA2MDIxODA5NDhaMDQxMjAwBgNVBAMMKUlyb2hhIElTTyBYTUxTaWcgQmFzaWMgQ3JpdGljYWwgVGVzdCBSb290MFkwEwYHKoZIzj0CAQYIKoZIzj0DAQcDQgAE7e0xHCR1qKXlfIXTt3NmtNXH9F4VB8LBcYZww4zlNSyp4OzM+XescC1uZOEaRnbSSp08DwiimCOycqTmBa+4GqNjMGEwDwYDVR0TBAgwBgEB/wIBAjAOBgNVHQ8BAf8EBAMCAQYwHQYDVR0OBBYEFKZEGoa5bUyosnahV8P7smx7Cir4MB8GA1UdIwQYMBaAFKZEGoa5bUyosnahV8P7smx7Cir4MAoGCCqGSM49BAMCA0gAMEUCIQDIsSzxKS8PptJ5tPca0zcACNmCKJnlS2Se6vh0o5AXyAIgVrtXd95gcxc3D6dP9TQSFRi5Eg2AQXmv7GxSpnN72aw=";
+    const TEST_X509_NONCRITICAL_CA_LEAF_BY_INTERMEDIATE_CERTIFICATE_DER_B64: &str = "MIIBxTCCAWqgAwIBAgICCWQwCgYIKoZIzj0EAwIwPDE6MDgGA1UEAwwxSXJvaGEgSVNPIFhNTFNpZyBCYXNpYyBDcml0aWNhbCBUZXN0IEludGVybWVkaWF0ZTAgFw0yNjA2MDExODA5NDhaGA8yMTI2MDYwMjE4MDk0OFowNjE0MDIGA1UEAwwrSXJvaGEgSVNPIFhNTFNpZyBCYXNpYyBDcml0aWNhbCBUZXN0IFNpZ25lcjBZMBMGByqGSM49AgEGCCqGSM49AwEHA0IABERz8+kus9RhrLXw0KkN8V/MY+kPKZssroEXd7fPAA50X/yf8eZAulusGhnVjka86MynQ8v7OoUz1VEZel1mKoCjYDBeMAwGA1UdEwEB/wQCMAAwDgYDVR0PAQH/BAQDAgeAMB0GA1UdDgQWBBQVon+sq5ga+L4/FEHbZlcMqg7x0DAfBgNVHSMEGDAWgBTSIdk47R3IN2fGfAV07ZazvkDLWjAKBggqhkjOPQQDAgNJADBGAiEAz4j9lvrlPCLAlVujRAtnOjK35uagY1u4LffNUIPkN0oCIQCXFTK6kiRvRna8zAmm9RecoI3SeotyEik8HgVB/bT5Iw==";
+    const TEST_X509_NONCRITICAL_CA_INTERMEDIATE_CERTIFICATE_DER_B64: &str = "MIIBxTCCAWugAwIBAgICCWIwCgYIKoZIzj0EAwIwNDEyMDAGA1UEAwwpSXJvaGEgSVNPIFhNTFNpZyBCYXNpYyBDcml0aWNhbCBUZXN0IFJvb3QwIBcNMjYwNjAxMTgwOTQ4WhgPMjEyNjA2MDIxODA5NDhaMDwxOjA4BgNVBAMMMUlyb2hhIElTTyBYTUxTaWcgQmFzaWMgQ3JpdGljYWwgVGVzdCBJbnRlcm1lZGlhdGUwWTATBgcqhkjOPQIBBggqhkjOPQMBBwNCAATdcxl1DWMRs1xo2bZnc+vc4MyBIaNE9QqmsLN6LlbVRDdjWGph4USBr94mpc39y4CjGlJ/6z7jLyQGUQkEDs0To2MwYTAPBgNVHRMECDAGAQH/AgEBMA4GA1UdDwEB/wQEAwIBBjAdBgNVHQ4EFgQU0iHZOO0dyDdnxnwFdO2Ws75Ay1owHwYDVR0jBBgwFoAUpkQahrltTKiydqFXw/uybHsKKvgwCgYIKoZIzj0EAwIDSAAwRQIhAKxXs6GWdsoSz9BWHryxZBLh6t3W93WCe/B84WbsjXijAiBeRrksPygF9mjsz7MyqxoJLWeVar+NU2LLePykEDjxfQ==";
+    const TEST_X509_NONCRITICAL_CA_CRITICAL_ROOT_CERTIFICATE_DER_B64: &str = "MIIBwTCCAWagAwIBAgICCWAwCgYIKoZIzj0EAwIwNDEyMDAGA1UEAwwpSXJvaGEgSVNPIFhNTFNpZyBCYXNpYyBDcml0aWNhbCBUZXN0IFJvb3QwIBcNMjYwNjAxMTgwOTQ4WhgPMjEyNjA2MDIxODA5NDhaMDQxMjAwBgNVBAMMKUlyb2hhIElTTyBYTUxTaWcgQmFzaWMgQ3JpdGljYWwgVGVzdCBSb290MFkwEwYHKoZIzj0CAQYIKoZIzj0DAQcDQgAE7e0xHCR1qKXlfIXTt3NmtNXH9F4VB8LBcYZww4zlNSyp4OzM+XescC1uZOEaRnbSSp08DwiimCOycqTmBa+4GqNmMGQwEgYDVR0TAQH/BAgwBgEB/wIBAjAOBgNVHQ8BAf8EBAMCAQYwHQYDVR0OBBYEFKZEGoa5bUyosnahV8P7smx7Cir4MB8GA1UdIwQYMBaAFKZEGoa5bUyosnahV8P7smx7Cir4MAoGCCqGSM49BAMCA0kAMEYCIQDo0n5RsdheNjfgo0b7s5SCQXzeFx+jIZ14u+oW+5QbVQIhAOpmgh7CZGXY99bYe++unYsNUbUyQzZErBvAs2YKGeci";
     const TEST_X509_PATHLEN_LEAF_SIGNING_KEY_PKCS8_DER_B64: &str = "MIGHAgEAMBMGByqGSM49AgEGCCqGSM49AwEHBG0wawIBAQQg3nuXdJt4HKvYmPHNQhHghYBH5m2rJhLM6X2mb3ZEAiWhRANCAAQSY1wJcCoKdL3Jofs44Th6YP3PrDlitaq8jMZY10IlqxoRWJCt4cQNbFs9MOjiDirdTGH/1LtNso+pt4/7A9nW";
     const TEST_X509_PATHLEN_LEAF_CERTIFICATE_DER_B64: &str = "MIIBuDCCAV6gAwIBAgIUAroD5KgdplQBUFMVASJFffMavp8wCgYIKoZIzj0EAwIwLjEsMCoGA1UEAwwjSXJvaGEgSVNPIFBhdGhMZW4gVGVzdCBJbnRlcm1lZGlhdGUwIBcNMjYwNjAxMTUxOTMxWhgPMjEyNjA1MDgxNTE5MzFaMCYxJDAiBgNVBAMMG0lyb2hhIElTTyBQYXRoTGVuIFRlc3QgTGVhZjBZMBMGByqGSM49AgEGCCqGSM49AwEHA0IABBJjXAlwKgp0vcmh+zjhOHpg/c+sOWK1qryMxljXQiWrGhFYkK3hxA1sWz0w6OIOKt1MYf/Uu02yj6m3j/sD2dajYDBeMAwGA1UdEwEB/wQCMAAwDgYDVR0PAQH/BAQDAgeAMB0GA1UdDgQWBBRd71CtjCd8i1OrveZVj7PhbftdozAfBgNVHSMEGDAWgBQ+9z6697KLGLz8FsX7pXkDmF0y0jAKBggqhkjOPQQDAgNIADBFAiEAqH2FNcRnBYe2euURS2b4HiWwDsDBLaYKvJUqcaGSF8kCIAr+D9sGxQyezdmBSLqdtK6Vf05V3CoDSQHAGcnhJgDU";
     const TEST_X509_PATHLEN_ROOT0_CERTIFICATE_DER_B64: &str = "MIIBtzCCAVygAwIBAgIUQdOUC+LffkVAc60QoHHaziSBgJMwCgYIKoZIzj0EAwIwJjEkMCIGA1UEAwwbSXJvaGEgSVNPIFBhdGhMZW4gVGVzdCBSb290MCAXDTI2MDYwMTE1MTkzMVoYDzIxMjYwNTA4MTUxOTMxWjAmMSQwIgYDVQQDDBtJcm9oYSBJU08gUGF0aExlbiBUZXN0IFJvb3QwWTATBgcqhkjOPQIBBggqhkjOPQMBBwNCAATHfMRmNRjSg2Q0EEqdYcGAJVEKCCTOnpjDZKgeUb/AwXgu42NfeTHsq7t3wFPd/pbCIqhBp/vJqw4btetClty+o2YwZDASBgNVHRMBAf8ECDAGAQH/AgEAMA4GA1UdDwEB/wQEAwIBBjAdBgNVHQ4EFgQULFjuLrmZd/w+EKb109b4f6d0C7gwHwYDVR0jBBgwFoAULFjuLrmZd/w+EKb109b4f6d0C7gwCgYIKoZIzj0EAwIDSQAwRgIhAIBI5KM6i2Abfp7Qn2AKIht2AMV1LAdLDDOK3+sLNPsKAiEA6eEOPnEEFLK47Xw8h+Gho0BzPRwtUBPYrTDadszwWRI=";
@@ -4881,6 +5008,8 @@ mod tests {
             x509_crl_der_base64: Vec::new(),
             x509_require_ocsp_revocation_check: false,
             x509_ocsp_response_der_base64: Vec::new(),
+            trusted_public_key_sha256: Vec::new(),
+            trusted_certificate_sha256: Vec::new(),
             required_reference_datasets: Vec::new(),
             message_profiles: vec![actual::IsoMessageProfile {
                 message_type: message_type.to_owned(),
@@ -4909,6 +5038,8 @@ mod tests {
             x509_crl_der_base64: Vec::new(),
             x509_require_ocsp_revocation_check: false,
             x509_ocsp_response_der_base64: Vec::new(),
+            trusted_public_key_sha256: Vec::new(),
+            trusted_certificate_sha256: Vec::new(),
             required_reference_datasets: Vec::new(),
             message_profiles: vec![actual::IsoMessageProfile {
                 message_type: "pacs.008".to_owned(),
@@ -5030,6 +5161,66 @@ mod tests {
         let certificate = BASE64_STANDARD
             .decode(TEST_X509_EXPIRED_ROOT_CERTIFICATE_DER_B64)
             .expect("expired-leaf root X.509 fixture must decode");
+        sha256_hex(&certificate)
+    }
+
+    fn test_x509_eku_leaf_signing_key() -> P256SigningKey {
+        let pkcs8 = BASE64_STANDARD
+            .decode(TEST_X509_EKU_LEAF_SIGNING_KEY_PKCS8_DER_B64)
+            .expect("EKU leaf PKCS#8 fixture must decode");
+        P256SigningKey::from_pkcs8_der(&pkcs8).expect("EKU leaf PKCS#8 fixture must parse")
+    }
+
+    fn test_x509_eku_leaf_public_key_pin() -> String {
+        let certificate = BASE64_STANDARD
+            .decode(TEST_X509_EKU_SERVER_AUTH_LEAF_CERTIFICATE_DER_B64)
+            .expect("EKU leaf X.509 fixture must decode");
+        let (_, certificate) =
+            X509Certificate::from_der(&certificate).expect("EKU leaf X.509 fixture must parse");
+        let public_key = certificate.public_key().subject_public_key.data.to_vec();
+        sha256_hex(&public_key)
+    }
+
+    fn test_x509_eku_root_certificate_pin() -> String {
+        let certificate = BASE64_STANDARD
+            .decode(TEST_X509_EKU_ROOT_CERTIFICATE_DER_B64)
+            .expect("EKU root X.509 fixture must decode");
+        sha256_hex(&certificate)
+    }
+
+    fn test_x509_aki_leaf_signing_key() -> P256SigningKey {
+        let pkcs8 = BASE64_STANDARD
+            .decode(TEST_X509_AKI_LEAF_SIGNING_KEY_PKCS8_DER_B64)
+            .expect("AKI leaf PKCS#8 fixture must decode");
+        P256SigningKey::from_pkcs8_der(&pkcs8).expect("AKI leaf PKCS#8 fixture must parse")
+    }
+
+    fn test_x509_aki_root_certificate_pin() -> String {
+        let certificate = BASE64_STANDARD
+            .decode(TEST_X509_AKI_ROOT_CERTIFICATE_DER_B64)
+            .expect("AKI root X.509 fixture must decode");
+        sha256_hex(&certificate)
+    }
+
+    fn test_x509_noncritical_ca_leaf_signing_key() -> P256SigningKey {
+        let pkcs8 = BASE64_STANDARD
+            .decode(TEST_X509_NONCRITICAL_CA_LEAF_SIGNING_KEY_PKCS8_DER_B64)
+            .expect("non-critical CA leaf PKCS#8 fixture must decode");
+        P256SigningKey::from_pkcs8_der(&pkcs8)
+            .expect("non-critical CA leaf PKCS#8 fixture must parse")
+    }
+
+    fn test_x509_noncritical_ca_root_certificate_pin() -> String {
+        let certificate = BASE64_STANDARD
+            .decode(TEST_X509_NONCRITICAL_CA_ROOT_CERTIFICATE_DER_B64)
+            .expect("non-critical CA root X.509 fixture must decode");
+        sha256_hex(&certificate)
+    }
+
+    fn test_x509_noncritical_ca_critical_root_certificate_pin() -> String {
+        let certificate = BASE64_STANDARD
+            .decode(TEST_X509_NONCRITICAL_CA_CRITICAL_ROOT_CERTIFICATE_DER_B64)
+            .expect("critical CA root X.509 fixture must decode");
         sha256_hex(&certificate)
     }
 
@@ -5269,6 +5460,48 @@ mod tests {
                 ),
                 leaf = TEST_X509_EXPIRED_LEAF_CERTIFICATE_DER_B64,
                 root_xml = root_xml
+            ),
+        )
+    }
+
+    fn signed_pacs008_xml_with_eku_x509_certificate_chain(
+        leaf_certificate: &str,
+        include_root: bool,
+    ) -> String {
+        let signing_key = test_x509_eku_leaf_signing_key();
+        let root_xml = if include_root {
+            format!("<X509Certificate>{TEST_X509_EKU_ROOT_CERTIFICATE_DER_B64}</X509Certificate>")
+        } else {
+            String::new()
+        };
+        signed_pacs008_xml_with_key_info(
+            &signing_key,
+            &format!(
+                concat!(
+                    "<KeyInfo><X509Data>",
+                    "<X509Certificate>{leaf}</X509Certificate>",
+                    "{root_xml}",
+                    "</X509Data></KeyInfo>"
+                ),
+                leaf = leaf_certificate,
+                root_xml = root_xml
+            ),
+        )
+    }
+
+    fn signed_pacs008_xml_with_aki_x509_certificate_chain(leaf_certificate: &str) -> String {
+        let signing_key = test_x509_aki_leaf_signing_key();
+        signed_pacs008_xml_with_key_info(
+            &signing_key,
+            &format!(
+                concat!(
+                    "<KeyInfo><X509Data>",
+                    "<X509Certificate>{leaf}</X509Certificate>",
+                    "<X509Certificate>{root}</X509Certificate>",
+                    "</X509Data></KeyInfo>"
+                ),
+                leaf = leaf_certificate,
+                root = TEST_X509_AKI_ROOT_CERTIFICATE_DER_B64
             ),
         )
     }
@@ -6021,6 +6254,158 @@ mod tests {
     }
 
     #[test]
+    fn require_verified_profile_accepts_directly_pinned_x509_code_signing_eku_leaf() {
+        let mut config = sample_config();
+        let mut profile = signed_message_profile("require-verified");
+        profile.signature_public_key_sha256_pins = vec![test_x509_eku_leaf_public_key_pin()];
+        config.profiles.push(profile);
+        let runtime = Iso20022BridgeRuntime::from_config(&config)
+            .expect("cfg")
+            .expect("enabled");
+        let payload = signed_pacs008_xml_with_eku_x509_certificate_chain(
+            TEST_X509_EKU_CODE_SIGNING_LEAF_CERTIFICATE_DER_B64,
+            false,
+        );
+        let parsed = parse_message("pacs.008", payload.as_bytes()).expect("parse signed XML");
+        let profile = runtime
+            .resolve_profile(Some("signed-pacs008-test"))
+            .expect("signed profile");
+
+        let metadata = runtime
+            .validate_profile_submission(profile, "pacs.008", &parsed, payload.as_bytes())
+            .expect("code-signing EKU leaves should be accepted for XMLDSig signer purpose");
+
+        assert!(metadata.embedded_signature_detected());
+    }
+
+    #[test]
+    fn require_verified_profile_accepts_trust_anchor_x509_code_signing_eku_leaf() {
+        let mut config = sample_config();
+        let mut profile = signed_message_profile("require-verified");
+        profile.signature_public_key_sha256_pins.clear();
+        profile.x509_trust_anchor_sha256_pins = vec![test_x509_eku_root_certificate_pin()];
+        config.profiles.push(profile);
+        let runtime = Iso20022BridgeRuntime::from_config(&config)
+            .expect("cfg")
+            .expect("enabled");
+        let payload = signed_pacs008_xml_with_eku_x509_certificate_chain(
+            TEST_X509_EKU_CODE_SIGNING_LEAF_CERTIFICATE_DER_B64,
+            true,
+        );
+        let parsed = parse_message("pacs.008", payload.as_bytes()).expect("parse signed XML");
+        let profile = runtime
+            .resolve_profile(Some("signed-pacs008-test"))
+            .expect("signed profile");
+
+        let metadata = runtime
+            .validate_profile_submission(profile, "pacs.008", &parsed, payload.as_bytes())
+            .expect("trust-anchor code-signing EKU leaves should be accepted");
+
+        assert!(metadata.embedded_signature_detected());
+    }
+
+    #[test]
+    fn require_verified_profile_rejects_directly_pinned_x509_incompatible_eku_leaf() {
+        let mut config = sample_config();
+        let mut profile = signed_message_profile("require-verified");
+        profile.signature_public_key_sha256_pins = vec![test_x509_eku_leaf_public_key_pin()];
+        config.profiles.push(profile);
+        let runtime = Iso20022BridgeRuntime::from_config(&config)
+            .expect("cfg")
+            .expect("enabled");
+        let payload = signed_pacs008_xml_with_eku_x509_certificate_chain(
+            TEST_X509_EKU_SERVER_AUTH_LEAF_CERTIFICATE_DER_B64,
+            false,
+        );
+        let parsed = parse_message("pacs.008", payload.as_bytes()).expect("parse signed XML");
+        let profile = runtime
+            .resolve_profile(Some("signed-pacs008-test"))
+            .expect("signed profile");
+
+        let err = runtime
+            .validate_profile_submission(profile, "pacs.008", &parsed, payload.as_bytes())
+            .expect_err("direct public-key pins must not bypass incompatible signer EKUs");
+
+        assert!(matches!(err, MsgError::ValidationFailed));
+    }
+
+    #[test]
+    fn require_verified_profile_rejects_trust_anchor_x509_incompatible_eku_leaf() {
+        let mut config = sample_config();
+        let mut profile = signed_message_profile("require-verified");
+        profile.signature_public_key_sha256_pins.clear();
+        profile.x509_trust_anchor_sha256_pins = vec![test_x509_eku_root_certificate_pin()];
+        config.profiles.push(profile);
+        let runtime = Iso20022BridgeRuntime::from_config(&config)
+            .expect("cfg")
+            .expect("enabled");
+        let payload = signed_pacs008_xml_with_eku_x509_certificate_chain(
+            TEST_X509_EKU_SERVER_AUTH_LEAF_CERTIFICATE_DER_B64,
+            true,
+        );
+        let parsed = parse_message("pacs.008", payload.as_bytes()).expect("parse signed XML");
+        let profile = runtime
+            .resolve_profile(Some("signed-pacs008-test"))
+            .expect("signed profile");
+
+        let err = runtime
+            .validate_profile_submission(profile, "pacs.008", &parsed, payload.as_bytes())
+            .expect_err("trust-anchor chains must reject incompatible signer EKUs");
+
+        assert!(matches!(err, MsgError::ValidationFailed));
+    }
+
+    #[test]
+    fn require_verified_profile_accepts_x509_authority_key_identifier_match() {
+        let mut config = sample_config();
+        let mut profile = signed_message_profile("require-verified");
+        profile.signature_public_key_sha256_pins.clear();
+        profile.x509_trust_anchor_sha256_pins = vec![test_x509_aki_root_certificate_pin()];
+        config.profiles.push(profile);
+        let runtime = Iso20022BridgeRuntime::from_config(&config)
+            .expect("cfg")
+            .expect("enabled");
+        let payload = signed_pacs008_xml_with_aki_x509_certificate_chain(
+            TEST_X509_AKI_GOOD_LEAF_CERTIFICATE_DER_B64,
+        );
+        let parsed = parse_message("pacs.008", payload.as_bytes()).expect("parse signed XML");
+        let profile = runtime
+            .resolve_profile(Some("signed-pacs008-test"))
+            .expect("signed profile");
+
+        let metadata = runtime
+            .validate_profile_submission(profile, "pacs.008", &parsed, payload.as_bytes())
+            .expect("matching AKI/SKI trust-anchor chain should pass");
+
+        assert!(metadata.embedded_signature_detected());
+    }
+
+    #[test]
+    fn require_verified_profile_rejects_x509_authority_key_identifier_mismatch() {
+        let mut config = sample_config();
+        let mut profile = signed_message_profile("require-verified");
+        profile.signature_public_key_sha256_pins.clear();
+        profile.x509_trust_anchor_sha256_pins = vec![test_x509_aki_root_certificate_pin()];
+        config.profiles.push(profile);
+        let runtime = Iso20022BridgeRuntime::from_config(&config)
+            .expect("cfg")
+            .expect("enabled");
+        let payload = signed_pacs008_xml_with_aki_x509_certificate_chain(
+            TEST_X509_AKI_MISMATCH_LEAF_CERTIFICATE_DER_B64,
+        );
+        let parsed = parse_message("pacs.008", payload.as_bytes()).expect("parse signed XML");
+        let profile = runtime
+            .resolve_profile(Some("signed-pacs008-test"))
+            .expect("signed profile");
+
+        let err = runtime
+            .validate_profile_submission(profile, "pacs.008", &parsed, payload.as_bytes())
+            .expect_err("issuer name/signature matching must not bypass AKI/SKI mismatch");
+
+        assert!(matches!(err, MsgError::ValidationFailed));
+    }
+
+    #[test]
     fn require_verified_profile_accepts_x509_path_length_allowed_intermediate() {
         let mut config = sample_config();
         let mut profile = signed_message_profile("require-verified");
@@ -6486,6 +6871,32 @@ mod tests {
             .expect("signed profile");
 
         assert_eq!(profile.signature_public_key_sha256_pins, vec![pin]);
+    }
+
+    #[test]
+    fn profile_trusted_alias_pins_feed_canonical_signature_trust() {
+        let mut config = sample_config();
+        let mut profile = signed_message_profile("require-verified");
+        let public_key_pin = test_p256_public_key_pin();
+        let certificate_pin = test_x509_chain_root_certificate_pin();
+        profile.signature_public_key_sha256_pins.clear();
+        profile.x509_trust_anchor_sha256_pins.clear();
+        profile.trusted_public_key_sha256 = vec![public_key_pin.clone()];
+        profile.trusted_certificate_sha256 = vec![certificate_pin.clone()];
+        config.profiles.push(profile);
+
+        let runtime = Iso20022BridgeRuntime::from_config(&config)
+            .expect("cfg")
+            .expect("enabled");
+        let profile = runtime
+            .resolve_profile(Some("signed-pacs008-test"))
+            .expect("signed profile");
+
+        assert_eq!(
+            profile.signature_public_key_sha256_pins,
+            vec![public_key_pin]
+        );
+        assert_eq!(profile.x509_trust_anchor_sha256_pins, vec![certificate_pin]);
     }
 
     #[test]

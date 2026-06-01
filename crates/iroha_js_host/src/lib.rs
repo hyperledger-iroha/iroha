@@ -137,7 +137,7 @@ use iroha_data_model::{
     oracle::KeyedHash,
     peer::{Peer, PeerId},
     permission::Permission,
-    proof::{ProofAttachment, VerifyingKeyId},
+    proof::{ProofAttachment, ProofAttachmentList, VerifyingKeyId},
     role::{NewRole, Role, RoleId},
     rwa::{NewRwa, RwaControlPolicy, RwaId, RwaParentRef},
     smart_contract::manifest::{ContractManifest, ManifestProvenance},
@@ -149,9 +149,9 @@ use iroha_data_model::{
     },
     sorafs::pin_registry::StorageClass,
     transaction::{
-        Executable, PrivateCreateKaigi, PrivateEndKaigi, PrivateJoinKaigi, PrivateKaigiAction,
-        PrivateKaigiArtifacts, PrivateKaigiFeeSpend, PrivateKaigiTemplate, PrivateKaigiTransaction,
-        TransactionSubmissionReceipt,
+        Executable, IvmProved, PrivateCreateKaigi, PrivateEndKaigi, PrivateJoinKaigi,
+        PrivateKaigiAction, PrivateKaigiArtifacts, PrivateKaigiFeeSpend, PrivateKaigiTemplate,
+        PrivateKaigiTransaction, TransactionSubmissionReceipt,
         signed::{SignedTransaction, TransactionBuilder, TransactionEntrypoint},
     },
     trigger::{
@@ -9279,24 +9279,18 @@ fn decode_signed_transaction(bytes: &[u8]) -> napi::Result<SignedTransaction> {
 }
 
 #[allow(clippy::too_many_arguments)] // mirrors TransactionBuilder inputs for clarity
-fn assemble_transaction(
+fn assemble_executable_transaction(
     chain_id: ChainId,
     authority: AccountId,
-    instructions: Vec<InstructionBox>,
+    executable: Executable,
     metadata: Metadata,
+    attachments: Option<ProofAttachmentList>,
     creation_time_ms: Option<i64>,
     ttl_ms: Option<i64>,
     nonce: Option<u32>,
     secret: &[u8],
 ) -> napi::Result<JsSignedTransaction> {
-    if instructions.is_empty() {
-        return Err(napi::Error::new(
-            napi::Status::InvalidArg,
-            "instructions must be a non-empty array",
-        ));
-    }
-
-    let mut builder = TransactionBuilder::new(chain_id, authority).with_instructions(instructions);
+    let mut builder = TransactionBuilder::new(chain_id, authority).with_executable(executable);
 
     if let Some(ms) = creation_time_ms {
         let millis = u64::try_from(ms).map_err(|_| {
@@ -9325,6 +9319,9 @@ fn assemble_transaction(
     }
 
     builder = builder.with_metadata(metadata);
+    if let Some(attachments) = attachments {
+        builder = builder.with_attachments(attachments);
+    }
 
     let private_key = PrivateKey::from_bytes(Algorithm::Ed25519, secret).map_err(norito_to_napi)?;
     let signed = builder.sign(&private_key);
@@ -9335,6 +9332,37 @@ fn assemble_transaction(
         signed_transaction: Buffer::from(signed_bytes),
         hash,
     })
+}
+
+#[allow(clippy::too_many_arguments)] // mirrors TransactionBuilder inputs for clarity
+fn assemble_transaction(
+    chain_id: ChainId,
+    authority: AccountId,
+    instructions: Vec<InstructionBox>,
+    metadata: Metadata,
+    creation_time_ms: Option<i64>,
+    ttl_ms: Option<i64>,
+    nonce: Option<u32>,
+    secret: &[u8],
+) -> napi::Result<JsSignedTransaction> {
+    if instructions.is_empty() {
+        return Err(napi::Error::new(
+            napi::Status::InvalidArg,
+            "instructions must be a non-empty array",
+        ));
+    }
+
+    assemble_executable_transaction(
+        chain_id,
+        authority,
+        Executable::from(instructions),
+        metadata,
+        None,
+        creation_time_ms,
+        ttl_ms,
+        nonce,
+        secret,
+    )
 }
 
 /// Compute the canonical pipeline hash for a Norito-serialized signed transaction.
@@ -9995,6 +10023,52 @@ pub fn build_transaction(
     )
 }
 
+/// Build and sign a transaction carrying an `Executable::IvmProved` payload and its proof attachment.
+#[napi]
+#[allow(clippy::too_many_arguments, clippy::needless_pass_by_value)] // JS bindings expose this exact surface to callers
+pub fn build_ivm_proved_transaction(
+    chain_id: String,
+    authority: String,
+    proved_json: String,
+    attachment_json: String,
+    metadata_json: Option<String>,
+    creation_time_ms: Option<i64>,
+    ttl_ms: Option<i64>,
+    nonce: Option<u32>,
+    secret: Uint8Array,
+) -> napi::Result<JsSignedTransaction> {
+    let chain_id: ChainId = chain_id.parse().map_err(|err| {
+        napi::Error::new(napi::Status::InvalidArg, format!("invalid chain id: {err}"))
+    })?;
+    let _chain_guard = scoped_chain_discriminant_for_literal(&authority);
+    let authority = parse_account_id(&authority, "authority account id")?;
+    let proved: IvmProved = json::from_json(&proved_json).map_err(|err| {
+        napi::Error::new(
+            napi::Status::InvalidArg,
+            format!("invalid IvmProved json: {err}"),
+        )
+    })?;
+    let attachment: ProofAttachment = json::from_json(&attachment_json).map_err(|err| {
+        napi::Error::new(
+            napi::Status::InvalidArg,
+            format!("invalid ProofAttachment json: {err}"),
+        )
+    })?;
+    let metadata = parse_metadata_payload("transaction", metadata_json)?;
+
+    assemble_executable_transaction(
+        chain_id,
+        authority,
+        Executable::IvmProved(proved),
+        metadata,
+        Some(ProofAttachmentList(vec![attachment])),
+        creation_time_ms,
+        ttl_ms,
+        nonce,
+        secret.as_ref(),
+    )
+}
+
 /// Build a private Kaigi create transaction entrypoint.
 #[napi]
 #[allow(clippy::needless_pass_by_value)]
@@ -10336,13 +10410,15 @@ mod tests {
         nexus::LaneId,
         nft::NftId,
         peer::{Peer, PeerId},
+        proof::{ProofAttachment, ProofBox, VerifyingKeyId},
         rwa::{NewRwa, RwaControlPolicy, RwaId, RwaParentRef},
         smart_contract::manifest::{
             AccessSetHints, ContractManifest, EntryPointKind, EntrypointDescriptor,
             EntrypointParamDescriptor, KotobaTranslation, KotobaTranslationEntry,
         },
         transaction::{
-            Executable, TransactionSubmissionReceipt, TransactionSubmissionReceiptPayload,
+            Executable, IvmBytecode, IvmProved, TransactionSubmissionReceipt,
+            TransactionSubmissionReceiptPayload,
         },
         trigger::TriggerId,
     };
@@ -13420,6 +13496,61 @@ mod tests {
             }
             other => panic!("expected instruction batch, got {other:?}"),
         }
+        assert_eq!(
+            result.hash.as_ref(),
+            tx.hash().as_ref(),
+            "hash must match signed transaction hash"
+        );
+    }
+
+    #[test]
+    fn build_ivm_proved_transaction_roundtrip() {
+        disable_packed_struct_once();
+        let keypair = KeyPair::random_with_algorithm(Algorithm::Ed25519);
+        let chain_id: ChainId = "test-chain".parse().expect("valid chain id");
+        let authority = AccountId::new(keypair.public_key().clone());
+        let proved = IvmProved {
+            bytecode: IvmBytecode::from_compiled(vec![0x4e, 0x52, 0x54, 0x30]),
+            overlay: Vec::<InstructionBox>::new().into(),
+            events_commitment: Hash::new(b"events"),
+            gas_policy_commitment: Hash::new(b"gas-policy"),
+        };
+        let attachment = ProofAttachment::new_ref(
+            "halo2/ipa".parse().expect("backend ident"),
+            ProofBox::new(
+                "halo2/ipa".parse().expect("proof backend ident"),
+                vec![0xAA, 0xBB, 0xCC],
+            ),
+            VerifyingKeyId::new("halo2/ipa", "ivm-exec-v1"),
+        );
+        let proved_json = json::to_json(&proved).expect("proved json");
+        let attachment_json = json::to_json(&attachment).expect("attachment json");
+        let (_, secret_bytes) = keypair.private_key().to_bytes();
+
+        let result = build_ivm_proved_transaction(
+            chain_id.to_string(),
+            account_json_literal(&authority),
+            proved_json,
+            attachment_json,
+            Some(r#"{"gas_limit":1000}"#.to_owned()),
+            Some(1_700_000_000_000),
+            Some(5_000),
+            Some(42),
+            Uint8Array::from(secret_bytes.to_vec()),
+        )
+        .expect("transaction built");
+
+        let tx = decode_signed_transaction(result.signed_transaction.as_ref()).expect("decode");
+        assert_eq!(tx.authority(), &authority);
+        assert_eq!(tx.chain(), &chain_id);
+        match tx.instructions() {
+            Executable::IvmProved(decoded) => {
+                assert_eq!(decoded, &proved);
+            }
+            other => panic!("expected IvmProved executable, got {other:?}"),
+        }
+        let attachments = tx.attachments().expect("proof attachments");
+        assert_eq!(attachments.0, vec![attachment]);
         assert_eq!(
             result.hash.as_ref(),
             tx.hash().as_ref(),

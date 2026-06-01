@@ -1,0 +1,20 @@
+// TAIRA-side SCCP XOR source contract for the taira_tron_xor route.
+//
+// Compile deployment artifacts with the IVM ZK mode bit forced, then submit
+// through Executable::IvmProved. Iroha core admission additionally enforces
+// that any taira_tron_xor RecordSccpMessage in the proved overlay is paired
+// with enough whole-unit XOR burn from the payload sender.
+seiyaku TairaXorSccpBurnRecord {
+  kotoage fn burn_and_record(
+    sender: AccountId,
+    settlement_asset: AssetDefinitionId,
+    amount: int,
+    record_instruction: Blob
+  ) permission(AssetTransferRole) {
+    require(amount > 0);
+    require(sender == authority());
+
+    burn_asset(sender, settlement_asset, amount);
+    execute_instruction(record_instruction);
+  }
+}

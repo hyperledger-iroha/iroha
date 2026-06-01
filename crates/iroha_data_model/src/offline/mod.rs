@@ -176,9 +176,21 @@ fn is_trusted_setup_kagemusha_backend(backend: &str) -> bool {
 }
 
 fn has_trusted_setup_kagemusha_backend_segment(backend: &str) -> bool {
+    const TRUSTED_SETUP_SEGMENTS: &[&str] = &[
+        "groth16",
+        "kzg",
+        "bn254",
+        "bn256",
+        "bls12",
+        "srs",
+        "crs",
+        "ptau",
+        "ceremony",
+        "powersoftau",
+    ];
     backend
         .split(|ch: char| !ch.is_ascii_alphanumeric())
-        .any(|segment| matches!(segment, "groth16" | "kzg" | "bn254" | "bn256" | "bls12"))
+        .any(|segment| TRUSTED_SETUP_SEGMENTS.contains(&segment))
 }
 
 fn has_trusted_setup_kagemusha_backend_compact_label(backend: &str) -> bool {
@@ -186,9 +198,24 @@ fn has_trusted_setup_kagemusha_backend_compact_label(backend: &str) -> bool {
         .chars()
         .filter(|ch| ch.is_ascii_alphanumeric())
         .collect::<String>();
-    ["groth16", "kzg", "bn254", "bn256", "bls12381", "bls12"]
-        .iter()
-        .any(|token| compact.contains(token))
+    [
+        "groth16",
+        "kzg",
+        "bn254",
+        "bn256",
+        "bls12381",
+        "bls12",
+        "srs",
+        "crs",
+        "ptau",
+        "ceremony",
+        "trustedsetup",
+        "structuredreferencestring",
+        "universalsrs",
+        "powersoftau",
+    ]
+    .iter()
+    .any(|token| compact.contains(token))
 }
 
 fn is_developer_only_kagemusha_backend(backend: &str) -> bool {
@@ -4030,6 +4057,7 @@ fn validate_kagemusha_recursive_spend_lineage_witness(
     bundle: &KagemushaRecursiveSpendBundleV1,
     witness: &KagemushaRecursiveSpendLineageWitnessV1,
 ) -> Result<(), KagemushaFoldError> {
+    bundle.validate_public_input_binding()?;
     let hop_count = witness.record_bundle.bundle.steps.len();
     if hop_count == 0 {
         return Err(KagemushaFoldError::Empty);
@@ -4052,11 +4080,10 @@ fn validate_kagemusha_recursive_spend_lineage_witness(
             actual: u32::try_from(witness.previous_recursive_proofs.len()).unwrap_or(u32::MAX),
         });
     }
-    if witness.pallas_open_envelopes_archive.is_empty() {
-        return Err(KagemushaFoldError::InvalidRecursiveSpendProof {
-            field: "lineage_witness.pallas_open_envelopes_archive",
-        });
-    }
+    decode_kagemusha_recursive_lineage_open_envelopes(
+        &witness.pallas_open_envelopes_archive,
+        hop_count,
+    )?;
     if witness.record_bundle.bundle.chain_id != bundle.accumulator.chain_id {
         return Err(KagemushaFoldError::RecursiveSpendChainMismatch);
     }
@@ -4092,8 +4119,30 @@ fn validate_kagemusha_recursive_spend_lineage_witness(
         });
     }
 
-    for previous_proof in &witness.previous_recursive_proofs {
-        validate_kagemusha_recursive_spend_proof_attachment(previous_proof)?;
+    for (proof_index, previous_proof) in witness.previous_recursive_proofs.iter().enumerate() {
+        let circuit =
+            validate_kagemusha_recursive_spend_proof_public_input_binding(previous_proof)?;
+        if circuit != KagemushaRecursiveSpendProofCircuit::SemanticAggregation {
+            return Err(KagemushaFoldError::InvalidRecursiveSpendProof {
+                field: "lineage_witness.previous_recursive_proofs.verifier_key_id.name",
+            });
+        }
+        if previous_proof
+            .public_inputs
+            .recursive_verifier_scalar_projection_digest
+            != [0u8; Hash::LENGTH]
+        {
+            return Err(KagemushaFoldError::InvalidRecursiveSpendProof {
+                field: "lineage_witness.previous_recursive_proofs.recursive_verifier_scalar_projection_digest",
+            });
+        }
+        let expected_hop_count = proof_index.saturating_add(1);
+        if previous_proof.public_inputs.hop_count != expected_hop_count as u32 {
+            return Err(KagemushaFoldError::HopCountMismatch {
+                expected: expected_hop_count,
+                actual: previous_proof.public_inputs.hop_count,
+            });
+        }
     }
 
     for (hop_index, (step, note)) in witness
@@ -5500,6 +5549,23 @@ mod offline_note_tests {
             "stark/fri/prod-bls12-381",
             "stark/fri/prod.bls12_381",
             "stark/fri/prod-b.l.s.12.381",
+            "srs",
+            "SRS",
+            "crs",
+            "ptau",
+            "powersoftau",
+            "powers-of-tau",
+            "trusted-setup",
+            "structured-reference-string",
+            "universal-srs",
+            "halo2/ipa:universal-srs",
+            "stark/fri/prod-srs",
+            "stark/fri/prod-s-r-s",
+            "stark/fri/prod.crs",
+            "stark/fri/prod-ptau",
+            "stark/fri/prod-powers-of-tau",
+            "stark/fri/prod-ceremony",
+            "stark/fri/structured-reference-string",
             "halo2/ipa;groth16",
             "halo2/ipa:groth-16",
         ] {
@@ -6598,6 +6664,25 @@ mod offline_note_tests {
         assert_eq!(witness0.current_notes, vec![note0.clone()]);
         assert!(witness0.previous_recursive_proofs.is_empty());
 
+        let mut stale_init_bundle = bundle0.clone();
+        stale_init_bundle.recursive_proof.public_inputs.hop_count = 2;
+        stale_init_bundle
+            .recursive_proof
+            .public_inputs
+            .verifier_witness_count = 2;
+        stale_init_bundle.recursive_proof.public_inputs_hash = stale_init_bundle
+            .recursive_proof
+            .public_inputs
+            .public_inputs_hash()
+            .expect("stale init bundle public-input hash");
+        assert!(matches!(
+            kagemusha_recursive_spend_lineage_witness_from_init_result(
+                &init_request,
+                &stale_init_bundle
+            ),
+            Err(KagemushaFoldError::RecursiveSpendPublicInputMismatch { field: "hop_count" })
+        ));
+
         let mut step1 = kagemusha_step(root1, root2, 0x60, 0x80, b"recursive-lineage-hop-1");
         step1.input_nullifiers = vec![note0.spend_nullifier];
         let note1 = KagemushaSpendableNoteDescriptorV1 {
@@ -6655,15 +6740,74 @@ mod offline_note_tests {
             VerifyingKeyId::new("halo2/ipa", "kagemusha-unshield-fixture"),
         );
         redeem_proof.vk_commitment = Some(fixed_hash(b"recursive-lineage-unshield-vk"));
-        KagemushaRecursiveSpendRedeemRequestV1 {
-            bundle: bundle1,
+        let valid_redeem_request = KagemushaRecursiveSpendRedeemRequestV1 {
+            bundle: bundle1.clone(),
             recipient: sample_account(0xB3, "offline"),
             public_amount: 42,
             redeem_proof,
             lineage_witness: Some(witness1.clone()),
-        }
-        .validate_public_binding()
-        .expect("redeem request accepts assembled lineage witness");
+        };
+        valid_redeem_request
+            .validate_public_binding()
+            .expect("redeem request accepts assembled lineage witness");
+
+        let mut reserved_previous_proof = valid_redeem_request.clone();
+        let lineage_previous_proof = kagemusha_recursive_spend_lineage_proof(
+            &bundle0.accumulator,
+            b"recursive-lineage-previous-proof-scalar",
+        );
+        reserved_previous_proof
+            .lineage_witness
+            .as_mut()
+            .expect("lineage witness")
+            .previous_recursive_proofs[0] = lineage_previous_proof;
+        assert!(matches!(
+            reserved_previous_proof.validate_public_binding(),
+            Err(KagemushaFoldError::InvalidRecursiveSpendProof {
+                field: "lineage_witness.previous_recursive_proofs.verifier_key_id.name"
+            })
+        ));
+
+        let mut scalar_spliced_previous_proof = valid_redeem_request.clone();
+        let previous_proof = &mut scalar_spliced_previous_proof
+            .lineage_witness
+            .as_mut()
+            .expect("lineage witness")
+            .previous_recursive_proofs[0];
+        previous_proof
+            .public_inputs
+            .recursive_verifier_scalar_projection_digest =
+            fixed_hash(b"recursive-lineage-semantic-previous-proof-scalar-splice");
+        previous_proof.public_inputs_hash = previous_proof
+            .public_inputs
+            .public_inputs_hash()
+            .expect("scalar-spliced previous proof public-input hash");
+        assert!(matches!(
+            scalar_spliced_previous_proof.validate_public_binding(),
+            Err(KagemushaFoldError::InvalidRecursiveSpendProof {
+                field: "lineage_witness.previous_recursive_proofs.recursive_verifier_scalar_projection_digest"
+            })
+        ));
+
+        let mut out_of_order_previous_proof = valid_redeem_request;
+        let previous_proof = &mut out_of_order_previous_proof
+            .lineage_witness
+            .as_mut()
+            .expect("lineage witness")
+            .previous_recursive_proofs[0];
+        previous_proof.public_inputs.hop_count = 2;
+        previous_proof.public_inputs.verifier_witness_count = 2;
+        previous_proof.public_inputs_hash = previous_proof
+            .public_inputs
+            .public_inputs_hash()
+            .expect("out-of-order previous proof public-input hash");
+        assert!(matches!(
+            out_of_order_previous_proof.validate_public_binding(),
+            Err(KagemushaFoldError::HopCountMismatch {
+                expected: 1,
+                actual: 2
+            })
+        ));
 
         let mut bad_init = init_request;
         bad_init.pallas_open_envelopes_archive = vec![0x01, 0x02];
@@ -7415,7 +7559,9 @@ mod offline_note_tests {
                 },
                 verifier_records: vec![KagemushaVerifiedFoldVerifierRecord { id: vk_id, record }],
             },
-            pallas_open_envelopes_archive: vec![0xE1, 0xE2],
+            pallas_open_envelopes_archive: kagemusha_recursive_spend_pallas_open_envelope_archive(
+                0x61,
+            ),
             current_notes: vec![note0.clone()],
             previous_recursive_proofs: Vec::new(),
         };
@@ -7424,6 +7570,39 @@ mod offline_note_tests {
         valid_with_lineage
             .validate_public_binding()
             .expect("redeem request accepts well-shaped lineage witness");
+
+        let mut malformed_archive = valid.clone();
+        let mut bad_witness = lineage_witness.clone();
+        bad_witness.pallas_open_envelopes_archive = vec![0xE1, 0xE2];
+        malformed_archive.lineage_witness = Some(bad_witness);
+        assert!(matches!(
+            malformed_archive.validate_public_binding(),
+            Err(KagemushaFoldError::InvalidRecursiveSpendProof {
+                field: "lineage_witness.pallas_open_envelopes_archive"
+            })
+        ));
+
+        let mut envelope_count_mismatch = valid.clone();
+        let mut bad_witness = lineage_witness.clone();
+        let mut envelopes: Vec<iroha_zkp_halo2::OpenVerifyEnvelope> =
+            norito::decode_from_bytes(&bad_witness.pallas_open_envelopes_archive)
+                .expect("decode one-hop Pallas envelope archive");
+        let mut extra_envelopes: Vec<iroha_zkp_halo2::OpenVerifyEnvelope> =
+            norito::decode_from_bytes(&kagemusha_recursive_spend_pallas_open_envelope_archive(
+                0x62,
+            ))
+            .expect("decode extra Pallas envelope archive");
+        envelopes.append(&mut extra_envelopes);
+        bad_witness.pallas_open_envelopes_archive =
+            to_bytes(&envelopes).expect("encode two-hop Pallas envelope archive");
+        envelope_count_mismatch.lineage_witness = Some(bad_witness);
+        assert!(matches!(
+            envelope_count_mismatch.validate_public_binding(),
+            Err(KagemushaFoldError::HopCountMismatch {
+                expected: 1,
+                actual: 2
+            })
+        ));
 
         let mut note_count_mismatch = valid.clone();
         let mut bad_witness = lineage_witness.clone();

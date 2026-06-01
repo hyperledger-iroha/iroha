@@ -57,14 +57,41 @@ GRANDPA lanes. The wrappers do not fabricate cryptographic proofs: they
 normalize the canonical transparent public inputs, SCCP bundle bytes, source
 proof bytes, statement hash, destination binding hash, and any verifier
 deployment binding material before calling the prover supplied by the app.
+The ETH/BSC receipt-proof, TON shard-proof, and Substrate-family storage-proof
+transcript helpers fail closed on an all-zero source event digest before
+hashing source witness material, matching the on-chain requirement that a source
+proof commits to a concrete emitted SCCP event.
+The dynamic Python witness-provider path snapshots app-owned request data before
+calling the UI resolver, including accepted non-string sequence byte inputs, so
+provider-side normalization or mutation cannot alter the proof request that the
+portal or mobile app is displaying to the user.
+Dynamic JavaScript and Python linked-prover callbacks for TON, EVM-family,
+TRON, and Substrate-family flows share the same callback snapshot contract:
+callback-visible request objects and nested metadata are frozen where those
+flows expose structured request metadata, and `bundleBytes`/`sourceProofBytes`
+accessors return defensive copies before proof wrapping.
+Swift, Kotlin/JVM, and Java Android final-proof callback regressions now pin
+the same source-proof byte snapshot behavior for EVM-family, TRON, TON, and
+Substrate-family proof engines alongside their existing bundle-byte snapshot
+checks.
 Core admission tests pin the same production gate ordering: lane-specific
-source-adapter evidence is checked before destination or route activation, and
-the all-lanes launch policy still blocks incomplete corridors before accepting
-user-generated proofs. Release-readiness user-prover surface rows therefore
-require the `core-admission` corridor phase in addition to the web, Python,
-Swift, Kotlin, and Java Android SDK phases, so a portal/mobile proof path cannot
-be marked validated until generated proofs also pass the on-chain admission
-surface.
+source-adapter evidence is checked before destination or route activation. The
+active launch policy is BSC-mainnet lane readiness, so complete BSC mainnet
+source-proof, destination-rollout, route-allowlist, and route-canary records can
+open without waiting for Ethereum, Solana, TON, TRON, or Substrate-family
+lanes. Non-BSC lanes remain fail-closed until their own launch policy opens,
+while the all-lanes checker remains as a diagnostic and release-evidence
+consistency helper. Strict release-bundle verification applies complete
+cryptographic-evidence row checks to the active BSC launch lane and keeps
+future-lane rows diagnostic until their launch policy opens. Core admission
+regressions now assert that Solana, TON, and TRON route-canary,
+route-allowlist, and destination-rollout drift checks remain behind that
+non-BSC lane-launch gate in the first-release policy.
+Release-readiness user-prover surface rows therefore require the
+`core-admission` corridor phase in addition to the web, Python,
+Swift, Kotlin, Java Android, and .NET SDK phases, so a portal/mobile proof path
+cannot be marked validated until generated proofs also pass the on-chain
+admission surface.
 For Solana source-state proofs, those wrappers also reject prover output unless
 the SDK-built request still binds the expected Solana source-domain and
 mainnet-genesis public-input columns, recomputes the AccountsLtHash or
@@ -671,8 +698,29 @@ same `js-sdk`, `python-sdk`, `swift-sdk`, `kotlin-sdk`, and `java-android`
 phases that gate release evidence. The legacy `sdk_helper_symbols` field remains
 the JavaScript/web symbol list, and release-bundle verification rejects drift
 between that list, the per-SDK helper map, the rendered helper string, and the
-current corridor phase results before release notes can be accepted. Those maps
-also require the user-owned prover hooks, including JavaScript/web
+current corridor phase results before release notes can be accepted. The public
+release-bundle verifier owns the same SDK phase inventory, so a weakened report
+generator cannot shrink the per-SDK helper-map coverage expected in published
+attachments. It also owns the lane/SDK helper inventory for the cryptographic
+proof-generation entrypoints that must be visible to portal and mobile apps, so
+a weakened report generator cannot drop Solana/TON full-light-client proof
+builders, source-state provers, EVM/TRON receipt/source-proof helpers,
+Substrate runtime-storage proof builders, or on-chain submission helpers from
+copied release rows. It also requires every user-prover row to stay gated by the web,
+Python, Swift, Kotlin, Java Android, and core-admission phases, with
+contract-smoke evidence still mandatory for EVM-family and TRON contract-backed
+proof backends. It independently pins the public row inventory to the production
+lane/backend pairs (`eth,bsc`/EVM Groth16, `tron`/TRON Groth16, `sol`/Solana
+recursive, `ton`/TON contract, and `substrate`/Substrate runtime), rejecting
+duplicates, unknown lanes, missing rows, or backend id drift before release
+attachments can pass verification. The same public bundle verifier pins the
+cryptographic evidence table to the production SCCP domain/chain inventory,
+rejecting duplicate domains, unknown domains, missing domains, and chain-label
+drift before comparing each row to embedded all-lanes evidence. Each public
+cryptographic evidence row must also use the route-canary source and
+source-adapter gate policy for its production domain, including exact named
+audit hashes for source-gated Solana, TON, TRON, and Substrate-family lanes.
+Those maps also require the user-owned prover hooks, including JavaScript/web
 `witnessProvider` and `proveFn`, Python `witness_provider` and `prove`,
 Swift witness-provider protocols and `ProveFunction` typealiases, Kotlin proof
 engine interfaces, Java Android nested `ProofEngine` interfaces, and the
@@ -684,17 +732,48 @@ applies the same fail-closed checks to attached release artifacts: duplicate
 helper symbols and rows missing the required UI-owned witness/prover hook
 markers are rejected even before the row is compared with the current generated
 surface.
-The same public release evidence now binds hashed corridor phase logs to the
-expected phase commands and phase-specific success markers inside the claimed
-phase block. A phase artifact with only the phase marker and the completion
-sentinel is rejected unless the same block also contains the Rust, script, SDK,
-contract-smoke, or core-admission command fragments and success output that
-prove the claimed phase actually ran and passed. The JS SDK phase is also
-checked specifically for the packaged `dist` and package-root SCCP export tests,
-so release notes cannot claim web-portal proof-generation readiness without
-evidence that app-facing imports were tested. The public release-bundle verifier
-applies the same package-root export transcript check to copied `js-sdk` corridor
-logs before accepting a published attachment bundle.
+The same public release evidence now binds hashed corridor phase logs to an
+exact claimed phase-marker line, the expected traced phase commands, a
+phase-local completion sentinel, and phase-specific success output inside the
+claimed phase block. The public bundle verifier owns the required corridor
+phase inventory as well as the transcript inventory, so a weakened report
+generator cannot shrink the production corridor by omitting a required SDK,
+contract-smoke, Rust verifier, evidence-script, or core-admission phase. A
+phase artifact with only the phase marker and the completion sentinel is
+rejected unless the same block also contains the Rust, script, SDK,
+contract-smoke, or core-admission command fragments on the
+corridor script's `+ ...` command lines and non-command success output that
+proves the claimed phase actually ran and passed. Prefix-alias phase markers,
+completion sentinels copied from another phase block, and success text echoed
+only on a traced command line are rejected. The JS SDK phase is also checked
+specifically for the packaged `dist` and package-root SCCP export tests, so
+release notes cannot claim web-portal proof-generation readiness without
+evidence that app-facing imports were tested. The report and bundle-verifier
+helper inventories also require the native Ethereum beacon-finality helper
+symbols, so release evidence cannot omit the typed provider-evidence builders
+and inbound-evidence construction helpers that Swift, Kotlin/JVM, Java Android,
+and .NET apps use for ETH source proofs.
+The packaged JavaScript SCCP tests now also assert that the browser-facing
+Ethereum and BSC mainnet artifacts contain no `WebAssembly`, `wasm`, `snarkjs`,
+remote prover, prover URL, or prover endpoint dependency markers, keeping the
+easy web path tied to app-owned local proof generation. The release report and
+strict bundle verifier require both the Ethereum and BSC no-WASM test names as
+JS phase output before accepting a published readiness bundle; they also
+require the package declaration test name for BSC mainnet Parlia finality
+evidence hooks so typed browser evidence fields cannot drift silently.
+The release-readiness script tests also scan the Ethereum and BSC SDK facade
+source files for JavaScript, Python, Swift, Kotlin/JVM, Java Android, and .NET,
+rejecting missing facade files or any `WebAssembly`, `wasm`, `snarkjs`,
+remote-prover, prover-URL, or prover-endpoint dependency marker. That keeps the
+Ethereum and BSC mainnet SDK launch paths native or local-prover owned across
+browser and native SDKs.
+The public release-bundle verifier
+owns the same phase command and success-marker inventory instead of trusting the
+report generator for those transcript requirements; parity tests keep the
+report and verifier inventories aligned, while a weakened report module cannot
+relax copied bundle-log checks. The verifier applies those traced command-line
+and package-root export transcript checks to copied corridor logs before
+accepting a published attachment bundle.
 Swift, Kotlin, and Java Android request builders also bind the mobile witness
 view to the opened full-bank `AccountsLtHash`: if a caller supplies an explicit
 `witness.accountsLtHash`, it must match the opened contribution hash, and absent
@@ -933,13 +1012,137 @@ proof family, verifier address, deployed verifier code hash, verifier key hash,
 and, for EVM-family lanes, the bridge-wrapper address are all included. If a
 portal supplies both `destinationBinding` material and a raw
 `destinationBindingHash`, the request builder rejects mismatches before invoking
-the user-linked prover. Swift, Kotlin, and Java Android mobile proof-request and
-submission constructors now apply the same source-domain, target-domain,
-backend, and `stark-fri-v1` proof-family checks when the app passes a derived
-binding object instead of a raw hash. The EVM-family and TRON result wrappers
+the user-linked prover. The JavaScript `EthereumMainnetSccp` facade is exported
+from the package root and validates `eth_chainId` as a canonical JSON-RPC
+quantity, so padded values such as `0x01` cannot alias the Ethereum mainnet
+launch lane. The JavaScript `BscMainnetSccp` facade is also exported from the
+package root, validates canonical `eth_chainId == 0x38`, and exposes the same
+easy inbound receipt-collection and outbound calldata paths for BSC mainnet.
+Both browser receipt collectors reject failed receipts, non-canonical
+transaction/block hashes, missing or zero `receipt.blockNumber`, missing or
+zero `block.number`, receipt transaction-hash drift, block hash/number drift,
+and block objects without a canonical `receiptsRoot` before calling the
+app-linked local prover; the BSC collector preserves Parlia finality evidence
+from the app-linked consensus provider. The BSC browser submit helper also
+rejects empty or all-zero inbound proof bytes and copies accepted proof bytes
+before invoking the app-linked Iroha submitter, and the browser prove helper
+rejects empty or all-zero local prover output before returning it to callers.
+The Swift, Kotlin/JVM, Java Android,
+and .NET `EthereumMainnetSccp` facades expose the same easy inbound method shape
+(`collectInboundEvidenceFromReceipt`/`CollectInboundEvidenceFromReceiptAsync`,
+`proveInboundToSora`/`ProveInboundToSoraAsync`, and
+`submitInboundToIroha`/`SubmitInboundToIrohaAsync`) for native apps: execution
+data must come from an app-supplied Ethereum JSON-RPC provider that validates
+canonical `eth_chainId == 0x1`, and collected receipts/blocks are checked for
+failed status, transaction-hash drift, block hash/number drift, missing or zero
+receipt/block numbers, non-canonical hashes, and missing receipt roots before
+native proof code is invoked. Swift, Kotlin/JVM, Java Android, and .NET callers
+can also link an app-supplied Ethereum consensus/finality provider so
+`collectInboundEvidenceFromReceipt` attaches beacon finality evidence from the
+same local collection path when the caller did not pre-supply it. Browser and
+native Ethereum collectors now bind any supplied or collected beacon finality
+evidence back to the execution block by requiring the finality execution block
+number, execution block hash, and execution receipts root to match the
+validated receipt/block before local source-prover callbacks run. The
+JavaScript `proveInboundToSora` easy path now runs the same collection step
+before invoking the app-linked prover, and precomputed `receiptProofHash`
+values are accepted as already-collected receipt proof material. Across
+JavaScript, Swift, Kotlin/JVM, Java Android, and .NET, Ethereum inbound proving
+also requires beacon finality to be present before the app-linked source prover
+is called; Swift, Kotlin/JVM, and Java Android now also accept per-call
+execution and consensus providers on `proveInboundToSora`, matching the
+JavaScript and .NET prove-time collection path without requiring apps to build a
+new facade for each provider pair. The JavaScript package declarations expose
+`EthereumMainnetBeaconFinalityEvidenceInput`,
+`EthereumMainnetBeaconFinalityEvidence`, and
+`EthereumMainnetConsensusProviderInput`, so browser applications see the
+required execution block number, execution block hash, and execution receipts
+root fields at compile time. Swift, Kotlin/JVM, Java Android, and .NET also
+expose typed native beacon-finality helpers
+(`EthereumMainnetBeaconFinalityEvidence` and Java Android's nested
+`EthereumMainnetSccp.BeaconFinalityEvidence`) that build the canonical
+map/dictionary shape for those three required execution fields plus optional
+provider metadata. Swift, Kotlin/JVM, Java Android, and .NET also provide typed
+inbound-evidence construction helpers for feeding that finality object into
+ETH -> SORA source proving without hand-copying the finality map. Native .NET
+callers also get the same Ethereum-mainnet route guard for chain id `1`,
+ETH -> SORA inbound routing, SORA -> ETH outbound routing, canonical
+SORA -> ETH destination-binding derivation, and the exact canonical bytes32
+network-id string; uppercase or padded network ids are rejected. The .NET
+Ethereum facade now also exposes `BuildOutboundProofRequest`,
+`ProveOutboundToEthereumAsync`, `BuildEthereumCalldata`, and
+`SubmitOutboundToEthereumAsync` so C# apps can keep SORA -> Ethereum proof
+generation and submission local to native code without a WASM or remote prover
+dependency. Swift, Kotlin/JVM, and Java Android now also provide
+`submitOutboundToEthereum` methods backed by app-owned outbound submitter
+callbacks, so their Ethereum mainnet easy paths build and validate verifier
+calldata before handing it to the wallet/RPC integration supplied by the app.
+The Python Ethereum mainnet facade mirrors that final step with
+`submit_outbound_to_ethereum`, which passes the validated calldata package to an
+app-owned transaction hook.
+The BSC mainnet facades now expose the same app-owned outbound submit step on
+JavaScript, Python, Swift, Kotlin/JVM, Java Android, and .NET: callers build the
+governed SORA -> BSC verifier calldata through `buildBscCalldata` or
+`build_bsc_calldata`, then hand it to `submitOutboundToBsc` or
+`submit_outbound_to_bsc` only after the wrapped proof result has passed the BSC
+destination-binding checks.
+Python, Swift, Kotlin, Java Android, and JavaScript mobile/web
+proof-request and submission constructors now apply the same source-domain,
+target-domain, backend, `stark-fri-v1` proof-family, and Ethereum-mainnet
+destination-binding checks when the app passes a derived binding object instead
+of a raw hash; their Ethereum calldata helpers require wrapped proof results
+that carry the chain-id-1 binding before calldata is built. The JavaScript,
+Python, Swift, Kotlin, Java Android, and Rust BSC mainnet facades now pin the
+EVM chain id to `56`, require the deployment-bound SORA -> BSC destination
+binding before request, result, proof-job, or submission packaging, and require
+wrapped proof results to carry the same binding before calldata is built.
+The Python package exposes the same easy `BscMainnetSccp` facade shape as the
+native SDKs, with static BSC chain-id and destination-binding guards,
+`build_outbound_proof_request`, `prove_outbound_to_bsc`, `build_bsc_calldata`,
+`submit_outbound_to_bsc`, `collect_inbound_evidence_from_receipt`,
+`prove_inbound_to_sora`, and `submit_inbound_to_iroha`; the older
+`BscMainnetSccpProver` name remains as a compatibility wrapper. Python,
+Swift, Kotlin/JVM, Java Android, and .NET now also expose native
+`BscMainnetSccp` receipt facades mirroring the Ethereum mobile path: they
+validate canonical BSC `eth_chainId` values, collect receipts and receipt
+blocks through app-supplied JSON-RPC providers, bind supplied or app-collected
+Parlia finality evidence to the execution block number, block hash, and
+receipts root, reject failed receipts, missing or zero receipt/block numbers,
+and drifted transaction/block/finality evidence, and
+submit only non-empty non-zero copied source proofs to the app-linked
+submitter.
+The JavaScript browser, Python, Swift, Kotlin/JVM, Java Android, and .NET BSC
+easy inbound proving paths now also require Parlia finality before the
+app-linked source prover callback runs; each SDK can collect that evidence
+through an app-supplied consensus provider or validate caller-supplied finality
+against the collected execution receipt block. The JavaScript package
+declarations expose the BSC Parlia finality evidence and consensus-provider
+input shapes so browser applications see the required execution block number,
+execution block hash, and receipts-root fields at compile time.
+Native .NET callers additionally get BSC-mainnet route guards for chain id
+`56`, BSC -> SORA inbound routing, SORA -> BSC outbound routing, the exact
+canonical bytes32 network-id string, native BSC destination-binding/hash
+construction using the same Keccak preimage as the JavaScript, Python, Swift,
+Kotlin, Java Android, and Rust helpers, and app-owned outbound
+proof-request/prove/calldata/submit hooks for SORA -> BSC. Release-readiness
+user-prover rows now
+name the Ethereum/BSC facade methods, Ethereum beacon-finality helpers and
+consensus-provider hooks, native BSC Parlia consensus-provider hooks, typed
+native BSC Parlia finality helper records/builders, and the .NET app-owned
+execution/prover/submitter interfaces alongside the other SDK helper symbols,
+so the `dotnet-sdk` corridor phase cannot stand in for an undocumented native
+C# surface. The Java Android
+Ethereum and BSC mainnet facades also snapshot `bundleBytes` and
+`sourceProofBytes` before witness-provider callbacks, so app-owned request
+bytes cannot be mutated while source evidence is being resolved. Rust also
+requires BSC -> SORA source proofs to bind governed source-adapter deployment
+evidence. The EVM-family and TRON result wrappers
 reject empty, all-zero, or non-384-byte Groth16 proof bytes across JavaScript,
-Python, Swift, Kotlin, and Java Android, so placeholder or non-canonical ABI proof output
-cannot be packaged by SDK callers before Torii's deployment-bound preflight.
+Python, Swift, Kotlin, Java Android, and .NET, and the .NET Ethereum mainnet
+outbound wrapper also validates the BN254 proof tuple plus message-id,
+commitment-root, and source-domain binding before verifier calldata is emitted,
+so placeholder or non-canonical ABI proof output cannot be packaged by SDK
+callers before Torii's deployment-bound preflight.
 JavaScript and Python EVM-family, TRON, and Substrate-family local prover
 callbacks may also return `proofBase64` / `proof_base64` for UI bookkeeping,
 but the SDK rejects that metadata unless it exactly matches the returned proof
@@ -1478,7 +1681,9 @@ non-minimal cumulative gas, non-256-byte blooms, malformed logs, logs with more
 than four topics, non-32-byte topics, digest-only topic matches, non-empty SCCP
 source event data, and typed-prefix byte `0x00`. Unrelated valid `LOG0`
 entries are allowed; they simply cannot satisfy the two-topic SCCP source-event
-ABI. Placeholder structural fixtures may still use the typed EVM-family
+ABI. More than one matching SCCP source-event log in the same receipt is
+rejected as ambiguous duplicate evidence. Placeholder structural fixtures may
+still use the typed EVM-family
 receipt-root envelope carrying the SCCP receipt/message root. This closes the
 first ETH consensus-signature,
 execution-header, beacon execution-payload inclusion, receipt-trie, and
@@ -1493,7 +1698,11 @@ committee hash from that payload, and binds the payload hash, parent committee
 hash, next committee hash, next-committee branch hash, finalized beacon root,
 transition slot, and sync-period range under a transition-message hash. The
 parent committee must sign that message with strict `> 2/3` weight before the
-next committee becomes eligible.
+next committee becomes eligible. Transition chains must advance one Ethereum
+mainnet sync-committee period at a time; the verifier uses the consensus
+mainnet presets `SLOTS_PER_EPOCH = 32` and
+`EPOCHS_PER_SYNC_COMMITTEE_PERIOD = 256` as the fixed period geometry and
+rejects skipped-period transition evidence.
 
 Operators can now render the ETH -> SORA source material and source-adapter
 deployment records from governed live evidence with
@@ -1515,7 +1724,9 @@ renderer and derive governed ETH records from template source components.
 runtime bytecode. Hash-only input is a diagnostic JSON path; production TOML
 requires `--source-bridge-runtime-bytecode-hex` or
 `--source-bridge-runtime-bytecode-file` so the helper derives the hash from the
-runtime bytecode preimage. TOML carries
+runtime bytecode preimage. Inline runtime bytecode must use a lowercase `0x`
+prefix with lowercase hex; `0X` or uppercase bytecode text is rejected before
+production TOML is rendered. TOML carries
 `sccp_evm_source_bridge_runtime_bytecode_hex` so the all-lanes preflight can
 replay the Keccak-256 hash instead of trusting the standalone code-hash
 comment. `adapter_verifier_vk_hash` must still match the canonical
@@ -1523,9 +1734,9 @@ comment. `adapter_verifier_vk_hash` must still match the canonical
 the helper recomputes that value and rejects mismatches before rendering
 governance TOML. Production TOML also requires mined deployment receipt
 metadata: the deployment transaction hash, receipt contract address, receipt
-block hash, and an exact positive integer receipt block number. Boolean or
-truthy placeholders for the block number are rejected before receipt metadata
-can be marked ready.
+block hash, an exact positive integer receipt block number, and the non-zero
+receipt block `receiptsRoot`. Boolean or truthy placeholders for the block
+number are rejected before receipt metadata can be marked ready.
 
 ```bash
 python3 scripts/sccp_eth_source_bridge_evidence.py \
@@ -1541,6 +1752,7 @@ python3 scripts/sccp_eth_source_bridge_evidence.py \
   --deployment-receipt-contract-address <eth-source-bridge-address> \
   --deployment-receipt-block-hash <source-adapter-deployment-block-hash> \
   --deployment-receipt-block-number <source-adapter-deployment-block-number> \
+  --deployment-receipt-block-receipts-root <source-adapter-deployment-receipts-root> \
   --toml
 ```
 
@@ -1623,7 +1835,9 @@ renderer and derive governed BSC records from template source components.
 runtime bytecode. Hash-only input is a diagnostic JSON path; production TOML
 requires `--source-bridge-runtime-bytecode-hex` or
 `--source-bridge-runtime-bytecode-file` so the helper derives the hash from the
-runtime bytecode preimage. TOML carries
+runtime bytecode preimage. Inline runtime bytecode must use a lowercase `0x`
+prefix with lowercase hex; `0X` or uppercase bytecode text is rejected before
+production TOML is rendered. TOML carries
 `sccp_evm_source_bridge_runtime_bytecode_hex` so the all-lanes preflight can
 replay the Keccak-256 hash instead of trusting the standalone code-hash
 comment. `adapter_verifier_vk_hash` must still match the canonical
@@ -1631,9 +1845,9 @@ comment. `adapter_verifier_vk_hash` must still match the canonical
 the helper recomputes that value and rejects mismatches before rendering
 governance TOML. Production TOML also requires mined deployment receipt
 metadata: the deployment transaction hash, receipt contract address, receipt
-block hash, and an exact positive integer receipt block number. Boolean or
-truthy placeholders for the block number are rejected before receipt metadata
-can be marked ready.
+block hash, an exact positive integer receipt block number, and the non-zero
+receipt block `receiptsRoot`. Boolean or truthy placeholders for the block
+number are rejected before receipt metadata can be marked ready.
 
 ```bash
 python3 scripts/sccp_bsc_source_bridge_evidence.py \
@@ -1649,6 +1863,7 @@ python3 scripts/sccp_bsc_source_bridge_evidence.py \
   --deployment-receipt-contract-address <bsc-source-bridge-address> \
   --deployment-receipt-block-hash <source-adapter-deployment-block-hash> \
   --deployment-receipt-block-number <source-adapter-deployment-block-number> \
+  --deployment-receipt-block-receipts-root <source-adapter-deployment-receipts-root> \
   --toml
 ```
 
@@ -1659,16 +1874,26 @@ against the requested source lane (`eth = 1`, `bsc = 56`), reads the governed
 source bridge runtime bytecode with `eth_getCode`, derives the same
 Keccak-256 runtime code hash used by source material, and can optionally read a
 deployment transaction receipt to check `status = 0x1` and the deployed
-contract address. Production TOML rendering requires an explicit
-`--expected-source-bridge-code-hash` pin plus expected source material and
-source-adapter deployment record hashes, so the observed live bytecode cannot
-self-authorize governance evidence.
+contract address. When deployment receipt evidence is supplied, the helper also
+fetches the receipt block by number, requires its canonical block number and
+hash to match the receipt, requires the receipt block `receiptsRoot` to be a
+non-zero bytes32 value, re-reads the source bridge bytecode at that block, and
+requires the hash and bytecode to match the selected collection block tag.
+Production TOML rendering requires that receipt-block hash/root/code-hash check,
+an explicit `--expected-source-bridge-code-hash` pin, plus expected source
+material and source-adapter deployment record hashes, so the observed live
+bytecode cannot self-authorize governance evidence.
 The helper treats chain-id selectors, fixed-width component hashes, and
 JSON-RPC returned quantities or hex byte strings as exact evidence; surrounding
 whitespace fails before live source material or deployment receipt metadata is
 rendered. It also caps successful JSON-RPC responses and HTTP error details
-before decoding, and rejects duplicate JSON object keys instead of accepting
-last-value-wins parsing.
+before decoding, rejects duplicate JSON object keys instead of accepting
+last-value-wins parsing, and requires every success envelope to echo
+`jsonrpc = "2.0"` with the request id `1` before using the result.
+Operator-supplied source bridge code-hash, deployment transaction, verifier
+component, deployment receipt, and expected record hash pins must also be
+lowercase hex with a lowercase `0x` prefix when provided; `0X` and uppercase
+aliases fail before live source TOML can be rendered.
 
 ```bash
 python3 scripts/sccp_evm_source_live_evidence.py \
@@ -1693,9 +1918,13 @@ The generated source TOML carries metadata comments for the observed RPC chain
 id, source bridge address, source bridge runtime code hash, and replayable
 source bridge runtime bytecode, plus the verified deployment transaction,
 receipt contract address, receipt block hash, and exact positive receipt block
-number. The all-lanes preflight requires those comments for ETH/BSC source
-material, decodes the bytecode, recomputes Keccak-256, and checks that both the
-live metadata and replayed hash match the governed
+number and block `receiptsRoot`. The live summary also carries
+`deployment_receipt_block_code_hash_matches = true` and
+`deployment_receipt_block_receipts_root_verified = true`; imported summaries
+without those receipt-block rechecks do not render production TOML. The
+all-lanes preflight requires those comments for ETH/BSC source material, decodes
+the bytecode, recomputes Keccak-256, and checks that both the live metadata and
+replayed hash match the governed
 `source_bridge_emitter_address` and `source_bridge_emitter_code_hash`. Hash-only
 offline source material is rejected for production launch even if the record
 hashes are internally consistent.
@@ -2772,13 +3001,12 @@ material, missing deployment, zero deployment receipt, replayed deployment
 material, replayed adapter verifier commitment, non-SORA source-adapter target,
 missing source-record hash comments, stale source-record hash comments,
 missing destination rollout, missing route allowlist, or replayed route material
-fails closed. Admission also enforces the all-lanes launch policy
-against configured material: once a submitted non-SORA source lane is locally
-ready, every advertised remote SCCP domain must have exactly matching
-production-ready source material, source-adapter deployment, destination
-rollout, and route allowlist records before the bridge proof is accepted. A
-partial governed rollout cannot open one inbound lane while another advertised
-lane is still missing production evidence. The default
+fails closed. Admission also enforces the configured launch policy against
+configured material: with the first-release BSC-mainnet launch policy, complete
+BSC evidence can open the BSC inbound lane independently, while non-BSC lanes
+remain blocked until their own lane policy opens. The all-lanes
+checker remains available as a diagnostic for future coordinated launches. The
+default
 production verifier continues to use the built-in catalog and therefore remains
 closed when no explicit lane material is configured.
 
@@ -2822,8 +3050,9 @@ non-canonical direct-helper backend or proof-family labels, and requires
 Inline `--bridge-runtime-bytecode-hex` and
 `--verifier-runtime-bytecode-hex` values are exact evidence: surrounding or
 embedded whitespace is rejected instead of being normalized into runtime
-preimages. Use the corresponding `--*-runtime-bytecode-file` inputs for
-formatted hex artifacts.
+preimages, and inline values must use a lowercase `0x` prefix with lowercase
+hex. Use the corresponding `--*-runtime-bytecode-file` inputs for formatted hex
+artifacts.
 The CLI and reusable `render_toml(...)` / `_json_summary(...)` entrypoints run
 the same derivation and mismatch checks, so portal backends cannot skip
 runtime-bytecode verification by importing the helper module directly. The rendered destination rollout stores
@@ -2848,11 +3077,11 @@ hash derived from that bytecode, and EVM route canary metadata derived from a
 successful `MessageProofAccepted` transaction. The direct renderer requires the
 transaction hash, log index, calldata SHA-256, message id, payload hash, target
 domain, statement hash, commitment root, finality height, finality block hash,
-proof version, proof source domain, and a live
+receipt block number/hash/`receiptsRoot`, proof version, proof source domain, and a live
 `usedMessageProofs(messageId) = true` assertion; if a
-`--route-canary-evidence-hash` is supplied, it must match that v2
+`--route-canary-evidence-hash` is supplied, it must match that v3
 transaction-derived transcript. Rust `iroha_sccp` route-allowlist admission
-stores and recomputes the same v2 canary fields before treating EVM route
+stores and recomputes the same v3 canary fields before treating EVM route
 evidence as bound. JSON summaries stay in diagnostic mode with
 `toml_ready = false`
 until the expected destination binding pin, both runtime bytecode blobs, the
@@ -2900,6 +3129,9 @@ python3 scripts/sccp_evm_destination_evidence.py \
   --route-canary-evidence-hash <post-deploy-route-canary-evidence-hash> \
   --route-canary-transaction-hash <message-proof-accepted-tx-hash> \
   --route-canary-log-index <message-proof-accepted-log-index> \
+  --route-canary-receipt-block-number <receipt-block-number> \
+  --route-canary-receipt-block-hash <receipt-block-hash> \
+  --route-canary-block-receipts-root <receipt-block-receipts-root> \
   --route-canary-call-data-sha256 <submit-calldata-sha256> \
   --route-canary-message-id <accepted-message-id> \
   --route-canary-payload-hash <decoded-payload-hash> \
@@ -2937,37 +3169,44 @@ audited values before the same TOML shape consumed by the all-lanes preflight is
 emitted. Production full TOML also requires the same route canary evidence hash
 as the direct helper, but live collection derives it by fetching the supplied
 `--route-canary-transaction-hash`, checking the receipt status, the
-`MessageProofAccepted` log at `--route-canary-log-index`, the submitted
-`submitSccpMessageProof(bytes,bytes32[6],bytes32)` calldata, the 384-byte
-proof tuple header, and `usedMessageProofs(messageId)`. The canonical EVM
-route-canary transcript now commits the exact submitted calldata SHA-256,
-decoded payload hash, ETH/BSC target-domain word, finality height, finality
-block hash, proof ABI version `1`, SORA proof source-domain word, and
+`MessageProofAccepted` log at `--route-canary-log-index`, the receipt block
+number/hash against `eth_getBlockByNumber`, a non-zero block `receiptsRoot`, the
+submitted `submitSccpMessageProof(bytes,bytes32[6],bytes32)` calldata, the
+384-byte proof tuple header, and `usedMessageProofs(messageId)`. Duplicate
+matching `MessageProofAccepted` events at the supplied log index are rejected as
+ambiguous receipt evidence. The canonical EVM
+route-canary transcript uses the `v3` hash label and commits the receipt block
+number, receipt block hash, block `receiptsRoot`, exact submitted calldata
+SHA-256, decoded payload hash, ETH/BSC target-domain word, finality height,
+finality block hash, proof ABI version `1`, SORA proof source-domain word, and
 `usedMessageProofs` consumption flag alongside the accepted event tuple and
 destination binding/backend/network pins. The direct renderer, public hash
-helper, and all-lanes preflight also reject reuse between the distinct
-transaction hash, calldata, message id, payload, statement, commitment,
-finality height, and finality block hash roles, so a canary cannot be replayed across
-proof tuple versions, EVM-family lanes, drifted Groth16 public inputs, or
-synthetic transcript-role aliases. Public release-bundle verification applies
-the same non-zero rule to each EVM route-canary transaction/public-input word
-published in readiness and all-lanes JSON. A
+helper, runtime config gate, and all-lanes preflight also reject reuse between
+the distinct transaction hash, receipt block hash, block `receiptsRoot`,
+calldata, message id, payload, statement, commitment, finality height, and
+finality block hash roles, so a canary cannot be replayed across proof tuple
+versions, EVM-family lanes, drifted Groth16 public inputs, stale receipt
+blocks, or synthetic transcript-role aliases. Public release-bundle
+verification applies the same non-zero rule to each EVM route-canary
+transaction/public-input word published in readiness and all-lanes JSON. A
 manually supplied canary hash is only accepted as a pin to that derived value.
 The live TOML
 carries the observed RPC chain id, bridge wrapper runtime code hash, verifier
 runtime code hash, their observed
 `eth_getCode` bytecode, verifier backend hash, and proof-family hash as
 metadata comments; the all-lanes preflight requires those comments to replay to
-the canonical EVM production profile and recomputes the EVM route canary hash
+the canonical EVM production profile, rejects non-canonical uppercase runtime
+bytecode preimages in staged evidence, and recomputes the EVM route canary hash
 from the transaction calldata, public inputs, proof header, event metadata, and
-consumed-message state before ETH/BSC destination rollout records can pass
-launch readiness.
+consumed-message state before ETH/BSC destination rollout records can pass launch
+readiness.
 The live collector also treats the explicit expected RPC chain id and JSON-RPC
 returned quantities or hex byte strings as exact evidence; surrounding
 whitespace fails instead of being normalized into destination rollout metadata.
 It also caps successful JSON-RPC responses and HTTP error details before
-decoding, and rejects duplicate JSON object keys instead of accepting
-last-value-wins parsing.
+decoding, rejects duplicate JSON object keys instead of accepting
+last-value-wins parsing, and requires every success envelope to echo
+`jsonrpc = "2.0"` with the request id `1` before using the result.
 The diagnostic `offline_evidence_args` replay the observed deployment material,
 but only include `--expected-destination-binding-hash` and route
 allowlist/source-record hash arguments after the operator supplied that expected
@@ -3845,9 +4084,9 @@ supplied source bridge runtime bytecode before recomputing the canonical source
 material and source-adapter deployment record hashes. TOML rendered with
 runtime bytecode also carries `sccp_evm_source_bridge_runtime_bytecode_hex`;
 the all-lanes preflight requires this bytecode preimage for ETH/BSC source
-material and rejects any staged source record whose decoded bytecode does not
-hash back to the live source bridge runtime code hash and governed
-`source_bridge_emitter_code_hash`.
+material, requires lowercase canonical hex in staged evidence, and rejects any
+staged source record whose decoded bytecode does not hash back to the live
+source bridge runtime code hash and governed `source_bridge_emitter_code_hash`.
 The source renderers and runtime SCCP source-material/deployment gates also
 require non-zero role digests to be pairwise distinct across trust anchors,
 consensus verifiers, message-inclusion verifiers, source-state verifiers,
@@ -3993,7 +4232,7 @@ bash scripts/check_sccp_production_corridor.sh
 Use `bash scripts/check_sccp_production_corridor.sh --list` to view the
 available phases, or repeat `--phase <name>` to run only selected slices such
 as `evidence-scripts`, `js-sdk`, `kotlin-sdk`, `java-android`, or
-`contract-smoke`. Add `--dry-run` to print the exact selected command plan
+`dotnet-sdk`. Add `--dry-run` to print the exact selected command plan
 without resolving local Java/Android toolchains or executing heavyweight
 phases; release operators should use that mode to review the corridor before a
 full run. For Gradle-backed mobile phases, the runner resolves `JAVA_HOME`
@@ -4003,8 +4242,11 @@ release rehearsals do not fail with an empty Java path when Apple's Java
 locator is absent. The full corridor covers the Rust SCCP verifier crate, all
 operator evidence script tests plus the corridor runner self-check, JavaScript
 and Python portal-facing proof generation, Swift and Kotlin mobile proof
-generation, the mirrored Java Android SDK checks, the EVM/TRON Groth16 contract
-smoke, and core bridge-proof admission.
+generation, the mirrored Java Android SDK checks, the native .NET/C# ETH/BSC
+facade tests, the EVM/TRON Groth16 contract smoke, and core bridge-proof
+admission. The `eth,bsc` public release row is blocked unless the `dotnet-sdk`
+phase also passes, so the native C# BSC facade cannot be validated only by
+ad-hoc local output.
 `.github/workflows/sccp_production_corridor.yml` attaches the same
 phase list to pull requests touching SCCP surfaces, a nightly scheduled run,
 and manual `workflow_dispatch` runs for either the full corridor or one named
@@ -4102,17 +4344,25 @@ a ready release. If `--force` is used to replace an output directory, the
 builder refuses dangerous targets and refuses any output directory that contains
 the input TOML or phase transcript sources, so evidence cannot be deleted before
 it is copied into the bundle. For production-ready bundles, the builder now runs
-the strict verifier against its own output before reporting success; run
+the strict verifier against its own output and prints the verified
+`manifest_sha256` root before reporting success; run
 `python3 scripts/sccp_verify_release_bundle.py <bundle-dir>` again after upload
 or when reviewing downloaded attachments to recompute every attachment hash and
 confirm that the readiness report, all-lanes summary, and manifest all agree on
 `production_ready`. With `--json`, the verifier also emits `manifest_sha256` so
 reviewers can archive the verified manifest root while the manifest remains
-outside its own artifact table. The manifest, readiness-report, and
+outside its own artifact table. Strict verification rejects any artifact row
+that tries to list `manifest.json` as a hash-bound attachment. The manifest,
+readiness-report, and
 all-lanes summary JSON roots must keep the bundle builder's canonical sorted-key
 serialization and reject duplicate JSON object keys before semantic review, so
 duplicate-key smuggling or hand-edited formatting drift cannot be published
-after attachment hashes are refreshed. The manifest and
+after attachment hashes are refreshed. The public verifier no longer exposes
+release-report or release-bundle module hooks for the artifact shapes it owns;
+the copied-evidence summary is recomputed through the all-lanes evidence
+validator directly, while readiness Markdown, release-note attachments,
+corridor phases, phase transcripts, cryptographic evidence rows, and
+user-prover submission surfaces are verifier-owned. The manifest and
 readiness-report JSON roots reject missing or unknown top-level fields, and
 manifest/report artifact entries reject unknown fields and require artifact
 `bytes`/`sha256` claims to keep canonical JSON
@@ -4126,9 +4376,11 @@ booleans; and nested readiness sections such as report `evidence`,
 `release_checklist`, `corridor`, and summary `release_checklist` must also keep
 their object shape while top-level `input_artifacts` must remain a list. The
 verifier recomputes the all-lanes
-summary from the copied TOML evidence files before comparing it with the
-standalone summary and embedded report evidence, so a published bundle cannot
-hide stale or tampered evidence inputs behind unchanged JSON reports. The
+summary by loading the all-lanes evidence validator directly against the copied
+TOML evidence files before comparing it with the standalone summary and
+embedded report evidence, so a published bundle cannot hide stale or tampered
+evidence inputs behind unchanged JSON reports or a weakened release-bundle
+builder. The
 report `inputs` provenance list must also match the copied evidence artifact
 paths used for recomputation, so JSON release notes cannot claim a different
 operator-side evidence source after the bundle is built. The
@@ -4146,21 +4398,24 @@ exactly match the required reports, copied evidence inputs, copied corridor
 logs referenced by known passed phases in the readiness report, and final
 release-notes attachment, so a hash-bound but unreviewed appendix, unknown
 phase log, or regenerated artifact table cannot be smuggled into an
-otherwise verified bundle. The verifier independently reloads the current
-production-corridor phase list and requires every known phase to be marked
-`passed` with a hash-bound artifact at the canonical
+otherwise verified bundle. The verifier owns the production-corridor phase
+inventory and requires every known phase to be marked `passed` with a
+hash-bound artifact at the canonical
 `corridor/<phase>.log` path, so a tampered readiness JSON cannot skip, move, or
 remove one phase while leaving top-level ready flags true. The corridor section
 also rejects unknown root fields and non-empty blockers, so operator
 attestations or unresolved phase blockers cannot be hidden beside the phase
-status and evidence maps. The verifier also recomputes the
+status and evidence maps. The verifier also owns and recomputes the exact
 user-prover SDK submission surface table from the corridor phase
-results and the user-side proof backend labels
+results, the user-side proof backend labels,
+the full per-lane/per-SDK helper inventory,
+and the expected on-chain submission text
 (`sccp-solana-recursive-mainnet-v1`, `ton-contract-v1`,
 `substrate-runtime-v1`, `evm-groth16-bn254-v1`, and
 `tron-groth16-bn254-v1`), so public release notes cannot claim a portal or
 mobile proof path is validated unless its required SDK and contract-smoke phases
-actually passed. The Solana destination manifest still uses `solana-program-v1`
+actually passed, and a weakened report generator cannot define a shorter
+helper table as canonical. The Solana destination manifest still uses `solana-program-v1`
 as the target verifier backend; the release-readiness surface uses the recursive
 backend id that browser and mobile provers must put in the proof request. The
 surface rows also name the lane-local user proof-generation helpers: EVM/BSC
@@ -4181,10 +4436,15 @@ For a production release bundle, the row-level validation status must be
 proof path cannot hide behind top-level ready flags.
 The verifier also
 rejects
-non-canonical or escaping manifest paths, a symlinked `manifest.json`,
-symlinked artifacts, duplicate, unmanifested, or omitted required artifacts,
+non-directory or symlinked bundle roots, non-canonical or escaping manifest
+paths, a symlinked `manifest.json`, self-listed `manifest.json` artifact rows,
+symlinked artifacts, unmanifested directories, duplicate, unmanifested, or
+omitted required artifacts,
 non-canonical manifest/readiness-report/summary JSON serialization,
 duplicate keys in public JSON roots,
+non-UTF-8 public JSON and Markdown roots,
+control characters in manifest, readiness-report, or extracted bundle artifact
+paths,
 unknown corridor phase statuses or evidence keys,
 blocked corridor roots,
 non-canonical corridor phase-log paths,
@@ -4226,29 +4486,44 @@ Substrate route-canary zero finalized-head/runtime-code hashes or reused
 Substrate route-canary hash roles,
 expected destination/route hash drift,
 route-canary route/destination hash drift from sibling lane evidence,
-cryptographic evidence row domain/chain drift or per-field
+duplicate, unknown, or missing required cryptographic evidence domains,
+cryptographic evidence row domain/chain drift, or per-field
 source/destination/source-gate/route/canary drift from embedded lane rows,
 unknown manifest or report artifact fields,
 unknown corridor root fields,
 unknown or malformed release-checklist fields,
 unknown or malformed portal/mobile submission-surface fields,
 manifest readiness-header drift from the report and summary,
-report/summary drift from recomputing the copied evidence TOML, a Markdown
-readiness report that is not the canonical render of the JSON readiness report,
-a release-notes attachment that is not the canonical manifest/report artifact
-table, manifest artifact-order drift from the bundle builder's public
+report/summary drift from verifier-owned direct recomputation of the copied
+evidence TOML, a Markdown
+readiness report that is missing its canonical title, status line, public
+evidence sections, input/corridor/checklist/crypto/user-prover/lane/blocker
+values, required release-evidence markers, or verifier-owned canonical render
+of the JSON readiness report,
+a release-notes attachment that is not the verifier-owned canonical
+manifest/report artifact table, manifest artifact-order drift from the bundle builder's public
 attachment order, and missing, malformed, unbound, lane-mismatched, or extra-field
 per-lane cryptographic evidence rows.
 That final check recomputes the public cryptographic table from the embedded
-all-lanes lane evidence, requires exact JSON domain/chain types plus canonical
-non-zero bytes32 hash text, and reports field-specific failures when a public
-row's source-material, source-deployment, destination-binding, route-allowlist,
-source-gate required flag/hash/audit hashes, route-canary hash/source, or
-route-canary binding flag differs from the lane
+all-lanes lane evidence, requires one row for every required production domain
+with no duplicate or unknown domains, requires exact JSON domain/chain types
+plus canonical non-zero bytes32 hash text, and reports field-specific failures
+when a public row's source-material, source-deployment, destination-binding,
+route-allowlist, source-gate required flag/hash/audit hashes, route-canary
+hash/source, or route-canary binding flag differs from the lane
 that actually passed preflight. For passed phases, the verifier independently
-re-reads each copied corridor log and requires the same phase marker,
-completion sentinel, phase-block command fragments, and phase-specific success
-markers as the report generator.
+re-reads each copied corridor log and requires an exact phase-marker line,
+phase-local completion sentinel, phase-block traced command fragments, and
+non-command phase-specific success output as the report generator. The verifier
+also owns the canonical public
+Markdown renderer and parses the rendered readiness report independently of the
+report generator, requiring the published sections to carry the copied evidence
+paths and hashes, corridor artifact hashes, release-checklist gate statuses,
+per-domain cryptographic hashes and canary metadata, every lane's portal/mobile
+helper symbols and required phases, lane readiness rows, blocker summary, and
+release-evidence handoff text. A weakened report renderer therefore cannot
+publish a shorter or structurally incomplete reviewer-facing report even when
+the JSON report still hashes correctly.
 The EVM-family, Solana, TON, and Substrate-family destination renderers and
 their live evidence wrappers, plus the TRON full-lane direct and live
 renderers, now require this comment block for production TOML when route
@@ -5109,7 +5384,9 @@ receipt trie rooted at `execution_receipts_root` with the RLP-encoded
 `receipt_root_index`. For non-placeholder material, the proven value must
 decode as an actual successful legacy or typed EVM receipt with a 256-byte logs
 bloom, the canonical SCCP source-event topic, `source_event_digest` as topic 1,
-empty event data, and the governed source bridge emitter. Placeholder
+empty event data, and the governed source bridge emitter. Exactly one matching
+SCCP source-event log must be present; duplicate matches are rejected even when
+each log is individually well formed. Placeholder
 structural fixtures may instead decode as the typed EVM-family receipt-root
 envelope whose 32-byte root equals
 `receipt_or_message_root`.
@@ -5615,8 +5892,11 @@ as Nexus-origin messages from block-level SCCP records.
   - the per-counterparty generic message backends / registry backends for `eth`,
     `bsc`, `sol`, `ton`, `tron`, `sora2`, `sora-kusama`, and
     `sora-polkadot`.
-  - the production launch policy: all advertised SCCP lanes must become ready
-    together, proof submission is permissionless, routes are allowlisted by
+  - the production launch policy: the first-release runtime admits the BSC
+    mainnet lane when its governed source material, source-adapter deployment,
+    destination rollout, route allowlist, and route-canary evidence are
+    complete; the all-lanes readiness checker remains available as a
+    diagnostic, proof submission is permissionless, routes are allowlisted by
     deployment-time governance, and per-message human approval is never part of
     verification.
   - every currently advertised lane is marked `production_ready = false` with a
@@ -5917,10 +6197,10 @@ as Nexus-origin messages from block-level SCCP records.
     that lane, and the same recomputed key/hash must match the configured
     rollout; otherwise Torii rejects the deployment-bound request even if the
     caller's expected hash matches its own query fields. Supplying a deployment
-    destination binding also triggers the configured all-lanes launch gate, so
-    one configured EVM/TRON rollout cannot expose production packaging while
-    another advertised SCCP remote lane is still missing governed source,
-    deployment, destination, or route evidence.
+    destination binding also triggers the configured launch policy for that
+    lane, so Ethereum packaging can open with complete ETH evidence while
+    non-ETH destination rollouts remain blocked until their own lane policy
+    opens.
     EVM/TRON Groth16 packaging also requires `proof_bytes_hex` / `proofBytesHex`
     for externally generated proof bytes; without those bytes Torii returns a
     bad request instead of attempting a generic signer/FastPQ package builder.
@@ -5972,11 +6252,11 @@ as Nexus-origin messages from block-level SCCP records.
     helpers additionally reject locally supplied EVM/TRON Groth16 tuples whose
     version, message id, SORA source-domain word, or commitment root does not
     match the accompanying `message_bundle`.
-  - current production behavior: this route rejects all live counterparty lanes
-    because the all-lanes-at-once launch policy requires each advertised chain
-    to have source-chain finality/inclusion verification, immutable destination
-    verifier deployment, active cryptographic anchors, and an anchored route
-    allowlist before any lane is enabled.
+  - current production behavior: this route can expose production packaging for
+    BSC mainnet only when the configured BSC source-chain finality/inclusion
+    material, immutable destination verifier deployment, active cryptographic
+    anchors, route allowlist, and route canary are all present. Other
+    counterparty lanes remain behind their future lane launch policies.
 - `GET /v1/sccp/jobs/message/{message_id}` returns the normalized SCCP counterparty proof job for the same canonical message id. Each job bundles:
   - the chain family, chain key, backend labels, verifier backend, manifest seed, finality model, verifier target, and canonical SCCP public inputs;
   - the same SCCP security model / cryptographic anchor mode and destination binding that the artifact and manifest commit into the canonical statement hash;
@@ -6011,11 +6291,11 @@ as Nexus-origin messages from block-level SCCP records.
     `0x41`-prefixed TRON payload as lowercase hex; malformed Base58Check
     strings, bad checksums, short payloads, and the all-zero TRON account
     payload are rejected during response normalization.
-  - current production behavior: this route rejects all live counterparty lanes
-    because the all-lanes-at-once launch policy requires each advertised chain
-    to have source-chain finality/inclusion verification, immutable destination
-    verifier deployment, active cryptographic anchors, and an anchored route
-    allowlist before any lane is enabled.
+  - current production behavior: this route can expose production packaging for
+    BSC mainnet only when the configured BSC source-chain finality/inclusion
+    material, immutable destination verifier deployment, active cryptographic
+    anchors, route allowlist, and route canary are all present. Other
+    counterparty lanes remain behind their future lane launch policies.
 - `GET /v1/sccp/proofs/message/{message_id}` now reconstructs the proof from committed blocks that contain `RecordSccpMessage` instructions and a non-null `sccp_commitment_root` in the finalized block header. The in-memory bundle registry is retained only for unit tests and never bypasses typed artifact or finality verification.
 - Generic SCCP `message` payloads now enforce explicit v1 codec families during structural verification instead of accepting arbitrary nonzero codec ids:
   - `1`: generic UTF-8 logical identifiers;

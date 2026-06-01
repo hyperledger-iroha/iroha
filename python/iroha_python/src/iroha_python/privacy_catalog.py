@@ -13,6 +13,7 @@ PRIVACY_CRITERIA = (
     "hide_asset_type",
     "post_quantum",
 )
+_ALGORITHM_ID_CHARS = frozenset("abcdefghijklmnopqrstuvwxyz0123456789-_")
 
 _RAW_PRIVACY_ALGORITHM_DESCRIPTORS_JSON = (
     "[{\"id\":\"transparent-transfer\",\"name\":\"Transparent asset transfer\",\"shortName\":\"Transparent\",\"sum"
@@ -606,6 +607,14 @@ def _load_descriptors() -> tuple[dict[str, Any], ...]:
         if not isinstance(algorithm_id, str) or not algorithm_id.strip():
             raise RuntimeError(
                 f"privacy algorithm catalog entry {index} must include a non-empty id"
+            )
+        if (
+            algorithm_id != algorithm_id.lower()
+            or any(char not in _ALGORITHM_ID_CHARS for char in algorithm_id)
+        ):
+            raise RuntimeError(
+                "privacy algorithm catalog entry "
+                f"{index} id {algorithm_id!r} must be lowercase and URL-safe"
             )
         if algorithm_id in seen_ids:
             raise RuntimeError(

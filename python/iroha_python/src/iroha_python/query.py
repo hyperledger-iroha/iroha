@@ -84,7 +84,6 @@ def account_query_envelope(
     )
     return envelope.to_dict()
 
-
 def asset_definitions_query_envelope(
     *,
     filter: Optional[FilterExpr | Mapping[str, Any]] = None,

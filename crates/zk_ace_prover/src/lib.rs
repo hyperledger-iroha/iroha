@@ -328,6 +328,22 @@ mod tests {
         }
     }
 
+    fn structured_bytes(seed: u8, step: u8) -> [u8; 32] {
+        let mut out = [0u8; 32];
+        for (index, byte) in out.iter_mut().enumerate() {
+            *byte = seed.wrapping_add((index as u8).wrapping_mul(step));
+        }
+        out
+    }
+
+    fn structured_witness(seed: u8) -> ZkAceWitnessV1 {
+        ZkAceWitnessV1 {
+            identity_root: structured_bytes(seed, 3),
+            identity_blinding: structured_bytes(seed ^ 0x5a, 5),
+            replay_secret: structured_bytes(seed.wrapping_add(0x33), 7),
+        }
+    }
+
     fn public_inputs_for(witness: &ZkAceWitnessV1) -> ZkAcePublicInputsV1 {
         let from = account(1);
         let to = account(2);
@@ -372,6 +388,22 @@ mod tests {
     fn verify_attachment(proof: &ProofAttachment) -> bool {
         let vk = zk_ace_verifying_key_box_v1().expect("vk");
         iroha_core::zk::verify_backend(ZK_ACE_PQ_AUTHORIZATION_V0_BACKEND, &proof.proof, Some(&vk))
+    }
+
+    fn lower_level_proof_verifies(
+        public_inputs: &ZkAcePublicInputsV1,
+        witness: &ZkAceWitnessV1,
+    ) -> bool {
+        let vk = zk_ace_verifying_key_box_v1().expect("vk");
+        let proof = iroha_core::zk::prove_stark_fri_zk_ace_open_verify_envelope(
+            ZK_ACE_PQ_AUTHORIZATION_V0_BACKEND,
+            ZK_ACE_PQ_AUTHORIZATION_V0_CIRCUIT_ID,
+            &vk,
+            public_inputs,
+            witness,
+        )
+        .expect("lower-level prover emits an envelope");
+        iroha_core::zk::verify_backend(ZK_ACE_PQ_AUTHORIZATION_V0_BACKEND, &proof, Some(&vk))
     }
 
     fn tamper_inner_stark(
@@ -595,42 +627,48 @@ mod tests {
 
     #[test]
     fn zk_ace_air_openings_do_not_recover_private_witness() {
-        let witness = witness(0x24);
-        let public_inputs = public_inputs_for(&witness);
-        let vk_commitment = zk_ace_verifying_key_commitment_v1().expect("vk commitment");
-        let proof = build_zk_ace_authorization_proof_v1(&public_inputs, &witness, vk_commitment)
-            .expect("build proof");
-        let inner = inner_stark_envelope(&proof);
-        let opening = inner
-            .proof
-            .air
-            .as_ref()
-            .expect("ZK-ACE AIR section")
-            .openings
-            .first()
-            .expect("AIR opening");
-        let domain = 1usize << inner.params.n_log2;
-        let opened_index = opening.index as usize;
-        assert_ne!(
-            opened_index, 0,
-            "ZK-ACE AIR must not open the private witness row"
-        );
-        assert_ne!(
-            (opened_index + 1) % domain,
-            0,
-            "ZK-ACE AIR must not open the private witness row as next_row"
-        );
+        for witness in [
+            witness(0x24),
+            structured_witness(0x35),
+            structured_witness(0x7d),
+        ] {
+            let public_inputs = public_inputs_for(&witness);
+            let vk_commitment = zk_ace_verifying_key_commitment_v1().expect("vk commitment");
+            let proof =
+                build_zk_ace_authorization_proof_v1(&public_inputs, &witness, vk_commitment)
+                    .expect("build proof");
+            let inner = inner_stark_envelope(&proof);
+            let air = inner.proof.air.as_ref().expect("ZK-ACE AIR section");
+            assert!(
+                !air.openings.is_empty(),
+                "ZK-ACE proof must carry AIR openings"
+            );
+            let domain = 1usize << inner.params.n_log2;
 
-        assert_ne!(
-            recover_witness_from_opened_zk_ace_row(&opening.row),
-            witness,
-            "ZK-ACE AIR row exposes enough information to recover the witness"
-        );
-        assert_ne!(
-            recover_witness_from_opened_zk_ace_row(&opening.next_row),
-            witness,
-            "ZK-ACE next AIR row exposes enough information to recover the witness"
-        );
+            for opening in &air.openings {
+                let opened_index = opening.index as usize;
+                assert_ne!(
+                    opened_index, 0,
+                    "ZK-ACE AIR must not open the private witness row"
+                );
+                assert_ne!(
+                    (opened_index + 1) % domain,
+                    0,
+                    "ZK-ACE AIR must not open the private witness row as next_row"
+                );
+
+                assert_ne!(
+                    recover_witness_from_opened_zk_ace_row(&opening.row),
+                    witness,
+                    "ZK-ACE AIR row exposes enough information to recover the witness"
+                );
+                assert_ne!(
+                    recover_witness_from_opened_zk_ace_row(&opening.next_row),
+                    witness,
+                    "ZK-ACE next AIR row exposes enough information to recover the witness"
+                );
+            }
+        }
     }
 
     #[test]
@@ -755,6 +793,49 @@ mod tests {
             !iroha_core::zk::verify_backend(ZK_ACE_PQ_AUTHORIZATION_V0_BACKEND, &proof, Some(&vk)),
             "native STARK verifier must reject a re-proved envelope whose witness does not match public inputs"
         );
+    }
+
+    #[test]
+    fn verifier_rejects_zero_private_witness_fields_without_host_preflight() {
+        let valid_witness = witness(0x2c);
+        let valid_public_inputs = public_inputs_for(&valid_witness);
+        assert!(
+            lower_level_proof_verifies(&valid_public_inputs, &valid_witness),
+            "baseline lower-level proof must verify before adversarial zero-witness cases"
+        );
+
+        for (label, zero_witness) in [
+            (
+                "identity root",
+                ZkAceWitnessV1 {
+                    identity_root: [0; 32],
+                    identity_blinding: [0x2d; 32],
+                    replay_secret: [0x2e; 32],
+                },
+            ),
+            (
+                "identity blinding",
+                ZkAceWitnessV1 {
+                    identity_root: [0x2f; 32],
+                    identity_blinding: [0; 32],
+                    replay_secret: [0x30; 32],
+                },
+            ),
+            (
+                "replay secret",
+                ZkAceWitnessV1 {
+                    identity_root: [0x31; 32],
+                    identity_blinding: [0x32; 32],
+                    replay_secret: [0; 32],
+                },
+            ),
+        ] {
+            let public_inputs = public_inputs_for(&zero_witness);
+            assert!(
+                !lower_level_proof_verifies(&public_inputs, &zero_witness),
+                "native STARK verifier must enforce nonzero {label} without relying on host preflight"
+            );
+        }
     }
 
     #[test]

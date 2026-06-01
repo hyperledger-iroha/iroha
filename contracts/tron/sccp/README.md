@@ -9,6 +9,43 @@ Files:
   `submitSccpSourceEvent(uint32,uint32,bytes32)` transaction-call path.
 - `SccpTronGroth16Bn254MessageVerifier.sol`: destination-side BN254 Groth16
   verifier entrypoint for TRON/TVM deployments.
+- `TairaXOR.sol`: TRC20-compatible bridged XOR token for the
+  `taira_tron_xor` route.
+- `TairaXorSccpBridge.sol`: route-bound mint/burn bridge that verifies
+  TAIRA-origin proofs and emits TRON-origin SCCP source events.
+
+The deployment helper `scripts/sccp_tron_taira_xor_deploy.mjs` creates and uses
+a separate TRON deployer account artifact under ignored `artifacts/sccp-tron/`.
+This deployer is only for contract deployment and evidence collection; end-user
+bridging must continue through WalletConnect-connected TRON wallets.
+
+Minimal operator sequence:
+
+```bash
+node scripts/sccp_tron_taira_xor_deploy.mjs generate-deployer
+# Fund the printed address with the TRX/Energy budget approved for deployment.
+node scripts/sccp_tron_taira_xor_deploy.mjs account-status
+NODE_PATH=/tmp/iroha-sccp-smoke-node/node_modules \
+  node scripts/sccp_tron_taira_xor_deploy.mjs compile
+NODE_PATH=/tmp/iroha-sccp-smoke-node/node_modules \
+  node scripts/sccp_tron_taira_xor_deploy.mjs deploy \
+    --verifier artifacts/sccp-tron/production-verifier-key.json \
+    --broadcast true \
+    --confirm-mainnet taira_tron_xor
+```
+
+`deploy` compiles the TRON artifacts, creates java-tron
+`/wallet/deploycontract` transactions, signs them locally with the deployer key,
+broadcasts them only when `--confirm-mainnet taira_tron_xor` is present, waits
+for transaction info, then configures the deployment by calling
+`TairaXOR.setBridge`, `TairaXOR.lockBridge`,
+`SccpTronSourceBridge.transferOwnership`, and
+`SccpTronGroth16Bn254MessageVerifier.emitDestinationBindingConfigured`.
+The helper also exposes `sign-transaction` and `broadcast` commands for
+operator-reviewed unsigned transaction JSON. The signed output stores the
+recoverable secp256k1 signature and verifies that it recovers to the deployer
+before writing the artifact. Broadcast is deliberately unavailable without the
+explicit mainnet confirmation flag.
 
 ## Source bridge
 

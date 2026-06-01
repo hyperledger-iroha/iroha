@@ -46,6 +46,7 @@ def eth_args(module):
         deployment_receipt_contract_address=bytes.fromhex("11" * 20),
         deployment_receipt_block_hash=bytes.fromhex("bb" * 32),
         deployment_receipt_block_number=4660,
+        deployment_receipt_block_receipts_root=bytes.fromhex("bc" * 32),
         expected_source_verifier_material_hash=bytes.fromhex(
             ETH_SOURCE_VERIFIER_MATERIAL_HASH_VECTOR
         ),
@@ -67,6 +68,17 @@ def test_eth_address_parser_rejects_zero_and_wrong_width(tmp_path):
         label="source bridge runtime bytecode",
     ) == bytes.fromhex("6080604052")
 
+    for value, expected in (
+        ("0X" + "11" * 20, "lowercase 0x prefix"),
+        ("0x" + "AA" * 20, "lowercase hex"),
+    ):
+        try:
+            module.parse_evm_address(value, label="bridge address")
+        except module.argparse.ArgumentTypeError as exc:
+            assert expected in str(exc)
+        else:
+            raise AssertionError("non-canonical ETH bridge address was accepted")
+
     for value in (" 0x6080604052", "0x6080\n604052"):
         try:
             module.parse_runtime_bytecode_hex(
@@ -77,6 +89,20 @@ def test_eth_address_parser_rejects_zero_and_wrong_width(tmp_path):
             assert "must not contain whitespace" in str(exc)
         else:
             raise AssertionError("padded ETH runtime bytecode was accepted")
+
+    for value, expected in (
+        ("0X6080604052", "lowercase 0x prefix"),
+        ("0x60806040AB", "lowercase hex"),
+    ):
+        try:
+            module.parse_runtime_bytecode_hex(
+                value,
+                label="source bridge runtime bytecode",
+            )
+        except module.argparse.ArgumentTypeError as exc:
+            assert expected in str(exc)
+        else:
+            raise AssertionError("non-canonical ETH runtime bytecode was accepted")
 
     runtime_file = tmp_path / "runtime.hex"
     runtime_file.write_text("0x6080\n604052\n", encoding="ascii")
@@ -331,6 +357,12 @@ def test_eth_toml_rendering_carries_mainnet_profile_ids_and_emitter_binding():
     )
     assert '# sccp_evm_source_deployment_block_number = "4660"' in rendered
     assert (
+        '# sccp_evm_source_deployment_block_receipts_root = "0x'
+        + "bc" * 32
+        + '"'
+        in rendered
+    )
+    assert (
         '# sccp_eth_source_verifier_material_hash = "0x'
         + args.expected_source_verifier_material_hash.hex()
         + '"'
@@ -391,6 +423,21 @@ def test_eth_source_evidence_rejects_boolean_receipt_block_number():
         assert "--deployment-receipt-block-number must be positive" in str(exc)
     else:
         raise AssertionError("boolean ETH source deployment block number was accepted")
+
+    assert module._toml_receipt_metadata_ready(args) is False
+
+
+def test_eth_source_evidence_requires_receipt_block_receipts_root_for_toml():
+    module = load_evidence_module()
+    args = eth_args(module)
+    args.deployment_receipt_block_receipts_root = None
+
+    try:
+        module.render_toml(args)
+    except ValueError as exc:
+        assert "--deployment-receipt-block-receipts-root" in str(exc)
+    else:
+        raise AssertionError("ETH source TOML without receiptsRoot was accepted")
 
     assert module._toml_receipt_metadata_ready(args) is False
 
@@ -599,6 +646,8 @@ def test_eth_cli_json_summary_and_toml_output(capsys):
         "0x" + "bb" * 32,
         "--deployment-receipt-block-number",
         "4660",
+        "--deployment-receipt-block-receipts-root",
+        "0x" + "bc" * 32,
         "--expected-source-verifier-material-hash",
         "0x" + ETH_SOURCE_VERIFIER_MATERIAL_HASH_VECTOR,
         "--expected-source-adapter-engine-deployment-hash",
@@ -666,6 +715,8 @@ def test_eth_cli_json_summary_and_toml_output(capsys):
         "0x" + "bb" * 32,
         "--deployment-receipt-block-number",
         "4660",
+        "--deployment-receipt-block-receipts-root",
+        "0x" + "bc" * 32,
         "--expected-source-verifier-material-hash",
         "0x" + expected_material_hash.hex(),
         "--expected-source-adapter-engine-deployment-hash",
